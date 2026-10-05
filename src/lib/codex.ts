@@ -448,6 +448,8 @@ export type CodexResult =
 export async function codexRespond(input: {
   instructions: string;
   prompt: string;
+  /** Images to read with the prompt, as data: URLs (JPEG). Sent for this call only — never stored. */
+  images?: string[];
   webSearch?: boolean;
   /** Both accepted by the ChatGPT backend (verified live, 23 Sep 2026). */
   reasoningEffort?: "low" | "medium" | "high" | "xhigh";
@@ -474,7 +476,14 @@ export async function codexRespond(input: {
       body: JSON.stringify({
         model,
         instructions: input.instructions,
-        input: [{ type: "message", role: "user", content: [{ type: "input_text", text: input.prompt }] }],
+        input: [{
+          type: "message",
+          role: "user",
+          content: [
+            { type: "input_text", text: input.prompt },
+            ...(input.images ?? []).map((url) => ({ type: "input_image", image_url: url })),
+          ],
+        }],
         tools: input.webSearch ? [{ type: "web_search" }] : [],
         tool_choice: "auto",
         parallel_tool_calls: false,

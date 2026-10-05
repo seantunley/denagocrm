@@ -118,6 +118,10 @@ export const assistantStep = z.discriminatedUnion("tool", [
   z.object({ tool: z.literal("vehicles"), args: vehicleArgs }),
   z.object({ tool: z.literal("deliveries"), args: deliveryArgs.default({}) }),
   z.object({ tool: z.literal("documents"), args: documentArgs }),
+  // No arguments, deliberately: the research step can ask FOR a web search but
+  // can't say what to search — the query is written from the person's own
+  // question by a step that never sees a record (crmAssistantWeb).
+  z.object({ tool: z.literal("web") }).strict(),
   z.object({ tool: z.literal("done") }),
 ]);
 
@@ -133,6 +137,8 @@ export type PlanContext = {
   activityTypes: string[];
   /** What it has learned (memory, this person's profile, playbook index), if anything. */
   learned?: string;
+  /** The owner has switched internet search on (and this isn't a scheduled run). */
+  web?: boolean;
 };
 
 export function planInstructions(ctx: PlanContext): string {
@@ -152,6 +158,9 @@ export function planInstructions(ctx: PlanContext): string {
     '- knowledge: {"topic":"<what to look up>" (required)} — the business\'s own knowledge: products and prices, approved answers (finance, warranty, policies…), company details, competitor intelligence.',
     '- recall: {"query":"<words>" (required)} — this person\'s own earlier conversations with you (last 30 days).',
     '- playbook: {"name":"<playbook name>" (required)} — one of your learned playbooks in full, when the question uses its term or procedure ("hot leads" → the hot-lead playbook) — load it BEFORE searching so you search the right way.',
+    ctx.web
+      ? '- web: {"tool":"web"} (no args) — search the INTERNET for public facts the CRM can\'t know: interest or prime rates, a product\'s published specs, a competitor\'s public prices, news, regulations. It sees only the person\'s question, so it can never look up a customer. Use it only when the question needs the outside world.'
+      : "",
     '- done: {} — you have enough (or the question needs no lookup: greetings, advice, questions about you yourself — what you can do, how you work, what you remember — or something already in the conversation).',
     `Stages: ${ctx.stages.join(", ") || "(none)"}.`,
     `People: ${ctx.staff.join(", ") || "(none)"}.`,
@@ -253,6 +262,7 @@ export function resultsBlock(label: string, body: string): string {
 
 export const ANSWER_RULES = [
   DATA_RULE,
+  "Results marked fromTheInternet are public web results, not the business's records: say so when you use them (\"according to <site>\"), name the source, and never present them as CRM facts.",
   "Answer from the CRM results below and the business knowledge in them. Never add records, figures, names or dates that aren't there.",
   "If results were capped (truncated: true), say these are the top results, not all of them. If there are no results, say so plainly.",
   "Plain text only (short paragraphs or simple '-' lists), no markdown tables or headings.",

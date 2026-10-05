@@ -54,7 +54,7 @@ test("the loop runs a batch side by side, skips repeats, and stops at the total 
   assert.match(loop, /if \(seen\.has\(key\)\) continue;/, "a lookup already run isn't run again");
   assert.match(loop, /fresh\.slice\(0, MAX_LOOKUPS - observations\.length\)/);
   assert.match(loop, /await Promise\.all\(\s*batch\.map/);
-  assert.match(loop, /runTool\(user, s\)\.catch\(/, "one failed lookup doesn't sink the batch");
+  assert.match(loop, /runTool\(user, s\)\)\.catch\(/, "one failed lookup doesn't sink the batch");
   assert.ok(MAX_LOOKUPS >= MAX_PARALLEL);
 });
 
@@ -103,8 +103,8 @@ test("tasks are proposed only in chat; a scheduled run asks nothing back", async
   assert.match(lib, /const actions = source !== "chat" \? \[\] : await resolveActions/);
   assert.match(lib, /const choices = source === "schedule" \? \[\] : choiceSplit\.choices;/);
   assert.match(lib, /source,\s*scheduleId: source === "schedule" \? opts\.scheduleId \?\? null : null,/);
-  // The browser can't pick a source: the action passes none.
-  assert.match(code("src/app/actions/assistant.ts"), /return askCrm\(user, q, typeof page === "string" \? page\.slice\(0, 200\) : null\);/);
+  // The browser can't pick a source: the action passes only the checked image(s).
+  assert.match(code("src/app/actions/assistant.ts"), /return askCrm\(user, q, typeof page === "string" \? page\.slice\(0, 200\) : null, \{ images \}\);/);
 });
 
 test("running for someone without a session re-checks membership, permission and module", () => {

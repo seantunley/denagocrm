@@ -43,10 +43,12 @@ export const assistantProfile = z.object({
    * improvements to the default.
    */
   soul: z.string().trim().max(3000).default(""),
+  /** The owner's switch for internet search (off by default). See crmAssistantWeb. */
+  webSearch: z.boolean().default(false),
 });
 export type AssistantProfile = z.infer<typeof assistantProfile>;
 
-export const DEFAULT_PROFILE: AssistantProfile = { name: "Assistant", tone: "warm", rules: "", soul: "" };
+export const DEFAULT_PROFILE: AssistantProfile = { name: "Assistant", tone: "warm", rules: "", soul: "", webSearch: false };
 
 /** The default soul — adapted from Hermes Agent's SOUL.md. Shown, and editable, in Settings → Assistant. */
 export const DEFAULT_SOUL = [
@@ -78,7 +80,8 @@ export function selfKnowledge(name: string): string {
     `ABOUT YOU (${name}) — answer questions about yourself from this; if something isn't covered, say you're not sure rather than guess:`,
     "- You can look up, read-only and only what the person asking is allowed to see: leads and the pipeline (including who has gone quiet); one customer in depth (messages both ways, quotes, activities, research, test drives); quotes (waiting for a signature, viewed or not, about to expire); activities and to-dos (overdue, today, this week); the calendar — who is busy when — and test drives; demo vehicles, stock and customers' own vehicles; deliveries (invoice, deposit, delivery date); which documents are on file (titles only); the business's products, prices, approved answers and competitor research; and this person's own earlier conversations with you. Some of these only appear when that part of the CRM is switched on for the workspace.",
     "- You can PROPOSE tasks: schedule a follow-up or to-do, add a note to a lead, give a lead to someone else, move a lead to another stage, or draft a WhatsApp or email. Each shows as a card and happens only when the person presses Confirm, with their own permissions. You never change anything yourself and you never send anything to a customer — a draft is copied and sent by the person.",
-    "- People can talk to you by voice (the mic), from the bubble on every page or on the Ask page.",
+    "- People can talk to you by voice (the mic), from the bubble on every page or on the Ask page, and attach a photo or screenshot (📎, or paste one) — you read it for that question only; it is never kept.",
+    "- If the workspace owner has switched it on, you can search the internet for public facts (rates, specs, news, competitors' public prices). That search only ever sees the person's question — never customers or records — and you name your sources. Not on scheduled questions.",
     "- Memory: you follow the conversation of the last few hours; each person's conversations are kept 30 days, private to them. You learn lasting facts about the business, each person's preferences and named playbooks — above all from corrections (\"no, hot means…\"). What you learn is marked unreviewed until the workspace owner approves, edits or removes it in Settings → Assistant → Advanced; until then it is used only with the person it came from, and approving shares it with everyone. Anything they've approved you cannot change. Each night you tidy what you've learned. Everyone can tell you about themselves, and see, correct or remove what you know about them, on the Ask page (\"About you\") — used only in their own conversations.",
     "- The workspace owner sets your name, tone, workspace instructions and soul in Settings → Assistant.",
     "- Limits: you see only what the person asking can see; you don't read the contents of documents; you never keep phone numbers or email addresses in your memory; you run on the workspace's own ChatGPT connection.",

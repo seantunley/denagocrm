@@ -146,12 +146,12 @@ test("a scheduled run learns nothing; the provider's error text never reaches th
   assert.doesNotMatch(lib, /ChatGPT didn't answer: \$\{reply\.error\}/);
 });
 
-test("voice is behind the same per-person limit before any audio leaves", () => {
+test("voice is behind a per-person limit before any audio leaves", () => {
   const voice = code("src/app/actions/voice.ts");
   const ask = voice.slice(voice.indexOf("export async function transcribeQuestion"), voice.indexOf("export async function draftVoiceDebrief"));
-  assert.ok(ask.indexOf("assistantAskAllowed(user.id)") < ask.indexOf("return hear(formData)"));
+  assert.ok(ask.indexOf("assistantVoiceAllowed(user.id)") > 0 && ask.indexOf("assistantVoiceAllowed(user.id)") < ask.indexOf("return hear(formData)"));
   const debrief = voice.slice(voice.indexOf("export async function draftVoiceDebrief"));
-  assert.ok(debrief.indexOf("assistantAskAllowed(user.id)") > 0 && debrief.indexOf("assistantAskAllowed(user.id)") < debrief.indexOf("await hear(formData)"));
+  assert.ok(debrief.indexOf("assistantVoiceAllowed(user.id)") > 0 && debrief.indexOf("assistantVoiceAllowed(user.id)") < debrief.indexOf("await hear(formData)"));
   assert.match(debrief, /if \(!\(await isModuleEnabled\("automation"\)\) \|\| !\(await isCodexConnected\(\)\)\)/, "no ChatGPT summary with the module off");
 });
 

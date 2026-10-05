@@ -2,7 +2,9 @@
 
 import { useEffect, useRef, useState, useTransition } from "react";
 import Link from "next/link";
-import { ArrowUpRight, Loader2, Mic, Smile, Sparkles, Square } from "lucide-react";
+import { ArrowUpRight, Loader2, Mic, Paperclip, Smile, Sparkles, Square, X } from "lucide-react";
+import { shrinkToJpeg } from "@/components/shrinkImage";
+import { IMAGE_MAX_SIDE, MAX_IMAGE_BYTES } from "@/lib/assistantImage";
 import { askCrmAction } from "@/app/actions/assistant";
 import { transcribeQuestion } from "@/app/actions/voice";
 import type { AssistantRow } from "@/lib/crmAssistant";
@@ -46,6 +48,30 @@ export default function AssistantChat({
   const [voiceError, setVoiceError] = useState<string | null>(null);
   const [emojiOpen, setEmojiOpen] = useState(false);
   const input = useRef<HTMLInputElement | null>(null);
+  // One attached image, already shrunk to a JPEG here. Sent with the next
+  // question, then dropped — never kept in the conversation.
+  const [image, setImage] = useState<{ blob: Blob; preview: string } | null>(null);
+  const [imageError, setImageError] = useState<string | null>(null);
+  const picker = useRef<HTMLInputElement | null>(null);
+
+  const attach = async (file: Blob | null | undefined) => {
+    if (!file) return;
+    setImageError(null);
+    const blob = await shrinkToJpeg(file, IMAGE_MAX_SIDE, MAX_IMAGE_BYTES);
+    if (!blob) {
+      setImageError("Couldn't read that image — try a JPG or PNG photo or screenshot.");
+      return;
+    }
+    setImage((old) => {
+      if (old) URL.revokeObjectURL(old.preview);
+      return { blob, preview: URL.createObjectURL(blob) };
+    });
+  };
+  const clearImage = () =>
+    setImage((old) => {
+      if (old) URL.revokeObjectURL(old.preview);
+      return null;
+    });
 
   // Drop the emoji where the cursor is, then put the cursor after it.
   const insertEmoji = (emoji: string) => {
@@ -62,14 +88,22 @@ export default function AssistantChat({
 
   const ask = (text: string) => {
     const q = text.trim();
-    if (!q || pending) return;
+    if ((!q && !image) || pending) return;
+    const sent = image;
+    let attachment: FormData | undefined;
+    if (sent) {
+      attachment = new FormData();
+      attachment.set("image", new File([sent.blob], "image.jpg", { type: "image/jpeg" }));
+    }
     setQuestion("");
+    clearImage();
+    const shown = sent ? `📎 ${q || "Image"}` : q;
     startTransition(async () => {
-      const result = await askCrmAction(q, page).catch(() => ({ ok: false as const, error: "Something went wrong — try again." }));
+      const result = await askCrmAction(q, page, attachment).catch(() => ({ ok: false as const, error: "Something went wrong — try again." }));
       setTurns((prev) => [
         result.ok
-          ? { question: q, answer: result.answer, rows: result.rows, learned: result.learned, actions: result.actions, choices: result.choices }
-          : { question: q, error: result.error, rows: [] },
+          ? { question: shown, answer: result.answer, rows: result.rows, learned: result.learned, actions: result.actions, choices: result.choices }
+          : { question: shown, error: result.error, rows: [] },
         ...prev,
       ]);
     });
@@ -156,10 +190,38 @@ export default function AssistantChat({
           placeholder={compact ? `Message ${name}…` : `Ask ${name} — e.g. "What should I do with Anna?"`}
           value={question}
           onChange={(event) => setQuestion(event.target.value)}
+          // A pasted screenshot is attached, not typed.
+          onPaste={(event) => {
+            const pasted = [...event.clipboardData.files].find((f) => f.type.startsWith("image/"));
+            if (pasted) {
+              event.preventDefault();
+              void attach(pasted);
+            }
+          }}
           maxLength={500}
           aria-label="Ask the CRM"
           disabled={pending || voice.recording || hearing}
         />
+        <input
+          ref={picker}
+          type="file"
+          accept="image/*"
+          className="hidden"
+          onChange={(event) => {
+            void attach(event.target.files?.[0]);
+            event.target.value = "";
+          }}
+        />
+        <button
+          type="button"
+          onClick={() => picker.current?.click()}
+          disabled={pending || voice.recording || hearing}
+          className={`grid size-10 shrink-0 place-items-center rounded-md border ${image ? "border-primary text-primary" : "border-border text-muted-foreground hover:text-foreground"}`}
+          aria-label="Attach a photo or screenshot"
+          title="Attach a photo or screenshot"
+        >
+          <Paperclip className="size-4" />
+        </button>
         <div className="relative">
           <button
             type="button"
@@ -200,10 +262,21 @@ export default function AssistantChat({
             {hearing ? <Loader2 className="size-4 animate-spin" /> : voice.recording ? <Square className="size-4" /> : <Mic className="size-4" />}
           </button>
         )}
-        <button type="submit" className="btn-primary h-10 px-4 text-sm" disabled={pending || !question.trim()}>
+        <button type="submit" className="btn-primary h-10 px-4 text-sm" disabled={pending || (!question.trim() && !image)}>
           {pending ? <Loader2 className="size-4 animate-spin" /> : compact ? "Send" : "Ask"}
         </button>
       </form>
+      {image && (
+        <div className="flex items-center gap-2 text-xs text-muted-foreground">
+          {/* eslint-disable-next-line @next/next/no-img-element -- a local blob preview, never a remote image */}
+          <img src={image.preview} alt="Attached image" className="size-12 rounded-md border border-border object-cover" />
+          <span>Sent with your next question, then not kept.</span>
+          <button type="button" onClick={clearImage} className="ml-auto inline-flex items-center gap-1 hover:text-destructive" aria-label="Remove the image">
+            <X className="size-3.5" /> Remove
+          </button>
+        </div>
+      )}
+      {imageError && <p className="text-xs text-destructive">{imageError}</p>}
       {voice.recording && (
         <p className="text-xs text-destructive">● Listening… {voice.seconds}s — tap ■ when you&apos;re done.</p>
       )}

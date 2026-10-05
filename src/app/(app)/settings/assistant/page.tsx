@@ -86,6 +86,18 @@ export default async function AssistantSettingsPage() {
             placeholder={"In your words. e.g.\n- Always mention the 5-year battery warranty when price comes up.\n- Never suggest a discount above 5%.\n- Donovan handles fleet and golf-estate deals; Sean handles everything else.\n- We reply to every new lead within 2 hours."}
           />
         </label>
+        <input type="hidden" name="webSearchShown" value="1" />
+        <label className="flex items-start gap-3 rounded-lg border border-border/60 p-3 text-sm">
+          <input type="checkbox" name="webSearch" defaultChecked={profile.webSearch} className="mt-1 accent-primary" />
+          <span>
+            <span className="block font-medium">Let {profile.name} search the internet when it helps</span>
+            <span className="block text-xs text-muted-foreground">
+              For things your CRM can&apos;t know — prime rate, a model&apos;s specs, news. The search only ever sees the
+              question that was asked, never your customers or records, and {profile.name} names its sources. Not used for
+              scheduled questions.
+            </span>
+          </span>
+        </label>
         <div className="flex justify-end border-t border-border/60 pt-4">
           <SaveButton>Save</SaveButton>
         </div>

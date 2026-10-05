@@ -12,7 +12,8 @@ import { prisma } from "@/lib/db";
 import { scheduleFollowUp } from "@/app/actions/activities";
 import { addCommunication } from "@/app/actions/communications";
 import { assignLead, moveLead } from "@/app/actions/leads";
-import { ASK_LIMIT_MESSAGE, ASSISTANT_PERMISSIONS, assistantAskAllowed } from "@/lib/assistantUser";
+import { ASK_LIMIT_MESSAGE, ASSISTANT_PERMISSIONS, assistantAskAllowed, assistantImageAllowed } from "@/lib/assistantUser";
+import { MAX_IMAGE_BYTES, cleanJpeg, jpegDataUrl } from "@/lib/assistantImage";
 
 /**
  * Run a task the assistant proposed, AFTER the person pressed Confirm on it.
@@ -66,20 +67,37 @@ export async function runAssistantAction(card: ActionCard): Promise<{ ok: boolea
   });
 }
 
-/** One question in, one answer out. Read-only: nothing here writes a record. */
-export async function askCrmAction(question: string, page?: string): Promise<AssistantResult> {
+/**
+ * One question in, one answer out. Read-only: nothing here writes a record.
+ * `attachment` may carry one image ("image"): checked and cleaned here
+ * (assistantImage — JPEG only, metadata stripped, size-capped), read for this
+ * question only, and never stored.
+ */
+export async function askCrmAction(question: string, page?: string, attachment?: FormData): Promise<AssistantResult> {
   return withActingStaffScope(async () => {
     const user = await requireAnyPermission(...ASSISTANT_PERMISSIONS);
     // The page hides it with the module off; the action must refuse on its own.
     if (!(await isModuleEnabled("automation"))) {
       return { ok: false, error: "Ask the CRM is part of the Automation & AI module, which is off for this workspace." };
     }
-    const q = String(question ?? "").trim().slice(0, 500);
+    const file = attachment instanceof FormData ? attachment.get("image") : null;
+    const hasImage = file instanceof File && file.size > 0;
+    const q = String(question ?? "").trim().slice(0, 500) || (hasImage ? "What's in this image, and what should I do with it?" : "");
     if (!q) return { ok: false, error: "Type a question first." };
     if (!(await assistantAskAllowed(user.id))) return { ok: false, error: ASK_LIMIT_MESSAGE };
+    let images: string[] = [];
+    if (hasImage) {
+      if (!(await assistantImageAllowed(user.id))) return { ok: false, error: "That's a lot of images this hour — give it a while and try again." };
+      if (file.size > MAX_IMAGE_BYTES || file.type !== "image/jpeg") {
+        return { ok: false, error: "That image couldn't be used — try a photo or screenshot again." };
+      }
+      const cleaned = cleanJpeg(new Uint8Array(await file.arrayBuffer()));
+      if (!cleaned) return { ok: false, error: "That image couldn't be read — try a photo or screenshot again." };
+      images = [jpegDataUrl(cleaned)];
+    }
     // `page` is only a hint ("this lead"); pageHint reads a record id out of it
     // and the tools re-check access, so a forged path finds nothing new.
-    return askCrm(user, q, typeof page === "string" ? page.slice(0, 200) : null);
+    return askCrm(user, q, typeof page === "string" ? page.slice(0, 200) : null, { images });
   });
 }
 
