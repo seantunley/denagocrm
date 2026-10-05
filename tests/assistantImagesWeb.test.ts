@@ -114,9 +114,10 @@ test("real photos (when sharp is installed locally): EXIF/GPS and trailing data 
 });
 
 test("the image is checked on the server before the question is asked — and never stored", () => {
-  const action = code("src/app/actions/assistant.ts");
-  const ask = action.slice(action.indexOf("export async function askCrmAction"));
-  const order = ["requireAnyPermission(", 'isModuleEnabled("automation")', "assistantAskAllowed(user.id)", "assistantImageAllowed(user.id)", 'file.type !== "image/jpeg"', "cleanJpeg(", "return askCrm("];
+  // The streaming route hands the image to askAsPerson, which checks it.
+  assert.match(code("src/app/api/assistant/ask/route.ts"), /image: form\.get\("image"\)/);
+  const ask = code("src/lib/assistantAsk.ts");
+  const order = ['isModuleEnabled("automation")', "assistantAskAllowed(user.id)", "assistantImageAllowed(user.id)", 'file.type !== "image/jpeg"', "cleanJpeg(", "return askCrm("];
   for (let i = 1; i < order.length; i++) assert.ok(ask.indexOf(order[i - 1]) < ask.indexOf(order[i]), `${order[i - 1]} before ${order[i]}`);
   const lib = code("src/lib/crmAssistant.ts");
   assert.match(lib, /question: images\.length \? `📎 \$\{question\}` : question,/, "only that there WAS an image is kept");

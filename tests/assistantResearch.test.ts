@@ -90,7 +90,7 @@ test("after several lookups it may save the method as a playbook — never on a 
   assert.doesNotMatch(text, /noContactDays|"x"/);
   assert.match(text, /not one about a particular customer/);
   assert.match(text, /improve it \(replace\)/);
-  assert.match(code("src/lib/crmAssistant.ts"), /LEARN_INSTRUCTIONS,\s*methodInstructions\(observations\),/);
+  assert.match(code("src/lib/crmAssistant.ts"), /LEARN_INSTRUCTIONS,[\s\S]{0,300}methodInstructions\(observations\),\s*\]/);
 });
 
 test("tasks are proposed only in chat; a scheduled run asks nothing back", async () => {
@@ -103,8 +103,8 @@ test("tasks are proposed only in chat; a scheduled run asks nothing back", async
   assert.match(lib, /const actions = source !== "chat" \? \[\] : await resolveActions/);
   assert.match(lib, /const choices = source === "schedule" \? \[\] : choiceSplit\.choices;/);
   assert.match(lib, /source,\s*scheduleId: source === "schedule" \? opts\.scheduleId \?\? null : null,/);
-  // The browser can't pick a source: the action passes only the checked image(s).
-  assert.match(code("src/app/actions/assistant.ts"), /return askCrm\(user, q, typeof page === "string" \? page\.slice\(0, 200\) : null, \{ images \}\);/);
+  // The browser can't pick a source: the chat passes only the checked image(s).
+  assert.match(code("src/lib/assistantAsk.ts"), /const page = typeof input\.page === "string" \? input\.page\.slice\(0, 200\) : null;\s*return askCrm\(user, q, page, \{ images, onAnswerText \}\);/);
 });
 
 test("running for someone without a session re-checks membership, permission and module", () => {
