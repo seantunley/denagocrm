@@ -2,6 +2,7 @@ import "server-only";
 import { prisma } from "./db";
 import { computeHealth, type HealthResult } from "./health";
 import { getAccessibleContactIds, type PermissionUser } from "./permissions";
+import { contactCommunicationWhere } from "./customerContact";
 
 type Scores = { nps: number | null; csat: number | null };
 
@@ -76,7 +77,8 @@ export async function bulkHealth(user: PermissionUser): Promise<ScoredContact[]>
           },
         },
         leads: { where: { status: "won" }, select: { id: true } },
-        communications: { select: { occurredAt: true }, orderBy: { occurredAt: "desc" }, take: 1 },
+        // Last CONTACT, not the last timeline entry: an internal note isn't (customerContact.ts).
+        communications: { where: contactCommunicationWhere, select: { occurredAt: true }, orderBy: { occurredAt: "desc" }, take: 1 },
         referralsMade: { select: { id: true } },
       },
     }),
@@ -129,7 +131,8 @@ export async function contactHealth(contactId: string): Promise<HealthResult> {
           },
         },
         leads: { where: { status: "won" }, select: { id: true } },
-        communications: { select: { occurredAt: true }, orderBy: { occurredAt: "desc" }, take: 1 },
+        // Last CONTACT, not the last timeline entry: an internal note isn't (customerContact.ts).
+        communications: { where: contactCommunicationWhere, select: { occurredAt: true }, orderBy: { occurredAt: "desc" }, take: 1 },
         referralsMade: { select: { id: true } },
       },
     }),
