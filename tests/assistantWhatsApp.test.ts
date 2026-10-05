@@ -403,6 +403,16 @@ test("a code is stamped with the CALLER's session version — a pre-reset sessio
   assert.match(actions, /const session = await verifySession\(token\);/, "read from the signed cookie, not trusted from the client");
 });
 
+test("Sessions & devices: the linked phone shows next to the devices, and 'Sign out all' ends it", () => {
+  const page = code("src/app/(app)/settings/sessions/page.tsx");
+  assert.match(page, /where: \{ tenantId, waId: \{ not: null \}, verifiedAt: \{ not: null \} \}/);
+  assert.match(page, /onConfirm=\{unlinkWhatsAppFor\.bind\(null, u\.id\)\}/);
+  const sessions = code("src/app/actions/sessions.ts");
+  const all = sessions.slice(sessions.indexOf("export async function revokeAllForUser"));
+  assert.ok(all.indexOf("mayManageSessionsOf(") < all.indexOf("assistantPhoneLink.deleteMany"), "same gate as signing the devices out");
+  assert.match(all, /await prisma\.assistantPhoneLink\.deleteMany\(\{ where: \{ userId \} \}\);/);
+});
+
 test("a code asked for BEFORE a reset is burnt, not redeemed after it", async () => {
   const row = pending("u1", "123456"); // issued under version 1 (e.g. from a stolen session)
   state.sessionVersions.set("u1", 2); // the victim resets their password
