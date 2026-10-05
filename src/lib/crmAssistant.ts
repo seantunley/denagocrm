@@ -8,6 +8,7 @@ import { payableTotalCents } from "./pricing";
 import { johannesburgDateKey } from "./activityDay";
 import { listActingTenantStaff } from "./tenantActor";
 import { getAccessibleActivityIds } from "./activityAccess";
+import { contactActivityWhere, contactCommunicationWhere } from "./customerContact";
 import {
   getAccessibleLeadIds,
   getAccessibleQuoteIds,
@@ -81,13 +82,15 @@ async function findLeads(user: PermissionUser, raw: z.infer<typeof leadArgs>): P
       stage: { select: { name: true } },
       product: { select: { name: true } },
       assignedTo: { select: { name: true } },
-      communications: { orderBy: { occurredAt: "desc" }, take: 1, select: { occurredAt: true } },
-      activities: { where: { status: "done" }, orderBy: { doneAt: "desc" }, take: 1, select: { doneAt: true } },
+      // Real contact only (customerContact.ts): not internal notes, to-dos or blocked time.
+      communications: { where: contactCommunicationWhere, orderBy: { occurredAt: "desc" }, take: 1, select: { occurredAt: true } },
+      activities: { where: contactActivityWhere, orderBy: { doneAt: "desc" }, take: 1, select: { doneAt: true } },
     },
   });
 
-  // Last contact = the latest message either way or completed activity. The
-  // lead's own updatedAt is NOT contact: editing a field touches it.
+  // Last contact = the latest message either way, call or meeting. Not an
+  // internal note or a completed to-do, and not the lead's own updatedAt
+  // (editing a field touches it).
   const withTouch = leads.map((lead) => {
     const touches = [lead.communications[0]?.occurredAt, lead.activities[0]?.doneAt].filter(
       (d): d is Date => Boolean(d),

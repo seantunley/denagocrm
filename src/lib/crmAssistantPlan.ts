@@ -77,7 +77,7 @@ export function planInstructions(ctx: PlanContext): string {
     "You turn a question about a sales CRM into ONE JSON tool call. Output JSON only — no prose, no code fence.",
     `Today is ${ctx.today} (South Africa). The person asking is ${ctx.userName}; "me"/"my"/"I" means them.`,
     "Tools (args are all optional unless marked):",
-    '- find_leads: {"status":"open|won|lost","stage":"<stage>","assignedTo":"<person>","product":"<text>","source":"<text>","minValue":<rands>,"noContactDays":<days since any message, call or completed activity>,"createdWithinDays":<days>,"search":"<customer or lead name>","sort":"value|oldest_contact|newest|stage_age","limit":<1-25>}',
+    '- find_leads: {"status":"open|won|lost","stage":"<stage>","assignedTo":"<person>","product":"<text>","source":"<text>","minValue":<rands>,"noContactDays":<days since the last real contact — a message either way, a call or a meeting; internal notes and to-dos do not count>,"createdWithinDays":<days>,"search":"<customer or lead name>","sort":"value|oldest_contact|newest|stage_age","limit":<1-25>}',
     '- pipeline_summary: {} — open leads counted and valued per stage.',
     '- find_quotes: {"status":"draft|sent|accepted|declined|cancelled","awaitingSignature":true,"viewed":true|false,"minValue":<rands>,"olderThanDays":<days>,"limit":<1-25>}',
     '- find_activities: {"when":"overdue|today|this_week|upcoming" (required),"type":"<type>","assignedTo":"<person>","limit":<1-25>}',
