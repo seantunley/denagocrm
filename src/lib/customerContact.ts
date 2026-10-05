@@ -31,3 +31,21 @@ export function isCustomerContact(entry: { type: string }, kind: "communication"
   const internal: readonly string[] = kind === "communication" ? INTERNAL_COMMUNICATION_TYPES : NON_CONTACT_ACTIVITY_TYPES;
   return !internal.includes(entry.type);
 }
+
+/**
+ * The last real contact from a lead's timeline: the newest communication or
+ * completed activity that IS contact. A newer internal note never replaces an
+ * older call. (The queries already filter with the where-clauses above; this
+ * applies the same rule to whatever rows come back, so the answer can't drift
+ * if a query changes.)
+ */
+export function latestContactAt(
+  communications: { type: string; occurredAt: Date }[],
+  activities: { type: string; doneAt: Date | null; availabilityBlock?: boolean }[],
+): Date | null {
+  const times = [
+    ...communications.filter((c) => isCustomerContact(c, "communication")).map((c) => c.occurredAt),
+    ...activities.filter((a) => !a.availabilityBlock && isCustomerContact(a, "activity")).map((a) => a.doneAt),
+  ].filter((d): d is Date => d instanceof Date);
+  return times.length ? new Date(Math.max(...times.map((d) => d.getTime()))) : null;
+}
