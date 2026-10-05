@@ -1,6 +1,6 @@
 import "server-only";
 import { isModuleEnabled } from "./modules/enabled";
-import { askCrm, type AssistantResult } from "./crmAssistant";
+import { askCrm, type AskOptions, type AssistantResult } from "./crmAssistant";
 import { ASK_LIMIT_MESSAGE, assistantAskAllowed, assistantImageAllowed } from "./assistantUser";
 import { MAX_IMAGE_BYTES, cleanJpeg, jpegDataUrl } from "./assistantImage";
 import type { PermissionUser } from "./permissions";
@@ -16,7 +16,7 @@ import type { PermissionUser } from "./permissions";
 export async function askAsPerson(
   user: PermissionUser,
   input: { question: unknown; page: unknown; image: unknown },
-  onAnswerText?: (visibleSoFar: string) => void,
+  live: Pick<AskOptions, "onAnswerText" | "onProgress"> = {},
 ): Promise<AssistantResult> {
   // The page hides it with the module off; the action must refuse on its own.
   if (!(await isModuleEnabled("automation"))) {
@@ -40,5 +40,5 @@ export async function askAsPerson(
   // `page` is only a hint ("this lead"); pageHint reads a record id out of it
   // and the tools re-check access, so a forged path finds nothing new.
   const page = typeof input.page === "string" ? input.page.slice(0, 200) : null;
-  return askCrm(user, q, page, { images, onAnswerText });
+  return askCrm(user, q, page, { images, onAnswerText: live.onAnswerText, onProgress: live.onProgress });
 }

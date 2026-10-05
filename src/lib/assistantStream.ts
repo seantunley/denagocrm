@@ -34,5 +34,6 @@ export function visibleAnswer(soFar: string): string {
 
 /** The events the streaming route sends, one JSON object per line. */
 export type AskStreamEvent =
+  | { t: "status"; v: string }
   | { t: "text"; v: string }
   | { t: "done"; r: unknown };

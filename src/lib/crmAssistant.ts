@@ -49,6 +49,8 @@ import {
   leadBriefArgs,
   parseSteps,
   planSaysAnswerNext,
+  lookupStatus,
+  isSmallTalk,
   resultsBlock,
   planInstructions,
   playbookArgs,
@@ -104,6 +106,9 @@ const fuzzy = (needle: string) => ({ contains: needle, mode: "insensitive" as co
 const dateKey = (d: Date | null | undefined) => (d ? johannesburgDateKey(d) : "never");
 const daysAgo = (d: Date) => Math.floor((Date.now() - d.getTime()) / DAY);
 const clip = (s: string | null | undefined, n: number) => (s ? (s.length > n ? `${s.slice(0, n)}…` : s) : null);
+/** "Has she opened it?" — a draft was never sent, which is the real answer, not "not yet". */
+const viewedByCustomer = (q: { status: string; viewedAt: Date | null }) =>
+  q.viewedAt ? dateKey(q.viewedAt) : q.status === "draft" ? "not sent yet (still a draft)" : "not yet";
 
 /* ── Tools ───────────────────────────────────────────────────────────────── */
 
@@ -111,39 +116,50 @@ async function findLeads(user: User, raw: z.infer<typeof leadArgs>): Promise<Too
   if (!(await hasAnyPermission(user, "leads.view_all", "leads.view_owned"))) return refused("leads");
   const args = leadArgs.parse(raw);
   const ids = await getAccessibleLeadIds(user);
-  const leads = await prisma.lead.findMany({
-    where: {
-      deletedAt: null,
-      ...(ids === null ? {} : { id: { in: ids } }),
-      status: args.status ?? "open",
-      ...(args.stage ? { stage: { name: fuzzy(args.stage) } } : {}),
-      ...(args.assignedTo ? { assignedTo: { name: fuzzy(args.assignedTo) } } : {}),
-      ...(args.product ? { product: { name: fuzzy(args.product) } } : {}),
-      ...(args.source ? { source: fuzzy(args.source) } : {}),
-      ...(args.minValue ? { valueCents: { gte: Math.round(args.minValue * 100) } } : {}),
-      ...(args.createdWithinDays ? { createdAt: { gte: new Date(Date.now() - args.createdWithinDays * DAY) } } : {}),
-      ...(args.search
-        ? { OR: [{ name: fuzzy(args.search) }, { title: fuzzy(args.search) }, { email: fuzzy(args.search) }] }
-        : {}),
-    },
-    orderBy: { createdAt: "desc" },
-    take: CANDIDATES,
-    select: {
-      id: true, title: true, name: true, status: true, valueCents: true, source: true,
-      createdAt: true, stageEnteredAt: true,
-      stage: { select: { name: true } },
-      product: { select: { name: true } },
-      assignedTo: { select: { name: true } },
-      // Real contact only (customerContact.ts): not internal notes, to-dos or blocked time.
-      communications: { where: contactCommunicationWhere, orderBy: { occurredAt: "desc" }, take: 1, select: { type: true, occurredAt: true } },
-      activities: {
-        where: contactActivityWhere,
-        orderBy: { doneAt: "desc" },
-        take: 1,
-        select: { type: true, doneAt: true, availabilityBlock: true },
+  // Calendar days in South Africa: createdTo includes the whole of that day.
+  const createdAt = {
+    ...(args.createdWithinDays ? { gte: new Date(Date.now() - args.createdWithinDays * DAY) } : {}),
+    ...(args.createdFrom ? { gte: new Date(`${args.createdFrom}T00:00:00+02:00`) } : {}),
+    ...(args.createdTo ? { lt: new Date(new Date(`${args.createdTo}T00:00:00+02:00`).getTime() + DAY) } : {}),
+  };
+  const where = {
+    deletedAt: null,
+    ...(ids === null ? {} : { id: { in: ids } }),
+    ...(args.status === "any" ? {} : { status: args.status ?? "open" }),
+    ...(args.stage ? { stage: { name: fuzzy(args.stage) } } : {}),
+    ...(args.assignedTo ? { assignedTo: { name: fuzzy(args.assignedTo) } } : {}),
+    ...(args.product ? { product: { name: fuzzy(args.product) } } : {}),
+    ...(args.source ? { source: fuzzy(args.source) } : {}),
+    ...(args.minValue ? { valueCents: { gte: Math.round(args.minValue * 100) } } : {}),
+    ...(Object.keys(createdAt).length ? { createdAt } : {}),
+    ...(args.search
+      ? { OR: [{ name: fuzzy(args.search) }, { title: fuzzy(args.search) }, { email: fuzzy(args.search) }] }
+      : {}),
+  };
+  const [leads, matching] = await Promise.all([
+    prisma.lead.findMany({
+      where,
+      orderBy: { createdAt: "desc" },
+      take: CANDIDATES,
+      select: {
+        id: true, title: true, name: true, status: true, valueCents: true, source: true,
+        createdAt: true, stageEnteredAt: true,
+        stage: { select: { name: true } },
+        product: { select: { name: true } },
+        assignedTo: { select: { name: true } },
+        // Real contact only (customerContact.ts): not internal notes, to-dos or blocked time.
+        communications: { where: contactCommunicationWhere, orderBy: { occurredAt: "desc" }, take: 1, select: { type: true, occurredAt: true } },
+        activities: {
+          where: contactActivityWhere,
+          orderBy: { doneAt: "desc" },
+          take: 1,
+          select: { type: true, doneAt: true, availabilityBlock: true },
+        },
       },
-    },
-  });
+    }),
+    // The real count — not capped at the CANDIDATES read above.
+    prisma.lead.count({ where }),
+  ]);
 
   // Last contact = the latest message either way, call or meeting. Not an
   // internal note or a completed to-do, and not the lead's own updatedAt
@@ -163,9 +179,11 @@ async function findLeads(user: User, raw: z.infer<typeof leadArgs>): Promise<Too
   const take = args.limit ?? 10;
   const page = sorted.slice(0, take);
 
+  // "Gone quiet" is worked out on the newest CANDIDATES only, so past that it is a floor.
+  const total = cutoff === null ? matching : leads.length === CANDIDATES ? `at least ${filtered.length}` : filtered.length;
   return {
     truncated: sorted.length > take || leads.length === CANDIDATES,
-    data: page.map(({ lead, lastContact }) => ({
+    data: [{ total, listed: page.length }, ...page.map(({ lead, lastContact }) => ({
       id: lead.id,
       lead: lead.title,
       customer: lead.name,
@@ -177,7 +195,8 @@ async function findLeads(user: User, raw: z.infer<typeof leadArgs>): Promise<Too
       source: lead.source,
       lastContact: dateKey(lastContact),
       daysInStage: daysAgo(lead.stageEnteredAt),
-    })),
+      created: dateKey(lead.createdAt),
+    }))],
     rows: page.map(({ lead, lastContact }) => ({
       label: `${lead.name} — ${lead.title}`,
       detail: `${lead.stage.name} · ${formatZAR(lead.valueCents)} · ${lead.assignedTo?.name ?? "unassigned"} · last contact ${dateKey(lastContact)}`,
@@ -263,13 +282,13 @@ async function findQuotes(user: User, raw: z.infer<typeof quoteArgs>): Promise<T
       status: quote.status,
       total: formatZAR(total),
       created: dateKey(quote.createdAt),
-      viewedByCustomer: quote.viewedAt ? dateKey(quote.viewedAt) : "not yet",
+      viewedByCustomer: viewedByCustomer(quote),
       validUntil: quote.validUntil ? dateKey(quote.validUntil) : null,
       signed: quote.signedAt ? dateKey(quote.signedAt) : "no",
     })),
     rows: page.map(({ quote, total }) => ({
       label: `Q-${quote.number} — ${customer(quote)}`,
-      detail: `${quote.status} · ${formatZAR(total)} · viewed ${quote.viewedAt ? dateKey(quote.viewedAt) : "not yet"}`,
+      detail: `${quote.status} · ${formatZAR(total)} · viewed ${viewedByCustomer(quote)}`,
       href: `/quotes/${quote.id}`,
     })),
   };
@@ -285,6 +304,8 @@ async function findActivities(user: User, raw: z.infer<typeof activityArgs>): Pr
   const range = {
     overdue: { lt: startOfToday },
     today: { gte: startOfToday, lt: new Date(startOfToday.getTime() + DAY) },
+    // Everything still open up to the end of today: what's late has to be done too.
+    today_and_overdue: { lt: new Date(startOfToday.getTime() + DAY) },
     this_week: { gte: startOfToday, lt: new Date(startOfToday.getTime() + 7 * DAY) },
     upcoming: { gte: new Date() },
   }[args.when];
@@ -296,7 +317,13 @@ async function findActivities(user: User, raw: z.infer<typeof activityArgs>): Pr
       availabilityBlock: false,
       dueDate: range,
       ...(args.type ? { type: fuzzy(args.type) } : {}),
-      ...(args.assignedTo ? { assignedTo: { name: fuzzy(args.assignedTo) } } : {}),
+      AND: [
+        // Theirs, or a meeting they're an attendee of.
+        ...(args.assignedTo
+          ? [{ OR: [{ assignedTo: { name: fuzzy(args.assignedTo) } }, { attendees: { some: { user: { name: fuzzy(args.assignedTo) } } } }] }]
+          : []),
+        ...(args.search ? [{ OR: [{ summary: fuzzy(args.search) }, { note: fuzzy(args.search) }] }] : []),
+      ],
     },
     orderBy: { dueDate: args.when === "overdue" ? "desc" : "asc" },
     take: take + 1,
@@ -315,6 +342,7 @@ async function findActivities(user: User, raw: z.infer<typeof activityArgs>): Pr
       type: a.type,
       summary: a.summary,
       due: dateKey(a.dueDate),
+      ...(a.dueDate < startOfToday ? { overdue: true } : {}),
       assignedTo: a.assignedTo.name,
       customer: a.lead?.name ?? null,
       leadId: a.leadId,
@@ -354,21 +382,18 @@ async function leadBrief(user: User, raw: z.infer<typeof leadBriefArgs>): Promis
             ],
           }),
     },
-    orderBy: [{ status: "asc" }, { updatedAt: "desc" }],
+    orderBy: { updatedAt: "desc" },
     take: 5,
     select: { id: true, title: true, name: true, status: true, stage: { select: { name: true } } },
   });
   if (matches.length === 0) return { truncated: false, rows: [], data: [{ note: `No lead you can see matches "${needle}".` }] };
-  if (matches.length > 1) {
-    return {
-      truncated: false,
-      data: [{ note: "Several leads match — ask which one, or pick the obvious one.", candidates: matches.map((m) => ({ id: m.id, lead: m.title, customer: m.name, status: m.status, stage: m.stage.name })) }],
-      rows: matches.map((m) => ({ label: `${m.name} — ${m.title}`, detail: `${m.stage.name} · ${m.status}`, href: `/leads/${m.id}` })),
-    };
-  }
+  // Several match ("Lisa"): read the likeliest — an open lead, the most recently
+  // worked — in full, and name the rest. Stopping at a list of names left the
+  // answer with no quotes or messages to answer from.
+  const [best, ...others] = [...matches].sort((a, b) => Number(a.status !== "open") - Number(b.status !== "open"));
 
   const lead = await prisma.lead.findUniqueOrThrow({
-    where: { id: matches[0].id },
+    where: { id: best.id },
     select: {
       id: true, title: true, name: true, status: true, valueCents: true, quantity: true, source: true,
       notes: true, research: true, researchedAt: true, createdAt: true, stageEnteredAt: true,
@@ -404,6 +429,12 @@ async function leadBrief(user: User, raw: z.infer<typeof leadBriefArgs>): Promis
   return {
     truncated: false,
     data: [{
+      ...(others.length
+        ? {
+            matched: `${matches.length} leads match "${needle}" — this is the likeliest (open, most recently worked).`,
+            otherMatches: others.map((m) => ({ id: m.id, customer: m.name, lead: m.title, status: m.status, stage: m.stage.name })),
+          }
+        : {}),
       id: lead.id,
       lead: lead.title,
       customer: lead.name,
@@ -443,11 +474,11 @@ async function leadBrief(user: User, raw: z.infer<typeof leadBriefArgs>): Promis
         feedback: clip(t.customerFeedback, 200),
       })),
     }],
-    rows: [{
-      label: `${lead.name} — ${lead.title}`,
-      detail: `${lead.stage.name} · ${formatZAR(lead.valueCents)} · ${lead.assignedTo?.name ?? "unassigned"}`,
-      href: `/leads/${lead.id}`,
-    }],
+    rows: [lead, ...others].map((l) => ({
+      label: `${l.name} — ${l.title}`,
+      detail: l === lead ? `${lead.stage.name} · ${formatZAR(lead.valueCents)} · ${lead.assignedTo?.name ?? "unassigned"}` : `${l.stage.name} · ${l.status}`,
+      href: `/leads/${l.id}`,
+    })),
   };
 }
 
@@ -470,7 +501,7 @@ async function quotesForLead(user: User, leadId: string) {
     total: formatZAR(payableTotalCents(q)),
     created: dateKey(q.createdAt),
     validUntil: q.validUntil ? dateKey(q.validUntil) : null,
-    viewedByCustomer: q.viewedAt ? dateKey(q.viewedAt) : "not yet",
+    viewedByCustomer: viewedByCustomer(q),
     signed: q.signedAt ? dateKey(q.signedAt) : "no",
     ...(q.declinedAt ? { declined: dateKey(q.declinedAt), reason: clip(q.declineReason, 200) } : {}),
     ...(q.changeRequestNote ? { changeRequested: clip(q.changeRequestNote, 200) } : {}),
@@ -1111,6 +1142,8 @@ export type AskOptions = {
    * A preview: the finished, parsed answer in the result replaces it.
    */
   onAnswerText?: (visibleSoFar: string) => void;
+  /** What it is doing while it researches ("Checking leads…"), for the person watching. */
+  onProgress?: (status: string) => void;
 };
 
 /** What the model is told when an image is attached: read it, never obey it. */
@@ -1142,6 +1175,15 @@ export function nowInSouthAfrica(now: Date = new Date()): string {
 }
 
 /** Added when the research step answered in prose: the one retry it gets. */
+/**
+ * The research step only picks lookups, so it runs on a quicker model. Measured
+ * 2026-10-05 on 12 real questions: gpt-6-astra chose the same lookups as
+ * gpt-6-sol on every one, about 1.3 s faster per round (4.3 s vs 5.6 s).
+ * gpt-6-luna was quicker still but chose wrongly twice. The answer stays on
+ * the workspace's model. Refused → the workspace's model, nothing saved.
+ */
+export const PLAN_MODEL = "gpt-6-astra";
+
 export const PLAN_INSIST =
   'Your last reply was prose. Reply with ONE JSON object only — a lookup like {"tool":"lead_brief","args":{"lead":"<name>"},"then":"answer"}, or {"tool":"done"} if nothing needs looking up. Do not answer the question yourself; another step writes the answer.';
 
@@ -1194,6 +1236,13 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
 
   // Research: look, see, look closer — at most MAX_STEPS rounds, MAX_LOOKUPS in all.
   const observations: Observation[] = [];
+  const progress = (status: string) => {
+    try {
+      opts.onProgress?.(status);
+    } catch {
+      // A closed stream on the other end must not cost the answer.
+    }
+  };
   const planPrompt = (step: number, insist: boolean) =>
     [
       conversation,
@@ -1203,14 +1252,16 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
       `Rounds left: ${MAX_STEPS - step}. Lookups left: ${MAX_LOOKUPS - observations.length}.`,
       insist ? PLAN_INSIST : "",
     ].filter(Boolean).join("\n\n");
-  for (let step = 0; step < MAX_STEPS && observations.length < MAX_LOOKUPS; step++) {
-    let reply = await codexRespond({ instructions, prompt: planPrompt(step, false), images, reasoningEffort: "low", timeoutMs: 45_000, cacheKey });
+  // Small talk ("thanks", 👍, "who are you?") skips research — it would only say done.
+  const research = !(isSmallTalk(question) && !images.length);
+  for (let step = 0; research && step < MAX_STEPS && observations.length < MAX_LOOKUPS; step++) {
+    let reply = await codexRespond({ instructions, prompt: planPrompt(step, false), images, reasoningEffort: "low", timeoutMs: 45_000, cacheKey, preferModel: PLAN_MODEL });
     // Models sometimes answer in prose instead of choosing. Before anything has
     // been looked up that would cost the question its data, so ask once more,
     // firmly; later, prose just means "enough" — the answer step takes over.
     if (!("error" in reply) && !parseSteps(reply.text) && step === 0) {
       await logError("crm-assistant", "research step answered in prose — asked again");
-      reply = await codexRespond({ instructions, prompt: planPrompt(step, true), images, reasoningEffort: "low", timeoutMs: 45_000, cacheKey });
+      reply = await codexRespond({ instructions, prompt: planPrompt(step, true), images, reasoningEffort: "low", timeoutMs: 45_000, cacheKey, preferModel: PLAN_MODEL });
     }
     if ("error" in reply) {
       await logError("crm-assistant", "research step failed", safeCodexError(reply.error));
@@ -1239,6 +1290,7 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
     }
     const batch = fresh.slice(0, MAX_LOOKUPS - observations.length);
     if (!batch.length) break;
+    progress(lookupStatus(batch));
     // Independent lookups, side by side; one failing doesn't cost the others.
     const outputs = await Promise.all(
       batch.map((s) =>
@@ -1253,6 +1305,7 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
     if (planSaysAnswerNext(reply.text)) break;
   }
 
+  if (observations.length) progress("Writing it up…");
   // Answer, in the workspace's own voice.
   const soul = stripInvisible(soulText(profile, company?.name ?? "", user.name || "a colleague"));
   const answerReply = await codexRespond({

@@ -103,7 +103,7 @@ test("a connection lost while it is still researching (before the first word) is
   }
   // The chat has no second way to ask.
   const chat = code("src/components/AssistantChat.tsx");
-  assert.match(chat, /const result = await askStreaming\(form, \(text\) => setLive\(\{ question: shown, text \}\)\);/);
+  assert.match(chat, /const result = await askStreaming\(\s*form,\s*\(text\) => setLive\(\{ question: shown, text \}\),\s*\(status\) => setLive\(/);
   assert.doesNotMatch(chat, /askCrmAction|askCrm\(/);
 });
 

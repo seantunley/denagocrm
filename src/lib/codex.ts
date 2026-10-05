@@ -508,6 +508,12 @@ export async function codexRespond(input: {
   /** Research at high effort runs 50–80 seconds; the default suits short calls. */
   timeoutMs?: number;
   /**
+   * A model to try FIRST for this call only — the assistant's quick research
+   * step. Refused → the workspace's own list, as usual. Never saved as the
+   * workspace's model.
+   */
+  preferModel?: string;
+  /**
    * Calls that share a prompt prefix (the same person's assistant turns) pass
    * the same key, so the backend keeps their prompt cache on one machine.
    * Omitted → a one-off call with a fresh id, as before.
@@ -561,7 +567,9 @@ export async function codexRespond(input: {
     }).catch((error: unknown) => error as Error);
 
   const refusals: string[] = [];
-  for (const model of modelCandidates(configured)) {
+  const preferred = input.preferModel?.trim() || null;
+  const candidates = modelCandidates(configured);
+  for (const model of preferred ? [...new Set([preferred, ...candidates])] : candidates) {
     let res = await send(auth.tokens, model);
 
     // An access token can be revoked before its stated expiry. Renew once and
@@ -607,8 +615,9 @@ export async function codexRespond(input: {
 
     // The model that answered is not the one the workspace had — it retired,
     // or was never on this plan. Save the one that works, so the next call
-    // goes straight to it, and leave a row saying so.
-    if (model !== (configured ?? CODEX_DEFAULT_MODEL)) {
+    // goes straight to it, and leave a row saying so. (A per-call preferred
+    // model is not the workspace's choice: never saved.)
+    if (model !== preferred && model !== (configured ?? CODEX_DEFAULT_MODEL)) {
       await putSetting(CODEX_MODEL_KEY, model);
       await logError(
         "codex-research",

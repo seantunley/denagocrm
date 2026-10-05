@@ -281,13 +281,13 @@ test("THE REQUEST MATCHES WHAT THE CHATGPT BACKEND REQUIRES", () => {
 
 test("A REFUSED MODEL IS REPLACED BY ONE THAT ANSWERS, AND THE CHANGE IS SAVED", () => {
   const call = codex.slice(codex.indexOf("export async function codexRespond"), codex.indexOf("export async function testCodexConnection"));
-  assert.match(call, /for \(const model of modelCandidates\(configured\)\)/, "every call walks the candidates");
+  assert.match(call, /const candidates = modelCandidates\(configured\);\s*for \(const model of preferred \? \[\.\.\.new Set\(\[preferred, \.\.\.candidates\]\)\] : candidates\)/, "every call walks the candidates (a per-call preferred model first)");
   assert.match(call, /if \(isModelRejection\(res\.status, text\)\) \{[\s\S]{0,120}continue;/, "an HTTP refusal tries the next");
   assert.match(call, /if \(isModelRejection\(400, parsed\.failed\)\) \{[\s\S]{0,120}continue;/, "so does a refusal inside the stream");
   assert.match(
     call,
-    /if \(model !== \(configured \?\? CODEX_DEFAULT_MODEL\)\) \{\s*await putSetting\(CODEX_MODEL_KEY, model\);/,
-    "the model that answered is saved, migrating a stored gpt-5.4",
+    /if \(model !== preferred && model !== \(configured \?\? CODEX_DEFAULT_MODEL\)\) \{\s*await putSetting\(CODEX_MODEL_KEY, model\);/,
+    "the model that answered is saved, migrating a stored gpt-5.4 — but never a per-call preferred one",
   );
 });
 

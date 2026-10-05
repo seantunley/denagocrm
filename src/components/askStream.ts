@@ -17,7 +17,11 @@ export const STREAM_DROPPED =
  * never retried another way: a second ask would mean a second answer, second
  * learning and second proposed actions from one click.
  */
-export async function askStreaming(form: FormData, onText: (visibleSoFar: string) => void): Promise<AssistantResult> {
+export async function askStreaming(
+  form: FormData,
+  onText: (visibleSoFar: string) => void,
+  onStatus: (status: string) => void = () => {},
+): Promise<AssistantResult> {
   let res: Response;
   try {
     res = await fetch("/api/assistant/ask", { method: "POST", body: form, credentials: "same-origin" });
@@ -40,7 +44,8 @@ export async function askStreaming(form: FormData, onText: (visibleSoFar: string
       for (const line of lines) {
         if (!line.trim()) continue;
         const event = JSON.parse(line) as AskStreamEvent;
-        if (event.t === "text") onText(event.v);
+        if (event.t === "status") onStatus(event.v);
+        else if (event.t === "text") onText(event.v);
         else if (event.t === "done") return event.r as AssistantResult;
       }
     }
