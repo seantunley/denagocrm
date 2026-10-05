@@ -167,30 +167,32 @@ test("the runner works in ONE real workspace, named on every read and write", ()
   assert.match(loop, /where: \{ tenantId, active: true, nextRunAt: \{ lte: new Date\(\) \} \}/, "due list names the tenant");
   assert.match(loop, /if \(schedule\.tenantId !== tenantId\) continue;/);
   assert.match(loop, /where: \{ id: schedule\.id, tenantId, active: true, nextRunAt: schedule\.nextRunAt \}/, "the claim names the tenant");
-  assert.match(loop, /where: \{ id: schedule\.id, tenantId \}, data: \{ active: false, nextRunAt: null \}/, "so does the switch-off");
+  assert.match(loop, /where: \{ id: schedule\.id, tenantId, active: true, nextRunAt: schedule\.nextRunAt \},\s*data: \{ active: false, nextRunAt: null \}/, "so does the switch-off");
   assert.match(loop, /data: \{\s*tenantId,\s*userId: user\.id,/, "the fallback turn is stamped from the scope");
   assert.doesNotMatch(loop, /ownedWriteTenantId|budget\.tenantId/, "the tenant comes from the checked scope only");
   assert.match(loop, /"assistant",\s*\{ tenantId, userId: user\.id \}/, "the push names the tenant and the one person");
 });
 
-test("the runner CLAIMS each schedule before running it, as the person, re-checked", () => {
+test("the runner checks the person, THEN claims the run, then runs it as them", () => {
   const runner = code("src/lib/assistantScheduleRun.ts");
   const loop = runner.slice(runner.indexOf("export async function runDueAssistantSchedules"));
   assert.match(loop, /nextRunAt: \{ lte: new Date\(\) \} \},\s*orderBy: \{ nextRunAt: "asc" \}/, "due, oldest first");
   const budgetAt = loop.indexOf("budget.shouldStop(SCHEDULE_RUN_RESERVE_MS)");
-  const claimAt = loop.indexOf("where: { id: schedule.id, tenantId, active: true, nextRunAt: schedule.nextRunAt }");
-  const countAt = loop.indexOf("if (claim.count !== 1) continue;");
   const userAt = loop.indexOf("await assistantUserFor(schedule.userId)");
+  const claimAt = loop.indexOf("const claim = await prisma.assistantSchedule.updateMany(");
+  const countAt = loop.indexOf("if (claim.count !== 1) continue;");
   const askAt = loop.indexOf("askCrm(user, schedule.question, null, { source: \"schedule\", scheduleId: schedule.id })");
-  assert.ok(budgetAt > 0 && budgetAt < claimAt, "only started with time to finish");
-  assert.ok(claimAt > 0 && claimAt < countAt && countAt < userAt && userAt < askAt, "claim → check claimed → re-check the person → run");
+  assert.ok(budgetAt > 0 && budgetAt < userAt, "only started with time to finish");
+  assert.ok(userAt > 0 && userAt < claimAt && claimAt < countAt && countAt < askAt, "check the person → claim → check claimed → run");
   // The claim moves it to the next time after NOW (no backfill); a one-off switches off.
   assert.match(loop, /const next = nextRun\(schedule, now\);/);
   assert.match(loop, /data: \{ nextRunAt: next, lastRunAt: now, \.\.\.\(next \? \{\} : \{ active: false \}\) \}/);
   // Someone who can no longer use the assistant: switched off, nothing runs.
-  assert.match(loop, /if \(!user \|\| user\.id !== schedule\.userId\) \{\s*await prisma\.assistantSchedule\.updateMany\(\{ where: \{ id: schedule\.id, tenantId \}, data: \{ active: false, nextRunAt: null \} \}\);\s*continue;/);
-  // A failed or skipped run still leaves them a note in their thread.
-  assert.match(loop, /if \(!result\.ok\) \{[\s\S]*answer: allowed \? scheduleFailureNote\(result\.error\) : SCHEDULE_SKIPPED_NOTE,\s*source: "schedule",\s*scheduleId: schedule\.id,/);
+  assert.match(loop, /if \(!user \|\| user\.id !== schedule\.userId\) \{\s*await prisma\.assistantSchedule\.updateMany\(\{[\s\S]*?data: \{ active: false, nextRunAt: null \},\s*\}\);\s*continue;/);
+  // A failed, skipped or unsaved run still leaves them a note in their thread.
+  assert.match(loop, /const briefing = result\.ok && result\.saved;/);
+  assert.match(loop, /const note = result\.ok \? SCHEDULE_UNSAVED_NOTE : allowed \? scheduleFailureNote\(result\.error\) : SCHEDULE_SKIPPED_NOTE;/);
+  assert.match(loop, /source: "schedule", scheduleId: schedule\.id/);
   // The push goes to them alone, and carries no answer.
   const push = loop.slice(loop.indexOf("sendPushToAll("));
   assert.match(push, /"assistant",\s*\{ tenantId, userId: user\.id \}/);

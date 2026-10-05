@@ -3,7 +3,7 @@ import { prisma } from "./db";
 import { logError } from "./errorLog";
 import { askCrm, type AssistantResult } from "./crmAssistant";
 import { assistantAskAllowed, assistantUserFor } from "./assistantUser";
-import { MAX_ACTIVE_SCHEDULES, SCHEDULE_SKIPPED_NOTE, nextRun, scheduleFailureNote } from "./assistantSchedule";
+import { MAX_ACTIVE_SCHEDULES, SCHEDULE_SKIPPED_NOTE, SCHEDULE_UNSAVED_NOTE, nextRun, scheduleFailureNote } from "./assistantSchedule";
 import { currentTenantScope } from "./tenantScope";
 import { sendPushToAll } from "./push";
 import { getSetting } from "./settings";
@@ -102,18 +102,11 @@ export async function runDueAssistantSchedules(budget: CronSliceContext): Promis
     // Over the per-person share: left unclaimed, so it is still due next tick.
     const theirs = perPerson.get(schedule.userId) ?? 0;
     if (theirs >= MAX_RUNS_PER_PERSON_PER_TICK) continue;
-    const now = new Date();
-    const next = nextRun(schedule, now);
-    const claim = await prisma.assistantSchedule.updateMany({
-      where: { id: schedule.id, tenantId, active: true, nextRunAt: schedule.nextRunAt },
-      data: { nextRunAt: next, lastRunAt: now, ...(next ? {} : { active: false }) },
-    });
-    if (claim.count !== 1) continue;
-    perPerson.set(schedule.userId, theirs + 1);
 
-    // A failure to READ who they are (a database blip) is not "they left": this
-    // one run is skipped — already claimed, so it comes round at its next time —
-    // and the schedule stays on. Only a definite "no longer allowed" switches it off.
+    // WHO they are is settled BEFORE the run is claimed. A failure to read it
+    // (a database blip) touches nothing: the schedule is still due and is tried
+    // again next tick — never consumed, never switched off. Only a definite "no
+    // longer allowed" switches it off, and only if nobody has claimed it since.
     let user: Awaited<ReturnType<typeof assistantUserFor>>;
     try {
       user = await assistantUserFor(schedule.userId);
@@ -122,9 +115,22 @@ export async function runDueAssistantSchedules(budget: CronSliceContext): Promis
       continue;
     }
     if (!user || user.id !== schedule.userId) {
-      await prisma.assistantSchedule.updateMany({ where: { id: schedule.id, tenantId }, data: { active: false, nextRunAt: null } });
+      await prisma.assistantSchedule.updateMany({
+        where: { id: schedule.id, tenantId, active: true, nextRunAt: schedule.nextRunAt },
+        data: { active: false, nextRunAt: null },
+      });
       continue;
     }
+
+    // Then the claim: one conditional update, so overlapping ticks never run it twice.
+    const now = new Date();
+    const next = nextRun(schedule, now);
+    const claim = await prisma.assistantSchedule.updateMany({
+      where: { id: schedule.id, tenantId, active: true, nextRunAt: schedule.nextRunAt },
+      data: { nextRunAt: next, lastRunAt: now, ...(next ? {} : { active: false }) },
+    });
+    if (claim.count !== 1) continue;
+    perPerson.set(schedule.userId, theirs + 1);
 
     // The same per-person hourly ask limit as chat, voice and WhatsApp. Over
     // it, this run is skipped — it is already claimed, so it simply comes round
@@ -137,34 +143,38 @@ export async function runDueAssistantSchedules(budget: CronSliceContext): Promis
             await logError("assistant-schedule", "scheduled run failed", error instanceof Error ? error.name : "unknown");
             return { ok: false as const, error: "failed" };
           });
-    // askCrm saves the turn only when it answers; a failure or a skip is saved
-    // here, so the person sees why instead of nothing.
-    if (!result.ok) {
-      await prisma.assistantTurn
-        .create({
-          data: {
-            tenantId,
-            userId: user.id,
-            question: schedule.question,
-            answer: allowed ? scheduleFailureNote(result.error) : SCHEDULE_SKIPPED_NOTE,
-            source: "schedule",
-            scheduleId: schedule.id,
-          },
-        })
-        .catch((error: unknown) => logError("assistant-schedule", "failure note write failed", error instanceof Error ? error.name : "unknown"));
+    // A BRIEFING EXISTS only if askCrm answered AND saved it (`saved`). Anything
+    // else — a failure, a skip, or an answer whose save failed — gets a short
+    // note saved here instead, so the person sees why.
+    const briefing = result.ok && result.saved;
+    let delivered = briefing;
+    if (!briefing) {
+      const note = result.ok ? SCHEDULE_UNSAVED_NOTE : allowed ? scheduleFailureNote(result.error) : SCHEDULE_SKIPPED_NOTE;
+      delivered = await prisma.assistantTurn
+        .create({ data: { tenantId, userId: user.id, question: schedule.question, answer: note, source: "schedule", scheduleId: schedule.id } })
+        .then(() => true)
+        .catch(async (error: unknown) => {
+          await logError("assistant-schedule", "schedule note write failed", error instanceof Error ? error.name : "unknown");
+          return false;
+        });
     }
     ran++;
 
-    const name = parseProfile(await getSetting(ASSISTANT_PROFILE_KEY).catch(() => null)).name;
-    await sendPushToAll(
-      {
-        title: name,
-        body: result.ok ? "Your scheduled briefing is ready." : "A scheduled question couldn't run — open to see why.",
-        url: "/assistant",
-      },
-      "assistant",
-      { tenantId, userId: user.id },
-    ).catch((error: unknown) => logError("assistant-schedule", "push failed", error instanceof Error ? error.name : "unknown"));
+    // The push points at something that is there: "ready" only for a saved
+    // briefing, "couldn't run" only for a saved note — and nothing at all when
+    // nothing could be saved (it would open onto an empty thread).
+    if (delivered) {
+      const name = parseProfile(await getSetting(ASSISTANT_PROFILE_KEY).catch(() => null)).name;
+      await sendPushToAll(
+        {
+          title: name,
+          body: briefing ? "Your scheduled briefing is ready." : "A scheduled question couldn't run — open to see why.",
+          url: "/assistant",
+        },
+        "assistant",
+        { tenantId, userId: user.id },
+      ).catch((error: unknown) => logError("assistant-schedule", "push failed", error instanceof Error ? error.name : "unknown"));
+    }
   }
   return { ran };
 }

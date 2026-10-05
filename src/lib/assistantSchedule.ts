@@ -144,6 +144,10 @@ export function describeSchedule(s: ScheduleTiming): string {
 }
 
 /** Saved instead of an answer when a run hit the person's hourly ask limit. */
+/** When the answer was written but couldn't be saved — said instead of a "ready" that would lead nowhere. */
+export const SCHEDULE_UNSAVED_NOTE =
+  "I answered this scheduled question but couldn't save the briefing. It will run again at its next time, or you can ask it yourself now.";
+
 export const SCHEDULE_SKIPPED_NOTE =
   "I skipped this scheduled question — there were too many questions to me in the last hour. You can ask it yourself in a few minutes.";
 

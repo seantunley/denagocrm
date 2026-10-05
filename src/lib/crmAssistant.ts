@@ -86,7 +86,8 @@ export type AssistantRow = { label: string; detail: string; href: string };
 export type AssistantResult =
   /** learned: how many memories/playbooks this answer added or changed (owner reviews them). */
   /** choices: quick replies, shown as buttons under the answer. */
-  | { ok: true; answer: string; rows: AssistantRow[]; tools: string[]; learned: number; actions: ActionCard[]; choices: string[] }
+  /** saved: the turn was written to the person's history — for a scheduled run, the briefing EXISTS. */
+  | { ok: true; answer: string; rows: AssistantRow[]; tools: string[]; learned: number; actions: ActionCard[]; choices: string[]; saved: boolean }
   | { ok: false; error: string };
 
 type ToolOutput = { rows: AssistantRow[]; data: unknown[]; truncated: boolean };
@@ -1192,7 +1193,7 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
   if ("error" in answerReply) {
     await logError("crm-assistant", "answer step failed", safeCodexError(answerReply.error));
     // The rows are still right; show them rather than nothing.
-    return { ok: true, answer: "Here's what the CRM returned (ChatGPT couldn't write it up just now).", rows, tools, learned: 0, actions: [], choices: [] };
+    return { ok: true, answer: "Here's what the CRM returned (ChatGPT couldn't write it up just now).", rows, tools, learned: 0, actions: [], choices: [], saved: false };
   }
   // The answer the person sees, and — separately — anything it decided to learn,
   // any tasks it proposes and any quick replies. All trailer lines are removed.
@@ -1214,7 +1215,7 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
         return 0;
       })
     : 0;
-  await prisma.assistantTurn
+  const saved = await prisma.assistantTurn
     .create({
       data: {
         tenantId: ownedWriteTenantId(),
@@ -1226,9 +1227,15 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
         scheduleId: source === "schedule" ? opts.scheduleId ?? null : null,
       },
     })
-    // Remembering is a nicety; failing to must not cost the person their answer.
-    .catch((error: unknown) => logError("crm-assistant", "history write failed", error instanceof Error ? error.name : "unknown"));
-  return { ok: true, answer, rows, tools, learned: learnedCount, actions, choices };
+    .then(() => true)
+    // In chat, remembering is a nicety: failing to must not cost the person the
+    // answer on their screen. A scheduled run has no screen — the saved turn IS
+    // the briefing — so the runner reads `saved` and never says "ready" without it.
+    .catch(async (error: unknown) => {
+      await logError("crm-assistant", "history write failed", error instanceof Error ? error.name : "unknown");
+      return false;
+    });
+  return { ok: true, answer, rows, tools, learned: learnedCount, actions, choices, saved };
 }
 
 /**
