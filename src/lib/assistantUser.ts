@@ -1,6 +1,7 @@
 import "server-only";
 import { basePrisma } from "./db";
 import { hasAnyPermission, type PermissionKey, type PermissionUser } from "./permissions";
+import { getUserPermissions, RBAC_UNAVAILABLE } from "./permissionQuery";
 import { isModuleEnabled } from "./modules/enabled";
 import { resolveTenantMemberUser } from "./tenantActor";
 import { currentTenantScope } from "./tenantScope";
@@ -51,6 +52,13 @@ export async function assistantUserFor(userId: string): Promise<PermissionUser |
   if (!member) return null;
   const user = await basePrisma.user.findUnique({ where: { id: member.id }, select: { id: true, name: true, email: true, role: true } });
   if (!user) return null;
+  // "Couldn't read their permissions" is not "they have none": a database blip
+  // throws, so the WhatsApp webhook retries and the schedule cron leaves the
+  // schedule for the next tick — instead of filing a staff question as a
+  // customer's, or switching someone's schedule off for good.
+  if (user.role !== "owner" && (await getUserPermissions(user.id)).has(RBAC_UNAVAILABLE)) {
+    throw new Error("assistant: permissions unavailable");
+  }
   if (!(await hasAnyPermission(user, ...ASSISTANT_PERMISSIONS))) return null;
   if (!(await isModuleEnabled("automation"))) return null;
   return user;

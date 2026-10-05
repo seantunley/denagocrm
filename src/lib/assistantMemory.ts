@@ -72,10 +72,11 @@ export const MIN_METHOD_LOOKUPS = 2;
 
 export function methodInstructions(lookups: { tool: string; args: unknown }[]): string {
   if (lookups.length < MIN_METHOD_LOOKUPS) return "";
-  const steps = lookups.map((l, i) => `${i + 1}. ${l.tool} ${JSON.stringify(l.args ?? {})}`).join("\n");
+  // The lookups themselves (tool + filters, which a model chose after reading
+  // customer text) are NOT copied into these instructions: they're already in
+  // the fenced results, each with its filters, cleaned. Only tool names here.
   return [
-    "METHOD. Answering this took several lookups:",
-    steps,
+    `METHOD. Answering this took ${lookups.length} lookups (${lookups.map((l) => l.tool).join(" → ")}); their filters are with each result above.`,
     "If this is a KIND of question that will come up again (\"who should I chase\", \"is X ready for delivery\" — not one about a particular customer) and no playbook already covers it, save the method as a playbook in your LEARN line: a name for that kind of question, a one-line description, and the steps — which lookups with which filters, what to look for in the results, and how to judge them. Leave out names and anything specific to today's records.",
     "If you loaded a playbook and it was missing a step you needed, improve it (replace). If the method was obvious or one-off, learn nothing.",
   ].join("\n");
@@ -126,7 +127,11 @@ const PHONE = /\p{Nd}(?:(?:[^\p{L}\p{Nd}\n,]{0,3}|,(?=\p{Nd}))\p{Nd}){8,}/u;
 // one or two of them are never nine digits.
 const DATE_OR_TIME =
   /\b(?:19|20)\d\d[-/.](?:0?[1-9]|1[0-2])[-/.](?:0?[1-9]|[12]\d|3[01])\b|\b(?:0?[1-9]|[12]\d|3[01])[-/.](?:0?[1-9]|1[0-2])[-/.](?:19|20)\d\d\b/g;
-const MONEY = /(?:\bR|\bZAR|\$|€|£)\s?\d{1,3}(?:[ ,.']\d{3})*(?:[.,]\d{2})?(?![\s,.']?\d)/gi;
+// Not followed by ANY separator-then-digit (so "$082-123-4567" isn't eaten
+// down to its tail), and an "amount" of nine or more digits is a phone wearing
+// a currency sign ("R0 821 234 567") — kept for the phone check, not removed.
+const MONEY = /(?:\bR|\bZAR|\$|€|£)\s?(\d{1,3}(?:[ ,.']\d{3})*)(?:[.,]\d{2})?(?![^\p{L}\p{Nd}\n]{0,3}\p{Nd})/giu;
+const withoutMoney = (text: string) => text.replace(MONEY, (whole, int: string) => (int.replace(/\D/g, "").length >= 9 ? whole : " amount "));
 
 /** Cleaned text, or a reason it may not be learned. */
 export function scanEntry(raw: string): { ok: true; text: string } | { ok: false; reason: string } {
@@ -134,7 +139,7 @@ export function scanEntry(raw: string): { ok: true; text: string } | { ok: false
   const text = stripInvisible(raw).replace(/\r\n/g, "\n").replace(/[^\S\n]+/g, " ").replace(/\n{3,}/g, "\n\n").trim();
   if (text.length < 3) return { ok: false, reason: "empty" };
   if (INJECTION.some((pattern) => pattern.test(text))) return { ok: false, reason: "looks like an instruction to the assistant" };
-  if (EMAIL.test(text) || PHONE.test(text.replace(MONEY, " amount ").replace(DATE_OR_TIME, " when "))) {
+  if (EMAIL.test(text) || PHONE.test(withoutMoney(text).replace(DATE_OR_TIME, " when "))) {
     return { ok: false, reason: "contains contact details" };
   }
   return { ok: true, text };

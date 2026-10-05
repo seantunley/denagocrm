@@ -159,7 +159,9 @@ async function startCodexLoginLocked(
   const deviceAuthId = str(body?.device_auth_id);
   const userCode = str(body?.user_code) ?? str(body?.usercode);
   if (!deviceAuthId || !userCode) {
-    await logError("codex-auth", "Device code response missing fields", text.slice(0, 300));
+    // Which fields arrived, never their values: a half-formed sign-in response
+    // can still carry a device code or user code — credentials, not log text.
+    await logError("codex-auth", "Device code response missing fields", `keys: ${Object.keys(body ?? {}).join(",").slice(0, 200)}`);
     return { error: "OpenAI's sign-in response was not in the expected shape." };
   }
 
@@ -219,7 +221,8 @@ export async function pollCodexLogin(shownUserCode: string): Promise<
   const code = str(body?.authorization_code);
   const verifier = str(body?.code_verifier);
   if (!code || !verifier) {
-    await logError("codex-auth", "Device authorization missing exchange code", text.slice(0, 300));
+    // Field names only: the body may hold an authorization code or verifier.
+    await logError("codex-auth", "Device authorization missing exchange code", `keys: ${Object.keys(body ?? {}).join(",").slice(0, 200)}`);
     return { error: "OpenAI's approval was not in the expected shape." };
   }
 
@@ -329,7 +332,9 @@ async function postTokenForm(
   const refresh = str(body?.refresh_token) ?? previous?.refresh;
   const expiresIn = Number(body?.expires_in);
   if (!access || !refresh) {
-    await logError("codex-auth", "Token response missing fields", text.slice(0, 120));
+    // Field names only: a token response missing its refresh token can still
+    // carry a live access token in the first characters of its body.
+    await logError("codex-auth", "Token response missing fields", `keys: ${Object.keys(body ?? {}).join(",").slice(0, 200)}`);
     return { error: "OpenAI's token response was not in the expected shape." };
   }
   return {
@@ -503,7 +508,8 @@ export async function codexRespond(input: {
         refusals.push(`${model} (${res.status})`);
         continue;
       }
-      await logError("codex-research", `ChatGPT backend ${res.status}`, text.slice(0, 300));
+      // The status only: the body is the provider's words and can echo the request.
+      await logError("codex-research", `ChatGPT backend ${res.status}`);
       // 429 is the plan's usage limit. It lifts on its own; the sweep should
       // stop for now rather than work down the list.
       const transient = res.status === 429 || res.status >= 500;
@@ -515,7 +521,8 @@ export async function codexRespond(input: {
     const parsed = parseCodexStream(text);
     if (parsed.failed) {
       if (isModelRejection(400, parsed.failed)) {
-        refusals.push(`${model} (${parsed.failed.slice(0, 60)})`);
+        // The model's name only — never the provider's reply text.
+        refusals.push(model);
         continue;
       }
       // A reason only: the provider's failure text can echo what was asked,
