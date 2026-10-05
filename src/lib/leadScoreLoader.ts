@@ -56,7 +56,10 @@ export async function scoreLeads(leads: ScorableLead[], now: Date = new Date()):
     // Contact means the customer (customerContact.ts): a note is something WE
     // wrote down, and a ticked-off to-do or blocked-out time isn't a touch either.
     prisma.communication.groupBy({ by: ["leadId"], where: { leadId, ...contactCommunicationWhere }, _max: { occurredAt: true } }),
-    prisma.communication.groupBy({ by: ["leadId"], where: { leadId, direction: "inbound" }, _max: { occurredAt: true } }),
+    // "The customer wrote to us" — a real inbound message, never a note filed as
+    // inbound (the generic communication action accepts type "note" with any
+    // direction), or a newer note would award "waiting on our reply".
+    prisma.communication.groupBy({ by: ["leadId"], where: { leadId, direction: "inbound", ...contactCommunicationWhere }, _max: { occurredAt: true } }),
     prisma.activity.groupBy({ by: ["leadId"], where: { leadId, ...contactActivityWhere }, _max: { doneAt: true } }),
     // The EARLIEST planned activity answers both questions at once: none means no
     // next step, and one in the past means something is overdue.
