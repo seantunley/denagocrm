@@ -12,37 +12,105 @@ const code = (rel: string) =>
     .replace(/\/\*[\s\S]*?\*\//g, "")
     .replace(/^\s*\/\/.*$/gm, "");
 
-/* A tiny JPEG built by hand: SOI, APP0 (JFIF), APP1 (EXIF with "GPS"), COM, DQT, SOS + data, EOI. */
+/* JPEGs built by hand, segment by segment, so every byte the cleaner keeps is known. */
 const seg = (marker: number, payload: number[]) => [0xff, marker, (payload.length + 2) >> 8, (payload.length + 2) & 0xff, ...payload];
 const ascii = (s: string) => [...s].map((c) => c.charCodeAt(0));
-const JFIF = seg(0xe0, ascii("JFIF\0\x01\x01"));
+const JFIF = seg(0xe0, ascii("JFIF\0\x01\x01 thumbnail-bytes"));
 const EXIF = seg(0xe1, ascii("Exif\0\0GPS -33.9249,18.4241 serial XYZ"));
 const XMP = seg(0xe1, ascii("http://ns.adobe.com/xap/1.0/ <x:xmpmeta/>"));
 const ICC = seg(0xe2, ascii("ICC_PROFILE"));
+const IPTC = seg(0xed, ascii("Photoshop 3.0 IPTC Anna Jacobs"));
 const COMMENT = seg(0xfe, ascii("taken at Anna's house"));
-const DQT = seg(0xdb, [0, ...Array(64).fill(1)]);
-const SOS = [...seg(0xda, [1, 1, 0, 0, 63, 0]), 0x12, 0x34, 0xff, 0x00, 0x56];
+const DQT = seg(0xdb, [0x00, ...Array(64).fill(1)]);
+// One DC table with one symbol of length 1.
+const DHT = seg(0xc4, [0x00, 1, ...Array(15).fill(0), 0x00]);
+const SOF0 = seg(0xc0, [8, 0, 16, 0, 16, 1, 1, 0x11, 0]);
+const SOF2 = seg(0xc2, [8, 0, 16, 0, 16, 1, 1, 0x11, 0]);
+// A scan: header + entropy data with a stuffed 0xFF00 and a restart marker.
+const scan = (bytes: number[]) => [...seg(0xda, [1, 1, 0x00, 0, 63, 0]), ...bytes];
+const SCAN_A = scan([0x12, 0x34, 0xff, 0x00, 0x56, 0xff, 0xd0, 0x78]);
+const SCAN_B = scan([0x9a, 0xbc, 0xff, 0x00]);
 const EOI = [0xff, 0xd9];
 const jpeg = (...parts: number[][]) => Uint8Array.from([0xff, 0xd8, ...parts.flat()]);
+const latin1 = (b: Uint8Array) => Buffer.from(b).toString("latin1");
 
-test("an attached image keeps its picture and loses every metadata block — GPS, XMP, ICC, comments", () => {
-  const dirty = jpeg(JFIF, EXIF, XMP, ICC, COMMENT, DQT, SOS, EOI);
-  const clean = cleanJpeg(dirty);
+test("only what draws the picture is kept — every APP block and comment goes, JFIF included", () => {
+  const clean = cleanJpeg(jpeg(JFIF, EXIF, XMP, ICC, IPTC, COMMENT, DQT, DHT, SOF0, SCAN_A, EOI));
   assert.ok(clean);
-  assert.deepEqual([...clean], [0xff, 0xd8, ...JFIF, ...DQT, ...SOS, ...EOI], "only what draws the picture is kept");
-  const text = Buffer.from(clean).toString("latin1");
-  for (const gone of ["Exif", "GPS", "xmpmeta", "ICC_PROFILE", "Anna"]) assert.ok(!text.includes(gone), gone);
+  assert.deepEqual([...clean], [0xff, 0xd8, ...DQT, ...DHT, ...SOF0, ...SCAN_A, ...EOI], "a whitelist rebuild, byte for byte");
+  for (const gone of ["Exif", "GPS", "xmpmeta", "ICC_PROFILE", "IPTC", "Anna", "JFIF", "thumbnail"]) assert.ok(!latin1(clean).includes(gone), gone);
   assert.match(jpegDataUrl(clean), /^data:image\/jpeg;base64,/);
 });
 
-test("anything that isn't a whole JPEG is refused, not passed on", () => {
-  assert.equal(cleanJpeg(Uint8Array.from([0x89, 0x50, 0x4e, 0x47])), null, "PNG");
-  assert.equal(cleanJpeg(Uint8Array.from(Buffer.from("<svg onload=alert(1)>"))), null, "SVG/script");
-  assert.equal(cleanJpeg(jpeg(JFIF, EXIF)), null, "no image data");
-  assert.equal(cleanJpeg(jpeg([0xff, 0xe1, 0xff, 0xff])), null, "a length running past the end");
-  assert.equal(cleanJpeg(Uint8Array.from([0xff, 0xd8])), null, "empty");
+test("bytes appended AFTER the end of the image are dropped", () => {
+  const secret = ascii("SECRET: customer list attached here");
+  const clean = cleanJpeg(Uint8Array.from([...jpeg(DQT, DHT, SOF0, SCAN_A, EOI), ...secret]));
+  assert.ok(clean);
+  assert.ok(!latin1(clean).includes("SECRET"));
+  assert.deepEqual([...clean.slice(-2)], EOI, "the image ends at EOI");
+});
+
+test("a progressive JPEG keeps every scan, and metadata BETWEEN scans is dropped", () => {
+  const clean = cleanJpeg(jpeg(DQT, DHT, SOF2, SCAN_A, EXIF, COMMENT, DHT, SCAN_B, XMP, EOI));
+  assert.ok(clean);
+  assert.deepEqual([...clean], [0xff, 0xd8, ...DQT, ...DHT, ...SOF2, ...SCAN_A, ...DHT, ...SCAN_B, ...EOI]);
+  for (const gone of ["Exif", "GPS", "Anna", "xmpmeta"]) assert.ok(!latin1(clean).includes(gone), gone);
+});
+
+test("malformed or unexpected structure is refused, never passed on", () => {
+  const padded = seg(0xdb, [0x00, ...Array(64).fill(1), ...ascii("hidden")]); // a table with spare bytes
+  const cases: [string, Uint8Array][] = [
+    ["PNG", Uint8Array.from([0x89, 0x50, 0x4e, 0x47])],
+    ["SVG/script", Uint8Array.from(Buffer.from("<svg onload=alert(1)>"))],
+    ["empty", Uint8Array.from([0xff, 0xd8])],
+    ["metadata only", jpeg(JFIF, EXIF)],
+    ["no end of image", jpeg(DQT, DHT, SOF0, SCAN_A)],
+    ["file ends inside a scan", jpeg(DQT, DHT, SOF0, scan([0x12, 0x34]))],
+    ["length runs past the end", jpeg([0xff, 0xe1, 0xff, 0xff])],
+    ["a header with hidden padding", jpeg(padded, DHT, SOF0, SCAN_A, EOI)],
+    ["a scan before any frame", jpeg(DQT, DHT, SCAN_A, SOF0, EOI)],
+    ["two frames", jpeg(DQT, DHT, SOF0, SOF0, SCAN_A, EOI)],
+    ["a second start-of-image", jpeg(DQT, [0xff, 0xd8], SOF0, SCAN_A, EOI)],
+    ["an unknown marker", jpeg(DQT, DHT, SOF0, seg(0xf0, ascii("JPEG extension data")), SCAN_A, EOI)],
+    ["no scan at all", jpeg(DQT, DHT, SOF0, EOI)],
+  ];
+  for (const [name, bytes] of cases) assert.equal(cleanJpeg(bytes), null, name);
   assert.ok(MAX_IMAGE_BYTES <= 2_000_000);
   assert.equal(MAX_IMAGES_PER_QUESTION, 1);
+});
+
+test("real photos (when sharp is installed locally): EXIF/GPS and trailing data gone, still a valid image", async (t) => {
+  // Loaded by a computed name: sharp is not a dependency of this app, so CI may
+  // not have it — then this real-photo check is skipped, not a type error.
+  type Sharp = (input?: unknown) => {
+    withExif(exif: Record<string, Record<string, string>>): ReturnType<Sharp>;
+    jpeg(options: { progressive: boolean; quality: number }): ReturnType<Sharp>;
+    toBuffer(): Promise<Buffer>;
+    metadata(): Promise<{ width?: number; exif?: Buffer }>;
+  };
+  let sharp: Sharp | null = null;
+  try {
+    const name = "sharp";
+    sharp = ((await import(name)) as { default: Sharp }).default;
+  } catch {
+    t.skip("sharp isn't installed here — the hand-built cases above cover the same rules");
+    return;
+  }
+  const raw = { create: { width: 64, height: 48, channels: 3 as const, background: { r: 200, g: 40, b: 40 } } };
+  for (const progressive of [false, true]) {
+    const photo = await sharp(raw)
+      .withExif({ IFD0: { Copyright: "GPS-SECRET Anna Jacobs" }, IFD3: { GPSLatitudeRef: "S", GPSLatitude: "33/1 55/1 29/1" } })
+      .jpeg({ progressive, quality: 80 })
+      .toBuffer();
+    assert.ok(photo.toString("latin1").includes("GPS-SECRET"), "the test photo really carries the metadata");
+    const dirty = Uint8Array.from([...photo, ...ascii("TRAILING-SECRET")]);
+    const clean = cleanJpeg(dirty);
+    assert.ok(clean, `progressive=${progressive}`);
+    assert.ok(!latin1(clean).includes("GPS-SECRET") && !latin1(clean).includes("TRAILING-SECRET"));
+    const meta = await sharp(Buffer.from(clean)).metadata();
+    assert.equal(meta.width, 64, "it still decodes as the same picture");
+    assert.equal(meta.exif, undefined, "no EXIF left");
+  }
 });
 
 test("the image is checked on the server before the question is asked — and never stored", () => {
