@@ -8,7 +8,7 @@ import { payableTotalCents } from "./pricing";
 import { johannesburgDateKey } from "./activityDay";
 import { listActingTenantStaff } from "./tenantActor";
 import { getAccessibleActivityIds } from "./activityAccess";
-import { contactActivityWhere, contactCommunicationWhere } from "./customerContact";
+import { contactActivityWhere, contactCommunicationWhere, latestContactAt } from "./customerContact";
 import {
   getAccessibleLeadIds,
   getAccessibleQuoteIds,
@@ -83,21 +83,20 @@ async function findLeads(user: PermissionUser, raw: z.infer<typeof leadArgs>): P
       product: { select: { name: true } },
       assignedTo: { select: { name: true } },
       // Real contact only (customerContact.ts): not internal notes, to-dos or blocked time.
-      communications: { where: contactCommunicationWhere, orderBy: { occurredAt: "desc" }, take: 1, select: { occurredAt: true } },
-      activities: { where: contactActivityWhere, orderBy: { doneAt: "desc" }, take: 1, select: { doneAt: true } },
+      communications: { where: contactCommunicationWhere, orderBy: { occurredAt: "desc" }, take: 1, select: { type: true, occurredAt: true } },
+      activities: {
+        where: contactActivityWhere,
+        orderBy: { doneAt: "desc" },
+        take: 1,
+        select: { type: true, doneAt: true, availabilityBlock: true },
+      },
     },
   });
 
   // Last contact = the latest message either way, call or meeting. Not an
   // internal note or a completed to-do, and not the lead's own updatedAt
   // (editing a field touches it).
-  const withTouch = leads.map((lead) => {
-    const touches = [lead.communications[0]?.occurredAt, lead.activities[0]?.doneAt].filter(
-      (d): d is Date => Boolean(d),
-    );
-    const lastContact = touches.length ? new Date(Math.max(...touches.map((d) => d.getTime()))) : null;
-    return { lead, lastContact };
-  });
+  const withTouch = leads.map((lead) => ({ lead, lastContact: latestContactAt(lead.communications, lead.activities) }));
   const cutoff = args.noContactDays ? Date.now() - args.noContactDays * DAY : null;
   const filtered = cutoff === null
     ? withTouch
