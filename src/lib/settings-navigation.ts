@@ -43,6 +43,7 @@ export const SETTINGS_NAV_GROUPS: SettingsNavGroup[] = [
     items: [
       { key: "company", label: "Company profile", href: "/settings/company", keywords: ["business", "address", "phone", "branding", "footer", "logo", "details"] },
       { key: "modules", label: "Modules", href: "/settings/modules", platform: true, keywords: ["features", "packs", "enable", "disable", "automotive", "workshop", "inbox", "add-ons"] },
+      { key: "assistant", label: "Assistant", href: "/settings/assistant", module: "automation", keywords: ["ai", "assistant", "ask the crm", "personality", "tone", "chatgpt", "memory", "learning", "playbooks"] },
       { key: "custom-fields", label: "Custom fields", href: "/settings/custom-fields", keywords: ["custom", "fields", "eav", "extra", "attributes", "metadata", "contact fields", "lead fields", "properties"] },
       // Beside custom fields rather than under Operations: both decide what gets
       // recorded against a record, and a checklist is not tied to one module —

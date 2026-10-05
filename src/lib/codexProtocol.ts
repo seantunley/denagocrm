@@ -162,13 +162,23 @@ export function accountIdFromToken(token: string | undefined | null): string | n
  * `incomplete` is the equivalent of Anthropic's `max_tokens` stop: it must never
  * be saved as research.
  */
-export function parseCodexStream(raw: string): { text: string; incomplete: boolean; failed: string | null } {
+/** Prompt tokens sent, and how many of them the provider served from its prompt cache. */
+export type CodexUsage = { inputTokens: number; cachedTokens: number };
+
+export function parseCodexStream(raw: string): { text: string; incomplete: boolean; failed: string | null; usage: CodexUsage | null } {
   let deltas = "";
   let itemsText = "";
   let completedText = "";
   let incomplete = false;
   let terminal = false;
   let failed: string | null = null;
+  let usage: CodexUsage | null = null;
+  const readUsage = (response: unknown) => {
+    const u = (response as { usage?: { input_tokens?: unknown; input_tokens_details?: { cached_tokens?: unknown } } } | undefined)?.usage;
+    if (u && typeof u.input_tokens === "number") {
+      usage = { inputTokens: u.input_tokens, cachedTokens: typeof u.input_tokens_details?.cached_tokens === "number" ? u.input_tokens_details.cached_tokens : 0 };
+    }
+  };
 
   for (const line of raw.split(/\r?\n/)) {
     if (!line.startsWith("data:")) continue;
@@ -192,11 +202,13 @@ export function parseCodexStream(raw: string): { text: string; incomplete: boole
       case "response.completed":
         terminal = true;
         completedText = outputText(event.response);
+        readUsage(event.response);
         break;
       case "response.incomplete":
         terminal = true;
         incomplete = true;
         completedText = outputText(event.response);
+        readUsage(event.response);
         break;
       case "response.failed":
         terminal = true;
@@ -211,7 +223,7 @@ export function parseCodexStream(raw: string): { text: string; incomplete: boole
 
   // `||`, not `??`: an empty completed output is exactly the case that was
   // silently discarding the answer.
-  return { text: (completedText || itemsText || deltas).trim(), incomplete: incomplete || !terminal, failed };
+  return { text: (completedText || itemsText || deltas).trim(), incomplete: incomplete || !terminal, failed, usage };
 }
 
 function outputText(response: unknown): string {

@@ -13,6 +13,7 @@ import LeadForm from "@/components/LeadForm";
 import { createQuoteFromLead } from "@/app/actions/quotes";
 import CommsTimeline from "@/components/CommsTimeline";
 import ActivityPanel from "@/components/ActivityPanel";
+import VoiceDebriefButton from "@/components/VoiceDebriefButton";
 import EmailComposer from "@/components/EmailComposer";
 import { composerReplyToDefault } from "@/lib/replyToDefault";
 import LeadTimeline from "@/components/LeadTimeline";
@@ -431,14 +432,17 @@ export default async function LeadDetailPage({
                 label: "Activities",
                 count: lead.activities.filter((a) => a.status === "planned").length,
                 content: (
-                  <ActivityPanel
-                    activities={lead.activities}
-                    users={users}
-                    currentUserId={user.id}
-                    leadId={lead.id}
-                    revalidate={path}
-                    startOpen={tab === "activities" && schedule === "1"}
-                  />
+                  <div className="space-y-3">
+                    {canBookTestDrive && <VoiceDebriefButton leadId={lead.id} />}
+                    <ActivityPanel
+                      activities={lead.activities}
+                      users={users}
+                      currentUserId={user.id}
+                      leadId={lead.id}
+                      revalidate={path}
+                      startOpen={tab === "activities" && schedule === "1"}
+                    />
+                  </div>
                 ),
               },
               {
