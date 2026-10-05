@@ -59,6 +59,8 @@ export const SETTINGS_NAV_GROUPS: SettingsNavGroup[] = [
     label: "Sales & CRM",
     items: [
       { key: "pipeline", label: "Pipeline", href: "/settings/pipelines", permission: "pipelines.manage", keywords: ["lead stages", "sales stages"] },
+      // Owner-only (no `permission`, not `everyone`): mirrors the page and action's requireTenantOwner().
+      { key: "lead-routing", label: "Lead routing", href: "/settings/lead-routing", keywords: ["assign", "assignment", "round robin", "auto-assign", "distribute", "leads", "reps", "owner", "inbound"] },
       { key: "activity-types", label: "Activity types", href: "/settings/activity-types", keywords: ["activity", "activities", "types", "task", "tasks", "diary", "calendar", "meeting", "call", "test drive", "golf day", "custom type", "location"] },
       { key: "quotes", label: "Quotes", keywords: ["quote defaults", "terms"] },
       { key: "import", label: "Import", keywords: ["contacts", "csv", "upload"] },
