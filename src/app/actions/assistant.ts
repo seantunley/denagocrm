@@ -3,7 +3,7 @@
 import { requireAnyPermission } from "@/lib/permissions";
 import { withActingStaffScope } from "@/lib/actingScope";
 import { isModuleEnabled } from "@/lib/modules/enabled";
-import { askCrm, assistantTurnsToday, type AssistantResult } from "@/lib/crmAssistant";
+import { assistantTurnsToday } from "@/lib/crmAssistant";
 import { getSetting } from "@/lib/settings";
 import { isCodexConnected } from "@/lib/codex";
 import { ASSISTANT_PROFILE_KEY, parseProfile } from "@/lib/assistantSoul";
@@ -12,7 +12,7 @@ import { prisma } from "@/lib/db";
 import { scheduleFollowUp } from "@/app/actions/activities";
 import { addCommunication } from "@/app/actions/communications";
 import { assignLead, moveLead } from "@/app/actions/leads";
-import { ASK_LIMIT_MESSAGE, ASSISTANT_PERMISSIONS, assistantAskAllowed } from "@/lib/assistantUser";
+import { ASSISTANT_PERMISSIONS } from "@/lib/assistantUser";
 
 /**
  * Run a task the assistant proposed, AFTER the person pressed Confirm on it.
@@ -63,23 +63,6 @@ export async function runAssistantAction(card: ActionCard): Promise<{ ok: boolea
       default:
         return { ok: false, error: "Drafts are copied and sent by you — nothing is sent from here." };
     }
-  });
-}
-
-/** One question in, one answer out. Read-only: nothing here writes a record. */
-export async function askCrmAction(question: string, page?: string): Promise<AssistantResult> {
-  return withActingStaffScope(async () => {
-    const user = await requireAnyPermission(...ASSISTANT_PERMISSIONS);
-    // The page hides it with the module off; the action must refuse on its own.
-    if (!(await isModuleEnabled("automation"))) {
-      return { ok: false, error: "Ask the CRM is part of the Automation & AI module, which is off for this workspace." };
-    }
-    const q = String(question ?? "").trim().slice(0, 500);
-    if (!q) return { ok: false, error: "Type a question first." };
-    if (!(await assistantAskAllowed(user.id))) return { ok: false, error: ASK_LIMIT_MESSAGE };
-    // `page` is only a hint ("this lead"); pageHint reads a record id out of it
-    // and the tools re-check access, so a forged path finds nothing new.
-    return askCrm(user, q, typeof page === "string" ? page.slice(0, 200) : null);
   });
 }
 
