@@ -2,7 +2,8 @@
 
 import { useEffect, useRef, useState, useTransition } from "react";
 import Link from "next/link";
-import { ArrowUpRight, Loader2, Mic, Paperclip, Smile, Sparkles, Square, X } from "lucide-react";
+import { ArrowUpRight, Loader2, Mic, Paperclip, Smile, Square, X } from "lucide-react";
+import { DaxIcon } from "@/components/DaxIcon";
 import { shrinkToJpeg } from "@/components/shrinkImage";
 import { askStreaming } from "@/components/askStream";
 import { IMAGE_MAX_SIDE, MAX_IMAGE_BYTES } from "@/lib/assistantImage";
@@ -188,7 +189,7 @@ export default function AssistantChat({
           ask(question);
         }}
       >
-        {!compact && <Sparkles className="ml-2 size-4 shrink-0 text-primary" />}
+        {!compact && <DaxIcon className="ml-2 size-4 shrink-0 text-primary" />}
         <input
           ref={input}
           className="h-10 min-w-0 flex-1 bg-transparent px-2 text-sm outline-none"

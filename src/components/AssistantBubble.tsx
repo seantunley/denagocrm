@@ -3,7 +3,8 @@
 import { useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Loader2, Maximize2, Sparkles, X } from "lucide-react";
+import { Loader2, Maximize2, X } from "lucide-react";
+import { DaxIcon } from "@/components/DaxIcon";
 import { openAssistantBubble } from "@/app/actions/assistant";
 import AssistantChat from "@/components/AssistantChat";
 
@@ -51,7 +52,7 @@ export default function AssistantBubble() {
         >
           <div className="flex items-center justify-between gap-2 border-b border-border/60 px-4 py-3">
             <p className="flex items-center gap-2 text-sm font-semibold">
-              <Sparkles className="size-4 text-primary" /> Ask {name}
+              <DaxIcon className="size-4 text-primary" /> Ask {name}
             </p>
             <div className="flex items-center gap-1">
               <Link href="/assistant" className="rounded p-1 text-muted-foreground hover:text-foreground" title="Open the full page" aria-label="Open the full page" onClick={() => setOpen(false)}>
@@ -86,7 +87,7 @@ export default function AssistantBubble() {
         title={`Ask ${name}`}
         className="fixed bottom-20 right-4 z-50 grid size-12 place-items-center rounded-full bg-primary text-primary-foreground shadow-lg transition-transform hover:scale-105 md:bottom-6 md:right-6"
       >
-        {open ? <X className="size-5" /> : <Sparkles className="size-5" />}
+        {open ? <X className="size-5" /> : <DaxIcon className="size-6" />}
       </button>
     </>
   );
