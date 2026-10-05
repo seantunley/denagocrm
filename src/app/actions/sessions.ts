@@ -60,9 +60,14 @@ export async function revokeAllForUser(userId: string) {
       where: { userId, revokedAt: null },
       data: { revokedAt: new Date() },
     });
+    // "All devices" includes a phone linked to the assistant — a sign-in by
+    // another route. This revokes sessions without bumping the version that
+    // would otherwise end the link, so it ends it here (this workspace only:
+    // the tenant-scoped client).
+    const phone = await prisma.assistantPhoneLink.deleteMany({ where: { userId } });
     await logAudit({
       action: "session.revoked_all",
-      summary: `Signed out all devices (${count}) for ${target?.name ?? "user"}`,
+      summary: `Signed out all devices (${count}) for ${target?.name ?? "user"}${phone.count ? ", and unlinked their WhatsApp from the assistant" : ""}`,
       user,
     });
     revalidatePath("/settings/sessions");
