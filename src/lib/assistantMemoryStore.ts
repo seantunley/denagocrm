@@ -35,12 +35,12 @@ export async function loadLearned(userId: string) {
   const [memory, profile, playbooks] = await Promise.all([
     prisma.assistantNote.findMany({ where: { kind: "memory", ...visibleTo(userId) }, orderBy: { createdAt: "asc" }, select: { id: true, content: true, status: true } }),
     prisma.assistantNote.findMany({ where: { kind: "profile", userId }, orderBy: { createdAt: "asc" }, select: { id: true, content: true, status: true } }),
-    prisma.assistantNote.findMany({ where: { kind: "playbook", ...visibleTo(userId) }, orderBy: { name: "asc" }, select: { name: true, description: true, status: true } }),
+    prisma.assistantNote.findMany({ where: { kind: "playbook", ...visibleTo(userId) }, orderBy: { name: "asc" }, select: { name: true, description: true, content: true, status: true } }),
   ]);
   return {
     memory,
     profile,
-    playbooks: playbooks.map((p) => ({ name: p.name ?? "", description: p.description ?? "", status: p.status })),
+    playbooks: playbooks.map((p) => ({ name: p.name ?? "", description: p.description ?? "", content: p.content, status: p.status })),
   };
 }
 

@@ -1,7 +1,7 @@
 "use server";
 
 import { requireAnyPermission, requirePermission, canAccessLead } from "@/lib/permissions";
-import { ASK_LIMIT_MESSAGE, ASSISTANT_PERMISSIONS, assistantAskAllowed } from "@/lib/assistantUser";
+import { ASK_LIMIT_MESSAGE, ASSISTANT_PERMISSIONS, assistantVoiceAllowed } from "@/lib/assistantUser";
 import { withActingStaffScope } from "@/lib/actingScope";
 import { transcribeVoice } from "@/lib/transcribe";
 import { isElevenLabsConfigured } from "@/lib/elevenlabs";
@@ -51,7 +51,7 @@ export async function transcribeQuestion(formData: FormData): Promise<Heard> {
     }
     // The person's one ask limit, before any audio leaves: a direct call in a
     // loop would otherwise spend transcription credit without end.
-    if (!(await assistantAskAllowed(user.id))) return { ok: false, error: ASK_LIMIT_MESSAGE };
+    if (!(await assistantVoiceAllowed(user.id))) return { ok: false, error: ASK_LIMIT_MESSAGE };
     return hear(formData);
   });
 }
@@ -67,7 +67,7 @@ export async function draftVoiceDebrief(
     const user = await requirePermission("activities.manage");
     const leadId = String(formData.get("leadId") ?? "");
     if (!leadId || !(await canAccessLead(user, leadId))) return { ok: false, error: "You don't have access to that lead." };
-    if (!(await assistantAskAllowed(user.id))) return { ok: false, error: ASK_LIMIT_MESSAGE };
+    if (!(await assistantVoiceAllowed(user.id))) return { ok: false, error: ASK_LIMIT_MESSAGE };
     const heard = await hear(formData);
     if (!heard.ok) return heard;
     // The ChatGPT summary is part of Automation & AI; with it off, the person

@@ -31,6 +31,28 @@ export async function assistantAskAllowed(userId: string): Promise<boolean> {
 export const ASK_LIMIT_MESSAGE = "You've asked a lot in the last hour — give it a few minutes and try again.";
 
 /**
+ * Narrower limits for the costlier extras, ON TOP of the ask limit, each with
+ * its own key so one question costs one ask:
+ *  - voice: transcription happens before the question is asked (it used to
+ *    count as an ask too, so a spoken question cost two);
+ *  - images: an upload per question;
+ *  - web: an internet search, counted only when one actually runs.
+ */
+const VOICE_POLICY: RateLimitPolicy = { limit: 60, windowMs: 60 * 60 * 1000, blockMs: 30 * 60 * 1000 };
+const IMAGE_POLICY: RateLimitPolicy = { limit: 30, windowMs: 60 * 60 * 1000, blockMs: 30 * 60 * 1000 };
+const WEB_POLICY: RateLimitPolicy = { limit: 20, windowMs: 60 * 60 * 1000, blockMs: 30 * 60 * 1000 };
+
+export async function assistantVoiceAllowed(userId: string): Promise<boolean> {
+  return (await registerRateLimitAttempt(rateLimitKey("assistant-voice", userId), VOICE_POLICY)).allowed;
+}
+export async function assistantImageAllowed(userId: string): Promise<boolean> {
+  return (await registerRateLimitAttempt(rateLimitKey("assistant-image", userId), IMAGE_POLICY)).allowed;
+}
+export async function assistantWebAllowed(userId: string): Promise<boolean> {
+  return (await registerRateLimitAttempt(rateLimitKey("assistant-web", userId), WEB_POLICY)).allowed;
+}
+
+/**
  * The assistant acting for a person with NO browser session — a scheduled
  * request firing, a question sent from their phone. The caller has already
  * entered the workspace's tenant scope (the cron's per-tenant loop, the

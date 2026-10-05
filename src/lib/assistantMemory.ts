@@ -287,17 +287,29 @@ export function planTidy(entries: TidyEntry[], block: TidyBlock): TidyChange[] {
 export const FLAG_PREFIX = "⚠ ";
 
 /** The learned block for the prompt — unreviewed entries marked so the model weighs them. */
+/**
+ * Playbooks this small go into the prompt in full: loading one with the
+ * playbook tool costs a whole research round (~5 s) before the real search.
+ * Past this, only the index — the full set would crowd the prompt.
+ */
+export const PLAYBOOK_INLINE_CHARS = 3000;
+
 export function memoryPrompt(input: {
   memory: Entry[];
   profile: Entry[];
-  playbooks: { name: string; description: string; status: string }[];
+  playbooks: { name: string; description: string; status: string; content?: string }[];
 }): string {
   const mark = (e: { status: string }) => (e.status === "approved" ? "" : " (unreviewed)");
   const parts: string[] = [];
   if (input.memory.length) parts.push(`What you know about this business:\n${input.memory.map((e) => `- ${e.content}${mark(e)}`).join("\n")}`);
   if (input.profile.length) parts.push(`What you know about this person:\n${input.profile.map((e) => `- ${e.content}${mark(e)}`).join("\n")}`);
   if (input.playbooks.length) {
-    parts.push(`Playbooks you've learned (load one with the playbook tool when relevant):\n${input.playbooks.map((p) => `- ${p.name}: ${p.description}${mark(p)}`).join("\n")}`);
+    const inline = input.playbooks.reduce((n, p) => n + (p.content?.length ?? Infinity), 0) <= PLAYBOOK_INLINE_CHARS;
+    parts.push(
+      inline
+        ? `Playbooks you've learned — already loaded below, so follow the one that fits without loading it:\n${input.playbooks.map((p) => `- ${p.name}: ${p.description}${mark(p)}\n  ${p.content}`).join("\n")}`
+        : `Playbooks you've learned (load one with the playbook tool when relevant):\n${input.playbooks.map((p) => `- ${p.name}: ${p.description}${mark(p)}`).join("\n")}`,
+    );
   }
   return parts.join("\n\n");
 }

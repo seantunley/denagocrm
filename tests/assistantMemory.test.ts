@@ -4,6 +4,7 @@ import { readFileSync } from "node:fs";
 import {
   MEMORY_CHAR_LIMIT,
   memoryPrompt,
+  PLAYBOOK_INLINE_CHARS,
   parseTidy,
   planNoteChanges,
   planTidy,
@@ -168,7 +169,17 @@ test("what it knows goes into the prompt, unreviewed entries marked", () => {
   assert.match(text, /about this business:\n- Donovan handles fleet deals\.$/m);
   assert.match(text, /- Prefers short answers\. \(unreviewed\)/);
   assert.match(text, /- hot-lead: What counts as hot\./);
+  assert.match(text, /load one with the playbook tool/, "no content given → index only");
   assert.equal(memoryPrompt({ memory: [], profile: [], playbooks: [] }), "");
+});
+
+test("small playbooks go in whole — no research round spent loading one; a large set stays an index", () => {
+  const book = (name: string, content: string) => ({ name, description: `${name} desc`, status: "approved", content });
+  const small = memoryPrompt({ memory: [], profile: [], playbooks: [book("hot-lead", "Sort open leads by value, top 5.")] });
+  assert.match(small, /already loaded below[\s\S]*- hot-lead: hot-lead desc\n  Sort open leads by value, top 5\./);
+  const big = memoryPrompt({ memory: [], profile: [], playbooks: [book("a", "x".repeat(PLAYBOOK_INLINE_CHARS)), book("b", "y")] });
+  assert.match(big, /load one with the playbook tool/);
+  assert.doesNotMatch(big, /xxxx/);
 });
 
 test("learning writes are one transaction under a per-workspace lock", () => {

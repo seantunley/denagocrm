@@ -89,6 +89,7 @@ export const CHOICE_INSTRUCTIONS = [
   "CHOICES. When you ask the person to pick between a few clear options (which customer, which time slot, call or WhatsApp), also put the options on one line at the very end:",
   'CHOICES: ["Anna Jacobs","Ben Jacobs"]',
   `- 2 to ${MAX_CHOICES} options, each worded as the person's own short reply (under 60 characters). They become buttons; tapping one sends it as the person's reply.`,
+  "- Each option must tell the choices apart on its own — by what differs (stage, value, date, product, who owns it): \"Anna Jacobs — Quoted, R235k\", never \"The first one\". If the records are duplicates that can't be told apart, say so instead of offering buttons.",
   "- Still ask the question in your answer. No CHOICES line when you aren't asking them to choose, and not for confirming a proposed task — its card has its own Confirm.",
 ].join("\n");
 
