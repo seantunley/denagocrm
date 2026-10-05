@@ -67,11 +67,11 @@ test("the personality is the workspace's, with honest-colleague rules underneath
   assert.deepEqual(parseProfile(null), DEFAULT_PROFILE);
   assert.deepEqual(parseProfile("{broken"), DEFAULT_PROFILE);
   assert.deepEqual(parseProfile('{"name":"Ava","tone":"direct","rules":"Mention the warranty."}'), {
-    name: "Ava", tone: "direct", rules: "Mention the warranty.", soul: "",
+    name: "Ava", tone: "direct", rules: "Mention the warranty.", soul: "", webSearch: false,
   });
   assert.deepEqual(parseProfile('{"tone":"sarcastic"}'), DEFAULT_PROFILE, "unknown tone → default, not a crash");
-  const soul = soulText({ name: "Ava", tone: "direct", rules: "Mention the warranty.", soul: "" }, "Denago", "Sean");
-  assert.match(soul, /You are Ava, the sales assistant inside Denago's CRM, talking with Sean\./);
+  const soul = soulText({ name: "Ava", tone: "direct", rules: "Mention the warranty.", soul: "", webSearch: false }, "Denago", "Sean");
+  assert.match(soul, /You are Ava, the digital assistant inside Denago's CRM, talking with Sean\./);
   assert.ok(soul.includes(DEFAULT_SOUL), "no custom soul → the default");
   assert.match(soul, /Keep FACTS .* apart from ADVICE/);
   assert.match(soul, /Workspace instructions from the business \(follow these\):\nMention the warranty\./);
@@ -83,7 +83,7 @@ test("the personality is the workspace's, with honest-colleague rules underneath
 
 test("the owner can rewrite the whole soul — but never the honesty rules", () => {
   const custom = "- Talk like a seasoned dealer principal. Short sentences. Always end with the next move.";
-  const soul = soulText({ name: "Ava", tone: "direct", rules: "", soul: custom }, "Denago", "Sean");
+  const soul = soulText({ name: "Ava", tone: "direct", rules: "", soul: custom, webSearch: false }, "Denago", "Sean");
   assert.ok(soul.includes(custom));
   assert.ok(!soul.includes(DEFAULT_SOUL), "the custom soul replaces the default");
   assert.ok(soul.includes(LOCKED_RULES), "the locked rules are always there");
