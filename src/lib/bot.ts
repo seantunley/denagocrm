@@ -6,6 +6,7 @@ import { sendPushToAll } from "./push";
 import { resolveTenantActor } from "./tenantActor";
 import { isBotAiEnabled, generateBotReply, type BotMsg } from "./botAi";
 import { elevenLabsTTS, canSynthesizeVoice } from "./elevenlabs";
+import type { VoiceLanguage } from "./voiceLanguage";
 
 export type BotRule = { id: string; keywords: string; reply: string };
 
@@ -59,8 +60,8 @@ async function voiceRepliesEnabled(): Promise<boolean> {
  * gets a reply. `viaVoice` reports what was ACTUALLY sent so the caller logs the
  * real channel (a text fallback must not be recorded as a voice reply).
  */
-async function sendVoiceReply(fromDigits: string, text: string): Promise<{ ok: boolean; viaVoice: boolean; providerMessageId?: string }> {
-  const audio = await elevenLabsTTS(text);
+async function sendVoiceReply(fromDigits: string, text: string, ttsModel?: string): Promise<{ ok: boolean; viaVoice: boolean; providerMessageId?: string }> {
+  const audio = await elevenLabsTTS(text, { model: ttsModel });
   if (audio) {
     // .ogg so WhatsApp treats it as a voice note (PTT waveform), not an audio file.
     const uploaded = await uploadWhatsAppMedia(audio.buffer, audio.contentType, "voice-reply.ogg").catch(() => null);
@@ -145,7 +146,7 @@ async function logOutbound(reply: string, subject: string, contactId: string | n
 export async function maybeAutoReply(
   fromDigits: string,
   text: string,
-  opts: { voiceNote?: boolean } = {}
+  opts: { voiceNote?: boolean; language?: VoiceLanguage | null } = {}
 ): Promise<void> {
   if ((await getSetting("BOT_ENABLED")) !== "true") return;
   const { contactId, leadId } = await matchByPhone(fromDigits);
@@ -167,19 +168,31 @@ export async function maybeAutoReply(
       name = l?.name?.split(" ")[0] ?? null;
     }
 
-    const ai = await generateBotReply({ history, customerName: name, isCustomer, voiceNote: opts.voiceNote });
+    const language = opts.language ?? null;
+    const ai = await generateBotReply({ history, customerName: name, isCustomer, voiceNote: opts.voiceNote, language: language?.name ?? null });
     if (ai) {
       // Mirror the customer: a voice note in → a voice note back, when voice
       // replies are enabled. When we CAN voice-reply, treat it as a normal turn
       // (don't force a human handoff just because the message was voice).
-      const voiceReply = Boolean(opts.voiceNote) && (await voiceRepliesEnabled());
-      const handoff = ai.handoff || (Boolean(opts.voiceNote) && !voiceReply);
+      //
+      // A language no voice model speaks (isiZulu, isiXhosa…) still gets its
+      // answer — in that language, as text — and is still a normal turn: voice
+      // was on, the reply simply can't be spoken. Only "voice replies are off"
+      // keeps the old voice-note → person routing.
+      const voiceOn = Boolean(opts.voiceNote) && (await voiceRepliesEnabled());
+      // What the reply is ACTUALLY in decides the voice, not what the customer
+      // spoke: a canonical answer that couldn't be safely translated, or the
+      // fixed handoff line, goes out in English — spoken with the default
+      // voice, never the Afrikaans model.
+      const replyLanguage = language && ai.localized ? language : null;
+      const voiceReply = voiceOn && (replyLanguage?.speakable ?? true);
+      const handoff = ai.handoff || (Boolean(opts.voiceNote) && !voiceOn);
       // `sentVoice` is what actually went out — a voice send that failed and fell
       // back to text must be logged as text, not as a 🎤 voice reply.
       let sentVoice = false;
       let sent: { ok: boolean; providerMessageId?: string };
       if (voiceReply) {
-        const r = await sendVoiceReply(fromDigits, ai.reply);
+        const r = await sendVoiceReply(fromDigits, ai.reply, replyLanguage?.ttsModel);
         sent = r;
         sentVoice = r.viaVoice;
       } else {

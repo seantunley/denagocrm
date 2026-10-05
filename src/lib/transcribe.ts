@@ -1,6 +1,6 @@
 import { getSetting } from "./settings";
 import { logError } from "./errorLog";
-import { elevenLabsSTT } from "./elevenlabs";
+import { elevenLabsSTTDetailed, type Transcript } from "./elevenlabs";
 
 /**
  * Transcribes an audio clip (e.g. a WhatsApp voice note) to text. ElevenLabs is
@@ -12,9 +12,24 @@ export async function transcribeVoice(
   buffer: Buffer,
   contentType = "audio/ogg"
 ): Promise<string | null> {
-  const viaEleven = await elevenLabsSTT(buffer, contentType);
-  if (viaEleven) return viaEleven;
+  return (await transcribeVoiceDetailed(buffer, contentType))?.text ?? null;
+}
 
+/**
+ * As transcribeVoice, plus the language heard. Only ElevenLabs reports it; the
+ * Whisper fallback returns the text with no language, which changes nothing.
+ */
+export async function transcribeVoiceDetailed(
+  buffer: Buffer,
+  contentType = "audio/ogg"
+): Promise<Transcript | null> {
+  const viaEleven = await elevenLabsSTTDetailed(buffer, contentType);
+  if (viaEleven) return viaEleven;
+  const text = await whisperTranscribe(buffer, contentType);
+  return text ? { text, languageCode: null, languageProbability: null } : null;
+}
+
+async function whisperTranscribe(buffer: Buffer, contentType: string): Promise<string | null> {
   const apiKey = await getSetting("OPENAI_API_KEY");
   if (!apiKey) return null;
   try {
@@ -24,6 +39,8 @@ export async function transcribeVoice(
       ? "m4a"
       : contentType.includes("wav")
       ? "wav"
+      : contentType.includes("webm")
+      ? "webm"
       : "ogg";
     const form = new FormData();
     form.append("file", new Blob([new Uint8Array(buffer)], { type: contentType }), `voice.${ext}`);

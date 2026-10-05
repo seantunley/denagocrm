@@ -5,7 +5,8 @@ import { applyReceipt } from "@/lib/messageReceipts";
 import crypto from "crypto";
 import { getSetting } from "@/lib/settings";
 import { recordInboundWhatsApp, fetchWhatsAppMedia } from "@/lib/whatsapp";
-import { transcribeVoice } from "@/lib/transcribe";
+import { transcribeVoiceDetailed } from "@/lib/transcribe";
+import { voiceLanguage } from "@/lib/voiceLanguage";
 import { saveFile } from "@/lib/storage";
 import { runWhatsAppBot } from "@/lib/flowRun";
 import { handleStaffWhatsApp } from "@/lib/assistantWhatsApp";
@@ -154,10 +155,13 @@ export async function POST(req: NextRequest) {
                 // transcribed there only once the number is known to be staff.
                 if (await handleStaffWhatsApp(from, { voiceMediaId: mediaId })) return;
                 const media = await fetchWhatsAppMedia(mediaId).catch(() => null);
-                const transcript = media ? await transcribeVoice(media.buffer, media.contentType).catch(() => null) : null;
-                const logged = transcript ? `🎤 ${transcript}` : "🎤 [Voice note]";
+                const heard = media ? await transcribeVoiceDetailed(media.buffer, media.contentType).catch(() => null) : null;
+                const transcript = heard?.text ?? null;
+                // Afrikaans / isiZulu / … : shown to staff, and answered in kind.
+                const language = voiceLanguage(heard?.languageCode, heard?.languageProbability);
+                const logged = transcript ? `🎤 ${language ? `(${language.name}) ` : ""}${transcript}` : "🎤 [Voice note]";
                 await recordInboundWhatsApp(from, profileName, logged, String(message.id ?? ""));
-                await runWhatsAppBot(from, { text: transcript ?? "[The customer sent a voice note.]" }, { voiceNote: true, entryContext });
+                await runWhatsAppBot(from, { text: transcript ?? "[The customer sent a voice note.]" }, { voiceNote: true, language, entryContext });
               }
             });
             await completeInboundBotEvent(claim);
