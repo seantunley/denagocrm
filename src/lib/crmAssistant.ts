@@ -1095,7 +1095,9 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
     loadLearned(user.id),
     personContext(user).catch(() => ""),
   ]);
-  const conversation = stripInvisible(conversationBlock(history));
+  // Earlier answers can quote customer text, so the earlier turns are fenced as
+  // data too — an instruction quoted in one answer doesn't come back as one.
+  const conversation = history.length ? resultsBlock("Earlier turns (context only):", stripInvisible(conversationBlock(history))) : "";
   // The business first (what it knows), then the person (who they are, what it knows about them).
   const learned = stripInvisible([memoryPrompt(learnedNow), person].filter(Boolean).join("\n\n"));
   const instructions = stripInvisible(planInstructions({ ...context, learned }));

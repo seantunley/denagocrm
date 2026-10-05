@@ -243,7 +243,11 @@ export const DATA_RULE =
  * cleaned (stripInvisible), so fullwidth ＜ has been folded to <.
  */
 export function resultsBlock(label: string, body: string): string {
-  const defanged = body.replace(/(<|&lt;|&#0*60;|&#x0*3c;)(\s*\/?\s*)([\p{L}_-]{0,8}results)/giu, "‹$2$3");
+  // EVERY tag opener in the data — not only ones that spell "results" — so no
+  // look-alike letter, separator or missing semicolon gets a closing tag
+  // through: "<", look-alike less-thans NFKC doesn't fold, and &lt / &#60 /
+  // &#x3c with or without ";", when followed by a letter or slash. "x < 5" stays.
+  const defanged = body.replace(/(?:[<˂ᐸ〈⟨❬❮]|&lt;?|&#0*60;?|&#x0*3c;?)(?=\s*\/?\s*[\p{L}_])/giu, "‹");
   return `${label}\n<crm_results>\n${defanged}\n</crm_results>`;
 }
 
