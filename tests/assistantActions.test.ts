@@ -77,7 +77,7 @@ test("proposals are checked against what this person may touch, names resolved, 
 
 test("Confirm runs the action a person would use by hand — and nothing is ever sent", () => {
   const action = code("src/app/actions/assistant.ts");
-  const run = action.slice(action.indexOf("export async function runAssistantAction"), action.indexOf("export async function askCrmAction"));
+  const run = action.slice(action.indexOf("export async function runAssistantAction"), action.indexOf("export async function openAssistantBubble"));
   assert.match(run, /await requireAnyPermission\(\.\.\.ASSISTANT_PERMISSIONS\);\s*if \(!\(await isModuleEnabled\("automation"\)\)\)/);
   for (const delegate of ["scheduleFollowUp(", "addCommunication(", "assignLead(", "moveLead("]) {
     assert.ok(run.includes(delegate), delegate);

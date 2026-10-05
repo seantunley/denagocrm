@@ -44,24 +44,87 @@ test("the route accepts only same-origin requests", () => {
   assert.equal(isSameOrigin(h({ host: "crm.denagocpt.co.za" })), false, "no origin at all is refused");
 });
 
-test("the streaming route: same-origin, signed in, permitted — then the SAME path as the action", () => {
+test("the streaming route: same-origin, signed in, permitted — then the shared ask path", () => {
   const route = code("src/app/api/assistant/ask/route.ts");
   const post = route.slice(route.indexOf("export async function POST"));
   const order = ["isSameOrigin(req.headers)", "requireApiUser()", "hasAnyPermission(user, ...ASSISTANT_PERMISSIONS)", "askAsPerson("];
   for (let i = 1; i < order.length; i++) assert.ok(post.indexOf(order[i - 1]) >= 0 && post.indexOf(order[i - 1]) < post.indexOf(order[i]), `${order[i - 1]} before ${order[i]}`);
   assert.match(route, /export const maxDuration = 300;/);
   assert.match(route, /"Cache-Control": "no-store"/);
-  const action = code("src/app/actions/assistant.ts");
-  assert.match(action.slice(action.indexOf("export async function askCrmAction")), /requireAnyPermission\(\.\.\.ASSISTANT_PERMISSIONS\);[\s\S]*?return askAsPerson\(/, "the action uses the shared path too");
+  // The route is the only way in: no second ask path to fall back to.
+  assert.doesNotMatch(code("src/app/actions/assistant.ts"), /askAsPerson|askCrm\(/);
   const shared = code("src/lib/assistantAsk.ts");
   const steps = ['isModuleEnabled("automation")', "assistantAskAllowed(user.id)", "assistantImageAllowed(user.id)", 'file.type !== "image/jpeg"', "cleanJpeg(", "return askCrm("];
   for (let i = 1; i < steps.length; i++) assert.ok(shared.indexOf(steps[i - 1]) < shared.indexOf(steps[i]), `${steps[i - 1]} before ${steps[i]}`);
 });
 
-test("the chat streams, and only falls back to asking again when NOTHING arrived", () => {
+/* ── One click, one ask: a dropped stream is never asked again ───────────── */
+
+// A fetch stand-in: records every call, answers with a stream that sends
+// `events` and then either ends or breaks.
+function fakeFetch(respond: () => Response | Promise<Response>) {
+  const calls: string[] = [];
+  const original = globalThis.fetch;
+  globalThis.fetch = (async (url: string | URL | Request) => {
+    calls.push(String(url));
+    return respond();
+  }) as typeof fetch;
+  return { calls, restore: () => { globalThis.fetch = original; } };
+}
+const streamOf = (chunks: string[], end: "close" | "break") =>
+  new Response(
+    new ReadableStream<Uint8Array>({
+      start(c) {
+        for (const chunk of chunks) c.enqueue(new TextEncoder().encode(chunk));
+        if (end === "close") c.close();
+        else c.error(new TypeError("network error"));
+      },
+    }),
+    { status: 200 },
+  );
+
+test("a connection lost while it is still researching (before the first word) is reported, never re-asked", async () => {
+  const { askStreaming, STREAM_DROPPED } = await import("../src/components/askStream");
+  for (const make of [
+    () => streamOf([], "break"), // dropped during research: nothing sent yet
+    () => streamOf([], "close"), // cut off cleanly with no "done"
+    () => streamOf(['{"t":"text","v":"Gavin"}\n'], "break"), // dropped mid-answer
+    () => { throw new TypeError("Failed to fetch"); }, // the request may still have arrived
+    () => new Response("Bad gateway", { status: 502 }), // a gateway cut off a request that may have run
+  ]) {
+    const net = fakeFetch(make);
+    try {
+      const result = await askStreaming(new FormData(), () => {});
+      assert.deepEqual(result, { ok: false, error: STREAM_DROPPED });
+      assert.equal(net.calls.length, 1, "asked exactly once");
+    } finally {
+      net.restore();
+    }
+  }
+  // The chat has no second way to ask.
   const chat = code("src/components/AssistantChat.tsx");
-  assert.match(chat, /const streamed = await askStreaming\(form, \(text\) => \{\s*received = true;/);
-  assert.match(chat, /streamed \?\?\s*\(received\s*\? \{ ok: false as const, error: "The connection dropped/, "a broken stream isn't asked (and paid for) twice");
+  assert.match(chat, /const result = await askStreaming\(form, \(text\) => setLive\(\{ question: shown, text \}\)\);/);
+  assert.doesNotMatch(chat, /askCrmAction|askCrm\(/);
+});
+
+test("a full stream returns its answer; a refusal says try again", async () => {
+  const { askStreaming } = await import("../src/components/askStream");
+  const seen: string[] = [];
+  let net = fakeFetch(() => streamOf(['{"t":"text","v":"Hi"}\n{"t":"te', 'xt","v":"Hi there"}\n{"t":"done","r":{"ok":true,"answer":"Hi there","rows":[]}}\n'], "close"));
+  try {
+    const result = await askStreaming(new FormData(), (t) => seen.push(t));
+    assert.deepEqual(result, { ok: true, answer: "Hi there", rows: [] });
+    assert.deepEqual(seen, ["Hi", "Hi there"], "a line split across chunks is joined");
+    assert.deepEqual(net.calls, ["/api/assistant/ask"]);
+  } finally {
+    net.restore();
+  }
+  net = fakeFetch(() => new Response("{}", { status: 403 }));
+  try {
+    assert.deepEqual(await askStreaming(new FormData(), () => {}), { ok: false, error: "Something went wrong — try again." });
+  } finally {
+    net.restore();
+  }
   const client = code("src/components/askStream.ts");
   assert.match(client, /fetch\("\/api\/assistant\/ask", \{ method: "POST", body: form, credentials: "same-origin" \}\)/);
 });

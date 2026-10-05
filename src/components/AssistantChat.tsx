@@ -6,7 +6,6 @@ import { ArrowUpRight, Loader2, Mic, Paperclip, Smile, Sparkles, Square, X } fro
 import { shrinkToJpeg } from "@/components/shrinkImage";
 import { askStreaming } from "@/components/askStream";
 import { IMAGE_MAX_SIDE, MAX_IMAGE_BYTES } from "@/lib/assistantImage";
-import { askCrmAction } from "@/app/actions/assistant";
 import { transcribeQuestion } from "@/app/actions/voice";
 import type { AssistantRow } from "@/lib/crmAssistant";
 import { audioForm, useVoiceRecorder } from "@/components/useVoiceRecorder";
@@ -93,33 +92,18 @@ export default function AssistantChat({
     const q = text.trim();
     if ((!q && !image) || pending) return;
     const sent = image;
-    let attachment: FormData | undefined;
-    if (sent) {
-      attachment = new FormData();
-      attachment.set("image", new File([sent.blob], "image.jpg", { type: "image/jpeg" }));
-    }
     setQuestion("");
     clearImage();
     const shown = sent ? `📎 ${q || "Image"}` : q;
     setLive({ question: shown, text: "" });
     startTransition(async () => {
-      // Streamed: the answer appears as it is written. If streaming isn't
-      // available at all, ask the ordinary way; if it broke part-way, the server
-      // still finishes and saves the answer — don't ask (and pay) twice.
+      // Streamed: the answer appears as it is written. Asked exactly once — a
+      // dropped stream is never re-asked another way (askStream).
       const form = new FormData();
       form.set("question", q);
       if (page) form.set("page", page);
       if (sent) form.set("image", new File([sent.blob], "image.jpg", { type: "image/jpeg" }));
-      let received = false;
-      const streamed = await askStreaming(form, (text) => {
-        received = true;
-        setLive({ question: shown, text });
-      });
-      const result =
-        streamed ??
-        (received
-          ? { ok: false as const, error: "The connection dropped while I was answering — open the Ask page to see the full answer." }
-          : await askCrmAction(q, page, attachment).catch(() => ({ ok: false as const, error: "Something went wrong — try again." })));
+      const result = await askStreaming(form, (text) => setLive({ question: shown, text }));
       setLive(null);
       setTurns((prev) => [
         result.ok

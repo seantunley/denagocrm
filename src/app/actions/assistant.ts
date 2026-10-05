@@ -3,8 +3,7 @@
 import { requireAnyPermission } from "@/lib/permissions";
 import { withActingStaffScope } from "@/lib/actingScope";
 import { isModuleEnabled } from "@/lib/modules/enabled";
-import { assistantTurnsToday, type AssistantResult } from "@/lib/crmAssistant";
-import { askAsPerson } from "@/lib/assistantAsk";
+import { assistantTurnsToday } from "@/lib/crmAssistant";
 import { getSetting } from "@/lib/settings";
 import { isCodexConnected } from "@/lib/codex";
 import { ASSISTANT_PROFILE_KEY, parseProfile } from "@/lib/assistantSoul";
@@ -64,21 +63,6 @@ export async function runAssistantAction(card: ActionCard): Promise<{ ok: boolea
       default:
         return { ok: false, error: "Drafts are copied and sent by you — nothing is sent from here." };
     }
-  });
-}
-
-/**
- * One question in, one answer out. Read-only: nothing here writes a record.
- * `attachment` may carry one image ("image"): checked and cleaned here
- * (assistantImage — JPEG only, metadata stripped, size-capped), read for this
- * question only, and never stored.
- */
-export async function askCrmAction(question: string, page?: string, attachment?: FormData): Promise<AssistantResult> {
-  return withActingStaffScope(async () => {
-    const user = await requireAnyPermission(...ASSISTANT_PERMISSIONS);
-    // Everything after the person is the shared path (assistantAsk) — the same
-    // checks, in the same order, as the streaming route.
-    return askAsPerson(user, { question, page, image: attachment instanceof FormData ? attachment.get("image") : null });
   });
 }
 
