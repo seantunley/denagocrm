@@ -9,10 +9,9 @@ import type { AskStreamEvent } from "@/lib/assistantStream";
 import { isSameOrigin } from "@/lib/sameOrigin";
 
 /**
- * Ask DAX and watch the answer arrive. The same question as askCrmAction, the
- * same checks (askAsPerson), the same result at the end — but the answer is
- * streamed as it is written, so the person reads the first words within a few
- * seconds instead of waiting for all of it.
+ * Ask DAX and watch the answer arrive — the chat's only way to ask. The checks
+ * are askAsPerson's; the answer is streamed as it is written, so the person
+ * reads the first words within a few seconds instead of waiting for all of it.
  *
  * Response: newline-delimited JSON. {"t":"text","v":<visible answer so far>}
  * any number of times (never a LEARN/ACTIONS/CHOICES line — assistantStream),

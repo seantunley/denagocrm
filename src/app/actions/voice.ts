@@ -43,7 +43,7 @@ async function hear(formData: FormData): Promise<Heard> {
 export async function transcribeQuestion(formData: FormData): Promise<Heard> {
   return withActingStaffScope(async () => {
     const user = await requireAnyPermission(...ASSISTANT_PERMISSIONS);
-    // Part of Ask the CRM, so behind the same module as askCrmAction — checked
+    // Part of Ask the CRM, so behind the same module as asking does — checked
     // here, before any audio is sent, or a direct call would spend the
     // workspace's ElevenLabs credit with the feature switched off.
     if (!(await isModuleEnabled("automation"))) {

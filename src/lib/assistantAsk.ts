@@ -6,10 +6,9 @@ import { MAX_IMAGE_BYTES, cleanJpeg, jpegDataUrl } from "./assistantImage";
 import type { PermissionUser } from "./permissions";
 
 /**
- * Asking DAX from the CRM — ONE path for both ways in: the server action
- * (askCrmAction) and the streaming route (/api/assistant/ask). Each caller has
- * already established the signed-in person and their assistant permission;
- * everything after that happens here, in this order, so the two can't drift:
+ * Asking DAX from the CRM (the streaming route, /api/assistant/ask). The caller
+ * has already established the signed-in person and their assistant permission;
+ * everything after that happens here, in this order:
  * the Automation module → the question → the person's hourly ask limit → an
  * attached image (its own limit; JPEG only, size-capped, rebuilt by
  * cleanJpeg) → askCrm. Read-only: nothing here writes a record.
