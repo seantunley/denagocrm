@@ -139,6 +139,28 @@ export async function handleStaffWhatsApp(from: string, input: StaffWhatsAppInpu
     });
     return true;
   }
+  // A CUSTOMER'S NUMBER IS NEVER STAFF — re-checked on EVERY message, not only
+  // when the number was linked. A number that has since landed on a customer
+  // record or open lead in this workspace (or can't be told apart) is no
+  // longer a safe place to send CRM answers: the link is cleared (guarded on
+  // exactly the link read), audited, and this message takes the customer path
+  // — no DAX reply, because the person holding that phone may be the customer.
+  const customer = await matchByPhone(waId);
+  if (customer.contactId || customer.leadId || customer.ambiguous) {
+    const cleared = await basePrisma.assistantPhoneLink.updateMany({
+      where: { id: link.id, tenantId, waId, sessionVersion: link.sessionVersion },
+      data: { waId: null, verifiedAt: null, sessionVersion: null },
+    });
+    if (cleared.count === 1) {
+      await logAudit({
+        action: "assistant.whatsapp_unlinked",
+        summary: `WhatsApp ${maskWaId(waId)} unlinked from the assistant: that number is now on a customer record`,
+        entityType: "AssistantPhoneLink",
+        entityId: link.id,
+      });
+    }
+    return false;
+  }
   // Re-checked on every message: still an active member, still allowed to use
   // the assistant, Automation & AI still on. Gone → their messages are treated
   // as anyone's, and the link stays for the owner to see.

@@ -312,6 +312,35 @@ test("a customer's number is never linked, even with a valid code — and the co
   }
 });
 
+test("an already-linked number that becomes a customer's is re-checked on EVERY message", async () => {
+  for (const kind of ["customers", "ambiguous"] as const) {
+    state.links = [];
+    state.sent = [];
+    state.asked = [];
+    state.customers = new Set();
+    state.ambiguous = new Set();
+    const row = verified("u1", STAFF);
+    assert.equal(await handleStaffWhatsApp(STAFF, { text: "pipeline?" }), true, `${kind}: staff while not a customer`);
+    assert.equal(state.asked.length, 1);
+    // The number is later saved on a customer record (or a lead), or becomes ambiguous.
+    state[kind].add(STAFF);
+    state.sent = [];
+    assert.equal(await handleStaffWhatsApp(STAFF, { text: "pipeline?" }), false, `${kind}: now a customer's number — customer path`);
+    assert.equal(state.asked.length, 1, "no CRM answer was produced");
+    assert.equal(state.sent.length, 0, "nothing was sent to that phone");
+    assert.equal(row.waId, null, "the link is cleared");
+    assert.match(state.audits.at(-1) ?? "", /•••567 unlinked from the assistant: that number is now on a customer record/);
+    // Voice notes too: never fetched once the number is a customer's.
+    state.mediaFetched = 0;
+    assert.equal(await handleStaffWhatsApp(STAFF, { voiceMediaId: "m1" }), false);
+    assert.equal(state.mediaFetched, 0);
+  }
+  const lib = code("src/lib/assistantWhatsApp.ts");
+  const handler = lib.slice(lib.indexOf("export async function handleStaffWhatsApp"), lib.indexOf("async function verifyLinkCode"));
+  assert.ok(handler.indexOf("await matchByPhone(waId)") < handler.indexOf("await assistantUserFor(link.userId)"), "checked before anything is answered");
+  assert.ok(handler.indexOf("await matchByPhone(waId)") < handler.indexOf("fetchWhatsAppMedia("), "and before a voice note is fetched");
+});
+
 test("one number can't be linked to two people: the newer proof takes it over", async () => {
   const old = verified("u2", STAFF);
   const fresh = pending("u1", "123456");
