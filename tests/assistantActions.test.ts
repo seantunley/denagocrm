@@ -41,7 +41,7 @@ test("choices become buttons: parsed, stripped, capped — and all three trailer
   assert.equal(splitChoices(`Pick.\nCHOICES: ${JSON.stringify(["a", "b", "c", "d", "e", "f"])}`).choices.length, MAX_CHOICES);
   assert.deepEqual(splitChoices("No choice here."), { answer: "No choice here.", choices: [] });
   // Wired: the answer step is told about them, the chat sends a tap as the next question.
-  assert.match(code("src/lib/crmAssistant.ts"), /ACTION_INSTRUCTIONS, CHOICE_INSTRUCTIONS\]/);
+  assert.match(code("src/lib/crmAssistant.ts"), /source === "chat" \? ACTION_INSTRUCTIONS : "",\s*source === "schedule" \? "" : CHOICE_INSTRUCTIONS,/);
   const chat = code("src/components/AssistantChat.tsx");
   assert.match(chat, /turn === turns\[0\] && !pending && turn\.choices/, "only the newest answer's choices");
   assert.match(chat, /onClick=\{\(\) => ask\(choice\)\}/);
@@ -77,7 +77,7 @@ test("proposals are checked against what this person may touch, names resolved, 
 
 test("Confirm runs the action a person would use by hand — and nothing is ever sent", () => {
   const action = code("src/app/actions/assistant.ts");
-  const run = action.slice(action.indexOf("export async function runAssistantAction"), action.indexOf("export async function askCrmAction"));
+  const run = action.slice(action.indexOf("export async function runAssistantAction"), action.indexOf("export async function openAssistantBubble"));
   assert.match(run, /await requireAnyPermission\(\.\.\.ASSISTANT_PERMISSIONS\);\s*if \(!\(await isModuleEnabled\("automation"\)\)\)/);
   for (const delegate of ["scheduleFollowUp(", "addCommunication(", "assignLead(", "moveLead("]) {
     assert.ok(run.includes(delegate), delegate);

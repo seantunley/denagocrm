@@ -18,7 +18,9 @@ import { stripInvisible } from "./invisibleText";
  */
 
 export const MEMORY_CHAR_LIMIT = 2200; // Hermes' MEMORY.md default
-export const PROFILE_CHAR_LIMIT = 1400; // Hermes' USER.md default
+// Hermes' USER.md default is 1400; more room here because a person can now
+// write their own "about me" as well as what it learns from them.
+export const PROFILE_CHAR_LIMIT = 2000;
 export const PLAYBOOK_LIMIT = 30;
 export const PLAYBOOK_CHARS = 1500;
 export const ENTRY_CHARS = 400;
@@ -59,6 +61,27 @@ export const LEARN_INSTRUCTIONS = [
   "Most answers learn nothing — then add no LEARN line at all.",
 ].join("\n");
 
+/**
+ * Learning from its own work (Hermes writes a skill after a task that took
+ * several tool calls, and patches it when it falls short). Only offered when
+ * this answer took MIN_METHOD_LOOKUPS or more: the method that worked, as a
+ * playbook the plan step can load next time — still unreviewed until the owner
+ * approves it, and never about one particular customer.
+ */
+export const MIN_METHOD_LOOKUPS = 2;
+
+export function methodInstructions(lookups: { tool: string; args: unknown }[]): string {
+  if (lookups.length < MIN_METHOD_LOOKUPS) return "";
+  // The lookups themselves (tool + filters, which a model chose after reading
+  // customer text) are NOT copied into these instructions: they're already in
+  // the fenced results, each with its filters, cleaned. Only tool names here.
+  return [
+    `METHOD. Answering this took ${lookups.length} lookups (${lookups.map((l) => l.tool).join(" → ")}); their filters are with each result above.`,
+    "If this is a KIND of question that will come up again (\"who should I chase\", \"is X ready for delivery\" — not one about a particular customer) and no playbook already covers it, save the method as a playbook in your LEARN line: a name for that kind of question, a one-line description, and the steps — which lookups with which filters, what to look for in the results, and how to judge them. Leave out names and anything specific to today's records.",
+    "If you loaded a playbook and it was missing a step you needed, improve it (replace). If the method was obvious or one-off, learn nothing.",
+  ].join("\n");
+}
+
 /** Split the model's reply into the answer the person sees and what it wants to learn. */
 export function splitLearn(reply: string): { answer: string; learn: LearnBlock | null } {
   const lines = reply.trimEnd().split("\n");
@@ -87,8 +110,28 @@ const INJECTION = [
   /<\s*\/?\s*(script|system|instructions?)\b/i,
   /\bLEARN:/,
 ];
-const EMAIL = /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i;
-const PHONE = /(\+?\d[\d\s-]{8,}\d)/;
+// Letters of ANY script (a Cyrillic look-alike domain is still a domain),
+// spaces around the @, and the ideographic/halfwidth full stops as dots.
+const EMAIL = /[\p{L}\p{N}._%+-]+\s*@\s*[\p{L}\p{N}-]+(?:\s*[.。．｡]\s*[\p{L}\p{N}-]+)+/iu;
+// Any run of 9+ digits — of any script (Arabic-Indic, Devanagari…) — whatever
+// separates them: up to three characters that are neither letters nor digits
+// (":", "|", "~", "−", "*"… not a whitelist that misses the next one). The one
+// exception is a comma followed by a space — a list ("120, 45, 300") — while
+// "082,123,4567" still counts. (Fullwidth forms are folded by NFKC first.)
+const PHONE = /\p{Nd}(?:(?:[^\p{L}\p{Nd}\n,]{0,3}|,(?=\p{Nd}))\p{Nd}){8,}/u;
+// Removed before the phone check — replaced with a WORD, so they can't glue the
+// digits either side into one run, nor hide a phone that only looks like one:
+// real dates only (19xx/20xx years, months ≤ 12, days ≤ 31), and money in
+// thousands groups that isn't followed by more digits ("R1,250,000.00",
+// "ZAR 450 000" — but "R 082 123 4567" is still a phone). Times are left in:
+// one or two of them are never nine digits.
+const DATE_OR_TIME =
+  /\b(?:19|20)\d\d[-/.](?:0?[1-9]|1[0-2])[-/.](?:0?[1-9]|[12]\d|3[01])\b|\b(?:0?[1-9]|[12]\d|3[01])[-/.](?:0?[1-9]|1[0-2])[-/.](?:19|20)\d\d\b/g;
+// Not followed by ANY separator-then-digit (so "$082-123-4567" isn't eaten
+// down to its tail), and an "amount" of nine or more digits is a phone wearing
+// a currency sign ("R0 821 234 567") — kept for the phone check, not removed.
+const MONEY = /(?:\bR|\bZAR|\$|€|£)\s?(\d{1,3}(?:[ ,.']\d{3})*)(?:[.,]\d{2})?(?![^\p{L}\p{Nd}\n]{0,3}\p{Nd})/giu;
+const withoutMoney = (text: string) => text.replace(MONEY, (whole, int: string) => (int.replace(/\D/g, "").length >= 9 ? whole : " amount "));
 
 /** Cleaned text, or a reason it may not be learned. */
 export function scanEntry(raw: string): { ok: true; text: string } | { ok: false; reason: string } {
@@ -96,7 +139,9 @@ export function scanEntry(raw: string): { ok: true; text: string } | { ok: false
   const text = stripInvisible(raw).replace(/\r\n/g, "\n").replace(/[^\S\n]+/g, " ").replace(/\n{3,}/g, "\n\n").trim();
   if (text.length < 3) return { ok: false, reason: "empty" };
   if (INJECTION.some((pattern) => pattern.test(text))) return { ok: false, reason: "looks like an instruction to the assistant" };
-  if (EMAIL.test(text) || PHONE.test(text)) return { ok: false, reason: "contains contact details" };
+  if (EMAIL.test(text) || PHONE.test(withoutMoney(text).replace(DATE_OR_TIME, " when "))) {
+    return { ok: false, reason: "contains contact details" };
+  }
   return { ok: true, text };
 }
 
@@ -176,7 +221,8 @@ export const tidyBlock = z
   .strict();
 export type TidyBlock = z.infer<typeof tidyBlock>;
 
-export type TidyEntry = { id: string; kind: string; userId: string | null; content: string; status: string };
+/** createdById: whose conversation it came from (null = the tidy-up itself). */
+export type TidyEntry = { id: string; kind: string; userId: string | null; createdById: string | null; content: string; status: string };
 export type TidyChange =
   | { kind: "merge"; keepId: string; deleteIds: string[]; content: string }
   | { kind: "remove"; id: string }
@@ -213,7 +259,9 @@ export function planTidy(entries: TidyEntry[], block: TidyBlock): TidyChange[] {
     const group = ids.map((id) => byId.get(id)!);
     const [first] = group;
     if (first.kind === "playbook") continue;
-    if (!group.every((e) => e.status !== "approved" && e.kind === first.kind && e.userId === first.userId)) continue;
+    // Same kind, same person, and learned from the same person's conversations:
+    // merging two people's unreviewed entries would hand each the other's.
+    if (!group.every((e) => e.status !== "approved" && e.kind === first.kind && e.userId === first.userId && e.createdById === first.createdById)) continue;
     const scanned = scanEntry(merge.content);
     if (!scanned.ok || scanned.text.length > group.reduce((n, e) => n + e.content.length, 0)) continue;
     ids.forEach((id) => used.add(id));
@@ -239,17 +287,29 @@ export function planTidy(entries: TidyEntry[], block: TidyBlock): TidyChange[] {
 export const FLAG_PREFIX = "⚠ ";
 
 /** The learned block for the prompt — unreviewed entries marked so the model weighs them. */
+/**
+ * Playbooks this small go into the prompt in full: loading one with the
+ * playbook tool costs a whole research round (~5 s) before the real search.
+ * Past this, only the index — the full set would crowd the prompt.
+ */
+export const PLAYBOOK_INLINE_CHARS = 3000;
+
 export function memoryPrompt(input: {
   memory: Entry[];
   profile: Entry[];
-  playbooks: { name: string; description: string; status: string }[];
+  playbooks: { name: string; description: string; status: string; content?: string }[];
 }): string {
   const mark = (e: { status: string }) => (e.status === "approved" ? "" : " (unreviewed)");
   const parts: string[] = [];
   if (input.memory.length) parts.push(`What you know about this business:\n${input.memory.map((e) => `- ${e.content}${mark(e)}`).join("\n")}`);
   if (input.profile.length) parts.push(`What you know about this person:\n${input.profile.map((e) => `- ${e.content}${mark(e)}`).join("\n")}`);
   if (input.playbooks.length) {
-    parts.push(`Playbooks you've learned (load one with the playbook tool when relevant):\n${input.playbooks.map((p) => `- ${p.name}: ${p.description}${mark(p)}`).join("\n")}`);
+    const inline = input.playbooks.reduce((n, p) => n + (p.content?.length ?? Infinity), 0) <= PLAYBOOK_INLINE_CHARS;
+    parts.push(
+      inline
+        ? `Playbooks you've learned — already loaded below, so follow the one that fits without loading it:\n${input.playbooks.map((p) => `- ${p.name}: ${p.description}${mark(p)}\n  ${p.content}`).join("\n")}`
+        : `Playbooks you've learned (load one with the playbook tool when relevant):\n${input.playbooks.map((p) => `- ${p.name}: ${p.description}${mark(p)}`).join("\n")}`,
+    );
   }
   return parts.join("\n\n");
 }

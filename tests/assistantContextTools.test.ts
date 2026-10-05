@@ -85,15 +85,20 @@ test("it can answer questions about itself — truthfully, from a fixed brief", 
   assert.match(about, /happens only when the person presses Confirm/);
   assert.match(about, /you never send anything to a customer/);
   assert.match(about, /kept 30 days, private to them/);
-  assert.match(about, /anything they've approved you cannot change/);
+  assert.match(about, /anything they've approved you cannot change/i);
+  assert.match(about, /until then it is used only with the person it came from/);
   // …and it is actually given to the answer step, after the soul.
   const lib = code("src/lib/crmAssistant.ts");
-  assert.match(lib, /instructions: \[soul, selfKnowledge\(profile\.name\), learned,/);
+  assert.match(lib, /instructions: \[\s*soul,\s*selfKnowledge\(profile\.name\),\s*ANSWER_RULES,/);
+  // What it has learned comes after the fixed rules — it changes, so it can't sit in the cached prefix.
+  assert.match(lib, /CHANNEL_RULES\[source\],\s*learned,\s*images\.length \? IMAGE_RULE : "",/);
   // Questions about itself need no lookup.
   assert.match(code("src/lib/crmAssistantPlan.ts"), /questions about you yourself/);
   // Every lookup it claims exists; nothing in the action list it says it can do is missing.
   const actions = code("src/lib/assistantActions.ts");
-  for (const kind of ["follow_up", "note", "assign", "stage", "draft_message"]) assert.ok(actions.includes(`z.literal("${kind}")`), kind);
+  for (const kind of ["follow_up", "note", "assign", "stage", "draft_message", "schedule"]) assert.ok(actions.includes(`z.literal("${kind}")`), kind);
+  // Scheduling: confirmed first, managed on the Ask page.
+  assert.match(about, /on a SCHEDULE[\s\S]*set up only when the person presses Confirm[\s\S]*on the Ask page/);
 });
 
 test("a digital assistant that uses emojis sparingly, whatever the soul says", () => {
@@ -116,7 +121,7 @@ test("in the bubble it reads like a chat: oldest first, composer at the bottom, 
 test("the bubble: same gate as the page, today's conversation only, no load until opened", () => {
   const layout = code("src/app/(app)/layout.tsx");
   assert.match(layout, /enabledModules === null \|\| enabledModules\.has\("automation"\)/);
-  assert.match(layout, /\{showAssistant && <AssistantBubble \/>\}/);
+  assert.match(layout, /\{showAssistant && <AssistantBubble unseen=\{assistantUnseen\} \/>\}/);
   const lib = code("src/lib/crmAssistant.ts");
   const today = lib.slice(lib.indexOf("export async function assistantTurnsToday"));
   assert.match(today.slice(0, 500), /where: \{ userId, createdAt: \{ gte: startOfToday \} \}/);

@@ -39,8 +39,12 @@ export default function AssistantActionCard({ card }: { card: ActionCard }) {
     <div className={`rounded-lg border p-3 text-sm ${state === "done" ? "border-emerald-500/40" : "border-border"}`}>
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
-          <p className="font-medium">{card.title}</p>
-          <Link href={`/leads/${card.leadId}`} className="text-xs text-muted-foreground hover:underline">{card.leadLabel}</Link>
+          <p className="font-medium">{card.kind === "schedule" ? `⏰ ${card.title}` : card.title}</p>
+          {card.kind === "schedule" ? (
+            <p className="text-xs text-muted-foreground">Runs as you — manage it on the Ask page</p>
+          ) : (
+            <Link href={`/leads/${card.leadId}`} className="text-xs text-muted-foreground hover:underline">{card.leadLabel}</Link>
+          )}
         </div>
         {state === "open" && (
           <button type="button" onClick={() => setState("dismissed")} className="text-muted-foreground hover:text-foreground" aria-label="Dismiss">
@@ -49,6 +53,7 @@ export default function AssistantActionCard({ card }: { card: ActionCard }) {
         )}
       </div>
       {card.kind === "note" && <p className="mt-2 whitespace-pre-line text-xs text-muted-foreground">{card.text}</p>}
+      {card.kind === "schedule" && <p className="mt-2 whitespace-pre-line text-xs">&ldquo;{card.question}&rdquo;</p>}
       {card.kind === "draft_message" && (
         <div className="mt-2 rounded-md bg-muted/40 p-2 text-xs">
           {card.subject && <p className="font-medium">{card.subject}</p>}

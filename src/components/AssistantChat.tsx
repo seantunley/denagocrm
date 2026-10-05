@@ -2,15 +2,22 @@
 
 import { useEffect, useRef, useState, useTransition } from "react";
 import Link from "next/link";
-import { ArrowUpRight, Loader2, Mic, Smile, Sparkles, Square } from "lucide-react";
-import { askCrmAction } from "@/app/actions/assistant";
+import { ArrowUpRight, Loader2, Mic, Paperclip, Smile, Square, X } from "lucide-react";
+import { DaxIcon } from "@/components/DaxIcon";
+import { shrinkToJpeg } from "@/components/shrinkImage";
+import { askStreaming } from "@/components/askStream";
+import { IMAGE_MAX_SIDE, MAX_IMAGE_BYTES } from "@/lib/assistantImage";
 import { transcribeQuestion } from "@/app/actions/voice";
 import type { AssistantRow } from "@/lib/crmAssistant";
 import { audioForm, useVoiceRecorder } from "@/components/useVoiceRecorder";
 import type { ActionCard } from "@/lib/assistantActions";
 import AssistantActionCard from "@/components/AssistantActionCard";
 
-type Turn = { question: string; answer?: string; error?: string; rows: AssistantRow[]; learned?: number; actions?: ActionCard[]; choices?: string[] };
+type Turn = { question: string; answer?: string; error?: string; rows: AssistantRow[]; learned?: number; actions?: ActionCard[]; choices?: string[]; source?: string };
+
+/** A scheduled answer arrived on its own — say so, or it reads as something you asked just now. */
+const scheduledLabel = (turn: Turn) =>
+  turn.source === "schedule" ? <p className="text-[11px] font-medium text-muted-foreground">⏰ Scheduled</p> : null;
 
 // The OS picker (Win + . / Ctrl + Cmd + Space) has everything; these are one tap away.
 const EMOJIS = ["👍", "🙏", "😊", "😂", "🔥", "✅", "⚠️", "📞", "💬", "📅", "🚗", "💰", "🎉", "🤝", "👀", "❓"];
@@ -33,7 +40,7 @@ export default function AssistantChat({
   compact = false,
 }: {
   name: string;
-  history?: { question: string; answer: string }[];
+  history?: { question: string; answer: string; source?: string }[];
   /** The page it was opened on (the bubble), so "this lead" means something. */
   page?: string;
   /** The bubble: no example prompts — there isn't room, and you're mid-task. */
@@ -46,6 +53,32 @@ export default function AssistantChat({
   const [voiceError, setVoiceError] = useState<string | null>(null);
   const [emojiOpen, setEmojiOpen] = useState(false);
   const input = useRef<HTMLInputElement | null>(null);
+  // One attached image, already shrunk to a JPEG here. Sent with the next
+  // question, then dropped — never kept in the conversation.
+  const [image, setImage] = useState<{ blob: Blob; preview: string } | null>(null);
+  const [imageError, setImageError] = useState<string | null>(null);
+  // The question being answered and the answer so far, while it streams in.
+  const [live, setLive] = useState<{ question: string; text: string } | null>(null);
+  const picker = useRef<HTMLInputElement | null>(null);
+
+  const attach = async (file: Blob | null | undefined) => {
+    if (!file) return;
+    setImageError(null);
+    const blob = await shrinkToJpeg(file, IMAGE_MAX_SIDE, MAX_IMAGE_BYTES);
+    if (!blob) {
+      setImageError("Couldn't read that image — try a JPG or PNG photo or screenshot.");
+      return;
+    }
+    setImage((old) => {
+      if (old) URL.revokeObjectURL(old.preview);
+      return { blob, preview: URL.createObjectURL(blob) };
+    });
+  };
+  const clearImage = () =>
+    setImage((old) => {
+      if (old) URL.revokeObjectURL(old.preview);
+      return null;
+    });
 
   // Drop the emoji where the cursor is, then put the cursor after it.
   const insertEmoji = (emoji: string) => {
@@ -62,14 +95,25 @@ export default function AssistantChat({
 
   const ask = (text: string) => {
     const q = text.trim();
-    if (!q || pending) return;
+    if ((!q && !image) || pending) return;
+    const sent = image;
     setQuestion("");
+    clearImage();
+    const shown = sent ? `📎 ${q || "Image"}` : q;
+    setLive({ question: shown, text: "" });
     startTransition(async () => {
-      const result = await askCrmAction(q, page).catch(() => ({ ok: false as const, error: "Something went wrong — try again." }));
+      // Streamed: the answer appears as it is written. Asked exactly once — a
+      // dropped stream is never re-asked another way (askStream).
+      const form = new FormData();
+      form.set("question", q);
+      if (page) form.set("page", page);
+      if (sent) form.set("image", new File([sent.blob], "image.jpg", { type: "image/jpeg" }));
+      const result = await askStreaming(form, (text) => setLive({ question: shown, text }));
+      setLive(null);
       setTurns((prev) => [
         result.ok
-          ? { question: q, answer: result.answer, rows: result.rows, learned: result.learned, actions: result.actions, choices: result.choices }
-          : { question: q, error: result.error, rows: [] },
+          ? { question: shown, answer: result.answer, rows: result.rows, learned: result.learned, actions: result.actions, choices: result.choices }
+          : { question: shown, error: result.error, rows: [] },
         ...prev,
       ]);
     });
@@ -90,7 +134,7 @@ export default function AssistantChat({
   const end = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
     if (compact) end.current?.scrollIntoView({ block: "end" });
-  }, [compact, turns.length, pending]);
+  }, [compact, turns.length, pending, live?.text]);
 
   const details = (turn: Turn) => (
     <>
@@ -149,17 +193,45 @@ export default function AssistantChat({
           ask(question);
         }}
       >
-        {!compact && <Sparkles className="ml-2 size-4 shrink-0 text-primary" />}
+        {!compact && <DaxIcon className="ml-2 size-4 shrink-0 text-primary" />}
         <input
           ref={input}
           className="h-10 min-w-0 flex-1 bg-transparent px-2 text-sm outline-none"
           placeholder={compact ? `Message ${name}…` : `Ask ${name} — e.g. "What should I do with Anna?"`}
           value={question}
           onChange={(event) => setQuestion(event.target.value)}
+          // A pasted screenshot is attached, not typed.
+          onPaste={(event) => {
+            const pasted = [...event.clipboardData.files].find((f) => f.type.startsWith("image/"));
+            if (pasted) {
+              event.preventDefault();
+              void attach(pasted);
+            }
+          }}
           maxLength={500}
           aria-label="Ask the CRM"
           disabled={pending || voice.recording || hearing}
         />
+        <input
+          ref={picker}
+          type="file"
+          accept="image/*"
+          className="hidden"
+          onChange={(event) => {
+            void attach(event.target.files?.[0]);
+            event.target.value = "";
+          }}
+        />
+        <button
+          type="button"
+          onClick={() => picker.current?.click()}
+          disabled={pending || voice.recording || hearing}
+          className={`grid size-10 shrink-0 place-items-center rounded-md border ${image ? "border-primary text-primary" : "border-border text-muted-foreground hover:text-foreground"}`}
+          aria-label="Attach a photo or screenshot"
+          title="Attach a photo or screenshot"
+        >
+          <Paperclip className="size-4" />
+        </button>
         <div className="relative">
           <button
             type="button"
@@ -200,10 +272,21 @@ export default function AssistantChat({
             {hearing ? <Loader2 className="size-4 animate-spin" /> : voice.recording ? <Square className="size-4" /> : <Mic className="size-4" />}
           </button>
         )}
-        <button type="submit" className="btn-primary h-10 px-4 text-sm" disabled={pending || !question.trim()}>
+        <button type="submit" className="btn-primary h-10 px-4 text-sm" disabled={pending || (!question.trim() && !image)}>
           {pending ? <Loader2 className="size-4 animate-spin" /> : compact ? "Send" : "Ask"}
         </button>
       </form>
+      {image && (
+        <div className="flex items-center gap-2 text-xs text-muted-foreground">
+          {/* eslint-disable-next-line @next/next/no-img-element -- a local blob preview, never a remote image */}
+          <img src={image.preview} alt="Attached image" className="size-12 rounded-md border border-border object-cover" />
+          <span>Sent with your next question, then not kept.</span>
+          <button type="button" onClick={clearImage} className="ml-auto inline-flex items-center gap-1 hover:text-destructive" aria-label="Remove the image">
+            <X className="size-3.5" /> Remove
+          </button>
+        </div>
+      )}
+      {imageError && <p className="text-xs text-destructive">{imageError}</p>}
       {voice.recording && (
         <p className="text-xs text-destructive">● Listening… {voice.seconds}s — tap ■ when you&apos;re done.</p>
       )}
@@ -222,6 +305,7 @@ export default function AssistantChat({
         )}
         {thread.map((turn, index) => (
           <div key={index} className="space-y-2">
+            {scheduledLabel(turn)}
             <p className="ml-auto max-w-[85%] whitespace-pre-line rounded-2xl rounded-br-sm bg-primary px-3 py-2 text-sm text-primary-foreground">
               {turn.question}
             </p>
@@ -235,7 +319,21 @@ export default function AssistantChat({
             </div>
           </div>
         ))}
-        {pending && <p className="text-sm text-muted-foreground">{name} is looking into it…</p>}
+        {pending && live && (
+          <div className="space-y-2">
+            <p className="ml-auto max-w-[85%] whitespace-pre-line rounded-2xl rounded-br-sm bg-primary px-3 py-2 text-sm text-primary-foreground">
+              {live.question}
+            </p>
+            <div className="max-w-[92%] rounded-2xl rounded-bl-sm bg-muted/50 px-3 py-2">
+              {live.text ? (
+                <p className="whitespace-pre-line text-sm leading-relaxed">{live.text}</p>
+              ) : (
+                <p className="text-sm text-muted-foreground">{name} is looking into it…</p>
+              )}
+            </div>
+          </div>
+        )}
+        {pending && !live && <p className="text-sm text-muted-foreground">{name} is looking into it…</p>}
         <div className="sticky bottom-0 mt-auto space-y-1 bg-card pt-2">{composer}</div>
         <div ref={end} />
       </div>
@@ -261,10 +359,20 @@ export default function AssistantChat({
         </div>
       )}
 
-      {pending && <p className="text-sm text-muted-foreground">{name} is looking into it…</p>}
+      {pending && (
+        <div className="card space-y-3 p-5">
+          {live && <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{live.question}</p>}
+          {live?.text ? (
+            <p className="whitespace-pre-line text-sm leading-relaxed">{live.text}</p>
+          ) : (
+            <p className="text-sm text-muted-foreground">{name} is looking into it…</p>
+          )}
+        </div>
+      )}
 
       {turns.map((turn, index) => (
         <div key={turns.length - index} className="card space-y-3 p-5">
+          {scheduledLabel(turn)}
           <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{turn.question}</p>
           {turn.error ? (
             <p className="text-sm text-destructive">{turn.error}</p>

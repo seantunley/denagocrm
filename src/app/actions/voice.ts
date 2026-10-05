@@ -1,12 +1,14 @@
 "use server";
 
 import { requireAnyPermission, requirePermission, canAccessLead } from "@/lib/permissions";
+import { ASK_LIMIT_MESSAGE, ASSISTANT_PERMISSIONS, assistantVoiceAllowed } from "@/lib/assistantUser";
 import { withActingStaffScope } from "@/lib/actingScope";
 import { transcribeVoice } from "@/lib/transcribe";
 import { isElevenLabsConfigured } from "@/lib/elevenlabs";
 import { codexRespond, isCodexConnected } from "@/lib/codex";
 import { johannesburgDateKey } from "@/lib/activityDay";
 import { logError } from "@/lib/errorLog";
+import { safeCodexError } from "@/lib/codexErrors";
 import { isModuleEnabled } from "@/lib/modules/enabled";
 import { DEBRIEF_INSTRUCTIONS, parseDebrief, plainDebrief, type DebriefDraft } from "@/lib/voiceDebrief";
 
@@ -40,17 +42,16 @@ async function hear(formData: FormData): Promise<Heard> {
 /** Speech → text for "Ask the CRM". */
 export async function transcribeQuestion(formData: FormData): Promise<Heard> {
   return withActingStaffScope(async () => {
-    await requireAnyPermission(
-      "leads.view_all", "leads.view_owned",
-      "quotes.view_all", "quotes.view_owned",
-      "activities.view", "activities.manage",
-    );
+    const user = await requireAnyPermission(...ASSISTANT_PERMISSIONS);
     // Part of Ask the CRM, so behind the same module as askCrmAction — checked
     // here, before any audio is sent, or a direct call would spend the
     // workspace's ElevenLabs credit with the feature switched off.
     if (!(await isModuleEnabled("automation"))) {
       return { ok: false, error: "Ask the CRM is part of the Automation & AI module, which is off for this workspace." };
     }
+    // The person's one ask limit, before any audio leaves: a direct call in a
+    // loop would otherwise spend transcription credit without end.
+    if (!(await assistantVoiceAllowed(user.id))) return { ok: false, error: ASK_LIMIT_MESSAGE };
     return hear(formData);
   });
 }
@@ -66,9 +67,14 @@ export async function draftVoiceDebrief(
     const user = await requirePermission("activities.manage");
     const leadId = String(formData.get("leadId") ?? "");
     if (!leadId || !(await canAccessLead(user, leadId))) return { ok: false, error: "You don't have access to that lead." };
+    if (!(await assistantVoiceAllowed(user.id))) return { ok: false, error: ASK_LIMIT_MESSAGE };
     const heard = await hear(formData);
     if (!heard.ok) return heard;
-    if (!(await isCodexConnected())) return { ok: true, draft: plainDebrief(heard.text), summarised: false };
+    // The ChatGPT summary is part of Automation & AI; with it off, the person
+    // still gets their words back as a plain draft.
+    if (!(await isModuleEnabled("automation")) || !(await isCodexConnected())) {
+      return { ok: true, draft: plainDebrief(heard.text), summarised: false };
+    }
     const reply = await codexRespond({
       instructions: DEBRIEF_INSTRUCTIONS,
       prompt: heard.text,
@@ -80,7 +86,7 @@ export async function draftVoiceDebrief(
     const draft = "error" in reply ? null : parseDebrief(reply.text, heard.text, today);
     if (!draft) {
       // A reason only — never the transcript.
-      await logError("voice-debrief", "summary step failed", "error" in reply ? reply.error : "unusable reply");
+      await logError("voice-debrief", "summary step failed", "error" in reply ? safeCodexError(reply.error) : "unusable reply");
       return { ok: true, draft: plainDebrief(heard.text), summarised: false };
     }
     return { ok: true, draft, summarised: true };

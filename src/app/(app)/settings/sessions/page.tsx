@@ -1,6 +1,10 @@
 import { Smartphone, Monitor, LogOut, ShieldOff } from "lucide-react";
 import { requireTenantOwner } from "@/lib/auth";
-import { prisma } from "@/lib/db";
+import { basePrisma, prisma } from "@/lib/db";
+import { actingOwnerTenantId } from "@/lib/actingScope";
+import { maskWaId } from "@/lib/assistantWhatsAppRules";
+import { unlinkWhatsAppFor } from "@/app/actions/assistantWhatsApp";
+import ConfirmActionDialog from "@/components/ConfirmActionDialog";
 import { actingTenantMemberIds } from "@/lib/tenantActor";
 import { formatDateTime } from "@/lib/format";
 import { revokeSession, revokeAllForUser } from "@/app/actions/sessions";
@@ -69,6 +73,17 @@ export default async function SessionsPage() {
     },
   });
   const totalActive = users.reduce((s, u) => s + u.sessions.length, 0);
+  // A phone linked to the assistant is a sign-in too. "Sign out all" ends it;
+  // revoking ONE device doesn't (the phone isn't that device), so it's shown
+  // here, next to the devices, with its own Unlink.
+  const tenantId = await actingOwnerTenantId().catch(() => null);
+  const phones = tenantId
+    ? await basePrisma.assistantPhoneLink.findMany({
+        where: { tenantId, waId: { not: null }, verifiedAt: { not: null } },
+        select: { userId: true, waId: true },
+      })
+    : [];
+  const phoneOf = new Map(phones.map((p) => [p.userId, p.waId]));
 
   return (
     <SettingsWorkspace
@@ -97,6 +112,21 @@ export default async function SessionsPage() {
               )}
             </div>
 
+            {phoneOf.has(u.id) && (
+              <div className="mb-2 flex items-center justify-between gap-2 rounded-lg bg-muted/40 px-3 py-2 text-[12px]">
+                <span>
+                  WhatsApp linked to the assistant <span className="text-muted-foreground">({maskWaId(phoneOf.get(u.id))})</span>
+                </span>
+                <ConfirmActionDialog
+                  trigger={<button type="button" className="text-xs text-muted-foreground hover:text-destructive">Unlink</button>}
+                  title="Unlink this phone?"
+                  description="Messages from it will be treated like any other number's. They can link again from the Ask page."
+                  confirmLabel="Unlink"
+                  destructive
+                  onConfirm={unlinkWhatsAppFor.bind(null, u.id)}
+                />
+              </div>
+            )}
             {u.sessions.length === 0 ? (
               <p className="py-1 text-xs text-muted-foreground/70">No active sessions.</p>
             ) : (

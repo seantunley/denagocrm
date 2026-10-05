@@ -16,6 +16,7 @@ import AppShell from "@/components/AppShell";
 import AppContextMenu from "@/components/AppContextMenu";
 import SessionKeeper from "@/components/SessionKeeper";
 import AssistantBubble from "@/components/AssistantBubble";
+import { prisma } from "@/lib/db";
 
 /**
  * Tab title and icon from the SESSION's workspace. The root layout can only go
@@ -105,6 +106,12 @@ export default async function AppLayout({
   const showAssistant =
     (enabledModules === null || enabledModules.has("automation")) &&
     (user.role === "owner" || permissions.some((p) => ASSISTANT_GRANTS.includes(p)));
+  // Scheduled answers this person hasn't seen yet → the bubble's unread dot.
+  // Counted HERE so the bubble itself still fetches nothing until it's opened;
+  // one indexed count of their own turns, and only when the bubble shows.
+  const assistantUnseen = showAssistant
+    ? await prisma.assistantTurn.count({ where: { userId: user.id, source: "schedule", seenAt: null } }).catch(() => 0)
+    : 0;
 
   return (
     <>
@@ -139,7 +146,7 @@ export default async function AppLayout({
         {children}
         {modal}
       </AppShell>
-      {showAssistant && <AssistantBubble />}
+      {showAssistant && <AssistantBubble unseen={assistantUnseen} />}
     </>
   );
 }
