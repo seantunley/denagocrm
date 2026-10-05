@@ -7,6 +7,7 @@ import { resolveTenantMemberUser } from "./tenantActor";
 import { currentTenantScope } from "./tenantScope";
 import { tenantEnforcing } from "./tenantEnforcement";
 import { rateLimitKey, registerRateLimitAttempt, type RateLimitPolicy } from "./rateLimit";
+import { logError } from "./errorLog";
 
 /** Who may use the assistant at all — the same set on every way in. */
 export const ASSISTANT_PERMISSIONS = [
@@ -23,9 +24,23 @@ export const ASSISTANT_PERMISSIONS = [
  */
 const ASK_POLICY: RateLimitPolicy = { limit: 60, windowMs: 60 * 60 * 1000, blockMs: 30 * 60 * 1000 };
 
-export async function assistantAskAllowed(userId: string): Promise<boolean> {
-  const result = await registerRateLimitAttempt(rateLimitKey("assistant-ask", userId), ASK_POLICY);
+/**
+ * Count one use against a limit. The attempt that STARTS a block goes to the
+ * System Log (who, which limit — never the question): reaching a limit is
+ * either someone working very hard or a session being abused, and the owner
+ * should be able to see which. Later attempts during the block aren't logged,
+ * so a script hammering a blocked session can't flood the log.
+ */
+async function allowedUnder(key: string, kind: string, userId: string, policy: RateLimitPolicy): Promise<boolean> {
+  const result = await registerRateLimitAttempt(key, policy);
+  if (!result.allowed && result.retryAfterSeconds * 1000 >= policy.blockMs) {
+    await logError("crm-assistant", `${kind} limit reached`, `user ${userId} — blocked ${policy.blockMs / 60_000} min`, { alert: false });
+  }
   return result.allowed;
+}
+
+export async function assistantAskAllowed(userId: string): Promise<boolean> {
+  return allowedUnder(rateLimitKey("assistant-ask", userId), "assistant-ask", userId, ASK_POLICY);
 }
 
 export const ASK_LIMIT_MESSAGE = "You've asked a lot in the last hour — give it a few minutes and try again.";
@@ -43,13 +58,13 @@ const IMAGE_POLICY: RateLimitPolicy = { limit: 30, windowMs: 60 * 60 * 1000, blo
 const WEB_POLICY: RateLimitPolicy = { limit: 20, windowMs: 60 * 60 * 1000, blockMs: 30 * 60 * 1000 };
 
 export async function assistantVoiceAllowed(userId: string): Promise<boolean> {
-  return (await registerRateLimitAttempt(rateLimitKey("assistant-voice", userId), VOICE_POLICY)).allowed;
+  return allowedUnder(rateLimitKey("assistant-voice", userId), "assistant-voice", userId, VOICE_POLICY);
 }
 export async function assistantImageAllowed(userId: string): Promise<boolean> {
-  return (await registerRateLimitAttempt(rateLimitKey("assistant-image", userId), IMAGE_POLICY)).allowed;
+  return allowedUnder(rateLimitKey("assistant-image", userId), "assistant-image", userId, IMAGE_POLICY);
 }
 export async function assistantWebAllowed(userId: string): Promise<boolean> {
-  return (await registerRateLimitAttempt(rateLimitKey("assistant-web", userId), WEB_POLICY)).allowed;
+  return allowedUnder(rateLimitKey("assistant-web", userId), "assistant-web", userId, WEB_POLICY);
 }
 
 /**

@@ -2,6 +2,7 @@ import "server-only";
 import { z } from "zod";
 import { prisma } from "./db";
 import { logError } from "./errorLog";
+import { logAudit } from "./audit";
 import { codexRespond, isCodexConnected } from "./codex";
 import { formatZAR, contactName } from "./format";
 import { payableTotalCents } from "./pricing";
@@ -1317,6 +1318,15 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
         return 0;
       })
     : 0;
+  // In the trail: that it learned, from whose conversation, how much — not the
+  // text (that is in Settings → Assistant → Advanced, for the owner to review).
+  if (learnedCount > 0) {
+    await logAudit({
+      action: "assistant.learned",
+      summary: `The assistant learned from ${user.name || "a colleague"}'s conversation (${learnedCount} change${learnedCount === 1 ? "" : "s"}, unreviewed until the owner approves)`,
+      user,
+    });
+  }
   const saved = await prisma.assistantTurn
     .create({
       data: {

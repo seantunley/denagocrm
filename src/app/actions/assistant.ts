@@ -35,6 +35,10 @@ export async function runAssistantAction(card: ActionCard): Promise<{ ok: boolea
     if (!(await isModuleEnabled("automation"))) {
       return { ok: false, error: "Ask the CRM is part of the Automation & AI module, which is off for this workspace." };
     }
+    // The action it hands to writes its own audit entry; this one records that
+    // the change came from the assistant's proposal, on the lead's timeline.
+    const confirmed = (what: string, leadId: string) =>
+      logAudit({ action: "assistant.action_confirmed", summary: `Confirmed the assistant's proposal: ${what}`, user, leadId });
     switch (card?.kind) {
       case "schedule": {
         // Saved for the SIGNED-IN person, always: nothing on the card says who
@@ -73,7 +77,9 @@ export async function runAssistantAction(card: ActionCard): Promise<{ ok: boolea
           when: card.when,
           summary: card.summary,
         });
-        return result.ok ? { ok: true, success: "Follow-up scheduled" } : { ok: false, error: result.error ?? "Couldn't schedule it." };
+        if (!result.ok) return { ok: false, error: result.error ?? "Couldn't schedule it." };
+        await confirmed(`schedule a ${card.activity}`, card.leadId);
+        return { ok: true, success: "Follow-up scheduled" };
       }
       case "note": {
         const form = new FormData();
@@ -82,15 +88,21 @@ export async function runAssistantAction(card: ActionCard): Promise<{ ok: boolea
         form.set("type", "note");
         form.set("revalidate", `/leads/${card.leadId}`);
         const result = await addCommunication(form);
-        return result?.error ? { ok: false, error: result.error } : { ok: true, success: "Note added" };
+        if (result?.error) return { ok: false, error: result.error };
+        await confirmed("add a note", card.leadId);
+        return { ok: true, success: "Note added" };
       }
       case "assign": {
         const result = await assignLead(card.leadId, card.userId);
-        return result.ok ? { ok: true, success: `Given to ${result.assignee.name}` } : { ok: false, error: result.error };
+        if (!result.ok) return { ok: false, error: result.error };
+        await confirmed(`give the lead to ${result.assignee.name}`, card.leadId);
+        return { ok: true, success: `Given to ${result.assignee.name}` };
       }
       case "stage": {
         const result = await moveLead(card.leadId, card.stageId);
-        return result.ok ? { ok: true, success: "Lead moved" } : { ok: false, error: result.error ?? "That move isn't allowed yet." };
+        if (!result.ok) return { ok: false, error: result.error ?? "That move isn't allowed yet." };
+        await confirmed("move the lead to another stage", card.leadId);
+        return { ok: true, success: "Lead moved" };
       }
       default:
         return { ok: false, error: "Drafts are copied and sent by you — nothing is sent from here." };

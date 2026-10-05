@@ -220,9 +220,20 @@ async function verifyLinkCode(tenantId: string, waId: string, code: string): Pro
   const perNumber = await registerRateLimitAttempt(rateLimitKey("assistant-wa-guess", `${tenantId}:${waId}`), LINK_GUESS_POLICY);
   // A number that's already blocked stops here — it doesn't get to keep the
   // workspace counter full and lock every colleague out of linking.
-  if (!perNumber.allowed) return false;
+  if (!perNumber.allowed) {
+    // Someone guessing link codes: logged once, when the block starts.
+    if (perNumber.retryAfterSeconds * 1000 >= LINK_GUESS_POLICY.blockMs) {
+      await logError("assistant-whatsapp", "link code guessing blocked for a number");
+    }
+    return false;
+  }
   const perWorkspace = await registerRateLimitAttempt(rateLimitKey("assistant-wa-guess-ws", tenantId), LINK_GUESS_WORKSPACE_POLICY);
-  if (!perWorkspace.allowed) return false;
+  if (!perWorkspace.allowed) {
+    if (perWorkspace.retryAfterSeconds * 1000 >= LINK_GUESS_WORKSPACE_POLICY.blockMs) {
+      await logError("assistant-whatsapp", "link code guessing blocked for the workspace");
+    }
+    return false;
+  }
 
   const now = new Date();
   const pending = await basePrisma.assistantPhoneLink.findMany({
@@ -246,6 +257,13 @@ async function verifyLinkCode(tenantId: string, waId: string, code: string): Pro
     await basePrisma.assistantPhoneLink.updateMany({
       where: { id: match.id, tenantId, codeHash: match.codeHash },
       data: { codeHash: null, codeExpiresAt: null },
+    });
+    await logAudit({
+      action: "assistant.whatsapp_link_refused",
+      summary: `Refused to link WhatsApp ${maskWaId(waId)}: the code was issued before this account's sign-ins were reset`,
+      user,
+      entityType: "AssistantPhoneLink",
+      entityId: match.id,
     });
     return false;
   }

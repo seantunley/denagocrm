@@ -1,6 +1,7 @@
 import "server-only";
 import { prisma } from "./db";
 import { logError } from "./errorLog";
+import { logAudit } from "./audit";
 import { askCrm, type AssistantResult } from "./crmAssistant";
 import { assistantAskAllowed, assistantUserFor } from "./assistantUser";
 import { MAX_ACTIVE_SCHEDULES, SCHEDULE_SKIPPED_NOTE, SCHEDULE_UNSAVED_NOTE, nextRun, scheduleFailureNote } from "./assistantSchedule";
@@ -115,10 +116,19 @@ export async function runDueAssistantSchedules(budget: CronSliceContext): Promis
       continue;
     }
     if (!user || user.id !== schedule.userId) {
-      await prisma.assistantSchedule.updateMany({
+      const off = await prisma.assistantSchedule.updateMany({
         where: { id: schedule.id, tenantId, active: true, nextRunAt: schedule.nextRunAt },
         data: { active: false, nextRunAt: null },
       });
+      if (off.count) {
+        await logAudit({
+          action: "assistant.schedule_switched_off",
+          summary: "Switched off a scheduled question: the person it runs as no longer has access to the assistant",
+          userName: "Assistant (schedules)",
+          entityType: "AssistantSchedule",
+          entityId: schedule.id,
+        });
+      }
       continue;
     }
 

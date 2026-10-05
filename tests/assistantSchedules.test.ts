@@ -188,7 +188,7 @@ test("the runner checks the person, THEN claims the run, then runs it as them", 
   assert.match(loop, /const next = nextRun\(schedule, now\);/);
   assert.match(loop, /data: \{ nextRunAt: next, lastRunAt: now, \.\.\.\(next \? \{\} : \{ active: false \}\) \}/);
   // Someone who can no longer use the assistant: switched off, nothing runs.
-  assert.match(loop, /if \(!user \|\| user\.id !== schedule\.userId\) \{\s*await prisma\.assistantSchedule\.updateMany\(\{[\s\S]*?data: \{ active: false, nextRunAt: null \},\s*\}\);\s*continue;/);
+  assert.match(loop, /if \(!user \|\| user\.id !== schedule\.userId\) \{\s*const off = await prisma\.assistantSchedule\.updateMany\(\{[\s\S]*?data: \{ active: false, nextRunAt: null \},\s*\}\);\s*if \(off\.count\) \{\s*await logAudit\(\{\s*action: "assistant\.schedule_switched_off",[\s\S]*?\}\);\s*\}\s*continue;/);
   // A failed, skipped or unsaved run still leaves them a note in their thread.
   assert.match(loop, /const briefing = result\.ok && result\.saved;/);
   assert.match(loop, /const note = result\.ok \? SCHEDULE_UNSAVED_NOTE : allowed \? scheduleFailureNote\(result\.error\) : SCHEDULE_SKIPPED_NOTE;/);
