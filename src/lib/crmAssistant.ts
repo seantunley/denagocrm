@@ -106,9 +106,52 @@ const fuzzy = (needle: string) => ({ contains: needle, mode: "insensitive" as co
 const dateKey = (d: Date | null | undefined) => (d ? johannesburgDateKey(d) : "never");
 const daysAgo = (d: Date) => Math.floor((Date.now() - d.getTime()) / DAY);
 const clip = (s: string | null | undefined, n: number) => (s ? (s.length > n ? `${s.slice(0, n)}…` : s) : null);
-/** "Has she opened it?" — a draft was never sent, which is the real answer, not "not yet". */
-const viewedByCustomer = (q: { status: string; viewedAt: Date | null }) =>
-  q.viewedAt ? dateKey(q.viewedAt) : q.status === "draft" ? "not sent yet (still a draft)" : "not yet";
+/**
+ * A quote sent from the signing hub keeps its own status "draft" and no
+ * viewedAt — sending, opening and signing are recorded on its SignatureRequest
+ * and recipients. So "was it sent / has she opened it" reads both.
+ */
+export type Signing = { status: string; sentAt: Date | null; viewedAt: Date | null; signedAt: Date | null };
+const LIVE_SIGNING = ["sent", "viewed", "in_progress"];
+
+/** Each quote's latest signing request that went out (not a draft, not voided). */
+async function signingFor(quoteIds: string[]): Promise<Map<string, Signing>> {
+  if (!quoteIds.length) return new Map();
+  const requests = await prisma.signatureRequest.findMany({
+    where: { quoteId: { in: quoteIds }, deletedAt: null, status: { notIn: ["draft", "voided"] } },
+    orderBy: { createdAt: "desc" },
+    select: { quoteId: true, status: true, sentAt: true, recipients: { select: { viewedAt: true, signedAt: true } } },
+  });
+  const byQuote = new Map<string, Signing>();
+  for (const r of requests) {
+    if (!r.quoteId || byQuote.has(r.quoteId)) continue;
+    const times = (pick: (x: { viewedAt: Date | null; signedAt: Date | null }) => Date | null) =>
+      r.recipients.map(pick).filter((d): d is Date => d !== null).map((d) => d.getTime());
+    const viewed = times((x) => x.viewedAt);
+    const signed = times((x) => x.signedAt);
+    byQuote.set(r.quoteId, {
+      status: r.status,
+      sentAt: r.sentAt,
+      viewedAt: viewed.length ? new Date(Math.min(...viewed)) : null,
+      signedAt: r.status === "completed" && signed.length ? new Date(Math.max(...signed)) : null,
+    });
+  }
+  return byQuote;
+}
+
+/** "Has she opened it?" — a draft never sent is the real answer, not "not yet". */
+export const viewedByCustomer = (q: { status: string; viewedAt: Date | null }, s?: Signing) => {
+  const opened = q.viewedAt ?? s?.viewedAt ?? null;
+  if (opened) return dateKey(opened);
+  return q.status === "draft" && !s ? "not sent yet (still a draft)" : "not yet";
+};
+
+/** What the quote's status means to a person: a "draft" sent for signature has been sent. */
+export const quoteFacts = (q: { status: string; signedAt: Date | null }, s?: Signing) => ({
+  status: s && q.status === "draft" ? `sent for signature (${s.status})` : q.status,
+  ...(s ? { sentForSignature: dateKey(s.sentAt) } : {}),
+  signed: q.signedAt ? dateKey(q.signedAt) : s?.signedAt ? dateKey(s.signedAt) : "no",
+});
 
 /* ── Tools ───────────────────────────────────────────────────────────────── */
 
@@ -235,15 +278,32 @@ async function findQuotes(user: User, raw: z.infer<typeof quoteArgs>): Promise<T
   if (!(await hasAnyPermission(user, "quotes.view_all", "quotes.view_owned"))) return refused("quotes");
   const args = quoteArgs.parse(raw);
   const ids = await getAccessibleQuoteIds(user);
+  // Quotes out for signature in the signing hub (their own status stays "draft").
+  const hub = args.awaitingSignature || args.viewed !== undefined
+    ? await prisma.signatureRequest.findMany({
+        where: { deletedAt: null, quoteId: { not: null }, status: { in: LIVE_SIGNING } },
+        select: { quoteId: true, recipients: { select: { viewedAt: true } } },
+      })
+    : [];
+  const outForSigning = hub.map((r) => r.quoteId!);
+  const openedInHub = hub.filter((r) => r.recipients.some((x) => x.viewedAt)).map((r) => r.quoteId!);
   const quotes = await prisma.quote.findMany({
     where: {
       deletedAt: null,
       supersededAt: null,
       ...(ids === null ? {} : { id: { in: ids } }),
       ...(args.awaitingSignature
-        ? { status: "sent", signedAt: null, declinedAt: null }
+        ? {
+            signedAt: null,
+            declinedAt: null,
+            // In an OR, so the id here narrows rather than replaces the access filter.
+            OR: [{ status: "sent" }, { id: { in: outForSigning }, status: { in: ["draft", "sent"] } }],
+          }
         : args.status ? { status: args.status } : {}),
-      ...(args.viewed === true ? { viewedAt: { not: null } } : args.viewed === false ? { viewedAt: null } : {}),
+      // Inside AND: a top-level `id` here would replace the access filter above.
+      ...(args.viewed === true
+        ? { AND: [{ OR: [{ viewedAt: { not: null } }, { id: { in: openedInHub } }] }] }
+        : args.viewed === false ? { AND: [{ viewedAt: null }, { id: { notIn: openedInHub } }] } : {}),
       ...(args.olderThanDays ? { createdAt: { lt: new Date(Date.now() - args.olderThanDays * DAY) } } : {}),
       // "Expiring": still open — draft or sent, nobody has signed or declined —
       // with its validity running out in the window (or already run out today).
@@ -271,6 +331,7 @@ async function findQuotes(user: User, raw: z.infer<typeof quoteArgs>): Promise<T
     .filter(({ total }) => !args.minValue || total >= args.minValue * 100);
   const take = args.limit ?? 10;
   const page = priced.slice(0, take);
+  const signing = await signingFor(page.map(({ quote }) => quote.id));
   const customer = (q: (typeof quotes)[number]) =>
     q.contact ? contactName(q.contact) : q.lead?.name ?? "no customer";
   return {
@@ -279,16 +340,15 @@ async function findQuotes(user: User, raw: z.infer<typeof quoteArgs>): Promise<T
       quote: `Q-${quote.number}`,
       leadId: quote.lead?.id ?? null,
       customer: customer(quote),
-      status: quote.status,
       total: formatZAR(total),
       created: dateKey(quote.createdAt),
-      viewedByCustomer: viewedByCustomer(quote),
+      ...quoteFacts(quote, signing.get(quote.id)),
+      viewedByCustomer: viewedByCustomer(quote, signing.get(quote.id)),
       validUntil: quote.validUntil ? dateKey(quote.validUntil) : null,
-      signed: quote.signedAt ? dateKey(quote.signedAt) : "no",
     })),
     rows: page.map(({ quote, total }) => ({
       label: `Q-${quote.number} — ${customer(quote)}`,
-      detail: `${quote.status} · ${formatZAR(total)} · viewed ${viewedByCustomer(quote)}`,
+      detail: `${quoteFacts(quote, signing.get(quote.id)).status} · ${formatZAR(total)} · viewed ${viewedByCustomer(quote, signing.get(quote.id))}`,
       href: `/quotes/${quote.id}`,
     })),
   };
@@ -489,20 +549,20 @@ async function quotesForLead(user: User, leadId: string) {
     orderBy: { createdAt: "desc" },
     take: 5,
     select: {
-      number: true, status: true, createdAt: true, validUntil: true, viewedAt: true, signedAt: true, declinedAt: true,
+      id: true, number: true, status: true, createdAt: true, validUntil: true, viewedAt: true, signedAt: true, declinedAt: true,
       declineReason: true, changeRequestNote: true,
       invoicedAt: true, depositPaidAt: true, deliveryScheduledFor: true, deliveredAt: true,
       taxInclusive: true, depositType: true, depositValue: true, items: true, fees: true,
     },
   });
+  const signing = await signingFor(quotes.map((q) => q.id));
   return quotes.map((q) => ({
     quote: `Q-${q.number}`,
-    status: q.status,
+    ...quoteFacts(q, signing.get(q.id)),
     total: formatZAR(payableTotalCents(q)),
     created: dateKey(q.createdAt),
     validUntil: q.validUntil ? dateKey(q.validUntil) : null,
-    viewedByCustomer: viewedByCustomer(q),
-    signed: q.signedAt ? dateKey(q.signedAt) : "no",
+    viewedByCustomer: viewedByCustomer(q, signing.get(q.id)),
     ...(q.declinedAt ? { declined: dateKey(q.declinedAt), reason: clip(q.declineReason, 200) } : {}),
     ...(q.changeRequestNote ? { changeRequested: clip(q.changeRequestNote, 200) } : {}),
     ...(q.status === "accepted"
