@@ -13,7 +13,11 @@ import { audioForm, useVoiceRecorder } from "@/components/useVoiceRecorder";
 import type { ActionCard } from "@/lib/assistantActions";
 import AssistantActionCard from "@/components/AssistantActionCard";
 
-type Turn = { question: string; answer?: string; error?: string; rows: AssistantRow[]; learned?: number; actions?: ActionCard[]; choices?: string[] };
+type Turn = { question: string; answer?: string; error?: string; rows: AssistantRow[]; learned?: number; actions?: ActionCard[]; choices?: string[]; source?: string };
+
+/** A scheduled answer arrived on its own — say so, or it reads as something you asked just now. */
+const scheduledLabel = (turn: Turn) =>
+  turn.source === "schedule" ? <p className="text-[11px] font-medium text-muted-foreground">⏰ Scheduled</p> : null;
 
 // The OS picker (Win + . / Ctrl + Cmd + Space) has everything; these are one tap away.
 const EMOJIS = ["👍", "🙏", "😊", "😂", "🔥", "✅", "⚠️", "📞", "💬", "📅", "🚗", "💰", "🎉", "🤝", "👀", "❓"];
@@ -36,7 +40,7 @@ export default function AssistantChat({
   compact = false,
 }: {
   name: string;
-  history?: { question: string; answer: string }[];
+  history?: { question: string; answer: string; source?: string }[];
   /** The page it was opened on (the bubble), so "this lead" means something. */
   page?: string;
   /** The bubble: no example prompts — there isn't room, and you're mid-task. */
@@ -301,6 +305,7 @@ export default function AssistantChat({
         )}
         {thread.map((turn, index) => (
           <div key={index} className="space-y-2">
+            {scheduledLabel(turn)}
             <p className="ml-auto max-w-[85%] whitespace-pre-line rounded-2xl rounded-br-sm bg-primary px-3 py-2 text-sm text-primary-foreground">
               {turn.question}
             </p>
@@ -367,6 +372,7 @@ export default function AssistantChat({
 
       {turns.map((turn, index) => (
         <div key={turns.length - index} className="card space-y-3 p-5">
+          {scheduledLabel(turn)}
           <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{turn.question}</p>
           {turn.error ? (
             <p className="text-sm text-destructive">{turn.error}</p>

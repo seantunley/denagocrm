@@ -35,6 +35,7 @@ import { assistantWebAllowed } from "./assistantUser";
 import { MAX_IMAGES_PER_QUESTION } from "./assistantImage";
 import { applyLearn, loadLearned, loadPlaybook } from "./assistantMemoryStore";
 import { ACTION_INSTRUCTIONS, CHOICE_INSTRUCTIONS, splitActions, splitChoices, type ActionCard, type ProposedAction } from "./assistantActions";
+import { describeSchedule, nextRun, scheduleInput } from "./assistantSchedule";
 import {
   ANSWER_RULES,
   MAX_LOOKUPS,
@@ -90,7 +91,8 @@ export type AssistantRow = { label: string; detail: string; href: string };
 export type AssistantResult =
   /** learned: how many memories/playbooks this answer added or changed (owner reviews them). */
   /** choices: quick replies, shown as buttons under the answer. */
-  | { ok: true; answer: string; rows: AssistantRow[]; tools: string[]; learned: number; actions: ActionCard[]; choices: string[] }
+  /** saved: the turn was written to the person's history — for a scheduled run, the briefing EXISTS. */
+  | { ok: true; answer: string; rows: AssistantRow[]; tools: string[]; learned: number; actions: ActionCard[]; choices: string[]; saved: boolean }
   | { ok: false; error: string };
 
 type ToolOutput = { rows: AssistantRow[]; data: unknown[]; truncated: boolean };
@@ -1029,7 +1031,8 @@ export async function assistantTurnsToday(userId: string) {
     where: { userId, createdAt: { gte: startOfToday } },
     orderBy: { createdAt: "desc" },
     take: 20,
-    select: { question: true, answer: true },
+    // `source`, so a scheduled answer is labelled as one in the thread.
+    select: { question: true, answer: true, source: true },
   });
 }
 
@@ -1050,7 +1053,7 @@ export async function assistantHistory(userId: string, take = 20) {
     where: { userId, createdAt: { gte: new Date(Date.now() - HISTORY_DAYS * DAY) } },
     orderBy: { createdAt: "desc" },
     take,
-    select: { id: true, question: true, answer: true, createdAt: true },
+    select: { id: true, question: true, answer: true, source: true, createdAt: true },
   });
 }
 
@@ -1290,7 +1293,7 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
   if ("error" in answerReply) {
     await logError("crm-assistant", "answer step failed", safeCodexError(answerReply.error));
     // The rows are still right; show them rather than nothing.
-    return { ok: true, answer: "Here's what the CRM returned (ChatGPT couldn't write it up just now).", rows, tools, learned: 0, actions: [], choices: [] };
+    return { ok: true, answer: "Here's what the CRM returned (ChatGPT couldn't write it up just now).", rows, tools, learned: 0, actions: [], choices: [], saved: false };
   }
   // The answer the person sees, and — separately — anything it decided to learn,
   // any tasks it proposes and any quick replies. All trailer lines are removed.
@@ -1312,7 +1315,7 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
         return 0;
       })
     : 0;
-  await prisma.assistantTurn
+  const saved = await prisma.assistantTurn
     .create({
       data: {
         tenantId: ownedWriteTenantId(),
@@ -1325,9 +1328,15 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
         scheduleId: source === "schedule" ? opts.scheduleId ?? null : null,
       },
     })
-    // Remembering is a nicety; failing to must not cost the person their answer.
-    .catch((error: unknown) => logError("crm-assistant", "history write failed", error instanceof Error ? error.name : "unknown"));
-  return { ok: true, answer, rows, tools, learned: learnedCount, actions, choices };
+    .then(() => true)
+    // In chat, remembering is a nicety: failing to must not cost the person the
+    // answer on their screen. A scheduled run has no screen — the saved turn IS
+    // the briefing — so the runner reads `saved` and never says "ready" without it.
+    .catch(async (error: unknown) => {
+      await logError("crm-assistant", "history write failed", error instanceof Error ? error.name : "unknown");
+      return false;
+    });
+  return { ok: true, answer, rows, tools, learned: learnedCount, actions, choices, saved };
 }
 
 /**
@@ -1341,6 +1350,16 @@ async function resolveActions(user: User, proposals: ProposedAction[]): Promise<
   const staff = await listActingTenantStaff();
   const cards: ActionCard[] = [];
   for (const [index, p] of proposals.entries()) {
+    if (p.type === "schedule") {
+      // No lead to check: it is saved for whoever presses Confirm, and runs as
+      // them with their permissions at the time. Only the timing is checked
+      // here — a one-off in the past never becomes a card.
+      const { type: _type, ...fields } = p;
+      const parsed = scheduleInput.safeParse(fields);
+      if (!parsed.success || !nextRun(parsed.data, new Date())) continue;
+      cards.push({ id: `a${index}-schedule`, kind: "schedule", title: describeSchedule(parsed.data), ...parsed.data });
+      continue;
+    }
     if (!(await canAccessLead(user, p.leadId))) continue;
     const lead = await prisma.lead.findUnique({
       where: { id: p.leadId },
