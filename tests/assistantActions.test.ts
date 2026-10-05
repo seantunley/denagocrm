@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { readFileSync } from "node:fs";
-import { MAX_ACTIONS, splitActions } from "../src/lib/assistantActions";
+import { MAX_ACTIONS, MAX_CHOICES, splitActions, splitChoices } from "../src/lib/assistantActions";
 import { splitLearn } from "../src/lib/assistantMemory";
 
 const code = (rel: string) =>
@@ -18,6 +18,33 @@ test("proposals come out of the reply; the person never sees the ACTIONS line", 
   );
   assert.equal(answer, "I've set up a call with Anna for you to confirm.");
   assert.deepEqual(actions.map((a) => a.type), ["follow_up", "assign"]);
+});
+
+test("choices become buttons: parsed, stripped, capped — and all three trailers come off together", () => {
+  const reply = [
+    "There are two Jacobs — which one? 🤔",
+    'LEARN: {"memory":[{"add":"Fleet deals go to Donovan."}]}',
+    `ACTIONS: [{"type":"note","leadId":"${LEAD}","text":"Asked about finance."}]`,
+    'CHOICES: ["Anna Jacobs","Ben Jacobs","Anna Jacobs","   "]',
+  ].join("\n");
+  const learnSplit = splitLearn(reply);
+  const choiceSplit = splitChoices(learnSplit.answer);
+  const { answer, actions } = splitActions(choiceSplit.answer);
+  assert.equal(answer, "There are two Jacobs — which one? 🤔");
+  assert.deepEqual(choiceSplit.choices, ["Anna Jacobs", "Ben Jacobs"], "deduped, blanks dropped");
+  assert.equal(actions.length, 1);
+  assert.equal(learnSplit.learn?.memory?.length, 1);
+  // Bad lines are removed from the answer and yield no buttons.
+  for (const bad of ['CHOICES: {"a":1}', "CHOICES: [broken", 'CHOICES: ["only one"]', `CHOICES: ["${"x".repeat(61)}","ok"]`]) {
+    assert.deepEqual(splitChoices(`Pick one.\n${bad}`), { answer: "Pick one.", choices: [] }, bad);
+  }
+  assert.equal(splitChoices(`Pick.\nCHOICES: ${JSON.stringify(["a", "b", "c", "d", "e", "f"])}`).choices.length, MAX_CHOICES);
+  assert.deepEqual(splitChoices("No choice here."), { answer: "No choice here.", choices: [] });
+  // Wired: the answer step is told about them, the chat sends a tap as the next question.
+  assert.match(code("src/lib/crmAssistant.ts"), /source === "chat" \? ACTION_INSTRUCTIONS : "",\s*source === "schedule" \? "" : CHOICE_INSTRUCTIONS,/);
+  const chat = code("src/components/AssistantChat.tsx");
+  assert.match(chat, /turn === turns\[0\] && !pending && turn\.choices/, "only the newest answer's choices");
+  assert.match(chat, /onClick=\{\(\) => ask\(choice\)\}/);
 });
 
 test("one bad proposal doesn't sink the rest; invented kinds and extra fields are refused", () => {
@@ -50,7 +77,7 @@ test("proposals are checked against what this person may touch, names resolved, 
 
 test("Confirm runs the action a person would use by hand — and nothing is ever sent", () => {
   const action = code("src/app/actions/assistant.ts");
-  const run = action.slice(action.indexOf("export async function runAssistantAction"), action.indexOf("export async function askCrmAction"));
+  const run = action.slice(action.indexOf("export async function runAssistantAction"), action.indexOf("export async function openAssistantBubble"));
   assert.match(run, /await requireAnyPermission\(\.\.\.ASSISTANT_PERMISSIONS\);\s*if \(!\(await isModuleEnabled\("automation"\)\)\)/);
   for (const delegate of ["scheduleFollowUp(", "addCommunication(", "assignLead(", "moveLead("]) {
     assert.ok(run.includes(delegate), delegate);

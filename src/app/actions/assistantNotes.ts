@@ -6,8 +6,11 @@ import { isTenantOwner, requireTenantOwner, requireUser } from "@/lib/auth";
 import { logAudit } from "@/lib/audit";
 import { withActingStaffScope } from "@/lib/actingScope";
 import { asActionResult, refuse } from "@/lib/actionResult";
-import { ENTRY_CHARS, MEMORY_CHAR_LIMIT, PLAYBOOK_CHARS, PLAYBOOK_LIMIT, scanEntry } from "@/lib/assistantMemory";
+import { ENTRY_CHARS, MEMORY_CHAR_LIMIT, PLAYBOOK_CHARS, PLAYBOOK_LIMIT, PROFILE_CHAR_LIMIT, scanEntry } from "@/lib/assistantMemory";
 import { ownedWriteTenantId } from "@/lib/tenantWrite";
+import { requireAnyPermission } from "@/lib/permissions";
+import { isModuleEnabled } from "@/lib/modules/enabled";
+import { ASSISTANT_PERMISSIONS } from "@/lib/assistantUser";
 
 /*
  * Reviewing what the assistant learned. It learns on its own (Sean's choice);
@@ -99,13 +102,17 @@ export async function createAssistantNote(formData: FormData) {
       const tenantId = ownedWriteTenantId();
       await prisma.$transaction(async (tx) => {
         await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`assistant-notes:${tenantId}`})::bigint)`;
+        // The owner's space is the SHARED one — what's approved. Colleagues'
+        // unreviewed entries reach only their own conversations, so a few busy
+        // colleagues can't fill it and lock the owner out of teaching.
+        const shared = { tenantId, status: "approved" };
         if (kind === "memory") {
-          const used = (await tx.assistantNote.findMany({ where: { tenantId, kind: "memory" }, select: { content: true } }))
+          const used = (await tx.assistantNote.findMany({ where: { ...shared, kind: "memory" }, select: { content: true } }))
             .reduce((n, e) => n + e.content.length, 0);
           if (used + scanned.text.length > MEMORY_CHAR_LIMIT) {
             refuse("Its business memory is full — remove or shorten something first (it's kept small because it's read with every question).");
           }
-        } else if ((await tx.assistantNote.count({ where: { tenantId, kind: "playbook" } })) >= PLAYBOOK_LIMIT) {
+        } else if ((await tx.assistantNote.count({ where: { ...shared, kind: "playbook" } })) >= PLAYBOOK_LIMIT) {
           refuse(`It already has ${PLAYBOOK_LIMIT} playbooks — remove one first.`);
         }
         await tx.assistantNote.create({
@@ -134,6 +141,43 @@ export async function deleteAssistantNote(id: string) {
       await logAudit({ action: "assistant.note_deleted", summary: `Removed what the assistant learned (${note.kind}${note.name ? ` “${note.name}”` : ""})`, user });
       revalidate();
       return { success: "Removed" };
+    }),
+  );
+}
+
+/**
+ * A person telling the assistant about THEMSELVES ("I run fleet deals in
+ * Gauteng", "bullet points, please"), Hermes' USER.md in their own hands.
+ * Their own words, used only in their own conversations, so no owner review:
+ * saved as approved — the assistant can't rewrite it. Only ever the caller's
+ * own profile: the row is created for, and updated where userId is, the
+ * signed-in person; an id belonging to anyone else is simply not found.
+ */
+export async function saveMyAssistantNote(id: string | null, formData: FormData) {
+  return asActionResult(() =>
+    withActingStaffScope(async () => {
+      const user = await requireAnyPermission(...ASSISTANT_PERMISSIONS);
+      if (!(await isModuleEnabled("automation"))) refuse("The assistant is part of the Automation & AI module, which is off for this workspace.");
+      const scanned = scanEntry(String(formData.get("content") ?? "").slice(0, ENTRY_CHARS));
+      if (!scanned.ok) refuse(scanned.reason === "empty" ? "Write something about yourself first." : `That can't be saved: it ${scanned.reason}.`);
+      const tenantId = ownedWriteTenantId();
+      const mine = { tenantId, kind: "profile", userId: user.id };
+      await prisma.$transaction(async (tx) => {
+        await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`assistant-notes:${tenantId}`})::bigint)`;
+        const entries = await tx.assistantNote.findMany({ where: mine, select: { id: true, content: true } });
+        const others = entries.filter((e) => e.id !== id).reduce((n, e) => n + e.content.length, 0);
+        if (others + scanned.text.length > PROFILE_CHAR_LIMIT) refuse("That's all the room there is about you — shorten or remove something first.");
+        const reviewed = { status: "approved", reviewedById: user.id, reviewedAt: new Date() };
+        if (id) {
+          const updated = await tx.assistantNote.updateMany({ where: { id, ...mine }, data: { content: scanned.text, ...reviewed } });
+          if (!updated.count) refuse(NOTE_GONE);
+        } else {
+          await tx.assistantNote.create({ data: { ...mine, content: scanned.text, createdById: user.id, ...reviewed } });
+        }
+      });
+      await logAudit({ action: "assistant.profile_saved", summary: "Told the assistant about themselves", user });
+      revalidate();
+      return { success: "Saved — it will use this in your conversations" };
     }),
   );
 }

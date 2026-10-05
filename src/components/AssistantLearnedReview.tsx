@@ -24,10 +24,11 @@ const GROUPS: { kind: string; title: string; hint: string }[] = [
 ];
 
 /**
- * The owner's review list. The assistant learns on its own; entries apply as
- * soon as they're learned and show "unreviewed" until approved, edited or
- * removed here. Approved entries are the owner's — the assistant can't rewrite
- * or remove them.
+ * The owner's review list. The assistant learns on its own; an entry shows
+ * "unreviewed" and is used only with the person it was learned from until it is
+ * approved, edited or removed here (it came from THEIR conversation, with their
+ * visibility). Approving shares it with everyone. Approved entries are the
+ * owner's — the assistant can't rewrite or remove them.
  */
 export default function AssistantLearnedReview({ notes }: { notes: LearnedNote[] }) {
   const unreviewed = notes.filter((n) => n.status !== "approved").length;
@@ -39,7 +40,7 @@ export default function AssistantLearnedReview({ notes }: { notes: LearnedNote[]
           {notes.length === 0
             ? "Nothing yet — it learns as your team uses it, especially from corrections."
             : unreviewed
-              ? `${unreviewed} new thing${unreviewed === 1 ? "" : "s"} to review. They're already in use; approve, correct or remove them.`
+              ? `${unreviewed} new thing${unreviewed === 1 ? "" : "s"} to review. Until you approve one, it's used only in the conversations of the person it came from — approving shares it with everyone.`
               : "All reviewed."}
         </p>
       </div>
