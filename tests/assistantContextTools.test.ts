@@ -89,7 +89,9 @@ test("it can answer questions about itself — truthfully, from a fixed brief", 
   assert.match(about, /until then it is used only with the person it came from/);
   // …and it is actually given to the answer step, after the soul.
   const lib = code("src/lib/crmAssistant.ts");
-  assert.match(lib, /instructions: \[\s*soul,\s*selfKnowledge\(profile\.name\),\s*learned,/);
+  assert.match(lib, /instructions: \[\s*soul,\s*selfKnowledge\(profile\.name\),\s*ANSWER_RULES,/);
+  // What it has learned comes after the fixed rules — it changes, so it can't sit in the cached prefix.
+  assert.match(lib, /CHANNEL_RULES\[source\],\s*learned,\s*images\.length \? IMAGE_RULE : "",/);
   // Questions about itself need no lookup.
   assert.match(code("src/lib/crmAssistantPlan.ts"), /questions about you yourself/);
   // Every lookup it claims exists; nothing in the action list it says it can do is missing.

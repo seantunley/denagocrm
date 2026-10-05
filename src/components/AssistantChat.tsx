@@ -4,6 +4,7 @@ import { useEffect, useRef, useState, useTransition } from "react";
 import Link from "next/link";
 import { ArrowUpRight, Loader2, Mic, Paperclip, Smile, Sparkles, Square, X } from "lucide-react";
 import { shrinkToJpeg } from "@/components/shrinkImage";
+import { askStreaming } from "@/components/askStream";
 import { IMAGE_MAX_SIDE, MAX_IMAGE_BYTES } from "@/lib/assistantImage";
 import { askCrmAction } from "@/app/actions/assistant";
 import { transcribeQuestion } from "@/app/actions/voice";
@@ -52,6 +53,8 @@ export default function AssistantChat({
   // question, then dropped — never kept in the conversation.
   const [image, setImage] = useState<{ blob: Blob; preview: string } | null>(null);
   const [imageError, setImageError] = useState<string | null>(null);
+  // The question being answered and the answer so far, while it streams in.
+  const [live, setLive] = useState<{ question: string; text: string } | null>(null);
   const picker = useRef<HTMLInputElement | null>(null);
 
   const attach = async (file: Blob | null | undefined) => {
@@ -98,8 +101,26 @@ export default function AssistantChat({
     setQuestion("");
     clearImage();
     const shown = sent ? `📎 ${q || "Image"}` : q;
+    setLive({ question: shown, text: "" });
     startTransition(async () => {
-      const result = await askCrmAction(q, page, attachment).catch(() => ({ ok: false as const, error: "Something went wrong — try again." }));
+      // Streamed: the answer appears as it is written. If streaming isn't
+      // available at all, ask the ordinary way; if it broke part-way, the server
+      // still finishes and saves the answer — don't ask (and pay) twice.
+      const form = new FormData();
+      form.set("question", q);
+      if (page) form.set("page", page);
+      if (sent) form.set("image", new File([sent.blob], "image.jpg", { type: "image/jpeg" }));
+      let received = false;
+      const streamed = await askStreaming(form, (text) => {
+        received = true;
+        setLive({ question: shown, text });
+      });
+      const result =
+        streamed ??
+        (received
+          ? { ok: false as const, error: "The connection dropped while I was answering — open the Ask page to see the full answer." }
+          : await askCrmAction(q, page, attachment).catch(() => ({ ok: false as const, error: "Something went wrong — try again." })));
+      setLive(null);
       setTurns((prev) => [
         result.ok
           ? { question: shown, answer: result.answer, rows: result.rows, learned: result.learned, actions: result.actions, choices: result.choices }
@@ -124,7 +145,7 @@ export default function AssistantChat({
   const end = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
     if (compact) end.current?.scrollIntoView({ block: "end" });
-  }, [compact, turns.length, pending]);
+  }, [compact, turns.length, pending, live?.text]);
 
   const details = (turn: Turn) => (
     <>
@@ -308,7 +329,21 @@ export default function AssistantChat({
             </div>
           </div>
         ))}
-        {pending && <p className="text-sm text-muted-foreground">{name} is looking into it…</p>}
+        {pending && live && (
+          <div className="space-y-2">
+            <p className="ml-auto max-w-[85%] whitespace-pre-line rounded-2xl rounded-br-sm bg-primary px-3 py-2 text-sm text-primary-foreground">
+              {live.question}
+            </p>
+            <div className="max-w-[92%] rounded-2xl rounded-bl-sm bg-muted/50 px-3 py-2">
+              {live.text ? (
+                <p className="whitespace-pre-line text-sm leading-relaxed">{live.text}</p>
+              ) : (
+                <p className="text-sm text-muted-foreground">{name} is looking into it…</p>
+              )}
+            </div>
+          </div>
+        )}
+        {pending && !live && <p className="text-sm text-muted-foreground">{name} is looking into it…</p>}
         <div className="sticky bottom-0 mt-auto space-y-1 bg-card pt-2">{composer}</div>
         <div ref={end} />
       </div>
@@ -334,7 +369,16 @@ export default function AssistantChat({
         </div>
       )}
 
-      {pending && <p className="text-sm text-muted-foreground">{name} is looking into it…</p>}
+      {pending && (
+        <div className="card space-y-3 p-5">
+          {live && <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{live.question}</p>}
+          {live?.text ? (
+            <p className="whitespace-pre-line text-sm leading-relaxed">{live.text}</p>
+          ) : (
+            <p className="text-sm text-muted-foreground">{name} is looking into it…</p>
+          )}
+        </div>
+      )}
 
       {turns.map((turn, index) => (
         <div key={turns.length - index} className="card space-y-3 p-5">

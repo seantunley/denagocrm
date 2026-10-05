@@ -1,0 +1,114 @@
+import assert from "node:assert/strict";
+import { test } from "node:test";
+import { readFileSync } from "node:fs";
+import Module from "node:module";
+import { visibleAnswer } from "../src/lib/assistantStream";
+import { isSameOrigin } from "../src/lib/sameOrigin";
+import { parseCodexStream } from "../src/lib/codexProtocol";
+import { planInstructions } from "../src/lib/crmAssistantPlan";
+
+// codex.ts and crmAssistant.ts reach server-only; their pure helpers load with it stubbed.
+type Loader = (request: string, parent: unknown, isMain: boolean) => unknown;
+const moduleWithLoad = Module as unknown as { _load: Loader };
+const realLoad = moduleWithLoad._load;
+moduleWithLoad._load = function (request, parent, isMain) {
+  if (request === "server-only") return {};
+  return realLoad.call(this, request, parent, isMain);
+};
+
+const code = (rel: string) =>
+  readFileSync(new URL(`../${rel}`, import.meta.url), "utf8")
+    .replace(/\r\n/g, "\n")
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/^\s*\/\/.*$/gm, "");
+
+/* ── Streaming: the person never sees a trailer line, even half-written ──── */
+
+test("while streaming, nothing of LEARN / ACTIONS / CHOICES ever shows — at any character", () => {
+  const full = 'Gavin needs a delivery check.\n\nI\'d ask Donovan first.\nLEARN: {"memory":[{"add":"x"}]}\nACTIONS: [{"type":"note"}]\nCHOICES: ["Call","WhatsApp"]';
+  for (let i = 1; i <= full.length; i++) {
+    const shown = visibleAnswer(full.slice(0, i));
+    assert.doesNotMatch(shown, /LEARN|ACTIONS|CHOICES|"memory"|"type"|\bLEA$|\bACT$|\bCHO$/, `at ${i}: ${JSON.stringify(shown)}`);
+  }
+  assert.equal(visibleAnswer(full), "Gavin needs a delivery check.\n\nI'd ask Donovan first.");
+  assert.equal(visibleAnswer("Leads gone quiet: 3\nActually fine."), "Leads gone quiet: 3\nActually fine.", "ordinary lines are shown");
+});
+
+test("the route accepts only same-origin requests", () => {
+  const h = (o: Record<string, string>) => ({ get: (k: string) => o[k.toLowerCase()] ?? null });
+  assert.equal(isSameOrigin(h({ "sec-fetch-site": "same-origin" })), true);
+  assert.equal(isSameOrigin(h({ "sec-fetch-site": "cross-site", origin: "https://crm.denagocpt.co.za", host: "crm.denagocpt.co.za" })), false, "the browser's word wins");
+  assert.equal(isSameOrigin(h({ "sec-fetch-site": "same-site" })), false, "a sibling subdomain is not us");
+  assert.equal(isSameOrigin(h({ origin: "https://crm.denagocpt.co.za", host: "crm.denagocpt.co.za" })), true);
+  assert.equal(isSameOrigin(h({ origin: "https://evil.example", host: "crm.denagocpt.co.za" })), false);
+  assert.equal(isSameOrigin(h({ host: "crm.denagocpt.co.za" })), false, "no origin at all is refused");
+});
+
+test("the streaming route: same-origin, signed in, permitted — then the SAME path as the action", () => {
+  const route = code("src/app/api/assistant/ask/route.ts");
+  const post = route.slice(route.indexOf("export async function POST"));
+  const order = ["isSameOrigin(req.headers)", "requireApiUser()", "hasAnyPermission(user, ...ASSISTANT_PERMISSIONS)", "askAsPerson("];
+  for (let i = 1; i < order.length; i++) assert.ok(post.indexOf(order[i - 1]) >= 0 && post.indexOf(order[i - 1]) < post.indexOf(order[i]), `${order[i - 1]} before ${order[i]}`);
+  assert.match(route, /export const maxDuration = 300;/);
+  assert.match(route, /"Cache-Control": "no-store"/);
+  const action = code("src/app/actions/assistant.ts");
+  assert.match(action.slice(action.indexOf("export async function askCrmAction")), /requireAnyPermission\(\.\.\.ASSISTANT_PERMISSIONS\);[\s\S]*?return askAsPerson\(/, "the action uses the shared path too");
+  const shared = code("src/lib/assistantAsk.ts");
+  const steps = ['isModuleEnabled("automation")', "assistantAskAllowed(user.id)", "assistantImageAllowed(user.id)", 'file.type !== "image/jpeg"', "cleanJpeg(", "return askCrm("];
+  for (let i = 1; i < steps.length; i++) assert.ok(shared.indexOf(steps[i - 1]) < shared.indexOf(steps[i]), `${steps[i - 1]} before ${steps[i]}`);
+});
+
+test("the chat streams, and only falls back to asking again when NOTHING arrived", () => {
+  const chat = code("src/components/AssistantChat.tsx");
+  assert.match(chat, /const streamed = await askStreaming\(form, \(text\) => \{\s*received = true;/);
+  assert.match(chat, /streamed \?\?\s*\(received\s*\? \{ ok: false as const, error: "The connection dropped/, "a broken stream isn't asked (and paid for) twice");
+  const client = code("src/components/askStream.ts");
+  assert.match(client, /fetch\("\/api\/assistant\/ask", \{ method: "POST", body: form, credentials: "same-origin" \}\)/);
+});
+
+/* ── Prompt cache: a stable key per person, and a frozen prefix ─────────── */
+
+test("each person's calls share a cache key — hashed, so no id is sent — and a one-off call gets none", () => {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const { cacheIdentity } = require("../src/lib/codex") as typeof import("../src/lib/codex");
+  const a = cacheIdentity("dax:tenant_denago_cpt:cmr871smu0000uw9cgaxeflmk");
+  assert.deepEqual(cacheIdentity("dax:tenant_denago_cpt:cmr871smu0000uw9cgaxeflmk"), a, "stable across calls");
+  assert.notEqual(cacheIdentity("dax:tenant_denago_cpt:someone-else").cacheKey, a.cacheKey, "per person");
+  assert.match(a.sessionId, /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-8[0-9a-f]{3}-[0-9a-f]{12}$/);
+  assert.ok(!a.cacheKey.includes("tenant") && !a.sessionId.includes("cmr8"), "no tenant or user id leaves");
+  const codex = code("src/lib/codex.ts");
+  assert.match(codex, /\.\.\.\(identity \? \{ prompt_cache_key: identity\.cacheKey \} : \{\}\)/);
+  assert.match(codex, /const sessionId = identity\?\.sessionId \?\? crypto\.randomUUID\(\);/);
+  const lib = code("src/lib/crmAssistant.ts");
+  assert.match(lib, /const cacheKey = `dax:\$\{ownedWriteTenantId\(\)\}:\$\{user\.id\}`;/);
+  assert.equal((lib.match(/cacheKey(,| \})/g) ?? []).length >= 3, true, "both plan calls and the answer use it");
+});
+
+test("what varies comes LAST in the research instructions, so the cached prefix holds", () => {
+  const a = planInstructions({ today: "2026-10-05", userName: "Sean", stages: ["New"], staff: ["Donovan"], activityTypes: ["call"] });
+  const b = planInstructions({ today: "2026-10-06", userName: "Donovan", stages: ["New", "Won"], staff: ["Sean"], activityTypes: ["todo"], learned: "x" });
+  let same = 0;
+  while (same < a.length && a[same] === b[same]) same++;
+  assert.ok(same > 4000, `the first ${same} characters are identical whoever asks, whatever the day`);
+  assert.ok(a.indexOf("Today is") > a.indexOf("YOU NEVER WRITE THE ANSWER"));
+  // …and sorted lists, so the database's order can't reshuffle them.
+  assert.match(code("src/lib/crmAssistant.ts"), /activityTypes: types\.map\(\(t\) => t\.type\)\.sort\(/);
+});
+
+test("the answer step: the per-question part last; today's date in the prompt, not the cached instructions", () => {
+  const lib = code("src/lib/crmAssistant.ts");
+  const answer = lib.slice(lib.indexOf("const answerReply = await codexRespond("));
+  assert.match(answer, /images\.length \? IMAGE_RULE : "",\s*methodInstructions\(observations\),\s*\]/);
+  assert.match(answer, /prompt: \[\s*`Now: \$\{nowInSouthAfrica\(\)\}\.`,/);
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const { nowInSouthAfrica } = require("../src/lib/crmAssistant") as typeof import("../src/lib/crmAssistant");
+  assert.equal(nowInSouthAfrica(new Date("2026-10-05T22:30:00Z")), "Tuesday 6 October 2026, 00:30 (South African time)");
+});
+
+test("usage is read from the stream, so cache hits can be measured", () => {
+  const stream = [
+    'data: {"type":"response.output_text.delta","delta":"Hi"}',
+    'data: {"type":"response.completed","response":{"output":[{"type":"message","content":[{"type":"output_text","text":"Hi"}]}],"usage":{"input_tokens":3780,"input_tokens_details":{"cached_tokens":2944}}}}',
+  ].join("\n");
+  assert.deepEqual(parseCodexStream(stream).usage, { inputTokens: 3780, cachedTokens: 2944 });
+});

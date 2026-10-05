@@ -14,6 +14,7 @@ import {
   parseCodexStream,
   renewedByAnotherHolder,
   type CodexTokens,
+  type CodexUsage,
 } from "./codexProtocol";
 
 /**
@@ -425,11 +426,61 @@ async function accessToken(forceRefresh = false): Promise<{ tokens: CodexTokens 
   });
 }
 
+/**
+ * Read the event stream as it arrives, handing each answer delta to `onText`,
+ * and return the whole raw stream for parseCodexStream — so the final result is
+ * byte-for-byte what a non-streaming read would have produced.
+ */
+async function readStreaming(body: ReadableStream<Uint8Array>, onText: (delta: string) => void): Promise<string> {
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  let raw = "";
+  let pending = "";
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      const chunk = decoder.decode(value, { stream: true });
+      raw += chunk;
+      pending += chunk;
+      const lines = pending.split(/\r?\n/);
+      pending = lines.pop() ?? "";
+      for (const line of lines) {
+        if (!line.startsWith("data:")) continue;
+        try {
+          const event = JSON.parse(line.slice(5).trim()) as { type?: string; delta?: unknown };
+          if (event.type === "response.output_text.delta" && typeof event.delta === "string") onText(event.delta);
+        } catch {
+          // Not JSON ([DONE], a keep-alive): nothing to show.
+        }
+      }
+    }
+  } catch {
+    // A dropped connection mid-stream: what arrived is parsed as usual (and
+    // flagged incomplete if it never finished).
+  }
+  return raw + decoder.decode();
+}
+
 /* ── The call ──────────────────────────────────────────────────────── */
 
 export type CodexResult =
-  | { text: string; incomplete: boolean }
+  | { text: string; incomplete: boolean; usage?: CodexUsage | null }
   | { error: string; transient?: true };
+
+/**
+ * A stable session id + prompt_cache_key from a caller's key — what Codex
+ * itself does. The ChatGPT backend routes the prompt cache by these: with a
+ * fresh random id on every call (as before) almost every call landed on a cold
+ * machine and re-read the whole prompt. Hashed, so no tenant or user id is sent.
+ */
+export function cacheIdentity(key: string): { sessionId: string; cacheKey: string } {
+  const h = crypto.createHash("sha256").update(`denago-cache:${key}`).digest("hex");
+  return {
+    sessionId: `${h.slice(0, 8)}-${h.slice(8, 12)}-4${h.slice(13, 16)}-8${h.slice(17, 20)}-${h.slice(20, 32)}`,
+    cacheKey: h.slice(0, 40),
+  };
+}
 
 /**
  * One Responses API turn on the ChatGPT backend, with web search available.
@@ -456,12 +507,25 @@ export async function codexRespond(input: {
   verbosity?: "low" | "medium" | "high";
   /** Research at high effort runs 50–80 seconds; the default suits short calls. */
   timeoutMs?: number;
+  /**
+   * Calls that share a prompt prefix (the same person's assistant turns) pass
+   * the same key, so the backend keeps their prompt cache on one machine.
+   * Omitted → a one-off call with a fresh id, as before.
+   */
+  cacheKey?: string;
+  /**
+   * Called with each piece of answer text as it arrives, so a person can watch
+   * it being written. The full reply is still parsed and returned at the end
+   * exactly as without it.
+   */
+  onText?: (delta: string) => void;
 }): Promise<CodexResult> {
   let auth = await accessToken();
   if ("error" in auth) return { error: auth.error };
 
   const configured = (await getSetting(CODEX_MODEL_KEY))?.trim() || null;
-  const sessionId = crypto.randomUUID();
+  const identity = input.cacheKey ? cacheIdentity(input.cacheKey) : null;
+  const sessionId = identity?.sessionId ?? crypto.randomUUID();
 
   const send = (tokens: CodexTokens, model: string) =>
     fetch(RESPONSES_URL, {
@@ -489,6 +553,7 @@ export async function codexRespond(input: {
         parallel_tool_calls: false,
         ...(input.reasoningEffort ? { reasoning: { effort: input.reasoningEffort } } : {}),
         ...(input.verbosity ? { text: { verbosity: input.verbosity } } : {}),
+        ...(identity ? { prompt_cache_key: identity.cacheKey } : {}),
         store: false,
         stream: true,
       }),
@@ -511,7 +576,7 @@ export async function codexRespond(input: {
       await logError("codex-research", res, "responses request");
       return { error: "Could not reach ChatGPT.", transient: true };
     }
-    const text = await res.text().catch(() => "");
+    const text = res.ok && input.onText && res.body ? await readStreaming(res.body, input.onText) : await res.text().catch(() => "");
     if (!res.ok) {
       if (isModelRejection(res.status, text)) {
         refusals.push(`${model} (${res.status})`);
@@ -551,7 +616,7 @@ export async function codexRespond(input: {
         `Was ${configured ?? `the default (${CODEX_DEFAULT_MODEL})`}. Refused: ${refusals.join(", ") || "retired, skipped"}.`,
       );
     }
-    return { text: parsed.text, incomplete: parsed.incomplete };
+    return { text: parsed.text, incomplete: parsed.incomplete, usage: parsed.usage };
   }
 
   await logError("codex-research", "Every research model was refused", refusals.join(", "));

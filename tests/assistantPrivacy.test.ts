@@ -89,8 +89,8 @@ test("one person can't sweep the CRM through the assistant at machine speed", ()
   const helper = code("src/lib/assistantUser.ts");
   assert.match(helper, /const ASK_POLICY: RateLimitPolicy = \{ limit: 60, windowMs: 60 \* 60 \* 1000, blockMs: 30 \* 60 \* 1000 \};/);
   assert.match(helper, /rateLimitKey\("assistant-ask", userId\)/, "one key per person, every channel");
-  const action = code("src/app/actions/assistant.ts");
-  const ask = action.slice(action.indexOf("export async function askCrmAction"));
+  // Every chat ask (action and streaming route) goes through askAsPerson.
+  const ask = code("src/lib/assistantAsk.ts");
   assert.ok(
     ask.indexOf("assistantAskAllowed(user.id)") > 0 && ask.indexOf("assistantAskAllowed(user.id)") < ask.indexOf("return askCrm("),
     "checked before any lookup runs",
