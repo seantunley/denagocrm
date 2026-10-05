@@ -3,6 +3,7 @@ import "server-only";
 import { prisma } from "./db";
 import { getAccessibleLeadIds, type PermissionUser } from "./permissions";
 import { scoreLead, type LeadScore } from "./leadScore";
+import { contactActivityWhere, contactCommunicationWhere } from "./customerContact";
 
 /**
  * Lead score — the IMPURE half: gathers the signals `scoreLead` reads.
@@ -52,10 +53,14 @@ export async function scoreLeads(leads: ScorableLead[], now: Date = new Date()):
   const leadId = { in: leads.map((lead) => lead.id) };
 
   const [contact, inbound, done, planned, viewed, outstanding] = await Promise.all([
-    // A note is something WE wrote down, not a touch with the customer.
-    prisma.communication.groupBy({ by: ["leadId"], where: { leadId, type: { not: "note" } }, _max: { occurredAt: true } }),
-    prisma.communication.groupBy({ by: ["leadId"], where: { leadId, direction: "inbound" }, _max: { occurredAt: true } }),
-    prisma.activity.groupBy({ by: ["leadId"], where: { leadId, status: "done" }, _max: { doneAt: true } }),
+    // Contact means the customer (customerContact.ts): a note is something WE
+    // wrote down, and a ticked-off to-do or blocked-out time isn't a touch either.
+    prisma.communication.groupBy({ by: ["leadId"], where: { leadId, ...contactCommunicationWhere }, _max: { occurredAt: true } }),
+    // "The customer wrote to us" — a real inbound message, never a note filed as
+    // inbound (the generic communication action accepts type "note" with any
+    // direction), or a newer note would award "waiting on our reply".
+    prisma.communication.groupBy({ by: ["leadId"], where: { leadId, direction: "inbound", ...contactCommunicationWhere }, _max: { occurredAt: true } }),
+    prisma.activity.groupBy({ by: ["leadId"], where: { leadId, ...contactActivityWhere }, _max: { doneAt: true } }),
     // The EARLIEST planned activity answers both questions at once: none means no
     // next step, and one in the past means something is overdue.
     prisma.activity.groupBy({ by: ["leadId"], where: { leadId, status: "planned" }, _min: { dueDate: true } }),
