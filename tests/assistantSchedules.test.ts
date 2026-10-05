@@ -306,6 +306,13 @@ test("no workspace leads every tick: who goes first moves on each :00 and :30", 
   }
 });
 
+test("a database blip skips one run — it never switches someone's schedule off", () => {
+  const run = code("src/lib/assistantScheduleRun.ts");
+  const check = run.slice(run.indexOf("let user: Awaited<ReturnType<typeof assistantUserFor>>;"));
+  assert.match(check, /try \{\s*user = await assistantUserFor\(schedule\.userId\);\s*\} catch \(error\) \{[\s\S]*?continue;\s*\}/);
+  assert.ok(check.indexOf("continue;") < check.indexOf("active: false"), "the error path never reaches the switch-off");
+});
+
 test("a push meant for one person can never widen to the workspace", () => {
   const push = code("src/lib/push.ts");
   assert.match(push, /\.filter\(\(sub\) => options\.userId == null \|\| sub\.userId === options\.userId\);/);

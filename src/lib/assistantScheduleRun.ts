@@ -111,7 +111,16 @@ export async function runDueAssistantSchedules(budget: CronSliceContext): Promis
     if (claim.count !== 1) continue;
     perPerson.set(schedule.userId, theirs + 1);
 
-    const user = await assistantUserFor(schedule.userId);
+    // A failure to READ who they are (a database blip) is not "they left": this
+    // one run is skipped — already claimed, so it comes round at its next time —
+    // and the schedule stays on. Only a definite "no longer allowed" switches it off.
+    let user: Awaited<ReturnType<typeof assistantUserFor>>;
+    try {
+      user = await assistantUserFor(schedule.userId);
+    } catch (error) {
+      await logError("assistant-schedule", "couldn't check the person for a scheduled run", error instanceof Error ? error.name : "unknown");
+      continue;
+    }
     if (!user || user.id !== schedule.userId) {
       await prisma.assistantSchedule.updateMany({ where: { id: schedule.id, tenantId }, data: { active: false, nextRunAt: null } });
       continue;
