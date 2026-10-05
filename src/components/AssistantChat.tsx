@@ -58,7 +58,8 @@ export default function AssistantChat({
   const [image, setImage] = useState<{ blob: Blob; preview: string } | null>(null);
   const [imageError, setImageError] = useState<string | null>(null);
   // The question being answered and the answer so far, while it streams in.
-  const [live, setLive] = useState<{ question: string; text: string } | null>(null);
+  // While asking: the answer so far, or — before it starts — what it is doing.
+  const [live, setLive] = useState<{ question: string; text: string; status?: string } | null>(null);
   const picker = useRef<HTMLInputElement | null>(null);
 
   const attach = async (file: Blob | null | undefined) => {
@@ -108,7 +109,11 @@ export default function AssistantChat({
       form.set("question", q);
       if (page) form.set("page", page);
       if (sent) form.set("image", new File([sent.blob], "image.jpg", { type: "image/jpeg" }));
-      const result = await askStreaming(form, (text) => setLive({ question: shown, text }));
+      const result = await askStreaming(
+        form,
+        (text) => setLive({ question: shown, text }),
+        (status) => setLive((prev) => ({ question: shown, text: prev?.text ?? "", status })),
+      );
       setLive(null);
       setTurns((prev) => [
         result.ok
@@ -328,7 +333,7 @@ export default function AssistantChat({
               {live.text ? (
                 <p className="whitespace-pre-line text-sm leading-relaxed">{live.text}</p>
               ) : (
-                <p className="text-sm text-muted-foreground">{name} is looking into it…</p>
+                <p className="animate-pulse text-sm text-muted-foreground">{live.status ?? `${name} is looking into it…`}</p>
               )}
             </div>
           </div>
@@ -365,7 +370,7 @@ export default function AssistantChat({
           {live?.text ? (
             <p className="whitespace-pre-line text-sm leading-relaxed">{live.text}</p>
           ) : (
-            <p className="text-sm text-muted-foreground">{name} is looking into it…</p>
+            <p className="animate-pulse text-sm text-muted-foreground">{live?.status ?? `${name} is looking into it…`}</p>
           )}
         </div>
       )}

@@ -25,10 +25,12 @@ const name = z.string().trim().min(1).max(80);
 const days = z.number().int().min(1).max(365);
 const rands = z.number().nonnegative().max(1_000_000_000);
 const limit = z.number().int().min(1).max(25);
+const isoDay = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
 
 export const leadArgs = z
   .object({
-    status: z.enum(["open", "won", "lost"]).optional(),
+    /** "any" counts every lead whatever happened to it ("how many came in"). */
+    status: z.enum(["open", "won", "lost", "any"]).optional(),
     stage: name.optional(),
     assignedTo: name.optional(),
     product: name.optional(),
@@ -37,6 +39,9 @@ export const leadArgs = z
     /** No message, call or completed activity on the lead for this many days. */
     noContactDays: days.optional(),
     createdWithinDays: days.optional(),
+    /** Created on or after / on or before these days (South Africa) — calendar periods like "last month". */
+    createdFrom: isoDay.optional(),
+    createdTo: isoDay.optional(),
     search: name.optional(),
     sort: z.enum(["value", "oldest_contact", "newest", "stage_age"]).optional(),
     limit: limit.optional(),
@@ -89,9 +94,11 @@ export const documentArgs = z.object({ customer: z.string().trim().min(1).max(12
 
 export const activityArgs = z
   .object({
-    when: z.enum(["overdue", "today", "this_week", "upcoming"]),
+    when: z.enum(["overdue", "today", "today_and_overdue", "this_week", "upcoming"]),
     type: name.optional(),
     assignedTo: name.optional(),
+    /** Words in the activity's summary or note ("golf day", "service"). */
+    search: name.optional(),
     limit: limit.optional(),
   })
   .strict();
@@ -149,14 +156,14 @@ export function planInstructions(ctx: PlanContext): string {
     // learned — comes last, so it never breaks the cached part before it.
     "You are the research step of a sales CRM assistant. Decide the ONE next lookup that best helps answer the question, or say done. Output JSON only — no prose, no code fence.",
     "Tools (args optional unless marked):",
-    '- find_leads: {"status":"open|won|lost","stage":"<stage>","assignedTo":"<person>","product":"<text>","source":"<text>","minValue":<rands>,"noContactDays":<days since the last real contact — a message either way, a call or a meeting; internal notes and to-dos do not count>,"createdWithinDays":<days>,"search":"<customer or lead name>","sort":"value|oldest_contact|newest|stage_age","limit":<1-25>}',
+    '- find_leads: {"status":"open|won|lost|any" (default open),"stage":"<stage>","assignedTo":"<person>","product":"<text>","source":"<text>","minValue":<rands>,"noContactDays":<days since the last real contact — a message either way, a call or a meeting; internal notes and to-dos do not count>,"createdWithinDays":<days>,"createdFrom":"YYYY-MM-DD","createdTo":"YYYY-MM-DD","search":"<customer or lead name>","sort":"value|oldest_contact|newest|stage_age","limit":<1-25>} — the result starts with the TOTAL that match (not just the ones listed), so use it for "how many". "How many came in" counts every lead: status "any". A calendar period ("last month", "in September") is createdFrom/createdTo — last month is the previous calendar month, not the last 30 days.',
     "- pipeline_summary: {} — open leads counted and valued per stage.",
     '- find_quotes: {"status":"draft|sent|accepted|declined|cancelled","awaitingSignature":true,"viewed":true|false,"minValue":<rands>,"olderThanDays":<days>,"expiringWithinDays":<0-60, still-open quotes running out>,"limit":<1-25>}',
     '- schedule: {"person":"<person>","from":"YYYY-MM-DD","days":<1-14>} — who is busy when (meetings, blocked time, test drives with their demo vehicle). Check it BEFORE suggesting a meeting or test-drive time; never suggest a slot that clashes.',
     '- vehicles: {"kind":"demo|stock|customer" (required),"search":"<model, reg, stock no. or customer>","status":"<status>","limit":<1-25>} — demo vehicles and their upcoming bookings, stock units (available/reserved/sold), or a customer\'s own vehicles.',
     '- deliveries: {"stage":"to_invoice|awaiting_deposit|to_schedule|scheduled|overdue|delivered_recently","limit":<1-25>} — signed deals on their way to the customer: invoicing, deposit, delivery date. With NO stage it returns every stage at once, each deal labelled — use that for "what\'s waiting / in progress"; ask for one stage only when that is all the question wants.',
     '- documents: {"customer":"<customer name, lead title or id>" (required)} — what is on file for one customer (titles, tags, dates — not contents).',
-    '- find_activities: {"when":"overdue|today|this_week|upcoming" (required),"type":"<type>","assignedTo":"<person>","limit":<1-25>}',
+    '- find_activities: {"when":"overdue|today|today_and_overdue|this_week|upcoming" (required),"type":"<type>","assignedTo":"<person — theirs, or a meeting they attend>","search":"<words in the activity>","limit":<1-25>} — the calendar\'s open activities: calls, meetings, to-dos, test drives, events. "What does X have to do today / what\'s on their plate" → today_and_overdue (what\'s late still has to be done). "When is the next golf day / launch / service" → upcoming with search — events live here, not in knowledge.',
     '- lead_brief: {"lead":"<customer name, lead title or id>" (required)} — one lead in depth: details, recent messages both ways, quotes (viewed? signed?), activities, research. Use it for "what should I do with X", "where are we with X", or to look closer at a lead found earlier.',
     '- knowledge: {"topic":"<what to look up>" (required)} — the business\'s own knowledge: products and prices, approved answers (finance, warranty, policies…), company details, competitor intelligence.',
     '- recall: {"query":"<words>" (required)} — this person\'s own earlier conversations with you (last 30 days).',
@@ -251,6 +258,54 @@ export function planSaysAnswerNext(text: string): boolean {
   return stepObject(text)?.then === "answer";
 }
 
+const LOOKUP_STATUS: Record<string, string> = {
+  find_leads: "Checking leads",
+  pipeline_summary: "Looking at the pipeline",
+  find_quotes: "Checking quotes",
+  schedule: "Checking the calendar",
+  vehicles: "Checking vehicles",
+  deliveries: "Checking deliveries",
+  documents: "Checking documents",
+  find_activities: "Checking activities",
+  knowledge: "Checking what the business knows",
+  recall: "Going back over earlier conversations",
+  playbook: "Opening a playbook",
+  web: "Searching the internet",
+};
+
+/**
+ * What the person sees while a round of lookups runs ("Reading Lisa's lead…"),
+ * so a few seconds of research doesn't look like nothing happening. Only to the
+ * person who asked, in their own chat.
+ */
+export function lookupStatus(steps: { tool: string; args?: unknown }[]): string {
+  const parts = steps.map((s) => {
+    const lead = s.tool === "lead_brief" ? (s.args as { lead?: unknown } | undefined)?.lead : undefined;
+    if (s.tool === "lead_brief") {
+      // An id (the page the person is on) reads as "this lead", not a code.
+      return typeof lead === "string" && !/^c[a-z0-9]{20,}$/i.test(lead) ? `Reading ${lead.slice(0, 40)}'s lead` : "Reading the lead";
+    }
+    return LOOKUP_STATUS[s.tool] ?? "Looking it up";
+  });
+  // "Checking leads, checking quotes and reading Lisa's lead…" — one sentence.
+  const unique = [...new Set(parts)].map((p, i) => (i === 0 ? p : p[0].toLowerCase() + p.slice(1)));
+  return `${unique.length > 1 ? `${unique.slice(0, -1).join(", ")} and ${unique.at(-1)}` : unique[0] ?? "Looking it up"}…`;
+}
+
+/**
+ * Small talk that never needs a lookup — a greeting, thanks, an emoji, "who are
+ * you?". The research round for these always says "done", so it is skipped:
+ * about 4 s back on the messages people send most casually. Deliberately
+ * narrow: anything that could be a question about the CRM goes the normal way.
+ */
+export function isSmallTalk(question: string): boolean {
+  const q = question.trim().toLowerCase().replace(/[!.?,\s]+$/g, "");
+  if (!q) return false;
+  // Only emoji / punctuation (👍, 😂, "!!").
+  if (/^[\p{Extended_Pictographic}\p{Emoji_Component}\s!?.,]+$/u.test(q) && !/[0-9#*]/.test(q)) return true;
+  return /^(hi|hello|hey|hiya|howzit|morning|good (morning|afternoon|evening)|thanks|thank you|thanks a lot|cheers|ok|okay|cool|great|nice|perfect|got it|who are you|what are you|what can you do|how are you)( dax)?$/.test(q);
+}
+
 /** A turn of earlier conversation, for follow-ups ("and which of those are Donovan's?"). */
 export type PriorTurn = { question: string; answer: string };
 
@@ -291,7 +346,9 @@ export const ANSWER_RULES = [
   DATA_RULE,
   "Results marked fromTheInternet are public web results, not the business's records: say so when you use them (\"according to <site>\"), name the source, and never present them as CRM facts.",
   "Answer from the CRM results below and the business knowledge in them. Never add records, figures, names or dates that aren't there.",
-  "If results were capped (truncated: true), say these are the top results, not all of them. If there are no results, say so plainly.",
+  "If results were capped (truncated: true), say these are the top results, not all of them — but a TOTAL in the results is the real count: give it. If there are no results, say so plainly.",
+  "Answer what was asked, then stop. No disclaimers about what the CRM might not show (\"I can't tell whether he has other work…\") unless it changes what they should do. If the results answer the question indirectly, give that answer: a quote still in draft hasn't been sent, so it hasn't been opened.",
+  "When several records matched a name and the results picked one, say which one you mean in a few words, and name the others only if it could have been them.",
   "Plain text only (short paragraphs or simple '-' lists), no markdown tables or headings.",
   "Emojis where they genuinely help someone scan or feel the point — ✅ done, ⚠️ risk, 📞 call, 💬 waiting on a reply, 🔥 hot deal, 📅 booked, 🚗 test drive — one or two, never a string of them, and none when the news is bad for a customer.",
 ].join("\n");

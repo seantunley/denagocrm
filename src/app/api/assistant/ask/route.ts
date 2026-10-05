@@ -13,9 +13,10 @@ import { isSameOrigin } from "@/lib/sameOrigin";
  * are askAsPerson's; the answer is streamed as it is written, so the person
  * reads the first words within a few seconds instead of waiting for all of it.
  *
- * Response: newline-delimited JSON. {"t":"text","v":<visible answer so far>}
- * any number of times (never a LEARN/ACTIONS/CHOICES line — assistantStream),
- * then exactly one {"t":"done","r":<AssistantResult>}.
+ * Response: newline-delimited JSON. {"t":"status","v":"Checking leads…"} while
+ * it researches, then {"t":"text","v":<visible answer so far>} any number of
+ * times (never a LEARN/ACTIONS/CHOICES line — assistantStream), then exactly
+ * one {"t":"done","r":<AssistantResult>}.
  *
  * WHO: a signed-in person (requireApiUser — the full session checks) with an
  * assistant permission. Unlike a server action this is a plain route, so it
@@ -57,7 +58,10 @@ export async function POST(req: NextRequest) {
         const result = await askAsPerson(
           asker,
           { question: form.get("question"), page: form.get("page"), image: form.get("image") },
-          (visible) => send({ t: "text", v: visible }),
+          {
+            onAnswerText: (visible) => send({ t: "text", v: visible }),
+            onProgress: (status) => send({ t: "status", v: status }),
+          },
         ).catch(async (error: unknown) => {
           await logError("crm-assistant", "streamed ask failed", error instanceof Error ? error.name : "unknown");
           return { ok: false as const, error: "Something went wrong — try again." };
