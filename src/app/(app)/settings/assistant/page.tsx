@@ -7,11 +7,26 @@ import { saveAssistantProfile } from "@/app/actions/assistantSettings";
 import { SettingsWorkspace } from "@/components/settings-workspace";
 import { SETTINGS_NAV_GROUPS } from "@/lib/settings-navigation";
 import { SaveForm, SaveButton } from "@/components/SaveForm";
-import { prisma } from "@/lib/db";
+import { basePrisma, prisma } from "@/lib/db";
 import { listActingTenantStaff } from "@/lib/tenantActor";
 import AssistantLearnedReview, { type LearnedNote } from "@/components/AssistantLearnedReview";
 import { TIDY_LAST_KEY, TIDY_SUMMARY_KEY } from "@/lib/assistantTidy";
 import { formatDateTime } from "@/lib/format";
+import { saveAssistantWhatsApp, unlinkWhatsAppFor } from "@/app/actions/assistantWhatsApp";
+import ConfirmActionDialog from "@/components/ConfirmActionDialog";
+import { ASSISTANT_WHATSAPP_KEY, maskWaId, whatsappSwitchOn } from "@/lib/assistantWhatsAppRules";
+import { actingOwnerTenantId } from "@/lib/actingScope";
+
+/** Who has a WhatsApp linked — masked — so the owner can see it, even for someone who has since lost access. */
+async function linkedPhones() {
+  const tenantId = await actingOwnerTenantId().catch(() => null);
+  if (!tenantId) return [];
+  return basePrisma.assistantPhoneLink.findMany({
+    where: { tenantId, waId: { not: null }, verifiedAt: { not: null } },
+    orderBy: { verifiedAt: "asc" },
+    select: { userId: true, waId: true },
+  });
+}
 
 export const dynamic = "force-dynamic";
 
@@ -25,12 +40,14 @@ const TONE_LABELS: Record<Tone, string> = {
 export default async function AssistantSettingsPage() {
   await requireTenantOwner();
   if (!(await isModuleEnabled("automation"))) notFound();
-  const [profile, notes, staff, tidiedAt, tidySummary] = await Promise.all([
+  const [profile, notes, staff, tidiedAt, tidySummary, whatsappOn, phones] = await Promise.all([
     getSetting(ASSISTANT_PROFILE_KEY).then(parseProfile),
     prisma.assistantNote.findMany({ orderBy: [{ status: "desc" }, { createdAt: "desc" }] }),
     listActingTenantStaff(),
     getSetting(TIDY_LAST_KEY),
     getSetting(TIDY_SUMMARY_KEY),
+    getSetting(ASSISTANT_WHATSAPP_KEY).then(whatsappSwitchOn),
+    linkedPhones(),
   ]);
   const nameOf = new Map(staff.map((s) => [s.id, s.name]));
   const learned: LearnedNote[] = notes.map((n) => ({
@@ -102,6 +119,50 @@ export default async function AssistantSettingsPage() {
           <SaveButton>Save</SaveButton>
         </div>
       </SaveForm>
+
+      <SaveForm action={saveAssistantWhatsApp} resetOnSuccess={false} className="card mt-6 max-w-2xl space-y-3 p-5">
+        <h2 className="text-base font-semibold">{profile.name} on WhatsApp</h2>
+        <label className="flex cursor-pointer items-start gap-2 text-sm">
+          <input type="checkbox" name="enabled" defaultChecked={whatsappOn} className="mt-1 accent-primary" />
+          <span>
+            <span className="block font-medium">Let staff ask {profile.name} on WhatsApp</span>
+            <span className="block text-xs text-muted-foreground">
+              Each person can link their own WhatsApp on the Ask page — by sending a one-time code from that phone to
+              the business number — and then ask {profile.name} by messaging the business number. Answers can contain
+              customer details, and they go to that staff member&apos;s phone. On WhatsApp it only answers; tasks still
+              need the CRM. Off: messages from staff phones are treated like any other, as today.
+            </span>
+          </span>
+        </label>
+        <div className="flex justify-end border-t border-border/60 pt-4">
+          <SaveButton>Save</SaveButton>
+        </div>
+      </SaveForm>
+      {phones.length > 0 && (
+        <div className="card max-w-3xl space-y-2 p-4 text-sm">
+          <p className="font-medium">Phones linked to {profile.name}</p>
+          <p className="text-xs text-muted-foreground">
+            A link ends by itself when that person&apos;s password is reset or they&apos;re signed out everywhere. Unlink anything that shouldn&apos;t be here.
+          </p>
+          <ul className="divide-y divide-border/50">
+            {phones.map((p) => (
+              <li key={p.userId} className="flex items-center justify-between gap-3 py-2">
+                <span>
+                  {nameOf.get(p.userId) ?? "a former team member"} <span className="text-muted-foreground">({maskWaId(p.waId)})</span>
+                </span>
+                <ConfirmActionDialog
+                  trigger={<button type="button" className="text-xs text-muted-foreground hover:text-destructive">Unlink</button>}
+                  title="Unlink this phone?"
+                  description="Messages from it will be treated like any other number's. They can link again from the Ask page."
+                  confirmLabel="Unlink"
+                  destructive
+                  onConfirm={unlinkWhatsAppFor.bind(null, p.userId)}
+                />
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
 
       {/* Advanced: its soul, and everything it has learned — all editable. Open
           by default whenever there's something for the owner to look at. */}
