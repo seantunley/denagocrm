@@ -44,8 +44,9 @@ test('"Has Lisa opened her quote?" — several Lisas: read the likeliest in full
   assert.doesNotMatch(brief, /Several leads match — ask which one/, "no more stopping at a list of names");
   assert.match(brief, /const \[best, \.\.\.others\] = \[\.\.\.matches\]\.sort\(/);
   assert.match(brief, /otherMatches: others\.map/);
-  assert.match(lib, /q\.viewedAt \? dateKey\(q\.viewedAt\) : q\.status === "draft" \? "not sent yet \(still a draft\)" : "not yet"/);
-  assert.equal((lib.match(/viewedByCustomer\((quote|q)\)/g) ?? []).length, 3, "every place a quote's opened state is shown");
+  // (A draft sent from the signing hub HAS been sent — assistantSigningQuotes.test.ts.)
+  assert.match(lib, /return q\.status === "draft" && !s \? "not sent yet \(still a draft\)" : "not yet";/);
+  assert.equal((lib.match(/viewedByCustomer\((quote|q), signing\.get\((quote|q)\.id\)\)/g) ?? []).length, 3, "every place a quote's opened state is shown");
   assert.match(ANSWER_RULES, /a quote still in draft hasn't been sent, so it hasn't been opened/);
 });
 
