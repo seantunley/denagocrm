@@ -149,7 +149,7 @@ export function planInstructions(ctx: PlanContext): string {
     // learned — comes last, so it never breaks the cached part before it.
     "You are the research step of a sales CRM assistant. Decide the ONE next lookup that best helps answer the question, or say done. Output JSON only — no prose, no code fence.",
     "Tools (args optional unless marked):",
-    '- find_leads: {"status":"open|won|lost","stage":"<stage>","assignedTo":"<person>","product":"<text>","source":"<text>","minValue":<rands>,"noContactDays":<days since any message, call or completed activity>,"createdWithinDays":<days>,"search":"<customer or lead name>","sort":"value|oldest_contact|newest|stage_age","limit":<1-25>}',
+    '- find_leads: {"status":"open|won|lost","stage":"<stage>","assignedTo":"<person>","product":"<text>","source":"<text>","minValue":<rands>,"noContactDays":<days since the last real contact — a message either way, a call or a meeting; internal notes and to-dos do not count>,"createdWithinDays":<days>,"search":"<customer or lead name>","sort":"value|oldest_contact|newest|stage_age","limit":<1-25>}',
     "- pipeline_summary: {} — open leads counted and valued per stage.",
     '- find_quotes: {"status":"draft|sent|accepted|declined|cancelled","awaitingSignature":true,"viewed":true|false,"minValue":<rands>,"olderThanDays":<days>,"expiringWithinDays":<0-60, still-open quotes running out>,"limit":<1-25>}',
     '- schedule: {"person":"<person>","from":"YYYY-MM-DD","days":<1-14>} — who is busy when (meetings, blocked time, test drives with their demo vehicle). Check it BEFORE suggesting a meeting or test-drive time; never suggest a slot that clashes.',
