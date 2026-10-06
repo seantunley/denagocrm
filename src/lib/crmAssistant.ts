@@ -745,6 +745,23 @@ const when = (d: Date) =>
 const nameOfContact = (c: { firstName: string; lastName: string | null } | null | undefined) => (c ? contactName(c) : null);
 
 /**
+ * Which activities `schedule` shows. It is the AVAILABILITY tool: what is still
+ * planned is busy time. A meeting later today can be marked done early (the
+ * completion guard only blocks future days), so a done activity that hasn't
+ * ended yet is NOT busy — it would make DAX turn down a free slot. A done
+ * activity wholly in the past is history ("what was on 22 September"), shown
+ * with its status. Cancelled never shows.
+ */
+export function scheduleStatusWhere(now: Date) {
+  return {
+    OR: [
+      { status: "planned" },
+      { status: "done", OR: [{ endDate: { lt: now } }, { endDate: null, dueDate: { lt: now } }] },
+    ],
+  };
+}
+
+/**
  * Who is busy when — meetings, blocked time and test drives (with their demo
  * vehicle) — so a suggested time never clashes. Through the calendar's own
  * visibility (getAccessibleActivityIds, accessibleTestDriveWhere). A blocked-out
@@ -764,11 +781,9 @@ async function schedule(user: User, raw: z.infer<typeof scheduleArgs>): Promise<
   const activities = await prisma.activity.findMany({
     where: {
       ...(ids === null ? {} : { id: { in: ids } }),
-      // Not just "planned": a day in the past shows what happened (done), and a
-      // meeting already marked done still took the time. Never cancelled.
-      status: { notIn: CANCELLED },
       dueDate: { lt: end },
       AND: [
+        scheduleStatusWhere(new Date()),
         { OR: [{ endDate: { gte: start } }, { endDate: null, dueDate: { gte: start } }] },
         person ? { OR: [{ assignedToId: person.id }, { attendees: { some: { userId: person.id } } }] } : {},
       ],
