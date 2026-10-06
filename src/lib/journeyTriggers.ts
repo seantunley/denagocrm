@@ -78,10 +78,15 @@ export const JOURNEY_TRIGGER_LABELS: Record<JourneyTrigger, string> = {
   quote_declined: "Quote is declined",
   delivered: "Vehicle delivered",
   referral_earned: "Referral is earned",
+  job_completed: "Job card is completed",
+  vehicle_delivered: "Vehicle registered as a new delivery",
   lead_idle: "Lead becomes idle",
   contact_segment: "Contact joins a saved segment",
   purchase_anniversary: "Purchase anniversary",
   win_back: "Inactive customer win-back",
+  service_due: "Vehicle is due for a service",
+  signing_unsigned: "Document sent for signing isn't signed",
+  survey_unanswered: "Automatic survey isn't answered",
 };
 
 const TRIGGER_TYPES = new Set<string>(JOURNEY_TRIGGERS);
@@ -105,6 +110,10 @@ const FILTERLESS_TRIGGER_TYPES = [
   "quote_declined",
   "delivered",
   "referral_earned",
+  "job_completed",
+  "vehicle_delivered",
+  // Scheduled, but with nothing to tell two apart: the sweep is the same each time.
+  "service_due",
 ] as const;
 
 /** Same shape a step id must have — safe in a dedupe key and in a condition value. */

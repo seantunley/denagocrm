@@ -738,35 +738,16 @@ export default async function SettingsPage({
             </Row>
 
             {automotiveOn && (
-            <Row
-              title="Service reminders to customers"
-              status={
-                setting("SERVICE_REMINDER_ENABLED") === "true" ? (
-                  <span className="badge bg-emerald-500/15 text-emerald-300">On</span>
-                ) : (
-                  <span className="badge bg-muted text-muted-foreground">Off</span>
-                )
-              }
-            >
+            <Row title="Service reminders to customers">
               <p className="text-xs text-muted-foreground mb-4">
-                Customers whose vehicle is due for a service get one automatic email per
-                due-cycle. Placeholders: <code>{"{{first_name}}"}</code>,{" "}
-                <code>{"{{model}}"}</code>, <code>{"{{due_date}}"}</code>,{" "}
+                Sent by the ready-made journey “Service-due reminder” — one email per due-cycle, off
+                until you switch it on in{" "}
+                <Link href="/journeys" className="text-primary underline">Journeys</Link>. It uses the
+                template picked here, or the “Service reminder” template if none is. Placeholders:{" "}
+                <code>{"{{first_name}}"}</code>, <code>{"{{model}}"}</code>, <code>{"{{due_date}}"}</code>,{" "}
                 <code>{"{{due_km}}"}</code>, <code>{"{{current_km}}"}</code>.
               </p>
-              <SaveForm success="Service reminder settings saved" resetOnSuccess={false} action={saveServiceReminderSettings} className="flex items-end gap-3 flex-wrap">
-                <div className="flex items-center gap-2 pb-2">
-                  <input
-                    type="checkbox"
-                    name="enabled"
-                    id="sr-enabled"
-                    defaultChecked={setting("SERVICE_REMINDER_ENABLED") === "true"}
-                    className="h-4 w-4"
-                  />
-                  <label htmlFor="sr-enabled" className="text-sm text-muted-foreground">
-                    Enabled
-                  </label>
-                </div>
+              <SaveForm success="Service reminder template saved" resetOnSuccess={false} action={saveServiceReminderSettings} className="flex items-end gap-3 flex-wrap">
                 <div className="flex-1 min-w-56">
                   <label className="label">Email template</label>
                   <select

@@ -7,7 +7,6 @@ import { resolveTenantActor } from "./tenantActor";
 import { createSurveyDistribution } from "./surveyDistributionQueue";
 import { logAudit } from "./audit";
 import { logError } from "./errorLog";
-import { automationOn } from "./automationSwitch";
 import { defaultIntro, type SurveyQuestion, type SurveyType } from "./surveyTypes";
 
 export type FrozenSurveySnapshot = {
@@ -225,9 +224,10 @@ export async function triggerGovernedSurvey(trigger: string, target: {
       },
       scheduledFor,
       reminderAfterHours: 48,
-      // A reminder nobody sent: only while the owner has it on (Settings →
-      // Automatic jobs & messages, off by default). It used to be hard-coded to 1.
-      maxReminders: (await automationOn("SURVEY_AUTO_REMINDERS", tenantId)) ? 1 : 0,
+      // Never reminded by the queue: an automatic survey's reminder is the "Survey
+      // reminder" journey's, off unless the owner switches it on. It used to be
+      // hard-coded to 1, then a switch on the Automatic page.
+      maxReminders: 0,
     });
   } catch (error) {
     await logError("governed-survey-trigger", error);

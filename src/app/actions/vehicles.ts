@@ -4,7 +4,7 @@ import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/db";
 import { logAudit } from "@/lib/audit";
-import { sendReviewRequest } from "@/lib/reviewRequests";
+import { emitContactJourneyEvent } from "@/lib/leadJourneyEvents";
 import { triggerSurvey } from "@/lib/surveys";
 import { remindVehicleService } from "@/lib/serviceReminders";
 import { softDeleteRecord } from "@/lib/trash";
@@ -80,7 +80,12 @@ export async function createVehicle(formData: FormData) {
       });
     }
     if (formData.get("newDelivery")) {
-      await sendReviewRequest(vehicle.contactId, "delivery", vehicle.model).catch(() => {});
+      // The Google review request is a journey now ("Vehicle registered as a new
+      // delivery"), switched on or off on Journeys — this only says it happened.
+      await emitContactJourneyEvent("vehicle_delivered", vehicle.contactId, {
+        occurrence: `vehicle:${vehicle.id}`,
+        payload: { vehicleId: vehicle.id, model: vehicle.model, refText: vehicle.model },
+      });
       await triggerSurvey("delivery", { contactId: vehicle.contactId });
     }
     revalidatePath("/vehicles");

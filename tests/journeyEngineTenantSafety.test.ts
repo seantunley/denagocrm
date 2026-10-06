@@ -149,6 +149,13 @@ loaderKey._load = function (this: unknown, request: string, parent, isMain) {
   if (from.endsWith("journeyEvents.ts") && request === "./journeyContext") return journeyContext;
   if (from.endsWith("journeyScheduling.ts") && request === "./campaigns") return campaigns;
   if (from.endsWith("journeyScheduling.ts") && request === "./leadIdle") return leadIdle;
+  // The reminder sweeps' modules (service, signing, survey) reach the database
+  // through their own imports; nothing here enrols on those triggers, so they
+  // are inert stand-ins and no real client is ever built.
+  if (from.endsWith("journeyScheduling.ts") && request === "./modules/enabled") return { isModuleEnabled: async () => true };
+  if (from.endsWith("journeyScheduling.ts") && request === "./serviceReminders") return { vehiclesDueForService: async () => [] };
+  if (from.endsWith("journeyScheduling.ts") && request === "./signingReminders") return { signersAwaitingReminder: async () => [] };
+  if (from.endsWith("journeyScheduling.ts") && request === "./surveyDistributionQueue") return { unansweredAutomaticSurveys: async () => [] };
   return realLoad.call(this, request, parent, isMain);
 } as Loader;
 

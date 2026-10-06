@@ -27,6 +27,9 @@ import {
   retryJourneyRun,
   runJourneyNowAction,
 } from "@/app/actions/journeyRuns";
+import { builderTenantId } from "@/lib/flowScope";
+import { withActingStaffScope } from "@/lib/actingScope";
+import { ensureReadyMadeJourneysQuietly, readyMadeJourneyIds } from "@/lib/readyMadeJourneys";
 import { PageHeader } from "@/components/page-header";
 import { SaveForm, SaveButton } from "@/components/SaveForm";
 import ConfirmDelete from "@/components/ConfirmDelete";
@@ -112,6 +115,12 @@ export default async function JourneysPage() {
   // about which leads the viewer may see, and the option now leads with the
   // customer name - the same hole the quote editor had.
   const accessibleLeadIds = await getAccessibleLeadIds(user);
+  // The ready-made journeys (review requests, service-due, signing and survey
+  // reminders) exist before the list is read, so they are always on it.
+  const tenantId = await builderTenantId();
+  // Inside the acting scope, so the creation's audit lands in this workspace.
+  await withActingStaffScope(() => ensureReadyMadeJourneysQuietly(tenantId));
+  const readyMade = await readyMadeJourneyIds(tenantId).catch(() => new Set<string>());
   const [journeys, stages, users, templates, tags, segments, recentRuns, testLeads] = await Promise.all([
     prisma.journey.findMany({
       where: { status: { not: "archived" } },
@@ -202,7 +211,9 @@ export default async function JourneysPage() {
                 <div className="flex-1 min-w-64">
                   <div className="flex items-center gap-2 flex-wrap">
                     <h3 className="font-semibold">{journey.name}</h3>
-                    <StatusPill tone={statusTone(journey.status)}>{journey.status}</StatusPill>
+                    {/* Replaced a built-in sender: worth knowing it came with the CRM, and that it is off until switched on. */}
+                    {readyMade.has(journey.id) && <StatusPill tone="info">ready-made</StatusPill>}
+                    <StatusPill tone={statusTone(journey.status)}>{journey.status === "paused" && readyMade.has(journey.id) ? "off" : journey.status}</StatusPill>
                     <StatusPill>{journey.category}</StatusPill>
                     {/* Parallel is the only mode that lets one person receive
                         two live sequences, so it is the only one badged as a
@@ -223,9 +234,9 @@ export default async function JourneysPage() {
                 <div className="flex gap-2 flex-wrap">
                   {draft && <SaveForm action={publishJourney.bind(null, journey.id)}><SaveButton className="btn-primary btn-sm" pendingLabel="Publishing…">Publish v{draft.version}</SaveButton></SaveForm>}
                   {journey.status === "active" ? (
-                    <SaveForm action={setJourneyStatus.bind(null, journey.id, "paused")}><SaveButton className="btn-secondary btn-sm" pendingLabel="Pausing…">Pause</SaveButton></SaveForm>
+                    <SaveForm action={setJourneyStatus.bind(null, journey.id, "paused")}><SaveButton className="btn-secondary btn-sm" pendingLabel="Pausing…">{readyMade.has(journey.id) ? "Switch off" : "Pause"}</SaveButton></SaveForm>
                   ) : journey.activeVersion ? (
-                    <SaveForm action={setJourneyStatus.bind(null, journey.id, "active")}><SaveButton className="btn-secondary btn-sm" pendingLabel="Resuming…">Resume</SaveButton></SaveForm>
+                    <SaveForm action={setJourneyStatus.bind(null, journey.id, "active")}><SaveButton className="btn-secondary btn-sm" pendingLabel="Resuming…">{readyMade.has(journey.id) ? "Switch on" : "Resume"}</SaveButton></SaveForm>
                   ) : null}
                   {/* "Enroll now" runs the cron's record sweep by hand, so it is
                       offered when ANY of the version's triggers is one the cron

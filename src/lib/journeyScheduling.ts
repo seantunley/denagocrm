@@ -7,6 +7,10 @@ import { leadHasGoneQuiet } from "./leadIdle";
 import { getActiveVersion } from "./journeyEngineShared";
 import { journeyTenantId } from "./journeyTenant";
 import { readJourneyTriggers, triggerKeySuffix, type JourneyTriggerSpec } from "./journeyTriggers";
+import { isModuleEnabled } from "./modules/enabled";
+import { vehiclesDueForService } from "./serviceReminders";
+import { signersAwaitingReminder } from "./signingReminders";
+import { unansweredAutomaticSurveys } from "./surveyDistributionQueue";
 
 function recurrenceWindow(repeat: unknown, now = new Date()) {
   if (repeat === "daily") return now.toISOString().slice(0, 10);
@@ -185,6 +189,55 @@ async function sweepTrigger(
         journeyId: journey.id,
         payload: { vehicleId: vehicle.id, model: vehicle.model, inactiveMonths: months, ...named(spec) },
         dedupeKey: `${journey.id}:${version.version}:winback:${contact.id}:${window}${triggerKeySuffix(spec)}`,
+      })) created++;
+    }
+  }
+
+  // The three reminders that were built-in cron jobs. Each module says who is due
+  // (with the tenant named in its own queries); the step that sends is the
+  // module's too.
+  if (spec.type === "service_due") {
+    // Automotive only, as the built-in job was: no workshop, no service schedule.
+    if (!(await isModuleEnabled("automotive"))) return created;
+    for (const due of await vehiclesDueForService(tenantId)) {
+      if (stop.shouldStop(ENROL_RESERVE_MS)) break;
+      if (await emitJourneyEvent({
+        type: spec.type,
+        entityType: "contact",
+        entityId: due.contactId,
+        journeyId: journey.id,
+        payload: { vehicleId: due.vehicleId, model: due.model, dueKey: due.dueKey, ...named(spec) },
+        dedupeKey: `${journey.id}:${version.version}:service-due:${due.vehicleId}:${due.dueKey}${triggerKeySuffix(spec)}`,
+      })) created++;
+    }
+  }
+
+  if (spec.type === "signing_unsigned") {
+    const days = Math.max(1, Number(config.days ?? 3));
+    for (const signer of await signersAwaitingReminder(tenantId, days)) {
+      if (stop.shouldStop(ENROL_RESERVE_MS)) break;
+      if (await emitJourneyEvent({
+        type: spec.type,
+        entityType: signer.entityType,
+        entityId: signer.entityId,
+        journeyId: journey.id,
+        payload: { signatureRecipientId: signer.recipientId, signatureRequestId: signer.requestId, days, ...named(spec) },
+        dedupeKey: `${journey.id}:${version.version}:signing-unsigned:${signer.recipientId}${triggerKeySuffix(spec)}`,
+      })) created++;
+    }
+  }
+
+  if (spec.type === "survey_unanswered") {
+    const hours = Math.max(1, Number(config.hours ?? 48));
+    for (const response of await unansweredAutomaticSurveys(tenantId, hours)) {
+      if (stop.shouldStop(ENROL_RESERVE_MS)) break;
+      if (await emitJourneyEvent({
+        type: spec.type,
+        entityType: "contact",
+        entityId: response.contactId,
+        journeyId: journey.id,
+        payload: { surveyResponseId: response.responseId, hours, ...named(spec) },
+        dedupeKey: `${journey.id}:${version.version}:survey-unanswered:${response.responseId}${triggerKeySuffix(spec)}`,
       })) created++;
     }
   }

@@ -4,6 +4,8 @@ import { getEnabledModuleIds } from "@/lib/modules/enabled";
 import { logError } from "@/lib/errorLog";
 import { warmUpForCron } from "@/lib/cronPreflight";
 import { runJourneyEngine } from "@/lib/journeys";
+import { journeyTenantId } from "@/lib/journeyTenant";
+import { ensureReadyMadeJourneysQuietly } from "@/lib/readyMadeJourneys";
 import { runCronPerTenant } from "@/lib/tenantCron";
 
 export const maxDuration = 60;
@@ -42,6 +44,10 @@ export async function GET(req: NextRequest) {
       if (budget.shouldStop(JOURNEY_RESERVE_MS)) {
         return { skipped: "insufficient-budget" as const };
       }
+      // The ready-made journeys that replaced the built-in senders exist before
+      // the engine looks for active ones — so a workspace that had a built-in
+      // switched on keeps getting it without anyone opening a page first.
+      await ensureReadyMadeJourneysQuietly(journeyTenantId());
       // …and hand the deadline DOWN, so the engine stops between records,
       // events, runs and steps rather than running to completion regardless of
       // the clock. A fixed admission reserve cannot bound work that can span
