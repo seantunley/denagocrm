@@ -1674,7 +1674,7 @@ async function resolveActions(user: User, proposals: ProposedAction[]): Promise<
         customer = (await prisma.lead.findUnique({ where: { id: parsed.data.leadId }, select: { name: true } }))?.name ?? null;
       }
       const quote = parsed.data.quoteId && /^Q-?\d+$/i.test(parsed.data.quoteId) ? parsed.data.quoteId.toUpperCase().replace(/^Q-?/, "Q-") : null;
-      cards.push({ id: `a${index}-watch`, kind: "watch", title: describeWatch(parsed.data, { customer, quote }), watch: parsed.data });
+      cards.push({ id: `a${index}-watch`, kind: "watch", title: describeWatch(parsed.data, { customer, lead: customer, quote }), watch: parsed.data });
       continue;
     }
     if (p.type === "reschedule" || p.type === "cancel_activity") {
