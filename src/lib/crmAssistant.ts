@@ -14,6 +14,8 @@ import { getCompanyProfile } from "./companyProfile";
 import { searchBotKnowledge } from "./botKnowledge";
 import { isModuleEnabled } from "./modules/enabled";
 import { ownedWriteTenantId } from "./tenantWrite";
+import { isCustomerSigner } from "./signing/quoteMirror";
+import { firstCustomerView, memoCustomer } from "./signing/customerView";
 import { accessibleTestDriveWhere } from "./testDriveAccess";
 import { contactActivityWhere, contactCommunicationWhere, latestContactAt } from "./customerContact";
 import {
@@ -120,19 +122,21 @@ async function signingFor(quoteIds: string[]): Promise<Map<string, Signing>> {
   const requests = await prisma.signatureRequest.findMany({
     where: { quoteId: { in: quoteIds }, deletedAt: null, status: { notIn: ["draft", "voided"] } },
     orderBy: { createdAt: "desc" },
-    select: { quoteId: true, status: true, sentAt: true, recipients: { select: { viewedAt: true, signedAt: true } } },
+    select: {
+      quoteId: true, status: true, sentAt: true,
+      recipients: { select: { role: true, email: true, viewedAt: true, signedAt: true } },
+    },
   });
+  const isCustomer = memoCustomer((r) => isCustomerSigner(r, ownedWriteTenantId()));
   const byQuote = new Map<string, Signing>();
   for (const r of requests) {
     if (!r.quoteId || byQuote.has(r.quoteId)) continue;
-    const times = (pick: (x: { viewedAt: Date | null; signedAt: Date | null }) => Date | null) =>
-      r.recipients.map(pick).filter((d): d is Date => d !== null).map((d) => d.getTime());
-    const viewed = times((x) => x.viewedAt);
-    const signed = times((x) => x.signedAt);
+    const signed = r.recipients.map((x) => x.signedAt).filter((d): d is Date => d !== null).map((d) => d.getTime());
     byQuote.set(r.quoteId, {
       status: r.status,
       sentAt: r.sentAt,
-      viewedAt: viewed.length ? new Date(Math.min(...viewed)) : null,
+      // The CUSTOMER's first open — a staff countersigner opening it isn't her.
+      viewedAt: await firstCustomerView(r.recipients, isCustomer),
       signedAt: r.status === "completed" && signed.length ? new Date(Math.max(...signed)) : null,
     });
   }
@@ -299,11 +303,14 @@ async function findQuotes(user: User, raw: z.infer<typeof quoteArgs>): Promise<T
   const hub = args.awaitingSignature || args.viewed !== undefined
     ? await prisma.signatureRequest.findMany({
         where: { deletedAt: null, quoteId: { not: null }, status: { in: LIVE_SIGNING } },
-        select: { quoteId: true, recipients: { select: { viewedAt: true } } },
+        select: { quoteId: true, recipients: { select: { role: true, email: true, viewedAt: true } } },
       })
     : [];
   const outForSigning = hub.map((r) => r.quoteId!);
-  const openedInHub = hub.filter((r) => r.recipients.some((x) => x.viewedAt)).map((r) => r.quoteId!);
+  // "Opened" = opened by the CUSTOMER, not a colleague reviewing or countersigning.
+  const isCustomer = memoCustomer((r) => isCustomerSigner(r, ownedWriteTenantId()));
+  const openedInHub: string[] = [];
+  for (const r of hub) if (await firstCustomerView(r.recipients, isCustomer)) openedInHub.push(r.quoteId!);
   const quotes = await prisma.quote.findMany({
     where: {
       deletedAt: null,

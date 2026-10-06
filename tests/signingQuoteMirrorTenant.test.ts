@@ -61,6 +61,8 @@ loader._load = function (this: unknown, request: string, parent, isMain) {
 
 const require_ = createRequire(import.meta.url);
 const { isCustomerSigner, mirrorQuoteSent, mirrorQuoteViewed } = require_("../src/lib/signing/quoteMirror.ts") as typeof import("../src/lib/signing/quoteMirror");
+const { firstCustomerView, memoCustomer } = require_("../src/lib/signing/customerView.ts") as typeof import("../src/lib/signing/customerView");
+const { viewedByCustomer } = require_("../src/lib/crmAssistant.ts") as typeof import("../src/lib/crmAssistant");
 
 const ids = { tenantId: T_A, quoteId: "q1", requestId: "r1" };
 const lisa = { role: "signer", email: "Lisa@Example.com" };
@@ -116,6 +118,49 @@ test("a request closed in the meantime (voided mid-send) → the quote is left a
   await mirrorQuoteSent(ids, lisa);
   await mirrorQuoteViewed(ids, lisa);
   assert.equal(state.quoteWrites.length, 0);
+});
+
+/* ── "Has the customer opened it?" — DAX's reading of the hub (#781 review 2) ── */
+
+const draftRow = { status: "draft", viewedAt: null };
+const sentInHub = (viewedAt: Date | null) => ({ status: "viewed", sentAt: new Date("2026-09-30T13:35:00Z"), viewedAt, signedAt: null });
+const custA = memoCustomer((r) => isCustomerSigner(r, T_A));
+const sean = { role: "signer", email: "sean@denago.co.za", viewedAt: new Date("2026-09-30T13:40:00Z") };
+const lisaOpened = { role: "signer", email: "lisa@example.com", viewedAt: new Date("2026-10-01T12:20:00Z") };
+const lisaNotYet = { ...lisaOpened, viewedAt: null };
+
+test("a staff countersigner opened it, the customer hasn't → still 'not yet'", async () => {
+  state.users = [{ id: "u_sean", email: "sean@denago.co.za" }];
+  state.members = [{ tenantId: T_A, userId: "u_sean" }];
+  const first = await firstCustomerView([sean, lisaNotYet], custA);
+  assert.equal(first, null);
+  assert.equal(viewedByCustomer(draftRow, sentInHub(first)), "not yet");
+  // …and an approver or viewer opening it never counts either.
+  assert.equal(await firstCustomerView([{ role: "approver", email: "boss@x.co", viewedAt: new Date() }, { role: "viewer", email: null, viewedAt: new Date() }], memoCustomer((r) => isCustomerSigner(r, T_A))), null);
+});
+
+test("the customer opened it → viewed on HER date, even though staff opened it first", async () => {
+  state.users = [{ id: "u_sean", email: "sean@denago.co.za" }];
+  state.members = [{ tenantId: T_A, userId: "u_sean" }];
+  const first = await firstCustomerView([sean, lisaOpened], memoCustomer((r) => isCustomerSigner(r, T_A)));
+  assert.deepEqual(first, lisaOpened.viewedAt);
+  assert.equal(viewedByCustomer(draftRow, sentInHub(first)), "2026-10-01");
+});
+
+test("a CRM user of another tenant acting as this tenant's customer → their open counts", async () => {
+  state.users = [{ id: "u_b", email: "lisa@example.com" }];
+  state.members = [{ tenantId: T_B, userId: "u_b" }];
+  const first = await firstCustomerView([lisaOpened], memoCustomer((r) => isCustomerSigner(r, T_A)));
+  assert.deepEqual(first, lisaOpened.viewedAt);
+  assert.ok(state.memberLookups.every((w) => w.tenantId === T_A), "asked about this tenant only");
+});
+
+test("one staff check per address per lookup", async () => {
+  let calls = 0;
+  const memo = memoCustomer(async () => { calls++; return true; });
+  await memo({ role: "signer", email: "Lisa@Example.com", viewedAt: null });
+  await memo({ role: "signer", email: " lisa@example.com ", viewedAt: null });
+  assert.equal(calls, 1);
 });
 
 test("every quote write names the request's tenant; no tenant → nothing at all", async () => {
