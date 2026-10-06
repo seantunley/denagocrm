@@ -63,8 +63,8 @@ export function useVoiceRecorder(onDone: (audio: Blob) => void) {
           return s + 1;
         });
       }, 1000);
-    } catch {
-      setError("Couldn't use the microphone — allow it for this site and try again.");
+    } catch (error) {
+      setError(microphoneError(error));
     }
   }, [stop]);
 
@@ -81,4 +81,20 @@ export function audioForm(audio: Blob, extra: Record<string, string> = {}): Form
   form.append("audio", audio, `recording.${ext}`);
   for (const [key, value] of Object.entries(extra)) form.append(key, value);
   return form;
+}
+
+/**
+ * Why the microphone couldn't be used, in words that say what to do. Every
+ * failure used to read "allow it for this site" — including the ones where it
+ * WAS allowed (no microphone plugged in, another app holding it), which sent
+ * people round in circles.
+ */
+export function microphoneError(error: unknown): string {
+  const name = error instanceof Error || (error && typeof error === "object" && "name" in error) ? String((error as { name: unknown }).name) : "";
+  if (name === "NotAllowedError" || name === "SecurityError") {
+    return "The microphone is blocked — allow it for this site in your browser (the icon left of the address bar), then try again.";
+  }
+  if (name === "NotFoundError" || name === "OverconstrainedError") return "No microphone found — plug one in or pick one in your computer's sound settings.";
+  if (name === "NotReadableError" || name === "AbortError") return "The microphone is busy — close any other app using it (a call, a recorder) and try again.";
+  return "Couldn't use the microphone — check it's connected and allowed for this site, then try again.";
 }
