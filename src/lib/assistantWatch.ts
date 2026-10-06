@@ -20,6 +20,8 @@ import { contactActivityWhere, contactCommunicationWhere, latestContactAt } from
 import { isModuleEnabled } from "./modules/enabled";
 import { contactName } from "./format";
 import { ownedWriteTenantId } from "./tenantWrite";
+import { firstCustomerView, memoCustomer } from "./signing/customerView";
+import { isCustomerSigner } from "./signing/quoteMirror";
 import {
   MAX_ACTIVE_WATCHES,
   ONE_SHOT_KINDS,
@@ -76,7 +78,7 @@ const LIVE_SIGNING = ["sent", "viewed", "in_progress"];
 
 type Tx = Parameters<Parameters<typeof prisma.$transaction>[0]>[0];
 
-type Watch = {
+export type Watch = {
   id: string;
   tenantId: string;
   userId: string;
@@ -111,39 +113,67 @@ const saDate = (d: Date) =>
   d.toLocaleDateString("en-ZA", { timeZone: "Africa/Johannesburg", weekday: "short", day: "numeric", month: "short" });
 
 /**
- * Has the customer opened it? Quote.viewedAt (the quote's own link), or — for a
- * quote sent through the signing hub, which keeps its own status "draft" and no
- * viewedAt — a signer on a request that went out has viewed it.
+ * When the CUSTOMER first opened each quote in the signing hub — a quote sent
+ * from the hub keeps its own status "draft" and no viewedAt, so the hub's
+ * recipients are where the open is recorded.
  *
- * Limitation: any recipient with role "signer" counts. A staff member set up as
- * a co-signer opening the envelope would read as the customer opening it; the
- * hub has no "this signer is the customer" flag to tell them apart.
+ * Only a genuine customer view counts (#781's definition, shared, not copied):
+ * a signer who isn't staff of THIS workspace. A colleague countersigning, an
+ * approver or a viewer opening the envelope is not "Anna opened Q-1042" — and
+ * must not start an "opened but unsigned for 48 hours" clock either. Someone who
+ * is a user in another workspace is still this workspace's customer.
+ *
+ * `openedBy` narrows the read to requests with some signer view by then; the
+ * staff check then decides whose view it was.
  */
-async function quoteOpened(tenantId: string, quote: { id: string; viewedAt: Date | null }): Promise<boolean> {
-  if (quote.viewedAt) return true;
-  const hub = await prisma.signatureRequest.findFirst({
+async function customerOpenedAt(
+  tenantId: string,
+  quoteIds: string[] | null,
+  opts: { openedBy?: Date; liveOnly?: boolean } = {},
+): Promise<Map<string, Date>> {
+  const { openedBy, liveOnly } = opts;
+  const requests = await prisma.signatureRequest.findMany({
     where: {
       tenantId,
-      quoteId: quote.id,
       deletedAt: null,
-      status: { notIn: ["draft", "voided"] },
-      recipients: { some: { role: "signer", viewedAt: { not: null } } },
+      // Unsigned-for-N-hours asks about requests still out for signature.
+      status: liveOnly ? { in: LIVE_SIGNING } : { notIn: ["draft", "voided"] },
+      quoteId: quoteIds === null ? { not: null } : { in: quoteIds },
+      recipients: { some: { role: "signer", viewedAt: openedBy ? { lte: openedBy } : { not: null } } },
     },
-    select: { id: true },
+    take: CANDIDATES,
+    select: { quoteId: true, recipients: { select: { role: true, email: true, viewedAt: true } } },
   });
-  return Boolean(hub);
+  const isCustomer = memoCustomer((r) => isCustomerSigner(r, tenantId));
+  const opened = new Map<string, Date>();
+  for (const request of requests) {
+    if (!request.quoteId) continue;
+    const at = await firstCustomerView(request.recipients, isCustomer);
+    const earlier = opened.get(request.quoteId);
+    if (at && (!earlier || at < earlier)) opened.set(request.quoteId, at);
+  }
+  return opened;
+}
+
+/** Has the customer opened it? Quote.viewedAt (the quote's own customer link), or a customer view in the hub. */
+async function quoteOpened(tenantId: string, quote: { id: string; viewedAt: Date | null }): Promise<boolean> {
+  if (quote.viewedAt) return true;
+  return (await customerOpenedAt(tenantId, [quote.id])).has(quote.id);
 }
 
 /* ── The five checks. Each runs AS the person: their access, at run time. ── */
 
-async function checkQuoteViewed(user: PermissionUser, tenantId: string, w: Watch): Promise<Check> {
+// The two quote checks are exported only so tests can run them against fakes
+// (tests/assistantWatchCustomerView.test.ts) — who counts as "the customer" is
+// the whole point of them.
+export async function checkQuoteViewed(user: PermissionUser, tenantId: string, w: Watch): Promise<Check> {
   if (!w.quoteId || !(await canAccessQuote(user, w.quoteId))) return "gone";
   const quote = await prisma.quote.findFirst({ where: { id: w.quoteId, tenantId, deletedAt: null }, select: QUOTE_SELECT });
   if (!quote) return "gone";
   return (await quoteOpened(tenantId, quote)) ? [quoteHit(quote)] : [];
 }
 
-async function checkQuoteUnsigned(user: PermissionUser, tenantId: string, w: Watch, now: Date): Promise<Check> {
+export async function checkQuoteUnsigned(user: PermissionUser, tenantId: string, w: Watch, now: Date): Promise<Check> {
   const cutoff = new Date(now.getTime() - (w.thresholdHours ?? 48) * HOUR);
   let ids: string[] | null;
   if (w.quoteId) {
@@ -153,18 +183,10 @@ async function checkQuoteUnsigned(user: PermissionUser, tenantId: string, w: Wat
     ids = await getAccessibleQuoteIds(user);
   }
   if (ids && !ids.length) return [];
-  // Opened in the signing hub at least N hours ago.
-  const hub = await prisma.signatureRequest.findMany({
-    where: {
-      tenantId,
-      deletedAt: null,
-      status: { in: LIVE_SIGNING },
-      quoteId: ids === null ? { not: null } : { in: ids },
-      recipients: { some: { role: "signer", viewedAt: { lte: cutoff } } },
-    },
-    take: CANDIDATES,
-    select: { quoteId: true },
-  });
+  // Opened in the signing hub BY THE CUSTOMER at least N hours ago — a staff
+  // countersigner's view starts no clock (customerOpenedAt).
+  const hubOpened = await customerOpenedAt(tenantId, ids, { openedBy: cutoff, liveOnly: true });
+  const hub = [...hubOpened.entries()].filter(([, at]) => at <= cutoff).map(([quoteId]) => ({ quoteId }));
   const quotes = await prisma.quote.findMany({
     where: {
       tenantId,
