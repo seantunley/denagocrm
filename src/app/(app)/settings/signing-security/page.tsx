@@ -1,8 +1,9 @@
-import { ShieldCheck, Clock } from "lucide-react";
+import { ShieldCheck, Clock, BellOff } from "lucide-react";
 import { requireTenantOwner } from "@/lib/auth";
 import { SettingsWorkspace } from "@/components/settings-workspace";
 import { SETTINGS_NAV_GROUPS } from "@/lib/settings-navigation";
-import { readSigningSecuritySettings } from "@/app/actions/signingSecuritySettings";
+import { readSigningAutoReminders, readSigningSecuritySettings } from "@/app/actions/signingSecuritySettings";
+import { SigningRemindersForm } from "./SigningRemindersForm";
 import { timestampAuthorityUrl, timestampingEnabled } from "@/lib/signing/timestamp";
 import { SigningSecurityForm } from "./SigningSecurityForm";
 
@@ -10,7 +11,7 @@ export const dynamic = "force-dynamic";
 
 export default async function SigningSecurityPage() {
   await requireTenantOwner();
-  const settings = await readSigningSecuritySettings();
+  const [settings, autoReminders] = await Promise.all([readSigningSecuritySettings(), readSigningAutoReminders()]);
   const tsaOn = timestampingEnabled();
   const tsaUrl = timestampAuthorityUrl();
 
@@ -37,6 +38,18 @@ export default async function SigningSecurityPage() {
             prepares a document can always override this for that document.
           </p>
           <SigningSecurityForm initial={settings} />
+        </section>
+
+        <section className="card p-5">
+          <h2 className="flex items-center gap-2 font-semibold">
+            <BellOff className="size-4 text-amber-500" />
+            Automatic reminders
+          </h2>
+          <p className="mt-1.5 max-w-2xl text-sm text-muted-foreground">
+            Whether the CRM nudges a signer on its own. Off by default: a reminder is a message to your
+            customer that nobody pressed Send on.
+          </p>
+          <SigningRemindersForm initial={autoReminders} />
         </section>
 
         <section className="card p-5">

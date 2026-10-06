@@ -39,6 +39,20 @@ test("automation cron runs SignatureRequest reminders", () => {
   );
 });
 
+test("automatic signing reminders are OFF unless the owner switches them on", () => {
+  // A reminder is a message to a customer nobody pressed Send on; it went out to
+  // every signer by default, with no setting anywhere in the app.
+  assert.match(reminderSource, /export const SIGNING_AUTO_REMINDERS_KEY = "SIGNING_AUTO_REMINDERS";/);
+  assert.match(reminderSource, /return \(await getSetting\(SIGNING_AUTO_REMINDERS_KEY\)\.catch\(\(\) => null\)\) === "true";/, "unset or unreadable = off");
+  const run = reminderSource.slice(reminderSource.indexOf("export async function runSignatureRequestReminders"));
+  assert.match(run, /^export async function runSignatureRequestReminders\(\): Promise<number> \{\s*if \(!\(await signingAutoRemindersOn\(\)\)\) return 0;/, "checked before anything is read or sent");
+  const action = readFileSync("src/app/actions/signingSecuritySettings.ts", "utf8");
+  const save = action.slice(action.indexOf("export async function saveSigningAutoReminders"));
+  assert.match(save, /const user = await requireTenantOwner\(\);/);
+  assert.match(save, /action: "signing\.auto_reminders_changed"/);
+  assert.match(readFileSync("src/app/(app)/settings/signing-security/page.tsx", "utf8"), /<SigningRemindersForm initial=\{autoReminders\} \/>/);
+});
+
 test("scheduled reminders use recipient delivery age and the live dispatch path", () => {
   assert.match(reminderSource, /signatureEvent\.groupBy/);
   assert.match(reminderSource, /type:\s*\{\s*in:\s*\["sent",\s*"delivered"\]\s*\}/);
