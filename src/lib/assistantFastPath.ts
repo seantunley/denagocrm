@@ -31,6 +31,9 @@ const MINE = /\b(for me|my)\b/;
 const TODAY = /^(what'?s|what is|show( me)?) (on )?(my )?(calendar|agenda|schedule|diary) (for )?today$|^what do i have (on )?today$/;
 const PIPELINE = /^(how many open leads( do i have| are there)?|(show( me)? )?(my |the )?pipeline( summary)?|how'?s the pipeline( looking)?)$/;
 const AWAITING = /^((which|what) )?quotes? (are )?(still )?(waiting|awaiting) (for )?(a )?signatures?$/;
+// A manager's check-in. Both lookups go through the asker's own visibility, so a
+// rep asking this just gets their own numbers.
+const TEAM = /^(how( is|'s| are) (my|the) (team|sales ?people|salespeople|reps)( doing| performing)?( this (week|month))?|(who|which of my (team|people|reps)) (needs|need) (help|coaching|a push)|where does my team need help|(team|coaching) (check-?in|review|update)|coach my team)$/;
 const THIS_ONE = /^(what should i do( here| next)?( with (this|him|her|them|this one|this lead|this customer|this deal))?|where are we( with (this|him|her|them|this one|this deal))?|summari[sz]e (this|him|her|them|this lead|this customer|this deal)|(what'?s|what is) (happening|going on)( here| with (this|him|her|them|this one|this deal))|tell me about (this|him|her|them)( one| lead| customer| deal)?)$/;
 
 export type FastPathContext = {
@@ -45,6 +48,7 @@ export function fastPath(question: string, ctx: FastPathContext): ToolStep[] | n
   if (!q || q.length > 80) return null;
   const steps: unknown[] = [];
   if (ATTENTION.test(q)) steps.push({ tool: "daily_brief", args: {} });
+  else if (TEAM.test(q)) steps.push({ tool: "daily_brief", args: {} }, { tool: "sales_stats", args: {} });
   else if (OVERDUE.test(q)) steps.push({ tool: "find_activities", args: { when: "overdue", ...(MINE.test(q) ? { assignedTo: ctx.userName } : {}) } });
   else if (TODAY.test(q)) steps.push({ tool: "find_activities", args: { when: "today", ...(MINE.test(q) || /^what do i/.test(q) ? { assignedTo: ctx.userName } : {}) } });
   else if (PIPELINE.test(q)) steps.push({ tool: "pipeline_summary", args: {} });

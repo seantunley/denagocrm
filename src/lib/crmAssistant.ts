@@ -1567,10 +1567,9 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
       // A closed stream or a failed run write must not cost the answer.
     }
   };
-  if (!(await isCodexConnected())) {
-    return { ok: false, error: "Connect ChatGPT first: Settings → Integrations → ChatGPT." };
-  }
-  const [whereTheyAre, context, history, learnedNow, person, profileRaw, company] = await Promise.all([
+  // The connection check rides with the context reads — one round trip, not two.
+  const [connected, whereTheyAre, context, history, learnedNow, person, profileRaw, company] = await Promise.all([
+    isCodexConnected(),
     pageContext(user, page),
     planContext(user),
     recentTurns(user.id),
@@ -1580,6 +1579,7 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
     getCompanyProfile().catch(() => null),
   ]);
   mark("context");
+  if (!connected) return { ok: false, error: "Connect ChatGPT first: Settings → Integrations → ChatGPT." };
   // "Last used" for the owner's review of what DAX has learned (never throws).
   void markNotesUsed([...learnedNow.memory, ...learnedNow.profile, ...learnedNow.playbooks].map((n) => n.id));
   const profile = parseProfile(profileRaw);

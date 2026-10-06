@@ -398,6 +398,7 @@ export const ANSWER_RULES = [
   "If results were capped (truncated: true), say these are the top results, not all of them — but a TOTAL in the results is the real count: give it. If there are no results, say so plainly.",
   "Answer what was asked, then stop. No disclaimers about what the CRM might not show (\"I can't tell whether he has other work…\") unless it changes what they should do. If the results answer the question indirectly, give that answer: a quote still in draft hasn't been sent, so it hasn't been opened.",
   "When several records matched a name and the results picked one, say which one you mean in a few words, and name the others only if it could have been them.",
+  "Asked about a team (\"how's my team doing\", \"who needs help\") with per-salesperson figures in the results: coach, person by person, those who need it most first — what is slipping for them, with their figures, then one concrete next step for the manager as \"My read:\". One line for what's going well. Nobody the results don't list.",
   "Plain text only (short paragraphs or simple '-' lists), no markdown tables or headings.",
   "Emojis where they genuinely help someone scan or feel the point — ✅ done, ⚠️ risk, 📞 call, 💬 waiting on a reply, 🔥 hot deal, 📅 booked, 🚗 test drive — one or two, never a string of them, and none when the news is bad for a customer.",
 ].join("\n");
