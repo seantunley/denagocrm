@@ -4,10 +4,12 @@ import { logError } from "@/lib/errorLog";
 import { warmUpForCron } from "@/lib/cronPreflight";
 import { runCronPerTenant } from "@/lib/tenantCron";
 import { runDueAssistantSchedules, SCHEDULE_RUN_RESERVE_MS } from "@/lib/assistantScheduleRun";
+import { runAssistantWatches } from "@/lib/assistantWatch";
 
 /**
- * Scheduled assistant questions ("every Monday at 7, which deals went quiet?"),
- * run as the person who set them up.
+ * Scheduled assistant questions ("every Monday at 7, which deals went quiet?")
+ * and watches ("tell me when Anna opens her quote"), run as the person who set
+ * them up.
  *
  * ITS OWN ROUTE for the same reason research has one: one run is a full
  * assistant answer — up to about three minutes on the ChatGPT subscription —
@@ -22,6 +24,8 @@ export const dynamic = "force-dynamic";
 export const maxDuration = 300;
 
 const MIN_START_BUDGET_MS = 15_000;
+/** The watch pass's share of a tick: the schedules keep at least ~230 s. */
+const WATCH_BUDGET_MS = 60_000;
 
 export async function GET(req: NextRequest) {
   if (!isAuthorizedCron(req)) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -34,12 +38,29 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ ok: false, skipped: routeBudget.reason }, { status: 503 });
   }
 
+  // Watches FIRST, every workspace: plain queries, seconds not minutes, so a
+  // long scheduled question can't starve them. Capped, so the schedules always
+  // keep the rest of the tick. A watch failure must not stop the schedules —
+  // caught here, logged by its name only, never a record or a label.
+  const startedAt = Date.now();
+  const watches = await runCronPerTenant(
+    async (tenantId, budget) =>
+      runAssistantWatches(budget).catch(async (error: unknown) => {
+        await logError("assistant-schedule", "watch run failed", error instanceof Error ? error.name : "unknown", { tenantId });
+        return { checked: 0, fired: 0 };
+      }),
+    { maxRuntimeMs: Math.min(WATCH_BUDGET_MS, routeBudget.remainingMs), rotationWindowMs: 30 * 60 * 1000 },
+  ).catch(async (error: unknown) => {
+    await logError("assistant-schedule", "watch run failed", error instanceof Error ? error.name : "unknown");
+    return [];
+  });
+
   const runs = await runCronPerTenant(async (_tenantId, budget) => {
     // A workspace reached with too little left for one run is left for the next tick.
     if (budget.shouldStop(SCHEDULE_RUN_RESERVE_MS)) return { ran: 0, skipped: "insufficient-budget" as const };
     return runDueAssistantSchedules(budget);
   }, {
-    maxRuntimeMs: routeBudget.remainingMs,
+    maxRuntimeMs: routeBudget.remainingMs - (Date.now() - startedAt),
     minStartBudgetMs: MIN_START_BUDGET_MS,
     // One workspace at a time: a run holds the function for minutes, and two
     // in parallel would only halve what each could fit.
@@ -55,5 +76,5 @@ export async function GET(req: NextRequest) {
   });
 
   const failed = runs.filter((run) => run.status === "error").length;
-  return NextResponse.json({ ok: failed === 0, runs }, { status: failed ? 207 : 200 });
+  return NextResponse.json({ ok: failed === 0, watches, runs }, { status: failed ? 207 : 200 });
 }

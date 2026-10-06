@@ -75,15 +75,41 @@ test("proposals are checked against what this person may touch, names resolved, 
   assert.doesNotMatch(resolve, /scheduleFollowUp|assignLead|moveLead|addCommunication|\.create\(|\.update\(/, "resolving runs nothing");
 });
 
-test("Confirm runs the action a person would use by hand — and nothing is ever sent", () => {
+test("Confirm runs the action a person would use by hand — and Confirm never sends", () => {
   const action = code("src/app/actions/assistant.ts");
-  const run = action.slice(action.indexOf("export async function runAssistantAction"), action.indexOf("export async function openAssistantBubble"));
+  const run = action.slice(action.indexOf("export async function runAssistantAction"), action.indexOf("export async function sendAssistantDraft"));
   assert.match(run, /await requireAnyPermission\(\.\.\.ASSISTANT_PERMISSIONS\);\s*if \(!\(await isModuleEnabled\("automation"\)\)\)/);
-  for (const delegate of ["scheduleFollowUp(", "addCommunication(", "assignLead(", "moveLead("]) {
+  for (const delegate of [
+    "scheduleFollowUp(", "addCommunication(", "assignLead(", "moveLead(", "scheduleActivity(", "createTestDriveBooking(",
+    "rescheduleActivity(", "cancelActivity(", "markLost(", "createQuoteFromLead(",
+  ]) {
     assert.ok(run.includes(delegate), delegate);
   }
-  // No path in the assistant sends to a customer.
-  for (const file of ["src/app/actions/assistant.ts", "src/lib/crmAssistant.ts", "src/lib/assistantActions.ts"]) {
-    assert.doesNotMatch(code(file), /sendWhatsApp|sendEmail|sendMessenger|sendTelegram|dispatch/i, file);
+  // Confirm on any card sends nothing to a customer.
+  assert.doesNotMatch(run, /sendWhatsApp|sendEmail|sendMessenger|sendTelegram|dispatch/i);
+  // The model's own path — research, answer, proposals — has no way to send at all.
+  for (const file of ["src/lib/crmAssistant.ts", "src/lib/assistantActions.ts", "src/lib/assistantReply.ts"]) {
+    assert.doesNotMatch(code(file), /sendWhatsApp|sendEmail|sendMessenger|sendTelegram|sendAssistantDraft|dispatch/i, file);
+  }
+});
+
+test("a drafted message reaches a customer only from its card's Send button, to the lead's own address", () => {
+  const action = code("src/app/actions/assistant.ts");
+  const send = action.slice(action.indexOf("export async function sendAssistantDraft"), action.indexOf("const escapeHtml"));
+  assert.match(send, /await requireAnyPermission\(\.\.\.ASSISTANT_PERMISSIONS\);\s*if \(!\(await isModuleEnabled\("automation"\)\)\)/);
+  assert.match(send, /if \(!\(await canAccessLead\(user, String\(input\.leadId\)\)\)\)/);
+  // The recipient is read here from the lead, never taken from the browser.
+  assert.doesNotMatch(send, /input\.(to|phone|email)\b/);
+  assert.match(send, /const phone = lead\.phone \|\| lead\.contact\?\.phone;/);
+  assert.match(send, /const to = lead\.email \|\| lead\.contact\?\.email;/);
+  // Through the lead page's own senders (their permission, outbox and timeline).
+  assert.match(send, /await sendWhatsAppMessage\(undefined, form\)/);
+  assert.match(send, /await sendEmailAction\(undefined, form\)/);
+  // Its only caller: the Send button on the card.
+  const card = code("src/components/AssistantActionCard.tsx");
+  assert.equal(card.match(/sendAssistantDraft\(/g)?.length, 1);
+  assert.match(card, /onClick=\{send\}/);
+  for (const file of ["src/components/AssistantChat.tsx", "src/components/AssistantBubble.tsx", "src/app/api/assistant/ask/route.ts", "src/lib/assistantAsk.ts"]) {
+    assert.doesNotMatch(code(file), /sendAssistantDraft/, file);
   }
 });

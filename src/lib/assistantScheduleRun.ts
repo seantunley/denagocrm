@@ -51,13 +51,14 @@ export async function withScheduleSlot<T>(userId: string, write: (tx: Tx) => Pro
 }
 
 /**
- * The person has now seen their scheduled answers (the bubble opened, or the
- * Ask page loaded): the unread dot goes. Their own turns only. Here rather than
- * in crmAssistant, whose one write stays its own conversation history.
+ * The person has now seen their scheduled answers and watch notes (the bubble
+ * opened, or the Ask page loaded): the unread dot goes. Their own turns only.
+ * Here rather than in crmAssistant, whose one write stays its own conversation
+ * history.
  */
 export async function markScheduledTurnsSeen(userId: string) {
   await prisma.assistantTurn.updateMany({
-    where: { userId, source: "schedule", seenAt: null },
+    where: { userId, source: { in: ["schedule", "watch"] }, seenAt: null },
     data: { seenAt: new Date() },
   });
 }

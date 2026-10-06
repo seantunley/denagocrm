@@ -115,7 +115,7 @@ test("in the bubble it reads like a chat: oldest first, composer at the bottom, 
   assert.match(compact, /const thread = \[\.\.\.turns\]\.reverse\(\);/);
   assert.ok(compact.indexOf("thread.map(") < compact.indexOf("{composer}"), "the composer comes after the thread");
   assert.match(chat, /const voice = useVoiceRecorder\(/, "the same mic in the bubble and the page");
-  assert.match(code("src/components/AssistantBubble.tsx"), /<AssistantChat key=\{pathname\} name=\{data\.name\} history=\{data\.history\} page=\{pathname \?\? undefined\} compact \/>/);
+  assert.match(code("src/components/AssistantBubble.tsx"), /<AssistantChat\s+key=\{pathname\}\s+name=\{data\.name\}\s+history=\{data\.history\}\s+page=\{pathname \?\? undefined\}\s+autoAsk=\{autoAsk \?\? undefined\}\s+compact\s+\/>/);
 });
 
 test("the bubble: same gate as the page, today's conversation only, no load until opened", () => {

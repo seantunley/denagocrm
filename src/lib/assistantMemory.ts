@@ -50,15 +50,15 @@ export type LearnBlock = z.infer<typeof learnBlock>;
 export type NoteOp = z.infer<typeof noteOp>;
 
 export const LEARN_INSTRUCTIONS = [
-  "LEARNING. You remember across conversations. After your answer, ONLY if this exchange taught you something durable, add one final line:",
-  'LEARN: {"memory":[{"add":"..."}],"profile":[{"add":"..."}],"playbook":[{"name":"hot-lead","description":"<=60 chars","content":"..."}]}',
+  'LEARNING. You remember across conversations. ONLY if this exchange taught you something durable, put it under "learn" in the reply block:',
+  '"learn":{"memory":[{"add":"..."}],"profile":[{"add":"..."}],"playbook":[{"name":"hot-lead","description":"<=60 chars","content":"..."}]}',
   'Each list is optional. Ops: {"add":"text"}, {"replace":{"old":"words in the existing entry","new":"whole new entry"}}, {"remove":"words in the entry"}.',
   "- memory: facts about THIS BUSINESS that matter in every future conversation — who handles what, how things are done here, policies someone told you.",
   "- profile: this person's own lasting preferences — how they like answers, their role, their area.",
   "- playbook: a named definition or procedure the person taught or corrected (\"hot lead means…\", \"our weekly review is…\"). name is lowercase-hyphenated.",
   "A correction from the person is the most important thing to learn. If an entry you were given is wrong or out of date, replace or remove it.",
   "SKIP: anything about one particular customer or deal, data that lives in the CRM records, one-off tasks, guesses. Never store a phone number, email address or a customer's name.",
-  "Most answers learn nothing — then add no LEARN line at all.",
+  'Most answers learn nothing — then leave "learn" out.',
 ].join("\n");
 
 /**
@@ -77,7 +77,7 @@ export function methodInstructions(lookups: { tool: string; args: unknown }[]): 
   // the fenced results, each with its filters, cleaned. Only tool names here.
   return [
     `METHOD. Answering this took ${lookups.length} lookups (${lookups.map((l) => l.tool).join(" → ")}); their filters are with each result above.`,
-    "If this is a KIND of question that will come up again (\"who should I chase\", \"is X ready for delivery\" — not one about a particular customer) and no playbook already covers it, save the method as a playbook in your LEARN line: a name for that kind of question, a one-line description, and the steps — which lookups with which filters, what to look for in the results, and how to judge them. Leave out names and anything specific to today's records.",
+    "If this is a KIND of question that will come up again (\"who should I chase\", \"is X ready for delivery\" — not one about a particular customer) and no playbook already covers it, save the method as a playbook under \"learn\": a name for that kind of question, a one-line description, and the steps — which lookups with which filters, what to look for in the results, and how to judge them. Leave out names and anything specific to today's records.",
     "If you loaded a playbook and it was missing a step you needed, improve it (replace). If the method was obvious or one-off, learn nothing.",
   ].join("\n");
 }
@@ -109,6 +109,9 @@ const INJECTION = [
   /\b(api ?key|password|secret|token)\s*[:=]/i,
   /<\s*\/?\s*(script|system|instructions?)\b/i,
   /\bLEARN:/,
+  // The reply block's marker (assistantReply.REPLY_MARKER): a remembered entry
+  // that carried it would sit in every prompt, ready to be echoed as a block.
+  /<<\s*DAX\s*>>/i,
 ];
 // Letters of ANY script (a Cyrillic look-alike domain is still a domain),
 // spaces around the @, and the ideographic/halfwidth full stops as dots.

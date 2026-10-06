@@ -106,11 +106,12 @@ export default async function AppLayout({
   const showAssistant =
     (enabledModules === null || enabledModules.has("automation")) &&
     (user.role === "owner" || permissions.some((p) => ASSISTANT_GRANTS.includes(p)));
-  // Scheduled answers this person hasn't seen yet → the bubble's unread dot.
-  // Counted HERE so the bubble itself still fetches nothing until it's opened;
-  // one indexed count of their own turns, and only when the bubble shows.
+  // Scheduled answers and watch notes this person hasn't seen yet → the
+  // bubble's unread dot. Counted HERE so the bubble itself still fetches
+  // nothing until it's opened; one indexed count of their own turns, and only
+  // when the bubble shows.
   const assistantUnseen = showAssistant
-    ? await prisma.assistantTurn.count({ where: { userId: user.id, source: "schedule", seenAt: null } }).catch(() => 0)
+    ? await prisma.assistantTurn.count({ where: { userId: user.id, source: { in: ["schedule", "watch"] }, seenAt: null } }).catch(() => 0)
     : 0;
 
   return (

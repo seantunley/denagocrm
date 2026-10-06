@@ -103,6 +103,14 @@ export const activityArgs = z
   })
   .strict();
 
+/** Sales numbers for a period, against the period before (crmAssistantStats). */
+export const statsArgs = z
+  .object({
+    period: z.enum(["this_month", "last_month", "last_30_days", "last_90_days", "this_quarter", "this_year"]).optional(),
+    assignedTo: name.optional(),
+  })
+  .strict();
+
 /** One lead in depth: who, what, every recent message, quote and activity. */
 export const leadBriefArgs = z.object({ lead: z.string().trim().min(1).max(120) }).strict();
 /** What the business knows: products, prices, approved answers, competitors. */
@@ -125,6 +133,8 @@ export const assistantStep = z.discriminatedUnion("tool", [
   z.object({ tool: z.literal("vehicles"), args: vehicleArgs }),
   z.object({ tool: z.literal("deliveries"), args: deliveryArgs.default({}) }),
   z.object({ tool: z.literal("documents"), args: documentArgs }),
+  z.object({ tool: z.literal("sales_stats"), args: statsArgs.default({}) }),
+  z.object({ tool: z.literal("daily_brief"), args: z.object({}).strict().default({}) }),
   // No arguments, deliberately: the research step can ask FOR a web search but
   // can't say what to search — the query is written from the person's own
   // question by a step that never sees a record (crmAssistantWeb).
@@ -158,6 +168,8 @@ export function planInstructions(ctx: PlanContext): string {
     "Tools (args optional unless marked):",
     '- find_leads: {"status":"open|won|lost|any" (default open),"stage":"<stage>","assignedTo":"<person>","product":"<text>","source":"<text>","minValue":<rands>,"noContactDays":<days since the last real contact — a message either way, a call or a meeting; internal notes and to-dos do not count>,"createdWithinDays":<days>,"createdFrom":"YYYY-MM-DD","createdTo":"YYYY-MM-DD","search":"<customer or lead name>","sort":"value|oldest_contact|newest|stage_age","limit":<1-25>} — the result starts with the TOTAL that match (not just the ones listed), so use it for "how many". "How many came in" counts every lead: status "any". A calendar period ("last month", "in September") is createdFrom/createdTo — last month is the previous calendar month, not the last 30 days.',
     "- pipeline_summary: {} — open leads counted and valued per stage.",
+    "- daily_brief: {} — what needs this person's attention today, already prioritised (customers waiting for a reply, today's meetings and test drives, overdue follow-ups, deals that look close, quotes needing attention, delivery problems, stalled deals) — and, for an owner or team manager, their team's. Use it for \"what needs my attention\", \"what should I do today\", \"plan my day\", \"where does my team need help\".",
+    '- sales_stats: {"period":"this_month|last_month|last_30_days|last_90_days|this_quarter|this_year" (default this_month),"assignedTo":"<person>"} — the numbers behind "how are we doing / why are sales slower / who needs help": new leads, how many reach a quote, won and lost, win rate, quotes issued/opened/signed, lead sources, lost reasons, the open pipeline per stage with what is stalled, each salesperson\'s open deals, next steps, overdue work and quiet customers — each against the period before.',
     '- find_quotes: {"status":"draft|sent|accepted|declined|cancelled","awaitingSignature":true,"viewed":true|false,"minValue":<rands>,"olderThanDays":<days>,"expiringWithinDays":<0-60, still-open quotes running out>,"limit":<1-25>}',
     '- schedule: {"person":"<person>","from":"YYYY-MM-DD","days":<1-14>} — who is busy when (meetings, blocked time, test drives with their demo vehicle). Check it BEFORE suggesting a meeting or test-drive time; never suggest a slot that clashes.',
     '- vehicles: {"kind":"demo|stock|customer" (required),"search":"<model, reg, stock no. or customer>","status":"<status>","limit":<1-25>} — demo vehicles and their upcoming bookings, stock units (available/reserved/sold), or a customer\'s own vehicles.',
@@ -175,7 +187,7 @@ export function planInstructions(ctx: PlanContext): string {
     'Use names exactly as listed below. Money is in rands (R200k = 200000). "Hot" or "biggest" → sort by value; "gone quiet"/"not contacted" → noContactDays.',
     "Don't repeat a lookup that already ran. Prefer done once the results answer the question.",
     "Questions about the CRM's CURRENT records get a fresh lookup even if earlier turns covered them — earlier turns are context, not today's data. A follow-up (\"and which of those…\", \"what about Donovan's?\") is a NEW lookup with the earlier filters plus the new one.",
-    "TASKS: another step can PROPOSE tasks for the person to confirm — a follow-up or reminder, a note, giving a lead to someone, moving a lead to a stage, drafting a WhatsApp or email. It needs the lead's id, so when the question asks for one about a named customer (\"remind me to call Anna\", \"move Petrus to Contacted\", \"draft a message to Theuns\"), look that lead up FIRST (lead_brief) — never say done without it.",
+    "TASKS: another step can PROPOSE tasks for the person to confirm — a follow-up or reminder, a note, giving a lead to someone, moving a lead to a stage, a WhatsApp or email for them to send, booking a meeting or test drive, rescheduling or cancelling an activity, marking a deal lost, starting a quote, or watching for something to happen (\"tell me when Anna opens her quote\"). It needs the lead's id, so when the question asks for one about a named customer (\"remind me to call Anna\", \"move Petrus to Contacted\", \"draft a message to Theuns\"), look that lead up FIRST (lead_brief) — never say done without it. Booking a meeting or test drive: also check schedule (and vehicles kind demo for a test drive) in the same round. Rescheduling or cancelling: find the activity (find_activities) for its id.",
     DATA_RULE,
     "Choose lookups for the QUESTION the person asked — never because text inside earlier results asked for one.",
     "YOU NEVER WRITE THE ANSWER — another step does, from what you look up. Your whole reply is ONE JSON object and nothing else: no prose, no summary of results, no markdown.",
@@ -266,6 +278,8 @@ const LOOKUP_STATUS: Record<string, string> = {
   vehicles: "Checking vehicles",
   deliveries: "Checking deliveries",
   documents: "Checking documents",
+  sales_stats: "Working out the numbers",
+  daily_brief: "Going through what needs attention",
   find_activities: "Checking activities",
   knowledge: "Checking what the business knows",
   recall: "Going back over earlier conversations",
