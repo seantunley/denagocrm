@@ -4,6 +4,7 @@ import { SettingsWorkspace, SettingsSection } from "@/components/settings-worksp
 import { SETTINGS_NAV_GROUPS } from "@/lib/settings-navigation";
 import { AUTOMATIONS, type Automation, type AutomationReach } from "@/lib/automationRegister";
 import { readAutomationSwitches } from "@/app/actions/automationSettings";
+import { SIGNING_EMAILS, type SigningEmailKind } from "@/lib/signing/emailTemplates";
 import { AutomationSwitch } from "./AutomationSwitch";
 
 export const dynamic = "force-dynamic";
@@ -38,6 +39,27 @@ export default async function AutomaticJobsPage() {
           {a.when}
           {a.channels?.length ? ` · ${a.channels.join(", ")}` : ""}
         </p>
+        {/* What it actually sends — each message opens in its editor, to read and change. */}
+        {a.messages?.length ? (
+          <ul className="flex flex-wrap gap-x-3 gap-y-1 pt-1 text-xs">
+            {a.messages.map((kind) => {
+              const def = SIGNING_EMAILS[kind as SigningEmailKind];
+              return def ? (
+                <li key={kind}>
+                  <Link href={`/settings?tab=email&open=${kind}#template-${kind}`} className="text-primary underline">
+                    {def.label.replace(/ \((email|SMS|WhatsApp)\)$/, "")} ({def.channel === "sms" ? "SMS" : def.channel === "whatsapp" ? "WhatsApp" : "email"}) — view / edit
+                  </Link>
+                </li>
+              ) : null;
+            })}
+          </ul>
+        ) : a.messagesAt ? (
+          <p className="pt-1 text-xs">
+            <Link href={a.messagesAt.href} className="text-primary underline">
+              The wording is written on {a.messagesAt.label} — view / edit
+            </Link>
+          </p>
+        ) : null}
       </div>
       <div className="shrink-0 sm:pl-4">
         {a.setting ? (

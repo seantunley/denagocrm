@@ -86,6 +86,26 @@ test("the page is in Settings for the owner, switches are owner-only, audited, a
   assert.match(save, /action: "automation\.switched"/);
 });
 
+test("every customer message can be READ and EDITED from the page — none is hidden or hard-coded", async () => {
+  const { SIGNING_EMAILS } = await import("../src/lib/signing/emailTemplates");
+  for (const a of AUTOMATIONS.filter((x) => x.reaches === "customer")) {
+    assert.ok(a.messages?.length || a.messagesAt, `${a.key}: says nothing about what it sends`);
+    for (const kind of a.messages ?? []) assert.ok(kind in SIGNING_EMAILS, `${a.key}: "${kind}" isn't an editable template`);
+  }
+  // Each opens in the editor: ?open=<kind> opens that template on Settings → Email.
+  const settings = code("src/app/(app)/settings/page.tsx");
+  assert.match(settings, /id=\{`template-\$\{kind\}`\} open=\{openTemplate === kind\}/);
+  assert.match(code("src/app/(app)/settings/automatic/page.tsx"), /href=\{`\/settings\?tab=email&open=\$\{kind\}#template-\$\{kind\}`\}/);
+  // The texts that were hard-coded now come from templates.
+  const dispatch = code("src/lib/signing/dispatch.ts");
+  assert.match(dispatch, /signingWhatsAppText\(opts\?\.reminder \? "reminder_whatsapp" : "invite_whatsapp"/);
+  assert.doesNotMatch(dispatch, /Sign here: \$\{url\}/, "no hard-coded WhatsApp wording");
+  const queue = code("src/lib/surveyDistributionQueue.ts");
+  assert.doesNotMatch(queue, /function inviteText|A quick reminder/, "no hard-coded survey wording");
+  assert.match(queue, /tenantEmailContent\(reminder \? "survey_reminder" : "survey_invite"/);
+  assert.match(queue, /tenantSmsContent\(reminder \? "survey_reminder_sms" : "survey_invite_sms"/);
+});
+
 test("forms never pre-tick a customer message", () => {
   assert.match(read("src/components/VehicleForm.tsx"), /name="newDelivery"[^>]*defaultChecked=\{false\}/);
   assert.match(read("src/app/(app)/marketing/surveys/distributions/page.tsx"), /name="maxReminders" min="0" max="3" defaultValue="0"/);

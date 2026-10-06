@@ -26,6 +26,13 @@ export type Automation = {
   setting?: { key: string; defaultOn: boolean };
   /** Switched on, set up or approved on another screen — where. */
   managedAt?: { label: string; href: string };
+  /**
+   * The messages it sends, by template (Settings → Email templates) — each shown
+   * with a link that opens it to read and edit. Every customer message has one.
+   */
+  messages?: string[];
+  /** Messages written somewhere other than the templates — where to read and edit them. */
+  messagesAt?: { label: string; href: string };
   /** Cron route path and phase name(s) that run it — read by the guard test. */
   cron?: string;
   phases?: string[];
@@ -37,6 +44,7 @@ export const AUTOMATIONS: Automation[] = [
   /* ── Messages that can reach a customer ─────────────────────────────── */
   {
     key: "signing-reminders",
+    messages: ["reminder", "reminder_whatsapp"],
     label: "Signing reminders",
     does: "One reminder to a signer who hasn't signed three days after the document reached them — and a re-nudge to the next signer in line if they haven't opened theirs.",
     reaches: "customer",
@@ -48,6 +56,7 @@ export const AUTOMATIONS: Automation[] = [
   },
   {
     key: "signed-copies",
+    messages: ["completed"],
     label: "Signed copies",
     does: "When everyone has signed, the signed PDF is emailed to each person on the request who has an email address.",
     reaches: "customer",
@@ -59,6 +68,7 @@ export const AUTOMATIONS: Automation[] = [
   },
   {
     key: "signing-next-signer",
+    messages: ["invite", "invite_whatsapp"],
     label: "Next signer in line",
     does: "In a request signed in order (e.g. our team, then the customer), the next person's signing link goes out when the one before them signs. Part of the request a person sent — the order is set when it is sent.",
     reaches: "customer",
@@ -69,6 +79,7 @@ export const AUTOMATIONS: Automation[] = [
   },
   {
     key: "review-requests",
+    messages: ["review_delivery", "review_service"],
     label: "Google review requests",
     does: "Emails the customer asking for a Google review after a job card is completed or a new vehicle is delivered — at most once per customer every 90 days, and never to someone who opted out.",
     reaches: "customer",
@@ -78,6 +89,7 @@ export const AUTOMATIONS: Automation[] = [
   },
   {
     key: "survey-auto-reminders",
+    messages: ["survey_reminder", "survey_reminder_sms"],
     label: "Survey reminders (automatic surveys)",
     does: "One reminder, 48 hours later, to a customer who hasn't answered a survey sent automatically (after a job card, a delivery or a won deal).",
     reaches: "customer",
@@ -87,6 +99,7 @@ export const AUTOMATIONS: Automation[] = [
   },
   {
     key: "surveys",
+    messages: ["survey_invite", "survey_invite_sms", "survey_reminder", "survey_reminder_sms"],
     label: "Survey invitations",
     does: "Sends surveys: ones a person sends to an audience, and ones a survey is set to send by itself (after a job card, a delivery or a won deal). A survey only sends once it is published and switched on.",
     reaches: "customer",
@@ -98,6 +111,7 @@ export const AUTOMATIONS: Automation[] = [
   },
   {
     key: "service-reminders",
+    messages: ["service_reminder", "service_reminder_sms"],
     label: "Service-due reminders",
     does: "Emails a customer when their vehicle is due for a service.",
     reaches: "customer",
@@ -110,6 +124,7 @@ export const AUTOMATIONS: Automation[] = [
   },
   {
     key: "campaigns",
+    messagesAt: { label: "each campaign", href: "/marketing/campaigns" },
     label: "Marketing campaigns",
     does: "Sends a campaign a person wrote and a second person approved, now or at its scheduled time.",
     reaches: "customer",
@@ -121,6 +136,7 @@ export const AUTOMATIONS: Automation[] = [
   },
   {
     key: "journeys",
+    messagesAt: { label: "each journey's steps", href: "/journeys" },
     label: "Journeys",
     does: "Runs the steps of active journeys — tasks for the team, and emails or SMS to customers only where a journey has a send step. A journey only runs once published and active.",
     reaches: "customer",
@@ -131,6 +147,7 @@ export const AUTOMATIONS: Automation[] = [
   },
   {
     key: "chatbot",
+    messagesAt: { label: "the chatbot", href: "/chatbot" },
     label: "Chatbot replies and retries",
     does: "Replies to customers who message on WhatsApp, Messenger, Instagram or Telegram, when the chatbot is on — and retries any reply (a person's or the bot's) that failed to deliver, for about an hour.",
     reaches: "customer",
@@ -141,6 +158,7 @@ export const AUTOMATIONS: Automation[] = [
   },
   {
     key: "inbound-email",
+    messagesAt: { label: "each mailbox's auto-reply", href: "/settings/helpdesk" },
     label: "Inbound email and help-desk auto-reply",
     does: "Collects incoming email into the inbox and help desk; sends an acknowledgement to the customer only if a mailbox's auto-reply is on.",
     reaches: "customer",

@@ -145,6 +145,41 @@ export async function tenantSmsContent(
 }
 
 /**
+ * The WhatsApp text for a signing invitation or reminder, from the request's
+ * tenant's template (Settings → Email templates → "(WhatsApp)"), or the
+ * default. It was hard-coded — customers got wording nobody could see or edit.
+ * NEVER THROWS: a failed lookup still sends the default text.
+ */
+export async function signingWhatsAppText(
+  kind: "invite_whatsapp" | "reminder_whatsapp",
+  input: { requestId: string; title: string; recipientName: string; signingUrl: string },
+): Promise<string> {
+  const vars: Record<string, string> = {
+    recipient_name: input.recipientName,
+    first_name: input.recipientName.trim().split(/\s+/)[0] ?? input.recipientName,
+    document_title: input.title,
+    signing_link: input.signingUrl,
+  };
+  try {
+    const req = await basePrisma.signatureRequest.findUnique({
+      where: { id: input.requestId },
+      select: { tenantId: true, quoteId: true, createdById: true, expiresAt: true },
+    });
+    if (!req?.tenantId) return tenantSmsContent(kind, null, vars);
+    const [quote, sender] = await Promise.all([
+      req.quoteId ? basePrisma.quote.findFirst({ where: { id: req.quoteId, tenantId: req.tenantId }, select: { number: true } }) : null,
+      req.createdById ? basePrisma.user.findUnique({ where: { id: req.createdById }, select: { name: true } }) : null,
+    ]);
+    vars.quote_number = quote ? `Q-${quote.number}` : "";
+    vars.sender_name = sender?.name ?? "";
+    vars.expiry_date = req.expiresAt ? formatDate(req.expiresAt) : "";
+    return tenantSmsContent(kind, req.tenantId, vars);
+  } catch {
+    return tenantSmsContent(kind, null, vars);
+  }
+}
+
+/**
  * Subject, HTML and text for one signing email, from the REQUEST's tenant's
  * template (or the default), in that tenant's brand.
  *
