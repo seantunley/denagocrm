@@ -1,5 +1,4 @@
 import Link from "next/link";
-import { MessageSquareWarning, Users, Cog } from "lucide-react";
 import { requireTenantOwner } from "@/lib/auth";
 import { SettingsWorkspace, SettingsSection } from "@/components/settings-workspace";
 import { SETTINGS_NAV_GROUPS } from "@/lib/settings-navigation";
@@ -9,15 +8,16 @@ import { AutomationSwitch } from "./AutomationSwitch";
 
 export const dynamic = "force-dynamic";
 
-const GROUPS: { reach: AutomationReach; title: string; description: string; icon: typeof Users }[] = [
+// No icons: SettingsSection is a client component, and an icon component can't
+// cross from this server page to it.
+const GROUPS: { reach: AutomationReach; title: string; description: string }[] = [
   {
     reach: "customer",
     title: "Can message your customers",
     description: "Nothing here contacts a customer unless it is switched on — here, or on the screen it names.",
-    icon: MessageSquareWarning,
   },
-  { reach: "staff", title: "Notifies your team", description: "Messages and notifications to the people in this workspace only.", icon: Users },
-  { reach: "nobody", title: "Housekeeping", description: "Background work that sends nothing to anyone.", icon: Cog },
+  { reach: "staff", title: "Notifies your team", description: "Messages and notifications to the people in this workspace only." },
+  { reach: "nobody", title: "Housekeeping", description: "Background work that sends nothing to anyone." },
 ];
 
 /**
@@ -67,7 +67,7 @@ export default async function AutomaticJobsPage() {
     >
       <div className="space-y-6">
         {GROUPS.map((group) => (
-          <SettingsSection key={group.reach} icon={group.icon} title={group.title} description={group.description}>
+          <SettingsSection key={group.reach} title={group.title} description={group.description}>
             <ul className="divide-y divide-border/50">{AUTOMATIONS.filter((a) => a.reaches === group.reach).map(row)}</ul>
           </SettingsSection>
         ))}
