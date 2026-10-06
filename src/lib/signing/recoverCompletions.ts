@@ -10,10 +10,12 @@ import {
   COMPLETED_EVENT,
   POST_COMPLETION_EVENT,
   RECOVERY_ATTEMPT_EVENT,
+  SIGNED_COPIES_OFF,
   deliverCompletionEmails,
   describeError,
   type FanoutRecipient,
 } from "./completionFanout";
+import { automationOn } from "@/lib/automationSwitch";
 import { sweepTenantWhere, sourceSignedByThisRequest, type SweepTenantWhere } from "./recoveryScope";
 
 /**
@@ -429,12 +431,17 @@ async function redrive(
     }
   }
 
-  const delivery = await deliverCompletionEmails({
-    requestId: req.id,
-    title: req.title,
-    pdf,
-    recipients: recipients as FanoutRecipient[],
-    tenantWhere: where,  });
+  // Signed copies are the owner's switch (on by default) — off, nothing is emailed.
+  // (The sweep runs inside its tenant's scope — recoverStrandedCompletions.)
+  const delivery = (await automationOn("SIGNING_SIGNED_COPIES"))
+    ? await deliverCompletionEmails({
+        requestId: req.id,
+        title: req.title,
+        pdf,
+        recipients: recipients as FanoutRecipient[],
+        tenantWhere: where,
+      })
+    : SIGNED_COPIES_OFF;
   failures.push(...delivery.failures);
 
   return { ok: failures.length === 0, failures };

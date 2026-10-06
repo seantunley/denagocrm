@@ -7,6 +7,7 @@ import { sendEmail } from "./email";
 import { logAudit } from "./audit";
 import { tenantEmailContent } from "./signing/signingEmail";
 import { canContactPerson, describeBlockedReason } from "./communicationPolicy";
+import { automationOn } from "./automationSwitch";
 
 const REVIEW_MARKER = "Google review request";
 
@@ -20,6 +21,9 @@ export async function sendReviewRequest(
   occasion: "delivery" | "service",
   refText: string
 ): Promise<boolean> {
+  // The owner's switch (Settings → Automatic jobs & messages), OFF by default.
+  // A Place ID set up to pull reviews used to switch this on silently.
+  if (!(await automationOn("REVIEW_REQUESTS_AUTO"))) return false;
   const placeId = await resolveTenantCredential(currentTenantScope()?.tenantId ?? null, "GOOGLE_PLACE_ID");
   if (!placeId) return false;
   const contact = await prisma.contact.findUnique({ where: { id: contactId } });

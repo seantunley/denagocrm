@@ -17,6 +17,7 @@ export async function signingAutoRemindersOn(): Promise<boolean> {
   // A setting that can't be read means "don't send", not "send".
   return (await getSetting(SIGNING_AUTO_REMINDERS_KEY).catch(() => null)) === "true";
 }
+// (The register — automationRegister.ts — lists this switch with every other one.)
 
 const REMINDER_DELAY_MS = 3 * 24 * 60 * 60 * 1000;
 const MAX_CANDIDATES_PER_RUN = 100;

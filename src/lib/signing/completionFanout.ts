@@ -67,6 +67,9 @@ export type DeliveryResult = {
   failures: string[];
 };
 
+/** What an automatic completion "sent" when the owner has switched signed copies off. */
+export const SIGNED_COPIES_OFF: DeliveryResult = { ok: true, sent: 0, skipped: 0, failures: [] };
+
 /** Anything, as a short string that will not blow the ErrorLog column. */
 export function describeError(err: unknown): string {
   return (err instanceof Error ? err.message : String(err)).slice(0, 300);

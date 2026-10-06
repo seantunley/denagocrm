@@ -8,6 +8,9 @@ import { tenantOrigin } from "@/lib/tenantOrigin";
 import { signingEmailContent } from "./signingEmail";
 import { usableCapability } from "./tokenVault";
 import { signingRecord } from "@/lib/outboundMessageLog";
+import { automationOn } from "@/lib/automationSwitch";
+
+const SIGNING_AUTO_REMINDERS_KEY = "SIGNING_AUTO_REMINDERS";
 
 /**
  * The platform origin, and the LAST resort.
@@ -277,5 +280,9 @@ export async function notifyNextInSequence(requestId: string): Promise<void> {
   // re-nudge of an already-"sent"-but-unopened signer → reminder, so the
   // at-most-once claim doesn't skip it.
   if (next && next.status !== "sent" && next.status !== "viewed") await notifyRecipient(next.id);
-  else if (next && !next.viewedAt) await notifyRecipient(next.id, { reminder: true });
+  // A re-nudge IS a reminder: only while the owner has signing reminders on
+  // (off by default) — it used to go out regardless of that switch.
+  else if (next && !next.viewedAt && (await automationOn(SIGNING_AUTO_REMINDERS_KEY, req.tenantId))) {
+    await notifyRecipient(next.id, { reminder: true });
+  }
 }
