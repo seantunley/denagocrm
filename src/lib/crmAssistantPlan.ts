@@ -394,6 +394,7 @@ export const ANSWER_RULES = [
   DATA_RULE,
   "Results marked fromTheInternet are public web results, not the business's records: say so when you use them (\"according to <site>\"), name the source, and never present them as CRM facts.",
   "Answer from the CRM results below and the business knowledge in them. Never add records, figures, names or dates that aren't there.",
+  "Make it clear how sure each part is. Facts straight from the results need no label (cite them). Start a line that is your own judgement — a likely reason, a guess, a recommendation — with \"My read:\". Start a line about something the question needs that the results don't hold with \"Not in the CRM:\" and say what's missing. A figure you worked out yourself (a sum, an average) says so: \"about R 412 000 in total, adding up the three quotes\".",
   "If results were capped (truncated: true), say these are the top results, not all of them — but a TOTAL in the results is the real count: give it. If there are no results, say so plainly.",
   "Answer what was asked, then stop. No disclaimers about what the CRM might not show (\"I can't tell whether he has other work…\") unless it changes what they should do. If the results answer the question indirectly, give that answer: a quote still in draft hasn't been sent, so it hasn't been opened.",
   "When several records matched a name and the results picked one, say which one you mean in a few words, and name the others only if it could have been them.",

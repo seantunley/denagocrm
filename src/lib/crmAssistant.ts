@@ -33,6 +33,7 @@ import {
 import { ASSISTANT_PROFILE_KEY, parseProfile, selfKnowledge, soulText } from "./assistantSoul";
 import { LEARN_INSTRUCTIONS, memoryPrompt, methodInstructions } from "./assistantMemory";
 import { CITE_RULE, REPLY_FORMAT, STATE_INSTRUCTIONS, citableLinks, resolveCitations, splitReply, type Evidence } from "./assistantReply";
+import { unsupportedFigures, unsupportedNote } from "./assistantVerify";
 import { salesStats } from "./crmAssistantStats";
 import { briefForAssistant, loadDaxBrief } from "./daxBrief";
 import { breakerOpen, withRetry } from "./assistantBreaker";
@@ -1770,7 +1771,14 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
   const reply = splitReply(answerReply.text);
   const citable = new Map<string, string>();
   for (const o of observations) citableLinks(o.output.data, citable);
-  const { cited, plain: answer, evidence } = resolveCitations(reply.answer, citable);
+  const resolved = resolveCitations(reply.answer, citable);
+  const { evidence } = resolved;
+  // The free check (assistantVerify): an amount or quote number the records
+  // don't hold gets a visible line under the answer — everywhere it's shown.
+  const flagged = unsupportedFigures(resolved.plain, [question, conversation, ...observations.map((o) => o.output.data)]);
+  const note = flagged.length ? `\n\n${unsupportedNote(flagged)}` : "";
+  const cited = resolved.cited + note;
+  const answer = resolved.plain + note;
   const proposals = reply.actions;
   // A scheduled run learns nothing: it reads customer text daily with nobody
   // watching, so an injected "remember this" would be written with no one there.
