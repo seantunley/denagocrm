@@ -106,6 +106,8 @@ const fuzzy = (needle: string) => ({ contains: needle, mode: "insensitive" as co
 const dateKey = (d: Date | null | undefined) => (d ? johannesburgDateKey(d) : "never");
 const daysAgo = (d: Date) => Math.floor((Date.now() - d.getTime()) / DAY);
 const clip = (s: string | null | undefined, n: number) => (s ? (s.length > n ? `${s.slice(0, n)}…` : s) : null);
+/** Cancelled activities, in both spellings the data holds. */
+const CANCELLED = ["canceled", "cancelled"];
 /**
  * A quote sent from the signing hub keeps its own status "draft" and no
  * viewedAt — sending, opening and signing are recorded on its SignatureRequest
@@ -368,14 +370,26 @@ async function findActivities(user: User, raw: z.infer<typeof activityArgs>): Pr
     today_and_overdue: { lt: new Date(startOfToday.getTime() + DAY) },
     this_week: { gte: startOfToday, lt: new Date(startOfToday.getTime() + 7 * DAY) },
     upcoming: { gte: new Date() },
+    past: { lt: new Date() },
   }[args.when];
+  // A specific day or period ("22 September", "last month") replaces the window.
+  const dated = args.from || args.to
+    ? {
+        ...(args.from ? { gte: new Date(`${args.from}T00:00:00+02:00`) } : {}),
+        ...(args.to ? { lt: new Date(new Date(`${args.to}T00:00:00+02:00`).getTime() + DAY) } : {}),
+      }
+    : null;
+  // What's still to do is "planned". What HAPPENED is done too — a golf day on
+  // 22 September is marked done afterwards and must still be found. Cancelled is
+  // never shown (both spellings are in the data).
+  const history = args.when === "past" || dated !== null;
   const take = args.limit ?? 15;
   const activities = await prisma.activity.findMany({
     where: {
       ...(ids === null ? {} : { id: { in: ids } }),
-      status: "planned",
+      status: history ? { notIn: CANCELLED } : "planned",
       availabilityBlock: false,
-      dueDate: range,
+      dueDate: dated ?? range,
       ...(args.type ? { type: fuzzy(args.type) } : {}),
       AND: [
         // Theirs, or a meeting they're an attendee of.
@@ -385,10 +399,11 @@ async function findActivities(user: User, raw: z.infer<typeof activityArgs>): Pr
         ...(args.search ? [{ OR: [{ summary: fuzzy(args.search) }, { note: fuzzy(args.search) }] }] : []),
       ],
     },
-    orderBy: { dueDate: args.when === "overdue" ? "desc" : "asc" },
+    // Most recent first when looking back with no dates ("what golf days did we have").
+    orderBy: { dueDate: args.when === "overdue" || (args.when === "past" && !dated) ? "desc" : "asc" },
     take: take + 1,
     select: {
-      id: true, type: true, summary: true, dueDate: true, leadId: true, contactId: true,
+      id: true, type: true, summary: true, dueDate: true, status: true, leadId: true, contactId: true,
       assignedTo: { select: { name: true } },
       lead: { select: { name: true } },
     },
@@ -402,7 +417,8 @@ async function findActivities(user: User, raw: z.infer<typeof activityArgs>): Pr
       type: a.type,
       summary: a.summary,
       due: dateKey(a.dueDate),
-      ...(a.dueDate < startOfToday ? { overdue: true } : {}),
+      ...(history ? { status: a.status } : {}),
+      ...(a.status === "planned" && a.dueDate < startOfToday ? { overdue: true } : {}),
       assignedTo: a.assignedTo.name,
       customer: a.lead?.name ?? null,
       leadId: a.leadId,
@@ -748,7 +764,9 @@ async function schedule(user: User, raw: z.infer<typeof scheduleArgs>): Promise<
   const activities = await prisma.activity.findMany({
     where: {
       ...(ids === null ? {} : { id: { in: ids } }),
-      status: "planned",
+      // Not just "planned": a day in the past shows what happened (done), and a
+      // meeting already marked done still took the time. Never cancelled.
+      status: { notIn: CANCELLED },
       dueDate: { lt: end },
       AND: [
         { OR: [{ endDate: { gte: start } }, { endDate: null, dueDate: { gte: start } }] },
@@ -758,7 +776,7 @@ async function schedule(user: User, raw: z.infer<typeof scheduleArgs>): Promise<
     orderBy: { dueDate: "asc" },
     take: 80,
     select: {
-      type: true, summary: true, dueDate: true, endDate: true, allDay: true, availabilityBlock: true,
+      type: true, summary: true, status: true, dueDate: true, endDate: true, allDay: true, availabilityBlock: true,
       assignedTo: { select: { name: true } },
       attendees: { select: { user: { select: { name: true } } } },
     },
@@ -795,6 +813,7 @@ async function schedule(user: User, raw: z.infer<typeof scheduleArgs>): Promise<
         until: a.endDate ? when(a.endDate) : null,
         allDay: a.allDay,
         what: a.availabilityBlock ? "busy (blocked out)" : `${a.type}: ${a.summary}`,
+        ...(a.availabilityBlock ? {} : { status: a.status }),
         people: [a.assignedTo.name, ...a.attendees.map((x) => x.user.name)],
       })),
       testDrives: testDrives.map((t) => ({

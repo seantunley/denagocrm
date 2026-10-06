@@ -94,11 +94,14 @@ export const documentArgs = z.object({ customer: z.string().trim().min(1).max(12
 
 export const activityArgs = z
   .object({
-    when: z.enum(["overdue", "today", "today_and_overdue", "this_week", "upcoming"]),
+    when: z.enum(["overdue", "today", "today_and_overdue", "this_week", "upcoming", "past"]),
     type: name.optional(),
     assignedTo: name.optional(),
     /** Words in the activity's summary or note ("golf day", "service"). */
     search: name.optional(),
+    /** A specific day or period (South Africa), past or future; replaces `when`'s window. */
+    from: isoDay.optional(),
+    to: isoDay.optional(),
     limit: limit.optional(),
   })
   .strict();
@@ -163,7 +166,7 @@ export function planInstructions(ctx: PlanContext): string {
     '- vehicles: {"kind":"demo|stock|customer" (required),"search":"<model, reg, stock no. or customer>","status":"<status>","limit":<1-25>} — demo vehicles and their upcoming bookings, stock units (available/reserved/sold), or a customer\'s own vehicles.',
     '- deliveries: {"stage":"to_invoice|awaiting_deposit|to_schedule|scheduled|overdue|delivered_recently","limit":<1-25>} — signed deals on their way to the customer: invoicing, deposit, delivery date. With NO stage it returns every stage at once, each deal labelled — use that for "what\'s waiting / in progress"; ask for one stage only when that is all the question wants.',
     '- documents: {"customer":"<customer name, lead title or id>" (required)} — what is on file for one customer (titles, tags, dates — not contents).',
-    '- find_activities: {"when":"overdue|today|today_and_overdue|this_week|upcoming" (required),"type":"<type>","assignedTo":"<person — theirs, or a meeting they attend>","search":"<words in the activity>","limit":<1-25>} — the calendar\'s open activities: calls, meetings, to-dos, test drives, events. "What does X have to do today / what\'s on their plate" → today_and_overdue (what\'s late still has to be done). "When is the next golf day / launch / service" → upcoming with search — events live here, not in knowledge.',
+    '- find_activities: {"when":"overdue|today|today_and_overdue|this_week|upcoming|past" (required),"from":"YYYY-MM-DD","to":"YYYY-MM-DD","type":"<type>","assignedTo":"<person — theirs, or a meeting they attend>","search":"<words in the activity>","limit":<1-25>} — the calendar: calls, meetings, to-dos, test drives, events. "What does X have to do today / what\'s on their plate" → today_and_overdue (what\'s late still has to be done). "When is the next golf day / launch / service" → upcoming with search — events live here, not in knowledge. What HAPPENED ("what golf days did we have last month", "what was on 22 September") → "past" with from/to (one day: from = to) — past results include what was done, each marked planned or done.',
     '- lead_brief: {"lead":"<customer name, lead title or id>" (required)} — one lead in depth: details, recent messages both ways, quotes (viewed? signed?), activities, research. Use it for "what should I do with X", "where are we with X", or to look closer at a lead found earlier.',
     '- knowledge: {"topic":"<what to look up>" (required)} — the business\'s own knowledge: products and prices, approved answers (finance, warranty, policies…), company details, competitor intelligence.',
     '- recall: {"query":"<words>" (required)} — this person\'s own earlier conversations with you (last 30 days).',
