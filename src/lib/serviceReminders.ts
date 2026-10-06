@@ -43,11 +43,19 @@ function dueKeyOf(due: ReturnType<typeof computeDue>): string {
   return `${due.nextDueDate?.toISOString().slice(0, 10) ?? "nodate"}-${due.nextDueKm ?? "nokm"}`;
 }
 
-const DUE_VEHICLE_INCLUDE = {
+/**
+ * What "is it due?" reads about a vehicle — ONE definition for the due scan and
+ * the sender, both naming the workspace on the nested reads. The tenant guard
+ * scopes only the top level, and service records and mileage logs carry their
+ * own tenantId but reach a vehicle by vehicleId alone: an unscoped nested read
+ * would let a mis-stamped row from another workspace become the "latest"
+ * service or mileage and change the reminder sent (#787 review).
+ */
+const dueVehicleInclude = (tenantId: string) => ({
   contact: true,
-  serviceRecords: { orderBy: { serviceDate: "desc" as const }, take: 1 },
-  mileageLogs: { orderBy: { recordedAt: "desc" as const }, take: 1 },
-};
+  serviceRecords: { where: { tenantId }, orderBy: { serviceDate: "desc" as const }, take: 1 },
+  mileageLogs: { where: { tenantId }, orderBy: { recordedAt: "desc" as const }, take: 1 },
+});
 
 /**
  * Vehicles due soon or overdue whose customer has an email address and hasn't
@@ -59,12 +67,7 @@ export async function vehiclesDueForService(
 ): Promise<Array<{ vehicleId: string; contactId: string; dueKey: string; model: string }>> {
   const vehicles = await prisma.vehicle.findMany({
     where: { tenantId, deletedAt: null },
-    include: {
-      contact: true,
-      // Nested reads carry the tenant too: the guard only scopes the top level.
-      serviceRecords: { where: { tenantId }, orderBy: { serviceDate: "desc" }, take: 1 },
-      mileageLogs: { where: { tenantId }, orderBy: { recordedAt: "desc" }, take: 1 },
-    },
+    include: dueVehicleInclude(tenantId),
   });
   const due = vehicles.flatMap((vehicle) => {
     if (!vehicle.contact.email || vehicle.contact.deletedAt || vehicle.contact.tenantId !== tenantId) return [];
@@ -94,7 +97,7 @@ export async function vehiclesDueForService(
 export async function sendServiceDueReminder(vehicleId: string, tenantId: string): Promise<ModuleSendOutcome> {
   const vehicle = await prisma.vehicle.findFirst({
     where: { id: vehicleId, tenantId, deletedAt: null },
-    include: DUE_VEHICLE_INCLUDE,
+    include: dueVehicleInclude(tenantId),
   });
   if (!vehicle || vehicle.contact.tenantId !== tenantId) return { kind: "skipped", reason: "the vehicle is no longer on file" };
   if (!vehicle.contact.email) return { kind: "skipped", reason: "the customer has no email address" };
@@ -195,14 +198,12 @@ export async function sendServiceDueReminder(vehicleId: string, tenantId: string
 export async function remindVehicleService(
   vehicleId: string
 ): Promise<{ ok: boolean; channel?: "email" | "sms"; error?: string }> {
-  const vehicle = await prisma.vehicle.findUnique({
-    where: { id: vehicleId },
-    include: {
-      contact: true,
-      serviceRecords: { orderBy: { serviceDate: "desc" }, take: 1 },
-      mileageLogs: { orderBy: { recordedAt: "desc" }, take: 1 },
-    },
-  });
+  // The vehicle's own workspace first, then its history read in THAT workspace
+  // only (dueVehicleInclude) — the same reads the automatic reminder uses.
+  const owner = await prisma.vehicle.findUnique({ where: { id: vehicleId }, select: { tenantId: true } });
+  const vehicle = owner?.tenantId
+    ? await prisma.vehicle.findFirst({ where: { id: vehicleId, tenantId: owner.tenantId }, include: dueVehicleInclude(owner.tenantId) })
+    : null;
   if (!vehicle) return { ok: false, error: "Vehicle not found" };
   const { contact } = vehicle;
   if (!contact.email && !contact.phone) return { ok: false, error: "No email or phone on file" };

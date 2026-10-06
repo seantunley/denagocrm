@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { beforeEach, test } from "node:test";
 import Module, { createRequire } from "node:module";
+import { readFileSync } from "node:fs";
 
 /*
  * The review-request and service-due senders, now reached only from a journey
@@ -21,9 +22,13 @@ const state = {
   logs: [] as Array<Record<string, unknown>>,
   queries: [] as Array<{ model: string; where: Record<string, unknown> }>,
   settingsRead: [] as string[],
+  // Newest first, as the sender's orderBy asks.
+  serviceRecords: [] as Array<{ tenantId: string; serviceDate: Date; km: number | null; nextDueKm: number | null; nextDueDate: Date | null }>,
+  mileageLogs: [] as Array<{ tenantId: string; recordedAt: Date; km: number }>,
 };
 
 const due = new Date(Date.now() + 5 * 24 * 60 * 60 * 1000); // due soon
+const OWN_SERVICE = { tenantId: "tenant_a", serviceDate: new Date("2026-01-01"), km: null, nextDueKm: null, nextDueDate: due };
 const contact = { id: "c1", tenantId: "tenant_a", firstName: "Lisa", lastName: "Moulder", email: "lisa@example.com", phone: null, deletedAt: null };
 const prisma = {
   contact: { findFirst: async ({ where }: { where: Record<string, unknown> }) => { state.queries.push({ model: "contact", where }); return contact; } },
@@ -32,13 +37,19 @@ const prisma = {
     create: async ({ data }: { data: Record<string, unknown> }) => { state.timeline.push(data); return data; },
   },
   vehicle: {
-    findFirst: async ({ where }: { where: Record<string, unknown> }) => {
+    // The nested reads behave as the database does with tenant enforcement OFF:
+    // a nested `where` is applied, and without one every workspace's rows come back.
+    findFirst: async ({ where, include }: { where: Record<string, unknown>; include?: Record<string, { where?: { tenantId?: string } }> }) => {
       state.queries.push({ model: "vehicle", where });
+      const scoped = <T extends { tenantId: string }>(rows: T[], key: string) => {
+        const tenant = include?.[key]?.where?.tenantId;
+        return tenant ? rows.filter((r) => r.tenantId === tenant) : rows;
+      };
       return {
         id: "v1", contactId: "c1", model: "Rover XXL", color: null, contact,
         serviceIntervalKm: null, serviceIntervalMonths: null, purchaseDate: null,
-        serviceRecords: [{ serviceDate: new Date("2026-01-01"), km: null, nextDueKm: null, nextDueDate: due }],
-        mileageLogs: [],
+        serviceRecords: scoped(state.serviceRecords, "serviceRecords").slice(0, 1),
+        mileageLogs: scoped(state.mileageLogs, "mileageLogs").slice(0, 1),
       };
     },
   },
@@ -100,6 +111,8 @@ beforeEach(() => {
   state.logs = [];
   state.queries = [];
   state.settingsRead = [];
+  state.serviceRecords = [OWN_SERVICE];
+  state.mileageLogs = [];
 });
 
 test("review request: sent in the editable template, on the timeline, every lookup in the run's workspace", async () => {
@@ -133,6 +146,28 @@ test("service reminder: once per due-cycle — logged, on the timeline, then ski
   assert.equal((await sendServiceDueReminder("v1", "tenant_a")).kind, "skipped", "already reminded for this service");
   assert.equal(state.sent.length, 1);
   assert.ok(!state.settingsRead.includes("SERVICE_REMINDER_ENABLED"), "no switch: the journey being on is the approval");
+});
+
+test("service reminder: another workspace's newer service or mileage row can't change what is sent (#787 review)", async () => {
+  // Tenant enforcement off, and a mis-stamped row from tenant_b on this vehicle
+  // that is NEWER than ours — read unscoped, it would be "the latest service"
+  // and say the next one isn't due for a year, so the reminder would be skipped.
+  state.serviceRecords = [
+    { tenantId: "tenant_b", serviceDate: new Date(), km: null, nextDueKm: null, nextDueDate: new Date(Date.now() + 365 * 24 * 60 * 60 * 1000) },
+    OWN_SERVICE,
+  ];
+  state.mileageLogs = [{ tenantId: "tenant_b", recordedAt: new Date(), km: 999_999 }];
+  assert.deepEqual(await sendServiceDueReminder("v1", "tenant_a"), { kind: "sent" }, "decided on tenant_a's own history only");
+  assert.equal(state.sent.length, 1);
+});
+
+test("service reminder: the due scan and the sender read the vehicle's history the same, tenant-scoped way", () => {
+  const src = readFileSync(new URL("../src/lib/serviceReminders.ts", import.meta.url), "utf8").replace(/\r\n/g, "\n");
+  assert.match(src, /const dueVehicleInclude = \(tenantId: string\) => \(\{\s*contact: true,\s*serviceRecords: \{ where: \{ tenantId \}, orderBy: \{ serviceDate: "desc" as const \}, take: 1 \},\s*mileageLogs: \{ where: \{ tenantId \}, orderBy: \{ recordedAt: "desc" as const \}, take: 1 \},/);
+  assert.equal((src.match(/include: dueVehicleInclude\(tenantId\)/g) ?? []).length, 2, "the scan and the sender");
+  // …and the Service Due page's manual Remind button, in the vehicle's own workspace.
+  assert.match(src, /include: dueVehicleInclude\(owner\.tenantId\)/);
+  assert.doesNotMatch(src, /serviceRecords: \{ orderBy|mileageLogs: \{ orderBy/, "no unscoped nested read left");
 });
 
 test("service reminder: a customer who switched reminders off gets nothing, recorded once against the cycle", async () => {
