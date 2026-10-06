@@ -14,6 +14,8 @@ import {
   normaliseSoul,
   parseProfile,
 } from "@/lib/assistantSoul";
+import { ASSISTANT_VOICE_REPLIES_KEY, voiceRepliesSwitchOn } from "@/lib/assistantVoiceRules";
+import { saveAssistantWhatsApp } from "@/app/actions/assistantWhatsApp";
 
 /**
  * The workspace's assistant: its name, tone, workspace instructions and soul.
@@ -44,6 +46,33 @@ export async function saveAssistantProfile(formData: FormData) {
       revalidatePath("/settings/assistant");
       revalidatePath("/assistant");
       return { success: "Saved" };
+    }),
+  );
+}
+
+/**
+ * The "on WhatsApp" card's Save: the WhatsApp switch (saved by its own action,
+ * unchanged) and, in the same form, voice replies. Voice replies default OFF —
+ * every spoken answer costs ElevenLabs credit — and are audited only when they
+ * actually change, so re-saving the card doesn't fill the trail.
+ */
+export async function saveAssistantWhatsAppCard(formData: FormData) {
+  const whatsapp = await saveAssistantWhatsApp(formData);
+  if (whatsapp.error) return whatsapp;
+  return asActionResult(() =>
+    withActingStaffScope(async () => {
+      const user = await requireTenantOwner();
+      const on = formData.get("voiceReplies") === "on";
+      if (on !== voiceRepliesSwitchOn(await getSetting(ASSISTANT_VOICE_REPLIES_KEY))) {
+        await putSetting(ASSISTANT_VOICE_REPLIES_KEY, on ? "on" : "off");
+        await logAudit({
+          action: on ? "assistant.voice_replies_enabled" : "assistant.voice_replies_disabled",
+          summary: on ? "Let the assistant reply with voice notes and read answers aloud (uses ElevenLabs credit)" : "Turned off the assistant's voice replies",
+          user,
+        });
+        revalidatePath("/settings/assistant");
+      }
+      return { success: `${whatsapp.success ?? "Saved"}${on ? " · voice replies on" : ""}` };
     }),
   );
 }

@@ -34,7 +34,9 @@ async function hear(formData: FormData): Promise<Heard> {
   return {
     ok: false,
     error: (await isElevenLabsConfigured())
-      ? "Couldn't make out the recording — try again somewhere quieter."
+      // Usually a silent recording, not a noisy one: the browser picked a muted
+      // or different microphone (seen 2026-10-07 — the pipeline itself worked).
+      ? "Couldn't hear any words — check the right microphone is picked and not muted (the mic icon in the address bar), then try again."
       : "Voice isn't set up — add the ElevenLabs key in Settings → Integrations.",
   };
 }

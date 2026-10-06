@@ -68,6 +68,17 @@ export async function assistantWebAllowed(userId: string): Promise<boolean> {
 }
 
 /**
+ * Answers read ALOUD (a WhatsApp voice note back, the CRM's Listen button):
+ * ElevenLabs bills per character, so a person gets this many an hour on top of
+ * their asks. Over it they still get every answer — as text.
+ */
+const VOICE_REPLY_POLICY: RateLimitPolicy = { limit: 30, windowMs: 60 * 60 * 1000, blockMs: 30 * 60 * 1000 };
+export async function assistantVoiceReplyAllowed(userId: string): Promise<boolean> {
+  return allowedUnder(rateLimitKey("assistant-voice-reply", userId), "assistant-voice-reply", userId, VOICE_REPLY_POLICY);
+}
+export const VOICE_REPLY_LIMIT_MESSAGE = "You've listened to a lot of answers in the last hour — they're all still here to read.";
+
+/**
  * The assistant acting for a person with NO browser session — a scheduled
  * request firing, a question sent from their phone. The caller has already
  * entered the workspace's tenant scope (the cron's per-tenant loop, the

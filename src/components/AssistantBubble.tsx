@@ -8,7 +8,7 @@ import { DaxIcon } from "@/components/DaxIcon";
 import { openAssistantBubble } from "@/app/actions/assistant";
 import AssistantChat from "@/components/AssistantChat";
 
-type Opened = { name: string; connected: boolean; history: { question: string; answer: string; source: string }[] };
+type Opened = { name: string; connected: boolean; listen: boolean; history: { question: string; answer: string; source: string }[] };
 
 /**
  * The floating "Ask DAX" bubble, on every page in the app.
@@ -110,6 +110,7 @@ export default function AssistantBubble({ unseen = 0 }: { unseen?: number }) {
                 history={data.history}
                 page={pathname ?? undefined}
                 autoAsk={autoAsk ?? undefined}
+                listen={data.listen}
                 compact
               />
             )}

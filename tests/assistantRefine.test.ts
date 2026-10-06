@@ -33,7 +33,9 @@ test('"then":"answer" goes straight to the answer — no round spent saying done
 
 test("prose instead of a choice gets ONE firm retry on the first step, and is never a dead end", () => {
   const lib = code("src/lib/crmAssistant.ts");
-  assert.match(lib, /!parseSteps\(reply\.text\) && step === 0\) \{[\s\S]*?reply = await codexRespond\(\{ instructions, prompt: planPrompt\(step, true\)/);
+  assert.match(lib, /!parseSteps\(reply\.text\) && step === 0\) \{[\s\S]*?reply = await plan\(step, true\);/);
+  // …through the one plan call, which builds the firm prompt when asked to insist.
+  assert.match(lib, /const plan = \(step: number, insist: boolean\) =>\s*withRetry\(breakerKey, \(\) =>\s*codexRespond\(\{ instructions, prompt: planPrompt\(step, insist\)/);
   assert.match(lib, /export const PLAN_INSIST =\s*'Your last reply was prose\. Reply with ONE JSON object only/);
   assert.doesNotMatch(lib, /I couldn't work out what to look up/, "no more failing the question");
 });
@@ -50,7 +52,7 @@ test("the research step is told it never writes the answer, that tasks need the 
 test("quick-reply buttons must tell the options apart; the answer step runs at low effort", () => {
   assert.match(code("src/lib/assistantActions.ts"), /never \\"The first one\\"/);
   const lib = code("src/lib/crmAssistant.ts");
-  const answer = lib.slice(lib.indexOf("const answerReply = await codexRespond("));
-  assert.match(answer.slice(0, 1500), /reasoningEffort: "low",/);
+  const answer = lib.slice(lib.indexOf("const answerReply = await withRetry(breakerKey, () => codexRespond("));
+  assert.match(answer.slice(0, 2500), /reasoningEffort: "low",/);
 });
 

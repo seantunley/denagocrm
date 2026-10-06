@@ -46,9 +46,18 @@ test("the route accepts only same-origin requests", () => {
 
 test("the streaming route: same-origin, signed in, permitted — then the shared ask path", () => {
   const route = code("src/app/api/assistant/ask/route.ts");
-  const post = route.slice(route.indexOf("export async function POST"));
-  const order = ["isSameOrigin(req.headers)", "requireApiUser()", "hasAnyPermission(user, ...ASSISTANT_PERMISSIONS)", "askAsPerson("];
+  const asker = route.slice(route.indexOf("async function signedInAsker"), route.indexOf("function ndjson"));
+  assert.ok(asker.indexOf("requireApiUser()") >= 0 && asker.indexOf("requireApiUser()") < asker.indexOf("hasAnyPermission(user, ...ASSISTANT_PERMISSIONS)"));
+  const post = route.slice(route.indexOf("export async function POST"), route.indexOf("export async function GET"));
+  const order = ["isSameOrigin(req.headers)", "signedInAsker()", "claimRun(user.id, key)", "askAsPerson("];
   for (let i = 1; i < order.length; i++) assert.ok(post.indexOf(order[i - 1]) >= 0 && post.indexOf(order[i - 1]) < post.indexOf(order[i]), `${order[i - 1]} before ${order[i]}`);
+  // A key that already ran is only READ — never asked again.
+  assert.match(post, /if \(key && claimed && !claimed\.created\) return ndjson\(\(send\) => follow\(user\.id, key, send\)\);/);
+  // The reconnect path checks the same things and can only read.
+  const get = route.slice(route.indexOf("export async function GET"));
+  assert.ok(get.indexOf("isSameOrigin(req.headers)") < get.indexOf("signedInAsker()"));
+  assert.doesNotMatch(get, /askAsPerson|claimRun/);
+  assert.match(get, /follow\(userId, key, send\)/);
   assert.match(route, /export const maxDuration = 300;/);
   assert.match(route, /"Cache-Control": "no-store"/);
   // The route is the only way in: no second ask path to fall back to.
@@ -83,8 +92,10 @@ const streamOf = (chunks: string[], end: "close" | "break") =>
     { status: 200 },
   );
 
-test("a connection lost while it is still researching (before the first word) is reported, never re-asked", async () => {
-  const { askStreaming, STREAM_DROPPED } = await import("../src/components/askStream");
+test("a connection lost at any point is never re-asked: it reconnects to the same run and reads it", async () => {
+  const { askStreaming, STREAM_DROPPED, RECONNECT_DELAYS_MS } = await import("../src/components/askStream");
+  const noPause = { pause: async () => {}, key: "run_test_key_1" };
+  const done = '{"t":"done","r":{"ok":true,"answer":"Gavin needs a delivery check.","rows":[]}}\n';
   for (const make of [
     () => streamOf([], "break"), // dropped during research: nothing sent yet
     () => streamOf([], "close"), // cut off cleanly with no "done"
@@ -92,14 +103,27 @@ test("a connection lost while it is still researching (before the first word) is
     () => { throw new TypeError("Failed to fetch"); }, // the request may still have arrived
     () => new Response("Bad gateway", { status: 502 }), // a gateway cut off a request that may have run
   ]) {
-    const net = fakeFetch(make);
+    // The first call (the POST) fails; the reconnect reads the finished run.
+    let n = 0;
+    const net = fakeFetch(() => (n++ === 0 ? make() : streamOf([done], "close")));
     try {
-      const result = await askStreaming(new FormData(), () => {});
-      assert.deepEqual(result, { ok: false, error: STREAM_DROPPED });
-      assert.equal(net.calls.length, 1, "asked exactly once");
+      const form = new FormData();
+      const result = await askStreaming(form, () => {}, () => {}, noPause);
+      assert.deepEqual(result, { ok: true, answer: "Gavin needs a delivery check.", rows: [] });
+      assert.deepEqual(net.calls, ["/api/assistant/ask", "/api/assistant/ask?run=run_test_key_1"], "POSTed once; the retry only reads the run");
+      assert.equal(form.get("runKey"), "run_test_key_1", "the run is named before it is sent");
     } finally {
       net.restore();
     }
+  }
+  // Every reconnect failing too: told plainly, and still asked only once.
+  const net = fakeFetch(() => streamOf([], "break"));
+  try {
+    assert.deepEqual(await askStreaming(new FormData(), () => {}, () => {}, noPause), { ok: false, error: STREAM_DROPPED });
+    assert.equal(net.calls.filter((c) => c === "/api/assistant/ask").length, 1, "one POST");
+    assert.equal(net.calls.length, 1 + RECONNECT_DELAYS_MS.length);
+  } finally {
+    net.restore();
   }
   // The chat has no second way to ask.
   const chat = code("src/components/AssistantChat.tsx");
@@ -144,7 +168,7 @@ test("each person's calls share a cache key — hashed, so no id is sent — and
   assert.match(codex, /const sessionId = identity\?\.sessionId \?\? crypto\.randomUUID\(\);/);
   const lib = code("src/lib/crmAssistant.ts");
   assert.match(lib, /const cacheKey = `dax:\$\{ownedWriteTenantId\(\)\}:\$\{user\.id\}`;/);
-  assert.equal((lib.match(/cacheKey(,| \})/g) ?? []).length >= 3, true, "both plan calls and the answer use it");
+  assert.equal((lib.match(/cacheKey(,| \})/g) ?? []).length >= 2, true, "the plan call (every try) and the answer use it");
 });
 
 test("what varies comes LAST in the research instructions, so the cached prefix holds", () => {
@@ -160,7 +184,7 @@ test("what varies comes LAST in the research instructions, so the cached prefix 
 
 test("the answer step: the per-question part last; today's date in the prompt, not the cached instructions", () => {
   const lib = code("src/lib/crmAssistant.ts");
-  const answer = lib.slice(lib.indexOf("const answerReply = await codexRespond("));
+  const answer = lib.slice(lib.indexOf("const answerReply = await withRetry("));
   assert.match(answer, /images\.length \? IMAGE_RULE : "",\s*methodInstructions\(observations\),\s*\]/);
   assert.match(answer, /prompt: \[\s*`Now: \$\{nowInSouthAfrica\(\)\}\.`,/);
   // eslint-disable-next-line @typescript-eslint/no-require-imports

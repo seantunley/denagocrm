@@ -1,4 +1,5 @@
 import { z } from "zod";
+import type { ConversationState } from "./assistantReply";
 
 /**
  * The CRM assistant's PLAN step — pure, so it can be tested without ChatGPT.
@@ -115,8 +116,18 @@ export const statsArgs = z
 export const leadBriefArgs = z.object({ lead: z.string().trim().min(1).max(120) }).strict();
 /** What the business knows: products, prices, approved answers, competitors. */
 export const knowledgeArgs = z.object({ topic: z.string().trim().min(1).max(200) }).strict();
-/** The asker's own earlier conversations (30 days). */
-export const recallArgs = z.object({ query: z.string().trim().min(1).max(200) }).strict();
+/**
+ * The asker's own earlier conversations (30 days). `alternatives` are the other
+ * words the same thing may have been said in ("fleet" / "corporate order"), and
+ * `lead` finds the turns that looked at that customer whatever they were called.
+ */
+export const recallArgs = z
+  .object({
+    query: z.string().trim().min(1).max(200),
+    alternatives: z.array(z.string().trim().min(1).max(80)).max(6).optional(),
+    lead: z.string().trim().min(1).max(120).optional(),
+  })
+  .strict();
 /** One learned playbook in full (the index of names is always in the prompt). */
 export const playbookArgs = z.object({ name: z.string().trim().min(1).max(48) }).strict();
 
@@ -178,7 +189,7 @@ export function planInstructions(ctx: PlanContext): string {
     '- find_activities: {"when":"overdue|today|today_and_overdue|this_week|upcoming" (required),"type":"<type>","assignedTo":"<person — theirs, or a meeting they attend>","search":"<words in the activity>","limit":<1-25>} — the calendar\'s open activities: calls, meetings, to-dos, test drives, events. "What does X have to do today / what\'s on their plate" → today_and_overdue (what\'s late still has to be done). "When is the next golf day / launch / service" → upcoming with search — events live here, not in knowledge.',
     '- lead_brief: {"lead":"<customer name, lead title or id>" (required)} — one lead in depth: details, recent messages both ways, quotes (viewed? signed?), activities, research. Use it for "what should I do with X", "where are we with X", or to look closer at a lead found earlier.',
     '- knowledge: {"topic":"<what to look up>" (required)} — the business\'s own knowledge: products and prices, approved answers (finance, warranty, policies…), company details, competitor intelligence.',
-    '- recall: {"query":"<words>" (required)} — this person\'s own earlier conversations with you (last 30 days).',
+    '- recall: {"query":"<words>" (required),"alternatives":["<other wordings>"],"lead":"<customer name, lead title or id>"} — this person\'s own earlier conversations with you (last 30 days). In alternatives, give up to 6 other wordings someone might have used for the same thing ("fleet" → "corporate order", "bulk"). When the question is about a customer, name them in lead.',
     '- playbook: {"name":"<playbook name>" (required)} — one of your learned playbooks in full, when the question uses its term or procedure ("hot leads" → the hot-lead playbook) — load it BEFORE searching so you search the right way. When your playbooks are already written out in full below, never load one: follow it and search straight away.',
     ctx.web
       ? '- web: {"tool":"web"} (no args) — search the INTERNET for public facts the CRM can\'t know: interest or prime rates, a product\'s published specs, a competitor\'s public prices, news, regulations. It sees only the person\'s question, so it can never look up a customer. Use it only when the question needs the outside world.'
@@ -320,14 +331,37 @@ export function isSmallTalk(question: string): boolean {
   return /^(hi|hello|hey|hiya|howzit|morning|good (morning|afternoon|evening)|thanks|thank you|thanks a lot|cheers|ok|okay|cool|great|nice|perfect|got it|who are you|what are you|what can you do|how are you)( dax)?$/.test(q);
 }
 
-/** A turn of earlier conversation, for follow-ups ("and which of those are Donovan's?"). */
-export type PriorTurn = { question: string; answer: string };
+/**
+ * A turn of earlier conversation, for follow-ups ("and which of those are
+ * Donovan's?"). `state` is the working memory the answer wrote (assistantReply).
+ */
+export type PriorTurn = { question: string; answer: string; state?: ConversationState | null };
 
-/** Earlier turns, newest last, trimmed so they inform without drowning the prompt. */
+/**
+ * Earlier turns, newest last, trimmed so they inform without drowning the prompt.
+ * With working memory, the latest state says where things stand — customer,
+ * topic, what was decided, what is still open — and only the last few
+ * exchanges follow, shorter: the state carries the rest. Turns written before
+ * there was a state get the full six exchanges, as before.
+ */
 export function conversationBlock(turns: PriorTurn[]): string {
   if (!turns.length) return "";
-  const lines = turns.map((t) => `Q: ${t.question.slice(0, 300)}\nA: ${t.answer.slice(0, 600)}`);
-  return `Earlier in this conversation:\n${lines.join("\n\n")}`;
+  const state = turns.findLast((t) => t.state)?.state;
+  if (!state) {
+    const lines = turns.map((t) => `Q: ${t.question.slice(0, 300)}\nA: ${t.answer.slice(0, 600)}`);
+    return `Earlier in this conversation:\n${lines.join("\n\n")}`;
+  }
+  const where = [
+    state.customer ? `Customer: ${state.customer}` : "",
+    state.topic ? `Topic: ${state.topic}` : "",
+    state.decided?.length ? `Decided:\n${state.decided.map((d) => `- ${d}`).join("\n")}` : "",
+    state.open?.length ? `Still open:\n${state.open.map((o) => `- ${o}`).join("\n")}` : "",
+  ].filter(Boolean);
+  const lines = turns.slice(-3).map((t) => `Q: ${t.question.slice(0, 200)}\nA: ${t.answer.slice(0, 400)}`);
+  return [
+    where.length ? `Where this conversation is:\n${where.join("\n")}` : "",
+    `Last exchanges:\n${lines.join("\n\n")}`,
+  ].filter(Boolean).join("\n\n");
 }
 
 /**

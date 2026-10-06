@@ -973,8 +973,39 @@ model AssistantTurn {
   feedback       String?
   feedbackReason String?
   feedbackAt     DateTime?
+  /// Working memory the answer wrote: customer, topic, tags, decided, open (assistantReply.parseState).
+  state      Json?
+  /// Records this answer's lookups returned ("lead:<id>", "quote:<id>", "contact:<id>"), so recall finds them by record.
+  refs       String[]  @default([])
+  /// state.tags, as a column: cheap overlap matching in recall.
+  tags       String[]  @default([])
   createdAt  DateTime  @default(now())
 
+  @@index([tenantId, userId, createdAt])
+  @@index([createdAt])
+}
+
+/// One question asked in chat, from the moment it arrives until it is answered
+/// (assistantRun.ts). The browser names it (clientKey) so a dropped connection
+/// re-reads THIS run instead of asking again; it runs exactly once. Holds the
+/// answer so far while it is written and the finished result, plus how long
+/// each phase took (no question text in the timings). Swept after 7 days.
+model AssistantRun {
+  id         String    @id @default(cuid())
+  tenantId   String
+  userId     String
+  clientKey  String
+  /// accepted | planning | researching | answering | completed | failed
+  status     String    @default("accepted")
+  statusText String?
+  partial    String?
+  result     Json?
+  timings    Json?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+  finishedAt DateTime?
+
+  @@unique([userId, clientKey])
   @@index([tenantId, userId, createdAt])
   @@index([createdAt])
 }
@@ -1071,6 +1102,16 @@ model AssistantNote {
   reviewedAt   DateTime?
   createdAt    DateTime  @default(now())
   updatedAt    DateTime  @updatedAt
+  /// How it was written: learned (a conversation) | owner (taught in Settings) | tidy (the nightly tidy-up) | person (their own "about me").
+  source          String    @default("learned")
+  /// When the owner (or the person, for "about me") last approved or edited it.
+  lastConfirmedAt DateTime?
+  /// Its last day; after that it stays here, marked expired, but out of every prompt.
+  validUntil      DateTime? @db.Date
+  /// When it last went into an answer's prompt.
+  lastUsedAt      DateTime?
+  /// status "conflict": the approved entry this contradicts. Plain id, no FK — if that entry goes, the hold just loses its pair.
+  conflictsWithId String?
 
   @@index([tenantId, kind])
   @@index([tenantId, userId])

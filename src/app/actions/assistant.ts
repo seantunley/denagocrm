@@ -7,7 +7,7 @@ import { assistantTurnsToday } from "@/lib/crmAssistant";
 import { getSetting } from "@/lib/settings";
 import { isCodexConnected } from "@/lib/codex";
 import { ASSISTANT_PROFILE_KEY, parseProfile } from "@/lib/assistantSoul";
-import type { ActionCard } from "@/lib/assistantActions";
+import { STALE_CARD, type ActionCard } from "@/lib/assistantActions";
 import { prisma } from "@/lib/db";
 import { cancelActivity, rescheduleActivity, scheduleActivity, scheduleFollowUp } from "@/app/actions/activities";
 import { addCommunication } from "@/app/actions/communications";
@@ -18,6 +18,7 @@ import { sendWhatsAppMessage } from "@/app/actions/whatsapp";
 import { sendEmailAction } from "@/app/actions/emails";
 import { canAccessLead } from "@/lib/permissions";
 import { createWatchForUser } from "@/lib/assistantWatch";
+import { assistantVoiceRepliesOn } from "@/lib/assistantVoice";
 import { ASSISTANT_PERMISSIONS } from "@/lib/assistantUser";
 import { MAX_ACTIVE_SCHEDULES, describeSchedule, nextRun, scheduleInput } from "@/lib/assistantSchedule";
 import { markScheduledTurnsSeen, withScheduleSlot } from "@/lib/assistantScheduleRun";
@@ -107,12 +108,14 @@ export async function runAssistantAction(card: ActionCard): Promise<{ ok: boolea
         return { ok: true, success: "Note added" };
       }
       case "assign": {
+        if (!(await stillAsProposed(card))) return { ok: false, error: STALE_CARD };
         const result = await assignLead(card.leadId, card.userId);
         if (!result.ok) return { ok: false, error: result.error };
         await confirmed(`give the lead to ${result.assignee.name}`, card.leadId);
         return { ok: true, success: `Given to ${result.assignee.name}` };
       }
       case "stage": {
+        if (!(await stillAsProposed(card))) return { ok: false, error: STALE_CARD };
         const result = await moveLead(card.leadId, card.stageId);
         if (!result.ok) return { ok: false, error: result.error ?? "That move isn't allowed yet." };
         await confirmed("move the lead to another stage", card.leadId);
@@ -148,18 +151,21 @@ export async function runAssistantAction(card: ActionCard): Promise<{ ok: boolea
         return { ok: true, success: result.success ?? "Test drive booked" };
       }
       case "reschedule": {
+        if (!(await stillAsProposed(card))) return { ok: false, error: STALE_CARD };
         const result = await rescheduleActivity(card.activityId, card.when);
         if (!result.ok) return { ok: false, error: result.error ?? "Couldn't move it." };
         if (card.leadId) await confirmed("reschedule an activity", card.leadId);
         return { ok: true, success: "Moved" };
       }
       case "cancel_activity": {
+        if (!(await stillAsProposed(card))) return { ok: false, error: STALE_CARD };
         const result = await cancelActivity(card.activityId, "/assistant");
         if (result.error) return { ok: false, error: result.error };
         if (card.leadId) await confirmed("cancel an activity", card.leadId);
         return { ok: true, success: "Cancelled" };
       }
       case "lost": {
+        if (!(await stillAsProposed(card))) return { ok: false, error: STALE_CARD };
         const form = new FormData();
         form.set("lostReason", card.reason);
         const result = await markLost(card.leadId, form);
@@ -235,7 +241,33 @@ export async function sendAssistantDraft(input: { leadId: string; channel: "what
   });
 }
 
-const escapeHtml = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+/**
+ * Is the record still as it was when DAX proposed the card? Only the field the
+ * card changes (assistantActions STALE CARDS). Read through the tenant-scoped
+ * client; the action that runs next checks access again in full.
+ */
+async function stillAsProposed(card: ActionCard): Promise<boolean> {
+  switch (card.kind) {
+    case "stage":
+    case "assign":
+    case "lost": {
+      const lead = await prisma.lead.findUnique({ where: { id: card.leadId }, select: { stageId: true, assignedToId: true, status: true } });
+      if (!lead || lead.status !== "open") return false;
+      if (card.kind === "stage") return lead.stageId === card.fromStageId;
+      if (card.kind === "assign") return lead.assignedToId === card.fromUserId;
+      return true;
+    }
+    case "reschedule":
+    case "cancel_activity": {
+      const activity = await prisma.activity.findUnique({ where: { id: card.activityId }, select: { status: true, dueDate: true } });
+      return Boolean(activity && activity.status === "planned" && activity.dueDate.toISOString() === card.fromDue);
+    }
+    default:
+      return true;
+  }
+}
+
+const escapeHtml =(s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 
 /**
  * 👍 / 👎 on one of the person's OWN answers, with a reason when it was wrong —
@@ -262,17 +294,18 @@ export async function rateAssistantAnswer(turnId: string, rating: "up" | "down",
  * are marked seen, so the unread dot goes on the next page.
  */
 export async function openAssistantBubble(): Promise<
-  { ok: true; name: string; connected: boolean; history: { question: string; answer: string; source: string }[] } | { ok: false }
+  { ok: true; name: string; connected: boolean; listen: boolean; history: { question: string; answer: string; source: string }[] } | { ok: false }
 > {
   return withActingStaffScope(async () => {
     const user = await requireAnyPermission(...ASSISTANT_PERMISSIONS);
     if (!(await isModuleEnabled("automation"))) return { ok: false };
-    const [profile, connected, history] = await Promise.all([
+    const [profile, connected, history, , listen] = await Promise.all([
       getSetting(ASSISTANT_PROFILE_KEY).then(parseProfile),
       isCodexConnected(),
       assistantTurnsToday(user.id),
       markScheduledTurnsSeen(user.id),
+      assistantVoiceRepliesOn().catch(() => false),
     ]);
-    return { ok: true, name: profile.name, connected, history };
+    return { ok: true, name: profile.name, connected, listen, history };
   });
 }

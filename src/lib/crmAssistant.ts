@@ -32,16 +32,18 @@ import {
 } from "./permissions";
 import { ASSISTANT_PROFILE_KEY, parseProfile, selfKnowledge, soulText } from "./assistantSoul";
 import { LEARN_INSTRUCTIONS, memoryPrompt, methodInstructions } from "./assistantMemory";
-import { CITE_RULE, REPLY_FORMAT, citableLinks, resolveCitations, splitReply, type Evidence } from "./assistantReply";
+import { CITE_RULE, REPLY_FORMAT, STATE_INSTRUCTIONS, citableLinks, resolveCitations, splitReply, type Evidence } from "./assistantReply";
 import { salesStats } from "./crmAssistantStats";
 import { briefForAssistant, loadDaxBrief } from "./daxBrief";
+import { breakerOpen, withRetry } from "./assistantBreaker";
+import { fastPath, pageLeadFromHint } from "./assistantFastPath";
 import { stripInvisible } from "./invisibleText";
 import { visibleAnswer } from "./assistantStream";
 import { safeCodexError } from "./codexErrors";
 import { webLookup } from "./crmAssistantWeb";
 import { assistantWebAllowed } from "./assistantUser";
 import { MAX_IMAGES_PER_QUESTION } from "./assistantImage";
-import { applyLearn, loadLearned, loadPlaybook } from "./assistantMemoryStore";
+import { applyLearn, loadLearned, loadPlaybook, markNotesUsed } from "./assistantMemoryStore";
 import { ACTION_INSTRUCTIONS, CHOICE_INSTRUCTIONS, type ActionCard, type ProposedAction } from "./assistantActions";
 import { describeSchedule, nextRun, scheduleInput } from "./assistantSchedule";
 import { describeWatch, watchInput } from "./assistantWatchRules";
@@ -671,22 +673,44 @@ async function knowledge(user: User, raw: z.infer<typeof knowledgeArgs>): Promis
  * match the most of the query's words, best first, each WITH the turns either
  * side of it that day — a decision is usually the answer to the question
  * before — so the answer step can say what was decided, not just quote a line.
+ *
+ * Found by meaning without embeddings: the planner's other wordings
+ * (alternatives), the tags each answer wrote about itself, Postgres full-text
+ * search (stems: "orders" finds "order"), trigram similarity for typos, and —
+ * strongest — the records a turn looked at, so "what did we say about Anna?"
+ * finds the turn that read her lead even if it never said her name.
  */
 async function recall(user: User, raw: z.infer<typeof recallArgs>): Promise<ToolOutput> {
-  const { query } = recallArgs.parse(raw);
-  const words = recallWords(query);
+  const { query, alternatives = [], lead } = recallArgs.parse(raw);
+  const words = [...new Set([query, ...alternatives].flatMap(recallWords))].slice(0, RECALL_WORDS);
+  const refs = lead ? await recallLeadRefs(user, lead) : [];
+  // websearch_to_tsquery never throws on odd input; "or" between words makes
+  // any one of them enough. A leading "-" would mean NOT there, so it goes.
+  const search = words.map((w) => w.replace(/^[-']+/, "")).filter(Boolean).join(" or ");
   const since = new Date(Date.now() - HISTORY_DAYS * DAY);
-  const candidates = await prisma.assistantTurn.findMany({
-    where: {
-      userId: user.id,
-      createdAt: { gte: since },
-      ...(words.length ? { OR: words.flatMap((w) => [{ question: fuzzy(w) }, { answer: fuzzy(w) }]) } : {}),
-    },
-    orderBy: { createdAt: "desc" },
-    take: 40,
-    select: { id: true, question: true, answer: true, createdAt: true },
-  });
-  const best = rankRecall(candidates, words).slice(0, RECALL_MATCHES);
+  // Raw SQL for full-text and trigram matching, which Prisma's filters can't
+  // express. It runs on the tenant-scoped client (RLS applies), and still names
+  // the tenant and the asker itself: never anyone else's conversations.
+  // ponytail: the match conditions run over one person's 30 days of turns (the
+  // tenant/user/createdAt index narrows to those); fine at hundreds of turns.
+  const candidates = await prisma.$queryRaw<RecallRow[]>`
+    SELECT "id", "question", "answer", "createdAt", "state", "refs", "tags",
+           ts_rank(to_tsvector('english', "question" || ' ' || "answer"), websearch_to_tsquery('english', ${search}))::float8 AS "ftsRank",
+           (SELECT coalesce(max(word_similarity(w, "question" || ' ' || "answer")), 0) FROM unnest(${words}::text[]) AS w)::float8 AS "similarity"
+      FROM "AssistantTurn"
+     WHERE "tenantId" = ${ownedWriteTenantId()}
+       AND "userId" = ${user.id}
+       AND "createdAt" >= ${since}
+       AND (
+         (cardinality(${words}::text[]) = 0 AND cardinality(${refs}::text[]) = 0)
+         OR "refs" && ${refs}::text[]
+         OR to_tsvector('english', "question" || ' ' || "answer") @@ websearch_to_tsquery('english', ${search})
+         OR to_tsvector('english', array_to_string("tags", ' ')) @@ websearch_to_tsquery('english', ${search})
+         OR EXISTS (SELECT 1 FROM unnest(${words}::text[]) AS w WHERE w <% ("question" || ' ' || "answer"))
+       )
+     ORDER BY "createdAt" DESC
+     LIMIT ${RECALL_CANDIDATES}`;
+  const best = rankRecall(candidates, words, refs).slice(0, RECALL_MATCHES);
   if (!best.length) return { truncated: false, rows: [], data: [{ note: "Nothing in this person's last 30 days of conversations matches." }] };
   // The turn before and after each match, same South African day.
   const around = await Promise.all(
@@ -695,12 +719,12 @@ async function recall(user: User, raw: z.infer<typeof recallArgs>): Promise<Tool
       const dayStart = new Date(`${day}T00:00:00+02:00`);
       return Promise.all([
         prisma.assistantTurn.findFirst({
-          where: { userId: user.id, createdAt: { gte: dayStart, lt: t.createdAt } },
+          where: { userId: user.id, tenantId: ownedWriteTenantId(), createdAt: { gte: dayStart, lt: t.createdAt } },
           orderBy: { createdAt: "desc" },
           select: { question: true, answer: true },
         }),
         prisma.assistantTurn.findFirst({
-          where: { userId: user.id, createdAt: { gt: t.createdAt, lt: new Date(dayStart.getTime() + DAY) } },
+          where: { userId: user.id, tenantId: ownedWriteTenantId(), createdAt: { gt: t.createdAt, lt: new Date(dayStart.getTime() + DAY) } },
           orderBy: { createdAt: "asc" },
           select: { question: true, answer: true },
         }),
@@ -709,19 +733,87 @@ async function recall(user: User, raw: z.infer<typeof recallArgs>): Promise<Tool
   );
   const short = (t: { question: string; answer: string } | null) => (t ? { question: clip(t.question, 200), answer: clip(t.answer, 300) } : undefined);
   return {
-    truncated: candidates.length === 40,
+    truncated: candidates.length === RECALL_CANDIDATES,
     rows: [],
     data: best.map((t, i) => ({
       when: when(t.createdAt),
       before: short(around[i][0]),
       question: t.question,
       answer: clip(t.answer, 700),
+      // What that conversation had decided and left open, in its own words.
+      ...(t.state ? { workingMemory: t.state } : {}),
       after: short(around[i][1]),
     })),
   };
 }
 
 const RECALL_MATCHES = 4;
+const RECALL_CANDIDATES = 60;
+/** The query's words plus the planner's alternatives, together. */
+const RECALL_WORDS = 16;
+/** Record links kept per turn — enough for a lead brief and a quote list. */
+const RECALL_REFS = 30;
+type RecallRow = {
+  id: string; question: string; answer: string; createdAt: Date;
+  state: unknown; refs: string[]; tags: string[]; ftsRank: number; similarity: number;
+};
+
+/**
+ * "Anna" → the leads (and their customers) this person can see by that name,
+ * as refs — lead_brief's own matching and visibility, so recall by customer
+ * never reaches a lead they couldn't open.
+ */
+async function recallLeadRefs(user: User, needle: string): Promise<string[]> {
+  if (!(await hasAnyPermission(user, "leads.view_all", "leads.view_owned"))) return [];
+  const ids = await getAccessibleLeadIds(user);
+  const leads = await prisma.lead.findMany({
+    where: {
+      deletedAt: null,
+      ...(ids === null ? {} : { id: { in: ids } }),
+      ...(/^c[a-z0-9]{20,}$/i.test(needle)
+        ? { OR: [{ id: needle }, { contactId: needle }] }
+        : {
+            OR: [
+              { name: fuzzy(needle) },
+              { title: fuzzy(needle) },
+              { contact: { OR: [{ firstName: fuzzy(needle) }, { lastName: fuzzy(needle) }] } },
+            ],
+          }),
+    },
+    orderBy: { updatedAt: "desc" },
+    take: 5,
+    select: { id: true, contactId: true },
+  });
+  return leads.flatMap((l) => [`lead:${l.id}`, ...(l.contactId ? [`contact:${l.contactId}`] : [])]);
+}
+
+/**
+ * The records an answer's lookups returned, as refs ("lead:<id>", "quote:<id>",
+ * "contact:<id>"), kept on the turn so recall can find it by customer. Walks
+ * the data as returned (like citableLinks): record links, and the leadId /
+ * quoteId / contactId a row carries. Only what the person's own lookups saw.
+ */
+export function turnRefs(data: unknown): string[] {
+  const refs = new Set<string>();
+  const walk = (value: unknown) => {
+    if (refs.size >= RECALL_REFS) return;
+    if (Array.isArray(value)) {
+      for (const item of value) walk(item);
+    } else if (value && typeof value === "object") {
+      const o = value as Record<string, unknown>;
+      const link = typeof o.link === "string" ? /^\/(lead|quote|contact)s\/([\w-]{1,64})(?:[/?#]|$)/.exec(o.link) : null;
+      if (link) refs.add(`${link[1]}:${link[2]}`);
+      for (const kind of ["lead", "quote", "contact"]) {
+        const id = o[`${kind}Id`];
+        if (typeof id === "string" && /^[\w-]{1,64}$/.test(id)) refs.add(`${kind}:${id}`);
+      }
+      for (const v of Object.values(o)) if (v && typeof v === "object") walk(v);
+    }
+  };
+  walk(data);
+  return [...refs].slice(0, RECALL_REFS);
+}
+
 const RECALL_STOP = new Set(["the", "and", "what", "did", "about", "with", "for", "was", "were", "that", "this", "have", "has", "had", "who", "when", "how", "why", "our", "you", "your", "say", "said", "tell", "told", "last", "week", "decide", "decided"]);
 
 /** The words worth searching for: no stop words, no repeats, at most 6. */
@@ -730,15 +822,30 @@ export function recallWords(query: string): string[] {
   return [...new Set(words)].slice(0, 6);
 }
 
-/** Most distinct words matched first; newest first among equals. */
-export function rankRecall<T extends { question: string; answer: string; createdAt: Date }>(turns: T[], words: string[]): T[] {
-  const hits = (t: T) => {
+/**
+ * Best first. A turn that looked at the customer asked about beats any wording
+ * (it IS about them); then each distinct word found in the text or in the
+ * turn's own tags; then Postgres' full-text rank and typo similarity as small
+ * nudges. Newest first among equals.
+ */
+export function rankRecall<
+  T extends { question: string; answer: string; createdAt: Date; refs?: string[]; tags?: string[]; ftsRank?: number; similarity?: number },
+>(turns: T[], words: string[], refs: string[] = []): T[] {
+  const wanted = new Set(refs);
+  const score = (t: T) => {
     const text = `${t.question}\n${t.answer}`.toLowerCase();
-    return words.filter((w) => text.includes(w)).length;
+    const tags = (t.tags ?? []).join("\n").toLowerCase();
+    return (
+      ((t.refs ?? []).some((r) => wanted.has(r)) ? 1000 : 0) +
+      words.filter((w) => text.includes(w)).length * 10 +
+      words.filter((w) => tags.includes(w)).length * 10 +
+      (Number(t.ftsRank) || 0) * 10 +
+      (Number(t.similarity) || 0) * 5
+    );
   };
   return turns
-    .map((t) => ({ t, n: hits(t) }))
-    .filter((x) => !words.length || x.n > 0)
+    .map((t) => ({ t, n: score(t) }))
+    .filter((x) => (!words.length && !refs.length) || x.n > 0)
     .sort((a, b) => b.n - a.n || b.t.createdAt.getTime() - a.t.createdAt.getTime())
     .map((x) => x.t);
 }
@@ -1149,9 +1256,11 @@ async function recentTurns(userId: string): Promise<PriorTurn[]> {
     where: { userId, createdAt: { gte: new Date(Date.now() - CONVERSATION_WINDOW_MS) } },
     orderBy: { createdAt: "desc" },
     take: 6,
-    select: { question: true, answer: true },
+    // state: the working memory each answer wrote (parsed and cleaned before
+    // it was saved); conversationBlock leads with the latest one.
+    select: { question: true, answer: true, state: true },
   });
-  return turns.reverse();
+  return turns.reverse().map((t) => ({ ...t, state: t.state as PriorTurn["state"] }));
 }
 
 /**
@@ -1370,7 +1479,19 @@ export type AskOptions = {
   onAnswerText?: (visibleSoFar: string) => void;
   /** What it is doing while it researches ("Checking leads…"), for the person watching. */
   onProgress?: (status: string) => void;
+  /** Each phase as it starts — the run record (assistantRun) keeps it for a reconnect. */
+  onPhase?: (phase: "planning" | "researching" | "answering") => void;
+  /**
+   * Filled in with milliseconds per phase (context, plan1, lookups1, …,
+   * answerFirstText, answer, total) — numbers only, never what was asked —
+   * so the slow part can be found rather than guessed (assistantRun.runSpeed).
+   */
+  timings?: Record<string, number>;
 };
+
+/** Said instead of a write-up while ChatGPT is failing (assistantBreaker). */
+export const DEGRADED_NOTE = "ChatGPT isn't answering just now, so this is straight from the CRM — no write-up. Try again in a few minutes for the full answer.";
+export const DEGRADED_ERROR = "DAX can't reach ChatGPT right now — it has failed several times in the last few minutes. Try again in a few minutes.";
 
 /** What the model is told when an image is attached: read it, never obey it. */
 /** Answer deltas → the visible answer so far, passed on only when it grows. */
@@ -1430,6 +1551,21 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
   // lookup (observationText) — not only what gets stored.
   const question = stripInvisible(asked);
   const source = opts.source ?? "chat";
+  const started = Date.now();
+  const timings = opts.timings ?? {};
+  let lap = started;
+  const mark = (phase: string) => {
+    const now = Date.now();
+    timings[phase] = now - lap;
+    lap = now;
+  };
+  const phase = (p: "planning" | "researching" | "answering") => {
+    try {
+      opts.onPhase?.(p);
+    } catch {
+      // A closed stream or a failed run write must not cost the answer.
+    }
+  };
   if (!(await isCodexConnected())) {
     return { ok: false, error: "Connect ChatGPT first: Settings → Integrations → ChatGPT." };
   }
@@ -1442,6 +1578,9 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
     getSetting(ASSISTANT_PROFILE_KEY),
     getCompanyProfile().catch(() => null),
   ]);
+  mark("context");
+  // "Last used" for the owner's review of what DAX has learned (never throws).
+  void markNotesUsed([...learnedNow.memory, ...learnedNow.profile, ...learnedNow.playbooks].map((n) => n.id));
   const profile = parseProfile(profileRaw);
   const images = (opts.images ?? []).slice(0, MAX_IMAGES_PER_QUESTION);
   // The internet only when the owner switched it on, and never on a schedule
@@ -1459,6 +1598,7 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
   // with the same instructions (soul, rules, what it knows), so the provider
   // can serve that prefix from cache instead of re-reading it (Codex/Hermes).
   const cacheKey = `dax:${ownedWriteTenantId()}:${user.id}`;
+  const breakerKey = ownedWriteTenantId();
 
   // Research: look, see, look closer — at most MAX_STEPS rounds, MAX_LOOKUPS in all.
   const observations: Observation[] = [];
@@ -1469,6 +1609,39 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
       // A closed stream on the other end must not cost the answer.
     }
   };
+  const runLookups = async (batch: ToolStep[], round: number) => {
+    progress(lookupStatus(batch));
+    phase("researching");
+    // Independent lookups, side by side; one failing doesn't cost the others.
+    const outputs = await Promise.all(
+      batch.map((s) =>
+        (s.tool === "web" ? internet(user, question) : runTool(user, s)).catch(async (error: unknown): Promise<ToolOutput> => {
+          await logError("crm-assistant", `lookup ${s.tool} failed`, error instanceof Error ? error.name : "unknown");
+          return { truncated: false, rows: [], data: [{ note: "That lookup failed — say so if it matters." }] };
+        }),
+      ),
+    );
+    batch.forEach((s, i) => observations.push({ tool: s.tool, args: "args" in s ? s.args : {}, output: outputs[i] }));
+    mark(`lookups${round}`);
+  };
+  // A question plain enough to need no research step (assistantFastPath): its
+  // lookup runs now. Not with an image — the picture may change what it means.
+  const fast = images.length ? null : fastPath(question, { userName: user.name || "", pageLead: pageLeadFromHint(whereTheyAre) });
+  if (fast) timings.fastPath = 1;
+  // ChatGPT failing again and again (assistantBreaker): answer from the CRM
+  // alone where a lookup needs no model to choose it, else say so at once.
+  if (breakerOpen(breakerKey)) {
+    if (!fast) return { ok: false, error: DEGRADED_ERROR };
+    await runLookups(fast, 1);
+    timings.total = Date.now() - started;
+    const rows = dedupeRows(observations.flatMap((o) => o.output.rows));
+    return { ok: true, answer: DEGRADED_NOTE, rows, tools: observations.map((o) => o.tool), learned: 0, actions: [], choices: [], saved: false };
+  }
+  // One research call, retried once on a passing ChatGPT fault (assistantBreaker).
+  const plan = (step: number, insist: boolean) =>
+    withRetry(breakerKey, () =>
+      codexRespond({ instructions, prompt: planPrompt(step, insist), images, reasoningEffort: "low", timeoutMs: 45_000, cacheKey, preferModel: PLAN_MODEL }),
+    );
   const planPrompt = (step: number, insist: boolean) =>
     [
       conversation,
@@ -1478,17 +1651,21 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
       `Rounds left: ${MAX_STEPS - step}. Lookups left: ${MAX_LOOKUPS - observations.length}.`,
       insist ? PLAN_INSIST : "",
     ].filter(Boolean).join("\n\n");
-  // Small talk ("thanks", 👍, "who are you?") skips research — it would only say done.
-  const research = !(isSmallTalk(question) && !images.length);
+  // Small talk ("thanks", 👍, "who are you?") skips research — it would only say
+  // done — and so does a fast-path question, whose lookup is already known.
+  const research = !(isSmallTalk(question) && !images.length) && !fast;
+  if (fast) await runLookups(fast, 1);
   for (let step = 0; research && step < MAX_STEPS && observations.length < MAX_LOOKUPS; step++) {
-    let reply = await codexRespond({ instructions, prompt: planPrompt(step, false), images, reasoningEffort: "low", timeoutMs: 45_000, cacheKey, preferModel: PLAN_MODEL });
+    phase("planning");
+    let reply = await plan(step, false);
     // Models sometimes answer in prose instead of choosing. Before anything has
     // been looked up that would cost the question its data, so ask once more,
     // firmly; later, prose just means "enough" — the answer step takes over.
     if (!("error" in reply) && !parseSteps(reply.text) && step === 0) {
       await logError("crm-assistant", "research step answered in prose — asked again");
-      reply = await codexRespond({ instructions, prompt: planPrompt(step, true), images, reasoningEffort: "low", timeoutMs: 45_000, cacheKey, preferModel: PLAN_MODEL });
+      reply = await plan(step, true);
     }
+    mark(`plan${step + 1}`);
     if ("error" in reply) {
       await logError("crm-assistant", "research step failed", safeCodexError(reply.error));
       if (!observations.length) return { ok: false, error: `ChatGPT didn't answer: ${safeCodexError(reply.error)}` };
@@ -1516,25 +1693,29 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
     }
     const batch = fresh.slice(0, MAX_LOOKUPS - observations.length);
     if (!batch.length) break;
-    progress(lookupStatus(batch));
-    // Independent lookups, side by side; one failing doesn't cost the others.
-    const outputs = await Promise.all(
-      batch.map((s) =>
-        (s.tool === "web" ? internet(user, question) : runTool(user, s)).catch(async (error: unknown): Promise<ToolOutput> => {
-          await logError("crm-assistant", `lookup ${s.tool} failed`, error instanceof Error ? error.name : "unknown");
-          return { truncated: false, rows: [], data: [{ note: "That lookup failed — say so if it matters." }] };
-        }),
-      ),
-    );
-    batch.forEach((s, i) => observations.push({ tool: s.tool, args: "args" in s ? s.args : {}, output: outputs[i] }));
+    await runLookups(batch, step + 1);
     // "These are all I need": straight to the answer — no round spent on "done".
     if (planSaysAnswerNext(reply.text)) break;
   }
 
   if (observations.length) progress("Writing it up…");
+  phase("answering");
+  // When the person first sees words — the number that decides whether DAX feels fast.
+  const answerStarted = Date.now();
+  const onAnswerText = opts.onAnswerText
+    ? (visible: string) => {
+        if (timings.answerFirstText === undefined) {
+          timings.answerFirstText = Date.now() - answerStarted;
+          timings.firstText = Date.now() - started;
+        }
+        opts.onAnswerText!(visible);
+      }
+    : undefined;
   // Answer, in the workspace's own voice.
   const soul = stripInvisible(soulText(profile, company?.name ?? "", user.name || "a colleague"));
-  const answerReply = await codexRespond({
+  // Retried once on a passing fault; a retry starts the visible text afresh
+  // (a new streamVisible), so the person never sees two half-answers joined.
+  const answerReply = await withRetry(breakerKey, () => codexRespond({
     // Same for every question of this person's (so the provider's prompt cache
     // serves it) — and only then what differs, at the END, so a change there
     // doesn't invalidate the cached prefix before it. What it has learned
@@ -1545,6 +1726,7 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
       ANSWER_RULES,
       source === "chat" ? CITE_RULE : "",
       REPLY_FORMAT,
+      STATE_INSTRUCTIONS,
       LEARN_INSTRUCTIONS,
       source === "chat" ? ACTION_INSTRUCTIONS : "",
       source === "schedule" ? "" : CHOICE_INSTRUCTIONS,
@@ -1569,8 +1751,10 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
     reasoningEffort: "low",
     timeoutMs: 60_000,
     cacheKey,
-    onText: opts.onAnswerText ? streamVisible(opts.onAnswerText) : undefined,
-  });
+    onText: onAnswerText ? streamVisible(onAnswerText) : undefined,
+  }));
+  timings.answer = Date.now() - answerStarted;
+  timings.total = Date.now() - started;
 
   const rows = dedupeRows(observations.flatMap((o) => o.output.rows));
   const tools = observations.map((o) => o.tool);
@@ -1623,6 +1807,10 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
         tools: observations.map((o) => ({ tool: o.tool, args: o.args })) as object,
         source,
         scheduleId: source === "schedule" ? opts.scheduleId ?? null : null,
+        // Working memory (already cleaned by parseState) and the records this
+        // answer looked at — what the next question and recall read back.
+        ...(reply.state ? { state: reply.state, tags: reply.state.tags ?? [] } : {}),
+        refs: turnRefs(observations.map((o) => o.output.data)),
       },
       select: { id: true },
     })
@@ -1688,12 +1876,12 @@ async function resolveActions(user: User, proposals: ProposedAction[]): Promise<
       if (!activity) continue;
       const leadLabel = activity.lead ? `${activity.lead.name} — ${activity.lead.title}` : activity.type;
       if (p.type === "cancel_activity") {
-        cards.push({ id: `a${index}-${p.activityId}`, kind: "cancel_activity", activityId: p.activityId, leadId: activity.leadId, leadLabel, title: `Cancel “${activity.summary}” (${when(activity.dueDate)})` });
+        cards.push({ id: `a${index}-${p.activityId}`, kind: "cancel_activity", activityId: p.activityId, leadId: activity.leadId, leadLabel, fromDue: activity.dueDate.toISOString(), title: `Cancel “${activity.summary}” (${when(activity.dueDate)})` });
       } else {
         const target = p.when.includes("T") ? p.when : `${p.when}T${saLocal(activity.dueDate).slice(11)}`;
         const at = new Date(`${target}:00+02:00`);
         if (Number.isNaN(at.getTime()) || at.getTime() < Date.now() - 60 * 60 * 1000) continue;
-        cards.push({ id: `a${index}-${p.activityId}`, kind: "reschedule", activityId: p.activityId, leadId: activity.leadId, leadLabel, when: target, title: `Move “${activity.summary}” to ${when(at)}` });
+        cards.push({ id: `a${index}-${p.activityId}`, kind: "reschedule", activityId: p.activityId, leadId: activity.leadId, leadLabel, when: target, fromDue: activity.dueDate.toISOString(), title: `Move “${activity.summary}” to ${when(at)}` });
       }
       continue;
     }
@@ -1701,7 +1889,7 @@ async function resolveActions(user: User, proposals: ProposedAction[]): Promise<
     const lead = await prisma.lead.findUnique({
       where: { id: p.leadId },
       select: {
-        name: true, title: true, stageId: true, stage: { select: { pipelineId: true } },
+        name: true, title: true, stageId: true, assignedToId: true, stage: { select: { pipelineId: true } },
         email: true, phone: true, contactId: true, contact: { select: { email: true, phone: true } },
       },
     });
@@ -1720,7 +1908,7 @@ async function resolveActions(user: User, proposals: ProposedAction[]): Promise<
       const wanted = p.to.trim().toLowerCase();
       const person = staff.find((s) => s.name.toLowerCase() === wanted) ?? staff.find((s) => s.name.toLowerCase().startsWith(wanted));
       if (!person) continue;
-      cards.push({ id, kind: "assign", leadId: p.leadId, leadLabel, title: `Give ${lead.name}'s lead to ${person.name}`, userId: person.id });
+      cards.push({ id, kind: "assign", leadId: p.leadId, leadLabel, title: `Give ${lead.name}'s lead to ${person.name}`, userId: person.id, fromUserId: lead.assignedToId });
     } else if (p.type === "stage") {
       // Compared in code, exactly: a pipeline has a handful of stages, and an
       // insensitive `equals` would treat `_`/`%` in the name as wildcards.
@@ -1730,7 +1918,7 @@ async function resolveActions(user: User, proposals: ProposedAction[]): Promise<
         select: { id: true, name: true },
       })).find((s) => s.name.toLowerCase() === wantedStage);
       if (!stage || stage.id === lead.stageId) continue;
-      cards.push({ id, kind: "stage", leadId: p.leadId, leadLabel, title: `Move ${lead.name}'s lead to ${stage.name}`, stageId: stage.id });
+      cards.push({ id, kind: "stage", leadId: p.leadId, leadLabel, title: `Move ${lead.name}'s lead to ${stage.name}`, stageId: stage.id, fromStageId: lead.stageId });
     } else if (p.type === "draft_message") {
       // Where it would go, shown on the card before anyone presses Send — the
       // lead's own number or address, else its customer's. Never sent to ChatGPT.

@@ -3,10 +3,14 @@ import crypto from "crypto";
 import { basePrisma } from "./db";
 import { getSetting } from "./settings";
 import { currentTenantScope } from "./tenantScope";
-import { fetchWhatsAppMedia, matchByPhone, sendWhatsAppButtons, sendWhatsAppText, waDigits } from "./whatsapp";
-import { transcribeVoice } from "./transcribe";
+import { fetchWhatsAppMedia, matchByPhone, sendWhatsAppAudioId, sendWhatsAppButtons, sendWhatsAppText, uploadWhatsAppMedia, waDigits } from "./whatsapp";
+import { transcribeVoice, transcribeVoiceDetailed } from "./transcribe";
 import { askCrm } from "./crmAssistant";
-import { ASK_LIMIT_MESSAGE, assistantAskAllowed, assistantUserFor } from "./assistantUser";
+import { ASK_LIMIT_MESSAGE, assistantAskAllowed, assistantUserFor, assistantVoiceReplyAllowed } from "./assistantUser";
+import { canSynthesizeVoice } from "./elevenlabs";
+import { synthesiseAnswer } from "./assistantVoice";
+import { ASSISTANT_VOICE_REPLIES_KEY, voiceLanguageFor, voiceRepliesSwitchOn } from "./assistantVoiceRules";
+import { voiceLanguage, type VoiceLanguage } from "./voiceLanguage";
 import { ASSISTANT_PROFILE_KEY, parseProfile } from "./assistantSoul";
 import { logAudit } from "./audit";
 import { logError } from "./errorLog";
@@ -176,11 +180,23 @@ export async function handleStaffWhatsApp(from: string, input: StaffWhatsAppInpu
   }
 
   let question = "text" in input ? input.text : null;
+  // A voice note in gets a voice note back — only when the owner switched voice
+  // replies on (they cost ElevenLabs credits). A typed question is answered in text.
+  const voiceBack = "voiceMediaId" in input && voiceRepliesSwitchOn(await getSetting(ASSISTANT_VOICE_REPLIES_KEY));
+  let heard: VoiceLanguage | null = null;
   if ("voiceMediaId" in input) {
     // Only now — after the number is known to be staff — is the voice note
     // downloaded. A customer's voice note never reaches this line.
     const media = await fetchWhatsAppMedia(input.voiceMediaId).catch(() => null);
-    question = media ? await transcribeVoice(media.buffer, media.contentType).catch(() => null) : null;
+    if (media && voiceBack) {
+      // Which language it was spoken in, too: an isiZulu question answered in
+      // isiZulu can't be voiced, and an Afrikaans one needs the Afrikaans model.
+      const transcript = await transcribeVoiceDetailed(media.buffer, media.contentType).catch(() => null);
+      question = transcript?.text ?? null;
+      heard = voiceLanguage(transcript?.languageCode, transcript?.languageProbability);
+    } else {
+      question = media ? await transcribeVoice(media.buffer, media.contentType).catch(() => null) : null;
+    }
     if (!question) {
       await sendPlan(waId, { texts: ["I couldn't make out that voice note — try again, or type it."], buttons: null });
       return true;
@@ -195,15 +211,47 @@ export async function handleStaffWhatsApp(from: string, input: StaffWhatsAppInpu
   // The AssistantTurn askCrm saves (source "whatsapp") is the record of this
   // exchange. It is never a customer Communication, never a lead, never the bot.
   let plan: WhatsAppReplyPlan;
+  let answer: string | null = null;
   try {
     const result = await askCrm(user, q, null, { source: "whatsapp" });
     plan = result.ok ? planWhatsAppReply(result.answer, result.choices) : { texts: [result.error], buttons: null };
+    if (result.ok) answer = result.answer;
   } catch (error) {
     await logError("assistant-whatsapp", "answering failed", error instanceof Error ? error.name : "unknown").catch(() => {});
     plan = { texts: ["Something went wrong answering that — try again in a minute."], buttons: null };
   }
+  // The full text ALWAYS goes, and first: it is the record, and it arrives while
+  // the voice is still being made. The voice note is a convenience on top.
   await sendPlan(waId, plan);
+  if (voiceBack && answer) await sendVoiceAnswer(user.id, waId, answer, heard);
   return true;
+}
+
+/**
+ * The spoken version of an answer, as a WhatsApp voice note — the customer
+ * chatbot's path (ElevenLabs OGG/Opus, uploaded to Meta by media id, so we never
+ * publish a URL of our own). Anything that stops it — no voice set up, a
+ * language no model speaks, the person's hourly cap, ElevenLabs or Meta failing —
+ * just means no voice note: they already have the text. Logged as a reason only.
+ */
+async function sendVoiceAnswer(userId: string, waId: string, answer: string, heard: VoiceLanguage | null): Promise<void> {
+  try {
+    // Checked before the cap is counted, so a text-only answer doesn't use it up.
+    if (!(await canSynthesizeVoice()) || !voiceLanguageFor(answer, heard)) return;
+    if (!(await assistantVoiceReplyAllowed(userId))) return;
+    const audio = await synthesiseAnswer(answer, heard);
+    if (typeof audio === "string") return; // ElevenLabs logs its own failure
+    // .ogg so WhatsApp shows it as a voice note (waveform), not an audio file.
+    const uploaded = await uploadWhatsAppMedia(audio.buffer, audio.contentType, "voice-reply.ogg");
+    if (!("id" in uploaded)) {
+      await logError("assistant-whatsapp", "voice reply upload failed");
+      return;
+    }
+    const sent = await sendWhatsAppAudioId(waId, uploaded.id);
+    if (!sent.ok) await logError("assistant-whatsapp", "voice reply send failed");
+  } catch (error) {
+    await logError("assistant-whatsapp", "voice reply threw", error instanceof Error ? error.name : "unknown").catch(() => {});
+  }
 }
 
 /**

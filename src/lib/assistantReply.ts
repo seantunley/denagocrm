@@ -1,4 +1,5 @@
-import { learnBlock, splitLearn, type LearnBlock } from "./assistantMemory";
+import { z } from "zod";
+import { learnBlock, scanEntry, splitLearn, type LearnBlock } from "./assistantMemory";
 import { parseActionList, parseChoiceList, splitActions, splitChoices, type ProposedAction } from "./assistantActions";
 
 /**
@@ -28,7 +29,56 @@ export const REPLY_FORMAT = [
   'and then ONE JSON object on the next line with just the keys you need: {"learn":{...},"actions":[...],"choices":[...]}. Nothing after it. Never mention the marker or the block in your answer.',
 ].join("\n");
 
-export type ParsedReply = { answer: string; learn: LearnBlock | null; actions: ProposedAction[]; choices: string[] };
+/**
+ * Working memory: what the conversation is about, in the model's own words,
+ * written with every answer and kept on the turn. The next question reads it
+ * instead of six long Q/A pairs, and recall searches its tags — so a chat about
+ * "the Jacobs corporate order" is found by "fleet" without embeddings.
+ */
+export const STATE_INSTRUCTIONS = [
+  'WORKING MEMORY. On every answer of substance (not a greeting or thanks), end with the marker and block even if nothing else goes in it, and put a "state" key in the block:',
+  '"state":{"customer":"<who this is about, if one customer>","topic":"<what the conversation is about, a few words>","tags":["<up to 8 short lowercase topic words, with the other words someone might use for the same thing — e.g. fleet, corporate order, bulk>"],"decided":["<what was agreed or concluded>"],"open":["<what is still unresolved or waiting>"]}',
+  "Keep it short and current — the whole conversation so far, not just this answer. Never put phone numbers, email addresses or anything a customer wrote word for word in it.",
+].join("\n");
+
+export type ConversationState = { customer?: string; topic?: string; tags?: string[]; decided?: string[]; open?: string[] };
+
+// Loose bounds only to refuse garbage; the real caps (below) clip rather than
+// reject, so one long "decided" line doesn't cost the whole working memory.
+const stateText = z.string().max(2000);
+const stateList = z.array(stateText).max(50);
+const stateBlock = z.object({ customer: stateText, topic: stateText, tags: stateList, decided: stateList, open: stateList }).partial();
+
+/**
+ * The block's "state" → cleaned working memory, or null. Every string goes
+ * through the memory scan (invisible characters out, instructions and contact
+ * details refused): it is read back into the next prompt, so it gets the same
+ * hygiene as anything DAX remembers. A string that fails is dropped on its own.
+ */
+export function parseState(raw: unknown): ConversationState | null {
+  const parsed = stateBlock.safeParse(raw);
+  if (!parsed.success) return null;
+  const s = parsed.data;
+  const one = (v: string | undefined, max: number) => {
+    const scanned = v ? scanEntry(v) : null;
+    return scanned?.ok ? scanned.text.replace(/\s+/g, " ").slice(0, max).trim() : undefined;
+  };
+  const many = (vs: string[] | undefined, max: number, cap: number) => {
+    const kept = [...new Set((vs ?? []).map((v) => one(v, max)).filter((v): v is string => Boolean(v)))].slice(0, cap);
+    return kept.length ? kept : undefined;
+  };
+  const state: ConversationState = {
+    customer: one(s.customer, 80),
+    topic: one(s.topic, 160),
+    tags: many(s.tags?.map((t) => t.toLowerCase()), 32, 8),
+    decided: many(s.decided, 200, 6),
+    open: many(s.open, 200, 6),
+  };
+  const kept = Object.fromEntries(Object.entries(state).filter(([, v]) => v !== undefined)) as ConversationState;
+  return Object.keys(kept).length ? kept : null;
+}
+
+export type ParsedReply = { answer: string; learn: LearnBlock | null; actions: ProposedAction[]; choices: string[]; state: ConversationState | null };
 
 /** The reply → the answer and its validated block (or the legacy trailer lines). */
 export function splitReply(reply: string): ParsedReply {
@@ -46,6 +96,7 @@ export function splitReply(reply: string): ParsedReply {
     learn: learn?.success ? learn.data : before.learn,
     actions: actions.length ? actions : before.actions,
     choices: choices.length ? choices : before.choices,
+    state: block && "state" in block ? parseState(block.state) : null,
   };
 }
 
@@ -53,7 +104,7 @@ function legacy(reply: string): ParsedReply {
   const learnSplit = splitLearn(reply);
   const choiceSplit = splitChoices(learnSplit.answer);
   const { answer, actions } = splitActions(choiceSplit.answer);
-  return { answer, learn: learnSplit.learn, actions, choices: choiceSplit.choices };
+  return { answer, learn: learnSplit.learn, actions, choices: choiceSplit.choices, state: null };
 }
 
 /** The block's JSON object (a code fence around it tolerated), or null. */

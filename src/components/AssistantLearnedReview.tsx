@@ -1,8 +1,14 @@
 import { Check, Trash2 } from "lucide-react";
 import { SaveForm, SaveButton } from "@/components/SaveForm";
 import ConfirmActionDialog from "@/components/ConfirmActionDialog";
-import { approveAssistantNote, createAssistantNote, deleteAssistantNote, updateAssistantNote } from "@/app/actions/assistantNotes";
-import { formatDateTime } from "@/lib/format";
+import {
+  approveAssistantNote,
+  createAssistantNote,
+  deleteAssistantNote,
+  resolveAssistantConflict,
+  updateAssistantNote,
+} from "@/app/actions/assistantNotes";
+import { formatDate, formatDateTime } from "@/lib/format";
 import { FLAG_PREFIX } from "@/lib/assistantMemory";
 
 export type LearnedNote = {
@@ -15,7 +21,30 @@ export type LearnedNote = {
   createdAt: Date;
   about: string | null; // the person a profile entry describes
   taughtBy: string | null;
+  source: string;
+  lastConfirmedAt: Date | null;
+  lastUsedAt: Date | null;
+  validUntil: Date | null;
+  expired: boolean;
+  /** For a held conflict: the approved text it contradicts (null if that entry has since gone). */
+  conflictsWith: string | null;
 };
+
+/** Where it came from, and when. */
+function origin(note: LearnedNote): string {
+  const when = formatDateTime(note.createdAt);
+  if (note.source === "owner") return `Taught by ${note.taughtBy ?? "the owner"} ${when}`;
+  if (note.source === "person") return `Written by ${note.taughtBy ?? "them"} about themselves ${when}`;
+  if (note.source === "tidy") return `Written by the nightly tidy-up ${when}`;
+  return `Learned ${when}${note.taughtBy ? ` talking with ${note.taughtBy}` : ""}`;
+}
+
+const BADGE = {
+  approved: { label: "Approved", tone: "bg-emerald-500/15 text-emerald-300" },
+  conflict: { label: "Conflict", tone: "bg-red-500/15 text-red-300" },
+  unreviewed: { label: "Unreviewed", tone: "bg-amber-500/15 text-amber-300" },
+};
+const badge = "shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide";
 
 const GROUPS: { kind: string; title: string; hint: string }[] = [
   { kind: "memory", title: "About the business", hint: "Facts it uses in every conversation." },
@@ -32,6 +61,7 @@ const GROUPS: { kind: string; title: string; hint: string }[] = [
  */
 export default function AssistantLearnedReview({ notes }: { notes: LearnedNote[] }) {
   const unreviewed = notes.filter((n) => n.status !== "approved").length;
+  const conflicts = notes.filter((n) => n.status === "conflict").length;
   return (
     <section className="max-w-3xl space-y-4">
       <div>
@@ -42,10 +72,13 @@ export default function AssistantLearnedReview({ notes }: { notes: LearnedNote[]
             : unreviewed
               ? `${unreviewed} new thing${unreviewed === 1 ? "" : "s"} to review. Until you approve one, it's used only in the conversations of the person it came from — approving shares it with everyone.`
               : "All reviewed."}
+          {conflicts > 0 &&
+            ` ${conflicts} contradict${conflicts === 1 ? "s" : ""} something you approved — it keeps to what you approved until you choose (shown first below).`}
         </p>
       </div>
       {GROUPS.map((group) => {
-        const items = notes.filter((n) => n.kind === group.kind);
+        // Conflicts first: they're the ones waiting on a decision.
+        const items = notes.filter((n) => n.kind === group.kind).sort((a, b) => Number(b.status === "conflict") - Number(a.status === "conflict"));
         if (!items.length) return null;
         return (
           <div key={group.kind} className="card space-y-3 p-4">
@@ -69,19 +102,49 @@ export default function AssistantLearnedReview({ notes }: { notes: LearnedNote[]
                           Flagged in the nightly tidy-up: {note.description.slice(FLAG_PREFIX.length)} — approve it if it&apos;s right, or edit it.
                         </p>
                       )}
+                      {note.status === "conflict" && (
+                        <p className="mt-1 text-xs text-red-300">
+                          {note.conflictsWith !== null
+                            ? `Conflicts with what you approved: “${note.conflictsWith}”`
+                            : "It conflicted with an entry that has since been removed."}{" "}
+                          Not used by anyone until you choose.
+                        </p>
+                      )}
                       <p className="mt-1 text-[11px] text-muted-foreground">
-                        {note.about ? `About ${note.about} · ` : ""}Learned {formatDateTime(note.createdAt)}
-                        {note.taughtBy ? ` talking with ${note.taughtBy}` : ""}
+                        {note.about ? `About ${note.about} · ` : ""}
+                        {origin(note)}
+                        {note.lastConfirmedAt ? ` · Last confirmed ${formatDateTime(note.lastConfirmedAt)}` : ""}
+                        {note.lastUsedAt ? ` · Last used ${formatDateTime(note.lastUsedAt)}` : ""}
+                        {note.validUntil ? ` · ${note.expired ? "Ended" : "Until"} ${formatDate(note.validUntil)}` : ""}
                       </p>
                     </div>
-                    <span
-                      className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${note.status === "approved" ? "bg-emerald-500/15 text-emerald-300" : "bg-amber-500/15 text-amber-300"}`}
-                    >
-                      {note.status === "approved" ? "Approved" : "Unreviewed"}
-                    </span>
+                    <div className="flex shrink-0 flex-col items-end gap-1">
+                      <span className={`${badge} ${(BADGE[note.status as keyof typeof BADGE] ?? BADGE.unreviewed).tone}`}>
+                        {(BADGE[note.status as keyof typeof BADGE] ?? BADGE.unreviewed).label}
+                      </span>
+                      {note.expired && (
+                        <span className={`${badge} bg-muted text-muted-foreground`} title="Past its last day — not used. Edit to extend it, or remove it.">
+                          Expired
+                        </span>
+                      )}
+                    </div>
                   </div>
                   <div className="flex flex-wrap items-center gap-2">
-                    {note.status !== "approved" && (
+                    {note.status === "conflict" && (
+                      <>
+                        <SaveForm action={resolveAssistantConflict.bind(null, note.id, "new")} resetOnSuccess={false}>
+                          <SaveButton className="btn-secondary btn-sm inline-flex items-center gap-1" title="Approve this one; the entry it contradicts is removed.">
+                            <Check className="size-3.5" /> Keep new
+                          </SaveButton>
+                        </SaveForm>
+                        <SaveForm action={resolveAssistantConflict.bind(null, note.id, "existing")} resetOnSuccess={false}>
+                          <SaveButton className="btn-secondary btn-sm" title="Keep what you approved; this one is removed.">
+                            Keep existing
+                          </SaveButton>
+                        </SaveForm>
+                      </>
+                    )}
+                    {note.status !== "approved" && note.status !== "conflict" && (
                       <SaveForm action={approveAssistantNote.bind(null, note.id)} resetOnSuccess={false}>
                         <SaveButton className="btn-secondary btn-sm inline-flex items-center gap-1">
                           <Check className="size-3.5" /> Approve
@@ -98,6 +161,16 @@ export default function AssistantLearnedReview({ notes }: { notes: LearnedNote[]
                           </div>
                         )}
                         <textarea name="content" defaultValue={note.content} rows={note.kind === "playbook" ? 8 : 2} className="input w-full" />
+                        <label className="flex flex-wrap items-center gap-2 text-muted-foreground">
+                          Use until
+                          <input
+                            type="date"
+                            name="validUntil"
+                            defaultValue={note.validUntil ? note.validUntil.toISOString().slice(0, 10) : ""}
+                            className="input w-auto"
+                          />
+                          <span className="text-[11px]">Empty = for good. After this day it stops using it, and it shows here as expired.</span>
+                        </label>
                         <SaveButton className="btn-primary btn-sm">Save</SaveButton>
                       </SaveForm>
                     </details>

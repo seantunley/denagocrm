@@ -55,7 +55,7 @@ test("small talk skips the research round — and nothing that could be about th
   for (const q of ["Hi, how's the pipeline?", "Thanks — and Donovan's?", "What's overdue?", "Who is Lisa?", "who are you talking to today", "12", "#1", "", "Can you tell me a joke about Gavin's deal?"]) {
     assert.equal(isSmallTalk(q), false, q);
   }
-  assert.match(lib, /const research = !\(isSmallTalk\(question\) && !images\.length\);/, "an attached image always gets the normal path");
+  assert.match(lib, /const research = !\(isSmallTalk\(question\) && !images\.length\) && !fast;/, "an attached image always gets the normal path");
   assert.match(lib, /for \(let step = 0; research && step < MAX_STEPS/);
 });
 
@@ -65,8 +65,12 @@ test("no hedging filler", () => {
 
 test("the research step runs on the quicker model; the answer doesn't", () => {
   assert.match(lib, /export const PLAN_MODEL = "gpt-6-astra";/);
-  assert.equal((lib.match(/preferModel: PLAN_MODEL/g) ?? []).length, 2, "both plan calls (and the retry)");
-  const answer = lib.slice(lib.indexOf("const answerReply = await codexRespond("), lib.indexOf("const rows = dedupeRows("));
+  // Every research call — first try, firm retry, transient retry — goes through the one plan helper.
+  assert.equal((lib.match(/preferModel: PLAN_MODEL/g) ?? []).length, 1, "the one plan call");
+  assert.match(lib, /const plan = \(step: number, insist: boolean\) =>[\s\S]{0,200}preferModel: PLAN_MODEL/);
+  // (lastIndexOf: degraded mode earlier in askCrm builds its rows too.)
+  const answer = lib.slice(lib.indexOf("const answerReply = await withRetry("), lib.lastIndexOf("const rows = dedupeRows("));
+  assert.ok(answer.length > 100, "found the answer step");
   assert.doesNotMatch(answer, /preferModel/);
 });
 
@@ -77,6 +81,6 @@ test("while it researches, the person sees what it's doing", () => {
   assert.equal(lookupStatus([{ tool: "find_leads" }, { tool: "find_leads" }, { tool: "schedule" }]), "Checking leads and checking the calendar…");
   assert.equal(lookupStatus([{ tool: "find_activities" }, { tool: "find_leads" }, { tool: "find_quotes" }]), "Checking activities, checking leads and checking quotes…", "one sentence, one capital");
   assert.match(lib, /progress\(lookupStatus\(batch\)\);/);
-  assert.match(code("src/app/api/assistant/ask/route.ts"), /onProgress: \(status\) => send\(\{ t: "status", v: status \}\)/);
+  assert.match(code("src/app/api/assistant/ask/route.ts"), /onProgress: \(status\) => \{\s*send\(\{ t: "status", v: status \}\);/);
   assert.match(code("src/components/askStream.ts"), /if \(event\.t === "status"\) onStatus\(event\.v\);/);
 });
