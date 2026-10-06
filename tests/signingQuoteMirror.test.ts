@@ -17,8 +17,11 @@ const mirror = code("src/lib/signing/quoteMirror.ts");
 
 test("only the CUSTOMER receiving or opening it counts — not an approver, viewer or staff countersigner", () => {
   assert.match(mirror, /if \(r\.role !== "signer"\) return false;/);
-  // Exact, case-folded match — an ILIKE would read "_" and "%" in an address as wildcards.
-  assert.match(mirror, /return \(await ciExactIds\("userEmail", r\.email\.trim\(\), \{ limit: 1 \}\)\)\.length === 0;/);
+  // Exact, case-folded match — an ILIKE would read "_" and "%" in an address as wildcards —
+  // then membership of THIS request's tenant only (behaviour: signingQuoteMirrorTenant.test.ts).
+  assert.match(mirror, /const userIds = await ciExactIds\("userEmail", email\);/);
+  assert.match(mirror, /basePrisma\.tenantMember\.findFirst\(\{ where: \{ tenantId, userId: \{ in: userIds \} \}/);
+  assert.equal((mirror.match(/isCustomerSigner\(recipient, tenantId\)/g) ?? []).length, 2);
 });
 
 test("sent: a draft only, never a signed, superseded or deleted quote — always in the request's own tenant", () => {

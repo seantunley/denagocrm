@@ -21,10 +21,20 @@ import { CLOSED_REQUEST_STATUSES } from "./status";
 type Recipient = { role: string; email: string | null };
 type Tx = Parameters<Parameters<typeof basePrisma.$transaction>[0]>[0];
 
-async function isCustomerSigner(r: Recipient): Promise<boolean> {
+/**
+ * Staff of THIS workspace only. An address that belongs to a user in another
+ * workspace is still this workspace's customer — and a global "is anyone a user
+ * with this email?" would also answer, across workspaces, who is a member where.
+ * Exact, case-folded email (ciExactIds), then membership of the request's tenant.
+ */
+export async function isCustomerSigner(r: Recipient, tenantId: string): Promise<boolean> {
   if (r.role !== "signer") return false;
-  if (!r.email?.trim()) return true; // phone-only: staff always sign in with an email
-  return (await ciExactIds("userEmail", r.email.trim(), { limit: 1 })).length === 0;
+  const email = r.email?.trim();
+  if (!email) return true; // phone-only: staff always sign in with an email
+  const userIds = await ciExactIds("userEmail", email);
+  if (!userIds.length) return true;
+  const member = await basePrisma.tenantMember.findFirst({ where: { tenantId, userId: { in: userIds } }, select: { userId: true } });
+  return !member;
 }
 
 /**
@@ -49,7 +59,7 @@ type Mirror = { tenantId: string | null; quoteId: string | null; requestId: stri
 export async function mirrorQuoteSent({ tenantId, quoteId, requestId }: Mirror, recipient: Recipient): Promise<void> {
   if (!quoteId || !tenantId) return;
   try {
-    if (!(await isCustomerSigner(recipient))) return;
+    if (!(await isCustomerSigner(recipient, tenantId))) return;
     await whileRequestOpen(tenantId, quoteId, requestId, (tx) =>
       tx.quote.updateMany({
         where: { id: quoteId, tenantId, status: "draft", deletedAt: null, signedAt: null, supersededAt: null },
@@ -66,7 +76,7 @@ export async function mirrorQuoteSent({ tenantId, quoteId, requestId }: Mirror, 
 export async function mirrorQuoteViewed({ tenantId, quoteId, requestId }: Mirror, recipient: Recipient): Promise<void> {
   if (!quoteId || !tenantId) return;
   try {
-    if (!(await isCustomerSigner(recipient))) return;
+    if (!(await isCustomerSigner(recipient, tenantId))) return;
     await whileRequestOpen(tenantId, quoteId, requestId, (tx) =>
       tx.quote.updateMany({ where: { id: quoteId, tenantId, viewedAt: null, deletedAt: null }, data: { viewedAt: new Date() } }),
     );
