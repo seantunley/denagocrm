@@ -7,7 +7,7 @@ import { codexRespond, isCodexConnected } from "./codex";
 import { isModuleEnabled } from "./modules/enabled";
 import { ownedWriteTenantId } from "./tenantWrite";
 import { applyLearn } from "./assistantMemoryStore";
-import { FLAG_PREFIX, TIDY_INSTRUCTIONS, parseTidy, planTidy, type TidyEntry } from "./assistantMemory";
+import { FLAG_PREFIX, TIDY_INSTRUCTIONS, inUseWhere, parseTidy, planTidy, type TidyEntry } from "./assistantMemory";
 import { resultsBlock } from "./crmAssistantPlan";
 
 /**
@@ -42,18 +42,28 @@ export async function runAssistantTidy(): Promise<number | null> {
   // Claim the day first: a failed run must not retry every 30 minutes.
   await putSetting(TIDY_LAST_KEY, new Date().toISOString());
 
-  const [notes, turns] = await Promise.all([
+  const [notes, turns, wrong] = await Promise.all([
     // Not anyone's profile: "about you" is that person's own, it never leaves
-    // their conversations — not even into this prompt.
-    prisma.assistantNote.findMany({ where: { kind: { not: "profile" } }, select: { id: true, kind: true, userId: true, createdById: true, content: true, status: true, name: true } }),
+    // their conversations — not even into this prompt. Nor a held conflict
+    // (waiting for the owner — a merge would release it) or an expired entry
+    // (not in use; the owner extends or removes it).
+    prisma.assistantNote.findMany({ where: { ...inUseWhere(), kind: { not: "profile" } }, select: { id: true, kind: true, userId: true, createdById: true, content: true, status: true, name: true } }),
     prisma.assistantTurn.findMany({
       where: { createdAt: { gte: new Date(Date.now() - 24 * 60 * 60 * 1000) } },
       orderBy: { createdAt: "asc" },
       take: 40,
       select: { question: true },
     }),
+    // Learning from outcomes: the answers people rated 👎 this week, with why —
+    // a repeated cause becomes a playbook, for the owner to approve like any other.
+    prisma.assistantTurn.findMany({
+      where: { feedback: "down", feedbackAt: { gte: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000) } },
+      orderBy: { feedbackAt: "desc" },
+      take: 20,
+      select: { question: true, answer: true, feedbackReason: true },
+    }),
   ]);
-  if (notes.length < 2 && turns.length === 0) return 0;
+  if (notes.length < 2 && turns.length === 0 && wrong.length === 0) return 0;
 
   const entries: TidyEntry[] = notes.map((n) => ({ id: n.id, kind: n.kind, userId: n.userId, createdById: n.createdById, content: n.content, status: n.status }));
   const reply = await codexRespond({
@@ -70,6 +80,9 @@ export async function runAssistantTidy(): Promise<number | null> {
         "",
         "Today's questions:",
         ...turns.map((t) => stripInvisible(`- ${t.question.slice(0, 300)}`)),
+        "",
+        "Answers rated wrong this week:",
+        ...wrong.map((t) => stripInvisible(`- [${t.feedbackReason ?? "no reason given"}] Q: ${t.question.slice(0, 300)} | A: ${t.answer.slice(0, 400)}`)),
       ].join("\n"),
     ),
     reasoningEffort: "medium",
@@ -90,13 +103,14 @@ export async function runAssistantTidy(): Promise<number | null> {
   await prisma.$transaction(async (tx) => {
     await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`assistant-notes:${tenantId}`})::bigint)`;
     for (const change of changes) {
-      // Re-checked inside the lock: the owner may have approved it since we read.
-      const notApproved = { tenantId, status: { not: "approved" } };
+      // Re-checked inside the lock: the owner may have approved it since we read,
+      // or new learning may have turned it into a held conflict.
+      const notApproved = { tenantId, status: { notIn: ["approved", "conflict"] } };
       if (change.kind === "merge") {
         // The merged text is the MODEL's, written with everyone's entries and
         // today's questions in front of it — so it belongs to nobody until the
         // owner approves it (createdById null reaches no one's prompt).
-        const kept = await tx.assistantNote.updateMany({ where: { id: change.keepId, ...notApproved }, data: { content: change.content, description: null, status: "unreviewed", createdById: null } });
+        const kept = await tx.assistantNote.updateMany({ where: { id: change.keepId, ...notApproved }, data: { content: change.content, description: null, status: "unreviewed", createdById: null, source: "tidy" } });
         if (kept.count) await tx.assistantNote.deleteMany({ where: { id: { in: change.deleteIds }, ...notApproved } });
       } else if (change.kind === "remove") {
         await tx.assistantNote.deleteMany({ where: { id: change.id, ...notApproved } });

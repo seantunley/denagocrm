@@ -74,7 +74,9 @@ test("recall searches the words that matter and ranks by how many it matches", a
   const lib = code("src/lib/crmAssistant.ts");
   const recall = lib.slice(lib.indexOf("async function recall("), lib.indexOf("const RECALL_MATCHES"));
   assert.match(recall, /userId: user\.id/, "only this person's own conversations");
-  assert.equal((recall.match(/userId: user\.id/g) ?? []).length, 3, "the turns either side are this person's too");
+  // The search itself is raw SQL ("userId" = ${user.id}); the turns either side are this person's too.
+  assert.match(recall, /"userId" = \$\{user\.id\}/, "the search is this person's own");
+  assert.equal((recall.match(/userId: user\.id/g) ?? []).length, 2, "the turns either side are this person's too");
 });
 
 test("after several lookups it may save the method as a playbook — never on a quick answer", () => {
@@ -101,10 +103,10 @@ test("tasks are proposed only in chat; a scheduled run asks nothing back", async
   assert.match(CHANNEL_RULES.whatsapp, /put the draft itself in your answer/);
   const lib = code("src/lib/crmAssistant.ts");
   assert.match(lib, /const actions = source !== "chat" \? \[\] : await resolveActions/);
-  assert.match(lib, /const choices = source === "schedule" \? \[\] : choiceSplit\.choices;/);
+  assert.match(lib, /const choices = source === "schedule" \? \[\] : reply\.choices;/);
   assert.match(lib, /source,\s*scheduleId: source === "schedule" \? opts\.scheduleId \?\? null : null,/);
   // The browser can't pick a source: the chat passes only the checked image(s).
-  assert.match(code("src/lib/assistantAsk.ts"), /const page = typeof input\.page === "string" \? input\.page\.slice\(0, 200\) : null;\s*return askCrm\(user, q, page, \{ images, onAnswerText: live\.onAnswerText, onProgress: live\.onProgress \}\);/);
+  assert.match(code("src/lib/assistantAsk.ts"), /const page = typeof input\.page === "string" \? input\.page\.slice\(0, 200\) : null;\s*return askCrm\(user, q, page, \{ images, onAnswerText: live\.onAnswerText, onProgress: live\.onProgress, onPhase: live\.onPhase, timings: live\.timings \}\);/);
 });
 
 test("running for someone without a session re-checks membership, permission and module", () => {

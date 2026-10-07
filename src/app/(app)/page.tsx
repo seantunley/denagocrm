@@ -8,6 +8,28 @@ import {
   defaultDashboard,
 } from "@/lib/dashboard/store";
 import { dashboardViewer, dashboardWindow, plannedActivities, grants } from "@/lib/dashboard/data";
+import type { DashboardAccess } from "@/lib/dashboard/registry";
+import type { PermissionUser } from "@/lib/permissions";
+import { loadDaxBrief, type DaxBrief } from "@/lib/daxBrief";
+import { logError } from "@/lib/errorLog";
+import { DaxBriefCard } from "@/components/DaxBriefCard";
+
+/**
+ * The DAX brief, or nothing. Only where DAX exists (the automation module) and
+ * for someone who can see leads at all — it is a summary OF leads. A failure
+ * hides the card rather than the home page: the brief is a convenience, and the
+ * dashboard under it must still load. Logged by reason only; the error is the
+ * query's, never a customer's details.
+ */
+async function homeBrief(user: PermissionUser, access: DashboardAccess): Promise<DaxBrief | null> {
+  if (!access.modules.has("automation") || !grants(access, "leads.view_all", "leads.view_owned")) return null;
+  try {
+    return await loadDaxBrief(user);
+  } catch (error) {
+    await logError("dax-brief", error, "home page brief failed to load");
+    return null;
+  }
+}
 
 /**
  * The home screen: the user's own dashboard.
@@ -42,6 +64,8 @@ export default async function DashboardPage({
 }) {
   const { tab } = await searchParams;
   const { user, access } = await dashboardViewer();
+  // Started now, awaited at the render, so it overlaps the queries below.
+  const briefPromise = homeBrief(user, access);
 
   // The stored home dashboard, or the generated one. `dashboardBySlug` is
   // scoped to the session user, so this can only ever be the caller's own.
@@ -69,6 +93,7 @@ export default async function DashboardPage({
   );
   const greeting = hour < 12 ? "Good morning" : hour < 17 ? "Good afternoon" : "Good evening";
   const firstName = user.name.split(/\s+/)[0];
+  const brief = await briefPromise;
 
   return (
     <div className="space-y-5">
@@ -95,6 +120,8 @@ export default async function DashboardPage({
           </p>
         )}
       </div>
+
+      {brief && <DaxBriefCard brief={brief} />}
 
       <DashboardScreen dashboard={dashboard} tab={tab} />
     </div>

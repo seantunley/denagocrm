@@ -9,10 +9,14 @@ import { ASSISTANT_PROFILE_KEY, parseProfile } from "@/lib/assistantSoul";
 import { assistantHistory } from "@/lib/crmAssistant";
 import { markScheduledTurnsSeen } from "@/lib/assistantScheduleRun";
 import { describeSchedule } from "@/lib/assistantSchedule";
+import { isExpired } from "@/lib/assistantMemory";
+import { assistantVoiceRepliesOn } from "@/lib/assistantVoice";
 import AssistantChat from "@/components/AssistantChat";
 import ConfirmActionDialog from "@/components/ConfirmActionDialog";
 import { deleteAssistantNote, saveMyAssistantNote } from "@/app/actions/assistantNotes";
 import { deleteAssistantSchedule, setAssistantScheduleActive } from "@/app/actions/assistantSchedules";
+import { deleteAssistantWatch, setAssistantWatchActive } from "@/app/actions/assistantWatches";
+import { ONE_SHOT_KINDS, type WatchKind } from "@/lib/assistantWatchRules";
 import { SaveForm, SaveButton } from "@/components/SaveForm";
 import { basePrisma, prisma } from "@/lib/db";
 import { actingOwnerTenantId } from "@/lib/actingScope";
@@ -47,11 +51,12 @@ export default async function AssistantPage() {
     "activities.view", "activities.manage",
   );
   if (!(await isModuleEnabled("automation"))) notFound();
-  const [connected, profile, history, aboutMe, schedules, whatsapp] = await Promise.all([
+  const [listen, connected, profile, history, aboutMe, schedules, whatsapp, watches] = await Promise.all([
+    assistantVoiceRepliesOn().catch(() => false),
     isCodexConnected(),
     getSetting(ASSISTANT_PROFILE_KEY).then(parseProfile),
     assistantHistory(user.id),
-    prisma.assistantNote.findMany({ where: { kind: "profile", userId: user.id }, orderBy: { createdAt: "asc" }, select: { id: true, content: true } }),
+    prisma.assistantNote.findMany({ where: { kind: "profile", userId: user.id }, orderBy: { createdAt: "asc" }, select: { id: true, content: true, status: true, validUntil: true } }),
     // This person's own schedules only.
     prisma.assistantSchedule.findMany({
       where: { userId: user.id },
@@ -59,9 +64,17 @@ export default async function AssistantPage() {
       select: { id: true, question: true, cadence: true, weekday: true, timeOfDay: true, onDate: true, nextRunAt: true, active: true },
     }),
     whatsappCard(user.id),
+    // This person's own watches only — every one of them, running or not.
+    prisma.assistantWatch.findMany({
+      where: { userId: user.id },
+      orderBy: { createdAt: "asc" },
+      select: { id: true, kind: true, label: true, active: true, lastFiredAt: true },
+    }),
     // Being on this page is seeing them: the bubble's unread dot goes.
     markScheduledTurnsSeen(user.id),
   ]);
+  const saWhen = (d: Date) =>
+    d.toLocaleString("en-ZA", { timeZone: "Africa/Johannesburg", weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
 
   return (
     <div className="mx-auto max-w-3xl space-y-6">
@@ -70,7 +83,7 @@ export default async function AssistantPage() {
         description="Your sales colleague: it reads your leads, quotes, activities and the business's own knowledge, and tells you what it means — never more than your own lists show you."
       />
       {connected ? (
-        <AssistantChat name={profile.name} history={history.map(({ question, answer, source }) => ({ question, answer, source }))} />
+        <AssistantChat name={profile.name} history={history.map(({ question, answer, source }) => ({ question, answer, source }))} listen={listen} />
       ) : (
         <p className="card p-5 text-sm text-muted-foreground">
           This runs on your workspace&apos;s ChatGPT connection, which isn&apos;t set up yet.{" "}
@@ -118,7 +131,50 @@ export default async function AssistantPage() {
           </ul>
         )}
       </section>
-      {whatsapp && <AssistantWhatsAppCard name={profile.name} linked={whatsapp.linked} />}
+      <section className="card space-y-3 p-4 text-sm">
+        <h2 className="font-medium">👀 Watching</h2>
+        <p className="text-muted-foreground">
+          Ask {profile.name} to keep an eye on something — e.g. &ldquo;tell me when Anna opens her quote&rdquo; or &ldquo;tell me if a lead goes a week without contact&rdquo;. You confirm it first; it checks every half hour and only ever tells you — it never contacts a customer.
+        </p>
+        {watches.length > 0 && (
+          <ul className="divide-y divide-border/50">
+            {watches.map((w) => {
+              const done = !w.active && Boolean(w.lastFiredAt) && ONE_SHOT_KINDS.includes(w.kind as WatchKind);
+              return (
+                <li key={w.id} className="flex items-start justify-between gap-3 py-2">
+                  <div className="min-w-0">
+                    <p className="font-medium">{w.label}</p>
+                    <p className="text-xs text-muted-foreground">
+                      {done ? "Done" : w.active ? "Watching" : "Paused"}
+                      {w.lastFiredAt ? ` · last told you ${saWhen(w.lastFiredAt)}` : ""}
+                    </p>
+                  </div>
+                  <div className="flex shrink-0 gap-3">
+                    {!done && (
+                      <ConfirmActionDialog
+                        trigger={<button type="button" className="text-xs text-muted-foreground hover:text-foreground">{w.active ? "Pause" : "Resume"}</button>}
+                        title={w.active ? "Pause this watch?" : "Resume this watch?"}
+                        description={w.active ? "It won't check or tell you anything until you resume it." : "It starts checking again at the next half hour."}
+                        confirmLabel={w.active ? "Pause" : "Resume"}
+                        onConfirm={setAssistantWatchActive.bind(null, w.id, !w.active)}
+                      />
+                    )}
+                    <ConfirmActionDialog
+                      trigger={<button type="button" className="text-xs text-muted-foreground hover:text-destructive">Delete</button>}
+                      title="Delete this watch?"
+                      description="It won't check again. What it already told you stays in your history."
+                      confirmLabel="Delete"
+                      destructive
+                      onConfirm={deleteAssistantWatch.bind(null, w.id)}
+                    />
+                  </div>
+                </li>
+              );
+            })}
+          </ul>
+        )}
+      </section>
+      {whatsapp &&<AssistantWhatsAppCard name={profile.name} linked={whatsapp.linked} />}
       <details className="card p-4 text-sm">
         <summary className="cursor-pointer font-medium">
           About you — what {profile.name} knows{aboutMe.length ? ` (${aboutMe.length})` : ""}
@@ -130,6 +186,11 @@ export default async function AssistantPage() {
           {aboutMe.map((note) => (
             <li key={note.id} className="space-y-2 py-2">
               <p className="whitespace-pre-line">{note.content}</p>
+              {/* Shown, not hidden: one DAX isn't using right now, and why. */}
+              {note.status === "conflict" && (
+                <p className="text-[11px] text-muted-foreground">On hold — it contradicts something the workspace owner approved; they&apos;ll decide which stands.</p>
+              )}
+              {isExpired(note.validUntil) && <p className="text-[11px] text-muted-foreground">Ended — no longer used.</p>}
               <div className="flex flex-wrap items-center gap-2">
                 <details className="w-full text-xs sm:w-auto">
                   <summary className="cursor-pointer list-none text-muted-foreground hover:text-foreground">Edit</summary>

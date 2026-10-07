@@ -16,7 +16,7 @@ import type { PermissionUser } from "./permissions";
 export async function askAsPerson(
   user: PermissionUser,
   input: { question: unknown; page: unknown; image: unknown },
-  live: Pick<AskOptions, "onAnswerText" | "onProgress"> = {},
+  live: Pick<AskOptions, "onAnswerText" | "onProgress" | "onPhase" | "timings"> = {},
 ): Promise<AssistantResult> {
   // The page hides it with the module off; the action must refuse on its own.
   if (!(await isModuleEnabled("automation"))) {
@@ -40,5 +40,5 @@ export async function askAsPerson(
   // `page` is only a hint ("this lead"); pageHint reads a record id out of it
   // and the tools re-check access, so a forged path finds nothing new.
   const page = typeof input.page === "string" ? input.page.slice(0, 200) : null;
-  return askCrm(user, q, page, { images, onAnswerText: live.onAnswerText, onProgress: live.onProgress });
+  return askCrm(user, q, page, { images, onAnswerText: live.onAnswerText, onProgress: live.onProgress, onPhase: live.onPhase, timings: live.timings });
 }

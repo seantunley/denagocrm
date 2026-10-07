@@ -2,7 +2,10 @@
 
 import { useEffect, useRef, useState, useTransition } from "react";
 import Link from "next/link";
-import { ArrowUpRight, Loader2, Mic, Paperclip, Smile, Square, X } from "lucide-react";
+import { ArrowUpRight, Loader2, Mic, Paperclip, Smile, Square, ThumbsDown, ThumbsUp, Volume2, X } from "lucide-react";
+import { rateAssistantAnswer } from "@/app/actions/assistant";
+import { speakAssistantAnswer } from "@/app/actions/assistantVoice";
+import type { Evidence } from "@/lib/assistantReply";
 import { DaxIcon } from "@/components/DaxIcon";
 import { shrinkToJpeg } from "@/components/shrinkImage";
 import { askStreaming } from "@/components/askStream";
@@ -13,11 +16,113 @@ import { audioForm, useVoiceRecorder } from "@/components/useVoiceRecorder";
 import type { ActionCard } from "@/lib/assistantActions";
 import AssistantActionCard from "@/components/AssistantActionCard";
 
-type Turn = { question: string; answer?: string; error?: string; rows: AssistantRow[]; learned?: number; actions?: ActionCard[]; choices?: string[]; source?: string };
+type Turn = {
+  question: string; answer?: string; cited?: string; evidence?: Evidence[]; turnId?: string;
+  error?: string; rows: AssistantRow[]; learned?: number; actions?: ActionCard[]; choices?: string[]; source?: string;
+};
 
-/** A scheduled answer arrived on its own — say so, or it reads as something you asked just now. */
+/** A scheduled answer or a fired watch arrived on its own — say so, or it reads as something you asked just now. */
 const scheduledLabel = (turn: Turn) =>
-  turn.source === "schedule" ? <p className="text-[11px] font-medium text-muted-foreground">⏰ Scheduled</p> : null;
+  turn.source === "schedule" ? <p className="text-[11px] font-medium text-muted-foreground">⏰ Scheduled</p>
+    : turn.source === "watch" ? <p className="text-[11px] font-medium text-muted-foreground">👀 Something you&apos;re watching</p>
+      : null;
+
+/**
+ * The answer, with its evidence: each [[n]] the server numbered becomes a small
+ * chip that opens the record the fact came from. Only links the server kept —
+ * ones its own lookups returned — ever reach here.
+ */
+function AnswerText({ turn }: { turn: Turn }) {
+  if (!turn.cited || !turn.evidence?.length) return <p className="whitespace-pre-line text-sm leading-relaxed">{turn.answer}</p>;
+  const parts = turn.cited.split(/\[\[(\d+)\]\]/);
+  return (
+    <p className="whitespace-pre-line text-sm leading-relaxed">
+      {parts.map((part, i) => {
+        if (i % 2 === 0) return part;
+        const source = turn.evidence![Number(part) - 1];
+        if (!source) return null;
+        return (
+          <Link
+            key={i}
+            href={source.href}
+            title={`Open ${source.label}`}
+            className="mx-0.5 inline-flex max-w-[12rem] items-center gap-0.5 truncate rounded-full border border-primary/30 bg-primary/5 px-1.5 align-baseline text-[11px] font-medium text-primary hover:bg-primary/10"
+          >
+            {source.label}
+            <ArrowUpRight className="size-3 shrink-0" />
+          </Link>
+        );
+      })}
+    </p>
+  );
+}
+
+const AUTO_ASKED = new Set<number>();
+
+const WRONG_REASONS: [string, string][] = [["wrong_facts", "Wrong facts"], ["bad_advice", "Bad advice"], ["misunderstood", "Didn't understand me"], ["other", "Other"]];
+
+/** 👍 / 👎 under an answer — and when it's wrong, why. Kept on the turn for the owner. */
+function Feedback({ turnId }: { turnId: string }) {
+  const [rated, setRated] = useState<"up" | "down" | "why" | null>(null);
+  const rate = (rating: "up" | "down", reason?: string) => {
+    setRated(rating === "down" && !reason ? "why" : rating);
+    void rateAssistantAnswer(turnId, rating, reason).catch(() => undefined);
+  };
+  if (rated === "up" || rated === "down") return <p className="text-[11px] text-muted-foreground">Thanks — noted.</p>;
+  if (rated === "why") {
+    return (
+      <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
+        <span className="text-muted-foreground">What was wrong?</span>
+        {WRONG_REASONS.map(([key, label]) => (
+          <button key={key} type="button" onClick={() => rate("down", key)} className="rounded-full border border-border px-2 py-0.5 hover:border-primary">
+            {label}
+          </button>
+        ))}
+      </div>
+    );
+  }
+  return (
+    <div className="flex items-center gap-1 text-muted-foreground">
+      <button type="button" onClick={() => rate("up")} className="rounded p-1 hover:text-foreground" aria-label="Useful" title="Useful">
+        <ThumbsUp className="size-3.5" />
+      </button>
+      <button type="button" onClick={() => rate("down")} className="rounded p-1 hover:text-foreground" aria-label="Wrong" title="Wrong">
+        <ThumbsDown className="size-3.5" />
+      </button>
+    </div>
+  );
+}
+
+// Set once the server says listening is off in this workspace (owner switch,
+// no voice set up, module off): every Listen button then hides for the page's life.
+let listeningOff = false;
+
+/**
+ * 🔊 Listen — this answer read aloud. Made only on the click (each one costs
+ * ElevenLabs credit) and played from memory; nothing is kept.
+ */
+function Listen({ turnId }: { turnId: string }) {
+  const [state, setState] = useState<{ busy?: boolean; audio?: string; error?: string; off?: boolean }>({});
+  if (state.audio) return <audio src={state.audio} controls autoPlay className="h-8 w-full max-w-xs" />;
+  if (state.off) return <p className="text-[11px] text-muted-foreground">{state.error}</p>;
+  if (listeningOff) return null;
+  const listen = async () => {
+    setState({ busy: true });
+    const result = await speakAssistantAnswer(turnId).catch(() => ({ ok: false as const, error: "Couldn't reach the server — try again.", off: false }));
+    if (result.ok) return setState({ audio: result.audio });
+    if (result.off) listeningOff = true;
+    setState({ error: result.error, off: result.off });
+  };
+  return (
+    <div className="flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
+      <button type="button" onClick={listen} disabled={state.busy} className="inline-flex items-center gap-1 rounded p-1 hover:text-foreground" title="Read this answer aloud">
+        {state.busy ? <Loader2 className="size-3.5 animate-spin" /> : <Volume2 className="size-3.5" />}
+        Listen
+      </button>
+      {state.error && <span>{state.error}</span>}
+    </div>
+  );
+}
 
 // The OS picker (Win + . / Ctrl + Cmd + Space) has everything; these are one tap away.
 const EMOJIS = ["👍", "🙏", "😊", "😂", "🔥", "✅", "⚠️", "📞", "💬", "📅", "🚗", "💰", "🎉", "🤝", "👀", "❓"];
@@ -38,6 +143,8 @@ export default function AssistantChat({
   history = [],
   page,
   compact = false,
+  autoAsk,
+  listen = false,
 }: {
   name: string;
   history?: { question: string; answer: string; source?: string }[];
@@ -45,6 +152,10 @@ export default function AssistantChat({
   page?: string;
   /** The bubble: no example prompts — there isn't room, and you're mid-task. */
   compact?: boolean;
+  /** Asked once as soon as the chat opens (the home page's "Ask DAX for a plan"). */
+  autoAsk?: { question: string; key: number };
+  /** The owner switched voice replies on and a voice is set up: show 🔊 Listen. */
+  listen?: boolean;
 }) {
   const [question, setQuestion] = useState("");
   const [turns, setTurns] = useState<Turn[]>(() => history.map((t) => ({ ...t, rows: [] })));
@@ -107,7 +218,9 @@ export default function AssistantChat({
       // dropped stream is never re-asked another way (askStream).
       const form = new FormData();
       form.set("question", q);
-      if (page) form.set("page", page);
+      // The query too (?conversation=…, ?edit=…): on the inbox and the quote
+      // editor, that is what says which record "this" is.
+      if (page) form.set("page", `${page}${typeof window === "undefined" ? "" : window.location.search}`);
       if (sent) form.set("image", new File([sent.blob], "image.jpg", { type: "image/jpeg" }));
       const result = await askStreaming(
         form,
@@ -117,12 +230,28 @@ export default function AssistantChat({
       setLive(null);
       setTurns((prev) => [
         result.ok
-          ? { question: shown, answer: result.answer, rows: result.rows, learned: result.learned, actions: result.actions, choices: result.choices }
+          ? {
+              question: shown, answer: result.answer, cited: result.cited, evidence: result.evidence, turnId: result.turnId,
+              rows: result.rows, learned: result.learned, actions: result.actions, choices: result.choices,
+            }
           : { question: shown, error: result.error, rows: [] },
         ...prev,
       ]);
     });
   };
+
+  // Asked once when opened for it (the brief's "Ask DAX for a plan"). Keys are
+  // remembered for the page's life, so a remount — moving to another page with
+  // the bubble open, or React's dev double effect — never asks it again.
+  useEffect(() => {
+    if (!autoAsk || AUTO_ASKED.has(autoAsk.key)) return;
+    AUTO_ASKED.add(autoAsk.key);
+    // An outside trigger (the brief's button), acted on once per key — the
+    // same as the person pressing Ask, which is what it stands for.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    ask(autoAsk.question);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- once per key
+  }, [autoAsk?.key]);
 
   // Speak the question: transcribe, then ask it exactly as if it were typed.
   const voice = useVoiceRecorder(async (audio) => {
@@ -166,6 +295,8 @@ export default function AssistantChat({
           ))}
         </div>
       )}
+      {turn.turnId && <Feedback turnId={turn.turnId} />}
+      {listen && turn.turnId && <Listen turnId={turn.turnId} />}
       {Boolean(turn.learned) && (
         <p className="text-[11px] text-muted-foreground">
           🧠 {name} learned something from this — the workspace owner can review it in Settings → Assistant.
@@ -318,7 +449,7 @@ export default function AssistantChat({
               {turn.error ? (
                 <p className="text-sm text-destructive">{turn.error}</p>
               ) : (
-                <p className="whitespace-pre-line text-sm leading-relaxed">{turn.answer}</p>
+                <AnswerText turn={turn} />
               )}
               {details(turn)}
             </div>
@@ -382,7 +513,7 @@ export default function AssistantChat({
           {turn.error ? (
             <p className="text-sm text-destructive">{turn.error}</p>
           ) : (
-            <p className="whitespace-pre-line text-sm leading-relaxed">{turn.answer}</p>
+            <AnswerText turn={turn} />
           )}
           {details(turn)}
         </div>

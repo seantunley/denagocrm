@@ -63,6 +63,6 @@ test("'gone quiet' and 'oldest contact' only count real contact", () => {
   const find = lib.slice(lib.indexOf("async function findLeads("), lib.indexOf("const withTouch"));
   assert.match(find, /communications: \{ where: contactCommunicationWhere,/, "a note doesn't reset the clock");
   assert.match(find, /activities: \{\s*where: contactActivityWhere,/, "a done to-do or blocked time doesn't either");
-  assert.match(lib, /lastContact: latestContactAt\(lead\.communications, lead\.activities\)/, "and the same rule is applied to the rows");
+  assert.match(lib, /const own = latestContactAt\(lead\.communications, lead\.activities\);/, "and the same rule is applied to the rows");
   assert.match(code("src/lib/crmAssistantPlan.ts"), /internal notes and to-dos do not count/, "the plan step is told what contact means");
 });

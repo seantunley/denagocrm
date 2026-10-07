@@ -159,6 +159,12 @@ async function runGlobalMaintenance() {
     await basePrisma.assistantTurn
       .deleteMany({ where: { createdAt: { lt: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000) } } })
       .catch(() => {});
+    // A run is the live copy of one question while it is answered (the turn
+    // above is the record) and its phase timings for the owner's speed view —
+    // a week of those is enough; the reconnect itself needs minutes.
+    await basePrisma.assistantRun
+      .deleteMany({ where: { createdAt: { lt: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000) } } })
+      .catch(() => {});
   });
 }
 

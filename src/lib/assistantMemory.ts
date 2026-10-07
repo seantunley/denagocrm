@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { stripInvisible } from "./invisibleText";
+import { johannesburgDateKey } from "./activityDay";
 
 /**
  * How the assistant learns — the pure half (parsing, limits, safety scan).
@@ -26,9 +27,16 @@ export const PLAYBOOK_CHARS = 1500;
 export const ENTRY_CHARS = 400;
 
 const entryText = z.string().trim().min(3).max(ENTRY_CHARS);
+// The last day a time-bound rule applies ("for October…"). A bad date only
+// loses the expiry, never the lesson: it is dropped, not the whole block.
+const until = z
+  .string()
+  .refine((day) => parseUntil(day) !== null)
+  .optional()
+  .catch(undefined);
 const noteOp = z.union([
-  z.object({ add: entryText }).strict(),
-  z.object({ replace: z.object({ old: z.string().trim().min(3).max(ENTRY_CHARS), new: entryText }).strict() }).strict(),
+  z.object({ add: entryText, until }).strict(),
+  z.object({ replace: z.object({ old: z.string().trim().min(3).max(ENTRY_CHARS), new: entryText }).strict(), until }).strict(),
   z.object({ remove: z.string().trim().min(3).max(ENTRY_CHARS) }).strict(),
 ]);
 export const playbookOp = z
@@ -50,15 +58,16 @@ export type LearnBlock = z.infer<typeof learnBlock>;
 export type NoteOp = z.infer<typeof noteOp>;
 
 export const LEARN_INSTRUCTIONS = [
-  "LEARNING. You remember across conversations. After your answer, ONLY if this exchange taught you something durable, add one final line:",
-  'LEARN: {"memory":[{"add":"..."}],"profile":[{"add":"..."}],"playbook":[{"name":"hot-lead","description":"<=60 chars","content":"..."}]}',
+  'LEARNING. You remember across conversations. ONLY if this exchange taught you something durable, put it under "learn" in the reply block:',
+  '"learn":{"memory":[{"add":"..."}],"profile":[{"add":"..."}],"playbook":[{"name":"hot-lead","description":"<=60 chars","content":"..."}]}',
   'Each list is optional. Ops: {"add":"text"}, {"replace":{"old":"words in the existing entry","new":"whole new entry"}}, {"remove":"words in the entry"}.',
+  'A rule that only holds for a while ("for October…", "until the promo ends on the 15th") gets "until":"YYYY-MM-DD" (its last day) on the add or replace op.',
   "- memory: facts about THIS BUSINESS that matter in every future conversation — who handles what, how things are done here, policies someone told you.",
   "- profile: this person's own lasting preferences — how they like answers, their role, their area.",
   "- playbook: a named definition or procedure the person taught or corrected (\"hot lead means…\", \"our weekly review is…\"). name is lowercase-hyphenated.",
   "A correction from the person is the most important thing to learn. If an entry you were given is wrong or out of date, replace or remove it.",
   "SKIP: anything about one particular customer or deal, data that lives in the CRM records, one-off tasks, guesses. Never store a phone number, email address or a customer's name.",
-  "Most answers learn nothing — then add no LEARN line at all.",
+  'Most answers learn nothing — then leave "learn" out.',
 ].join("\n");
 
 /**
@@ -77,7 +86,7 @@ export function methodInstructions(lookups: { tool: string; args: unknown }[]): 
   // the fenced results, each with its filters, cleaned. Only tool names here.
   return [
     `METHOD. Answering this took ${lookups.length} lookups (${lookups.map((l) => l.tool).join(" → ")}); their filters are with each result above.`,
-    "If this is a KIND of question that will come up again (\"who should I chase\", \"is X ready for delivery\" — not one about a particular customer) and no playbook already covers it, save the method as a playbook in your LEARN line: a name for that kind of question, a one-line description, and the steps — which lookups with which filters, what to look for in the results, and how to judge them. Leave out names and anything specific to today's records.",
+    "If this is a KIND of question that will come up again (\"who should I chase\", \"is X ready for delivery\" — not one about a particular customer) and no playbook already covers it, save the method as a playbook under \"learn\": a name for that kind of question, a one-line description, and the steps — which lookups with which filters, what to look for in the results, and how to judge them. Leave out names and anything specific to today's records.",
     "If you loaded a playbook and it was missing a step you needed, improve it (replace). If the method was obvious or one-off, learn nothing.",
   ].join("\n");
 }
@@ -109,6 +118,9 @@ const INJECTION = [
   /\b(api ?key|password|secret|token)\s*[:=]/i,
   /<\s*\/?\s*(script|system|instructions?)\b/i,
   /\bLEARN:/,
+  // The reply block's marker (assistantReply.REPLY_MARKER): a remembered entry
+  // that carried it would sit in every prompt, ready to be echoed as a block.
+  /<<\s*DAX\s*>>/i,
 ];
 // Letters of ANY script (a Cyrillic look-alike domain is still a domain),
 // spaces around the @, and the ideographic/halfwidth full stops as dots.
@@ -147,46 +159,183 @@ export function scanEntry(raw: string): { ok: true; text: string } | { ok: false
 
 /* ── Applying ops to a list of entries (pure, so limits are testable) ───── */
 
-export type Entry = { id: string; content: string; status: string };
+/**
+ * status: "unreviewed" (learned, not yet looked at), "approved" (the owner's),
+ * or "conflict" — learned, but it contradicts the approved entry
+ * `conflictsWithId`, so it is held out of every prompt until the owner picks one.
+ */
+export type Entry = { id: string; content: string; status: string; conflictsWithId?: string | null; validUntil?: Date | null };
 export type Change =
-  | { kind: "create"; content: string }
-  | { kind: "update"; id: string; content: string }
+  | { kind: "create"; content: string; until?: string; conflictsWithId?: string }
+  | { kind: "update"; id: string; content: string; until?: string; conflictsWithId?: string }
   | { kind: "delete"; id: string };
 
 /**
  * Ops → changes against the current entries, refusing anything over `limit`
  * total characters. Approved entries are the owner's: the assistant may only
- * replace or remove its own unreviewed ones (it adds a correction instead).
+ * replace or remove its own unreviewed ones. New text that contradicts an
+ * approved entry — or a "replace" aimed at one, which is the model correcting
+ * it — is held as a conflict for the owner to settle, never used meanwhile.
  */
 export function planNoteChanges(entries: Entry[], ops: NoteOp[], limit: number): Change[] {
-  const working = entries.map((e) => ({ ...e }));
+  const working: Entry[] = entries.map((e) => ({ ...e }));
   const changes: Change[] = [];
   const total = () => working.reduce((n, e) => n + e.content.length, 0);
   const find = (words: string) => working.find((e) => e.content.toLowerCase().includes(words.toLowerCase()));
+  const exists = (text: string) => working.some((e) => e.content.toLowerCase() === text.toLowerCase());
+  const clashFor = (text: string) => working.find((e) => e.status === "approved" && conflictsWith(text, e.content));
+  // One open question per approved entry: a held entry isn't in the prompt, so
+  // the model may well learn the same thing again next time in other words.
+  const pending = (approvedId: string, except?: Entry) =>
+    working.some((e) => e !== except && e.status === "conflict" && e.conflictsWithId === approvedId);
+  const extra = (until: string | undefined, clash: Entry | undefined) => ({
+    ...(until ? { until } : {}),
+    ...(clash ? { conflictsWithId: clash.id } : {}),
+  });
+  const create = (content: string, until: string | undefined, clash: Entry | undefined) => {
+    working.push({ id: `new-${changes.length}`, content, status: clash ? "conflict" : "unreviewed", conflictsWithId: clash?.id });
+    changes.push({ kind: "create", content, ...extra(until, clash) });
+  };
 
   for (const op of ops) {
     if ("add" in op) {
       const scanned = scanEntry(op.add);
-      if (!scanned.ok) continue;
-      if (working.some((e) => e.content.toLowerCase() === scanned.text.toLowerCase())) continue;
-      if (total() + scanned.text.length > limit) continue;
-      working.push({ id: `new-${changes.length}`, content: scanned.text, status: "unreviewed" });
-      changes.push({ kind: "create", content: scanned.text });
+      if (!scanned.ok || exists(scanned.text) || total() + scanned.text.length > limit) continue;
+      const clash = clashFor(scanned.text);
+      if (clash && pending(clash.id)) continue;
+      create(scanned.text, op.until, clash);
     } else if ("replace" in op) {
       const target = find(op.replace.old);
       const scanned = scanEntry(op.replace.new);
-      if (!target || !scanned.ok || target.status === "approved") continue;
+      // A held entry waits for the owner; the assistant can't change it meanwhile.
+      if (!target || !scanned.ok || target.status === "conflict") continue;
+      if (target.status === "approved") {
+        // The owner's entry stays as it is; the correction waits beside it.
+        if (exists(scanned.text) || pending(target.id) || total() + scanned.text.length > limit) continue;
+        create(scanned.text, op.until, target);
+        continue;
+      }
       if (total() - target.content.length + scanned.text.length > limit) continue;
-      target.content = scanned.text;
-      changes.push(target.id.startsWith("new-") ? { kind: "create", content: scanned.text } : { kind: "update", id: target.id, content: scanned.text });
+      const clash = clashFor(scanned.text);
+      if (clash && pending(clash.id, target)) continue;
+      Object.assign(target, { content: scanned.text, status: clash ? "conflict" : "unreviewed", conflictsWithId: clash?.id });
+      changes.push(
+        target.id.startsWith("new-")
+          ? { kind: "create", content: scanned.text, ...extra(op.until, clash) }
+          : { kind: "update", id: target.id, content: scanned.text, ...extra(op.until, clash) },
+      );
     } else {
       const target = find(op.remove);
-      if (!target || target.status === "approved" || target.id.startsWith("new-")) continue;
+      if (!target || target.status === "approved" || target.status === "conflict" || target.id.startsWith("new-")) continue;
       working.splice(working.indexOf(target), 1);
       changes.push({ kind: "delete", id: target.id });
     }
   }
   return changes;
+}
+
+/* ── Time: when an entry stops applying ──────────────────────────────────── */
+
+/** "YYYY-MM-DD" → that day (UTC midnight, the way a DATE column comes back), or null if it isn't a real day. */
+export function parseUntil(text: string): Date | null {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(text)) return null;
+  const day = new Date(`${text}T00:00:00Z`);
+  // "2026-02-31" parses as 3 March; only a date that reads back the same is real.
+  return !Number.isNaN(day.getTime()) && day.toISOString().startsWith(text) ? day : null;
+}
+
+/** Today in South Africa, as the same kind of value — the business's day, not the UTC server's. */
+export function saToday(now = new Date()): Date {
+  return new Date(`${johannesburgDateKey(now)}T00:00:00Z`);
+}
+
+/** Past its last day. Still kept (the owner sees "Expired" and can extend it) — just never in a prompt. */
+export const isExpired = (validUntil: Date | null | undefined, now = new Date()) => Boolean(validUntil && validUntil < saToday(now));
+
+/**
+ * What may go into a prompt: not held as a conflict, and not past its last
+ * day (valid THROUGH validUntil). A Prisma filter, spread into each read.
+ */
+export function inUseWhere(now = new Date()) {
+  return { status: { not: "conflict" }, AND: [{ OR: [{ validUntil: null }, { validUntil: { gte: saToday(now) } }] }] };
+}
+
+/* ── Conflicts: does new learning contradict an approved entry? ─────────── */
+
+/*
+ * Deterministic and cheap — it runs inside the learning write, with no extra
+ * model call. Deliberately conservative: two shapes only, and anything it
+ * can't read cleanly is NOT a conflict (the nightly tidy-up still flags what
+ * this misses). A false alarm would hold good learning back from everyone.
+ *
+ *  1. Who owns what: "Sean handles fleet accounts" vs "Fleet deals go to
+ *     Donovan" — both name one owner for the same topic, and the owners differ.
+ *  2. The same statement, flipped or re-numbered: "We deliver on Saturdays" vs
+ *     "We don't deliver on Saturdays"; "within 24 hours" vs "within 48 hours".
+ *
+ * ponytail: word sets, not grammar — misses paraphrases ("Donovan looks after
+ * fleet" vs "fleet is Sean's"); the tidy-up is the backstop for those.
+ */
+
+const STOP = new Set(
+  "a an the our we us you your i my me all any every each of to for in on at by with is are be was were will would should must can could may might it its this that these those than also only always just please do does did".split(" "),
+);
+const NEGATION = new Set(["not", "no", "never", "don't", "dont", "doesn't", "doesnt", "won't", "wont", "can't", "cant", "cannot", "isn't", "aren't", "shouldn't", "mustn't", "nobody", "none"]);
+// Words that name the work, not which work: "fleet deals" and "fleet accounts" are one topic.
+const GENERIC = new Set(["deal", "account", "customer", "client", "lead", "enquiry", "enquirie", "inquiry", "inquirie", "sale", "order", "quote", "job", "request"]);
+const stem = (word: string) => (word.length > 3 && word.endsWith("s") && !word.endsWith("ss") ? word.slice(0, -1) : word);
+
+function words(text: string) {
+  const content = new Set<string>();
+  const numbers = new Set<string>();
+  let negative = false;
+  for (const raw of text.toLowerCase().replace(/[‘’]/g, "'").split(/[^\p{L}\p{N}'%-]+/u)) {
+    const word = raw.replace(/^['-]+|['-]+$/g, "");
+    if (!word || STOP.has(word)) continue;
+    if (NEGATION.has(word)) negative = true;
+    else if (/\p{N}/u.test(word)) numbers.add(word);
+    else content.add(stem(word));
+  }
+  return { content, numbers, negative };
+}
+
+const sameSet = (a: Set<string>, b: Set<string>) => a.size === b.size && [...a].every((x) => b.has(x));
+
+const OWN_VERBS = "handles?|owns?|runs?|manages?|covers?|looks after|takes care of|is responsible for|is in charge of|deals with";
+const NAME = String.raw`([A-Z][\p{L}'-]+(?: [A-Z][\p{L}'-]+)?)`;
+const OWNER_FIRST = new RegExp(`^${NAME} (?:${OWN_VERBS}) (.+)$`, "u");
+const OWNER_LAST = new RegExp(
+  `^(.+?) (?:go(?:es)? to|belongs? to|(?:is|are) (?:handled|owned|run|managed|covered|looked after) by|(?:is|are) (?:assigned|routed|passed|sent) to) ${NAME}$`,
+  "u",
+);
+const NOT_A_NAME = new Set(["we", "i", "they", "he", "she", "you", "it", "everyone", "nobody", "someone", "each", "all", "the", "our", "this", "that"]);
+// A condition or a second clause means the sentence says more than "X owns Y" — unsure, so no.
+const HEDGED = new RegExp(String.raw`[;:]|\b(?:except|but|unless|while|when|if|until|${OWN_VERBS}|go(?:es)? to)\b`, "i");
+
+/** "Sean handles fleet and golf-estate deals" → who: "sean", topics: ["fleet", "golf-estate"]. */
+function ownership(text: string): { who: string; topics: string[] } | null {
+  const sentence = text.trim().replace(/[.!]+$/, "").replace(/^only /i, "");
+  const first = OWNER_FIRST.exec(sentence);
+  const last = first ? null : OWNER_LAST.exec(sentence);
+  const [who, topic] = first ? [first[1], first[2]] : last ? [last[2], last[1]] : [];
+  if (!who || !topic || NOT_A_NAME.has(who.toLowerCase()) || HEDGED.test(topic)) return null;
+  const topics = topic.split(/\s*(?:,|&|\/|\band\b|\bor\b)\s*/i).map((item) => {
+    const specific = [...words(item).content].filter((w) => !GENERIC.has(w)).sort();
+    return specific.length ? specific.join(" ") : "*"; // only generic words: "all deals"
+  });
+  // First name only, so "Sean" and "Sean Tunley" are one person.
+  return { who: who.split(" ")[0].toLowerCase(), topics };
+}
+
+/** True only when `next` clearly contradicts `existing` (see the two shapes above). */
+export function conflictsWith(next: string, existing: string): boolean {
+  const a = ownership(next);
+  const b = ownership(existing);
+  if (a && b) return a.who !== b.who && a.topics.some((t) => b.topics.includes(t));
+  const x = words(next);
+  const y = words(existing);
+  if (!x.content.size || !sameSet(x.content, y.content)) return false;
+  return x.negative !== y.negative || (x.numbers.size > 0 && y.numbers.size > 0 && !sameSet(x.numbers, y.numbers));
 }
 
 /* ── Nightly tidy-up (Hermes' periodic consolidation) ───────────────────── */
@@ -206,6 +355,7 @@ export const TIDY_INSTRUCTIONS = [
   "- remove: entries that are stale, trivial, about one particular customer, or no longer true given the questions.",
   "- flag: an entry that contradicts another entry or today's questions — the owner will decide.",
   "- playbook: improve an existing one or add a new one ONLY when today's questions show the same correction or procedure more than once.",
+  "- Answers rated wrong (with the reason: wrong_facts, bad_advice, misunderstood): when two or more share a cause you can see — a term it misread, a lookup it should have used, advice people keep rejecting — add or improve a playbook that prevents it. One bad answer alone is not a pattern. Flag an entry that led to a wrong answer.",
   "- You may only merge or remove entries whose status is unreviewed. Approved entries are the owner's: flag them at most.",
   "- Never include phone numbers, email addresses or customer names. Never invent facts.",
   'If nothing needs doing, output {}.',
@@ -300,9 +450,11 @@ export function memoryPrompt(input: {
   playbooks: { name: string; description: string; status: string; content?: string }[];
 }): string {
   const mark = (e: { status: string }) => (e.status === "approved" ? "" : " (unreviewed)");
+  // A time-bound rule says so, or the model would state "for October" as for good.
+  const until = (e: Entry) => (e.validUntil ? ` (until ${e.validUntil.toISOString().slice(0, 10)})` : "");
   const parts: string[] = [];
-  if (input.memory.length) parts.push(`What you know about this business:\n${input.memory.map((e) => `- ${e.content}${mark(e)}`).join("\n")}`);
-  if (input.profile.length) parts.push(`What you know about this person:\n${input.profile.map((e) => `- ${e.content}${mark(e)}`).join("\n")}`);
+  if (input.memory.length) parts.push(`What you know about this business:\n${input.memory.map((e) => `- ${e.content}${until(e)}${mark(e)}`).join("\n")}`);
+  if (input.profile.length) parts.push(`What you know about this person:\n${input.profile.map((e) => `- ${e.content}${until(e)}${mark(e)}`).join("\n")}`);
   if (input.playbooks.length) {
     const inline = input.playbooks.reduce((n, p) => n + (p.content?.length ?? Infinity), 0) <= PLAYBOOK_INLINE_CHARS;
     parts.push(

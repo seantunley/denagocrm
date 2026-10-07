@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { Loader2, Maximize2, X } from "lucide-react";
@@ -8,7 +8,7 @@ import { DaxIcon } from "@/components/DaxIcon";
 import { openAssistantBubble } from "@/app/actions/assistant";
 import AssistantChat from "@/components/AssistantChat";
 
-type Opened = { name: string; connected: boolean; history: { question: string; answer: string; source: string }[] };
+type Opened = { name: string; connected: boolean; listen: boolean; history: { question: string; answer: string; source: string }[] };
 
 /**
  * The floating "Ask DAX" bubble, on every page in the app.
@@ -31,14 +31,18 @@ export default function AssistantBubble({ unseen = 0 }: { unseen?: number }) {
   const [data, setData] = useState<Opened | null>(null);
   const [error, setError] = useState(false);
   const [unread, setUnread] = useState(unseen > 0);
-
-  if (pathname?.startsWith("/assistant")) {
-    if (unread) setUnread(false);
-    return null;
-  }
+  // A question to ask the moment it opens — sent by the home page's daily
+  // brief ("Ask DAX for a plan") as a window event, so the card needn't know
+  // where the bubble is mounted. Each press has its own key; the chat asks each
+  // key once, however often it remounts.
+  const [autoAsk, setAutoAsk] = useState<{ question: string; key: number } | null>(null);
 
   const toggle = async () => {
     if (open) return setOpen(false);
+    await openBubble();
+  };
+
+  const openBubble = async () => {
     setOpen(true);
     setUnread(false);
     setLoading(true);
@@ -49,6 +53,22 @@ export default function AssistantBubble({ unseen = 0 }: { unseen?: number }) {
     if (result.ok) setData(result);
     else setError(true);
   };
+
+  useEffect(() => {
+    const onAsk = (event: Event) => {
+      const question = (event as CustomEvent<{ question?: unknown }>).detail?.question;
+      if (typeof question !== "string" || !question.trim()) return;
+      setAutoAsk({ question: question.slice(0, 500), key: Date.now() });
+      void openBubble();
+    };
+    window.addEventListener("dax:ask", onAsk);
+    return () => window.removeEventListener("dax:ask", onAsk);
+  });
+
+  if (pathname?.startsWith("/assistant")) {
+    if (unread) setUnread(false);
+    return null;
+  }
 
   const name = data?.name ?? "the CRM";
 
@@ -84,7 +104,15 @@ export default function AssistantBubble({ unseen = 0 }: { unseen?: number }) {
                 <Link href="/settings/integrations" className="text-primary underline">Connect ChatGPT</Link>.
               </p>
             ) : (
-              <AssistantChat key={pathname} name={data.name} history={data.history} page={pathname ?? undefined} compact />
+              <AssistantChat
+                key={pathname}
+                name={data.name}
+                history={data.history}
+                page={pathname ?? undefined}
+                autoAsk={autoAsk ?? undefined}
+                listen={data.listen}
+                compact
+              />
             )}
           </div>
         </div>
