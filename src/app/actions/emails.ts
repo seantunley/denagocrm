@@ -4,7 +4,7 @@ import { asActionResult, refuse } from "@/lib/actionResult";
 import { revalidatePath } from "next/cache";
 import { basePrisma, prisma } from "@/lib/db";
 import { customerRecordTenantId } from "@/lib/customerRecordTenant";
-import { putSetting } from "@/lib/settings";
+import { getSetting, putSetting } from "@/lib/settings";
 import { getActiveTenantId, requireTenantOwner } from "@/lib/auth";
 import {
   EMAIL_HEADER_STYLES,
@@ -26,7 +26,14 @@ import {
 } from "@/lib/permissions";
 import { logAudit } from "@/lib/audit";
 import { sendEmail } from "@/lib/email";
-import { signatureCompanyFrom, buildSignature, buildEmailHtml, htmlToText } from "@/lib/signature";
+import {
+  signatureCompanyFrom,
+  buildSignature,
+  buildEmailHtml,
+  htmlToText,
+  parseSignatureDesign,
+  SIGNATURE_DESIGN_KEY,
+} from "@/lib/signature";
 import { getCompanyProfile } from "@/lib/companyProfile";
 import { readFile } from "@/lib/storage";
 import { emailUploads } from "@/lib/emailUploads";
@@ -47,7 +54,9 @@ type ComposerUser = Awaited<ReturnType<typeof requireAnyPermission>>;
 
 /** The composer email's HTML: the message plus the sender's signature. One builder, so Preview is what Send sends. */
 async function composerHtml(user: ComposerUser, bodyHtml: string, profile: Awaited<ReturnType<typeof getCompanyProfile>>) {
-  const company = signatureCompanyFrom(profile, await tenantOrigin(await tenantIdFor(user.id)));
+  // The workspace's signature design (Settings → My account → Email signature), same as the settings preview.
+  const design = parseSignatureDesign(await getSetting(SIGNATURE_DESIGN_KEY));
+  const company = signatureCompanyFrom(profile, await tenantOrigin(await tenantIdFor(user.id)), design);
   return buildEmailHtml(bodyHtml, buildSignature(user, company));
 }
 
@@ -394,6 +403,34 @@ export async function saveEmailOpenTracking(formData: FormData) {
       create: { tenantId, key: EMAIL_OPEN_TRACKING_KEY, value },
     });
     await logAudit({ action: "settings.email_open_tracking.saved", summary: `Turned email open tracking ${value}`, user });
+    revalidatePath("/settings");
+  });
+}
+
+/** The workspace's email signature design — one for everyone (lib/signature.ts SignatureDesign). */
+export async function saveSignatureDesign(formData: FormData) {
+  return asActionResult(async () => {
+    const user = await requireTenantOwner();
+    const tenantId = await getActiveTenantId();
+    if (!tenantId) refuse("No workspace attached to this sign-in — sign out and back in.");
+    const design = parseSignatureDesign(
+      JSON.stringify({
+        style: formData.get("style"),
+        companyLine: String(formData.get("companyLine") ?? "").replace(/[\r\n]+/g, " "),
+        footerLine: String(formData.get("footerLine") ?? "").replace(/[\r\n]+/g, " "),
+      }),
+    );
+    const value = JSON.stringify(design);
+    await basePrisma.appSetting.upsert({
+      where: { tenantId_key: { tenantId, key: SIGNATURE_DESIGN_KEY } },
+      update: { value },
+      create: { tenantId, key: SIGNATURE_DESIGN_KEY, value },
+    });
+    await logAudit({
+      action: "settings.email_signature.saved",
+      summary: `Set the email signature to the ${design.style === "card" ? "card" : "classic"} design`,
+      user,
+    });
     revalidatePath("/settings");
   });
 }
