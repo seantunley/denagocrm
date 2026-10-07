@@ -9,6 +9,7 @@ import { getActiveTenantId, requireTenantOwner } from "@/lib/auth";
 import {
   EMAIL_HEADER_STYLES,
   SIGNING_EMAILS,
+  isTextTemplate,
   parseEmailHeaderStyle,
   validateSigningTemplate,
   type SigningEmailKind,
@@ -285,7 +286,7 @@ function signingKind(kind: string): SigningEmailKind {
  */
 function templateFromForm(kind: SigningEmailKind, formData: FormData): StoredSigningTemplate {
   const def = SIGNING_EMAILS[kind];
-  const sms = def.channel === "sms";
+  const sms = isTextTemplate(def);
   // An SMS is plain text: no subject, never a formatted body.
   const subject = sms ? "" : String(formData.get("subject") ?? "").trim();
   const rawDoc = sms ? "" : String(formData.get("doc") ?? "");
@@ -395,7 +396,7 @@ export async function previewSigningEmailTemplate(kind: string, formData: FormDa
       signing_link: `${origin}/signing/preview-only-not-a-real-link`,
       survey_link: `${origin}/s/preview-only`,
     };
-    if (SIGNING_EMAILS[k].channel === "sms") {
+    if (isTextTemplate(SIGNING_EMAILS[k])) {
       preview = { text: await tenantSmsContent(k, tenantId, vars, draft) };
       return;
     }

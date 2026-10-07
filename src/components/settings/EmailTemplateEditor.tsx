@@ -92,12 +92,15 @@ export function SmsTemplateEditor({
   fieldHelp,
   requiredField,
   preview,
+  whatsapp = false,
 }: {
   initialBody: string;
   fields: readonly string[];
   fieldHelp: Record<string, string>;
   requiredField: string | null;
   preview: (formData: FormData) => Promise<EmailPreview>;
+  /** A WhatsApp message: no SMS parts to count. */
+  whatsapp?: boolean;
 }) {
   const [body, setBody] = useState(initialBody);
   const ref = useRef<HTMLTextAreaElement>(null);
@@ -141,7 +144,7 @@ export function SmsTemplateEditor({
         <div className="max-w-sm rounded-2xl rounded-bl-sm bg-muted px-3 py-2 text-sm whitespace-pre-wrap">{sample || "…"}</div>
       )}
       <p className="text-xs text-muted-foreground">
-        {sample.length} characters · {parts} SMS part{parts === 1 ? "" : "s"}. Words in {"{{double braces}}"} are filled in for each customer.
+        {sample.length} characters{whatsapp ? "" : ` · ${parts} SMS part${parts === 1 ? "" : "s"}`}. Words in {"{{double braces}}"} are filled in for each customer.
       </p>
     </div>
   );

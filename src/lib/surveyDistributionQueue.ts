@@ -8,6 +8,8 @@ import { ActionRefusal } from "./actionFailure";
 
 import { DEFAULT_BRAND, brandForTenant } from "./tenantBrand";
 import { tenantOrigin } from "./tenantOrigin";
+import { tenantEmailContent, tenantSmsContent } from "./signing/signingEmail";
+import { automationOn } from "./automationSwitch";
 const BATCH_SIZE = 75;
 const STALE_MINUTES = 15;
 
@@ -39,6 +41,8 @@ type ClaimedInvite = {
   distributionStatus: string;
   purpose: string;
   snapshot: SurveySnapshot;
+  /** "automation_trigger" for a distribution an automatic trigger created (reminders only). */
+  audienceSource?: string | null;
   email: string | null;
   phone: string | null;
   whatsapp: string | null;
@@ -77,10 +81,30 @@ async function senderFor(tenantId: string | null): Promise<InviteSender> {
   return { origin, displayName: brand.displayName };
 }
 
-function inviteText(snapshot: SurveySnapshot, name: string | null, token: string, sender: InviteSender, reminder = false) {
-  const first = (name || "there").split(/\s+/)[0] || "there";
-  const lead = reminder ? "A quick reminder" : "We would value your feedback";
-  return `Hi ${first},\n\n${lead}: ${snapshot.intro || snapshot.title}\n\n${sender.origin}/s/${token}\n\nThank you,\n${sender.displayName}`;
+/**
+ * The invitation or reminder, from the workspace's own editable templates
+ * (Settings → Email templates → "Survey invitation" / "Survey reminder"). It
+ * was hard-coded here — customers got wording nobody could see or change.
+ */
+async function surveyMessage(
+  invite: { snapshot: SurveySnapshot; name: string | null; token: string; tenantId: string | null },
+  channel: "email" | "sms",
+  reminder: boolean,
+): Promise<{ subject: string; text: string; html?: string }> {
+  const sender = await senderFor(invite.tenantId);
+  const vars = {
+    first_name: (invite.name || "there").split(/\s+/)[0] || "there",
+    recipient_name: invite.name ?? "",
+    survey_title: invite.snapshot.title,
+    survey_intro: invite.snapshot.intro || invite.snapshot.title,
+    survey_subject: invite.snapshot.title,
+    survey_link: `${sender.origin}/s/${invite.token}`,
+  };
+  if (channel === "sms") {
+    return { subject: "", text: await tenantSmsContent(reminder ? "survey_reminder_sms" : "survey_invite_sms", invite.tenantId, vars) };
+  }
+  const message = await tenantEmailContent(reminder ? "survey_reminder" : "survey_invite", invite.tenantId, vars);
+  return { subject: message.subject, text: message.text, html: message.html };
 }
 
 export async function createSurveyDistribution(args: {
@@ -299,12 +323,12 @@ async function deliver(invite: ClaimedInvite) {
     return;
   }
 
-  const text = inviteText(invite.snapshot, invite.name, invite.token, await senderFor(invite.tenantId));
+  const message = await surveyMessage(invite, requested === "email" ? "email" : "sms", false);
   // On the customer's timeline, the survey link masked (it is a response capability).
   const record = { contactId: invite.contactId, label: "Survey invitation", secrets: [invite.token] };
   const result = requested === "email"
-    ? await sendEmail({ to: eligibility.destination, subject: invite.snapshot.title, text, record })
-    : await sendSms(eligibility.destination, text, record);
+    ? await sendEmail({ to: eligibility.destination, subject: message.subject, text: message.text, html: message.html, record })
+    : await sendSms(eligibility.destination, message.text, record);
 
   if (result.ok) {
     await basePrisma.$transaction(async (tx) => {
@@ -373,7 +397,15 @@ async function closeReminderLease(invite: ClaimedInvite, status: string, consume
   `;
 }
 
-async function sendDueReminders(tid: string | null, limit = 50) {
+/**
+ * Distributions the automatic triggers created (job card, delivery, won deal)
+ * remind only while the owner has "Survey reminders (automatic surveys)" on —
+ * checked HERE, at send time, so switching it off stops reminders already
+ * queued (#784 review). A distribution a person created keeps its own
+ * reminder count: they chose it.
+ */
+export async function sendDueReminders(tid: string | null, limit = 50) {
+  const autoRemindersOn = await automationOn("SURVEY_AUTO_REMINDERS", tid);
   const reminders = await basePrisma.$queryRaw<ClaimedInvite[]>`
     WITH candidates AS (
       SELECT r."id"
@@ -388,6 +420,8 @@ async function sendDueReminders(tid: string | null, limit = 50) {
         AND (r."lastReminderAt" IS NULL OR r."lastReminderAt" <= CURRENT_TIMESTAMP - (d."reminderAfterHours" * INTERVAL '1 hour'))
         AND (r."providerStatus" IS DISTINCT FROM 'reminder_sending' OR r."lastAttemptAt" < CURRENT_TIMESTAMP - (${STALE_MINUTES} * INTERVAL '1 minute'))
         AND d."status" = 'sending'
+        -- An automatic survey's reminder isn't even claimed while the switch is off.
+        AND (${autoRemindersOn} OR COALESCE(d."audienceSnapshot"->>'source', '') <> 'automation_trigger')
       ORDER BY r."inviteSentAt", r."id"
       FOR UPDATE OF r SKIP LOCKED
       LIMIT ${limit}
@@ -409,6 +443,7 @@ async function sendDueReminders(tid: string | null, limit = 50) {
     SELECT r."id", r."tenantId", r."distributionId", r."surveyId", r."surveyVersion",
       r."contactId", r."token", r."name", r."attemptCount", r."reminderCount",
       d."maxReminders", d."channel" AS "distributionChannel", d."purpose", v."snapshot",
+      d."audienceSnapshot"->>'source' AS "audienceSource",
       c."email", c."phone", c."whatsapp"
     FROM claimed r
     JOIN "SurveyDistribution" d ON d."id" = r."distributionId"
@@ -419,6 +454,11 @@ async function sendDueReminders(tid: string | null, limit = 50) {
 
   let sent = 0;
   for (const invite of reminders) {
+    // Backstop for the query's own filter: never remind for an automatic survey with the switch off.
+    if (invite.audienceSource === "automation_trigger" && !autoRemindersOn) {
+      await closeReminderLease(invite, "reminder_switched_off", false);
+      continue;
+    }
     const requested = channelFor(invite);
     if (!requested || !invite.contactId) {
       await closeReminderLease(invite, "reminder_destination_missing", true);
@@ -436,11 +476,11 @@ async function sendDueReminders(tid: string | null, limit = 50) {
       await closeReminderLease(invite, `reminder_${reason}`, PERMANENT_REMINDER_BLOCKS.has(reason));
       continue;
     }
-    const text = inviteText(invite.snapshot, invite.name, invite.token, await senderFor(invite.tenantId), true);
+    const message = await surveyMessage(invite, requested === "email" ? "email" : "sms", true);
     const record = { contactId: invite.contactId, label: "Survey reminder", secrets: [invite.token] };
     const result = requested === "email"
-      ? await sendEmail({ to: eligibility.destination, subject: `Reminder: ${invite.snapshot.title}`, text, record })
-      : await sendSms(eligibility.destination, text, record);
+      ? await sendEmail({ to: eligibility.destination, subject: message.subject, text: message.text, html: message.html, record })
+      : await sendSms(eligibility.destination, message.text, record);
     await basePrisma.$executeRaw`
       UPDATE "SurveyResponse"
       SET "providerStatus" = ${result.ok ? "reminder_sent" : "reminder_failed"},

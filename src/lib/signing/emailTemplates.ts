@@ -50,7 +50,11 @@ export type SigningEmailKind =
   | "review_delivery"
   | "review_service"
   | "survey_invite"
-  | "survey_invite_sms";
+  | "survey_invite_sms"
+  | "invite_whatsapp"
+  | "reminder_whatsapp"
+  | "survey_reminder"
+  | "survey_reminder_sms";
 
 /** Placeholders a message can't be sent without. Link ones render as a button when on a line of their own. */
 export type ActionField = "signing_link" | "code" | "review_link" | "survey_link";
@@ -61,7 +65,8 @@ export type SigningEmailDef = {
   description: string;
   /** Section in Settings → Email templates. */
   group: string;
-  channel?: "email" | "sms";
+  /** Unset = email. SMS and WhatsApp are plain text (isTextTemplate). */
+  channel?: "email" | "sms" | "whatsapp";
   /** AppSetting key the tenant's edited copy is stored under (JSON {subject, body, doc?}). */
   settingKey: string;
   /** Unused for SMS. */
@@ -143,6 +148,32 @@ export const SIGNING_EMAILS: Record<SigningEmailKind, SigningEmailDef> = {
     settingKey: "SIGNING_EMAIL_REMINDER",
     subject: "Reminder — please sign: {{document_title}}",
     body: "Hi {{recipient_name}},\n\nReminder — please review and sign {{document_title}}.\n\n{{signing_link}}\n\nThank you,\n{{company_name}}",
+    fields: [...COMMON, "signing_link", "expiry_date"],
+    action: "signing_link",
+  },
+  // The WhatsApp texts used to be hard-coded in dispatch.ts — sent to customers
+  // in wording nobody could see or change. Defaults are that exact wording.
+  invite_whatsapp: {
+    kind: "invite_whatsapp",
+    group: "Signing & quotes",
+    label: "Signing — invitation (WhatsApp)",
+    description: "The WhatsApp message sent with a signing link, when the signer has a mobile number and WhatsApp is connected.",
+    channel: "whatsapp",
+    settingKey: "SIGNING_WHATSAPP_INVITE",
+    subject: "",
+    body: "Please sign your document: \"{{document_title}}\"\nSign here: {{signing_link}}",
+    fields: [...COMMON, "signing_link", "expiry_date"],
+    action: "signing_link",
+  },
+  reminder_whatsapp: {
+    kind: "reminder_whatsapp",
+    group: "Signing & quotes",
+    label: "Signing — reminder (WhatsApp)",
+    description: "The WhatsApp reminder to a signer (when reminders are on, or someone presses Resend).",
+    channel: "whatsapp",
+    settingKey: "SIGNING_WHATSAPP_REMINDER",
+    subject: "",
+    body: "Reminder — please sign: \"{{document_title}}\"\nSign here: {{signing_link}}",
     fields: [...COMMON, "signing_link", "expiry_date"],
     action: "signing_link",
   },
@@ -307,9 +338,38 @@ export const SIGNING_EMAILS: Record<SigningEmailKind, SigningEmailDef> = {
     fields: [...PERSON, ...COMPANY, "survey_title", "survey_intro", "survey_link"],
     action: "survey_link",
   },
+  // Reminders were hard-coded in surveyDistributionQueue.ts. Defaults are that wording.
+  survey_reminder: {
+    kind: "survey_reminder",
+    group: "Reviews & surveys",
+    label: "Survey reminder (email)",
+    description: "Sent once to a customer who hasn't answered — only when survey reminders are on (Settings → Automatic jobs & messages) or set on a distribution.",
+    settingKey: "SYSTEM_EMAIL_SURVEY_REMINDER",
+    subject: "{{survey_title}}",
+    body: "Hi {{first_name}},\n\nA quick reminder: {{survey_intro}}\n\n{{survey_link}}\n\nThank you,\n{{company_name}}",
+    fields: [...PERSON, ...COMPANY, "survey_title", "survey_intro", "survey_subject", "survey_link"],
+    action: "survey_link",
+  },
+  survey_reminder_sms: {
+    kind: "survey_reminder_sms",
+    group: "Reviews & surveys",
+    channel: "sms",
+    label: "Survey reminder (SMS)",
+    description: "The text-message reminder, when the customer has no email address.",
+    settingKey: "SYSTEM_SMS_SURVEY_REMINDER",
+    subject: "",
+    body: "Hi {{first_name}}, a quick reminder: {{survey_intro}} {{survey_link}}",
+    fields: [...PERSON, ...COMPANY, "survey_title", "survey_intro", "survey_link"],
+    action: "survey_link",
+  },
 };
 
 export const SIGNING_EMAIL_KINDS = Object.keys(SIGNING_EMAILS) as SigningEmailKind[];
+
+/** SMS and WhatsApp: plain text, no subject, no formatted body. */
+export function isTextTemplate(def: Pick<SigningEmailDef, "channel">): boolean {
+  return def.channel === "sms" || def.channel === "whatsapp";
+}
 
 /** Placeholders that carry a secret. They may appear in the body only — never the subject, which lands in previews, logs and timelines. */
 const SECRET_FIELDS = new Set(["signing_link", "code", "survey_link"]);
@@ -335,7 +395,7 @@ export function parseStoredSigningTemplate(raw: string | null | undefined, kind?
     const v = JSON.parse(raw) as { subject?: unknown; body?: unknown; doc?: unknown };
     if (typeof v.subject !== "string" || typeof v.body !== "string") return null;
     // Only an SMS has no subject.
-    const sms = kind ? SIGNING_EMAILS[kind].channel === "sms" : false;
+    const sms = kind ? isTextTemplate(SIGNING_EMAILS[kind]) : false;
     if ((!sms && !v.subject.trim()) || !v.body.trim()) return null;
     return Array.isArray(v.doc) ? { subject: v.subject, body: v.body, doc: v.doc } : { subject: v.subject, body: v.body };
   } catch {
@@ -346,7 +406,7 @@ export function parseStoredSigningTemplate(raw: string | null | undefined, kind?
 /** Why this template cannot be saved, or null when it can. */
 export function validateSigningTemplate(kind: SigningEmailKind, subject: string, body: string): string | null {
   const def = SIGNING_EMAILS[kind];
-  if (def.channel === "sms") {
+  if (isTextTemplate(def)) {
     if (!body.trim()) return "The message is required.";
     if (body.length > MAX_SMS) return `The text message is too long (max ${MAX_SMS} characters).`;
     subject = "";

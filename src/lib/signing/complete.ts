@@ -20,8 +20,10 @@ import { signedPdfIsSafeToDelete } from "./blobReferences";
 import {
   COMPLETED_EVENT,
   POST_COMPLETION_EVENT,
+  SIGNED_COPIES_OFF,
   deliverCompletionEmails,
 } from "./completionFanout";
+import { automationOn } from "@/lib/automationSwitch";
 import { exactTenantWhere } from "./recoveryScope";
 import { sendPushToAll } from "@/lib/push";
 
@@ -477,17 +479,22 @@ export async function completeSignatureRequest(requestId: string): Promise<void>
   // the result discarded — and sendEmail NEVER THROWS, it returns { ok: false }
   // — so a fan-out that reached nobody looked exactly like one that reached
   // everybody, and the completion marker below was written over it.
-  const delivery = await deliverCompletionEmails({
-    requestId: req.id,
-    title: req.title,
-    pdf,
-    recipients: req.recipients.map((r) => ({
-      id: r.id,
-      name: r.name,
-      email: r.email,
-      completedEmailSentAt: r.completedEmailSentAt,
-    })),
-    tenantWhere,  });
+  // Only while the owner has signed copies on (Settings → Automatic jobs &
+  // messages; on by default). Off: the request still completes — nobody is emailed.
+  const delivery = (await automationOn("SIGNING_SIGNED_COPIES", req.tenantId))
+    ? await deliverCompletionEmails({
+        requestId: req.id,
+        title: req.title,
+        pdf,
+        recipients: req.recipients.map((r) => ({
+          id: r.id,
+          name: r.name,
+          email: r.email,
+          completedEmailSentAt: r.completedEmailSentAt,
+        })),
+        tenantWhere,
+      })
+    : SIGNED_COPIES_OFF;
 
   // LAST, not first, and ONLY on success. This event used to be written
   // immediately after the transaction, which made it a record that the commit

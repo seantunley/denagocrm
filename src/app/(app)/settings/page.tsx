@@ -31,6 +31,7 @@ import {
   SIGNING_EMAILS,
   SIGNING_EMAIL_KINDS,
   SIGNING_FIELD_HELP,
+  isTextTemplate,
   parseStoredSigningTemplate,
   type SigningEmailKind,
 } from "@/lib/signing/emailTemplates";
@@ -73,7 +74,7 @@ import ProfileSettingsForms from "@/components/ProfileSettingsForms";
 export default async function SettingsPage({
   searchParams,
 }: {
-  searchParams: Promise<{ tab?: string; section?: string }>;
+  searchParams: Promise<{ tab?: string; section?: string; open?: string }>;
 }) {
   const currentUser = await requireUser();
   // The WORKSPACE's owner — the tabs here configure this workspace, and every
@@ -99,7 +100,10 @@ export default async function SettingsPage({
     { isOwner: isAdmin, isPlatformOwner: currentUser.role === "owner", permissions: await getUserPermissionList(currentUser) },
     enabled,
   );
-  const { tab: rawTab, section } = await searchParams;
+  const { tab: rawTab, section, open } = await searchParams;
+  // One message template, opened — linked from each automation on Settings →
+  // Automatic jobs & messages ("see and edit what it sends").
+  const openTemplate = open && (SIGNING_EMAIL_KINDS as string[]).includes(open) ? open : null;
   // Deep-linkable sections inside a tab. The account menu links straight to
   // "change password", and a <details> that arrives closed has not answered the
   // request — the person still has to find and open it.
@@ -829,10 +833,11 @@ export default async function SettingsPage({
                     const def = SIGNING_EMAILS[kind];
                     const saved = signingTemplate(kind);
                     return (
-                      <details key={kind} className="rounded-lg border border-border bg-muted/40">
+                      // Linked from Settings → Automatic jobs & messages: ?open=<kind> opens this one.
+                      <details key={kind} id={`template-${kind}`} open={openTemplate === kind} className="rounded-lg border border-border bg-muted/40 scroll-mt-24">
                         <summary className="px-4 py-2.5 cursor-pointer text-sm font-medium flex items-center gap-2">
                           {def.label}
-                          <span className="badge bg-muted text-muted-foreground">{def.channel === "sms" ? "SMS" : "Email"}</span>
+                          <span className="badge bg-muted text-muted-foreground">{def.channel === "sms" ? "SMS" : def.channel === "whatsapp" ? "WhatsApp" : "Email"}</span>
                           <span className="badge bg-muted text-muted-foreground">{saved ? "Customised" : "Default"}</span>
                         </summary>
                         <div className="p-4 pt-1 space-y-2">
@@ -845,13 +850,14 @@ export default async function SettingsPage({
                             action={saveSigningEmailTemplate.bind(null, kind)}
                             className="space-y-2"
                           >
-                            {def.channel === "sms" ? (
+                            {isTextTemplate(def) ? (
                               <SmsTemplateEditor
                                 initialBody={saved?.body ?? def.body}
                                 fields={def.fields}
                                 fieldHelp={SIGNING_FIELD_HELP}
                                 requiredField={def.action}
                                 preview={previewSigningEmailTemplate.bind(null, kind)}
+                                whatsapp={def.channel === "whatsapp"}
                               />
                             ) : (
                               <EmailTemplateEditor

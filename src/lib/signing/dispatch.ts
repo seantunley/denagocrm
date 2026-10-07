@@ -5,10 +5,13 @@ import { sendWhatsAppText, waDigits, isWhatsAppConfigured } from "@/lib/whatsapp
 import { logSignEvent } from "./events";
 import { CLOSED_REQUEST_STATUSES, isRequestClosed } from "./status";
 import { tenantOrigin } from "@/lib/tenantOrigin";
-import { signingEmailContent } from "./signingEmail";
+import { signingEmailContent, signingWhatsAppText } from "./signingEmail";
 import { usableCapability } from "./tokenVault";
 import { signingRecord } from "@/lib/outboundMessageLog";
 import { mirrorQuoteSent } from "./quoteMirror";
+import { automationOn } from "@/lib/automationSwitch";
+
+const SIGNING_AUTO_REMINDERS_KEY = "SIGNING_AUTO_REMINDERS";
 
 /**
  * The platform origin, and the LAST resort.
@@ -92,7 +95,6 @@ export async function notifyRecipient(recipientId: string, opts?: { reminder?: b
   // independent and both required: a digest in the link is unusable, and the
   // platform hostname on a branded workspace's mail is the wrong sender.
   const url = signUrl(raw, origin);
-  const verb = opts?.reminder ? "Reminder — please sign" : "Please sign your document";
   const evType = opts?.reminder ? "reminded" : "sent";
   let delivered = false;
   // The customer's timeline gets a copy of each channel that went out, with the
@@ -119,7 +121,11 @@ export async function notifyRecipient(recipientId: string, opts?: { reminder?: b
   // WhatsApp works inside the 24h customer-service window (or requires an approved
   // template for cold outreach — see @/lib/whatsapp). Best-effort; failures are logged.
   if (hasWhatsApp) {
-    const res = await sendWhatsAppText(waDigits(r.phone!), `${verb}: "${r.request.title}"\nSign here: ${url}`, record);
+    // The tenant's own editable WhatsApp template (Settings → Email templates).
+    const text = await signingWhatsAppText(opts?.reminder ? "reminder_whatsapp" : "invite_whatsapp", {
+      requestId: r.requestId, title: r.request.title, recipientName: r.name, signingUrl: url,
+    });
+    const res = await sendWhatsAppText(waDigits(r.phone!), text, record);
     if (res.ok) delivered = true;
     await logSignEvent(r.requestId, { type: evType, recipientId: r.id, actor: "system", channel: "whatsapp", metadata: { ok: res.ok, error: res.error } });
   }
@@ -280,5 +286,9 @@ export async function notifyNextInSequence(requestId: string): Promise<void> {
   // re-nudge of an already-"sent"-but-unopened signer → reminder, so the
   // at-most-once claim doesn't skip it.
   if (next && next.status !== "sent" && next.status !== "viewed") await notifyRecipient(next.id);
-  else if (next && !next.viewedAt) await notifyRecipient(next.id, { reminder: true });
+  // A re-nudge IS a reminder: only while the owner has signing reminders on
+  // (off by default) — it used to go out regardless of that switch.
+  else if (next && !next.viewedAt && (await automationOn(SIGNING_AUTO_REMINDERS_KEY, req.tenantId))) {
+    await notifyRecipient(next.id, { reminder: true });
+  }
 }

@@ -122,7 +122,7 @@ test("every customer-facing link builder takes an origin", () => {
     "an approval link built from the stored digest is unusable",
   );
   assert.match(shipped("src/lib/surveys.ts"), /surveyUrl\(response\.token, origin\)/);
-  assert.match(shipped("src/lib/surveyDistributionQueue.ts"), /\$\{sender\.origin\}\/s\/\$\{token\}/);
+  assert.match(shipped("src/lib/surveyDistributionQueue.ts"), /\$\{sender\.origin\}\/s\/\$\{invite\.token\}/);
 });
 
 /* ── 3. the emails that carried a hardcoded company ──────────────────────── */

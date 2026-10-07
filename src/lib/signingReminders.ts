@@ -2,7 +2,22 @@ import "server-only";
 
 import { prisma } from "@/lib/db";
 import { logError } from "@/lib/errorLog";
+import { getSetting } from "@/lib/settings";
 import { notifyRecipient } from "@/lib/signing/dispatch";
+
+/**
+ * The workspace owner's switch (Settings → Signing security). OFF unless they
+ * turn it on: a reminder is a message to a customer that nobody pressed Send
+ * on, and it went out to every signer by default (a customer got a WhatsApp
+ * nudge on Q-1022 three days after it was sent). "Resend" by hand is unaffected.
+ */
+export const SIGNING_AUTO_REMINDERS_KEY = "SIGNING_AUTO_REMINDERS";
+
+export async function signingAutoRemindersOn(): Promise<boolean> {
+  // A setting that can't be read means "don't send", not "send".
+  return (await getSetting(SIGNING_AUTO_REMINDERS_KEY).catch(() => null)) === "true";
+}
+// (The register — automationRegister.ts — lists this switch with every other one.)
 
 const REMINDER_DELAY_MS = 3 * 24 * 60 * 60 * 1000;
 const MAX_CANDIDATES_PER_RUN = 100;
@@ -17,6 +32,7 @@ const REMINDABLE_RECIPIENT_STATUSES = ["sent", "viewed"] as const;
  * after their turn actually starts.
  */
 export async function runSignatureRequestReminders(): Promise<number> {
+  if (!(await signingAutoRemindersOn())) return 0;
   const cutoff = new Date(Date.now() - REMINDER_DELAY_MS);
   const candidates = await prisma.signatureRecipient.findMany({
     where: {
