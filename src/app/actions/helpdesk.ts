@@ -60,7 +60,7 @@ type LoadedCase = NonNullable<Awaited<ReturnType<typeof loadCase>>>;
  * whatever the mail server says, so a failure is reported, never thrown (a
  * throw would make the agent resend a reply that was already posted).
  */
-async function emailTicketReply(item: LoadedCase, replyId: string, body: string, userId: string): Promise<ReplyEmailOutcome> {
+async function emailTicketReply(item: LoadedCase, replyId: string, body: string, userId: string, senderName: string): Promise<ReplyEmailOutcome> {
   const [contact, mailbox, chain] = await Promise.all([
     prisma.contact.findUnique({ where: { id: item.contactId }, select: { email: true } }),
     item.mailboxId
@@ -92,6 +92,8 @@ async function emailTicketReply(item: LoadedCase, replyId: string, body: string,
         // Replies go to the help desk mailbox, which the IMAP sync files back
         // onto this ticket. The mailbox address is admin-set; parse it anyway.
         replyTo: mailbox?.email && isReplyToAddress(mailbox.email) ? mailbox.email : undefined,
+        // The agent who wrote it: their name on the From line.
+        senderName,
         // Customer timeline (outbound email, carrying our Message-ID) once SMTP
         // accepts; a failure goes to their audit trail — lib/outboundMessageLog.ts.
         record: { contactId: item.contactId, userId, label: `Help desk reply C-${item.number}` },
@@ -322,7 +324,7 @@ export async function replyToTicket(caseId: string, formData: FormData): Promise
       return reply.id;
     });
 
-    const emailed = await emailTicketReply(item, replyId, body, user.id);
+    const emailed = await emailTicketReply(item, replyId, body, user.id, user.name);
     await notifyCustomer(
       item.contactId,
       `Update on ticket C-${item.number}`,

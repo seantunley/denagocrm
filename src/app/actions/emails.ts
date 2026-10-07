@@ -137,6 +137,8 @@ export async function sendEmailAction(
     replyTo: replyTo.value ?? undefined,
     // "Opened" on the timeline entry below (unless switched off in Settings → Email).
     trackOpens: true,
+    // The person writing it: "Sean Tunley · Denago Cape Town" on the From line.
+    senderName: user.name,
   });
   if (!result.ok) return { error: result.error };
 
