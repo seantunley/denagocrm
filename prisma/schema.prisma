@@ -1413,6 +1413,11 @@ model Communication {
   /// opposite things. Both are watermark-derived; see lib/deliveryReceipts.ts.
   deliveredAt    DateTime?
   seenAt         DateTime?
+  /// Email open tracking (Sean, 2026-10-07): the unguessable token in this sent
+  /// email's tracking pixel (/api/track/e/<token>), and how often it loaded. The
+  /// first load sets `seenAt` — the customer opened it. Null = not tracked.
+  openToken      String?  @unique
+  openCount      Int      @default(0)
   archivedAt     DateTime? // when the thread carrying this message was archived out of the inbox (NULL = active)
 
   // Multi-tenancy (Phase B — additive/inert): owning tenant. See Contact.tenantId.

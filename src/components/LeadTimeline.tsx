@@ -11,6 +11,7 @@ import {
   toggleLeadNotePin,
 } from "@/app/actions/timelinePins";
 import { formatDateTime } from "@/lib/format";
+import { SEEN_HINT, seenLabel } from "@/lib/emailOpenTracking";
 import { SaveForm, SaveButton } from "@/components/SaveForm";
 import { isFutureDay } from "@/lib/activityDay";
 import {
@@ -66,6 +67,8 @@ type Item = {
   image?: string | null;
   who: string;
   when: Date;
+  /** "👁 Opened …" on an outbound message the customer opened (lib/emailOpenTracking.ts). */
+  seen?: string | null;
   pending?: boolean;
   activityId?: string;
   activityStatus?: string;
@@ -136,6 +139,8 @@ export default async function LeadTimeline({
     body: string;
     attachmentUrl?: string | null;
     occurredAt: Date;
+    seenAt?: Date | null;
+    openCount?: number;
     user: { name: string };
   }[];
   activities?: {
@@ -239,6 +244,7 @@ export default async function LeadTimeline({
       image: storedFileSrc(communication.attachmentUrl),
       who: communication.user.name,
       when: communication.occurredAt,
+      seen: seenLabel(communication),
       pinnedAt: pinnedAt("communication", communication.id),
       pinTarget: { kind: "communication", itemId: communication.id },
     })),
@@ -403,6 +409,11 @@ export default async function LeadTimeline({
             <p className="mt-1 text-xs text-slate-500">
               <span className="font-medium text-slate-400">{item.who}</span>{" "}
               · {formatDateTime(item.when)}
+              {item.seen && (
+                <span className="badge ml-2 bg-emerald-500/15 text-emerald-300" title={SEEN_HINT}>
+                  {item.seen}
+                </span>
+              )}
             </p>
           </div>
 

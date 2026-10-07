@@ -144,6 +144,8 @@ export async function sendQuoteEmail(
             html: email.html,
             attachments: mail.attachments,
             replyTo: replyTo || undefined,
+            // "Opened" on the quote email's timeline entry (unless switched off).
+            trackOpens: true,
             // A person emailed this quote: their name on the From line.
             senderName: user.name,
             record: { contactId: quote.contactId, leadId: quote.leadId, userId: user.id, label: "Quote email" },

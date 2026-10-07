@@ -79,7 +79,7 @@ test("sendEmail records on success and a failure on both failure paths", () => {
   const ok = s.indexOf("await noteSmtpOutcome(config, null);");
   const rec = s.indexOf("recordOutboundMessage(", ok);
   assert.ok(ok > 0 && rec > ok, "success record comes after SMTP accepted");
-  assert.ok(rec < s.indexOf("return { ok: true };", ok), "and before returning ok");
+  assert.ok(rec < s.indexOf("return { ok: true", ok), "and before returning ok");
   assert.equal((s.match(/recordOutboundFailure\(logged, input\.record/g) ?? []).length, 2, "not-configured and transport failure");
   assert.match(s, /messageId: info\?\.messageId/);
 });
