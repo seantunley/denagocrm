@@ -1,6 +1,6 @@
 import { getSetting } from "./settings";
 import { logError } from "./errorLog";
-import { elevenLabsSTTDetailed, type Transcript } from "./elevenlabs";
+import { elevenLabsSTTChecked, elevenLabsSTTDetailed, type SttRefusal, type Transcript } from "./elevenlabs";
 
 /**
  * Transcribes an audio clip (e.g. a WhatsApp voice note) to text. ElevenLabs is
@@ -27,6 +27,17 @@ export async function transcribeVoiceDetailed(
   if (viaEleven) return viaEleven;
   const text = await whisperTranscribe(buffer, contentType);
   return text ? { text, languageCode: null, languageProbability: null } : null;
+}
+
+/**
+ * As transcribeVoice, but when nothing came back says whether ElevenLabs
+ * refused the KEY — so the person is told to fix the key, not their microphone.
+ */
+export async function transcribeVoiceChecked(buffer: Buffer, contentType: string): Promise<{ text: string } | SttRefusal | null> {
+  const viaEleven = await elevenLabsSTTChecked(buffer, contentType);
+  if (viaEleven && "text" in viaEleven) return { text: viaEleven.text };
+  const text = await whisperTranscribe(buffer, contentType);
+  return text ? { text } : viaEleven;
 }
 
 async function whisperTranscribe(buffer: Buffer, contentType: string): Promise<string | null> {

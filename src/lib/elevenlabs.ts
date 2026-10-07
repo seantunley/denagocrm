@@ -46,6 +46,19 @@ export type Transcript = {
 
 /** As elevenLabsSTT, plus the language Scribe detected and how sure it was. */
 export async function elevenLabsSTTDetailed(buffer: Buffer, contentType = "audio/ogg"): Promise<Transcript | null> {
+  const result = await elevenLabsSTTChecked(buffer, contentType);
+  return result && "text" in result ? result : null;
+}
+
+/**
+ * Why ElevenLabs refused, when it was the KEY: "permission" — a scoped key
+ * without Speech to Text ticked (seen 2026-10-07: every recording failed and
+ * the person was told to check their microphone); "key" — revoked or wrong.
+ */
+export type SttRefusal = { refused: "permission" | "key" };
+
+/** As elevenLabsSTTDetailed, but says when the key itself was refused. */
+export async function elevenLabsSTTChecked(buffer: Buffer, contentType = "audio/ogg"): Promise<Transcript | SttRefusal | null> {
   const apiKey = await getSetting("ELEVENLABS_API_KEY");
   if (!apiKey) return null;
   const model = (await getSetting("ELEVENLABS_STT_MODEL")) || DEFAULT_STT_MODEL;
@@ -62,7 +75,9 @@ export async function elevenLabsSTTDetailed(buffer: Buffer, contentType = "audio
       signal: AbortSignal.timeout(30000),
     });
     if (!res.ok) {
-      await logError("elevenlabs-stt", `STT ${res.status}`, (await res.text().catch(() => "")).slice(0, 200));
+      const body = await res.text().catch(() => "");
+      await logError("elevenlabs-stt", `STT ${res.status}`, body.slice(0, 200));
+      if (res.status === 401) return { refused: body.includes("missing_permissions") ? "permission" : "key" };
       return null;
     }
     const json = await res.json();
