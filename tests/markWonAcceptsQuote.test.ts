@@ -110,7 +110,8 @@ loader._load = function (this: unknown, request, parent, isMain) {
     if (request === "./leadJourneyEvents") return { emitLeadJourneyEvent: async (t: string, id: string) => { fanout.push(`${t}:${id}`); } };
     if (request === "./surveys") return { triggerSurvey: async (t: string) => { fanout.push(`survey:${t}`); } };
     if (request === "./errorLog") return { logError: async () => {} };
-    if (request === "./numbering") return { nextQuoteNumber: async () => 2001 };
+    // Accepting also issues the invoice number (tests/invoiceNumbers.test.ts covers it).
+    if (request === "./numbering") return { nextQuoteNumber: async () => 2001, issueInvoiceNumberInTx: async () => 1 };
   }
   return realLoad.call(this, request, parent, isMain);
 } as Loader;

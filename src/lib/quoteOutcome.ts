@@ -6,7 +6,7 @@ import { markReferralEarned } from "./referrals";
 import { emitLeadJourneyEvent } from "./leadJourneyEvents";
 import { triggerSurvey } from "./surveys";
 import { logError } from "./errorLog";
-import { nextQuoteNumber } from "./numbering";
+import { issueInvoiceNumberInTx, nextQuoteNumber } from "./numbering";
 import { payableTotalCents } from "./pricing";
 import { formatZAR } from "./format";
 
@@ -78,6 +78,8 @@ export async function acceptQuoteInTx(tx: Tx, quoteId: string, tenantId: string,
 
   const updated = await tx.quote.updateMany({ where: { id: quoteId, tenantId }, data: { status: "accepted" } });
   if (updated.count !== 1) return { kind: "gone" };
+  // Accepted is when it becomes an invoice: it gets its own invoice number.
+  await issueInvoiceNumberInTx(tx, quoteId, tenantId);
   await logAuditStrict({
     action: "quote.accepted",
     summary: `Quote Q-${before.number} (${formatZAR(Math.round(payableTotalCents(before)))}) accepted 🎉`,
