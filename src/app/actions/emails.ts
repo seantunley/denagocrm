@@ -34,6 +34,7 @@ import { resolveActingTenant } from "@/lib/tenantContext";
 import { parseReplyTo } from "@/lib/replyToAddresses";
 import { tenantOrigin } from "@/lib/tenantOrigin";
 import { withActingStaffScope } from "@/lib/actingScope";
+import { EMAIL_OPEN_TRACKING_KEY } from "@/lib/emailOpenTracking";
 
 export type SendEmailState = { ok?: string; error?: string };
 
@@ -134,6 +135,8 @@ export async function sendEmailAction(
     html,
     attachments,
     replyTo: replyTo.value ?? undefined,
+    // "Opened" on the timeline entry below (unless switched off in Settings → Email).
+    trackOpens: true,
   });
   if (!result.ok) return { error: result.error };
 
@@ -150,6 +153,7 @@ export async function sendEmailAction(
       contactId,
       userId: user.id,
       tenantId: await customerRecordTenantId({ contactId, leadId }),
+      ...(result.openToken ? { openToken: result.openToken } : {}),
     },
   });
   await logAudit({
@@ -358,6 +362,23 @@ export async function saveEmailHeaderStyle(formData: FormData) {
       create: { tenantId, key: "EMAIL_HEADER_STYLE", value: style },
     });
     await logAudit({ action: "settings.email_header.saved", summary: `Set the email header to ${EMAIL_HEADER_STYLES[style]}`, user });
+    revalidatePath("/settings");
+  });
+}
+
+/** Settings → Email: whether composer and quote emails carry the open-tracking image. */
+export async function saveEmailOpenTracking(formData: FormData) {
+  return asActionResult(async () => {
+    const user = await requireTenantOwner();
+    const tenantId = await getActiveTenantId();
+    if (!tenantId) refuse("No workspace attached to this sign-in — sign out and back in.");
+    const value = formData.get("openTracking") === "off" ? "off" : "on";
+    await basePrisma.appSetting.upsert({
+      where: { tenantId_key: { tenantId, key: EMAIL_OPEN_TRACKING_KEY } },
+      update: { value },
+      create: { tenantId, key: EMAIL_OPEN_TRACKING_KEY, value },
+    });
+    await logAudit({ action: "settings.email_open_tracking.saved", summary: `Turned email open tracking ${value}`, user });
     revalidatePath("/settings");
   });
 }

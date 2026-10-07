@@ -48,6 +48,8 @@ export type OutboundMessage = {
   /** Provider message id (SMTP Message-ID, BulkSMS id, WhatsApp wamid). */
   messageId?: string | null;
   occurredAt?: Date;
+  /** An email's open-tracking token (lib/emailOpenTracking.ts), kept on its timeline entry. */
+  openToken?: string;
 };
 
 export const SECRET_MASK = "••••••";
@@ -80,6 +82,7 @@ export function outboundTimelineEntry(msg: OutboundMessage, record: OutboundReco
     leadId: record.leadId ?? null,
     messageId: msg.messageId ?? null,
     occurredAt: msg.occurredAt ?? new Date(),
+    ...(msg.openToken ? { openToken: msg.openToken } : {}),
   };
 }
 

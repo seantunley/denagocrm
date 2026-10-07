@@ -30,6 +30,11 @@ const PUBLIC_PREFIXES = [
   // response, nosniff). It discloses what that tenant's own login page already
   // shows the world. Suspended tenants 404. See the route's header comment.
   "brand/logo",
+  // Email open pixel. PUBLIC BY NECESSITY: the customer's mail app loads it with
+  // no session. It answers every request with the same 1×1 GIF and, for a token
+  // that matches a sent email, only bumps that email's open count — it returns
+  // nothing and reads nothing back. See lib/emailOpenTracking.ts.
+  "track/e/",
   // Domain reachability check. PUBLIC BY NECESSITY, and the necessity is the
   // whole function: we fetch it ourselves, over the internet, at the hostname
   // being verified, to learn whether that hostname reaches this deployment. A

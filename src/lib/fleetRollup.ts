@@ -103,6 +103,8 @@ export type FleetCommunication = {
   body: string;
   attachmentUrl: string | null;
   occurredAt: Date;
+  seenAt: Date | null;
+  openCount: number;
   user: { name: string };
 };
 
@@ -325,6 +327,8 @@ export async function loadFleetRollup(
           body: true,
           attachmentUrl: true,
           occurredAt: true,
+          seenAt: true,
+          openCount: true,
           user: { select: { name: true } },
         },
         orderBy: { occurredAt: "desc" },
