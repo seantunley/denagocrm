@@ -3,8 +3,9 @@
 import { requireAnyPermission, requirePermission, canAccessLead } from "@/lib/permissions";
 import { ASK_LIMIT_MESSAGE, ASSISTANT_PERMISSIONS, assistantVoiceAllowed } from "@/lib/assistantUser";
 import { withActingStaffScope } from "@/lib/actingScope";
-import { transcribeVoice } from "@/lib/transcribe";
+import { transcribeVoiceChecked } from "@/lib/transcribe";
 import { isElevenLabsConfigured } from "@/lib/elevenlabs";
+import { notHeard } from "@/lib/voiceNotHeard";
 import { codexRespond, isCodexConnected } from "@/lib/codex";
 import { johannesburgDateKey } from "@/lib/activityDay";
 import { logError } from "@/lib/errorLog";
@@ -29,16 +30,9 @@ async function hear(formData: FormData): Promise<Heard> {
   if (!audio.type.startsWith("audio/") && !audio.type.startsWith("video/webm")) {
     return { ok: false, error: "That isn't a voice recording." };
   }
-  const text = await transcribeVoice(Buffer.from(await audio.arrayBuffer()), audio.type);
-  if (text) return { ok: true, text };
-  return {
-    ok: false,
-    error: (await isElevenLabsConfigured())
-      // Usually a silent recording, not a noisy one: the browser picked a muted
-      // or different microphone (seen 2026-10-07 — the pipeline itself worked).
-      ? "Couldn't hear any words — check the right microphone is picked and not muted (the mic icon in the address bar), then try again."
-      : "Voice isn't set up — add the ElevenLabs key in Settings → Integrations.",
-  };
+  const heard = await transcribeVoiceChecked(Buffer.from(await audio.arrayBuffer()), audio.type);
+  if (heard && "text" in heard) return { ok: true, text: heard.text };
+  return { ok: false, error: notHeard(heard, await isElevenLabsConfigured()) };
 }
 
 /** Speech → text for "Ask the CRM". */
