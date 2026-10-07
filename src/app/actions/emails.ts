@@ -29,6 +29,7 @@ import { sendEmail } from "@/lib/email";
 import { signatureCompanyFrom, buildSignature, buildEmailHtml, htmlToText } from "@/lib/signature";
 import { getCompanyProfile } from "@/lib/companyProfile";
 import { readFile } from "@/lib/storage";
+import { emailUploads } from "@/lib/emailUploads";
 import { resolveActingTenant } from "@/lib/tenantContext";
 import { parseReplyTo } from "@/lib/replyToAddresses";
 import { tenantOrigin } from "@/lib/tenantOrigin";
@@ -109,6 +110,16 @@ export async function sendEmailAction(
         return { error: `Attachment “${v.fileName}” could not be read from storage.` };
       }
     }
+  }
+
+  // Files uploaded from the computer (Sean, 2026-10-07: "must be able to upload
+  // an attachment as well"). Checked before anything is sent; named on the
+  // timeline and in the audit like library files.
+  const uploads = emailUploads(formData);
+  if ("error" in uploads) return { error: uploads.error };
+  for (const file of uploads.files) {
+    attachments.push({ filename: file.name, content: Buffer.from(await file.arrayBuffer()), contentType: file.type || undefined });
+    attachedNames.push(file.name);
   }
 
   const result = await sendEmail({

@@ -1,11 +1,14 @@
 "use client";
 
-import { useState, useEffect, useActionState } from "react";
+import { useState, useEffect, useActionState, useRef } from "react";
 import AiCheckButton from "@/components/AiCheckButton";
 import ModalPortal from "@/components/ui/modal-portal";
 import Link from "next/link";
 import { sendEmailAction, type SendEmailState } from "@/app/actions/emails";
 import RichTextEditor from "@/components/RichTextEditor";
+import { EMAIL_UPLOAD_MAX_BYTES, EMAIL_UPLOAD_MAX_FILES } from "@/lib/emailUploads";
+
+const fileSize = (bytes: number) => (bytes < 1024 * 1024 ? `${Math.max(1, Math.round(bytes / 1024))} KB` : `${(bytes / 1024 / 1024).toFixed(1)} MB`);
 
 /** Converts a plain-text template into simple HTML paragraphs for the editor. */
 function textToHtml(text: string): string {
@@ -59,6 +62,26 @@ export default function EmailComposer({
   const [attachOpen, setAttachOpen] = useState(false);
   const [attached, setAttached] = useState<string[]>([]);
   const [attachFilter, setAttachFilter] = useState("");
+  // Files from the computer. The hidden file input is what the form posts, so it
+  // is rebuilt to hold exactly this list whenever a file is added or removed.
+  const [uploads, setUploads] = useState<File[]>([]);
+  const uploadRef = useRef<HTMLInputElement>(null);
+  const setUploadFiles = (picked: File[]) => {
+    // The same file (name, size, date) once: picking it again, or a second
+    // change event for one pick, never doubles it up.
+    const seen = new Set<string>();
+    const files = picked.filter((f) => {
+      const key = `${f.name}:${f.size}:${f.lastModified}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+    setUploads(files);
+    if (!uploadRef.current) return;
+    const dt = new DataTransfer();
+    files.forEach((f) => dt.items.add(f));
+    uploadRef.current.files = dt.files;
+  };
   const [state, formAction, pending] = useActionState<SendEmailState | undefined, FormData>(
     sendEmailAction,
     undefined
@@ -223,6 +246,19 @@ export default function EmailComposer({
                   </span>
                 );
               })}
+              {uploads.map((file, i) => (
+                <span key={`${file.name}-${i}`} className="badge bg-slate-800 text-slate-200 gap-1.5 py-1">
+                  📎 {file.name} <span className="text-slate-500">{fileSize(file.size)}</span>
+                  <button
+                    type="button"
+                    onClick={() => setUploadFiles(uploads.filter((_, j) => j !== i))}
+                    className="text-slate-500 hover:text-red-400 cursor-pointer"
+                    aria-label={`Remove ${file.name}`}
+                  >
+                    ✕
+                  </button>
+                </span>
+              ))}
               <button
                 type="button"
                 onClick={() => setAttachOpen(true)}
@@ -231,10 +267,22 @@ export default function EmailComposer({
               >
                 📎 Attach from library
               </button>
-              {libraryDocs.length === 0 && (
-                <span className="text-xs text-slate-500">Library is empty.</span>
-              )}
+              <button type="button" onClick={() => uploadRef.current?.click()} className="btn-secondary btn-sm">
+                ⬆ Upload a file
+              </button>
+              {/* The form posts this input's files; it always holds exactly the chips above. */}
+              <input
+                ref={uploadRef}
+                type="file"
+                name="upload"
+                multiple
+                className="hidden"
+                onChange={(e) => setUploadFiles([...uploads, ...Array.from(e.target.files ?? [])])}
+              />
             </div>
+            <p className="mt-1 text-xs text-slate-500">
+              Up to {EMAIL_UPLOAD_MAX_FILES} files from your computer, {EMAIL_UPLOAD_MAX_BYTES / 1024 / 1024} MB in total.
+            </p>
             {attached.map((id) => (
               <input key={id} type="hidden" name="attach" value={id} />
             ))}
