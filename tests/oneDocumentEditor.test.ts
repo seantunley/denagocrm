@@ -59,9 +59,10 @@ test("the agreement's clauses keep their {{company.name}} merge field", () => {
 test("new standard layouts start with their text written in", () => {
   const invoice = JSON.stringify(standardTemplateFor("invoice"));
   assert.equal(hasLegacyTokens("invoice", standardTemplateFor("invoice")), false);
+  // Bank details and payment terms are written in, to be edited once in the editor.
   assert.match(invoice, /Bank: \(add your bank\)/);
-  assert.match(invoice, /Thank you for your business\./);
-  assert.doesNotMatch(invoice, /PAYMENT TERMS/, "no terms written yet → no box, as before");
+  assert.match(invoice, /Thank you for your business/);
+  assert.match(invoice, /Payment is due on receipt of this invoice\./);
   assert.equal(hasLegacyTokens("agreement", standardTemplateFor("agreement", { automotive: true })), false);
   assert.match(JSON.stringify(standardTemplateFor("agreement", { automotive: true })), /buy the vehicle\(s\)/);
 });

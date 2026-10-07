@@ -177,30 +177,6 @@ function exclusiveTaxLines(): DocumentBlock {
   return block;
 }
 
-function invoiceTemplate(): DocumentModel {
-  return documentModel("Standard invoice", [
-    [banner("INVOICE", "{{invoice.number}}")],
-    [
-      text("Date: {{invoice.date}}"),
-      text("Reference: {{quote.number}}", "center"),
-      text("Billed to: {{customer.name}}", "right"),
-    ],
-    [conditional("invoice.intro", [italic("{{invoice.intro}}")])],
-    [
-      infoCard("BILLED TO", "{{customer.name}}", "{{invoice.billedTo}}"),
-      infoCard("INVOICE DETAILS", "Invoice {{invoice.number}}", "Quote {{quote.number}}\nStatus: {{quote.status}}", INK),
-    ],
-    [lineItems()],
-    [exclusiveTaxLines()],
-    [totalBand("TOTAL INCL. VAT", "{{quote.total}}")],
-    // Written in by BUILDERS below (inlineLegacyText), edited here like any text.
-    [conditional("invoice.paymentTerms", [textBox("PAYMENT TERMS", "{{invoice.paymentTerms}}")])],
-    [conditional("invoice.bankingDetails", [textBox("PAYMENT DETAILS", "{{invoice.bankingDetails}}")])],
-    [signLine("Received by · Date")],
-    [footer()],
-  ]);
-}
-
 function agreementTemplate(): DocumentModel {
   return documentModel("Sales agreement", [
     [banner("SALES AGREEMENT", "{{agreement.number}}")],
@@ -563,6 +539,133 @@ export function showcaseQuoteTemplate(): DocumentModel {
   };
 }
 
+/**
+ * The invoice in the quotation's style (Sean, 2026-10-07): the same header band,
+ * info strip, line-item table, totals box and footer band — without the vehicle
+ * showcase — and with what a tax invoice needs: TAX INVOICE and its number, who
+ * it's billed to and who it's from (with the seller's VAT number), the quote it
+ * came from, the totals with VAT, and how to pay.
+ *
+ * Every word is ordinary editable text in the document editor; "(add …)" lines
+ * are there to be replaced once — the bank details and the VAT number.
+ *
+ * Like the quotation, a long invoice moves the payment cards to a second page
+ * with a compact header (overflowGroups); the row counts are measured in
+ * headless Chrome (tests/showcaseInvoice.test.ts).
+ */
+export const INVOICE_ROWS_ABOVE_CARDS = 9;
+export const INVOICE_ROWS_ABOVE_FOOTER = 13;
+
+function showcaseInvoiceTemplate(): DocumentModel {
+  const PAGE = PAGE_SIZES.A4;
+  const inset = SHOWCASE_INSET;
+  const contentW = PAGE.w - inset * 2;
+  const gap = 14;
+  const cardW = Math.floor((contentW - gap) / 2);
+  const footerY = PAGE.h - 1 - FOOTER_BAND_HEIGHT;
+  const cardsY = footerY - 14 - acceptanceHeight();
+  const content = { top: 0, right: inset, bottom: 0, left: inset };
+  const padded = (blocks: DocumentBlock[], padding = content) => {
+    const row = newRow([newColumn(100, blocks)]);
+    row.settings = { ...row.settings, padding };
+    return row;
+  };
+  const showcaseCard = (label: string, name: string, lines: string) => {
+    const block = infoCard(label, name, lines);
+    if (block.type === "infoCard") block.look = "showcase";
+    return block;
+  };
+
+  const header = newBlock("showcaseHeader");
+  if (header.type === "showcaseHeader") {
+    header.title = "TAX INVOICE";
+    header.docNumber = "{{invoice.number}}";
+    header.bgImage = SHOWCASE_HEADER_IMAGE;
+  }
+  const strip = newBlock("infoStrip");
+  if (strip.type === "infoStrip") {
+    strip.items = [
+      { icon: "calendar", label: "INVOICE DATE", value: "{{invoice.date}}", sub: "" },
+      { icon: "calendarCheck", label: "QUOTE REFERENCE", value: "{{quote.number}}", sub: "" },
+      { icon: "user", label: "PREPARED BY", value: "{{preparedBy}}", sub: "Sales Consultant" },
+    ];
+  }
+  const billTo = showcaseCard("BILL TO", "{{customer.name}}", "{{invoice.billedTo}}");
+  const from = showcaseCard("FROM", "{{company.name}}", "{{company.address}}\n{{company.phone}} · {{company.email}}\nVAT no: (add your VAT number)");
+  const parties = newRow([newColumn(50, [billTo]), newColumn(50, [from])]);
+  parties.settings = { ...parties.settings, gap, padding: content };
+
+  const items = newBlock("lineItems");
+  if (items.type === "lineItems") {
+    items.look = "showcase";
+    items.headerBg = "#0b1220";
+    items.columns = [
+      { key: "description", header: "Description", align: "left", showIf: "" },
+      { key: "qty", header: "Qty", align: "right", showIf: "" },
+      { key: "unitPrice", header: "Unit price (incl. VAT)", align: "right", showIf: "" },
+      { key: "total", header: "Total (incl. VAT)", align: "right", showIf: "" },
+    ];
+  }
+  const totals = newBlock("totalsBox");
+  totals.settings = { width: 46, horizontalAlignment: "right" };
+  if (totals.type === "totalsBox") totals.totalLabel = "TOTAL DUE INCL. VAT";
+
+  const banking = showcaseCard(
+    "BANKING DETAILS",
+    "{{company.name}}",
+    "Bank: (add your bank)\nAccount number: (add your account number)\nBranch code: (add your branch code)\nReference: {{invoice.number}}",
+  );
+  const payment = showcaseCard(
+    "PAYMENT TERMS",
+    "Thank you for your business",
+    "Payment is due on receipt of this invoice.\nPlease use {{invoice.number}} as your payment reference.\nE & O.E.",
+  );
+  const footerBand = newBlock("footerBand");
+  if (footerBand.type === "footerBand") footerBand.bgImage = SHOWCASE_FOOTER_IMAGE;
+
+  const page = newPage([
+    padded([header], { top: 0, right: 0, bottom: 0, left: 0 }),
+    padded([strip]),
+    parties,
+    padded([items]),
+    padded([totals]),
+  ]);
+  const bankingFloat = { id: uid(), x: inset, y: cardsY, width: cardW, block: banking };
+  const paymentFloat = { id: uid(), x: inset + cardW + gap, y: cardsY, width: cardW, block: payment };
+  const footerFloat = { id: uid(), x: 0, y: footerY, width: PAGE.w, block: footerBand };
+  page.floatingBlocks = [bankingFloat, paymentFloat, footerFloat];
+  const continuationHeader = newBlock("showcaseHeader");
+  if (continuationHeader.type === "showcaseHeader") {
+    continuationHeader.title = "TAX INVOICE";
+    continuationHeader.docNumber = "{{invoice.number}}";
+    continuationHeader.bgImage = SHOWCASE_HEADER_IMAGE;
+    continuationHeader.compact = true;
+  }
+  page.overflowGroups = [
+    {
+      maxItems: INVOICE_ROWS_ABOVE_CARDS,
+      floatIds: [bankingFloat.id, paymentFloat.id],
+      fieldIds: [],
+      topOnNextPage: SHOWCASE_COMPACT_HEADER_HEIGHT + 24,
+      nextPageFloats: [
+        { id: uid(), x: 0, y: 0, width: PAGE.w, block: continuationHeader },
+        { id: uid(), x: 0, y: footerY, width: PAGE.w, block: { ...footerBand, id: uid() } },
+      ],
+    },
+    { maxItems: INVOICE_ROWS_ABOVE_FOOTER, floatIds: [footerFloat.id], fieldIds: [], drop: true },
+  ];
+
+  return {
+    schemaVersion: 1,
+    title: "Tax invoice",
+    style: { fontFamily: "sans", pageSize: "A4", margin: 0, accent: ACCENT, ink: INK },
+    recipients: [],
+    pages: [page],
+    header: [],
+    footer: [],
+  };
+}
+
 /** What a workspace has that changes its standard documents. */
 export type StandardTemplateOptions = { automotive?: boolean };
 
@@ -570,11 +673,7 @@ export type StandardTemplateOptions = { automotive?: boolean };
 // prints — not read from the old form editor (inlineLegacyText).
 const BUILDERS: Record<StandardDocKey, (options: StandardTemplateOptions) => DocumentModel> = {
   quote: (options) => standardQuoteTemplate(options),
-  invoice: () => inlineLegacyText("invoice", invoiceTemplate(), {
-    intro: { text: DOC_DEFS.invoice.defaultIntro ?? "", on: true },
-    paymentTerms: { text: "", on: true },
-    bankingDetails: { text: DOC_DEFS.invoice.defaultBody ?? "", on: true },
-  }) as DocumentModel,
+  invoice: () => showcaseInvoiceTemplate(),
   agreement: (options) => inlineLegacyText("agreement", agreementTemplate(), {
     intro: { text: DOC_DEFS.agreement.defaultIntro ?? "", on: true },
     clauses: { text: (options.automotive ? DOC_DEFS.agreement.automotiveBody : DOC_DEFS.agreement.defaultBody) ?? "", on: true },
