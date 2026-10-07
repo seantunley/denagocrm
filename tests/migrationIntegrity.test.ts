@@ -349,7 +349,10 @@ test("session GUCs really do span separate statements, in every migration that u
   // `lastConfirmedAt` on AssistantNote, which already FORCEs RLS — under a
   // migrating role without BYPASSRLS the UPDATEs would match zero rows and the
   // migration would still be recorded as applied.
-  assert.equal(spans.length, 18, "eighteen migrations set a session GUC");
+  //
+  // 18 → 19: 20261007150000_quote_invoice_numbers numbers the existing accepted
+  // quotes' invoices on Quote, which FORCEs RLS — the same reason.
+  assert.equal(spans.length, 19, "nineteen migrations set a session GUC");
   for (const { name, between } of spans) {
     assert.ok(between > 0, `${name}: a SET with no following statement would not need session pinning`);
   }

@@ -1235,6 +1235,10 @@ model Quote {
   reminderSentAt       DateTime? // unsigned-quote nudge already sent
   // Fulfilment flow after signing (all set manually from the Deliveries board)
   invoicedAt           DateTime?
+  /// The tax invoice's OWN number, from the workspace's invoice sequence — not
+  /// the quote number with a prefix (Sean, 2026-10-07). Issued once, when the
+  /// quote is accepted (lib/invoiceNumber.ts), and never reused.
+  invoiceNumber        Int?
   depositPaidAt        DateTime?
   depositPaidCents     Int? // amount actually received; null = recorded before amounts were captured
   deliveryScheduledFor DateTime?
@@ -1293,6 +1297,8 @@ model Quote {
   // The fleet page lists an account's quotes by this column.
   @@index([fleetId])
   @@unique([tenantId, id])
+  // One invoice number per workspace: the sequence can never issue a duplicate.
+  @@unique([tenantId, invoiceNumber])
 }
 
 model QuoteItem {

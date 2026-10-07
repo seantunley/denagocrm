@@ -26,6 +26,7 @@ import {
 import { automationOn } from "@/lib/automationSwitch";
 import { exactTenantWhere } from "./recoveryScope";
 import { sendPushToAll } from "@/lib/push";
+import { issueInvoiceNumberInTx } from "@/lib/numbering";
 
 /** Internal sentinel: the completion claim was lost to a concurrent close. */
 class CompletionLost extends Error {}
@@ -380,6 +381,8 @@ export async function completeSignatureRequest(requestId: string): Promise<void>
         });
         if (signedQuote.count === 1) {
           sourceSigned = true;
+          // Signed is accepted: the quote becomes an invoice and gets its own number.
+          await issueInvoiceNumberInTx(tx, req.quoteId, req.tenantId);
           const q = await tx.quote.findUnique({ where: { id: req.quoteId }, select: { leadId: true } });
           if (q?.leadId) {
             // Win the lead in the SAME transaction, locked, so quote-accepted and
