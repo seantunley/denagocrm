@@ -1775,7 +1775,10 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
   const { evidence } = resolved;
   // The free check (assistantVerify): an amount or quote number the records
   // don't hold gets a visible line under the answer — everywhere it's shown.
-  const flagged = unsupportedFigures(resolved.plain, [question, conversation, ...observations.map((o) => o.output.data)]);
+  // Evidence is the lookups and what the PERSON said, now and earlier — never
+  // DAX's own earlier answers or working memory: a figure it made up last turn
+  // must not vouch for itself this turn.
+  const flagged = unsupportedFigures(resolved.plain, [question, ...history.map((t) => t.question), ...observations.map((o) => o.output.data)]);
   const note = flagged.length ? `\n\n${unsupportedNote(flagged)}` : "";
   const cited = resolved.cited + note;
   const answer = resolved.plain + note;
