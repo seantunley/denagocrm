@@ -144,6 +144,8 @@ export async function sendQuoteEmail(
             html: email.html,
             attachments: mail.attachments,
             replyTo: replyTo || undefined,
+            // A person emailed this quote: their name on the From line.
+            senderName: user.name,
             record: { contactId: quote.contactId, leadId: quote.leadId, userId: user.id, label: "Quote email" },
           }),
         // Only a draft moves, and only the version that was rendered: an edit
