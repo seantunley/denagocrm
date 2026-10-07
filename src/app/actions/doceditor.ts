@@ -4,7 +4,8 @@ import { asActionResult, ActionRefusal, refuse } from "@/lib/actionResult";
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/db";
 import { isModuleEnabled } from "@/lib/modules/enabled";
-import { requirePermission, type PermissionUser } from "@/lib/permissions";
+import { hasPermission, requireAnyPermission, requirePermission, type PermissionUser } from "@/lib/permissions";
+import { canEditLayout } from "@/lib/docbuilder/layoutAccess";
 import { RECORD_UNAVAILABLE, canAccessBuilderRecord } from "@/lib/docbuilder/recordAccess";
 import { logAudit } from "@/lib/audit";
 import { documentSchema } from "@/lib/doceditor/model";
@@ -262,7 +263,15 @@ export async function createStandardQuoteTemplate() {
  */
 export async function uploadDocEditorImage(formData: FormData): Promise<{ ok: true; ref: string } | { ok: false; error: string }> {
   return withActingStaffScope(async () => {
-    const user = await requirePermission("docbuilder.manage");
+    const user = await requireAnyPermission("docbuilder.manage", "document_templates.manage");
+    // Into a layout this person may edit (layoutAccess); with no layout named,
+    // docbuilder.manage as before.
+    const templateId = String(formData.get("templateId") ?? "").trim();
+    const template = templateId ? await getBuilderTemplate(templateId) : null;
+    if (templateId && !template) return { ok: false, error: "Template not found." };
+    if (!(template ? await canEditLayout(user, template.key) : await hasPermission(user, "docbuilder.manage"))) {
+      return { ok: false, error: "You don't have access to edit this layout." };
+    }
     const file = formData.get("file");
     if (!(file instanceof File)) return { ok: false, error: "Choose an image to upload." };
     // Checked on the size and first bytes BEFORE the whole file is read into memory.
@@ -270,9 +279,6 @@ export async function uploadDocEditorImage(formData: FormData): Promise<{ ok: tr
     if (!type.ok) return type;
     const bytes = Buffer.from(await file.arrayBuffer());
 
-    const templateId = String(formData.get("templateId") ?? "").trim();
-    const template = templateId ? await getBuilderTemplate(templateId) : null;
-    if (templateId && !template) return { ok: false, error: "Template not found." };
     const tenantId = template ? template.tenantId : await actingOwnerTenantId();
 
     const ref = await saveFile(bytes, `image.${type.ext}`, type.mime, tenantId);
@@ -293,7 +299,7 @@ export async function saveDocEditor(
   doc: unknown,
 ): Promise<{ ok: boolean; error?: string }> {
   return withActingStaffScope(async () => {
-    const user = await requirePermission("docbuilder.manage");
+    const user = await requireAnyPermission("docbuilder.manage", "document_templates.manage");
     const parsed = documentSchema.safeParse(doc);
     if (!parsed.success) {
       return { ok: false, error: "Invalid document structure" };
@@ -303,6 +309,8 @@ export async function saveDocEditor(
     if (!existing) {
       return { ok: false, error: "Not found" };
     }
+    // The seven old form-editor layouts also under document_templates.manage (layoutAccess).
+    if (!(await canEditLayout(user, existing.key))) return { ok: false, error: "You don't have access to edit this layout." };
 
     await prisma.docBuilderTemplate.update({
       where: { id },

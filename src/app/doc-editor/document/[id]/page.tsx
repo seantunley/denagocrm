@@ -23,8 +23,9 @@ export default async function CustomDocumentPage({ params }: { params: Promise<{
   const { id } = await params;
   const row = await prisma.docInstance.findUnique({ where: { id } });
   if (!row || row.deletedAt || !(await canAccessDocumentLinks(user, row))) notFound();
-  // A legacy Studio (BlockNote) document still opens in the Studio editor.
-  if (row.docModelJson == null) redirect(`/settings/documents/studio/d/${id}`);
+  // A legacy Studio (BlockNote) document — none exist; the Studio editor is
+  // gone (one editor, 2026-10-07). Its filed PDF stays in the repository.
+  if (row.docModelJson == null) redirect("/document-studio");
 
   const doc = parseDocument(row.docModelJson);
   const editable = customDocumentEditable(row) && (await hasPermission(user, "documents.manage"));

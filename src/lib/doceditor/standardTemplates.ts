@@ -17,6 +17,8 @@ import {
 } from "./factory";
 import { FOOTER_BAND_HEIGHT, SHOWCASE_COMPACT_HEADER_HEIGHT, SHOWCASE_INSET, acceptanceFieldRects, acceptanceHeight } from "./showcaseRender";
 import { SHOWCASE_FOOTER_IMAGE, SHOWCASE_HEADER_IMAGE } from "./showcaseAssets";
+import { inlineLegacyText } from "./inlineLegacyText";
+import { DOC_DEFS } from "../docTemplates";
 
 export type StandardDocKey =
   | "quote"
@@ -191,7 +193,7 @@ function invoiceTemplate(): DocumentModel {
     [lineItems()],
     [exclusiveTaxLines()],
     [totalBand("TOTAL INCL. VAT", "{{quote.total}}")],
-    // Both texts come from Settings → Documents → Invoice, as on the old page.
+    // Written in by BUILDERS below (inlineLegacyText), edited here like any text.
     [conditional("invoice.paymentTerms", [textBox("PAYMENT TERMS", "{{invoice.paymentTerms}}")])],
     [conditional("invoice.bankingDetails", [textBox("PAYMENT DETAILS", "{{invoice.bankingDetails}}")])],
     [signLine("Received by · Date")],
@@ -211,7 +213,7 @@ function agreementTemplate(): DocumentModel {
     [lineItems()],
     [exclusiveTaxLines()],
     [totalBand("PURCHASE PRICE", "{{quote.total}}")],
-    // The clauses come from Settings → Documents → Sales agreement, as on the old page.
+    // Written in by BUILDERS below (inlineLegacyText), edited here like any text.
     [conditional("agreement.clauses", [textBox("TERMS OF SALE", "{{agreement.clauses}}")])],
     [signLine("Purchaser signature · Date"), signLine("For {{company.name}} · Date")],
     [footer()],
@@ -564,10 +566,19 @@ export function showcaseQuoteTemplate(): DocumentModel {
 /** What a workspace has that changes its standard documents. */
 export type StandardTemplateOptions = { automotive?: boolean };
 
+// The invoice and agreement start with their text written in, edited where it
+// prints — not read from the old form editor (inlineLegacyText).
 const BUILDERS: Record<StandardDocKey, (options: StandardTemplateOptions) => DocumentModel> = {
   quote: (options) => standardQuoteTemplate(options),
-  invoice: invoiceTemplate,
-  agreement: agreementTemplate,
+  invoice: () => inlineLegacyText("invoice", invoiceTemplate(), {
+    intro: { text: DOC_DEFS.invoice.defaultIntro ?? "", on: true },
+    paymentTerms: { text: "", on: true },
+    bankingDetails: { text: DOC_DEFS.invoice.defaultBody ?? "", on: true },
+  }) as DocumentModel,
+  agreement: (options) => inlineLegacyText("agreement", agreementTemplate(), {
+    intro: { text: DOC_DEFS.agreement.defaultIntro ?? "", on: true },
+    clauses: { text: (options.automotive ? DOC_DEFS.agreement.automotiveBody : DOC_DEFS.agreement.defaultBody) ?? "", on: true },
+  }) as DocumentModel,
   indemnity: indemnityTemplate,
   delivery: deliveryTemplate,
   jobcard: jobcardTemplate,

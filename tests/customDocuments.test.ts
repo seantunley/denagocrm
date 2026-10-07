@@ -204,14 +204,9 @@ test("saving and finalising touch only a draft the caller may edit — never the
   assert.doesNotMatch(finalise, /docBuilderTemplate/);
 });
 
-test("converting a Studio template needs both template permissions and never changes the original", () => {
-  const convert = body(shipped(ACTIONS), "convertStudioTemplate");
-  assert.match(convert, /requirePermission\("document_templates\.manage"\)/);
-  assert.match(convert, /requirePermission\("docbuilder\.manage"\)/);
-  assert.match(convert, /blockNoteToDocument\(source\.draftJson/);
-  assert.match(convert, /key: CUSTOM_KEY/);
-  assert.doesNotMatch(convert, /customDocTemplate\.(update|delete)/);
-
+test("the editor's Library offers clauses without the document editor's own library items twice", () => {
+  // (Studio templates and their converter are gone with the Studio editor —
+  // one editor, 2026-10-07; none existed in production.)
   const clauses = body(shipped(ACTIONS), "listClauseBlocks");
   assert.match(clauses, /listStudioClauses\(\)/, "clauses exclude doc-editor library items");
 });
@@ -232,12 +227,9 @@ test("the page, the preview route and the legacy Studio actions agree on who may
   assert.match(shipped("src/lib/doceditor/generate.ts"), /embedDocImages\(doc, tenantId \?\? undefined\)/);
   assert.match(page, /documentLogo\(company\.logoUrl, row\.tenantId\)/, "the canvas shows the workspace logo");
 
-  // A document-editor row has an empty BlockNote column; the Studio actions must not file it.
-  const studio = shipped("src/app/actions/studio.ts");
-  for (const name of ["saveDocInstance", "finalizeDocInstance"]) {
-    assert.match(body(studio, name), /docModelJson != null\) return \{ ok: false, error: NEW_EDITOR_DOCUMENT \}/, name);
-  }
-  assert.match(shipped("src/app/(app)/settings/documents/studio/d/[id]/page.tsx"), /docModelJson != null\) redirect\(`\/doc-editor\/document\/\$\{id\}`\)/);
+  // The Studio editor and its save/finalise actions are gone: an old Studio
+  // link lands here, in the one editor.
+  assert.match(shipped("src/app/(app)/settings/documents/studio/d/[id]/page.tsx"), /redirect\(`\/doc-editor\/document\/\$\{encodeURIComponent\(id\)\}`\)/);
 });
 
 test("the editor in document mode saves the document and finalises instead of publishing", () => {
@@ -249,15 +241,12 @@ test("the editor in document mode saves the document and finalises instead of pu
 
 // ── Document Studio wiring ───────────────────────────────────────────
 
-test("Document Studio makes new documents from custom templates and offers Convert per Studio template", () => {
+test("Document Studio makes new documents from custom templates, all in the one editor", () => {
   const page = shipped("src/app/(app)/document-studio/page.tsx");
   assert.match(page, /action=\{createCustomDocument\}/);
   assert.match(page, /where: \{ key: "custom", deletedAt: null \}/);
-  assert.match(page, /action=\{convertStudioTemplate\.bind\(null, template\.id\)\}/);
-  assert.match(page, /Convert to new editor/);
-  assert.match(page, /Legacy/);
-  assert.match(page, /instance\.editorDocument \? `\/doc-editor\/document\/\$\{instance\.id\}` : `\/settings\/documents\/studio\/d\/\$\{instance\.id\}`/);
-  assert.doesNotMatch(page, /createDocInstance|createStudioTemplate/, "no new legacy documents or templates");
+  assert.match(page, /href=\{`\/doc-editor\/document\/\$\{instance\.id\}`\}/, "every document opens in the one editor");
+  assert.doesNotMatch(page, /convertStudioTemplate|createDocInstance|createStudioTemplate|settings\/documents\/studio/, "no second editor anywhere");
 });
 
 test("the migration is additive: two nullable columns on DocInstance, reentrant", () => {

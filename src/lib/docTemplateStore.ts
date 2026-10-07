@@ -63,6 +63,14 @@ export async function getDocTemplate(key: DocKey, templateId?: string): Promise<
   return withCompanyDetails(tpl, company);
 }
 
+/**
+ * The default template's text as the owner wrote it — {{company.name}} still a
+ * placeholder, not filled in — for moving it into the document editor's layout.
+ */
+export async function getDocTemplateText(key: DocKey): Promise<DocTemplate> {
+  return loadDocTemplate(key);
+}
+
 async function loadDocTemplate(key: DocKey, templateId?: string): Promise<DocTemplate> {
   if (templateId) {
     const rec = await prisma.docTemplateRecord.findUnique({ where: { id: templateId } });

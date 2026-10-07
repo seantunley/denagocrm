@@ -1,8 +1,9 @@
 import { notFound } from "next/navigation";
-import { getAccessibleLeadIds, getAccessibleVehicleIds, requirePermission } from "@/lib/permissions";
+import { getAccessibleJobCardIds, getAccessibleLeadIds, getAccessibleQuoteIds, getAccessibleVehicleIds, requireAnyPermission } from "@/lib/permissions";
+import { requireLayoutEditor } from "@/lib/docbuilder/layoutAccess";
 import { prisma } from "@/lib/db";
 import { contactName } from "@/lib/format";
-import { getBuilderTemplate } from "@/lib/docbuilder/store";
+import { getBuilderTemplate, withLegacyTextInlined } from "@/lib/docbuilder/store";
 import { requiredRecordKind } from "@/lib/docbuilder/recordBinding";
 import Link from "next/link";
 import { readTemplateDocument } from "@/lib/doceditor/legacy";
@@ -20,10 +21,16 @@ export default async function DocEditorPage({
 }: {
   params: Promise<{ id: string }>;
 }) {
-  const user = await requirePermission("docbuilder.manage");
+  await requireAnyPermission("docbuilder.manage", "document_templates.manage");
   const { id } = await params;
-  const template = await getBuilderTemplate(id);
+  // An invoice/agreement still reading its text from the old form editor opens
+  // with it written in, so bank details and clauses are edited in this editor
+  // (stored by the editor's save, or by Publish — nothing is written on open).
+  const template = await getBuilderTemplate(id).then((t) => (t ? withLegacyTextInlined(t) : null));
   if (!template) notFound();
+  // docbuilder.manage, or — for the seven layouts the old form editor managed —
+  // document_templates.manage (layoutAccess).
+  const user = await requireLayoutEditor(template.key);
 
   const read = readTemplateDocument(template.data, template.name);
 
@@ -57,8 +64,8 @@ export default async function DocEditorPage({
           Create a new document to replace it, or send this template name to
           support so the content can be recovered.
         </p>
-        <Link href="/settings/documents/builder" className="inline-block text-sm text-primary hover:underline">
-          Back to Document Builder
+        <Link href="/document-studio" className="inline-block text-sm text-primary hover:underline">
+          Back to Document Studio
         </Link>
       </div>
     );
@@ -66,22 +73,30 @@ export default async function DocEditorPage({
 
   const initialDoc = read.doc;
   const required = requiredRecordKind(template.key);
+  // Every preview record is scoped to what the caller may see (as BuilderSection
+  // does): the editor is open to document_templates.manage holders too
+  // (layoutAccess), who may hold no quotes or workshop permission at all — and
+  // the labels carry customer names, quote and job numbers, vehicle models.
+  const scoped = (ids: string[] | null) => (ids === null ? {} : { id: { in: ids } });
   const [quotes, jobCards, leads, claims] = await Promise.all([
     required !== "quote" && required !== "either"
       ? []
-      : prisma.quote.findMany({
-          where: { supersededAt: null },
-          orderBy: { createdAt: "desc" },
-          take: 100,
-          include: { contact: true },
-        }),
+      : getAccessibleQuoteIds(user).then((ids) =>
+          prisma.quote.findMany({
+            where: { supersededAt: null, ...scoped(ids) },
+            orderBy: { createdAt: "desc" },
+            take: 100,
+            include: { contact: true },
+          })),
     required !== "jobcard" && required !== "either"
       ? []
-      : prisma.jobCard.findMany({
-          orderBy: { openedAt: "desc" },
-          take: 100,
-          include: { contact: true, vehicle: true },
-        }),
+      : getAccessibleJobCardIds(user).then((ids) =>
+          prisma.jobCard.findMany({
+            where: scoped(ids),
+            orderBy: { openedAt: "desc" },
+            take: 100,
+            include: { contact: true, vehicle: true },
+          })),
     // Scoped to the leads / vehicles the caller may see, as the print pages are.
     required !== "lead"
       ? []
