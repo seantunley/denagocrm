@@ -4,7 +4,7 @@ import { useState, useEffect, useActionState, useRef } from "react";
 import AiCheckButton from "@/components/AiCheckButton";
 import ModalPortal from "@/components/ui/modal-portal";
 import Link from "next/link";
-import { sendEmailAction, type SendEmailState } from "@/app/actions/emails";
+import { previewComposerEmail, sendEmailAction, type SendEmailState } from "@/app/actions/emails";
 import RichTextEditor from "@/components/RichTextEditor";
 import { EMAIL_UPLOAD_MAX_BYTES, EMAIL_UPLOAD_MAX_FILES } from "@/lib/emailUploads";
 
@@ -87,6 +87,26 @@ export default function EmailComposer({
     undefined
   );
 
+  // Preview: the server builds the same HTML the send does (message + signature).
+  const formRef = useRef<HTMLFormElement>(null);
+  // `sentState` is the send result the preview was opened against: once a send
+  // answers (sent, or an error to read on the form), the preview steps aside.
+  const [preview, setPreview] = useState<{ html: string; to: string; replyTo: string; sentState: typeof state } | null>(null);
+  const [previewing, setPreviewing] = useState(false);
+  const [previewError, setPreviewError] = useState("");
+  async function showPreview() {
+    const field = (name: string) => String(new FormData(formRef.current ?? undefined).get(name) ?? "").trim();
+    setPreviewing(true);
+    setPreviewError("");
+    try {
+      const { html } = await previewComposerEmail(body);
+      setPreview({ html, to: field("to"), replyTo: field("replyTo"), sentState: state });
+    } catch {
+      setPreviewError("Couldn't build the preview — try again.");
+    } finally {
+      setPreviewing(false);
+    }
+  }
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => e.key === "Escape" && setOpen(false);
@@ -145,7 +165,7 @@ export default function EmailComposer({
                 .
               </p>
             ) : (
-              <form action={formAction} className="space-y-3">
+              <form ref={formRef} action={formAction} className="space-y-3">
           {leadId && <input type="hidden" name="leadId" value={leadId} />}
           {contactId && <input type="hidden" name="contactId" value={contactId} />}
           <input type="hidden" name="revalidate" value={revalidate} />
@@ -349,11 +369,70 @@ export default function EmailComposer({
               </div>
             </div>
           )}
+          {preview && preview.sentState === state && (
+            <div
+              className="fixed inset-0 z-[60] flex items-start justify-center bg-black/70 p-4 pt-8 overflow-y-auto"
+              onPointerDown={(e) => e.target === e.currentTarget && setPreview(null)}
+            >
+              <div className="card w-full max-w-3xl">
+                <div className="flex items-center justify-between mb-3">
+                  <h3 className="font-bold text-white">Preview — what the customer receives</h3>
+                  <button
+                    type="button"
+                    onClick={() => setPreview(null)}
+                    className="text-slate-400 hover:text-white text-2xl leading-none cursor-pointer"
+                    aria-label="Back to editing"
+                  >
+                    ×
+                  </button>
+                </div>
+                <dl className="mb-3 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-sm">
+                  <dt className="text-slate-500">To</dt>
+                  <dd className="text-slate-200 break-all">{preview.to || "—"}</dd>
+                  {preview.replyTo && (
+                    <>
+                      <dt className="text-slate-500">Reply to</dt>
+                      <dd className="text-slate-200 break-all">{preview.replyTo}</dd>
+                    </>
+                  )}
+                  <dt className="text-slate-500">Subject</dt>
+                  <dd className="text-slate-200">{subject || "—"}</dd>
+                  {(attached.length > 0 || uploads.length > 0) && (
+                    <>
+                      <dt className="text-slate-500">Attached</dt>
+                      <dd className="text-slate-200">
+                        {[...attached.map((id) => libraryDocs.find((x) => x.id === id)?.label ?? "Document"), ...uploads.map((f) => f.name)].join(", ")}
+                      </dd>
+                    </>
+                  )}
+                </dl>
+                {/* sandbox="": the message renders as HTML but can run nothing. */}
+                <iframe
+                  title="Email preview"
+                  sandbox=""
+                  srcDoc={preview.html}
+                  className="h-[60vh] w-full rounded-lg border border-slate-700 bg-white"
+                />
+                <div className="mt-4 flex gap-2">
+                  <button className="btn-primary" disabled={pending}>
+                    {pending ? "Sending…" : "Send email"}
+                  </button>
+                  <button type="button" onClick={() => setPreview(null)} className="btn-secondary">
+                    Back to editing
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
           {state?.error && <p className="text-sm text-red-400">{state.error}</p>}
           {state?.ok && <p className="text-sm text-emerald-400">{state.ok}</p>}
+          {previewError && <p className="text-sm text-red-400">{previewError}</p>}
           <div className="flex gap-2">
             <button className="btn-primary" disabled={pending}>
               {pending ? "Sending…" : "Send email"}
+            </button>
+            <button type="button" onClick={showPreview} className="btn-secondary" disabled={previewing || pending}>
+              {previewing ? "Building preview…" : "👁 Preview"}
             </button>
             <button type="button" onClick={() => setOpen(false)} className="btn-secondary">
               {state?.ok ? "Close" : "Cancel"}

@@ -43,6 +43,20 @@ async function tenantIdFor(userId: string): Promise<string | null> {
   return "tenantId" in tenant ? tenant.tenantId : null;
 }
 
+type ComposerUser = Awaited<ReturnType<typeof requireAnyPermission>>;
+
+/** The composer email's HTML: the message plus the sender's signature. One builder, so Preview is what Send sends. */
+async function composerHtml(user: ComposerUser, bodyHtml: string, profile: Awaited<ReturnType<typeof getCompanyProfile>>) {
+  const company = signatureCompanyFrom(profile, await tenantOrigin(await tenantIdFor(user.id)));
+  return buildEmailHtml(bodyHtml, buildSignature(user, company));
+}
+
+/** The composer's Preview (Sean, 2026-10-07: "a preview on the email, to view before it sends"). Sends nothing. */
+export async function previewComposerEmail(bodyHtml: string): Promise<{ html: string }> {
+  const user = await requireAnyPermission(...CUSTOMER_RECORD_WRITE_PERMISSIONS);
+  return { html: await composerHtml(user, String(bodyHtml ?? "").trim(), await getCompanyProfile()) };
+}
+
 /** Sends an email and logs it as an outbound communication on the lead/contact. */
 export async function sendEmailAction(
   _prev: SendEmailState | undefined,
@@ -81,8 +95,7 @@ export async function sendEmailAction(
     return { error: "You don't have access to that lead." };
   }
   const profile = await getCompanyProfile();
-  const signature = buildSignature(user, signatureCompanyFrom(profile, await tenantOrigin(await tenantIdFor(user.id))));
-  const html = buildEmailHtml(bodyHtml, signature);
+  const html = await composerHtml(user, bodyHtml, profile);
 
   // Library attachments (selected version ids)
   const attachIds = formData.getAll("attach").map(String).filter(Boolean);
