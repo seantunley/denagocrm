@@ -115,15 +115,19 @@ test("a run reads as what happened — and one that died with its server says so
   assert.deepEqual(dead.result, RUN_LOST);
 });
 
-test("runs are claimed by a unique key per person and read only by their owner", () => {
+test("runs are claimed by a unique key per person per workspace, and every read and write names both", () => {
   const run = code("src/lib/assistantRun.ts");
   assert.match(run, /error\.code === "P2002"/);
-  assert.match(run, /where: \{ userId_clientKey: \{ userId, clientKey \} \}/);
-  assert.match(run, /if \(!run \|\| run\.userId !== userId\) return null;/);
-  assert.match(run, /prisma\.assistantRun\.updateMany\(\{ where: \{ id, userId \}, data \}\)/);
+  assert.equal((run.match(/where: \{ tenantId_userId_clientKey: \{ tenantId, userId, clientKey \} \}/g) ?? []).length, 2, "the claim's fallback and the read");
+  assert.match(run, /if \(!run \|\| run\.tenantId !== tenantId \|\| run\.userId !== userId\) return null;/);
+  assert.match(run, /prisma\.assistantRun\.updateMany\(\{ where: \{ id, tenantId, userId \}, data \}\)/);
+  assert.match(run, /where: \{ tenantId: inheritedTenantId\(\), status: "completed"/, "the owner's speed view is this workspace's runs");
+  assert.doesNotMatch(run, /\buserId_clientKey/, "no lookup by person and key alone");
   const schema = code("prisma/schema.prisma");
-  assert.match(schema, /model AssistantRun \{[\s\S]*?@@unique\(\[userId, clientKey\]\)/);
+  assert.match(schema, /model AssistantRun \{[\s\S]*?@@unique\(\[tenantId, userId, clientKey\]\)/);
   const sql = readFileSync(new URL("../prisma/migrations/20261007090000_assistant_runs/migration.sql", import.meta.url), "utf8");
+  assert.match(sql, /CREATE UNIQUE INDEX IF NOT EXISTS "AssistantRun_tenantId_userId_clientKey_key" ON "AssistantRun"\("tenantId", "userId", "clientKey"\);/);
+  assert.doesNotMatch(sql, /ON "AssistantRun"\("userId", "clientKey"\)/);
   assert.match(sql, /ALTER TABLE "AssistantRun" ENABLE ROW LEVEL SECURITY;/);
   assert.match(sql, /ALTER TABLE "AssistantRun" FORCE ROW LEVEL SECURITY;/);
   // Swept after a week with the 30-day turn sweep.

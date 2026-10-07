@@ -21,7 +21,8 @@ CREATE TABLE IF NOT EXISTS "AssistantRun" (
   CONSTRAINT "AssistantRun_userId_fkey"
     FOREIGN KEY ("userId") REFERENCES "User"("id") ON DELETE CASCADE ON UPDATE CASCADE
 );
-CREATE UNIQUE INDEX IF NOT EXISTS "AssistantRun_userId_clientKey_key" ON "AssistantRun"("userId", "clientKey");
+-- Workspace first: one person's run key in workspace A is never their run in B.
+CREATE UNIQUE INDEX IF NOT EXISTS "AssistantRun_tenantId_userId_clientKey_key" ON "AssistantRun"("tenantId", "userId", "clientKey");
 CREATE INDEX IF NOT EXISTS "AssistantRun_tenantId_userId_createdAt_idx" ON "AssistantRun"("tenantId", "userId", "createdAt");
 CREATE INDEX IF NOT EXISTS "AssistantRun_createdAt_idx" ON "AssistantRun"("createdAt");
 

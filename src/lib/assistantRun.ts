@@ -2,7 +2,7 @@ import "server-only";
 import { Prisma } from "@prisma/client";
 import { prisma } from "./db";
 import { logError } from "./errorLog";
-import { ownedWriteTenantId } from "./tenantWrite";
+import { inheritedTenantId } from "./tenantWrite";
 import type { AssistantResult } from "./crmAssistant";
 
 /**
@@ -16,11 +16,14 @@ import type { AssistantResult } from "./crmAssistant";
  * runs it; any later request with the same name — a retry after a drop, a
  * reconnect — reads the same run instead: its status, the answer so far, and
  * the finished result with its cards. Exactly once, by the unique
- * (userId, clientKey) index rather than by hoping.
+ * (tenantId, userId, clientKey) index rather than by hoping.
  *
- * Only the person who asked can read their run (every read names userId), and
- * the row is swept after a week (automations cron). Timings hold milliseconds
- * per phase, never question text.
+ * Only the person who asked, in the workspace they asked in, can read their
+ * run: every read and write names the workspace and the person explicitly —
+ * not left to ambient filtering, which is off when tenant enforcement is — so a
+ * key from workspace A, replayed from B by someone in both, finds nothing. The
+ * row is swept after a week (automations cron). Timings hold milliseconds per
+ * phase, never question text.
  */
 
 export const RUN_KEY = /^[A-Za-z0-9_-]{8,64}$/;
@@ -41,29 +44,29 @@ export const RUN_LOST: AssistantResult = {
  * Claim the run for this key. `created` false means it already exists — this
  * request must only READ it (a retry or a reconnect), never run it again.
  */
-export async function claimRun(userId: string, clientKey: string): Promise<{ id: string; created: boolean }> {
+export async function claimRun(tenantId: string, userId: string, clientKey: string): Promise<{ id: string; created: boolean }> {
   try {
     const run = await prisma.assistantRun.create({
-      data: { tenantId: ownedWriteTenantId(), userId, clientKey },
+      data: { tenantId, userId, clientKey },
       select: { id: true },
     });
     return { id: run.id, created: true };
   } catch (error) {
     if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
-      const existing = await prisma.assistantRun.findUnique({ where: { userId_clientKey: { userId, clientKey } }, select: { id: true } });
+      const existing = await prisma.assistantRun.findUnique({ where: { tenantId_userId_clientKey: { tenantId, userId, clientKey } }, select: { id: true } });
       if (existing) return { id: existing.id, created: false };
     }
     throw error;
   }
 }
 
-/** What a reader sees of the person's own run — a run gone quiet for too long reads as failed. */
-export async function readRun(userId: string, clientKey: string, now: Date = new Date()): Promise<RunView | null> {
+/** What a reader sees of the person's own run, in this workspace — a run gone quiet for too long reads as failed. */
+export async function readRun(tenantId: string, userId: string, clientKey: string, now: Date = new Date()): Promise<RunView | null> {
   const run = await prisma.assistantRun.findUnique({
-    where: { userId_clientKey: { userId, clientKey } },
-    select: { userId: true, status: true, statusText: true, partial: true, result: true, updatedAt: true },
+    where: { tenantId_userId_clientKey: { tenantId, userId, clientKey } },
+    select: { tenantId: true, userId: true, status: true, statusText: true, partial: true, result: true, updatedAt: true },
   });
-  if (!run || run.userId !== userId) return null;
+  if (!run || run.tenantId !== tenantId || run.userId !== userId) return null;
   return runView(run, now);
 }
 
@@ -90,11 +93,11 @@ export function runView(
  * write is logged and dropped: the person watching the stream still gets
  * everything — only a reconnect would be a moment behind.
  */
-export function runRecorder(id: string, userId: string) {
+export function runRecorder(id: string, tenantId: string, userId: string) {
   let lastPartial = 0;
   let pending: string | null = null;
   const write = (data: Prisma.AssistantRunUpdateManyMutationInput) =>
-    prisma.assistantRun.updateMany({ where: { id, userId }, data }).catch(async (error: unknown) => {
+    prisma.assistantRun.updateMany({ where: { id, tenantId, userId }, data }).catch(async (error: unknown) => {
       await logError("assistant-run", "run write failed", error instanceof Error ? error.name : "unknown");
     });
   return {
@@ -127,7 +130,7 @@ export function runRecorder(id: string, userId: string) {
  */
 export async function runSpeed(days = 7): Promise<{ runs: number; medians: Record<string, number> }> {
   const rows = await prisma.assistantRun.findMany({
-    where: { status: "completed", createdAt: { gte: new Date(Date.now() - days * 86_400_000) } },
+    where: { tenantId: inheritedTenantId(), status: "completed", createdAt: { gte: new Date(Date.now() - days * 86_400_000) } },
     orderBy: { createdAt: "desc" },
     take: 500,
     select: { timings: true },

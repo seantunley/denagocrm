@@ -1005,7 +1005,9 @@ model AssistantRun {
   updatedAt  DateTime  @updatedAt
   finishedAt DateTime?
 
-  @@unique([userId, clientKey])
+  /// A run key belongs to one person in one workspace: the same person's key in
+  /// another workspace is a different run, never this one.
+  @@unique([tenantId, userId, clientKey])
   @@index([tenantId, userId, createdAt])
   @@index([createdAt])
 }

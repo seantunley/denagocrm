@@ -8,6 +8,7 @@ import { logError } from "@/lib/errorLog";
 import type { AskStreamEvent } from "@/lib/assistantStream";
 import { isSameOrigin } from "@/lib/sameOrigin";
 import { RUN_KEY, claimRun, readRun, runRecorder } from "@/lib/assistantRun";
+import { inheritedTenantId } from "@/lib/tenantWrite";
 import type { AssistantResult } from "@/lib/crmAssistant";
 
 /**
@@ -32,7 +33,8 @@ import type { AssistantResult } from "@/lib/crmAssistant";
  * also refuses a request from another site: the session cookie is SameSite=Lax
  * (not sent on a cross-site POST) and, as a second guard, the browser's own
  * Sec-Fetch-Site / Origin must say same-origin. A run is only ever read by the
- * person who asked it (readRun names userId).
+ * person who asked it, in the workspace they asked it in: the workspace is
+ * resolved once per request and named in every run read and write.
  */
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -81,12 +83,12 @@ function ndjson(run: (send: (event: AskStreamEvent) => void) => Promise<void>): 
 }
 
 /** Stream an existing run from its record until it finishes (or we stop following). */
-async function follow(userId: string, key: string, send: (event: AskStreamEvent) => void) {
+async function follow(tenantId: string, userId: string, key: string, send: (event: AskStreamEvent) => void) {
   const until = Date.now() + FOLLOW_FOR_MS;
   let status = "";
   let partial = "";
   while (Date.now() < until) {
-    const run = await readRun(userId, key).catch(() => null);
+    const run = await readRun(tenantId, userId, key).catch(() => null);
     if (!run) {
       send({ t: "done", r: { ok: false, error: "That question isn't there any more — ask again." } satisfies AssistantResult });
       return;
@@ -112,15 +114,17 @@ export async function POST(req: NextRequest) {
     if (!form) return NextResponse.json({ error: "Bad request" }, { status: 400 });
     const rawKey = form.get("runKey");
     const key = typeof rawKey === "string" && RUN_KEY.test(rawKey) ? rawKey : null;
+    // The workspace this question is asked in, resolved once and named on the run.
+    const tenantId = inheritedTenantId();
 
     // Already asked under this key (a retry): read it, never run it twice.
-    const claimed = key ? await claimRun(user.id, key).catch(async (error: unknown) => {
+    const claimed = key ? await claimRun(tenantId, user.id, key).catch(async (error: unknown) => {
       await logError("assistant-run", "couldn't record the run", error instanceof Error ? error.name : "unknown");
       return null;
     }) : null;
-    if (key && claimed && !claimed.created) return ndjson((send) => follow(user.id, key, send));
+    if (key && claimed && !claimed.created) return ndjson((send) => follow(tenantId, user.id, key, send));
 
-    const recorder = claimed ? runRecorder(claimed.id, user.id) : null;
+    const recorder = claimed ? runRecorder(claimed.id, tenantId, user.id) : null;
     return ndjson(async (send) => {
       const timings: Record<string, number> = {};
       const result = await askAsPerson(
@@ -157,6 +161,7 @@ export async function GET(req: NextRequest) {
     const key = req.nextUrl.searchParams.get("run") ?? "";
     if (!RUN_KEY.test(key)) return NextResponse.json({ error: "Bad request" }, { status: 400 });
     const userId = asker.user.id;
-    return ndjson((send) => follow(userId, key, send));
+    const tenantId = inheritedTenantId();
+    return ndjson((send) => follow(tenantId, userId, key, send));
   });
 }

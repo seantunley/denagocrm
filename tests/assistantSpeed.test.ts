@@ -49,15 +49,16 @@ test("the streaming route: same-origin, signed in, permitted — then the shared
   const asker = route.slice(route.indexOf("async function signedInAsker"), route.indexOf("function ndjson"));
   assert.ok(asker.indexOf("requireApiUser()") >= 0 && asker.indexOf("requireApiUser()") < asker.indexOf("hasAnyPermission(user, ...ASSISTANT_PERMISSIONS)"));
   const post = route.slice(route.indexOf("export async function POST"), route.indexOf("export async function GET"));
-  const order = ["isSameOrigin(req.headers)", "signedInAsker()", "claimRun(user.id, key)", "askAsPerson("];
+  const order = ["isSameOrigin(req.headers)", "signedInAsker()", "const tenantId = inheritedTenantId();", "claimRun(tenantId, user.id, key)", "askAsPerson("];
   for (let i = 1; i < order.length; i++) assert.ok(post.indexOf(order[i - 1]) >= 0 && post.indexOf(order[i - 1]) < post.indexOf(order[i]), `${order[i - 1]} before ${order[i]}`);
-  // A key that already ran is only READ — never asked again.
-  assert.match(post, /if \(key && claimed && !claimed\.created\) return ndjson\(\(send\) => follow\(user\.id, key, send\)\);/);
+  // A key that already ran is only READ — never asked again — in this workspace.
+  assert.match(post, /if \(key && claimed && !claimed\.created\) return ndjson\(\(send\) => follow\(tenantId, user\.id, key, send\)\);/);
+  assert.match(post, /runRecorder\(claimed\.id, tenantId, user\.id\)/);
   // The reconnect path checks the same things and can only read.
   const get = route.slice(route.indexOf("export async function GET"));
   assert.ok(get.indexOf("isSameOrigin(req.headers)") < get.indexOf("signedInAsker()"));
   assert.doesNotMatch(get, /askAsPerson|claimRun/);
-  assert.match(get, /follow\(userId, key, send\)/);
+  assert.match(get, /const tenantId = inheritedTenantId\(\);\s*return ndjson\(\(send\) => follow\(tenantId, userId, key, send\)\);/);
   assert.match(route, /export const maxDuration = 300;/);
   assert.match(route, /"Cache-Control": "no-store"/);
   // The route is the only way in: no second ask path to fall back to.
