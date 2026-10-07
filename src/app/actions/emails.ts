@@ -147,6 +147,8 @@ export async function sendEmailAction(
     html,
     attachments,
     replyTo: replyTo.value ?? undefined,
+    // The person writing it: "Sean Tunley · Denago Cape Town" on the From line.
+    senderName: user.name,
   });
   if (!result.ok) return { error: result.error };
 
