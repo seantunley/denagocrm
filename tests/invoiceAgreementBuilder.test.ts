@@ -159,21 +159,15 @@ function bound(tokens: Record<string, string>, vars: Record<string, unknown>) {
   };
 }
 
-test("the seeded invoice prints its number, and the banking box only when there is banking text", () => {
-  const doc = standardTemplateFor("invoice");
-  const withText = legacyDocTextTokens("invoice", defaultTemplate("invoice"));
-  const html = renderDocumentHtml(doc, bound(withText.tokens, { quote: { taxInclusive: true }, ...withText.vars }));
+test("the seeded invoice prints its number, its banking and payment cards, and resolves every token", () => {
+  // The quotation-style invoice (showcaseInvoice.test has the layout itself).
+  const html = renderDocumentHtml(standardTemplateFor("invoice"), bound({}, { quote: { taxInclusive: true } }));
   assert.match(html, /INV-77/);
-  assert.match(html, /PAYMENT DETAILS/);
-  assert.match(html, /Banking details:/);
-  assert.doesNotMatch(html, /PAYMENT TERMS/, "no payment terms set → no box");
-  assert.doesNotMatch(html, /Subtotal:/, "inclusive quote → one total line, as documentTotals()");
+  assert.match(html, /TAX INVOICE/);
+  assert.match(html, /BANKING DETAILS/);
+  assert.match(html, /PAYMENT TERMS/);
+  assert.match(html, /R 86,956\.52/, "subtotal excl. VAT in the totals box");
   assert.doesNotMatch(html, /\{\{/, "every token resolves");
-
-  // The banking text is part of the layout now, edited in the document editor
-  // (a section switched off before moving over stays out: oneDocumentEditor.test).
-  const bare = renderDocumentHtml(doc, bound({}, { quote: { taxInclusive: false } }));
-  assert.match(bare, /Subtotal: R 86,956\.52/, "exclusive quote → subtotal and VAT above the total");
 });
 
 test("the seeded agreement prints SA-, the purchase price band, clauses and both signature lines", () => {
