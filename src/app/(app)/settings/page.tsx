@@ -10,7 +10,9 @@ import {
   saveWorkshopSettings,
   saveNotificationPrefs,
 } from "@/app/actions/settings";
-import { signatureCompanyFrom, buildSignature } from "@/lib/signature";
+import { signatureCompanyFrom, buildSignature, parseSignatureDesign, SIGNATURE_DESIGN_KEY } from "@/lib/signature";
+import SignatureDesignEditor from "@/components/SignatureDesignEditor";
+import { getSetting } from "@/lib/settings";
 import { getCompanyProfile } from "@/lib/companyProfile";
 import { tenantOrigin } from "@/lib/tenantOrigin";
 import { AddUserForm, ChangePasswordForm } from "@/components/TeamForms";
@@ -85,7 +87,8 @@ export default async function SettingsPage({
   // where you check your signature is the one screen that lies about it.
   const profile = await getCompanyProfile();
   // The preview must render what the send path renders, glyph URLs included.
-  const signatureCompany = signatureCompanyFrom(profile, await tenantOrigin(await getActiveTenantId()));
+  const signatureDesign = parseSignatureDesign(await getSetting(SIGNATURE_DESIGN_KEY));
+  const signatureCompany = signatureCompanyFrom(profile, await tenantOrigin(await getActiveTenantId()), signatureDesign);
   const enabled = await getEnabledModuleIds();
   const automotiveOn = enabled.has("automotive");
   const commerceOn = enabled.has("commerce");
@@ -339,23 +342,41 @@ export default async function SettingsPage({
                 <span className="btn-secondary btn-sm">View &amp; edit</span>
               </summary>
               <div className="px-5 pb-5 space-y-4">
-                <div
-                  className="rounded-lg bg-white p-4 overflow-x-auto"
-                  dangerouslySetInnerHTML={{ __html: buildSignature(currentUser, signatureCompany) }}
+                <SignatureDesignEditor
+                  user={{ name: currentUser.name, email: currentUser.email, mobile: currentUser.mobile, jobTitle: currentUser.jobTitle }}
+                  company={signatureCompany}
+                  initial={signatureDesign}
+                  canEdit={isAdmin}
                 />
-                <SaveForm success="Profile saved" resetOnSuccess={false} action={saveMyProfile} className="space-y-3 max-w-md">
-                  <div>
-                    <label className="label">Custom signature HTML (optional)</label>
-                    <textarea
-                      name="signatureHtml"
-                      className="input font-mono text-xs"
-                      rows={4}
-                      defaultValue={currentUser.signatureHtml ?? ""}
-                      placeholder="Leave blank to use the branded signature (recommended)."
-                    />
+                <details className="rounded-lg border border-border">
+                  <summary className="px-4 py-2.5 cursor-pointer text-sm text-muted-foreground">
+                    Advanced: use your own HTML instead{currentUser.signatureHtml?.trim() ? " (in use on your emails)" : ""}
+                  </summary>
+                  <div className="px-4 pb-4 space-y-3">
+                    {currentUser.signatureHtml?.trim() && (
+                      <div
+                        className="rounded-lg bg-white p-4 overflow-x-auto"
+                        dangerouslySetInnerHTML={{ __html: buildSignature(currentUser, signatureCompany) }}
+                      />
+                    )}
+                    <SaveForm success="Profile saved" resetOnSuccess={false} action={saveMyProfile} className="space-y-3 max-w-md">
+                      <div>
+                        <label className="label">Custom signature HTML (optional)</label>
+                        <textarea
+                          name="signatureHtml"
+                          className="input font-mono text-xs"
+                          rows={4}
+                          defaultValue={currentUser.signatureHtml ?? ""}
+                          placeholder="Leave blank to use the workspace signature (recommended)."
+                        />
+                        <p className="mt-1 text-xs text-muted-foreground">
+                          Replaces the workspace signature on your emails only.
+                        </p>
+                      </div>
+                      <SaveButton className="btn-primary btn-sm">Save</SaveButton>
+                    </SaveForm>
                   </div>
-                  <SaveButton className="btn-primary btn-sm">Save</SaveButton>
-                </SaveForm>
+                </details>
               </div>
             </details>
           </div>
