@@ -49,7 +49,8 @@ export function quoteDocTokens(
     billTo.attention ? `Attention: ${billTo.attention}` : "",
     billTo.phone,
     billTo.email,
-    billTo.address,
+    // Street, then town — one comma-joined line wrapped badly (Sean, 2026-10-07).
+    ...(billTo.addressLines?.length ? billTo.addressLines : [billTo.address]),
   ];
   const vat = billTo.vatNumber ? `VAT no: ${billTo.vatNumber}` : "";
   return {
