@@ -107,7 +107,7 @@ test("every record a lookup lists carries a link to cite", () => {
   assert.match(lib, /for \(const o of observations\) citableLinks\(o\.output\.data, citable\);/);
   assert.match(lib, /\.\.\.\(source === "chat" && evidence\.length \? \{ cited, evidence \} : \{\}\)/);
   // What is stored and sent anywhere else is the plain answer.
-  assert.match(lib, /const \{ cited, plain: answer, evidence \} = resolveCitations\(reply\.answer, citable\);/);
+  assert.match(lib, /const resolved = resolveCitations\(reply\.answer, citable\);/);
 });
 
 /* ── New tasks ───────────────────────────────────────────────────────────── */

@@ -35,6 +35,7 @@ import {
 import { ASSISTANT_PROFILE_KEY, parseProfile, selfKnowledge, soulText } from "./assistantSoul";
 import { LEARN_INSTRUCTIONS, memoryPrompt, methodInstructions } from "./assistantMemory";
 import { CITE_RULE, REPLY_FORMAT, STATE_INSTRUCTIONS, citableLinks, resolveCitations, splitReply, type Evidence } from "./assistantReply";
+import { unsupportedFigures, unsupportedNote } from "./assistantVerify";
 import { salesStats } from "./crmAssistantStats";
 import { briefForAssistant, loadDaxBrief } from "./daxBrief";
 import { breakerOpen, withRetry } from "./assistantBreaker";
@@ -1634,10 +1635,9 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
       // A closed stream or a failed run write must not cost the answer.
     }
   };
-  if (!(await isCodexConnected())) {
-    return { ok: false, error: "Connect ChatGPT first: Settings → Integrations → ChatGPT." };
-  }
-  const [whereTheyAre, context, history, learnedNow, person, profileRaw, company] = await Promise.all([
+  // The connection check rides with the context reads — one round trip, not two.
+  const [connected, whereTheyAre, context, history, learnedNow, person, profileRaw, company] = await Promise.all([
+    isCodexConnected(),
     pageContext(user, page),
     planContext(user),
     recentTurns(user.id),
@@ -1647,6 +1647,7 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
     getCompanyProfile().catch(() => null),
   ]);
   mark("context");
+  if (!connected) return { ok: false, error: "Connect ChatGPT first: Settings → Integrations → ChatGPT." };
   // "Last used" for the owner's review of what DAX has learned (never throws).
   void markNotesUsed([...learnedNow.memory, ...learnedNow.profile, ...learnedNow.playbooks].map((n) => n.id));
   const profile = parseProfile(profileRaw);
@@ -1838,7 +1839,17 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
   const reply = splitReply(answerReply.text);
   const citable = new Map<string, string>();
   for (const o of observations) citableLinks(o.output.data, citable);
-  const { cited, plain: answer, evidence } = resolveCitations(reply.answer, citable);
+  const resolved = resolveCitations(reply.answer, citable);
+  const { evidence } = resolved;
+  // The free check (assistantVerify): an amount or quote number the records
+  // don't hold gets a visible line under the answer — everywhere it's shown.
+  // Evidence is the lookups and what the PERSON said, now and earlier — never
+  // DAX's own earlier answers or working memory: a figure it made up last turn
+  // must not vouch for itself this turn.
+  const flagged = unsupportedFigures(resolved.plain, [question, ...history.map((t) => t.question), ...observations.map((o) => o.output.data)]);
+  const note = flagged.length ? `\n\n${unsupportedNote(flagged)}` : "";
+  const cited = resolved.cited + note;
+  const answer = resolved.plain + note;
   const proposals = reply.actions;
   // A scheduled run learns nothing: it reads customer text daily with nobody
   // watching, so an injected "remember this" would be written with no one there.

@@ -355,6 +355,7 @@ export const TIDY_INSTRUCTIONS = [
   "- remove: entries that are stale, trivial, about one particular customer, or no longer true given the questions.",
   "- flag: an entry that contradicts another entry or today's questions — the owner will decide.",
   "- playbook: improve an existing one or add a new one ONLY when today's questions show the same correction or procedure more than once.",
+  "- Answers rated wrong (with the reason: wrong_facts, bad_advice, misunderstood): when two or more share a cause you can see — a term it misread, a lookup it should have used, advice people keep rejecting — add or improve a playbook that prevents it. One bad answer alone is not a pattern. Flag an entry that led to a wrong answer.",
   "- You may only merge or remove entries whose status is unreviewed. Approved entries are the owner's: flag them at most.",
   "- Never include phone numbers, email addresses or customer names. Never invent facts.",
   'If nothing needs doing, output {}.',

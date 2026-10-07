@@ -42,7 +42,7 @@ export async function runAssistantTidy(): Promise<number | null> {
   // Claim the day first: a failed run must not retry every 30 minutes.
   await putSetting(TIDY_LAST_KEY, new Date().toISOString());
 
-  const [notes, turns] = await Promise.all([
+  const [notes, turns, wrong] = await Promise.all([
     // Not anyone's profile: "about you" is that person's own, it never leaves
     // their conversations — not even into this prompt. Nor a held conflict
     // (waiting for the owner — a merge would release it) or an expired entry
@@ -54,8 +54,16 @@ export async function runAssistantTidy(): Promise<number | null> {
       take: 40,
       select: { question: true },
     }),
+    // Learning from outcomes: the answers people rated 👎 this week, with why —
+    // a repeated cause becomes a playbook, for the owner to approve like any other.
+    prisma.assistantTurn.findMany({
+      where: { feedback: "down", feedbackAt: { gte: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000) } },
+      orderBy: { feedbackAt: "desc" },
+      take: 20,
+      select: { question: true, answer: true, feedbackReason: true },
+    }),
   ]);
-  if (notes.length < 2 && turns.length === 0) return 0;
+  if (notes.length < 2 && turns.length === 0 && wrong.length === 0) return 0;
 
   const entries: TidyEntry[] = notes.map((n) => ({ id: n.id, kind: n.kind, userId: n.userId, createdById: n.createdById, content: n.content, status: n.status }));
   const reply = await codexRespond({
@@ -72,6 +80,9 @@ export async function runAssistantTidy(): Promise<number | null> {
         "",
         "Today's questions:",
         ...turns.map((t) => stripInvisible(`- ${t.question.slice(0, 300)}`)),
+        "",
+        "Answers rated wrong this week:",
+        ...wrong.map((t) => stripInvisible(`- [${t.feedbackReason ?? "no reason given"}] Q: ${t.question.slice(0, 300)} | A: ${t.answer.slice(0, 400)}`)),
       ].join("\n"),
     ),
     reasoningEffort: "medium",
