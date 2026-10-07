@@ -3,6 +3,7 @@ import { PLATFORM_NAME } from "./platformIdentity";
 import { inlineEmailStyles } from "./emailInlineStyles";
 import type { CompanyProfile } from "./companyBrand";
 import { escapeHtml } from "./escapeHtml";
+import { BANNER_HEIGHT, BANNER_WIDTH } from "./signatureBanner";
 
 /**
  * Where the signature's static assets (the social glyphs) are served from.
@@ -63,22 +64,31 @@ export type SignatureDesign = {
   companyLine: string;
   /** Under the rule, beside the pin. Empty = tagline — address. */
   footerLine: string;
+  /**
+   * The card's logo panel as one image (lib/signatureBanner.ts draws it from the
+   * logo, or the owner uploads their own). A public https URL; empty = the
+   * plainer panel built from the logo in HTML.
+   */
+  bannerUrl: string;
 };
 
 export const SIGNATURE_DESIGN_KEY = "EMAIL_SIGNATURE";
 export const SIGNATURE_LINE_MAX = 160;
 /** What every workspace gets until its owner changes it. */
-export const DEFAULT_SIGNATURE_DESIGN: SignatureDesign = { style: "card", companyLine: "", footerLine: "" };
+export const DEFAULT_SIGNATURE_DESIGN: SignatureDesign = { style: "card", companyLine: "", footerLine: "", bannerUrl: "" };
 
 /** The stored setting, tolerant of anything: a bad value is the default design, never a broken signature. */
 export function parseSignatureDesign(raw: string | null | undefined): SignatureDesign {
   try {
     const v = raw ? JSON.parse(raw) : {};
     const line = (s: unknown) => (typeof s === "string" ? s.trim().slice(0, SIGNATURE_LINE_MAX) : "");
+    const banner = typeof v?.bannerUrl === "string" ? v.bannerUrl.trim() : "";
     return {
       style: v?.style === "classic" ? "classic" : "card",
       companyLine: line(v?.companyLine),
       footerLine: line(v?.footerLine),
+      // Only a plain public https address reaches an <img src>.
+      bannerUrl: /^https:\/\/[^\s"'<>]+$/i.test(banner) && banner.length <= 500 ? banner : "",
     };
   } catch {
     return DEFAULT_SIGNATURE_DESIGN;
@@ -241,21 +251,24 @@ ${socialRow}${footerRow}</table>`;
 }
 
 /** The card's colours: the Denago logo's own orange (sampled from the PNG) and the logo panel's near-black. */
-const CARD_ORANGE = "#f1603c";
-const CARD_DARK = "#0b0f19";
+export const CARD_ORANGE = "#f1603c";
+export const CARD_DARK = "#0b0f19";
+
+/** Montserrat where the mail app has it (Apple Mail, iOS, Outlook for Mac), a clean system sans everywhere else. */
+const CARD_FONT = "'Montserrat','Segoe UI',Helvetica,Arial,sans-serif";
 
 /**
- * The "dealer card" signature, from Sean's mock-up: the logo on a dark panel
- * with an orange stripe and a slanted edge, a divider, then the name, the
- * company in letterspaced capitals and the contact line with round icons; a rule
- * and a pinned footer line underneath.
+ * The card signature, from Sean's mock-up: the logo panel (one image — see
+ * lib/signatureBanner.ts), a thin divider, then a large heavy name, the company
+ * in spaced capitals, and phone / email / website stacked in three rows, each a
+ * round icon, a short bar and the value; a rule and a pinned address line under
+ * it all.
  *
  * Email-client rules, not web rules: tables for layout, every style inline, no
- * CSS shapes — the slant and the icons are PNGs in /branding/signature/
- * (rendered from the Lucide icon paths, so they match the app). The contact
- * items are inline, so on a narrow phone they wrap instead of overflowing.
- * Every part is conditional, like the classic template: an unset field removes
- * its element.
+ * CSS shapes. The icons are PNGs in /branding/signature/ (rendered from the
+ * Lucide paths, so they match the app) and travel inside the message
+ * (signatureAssets.ts). Every part is conditional, like the classic template:
+ * an unset field removes its element.
  */
 function cardSignature(
   user: { name: string; email: string; mobile?: string | null; jobTitle?: string | null },
@@ -276,40 +289,41 @@ function cardSignature(
     ? escapeHtml(design.footerLine)
     : [escapeHtml(company.tagline).trim(), company.address.trim()].filter(Boolean).join(" — ");
 
-  const icon = (file: string, alt: string) =>
-    `<img src="${assets}/${file}.png" alt="${alt}" width="22" height="22" style="vertical-align:middle;border:0;" />`;
-  const link = (href: string, text: string, color: string) =>
-    `<a href="${href}" style="color:${color};text-decoration:none;">${text}</a>`;
+  // One contact row: round icon · short bar · value.
+  const row = (file: string, alt: string, href: string, text: string, color: string) => `
+          <tr>
+            <td style="padding:4px 0;vertical-align:middle;"><img src="${assets}/${file}.png" alt="${alt}" width="26" height="26" style="display:block;border:0;" /></td>
+            <td style="padding:4px 12px;vertical-align:middle;"><div style="width:1px;height:20px;background-color:#d5dbe3;font-size:0;line-height:0;">&nbsp;</div></td>
+            <td style="padding:4px 0;vertical-align:middle;font-size:15px;line-height:20px;white-space:nowrap;"><a href="${href}" style="color:${color};text-decoration:none;">${text}</a></td>
+          </tr>`;
   const contacts = [
-    phone ? `${icon("phone", "Phone")}&nbsp;&nbsp;${link(`tel:${phone.replace(/[^\d+]/g, "")}`, escapeHtml(phone), "#0f172a")}` : "",
-    `${icon("mail", "Email")}&nbsp;&nbsp;${link(`mailto:${encodeURIComponent(user.email)}`, escapeHtml(user.email), "#0f172a")}`,
-    website ? `${icon("web", "Website")}&nbsp;&nbsp;${link(websiteHref, escapeHtml(website), CARD_ORANGE)}` : "",
-  ]
-    .filter(Boolean)
-    .map((item) => `<span style="white-space:nowrap;">${item}</span>`)
-    .join(`<span style="color:#cbd5e1;">&nbsp;&nbsp;&nbsp;|&nbsp;&nbsp;&nbsp;</span>`);
+    phone ? row("phone", "Phone", `tel:${phone.replace(/[^\d+]/g, "")}`, escapeHtml(phone), "#0f172a") : "",
+    row("mail", "Email", `mailto:${encodeURIComponent(user.email)}`, escapeHtml(user.email), "#0f172a"),
+    website ? row("web", "Website", websiteHref, escapeHtml(website), CARD_ORANGE) : "",
+  ].join("");
 
-  const logoImg = logoUrl
-    ? `<img src="${escapeHtml(logoUrl)}" alt="${escapeHtml(company.name)}" width="170" style="display:block;border:0;" />`
-    : "";
-  const logoCells = !logoImg
-    ? ""
-    : // Stripe and divider are BORDERS, not 1–5px cells: a narrow phone squeezes
-      // spacer cells to nothing, and a border it can't.
-      `<td width="170" height="110" style="width:170px;height:110px;background-color:${CARD_DARK};border-left:5px solid ${CARD_ORANGE};padding:0 4px 0 20px;vertical-align:middle;">${
-      website ? `<a href="${websiteHref}" style="text-decoration:none;">${logoImg}</a>` : logoImg
-    }</td>
-    <td width="30" style="width:30px;padding-right:18px;vertical-align:top;font-size:0;line-height:0;"><img src="${assets}/slant.png" alt="" width="30" height="110" style="display:block;border:0;" /></td>
-    `;
-  const columns = logoImg ? 3 : 1;
-  const divider = logoImg ? "border-left:1px solid #e2e8f0;padding-left:20px;" : "";
+  const linked = (img: string) => (website ? `<a href="${websiteHref}" style="text-decoration:none;">${img}</a>` : img);
+  // The panel: the banner image when there is one (it is the mock-up's panel,
+  // pixel for pixel); otherwise the logo on a dark block with the slanted edge.
+  const panel = design.bannerUrl
+    ? `<td class="sig-panel" width="${BANNER_WIDTH + 24}" style="width:${BANNER_WIDTH + 24}px;padding-right:24px;vertical-align:middle;">${linked(
+        `<img class="sig-banner" src="${escapeHtml(design.bannerUrl)}" alt="${escapeHtml(company.name)}" width="${BANNER_WIDTH}" height="${BANNER_HEIGHT}" style="display:block;border:0;" />`,
+      )}</td>`
+    : logoUrl
+      ? `<td class="sig-panel" width="240" height="170" style="width:240px;height:170px;background-color:${CARD_DARK};padding:0 6px 0 24px;vertical-align:middle;">${linked(
+          `<img class="sig-banner" src="${escapeHtml(logoUrl)}" alt="${escapeHtml(company.name)}" width="230" style="display:block;border:0;" />`,
+        )}</td>
+    <td width="57" style="width:57px;padding-right:20px;vertical-align:top;font-size:0;line-height:0;"><img src="${assets}/slant.png" alt="" width="57" height="170" style="display:block;border:0;" /></td>`
+      : "";
+  const columns = !panel ? 1 : design.bannerUrl ? 2 : 3;
+  const divider = panel ? "border-left:1px solid #e2e8f0;padding-left:24px;" : "";
 
   const footerRow = !footer
     ? ""
     : `  <tr>
-    <td colspan="${columns}" style="padding-top:14px;">
+    <td colspan="${columns}" style="padding-top:16px;">
       <table cellpadding="0" cellspacing="0" border="0" role="presentation" width="100%"><tr>
-        <td style="border-top:1px solid #e2e8f0;padding-top:10px;font-size:10px;letter-spacing:2px;color:#64748b;text-transform:uppercase;">
+        <td style="border-top:1px solid #e2e8f0;padding-top:12px;font-size:10.5px;line-height:16px;letter-spacing:2px;color:#64748b;text-transform:uppercase;">
           <img src="${assets}/pin.png" alt="" width="14" height="14" style="vertical-align:middle;border:0;" />&nbsp;&nbsp;${footer}
         </td>
       </tr></table>
@@ -318,12 +332,14 @@ function cardSignature(
 `;
 
   return `
-<table cellpadding="0" cellspacing="0" border="0" role="presentation" style="font-family:Arial,Helvetica,sans-serif;margin-top:24px;border-collapse:collapse;">
+<table cellpadding="0" cellspacing="0" border="0" role="presentation" style="font-family:${CARD_FONT};margin-top:24px;border-collapse:collapse;">
   <tr>
-    ${logoCells}<td style="${divider}vertical-align:middle;">
-      <div style="font-size:22px;font-weight:bold;color:#0f172a;line-height:1.2;">${escapeHtml(user.name)}</div>
-      ${titleLine ? `<div style="padding-top:4px;font-size:11px;letter-spacing:3px;color:#64748b;">${titleLine}</div>` : ""}
-      <div style="padding-top:12px;font-size:13px;line-height:26px;color:#0f172a;">${contacts}</div>
+    ${panel}
+    <td class="sig-details" style="${divider}vertical-align:middle;">
+      <div style="font-size:28px;font-weight:800;color:#0b1220;line-height:1.1;letter-spacing:-0.3px;">${escapeHtml(user.name)}</div>
+      ${titleLine ? `<div style="padding-top:6px;font-size:13px;line-height:18px;letter-spacing:3.5px;color:#64748b;">${titleLine}</div>` : ""}
+      <table cellpadding="0" cellspacing="0" border="0" role="presentation" style="margin-top:10px;border-collapse:collapse;">${contacts}
+      </table>
     </td>
   </tr>
 ${footerRow}</table>`;
@@ -335,8 +351,18 @@ export function buildEmailHtml(bodyHtml: string, signature: string): string {
   // arrives with the same problem: tags carrying no style attribute, at the mercy
   // of whatever default stylesheet the recipient's client applies. The signature
   // is already inline-styled and is left alone.
+  // The font link only helps mail apps that load web fonts (Apple Mail, iOS);
+  // the rest ignore it and use the fallbacks in each font-family.
   return `<!DOCTYPE html>
-<html><body style="font-family:Arial,Helvetica,sans-serif;font-size:14px;color:#1e293b;line-height:1.6;">
+<html><head><link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@500;800&amp;display=swap" rel="stylesheet" />
+<style>
+/* Phones: the card signature's panel stacks above the name instead of squeezing beside it. */
+@media (max-width: 600px) {
+  .sig-panel { display: block !important; width: 100% !important; padding: 0 0 14px 0 !important; }
+  .sig-banner { width: 100% !important; max-width: ${BANNER_WIDTH}px !important; height: auto !important; }
+  .sig-details { display: block !important; border-left: 0 !important; padding-left: 0 !important; }
+}
+</style></head><body style="font-family:Arial,Helvetica,sans-serif;font-size:14px;color:#1e293b;line-height:1.6;">
 ${inlineEmailStyles(bodyHtml)}
 ${signature}
 </body></html>`;

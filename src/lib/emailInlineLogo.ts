@@ -3,6 +3,7 @@ import { decryptValue } from "./settings";
 import { readManagedBlob } from "./storage";
 import { brandLogoAsset } from "./tenantBrand";
 import { signatureAsset } from "./signatureAssets";
+import { parseSignatureDesign, SIGNATURE_DESIGN_KEY } from "./signature";
 
 /**
  * Put the workspace's logo INSIDE the email instead of linking to it.
@@ -89,14 +90,19 @@ async function loadWorkspaceLogo(tenantId: string, src: string): Promise<LoadedI
     const content = await readManagedBlob(`branding/${tenantId}/${asset}`);
     return content.length <= MAX_LOGO_BYTES ? { content, contentType } : null;
   }
-  // 2. The Company Profile logo — only the exact public https URL this workspace
-  //    configured, so a template cannot point the server at anything else.
-  const row = await basePrisma.appSetting.findUnique({
-    where: { tenantId_key: { tenantId, key: "COMPANY_LOGO_URL" } },
-    select: { value: true },
+  // 2. The Company Profile logo or the signature's logo-panel banner — only the
+  //    exact public https URLs this workspace configured, so a template cannot
+  //    point the server at anything else.
+  const rows = await basePrisma.appSetting.findMany({
+    where: { tenantId, key: { in: ["COMPANY_LOGO_URL", SIGNATURE_DESIGN_KEY] } },
+    select: { key: true, value: true },
   });
-  const configured = row?.value ? decryptValue(row.value).trim() : "";
-  if (!configured || configured !== src || /\.private\.blob\.|\/api\/stored/i.test(configured)) return null;
+  const value = (key: string) => {
+    const raw = rows.find((row) => row.key === key)?.value;
+    return raw ? decryptValue(raw).trim() : "";
+  };
+  const configured = [value("COMPANY_LOGO_URL"), parseSignatureDesign(value(SIGNATURE_DESIGN_KEY)).bannerUrl];
+  if (!configured.includes(src) || /\.private\.blob\.|\/api\/stored/i.test(src)) return null;
   const response = await fetch(src, { signal: AbortSignal.timeout(5000), redirect: "error" });
   const contentType = (response.headers.get("content-type") ?? "").split(";")[0].trim().toLowerCase();
   if (!response.ok || !contentType.startsWith("image/") || !response.body) return null;

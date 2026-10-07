@@ -1,7 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { existsSync, readFileSync } from "node:fs";
+import { BANNER_HEIGHT, BANNER_WIDTH } from "../src/lib/signatureBanner";
 import {
+  buildEmailHtml,
   buildSignature,
   DEFAULT_SIGNATURE_DESIGN,
   parseSignatureDesign,
@@ -55,7 +57,7 @@ test("the card: name, company in capitals, the three contacts and the address li
 
 test("the person's own mobile and title win; the owner's lines replace the profile's and are escaped", () => {
   const html = card(
-    { style: "card", companyLine: "Sales", footerLine: "<b>Open</b> Mon–Sat" },
+    { ...DEFAULT_SIGNATURE_DESIGN, companyLine: "Sales", footerLine: "<b>Open</b> Mon–Sat" },
     profile,
     { ...user, mobile: "082 000 0000", jobTitle: "Owner" },
   );
@@ -64,6 +66,38 @@ test("the person's own mobile and title win; the owner's lines replace the profi
   assert.match(html, />OWNER&nbsp;&nbsp;·&nbsp;&nbsp;SALES</);
   assert.match(html, /&lt;b&gt;Open&lt;\/b&gt; Mon–Sat/);
   assert.doesNotMatch(html, /<b>Open/);
+});
+
+test("the mock-up's layout: a large name, and the contacts stacked in three rows, each icon · bar · value", () => {
+  const html = card();
+  assert.match(html, /font-size:28px;font-weight:800;[^"]*">Sean Tunley</);
+  const rows = html.match(/<tr>\s*<td[^>]*><img src="[^"]+\/branding\/signature\/(phone|mail|web)\.png"[^>]*\/><\/td>\s*<td[^>]*><div style="width:1px;/g) ?? [];
+  assert.equal(rows.length, 3, "phone, email and website, one row each with its bar");
+});
+
+test("the logo panel banner: shown at its size and linked, https only, and kept by a plain Save", () => {
+  const bannerUrl = "https://blob.example.com/uploads/t1/public/banner.png";
+  const html = card({ ...DEFAULT_SIGNATURE_DESIGN, bannerUrl });
+  assert.match(html, new RegExp(`<a href="https://denagocpt\\.co\\.za"[^>]*><img class="sig-banner" src="${bannerUrl.replace(/\./g, "\\.")}"[^>]*width="${BANNER_WIDTH}" height="${BANNER_HEIGHT}"`));
+  assert.doesNotMatch(html, /slant\.png/, "the banner replaces the HTML-built panel");
+  for (const bad of ["http://x.com/a.png", "javascript:alert(1)", 'https://x.com/a.png" onerror="x', "data:image/png;base64,AAAA"]) {
+    assert.equal(parseSignatureDesign(JSON.stringify({ bannerUrl: bad })).bannerUrl, "", bad);
+  }
+  assert.equal(parseSignatureDesign(JSON.stringify({ bannerUrl })).bannerUrl, bannerUrl);
+  const action = readFileSync(new URL("../src/app/actions/emails.ts", import.meta.url), "utf8");
+  const save = action.slice(action.indexOf("export async function saveSignatureDesign"), action.indexOf("const storedSignatureDesign"));
+  assert.match(save, /bannerUrl: \(await storedSignatureDesign\(tenantId\)\)\.bannerUrl/, "Save for everyone must not drop the banner");
+  const upload = action.slice(action.indexOf("export async function saveSignatureBanner"));
+  assert.match(upload, /requireTenantOwner\(\)/);
+  assert.match(upload, /\["image\/png", "image\/jpeg"\]\.includes\(file\.type\)/);
+  assert.match(upload, /savePublicAsset\(/, "email artwork is a public asset, never a private client file");
+});
+
+test("phones stack the panel above the details", () => {
+  const page = buildEmailHtml("", card({ ...DEFAULT_SIGNATURE_DESIGN, bannerUrl: "https://blob.example.com/b.png" }));
+  assert.match(page, /@media \(max-width: 600px\)[\s\S]*\.sig-panel \{ display: block !important/);
+  assert.match(page, /class="sig-panel"/);
+  assert.match(page, /class="sig-details"/);
 });
 
 test("an unset field removes its part: no logo, no panel; no website, no web icon", () => {

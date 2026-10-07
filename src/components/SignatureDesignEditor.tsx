@@ -1,9 +1,18 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { SaveForm, SaveButton } from "@/components/SaveForm";
-import { saveSignatureDesign } from "@/app/actions/emails";
-import { buildEmailHtml, buildSignature, SIGNATURE_LINE_MAX, type SignatureCompany, type SignatureDesign } from "@/lib/signature";
+import { saveSignatureBanner, saveSignatureDesign } from "@/app/actions/emails";
+import {
+  buildEmailHtml,
+  buildSignature,
+  CARD_DARK,
+  CARD_ORANGE,
+  SIGNATURE_LINE_MAX,
+  type SignatureCompany,
+  type SignatureDesign,
+} from "@/lib/signature";
+import { drawSignatureBanner } from "@/lib/signatureBanner";
 
 /**
  * Settings → My account → Email signature, for the workspace owner: the ONE
@@ -23,6 +32,47 @@ export default function SignatureDesignEditor({
 }) {
   const [design, setDesign] = useState(initial);
   const set = (patch: Partial<SignatureDesign>) => setDesign((d) => ({ ...d, ...patch }));
+
+  // The logo panel image: saved the moment it is generated, uploaded or removed.
+  const uploadRef = useRef<HTMLInputElement>(null);
+  const [busy, setBusy] = useState<"" | "generate" | "upload" | "remove">("");
+  const [bannerError, setBannerError] = useState("");
+  async function sendBanner(file: Blob | null, kind: "generate" | "upload" | "remove") {
+    setBusy(kind);
+    setBannerError("");
+    try {
+      const form = new FormData();
+      if (file) form.append("banner", file, file instanceof File ? file.name : "signature-banner.png");
+      const result = await saveSignatureBanner(form);
+      if (result.error) setBannerError(result.error);
+      else set({ bannerUrl: result.bannerUrl ?? "" });
+    } catch {
+      setBannerError("That didn't save — try again.");
+    } finally {
+      setBusy("");
+    }
+  }
+  async function generate() {
+    setBusy("generate");
+    setBannerError("");
+    try {
+      const logo = new Image();
+      logo.crossOrigin = "anonymous";
+      // A logo served from this app (/branding/…) is read from THIS origin, so the
+      // browser lets the canvas use it on any of the workspace's domains.
+      const src = new URL(company.logoUrl, window.location.href);
+      logo.src = src.pathname.startsWith("/branding/") ? src.pathname : src.href;
+      await logo.decode();
+      const canvas = document.createElement("canvas");
+      drawSignatureBanner(canvas, logo, { dark: CARD_DARK, accent: CARD_ORANGE });
+      const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/png"));
+      if (!blob) throw new Error("no image");
+      await sendBanner(blob, "generate");
+    } catch {
+      setBusy("");
+      setBannerError("Couldn't draw the panel from your logo (the logo's host may not allow it) — upload your own image instead.");
+    }
+  }
   const defaultFooter = [company.tagline, company.address.replace(/&amp;/g, "&")].map((s) => s.trim()).filter(Boolean).join(" — ");
 
   return (
@@ -43,6 +93,41 @@ export default function SignatureDesignEditor({
         className="w-full rounded-lg border border-border bg-white"
         style={{ height: 220 }}
       />
+      {canEdit && design.style === "card" && (
+        <div className="max-w-xl space-y-2 rounded-lg border border-border p-3">
+          <div className="text-sm font-medium">Logo panel</div>
+          <p className="text-xs text-muted-foreground">
+            {design.bannerUrl
+              ? "Using the panel image above. Generate it again after changing your logo, or upload your own."
+              : "Generate the panel from your logo — the dark slanted panel with the orange stripe — or upload your own image (PNG or JPG, 960 × 300 looks sharpest)."}
+          </p>
+          <div className="flex flex-wrap gap-2">
+            <button type="button" className="btn-primary btn-sm" disabled={!!busy || !company.logoUrl} onClick={generate}>
+              {busy === "generate" ? "Generating…" : "Generate from my logo"}
+            </button>
+            <button type="button" className="btn-secondary btn-sm" disabled={!!busy} onClick={() => uploadRef.current?.click()}>
+              {busy === "upload" ? "Uploading…" : "Upload my own"}
+            </button>
+            {design.bannerUrl && (
+              <button type="button" className="btn-secondary btn-sm" disabled={!!busy} onClick={() => sendBanner(null, "remove")}>
+                {busy === "remove" ? "Removing…" : "Remove"}
+              </button>
+            )}
+            <input
+              ref={uploadRef}
+              type="file"
+              accept="image/png,image/jpeg"
+              className="hidden"
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                e.target.value = "";
+                if (file) void sendBanner(file, "upload");
+              }}
+            />
+          </div>
+          {bannerError && <p className="text-xs text-red-500">{bannerError}</p>}
+        </div>
+      )}
       {canEdit ? (
         <SaveForm success="Signature saved for everyone" resetOnSuccess={false} action={saveSignatureDesign} className="space-y-3 max-w-xl">
           <p className="text-xs text-muted-foreground">
