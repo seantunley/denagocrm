@@ -2,6 +2,7 @@ import { basePrisma } from "./db";
 import { decryptValue } from "./settings";
 import { readManagedBlob } from "./storage";
 import { brandLogoAsset } from "./tenantBrand";
+import { signatureAsset } from "./signatureAssets";
 
 /**
  * Put the workspace's logo INSIDE the email instead of linking to it.
@@ -11,6 +12,8 @@ import { brandLogoAsset } from "./tenantBrand";
  * a quote, a signing request or a campaign was a broken-image box where the
  * logo should be. An inline (CID) attachment is part of the message and shows
  * straight away.
+ *
+ * Also embedded: the card signature's five fixed images (signatureAssets.ts).
  *
  * Only THIS workspace's own logo is embedded: its public brand-logo route
  * (bytes read straight from storage, nothing fetched over the network), or —
@@ -70,6 +73,10 @@ export function workspaceLogoLoader(tenantId: string): ImageLoader {
 
 async function loadWorkspaceLogo(tenantId: string, src: string): Promise<LoadedImage | null> {
   const url = new URL(src);
+  // 0. The card signature's own five images (signatureAssets.ts): bytes compiled
+  //    into the app, matched by exact name — nothing is fetched or read from disk.
+  const signature = signatureAsset(url.pathname);
+  if (signature) return { content: signature, contentType: "image/png" };
   // 1. This workspace's public brand-logo route. The same object the route would
   //    stream, rebuilt the same way (tenant folder + strictly matched asset name),
   //    read from storage — the URL's host is never contacted.

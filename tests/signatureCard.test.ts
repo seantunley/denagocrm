@@ -8,6 +8,8 @@ import {
   signatureCompanyFrom,
   SIGNATURE_LINE_MAX,
 } from "../src/lib/signature";
+import { SIGNATURE_ASSETS, signatureAsset } from "../src/lib/signatureAssets";
+import { inlineImages, workspaceLogoLoader } from "../src/lib/emailInlineLogo";
 
 const src = (path: string) => readFileSync(new URL(`../${path}`, import.meta.url), "utf8");
 
@@ -73,6 +75,24 @@ test("an unset field removes its part: no logo, no panel; no website, no web ico
 test("classic stays available, and a person's own HTML still replaces the design", () => {
   assert.doesNotMatch(card({ ...DEFAULT_SIGNATURE_DESIGN, style: "classic" }), /branding\/signature\//);
   assert.equal(card(DEFAULT_SIGNATURE_DESIGN, profile, { ...user, signatureHtml: "<p>mine</p>" }), "<p>mine</p>");
+});
+
+test("the five card images travel inside the email; nothing else matches, and the open pixel stays remote", async () => {
+  for (const name of Object.keys(SIGNATURE_ASSETS)) {
+    const file = readFileSync(new URL(`../public/branding/signature/${name}.png`, import.meta.url));
+    assert.ok(signatureAsset(`/branding/signature/${name}.png`)?.equals(file), `${name}: embedded bytes = public file`);
+  }
+  assert.deepEqual(Object.keys(SIGNATURE_ASSETS).sort(), ["mail", "phone", "pin", "slant", "web"]);
+  for (const bad of ["/branding/signature/evil.png", "/branding/signature/../logo.png", "/branding/signature/phone.png.png", "/x/branding/signature/phone.png", "/branding/signature/constructor.png"]) {
+    assert.equal(signatureAsset(bad), null, bad);
+  }
+  // No logo URL here, so the loader never reaches the database: only the card's own images are in play.
+  const html = `${card(DEFAULT_SIGNATURE_DESIGN, { ...profile, logoUrl: "" })}<img src="https://crm.example.co.za/api/track/e/abcdefghijklmnopqrstuvwxyz" width="1" height="1" />`;
+  const out = await inlineImages(html, workspaceLogoLoader("tenant_test"));
+  assert.doesNotMatch(out.html, /branding\/signature\//, "every card image is a cid: reference");
+  assert.equal(out.attachments.length, 4, "phone, mail, web and pin (no logo, so no slant)");
+  assert.ok(out.attachments.every((a) => a.contentType === "image/png"));
+  assert.match(out.html, /src="https:\/\/crm\.example\.co\.za\/api\/track\/e\/abcdefghijklmnopqrstuvwxyz"/, "the open pixel must stay remote");
 });
 
 test("the send and the settings preview both use the workspace's saved design", () => {
