@@ -27,6 +27,8 @@ import { automationOn } from "@/lib/automationSwitch";
 import { exactTenantWhere } from "./recoveryScope";
 import { sendPushToAll } from "@/lib/push";
 import { issueInvoiceNumberInTx } from "@/lib/numbering";
+import { winLeadInTx } from "@/lib/quoteOutcome";
+import { payableTotalCents } from "@/lib/pricing";
 
 /** Internal sentinel: the completion claim was lost to a concurrent close. */
 class CompletionLost extends Error {}
@@ -383,13 +385,15 @@ export async function completeSignatureRequest(requestId: string): Promise<void>
           sourceSigned = true;
           // Signed is accepted: the quote becomes an invoice and gets its own number.
           await issueInvoiceNumberInTx(tx, req.quoteId, req.tenantId);
-          const q = await tx.quote.findUnique({ where: { id: req.quoteId }, select: { leadId: true } });
+          const q = await tx.quote.findUnique({ where: { id: req.quoteId }, include: { items: true, fees: true } });
           if (q?.leadId) {
             // Win the lead in the SAME transaction, locked, so quote-accepted and
-            // lead-won can't diverge under a concurrent decline/accept.
-            await tx.$executeRaw`SELECT id FROM "Lead" WHERE id = ${q.leadId} FOR UPDATE`;
-            const won = await tx.lead.updateMany({ where: { id: q.leadId, deletedAt: null, status: "open" }, data: { status: "won" } });
-            if (won.count === 1) wonLeadId = q.leadId;
+            // lead-won can't diverge under a concurrent decline/accept — through
+            // the shared win, so the lead is worth what the customer signed for.
+            // The tenant is never null on a live row (RLS would not have shown it);
+            // the column type still allows it, so take whichever row names it.
+            const tenantId = req.tenantId ?? q.tenantId;
+            if (tenantId && (await winLeadInTx(tx, q.leadId, tenantId, Math.round(payableTotalCents(q))))) wonLeadId = q.leadId;
           }
         } else {
           // Didn't sign it. Completing anyway is only OK if the quote is ALREADY

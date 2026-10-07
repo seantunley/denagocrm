@@ -30,16 +30,29 @@ import { formatZAR } from "./format";
 
 type Tx = Prisma.TransactionClient;
 type Actor = { id: string; name: string };
+/** Only what a win touches, so the signing hub's extended-client transaction fits as well as a plain one. */
+type LeadWinTx = {
+  $executeRaw: Tx["$executeRaw"];
+  lead: { updateMany(args: { where: Prisma.LeadWhereInput; data: Prisma.LeadUpdateManyMutationInput }): PromiseLike<{ count: number }> };
+};
 
 /** A quote in one of these can still be the one the customer accepted. */
 export const WINNABLE_QUOTE_STATUSES = ["draft", "sent", "declined"];
 
-/** Lock the lead and move it open → won. True only when THIS call won it. */
-export async function winLeadInTx(tx: Tx, leadId: string, tenantId: string): Promise<boolean> {
+/**
+ * Lock the lead and move it open → won. True only when THIS call won it.
+ *
+ * `valueCents`: the accepted quote's total, when a quote is what won it. The
+ * deal is worth what the customer accepted, not the estimate typed in when the
+ * lead arrived — and the dashboard's "won value", targets and reports all sum
+ * the LEAD's value. Without it, Q-1025 (R 242 000) won a lead worth R 0
+ * (Sean, 2026-10-07: "why does dashboard show no won value?").
+ */
+export async function winLeadInTx(tx: LeadWinTx, leadId: string, tenantId: string, valueCents?: number): Promise<boolean> {
   await tx.$executeRaw`SELECT id FROM "Lead" WHERE id = ${leadId} AND "tenantId" = ${tenantId} FOR UPDATE`;
   const won = await tx.lead.updateMany({
     where: { id: leadId, tenantId, deletedAt: null, status: "open" },
-    data: { status: "won" },
+    data: { status: "won", ...(valueCents !== undefined ? { valueCents } : {}) },
   });
   return won.count === 1;
 }
@@ -65,7 +78,7 @@ export async function acceptQuoteInTx(tx: Tx, quoteId: string, tenantId: string,
   const before = await tx.quote.findFirst({
     where: { id: quoteId, tenantId },
     // fees: the audit records the value of the sale, fees and delivery included.
-    include: { items: true, fees: true, lead: { select: { title: true } } },
+    include: { items: true, fees: true, lead: { select: { title: true, valueCents: true } } },
   });
   if (!before || before.deletedAt || before.signedAt || before.supersededAt || before.status === "cancelled") {
     return { kind: "gone" };
@@ -80,9 +93,10 @@ export async function acceptQuoteInTx(tx: Tx, quoteId: string, tenantId: string,
   if (updated.count !== 1) return { kind: "gone" };
   // Accepted is when it becomes an invoice: it gets its own invoice number.
   await issueInvoiceNumberInTx(tx, quoteId, tenantId);
+  const totalCents = Math.round(payableTotalCents(before));
   await logAuditStrict({
     action: "quote.accepted",
-    summary: `Quote Q-${before.number} (${formatZAR(Math.round(payableTotalCents(before)))}) accepted 🎉`,
+    summary: `Quote Q-${before.number} (${formatZAR(totalCents)}) accepted 🎉`,
     leadId: before.leadId,
     contactId: before.contactId,
     user: actor,
@@ -91,14 +105,16 @@ export async function acceptQuoteInTx(tx: Tx, quoteId: string, tenantId: string,
   }, tx);
 
   let wonLeadId: string | null = null;
-  if (before.leadId && (await winLeadInTx(tx, before.leadId, tenantId))) {
+  if (before.leadId && (await winLeadInTx(tx, before.leadId, tenantId, totalCents))) {
     wonLeadId = before.leadId;
     await logAuditStrict({
       action: "lead.won",
-      summary: `Lead “${before.lead?.title ?? ""}” won via accepted quote Q-${before.number} 🎉`,
+      summary: `Lead “${before.lead?.title ?? ""}” won via accepted quote Q-${before.number} (${formatZAR(totalCents)}) 🎉`,
       leadId: before.leadId,
       contactId: before.contactId,
       user: actor,
+      before: { valueCents: before.lead?.valueCents ?? null },
+      after: { status: "won", valueCents: totalCents },
       metadata: { quoteId },
     }, tx);
   }
