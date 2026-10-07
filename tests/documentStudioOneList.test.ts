@@ -23,23 +23,18 @@ async function redirectTarget(render: () => Promise<unknown>): Promise<string> {
   assert.fail("expected the page to redirect");
 }
 
-test("the quote card offers only the builder layout, never a DocTemplateRecord form", () => {
+test("every document card — the quote included — opens its one layout in the document editor", () => {
   const page = src(STUDIO);
-  // Quote DocTemplateRecords are rendered by nothing — they are not even loaded.
-  assert.match(page, /\.filter\(\s*\(key\) => key !== "quote"( && docKeyAvailable\(key, enabledModules\))?,?\s*\)/);
-  const quoteCard = page.slice(page.indexOf('if (key === "quote")'), page.indexOf("const templates = typedByKey[key]"));
-  assert.ok(quoteCard.length > 0, "the quote card branch must exist");
-  assert.match(quoteCard, /Edit quote layout/);
-  assert.match(quoteCard, /\/doc-editor\/\$\{quoteBuilder\.id\}/);
-  assert.match(quoteCard, /print, PDF and e-signing/);
-  assert.doesNotMatch(quoteCard, /createDocTemplate|\/settings\/documents\/t\//);
+  // 2026-10-07: the old form editor (DocTemplateRecord) is no longer offered
+  // for any document; design and wording are both edited in the one editor.
+  assert.match(page, /const keys = \(Object\.keys\(DOC_DEFS\) as DocKey\[\]\)\.filter\(\(key\) => docKeyAvailable\(key, enabledModules\)\);/);
+  assert.match(page, /Edit layout &amp; wording/);
+  assert.match(page, /print, PDF and e-signing/);
+  assert.doesNotMatch(page, /createDocTemplate|setDefaultDocTemplate|duplicateDocTemplate|deleteDocTemplate|\/settings\/documents\/t\//);
 });
 
-test("other operational cards carry the Settings → Documents template actions", () => {
-  const page = src(STUDIO);
-  for (const action of ["setDefaultDocTemplate", "duplicateDocTemplate", "deleteDocTemplate", "createCustomDocument"]) {
-    assert.match(page, new RegExp(`action=\\{${action}`), `${action} must be wired`);
-  }
+test("custom documents can still be created from Document Studio", () => {
+  assert.match(src(STUDIO), /action=\{createCustomDocument/);
 });
 
 test("/settings/documents forwards templates to Document Studio and the repository to /documents", async () => {

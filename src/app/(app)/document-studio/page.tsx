@@ -1,6 +1,5 @@
 import Link from "next/link";
 import {
-  Copy,
   FileText,
   Layers3,
   PenLine,
@@ -8,13 +7,12 @@ import {
   Rocket,
   ScrollText,
   Sparkles,
-  Star,
   Workflow,
 } from "lucide-react";
 import { prisma } from "@/lib/db";
 import { DOC_DEFS, docGroupsForModules, docKeyAvailable, type DocKey } from "@/lib/docTemplates";
 import { getEnabledModuleIds } from "@/lib/modules/enabled";
-import { ensureSeeded, listStudioClauses, listTemplates } from "@/lib/docTemplateStore";
+import { ensureSeeded, listStudioClauses } from "@/lib/docTemplateStore";
 import { ensureBuilderSeeded } from "@/lib/docbuilder/store";
 import { contactName, formatDate } from "@/lib/format";
 import {
@@ -26,19 +24,12 @@ import {
   requireAnyPermission,
   type PermissionUser,
 } from "@/lib/permissions";
-import {
-  createDocTemplate,
-  deleteDocTemplate,
-  duplicateDocTemplate,
-  setDefaultDocTemplate,
-} from "@/app/actions/documents";
 import { createReusableBlock } from "@/app/actions/studio";
 import { convertStudioTemplate, createCustomDocument } from "@/app/actions/customDocuments";
 import { createDocEditorTemplate } from "@/app/actions/doceditor";
 import { WorkspaceHero } from "@/components/workspace-hero";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { SaveForm, SaveButton } from "@/components/SaveForm";
-import ConfirmDelete from "@/components/ConfirmDelete";
 import { SaveSubmitButton } from "@/components/SaveSubmitButton";
 import BuilderSection from "./builder-section";
 import ContactPicker from "@/components/ContactPicker";
@@ -114,17 +105,14 @@ export default async function DocumentStudioPage({
   // claims, test-drive indemnities and delivery notes need the automotive module.
   const enabledModules = await getEnabledModuleIds();
   const docGroups = docGroupsForModules(enabledModules);
-  const keys = (Object.keys(DOC_DEFS) as DocKey[]).filter(
-    (key) => key !== "quote" && docKeyAvailable(key, enabledModules),
-  );
+  const keys = (Object.keys(DOC_DEFS) as DocKey[]).filter((key) => docKeyAvailable(key, enabledModules));
   const [
     studioTemplates,
     clauses,
     instances,
-    quoteBuilder,
+    layoutRows,
     customTemplates,
     pickers,
-    ...typedLists
   ] = await Promise.all([
     prisma.customDocTemplate.findMany({
       where: { deletedAt: null },
@@ -148,10 +136,12 @@ export default async function DocumentStudioPage({
       })
       // Which editor opens it: a document-editor model, or a legacy Studio one.
       .then((rows) => rows.map(({ docModelJson, ...row }) => ({ ...row, editorDocument: docModelJson != null }))),
-    prisma.docBuilderTemplate.findFirst({
-      where: { key: "quote", deletedAt: null },
+    // Each document's one layout in the document editor (its default), and
+    // whether it is live yet.
+    prisma.docBuilderTemplate.findMany({
+      where: { key: { in: keys }, deletedAt: null },
       orderBy: [{ isDefault: "desc" }, { updatedAt: "desc" }],
-      select: { id: true },
+      select: { id: true, key: true, publishedVersion: true },
     }),
     // Doc-editor templates a custom document can be made from.
     prisma.docBuilderTemplate.findMany({
@@ -160,18 +150,14 @@ export default async function DocumentStudioPage({
       select: { id: true, name: true, publishedVersion: true, updatedAt: true },
     }),
     canCreateDocument ? loadPickers(user) : null,
-    ...keys.map((key) => listTemplates(key)),
   ]);
-  const typedByKey = Object.fromEntries(
-    keys.map((key, index) => [key, typedLists[index]]),
-  ) as Record<DocKey, Awaited<ReturnType<typeof listTemplates>>>;
+  // Ordered default-first, so the first row per document is its layout.
+  const layoutByKey = new Map<string, (typeof layoutRows)[number]>();
+  for (const row of layoutRows) if (!layoutByKey.has(row.key)) layoutByKey.set(row.key, row);
 
   const input =
     "h-9 rounded-md border border-input bg-card px-3 text-sm text-foreground outline-none focus:border-ring focus:ring-2 focus:ring-ring/20";
-  const operationalTemplateCount = keys.reduce(
-    (total, key) => total + typedByKey[key].length,
-    0,
-  );
+  const operationalTemplateCount = keys.length;
 
   return (
     <div className="space-y-7">
@@ -200,10 +186,11 @@ export default async function DocumentStudioPage({
           1. Operational templates
         </h2>
         <p className="mt-1 max-w-4xl text-sm leading-6 text-muted-foreground">
-          Quotes use a single Document Builder layout, opened with
-          <strong> Edit quote layout</strong> below. The named templates for every
-          other document type control their existing print layouts until each
-          builder layout reaches visual parity.
+          Every document has one layout, edited in the document editor — its
+          design, its wording, bank details, terms and clauses, all in one place.
+          Your logo and company details come from your company profile. A document
+          prints its new layout once you <strong>Publish</strong> it there; until then
+          it keeps printing as it does today.
         </p>
       </section>
 
@@ -218,141 +205,53 @@ export default async function DocumentStudioPage({
                 {group.name}
               </h3>
               <p className="text-xs text-muted-foreground">
-                Named templates feed the matching CRM print/PDF route.
+                One layout per document, edited in the document editor.
               </p>
             </div>
             <div className="grid gap-4 xl:grid-cols-2">
               {group.keys.map((key) => {
                 const definition = DOC_DEFS[key];
-                if (key === "quote") {
-                  return (
-                    <div
-                      key={key}
-                      className="rounded-xl border border-border/70 bg-background/30 p-4"
-                    >
-                      <div className="flex items-start justify-between gap-3">
-                        <div>
-                          <p className="font-medium text-foreground">
-                            {definition.label}
-                          </p>
-                          <p className="mt-0.5 text-xs leading-5 text-muted-foreground">
-                            This one layout is used for quote print, PDF and e-signing.
-                          </p>
-                        </div>
-                        {quoteBuilder && canEditLayout ? (
-                          <Button asChild size="sm" className="shrink-0">
-                            <Link href={`/doc-editor/${quoteBuilder.id}`}>
-                              <PenLine className="size-3.5" />
-                              Edit quote layout
-                            </Link>
-                          </Button>
-                        ) : (
-                          <span className="shrink-0 text-[11px] text-muted-foreground">
-                            {quoteBuilder
-                              ? "Editing needs Document Builder access."
-                              : "No quote layout yet."}
-                          </span>
-                        )}
-                      </div>
-                    </div>
-                  );
-                }
-                const templates = typedByKey[key];
+                const layout = layoutByKey.get(key);
+                // The quote prints from this layout even unpublished (its draft);
+                // every other document waits for Publish (publishedBuilderTemplateFor).
+                const live = layout?.publishedVersion != null || (key === "quote" && Boolean(layout));
                 return (
                   <div
                     key={key}
                     className="rounded-xl border border-border/70 bg-background/30 p-4"
                   >
                     <div className="flex items-start justify-between gap-3">
-                      <div>
+                      <div className="min-w-0">
                         <p className="font-medium text-foreground">
                           {definition.label}
+                          <span
+                            className={`ml-2 rounded px-1.5 py-0.5 align-middle text-[10px] font-semibold uppercase tracking-wide ${live ? "bg-emerald-500/15 text-emerald-600" : "bg-amber-500/15 text-amber-600"}`}
+                          >
+                            {live ? "Live" : "Not published yet"}
+                          </span>
                         </p>
                         <p className="mt-0.5 text-xs leading-5 text-muted-foreground">
-                          {definition.description}
+                          {key === "quote" ? "Used for quote print, PDF and e-signing." : definition.description}
                         </p>
+                        {!live && layout && (
+                          <p className="mt-1 text-xs leading-5 text-amber-600">
+                            Still printing its previous layout. Open it, check it, and press Publish to switch.
+                          </p>
+                        )}
                       </div>
-                      <span className="shrink-0 rounded bg-muted px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
-                        Built-in
-                      </span>
+                      {layout && canEditLayout ? (
+                        <Button asChild size="sm" className="shrink-0">
+                          <Link href={`/doc-editor/${layout.id}`}>
+                            <PenLine className="size-3.5" />
+                            Edit layout &amp; wording
+                          </Link>
+                        </Button>
+                      ) : (
+                        <span className="shrink-0 text-[11px] text-muted-foreground">
+                          {layout ? "Editing needs Document Builder access." : "No layout yet."}
+                        </span>
+                      )}
                     </div>
-                    <ul className="mt-3 divide-y divide-border/50">
-                      {templates.map((template) => (
-                        <li
-                          key={template.id}
-                          className="flex items-center gap-2 py-2"
-                        >
-                          <div className="min-w-0 flex-1">
-                            <Link
-                              href={`/settings/documents/t/${template.id}`}
-                              className="truncate text-[13px] font-medium text-foreground hover:text-primary"
-                            >
-                              {template.name}
-                            </Link>
-                            {template.isDefault && (
-                              <span className="ml-2 inline-flex items-center gap-1 rounded bg-primary/10 px-1.5 py-0.5 text-[10px] font-semibold text-primary">
-                                <Star className="size-3" />
-                                Default
-                              </span>
-                            )}
-                          </div>
-                          <Button asChild variant="outline" size="sm">
-                            <Link
-                              href={`/settings/documents/t/${template.id}`}
-                            >
-                              <PenLine className="size-3.5" />
-                              Edit
-                            </Link>
-                          </Button>
-                          {!template.isDefault && (
-                            <SaveForm action={setDefaultDocTemplate.bind(null, template.id)}>
-                              <SaveButton pendingLabel="…" className={buttonVariants({ variant: "ghost", size: "sm" })} title="Make default" aria-label={`Make ${template.name} the default`}>
-                                <Star className="size-3.5" />
-                              </SaveButton>
-                            </SaveForm>
-                          )}
-                          <SaveForm action={duplicateDocTemplate.bind(null, template.id)}>
-                            <SaveButton pendingLabel="…" className={buttonVariants({ variant: "ghost", size: "sm" })} title="Duplicate" aria-label={`Duplicate ${template.name}`}>
-                              <Copy className="size-3.5" />
-                            </SaveButton>
-                          </SaveForm>
-                          {!template.isDefault && (
-                            <ConfirmDelete
-                              action={deleteDocTemplate.bind(null, template.id)}
-                              title={`Delete template “${template.name}”?`}
-                              description="Documents already made from it keep their content. You can restore it from Trash."
-                              trigger="Delete"
-                              triggerClass={buttonVariants({ variant: "ghost", size: "sm", className: "text-red-400 hover:text-red-300" })}
-                              confirmLabel="Delete template"
-                            />
-                          )}
-                        </li>
-                      ))}
-                    </ul>
-                    <SaveForm
-                      action={createDocTemplate}
-                      className="mt-3 flex flex-wrap gap-2"
-                    >
-                      <input type="hidden" name="docType" value={key} />
-                      <input
-                        name="name"
-                        required
-                        placeholder={`New ${definition.label.toLowerCase()} template…`}
-                        className={`${input} min-w-48 flex-1`}
-                      />
-                      <select name="baseId" defaultValue="" className={input}>
-                        <option value="">Start from standard</option>
-                        {templates.map((template) => (
-                          <option key={template.id} value={template.id}>
-                            Copy {template.name}
-                          </option>
-                        ))}
-                      </select>
-                      <SaveButton className={buttonVariants({ size: "sm" })} pendingLabel="Creating…">
-                        <Plus className="size-3.5" />
-                        Create
-                      </SaveButton>
-                    </SaveForm>
                   </div>
                 );
               })}

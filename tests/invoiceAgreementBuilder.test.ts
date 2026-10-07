@@ -170,9 +170,9 @@ test("the seeded invoice prints its number, and the banking box only when there 
   assert.doesNotMatch(html, /Subtotal:/, "inclusive quote → one total line, as documentTotals()");
   assert.doesNotMatch(html, /\{\{/, "every token resolves");
 
-  const none = legacyDocTextTokens("invoice", { ...defaultTemplate("invoice"), sections: { banking: false } });
-  const bare = renderDocumentHtml(doc, bound(none.tokens, { quote: { taxInclusive: false }, ...none.vars }));
-  assert.doesNotMatch(bare, /PAYMENT DETAILS/);
+  // The banking text is part of the layout now, edited in the document editor
+  // (a section switched off before moving over stays out: oneDocumentEditor.test).
+  const bare = renderDocumentHtml(doc, bound({}, { quote: { taxInclusive: false } }));
   assert.match(bare, /Subtotal: R 86,956\.52/, "exclusive quote → subtotal and VAT above the total");
 });
 

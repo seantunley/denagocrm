@@ -7,7 +7,7 @@ import { isModuleEnabled } from "@/lib/modules/enabled";
 import { requirePermission, requireAnyPermission } from "@/lib/permissions";
 import { logAudit } from "@/lib/audit";
 // getBuilderTemplate, not a raw findUnique: it is where the module check lives.
-import { getBuilderTemplate, listBuilderVersions } from "@/lib/docbuilder/store";
+import { getBuilderTemplate, listBuilderVersions, withLegacyTextInlined } from "@/lib/docbuilder/store";
 import { STANDARD_TEMPLATE_KEYS, standardTemplateFor, type StandardDocKey } from "@/lib/doceditor/standardTemplates";
 import { withActingStaffScope } from "@/lib/actingScope";
 import { requiredRecordKind } from "@/lib/docbuilder/recordBinding";
@@ -62,8 +62,12 @@ export async function setDefaultBuilderTemplate(id: string) {
 export async function publishBuilderVersion(id: string, label?: string): Promise<{ ok: boolean; version?: number; warnings?: string[] }> {
   return withActingStaffScope(async () => {
     const user = await requirePermission("docbuilder.manage");
-    const tpl = await getBuilderTemplate(id);
-    if (!tpl || tpl.deletedAt) return { ok: false };
+    const found = await getBuilderTemplate(id);
+    if (!found || found.deletedAt) return { ok: false };
+    // An invoice/agreement still reading bank details or clauses from the old
+    // form editor is published with that text written in, and its draft keeps
+    // it — from here on it is edited only in this editor.
+    const tpl = await withLegacyTextInlined(found);
     const last = await prisma.docBuilderVersion.findFirst({
       where: { templateId: id }, orderBy: { version: "desc" }, select: { version: true },
     });
@@ -72,7 +76,10 @@ export async function publishBuilderVersion(id: string, label?: string): Promise
       prisma.docBuilderVersion.create({
         data: { templateId: id, version, data: tpl.data as object, label: label?.trim() || null, publishedBy: user.name },
       }),
-      prisma.docBuilderTemplate.update({ where: { id }, data: { status: "published", publishedVersion: version } }),
+      prisma.docBuilderTemplate.update({
+        where: { id },
+        data: { status: "published", publishedVersion: version, ...(tpl.data !== found.data ? { data: tpl.data as object } : {}) },
+      }),
     ]);
     await logAudit({
       action: "docbuilder.publish",

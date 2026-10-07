@@ -3,6 +3,8 @@ import { prisma } from "@/lib/db";
 import { isModuleEnabled } from "@/lib/modules/enabled";
 import { docKeyEnabled } from "@/lib/docModuleAccess";
 import { readTemplateDocument } from "@/lib/doceditor/legacy";
+import { hasLegacyTokens, inlineLegacyText, type LegacyText } from "@/lib/doceditor/inlineLegacyText";
+import { getDocTemplateText } from "@/lib/docTemplateStore";
 import {
   STANDARD_TEMPLATE_KEYS,
   STANDARD_TEMPLATE_NAMES,
@@ -128,6 +130,32 @@ export async function getBuilderTemplate(id: string) {
   // builder actions), so a module-only template opened by id is simply not there.
   if (!(await docKeyEnabled(record.key))) return null;
   return record;
+}
+
+/**
+ * An invoice or sales agreement layout that still reads its text (bank
+ * details, payment terms, clauses) from the old form editor, with that text
+ * written in (inlineLegacyText) — so it is edited in the one editor. READS
+ * only: the editor opens this and its save stores it; Publish stores it too
+ * (publishBuilderVersion). Until the owner publishes, the live document keeps
+ * printing the old text, as it always has.
+ */
+export async function withLegacyTextInlined<T extends { key: string; data: unknown }>(template: T): Promise<T> {
+  if ((template.key !== "invoice" && template.key !== "agreement") || !hasLegacyTokens(template.key, template.data)) return template;
+  const old = await getDocTemplateText(template.key);
+  const sectionOn = (section: string) => old.sections[section] !== false;
+  const legacy: LegacyText =
+    template.key === "invoice"
+      ? {
+          intro: { text: old.intro ?? "", on: true },
+          paymentTerms: { text: old.terms ?? "", on: sectionOn("terms") },
+          bankingDetails: { text: old.bodyText ?? "", on: sectionOn("banking") },
+        }
+      : {
+          intro: { text: old.intro ?? "", on: true },
+          clauses: { text: old.bodyText ?? "", on: sectionOn("clauses") },
+        };
+  return { ...template, data: inlineLegacyText(template.key, template.data, legacy) };
 }
 
 /**
