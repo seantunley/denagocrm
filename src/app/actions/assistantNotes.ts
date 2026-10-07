@@ -6,7 +6,7 @@ import { isTenantOwner, requireTenantOwner, requireUser } from "@/lib/auth";
 import { logAudit } from "@/lib/audit";
 import { withActingStaffScope } from "@/lib/actingScope";
 import { asActionResult, refuse } from "@/lib/actionResult";
-import { ENTRY_CHARS, MEMORY_CHAR_LIMIT, PLAYBOOK_CHARS, PLAYBOOK_LIMIT, PROFILE_CHAR_LIMIT, scanEntry } from "@/lib/assistantMemory";
+import { ENTRY_CHARS, MEMORY_CHAR_LIMIT, PLAYBOOK_CHARS, PLAYBOOK_LIMIT, PROFILE_CHAR_LIMIT, parseUntil, scanEntry } from "@/lib/assistantMemory";
 import { ownedWriteTenantId } from "@/lib/tenantWrite";
 import { requireAnyPermission } from "@/lib/permissions";
 import { isModuleEnabled } from "@/lib/modules/enabled";
@@ -34,9 +34,13 @@ export async function approveAssistantNote(id: string) {
       const note = await prisma.assistantNote.findUnique({ where: { id }, select: { kind: true, name: true } });
       if (!note) refuse(NOTE_GONE);
       // Approving a flagged fact is the owner saying it's right: the flag goes.
+      const now = new Date();
       await prisma.assistantNote.update({
         where: { id },
-        data: { status: "approved", reviewedById: user.id, reviewedAt: new Date(), ...(note.kind === "playbook" ? {} : { description: null }) },
+        data: {
+          status: "approved", conflictsWithId: null, reviewedById: user.id, reviewedAt: now, lastConfirmedAt: now,
+          ...(note.kind === "playbook" ? {} : { description: null }),
+        },
       });
       await logAudit({ action: "assistant.note_approved", summary: `Approved what the assistant learned (${note.kind}${note.name ? ` “${note.name}”` : ""})`, user });
       revalidate();
@@ -72,10 +76,23 @@ export async function updateAssistantNote(id: string, formData: FormData) {
       // Even the owner's text is scanned: it goes into the assistant's prompt.
       if (!scanned.ok) refuse(`That can't be saved: it ${scanned.reason}.`);
       const book = note.kind === "playbook" ? await playbookFields(formData, id) : null;
+      // Its last day: empty clears it (use it for good). A form without the
+      // field leaves it as it is.
+      let validUntil: Date | null | undefined;
+      if (formData.has("validUntil")) {
+        const day = String(formData.get("validUntil") ?? "").trim();
+        validUntil = day ? parseUntil(day) : null;
+        if (day && !validUntil) refuse("Pick a valid date, or leave it empty to keep using it.");
+      }
+      const now = new Date();
       await prisma.assistantNote.update({
         where: { id },
-        // A fact's description only ever holds a tidy-up flag; the owner's edit settles it.
-        data: { content: scanned.text, ...(book ?? { description: null }), status: "approved", reviewedById: user.id, reviewedAt: new Date() },
+        // A fact's description only ever holds a tidy-up flag; the owner's edit
+        // settles it — and a held conflict: the owner has written what's true.
+        data: {
+          content: scanned.text, ...(book ?? { description: null }), ...(validUntil === undefined ? {} : { validUntil }),
+          status: "approved", conflictsWithId: null, reviewedById: user.id, reviewedAt: now, lastConfirmedAt: now,
+        },
       });
       await logAudit({ action: "assistant.note_edited", summary: `Edited what the assistant learned (${note.kind}${note.name ? ` “${note.name}”` : ""})`, user });
       revalidate();
@@ -117,8 +134,8 @@ export async function createAssistantNote(formData: FormData) {
         }
         await tx.assistantNote.create({
           data: {
-            tenantId, kind, content: scanned.text, ...(book ?? {}),
-            status: "approved", createdById: user.id, reviewedById: user.id, reviewedAt: new Date(),
+            tenantId, kind, content: scanned.text, ...(book ?? {}), source: "owner",
+            status: "approved", createdById: user.id, reviewedById: user.id, reviewedAt: new Date(), lastConfirmedAt: new Date(),
           },
         });
       });
@@ -146,6 +163,51 @@ export async function deleteAssistantNote(id: string) {
 }
 
 /**
+ * The owner settles learning that was held because it contradicts an approved
+ * entry. "new": the new entry is approved and replaces the one it contradicts
+ * (that one is removed). "existing": the new entry goes. Under the same lock as
+ * learning, so a conversation finishing meanwhile plans against the result.
+ */
+export async function resolveAssistantConflict(id: string, keep: "new" | "existing") {
+  return asActionResult(() =>
+    withActingStaffScope(async () => {
+      const user = await requireTenantOwner();
+      if (keep !== "new" && keep !== "existing") refuse("Choose which one to keep.");
+      const tenantId = ownedWriteTenantId();
+      const note = await prisma.$transaction(async (tx) => {
+        await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`assistant-notes:${tenantId}`})::bigint)`;
+        const held = await tx.assistantNote.findFirst({ where: { id, status: "conflict" }, select: { kind: true, userId: true, conflictsWithId: true } });
+        if (!held) refuse(NOTE_GONE);
+        if (keep === "existing") {
+          await tx.assistantNote.delete({ where: { id } });
+          return held;
+        }
+        const now = new Date();
+        await tx.assistantNote.update({
+          where: { id },
+          data: { status: "approved", conflictsWithId: null, description: null, reviewedById: user.id, reviewedAt: now, lastConfirmedAt: now },
+        });
+        // Only ever the entry it was held against — same kind, about the same person.
+        if (held.conflictsWithId) {
+          await tx.assistantNote.deleteMany({ where: { id: held.conflictsWithId, kind: held.kind, userId: held.userId } });
+        }
+        return held;
+      });
+      // The kind only — what either entry says stays in Settings, not the trail.
+      await logAudit({
+        action: "assistant.conflict_resolved",
+        summary: keep === "new"
+          ? `Kept the assistant's newer ${note.kind} entry in place of the one it contradicted`
+          : `Kept the existing ${note.kind} entry and dropped the assistant's contradicting one`,
+        user,
+      });
+      revalidate();
+      return { success: keep === "new" ? "Kept the new one" : "Kept the existing one" };
+    }),
+  );
+}
+
+/**
  * A person telling the assistant about THEMSELVES ("I run fleet deals in
  * Gauteng", "bullet points, please"), Hermes' USER.md in their own hands.
  * Their own words, used only in their own conversations, so no owner review:
@@ -167,12 +229,13 @@ export async function saveMyAssistantNote(id: string | null, formData: FormData)
         const entries = await tx.assistantNote.findMany({ where: mine, select: { id: true, content: true } });
         const others = entries.filter((e) => e.id !== id).reduce((n, e) => n + e.content.length, 0);
         if (others + scanned.text.length > PROFILE_CHAR_LIMIT) refuse("That's all the room there is about you — shorten or remove something first.");
-        const reviewed = { status: "approved", reviewedById: user.id, reviewedAt: new Date() };
+        const now = new Date();
+        const reviewed = { status: "approved", conflictsWithId: null, reviewedById: user.id, reviewedAt: now, lastConfirmedAt: now };
         if (id) {
           const updated = await tx.assistantNote.updateMany({ where: { id, ...mine }, data: { content: scanned.text, ...reviewed } });
           if (!updated.count) refuse(NOTE_GONE);
         } else {
-          await tx.assistantNote.create({ data: { ...mine, content: scanned.text, createdById: user.id, ...reviewed } });
+          await tx.assistantNote.create({ data: { ...mine, content: scanned.text, createdById: user.id, source: "person", ...reviewed } });
         }
       });
       await logAudit({ action: "assistant.profile_saved", summary: "Told the assistant about themselves", user });

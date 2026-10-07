@@ -9,6 +9,8 @@ import { ASSISTANT_PROFILE_KEY, parseProfile } from "@/lib/assistantSoul";
 import { assistantHistory } from "@/lib/crmAssistant";
 import { markScheduledTurnsSeen } from "@/lib/assistantScheduleRun";
 import { describeSchedule } from "@/lib/assistantSchedule";
+import { isExpired } from "@/lib/assistantMemory";
+import { assistantVoiceRepliesOn } from "@/lib/assistantVoice";
 import AssistantChat from "@/components/AssistantChat";
 import ConfirmActionDialog from "@/components/ConfirmActionDialog";
 import { deleteAssistantNote, saveMyAssistantNote } from "@/app/actions/assistantNotes";
@@ -49,11 +51,12 @@ export default async function AssistantPage() {
     "activities.view", "activities.manage",
   );
   if (!(await isModuleEnabled("automation"))) notFound();
-  const [connected, profile, history, aboutMe, schedules, whatsapp, watches] = await Promise.all([
+  const [listen, connected, profile, history, aboutMe, schedules, whatsapp, watches] = await Promise.all([
+    assistantVoiceRepliesOn().catch(() => false),
     isCodexConnected(),
     getSetting(ASSISTANT_PROFILE_KEY).then(parseProfile),
     assistantHistory(user.id),
-    prisma.assistantNote.findMany({ where: { kind: "profile", userId: user.id }, orderBy: { createdAt: "asc" }, select: { id: true, content: true } }),
+    prisma.assistantNote.findMany({ where: { kind: "profile", userId: user.id }, orderBy: { createdAt: "asc" }, select: { id: true, content: true, status: true, validUntil: true } }),
     // This person's own schedules only.
     prisma.assistantSchedule.findMany({
       where: { userId: user.id },
@@ -80,7 +83,7 @@ export default async function AssistantPage() {
         description="Your sales colleague: it reads your leads, quotes, activities and the business's own knowledge, and tells you what it means — never more than your own lists show you."
       />
       {connected ? (
-        <AssistantChat name={profile.name} history={history.map(({ question, answer, source }) => ({ question, answer, source }))} />
+        <AssistantChat name={profile.name} history={history.map(({ question, answer, source }) => ({ question, answer, source }))} listen={listen} />
       ) : (
         <p className="card p-5 text-sm text-muted-foreground">
           This runs on your workspace&apos;s ChatGPT connection, which isn&apos;t set up yet.{" "}
@@ -183,6 +186,11 @@ export default async function AssistantPage() {
           {aboutMe.map((note) => (
             <li key={note.id} className="space-y-2 py-2">
               <p className="whitespace-pre-line">{note.content}</p>
+              {/* Shown, not hidden: one DAX isn't using right now, and why. */}
+              {note.status === "conflict" && (
+                <p className="text-[11px] text-muted-foreground">On hold — it contradicts something the workspace owner approved; they&apos;ll decide which stands.</p>
+              )}
+              {isExpired(note.validUntil) && <p className="text-[11px] text-muted-foreground">Ended — no longer used.</p>}
               <div className="flex flex-wrap items-center gap-2">
                 <details className="w-full text-xs sm:w-auto">
                   <summary className="cursor-pointer list-none text-muted-foreground hover:text-foreground">Edit</summary>

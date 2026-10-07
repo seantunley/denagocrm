@@ -2,8 +2,9 @@
 
 import { useEffect, useRef, useState, useTransition } from "react";
 import Link from "next/link";
-import { ArrowUpRight, Loader2, Mic, Paperclip, Smile, Square, ThumbsDown, ThumbsUp, X } from "lucide-react";
+import { ArrowUpRight, Loader2, Mic, Paperclip, Smile, Square, ThumbsDown, ThumbsUp, Volume2, X } from "lucide-react";
 import { rateAssistantAnswer } from "@/app/actions/assistant";
+import { speakAssistantAnswer } from "@/app/actions/assistantVoice";
 import type { Evidence } from "@/lib/assistantReply";
 import { DaxIcon } from "@/components/DaxIcon";
 import { shrinkToJpeg } from "@/components/shrinkImage";
@@ -92,6 +93,37 @@ function Feedback({ turnId }: { turnId: string }) {
   );
 }
 
+// Set once the server says listening is off in this workspace (owner switch,
+// no voice set up, module off): every Listen button then hides for the page's life.
+let listeningOff = false;
+
+/**
+ * 🔊 Listen — this answer read aloud. Made only on the click (each one costs
+ * ElevenLabs credit) and played from memory; nothing is kept.
+ */
+function Listen({ turnId }: { turnId: string }) {
+  const [state, setState] = useState<{ busy?: boolean; audio?: string; error?: string; off?: boolean }>({});
+  if (state.audio) return <audio src={state.audio} controls autoPlay className="h-8 w-full max-w-xs" />;
+  if (state.off) return <p className="text-[11px] text-muted-foreground">{state.error}</p>;
+  if (listeningOff) return null;
+  const listen = async () => {
+    setState({ busy: true });
+    const result = await speakAssistantAnswer(turnId).catch(() => ({ ok: false as const, error: "Couldn't reach the server — try again.", off: false }));
+    if (result.ok) return setState({ audio: result.audio });
+    if (result.off) listeningOff = true;
+    setState({ error: result.error, off: result.off });
+  };
+  return (
+    <div className="flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
+      <button type="button" onClick={listen} disabled={state.busy} className="inline-flex items-center gap-1 rounded p-1 hover:text-foreground" title="Read this answer aloud">
+        {state.busy ? <Loader2 className="size-3.5 animate-spin" /> : <Volume2 className="size-3.5" />}
+        Listen
+      </button>
+      {state.error && <span>{state.error}</span>}
+    </div>
+  );
+}
+
 // The OS picker (Win + . / Ctrl + Cmd + Space) has everything; these are one tap away.
 const EMOJIS = ["👍", "🙏", "😊", "😂", "🔥", "✅", "⚠️", "📞", "💬", "📅", "🚗", "💰", "🎉", "🤝", "👀", "❓"];
 
@@ -112,6 +144,7 @@ export default function AssistantChat({
   page,
   compact = false,
   autoAsk,
+  listen = false,
 }: {
   name: string;
   history?: { question: string; answer: string; source?: string }[];
@@ -121,6 +154,8 @@ export default function AssistantChat({
   compact?: boolean;
   /** Asked once as soon as the chat opens (the home page's "Ask DAX for a plan"). */
   autoAsk?: { question: string; key: number };
+  /** The owner switched voice replies on and a voice is set up: show 🔊 Listen. */
+  listen?: boolean;
 }) {
   const [question, setQuestion] = useState("");
   const [turns, setTurns] = useState<Turn[]>(() => history.map((t) => ({ ...t, rows: [] })));
@@ -261,6 +296,7 @@ export default function AssistantChat({
         </div>
       )}
       {turn.turnId && <Feedback turnId={turn.turnId} />}
+      {listen && turn.turnId && <Listen turnId={turn.turnId} />}
       {Boolean(turn.learned) && (
         <p className="text-[11px] text-muted-foreground">
           🧠 {name} learned something from this — the workspace owner can review it in Settings → Assistant.

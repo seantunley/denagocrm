@@ -157,8 +157,8 @@ test("voice is behind a per-person limit before any audio leaves", () => {
 
 test("the nightly tidy never sees anyone's profile, and what it merges reaches nobody until approved", () => {
   const tidy = code("src/lib/assistantTidy.ts");
-  assert.match(tidy, /where: \{ kind: \{ not: "profile" \} \}/);
-  assert.match(tidy, /status: "unreviewed", createdById: null \}/);
+  assert.match(tidy, /where: \{ \.\.\.inUseWhere\(\), kind: \{ not: "profile" \} \}/);
+  assert.match(tidy, /status: "unreviewed", createdById: null, source: "tidy" \}/);
 });
 
 test("one person can't fill the learning space everyone shares", () => {

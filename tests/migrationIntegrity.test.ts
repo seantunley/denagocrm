@@ -344,7 +344,12 @@ test("session GUCs really do span separate statements, in every migration that u
   // 16 → 17: the checklist-integrity migration backfills immutable entry and
   // template-revision snapshots on tables that already FORCE RLS. The same
   // session escape is required before the composite revision key can be added.
-  assert.equal(spans.length, 17, "seventeen migrations set a session GUC");
+  //
+  // 17 → 18: 20261007091000_assistant_note_provenance backfills `source` and
+  // `lastConfirmedAt` on AssistantNote, which already FORCEs RLS — under a
+  // migrating role without BYPASSRLS the UPDATEs would match zero rows and the
+  // migration would still be recorded as applied.
+  assert.equal(spans.length, 18, "eighteen migrations set a session GUC");
   for (const { name, between } of spans) {
     assert.ok(between > 0, `${name}: a SET with no following statement would not need session pinning`);
   }

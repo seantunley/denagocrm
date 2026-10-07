@@ -131,7 +131,7 @@ test("the tidy-up runs daily, inside the research cron's budget, and never rewri
   assert.match(tidy, /const EVERY_MS = 20 \* 60 \* 60 \* 1000;/);
   assert.match(tidy, /await putSetting\(TIDY_LAST_KEY, new Date\(\)\.toISOString\(\)\);[\s\S]*codexRespond\(/, "the day is claimed before the call");
   assert.match(tidy, /pg_advisory_xact_lock\(hashtext\(\$\{`assistant-notes:\$\{tenantId\}`\}\)::bigint\)/);
-  assert.match(tidy, /const notApproved = \{ tenantId, status: \{ not: "approved" \} \};/, "re-checked inside the lock");
+  assert.match(tidy, /const notApproved = \{ tenantId, status: \{ notIn: \["approved", "conflict"\] \} \};/, "re-checked inside the lock");
   assert.match(tidy, /applyLearn\(null, \{ playbook: block\.playbook \}\)/, "no person → never a profile");
   const cron = code("src/app/api/cron/research/route.ts");
   assert.match(cron, /budget\.shouldStop\(TIDY_RESERVE_MS\)\s*\? null\s*: await runAssistantTidy\(\)/);
@@ -146,8 +146,8 @@ test("memory stays under its cap, never duplicates, and approved entries are the
   assert.deepEqual(planNoteChanges(entries, [{ add: "x".repeat(300) }], 100), [], "over the cap");
   assert.deepEqual(
     planNoteChanges(entries, [{ replace: { old: "fleet", new: "Sean handles fleet deals." } }], MEMORY_CHAR_LIMIT),
-    [],
-    "can't rewrite an approved entry",
+    [{ kind: "create", content: "Sean handles fleet deals.", conflictsWithId: "a" }],
+    "can't rewrite an approved entry — the correction is held beside it for the owner",
   );
   assert.deepEqual(planNoteChanges(entries, [{ remove: "Donovan" }], MEMORY_CHAR_LIMIT), [], "can't remove an approved entry");
   assert.deepEqual(

@@ -150,19 +150,30 @@ export function splitChoices(reply: string): { answer: string; choices: string[]
   return { answer, choices: parseChoiceList(raw) };
 }
 
-/** A proposal the server has checked and resolved (names → ids), ready for a card. */
+/**
+ * A proposal the server has checked and resolved (names → ids), ready for a card.
+ *
+ * STALE CARDS. A card can sit on screen while the record changes underneath
+ * it — DAX proposes "move Anna to Quoted", someone else moves her to Won, then
+ * Confirm is pressed. So a card that changes a record's state carries what it
+ * expected to find (`from…`), and Confirm refuses when that's no longer true
+ * rather than applying a suggestion made about a deal that has moved on.
+ * Only the field the card changes is compared: a lead touched in some other
+ * way (a note, being opened) doesn't make "give it to Donovan" wrong.
+ */
 type LeadCard = { id: string; leadId: string; leadLabel: string; title: string };
+export const STALE_CARD = "This changed since DAX suggested it — ask again to see where it stands now.";
 export type ActionCard =
   | (LeadCard & { kind: "follow_up"; when: string; activity: string; summary?: string })
   | (LeadCard & { kind: "note"; text: string })
-  | (LeadCard & { kind: "assign"; userId: string })
-  | (LeadCard & { kind: "stage"; stageId: string })
+  | (LeadCard & { kind: "assign"; userId: string; fromUserId: string | null })
+  | (LeadCard & { kind: "stage"; stageId: string; fromStageId: string })
   | (LeadCard & { kind: "draft_message"; channel: "whatsapp" | "email"; subject?: string; body: string; to: string | null })
   | (LeadCard & { kind: "meeting"; start: string; end: string; summary: string; attendeeIds: string[]; detail: string })
   | (LeadCard & { kind: "test_drive"; contactId: string; demoVehicleId: string; branch: string; start: string; end: string; detail: string })
   | (LeadCard & { kind: "lost"; reason: string })
   | (LeadCard & { kind: "quote" })
-  | { id: string; kind: "reschedule"; activityId: string; title: string; when: string; leadId: string | null; leadLabel: string }
-  | { id: string; kind: "cancel_activity"; activityId: string; title: string; leadId: string | null; leadLabel: string }
+  | { id: string; kind: "reschedule"; activityId: string; title: string; when: string; leadId: string | null; leadLabel: string; fromDue: string }
+  | { id: string; kind: "cancel_activity"; activityId: string; title: string; leadId: string | null; leadLabel: string; fromDue: string }
   | { id: string; kind: "schedule"; title: string; question: string; cadence: Cadence; weekday?: number; timeOfDay: string; onDate?: string }
   | { id: string; kind: "watch"; title: string; watch: WatchInput };

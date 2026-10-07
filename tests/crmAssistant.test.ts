@@ -101,7 +101,13 @@ test("the assistant only reads the CRM, and only through each user's own visibil
   const writes = lib.match(/\.(create|createMany|update|updateMany|upsert|delete|deleteMany)\(/g) ?? [];
   assert.deepEqual(writes, [".create("]);
   assert.match(lib, /prisma\.assistantTurn\s*\.create\(/);
-  assert.doesNotMatch(lib, /\$executeRaw|\$queryRaw|basePrisma/, "no raw SQL, tenant-scoped client only");
+  // Raw SQL only for recall's full-text search: a read, on the tenant-scoped
+  // client, naming the tenant and the asker itself (assistantRecall.test.ts).
+  assert.doesNotMatch(lib, /\$executeRaw|\$queryRawUnsafe|basePrisma/, "no raw writes, tenant-scoped client only");
+  for (const raw of lib.match(/\$queryRaw[\s\S]*?`;/g) ?? []) {
+    assert.match(raw, /"tenantId" = \$\{/, raw);
+    assert.match(raw, /"userId" = \$\{user\.id\}/, raw);
+  }
   for (const helper of ["getAccessibleLeadIds(user)", "getAccessibleQuoteIds(user)", "getAccessibleActivityIds(user)"]) {
     assert.ok(lib.includes(helper), helper);
   }
