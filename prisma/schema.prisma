@@ -963,12 +963,16 @@ model AssistantTurn {
   answer    String
   /// The tools the assistant ran for this turn (names and filters, no rows).
   tools      Json?
-  /// chat | schedule | whatsapp
+  /// chat | schedule | whatsapp | watch
   source     String    @default("chat")
   /// The AssistantSchedule that asked it, for a scheduled answer.
   scheduleId String?
-  /// When the person saw a scheduled answer (null = the bubble shows a dot).
+  /// When the person saw a scheduled answer or a watch firing (null = the bubble shows a dot).
   seenAt     DateTime?
+  /// The person's thumbs on this answer: "up" | "down".
+  feedback       String?
+  feedbackReason String?
+  feedbackAt     DateTime?
   createdAt  DateTime  @default(now())
 
   @@index([tenantId, userId, createdAt])
@@ -998,6 +1002,33 @@ model AssistantSchedule {
 
   @@index([tenantId, userId])
   @@index([active, nextRunAt])
+}
+
+/// "Tell me when Anna opens her quote": a condition the assistant cron checks
+/// with plain code (no ChatGPT) as one person, and tells only that person.
+/// Never contacts a customer.
+model AssistantWatch {
+  id             String    @id @default(cuid())
+  tenantId       String
+  userId         String
+  /// quote_viewed | quote_unsigned | lead_quiet | test_drive_no_follow_up | delivery_deposit_due
+  kind           String
+  leadId         String?
+  quoteId        String?
+  product        String?
+  thresholdHours Int?
+  thresholdDays  Int?
+  /// The sentence shown on the Ask page and as the question of each firing.
+  label          String
+  /// { recordId: ISO date } — records already told about while the condition holds.
+  fired          Json?
+  active         Boolean   @default(true)
+  lastCheckedAt  DateTime?
+  lastFiredAt    DateTime?
+  createdAt      DateTime  @default(now())
+
+  @@index([tenantId, userId])
+  @@index([active])
 }
 
 /// A staff member's own WhatsApp number, linked by PROOF: they send a one-time

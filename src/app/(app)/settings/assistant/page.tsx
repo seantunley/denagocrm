@@ -37,10 +37,26 @@ const TONE_LABELS: Record<Tone, string> = {
   playful: "Playful",
 };
 
+/** 👍/👎 counts by reason over the last `days` — never which answers or whose. */
+function ratingsSince(days: number) {
+  return prisma.assistantTurn.groupBy({
+    by: ["feedback", "feedbackReason"],
+    where: { feedback: { not: null }, createdAt: { gte: new Date(Date.now() - days * 86_400_000) } },
+    _count: { _all: true },
+  });
+}
+
+const FEEDBACK_REASON_LABELS: Record<string, string> = {
+  wrong_facts: "Wrong facts",
+  bad_advice: "Bad advice",
+  misunderstood: "Didn't understand",
+  other: "Other",
+};
+
 export default async function AssistantSettingsPage() {
   await requireTenantOwner();
   if (!(await isModuleEnabled("automation"))) notFound();
-  const [profile, notes, staff, tidiedAt, tidySummary, whatsappOn, phones] = await Promise.all([
+  const [profile, notes, staff, tidiedAt, tidySummary, whatsappOn, phones, ratings] = await Promise.all([
     getSetting(ASSISTANT_PROFILE_KEY).then(parseProfile),
     prisma.assistantNote.findMany({ orderBy: [{ status: "desc" }, { createdAt: "desc" }] }),
     listActingTenantStaff(),
@@ -48,7 +64,12 @@ export default async function AssistantSettingsPage() {
     getSetting(TIDY_SUMMARY_KEY),
     getSetting(ASSISTANT_WHATSAPP_KEY).then(whatsappSwitchOn),
     linkedPhones(),
+    // 👍/👎 over the last 30 days — counts and reasons only. The conversations
+    // stay private to each person; the owner sees how DAX is doing, not what was asked.
+    ratingsSince(30),
   ]);
+  const rated = (rating: string) => ratings.filter((r) => r.feedback === rating).reduce((n, r) => n + r._count._all, 0);
+  const wrongBecause = ratings.filter((r) => r.feedback === "down" && r.feedbackReason);
   const nameOf = new Map(staff.map((s) => [s.id, s.name]));
   const learned: LearnedNote[] = notes.map((n) => ({
     id: n.id,
@@ -119,6 +140,30 @@ export default async function AssistantSettingsPage() {
           <SaveButton>Save</SaveButton>
         </div>
       </SaveForm>
+
+      <section className="card mt-6 max-w-2xl space-y-2 p-5">
+        <h2 className="text-base font-semibold">How {profile.name} is doing</h2>
+        <p className="text-xs text-muted-foreground">
+          What your team marked under {profile.name}&apos;s answers in the last 30 days. Only the totals — each person&apos;s
+          conversations stay private to them.
+        </p>
+        {rated("up") + rated("down") === 0 ? (
+          <p className="text-sm text-muted-foreground">No answers rated yet.</p>
+        ) : (
+          <>
+            <p className="text-sm">👍 {rated("up")} useful · 👎 {rated("down")} wrong</p>
+            {wrongBecause.length > 0 && (
+              <ul className="flex flex-wrap gap-1.5 text-xs">
+                {wrongBecause.map((r) => (
+                  <li key={r.feedbackReason} className="rounded-md border border-border/60 px-2 py-0.5">
+                    {FEEDBACK_REASON_LABELS[r.feedbackReason ?? ""] ?? r.feedbackReason}: {r._count._all}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </>
+        )}
+      </section>
 
       <SaveForm action={saveAssistantWhatsApp} resetOnSuccess={false} className="card mt-6 max-w-2xl space-y-3 p-5">
         <h2 className="text-base font-semibold">{profile.name} on WhatsApp</h2>

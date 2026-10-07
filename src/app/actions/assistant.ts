@@ -9,9 +9,15 @@ import { isCodexConnected } from "@/lib/codex";
 import { ASSISTANT_PROFILE_KEY, parseProfile } from "@/lib/assistantSoul";
 import type { ActionCard } from "@/lib/assistantActions";
 import { prisma } from "@/lib/db";
-import { scheduleFollowUp } from "@/app/actions/activities";
+import { cancelActivity, rescheduleActivity, scheduleActivity, scheduleFollowUp } from "@/app/actions/activities";
 import { addCommunication } from "@/app/actions/communications";
-import { assignLead, moveLead } from "@/app/actions/leads";
+import { assignLead, markLost, moveLead } from "@/app/actions/leads";
+import { createQuoteFromLead } from "@/app/actions/quotes";
+import { createTestDriveBooking } from "@/app/actions/testDrives";
+import { sendWhatsAppMessage } from "@/app/actions/whatsapp";
+import { sendEmailAction } from "@/app/actions/emails";
+import { canAccessLead } from "@/lib/permissions";
+import { createWatchForUser } from "@/lib/assistantWatch";
 import { ASSISTANT_PERMISSIONS } from "@/lib/assistantUser";
 import { MAX_ACTIVE_SCHEDULES, describeSchedule, nextRun, scheduleInput } from "@/lib/assistantSchedule";
 import { markScheduledTurnsSeen, withScheduleSlot } from "@/lib/assistantScheduleRun";
@@ -29,7 +35,7 @@ import { revalidatePath } from "next/cache";
  * trusted beyond what those actions re-check. A draft message is never sent
  * from here: the person copies it into the conversation and sends it there.
  */
-export async function runAssistantAction(card: ActionCard): Promise<{ ok: boolean; error?: string; success?: string }> {
+export async function runAssistantAction(card: ActionCard): Promise<{ ok: boolean; error?: string; success?: string; href?: string }> {
   return withActingStaffScope(async () => {
     const user = await requireAnyPermission(...ASSISTANT_PERMISSIONS);
     if (!(await isModuleEnabled("automation"))) {
@@ -66,6 +72,14 @@ export async function runAssistantAction(card: ActionCard): Promise<{ ok: boolea
         await logAudit({ action: "assistant.schedule_created", summary: `Scheduled a question for the assistant (${when})`, user, entityType: "AssistantSchedule", entityId: saved.id });
         revalidatePath("/assistant");
         return { ok: true, success: `Scheduled: ${when}. Manage it on the Ask page.` };
+      }
+      case "watch": {
+        // For the SIGNED-IN person, always; it validates, checks they can open
+        // the lead or quote, enforces their cap and audits (assistantWatch).
+        const saved = await createWatchForUser(user, card.watch);
+        if (!saved.ok) return { ok: false, error: saved.error };
+        revalidatePath("/assistant");
+        return { ok: true, success: "Watching — it only ever tells you. Manage it on the Ask page." };
       }
       case "follow_up": {
         const lead = await prisma.lead.findUnique({ where: { id: card.leadId }, select: { contactId: true } });
@@ -104,9 +118,141 @@ export async function runAssistantAction(card: ActionCard): Promise<{ ok: boolea
         await confirmed("move the lead to another stage", card.leadId);
         return { ok: true, success: "Lead moved" };
       }
+      case "meeting": {
+        const lead = await prisma.lead.findUnique({ where: { id: card.leadId }, select: { contactId: true } });
+        if (!lead) return { ok: false, error: "That lead is no longer there." };
+        const form = new FormData();
+        form.set("type", "meeting");
+        form.set("summary", card.summary);
+        form.set("leadId", card.leadId);
+        if (lead.contactId) form.set("contactId", lead.contactId);
+        form.set("dueDate", card.start);
+        form.set("endDate", card.end);
+        for (const id of card.attendeeIds) form.append("attendeeIds", id);
+        const result = await scheduleActivity(form);
+        if (result.error) return { ok: false, error: result.error };
+        await confirmed("book a meeting", card.leadId);
+        return { ok: true, success: "Meeting booked" };
+      }
+      case "test_drive": {
+        const form = new FormData();
+        form.set("contactId", card.contactId);
+        form.set("leadId", card.leadId);
+        form.set("demoVehicleId", card.demoVehicleId);
+        form.set("branch", card.branch);
+        form.set("scheduledStart", card.start);
+        form.set("expectedReturnAt", card.end);
+        const result = await createTestDriveBooking(form);
+        if (result.error) return { ok: false, error: result.error };
+        await confirmed("book a test drive", card.leadId);
+        return { ok: true, success: result.success ?? "Test drive booked" };
+      }
+      case "reschedule": {
+        const result = await rescheduleActivity(card.activityId, card.when);
+        if (!result.ok) return { ok: false, error: result.error ?? "Couldn't move it." };
+        if (card.leadId) await confirmed("reschedule an activity", card.leadId);
+        return { ok: true, success: "Moved" };
+      }
+      case "cancel_activity": {
+        const result = await cancelActivity(card.activityId, "/assistant");
+        if (result.error) return { ok: false, error: result.error };
+        if (card.leadId) await confirmed("cancel an activity", card.leadId);
+        return { ok: true, success: "Cancelled" };
+      }
+      case "lost": {
+        const form = new FormData();
+        form.set("lostReason", card.reason);
+        const result = await markLost(card.leadId, form);
+        if (result.error) return { ok: false, error: result.error };
+        await confirmed("mark the deal lost", card.leadId);
+        return { ok: true, success: "Marked lost" };
+      }
+      case "quote": {
+        const result = await createQuoteFromLead(card.leadId);
+        if (result.error) return { ok: false, error: result.error };
+        await confirmed("start a quote", card.leadId);
+        return { ok: true, success: "Draft quote started", href: result.redirectTo };
+      }
       default:
-        return { ok: false, error: "Drafts are copied and sent by you — nothing is sent from here." };
+        return { ok: false, error: "Messages go out only with the Send button on their card." };
     }
+  });
+}
+
+/**
+ * Send a message DAX drafted — ONLY from the Send button on its card, after the
+ * person has read it and, if they liked, changed it. The body is the person's
+ * own (edited) text from the card, and it goes through the same action as the
+ * lead's own message box: sendWhatsAppMessage (inbox.reply, the outbox, the
+ * delivery log) or sendEmailAction (the workspace's mailbox, the signature,
+ * the timeline). The recipient is read again here from the lead — never taken
+ * from the browser — so an edited card can't redirect it.
+ */
+export async function sendAssistantDraft(input: { leadId: string; channel: "whatsapp" | "email"; subject?: string; body: string; compositionId: string }): Promise<{ ok: boolean; error?: string; success?: string }> {
+  return withActingStaffScope(async () => {
+    const user = await requireAnyPermission(...ASSISTANT_PERMISSIONS);
+    if (!(await isModuleEnabled("automation"))) {
+      return { ok: false, error: "Ask the CRM is part of the Automation & AI module, which is off for this workspace." };
+    }
+    const body = String(input?.body ?? "").trim().slice(0, 4000);
+    if (!body) return { ok: false, error: "The message is empty." };
+    if (!(await canAccessLead(user, String(input.leadId)))) return { ok: false, error: "That lead is no longer yours to message." };
+    const lead = await prisma.lead.findUnique({
+      where: { id: input.leadId },
+      select: { email: true, phone: true, contactId: true, contact: { select: { email: true, phone: true } } },
+    });
+    if (!lead) return { ok: false, error: "That lead is no longer there." };
+    const form = new FormData();
+    form.set("leadId", input.leadId);
+    if (lead.contactId) form.set("contactId", lead.contactId);
+    let result: { ok?: string; error?: string };
+    if (input.channel === "whatsapp") {
+      const phone = lead.phone || lead.contact?.phone;
+      if (!phone) return { ok: false, error: "There's no WhatsApp number on this lead or its customer." };
+      form.set("phone", phone);
+      form.set("text", body);
+      form.set("compositionId", String(input.compositionId ?? "").slice(0, 80));
+      result = await sendWhatsAppMessage(undefined, form);
+    } else {
+      const to = lead.email || lead.contact?.email;
+      if (!to) return { ok: false, error: "There's no email address on this lead or its customer." };
+      const subject = String(input.subject ?? "").trim().slice(0, 150);
+      if (!subject) return { ok: false, error: "Add a subject first." };
+      form.set("to", to);
+      form.set("subject", subject);
+      form.set("bodyHtml", body.split(/\n{2,}/).map((p) => `<p>${escapeHtml(p).replace(/\n/g, "<br>")}</p>`).join(""));
+      form.set("revalidate", `/leads/${input.leadId}`);
+      result = await sendEmailAction(undefined, form);
+    }
+    if (result.error) return { ok: false, error: result.error };
+    await logAudit({
+      action: "assistant.draft_sent",
+      summary: `Sent a ${input.channel === "whatsapp" ? "WhatsApp" : "email"} the assistant drafted, after reviewing it`,
+      user,
+      leadId: input.leadId,
+    });
+    return { ok: true, success: result.ok ?? "Sent" };
+  });
+}
+
+const escapeHtml = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+
+/**
+ * 👍 / 👎 on one of the person's OWN answers, with a reason when it was wrong —
+ * kept on the turn for the owner to read (Settings → Assistant), never sent
+ * anywhere. Their own turns only: the update names the user.
+ */
+const FEEDBACK_REASONS = ["wrong_facts", "bad_advice", "misunderstood", "other"] as const;
+export async function rateAssistantAnswer(turnId: string, rating: "up" | "down", reason?: string): Promise<{ ok: boolean }> {
+  return withActingStaffScope(async () => {
+    const user = await requireAnyPermission(...ASSISTANT_PERMISSIONS);
+    if (rating !== "up" && rating !== "down") return { ok: false };
+    const why = rating === "down" && FEEDBACK_REASONS.includes(reason as (typeof FEEDBACK_REASONS)[number]) ? reason! : null;
+    const updated = await prisma.assistantTurn.updateMany({
+      where: { id: String(turnId), userId: user.id },
+      data: { feedback: rating, feedbackReason: why, feedbackAt: new Date() },
+    });
+    return { ok: updated.count === 1 };
   });
 }
 
