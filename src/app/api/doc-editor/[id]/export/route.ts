@@ -1,5 +1,6 @@
 import { getCurrentUser } from "@/lib/auth";
 import { hasAnyPermission } from "@/lib/permissions";
+import { canEditLayout } from "@/lib/docbuilder/layoutAccess";
 import { getBuilderTemplate } from "@/lib/docbuilder/store";
 import {
   bindingParams,
@@ -27,13 +28,17 @@ export async function GET(
   // this export sibling isn't stricter than the editor/preview it accompanies.
   const user = await getCurrentUser();
   if (!user) return new Response("Unauthorized", { status: 401 });
-  if (!(await hasAnyPermission(user, "docbuilder.view", "docbuilder.manage"))) {
+  if (!(await hasAnyPermission(user, "docbuilder.view", "docbuilder.manage", "document_templates.manage"))) {
     return new Response("Forbidden", { status: 403 });
   }
 
   const { id } = await context.params;
   const template = await getBuilderTemplate(id);
   if (!template) return new Response("Not found", { status: 404 });
+  // Without docbuilder access, only a layout this person may edit (layoutAccess).
+  if (!(await hasAnyPermission(user, "docbuilder.view", "docbuilder.manage")) && !(await canEditLayout(user, template.key))) {
+    return new Response("Not found", { status: 404 });
+  }
   const url = new URL(request.url);
   const value = url.searchParams.get("record");
   const record = value

@@ -62,16 +62,25 @@ test("doc-editor library items are not Studio clauses", () => {
   assert.equal(isDocEditorLibraryItem({ contentJson: { kind: "other" } }), false);
   assert.equal(isDocEditorLibraryItem({ contentJson: null }), false);
 
-  // Every Studio clause list goes through the filtered helper, not the raw table.
-  for (const rel of [
-    STUDIO,
-    "src/app/(app)/settings/documents/studio/t/[id]/page.tsx",
-    "src/app/(app)/settings/documents/studio/d/[id]/page.tsx",
-  ]) {
-    const code = src(rel);
-    assert.match(code, /listStudioClauses\(\)/, `${rel} must list clauses through listStudioClauses`);
-    assert.doesNotMatch(code, /reusableBlock\.findMany/, `${rel} lists ReusableBlock unfiltered`);
+  // The editor's Library lists Studio clauses only through the filtered helper.
+  assert.match(src("src/app/actions/customDocuments.ts"), /listStudioClauses\(\)/);
+  assert.doesNotMatch(src(STUDIO), /reusableBlock\.findMany/);
+});
+
+test("there is ONE document editor: the Studio free-form editor is gone and its pages redirect", () => {
+  for (const gone of ["src/components/StudioEditor.tsx", "src/components/StudioEditorInner.tsx", "src/components/StudioFinalize.tsx", "src/app/actions/studio.ts"]) {
+    assert.throws(() => src(gone), /ENOENT/, `${gone} must not exist`);
   }
+  for (const page of ["t", "c"]) {
+    const code = src(`src/app/(app)/settings/documents/studio/${page}/[id]/page.tsx`);
+    assert.match(code, /redirect\("\/document-studio"\)/);
+    assert.doesNotMatch(code, /StudioEditor|SaveForm/, `${page}: nothing left to edit with`);
+  }
+  assert.match(src("src/app/(app)/settings/documents/studio/d/[id]/page.tsx"), /redirect\(`\/doc-editor\/document\/\$\{encodeURIComponent\(id\)\}`\)/);
+  assert.match(src("src/app/doc-editor/document/[id]/page.tsx"), /if \(row\.docModelJson == null\) redirect\("\/document-studio"\);/);
+  // Nothing in the app links to, or mounts, another editor.
+  const studio = src(STUDIO);
+  assert.doesNotMatch(studio, /settings\/documents\/studio|StudioEditor|convertStudioTemplate|createReusableBlock/);
 });
 
 test("Builder-only users (docbuilder.view/manage) still reach Document Studio, and see only the Builder", () => {

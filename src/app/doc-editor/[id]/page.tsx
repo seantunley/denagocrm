@@ -1,5 +1,6 @@
 import { notFound } from "next/navigation";
-import { getAccessibleLeadIds, getAccessibleVehicleIds, requirePermission } from "@/lib/permissions";
+import { getAccessibleLeadIds, getAccessibleVehicleIds, requireAnyPermission } from "@/lib/permissions";
+import { requireLayoutEditor } from "@/lib/docbuilder/layoutAccess";
 import { prisma } from "@/lib/db";
 import { contactName } from "@/lib/format";
 import { getBuilderTemplate, withLegacyTextInlined } from "@/lib/docbuilder/store";
@@ -20,13 +21,16 @@ export default async function DocEditorPage({
 }: {
   params: Promise<{ id: string }>;
 }) {
-  const user = await requirePermission("docbuilder.manage");
+  await requireAnyPermission("docbuilder.manage", "document_templates.manage");
   const { id } = await params;
   // An invoice/agreement still reading its text from the old form editor opens
   // with it written in, so bank details and clauses are edited in this editor
   // (stored by the editor's save, or by Publish — nothing is written on open).
   const template = await getBuilderTemplate(id).then((t) => (t ? withLegacyTextInlined(t) : null));
   if (!template) notFound();
+  // docbuilder.manage, or — for the seven layouts the old form editor managed —
+  // document_templates.manage (layoutAccess).
+  const user = await requireLayoutEditor(template.key);
 
   const read = readTemplateDocument(template.data, template.name);
 

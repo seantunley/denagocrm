@@ -41,22 +41,10 @@ test("deleting a template is confirmed and its reason audited", () => {
   assert.match(docs, /summary: `Deleted template “\$\{rec\.name\}” — \$\{reason\}`/);
 });
 
-test("studio publish / new clause return refusals and navigate by value", () => {
-  const studio = src("src/app/actions/studio.ts");
-  for (const name of ["publishStudioTemplate", "createReusableBlock"]) {
-    const at = studio.indexOf(`export async function ${name}(`);
-    assert.match(studio.slice(at, at + 300), /return asActionResult\(async \(\) => \{/, name);
-  }
-  assert.match(studio, /return \{ redirectTo: `\/settings\/documents\/studio\/c\/\$\{row\.id\}`/);
-  assert.doesNotMatch(studio, /throw new Error\(/);
-  assert.doesNotMatch(studio, /findUniqueOrThrow\(/);
-});
-
 test("every form posting to these is a SaveForm", () => {
   for (const file of [
     "src/app/(app)/document-studio/page.tsx",
     "src/app/(app)/settings/documents/t/[id]/page.tsx",
-    "src/app/(app)/settings/documents/studio/t/[id]/page.tsx",
     "src/components/RepoRow.tsx",
     "src/components/DocumentsPanel.tsx",
   ]) {

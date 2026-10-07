@@ -82,7 +82,9 @@ test("the upload action is permission-gated, checks the bytes, and files under t
   const start = code.indexOf("export async function uploadDocEditorImage(");
   assert.notEqual(start, -1);
   const body = code.slice(start, code.indexOf("\n}\n", start));
-  assert.match(body, /requirePermission\("docbuilder\.manage"\)/);
+  // Into a layout this person may edit (layoutAccess.test), docbuilder.manage otherwise.
+  assert.match(body, /requireAnyPermission\("docbuilder\.manage", "document_templates\.manage"\)/);
+  assert.match(body, /template \? await canEditLayout\(user, template\.key\) : await hasPermission\(user, "docbuilder\.manage"\)/);
   assert.match(body, /checkDocImage\(file\.size/);
   assert.match(body, /saveFile\(bytes, `image\.\$\{type\.ext\}`, type\.mime, tenantId\)/, "stored with the SNIFFED type, not the browser's");
   assert.match(body, /template \? template\.tenantId : await actingOwnerTenantId\(\)/);
