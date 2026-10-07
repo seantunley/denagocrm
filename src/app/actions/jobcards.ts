@@ -10,7 +10,7 @@ import { prisma, basePrisma } from "@/lib/db";
 import { logAudit } from "@/lib/audit";
 import { nextJobCardNumber } from "@/lib/numbering";
 import { actingTenantId } from "@/lib/actingTenant";
-import { sendReviewRequest } from "@/lib/reviewRequests";
+import { emitContactJourneyEvent } from "@/lib/leadJourneyEvents";
 import { triggerSurvey } from "@/lib/surveys";
 import { CLOSED_REQUEST_STATUSES } from "@/lib/signing/status";
 import { MAX_PHOTOS, MAX_PHOTO_BYTES, checkUploadPayload } from "@/lib/photoBudget";
@@ -649,11 +649,16 @@ export async function completeJobCard(jobCardId: string, formData: FormData) {
       contactId: jobCard.contactId,
       user,
     });
-    await sendReviewRequest(
-      jobCard.contactId,
-      "service",
-      `the service on your ${jobCard.vehicle.model} (job card #${jobCard.number})`
-    ).catch(() => {});
+    // The Google review request is a journey now ("Job card is completed"),
+    // switched on or off on Journeys — this only says it happened.
+    await emitContactJourneyEvent("job_completed", jobCard.contactId, {
+      occurrence: `jobcard:${jobCard.id}:${completedAt.toISOString()}`,
+      payload: {
+        jobCardId: jobCard.id,
+        model: jobCard.vehicle.model,
+        refText: `the service on your ${jobCard.vehicle.model} (job card #${jobCard.number})`,
+      },
+    });
     await triggerSurvey("job_complete", {
       contactId: jobCard.contactId,
       jobCardId: jobCard.id,

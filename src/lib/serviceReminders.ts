@@ -10,6 +10,7 @@ import { formatDate } from "./format";
 import { companyTeamSignoff, getCompanyProfile } from "./companyProfile";
 import { tenantEmailContent, tenantSmsContent } from "./signing/signingEmail";
 import { canContactPerson, describeBlockedReason, firstAllowedChannel } from "./communicationPolicy";
+import type { ModuleSendOutcome } from "./journeyTypes";
 
 async function recordSuppressedReminder(
   vehicleId: string,
@@ -37,100 +38,155 @@ async function recordSuppressedReminder(
   });
 }
 
+/** One due-cycle of one vehicle: the date and km it is due at. */
+function dueKeyOf(due: ReturnType<typeof computeDue>): string {
+  return `${due.nextDueDate?.toISOString().slice(0, 10) ?? "nodate"}-${due.nextDueKm ?? "nokm"}`;
+}
+
 /**
- * Emails customers whose vehicle is due (or overdue) for a service.
- * Each due-cycle is reminded exactly once (tracked in ServiceReminderLog).
- * Enabled via Settings → Email → Service reminders.
+ * What "is it due?" reads about a vehicle — ONE definition for the due scan and
+ * the sender, both naming the workspace on the nested reads. The tenant guard
+ * scopes only the top level, and service records and mileage logs carry their
+ * own tenantId but reach a vehicle by vehicleId alone: an unscoped nested read
+ * would let a mis-stamped row from another workspace become the "latest"
+ * service or mileage and change the reminder sent (#787 review).
  */
-export async function runServiceReminders(): Promise<number> {
-  const enabled = (await getSetting("SERVICE_REMINDER_ENABLED")) === "true";
-  if (!enabled) return 0;
-  const templateId = await getSetting("SERVICE_REMINDER_TEMPLATE_ID");
-  if (!templateId) return 0;
-  const template = await prisma.emailTemplate.findUnique({ where: { id: templateId } });
-  if (!template) return 0;
+const dueVehicleInclude = (tenantId: string) => ({
+  contact: true,
+  serviceRecords: { where: { tenantId }, orderBy: { serviceDate: "desc" as const }, take: 1 },
+  mileageLogs: { where: { tenantId }, orderBy: { recordedAt: "desc" as const }, take: 1 },
+});
 
+/**
+ * Vehicles due soon or overdue whose customer has an email address and hasn't
+ * been reminded for this due-cycle — what the "Vehicle is due for a service"
+ * journey trigger enrols. Each cycle is reminded once (ServiceReminderLog).
+ */
+export async function vehiclesDueForService(
+  tenantId: string,
+): Promise<Array<{ vehicleId: string; contactId: string; dueKey: string; model: string }>> {
   const vehicles = await prisma.vehicle.findMany({
-    include: {
-      contact: true,
-      serviceRecords: { orderBy: { serviceDate: "desc" }, take: 1 },
-      mileageLogs: { orderBy: { recordedAt: "desc" }, take: 1 },
-    },
+    where: { tenantId, deletedAt: null },
+    include: dueVehicleInclude(tenantId),
   });
-  const firstUser = await resolveTenantActor();
+  const due = vehicles.flatMap((vehicle) => {
+    if (!vehicle.contact.email || vehicle.contact.deletedAt || vehicle.contact.tenantId !== tenantId) return [];
+    const info = computeDue(vehicle);
+    if (info.status !== "due_soon" && info.status !== "overdue") return [];
+    return [{ vehicleId: vehicle.id, contactId: vehicle.contactId, dueKey: dueKeyOf(info), model: vehicle.model }];
+  });
+  if (due.length === 0) return [];
+  const logged = await prisma.serviceReminderLog.findMany({
+    where: { tenantId, vehicleId: { in: due.map((d) => d.vehicleId) } },
+    select: { vehicleId: true, dueKey: true },
+  });
+  const done = new Set(logged.map((l) => `${l.vehicleId}:${l.dueKey}`));
+  return due.filter((d) => !done.has(`${d.vehicleId}:${d.dueKey}`));
+}
+
+/**
+ * Emails ONE customer that their vehicle is due (or overdue) for a service — the
+ * "Send service-due reminder" journey step's sender. The ready-made "Service-due
+ * reminder" journey is off until the owner switches it on in Journeys.
+ *
+ * Each due-cycle is reminded exactly once (ServiceReminderLog): a vehicle no
+ * longer due, or already reminded for this cycle, is skipped. Uses the reminder
+ * template picked under Settings → Email → Service reminders, else the
+ * workspace's editable "Service reminder" email.
+ */
+export async function sendServiceDueReminder(vehicleId: string, tenantId: string): Promise<ModuleSendOutcome> {
+  const vehicle = await prisma.vehicle.findFirst({
+    where: { id: vehicleId, tenantId, deletedAt: null },
+    include: dueVehicleInclude(tenantId),
+  });
+  if (!vehicle || vehicle.contact.tenantId !== tenantId) return { kind: "skipped", reason: "the vehicle is no longer on file" };
+  if (!vehicle.contact.email) return { kind: "skipped", reason: "the customer has no email address" };
+  const due = computeDue(vehicle);
+  if (due.status !== "due_soon" && due.status !== "overdue") return { kind: "skipped", reason: "the vehicle is no longer due" };
+
+  const dueKey = dueKeyOf(due);
+  const already = await prisma.serviceReminderLog.findUnique({
+    where: { vehicleId_dueKey: { vehicleId: vehicle.id, dueKey } },
+  });
+  if (already) return { kind: "skipped", reason: "already reminded for this service" };
+
+  // Trashed contact, portal "Email service reminders" off, or service consent
+  // withdrawn. The refusal is recorded against the due-cycle so it is audited
+  // ONCE: a customer who switches reminders back on picks up from the next cycle
+  // (the manual Remind button still works for this one).
+  const verdict = await canContactPerson({
+    contactId: vehicle.contactId,
+    tenantId: vehicle.contact.tenantId,
+    purpose: "service",
+    requestedChannel: "email",
+  });
+  if (!verdict.allowed) {
+    await recordSuppressedReminder(vehicle.id, vehicle.contactId, vehicle.model, dueKey, verdict.reason, "Automation");
+    return { kind: "skipped", reason: describeBlockedReason(verdict.reason) };
+  }
+
+  const templateId = await getSetting("SERVICE_REMINDER_TEMPLATE_ID");
+  const template = templateId ? await prisma.emailTemplate.findFirst({ where: { id: templateId, tenantId } }) : null;
   const company = await getCompanyProfile();
-  const regional = await getRegionalSettings();
-
-  let sent = 0;
-  for (const vehicle of vehicles) {
-    if (!vehicle.contact.email) continue;
-    const due = computeDue(vehicle);
-    if (due.status !== "due_soon" && due.status !== "overdue") continue;
-
-    const dueKey = `${due.nextDueDate?.toISOString().slice(0, 10) ?? "nodate"}-${due.nextDueKm ?? "nokm"}`;
-    const already = await prisma.serviceReminderLog.findUnique({
-      where: { vehicleId_dueKey: { vehicleId: vehicle.id, dueKey } },
-    });
-    if (already) continue;
-
-    // Trashed contact, portal "Email service reminders" off, or service consent
-    // withdrawn. The refusal is recorded against the due-cycle so it is audited
-    // ONCE, not every night: a customer who switches reminders back on picks up
-    // from the next cycle (the manual Remind button still works for this one).
-    const verdict = await canContactPerson({
-      contactId: vehicle.contactId,
-      tenantId: vehicle.contact.tenantId,
-      purpose: "service",
-      requestedChannel: "email",
-    });
-    if (!verdict.allowed) {
-      await recordSuppressedReminder(vehicle.id, vehicle.contactId, vehicle.model, dueKey, verdict.reason, "Automation");
-      continue;
-    }
-
-    const vars = {
-      name: `${vehicle.contact.firstName} ${vehicle.contact.lastName ?? ""}`.trim(),
+  const dueWhen = due.nextDueDate ? formatDate(due.nextDueDate, await getRegionalSettings()) : "soon";
+  const name = `${vehicle.contact.firstName} ${vehicle.contact.lastName ?? ""}`.trim();
+  const vars = {
+    name,
+    first_name: vehicle.contact.firstName,
+    model: vehicle.model,
+    color: vehicle.color ?? "",
+    due_date: dueWhen,
+    due_km: due.nextDueKm != null ? `${due.nextDueKm.toLocaleString()} km` : "",
+    current_km: due.currentKm != null ? `${due.currentKm.toLocaleString()} km` : "",
+    user_name: companyTeamSignoff(company),
+    email: vehicle.contact.email,
+    phone: vehicle.contact.phone ?? "",
+    value: "",
+  };
+  let subject: string;
+  let text: string;
+  let html: string | undefined;
+  if (template) {
+    subject = renderTemplate(template.subject, vars);
+    text = renderTemplate(template.body, vars);
+  } else {
+    ({ subject, text, html } = await tenantEmailContent("service_reminder", tenantId, {
       first_name: vehicle.contact.firstName,
+      recipient_name: name,
       model: vehicle.model,
-      color: vehicle.color ?? "",
-      due_date: due.nextDueDate ? formatDate(due.nextDueDate, regional) : "soon",
-      due_km: due.nextDueKm != null ? `${due.nextDueKm.toLocaleString()} km` : "",
-      current_km: due.currentKm != null ? `${due.currentKm.toLocaleString()} km` : "",
-      user_name: companyTeamSignoff(company),
-      email: vehicle.contact.email,
-      phone: vehicle.contact.phone ?? "",
-      value: "",
-    };
-    const result = await sendEmail({
-      to: vehicle.contact.email,
-      subject: renderTemplate(template.subject, vars),
-      text: renderTemplate(template.body, vars),
-    });
-    if (!result.ok) continue;
+      due_date: dueWhen,
+    }));
+  }
+  const result = await sendEmail({ to: vehicle.contact.email, subject, text, html });
+  if (!result.ok) return { kind: "failed", reason: "the email provider refused it" };
 
-    await prisma.serviceReminderLog.create({
-      data: { vehicleId: vehicle.id, dueKey, sentTo: vehicle.contact.email },
+  await prisma.serviceReminderLog
+    .upsert({
+      where: { vehicleId_dueKey: { vehicleId: vehicle.id, dueKey } },
+      create: { vehicleId: vehicle.id, dueKey, sentTo: vehicle.contact.email },
+      update: { sentTo: vehicle.contact.email },
     });
+  const firstUser = await resolveTenantActor();
+  if (firstUser) {
     await prisma.communication.create({
       data: {
         type: "email",
         direction: "outbound",
-        subject: renderTemplate(template.subject, vars),
-        body: `[Service reminder]\n\n${renderTemplate(template.body, vars)}`,
+        subject,
+        body: `[Service reminder]\n\n${text}`,
         contactId: vehicle.contactId,
-        userId: firstUser!.id,
+        userId: firstUser.id,
         tenantId: await customerRecordTenantId({ contactId: vehicle.contactId }),
       },
     });
-    await logAudit({
-      action: "email.sent",
-      summary: `Service reminder emailed to ${vehicle.contact.email} for ${vehicle.model} (due ${vars.due_date}${vars.due_km ? ` / ${vars.due_km}` : ""})`,
-      contactId: vehicle.contactId,
-      userName: "Automation",
-    });
-    sent++;
   }
-  return sent;
+  await logAudit({
+    action: "email.sent",
+    summary: `Service reminder emailed for ${vehicle.model} (due ${dueWhen}${vars.due_km ? ` / ${vars.due_km}` : ""})`,
+    contactId: vehicle.contactId,
+    userName: "Automation",
+  });
+  return { kind: "sent" };
 }
 
 /**
@@ -142,14 +198,12 @@ export async function runServiceReminders(): Promise<number> {
 export async function remindVehicleService(
   vehicleId: string
 ): Promise<{ ok: boolean; channel?: "email" | "sms"; error?: string }> {
-  const vehicle = await prisma.vehicle.findUnique({
-    where: { id: vehicleId },
-    include: {
-      contact: true,
-      serviceRecords: { orderBy: { serviceDate: "desc" }, take: 1 },
-      mileageLogs: { orderBy: { recordedAt: "desc" }, take: 1 },
-    },
-  });
+  // The vehicle's own workspace first, then its history read in THAT workspace
+  // only (dueVehicleInclude) — the same reads the automatic reminder uses.
+  const owner = await prisma.vehicle.findUnique({ where: { id: vehicleId }, select: { tenantId: true } });
+  const vehicle = owner?.tenantId
+    ? await prisma.vehicle.findFirst({ where: { id: vehicleId, tenantId: owner.tenantId }, include: dueVehicleInclude(owner.tenantId) })
+    : null;
   if (!vehicle) return { ok: false, error: "Vehicle not found" };
   const { contact } = vehicle;
   if (!contact.email && !contact.phone) return { ok: false, error: "No email or phone on file" };

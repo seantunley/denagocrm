@@ -9,9 +9,6 @@ import { signingEmailContent, signingWhatsAppText } from "./signingEmail";
 import { usableCapability } from "./tokenVault";
 import { signingRecord } from "@/lib/outboundMessageLog";
 import { mirrorQuoteSent } from "./quoteMirror";
-import { automationOn } from "@/lib/automationSwitch";
-
-const SIGNING_AUTO_REMINDERS_KEY = "SIGNING_AUTO_REMINDERS";
 
 /**
  * The platform origin, and the LAST resort.
@@ -282,13 +279,9 @@ export async function notifyNextInSequence(requestId: string): Promise<void> {
   const req = await prisma.signatureRequest.findUnique({ where: { id: requestId }, include: { recipients: { orderBy: { order: "asc" } } } });
   if (!req || req.ordering !== "sequential") return;
   const next = req.recipients.find((r) => r.role !== "viewer" && r.status !== "signed");
-  // First reach of a pending signer → normal (at-most-once) send. Otherwise it's a
-  // re-nudge of an already-"sent"-but-unopened signer → reminder, so the
-  // at-most-once claim doesn't skip it.
+  // First reach of a pending signer → normal (at-most-once) send. A signer who
+  // already has their link gets nothing here: re-nudging them is a REMINDER, and
+  // reminders are the "Signing reminder" journey's (off unless the owner switches
+  // it on) — this used to send one by itself.
   if (next && next.status !== "sent" && next.status !== "viewed") await notifyRecipient(next.id);
-  // A re-nudge IS a reminder: only while the owner has signing reminders on
-  // (off by default) — it used to go out regardless of that switch.
-  else if (next && !next.viewedAt && (await automationOn(SIGNING_AUTO_REMINDERS_KEY, req.tenantId))) {
-    await notifyRecipient(next.id, { reminder: true });
-  }
 }

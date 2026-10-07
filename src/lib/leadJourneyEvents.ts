@@ -79,3 +79,35 @@ export async function emitLeadJourneyEvent(
     // Deliberately swallowed — see ERROR ISOLATION above.
   }
 }
+
+/**
+ * The same, for something that happened to a CUSTOMER rather than a lead — a job
+ * card completed, a vehicle registered as a new delivery. These used to send the
+ * Google review request straight from the action; now they only tell the journey
+ * engine, and whatever journey the owner has switched on decides what goes out.
+ *
+ * Same contract as emitLeadJourneyEvent: Marketing-gated, never rejects, and
+ * `occurrence` makes each firing distinct (a reopened, re-completed job card is a
+ * second completion).
+ */
+export async function emitContactJourneyEvent(
+  trigger: JourneyEventTrigger,
+  contactId: string,
+  options: { occurrence: string; payload?: Record<string, unknown> },
+): Promise<void> {
+  try {
+    if (!(await isModuleEnabled("marketing"))) return;
+    // Scoped client: a contact outside this workspace reads as missing.
+    const contact = await prisma.contact.findUnique({ where: { id: contactId }, select: { id: true } });
+    if (!contact) return;
+    await emitJourneyEvent({
+      type: trigger,
+      entityType: "contact",
+      entityId: contact.id,
+      payload: options.payload ?? {},
+      dedupeKey: `contact-event:${trigger}:${contactId}:${options.occurrence}`,
+    });
+  } catch {
+    // Deliberately swallowed — see ERROR ISOLATION above.
+  }
+}

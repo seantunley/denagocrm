@@ -942,13 +942,16 @@ test("the runner does not advance the cursor when a step asks to be retried", ()
     /if \(!\(result\.status === "waiting" && result\.retryStep\)\) \{\s*cursor = advanceCursor\(/,
     "a retry-in-place must skip advanceCursor entirely",
   );
-  // And the executor must actually set the flag on both held sends.
+  // And the executor must actually set the flag on every held send: the email
+  // and SMS consent defers, and a module step held by quiet hours (the survey
+  // reminder's frequency cap / quiet hours, via moduleStepResult).
   const executor = shipped("src/lib/journeyStepExecutor.ts");
   assert.equal(
     (executor.match(/retryStep: true/g) ?? []).length,
-    2,
-    "both the email and the SMS consent defers must ask to be retried",
+    3,
+    "the email, SMS and module-step defers must each ask to be retried",
   );
+  assert.match(executor, /case "deferred":\s*return \{ status: "waiting", note: `\$\{what\} held for \$\{outcome\.reason\}`, nextRunAt: outcome\.until, retryStep: true \};/);
   assert.ok(
     !/nextStepId: step\.id/.test(executor),
     "the old branch-override spelling silently fails inside a container",

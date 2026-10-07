@@ -234,7 +234,9 @@ test("the marketing gate moved with the engine, not lost with it", () => {
 const EMITTED_EVENT_TRIGGERS = (() => {
   const found = new Set<string>();
   for (const rel of ALL_SOURCES) {
-    for (const [, trigger] of shipped(rel).matchAll(/emitLeadJourneyEvent\(\s*"([a-z_]+)"/g)) {
+    // emitContactJourneyEvent is the same emitter for a customer rather than a
+    // lead (a job card completed, a vehicle delivered) — same gate, same contract.
+    for (const [, trigger] of shipped(rel).matchAll(/emit(?:Lead|Contact)JourneyEvent\(\s*"([a-z_]+)"/g)) {
       found.add(trigger);
     }
   }

@@ -5,7 +5,6 @@ import { requireTenantOwner } from "@/lib/auth";
 import { getSetting, putSetting } from "@/lib/settings";
 import { logAudit } from "@/lib/audit";
 import { withActingStaffScope } from "@/lib/actingScope";
-import { SIGNING_AUTO_REMINDERS_KEY, signingAutoRemindersOn } from "@/lib/signingReminders";
 import {
   parseOtpPolicy,
   parseOtpMinValue,
@@ -84,38 +83,5 @@ export async function saveSigningSecuritySettings(
   });
 }
 
-/** Whether signers get an automatic reminder. Owner-only, like the rest of this page. */
-export async function readSigningAutoReminders(): Promise<boolean> {
-  return withActingStaffScope(async () => {
-    await requireTenantOwner();
-    return signingAutoRemindersOn();
-  });
-}
-
-/**
- * Switch automatic signing reminders on or off. A reminder is a message to a
- * customer that nobody pressed Send on, so it is the owner's call and audited.
- */
-export async function saveSigningAutoReminders(
-  _prev: { error?: string; ok?: string } | undefined,
-  formData: FormData,
-): Promise<{ error?: string; ok?: string }> {
-  return withActingStaffScope(async () => {
-    const user = await requireTenantOwner();
-    const on = formData.get("autoReminders") === "on";
-    const before = await signingAutoRemindersOn();
-    await putSetting(SIGNING_AUTO_REMINDERS_KEY, on ? "true" : "false");
-    if (before !== on) {
-      await logAudit({
-        action: "signing.auto_reminders_changed",
-        summary: `Automatic signing reminders switched ${on ? "on" : "off"}`,
-        entityType: "AppSetting",
-        entityId: SIGNING_AUTO_REMINDERS_KEY,
-        userName: user.name,
-        metadata: { before, after: on },
-      });
-    }
-    revalidatePath("/settings/signing-security");
-    return { ok: on ? "On — signers get one reminder after 3 days." : "Off — no automatic reminders." };
-  });
-}
+// Automatic signing reminders were switched here. They are the ready-made
+// "Signing reminder" journey now, switched on Journeys — this page shows its state.

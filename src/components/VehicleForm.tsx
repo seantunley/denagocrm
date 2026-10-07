@@ -257,8 +257,8 @@ export default function VehicleForm({
                 This is a new customer delivery
               </span>
               <span className="mt-1 block text-[11px] leading-4 text-muted-foreground">
-                Emails the customer the delivery survey (if one is switched on) and a Google review request (if
-                review requests are on in Settings → Automatic jobs &amp; messages).
+                Emails the customer the delivery survey (if one is switched on) and whatever journey is on for a
+                new delivery — e.g. the ready-made Google review request, switched on or off in Journeys.
               </span>
             </span>
           </label>

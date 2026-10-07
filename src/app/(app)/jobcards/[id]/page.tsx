@@ -819,7 +819,7 @@ export default async function JobCardDetailPage({
                 </SaveButton>
                 <p className="mt-2 text-xs text-muted-foreground">
                   Completing also sends the customer whatever is switched on for completed job cards — a Google
-                  review request, a survey — in{" "}
+                  review request journey, a survey — see{" "}
                   <a href="/settings/automatic" className="underline">Settings → Automatic jobs &amp; messages</a>.
                 </p>
               </SaveForm>

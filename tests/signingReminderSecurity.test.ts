@@ -29,34 +29,30 @@ test("portal signing links are limited to the authenticated contact email", () =
   );
 });
 
-test("automation cron runs SignatureRequest reminders", () => {
-  // Invoked through the budget-aware phase() helper rather than called inline,
-  // so this now asserts BOTH that the cron runs it and that it is subject to the
-  // route deadline like every other side-effecting queue.
-  assert.match(
-    cronSource,
-    /phase\(\s*"signature-request-reminders",\s*runSignatureRequestReminders/,
-  );
+test("the automation cron no longer sends signing reminders — the journey does", () => {
+  // One engine for automatic customer messages (2026-10-06): the reminder is the
+  // ready-made "Signing reminder" journey, off unless the owner switches it on.
+  const cronCode = cronSource.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+  assert.doesNotMatch(cronCode, /signature-request-reminders|runSignatureRequestReminders|signingReminders/);
+  assert.doesNotMatch(reminderSource, /export async function runSignatureRequestReminders|getSetting\(/, "no second, switch-gated sender");
+  // The Signing security page shows the journey's state instead of its own switch.
+  const page = readFileSync("src/app/(app)/settings/signing-security/page.tsx", "utf8");
+  assert.doesNotMatch(page, /SigningRemindersForm/);
+  assert.match(page, /readyMade\.rows\.find\(\(row\) => row\.key === "signing-reminders"\)/);
+  assert.match(page, /href="\/journeys"/);
 });
 
-test("automatic signing reminders are OFF unless the owner switches them on", () => {
-  // A reminder is a message to a customer nobody pressed Send on; it went out to
-  // every signer by default, with no setting anywhere in the app.
-  assert.match(reminderSource, /export const SIGNING_AUTO_REMINDERS_KEY = "SIGNING_AUTO_REMINDERS";/);
-  assert.match(reminderSource, /return \(await getSetting\(SIGNING_AUTO_REMINDERS_KEY\)\.catch\(\(\) => null\)\) === "true";/, "unset or unreadable = off");
-  const run = reminderSource.slice(reminderSource.indexOf("export async function runSignatureRequestReminders"));
-  assert.match(run, /^export async function runSignatureRequestReminders\(\): Promise<number> \{\s*if \(!\(await signingAutoRemindersOn\(\)\)\) return 0;/, "checked before anything is read or sent");
-  const action = readFileSync("src/app/actions/signingSecuritySettings.ts", "utf8");
-  const save = action.slice(action.indexOf("export async function saveSigningAutoReminders"));
-  assert.match(save, /const user = await requireTenantOwner\(\);/);
-  assert.match(save, /action: "signing\.auto_reminders_changed"/);
-  assert.match(readFileSync("src/app/(app)/settings/signing-security/page.tsx", "utf8"), /<SigningRemindersForm initial=\{autoReminders\} \/>/);
-});
-
-test("scheduled reminders use recipient delivery age and the live dispatch path", () => {
+test("reminders use recipient delivery age and the live dispatch path, once per signer", () => {
   assert.match(reminderSource, /signatureEvent\.groupBy/);
   assert.match(reminderSource, /type:\s*\{\s*in:\s*\["sent",\s*"delivered"\]\s*\}/);
-  assert.match(reminderSource, /notifyRecipient\(recipient\.id,\s*\{\s*reminder:\s*true\s*\}\)/);
+  assert.match(reminderSource, /notifyRecipient\(recipientId,\s*\{\s*reminder:\s*true\s*\}\)/);
   assert.match(reminderSource, /remindedAt:\s*null/);
   assert.doesNotMatch(reminderSource, /signToken|\/sign\/quote/);
+  // Every query names the tenant: the sweep runs per workspace from the journeys cron.
+  const sweep = reminderSource.slice(reminderSource.indexOf("export async function signersAwaitingReminder"), reminderSource.indexOf("export async function remindSigner"));
+  for (const model of ["signatureRecipient", "signatureEvent", "signatureRequest", "quote", "jobCard"]) {
+    const at = sweep.indexOf(`prisma.${model}.`);
+    assert.ok(at !== -1, `${model} read`);
+    assert.match(sweep.slice(at, at + 160), /tenantId/, `${model} read names the tenant`);
+  }
 });

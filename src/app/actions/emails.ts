@@ -199,13 +199,10 @@ export async function saveSmtpSettings(formData: FormData) {
 export async function saveServiceReminderSettings(formData: FormData) {
   return asActionResult(async () => {
     await requireTenantOwner();
-    const entries: Record<string, string> = {
-      SERVICE_REMINDER_ENABLED: formData.get("enabled") === "on" ? "true" : "false",
-      SERVICE_REMINDER_TEMPLATE_ID: String(formData.get("templateId") ?? "").trim(),
-    };
-    for (const [key, value] of Object.entries(entries)) {
-      await putSetting(key, value);
-    }
+    // Only the template. Whether reminders go out at all is the "Service-due
+    // reminder" journey's switch now; SERVICE_REMINDER_ENABLED is left as it was
+    // (the seeding reads it once as the owner's prior approval).
+    await putSetting("SERVICE_REMINDER_TEMPLATE_ID", String(formData.get("templateId") ?? "").trim());
     revalidatePath("/settings");
   });
 }

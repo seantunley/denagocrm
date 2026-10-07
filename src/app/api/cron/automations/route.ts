@@ -2,8 +2,6 @@ import { NextRequest, NextResponse } from "next/server";
 import { pruneRateLimits } from "@/lib/rateLimit";
 
 export const maxDuration = 60;
-import { runServiceReminders } from "@/lib/serviceReminders";
-import { runSignatureRequestReminders } from "@/lib/signingReminders";
 import { recoverStaleSigningClaims } from "@/lib/signing/dispatch";
 import { recoverStrandedCompletions } from "@/lib/signing/recoverCompletions";
 import { syncFacebookLeads } from "@/lib/metaLeadSync";
@@ -66,8 +64,10 @@ async function runOperationalQueues(tenantId: string | null, budget: CronSliceCo
   // well is exactly how a tenant got TWO anniversary emails — the three dedupe
   // stores (AutomationLog, JourneyEvent.dedupeKey, Communication.subject LIKE)
   // could not see each other.
-  const remindersSent = on("automotive") ? await phase("service-reminders", runServiceReminders, -1) : null;
-  const signingReminders = await phase("signature-request-reminders", runSignatureRequestReminders, -1);
+  // "service-reminders" and "signature-request-reminders" used to run here too.
+  // Both are journeys now (triggers service_due / signing_unsigned, swept on
+  // /api/cron/journeys) — one engine for every automatic customer message, so a
+  // customer can't be reminded by two.
   const staleSigningClaims = await phase("stale-signing-claims", recoverStaleSigningClaims, null);
   // Completions that committed but never notified anyone. Runs alongside the
   // stale-claim sweep because it is the same class of problem at the other end
@@ -111,8 +111,6 @@ async function runOperationalQueues(tenantId: string | null, budget: CronSliceCo
   // tick asks the same questions and gets the same answers.
   const repairs = await phase("repairs-detectors", runRepairsDetectors, null);
   return {
-    remindersSent,
-    signingReminders,
     staleSigningClaims,
     strandedCompletions,
     fbLeads,
