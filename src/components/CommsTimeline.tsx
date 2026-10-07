@@ -4,6 +4,7 @@ import { SaveForm, SaveButton } from "@/components/SaveForm";
 import { formatDateTime } from "@/lib/format";
 import { storedFileSrc } from "@/lib/storedFileSrc";
 import PasteImageInput from "@/components/PasteImageInput";
+import { SEEN_HINT, seenLabel } from "@/lib/emailOpenTracking";
 
 /* eslint-disable @next/next/no-img-element */
 const logo = (src: string, alt: string) => (
@@ -29,6 +30,10 @@ type Comm = {
   body: string;
   attachmentUrl?: string | null;
   occurredAt: Date;
+  /** The customer opened our outbound message (email open tracking, WhatsApp read receipts). */
+  seenAt?: Date | null;
+  /** How many times a tracked email was opened. */
+  openCount?: number;
   user: { name: string };
   /**
    * Which customer this entry belongs to. Only set where the timeline shows an
@@ -143,6 +148,11 @@ export default function CommsTimeline({
                     {formatDateTime(c.occurredAt)} — {c.user.name}
                     {c.ownerLabel ? ` · ${c.ownerLabel}` : ""}
                   </span>
+                  {seenLabel(c) && (
+                    <span className="badge bg-emerald-500/15 text-emerald-300" title={c.type === "email" ? SEEN_HINT : undefined}>
+                      {seenLabel(c)}
+                    </span>
+                  )}
                 </div>
                 {c.subject && (
                   <p className="text-sm font-medium text-slate-300">{c.subject}</p>

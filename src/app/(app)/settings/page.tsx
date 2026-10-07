@@ -26,7 +26,9 @@ import {
   resetSigningEmailTemplate,
   previewSigningEmailTemplate,
   saveEmailHeaderStyle,
+  saveEmailOpenTracking,
 } from "@/app/actions/emails";
+import { EMAIL_OPEN_TRACKING_KEY, openTrackingOn } from "@/lib/emailOpenTracking";
 import {
   EMAIL_HEADER_STYLES,
   parseEmailHeaderStyle,
@@ -171,7 +173,7 @@ export default async function SettingsPage({
     ? await basePrisma.appSetting.findMany({
         where: {
           tenantId: signingTenantId,
-          key: { in: [...SIGNING_EMAIL_KINDS.map((k) => SIGNING_EMAILS[k].settingKey), "EMAIL_HEADER_STYLE"] },
+          key: { in: [...SIGNING_EMAIL_KINDS.map((k) => SIGNING_EMAILS[k].settingKey), "EMAIL_HEADER_STYLE", EMAIL_OPEN_TRACKING_KEY] },
         },
         select: { key: true, value: true },
       })
@@ -179,6 +181,7 @@ export default async function SettingsPage({
   const signingTemplate = (kind: SigningEmailKind) =>
     parseStoredSigningTemplate(signingOverrides.find((s) => s.key === SIGNING_EMAILS[kind].settingKey)?.value, kind);
   const emailHeaderStyle = parseEmailHeaderStyle(signingOverrides.find((s) => s.key === "EMAIL_HEADER_STYLE")?.value);
+  const emailOpenTracking = openTrackingOn(signingOverrides.find((s) => s.key === EMAIL_OPEN_TRACKING_KEY)?.value);
   const isOwner = isAdmin;
   // The System Log is TENANT-SCOPED. `basePrisma` bypasses the tenant guard, so the
   // unfiltered read this replaced handed every tenant owner every other tenant's
@@ -825,6 +828,21 @@ export default async function SettingsPage({
                   <SaveButton className="btn-secondary btn-sm">Save</SaveButton>
                   <span className="text-xs text-muted-foreground basis-full">
                     Pick Dark or Brand colour if your logo is drawn in white.
+                  </span>
+                </SaveForm>
+                <SaveForm success="Open tracking saved" resetOnSuccess={false} action={saveEmailOpenTracking} className="mb-3 flex flex-wrap items-end gap-2">
+                  <div>
+                    <label className="label">Open tracking</label>
+                    <select name="openTracking" className="input" defaultValue={emailOpenTracking ? "on" : "off"}>
+                      <option value="on">On — show when a customer opens an email</option>
+                      <option value="off">Off</option>
+                    </select>
+                  </div>
+                  <SaveButton className="btn-secondary btn-sm">Save</SaveButton>
+                  <span className="text-xs text-muted-foreground basis-full">
+                    Emails sent from the composer and quote emails carry an invisible image; when the customer&apos;s
+                    mail app loads it, the timeline shows 👁 Opened. Some apps load images on their own (Apple Mail)
+                    or block them, so it is a strong hint, not proof.
                   </span>
                 </SaveForm>
                 {[...new Set(SIGNING_EMAIL_KINDS.map((k) => SIGNING_EMAILS[k].group))].map((group) => (

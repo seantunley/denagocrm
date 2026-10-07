@@ -41,12 +41,29 @@ import { resolveActingTenant } from "@/lib/tenantContext";
 import { parseReplyTo } from "@/lib/replyToAddresses";
 import { tenantOrigin } from "@/lib/tenantOrigin";
 import { withActingStaffScope } from "@/lib/actingScope";
+import { EMAIL_OPEN_TRACKING_KEY } from "@/lib/emailOpenTracking";
 
 export type SendEmailState = { ok?: string; error?: string };
 
 async function tenantIdFor(userId: string): Promise<string | null> {
   const tenant = await resolveActingTenant(userId);
   return "tenantId" in tenant ? tenant.tenantId : null;
+}
+
+type ComposerUser = Awaited<ReturnType<typeof requireAnyPermission>>;
+
+/** The composer email's HTML: the message plus the sender's signature. One builder, so Preview is what Send sends. */
+async function composerHtml(user: ComposerUser, bodyHtml: string, profile: Awaited<ReturnType<typeof getCompanyProfile>>) {
+  // The workspace's signature design (Settings → My account → Email signature), same as the settings preview.
+  const design = parseSignatureDesign(await getSetting(SIGNATURE_DESIGN_KEY));
+  const company = signatureCompanyFrom(profile, await tenantOrigin(await tenantIdFor(user.id)), design);
+  return buildEmailHtml(bodyHtml, buildSignature(user, company));
+}
+
+/** The composer's Preview (Sean, 2026-10-07: "a preview on the email, to view before it sends"). Sends nothing. */
+export async function previewComposerEmail(bodyHtml: string): Promise<{ html: string }> {
+  const user = await requireAnyPermission(...CUSTOMER_RECORD_WRITE_PERMISSIONS);
+  return { html: await composerHtml(user, String(bodyHtml ?? "").trim(), await getCompanyProfile()) };
 }
 
 /** Sends an email and logs it as an outbound communication on the lead/contact. */
@@ -87,9 +104,7 @@ export async function sendEmailAction(
     return { error: "You don't have access to that lead." };
   }
   const profile = await getCompanyProfile();
-  const design = parseSignatureDesign(await getSetting(SIGNATURE_DESIGN_KEY));
-  const signature = buildSignature(user, signatureCompanyFrom(profile, await tenantOrigin(await tenantIdFor(user.id)), design));
-  const html = buildEmailHtml(bodyHtml, signature);
+  const html = await composerHtml(user, bodyHtml, profile);
 
   // Library attachments (selected version ids)
   const attachIds = formData.getAll("attach").map(String).filter(Boolean);
@@ -142,6 +157,10 @@ export async function sendEmailAction(
     html,
     attachments,
     replyTo: replyTo.value ?? undefined,
+    // "Opened" on the timeline entry below (unless switched off in Settings → Email).
+    trackOpens: true,
+    // The person writing it: "Sean Tunley · Denago Cape Town" on the From line.
+    senderName: user.name,
   });
   if (!result.ok) return { error: result.error };
 
@@ -158,6 +177,7 @@ export async function sendEmailAction(
       contactId,
       userId: user.id,
       tenantId: await customerRecordTenantId({ contactId, leadId }),
+      ...(result.openToken ? { openToken: result.openToken } : {}),
     },
   });
   await logAudit({
@@ -366,6 +386,23 @@ export async function saveEmailHeaderStyle(formData: FormData) {
       create: { tenantId, key: "EMAIL_HEADER_STYLE", value: style },
     });
     await logAudit({ action: "settings.email_header.saved", summary: `Set the email header to ${EMAIL_HEADER_STYLES[style]}`, user });
+    revalidatePath("/settings");
+  });
+}
+
+/** Settings → Email: whether composer and quote emails carry the open-tracking image. */
+export async function saveEmailOpenTracking(formData: FormData) {
+  return asActionResult(async () => {
+    const user = await requireTenantOwner();
+    const tenantId = await getActiveTenantId();
+    if (!tenantId) refuse("No workspace attached to this sign-in — sign out and back in.");
+    const value = formData.get("openTracking") === "off" ? "off" : "on";
+    await basePrisma.appSetting.upsert({
+      where: { tenantId_key: { tenantId, key: EMAIL_OPEN_TRACKING_KEY } },
+      update: { value },
+      create: { tenantId, key: EMAIL_OPEN_TRACKING_KEY, value },
+    });
+    await logAudit({ action: "settings.email_open_tracking.saved", summary: `Turned email open tracking ${value}`, user });
     revalidatePath("/settings");
   });
 }
