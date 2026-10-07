@@ -65,8 +65,12 @@ const nextConfig: NextConfig = {
           { key: "X-Content-Type-Options", value: "nosniff" },
           { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
           {
+            // microphone=(self), not (): the empty list forbade the microphone
+            // on every page of the site, whatever the browser allowed — so
+            // asking DAX by voice and voice debriefs failed everywhere with
+            // "allow it for this site". Our own pages only; never third parties.
             key: "Permissions-Policy",
-            value: "camera=(self), microphone=(), geolocation=(), browsing-topics=()",
+            value: "camera=(self), microphone=(self), geolocation=(), browsing-topics=()",
           },
           {
             key: "Strict-Transport-Security",

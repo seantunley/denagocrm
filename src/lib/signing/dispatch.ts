@@ -8,6 +8,7 @@ import { tenantOrigin } from "@/lib/tenantOrigin";
 import { signingEmailContent, signingWhatsAppText } from "./signingEmail";
 import { usableCapability } from "./tokenVault";
 import { signingRecord } from "@/lib/outboundMessageLog";
+import { mirrorQuoteSent } from "./quoteMirror";
 import { automationOn } from "@/lib/automationSwitch";
 
 const SIGNING_AUTO_REMINDERS_KEY = "SIGNING_AUTO_REMINDERS";
@@ -146,6 +147,8 @@ export async function notifyRecipient(recipientId: string, opts?: { reminder?: b
     // above, and an unconditional update would stomp that newer state back to
     // "sent"/"pending". count !== 1 → someone else already resolved it; leave it.
     await prisma.signatureRecipient.updateMany({ where: { id: r.id, status: "sending" }, data: { status: delivered ? "sent" : "pending", sendingAt: null } });
+    // The customer has it now: a draft quote behind this request is sent.
+    if (delivered) await mirrorQuoteSent({ tenantId: r.request.tenantId, quoteId: r.request.quoteId, requestId: r.requestId }, r);
   }
   return { reachable: true, delivered };
 }

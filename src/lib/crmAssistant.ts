@@ -14,6 +14,8 @@ import { getCompanyProfile } from "./companyProfile";
 import { searchBotKnowledge } from "./botKnowledge";
 import { isModuleEnabled } from "./modules/enabled";
 import { ownedWriteTenantId } from "./tenantWrite";
+import { isCustomerSigner } from "./signing/quoteMirror";
+import { firstCustomerView, memoCustomer } from "./signing/customerView";
 import { accessibleTestDriveWhere } from "./testDriveAccess";
 import { contactActivityWhere, contactCommunicationWhere, latestContactAt } from "./customerContact";
 import {
@@ -106,6 +108,8 @@ const fuzzy = (needle: string) => ({ contains: needle, mode: "insensitive" as co
 const dateKey = (d: Date | null | undefined) => (d ? johannesburgDateKey(d) : "never");
 const daysAgo = (d: Date) => Math.floor((Date.now() - d.getTime()) / DAY);
 const clip = (s: string | null | undefined, n: number) => (s ? (s.length > n ? `${s.slice(0, n)}…` : s) : null);
+/** Cancelled activities, in both spellings the data holds. */
+const CANCELLED = ["canceled", "cancelled"];
 /**
  * A quote sent from the signing hub keeps its own status "draft" and no
  * viewedAt — sending, opening and signing are recorded on its SignatureRequest
@@ -120,19 +124,21 @@ async function signingFor(quoteIds: string[]): Promise<Map<string, Signing>> {
   const requests = await prisma.signatureRequest.findMany({
     where: { quoteId: { in: quoteIds }, deletedAt: null, status: { notIn: ["draft", "voided"] } },
     orderBy: { createdAt: "desc" },
-    select: { quoteId: true, status: true, sentAt: true, recipients: { select: { viewedAt: true, signedAt: true } } },
+    select: {
+      quoteId: true, status: true, sentAt: true,
+      recipients: { select: { role: true, email: true, viewedAt: true, signedAt: true } },
+    },
   });
+  const isCustomer = memoCustomer((r) => isCustomerSigner(r, ownedWriteTenantId()));
   const byQuote = new Map<string, Signing>();
   for (const r of requests) {
     if (!r.quoteId || byQuote.has(r.quoteId)) continue;
-    const times = (pick: (x: { viewedAt: Date | null; signedAt: Date | null }) => Date | null) =>
-      r.recipients.map(pick).filter((d): d is Date => d !== null).map((d) => d.getTime());
-    const viewed = times((x) => x.viewedAt);
-    const signed = times((x) => x.signedAt);
+    const signed = r.recipients.map((x) => x.signedAt).filter((d): d is Date => d !== null).map((d) => d.getTime());
     byQuote.set(r.quoteId, {
       status: r.status,
       sentAt: r.sentAt,
-      viewedAt: viewed.length ? new Date(Math.min(...viewed)) : null,
+      // The CUSTOMER's first open — a staff countersigner opening it isn't her.
+      viewedAt: await firstCustomerView(r.recipients, isCustomer),
       signedAt: r.status === "completed" && signed.length ? new Date(Math.max(...signed)) : null,
     });
   }
@@ -186,7 +192,7 @@ async function findLeads(user: User, raw: z.infer<typeof leadArgs>): Promise<Too
       take: CANDIDATES,
       select: {
         id: true, title: true, name: true, status: true, valueCents: true, source: true,
-        createdAt: true, stageEnteredAt: true,
+        createdAt: true, stageEnteredAt: true, contactId: true,
         stage: { select: { name: true } },
         product: { select: { name: true } },
         assignedTo: { select: { name: true } },
@@ -206,8 +212,25 @@ async function findLeads(user: User, raw: z.infer<typeof leadArgs>): Promise<Too
 
   // Last contact = the latest message either way, call or meeting. Not an
   // internal note or a completed to-do, and not the lead's own updatedAt
-  // (editing a field touches it).
-  const withTouch = leads.map((lead) => ({ lead, lastContact: latestContactAt(lead.communications, lead.activities) }));
+  // (editing a field touches it). The customer's own rows that sit on no lead
+  // count too (a Messenger message matches the customer first — leadIdle.ts).
+  const contactIds = [...new Set(leads.map((l) => l.contactId).filter((id): id is string => !!id))];
+  const [contactComms, contactDone] = contactIds.length
+    ? await Promise.all([
+        prisma.communication.groupBy({ by: ["contactId"], where: { contactId: { in: contactIds }, leadId: null, ...contactCommunicationWhere }, _max: { occurredAt: true } }),
+        prisma.activity.groupBy({ by: ["contactId"], where: { contactId: { in: contactIds }, leadId: null, ...contactActivityWhere }, _max: { doneAt: true } }),
+      ])
+    : [[], []];
+  const customerTouch = new Map<string, number>();
+  for (const at of [...contactComms.map((r) => [r.contactId, r._max.occurredAt] as const), ...contactDone.map((r) => [r.contactId, r._max.doneAt] as const)]) {
+    if (at[0] && at[1]) customerTouch.set(at[0], Math.max(customerTouch.get(at[0]) ?? 0, at[1].getTime()));
+  }
+  const withTouch = leads.map((lead) => {
+    const own = latestContactAt(lead.communications, lead.activities);
+    const viaCustomer = lead.contactId ? customerTouch.get(lead.contactId) : undefined;
+    const lastContact = viaCustomer && (!own || viaCustomer > own.getTime()) ? new Date(viaCustomer) : own;
+    return { lead, lastContact };
+  });
   const cutoff = args.noContactDays ? Date.now() - args.noContactDays * DAY : null;
   const filtered = cutoff === null
     ? withTouch
@@ -282,11 +305,14 @@ async function findQuotes(user: User, raw: z.infer<typeof quoteArgs>): Promise<T
   const hub = args.awaitingSignature || args.viewed !== undefined
     ? await prisma.signatureRequest.findMany({
         where: { deletedAt: null, quoteId: { not: null }, status: { in: LIVE_SIGNING } },
-        select: { quoteId: true, recipients: { select: { viewedAt: true } } },
+        select: { quoteId: true, recipients: { select: { role: true, email: true, viewedAt: true } } },
       })
     : [];
   const outForSigning = hub.map((r) => r.quoteId!);
-  const openedInHub = hub.filter((r) => r.recipients.some((x) => x.viewedAt)).map((r) => r.quoteId!);
+  // "Opened" = opened by the CUSTOMER, not a colleague reviewing or countersigning.
+  const isCustomer = memoCustomer((r) => isCustomerSigner(r, ownedWriteTenantId()));
+  const openedInHub: string[] = [];
+  for (const r of hub) if (await firstCustomerView(r.recipients, isCustomer)) openedInHub.push(r.quoteId!);
   const quotes = await prisma.quote.findMany({
     where: {
       deletedAt: null,
@@ -368,14 +394,26 @@ async function findActivities(user: User, raw: z.infer<typeof activityArgs>): Pr
     today_and_overdue: { lt: new Date(startOfToday.getTime() + DAY) },
     this_week: { gte: startOfToday, lt: new Date(startOfToday.getTime() + 7 * DAY) },
     upcoming: { gte: new Date() },
+    past: { lt: new Date() },
   }[args.when];
+  // A specific day or period ("22 September", "last month") replaces the window.
+  const dated = args.from || args.to
+    ? {
+        ...(args.from ? { gte: new Date(`${args.from}T00:00:00+02:00`) } : {}),
+        ...(args.to ? { lt: new Date(new Date(`${args.to}T00:00:00+02:00`).getTime() + DAY) } : {}),
+      }
+    : null;
+  // What's still to do is "planned". What HAPPENED is done too — a golf day on
+  // 22 September is marked done afterwards and must still be found. Cancelled is
+  // never shown (both spellings are in the data).
+  const history = args.when === "past" || dated !== null;
   const take = args.limit ?? 15;
   const activities = await prisma.activity.findMany({
     where: {
       ...(ids === null ? {} : { id: { in: ids } }),
-      status: "planned",
+      status: history ? { notIn: CANCELLED } : "planned",
       availabilityBlock: false,
-      dueDate: range,
+      dueDate: dated ?? range,
       ...(args.type ? { type: fuzzy(args.type) } : {}),
       AND: [
         // Theirs, or a meeting they're an attendee of.
@@ -385,10 +423,11 @@ async function findActivities(user: User, raw: z.infer<typeof activityArgs>): Pr
         ...(args.search ? [{ OR: [{ summary: fuzzy(args.search) }, { note: fuzzy(args.search) }] }] : []),
       ],
     },
-    orderBy: { dueDate: args.when === "overdue" ? "desc" : "asc" },
+    // Most recent first when looking back with no dates ("what golf days did we have").
+    orderBy: { dueDate: args.when === "overdue" || (args.when === "past" && !dated) ? "desc" : "asc" },
     take: take + 1,
     select: {
-      id: true, type: true, summary: true, dueDate: true, leadId: true, contactId: true,
+      id: true, type: true, summary: true, dueDate: true, status: true, leadId: true, contactId: true,
       assignedTo: { select: { name: true } },
       lead: { select: { name: true } },
     },
@@ -402,7 +441,8 @@ async function findActivities(user: User, raw: z.infer<typeof activityArgs>): Pr
       type: a.type,
       summary: a.summary,
       due: dateKey(a.dueDate),
-      ...(a.dueDate < startOfToday ? { overdue: true } : {}),
+      ...(history ? { status: a.status } : {}),
+      ...(a.status === "planned" && a.dueDate < startOfToday ? { overdue: true } : {}),
       assignedTo: a.assignedTo.name,
       customer: a.lead?.name ?? null,
       leadId: a.leadId,
@@ -458,21 +498,31 @@ async function leadBrief(user: User, raw: z.infer<typeof leadBriefArgs>): Promis
       id: true, title: true, name: true, status: true, valueCents: true, quantity: true, source: true,
       notes: true, research: true, researchedAt: true, createdAt: true, stageEnteredAt: true,
       wonAt: true, lostAt: true, lostReason: true,
+      contactId: true,
       stage: { select: { name: true } },
       product: { select: { name: true } },
       assignedTo: { select: { name: true } },
-      communications: {
-        orderBy: { occurredAt: "desc" },
-        take: 15,
-        select: { occurredAt: true, direction: true, type: true, subject: true, body: true },
-      },
-      activities: {
-        orderBy: { dueDate: "desc" },
-        take: 10,
-        select: { type: true, summary: true, status: true, dueDate: true, doneAt: true, note: true },
-      },
     },
   });
+  // The lead's own messages and activities AND the customer's that aren't on any
+  // lead: an inbound Messenger/Instagram message matches the customer first, and
+  // the customer panel books follow-ups with no lead (leadIdle.ts counts both).
+  // Not the customer's OTHER leads — those are other deals.
+  const theirs = { OR: [{ leadId: lead.id }, ...(lead.contactId ? [{ contactId: lead.contactId, leadId: null }] : [])] };
+  const [communications, activities] = await Promise.all([
+    prisma.communication.findMany({
+      where: theirs,
+      orderBy: { occurredAt: "desc" },
+      take: 15,
+      select: { occurredAt: true, direction: true, type: true, subject: true, body: true },
+    }),
+    prisma.activity.findMany({
+      where: theirs,
+      orderBy: { dueDate: "desc" },
+      take: 10,
+      select: { type: true, summary: true, status: true, dueDate: true, doneAt: true, note: true },
+    }),
+  ]);
   // Test drives for this lead, through the test-drive page's own visibility rule.
   const testDrives = (await isModuleEnabled("automotive"))
     ? await prisma.testDriveBooking.findMany({
@@ -511,13 +561,13 @@ async function leadBrief(user: User, raw: z.infer<typeof leadBriefArgs>): Promis
       ...(lead.lostAt ? { lost: dateKey(lead.lostAt), lostReason: lead.lostReason } : {}),
       notes: clip(lead.notes, 800),
       research: lead.research ? { when: dateKey(lead.researchedAt), summary: clip(lead.research, 1500) } : null,
-      messages: lead.communications.map((c) => ({
+      messages: communications.map((c) => ({
         when: dateKey(c.occurredAt),
         from: c.direction === "inbound" ? "customer" : "us",
         channel: c.type,
         text: clip([c.subject, c.body].filter(Boolean).join(" — "), 300),
       })),
-      activities: lead.activities.map((a) => ({
+      activities: activities.map((a) => ({
         type: a.type,
         summary: a.summary,
         status: a.status,
@@ -729,6 +779,23 @@ const when = (d: Date) =>
 const nameOfContact = (c: { firstName: string; lastName: string | null } | null | undefined) => (c ? contactName(c) : null);
 
 /**
+ * Which activities `schedule` shows. It is the AVAILABILITY tool: what is still
+ * planned is busy time. A meeting later today can be marked done early (the
+ * completion guard only blocks future days), so a done activity that hasn't
+ * ended yet is NOT busy — it would make DAX turn down a free slot. A done
+ * activity wholly in the past is history ("what was on 22 September"), shown
+ * with its status. Cancelled never shows.
+ */
+export function scheduleStatusWhere(now: Date) {
+  return {
+    OR: [
+      { status: "planned" },
+      { status: "done", OR: [{ endDate: { lt: now } }, { endDate: null, dueDate: { lt: now } }] },
+    ],
+  };
+}
+
+/**
  * Who is busy when — meetings, blocked time and test drives (with their demo
  * vehicle) — so a suggested time never clashes. Through the calendar's own
  * visibility (getAccessibleActivityIds, accessibleTestDriveWhere). A blocked-out
@@ -748,9 +815,9 @@ async function schedule(user: User, raw: z.infer<typeof scheduleArgs>): Promise<
   const activities = await prisma.activity.findMany({
     where: {
       ...(ids === null ? {} : { id: { in: ids } }),
-      status: "planned",
       dueDate: { lt: end },
       AND: [
+        scheduleStatusWhere(new Date()),
         { OR: [{ endDate: { gte: start } }, { endDate: null, dueDate: { gte: start } }] },
         person ? { OR: [{ assignedToId: person.id }, { attendees: { some: { userId: person.id } } }] } : {},
       ],
@@ -758,7 +825,7 @@ async function schedule(user: User, raw: z.infer<typeof scheduleArgs>): Promise<
     orderBy: { dueDate: "asc" },
     take: 80,
     select: {
-      type: true, summary: true, dueDate: true, endDate: true, allDay: true, availabilityBlock: true,
+      type: true, summary: true, status: true, dueDate: true, endDate: true, allDay: true, availabilityBlock: true,
       assignedTo: { select: { name: true } },
       attendees: { select: { user: { select: { name: true } } } },
     },
@@ -795,6 +862,7 @@ async function schedule(user: User, raw: z.infer<typeof scheduleArgs>): Promise<
         until: a.endDate ? when(a.endDate) : null,
         allDay: a.allDay,
         what: a.availabilityBlock ? "busy (blocked out)" : `${a.type}: ${a.summary}`,
+        ...(a.availabilityBlock ? {} : { status: a.status }),
         people: [a.assignedTo.name, ...a.attendees.map((x) => x.user.name)],
       })),
       testDrives: testDrives.map((t) => ({
