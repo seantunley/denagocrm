@@ -1,5 +1,5 @@
 import { notFound } from "next/navigation";
-import { getAccessibleLeadIds, getAccessibleVehicleIds, requireAnyPermission } from "@/lib/permissions";
+import { getAccessibleJobCardIds, getAccessibleLeadIds, getAccessibleQuoteIds, getAccessibleVehicleIds, requireAnyPermission } from "@/lib/permissions";
 import { requireLayoutEditor } from "@/lib/docbuilder/layoutAccess";
 import { prisma } from "@/lib/db";
 import { contactName } from "@/lib/format";
@@ -73,22 +73,30 @@ export default async function DocEditorPage({
 
   const initialDoc = read.doc;
   const required = requiredRecordKind(template.key);
+  // Every preview record is scoped to what the caller may see (as BuilderSection
+  // does): the editor is open to document_templates.manage holders too
+  // (layoutAccess), who may hold no quotes or workshop permission at all — and
+  // the labels carry customer names, quote and job numbers, vehicle models.
+  const scoped = (ids: string[] | null) => (ids === null ? {} : { id: { in: ids } });
   const [quotes, jobCards, leads, claims] = await Promise.all([
     required !== "quote" && required !== "either"
       ? []
-      : prisma.quote.findMany({
-          where: { supersededAt: null },
-          orderBy: { createdAt: "desc" },
-          take: 100,
-          include: { contact: true },
-        }),
+      : getAccessibleQuoteIds(user).then((ids) =>
+          prisma.quote.findMany({
+            where: { supersededAt: null, ...scoped(ids) },
+            orderBy: { createdAt: "desc" },
+            take: 100,
+            include: { contact: true },
+          })),
     required !== "jobcard" && required !== "either"
       ? []
-      : prisma.jobCard.findMany({
-          orderBy: { openedAt: "desc" },
-          take: 100,
-          include: { contact: true, vehicle: true },
-        }),
+      : getAccessibleJobCardIds(user).then((ids) =>
+          prisma.jobCard.findMany({
+            where: scoped(ids),
+            orderBy: { openedAt: "desc" },
+            take: 100,
+            include: { contact: true, vehicle: true },
+          })),
     // Scoped to the leads / vehicles the caller may see, as the print pages are.
     required !== "lead"
       ? []

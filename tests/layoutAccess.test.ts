@@ -44,6 +44,21 @@ test("docbuilder.manage edits every layout; neither permission edits none", asyn
   for (const key of [...SEVEN, "quote", "custom"]) assert.equal(await canEditLayout(user, key), false, key);
 });
 
+test("the editor's preview-record picker lists only records the person may see (#791 review)", () => {
+  // Opening the editor to document_templates.manage holders opened its picker to
+  // people who may hold no quotes or workshop permission: every record list in it
+  // is scoped, or its labels leak customer names, quote/job numbers, vehicles.
+  const page = code("src/app/doc-editor/[id]/page.tsx");
+  const loader = page.slice(page.indexOf("const [quotes, jobCards, leads, claims] = await Promise.all(["), page.indexOf("const records = ["));
+  assert.match(loader, /getAccessibleQuoteIds\(user\)\.then\(\(ids\) =>\s*prisma\.quote\.findMany\(\{\s*where: \{ supersededAt: null, \.\.\.scoped\(ids\) \}/);
+  assert.match(loader, /getAccessibleJobCardIds\(user\)\.then\(\(ids\) =>\s*prisma\.jobCard\.findMany\(\{\s*where: scoped\(ids\)/);
+  assert.match(loader, /getAccessibleLeadIds\(user\)/);
+  assert.match(loader, /getAccessibleVehicleIds\(user\)/);
+  // No record table is read in there except behind its scope helper.
+  assert.equal((loader.match(/prisma\.\w+\.findMany/g) ?? []).length, 4);
+  assert.equal((loader.match(/getAccessible\w+Ids\(user\)\.then/g) ?? []).length, 4, "each of the four lists behind its scope");
+});
+
 test("every way into editing a layout goes through the same rule", () => {
   // The editor page: open to either permission, then this layout's rule.
   const page = code("src/app/doc-editor/[id]/page.tsx");
