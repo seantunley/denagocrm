@@ -145,7 +145,14 @@ export const tableBlockSchema = z.object({
  * template renders byte-for-byte as before; "showcase" draws it in the showcase
  * quotation's style (lib/doceditor/showcaseRender.ts).
  */
-const blockLook = z.enum(["standard", "showcase"]).optional();
+// "classic": the invoice's quieter look (2026-10-07 mock-up) — no boxes, plain
+// columns, label/value rows, a light table header.
+const blockLook = z.enum(["standard", "showcase", "classic"]).optional();
+/**
+ * The showcase bands (header, info strip, totals, footer) can be drawn in the
+ * same "classic" style. Optional: a document without it keeps its band look.
+ */
+const bandStyle = z.enum(["band", "classic"]).optional();
 
 // ── branded blocks (match the print templates) ──────────────────────
 export const bannerBlockSchema = z.object({
@@ -163,6 +170,8 @@ export const infoCardBlockSchema = z.object({
   lines: z.string().default("{{customer.phone}}\n{{customer.email}}"),
   accent: colorField("#ea580c"),
   look: blockLook,
+  /** Classic look: a thin rule down the left, between two side-by-side columns. */
+  divider: z.boolean().optional(),
 });
 export const lineItemColKeys = ["description", "qty", "unitPrice", "unitPriceExVat", "vat", "subtotal", "total"] as const;
 export const lineItemColumnSchema = z.object({
@@ -228,6 +237,10 @@ export const showcaseHeaderBlockSchema = z.object({
   showLogo: z.boolean().default(true),
   /** A slimmer band (no tagline) — the header repeated on a continuation page. */
   compact: z.boolean().optional(),
+  style: bandStyle,
+  /** Classic: the line under the title, and the small label above the number. */
+  subtitle: z.string().optional(),
+  numberLabel: z.string().optional(),
 });
 export const infoStripBlockSchema = z.object({
   ...base, type: z.literal("infoStrip"),
@@ -235,6 +248,7 @@ export const infoStripBlockSchema = z.object({
   items: z.array(z.object({
     icon: showcaseIcon, label: z.string().default(""), value: z.string().default(""), sub: z.string().default(""),
   })).default([]),
+  style: bandStyle,
 });
 /** A vehicle as the showcase shows it (lib/docbuilder/vehicleShowcase.ts VehicleShowcaseData). */
 export const frozenVehicleSchema = z.object({
@@ -276,6 +290,7 @@ export const totalsBoxBlockSchema = z.object({
   totalAmount: z.string().default("{{quote.total}}"),
   bg: colorField("#020617"),
   accent: colorField("#ea580c"),
+  style: bandStyle,
 });
 export const acceptanceBlockSchema = z.object({
   ...base, type: z.literal("acceptance"),
@@ -293,6 +308,8 @@ export const footerBandBlockSchema = z.object({
   accent: colorField("#ea580c"),
   /** Optional band photo (e.g. a skyline). Only an inline `data:image/…` is ever rendered. */
   bgImage: z.string().default(""),
+  /** Classic: one slim line (the subtitle, e.g. "name · website · Invoice no"), an accent mark beside it. */
+  style: bandStyle,
 });
 
 /** Conditional wrapper — nested blocks render only when `when` is truthy (safe expr engine). */

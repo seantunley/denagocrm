@@ -33,8 +33,8 @@ function money(amount: number, currency: string): string {
 
 /** Renders one block's CONTENT for the editing canvas. Chrome (handles, outline) is added by the wrapper. */
 export function BlockView({ block, active }: { block: DocumentBlock; active: boolean }) {
-  // Shared blocks drawn in the showcase quotation's style render its HTML, as the PDF does.
-  if ((block.type === "infoCard" || block.type === "lineItems" || block.type === "terms") && block.look === "showcase") {
+  // Shared blocks drawn in the showcase (or classic) style render its HTML, as the PDF does.
+  if ((block.type === "infoCard" || block.type === "lineItems" || block.type === "terms") && (block.look === "showcase" || block.look === "classic")) {
     return <ShowcaseBlockView block={block} />;
   }
   switch (block.type) {

@@ -15,7 +15,7 @@ import {
   standardQuoteTemplate,
   uid,
 } from "./factory";
-import { FOOTER_BAND_HEIGHT, SHOWCASE_COMPACT_HEADER_HEIGHT, SHOWCASE_INSET, acceptanceFieldRects, acceptanceHeight } from "./showcaseRender";
+import { CLASSIC_FOOTER_HEIGHT, FOOTER_BAND_HEIGHT, SHOWCASE_COMPACT_HEADER_HEIGHT, SHOWCASE_INSET, acceptanceFieldRects, acceptanceHeight } from "./showcaseRender";
 import { SHOWCASE_FOOTER_IMAGE, SHOWCASE_HEADER_IMAGE } from "./showcaseAssets";
 import { inlineLegacyText } from "./inlineLegacyText";
 import { DOC_DEFS } from "../docTemplates";
@@ -540,100 +540,123 @@ export function showcaseQuoteTemplate(): DocumentModel {
 }
 
 /**
- * The invoice in the quotation's style (Sean, 2026-10-07): the same header band,
- * info strip, line-item table, totals box and footer band — without the vehicle
- * showcase — and with what a tax invoice needs: TAX INVOICE and its number, who
- * it's billed to and who it's from (with the seller's VAT number), the quote it
- * came from, the totals with VAT, and how to pay.
+ * The invoice, laid out as Sean's mock-up (2026-10-07), in the "classic" look:
+ * the photo header band (logo, TAX INVOICE, the labelled invoice number), a grey
+ * info strip, BILL TO / FROM as plain columns, a light-headed table, subtotal and
+ * VAT over the dark TOTAL DUE bar (amount in orange — Sean), then BANKING DETAILS
+ * (label/value rows, the reference picked out) beside PAYMENT TERMS, a thank-you
+ * line and a slim footer. No vehicle showcase, no acceptance, no signers.
  *
  * Every word is ordinary editable text in the document editor; "(add …)" lines
  * are there to be replaced once — the bank details and the VAT number.
  *
- * Like the quotation, a long invoice moves the payment cards to a second page
- * with a compact header (overflowGroups); the row counts are measured in
- * headless Chrome (tests/showcaseInvoice.test.ts).
+ * A long invoice moves the payment section to a second page under a compact
+ * header (overflowGroups); the row counts are measured in headless Chrome
+ * (tests/showcaseInvoice.test.ts).
  */
-export const INVOICE_ROWS_ABOVE_CARDS = 9;
-export const INVOICE_ROWS_ABOVE_FOOTER = 13;
+export const INVOICE_ROWS_ABOVE_CARDS = 4;
+export const INVOICE_ROWS_ABOVE_FOOTER = 9;
 
 function showcaseInvoiceTemplate(): DocumentModel {
   const PAGE = PAGE_SIZES.A4;
   const inset = SHOWCASE_INSET;
   const contentW = PAGE.w - inset * 2;
-  const gap = 14;
+  const gap = 28;
   const cardW = Math.floor((contentW - gap) / 2);
-  const footerY = PAGE.h - 1 - FOOTER_BAND_HEIGHT;
-  const cardsY = footerY - 14 - acceptanceHeight();
+  // The bottom of the page, upwards: footer line, thank-you line, the payment
+  // section (banking details sized for six lines and the reference box), a rule.
+  const footerY = PAGE.h - 1 - CLASSIC_FOOTER_HEIGHT;
+  const thanksY = footerY - 38;
+  const cardsH = 176;
+  const cardsY = thanksY - 14 - cardsH;
+  const ruleY = cardsY - 18;
   const content = { top: 0, right: inset, bottom: 0, left: inset };
   const padded = (blocks: DocumentBlock[], padding = content) => {
     const row = newRow([newColumn(100, blocks)]);
     row.settings = { ...row.settings, padding };
     return row;
   };
-  const showcaseCard = (label: string, name: string, lines: string) => {
+  const classicCard = (label: string, name: string, lines: string, divider = false) => {
     const block = infoCard(label, name, lines);
-    if (block.type === "infoCard") block.look = "showcase";
+    if (block.type === "infoCard") {
+      block.look = "classic";
+      if (divider) block.divider = true;
+    }
     return block;
   };
 
   const header = newBlock("showcaseHeader");
   if (header.type === "showcaseHeader") {
+    header.style = "classic";
     header.title = "TAX INVOICE";
+    header.subtitle = "{{company.name}}";
+    header.numberLabel = "Invoice number";
     header.docNumber = "{{invoice.number}}";
     header.bgImage = SHOWCASE_HEADER_IMAGE;
   }
   const strip = newBlock("infoStrip");
   if (strip.type === "infoStrip") {
+    strip.style = "classic";
     strip.items = [
       { icon: "calendar", label: "INVOICE DATE", value: "{{invoice.date}}", sub: "" },
       { icon: "calendarCheck", label: "QUOTE REFERENCE", value: "{{quote.number}}", sub: "" },
-      { icon: "user", label: "PREPARED BY", value: "{{preparedBy}}", sub: "Sales Consultant" },
+      { icon: "user", label: "PREPARED BY", value: "{{preparedBy}}", sub: "" },
     ];
   }
-  const billTo = showcaseCard("BILL TO", "{{customer.name}}", "{{invoice.billedTo}}");
-  const from = showcaseCard("FROM", "{{company.name}}", "{{company.address}}\n{{company.phone}} · {{company.email}}\nVAT no: (add your VAT number)");
+  const billTo = classicCard("BILL TO", "{{customer.name}}", "{{invoice.billedTo}}");
+  const from = classicCard("FROM", "{{company.name}}", "{{company.address}}\nVAT No: (add your VAT number)\nT: {{company.phone}}\nE: {{company.email}}", true);
   const parties = newRow([newColumn(50, [billTo]), newColumn(50, [from])]);
-  parties.settings = { ...parties.settings, gap, padding: content };
+  parties.settings = { ...parties.settings, gap, padding: { top: 20, right: inset, bottom: 6, left: inset } };
 
   const items = newBlock("lineItems");
   if (items.type === "lineItems") {
-    items.look = "showcase";
-    items.headerBg = "#0b1220";
+    items.look = "classic";
     items.columns = [
       { key: "description", header: "Description", align: "left", showIf: "" },
       { key: "qty", header: "Qty", align: "right", showIf: "" },
-      { key: "unitPrice", header: "Unit price (incl. VAT)", align: "right", showIf: "" },
-      { key: "total", header: "Total (incl. VAT)", align: "right", showIf: "" },
+      { key: "unitPrice", header: "Unit price", align: "right", showIf: "" },
+      { key: "total", header: "Total", align: "right", showIf: "" },
     ];
   }
   const totals = newBlock("totalsBox");
   totals.settings = { width: 46, horizontalAlignment: "right" };
-  if (totals.type === "totalsBox") totals.totalLabel = "TOTAL DUE INCL. VAT";
+  if (totals.type === "totalsBox") {
+    totals.style = "classic";
+    totals.totalLabel = "TOTAL DUE";
+  }
 
-  const banking = showcaseCard(
+  const banking = classicCard(
     "BANKING DETAILS",
-    "{{company.name}}",
-    "Bank: (add your bank)\nAccount number: (add your account number)\nBranch code: (add your branch code)\nReference: {{invoice.number}}",
+    "",
+    "Bank: (add your bank)\nAccount name: {{company.name}}\nAccount number: (add your account number)\nBranch code: (add your branch code)\nAccount type: (add the account type)\nReference: {{invoice.number}}",
   );
-  const payment = showcaseCard(
+  const payment = classicCard(
     "PAYMENT TERMS",
-    "Thank you for your business",
-    "Payment is due on receipt of this invoice.\nPlease use {{invoice.number}} as your payment reference.\nE & O.E.",
+    "",
+    "Payment due within 7 days of the invoice date.\nPlease use the reference shown when making payment.\nPrices are subject to our standard terms and conditions.\nE & O.E.",
+    true,
   );
+  const rule = newBlock("divider");
+  const thanks = text("Thank you for your business.");
   const footerBand = newBlock("footerBand");
-  if (footerBand.type === "footerBand") footerBand.bgImage = SHOWCASE_FOOTER_IMAGE;
+  if (footerBand.type === "footerBand") {
+    footerBand.style = "classic";
+    footerBand.subtitle = "{{company.name}}   ·   {{company.website}}   ·   Invoice {{invoice.number}}";
+  }
 
   const page = newPage([
     padded([header], { top: 0, right: 0, bottom: 0, left: 0 }),
-    padded([strip]),
+    padded([strip], { top: 0, right: 0, bottom: 0, left: 0 }),
     parties,
     padded([items]),
     padded([totals]),
   ]);
+  const ruleFloat = { id: uid(), x: inset, y: ruleY, width: contentW, block: rule };
   const bankingFloat = { id: uid(), x: inset, y: cardsY, width: cardW, block: banking };
   const paymentFloat = { id: uid(), x: inset + cardW + gap, y: cardsY, width: cardW, block: payment };
+  const thanksFloat = { id: uid(), x: inset, y: thanksY, width: contentW, block: thanks };
   const footerFloat = { id: uid(), x: 0, y: footerY, width: PAGE.w, block: footerBand };
-  page.floatingBlocks = [bankingFloat, paymentFloat, footerFloat];
+  page.floatingBlocks = [ruleFloat, bankingFloat, paymentFloat, thanksFloat, footerFloat];
   const continuationHeader = newBlock("showcaseHeader");
   if (continuationHeader.type === "showcaseHeader") {
     continuationHeader.title = "TAX INVOICE";
@@ -644,7 +667,7 @@ function showcaseInvoiceTemplate(): DocumentModel {
   page.overflowGroups = [
     {
       maxItems: INVOICE_ROWS_ABOVE_CARDS,
-      floatIds: [bankingFloat.id, paymentFloat.id],
+      floatIds: [ruleFloat.id, bankingFloat.id, paymentFloat.id, thanksFloat.id],
       fieldIds: [],
       topOnNextPage: SHOWCASE_COMPACT_HEADER_HEIGHT + 24,
       nextPageFloats: [

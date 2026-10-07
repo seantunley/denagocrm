@@ -217,14 +217,14 @@ function blockHtml(block: DocumentBlock, ctx: RenderCtx, style: DocStyle, logoDa
       </div>`;
     }
     case "infoCard":
-      if (block.look === "showcase") return showcaseLookHtml(block, ctx);
+      if (block.look === "showcase" || block.look === "classic") return showcaseLookHtml(block, ctx);
       return `<div style="background:#f8fafc;border-left:3px solid ${cssColor(block.accent, "#ea580c")};border-radius:6px;padding:12px 14px">
         <div style="font-size:8pt;font-weight:700;letter-spacing:1px;color:${cssColor(block.accent, "#ea580c")}">${esc(block.label)}</div>
         <div style="font-size:12pt;font-weight:700;color:${cssColor(style.ink, "#020617")};margin:3px 0">${esc(tok(block.name, ctx))}</div>
         <div style="font-size:9pt;color:#64748b">${nl2br(tok(block.lines, ctx))}</div>
       </div>`;
     case "lineItems": {
-      if (block.look === "showcase") return showcaseLookHtml(block, ctx);
+      if (block.look === "showcase" || block.look === "classic") return showcaseLookHtml(block, ctx);
       const rows = ctx?.items ?? [];
       // Conditional columns: only when bound to a record, drop columns whose condition
       // is false. An unbound (globals-only) preview keeps all columns as a placeholder.
