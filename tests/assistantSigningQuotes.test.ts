@@ -45,6 +45,17 @@ test("signed in the hub counts as signed; the quote's own dates still win when i
   assert.equal(quoteFacts(ownRow, hub).status, "sent", "a quote sent the ordinary way keeps its status");
 });
 
+test("'opened' means opened by the CUSTOMER in both places DAX reads it — never any recipient", () => {
+  const lib = code("src/lib/crmAssistant.ts");
+  const signing = lib.slice(lib.indexOf("async function signingFor("), lib.indexOf("export const viewedByCustomer"));
+  assert.match(signing, /viewedAt: await firstCustomerView\(r\.recipients, isCustomer\),/);
+  assert.doesNotMatch(signing, /Math\.min\(\.\.\.viewed\)/, "not the earliest open by anyone");
+  const find = lib.slice(lib.indexOf("async function findQuotes("), lib.indexOf("const quotes = await prisma.quote.findMany("));
+  assert.match(find, /for \(const r of hub\) if \(await firstCustomerView\(r\.recipients, isCustomer\)\) openedInHub\.push\(r\.quoteId!\);/);
+  assert.doesNotMatch(find, /recipients\.some\(\(x\) => x\.viewedAt\)/);
+  assert.equal((lib.match(/memoCustomer\(\(r\) => isCustomerSigner\(r, ownedWriteTenantId\(\)\)\)/g) ?? []).length, 2, "the mirror's own customer rule, this workspace");
+});
+
 test("both quote lookups read the signing hub; its filters never replace the access filter", () => {
   const lib = code("src/lib/crmAssistant.ts");
   assert.match(lib, /where: \{ quoteId: \{ in: quoteIds \}, deletedAt: null, status: \{ notIn: \["draft", "voided"\] \} \}/);

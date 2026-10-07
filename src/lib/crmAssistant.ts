@@ -14,6 +14,8 @@ import { getCompanyProfile } from "./companyProfile";
 import { searchBotKnowledge } from "./botKnowledge";
 import { isModuleEnabled } from "./modules/enabled";
 import { ownedWriteTenantId } from "./tenantWrite";
+import { isCustomerSigner } from "./signing/quoteMirror";
+import { firstCustomerView, memoCustomer } from "./signing/customerView";
 import { accessibleTestDriveWhere } from "./testDriveAccess";
 import { contactActivityWhere, contactCommunicationWhere, latestContactAt } from "./customerContact";
 import {
@@ -120,19 +122,21 @@ async function signingFor(quoteIds: string[]): Promise<Map<string, Signing>> {
   const requests = await prisma.signatureRequest.findMany({
     where: { quoteId: { in: quoteIds }, deletedAt: null, status: { notIn: ["draft", "voided"] } },
     orderBy: { createdAt: "desc" },
-    select: { quoteId: true, status: true, sentAt: true, recipients: { select: { viewedAt: true, signedAt: true } } },
+    select: {
+      quoteId: true, status: true, sentAt: true,
+      recipients: { select: { role: true, email: true, viewedAt: true, signedAt: true } },
+    },
   });
+  const isCustomer = memoCustomer((r) => isCustomerSigner(r, ownedWriteTenantId()));
   const byQuote = new Map<string, Signing>();
   for (const r of requests) {
     if (!r.quoteId || byQuote.has(r.quoteId)) continue;
-    const times = (pick: (x: { viewedAt: Date | null; signedAt: Date | null }) => Date | null) =>
-      r.recipients.map(pick).filter((d): d is Date => d !== null).map((d) => d.getTime());
-    const viewed = times((x) => x.viewedAt);
-    const signed = times((x) => x.signedAt);
+    const signed = r.recipients.map((x) => x.signedAt).filter((d): d is Date => d !== null).map((d) => d.getTime());
     byQuote.set(r.quoteId, {
       status: r.status,
       sentAt: r.sentAt,
-      viewedAt: viewed.length ? new Date(Math.min(...viewed)) : null,
+      // The CUSTOMER's first open — a staff countersigner opening it isn't her.
+      viewedAt: await firstCustomerView(r.recipients, isCustomer),
       signedAt: r.status === "completed" && signed.length ? new Date(Math.max(...signed)) : null,
     });
   }
@@ -186,7 +190,7 @@ async function findLeads(user: User, raw: z.infer<typeof leadArgs>): Promise<Too
       take: CANDIDATES,
       select: {
         id: true, title: true, name: true, status: true, valueCents: true, source: true,
-        createdAt: true, stageEnteredAt: true,
+        createdAt: true, stageEnteredAt: true, contactId: true,
         stage: { select: { name: true } },
         product: { select: { name: true } },
         assignedTo: { select: { name: true } },
@@ -206,8 +210,25 @@ async function findLeads(user: User, raw: z.infer<typeof leadArgs>): Promise<Too
 
   // Last contact = the latest message either way, call or meeting. Not an
   // internal note or a completed to-do, and not the lead's own updatedAt
-  // (editing a field touches it).
-  const withTouch = leads.map((lead) => ({ lead, lastContact: latestContactAt(lead.communications, lead.activities) }));
+  // (editing a field touches it). The customer's own rows that sit on no lead
+  // count too (a Messenger message matches the customer first — leadIdle.ts).
+  const contactIds = [...new Set(leads.map((l) => l.contactId).filter((id): id is string => !!id))];
+  const [contactComms, contactDone] = contactIds.length
+    ? await Promise.all([
+        prisma.communication.groupBy({ by: ["contactId"], where: { contactId: { in: contactIds }, leadId: null, ...contactCommunicationWhere }, _max: { occurredAt: true } }),
+        prisma.activity.groupBy({ by: ["contactId"], where: { contactId: { in: contactIds }, leadId: null, ...contactActivityWhere }, _max: { doneAt: true } }),
+      ])
+    : [[], []];
+  const customerTouch = new Map<string, number>();
+  for (const at of [...contactComms.map((r) => [r.contactId, r._max.occurredAt] as const), ...contactDone.map((r) => [r.contactId, r._max.doneAt] as const)]) {
+    if (at[0] && at[1]) customerTouch.set(at[0], Math.max(customerTouch.get(at[0]) ?? 0, at[1].getTime()));
+  }
+  const withTouch = leads.map((lead) => {
+    const own = latestContactAt(lead.communications, lead.activities);
+    const viaCustomer = lead.contactId ? customerTouch.get(lead.contactId) : undefined;
+    const lastContact = viaCustomer && (!own || viaCustomer > own.getTime()) ? new Date(viaCustomer) : own;
+    return { lead, lastContact };
+  });
   const cutoff = args.noContactDays ? Date.now() - args.noContactDays * DAY : null;
   const filtered = cutoff === null
     ? withTouch
@@ -282,11 +303,14 @@ async function findQuotes(user: User, raw: z.infer<typeof quoteArgs>): Promise<T
   const hub = args.awaitingSignature || args.viewed !== undefined
     ? await prisma.signatureRequest.findMany({
         where: { deletedAt: null, quoteId: { not: null }, status: { in: LIVE_SIGNING } },
-        select: { quoteId: true, recipients: { select: { viewedAt: true } } },
+        select: { quoteId: true, recipients: { select: { role: true, email: true, viewedAt: true } } },
       })
     : [];
   const outForSigning = hub.map((r) => r.quoteId!);
-  const openedInHub = hub.filter((r) => r.recipients.some((x) => x.viewedAt)).map((r) => r.quoteId!);
+  // "Opened" = opened by the CUSTOMER, not a colleague reviewing or countersigning.
+  const isCustomer = memoCustomer((r) => isCustomerSigner(r, ownedWriteTenantId()));
+  const openedInHub: string[] = [];
+  for (const r of hub) if (await firstCustomerView(r.recipients, isCustomer)) openedInHub.push(r.quoteId!);
   const quotes = await prisma.quote.findMany({
     where: {
       deletedAt: null,
@@ -458,21 +482,31 @@ async function leadBrief(user: User, raw: z.infer<typeof leadBriefArgs>): Promis
       id: true, title: true, name: true, status: true, valueCents: true, quantity: true, source: true,
       notes: true, research: true, researchedAt: true, createdAt: true, stageEnteredAt: true,
       wonAt: true, lostAt: true, lostReason: true,
+      contactId: true,
       stage: { select: { name: true } },
       product: { select: { name: true } },
       assignedTo: { select: { name: true } },
-      communications: {
-        orderBy: { occurredAt: "desc" },
-        take: 15,
-        select: { occurredAt: true, direction: true, type: true, subject: true, body: true },
-      },
-      activities: {
-        orderBy: { dueDate: "desc" },
-        take: 10,
-        select: { type: true, summary: true, status: true, dueDate: true, doneAt: true, note: true },
-      },
     },
   });
+  // The lead's own messages and activities AND the customer's that aren't on any
+  // lead: an inbound Messenger/Instagram message matches the customer first, and
+  // the customer panel books follow-ups with no lead (leadIdle.ts counts both).
+  // Not the customer's OTHER leads — those are other deals.
+  const theirs = { OR: [{ leadId: lead.id }, ...(lead.contactId ? [{ contactId: lead.contactId, leadId: null }] : [])] };
+  const [communications, activities] = await Promise.all([
+    prisma.communication.findMany({
+      where: theirs,
+      orderBy: { occurredAt: "desc" },
+      take: 15,
+      select: { occurredAt: true, direction: true, type: true, subject: true, body: true },
+    }),
+    prisma.activity.findMany({
+      where: theirs,
+      orderBy: { dueDate: "desc" },
+      take: 10,
+      select: { type: true, summary: true, status: true, dueDate: true, doneAt: true, note: true },
+    }),
+  ]);
   // Test drives for this lead, through the test-drive page's own visibility rule.
   const testDrives = (await isModuleEnabled("automotive"))
     ? await prisma.testDriveBooking.findMany({
@@ -511,13 +545,13 @@ async function leadBrief(user: User, raw: z.infer<typeof leadBriefArgs>): Promis
       ...(lead.lostAt ? { lost: dateKey(lead.lostAt), lostReason: lead.lostReason } : {}),
       notes: clip(lead.notes, 800),
       research: lead.research ? { when: dateKey(lead.researchedAt), summary: clip(lead.research, 1500) } : null,
-      messages: lead.communications.map((c) => ({
+      messages: communications.map((c) => ({
         when: dateKey(c.occurredAt),
         from: c.direction === "inbound" ? "customer" : "us",
         channel: c.type,
         text: clip([c.subject, c.body].filter(Boolean).join(" — "), 300),
       })),
-      activities: lead.activities.map((a) => ({
+      activities: activities.map((a) => ({
         type: a.type,
         summary: a.summary,
         status: a.status,
