@@ -1,0 +1,172 @@
+/**
+ * The starting point of every customer email in the editor (Sean chose design
+ * B, 2026-10-08): the shared FRAME — the logo panel at the top, the message,
+ * the signature, a quiet footer — and each message's BODY, converted from the
+ * wording the workspace already sends (its own edited copy when it has one),
+ * so moving to the editor changes the look, not what customers are told.
+ *
+ * Pure and DETERMINISTIC (ids derive from position) — the same input always
+ * builds the same document.
+ */
+import { documentSchema, type DocumentBlock, type DocumentModel } from "./model";
+import { LINK_FIELDS } from "./emailRender";
+import {
+  SIGNING_EMAILS,
+  SIGNING_EMAIL_KINDS,
+  isTextTemplate,
+  type SigningEmailKind,
+  type StoredSigningTemplate,
+} from "../signing/emailTemplates";
+import { sanitizeEmailDoc } from "../signing/emailDoc";
+
+export const EMAIL_FRAME_KEY = "email:frame";
+export const emailBodyKey = (kind: SigningEmailKind) => `email:${kind}`;
+export function emailKindOf(key: string): SigningEmailKind | null {
+  const kind = key.startsWith("email:") ? key.slice("email:".length) : "";
+  return (SIGNING_EMAIL_KINDS as string[]).includes(kind) && !isTextTemplate(SIGNING_EMAILS[kind as SigningEmailKind])
+    ? (kind as SigningEmailKind)
+    : null;
+}
+/** The email kinds (texts and WhatsApp messages stay text). */
+export const EMAIL_KINDS = SIGNING_EMAIL_KINDS.filter((k) => !isTextTemplate(SIGNING_EMAILS[k]));
+
+type Plate = Record<string, unknown>;
+const TOKEN = /\{\{\s*([\w.]+)\s*\}\}/g;
+const layout = { settings: {}, locked: false, hidden: false } as const;
+
+/** A headline for each email, using only that message's own fields. */
+export const EMAIL_HEADLINES: Partial<Record<SigningEmailKind, string>> = {
+  invite: "Please sign {{document_title}}",
+  reminder: "A reminder to sign {{document_title}}",
+  completed: "Everyone has signed",
+  otp: "Your verification code",
+  quote: "Your quote {{quote_number}}",
+  portal_code: "Your login code",
+  lookup_code: "Your verification code",
+  service_reminder: "Time for a service",
+  recall: "{{recall_title}}",
+  review_delivery: "Enjoying your new {{item}}?",
+  review_service: "How was your service?",
+  survey_invite: "{{survey_title}}",
+  survey_reminder: "{{survey_title}}",
+};
+
+/** Text → Plate leaves, every {{token}} an inline merge-field node. */
+function leaves(text: string, marks: Plate = {}): Plate[] {
+  const out: Plate[] = [];
+  let last = 0;
+  for (const match of text.matchAll(TOKEN)) {
+    const at = match.index ?? 0;
+    if (at > last) out.push({ ...marks, text: text.slice(last, at) });
+    out.push({ type: "mergeField", token: match[1], children: [{ text: "" }] });
+    last = at + match[0].length;
+  }
+  if (last < text.length) out.push({ ...marks, text: text.slice(last) });
+  return out.length ? out : [{ text: "" }];
+}
+
+function frameRow(id: string, block: DocumentBlock) {
+  return { id: `${id}-row`, columns: [{ id: `${id}-col`, widthPercent: 100, blocks: [block] }], settings: { gap: 16, keepTogether: false, keepWithNext: false } };
+}
+
+function emailDocument(title: string, blocks: DocumentBlock[], subject?: string): DocumentModel {
+  return documentSchema.parse({
+    schemaVersion: 1,
+    title,
+    style: { fontFamily: "sans", pageSize: "A4", margin: 0, accent: "#f1603c", ink: "#0b1220" },
+    recipients: [],
+    pages: [{ id: "email-page", rows: blocks.map((b) => frameRow(b.id, b)) }],
+    ...(subject !== undefined ? { email: { subject } } : {}),
+  });
+}
+
+/** Design B: the logo panel, the message, the signature, a quiet footer. */
+export function defaultEmailFrame(): DocumentModel {
+  return emailDocument("Email frame — header, signature and footer", [
+    { id: "frame-header", type: "emailHeader", ...layout },
+    { id: "frame-body", type: "emailBody", ...layout },
+    { id: "frame-signature", type: "emailSignature", ...layout },
+    { id: "frame-footer", type: "emailFooter", ...layout, note: "" },
+  ]);
+}
+
+/**
+ * One message's body from its current wording. Paragraphs become text; the
+ * line holding only the message's link or code becomes its button (or code
+ * box), where it stood; a quote email also shows its number and total.
+ */
+export function defaultEmailBody(kind: SigningEmailKind, stored?: StoredSigningTemplate | null): DocumentModel {
+  const def = SIGNING_EMAILS[kind];
+  const action = def.action ?? null;
+  const blocks: DocumentBlock[] = [];
+  let n = 0;
+  const id = (what: string) => `${kind}-${what}-${n++}`;
+  const headline = EMAIL_HEADLINES[kind];
+  if (headline) blocks.push({ id: id("heading"), type: "heading", ...layout, value: [{ type: "h2", children: leaves(headline) }] });
+
+  let flow: Plate[] = [];
+  const flush = () => {
+    if (flow.length) blocks.push({ id: id("text"), type: "text", ...layout, value: flow });
+    flow = [];
+  };
+  const button = () => {
+    flush();
+    blocks.push({ id: id("button"), type: "emailButton", ...layout, token: action!, label: LINK_FIELDS[action!]?.label ?? "Open", style: "dark" });
+  };
+
+  // The owner's formatted copy when there is one (sanitised to this message's
+  // own fields, as the send path does), else the plain wording.
+  const doc = stored?.doc ? sanitizeEmailDoc(stored.doc, def.fields) : null;
+  if (doc?.length) {
+    for (const b of doc) {
+      const only = b.children.length === 1 && "type" in b.children[0] && b.children[0].type === "mergeField" ? b.children[0].token : null;
+      if (action && only === action) { button(); continue; }
+      const node: Plate = { type: b.type, ...(b.align ? { align: b.align } : {}), children: b.children };
+      if (b.listStyleType) {
+        const list = b.listStyleType === "decimal" ? "ol" : "ul";
+        const last = flow[flow.length - 1];
+        const item = { type: "li", children: b.children };
+        if (last?.type === list) (last.children as Plate[]).push(item);
+        else flow.push({ type: list, children: [item] });
+      } else flow.push(node);
+    }
+  } else {
+    const body = (stored?.body ?? def.body).replace(/\r\n?/g, "\n").trim();
+    const actionLine = action ? new RegExp(`^\\{\\{\\s*${action}\\s*\\}\\}$`) : null;
+    for (const paragraph of body.split(/\n\s*\n/)) {
+      if (actionLine?.test(paragraph.trim())) { button(); continue; }
+      // Line breaks inside a paragraph: one Plate paragraph per line keeps them.
+      for (const line of paragraph.split("\n")) flow.push({ type: "p", children: leaves(line) });
+    }
+  }
+  // The sign-off's name lines ("{{sender_name}}", "{{company_name}}") go: the
+  // frame's signature now says who it is from, and twice reads as a mistake.
+  while (flow.length && isNameLine(flow[flow.length - 1])) flow.pop();
+  flush();
+
+  if (kind === "quote") {
+    // The quote's number and total, the two figures a customer looks for: after
+    // the greeting and the main paragraph, before the closing lines.
+    const facts: DocumentBlock = {
+      id: id("facts"), type: "emailFacts", ...layout,
+      items: [
+        { label: "QUOTE", value: "{{quote_number}}", sub: "", highlight: false },
+        { label: "TOTAL INCL. VAT", value: "{{total}}", sub: "", highlight: true },
+      ],
+    };
+    const at = blocks.findIndex((b) => b.type === "text");
+    const text = blocks[at];
+    if (text?.type === "text" && text.value.length > 2) {
+      const rest: DocumentBlock = { ...text, id: `${text.id}-rest`, value: text.value.slice(2) };
+      blocks.splice(at, 1, { ...text, value: text.value.slice(0, 2) }, facts, rest);
+    } else blocks.splice(at < 0 ? blocks.length : at + 1, 0, facts);
+  }
+  return emailDocument(def.label, blocks, stored?.subject ?? def.subject);
+}
+
+/** A paragraph holding only the sender's or company's name field. */
+function isNameLine(node: Plate): boolean {
+  const children = (node.children as Plate[] | undefined) ?? [];
+  const real = children.filter((c) => !(typeof c.text === "string" && !c.text.trim()));
+  return node.type === "p" && real.length === 1 && real[0].type === "mergeField" && ["sender_name", "company_name"].includes(String(real[0].token));
+}

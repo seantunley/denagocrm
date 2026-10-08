@@ -107,6 +107,20 @@ export function newBlock(type: BlockType): DocumentBlock {
       };
     case "footerBand":
       return { id: uid(), type, ...emptyLayout, subtitle: "{{company.tagline}}", bg: "#020617", accent: "#ea580c", bgImage: "" };
+    // Customer email blocks (./emailRender.ts).
+    case "emailHeader":
+    case "emailBody":
+    case "emailSignature":
+      return { id: uid(), type, ...emptyLayout };
+    case "emailFooter":
+      return { id: uid(), type, ...emptyLayout, note: "" };
+    case "emailButton":
+      return { id: uid(), type, ...emptyLayout, token: "signing_link", label: "Open & sign", style: "dark" };
+    case "emailFacts":
+      return { id: uid(), type, ...emptyLayout, items: [
+        { label: "QUOTE", value: "{{quote_number}}", sub: "", highlight: false },
+        { label: "TOTAL INCL. VAT", value: "{{total}}", sub: "", highlight: true },
+      ] };
   }
 }
 

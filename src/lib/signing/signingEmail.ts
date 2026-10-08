@@ -7,6 +7,7 @@ import { decryptValue } from "@/lib/settings";
 import {
   DEFAULT_ACCENT,
   SIGNING_EMAILS,
+  isTextTemplate,
   parseEmailHeaderStyle,
   parseStoredSigningTemplate,
   renderSigningEmail,
@@ -16,6 +17,11 @@ import {
   type SigningEmailKind,
   type StoredSigningTemplate,
 } from "./emailTemplates";
+import { publishedEmailDocs } from "@/lib/doceditor/emailDocuments";
+import { renderEmailDocument } from "@/lib/doceditor/emailRender";
+import { defaultEmailBody } from "@/lib/doceditor/emailDefaults";
+import { CARD_ORANGE, parseSignatureDesign, SIGNATURE_DESIGN_KEY } from "@/lib/signature";
+import { tenantOrigin } from "@/lib/tenantOrigin";
 
 const FALLBACK_BRAND: SigningEmailBrand = {
   companyName: DEFAULT_BRAND.displayName,
@@ -58,7 +64,13 @@ export async function tenantEmailContent(
       basePrisma.appSetting.findMany({
         where: {
           tenantId,
-          key: { in: [def.settingKey, "COMPANY_NAME", "COMPANY_TAGLINE", "COMPANY_PHONE", "COMPANY_EMAIL", "COMPANY_LOGO_URL", "EMAIL_HEADER_STYLE"] },
+          key: {
+            in: [
+              def.settingKey, "COMPANY_NAME", "COMPANY_TAGLINE", "COMPANY_PHONE", "COMPANY_EMAIL", "COMPANY_LOGO_URL", "EMAIL_HEADER_STYLE",
+              // The designed email (doceditor/emailRender.ts) also shows these.
+              "COMPANY_ADDRESS", "COMPANY_WEBSITE", SIGNATURE_DESIGN_KEY,
+            ],
+          },
         },
         select: { key: true, value: true },
       }),
@@ -85,7 +97,39 @@ export async function tenantEmailContent(
       mailBrand.logoUrl ??
       (/^https:\/\//i.test(profileLogo) && !/\.private\.blob\.|\/api\/stored/i.test(profileLogo) ? profileLogo : null);
 
-    return renderSigningEmail(kind, override ?? parseStoredSigningTemplate(setting(def.settingKey), kind), all, {
+    const stored = override ?? parseStoredSigningTemplate(setting(def.settingKey), kind);
+
+    // The email designed in the editor, once its FRAME is published (Sean,
+    // 2026-10-08). The body is the message's published design, else its
+    // current wording in the new layout; a per-send edit (the quote dialog)
+    // keeps its words and gets the layout. Until then: exactly as before.
+    const { frame, body } = isTextTemplate(def) ? { frame: null, body: null } : await publishedEmailDocs(tenantId, kind);
+    if (frame) {
+      const fields: Record<string, string> = Object.create(null);
+      const values: Record<string, unknown> = all;
+      for (const f of def.fields) fields[f] = typeof values[f] === "string" ? (values[f] as string) : "";
+      for (const f of ["company_name", "company_phone", "company_email"] as const) fields[f] = all[f];
+      return renderEmailDocument({
+        frame,
+        body: override ? defaultEmailBody(kind, override) : body ?? defaultEmailBody(kind, stored),
+        fields,
+        brand: {
+          companyName,
+          tagline: tagline || "",
+          address: setting("COMPANY_ADDRESS"),
+          phone: all.company_phone,
+          email: all.company_email,
+          website: setting("COMPANY_WEBSITE"),
+          logoUrl: logoUrl ?? "",
+          bannerUrl: parseSignatureDesign(setting(SIGNATURE_DESIGN_KEY)).bannerUrl,
+          accent: brand.primary ?? CARD_ORANGE,
+          assetBase: await tenantOrigin(tenantId),
+        },
+        action: def.action ?? null,
+      });
+    }
+
+    return renderSigningEmail(kind, stored, all, {
       companyName,
       tagline: tagline || null,
       logoUrl,
