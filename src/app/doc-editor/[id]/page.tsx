@@ -13,8 +13,24 @@ import { DocEditorEnvProvider } from "@/components/doceditor/EditorContext";
 import { getCompanyProfile } from "@/lib/companyProfile";
 import { documentLogo } from "@/lib/doceditor/renderGlobals";
 import { quoteWordingSettings } from "@/lib/quoteFromLead";
+import { getActiveTenantId } from "@/lib/auth";
+import { EMAIL_FRAME_KEY, EMAIL_SAMPLE_FIELDS, emailKindOf } from "@/lib/doceditor/emailDefaults";
+import { emailBrandFor } from "@/lib/doceditor/emailDocuments";
+import { MESSAGE_PLACES, messagePlace } from "@/lib/customerMessagePlaces";
+import { SIGNING_EMAILS } from "@/lib/signing/emailTemplates";
 
 export const dynamic = "force-dynamic";
+
+/** Does the saved draft match what real documents (or emails) use — the published version? */
+async function publishStateOf(template: { id: string; data: unknown; publishedVersion: number | null }): Promise<PublishState> {
+  const published = template.publishedVersion == null
+    ? null
+    : await prisma.docBuilderVersion.findUnique({
+        where: { templateId_version: { templateId: template.id, version: template.publishedVersion } },
+        select: { data: true },
+      });
+  return !published ? "never" : JSON.stringify(published.data) === JSON.stringify(template.data) ? "live" : "ahead";
+}
 
 export default async function DocEditorPage({
   params,
@@ -72,6 +88,38 @@ export default async function DocEditorPage({
   }
 
   const initialDoc = read.doc;
+
+  // A customer EMAIL (the shared frame, or one message): the editor in email
+  // mode — the workspace's email look on the canvas, only that message's fields,
+  // a Subject line, and no print tools. Owner-only (layoutAccess.ts).
+  const emailKind = emailKindOf(template.key);
+  if (emailKind || template.key === EMAIL_FRAME_KEY) {
+    // The acting workspace, from the session; the template is its own (getBuilderTemplate
+    // refuses another workspace's email) — and the brand shown is read for that tenant only.
+    const tenantId = await getActiveTenantId();
+    if (!tenantId || template.tenantId !== tenantId) notFound();
+    const brand = await emailBrandFor(tenantId);
+    const place = emailKind ? messagePlace(emailKind) : "automatic";
+    const backHref = place === "documents" ? "/document-studio#document-emails" : MESSAGE_PLACES[place].path;
+    return (
+      <DocEditorEnvProvider
+        value={{
+          templateId: template.id,
+          logoSrc: "",
+          companyName: brand.companyName,
+          email: {
+            kind: emailKind,
+            fields: emailKind ? [...SIGNING_EMAILS[emailKind].fields] : [],
+            sample: { ...EMAIL_SAMPLE_FIELDS, company_name: brand.companyName, company_phone: brand.phone, company_email: brand.email },
+            brand,
+          },
+        }}
+      >
+        <DocEditor id={template.id} initialDoc={initialDoc} records={[]} initialPublishState={await publishStateOf(template)} email={{ frame: !emailKind, backHref }} />
+      </DocEditorEnvProvider>
+    );
+  }
+
   const required = requiredRecordKind(template.key);
   // Every preview record is scoped to what the caller may see (as BuilderSection
   // does): the editor is open to document_templates.manage holders too
@@ -136,18 +184,7 @@ export default async function DocEditorPage({
     })),
   ];
 
-  // Does the saved draft match what real documents render (the published version)?
-  const published = template.publishedVersion == null
-    ? null
-    : await prisma.docBuilderVersion.findUnique({
-        where: { templateId_version: { templateId: template.id, version: template.publishedVersion } },
-        select: { data: true },
-      });
-  const publishState: PublishState = !published
-    ? "never"
-    : JSON.stringify(published.data) === JSON.stringify(template.data)
-      ? "live"
-      : "ahead";
+  const publishState = await publishStateOf(template);
 
   // The canvas shows the same embedded logo the printed document will carry.
   const company = await getCompanyProfile();

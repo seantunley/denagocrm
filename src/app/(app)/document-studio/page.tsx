@@ -33,7 +33,8 @@ import { SaveSubmitButton } from "@/components/SaveSubmitButton";
 import BuilderSection from "./builder-section";
 import ContactPicker from "@/components/ContactPicker";
 import CustomerMessageEditors from "@/components/CustomerMessageEditors";
-import { kindsAt } from "@/lib/customerMessagePlaces";
+import EmailDesignCards from "@/components/EmailDesignCards";
+import { emailKindsAt, textKindsAt } from "@/lib/customerMessagePlaces";
 import { isTenantOwner } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
@@ -260,7 +261,11 @@ export default async function DocumentStudioPage({
               reads with each document. Logo, colour and footer come from your company profile.
             </p>
           </div>
-          <CustomerMessageEditors kinds={kindsAt("documents")} open={open} />
+          {/* Emails open in the document editor, like the documents above; WhatsApp texts stay text. */}
+          <EmailDesignCards kinds={emailKindsAt("documents")} frame />
+          <div className="mt-3">
+            <CustomerMessageEditors kinds={textKindsAt("documents")} open={open} />
+          </div>
         </section>
       )}
 

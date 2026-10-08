@@ -4,7 +4,8 @@ import { requireTenantOwner } from "@/lib/auth";
 import { requireRoute } from "@/lib/permissions";
 import { PageHeader } from "@/components/page-header";
 import CustomerMessageEditors from "@/components/CustomerMessageEditors";
-import { kindsAt, MESSAGE_PLACES, messageEditorHref, messagePlace } from "@/lib/customerMessagePlaces";
+import EmailDesignCards from "@/components/EmailDesignCards";
+import { emailKindsAt, MESSAGE_PLACES, messageEditorHref, messagePlace, textKindsAt } from "@/lib/customerMessagePlaces";
 import { SIGNING_EMAILS, SIGNING_EMAIL_KINDS } from "@/lib/signing/emailTemplates";
 
 export const dynamic = "force-dynamic";
@@ -43,7 +44,11 @@ export default async function CustomerMessagesPage({ searchParams }: { searchPar
           Whether each one is sent at all is switched on Journeys and in{" "}
           <Link href="/settings/automatic" className="text-primary underline">Automatic jobs &amp; messages</Link>.
         </p>
-        <CustomerMessageEditors kinds={kindsAt("automatic")} open={open} />
+        {/* Emails open in the document editor; texts stay text. */}
+        <EmailDesignCards kinds={emailKindsAt("automatic")} frame />
+        <div className="mt-4">
+          <CustomerMessageEditors kinds={textKindsAt("automatic")} open={open} />
+        </div>
       </section>
 
       <section className="card">

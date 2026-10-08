@@ -6,6 +6,7 @@ import { plateToHtmlBody, prettyToken } from "@/lib/docbuilder/plateSerialize";
 import { useEditor } from "@/lib/doceditor/store";
 import type { TextBlock, HeadingBlock } from "@/lib/doceditor/model";
 import { VARIABLES } from "@/lib/doceditor/variables";
+import { useDocEditorEnv } from "./EditorContext";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -44,8 +45,18 @@ export function ReadOnlyRichText({ value, muted }: { value: unknown[]; muted?: b
 }
 
 /** The live Plate editor — mounted ONLY for the currently active text/heading block. */
+/** An email's fields for the picker: its own (without the company ones), then the company's. */
+function emailVariableGroups(fields: string[]) {
+  const own = fields.filter((f) => !f.startsWith("company_"));
+  return [
+    ...(own.length ? [{ group: "This message", fields: own }] : []),
+    { group: "Company", fields: ["company.name", "company.phone", "company.email", "company.website", "company.address"] },
+  ];
+}
+
 export function ActiveRichText({ block }: { block: TextBlock | HeadingBlock }) {
   const updateBlock = useEditor((s) => s.updateBlock);
+  const { email } = useDocEditorEnv();
   const editor = usePlateEditor({
     plugins: [BasicBlocksPlugin, BasicMarksPlugin, MergeFieldPlugin],
     value: (Array.isArray(block.value) && block.value.length ? block.value : EMPTY) as any,
@@ -84,10 +95,11 @@ export function ActiveRichText({ block }: { block: TextBlock | HeadingBlock }) {
           className="h-7 rounded border border-slate-200 bg-white px-1 text-xs text-slate-700"
           title="Insert a CRM variable"
         >
-          <option value="">＋ variable</option>
-          {VARIABLES.map((g) => (
+          <option value="">＋ {email ? "field" : "variable"}</option>
+          {/* An email offers only what that message can fill (its own fields, the company's). */}
+          {(email ? emailVariableGroups(email.fields) : VARIABLES).map((g) => (
             <optgroup key={g.group} label={g.group}>
-              {g.fields.map((f) => <option key={f} value={f}>{`{{${f}}}`}</option>)}
+              {g.fields.map((f) => <option key={f} value={f}>{email ? prettyToken(f) : `{{${f}}}`}</option>)}
             </optgroup>
           ))}
         </select>

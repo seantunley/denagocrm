@@ -10,6 +10,7 @@ import type { BlockType, DocumentBlock, OverlayField } from "@/lib/doceditor/mod
 import type { DragData } from "./DndController";
 import { listLibraryItems, deleteLibraryItem } from "@/app/actions/doclibrary";
 import { listClauseBlocks } from "@/app/actions/customDocuments";
+import { useDocEditorEnv } from "./EditorContext";
 
 const CONTENT: { type: BlockType; label: string; icon: string }[] = [
   { type: "text", label: "Text", icon: "¶" },
@@ -148,7 +149,45 @@ function ContentItem({ type, label, icon }: { type: BlockType; label: string; ic
   );
 }
 
+/** A customer email's blocks — only what mail apps can show (doceditor/emailRender.ts). */
+const EMAIL_CONTENT: { type: BlockType; label: string; icon: string }[] = [
+  { type: "heading", label: "Headline", icon: "H" },
+  { type: "text", label: "Text", icon: "¶" },
+  { type: "emailButton", label: "Button (or code)", icon: "▭" },
+  { type: "emailFacts", label: "Key figures", icon: "▦" },
+  { type: "image", label: "Image", icon: "🖼" },
+  { type: "divider", label: "Divider", icon: "―" },
+  { type: "spacer", label: "Spacer", icon: "↕" },
+];
+const EMAIL_FRAME: { type: BlockType; label: string; icon: string }[] = [
+  { type: "emailHeader", label: "Logo panel", icon: "▀" },
+  { type: "emailBody", label: "Message slot", icon: "✉" },
+  { type: "emailSignature", label: "Signature", icon: "✍" },
+  { type: "emailFooter", label: "Footer", icon: "▄" },
+];
+
 export function Palette() {
+  const { email } = useDocEditorEnv();
+  if (email) return <EmailPalette frame={email.kind === null} />;
+  return <DocumentPalette />;
+}
+
+function EmailPalette({ frame }: { frame: boolean }) {
+  return (
+    <div className="flex-1 space-y-2 overflow-y-auto p-2">
+      <p className="px-1 text-[11px] text-slate-400">
+        {frame
+          ? "The frame every customer email shares. Drag to reorder; the message slot is where each email's own content goes."
+          : "Drag onto the email, or click to add at the end. Drop beside a block for two columns (they stack on phones)."}
+      </p>
+      <div className="grid grid-cols-1 gap-1.5">
+        {(frame ? [...EMAIL_FRAME, ...EMAIL_CONTENT] : EMAIL_CONTENT).map((c) => <ContentItem key={c.type} {...c} />)}
+      </div>
+    </div>
+  );
+}
+
+function DocumentPalette() {
   const [tab, setTab] = useState<(typeof TABS)[number]>("Content");
   const addField = useEditor((s) => s.addField);
   const selectField = useEditor((s) => s.selectField);

@@ -284,6 +284,11 @@ function blockHtml(block: DocumentBlock, ctx: RenderCtx, style: DocStyle, logoDa
     case "showcaseHeader": case "infoStrip": case "vehicleShowcase": case "totalsBox": case "acceptance": case "footerBand":
       // The same embedded-only logo as the banner: the workspace's, else the built-in.
       return showcaseBlockHtml(block, ctx, [ctx?.logo, logoDataUri].find((src) => src && /^data:image\//i.test(src)));
+
+    // Customer email blocks belong to email documents, rendered by ./emailRender.ts —
+    // never to a printed one.
+    case "emailHeader": case "emailBody": case "emailSignature": case "emailFooter": case "emailButton": case "emailFacts":
+      return "";
   }
 }
 
