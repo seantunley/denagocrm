@@ -17,7 +17,7 @@ import {
 import { prisma } from "@/lib/db";
 import { contactName, formatDate } from "@/lib/format";
 import { listBuilderTemplates } from "@/lib/docbuilder/store";
-import { docKeyAvailable } from "@/lib/docTemplates";
+import { DOC_DEFS, docKeyAvailable } from "@/lib/docTemplates";
 import { getEnabledModuleIds } from "@/lib/modules/enabled";
 import {
   deleteBuilderTemplate,
@@ -153,6 +153,21 @@ export default async function BuilderSection({
     }),
   ]);
   const templates = allTemplates.filter((template) => docKeyAvailable(template.key, enabledModules));
+  // Each operational document's own layout already has a card at the top of
+  // Document Studio (Edit, Preview PDF), so listing it again here was the same
+  // eight rows twice — with a delete bin beside a layout real documents print
+  // from (Sean, 2026-10-08: "Are these not duplicates?"). Only what has no card
+  // is listed below: a second layout for a document, and layouts of other kinds.
+  // The card's layout is picked exactly as the page picks it: default first,
+  // then most recently edited (listBuilderTemplates is already newest-first).
+  const cardLayoutIds = new Set(
+    Object.keys(DOC_DEFS).flatMap((key) => {
+      const ofKey = templates.filter((template) => template.key === key);
+      const card = ofKey.find((template) => template.isDefault) ?? ofKey[0];
+      return card ? [card.id] : [];
+    }),
+  );
+  const otherLayouts = templates.filter((template) => !cardLayoutIds.has(template.id));
   const capped = quotes.length === RECORD_LIMIT || jobCards.length === RECORD_LIMIT;
 
   const input =
@@ -312,17 +327,17 @@ export default async function BuilderSection({
         </div>
       </div>
 
+      {otherLayouts.length > 0 && (
       <div className="rounded-xl border border-border bg-card p-4 shadow-sm">
-        <p className="mb-2 text-sm font-semibold text-foreground">
-          Builder layouts
+        <p className="text-sm font-semibold text-foreground">
+          Other layouts
         </p>
-        {templates.length === 0 ? (
-          <p className="py-2 text-xs text-muted-foreground/70">
-            None yet — create one above.
-          </p>
-        ) : (
+        <p className="mb-2 text-xs text-muted-foreground">
+          Extra layouts you have created. Each document&apos;s own layout is edited from its card at the top of this page.
+        </p>
+        {(
           <ul className="divide-y divide-border/50">
-            {templates.map((template) => (
+            {otherLayouts.map((template) => (
               <li
                 key={template.id}
                 className="flex items-center gap-2 py-2"
@@ -399,6 +414,7 @@ export default async function BuilderSection({
           </ul>
         )}
       </div>
+      )}
     </div>
   );
 }
