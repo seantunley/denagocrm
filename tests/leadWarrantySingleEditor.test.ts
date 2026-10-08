@@ -199,7 +199,8 @@ for (const page of [
     route: "src/app/(print)/warranty/[id]/print/document/route.ts",
     target: "`/warranty/${id}/print/document`",
     back: "`/warranty/${id}/print`",
-    guard: "requireVehicleReadAccess(claim.vehicleId)",
+    // The claim's one read rule (warranty grant AND vehicle) — lib/warrantyAccess.ts.
+    guard: "requireWarrantyClaimReadAccess(id)",
   },
 ]) {
   test(`${page.key}: the print page and its document route share one gate, behind the same guard`, () => {
@@ -222,18 +223,20 @@ for (const page of [
 
 test("the warranty document route keeps the module guard the (print) layout gave the page", () => {
   const routeSrc = src("src/app/(print)/warranty/[id]/print/document/route.ts");
-  assert.ok(routeSrc.indexOf('isModuleEnabled("automotive")') < routeSrc.indexOf("findUnique("));
+  const moduleGuard = routeSrc.indexOf('isModuleEnabled("automotive")');
+  assert.ok(moduleGuard > -1 && moduleGuard < routeSrc.indexOf("requireWarrantyClaimReadAccess(id)"));
 });
 
 test("the builder decides lead and warranty access the way the print pages do", () => {
   const helper = src("src/lib/docbuilder/recordAccess.ts");
   assert.match(helper, /record\.kind === "lead"\) return canAccessLead\(user, record\.id\)/);
-  assert.match(helper, /canAccessVehicle\(user, claim\.vehicleId\)/);
+  // Warranty grant AND vehicle, by the same function the claim page and print use.
+  assert.match(helper, /canReadWarrantyClaim\(user, claim\.vehicleId\)/);
   assert.match(helper, /prisma\.warrantyClaim\.findUnique/, "the claim is read through the tenant-scoped client");
   assert.doesNotMatch(helper, /basePrisma/);
 
   // The editor's preview picker lists only leads / claims the caller may open.
   const picker = src("src/app/doc-editor/[id]/page.tsx");
   assert.match(picker, /getAccessibleLeadIds\(user\)\.then\(\(ids\) =>\s+prisma\.lead\.findMany\(\{\s+where: ids === null \? \{\} : \{ id: \{ in: ids \} \}/);
-  assert.match(picker, /getAccessibleVehicleIds\(user\)\.then\(\(ids\) =>\s+prisma\.warrantyClaim\.findMany\(\{\s+where: ids === null \? \{\} : \{ vehicleId: \{ in: ids \} \}/);
+  assert.match(picker, /hasAnyPermission\(user, \.\.\.WARRANTY_READ\)\.then\(\(canRead\) => !canRead \? \[\] : getAccessibleVehicleIds\(user\)\.then\(\(ids\) =>\s+prisma\.warrantyClaim\.findMany\(\{\s+where: ids === null \? \{\} : \{ vehicleId: \{ in: ids \} \}/);
 });

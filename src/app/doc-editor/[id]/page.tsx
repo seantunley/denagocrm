@@ -1,5 +1,6 @@
 import { notFound } from "next/navigation";
-import { getAccessibleJobCardIds, getAccessibleLeadIds, getAccessibleQuoteIds, getAccessibleVehicleIds, requireAnyPermission } from "@/lib/permissions";
+import { getAccessibleJobCardIds, getAccessibleLeadIds, getAccessibleQuoteIds, getAccessibleVehicleIds, hasAnyPermission, requireAnyPermission } from "@/lib/permissions";
+import { WARRANTY_READ } from "@/lib/warrantyAccess";
 import { requireLayoutEditor } from "@/lib/docbuilder/layoutAccess";
 import { prisma } from "@/lib/db";
 import { contactName } from "@/lib/format";
@@ -155,15 +156,16 @@ export default async function DocEditorPage({
             take: 100,
             select: { id: true, name: true, title: true },
           })),
+    // Claims need the warranty grant too (lib/warrantyAccess.ts), not only the vehicle.
     required !== "warranty"
       ? []
-      : getAccessibleVehicleIds(user).then((ids) =>
+      : hasAnyPermission(user, ...WARRANTY_READ).then((canRead) => !canRead ? [] : getAccessibleVehicleIds(user).then((ids) =>
           prisma.warrantyClaim.findMany({
             where: ids === null ? {} : { vehicleId: { in: ids } },
             orderBy: { claimedAt: "desc" },
             take: 100,
             select: { id: true, vehicle: { select: { model: true } } },
-          })),
+          }))),
   ]);
   const records = [
     ...quotes.map((quote) => ({

@@ -4,9 +4,9 @@ import {
   canAccessJobCard,
   canAccessLead,
   canAccessQuote,
-  canAccessVehicle,
   type PermissionUser,
 } from "@/lib/permissions";
+import { canReadWarrantyClaim } from "@/lib/warrantyAccess";
 import type { BuilderRecordKind } from "./recordBinding";
 
 /**
@@ -40,7 +40,9 @@ export async function canAccessBuilderRecord(
       where: { id: record.id },
       select: { vehicleId: true },
     });
-    return claim ? canAccessVehicle(user, claim.vehicleId) : false;
+    // The claim's one read rule — warranty grant AND vehicle — not the vehicle
+    // alone, which let a vehicles-only user render a claim as a document.
+    return claim ? canReadWarrantyClaim(user, claim.vehicleId) : false;
   }
   return record.kind === "quote"
     ? canAccessQuote(user, record.id)

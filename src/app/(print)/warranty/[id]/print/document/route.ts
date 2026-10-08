@@ -1,7 +1,5 @@
 import { redirect } from "next/navigation";
-import { prisma } from "@/lib/db";
-import { requireUser } from "@/lib/auth";
-import { requireVehicleReadAccess } from "@/lib/permissions";
+import { requireWarrantyClaimReadAccess } from "@/lib/warrantyAccess";
 import { isModuleEnabled } from "@/lib/modules/enabled";
 import { withActingStaffScope } from "@/lib/actingScope";
 import { printToolbarHtml } from "@/lib/printToolbar";
@@ -31,14 +29,9 @@ export async function GET(
       return new Response("Not found", { status: 404 });
     }
     const { id } = await context.params;
-    // The same guards as the legacy page.
-    await requireUser();
-    const claim = await prisma.warrantyClaim.findUnique({
-      where: { id },
-      select: { vehicleId: true },
-    });
-    if (!claim) return new Response("Not found", { status: 404 });
-    await requireVehicleReadAccess(claim.vehicleId);
+    // The same guard as the legacy page: the claim's read rule (warranty grant
+    // AND vehicle), not vehicle access alone.
+    if (!(await requireWarrantyClaimReadAccess(id))) return new Response("Not found", { status: 404 });
 
     const doc = await printableRecordLayout("warranty-claim");
     if (!doc) redirect(`/warranty/${id}/print`);
