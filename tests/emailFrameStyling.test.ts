@@ -2,7 +2,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { emailBlockPreviewHtml, emailFramePreview, renderEmailDocument, type EmailBrand } from "../src/lib/doceditor/emailRender";
-import { defaultEmailBody, defaultEmailFrame } from "../src/lib/doceditor/emailDefaults";
+import { defaultEmailBody, defaultEmailFrame, EMAIL_KINDS, isUntouchedEmailSeed } from "../src/lib/doceditor/emailDefaults";
+import { STANDARD_WORDING_2026_10_07 } from "../src/lib/doceditor/emailWordingHistory";
 import { documentSchema, type DocumentBlock, type DocumentModel } from "../src/lib/doceditor/model";
 import { SIGNING_EMAILS, type SigningEmailKind } from "../src/lib/signing/emailTemplates";
 
@@ -237,12 +238,64 @@ test("declining is offered beside signing — in the bar that follows the page, 
   }
 });
 
-test("a draft nobody touched takes the rewritten wording; an edited or published one is never overwritten", () => {
+/** A document as Postgres jsonb hands it back: same content, keys in another order. */
+function asStored(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(asStored);
+  if (!value || typeof value !== "object") return value;
+  return Object.fromEntries(Object.entries(value as Record<string, unknown>).reverse().map(([k, v]) => [k, asStored(v)]));
+}
+
+test("a draft is 'untouched' only when it is EXACTLY what was seeded — any edit, however early, keeps it", () => {
+  // Review of #807: "untouched" was `updatedAt - createdAt < 5s`, but the editor
+  // autosaves ~1.2s after a keystroke, so a first edit made straight after the
+  // email was created looked untouched and was overwritten on the next load.
+  for (const kind of EMAIL_KINDS) {
+    const old = STANDARD_WORDING_2026_10_07[kind];
+    assert.ok(old, `${kind}: the replaced wording is on record`);
+    const seeded = asStored(JSON.parse(JSON.stringify(defaultEmailBody(kind, null, old))));
+    assert.equal(isUntouchedEmailSeed(kind, seeded), true, `${kind}: exactly as seeded`);
+    // The current standard is not a replaced seed, so a refreshed draft is never refreshed again.
+    assert.equal(isUntouchedEmailSeed(kind, defaultEmailBody(kind)), false, `${kind}: already current`);
+  }
+
+  // One character typed, seconds after creation — no timestamp is consulted, so it can never be lost.
+  const edited = JSON.parse(JSON.stringify(defaultEmailBody("invite", null, STANDARD_WORDING_2026_10_07.invite))) as DocumentModel;
+  const firstText = edited.pages[0].rows.flatMap((r) => r.columns[0].blocks).find((b) => b.type === "text") as Block<"text">;
+  (firstText.value[0] as { children: { text?: string }[] }).children[0].text = "Hi there ";
+  assert.equal(isUntouchedEmailSeed("invite", edited), false, "a changed word");
+  // The other ways an owner can change an email without touching its words.
+  const seed = () => JSON.parse(JSON.stringify(defaultEmailBody("quote", null, STANDARD_WORDING_2026_10_07.quote))) as DocumentModel;
+  const subject = seed();
+  subject.email = { subject: "Our quote for you" };
+  assert.equal(isUntouchedEmailSeed("quote", subject), false, "a changed subject");
+  const removed = seed();
+  removed.pages[0].rows.pop();
+  assert.equal(isUntouchedEmailSeed("quote", removed), false, "a removed block");
+  const restyled = seed();
+  const button = defaultEmailBody("invite").pages[0].rows[0];
+  restyled.pages[0].rows.push(button);
+  assert.equal(isUntouchedEmailSeed("quote", restyled), false, "an added block");
+  const hidden = seed();
+  hidden.pages[0].rows[0].columns[0].blocks[0].hidden = true;
+  assert.equal(isUntouchedEmailSeed("quote", hidden), false, "a hidden block");
+
+  // A workspace that had written its own wording was seeded from THAT; the same rule applies to it.
+  const own = { subject: "Your Acme quote", body: "Hello {{first_name}},\n\nQuote attached.\n\nRegards,\n{{company_name}}" };
+  const ownSeed = asStored(JSON.parse(JSON.stringify(defaultEmailBody("quote", own, STANDARD_WORDING_2026_10_07.quote))));
+  assert.equal(isUntouchedEmailSeed("quote", ownSeed, own), true);
+  assert.equal(isUntouchedEmailSeed("quote", ownSeed), false, "not mistaken for the standard seed");
+  // Unreadable or foreign data is never "untouched".
+  assert.equal(isUntouchedEmailSeed("quote", null), false);
+  assert.equal(isUntouchedEmailSeed("quote", { junk: true }), false);
+  assert.equal(isUntouchedEmailSeed("invite", ownSeed), false, "another email's seed");
+});
+
+test("the refresh reads content, never timestamps; only unpublished drafts; and only if unchanged since read", () => {
   const seed = src("src/lib/doceditor/emailSeeding.ts");
-  // Only never-published drafts are candidates, and only those not saved since they were created.
-  assert.match(seed, /where: \{ tenantId, key: \{ in: keys \}, deletedAt: null, publishedVersion: null \},/);
-  assert.match(seed, /\.filter\(\(row\) => row\.updatedAt\.getTime\(\) - row\.createdAt\.getTime\(\) < UNTOUCHED_MS\)/);
-  // The write is conditional on the row being exactly as read — an edit or a publish in between wins.
+  assert.doesNotMatch(seed, /createdAt|getTime\(\)|UNTOUCHED_MS/, "no timestamp decides whether a draft was edited");
+  assert.match(seed, /where: \{ tenantId, key: \{ in: EMAIL_KINDS\.map\(emailBodyKey\) \}, deletedAt: null, publishedVersion: null \},/);
+  assert.match(seed, /if \(!kind \|\| !isUntouchedEmailSeed\(kind, row\.data, storedFor\(kind\)\)\) continue;/);
+  // The write is conditional on the row being exactly as read — a save or a publish in between wins.
   assert.match(seed, /where: \{ id: row\.id, tenantId, updatedAt: row\.updatedAt, publishedVersion: null \},/);
   assert.doesNotMatch(seed, /publishedVersion: \d|status: "published"/, "still a draft — nothing changes for customers");
 });

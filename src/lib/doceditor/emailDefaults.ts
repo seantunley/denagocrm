@@ -18,6 +18,7 @@ import {
   type StoredSigningTemplate,
 } from "../signing/emailTemplates";
 import { sanitizeEmailDoc } from "../signing/emailDoc";
+import { REPLACED_STANDARD_WORDINGS, type EmailWording } from "./emailWordingHistory";
 
 export const EMAIL_FRAME_KEY = "email:frame";
 export const emailBodyKey = (kind: SigningEmailKind) => `email:${kind}`;
@@ -115,13 +116,18 @@ export function defaultEmailFrame(): DocumentModel {
  * line holding only the message's link or code becomes its button (or code
  * box), where it stood; a quote email also shows its number and total.
  */
-export function defaultEmailBody(kind: SigningEmailKind, stored?: StoredSigningTemplate | null): DocumentModel {
+export function defaultEmailBody(
+  kind: SigningEmailKind,
+  stored?: StoredSigningTemplate | null,
+  /** The standard wording to build from — today's, unless rebuilding what an older revision seeded (isUntouchedEmailSeed). */
+  wording: EmailWording = { subject: SIGNING_EMAILS[kind].subject, body: SIGNING_EMAILS[kind].body, headline: EMAIL_HEADLINES[kind] ?? "" },
+): DocumentModel {
   const def = SIGNING_EMAILS[kind];
   const action = def.action ?? null;
   const blocks: DocumentBlock[] = [];
   let n = 0;
   const id = (what: string) => `${kind}-${what}-${n++}`;
-  const headline = EMAIL_HEADLINES[kind];
+  const headline = wording.headline;
   if (headline) blocks.push({ id: id("heading"), type: "heading", ...layout, value: [{ type: "h2", children: leaves(headline) }] });
 
   let flow: Plate[] = [];
@@ -151,7 +157,7 @@ export function defaultEmailBody(kind: SigningEmailKind, stored?: StoredSigningT
       } else flow.push(node);
     }
   } else {
-    const body = (stored?.body ?? def.body).replace(/\r\n?/g, "\n").trim();
+    const body = (stored?.body ?? wording.body).replace(/\r\n?/g, "\n").trim();
     const actionLine = action ? new RegExp(`^\\{\\{\\s*${action}\\s*\\}\\}$`) : null;
     for (const paragraph of body.split(/\n\s*\n/)) {
       if (actionLine?.test(paragraph.trim())) { button(); continue; }
@@ -181,7 +187,35 @@ export function defaultEmailBody(kind: SigningEmailKind, stored?: StoredSigningT
       blocks.splice(at, 1, { ...text, value: text.value.slice(0, 2) }, facts, rest);
     } else blocks.splice(at < 0 ? blocks.length : at + 1, 0, facts);
   }
-  return emailDocument(def.label, blocks, stored?.subject ?? def.subject);
+  return emailDocument(def.label, blocks, stored?.subject ?? wording.subject);
+}
+
+/** Key order and absent-vs-undefined never make two documents differ (Postgres jsonb reorders keys). */
+function canonical(value: unknown): string {
+  return JSON.stringify(value, (_key, v: unknown) =>
+    v && typeof v === "object" && !Array.isArray(v)
+      ? Object.fromEntries(Object.entries(v as Record<string, unknown>).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)))
+      : v,
+  );
+}
+
+/**
+ * Is this stored draft EXACTLY what seeding produced from a standard wording
+ * that has since been replaced — i.e. nobody has changed a character of it?
+ *
+ * Decided by content alone. Any edit, however early (the editor autosaves
+ * about a second after a keystroke) or small, makes the draft differ from
+ * every seed, so it is never taken for untouched. Both sides go through the
+ * schema first, so fields added to the model since are not a difference.
+ */
+export function isUntouchedEmailSeed(kind: SigningEmailKind, data: unknown, stored?: StoredSigningTemplate | null): boolean {
+  const draft = documentSchema.safeParse(data);
+  if (!draft.success) return false;
+  const now = canonical(draft.data);
+  return REPLACED_STANDARD_WORDINGS.some((revision) => {
+    const wording = revision[kind];
+    return !!wording && canonical(defaultEmailBody(kind, stored, wording)) === now;
+  });
 }
 
 /** A paragraph holding only the sender's or company's name field. */
