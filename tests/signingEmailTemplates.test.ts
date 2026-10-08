@@ -40,14 +40,14 @@ test("default invitation: professional wording, the link and button, and the way
   const e = renderSigningEmail("invite", null, VARS, BRAND);
   assert.equal(e.subject, "Quote Q-1026 — ready for review and signature");
   assert.match(e.html, /Dear Jane Doe,/);
-  assert.match(e.html, /Your Quote Q-1026 is ready for review and signature\./);
+  assert.match(e.html, /Your Quote Q-1026 is ready\./);
   // Signing stays customer-friendly: Decline remains available without dominating the message.
   assert.match(e.text, /signing page also gives you the option to Decline/);
   assert.match(renderSigningEmail("reminder", null, VARS, BRAND).text, /choose Decline on the signing page/);
   assert.match(e.html, /Review &amp; Sign/);
   assert.match(e.html, /Having trouble with the button\? Copy this secure link into your browser:/);
   assert.ok(e.html.includes(`href="${URL_}"`));
-  assert.match(e.text, /^Dear Jane Doe,\n\nYour Quote Q-1026 is ready for review and signature\.[^\n]*\n\nReview and sign securely here:\nhttps:\/\/crm\.example\.co\.za\/signing\//);
+  assert.match(e.text, /^Dear Jane Doe,\n\nYour Quote Q-1026 is ready\.[^\n]*\n\nReview and sign securely here:\nhttps:\/\/crm\.example\.co\.za\/signing\//);
   assert.match(e.text, /Kind regards,\nAcme Carts$/);
   // Logo on top, brand in the footer.
   assert.ok(e.html.includes(`<img src="${BRAND.logoUrl}"`));
