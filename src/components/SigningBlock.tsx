@@ -28,6 +28,7 @@ export type SigningRecipientView = {
   viewedAt: Date | string | null;
   signedAt: Date | string | null;
   declinedAt: Date | string | null;
+  declineReason?: string | null;
 };
 
 export type SigningState = {
@@ -177,6 +178,9 @@ export default function SigningBlock({
         <div className="rounded-lg bg-red-500/10 border border-red-500/30 px-3 py-2 mb-3">
           <p className="text-xs text-red-300">
             ✗ Declined by the customer on {formatDateTime(declined.declinedAt!)}. Void the request below and send a fresh one if they change their mind.
+          </p>
+          <p className="mt-1 text-xs text-red-200">
+            {declined.declineReason?.trim() ? `Their reason: “${declined.declineReason.trim()}”` : "They gave no reason."}
           </p>
         </div>
       )}

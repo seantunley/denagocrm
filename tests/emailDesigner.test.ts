@@ -48,9 +48,9 @@ test("every email has a default design: valid, its subject, its action, and a he
 
 test("design B: the frame wraps the body — logo panel, message, the sender as signature, a quiet footer", () => {
   const { html, subject } = render("invite");
-  assert.equal(subject, "Please sign your document: Quote Q-42");
-  assert.ok(html.indexOf('src="https://acme.example/logo.png"') < html.indexOf("Please sign Quote Q-42"), "header above the message");
-  assert.ok(html.indexOf("Please sign Quote Q-42") < html.indexOf(">Pat Smith<"), "the message above the signature");
+  assert.equal(subject, "Quote Q-42 is ready for your signature");
+  assert.ok(html.indexOf('src="https://acme.example/logo.png"') < html.indexOf("Quote Q-42 is ready for your signature</div>"), "header above the message");
+  assert.ok(html.indexOf("Quote Q-42 is ready for your signature</div>") < html.indexOf(">Pat Smith<"), "the message above the signature");
   assert.match(html, /href="https:\/\/crm\.acme\.example\/signing\/tok"[^>]*>Open &amp; sign/);
   assert.match(html, /1 Main Rd, Cape Town/);
   assert.match(html, /@media \(max-width: 600px\)/);
@@ -113,7 +113,7 @@ test("a per-send edit swaps the paragraphs only: headline, figures and button st
   assert.deepEqual(kinds, ["heading", "text", "emailFacts"], "one text block where the first was; the rest kept");
   const r = render("quote", body);
   assert.match(r.html, /Here is the revised quote\./);
-  assert.doesNotMatch(r.html, /Thank you for your interest/);
+  assert.doesNotMatch(r.html, /Thank you for the opportunity to quote/);
   assert.equal(r.bodyText, "Hi Jane,\n\nHere is the revised quote.");
   // The quote dialog shows and compares exactly that text, not the whole email.
   const quoteAction = src("src/app/actions/quoteEmail.ts");

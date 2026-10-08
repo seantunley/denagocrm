@@ -22,7 +22,7 @@ test("every default template passes its own validation and has a group", () => {
   }
 });
 
-test("defaults keep today's wording — nothing a customer receives changes until an owner edits it", () => {
+test("the standard wording: texts as they were, emails as rewritten 2026-10-08", () => {
   assert.equal(
     renderSms("lookup_code_sms", null, { ...COMPANY, code: "482913" }),
     "Acme: your verification code is 482913. It expires in 10 minutes. If you didn't request this, ignore this message.",
@@ -36,11 +36,11 @@ test("defaults keep today's wording — nothing a customer receives changes unti
     "Hi Jo, your Rover XL is due for a service (14 Oct 2026). Call Acme on 021 000 0000 to book. Reply STOP to opt out.",
   );
   const recall = renderSigningEmail("recall", null, { ...COMPANY, first_name: "Jo", model: "Rover XL", recall_title: "Brake check", recall_description: "Please book in." }, BRAND);
-  assert.equal(recall.subject, "Important: Brake check — your Rover XL");
-  assert.equal(recall.text, "Hi Jo,\n\nPlease book in.\n\nPlease contact Acme on 021 000 0000 to arrange this at no charge.\n\nWarm regards,\nAcme");
+  assert.equal(recall.subject, "Important notice for your Rover XL: Brake check");
+  assert.equal(recall.text, "Dear Jo,\n\nWe are writing to you about your Rover XL.\n\nPlease book in.\n\nThis work will be carried out at no charge to you. Please contact Acme on 021 000 0000 at your earliest convenience so that we can arrange a suitable time.\n\nWe apologise for the inconvenience and thank you for your understanding.\n\nKind regards,\nAcme");
   const portal = renderSigningEmail("portal_code", null, { ...COMPANY, code: "482913" }, BRAND);
-  assert.equal(portal.subject, "Your Acme portal code");
-  assert.match(portal.text, /^Your login code is 482913\. It expires in 10 minutes\./);
+  assert.equal(portal.subject, "Your Acme login code");
+  assert.match(portal.text, /^Please use the code below to sign in to your Acme customer portal:\n\n482913\n\nThe code is valid for 10 minutes\./);
 });
 
 test("SMS: no subject, length-capped, and the code/link can't be dropped", () => {

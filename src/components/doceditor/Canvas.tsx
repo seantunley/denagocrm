@@ -1,6 +1,8 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useDocEditorEnv } from "./EditorContext";
+import { emailFramePreview } from "@/lib/doceditor/emailRender";
 import { useDraggable } from "@dnd-kit/core";
 import { useEditor } from "@/lib/doceditor/store";
 import { newBlock } from "@/lib/doceditor/factory";
@@ -15,14 +17,52 @@ export function Canvas({ zoom }: { zoom: number }) {
   const select = useEditor((s) => s.select);
   const hint = useDropHint();
 
+  const { email } = useDocEditorEnv();
+  // An email is drawn in its frame: the frame's own colours, and — around a
+  // message — the header above it and the signature and footer below, exactly
+  // as they send. On the frame itself those are its own (editable) blocks.
+  const frameDoc = email ? (email.kind ? email.frame?.doc : doc) : null;
+  const frame = useMemo(
+    () => (email && frameDoc ? emailFramePreview(frameDoc, { ...email.sample, sender_name: email.sample.sender_name || "Your name" }, email.brand) : null),
+    [email, frameDoc],
+  );
+
   if (!doc) return null;
   const size = PAGE_SIZES[doc.style.pageSize];
+  const around = email && frame ? { ...frame, message: !!email.kind, href: email.frame?.href ?? null } : undefined;
 
   return (
-    <div className="flex flex-col items-center gap-10 py-10" onMouseDown={() => select(null)}>
+    <div className="flex flex-col items-center gap-10 py-10" style={frame ? { background: frame.page } : undefined} onMouseDown={() => select(null)}>
       {doc.pages.map((page, pIdx) => (
-        <PageView key={page.id} page={page} pIdx={pIdx} zoom={zoom} size={size} margin={doc.style.margin} fontFamily={doc.style.fontFamily} hint={hint} />
+        <PageView key={page.id} page={page} pIdx={pIdx} zoom={zoom} size={size} margin={doc.style.margin} fontFamily={doc.style.fontFamily} hint={hint} email={around} />
       ))}
+    </div>
+  );
+}
+
+type EmailAround = { top: string; bottom: string; card: string; message: boolean; href: string | null };
+
+/**
+ * The shared frame around a message — shown so the email is edited as it is
+ * sent, not editable here (it belongs to every email): one click opens it.
+ * Our own renderer's escaped markup, with sample details.
+ */
+function FramePart({ html, href, zoom }: { html: string; href: string | null; zoom: number }) {
+  if (!html) return null;
+  return (
+    <div className="group/frame relative" onMouseDown={(e) => e.stopPropagation()}>
+      <div style={{ zoom }} dangerouslySetInnerHTML={{ __html: html }} />
+      {href && (
+        <a
+          href={href} target="_blank" rel="noreferrer"
+          title="The header, signature and footer are shared by every customer email. Opens the frame in a new tab."
+          className="absolute inset-0 flex items-start justify-end rounded-sm p-2 outline-dashed outline-1 -outline-offset-1 outline-transparent transition hover:bg-orange-400/5 hover:outline-orange-400"
+        >
+          <span className="rounded-full bg-slate-900/80 px-2.5 py-1 text-[11px] font-medium text-white shadow-sm group-hover/frame:bg-orange-500">
+            Shared frame · Edit ↗
+          </span>
+        </a>
+      )}
     </div>
   );
 }
@@ -37,11 +77,12 @@ export function Canvas({ zoom }: { zoom: number }) {
  * boundary back where the designer can see it.
  */
 function PageView({
-  page, pIdx, zoom, size, margin, fontFamily, hint,
+  page, pIdx, zoom, size, margin, fontFamily, hint, email,
 }: {
   page: DocumentPage; pIdx: number; zoom: number;
   size: { w: number; h: number }; margin: number;
   fontFamily: "sans" | "serif" | "mono"; hint: Hint;
+  email?: EmailAround;
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const [height, setHeight] = useState(0);
@@ -58,7 +99,8 @@ function PageView({
 
   const sheet = size.h * zoom;
   // How many sheets this page's content will actually print onto.
-  const sheets = Math.max(1, Math.ceil(height / sheet - 0.001));
+  // An email is one continuous card, never paginated.
+  const sheets = email ? 1 : Math.max(1, Math.ceil(height / sheet - 0.001));
 
   return (
     <div
@@ -66,9 +108,12 @@ function PageView({
       data-page-idx={pIdx}
       className="relative bg-white shadow-lg ring-1 ring-black/5"
       // Ink on paper whatever the app's theme: the sheet is white, so its text must never inherit the dark theme's light foreground.
-      style={{ width: size.w * zoom, minHeight: sheet, color: "#0f172a" }}
+      style={{ width: size.w * zoom, minHeight: sheet, color: "#0f172a", ...(email ? { background: email.card, borderRadius: 16 * zoom, overflow: "hidden" } : {}) }}
     >
-      <div className="relative" style={{ padding: margin * zoom }}>
+      {email?.message && <FramePart html={email.top} href={email.href} zoom={zoom} />}
+      {/* An email has no page margin of its own: a message sits where the frame's
+          slot puts it, and the frame's header and footer run edge to edge. */}
+      <div className="relative" style={{ padding: email ? (email.message ? `${34 * zoom}px ${margin * zoom}px ${4 * zoom}px` : `${14 * zoom}px ${margin * zoom}px 0`) : margin * zoom }}>
         {/* CSS `zoom`, not just zoomed box sizes: the page, its margins and every
             floating block / overlay field are placed at `px × zoom`, so the
             CONTENT has to scale by the same factor or it lays out at 100% inside
@@ -81,6 +126,7 @@ function PageView({
         </div>
         <AddRowButton pageIdx={pIdx} active={!!hint && "pageIdx" in hint && hint.pageIdx === pIdx} />
       </div>
+      {email?.message && <FramePart html={email.bottom} href={email.href} zoom={zoom} />}
       <FloatingLayer page={page} zoom={zoom} />
       <OverlayLayer page={page} zoom={zoom} />
       <div className="pointer-events-none absolute -top-6 left-0 text-[11px] font-medium text-slate-400">Page {pIdx + 1}</div>

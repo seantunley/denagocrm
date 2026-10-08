@@ -2,6 +2,7 @@
 
 import { createContext, useContext, type ReactNode } from "react";
 import type { EmailBrand } from "@/lib/doceditor/emailRender";
+import type { DocumentModel } from "@/lib/doceditor/model";
 
 /**
  * Server-resolved facts the canvas and panels need but the document model does
@@ -19,7 +20,18 @@ export type DocEditorEnv = {
    * them, and the workspace's email brand — so the canvas draws the email blocks
    * as the email will, and "＋ field" offers only what that message can fill.
    */
-  email?: { kind: string | null; fields: string[]; sample: Record<string, string>; brand: EmailBrand };
+  email?: {
+    kind: string | null;
+    fields: string[];
+    sample: Record<string, string>;
+    brand: EmailBrand;
+    /**
+     * For a MESSAGE: the workspace's email frame as it is being designed (its
+     * header, signature, footer and colours), drawn around the message on the
+     * canvas, and where to edit it. Absent on the frame itself.
+     */
+    frame?: { href: string | null; doc: DocumentModel };
+  };
 };
 
 // No logo outside a provider: the banner then shows the company-name wordmark.

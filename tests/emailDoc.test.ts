@@ -75,7 +75,7 @@ test("plain text is derived from the formatted body — what validation reads is
 
 test("existing plain templates open in the editor with fields as pills", () => {
   const doc = textToEmailDoc(SIGNING_EMAILS.invite.body, FIELDS);
-  assert.deepEqual(doc[0].children, [{ text: "Hi " }, field("recipient_name"), { text: "," }]);
+  assert.deepEqual(doc[0].children, [{ text: "Dear " }, field("recipient_name"), { text: "," }]);
   assert.deepEqual(doc[2].children, [field("signing_link")]);
   assert.equal(emailDocToText(sanitizeEmailDoc(doc, FIELDS)!), SIGNING_EMAILS.invite.body, "round-trips to the same text");
 });
@@ -99,6 +99,6 @@ test("Email quote keeps the template's formatting when staff don't edit the mess
 
 test("a template saved before formatting (no doc) renders exactly as before", () => {
   const plain = renderSigningEmail("invite", null, { recipient_name: "Jane", document_title: "Q-1", signing_link: LINK, company_name: "Acme" }, BRAND);
-  assert.match(plain.html, /<p style="[^"]*">Hi Jane,<\/p>/);
+  assert.match(plain.html, /<p style="[^"]*">Dear Jane,<\/p>/);
   assert.match(plain.html, /v:roundrect/);
 });

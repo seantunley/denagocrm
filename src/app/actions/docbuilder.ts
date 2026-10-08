@@ -10,6 +10,7 @@ import { logAudit } from "@/lib/audit";
 // getBuilderTemplate, not a raw findUnique: it is where the module check lives.
 import { getBuilderTemplate, listBuilderVersions, withLegacyTextInlined } from "@/lib/docbuilder/store";
 import { STANDARD_TEMPLATE_KEYS, standardTemplateFor, type StandardDocKey } from "@/lib/doceditor/standardTemplates";
+import { defaultEmailBody, defaultEmailFrame, EMAIL_FRAME_KEY, emailKindOf } from "@/lib/doceditor/emailDefaults";
 import { withActingStaffScope } from "@/lib/actingScope";
 import { requiredRecordKind } from "@/lib/docbuilder/recordBinding";
 import { staleWordingWarnings } from "@/lib/doceditor/wordingCheck";
@@ -125,10 +126,18 @@ export async function resetBuilderTemplateToStandard(id: string): Promise<{ ok: 
     const tpl = await getBuilderTemplate(id);
     if (!tpl || tpl.deletedAt) return { ok: false, error: "That template no longer exists." };
     if (!(await canEditLayout(user, tpl.key))) return { ok: false, error: "You don't have access to edit this layout." };
-    if (!(STANDARD_TEMPLATE_KEYS as string[]).includes(tpl.key)) {
+    // A customer email resets to the standard wording / frame (never the
+    // workspace's older saved copy — the point is to take the current standard).
+    const emailKind = emailKindOf(tpl.key);
+    const isEmail = !!emailKind || tpl.key === EMAIL_FRAME_KEY;
+    if (!isEmail && !(STANDARD_TEMPLATE_KEYS as string[]).includes(tpl.key)) {
       return { ok: false, error: "There is no standard layout for this kind of document." };
     }
-    const standard = standardTemplateFor(tpl.key as StandardDocKey, { automotive: await isModuleEnabled("automotive") });
+    const standard = emailKind
+      ? defaultEmailBody(emailKind)
+      : isEmail
+        ? defaultEmailFrame()
+        : standardTemplateFor(tpl.key as StandardDocKey, { automotive: await isModuleEnabled("automotive") });
     await prisma.$transaction(async (tx) => {
       const last = await tx.docBuilderVersion.findFirst({
         where: { templateId: id }, orderBy: { version: "desc" }, select: { version: true },

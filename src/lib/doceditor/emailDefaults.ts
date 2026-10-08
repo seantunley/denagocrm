@@ -40,7 +40,7 @@ const layout = { settings: {}, locked: false, hidden: false } as const;
  */
 export const EMAIL_SAMPLE_FIELDS: Record<string, string> = {
   recipient_name: "Jane Doe", first_name: "Jane", document_title: "Quote Q-1026", quote_number: "Q-1026",
-  company_name: "", sender_name: "", company_phone: "", company_email: "", company_contact: "",
+  company_name: "", sender_name: "", sender_title: "", sender_mobile: "", sender_email: "", company_phone: "", company_email: "", company_contact: "",
   signing_link: "https://example.com/signing/preview-only", expiry_date: "14 Oct 2026", code: "482913",
   total: "R 125 000,00", model: "Rover XL", item: "Rover XL", due_date: "14 Oct 2026",
   recall_title: "Brake cable inspection", recall_description: "We're checking the rear brake cable on all Rover XL vehicles built before June 2026.",
@@ -51,17 +51,17 @@ export const EMAIL_SAMPLE_FIELDS: Record<string, string> = {
 
 /** A headline for each email, using only that message's own fields. */
 export const EMAIL_HEADLINES: Partial<Record<SigningEmailKind, string>> = {
-  invite: "Please sign {{document_title}}",
-  reminder: "A reminder to sign {{document_title}}",
-  completed: "Everyone has signed",
+  invite: "{{document_title}} is ready for your signature",
+  reminder: "{{document_title}} is awaiting your signature",
+  completed: "Signed and complete",
   otp: "Your verification code",
-  quote: "Your quote {{quote_number}}",
+  quote: "Your quotation {{quote_number}}",
   portal_code: "Your login code",
   lookup_code: "Your verification code",
-  service_reminder: "Time for a service",
+  service_reminder: "Your {{model}} is due for a service",
   recall: "{{recall_title}}",
-  review_delivery: "Enjoying your new {{item}}?",
-  review_service: "How was your service?",
+  review_delivery: "How are you enjoying your new {{item}}?",
+  review_service: "How was your recent service?",
   survey_invite: "{{survey_title}}",
   survey_reminder: "{{survey_title}}",
 };
@@ -95,13 +95,18 @@ function emailDocument(title: string, blocks: DocumentBlock[], subject?: string)
   });
 }
 
+/** What a new header, signature and footer start as (the model's own defaults, spelled out for literals). */
+export const EMAIL_HEADER_DEFAULTS = { style: "panel", background: "#0b0f19", logoWidth: 210, align: "left" } as const;
+export const EMAIL_SIGNATURE_DEFAULTS = { showJobTitle: true, showCompany: true, showPhone: true, showEmail: true, showWebsite: true } as const;
+export const EMAIL_FOOTER_DEFAULTS = { note: "", showCompany: true, showContact: true, align: "center", color: "#94a3b8", background: "" } as const;
+
 /** Design B: the logo panel, the message, the signature, a quiet footer. */
 export function defaultEmailFrame(): DocumentModel {
   return emailDocument("Email frame — header, signature and footer", [
-    { id: "frame-header", type: "emailHeader", ...layout },
+    { id: "frame-header", type: "emailHeader", ...layout, ...EMAIL_HEADER_DEFAULTS },
     { id: "frame-body", type: "emailBody", ...layout },
-    { id: "frame-signature", type: "emailSignature", ...layout },
-    { id: "frame-footer", type: "emailFooter", ...layout, note: "" },
+    { id: "frame-signature", type: "emailSignature", ...layout, ...EMAIL_SIGNATURE_DEFAULTS },
+    { id: "frame-footer", type: "emailFooter", ...layout, ...EMAIL_FOOTER_DEFAULTS },
   ]);
 }
 

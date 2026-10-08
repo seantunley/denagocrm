@@ -53,7 +53,12 @@ export async function GET(_request: Request, context: { params: Promise<{ id: st
   const brand = await emailBrandFor(tenantId);
   const fields: Record<string, string> = {};
   for (const f of SIGNING_EMAILS[shown].fields) fields[f] = EMAIL_SAMPLE_FIELDS[f] ?? "";
-  Object.assign(fields, { company_name: brand.companyName, company_phone: brand.phone, company_email: brand.email, sender_name: user.name });
+  Object.assign(fields, { company_name: brand.companyName, company_phone: brand.phone, company_email: brand.email });
+  // A message a person sends previews signed by the viewer — their own details, as their sends will be.
+  if ((SIGNING_EMAILS[shown].fields as readonly string[]).includes("sender_name")) {
+    const me = await prisma.user.findUnique({ where: { id: user.id }, select: { mobile: true, jobTitle: true } });
+    Object.assign(fields, { sender_name: user.name, sender_email: user.email, sender_mobile: me?.mobile ?? "", sender_title: me?.jobTitle ?? "" });
+  }
   const email = renderEmailDocument({ frame, body, fields, brand, action: SIGNING_EMAILS[shown].action ?? null });
 
   const page = `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Preview — ${esc(email.subject)}</title>

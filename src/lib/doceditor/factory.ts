@@ -4,6 +4,7 @@ import type {
   OverlayField, Recipient, PricingLine,
 } from "./model";
 import { DEFAULT_REGIONAL } from "@/lib/format";
+import { EMAIL_FOOTER_DEFAULTS, EMAIL_HEADER_DEFAULTS, EMAIL_SIGNATURE_DEFAULTS } from "./emailDefaults";
 
 export function uid(): string {
   // crypto.randomUUID is available in modern browsers and Node 18+.
@@ -108,12 +109,14 @@ export function newBlock(type: BlockType): DocumentBlock {
     case "footerBand":
       return { id: uid(), type, ...emptyLayout, subtitle: "{{company.tagline}}", bg: "#020617", accent: "#ea580c", bgImage: "" };
     // Customer email blocks (./emailRender.ts).
-    case "emailHeader":
     case "emailBody":
-    case "emailSignature":
       return { id: uid(), type, ...emptyLayout };
+    case "emailHeader":
+      return { id: uid(), type, ...emptyLayout, ...EMAIL_HEADER_DEFAULTS };
+    case "emailSignature":
+      return { id: uid(), type, ...emptyLayout, ...EMAIL_SIGNATURE_DEFAULTS };
     case "emailFooter":
-      return { id: uid(), type, ...emptyLayout, note: "" };
+      return { id: uid(), type, ...emptyLayout, ...EMAIL_FOOTER_DEFAULTS };
     case "emailButton":
       return { id: uid(), type, ...emptyLayout, token: "signing_link", label: "Open & sign", style: "dark" };
     case "emailFacts":

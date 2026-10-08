@@ -54,6 +54,8 @@ async function quoteVars(quote: LoadedQuote, user: PermissionUser) {
   const billTo = quoteBillTo(quote, await loadBillToFleet(prisma, quote.fleetId));
   // The person, not the fleet account: "Hi Acme Logistics" reads wrong.
   const name = (billTo.attention || billTo.name).trim();
+  // The sender's own details sign the email (My account → job title, mobile).
+  const sender = await prisma.user.findUnique({ where: { id: user.id }, select: { mobile: true, jobTitle: true } });
   return {
     to: billTo.email,
     vars: {
@@ -63,6 +65,9 @@ async function quoteVars(quote: LoadedQuote, user: PermissionUser) {
       quote_number: `Q-${quote.number}`,
       total: formatZAR(Math.round(payableTotalCents(quote))),
       sender_name: user.name,
+      sender_title: sender?.jobTitle ?? "",
+      sender_mobile: sender?.mobile ?? "",
+      sender_email: user.email,
     },
   };
 }
