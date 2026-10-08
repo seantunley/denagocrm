@@ -94,9 +94,11 @@ export default async function DocEditorPage({
   // a Subject line, and no print tools. Owner-only (layoutAccess.ts).
   const emailKind = emailKindOf(template.key);
   if (emailKind || template.key === EMAIL_FRAME_KEY) {
-    const tenantId = template.tenantId ?? (await getActiveTenantId());
-    const brand = tenantId ? await emailBrandFor(tenantId) : null;
-    if (!brand) notFound();
+    // The acting workspace, from the session; the template is its own (getBuilderTemplate
+    // refuses another workspace's email) — and the brand shown is read for that tenant only.
+    const tenantId = await getActiveTenantId();
+    if (!tenantId || template.tenantId !== tenantId) notFound();
+    const brand = await emailBrandFor(tenantId);
     const place = emailKind ? messagePlace(emailKind) : "automatic";
     const backHref = place === "documents" ? "/document-studio#document-emails" : MESSAGE_PLACES[place].path;
     return (

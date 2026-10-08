@@ -29,15 +29,19 @@ export async function GET(_request: Request, context: { params: Promise<{ id: st
   const kind = template ? emailKindOf(template.key) : null;
   if (!template || (!kind && template.key !== EMAIL_FRAME_KEY)) return new Response("Not found", { status: 404 });
   if (!(await canEditLayout(user, template.key))) return new Response("Not found", { status: 404 });
-  const tenantId = template.tenantId ?? (await getActiveTenantId());
-  if (!tenantId) return new Response("Not found", { status: 404 });
+  // The ACTING workspace, from the session — and the template must be its own
+  // (getBuilderTemplate already refused another workspace's email; checked again
+  // here so this route never depends on that alone). Everything below — the
+  // companion frame/body, the brand — is read for exactly this tenant.
+  const tenantId = await getActiveTenantId();
+  if (!tenantId || template.tenantId !== tenantId) return new Response("Not found", { status: 404 });
 
   const draft = parseDocument(template.data);
   if (!draft) return new Response("This email can't be read.", { status: 422 });
   // The other half: for a message, this workspace's frame as it is being designed; for the frame, a sample message.
   const otherKey = kind ? EMAIL_FRAME_KEY : emailBodyKey("quote");
   const other = await prisma.docBuilderTemplate.findFirst({
-    where: { key: otherKey, deletedAt: null },
+    where: { tenantId, key: otherKey, deletedAt: null },
     orderBy: [{ isDefault: "desc" }, { updatedAt: "desc" }],
     select: { data: true },
   });

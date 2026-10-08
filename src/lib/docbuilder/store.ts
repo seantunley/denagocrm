@@ -1,5 +1,6 @@
 import "server-only";
 import { prisma } from "@/lib/db";
+import { getActiveTenantId } from "@/lib/auth";
 import { isModuleEnabled } from "@/lib/modules/enabled";
 import { docKeyEnabled } from "@/lib/docModuleAccess";
 import { readTemplateDocument } from "@/lib/doceditor/legacy";
@@ -129,6 +130,16 @@ export async function getBuilderTemplate(id: string) {
   // The one door every by-id read uses (editor, preview, render, export, and the
   // builder actions), so a module-only template opened by id is simply not there.
   if (!(await docKeyEnabled(record.key))) return null;
+  // A customer EMAIL layout (`email:…`) exists only for the workspace that OWNS
+  // it (review of #806). `isTenantOwner()` proves the caller owns their active
+  // workspace, not that this row is in it — and this lookup is by id alone, so
+  // an owner of workspace A holding one of B's ids could otherwise open, save,
+  // publish, restore and preview B's email. Checked HERE, the one door, so every
+  // one of those paths gets it; an email row without a tenant is nobody's.
+  if (record.key.startsWith("email:")) {
+    const active = await getActiveTenantId().catch(() => null);
+    if (!active || record.tenantId !== active) return null;
+  }
   return record;
 }
 
