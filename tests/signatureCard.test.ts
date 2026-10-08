@@ -91,6 +91,11 @@ test("the logo panel banner: shown at its size and linked, https only, and kept 
   assert.match(upload, /requireTenantOwner\(\)/);
   assert.match(upload, /\["image\/png", "image\/jpeg"\]\.includes\(file\.type\)/);
   assert.match(upload, /savePublicAsset\(/, "email artwork is a public asset, never a private client file");
+  // An accepted banner must be one the email embedder will embed (review of #804):
+  // one limit, shared, not two numbers that can drift apart.
+  assert.match(action, /const BANNER_MAX_BYTES = MAX_LOGO_BYTES;/);
+  assert.match(upload, /if \(file\.size > BANNER_MAX_BYTES\) refuse\(/);
+  assert.match(readFileSync(new URL("../src/lib/emailInlineLogo.ts", import.meta.url), "utf8"), /export const MAX_LOGO_BYTES = 1024 \* 1024;[\s\S]*content\.length <= MAX_LOGO_BYTES/);
 });
 
 test("phones stack the panel above the details", () => {

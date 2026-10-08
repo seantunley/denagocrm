@@ -37,6 +37,7 @@ import {
 } from "@/lib/signature";
 import { getCompanyProfile } from "@/lib/companyProfile";
 import { readFile, savePublicAsset } from "@/lib/storage";
+import { MAX_LOGO_BYTES } from "@/lib/emailInlineLogo";
 import { emailUploads } from "@/lib/emailUploads";
 import { resolveActingTenant } from "@/lib/tenantContext";
 import { parseReplyTo } from "@/lib/replyToAddresses";
@@ -447,7 +448,10 @@ async function storeSignatureDesign(tenantId: string, design: SignatureDesign) {
   });
 }
 
-const BANNER_MAX_BYTES = 2 * 1024 * 1024;
+// The email embedder's own limit (review of #804): a bigger banner would show in
+// the Settings preview but stay a remote image in the sent email, which many mail
+// apps block — the panel would be missing for exactly the customers who matter.
+const BANNER_MAX_BYTES = MAX_LOGO_BYTES;
 
 /**
  * The card signature's logo panel image: drawn in the browser from the logo
@@ -465,7 +469,7 @@ export async function saveSignatureBanner(formData: FormData): Promise<{ error?:
     const file = formData.get("banner");
     if (file instanceof File && file.size > 0) {
       if (!["image/png", "image/jpeg"].includes(file.type)) refuse("The banner has to be a PNG or JPG image.");
-      if (file.size > BANNER_MAX_BYTES) refuse("The banner is over the 2 MB limit.");
+      if (file.size > BANNER_MAX_BYTES) refuse("The banner is over the 1 MB limit — save it smaller (960 × 300 is plenty).");
       bannerUrl = await savePublicAsset(Buffer.from(await file.arrayBuffer()), file.type === "image/png" ? "signature-banner.png" : "signature-banner.jpg", file.type, tenantId);
       // Without a public store the file lands on local disk with no web address,
       // and a mail app can't load a banner that has none.

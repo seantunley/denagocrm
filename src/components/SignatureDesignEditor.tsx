@@ -99,7 +99,7 @@ export default function SignatureDesignEditor({
           <p className="text-xs text-muted-foreground">
             {design.bannerUrl
               ? "Using the panel image above. Generate it again after changing your logo, or upload your own."
-              : "Generate the panel from your logo — the dark slanted panel with the orange stripe — or upload your own image (PNG or JPG, 960 × 300 looks sharpest)."}
+              : "Generate the panel from your logo — the dark slanted panel with the orange stripe — or upload your own image (PNG or JPG, up to 1 MB; 960 × 300 looks sharpest)."}
           </p>
           <div className="flex flex-wrap gap-2">
             <button type="button" className="btn-primary btn-sm" disabled={!!busy || !company.logoUrl} onClick={generate}>

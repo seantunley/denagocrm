@@ -29,7 +29,8 @@ export type ImageLoader = (src: string) => Promise<LoadedImage | null>;
 
 const EXT_TYPES: Record<string, string> = { png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", webp: "image/webp", svg: "image/svg+xml" };
 const TYPE_EXT: Record<string, string> = { "image/png": "png", "image/jpeg": "jpg", "image/webp": "webp", "image/svg+xml": "svg", "image/gif": "gif" };
-const MAX_LOGO_BYTES = 1024 * 1024;
+/** The largest image embedded in an email. An upload meant for email (the signature banner) is capped at this too. */
+export const MAX_LOGO_BYTES = 1024 * 1024;
 const CACHE_MS = 10 * 60 * 1000;
 
 /**
