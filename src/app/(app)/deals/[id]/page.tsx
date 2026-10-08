@@ -22,8 +22,9 @@ import {
   Wrench,
 } from "lucide-react";
 import { prisma } from "@/lib/db";
-import { requireQuoteReadAccess } from "@/lib/permissions";
-import { contactName, formatDate, formatDateTime, formatZAR } from "@/lib/format";
+import { canAccessLead, hasAnyPermission, requireQuoteReadAccess, requireRoute } from "@/lib/permissions";
+import { formatDate, formatDateTime, formatZAR } from "@/lib/format";
+import { loadBillToFleet, quoteBillTo } from "@/lib/quoteBillTo";
 import { payableTotalCents } from "@/lib/pricing";
 import { primaryVehicleLine, showcaseImageRefFor } from "@/lib/docbuilder/vehicleShowcase";
 import { storedFileSrc } from "@/lib/storedFileSrc";
@@ -98,7 +99,9 @@ function TimelineItem({
 
 export default async function DealWorkspacePage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  await requireQuoteReadAccess(id);
+  // The same rule the proxy applies to /deals (routeAccess.ts), then this quote itself.
+  await requireRoute("/deals");
+  const user = await requireQuoteReadAccess(id);
 
   const quote = await prisma.quote.findUnique({
     where: { id },
@@ -152,7 +155,16 @@ export default async function DealWorkspacePage({ params }: { params: Promise<{ 
         ? Math.round(total * ((quote.depositValue ?? 0) / 100))
         : 0;
 
-  const customer = quote.contact ? contactName(quote.contact) : quote.lead?.name || "Unlinked customer";
+  // Who the deal is with: the fleet account when the quote is billed to one, as
+  // every quote document states it (quoteBillTo) — not the manager's own name.
+  const billTo = quoteBillTo(quote, await loadBillToFleet(prisma, quote.fleetId));
+  const customer = billTo.name || "Unlinked customer";
+  // The lead's own content — its conversations, activities and source — is shown
+  // only to someone who may open that lead. Seeing a quote does not grant its lead.
+  const lead =
+    quote.lead && (await hasAnyPermission(user, "leads.view_all", "leads.view_owned")) && (await canAccessLead(user, quote.lead.id))
+      ? quote.lead
+      : null;
   const stock = [
     ...quote.soldStock.map((unit) => ({ ...unit, allocation: "Sold" })),
     ...quote.stockReservations
@@ -167,7 +179,7 @@ export default async function DealWorkspacePage({ params }: { params: Promise<{ 
     ? storedFileSrc(showcaseImageRefFor(vehicleProduct, vehicleColour))
     : null;
   const vehicleName = vehicleProduct?.name ?? vehicleLine?.description ?? quote.lead?.title ?? "Vehicle not selected";
-  const nextActivity = quote.lead?.activities.find((item) => item.status === "planned") ?? null;
+  const nextActivity = lead?.activities.find((item) => item.status === "planned") ?? null;
   const accepted = quote.status === "accepted" || Boolean(quote.signedAt);
   const stockReady = stock.length > 0;
   const pdiReady = stockReady && stock.every((item) => item.pdiStatus === "ready_for_delivery" || item.pdiStatus === "passed");
@@ -193,7 +205,7 @@ export default async function DealWorkspacePage({ params }: { params: Promise<{ 
       kind: item.kind,
     }));
   const timeline = [
-    ...quote.lead?.communications.map((message) => ({
+    ...lead?.communications.map((message) => ({
       key: `comm-${message.id}`,
       when: message.occurredAt,
       icon: message.type === "email" ? <Mail className="size-3.5" /> : <MessageSquareText className="size-3.5" />,
@@ -231,7 +243,7 @@ export default async function DealWorkspacePage({ params }: { params: Promise<{ 
       actions={
         <>
           <Link href={`/quotes?edit=${quote.id}`} className="btn-primary">Edit quote</Link>
-          {quote.leadId && <Link href={`/leads/${quote.leadId}?tab=activities&schedule=1`} className="btn-secondary">Add activity</Link>}
+          {lead && <Link href={`/leads/${lead.id}?tab=activities&schedule=1`} className="btn-secondary">Add activity</Link>}
           <a href={`/quotes/${quote.id}/print`} target="_blank" rel="noreferrer" className="btn-secondary">Print</a>
         </>
       }
@@ -277,7 +289,7 @@ export default async function DealWorkspacePage({ params }: { params: Promise<{ 
               </div>
               <div className="mt-5 flex flex-wrap gap-2">
                 {quote.contactId && <Link href={`/contacts/${quote.contactId}`} className="btn-secondary btn-sm"><UserRound className="size-4" />Customer</Link>}
-                {quote.leadId && <Link href={`/leads/${quote.leadId}`} className="btn-secondary btn-sm"><Activity className="size-4" />Lead</Link>}
+                {lead && <Link href={`/leads/${lead.id}`} className="btn-secondary btn-sm"><Activity className="size-4" />Lead</Link>}
                 {quote.status === "accepted" && <Link href="/deliveries" className="btn-secondary btn-sm"><Truck className="size-4" />Delivery board</Link>}
               </div>
             </div>
@@ -337,7 +349,7 @@ export default async function DealWorkspacePage({ params }: { params: Promise<{ 
                   <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">Activity</p>
                   <h2 className="mt-1 text-base font-semibold">Deal timeline</h2>
                 </div>
-                {quote.leadId && <Link href={`/leads/${quote.leadId}?tab=comms`} className="text-xs font-medium text-primary hover:underline">Full timeline</Link>}
+                {lead && <Link href={`/leads/${lead.id}?tab=comms`} className="text-xs font-medium text-primary hover:underline">Full timeline</Link>}
               </div>
               <div className="mt-3">
                 {timeline.length ? timeline.map((event) => (
@@ -405,13 +417,14 @@ export default async function DealWorkspacePage({ params }: { params: Promise<{ 
               </div>
               <div className="mt-4">
                 <p className="text-base font-semibold">{customer}</p>
+                {billTo.attention && <p className="mt-0.5 text-xs text-muted-foreground">Attention: {billTo.attention}</p>}
                 <div className="mt-3 space-y-2 text-sm">
-                  <p className="flex items-center gap-2 text-muted-foreground"><Mail className="size-3.5" /><span className="truncate">{quote.contact?.email ?? quote.lead?.email ?? "No email"}</span></p>
-                  <p className="flex items-center gap-2 text-muted-foreground"><Phone className="size-3.5" /><span>{quote.contact?.phone ?? quote.lead?.phone ?? "No phone"}</span></p>
+                  <p className="flex items-center gap-2 text-muted-foreground"><Mail className="size-3.5" /><span className="truncate">{billTo.email || "No email"}</span></p>
+                  <p className="flex items-center gap-2 text-muted-foreground"><Phone className="size-3.5" /><span>{billTo.phone || "No phone"}</span></p>
                 </div>
               </div>
               <div className="mt-4 grid grid-cols-2 gap-3 border-t border-border pt-4">
-                <Fact label="Source" value={quote.lead?.source ?? "—"} />
+                <Fact label="Source" value={lead?.source ?? "—"} />
                 <Fact label="Owner" value={quote.lead?.assignedTo?.name ?? quote.createdBy?.name ?? "—"} />
               </div>
             </Surface>
@@ -430,7 +443,7 @@ export default async function DealWorkspacePage({ params }: { params: Promise<{ 
               ) : (
                 <p className="mt-4 text-sm text-muted-foreground">Nothing scheduled.</p>
               )}
-              {quote.leadId && <Link href={`/leads/${quote.leadId}?tab=activities&schedule=1`} className="btn-secondary btn-sm mt-4 w-full">Schedule activity</Link>}
+              {lead && <Link href={`/leads/${lead.id}?tab=activities&schedule=1`} className="btn-secondary btn-sm mt-4 w-full">Schedule activity</Link>}
             </Surface>
 
             <Surface className="p-5">
