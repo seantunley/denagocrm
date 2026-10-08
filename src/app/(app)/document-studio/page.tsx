@@ -32,6 +32,9 @@ import { SaveForm } from "@/components/SaveForm";
 import { SaveSubmitButton } from "@/components/SaveSubmitButton";
 import BuilderSection from "./builder-section";
 import ContactPicker from "@/components/ContactPicker";
+import CustomerMessageEditors from "@/components/CustomerMessageEditors";
+import { kindsAt } from "@/lib/customerMessagePlaces";
+import { isTenantOwner } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
 
@@ -78,10 +81,11 @@ async function loadPickers(user: PermissionUser) {
 export default async function DocumentStudioPage({
   searchParams,
 }: {
-  searchParams: Promise<{ q?: string }>;
+  searchParams: Promise<{ q?: string; open?: string }>;
 }) {
   const user = await requireAnyPermission("document_templates.manage", "docbuilder.view", "docbuilder.manage");
-  const { q } = await searchParams;
+  const { q, open } = await searchParams;
+  const isOwner = await isTenantOwner();
   // A Builder-only user (the old Document Builder page's audience) gets the
   // Builder section and nothing that needs document_templates.manage.
   if (!(await hasPermission(user, "document_templates.manage"))) {
@@ -243,6 +247,22 @@ export default async function DocumentStudioPage({
           </section>
         ))}
       </div>
+
+      {/* The emails that SEND these documents, next to the documents (Sean,
+          2026-10-07: templates "buried in settings under email"). Owner-only,
+          like the actions behind them. Linked as /document-studio?open=<kind>. */}
+      {isOwner && (
+        <section id="document-emails" className="scroll-mt-24 rounded-xl border border-border bg-card p-4 shadow-sm">
+          <div className="mb-3">
+            <h3 className="text-sm font-semibold text-foreground">Emails that send your documents</h3>
+            <p className="text-xs text-muted-foreground">
+              The quote email and the signing invitation, reminder, signed copy and code — the wording your customer
+              reads with each document. Logo, colour and footer come from your company profile.
+            </p>
+          </div>
+          <CustomerMessageEditors kinds={kindsAt("documents")} open={open} />
+        </section>
+      )}
 
       <section className="rounded-2xl border border-sky-500/25 bg-sky-500/[0.05] p-5">
         <h2 className="text-base font-semibold text-foreground">

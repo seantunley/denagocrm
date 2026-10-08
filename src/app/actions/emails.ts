@@ -44,6 +44,7 @@ import { parseReplyTo } from "@/lib/replyToAddresses";
 import { tenantOrigin } from "@/lib/tenantOrigin";
 import { withActingStaffScope } from "@/lib/actingScope";
 import { EMAIL_OPEN_TRACKING_KEY } from "@/lib/emailOpenTracking";
+import { MESSAGE_PLACES } from "@/lib/customerMessagePlaces";
 
 export type SendEmailState = { ok?: string; error?: string };
 
@@ -356,8 +357,13 @@ export async function saveSigningEmailTemplate(kind: string, formData: FormData)
       create: { tenantId, key: def.settingKey, value },
     });
     await logAudit({ action: "settings.signing_email.saved", summary: `Edited the “${def.label}” message template`, user });
-    revalidatePath("/settings");
+    revalidateMessagePlaces();
   });
+}
+
+/** A message's editor lives on Document Studio, Journeys → Customer messages or Settings (customerMessagePlaces.ts). */
+function revalidateMessagePlaces() {
+  for (const { path } of Object.values(MESSAGE_PLACES)) revalidatePath(path.split("?")[0]);
 }
 
 export async function resetSigningEmailTemplate(kind: string, formData: FormData) {
@@ -369,7 +375,7 @@ export async function resetSigningEmailTemplate(kind: string, formData: FormData
     if (!tenantId) refuse("No workspace attached to this sign-in — sign out and back in.");
     await basePrisma.appSetting.deleteMany({ where: { tenantId, key: def.settingKey } });
     await logAudit({ action: "settings.signing_email.reset", summary: `Reset the “${def.label}” message template to default`, user });
-    revalidatePath("/settings");
+    revalidateMessagePlaces();
   });
 }
 
