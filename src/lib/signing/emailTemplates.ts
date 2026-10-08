@@ -462,7 +462,11 @@ export function parseEmailHeaderStyle(raw: string | null | undefined): EmailHead
 
 export const DEFAULT_ACCENT = "#ea580c";
 
-export type RenderedSigningEmail = { subject: string; html: string; text: string };
+/**
+ * `bodyText` (designed emails only): the message's own paragraphs, without the
+ * headline, figures, button or signature — what a per-send edit shows and replaces.
+ */
+export type RenderedSigningEmail = { subject: string; html: string; text: string; bodyText?: string };
 
 /**
  * Render one signing email.

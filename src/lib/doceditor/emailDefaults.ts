@@ -34,6 +34,21 @@ type Plate = Record<string, unknown>;
 const TOKEN = /\{\{\s*([\w.]+)\s*\}\}/g;
 const layout = { settings: {}, locked: false, hidden: false } as const;
 
+/**
+ * Sample details for previews — obviously made up, so a preview can never be
+ * mistaken for a real send. Every message field has one.
+ */
+export const EMAIL_SAMPLE_FIELDS: Record<string, string> = {
+  recipient_name: "Jane Doe", first_name: "Jane", document_title: "Quote Q-1026", quote_number: "Q-1026",
+  company_name: "", sender_name: "", company_phone: "", company_email: "", company_contact: "",
+  signing_link: "https://example.com/signing/preview-only", expiry_date: "14 Oct 2026", code: "482913",
+  total: "R 125 000,00", model: "Rover XL", item: "Rover XL", due_date: "14 Oct 2026",
+  recall_title: "Brake cable inspection", recall_description: "We're checking the rear brake cable on all Rover XL vehicles built before June 2026.",
+  review_link: "https://example.com/review/preview-only", survey_title: "Service feedback",
+  survey_intro: "We'd love to hear how your service went.", survey_subject: "How was your service?",
+  survey_link: "https://example.com/survey/preview-only",
+};
+
 /** A headline for each email, using only that message's own fields. */
 export const EMAIL_HEADLINES: Partial<Record<SigningEmailKind, string>> = {
   invite: "Please sign {{document_title}}",
@@ -73,7 +88,7 @@ function emailDocument(title: string, blocks: DocumentBlock[], subject?: string)
   return documentSchema.parse({
     schemaVersion: 1,
     title,
-    style: { fontFamily: "sans", pageSize: "A4", margin: 0, accent: "#f1603c", ink: "#0b1220" },
+    style: { fontFamily: "sans", pageSize: "Email", margin: 32, accent: "#f1603c", ink: "#0b1220" },
     recipients: [],
     pages: [{ id: "email-page", rows: blocks.map((b) => frameRow(b.id, b)) }],
     ...(subject !== undefined ? { email: { subject } } : {}),

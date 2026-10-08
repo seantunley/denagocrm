@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { renderEmailDocument, type EmailBrand } from "../src/lib/doceditor/emailRender";
+import { renderEmailDocument, withEditedText, type EmailBrand } from "../src/lib/doceditor/emailRender";
 import { defaultEmailBody, defaultEmailFrame, EMAIL_HEADLINES, EMAIL_KINDS, emailKindOf } from "../src/lib/doceditor/emailDefaults";
 import { documentSchema, type DocumentBlock, type DocumentModel } from "../src/lib/doceditor/model";
 import { SIGNING_EMAILS, type SigningEmailKind } from "../src/lib/signing/emailTemplates";
@@ -107,11 +107,46 @@ test("an owner's edited wording carries over: formatting, lists and its own subj
   assert.equal(blocks(body).filter((b) => b.type === "emailButton").length, 1);
 });
 
+test("a per-send edit swaps the paragraphs only: headline, figures and button stay", () => {
+  const body = withEditedText(defaultEmailBody("quote"), "Hi Jane,\n\nHere is the revised quote.");
+  const kinds = blocks(body).map((b) => b.type);
+  assert.deepEqual(kinds, ["heading", "text", "emailFacts"], "one text block where the first was; the rest kept");
+  const r = render("quote", body);
+  assert.match(r.html, /Here is the revised quote\./);
+  assert.doesNotMatch(r.html, /Thank you for your interest/);
+  assert.equal(r.bodyText, "Hi Jane,\n\nHere is the revised quote.");
+  // The quote dialog shows and compares exactly that text, not the whole email.
+  const quoteAction = src("src/app/actions/quoteEmail.ts");
+  assert.match(quoteAction, /body: email\.bodyText \?\? email\.text/);
+  assert.match(quoteAction, /\(standard\.bodyText \?\? standard\.text\)\.replace/);
+});
+
+test("emails are designed in the document editor — owner-only, previewed without sending, created once", () => {
+  assert.match(src("src/lib/docbuilder/layoutAccess.ts"), /if \(key\.startsWith\("email:"\)\) return isTenantOwner\(\);/);
+  const preview = src("src/app/api/email-preview/[id]/route.ts");
+  assert.match(preview, /if \(!\(await canEditLayout\(user, template\.key\)\)\) return new Response\("Not found", \{ status: 404 \}\);/);
+  assert.doesNotMatch(preview, /sendEmail|nodemailer/, "a preview never sends");
+  assert.doesNotMatch(preview, /<script/, "the site's CSP refuses inline scripts");
+  const seed = src("src/lib/doceditor/emailSeeding.ts");
+  assert.match(seed, /pg_advisory_xact_lock\(hashtext\(\$\{`email-templates:\$\{tenantId\}`\}\)\)/);
+  assert.match(seed, /found = index\(await tx\.docBuilderTemplate\.findMany\(query\)\);/, "re-read under the lock");
+  assert.doesNotMatch(seed, /publishedVersion: \d|status: "published"/, "created as drafts — nothing changes for customers");
+  const page = src("src/app/doc-editor/[id]/page.tsx");
+  assert.match(page, /if \(emailKind \|\| template\.key === EMAIL_FRAME_KEY\) \{/);
+  const editor = src("src/components/doceditor/DocEditor.tsx");
+  assert.match(editor, /\{!email && \(\s*<button type="button" className=\{buttonClass\} onClick=\{\(\) => addPage\(\)\}/, "an email has no pages");
+  assert.match(editor, /\{!isDocument && !email && \(<>/, "no import/export for an email");
+  assert.match(editor, /`\/api\/email-preview\/\$\{id\}`/);
+});
+
 test("the send path uses the design only once the frame is PUBLISHED, read by explicit tenant", () => {
   const send = src("src/lib/signing/signingEmail.ts");
   assert.match(send, /await publishedEmailDocs\(tenantId, kind\)/);
   assert.match(send, /if \(frame\) \{/);
-  assert.match(send, /body: override \? defaultEmailBody\(kind, override\) : body \?\? defaultEmailBody\(kind, stored\)/);
+  assert.match(send, /const design = body \?\? defaultEmailBody\(kind, parseStoredSigningTemplate\(setting\(def\.settingKey\), kind\)\);/);
+  // A per-send edit (the quote dialog) changes the words, never the design.
+  assert.match(send, /\? \{ \.\.\.withEditedText\(design, override\.body\), email: \{ subject: override\.subject \} \}/);
+  assert.match(send, /brand: await emailBrandFor\(tenantId\)/, "the send's look is the editor's look");
   assert.match(send, /isTextTemplate\(def\) \? \{ frame: null, body: null \}/, "texts and WhatsApp never");
   const docs = src("src/lib/doceditor/emailDocuments.ts");
   assert.match(docs, /where: \{ tenantId, key: \{ in: \[EMAIL_FRAME_KEY, emailBodyKey\(kind\)\] \}, deletedAt: null, publishedVersion: \{ not: null \} \}/);

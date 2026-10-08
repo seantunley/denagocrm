@@ -47,6 +47,8 @@ const colorField = (fallback: string) =>
 export const PAGE_SIZES = {
   A4: { w: 794, h: 1123, cssH: "297mm" }, // px @ 96dpi; cssH is exact
   Letter: { w: 816, h: 1056, cssH: "11in" },
+  /** A customer email (./emailRender.ts): the 600px card mail apps show. Never printed. */
+  Email: { w: 600, h: 760, cssH: "201.08mm" },
 } as const;
 export type PageSizeName = keyof typeof PAGE_SIZES;
 
@@ -519,7 +521,7 @@ export type DocumentPage = z.infer<typeof pageSchema>;
 
 export const docStyleSchema = z.object({
   fontFamily: z.enum(["sans", "serif", "mono"]).default("sans"),
-  pageSize: z.enum(["A4", "Letter"]).default("A4"),
+  pageSize: z.enum(["A4", "Letter", "Email"]).default("A4"),
   margin: z.number().default(48), // px
   accent: colorField("#ea580c"),
   ink: colorField("#020617"),

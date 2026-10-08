@@ -47,7 +47,8 @@ import { decryptValue } from "@/lib/settings";
 import { PUSH_KINDS } from "@/lib/push";
 import Link from "next/link";
 import CustomerMessageEditors from "@/components/CustomerMessageEditors";
-import { kindsAt, MESSAGE_PLACES } from "@/lib/customerMessagePlaces";
+import EmailDesignCards from "@/components/EmailDesignCards";
+import { emailKindsAt, MESSAGE_PLACES, textKindsAt } from "@/lib/customerMessagePlaces";
 import { getNextStepScheduling } from "@/lib/nextStepConfig";
 import { saveNextStepScheduling } from "@/app/actions/settings";
 import ProductsPage from "../products/page";
@@ -841,7 +842,10 @@ export default async function SettingsPage({
                   </li>
                 </ul>
                 <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-2">Login &amp; verification codes</div>
-                <CustomerMessageEditors kinds={kindsAt("settings")} open={openTemplate} />
+                <EmailDesignCards kinds={emailKindsAt("settings")} />
+                <div className="mt-3">
+                  <CustomerMessageEditors kinds={textKindsAt("settings")} open={openTemplate} />
+                </div>
               </div>
               {marketingOn ? (
                 <p className="text-sm">

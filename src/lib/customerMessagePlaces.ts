@@ -1,4 +1,4 @@
-import { SIGNING_EMAILS, SIGNING_EMAIL_KINDS, type SigningEmailKind } from "./signing/emailTemplates";
+import { SIGNING_EMAILS, SIGNING_EMAIL_KINDS, isTextTemplate, type SigningEmailKind } from "./signing/emailTemplates";
 
 /**
  * WHERE EACH CUSTOMER MESSAGE IS EDITED — next to the thing that sends it
@@ -33,6 +33,10 @@ export const MESSAGE_PLACES: Record<MessagePlace, { path: string; label: string 
 export const messagePlace = (kind: SigningEmailKind): MessagePlace => PLACE_BY_GROUP[SIGNING_EMAILS[kind].group] ?? "settings";
 
 export const kindsAt = (place: MessagePlace): SigningEmailKind[] => SIGNING_EMAIL_KINDS.filter((kind) => messagePlace(kind) === place);
+/** The emails of a place — designed in the document editor (EmailDesignCards). */
+export const emailKindsAt = (place: MessagePlace) => kindsAt(place).filter((kind) => !isTextTemplate(SIGNING_EMAILS[kind]));
+/** The texts and WhatsApp messages of a place — edited as text (CustomerMessageEditors). */
+export const textKindsAt = (place: MessagePlace) => kindsAt(place).filter((kind) => isTextTemplate(SIGNING_EMAILS[kind]));
 
 /** The link that opens one message's editor, wherever it lives. */
 export function messageEditorHref(kind: SigningEmailKind): string {

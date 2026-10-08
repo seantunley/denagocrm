@@ -1,8 +1,61 @@
 import "server-only";
 import { basePrisma } from "@/lib/db";
+import { decryptValue } from "@/lib/settings";
+import { brandForTenant, DEFAULT_BRAND } from "@/lib/tenantBrand";
+import { emailBrand } from "@/lib/emailBrand";
+import { tenantOrigin } from "@/lib/tenantOrigin";
+import { CARD_ORANGE, parseSignatureDesign, SIGNATURE_DESIGN_KEY } from "@/lib/signature";
 import { parseDocument, type DocumentModel } from "./model";
 import { EMAIL_FRAME_KEY, emailBodyKey } from "./emailDefaults";
+import type { EmailBrand } from "./emailRender";
 import type { SigningEmailKind } from "../signing/emailTemplates";
+
+/**
+ * How a workspace's customer emails look: its name and details (Company
+ * profile first, then the platform brand), its logo (the public brand-logo
+ * route, or a public https Company profile logo — never a private-store link,
+ * which a mail app cannot load), the signature's logo-panel banner, its colour,
+ * and the origin its icons are served from. By EXPLICIT tenant; never throws.
+ */
+export async function emailBrandFor(tenantId: string): Promise<EmailBrand> {
+  const [brand, mailBrand, rows, origin] = await Promise.all([
+    brandForTenant(tenantId).catch(() => DEFAULT_BRAND),
+    emailBrand(tenantId).catch(() => ({ logoUrl: null })),
+    basePrisma.appSetting
+      .findMany({
+        where: {
+          tenantId,
+          key: { in: ["COMPANY_NAME", "COMPANY_TAGLINE", "COMPANY_PHONE", "COMPANY_EMAIL", "COMPANY_ADDRESS", "COMPANY_WEBSITE", "COMPANY_LOGO_URL", SIGNATURE_DESIGN_KEY] },
+        },
+        select: { key: true, value: true },
+      })
+      .catch(() => []),
+    tenantOrigin(tenantId),
+  ]);
+  const setting = (key: string) => {
+    const raw = rows.find((r) => r.key === key)?.value ?? "";
+    try {
+      return decryptValue(raw).trim();
+    } catch {
+      return "";
+    }
+  };
+  const profileLogo = setting("COMPANY_LOGO_URL");
+  return {
+    companyName: setting("COMPANY_NAME") || brand.displayName,
+    tagline: setting("COMPANY_TAGLINE") || brand.tagline || "",
+    address: setting("COMPANY_ADDRESS"),
+    phone: setting("COMPANY_PHONE"),
+    email: setting("COMPANY_EMAIL"),
+    website: setting("COMPANY_WEBSITE"),
+    logoUrl:
+      mailBrand.logoUrl ??
+      (/^https:\/\//i.test(profileLogo) && !/\.private\.blob\.|\/api\/stored/i.test(profileLogo) ? profileLogo : ""),
+    bannerUrl: parseSignatureDesign(setting(SIGNATURE_DESIGN_KEY)).bannerUrl,
+    accent: brand.primary ?? CARD_ORANGE,
+    assetBase: origin,
+  };
+}
 
 /**
  * The PUBLISHED email frame and one message's PUBLISHED body for a workspace —

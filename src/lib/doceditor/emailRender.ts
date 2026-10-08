@@ -58,7 +58,39 @@ export type EmailRenderInput = {
   action?: string | null;
 };
 
-export type RenderedEmail = { subject: string; html: string; text: string };
+/** `bodyText`: the message's own paragraphs only — what a per-send edit (the quote dialog) shows and replaces. */
+export type RenderedEmail = { subject: string; html: string; text: string; bodyText: string };
+
+/**
+ * A body with its paragraphs replaced by `text` (blank-line separated) — a
+ * per-send edit keeps the design: headline, figures, button and frame stay,
+ * only the words change. The new text sits where the first paragraph block was.
+ */
+export function withEditedText(body: DocumentModel, text: string): DocumentModel {
+  const value = text.replace(/\r\n?/g, "\n").trim().split(/\n\s*\n/)
+    .flatMap((paragraph) => paragraph.split("\n").map((line) => ({ type: "p", children: [{ text: line }] })));
+  let placed = false;
+  return {
+    ...body,
+    pages: body.pages.map((page) => ({
+      ...page,
+      rows: page.rows
+        .map((row) => ({
+          ...row,
+          columns: row.columns.map((col) => ({
+            ...col,
+            blocks: col.blocks.flatMap((block): DocumentBlock[] => {
+              if (block.type !== "text") return [block];
+              if (placed) return [];
+              placed = true;
+              return [{ ...block, value }];
+            }),
+          })),
+        }))
+        .filter((row) => row.columns.some((col) => col.blocks.length)),
+    })),
+  };
+}
 
 const esc = (s: unknown) =>
   String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
@@ -204,6 +236,11 @@ function codeHtml(code: string): string {
 }
 
 type Ctx = { tokens: Record<string, string>; brand: EmailBrand; accent: string };
+
+/** One block as the email will show it — for the editor's canvas, with sample details. */
+export function emailBlockPreviewHtml(block: DocumentBlock, fields: Record<string, string>, brand: EmailBrand): string {
+  return emailBlockHtml(block, { tokens: tokenMap(fields, brand), brand, accent: cssColor(brand.accent, CARD_ORANGE) });
+}
 
 /** One block of a message (or of the frame, outside the slots). */
 export function emailBlockHtml(block: DocumentBlock, ctx: Ctx): string {
@@ -382,7 +419,12 @@ ${rows}
 </body>
 </html>`;
 
-  return { subject, html, text: plainText(body, ctx) };
+  const bodyText = blocksOf(body)
+    .filter((b) => b.type === "text" && !b.hidden)
+    .map((b) => (b.type === "text" ? richTextPlain(b.value, tokens) : ""))
+    .filter((s) => s.trim())
+    .join("\n\n");
+  return { subject, html, text: plainText(body, ctx), bodyText };
 }
 
 /** The plain-text alternative every mail app falls back to: the message, its action, the sender. */

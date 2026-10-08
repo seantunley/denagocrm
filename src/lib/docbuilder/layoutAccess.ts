@@ -1,6 +1,7 @@
 import "server-only";
 import { redirect } from "next/navigation";
 import { hasPermission, requireAnyPermission, type PermissionUser } from "@/lib/permissions";
+import { isTenantOwner } from "@/lib/auth";
 
 /**
  * Who may edit a layout in the one document editor.
@@ -24,6 +25,10 @@ export const FORM_EDITOR_KEYS: ReadonlySet<string> = new Set([
 ]);
 
 export async function canEditLayout(user: PermissionUser, key: string): Promise<boolean> {
+  // A customer EMAIL (doceditor/emailDefaults.ts) is what the workspace sends
+  // its customers on its own, and was the owner's to change before it moved into
+  // this editor (requireTenantOwner) — it stays the owner's.
+  if (key.startsWith("email:")) return isTenantOwner();
   if (await hasPermission(user, "docbuilder.manage")) return true;
   return FORM_EDITOR_KEYS.has(key) && (await hasPermission(user, "document_templates.manage"));
 }

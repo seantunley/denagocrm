@@ -164,7 +164,8 @@ test("Quote email is edited on Document Studio beside the signing emails", () =>
   assert.ok(SIGNING_EMAIL_KINDS.includes("quote"));
   // The emails that send a document live with the documents (customerMessagePlaces.ts).
   assert.equal(messagePlace("quote"), "documents");
-  assert.match(shipped("src/app/(app)/document-studio/page.tsx"), /<CustomerMessageEditors kinds=\{kindsAt\("documents"\)\}/);
+  // …as a document of the editor, like the documents beside it (EmailDesignCards → /doc-editor).
+  assert.match(shipped("src/app/(app)/document-studio/page.tsx"), /<EmailDesignCards kinds=\{emailKindsAt\("documents"\)\} frame \/>/);
   const editors = shipped("src/components/CustomerMessageEditors.tsx");
   assert.match(editors, /saveSigningEmailTemplate\.bind\(null, kind\)/);
   assert.match(editors, /resetSigningEmailTemplate\.bind\(null, kind\)/);

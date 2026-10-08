@@ -17,11 +17,9 @@ import {
   type SigningEmailKind,
   type StoredSigningTemplate,
 } from "./emailTemplates";
-import { publishedEmailDocs } from "@/lib/doceditor/emailDocuments";
-import { renderEmailDocument } from "@/lib/doceditor/emailRender";
+import { emailBrandFor, publishedEmailDocs } from "@/lib/doceditor/emailDocuments";
+import { renderEmailDocument, withEditedText } from "@/lib/doceditor/emailRender";
 import { defaultEmailBody } from "@/lib/doceditor/emailDefaults";
-import { CARD_ORANGE, parseSignatureDesign, SIGNATURE_DESIGN_KEY } from "@/lib/signature";
-import { tenantOrigin } from "@/lib/tenantOrigin";
 
 const FALLBACK_BRAND: SigningEmailBrand = {
   companyName: DEFAULT_BRAND.displayName,
@@ -65,11 +63,7 @@ export async function tenantEmailContent(
         where: {
           tenantId,
           key: {
-            in: [
-              def.settingKey, "COMPANY_NAME", "COMPANY_TAGLINE", "COMPANY_PHONE", "COMPANY_EMAIL", "COMPANY_LOGO_URL", "EMAIL_HEADER_STYLE",
-              // The designed email (doceditor/emailRender.ts) also shows these.
-              "COMPANY_ADDRESS", "COMPANY_WEBSITE", SIGNATURE_DESIGN_KEY,
-            ],
+            in: [def.settingKey, "COMPANY_NAME", "COMPANY_TAGLINE", "COMPANY_PHONE", "COMPANY_EMAIL", "COMPANY_LOGO_URL", "EMAIL_HEADER_STYLE"],
           },
         },
         select: { key: true, value: true },
@@ -109,22 +103,16 @@ export async function tenantEmailContent(
       const values: Record<string, unknown> = all;
       for (const f of def.fields) fields[f] = typeof values[f] === "string" ? (values[f] as string) : "";
       for (const f of ["company_name", "company_phone", "company_email"] as const) fields[f] = all[f];
+      const design = body ?? defaultEmailBody(kind, parseStoredSigningTemplate(setting(def.settingKey), kind));
       return renderEmailDocument({
         frame,
-        body: override ? defaultEmailBody(kind, override) : body ?? defaultEmailBody(kind, stored),
+        // A per-send edit (the quote dialog) changes the words, not the design.
+        body: override
+          ? { ...withEditedText(design, override.body), email: { subject: override.subject } }
+          : design,
         fields,
-        brand: {
-          companyName,
-          tagline: tagline || "",
-          address: setting("COMPANY_ADDRESS"),
-          phone: all.company_phone,
-          email: all.company_email,
-          website: setting("COMPANY_WEBSITE"),
-          logoUrl: logoUrl ?? "",
-          bannerUrl: parseSignatureDesign(setting(SIGNATURE_DESIGN_KEY)).bannerUrl,
-          accent: brand.primary ?? CARD_ORANGE,
-          assetBase: await tenantOrigin(tenantId),
-        },
+        // The same look the editor shows (emailBrandFor), so the canvas never disagrees with the send.
+        brand: await emailBrandFor(tenantId),
         action: def.action ?? null,
       });
     }

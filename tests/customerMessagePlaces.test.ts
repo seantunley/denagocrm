@@ -25,14 +25,17 @@ test("the link to a message opens it where it lives", () => {
 });
 
 test("each home renders its editors, owner-only like the actions behind them", () => {
+  // Emails open in the document editor (EmailDesignCards); texts and WhatsApp stay text (CustomerMessageEditors).
   const studio = src("src/app/(app)/document-studio/page.tsx");
-  assert.match(studio, /\{isOwner && \([\s\S]*?id="document-emails"[\s\S]*?<CustomerMessageEditors kinds=\{kindsAt\("documents"\)\} open=\{open\} \/>/);
+  assert.match(studio, /\{isOwner && \([\s\S]*?id="document-emails"[\s\S]*?<EmailDesignCards kinds=\{emailKindsAt\("documents"\)\} frame \/>[\s\S]*?<CustomerMessageEditors kinds=\{textKindsAt\("documents"\)\} open=\{open\} \/>/);
   const messages = src("src/app/(app)/journeys/messages/page.tsx");
   assert.match(messages, /await requireTenantOwner\(\);/);
-  assert.match(messages, /<CustomerMessageEditors kinds=\{kindsAt\("automatic"\)\} open=\{open\} \/>/);
+  assert.match(messages, /<EmailDesignCards kinds=\{emailKindsAt\("automatic"\)\} frame \/>/);
+  assert.match(messages, /<CustomerMessageEditors kinds=\{textKindsAt\("automatic"\)\} open=\{open\} \/>/);
   assert.match(messages, /SIGNING_EMAIL_KINDS\.map/, "the index lists every message");
   const settings = src("src/app/(app)/settings/page.tsx");
-  assert.match(settings, /<CustomerMessageEditors kinds=\{kindsAt\("settings"\)\} open=\{openTemplate\} \/>/);
+  assert.match(settings, /<EmailDesignCards kinds=\{emailKindsAt\("settings"\)\} \/>/);
+  assert.match(settings, /<CustomerMessageEditors kinds=\{textKindsAt\("settings"\)\} open=\{openTemplate\} \/>/);
   assert.doesNotMatch(settings, /saveSigningEmailTemplate/, "the editor exists once, in CustomerMessageEditors");
   // Own templates: Marketing → Templates when the module is on; kept here only when it is off.
   assert.match(settings, /\{marketingOn \? \([\s\S]*?href="\/marketing\/templates"/);
