@@ -372,21 +372,35 @@ function senderOf(ctx: Ctx) {
  * the company's name and website. An automatic message is signed by the company.
  */
 function signatureHtml(block: EmailSignatureBlock, ctx: Ctx): string {
-  const { brand } = ctx;
-  const sender = senderOf(ctx);
+  const shown = signatureLines(block, ctx);
   return buildSignature(
-    {
-      name: sender.name,
-      email: block.showEmail ? sender.email : "",
-      mobile: block.showPhone ? sender.phone : null,
-      jobTitle: block.showJobTitle ? sender.title : null,
-    },
+    { name: shown.name, email: shown.email, mobile: shown.phone || null, jobTitle: shown.title || null },
     signatureCompanyFrom(
-      // The company line sits under a person's name; under the company's own name it would only repeat it.
-      { name: sender.person && block.showCompany ? brand.companyName : "", tagline: "", address: "", phone: "", email: "", website: block.showWebsite ? brand.website : "", facebook: "", instagram: "", logoUrl: "" },
-      brand.assetBase,
+      { name: shown.company, tagline: "", address: "", phone: "", email: "", website: shown.website, facebook: "", instagram: "", logoUrl: "" },
+      ctx.brand.assetBase,
     ),
   );
+}
+
+/**
+ * What the signature SHOWS, after the owner's switches — the one source for
+ * both the HTML signature and the plain-text one (review of #807: the text
+ * part appended the sender's full details whatever was switched off, so a
+ * plain-text mail app showed what the owner had hidden). A line that is
+ * switched off is empty here, and so is absent from both.
+ */
+function signatureLines(block: EmailSignatureBlock, ctx: Ctx) {
+  const { brand } = ctx;
+  const sender = senderOf(ctx);
+  return {
+    name: sender.name,
+    title: block.showJobTitle ? sender.title : "",
+    // The company line sits under a person's name; under the company's own name it would only repeat it.
+    company: sender.person && block.showCompany ? brand.companyName : "",
+    phone: block.showPhone ? sender.phone : "",
+    email: block.showEmail ? sender.email : "",
+    website: block.showWebsite ? brand.website : "",
+  };
 }
 
 /** The footer, full width of the card: an optional line, then the company's details. Empty when it has nothing to say. */
@@ -514,12 +528,17 @@ ${rows}
     .map((b) => (b.type === "text" ? richTextPlain(b.value, tokens) : ""))
     .filter((s) => s.trim())
     .join("\n\n");
-  return { subject, html, text: plainText(body, ctx), bodyText };
+  return { subject, html, text: plainText(body, input.frame, ctx), bodyText };
 }
 
-/** The plain-text alternative every mail app falls back to: the message, its action, the sender. */
-function plainText(rows: DocumentRow[], ctx: Ctx): string {
-  const { tokens, brand } = ctx;
+/**
+ * The plain-text alternative every mail app falls back to: the message, its
+ * action, and the signature — the SAME signature the HTML shows: the frame's
+ * visible signature block with its switches applied, and none at all when the
+ * frame has no signature or it is hidden.
+ */
+function plainText(rows: DocumentRow[], frame: DocumentModel, ctx: Ctx): string {
+  const { tokens } = ctx;
   const parts: string[] = [];
   for (const block of blocksOf(rows)) {
     if (block.hidden) continue;
@@ -532,7 +551,10 @@ function plainText(rows: DocumentRow[], ctx: Ctx): string {
       parts.push(block.items.map((i) => `${fill(i.label, tokens)}: ${fill(i.value, tokens)}`).filter((l) => l.trim() !== ":").join("\n"));
     } else if (block.type === "image" && block.alt) parts.push(`[${block.alt}]`);
   }
-  const sender = senderOf(ctx);
-  const signature = [sender.name, sender.title, sender.person ? brand.companyName : "", [sender.phone, sender.email, brand.website].filter(Boolean).join(" · ")].filter(Boolean);
-  return [...parts.filter((p) => p.trim()), `--\n${signature.join("\n")}`].join("\n\n");
+  const block = blocksOf(frame.pages.flatMap((p) => p.rows)).find((b): b is EmailSignatureBlock => b.type === "emailSignature" && !b.hidden);
+  const shown = block ? signatureLines(block, ctx) : null;
+  const signature = shown
+    ? [shown.name, shown.title, shown.company, [shown.phone, shown.email, shown.website].filter(Boolean).join(" · ")].filter(Boolean)
+    : [];
+  return [...parts.filter((p) => p.trim()), ...(signature.length ? [`--\n${signature.join("\n")}`] : [])].join("\n\n");
 }

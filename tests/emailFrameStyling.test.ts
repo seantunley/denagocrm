@@ -84,6 +84,53 @@ test("signature lines can be switched off", () => {
   assert.doesNotMatch(none.slice(none.indexOf(">Pat Smith<"), none.indexOf("border-top:1px solid #eef0f3")), /mailto:/, "no empty email row");
 });
 
+test("the plain-text part shows exactly the signature the HTML shows — a hidden line is hidden in both", () => {
+  // Review of #807: the text/plain signature ignored the switches, so a plain-text
+  // mail app showed the mobile, email, title, company or website the owner had hidden.
+  const signatureOf = (text: string) => (text.includes("\n\n--\n") ? text.slice(text.lastIndexOf("\n\n--\n") + 5) : null);
+  const text = (signature: Partial<Block<"emailSignature">>) => render("quote", frameWith({ signature }), PAT).text;
+  const ALL = "Pat Smith\nSales Manager\nAcme Carts\n082 555 0101 · pat@acme.example · acme.example";
+  assert.equal(signatureOf(text({})), ALL);
+  const switches: [Partial<Block<"emailSignature">>, string, string][] = [
+    [{ showJobTitle: false }, "Sales Manager", "Pat Smith\nAcme Carts\n082 555 0101 · pat@acme.example · acme.example"],
+    [{ showCompany: false }, "Acme Carts", "Pat Smith\nSales Manager\n082 555 0101 · pat@acme.example · acme.example"],
+    [{ showPhone: false }, "082 555 0101", "Pat Smith\nSales Manager\nAcme Carts\npat@acme.example · acme.example"],
+    [{ showEmail: false }, "pat@acme.example", "Pat Smith\nSales Manager\nAcme Carts\n082 555 0101 · acme.example"],
+    [{ showWebsite: false }, " · acme.example", "Pat Smith\nSales Manager\nAcme Carts\n082 555 0101 · pat@acme.example"],
+  ];
+  for (const [off, hidden, expected] of switches) {
+    const signature = signatureOf(text(off));
+    assert.equal(signature, expected, JSON.stringify(off));
+    assert.ok(!signature!.includes(hidden), `${JSON.stringify(off)} still shows ${hidden}`);
+  }
+  // Everything off: the name alone. No fallback to the company's number or address either.
+  const bare = text({ showJobTitle: false, showCompany: false, showPhone: false, showEmail: false, showWebsite: false });
+  assert.equal(signatureOf(bare), "Pat Smith");
+  assert.doesNotMatch(bare, /082 555 0101|021 000 0000|pat@acme\.example|hi@acme\.example|Sales Manager/);
+
+  // The signature hidden, or removed from the frame: no signature in either part.
+  const hidden = render("quote", frameWith({ signature: { hidden: true } }), PAT);
+  assert.equal(signatureOf(hidden.text), null);
+  assert.doesNotMatch(hidden.text, /Pat Smith|082 555 0101|pat@acme\.example|Sales Manager/);
+  assert.doesNotMatch(hidden.html, />Pat Smith<|082 555 0101|pat@acme\.example|SALES MANAGER/);
+  const frame = defaultEmailFrame();
+  const removed = documentSchema.parse({ ...frame, pages: [{ ...frame.pages[0], rows: frame.pages[0].rows.filter((r) => r.columns[0].blocks[0].type !== "emailSignature") }] });
+  const without = renderEmailDocument({ frame: removed, body: defaultEmailBody("quote"), fields: fieldsFor("quote", PAT), brand, action: null });
+  assert.equal(signatureOf(without.text), null);
+  assert.doesNotMatch(without.text, /Pat Smith|082 555 0101|pat@acme\.example/);
+
+  // An automatic message: the company's details, under the same switches.
+  const auto = (signature: Partial<Block<"emailSignature">>) =>
+    signatureOf(render("service_reminder", frameWith({ signature }), { first_name: "Jo", model: "Rover XL" }).text);
+  assert.equal(auto({}), "Acme Carts\n021 000 0000 · hi@acme.example · acme.example");
+  assert.equal(auto({ showPhone: false, showEmail: false }), "Acme Carts\nacme.example");
+
+  // Both parts read the one function, so they cannot drift again.
+  const source = src("src/lib/doceditor/emailRender.ts");
+  assert.equal((source.match(/signatureLines\(block, ctx\)/g) ?? []).length, 2, "the HTML signature and the text signature");
+  assert.equal((source.match(/senderOf\(ctx\)/g) ?? []).length, 1, "the sender's details are read only inside it");
+});
+
 test("the header can be styled: logo panel, a full-width colour bar, or the logo alone; size and position", () => {
   const panel = render("invite", defaultEmailFrame(), {}).html;
   assert.match(panel, /slant\.png/);
