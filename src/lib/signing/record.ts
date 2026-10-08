@@ -26,6 +26,7 @@ export type RecordSigningState = {
     viewedAt: Date | null;
     signedAt: Date | null;
     declinedAt: Date | null;
+    declineReason: string | null;
   }[];
 } | null;
 
@@ -50,7 +51,7 @@ export async function activeRecordRequest(opts: { quoteId?: string | null; jobCa
     signedDocId: req.signedDocId,
     recipients: req.recipients.map((r) => ({
       id: r.id, name: r.name, email: r.email, phone: r.phone, token: r.token,
-      status: r.status, viewedAt: r.viewedAt, signedAt: r.signedAt, declinedAt: r.declinedAt,
+      status: r.status, viewedAt: r.viewedAt, signedAt: r.signedAt, declinedAt: r.declinedAt, declineReason: r.declineReason,
     })),
   };
 }

@@ -421,6 +421,7 @@ export function DocEditor({
           id={id}
           onPublished={() => setPublishState("live")}
           hasStandardLayout={hasStandardLayout}
+          standard={email ? (email.frame ? "standard frame" : "standard wording") : undefined}
           save={async () => {
             const current = useEditor.getState().doc;
             if (current) {
@@ -524,7 +525,7 @@ export function DocEditor({
             placeholder="The subject line — fields like {{document_title}} are filled in for each customer"
             onChange={(event) => {
               const subject = event.target.value;
-              useEditor.getState().commit((d) => ({ ...d, email: { subject } }));
+              useEditor.getState().commit((d) => ({ ...d, email: { ...d.email, subject } }));
             }}
           />
         </div>

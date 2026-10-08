@@ -3,7 +3,8 @@
 import { useEditor } from "@/lib/doceditor/store";
 import { getBlock } from "@/lib/doceditor/ops";
 import { newPricingLine } from "@/lib/doceditor/factory";
-import type { DocumentBlock, OverlayField, Recipient, PricingBlock, ImageBlock, DividerBlock, SpacerBlock, ConditionalBlock, TextBlock, BannerBlock, InfoCardBlock, TotalBandBlock, TermsBlock, FooterBlock, LineItemsBlock, LineItemColumn, EmailButtonBlock, EmailFactsBlock, EmailFooterBlock } from "@/lib/doceditor/model";
+import type { DocumentBlock, OverlayField, Recipient, PricingBlock, ImageBlock, DividerBlock, SpacerBlock, ConditionalBlock, TextBlock, BannerBlock, InfoCardBlock, TotalBandBlock, TermsBlock, FooterBlock, LineItemsBlock, LineItemColumn, EmailButtonBlock, EmailFactsBlock, EmailFooterBlock, EmailHeaderBlock, EmailSignatureBlock } from "@/lib/doceditor/model";
+import { cssColor } from "@/lib/doceditor/css";
 import { lineItemColKeys } from "@/lib/doceditor/model";
 import { recipientLabel } from "@/lib/signing/templateRecipients";
 import { ConditionField } from "@/lib/docbuilder/ConditionField";
@@ -166,12 +167,19 @@ function LayoutSection({ block, floating }: { block: DocumentBlock; floating: bo
   );
 }
 
+const FRAME_PARTS = new Set<string>(["emailHeader", "emailBody", "emailSignature", "emailFooter"]);
+/** Plain names for the email blocks ("emailHeader block" is the code's name, not the owner's). */
+const EMAIL_BLOCK_NAMES: Record<string, string> = {
+  emailHeader: "Header", emailBody: "Message slot", emailSignature: "Signature", emailFooter: "Footer", emailButton: "Button", emailFacts: "Key figures",
+};
+
 function BlockProps({ block, floating }: { block: DocumentBlock; floating: boolean }) {
   const remove = useEditor((s) => s.remove);
   return (
     <>
-      <div className="border-b border-slate-100 p-3 text-sm font-medium capitalize text-slate-700">{block.type} block{floating ? " · floating" : ""}</div>
-      {block.type !== "pageBreak" && <LayoutSection block={block} floating={floating} />}
+      <div className="border-b border-slate-100 p-3 text-sm font-medium capitalize text-slate-700">{EMAIL_BLOCK_NAMES[block.type] ?? `${block.type} block`}{floating ? " · floating" : ""}</div>
+      {/* The frame's own parts run the width of the email: no column width, text scale or free placement. */}
+      {block.type !== "pageBreak" && !FRAME_PARTS.has(block.type) && <LayoutSection block={block} floating={floating} />}
       {block.type === "image" && <ImageProps block={block} />}
       {block.type === "pricing" && <PricingProps block={block} />}
       {block.type === "divider" && <DividerProps block={block} />}
@@ -187,8 +195,8 @@ function BlockProps({ block, floating }: { block: DocumentBlock; floating: boole
       {block.type === "emailButton" && <EmailButtonProps block={block} />}
       {block.type === "emailFacts" && <EmailFactsProps block={block} />}
       {block.type === "emailFooter" && <EmailFooterProps block={block} />}
-      {block.type === "emailHeader" && <p className="p-3 text-xs text-slate-500">Your logo panel — the one from your email signature (Settings → My account → Email signature → Logo panel), else your logo on a dark panel.</p>}
-      {block.type === "emailSignature" && <p className="p-3 text-xs text-slate-500">The sender&apos;s name (your company&apos;s, for automatic messages), then your company&apos;s phone, email and website from Company profile.</p>}
+      {block.type === "emailHeader" && <EmailHeaderProps block={block} />}
+      {block.type === "emailSignature" && <EmailSignatureProps block={block} />}
       {block.type === "emailBody" && <p className="p-3 text-xs text-slate-500">Where each email&apos;s own content goes. Keep exactly one.</p>}
       {(block.type === "text" || block.type === "heading") && <TextHint block={block} />}
       {block.type === "table" && <p className="p-3 text-xs text-slate-400">Edit table cells inline on the page.</p>}
@@ -293,7 +301,7 @@ function EmailButtonProps({ block }: { block: EmailButtonBlock }) {
           <div className={row}>
             <label className={lbl}>Style</label>
             <select className={inp} value={block.style} onChange={(e) => updateBlock(block.id, { style: e.target.value === "accent" ? "accent" : "dark" })}>
-              <option value="dark">Dark, with an orange arrow</option>
+              <option value="dark">Button colour, with an accent arrow</option>
               <option value="accent">Brand colour</option>
             </select>
           </div>
@@ -331,15 +339,98 @@ function EmailFactsProps({ block }: { block: EmailFactsBlock }) {
   );
 }
 
+/** A colour with a "standard" state: unset means the email's own default. */
+function ColourRow({ label, value, standard, onChange }: { label: string; value: string | undefined; standard: string; onChange: (value: string) => void }) {
+  return (
+    <div className={row}>
+      <label className={lbl}>{label}</label>
+      <div className="flex items-center gap-2">
+        <input type="color" value={value || standard} onChange={(e) => onChange(e.target.value)} className="h-8 flex-1 rounded border border-slate-300" />
+        {value ? <button type="button" className="text-[11px] text-slate-500 underline hover:text-slate-700" onClick={() => onChange("")}>Standard</button> : null}
+      </div>
+    </div>
+  );
+}
+
+const tick = "mb-1.5 flex items-center gap-2 text-sm text-slate-700";
+
+function EmailHeaderProps({ block }: { block: EmailHeaderBlock }) {
+  const updateBlock = useEditor((s) => s.updateBlock);
+  return (
+    <Section title="Header">
+      <div className={row}>
+        <label className={lbl}>Style</label>
+        <select className={inp} value={block.style} onChange={(e) => updateBlock(block.id, { style: e.target.value as EmailHeaderBlock["style"] })}>
+          <option value="panel">Logo panel (from your email signature)</option>
+          <option value="bar">Full-width colour bar with your logo</option>
+          <option value="plain">Logo only, no background</option>
+        </select>
+      </div>
+      {block.style === "bar" && (
+        <div className={row}><label className={lbl}>Bar colour</label><input type="color" value={block.background} onChange={(e) => updateBlock(block.id, { background: e.target.value })} className="h-8 w-full rounded border border-slate-300" /></div>
+      )}
+      {block.style !== "panel" && (
+        <div className={row}><label className={lbl}>Logo size ({block.logoWidth}px wide)</label><input type="range" min={80} max={420} step={10} className="w-full" value={block.logoWidth} onChange={(e) => updateBlock(block.id, { logoWidth: Number(e.target.value) }, false)} /></div>
+      )}
+      <div className={row}>
+        <label className={lbl}>Position</label>
+        <select className={inp} value={block.align} onChange={(e) => updateBlock(block.id, { align: e.target.value === "center" ? "center" : "left" })}>
+          <option value="left">Left</option>
+          <option value="center">Centre</option>
+        </select>
+      </div>
+      <p className="text-[11px] text-slate-400">
+        {block.style === "panel"
+          ? "The logo panel is the one from your email signature (Settings → My account → Email signature)."
+          : "Your logo comes from Company profile. A white logo needs a dark bar behind it."}
+      </p>
+    </Section>
+  );
+}
+
+function EmailSignatureProps({ block }: { block: EmailSignatureBlock }) {
+  const updateBlock = useEditor((s) => s.updateBlock);
+  const lines: [keyof Pick<EmailSignatureBlock, "showJobTitle" | "showCompany" | "showPhone" | "showEmail" | "showWebsite">, string][] = [
+    ["showJobTitle", "Job title"],
+    ["showCompany", "Company name"],
+    ["showPhone", "Phone"],
+    ["showEmail", "Email address"],
+    ["showWebsite", "Website"],
+  ];
+  return (
+    <Section title="Signature">
+      <p className="mb-3 text-xs text-slate-500">
+        Signed by whoever sends the email: their own name, job title, mobile and email (each person sets these under Settings → My account). Your company number is used when they have no mobile, and automatic messages are signed by your company.
+      </p>
+      <label className={lbl}>Lines to show</label>
+      {lines.map(([key, label]) => (
+        <label key={key} className={tick}><input type="checkbox" checked={block[key]} onChange={(e) => updateBlock(block.id, { [key]: e.target.checked })} /> {label}</label>
+      ))}
+    </Section>
+  );
+}
+
 function EmailFooterProps({ block }: { block: EmailFooterBlock }) {
   const updateBlock = useEditor((s) => s.updateBlock);
   return (
     <Section title="Footer">
       <div className={row}>
-        <label className={lbl}>A line above your company details (optional)</label>
+        <label className={lbl}>Your own line (optional)</label>
         <input className={inp} value={block.note} placeholder="e.g. You're receiving this because you're a customer of ours." onChange={(e) => updateBlock(block.id, { note: e.target.value }, false)} />
       </div>
-      <p className="text-[11px] text-slate-400">Company name, address, phone, email and website come from Company profile.</p>
+      <label className={tick}><input type="checkbox" checked={block.showCompany} onChange={(e) => updateBlock(block.id, { showCompany: e.target.checked })} /> Company name and address</label>
+      <label className={`${tick} mb-3`}><input type="checkbox" checked={block.showContact} onChange={(e) => updateBlock(block.id, { showContact: e.target.checked })} /> Phone, email and website</label>
+      <div className={row}>
+        <label className={lbl}>Alignment</label>
+        <select className={inp} value={block.align} onChange={(e) => updateBlock(block.id, { align: e.target.value as EmailFooterBlock["align"] })}>
+          <option value="left">Left</option>
+          <option value="center">Centre</option>
+          <option value="right">Right</option>
+        </select>
+      </div>
+      <div className={row}><label className={lbl}>Text colour</label><input type="color" value={block.color} onChange={(e) => updateBlock(block.id, { color: e.target.value })} className="h-8 w-full rounded border border-slate-300" /></div>
+      <ColourRow label="Background" value={block.background} standard="#ffffff" onChange={(background) => updateBlock(block.id, { background })} />
+      <p className="text-[11px] text-slate-400">The company details themselves come from Company profile.</p>
     </Section>
   );
 }
@@ -585,7 +676,27 @@ function DocumentProps() {
             ? "Click a block to change it, or drag new ones in from the left. The subject line is above the email. Preview shows it exactly as your customer receives it, in your frame."
             : "The header, signature and footer around every customer email. Each email's own content appears in the message slot."}
         </p>
-        <p className="mt-2 text-xs text-slate-500">Logo, colour and company details come from Company profile and your email signature.</p>
+        {email.kind ? (
+          <p className="mt-2 text-xs text-slate-500">
+            The header, signature and footer around it are the shared frame — click them on the email to style them.
+          </p>
+        ) : (
+          <>
+            <p className="mb-3 mt-2 text-xs text-slate-500">Click the header, signature or footer on the email to style it. These colours apply to every customer email.</p>
+            {([
+              ["pageColor", "Page behind the email", "#f3f4f6"],
+              ["cardColor", "Email background", "#ffffff"],
+              ["buttonColor", "Buttons", "#0b0f19"],
+              ["accentColor", "Accent — links, the button's arrow, highlighted figures", cssColor(email.brand.accent, "#f1603c")],
+            ] as const).map(([key, label, standard]) => (
+              <ColourRow
+                key={key} label={label} value={doc.email?.[key]} standard={standard}
+                onChange={(value) => useEditor.getState().commit((d) => ({ ...d, email: { subject: "", ...d.email, [key]: value } }))}
+              />
+            ))}
+            <p className="text-[11px] text-slate-400">Your logo and company details come from Company profile.</p>
+          </>
+        )}
       </Section>
     );
   }

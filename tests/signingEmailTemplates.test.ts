@@ -34,34 +34,37 @@ const VARS = {
   code: "123456",
 };
 
-/* ── defaults reproduce today's emails ───────────────────────────────────── */
+/* ── the standard wording (rewritten 2026-10-08) ───────────────────────────────────── */
 
-test("default invitation carries today's wording, link and button", () => {
+test("default invitation: professional wording, the link and button, and the way to decline", () => {
   const e = renderSigningEmail("invite", null, VARS, BRAND);
-  assert.equal(e.subject, "Please sign your document: Quote Q-1026");
-  assert.match(e.html, /Hi Jane Doe,/);
-  assert.match(e.html, /Please review and sign Quote Q-1026\./);
+  assert.equal(e.subject, "Quote Q-1026 is ready for your signature");
+  assert.match(e.html, /Dear Jane Doe,/);
+  assert.match(e.html, /Quote Q-1026 is ready for your review\./);
+  // Sean, 2026-10-08: a request to sign always says the customer may decline, and how.
+  assert.match(e.text, /would prefer not to go ahead, please choose Decline on the same page and tell us why/);
+  assert.match(renderSigningEmail("reminder", null, VARS, BRAND).text, /choose Decline on the signing page/);
   assert.match(e.html, /Open &amp; sign/);
   assert.match(e.html, /Or paste this link into your browser:/);
   assert.ok(e.html.includes(`href="${URL_}"`));
-  assert.match(e.text, /^Hi Jane Doe,\n\nPlease review and sign Quote Q-1026\.\n\nOpen and sign here:\nhttps:\/\/crm\.example\.co\.za\/signing\//);
-  assert.match(e.text, /Thank you,\nAcme Carts$/);
+  assert.match(e.text, /^Dear Jane Doe,\n\nQuote Q-1026 is ready for your review\.[^\n]*\n\nOpen and sign here:\nhttps:\/\/crm\.example\.co\.za\/signing\//);
+  assert.match(e.text, /Kind regards,\nAcme Carts$/);
   // Logo on top, brand in the footer.
   assert.ok(e.html.includes(`<img src="${BRAND.logoUrl}"`));
   assert.match(e.html, /Acme Carts — Golf &amp; leisure/);
 });
 
-test("default reminder, signed-copy and code emails keep today's subjects", () => {
-  assert.equal(renderSigningEmail("reminder", null, VARS, BRAND).subject, "Reminder — please sign: Quote Q-1026");
+test("default reminder, signed-copy and code emails", () => {
+  assert.equal(renderSigningEmail("reminder", null, VARS, BRAND).subject, "Reminder: Quote Q-1026 is awaiting your signature");
   const done = renderSigningEmail("completed", null, VARS, BRAND);
-  assert.equal(done.subject, "Completed & signed: Quote Q-1026");
-  assert.match(done.text, /Everyone has signed "Quote Q-1026"\. The final sealed PDF is attached\./);
+  assert.equal(done.subject, "Your signed copy of Quote Q-1026");
+  assert.match(done.text, /Quote Q-1026 has now been signed by all parties, and the completed copy is attached/);
   assert.doesNotMatch(done.html, /Open &amp; sign/, "nothing to sign on a signed copy");
   const otp = renderSigningEmail("otp", null, VARS, BRAND);
-  assert.equal(otp.subject, "Verification code: Quote Q-1026");
+  assert.equal(otp.subject, "Your verification code for Quote Q-1026");
   assert.match(otp.text, /123456/);
   assert.match(otp.html, /123456/);
-  assert.match(otp.text, /expires in 10 minutes/);
+  assert.match(otp.text, /valid for 10 minutes/);
 });
 
 test("no default template names a company by a literal", () => {
@@ -219,10 +222,10 @@ test("each request renders from ITS tenant's template and brand only", async () 
   assert.match(a.html, /api\/brand\/logo\/t_a/);
 
   const b = await signingEmailContent("invite", { requestId: "req_b", title: "Contract", recipientName: "Bob", signingUrl: URL_ });
-  assert.equal(b.subject, "Please sign your document: Contract", "tenant B has no override → default, never tenant A's");
+  assert.equal(b.subject, "Contract is ready for your signature", "tenant B has no override → default, never tenant A's");
   assert.doesNotMatch(b.html, /Tenant A|011 000 0000|#00ff00|t_a/);
   assert.match(b.html, /api\/brand\/logo\/t_b/);
-  assert.match(b.html, /Thank you,<br>Bravo/);
+  assert.match(b.html, /Kind regards,<br>Bravo/);
 
   assert.deepEqual(calls.settingsWhere.map((w) => w.tenantId), ["t_a", "t_b"], "settings read by the request's own tenant");
   assert.deepEqual(calls.brandFor, ["t_a", "t_b"]);
@@ -233,7 +236,7 @@ for (const [label, requestId] of [["a missing request", "req_gone"], ["a request
     const settingsBefore = calls.settingsWhere.length;
     const brandBefore = calls.brandFor.length;
     const e = await signingEmailContent("invite", { requestId, title: "Quote Q-9", recipientName: "Jane", signingUrl: URL_ });
-    assert.equal(e.subject, "Please sign your document: Quote Q-9");
+    assert.equal(e.subject, "Quote Q-9 is ready for your signature");
     assert.ok(e.html.includes(`href="${URL_}"`));
     assert.doesNotMatch(e.html, /api\/brand\/logo/);
     assert.equal(calls.settingsWhere.length, settingsBefore, "no AppSetting read");
@@ -243,6 +246,6 @@ for (const [label, requestId] of [["a missing request", "req_gone"], ["a request
 
 test("a failed lookup still sends the default email with the link", async () => {
   const e = await signingEmailContent("invite", { requestId: "req_boom", title: "Quote Q-9", recipientName: "Jane", signingUrl: URL_ });
-  assert.equal(e.subject, "Please sign your document: Quote Q-9");
+  assert.equal(e.subject, "Quote Q-9 is ready for your signature");
   assert.ok(e.html.includes(`href="${URL_}"`));
 });

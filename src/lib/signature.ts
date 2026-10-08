@@ -298,7 +298,7 @@ function cardSignature(
           </tr>`;
   const contacts = [
     phone ? row("phone", "Phone", `tel:${phone.replace(/[^\d+]/g, "")}`, escapeHtml(phone), "#0f172a") : "",
-    row("mail", "Email", `mailto:${encodeURIComponent(user.email)}`, escapeHtml(user.email), "#0f172a"),
+    user.email.trim() ? row("mail", "Email", `mailto:${encodeURIComponent(user.email)}`, escapeHtml(user.email), "#0f172a") : "",
     website ? row("web", "Website", websiteHref, escapeHtml(website), CARD_ORANGE) : "",
   ].join("");
 

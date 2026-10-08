@@ -8,6 +8,7 @@ import { ActiveRichText, ReadOnlyRichText } from "./RichText";
 import { handoverChecklistHtml } from "@/lib/doceditor/handoverChecklist";
 import { ShowcaseBlockView } from "./ShowcaseBlockView";
 import { useDocEditorEnv } from "./EditorContext";
+import { useEditor } from "@/lib/doceditor/store";
 import { emailBlockPreviewHtml } from "@/lib/doceditor/emailRender";
 
 /** The workspace's own logo (resolved server-side, same as the printed banner). */
@@ -229,6 +230,7 @@ export function BlockView({ block, active }: { block: DocumentBlock; active: boo
 /** A customer-email block, drawn by the email's own renderer with sample details. */
 function EmailBlockView({ block }: { block: DocumentBlock }) {
   const { email, companyName } = useDocEditorEnv();
+  const doc = useEditor((s) => s.doc);
   if (block.type === "emailBody") {
     return (
       <div className="rounded-lg border-2 border-dashed border-orange-300 bg-orange-50/60 px-4 py-6 text-center text-sm text-orange-800">
@@ -240,8 +242,12 @@ function EmailBlockView({ block }: { block: DocumentBlock }) {
   const brand = { ...email.brand, companyName: email.brand.companyName || companyName };
   const fields = { ...email.sample, sender_name: email.sample.sender_name || "Your name" };
   // Our own renderer's escaped markup with sample values; nothing from a record.
-  const html = emailBlockPreviewHtml(block, fields, brand);
-  return block.type === "emailFooter"
-    ? <div style={{ borderTop: "1px solid #eef0f3", padding: "16px 0 4px", textAlign: "center", fontSize: 12, lineHeight: 1.7, color: "#94a3b8" }} dangerouslySetInnerHTML={{ __html: html || "Company details" }} />
-    : <div dangerouslySetInnerHTML={{ __html: html }} />;
+  // The frame's colours reach every block: a message's buttons and links take them too.
+  const html = emailBlockPreviewHtml(block, fields, brand, email.kind ? email.frame?.doc : doc);
+  // The header and footer run edge to edge of the card, as they send — out past the canvas's side margin.
+  if (block.type === "emailHeader" || block.type === "emailFooter") {
+    const bleed = (doc?.style.margin ?? 0) + 2;
+    return <div style={{ margin: `0 -${bleed}px` }} dangerouslySetInnerHTML={{ __html: html || `<div style="padding:16px;text-align:center;font-size:12px;color:#94a3b8;">Footer — nothing to show yet</div>` }} />;
+  }
+  return <div style={block.type === "emailSignature" ? { paddingBottom: 34 } : undefined} dangerouslySetInnerHTML={{ __html: html }} />;
 }

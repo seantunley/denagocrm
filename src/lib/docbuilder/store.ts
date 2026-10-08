@@ -114,7 +114,11 @@ export async function defaultBuilderTemplateId(
 
 export async function listBuilderTemplates() {
   try {
+    // Print layouts only. Customer emails (`email:…`) are documents of the same
+    // editor but are not layouts: they have no PDF, and they are listed where
+    // they are edited from (Document Studio → emails, Journeys → messages).
     const rows = await prisma.docBuilderTemplate.findMany({
+      where: { NOT: { key: { startsWith: "email:" } } },
       orderBy: [{ key: "asc" }, { updatedAt: "desc" }],
     });
     const enabled = await Promise.all(rows.map((row) => docKeyEnabled(row.key)));

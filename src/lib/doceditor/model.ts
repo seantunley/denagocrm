@@ -29,6 +29,8 @@ import { isSafeCssColor } from "./css";
  */
 const colorField = (fallback: string) =>
   z.string().default(fallback).transform((value) => (isSafeCssColor(value) ? value : fallback));
+/** A colour that may be left unset ("use the default"); an unsafe value is unset too. */
+const optionalColor = z.string().default("").transform((value) => (isSafeCssColor(value) ? value : ""));
 
 /**
  * Page boxes in TWO units, and both are load-bearing.
@@ -320,14 +322,44 @@ export const footerBandBlockSchema = z.object({
 // (header, signature, footer around an emailBody slot) wraps every message's
 // BODY. Print documents never contain these; the PDF serialiser draws nothing
 // for them.
-/** The frame's header: the workspace's logo panel (signature banner), else the logo on a dark panel. */
-export const emailHeaderBlockSchema = z.object({ ...base, type: z.literal("emailHeader") });
+/**
+ * The frame's header. `panel`: the workspace's logo panel (signature banner),
+ * else the logo on a dark panel. `bar`: the logo on a full-width band of
+ * `background`. `plain`: the logo alone on the card.
+ */
+export const emailHeaderBlockSchema = z.object({
+  ...base, type: z.literal("emailHeader"),
+  style: z.enum(["panel", "bar", "plain"]).default("panel"),
+  background: colorField("#0b0f19"),
+  logoWidth: z.number().default(210),
+  align: z.enum(["left", "center"]).default("left"),
+});
 /** In the frame: where each message's own body goes. */
 export const emailBodyBlockSchema = z.object({ ...base, type: z.literal("emailBody") });
-/** In the frame: the sender's name, the company and its phone / email / website. */
-export const emailSignatureBlockSchema = z.object({ ...base, type: z.literal("emailSignature") });
+/**
+ * In the frame: who the email is from. The SENDER's own name, job title, mobile
+ * and email when a person sends it (Sean, 2026-10-08: "It must be the senders
+ * information"); the company's for an automatic message. Each line can be hidden.
+ */
+export const emailSignatureBlockSchema = z.object({
+  ...base, type: z.literal("emailSignature"),
+  showJobTitle: z.boolean().default(true),
+  showCompany: z.boolean().default(true),
+  showPhone: z.boolean().default(true),
+  showEmail: z.boolean().default(true),
+  showWebsite: z.boolean().default(true),
+});
 /** In the frame: company details, small and quiet, with an optional line above them. */
-export const emailFooterBlockSchema = z.object({ ...base, type: z.literal("emailFooter"), note: z.string().default("") });
+export const emailFooterBlockSchema = z.object({
+  ...base, type: z.literal("emailFooter"),
+  note: z.string().default(""),
+  showCompany: z.boolean().default(true),
+  showContact: z.boolean().default(true),
+  align: z.enum(["left", "center", "right"]).default("center"),
+  color: colorField("#94a3b8"),
+  /** Empty = the card's own colour. */
+  background: optionalColor,
+});
 /**
  * The message's action: a button that opens one of the message's links
  * (signing, review, survey), or — for a code — the code itself, shown large.
@@ -544,7 +576,19 @@ export const documentSchema = z.object({
    */
   layoutRows: z.number().optional(),
   /** Set on a customer EMAIL document (template key `email:<kind>`): its subject line, {{fields}} allowed. */
-  email: z.object({ subject: z.string().default("") }).optional(),
+  /**
+   * On the email FRAME (`email:frame`), the colours every email shares: the page
+   * behind the card, the card, the dark button, and the accent (links, the
+   * button's arrow, a highlighted figure). Empty = the standard look / the
+   * workspace's brand colour.
+   */
+  email: z.object({
+    subject: z.string().default(""),
+    pageColor: optionalColor.optional(),
+    cardColor: optionalColor.optional(),
+    buttonColor: optionalColor.optional(),
+    accentColor: optionalColor.optional(),
+  }).optional(),
 });
 export type DocumentModel = z.infer<typeof documentSchema>;
 

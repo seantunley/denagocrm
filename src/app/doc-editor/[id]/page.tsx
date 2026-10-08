@@ -15,7 +15,8 @@ import { getCompanyProfile } from "@/lib/companyProfile";
 import { documentLogo } from "@/lib/doceditor/renderGlobals";
 import { quoteWordingSettings } from "@/lib/quoteFromLead";
 import { getActiveTenantId } from "@/lib/auth";
-import { EMAIL_FRAME_KEY, EMAIL_SAMPLE_FIELDS, emailKindOf } from "@/lib/doceditor/emailDefaults";
+import { defaultEmailFrame, EMAIL_FRAME_KEY, EMAIL_SAMPLE_FIELDS, emailKindOf } from "@/lib/doceditor/emailDefaults";
+import { parseDocument } from "@/lib/doceditor/model";
 import { emailBrandFor } from "@/lib/doceditor/emailDocuments";
 import { MESSAGE_PLACES, messagePlace } from "@/lib/customerMessagePlaces";
 import { SIGNING_EMAILS } from "@/lib/signing/emailTemplates";
@@ -102,6 +103,24 @@ export default async function DocEditorPage({
     const brand = await emailBrandFor(tenantId);
     const place = emailKind ? messagePlace(emailKind) : "automatic";
     const backHref = place === "documents" ? "/document-studio#document-emails" : MESSAGE_PLACES[place].path;
+    // A message is edited inside the frame it is sent in: this workspace's frame
+    // as it is being designed (what Preview shows too), named by tenant in the query.
+    const frameRow = emailKind
+      ? await prisma.docBuilderTemplate.findFirst({
+          where: { tenantId, key: EMAIL_FRAME_KEY, deletedAt: null },
+          orderBy: [{ isDefault: "desc" }, { updatedAt: "desc" }],
+          select: { id: true, data: true },
+        })
+      : null;
+    const frame = emailKind
+      ? { href: frameRow ? `/doc-editor/${frameRow.id}` : null, doc: (frameRow && parseDocument(frameRow.data)) || defaultEmailFrame() }
+      : undefined;
+    // A message a person sends is signed with the sender's own details — shown here as the viewer's.
+    const signsAsSender = !emailKind || (SIGNING_EMAILS[emailKind].fields as readonly string[]).includes("sender_name");
+    const me = signsAsSender ? await prisma.user.findUnique({ where: { id: user.id }, select: { mobile: true, jobTitle: true } }) : null;
+    const sender: Record<string, string> = signsAsSender
+      ? { sender_name: user.name, sender_email: user.email, sender_mobile: me?.mobile ?? "", sender_title: me?.jobTitle ?? "" }
+      : {};
     return (
       <DocEditorEnvProvider
         value={{
@@ -111,12 +130,13 @@ export default async function DocEditorPage({
           email: {
             kind: emailKind,
             fields: emailKind ? [...SIGNING_EMAILS[emailKind].fields] : [],
-            sample: { ...EMAIL_SAMPLE_FIELDS, company_name: brand.companyName, company_phone: brand.phone, company_email: brand.email },
+            sample: { ...EMAIL_SAMPLE_FIELDS, company_name: brand.companyName, company_phone: brand.phone, company_email: brand.email, ...sender },
             brand,
+            frame,
           },
         }}
       >
-        <DocEditor id={template.id} initialDoc={initialDoc} records={[]} initialPublishState={await publishStateOf(template)} email={{ frame: !emailKind, backHref }} />
+        <DocEditor id={template.id} initialDoc={initialDoc} records={[]} initialPublishState={await publishStateOf(template)} hasStandardLayout email={{ frame: !emailKind, backHref }} />
       </DocEditorEnvProvider>
     );
   }

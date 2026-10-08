@@ -240,10 +240,16 @@ export async function signingEmailContent(
       req.quoteId
         ? basePrisma.quote.findFirst({ where: { id: req.quoteId, tenantId }, select: { number: true } })
         : null,
-      req.createdById ? basePrisma.user.findUnique({ where: { id: req.createdById }, select: { name: true } }) : null,
+      req.createdById
+        ? basePrisma.user.findUnique({ where: { id: req.createdById }, select: { name: true, email: true, mobile: true, jobTitle: true } })
+        : null,
     ]);
     vars.quote_number = quote ? `Q-${quote.number}` : "";
+    // Who sent it — their own details sign the email (the frame's signature).
     vars.sender_name = sender?.name ?? "";
+    vars.sender_title = sender?.jobTitle ?? "";
+    vars.sender_mobile = sender?.mobile ?? "";
+    vars.sender_email = sender?.email ?? "";
     vars.expiry_date = req.expiresAt ? formatDate(req.expiresAt) : "";
     return tenantEmailContent(kind, tenantId, vars);
   } catch {
