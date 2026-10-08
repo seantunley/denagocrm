@@ -1,7 +1,7 @@
+import { requireRoute } from "@/lib/permissions";
 import { Prisma } from "@prisma/client";
 import { notFound } from "next/navigation";
 import { CheckCircle2, CircleDashed, FlaskConical, ListChecks, Play, Plus, Trash2, XCircle } from "lucide-react";
-import { requireOwner } from "@/lib/auth";
 import { basePrisma, prisma } from "@/lib/db";
 import { builderTenantId, flowScope } from "@/lib/flowScope";
 import { createFlowEvaluation, deleteFlowEvaluation, runAllFlowEvaluations, runFlowEvaluation } from "@/app/actions/flowEvaluations";
@@ -20,7 +20,7 @@ const asExpectation = (value: unknown) => value as FlowEvaluationExpectation;
 const asResult = (value: unknown) => (value && typeof value === "object" ? value : {}) as StoredResult;
 
 export default async function FlowEvaluationsPage({ params }: { params: Promise<{ id: string }> }) {
-  await requireOwner();
+  await requireRoute("/bot-builder");
   const { id } = await params;
   const tenantId = await builderTenantId();
   const scope = await flowScope();

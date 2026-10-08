@@ -249,14 +249,16 @@ export default function VehicleForm({
       >
         {showInitialKm && (
           <label className="flex cursor-pointer items-start gap-3 rounded-xl border border-border bg-background/40 p-3 sm:col-span-2">
-            <input type="checkbox" name="newDelivery" className="mt-0.5 size-4 accent-orange-600" defaultChecked={Boolean(defaults.productId)} />
+            {/* Never pre-ticked: ticking it sends the customer messages. */}
+            <input type="checkbox" name="newDelivery" className="mt-0.5 size-4 accent-orange-600" defaultChecked={false} />
             <span className="min-w-0">
               <span className="flex items-center gap-2 text-sm font-medium text-foreground">
                 <Sparkles className="size-4 text-primary" />
                 This is a new customer delivery
               </span>
               <span className="mt-1 block text-[11px] leading-4 text-muted-foreground">
-                Send the delivery survey and Google review request after registration.
+                Emails the customer the delivery survey (if one is switched on) and whatever journey is on for a
+                new delivery — e.g. the ready-made Google review request, switched on or off in Journeys.
               </span>
             </span>
           </label>

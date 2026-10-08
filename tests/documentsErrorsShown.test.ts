@@ -34,29 +34,17 @@ test("the default template can't be deleted, and it says why", () => {
 });
 
 test("deleting a template is confirmed and its reason audited", () => {
-  const page = src("src/app/(app)/document-studio/page.tsx");
-  assert.match(page, /<ConfirmDelete\s+action=\{deleteDocTemplate\.bind\(null, template\.id\)\}/);
+  // Document Studio no longer offers old form-editor templates at all (one
+  // editor, 2026-10-07); the action keeps its server-side reason check.
   // Required on the server, not only in the dialog.
   assert.match(docs, /const reason = requiredReason\(formData, "deleting this template"\);/);
   assert.match(docs, /summary: `Deleted template “\$\{rec\.name\}” — \$\{reason\}`/);
-});
-
-test("studio publish / new clause return refusals and navigate by value", () => {
-  const studio = src("src/app/actions/studio.ts");
-  for (const name of ["publishStudioTemplate", "createReusableBlock"]) {
-    const at = studio.indexOf(`export async function ${name}(`);
-    assert.match(studio.slice(at, at + 300), /return asActionResult\(async \(\) => \{/, name);
-  }
-  assert.match(studio, /return \{ redirectTo: `\/settings\/documents\/studio\/c\/\$\{row\.id\}`/);
-  assert.doesNotMatch(studio, /throw new Error\(/);
-  assert.doesNotMatch(studio, /findUniqueOrThrow\(/);
 });
 
 test("every form posting to these is a SaveForm", () => {
   for (const file of [
     "src/app/(app)/document-studio/page.tsx",
     "src/app/(app)/settings/documents/t/[id]/page.tsx",
-    "src/app/(app)/settings/documents/studio/t/[id]/page.tsx",
     "src/components/RepoRow.tsx",
     "src/components/DocumentsPanel.tsx",
   ]) {

@@ -66,7 +66,7 @@ export default function StockUnitForm({
         <CaptureHero
           icon={PackagePlus}
           eyebrow="Floor stock intake"
-          title={product?.name ?? "Choose the Denago model"}
+          title={product?.name ?? "Choose the product"}
           description="Register one physical unit already on site with its identity, equipment, condition and valuation basis."
           summary={[
             { label: "State", value: "Available" },

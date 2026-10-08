@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { prisma } from "@/lib/db";
-import { requireOwner } from "@/lib/auth";
+import { requireTenantOwner } from "@/lib/auth";
 import { createSignWorkflow } from "@/app/actions/signflow";
 import { parseGraph } from "@/lib/signflow/model";
 import { formatDateTime } from "@/lib/format";
@@ -17,7 +17,7 @@ function signerCount(graph: unknown): number {
 }
 
 export default async function SigningWorkflowsPage() {
-  await requireOwner();
+  await requireTenantOwner();
   const workflows = await prisma.signWorkflow.findMany({ where: { isArchived: false }, orderBy: { updatedAt: "desc" } });
 
   return (

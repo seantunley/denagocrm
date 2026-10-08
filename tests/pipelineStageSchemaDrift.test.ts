@@ -488,8 +488,8 @@ test("both stage actions are still owner-gated on their own entry path", () => {
   // A Server Action is a POST endpoint: the settings screen not rendering the form
   // for a member is not a boundary. Neither action may become reachable to one.
   for (const [name, body] of [["createStage", CREATE], ["moveStage", MOVE]] as const) {
-    assert.match(body, /await requireOwner\(\);/, `${name} lost its guard`);
-    const guardAt = body.indexOf("requireOwner");
+    assert.match(body, /await requireTenantOwner\(\);/, `${name} lost its guard`);
+    const guardAt = body.indexOf("requireTenantOwner");
     const writeAt = Math.min(
       ...[body.indexOf("pipelineStage.create"), body.indexOf("reorderPipelineStages")].filter((i) => i >= 0),
     );

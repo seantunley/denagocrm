@@ -18,6 +18,10 @@ import { authorizeDocumentTarget } from "@/lib/documentUploadAuth";
 import { actingOwnerTenantId } from "@/lib/actingScope";
 import { requiredReason } from "@/lib/deleteReason";
 import { DOC_DEFS, defaultTemplate, mergeTemplate, isDocKey } from "@/lib/docTemplates";
+// getTemplateRecord, not a raw findUnique: it is where the module check lives.
+import { getTemplateRecord } from "@/lib/docTemplateStore";
+import { docKeyEnabled } from "@/lib/docModuleAccess";
+import { isModuleEnabled } from "@/lib/modules/enabled";
 import {
   requirePermission,
   requireDocumentAccess,
@@ -268,11 +272,12 @@ export async function createDocTemplate(formData: FormData) {
     const user = await requirePermission("document_templates.manage");
     const docType = String(formData.get("docType") ?? "");
     if (!isDocKey(docType)) refuse("Choose what kind of document this template is for.");
+    if (!(await docKeyEnabled(docType))) refuse("That kind of document isn't available in this workspace.");
     const name = String(formData.get("name") ?? "").trim() || "Untitled";
     const baseId = String(formData.get("baseId") ?? "").trim();
-    let config: object = defaultTemplate(docType) as object;
+    let config: object = defaultTemplate(docType, { automotive: await isModuleEnabled("automotive") }) as object;
     if (baseId) {
-      const base = await prisma.docTemplateRecord.findUnique({ where: { id: baseId } });
+      const base = await getTemplateRecord(baseId);
       if (base && base.docType === docType) config = mergeTemplate(docType, base.config) as object;
     }
     const hasDefault = await prisma.docTemplateRecord.count({
@@ -290,7 +295,7 @@ export async function createDocTemplate(formData: FormData) {
 export async function updateDocTemplate(id: string, formData: FormData) {
   return asActionResult(async () => {
     const user = await requirePermission("document_templates.manage");
-    const rec = await prisma.docTemplateRecord.findUnique({ where: { id } });
+    const rec = await getTemplateRecord(id);
     if (!rec) refuse(TEMPLATE_GONE);
     if (!isDocKey(rec.docType)) refuse(UNKNOWN_TEMPLATE);
     const key = rec.docType;
@@ -327,7 +332,7 @@ export async function updateDocTemplate(id: string, formData: FormData) {
 export async function setDefaultDocTemplate(id: string) {
   return asActionResult(async () => {
     const user = await requirePermission("document_templates.manage");
-    const rec = await prisma.docTemplateRecord.findUnique({ where: { id } });
+    const rec = await getTemplateRecord(id);
     if (!rec) refuse(TEMPLATE_GONE);
     await prisma.$transaction([
       prisma.docTemplateRecord.updateMany({ where: { docType: rec.docType }, data: { isDefault: false } }),
@@ -343,7 +348,7 @@ export async function setDefaultDocTemplate(id: string) {
 export async function duplicateDocTemplate(id: string) {
   return asActionResult(async () => {
     const user = await requirePermission("document_templates.manage");
-    const rec = await prisma.docTemplateRecord.findUnique({ where: { id } });
+    const rec = await getTemplateRecord(id);
     if (!rec) refuse(TEMPLATE_GONE);
     const copy = await prisma.docTemplateRecord.create({
       data: { docType: rec.docType, name: `Copy of ${rec.name}`, config: rec.config as object },
@@ -356,7 +361,7 @@ export async function duplicateDocTemplate(id: string) {
 export async function deleteDocTemplate(id: string, formData?: FormData) {
   return asActionResult(async () => {
     const user = await requirePermission("document_templates.manage");
-    const rec = await prisma.docTemplateRecord.findUnique({ where: { id } });
+    const rec = await getTemplateRecord(id);
     if (!rec) refuse(TEMPLATE_GONE);
     if (rec.isDefault) refuse("This is the default template — make another one the default first.");
     // Required here, not just in the dialog: the action is a public endpoint.
@@ -371,7 +376,7 @@ export async function deleteDocTemplate(id: string, formData?: FormData) {
 export async function uploadTemplateLogo(id: string, formData: FormData) {
   return asActionResult(async () => {
     const user = await requirePermission("document_templates.manage");
-    const rec = await prisma.docTemplateRecord.findUnique({ where: { id } });
+    const rec = await getTemplateRecord(id);
     if (!rec) refuse(TEMPLATE_GONE);
     if (!isDocKey(rec.docType)) refuse(UNKNOWN_TEMPLATE);
     const file = formData.get("file");

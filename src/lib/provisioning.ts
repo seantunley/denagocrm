@@ -1,5 +1,7 @@
 import type { PrismaClient, Prisma } from "@prisma/client";
 import { DEFAULT_TENANT_ID } from "./tenant";
+import { grantedModuleIds } from "./modules/entitlement";
+import type { ModuleId } from "./modules/registry";
 
 /**
  * IDs of the 7 system roles seeded in migration 52_pipelines_forecasting_rbac_audit
@@ -16,6 +18,23 @@ const SYSTEM_ROLE_IDS = [
   "role_technician",
   "role_auditor",
 ] as const;
+
+/**
+ * Roles that only make sense with an optional module. Every workspace used to get
+ * the workshop roles, so a non-automotive one had a Technician and a Workshop
+ * manager to assign. They are copied when the module is granted, and hidden from
+ * the roles screen while it is off (an existing copy is kept, never deleted).
+ */
+export const MODULE_ROLES: Readonly<Record<string, ModuleId>> = {
+  role_workshop_manager: "automotive",
+  role_technician: "automotive",
+};
+
+/** Whether a role (system id or its `<id>:<tenantId>` copy) is usable with these modules. */
+export function roleAvailable(roleId: string, enabledModules: ReadonlySet<string>): boolean {
+  const needs = MODULE_ROLES[roleId.split(":")[0]];
+  return !needs || enabledModules.has(needs);
+}
 
 /**
  * Shared tenant-provisioning service. ONE place that turns "a user exists" into "a
@@ -93,7 +112,11 @@ export async function seedTenantDefaultRoles(client: Client, tenantId: string): 
     throw new Error(`Default tenant roles missing from founding tenant: ${missing.join(", ")}`);
   }
 
+  const tenant = await client.tenant.findUnique({ where: { id: tenantId }, select: { modules: true } });
+  const granted = grantedModuleIds(tenant?.modules);
   for (const source of sourceRoles) {
+    // Module roles wait for their module; setTenantModulesAction re-runs this.
+    if (!roleAvailable(source.id, granted)) continue;
     const id = `${source.id}:${tenantId}`;
     await client.role.upsert({
       where: { id },

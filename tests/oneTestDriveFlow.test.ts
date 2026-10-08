@@ -11,7 +11,8 @@ const leads = src("src/app/actions/leads.ts");
 const board = leads.slice(leads.indexOf("export async function moveLeadToTestDrive("), leads.indexOf("export async function", leads.indexOf("export async function moveLeadToTestDrive(") + 10));
 
 test("both doors book through the one helper", () => {
-  assert.match(src("src/app/actions/testDrives.ts"), /prisma\.\$transaction\(\(tx\) =>\s*createBookedTestDrive\(tx, \{/);
+  // Inside the transaction that holds the staff schedule locks (#710).
+  assert.match(src("src/app/actions/testDrives.ts"), /prisma\.\$transaction\(async \(tx\) => \{[\s\S]*?lockStaffSchedules\(tx,[\s\S]*?return createBookedTestDrive\(tx, \{/);
   assert.match(board, /await createBookedTestDrive\(tx, \{/);
   // The bare activity-only booking is gone.
   assert.doesNotMatch(board, /tx\.activity\.create\(/);

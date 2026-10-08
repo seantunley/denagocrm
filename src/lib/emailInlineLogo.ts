@@ -2,6 +2,8 @@ import { basePrisma } from "./db";
 import { decryptValue } from "./settings";
 import { readManagedBlob } from "./storage";
 import { brandLogoAsset } from "./tenantBrand";
+import { signatureAsset } from "./signatureAssets";
+import { parseSignatureDesign, SIGNATURE_DESIGN_KEY } from "./signature";
 
 /**
  * Put the workspace's logo INSIDE the email instead of linking to it.
@@ -11,6 +13,8 @@ import { brandLogoAsset } from "./tenantBrand";
  * a quote, a signing request or a campaign was a broken-image box where the
  * logo should be. An inline (CID) attachment is part of the message and shows
  * straight away.
+ *
+ * Also embedded: the card signature's five fixed images (signatureAssets.ts).
  *
  * Only THIS workspace's own logo is embedded: its public brand-logo route
  * (bytes read straight from storage, nothing fetched over the network), or —
@@ -25,7 +29,8 @@ export type ImageLoader = (src: string) => Promise<LoadedImage | null>;
 
 const EXT_TYPES: Record<string, string> = { png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", webp: "image/webp", svg: "image/svg+xml" };
 const TYPE_EXT: Record<string, string> = { "image/png": "png", "image/jpeg": "jpg", "image/webp": "webp", "image/svg+xml": "svg", "image/gif": "gif" };
-const MAX_LOGO_BYTES = 1024 * 1024;
+/** The largest image embedded in an email. An upload meant for email (the signature banner) is capped at this too. */
+export const MAX_LOGO_BYTES = 1024 * 1024;
 const CACHE_MS = 10 * 60 * 1000;
 
 /**
@@ -70,6 +75,10 @@ export function workspaceLogoLoader(tenantId: string): ImageLoader {
 
 async function loadWorkspaceLogo(tenantId: string, src: string): Promise<LoadedImage | null> {
   const url = new URL(src);
+  // 0. The card signature's own five images (signatureAssets.ts): bytes compiled
+  //    into the app, matched by exact name — nothing is fetched or read from disk.
+  const signature = signatureAsset(url.pathname);
+  if (signature) return { content: signature, contentType: "image/png" };
   // 1. This workspace's public brand-logo route. The same object the route would
   //    stream, rebuilt the same way (tenant folder + strictly matched asset name),
   //    read from storage — the URL's host is never contacted.
@@ -82,14 +91,19 @@ async function loadWorkspaceLogo(tenantId: string, src: string): Promise<LoadedI
     const content = await readManagedBlob(`branding/${tenantId}/${asset}`);
     return content.length <= MAX_LOGO_BYTES ? { content, contentType } : null;
   }
-  // 2. The Company Profile logo — only the exact public https URL this workspace
-  //    configured, so a template cannot point the server at anything else.
-  const row = await basePrisma.appSetting.findUnique({
-    where: { tenantId_key: { tenantId, key: "COMPANY_LOGO_URL" } },
-    select: { value: true },
+  // 2. The Company Profile logo or the signature's logo-panel banner — only the
+  //    exact public https URLs this workspace configured, so a template cannot
+  //    point the server at anything else.
+  const rows = await basePrisma.appSetting.findMany({
+    where: { tenantId, key: { in: ["COMPANY_LOGO_URL", SIGNATURE_DESIGN_KEY] } },
+    select: { key: true, value: true },
   });
-  const configured = row?.value ? decryptValue(row.value).trim() : "";
-  if (!configured || configured !== src || /\.private\.blob\.|\/api\/stored/i.test(configured)) return null;
+  const value = (key: string) => {
+    const raw = rows.find((row) => row.key === key)?.value;
+    return raw ? decryptValue(raw).trim() : "";
+  };
+  const configured = [value("COMPANY_LOGO_URL"), parseSignatureDesign(value(SIGNATURE_DESIGN_KEY)).bannerUrl];
+  if (!configured.includes(src) || /\.private\.blob\.|\/api\/stored/i.test(src)) return null;
   const response = await fetch(src, { signal: AbortSignal.timeout(5000), redirect: "error" });
   const contentType = (response.headers.get("content-type") ?? "").split(";")[0].trim().toLowerCase();
   if (!response.ok || !contentType.startsWith("image/") || !response.body) return null;

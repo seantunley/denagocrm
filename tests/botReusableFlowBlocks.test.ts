@@ -58,7 +58,7 @@ test("block insertion creates no runtime reference back to the source snippet", 
 
 test("saving reusable blocks requires a compiler-clean owner draft", () => {
   const action = src("src/app/actions/flowSnippets.ts");
-  assert.match(action, /await requireOwner\(\)/);
+  assert.match(action, /await requireTenantOwner\(\)/);
   assert.match(action, /flowErrors\(validateFlow\(definition, await enabledFlowChannels\(\)\)\)/);
   assert.match(action, /if \(errors\.length\) return/);
 });

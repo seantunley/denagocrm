@@ -1,8 +1,8 @@
+import { requireRoute } from "@/lib/permissions";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { History, RotateCcw, ShieldCheck } from "lucide-react";
 import { Prisma } from "@prisma/client";
-import { requireOwner } from "@/lib/auth";
 import { basePrisma, prisma } from "@/lib/db";
 import { DEFAULT_TENANT_ID } from "@/lib/tenant";
 import { writeTenantId } from "@/lib/tenantWrite";
@@ -47,7 +47,7 @@ function nodeCount(definition: string): number {
 }
 
 export default async function FlowVersionsPage({ params }: { params: Promise<{ id: string }> }) {
-  await requireOwner();
+  await requireRoute("/bot-builder");
   const { id } = await params;
   const tenantId = await builderTenantId();
   const scope = flowTenantWhere(tenantId);

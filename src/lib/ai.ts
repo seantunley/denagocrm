@@ -6,11 +6,12 @@ import { inheritedTenantId } from "./tenantWrite";
 import { codexRespond, isCodexConnected } from "./codex";
 import {
   CHATGPT_RESEARCH_FORMAT_NOTE,
-  RESEARCH_INSTRUCTIONS,
   corporateDomain,
+  researchInstructions,
   researchLeadMessage,
   stripInlineCitations,
 } from "./researchPrompt";
+import { getCompanyProfile } from "./companyProfile";
 import type { CronSliceContext } from "./tenantCron";
 
 export async function isAiConfigured(): Promise<boolean> {
@@ -29,6 +30,8 @@ export async function aiCheckDraft(input: {
 }): Promise<{ issues: string[] } | { error: string }> {
   const apiKey = await getSetting("ANTHROPIC_API_KEY");
   if (!apiKey) return { error: "AI Assist is not configured (Settings → Integrations)." };
+  // Whose messages these are: the workspace's own business, not Denago's.
+  const company = (await getCompanyProfile().catch(() => null))?.name?.trim() || "a South African business";
 
   try {
     const res = await fetch("https://api.anthropic.com/v1/messages", {
@@ -43,7 +46,8 @@ export async function aiCheckDraft(input: {
         model: "claude-haiku-4-5",
         max_tokens: 500,
         system:
-          "You proofread short outbound messages for Denago Cape Town, a South African electric golf-cart dealership. Check ONLY for: spelling/grammar errors (South African English), the customer's name spelled differently from the record, numbers or prices that look mistyped, references to attachments when none are mentioned as attached, and accidentally unprofessional tone. Respond with STRICT JSON: {\"issues\": [\"...\"]} — each issue one short sentence. If the message is fine, respond {\"issues\": []}. Never rewrite the message, never invent issues.",
+          `You proofread short outbound messages for ${company}. Check ONLY for:` +
+          " spelling/grammar errors (South African English), the customer's name spelled differently from the record, numbers or prices that look mistyped, references to attachments when none are mentioned as attached, and accidentally unprofessional tone. Respond with STRICT JSON: {\"issues\": [\"...\"]} — each issue one short sentence. If the message is fine, respond {\"issues\": []}. Never rewrite the message, never invent issues.",
         messages: [
           {
             role: "user",
@@ -230,6 +234,8 @@ export async function aiResearch(
     return { error: "AI Assist is not configured (Settings → Integrations)." };
   }
   const corporate = corporateDomain(input.email);
+  // The research is for THIS workspace's business (its Company Profile), not Denago's.
+  const instructions = researchInstructions((await getCompanyProfile().catch(() => null))?.name ?? "");
 
   /**
    * SERVER-SIDE WEB SEARCH DOES NOT ALWAYS FINISH IN ONE RESPONSE.
@@ -290,7 +296,7 @@ export async function aiResearch(
         // This task needs the model to READ a handful of pages and synthesise
         // them, and the basic tool puts them straight into context where it can.
         tools: [{ type: "web_search_20250305", name: "web_search", max_uses: options.maxSearches ?? 8 }],
-        system: RESEARCH_INSTRUCTIONS,
+        system: instructions,
     };
 
     // The opening turn. It lives in `messages` — NOT in `requestBody` — because
@@ -317,7 +323,7 @@ export async function aiResearch(
       // at 50 to 80 seconds a call, which is why the timeout is generous and
       // automatic research has its own cron route.
       const reply = await codexRespond({
-        instructions: RESEARCH_INSTRUCTIONS + CHATGPT_RESEARCH_FORMAT_NOTE,
+        instructions: instructions + CHATGPT_RESEARCH_FORMAT_NOTE,
         prompt: String(messages[0].content),
         webSearch: true,
         reasoningEffort: "high",

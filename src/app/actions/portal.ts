@@ -65,12 +65,40 @@ const normEmail = (email: string) => email.trim().toLowerCase();
  * that cannot have a tenant scope yet and pins the tenant in its own WHERE.
  */
 type PortalContactRow = { id: string; firstName: string; lastName: string | null };
+
+/**
+ * The workspace whose portal this is: the one `withPortalHostScope` bound from
+ * the VERIFIED hostname. This was pinned to DEFAULT_TENANT_ID, so on any other
+ * workspace's portal domain the lookup searched Denago's contacts and no other
+ * workspace's customer could ever sign in. With no bound scope — an address no
+ * workspace has verified — there is no portal: null, and nobody signs in. Only
+ * local dev with enforcement off keeps the founding workspace.
+ */
+async function portalLoginTenantId(): Promise<string | null> {
+  const { currentTenantScope } = await import("@/lib/tenantScope");
+  const { tenantEnforcing } = await import("@/lib/tenantEnforcement");
+  return currentTenantScope()?.tenantId ?? (tenantEnforcing() ? null : DEFAULT_TENANT_ID);
+}
+
+/**
+ * The OTP challenge key for this portal's sign-in. OtpChallenge is a global
+ * model, so a bare email let a code issued on one workspace's portal be redeemed
+ * on another's for a customer who uses the same address at both. Namespaced the
+ * same way as serviceOtpKey. Rate-limit keys use it too, so one workspace's
+ * traffic can't throttle another's customers.
+ */
+async function portalOtpKey(email: string): Promise<string> {
+  return `t:${await portalLoginTenantId()}:${email}`;
+}
+
 async function findPortalContactByEmail(email: string): Promise<PortalContactRow | null> {
+  const loginTenantId = await portalLoginTenantId();
+  if (!loginTenantId) return null;
   const rows = await basePrisma.$queryRaw<PortalContactRow[]>`
     SELECT "id", "firstName", "lastName" FROM "Contact"
     WHERE LOWER("email") = ${email}
       AND "deletedAt" IS NULL
-      AND "tenantId" = ${DEFAULT_TENANT_ID}
+      AND "tenantId" = ${loginTenantId}
     ORDER BY "createdAt" ASC, "id" ASC
     LIMIT 1
   `;
@@ -187,7 +215,8 @@ async function issuePortalOtp(email: string): Promise<PortalAuthState> {
 
   const generic: PortalAuthState = { sent: true };
   const ip = await getRequestIp();
-  const accountKey = rateLimitKey("portal-otp-send-account", email);
+  const otpKey = await portalOtpKey(email);
+  const accountKey = rateLimitKey("portal-otp-send-account", otpKey);
   const ipKey = rateLimitKey("portal-otp-send-ip", ip);
   const [accountLimit, ipLimit] = await Promise.all([
     registerRateLimitAttempt(accountKey, OTP_SEND_POLICY),
@@ -207,15 +236,15 @@ async function issuePortalOtp(email: string): Promise<PortalAuthState> {
   // lock stops two concurrent reissues from each expiring the visible codes and
   // then inserting a new one — which would leave TWO valid codes.
   await prisma.$transaction(async (tx) => {
-    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`otp:portal:${email}`})::bigint)`;
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`otp:portal:${otpKey}`})::bigint)`;
     await tx.otpChallenge.updateMany({
-      where: { purpose: "portal", key: email, verifiedAt: null },
+      where: { purpose: "portal", key: otpKey, verifiedAt: null },
       data: { expiresAt: new Date() },
     });
     await tx.otpChallenge.create({
       data: {
         purpose: "portal",
-        key: email,
+        key: otpKey,
         codeHash,
         channel: "email",
         target: email,
@@ -225,7 +254,7 @@ async function issuePortalOtp(email: string): Promise<PortalAuthState> {
   });
   // The workspace's own editable "portal login code" email (Settings → Email
   // templates), signed by the workspace the contact belongs to (the lookup above pins it).
-  const message = await tenantEmailContent("portal_code", DEFAULT_TENANT_ID, {
+  const message = await tenantEmailContent("portal_code", await portalLoginTenantId(), {
     first_name: contact.firstName,
     recipient_name: [contact.firstName, contact.lastName].filter(Boolean).join(" "),
     code,
@@ -258,13 +287,14 @@ export async function verifyPortalOtp(
 
 async function completePortalOtp(email: string, code: string): Promise<PortalAuthState> {
   const ip = await getRequestIp();
-  const verifyKey = rateLimitKey("portal-otp-verify", `${email}:${ip}`);
+  const otpKey = await portalOtpKey(email);
+  const verifyKey = rateLimitKey("portal-otp-verify", `${otpKey}:${ip}`);
   if (!(await checkRateLimit(verifyKey)).allowed) {
     return { error: "Too many incorrect codes. Request a new code later." };
   }
 
   const challenge = await prisma.otpChallenge.findFirst({
-    where: { purpose: "portal", key: email, verifiedAt: null, expiresAt: { gt: new Date() } },
+    where: { purpose: "portal", key: otpKey, verifiedAt: null, expiresAt: { gt: new Date() } },
     orderBy: { createdAt: "desc" },
   });
   if (!challenge) return { error: "That code has expired — request a new one." };
@@ -296,7 +326,7 @@ async function completePortalOtp(email: string, code: string): Promise<PortalAut
   if (consumed.count !== 1) return { error: "That code has expired — request a new one." };
   await Promise.all([
     clearRateLimit(verifyKey),
-    clearRateLimit(rateLimitKey("portal-otp-send-account", email)),
+    clearRateLimit(rateLimitKey("portal-otp-send-account", otpKey)),
   ]);
   await setPortalCookie(contact.id, email);
   redirect("/portal");

@@ -786,6 +786,56 @@ export async function putManagedBlob(
   return { url: blob.url, pathname: blob.pathname };
 }
 
+export type TenantBlobUsage = { bytes: number; files: number; truncated: boolean };
+
+/** Upper bound on listing pages per store, so a huge store can't hang the console. */
+const BLOB_USAGE_MAX_PAGES = 20;
+
+/**
+ * What a workspace actually keeps in file storage — documents, photos, signed
+ * PDFs, logos. The console's storage figure was the database only.
+ *
+ * BOTH stores are counted: files written before a public→private switch stay in
+ * the public store and are still that workspace's — and a copy in each store is
+ * two objects, so it counts twice. Ownership is
+ * {@link blobBelongsToTenant}'s rule, so the founding workspace also gets its
+ * pre-namespace `uploads/<file>` and `library/<file>` objects. Measured, not
+ * estimated — Blob reports each object's size — but capped at
+ * BLOB_USAGE_MAX_PAGES × 1000 objects per store (`truncated` says when).
+ */
+export async function tenantBlobUsage(tenantId: string): Promise<TenantBlobUsage> {
+  // Only the founding workspace has un-namespaced objects; everyone else's live
+  // under their own prefix, which keeps their listing small.
+  const prefixes = tenantId === DEFAULT_TENANT_ID ? ["uploads/", "library/"] : [`uploads/${tenantId}/`];
+  // One entry per STORE: the same token configured twice is one store, listed once.
+  const tokens = [...new Set([publicToken(), privateToken()].filter((t): t is string => Boolean(t)))];
+  // Keyed by store + pathname, never pathname alone: the same path in the public
+  // and the private store (left behind by a public→private migration) is two
+  // objects, billed twice, and must count twice.
+  const seen = new Set<string>();
+  let bytes = 0;
+  let truncated = false;
+  for (const [store, token] of tokens.entries()) {
+    for (const prefix of prefixes) {
+      let cursor: string | undefined;
+      let pages = 0;
+      do {
+        const page = await list({ prefix, cursor, limit: 1000, token });
+        for (const blob of page.blobs) {
+          const key = `${store}:${blob.pathname}`;
+          if (seen.has(key) || !blobBelongsToTenant(blob.pathname, tenantId)) continue;
+          seen.add(key);
+          bytes += blob.size;
+        }
+        cursor = page.hasMore ? page.cursor : undefined;
+        pages += 1;
+      } while (cursor && pages < BLOB_USAGE_MAX_PAGES);
+      if (cursor) truncated = true;
+    }
+  }
+  return { bytes, files: seen.size, truncated };
+}
+
 async function collectBlobs(prefix: string, token: string): Promise<Array<{ pathname: string; url: string }>> {
   const out: Array<{ pathname: string; url: string }> = [];
   let cursor: string | undefined;

@@ -9,14 +9,35 @@ import {
 } from "date-fns";
 import { prisma } from "@/lib/db";
 import { contactName } from "@/lib/format";
+import { johannesburgDateKey } from "@/lib/activityDay";
 import { getSlotConfig } from "@/lib/bookingSlots";
+import { activityPeople } from "@/lib/activityAttendees";
 import {
   calendarQueryBounds,
   isCalendarEventOverdue,
+  shiftDateKey,
 } from "@/lib/calendarDates";
 import CalendarWorkspace, {
   type CalendarWorkspaceEvent,
 } from "@/components/CalendarWorkspace";
+
+function johannesburgTime(date: Date): string {
+  return date.toLocaleTimeString("en-ZA", {
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+    timeZone: "Africa/Johannesburg",
+  });
+}
+
+function dateLabel(dateKey: string): string {
+  return new Date(`${dateKey}T12:00:00+02:00`).toLocaleDateString("en-ZA", {
+    weekday: "long",
+    day: "numeric",
+    month: "long",
+    timeZone: "Africa/Johannesburg",
+  });
+}
 
 export default async function CalendarView({
   mode,
@@ -33,12 +54,7 @@ export default async function CalendarView({
   canManage: boolean;
 }) {
   const now = new Date();
-  const todayKey = now.toLocaleDateString("en-CA", {
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    timeZone: "Africa/Johannesburg",
-  });
+  const todayKey = johannesburgDateKey(now);
   const currentMonthKey = todayKey.slice(0, 7);
   const parsedMonth = parse(
     m && /^\d{4}-\d{2}$/.test(m) ? m : currentMonthKey,
@@ -48,34 +64,55 @@ export default async function CalendarView({
   const monthStart = startOfMonth(parsedMonth);
   const gridStart = startOfWeek(monthStart, { weekStartsOn: 1 });
   const gridEnd = addDays(gridStart, 42);
-  const queryBounds = calendarQueryBounds(
-    format(gridStart, "yyyy-MM-dd"),
-    format(gridEnd, "yyyy-MM-dd"),
-  );
+  const gridStartKey = format(gridStart, "yyyy-MM-dd");
+  const gridEndKey = format(gridEnd, "yyyy-MM-dd");
+  const lastGridKey = format(addDays(gridEnd, -1), "yyyy-MM-dd");
+  const queryBounds = calendarQueryBounds(gridStartKey, gridEndKey);
+
+  const calendarRange = {
+    OR: [
+      {
+        availabilityBlock: false,
+        dueDate: { gte: queryBounds.start, lt: queryBounds.end },
+      },
+      {
+        availabilityBlock: true,
+        dueDate: { lt: queryBounds.end },
+        endDate: { gt: queryBounds.start },
+      },
+    ],
+  };
+
+  const calendarKind =
+    mode === "workshop"
+      ? { OR: [{ category: "workshop" }, { availabilityBlock: true }] }
+      : {
+          OR: [
+            { category: null },
+            { category: { not: "workshop" } },
+            { availabilityBlock: true },
+          ],
+        };
 
   const [activities, slotConfig, bookingCountRows] = await Promise.all([
     prisma.activity.findMany({
       where: {
-        dueDate: { gte: queryBounds.start, lt: queryBounds.end },
-        // History stays visible; only explicitly cancelled work is hidden.
-        status: { in: ["planned", "done"] },
-        ...(activityIds != null ? { id: { in: activityIds } } : {}),
-        ...(mode === "workshop"
-          ? { category: "workshop" }
-          : { OR: [{ category: null }, { category: { not: "workshop" } }] }),
+        AND: [
+          calendarRange,
+          calendarKind,
+          { status: { in: ["planned", "done"] } },
+          ...(activityIds != null ? [{ id: { in: activityIds } }] : []),
+        ],
       },
       include: {
         assignedTo: { select: { id: true, name: true } },
+        attendees: { include: { user: { select: { name: true } } }, orderBy: { createdAt: "asc" } },
         lead: { include: { product: { select: { name: true } } } },
         contact: true,
       },
       orderBy: { dueDate: "asc" },
     }),
     mode === "workshop" ? getSlotConfig() : Promise.resolve(null),
-    // Aggregate capacity source: EVERY planned workshop booking in the window,
-    // deliberately NOT filtered by the RBAC activityIds — slot/open-capacity maths must
-    // reflect all bookings (a slot taken by another technician still occupies public
-    // capacity). We select only dueDate, so no inaccessible event details are exposed.
     mode === "workshop"
       ? prisma.activity.findMany({
           where: {
@@ -88,78 +125,85 @@ export default async function CalendarView({
       : Promise.resolve([] as { dueDate: Date }[]),
   ]);
 
-  // Bookings per calendar day (Africa/Johannesburg), from the unfiltered source above.
   const bookingCountsByDate: Record<string, number> = {};
   for (const row of bookingCountRows) {
-    const key = row.dueDate.toLocaleDateString("en-CA", {
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit",
-      timeZone: "Africa/Johannesburg",
-    });
+    const key = johannesburgDateKey(row.dueDate);
     bookingCountsByDate[key] = (bookingCountsByDate[key] ?? 0) + 1;
   }
 
-  const events: CalendarWorkspaceEvent[] = activities.map((activity) => {
-    // Date-only activities are stored at UTC midnight. Timed activities follow
-    // the Africa/Johannesburg scheduling contract.
-    const dateOnly =
-      activity.dueDate.getUTCHours() === 0 &&
-      activity.dueDate.getUTCMinutes() === 0;
-    const time = dateOnly
-      ? null
-      : activity.dueDate.toLocaleTimeString("en-ZA", {
-          hour: "2-digit",
-          minute: "2-digit",
-          hour12: false,
-          timeZone: "Africa/Johannesburg",
-        });
-    const dateKey = activity.dueDate.toLocaleDateString("en-CA", {
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit",
-      timeZone: "Africa/Johannesburg",
-    });
+  const events: CalendarWorkspaceEvent[] = activities.flatMap((activity) => {
+    const startKey = johannesburgDateKey(activity.dueDate);
+    const end = activity.endDate ?? new Date(activity.dueDate.getTime() + 60 * 60 * 1000);
+    const lastInstant = new Date(Math.max(activity.dueDate.getTime(), end.getTime() - 1));
+    const naturalLastKey = johannesburgDateKey(lastInstant);
+    const occurrenceStart = activity.availabilityBlock && startKey < gridStartKey ? gridStartKey : startKey;
+    const occurrenceEnd = activity.availabilityBlock && naturalLastKey > lastGridKey ? lastGridKey : naturalLastKey;
 
-    return {
-      id: activity.id,
-      dueDate: activity.dueDate.toISOString(),
-      dateKey,
-      href: activity.lead
-        ? `/leads/${activity.lead.id}`
-        : activity.contact
-          ? `/contacts/${activity.contact.id}`
-          : "/activities",
-      summary: activity.summary,
-      time,
-      status: activity.status,
-      overdue: isCalendarEventOverdue({
+    const occurrenceKeys: string[] = [];
+    if (activity.availabilityBlock) {
+      for (let key = occurrenceStart; key <= occurrenceEnd; key = shiftDateKey(key, 1)) {
+        occurrenceKeys.push(key);
+      }
+    } else {
+      occurrenceKeys.push(startKey);
+    }
+
+    return occurrenceKeys.map((occurrenceKey, index) => {
+      const dateOnly =
+        activity.allDay ||
+        (activity.dueDate.getUTCHours() === 0 && activity.dueDate.getUTCMinutes() === 0);
+      const isNaturalStartDay = occurrenceKey === startKey;
+      const isNaturalEndDay = occurrenceKey === naturalLastKey;
+      const time = dateOnly || !isNaturalStartDay ? null : johannesburgTime(activity.dueDate);
+      const endTime =
+        activity.allDay || !isNaturalEndDay
+          ? null
+          : johannesburgTime(end);
+
+      return {
+        id: activity.availabilityBlock ? `${activity.id}:${occurrenceKey}` : activity.id,
+        recordId: activity.id,
+        dueDate: activity.dueDate.toISOString(),
+        endDate: activity.endDate?.toISOString() ?? null,
+        dateKey: occurrenceKey,
+        href: activity.lead
+          ? `/leads/${activity.lead.id}`
+          : activity.contact
+            ? `/contacts/${activity.contact.id}`
+            : null,
+        summary: activity.summary,
+        time,
+        endTime,
+        allDay: activity.allDay,
+        availabilityBlock: activity.availabilityBlock,
         status: activity.status,
-        dueDate: activity.dueDate,
-        dateOnly,
-        now,
-        todayKey,
-      }),
-      type: activity.type,
-      workshop: activity.category === "workshop",
-      who: activity.lead
-        ? activity.lead.name
-        : activity.contact
-          ? contactName(activity.contact)
-          : null,
-      context: activity.lead?.product?.name ?? null,
-      phone: activity.contact?.phone ?? activity.lead?.phone ?? null,
-      email: activity.contact?.email ?? activity.lead?.email ?? null,
-      assignee: activity.assignedTo.name,
-      location: activity.location,
-      note: activity.note,
-      dateLabel: activity.dueDate.toLocaleDateString("en-ZA", {
-        weekday: "long",
-        day: "numeric",
-        month: "long",
-        timeZone: "Africa/Johannesburg",
-      }),
-    };
+        overdue: activity.availabilityBlock
+          ? false
+          : isCalendarEventOverdue({
+              status: activity.status,
+              dueDate: activity.dueDate,
+              dateOnly,
+              now,
+              todayKey,
+            }),
+        type: activity.type,
+        workshop: activity.category === "workshop",
+        who: activity.lead
+          ? activity.lead.name
+          : activity.contact
+            ? contactName(activity.contact)
+            : null,
+        context: activity.lead?.product?.name ?? null,
+        phone: activity.contact?.phone ?? activity.lead?.phone ?? null,
+        email: activity.contact?.email ?? activity.lead?.email ?? null,
+        assignee: activityPeople(activity).join(", "),
+        people: activityPeople(activity),
+        location: activity.location,
+        note: activity.note,
+        dateLabel: dateLabel(occurrenceKey),
+        continuation: activity.availabilityBlock && index > 0,
+      };
+    });
   });
 
   const days = Array.from({ length: 42 }, (_, index) => {

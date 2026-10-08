@@ -1,9 +1,10 @@
 import { redirect } from "next/navigation";
-import { requireUser, getActiveTenantId } from "@/lib/auth";
-import { brandForTenant, brandLogoUrl, brandStyle, DEFAULT_BRAND } from "@/lib/tenantBrand";
+import { requireUser, getActiveTenantId, isTenantOwner } from "@/lib/auth";
+import type { Metadata } from "next";
+import { brandForTenant, brandIcons, brandLogoUrl, brandStyle, DEFAULT_BRAND } from "@/lib/tenantBrand";
 import { getSetting } from "@/lib/settings";
 import { WEATHER_CITIES_KEY, parseWeatherCities } from "@/lib/weatherCities";
-import { ACTIVITY_TYPES_KEY, resolveActivityTypes } from "@/lib/activityTypes";
+import { ACTIVITY_TYPES_KEY, activityTypesForModules, resolveActivityTypes } from "@/lib/activityTypes";
 import { awaitingReplyCount } from "@/lib/inboxCount";
 import { casesAwaitingCount } from "@/lib/helpdesk";
 import { getUserPermissionList } from "@/lib/permissions";
@@ -14,6 +15,24 @@ import { currentTenantScope } from "@/lib/tenantScope";
 import AppShell from "@/components/AppShell";
 import AppContextMenu from "@/components/AppContextMenu";
 import SessionKeeper from "@/components/SessionKeeper";
+import AssistantBubble from "@/components/AssistantBubble";
+import { prisma } from "@/lib/db";
+
+/**
+ * Tab title and icon from the SESSION's workspace. The root layout can only go
+ * by hostname, so a workspace's staff working on the platform's own domain saw
+ * the platform's name and icon. Never throws: on any failure the root's
+ * hostname answer stands.
+ */
+export async function generateMetadata(): Promise<Metadata> {
+  try {
+    const brand = await brandForTenant(await getActiveTenantId());
+    if (!brand.tenantId) return {};
+    return { title: brand.displayName, icons: brandIcons(brand) };
+  } catch {
+    return {};
+  }
+}
 
 export default async function AppLayout({
   children,
@@ -67,7 +86,10 @@ export default async function AppLayout({
   // pickers are client components scattered across the app, and none of them can
   // reach the tenant. `resolveActivityTypes` is total — an unreadable setting
   // gives the built-in seven rather than an empty picker.
-  const activityTypes = resolveActivityTypes(await getSetting(ACTIVITY_TYPES_KEY));
+  // Module-only built-ins (a test drive needs the automotive module) are hidden
+  // where the module is off. If the module lookup failed, nothing is hidden.
+  const storedTypes = resolveActivityTypes(await getSetting(ACTIVITY_TYPES_KEY));
+  const activityTypes = enabledModules ? activityTypesForModules(storedTypes, enabledModules) : storedTypes;
 
 
   // The accent override, or nothing. `brandStyle` returns null for an unbranded
@@ -77,6 +99,20 @@ export default async function AppLayout({
   // Tailwind via @theme inline), which is why the roadmap chose "accent + logo"
   // as the depth: components consume tokens, not literal colours.
   const style = brandStyle(brand);
+
+  // The floating "Ask" bubble: the same gate as the /assistant page and its
+  // actions — the Automation & AI module, and a lead/quote/activity view grant.
+  const ASSISTANT_GRANTS = ["leads.view_all", "leads.view_owned", "quotes.view_all", "quotes.view_owned", "activities.view", "activities.manage"];
+  const showAssistant =
+    (enabledModules === null || enabledModules.has("automation")) &&
+    (user.role === "owner" || permissions.some((p) => ASSISTANT_GRANTS.includes(p)));
+  // Scheduled answers and watch notes this person hasn't seen yet → the
+  // bubble's unread dot. Counted HERE so the bubble itself still fetches
+  // nothing until it's opened; one indexed count of their own turns, and only
+  // when the bubble shows.
+  const assistantUnseen = showAssistant
+    ? await prisma.assistantTurn.count({ where: { userId: user.id, source: { in: ["schedule", "watch"] }, seenAt: null } }).catch(() => 0)
+    : 0;
 
   return (
     <>
@@ -94,6 +130,9 @@ export default async function AppLayout({
           id: user.id,
           name: user.name,
           role: user.role,
+          // The workspace's own owner (Tenant.ownerUserId) or the platform owner —
+          // what the nav and menus mean by "owner". Never throws: false on failure.
+          isTenantOwner: await isTenantOwner().catch(() => false),
           permissions,
           avatarVersion: user.avatarRef ? user.avatarUpdatedAt?.toISOString() ?? "current" : null,
         }}
@@ -108,6 +147,7 @@ export default async function AppLayout({
         {children}
         {modal}
       </AppShell>
+      {showAssistant && <AssistantBubble unseen={assistantUnseen} />}
     </>
   );
 }

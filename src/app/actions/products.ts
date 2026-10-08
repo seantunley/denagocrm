@@ -6,7 +6,7 @@ import { withActingTenantWrite } from "@/lib/actingScope";
 // asActionResult binds the acting workspace itself (the synchronous tenant
 // readers below still see it) AND returns a refusal as { error } for the form.
 import { asActionResult, refuse } from "@/lib/actionResult";
-import { requireOwner } from "@/lib/auth";
+import { requireTenantOwner } from "@/lib/auth";
 import { logAudit } from "@/lib/audit";
 import { softDeleteRecord } from "@/lib/trash";
 import { parseRands } from "@/lib/format";
@@ -48,7 +48,7 @@ function productData(formData: FormData) {
  */
 export async function createProduct(formData: FormData) {
   return asActionResult(async () => {
-  await requireOwner();
+  await requireTenantOwner();
   const data = productData(formData);
   if (!data.name) refuse("Product name is required");
   const colors = String(formData.get("colors") ?? "")
@@ -58,7 +58,7 @@ export async function createProduct(formData: FormData) {
   // Atomic: product + its colours in ONE transaction, each explicitly stamped with
   // the owning tenant (bypass path — the guard won't stamp).
   //
-  // USER-ORIGINATED: `requireOwner()` above proves a signed-in owner is doing this,
+  // USER-ORIGINATED: `requireTenantOwner()` above proves a signed-in owner is doing this,
   // and a product has no parent record — the creating workspace IS the owner. So
   // the tenant is the ACTING workspace. `withTenantWrite` was wrong here for the
   // reason #470 documents: it resolves `writeTenantId() ?? DEFAULT_TENANT_ID`, and
@@ -82,7 +82,7 @@ export async function createProduct(formData: FormData) {
 
 export async function updateProduct(id: string, formData: FormData) {
   return asActionResult(async () => {
-    await requireOwner();
+    await requireTenantOwner();
     const data = productData(formData);
     if (!data.name) refuse("Product name is required");
     await prisma.product.update({ where: { id }, data });
@@ -100,7 +100,7 @@ export async function updateProduct(id: string, formData: FormData) {
  */
 export async function updateProductShowcase(id: string, formData: FormData) {
   return asActionResult(async () => {
-    const user = await requireOwner();
+    const user = await requireTenantOwner();
     // Tenant-scoped read: another workspace's product id resolves to nothing.
     const product = await prisma.product.findUnique({
       where: { id },
@@ -182,7 +182,7 @@ export async function updateProductShowcase(id: string, formData: FormData) {
 
 export async function addProductColor(productId: string, formData: FormData) {
   return asActionResult(async () => {
-    await requireOwner();
+    await requireTenantOwner();
     const name = String(formData.get("name") ?? "").trim();
     if (!name) refuse("Enter a colour name.");
     await prisma.productColor.create({ data: { productId, name } });
@@ -192,7 +192,7 @@ export async function addProductColor(productId: string, formData: FormData) {
 
 export async function deleteProductColor(id: string, productId: string, formData: FormData) {
   return asActionResult(async () => {
-    await requireOwner();
+    await requireTenantOwner();
     void formData;
     await prisma.productColor.delete({ where: { id } });
     revalidatePath(`/products/${productId}`);
@@ -201,7 +201,7 @@ export async function deleteProductColor(id: string, productId: string, formData
 
 export async function deleteProduct(id: string, formData: FormData) {
   return asActionResult(async () => {
-    const user = await requireOwner();
+    const user = await requireTenantOwner();
     const reason = String(formData.get("reason") ?? "").trim() || "No reason given";
     const product = await softDeleteRecord("product", id, reason, user.name);
     // Nothing matched — another tenant's id, or already gone. Never audit a

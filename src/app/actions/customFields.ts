@@ -5,7 +5,7 @@ import type { Prisma } from "@prisma/client";
 import { asActionResult, refuse, type ActionResult } from "@/lib/actionResult";
 import { prisma, basePrisma } from "@/lib/db";
 import { withEditableQuote } from "@/lib/quoteLock";
-import { requireOwner } from "@/lib/auth";
+import { requireTenantOwner } from "@/lib/auth";
 import {
   requireContactAccess,
   requireLeadAccess,
@@ -31,7 +31,7 @@ const str = (fd: FormData, k: string) => String(fd.get(k) ?? "").trim();
 /** Create or update a custom-field definition. Owner only. */
 export async function saveCustomFieldDef(formData: FormData) {
   return asActionResult(async () => {
-    const owner = await requireOwner();
+    const owner = await requireTenantOwner();
     const id = str(formData, "id") || null;
     const entity = str(formData, "entity");
     const label = str(formData, "label");
@@ -92,7 +92,7 @@ export async function saveCustomFieldDef(formData: FormData) {
 /** Delete a custom-field definition (and its values, via cascade). Owner only. */
 export async function deleteCustomFieldDef(id: string) {
   return asActionResult(async () => {
-    const owner = await requireOwner();
+    const owner = await requireTenantOwner();
     const def = await prisma.customFieldDef.findUnique({ where: { id } });
     if (!def) refuse("That field is already gone — refresh the page.");
     await prisma.customFieldDef.delete({ where: { id } });

@@ -48,10 +48,30 @@ export default function UsageTab({ tenantId }: { tenantId: string }) {
     return <p className="card p-5 text-sm text-muted-foreground">Estimating storage…</p>;
   }
 
-  const { storage, activity } = usage;
+  const { storage, activity, files } = usage;
 
   return (
     <div className="space-y-4">
+      <div className="card p-5">
+        <div className="flex flex-wrap items-baseline justify-between gap-2">
+          <h3 className="font-semibold">File storage</h3>
+          <p className="text-2xl font-semibold tabular-nums">
+            {files ? formatBytes(files.bytes) : "—"}
+          </p>
+        </div>
+        <p className="mt-1 text-xs text-muted-foreground">
+          {files ? (
+            <>
+              {files.files} file{files.files === 1 ? "" : "s"} in Blob storage — documents,
+              photos, signed PDFs and logos. <strong>Measured</strong>, not estimated.
+              {files.truncated && " The store is large, so only the first part was counted; the real figure is higher."}
+            </>
+          ) : (
+            "Blob storage isn't configured, or couldn't be listed right now."
+          )}
+        </p>
+      </div>
+
       <div className="card p-5">
         <div className="flex flex-wrap items-baseline justify-between gap-2">
           <h3 className="font-semibold">Estimated database storage</h3>

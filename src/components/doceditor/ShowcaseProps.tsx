@@ -61,12 +61,27 @@ export function ShowcaseProps({ block }: { block: ShowcaseBlock }) {
     </div>
   );
 
+  // Band (the quotation's look) or classic (the invoice's quieter look).
+  const styleSelect = (current: string | undefined) => (
+    <div className="mb-3">
+      <label className={lbl}>Style</label>
+      <select className={inp} value={current ?? "band"} onChange={(e) => set({ style: e.target.value })}>
+        <option value="band">Band (as the quotation)</option>
+        <option value="classic">Classic (as the invoice)</option>
+      </select>
+    </div>
+  );
+
   switch (block.type) {
     case "showcaseHeader": {
       return wrap("Header band", <>
+        {styleSelect(block.style)}
         <Field label="Title" value={block.title} onChange={(title) => set({ title })} />
         <Field label="Number (supports {{quote.number}})" value={block.docNumber} onChange={(docNumber) => set({ docNumber })} />
-        <Field label="Tagline" value={block.tagline} onChange={(tagline) => set({ tagline })} />
+        {block.style === "classic" ? <>
+          <Field label="Line under the title" value={block.subtitle ?? ""} onChange={(subtitle) => set({ subtitle })} />
+          <Field label="Label above the number" value={block.numberLabel ?? ""} onChange={(numberLabel) => set({ numberLabel })} />
+        </> : <Field label="Tagline" value={block.tagline} onChange={(tagline) => set({ tagline })} />}
         <div className="mb-3 grid grid-cols-2 gap-2">
           <Colour label="Background" value={block.bg} onChange={(bg) => set({ bg })} />
           <Colour label="Accent" value={block.accent} onChange={(accent) => set({ accent })} />
@@ -79,6 +94,7 @@ export function ShowcaseProps({ block }: { block: ShowcaseBlock }) {
       const items = block.items;
       const setItem = (i: number, patch: Partial<(typeof items)[number]>) => set({ items: items.map((it, j) => (j === i ? { ...it, ...patch } : it)) });
       return wrap("Info strip", <>
+        {styleSelect(block.style)}
         {items.map((it, i) => (
           <div key={i} className="mb-2 space-y-1 rounded-md border border-slate-200 p-2">
             <div className="flex gap-1">
@@ -121,6 +137,7 @@ export function ShowcaseProps({ block }: { block: ShowcaseBlock }) {
       </>);
     case "totalsBox":
       return wrap("Totals box", <>
+        {styleSelect(block.style)}
         {block.rows.map((r, i) => (
           <div key={i} className="mb-1 flex gap-1">
             <input className={inp} value={r.label} onChange={(e) => set({ rows: block.rows.map((x, j) => (j === i ? { ...x, label: e.target.value } : x)) })} />
@@ -148,7 +165,8 @@ export function ShowcaseProps({ block }: { block: ShowcaseBlock }) {
       </>);
     case "footerBand":
       return wrap("Footer band", <>
-        <Field label="Line under the company name" value={block.subtitle} onChange={(subtitle) => set({ subtitle })} />
+        {styleSelect(block.style)}
+        <Field label={block.style === "classic" ? "The footer line" : "Line under the company name"} value={block.subtitle} onChange={(subtitle) => set({ subtitle })} />
         <div className="mb-2 grid grid-cols-2 gap-2">
           <Colour label="Background" value={block.bg} onChange={(bg) => set({ bg })} />
           <Colour label="Accent" value={block.accent} onChange={(accent) => set({ accent })} />

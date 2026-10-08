@@ -1,82 +1,11 @@
-import Link from "next/link";
-import { notFound } from "next/navigation";
-import { ArrowLeft, Rocket } from "lucide-react";
-import { requirePermission } from "@/lib/permissions";
-import { prisma } from "@/lib/db";
-import { listStudioClauses } from "@/lib/docTemplateStore";
-import { MERGE_FIELDS } from "@/lib/mergeFields";
-import { formatDateTime } from "@/lib/format";
-import StudioEditor from "@/components/StudioEditor";
-import { saveStudioTemplate, publishStudioTemplate } from "@/app/actions/studio";
-import { buttonVariants } from "@/components/ui/button";
-import { SaveForm, SaveButton } from "@/components/SaveForm";
+import { redirect } from "next/navigation";
+import { requireAnyPermission } from "@/lib/permissions";
 
-export const dynamic = "force-dynamic";
-
-export default async function StudioTemplatePage({
-  params,
-}: {
-  params: Promise<{ id: string }>;
-}) {
-  await requirePermission("document_templates.manage");
-  const { id } = await params;
-  const [tpl, clauses] = await Promise.all([
-    prisma.customDocTemplate.findUnique({
-      where: { id },
-      include: { versions: { orderBy: { version: "desc" }, take: 5 } },
-    }),
-    listStudioClauses(),
-  ]);
-  if (!tpl) notFound();
-  const latest = tpl.versions[0];
-
-  async function save(data: { title: string; content: unknown }) {
-    "use server";
-    return saveStudioTemplate(id, { name: data.title, content: data.content });
-  }
-
-  return (
-    <div className="space-y-4">
-      <div>
-        <Link
-          href="/document-studio"
-          className="mb-1 inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
-        >
-          <ArrowLeft className="size-3.5" />
-          Document Studio
-        </Link>
-        <p className="text-sm text-muted-foreground">
-          <strong>Legacy Studio editor.</strong> New documents are made in the document
-          editor — use <em>Convert to new editor</em> in Document Studio to copy this
-          template there.{" "}
-          Template — insert merge fields where customer data should appear; publishing freezes a
-          version that new documents are generated from.
-          {latest
-            ? ` Currently published: v${latest.version} (${formatDateTime(latest.publishedAt)}).`
-            : " Not published yet — documents will use the live draft."}
-        </p>
-      </div>
-
-      <StudioEditor
-        initialTitle={tpl.name}
-        initialContent={tpl.draftJson}
-        fields={MERGE_FIELDS}
-        clauses={clauses.map((clause) => ({
-          id: clause.id,
-          name: clause.name,
-          category: clause.category,
-          contentJson: clause.contentJson,
-        }))}
-        onSave={save}
-        headerRight={
-          <SaveForm action={publishStudioTemplate.bind(null, id)}>
-            <SaveButton className={buttonVariants({ size: "sm" })} pendingLabel="Publishing…" title="Freeze the current draft as the next version">
-              <Rocket className="size-4" />
-              Publish {latest ? `v${latest.version + 1}` : "v1"}
-            </SaveButton>
-          </SaveForm>
-        }
-      />
-    </div>
-  );
+/**
+ * The old Studio free-form editor is gone — there is ONE document editor
+ * (2026-10-07). Custom templates are made and edited there, from Document Studio.
+ */
+export default async function OldStudioTemplatePage() {
+  await requireAnyPermission("document_templates.manage", "docbuilder.manage");
+  redirect("/document-studio");
 }

@@ -16,6 +16,10 @@ export const JOURNEY_EVENT_TRIGGERS = [
   "quote_declined",
   "delivered",
   "referral_earned",
+  // Contact events (emitContactJourneyEvent). They used to fire the Google review
+  // request directly, outside any journey — the "two engines" Sean asked about.
+  "job_completed",
+  "vehicle_delivered",
 ] as const;
 
 /** Triggers the cron enrols for by sweeping records (journeyScheduling.ts). */
@@ -24,6 +28,11 @@ export const JOURNEY_SCHEDULED_TRIGGERS = [
   "contact_segment",
   "purchase_anniversary",
   "win_back",
+  // The three reminders that were hard-coded cron jobs before journeys owned
+  // every automatic customer message (2026-10-06).
+  "service_due",
+  "signing_unsigned",
+  "survey_unanswered",
 ] as const;
 
 export const JOURNEY_TRIGGERS = [
@@ -74,9 +83,27 @@ export const JOURNEY_STEP_TYPES = [
   // takes. Like the other wait it parks the run on its own position, so the
   // runner owns it too.
   "wait_for_condition",
+  // Messages that need something only their module has — a signer's own secret
+  // link, a survey link, the Google review link, a vehicle's due date. Each calls
+  // the module's existing sender, so its template, timeline record (link masked),
+  // opt-out checks and once-only claim stay where they were.
+  "send_review_request",
+  "send_service_reminder",
+  "send_signing_reminder",
+  "send_survey_reminder",
 ] as const;
 
 export type JourneyStepType = (typeof JOURNEY_STEP_TYPES)[number];
+
+/** What a module's sender did for a journey step — the step turns it into a trace line. */
+export type ModuleSendOutcome =
+  | { kind: "sent" }
+  /** Not sent and shouldn't be retried: opted out, already reminded, nothing to send. */
+  | { kind: "skipped"; reason: string }
+  /** Not yet — quiet hours or a frequency cap. The step waits and tries again. */
+  | { kind: "deferred"; reason: string; until: Date }
+  /** A provider refused it. The step fails, so the run retries. */
+  | { kind: "failed"; reason: string };
 
 /**
  * What each step type is CALLED on screen.
@@ -105,6 +132,10 @@ export const JOURNEY_STEP_LABELS: Record<JourneyStepType, string> = {
   wait_for_trigger: "Wait for an event",
   variables: "Set variables",
   wait_for_condition: "Wait until true",
+  send_review_request: "Send Google review request",
+  send_service_reminder: "Send service-due reminder",
+  send_signing_reminder: "Send signing reminder",
+  send_survey_reminder: "Send survey reminder",
 };
 
 /** Container steps own nested sequences; the runner, not the executor, runs them. */

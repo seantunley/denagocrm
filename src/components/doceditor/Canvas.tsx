@@ -65,7 +65,8 @@ function PageView({
       ref={ref}
       data-page-idx={pIdx}
       className="relative bg-white shadow-lg ring-1 ring-black/5"
-      style={{ width: size.w * zoom, minHeight: sheet }}
+      // Ink on paper whatever the app's theme: the sheet is white, so its text must never inherit the dark theme's light foreground.
+      style={{ width: size.w * zoom, minHeight: sheet, color: "#0f172a" }}
     >
       <div className="relative" style={{ padding: margin * zoom }}>
         {/* CSS `zoom`, not just zoomed box sizes: the page, its margins and every

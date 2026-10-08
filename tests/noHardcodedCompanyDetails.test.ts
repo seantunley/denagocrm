@@ -36,17 +36,12 @@ const ALLOWED: Record<string, string> = {
   "src/app/(app)/settings/page.tsx": "staff — SMTP/IMAP example placeholders and the platform's webhook URLs",
   "src/components/settings/WorkspaceIntegrationRows.tsx": "staff (platform owner only) — the platform's webhook URLs on Settings → Integrations",
   "src/app/(print)/manual/page.tsx": "staff — the printed user manual",
-  "src/app/manifest.ts": "staff — PWA install description",
-  "src/app/messages/manifest.webmanifest/route.ts": "staff — PWA install description",
   "src/components/AppShell.tsx": "staff — logo alt fallback, pinned by appShellBranding.test.ts",
   "src/components/KanbanBoard.tsx": "staff — 16px lead-SOURCE glyph on the pipeline board (see appShellBranding.test.ts)",
   "src/components/quotes/QuoteEditorDialog.tsx": "staff — in-editor preview header (the printed quote reads the profile)",
   "src/lib/help/data/admin.json": "staff — help centre",
   "src/lib/help/data/channels.json": "staff — help centre (platform webhook URLs)",
   "src/lib/help/data/marketing.json": "staff — help centre",
-  "src/lib/ai.ts": "staff — proofreading prompt context, never sent to a customer",
-  "src/lib/researchPrompt.ts": "staff — lead-research prompt context",
-  "src/lib/webauthn.ts": "staff — passkey relying-party name",
   "src/lib/provisioning.ts": "seed — the founding tenant's own row",
   // The PLATFORM's origin (crm.denagocpt.co.za), not a company detail: a fallback
   // when NEXT_PUBLIC_APP_URL is unset. Tenant links go through tenantOrigin().

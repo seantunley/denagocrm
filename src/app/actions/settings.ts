@@ -7,7 +7,8 @@ import { validPassword } from "@/lib/passwordPolicy";
 import crypto from "crypto";
 import { basePrisma, prisma } from "@/lib/db";
 import { ciExactIdFilter } from "@/lib/ciExact";
-import { createSessionCookie, getActiveTenantId, requireUser, requireOwner } from "@/lib/auth";
+import { createSessionCookie, getActiveTenantId, requireUser, requireTenantOwner } from "@/lib/auth";
+import { DEFAULT_TENANT_ID } from "@/lib/tenant";
 import {
   findOwnedPipelineForStage,
   getDefaultPipeline,
@@ -41,6 +42,8 @@ import { bumpUserSessionVersion } from "@/lib/userSecurity";
 import { createUserInOwnerTenant } from "@/lib/tenantContext";
 import { deleteFile, saveFile } from "@/lib/storage";
 import { withActingStaffScope } from "@/lib/actingScope";
+import { listActingTenantStaff } from "@/lib/tenantActor";
+import { LEAD_ROUTING_KEY, parseLeadRoutingConfig, routingCandidateIds } from "@/lib/leadRouting";
 import {
   detectProfileImageMime,
   isValidPhone,
@@ -67,7 +70,7 @@ import {
  */
 export async function createStage(formData: FormData) {
   return asActionResult(async () => {
-    await requireOwner();
+    await requireTenantOwner();
     const name = String(formData.get("name") ?? "").trim();
     if (!name) refuse("Give the stage a name.");
 
@@ -129,7 +132,7 @@ export async function createStage(formData: FormData) {
 
 export async function renameStage(id: string, formData: FormData) {
   return asActionResult(async () => {
-    await requireOwner();
+    await requireTenantOwner();
     const name = String(formData.get("name") ?? "").trim();
     if (!name) refuse("Give the stage a name.");
     await prisma.pipelineStage.update({
@@ -165,7 +168,7 @@ export async function renameStage(id: string, formData: FormData) {
  */
 export async function moveStage(id: string, direction: "up" | "down") {
   return asActionResult(async () => {
-    await requireOwner();
+    await requireTenantOwner();
     // THE LOOKUP AND THE GATE ARE ONE STATEMENT. THAT IS THE WHOLE FIX.
     //
     // `reorderPipelineStages()` already refuses a pipeline this workspace does not
@@ -227,7 +230,7 @@ export async function moveStage(id: string, direction: "up" | "down") {
 
 export async function deleteStage(id: string, formData: FormData): Promise<ActionResult> {
   return asActionResult(async () => {
-    await requireOwner();
+    await requireTenantOwner();
     void formData;
     const count = await prisma.lead.count({ where: { stageId: id } });
     // Silently returning here reported "Deleted" for a stage that is still in use.
@@ -247,7 +250,7 @@ export async function createUser(
   _prev: FormState | undefined,
   formData: FormData
 ): Promise<FormState> {
-  const owner = await requireOwner();
+  const owner = await requireTenantOwner();
   const name = String(formData.get("name") ?? "").trim();
   const email = String(formData.get("email") ?? "").trim().toLowerCase();
   const password = String(formData.get("password") ?? "");
@@ -286,10 +289,16 @@ export async function createUser(
   // (tenantId,userId,roleId) unique index's dedup). Reads stay tenant-agnostic for
   // now: scoping getUserPermissions by the active tenant is the enforcement flip,
   // deferred to the staged tenant rollout (see below / accessControl.ts).
+  // The WORKSPACE's own copy of the role. Every tenant but the founding one has
+  // its roles as `<system id>:<tenantId>` (seedTenantDefaultRoles); assigning the
+  // bare id gave a new workspace's users the founding tenant's role row, which
+  // their workspace cannot see — so they had no permissions at all.
+  const salesRepRoleId =
+    result.tenantId === DEFAULT_TENANT_ID ? "role_sales_rep" : `role_sales_rep:${result.tenantId}`;
   try {
     await basePrisma.$executeRaw`
       INSERT INTO "UserRole" ("id", "userId", "roleId", "tenantId")
-      VALUES (gen_random_uuid()::text, ${created.id}, 'role_sales_rep', ${result.tenantId})
+      VALUES (gen_random_uuid()::text, ${created.id}, ${salesRepRoleId}, ${result.tenantId})
       ON CONFLICT DO NOTHING
     `;
   } catch {
@@ -302,7 +311,7 @@ export async function createUser(
     entityId: created.id,
     user: owner,
     // Audit the tenant ACTUALLY used (returned from the locked transaction).
-    after: { name, email, role: "member", initialRbacRole: "role_sales_rep", tenantId: result.tenantId },
+    after: { name, email, role: "member", initialRbacRole: salesRepRoleId, tenantId: result.tenantId },
   });
   revalidatePath("/settings");
   revalidatePath("/settings/access");
@@ -350,7 +359,7 @@ export async function changeOwnPassword(
 
 export async function saveQuoteDefaults(formData: FormData) {
   return asActionResult(async () => {
-    await requireOwner();
+    await requireTenantOwner();
     const days = String(formData.get("validDays") ?? "").trim();
     const terms = String(formData.get("terms") ?? "").trim();
     await putSetting("QUOTE_VALID_DAYS", String(quoteValidDays(days)));
@@ -367,7 +376,7 @@ export async function saveQuoteDefaults(formData: FormData) {
  */
 export async function saveRegionalSettings(formData: FormData) {
   return asActionResult(async () => {
-    const user = await requireOwner();
+    const user = await requireTenantOwner();
     const field = (name: string) => String(formData.get(name) ?? "").trim();
     const input = {
       vatRatePct: field("vatRatePct").replace(",", "."),
@@ -401,7 +410,7 @@ export async function saveRegionalSettings(formData: FormData) {
 
 export async function saveWorkshopSettings(formData: FormData) {
   return asActionResult(async () => {
-    await requireOwner();
+    await requireTenantOwner();
     const days = formData.getAll("days").map(String).join(",");
     const entries: Record<string, string> = {
       BOOKING_SLOT_TIMES: String(formData.get("times") ?? "").trim() || "08:00,10:00,12:00,14:00",
@@ -418,7 +427,7 @@ export async function saveWorkshopSettings(formData: FormData) {
 
 export async function saveNextStepScheduling(formData: FormData) {
   return withActingStaffScope(async () => {
-    await requireOwner();
+    await requireTenantOwner();
     const hour = parseInt(String(formData.get("hour") ?? ""), 10);
     // An unchecked checkbox submits nothing, so absence means "don't skip".
     const skipWeekends = formData.get("skipWeekends") != null;
@@ -612,7 +621,7 @@ export async function saveMyProfile(formData: FormData) {
 
 export async function saveSetting(formData: FormData) {
   return asActionResult(async () => {
-    await requireOwner();
+    await requireTenantOwner();
     const key = String(formData.get("key") ?? "");
     const value = String(formData.get("value") ?? "").trim();
     if (!key) refuse("Nothing to save — the setting key was missing.");
@@ -654,7 +663,7 @@ async function registerInboundEndpointsFor(key: string): Promise<void> {
  *  initial server-rendered page, only fetched by an explicit owner action. */
 export async function revealSecret(key: string): Promise<string> {
   return withActingStaffScope(async () => {
-    await requireOwner();
+    await requireTenantOwner();
     if (!isManagedSecret(key)) throw new Error("Not a revealable secret.");
     return (await getSetting(key)) ?? "";
   });
@@ -665,7 +674,7 @@ export async function revealSecret(key: string): Promise<string> {
  *  comes from the client, so we must not delete an arbitrary AppSetting. */
 export async function clearSecret(key: string, _formData?: FormData): Promise<void> {
   return withActingStaffScope(async () => {
-    await requireOwner();
+    await requireTenantOwner();
     void _formData;
     if (!isManagedSecret(key)) throw new Error("Not a clearable secret.");
     await putSetting(key, "");
@@ -681,7 +690,7 @@ export async function clearSecret(key: string, _formData?: FormData): Promise<vo
 
 export async function regenerateSetting(key: string) {
   return asActionResult(async () => {
-    await requireOwner();
+    await requireTenantOwner();
     // The key is a client-supplied bound arg — only allow secrets we actually
     // generate, so this can't overwrite an externally-issued credential.
     if (!isRegeneratable(key)) throw new ActionRefusal("Not a regeneratable secret.");
@@ -693,7 +702,7 @@ export async function regenerateSetting(key: string) {
 
 export async function saveNotificationPrefs(formData: FormData) {
   return asActionResult(async () => {
-    await requireOwner();
+    await requireTenantOwner();
     const enabled = new Set(formData.getAll("kinds").map(String));
     const disabled = PUSH_KINDS.map((kind) => kind.id).filter((id) => !enabled.has(id));
     await putSetting("PUSH_DISABLED_KINDS", disabled.join(","));
@@ -718,7 +727,7 @@ export async function saveNotificationPrefs(formData: FormData) {
  */
 export async function saveWeatherCities(cities: unknown): Promise<ActionResult> {
   return asActionResult(async () => {
-    await requireOwner();
+    await requireTenantOwner();
 
     if (!Array.isArray(cities)) refuse("Could not read that list of cities.");
     const cleaned = parseWeatherCities(serialiseWeatherCities(cities as WeatherCity[]));
@@ -764,7 +773,7 @@ export async function saveWeatherCities(cities: unknown): Promise<ActionResult> 
  */
 export async function saveActivityTypes(types: unknown): Promise<ActionResult> {
   return asActionResult(async () => {
-    await requireOwner();
+    await requireTenantOwner();
 
     if (!Array.isArray(types)) refuse("Could not read that list of activity types.");
 
@@ -797,4 +806,45 @@ export async function saveActivityTypes(types: unknown): Promise<ActionResult> {
     // in the app, so the whole shell has to re-render.
     revalidatePath("/", "layout");
   });
+}
+
+// ---- Lead routing ----
+
+/**
+ * Who new inbound leads are auto-assigned to (lib/leadRouting.ts).
+ *
+ * OWNER ONLY. Every user id the config can assign to — reps AND fixed rule
+ * targets — must be an active member of the ACTING workspace, checked here
+ * against the same list the picker was built from: a posted id from another
+ * workspace would otherwise be stored and, at the next lead, refused only by the
+ * runtime re-check. Refusing at save time tells the owner instead of silently
+ * leaving leads unassigned. Products are checked through the tenant-guarded
+ * client for the same reason.
+ *
+ * `withActingStaffScope` because the product read below goes through the guarded
+ * client, which needs a bound scope a Server Action does not otherwise have.
+ */
+export async function saveLeadRouting(input: unknown): Promise<ActionResult> {
+  return withActingStaffScope(() =>
+    asActionResult(async () => {
+      await requireTenantOwner();
+      const config = parseLeadRoutingConfig(input);
+
+      const members = new Set((await listActingTenantStaff()).map((person) => person.id));
+      if (routingCandidateIds(config).some((id) => !members.has(id))) {
+        refuse("One of the chosen people is not an active member of this workspace. Refresh and try again.");
+      }
+      const productIds = [...new Set(config.rules.flatMap((rule) => (rule.productId ? [rule.productId] : [])))];
+      if (productIds.length > 0) {
+        const found = await prisma.product.count({ where: { id: { in: productIds } } });
+        if (found !== productIds.length) refuse("One of the chosen products no longer exists. Refresh and try again.");
+      }
+      if (config.enabled && routingCandidateIds(config).length === 0) {
+        refuse("Pick at least one rep before switching lead routing on.");
+      }
+
+      await putSetting(LEAD_ROUTING_KEY, JSON.stringify(config));
+      revalidatePath("/settings/lead-routing");
+    }),
+  );
 }

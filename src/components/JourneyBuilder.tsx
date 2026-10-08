@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useRef, useState } from "react";
+import { messageEditorHref } from "@/lib/customerMessagePlaces";
 import { createJourney } from "@/app/actions/journeys";
 import { SaveForm, SaveButton } from "@/components/SaveForm";
 import type { ActionResult } from "@/lib/actionResultTypes";
@@ -449,6 +450,18 @@ export default function JourneyBuilder({
               {spec.type === "win_back" && (
                 <input className="input" type="number" min={3} value={String(config.inactiveMonths ?? 12)} onChange={(e) => setTriggerConfig(index, { inactiveMonths: Number(e.target.value) })} aria-label="Inactive months" />
               )}
+              {spec.type === "signing_unsigned" && (
+                <label className="block text-xs text-muted-foreground">
+                  Days after the document reached the signer
+                  <input className="input mt-1" type="number" min={1} value={String(config.days ?? 3)} onChange={(e) => setTriggerConfig(index, { days: Number(e.target.value) })} aria-label="Days unsigned" />
+                </label>
+              )}
+              {spec.type === "survey_unanswered" && (
+                <label className="block text-xs text-muted-foreground">
+                  Hours after the survey was sent
+                  <input className="input mt-1" type="number" min={1} value={String(config.hours ?? 48)} onChange={(e) => setTriggerConfig(index, { hours: Number(e.target.value) })} aria-label="Hours unanswered" />
+                </label>
+              )}
             </div>
           );
         })}
@@ -625,6 +638,39 @@ export default function JourneyBuilder({
                 the step records itself as skipped, so a journey that runs again cannot count the same
                 sale twice or pay a referral fee twice. To win a lead that was closed, put a
                 “Reopen lead” step in front of this one.
+              </p>
+            )}
+            {/* The module steps have nothing to configure here: what they send is
+                the editable template, linked, and who they reach comes from the
+                trigger. Saying which trigger is the whole of the help. */}
+            {step.type === "send_review_request" && (
+              <p className="text-xs text-slate-500">
+                Emails the customer a Google review request — the{" "}
+                <a className="underline" href={messageEditorHref("review_service")}>service</a> or{" "}
+                <a className="underline" href={messageEditorHref("review_delivery")}>delivery</a>{" "}
+                template, depending on the trigger. At most once per customer every 90 days, never to someone who
+                opted out, and only with a Google Place ID set up.
+              </p>
+            )}
+            {step.type === "send_service_reminder" && (
+              <p className="text-xs text-slate-500">
+                Emails the customer that their vehicle is due for a service, once per due date. Needs the “Vehicle is
+                due for a service” trigger. Uses the template picked under Settings → Email → Service reminders, or
+                the <a className="underline" href={messageEditorHref("service_reminder")}>Service reminder</a> template.
+              </p>
+            )}
+            {step.type === "send_signing_reminder" && (
+              <p className="text-xs text-slate-500">
+                Sends the signer one reminder with their own signing link, by email and WhatsApp (the{" "}
+                <a className="underline" href={messageEditorHref("reminder")}>signing reminder</a> templates). Needs the
+                “Document sent for signing isn&apos;t signed” trigger. Once per signer, and never once they have signed.
+              </p>
+            )}
+            {step.type === "send_survey_reminder" && (
+              <p className="text-xs text-slate-500">
+                Sends one reminder with the survey link (the{" "}
+                <a className="underline" href={messageEditorHref("survey_reminder")}>survey reminder</a> templates). Needs
+                the “Automatic survey isn&apos;t answered” trigger. Once per survey, never after it is answered.
               </p>
             )}
             {step.type === "lead_reopen" && (

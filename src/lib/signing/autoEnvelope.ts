@@ -1,5 +1,6 @@
 import "server-only";
 import { prisma } from "@/lib/db";
+import { isModuleEnabled } from "@/lib/modules/enabled";
 import { payableTotalCents } from "@/lib/pricing";
 import { contactName } from "@/lib/format";
 import { listTenantStaff } from "@/lib/tenantActor";
@@ -470,7 +471,7 @@ export async function resolveEnvelope(opts: {
     doc = read.doc;
   }
   // Reached only when NO template was chosen at all.
-  if (!doc) doc = quoteId ? standardQuoteTemplate() : standardJobCardTemplate();
+  if (!doc) doc = quoteId ? standardQuoteTemplate({ automotive: await isModuleEnabled("automotive") }) : standardJobCardTemplate();
   doc.title = customer.title;
   const templateHasReadyRecipients = hasSendReadyRecipients(doc);
 

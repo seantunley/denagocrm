@@ -86,13 +86,17 @@ export type BillToQuote = {
 export type QuoteBillTo = {
   /** The entity the quote is addressed to. */
   name: string;
-  /** The person, when the addressee is a business account. Null otherwise —
-   *  printing "Attention: <the same name again>" on an individual's quote is
-   *  noise, and on a company contact it is wrong. */
+  /** The person, when the addressee is a business account — a fleet, or a
+   *  company contact with a person's name distinct from the company. Null
+   *  otherwise: "Attention: <the same name again>" is noise. */
   attention: string | null;
   phone: string;
   email: string;
   address: string;
+  /** The address over two lines (street; suburb, town, province, code), for a
+   *  document's party block — one long comma-joined line wrapped badly. Optional:
+   *  a caller building its own QuoteBillTo falls back to `address`. */
+  addressLines?: string[];
   vatNumber: string;
   registrationNumber: string;
   /** True when a fleet account resolved. Renderers use it to decide whether the
@@ -101,6 +105,9 @@ export type QuoteBillTo = {
 };
 
 const joinAddress = (parts: Array<string | null | undefined>) => parts.filter(Boolean).join(", ");
+/** The same address over two lines — the street, then suburb, town, province and code — for a document's party block. */
+const addressLines = (street: string | null | undefined, ...locality: Array<string | null | undefined>) =>
+  [street?.trim() ?? "", joinAddress(locality.map((p) => p?.trim()))].filter(Boolean);
 
 /**
  * Resolve the addressee.
@@ -128,6 +135,7 @@ export function quoteBillTo(quote: BillToQuote, fleet: BillToFleet | null): Quot
       phone: fleet.billingPhone ?? contact?.phone ?? quote.lead?.phone ?? "",
       email: fleet.billingEmail ?? contact?.email ?? quote.lead?.email ?? "",
       address: joinAddress([fleet.address, fleet.suburb, fleet.city, fleet.province, fleet.postalCode]),
+      addressLines: addressLines(fleet.address, fleet.suburb, fleet.city, fleet.province, fleet.postalCode),
       // Never the contact's VAT number as a fallback: a fleet member's personal
       // VAT registration is not the account's, and a wrong VAT number on an
       // invoice is a tax document that misstates who may claim the input credit.
@@ -138,12 +146,22 @@ export function quoteBillTo(quote: BillToQuote, fleet: BillToFleet | null): Quot
   }
 
   if (contact) {
+    // A company account is addressed by its company name; the person behind it
+    // is the Attention line (Sean, 2026-10-07: "Tekili Farm" printed with no
+    // contact name). Not when the name fields hold the account name itself —
+    // the form's "First name / account name" — or there'd be the same name twice.
+    const personName = [contact.firstName, contact.lastName].filter(Boolean).join(" ").trim();
+    const attention =
+      contact.isCompany && contact.company?.trim() && personName && personName.toLowerCase() !== contact.company.trim().toLowerCase()
+        ? personName
+        : null;
     return {
       name: person ?? "",
-      attention: null,
+      attention,
       phone: contact.phone ?? quote.lead?.phone ?? "",
       email: contact.email ?? quote.lead?.email ?? "",
       address: joinAddress([contact.address, contact.suburb, contact.city, contact.province, contact.postalCode]),
+      addressLines: addressLines(contact.address, contact.suburb, contact.city, contact.province, contact.postalCode),
       vatNumber: contact.vatNumber ?? "",
       registrationNumber: "",
       isFleet: false,

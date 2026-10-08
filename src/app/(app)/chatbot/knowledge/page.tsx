@@ -1,6 +1,6 @@
+import { requireRoute } from "@/lib/permissions";
 import Link from "next/link";
 import { BookOpenCheck, Clock3, Database, FileCheck2, Library, Search, SlidersHorizontal } from "lucide-react";
-import { requireOwner } from "@/lib/auth";
 import { actingTenantId } from "@/lib/actingTenant";
 import { prisma } from "@/lib/db";
 import { getBotKnowledgeEntries, knowledgeIsCurrent, type BotKnowledgeStatus } from "@/lib/botKnowledge";
@@ -14,7 +14,7 @@ const statusTone = (entry: { status: BotKnowledgeStatus }, current: boolean) => 
 const dateValue = (value?: string) => value?.slice(0, 10) ?? "";
 
 export default async function BotKnowledgePage({ searchParams }: Props) {
-  await requireOwner();
+  await requireRoute("/chatbot");
   const tenantId = await actingTenantId();
   const [params, entries, libraryDocuments] = await Promise.all([
     searchParams,

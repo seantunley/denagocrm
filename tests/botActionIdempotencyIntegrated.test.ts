@@ -152,7 +152,7 @@ test("the lead identity constraint and the lookup that consults it share one dom
   // The row must carry a tenant. The db.ts guard only stamps one under enforcement,
   // which is dormant, so without this the row lands NULL while the identity read
   // asks for DEFAULT_TENANT_ID — and the pre-check never matches what it created.
-  assert.match(creator, /tenantId: writeTenantId\(\) \?\? DEFAULT_TENANT_ID/);
+  assert.match(creator, /tenantId: ownedWriteTenantId\(\)/);
   const recovery = creator.slice(creator.indexOf('error.code === "P2002"'));
   assert.match(recovery, /no longer agree/);
 

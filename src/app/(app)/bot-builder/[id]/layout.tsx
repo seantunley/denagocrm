@@ -1,8 +1,8 @@
+import { requireRoute } from "@/lib/permissions";
 import type { ReactNode } from "react";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { ArrowLeft, BarChart3, Blocks, FlaskConical, History, ListChecks, Pencil } from "lucide-react";
-import { requireOwner } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 import { flowScope } from "@/lib/flowScope";
 import { StatusPill } from "@/components/visual-system";
@@ -21,7 +21,7 @@ export default async function FlowWorkspaceLayout({
   children: ReactNode;
   params: Promise<{ id: string }>;
 }) {
-  await requireOwner();
+  await requireRoute("/bot-builder");
   const { id } = await params;
   const scope = await flowScope();
   const flow = await prisma.botFlow.findFirst({ where: { id, ...scope }, select: { id: true, name: true, channel: true, active: true } });

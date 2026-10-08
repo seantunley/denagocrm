@@ -20,10 +20,15 @@ import { signedPdfIsSafeToDelete } from "./blobReferences";
 import {
   COMPLETED_EVENT,
   POST_COMPLETION_EVENT,
+  SIGNED_COPIES_OFF,
   deliverCompletionEmails,
 } from "./completionFanout";
+import { automationOn } from "@/lib/automationSwitch";
 import { exactTenantWhere } from "./recoveryScope";
 import { sendPushToAll } from "@/lib/push";
+import { issueInvoiceNumberInTx } from "@/lib/numbering";
+import { winLeadInTx } from "@/lib/quoteOutcome";
+import { payableTotalCents } from "@/lib/pricing";
 
 /** Internal sentinel: the completion claim was lost to a concurrent close. */
 class CompletionLost extends Error {}
@@ -378,13 +383,17 @@ export async function completeSignatureRequest(requestId: string): Promise<void>
         });
         if (signedQuote.count === 1) {
           sourceSigned = true;
-          const q = await tx.quote.findUnique({ where: { id: req.quoteId }, select: { leadId: true } });
+          // Signed is accepted: the quote becomes an invoice and gets its own number.
+          await issueInvoiceNumberInTx(tx, req.quoteId, req.tenantId);
+          const q = await tx.quote.findUnique({ where: { id: req.quoteId }, include: { items: true, fees: true } });
           if (q?.leadId) {
             // Win the lead in the SAME transaction, locked, so quote-accepted and
-            // lead-won can't diverge under a concurrent decline/accept.
-            await tx.$executeRaw`SELECT id FROM "Lead" WHERE id = ${q.leadId} FOR UPDATE`;
-            const won = await tx.lead.updateMany({ where: { id: q.leadId, deletedAt: null, status: "open" }, data: { status: "won" } });
-            if (won.count === 1) wonLeadId = q.leadId;
+            // lead-won can't diverge under a concurrent decline/accept — through
+            // the shared win, so the lead is worth what the customer signed for.
+            // The tenant is never null on a live row (RLS would not have shown it);
+            // the column type still allows it, so take whichever row names it.
+            const tenantId = req.tenantId ?? q.tenantId;
+            if (tenantId && (await winLeadInTx(tx, q.leadId, tenantId, Math.round(payableTotalCents(q))))) wonLeadId = q.leadId;
           }
         } else {
           // Didn't sign it. Completing anyway is only OK if the quote is ALREADY
@@ -477,17 +486,22 @@ export async function completeSignatureRequest(requestId: string): Promise<void>
   // the result discarded — and sendEmail NEVER THROWS, it returns { ok: false }
   // — so a fan-out that reached nobody looked exactly like one that reached
   // everybody, and the completion marker below was written over it.
-  const delivery = await deliverCompletionEmails({
-    requestId: req.id,
-    title: req.title,
-    pdf,
-    recipients: req.recipients.map((r) => ({
-      id: r.id,
-      name: r.name,
-      email: r.email,
-      completedEmailSentAt: r.completedEmailSentAt,
-    })),
-    tenantWhere,  });
+  // Only while the owner has signed copies on (Settings → Automatic jobs &
+  // messages; on by default). Off: the request still completes — nobody is emailed.
+  const delivery = (await automationOn("SIGNING_SIGNED_COPIES", req.tenantId))
+    ? await deliverCompletionEmails({
+        requestId: req.id,
+        title: req.title,
+        pdf,
+        recipients: req.recipients.map((r) => ({
+          id: r.id,
+          name: r.name,
+          email: r.email,
+          completedEmailSentAt: r.completedEmailSentAt,
+        })),
+        tenantWhere,
+      })
+    : SIGNED_COPIES_OFF;
 
   // LAST, not first, and ONLY on success. This event used to be written
   // immediately after the transaction, which made it a record that the commit

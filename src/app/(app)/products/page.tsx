@@ -1,7 +1,7 @@
+import { requireRoute } from "@/lib/permissions";
 import Link from "next/link";
 import { Boxes, Plus } from "lucide-react";
 import { prisma } from "@/lib/db";
-import { requireOwner } from "@/lib/auth";
 import ModalTrigger from "@/components/Modal";
 import ProductForm from "@/components/ProductForm";
 import { formatZAR } from "@/lib/format";
@@ -27,7 +27,7 @@ export default async function ProductsPage() {
   // the boundary (see next/docs 01-app/02-guides/authentication.md). Product
   // records themselves are read app-wide by non-owners (leads, quotes, stock,
   // vehicles); it is the create/edit/delete surface here that is restricted.
-  await requireOwner();
+  await requireRoute("/products");
   const products = await prisma.product.findMany({
     orderBy: [{ active: "desc" }, { name: "asc" }],
     include: { colors: true, _count: { select: { leads: true, vehicles: true } } },
@@ -35,7 +35,7 @@ export default async function ProductsPage() {
 
   return (
     <div className="space-y-5">
-      <PageHeader title="Product catalogue" description={`${products.filter((product) => product.active).length} active Denago models`}>
+      <PageHeader title="Product catalogue" description={`${products.filter((product) => product.active).length} active products`}>
         <ModalTrigger label={<><Plus className="size-4" />New product</>} title="New product" buttonClass={buttonVariants({ size: "sm" })}>
           <ProductForm variant="dialog" />
         </ModalTrigger>
@@ -45,7 +45,7 @@ export default async function ProductsPage() {
         <EmptyState
           icon={Boxes}
           title="Your catalogue is ready for its first model"
-          description="Add the Denago models your team sells so stock, quotes, leads and customer vehicles all use the same product data."
+          description="Add the products your team sells so stock, quotes, leads and customer vehicles all use the same product data."
           action={<Link href="/products/new" className={buttonVariants({ size: "sm" })}><Plus className="size-4" />Add first product</Link>}
         />
       ) : (

@@ -50,7 +50,7 @@ export default function GlobalError({ error }: { error: Error & { digest?: strin
               before that — a quote, an upload, a status change. Telling someone
               their data is safe invites the retry that duplicates it. */}
           <p style={{ margin: "0 0 20px", color: "#94a3b8", fontSize: "0.95rem" }}>
-            Denago CRM hit an error it couldn&apos;t recover from. Your last action may have
+            The app hit an error it couldn&apos;t recover from. Your last action may have
             completed — check the record before trying it again.
           </p>
 

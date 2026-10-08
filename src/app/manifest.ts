@@ -1,15 +1,31 @@
 import type { MetadataRoute } from "next";
+import { headers } from "next/headers";
+import { DEFAULT_BRAND, brandForHost } from "@/lib/tenantBrand";
+import { PLATFORM_NAME } from "@/lib/platformIdentity";
 
-export default function manifest(): MetadataRoute.Manifest {
+/**
+ * The installed app's name is the workspace's on its own domain. It was "Denago
+ * CRM" — "Sales & EV service management for Denago Cape Town" — for everyone
+ * who installed any workspace. Never throws: an unresolved host gets the
+ * platform name.
+ */
+export default async function manifest(): Promise<MetadataRoute.Manifest> {
+  let brand = DEFAULT_BRAND;
+  try {
+    brand = await brandForHost((await headers()).get("host"));
+  } catch {
+    // No request scope (or no host): the platform's name.
+  }
+  const name = brand.tenantId ? brand.displayName : PLATFORM_NAME;
   return {
     // Explicit, stable app identity distinct from the Messages sub-app
     // (id "/messages"). Without an explicit id Chrome derives one from start_url,
     // which can make the two apps' identities ambiguous and cause the nested
     // /messages PWA to be treated as "already installed" by the root app.
     id: "/",
-    name: "Denago CRM",
-    short_name: "DenagoCRM",
-    description: "Sales & EV service management for Denago Cape Town",
+    name,
+    short_name: name.slice(0, 12),
+    description: `Customer, sales and service management for ${name}`,
     start_url: "/",
     scope: "/",
     display: "standalone",

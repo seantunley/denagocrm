@@ -4,11 +4,12 @@ import { asActionResult, refuse } from "@/lib/actionResult";
 import { revalidatePath } from "next/cache";
 import { basePrisma, prisma } from "@/lib/db";
 import { customerRecordTenantId } from "@/lib/customerRecordTenant";
-import { putSetting } from "@/lib/settings";
-import { getActiveTenantId, requireOwner } from "@/lib/auth";
+import { getSetting, putSetting } from "@/lib/settings";
+import { getActiveTenantId, requireTenantOwner } from "@/lib/auth";
 import {
   EMAIL_HEADER_STYLES,
   SIGNING_EMAILS,
+  isTextTemplate,
   parseEmailHeaderStyle,
   validateSigningTemplate,
   type SigningEmailKind,
@@ -25,19 +26,47 @@ import {
 } from "@/lib/permissions";
 import { logAudit } from "@/lib/audit";
 import { sendEmail } from "@/lib/email";
-import { signatureCompanyFrom, buildSignature, buildEmailHtml, htmlToText } from "@/lib/signature";
+import {
+  signatureCompanyFrom,
+  buildSignature,
+  buildEmailHtml,
+  htmlToText,
+  parseSignatureDesign,
+  SIGNATURE_DESIGN_KEY,
+  type SignatureDesign,
+} from "@/lib/signature";
 import { getCompanyProfile } from "@/lib/companyProfile";
-import { readFile } from "@/lib/storage";
+import { readFile, savePublicAsset } from "@/lib/storage";
+import { MAX_LOGO_BYTES } from "@/lib/emailInlineLogo";
+import { emailUploads } from "@/lib/emailUploads";
 import { resolveActingTenant } from "@/lib/tenantContext";
 import { parseReplyTo } from "@/lib/replyToAddresses";
 import { tenantOrigin } from "@/lib/tenantOrigin";
 import { withActingStaffScope } from "@/lib/actingScope";
+import { EMAIL_OPEN_TRACKING_KEY } from "@/lib/emailOpenTracking";
+import { MESSAGE_PLACES } from "@/lib/customerMessagePlaces";
 
 export type SendEmailState = { ok?: string; error?: string };
 
 async function tenantIdFor(userId: string): Promise<string | null> {
   const tenant = await resolveActingTenant(userId);
   return "tenantId" in tenant ? tenant.tenantId : null;
+}
+
+type ComposerUser = Awaited<ReturnType<typeof requireAnyPermission>>;
+
+/** The composer email's HTML: the message plus the sender's signature. One builder, so Preview is what Send sends. */
+async function composerHtml(user: ComposerUser, bodyHtml: string, profile: Awaited<ReturnType<typeof getCompanyProfile>>) {
+  // The workspace's signature design (Settings → My account → Email signature), same as the settings preview.
+  const design = parseSignatureDesign(await getSetting(SIGNATURE_DESIGN_KEY));
+  const company = signatureCompanyFrom(profile, await tenantOrigin(await tenantIdFor(user.id)), design);
+  return buildEmailHtml(bodyHtml, buildSignature(user, company));
+}
+
+/** The composer's Preview (Sean, 2026-10-07: "a preview on the email, to view before it sends"). Sends nothing. */
+export async function previewComposerEmail(bodyHtml: string): Promise<{ html: string }> {
+  const user = await requireAnyPermission(...CUSTOMER_RECORD_WRITE_PERMISSIONS);
+  return { html: await composerHtml(user, String(bodyHtml ?? "").trim(), await getCompanyProfile()) };
 }
 
 /** Sends an email and logs it as an outbound communication on the lead/contact. */
@@ -78,8 +107,7 @@ export async function sendEmailAction(
     return { error: "You don't have access to that lead." };
   }
   const profile = await getCompanyProfile();
-  const signature = buildSignature(user, signatureCompanyFrom(profile, await tenantOrigin(await tenantIdFor(user.id))));
-  const html = buildEmailHtml(bodyHtml, signature);
+  const html = await composerHtml(user, bodyHtml, profile);
 
   // Library attachments (selected version ids)
   const attachIds = formData.getAll("attach").map(String).filter(Boolean);
@@ -110,6 +138,16 @@ export async function sendEmailAction(
     }
   }
 
+  // Files uploaded from the computer (Sean, 2026-10-07: "must be able to upload
+  // an attachment as well"). Checked before anything is sent; named on the
+  // timeline and in the audit like library files.
+  const uploads = emailUploads(formData);
+  if ("error" in uploads) return { error: uploads.error };
+  for (const file of uploads.files) {
+    attachments.push({ filename: file.name, content: Buffer.from(await file.arrayBuffer()), contentType: file.type || undefined });
+    attachedNames.push(file.name);
+  }
+
   const result = await sendEmail({
     to,
     subject,
@@ -122,6 +160,10 @@ export async function sendEmailAction(
     html,
     attachments,
     replyTo: replyTo.value ?? undefined,
+    // "Opened" on the timeline entry below (unless switched off in Settings → Email).
+    trackOpens: true,
+    // The person writing it: "Sean Tunley · Denago Cape Town" on the From line.
+    senderName: user.name,
   });
   if (!result.ok) return { error: result.error };
 
@@ -138,6 +180,7 @@ export async function sendEmailAction(
       contactId,
       userId: user.id,
       tenantId: await customerRecordTenantId({ contactId, leadId }),
+      ...(result.openToken ? { openToken: result.openToken } : {}),
     },
   });
   await logAudit({
@@ -160,11 +203,11 @@ export async function sendTestEmail(
   _prev: SendEmailState | undefined
 ): Promise<SendEmailState> {
   return withActingStaffScope(async () => {
-    const user = await requireOwner();
+    const user = await requireTenantOwner();
     const result = await sendEmail({
       to: user.email,
-      subject: "Denago CRM test email",
-      text: "Your SMTP settings are working. — Denago CRM",
+      subject: "SMTP test email",
+      text: "Your SMTP settings are working.",
     });
     return result.ok
       ? { ok: `Test email sent to ${user.email}.` }
@@ -176,7 +219,7 @@ export async function sendTestEmail(
 
 export async function saveSmtpSettings(formData: FormData) {
   return asActionResult(async () => {
-    await requireOwner();
+    await requireTenantOwner();
     const entries: Record<string, string> = {
       SMTP_HOST: String(formData.get("host") ?? "").trim(),
       SMTP_PORT: String(formData.get("port") ?? "587").trim(),
@@ -197,14 +240,11 @@ export async function saveSmtpSettings(formData: FormData) {
 
 export async function saveServiceReminderSettings(formData: FormData) {
   return asActionResult(async () => {
-    await requireOwner();
-    const entries: Record<string, string> = {
-      SERVICE_REMINDER_ENABLED: formData.get("enabled") === "on" ? "true" : "false",
-      SERVICE_REMINDER_TEMPLATE_ID: String(formData.get("templateId") ?? "").trim(),
-    };
-    for (const [key, value] of Object.entries(entries)) {
-      await putSetting(key, value);
-    }
+    await requireTenantOwner();
+    // Only the template. Whether reminders go out at all is the "Service-due
+    // reminder" journey's switch now; SERVICE_REMINDER_ENABLED is left as it was
+    // (the seeding reads it once as the owner's prior approval).
+    await putSetting("SERVICE_REMINDER_TEMPLATE_ID", String(formData.get("templateId") ?? "").trim());
     revalidatePath("/settings");
   });
 }
@@ -219,7 +259,7 @@ export async function saveServiceReminderSettings(formData: FormData) {
 
 export async function createTemplate(formData: FormData) {
   return asActionResult(async () => {
-    const user = await requireOwner();
+    const user = await requireTenantOwner();
     const tenantId = await tenantIdFor(user.id);
     if (!tenantId) refuse("No workspace attached to this sign-in — sign out and back in.");
     const name = String(formData.get("name") ?? "").trim();
@@ -234,7 +274,7 @@ export async function createTemplate(formData: FormData) {
 
 export async function updateTemplate(id: string, formData: FormData) {
   return asActionResult(async () => {
-    const user = await requireOwner();
+    const user = await requireTenantOwner();
     const tenantId = await tenantIdFor(user.id);
     if (!tenantId) refuse("No workspace attached to this sign-in — sign out and back in.");
     const name = String(formData.get("name") ?? "").trim();
@@ -252,7 +292,7 @@ export async function updateTemplate(id: string, formData: FormData) {
 
 export async function deleteTemplate(id: string, formData: FormData) {
   return asActionResult(async () => {
-    const user = await requireOwner();
+    const user = await requireTenantOwner();
     const tenantId = await tenantIdFor(user.id);
     if (!tenantId) refuse("No workspace attached to this sign-in — sign out and back in.");
     void formData;
@@ -285,7 +325,7 @@ function signingKind(kind: string): SigningEmailKind {
  */
 function templateFromForm(kind: SigningEmailKind, formData: FormData): StoredSigningTemplate {
   const def = SIGNING_EMAILS[kind];
-  const sms = def.channel === "sms";
+  const sms = isTextTemplate(def);
   // An SMS is plain text: no subject, never a formatted body.
   const subject = sms ? "" : String(formData.get("subject") ?? "").trim();
   const rawDoc = sms ? "" : String(formData.get("doc") ?? "");
@@ -306,7 +346,7 @@ function templateFromForm(kind: SigningEmailKind, formData: FormData): StoredSig
 
 export async function saveSigningEmailTemplate(kind: string, formData: FormData) {
   return asActionResult(async () => {
-    const user = await requireOwner();
+    const user = await requireTenantOwner();
     const def = SIGNING_EMAILS[signingKind(kind)];
     const tenantId = await getActiveTenantId();
     if (!tenantId) refuse("No workspace attached to this sign-in — sign out and back in.");
@@ -317,27 +357,32 @@ export async function saveSigningEmailTemplate(kind: string, formData: FormData)
       create: { tenantId, key: def.settingKey, value },
     });
     await logAudit({ action: "settings.signing_email.saved", summary: `Edited the “${def.label}” message template`, user });
-    revalidatePath("/settings");
+    revalidateMessagePlaces();
   });
+}
+
+/** A message's editor lives on Document Studio, Journeys → Customer messages or Settings (customerMessagePlaces.ts). */
+function revalidateMessagePlaces() {
+  for (const { path } of Object.values(MESSAGE_PLACES)) revalidatePath(path.split("?")[0]);
 }
 
 export async function resetSigningEmailTemplate(kind: string, formData: FormData) {
   return asActionResult(async () => {
     void formData;
-    const user = await requireOwner();
+    const user = await requireTenantOwner();
     const def = SIGNING_EMAILS[signingKind(kind)];
     const tenantId = await getActiveTenantId();
     if (!tenantId) refuse("No workspace attached to this sign-in — sign out and back in.");
     await basePrisma.appSetting.deleteMany({ where: { tenantId, key: def.settingKey } });
     await logAudit({ action: "settings.signing_email.reset", summary: `Reset the “${def.label}” message template to default`, user });
-    revalidatePath("/settings");
+    revalidateMessagePlaces();
   });
 }
 
 /** Header background for the branded emails (signing, quote, and the other system emails). */
 export async function saveEmailHeaderStyle(formData: FormData) {
   return asActionResult(async () => {
-    const user = await requireOwner();
+    const user = await requireTenantOwner();
     const tenantId = await getActiveTenantId();
     if (!tenantId) refuse("No workspace attached to this sign-in — sign out and back in.");
     const raw = String(formData.get("headerStyle") ?? "");
@@ -351,6 +396,102 @@ export async function saveEmailHeaderStyle(formData: FormData) {
     await logAudit({ action: "settings.email_header.saved", summary: `Set the email header to ${EMAIL_HEADER_STYLES[style]}`, user });
     revalidatePath("/settings");
   });
+}
+
+/** Settings → Email: whether composer and quote emails carry the open-tracking image. */
+export async function saveEmailOpenTracking(formData: FormData) {
+  return asActionResult(async () => {
+    const user = await requireTenantOwner();
+    const tenantId = await getActiveTenantId();
+    if (!tenantId) refuse("No workspace attached to this sign-in — sign out and back in.");
+    const value = formData.get("openTracking") === "off" ? "off" : "on";
+    await basePrisma.appSetting.upsert({
+      where: { tenantId_key: { tenantId, key: EMAIL_OPEN_TRACKING_KEY } },
+      update: { value },
+      create: { tenantId, key: EMAIL_OPEN_TRACKING_KEY, value },
+    });
+    await logAudit({ action: "settings.email_open_tracking.saved", summary: `Turned email open tracking ${value}`, user });
+    revalidatePath("/settings");
+  });
+}
+
+/** The workspace's email signature design — one for everyone (lib/signature.ts SignatureDesign). */
+export async function saveSignatureDesign(formData: FormData) {
+  return asActionResult(async () => {
+    const user = await requireTenantOwner();
+    const tenantId = await getActiveTenantId();
+    if (!tenantId) refuse("No workspace attached to this sign-in — sign out and back in.");
+    const design = parseSignatureDesign(
+      JSON.stringify({
+        style: formData.get("style"),
+        companyLine: String(formData.get("companyLine") ?? "").replace(/[\r\n]+/g, " "),
+        footerLine: String(formData.get("footerLine") ?? "").replace(/[\r\n]+/g, " "),
+        // The banner is set by its own buttons (saveSignatureBanner); a Save keeps it.
+        bannerUrl: (await storedSignatureDesign(tenantId)).bannerUrl,
+      }),
+    );
+    await storeSignatureDesign(tenantId, design);
+    await logAudit({
+      action: "settings.email_signature.saved",
+      summary: `Set the email signature to the ${design.style === "card" ? "card" : "classic"} design`,
+      user,
+    });
+    revalidatePath("/settings");
+  });
+}
+
+const storedSignatureDesign = async (tenantId: string) =>
+  parseSignatureDesign(
+    (await basePrisma.appSetting.findUnique({ where: { tenantId_key: { tenantId, key: SIGNATURE_DESIGN_KEY } }, select: { value: true } }))?.value,
+  );
+
+async function storeSignatureDesign(tenantId: string, design: SignatureDesign) {
+  const value = JSON.stringify(design);
+  await basePrisma.appSetting.upsert({
+    where: { tenantId_key: { tenantId, key: SIGNATURE_DESIGN_KEY } },
+    update: { value },
+    create: { tenantId, key: SIGNATURE_DESIGN_KEY, value },
+  });
+}
+
+// The email embedder's own limit (review of #804): a bigger banner would show in
+// the Settings preview but stay a remote image in the sent email, which many mail
+// apps block — the panel would be missing for exactly the customers who matter.
+const BANNER_MAX_BYTES = MAX_LOGO_BYTES;
+
+/**
+ * The card signature's logo panel image: drawn in the browser from the logo
+ * ("Generate from my logo", lib/signatureBanner.ts) or the owner's own file.
+ * Stored as a PUBLIC asset — it is email artwork every recipient's mail app
+ * loads — and embedded in each email by emailInlineLogo.ts. Sending no file
+ * removes it, back to the plainer panel.
+ */
+export async function saveSignatureBanner(formData: FormData): Promise<{ error?: string; bannerUrl?: string }> {
+  let bannerUrl = "";
+  const result = await asActionResult(async () => {
+    const user = await requireTenantOwner();
+    const tenantId = await getActiveTenantId();
+    if (!tenantId) refuse("No workspace attached to this sign-in — sign out and back in.");
+    const file = formData.get("banner");
+    if (file instanceof File && file.size > 0) {
+      if (!["image/png", "image/jpeg"].includes(file.type)) refuse("The banner has to be a PNG or JPG image.");
+      if (file.size > BANNER_MAX_BYTES) refuse("The banner is over the 1 MB limit — save it smaller (960 × 300 is plenty).");
+      bannerUrl = await savePublicAsset(Buffer.from(await file.arrayBuffer()), file.type === "image/png" ? "signature-banner.png" : "signature-banner.jpg", file.type, tenantId);
+      // Without a public store the file lands on local disk with no web address,
+      // and a mail app can't load a banner that has none.
+      if (!/^https:\/\//i.test(bannerUrl)) refuse("Images can't be stored publicly here — file storage isn't set up.");
+    }
+    const design = { ...(await storedSignatureDesign(tenantId)), bannerUrl };
+    // parse → the same https-only rule the send path applies.
+    await storeSignatureDesign(tenantId, parseSignatureDesign(JSON.stringify(design)));
+    await logAudit({
+      action: "settings.email_signature.banner",
+      summary: bannerUrl ? "Set the email signature's logo panel image" : "Removed the email signature's logo panel image",
+      user,
+    });
+    revalidatePath("/settings");
+  });
+  return result.error ? { error: result.error } : { bannerUrl };
 }
 
 /** Sample values for the live preview — obviously fake, so a preview can't be mistaken for a real send. */
@@ -383,7 +524,7 @@ export type EmailPreview = { subject?: string; html?: string; text?: string; err
 export async function previewSigningEmailTemplate(kind: string, formData: FormData): Promise<EmailPreview> {
   let preview: EmailPreview = {};
   const result = await asActionResult(async () => {
-    const user = await requireOwner();
+    const user = await requireTenantOwner();
     const k = signingKind(kind);
     const tenantId = await getActiveTenantId();
     if (!tenantId) refuse("No workspace attached to this sign-in — sign out and back in.");
@@ -395,7 +536,7 @@ export async function previewSigningEmailTemplate(kind: string, formData: FormDa
       signing_link: `${origin}/signing/preview-only-not-a-real-link`,
       survey_link: `${origin}/s/preview-only`,
     };
-    if (SIGNING_EMAILS[k].channel === "sms") {
+    if (isTextTemplate(SIGNING_EMAILS[k])) {
       preview = { text: await tenantSmsContent(k, tenantId, vars, draft) };
       return;
     }
@@ -408,7 +549,7 @@ export async function previewSigningEmailTemplate(kind: string, formData: FormDa
 /** Incoming-mail (IMAP) credentials — password encrypted at rest. */
 export async function saveImapSettings(formData: FormData) {
   return asActionResult(async () => {
-    await requireOwner();
+    await requireTenantOwner();
     const entries: Record<string, string> = {
       IMAP_HOST: String(formData.get("host") ?? "").trim(),
       IMAP_PORT: String(formData.get("port") ?? "993").trim(),

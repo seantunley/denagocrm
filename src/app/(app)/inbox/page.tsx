@@ -2,7 +2,7 @@ import { ExternalLink, Inbox, Star } from "lucide-react";
 import { basePrisma } from "@/lib/db";
 import { activeTenantPredicate } from "@/lib/tenantPredicate";
 import { getActiveTenantId } from "@/lib/auth";
-import { DEFAULT_TENANT_ID } from "@/lib/tenant";
+import { notFound } from "next/navigation";
 import { accessibleInboxWhere, hasPermission, requireAnyPermission } from "@/lib/permissions";
 import { loadCommentThreads } from "@/lib/commentInbox";
 import CommentThreadList from "@/components/CommentThreadList";
@@ -24,14 +24,16 @@ import { SaveForm, SaveButton } from "@/components/SaveForm";
 import { listDeadBotConversations } from "@/lib/deadBotConversations";
 import { retryDeadBotConversation, retryFailedMessage } from "@/app/actions/botDeliveries";
 
-export const metadata = { title: "Social inbox — DenagoCRM" };
+export const metadata = { title: "Social inbox" };
 
 export default async function InboxPage({ searchParams }: { searchParams: Promise<{ tab?: string }> }) {
   const { tab } = await searchParams;
   // The page's own guard, not only the layout's: a layout does not re-run on
   // client navigation, and this page now also loads the public comments.
   const user = await requireAnyPermission("inbox.view", "inbox.reply");
-  const workspaceTenantId = (await getActiveTenantId()) ?? DEFAULT_TENANT_ID;
+  // No workspace means nothing to show — not Denago's reviews and Place ID.
+  const workspaceTenantId = await getActiveTenantId();
+  if (!workspaceTenantId) notFound();
   const scopeWhere = await accessibleInboxWhere(user);
   const channelWhere = { type: { in: ["whatsapp", "messenger", "instagram", "x", "telegram"] } };
   const [activeComms, archivedComms, reviews, placeId, activeComments, archivedComments, capabilities] = await Promise.all([

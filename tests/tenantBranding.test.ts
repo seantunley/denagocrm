@@ -177,9 +177,30 @@ test("the emitted stylesheet contains nothing but the two validated values", () 
     brandDisplayName: null,
     brandTagline: null,
   });
-  const css = brandStyle(brand);
-  assert.equal(css, ":root{--primary:#ea580c;--primary-foreground:#ffffff}");
-  assert.doesNotMatch(css ?? "", /[<>"']/, "nothing that could break out of a <style> element");
+  const css = brandStyle(brand) ?? "";
+  assert.ok(css.startsWith(":root{--primary:#ea580c;--primary-foreground:#ffffff;"), css);
+  assert.ok(css.endsWith("}") && css.indexOf("}") === css.length - 1, "one rule, nothing after it");
+  assert.doesNotMatch(css, /[<>"']/, "nothing that could break out of a <style> element");
+  // Only the validated accent and fixed literals go into the palette.
+  const values = css.slice(css.indexOf("--color-orange-50:"), -1);
+  assert.doesNotMatch(values.replaceAll("#ea580c", ""), /#/, "no colour but the accent");
+});
+
+// Tenant-fit audit 6.2: ~200 literal `orange-*` classes kept Denago's colour in
+// every workspace. The palette variables Tailwind reads are re-derived instead.
+test("the orange palette follows the accent, and a light accent keeps its fills dark", () => {
+  const row = (brandPrimary: string) =>
+    brandFromRow({ tenantId: "t1", brandPrimary, brandLogoRef: null, brandDisplayName: null, brandTagline: null });
+  const dark = brandStyle(row("#1e3a8a")) ?? "";
+  for (const step of [50, 100, 200, 300, 400, 500, 600, 700, 800, 900, 950]) {
+    assert.match(dark, new RegExp(`--color-orange-${step}:`), `step ${step}`);
+  }
+  assert.match(dark, /--color-orange-500:#1e3a8a;/, "a dark accent is its own fill");
+  assert.match(dark, /--color-orange-200:color-mix\(in oklab, #1e3a8a 32%, white\)/);
+  // #f6f2ed — Breastfeeding Art's beige — would make `bg-orange-500 text-white` white on white.
+  const light = brandStyle(row("#f6f2ed")) ?? "";
+  assert.match(light, /--color-orange-500:color-mix\(in oklab, #f6f2ed 55%, black\);/);
+  assert.equal(brandStyle(brandFromRow({ tenantId: "t1", brandPrimary: null, brandLogoRef: null, brandDisplayName: null, brandTagline: null })), null, "unbranded: no palette, Denago's orange stays");
 });
 
 /* ── readable text is computed, never stored ─────────────────────────────── */

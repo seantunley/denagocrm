@@ -1,7 +1,7 @@
+import { requireRoute } from "@/lib/permissions";
 import Link from "next/link";
 import { CheckCircle2, Copy, GitBranch, Layers3, Pencil, Plus, Radio, Route, Trash2 } from "lucide-react";
 import { prisma } from "@/lib/db";
-import { requireOwner } from "@/lib/auth";
 import { getSetting, putSetting } from "@/lib/settings";
 import { DEFAULT_FLOW, type Flow } from "@/lib/flow";
 import { FLOW_TEMPLATES } from "@/lib/flowTemplates";
@@ -34,7 +34,7 @@ function nodeCount(definition?: string | null): number | null {
 }
 
 export default async function BotBuilderPage() {
-  const owner = await requireOwner();
+  const owner = await requireRoute("/bot-builder");
   const scope = await flowScope();
 
   const tenantId = await builderTenantId();

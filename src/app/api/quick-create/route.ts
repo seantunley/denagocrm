@@ -98,7 +98,7 @@ export async function GET(request: Request) {
   const canCreateQuote = rawCanCreateQuote && (!kind || kind === "quote");
   const canManageVehicles = rawCanManageVehicles && (!kind || kind === "vehicle");
   const canManageJobcards = rawJobcards && canViewVehicles && (!kind || kind === "jobcard");
-  const canScheduleActivity = rawCanScheduleActivity && (!kind || kind === "calendar");
+  const canScheduleActivity = rawCanScheduleActivity && (!kind || kind === "calendar" || kind === "availability");
   if (
     !canCreateLead && !canCreateContact && !canCreateQuote &&
     !canManageVehicles && !canManageJobcards && !canScheduleActivity
@@ -106,7 +106,7 @@ export async function GET(request: Request) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
-  const needsContacts = canCreateLead || canCreateQuote || canManageVehicles || canScheduleActivity;
+  const needsContacts = canCreateLead || canCreateQuote || canManageVehicles || (canScheduleActivity && kind !== "availability");
   const needsProducts = canCreateLead || canCreateQuote || canManageVehicles;
   const needsUsers = canCreateLead || canCreateContact || canScheduleActivity;
   const needsVehicles = canManageJobcards;

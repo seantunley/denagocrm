@@ -11,6 +11,7 @@ import { getDocTemplate } from "@/lib/docTemplateStore";
 import { formatDate } from "@/lib/format";
 import { documentTotals, feeRows, includedLines } from "@/lib/pricing";
 import { loadBillToFleet, quoteBillTo } from "@/lib/quoteBillTo";
+import { formatInvoiceNumber } from "@/lib/invoiceNumber";
 
 export default async function InvoicePrintPage({
   params,
@@ -51,7 +52,7 @@ export default async function InvoicePrintPage({
         company={company}
         template={tpl}
         title="Invoice"
-        number={`INV-${quote.number}`}
+        number={formatInvoiceNumber(quote.invoiceNumber)}
         meta={[
           `Date: ${formatDate(quote.invoicedAt ?? new Date(), regional)}`,
           `Reference: Q-${quote.number}`,
@@ -76,7 +77,7 @@ export default async function InvoicePrintPage({
           />
           <InfoBlock
             title="Invoice details"
-            lines={[`Invoice INV-${quote.number}`, `Quote Q-${quote.number}`, `Status: ${quote.status}`]}
+            lines={[`Invoice ${formatInvoiceNumber(quote.invoiceNumber)}`, `Quote Q-${quote.number}`, `Status: ${quote.status}`]}
           />
         </div>
         <ItemsTable rows={[...includedLines(quote.items), ...feeRows(quote.fees)]} showPrices totals={totals} regional={regional} />

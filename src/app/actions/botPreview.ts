@@ -1,6 +1,6 @@
 "use server";
 
-import { requireOwner } from "@/lib/auth";
+import { requireTenantOwner } from "@/lib/auth";
 import { generateBotReply } from "@/lib/botAi";
 import { searchBotKnowledge } from "@/lib/botKnowledge";
 import { withActingStaffScope } from "@/lib/actingScope";
@@ -27,7 +27,7 @@ export async function previewBotAnswer(
   formData: FormData,
 ): Promise<BotPreviewState> {
   return withActingStaffScope(async () => {
-    await requireOwner();
+    await requireTenantOwner();
     const question = String(formData.get("question") ?? "").trim().slice(0, 3000);
     const customerName = String(formData.get("customerName") ?? "").trim().slice(0, 120) || null;
     const isCustomer = formData.get("isCustomer") === "on";

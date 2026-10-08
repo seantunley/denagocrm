@@ -33,9 +33,11 @@ import {
   Radar,
   Route,
   Hammer,
+  Sun,
   type LucideIcon,
 } from "lucide-react";
 import { isPathEnabled } from "@/lib/modules/registry";
+import { DaxIcon } from "@/components/DaxIcon";
 
 /** `keywords`: other words search should find the link by (e.g. an old name). */
 export type NavLink = { href: string; label: string; icon: LucideIcon; keywords?: string[] };
@@ -58,6 +60,7 @@ export function buildNav(
   const can = (...keys: string[]) => isAdmin || keys.some((key) => permissions.has(key));
 
   const topLinks: NavLink[] = [{ href: "/", label: "Dashboard", icon: LayoutDashboard }];
+  if (can("leads.view_all", "leads.view_owned")) topLinks.push({ href: "/today", label: "Today", icon: Sun, keywords: ["lead score", "who to call", "next"] });
   if (can("reports.view", "reports.view_all", "reports.view_team")) {
     topLinks.push({ href: "/reports", label: "Reports", icon: ChartColumnIncreasing });
     topLinks.push({ href: "/targets", label: "Targets", icon: Target });
@@ -135,6 +138,11 @@ export function buildNav(
   // retired) — link the survivor directly rather than sending every click
   // through a bounce.
   if (can("journeys.manage")) automationLinks.push({ href: "/journeys", label: "Journeys", icon: Zap });
+  // Anyone who can see leads, quotes or activities: it only ever shows them
+  // what their own lists already would.
+  if (can("leads.view_all", "leads.view_owned", "quotes.view_all", "quotes.view_owned", "activities.view", "activities.manage")) {
+    automationLinks.push({ href: "/assistant", label: "Ask the CRM", icon: DaxIcon });
+  }
   if (isAdmin) {
     automationLinks.push({ href: "/chatbot", label: "Chatbot", icon: Bot });
     automationLinks.push({ href: "/bot-builder", label: "Flow builder", icon: Network });

@@ -24,7 +24,7 @@ import { createSignatureRequestFromDoc, type SigningIdentityMode } from "@/lib/s
 import { usableCapability } from "@/lib/signing/tokenVault";
 import { signUrl } from "@/lib/signing/dispatch";
 import { dispatchRequest, notifyRecipient } from "@/lib/signing/dispatch";
-import { logSignEvent } from "@/lib/signing/events";
+import { logSignEvent, staffActor } from "@/lib/signing/events";
 import { activeRecordRequest, isLockedForSigning, type QuoteSigningView } from "@/lib/signing/record";
 import { advanceWorkflow, repairWorkflow, pendingApprovalNode } from "@/lib/signflow/runtime";
 import { countersignWithSavedSignature } from "@/lib/signing/countersign";
@@ -605,7 +605,7 @@ export async function countersignRecord(kind: Kind, id: string): Promise<Result>
 
     await logAudit({
       action: "signing.countersigned",
-      summary: `Countersigned “${state.title}” for Denago`,
+      summary: `Countersigned “${state.title}”`,
       entityType: "SignatureRequest",
       entityId: state.requestId,
       user,
@@ -875,7 +875,7 @@ export async function voidRecordSigning(
     }
     await logSignEvent(state.requestId, {
       type: "voided",
-      actor: `Denago: ${user.name}`,
+      actor: await staffActor(user.name),
       metadata: { via: "record" },
     });
     await logAudit({

@@ -340,7 +340,7 @@ test("settings/access no longer lists every user while enforcement is dormant", 
  * `findUniqueOrThrow({ where: { id } })` asked only whether the human exists.
  */
 const MANAGEMENT_ACTIONS = [
-  { file: join("src", "app", "actions", "security.ts"), fns: ["setUserRole", "ownerResetUser2fa", "revokeUserSessions", "setUserDisabled"], guard: /await assertManageableUser\(userId\);/ },
+  { file: join("src", "app", "actions", "security.ts"), fns: ["setUserRole", "ownerResetUser2fa", "revokeUserSessions", "setUserDisabled"], guard: /await assertManageableUser\(userId, owner\);/ },
   { file: join("src", "app", "actions", "sessions.ts"), fns: ["revokeSession", "revokeAllForUser"], guard: /await isActingTenantMember\(/ },
 ] as const;
 

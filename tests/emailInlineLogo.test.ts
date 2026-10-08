@@ -42,13 +42,15 @@ test("only this workspace's own logo is loaded, and sendEmail never fails over i
   assert.match(lib, /if \(url\.pathname === `\/api\/brand\/logo\/\$\{tenantId\}`\) \{/);
   assert.match(lib, /await readManagedBlob\(`branding\/\$\{tenantId\}\/\$\{asset\}`\)/);
   // Company Profile logo: exactly the URL configured for this workspace, never private.
-  assert.match(lib, /if \(!configured \|\| configured !== src \|\| /);
+  // …or the signature's banner, by the same exact-match rule.
+  assert.match(lib, /\[value\("COMPANY_LOGO_URL"\), parseSignatureDesign\(value\(SIGNATURE_DESIGN_KEY\)\)\.bannerUrl\]/);
+  assert.match(lib, /if \(!configured\.includes\(src\) \|\| /);
   assert.match(lib, /redirect: "error"/);
   assert.match(lib, /contentType\.startsWith\("image\/"\)/);
   const email = readFileSync(new URL("../src/lib/email.ts", import.meta.url), "utf8");
   // The workspace the mail is SENT AS, not a second read of ambient scope (review of #744).
-  assert.match(email, /await inlineImages\(input\.html, workspaceLogoLoader\(config\.tenantId\)\)\.catch\(\(\) => null\)/);
-  assert.match(email, /html: inline\?\.html \?\? input\.html,/);
+  assert.match(email, /await inlineImages\(html, workspaceLogoLoader\(config\.tenantId\)\)\.catch\(\(\) => null\)/);
+  assert.match(email, /html: inline\?\.html \?\? html,/);
   // The size cap is enforced before and while reading, never after buffering.
   assert.doesNotMatch(lib, /arrayBuffer\(\)/);
   assert.match(lib, /if \(Number\(response\.headers\.get\("content-length"\) \?\? 0\) > MAX_LOGO_BYTES\) \{/);

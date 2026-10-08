@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/db";
-import { requireOwner } from "@/lib/auth";
+import { requireTenantOwner } from "@/lib/auth";
 import { logAudit } from "@/lib/audit";
 import { generateFlowDraft } from "@/lib/flowAiDraft";
 import { enabledFlowChannels, validateFlowForEnabledChannels } from "@/lib/flowValidationServer";
@@ -22,7 +22,7 @@ export async function generateFlowDraftAction(
   formData: FormData,
 ): Promise<FlowAiDraftState> {
   return withActingStaffScope(async () => {
-    const owner = await requireOwner();
+    const owner = await requireTenantOwner();
     const instruction = String(formData.get("instruction") ?? "").trim();
     if (instruction.length < 8) return { error: "Describe the change you want in a little more detail." };
     const scope = await flowScope();
@@ -63,7 +63,7 @@ export async function applyFlowDraftProposalAction(
   formData: FormData,
 ): Promise<FlowAiDraftState> {
   return withActingStaffScope(async () => {
-    const owner = await requireOwner();
+    const owner = await requireTenantOwner();
     const token = String(formData.get("proposalToken") ?? "");
     const proposal = verifyFlowProposal(token);
     if (!proposal || proposal.flowId !== flowId || proposal.ownerId !== owner.id) return { error: "This AI proposal is invalid or expired. Generate it again." };

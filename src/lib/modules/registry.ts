@@ -35,7 +35,7 @@ export const MODULE_REGISTRY: AppModule[] = [
       "/documents", "/signatures", "/signing-workflows", "/duplicates",
       "/reports", "/targets", "/forecast", "/search", "/audit", "/trash",
       "/settings", "/help", "/library", "/document-studio", "/health",
-      "/messages/start",
+      "/messages/start", "/today",
     ],
   },
   {
@@ -59,8 +59,8 @@ export const MODULE_REGISTRY: AppModule[] = [
   {
     id: "automation",
     label: "Automation & AI",
-    description: "Chatbot, flow builder and competitor intelligence.",
-    routePrefixes: ["/chatbot", "/bot-builder", "/competitors"],
+    description: "Chatbot, flow builder, competitor intelligence and Ask the CRM.",
+    routePrefixes: ["/chatbot", "/bot-builder", "/competitors", "/assistant"],
   },
   {
     id: "automotive",

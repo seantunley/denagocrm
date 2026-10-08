@@ -76,7 +76,8 @@ export async function quoteEmailDraft(quoteId: string): Promise<QuoteEmailDraft>
     if (!quote) return { ok: false, error: "This quote no longer exists." };
     const { to, vars } = await quoteVars(quote, user);
     const email = await tenantEmailContent("quote", quote.tenantId, vars);
-    return { ok: true, to, subject: email.subject, body: email.text, fileName: quotePdfFileName(quote.number) };
+    // A designed email edits its paragraphs only; its headline, figures and signature stay as designed.
+    return { ok: true, to, subject: email.subject, body: email.bodyText ?? email.text, fileName: quotePdfFileName(quote.number) };
   });
 }
 
@@ -115,7 +116,7 @@ export async function sendQuoteEmail(
     // formatting (lists, bold, links) survives; the dialog only shows plain text.
     // Edited → the staff member's words, as plain paragraphs.
     const standard = await tenantEmailContent("quote", quote.tenantId, vars);
-    const unchanged = standard.subject === subject && standard.text.replace(/\r\n?/g, "\n").trim() === body;
+    const unchanged = standard.subject === subject && (standard.bodyText ?? standard.text).replace(/\r\n?/g, "\n").trim() === body;
     const email = unchanged ? standard : await tenantEmailContent("quote", quote.tenantId, vars, { subject, body });
     const replyTo = await composerReplyToDefault(user.email);
 
@@ -144,6 +145,10 @@ export async function sendQuoteEmail(
             html: email.html,
             attachments: mail.attachments,
             replyTo: replyTo || undefined,
+            // "Opened" on the quote email's timeline entry (unless switched off).
+            trackOpens: true,
+            // A person emailed this quote: their name on the From line.
+            senderName: user.name,
             record: { contactId: quote.contactId, leadId: quote.leadId, userId: user.id, label: "Quote email" },
           }),
         // Only a draft moves, and only the version that was rendered: an edit

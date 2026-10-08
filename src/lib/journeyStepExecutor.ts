@@ -18,7 +18,11 @@ import { JourneyContext, journeyTemplateVars } from "./journeyContext";
 import { AbortJourney } from "./journeyControlFlow";
 import { conditionStepOutcome, stopStepOutcome } from "./journeyStepControl";
 import { applyLeadOutcome, cappedLostReason } from "./journeyLeadOutcome";
-import { parseLeadOutcomeConfig, type JourneyStep } from "./journeyTypes";
+import { parseLeadOutcomeConfig, type JourneyStep, type ModuleSendOutcome } from "./journeyTypes";
+import { sendReviewRequest } from "./reviewRequests";
+import { sendServiceDueReminder } from "./serviceReminders";
+import { remindSigner } from "./signingReminders";
+import { sendSurveyReminder } from "./surveyDistributionQueue";
 
 export { resolveTopLevelNext } from "./journeyStepControl";
 
@@ -66,6 +70,28 @@ function stringConfig(step: JourneyStep, key: string): string | null {
 function numberConfig(step: JourneyStep, key: string, fallback = 0): number {
   const value = Number(step.config[key]);
   return Number.isFinite(value) ? value : fallback;
+}
+
+function stringValue(value: unknown): string | null {
+  return typeof value === "string" && value ? value : null;
+}
+
+/**
+ * A module sender's outcome as a step result. A refusal the module recorded is a
+ * skip (it says why); quiet hours wait and retry THIS step; a provider failure
+ * throws, so the run retries — the module's claim stops a retry sending twice.
+ */
+function moduleStepResult(outcome: ModuleSendOutcome, what: string): StepResult {
+  switch (outcome.kind) {
+    case "sent":
+      return { status: "completed", note: `${what} sent` };
+    case "deferred":
+      return { status: "waiting", note: `${what} held for ${outcome.reason}`, nextRunAt: outcome.until, retryStep: true };
+    case "failed":
+      throw new Error(`${what} not sent: ${outcome.reason}`);
+    case "skipped":
+      return { status: "skipped", note: `${what} not sent: ${outcome.reason}` };
+  }
 }
 
 function ids(context: JourneyContext) {
@@ -452,6 +478,43 @@ export async function executeJourneyStep(args: {
         metadata: { runId, stepId: step.id, journey: journeyName, ...(reason ? { lostReason: reason } : {}) },
       });
       return { status: "completed", note: outcome.note, output: outcome.output };
+    }
+
+    /**
+     * The module steps — the built-in senders, now steps of the ready-made
+     * journeys (readyMadeJourneys.ts). Each hands the record its trigger put on
+     * the event to the module's OWN sender, which keeps the secret link, the
+     * editable template, the masked timeline record, the opt-out checks and the
+     * once-only claim. The journey decides only whether and when.
+     */
+    case "send_review_request": {
+      if (!contactId) return { status: "skipped", note: "Review request skipped: no customer on this run" };
+      if (!tenantId) return { status: "skipped", note: "Review request skipped: the run has no workspace" };
+      const event = context.event ?? {};
+      const occasion = event.type === "vehicle_delivered" || event.type === "delivered" ? "delivery" : "service";
+      const refText = typeof event.refText === "string" && event.refText ? event.refText : vars.model;
+      return moduleStepResult(await sendReviewRequest(contactId, occasion, refText, tenantId), "Google review request");
+    }
+
+    case "send_service_reminder": {
+      const vehicleId = stringValue(context.event?.vehicleId);
+      if (!vehicleId) return { status: "skipped", note: "Service reminder skipped: needs the “Vehicle is due for a service” trigger" };
+      if (!tenantId) return { status: "skipped", note: "Service reminder skipped: the run has no workspace" };
+      return moduleStepResult(await sendServiceDueReminder(vehicleId, tenantId), "Service reminder");
+    }
+
+    case "send_signing_reminder": {
+      const recipientId = stringValue(context.event?.signatureRecipientId);
+      if (!recipientId) return { status: "skipped", note: "Signing reminder skipped: needs the “Document sent for signing isn't signed” trigger" };
+      if (!tenantId) return { status: "skipped", note: "Signing reminder skipped: the run has no workspace" };
+      return moduleStepResult(await remindSigner(recipientId, tenantId), "Signing reminder");
+    }
+
+    case "send_survey_reminder": {
+      const responseId = stringValue(context.event?.surveyResponseId);
+      if (!responseId) return { status: "skipped", note: "Survey reminder skipped: needs the “Automatic survey isn't answered” trigger" };
+      if (!tenantId) return { status: "skipped", note: "Survey reminder skipped: the run has no workspace" };
+      return moduleStepResult(await sendSurveyReminder(responseId, tenantId), "Survey reminder");
     }
 
     case "add_tag":

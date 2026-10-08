@@ -200,7 +200,8 @@ test("changing who gets challenged is owner-only and audited", () => {
   const action = read("src/app/actions/signingSecuritySettings.ts");
   // Turning verification off is a security decision; it should be attributable
   // to a person rather than appearing in a settings table with no history.
-  assert.match(action, /requireOwner\(\)/);
+  // The workspace's own signer policy (a tenant AppSetting), so its own owner.
+  assert.match(action, /requireTenantOwner\(\)/);
   assert.match(action, /logAudit\(/);
   assert.match(action, /signing\.identity_policy_changed/);
 });

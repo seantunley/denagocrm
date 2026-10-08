@@ -6,6 +6,7 @@ import Module, { createRequire } from "node:module";
 import path from "node:path";
 import { deliverQuoteEmail, quotePdfFileName } from "../src/lib/quoteEmail";
 import { quotePrintLinks } from "../src/lib/quotePrintLinks";
+import { messagePlace } from "../src/lib/customerMessagePlaces";
 import {
   SIGNING_EMAILS,
   SIGNING_EMAIL_KINDS,
@@ -159,14 +160,17 @@ const VARS = {
   sender_name: "Pat",
 };
 
-test("Quote email is edited in Settings → Email templates beside the signing emails", () => {
-  assert.ok(SIGNING_EMAIL_KINDS.includes("quote"), "the settings loop renders every kind");
-  const settings = shipped("src/app/(app)/settings/page.tsx");
-  // Rendered section by section (each kind's group), so every kind still appears.
-  assert.match(settings, /SIGNING_EMAIL_KINDS\.filter\(\(k\) => SIGNING_EMAILS\[k\]\.group === group\)\.map\(\(kind\) =>/);
-  assert.match(settings, /saveSigningEmailTemplate\.bind\(null, kind\)/);
-  assert.match(settings, /resetSigningEmailTemplate\.bind\(null, kind\)/);
+test("Quote email is edited on Document Studio beside the signing emails", () => {
+  assert.ok(SIGNING_EMAIL_KINDS.includes("quote"));
+  // The emails that send a document live with the documents (customerMessagePlaces.ts).
+  assert.equal(messagePlace("quote"), "documents");
+  // …as a document of the editor, like the documents beside it (EmailDesignCards → /doc-editor).
+  assert.match(shipped("src/app/(app)/document-studio/page.tsx"), /<EmailDesignCards kinds=\{emailKindsAt\("documents"\)\} frame \/>/);
+  const editors = shipped("src/components/CustomerMessageEditors.tsx");
+  assert.match(editors, /saveSigningEmailTemplate\.bind\(null, kind\)/);
+  assert.match(editors, /resetSigningEmailTemplate\.bind\(null, kind\)/);
   // The two-step picker is gone.
+  const settings = shipped("src/app/(app)/settings/page.tsx");
   assert.doesNotMatch(settings, /QUOTE_EMAIL_TEMPLATE|saveQuoteEmailSettings/);
   assert.doesNotMatch(shipped("src/app/actions/emails.ts"), /QUOTE_EMAIL_TEMPLATE|saveQuoteEmailSettings/);
 });

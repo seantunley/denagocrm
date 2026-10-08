@@ -40,7 +40,7 @@ function LoginInner({ brand }: { brand: LoginBrand }) {
   return (
     <Shell brand={brand}>
       <div className="mb-8">
-        <p className="mb-3 text-xs font-semibold uppercase tracking-[0.22em] text-orange-400">Staff portal</p>
+        <p className="mb-3 text-xs font-semibold uppercase tracking-[0.22em] text-primary">Staff portal</p>
         <h1 className="text-3xl font-semibold tracking-[-0.04em] text-white sm:text-4xl">Welcome back.</h1>
         <p className="mt-2 text-sm leading-6 text-slate-400">{`Sign in to ${brand.displayName}.`}</p>
       </div>
@@ -143,10 +143,10 @@ function ForgotPasswordStep({ brand, onBack }: { brand: LoginBrand; onBack: () =
 
   return (
     <Shell brand={brand}>
-      <div className="mb-7 flex size-12 items-center justify-center rounded-2xl border border-orange-400/20 bg-orange-400/10 text-orange-400 shadow-[0_0_35px_rgba(249,115,22,0.12)]">
+      <div className="mb-7 flex size-12 items-center justify-center rounded-2xl border border-primary/20 bg-primary/10 text-primary shadow-[0_0_35px_color-mix(in_oklab,var(--primary)_12%,transparent)]">
         <LockKeyhole className="size-6" />
       </div>
-      <p className="mb-3 text-xs font-semibold uppercase tracking-[0.22em] text-orange-400">Reset password</p>
+      <p className="mb-3 text-xs font-semibold uppercase tracking-[0.22em] text-primary">Reset password</p>
       {reset?.done ? (
         <>
           <h1 className="text-3xl font-semibold tracking-[-0.04em] text-white">Password changed.</h1>
@@ -211,10 +211,10 @@ function TwoFactorStep({ methods, brand }: { methods: string[]; brand: LoginBran
 
   return (
     <Shell brand={brand}>
-      <div className="mb-7 flex size-12 items-center justify-center rounded-2xl border border-orange-400/20 bg-orange-400/10 text-orange-400 shadow-[0_0_35px_rgba(249,115,22,0.12)]">
+      <div className="mb-7 flex size-12 items-center justify-center rounded-2xl border border-primary/20 bg-primary/10 text-primary shadow-[0_0_35px_color-mix(in_oklab,var(--primary)_12%,transparent)]">
         <ShieldCheck className="size-6" />
       </div>
-      <p className="mb-3 text-xs font-semibold uppercase tracking-[0.22em] text-orange-400">Identity check</p>
+      <p className="mb-3 text-xs font-semibold uppercase tracking-[0.22em] text-primary">Identity check</p>
       <h1 className="text-3xl font-semibold tracking-[-0.04em] text-white">One more step.</h1>
       <p className="mt-3 max-w-sm text-sm leading-6 text-slate-400">
         {hasTotp ? "Enter the six-digit code from your authenticator app." : "Enter the code we sent to your email."}
@@ -263,7 +263,7 @@ function TwoFactorStep({ methods, brand }: { methods: string[]; brand: LoginBran
 function Shell({ children, brand }: { children: React.ReactNode; brand: LoginBrand }) {
   return (
     <main className="relative min-h-[100dvh] overflow-hidden bg-[#070909] text-white lg:grid lg:grid-cols-[minmax(430px,0.82fr)_1.18fr]">
-      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_20%_0%,rgba(249,115,22,0.11),transparent_32%)] lg:hidden" />
+      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_20%_0%,color-mix(in_oklab,var(--primary)_11%,transparent),transparent_32%)] lg:hidden" />
       <section className="relative z-10 flex min-h-[100dvh] flex-col px-6 py-7 sm:px-10 lg:px-14 xl:px-20">
         <header className="flex items-center justify-between">
           {/*
@@ -318,9 +318,9 @@ function BrandScene({ brand }: { brand: LoginBrand }) {
       className="relative hidden overflow-hidden border-l border-white/[0.06] bg-[#0c0f0e] lg:block"
     >
       <div className="absolute inset-0 opacity-35 [background-image:linear-gradient(rgba(255,255,255,.035)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,.035)_1px,transparent_1px)] [background-size:72px_72px] [mask-image:linear-gradient(to_bottom,black,transparent_88%)]" />
-      <div className="absolute -right-28 -top-28 size-[500px] rounded-full border border-orange-500/10" />
-      <div className="absolute -right-12 -top-12 size-[330px] rounded-full border border-orange-500/10" />
-      <motion.div style={{ x: glowX, y: glowY }} className="absolute right-[8%] top-[12%] size-80 rounded-full bg-orange-600/20 blur-[110px]" />
+      <div className="absolute -right-28 -top-28 size-[500px] rounded-full border border-primary/10" />
+      <div className="absolute -right-12 -top-12 size-[330px] rounded-full border border-primary/10" />
+      <motion.div style={{ x: glowX, y: glowY }} className="absolute right-[8%] top-[12%] size-80 rounded-full bg-primary/20 blur-[110px]" />
 
       <div className="relative flex h-full min-h-[680px] flex-col justify-between p-12 xl:p-16">
         <div className="flex items-center justify-between">
@@ -328,7 +328,7 @@ function BrandScene({ brand }: { brand: LoginBrand }) {
             <span className="relative flex size-2"><span className="absolute inline-flex size-full animate-ping rounded-full bg-emerald-400 opacity-50" /><span className="relative size-2 rounded-full bg-emerald-400" /></span>
             Operations online
           </div>
-          <Zap className="size-5 text-orange-500" fill="currentColor" />
+          <Zap className="size-5 text-primary" fill="currentColor" />
         </div>
 
         <div className="relative mx-auto w-full max-w-3xl py-14">
@@ -340,18 +340,18 @@ function BrandScene({ brand }: { brand: LoginBrand }) {
               </div>
               {brand.logoUrl ? (
                 // eslint-disable-next-line @next/next/no-img-element
-                <img src={brand.logoUrl} alt="" className="h-12 w-auto object-contain drop-shadow-[0_12px_25px_rgba(249,115,22,.28)]" />
+                <img src={brand.logoUrl} alt="" className="h-12 w-auto object-contain drop-shadow-[0_12px_25px_color-mix(in_oklab,var(--primary)_28%,transparent)]" />
               ) : null}
             </div>
             <div className="grid grid-cols-3 gap-3">
               <Metric value="14" label="Active leads" accent />
-              <Metric value="6" label="In workshop" />
-              <Metric value="3" label="Deliveries" />
+              <Metric value="6" label="Open quotes" />
+              <Metric value="3" label="Follow-ups" />
             </div>
             <div className="mt-7 rounded-2xl border border-white/[0.06] bg-black/20 p-4">
               <div className="mb-5 flex items-center justify-between text-xs"><span className="text-slate-400">Team momentum</span><span className="text-emerald-400">+18% this week</span></div>
               <div className="flex h-20 items-end gap-2">
-                {[38, 52, 44, 68, 58, 82, 72, 96, 84, 100].map((height, index) => <div key={height + index} className={`flex-1 rounded-t-sm ${index === 9 ? "bg-orange-500" : "bg-white/10"}`} style={{ height: `${height}%` }} />)}
+                {[38, 52, 44, 68, 58, 82, 72, 96, 84, 100].map((height, index) => <div key={height + index} className={`flex-1 rounded-t-sm ${index === 9 ? "bg-primary" : "bg-white/10"}`} style={{ height: `${height}%` }} />)}
               </div>
             </div>
             <div className="absolute -bottom-5 -right-5 flex items-center gap-3 rounded-2xl border border-white/10 bg-[#171a18]/95 px-4 py-3 shadow-2xl backdrop-blur-xl">
@@ -362,8 +362,10 @@ function BrandScene({ brand }: { brand: LoginBrand }) {
         </div>
 
         <div>
-          <p className="max-w-xl text-3xl font-medium leading-tight tracking-[-0.035em] text-white xl:text-4xl">Every lead. Every vehicle.<br /><span className="text-slate-500">One electric rhythm.</span></p>
-          <p className="mt-4 max-w-md text-sm leading-6 text-slate-500">{brand.tagline ?? `The command centre for ${brand.displayName} sales, service and lasting customer relationships.`}</p>
+          {/* Any business's words, not one dealer's ("Every vehicle. One electric
+              rhythm." was Denago's, shown to every workspace). */}
+          <p className="max-w-xl text-3xl font-medium leading-tight tracking-[-0.035em] text-white xl:text-4xl">Every lead. Every customer.<br /><span className="text-slate-500">All in one place.</span></p>
+          <p className="mt-4 max-w-md text-sm leading-6 text-slate-500">{brand.tagline ?? `The command centre for ${brand.displayName}: leads, customers and the follow-ups that keep them.`}</p>
         </div>
       </div>
     </section>
@@ -371,7 +373,7 @@ function BrandScene({ brand }: { brand: LoginBrand }) {
 }
 
 function Metric({ value, label, accent = false }: { value: string; label: string; accent?: boolean }) {
-  return <div className={`rounded-2xl border p-4 ${accent ? "border-orange-400/20 bg-orange-400/10" : "border-white/[0.06] bg-white/[0.025]"}`}><p className={`text-2xl font-semibold ${accent ? "text-orange-400" : "text-white"}`}>{value}</p><p className="mt-1 text-[11px] text-slate-500">{label}</p></div>;
+  return <div className={`rounded-2xl border p-4 ${accent ? "border-primary/20 bg-primary/10" : "border-white/[0.06] bg-white/[0.025]"}`}><p className={`text-2xl font-semibold ${accent ? "text-primary" : "text-white"}`}>{value}</p><p className="mt-1 text-[11px] text-slate-500">{label}</p></div>;
 }
 
 function subscribeToDisplayMode(onChange: () => void) {

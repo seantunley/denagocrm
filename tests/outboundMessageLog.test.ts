@@ -79,7 +79,7 @@ test("sendEmail records on success and a failure on both failure paths", () => {
   const ok = s.indexOf("await noteSmtpOutcome(config, null);");
   const rec = s.indexOf("recordOutboundMessage(", ok);
   assert.ok(ok > 0 && rec > ok, "success record comes after SMTP accepted");
-  assert.ok(rec < s.indexOf("return { ok: true };", ok), "and before returning ok");
+  assert.ok(rec < s.indexOf("return { ok: true", ok), "and before returning ok");
   assert.equal((s.match(/recordOutboundFailure\(logged, input\.record/g) ?? []).length, 2, "not-configured and transport failure");
   assert.match(s, /messageId: info\?\.messageId/);
 });
@@ -123,7 +123,8 @@ const SILENT_PATHS: Array<[string, RegExp[]]> = [
   ["src/lib/imapSync.ts", [/record: \{ contactId: outcome\.contactId/]],
   ["src/lib/campaigns.ts", [/headers: unsubscribeHeaders\(r\.token, brand\),\n\s+record,/, /renderTemplate\(campaign\.body, vars\), record\)/]],
   ["src/lib/marketingCampaignQueue.ts", [/headers: unsubscribeHeaders\(recipient\.token, brand\),\n\s+record,/, /renderTemplate\(recipient\.body, vars\), record\)/]],
-  ["src/lib/surveyDistributionQueue.ts", [/subject: invite\.snapshot\.title, text, record \}/, /subject: `Reminder: \$\{invite\.snapshot\.title\}`, text, record \}/]],
+  // Invitation and reminder: both from the editable templates, both recorded.
+  ["src/lib/surveyDistributionQueue.ts", [/const message = await surveyMessage\(invite, requested === "email" \? "email" : "sms", false\);[\s\S]{0,400}subject: message\.subject, text: message\.text, html: message\.html, record \}/, /const message = await surveyMessage\(invite, requested === "email" \? "email" : "sms", true\);[\s\S]{0,400}subject: message\.subject, text: message\.text, html: message\.html, record \}/]],
 ];
 
 for (const [file, patterns] of SILENT_PATHS) {

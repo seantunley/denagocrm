@@ -3,7 +3,7 @@
 import { useEditor } from "@/lib/doceditor/store";
 import { getBlock } from "@/lib/doceditor/ops";
 import { newPricingLine } from "@/lib/doceditor/factory";
-import type { DocumentBlock, OverlayField, Recipient, PricingBlock, ImageBlock, DividerBlock, SpacerBlock, ConditionalBlock, TextBlock, BannerBlock, InfoCardBlock, TotalBandBlock, TermsBlock, FooterBlock, LineItemsBlock, LineItemColumn } from "@/lib/doceditor/model";
+import type { DocumentBlock, OverlayField, Recipient, PricingBlock, ImageBlock, DividerBlock, SpacerBlock, ConditionalBlock, TextBlock, BannerBlock, InfoCardBlock, TotalBandBlock, TermsBlock, FooterBlock, LineItemsBlock, LineItemColumn, EmailButtonBlock, EmailFactsBlock, EmailFooterBlock } from "@/lib/doceditor/model";
 import { lineItemColKeys } from "@/lib/doceditor/model";
 import { recipientLabel } from "@/lib/signing/templateRecipients";
 import { ConditionField } from "@/lib/docbuilder/ConditionField";
@@ -73,11 +73,11 @@ function FieldProps({ field }: { field: OverlayField }) {
             </p>
           ) : recipients.length === 0 ? (
             <p className="mt-1 text-[11px] text-amber-600">
-              Add a recipient below — set one to “Denago” and one to “The customer”, then assign this field to whichever signs here.
+              Add a recipient below — set one to “Our team” and one to “The customer”, then assign this field to whichever signs here.
             </p>
           ) : !field.recipientId ? (
             <p className="mt-1 text-[11px] text-amber-600">
-              An unassigned field is filled by whoever opens the document first. Assign it so the signature lands in the right box — and so Denago&apos;s can be applied automatically.
+              An unassigned field is filled by whoever opens the document first. Assign it so the signature lands in the right box — and so your team&apos;s can be applied automatically.
             </p>
           ) : null}
         </div>
@@ -184,6 +184,12 @@ function BlockProps({ block, floating }: { block: DocumentBlock; floating: boole
       {block.type === "footer" && <FooterProps block={block} />}
       {block.type === "lineItems" && <LineItemsProps block={block} />}
       {(block.type === "showcaseHeader" || block.type === "infoStrip" || block.type === "vehicleShowcase" || block.type === "totalsBox" || block.type === "acceptance" || block.type === "footerBand") && <ShowcaseProps block={block} />}
+      {block.type === "emailButton" && <EmailButtonProps block={block} />}
+      {block.type === "emailFacts" && <EmailFactsProps block={block} />}
+      {block.type === "emailFooter" && <EmailFooterProps block={block} />}
+      {block.type === "emailHeader" && <p className="p-3 text-xs text-slate-500">Your logo panel — the one from your email signature (Settings → My account → Email signature → Logo panel), else your logo on a dark panel.</p>}
+      {block.type === "emailSignature" && <p className="p-3 text-xs text-slate-500">The sender&apos;s name (your company&apos;s, for automatic messages), then your company&apos;s phone, email and website from Company profile.</p>}
+      {block.type === "emailBody" && <p className="p-3 text-xs text-slate-500">Where each email&apos;s own content goes. Keep exactly one.</p>}
       {(block.type === "text" || block.type === "heading") && <TextHint block={block} />}
       {block.type === "table" && <p className="p-3 text-xs text-slate-400">Edit table cells inline on the page.</p>}
       {block.type === "pageBreak" && <p className="p-3 text-xs text-slate-400">Forces the next content onto a new page.</p>}
@@ -255,6 +261,85 @@ function ImageProps({ block }: { block: ImageBlock }) {
       <div className={row}><label className={lbl}>Alt text</label><input className={inp} value={block.alt} onChange={(e) => updateBlock(block.id, { alt: e.target.value })} /></div>
       <div className={row}><label className={lbl}>Width ({block.widthPct}%)</label><input type="range" min={10} max={100} className="w-full" value={block.widthPct} onChange={(e) => updateBlock(block.id, { widthPct: Number(e.target.value) }, false)} /></div>
       <label className="flex items-center gap-2 text-sm text-slate-700"><input type="checkbox" checked={block.rounded} onChange={(e) => updateBlock(block.id, { rounded: e.target.checked })} /> Rounded corners</label>
+    </Section>
+  );
+}
+
+// ── customer email blocks ───────────────────────────────────────────
+/** What a button can open (or show): the message's own link or code fields. */
+const BUTTON_FIELDS: Record<string, string> = {
+  signing_link: "The signing link",
+  review_link: "The Google review link",
+  survey_link: "The survey link",
+  code: "The code (shown large, no link)",
+};
+
+function EmailButtonProps({ block }: { block: EmailButtonBlock }) {
+  const updateBlock = useEditor((s) => s.updateBlock);
+  const { email } = useDocEditorEnv();
+  const options = Object.keys(BUTTON_FIELDS).filter((f) => !email || email.kind === null || email.fields.includes(f));
+  return (
+    <Section title="Button">
+      <div className={row}>
+        <label className={lbl}>Opens</label>
+        <select className={inp} value={block.token} onChange={(e) => updateBlock(block.id, { token: e.target.value })}>
+          {options.map((f) => <option key={f} value={f}>{BUTTON_FIELDS[f]}</option>)}
+          {!options.includes(block.token) && <option value={block.token}>{block.token} (not in this email)</option>}
+        </select>
+      </div>
+      {block.token !== "code" && (
+        <>
+          <div className={row}><label className={lbl}>Label</label><input className={inp} value={block.label} onChange={(e) => updateBlock(block.id, { label: e.target.value }, false)} /></div>
+          <div className={row}>
+            <label className={lbl}>Style</label>
+            <select className={inp} value={block.style} onChange={(e) => updateBlock(block.id, { style: e.target.value === "accent" ? "accent" : "dark" })}>
+              <option value="dark">Dark, with an orange arrow</option>
+              <option value="accent">Brand colour</option>
+            </select>
+          </div>
+        </>
+      )}
+      <p className="text-[11px] text-slate-400">An email is never sent without its link or code — if you delete this button, one is added back at the end.</p>
+    </Section>
+  );
+}
+
+function EmailFactsProps({ block }: { block: EmailFactsBlock }) {
+  const updateBlock = useEditor((s) => s.updateBlock);
+  const items = block.items;
+  const set = (i: number, patch: Partial<EmailFactsBlock["items"][number]>) =>
+    updateBlock(block.id, { items: items.map((item, j) => (j === i ? { ...item, ...patch } : item)) }, false);
+  return (
+    <Section title="Key figures">
+      {items.map((item, i) => (
+        <div key={i} className="mb-3 rounded-md border border-slate-200 p-2">
+          <div className={row}><label className={lbl}>Label</label><input className={inp} value={item.label} onChange={(e) => set(i, { label: e.target.value })} /></div>
+          <div className={row}><label className={lbl}>Value — a field like {"{{total}}"}</label><input className={inp} value={item.value} onChange={(e) => set(i, { value: e.target.value })} /></div>
+          <div className={row}><label className={lbl}>Small line under it</label><input className={inp} value={item.sub} onChange={(e) => set(i, { sub: e.target.value })} /></div>
+          <div className="flex items-center justify-between">
+            <label className="flex items-center gap-1.5 text-xs text-slate-600"><input type="checkbox" checked={item.highlight} onChange={(e) => set(i, { highlight: e.target.checked })} /> Dark card</label>
+            <button type="button" className="text-xs text-red-500 hover:underline" onClick={() => updateBlock(block.id, { items: items.filter((_, j) => j !== i) })}>Remove</button>
+          </div>
+        </div>
+      ))}
+      {items.length < 3 && (
+        <button type="button" className="w-full rounded-md border border-slate-300 py-1.5 text-sm text-slate-700 hover:bg-slate-50" onClick={() => updateBlock(block.id, { items: [...items, { label: "LABEL", value: "", sub: "", highlight: false }] })}>
+          + Add a figure
+        </button>
+      )}
+    </Section>
+  );
+}
+
+function EmailFooterProps({ block }: { block: EmailFooterBlock }) {
+  const updateBlock = useEditor((s) => s.updateBlock);
+  return (
+    <Section title="Footer">
+      <div className={row}>
+        <label className={lbl}>A line above your company details (optional)</label>
+        <input className={inp} value={block.note} placeholder="e.g. You're receiving this because you're a customer of ours." onChange={(e) => updateBlock(block.id, { note: e.target.value }, false)} />
+      </div>
+      <p className="text-[11px] text-slate-400">Company name, address, phone, email and website come from Company profile.</p>
     </Section>
   );
 }
@@ -489,6 +574,21 @@ function DocumentProps() {
   const addRecipient = useEditor((s) => s.addRecipient);
   const updateRecipient = useEditor((s) => s.updateRecipient);
   const removeRecipient = useEditor((s) => s.removeRecipient);
+  const { email } = useDocEditorEnv();
+  // An email has no page size, margins or signers: its width is the 600px mail apps show.
+  if (email) {
+    return (
+      <Section title={email.kind ? "Email" : "Email frame"}>
+        <div className={row}><label className={lbl}>Name</label><input className={inp} value={doc.title} onChange={(e) => setTitle(e.target.value)} /></div>
+        <p className="text-xs text-slate-500">
+          {email.kind
+            ? "Click a block to change it, or drag new ones in from the left. The subject line is above the email. Preview shows it exactly as your customer receives it, in your frame."
+            : "The header, signature and footer around every customer email. Each email's own content appears in the message slot."}
+        </p>
+        <p className="mt-2 text-xs text-slate-500">Logo, colour and company details come from Company profile and your email signature.</p>
+      </Section>
+    );
+  }
   return (
     <>
       <Section title="Document">
@@ -520,7 +620,7 @@ function DocumentProps() {
                   value={r.party}
                   onChange={(e) => updateRecipient(r.id, { party: e.target.value as Recipient["party"] })}
                 >
-                  <option value="denago">Denago (whoever sends it)</option>
+                  <option value="denago">Our team (whoever sends it)</option>
                   <option value="customer">The customer</option>
                   <option value="custom">Someone specific…</option>
                 </select>

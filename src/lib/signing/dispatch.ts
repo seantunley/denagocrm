@@ -5,9 +5,10 @@ import { sendWhatsAppText, waDigits, isWhatsAppConfigured } from "@/lib/whatsapp
 import { logSignEvent } from "./events";
 import { CLOSED_REQUEST_STATUSES, isRequestClosed } from "./status";
 import { tenantOrigin } from "@/lib/tenantOrigin";
-import { signingEmailContent } from "./signingEmail";
+import { signingEmailContent, signingWhatsAppText } from "./signingEmail";
 import { usableCapability } from "./tokenVault";
 import { signingRecord } from "@/lib/outboundMessageLog";
+import { mirrorQuoteSent } from "./quoteMirror";
 
 /**
  * The platform origin, and the LAST resort.
@@ -91,7 +92,6 @@ export async function notifyRecipient(recipientId: string, opts?: { reminder?: b
   // independent and both required: a digest in the link is unusable, and the
   // platform hostname on a branded workspace's mail is the wrong sender.
   const url = signUrl(raw, origin);
-  const verb = opts?.reminder ? "Reminder — please sign" : "Please sign your document";
   const evType = opts?.reminder ? "reminded" : "sent";
   let delivered = false;
   // The customer's timeline gets a copy of each channel that went out, with the
@@ -118,7 +118,11 @@ export async function notifyRecipient(recipientId: string, opts?: { reminder?: b
   // WhatsApp works inside the 24h customer-service window (or requires an approved
   // template for cold outreach — see @/lib/whatsapp). Best-effort; failures are logged.
   if (hasWhatsApp) {
-    const res = await sendWhatsAppText(waDigits(r.phone!), `${verb}: "${r.request.title}"\nSign here: ${url}`, record);
+    // The tenant's own editable WhatsApp template (Settings → Email templates).
+    const text = await signingWhatsAppText(opts?.reminder ? "reminder_whatsapp" : "invite_whatsapp", {
+      requestId: r.requestId, title: r.request.title, recipientName: r.name, signingUrl: url,
+    });
+    const res = await sendWhatsAppText(waDigits(r.phone!), text, record);
     if (res.ok) delivered = true;
     await logSignEvent(r.requestId, { type: evType, recipientId: r.id, actor: "system", channel: "whatsapp", metadata: { ok: res.ok, error: res.error } });
   }
@@ -140,6 +144,8 @@ export async function notifyRecipient(recipientId: string, opts?: { reminder?: b
     // above, and an unconditional update would stomp that newer state back to
     // "sent"/"pending". count !== 1 → someone else already resolved it; leave it.
     await prisma.signatureRecipient.updateMany({ where: { id: r.id, status: "sending" }, data: { status: delivered ? "sent" : "pending", sendingAt: null } });
+    // The customer has it now: a draft quote behind this request is sent.
+    if (delivered) await mirrorQuoteSent({ tenantId: r.request.tenantId, quoteId: r.request.quoteId, requestId: r.requestId }, r);
   }
   return { reachable: true, delivered };
 }
@@ -273,9 +279,9 @@ export async function notifyNextInSequence(requestId: string): Promise<void> {
   const req = await prisma.signatureRequest.findUnique({ where: { id: requestId }, include: { recipients: { orderBy: { order: "asc" } } } });
   if (!req || req.ordering !== "sequential") return;
   const next = req.recipients.find((r) => r.role !== "viewer" && r.status !== "signed");
-  // First reach of a pending signer → normal (at-most-once) send. Otherwise it's a
-  // re-nudge of an already-"sent"-but-unopened signer → reminder, so the
-  // at-most-once claim doesn't skip it.
+  // First reach of a pending signer → normal (at-most-once) send. A signer who
+  // already has their link gets nothing here: re-nudging them is a REMINDER, and
+  // reminders are the "Signing reminder" journey's (off unless the owner switches
+  // it on) — this used to send one by itself.
   if (next && next.status !== "sent" && next.status !== "viewed") await notifyRecipient(next.id);
-  else if (next && !next.viewedAt) await notifyRecipient(next.id, { reminder: true });
 }

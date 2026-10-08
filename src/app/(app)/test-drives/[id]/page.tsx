@@ -29,7 +29,9 @@ import {
 } from "@/app/actions/testDrives";
 import { PageHeader } from "@/components/page-header";
 import { SaveForm, SaveButton } from "@/components/SaveForm";
+import ConfirmDelete from "@/components/ConfirmDelete";
 import { Surface } from "@/components/visual-system";
+import { ConflictAwareForm } from "@/components/ConflictAwareForm";
 
 export const dynamic = "force-dynamic";
 
@@ -149,7 +151,12 @@ export default async function TestDriveDetailPage({ params }: { params: Promise<
               <h2 className="font-semibold">Booking and vehicle assignment</h2>
             </div>
             {canManage && upcoming ? (
-              <SaveForm action={updateTestDriveBooking.bind(null, booking.id)} success="Booking saved" resetOnSuccess={false} className="mt-4 grid gap-3 sm:grid-cols-2">
+              <ConflictAwareForm
+                action={updateTestDriveBooking.bind(null, booking.id)}
+                conflictTitle="Salesperson unavailable"
+                successMessage="Booking updated"
+                className="mt-4 grid gap-3 sm:grid-cols-2"
+              >
                 <div>
                   <label className="label">Branch / location</label>
                   <input name="branch" className="input" required defaultValue={booking.branch} />
@@ -182,8 +189,8 @@ export default async function TestDriveDetailPage({ params }: { params: Promise<
                   <label className="label">Expected return</label>
                   <input type="datetime-local" name="expectedReturnAt" className="input" required defaultValue={inputDate(booking.expectedReturnAt)} />
                 </div>
-                <div className="sm:col-span-2 text-right"><SaveButton className="btn-secondary btn-sm">Save booking</SaveButton></div>
-              </SaveForm>
+                <div className="sm:col-span-2 text-right"><button className="btn-secondary btn-sm">Save booking</button></div>
+              </ConflictAwareForm>
             ) : (
               <div className="mt-4 grid gap-3 text-sm sm:grid-cols-2">
                 <p><span className="text-muted-foreground">Branch:</span> {booking.branch}</p>
@@ -369,10 +376,19 @@ export default async function TestDriveDetailPage({ params }: { params: Promise<
                 <input name="reason" className="input" placeholder="No-show note (optional)" />
                 <SaveButton className="btn-secondary w-full">Mark no-show</SaveButton>
               </SaveForm>
-              <SaveForm action={cancelTestDrive.bind(null, booking.id)} success="Booking cancelled" className="space-y-2">
-                <textarea name="reason" className="input" rows={2} required placeholder="Cancellation reason" />
-                <SaveButton className="btn-danger w-full" pendingLabel="Cancelling…">Cancel booking</SaveButton>
-              </SaveForm>
+              <ConfirmDelete
+                action={cancelTestDrive.bind(null, booking.id)}
+                title={`Cancel test drive ${booking.reference}?`}
+                description="The booking and its calendar entry are cancelled."
+                trigger="Cancel booking"
+                triggerClass="btn-danger w-full"
+                confirmLabel="Cancel booking"
+                dismissLabel="Keep booking"
+                success="Booking cancelled"
+                reasonLabel="Cancellation reason"
+                reasonPlaceholder="e.g. Customer rescheduled by phone"
+                pendingLabel="Cancelling…"
+              />
             </Surface>
           )}
 

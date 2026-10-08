@@ -94,7 +94,7 @@ test("a declared party beats the name guess", () => {
 });
 
 test("the editor names a party rather than showing an empty recipient", () => {
-  assert.equal(recipientLabel(newRecipient({ name: "", party: "denago" })), "Denago (whoever sends it)");
+  assert.equal(recipientLabel(newRecipient({ name: "", party: "denago" })), "Our team (whoever sends it)");
   assert.equal(recipientLabel(newRecipient({ name: "", party: "customer" })), "The customer");
   assert.equal(recipientLabel(newRecipient({ name: "Anna", party: "custom" })), "Anna");
   // The dropdown said "Unassigned" with nothing to pick, because an unnamed

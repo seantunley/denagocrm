@@ -7,10 +7,11 @@ import {
   type ComponentType,
 } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { unstable_rethrow, useRouter } from "next/navigation";
 import {
   CalendarDays,
   CalendarPlus,
+  CalendarX2,
   Car,
   Check,
   CheckCircle2,
@@ -35,6 +36,7 @@ import { toast } from "sonner";
 import { isFutureDay } from "@/lib/activityDay";
 import { useActivityTypes } from "@/components/ActivityTypesProvider";
 import { findActivityType, type ActivityType } from "@/lib/activityTypes";
+import { CALENDAR_DEFAULT_VIEW, inDefaultCalendarView } from "@/lib/calendarFilter";
 import {
   cancelActivity,
   completeActivity,
@@ -53,14 +55,23 @@ import {
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { shiftDateKey } from "@/lib/calendarDates";
 import { cn } from "@/lib/utils";
+import { AvailabilityConflictDialog } from "@/components/AvailabilityConflictDialog";
+import ConfirmActionDialog from "@/components/ConfirmActionDialog";
 
 export type CalendarWorkspaceEvent = {
   id: string;
+  recordId: string;
   dueDate: string;
+  endDate: string | null;
   dateKey: string;
-  href: string;
+  /** The lead or contact it belongs to; null when it is not linked to one. */
+  href: string | null;
   summary: string;
   time: string | null;
+  endTime: string | null;
+  allDay: boolean;
+  availabilityBlock: boolean;
+  continuation: boolean;
   status: string;
   overdue: boolean;
   type: string;
@@ -69,7 +80,10 @@ export type CalendarWorkspaceEvent = {
   context: string | null;
   phone: string | null;
   email: string | null;
+  /** Everyone at it as one label ("Sean Tunley, Donovan Hodgman"), owner first. */
   assignee: string;
+  /** The same people, for the owner filter. */
+  people: string[];
   location: string | null;
   note: string | null;
   dateLabel: string;
@@ -119,11 +133,13 @@ const EVENT_TYPES: Record<
     tone: "border-emerald-500/25 bg-emerald-500/10 text-emerald-200",
     dot: "bg-emerald-400",
   },
+  // Meetings, test drives and blocked time are the calendar's default view (#746),
+  // so these three must be told apart at a glance: violet, orange, dashed rose.
   meeting: {
     label: "Meeting",
     icon: Users,
-    tone: "border-orange-500/25 bg-orange-500/10 text-orange-200",
-    dot: "bg-orange-400",
+    tone: "border-violet-500/30 bg-violet-500/10 text-violet-200",
+    dot: "bg-violet-400",
   },
   test_drive: {
     label: "Test drive",
@@ -137,7 +153,15 @@ const EVENT_TYPES: Record<
     tone: "border-slate-500/25 bg-slate-500/10 text-slate-200",
     dot: "bg-slate-400",
   },
+  availability: {
+    label: "Unavailable",
+    icon: CalendarX2,
+    tone: "border-dashed border-rose-500/40 bg-rose-500/10 text-rose-100",
+    dot: "bg-rose-400",
+  },
 };
+
+const AVAILABILITY_TONE = EVENT_TYPES.availability.tone;
 
 const DEFAULT_EVENT_TYPE = {
   label: "Activity",
@@ -180,6 +204,23 @@ function isoWeekday(dateKey: string) {
   return weekday === 0 ? 7 : weekday;
 }
 
+function addHourLocal(dateKey: string, time: string) {
+  // One hour AFTER the start: formatting the start instant back unchanged made
+  // the default end equal the start, which the server refuses.
+  const value = new Date(new Date(`${dateKey}T${time}:00+02:00`).getTime() + 60 * 60 * 1000);
+  return value
+    .toLocaleString("sv-SE", {
+      timeZone: "Africa/Johannesburg",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+    })
+    .replace(" ", "T");
+}
+
 function EventCard({
   event,
   compact = false,
@@ -195,7 +236,7 @@ function EventCard({
 }) {
   const activityTypes = useActivityTypes();
   const config = eventType(event.type, activityTypes);
-  const Icon = event.workshop ? Wrench : config.icon;
+  const Icon = event.availabilityBlock ? CalendarX2 : event.workshop ? Wrench : config.icon;
   const done = event.status === "done";
 
   return (
@@ -216,9 +257,11 @@ function EventCard({
               ? "border-border bg-muted/45 text-muted-foreground"
               : event.overdue
                 ? "border-red-500/30 bg-red-500/10 text-red-100"
-                : event.workshop
-                  ? "border-emerald-500/25 bg-emerald-500/10 text-emerald-100"
-                  : config.tone,
+                : event.availabilityBlock
+                  ? AVAILABILITY_TONE
+                  : event.workshop
+                    ? "border-emerald-500/25 bg-emerald-500/10 text-emerald-100"
+                    : config.tone,
             compact ? "px-2 py-1.5" : "p-3",
             canManage && !done && "cursor-grab active:cursor-grabbing",
           )}
@@ -227,16 +270,30 @@ function EventCard({
           <div className="flex min-w-0 items-start gap-2">
             <Icon className={cn("mt-0.5 shrink-0", compact ? "size-3" : "size-4")} />
             <div className="min-w-0 flex-1">
-              <p className={cn("truncate font-medium", compact ? "text-[11px] leading-4" : "text-sm", done && "line-through")}>
-                {event.time && <span className="mr-1.5 tabular-nums opacity-75">{event.time}</span>}
-                {event.summary}
-              </p>
-              {!compact && (
-                <div className="mt-1.5 flex min-w-0 items-center gap-2 text-[11px] opacity-70">
-                  <span className="truncate">{event.who ?? config.label}</span>
-                  <span aria-hidden="true">·</span>
-                  <span className="truncate">{event.assignee}</span>
-                </div>
+              {event.availabilityBlock ? (
+                <>
+                  <p className={cn("truncate font-semibold", compact ? "text-[11px] leading-4" : "text-sm")}>
+                    {event.time && !event.continuation && <span className="mr-1.5 tabular-nums opacity-75">{event.time}</span>}
+                    {event.assignee} · {event.summary}
+                  </p>
+                  <p className={cn("mt-0.5 truncate opacity-75", compact ? "text-[10px] leading-4" : "text-[11px]")}>
+                    {event.note || "Unavailable"}
+                  </p>
+                </>
+              ) : (
+                <>
+                  <p className={cn("truncate font-medium", compact ? "text-[11px] leading-4" : "text-sm", done && "line-through")}>
+                    {event.time && <span className="mr-1.5 tabular-nums opacity-75">{event.time}</span>}
+                    {event.summary}
+                  </p>
+                  {!compact && (
+                    <div className="mt-1.5 flex min-w-0 items-center gap-2 text-[11px] opacity-70">
+                      <span className="truncate">{event.who ?? config.label}</span>
+                      <span aria-hidden="true">·</span>
+                      <span className="truncate">{event.assignee}</span>
+                    </div>
+                  )}
+                </>
               )}
             </div>
             {done && <Check className="size-3.5 shrink-0" />}
@@ -247,13 +304,13 @@ function EventCard({
         <div className="overflow-hidden rounded-lg">
           <div className="border-b border-border bg-card/95 p-3.5">
             <div className="flex items-start gap-2.5">
-              <span className={cn("mt-0.5 grid size-7 shrink-0 place-items-center rounded-lg border", event.workshop ? "border-emerald-500/25 bg-emerald-500/10 text-emerald-200" : config.tone)}>
+              <span className={cn("mt-0.5 grid size-7 shrink-0 place-items-center rounded-lg border", event.availabilityBlock ? AVAILABILITY_TONE : event.workshop ? "border-emerald-500/25 bg-emerald-500/10 text-emerald-200" : config.tone)}>
                 <Icon className="size-3.5" />
               </span>
               <div className="min-w-0 flex-1">
                 <p className="text-sm font-semibold leading-5 text-popover-foreground">{event.summary}</p>
                 <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[11px] text-muted-foreground">
-                  <span>{event.dateLabel}{event.time ? ` · ${event.time}` : " · All day"}</span>
+                  <span>{event.dateLabel}{event.allDay ? " · All day" : event.time ? ` · ${event.time}${event.endTime ? `–${event.endTime}` : ""}` : " · Continues"}</span>
                   <span className={cn(
                     "rounded-full px-1.5 py-px text-[9px] font-semibold uppercase tracking-wide",
                     done
@@ -355,7 +412,10 @@ export default function CalendarWorkspace({
   const [view, setView] = useState<CalendarViewMode>("month");
   const [query, setQuery] = useState("");
   const [owner, setOwner] = useState("");
-  const [type, setType] = useState("");
+  // The sales calendar opens on meetings, test drives and blocked time; the
+  // workshop calendar is all workshop bookings, so it keeps showing everything.
+  const defaultType = mode === "workshop" ? "" : CALENDAR_DEFAULT_VIEW;
+  const [type, setType] = useState(defaultType);
   const [attentionOnly, setAttentionOnly] = useState(false);
   const [selectedDate, setSelectedDate] = useState(() => {
     if (initialDate && days.some((day) => day.key === initialDate)) {
@@ -371,13 +431,18 @@ export default function CalendarWorkspace({
   const [dayDialog, setDayDialog] = useState<string | null>(null);
   const [draggingId, setDraggingId] = useState<string | null>(null);
   const [rescheduleValue, setRescheduleValue] = useState("");
+  const [conflictMessage, setConflictMessage] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
 
   const activityTypes = useActivityTypes();
+  // Hidden where the workspace has no automotive module (lib/activityTypes) —
+  // the headline card then counts meetings instead of test drives.
+  const testDrivesOn = !findActivityType(activityTypes, "test_drive")?.hidden;
+  const featuredType = testDrivesOn ? "test_drive" : "meeting";
 
   const owners = useMemo(
     () =>
-      Array.from(new Set(events.map((event) => event.assignee))).sort(),
+      Array.from(new Set(events.flatMap((event) => event.people))).sort(),
     [events],
   );
   const types = useMemo(
@@ -396,6 +461,7 @@ export default function CalendarWorkspace({
           event.context,
           event.assignee,
           event.location,
+          event.note,
           eventType(event.type, activityTypes).label,
         ]
           .filter(Boolean)
@@ -404,8 +470,10 @@ export default function CalendarWorkspace({
           .includes(needle);
       return (
         matchesQuery &&
-        (!owner || event.assignee === owner) &&
-        (!type || event.type === type) &&
+        (!owner || event.people.includes(owner)) &&
+        (type === CALENDAR_DEFAULT_VIEW
+          ? inDefaultCalendarView(event)
+          : !type || event.type === type) &&
         (!attentionOnly || event.overdue)
       );
     });
@@ -433,7 +501,7 @@ export default function CalendarWorkspace({
     (day) =>
       day.inMonth && (eventsByDate.get(day.key)?.length ?? 0) > 0,
   );
-  const filtersActive = Boolean(query || owner || type || attentionOnly);
+  const filtersActive = Boolean(query || owner || type !== defaultType || attentionOnly);
   const periodLabel =
     view === "week" && weekDays.length > 0
       ? `${weekDays[0].label} – ${weekDays.at(-1)?.label ?? weekDays[0].label}`
@@ -487,12 +555,12 @@ export default function CalendarWorkspace({
       featured:
         mode === "workshop"
           ? monthEvents.filter(happened).length
-          : monthEvents.filter((event) => event.type === "test_drive" && happened(event)).length,
+          : monthEvents.filter((event) => event.type === featuredType && happened(event)).length,
       completed: monthEvents.filter((event) => event.status === "done")
         .length,
       openSlots,
     };
-  }, [bookingCountsByDate, days, events, mode, slotConfig, todayKey]);
+  }, [bookingCountsByDate, days, events, featuredType, mode, slotConfig, todayKey]);
 
   function openEvent(event: CalendarWorkspaceEvent) {
     setSelectedEvent(event);
@@ -521,6 +589,7 @@ export default function CalendarWorkspace({
     }
     openQuickCreate("calendar", {
       dueDate: `${dateKey}T${defaultTime}`,
+      endDate: addHourLocal(dateKey, defaultTime),
       workshop: mode === "workshop",
       revalidate: basePath,
     });
@@ -550,37 +619,67 @@ export default function CalendarWorkspace({
     });
   }
 
+  function blockAvailability(dateKey = selectedDate) {
+    openQuickCreate("availability", {
+      dueDate: `${dateKey}T09:00`,
+      endDate: `${dateKey}T17:00`,
+      revalidate: basePath,
+    });
+  }
+
   function completeSelected() {
     if (!selectedEvent) return;
     const data = new FormData();
     data.set("revalidate", basePath);
     runAction(
-      () => completeActivity(selectedEvent.id, data),
+      () => completeActivity(selectedEvent.recordId, data),
       "Activity completed",
     );
   }
 
-  function cancelSelected() {
+  // Behind a confirmation: one click on Cancel took a festival day off two
+  // people's calendars by mistake.
+  async function confirmCancelSelected() {
     if (!selectedEvent) return;
-    runAction(
-      () => cancelActivity(selectedEvent.id, basePath),
-      "Activity cancelled",
-    );
+    const result = await cancelActivity(selectedEvent.recordId, basePath);
+    if (!result?.error) {
+      setSelectedEvent(null);
+      router.refresh();
+    }
+    return result;
+  }
+
+  /**
+   * Run a reschedule and report it. A refusal comes back as a value (conflict
+   * dialog); anything THROWN — a dropped connection, a stale tab — is a toast,
+   * never an unhandled rejection that takes the calendar to its error boundary.
+   */
+  function runReschedule(recordId: string, when: string, success: string, after?: () => void) {
+    startTransition(async () => {
+      try {
+        const result = await rescheduleActivity(recordId, when);
+        if (!result.ok) {
+          setConflictMessage(result.error ?? "That time is not available.");
+          return;
+        }
+        toast.success(success);
+        after?.();
+        router.refresh();
+      } catch (error) {
+        unstable_rethrow(error);
+        toast.error("The calendar couldn't save that move — refresh the page and try again.");
+      }
+    });
   }
 
   function rescheduleSelected() {
     if (!selectedEvent || !rescheduleValue) return;
-    runAction(async () => {
-      const result = await rescheduleActivity(
-        selectedEvent.id,
-        rescheduleValue,
-      );
-      if (!result.ok) {
-        throw new Error(
-          result.error ?? "Could not reschedule activity",
-        );
-      }
-    }, "Activity rescheduled");
+    runReschedule(
+      selectedEvent.recordId,
+      rescheduleValue,
+      selectedEvent.availabilityBlock ? "Availability moved" : "Activity rescheduled",
+      () => setSelectedEvent(null),
+    );
   }
 
   function dropOnDate(dateKey: string, transferredId?: string) {
@@ -589,15 +688,13 @@ export default function CalendarWorkspace({
     if (!eventId) return;
     const event = events.find((item) => item.id === eventId);
     if (!event || event.dateKey === dateKey) return;
-    const when = event.time ? `${dateKey}T${event.time}` : dateKey;
-    runAction(async () => {
-      const result = await rescheduleActivity(event.id, when);
-      if (!result.ok) {
-        throw new Error(
-          result.error ?? "Could not reschedule activity",
-        );
-      }
-    }, `${event.summary} moved to ${dateKey}`);
+    // Move by the number of days the card was dragged, applied to the record's
+    // OWN start: an all-day or multi-day block keeps its local start time, and
+    // grabbing day 3 of a 5-day block and dropping it one day later moves the
+    // whole block one day — not to start on the drop day.
+    const days = Math.round((Date.parse(`${dateKey}T00:00:00Z`) - Date.parse(`${event.dateKey}T00:00:00Z`)) / 86_400_000);
+    const when = new Date(Date.parse(event.dueDate) + days * 86_400_000).toISOString();
+    runReschedule(event.recordId, when, `${event.summary} moved to ${dateKey}`);
   }
 
   function navigateWeek(direction: -1 | 1) {
@@ -674,10 +771,10 @@ export default function CalendarWorkspace({
             tone: "primary",
           },
           {
-            label: "Test drives",
+            label: testDrivesOn ? "Test drives" : "Meetings",
             value: stats.featured,
             detail: "this month",
-            icon: Car,
+            icon: testDrivesOn ? Car : Users,
             tone: "warning",
           },
           {
@@ -733,10 +830,16 @@ export default function CalendarWorkspace({
           </Link>
         </div>
         {canManage && (
-          <Button type="button" onClick={() => createActivity()}>
-            <CalendarPlus className="size-4" />
-            Schedule
-          </Button>
+          <>
+            <Button type="button" variant="outline" onClick={() => blockAvailability()}>
+              <CalendarX2 className="size-4" />
+              Block time
+            </Button>
+            <Button type="button" onClick={() => createActivity()}>
+              <CalendarPlus className="size-4" />
+              Schedule
+            </Button>
+          </>
         )}
         </>}
         stats={statCards}
@@ -774,7 +877,12 @@ export default function CalendarWorkspace({
               className="input h-10 sm:w-40"
               aria-label="Filter by activity type"
             >
-              <option value="">All activity types</option>
+              {mode !== "workshop" && (
+                <option value={CALENDAR_DEFAULT_VIEW}>
+                  {testDrivesOn ? "Meetings, test drives & blocked time" : "Meetings & blocked time"}
+                </option>
+              )}
+              <option value="">All activities</option>
               {types.map((value) => (
                 <option key={value} value={value}>
                   {eventType(value, activityTypes).label}
@@ -802,7 +910,7 @@ export default function CalendarWorkspace({
                 onClick={() => {
                   setQuery("");
                   setOwner("");
-                  setType("");
+                  setType(defaultType);
                   setAttentionOnly(false);
                 }}
                 className="btn h-10 text-muted-foreground"
@@ -960,14 +1068,16 @@ export default function CalendarWorkspace({
               </p>
             </div>
             {canManage && (
-              <Button
-                type="button"
-                size="sm"
-                onClick={() => createActivity(selectedDate)}
-              >
-                <CalendarPlus className="size-4" />
-                Add
-              </Button>
+              <div className="flex gap-2">
+                <Button type="button" size="sm" variant="outline" onClick={() => blockAvailability(selectedDate)}>
+                  <CalendarX2 className="size-4" />
+                  Block
+                </Button>
+                <Button type="button" size="sm" onClick={() => createActivity(selectedDate)}>
+                  <CalendarPlus className="size-4" />
+                  Add
+                </Button>
+              </div>
             )}
           </div>
           <div className="space-y-2">
@@ -1339,13 +1449,15 @@ export default function CalendarWorkspace({
                   </span>
                 </div>
                 <DialogTitle className="mt-2 text-xl leading-tight">
-                  {selectedEvent.summary}
+                  {selectedEvent.availabilityBlock ? `${selectedEvent.assignee} · ${selectedEvent.summary}` : selectedEvent.summary}
                 </DialogTitle>
                 <DialogDescription>
                   {selectedEvent.dateLabel}
-                  {selectedEvent.time
-                    ? ` at ${selectedEvent.time}`
-                    : " · All day"}
+                  {selectedEvent.allDay
+                    ? " · All day"
+                    : selectedEvent.time
+                      ? ` at ${selectedEvent.time}${selectedEvent.endTime ? `–${selectedEvent.endTime}` : ""}`
+                      : " · Continues"}
                 </DialogDescription>
               </DialogHeader>
 
@@ -1438,27 +1550,42 @@ export default function CalendarWorkspace({
                 )}
 
               <div className="flex flex-col-reverse gap-2 border-t border-border pt-4 sm:flex-row sm:items-center sm:justify-between">
-                <Button asChild variant="outline">
-                  <Link href={selectedEvent.href}>Open record</Link>
-                </Button>
+                {/* Only when there is a record: an unlinked meeting used to link
+                    back to /calendar, so the button did nothing. */}
+                {selectedEvent.href ? (
+                  <Button asChild variant="outline">
+                    <Link href={selectedEvent.href}>Open record</Link>
+                  </Button>
+                ) : (
+                  <span />
+                )}
                 {canManage &&
                   selectedEvent.status === "planned" && (
                     <div className="flex gap-2">
-                      <Button
-                        type="button"
-                        variant="outline"
-                        onClick={cancelSelected}
-                        disabled={isPending}
-                        className="text-red-300 hover:text-red-200"
-                      >
-                        <XCircle className="size-4" />
-                        Cancel
-                      </Button>
+                      <ConfirmActionDialog
+                        trigger={
+                          <Button
+                            type="button"
+                            variant="outline"
+                            disabled={isPending}
+                            className="text-red-300 hover:text-red-200"
+                          >
+                            <XCircle className="size-4" />
+                            Cancel
+                          </Button>
+                        }
+                        title={`Cancel “${selectedEvent.summary}”?`}
+                        description={`It comes off the calendar for ${selectedEvent.assignee}.`}
+                        confirmLabel="Cancel it"
+                        destructive
+                        success="Activity cancelled"
+                        onConfirm={confirmCancelSelected}
+                      />
                       {/* Not offered before the day arrives. `selectedEvent.dueDate`
                           is an ISO STRING here, hence the Date(). finishActivity
                           refuses it server-side either way; this stops the calendar
                           presenting a button that can only fail. */}
-                      {!isFutureDay(new Date(selectedEvent.dueDate)) && (
+                      {!selectedEvent.availabilityBlock && !isFutureDay(new Date(selectedEvent.dueDate)) && (
                         <Button
                           type="button"
                           onClick={completeSelected}
@@ -1475,6 +1602,12 @@ export default function CalendarWorkspace({
           )}
         </ResponsiveDialogContent>
       </Dialog>
+
+      <AvailabilityConflictDialog
+        message={conflictMessage}
+        onClose={() => setConflictMessage(null)}
+        title={selectedEvent?.availabilityBlock ? "Cannot block this time" : "Staff member unavailable"}
+      />
     </div>
   );
 }

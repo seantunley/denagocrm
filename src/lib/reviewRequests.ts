@@ -2,28 +2,33 @@ import { prisma } from "./db";
 import { customerRecordTenantId } from "./customerRecordTenant";
 import { resolveTenantActor } from "./tenantActor";
 import { resolveTenantCredential } from "./settings";
-import { currentTenantScope } from "./tenantScope";
 import { sendEmail } from "./email";
 import { logAudit } from "./audit";
 import { tenantEmailContent } from "./signing/signingEmail";
 import { canContactPerson, describeBlockedReason } from "./communicationPolicy";
+import type { ModuleSendOutcome } from "./journeyTypes";
 
 const REVIEW_MARKER = "Google review request";
 
 /**
- * Asks a happy customer for a Google review — sent ONLY on new-cart delivery
- * or job-card completion (the two moments Sean chose). One request per
- * customer per 90 days, and only when a Place ID + SMTP are configured.
+ * Asks a happy customer for a Google review. Sent ONLY by a journey's "Send
+ * Google review request" step — the ready-made one listens for a completed job
+ * card or a new delivery (the two moments Sean chose), and is off until the owner
+ * switches it on in Journeys. One request per customer per 90 days, and only
+ * when a Place ID + SMTP are configured.
+ *
+ * `tenantId` is the journey run's workspace, named in every lookup here.
  */
 export async function sendReviewRequest(
   contactId: string,
   occasion: "delivery" | "service",
-  refText: string
-): Promise<boolean> {
-  const placeId = await resolveTenantCredential(currentTenantScope()?.tenantId ?? null, "GOOGLE_PLACE_ID");
-  if (!placeId) return false;
-  const contact = await prisma.contact.findUnique({ where: { id: contactId } });
-  if (!contact?.email) return false;
+  refText: string,
+  tenantId: string,
+): Promise<ModuleSendOutcome> {
+  const placeId = await resolveTenantCredential(tenantId, "GOOGLE_PLACE_ID");
+  if (!placeId) return { kind: "skipped", reason: "no Google Place ID is set up" };
+  const contact = await prisma.contact.findFirst({ where: { id: contactId, tenantId } });
+  if (!contact?.email) return { kind: "skipped", reason: "the customer has no email address" };
 
   // A review ask is solicitation: marketing opt-out, withdrawn marketing consent
   // and the portal "Marketing emails" switch all refuse it, as does Trash.
@@ -40,18 +45,19 @@ export async function sendReviewRequest(
       contactId,
       userName: "System",
     });
-    return false;
+    return { kind: "skipped", reason: describeBlockedReason(verdict.reason) };
   }
 
   // Don't nag: one review ask per customer per 90 days
   const recent = await prisma.communication.findFirst({
     where: {
+      tenantId,
       contactId,
       subject: { contains: REVIEW_MARKER },
       occurredAt: { gte: new Date(Date.now() - 90 * 24 * 60 * 60 * 1000) },
     },
   });
-  if (recent) return false;
+  if (recent) return { kind: "skipped", reason: "already asked in the last 90 days" };
 
   const reviewLink = `https://search.google.com/local/writereview?placeid=${encodeURIComponent(placeId)}`;
   // The workspace's own editable review-request email (Settings → Email
@@ -67,7 +73,7 @@ export async function sendReviewRequest(
     },
   );
   const res = await sendEmail({ to: contact.email, subject: message.subject, text: message.text, html: message.html });
-  if (!res.ok) return false;
+  if (!res.ok) return { kind: "failed", reason: "the email provider refused it" };
 
   const firstUser = await resolveTenantActor();
   if (firstUser) {
@@ -91,5 +97,5 @@ export async function sendReviewRequest(
     contactId,
     userName: "System",
   });
-  return true;
+  return { kind: "sent" };
 }

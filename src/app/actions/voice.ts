@@ -1,0 +1,90 @@
+"use server";
+
+import { requireAnyPermission, requirePermission, canAccessLead } from "@/lib/permissions";
+import { ASK_LIMIT_MESSAGE, ASSISTANT_PERMISSIONS, assistantVoiceAllowed } from "@/lib/assistantUser";
+import { withActingStaffScope } from "@/lib/actingScope";
+import { transcribeVoiceChecked } from "@/lib/transcribe";
+import { isElevenLabsConfigured } from "@/lib/elevenlabs";
+import { notHeard } from "@/lib/voiceNotHeard";
+import { codexRespond, isCodexConnected } from "@/lib/codex";
+import { johannesburgDateKey } from "@/lib/activityDay";
+import { logError } from "@/lib/errorLog";
+import { safeCodexError } from "@/lib/codexErrors";
+import { isModuleEnabled } from "@/lib/modules/enabled";
+import { DEBRIEF_INSTRUCTIONS, parseDebrief, plainDebrief, type DebriefDraft } from "@/lib/voiceDebrief";
+
+/** ~3 minutes of opus is well under this; anything bigger isn't a voice note. */
+const MAX_AUDIO_BYTES = 8 * 1024 * 1024;
+
+type Heard = { ok: true; text: string } | { ok: false; error: string };
+
+/**
+ * The recording → text. The audio goes to the transcriber and is dropped: it is
+ * never written to storage, the database or a log (POPIA, and the no-client-data
+ * logging rule). Only the text comes back.
+ */
+async function hear(formData: FormData): Promise<Heard> {
+  const audio = formData.get("audio");
+  if (!(audio instanceof File) || audio.size === 0) return { ok: false, error: "Nothing was recorded — try again." };
+  if (audio.size > MAX_AUDIO_BYTES) return { ok: false, error: "That recording is too long — keep it under three minutes." };
+  if (!audio.type.startsWith("audio/") && !audio.type.startsWith("video/webm")) {
+    return { ok: false, error: "That isn't a voice recording." };
+  }
+  const heard = await transcribeVoiceChecked(Buffer.from(await audio.arrayBuffer()), audio.type);
+  if (heard && "text" in heard) return { ok: true, text: heard.text };
+  return { ok: false, error: notHeard(heard, await isElevenLabsConfigured()) };
+}
+
+/** Speech → text for "Ask the CRM". */
+export async function transcribeQuestion(formData: FormData): Promise<Heard> {
+  return withActingStaffScope(async () => {
+    const user = await requireAnyPermission(...ASSISTANT_PERMISSIONS);
+    // Part of Ask the CRM, so behind the same module as asking does — checked
+    // here, before any audio is sent, or a direct call would spend the
+    // workspace's ElevenLabs credit with the feature switched off.
+    if (!(await isModuleEnabled("automation"))) {
+      return { ok: false, error: "Ask the CRM is part of the Automation & AI module, which is off for this workspace." };
+    }
+    // The person's one ask limit, before any audio leaves: a direct call in a
+    // loop would otherwise spend transcription credit without end.
+    if (!(await assistantVoiceAllowed(user.id))) return { ok: false, error: ASK_LIMIT_MESSAGE };
+    return hear(formData);
+  });
+}
+
+/**
+ * A spoken call/visit debrief → a DRAFT activity for the person to check. Saves
+ * nothing: logVoiceDebrief does that, after they press Save.
+ */
+export async function draftVoiceDebrief(
+  formData: FormData,
+): Promise<{ ok: true; draft: DebriefDraft; summarised: boolean } | { ok: false; error: string }> {
+  return withActingStaffScope(async () => {
+    const user = await requirePermission("activities.manage");
+    const leadId = String(formData.get("leadId") ?? "");
+    if (!leadId || !(await canAccessLead(user, leadId))) return { ok: false, error: "You don't have access to that lead." };
+    if (!(await assistantVoiceAllowed(user.id))) return { ok: false, error: ASK_LIMIT_MESSAGE };
+    const heard = await hear(formData);
+    if (!heard.ok) return heard;
+    // The ChatGPT summary is part of Automation & AI; with it off, the person
+    // still gets their words back as a plain draft.
+    if (!(await isModuleEnabled("automation")) || !(await isCodexConnected())) {
+      return { ok: true, draft: plainDebrief(heard.text), summarised: false };
+    }
+    const reply = await codexRespond({
+      instructions: DEBRIEF_INSTRUCTIONS,
+      prompt: heard.text,
+      reasoningEffort: "low",
+      verbosity: "low",
+      timeoutMs: 45_000,
+    });
+    const today = johannesburgDateKey(new Date());
+    const draft = "error" in reply ? null : parseDebrief(reply.text, heard.text, today);
+    if (!draft) {
+      // A reason only — never the transcript.
+      await logError("voice-debrief", "summary step failed", "error" in reply ? safeCodexError(reply.error) : "unusable reply");
+      return { ok: true, draft: plainDebrief(heard.text), summarised: false };
+    }
+    return { ok: true, draft, summarised: true };
+  });
+}

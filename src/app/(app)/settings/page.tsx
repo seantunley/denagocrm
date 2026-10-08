@@ -1,7 +1,7 @@
 import { prisma } from "@/lib/db";
 import { actingTenantMemberIds } from "@/lib/tenantActor";
 import { SaveForm, SaveButton } from "@/components/SaveForm";
-import { getActiveTenantId, requireUser } from "@/lib/auth";
+import { getActiveTenantId, isTenantOwner, requireUser } from "@/lib/auth";
 import { redirect } from "next/navigation";
 import {
   saveMyProfile,
@@ -10,7 +10,9 @@ import {
   saveWorkshopSettings,
   saveNotificationPrefs,
 } from "@/app/actions/settings";
-import { signatureCompanyFrom, buildSignature } from "@/lib/signature";
+import { signatureCompanyFrom, buildSignature, parseSignatureDesign, SIGNATURE_DESIGN_KEY } from "@/lib/signature";
+import SignatureDesignEditor from "@/components/SignatureDesignEditor";
+import { getSetting } from "@/lib/settings";
 import { getCompanyProfile } from "@/lib/companyProfile";
 import { tenantOrigin } from "@/lib/tenantOrigin";
 import { AddUserForm, ChangePasswordForm } from "@/components/TeamForms";
@@ -20,22 +22,11 @@ import {
   createTemplate,
   updateTemplate,
   deleteTemplate,
-  saveSigningEmailTemplate,
-  resetSigningEmailTemplate,
-  previewSigningEmailTemplate,
   saveEmailHeaderStyle,
+  saveEmailOpenTracking,
 } from "@/app/actions/emails";
-import {
-  EMAIL_HEADER_STYLES,
-  parseEmailHeaderStyle,
-  SIGNING_EMAILS,
-  SIGNING_EMAIL_KINDS,
-  SIGNING_FIELD_HELP,
-  parseStoredSigningTemplate,
-  type SigningEmailKind,
-} from "@/lib/signing/emailTemplates";
-import { sanitizeEmailDoc, textToEmailDoc } from "@/lib/signing/emailDoc";
-import { EmailTemplateEditor, SmsTemplateEditor } from "@/components/settings/EmailTemplateEditor";
+import { EMAIL_OPEN_TRACKING_KEY, openTrackingOn } from "@/lib/emailOpenTracking";
+import { EMAIL_HEADER_STYLES, parseEmailHeaderStyle, SIGNING_EMAIL_KINDS } from "@/lib/signing/emailTemplates";
 import TestEmailButton from "@/components/TestEmailButton";
 import ConfirmDelete from "@/components/ConfirmDelete";
 import ClearSecret from "@/components/ClearSecret";
@@ -55,6 +46,9 @@ import { ABSOLUTE_SESSION_HOURS } from "@/lib/session";
 import { decryptValue } from "@/lib/settings";
 import { PUSH_KINDS } from "@/lib/push";
 import Link from "next/link";
+import CustomerMessageEditors from "@/components/CustomerMessageEditors";
+import EmailDesignCards from "@/components/EmailDesignCards";
+import { emailKindsAt, MESSAGE_PLACES, textKindsAt } from "@/lib/customerMessagePlaces";
 import { getNextStepScheduling } from "@/lib/nextStepConfig";
 import { saveNextStepScheduling } from "@/app/actions/settings";
 import ProductsPage from "../products/page";
@@ -73,15 +67,19 @@ import ProfileSettingsForms from "@/components/ProfileSettingsForms";
 export default async function SettingsPage({
   searchParams,
 }: {
-  searchParams: Promise<{ tab?: string; section?: string }>;
+  searchParams: Promise<{ tab?: string; section?: string; open?: string }>;
 }) {
   const currentUser = await requireUser();
-  const isAdmin = currentUser.role === "owner";
+  // The WORKSPACE's owner — the tabs here configure this workspace, and every
+  // action behind them now checks requireTenantOwner(). `role === "owner"` is the
+  // platform owner, which a workspace's own owner never is.
+  const isAdmin = await isTenantOwner();
   // The signature PREVIEW must render what the send path renders, or the screen
   // where you check your signature is the one screen that lies about it.
   const profile = await getCompanyProfile();
   // The preview must render what the send path renders, glyph URLs included.
-  const signatureCompany = signatureCompanyFrom(profile, await tenantOrigin(await getActiveTenantId()));
+  const signatureDesign = parseSignatureDesign(await getSetting(SIGNATURE_DESIGN_KEY));
+  const signatureCompany = signatureCompanyFrom(profile, await tenantOrigin(await getActiveTenantId()), signatureDesign);
   const enabled = await getEnabledModuleIds();
   const automotiveOn = enabled.has("automotive");
   const commerceOn = enabled.has("commerce");
@@ -93,10 +91,13 @@ export default async function SettingsPage({
     ? SETTINGS_TABS
     : SETTINGS_TABS.filter((t) => t.key === "account");
   const visibleGroups = visibleSettingsGroups(
-    { isOwner: isAdmin, permissions: await getUserPermissionList(currentUser) },
+    { isOwner: isAdmin, isPlatformOwner: currentUser.role === "owner", permissions: await getUserPermissionList(currentUser) },
     enabled,
   );
-  const { tab: rawTab, section } = await searchParams;
+  const { tab: rawTab, section, open } = await searchParams;
+  // One message template, opened — linked from each automation on Settings →
+  // Automatic jobs & messages ("see and edit what it sends").
+  const openTemplate = open && (SIGNING_EMAIL_KINDS as string[]).includes(open) ? open : null;
   // Deep-linkable sections inside a tab. The account menu links straight to
   // "change password", and a <details> that arrives closed has not answered the
   // request — the person still has to find and open it.
@@ -154,21 +155,18 @@ export default async function SettingsPage({
   const regional = regionalFrom(
     Object.fromEntries(Object.entries(REGIONAL_KEYS).map(([field, key]) => [field, setting(key)])),
   );
-  // The signing emails' edited copies, read by EXPLICIT tenant — the same key the
-  // send path reads by the signature request's tenantId (lib/signing/signingEmail.ts).
+  // The email settings, read by EXPLICIT tenant — the same key the send path reads
+  // (lib/signing/signingEmail.ts). The message editors read their own copies
+  // (CustomerMessageEditors).
   const signingTenantId = isAdmin && tab === "email" ? await getActiveTenantId() : null;
   const signingOverrides = signingTenantId
     ? await basePrisma.appSetting.findMany({
-        where: {
-          tenantId: signingTenantId,
-          key: { in: [...SIGNING_EMAIL_KINDS.map((k) => SIGNING_EMAILS[k].settingKey), "EMAIL_HEADER_STYLE"] },
-        },
+        where: { tenantId: signingTenantId, key: { in: ["EMAIL_HEADER_STYLE", EMAIL_OPEN_TRACKING_KEY] } },
         select: { key: true, value: true },
       })
     : [];
-  const signingTemplate = (kind: SigningEmailKind) =>
-    parseStoredSigningTemplate(signingOverrides.find((s) => s.key === SIGNING_EMAILS[kind].settingKey)?.value, kind);
   const emailHeaderStyle = parseEmailHeaderStyle(signingOverrides.find((s) => s.key === "EMAIL_HEADER_STYLE")?.value);
+  const emailOpenTracking = openTrackingOn(signingOverrides.find((s) => s.key === EMAIL_OPEN_TRACKING_KEY)?.value);
   const isOwner = isAdmin;
   // The System Log is TENANT-SCOPED. `basePrisma` bypasses the tenant guard, so the
   // unfiltered read this replaced handed every tenant owner every other tenant's
@@ -332,23 +330,41 @@ export default async function SettingsPage({
                 <span className="btn-secondary btn-sm">View &amp; edit</span>
               </summary>
               <div className="px-5 pb-5 space-y-4">
-                <div
-                  className="rounded-lg bg-white p-4 overflow-x-auto"
-                  dangerouslySetInnerHTML={{ __html: buildSignature(currentUser, signatureCompany) }}
+                <SignatureDesignEditor
+                  user={{ name: currentUser.name, email: currentUser.email, mobile: currentUser.mobile, jobTitle: currentUser.jobTitle }}
+                  company={signatureCompany}
+                  initial={signatureDesign}
+                  canEdit={isAdmin}
                 />
-                <SaveForm success="Profile saved" resetOnSuccess={false} action={saveMyProfile} className="space-y-3 max-w-md">
-                  <div>
-                    <label className="label">Custom signature HTML (optional)</label>
-                    <textarea
-                      name="signatureHtml"
-                      className="input font-mono text-xs"
-                      rows={4}
-                      defaultValue={currentUser.signatureHtml ?? ""}
-                      placeholder="Leave blank to use the branded signature (recommended)."
-                    />
+                <details className="rounded-lg border border-border">
+                  <summary className="px-4 py-2.5 cursor-pointer text-sm text-muted-foreground">
+                    Advanced: use your own HTML instead{currentUser.signatureHtml?.trim() ? " (in use on your emails)" : ""}
+                  </summary>
+                  <div className="px-4 pb-4 space-y-3">
+                    {currentUser.signatureHtml?.trim() && (
+                      <div
+                        className="rounded-lg bg-white p-4 overflow-x-auto"
+                        dangerouslySetInnerHTML={{ __html: buildSignature(currentUser, signatureCompany) }}
+                      />
+                    )}
+                    <SaveForm success="Profile saved" resetOnSuccess={false} action={saveMyProfile} className="space-y-3 max-w-md">
+                      <div>
+                        <label className="label">Custom signature HTML (optional)</label>
+                        <textarea
+                          name="signatureHtml"
+                          className="input font-mono text-xs"
+                          rows={4}
+                          defaultValue={currentUser.signatureHtml ?? ""}
+                          placeholder="Leave blank to use the workspace signature (recommended)."
+                        />
+                        <p className="mt-1 text-xs text-muted-foreground">
+                          Replaces the workspace signature on your emails only.
+                        </p>
+                      </div>
+                      <SaveButton className="btn-primary btn-sm">Save</SaveButton>
+                    </SaveForm>
                   </div>
-                  <SaveButton className="btn-primary btn-sm">Save</SaveButton>
-                </SaveForm>
+                </details>
               </div>
             </details>
           </div>
@@ -399,12 +415,14 @@ export default async function SettingsPage({
                     </td>
                     {isOwner && (
                       <td className="text-right">
-                        {u.id !== currentUser.id && (
+                        {/* A platform owner's account is the platform's to manage (security.ts). */}
+                        {u.id !== currentUser.id && (currentUser.role === "owner" || u.role !== "owner") && (
                           <OwnerUserControls
                             userId={u.id}
                             name={u.name}
                             role={u.role as "owner" | "member"}
                             has2fa={Boolean(u.totpEnabledAt || u.emailOtpEnabled)}
+                            canChangeRole={currentUser.role === "owner"}
                           />
                         )}
                       </td>
@@ -729,35 +747,16 @@ export default async function SettingsPage({
             </Row>
 
             {automotiveOn && (
-            <Row
-              title="Service reminders to customers"
-              status={
-                setting("SERVICE_REMINDER_ENABLED") === "true" ? (
-                  <span className="badge bg-emerald-500/15 text-emerald-300">On</span>
-                ) : (
-                  <span className="badge bg-muted text-muted-foreground">Off</span>
-                )
-              }
-            >
+            <Row title="Service reminders to customers">
               <p className="text-xs text-muted-foreground mb-4">
-                Customers whose vehicle is due for a service get one automatic email per
-                due-cycle. Placeholders: <code>{"{{first_name}}"}</code>,{" "}
-                <code>{"{{model}}"}</code>, <code>{"{{due_date}}"}</code>,{" "}
+                Sent by the ready-made journey “Service-due reminder” — one email per due-cycle, off
+                until you switch it on in{" "}
+                <Link href="/journeys" className="text-primary underline">Journeys</Link>. It uses the
+                template picked here, or the “Service reminder” template if none is. Placeholders:{" "}
+                <code>{"{{first_name}}"}</code>, <code>{"{{model}}"}</code>, <code>{"{{due_date}}"}</code>,{" "}
                 <code>{"{{due_km}}"}</code>, <code>{"{{current_km}}"}</code>.
               </p>
-              <SaveForm success="Service reminder settings saved" resetOnSuccess={false} action={saveServiceReminderSettings} className="flex items-end gap-3 flex-wrap">
-                <div className="flex items-center gap-2 pb-2">
-                  <input
-                    type="checkbox"
-                    name="enabled"
-                    id="sr-enabled"
-                    defaultChecked={setting("SERVICE_REMINDER_ENABLED") === "true"}
-                    className="h-4 w-4"
-                  />
-                  <label htmlFor="sr-enabled" className="text-sm text-muted-foreground">
-                    Enabled
-                  </label>
-                </div>
+              <SaveForm success="Service reminder template saved" resetOnSuccess={false} action={saveServiceReminderSettings} className="flex items-end gap-3 flex-wrap">
                 <div className="flex-1 min-w-56">
                   <label className="label">Email template</label>
                   <select
@@ -816,67 +815,45 @@ export default async function SettingsPage({
                     Pick Dark or Brand colour if your logo is drawn in white.
                   </span>
                 </SaveForm>
-                {[...new Set(SIGNING_EMAIL_KINDS.map((k) => SIGNING_EMAILS[k].group))].map((group) => (
-                <div key={group} className="mb-4">
-                <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-2">{group}</div>
-                <div className="space-y-3">
-                  {SIGNING_EMAIL_KINDS.filter((k) => SIGNING_EMAILS[k].group === group).map((kind) => {
-                    const def = SIGNING_EMAILS[kind];
-                    const saved = signingTemplate(kind);
-                    return (
-                      <details key={kind} className="rounded-lg border border-border bg-muted/40">
-                        <summary className="px-4 py-2.5 cursor-pointer text-sm font-medium flex items-center gap-2">
-                          {def.label}
-                          <span className="badge bg-muted text-muted-foreground">{def.channel === "sms" ? "SMS" : "Email"}</span>
-                          <span className="badge bg-muted text-muted-foreground">{saved ? "Customised" : "Default"}</span>
-                        </summary>
-                        <div className="p-4 pt-1 space-y-2">
-                          <p className="text-xs text-muted-foreground">{def.description}</p>
-                          <SaveForm
-                            // Remount after a reset so the fields show the default again.
-                            key={saved ? "custom" : "default"}
-                            success={`${def.label} saved`}
-                            resetOnSuccess={false}
-                            action={saveSigningEmailTemplate.bind(null, kind)}
-                            className="space-y-2"
-                          >
-                            {def.channel === "sms" ? (
-                              <SmsTemplateEditor
-                                initialBody={saved?.body ?? def.body}
-                                fields={def.fields}
-                                fieldHelp={SIGNING_FIELD_HELP}
-                                requiredField={def.action}
-                                preview={previewSigningEmailTemplate.bind(null, kind)}
-                              />
-                            ) : (
-                              <EmailTemplateEditor
-                                initialSubject={saved?.subject ?? def.subject}
-                                initialDoc={
-                                  (saved?.doc ? sanitizeEmailDoc(saved.doc, def.fields) : null) ??
-                                  textToEmailDoc(saved?.body ?? def.body, def.fields)
-                                }
-                                fields={def.fields}
-                                fieldHelp={SIGNING_FIELD_HELP}
-                                requiredField={def.action}
-                                preview={previewSigningEmailTemplate.bind(null, kind)}
-                                refreshKey={emailHeaderStyle}
-                              />
-                            )}
-                            <SaveButton className="btn-primary btn-sm">Save</SaveButton>
-                          </SaveForm>
-                          {saved && (
-                            <SaveForm success="Reset to default" action={resetSigningEmailTemplate.bind(null, kind)}>
-                              <SaveButton className="btn-secondary btn-sm">Reset to default</SaveButton>
-                            </SaveForm>
-                          )}
-                        </div>
-                      </details>
-                    );
-                  })}
+                <SaveForm success="Open tracking saved" resetOnSuccess={false} action={saveEmailOpenTracking} className="mb-3 flex flex-wrap items-end gap-2">
+                  <div>
+                    <label className="label">Open tracking</label>
+                    <select name="openTracking" className="input" defaultValue={emailOpenTracking ? "on" : "off"}>
+                      <option value="on">On — show when a customer opens an email</option>
+                      <option value="off">Off</option>
+                    </select>
+                  </div>
+                  <SaveButton className="btn-secondary btn-sm">Save</SaveButton>
+                  <span className="text-xs text-muted-foreground basis-full">
+                    Emails sent from the composer and quote emails carry an invisible image; when the customer&apos;s
+                    mail app loads it, the timeline shows 👁 Opened. Some apps load images on their own (Apple Mail)
+                    or block them, so it is a strong hint, not proof.
+                  </span>
+                </SaveForm>
+                {/* Each message is edited next to what sends it (lib/customerMessagePlaces.ts). */}
+                <ul className="mb-4 space-y-1 text-sm">
+                  <li>
+                    Emails that send a document — quote, signing invitation, reminder, signed copy:{" "}
+                    <Link href="/document-studio#document-emails" className="text-primary underline">Document Studio</Link>
+                  </li>
+                  <li>
+                    Messages the CRM sends by itself — service reminders, recalls, review requests, surveys:{" "}
+                    <Link href={MESSAGE_PLACES.automatic.path} className="text-primary underline">Journeys → Customer messages</Link>
+                  </li>
+                </ul>
+                <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-2">Login &amp; verification codes</div>
+                <EmailDesignCards kinds={emailKindsAt("settings")} />
+                <div className="mt-3">
+                  <CustomerMessageEditors kinds={textKindsAt("settings")} open={openTemplate} />
                 </div>
-                </div>
-                ))}
               </div>
+              {marketingOn ? (
+                <p className="text-sm">
+                  <span className="font-semibold">Your own templates</span> (for the email composer, campaigns and journeys) are in{" "}
+                  <Link href="/marketing/templates" className="text-primary underline">Marketing → Templates</Link>.
+                </p>
+              ) : (
+              <>
               <div className="text-sm font-semibold mb-1">Your templates</div>
               <p className="text-xs text-muted-foreground mb-2">
                 For campaigns, journeys and service reminders. Placeholders: <code>{"{{name}}"}</code>,{" "}
@@ -926,6 +903,8 @@ export default async function SettingsPage({
                   <SaveButton className="btn-primary btn-sm">Create template</SaveButton>
                 </SaveForm>
               </details>
+              </>
+              )}
             </Row>
           </div>
         </div>

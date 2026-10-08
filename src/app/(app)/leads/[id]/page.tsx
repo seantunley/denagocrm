@@ -13,6 +13,7 @@ import LeadForm from "@/components/LeadForm";
 import { createQuoteFromLead } from "@/app/actions/quotes";
 import CommsTimeline from "@/components/CommsTimeline";
 import ActivityPanel from "@/components/ActivityPanel";
+import VoiceDebriefButton from "@/components/VoiceDebriefButton";
 import EmailComposer from "@/components/EmailComposer";
 import { composerReplyToDefault } from "@/lib/replyToDefault";
 import LeadTimeline from "@/components/LeadTimeline";
@@ -43,6 +44,8 @@ import { quotePrintLinks } from "@/lib/quotePrintLinks";
 import { isModuleEnabled } from "@/lib/modules/enabled";
 import { EntityDetailShell } from "@/components/entity-detail-shell";
 import { StatusPill } from "@/components/visual-system";
+import { LeadScoreBadge } from "@/components/LeadScoreBadge";
+import { scoreLeads } from "@/lib/leadScoreLoader";
 import { leadAttribution, isAdClick } from "@/lib/attribution";
 import { Car, FileText } from "lucide-react";
 import ContactPicker from "@/components/ContactPicker";
@@ -79,19 +82,28 @@ export default async function LeadDetailPage({
       assignedTo: true,
       createdBy: true,
       communications: { include: { user: true }, orderBy: { occurredAt: "desc" } },
-      activities: { include: { assignedTo: true }, orderBy: { dueDate: "asc" } },
+      activities: {
+        include: {
+          assignedTo: true,
+          attendees: { select: { userId: true, user: { select: { name: true } } }, orderBy: { createdAt: "asc" } },
+        },
+        orderBy: { dueDate: "asc" },
+      },
       quotes: { where: { deletedAt: null }, include: { items: true, fees: { orderBy: { sortOrder: "asc" } } }, orderBy: { createdAt: "desc" } },
       researchNotes: { orderBy: { createdAt: "desc" } },
     },
   });
   if (!lead) notFound();
   const automotiveOn = await isModuleEnabled("automotive");
-  const [canCancelQuotes, canDuplicateQuotes, canBookTestDrive, canEditLead, accessibleContactIds] = await Promise.all([
+  const [canCancelQuotes, canDuplicateQuotes, canBookTestDrive, canEditLead, accessibleContactIds, leadScore] = await Promise.all([
     hasPermission(user, "quotes.change_status"),
     hasPermission(user, "quotes.create"),
     hasPermission(user, "activities.manage"),
     hasPermission(user, "leads.edit"),
     getAccessibleContactIds(user),
+    // The same loader the Today queue ranks by, so the badge here and the
+    // position there can never disagree. A closed deal scores 0 — skip the reads.
+    lead.status === "open" ? scoreLeads([lead]).then((scores) => scores.get(lead.id)) : undefined,
   ]);
   const alreadyViewed = !!lead.viewedAt;
   const [contacts, users, templates, smtpConfigured, audit, waConfigured, libraryDocuments, products, stages] = await Promise.all([
@@ -162,7 +174,15 @@ export default async function LeadDetailPage({
         backLabel="Leads"
         eyebrow="Sales opportunity"
         title={lead.title}
-        status={<StatusPill tone={lead.status === "won" ? "success" : lead.status === "lost" ? "danger" : "info"}>{lead.status === "open" ? lead.stage.name : lead.status}</StatusPill>}
+        status={<>
+          <StatusPill tone={lead.status === "won" ? "success" : lead.status === "lost" ? "danger" : "info"}>{lead.status === "open" ? lead.stage.name : lead.status}</StatusPill>
+          {leadScore && leadScore.score > 0 && (
+            <Link href="/today?view=all" className="inline-flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground" title={leadScore.reasons.join(" · ")}>
+              <LeadScoreBadge score={leadScore.score} />
+              {leadScore.reasons[0]}
+            </Link>
+          )}
+        </>}
         description={`${lead.name} · ${lead.source}`}
         meta={`Added ${formatDate(lead.createdAt)}${lead.assignedTo ? ` · Owner: ${lead.assignedTo.name}` : " · Unassigned"}`}
         facts={[
@@ -214,14 +234,17 @@ export default async function LeadDetailPage({
               <SaveButton className="btn-secondary">Reopen</SaveButton>
             </SaveForm>
           )}
-          <Link
-            href={`/leads/${lead.id}/indemnity`}
-            target="_blank"
-            className="btn-secondary"
-            title="Print a test-drive indemnity for this customer to sign"
-          >
-            <Car className="size-4" />Indemnity
-          </Link>
+          {/* A test-drive indemnity: automotive workspaces only. */}
+          {automotiveOn && (
+            <Link
+              href={`/leads/${lead.id}/indemnity`}
+              target="_blank"
+              className="btn-secondary"
+              title="Print a test-drive indemnity for this customer to sign"
+            >
+              <Car className="size-4" />Indemnity
+            </Link>
+          )}
           <ConfirmDelete
             action={deleteLead.bind(null, lead.id)}
             title={`Delete lead “${lead.title}”?`}
@@ -409,14 +432,17 @@ export default async function LeadDetailPage({
                 label: "Activities",
                 count: lead.activities.filter((a) => a.status === "planned").length,
                 content: (
-                  <ActivityPanel
-                    activities={lead.activities}
-                    users={users}
-                    currentUserId={user.id}
-                    leadId={lead.id}
-                    revalidate={path}
-                    startOpen={tab === "activities" && schedule === "1"}
-                  />
+                  <div className="space-y-3">
+                    {canBookTestDrive && <VoiceDebriefButton leadId={lead.id} />}
+                    <ActivityPanel
+                      activities={lead.activities}
+                      users={users}
+                      currentUserId={user.id}
+                      leadId={lead.id}
+                      revalidate={path}
+                      startOpen={tab === "activities" && schedule === "1"}
+                    />
+                  </div>
                 ),
               },
               {

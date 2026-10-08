@@ -60,6 +60,7 @@ export async function createBookedTestDrive(tx: Tx, input: NewTestDrive) {
         note: input.note,
         location: input.branch,
         dueDate: input.scheduledStart,
+        endDate: input.expectedReturnAt,
         status: "planned",
         leadId: input.leadId,
         contactId: input.contactId,

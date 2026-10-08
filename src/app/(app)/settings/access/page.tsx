@@ -2,8 +2,10 @@ import { Plus } from "lucide-react";
 import { SaveForm, SaveButton } from "@/components/SaveForm";
 import { basePrisma } from "@/lib/db";
 import { actingTenantMemberIds } from "@/lib/tenantActor";
-import { getActiveTenantId } from "@/lib/auth";
+import { getActiveTenantId, isTenantOwner } from "@/lib/auth";
 import { tenantEnforcing } from "@/lib/tenantEnforcement";
+import { getEnabledModuleIds } from "@/lib/modules/enabled";
+import { roleAvailable } from "@/lib/provisioning";
 import { hasPermission, requireAnyPermission } from "@/lib/permissions";
 import {
   createRole,
@@ -47,7 +49,9 @@ export default async function AccessSettingsPage() {
     hasPermission(currentUser, "roles.view"),
     hasPermission(currentUser, "roles.manage"),
   ]);
-  const canManageSecurity = currentUser.role === "owner";
+  // The WORKSPACE owner manages their own team's security — the same predicate
+  // the actions use (requireTenantOwner), so control and gate cannot drift.
+  const canManageSecurity = await isTenantOwner();
 
   // Multi-tenancy readiness: Team/TeamMember already carry tenantId (stamped on
   // create), but these reads only ever filtered by id/deletedAt. The
@@ -101,7 +105,7 @@ export default async function AccessSettingsPage() {
   // this dormant (byte-for-byte today's query) until tenantEnforcing() flips
   // on. Permission (the fixed capability catalog) has no tenantId and is
   // unaffected.
-  const roles = canViewRoles
+  const allRoles = canViewRoles
     ? await basePrisma.$queryRaw<RoleRow[]>`
         SELECT "id", "name", "description", "system" FROM "Role"
         WHERE (NOT ${enforcing}::boolean OR "tenantId" IS NULL OR "tenantId" IS NOT DISTINCT FROM ${activeTenantId})
@@ -125,6 +129,12 @@ export default async function AccessSettingsPage() {
         WHERE (NOT ${enforcing}::boolean OR "tenantId" IS NULL OR "tenantId" IS NOT DISTINCT FROM ${activeTenantId})
       `
     : [];
+  // Workshop roles only with the automotive module. One still assigned to somebody
+  // stays visible: hiding it would let the next save silently strip it from them.
+  const enabledModules = await getEnabledModuleIds();
+  const roles = allRoles.filter(
+    (role) => roleAvailable(role.id, enabledModules) || userRoles.some((ur) => ur.roleId === role.id),
+  );
 
   const membersFor = (teamId: string) => members.filter((member) => member.teamId === teamId);
   const rolePermissionSet = new Set(rolePermissions.map((item) => `${item.roleId}:${item.permissionKey}`));
@@ -163,7 +173,8 @@ export default async function AccessSettingsPage() {
                   <td className="text-sm text-muted-foreground">{user.lastLoginAt ? formatDateTime(user.lastLoginAt) : "Never"}</td>
                   <td>{user.failedLoginCount}</td>
                   <td>
-                    {user.id !== currentUser.id && (
+                    {/* A platform owner's account is managed by the platform, not a workspace (security.ts). */}
+                    {user.id !== currentUser.id && (currentUser.role === "owner" || user.role !== "owner") && (
                       <div className="flex gap-2 justify-end">
                         <SaveForm resetOnSuccess={false} action={revokeUserSessions.bind(null, user.id)}>
                           <SaveButton className="btn-secondary btn-sm">Revoke sessions</SaveButton>

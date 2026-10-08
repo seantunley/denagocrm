@@ -20,6 +20,11 @@ import { assignmentRefusalMessage } from "@/lib/assignableUser";
 // generic "This page hit an error" (gap audit #22).
 import { asActionResult } from "@/lib/actionResult";
 import {
+  availabilityConflictMessage,
+  findStaffAvailabilityConflict,
+  lockStaffSchedules,
+} from "@/lib/staffAvailability";
+import {
   assertTestDriveCustomerAccess,
   requireTestDriveManageAccess,
 } from "@/lib/testDriveAccess";
@@ -180,8 +185,21 @@ export async function createTestDriveBooking(formData: FormData) {
     // The booking's tenant is stamped from the SESSION, not left to the db.ts
     // guard (whose `scopeArgs` returned args untouched while enforcement was
     // dormant — 2 of 2 production rows had a NULL tenant at the 2026-08-10 audit).
-    const booking = await prisma.$transaction((tx) =>
-      createBookedTestDrive(tx, {
+    const booking = await prisma.$transaction(async (tx) => {
+      // Both people on the drive must be free; checked under their schedule locks.
+      const staffIds = Array.from(new Set([salespersonId, accompanyingSalespersonId].filter((id): id is string => Boolean(id))));
+      await lockStaffSchedules(tx, bookingTenantId, staffIds);
+      for (const staffId of staffIds) {
+        const conflict = await findStaffAvailabilityConflict({
+          userId: staffId,
+          tenantId: bookingTenantId,
+          start: scheduledStart,
+          end: expectedReturnAt,
+          db: tx,
+        });
+        if (conflict) throw new ActionRefusal(availabilityConflictMessage(conflict));
+      }
+      return createBookedTestDrive(tx, {
         bookingTenantId,
         activityTenantId,
         leadId,
@@ -196,8 +214,8 @@ export async function createTestDriveBooking(formData: FormData) {
         summary: `Test drive — ${modelName}`,
         note: "Managed from the dedicated Test drives module.",
         createdById: user.id,
-      }),
-    );
+      });
+    });
 
     await auditBooking({
       action: "test_drive.created",
@@ -236,7 +254,26 @@ export async function updateTestDriveBooking(id: string, formData: FormData) {
         : Promise.resolve(null),
     ]);
 
-    const updated = await prisma.$transaction(async (tx) => {
+    const bookingTenantId = before.tenantId ?? await actingTenantId();
+    const updatedResult = await prisma.$transaction(async (tx) => {
+      const staffIds = Array.from(new Set([
+        before.salespersonId,
+        before.accompanyingSalespersonId,
+        salespersonId,
+        accompanyingSalespersonId,
+      ].filter((staffId): staffId is string => Boolean(staffId))));
+      await lockStaffSchedules(tx, bookingTenantId, staffIds);
+      for (const staffId of Array.from(new Set([salespersonId, accompanyingSalespersonId].filter((value): value is string => Boolean(value))))) {
+        const conflict = await findStaffAvailabilityConflict({
+          userId: staffId,
+          tenantId: bookingTenantId,
+          start: scheduledStart,
+          end: expectedReturnAt,
+          db: tx,
+        });
+        if (conflict) return { conflict } as const;
+      }
+
       const result = await tx.testDriveBooking.update({
         where: { id },
         data: { branch, demoVehicleId, salespersonId, accompanyingSalespersonId, scheduledStart, expectedReturnAt },
@@ -244,11 +281,15 @@ export async function updateTestDriveBooking(id: string, formData: FormData) {
       if (before.activityId) {
         await tx.activity.update({
           where: { id: before.activityId },
-          data: { location: branch, dueDate: scheduledStart, assignedToId: salespersonId },
+          data: { location: branch, dueDate: scheduledStart, endDate: expectedReturnAt, assignedToId: salespersonId },
         });
       }
-      return result;
+      return { result } as const;
     });
+    if ("conflict" in updatedResult && updatedResult.conflict) {
+      return { error: availabilityConflictMessage(updatedResult.conflict) };
+    }
+    const updated = updatedResult.result;
     await auditBooking({ action: "test_drive.updated", summary: `Updated ${updated.reference}`, user, booking: updated, before, after: updated });
     revalidatePath("/test-drives");
     revalidatePath(`/test-drives/${id}`);

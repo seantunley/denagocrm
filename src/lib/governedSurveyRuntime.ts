@@ -224,7 +224,10 @@ export async function triggerGovernedSurvey(trigger: string, target: {
       },
       scheduledFor,
       reminderAfterHours: 48,
-      maxReminders: 1,
+      // Never reminded by the queue: an automatic survey's reminder is the "Survey
+      // reminder" journey's, off unless the owner switches it on. It used to be
+      // hard-coded to 1, then a switch on the Automatic page.
+      maxReminders: 0,
     });
   } catch (error) {
     await logError("governed-survey-trigger", error);

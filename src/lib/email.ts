@@ -1,6 +1,7 @@
 import nodemailer from "nodemailer";
 import { PLATFORM_TEAM_SIGNOFF } from "./platformIdentity";
-import { resolveIntegrationBundleForTenant } from "./settings";
+import { getSetting, resolveIntegrationBundleForTenant } from "./settings";
+import { EMAIL_OPEN_TRACKING_KEY, newOpenToken, openTrackingOn, withOpenPixel } from "./emailOpenTracking";
 import { currentTenantScope } from "./tenantScope";
 import { inlineImages, workspaceLogoLoader } from "./emailInlineLogo";
 import { DEFAULT_REGIONAL, formatZAR, type Regional } from "./format";
@@ -56,6 +57,28 @@ function fromHeader(config: SmtpConfig): string {
   return from;
 }
 
+/**
+ * The From line for mail a PERSON wrote (Sean, 2026-10-07): their name in front
+ * of the workspace's — "Sean Tunley · Denago Cape Town" — on the workspace's own
+ * address. Only the display name changes: sending AS the person's address would
+ * fail the recipient's SPF/DKIM checks (the CRM authenticates as the workspace
+ * mailbox) and land in spam. Replies still reach the person through Reply-To.
+ *
+ * Returned as nodemailer's { name, address } so the library encodes the name; it
+ * is also cleaned of anything that could close the display name or start a new
+ * header. Anything unparseable falls back to the workspace's own From, unchanged.
+ */
+export function personFrom(workspaceFrom: string, senderName: string): { name: string; address: string } | null {
+  const person = senderName.replace(/[\r\n"<>\\]/g, " ").replace(/\s+/g, " ").trim().slice(0, 60);
+  if (!person) return null;
+  const named = /^\s*"?([^"<]*?)"?\s*<\s*([^<>\s]+@[^<>\s]+)\s*>\s*$/.exec(workspaceFrom);
+  const bare = /^\s*([^<>\s"]+@[^<>\s"]+)\s*$/.exec(workspaceFrom);
+  const address = named?.[2] ?? bare?.[1];
+  if (!address) return null;
+  const workspace = (named?.[1] ?? "").replace(/[\r\n"<>\\]/g, " ").replace(/\s+/g, " ").trim();
+  return { name: workspace && workspace !== person ? `${person} · ${workspace}` : person, address };
+}
+
 export async function sendEmail(input: {
   to: string;
   subject: string;
@@ -91,6 +114,19 @@ export async function sendEmail(input: {
    */
   replyTo?: string;
   /**
+   * Track whether the customer opens it (lib/emailOpenTracking.ts): an HTML
+   * mail gets the pixel and the timeline entry its token — unless the owner
+   * switched tracking off in Settings → Email. The token comes back on the
+   * result for a caller that writes its own timeline entry.
+   */
+  trackOpens?: boolean;
+  /**
+   * The person who wrote this mail, shown in front of the workspace name on the
+   * From line (personFrom). Only for mail a person sends — the composer, a quote
+   * they email, a help-desk reply — never automatic messages.
+   */
+  senderName?: string;
+  /**
    * Our own `Message-ID` (`<id@domain>`), for mail that must be threaded back:
    * a customer's answer names it in In-Reply-To, and the IMAP sync matches that
    * to the ticket. Omitted → nodemailer generates one, as before.
@@ -103,8 +139,8 @@ export async function sendEmail(input: {
    * Communication, or the mail is not to a customer.
    */
   record?: OutboundRecord;
-}): Promise<{ ok: boolean; error?: string }> {
-  const logged = { channel: "email" as const, to: input.to, subject: input.subject, text: input.text, attachments: input.attachments?.map((a) => a.filename) };
+}): Promise<{ ok: boolean; error?: string; openToken?: string }> {
+  const logged: Parameters<typeof recordOutboundMessage>[0] = { channel: "email" as const, to: input.to, subject: input.subject, text: input.text, attachments: input.attachments?.map((a) => a.filename) };
   const config = await getSmtpConfig();
   if (!config) {
     const error = "SMTP is not configured (see Settings → Email).";
@@ -123,19 +159,37 @@ export async function sendEmail(input: {
       requireTLS: !config.secure,
       auth: config.user ? { user: config.user, pass: config.pass ?? "" } : undefined,
     });
+    // Open tracking: the pixel on the workspace's own address, its token on the
+    // timeline entry. Never a reason to fail the send.
+    let openToken: string | undefined;
+    let html = input.html;
+    if (html && input.trackOpens) {
+      try {
+        if (openTrackingOn(await getSetting(EMAIL_OPEN_TRACKING_KEY))) {
+          const { tenantOrigin } = await import("./tenantOrigin");
+          openToken = newOpenToken();
+          html = withOpenPixel(html, await tenantOrigin(config.tenantId), openToken);
+          logged.openToken = openToken;
+        }
+      } catch {
+        openToken = undefined;
+        html = input.html;
+      }
+    }
     // The workspace's logo travels INSIDE the message (see emailInlineLogo.ts), so
     // it shows without the reader allowing remote images. Never a reason to fail:
     // anything that goes wrong leaves the original linked logo.
     // The workspace this mail is being SENT AS — config.tenantId, never a second
     // read of ambient scope, which is absent on the system and enforcement-off
     // paths SmtpConfig.tenantId exists to cover (review of #744).
-    const inline = input.html ? await inlineImages(input.html, workspaceLogoLoader(config.tenantId)).catch(() => null) : null;
+    const inline = html ? await inlineImages(html, workspaceLogoLoader(config.tenantId)).catch(() => null) : null;
+    const workspaceFrom = fromHeader(config);
     const info = await transporter.sendMail({
-      from: fromHeader(config),
+      from: (input.senderName && personFrom(workspaceFrom, input.senderName)) || workspaceFrom,
       to: input.to,
       subject: input.subject,
       text: input.text,
-      html: inline?.html ?? input.html,
+      html: inline?.html ?? html,
       // Inline logos ride along as cid attachments; the timeline's attachment
       // list (`logged`) stays what the sender attached.
       attachments: inline?.attachments.length ? [...(input.attachments ?? []), ...inline.attachments] : input.attachments,
@@ -147,7 +201,7 @@ export async function sendEmail(input: {
     });
     await noteSmtpOutcome(config, null);
     if (input.record) await recordOutboundMessage({ ...logged, messageId: info?.messageId ?? null }, input.record);
-    return { ok: true };
+    return { ok: true, ...(openToken ? { openToken } : {}) };
   } catch (err) {
     await noteSmtpOutcome(config, err);
     const { logError } = await import("./errorLog");

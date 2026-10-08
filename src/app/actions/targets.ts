@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/db";
-import { requireOwner } from "@/lib/auth";
+import { requireTenantOwner } from "@/lib/auth";
 import { parseRands } from "@/lib/format";
 import { withActingStaffScope } from "@/lib/actingScope";
 
@@ -11,7 +11,7 @@ const TARGET_METRICS = ["leads", "sales_value", "deliveries", "services"] as con
 /** Upsert this-period targets. sales_value comes in as Rands, stored as cents. */
 export async function saveTargets(period: string, formData: FormData) {
   return withActingStaffScope(async () => {
-    await requireOwner();
+    await requireTenantOwner();
     for (const metric of TARGET_METRICS) {
       const raw = String(formData.get(metric) ?? "").trim();
       if (raw === "") continue;
