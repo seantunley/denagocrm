@@ -319,7 +319,7 @@ export const SIGNING_EMAILS: Record<SigningEmailKind, SigningEmailDef> = {
     description: "Sent when a job card is completed (at most once every 90 days per customer, when a Google Place ID is set).",
     settingKey: "SYSTEM_EMAIL_REVIEW_SERVICE",
     subject: "How was your recent service?",
-    body: "Dear {{first_name}},\n\nThank you for trusting {{company_name}} with your {{item}}.\n\nWe would appreciate your honest feedback about your recent service experience. A short Google review takes only a minute and helps us understand what we are doing well and where we can improve.\n\n{{review_link}}\n\nIf there is anything we can assist with, please contact {{company_contact}}.\n\nKind regards,\n{{company_name}}",
+    body: "Dear {{first_name}},\n\nThank you for choosing {{company_name}} for your recent service.\n\nWe would appreciate your honest feedback about your recent service experience. A short Google review takes only a minute and helps us understand what we are doing well and where we can improve.\n\n{{review_link}}\n\nIf there is anything we can assist with, please contact {{company_contact}}.\n\nKind regards,\n{{company_name}}",
     fields: [...PERSON, ...COMPANY, "item", "review_link"],
     action: "review_link",
   },
