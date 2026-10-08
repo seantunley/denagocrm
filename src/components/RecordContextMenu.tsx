@@ -72,6 +72,23 @@ const ACTION_ICONS: Record<RecordActionIcon, LucideIcon> = {
   quote: FilePlus2,
 };
 
+/**
+ * The row to attach the menu to, as a real element.
+ *
+ * The row arrives from a server page. When a row is large, React sends it as a
+ * separate chunk and hands this component a LAZY reference instead of the
+ * element — and the trigger (`asChild`) must clone a real element, so it threw
+ * "failed to slot onto its children" on the server and the whole list fell back
+ * to client rendering. One more button in the quote register's rows was enough
+ * to cross that size (found bringing #704 up to date). Reading the reference
+ * the way React itself does returns the element, or suspends until its chunk
+ * has arrived — so no list depends on its rows staying small.
+ */
+function resolvedRow(row: ReactElement): ReactElement {
+  const lazy = row as unknown as { $$typeof?: symbol; _payload?: unknown; _init?: (payload: unknown) => ReactElement };
+  return lazy.$$typeof === Symbol.for("react.lazy") && typeof lazy._init === "function" ? lazy._init(lazy._payload) : row;
+}
+
 function isExternalHref(href: string) {
   return /^(https?:|mailto:|tel:)/.test(href);
 }
@@ -135,7 +152,7 @@ export default function RecordContextMenu({
 
   return (
     <ContextMenu>
-      <ContextMenuTrigger asChild>{children}</ContextMenuTrigger>
+      <ContextMenuTrigger asChild>{resolvedRow(children)}</ContextMenuTrigger>
       <ContextMenuContent className="min-w-56">
         <ContextMenuLabel className="max-w-64 truncate">{label}</ContextMenuLabel>
         <ContextMenuItem onSelect={() => navigate(href, openInNewTab)}>

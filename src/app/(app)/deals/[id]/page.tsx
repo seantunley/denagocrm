@@ -188,7 +188,7 @@ export default async function DealWorkspacePage({ params }: { params: Promise<{ 
 
   const journey = [
     { label: "Quote", done: true },
-    { label: "Signed", done: accepted },
+    { label: "Accepted", done: accepted },
     { label: "Deposit", done: Boolean(quote.depositPaidAt) },
     { label: "Stock", done: stockReady },
     { label: "PDI", done: pdiReady },
@@ -401,7 +401,7 @@ export default async function DealWorkspacePage({ params }: { params: Promise<{ 
                 </div>
               </div>
               <div className="mt-3 divide-y divide-border/60">
-                <ReadinessRow done={accepted} label="Agreement accepted" detail={quote.signedAt ? formatDateTime(quote.signedAt) : "Customer acceptance outstanding"} />
+                <ReadinessRow done={accepted} label="Agreement accepted" detail={quote.signedAt ? `Signed ${formatDateTime(quote.signedAt)}` : accepted ? "Marked accepted — not signed online" : "Customer acceptance outstanding"} />
                 <ReadinessRow done={Boolean(quote.depositPaidAt)} label="Deposit received" detail={quote.depositPaidAt ? formatDateTime(quote.depositPaidAt) : depositAmount ? `Waiting for ${formatZAR(depositAmount)}` : "No deposit receipt recorded"} />
                 <ReadinessRow done={stockReady} label="Stock allocated" detail={stockReady ? stock.map((item) => item.stockNumber ?? item.product.name).join(", ") : "No physical unit assigned"} />
                 <ReadinessRow done={pdiReady} label="PDI complete" detail={stockReady ? (pdiReady ? "Allocated stock ready for delivery" : "Workshop preparation still outstanding") : "Requires stock allocation first"} />

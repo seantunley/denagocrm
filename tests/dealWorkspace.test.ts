@@ -45,6 +45,17 @@ test("a lead's conversations, activities and source are shown only to someone wh
   assert.doesNotMatch(page, /quote\.leadId &&/, "no link into a lead the viewer cannot open");
 });
 
+test("a record list's right-click menu does not depend on its rows staying small", () => {
+  // The Open deal button made the quote register's rows large enough that React
+  // sent each as its own chunk: the menu trigger was handed a lazy reference, could
+  // not clone it, and the whole list failed to render on the server. Seen in a
+  // browser, not by any source test — so the fix is pinned here.
+  const menu = read("src/components/RecordContextMenu.tsx");
+  assert.match(menu, /<ContextMenuTrigger asChild>\{resolvedRow\(children\)\}<\/ContextMenuTrigger>/);
+  assert.match(menu, /lazy\.\$\$typeof === Symbol\.for\("react\.lazy"\) && typeof lazy\._init === "function" \? lazy\._init\(lazy\._payload\) : row/);
+  assert.doesNotMatch(menu, /asChild>\{children\}/);
+});
+
 test("deal jacket is reachable from both quote and lead workflows", () => {
   const quotes = read("src/app/(app)/quotes/page.tsx");
   const lead = read("src/app/(app)/leads/[id]/page.tsx");
