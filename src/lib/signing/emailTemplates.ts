@@ -80,9 +80,9 @@ export type SigningEmailDef = {
 
 /** Button text, and the text-part lead-in, for each link action. */
 const LINK_ACTIONS: Partial<Record<ActionField, { button: string; lead: string }>> = {
-  signing_link: { button: "Open &amp; sign", lead: "Open and sign here:" },
-  review_link: { button: "Leave a review", lead: "Leave a review here:" },
-  survey_link: { button: "Answer the survey", lead: "Answer here:" },
+  signing_link: { button: "Review &amp; Sign", lead: "Review and sign securely here:" },
+  review_link: { button: "Share a Review", lead: "Share your review here:" },
+  survey_link: { button: "Complete Survey", lead: "Complete the survey here:" },
 };
 
 const COMMON = [
@@ -583,7 +583,7 @@ export function signButton(
   url: string,
   brand: Pick<SigningEmailBrand, "accent" | "accentText">,
   /** Already-HTML label — only ever one of the LINK_ACTIONS constants. */
-  label = "Open &amp; sign",
+  label = "Review &amp; Sign",
 ): string {
   const href = escapeHtml(url);
   const font = "font-family:Helvetica,Arial,sans-serif;font-size:15px;font-weight:bold;";
@@ -597,7 +597,7 @@ export function signButton(
 <a href="${href}" target="_blank" style="${font}color:${brand.accentText};text-decoration:none;display:inline-block;">${label}</a>
 </td></tr></table>
 <!--<![endif]-->
-<p style="margin:0 0 16px;font-family:Helvetica,Arial,sans-serif;font-size:12px;line-height:1.5;color:#64748b;">Or paste this link into your browser:<br><a href="${href}" style="color:#64748b;word-break:break-all;">${href}</a></p>`;
+<p style="margin:0 0 18px;font-family:Helvetica,Arial,sans-serif;font-size:12px;line-height:1.55;color:#64748b;">Having trouble with the button? Copy this secure link into your browser:<br><a href="${href}" style="color:#64748b;word-break:break-all;">${href}</a></p>`;
 }
 
 function shell(subject: string, content: string, brand: SigningEmailBrand): string {
