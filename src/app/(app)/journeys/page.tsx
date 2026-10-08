@@ -1,5 +1,6 @@
 import Link from "next/link";
-import { Activity, Workflow } from "lucide-react";
+import { Activity, Mail, Workflow } from "lucide-react";
+import { isTenantOwner } from "@/lib/auth";
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { leadOptionLabels } from "@/lib/leadOption";
@@ -111,6 +112,7 @@ function statusTone(status: string) {
 
 export default async function JourneysPage() {
   const user = await requireRoute("/journeys");
+  const isOwner = await isTenantOwner();
   // Lead RBAC for the test-lead picker below. Reaching this page says nothing
   // about which leads the viewer may see, and the option now leads with the
   // customer name - the same hole the quote editor had.
@@ -182,6 +184,13 @@ export default async function JourneysPage() {
           <Activity className="size-4" />
           Activity &amp; traces
         </Link>
+        {/* The wording of the automatic customer messages (owner-only, like their editors). */}
+        {isOwner && (
+          <Link href="/journeys/messages" className="btn-secondary">
+            <Mail className="size-4" />
+            Customer messages
+          </Link>
+        )}
         <SaveForm action={installJourneyTemplates}>
           <SaveButton className="btn-secondary" pendingLabel="Installing…">Install recommended drafts</SaveButton>
         </SaveForm>

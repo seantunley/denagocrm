@@ -6,6 +6,7 @@ import { AUTOMATIONS, type Automation, type AutomationReach } from "@/lib/automa
 import { readAutomationSwitches, readReadyMadeJourneys } from "@/app/actions/automationSettings";
 import { SIGNING_EMAILS, type SigningEmailKind } from "@/lib/signing/emailTemplates";
 import { AutomationSwitch } from "./AutomationSwitch";
+import { messageEditorHref } from "@/lib/customerMessagePlaces";
 
 export const dynamic = "force-dynamic";
 
@@ -22,7 +23,7 @@ const GROUPS: { reach: AutomationReach; title: string; description: string }[] =
   { reach: "nobody", title: "Housekeeping", description: "Background work that sends nothing to anyone." },
 ];
 
-/** Each message opens in its editor (Settings → Email templates), to read and change. */
+/** Each message opens in its editor, wherever it lives (lib/customerMessagePlaces.ts), to read and change. */
 function MessageLinks({ kinds }: { kinds: string[] }) {
   return (
     <ul className="flex flex-wrap gap-x-3 gap-y-1 pt-1 text-xs">
@@ -30,7 +31,7 @@ function MessageLinks({ kinds }: { kinds: string[] }) {
         const def = SIGNING_EMAILS[kind as SigningEmailKind];
         return def ? (
           <li key={kind}>
-            <Link href={`/settings?tab=email&open=${kind}#template-${kind}`} className="text-primary underline">
+            <Link href={messageEditorHref(kind as SigningEmailKind)} className="text-primary underline">
               {def.label.replace(/ \((email|SMS|WhatsApp)\)$/, "")} ({def.channel === "sms" ? "SMS" : def.channel === "whatsapp" ? "WhatsApp" : "email"}) — view / edit
             </Link>
           </li>

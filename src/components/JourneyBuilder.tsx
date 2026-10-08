@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useRef, useState } from "react";
+import { messageEditorHref } from "@/lib/customerMessagePlaces";
 import { createJourney } from "@/app/actions/journeys";
 import { SaveForm, SaveButton } from "@/components/SaveForm";
 import type { ActionResult } from "@/lib/actionResultTypes";
@@ -645,8 +646,8 @@ export default function JourneyBuilder({
             {step.type === "send_review_request" && (
               <p className="text-xs text-slate-500">
                 Emails the customer a Google review request — the{" "}
-                <a className="underline" href="/settings?tab=email&open=review_service#template-review_service">service</a> or{" "}
-                <a className="underline" href="/settings?tab=email&open=review_delivery#template-review_delivery">delivery</a>{" "}
+                <a className="underline" href={messageEditorHref("review_service")}>service</a> or{" "}
+                <a className="underline" href={messageEditorHref("review_delivery")}>delivery</a>{" "}
                 template, depending on the trigger. At most once per customer every 90 days, never to someone who
                 opted out, and only with a Google Place ID set up.
               </p>
@@ -655,20 +656,20 @@ export default function JourneyBuilder({
               <p className="text-xs text-slate-500">
                 Emails the customer that their vehicle is due for a service, once per due date. Needs the “Vehicle is
                 due for a service” trigger. Uses the template picked under Settings → Email → Service reminders, or
-                the <a className="underline" href="/settings?tab=email&open=service_reminder#template-service_reminder">Service reminder</a> template.
+                the <a className="underline" href={messageEditorHref("service_reminder")}>Service reminder</a> template.
               </p>
             )}
             {step.type === "send_signing_reminder" && (
               <p className="text-xs text-slate-500">
                 Sends the signer one reminder with their own signing link, by email and WhatsApp (the{" "}
-                <a className="underline" href="/settings?tab=email&open=reminder#template-reminder">signing reminder</a> templates). Needs the
+                <a className="underline" href={messageEditorHref("reminder")}>signing reminder</a> templates). Needs the
                 “Document sent for signing isn&apos;t signed” trigger. Once per signer, and never once they have signed.
               </p>
             )}
             {step.type === "send_survey_reminder" && (
               <p className="text-xs text-slate-500">
                 Sends one reminder with the survey link (the{" "}
-                <a className="underline" href="/settings?tab=email&open=survey_reminder#template-survey_reminder">survey reminder</a> templates). Needs
+                <a className="underline" href={messageEditorHref("survey_reminder")}>survey reminder</a> templates). Needs
                 the “Automatic survey isn&apos;t answered” trigger. Once per survey, never after it is answered.
               </p>
             )}

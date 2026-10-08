@@ -205,10 +205,10 @@ test("every customer message can be READ and EDITED from the page — none is hi
     assert.ok(a.messages?.length || a.messagesAt, `${a.key}: says nothing about what it sends`);
     for (const kind of a.messages ?? []) assert.ok(kind in SIGNING_EMAILS, `${a.key}: "${kind}" isn't an editable template`);
   }
-  // Each opens in the editor: ?open=<kind> opens that template on Settings → Email.
-  const settings = code("src/app/(app)/settings/page.tsx");
-  assert.match(settings, /id=\{`template-\$\{kind\}`\} open=\{openTemplate === kind\}/);
-  assert.match(code("src/app/(app)/settings/automatic/page.tsx"), /href=\{`\/settings\?tab=email&open=\$\{kind\}#template-\$\{kind\}`\}/);
+  // Each opens in its editor, wherever it lives: ?open=<kind> opens that one
+  // (lib/customerMessagePlaces.ts; tests/customerMessagePlaces.test.ts).
+  assert.match(code("src/components/CustomerMessageEditors.tsx"), /id=\{`template-\$\{kind\}`\} open=\{open === kind\}/);
+  assert.match(code("src/app/(app)/settings/automatic/page.tsx"), /href=\{messageEditorHref\(kind as SigningEmailKind\)\}/);
   // The texts that were hard-coded now come from templates.
   const dispatch = code("src/lib/signing/dispatch.ts");
   assert.match(dispatch, /signingWhatsAppText\(opts\?\.reminder \? "reminder_whatsapp" : "invite_whatsapp"/);

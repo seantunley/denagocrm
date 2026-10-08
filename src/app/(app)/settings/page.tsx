@@ -22,25 +22,11 @@ import {
   createTemplate,
   updateTemplate,
   deleteTemplate,
-  saveSigningEmailTemplate,
-  resetSigningEmailTemplate,
-  previewSigningEmailTemplate,
   saveEmailHeaderStyle,
   saveEmailOpenTracking,
 } from "@/app/actions/emails";
 import { EMAIL_OPEN_TRACKING_KEY, openTrackingOn } from "@/lib/emailOpenTracking";
-import {
-  EMAIL_HEADER_STYLES,
-  parseEmailHeaderStyle,
-  SIGNING_EMAILS,
-  SIGNING_EMAIL_KINDS,
-  SIGNING_FIELD_HELP,
-  isTextTemplate,
-  parseStoredSigningTemplate,
-  type SigningEmailKind,
-} from "@/lib/signing/emailTemplates";
-import { sanitizeEmailDoc, textToEmailDoc } from "@/lib/signing/emailDoc";
-import { EmailTemplateEditor, SmsTemplateEditor } from "@/components/settings/EmailTemplateEditor";
+import { EMAIL_HEADER_STYLES, parseEmailHeaderStyle, SIGNING_EMAIL_KINDS } from "@/lib/signing/emailTemplates";
 import TestEmailButton from "@/components/TestEmailButton";
 import ConfirmDelete from "@/components/ConfirmDelete";
 import ClearSecret from "@/components/ClearSecret";
@@ -60,6 +46,8 @@ import { ABSOLUTE_SESSION_HOURS } from "@/lib/session";
 import { decryptValue } from "@/lib/settings";
 import { PUSH_KINDS } from "@/lib/push";
 import Link from "next/link";
+import CustomerMessageEditors from "@/components/CustomerMessageEditors";
+import { kindsAt, MESSAGE_PLACES } from "@/lib/customerMessagePlaces";
 import { getNextStepScheduling } from "@/lib/nextStepConfig";
 import { saveNextStepScheduling } from "@/app/actions/settings";
 import ProductsPage from "../products/page";
@@ -166,20 +154,16 @@ export default async function SettingsPage({
   const regional = regionalFrom(
     Object.fromEntries(Object.entries(REGIONAL_KEYS).map(([field, key]) => [field, setting(key)])),
   );
-  // The signing emails' edited copies, read by EXPLICIT tenant — the same key the
-  // send path reads by the signature request's tenantId (lib/signing/signingEmail.ts).
+  // The email settings, read by EXPLICIT tenant — the same key the send path reads
+  // (lib/signing/signingEmail.ts). The message editors read their own copies
+  // (CustomerMessageEditors).
   const signingTenantId = isAdmin && tab === "email" ? await getActiveTenantId() : null;
   const signingOverrides = signingTenantId
     ? await basePrisma.appSetting.findMany({
-        where: {
-          tenantId: signingTenantId,
-          key: { in: [...SIGNING_EMAIL_KINDS.map((k) => SIGNING_EMAILS[k].settingKey), "EMAIL_HEADER_STYLE", EMAIL_OPEN_TRACKING_KEY] },
-        },
+        where: { tenantId: signingTenantId, key: { in: ["EMAIL_HEADER_STYLE", EMAIL_OPEN_TRACKING_KEY] } },
         select: { key: true, value: true },
       })
     : [];
-  const signingTemplate = (kind: SigningEmailKind) =>
-    parseStoredSigningTemplate(signingOverrides.find((s) => s.key === SIGNING_EMAILS[kind].settingKey)?.value, kind);
   const emailHeaderStyle = parseEmailHeaderStyle(signingOverrides.find((s) => s.key === "EMAIL_HEADER_STYLE")?.value);
   const emailOpenTracking = openTrackingOn(signingOverrides.find((s) => s.key === EMAIL_OPEN_TRACKING_KEY)?.value);
   const isOwner = isAdmin;
@@ -845,69 +829,27 @@ export default async function SettingsPage({
                     or block them, so it is a strong hint, not proof.
                   </span>
                 </SaveForm>
-                {[...new Set(SIGNING_EMAIL_KINDS.map((k) => SIGNING_EMAILS[k].group))].map((group) => (
-                <div key={group} className="mb-4">
-                <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-2">{group}</div>
-                <div className="space-y-3">
-                  {SIGNING_EMAIL_KINDS.filter((k) => SIGNING_EMAILS[k].group === group).map((kind) => {
-                    const def = SIGNING_EMAILS[kind];
-                    const saved = signingTemplate(kind);
-                    return (
-                      // Linked from Settings → Automatic jobs & messages: ?open=<kind> opens this one.
-                      <details key={kind} id={`template-${kind}`} open={openTemplate === kind} className="rounded-lg border border-border bg-muted/40 scroll-mt-24">
-                        <summary className="px-4 py-2.5 cursor-pointer text-sm font-medium flex items-center gap-2">
-                          {def.label}
-                          <span className="badge bg-muted text-muted-foreground">{def.channel === "sms" ? "SMS" : def.channel === "whatsapp" ? "WhatsApp" : "Email"}</span>
-                          <span className="badge bg-muted text-muted-foreground">{saved ? "Customised" : "Default"}</span>
-                        </summary>
-                        <div className="p-4 pt-1 space-y-2">
-                          <p className="text-xs text-muted-foreground">{def.description}</p>
-                          <SaveForm
-                            // Remount after a reset so the fields show the default again.
-                            key={saved ? "custom" : "default"}
-                            success={`${def.label} saved`}
-                            resetOnSuccess={false}
-                            action={saveSigningEmailTemplate.bind(null, kind)}
-                            className="space-y-2"
-                          >
-                            {isTextTemplate(def) ? (
-                              <SmsTemplateEditor
-                                initialBody={saved?.body ?? def.body}
-                                fields={def.fields}
-                                fieldHelp={SIGNING_FIELD_HELP}
-                                requiredField={def.action}
-                                preview={previewSigningEmailTemplate.bind(null, kind)}
-                                whatsapp={def.channel === "whatsapp"}
-                              />
-                            ) : (
-                              <EmailTemplateEditor
-                                initialSubject={saved?.subject ?? def.subject}
-                                initialDoc={
-                                  (saved?.doc ? sanitizeEmailDoc(saved.doc, def.fields) : null) ??
-                                  textToEmailDoc(saved?.body ?? def.body, def.fields)
-                                }
-                                fields={def.fields}
-                                fieldHelp={SIGNING_FIELD_HELP}
-                                requiredField={def.action}
-                                preview={previewSigningEmailTemplate.bind(null, kind)}
-                                refreshKey={emailHeaderStyle}
-                              />
-                            )}
-                            <SaveButton className="btn-primary btn-sm">Save</SaveButton>
-                          </SaveForm>
-                          {saved && (
-                            <SaveForm success="Reset to default" action={resetSigningEmailTemplate.bind(null, kind)}>
-                              <SaveButton className="btn-secondary btn-sm">Reset to default</SaveButton>
-                            </SaveForm>
-                          )}
-                        </div>
-                      </details>
-                    );
-                  })}
-                </div>
-                </div>
-                ))}
+                {/* Each message is edited next to what sends it (lib/customerMessagePlaces.ts). */}
+                <ul className="mb-4 space-y-1 text-sm">
+                  <li>
+                    Emails that send a document — quote, signing invitation, reminder, signed copy:{" "}
+                    <Link href="/document-studio#document-emails" className="text-primary underline">Document Studio</Link>
+                  </li>
+                  <li>
+                    Messages the CRM sends by itself — service reminders, recalls, review requests, surveys:{" "}
+                    <Link href={MESSAGE_PLACES.automatic.path} className="text-primary underline">Journeys → Customer messages</Link>
+                  </li>
+                </ul>
+                <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-2">Login &amp; verification codes</div>
+                <CustomerMessageEditors kinds={kindsAt("settings")} open={openTemplate} />
               </div>
+              {marketingOn ? (
+                <p className="text-sm">
+                  <span className="font-semibold">Your own templates</span> (for the email composer, campaigns and journeys) are in{" "}
+                  <Link href="/marketing/templates" className="text-primary underline">Marketing → Templates</Link>.
+                </p>
+              ) : (
+              <>
               <div className="text-sm font-semibold mb-1">Your templates</div>
               <p className="text-xs text-muted-foreground mb-2">
                 For campaigns, journeys and service reminders. Placeholders: <code>{"{{name}}"}</code>,{" "}
@@ -957,6 +899,8 @@ export default async function SettingsPage({
                   <SaveButton className="btn-primary btn-sm">Create template</SaveButton>
                 </SaveForm>
               </details>
+              </>
+              )}
             </Row>
           </div>
         </div>
