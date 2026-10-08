@@ -43,6 +43,22 @@ test("the standard wording: texts stay compact, emails use the premium 2026-10-0
   assert.match(portal.text, /^Please use the secure code below to sign in to your Acme customer portal\.\n\n482913\n\nThis code is valid for 10 minutes/);
 });
 
+test("service reminder uses valid language for both a date and the fallback soon", () => {
+  const vars = { ...COMPANY, first_name: "Jo", model: "Rover XL" };
+  const fallback = renderSigningEmail("service_reminder", null, { ...vars, due_date: "soon" }, BRAND);
+  const dated = renderSigningEmail("service_reminder", null, { ...vars, due_date: "14 Oct 2026" }, BRAND);
+  assert.match(fallback.text, /next scheduled service \\(soon\\)/);
+  assert.doesNotMatch(fallback.text, /on soon/);
+  assert.match(dated.text, /next scheduled service \\(14 Oct 2026\\)/);
+});
+
+test("service review uses natural language for the named vehicle", () => {
+  const review = renderSigningEmail("review_service", null, {
+    ...COMPANY, first_name: "Jo", item: "Rover XL", review_link: "https://reviews.example/r"
+  }, BRAND);
+  assert.match(review.text, /Thank you for trusting Acme with your Rover XL\\./);
+});
+
 test("SMS: no subject, length-capped, and the code/link can't be dropped", () => {
   assert.equal(validateSigningTemplate("lookup_code_sms", "", "Code {{code}}"), null);
   assert.match(validateSigningTemplate("lookup_code_sms", "", "No code here") ?? "", /must include \{\{code\}\}/);
