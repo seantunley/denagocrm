@@ -56,7 +56,13 @@ test("service review uses natural language for the named vehicle", () => {
   const review = renderSigningEmail("review_service", null, {
     ...COMPANY, first_name: "Jo", item: "Rover XL", review_link: "https://reviews.example/r"
   }, BRAND);
-  assert.match(review.text, /Thank you for trusting Acme with your Rover XL\\./);
+  assert.match(review.text, /Thank you for choosing Acme for your recent service\./);
+  const jobCard = renderSigningEmail("review_service", null, {
+    ...COMPANY, first_name: "Jo", item: "the service on your Rover XL (job card #7)", review_link: "https://reviews.example/r"
+  }, BRAND);
+  assert.match(jobCard.text, /Thank you for choosing Acme for your recent service\./);
+  assert.doesNotMatch(jobCard.text, /your the service|your your|with Rover XL/);
+
 });
 
 test("SMS: no subject, length-capped, and the code/link can't be dropped", () => {
