@@ -47,9 +47,9 @@ test("service reminder uses valid language for both a date and the fallback soon
   const vars = { ...COMPANY, first_name: "Jo", model: "Rover XL" };
   const fallback = renderSigningEmail("service_reminder", null, { ...vars, due_date: "soon" }, BRAND);
   const dated = renderSigningEmail("service_reminder", null, { ...vars, due_date: "14 Oct 2026" }, BRAND);
-  assert.match(fallback.text, /next scheduled service \\(soon\\)/);
+  assert.match(fallback.text, /next scheduled service \(soon\)/);
   assert.doesNotMatch(fallback.text, /on soon/);
-  assert.match(dated.text, /next scheduled service \\(14 Oct 2026\\)/);
+  assert.match(dated.text, /next scheduled service \(14 Oct 2026\)/);
 });
 
 test("service review uses natural language for the named vehicle", () => {
