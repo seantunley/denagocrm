@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import Module, { createRequire } from "node:module";
 import { readFileSync } from "node:fs";
+import { payableTotalCents } from "../src/lib/pricing";
 
 /**
  * Gap audit 2026-09-30, #11 and #16.
@@ -43,7 +44,11 @@ function table(rows: Row[]) {
       const withChildren: Row = { ...row };
       if (include.items) withChildren.items = db.quoteItem.rows.filter((i) => i.quoteId === row.id);
       if (include.fees) withChildren.fees = db.quoteFee.rows.filter((f) => f.quoteId === row.id);
-      if (include.lead) withChildren.lead = db.lead.rows.find((l) => l.id === row.leadId) ?? null;
+      // A copy, as Prisma returns a snapshot: a later update must not rewrite what was read.
+      if (include.lead) {
+        const lead = db.lead.rows.find((l) => l.id === row.leadId);
+        withChildren.lead = lead ? { ...lead } : null;
+      }
       return withChildren;
     },
     async findMany({ where }: { where?: Row }) {
@@ -176,6 +181,30 @@ test("accepting the chosen quote puts the deal on Deliveries and wins the lead, 
 
   await outcome.afterDealWon("lead_1", "c1");
   assert.deepEqual(fanout, ["referral:lead_1", "lead_won:lead_1", "survey:won"]);
+});
+
+test("the won lead is worth the accepted quote — the dashboard's won value sums the lead (Q-1025 won R 0)", async () => {
+  reset();
+  db.lead.rows[0].valueCents = 0;
+  db.quoteFee.rows.push({ id: "f1", quoteId: "q1", tenantId: T, label: "Delivery", kind: "delivery", amountCents: 5_000_00, taxRatePct: 15, sortOrder: 0 });
+  const quote = await db.quote.findFirst({ where: { id: "q1" }, include: { items: true, fees: true } });
+  const total = Math.round(payableTotalCents(quote as unknown as Parameters<typeof payableTotalCents>[0]));
+  assert.ok(total > 10_000_00, "fees are part of the deal");
+  await outcome.acceptQuoteInTx(fakeTx, "q1", T, actor);
+  assert.equal(db.lead.rows[0].valueCents, total);
+  const won = audits.find((a) => a.action === "lead.won")!;
+  assert.deepEqual([won.before, won.after], [{ valueCents: 0 }, { status: "won", valueCents: total }], "the value change is audited");
+
+  // Winning without a quote keeps whatever value the lead has.
+  db.lead.rows.push({ id: "lead_2", tenantId: T, status: "open", deletedAt: null, valueCents: 123_00 });
+  await outcome.winLeadInTx(fakeTx, "lead_2", T);
+  assert.equal(db.lead.rows[1].valueCents, 123_00);
+});
+
+test("a signed quote wins its lead through the same win, at the signed total", () => {
+  const complete = shipped("src/lib/signing/complete.ts");
+  assert.match(complete, /winLeadInTx\(tx, q\.leadId, tenantId, Math\.round\(payableTotalCents\(q\)\)\)/);
+  assert.doesNotMatch(complete, /lead\.updateMany/, "no private lead-win left to drift");
 });
 
 test("a quote out for signature is not accepted behind the customer's back", async () => {
