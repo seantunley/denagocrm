@@ -50,21 +50,21 @@ export const EMAIL_SAMPLE_FIELDS: Record<string, string> = {
   survey_link: "https://example.com/survey/preview-only",
 };
 
-/** A headline for each email, using only that message's own fields. */
+/** A concise headline for each email, using only that message's own fields. */
 export const EMAIL_HEADLINES: Partial<Record<SigningEmailKind, string>> = {
-  invite: "{{document_title}} is ready for your signature",
-  reminder: "{{document_title}} is awaiting your signature",
+  invite: "Review and sign {{document_title}}",
+  reminder: "A reminder about {{document_title}}",
   completed: "Signed and complete",
-  otp: "Your verification code",
+  otp: "Secure verification code",
   quote: "Your quotation {{quote_number}}",
-  portal_code: "Your login code",
-  lookup_code: "Your verification code",
-  service_reminder: "Your {{model}} is due for a service",
+  portal_code: "Secure login code",
+  lookup_code: "Secure verification code",
+  service_reminder: "Service reminder for your {{model}}",
   recall: "{{recall_title}}",
-  review_delivery: "How are you enjoying your new {{item}}?",
-  review_service: "How was your recent service?",
+  review_delivery: "We would value your feedback",
+  review_service: "Tell us about your service",
   survey_invite: "{{survey_title}}",
-  survey_reminder: "{{survey_title}}",
+  survey_reminder: "A reminder: {{survey_title}}",
 };
 
 /** Text → Plate leaves, every {{token}} an inline merge-field node. */
@@ -137,7 +137,9 @@ export function defaultEmailBody(
   };
   const button = () => {
     flush();
-    blocks.push({ id: id("button"), type: "emailButton", ...layout, token: action!, label: LINK_FIELDS[action!]?.label ?? "Open", style: "dark" });
+    // Archived wording records the original label, preserving exact draft comparisons.
+    const label = wording.buttonLabel ?? LINK_FIELDS[action!]?.label ?? "Open";
+    blocks.push({ id: id("button"), type: "emailButton", ...layout, token: action!, label, style: "dark" });
   };
 
   // The owner's formatted copy when there is one (sanitised to this message's
@@ -176,7 +178,7 @@ export function defaultEmailBody(
     const facts: DocumentBlock = {
       id: id("facts"), type: "emailFacts", ...layout,
       items: [
-        { label: "QUOTE", value: "{{quote_number}}", sub: "", highlight: false },
+        { label: wording.quoteLabel ?? "QUOTE NUMBER", value: "{{quote_number}}", sub: "", highlight: false },
         { label: "TOTAL INCL. VAT", value: "{{total}}", sub: "", highlight: true },
       ],
     };

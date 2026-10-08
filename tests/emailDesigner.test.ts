@@ -48,10 +48,10 @@ test("every email has a default design: valid, its subject, its action, and a he
 
 test("design B: the frame wraps the body — logo panel, message, the sender as signature, a quiet footer", () => {
   const { html, subject } = render("invite");
-  assert.equal(subject, "Quote Q-42 is ready for your signature");
-  assert.ok(html.indexOf('src="https://acme.example/logo.png"') < html.indexOf("Quote Q-42 is ready for your signature</div>"), "header above the message");
-  assert.ok(html.indexOf("Quote Q-42 is ready for your signature</div>") < html.indexOf(">Pat Smith<"), "the message above the signature");
-  assert.match(html, /href="https:\/\/crm\.acme\.example\/signing\/tok"[^>]*>Open &amp; sign/);
+  assert.equal(subject, "Quote Q-42 — ready for review and signature");
+  assert.ok(html.indexOf('src="https://acme.example/logo.png"') < html.indexOf("Review and sign Quote Q-42</div>"), "header above the message");
+  assert.ok(html.indexOf("Review and sign Quote Q-42</div>") < html.indexOf(">Pat Smith<"), "the message above the signature");
+  assert.match(html, /href="https:\/\/crm\.acme\.example\/signing\/tok"[^>]*>Review &amp; Sign/);
   assert.match(html, /1 Main Rd, Cape Town/);
   assert.match(html, /@media \(max-width: 600px\)/);
   // The banner wins over the logo when there is one; with neither, the company name.
@@ -63,7 +63,7 @@ test("the old sign-off's name lines go (the signature says who it's from); the q
   const quote = render("quote");
   assert.equal((quote.html.match(/>Pat Smith</g) ?? []).length, 1, "the sender once, in the signature");
   assert.match(quote.html, /TOTAL INCL\. VAT[\s\S]*R 1 000,00/);
-  assert.match(quote.text, /QUOTE: Q-42\nTOTAL INCL\. VAT: R 1 000,00/);
+  assert.match(quote.text, /QUOTE NUMBER: Q-42\nTOTAL INCL\. VAT: R 1 000,00/);
   assert.match(quote.text, /--\nPat Smith\nAcme Carts/);
 });
 
@@ -85,7 +85,7 @@ test("never sent without its action; a code is shown large; a secret never reach
   const r = render("invite", body);
   assert.match(r.html, /href="https:\/\/crm\.acme\.example\/signing\/tok"/, "the button is put back");
   assert.equal(r.subject, "Sign Quote Q-42 at");
-  assert.match(r.text, /Open and sign here:\nhttps:\/\/crm\.acme\.example\/signing\/tok/);
+  assert.match(r.text, /Review and sign securely here:\nhttps:\/\/crm\.acme\.example\/signing\/tok/);
   assert.match(render("otp").html, /letter-spacing:8px;[^>]*>482913</);
 });
 

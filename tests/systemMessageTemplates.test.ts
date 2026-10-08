@@ -22,7 +22,7 @@ test("every default template passes its own validation and has a group", () => {
   }
 });
 
-test("the standard wording: texts as they were, emails as rewritten 2026-10-08", () => {
+test("the standard wording: texts stay compact, emails use the premium 2026-10-08 copy", () => {
   assert.equal(
     renderSms("lookup_code_sms", null, { ...COMPANY, code: "482913" }),
     "Acme: your verification code is 482913. It expires in 10 minutes. If you didn't request this, ignore this message.",
@@ -37,10 +37,32 @@ test("the standard wording: texts as they were, emails as rewritten 2026-10-08",
   );
   const recall = renderSigningEmail("recall", null, { ...COMPANY, first_name: "Jo", model: "Rover XL", recall_title: "Brake check", recall_description: "Please book in." }, BRAND);
   assert.equal(recall.subject, "Important notice for your Rover XL: Brake check");
-  assert.equal(recall.text, "Dear Jo,\n\nWe are writing to you about your Rover XL.\n\nPlease book in.\n\nThis work will be carried out at no charge to you. Please contact Acme on 021 000 0000 at your earliest convenience so that we can arrange a suitable time.\n\nWe apologise for the inconvenience and thank you for your understanding.\n\nKind regards,\nAcme");
+  assert.equal(recall.text, "Dear Jo,\n\nWe are contacting you regarding an important notice for your Rover XL.\n\nPlease book in.\n\nThe required work will be completed at no charge to you. Please contact Acme on 021 000 0000 so that we can arrange a convenient time and assist you as quickly as possible.\n\nWe apologise for any inconvenience and appreciate your prompt attention to this notice.\n\nKind regards,\nAcme");
   const portal = renderSigningEmail("portal_code", null, { ...COMPANY, code: "482913" }, BRAND);
   assert.equal(portal.subject, "Your Acme login code");
-  assert.match(portal.text, /^Please use the code below to sign in to your Acme customer portal:\n\n482913\n\nThe code is valid for 10 minutes\./);
+  assert.match(portal.text, /^Please use the secure code below to sign in to your Acme customer portal\.\n\n482913\n\nThis code is valid for 10 minutes/);
+});
+
+test("service reminder uses valid language for both a date and the fallback soon", () => {
+  const vars = { ...COMPANY, first_name: "Jo", model: "Rover XL" };
+  const fallback = renderSigningEmail("service_reminder", null, { ...vars, due_date: "soon" }, BRAND);
+  const dated = renderSigningEmail("service_reminder", null, { ...vars, due_date: "14 Oct 2026" }, BRAND);
+  assert.match(fallback.text, /next scheduled service \(soon\)/);
+  assert.doesNotMatch(fallback.text, /on soon/);
+  assert.match(dated.text, /next scheduled service \(14 Oct 2026\)/);
+});
+
+test("service review uses natural language for the named vehicle", () => {
+  const review = renderSigningEmail("review_service", null, {
+    ...COMPANY, first_name: "Jo", item: "Rover XL", review_link: "https://reviews.example/r"
+  }, BRAND);
+  assert.match(review.text, /Thank you for choosing Acme for your recent service\./);
+  const jobCard = renderSigningEmail("review_service", null, {
+    ...COMPANY, first_name: "Jo", item: "the service on your Rover XL (job card #7)", review_link: "https://reviews.example/r"
+  }, BRAND);
+  assert.match(jobCard.text, /Thank you for choosing Acme for your recent service\./);
+  assert.doesNotMatch(jobCard.text, /your the service|your your|with Rover XL/);
+
 });
 
 test("SMS: no subject, length-capped, and the code/link can't be dropped", () => {
@@ -56,12 +78,12 @@ test("SMS: no subject, length-capped, and the code/link can't be dropped", () =>
 
 test("review and survey links become buttons with their own label; a survey link never reaches a subject", () => {
   const review = renderSigningEmail("review_delivery", null, { ...COMPANY, first_name: "Jo", item: "Rover XL", review_link: "https://search.google.com/local/writereview?placeid=P" }, BRAND);
-  assert.match(review.html, /v:roundrect[\s\S]*Leave a review<\/center>/);
-  assert.match(review.text, /Leave a review here:\nhttps:\/\/search\.google\.com/);
+  assert.match(review.html, /v:roundrect[\s\S]*Share a Review<\/center>/);
+  assert.match(review.text, /Share your review here:\nhttps:\/\/search\.google\.com/);
   assert.match(validateSigningTemplate("survey_invite", "Answer {{survey_link}}", "{{survey_link}}") ?? "", /can't go in the subject/);
   const survey = renderSigningEmail("survey_invite", null, { ...COMPANY, first_name: "Jo", survey_intro: "Quick one.", survey_subject: "How did we do?", survey_link: "https://x.test/s/tok" }, BRAND);
   assert.equal(survey.subject, "How did we do?");
-  assert.match(survey.html, /Answer the survey<\/a>/);
+  assert.match(survey.html, /Complete Survey<\/a>/);
 });
 
 test("every sender uses its editable template — no customer wording left in code", () => {

@@ -46,7 +46,7 @@ test("formatted body renders as styled HTML; every character of text is escaped"
   assert.match(out.html, /<h2 style="[^"]*">Your &lt;quote&gt;<\/h2>/);
   assert.match(out.html, /Hi &lt;b&gt;Jo&lt;\/b&gt;, see <a href="https:\/\/acme\.test\/\?a=1&amp;b=2"/);
   assert.match(out.html, /<ul style="[^"]*"><li[^>]*><strong>one<\/strong><\/li><li[^>]*>two<\/li><\/ul>/, "consecutive items share one list");
-  assert.match(out.html, /v:roundrect[\s\S]*Open &amp; sign/, "a line holding only the link becomes the button");
+  assert.match(out.html, /v:roundrect[\s\S]*Review &amp; Sign/, "a line holding only the link becomes the button");
 });
 
 test("the action can't be dropped: a formatted body without the link still gets the button", () => {
