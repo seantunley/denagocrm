@@ -25,9 +25,9 @@ const LINE = "#e6eaf0";
 
 /** The message fields that are links: shown as a button, and as a link wherever they are typed inline. */
 export const LINK_FIELDS: Record<string, { label: string; lead: string }> = {
-  signing_link: { label: "Open & sign", lead: "Open and sign here:" },
-  review_link: { label: "Leave a review", lead: "Leave a review here:" },
-  survey_link: { label: "Answer the survey", lead: "Answer here:" },
+  signing_link: { label: "Review & Sign", lead: "Review and sign securely here:" },
+  review_link: { label: "Share a Review", lead: "Share your review here:" },
+  survey_link: { label: "Complete Survey", lead: "Complete the survey here:" },
 };
 /** Never in a subject line: a subject is shown in notification previews and inbox lists. */
 const SECRET_FIELDS = new Set(["signing_link", "code", "survey_link"]);
@@ -304,7 +304,7 @@ export function emailBlockHtml(block: DocumentBlock, ctx: Ctx): string {
       const label = fill(block.label, tokens) || LINK_FIELDS[block.token]?.label || "Open";
       const bg = block.style === "accent" ? accent : ctx.look.button;
       const fallback = href !== "#" && SECRET_FIELDS.has(block.token)
-        ? `<p style="margin:0 0 16px;font-size:12px;line-height:1.5;color:${MUTED};">Or paste this link into your browser:<br><a href="${esc(href)}" style="color:${MUTED};word-break:break-all;">${esc(href)}</a></p>`
+        ? `<p style="margin:0 0 18px;font-size:12px;line-height:1.55;color:${MUTED};">Having trouble with the button? Copy this secure link into your browser:<br><a href="${esc(href)}" style="color:${MUTED};word-break:break-all;">${esc(href)}</a></p>`
         : "";
       return buttonHtml(href, label, bg, accent) + fallback;
     }
@@ -516,7 +516,7 @@ export function renderEmailDocument(input: EmailRenderInput): RenderedEmail {
 <html xmlns="http://www.w3.org/1999/xhtml" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office">${HEAD(subject)}
 <body style="margin:0;padding:0;background-color:${look.page};">
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="${look.page}" style="background-color:${look.page};"><tr><td class="wrap" align="center" style="padding:32px 16px;">
-<table role="presentation" class="card" width="600" cellpadding="0" cellspacing="0" border="0" bgcolor="${look.card}" style="width:600px;max-width:600px;background-color:${look.card};border-radius:16px;overflow:hidden;font-family:${EMAIL_FONT};">
+<table role="presentation" class="card" width="600" cellpadding="0" cellspacing="0" border="0" bgcolor="${look.card}" style="width:600px;max-width:600px;background-color:${look.card};border:1px solid #e6eaf0;border-radius:16px;overflow:hidden;font-family:${EMAIL_FONT};box-shadow:0 12px 30px rgba(15,23,42,0.08);">
 ${rows}
 </table>
 </td></tr></table>
