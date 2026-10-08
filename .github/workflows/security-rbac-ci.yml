@@ -442,6 +442,10 @@ jobs:
     if: ${{ github.event_name != 'pull_request' || github.event.pull_request.draft == false }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    # pull-requests: read lets the step below list the files a PR changes.
+    permissions:
+      contents: read
+      pull-requests: read
     services:
       postgres:
         image: postgres:16-alpine
@@ -497,7 +501,31 @@ jobs:
       - name: Generate Prisma client
         run: npm run prisma:generate
 
+      # The upgrade test below is five of this lane's six minutes, and it reads
+      # exactly two things: prisma/ (the migrations and the schema the client is
+      # generated from) and its own script. A pull request that touches neither
+      # cannot change its result, so it is skipped for those -- and only for
+      # those. It always runs on main, on a manual run, and whenever the changed
+      # files cannot be listed: not knowing is a reason to run it, never to skip.
+      - name: Does this change touch what the signing upgrade test reads?
+        id: upgrade
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          run=true
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            if files=$(gh api "repos/${{ github.repository }}/pulls/${PR_NUMBER}/files" --paginate -q '.[].filename') && [ -n "$files" ]; then
+              if ! echo "$files" | grep -qE '^(prisma/|scripts/|package(-lock)?\.json$|\.github/workflows/)'; then
+                run=false
+              fi
+            fi
+          fi
+          echo "run=${run}" >> "$GITHUB_OUTPUT"
+          echo "signing upgrade test will run: ${run}"
+
       - name: Signing upgrade test -- migrate a database that ALREADY HAS signing data
+        if: ${{ steps.upgrade.outputs.run != 'false' }}
         # The integration lane applies migrations to a completely empty PostgreSQL.
         # That cannot catch a backfill which skips rows a previous migration
         # already populated, a terminal-status trigger whose write a later guard
