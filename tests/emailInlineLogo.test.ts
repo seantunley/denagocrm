@@ -42,7 +42,9 @@ test("only this workspace's own logo is loaded, and sendEmail never fails over i
   assert.match(lib, /if \(url\.pathname === `\/api\/brand\/logo\/\$\{tenantId\}`\) \{/);
   assert.match(lib, /await readManagedBlob\(`branding\/\$\{tenantId\}\/\$\{asset\}`\)/);
   // Company Profile logo: exactly the URL configured for this workspace, never private.
-  assert.match(lib, /if \(!configured \|\| configured !== src \|\| /);
+  // …or the signature's banner, by the same exact-match rule.
+  assert.match(lib, /\[value\("COMPANY_LOGO_URL"\), parseSignatureDesign\(value\(SIGNATURE_DESIGN_KEY\)\)\.bannerUrl\]/);
+  assert.match(lib, /if \(!configured\.includes\(src\) \|\| /);
   assert.match(lib, /redirect: "error"/);
   assert.match(lib, /contentType\.startsWith\("image\/"\)/);
   const email = readFileSync(new URL("../src/lib/email.ts", import.meta.url), "utf8");

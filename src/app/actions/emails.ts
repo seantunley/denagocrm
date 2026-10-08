@@ -33,9 +33,11 @@ import {
   htmlToText,
   parseSignatureDesign,
   SIGNATURE_DESIGN_KEY,
+  type SignatureDesign,
 } from "@/lib/signature";
 import { getCompanyProfile } from "@/lib/companyProfile";
-import { readFile } from "@/lib/storage";
+import { readFile, savePublicAsset } from "@/lib/storage";
+import { MAX_LOGO_BYTES } from "@/lib/emailInlineLogo";
 import { emailUploads } from "@/lib/emailUploads";
 import { resolveActingTenant } from "@/lib/tenantContext";
 import { parseReplyTo } from "@/lib/replyToAddresses";
@@ -418,14 +420,11 @@ export async function saveSignatureDesign(formData: FormData) {
         style: formData.get("style"),
         companyLine: String(formData.get("companyLine") ?? "").replace(/[\r\n]+/g, " "),
         footerLine: String(formData.get("footerLine") ?? "").replace(/[\r\n]+/g, " "),
+        // The banner is set by its own buttons (saveSignatureBanner); a Save keeps it.
+        bannerUrl: (await storedSignatureDesign(tenantId)).bannerUrl,
       }),
     );
-    const value = JSON.stringify(design);
-    await basePrisma.appSetting.upsert({
-      where: { tenantId_key: { tenantId, key: SIGNATURE_DESIGN_KEY } },
-      update: { value },
-      create: { tenantId, key: SIGNATURE_DESIGN_KEY, value },
-    });
+    await storeSignatureDesign(tenantId, design);
     await logAudit({
       action: "settings.email_signature.saved",
       summary: `Set the email signature to the ${design.style === "card" ? "card" : "classic"} design`,
@@ -433,6 +432,60 @@ export async function saveSignatureDesign(formData: FormData) {
     });
     revalidatePath("/settings");
   });
+}
+
+const storedSignatureDesign = async (tenantId: string) =>
+  parseSignatureDesign(
+    (await basePrisma.appSetting.findUnique({ where: { tenantId_key: { tenantId, key: SIGNATURE_DESIGN_KEY } }, select: { value: true } }))?.value,
+  );
+
+async function storeSignatureDesign(tenantId: string, design: SignatureDesign) {
+  const value = JSON.stringify(design);
+  await basePrisma.appSetting.upsert({
+    where: { tenantId_key: { tenantId, key: SIGNATURE_DESIGN_KEY } },
+    update: { value },
+    create: { tenantId, key: SIGNATURE_DESIGN_KEY, value },
+  });
+}
+
+// The email embedder's own limit (review of #804): a bigger banner would show in
+// the Settings preview but stay a remote image in the sent email, which many mail
+// apps block — the panel would be missing for exactly the customers who matter.
+const BANNER_MAX_BYTES = MAX_LOGO_BYTES;
+
+/**
+ * The card signature's logo panel image: drawn in the browser from the logo
+ * ("Generate from my logo", lib/signatureBanner.ts) or the owner's own file.
+ * Stored as a PUBLIC asset — it is email artwork every recipient's mail app
+ * loads — and embedded in each email by emailInlineLogo.ts. Sending no file
+ * removes it, back to the plainer panel.
+ */
+export async function saveSignatureBanner(formData: FormData): Promise<{ error?: string; bannerUrl?: string }> {
+  let bannerUrl = "";
+  const result = await asActionResult(async () => {
+    const user = await requireTenantOwner();
+    const tenantId = await getActiveTenantId();
+    if (!tenantId) refuse("No workspace attached to this sign-in — sign out and back in.");
+    const file = formData.get("banner");
+    if (file instanceof File && file.size > 0) {
+      if (!["image/png", "image/jpeg"].includes(file.type)) refuse("The banner has to be a PNG or JPG image.");
+      if (file.size > BANNER_MAX_BYTES) refuse("The banner is over the 1 MB limit — save it smaller (960 × 300 is plenty).");
+      bannerUrl = await savePublicAsset(Buffer.from(await file.arrayBuffer()), file.type === "image/png" ? "signature-banner.png" : "signature-banner.jpg", file.type, tenantId);
+      // Without a public store the file lands on local disk with no web address,
+      // and a mail app can't load a banner that has none.
+      if (!/^https:\/\//i.test(bannerUrl)) refuse("Images can't be stored publicly here — file storage isn't set up.");
+    }
+    const design = { ...(await storedSignatureDesign(tenantId)), bannerUrl };
+    // parse → the same https-only rule the send path applies.
+    await storeSignatureDesign(tenantId, parseSignatureDesign(JSON.stringify(design)));
+    await logAudit({
+      action: "settings.email_signature.banner",
+      summary: bannerUrl ? "Set the email signature's logo panel image" : "Removed the email signature's logo panel image",
+      user,
+    });
+    revalidatePath("/settings");
+  });
+  return result.error ? { error: result.error } : { bannerUrl };
 }
 
 /** Sample values for the live preview — obviously fake, so a preview can't be mistaken for a real send. */
