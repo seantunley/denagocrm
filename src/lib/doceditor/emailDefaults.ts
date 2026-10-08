@@ -137,12 +137,9 @@ export function defaultEmailBody(
   };
   const button = () => {
     flush();
-    const premiumLabel =
-      action === "signing_link" ? "Review & Sign" :
-      action === "review_link" ? "Share a Review" :
-      action === "survey_link" ? "Complete Survey" :
-      LINK_FIELDS[action!]?.label ?? "Open";
-    blocks.push({ id: id("button"), type: "emailButton", ...layout, token: action!, label: premiumLabel, style: "dark" });
+    // Archived wording records the original label, preserving exact draft comparisons.
+    const label = wording.buttonLabel ?? LINK_FIELDS[action!]?.label ?? "Open";
+    blocks.push({ id: id("button"), type: "emailButton", ...layout, token: action!, label, style: "dark" });
   };
 
   // The owner's formatted copy when there is one (sanitised to this message's
@@ -181,7 +178,7 @@ export function defaultEmailBody(
     const facts: DocumentBlock = {
       id: id("facts"), type: "emailFacts", ...layout,
       items: [
-        { label: "QUOTE NUMBER", value: "{{quote_number}}", sub: "", highlight: false },
+        { label: wording.quoteLabel ?? "QUOTE NUMBER", value: "{{quote_number}}", sub: "", highlight: false },
         { label: "TOTAL INCL. VAT", value: "{{total}}", sub: "", highlight: true },
       ],
     };
