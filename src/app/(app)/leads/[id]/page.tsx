@@ -486,6 +486,9 @@ export default async function LeadDetailPage({
                               >
                                 {q.supersededAt ? "superseded" : q.status}
                               </span>
+                              {canPrintQuote(q.id) && (
+                                <Link href={`/deals/${q.id}`} className="text-xs font-medium text-primary hover:underline">Deal workspace</Link>
+                              )}
                               {!q.supersededAt && canPrintQuote(q.id) && quotePrintLinks(q).map((link) => (
                                 <a key={link.href} href={link.href} target="_blank" rel="noreferrer" className="text-xs text-orange-400 hover:underline">
                                   {link.label}

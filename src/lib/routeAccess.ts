@@ -61,6 +61,8 @@ export type RouteRule =
   | { readonly prefix: string; readonly anyOf: readonly PermissionKey[] };
 
 export const ROUTE_RULES = [
+  // Deal jackets are quote-bound workspaces and use the exact quote read grants.
+  { prefix: "/deals", anyOf: ["quotes.view_all", "quotes.view_owned"] },
   // Customer health scores every contact — the same grant the nav uses to show
   // the link, so a visible link can no longer lead to a redirect.
   { prefix: "/health", anyOf: ["contacts.view_all", "contacts.view_owned"] },

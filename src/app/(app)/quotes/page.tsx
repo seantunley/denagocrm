@@ -327,7 +327,8 @@ export default async function QuotesPage({
                         </MobileDataField>
                         <MobileDataField label="Created">{formatDate(quote.createdAt)}</MobileDataField>
                       </MobileDataFields>
-                      <div className="mt-2 flex justify-end gap-3">
+                      <div className="mt-2 flex items-center justify-end gap-3">
+                        <Link href={`/deals/${quote.id}`} className={`${buttonVariants({ variant: "outline", size: "sm" })} mr-auto`}>Open deal</Link>
                         <QuoteRowActions quoteId={quote.id} number={quote.number} status={quote.status} signed={Boolean(quote.signedAt)} canCancel={canCancel} canDuplicate={canDuplicate} />
                         <ConfirmDelete action={deleteQuote.bind(null, quote.id)} title={`Delete quote Q-${quote.number}?`} description="Moves the quote to Trash (restorable for 60 days)." trigger="Delete quote" triggerClass="text-xs text-slate-500 hover:text-red-400" disabled={!canDelete} disabledReason="Your role can't delete quotes." />
                       </div>
@@ -388,6 +389,7 @@ export default async function QuotesPage({
                           <td className="text-slate-400">{formatDate(quote.validUntil, quoteDefaults.regional)}</td>
                           <td className="text-slate-400">{formatDate(quote.createdAt)}{quote.createdBy ? ` · ${quote.createdBy.name}` : ""}</td>
                           <td className="whitespace-nowrap text-right">
+                            <Link href={`/deals/${quote.id}`} className={`${buttonVariants({ variant: "outline", size: "sm" })} mr-3`}>Open deal</Link>
                             <QuoteRowActions className="mr-3" quoteId={quote.id} number={quote.number} status={quote.status} signed={Boolean(quote.signedAt)} canCancel={canCancel} canDuplicate={canDuplicate} />
                             <ConfirmDelete action={deleteQuote.bind(null, quote.id)} title={`Delete quote Q-${quote.number}?`} description="Moves the quote to Trash (restorable for 60 days)." trigger="Delete" triggerClass="text-xs text-slate-500 hover:text-red-400" disabled={!canDelete} disabledReason="Your role can't delete quotes." />
                           </td>
@@ -414,6 +416,7 @@ export default async function QuotesPage({
 function quoteContextActions(quote: { id: string; status: string }): RecordContextAction[] {
   return [
     { label: "Open editor", href: `/quotes?edit=${quote.id}`, icon: "edit" },
+    { label: "Deal workspace", href: `/deals/${quote.id}`, icon: "quote" },
     { label: "Print / PDF", href: `/quotes/${quote.id}/print`, icon: "print", newTab: true },
     ...quotePrintLinks(quote).map((link) => ({ ...link, icon: "print" as const, newTab: true })),
   ];
