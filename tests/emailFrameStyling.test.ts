@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { emailBlockPreviewHtml, emailFramePreview, renderEmailDocument, type EmailBrand } from "../src/lib/doceditor/emailRender";
 import { defaultEmailBody, defaultEmailFrame, EMAIL_KINDS, isUntouchedEmailSeed } from "../src/lib/doceditor/emailDefaults";
-import { STANDARD_WORDING_2026_10_07 } from "../src/lib/doceditor/emailWordingHistory";
+import { STANDARD_WORDING_2026_10_07, STANDARD_WORDING_2026_10_08 } from "../src/lib/doceditor/emailWordingHistory";
 import { documentSchema, type DocumentBlock, type DocumentModel } from "../src/lib/doceditor/model";
 import { SIGNING_EMAILS, type SigningEmailKind } from "../src/lib/signing/emailTemplates";
 
@@ -288,6 +288,49 @@ test("a draft is 'untouched' only when it is EXACTLY what was seeded — any edi
   assert.equal(isUntouchedEmailSeed("quote", null), false);
   assert.equal(isUntouchedEmailSeed("quote", { junk: true }), false);
   assert.equal(isUntouchedEmailSeed("invite", ownSeed), false, "another email's seed");
+});
+
+
+test("real pre-upgrade draft labels from #806 and #807 are recognised across all 13 emails", () => {
+  // Reconstruct the old seed structure, then stamp the ACTUAL old labels
+  // independently of the current factory. Previously the test rebuilt old
+  // drafts using new CTA defaults, hiding a 7-of-13 recognition failure.
+  const oldButtons: Partial<Record<SigningEmailKind, string>> = {
+    invite: "Open & sign",
+    reminder: "Open & sign",
+    review_delivery: "Leave a review",
+    review_service: "Leave a review",
+    survey_invite: "Answer the survey",
+    survey_reminder: "Answer the survey",
+  };
+  for (const revision of [STANDARD_WORDING_2026_10_07, STANDARD_WORDING_2026_10_08]) {
+    for (const kind of EMAIL_KINDS) {
+      const wording = revision[kind]!;
+      assert.ok(wording, `missing archived ${kind}`);
+      // Deliberately discard the archived design metadata to reproduce the
+      // old stored body, then restore each old literal by hand below.
+      const oldDraft = defaultEmailBody(kind, null, {
+        subject: wording.subject,
+        body: wording.body,
+        headline: wording.headline,
+      });
+      const all = oldDraft.pages.flatMap((p) => p.rows.flatMap((r) => r.columns.flatMap((c) => c.blocks)));
+      const button = all.find((b) => b.type === "emailButton");
+      if (button?.type === "emailButton") button.label = oldButtons[kind] ?? button.label;
+      const facts = all.find((b) => b.type === "emailFacts");
+      if (facts?.type === "emailFacts") facts.items[0].label = "QUOTE";
+      assert.equal(
+        isUntouchedEmailSeed(kind, asStored(oldDraft)),
+        true,
+        `${kind} from ${revision === STANDARD_WORDING_2026_10_07 ? "#806" : "#807"} must upgrade`,
+      );
+      // A manual change to any visible label is not considered an untouched seed.
+      if (button?.type === "emailButton") {
+        button.label = "Custom button";
+        assert.equal(isUntouchedEmailSeed(kind, oldDraft), false, `${kind} custom CTA is preserved`);
+      }
+    }
+  }
 });
 
 test("the refresh reads content, never timestamps; only unpublished drafts; and only if unchanged since read", () => {
