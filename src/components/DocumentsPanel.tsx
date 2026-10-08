@@ -1,6 +1,8 @@
 import Link from "next/link";
 import { uploadDocument, deleteDocument } from "@/app/actions/documents";
 import ConfirmDelete from "@/components/ConfirmDelete";
+import { SaveForm, SaveButton } from "@/components/SaveForm";
+import QuoteRowActions from "@/components/quotes/QuoteRowActions";
 import { StatusPill } from "@/components/visual-system";
 import { formatDate, formatZAR } from "@/lib/format";
 import { FileText, Upload } from "lucide-react";
@@ -126,10 +128,13 @@ export default function DocumentsPanel({
   revalidate,
   hideUpload = false,
   emptyText = "No documents uploaded.",
+  quoteActions,
 }: {
   documents: Doc[];
   /** Quote-by-quote grouping. Omit for the vehicle and job card panels. */
   quoteGroups?: QuoteGroup[];
+  /** Offer Cancel / Duplicate on each quote heading; the caller's permissions. */
+  quoteActions?: { canCancel: boolean; canDuplicate: boolean };
   contactId?: string;
   vehicleId?: string;
   jobCardId?: string;
@@ -153,7 +158,7 @@ export default function DocumentsPanel({
       </div>
 
       {!hideUpload && (
-        <form
+        <SaveForm
           action={uploadDocument}
           className="mb-4 grid gap-2 rounded-xl border border-border bg-muted/20 p-3"
         >
@@ -167,8 +172,8 @@ export default function DocumentsPanel({
             required
             className="w-full min-w-0 text-xs text-muted-foreground file:mr-3 file:cursor-pointer file:rounded-md file:border file:border-border file:bg-background file:px-2.5 file:py-1.5 file:text-xs file:font-medium file:text-foreground"
           />
-          <button className="btn-primary btn-sm w-full"><Upload className="size-4" />Upload document</button>
-        </form>
+          <SaveButton className="btn-primary btn-sm w-full" pendingLabel="Uploading…"><Upload className="size-4" />Upload document</SaveButton>
+        </SaveForm>
       )}
 
       {/* A quote is listed whether or not it has any paperwork yet — an accepted,
@@ -192,6 +197,16 @@ export default function DocumentsPanel({
                 <span className="ml-auto text-xs tabular-nums text-muted-foreground">
                   {formatZAR(Math.round(group.totalCents))} · {formatDate(group.createdAt)}
                 </span>
+                {quoteActions && !group.superseded && (
+                  <QuoteRowActions
+                    quoteId={group.id}
+                    number={group.number}
+                    status={group.status}
+                    signed={group.signed}
+                    canCancel={quoteActions.canCancel}
+                    canDuplicate={quoteActions.canDuplicate}
+                  />
+                )}
               </div>
               {group.documents.length === 0 ? (
                 <p className="mt-2 text-xs text-slate-500">

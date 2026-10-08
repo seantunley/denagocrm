@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { requireUser } from "@/lib/auth";
+import { isTenantOwner, requireUser } from "@/lib/auth";
 import { requireModuleEnabled } from "@/lib/modules/enabled";
 import { getUserPermissionList } from "@/lib/permissions";
 import MarketingWorkspaceShell from "@/components/marketing/MarketingWorkspaceShell";
@@ -11,7 +11,8 @@ export default async function MarketingLayout({ children }: { children: ReactNod
     requireModuleEnabled("marketing"),
     getUserPermissionList(user),
   ]);
-  const sections = buildMarketingWorkspaceSections(user.role === "owner", permissions);
+  // The workspace's owner, not only the platform owner.
+  const sections = buildMarketingWorkspaceSections(await isTenantOwner(), permissions);
 
   return <MarketingWorkspaceShell sections={sections}>{children}</MarketingWorkspaceShell>;
 }

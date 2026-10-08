@@ -1,9 +1,12 @@
 import { ExternalLink, Inbox, Star } from "lucide-react";
 import { basePrisma } from "@/lib/db";
 import { activeTenantPredicate } from "@/lib/tenantPredicate";
-import { getActiveTenantId, requireUser } from "@/lib/auth";
-import { DEFAULT_TENANT_ID } from "@/lib/tenant";
-import { accessibleInboxWhere, hasPermission } from "@/lib/permissions";
+import { getActiveTenantId } from "@/lib/auth";
+import { notFound } from "next/navigation";
+import { accessibleInboxWhere, hasPermission, requireAnyPermission } from "@/lib/permissions";
+import { loadCommentThreads } from "@/lib/commentInbox";
+import CommentThreadList from "@/components/CommentThreadList";
+import { pageCapabilities } from "@/lib/metaCapabilities";
 import AutoRefresh from "@/components/AutoRefresh";
 import Tabs from "@/components/Tabs";
 import SocialThreadList from "@/components/SocialThreadList";
@@ -13,19 +16,27 @@ import { loadInboxComms } from "@/lib/inboxQuery";
 import { deliveryStateForMessages } from "@/lib/botOutbox";
 import { collaborationForThreads } from "@/lib/inboxCollaboration";
 import { listActingTenantStaff } from "@/lib/tenantActor";
-import { getSetting } from "@/lib/settings";
+import { resolveIntegrationBundle } from "@/lib/settings";
 import { formatDateTime } from "@/lib/format";
 import { EmptyState, SectionHeading, Surface } from "@/components/visual-system";
 import { WorkspaceHero } from "@/components/workspace-hero";
+import { SaveForm, SaveButton } from "@/components/SaveForm";
+import { listDeadBotConversations } from "@/lib/deadBotConversations";
+import { retryDeadBotConversation, retryFailedMessage } from "@/app/actions/botDeliveries";
 
-export const metadata = { title: "Social inbox — DenagoCRM" };
+export const metadata = { title: "Social inbox" };
 
-export default async function InboxPage() {
-  const user = await requireUser();
-  const workspaceTenantId = (await getActiveTenantId()) ?? DEFAULT_TENANT_ID;
+export default async function InboxPage({ searchParams }: { searchParams: Promise<{ tab?: string }> }) {
+  const { tab } = await searchParams;
+  // The page's own guard, not only the layout's: a layout does not re-run on
+  // client navigation, and this page now also loads the public comments.
+  const user = await requireAnyPermission("inbox.view", "inbox.reply");
+  // No workspace means nothing to show — not Denago's reviews and Place ID.
+  const workspaceTenantId = await getActiveTenantId();
+  if (!workspaceTenantId) notFound();
   const scopeWhere = await accessibleInboxWhere(user);
-  const channelWhere = { type: { in: ["whatsapp", "messenger", "instagram", "x"] } };
-  const [activeComms, archivedComms, reviews, placeId] = await Promise.all([
+  const channelWhere = { type: { in: ["whatsapp", "messenger", "instagram", "x", "telegram"] } };
+  const [activeComms, archivedComms, reviews, placeId, activeComments, archivedComments, capabilities] = await Promise.all([
     loadInboxComms({ ...channelWhere, ...scopeWhere }, { archived: false }),
     loadInboxComms({ ...channelWhere, ...scopeWhere }, { archived: true }),
     basePrisma.googleReview.findMany({
@@ -33,7 +44,14 @@ export default async function InboxPage() {
       orderBy: { publishedAt: "desc" },
       take: 10,
     }),
-    getSetting("GOOGLE_PLACE_ID"),
+    // The same resolution the review fetcher uses, so a workspace's own Google
+    // credentials count here too. Only the (non-secret) place id is kept.
+    resolveIntegrationBundle(workspaceTenantId, "google-reviews").then((bundle) => bundle?.GOOGLE_PLACE_ID ?? null),
+    loadCommentThreads({ archived: false }),
+    loadCommentThreads({ archived: true }),
+    // Asked, not assumed. Public replies need pages_manage_engagement; if Meta
+    // has not granted it, the button is not rendered and the notice says how.
+    pageCapabilities(),
   ]);
 
   const threadList = buildInboxThreads(activeComms);
@@ -43,10 +61,12 @@ export default async function InboxPage() {
       thread.messages.filter((message) => message.direction === "outbound").map((message) => message.id),
     ),
   );
-  const [collaboration, staff, canCollaborate] = await Promise.all([
+  const [collaboration, staff, canCollaborate, deadConversations] = await Promise.all([
     collaborationForThreads([...threadList, ...archivedList]),
     listActingTenantStaff(),
     hasPermission(user, "inbox.reply"),
+    // Conversations whose last message died — the customer is waiting (gap audit #31).
+    listDeadBotConversations(),
   ]);
   const collabStaff = staff.map((person) => ({ id: person.id, name: person.name }));
   const unread = threadList.filter((thread) => thread.unread).length;
@@ -84,11 +104,83 @@ export default async function InboxPage() {
         <Surface className="p-4"><p className="text-[10px] uppercase tracking-wide text-muted-foreground">SLA overdue</p><p className={`mt-1 text-2xl font-semibold ${overdueHandoffs ? "text-red-300" : "text-emerald-300"}`}>{overdueHandoffs}</p><p className="mt-1 text-[11px] text-muted-foreground">Past the handoff target</p></Surface>
         <Surface className="p-4"><p className="text-[10px] uppercase tracking-wide text-muted-foreground">Human handling</p><p className="mt-1 text-2xl font-semibold text-sky-300">{humanThreads.length}</p><p className="mt-1 text-[11px] text-muted-foreground">Automation currently paused</p></Surface>
       </div>
+      {deadConversations.length > 0 && (
+        <Surface className="border-red-500/30 p-4">
+          <h2 className="text-sm font-semibold">Couldn&apos;t reach the customer</h2>
+          <p className="mt-1 text-xs text-muted-foreground">A message to these customers failed — the bot&apos;s (so the bot has stopped) or a staff reply — and the customer is still waiting. Reply yourself, or send it again if the failure was temporary.</p>
+          <ul className="mt-3 divide-y divide-border">
+            {deadConversations.map((dead) => (
+              <li key={`${dead.channel}:${dead.key}`} className="flex flex-wrap items-center gap-3 py-2.5">
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm font-medium">
+                    {dead.contact ? <a href={`/contacts/${dead.contact.id}`} className="text-primary hover:underline">{dead.contact.name}</a> : "Unknown customer"}
+                    <span className="ml-2 text-xs capitalize text-muted-foreground">{dead.channel}{dead.origin === "staff" ? " · staff reply" : ""}</span>
+                  </p>
+                  <p className="text-xs text-muted-foreground">Failed {formatDateTime(dead.failedAt)} — {dead.reason}</p>
+                </div>
+                {canCollaborate && dead.retryable && (
+                  <SaveForm action={dead.failedMessageId ? retryFailedMessage.bind(null, dead.failedMessageId) : retryDeadBotConversation.bind(null, dead.channel, dead.key)}>
+                    <SaveButton className="btn-secondary btn-sm" pendingLabel="Sending…">Send again</SaveButton>
+                  </SaveForm>
+                )}
+              </li>
+            ))}
+          </ul>
+        </Surface>
+      )}
       <div>
         <div className="mb-3"><h2 className="text-sm font-semibold">Waiting for takeover</h2><p className="mt-1 text-xs text-muted-foreground">Reason, wait time, channel and assignment are visible without opening the conversation.</p></div>
         <BotHandoffQueue items={handoffItems} staff={collabStaff} canAct={canCollaborate} />
       </div>
       {humanThreads.length ? <div><div className="mb-3"><h2 className="text-sm font-semibold">Human handling</h2><p className="mt-1 text-xs text-muted-foreground">These conversations are already claimed or manually paused; open one to return it to the bot when resolved.</p></div><SocialThreadList delivery={delivery} collaboration={collaboration} staff={collabStaff} canCollaborate={canCollaborate} viewerId={user.id} list={humanThreads} empty="No conversations are currently human-controlled." /></div> : null}
+    </div>
+  );
+
+  // Public comments on posts and ads: their own tab, never mixed into "All".
+  // The conversation tabs group by PERSON and answer "who is waiting on us";
+  // a post with a crowd on it is moderation, and a commenter has no identity we
+  // can resolve (their Facebook id is not their Messenger id), so
+  // buildInboxThreads skips those rows by construction and this list reads them
+  // itself. This used to be a separate /comments screen, which now opens here.
+  const unreadComments = activeComments.filter((thread) => thread.unread).length;
+  const commentsPanel = (
+    <div className="space-y-4">
+      {!capabilities.canManageEngagement && (
+        <Surface className="border-amber-500/30 bg-amber-500/[0.06] p-4">
+          <p className="text-sm font-medium text-amber-200">Public replies are not enabled yet</p>
+          <p className="mt-1 text-xs text-muted-foreground">
+            Replying <b>privately</b> works now. To also reply <b>under the post</b>, the Denago CRM app needs
+            Meta&apos;s <code className="rounded bg-muted px-1">pages_manage_engagement</code> permission:
+            request it in the Meta app dashboard under <b>App Review → Permissions and Features</b>, then
+            reconnect the Page in Settings → Integrations.
+            {capabilities.checkedAt
+              ? ` Last checked ${capabilities.checkedAt.toLocaleString("en-ZA")}.`
+              : " Meta has not been asked yet — this updates once the Page token is readable."}
+          </p>
+        </Surface>
+      )}
+      <Tabs
+        tabs={[
+          {
+            key: "active",
+            label: "Active",
+            count: unreadComments,
+            content: <CommentThreadList threads={activeComments} canReplyPublicly={capabilities.canManageEngagement} />,
+          },
+          {
+            key: "archived",
+            label: "Archived",
+            count: archivedComments.length,
+            content: (
+              <CommentThreadList
+                threads={archivedComments}
+                canReplyPublicly={capabilities.canManageEngagement}
+                emptyMessage="Nothing archived yet. Archive a post once you have dealt with its comments — it leaves this list but keeps listening, so a new comment brings it back."
+              />
+            ),
+          },
+        ]}
+      />
     </div>
   );
 
@@ -135,6 +227,7 @@ export default async function InboxPage() {
           { label: "Messenger", icon: "/branding/social-facebook.png", count: channelCount("messenger") },
           { label: "Instagram", icon: "/branding/social-instagram.png", count: channelCount("instagram") },
           { label: "X", icon: "/branding/social-x.svg", count: channelCount("x") },
+          { label: "Telegram", icon: "/branding/social-telegram.svg", count: channelCount("telegram") },
         ].map((channel) => (
           <Surface key={channel.label} className="flex items-center gap-3 px-4 py-3">
             {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -146,14 +239,16 @@ export default async function InboxPage() {
       </div>
 
       <Tabs
-        initialKey="all"
+        initialKey={tab === "comments" ? "comments" : "all"}
         tabs={[
-          { key: "handoffs", label: "Bot handoffs", count: handoffThreads.length, content: handoffsPanel },
+          { key: "handoffs", label: "Bot handoffs", count: handoffThreads.length + deadConversations.length, content: handoffsPanel },
           { key: "all", label: "All", count: unread, content: <SocialThreadList delivery={delivery} collaboration={collaboration} staff={collabStaff} canCollaborate={canCollaborate} viewerId={user.id} list={threadList} empty="No conversations yet. Messages appear here as soon as a connected customer channel receives one." /> },
           { key: "whatsapp", label: "WhatsApp", count: threadList.filter((thread) => thread.channel === "whatsapp" && thread.unread).length, content: <SocialThreadList delivery={delivery} collaboration={collaboration} staff={collabStaff} canCollaborate={canCollaborate} viewerId={user.id} list={threadList.filter((thread) => thread.channel === "whatsapp")} empty="No WhatsApp conversations yet. Connect the WhatsApp Business number in Settings → Integrations." /> },
           { key: "messenger", label: "Messenger", count: threadList.filter((thread) => thread.channel === "messenger" && thread.unread).length, content: <SocialThreadList delivery={delivery} collaboration={collaboration} staff={collabStaff} canCollaborate={canCollaborate} viewerId={user.id} list={threadList.filter((thread) => thread.channel === "messenger")} empty="No Messenger conversations yet." /> },
           { key: "instagram", label: "Instagram", count: threadList.filter((thread) => thread.channel === "instagram" && thread.unread).length, content: <SocialThreadList delivery={delivery} collaboration={collaboration} staff={collabStaff} canCollaborate={canCollaborate} viewerId={user.id} list={threadList.filter((thread) => thread.channel === "instagram")} empty="No Instagram DMs yet. They appear once the Instagram account and Meta messaging permissions are connected." /> },
           { key: "x", label: "X", count: threadList.filter((thread) => thread.channel === "x" && thread.unread).length, content: <SocialThreadList delivery={delivery} collaboration={collaboration} staff={collabStaff} canCollaborate={canCollaborate} viewerId={user.id} list={threadList.filter((thread) => thread.channel === "x")} empty="No X conversations yet. Connect the tenant's X account in Settings → Integrations." /> },
+          { key: "telegram", label: "Telegram", count: threadList.filter((thread) => thread.channel === "telegram" && thread.unread).length, content: <SocialThreadList delivery={delivery} collaboration={collaboration} staff={collabStaff} canCollaborate={canCollaborate} viewerId={user.id} list={threadList.filter((thread) => thread.channel === "telegram")} empty="No Telegram conversations yet. They appear once the Telegram bot is connected in Settings → Integrations." /> },
+          { key: "comments", label: "Comments", count: unreadComments, content: commentsPanel },
           { key: "reviews", label: "Google Reviews", count: reviews.length, content: reviewsPanel },
           { key: "archived", label: "Archived", count: archivedList.length, content: <SocialThreadList delivery={delivery} collaboration={collaboration} staff={collabStaff} canCollaborate={canCollaborate} viewerId={user.id} list={archivedList} empty="Nothing archived. Archive finished or test conversations to keep the active queue focused." /> },
         ]}

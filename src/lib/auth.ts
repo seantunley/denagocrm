@@ -153,6 +153,18 @@ export async function requireApiOwner() {
   return user;
 }
 
+/**
+ * The API-route form of requireTenantOwner(): the PLATFORM owner or the owner of
+ * the caller's active workspace, as JSON 401/403 rather than a redirect. Use it
+ * for a route that serves a workspace its own data — requireApiOwner() is the
+ * platform owner only, which no other workspace's owner ever is.
+ */
+export async function requireApiTenantOwner() {
+  const user = await requireApiUser();
+  if (!(await isTenantOwner())) throw new ApiAuthError(403);
+  return user;
+}
+
 /** Turn an ApiAuthError into its JSON response; returns null for anything else. */
 export function apiAuthErrorResponse(err: unknown): NextResponse | null {
   if (err instanceof ApiAuthError) {

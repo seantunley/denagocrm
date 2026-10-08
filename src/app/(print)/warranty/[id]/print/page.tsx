@@ -1,11 +1,11 @@
 import { notFound, redirect } from "next/navigation";
 import { printableRecordLayout } from "@/lib/docbuilder/leadWarrantyRecords";
 import { prisma } from "@/lib/db";
-import { requireUser } from "@/lib/auth";
-import { requireVehicleReadAccess } from "@/lib/permissions";
+import { requireWarrantyClaimReadAccess } from "@/lib/warrantyAccess";
 import PrintActions from "@/components/PrintActions";
 import PrintDocShell, { InfoBlock } from "@/components/print/PrintDocShell";
 import { getCompanyProfile } from "@/lib/companyProfile";
+import { getRegionalSettings } from "@/lib/settings";
 import { getDocTemplate } from "@/lib/docTemplateStore";
 import { computeWarranty, warrantyLabels } from "@/lib/warranty";
 import { contactName, formatDate } from "@/lib/format";
@@ -19,13 +19,14 @@ export default async function WarrantyClaimPrintPage({
 }) {
   const { id } = await params;
   const { tpl: tplId } = await searchParams;
-  await requireUser();
+  // The claim's read rule — warranty grant AND vehicle — as on the claim's own
+  // page. Vehicle access alone used to be enough here.
+  if (!(await requireWarrantyClaimReadAccess(id))) notFound();
   const claim = await prisma.warrantyClaim.findUnique({
     where: { id },
     include: { vehicle: { include: { contact: true } } },
   });
   if (!claim) notFound();
-  await requireVehicleReadAccess(claim.vehicleId);
   // SAFE SWITCH: once the default warranty-claim layout is PUBLISHED in the
   // single editor, that is what prints. ?tpl= is a Settings → Documents preview
   // of a legacy template, so it stays here.
@@ -35,6 +36,7 @@ export default async function WarrantyClaimPrintPage({
   // The company this document is FROM. getCompanyProfile now inherits the
   // platform-set tenant brand when the tenant has not filled in its own profile.
   const company = await getCompanyProfile();
+  const regional = await getRegionalSettings();
   const tpl = await getDocTemplate("warranty-claim", tplId);
   const w = computeWarranty(claim.vehicle);
 
@@ -46,8 +48,8 @@ export default async function WarrantyClaimPrintPage({
         template={tpl}
         title="Warranty claim"
         number={`WC-${claim.id.slice(-6).toUpperCase()}`}
-        meta={[`Claimed: ${formatDate(claim.claimedAt)}`, `Status: ${claim.status}`]}
-        parties={{ left: "Customer · Date", right: "For Denago Cape Town · Date" }}
+        meta={[`Claimed: ${formatDate(claim.claimedAt, regional)}`, `Status: ${claim.status}`]}
+        parties={{ left: "Customer · Date", right: `For ${company.name} · Date` }}
       >
         {tpl.sections.vehicle !== false && (
           <div className="grid grid-cols-2 gap-4 mb-6">
@@ -66,10 +68,10 @@ export default async function WarrantyClaimPrintPage({
                 claim.vehicle.model,
                 claim.vehicle.vin ? `VIN: ${claim.vehicle.vin}` : null,
                 claim.vehicle.purchaseDate
-                  ? `Purchased: ${formatDate(claim.vehicle.purchaseDate)}`
+                  ? `Purchased: ${formatDate(claim.vehicle.purchaseDate, regional)}`
                   : null,
                 `Warranty: ${warrantyLabels[w.status]}${
-                  w.expiryDate ? ` (until ${formatDate(w.expiryDate)})` : ""
+                  w.expiryDate ? ` (until ${formatDate(w.expiryDate, regional)})` : ""
                 }`,
               ]}
             />
@@ -90,7 +92,7 @@ export default async function WarrantyClaimPrintPage({
             </p>
             <p className="text-xs text-slate-700 whitespace-pre-wrap">
               {claim.resolution}
-              {claim.resolvedAt ? ` (${formatDate(claim.resolvedAt)})` : ""}
+              {claim.resolvedAt ? ` (${formatDate(claim.resolvedAt, regional)})` : ""}
             </p>
           </div>
         )}

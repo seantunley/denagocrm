@@ -13,7 +13,9 @@ test("mobile test drives exposes the real booking workflow as its primary action
 
   assert.match(mobileView, /<MobileWorkspaceHeader[\s\S]*action={canCreate \? \([\s\S]*<TestDriveBookingTrigger/);
   assert.match(mobileView, /compact/);
-  assert.match(trigger, /form action={createTestDriveBooking}/, "the mobile action must create rather than only list bookings");
+  // ConflictAwareForm (#710): a refusal — a calendar conflict above all — shows its
+  // message instead of the error page.
+  assert.match(trigger, /<ConflictAwareForm[\s\S]*action={createTestDriveBooking}/, "the mobile action must create rather than only list bookings");
   assert.match(trigger, /Create booking/);
 });
 

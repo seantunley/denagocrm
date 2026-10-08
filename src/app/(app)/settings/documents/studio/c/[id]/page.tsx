@@ -1,50 +1,11 @@
-import Link from "next/link";
-import { notFound } from "next/navigation";
-import { ArrowLeft } from "lucide-react";
-import { requirePermission } from "@/lib/permissions";
-import { prisma } from "@/lib/db";
-import { isDocEditorLibraryItem } from "@/lib/studioClauses";
-import { MERGE_FIELDS } from "@/lib/mergeFields";
-import StudioEditor from "@/components/StudioEditor";
-import { saveReusableBlock } from "@/app/actions/studio";
+import { redirect } from "next/navigation";
+import { requireAnyPermission } from "@/lib/permissions";
 
-export const dynamic = "force-dynamic";
-
-export default async function StudioClausePage({ params }: { params: Promise<{ id: string }> }) {
-  await requirePermission("document_templates.manage");
-  const { id } = await params;
-  const clause = await prisma.reusableBlock.findUnique({ where: { id } });
-  // A doc-editor library item is not BlockNote content; saving it here would overwrite it.
-  if (!clause || isDocEditorLibraryItem(clause)) notFound();
-
-  async function save(data: { title: string; content: unknown }) {
-    "use server";
-    return saveReusableBlock(id, data);
-  }
-
-  return (
-    <div className="space-y-4">
-      <div>
-        <Link
-          href="/document-studio"
-          className="mb-1 inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
-        >
-          <ArrowLeft className="size-3.5" />
-          Document Studio
-        </Link>
-        <p className="text-sm text-muted-foreground">
-          Reusable clause — insert it into any template or document. It is copied in at insert
-          time, so editing this clause never changes existing documents.
-        </p>
-      </div>
-
-      <StudioEditor
-        initialTitle={clause.name}
-        initialContent={clause.contentJson}
-        fields={MERGE_FIELDS}
-        clauses={[]}
-        onSave={save}
-      />
-    </div>
-  );
+/**
+ * The old Studio clause editor is gone — there is ONE document editor
+ * (2026-10-07). Reusable clauses are saved and inserted from its Library tab.
+ */
+export default async function OldStudioClausePage() {
+  await requireAnyPermission("document_templates.manage", "docbuilder.manage");
+  redirect("/document-studio");
 }

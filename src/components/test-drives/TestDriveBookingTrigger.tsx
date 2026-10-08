@@ -3,6 +3,8 @@ import { createTestDriveBooking } from "@/app/actions/testDrives";
 import { contactName } from "@/lib/format";
 import ModalTrigger from "@/components/Modal";
 import { buttonVariants } from "@/components/ui/button";
+import { ConflictAwareForm } from "@/components/ConflictAwareForm";
+import ContactPicker from "@/components/ContactPicker";
 
 type ContactOption = {
   id: string;
@@ -26,6 +28,9 @@ export function TestDriveBookingTrigger({
   defaultStart,
   defaultEnd,
   compact = false,
+  defaultContactId,
+  defaultLeadId,
+  defaultOpen = false,
 }: {
   contacts: ContactOption[];
   leads: LeadOption[];
@@ -36,25 +41,36 @@ export function TestDriveBookingTrigger({
   defaultStart: string;
   defaultEnd: string;
   compact?: boolean;
+  /** Pre-selected when arriving from a customer or lead page ("Book test drive" there). */
+  defaultContactId?: string;
+  defaultLeadId?: string;
+  defaultOpen?: boolean;
 }) {
   return (
     <ModalTrigger
       label={<><Plus className="size-4" />{compact ? "Book" : "Book test drive"}</>}
       title="Book a test drive"
       buttonClass={buttonVariants({ size: "sm" })}
+      defaultOpen={defaultOpen}
     >
-      <form action={createTestDriveBooking} className="space-y-4">
+      <ConflictAwareForm
+        action={createTestDriveBooking}
+        conflictTitle="Salesperson unavailable"
+        className="space-y-4"
+      >
         <div className="grid gap-3 sm:grid-cols-2">
           <div className="sm:col-span-2">
             <label className="label">Customer</label>
-            <select name="contactId" className="input" required defaultValue="">
-              <option value="" disabled>Select customer…</option>
-              {contacts.map((contact) => <option key={contact.id} value={contact.id}>{contactName(contact)}</option>)}
-            </select>
+            <ContactPicker
+              name="contactId"
+              required
+              defaultValue={defaultContactId ?? ""}
+              options={contacts.map((contact) => ({ id: contact.id, label: contactName(contact) }))}
+            />
           </div>
           <div className="sm:col-span-2">
             <label className="label">Lead</label>
-            <select name="leadId" className="input" defaultValue="">
+            <select name="leadId" className="input" defaultValue={defaultLeadId ?? ""}>
               <option value="">No linked lead</option>
               {leads.map((lead) => <option key={lead.id} value={lead.id}>{lead.title} — {lead.name}</option>)}
             </select>
@@ -100,7 +116,7 @@ export function TestDriveBookingTrigger({
           </div>
         </div>
         <button className="btn-primary w-full">Create booking</button>
-      </form>
+      </ConflictAwareForm>
     </ModalTrigger>
   );
 }

@@ -6,11 +6,13 @@ import { revalidatePath } from "next/cache";
 import { basePrisma } from "@/lib/db";
 import { requirePlatformAdminAction } from "@/lib/platformAuth";
 import { logAuditStrict } from "@/lib/audit";
+import { validPassword } from "@/lib/passwordPolicy";
 import {
   createTenant,
   activateTenant,
   suspendTenant,
   addTenantMembership,
+  seedTenantDefaultRoles,
 } from "@/lib/provisioning";
 import {
   canActivateTenant,
@@ -26,10 +28,6 @@ const CONSOLE_PATH = "/platform/tenants";
 
 const value = (formData: FormData, key: string) => String(formData.get(key) ?? "").trim();
 
-/** Same password floor as admin createUser (settings.createUser). */
-function validPassword(password: string): boolean {
-  return password.length >= 12 && /[A-Za-z]/.test(password) && /\d/.test(password);
-}
 
 /** A Prisma unique-constraint violation, duck-typed so this file stays crypto/ORM-light. */
 function isUniqueViolation(error: unknown): boolean {
@@ -349,6 +347,9 @@ export async function setTenantModulesAction(
     }
 
     await basePrisma.tenant.update({ where: { id: tenantId }, data: { modules } });
+    // A newly granted module brings its roles (e.g. automotive → Technician,
+    // Workshop manager). Idempotent; a revoked module's roles are hidden, not deleted.
+    await basePrisma.$transaction((tx) => seedTenantDefaultRoles(tx, tenantId));
 
     await logAuditStrict({
       action: "tenant.modules_changed",

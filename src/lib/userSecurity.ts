@@ -41,6 +41,23 @@ async function readUserSecurityState(userId: string): Promise<UserSecurityState 
   }
 }
 
+/**
+ * The security state with NO fallback: a failed read throws instead of
+ * answering "version 0". For a decision that must fail CLOSED — whether a
+ * linked phone is still a valid sign-in — where the legacy pre-migration
+ * fallback above would let a version-0 link outlive a reset on a transient
+ * database error. Sign-in itself keeps the fallback, unchanged.
+ */
+export async function readUserSecurityStateStrict(userId: string): Promise<UserSecurityState | null> {
+  const rows = await basePrisma.$queryRaw<UserSecurityState[]>`
+    SELECT "sessionVersion", "disabledAt", "lastLoginAt", "failedLoginCount"
+    FROM "User"
+    WHERE "id" = ${userId}
+    LIMIT 1
+  `;
+  return rows[0] ?? null;
+}
+
 // Request-memoised: read the row once per request even when getCurrentUser and
 // direct callers both ask. Request-scoped, so changes apply on the next request.
 export const getUserSecurityState = cache(readUserSecurityState);

@@ -534,7 +534,7 @@ test("a display-name From header is accepted, a malformed one is not", () => {
 const root = fileURLToPath(new URL("..", import.meta.url));
 
 test("the settings page never hands a secret to the client wizard", () => {
-  const page = readFileSync(join(root, "src/app/(app)/settings/integration-overrides/page.tsx"), "utf8");
+  const page = readFileSync(join(root, "src/app/(app)/settings/integrations/page.tsx"), "utf8");
   assert.match(
     page,
     /if \(isSecretSettingKey\(key\)\) continue;/,
@@ -897,9 +897,10 @@ test("every WhatsApp path that presents the access token reports how it went", (
   const silent: string[] = [];
   for (const name of OUTBOUND) {
     const body = bodies.get(name) ?? "";
-    // Button and list messages carry no credentials of their own; they delegate.
+    // Button and list messages carry no credentials of their own; they delegate —
+    // and every /messages send delegates to postWhatsAppMessage, checked below.
     if (!/Bearer \$\{/.test(body)) {
-      assert.match(body, /sendInteractive\(/, `${name} neither presents the token nor delegates to something that does`);
+      assert.match(body, /(sendInteractive|postWhatsAppMessage)\(/, `${name} neither presents the token nor delegates to something that does`);
       continue;
     }
     if (!/noteWhatsAppOutcome\(/.test(body)) silent.push(name);
@@ -911,13 +912,18 @@ test("every WhatsApp path that presents the access token reports how it went", (
   );
 
   // Both directions, not just failures: a success is what heals a stale badge.
-  for (const name of ["sendWhatsAppImage", "uploadWhatsAppMedia", "sendWhatsAppAudioId", "sendInteractive"]) {
-    assert.match(
-      bodies.get(name) ?? "",
-      /await noteWhatsAppOutcome\(creds, res, null\)/,
-      `${name} must report success too, or a fixed integration never stops saying "Reconnect"`,
-    );
-  }
+  assert.match(
+    bodies.get("uploadWhatsAppMedia") ?? "",
+    /await noteWhatsAppOutcome\(creds, res, null\)/,
+    `uploadWhatsAppMedia must report success too, or a fixed integration never stops saying "Reconnect"`,
+  );
+  const post = bodies.get("postWhatsAppMessage") ?? "";
+  assert.match(post, /Bearer \$\{/, "postWhatsAppMessage is the one /messages sender");
+  assert.match(
+    post,
+    /await noteWhatsAppOutcome\(creds, res, res\.ok \? null : json\)/,
+    `postWhatsAppMessage must report success AND failure, or a fixed integration never stops saying "Reconnect"`,
+  );
 });
 
 test("the media READ never turns an expired voice note into a demand to reconnect", () => {

@@ -1,6 +1,5 @@
 import "server-only";
 import { basePrisma } from "./db";
-import { DEFAULT_TENANT_ID } from "./tenant";
 import { botIdentityForRecord } from "./botConversationControl";
 import { conversationIdsForThreads } from "./inboxConversations";
 import { type ThreadCollaboration, type ThreadIdentity } from "./inboxThreads";
@@ -83,10 +82,12 @@ export async function collaborationForThreads(
 
   const botTargets = conversations.flatMap((conversation) => {
     const identity = botIdentityForRecord(conversation);
-    return identity
+    // An unowned (legacy NULL) conversation has no bot session in any workspace;
+    // looking it up as Denago's could show Denago's bot state on it.
+    return identity && conversation.tenantId
       ? [{
           conversationId: conversation.id,
-          tenantId: conversation.tenantId ?? DEFAULT_TENANT_ID,
+          tenantId: conversation.tenantId,
           ...identity,
         }]
       : [];

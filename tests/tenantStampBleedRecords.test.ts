@@ -368,9 +368,11 @@ test("every writer this change owns names a tenant on the row it creates", () =>
       count: 2,
     },
     {
-      file: "src/app/actions/testDrives.ts",
+      // Both doors (Test drives module, pipeline board) book through this one
+      // helper since gap audit #19; each passes the acting workspace in.
+      file: "src/lib/testDriveBooking.ts",
       model: "testDriveBooking",
-      expect: /tenantId: bookingTenantId/,
+      expect: /tenantId: input\.bookingTenantId/,
       count: 1,
     },
     // Not on the audit list — production holds no unowned rows for it — but the
@@ -460,6 +462,7 @@ test("no writer in this change resolves a create stamp from writeTenantId() alon
     "src/lib/journeyEngineShared.ts",
     "src/app/actions/ai.ts",
     "src/app/actions/testDrives.ts",
+    "src/lib/testDriveBooking.ts",
     "src/app/actions/dashboardConfig.ts",
   ]) {
     const code = shipped(file);

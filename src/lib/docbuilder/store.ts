@@ -1,6 +1,11 @@
 import "server-only";
 import { prisma } from "@/lib/db";
+import { getActiveTenantId } from "@/lib/auth";
+import { isModuleEnabled } from "@/lib/modules/enabled";
+import { docKeyEnabled } from "@/lib/docModuleAccess";
 import { readTemplateDocument } from "@/lib/doceditor/legacy";
+import { hasLegacyTokens, inlineLegacyText, type LegacyText } from "@/lib/doceditor/inlineLegacyText";
+import { getDocTemplateText } from "@/lib/docTemplateStore";
 import {
   STANDARD_TEMPLATE_KEYS,
   STANDARD_TEMPLATE_NAMES,
@@ -14,6 +19,8 @@ import {
  */
 export async function ensureBuilderSeeded(): Promise<void> {
   for (const key of STANDARD_TEMPLATE_KEYS) {
+    // No job card / indemnity / … templates minted for a workspace without the module.
+    if (!(await docKeyEnabled(key))) continue;
     try {
       const rows = await prisma.docBuilderTemplate.findMany({
         where: { key, deletedAt: null },
@@ -72,7 +79,9 @@ export async function ensureBuilderSeeded(): Promise<void> {
           name: STANDARD_TEMPLATE_NAMES[key],
           key,
           isDefault: becomeDefault,
-          data: standardTemplateFor(key) as object,
+          // The workspace's own standard: no vehicle card or EV disclaimer on a
+          // non-automotive workspace's quotes.
+          data: standardTemplateFor(key, { automotive: await isModuleEnabled("automotive") }) as object,
         },
       });
     } catch (error) {
@@ -89,6 +98,7 @@ export async function defaultBuilderTemplateId(
   key: string,
 ): Promise<string | null> {
   try {
+    if (!(await docKeyEnabled(key))) return null;
     await ensureBuilderSeeded();
     const rows = await prisma.docBuilderTemplate.findMany({
       where: { key, deletedAt: null },
@@ -104,9 +114,15 @@ export async function defaultBuilderTemplateId(
 
 export async function listBuilderTemplates() {
   try {
-    return await prisma.docBuilderTemplate.findMany({
+    // Print layouts only. Customer emails (`email:…`) are documents of the same
+    // editor but are not layouts: they have no PDF, and they are listed where
+    // they are edited from (Document Studio → emails, Journeys → messages).
+    const rows = await prisma.docBuilderTemplate.findMany({
+      where: { NOT: { key: { startsWith: "email:" } } },
       orderBy: [{ key: "asc" }, { updatedAt: "desc" }],
     });
+    const enabled = await Promise.all(rows.map((row) => docKeyEnabled(row.key)));
+    return rows.filter((_, i) => enabled[i]);
   } catch {
     return [];
   }
@@ -115,7 +131,46 @@ export async function listBuilderTemplates() {
 export async function getBuilderTemplate(id: string) {
   const record = await prisma.docBuilderTemplate.findUnique({ where: { id } });
   if (!record || record.deletedAt) return null;
+  // The one door every by-id read uses (editor, preview, render, export, and the
+  // builder actions), so a module-only template opened by id is simply not there.
+  if (!(await docKeyEnabled(record.key))) return null;
+  // A customer EMAIL layout (`email:…`) exists only for the workspace that OWNS
+  // it (review of #806). `isTenantOwner()` proves the caller owns their active
+  // workspace, not that this row is in it — and this lookup is by id alone, so
+  // an owner of workspace A holding one of B's ids could otherwise open, save,
+  // publish, restore and preview B's email. Checked HERE, the one door, so every
+  // one of those paths gets it; an email row without a tenant is nobody's.
+  if (record.key.startsWith("email:")) {
+    const active = await getActiveTenantId().catch(() => null);
+    if (!active || record.tenantId !== active) return null;
+  }
   return record;
+}
+
+/**
+ * An invoice or sales agreement layout that still reads its text (bank
+ * details, payment terms, clauses) from the old form editor, with that text
+ * written in (inlineLegacyText) — so it is edited in the one editor. READS
+ * only: the editor opens this and its save stores it; Publish stores it too
+ * (publishBuilderVersion). Until the owner publishes, the live document keeps
+ * printing the old text, as it always has.
+ */
+export async function withLegacyTextInlined<T extends { key: string; data: unknown }>(template: T): Promise<T> {
+  if ((template.key !== "invoice" && template.key !== "agreement") || !hasLegacyTokens(template.key, template.data)) return template;
+  const old = await getDocTemplateText(template.key);
+  const sectionOn = (section: string) => old.sections[section] !== false;
+  const legacy: LegacyText =
+    template.key === "invoice"
+      ? {
+          intro: { text: old.intro ?? "", on: true },
+          paymentTerms: { text: old.terms ?? "", on: sectionOn("terms") },
+          bankingDetails: { text: old.bodyText ?? "", on: sectionOn("banking") },
+        }
+      : {
+          intro: { text: old.intro ?? "", on: true },
+          clauses: { text: old.bodyText ?? "", on: sectionOn("clauses") },
+        };
+  return { ...template, data: inlineLegacyText(template.key, template.data, legacy) };
 }
 
 /**

@@ -1,8 +1,8 @@
 import "server-only";
 
 import { basePrisma } from "@/lib/db";
-import { runInTenantScope } from "@/lib/tenantScope";
-import { getSetting } from "@/lib/settings";
+import { currentTenantScope, runInTenantScope } from "@/lib/tenantScope";
+import { getSetting, resolveIntegrationBundle } from "@/lib/settings";
 import { isSmtpConfigured } from "@/lib/email";
 import { isWhatsAppConfigured } from "@/lib/whatsapp";
 import { isSmsConfigured } from "@/lib/sms";
@@ -105,12 +105,11 @@ const DEFS: IntegrationDef[] = [
     label: "Google Reviews",
     scopes: ["google-reviews"],
     configured: async () => {
-      const [key, placeId] = await Promise.all([
-        getSetting("GOOGLE_PLACES_API_KEY"),
-        getSetting("GOOGLE_PLACE_ID"),
-      ]);
+      // The same resolution the fetcher (syncGoogleReviews) uses, so a workspace's
+      // own credentials count — reading AppSetting alone called them "not set up".
+      const bundle = await resolveIntegrationBundle(currentTenantScope()?.tenantId ?? null, "google-reviews");
       // Both are needed: a key without a place id fetches nothing.
-      return Boolean(key && placeId);
+      return Boolean(bundle?.GOOGLE_PLACES_API_KEY && bundle?.GOOGLE_PLACE_ID);
     },
   },
   {

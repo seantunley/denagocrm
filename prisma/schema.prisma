@@ -60,6 +60,7 @@ model User {
   contactsCreated    Contact[]        @relation("ContactCreator")
   activitiesAssigned Activity[]       @relation("ActivityAssignee")
   activitiesCreated  Activity[]       @relation("ActivityCreator")
+  activitiesAttending ActivityAttendee[]
   libraryVersions    LibraryVersion[]
   quotesCreated      Quote[]          @relation("QuoteCreator")
   jobCardsAsTech     JobCard[]        @relation("JobCardTechnician")
@@ -278,6 +279,7 @@ model StockReservation {
   expiresAt            DateTime?
   depositRequiredCents Int       @default(0)
   depositReceivedAt    DateTime?
+  depositReceivedCents Int? // amount actually received; null = recorded before amounts were captured
   releasedAt           DateTime?
   releaseReason        String?
   reservedById         String
@@ -400,6 +402,7 @@ model Contact {
   messengerPsid String?  @unique // Facebook Messenger page-scoped id
   instagramId   String?  @unique // Instagram-scoped user id
   xUserId       String? // X user id; unique only within its tenant
+  telegramChatId String? // Telegram chat id; unique only within its tenant (one bot per tenant)
   address       String? // street address / estate + unit
   suburb        String?
   city          String?
@@ -464,6 +467,7 @@ model Contact {
 
   @@index([tenantId])
   @@unique([tenantId, xUserId])
+  @@unique([tenantId, telegramChatId])
   @@index([fleetId])
   @@unique([tenantId, id])
 }
@@ -919,6 +923,9 @@ model Activity {
   location       String? // meeting place - opens in Google Maps
   reminderSentAt DateTime? // hour-before push already sent
   dueDate        DateTime
+  endDate        DateTime? // exclusive end for timed work / staff availability blocks
+  allDay         Boolean   @default(false)
+  availabilityBlock Boolean @default(false) // internal staff time: leave, training, personal, off-site, etc.
   status         String    @default("planned") // planned | done | canceled
   doneAt         DateTime?
 
@@ -933,9 +940,195 @@ model Activity {
   assignedTo   User     @relation("ActivityAssignee", fields: [assignedToId], references: [id])
   createdById  String
   createdBy    User     @relation("ActivityCreator", fields: [createdById], references: [id])
+  /// Other staff at a meeting besides the assignee (who stays the owner).
+  attendees    ActivityAttendee[]
 
   createdAt DateTime @default(now())
 
+  @@index([tenantId])
+  @@index([assignedToId, dueDate, status])
+  @@index([availabilityBlock, dueDate, endDate])
+}
+
+/// A second (third…) staff member at an activity. Activity has one assignee —
+/// the owner, whose task list it is on — and a meeting often has more people.
+/// One question and answer in "Ask the CRM". Private to the asker, kept 30 days
+/// (the maintenance sweep deletes older rows) so the assistant can follow a
+/// conversation across visits.
+model AssistantTurn {
+  id        String   @id @default(cuid())
+  tenantId  String
+  userId    String
+  question  String
+  answer    String
+  /// The tools the assistant ran for this turn (names and filters, no rows).
+  tools      Json?
+  /// chat | schedule | whatsapp | watch
+  source     String    @default("chat")
+  /// The AssistantSchedule that asked it, for a scheduled answer.
+  scheduleId String?
+  /// When the person saw a scheduled answer or a watch firing (null = the bubble shows a dot).
+  seenAt     DateTime?
+  /// The person's thumbs on this answer: "up" | "down".
+  feedback       String?
+  feedbackReason String?
+  feedbackAt     DateTime?
+  /// Working memory the answer wrote: customer, topic, tags, decided, open (assistantReply.parseState).
+  state      Json?
+  /// Records this answer's lookups returned ("lead:<id>", "quote:<id>", "contact:<id>"), so recall finds them by record.
+  refs       String[]  @default([])
+  /// state.tags, as a column: cheap overlap matching in recall.
+  tags       String[]  @default([])
+  createdAt  DateTime  @default(now())
+
+  @@index([tenantId, userId, createdAt])
+  @@index([createdAt])
+}
+
+/// One question asked in chat, from the moment it arrives until it is answered
+/// (assistantRun.ts). The browser names it (clientKey) so a dropped connection
+/// re-reads THIS run instead of asking again; it runs exactly once. Holds the
+/// answer so far while it is written and the finished result, plus how long
+/// each phase took (no question text in the timings). Swept after 7 days.
+model AssistantRun {
+  id         String    @id @default(cuid())
+  tenantId   String
+  userId     String
+  clientKey  String
+  /// accepted | planning | researching | answering | completed | failed
+  status     String    @default("accepted")
+  statusText String?
+  partial    String?
+  result     Json?
+  timings    Json?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+  finishedAt DateTime?
+
+  /// A run key belongs to one person in one workspace: the same person's key in
+  /// another workspace is a different run, never this one.
+  @@unique([tenantId, userId, clientKey])
+  @@index([tenantId, userId, createdAt])
+  @@index([createdAt])
+}
+
+/// A question DAX answers on a schedule for one person ("every Monday 07:00:
+/// which deals went quiet?"), run as them — their permissions at run time.
+model AssistantSchedule {
+  id        String    @id @default(cuid())
+  tenantId  String
+  userId    String
+  question  String
+  /// once | daily | weekdays | weekly
+  cadence   String
+  /// 0 = Sunday … 6 = Saturday; weekly only.
+  weekday   Int?
+  /// "HH:MM", South African time.
+  timeOfDay String
+  /// "YYYY-MM-DD"; once only.
+  onDate    String?
+  /// Null once a one-off has run or the schedule is switched off.
+  nextRunAt DateTime?
+  lastRunAt DateTime?
+  active    Boolean   @default(true)
+  createdAt DateTime  @default(now())
+
+  @@index([tenantId, userId])
+  @@index([active, nextRunAt])
+}
+
+/// "Tell me when Anna opens her quote": a condition the assistant cron checks
+/// with plain code (no ChatGPT) as one person, and tells only that person.
+/// Never contacts a customer.
+model AssistantWatch {
+  id             String    @id @default(cuid())
+  tenantId       String
+  userId         String
+  /// quote_viewed | quote_unsigned | lead_quiet | test_drive_no_follow_up | delivery_deposit_due
+  kind           String
+  leadId         String?
+  quoteId        String?
+  product        String?
+  thresholdHours Int?
+  thresholdDays  Int?
+  /// The sentence shown on the Ask page and as the question of each firing.
+  label          String
+  /// { recordId: ISO date } — records already told about while the condition holds.
+  fired          Json?
+  active         Boolean   @default(true)
+  lastCheckedAt  DateTime?
+  lastFiredAt    DateTime?
+  createdAt      DateTime  @default(now())
+
+  @@index([tenantId, userId])
+  @@index([active])
+}
+
+/// A staff member's own WhatsApp number, linked by PROOF: they send a one-time
+/// code from that phone to the business number. Only a verified link reaches
+/// DAX; every other sender is a customer, exactly as before.
+model AssistantPhoneLink {
+  id            String    @id @default(cuid())
+  tenantId      String
+  userId        String
+  /// Meta's wa_id (digits) — set only when the code arrives from it.
+  waId          String?
+  /// sha256 of the pending code; cleared once used.
+  codeHash      String?
+  codeExpiresAt DateTime?
+  verifiedAt    DateTime?
+  /// The account's sessionVersion when linked. A linked number is a sign-in:
+  /// any later bump (password reset, sign out everywhere, disable) ends it.
+  sessionVersion Int?
+  createdAt     DateTime  @default(now())
+
+  @@unique([tenantId, userId])
+  @@unique([tenantId, waId])
+}
+
+/// What the assistant has learned. kind: "memory" (workspace facts and
+/// conventions), "profile" (one user's preferences — userId set) or "playbook"
+/// (a named definition or procedure). It writes these on its own; the owner
+/// reviews them (status unreviewed → approved, or deletes).
+model AssistantNote {
+  id           String    @id @default(cuid())
+  tenantId     String
+  kind         String
+  userId       String?
+  name         String?
+  description  String?
+  content      String
+  status       String    @default("unreviewed")
+  createdById  String?
+  reviewedById String?
+  reviewedAt   DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+  /// How it was written: learned (a conversation) | owner (taught in Settings) | tidy (the nightly tidy-up) | person (their own "about me").
+  source          String    @default("learned")
+  /// When the owner (or the person, for "about me") last approved or edited it.
+  lastConfirmedAt DateTime?
+  /// Its last day; after that it stays here, marked expired, but out of every prompt.
+  validUntil      DateTime? @db.Date
+  /// When it last went into an answer's prompt.
+  lastUsedAt      DateTime?
+  /// status "conflict": the approved entry this contradicts. Plain id, no FK — if that entry goes, the hold just loses its pair.
+  conflictsWithId String?
+
+  @@index([tenantId, kind])
+  @@index([tenantId, userId])
+}
+
+model ActivityAttendee {
+  activityId String
+  activity   Activity @relation(fields: [activityId], references: [id], onDelete: Cascade)
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tenantId   String
+  createdAt  DateTime @default(now())
+
+  @@id([activityId, userId])
+  @@index([userId])
   @@index([tenantId])
 }
 
@@ -1008,7 +1201,7 @@ model RetiredAutomationLog {
 model Quote {
   id         String    @id @default(cuid())
   number     Int       @unique
-  status     String    @default("draft") // draft | sent | accepted | declined
+  status     String    @default("draft") // draft | sent | accepted | declined | cancelled
   validUntil DateTime?
   terms      String?
   createdAt  DateTime  @default(now())
@@ -1042,7 +1235,12 @@ model Quote {
   reminderSentAt       DateTime? // unsigned-quote nudge already sent
   // Fulfilment flow after signing (all set manually from the Deliveries board)
   invoicedAt           DateTime?
+  /// The tax invoice's OWN number, from the workspace's invoice sequence — not
+  /// the quote number with a prefix (Sean, 2026-10-07). Issued once, when the
+  /// quote is accepted (lib/invoiceNumber.ts), and never reused.
+  invoiceNumber        Int?
   depositPaidAt        DateTime?
+  depositPaidCents     Int? // amount actually received; null = recorded before amounts were captured
   deliveryScheduledFor DateTime?
   deliveredAt          DateTime?
   deliveredByName      String? // driver / who handed the cart over
@@ -1099,6 +1297,8 @@ model Quote {
   // The fleet page lists an account's quotes by this column.
   @@index([fleetId])
   @@unique([tenantId, id])
+  // One invoice number per workspace: the sequence can never issue a duplicate.
+  @@unique([tenantId, invoiceNumber])
 }
 
 model QuoteItem {
@@ -1213,6 +1413,11 @@ model Communication {
   /// opposite things. Both are watermark-derived; see lib/deliveryReceipts.ts.
   deliveredAt    DateTime?
   seenAt         DateTime?
+  /// Email open tracking (Sean, 2026-10-07): the unguessable token in this sent
+  /// email's tracking pixel (/api/track/e/<token>), and how often it loaded. The
+  /// first load sets `seenAt` — the customer opened it. Null = not tracked.
+  openToken      String?  @unique
+  openCount      Int      @default(0)
   archivedAt     DateTime? // when the thread carrying this message was archived out of the inbox (NULL = active)
 
   // Multi-tenancy (Phase B — additive/inert): owning tenant. See Contact.tenantId.

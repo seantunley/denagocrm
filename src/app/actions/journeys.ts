@@ -3,7 +3,10 @@
 import { Prisma } from "@prisma/client";
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/db";
+import { getCompanyProfile } from "@/lib/companyProfile";
 import { withActingTenantWrite, withActingStaffScope } from "@/lib/actingScope";
+import { asActionResult, refuse, ActionRefusal } from "@/lib/actionResult";
+import { requiredReason } from "@/lib/deleteReason";
 import { journeyScope } from "@/lib/flowScope";
 import { requirePermission } from "@/lib/permissions";
 import { logAudit } from "@/lib/audit";
@@ -19,24 +22,42 @@ import {
 
 function parseObject(value: FormDataEntryValue | null, label: string) {
   if (!value || String(value).trim() === "") return null;
+  let parsed: unknown;
   try {
-    const parsed = JSON.parse(String(value));
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error();
-    return parsed as Record<string, unknown>;
+    parsed = JSON.parse(String(value));
   } catch {
-    throw new Error(`${label} is not valid JSON`);
+    refuse(`${label} could not be read — refresh and try again.`);
   }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) refuse(`${label} could not be read — refresh and try again.`);
+  return parsed as Record<string, unknown>;
 }
 
-/** The array counterpart of parseObject — same "not valid JSON" contract. */
+/** The array counterpart of parseObject — same contract. */
 function parseArray(value: FormDataEntryValue | null, label: string) {
   if (!value || String(value).trim() === "") return null;
+  let parsed: unknown;
   try {
-    const parsed = JSON.parse(String(value));
-    if (!Array.isArray(parsed)) throw new Error();
-    return parsed as unknown[];
+    parsed = JSON.parse(String(value));
   } catch {
-    throw new Error(`${label} is not valid JSON`);
+    refuse(`${label} could not be read — refresh and try again.`);
+  }
+  if (!Array.isArray(parsed)) refuse(`${label} could not be read — refresh and try again.`);
+  return parsed as unknown[];
+}
+
+/**
+ * The strict journey parsers (shared with the engine, which keeps its own
+ * tolerant reader) throw plain Errors whose messages are written for the person
+ * building the journey — "a journey needs at least one enrolment trigger", "two
+ * triggers share an ID". Here, where that person is waiting, they become refusals
+ * the builder shows instead of "This page hit an error" (gap audit #22).
+ */
+function strict<T>(parse: () => T): T {
+  try {
+    return parse();
+  } catch (error) {
+    if (error instanceof ActionRefusal) throw error;
+    refuse(error instanceof Error && error.message ? error.message : "This journey isn't valid yet.");
   }
 }
 
@@ -44,21 +65,22 @@ function journeyData(formData: FormData) {
   const name = String(formData.get("name") ?? "").trim();
   const description = String(formData.get("description") ?? "").trim() || null;
   const category = String(formData.get("category") ?? "automation");
-  if (!name) throw new Error("Journey name is required");
-  if (!new Set(["automation", "marketing"]).has(category)) throw new Error("Invalid journey category");
+  if (!name) refuse("Give the journey a name.");
+  if (!new Set(["automation", "marketing"]).has(category)) refuse("Choose automation or marketing.");
 
   // STRICT here, tolerant in the engine. This is the one place a person is
   // waiting to be told their journey is wrong, so an unknown trigger, a repeated
   // id or two unnamed triggers of the same type are all refused with a message
   // — rather than saved and discovered later as a journey that enrols nobody.
-  const triggers = parseJourneyTriggers(parseArray(formData.get("triggers"), "Enrolment triggers"));
+  const rawTriggers = parseArray(formData.get("triggers"), "Enrolment triggers");
+  const triggers = strict(() => parseJourneyTriggers(rawTriggers));
   const rawConditions = parseObject(formData.get("entryConditions"), "Entry conditions");
   const rawDefinition = parseObject(formData.get("definition"), "Journey definition") ?? {
     startStepId: null,
     steps: [],
   };
-  const entryConditions = parseConditionGroup(rawConditions);
-  const definition = parseJourneyDefinition(rawDefinition);
+  const entryConditions = strict(() => parseConditionGroup(rawConditions));
+  const definition = strict(() => parseJourneyDefinition(rawDefinition));
 
   // Absent is NOT the same as invalid, and the difference is destructive.
   // parseRunMode maps anything it does not recognise to "single" — which is
@@ -101,7 +123,7 @@ function journeyData(formData: FormData) {
 function legacyTriggerPair(triggers: unknown): { trigger: string; triggerConfig: Prisma.InputJsonValue | typeof Prisma.JsonNull } {
   const first = Array.isArray(triggers) ? (triggers[0] as { type?: unknown; config?: unknown } | undefined) : undefined;
   if (!first || typeof first.type !== "string" || !first.type) {
-    throw new Error("A journey version must declare at least one trigger.");
+    refuse("A journey needs at least one enrolment trigger.");
   }
   const config = first.config;
   return {
@@ -144,7 +166,7 @@ async function assertTriggerReferencesResolve(tenantId: string | null, triggers:
     const alive = new Set(found.map((row) => row.id));
     const missing = [...stageIds].filter((id) => !alive.has(id));
     if (missing.length > 0) {
-      throw new Error("This journey enrols on a pipeline stage that no longer exists in this workspace.");
+      refuse("This journey enrols on a pipeline stage that no longer exists in this workspace.");
     }
   }
 
@@ -156,7 +178,7 @@ async function assertTriggerReferencesResolve(tenantId: string | null, triggers:
     const alive = new Set(found.map((row) => row.id));
     const missing = [...segmentIds].filter((id) => !alive.has(id));
     if (missing.length > 0) {
-      throw new Error("This journey enrols on a segment that no longer exists in this workspace.");
+      refuse("This journey enrols on a segment that no longer exists in this workspace.");
     }
   }
 }
@@ -183,7 +205,7 @@ async function assertStepAssigneesResolve(definition: unknown): Promise<void> {
 }
 
 export async function createJourney(formData: FormData) {
-  return withActingStaffScope(async () => {
+  return asActionResult(async () => {
     const user = await requirePermission("journeys.manage");
     const data = journeyData(formData);
     await assertStepAssigneesResolve(data.definition);
@@ -234,19 +256,23 @@ export async function createJourney(formData: FormData) {
     revalidatePath("/journeys");
     // /automations was revalidated here too; it is a redirect now, with nothing
     // of its own to re-render.
+    return { success: "Journey created" };
   });
 }
 
+const JOURNEY_GONE = "That journey is no longer there — refresh the page.";
+
 export async function saveJourneyDraft(journeyId: string, formData: FormData) {
-  return withActingStaffScope(async () => {
+  return asActionResult(async () => {
     const user = await requirePermission("journeys.manage");
     const data = journeyData(formData);
     await assertStepAssigneesResolve(data.definition);
     await prisma.$transaction(async (tx) => {
-      const journey = await tx.journey.findUniqueOrThrow({
+      const journey = await tx.journey.findUnique({
         where: { id: journeyId },
         include: { versions: { orderBy: { version: "desc" } } },
       });
+      if (!journey) refuse(JOURNEY_GONE);
       const draft = journey.versions.find((version) => version.state === "draft");
       const versionData = {
         triggers: data.triggers,
@@ -288,18 +314,20 @@ export async function saveJourneyDraft(journeyId: string, formData: FormData) {
       user,
     });
     revalidatePath("/journeys");
+    return { success: "Draft saved" };
   });
 }
 
 export async function publishJourney(journeyId: string) {
-  return withActingStaffScope(async () => {
+  return asActionResult(async () => {
     const user = await requirePermission("journeys.manage");
-    const journey = await prisma.journey.findUniqueOrThrow({
+    const journey = await prisma.journey.findUnique({
       where: { id: journeyId },
       include: { versions: { orderBy: { version: "desc" } } },
     });
+    if (!journey) refuse(JOURNEY_GONE);
     const draft = journey.versions.find((version) => version.state === "draft");
-    if (!draft) throw new Error("This journey has no draft to publish");
+    if (!draft) refuse("This journey has no draft to publish.");
 
     // PUBLISH IS THE STRICT GATE — for the whole version, not just its definition.
     //
@@ -314,9 +342,9 @@ export async function publishJourney(journeyId: string) {
     //
     // So everything that decides who gets enrolled is re-parsed here, strictly,
     // before any row changes state.
-    parseJourneyTriggers(draft.triggers);
-    parseConditionGroup(draft.entryConditions);
-    parseJourneyDefinition(draft.definition);
+    strict(() => parseJourneyTriggers(draft.triggers));
+    strict(() => parseConditionGroup(draft.entryConditions));
+    strict(() => parseJourneyDefinition(draft.definition));
     await assertTriggerReferencesResolve(journey.tenantId, draft.triggers);
     // Also on publish, not only on save: a draft can be written by one build and
     // published by another, and membership can lapse in between. Publishing is
@@ -344,21 +372,27 @@ export async function publishJourney(journeyId: string) {
       user,
     });
     revalidatePath("/journeys");
+    return { success: `Published v${draft.version}` };
   });
 }
 
-export async function setJourneyStatus(journeyId: string, status: "active" | "paused" | "archived") {
-  return withActingStaffScope(async () => {
+export async function setJourneyStatus(journeyId: string, status: "active" | "paused" | "archived", formData?: FormData) {
+  return asActionResult(async () => {
     const user = await requirePermission("journeys.manage");
-    const journey = await prisma.journey.findUniqueOrThrow({ where: { id: journeyId } });
-    if (status === "active" && !journey.activeVersion) throw new Error("Publish the journey before activating it");
+    const journey = await prisma.journey.findUnique({ where: { id: journeyId } });
+    if (!journey) refuse(JOURNEY_GONE);
+    // Archiving is confirmed with a reason, and the action is a public endpoint,
+    // so the reason is required HERE — not only in the dialog. Pause/resume take none.
+    const reason = status === "archived" ? requiredReason(formData, "archiving this journey") : "";
+    if (status === "active" && !journey.activeVersion) refuse("Publish the journey before activating it.");
     await prisma.journey.update({ where: { id: journeyId }, data: { status } });
     await logAudit({
       action: `journey.${status}`,
-      summary: `${status === "active" ? "Activated" : status === "paused" ? "Paused" : "Archived"} journey “${journey.name}”`,
+      summary: `${status === "active" ? "Activated" : status === "paused" ? "Paused" : "Archived"} journey “${journey.name}”${reason ? ` — ${reason}` : ""}`,
       user,
     });
     revalidatePath("/journeys");
+    return { success: status === "active" ? "Resumed" : status === "paused" ? "Paused" : "Archived" };
   });
 }
 
@@ -384,8 +418,11 @@ function definition(steps: Array<Record<string, unknown>>) {
 }
 
 export async function installJourneyTemplates() {
-  return withActingStaffScope(async () => {
+  return asActionResult(async () => {
     const user = await requirePermission("journeys.manage");
+    // Written into the installed templates (still editable), named after THIS
+    // workspace — they used to greet every tenant's customers as Denago.
+    const company = (await getCompanyProfile()).name;
     const templates = [
       {
         name: "New lead speed-to-contact",
@@ -410,8 +447,8 @@ export async function installJourneyTemplates() {
             id: "welcome",
             type: "send_email",
             config: {
-              subject: "Welcome to the Denago Cape Town family",
-              body: "Hi {{first_name}},\n\nThank you for choosing Denago Cape Town. We are delighted to have you with us and will be in touch with the next steps.\n\nWarm regards,\nDenago Cape Town",
+              subject: `Welcome to the ${company} family`,
+              body: `Hi {{first_name}},\n\nThank you for choosing ${company}. We are delighted to have you with us and will be in touch with the next steps.\n\nWarm regards,\n${company}`,
             },
           },
         ]),
@@ -427,8 +464,8 @@ export async function installJourneyTemplates() {
             id: "anniversary-email",
             type: "send_email",
             config: {
-              subject: "Happy Denago anniversary, {{first_name}}!",
-              body: "Hi {{first_name}},\n\nHappy anniversary from Denago Cape Town. Thank you for being part of our community. If your vehicle needs a service, accessories or a battery health check, our team is ready to help.\n\nWarm regards,\nDenago Cape Town",
+              subject: "Happy anniversary, {{first_name}}!",
+              body: `Hi {{first_name}},\n\nHappy anniversary from ${company}. Thank you for being part of our community. If your vehicle needs a service, accessories or a battery health check, our team is ready to help.\n\nWarm regards,\n${company}`,
             },
           },
         ]),
@@ -444,8 +481,8 @@ export async function installJourneyTemplates() {
             id: "winback-email",
             type: "send_email",
             config: {
-              subject: "We miss you at Denago Cape Town",
-              body: "Hi {{first_name}},\n\nIt has been a while since we saw you. A quick service helps protect your vehicle and battery. Reply to this email and our team will arrange a convenient booking.\n\nWarm regards,\nDenago Cape Town",
+              subject: `We miss you at ${company}`,
+              body: `Hi {{first_name}},\n\nIt has been a while since we saw you. A quick service helps protect your vehicle and battery. Reply to this email and our team will arrange a convenient booking.\n\nWarm regards,\n${company}`,
             },
           },
           { id: "wait", type: "wait", config: { amount: 7, unit: "days" } },
@@ -470,11 +507,13 @@ export async function installJourneyTemplates() {
     // nullable and the NULL rows are the FOUNDING tenant's, and only its). Reusing
     // it keeps one rule rather than a second copy that can drift from it.
     const ownScope = await journeyScope();
+    let installed = 0;
     for (const item of templates) {
       const exists = await prisma.journey.findFirst({
         where: { name: item.name, status: { not: "archived" }, ...ownScope },
       });
       if (exists) continue;
+      installed += 1;
       await withActingTenantWrite(async (tx, tenantId) => {
         const tpl = await tx.journey.create({
           data: {
@@ -501,5 +540,6 @@ export async function installJourneyTemplates() {
       });
     }
     revalidatePath("/journeys");
+    return { success: installed ? `${installed} template${installed === 1 ? "" : "s"} added as drafts` : "The templates are already installed" };
   });
 }

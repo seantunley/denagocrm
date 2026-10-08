@@ -101,10 +101,15 @@ const WRITE_PATHS: Array<[string, string[]]> = [
   // duplicated back out to five places, which is the thing that was fixed:
   // three of those five never fired an automation at all.
   ["src/lib/leadCreate.ts", ["lead_created"]],
-  ["src/app/actions/leads.ts", ["stage_entered", "lead_won", "lead_lost"]],
-  ["src/app/actions/quotes.ts", ["lead_won", "quote_declined"]],
+  ["src/app/actions/leads.ts", ["stage_entered", "lead_lost"]],
+  ["src/app/actions/quotes.ts", ["quote_declined"]],
+  // Mark won and accepting a quote share one win path (#11); both must still
+  // reach it — see the afterDealWon assertion below.
+  ["src/lib/quoteOutcome.ts", ["lead_won"]],
   ["src/lib/signing/postComplete.ts", ["lead_won", "quote_signed"]],
-  ["src/app/actions/fulfilment.ts", ["delivered"]],
+  // The one delivery, shared by the Deliveries board and the stock page — so a
+  // stock-page delivery now fires `delivered` too, which it never did before.
+  ["src/lib/quoteDelivery.ts", ["delivered"]],
   ["src/lib/referrals.ts", ["referral_earned"]],
 ];
 
@@ -149,6 +154,12 @@ for (const [rel, triggers] of WRITE_PATHS) {
     }
   });
 }
+
+test("Mark won and accepting a quote both reach the shared lead_won emitter", () => {
+  for (const rel of ["src/app/actions/leads.ts", "src/app/actions/quotes.ts"]) {
+    assert.match(shipped(rel), /await afterDealWon\(/, `${rel} must fan a win out through afterDealWon`);
+  }
+});
 
 test("every path that changes a stage emits stage_entered", () => {
   // FIVE distinct paths now change a lead's stage — the edit form, the board
@@ -223,7 +234,9 @@ test("the marketing gate moved with the engine, not lost with it", () => {
 const EMITTED_EVENT_TRIGGERS = (() => {
   const found = new Set<string>();
   for (const rel of ALL_SOURCES) {
-    for (const [, trigger] of shipped(rel).matchAll(/emitLeadJourneyEvent\(\s*"([a-z_]+)"/g)) {
+    // emitContactJourneyEvent is the same emitter for a customer rather than a
+    // lead (a job card completed, a vehicle delivered) — same gate, same contract.
+    for (const [, trigger] of shipped(rel).matchAll(/emit(?:Lead|Contact)JourneyEvent\(\s*"([a-z_]+)"/g)) {
       found.add(trigger);
     }
   }

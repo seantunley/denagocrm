@@ -1,6 +1,9 @@
 import crypto from "node:crypto";
 import { basePrisma } from "./db";
 import { computeDue } from "./serviceDue";
+// Every rejection here is about the rules the person built (too deep, a missing
+// value, a tag from another workspace) — a message for them, not a crash (#22).
+import { ActionRefusal } from "./actionFailure";
 
 export type AudienceRule = { field: string; operator: string; value?: unknown; legacyCriteria?: Record<string, unknown> };
 export type AudienceGroup = { operator: "AND" | "OR"; rules: Array<AudienceRule | AudienceGroup>; exclusions?: Array<AudienceRule | AudienceGroup> };
@@ -26,25 +29,25 @@ function group(value: unknown): value is AudienceGroup {
 export function validateAudienceTree(tree: AudienceGroup) {
   let count = 0;
   const visit = (node: AudienceRule | AudienceGroup, depth: number) => {
-    if (depth > MAX_DEPTH) throw new Error(`Audience rules may be nested at most ${MAX_DEPTH} levels`);
+    if (depth > MAX_DEPTH) throw new ActionRefusal(`Audience rules may be nested at most ${MAX_DEPTH} levels`);
     count += 1;
-    if (count > MAX_RULES) throw new Error(`Audience may contain at most ${MAX_RULES} rules and groups`);
+    if (count > MAX_RULES) throw new ActionRefusal(`Audience may contain at most ${MAX_RULES} rules and groups`);
     if (group(node)) {
-      if (node.rules.length === 0) throw new Error("Every audience group needs at least one rule");
+      if (node.rules.length === 0) throw new ActionRefusal("Every audience group needs at least one rule");
       for (const child of node.rules) visit(child, depth + 1);
       for (const exclusion of node.exclusions ?? []) visit(exclusion, depth + 1);
       return;
     }
     if (node.legacyCriteria) {
       if (!node.legacyCriteria || typeof node.legacyCriteria !== "object" || Array.isArray(node.legacyCriteria)) {
-        throw new Error("Legacy audience criteria are invalid");
+        throw new ActionRefusal("Legacy audience criteria are invalid");
       }
       return;
     }
-    if (!ALLOWED_FIELDS.has(node.field)) throw new Error(`Unsupported audience field: ${node.field || "blank"}`);
-    if (!ALLOWED_OPERATORS.has(node.operator)) throw new Error(`Unsupported audience operator: ${node.operator || "blank"}`);
+    if (!ALLOWED_FIELDS.has(node.field)) throw new ActionRefusal(`Unsupported audience field: ${node.field || "blank"}`);
+    if (!ALLOWED_OPERATORS.has(node.operator)) throw new ActionRefusal(`Unsupported audience operator: ${node.operator || "blank"}`);
     if (!new Set(["is_empty", "is_not_empty"]).has(node.operator) && node.value === undefined) {
-      throw new Error(`${node.field.replaceAll("_", " ")} needs a comparison value`);
+      throw new ActionRefusal(`${node.field.replaceAll("_", " ")} needs a comparison value`);
     }
   };
   visit(tree, 0);
@@ -88,14 +91,14 @@ export async function validateAudienceReferences(tree: AudienceGroup, tenantId: 
   const productIds = collectReferenceIds(tree, "product_interest");
 
   if (tagIds.length > 0) {
-    if (!tenantId) throw new Error("Audience tags require an active tenant");
+    if (!tenantId) throw new ActionRefusal("Audience tags require an active tenant");
     const ownedTags = await basePrisma.tag.count({ where: { tenantId, id: { in: tagIds } } });
-    if (ownedTags !== tagIds.length) throw new Error("Audience contains a tag that does not belong to this tenant");
+    if (ownedTags !== tagIds.length) throw new ActionRefusal("Audience contains a tag that does not belong to this tenant");
   }
 
   if (productIds.length > 0) {
     const ownedProducts = await basePrisma.product.count({ where: { tenantId, id: { in: productIds } } });
-    if (ownedProducts !== productIds.length) throw new Error("Audience contains a product that does not belong to this tenant");
+    if (ownedProducts !== productIds.length) throw new ActionRefusal("Audience contains a product that does not belong to this tenant");
   }
 
   return tree;
@@ -227,8 +230,8 @@ export async function saveAudienceVersion(args: {
         AND "tenantId" IS NOT DISTINCT FROM ${args.tenantId}
       FOR UPDATE
     `;
-    if (!segments[0]) throw new Error("Audience not found");
-    if (segments[0].status === "archived") throw new Error("Archived audiences cannot be edited");
+    if (!segments[0]) throw new ActionRefusal("Audience not found");
+    if (segments[0].status === "archived") throw new ActionRefusal("Archived audiences cannot be edited");
     const rows = await tx.$queryRaw<Array<{ version: number }>>`
       SELECT COALESCE(MAX("version"), 0) + 1 AS "version"
       FROM "MarketingAudienceVersion"
@@ -268,7 +271,7 @@ export async function saveAudienceVersion(args: {
             AND "tenantId" IS NOT DISTINCT FROM ${args.tenantId}
             AND COALESCE("status", 'active') <> 'archived'
         `;
-    if (updated !== 1) throw new Error("Audience changed while saving");
+    if (updated !== 1) throw new ActionRefusal("Audience changed while saving");
     return { version, count, explanation };
   });
 }

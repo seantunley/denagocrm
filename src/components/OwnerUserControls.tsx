@@ -22,11 +22,18 @@ export default function OwnerUserControls({
   name,
   role,
   has2fa,
+  canChangeRole = false,
 }: {
   userId: string;
   name: string;
   role: "owner" | "member";
   has2fa: boolean;
+  /**
+   * Only the PLATFORM owner: "owner" is a platform-wide role and setUserRole is
+   * requireOwner(). A workspace owner was shown a button whose one outcome was a
+   * refusal.
+   */
+  canChangeRole?: boolean;
 }) {
   // The role toggle used to fire its action and discard the promise: a rejection
   // was swallowed whole and a success looked identical to nothing happening. It
@@ -51,17 +58,19 @@ export default function OwnerUserControls({
   return (
     <div className="flex flex-col items-end gap-1.5">
       <div className="flex items-center gap-3">
-        <button
-          type="button"
-          disabled={pending}
-          onClick={() => {
-            const next = role === "owner" ? "member" : "owner";
-            report(() => setUserRole(userId, next), `${name} is now ${next === "owner" ? "an admin" : "a member"}.`);
-          }}
-          className="text-xs text-slate-400 hover:text-orange-400 underline cursor-pointer disabled:opacity-50"
-        >
-          {role === "owner" ? "Make member" : "Make admin"}
-        </button>
+        {canChangeRole && (
+          <button
+            type="button"
+            disabled={pending}
+            onClick={() => {
+              const next = role === "owner" ? "member" : "owner";
+              report(() => setUserRole(userId, next), `${name} is now ${next === "owner" ? "an admin" : "a member"}.`);
+            }}
+            className="text-xs text-slate-400 hover:text-orange-400 underline cursor-pointer disabled:opacity-50"
+          >
+            {role === "owner" ? "Make member" : "Make admin"}
+          </button>
+        )}
         {has2fa && (
           <ConfirmActionDialog
             destructive

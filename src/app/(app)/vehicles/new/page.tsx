@@ -8,7 +8,7 @@ import { SectionHeading, Surface } from "@/components/visual-system";
 import { prisma } from "@/lib/db";
 import { contactName } from "@/lib/format";
 import { getAccessibleContactIds, requirePermission } from "@/lib/permissions";
-import { vehiclesAwaitingRegistration } from "@/lib/deliveryVehicles";
+import { registrationQueueForQuote } from "@/lib/quoteDelivery";
 
 const vehicleJourney = [
   { icon: History, label: "Customer garage", detail: "The vehicle becomes part of the owner’s permanent sales and service timeline." },
@@ -44,13 +44,8 @@ export default async function NewVehiclePage({
    * the page falls back to the plain form — the guarded client already refuses
    * anything outside the caller's tenant, so there is nothing extra to check.
    */
-  const quote = quoteId
-    ? await prisma.quote.findFirst({
-        where: { id: quoteId },
-        include: { items: { include: { product: true }, orderBy: { sortOrder: "asc" } } },
-      })
-    : null;
-  const queue = quote ? vehiclesAwaitingRegistration(quote.items) : [];
+  // Minus the carts that came out of stock: those got their vehicle at delivery.
+  const queue = quoteId ? await registrationQueueForQuote(quoteId) : [];
   const position = Math.max(0, Number.parseInt(seq ?? "0", 10) || 0);
   const current = queue[position] ?? null;
 

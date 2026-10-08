@@ -3,11 +3,16 @@ import { prisma } from "./db";
 import { getSetting } from "./settings";
 import { embedStoredImage } from "./storedImage";
 import { isDocEditorLibraryItem } from "./studioClauses";
-import { DOC_DEFS, defaultTemplate, mergeTemplate, type DocKey, type DocTemplate } from "./docTemplates";
+import { DOC_DEFS, defaultTemplate, mergeTemplate, withCompanyDetails, type DocKey, type DocTemplate } from "./docTemplates";
+import { getCompanyProfile } from "./companyProfile";
+import { docKeyEnabled } from "./docModuleAccess";
+import { isModuleEnabled } from "./modules/enabled";
 
 /** First run per type: seed a "Standard" template (from legacy settings if any). */
 export async function ensureSeeded(): Promise<void> {
+  const automotive = await isModuleEnabled("automotive");
   for (const key of Object.keys(DOC_DEFS) as DocKey[]) {
+    if (!(await docKeyEnabled(key))) continue;
     const count = await prisma.docTemplateRecord.count({ where: { docType: key, deletedAt: null } });
     if (count > 0) continue;
     const legacy = await getSetting(`DOC_TEMPLATE_${key}`); // pre-v2 storage
@@ -16,13 +21,14 @@ export async function ensureSeeded(): Promise<void> {
         docType: key,
         name: "Standard",
         isDefault: true,
-        config: mergeTemplate(key, legacy) as object,
+        config: mergeTemplate(key, legacy, { automotive }) as object,
       },
     });
   }
 }
 
 export async function listTemplates(key: DocKey) {
+  if (!(await docKeyEnabled(key))) return [];
   return prisma.docTemplateRecord.findMany({
     where: { docType: key, deletedAt: null },
     orderBy: [{ isDefault: "desc" }, { name: "asc" }],
@@ -38,8 +44,11 @@ export async function listStudioClauses() {
   return rows.filter((row) => !isDocEditorLibraryItem(row));
 }
 
+/** A template by id, or null when it is gone or its document's module is off. */
 export async function getTemplateRecord(id: string) {
-  return prisma.docTemplateRecord.findUnique({ where: { id } });
+  const rec = await prisma.docTemplateRecord.findUnique({ where: { id } });
+  if (!rec || !(await docKeyEnabled(rec.docType))) return null;
+  return rec;
 }
 
 /**
@@ -47,6 +56,22 @@ export async function getTemplateRecord(id: string) {
  * via ?tpl=), else the type's default record, else built-in defaults.
  */
 export async function getDocTemplate(key: DocKey, templateId?: string): Promise<DocTemplate> {
+  // Every print of a typed document comes through here: refuse rather than
+  // render a module-only document in a workspace without the module.
+  if (!(await docKeyEnabled(key))) throw new Error(`The ${DOC_DEFS[key].label} isn't available in this workspace.`);
+  const [tpl, company] = await Promise.all([loadDocTemplate(key, templateId), getCompanyProfile()]);
+  return withCompanyDetails(tpl, company);
+}
+
+/**
+ * The default template's text as the owner wrote it — {{company.name}} still a
+ * placeholder, not filled in — for moving it into the document editor's layout.
+ */
+export async function getDocTemplateText(key: DocKey): Promise<DocTemplate> {
+  return loadDocTemplate(key);
+}
+
+async function loadDocTemplate(key: DocKey, templateId?: string): Promise<DocTemplate> {
   if (templateId) {
     const rec = await prisma.docTemplateRecord.findUnique({ where: { id: templateId } });
     if (rec && rec.docType === key) return withPrintableLogo(mergeTemplate(key, rec.config), rec.tenantId);
@@ -56,7 +81,8 @@ export async function getDocTemplate(key: DocKey, templateId?: string): Promise<
   });
   if (def) return withPrintableLogo(mergeTemplate(key, def.config), def.tenantId);
   const legacy = await getSetting(`DOC_TEMPLATE_${key}`);
-  return withPrintableLogo(legacy ? mergeTemplate(key, legacy) : defaultTemplate(key), null);
+  const options = { automotive: await isModuleEnabled("automotive") };
+  return withPrintableLogo(legacy ? mergeTemplate(key, legacy, options) : defaultTemplate(key, options), null);
 }
 
 /**

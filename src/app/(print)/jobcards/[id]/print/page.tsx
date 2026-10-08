@@ -6,6 +6,8 @@ import { requireJobCardReadAccess } from "@/lib/permissions";
 import PrintActions from "@/components/PrintActions";
 import { contactName, formatDate, formatZAR } from "@/lib/format";
 import { getDocTemplate } from "@/lib/docTemplateStore";
+import { getCompanyProfile } from "@/lib/companyProfile";
+import { getRegionalSettings } from "@/lib/settings";
 import { embedStoredImage } from "@/lib/storedImage";
 import { stageMeta, jobCardTotals, jobLineCents } from "@/lib/workshop-constants";
 
@@ -40,7 +42,8 @@ export default async function JobCardPrintPage({
     },
   });
   if (!jobCard) notFound();
-  const tpl = await getDocTemplate("jobcard", tplId);
+  const [tpl, company] = await Promise.all([getDocTemplate("jobcard", tplId), getCompanyProfile()]);
+  const regional = await getRegionalSettings();
   // Embedded, not linked: a signature in the private store has no public link.
   const signatureSrc = jobCard.signedAt ? await embedStoredImage(jobCard.signatureRef, jobCard.tenantId) : null;
   const conditionPhotos = jobCard.documents;
@@ -90,13 +93,12 @@ export default async function JobCardPrintPage({
       <div className="max-w-3xl mx-auto px-6 py-8 print:p-0 text-sm">
         {/* Brand banner */}
         <div className="flex items-center justify-between rounded-xl bg-[#020617] px-7 py-5">
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img
-            src={tpl.logoUrl ?? "/branding/denago-logo-email.png"}
-            alt="Denago Cape Town EV"
-            className="h-11 w-auto object-contain"
-          />
-          <div className="text-right">
+          {/* No logo configured → no image (never another company's). */}
+          {(tpl.logoUrl || company.logoUrl) && (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img src={(tpl.logoUrl || company.logoUrl) as string} alt={company.name} className="h-11 w-auto object-contain" />
+          )}
+          <div className="ml-auto text-right">
             <p className="text-2xl font-semibold tracking-[-0.035em] tracking-widest text-white">JOB CARD</p>
             <p className="text-lg font-bold text-orange-500">#{jobCard.number}</p>
             <p className="text-xs text-slate-400">{stageMeta(jobCard.status).label}</p>
@@ -131,9 +133,9 @@ export default async function JobCardPrintPage({
             {jobCard.vehicle.vin && <p>VIN / Serial: {jobCard.vehicle.vin}</p>}
             {jobCard.vehicle.regNumber && <p>Reg: {jobCard.vehicle.regNumber}</p>}
             <p className="text-slate-600">
-              Opened {formatDate(jobCard.openedAt)}
+              Opened {formatDate(jobCard.openedAt, regional)}
               {jobCard.kmIn != null ? ` · ${jobCard.kmIn.toLocaleString()} km in` : ""}
-              {jobCard.completedAt ? ` · Completed ${formatDate(jobCard.completedAt)}` : ""}
+              {jobCard.completedAt ? ` · Completed ${formatDate(jobCard.completedAt, regional)}` : ""}
             </p>
           </div>
         </div>
@@ -172,8 +174,8 @@ export default async function JobCardPrintPage({
                 <td className="py-1.5 pr-2 capitalize">{i.kind}</td>
                 <td className="py-1.5 pr-2">{i.description}</td>
                 <td className="py-1.5 pr-2 text-right">{i.qty}</td>
-                <td className="py-1.5 pr-2 text-right">{formatZAR(i.unitPriceCents)}</td>
-                <td className="py-1.5 text-right">{formatZAR(jobLineCents(i))}</td>
+                <td className="py-1.5 pr-2 text-right">{formatZAR(i.unitPriceCents, regional)}</td>
+                <td className="py-1.5 text-right">{formatZAR(jobLineCents(i), regional)}</td>
               </tr>
             ))}
           </tbody>
@@ -183,21 +185,21 @@ export default async function JobCardPrintPage({
           <div className="w-64 space-y-1">
             <div className="flex justify-between">
               <span className="text-slate-600">Parts</span>
-              <span>{formatZAR(Math.round(partsTotal))}</span>
+              <span>{formatZAR(Math.round(partsTotal), regional)}</span>
             </div>
             <div className="flex justify-between">
               <span className="text-slate-600">Labour</span>
-              <span>{formatZAR(Math.round(labourTotal))}</span>
+              <span>{formatZAR(Math.round(labourTotal), regional)}</span>
             </div>
             {otherTotal !== 0 && (
               <div className="flex justify-between">
                 <span className="text-slate-600">Other</span>
-                <span>{formatZAR(Math.round(otherTotal))}</span>
+                <span>{formatZAR(Math.round(otherTotal), regional)}</span>
               </div>
             )}
             <div className="flex justify-between border-t-2 border-slate-900 pt-1 font-bold">
               <span>Total</span>
-              <span>{formatZAR(Math.round(grandTotal))}</span>
+              <span>{formatZAR(Math.round(grandTotal), regional)}</span>
             </div>
           </div>
         </div>
@@ -223,7 +225,7 @@ export default async function JobCardPrintPage({
             <p className="text-slate-600">
               Next service due:{" "}
               {jobCard.serviceRecord.nextDueDate
-                ? formatDate(jobCard.serviceRecord.nextDueDate)
+                ? formatDate(jobCard.serviceRecord.nextDueDate, regional)
                 : "—"}
               {jobCard.serviceRecord.nextDueKm != null
                 ? ` / ${jobCard.serviceRecord.nextDueKm.toLocaleString()} km`
@@ -274,7 +276,7 @@ export default async function JobCardPrintPage({
             <div className="border-t border-slate-900 pt-1.5 max-w-md">
               <p className="text-xs text-slate-600">
                 Signed electronically by <b>{jobCard.signedByName}</b> on{" "}
-                {formatDate(jobCard.signedAt)}
+                {formatDate(jobCard.signedAt, regional)}
                 {jobCard.signerIp ? ` · IP ${jobCard.signerIp}` : ""} · ECT Act, 2002
               </p>
             </div>
@@ -301,8 +303,8 @@ export default async function JobCardPrintPage({
         )}
 
         <p className="text-[10px] text-slate-400 mt-8 text-center">
-          Denago Cape Town · Authorized Denago EV Dealer · Job card #{jobCard.number} · Generated{" "}
-          {formatDate(new Date())}
+          {[company.name, company.tagline].filter(Boolean).join(" · ")} · Job card #{jobCard.number} · Generated{" "}
+          {formatDate(new Date(), regional)}
         </p>
       </div>
     </>

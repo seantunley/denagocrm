@@ -1,8 +1,9 @@
 import { Document, Page, View, Text, StyleSheet } from "@react-pdf/renderer";
-import { formatDate, formatZAR } from "@/lib/format";
+import { formatDate, formatZAR, type Regional } from "@/lib/format";
 import { documentTotals, feeRows, includedLines, lineNetCents } from "@/lib/pricing";
 import { quoteBillTo, type BillToFleet } from "@/lib/quoteBillTo";
-import type { QuoteForPrint } from "@/components/print/QuotePrintDoc";
+import type { QuoteForPrint } from "@/lib/docbuilder/merge";
+import { brandFooterContent, type CompanyProfile } from "@/lib/companyBrand";
 
 /**
  * SPIKE — the quotation rebuilt with @react-pdf/renderer instead of fixed mm
@@ -125,11 +126,21 @@ export default function QuoteDoc({
   quote,
   fleet,
   signed,
+  company,
+  regional,
 }: {
   quote: QuoteForPrint;
   fleet: BillToFleet | null;
   signed?: SignedInfo;
+  /** The company the quote is FROM — getCompanyProfile(). */
+  company: CompanyProfile;
+  /** The workspace's currency/locale/time zone (getRegionalSettings). */
+  regional: Regional;
 }) {
+  const footer = brandFooterContent((k) => company[k]);
+  const title = [company.name, company.tagline].filter(Boolean).join(" — ");
+  const money = (cents: number) => formatZAR(cents, regional);
+  const date = (d: Date | null) => formatDate(d, regional);
   const lineNet = lineNetCents;
   // Fees and delivery are part of the quoted price — itemised as rows below as
   // well as counted here, so the lines the customer reads add up to the total.
@@ -146,13 +157,13 @@ export default function QuoteDoc({
     .filter(Boolean);
 
   return (
-    <Document title={`Quotation Q-${quote.number}`} author="Denago Cape Town">
+    <Document title={`Quotation Q-${quote.number}`} author={company.name}>
       <Page size="A4" style={s.page}>
         {/* Repeating brand banner */}
         <View style={s.header} fixed>
           <View>
-            <Text style={s.brand}>DENAGO CAPE TOWN</Text>
-            <Text style={s.brandSub}>AUTHORIZED DENAGO EV DEALER</Text>
+            <Text style={s.brand}>{company.name.toUpperCase()}</Text>
+            {company.tagline ? <Text style={s.brandSub}>{company.tagline.toUpperCase()}</Text> : null}
           </View>
           <View>
             <Text style={s.docTitle}>QUOTATION</Text>
@@ -163,17 +174,19 @@ export default function QuoteDoc({
         {/* Repeating footer with page numbers */}
         <View style={s.footer} fixed>
           <View>
-            <Text style={s.footerBold}>Denago Cape Town — Authorized Denago EV Dealer</Text>
-            <Text style={s.footerLine}>Unit 55, M5 Freeway Business Park, Maitland, Cape Town · 073 789 3438</Text>
-            <Text style={s.footerLine}>sales@denagocpt.co.za · denagocpt.co.za · @denago_capetown</Text>
+            <Text style={s.footerBold}>{title}</Text>
+            {footer.contact ? <Text style={s.footerLine}>{footer.contact}</Text> : null}
+            {footer.web || footer.instagram ? (
+              <Text style={s.footerLine}>{[footer.web, footer.instagram].filter(Boolean).join(" · ")}</Text>
+            ) : null}
           </View>
           <Text style={s.pageNo} render={({ pageNumber, totalPages }) => `Page ${pageNumber} / ${totalPages}`} />
         </View>
 
         {/* Meta strip */}
         <View style={s.metaRow}>
-          <Text style={s.meta}>Date: {formatDate(quote.createdAt)}</Text>
-          {quote.validUntil ? <Text style={s.meta}>Valid until: {formatDate(quote.validUntil)}</Text> : <Text />}
+          <Text style={s.meta}>Date: {date(quote.createdAt)}</Text>
+          {quote.validUntil ? <Text style={s.meta}>Valid until: {date(quote.validUntil)}</Text> : <Text />}
           {quote.createdBy ? <Text style={s.meta}>Prepared by: {quote.createdBy.name}</Text> : <Text />}
         </View>
 
@@ -193,7 +206,7 @@ export default function QuoteDoc({
             <Text style={[s.cardLabel, { color: slate500 }]}>VEHICLE OF INTEREST</Text>
             <Text style={s.cardName}>{vehicle}</Text>
             {quote.lead?.color ? <Text style={s.cardLine}>Colour: {quote.lead.color}</Text> : null}
-            <Text style={s.cardLine}>Demo drives available at your estate or our Maitland showroom.</Text>
+            <Text style={s.cardLine}>Demo drives available at your estate or our showroom.</Text>
           </View>
         </View>
 
@@ -211,10 +224,10 @@ export default function QuoteDoc({
             </Text>
             <Text style={[s.cell, s.cNum]}>{i.qty}</Text>
             <Text style={[s.cell, s.cNum]}>
-              {i.discountPct ? `${formatZAR(i.unitPriceCents)} (−${i.discountPct}%)` : formatZAR(i.unitPriceCents)}
+              {i.discountPct ? `${money(i.unitPriceCents)} (−${i.discountPct}%)` : money(i.unitPriceCents)}
             </Text>
             <Text style={[s.cell, s.cNum, { fontFamily: "Helvetica-Bold" }]}>
-              {formatZAR(lineNet(i))}
+              {money(lineNet(i))}
             </Text>
           </View>
         ))}
@@ -226,9 +239,9 @@ export default function QuoteDoc({
           >
             <Text style={[s.cell, s.cDesc]}>{fee.description}</Text>
             <Text style={[s.cell, s.cNum]}>{fee.qty}</Text>
-            <Text style={[s.cell, s.cNum]}>{formatZAR(fee.unitPriceCents)}</Text>
+            <Text style={[s.cell, s.cNum]}>{money(fee.unitPriceCents)}</Text>
             <Text style={[s.cell, s.cNum, { fontFamily: "Helvetica-Bold" }]}>
-              {formatZAR(fee.unitPriceCents)}
+              {money(fee.unitPriceCents)}
             </Text>
           </View>
         ))}
@@ -239,13 +252,13 @@ export default function QuoteDoc({
             {totals.filter((line) => !line.strong).map((line) => (
               <View key={line.label} style={s.totalRow}>
                 <Text style={s.totalRowLabel}>{line.label}</Text>
-                <Text style={s.totalRowAmount}>{formatZAR(Math.round(line.amountCents))}</Text>
+                <Text style={s.totalRowAmount}>{money(Math.round(line.amountCents))}</Text>
               </View>
             ))}
             {totals.filter((line) => line.strong).map((line) => (
               <View key={line.label} style={s.totalBand}>
                 <Text style={s.totalLabel}>{line.label.toUpperCase()}</Text>
-                <Text style={s.totalAmount}>{formatZAR(Math.round(line.amountCents))}</Text>
+                <Text style={s.totalAmount}>{money(Math.round(line.amountCents))}</Text>
               </View>
             ))}
           </View>
@@ -285,7 +298,7 @@ export default function QuoteDoc({
           </View>
           <View style={s.sig}>
             <View style={s.sigLine}>
-              <Text style={s.sigLabel}>For Denago Cape Town &amp; date</Text>
+              <Text style={s.sigLabel}>For {company.name} &amp; date</Text>
             </View>
           </View>
         </View>
@@ -296,8 +309,8 @@ export default function QuoteDoc({
         <Page size="A4" style={s.page}>
           <View style={s.header} fixed>
             <View>
-              <Text style={s.brand}>DENAGO CAPE TOWN</Text>
-              <Text style={s.brandSub}>AUTHORIZED DENAGO EV DEALER</Text>
+              <Text style={s.brand}>{company.name.toUpperCase()}</Text>
+              {company.tagline ? <Text style={s.brandSub}>{company.tagline.toUpperCase()}</Text> : null}
             </View>
             <View>
               <Text style={s.docTitle}>CERTIFICATE</Text>
@@ -306,15 +319,15 @@ export default function QuoteDoc({
           </View>
           <View style={s.footer} fixed>
             <View>
-              <Text style={s.footerBold}>Denago Cape Town — Authorized Denago EV Dealer</Text>
-              <Text style={s.footerLine}>sales@denagocpt.co.za · denagocpt.co.za</Text>
+              <Text style={s.footerBold}>{title}</Text>
+              {footer.web ? <Text style={s.footerLine}>{footer.web}</Text> : null}
             </View>
             <Text style={s.pageNo} render={({ pageNumber, totalPages }) => `Page ${pageNumber} / ${totalPages}`} />
           </View>
 
           <Text style={s.certTitle}>CERTIFICATE OF COMPLETION</Text>
           <Text style={s.certLead}>
-            Audit record for Quotation Q-{quote.number}, signed electronically and sealed by Denago Cape Town.
+            Audit record for Quotation Q-{quote.number}, signed electronically and sealed by {company.name}.
           </Text>
 
           <View style={s.certRow}>
@@ -346,8 +359,8 @@ export default function QuoteDoc({
             <Text style={s.certSealLabel}>TAMPER-EVIDENT SEAL</Text>
             <Text style={s.certSealText}>
               This document was signed electronically in terms of the Electronic Communications and
-              Transactions Act 25 of 2002. It carries a PKCS#7 digital signature applied by Denago Cape
-              Town; any alteration made after sealing invalidates the signature and is detectable by any
+              Transactions Act 25 of 2002. It carries a PKCS#7 digital signature applied by {company.name};
+              any alteration made after sealing invalidates the signature and is detectable by any
               standard PDF reader.
             </Text>
           </View>

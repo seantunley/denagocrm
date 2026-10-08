@@ -35,7 +35,7 @@ export async function generateFlowDraft(input: {
     ? journeys.map((journey) => `[${journey.id}] ${journey.name}`).join("\n")
     : "(No active Journeys are available. Do not create a journey node.)";
 
-  const system = `You design DRAFT conversation graphs for DenagoCRM. Return exactly one JSON object and nothing else.
+  const system = `You design DRAFT conversation graphs for a business's customer chatbot. Return exactly one JSON object and nothing else.
 
 The output shape is:
 {"start":"node_id","nodes":{"node_id":{...}},"positions":{"node_id":{"x":0,"y":0}}}

@@ -1,6 +1,8 @@
 // Document template config — pure types + defaults (client-safe).
 // Templates are DocTemplateRecord rows: many per type, one default per type.
 
+import { brandFooterContent, type CompanyProfile } from "./companyBrand";
+
 export type DocKey =
   | "quote"
   | "invoice"
@@ -29,7 +31,15 @@ type DocDef = {
   description: string;
   sections: { id: string; label: string }[];
   defaultBody?: string;
+  /** Replaces defaultBody when the workspace has the automotive module. */
+  automotiveBody?: string;
   defaultIntro?: string;
+  /**
+   * The feature pack this document belongs to. A workspace without it is not
+   * offered the template at all — a breastfeeding-art studio has no job cards,
+   * test drives or vehicle deliveries.
+   */
+  module?: "automotive";
 };
 
 export const DOC_DEFS: Record<DocKey, DocDef> = {
@@ -59,19 +69,24 @@ export const DOC_DEFS: Record<DocKey, DocDef> = {
   agreement: {
     label: "Sales agreement",
     group: "Sales",
-    description: "Purchase contract for a cart sale — clauses below are fully editable.",
+    description: "Purchase contract for a sale — clauses below are fully editable.",
     sections: [
-      { id: "items", label: "Vehicle & items table" },
+      { id: "items", label: "Items table" },
       { id: "clauses", label: "Agreement clauses" },
       { id: "signatures", label: "Signature block" },
       { id: "footer", label: "Branded footer" },
     ],
     defaultBody:
-      "1. The purchaser agrees to buy the vehicle(s) described above at the stated price.\n2. Ownership passes on receipt of full payment.\n3. The vehicle carries the manufacturer's warranty as per the warranty schedule.\n4. Delivery takes place at the agreed address or at Denago Cape Town, Maitland.\n5. This agreement is governed by the laws of the Republic of South Africa.",
+      "1. The purchaser agrees to buy the goods and/or services described above at the stated price.\n2. Ownership passes on receipt of full payment.\n3. Goods carry the supplier's or manufacturer's warranty, where one applies.\n4. Delivery or collection takes place at the agreed address or at {{company.name}}.\n5. This agreement is governed by the laws of the Republic of South Africa.",
+    // Only what a NEW template starts with. Each workspace's saved clauses live
+    // on its own DocTemplateRecord and are edited in Settings → Documents.
+    automotiveBody:
+      "1. The purchaser agrees to buy the vehicle(s) described above at the stated price.\n2. Ownership passes on receipt of full payment.\n3. The vehicle carries the manufacturer's warranty as per the warranty schedule.\n4. Delivery takes place at the agreed address or at {{company.name}}.\n5. This agreement is governed by the laws of the Republic of South Africa.",
   },
   indemnity: {
     label: "Test-drive indemnity",
     group: "Sales",
+    module: "automotive",
     description: "Waiver the customer signs before a test drive.",
     sections: [
       { id: "waiver", label: "Waiver text" },
@@ -79,12 +94,13 @@ export const DOC_DEFS: Record<DocKey, DocDef> = {
       { id: "footer", label: "Branded footer" },
     ],
     defaultBody:
-      "I, the undersigned, acknowledge that I am test-driving the vehicle entirely at my own risk. I confirm that I hold a valid driver's licence, will follow all instructions given by Denago Cape Town staff, and accept liability for any damage caused by my negligence during the test drive. Denago Cape Town, its owners and employees are indemnified against any claim for injury, loss or damage arising from the test drive, to the fullest extent permitted by law.",
+      "I, the undersigned, acknowledge that I am test-driving the vehicle entirely at my own risk. I confirm that I hold a valid driver's licence, will follow all instructions given by {{company.name}} staff, and accept liability for any damage caused by my negligence during the test drive. {{company.name}}, its owners and employees are indemnified against any claim for injury, loss or damage arising from the test drive, to the fullest extent permitted by law.",
     defaultIntro: "Please read and sign before the test drive.",
   },
   delivery: {
     label: "Delivery note",
     group: "Fulfilment",
+    module: "automotive",
     description: "Handover document for a delivery — items, checklist and signatures.",
     sections: [
       { id: "items", label: "Items being delivered" },
@@ -98,6 +114,7 @@ export const DOC_DEFS: Record<DocKey, DocDef> = {
   jobcard: {
     label: "Job card",
     group: "Workshop",
+    module: "automotive",
     description: "The workshop job card print-out with technician and customer sign-off.",
     sections: [
       { id: "signatures", label: "Signature block" },
@@ -107,6 +124,7 @@ export const DOC_DEFS: Record<DocKey, DocDef> = {
   "service-report": {
     label: "Service report",
     group: "Workshop",
+    module: "automotive",
     description: "Given to the customer after a service: work done, parts, next service due.",
     sections: [
       { id: "items", label: "Work & parts table" },
@@ -120,13 +138,14 @@ export const DOC_DEFS: Record<DocKey, DocDef> = {
   "warranty-claim": {
     label: "Warranty claim",
     group: "Workshop",
+    module: "automotive",
     description: "Claim form for a warranty fault — for the customer and the manufacturer.",
     sections: [
       { id: "vehicle", label: "Vehicle & warranty details" },
       { id: "signatures", label: "Signature block" },
       { id: "footer", label: "Branded footer" },
     ],
-    defaultIntro: "Warranty claim as recorded by Denago Cape Town.",
+    defaultIntro: "Warranty claim as recorded by {{company.name}}.",
   },
 };
 
@@ -136,31 +155,63 @@ export const DOC_GROUPS: { name: DocDef["group"]; keys: DocKey[] }[] = [
   { name: "Workshop", keys: ["jobcard", "service-report", "warranty-claim"] },
 ];
 
+/** Whether this workspace has the document at all (its module, if any, is on). */
+export function docKeyAvailable(key: string, enabledModules: ReadonlySet<string>): boolean {
+  const needs = (DOC_DEFS as Record<string, DocDef | undefined>)[key]?.module;
+  return !needs || enabledModules.has(needs);
+}
+
+/** DOC_GROUPS for this workspace: module-only documents removed, empty groups dropped. */
+export function docGroupsForModules(enabledModules: ReadonlySet<string>) {
+  return DOC_GROUPS.map((group) => ({ ...group, keys: group.keys.filter((key) => docKeyAvailable(key, enabledModules)) })).filter(
+    (group) => group.keys.length > 0,
+  );
+}
+
 export const SIGNATURE_POSITIONS: { id: SignaturePosition; label: string }[] = [
-  { id: "left-right", label: "Customer left · Denago right" },
-  { id: "right-left", label: "Denago left · Customer right" },
+  { id: "left-right", label: "Customer left · Dealer right" },
+  { id: "right-left", label: "Dealer left · Customer right" },
   { id: "strip", label: "Full-width strip" },
 ];
 
-export function defaultTemplate(key: DocKey): DocTemplate {
+export function defaultTemplate(key: DocKey, { automotive = false }: { automotive?: boolean } = {}): DocTemplate {
   const def = DOC_DEFS[key];
   return {
     logoUrl: null,
     intro: def.defaultIntro ?? null,
-    bodyText: def.defaultBody ?? null,
+    bodyText: (automotive && def.automotiveBody) || def.defaultBody || null,
     terms: null,
-    footerLines: [
-      "Unit 55, M5 Freeway Business Park, Maitland, Cape Town · 073 789 3438",
-      "sales@denagocpt.co.za · denagocpt.co.za",
-    ],
+    // Empty = the Company Profile's address/phone and email/website lines,
+    // filled in at print time by withCompanyDetails().
+    footerLines: [],
     sections: Object.fromEntries(def.sections.map((s) => [s.id, s.id !== "prices"])),
     signature: { position: "left-right", dealerCounterSign: true },
   };
 }
 
+/**
+ * Bind a template to the company printing it: `{{company.name}}` in the owner-
+ * editable text becomes the workspace's name, and an empty footer becomes the
+ * Company Profile's contact lines. These defaults used to be Denago's details
+ * typed in, so every workspace printed Denago's address on its documents.
+ */
+export function withCompanyDetails(tpl: DocTemplate, company: CompanyProfile): DocTemplate {
+  const fill = (s: string | null) => s?.replaceAll("{{company.name}}", company.name) ?? null;
+  const footer = brandFooterContent((k) => company[k]);
+  return {
+    ...tpl,
+    intro: fill(tpl.intro),
+    bodyText: fill(tpl.bodyText),
+    terms: fill(tpl.terms),
+    footerLines: tpl.footerLines.length
+      ? tpl.footerLines.map((l) => fill(l) ?? l)
+      : [footer.contact, footer.web].filter(Boolean),
+  };
+}
+
 /** Merge stored JSON over the defaults so new fields never break old data. */
-export function mergeTemplate(key: DocKey, raw: unknown): DocTemplate {
-  const base = defaultTemplate(key);
+export function mergeTemplate(key: DocKey, raw: unknown, options?: { automotive?: boolean }): DocTemplate {
+  const base = defaultTemplate(key, options);
   if (!raw) return base;
   try {
     const parsed = (typeof raw === "string" ? JSON.parse(raw) : raw) as Partial<DocTemplate>;

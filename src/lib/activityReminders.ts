@@ -1,6 +1,7 @@
 import { prisma, basePrisma } from "./db";
 import { sendPushToAll } from "./push";
 import { contactName } from "./format";
+import { activityPeople } from "./activityAttendees";
 
 export const mapsLink = (location: string) =>
   location.startsWith("http")
@@ -18,10 +19,17 @@ export async function runActivityReminders(): Promise<number> {
   const upcoming = await prisma.activity.findMany({
     where: {
       status: "planned",
+      // Availability blocks are not tasks: no "in 60 min: Leave" push to everyone.
+      availabilityBlock: false,
       reminderSentAt: null,
       dueDate: { gt: now, lte: inAnHour },
     },
-    include: { lead: true, contact: true, assignedTo: true },
+    include: {
+      lead: true,
+      contact: true,
+      assignedTo: true,
+      attendees: { include: { user: { select: { name: true } } } },
+    },
     take: 10,
   });
   let sent = 0;
@@ -33,7 +41,7 @@ export async function runActivityReminders(): Promise<number> {
     await sendPushToAll(
       {
         title: `⏰ In ${mins} min: ${a.summary}`.slice(0, 100),
-        body: [who, a.location ? `📍 ${a.location} — tap for directions` : null, a.assignedTo.name]
+        body: [who, a.location ? `📍 ${a.location} — tap for directions` : null, activityPeople(a).join(", ")]
           .filter(Boolean)
           .join(" · "),
         url: a.location ? mapsLink(a.location) : "/activities",

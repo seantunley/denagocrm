@@ -51,13 +51,13 @@ import {
   assignLead,
   convertLeadToContact,
   markLost,
-  markWon,
   moveLead,
   moveLeadToTestDrive,
   moveLeadWithContact,
   moveLeadWithNewQuote,
   searchLinkableContacts,
 } from "@/app/actions/leads";
+import { MarkWonDialog } from "@/components/MarkWonDialog";
 import { formatZAR } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
@@ -102,6 +102,7 @@ import { STAGE_REMEDIES, remedyFor } from "@/lib/stageRemedies";
 // describe an unmet criterion with the SAME sentence. A second copy of this
 // wording here is how the refusal and the warning start disagreeing.
 import { MIN_OVERRIDE_REASON, describeUnmet, type StageGateVerdict } from "@/lib/stageGate";
+import { AvailabilityConflictDialog } from "@/components/AvailabilityConflictDialog";
 
 export type KanbanLead = {
   id: string;
@@ -732,6 +733,7 @@ export default function KanbanBoard({
   const [query, setQuery] = useState("");
   const [owner, setOwner] = useState<string>(OWNER_ANY);
   const [attentionOnly, setAttentionOnly] = useState(false);
+  const [availabilityConflict, setAvailabilityConflict] = useState<string | null>(null);
   const boardRef = useRef<HTMLDivElement>(null);
   const [, startTransition] = useTransition();
 
@@ -831,9 +833,9 @@ export default function KanbanBoard({
    * Restoring the captured snapshot is the whole rollback: it is the state the
    * user had, so their scroll position, filters and selection are untouched.
    */
-  function rollbackTo(snapshot: KanbanStage[], message: string) {
+  function rollbackTo(snapshot: KanbanStage[], message: string, notify = true) {
     setStages(snapshot);
-    toast.error(message);
+    if (notify) toast.error(message);
   }
 
   function requestMove(lead: KanbanLead, targetStageId: string, overrideReason?: string) {
@@ -1111,7 +1113,13 @@ export default function KanbanBoard({
       } else {
         // Same rule: a refused booking must not leave the card in the stage the
         // booking was the price of entry to.
-        rollbackTo(snapshot, result.error ?? "Couldn't book the test drive");
+        const message = result.error ?? "Couldn't book the test drive";
+        if (result.error?.includes(" is unavailable from ")) {
+          rollbackTo(snapshot, result.error, false);
+          setAvailabilityConflict(result.error);
+        } else {
+          rollbackTo(snapshot, message);
+        }
       }
     });
   }
@@ -1186,24 +1194,26 @@ export default function KanbanBoard({
     };
   }
 
-  function confirmOutcome(reason?: string) {
-    if (!pendingOutcome) return;
-    const { lead, mode } = pendingOutcome;
+  const pendingLost = pendingOutcome?.mode === "lost" ? { lead: pendingOutcome.lead } : null;
+  const pendingWon = pendingOutcome?.mode === "won" ? pendingOutcome.lead : null;
+
+  function confirmLost(reason: string) {
+    if (!pendingLost) return;
+    const { lead } = pendingLost;
     setPendingOutcome(null);
     startTransition(async () => {
       try {
         const formData = new FormData();
-        if (mode === "won") {
-          formData.set("returnTo", "/leads");
-          await markWon(lead.id, formData);
-        } else {
-          formData.set("lostReason", reason ?? "");
-          await markLost(lead.id, formData);
+        formData.set("lostReason", reason);
+        const result = await markLost(lead.id, formData);
+        if (result?.error) {
+          toast.error(result.error);
+          return;
         }
         removeLead(lead.id);
-        toast.success(`${lead.name} marked ${mode}`);
+        toast.success(`${lead.name} marked lost`);
       } catch {
-        toast.error(`Couldn't mark ${lead.name} ${mode}`);
+        toast.error(`Couldn't mark ${lead.name} lost`);
       }
     });
   }
@@ -1390,10 +1400,20 @@ export default function KanbanBoard({
           onConfirm={confirmTestDrive}
         />
         <LeadOutcomeDialog
-          key={pendingOutcome ? `${pendingOutcome.lead.id}-${pendingOutcome.mode}` : "closed"}
-          pending={pendingOutcome}
+          key={pendingLost ? `${pendingLost.lead.id}-lost` : "closed"}
+          pending={pendingLost}
           onCancel={() => setPendingOutcome(null)}
-          onConfirm={confirmOutcome}
+          onConfirm={confirmLost}
+        />
+        {/* Winning asks WHICH quote was accepted — that is what sends the deal
+            to Deliveries — so it has its own dialog, shared with the lead page. */}
+        <MarkWonDialog
+          open={Boolean(pendingWon)}
+          onOpenChange={(open) => !open && setPendingOutcome(null)}
+          leadId={pendingWon?.id ?? ""}
+          leadName={pendingWon?.name ?? ""}
+          returnTo="/leads"
+          onWon={() => pendingWon && removeLead(pendingWon.id)}
         />
         <ContactLinkDialog
           key={pendingLink ? `${pendingLink.lead.id}-${pendingLink.stageId}` : "link-closed"}
@@ -1412,6 +1432,11 @@ export default function KanbanBoard({
           pending={pendingGate}
           onCancel={() => setPendingGate(null)}
           onConfirm={confirmGateOverride}
+        />
+        <AvailabilityConflictDialog
+          message={availabilityConflict}
+          onClose={() => setAvailabilityConflict(null)}
+          title="Salesperson unavailable"
         />
       </DndContext>
     </>
@@ -1673,9 +1698,9 @@ function LeadOutcomeDialog({
   onCancel,
   onConfirm,
 }: {
-  pending: { lead: KanbanLead; mode: "won" | "lost" } | null;
+  pending: { lead: KanbanLead } | null;
   onCancel: () => void;
-  onConfirm: (reason?: string) => void;
+  onConfirm: (reason: string) => void;
 }) {
   const [reason, setReason] = useState("");
 
@@ -1686,45 +1711,37 @@ function LeadOutcomeDialog({
           <>
             <DialogHeader>
               <DialogTitle className="flex items-center gap-2">
-                {pending.mode === "won" ? (
-                  <Trophy className="size-4 text-emerald-400" />
-                ) : (
-                  <XCircle className="size-4 text-destructive" />
-                )}
-                Mark {pending.lead.name} {pending.mode}?
+                <XCircle className="size-4 text-destructive" />
+                Mark {pending.lead.name} lost?
               </DialogTitle>
               <DialogDescription>
-                {pending.mode === "won"
-                  ? "This closes the opportunity as won and creates a customer if one is not already linked."
-                  : "Capture why the opportunity was lost so reporting and future coaching stay useful."}
+                Capture why the opportunity was lost so reporting and future coaching stay useful.
               </DialogDescription>
             </DialogHeader>
-            {pending.mode === "lost" && (
-              <div>
-                <label className="mb-1 block text-xs font-medium text-muted-foreground">Lost reason</label>
-                <input
-                  value={reason}
-                  onChange={(event) => setReason(event.target.value)}
-                  className="input"
-                  autoFocus
-                  placeholder="e.g. Bought elsewhere, budget, no response"
-                  onKeyDown={(event) => {
-                    if (event.key === "Enter" && reason.trim()) onConfirm(reason.trim());
-                  }}
-                />
-              </div>
-            )}
+            <div>
+              <label className="mb-1 block text-xs font-medium text-muted-foreground">Lost reason</label>
+              <input
+                value={reason}
+                onChange={(event) => setReason(event.target.value)}
+                className="input"
+                autoFocus
+                placeholder="e.g. Bought elsewhere, budget, no response"
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" && reason.trim()) onConfirm(reason.trim());
+                }}
+              />
+            </div>
             <div className="flex justify-end gap-2">
               <Button type="button" variant="outline" onClick={onCancel}>
                 Cancel
               </Button>
               <Button
                 type="button"
-                variant={pending.mode === "lost" ? "destructive" : "default"}
-                disabled={pending.mode === "lost" && !reason.trim()}
-                onClick={() => onConfirm(reason.trim() || undefined)}
+                variant="destructive"
+                disabled={!reason.trim()}
+                onClick={() => onConfirm(reason.trim())}
               >
-                Mark {pending.mode}
+                Mark lost
               </Button>
             </div>
           </>
@@ -1749,14 +1766,14 @@ function TestDriveDialog({
   const [productId, setProductId] = useState("");
   const [date, setDate] = useState(tomorrow);
   const [time, setTime] = useState("10:00");
-  const [location, setLocation] = useState("Denago Cape Town showroom");
+  const [location, setLocation] = useState("Our showroom");
 
   useEffect(() => {
     if (pending) {
       setProductId(pending.lead.productId ?? "");
       setDate(tomorrow);
       setTime("10:00");
-      setLocation("Denago Cape Town showroom");
+      setLocation("Our showroom");
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pending?.lead.id]);

@@ -4,6 +4,7 @@ import { contactName, formatDate } from "@/lib/format";
 import { computeWarranty, warrantyColors, warrantyLabels, claimColors } from "@/lib/warranty";
 import { createRecall, deleteRecall } from "@/app/actions/warranty";
 import RecallNotifyButton from "@/components/RecallNotifyButton";
+import ConfirmDelete from "@/components/ConfirmDelete";
 import { WorkspaceHero } from "@/components/workspace-hero";
 import { AlertTriangle, CarFront, ClipboardCheck, Megaphone, ShieldCheck } from "lucide-react";
 import { ResponsiveEntityTable } from "@/components/responsive-patterns";
@@ -94,7 +95,7 @@ export default async function WarrantyPage() {
                 <tr key={claim.id}>
                   <td data-primary data-label="Cart"><Link href={`/vehicles/${claim.vehicleId}`} className="text-orange-400 hover:underline font-medium">{claim.vehicle.model}</Link></td>
                   <td data-label="Owner">{contactName(claim.vehicle.contact)}</td>
-                  <td data-label="Fault" className="text-slate-300 max-w-xs truncate" title={claim.description}>{claim.description}</td>
+                  <td data-label="Fault" className="max-w-xs truncate" title={claim.description}><Link href={`/warranty/${claim.id}`} className="text-slate-300 hover:text-orange-400 hover:underline">{claim.description}</Link></td>
                   <td data-label="Status"><span className={`badge ${claimColors[claim.status]}`}>{claim.status}</span></td>
                   <td data-label="Opened" className="text-slate-400">{formatDate(claim.claimedAt)}</td>
                   <td data-actions className="text-right"><a href={`/warranty/${claim.id}/print`} target="_blank" rel="noreferrer" className="text-xs text-orange-400 hover:underline">Print claim</a></td>
@@ -133,7 +134,12 @@ export default async function WarrantyPage() {
                 {canManage && (
                   <div className="flex items-center gap-3">
                     <RecallNotifyButton recallId={recall.id} affected={modelCounts.get(recall.model) ?? 0} />
-                    <form action={deleteRecall.bind(null, recall.id)}><button className="text-xs text-red-400 hover:text-red-300">Delete</button></form>
+                    <ConfirmDelete
+                      action={deleteRecall.bind(null, recall.id)}
+                      title={`Delete the recall “${recall.title}”?`}
+                      description="The recall is permanently removed — it does not go to Trash. Notices already sent are not recalled."
+                      triggerClass="text-xs text-red-400 hover:text-red-300"
+                    />
                   </div>
                 )}
               </div>

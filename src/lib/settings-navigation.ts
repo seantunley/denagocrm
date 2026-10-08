@@ -11,6 +11,11 @@ export type SettingsNavItem = {
   permission?: string | string[];
   /** Optional feature pack this surface belongs to. Hidden when the module is off. */
   module?: ModuleId;
+  /**
+   * PLATFORM-level (the whole install, not one workspace): shown only to the
+   * platform owner, never to a workspace owner. Mirrors the page's requireOwner().
+   */
+  platform?: boolean;
 };
 
 export type SettingsNavGroup = {
@@ -37,7 +42,8 @@ export const SETTINGS_NAV_GROUPS: SettingsNavGroup[] = [
     label: "Organisation",
     items: [
       { key: "company", label: "Company profile", href: "/settings/company", keywords: ["business", "address", "phone", "branding", "footer", "logo", "details"] },
-      { key: "modules", label: "Modules", href: "/settings/modules", keywords: ["features", "packs", "enable", "disable", "automotive", "workshop", "inbox", "add-ons"] },
+      { key: "modules", label: "Modules", href: "/settings/modules", platform: true, keywords: ["features", "packs", "enable", "disable", "automotive", "workshop", "inbox", "add-ons"] },
+      { key: "assistant", label: "Assistant", href: "/settings/assistant", module: "automation", keywords: ["ai", "assistant", "ask the crm", "personality", "tone", "chatgpt", "memory", "learning", "playbooks"] },
       { key: "custom-fields", label: "Custom fields", href: "/settings/custom-fields", keywords: ["custom", "fields", "eav", "extra", "attributes", "metadata", "contact fields", "lead fields", "properties"] },
       // Beside custom fields rather than under Operations: both decide what gets
       // recorded against a record, and a checklist is not tied to one module —
@@ -53,6 +59,8 @@ export const SETTINGS_NAV_GROUPS: SettingsNavGroup[] = [
     label: "Sales & CRM",
     items: [
       { key: "pipeline", label: "Pipeline", href: "/settings/pipelines", permission: "pipelines.manage", keywords: ["lead stages", "sales stages"] },
+      // Owner-only (no `permission`, not `everyone`): mirrors the page and action's requireTenantOwner().
+      { key: "lead-routing", label: "Lead routing", href: "/settings/lead-routing", keywords: ["assign", "assignment", "round robin", "auto-assign", "distribute", "leads", "reps", "owner", "inbound"] },
       { key: "activity-types", label: "Activity types", href: "/settings/activity-types", keywords: ["activity", "activities", "types", "task", "tasks", "diary", "calendar", "meeting", "call", "test drive", "golf day", "custom type", "location"] },
       { key: "quotes", label: "Quotes", keywords: ["quote defaults", "terms"] },
       { key: "import", label: "Import", keywords: ["contacts", "csv", "upload"] },
@@ -73,16 +81,17 @@ export const SETTINGS_NAV_GROUPS: SettingsNavGroup[] = [
       { key: "email", label: "Email", keywords: ["smtp", "imap", "templates"] },
       { key: "automations", label: "Automations", module: "marketing", keywords: ["rules", "workflows", "triggers", "journeys", "follow-up", "next step"] },
       { key: "helpdesk", label: "Help desk", href: "/settings/helpdesk", permission: "cases.manage", module: "support", keywords: ["mailboxes", "saved replies", "tags", "support", "tickets", "cases"] },
-      { key: "integrations", label: "Integrations", keywords: ["api", "webhooks", "whatsapp", "meta"] },
       {
-        key: "integration-overrides",
-        label: "Integration overrides",
-        href: "/settings/integration-overrides",
+        // ONE Integrations page (batch 6) — it replaced the owner-only Settings tab
+        // and "Integration overrides", whose old addresses both redirect here.
+        key: "integrations",
+        label: "Integrations",
+        href: "/settings/integrations",
         // Visible to all signed-in users so tenant owners (who are not global
         // owners) can discover and navigate to this page. The page enforces
         // requireTenantOwner() — regular members who navigate here are redirected.
         everyone: true,
-        keywords: ["whatsapp", "email", "smtp", "imap", "telegram", "sms", "bulksms", "google reviews", "per-tenant", "credentials", "override"],
+        keywords: ["api", "webhooks", "whatsapp", "meta", "email", "smtp", "imap", "telegram", "sms", "bulksms", "google reviews", "per-tenant", "credentials", "override", "ai", "elevenlabs", "chatgpt", "intake"],
       },
     ],
   },
@@ -92,7 +101,7 @@ export const SETTINGS_NAV_GROUPS: SettingsNavGroup[] = [
       { key: "documents", label: "Document Studio", href: "/document-studio", permission: ["document_templates.manage", "docbuilder.view", "docbuilder.manage"], keywords: ["documents", "templates", "document studio", "document builder"] },
       { key: "signing-workflows", label: "Signing workflows", href: "/settings/signing-workflows", keywords: ["approval", "signing", "workflow", "e-sign"] },
       { key: "signing-security", label: "Signing security", href: "/settings/signing-security", keywords: ["otp", "one-time code", "verify signer", "identity", "timestamp", "e-sign", "two factor"] },
-      { key: "backups", label: "Backup & recovery", href: "/settings/backup-recovery", keywords: ["backup", "restore", "disaster recovery"] },
+      { key: "backups", label: "Backup & recovery", href: "/settings/backup-recovery", platform: true, keywords: ["backup", "restore", "disaster recovery"] },
     ],
   },
   {
@@ -100,14 +109,16 @@ export const SETTINGS_NAV_GROUPS: SettingsNavGroup[] = [
     items: [
       { key: "team", label: "Team & access", href: "/settings/access", permission: ["teams.view", "roles.view", "teams.manage", "roles.manage"], keywords: ["users", "staff", "members", "roles", "permissions"] },
       { key: "portal-access", label: "Portal access", href: "/settings/portal-access", permission: "portal_access.manage", keywords: ["customer portal", "delegation", "profile requests"] },
-      { key: "security", label: "Security", href: "/settings/security", keywords: ["security checks", "surface exposure"] },
+      { key: "security", label: "Security", href: "/settings/security", platform: true, keywords: ["security checks", "surface exposure"] },
       { key: "sessions", label: "Sessions & devices", href: "/settings/sessions", keywords: ["devices", "logins", "sign out"] },
     ],
   },
   {
     label: "System",
     items: [
+      { key: "automatic", label: "Automatic jobs & messages", href: "/settings/automatic", keywords: ["automatic", "automation", "background", "cron", "reminders", "review requests", "surveys", "signed copies", "what runs", "switch off"] },
       { key: "system", label: "System Log", keywords: ["errors", "logs", "diagnostics"] },
+      { key: "queues", label: "Background queues", href: "/settings/queues", keywords: ["queue", "jobs", "outbox", "failed", "stuck", "worker", "signing jobs", "campaign sends", "journeys"] },
     ],
   },
 ];
@@ -129,6 +140,41 @@ export function settingsItemEnabled(
 ): boolean {
   if (!item.module || !enabled) return true;
   return enabled.has(item.module);
+}
+
+/**
+ * `isOwner` is the owner of the WORKSPACE being viewed (requireTenantOwner);
+ * `isPlatformOwner` is the platform-wide owner role (requireOwner), the only
+ * viewer of `platform` entries.
+ */
+export type SettingsViewer = { isOwner: boolean; isPlatformOwner?: boolean; permissions: readonly string[] };
+
+/**
+ * THE one rule for which settings entries a person is shown — the sidebar menu,
+ * the ⌘K palette, search, /settings and every settings page's own side nav all
+ * ask this. They used to disagree: the menu honoured `permission`, everything
+ * else showed non-owners only My Account (hiding pages they're allowed to use)
+ * or showed everyone everything (advertising pages that redirect them away).
+ */
+export function canSeeSettingsItem(item: SettingsNavItem, viewer: SettingsViewer): boolean {
+  if (item.platform) return viewer.isPlatformOwner === true;
+  if (viewer.isOwner || item.everyone) return true;
+  if (!item.permission) return false;
+  const need = Array.isArray(item.permission) ? item.permission : [item.permission];
+  return need.some((permission) => viewer.permissions.includes(permission));
+}
+
+export function visibleSettingsGroups(
+  viewer: SettingsViewer,
+  enabled?: ReadonlySet<string>,
+  groups: SettingsNavGroup[] = SETTINGS_NAV_GROUPS,
+): SettingsNavGroup[] {
+  return groups
+    .map((group) => ({
+      ...group,
+      items: group.items.filter((item) => canSeeSettingsItem(item, viewer) && settingsItemEnabled(item, enabled)),
+    }))
+    .filter((group) => group.items.length > 0);
 }
 
 // Aliases used by the visual-consistency components (SettingsNav / search).

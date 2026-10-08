@@ -20,13 +20,13 @@ import { requestPortalOtp, verifyPortalOtp } from "@/app/actions/portal";
 const PORTAL_FEATURES = [
   {
     icon: CalendarCheck,
-    title: "Service, simplified",
-    copy: "See service history and request your next visit.",
+    title: "Bookings, simplified",
+    copy: "See your history and request your next appointment.",
   },
   {
     icon: FileText,
     title: "Everything on file",
-    copy: "Quotes and important vehicle documents in one place.",
+    copy: "Quotes and important documents in one place.",
   },
   {
     icon: Headphones,
@@ -51,7 +51,7 @@ export default function PortalLoginClient({ brand }: { brand: LoginBrand }) {
 
   return (
     <div className="portal-login-page relative min-h-[100dvh] overflow-x-hidden bg-[#070908] text-white lg:grid lg:grid-cols-[1.08fr_minmax(460px,0.92fr)]">
-      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_8%_0%,rgba(249,115,22,0.14),transparent_30%)] lg:hidden" />
+      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_8%_0%,color-mix(in_oklab,var(--primary)_14%,transparent),transparent_30%)] lg:hidden" />
 
       <CustomerStory brand={brand} />
 
@@ -73,10 +73,10 @@ export default function PortalLoginClient({ brand }: { brand: LoginBrand }) {
 
         <div className="my-auto w-full max-w-[440px] self-center py-12 sm:py-16">
           <div className="mb-8">
-            <div className="mb-5 flex size-11 items-center justify-center rounded-2xl border border-orange-400/20 bg-orange-400/10 text-orange-400 shadow-[0_0_40px_rgba(249,115,22,0.12)]">
+            <div className="mb-5 flex size-11 items-center justify-center rounded-2xl border border-primary/20 bg-primary/10 text-primary shadow-[0_0_40px_color-mix(in_oklab,var(--primary)_12%,transparent)]">
               {sent ? <Mail className="size-5" /> : <Sparkles className="size-5" />}
             </div>
-            <p className="mb-3 text-[10px] font-semibold uppercase tracking-[0.24em] text-orange-400">
+            <p className="mb-3 text-[10px] font-semibold uppercase tracking-[0.24em] text-primary">
               {`Your ${brand.displayName}`}
             </p>
             <h1 className="max-w-md text-3xl font-semibold leading-[1.08] tracking-[-0.045em] text-white sm:text-[2.5rem]">
@@ -85,7 +85,7 @@ export default function PortalLoginClient({ brand }: { brand: LoginBrand }) {
             <p className="mt-3 max-w-sm text-sm leading-6 text-slate-400">
               {sent
                 ? "Enter the six-digit code from your email to open your portal."
-                : "Access your vehicles, documents and support with the email already linked to your customer profile."}
+                : "Access your documents, bookings and support with the email already linked to your customer profile."}
             </p>
           </div>
 
@@ -218,12 +218,12 @@ export default function PortalLoginClient({ brand }: { brand: LoginBrand }) {
 function StepIndicator({ sent }: { sent: boolean }) {
   return (
     <div className="mb-7 flex items-center gap-3" aria-label={sent ? "Step 2 of 2" : "Step 1 of 2"}>
-      <span className={`flex size-6 items-center justify-center rounded-full text-[10px] font-bold ${sent ? "bg-emerald-400 text-[#07110b]" : "bg-orange-500 text-white"}`}>
+      <span className={`flex size-6 items-center justify-center rounded-full text-[10px] font-bold ${sent ? "bg-emerald-400 text-[#07110b]" : "bg-primary text-primary-foreground"}`}>
         {sent ? <Check className="size-3.5" /> : "1"}
       </span>
       <span className={`text-xs font-medium ${sent ? "text-slate-500" : "text-slate-200"}`}>Your email</span>
       <span className="h-px flex-1 bg-white/[0.08]" />
-      <span className={`flex size-6 items-center justify-center rounded-full text-[10px] font-bold ${sent ? "bg-orange-500 text-white" : "border border-white/10 bg-white/[0.035] text-slate-600"}`}>2</span>
+      <span className={`flex size-6 items-center justify-center rounded-full text-[10px] font-bold ${sent ? "bg-primary text-primary-foreground" : "border border-white/10 bg-white/[0.035] text-slate-600"}`}>2</span>
       <span className={`text-xs font-medium ${sent ? "text-slate-200" : "text-slate-600"}`}>Verify</span>
     </div>
   );
@@ -233,9 +233,9 @@ function CustomerStory({ brand }: { brand: LoginBrand }) {
   return (
     <section className="relative hidden min-h-[100dvh] flex-col justify-between overflow-hidden bg-[#0b0e0d] p-12 lg:flex xl:p-16">
       <div className="absolute inset-0 opacity-40 [background-image:linear-gradient(rgba(255,255,255,.03)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,.03)_1px,transparent_1px)] [background-size:76px_76px] [mask-image:linear-gradient(to_bottom,black,transparent_92%)]" />
-      <div className="absolute -left-48 -top-48 size-[560px] rounded-full border border-orange-500/10" />
-      <div className="absolute -left-28 -top-28 size-[360px] rounded-full border border-orange-500/10" />
-      <div className="absolute left-[15%] top-[12%] size-80 rounded-full bg-orange-600/15 blur-[110px]" />
+      <div className="absolute -left-48 -top-48 size-[560px] rounded-full border border-primary/10" />
+      <div className="absolute -left-28 -top-28 size-[360px] rounded-full border border-primary/10" />
+      <div className="absolute left-[15%] top-[12%] size-80 rounded-full bg-primary/15 blur-[110px]" />
 
       <div className="relative flex items-center gap-2 text-xs font-medium text-slate-500">
         <span className="relative flex size-2">
@@ -247,13 +247,13 @@ function CustomerStory({ brand }: { brand: LoginBrand }) {
 
       <div className="relative mx-auto w-full max-w-3xl py-12">
         <div className="relative overflow-hidden rounded-[34px] border border-white/[0.1] bg-white/[0.055] p-7 shadow-[0_45px_140px_rgba(0,0,0,.52)] backdrop-blur-xl xl:p-9">
-          <div className="absolute -right-14 -top-14 size-44 rounded-full bg-orange-500/10 blur-3xl" />
+          <div className="absolute -right-14 -top-14 size-44 rounded-full bg-primary/10 blur-3xl" />
           <div className="relative mb-10 flex items-start justify-between gap-6">
             <div>
-              <p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-orange-400">{`My ${brand.displayName}`}</p>
+              <p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-primary">{`My ${brand.displayName}`}</p>
               <p className="mt-2 text-2xl font-medium tracking-[-0.035em] text-white">Everything that moves with you.</p>
             </div>
-            <div className="flex size-14 items-center justify-center rounded-2xl border border-orange-400/15 bg-orange-400/10 shadow-[0_18px_45px_rgba(249,115,22,.12)]">
+            <div className="flex size-14 items-center justify-center rounded-2xl border border-primary/15 bg-primary/10 shadow-[0_18px_45px_color-mix(in_oklab,var(--primary)_12%,transparent)]">
               {brand.logoUrl ? (
                 // eslint-disable-next-line @next/next/no-img-element
                 <img src={brand.logoUrl} alt="" className="h-9 w-auto object-contain" />
@@ -263,8 +263,8 @@ function CustomerStory({ brand }: { brand: LoginBrand }) {
 
           <div className="relative grid gap-3 xl:grid-cols-3">
             {PORTAL_FEATURES.map((feature, index) => (
-              <div key={feature.title} className={`rounded-2xl border p-4 ${index === 0 ? "border-orange-400/20 bg-orange-400/[0.09]" : "border-white/[0.07] bg-black/15"}`}>
-                <feature.icon className={`size-5 ${index === 0 ? "text-orange-400" : "text-slate-500"}`} />
+              <div key={feature.title} className={`rounded-2xl border p-4 ${index === 0 ? "border-primary/20 bg-primary/[0.09]" : "border-white/[0.07] bg-black/15"}`}>
+                <feature.icon className={`size-5 ${index === 0 ? "text-primary" : "text-slate-500"}`} />
                 <p className="mt-7 text-sm font-medium text-slate-100">{feature.title}</p>
                 <p className="mt-1.5 text-[11px] leading-5 text-slate-500">{feature.copy}</p>
               </div>
@@ -283,11 +283,11 @@ function CustomerStory({ brand }: { brand: LoginBrand }) {
 
       <div className="relative">
         <h2 className="max-w-2xl text-3xl font-medium leading-[1.08] tracking-[-0.04em] text-white xl:text-4xl">
-          More than a vehicle.<br />
+          Everything in one place.<br />
           <span className="text-slate-500">A better way to stay connected.</span>
         </h2>
         <p className="mt-4 max-w-lg text-sm leading-6 text-slate-500">
-          {`Your personal window into service, documents and support from ${brand.displayName}.`}
+          {`Your personal window into bookings, documents and support from ${brand.displayName}.`}
         </p>
       </div>
     </section>

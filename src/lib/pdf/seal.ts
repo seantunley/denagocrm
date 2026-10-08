@@ -53,7 +53,7 @@ function makeDevelopmentP12(): Buffer {
   cert.validity.notAfter.setFullYear(cert.validity.notBefore.getFullYear() + 1);
   const attrs = [
     { name: "commonName", value: "Denago Development Seal" },
-    { name: "organizationName", value: "Denago Cape Town" },
+    { name: "organizationName", value: "Development" },
     { name: "countryName", value: "ZA" },
   ];
   cert.setSubject(attrs);
@@ -138,9 +138,9 @@ export async function sealPdf(
   const withPlaceholder = plainAddPlaceholder({
     pdfBuffer,
     reason: meta.reason,
-    contactInfo: meta.contactInfo ?? "sales@denagocpt.co.za",
+    contactInfo: meta.contactInfo ?? "",
     name: meta.name,
-    location: meta.location ?? "Cape Town, ZA",
+    location: meta.location ?? "",
   });
   const { p12, passphrase } = getSigner();
   const signer = new P12Signer(p12, { passphrase });

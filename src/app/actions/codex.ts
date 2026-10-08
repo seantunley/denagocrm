@@ -1,7 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { requireOwner } from "@/lib/auth";
+import { requireTenantOwner } from "@/lib/auth";
 import { logAudit } from "@/lib/audit";
 import {
   disconnectCodex,
@@ -15,18 +15,18 @@ import {
  *
  * OWNER ONLY, every action, including the poll. The sign-in decides which
  * ChatGPT account every future research call is billed against, and the
- * tokens it stores act as that account. `requireOwner` decides who may do it;
+ * tokens it stores act as that account. `requireTenantOwner` decides who may do it;
  * the settings storage decides WHICH workspace it lands in, from the request
  * scope, so one workspace cannot connect or read another's.
  */
 
 export async function startChatGptLogin() {
-  await requireOwner();
+  await requireTenantOwner();
   return startCodexLogin();
 }
 
 export async function pollChatGptLogin(shownUserCode: unknown) {
-  const user = await requireOwner();
+  const user = await requireTenantOwner();
   // From the browser, so checked here: only ever compared with the stored code,
   // never forwarded, but a non-string must not reach it.
   if (typeof shownUserCode !== "string" || !shownUserCode.trim() || shownUserCode.length > 64) {
@@ -39,13 +39,13 @@ export async function pollChatGptLogin(shownUserCode: unknown) {
       summary: "Connected a ChatGPT subscription for lead research",
       user,
     });
-    revalidatePath("/settings");
+    revalidatePath("/settings", "layout");
   }
   return result;
 }
 
 export async function disconnectChatGpt() {
-  const user = await requireOwner();
+  const user = await requireTenantOwner();
   const { revoked } = await disconnectCodex();
   await logAudit({
     action: "integration.chatgpt_disconnected",
@@ -54,11 +54,11 @@ export async function disconnectChatGpt() {
       : "Disconnected the ChatGPT subscription; OpenAI could not be reached to revoke the sign-in, so it was only cleared here",
     user,
   });
-  revalidatePath("/settings");
+  revalidatePath("/settings", "layout");
   return { revoked };
 }
 
 export async function testChatGpt() {
-  await requireOwner();
+  await requireTenantOwner();
   return testCodexConnection();
 }

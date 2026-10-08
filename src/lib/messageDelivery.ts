@@ -80,7 +80,7 @@ export function classifyDeliveryFailure(error: string): string {
   if (/invalid|not a valid|no such user|recipient.*(unavailable|not found)|unknown user/.test(text)) return "invalid_recipient";
   if (/blocked|unsubscribed|opt(ed)? out|policy violation|not authorized|permission/.test(text)) return "rejected_by_recipient";
   if (/rate limit|too many requests|429/.test(text)) return "rate_limited";
-  if (/timeout|timed out|aborted|econn|network|socket/.test(text)) return "transient_network";
+  if (/timeout|timed out|aborted|econn|network|socket|could not reach/.test(text)) return "transient_network";
   return "provider_error";
 }
 
@@ -263,6 +263,20 @@ export function deliveryLabel(
 
   const receipt = receiptLabel(message, channelReports);
 
+  // Terminal failures come BEFORE receipts. Receipts are a watermark: a later
+  // message being delivered stamps deliveredAt on every earlier row, including
+  // one the provider refused or reported `failed` — which then read
+  // "Delivered ✓✓". A dead or cancelled row never reached the customer (a send
+  // accepted after a superseded lease is written `sent`, never `dead`).
+  if (state?.status === "cancelled") {
+    const reason = deliveryFailureReason(state.failureCode);
+    return { text: reason ? `Not sent — ${reason}` : "Not sent", tone: "failed" };
+  }
+  if (state?.status === "dead") {
+    const reason = deliveryFailureReason(state.failureCode);
+    return { text: reason ? `Not delivered — ${reason}` : "Not delivered", tone: "failed" };
+  }
+
   // A receipt is proof the message left, whatever the queue says — a worker can
   // be marked stale after the provider accepted the send. Trust the stronger
   // evidence.
@@ -284,14 +298,6 @@ export function deliveryLabel(
         text: reason ? `Retrying — ${reason}${attempts}` : `Retrying…${attempts}`,
         tone: "failed",
       };
-    }
-    if (state.status === "cancelled") {
-      const reason = deliveryFailureReason(state.failureCode);
-      return { text: reason ? `Not sent — ${reason}` : "Not sent", tone: "failed" };
-    }
-    if (state.status === "dead") {
-      const reason = deliveryFailureReason(state.failureCode);
-      return { text: reason ? `Not delivered — ${reason}` : "Not delivered", tone: "failed" };
     }
   }
 

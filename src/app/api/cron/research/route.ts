@@ -4,6 +4,7 @@ import { logError } from "@/lib/errorLog";
 import { warmUpForCron } from "@/lib/cronPreflight";
 import { runAutoResearch, AUTO_RESEARCH_RESERVE_MS } from "@/lib/ai";
 import { runCronPerTenant } from "@/lib/tenantCron";
+import { runAssistantTidy, TIDY_RESERVE_MS } from "@/lib/assistantTidy";
 
 /**
  * Automatic research on new leads, once per tenant per tick.
@@ -42,7 +43,17 @@ export async function GET(req: NextRequest) {
 
   const runs = await runCronPerTenant(async (_tenantId, budget) => {
       if (budget.shouldStop(AUTO_RESEARCH_RESERVE_MS)) return { researched: 0, skipped: "insufficient-budget" as const };
-      return { researched: await runAutoResearch(budget) };
+      const researched = await runAutoResearch(budget);
+      // The assistant's nightly tidy-up of what it has learned: once a day per
+      // workspace, after research (customers first), only with a full call's
+      // budget in hand. Not due → null, and costs one settings read.
+      const assistantTidied = budget.shouldStop(TIDY_RESERVE_MS)
+        ? null
+        : await runAssistantTidy().catch((error: unknown) => {
+            logError("assistant-tidy", error);
+            return null;
+          });
+      return { researched, assistantTidied };
     },
     {
       maxRuntimeMs: routeBudget.remainingMs,

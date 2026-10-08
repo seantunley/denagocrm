@@ -9,15 +9,19 @@ import {
 } from "@/lib/permissions";
 import { logAudit } from "@/lib/audit";
 import { toggleTimelinePin } from "@/lib/timelinePins";
-import { withActingStaffScope } from "@/lib/actingScope";
+// asActionResult (which binds the acting workspace itself) so a refusal reaches
+// the timeline as a message — a thrown Error showed "This page hit an error"
+// (gap audit #22).
+import { asActionResult, refuse } from "@/lib/actionResult";
 
 export async function toggleActivityPin(id: string, path: string) {
-  return withActingStaffScope(async () => {
+  return asActionResult(async () => {
     const user = await requirePermission("activities.manage");
-    const activity = await prisma.activity.findUniqueOrThrow({
+    const activity = await prisma.activity.findUnique({
       where: { id },
       include: { lead: true },
     });
+    if (!activity) refuse("That activity is no longer there — refresh the page.");
 
     const directlyOwned =
       activity.assignedToId === user.id || activity.createdById === user.id;
@@ -27,7 +31,7 @@ export async function toggleActivityPin(id: string, path: string) {
         ? await canAccessContact(user, activity.contactId)
         : false);
     if (user.role !== "owner" && !directlyOwned && !linkedAllowed) {
-      throw new Error("Activity access denied");
+      refuse("You don't have access to that activity.");
     }
 
     const result = await toggleTimelinePin("activity", id, user.id);
@@ -39,22 +43,24 @@ export async function toggleActivityPin(id: string, path: string) {
       user,
     });
     revalidatePath(path);
+    return { success: result.pinned ? "Pinned" : "Unpinned" };
   });
 }
 
 export async function toggleContactNotePin(contactId: string, path: string) {
-  return withActingStaffScope(async () => {
+  return asActionResult(async () => {
     const user = await requirePermission("contacts.edit");
-    const contact = await prisma.contact.findUniqueOrThrow({
+    const contact = await prisma.contact.findUnique({
       where: { id: contactId },
       select: { id: true, firstName: true, lastName: true, notes: true },
     });
+    if (!contact) refuse("That contact is no longer there — refresh the page.");
 
     if (user.role !== "owner" && !(await canAccessContact(user, contact.id))) {
-      throw new Error("Contact access denied");
+      refuse("You don't have access to that contact.");
     }
     if (!contact.notes?.trim()) {
-      throw new Error("This contact has no original note to pin");
+      refuse("This contact has no original note to pin.");
     }
 
     const result = await toggleTimelinePin("contact_note", contact.id, user.id);
@@ -66,22 +72,24 @@ export async function toggleContactNotePin(contactId: string, path: string) {
       user,
     });
     revalidatePath(path);
+    return { success: result.pinned ? "Pinned" : "Unpinned" };
   });
 }
 
 export async function toggleLeadNotePin(leadId: string, path: string) {
-  return withActingStaffScope(async () => {
+  return asActionResult(async () => {
     const user = await requirePermission("leads.edit");
-    const lead = await prisma.lead.findUniqueOrThrow({
+    const lead = await prisma.lead.findUnique({
       where: { id: leadId },
       select: { id: true, title: true, notes: true, contactId: true },
     });
+    if (!lead) refuse("That lead is no longer there — refresh the page.");
 
     if (user.role !== "owner" && !(await canAccessLead(user, lead.id))) {
-      throw new Error("Lead access denied");
+      refuse("You don't have access to that lead.");
     }
     if (!lead.notes?.trim()) {
-      throw new Error("This lead has no original note to pin");
+      refuse("This lead has no original note to pin.");
     }
 
     const result = await toggleTimelinePin("lead_note", lead.id, user.id);
@@ -93,5 +101,6 @@ export async function toggleLeadNotePin(leadId: string, path: string) {
       user,
     });
     revalidatePath(path);
+    return { success: result.pinned ? "Pinned" : "Unpinned" };
   });
 }

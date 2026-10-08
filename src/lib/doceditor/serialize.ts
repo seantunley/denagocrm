@@ -20,11 +20,17 @@ import { showcaseBlockHtml, showcaseLookHtml } from "./showcaseRender";
 import { layoutRowsFor, resolveOverflowGroups } from "./overflow";
 import { storedFileSrc } from "@/lib/storedFileSrc";
 import { DOCUMENT_FONT_FACE, DOCUMENT_FONT_FAMILY } from "./documentFont";
+import { DEFAULT_REGIONAL, formatZAR, regionalFrom, type Regional } from "@/lib/format";
+import type { TableRow } from "@/lib/docbuilder/blocks";
 
 export type RenderCtx = {
   tokens: Record<string, string>;
-  items: { cells: { value: string }[]; qty?: number; unitPrice?: number; discountPct?: number }[];
+  items: LineItemRow[];
   vars: Record<string, unknown>;
+  /** The workspace's currency/locale/time zone, for amounts and dates computed
+   *  after binding (derived line-item columns, bound pricing, delivery/service
+   *  facts). Set by the binders; absent = the defaults. */
+  regional?: Regional;
   // True only when bound to a real CRM record. A context may be non-null yet unbound
   // — carrying just record-independent global tokens ({{company.*}}) for a "No record"
   // preview — in which case conditionals and showIf columns must render as the
@@ -61,10 +67,9 @@ function fontStack(f: DocStyle["fontFamily"]): string {
   // no Helvetica/Arial, and its fallback printed uneven, jagged letters.
   return f === "serif" ? "Georgia, 'Times New Roman', serif" : f === "mono" ? "'Courier New', monospace" : `'${DOCUMENT_FONT_FAMILY}', Helvetica, Arial, sans-serif`;
 }
-function money(amount: number, currency: string): string {
-  const sign = amount < 0 ? "-" : "";
-  const n = Math.abs(amount).toLocaleString("en-ZA", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-  return currency === "ZAR" ? `${sign}R ${n}` : `${sign}${currency} ${n}`;
+/** An amount in rand-units (not cents) in the given currency/locale. */
+function money(amount: number, m: Pick<Regional, "currency" | "locale"> = DEFAULT_REGIONAL): string {
+  return formatZAR(Math.round(amount * 100), m);
 }
 
 export function computePricing(block: PricingBlock): {
@@ -92,7 +97,9 @@ function pricingHtml(block: PricingBlock, ctx: RenderCtx): string {
       })) }
     : block;
   const { rows, subtotal, taxTotal, total } = computePricing(b);
-  const cur = b.currency;
+  // The workspace's currency whenever the render knows it; the block's own only
+  // where it doesn't (the editor canvas), and never a code Intl would reject.
+  const cur = ctx?.regional ?? { currency: regionalFrom({ currency: b.currency }).currency, locale: DEFAULT_REGIONAL.locale };
   const cols = ["Item", "Qty", "Unit", b.showDiscount ? "Disc" : null, b.showTax ? "Tax" : null, "Amount"].filter(Boolean) as string[];
   const head = cols.map((c, i) => `<th style="text-align:${i === 0 ? "left" : "right"};background:${cssColor(b.accent, "#ea580c")};color:#fff;padding:7px 9px;font-size:8pt;letter-spacing:.5px;text-transform:uppercase">${esc(c)}</th>`).join("");
   const body = rows.map((r, i) => {
@@ -122,23 +129,38 @@ function parseMoney(s?: string): number {
   return Number.isFinite(n) ? n : 0;
 }
 
+/** One bound line-items row — cells [description, qty, unit, total] + numbers. */
+export type LineItemRow = TableRow;
+
 /**
- * Value for one bound line-items column. Quote prices are VAT-INCLUSIVE, so the
- * cells give inclusive unit price + inclusive line total; the excl-VAT and VAT
- * figures are derived so a table using them adds up (excl + VAT = incl).
+ * Value for one bound line-items column. The cells give the unit price and line
+ * total as quoted; the excl-VAT and VAT figures are derived so a table using
+ * them adds up (excl + VAT = incl), at the row's own rate when it has one and
+ * the block's `vatRate` otherwise.
+ *
+ * The numbers come from the row, not from re-parsing its formatted text: en-ZA
+ * writes "R 1 234,56", and stripping that to digits read it as 123456 — a
+ * hundredfold error in every derived column.
  */
-export function lineItemCell(key: string, row: { cells: { value: string }[] }, vatRate: number): string {
-  const factor = 1 + (vatRate || 0) / 100;
-  const inclUnit = parseMoney(row.cells[2]?.value);
-  const inclTotal = parseMoney(row.cells[3]?.value);
+export function lineItemCell(
+  key: string,
+  row: LineItemRow,
+  vatRate: number,
+  m: Pick<Regional, "currency" | "locale"> = DEFAULT_REGIONAL,
+): string {
+  const factor = 1 + (row.taxRatePct ?? vatRate ?? 0) / 100;
+  const inclusive = row.taxInclusive !== false;
+  const unit = row.unitPrice ?? parseMoney(row.cells[2]?.value); // before discount, like the "unitPrice" column
+  const total = row.lineTotal ?? parseMoney(row.cells[3]?.value);
+  const exVat = (amount: number) => (inclusive ? amount / factor : amount);
   switch (key) {
     case "description": return row.cells[0]?.value ?? "";
     case "qty": return row.cells[1]?.value ?? "";
-    case "unitPrice": return row.cells[2]?.value ?? "";        // incl VAT (as quoted)
-    case "unitPriceExVat": return money(inclUnit / factor, "ZAR");
-    case "vat": return money(inclTotal - inclTotal / factor, "ZAR");
-    case "subtotal": return money(inclTotal / factor, "ZAR");  // line total excl VAT
-    case "total": return row.cells[3]?.value ?? "";            // incl VAT
+    case "unitPrice": return row.cells[2]?.value ?? "";        // as quoted
+    case "unitPriceExVat": return money(exVat(unit), m);
+    case "vat": return money(exVat(total) * (factor - 1), m);
+    case "subtotal": return money(exVat(total), m);            // line total excl VAT
+    case "total": return row.cells[3]?.value ?? "";            // as quoted
     default: return "";
   }
 }
@@ -183,31 +205,33 @@ function blockHtml(block: DocumentBlock, ctx: RenderCtx, style: DocStyle, logoDa
       // Embedded images only: a logo LINK would have the customer's signing page
       // (and a frozen document) load it from whatever host it names.
       const logoSrc = [ctx?.logo, logoDataUri].find((src) => src && /^data:image\//i.test(src));
-      const company = ctx?.tokens?.["company.name"] || "DENAGO";
+      const company = ctx?.tokens?.["company.name"] || "";
       const logo = block.showLogo && logoSrc
         ? `<img src="${esc(logoSrc)}" alt="${esc(company)}" style="height:34px;width:auto"/>`
-        : `<span style="color:#fff;font-weight:800;font-size:15pt;letter-spacing:1px">${esc(company.toUpperCase())}</span>`;
+        : company
+          ? `<span style="color:#fff;font-weight:800;font-size:15pt;letter-spacing:1px">${esc(company.toUpperCase())}</span>`
+          : "";
       return `<div style="background:${cssColor(block.bg, "#020617")};border-radius:8px;padding:16px 20px;display:flex;align-items:center;justify-content:space-between;margin:2px 0">
         <div>${logo}</div>
         <div style="text-align:right"><div style="color:#fff;font-weight:800;font-size:17pt;letter-spacing:1px">${esc(tok(block.title, ctx))}</div><div style="color:${cssColor(block.accent, "#ea580c")};font-weight:800;font-size:12pt">${esc(tok(block.docNumber, ctx))}</div></div>
       </div>`;
     }
     case "infoCard":
-      if (block.look === "showcase") return showcaseLookHtml(block, ctx);
+      if (block.look === "showcase" || block.look === "classic") return showcaseLookHtml(block, ctx);
       return `<div style="background:#f8fafc;border-left:3px solid ${cssColor(block.accent, "#ea580c")};border-radius:6px;padding:12px 14px">
         <div style="font-size:8pt;font-weight:700;letter-spacing:1px;color:${cssColor(block.accent, "#ea580c")}">${esc(block.label)}</div>
         <div style="font-size:12pt;font-weight:700;color:${cssColor(style.ink, "#020617")};margin:3px 0">${esc(tok(block.name, ctx))}</div>
         <div style="font-size:9pt;color:#64748b">${nl2br(tok(block.lines, ctx))}</div>
       </div>`;
     case "lineItems": {
-      if (block.look === "showcase") return showcaseLookHtml(block, ctx);
+      if (block.look === "showcase" || block.look === "classic") return showcaseLookHtml(block, ctx);
       const rows = ctx?.items ?? [];
       // Conditional columns: only when bound to a record, drop columns whose condition
       // is false. An unbound (globals-only) preview keeps all columns as a placeholder.
       const cols = ctx?.bound ? block.columns.filter((c) => evaluateCondition(c.showIf, ctx.vars)) : block.columns;
       const head = `<tr>${cols.map((c) => `<th style="text-align:${c.align};background:${cssColor(block.headerBg, "#020617")};color:${cssColor(block.headerColor, "#ffffff")};padding:7px 9px;font-size:8pt;letter-spacing:.5px;text-transform:uppercase">${esc(c.header)}</th>`).join("")}</tr>`;
       const body = rows.length
-        ? rows.map((r, i) => `<tr style="background:${i % 2 ? "#f8fafc" : "#fff"}">${cols.map((c) => `<td style="text-align:${c.align};padding:7px 9px;border-bottom:.5px solid #e2e8f0">${esc(lineItemCell(c.key, r, block.vatRate))}</td>`).join("")}</tr>`).join("")
+        ? rows.map((r, i) => `<tr style="background:${i % 2 ? "#f8fafc" : "#fff"}">${cols.map((c) => `<td style="text-align:${c.align};padding:7px 9px;border-bottom:.5px solid #e2e8f0">${esc(lineItemCell(c.key, r, block.vatRate, ctx?.regional))}</td>`).join("")}</tr>`).join("")
         : `<tr><td colspan="${cols.length}" style="padding:7px 9px;color:#94a3b8">Line items appear here when linked to a record</td></tr>`;
       return `<table style="width:100%;border-collapse:collapse;margin:6px 0"><thead>${head}</thead><tbody>${body}</tbody></table>`;
     }
@@ -228,7 +252,7 @@ function blockHtml(block: DocumentBlock, ctx: RenderCtx, style: DocStyle, logoDa
     }
     case "terms":
       if (block.look === "showcase") return showcaseLookHtml(block, ctx);
-      return `<div style="background:#f8fafc;border-radius:6px;padding:12px 14px;margin:4px 0">${block.title ? `<div style="font-size:8pt;font-weight:700;letter-spacing:1px;color:#64748b;margin-bottom:6px">${esc(block.title)}</div>` : ""}${block.items.map((it) => `<div style="font-size:9pt;color:#64748b;margin-bottom:3px">• ${esc(it.text)}</div>`).join("")}</div>`;
+      return `<div style="background:#f8fafc;border-radius:6px;padding:12px 14px;margin:4px 0">${block.title ? `<div style="font-size:8pt;font-weight:700;letter-spacing:1px;color:#64748b;margin-bottom:6px">${esc(block.title)}</div>` : ""}${block.items.map((it) => `<div style="font-size:9pt;color:#64748b;margin-bottom:3px">• ${esc(tok(it.text, ctx))}</div>`).join("")}</div>`;
     case "footer": {
       if (block.variant === "simple") {
         return `<div style="border-top:1.5px solid ${cssColor(block.accent, "#ea580c")};padding-top:8px;margin:6px 0;text-align:center">${block.lines.map((l, i) => `<div style="font-size:${i === 0 ? 9 : 8}pt;font-weight:${i === 0 ? 700 : 400};color:${i === 0 ? "#334155" : "#64748b"}">${esc(tok(l.text, ctx))}</div>`).join("")}</div>`;
@@ -260,6 +284,11 @@ function blockHtml(block: DocumentBlock, ctx: RenderCtx, style: DocStyle, logoDa
     case "showcaseHeader": case "infoStrip": case "vehicleShowcase": case "totalsBox": case "acceptance": case "footerBand":
       // The same embedded-only logo as the banner: the workspace's, else the built-in.
       return showcaseBlockHtml(block, ctx, [ctx?.logo, logoDataUri].find((src) => src && /^data:image\//i.test(src)));
+
+    // Customer email blocks belong to email documents, rendered by ./emailRender.ts —
+    // never to a printed one.
+    case "emailHeader": case "emailBody": case "emailSignature": case "emailFooter": case "emailButton": case "emailFacts":
+      return "";
   }
 }
 

@@ -108,7 +108,8 @@ test("deleting from the editor dismisses the editor, without asking about unsave
   // exists, or route the close through the discard prompt — which would ask
   // whether to save changes to something already in the Trash.
   const code = shipped("src/components/quotes/QuoteEditorDialog.tsx");
-  const at = code.indexOf("<ConfirmDelete");
+  // The DELETE one: the header's Cancel quote is also a ConfirmDelete.
+  const at = code.lastIndexOf("<ConfirmDelete", code.indexOf("action={deleteQuote.bind"));
   assert.ok(at > 0, "the editor must offer delete");
   const block = code.slice(at, code.indexOf("/>", at));
   assert.match(block, /onDeleted=\{\(\) => onOpenChange\(false\)\}/, "it must close, and not via requestOpenChange");
@@ -159,7 +160,7 @@ test("the delete control defaults to unavailable until the answer arrives", () =
 
 test("the editor only offers delete once there is something to delete", () => {
   const code = shipped("src/components/quotes/QuoteEditorDialog.tsx");
-  const at = code.indexOf("<ConfirmDelete");
+  const at = code.lastIndexOf("<ConfirmDelete", code.indexOf("action={deleteQuote.bind"));
   const before = code.slice(Math.max(0, at - 200), at);
   assert.match(before, /savedQuote && \(/, "an unsaved draft has no record to trash");
 });
@@ -320,7 +321,7 @@ test("saving from the editor stops resetting the columns it never shows", () => 
   // defaults: margin's cost basis zeroed, declined optional add-ons silently
   // re-included. Rows are matched by id and the values carried across.
   const code = shipped("src/app/actions/quotes.ts");
-  const at = code.indexOf("const itemRows = itemRowsFor(normalizedItems, priorById(existing.items))");
+  const at = code.indexOf("const itemRows = itemRowsFor(normalizedItems, priorById(existing.items), ");
   assert.ok(at > 0, "the previous rows must be read before they are deleted");
   assert.ok(at < code.indexOf("tx.quoteItem.deleteMany"), "…BEFORE, or there is nothing left to read");
   assert.match(code, /id: z\.string\(\)\.trim\(\)\.min\(1\)\.nullable\(\)\.optional\(\)/, "the payload must identify the row");
@@ -331,7 +332,8 @@ test("saving from the editor stops resetting the columns it never shows", () => 
   for (const field of ["kind", "costCents", "optional", "selected"]) {
     assert.match(rows, new RegExp(`${field}: previous\\?\\.${field}`), `${field} must be carried across`);
   }
-  assert.match(rows, /taxRatePct: taxRatePct \?\? previous\?\.taxRatePct \?\? 15/);
+  // A genuinely new line takes the WORKSPACE's rate (Settings → Quotes), not a built-in 15.
+  assert.match(rows, /taxRatePct: taxRatePct \?\? previous\?\.taxRatePct \?\? vatRatePct/);
   assert.match(rows, /\.\.\.\(previous \? \{ id: previous\.id \} : \{\}\)/, "a surviving row must keep its id");
 });
 

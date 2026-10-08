@@ -15,6 +15,7 @@ import { logAudit } from "@/lib/audit";
 import { saveFile, deleteFile } from "@/lib/storage";
 import { CLOSED_REQUEST_STATUSES, isRequestClosed } from "@/lib/signing/status";
 import { quoteExpired } from "@/lib/quoteExpiry";
+import { getRegionalSettings } from "@/lib/settings";
 import { defaultBuilderTemplateId } from "@/lib/docbuilder/store";
 import { publishedBuilderTemplateFor } from "@/lib/docbuilder/published";
 import { resolveEnvelope } from "@/lib/signing/autoEnvelope";
@@ -23,7 +24,7 @@ import { createSignatureRequestFromDoc, type SigningIdentityMode } from "@/lib/s
 import { usableCapability } from "@/lib/signing/tokenVault";
 import { signUrl } from "@/lib/signing/dispatch";
 import { dispatchRequest, notifyRecipient } from "@/lib/signing/dispatch";
-import { logSignEvent } from "@/lib/signing/events";
+import { logSignEvent, staffActor } from "@/lib/signing/events";
 import { activeRecordRequest, isLockedForSigning, type QuoteSigningView } from "@/lib/signing/record";
 import { advanceWorkflow, repairWorkflow, pendingApprovalNode } from "@/lib/signflow/runtime";
 import { countersignWithSavedSignature } from "@/lib/signing/countersign";
@@ -146,7 +147,12 @@ async function checkRecordActive(
       return { error: "This quote was superseded by a revision — sign the current version.", leadId: null, version: null };
     }
     if (quote.signedAt) return { error: "This quote has already been signed.", leadId: null, version: null };
-    if (quoteExpired(quote.validUntil)) {
+    // A cancel that lands after this check still bumps updatedAt, so the locked
+    // version check in startRecordSigning refuses it as stale.
+    if (quote.status === "cancelled") {
+      return { error: "This quote was cancelled — duplicate it to send a new one.", leadId: null, version: null };
+    }
+    if (quoteExpired(quote.validUntil, (await getRegionalSettings()).timeZone)) {
       return { error: "This quote has expired — issue an updated quote first.", leadId: null, version: null };
     }
     return { error: null, leadId: quote.leadId, version: quote.updatedAt.getTime() };
@@ -265,6 +271,8 @@ export async function startRecordSigning(
     // — AND, for a workflow envelope, the frozen graph + recipient node IDs — are
     // all created together, so a crash can't leave a partial or unrecognisable
     // draft; the worst residual state (graph set, not yet advanced) self-heals.
+    // Resolved before the lock: expiry is judged on the workspace calendar.
+    const { timeZone } = await getRegionalSettings();
     const isWorkflow = Boolean(envelope.frozen && envelope.signers);
     let committedRequestId: string | null = null;
     let outcome:
@@ -279,7 +287,7 @@ export async function startRecordSigning(
             where: { id: quoteId },
             select: { deletedAt: true, signedAt: true, supersededAt: true, validUntil: true, updatedAt: true },
           });
-          if (!q || q.deletedAt || q.signedAt || q.supersededAt || quoteExpired(q.validUntil) || q.updatedAt.getTime() !== sourceVersion) {
+          if (!q || q.deletedAt || q.signedAt || q.supersededAt || quoteExpired(q.validUntil, timeZone) || q.updatedAt.getTime() !== sourceVersion) {
             return { kind: "stale" as const };
           }
         } else {
@@ -597,7 +605,7 @@ export async function countersignRecord(kind: Kind, id: string): Promise<Result>
 
     await logAudit({
       action: "signing.countersigned",
-      summary: `Countersigned “${state.title}” for Denago`,
+      summary: `Countersigned “${state.title}”`,
       entityType: "SignatureRequest",
       entityId: state.requestId,
       user,
@@ -867,7 +875,7 @@ export async function voidRecordSigning(
     }
     await logSignEvent(state.requestId, {
       type: "voided",
-      actor: `Denago: ${user.name}`,
+      actor: await staffActor(user.name),
       metadata: { via: "record" },
     });
     await logAudit({

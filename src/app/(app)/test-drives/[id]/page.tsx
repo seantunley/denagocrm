@@ -28,7 +28,10 @@ import {
   uploadTestDriveAsset,
 } from "@/app/actions/testDrives";
 import { PageHeader } from "@/components/page-header";
+import { SaveForm, SaveButton } from "@/components/SaveForm";
+import ConfirmDelete from "@/components/ConfirmDelete";
 import { Surface } from "@/components/visual-system";
+import { ConflictAwareForm } from "@/components/ConflictAwareForm";
 
 export const dynamic = "force-dynamic";
 
@@ -148,7 +151,12 @@ export default async function TestDriveDetailPage({ params }: { params: Promise<
               <h2 className="font-semibold">Booking and vehicle assignment</h2>
             </div>
             {canManage && upcoming ? (
-              <form action={updateTestDriveBooking.bind(null, booking.id)} className="mt-4 grid gap-3 sm:grid-cols-2">
+              <ConflictAwareForm
+                action={updateTestDriveBooking.bind(null, booking.id)}
+                conflictTitle="Salesperson unavailable"
+                successMessage="Booking updated"
+                className="mt-4 grid gap-3 sm:grid-cols-2"
+              >
                 <div>
                   <label className="label">Branch / location</label>
                   <input name="branch" className="input" required defaultValue={booking.branch} />
@@ -182,7 +190,7 @@ export default async function TestDriveDetailPage({ params }: { params: Promise<
                   <input type="datetime-local" name="expectedReturnAt" className="input" required defaultValue={inputDate(booking.expectedReturnAt)} />
                 </div>
                 <div className="sm:col-span-2 text-right"><button className="btn-secondary btn-sm">Save booking</button></div>
-              </form>
+              </ConflictAwareForm>
             ) : (
               <div className="mt-4 grid gap-3 text-sm sm:grid-cols-2">
                 <p><span className="text-muted-foreground">Branch:</span> {booking.branch}</p>
@@ -196,7 +204,7 @@ export default async function TestDriveDetailPage({ params }: { params: Promise<
               <ShieldCheck className="size-4 text-primary" />
               <h2 className="font-semibold">Driver controls</h2>
             </div>
-            <form action={saveDriverControls.bind(null, booking.id)} className="mt-4 grid gap-3 sm:grid-cols-2">
+            <SaveForm action={saveDriverControls.bind(null, booking.id)} success="Driver controls saved" resetOnSuccess={false} className="mt-4 grid gap-3 sm:grid-cols-2">
               <div>
                 <label className="label">Driver&apos;s licence number</label>
                 <input name="driverLicenceNumber" className="input" required defaultValue={booking.driverLicenceNumber ?? ""} disabled={!canManage || !upcoming} />
@@ -226,8 +234,8 @@ export default async function TestDriveDetailPage({ params }: { params: Promise<
                 <input type="checkbox" name="identityVerified" defaultChecked={Boolean(booking.identityVerifiedAt)} disabled={!canManage || !upcoming} />
                 Identity verified
               </label>
-              {canManage && upcoming && <div className="sm:col-span-2 text-right"><button className="btn-secondary btn-sm">Save driver controls</button></div>}
-            </form>
+              {canManage && upcoming && <div className="sm:col-span-2 text-right"><SaveButton className="btn-secondary btn-sm">Save driver controls</SaveButton></div>}
+            </SaveForm>
             <AssetUploader bookingId={booking.id} kind="driver_licence" label="Upload licence or ID" disabled={!canManage || !upcoming} />
             <AssetGrid assets={licenceAssets} isImage={isImage} />
           </Surface>
@@ -246,7 +254,7 @@ export default async function TestDriveDetailPage({ params }: { params: Promise<
                 <p><span className="text-muted-foreground">Route:</span> {booking.intendedRoute ?? "Not recorded"}</p>
               </div>
             ) : canManage && upcoming ? (
-              <form action={checkOutTestDrive.bind(null, booking.id)} className="mt-4 grid gap-3 sm:grid-cols-2">
+              <SaveForm action={checkOutTestDrive.bind(null, booking.id)} success="Vehicle checked out" resetOnSuccess={false} className="mt-4 grid gap-3 sm:grid-cols-2">
                 {!readyForCheckout && (
                   <div className="sm:col-span-2 rounded-xl border border-amber-500/30 bg-amber-500/5 p-3 text-sm text-amber-200">
                     Complete every item in the readiness checklist before vehicle handover.
@@ -273,9 +281,9 @@ export default async function TestDriveDetailPage({ params }: { params: Promise<
                   <input name="intendedRoute" className="input" placeholder="Intended route or destination" />
                 </div>
                 <div className="sm:col-span-2">
-                  <button className="btn-primary w-full" disabled={!readyForCheckout}>Check vehicle out</button>
+                  <SaveButton className="btn-primary w-full" disabled={!readyForCheckout} pendingLabel="Checking out…">Check vehicle out</SaveButton>
                 </div>
-              </form>
+              </SaveForm>
             ) : <p className="mt-4 text-sm text-muted-foreground">The handover was not completed.</p>}
             <AssetUploader bookingId={booking.id} kind="start_condition" label="Add start-condition photos" disabled={!canManage || !upcoming} />
             <AssetGrid assets={startConditionAssets} isImage={isImage} />
@@ -297,7 +305,7 @@ export default async function TestDriveDetailPage({ params }: { params: Promise<
                 {booking.convertedQuoteId && <Link href={`/quotes/${booking.convertedQuoteId}`} className="text-primary hover:underline">Open converted quote</Link>}
               </div>
             ) : booking.status === "checked_out" && canManage ? (
-              <form action={completeTestDrive.bind(null, booking.id)} className="mt-4 grid gap-3 sm:grid-cols-2">
+              <SaveForm action={completeTestDrive.bind(null, booking.id)} success="Return completed" resetOnSuccess={false} className="mt-4 grid gap-3 sm:grid-cols-2">
                 <div>
                   <label className="label">Return odometer (km)</label>
                   <input type="number" min={booking.startOdometerKm ?? 0} name="returnOdometerKm" className="input" required />
@@ -329,8 +337,8 @@ export default async function TestDriveDetailPage({ params }: { params: Promise<
                   </select>
                 </div>
                 <div className="sm:col-span-2"><label className="label">Customer feedback</label><textarea name="customerFeedback" className="input" rows={3} /></div>
-                <div className="sm:col-span-2"><button className="btn-primary w-full">Complete return</button></div>
-              </form>
+                <div className="sm:col-span-2"><SaveButton className="btn-primary w-full" pendingLabel="Completing…">Complete return</SaveButton></div>
+              </SaveForm>
             ) : <p className="mt-4 text-sm text-muted-foreground">Return controls become available after vehicle check-out.</p>}
             <AssetUploader bookingId={booking.id} kind="return_condition" label="Add return-condition photos" disabled={!canManage || !["checked_out", "completed"].includes(booking.status)} />
             <AssetUploader bookingId={booking.id} kind="incident" label="Add incident evidence" disabled={!canManage || !["checked_out", "completed"].includes(booking.status)} />
@@ -360,18 +368,27 @@ export default async function TestDriveDetailPage({ params }: { params: Promise<
             <Surface className="space-y-3 p-5">
               <h2 className="font-semibold">Booking controls</h2>
               {booking.status === "booked" && (
-                <form action={confirmTestDrive.bind(null, booking.id)}>
-                  <button className="btn-primary w-full">Confirm booking</button>
-                </form>
+                <SaveForm action={confirmTestDrive.bind(null, booking.id)} success="Booking confirmed">
+                  <SaveButton className="btn-primary w-full" pendingLabel="Confirming…">Confirm booking</SaveButton>
+                </SaveForm>
               )}
-              <form action={markTestDriveNoShow.bind(null, booking.id)} className="space-y-2">
+              <SaveForm action={markTestDriveNoShow.bind(null, booking.id)} success="Marked as no-show" className="space-y-2">
                 <input name="reason" className="input" placeholder="No-show note (optional)" />
-                <button className="btn-secondary w-full">Mark no-show</button>
-              </form>
-              <form action={cancelTestDrive.bind(null, booking.id)} className="space-y-2">
-                <textarea name="reason" className="input" rows={2} required placeholder="Cancellation reason" />
-                <button className="btn-danger w-full">Cancel booking</button>
-              </form>
+                <SaveButton className="btn-secondary w-full">Mark no-show</SaveButton>
+              </SaveForm>
+              <ConfirmDelete
+                action={cancelTestDrive.bind(null, booking.id)}
+                title={`Cancel test drive ${booking.reference}?`}
+                description="The booking and its calendar entry are cancelled."
+                trigger="Cancel booking"
+                triggerClass="btn-danger w-full"
+                confirmLabel="Cancel booking"
+                dismissLabel="Keep booking"
+                success="Booking cancelled"
+                reasonLabel="Cancellation reason"
+                reasonPlaceholder="e.g. Customer rescheduled by phone"
+                pendingLabel="Cancelling…"
+              />
             </Surface>
           )}
 
@@ -405,11 +422,11 @@ function ReadyRow({ ready, label }: { ready: boolean; label: string }) {
 function AssetUploader({ bookingId, kind, label, disabled }: { bookingId: string; kind: string; label: string; disabled: boolean }) {
   if (disabled) return null;
   return (
-    <form action={uploadTestDriveAsset.bind(null, bookingId, kind)} className="mt-4 flex flex-col gap-2 rounded-xl border border-dashed border-border p-3 sm:flex-row">
+    <SaveForm action={uploadTestDriveAsset.bind(null, bookingId, kind)} success="Uploaded" className="mt-4 flex flex-col gap-2 rounded-xl border border-dashed border-border p-3 sm:flex-row">
       <input type="file" name="file" required accept="image/jpeg,image/png,image/webp,application/pdf" className="min-w-0 flex-1 text-xs" />
       <input name="note" className="input h-9 sm:w-48" placeholder="Optional note" />
-      <button className="btn-secondary btn-sm"><Camera className="size-4" />{label}</button>
-    </form>
+      <SaveButton className="btn-secondary btn-sm" pendingLabel="Uploading…"><Camera className="size-4" />{label}</SaveButton>
+    </SaveForm>
   );
 }
 

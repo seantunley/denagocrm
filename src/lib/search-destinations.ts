@@ -1,5 +1,5 @@
 import { buildNav } from "@/components/nav-config";
-import { SETTINGS_NAV_GROUPS, settingsDestination } from "@/lib/settings-navigation";
+import { settingsDestination, visibleSettingsGroups } from "@/lib/settings-navigation";
 
 export type SearchDestination = {
   href: string;
@@ -10,9 +10,13 @@ export type SearchDestination = {
 
 export function getSearchDestinations({
   isAdmin,
+  isPlatformOwner = false,
   permissions = [],
 }: {
+  /** Owner of the workspace being viewed. */
   isAdmin: boolean;
+  /** The platform-wide owner role — the only viewer of platform settings. */
+  isPlatformOwner?: boolean;
   permissions?: string[];
 }): SearchDestination[] {
   const { topLinks, groups } = buildNav(isAdmin, permissions);
@@ -31,16 +35,14 @@ export function getSearchDestinations({
       group: "Account",
       keywords: ["preferences", "configuration"],
     },
-    ...(isAdmin
-      ? SETTINGS_NAV_GROUPS.flatMap((group) =>
-          group.items.map((item) => ({
-            href: settingsDestination(item),
-            label: item.label,
-            group: `Settings · ${group.label}`,
-            keywords: item.keywords ?? [],
-          })),
-        )
-      : []),
+    ...visibleSettingsGroups({ isOwner: isAdmin, isPlatformOwner, permissions }).flatMap((group) =>
+      group.items.map((item) => ({
+        href: settingsDestination(item),
+        label: item.label,
+        group: `Settings · ${group.label}`,
+        keywords: item.keywords ?? [],
+      })),
+    ),
   ];
 
   return [...new Map(destinations.map((item) => [item.href, item])).values()];

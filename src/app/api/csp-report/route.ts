@@ -70,8 +70,11 @@ type Violation = { directive: string; blocked: string; document: string; source:
  * A browser extension's own script, running in our page. It trips our policy
  * (a password manager's WebAssembly on /login, say) but it is not our code and
  * no change to the site can fix it, so it is not worth a System Log row.
+ *
+ * Chrome reports the source as the bare scheme — "chrome-extension", no colon —
+ * which the colon-only pattern let through (2026-10-02 System Log).
  */
-const EXTENSION_SOURCE = /^(chrome|moz|safari-web|ms-browser)-extension:/;
+const EXTENSION_SOURCE = /^(chrome|moz|safari-web|ms-browser)-extension(:|$)/;
 
 function violationsFrom(payload: unknown): Violation[] {
   const out: Violation[] = [];

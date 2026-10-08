@@ -278,7 +278,33 @@ export function teamSignoff(brand: TenantBrand): string {
 
 export function brandStyle(brand: TenantBrand): string | null {
   if (!brand.primary || !brand.primaryForeground) return null;
-  return `:root{--primary:${brand.primary};--primary-foreground:${brand.primaryForeground}}`;
+  return `:root{--primary:${brand.primary};--primary-foreground:${brand.primaryForeground};${brandOrangePalette(brand.primary, brand.primaryForeground)}}`;
+}
+
+/**
+ * The orange palette, re-derived from the workspace's accent.
+ *
+ * ~200 class names across the app still say `orange-*` — Denago's colour, written
+ * in before branding existed — so links, badges, pins and highlights stayed
+ * orange in every workspace. Tailwind v4 utilities read `var(--color-orange-N)`,
+ * so redefining those variables here re-colours all of them at once, with no
+ * class churn and nothing changing for an unbranded workspace (no style at all).
+ *
+ * Tints (50–400) mix the accent with white; they sit on the dark UI as text and
+ * borders. The strong end (500–950) carries white text on fills, so it comes from
+ * an INK that is the accent itself when it is dark enough for that, and the
+ * accent pulled halfway to black when it is light — a near-white brand would
+ * otherwise turn `bg-orange-500 text-white` into white on white.
+ */
+function brandOrangePalette(primary: string, foreground: string): string {
+  const ink = foreground === "#ffffff" ? primary : `color-mix(in oklab, ${primary} 55%, black)`;
+  const tints: [number, number][] = [[50, 8], [100, 16], [200, 32], [300, 52], [400, 76]];
+  const shades: [number, number][] = [[600, 88], [700, 72], [800, 56], [900, 42], [950, 26]];
+  return [
+    ...tints.map(([step, pct]) => `--color-orange-${step}:color-mix(in oklab, ${primary} ${pct}%, white)`),
+    `--color-orange-500:${ink}`,
+    ...shades.map(([step, pct]) => `--color-orange-${step}:color-mix(in oklab, ${ink} ${pct}%, black)`),
+  ].join(";");
 }
 
 /**
@@ -321,4 +347,17 @@ export function brandLogoUrl(brand: TenantBrand): string | null {
   return asset
     ? `/api/brand/logo/${brand.tenantId}?a=${encodeURIComponent(asset)}`
     : `/api/brand/logo/${brand.tenantId}`;
+}
+
+/** The platform's own tab / home-screen icons, for an unbranded request. */
+export const PLATFORM_ICONS = { icon: "/icons/icon-192.png", apple: "/icons/apple-touch-icon.png" } as const;
+
+/**
+ * The browser-tab and home-screen icons for a brand: the workspace's logo when
+ * it has one, the platform's otherwise. Every tenant's tabs and bookmarks used
+ * to show the platform icon.
+ */
+export function brandIcons(brand: TenantBrand): { icon: string; apple: string } {
+  const logo = brandLogoUrl(brand);
+  return logo ? { icon: logo, apple: logo } : { ...PLATFORM_ICONS };
 }

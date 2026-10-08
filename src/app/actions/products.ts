@@ -1,10 +1,12 @@
 "use server";
 
-import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/db";
-import { withActingTenantWrite, withActingStaffScope } from "@/lib/actingScope";
-import { requireOwner } from "@/lib/auth";
+import { withActingTenantWrite } from "@/lib/actingScope";
+// asActionResult binds the acting workspace itself (the synchronous tenant
+// readers below still see it) AND returns a refusal as { error } for the form.
+import { asActionResult, refuse } from "@/lib/actionResult";
+import { requireTenantOwner } from "@/lib/auth";
 import { logAudit } from "@/lib/audit";
 import { softDeleteRecord } from "@/lib/trash";
 import { parseRands } from "@/lib/format";
@@ -35,7 +37,7 @@ function productData(formData: FormData) {
 }
 
 /**
- * Bound with {@link withActingStaffScope} because this action reads the tenant scope
+ * Bound (via asActionResult → withActingStaffScope) because this action reads the tenant scope
  * SYNCHRONOUSLY (inheritedTenantId / activeTenantPredicate / writeTenantId), and a
  * sync reader cannot recover a missing scope the way an awaited one can.
  *
@@ -45,10 +47,10 @@ function productData(formData: FormData) {
  * Binding an ENCLOSING frame here is the only shape that reaches it.
  */
 export async function createProduct(formData: FormData) {
-  return withActingStaffScope(async () => {
-  await requireOwner();
+  return asActionResult(async () => {
+  await requireTenantOwner();
   const data = productData(formData);
-  if (!data.name) throw new Error("Product name is required");
+  if (!data.name) refuse("Product name is required");
   const colors = String(formData.get("colors") ?? "")
     .split(",")
     .map((c) => c.trim())
@@ -56,7 +58,7 @@ export async function createProduct(formData: FormData) {
   // Atomic: product + its colours in ONE transaction, each explicitly stamped with
   // the owning tenant (bypass path — the guard won't stamp).
   //
-  // USER-ORIGINATED: `requireOwner()` above proves a signed-in owner is doing this,
+  // USER-ORIGINATED: `requireTenantOwner()` above proves a signed-in owner is doing this,
   // and a product has no parent record — the creating workspace IS the owner. So
   // the tenant is the ACTING workspace. `withTenantWrite` was wrong here for the
   // reason #470 documents: it resolves `writeTenantId() ?? DEFAULT_TENANT_ID`, and
@@ -74,15 +76,15 @@ export async function createProduct(formData: FormData) {
     return created;
   });
   revalidatePath("/products");
-  redirect(`/products/${product.id}`);
+  return { redirectTo: `/products/${product.id}`, success: `Added ${product.name}` };
   });
 }
 
 export async function updateProduct(id: string, formData: FormData) {
-  return withActingStaffScope(async () => {
-    await requireOwner();
+  return asActionResult(async () => {
+    await requireTenantOwner();
     const data = productData(formData);
-    if (!data.name) throw new Error("Product name is required");
+    if (!data.name) refuse("Product name is required");
     await prisma.product.update({ where: { id }, data });
     revalidatePath("/products");
     revalidatePath(`/products/${id}`);
@@ -97,14 +99,14 @@ export async function updateProduct(id: string, formData: FormData) {
  * URLs when a quote is rendered (lib/docbuilder/vehicleShowcaseLoad.ts).
  */
 export async function updateProductShowcase(id: string, formData: FormData) {
-  return withActingStaffScope(async () => {
-    const user = await requireOwner();
+  return asActionResult(async () => {
+    const user = await requireTenantOwner();
     // Tenant-scoped read: another workspace's product id resolves to nothing.
     const product = await prisma.product.findUnique({
       where: { id },
       select: { id: true, tenantId: true, name: true, showcaseImageRef: true, showcaseColourImages: true, colors: { select: { id: true, name: true } } },
     });
-    if (!product) throw new Error("Product not found");
+    if (!product) refuse("Product not found");
 
     const specs = parseVehicleSpecs(
       Array.from({ length: MAX_VEHICLE_SPECS }, (_, i) => ({
@@ -121,7 +123,14 @@ export async function updateProductShowcase(id: string, formData: FormData) {
       const upload = formData.get(field);
       if (upload instanceof File && upload.size > 0) {
         const buffer = Buffer.from(await upload.arrayBuffer());
-        const { mime, ext } = checkShowcaseImage(buffer);
+        let checked: { mime: string; ext: string };
+        try {
+          checked = checkShowcaseImage(buffer);
+        } catch (error) {
+          // Its only failures are the two size/format messages written for the owner.
+          refuse(error instanceof Error ? error.message : "That photo can't be used.");
+        }
+        const { mime, ext } = checked;
         const ref = await saveFile(buffer, `product-${product.id}${slug}${ext}`, mime, product.tenantId);
         saved.push(ref);
         return ref;
@@ -172,18 +181,18 @@ export async function updateProductShowcase(id: string, formData: FormData) {
 }
 
 export async function addProductColor(productId: string, formData: FormData) {
-  return withActingStaffScope(async () => {
-    await requireOwner();
+  return asActionResult(async () => {
+    await requireTenantOwner();
     const name = String(formData.get("name") ?? "").trim();
-    if (!name) return;
+    if (!name) refuse("Enter a colour name.");
     await prisma.productColor.create({ data: { productId, name } });
     revalidatePath(`/products/${productId}`);
   });
 }
 
 export async function deleteProductColor(id: string, productId: string, formData: FormData) {
-  return withActingStaffScope(async () => {
-    await requireOwner();
+  return asActionResult(async () => {
+    await requireTenantOwner();
     void formData;
     await prisma.productColor.delete({ where: { id } });
     revalidatePath(`/products/${productId}`);
@@ -191,19 +200,19 @@ export async function deleteProductColor(id: string, productId: string, formData
 }
 
 export async function deleteProduct(id: string, formData: FormData) {
-  return withActingStaffScope(async () => {
-    const user = await requireOwner();
+  return asActionResult(async () => {
+    const user = await requireTenantOwner();
     const reason = String(formData.get("reason") ?? "").trim() || "No reason given";
     const product = await softDeleteRecord("product", id, reason, user.name);
     // Nothing matched — another tenant's id, or already gone. Never audit a
     // deletion that did not happen.
-    if (!product) return;
+    if (!product) refuse("That product is already gone — refresh the page.");
     await logAudit({
       action: "trash.deleted",
       summary: `Moved product ${product.name} to trash — ${reason}`,
       user,
     });
     revalidatePath("/products");
-    redirect("/products");
+    return { redirectTo: "/products" };
   });
 }

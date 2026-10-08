@@ -91,7 +91,7 @@ export function blankWorkflow(): WorkflowGraph {
     start,
     nodes: {
       [start]: { id: start, type: "start", next: denago },
-      [denago]: { id: denago, type: "signer", label: "Denago", who: { mode: "staff" }, role: "approver", next: customer },
+      [denago]: { id: denago, type: "signer", label: "Our team", who: { mode: "staff" }, role: "approver", next: customer },
       [customer]: { id: customer, type: "signer", label: "Customer", who: { mode: "customer" }, role: "signer", next: end },
       [end]: { id: end, type: "end" },
     },

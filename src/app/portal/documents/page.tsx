@@ -8,6 +8,7 @@ import { isModuleEnabled } from "@/lib/modules/enabled";
 import { AUTOMOTIVE_DELIVERY_TAGS } from "@/lib/modules/registry";
 import { PortalUploadForm } from "@/components/PortalExpansionForms";
 import { formatDate } from "@/lib/format";
+import { getRegionalSettings } from "@/lib/settings";
 import { EmptyState, PortalPageHeader, SectionHeading, Surface } from "@/components/visual-system";
 
 type UploadRow = {
@@ -25,6 +26,7 @@ export default async function PortalDocumentsPage() {
   if (!contact) redirect("/portal/login");
   // Cached per request — the layout and every page share one resolution.
   const brand = await portalBrand();
+  const regional = await getRegionalSettings();
   const scope = await requirePortalScope();
   const automotiveOn = await isModuleEnabled("automotive");
 
@@ -95,7 +97,7 @@ export default async function PortalDocumentsPage() {
       <PortalPageHeader eyebrow="Document centre" title="Documents" description={automotiveOn ? "Download your customer, vehicle, quote and delivery documents, or send files securely to our team." : "Download your documents, or send files securely to our team."} />
 
       <Surface className="space-y-5 p-5 sm:p-6">
-        <SectionHeading title="Secure upload" description={brand.branded ? `Files are attached directly to your customer record and are only visible to the ${brand.displayName} team.` : "Files are attached directly to your customer record and are only visible to the Denago team."} action={<span className="grid size-10 place-items-center rounded-xl bg-primary/10 text-primary"><UploadCloud className="size-5" /></span>} />
+        <SectionHeading title="Secure upload" description={brand.branded ? `Files are attached directly to your customer record and are only visible to the ${brand.displayName} team.` : "Files are attached directly to your customer record and are only visible to our team."} action={<span className="grid size-10 place-items-center rounded-xl bg-primary/10 text-primary"><UploadCloud className="size-5" /></span>} />
         <PortalUploadForm
           automotive={automotiveOn}
           vehicles={automotiveOn ? vehicles.map((vehicle) => ({ id: vehicle.id, label: `${vehicle.model}${vehicle.regNumber ? ` (${vehicle.regNumber})` : ""}` })) : []}
@@ -104,7 +106,7 @@ export default async function PortalDocumentsPage() {
       </Surface>
 
       <section className="space-y-3">
-        <SectionHeading title={brand.branded ? `Documents from ${brand.displayName}` : "Documents from Denago"} description="Your latest official documents and completed paperwork." />
+        <SectionHeading title={brand.branded ? `Documents from ${brand.displayName}` : "Your documents"} description="Your latest official documents and completed paperwork." />
         {documents.length === 0 ? (
           <EmptyState icon={FolderOpen} title="No documents available yet" description="Quotes, delivery paperwork and other files shared with you will appear here." className="py-10" />
         ) : (
@@ -114,7 +116,7 @@ export default async function PortalDocumentsPage() {
                 <span className="grid size-9 shrink-0 place-items-center rounded-xl border border-white/[0.07] bg-white/[0.035] text-slate-400"><FileText className="size-4" /></span>
                 <div className="min-w-0 flex-1">
                   <p className="text-sm font-medium">{document.fileName}</p>
-                  <p className="text-xs text-slate-400">{document.tag || document.mimeType} · {formatDate(document.createdAt)}</p>
+                  <p className="text-xs text-slate-400">{document.tag || document.mimeType} · {formatDate(document.createdAt, regional)}</p>
                 </div>
                 <Download className="size-4 shrink-0 text-slate-500 transition-colors group-hover:text-orange-400" />
               </a>
@@ -132,7 +134,7 @@ export default async function PortalDocumentsPage() {
                 <span className="grid size-9 shrink-0 place-items-center rounded-xl border border-white/[0.07] bg-white/[0.035] text-slate-400"><UploadCloud className="size-4" /></span>
                 <div className="min-w-0 flex-1">
                   <p className="text-sm font-medium">{upload.fileName}</p>
-                  <p className="text-xs text-slate-400">{Math.ceil(upload.sizeBytes / 1024)} KB · {upload.status} · {formatDate(upload.createdAt)}</p>
+                  <p className="text-xs text-slate-400">{Math.ceil(upload.sizeBytes / 1024)} KB · {upload.status} · {formatDate(upload.createdAt, regional)}</p>
                 </div>
                 <Download className="size-4 shrink-0 text-slate-500 transition-colors group-hover:text-orange-400" />
               </a>

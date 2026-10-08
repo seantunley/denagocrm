@@ -207,8 +207,9 @@ const ACTING_STAFF_SURFACES = [
   join("src", "app", "(app)", "contacts", "[id]", "edit", "page.tsx"),
   join("src", "app", "(app)", "leads", "page.tsx"),
   join("src", "app", "(app)", "leads", "new", "page.tsx"),
+  // The lead's editor is the modal on leads/[id]/page.tsx (one lead editor);
+  // leads/[id]/edit is now a redirect with no staff list of its own.
   join("src", "app", "(app)", "leads", "[id]", "page.tsx"),
-  join("src", "app", "(app)", "leads", "[id]", "edit", "page.tsx"),
   join("src", "app", "(app)", "journeys", "page.tsx"),
   join("src", "app", "(app)", "inbox", "page.tsx"),
   join("src", "app", "(app)", "audit", "page.tsx"),
@@ -339,7 +340,7 @@ test("settings/access no longer lists every user while enforcement is dormant", 
  * `findUniqueOrThrow({ where: { id } })` asked only whether the human exists.
  */
 const MANAGEMENT_ACTIONS = [
-  { file: join("src", "app", "actions", "security.ts"), fns: ["setUserRole", "ownerResetUser2fa", "revokeUserSessions", "setUserDisabled"], guard: /await assertManageableUser\(userId\);/ },
+  { file: join("src", "app", "actions", "security.ts"), fns: ["setUserRole", "ownerResetUser2fa", "revokeUserSessions", "setUserDisabled"], guard: /await assertManageableUser\(userId, owner\);/ },
   { file: join("src", "app", "actions", "sessions.ts"), fns: ["revokeSession", "revokeAllForUser"], guard: /await isActingTenantMember\(/ },
 ] as const;
 

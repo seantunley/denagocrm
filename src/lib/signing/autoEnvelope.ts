@@ -1,5 +1,6 @@
 import "server-only";
 import { prisma } from "@/lib/db";
+import { isModuleEnabled } from "@/lib/modules/enabled";
 import { payableTotalCents } from "@/lib/pricing";
 import { contactName } from "@/lib/format";
 import { listTenantStaff } from "@/lib/tenantActor";
@@ -124,7 +125,7 @@ function standardJobCardTemplate(): DocumentModel {
       {
         text: "I authorise the work described above and confirm the vehicle details are correct.",
       },
-      { text: "Prices include 15% VAT." },
+      { text: "Prices include VAT." },
     ];
   }
   return {
@@ -331,7 +332,7 @@ function makeCosignable(
   // Parties stated explicitly (see ensureSignable): fieldSnap moves only the customer's fields.
   const dealerRecipient = newRecipient({
     party: "denago",
-    name: denago.name || "Denago Cape Town",
+    name: denago.name || "Dealer",
     email: denago.email ?? "",
     role: "signer",
     color: "#020617",
@@ -470,7 +471,7 @@ export async function resolveEnvelope(opts: {
     doc = read.doc;
   }
   // Reached only when NO template was chosen at all.
-  if (!doc) doc = quoteId ? standardQuoteTemplate() : standardJobCardTemplate();
+  if (!doc) doc = quoteId ? standardQuoteTemplate({ automotive: await isModuleEnabled("automotive") }) : standardJobCardTemplate();
   doc.title = customer.title;
   const templateHasReadyRecipients = hasSendReadyRecipients(doc);
 

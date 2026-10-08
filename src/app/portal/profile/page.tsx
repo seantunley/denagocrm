@@ -5,6 +5,7 @@ import { basePrisma } from "@/lib/db";
 import { getPortalContact } from "@/lib/portal";
 import { PortalPreferenceForm, PortalProfileForm } from "@/components/PortalExpansionForms";
 import { formatDate } from "@/lib/format";
+import { getRegionalSettings } from "@/lib/settings";
 import { PortalPageHeader, SectionHeading, StatusPill, Surface } from "@/components/visual-system";
 
 type PreferenceRow = {
@@ -20,6 +21,7 @@ export default async function PortalProfilePage() {
   if (!contact) redirect("/portal/login");
   // Cached per request — the layout and every page share one resolution.
   const brand = await portalBrand();
+  const regional = await getRegionalSettings();
 
   const [preferences, requests] = await Promise.all([
     basePrisma.$queryRaw<PreferenceRow[]>`
@@ -42,7 +44,7 @@ export default async function PortalProfilePage() {
 
   return (
     <div className="space-y-10">
-      <PortalPageHeader eyebrow="Your account" title="Profile & preferences" description={brand.branded ? `Keep your details current and choose how ${brand.displayName} may contact you about service, support and offers.` : "Keep your details current and choose how Denago may contact you about service, support and offers."} />
+      <PortalPageHeader eyebrow="Your account" title="Profile & preferences" description={brand.branded ? `Keep your details current and choose how ${brand.displayName} may contact you about service, support and offers.` : "Keep your details current and choose how we may contact you about service, support and offers."} />
       <Surface className="space-y-5 p-5 sm:p-6">
         <SectionHeading title="Your details" description="For your security, requested changes are reviewed before protected customer records are updated." action={<span className="grid size-10 place-items-center rounded-xl bg-primary/10 text-primary"><UserRound className="size-5" /></span>} />
         <PortalProfileForm contact={{
@@ -68,7 +70,7 @@ export default async function PortalProfilePage() {
             {requests.map((request) => (
               <li key={request.id} className="py-3 flex items-center justify-between gap-3 text-sm">
                 <span>{request.note || "Profile update"}</span>
-                <div className="flex flex-wrap items-center justify-end gap-2"><StatusPill tone={request.status === "approved" ? "success" : request.status === "rejected" ? "danger" : "warning"}>{request.status}</StatusPill><span className="text-xs text-slate-400">{formatDate(request.createdAt)}</span></div>
+                <div className="flex flex-wrap items-center justify-end gap-2"><StatusPill tone={request.status === "approved" ? "success" : request.status === "rejected" ? "danger" : "warning"}>{request.status}</StatusPill><span className="text-xs text-slate-400">{formatDate(request.createdAt, regional)}</span></div>
               </li>
             ))}
           </ul>

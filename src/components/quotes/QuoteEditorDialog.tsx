@@ -16,6 +16,7 @@ import {
   Ban,
   Check,
   Clock3,
+  Copy,
   ExternalLink,
   Eye,
   FileClock,
@@ -37,8 +38,10 @@ import {
 import { toast } from "sonner";
 import {
   canDeleteQuote,
+  cancelQuote,
   createQuoteRevision,
   deleteQuote,
+  duplicateQuote,
   quoteEditorRecord,
   saveQuoteDraft,
   setQuoteStatus,
@@ -51,10 +54,12 @@ import CustomFieldsForm from "@/components/custom-fields/CustomFieldsForm";
 import { quoteSigningView } from "@/app/actions/recordSigning";
 import type { QuoteSigningView } from "@/lib/signing/record";
 import { feeRows, quotePricing } from "@/lib/pricing";
+import { formatDate, formatZAR, type Regional } from "@/lib/format";
+import { calendarDateInstant } from "@/lib/quoteExpiry";
 import SigningBlock from "@/components/SigningBlock";
 import QuoteEmailDialog from "@/components/quotes/QuoteEmailDialog";
 import { quotePrintLinks } from "@/lib/quotePrintLinks";
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 import {
   Dialog,
   DialogDescription,
@@ -65,6 +70,7 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { FeedbackBanner, StatusPill } from "@/components/visual-system";
 import { cn } from "@/lib/utils";
+import ContactPicker, { type ContactOption } from "@/components/ContactPicker";
 
 export type QuoteEditorContact = {
   id: string;
@@ -136,17 +142,22 @@ export type QuoteEditorRecord = {
      *  line would print an amount the total never counted. */
     optional: boolean;
     selected: boolean;
+    /** The VAT rate this line was issued at. The preview prices it at THIS,
+     *  not the workspace's current rate, so an old quote previews as it prints. */
+    taxRatePct: number;
   }>;
   taxInclusive: boolean;
   depositType: string | null;
   depositValue: number | null;
-  fees: Array<{ id: string; label: string; kind: string; amountCents: number }>;
+  fees: Array<{ id: string; label: string; kind: string; amountCents: number; taxRatePct: number }>;
   versions: QuoteEditorVersion[];
 };
 
 export type QuoteEditorDefaults = {
   validUntil: string;
   terms: string;
+  /** VAT for new lines, and the currency/locale the editor shows money in. */
+  regional: Regional;
 };
 
 type DraftLine = {
@@ -169,6 +180,8 @@ type DraftLine = {
   /** Carried, not edited — an unselected add-on is offered but not charged. */
   optional: boolean;
   selected: boolean;
+  /** Carried, not edited. null = a new line, priced at the workspace's rate. */
+  taxRatePct: number | null;
 };
 
 type DraftFee = {
@@ -177,6 +190,8 @@ type DraftFee = {
   label: string;
   kind: "fee" | "delivery";
   amount: string;
+  /** As on DraftLine. */
+  taxRatePct: number | null;
 };
 
 type DraftState = {
@@ -207,14 +222,6 @@ function lineKey() {
 function feeKey() {
   lineSequence += 1;
   return `quote-fee-${lineSequence}`;
-}
-
-function rands(cents: number) {
-  return new Intl.NumberFormat("en-ZA", {
-    style: "currency",
-    currency: "ZAR",
-    minimumFractionDigits: 2,
-  }).format(cents / 100);
 }
 
 function priceInput(cents: number) {
@@ -256,6 +263,7 @@ function createDraft(
       label: fee.label,
       kind: fee.kind === "delivery" ? "delivery" : "fee",
       amount: (fee.amountCents / 100).toFixed(2),
+      taxRatePct: fee.taxRatePct,
     })),
     taxInclusive: record.taxInclusive,
     depositType: record.depositType === "percent" || record.depositType === "amount" ? record.depositType : "",
@@ -277,6 +285,7 @@ function createDraft(
         costCents: item.costCents,
         optional: item.optional,
         selected: item.selected,
+        taxRatePct: item.taxRatePct,
       };
     }),
   } satisfies DraftState;
@@ -311,13 +320,10 @@ function statusTone(status: string): "neutral" | "success" | "danger" | "info" {
   return "neutral";
 }
 
-function displayDate(value: string) {
-  if (!value) return "Not set";
-  return new Date(`${value}T12:00:00`).toLocaleDateString("en-ZA", {
-    year: "numeric",
-    month: "short",
-    day: "numeric",
-  });
+/** A workspace-calendar date key, printed exactly as the documents print it. */
+function displayDate(value: string, regional: Regional) {
+  const instant = value ? calendarDateInstant(value, regional.timeZone) : null;
+  return instant ? formatDate(instant, regional) : "Not set";
 }
 
 export function QuoteEditorDialog({
@@ -347,7 +353,11 @@ export function QuoteEditorDialog({
   onOpenQuote?: (quoteId: string) => void;
 }) {
   const router = useRouter();
+  const regional = defaults.regional;
+  const rands = (cents: number) => formatZAR(cents, regional);
   const [draft, setDraft] = useState<DraftState>(() => createDraft(record, defaults, initialContactId, products));
+  // A customer found by search (beyond the preloaded list) — for its label.
+  const [pickedCustomer, setPickedCustomer] = useState<ContactOption | null>(null);
   const [initialSnapshot, setInitialSnapshot] = useState(() => draftSnapshot(draft));
   const [savedQuote, setSavedQuote] = useState<SavedQuote>(
     record ? { id: record.id, number: record.number, status: record.status } : null,
@@ -445,14 +455,19 @@ export function QuoteEditorDialog({
   ]
     .filter(Boolean)
     .join(" ");
-  const customerLabel = contacts.find((contact) => contact.id === draft.contactId)?.label ?? "Customer not selected";
+  const customerLabel =
+    contacts.find((contact) => contact.id === draft.contactId)?.label ??
+    (pickedCustomer?.id === draft.contactId ? pickedCustomer.label : null) ??
+    (draft.contactId ? "Customer" : "Customer not selected");
 
   const calculated = useMemo(() => {
     const lines = draft.lines.map((line) => ({
       qty: Number(line.qty.replace(",", ".")) || 0,
       unitPriceCents: centsFromInput(line.unitPrice) || 0,
       discountPct: Number(line.discount.replace(",", ".")) || 0,
-      taxRatePct: 15,
+      // The rate the SAVE will store: its own for an existing line, the
+      // workspace's for a new one (see itemRowsFor).
+      taxRatePct: line.taxRatePct ?? regional.vatRatePct,
       costCents: line.costCents,
       // An add-on the customer declined is offered, not charged — quotePricing
       // leaves it out of the total, so it must not be priced as a normal row.
@@ -467,7 +482,7 @@ export function QuoteEditorDialog({
         label: fee.label.trim() || (fee.kind === "delivery" ? "Delivery" : "Fee"),
         kind: fee.kind,
         amountCents: centsFromInput(fee.amount) || 0,
-        taxRatePct: 15,
+        taxRatePct: fee.taxRatePct ?? regional.vatRatePct,
       }))
       .filter((fee) => fee.amountCents !== 0);
     const p = quotePricing(lines, fees, {
@@ -492,7 +507,7 @@ export function QuoteEditorDialog({
       // customer can't check. Same helper the printed document uses.
       feeLines: feeRows(fees),
     };
-  }, [draft.lines, draft.fees, draft.taxInclusive, draft.depositType, draft.depositValue]);
+  }, [draft.lines, draft.fees, draft.taxInclusive, draft.depositType, draft.depositValue, regional.vatRatePct]);
 
   function updateLine(key: string, patch: Partial<DraftLine>) {
     setDraft((current) => ({
@@ -513,6 +528,7 @@ export function QuoteEditorDialog({
           costCents: 0,
           optional: false,
           selected: true,
+          taxRatePct: null,
           kind: "catalogue",
           description: "",
           qty: "1",
@@ -557,6 +573,7 @@ export function QuoteEditorDialog({
           costCents: 0,
           optional: false,
           selected: true,
+          taxRatePct: null,
           kind: "custom",
           description: "",
           qty: "1",
@@ -578,7 +595,7 @@ export function QuoteEditorDialog({
     if (!editable) return;
     setDraft((current) => ({
       ...current,
-      fees: [...current.fees, { key: feeKey(), id: null, label: kind === "delivery" ? "Delivery" : "", kind, amount: "0.00" }],
+      fees: [...current.fees, { key: feeKey(), id: null, label: kind === "delivery" ? "Delivery" : "", kind, amount: "0.00", taxRatePct: null }],
     }));
   }
 
@@ -859,6 +876,39 @@ export function QuoteEditorDialog({
                   )}
                 </div>
               )}
+              {/*
+                Duplicate and Cancel work on ANY saved quote — signed ones
+                included, which is exactly when Revise cannot help. Duplicate
+                makes an unsigned draft and supersedes nothing; Cancel keeps the
+                quote, its signed PDF and its history, and voids a live signing
+                link. Both actions re-check permission and state on the server.
+              */}
+              {savedQuote && (
+                <div className="flex flex-wrap items-center gap-2">
+                  <Button type="button" size="sm" variant="outline" disabled={isPending} title="Copies this quote into a new, unsigned draft. The editor switches to the copy." onClick={() => runLifecycle("Copy created", () => duplicateQuote(savedQuote.id))}><Copy />Duplicate</Button>
+                  {!record?.supersededAt && currentStatus !== "cancelled" && (
+                    <ConfirmDelete
+                      action={cancelQuote.bind(null, savedQuote.id)}
+                      title={`Cancel quote Q-${savedQuote.number}?`}
+                      description={cancelQuoteConsequences(currentStatus, Boolean(signing?.signedAt))}
+                      trigger="Cancel quote"
+                      triggerClass={buttonVariants({ variant: "outline", size: "sm" })}
+                      confirmLabel="Cancel quote"
+                      dismissLabel="Keep quote"
+                      pendingLabel="Cancelling…"
+                      reasonLabel="Reason for cancelling"
+                      reasonPlaceholder="e.g. Customer changed their order, deal fell through"
+                      success={`Quote Q-${savedQuote.number} cancelled`}
+                      contentClassName="z-[110]"
+                      onDeleted={() => {
+                        setSavedQuote((current) => (current ? { ...current, status: "cancelled" } : current));
+                        reloadSigning();
+                        router.refresh();
+                      }}
+                    />
+                  )}
+                </div>
+              )}
               <div className="flex items-center gap-2 text-xs text-muted-foreground">
                 {isPending ? <Loader2 className="size-3.5 animate-spin text-primary" /> : dirty ? <Clock3 className="size-3.5 text-amber-300" /> : <Check className="size-3.5 text-emerald-400" />}
                 <span>{isPending ? "Saving…" : dirty ? "Unsaved changes" : "All changes saved"}</span>
@@ -926,18 +976,20 @@ export function QuoteEditorDialog({
                         {record?.leadLabel && <StatusPill tone="info">Lead linked</StatusPill>}
                       </div>
                       <label className="mt-4 block text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground" htmlFor="quote-customer">Customer</label>
-                      <select
+                      <ContactPicker
                         id="quote-customer"
-                        className="input mt-1.5"
+                        name="contactId"
+                        className="mt-1.5"
+                        options={contacts}
                         value={draft.contactId}
                         // Locked for a lead's quote only once it HAS a customer;
                         // a lead with none yet must still be able to get one here.
                         disabled={!editable || Boolean(record?.leadLabel && record?.contactId)}
-                        onChange={(event) => setDraft((current) => ({ ...current, contactId: event.target.value }))}
-                      >
-                        <option value="">Select a customer…</option>
-                        {contacts.map((contact) => <option key={contact.id} value={contact.id}>{contact.label}</option>)}
-                      </select>
+                        onChange={(contactId, option) => {
+                          if (option) setPickedCustomer(option);
+                          setDraft((current) => ({ ...current, contactId }));
+                        }}
+                      />
                       {/* Optional lead link — only when starting a fresh quote. Picking a
                           lead ties the quote to it (so it shows on the lead) and fills in
                           the customer from that lead. Existing quotes keep their own link. */}
@@ -1067,7 +1119,7 @@ export function QuoteEditorDialog({
                       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/[0.07] px-4 py-4 sm:px-5">
                         <div>
                           <p className="text-sm font-semibold">Fees &amp; delivery</p>
-                          <p className="mt-1 text-xs text-muted-foreground">Delivery charges, admin or other fees (VAT at 15%).</p>
+                          <p className="mt-1 text-xs text-muted-foreground">Delivery charges, admin or other fees (VAT at {regional.vatRatePct}%).</p>
                         </div>
                         {editable && (
                           <div className="flex flex-wrap gap-2">
@@ -1190,7 +1242,7 @@ export function QuoteEditorDialog({
                     </div>
                     <div className="text-right">
                       <p className="text-xl font-bold text-orange-600">{savedQuote ? `Q-${savedQuote.number}` : "DRAFT"}</p>
-                      <p className="mt-1 text-xs text-slate-500">Valid until {displayDate(draft.validUntil)}</p>
+                      <p className="mt-1 text-xs text-slate-500">Valid until {displayDate(draft.validUntil, regional)}</p>
                     </div>
                   </div>
                   <div className="grid gap-6 py-8 sm:grid-cols-2">
@@ -1559,4 +1611,25 @@ export function QuoteEditorTrigger({
       {children}
     </button>
   );
+}
+
+/**
+ * The editor's opener when there is one on the page, else null. Pushing
+ * /quotes?edit=<id> from inside /quotes opens nothing (the provider reads it
+ * once, on mount), so a control that creates a quote asks here first.
+ */
+export function useOptionalQuoteEditor(): QuoteEditorContextValue | null {
+  return useContext(QuoteEditorContext);
+}
+
+/** What cancelling a quote does, said before the reason is typed. */
+export function cancelQuoteConsequences(status: string, signed: boolean): string {
+  const kept = signed ? "the quote, its signed PDF and its history" : "the quote and its history";
+  return [
+    `The quote is marked cancelled and leaves Deliveries. Nothing is deleted — ${kept} stay on record.`,
+    "Any signing request still out with the customer is voided, and stock allocated to it is released.",
+    status === "accepted" ? "Its lead reopens unless another accepted quote still stands." : null,
+  ]
+    .filter(Boolean)
+    .join(" ");
 }

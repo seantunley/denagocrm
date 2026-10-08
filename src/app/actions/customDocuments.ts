@@ -7,7 +7,8 @@
  * A custom document is a `DocInstance` row with `docModelJson` set: a per-record
  * COPY of a "custom" doc-editor template, merge data frozen in at creation,
  * edited in /doc-editor/document/[id], and finalised into a filed PDF that locks
- * it. Legacy Studio rows (no `docModelJson`) stay with actions/studio.ts.
+ * it. The Studio free-form editor and its actions are gone (one editor,
+ * 2026-10-07); none of its rows existed in production.
  */
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/db";
@@ -19,6 +20,7 @@ import { requireAnyPermission, requirePermission } from "@/lib/permissions";
 import { buildMergeContext } from "@/lib/customDocs";
 import { buildQuoteContext } from "@/lib/docbuilder/merge";
 import { loadBillToFleet } from "@/lib/quoteBillTo";
+import { getRegionalSettings } from "@/lib/settings";
 import { getLiveBuilderTemplate } from "@/lib/docbuilder/store";
 import { RECORD_UNAVAILABLE } from "@/lib/docbuilder/recordAccess";
 import { listStudioClauses } from "@/lib/docTemplateStore";
@@ -26,7 +28,7 @@ import { documentSchema, parseDocument } from "@/lib/doceditor/model";
 import { blankDocument } from "@/lib/doceditor/factory";
 import { readTemplateDocument } from "@/lib/doceditor/legacy";
 import { renderModelToPdf } from "@/lib/doceditor/generate";
-import { blockNoteToBlocks, blockNoteToDocument } from "@/lib/doceditor/blocknote";
+import { blockNoteToBlocks } from "@/lib/doceditor/blocknote";
 import { canAccessDocumentLinks } from "@/lib/doceditor/instanceAccess";
 import {
   combineTokens,
@@ -81,7 +83,7 @@ export async function createCustomDocument(formData: FormData) {
         include: { items: true, fees: { orderBy: { sortOrder: "asc" } }, lead: { include: { product: true } }, contact: true, createdBy: true },
       });
       if (quote) {
-        const ctx = buildQuoteContext(quote, await loadBillToFleet(prisma, quote.fleetId));
+        const ctx = buildQuoteContext(quote, await loadBillToFleet(prisma, quote.fleetId), await getRegionalSettings());
         snapshot = { tokens: combineTokens(studio, ctx.tokens), items: ctx.items, vars: ctx.vars };
       }
     }
@@ -182,33 +184,6 @@ export async function finaliseCustomDocument(id: string): Promise<{ ok: boolean;
     revalidatePath(STUDIO);
   });
   return result.error ? { ok: false, error: result.error } : { ok: true, pdfDocId };
-}
-
-/**
- * "Convert to new editor": a Studio free-form template becomes a doc-editor
- * `custom` template. Converts the draft (what the Studio editor shows) and
- * never touches or deletes the original, so converting twice is harmless.
- */
-export async function convertStudioTemplate(id: string) {
-  return asActionResult(async () => {
-    const user = await requirePermission("document_templates.manage");
-    await requirePermission("docbuilder.manage");
-    const source = await prisma.customDocTemplate.findUnique({ where: { id } });
-    if (!source || source.deletedAt) refuse("That template isn't available.");
-    const data = blockNoteToDocument(source.draftJson, source.name);
-    const created = await prisma.docBuilderTemplate.create({
-      data: { name: source.name, key: CUSTOM_KEY, data: data as object, createdById: user.id },
-    });
-    await logAudit({
-      action: "customdoc.template.converted",
-      summary: `Converted Studio template “${source.name}” to the document editor`,
-      entityType: "DocBuilderTemplate",
-      entityId: created.id,
-      user,
-    });
-    revalidatePath(STUDIO);
-    return { redirectTo: `/doc-editor/${created.id}` };
-  });
 }
 
 /** Studio clauses, converted for insertion into the document editor (by value). */

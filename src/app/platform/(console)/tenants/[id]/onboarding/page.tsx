@@ -123,7 +123,7 @@ export default async function TenantOnboardingPage({ params }: { params: Promise
           <OwnerTask href="/settings/pipelines" title="Pipeline and sales process" description="Default pipeline, stages, stale thresholds, required fields and ownership workflow." />
           <OwnerTask href="/settings?tab=quotes" title="Quote and tax defaults" description="Validity period, deposit, terms, tax behavior, numbering and document templates." />
           <OwnerTask href="/settings?tab=email" title="Email and notifications" description="SMTP/IMAP, sender identity, templates, reminders and device notifications." />
-          <OwnerTask href="/settings?tab=integrations" title="Integrations and social inbox" description="Connect only this tenant's WhatsApp, Meta, X and other providers; secrets stay encrypted and tenant-bound." />
+          <OwnerTask href="/settings/integrations" title="Integrations and social inbox" description="Connect only this tenant's WhatsApp, Meta, X and other providers; secrets stay encrypted and tenant-bound." />
           <OwnerTask href="/settings/access" title="Team, roles and security" description="Invite staff, assign least-privilege roles, require 2FA and verify record visibility." />
           <OwnerTask href="/settings?tab=import" title="Data import and launch check" description="Import tenant-owned contacts and records, test a lead-to-quote flow, then confirm inbox and Attention Centre behavior." />
         </ul>

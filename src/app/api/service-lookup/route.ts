@@ -12,6 +12,7 @@ import { serviceOtpKey } from "@/lib/serviceOtp";
 import { isModuleEnabled } from "@/lib/modules/enabled";
 import { sendSms, isSmsConfigured, maskPhone } from "@/lib/sms";
 import { sendEmail, isSmtpConfigured } from "@/lib/email";
+import { tenantEmailContent, tenantSmsContent } from "@/lib/signing/signingEmail";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -123,24 +124,22 @@ export async function POST(req: NextRequest) {
     let target = "";
     // On the owner's timeline with the code masked.
     const record = { contactId: vehicle.contactId, label: "Service lookup verification code", secrets: [code] };
+    // The workspace's own editable wording (Settings → Email templates).
+    const vars = {
+      first_name: vehicle.contact.firstName,
+      recipient_name: [vehicle.contact.firstName, vehicle.contact.lastName].filter(Boolean).join(" "),
+      code,
+    };
     if (phone && (await isSmsConfigured())) {
-      const res = await sendSms(
-        phone,
-        `Denago Cape Town: your verification code is ${code}. It expires in 10 minutes. If you didn't request this, ignore this message.`,
-        record,
-      );
+      const res = await sendSms(phone, await tenantSmsContent("lookup_code_sms", auth.tenantId, vars), record);
       if (res.ok) {
         channel = "sms";
         target = maskPhone(phone);
       }
     }
     if (!channel && email && (await isSmtpConfigured())) {
-      const res = await sendEmail({
-        to: email,
-        subject: "Your Denago Cape Town verification code",
-        text: `Your verification code is ${code}.\n\nIt expires in 10 minutes. If you didn't request this, you can ignore this email.\n\nDenago Cape Town`,
-        record,
-      });
+      const message = await tenantEmailContent("lookup_code", auth.tenantId, vars);
+      const res = await sendEmail({ to: email, subject: message.subject, text: message.text, html: message.html, record });
       if (res.ok) {
         channel = "email";
         target = maskEmail(email);

@@ -4,15 +4,18 @@ import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/db";
 import { logAudit } from "@/lib/audit";
-import { sendReviewRequest } from "@/lib/reviewRequests";
+import { emitContactJourneyEvent } from "@/lib/leadJourneyEvents";
 import { triggerSurvey } from "@/lib/surveys";
 import { remindVehicleService } from "@/lib/serviceReminders";
 import { softDeleteRecord } from "@/lib/trash";
 import { isModuleEnabled } from "@/lib/modules/enabled";
 import { withActingStaffScope } from "@/lib/actingScope";
-import { vehiclesAwaitingRegistration } from "@/lib/deliveryVehicles";
+import { asActionResult, refuse } from "@/lib/actionResult";
+import { requiredReason } from "@/lib/deleteReason";
+import { registrationQueueForQuote } from "@/lib/quoteDelivery";
 import {
   requireContactAccess,
+  requirePermission,
   requireVehicleAccess,
 } from "@/lib/permissions";
 
@@ -77,7 +80,12 @@ export async function createVehicle(formData: FormData) {
       });
     }
     if (formData.get("newDelivery")) {
-      await sendReviewRequest(vehicle.contactId, "delivery", vehicle.model).catch(() => {});
+      // The Google review request is a journey now ("Vehicle registered as a new
+      // delivery"), switched on or off on Journeys — this only says it happened.
+      await emitContactJourneyEvent("vehicle_delivered", vehicle.contactId, {
+        occurrence: `vehicle:${vehicle.id}`,
+        payload: { vehicleId: vehicle.id, model: vehicle.model, refText: vehicle.model },
+      });
       await triggerSurvey("delivery", { contactId: vehicle.contactId });
     }
     revalidatePath("/vehicles");
@@ -93,11 +101,7 @@ export async function createVehicle(formData: FormData) {
      */
     const deliveryQuoteId = String(formData.get("deliveryQuoteId") ?? "").trim();
     if (deliveryQuoteId) {
-      const quote = await prisma.quote.findFirst({
-        where: { id: deliveryQuoteId },
-        include: { items: { include: { product: true }, orderBy: { sortOrder: "asc" } } },
-      });
-      const queue = quote ? vehiclesAwaitingRegistration(quote.items) : [];
+      const queue = await registrationQueueForQuote(deliveryQuoteId);
       const next = (Number.parseInt(String(formData.get("deliverySeq") ?? "0"), 10) || 0) + 1;
       if (next < queue.length) {
         redirect(`/vehicles/new?contactId=${vehicle.contactId}&quoteId=${deliveryQuoteId}&seq=${next}`);
@@ -139,12 +143,21 @@ export async function addBatteryCheck(vehicleId: string, formData: FormData) {
   });
 }
 
-export async function deleteBatteryCheck(id: string) {
-  return withActingStaffScope(async () => {
+export async function deleteBatteryCheck(id: string, formData?: FormData) {
+  return asActionResult(async () => {
+    // Authorise before answering anything about the record.
+    await requirePermission("vehicles.manage");
     const bc = await prisma.batteryCheck.findUnique({ where: { id } });
-    if (!bc) return;
-    await requireVehicleAccess(bc.vehicleId, "vehicles.manage");
+    if (!bc) refuse("That battery check is already gone — refresh the page.");
+    const user = await requireVehicleAccess(bc.vehicleId, "vehicles.manage");
+    // Permanent, so the audit line is the only record left of the reading.
+    const reason = requiredReason(formData, "deleting this battery check");
     await prisma.batteryCheck.delete({ where: { id } });
+    await logAudit({
+      action: "battery_check.deleted",
+      summary: `Deleted a battery check from ${bc.checkedAt.toISOString().slice(0, 10)}${bc.stateOfHealth != null ? ` (SoH ${bc.stateOfHealth}%)` : ""} — ${reason}`,
+      user,
+    });
     revalidatePath(`/vehicles/${bc.vehicleId}`);
   });
 }

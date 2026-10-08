@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { hasAnyPermission, requireRoute } from "@/lib/permissions";
+import { isTenantOwner } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 import { activeTenantPredicate } from "@/lib/tenantPredicate";
 import { listActingTenantStaff } from "@/lib/tenantActor";
@@ -27,6 +28,7 @@ import ConfirmDelete from "@/components/ConfirmDelete";
 import DocumentsPanel from "@/components/DocumentsPanel";
 import Tabs from "@/components/Tabs";
 import { SaveForm, SaveButton } from "@/components/SaveForm";
+import ContactPicker from "@/components/ContactPicker";
 
 export const dynamic = "force-dynamic";
 
@@ -37,6 +39,8 @@ export default async function FleetDetailPage({ params }: { params: Promise<{ id
   // would hide a customer account from the staff who work it) and not merely
   // signed-in (which is no guard at all).
   const user = await requireRoute("/fleets");
+  // The workspace's owner (the contact export route checks the same predicate).
+  const isOwner = await isTenantOwner();
   const { id } = await params;
   // Referrals are a marketing-module surface on the contact page and stay one
   // here, so the tab and its query disappear together when the module is off.
@@ -296,14 +300,12 @@ export default async function FleetDetailPage({ params }: { params: Promise<{ id
                           </option>
                         ))}
                       </select>
-                      <select name="contactId" className="input" defaultValue={fleet.contactId ?? ""}>
-                        <option value="">Primary contact (optional)…</option>
-                        {contacts.map((c) => (
-                          <option key={c.id} value={c.id}>
-                            {contactName(c)}
-                          </option>
-                        ))}
-                      </select>
+                      <ContactPicker
+                        name="contactId"
+                        options={contacts.map((c) => ({ id: c.id, label: contactName(c) }))}
+                        defaultValue={fleet.contactId ?? ""}
+                        emptyLabel="Primary contact (optional)…"
+                      />
                       <textarea name="notes" className="input" rows={2} defaultValue={fleet.notes ?? ""} placeholder="Notes" />
                       <button className="btn-secondary btn-sm">Save</button>
                     </form>
@@ -820,9 +822,9 @@ export default async function FleetDetailPage({ params }: { params: Promise<{ id
                               ))
                             )}
                           </span>
-                          {user.role === "owner" && (
+                          {isOwner && (
                             // Owner-only because the export endpoint is
-                            // owner-only (requireApiOwner). Offering it to
+                            // owner-only (requireApiTenantOwner). Offering it to
                             // anyone else is offering a button whose one
                             // outcome is a 403.
                             <a

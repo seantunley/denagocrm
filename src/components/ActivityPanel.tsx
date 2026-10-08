@@ -1,9 +1,13 @@
 import { scheduleActivity, completeActivity, cancelActivity, updateActivity } from "@/app/actions/activities";
 import ModalTrigger from "@/components/Modal";
+import { SaveForm, SaveButton } from "@/components/SaveForm";
 import ActivityTypeFields from "@/components/ActivityTypeFields";
 import { formatDue } from "@/lib/format";
 import { isFutureDay } from "@/lib/activityDay";
 import { ActivityTypeIcon } from "@/components/ActivityTypesProvider";
+import { ConflictAwareForm } from "@/components/ConflictAwareForm";
+import { AttendeePicker } from "@/components/AttendeePicker";
+import ConfirmActionDialog from "@/components/ConfirmActionDialog";
 
 type ActivityItem = {
   id: string;
@@ -13,8 +17,14 @@ type ActivityItem = {
   note: string | null;
   location: string | null;
   dueDate: Date;
+  endDate?: Date | null;
   status: string;
   assignedTo: { id: string; name: string };
+  /**
+   * The other staff attending. Left undefined by a page that did not load them;
+   * the edit form then offers no picker, so a save cannot clear them unseen.
+   */
+  attendees?: { userId: string; user: { name: string } }[];
   /**
    * Which customer this activity belongs to. Only set where the panel shows an
    * AGGREGATE — the fleet page pools the activities of every contact in the
@@ -77,8 +87,10 @@ export default function ActivityPanel({
         <summary className="btn-secondary btn-sm inline-flex cursor-pointer select-none list-none [&::-webkit-details-marker]:hidden">
           + Schedule activity
         </summary>
-        <form
+        <ConflictAwareForm
           action={scheduleActivity}
+          conflictTitle="Staff member unavailable"
+          successMessage="Activity scheduled"
           className="mt-3 rounded-lg bg-slate-800/40 p-4 border border-slate-800 grid grid-cols-2 md:grid-cols-4 gap-3 items-end"
         >
         {leadId && <input type="hidden" name="leadId" value={leadId} />}
@@ -92,6 +104,11 @@ export default function ActivityPanel({
         <div>
           <label className="label">Due</label>
           <input type="datetime-local" name="dueDate" className="input" required />
+        </div>
+        <div>
+          <label className="label">Ends</label>
+          <input type="datetime-local" name="endDate" className="input" />
+          <p className="mt-1 text-[11px] text-slate-500">Blank = 1 hour</p>
         </div>
         <div className="col-span-2 md:col-span-2">
           <label className="label">Assign to</label>
@@ -123,7 +140,8 @@ export default function ActivityPanel({
           🔧 Workshop
         </label>
         <button className="btn-primary">Schedule</button>
-        </form>
+        <AttendeePicker users={users} className="col-span-2 md:col-span-4" />
+        </ConflictAwareForm>
       </details>
       )}
 
@@ -157,7 +175,7 @@ export default function ActivityPanel({
                       {overdue ? "Overdue — " : dueToday ? "Today — " : ""}
                       {formatDue(a.dueDate)}
                     </span>{" "}
-                    · {a.assignedTo.name}
+                    · {[a.assignedTo.name, ...(a.attendees ?? []).map((row) => row.user.name)].join(", ")}
                     {a.contactLabel && ` · ${a.contactLabel}`}
                     {a.location && (
                       <>
@@ -178,7 +196,7 @@ export default function ActivityPanel({
                   </p>
                 </div>
                 {/* Not offered before the day arrives — finishActivity refuses it. */}
-                {!isFutureDay(a.dueDate) && <form
+                {!isFutureDay(a.dueDate) && <SaveForm
                   action={completeActivity.bind(null, a.id)}
                   className="flex items-center gap-1.5"
                 >
@@ -188,17 +206,19 @@ export default function ActivityPanel({
                     className="input btn-sm w-36 hidden md:block"
                     placeholder="Outcome note…"
                   />
-                  <button className="btn-secondary btn-sm" title="Mark done">
+                  <SaveButton className="btn-secondary btn-sm" title="Mark done" pendingLabel="…">
                     ✓ Done
-                  </button>
-                </form>}
+                  </SaveButton>
+                </SaveForm>}
                 <ModalTrigger
                   label="✎"
                   title="Edit activity"
                   buttonClass="text-xs text-slate-600 hover:text-orange-400 cursor-pointer mt-1.5"
                 >
-                  <form
+                  <ConflictAwareForm
                     action={updateActivity.bind(null, a.id)}
+                    conflictTitle="Staff member unavailable"
+                    successMessage="Activity updated"
                     className="card grid grid-cols-2 gap-3 items-end"
                   >
                     <input type="hidden" name="revalidate" value={revalidate} />
@@ -214,6 +234,16 @@ export default function ActivityPanel({
                         name="dueDate"
                         className="input"
                         defaultValue={toLocalInput(a.dueDate)}
+                        required
+                      />
+                    </div>
+                    <div>
+                      <label className="label">Ends</label>
+                      <input
+                        type="datetime-local"
+                        name="endDate"
+                        className="input"
+                        defaultValue={toLocalInput(a.endDate ?? new Date(a.dueDate.getTime() + 60 * 60 * 1000))}
                         required
                       />
                     </div>
@@ -264,19 +294,36 @@ export default function ActivityPanel({
                       />
                       🔧 Workshop
                     </label>
+                    {a.attendees && (
+                      <AttendeePicker
+                        users={users}
+                        defaultIds={a.attendees.map((row) => row.userId)}
+                        className="col-span-2"
+                      />
+                    )}
                     <div className="col-span-2">
-                      <button className="btn-primary w-full">Save changes</button>
+                      <SaveButton className="btn-primary w-full">Save changes</SaveButton>
                     </div>
-                  </form>
+                  </ConflictAwareForm>
                 </ModalTrigger>
-                <form action={cancelActivity.bind(null, a.id, revalidate)}>
-                  <button
-                    className="text-xs text-slate-600 hover:text-red-500 cursor-pointer mt-1.5"
-                    title="Cancel"
-                  >
-                    ✕
-                  </button>
-                </form>
+                <ConfirmActionDialog
+                  trigger={
+                    <button
+                      type="button"
+                      className="text-xs text-slate-600 hover:text-red-500 cursor-pointer mt-1.5"
+                      title="Cancel"
+                      aria-label={`Cancel ${a.summary}`}
+                    >
+                      ✕
+                    </button>
+                  }
+                  title={`Cancel “${a.summary}”?`}
+                  description="It comes off the calendar and the to-do list."
+                  confirmLabel="Cancel it"
+                  destructive
+                  success="Activity cancelled"
+                  onConfirm={cancelActivity.bind(null, a.id, revalidate)}
+                />
               </li>
             );
           })}

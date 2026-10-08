@@ -1,7 +1,7 @@
 import type { Metadata, Viewport } from "next";
 import { headers } from "next/headers";
 import { Geist, Geist_Mono } from "next/font/google";
-import { DEFAULT_BRAND, brandForHost } from "@/lib/tenantBrand";
+import { DEFAULT_BRAND, brandForHost, brandIcons } from "@/lib/tenantBrand";
 import { PLATFORM_NAME } from "@/lib/platformIdentity";
 import "./globals.css";
 
@@ -55,10 +55,9 @@ export async function generateMetadata(): Promise<Metadata> {
     title,
     description: brand.tagline ?? `Customer, sales and service management for ${title}`,
     manifest: "/manifest.webmanifest",
-    icons: {
-      icon: "/icons/icon-192.png",
-      apple: "/icons/apple-touch-icon.png",
-    },
+    // The tab icon is the workspace's logo on its own domain — it was the
+    // platform's icon on every tenant's tabs and bookmarks.
+    icons: brandIcons(brand),
     appleWebApp: {
       capable: true,
       title,

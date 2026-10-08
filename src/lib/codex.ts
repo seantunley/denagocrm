@@ -14,6 +14,7 @@ import {
   parseCodexStream,
   renewedByAnotherHolder,
   type CodexTokens,
+  type CodexUsage,
 } from "./codexProtocol";
 
 /**
@@ -159,7 +160,9 @@ async function startCodexLoginLocked(
   const deviceAuthId = str(body?.device_auth_id);
   const userCode = str(body?.user_code) ?? str(body?.usercode);
   if (!deviceAuthId || !userCode) {
-    await logError("codex-auth", "Device code response missing fields", text.slice(0, 300));
+    // Which fields arrived, never their values: a half-formed sign-in response
+    // can still carry a device code or user code — credentials, not log text.
+    await logError("codex-auth", "Device code response missing fields", `keys: ${Object.keys(body ?? {}).join(",").slice(0, 200)}`);
     return { error: "OpenAI's sign-in response was not in the expected shape." };
   }
 
@@ -219,7 +222,8 @@ export async function pollCodexLogin(shownUserCode: string): Promise<
   const code = str(body?.authorization_code);
   const verifier = str(body?.code_verifier);
   if (!code || !verifier) {
-    await logError("codex-auth", "Device authorization missing exchange code", text.slice(0, 300));
+    // Field names only: the body may hold an authorization code or verifier.
+    await logError("codex-auth", "Device authorization missing exchange code", `keys: ${Object.keys(body ?? {}).join(",").slice(0, 200)}`);
     return { error: "OpenAI's approval was not in the expected shape." };
   }
 
@@ -329,7 +333,9 @@ async function postTokenForm(
   const refresh = str(body?.refresh_token) ?? previous?.refresh;
   const expiresIn = Number(body?.expires_in);
   if (!access || !refresh) {
-    await logError("codex-auth", "Token response missing fields", text.slice(0, 120));
+    // Field names only: a token response missing its refresh token can still
+    // carry a live access token in the first characters of its body.
+    await logError("codex-auth", "Token response missing fields", `keys: ${Object.keys(body ?? {}).join(",").slice(0, 200)}`);
     return { error: "OpenAI's token response was not in the expected shape." };
   }
   return {
@@ -420,11 +426,61 @@ async function accessToken(forceRefresh = false): Promise<{ tokens: CodexTokens 
   });
 }
 
+/**
+ * Read the event stream as it arrives, handing each answer delta to `onText`,
+ * and return the whole raw stream for parseCodexStream — so the final result is
+ * byte-for-byte what a non-streaming read would have produced.
+ */
+async function readStreaming(body: ReadableStream<Uint8Array>, onText: (delta: string) => void): Promise<string> {
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  let raw = "";
+  let pending = "";
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      const chunk = decoder.decode(value, { stream: true });
+      raw += chunk;
+      pending += chunk;
+      const lines = pending.split(/\r?\n/);
+      pending = lines.pop() ?? "";
+      for (const line of lines) {
+        if (!line.startsWith("data:")) continue;
+        try {
+          const event = JSON.parse(line.slice(5).trim()) as { type?: string; delta?: unknown };
+          if (event.type === "response.output_text.delta" && typeof event.delta === "string") onText(event.delta);
+        } catch {
+          // Not JSON ([DONE], a keep-alive): nothing to show.
+        }
+      }
+    }
+  } catch {
+    // A dropped connection mid-stream: what arrived is parsed as usual (and
+    // flagged incomplete if it never finished).
+  }
+  return raw + decoder.decode();
+}
+
 /* ── The call ──────────────────────────────────────────────────────── */
 
 export type CodexResult =
-  | { text: string; incomplete: boolean }
+  | { text: string; incomplete: boolean; usage?: CodexUsage | null }
   | { error: string; transient?: true };
+
+/**
+ * A stable session id + prompt_cache_key from a caller's key — what Codex
+ * itself does. The ChatGPT backend routes the prompt cache by these: with a
+ * fresh random id on every call (as before) almost every call landed on a cold
+ * machine and re-read the whole prompt. Hashed, so no tenant or user id is sent.
+ */
+export function cacheIdentity(key: string): { sessionId: string; cacheKey: string } {
+  const h = crypto.createHash("sha256").update(`denago-cache:${key}`).digest("hex");
+  return {
+    sessionId: `${h.slice(0, 8)}-${h.slice(8, 12)}-4${h.slice(13, 16)}-8${h.slice(17, 20)}-${h.slice(20, 32)}`,
+    cacheKey: h.slice(0, 40),
+  };
+}
 
 /**
  * One Responses API turn on the ChatGPT backend, with web search available.
@@ -443,18 +499,39 @@ export type CodexResult =
 export async function codexRespond(input: {
   instructions: string;
   prompt: string;
+  /** Images to read with the prompt, as data: URLs (JPEG). Sent for this call only — never stored. */
+  images?: string[];
   webSearch?: boolean;
   /** Both accepted by the ChatGPT backend (verified live, 23 Sep 2026). */
   reasoningEffort?: "low" | "medium" | "high" | "xhigh";
   verbosity?: "low" | "medium" | "high";
   /** Research at high effort runs 50–80 seconds; the default suits short calls. */
   timeoutMs?: number;
+  /**
+   * A model to try FIRST for this call only — the assistant's quick research
+   * step. Refused → the workspace's own list, as usual. Never saved as the
+   * workspace's model.
+   */
+  preferModel?: string;
+  /**
+   * Calls that share a prompt prefix (the same person's assistant turns) pass
+   * the same key, so the backend keeps their prompt cache on one machine.
+   * Omitted → a one-off call with a fresh id, as before.
+   */
+  cacheKey?: string;
+  /**
+   * Called with each piece of answer text as it arrives, so a person can watch
+   * it being written. The full reply is still parsed and returned at the end
+   * exactly as without it.
+   */
+  onText?: (delta: string) => void;
 }): Promise<CodexResult> {
   let auth = await accessToken();
   if ("error" in auth) return { error: auth.error };
 
   const configured = (await getSetting(CODEX_MODEL_KEY))?.trim() || null;
-  const sessionId = crypto.randomUUID();
+  const identity = input.cacheKey ? cacheIdentity(input.cacheKey) : null;
+  const sessionId = identity?.sessionId ?? crypto.randomUUID();
 
   const send = (tokens: CodexTokens, model: string) =>
     fetch(RESPONSES_URL, {
@@ -469,12 +546,20 @@ export async function codexRespond(input: {
       body: JSON.stringify({
         model,
         instructions: input.instructions,
-        input: [{ type: "message", role: "user", content: [{ type: "input_text", text: input.prompt }] }],
+        input: [{
+          type: "message",
+          role: "user",
+          content: [
+            { type: "input_text", text: input.prompt },
+            ...(input.images ?? []).map((url) => ({ type: "input_image", image_url: url })),
+          ],
+        }],
         tools: input.webSearch ? [{ type: "web_search" }] : [],
         tool_choice: "auto",
         parallel_tool_calls: false,
         ...(input.reasoningEffort ? { reasoning: { effort: input.reasoningEffort } } : {}),
         ...(input.verbosity ? { text: { verbosity: input.verbosity } } : {}),
+        ...(identity ? { prompt_cache_key: identity.cacheKey } : {}),
         store: false,
         stream: true,
       }),
@@ -482,7 +567,9 @@ export async function codexRespond(input: {
     }).catch((error: unknown) => error as Error);
 
   const refusals: string[] = [];
-  for (const model of modelCandidates(configured)) {
+  const preferred = input.preferModel?.trim() || null;
+  const candidates = modelCandidates(configured);
+  for (const model of preferred ? [...new Set([preferred, ...candidates])] : candidates) {
     let res = await send(auth.tokens, model);
 
     // An access token can be revoked before its stated expiry. Renew once and
@@ -497,13 +584,14 @@ export async function codexRespond(input: {
       await logError("codex-research", res, "responses request");
       return { error: "Could not reach ChatGPT.", transient: true };
     }
-    const text = await res.text().catch(() => "");
+    const text = res.ok && input.onText && res.body ? await readStreaming(res.body, input.onText) : await res.text().catch(() => "");
     if (!res.ok) {
       if (isModelRejection(res.status, text)) {
         refusals.push(`${model} (${res.status})`);
         continue;
       }
-      await logError("codex-research", `ChatGPT backend ${res.status}`, text.slice(0, 300));
+      // The status only: the body is the provider's words and can echo the request.
+      await logError("codex-research", `ChatGPT backend ${res.status}`);
       // 429 is the plan's usage limit. It lifts on its own; the sweep should
       // stop for now rather than work down the list.
       const transient = res.status === 429 || res.status >= 500;
@@ -515,17 +603,21 @@ export async function codexRespond(input: {
     const parsed = parseCodexStream(text);
     if (parsed.failed) {
       if (isModelRejection(400, parsed.failed)) {
-        refusals.push(`${model} (${parsed.failed.slice(0, 60)})`);
+        // The model's name only — never the provider's reply text.
+        refusals.push(model);
         continue;
       }
-      await logError("codex-research", "ChatGPT response failed", parsed.failed.slice(0, 300));
+      // A reason only: the provider's failure text can echo what was asked,
+      // and what was asked mentions customers (no client data in logs).
+      await logError("codex-research", "ChatGPT response failed");
       return { error: `ChatGPT could not answer: ${parsed.failed.slice(0, 120)}` };
     }
 
     // The model that answered is not the one the workspace had — it retired,
     // or was never on this plan. Save the one that works, so the next call
-    // goes straight to it, and leave a row saying so.
-    if (model !== (configured ?? CODEX_DEFAULT_MODEL)) {
+    // goes straight to it, and leave a row saying so. (A per-call preferred
+    // model is not the workspace's choice: never saved.)
+    if (model !== preferred && model !== (configured ?? CODEX_DEFAULT_MODEL)) {
       await putSetting(CODEX_MODEL_KEY, model);
       await logError(
         "codex-research",
@@ -533,7 +625,7 @@ export async function codexRespond(input: {
         `Was ${configured ?? `the default (${CODEX_DEFAULT_MODEL})`}. Refused: ${refusals.join(", ") || "retired, skipped"}.`,
       );
     }
-    return { text: parsed.text, incomplete: parsed.incomplete };
+    return { text: parsed.text, incomplete: parsed.incomplete, usage: parsed.usage };
   }
 
   await logError("codex-research", "Every research model was refused", refusals.join(", "));

@@ -10,8 +10,10 @@ import { readFileSync } from "node:fs";
 const action = readFileSync("src/app/actions/docbuilder.ts", "utf8");
 const reset = action.slice(action.indexOf("export async function resetBuilderTemplateToStandard"), action.indexOf("/** Restore a prior version"));
 
-test("reset needs docbuilder.manage and a type with a standard layout", () => {
-  assert.match(reset, /requirePermission\("docbuilder\.manage"\)/);
+test("reset needs a layout this person may edit and a type with a standard layout", () => {
+  // docbuilder.manage, or document_templates.manage on the seven old form-editor layouts (layoutAccess.test).
+  assert.match(reset, /requireAnyPermission\("docbuilder\.manage", "document_templates\.manage"\)/);
+  assert.match(reset, /if \(!\(await canEditLayout\(user, tpl\.key\)\)\)/);
   assert.match(reset, /STANDARD_TEMPLATE_KEYS as string\[\]\)\.includes\(tpl\.key\)/);
 });
 

@@ -11,6 +11,7 @@ import { flushBotOutboxConversation } from "./botOutbox";
 import { enqueueBotMessagesTx } from "./botOutboxWrite";
 import type { DmPlatform } from "./messenger";
 import type { FlowEntryContext } from "./flowRouting";
+import { getCompanyProfile } from "./companyProfile";
 
 async function dmBotEnabled(): Promise<boolean> {
   return (await getSetting("BOT_ENABLED")) === "true" && (await getSetting("BOT_DM_ENABLED")) === "true";
@@ -38,7 +39,7 @@ export async function runDmFlow(platform: DmPlatform, senderId: string, text: st
       handoff: async (_vars, context) => { await sendPushToAll({ title: `${platform === "instagram" ? "Instagram" : "Messenger"} needs you 🙋`, body: handoffBody(context), url: "/inbox" }, "bot_handoff").catch(() => {}); },
       ...crmActions(platform, { contactId: contact?.id ?? null, leadId: null }),
     }),
-    greetingVars(contact?.firstName ?? null),
+    greetingVars(contact?.firstName ?? null, (await getCompanyProfile()).name),
     async (messages, tx, tenantId, flowVersionId) => {
       await enqueueBotMessagesTx(tx, tenantId, { channel: platform, key: senderId, messages, flowVersionId, contactId: contact?.id ?? null, actorId: actor.id });
     },

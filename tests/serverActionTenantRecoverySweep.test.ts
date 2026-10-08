@@ -139,11 +139,13 @@ test("known synchronous tenant readers in Server Actions remain enclosed", () =>
     "researchRecord later calls inheritedTenantId synchronously");
 
   const products = shipped("src/app/actions/products.ts");
-  assert.match(functionBody(products, "createProduct", "updateProduct"), /withActingStaffScope\(/,
+  // asActionResult binds withActingStaffScope around the whole body (lib/actionResult.ts),
+  // so it encloses the synchronous readers exactly as a direct wrap does.
+  assert.match(functionBody(products, "createProduct", "updateProduct"), /(withActingStaffScope|asActionResult)\(/,
     "root product creation uses the acting tenant write boundary");
 
   const library = shipped("src/app/actions/library.ts");
-  assert.match(functionBody(library, "registerLibraryDocuments", "registerLibraryVersion"), /withActingStaffScope\(/,
+  assert.match(functionBody(library, "registerLibraryDocuments", "registerLibraryVersion"), /(withActingStaffScope|asActionResult)\(/,
     "the direct library upload path performs ownership checks and tenant writes in one staff scope");
 
   const portal = shipped("src/app/actions/portalAdmin.ts");

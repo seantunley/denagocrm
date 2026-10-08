@@ -15,15 +15,15 @@ import {
 } from "./whatsappRendering";
 import { customerRecordTenantId } from "./customerRecordTenant";
 import { shareableFileUrl } from "./storage";
-import { credentialOwnerTenantId, resolveIntegrationBundleForTenant, resolveTenantCredential } from "./settings";
+import { resolveIntegrationBundleForTenant } from "./settings";
 import { sendPushToAll } from "./push";
 import { resolveTenantActor } from "./tenantActor";
 import { inboundCommunicationKey, isDedupeKeyConflict } from "./inboundMessageKey";
 import { currentInboundBotEventId } from "./botInboundEvent";
-import { DEFAULT_TENANT_ID } from "./tenant";
-import { writeTenantId } from "./tenantWrite";
+import { ownedWriteTenantId } from "./tenantWrite";
 import { currentTenantScope } from "./tenantScope";
 import { distinctIdentities } from "./botBookingIdentity";
+import { whatsappSendResult, whatsappTransportFailure, type WhatsAppSendResult } from "./deliveryReceipts";
 import { recordOutboundFailure, recordOutboundMessage, type OutboundRecord } from "./outboundMessageLog";
 
 /**
@@ -264,7 +264,7 @@ export async function sendWhatsAppText(
   text: string,
   /** The customer this is to: written to their timeline once Meta accepts it — see lib/outboundMessageLog.ts. */
   record?: OutboundRecord,
-): Promise<{ ok: boolean; error?: string }> {
+): Promise<WhatsAppSendResult> {
   const logged = { channel: "whatsapp" as const, to: toDigits, text };
   const creds = await waCredentials();
   if (!creds) {
@@ -272,62 +272,52 @@ export async function sendWhatsAppText(
     if (record) await recordOutboundFailure(logged, record, error);
     return { ok: false, error };
   }
+  // A thrown transport error (timeout, DNS, TLS, reset) comes back from here as
+  // a failed send — "Could not reach WhatsApp (…)" — not a throw: callers that
+  // don't catch (signing dispatch, the legacy bot) no longer die mid-dispatch,
+  // and the outbox retries it exactly as it retried the throw.
+  const sent = await postWhatsAppMessage(creds, { to: toDigits, type: "text", text: { body: text.slice(0, WA_TEXT_MAX) } });
+  if (sent.ok) {
+    if (record) await recordOutboundMessage({ ...logged, messageId: sent.providerMessageId ?? null }, record);
+    return sent;
+  }
+  const error = sent.error?.includes("24")
+    ? "Outside the 24-hour reply window — the customer must message you first (or use an approved template from WhatsApp Manager)."
+    : sent.error ?? "WhatsApp send failed";
+  // Transport and non-2xx failures both land here, so both reach the timeline.
+  if (record) await recordOutboundFailure(logged, record, error);
+  return { ok: false, error };
+}
+
+/**
+ * POST one message to the Cloud API. Every /messages send goes through here so
+ * each one (a) hands back the `wamid` — the only key a later `failed` status can
+ * be matched on — and (b) returns a timeout or dropped connection as a failed
+ * send instead of throwing it into the middle of a dispatch.
+ */
+async function postWhatsAppMessage(creds: WhatsAppCredentials, message: Record<string, unknown>): Promise<WhatsAppSendResult> {
   let res: Response;
   try {
     res = await fetch(`${GRAPH}/${creds.phoneNumberId}/messages`, {
       signal: AbortSignal.timeout(OUTBOUND_TIMEOUT_MS),
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${creds.token}` },
-      body: JSON.stringify({
-        messaging_product: "whatsapp",
-        to: toDigits,
-        type: "text",
-        text: { body: text.slice(0, WA_TEXT_MAX) },
-      }),
+      body: JSON.stringify({ messaging_product: "whatsapp", ...message }),
     });
-  } catch (e) {
-    // Timeout, DNS, TLS, reset: the customer's timeline still says it failed.
-    // Rethrown so callers (outbox retries, job workers) behave as before.
-    const name = e instanceof Error ? e.name : "Error";
-    if (record) await recordOutboundFailure(logged, record, `Could not reach WhatsApp (${name === "TimeoutError" ? "timed out" : name})`);
-    throw e;
+  } catch (error) {
+    return whatsappTransportFailure(error);
   }
-  if (!res.ok) {
-    const err = await res.json().catch(() => null);
-    await noteWhatsAppOutcome(creds, res, err);
-    const msg: string = err?.error?.message ?? `WhatsApp API error ${res.status}`;
-    const friendly = msg.includes("24")
-      ? "Outside the 24-hour reply window — the customer must message you first (or use an approved template from WhatsApp Manager)."
-      : msg;
-    if (record) await recordOutboundFailure(logged, record, friendly);
-    return { ok: false, error: friendly };
-  }
-  await noteWhatsAppOutcome(creds, res, null);
-  if (record) {
-    const sent = (await res.json().catch(() => null)) as { messages?: Array<{ id?: string }> } | null;
-    await recordOutboundMessage({ ...logged, messageId: sent?.messages?.[0]?.id ?? null }, record);
-  }
-  return { ok: true };
+  const json = await res.json().catch(() => null);
+  await noteWhatsAppOutcome(creds, res, res.ok ? null : json);
+  return whatsappSendResult(res, json);
 }
 
 /** Sends an image by URL (e.g. a brochure) on WhatsApp. */
-export async function sendWhatsAppImage(toDigits: string, url: string, caption?: string): Promise<{ ok: boolean; error?: string }> {
+export async function sendWhatsAppImage(toDigits: string, url: string, caption?: string): Promise<WhatsAppSendResult> {
   const creds = await waCredentials();
   if (!creds) return { ok: false, error: "WhatsApp is not configured." };
-  const res = await fetch(`${GRAPH}/${creds.phoneNumberId}/messages`, {
-    signal: AbortSignal.timeout(OUTBOUND_TIMEOUT_MS),
-    method: "POST",
-    headers: { "Content-Type": "application/json", Authorization: `Bearer ${creds.token}` },
-    // WhatsApp downloads the image itself: a private file gets a short-lived signed link.
-    body: JSON.stringify({ messaging_product: "whatsapp", to: toDigits, type: "image", image: { link: await shareableFileUrl(url), ...(caption ? { caption } : {}) } }),
-  });
-  if (!res.ok) {
-    const err = await res.json().catch(() => null);
-    await noteWhatsAppOutcome(creds, res, err);
-    return { ok: false, error: err?.error?.message ?? `WhatsApp API error ${res.status}` };
-  }
-  await noteWhatsAppOutcome(creds, res, null);
-  return { ok: true };
+  // WhatsApp downloads the image itself: a private file gets a short-lived signed link.
+  return postWhatsAppMessage(creds, { to: toDigits, type: "image", image: { link: await shareableFileUrl(url), ...(caption ? { caption } : {}) } });
 }
 
 /**
@@ -363,41 +353,17 @@ export async function uploadWhatsAppMedia(
 }
 
 /** Sends an audio message (e.g. a synthesised voice-note reply) by uploaded media ID. */
-export async function sendWhatsAppAudioId(toDigits: string, mediaId: string): Promise<{ ok: boolean; error?: string }> {
+export async function sendWhatsAppAudioId(toDigits: string, mediaId: string): Promise<WhatsAppSendResult> {
   const creds = await waCredentials();
   if (!creds) return { ok: false, error: "WhatsApp is not configured." };
-  const res = await fetch(`${GRAPH}/${creds.phoneNumberId}/messages`, {
-    signal: AbortSignal.timeout(OUTBOUND_TIMEOUT_MS),
-    method: "POST",
-    headers: { "Content-Type": "application/json", Authorization: `Bearer ${creds.token}` },
-    body: JSON.stringify({ messaging_product: "whatsapp", to: toDigits, type: "audio", audio: { id: mediaId } }),
-  });
-  if (!res.ok) {
-    const err = await res.json().catch(() => null);
-    await noteWhatsAppOutcome(creds, res, err);
-    return { ok: false, error: err?.error?.message ?? `WhatsApp API error ${res.status}` };
-  }
-  await noteWhatsAppOutcome(creds, res, null);
-  return { ok: true };
+  return postWhatsAppMessage(creds, { to: toDigits, type: "audio", audio: { id: mediaId } });
 }
 
 /** Shared sender behind the button and list messages — both report their outcome. */
-async function sendInteractive(toDigits: string, interactive: unknown): Promise<{ ok: boolean; error?: string }> {
+async function sendInteractive(toDigits: string, interactive: unknown): Promise<WhatsAppSendResult> {
   const creds = await waCredentials();
   if (!creds) return { ok: false, error: "WhatsApp is not configured." };
-  const res = await fetch(`${GRAPH}/${creds.phoneNumberId}/messages`, {
-    signal: AbortSignal.timeout(OUTBOUND_TIMEOUT_MS),
-    method: "POST",
-    headers: { "Content-Type": "application/json", Authorization: `Bearer ${creds.token}` },
-    body: JSON.stringify({ messaging_product: "whatsapp", to: toDigits, type: "interactive", interactive }),
-  });
-  if (!res.ok) {
-    const err = await res.json().catch(() => null);
-    await noteWhatsAppOutcome(creds, res, err);
-    return { ok: false, error: err?.error?.message ?? `WhatsApp API error ${res.status}` };
-  }
-  await noteWhatsAppOutcome(creds, res, null);
-  return { ok: true };
+  return postWhatsAppMessage(creds, { to: toDigits, type: "interactive", interactive });
 }
 
 /** Sends up to 3 tappable reply buttons. */
@@ -461,13 +427,16 @@ export async function sendWhatsAppList(
 export async function fetchWhatsAppMedia(
   mediaId: string
 ): Promise<{ buffer: Buffer; contentType: string } | null> {
-  const tenantId = ambientTenantId();
-  const token = await resolveTenantCredential(tenantId, "WA_ACCESS_TOKEN");
-  if (!token) return null;
+  // The token of the account that RECEIVED the voice note — the same set the
+  // sender resolves (waCredentials), never a field-by-field mix that could pair a
+  // half-entered workspace override with the settings account's media.
+  const bundle = await resolveIntegrationBundleForTenant(ambientTenantId(), "whatsapp");
+  const token = bundle?.values.WA_ACCESS_TOKEN;
+  if (!bundle || !token) return null;
   // phoneNumberId is empty on purpose: this endpoint is not scoped to it, and the
   // only failures reported below are ones classifyGraphError never quotes it in.
   const creds: WhatsAppCredentials = {
-    tenantId: credentialOwnerTenantId(tenantId),
+    tenantId: bundle.tenantId,
     phoneNumberId: "",
     token,
   };
@@ -570,7 +539,7 @@ export async function recordInboundWhatsApp(
   // hook, a redelivery is refused by the index.
   const dedupeKey = inboundCommunicationKey({
     ledgerEventId: currentInboundBotEventId(),
-    tenantId: writeTenantId() ?? DEFAULT_TENANT_ID,
+    tenantId: ownedWriteTenantId(),
     channel: "whatsapp",
     providerId: providerMessageId ?? "",
   });

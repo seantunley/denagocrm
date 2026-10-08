@@ -1,6 +1,6 @@
+import { requireRoute } from "@/lib/permissions";
 import Link from "next/link";
 import { AlertTriangle, ArrowLeft, ChevronDown, ExternalLink, GitBranch, Signpost, ToggleLeft } from "lucide-react";
-import { requireOwner } from "@/lib/auth";
 import { builderTenantId, flowScope } from "@/lib/flowScope";
 import { prisma } from "@/lib/db";
 import { FLOW_CHANNELS } from "@/lib/flowRouting";
@@ -15,7 +15,7 @@ const channelLabel: Record<string, string> = { whatsapp: "WhatsApp", messenger: 
 const kindLabel: Record<string, string> = { keyword: "Keyword phrase", referral: "Referral code", ad: "Ad ID" };
 
 export default async function FlowRoutesPage() {
-  await requireOwner();
+  await requireRoute("/bot-builder");
   const tenantId = await builderTenantId();
   const scope = await flowScope();
   const [routes, flows, publications, versions] = await Promise.all([

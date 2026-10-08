@@ -30,6 +30,11 @@ const PUBLIC_PREFIXES = [
   // response, nosniff). It discloses what that tenant's own login page already
   // shows the world. Suspended tenants 404. See the route's header comment.
   "brand/logo",
+  // Email open pixel. PUBLIC BY NECESSITY: the customer's mail app loads it with
+  // no session. It answers every request with the same 1×1 GIF and, for a token
+  // that matches a sent email, only bumps that email's open count — it returns
+  // nothing and reads nothing back. See lib/emailOpenTracking.ts.
+  "track/e/",
   // Domain reachability check. PUBLIC BY NECESSITY, and the necessity is the
   // whole function: we fetch it ourselves, over the internet, at the hostname
   // being verified, to learn whether that hostname reaches this deployment. A
@@ -59,6 +64,12 @@ const PUBLIC_PREFIXES = [
 const APPROVED_GUARDS = [
   "requireApiUser", "requireApiOwner",
   "requireUser", "requireOwner",
+  // A workspace's own owner (or the platform owner). Calls requireUser() first,
+  // so the fresh device/disabled/session-version checks still run.
+  "requireTenantOwner",
+  // Its API-route form (JSON 401/403): calls requireApiUser() first, then the same
+  // isTenantOwner() predicate.
+  "requireApiTenantOwner",
   // The module-CSV family (requireCrm/requireWorkshop/requireInbox/
   // requireOperational/requireAnyModule) is gone — it gated on User.modules,
   // a second authorization source RBAC never wrote to.

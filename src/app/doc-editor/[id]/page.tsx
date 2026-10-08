@@ -1,8 +1,10 @@
 import { notFound } from "next/navigation";
-import { getAccessibleLeadIds, getAccessibleVehicleIds, requirePermission } from "@/lib/permissions";
+import { getAccessibleJobCardIds, getAccessibleLeadIds, getAccessibleQuoteIds, getAccessibleVehicleIds, hasAnyPermission, requireAnyPermission } from "@/lib/permissions";
+import { WARRANTY_READ } from "@/lib/warrantyAccess";
+import { requireLayoutEditor } from "@/lib/docbuilder/layoutAccess";
 import { prisma } from "@/lib/db";
 import { contactName } from "@/lib/format";
-import { getBuilderTemplate } from "@/lib/docbuilder/store";
+import { getBuilderTemplate, withLegacyTextInlined } from "@/lib/docbuilder/store";
 import { requiredRecordKind } from "@/lib/docbuilder/recordBinding";
 import Link from "next/link";
 import { readTemplateDocument } from "@/lib/doceditor/legacy";
@@ -11,18 +13,42 @@ import { STANDARD_TEMPLATE_KEYS } from "@/lib/doceditor/standardTemplates";
 import { DocEditorEnvProvider } from "@/components/doceditor/EditorContext";
 import { getCompanyProfile } from "@/lib/companyProfile";
 import { documentLogo } from "@/lib/doceditor/renderGlobals";
+import { quoteWordingSettings } from "@/lib/quoteFromLead";
+import { getActiveTenantId } from "@/lib/auth";
+import { defaultEmailFrame, EMAIL_FRAME_KEY, EMAIL_SAMPLE_FIELDS, emailKindOf } from "@/lib/doceditor/emailDefaults";
+import { parseDocument } from "@/lib/doceditor/model";
+import { emailBrandFor } from "@/lib/doceditor/emailDocuments";
+import { MESSAGE_PLACES, messagePlace } from "@/lib/customerMessagePlaces";
+import { SIGNING_EMAILS } from "@/lib/signing/emailTemplates";
 
 export const dynamic = "force-dynamic";
+
+/** Does the saved draft match what real documents (or emails) use — the published version? */
+async function publishStateOf(template: { id: string; data: unknown; publishedVersion: number | null }): Promise<PublishState> {
+  const published = template.publishedVersion == null
+    ? null
+    : await prisma.docBuilderVersion.findUnique({
+        where: { templateId_version: { templateId: template.id, version: template.publishedVersion } },
+        select: { data: true },
+      });
+  return !published ? "never" : JSON.stringify(published.data) === JSON.stringify(template.data) ? "live" : "ahead";
+}
 
 export default async function DocEditorPage({
   params,
 }: {
   params: Promise<{ id: string }>;
 }) {
-  const user = await requirePermission("docbuilder.manage");
+  await requireAnyPermission("docbuilder.manage", "document_templates.manage");
   const { id } = await params;
-  const template = await getBuilderTemplate(id);
+  // An invoice/agreement still reading its text from the old form editor opens
+  // with it written in, so bank details and clauses are edited in this editor
+  // (stored by the editor's save, or by Publish — nothing is written on open).
+  const template = await getBuilderTemplate(id).then((t) => (t ? withLegacyTextInlined(t) : null));
   if (!template) notFound();
+  // docbuilder.manage, or — for the seven layouts the old form editor managed —
+  // document_templates.manage (layoutAccess).
+  const user = await requireLayoutEditor(template.key);
 
   const read = readTemplateDocument(template.data, template.name);
 
@@ -56,31 +82,90 @@ export default async function DocEditorPage({
           Create a new document to replace it, or send this template name to
           support so the content can be recovered.
         </p>
-        <Link href="/settings/documents/builder" className="inline-block text-sm text-primary hover:underline">
-          Back to Document Builder
+        <Link href="/document-studio" className="inline-block text-sm text-primary hover:underline">
+          Back to Document Studio
         </Link>
       </div>
     );
   }
 
   const initialDoc = read.doc;
+
+  // A customer EMAIL (the shared frame, or one message): the editor in email
+  // mode — the workspace's email look on the canvas, only that message's fields,
+  // a Subject line, and no print tools. Owner-only (layoutAccess.ts).
+  const emailKind = emailKindOf(template.key);
+  if (emailKind || template.key === EMAIL_FRAME_KEY) {
+    // The acting workspace, from the session; the template is its own (getBuilderTemplate
+    // refuses another workspace's email) — and the brand shown is read for that tenant only.
+    const tenantId = await getActiveTenantId();
+    if (!tenantId || template.tenantId !== tenantId) notFound();
+    const brand = await emailBrandFor(tenantId);
+    const place = emailKind ? messagePlace(emailKind) : "automatic";
+    const backHref = place === "documents" ? "/document-studio#document-emails" : MESSAGE_PLACES[place].path;
+    // A message is edited inside the frame it is sent in: this workspace's frame
+    // as it is being designed (what Preview shows too), named by tenant in the query.
+    const frameRow = emailKind
+      ? await prisma.docBuilderTemplate.findFirst({
+          where: { tenantId, key: EMAIL_FRAME_KEY, deletedAt: null },
+          orderBy: [{ isDefault: "desc" }, { updatedAt: "desc" }],
+          select: { id: true, data: true },
+        })
+      : null;
+    const frame = emailKind
+      ? { href: frameRow ? `/doc-editor/${frameRow.id}` : null, doc: (frameRow && parseDocument(frameRow.data)) || defaultEmailFrame() }
+      : undefined;
+    // A message a person sends is signed with the sender's own details — shown here as the viewer's.
+    const signsAsSender = !emailKind || (SIGNING_EMAILS[emailKind].fields as readonly string[]).includes("sender_name");
+    const me = signsAsSender ? await prisma.user.findUnique({ where: { id: user.id }, select: { mobile: true, jobTitle: true } }) : null;
+    const sender: Record<string, string> = signsAsSender
+      ? { sender_name: user.name, sender_email: user.email, sender_mobile: me?.mobile ?? "", sender_title: me?.jobTitle ?? "" }
+      : {};
+    return (
+      <DocEditorEnvProvider
+        value={{
+          templateId: template.id,
+          logoSrc: "",
+          companyName: brand.companyName,
+          email: {
+            kind: emailKind,
+            fields: emailKind ? [...SIGNING_EMAILS[emailKind].fields] : [],
+            sample: { ...EMAIL_SAMPLE_FIELDS, company_name: brand.companyName, company_phone: brand.phone, company_email: brand.email, ...sender },
+            brand,
+            frame,
+          },
+        }}
+      >
+        <DocEditor id={template.id} initialDoc={initialDoc} records={[]} initialPublishState={await publishStateOf(template)} hasStandardLayout email={{ frame: !emailKind, backHref }} />
+      </DocEditorEnvProvider>
+    );
+  }
+
   const required = requiredRecordKind(template.key);
+  // Every preview record is scoped to what the caller may see (as BuilderSection
+  // does): the editor is open to document_templates.manage holders too
+  // (layoutAccess), who may hold no quotes or workshop permission at all — and
+  // the labels carry customer names, quote and job numbers, vehicle models.
+  const scoped = (ids: string[] | null) => (ids === null ? {} : { id: { in: ids } });
   const [quotes, jobCards, leads, claims] = await Promise.all([
     required !== "quote" && required !== "either"
       ? []
-      : prisma.quote.findMany({
-          where: { supersededAt: null },
-          orderBy: { createdAt: "desc" },
-          take: 100,
-          include: { contact: true },
-        }),
+      : getAccessibleQuoteIds(user).then((ids) =>
+          prisma.quote.findMany({
+            where: { supersededAt: null, ...scoped(ids) },
+            orderBy: { createdAt: "desc" },
+            take: 100,
+            include: { contact: true },
+          })),
     required !== "jobcard" && required !== "either"
       ? []
-      : prisma.jobCard.findMany({
-          orderBy: { openedAt: "desc" },
-          take: 100,
-          include: { contact: true, vehicle: true },
-        }),
+      : getAccessibleJobCardIds(user).then((ids) =>
+          prisma.jobCard.findMany({
+            where: scoped(ids),
+            orderBy: { openedAt: "desc" },
+            take: 100,
+            include: { contact: true, vehicle: true },
+          })),
     // Scoped to the leads / vehicles the caller may see, as the print pages are.
     required !== "lead"
       ? []
@@ -91,15 +176,16 @@ export default async function DocEditorPage({
             take: 100,
             select: { id: true, name: true, title: true },
           })),
+    // Claims need the warranty grant too (lib/warrantyAccess.ts), not only the vehicle.
     required !== "warranty"
       ? []
-      : getAccessibleVehicleIds(user).then((ids) =>
+      : hasAnyPermission(user, ...WARRANTY_READ).then((canRead) => !canRead ? [] : getAccessibleVehicleIds(user).then((ids) =>
           prisma.warrantyClaim.findMany({
             where: ids === null ? {} : { vehicleId: { in: ids } },
             orderBy: { claimedAt: "desc" },
             take: 100,
             select: { id: true, vehicle: { select: { model: true } } },
-          })),
+          }))),
   ]);
   const records = [
     ...quotes.map((quote) => ({
@@ -120,22 +206,14 @@ export default async function DocEditorPage({
     })),
   ];
 
-  // Does the saved draft match what real documents render (the published version)?
-  const published = template.publishedVersion == null
-    ? null
-    : await prisma.docBuilderVersion.findUnique({
-        where: { templateId_version: { templateId: template.id, version: template.publishedVersion } },
-        select: { data: true },
-      });
-  const publishState: PublishState = !published
-    ? "never"
-    : JSON.stringify(published.data) === JSON.stringify(template.data)
-      ? "live"
-      : "ahead";
+  const publishState = await publishStateOf(template);
 
   // The canvas shows the same embedded logo the printed document will carry.
   const company = await getCompanyProfile();
   const logoSrc = (await documentLogo(company.logoUrl)) ?? "";
+  // Quote-bound layouts get warned about typed-in validity/VAT wording that
+  // contradicts the settings (see doceditor/wordingCheck).
+  const wordingSettings = required === "quote" ? await quoteWordingSettings() : undefined;
 
   return (
     <DocEditorEnvProvider value={{ templateId: template.id, logoSrc, companyName: company.name }}>
@@ -145,6 +223,7 @@ export default async function DocEditorPage({
         records={records}
         initialPublishState={publishState}
         hasStandardLayout={(STANDARD_TEMPLATE_KEYS as string[]).includes(template.key)}
+        wordingSettings={wordingSettings}
       />
     </DocEditorEnvProvider>
   );

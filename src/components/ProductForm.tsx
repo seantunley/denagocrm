@@ -11,6 +11,7 @@ import {
   type CaptureFormVariant,
 } from "@/components/capture-form";
 import { cn } from "@/lib/utils";
+import { SaveForm } from "@/components/SaveForm";
 
 function priceSummary(value: string) {
   const parsed = Number(value.replace(/\s/g, "").replace(",", "."));
@@ -34,8 +35,9 @@ export default function ProductForm({ variant = "compact" }: { variant?: Capture
   );
 
   return (
-    <form
+    <SaveForm
       action={createProduct}
+      success="Product created"
       className={cn(
         "space-y-4",
         variant === "compact" && "card max-w-3xl",
@@ -46,7 +48,7 @@ export default function ProductForm({ variant = "compact" }: { variant?: Capture
         <CaptureHero
           icon={Shapes}
           eyebrow="Catalogue setup"
-          title={name.trim() || "Name the Denago model"}
+          title={name.trim() || "Name the product"}
           description="Create the reusable model record that powers leads, quotes, vehicle registrations and physical stock intake."
           summary={[
             { label: "Category", value: category.trim() || "Not classified" },
@@ -167,6 +169,6 @@ export default function ProductForm({ variant = "compact" }: { variant?: Capture
         kind="product"
         variant={variant}
       />
-    </form>
+    </SaveForm>
   );
 }

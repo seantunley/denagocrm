@@ -54,6 +54,8 @@ async function quoteVars(quote: LoadedQuote, user: PermissionUser) {
   const billTo = quoteBillTo(quote, await loadBillToFleet(prisma, quote.fleetId));
   // The person, not the fleet account: "Hi Acme Logistics" reads wrong.
   const name = (billTo.attention || billTo.name).trim();
+  // The sender's own details sign the email (My account → job title, mobile).
+  const sender = await prisma.user.findUnique({ where: { id: user.id }, select: { mobile: true, jobTitle: true } });
   return {
     to: billTo.email,
     vars: {
@@ -63,6 +65,9 @@ async function quoteVars(quote: LoadedQuote, user: PermissionUser) {
       quote_number: `Q-${quote.number}`,
       total: formatZAR(Math.round(payableTotalCents(quote))),
       sender_name: user.name,
+      sender_title: sender?.jobTitle ?? "",
+      sender_mobile: sender?.mobile ?? "",
+      sender_email: user.email,
     },
   };
 }
@@ -76,7 +81,8 @@ export async function quoteEmailDraft(quoteId: string): Promise<QuoteEmailDraft>
     if (!quote) return { ok: false, error: "This quote no longer exists." };
     const { to, vars } = await quoteVars(quote, user);
     const email = await tenantEmailContent("quote", quote.tenantId, vars);
-    return { ok: true, to, subject: email.subject, body: email.text, fileName: quotePdfFileName(quote.number) };
+    // A designed email edits its paragraphs only; its headline, figures and signature stay as designed.
+    return { ok: true, to, subject: email.subject, body: email.bodyText ?? email.text, fileName: quotePdfFileName(quote.number) };
   });
 }
 
@@ -111,7 +117,12 @@ export async function sendQuoteEmail(
     const fileName = quotePdfFileName(quote.number);
     const { vars } = await quoteVars(quote, user);
     // Rendered escaped into the branded shell; CR/LF cannot reach the subject.
-    const email = await tenantEmailContent("quote", quote.tenantId, vars, { subject, body });
+    // Left exactly as prefilled → send the saved template itself, so its
+    // formatting (lists, bold, links) survives; the dialog only shows plain text.
+    // Edited → the staff member's words, as plain paragraphs.
+    const standard = await tenantEmailContent("quote", quote.tenantId, vars);
+    const unchanged = standard.subject === subject && (standard.bodyText ?? standard.text).replace(/\r\n?/g, "\n").trim() === body;
+    const email = unchanged ? standard : await tenantEmailContent("quote", quote.tenantId, vars, { subject, body });
     const replyTo = await composerReplyToDefault(user.email);
 
     const result = await deliverQuoteEmail(
@@ -139,6 +150,10 @@ export async function sendQuoteEmail(
             html: email.html,
             attachments: mail.attachments,
             replyTo: replyTo || undefined,
+            // "Opened" on the quote email's timeline entry (unless switched off).
+            trackOpens: true,
+            // A person emailed this quote: their name on the From line.
+            senderName: user.name,
             record: { contactId: quote.contactId, leadId: quote.leadId, userId: user.id, label: "Quote email" },
           }),
         // Only a draft moves, and only the version that was rendered: an edit

@@ -4,6 +4,7 @@ import Module, { createRequire } from "node:module";
 import { VARIABLES } from "../src/lib/doceditor/variables";
 import { COMPANY_DEFAULTS, companyTokens } from "../src/lib/companyBrand";
 import { plateToHtmlBody } from "../src/lib/docbuilder/plateSerialize";
+import { DEFAULT_REGIONAL as R } from "../src/lib/format";
 
 /**
  * The doc-editor's "＋ variable" picker offers company, customer first name,
@@ -46,7 +47,7 @@ const jobCard = {
 } as unknown as Parameters<typeof merge.buildJobCardContext>[0];
 
 test("a quote fills customer.firstName and the lead fields", () => {
-  const { tokens } = merge.buildQuoteContext(quote(), null);
+  const { tokens } = merge.buildQuoteContext(quote(), null, R);
   assert.equal(tokens["customer.firstName"], "Thandi");
   assert.equal(tokens["lead.name"], "Thandi Nkosi");
   assert.equal(tokens["lead.title"], "Rover XL enquiry");
@@ -56,15 +57,15 @@ test("a quote fills customer.firstName and the lead fields", () => {
 });
 
 test("a customerless lead's quote still has a first name; a leadless quote has blank lead fields", () => {
-  assert.equal(merge.buildQuoteContext(quote({ contact: null }), null).tokens["customer.firstName"], "Thandi");
-  const { tokens } = merge.buildQuoteContext(quote({ lead: null }), null);
+  assert.equal(merge.buildQuoteContext(quote({ contact: null }), null, R).tokens["customer.firstName"], "Thandi");
+  const { tokens } = merge.buildQuoteContext(quote({ lead: null }), null, R);
   for (const key of ["lead.name", "lead.title", "lead.source", "lead.product", "lead.value"]) {
     assert.equal(tokens[key], "", `${key} is blank, not "undefined"`);
   }
 });
 
 test("a job card fills customer.firstName", () => {
-  assert.equal(merge.buildJobCardContext(jobCard).tokens["customer.firstName"], "Pieter");
+  assert.equal(merge.buildJobCardContext(jobCard, null, R).tokens["customer.firstName"], "Pieter");
 });
 
 test("user.name and date.today are filled for every document", () => {
@@ -77,8 +78,8 @@ test("user.name and date.today are filled for every document", () => {
 
 test("every variable the picker offers is filled by some resolver", () => {
   const filled = new Set([
-    ...Object.keys(merge.buildQuoteContext(quote(), null).tokens),
-    ...Object.keys(merge.buildJobCardContext(jobCard).tokens),
+    ...Object.keys(merge.buildQuoteContext(quote(), null, R).tokens),
+    ...Object.keys(merge.buildJobCardContext(jobCard, null, R).tokens),
     ...Object.keys(companyTokens(COMPANY_DEFAULTS)),
     ...Object.keys(merge.documentGlobalTokens("x")),
   ]);
@@ -92,7 +93,7 @@ test("every variable the picker offers is filled by some resolver", () => {
 
 test("a variable the record cannot fill keeps the existing unresolved style", () => {
   // lead.* on a job card: the same pill any unfilled variable renders as.
-  const ctx = merge.buildJobCardContext(jobCard);
+  const ctx = merge.buildJobCardContext(jobCard, null, R);
   const html = plateToHtmlBody([{ type: "p", children: [{ type: "mergeField", token: "lead.title", children: [{ text: "" }] }] }], ctx);
   assert.match(html, /background:#fff7ed/);
   assert.match(html, /Lead title/);

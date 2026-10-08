@@ -3,18 +3,12 @@ import { prisma } from "@/lib/db";
 import { getCurrentUser } from "@/lib/auth";
 import { getAccessibleContactIds, getAccessibleVehicleIds, hasPermission, hasAnyPermission } from "@/lib/permissions";
 import { contactName } from "@/lib/format";
-import { getSetting } from "@/lib/settings";
+import { editorDefaults, quoteFromLeadDefaults } from "@/lib/quoteFromLead";
 import { isModuleEnabled } from "@/lib/modules/enabled";
 import { listActingTenantStaff } from "@/lib/tenantActor";
 import { fleetPicker } from "@/lib/fleetDirectory";
 import { NO_FLEET_PICKER } from "@/lib/fleetTypes";
 import { withActingStaffScope } from "@/lib/actingScope";
-
-function inputDate(daysFromNow: number) {
-  const date = new Date();
-  date.setDate(date.getDate() + daysFromNow);
-  return date.toISOString().slice(0, 10);
-}
 
 /** Option lists for the Quick Actions create dialogs — one cached payload. */
 export async function GET(request: Request) {
@@ -36,7 +30,7 @@ export async function GET(request: Request) {
       return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     }
     const scoped = (ids: string[] | null) => (ids === null ? {} : { id: { in: ids } });
-    const [products, contacts, validDaysRaw, quoteTerms] = await Promise.all([
+    const [products, contacts, quoteDefaults] = await Promise.all([
       prisma.product.findMany({
         where: { active: true },
         include: { colors: true },
@@ -47,10 +41,8 @@ export async function GET(request: Request) {
         orderBy: { firstName: "asc" },
         take: 500,
       }),
-      getSetting("QUOTE_VALID_DAYS"),
-      getSetting("QUOTE_TERMS"),
+      quoteFromLeadDefaults(),
     ]);
-    const validDays = Number.parseInt(validDaysRaw ?? "7", 10);
     return NextResponse.json({
       products: products.map((product) => ({
         id: product.id,
@@ -59,10 +51,7 @@ export async function GET(request: Request) {
         colors: product.colors.map((color) => color.name),
       })),
       contacts: contacts.map((contact) => ({ id: contact.id, label: contactName(contact) })),
-      quoteDefaults: {
-        validUntil: inputDate(Number.isFinite(validDays) ? validDays : 7),
-        terms: quoteTerms || "Prices include VAT. Delivery arranged on acceptance. E&OE.",
-      },
+      quoteDefaults: editorDefaults(quoteDefaults),
       stages: [],
       users: [],
       vehicles: [],
@@ -109,7 +98,7 @@ export async function GET(request: Request) {
   const canCreateQuote = rawCanCreateQuote && (!kind || kind === "quote");
   const canManageVehicles = rawCanManageVehicles && (!kind || kind === "vehicle");
   const canManageJobcards = rawJobcards && canViewVehicles && (!kind || kind === "jobcard");
-  const canScheduleActivity = rawCanScheduleActivity && (!kind || kind === "calendar");
+  const canScheduleActivity = rawCanScheduleActivity && (!kind || kind === "calendar" || kind === "availability");
   if (
     !canCreateLead && !canCreateContact && !canCreateQuote &&
     !canManageVehicles && !canManageJobcards && !canScheduleActivity
@@ -117,13 +106,13 @@ export async function GET(request: Request) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
-  const needsContacts = canCreateLead || canCreateQuote || canManageVehicles || canScheduleActivity;
+  const needsContacts = canCreateLead || canCreateQuote || canManageVehicles || (canScheduleActivity && kind !== "availability");
   const needsProducts = canCreateLead || canCreateQuote || canManageVehicles;
   const needsUsers = canCreateLead || canCreateContact || canScheduleActivity;
   const needsVehicles = canManageJobcards;
   const scoped = (ids: string[] | null) => (ids === null ? {} : { id: { in: ids } });
 
-  const [products, stages, contacts, users, vehicles, picker, validDaysRaw, quoteTerms] = await Promise.all([
+  const [products, stages, contacts, users, vehicles, picker, quoteDefaults] = await Promise.all([
     commerceOn && needsProducts
       ? prisma.product.findMany({
           where: { active: true },
@@ -150,11 +139,8 @@ export async function GET(request: Request) {
     // inside fleetPicker — never a bare fleet.findMany — and withheld entirely
     // from a user without the fleets permission.
     canCreateContact ? fleetPicker() : Promise.resolve(NO_FLEET_PICKER),
-    !kind ? getSetting("QUOTE_VALID_DAYS") : Promise.resolve(null),
-    !kind ? getSetting("QUOTE_TERMS") : Promise.resolve(null),
+    !kind ? quoteFromLeadDefaults() : Promise.resolve(null),
   ]);
-
-  const validDays = Number.parseInt(validDaysRaw ?? "7", 10);
 
   return NextResponse.json({
     products: products.map((p) => ({
@@ -167,10 +153,7 @@ export async function GET(request: Request) {
     contacts: contacts.map((c) => ({ id: c.id, label: contactName(c) })),
     users,
     fleetPicker: picker,
-    quoteDefaults: {
-      validUntil: inputDate(Number.isFinite(validDays) ? validDays : 7),
-      terms: quoteTerms || "Prices include VAT. Delivery arranged on acceptance. E&OE.",
-    },
+    quoteDefaults: quoteDefaults ? editorDefaults(quoteDefaults) : null,
     vehicles: vehicles.map((v) => ({ id: v.id, label: `${v.model} — ${contactName(v.contact)}` })),
   });
   });

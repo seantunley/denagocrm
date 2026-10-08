@@ -1,5 +1,6 @@
-import { formatDate, formatZAR } from "@/lib/format";
+import { DEFAULT_REGIONAL, formatDate, formatZAR, type Regional } from "@/lib/format";
 import type { QuoteBillTo } from "@/lib/quoteBillTo";
+import { formatInvoiceNumber } from "@/lib/invoiceNumber";
 import type { DocTemplate } from "@/lib/docTemplates";
 
 /**
@@ -11,7 +12,8 @@ import type { DocTemplate } from "@/lib/docTemplates";
  * these tokens says the same thing as the page it replaces.
  */
 
-export const invoiceNumber = (quoteNumber: number) => `INV-${quoteNumber}`;
+/** The invoice's own number from the workspace's sequence — never the quote number (lib/invoiceNumber). */
+export const invoiceNumber = (issued: number | null | undefined) => formatInvoiceNumber(issued);
 export const agreementNumber = (quoteNumber: number) => `SA-${quoteNumber}`;
 
 /**
@@ -37,28 +39,30 @@ export async function builderDocRedirect(
 const lines = (parts: (string | null | undefined)[]) => parts.filter(Boolean).join("\n");
 
 export function quoteDocTokens(
-  quote: { number: number; status: string; invoicedAt?: Date | null },
+  quote: { number: number; status: string; invoicedAt?: Date | null; invoiceNumber?: number | null },
   billTo: QuoteBillTo,
   money: { depositCents: number; balanceCents: number },
   now: Date = new Date(),
+  r: Regional = DEFAULT_REGIONAL,
 ): Record<string, string> {
   const party = [
     billTo.attention ? `Attention: ${billTo.attention}` : "",
     billTo.phone,
     billTo.email,
-    billTo.address,
+    // Street, then town — one comma-joined line wrapped badly (Sean, 2026-10-07).
+    ...(billTo.addressLines?.length ? billTo.addressLines : [billTo.address]),
   ];
   const vat = billTo.vatNumber ? `VAT no: ${billTo.vatNumber}` : "";
   return {
     "quote.status": quote.status,
-    "quote.deposit": formatZAR(money.depositCents),
-    "quote.balance": formatZAR(money.balanceCents),
-    "invoice.number": invoiceNumber(quote.number),
+    "quote.deposit": formatZAR(money.depositCents, r),
+    "quote.balance": formatZAR(money.balanceCents, r),
+    "invoice.number": invoiceNumber(quote.invoiceNumber),
     // An invoice is dated when it was raised; one not yet raised is dated today.
-    "invoice.date": formatDate(quote.invoicedAt ?? now),
+    "invoice.date": formatDate(quote.invoicedAt ?? now, r),
     "invoice.billedTo": lines([...party, vat]),
     "agreement.number": agreementNumber(quote.number),
-    "agreement.date": formatDate(now),
+    "agreement.date": formatDate(now, r),
     "agreement.purchaser": lines([
       ...party,
       billTo.registrationNumber ? `Reg. no: ${billTo.registrationNumber}` : "",

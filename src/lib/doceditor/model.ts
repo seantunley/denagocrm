@@ -29,6 +29,8 @@ import { isSafeCssColor } from "./css";
  */
 const colorField = (fallback: string) =>
   z.string().default(fallback).transform((value) => (isSafeCssColor(value) ? value : fallback));
+/** A colour that may be left unset ("use the default"); an unsafe value is unset too. */
+const optionalColor = z.string().default("").transform((value) => (isSafeCssColor(value) ? value : ""));
 
 /**
  * Page boxes in TWO units, and both are load-bearing.
@@ -47,6 +49,8 @@ const colorField = (fallback: string) =>
 export const PAGE_SIZES = {
   A4: { w: 794, h: 1123, cssH: "297mm" }, // px @ 96dpi; cssH is exact
   Letter: { w: 816, h: 1056, cssH: "11in" },
+  /** A customer email (./emailRender.ts): the 600px card mail apps show. Never printed. */
+  Email: { w: 600, h: 760, cssH: "201.08mm" },
 } as const;
 export type PageSizeName = keyof typeof PAGE_SIZES;
 
@@ -145,7 +149,14 @@ export const tableBlockSchema = z.object({
  * template renders byte-for-byte as before; "showcase" draws it in the showcase
  * quotation's style (lib/doceditor/showcaseRender.ts).
  */
-const blockLook = z.enum(["standard", "showcase"]).optional();
+// "classic": the invoice's quieter look (2026-10-07 mock-up) — no boxes, plain
+// columns, label/value rows, a light table header.
+const blockLook = z.enum(["standard", "showcase", "classic"]).optional();
+/**
+ * The showcase bands (header, info strip, totals, footer) can be drawn in the
+ * same "classic" style. Optional: a document without it keeps its band look.
+ */
+const bandStyle = z.enum(["band", "classic"]).optional();
 
 // ── branded blocks (match the print templates) ──────────────────────
 export const bannerBlockSchema = z.object({
@@ -163,6 +174,8 @@ export const infoCardBlockSchema = z.object({
   lines: z.string().default("{{customer.phone}}\n{{customer.email}}"),
   accent: colorField("#ea580c"),
   look: blockLook,
+  /** Classic look: a thin rule down the left, between two side-by-side columns. */
+  divider: z.boolean().optional(),
 });
 export const lineItemColKeys = ["description", "qty", "unitPrice", "unitPriceExVat", "vat", "subtotal", "total"] as const;
 export const lineItemColumnSchema = z.object({
@@ -228,6 +241,10 @@ export const showcaseHeaderBlockSchema = z.object({
   showLogo: z.boolean().default(true),
   /** A slimmer band (no tagline) — the header repeated on a continuation page. */
   compact: z.boolean().optional(),
+  style: bandStyle,
+  /** Classic: the line under the title, and the small label above the number. */
+  subtitle: z.string().optional(),
+  numberLabel: z.string().optional(),
 });
 export const infoStripBlockSchema = z.object({
   ...base, type: z.literal("infoStrip"),
@@ -235,6 +252,7 @@ export const infoStripBlockSchema = z.object({
   items: z.array(z.object({
     icon: showcaseIcon, label: z.string().default(""), value: z.string().default(""), sub: z.string().default(""),
   })).default([]),
+  style: bandStyle,
 });
 /** A vehicle as the showcase shows it (lib/docbuilder/vehicleShowcase.ts VehicleShowcaseData). */
 export const frozenVehicleSchema = z.object({
@@ -276,6 +294,7 @@ export const totalsBoxBlockSchema = z.object({
   totalAmount: z.string().default("{{quote.total}}"),
   bg: colorField("#020617"),
   accent: colorField("#ea580c"),
+  style: bandStyle,
 });
 export const acceptanceBlockSchema = z.object({
   ...base, type: z.literal("acceptance"),
@@ -288,11 +307,76 @@ export const acceptanceBlockSchema = z.object({
 });
 export const footerBandBlockSchema = z.object({
   ...base, type: z.literal("footerBand"),
-  subtitle: z.string().default("Authorised Denago EV Dealer"),
+  subtitle: z.string().default("{{company.tagline}}"),
   bg: colorField("#020617"),
   accent: colorField("#ea580c"),
   /** Optional band photo (e.g. a skyline). Only an inline `data:image/…` is ever rendered. */
   bgImage: z.string().default(""),
+  /** Classic: one slim line (the subtitle, e.g. "name · website · Invoice no"), an accent mark beside it. */
+  style: bandStyle,
+});
+
+// ── customer email blocks (rendered by ./emailRender.ts) ─────────────
+// Customer emails are documents in this editor too (Sean, 2026-10-08: "We have
+// all this advanced editing, and I get inline editing"). One shared FRAME
+// (header, signature, footer around an emailBody slot) wraps every message's
+// BODY. Print documents never contain these; the PDF serialiser draws nothing
+// for them.
+/**
+ * The frame's header. `panel`: the workspace's logo panel (signature banner),
+ * else the logo on a dark panel. `bar`: the logo on a full-width band of
+ * `background`. `plain`: the logo alone on the card.
+ */
+export const emailHeaderBlockSchema = z.object({
+  ...base, type: z.literal("emailHeader"),
+  style: z.enum(["panel", "bar", "plain"]).default("panel"),
+  background: colorField("#0b0f19"),
+  logoWidth: z.number().default(210),
+  align: z.enum(["left", "center"]).default("left"),
+});
+/** In the frame: where each message's own body goes. */
+export const emailBodyBlockSchema = z.object({ ...base, type: z.literal("emailBody") });
+/**
+ * In the frame: who the email is from. The SENDER's own name, job title, mobile
+ * and email when a person sends it (Sean, 2026-10-08: "It must be the senders
+ * information"); the company's for an automatic message. Each line can be hidden.
+ */
+export const emailSignatureBlockSchema = z.object({
+  ...base, type: z.literal("emailSignature"),
+  showJobTitle: z.boolean().default(true),
+  showCompany: z.boolean().default(true),
+  showPhone: z.boolean().default(true),
+  showEmail: z.boolean().default(true),
+  showWebsite: z.boolean().default(true),
+});
+/** In the frame: company details, small and quiet, with an optional line above them. */
+export const emailFooterBlockSchema = z.object({
+  ...base, type: z.literal("emailFooter"),
+  note: z.string().default(""),
+  showCompany: z.boolean().default(true),
+  showContact: z.boolean().default(true),
+  align: z.enum(["left", "center", "right"]).default("center"),
+  color: colorField("#94a3b8"),
+  /** Empty = the card's own colour. */
+  background: optionalColor,
+});
+/**
+ * The message's action: a button that opens one of the message's links
+ * (signing, review, survey), or — for a code — the code itself, shown large.
+ * `token` names the message field; a message is never sent without its action.
+ */
+export const emailButtonBlockSchema = z.object({
+  ...base, type: z.literal("emailButton"),
+  token: z.string().default("signing_link"),
+  label: z.string().default("Open & sign"),
+  style: z.enum(["dark", "accent"]).default("dark"),
+});
+/** Key figures as cards, side by side (a quote's number and total). A highlighted card is dark with the accent value. */
+export const emailFactsBlockSchema = z.object({
+  ...base, type: z.literal("emailFacts"),
+  items: z.array(z.object({
+    label: z.string().default(""), value: z.string().default(""), sub: z.string().default(""), highlight: z.boolean().default(false),
+  })).default([]),
 });
 
 /** Conditional wrapper — nested blocks render only when `when` is truthy (safe expr engine). */
@@ -308,6 +392,7 @@ export const blockSchema: z.ZodType<DocumentBlock> = z.lazy(() => z.discriminate
   bannerBlockSchema, infoCardBlockSchema, lineItemsBlockSchema, totalBandBlockSchema, termsBlockSchema, footerBlockSchema,
   conditionalBlockSchema, handoverChecklistBlockSchema,
   showcaseHeaderBlockSchema, infoStripBlockSchema, vehicleShowcaseBlockSchema, totalsBoxBlockSchema, acceptanceBlockSchema, footerBandBlockSchema,
+  emailHeaderBlockSchema, emailBodyBlockSchema, emailSignatureBlockSchema, emailFooterBlockSchema, emailButtonBlockSchema, emailFactsBlockSchema,
 ])) as z.ZodType<DocumentBlock>;
 
 export type TextBlock = z.infer<typeof textBlockSchema>;
@@ -333,6 +418,14 @@ export type AcceptanceBlock = z.infer<typeof acceptanceBlockSchema>;
 export type FooterBandBlock = z.infer<typeof footerBandBlockSchema>;
 export type ShowcaseBlock =
   | ShowcaseHeaderBlock | InfoStripBlock | VehicleShowcaseBlock | TotalsBoxBlock | AcceptanceBlock | FooterBandBlock;
+export type EmailHeaderBlock = z.infer<typeof emailHeaderBlockSchema>;
+export type EmailBodyBlock = z.infer<typeof emailBodyBlockSchema>;
+export type EmailSignatureBlock = z.infer<typeof emailSignatureBlockSchema>;
+export type EmailFooterBlock = z.infer<typeof emailFooterBlockSchema>;
+export type EmailButtonBlock = z.infer<typeof emailButtonBlockSchema>;
+export type EmailFactsBlock = z.infer<typeof emailFactsBlockSchema>;
+export type EmailBlock = EmailHeaderBlock | EmailBodyBlock | EmailSignatureBlock | EmailFooterBlock | EmailButtonBlock | EmailFactsBlock;
+export const EMAIL_BLOCK_TYPES = ["emailHeader", "emailBody", "emailSignature", "emailFooter", "emailButton", "emailFacts"] as const;
 export type ConditionalBlock = {
   id: string; type: "conditional"; settings: LayoutSettings; locked: boolean; hidden: boolean;
   when: string; blocks: DocumentBlock[];
@@ -341,7 +434,7 @@ export type DocumentBlock =
   | TextBlock | HeadingBlock | ImageBlock | DividerBlock | SpacerBlock
   | PageBreakBlock | PricingBlock | TableBlock
   | BannerBlock | InfoCardBlock | LineItemsBlock | TotalBandBlock | TermsBlock | FooterBlock
-  | ConditionalBlock | HandoverChecklistBlock | ShowcaseBlock;
+  | ConditionalBlock | HandoverChecklistBlock | ShowcaseBlock | EmailBlock;
 export type BlockType = DocumentBlock["type"];
 
 // ── columns / rows / pages ──────────────────────────────────────────
@@ -460,7 +553,7 @@ export type DocumentPage = z.infer<typeof pageSchema>;
 
 export const docStyleSchema = z.object({
   fontFamily: z.enum(["sans", "serif", "mono"]).default("sans"),
-  pageSize: z.enum(["A4", "Letter"]).default("A4"),
+  pageSize: z.enum(["A4", "Letter", "Email"]).default("A4"),
   margin: z.number().default(48), // px
   accent: colorField("#ea580c"),
   ink: colorField("#020617"),
@@ -482,6 +575,20 @@ export const documentSchema = z.object({
    * signature fields placed on it — never re-flows.
    */
   layoutRows: z.number().optional(),
+  /** Set on a customer EMAIL document (template key `email:<kind>`): its subject line, {{fields}} allowed. */
+  /**
+   * On the email FRAME (`email:frame`), the colours every email shares: the page
+   * behind the card, the card, the dark button, and the accent (links, the
+   * button's arrow, a highlighted figure). Empty = the standard look / the
+   * workspace's brand colour.
+   */
+  email: z.object({
+    subject: z.string().default(""),
+    pageColor: optionalColor.optional(),
+    cardColor: optionalColor.optional(),
+    buttonColor: optionalColor.optional(),
+    accentColor: optionalColor.optional(),
+  }).optional(),
 });
 export type DocumentModel = z.infer<typeof documentSchema>;
 

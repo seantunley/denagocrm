@@ -3,7 +3,8 @@
 import { useEditor } from "@/lib/doceditor/store";
 import { getBlock } from "@/lib/doceditor/ops";
 import { newPricingLine } from "@/lib/doceditor/factory";
-import type { DocumentBlock, OverlayField, Recipient, PricingBlock, ImageBlock, DividerBlock, SpacerBlock, ConditionalBlock, TextBlock, BannerBlock, InfoCardBlock, TotalBandBlock, TermsBlock, FooterBlock, LineItemsBlock, LineItemColumn } from "@/lib/doceditor/model";
+import type { DocumentBlock, OverlayField, Recipient, PricingBlock, ImageBlock, DividerBlock, SpacerBlock, ConditionalBlock, TextBlock, BannerBlock, InfoCardBlock, TotalBandBlock, TermsBlock, FooterBlock, LineItemsBlock, LineItemColumn, EmailButtonBlock, EmailFactsBlock, EmailFooterBlock, EmailHeaderBlock, EmailSignatureBlock } from "@/lib/doceditor/model";
+import { cssColor } from "@/lib/doceditor/css";
 import { lineItemColKeys } from "@/lib/doceditor/model";
 import { recipientLabel } from "@/lib/signing/templateRecipients";
 import { ConditionField } from "@/lib/docbuilder/ConditionField";
@@ -73,11 +74,11 @@ function FieldProps({ field }: { field: OverlayField }) {
             </p>
           ) : recipients.length === 0 ? (
             <p className="mt-1 text-[11px] text-amber-600">
-              Add a recipient below — set one to “Denago” and one to “The customer”, then assign this field to whichever signs here.
+              Add a recipient below — set one to “Our team” and one to “The customer”, then assign this field to whichever signs here.
             </p>
           ) : !field.recipientId ? (
             <p className="mt-1 text-[11px] text-amber-600">
-              An unassigned field is filled by whoever opens the document first. Assign it so the signature lands in the right box — and so Denago&apos;s can be applied automatically.
+              An unassigned field is filled by whoever opens the document first. Assign it so the signature lands in the right box — and so your team&apos;s can be applied automatically.
             </p>
           ) : null}
         </div>
@@ -166,12 +167,19 @@ function LayoutSection({ block, floating }: { block: DocumentBlock; floating: bo
   );
 }
 
+const FRAME_PARTS = new Set<string>(["emailHeader", "emailBody", "emailSignature", "emailFooter"]);
+/** Plain names for the email blocks ("emailHeader block" is the code's name, not the owner's). */
+const EMAIL_BLOCK_NAMES: Record<string, string> = {
+  emailHeader: "Header", emailBody: "Message slot", emailSignature: "Signature", emailFooter: "Footer", emailButton: "Button", emailFacts: "Key figures",
+};
+
 function BlockProps({ block, floating }: { block: DocumentBlock; floating: boolean }) {
   const remove = useEditor((s) => s.remove);
   return (
     <>
-      <div className="border-b border-slate-100 p-3 text-sm font-medium capitalize text-slate-700">{block.type} block{floating ? " · floating" : ""}</div>
-      {block.type !== "pageBreak" && <LayoutSection block={block} floating={floating} />}
+      <div className="border-b border-slate-100 p-3 text-sm font-medium capitalize text-slate-700">{EMAIL_BLOCK_NAMES[block.type] ?? `${block.type} block`}{floating ? " · floating" : ""}</div>
+      {/* The frame's own parts run the width of the email: no column width, text scale or free placement. */}
+      {block.type !== "pageBreak" && !FRAME_PARTS.has(block.type) && <LayoutSection block={block} floating={floating} />}
       {block.type === "image" && <ImageProps block={block} />}
       {block.type === "pricing" && <PricingProps block={block} />}
       {block.type === "divider" && <DividerProps block={block} />}
@@ -184,6 +192,12 @@ function BlockProps({ block, floating }: { block: DocumentBlock; floating: boole
       {block.type === "footer" && <FooterProps block={block} />}
       {block.type === "lineItems" && <LineItemsProps block={block} />}
       {(block.type === "showcaseHeader" || block.type === "infoStrip" || block.type === "vehicleShowcase" || block.type === "totalsBox" || block.type === "acceptance" || block.type === "footerBand") && <ShowcaseProps block={block} />}
+      {block.type === "emailButton" && <EmailButtonProps block={block} />}
+      {block.type === "emailFacts" && <EmailFactsProps block={block} />}
+      {block.type === "emailFooter" && <EmailFooterProps block={block} />}
+      {block.type === "emailHeader" && <EmailHeaderProps block={block} />}
+      {block.type === "emailSignature" && <EmailSignatureProps block={block} />}
+      {block.type === "emailBody" && <p className="p-3 text-xs text-slate-500">Where each email&apos;s own content goes. Keep exactly one.</p>}
       {(block.type === "text" || block.type === "heading") && <TextHint block={block} />}
       {block.type === "table" && <p className="p-3 text-xs text-slate-400">Edit table cells inline on the page.</p>}
       {block.type === "pageBreak" && <p className="p-3 text-xs text-slate-400">Forces the next content onto a new page.</p>}
@@ -255,6 +269,168 @@ function ImageProps({ block }: { block: ImageBlock }) {
       <div className={row}><label className={lbl}>Alt text</label><input className={inp} value={block.alt} onChange={(e) => updateBlock(block.id, { alt: e.target.value })} /></div>
       <div className={row}><label className={lbl}>Width ({block.widthPct}%)</label><input type="range" min={10} max={100} className="w-full" value={block.widthPct} onChange={(e) => updateBlock(block.id, { widthPct: Number(e.target.value) }, false)} /></div>
       <label className="flex items-center gap-2 text-sm text-slate-700"><input type="checkbox" checked={block.rounded} onChange={(e) => updateBlock(block.id, { rounded: e.target.checked })} /> Rounded corners</label>
+    </Section>
+  );
+}
+
+// ── customer email blocks ───────────────────────────────────────────
+/** What a button can open (or show): the message's own link or code fields. */
+const BUTTON_FIELDS: Record<string, string> = {
+  signing_link: "The signing link",
+  review_link: "The Google review link",
+  survey_link: "The survey link",
+  code: "The code (shown large, no link)",
+};
+
+function EmailButtonProps({ block }: { block: EmailButtonBlock }) {
+  const updateBlock = useEditor((s) => s.updateBlock);
+  const { email } = useDocEditorEnv();
+  const options = Object.keys(BUTTON_FIELDS).filter((f) => !email || email.kind === null || email.fields.includes(f));
+  return (
+    <Section title="Button">
+      <div className={row}>
+        <label className={lbl}>Opens</label>
+        <select className={inp} value={block.token} onChange={(e) => updateBlock(block.id, { token: e.target.value })}>
+          {options.map((f) => <option key={f} value={f}>{BUTTON_FIELDS[f]}</option>)}
+          {!options.includes(block.token) && <option value={block.token}>{block.token} (not in this email)</option>}
+        </select>
+      </div>
+      {block.token !== "code" && (
+        <>
+          <div className={row}><label className={lbl}>Label</label><input className={inp} value={block.label} onChange={(e) => updateBlock(block.id, { label: e.target.value }, false)} /></div>
+          <div className={row}>
+            <label className={lbl}>Style</label>
+            <select className={inp} value={block.style} onChange={(e) => updateBlock(block.id, { style: e.target.value === "accent" ? "accent" : "dark" })}>
+              <option value="dark">Button colour, with an accent arrow</option>
+              <option value="accent">Brand colour</option>
+            </select>
+          </div>
+        </>
+      )}
+      <p className="text-[11px] text-slate-400">An email is never sent without its link or code — if you delete this button, one is added back at the end.</p>
+    </Section>
+  );
+}
+
+function EmailFactsProps({ block }: { block: EmailFactsBlock }) {
+  const updateBlock = useEditor((s) => s.updateBlock);
+  const items = block.items;
+  const set = (i: number, patch: Partial<EmailFactsBlock["items"][number]>) =>
+    updateBlock(block.id, { items: items.map((item, j) => (j === i ? { ...item, ...patch } : item)) }, false);
+  return (
+    <Section title="Key figures">
+      {items.map((item, i) => (
+        <div key={i} className="mb-3 rounded-md border border-slate-200 p-2">
+          <div className={row}><label className={lbl}>Label</label><input className={inp} value={item.label} onChange={(e) => set(i, { label: e.target.value })} /></div>
+          <div className={row}><label className={lbl}>Value — a field like {"{{total}}"}</label><input className={inp} value={item.value} onChange={(e) => set(i, { value: e.target.value })} /></div>
+          <div className={row}><label className={lbl}>Small line under it</label><input className={inp} value={item.sub} onChange={(e) => set(i, { sub: e.target.value })} /></div>
+          <div className="flex items-center justify-between">
+            <label className="flex items-center gap-1.5 text-xs text-slate-600"><input type="checkbox" checked={item.highlight} onChange={(e) => set(i, { highlight: e.target.checked })} /> Dark card</label>
+            <button type="button" className="text-xs text-red-500 hover:underline" onClick={() => updateBlock(block.id, { items: items.filter((_, j) => j !== i) })}>Remove</button>
+          </div>
+        </div>
+      ))}
+      {items.length < 3 && (
+        <button type="button" className="w-full rounded-md border border-slate-300 py-1.5 text-sm text-slate-700 hover:bg-slate-50" onClick={() => updateBlock(block.id, { items: [...items, { label: "LABEL", value: "", sub: "", highlight: false }] })}>
+          + Add a figure
+        </button>
+      )}
+    </Section>
+  );
+}
+
+/** A colour with a "standard" state: unset means the email's own default. */
+function ColourRow({ label, value, standard, onChange }: { label: string; value: string | undefined; standard: string; onChange: (value: string) => void }) {
+  return (
+    <div className={row}>
+      <label className={lbl}>{label}</label>
+      <div className="flex items-center gap-2">
+        <input type="color" value={value || standard} onChange={(e) => onChange(e.target.value)} className="h-8 flex-1 rounded border border-slate-300" />
+        {value ? <button type="button" className="text-[11px] text-slate-500 underline hover:text-slate-700" onClick={() => onChange("")}>Standard</button> : null}
+      </div>
+    </div>
+  );
+}
+
+const tick = "mb-1.5 flex items-center gap-2 text-sm text-slate-700";
+
+function EmailHeaderProps({ block }: { block: EmailHeaderBlock }) {
+  const updateBlock = useEditor((s) => s.updateBlock);
+  return (
+    <Section title="Header">
+      <div className={row}>
+        <label className={lbl}>Style</label>
+        <select className={inp} value={block.style} onChange={(e) => updateBlock(block.id, { style: e.target.value as EmailHeaderBlock["style"] })}>
+          <option value="panel">Logo panel (from your email signature)</option>
+          <option value="bar">Full-width colour bar with your logo</option>
+          <option value="plain">Logo only, no background</option>
+        </select>
+      </div>
+      {block.style === "bar" && (
+        <div className={row}><label className={lbl}>Bar colour</label><input type="color" value={block.background} onChange={(e) => updateBlock(block.id, { background: e.target.value })} className="h-8 w-full rounded border border-slate-300" /></div>
+      )}
+      {block.style !== "panel" && (
+        <div className={row}><label className={lbl}>Logo size ({block.logoWidth}px wide)</label><input type="range" min={80} max={420} step={10} className="w-full" value={block.logoWidth} onChange={(e) => updateBlock(block.id, { logoWidth: Number(e.target.value) }, false)} /></div>
+      )}
+      <div className={row}>
+        <label className={lbl}>Position</label>
+        <select className={inp} value={block.align} onChange={(e) => updateBlock(block.id, { align: e.target.value === "center" ? "center" : "left" })}>
+          <option value="left">Left</option>
+          <option value="center">Centre</option>
+        </select>
+      </div>
+      <p className="text-[11px] text-slate-400">
+        {block.style === "panel"
+          ? "The logo panel is the one from your email signature (Settings → My account → Email signature)."
+          : "Your logo comes from Company profile. A white logo needs a dark bar behind it."}
+      </p>
+    </Section>
+  );
+}
+
+function EmailSignatureProps({ block }: { block: EmailSignatureBlock }) {
+  const updateBlock = useEditor((s) => s.updateBlock);
+  const lines: [keyof Pick<EmailSignatureBlock, "showJobTitle" | "showCompany" | "showPhone" | "showEmail" | "showWebsite">, string][] = [
+    ["showJobTitle", "Job title"],
+    ["showCompany", "Company name"],
+    ["showPhone", "Phone"],
+    ["showEmail", "Email address"],
+    ["showWebsite", "Website"],
+  ];
+  return (
+    <Section title="Signature">
+      <p className="mb-3 text-xs text-slate-500">
+        Signed by whoever sends the email: their own name, job title, mobile and email (each person sets these under Settings → My account). Your company number is used when they have no mobile, and automatic messages are signed by your company.
+      </p>
+      <label className={lbl}>Lines to show</label>
+      {lines.map(([key, label]) => (
+        <label key={key} className={tick}><input type="checkbox" checked={block[key]} onChange={(e) => updateBlock(block.id, { [key]: e.target.checked })} /> {label}</label>
+      ))}
+    </Section>
+  );
+}
+
+function EmailFooterProps({ block }: { block: EmailFooterBlock }) {
+  const updateBlock = useEditor((s) => s.updateBlock);
+  return (
+    <Section title="Footer">
+      <div className={row}>
+        <label className={lbl}>Your own line (optional)</label>
+        <input className={inp} value={block.note} placeholder="e.g. You're receiving this because you're a customer of ours." onChange={(e) => updateBlock(block.id, { note: e.target.value }, false)} />
+      </div>
+      <label className={tick}><input type="checkbox" checked={block.showCompany} onChange={(e) => updateBlock(block.id, { showCompany: e.target.checked })} /> Company name and address</label>
+      <label className={`${tick} mb-3`}><input type="checkbox" checked={block.showContact} onChange={(e) => updateBlock(block.id, { showContact: e.target.checked })} /> Phone, email and website</label>
+      <div className={row}>
+        <label className={lbl}>Alignment</label>
+        <select className={inp} value={block.align} onChange={(e) => updateBlock(block.id, { align: e.target.value as EmailFooterBlock["align"] })}>
+          <option value="left">Left</option>
+          <option value="center">Centre</option>
+          <option value="right">Right</option>
+        </select>
+      </div>
+      <div className={row}><label className={lbl}>Text colour</label><input type="color" value={block.color} onChange={(e) => updateBlock(block.id, { color: e.target.value })} className="h-8 w-full rounded border border-slate-300" /></div>
+      <ColourRow label="Background" value={block.background} standard="#ffffff" onChange={(background) => updateBlock(block.id, { background })} />
+      <p className="text-[11px] text-slate-400">The company details themselves come from Company profile.</p>
     </Section>
   );
 }
@@ -373,6 +549,10 @@ function TermsProps({ block }: { block: TermsBlock }) {
           </div>
         ))}
         <button type="button" className="w-full rounded-md border border-dashed border-slate-300 py-1 text-xs text-slate-500 hover:border-orange-300 hover:text-orange-600" onClick={() => set([...block.items, { text: "New term" }])}>＋ Add term</button>
+        <p className="text-[11px] leading-snug text-slate-500">
+          Merge fields work here, e.g. <code>{"{{quote.validUntil}}"}</code> (the quote&apos;s expiry date),{" "}
+          <code>{"{{quote.validDays}}"}</code> (days it is valid for) and <code>{"{{quote.vatRate}}"}</code> (its VAT rate).
+        </p>
       </div>
     </Section>
   );
@@ -485,6 +665,41 @@ function DocumentProps() {
   const addRecipient = useEditor((s) => s.addRecipient);
   const updateRecipient = useEditor((s) => s.updateRecipient);
   const removeRecipient = useEditor((s) => s.removeRecipient);
+  const { email } = useDocEditorEnv();
+  // An email has no page size, margins or signers: its width is the 600px mail apps show.
+  if (email) {
+    return (
+      <Section title={email.kind ? "Email" : "Email frame"}>
+        <div className={row}><label className={lbl}>Name</label><input className={inp} value={doc.title} onChange={(e) => setTitle(e.target.value)} /></div>
+        <p className="text-xs text-slate-500">
+          {email.kind
+            ? "Click a block to change it, or drag new ones in from the left. The subject line is above the email. Preview shows it exactly as your customer receives it, in your frame."
+            : "The header, signature and footer around every customer email. Each email's own content appears in the message slot."}
+        </p>
+        {email.kind ? (
+          <p className="mt-2 text-xs text-slate-500">
+            The header, signature and footer around it are the shared frame — click them on the email to style them.
+          </p>
+        ) : (
+          <>
+            <p className="mb-3 mt-2 text-xs text-slate-500">Click the header, signature or footer on the email to style it. These colours apply to every customer email.</p>
+            {([
+              ["pageColor", "Page behind the email", "#f3f4f6"],
+              ["cardColor", "Email background", "#ffffff"],
+              ["buttonColor", "Buttons", "#0b0f19"],
+              ["accentColor", "Accent — links, the button's arrow, highlighted figures", cssColor(email.brand.accent, "#f1603c")],
+            ] as const).map(([key, label, standard]) => (
+              <ColourRow
+                key={key} label={label} value={doc.email?.[key]} standard={standard}
+                onChange={(value) => useEditor.getState().commit((d) => ({ ...d, email: { subject: "", ...d.email, [key]: value } }))}
+              />
+            ))}
+            <p className="text-[11px] text-slate-400">Your logo and company details come from Company profile.</p>
+          </>
+        )}
+      </Section>
+    );
+  }
   return (
     <>
       <Section title="Document">
@@ -516,7 +731,7 @@ function DocumentProps() {
                   value={r.party}
                   onChange={(e) => updateRecipient(r.id, { party: e.target.value as Recipient["party"] })}
                 >
-                  <option value="denago">Denago (whoever sends it)</option>
+                  <option value="denago">Our team (whoever sends it)</option>
                   <option value="customer">The customer</option>
                   <option value="custom">Someone specific…</option>
                 </select>

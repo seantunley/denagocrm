@@ -75,7 +75,7 @@ test("THE INTERVALS ARE THE ONES THE COST NOTE ASSUMES", () => {
    * emails that may take up to half an hour. Tightening it again is a real
    * cost, not a free tweak.
    */
-  for (const route of ["signing-jobs", "bot-outbox", "journeys", "automations", "statistics", "research"]) {
+  for (const route of ["signing-jobs", "bot-outbox", "journeys", "automations", "statistics", "research", "assistant"]) {
     assert.equal(scheduleOf(route), "*/30 * * * *", `${route} is recovery or batch work, not realtime`);
   }
 
@@ -95,7 +95,7 @@ test("EVERY FREQUENT CRON STILL WAKES THE DATABASE ON PURPOSE", () => {
    * INTERVAL, not the warm-up. This pins that distinction so the next person
    * reading the bill removes the right thing.
    */
-  for (const route of ["bot-outbox", "signing-jobs", "journeys", "automations", "statistics", "research"]) {
+  for (const route of ["bot-outbox", "signing-jobs", "journeys", "automations", "statistics", "research", "assistant"]) {
     const code = src(`src/app/api/cron/${route}/route.ts`);
     assert.match(code, /warmUpForCron\(/, `${route} wakes the database before sweeping`);
   }

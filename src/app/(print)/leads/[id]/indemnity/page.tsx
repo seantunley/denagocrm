@@ -5,6 +5,7 @@ import { requireLeadReadAccess } from "@/lib/permissions";
 import PrintActions from "@/components/PrintActions";
 import PrintDocShell, { InfoBlock } from "@/components/print/PrintDocShell";
 import { getCompanyProfile } from "@/lib/companyProfile";
+import { getRegionalSettings } from "@/lib/settings";
 import { getDocTemplate } from "@/lib/docTemplateStore";
 import { formatDate } from "@/lib/format";
 
@@ -41,8 +42,8 @@ export default async function IndemnityPrintPage({
         company={company}
         template={tpl}
         title="Test-drive indemnity"
-        meta={[`Date: ${formatDate(new Date())}`]}
-        parties={{ left: "Driver signature · Date", right: "For Denago Cape Town · Date" }}
+        meta={[`Date: ${formatDate(new Date(), await getRegionalSettings())}`]}
+        parties={{ left: "Driver signature · Date", right: `For ${company.name} · Date` }}
         bodySection="waiver"
         bodyTitle="Indemnity & waiver"
       >
@@ -55,7 +56,7 @@ export default async function IndemnityPrintPage({
           <InfoBlock
             title="Vehicle"
             lines={[
-              lead.product?.name ?? "Denago EV",
+              lead.product?.name ?? "Demo vehicle",
               lead.color ? `Colour: ${lead.color}` : null,
             ]}
           />

@@ -78,14 +78,17 @@ test("each print page gates on its OWN key, and the gate requires a published ve
 
 // ── the context ─────────────────────────────────────────────────────────────
 
-test("numbering is exactly what the old pages print", () => {
-  assert.equal(invoiceNumber(1234), "INV-1234");
+test("numbering is exactly what the old pages print — the invoice its OWN number, not the quote's", () => {
+  // Sean, 2026-10-07: never the quote number with a different prefix.
+  assert.equal(invoiceNumber(123), "INV-000123");
+  assert.equal(invoiceNumber(null), "Not yet issued");
   assert.equal(agreementNumber(1234), "SA-1234");
-  const tokens = quoteDocTokens({ number: 77, status: "accepted" }, person, money);
-  assert.equal(tokens["invoice.number"], "INV-77");
-  assert.equal(tokens["agreement.number"], "SA-77");
-  // Old pages: number={`INV-${quote.number}`} and number={`SA-${quote.number}`}.
-  assert.match(read("src/app/(print)/quotes/[id]/invoice/page.tsx"), /number=\{`INV-\$\{quote\.number\}`\}/);
+  const tokens = quoteDocTokens({ number: 1077, status: "accepted", invoiceNumber: 5 }, person, money);
+  assert.equal(tokens["invoice.number"], "INV-000005");
+  assert.equal(tokens["agreement.number"], "SA-1077");
+  // The old page prints the same issued number.
+  assert.match(read("src/app/(print)/quotes/[id]/invoice/page.tsx"), /number=\{formatInvoiceNumber\(quote\.invoiceNumber\)\}/);
+  assert.doesNotMatch(read("src/app/(print)/quotes/[id]/invoice/page.tsx"), /INV-\$\{quote\.number\}/);
   assert.match(read("src/app/(print)/quotes/[id]/agreement/page.tsx"), /number=\{`SA-\$\{quote\.number\}`\}/);
 });
 
@@ -135,7 +138,7 @@ test("banking, payment terms and clauses come from the old template, and a secti
 
 test("buildQuoteContext carries the new tokens and the tax mode", () => {
   const merge = read("src/lib/docbuilder/merge.ts");
-  assert.match(merge, /\.\.\.quoteDocTokens\(quote, billTo, pricing\)/);
+  assert.match(merge, /\.\.\.quoteDocTokens\(quote, billTo, pricing, new Date\(\), r\)/);
   assert.match(merge, /taxInclusive: quote\.taxInclusive !== false/);
 });
 
@@ -150,7 +153,7 @@ function bound(tokens: Record<string, string>, vars: Record<string, unknown>) {
       "quote.subtotal": "R 86,956.52",
       "quote.vat": "R 13,043.48",
       "customer.name": "Jane Buyer",
-      ...quoteDocTokens({ number: 77, status: "accepted" }, person, money),
+      ...quoteDocTokens({ number: 77, status: "accepted", invoiceNumber: 77 }, person, money),
       ...tokens,
     },
     items: [],
@@ -159,21 +162,15 @@ function bound(tokens: Record<string, string>, vars: Record<string, unknown>) {
   };
 }
 
-test("the seeded invoice prints its number, and the banking box only when there is banking text", () => {
-  const doc = standardTemplateFor("invoice");
-  const withText = legacyDocTextTokens("invoice", defaultTemplate("invoice"));
-  const html = renderDocumentHtml(doc, bound(withText.tokens, { quote: { taxInclusive: true }, ...withText.vars }));
-  assert.match(html, /INV-77/);
-  assert.match(html, /PAYMENT DETAILS/);
-  assert.match(html, /Banking details:/);
-  assert.doesNotMatch(html, /PAYMENT TERMS/, "no payment terms set → no box");
-  assert.doesNotMatch(html, /Subtotal:/, "inclusive quote → one total line, as documentTotals()");
+test("the seeded invoice prints its number, its banking and payment cards, and resolves every token", () => {
+  // The quotation-style invoice (showcaseInvoice.test has the layout itself).
+  const html = renderDocumentHtml(standardTemplateFor("invoice"), bound({}, { quote: { taxInclusive: true } }));
+  assert.match(html, /INV-000077/);
+  assert.match(html, /TAX INVOICE/);
+  assert.match(html, /BANKING DETAILS/);
+  assert.match(html, /PAYMENT TERMS/);
+  assert.match(html, /R 86,956\.52/, "subtotal excl. VAT in the totals box");
   assert.doesNotMatch(html, /\{\{/, "every token resolves");
-
-  const none = legacyDocTextTokens("invoice", { ...defaultTemplate("invoice"), sections: { banking: false } });
-  const bare = renderDocumentHtml(doc, bound(none.tokens, { quote: { taxInclusive: false }, ...none.vars }));
-  assert.doesNotMatch(bare, /PAYMENT DETAILS/);
-  assert.match(bare, /Subtotal: R 86,956\.52/, "exclusive quote → subtotal and VAT above the total");
 });
 
 test("the seeded agreement prints SA-, the purchase price band, clauses and both signature lines", () => {

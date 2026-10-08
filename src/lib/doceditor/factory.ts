@@ -3,6 +3,8 @@ import type {
   DocumentModel, DocumentPage, DocumentRow, DocumentColumn, DocumentBlock, BlockType,
   OverlayField, Recipient, PricingLine,
 } from "./model";
+import { DEFAULT_REGIONAL } from "@/lib/format";
+import { EMAIL_FOOTER_DEFAULTS, EMAIL_HEADER_DEFAULTS, EMAIL_SIGNATURE_DEFAULTS } from "./emailDefaults";
 
 export function uid(): string {
   // crypto.randomUUID is available in modern browsers and Node 18+.
@@ -42,14 +44,14 @@ export function newBlock(type: BlockType): DocumentBlock {
       return { id: uid(), type, ...emptyLayout };
     case "pricing":
       return {
-        id: uid(), type, ...emptyLayout, currency: "ZAR", bound: false, showTax: true, showDiscount: true, accent: "#ea580c",
+        id: uid(), type, ...emptyLayout, currency: DEFAULT_REGIONAL.currency, bound: false, showTax: true, showDiscount: true, accent: "#ea580c",
         lines: [newPricingLine({ name: "Denago Rover XL", unitPrice: 189900, qty: 1 }), newPricingLine({ name: "On-road & handover", unitPrice: 4500, qty: 1 })],
       };
     case "table":
       return {
         id: uid(), type, ...emptyLayout, headerBg: "#020617", headerColor: "#ffffff",
         columns: [{ header: "Description", align: "left", widthPct: 60 }, { header: "Qty", align: "right", widthPct: 20 }, { header: "Amount", align: "right", widthPct: 20 }],
-        rows: [{ cells: [{ value: "Item" }, { value: "1" }, { value: "R 0.00" }] }],
+        rows: [{ cells: [{ value: "Item" }, { value: "1" }, { value: "0.00" }] }],
       };
     case "banner":
       return { id: uid(), type, ...emptyLayout, title: "QUOTATION", docNumber: "{{quote.number}}", bg: "#020617", accent: "#ea580c", showLogo: true };
@@ -68,7 +70,7 @@ export function newBlock(type: BlockType): DocumentBlock {
     case "totalBand":
       return { id: uid(), type, ...emptyLayout, label: "TOTAL INCL. VAT", amount: "{{quote.total}}", color: "#ea580c" };
     case "terms":
-      return { id: uid(), type, ...emptyLayout, title: "TERMS", items: [{ text: "Prices include 15% VAT." }] };
+      return { id: uid(), type, ...emptyLayout, title: "TERMS", items: [{ text: "Prices include VAT." }] };
     case "footer":
       // Brand footer — resolves name, contact details and socials from the
       // editable Company Profile at render time, so it stays correct when the
@@ -95,7 +97,8 @@ export function newBlock(type: BlockType): DocumentBlock {
     case "totalsBox":
       return { id: uid(), type, ...emptyLayout, bg: "#020617", accent: "#ea580c", totalLabel: "TOTAL INCL. VAT", totalAmount: "{{quote.total}}", rows: [
         { label: "Subtotal (excl. VAT)", value: "{{quote.subtotal}}" },
-        { label: "VAT (15%)", value: "{{quote.vat}}" },
+        // The quote's own rate, as issued — never a figure typed into the layout.
+        { label: "VAT ({{quote.vatRate}})", value: "{{quote.vat}}" },
       ] };
     case "acceptance":
       return {
@@ -104,12 +107,37 @@ export function newBlock(type: BlockType): DocumentBlock {
         nameLabel: "Customer Name", nameValue: "{{customer.name}}", signatureLabel: "Signature", dateLabel: "Date",
       };
     case "footerBand":
-      return { id: uid(), type, ...emptyLayout, subtitle: "Authorised Denago EV Dealer", bg: "#020617", accent: "#ea580c", bgImage: "" };
+      return { id: uid(), type, ...emptyLayout, subtitle: "{{company.tagline}}", bg: "#020617", accent: "#ea580c", bgImage: "" };
+    // Customer email blocks (./emailRender.ts).
+    case "emailBody":
+      return { id: uid(), type, ...emptyLayout };
+    case "emailHeader":
+      return { id: uid(), type, ...emptyLayout, ...EMAIL_HEADER_DEFAULTS };
+    case "emailSignature":
+      return { id: uid(), type, ...emptyLayout, ...EMAIL_SIGNATURE_DEFAULTS };
+    case "emailFooter":
+      return { id: uid(), type, ...emptyLayout, ...EMAIL_FOOTER_DEFAULTS };
+    case "emailButton":
+      return { id: uid(), type, ...emptyLayout, token: "signing_link", label: "Open & sign", style: "dark" };
+    case "emailFacts":
+      return { id: uid(), type, ...emptyLayout, items: [
+        { label: "QUOTE", value: "{{quote_number}}", sub: "", highlight: false },
+        { label: "TOTAL INCL. VAT", value: "{{total}}", sub: "", highlight: true },
+      ] };
   }
 }
 
 /** Composes the branded "Standard" quotation layout as an editable document. */
-export function standardQuoteTemplate(): DocumentModel {
+/**
+ * The standard quotation a workspace starts from.
+ *
+ * `automotive` adds what only a vehicle dealer quotes: the "vehicle of interest"
+ * card, the build-slot deposit and the low-speed-vehicle disclaimer. It used to
+ * be unconditional — and the disclaimer named Denago — so a breastfeeding-art
+ * studio's quotes told its customers about "Denago EVs". Generic by default; the
+ * callers pass the workspace's module.
+ */
+export function standardQuoteTemplate({ automotive = false }: { automotive?: boolean } = {}): DocumentModel {
   const meta = (text: string, align: "left" | "center" | "right") => {
     const b = newBlock("text");
     if (b.type === "text") b.value = [{ type: "p", align, children: [{ text }] }];
@@ -124,10 +152,13 @@ export function standardQuoteTemplate(): DocumentModel {
   total.settings = { width: 55, horizontalAlignment: "right" };
   const terms = newBlock("terms");
   if (terms.type === "terms") terms.items = [
-    { text: "Quote valid for 14 days." },
-    { text: "50% deposit to secure build slot; balance on delivery." },
-    { text: "Prices are recommended retail, including 15% VAT, and subject to change without notice." },
-    { text: "Denago EVs are Low-Speed Vehicles for private-property use and are not road registered." },
+    // Tokens, not literals: the validity comes from the quote's own date (set
+    // from Settings → Quotes) and the VAT from its own lines, so the wording can
+    // never contradict the figures above it.
+    { text: "Quote valid until {{quote.validUntil}}." },
+    ...(automotive ? [{ text: "50% deposit to secure build slot; balance on delivery." }] : []),
+    { text: "Prices are recommended retail, including {{quote.vatRate}} VAT, and subject to change without notice." },
+    ...(automotive ? [{ text: "Our EVs are Low-Speed Vehicles for private-property use and are not road registered." }] : []),
     { text: "E&OE." },
   ];
 
@@ -143,10 +174,14 @@ export function standardQuoteTemplate(): DocumentModel {
         newColumn(34, [meta("Valid until: {{quote.validUntil}}", "center")]),
         newColumn(33, [meta("Prepared by: {{preparedBy}}", "right")]),
       ]),
-      newRow([
-        newColumn(50, [infoCard("PREPARED FOR", "{{customer.name}}", "{{customer.phone}}\n{{customer.email}}", "#ea580c")]),
-        newColumn(50, [infoCard("VEHICLE OF INTEREST", "{{vehicle}}", "Demo drives available at your estate or our Maitland showroom.", "#020617")]),
-      ]),
+      newRow(
+        automotive
+          ? [
+              newColumn(50, [infoCard("PREPARED FOR", "{{customer.name}}", "{{customer.phone}}\n{{customer.email}}", "#ea580c")]),
+              newColumn(50, [infoCard("VEHICLE OF INTEREST", "{{vehicle}}", "Demo drives available at your estate or our showroom.", "#020617")]),
+            ]
+          : [newColumn(100, [infoCard("PREPARED FOR", "{{customer.name}}", "{{customer.phone}}\n{{customer.email}}", "#ea580c")])],
+      ),
       newRow([newColumn(100, [newBlock("lineItems")])]),
       newRow([newColumn(100, [total])]),
       newRow([newColumn(100, [terms])]),

@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import path from "node:path";
 
 import { quoteBillTo, loadBillToFleets, type BillToFleet } from "../src/lib/quoteBillTo";
+import { quoteDocTokens } from "../src/lib/docbuilder/quoteDocs";
 import { withTenant } from "../src/lib/tenantScope";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -114,14 +115,40 @@ test("precedence is fleet → contact → lead, and an unlinked quote still has 
   });
 });
 
-test("a company CONTACT still prints as the company, with no attention line", async () => {
-  // contactName() already returns the company instead of the person when
-  // isCompany && company. That rule is untouched — a business contact is not a
-  // fleet account and has no separate person to be 'attention of'.
+test("a company CONTACT prints as the company, with its person as the Attention line (Sean, 2026-10-07)", async () => {
+  // "Tekili Farm" printed with no contact name. The company is the addressee;
+  // the person on the record is who it's for — as on a fleet invoice.
   const company = { ...MANAGER, isCompany: true, company: "Sandton Golf Carts (Pty) Ltd" };
   const billTo = quoteBillTo({ contact: company, lead: null }, null);
   assert.equal(billTo.name, "Sandton Golf Carts (Pty) Ltd");
-  assert.equal(billTo.attention, null);
+  assert.equal(billTo.attention, "Thandi Mokoena");
+  assert.match(quoteDocTokens({ number: 1, status: "accepted" }, billTo, { depositCents: 0, balanceCents: 0 })["invoice.billedTo"], /^Attention: Thandi Mokoena\n/);
+});
+
+test("the bill-to block: the person, then phone, email, and the address over two lines (street; town)", async () => {
+  const farm = {
+    ...MANAGER, isCompany: true, company: "Hillside Farm", firstName: "Pieter", lastName: "Botha",
+    address: "7C Cell 1, Main Road", suburb: null, city: "Hermanus", province: "Western Cape", postalCode: "7200",
+  };
+  const billTo = quoteBillTo({ contact: farm, lead: null }, null);
+  assert.equal(billTo.address, "7C Cell 1, Main Road, Hermanus, Western Cape, 7200", "the one-line address other pages print is unchanged");
+  assert.deepEqual(billTo.addressLines, ["7C Cell 1, Main Road", "Hermanus, Western Cape, 7200"]);
+  assert.equal(
+    quoteDocTokens({ number: 1, status: "accepted" }, billTo, { depositCents: 0, balanceCents: 0 })["invoice.billedTo"],
+    "Attention: Pieter Botha\n082 555 0199\nthandi@klooflodge.co.za\n7C Cell 1, Main Road\nHermanus, Western Cape, 7200\nVAT no: 9999999999",
+  );
+});
+
+test("no Attention line repeating the company — the form's 'First name / account name' may hold it", async () => {
+  const sameName = { ...MANAGER, isCompany: true, firstName: "Sandton Golf Carts", lastName: null, company: "Sandton Golf Carts" };
+  assert.equal(quoteBillTo({ contact: sameName, lead: null }, null).attention, null);
+  const splitSame = { ...MANAGER, isCompany: true, firstName: "sandton golf", lastName: "Carts ", company: " Sandton Golf Carts" };
+  assert.equal(quoteBillTo({ contact: splitSame, lead: null }, null).attention, null, "case and spacing don't matter");
+  // A company account with no company name prints the person as the addressee — nothing to attend.
+  const noCompany = { ...MANAGER, isCompany: true, company: null };
+  assert.equal(quoteBillTo({ contact: noCompany, lead: null }, null).attention, null);
+  // An individual never gets one.
+  assert.equal(quoteBillTo({ contact: { ...MANAGER, company: "Works at Acme" }, lead: null }, null).attention, null);
 });
 
 /* ── the tenant boundary ─────────────────────────────────────────────────── */
@@ -251,7 +278,6 @@ test("every document that states a customer resolves the fleet first", () => {
   for (const rel of [
     "src/lib/docbuilder/merge.ts",
     "src/lib/pdf/QuoteDoc.tsx",
-    "src/components/print/QuotePrintDoc.tsx",
     "src/app/(print)/quotes/[id]/invoice/page.tsx",
     "src/app/(print)/quotes/[id]/agreement/page.tsx",
     "src/app/(print)/quotes/[id]/delivery-note/page.tsx",
@@ -280,10 +306,9 @@ test("the fleet is a required parameter, not an optional one a caller can forget
   // asserts the compiler was given something to enforce.
   assert.match(
     shipped("src/lib/docbuilder/merge.ts"),
-    /buildQuoteContext\(quote: QuoteForPrint, fleet: BillToFleet \| null\)/,
+    /buildQuoteContext\(quote: QuoteForPrint, fleet: BillToFleet \| null, r: Regional\)/,
   );
   assert.match(shipped("src/lib/pdf/QuoteDoc.tsx"), /fleet: BillToFleet \| null;/);
-  assert.match(shipped("src/components/print/QuotePrintDoc.tsx"), /fleet: BillToFleet \| null;/);
 });
 
 /* ── creating one ────────────────────────────────────────────────────────── */

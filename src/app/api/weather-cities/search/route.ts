@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { apiAuthErrorResponse, requireApiOwner } from "@/lib/auth";
+import { apiAuthErrorResponse, requireApiTenantOwner } from "@/lib/auth";
 import { isValidZone } from "@/lib/weatherCities";
 
 /**
@@ -31,7 +31,7 @@ const UPSTREAM = "https://geocoding-api.open-meteo.com/v1/search";
 
 export async function GET(request: Request) {
   try {
-    await requireApiOwner();
+    await requireApiTenantOwner();
   } catch (err) {
     return apiAuthErrorResponse(err) ?? NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }

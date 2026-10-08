@@ -7,6 +7,8 @@ import { MetricCard, MetricStrip, StatusPill } from "@/components/visual-system"
 import { EntityDetailShell } from "@/components/entity-detail-shell";
 import { ResponsiveEntityTable } from "@/components/responsive-patterns";
 import { cancelDistribution, pauseDistribution, resumeDistribution, retryDistributionFailures } from "@/app/actions/surveyDistributions";
+import { SaveForm, SaveButton } from "@/components/SaveForm";
+import ConfirmActionDialog from "@/components/ConfirmActionDialog";
 
 export default async function SurveyDistributionDetailPage({ params }: { params: Promise<{ id: string }> }) {
   await requirePermission("surveys.manage");
@@ -50,10 +52,10 @@ export default async function SurveyDistributionDetailPage({ params }: { params:
     status={<StatusPill tone={distribution.status === "completed" ? "success" : distribution.status === "completed_with_errors" ? "warning" : distribution.status === "cancelled" ? "danger" : "neutral"}>{distribution.status.replaceAll("_", " ")}</StatusPill>}
     description={`${distribution.surveyTitle} · version ${distribution.surveyVersion} · ${distribution.purpose.replaceAll("_", " ")} · ${distribution.channel}`}
     actions={<>
-      {new Set(["scheduled", "queued", "sending"]).has(distribution.status) && <form action={pauseDistribution}><input type="hidden" name="id" value={id} /><button className="btn-secondary">Pause</button></form>}
-      {distribution.status === "paused" && <form action={resumeDistribution}><input type="hidden" name="id" value={id} /><button className="btn-primary">Resume</button></form>}
-      {distribution.failedCount > 0 && <form action={retryDistributionFailures}><input type="hidden" name="id" value={id} /><button className="btn-secondary">Retry permanent failures</button></form>}
-      {open.has(distribution.status) && <form action={cancelDistribution}><input type="hidden" name="id" value={id} /><button className="btn-secondary">Cancel remaining</button></form>}
+      {new Set(["scheduled", "queued", "sending"]).has(distribution.status) && <SaveForm action={pauseDistribution}><input type="hidden" name="id" value={id} /><SaveButton className="btn-secondary" pendingLabel="Pausing…">Pause</SaveButton></SaveForm>}
+      {distribution.status === "paused" && <SaveForm action={resumeDistribution}><input type="hidden" name="id" value={id} /><SaveButton className="btn-primary" pendingLabel="Resuming…">Resume</SaveButton></SaveForm>}
+      {distribution.failedCount > 0 && <SaveForm action={retryDistributionFailures}><input type="hidden" name="id" value={id} /><SaveButton className="btn-secondary" pendingLabel="Queuing…">Retry permanent failures</SaveButton></SaveForm>}
+      {open.has(distribution.status) && <ConfirmActionDialog trigger={<button type="button" className="btn-secondary">Cancel remaining</button>} title="Cancel the remaining invites?" description="Invites not yet sent will not go out. Invites already delivered are not affected." confirmLabel="Cancel remaining" destructive onConfirm={cancelDistribution.bind(null, id)} />}
     </>}
   >
 

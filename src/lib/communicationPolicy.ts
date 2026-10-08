@@ -191,7 +191,9 @@ export async function canContactPerson(args: {
         tenantId: args.tenantId,
         direction: "outbound",
         createdAt: { gte: new Date(now.getTime() - 24 * 60 * 60 * 1000) },
-        type: args.requestedChannel === "email" ? "email" : "sms",
+        // The requested channel's own rows. WhatsApp used to be counted against
+        // SMS rows, so WhatsApp marketing was never capped by itself (gap #33).
+        type: args.requestedChannel,
       },
     });
     if (recent >= 3) return { allowed: false, reason: "frequency_cap" };

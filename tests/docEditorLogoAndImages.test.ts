@@ -41,7 +41,7 @@ test("the Denago logo path is no longer hard-coded as the banner's only source",
   // how the callers that still pass the built-in mark (quotePrintDocument) get it too.
   for (const rel of ["src/lib/signing/render.ts", "src/lib/doceditor/generate.ts"]) {
     assert.match(shipped(rel), /const logo = await documentLogo\(/, `${rel} resolves the workspace logo`);
-    assert.match(shipped(rel), /bound: true, logo \}/, `${rel} puts it on the context`);
+    assert.match(shipped(rel), /bound: true, logo, regional \}/, `${rel} puts it on the context`);
   }
   // …and the canvas is given the same one.
   assert.match(shipped("src/app/doc-editor/[id]/page.tsx"), /documentLogo\(company\.logoUrl\)/);
@@ -82,7 +82,9 @@ test("the upload action is permission-gated, checks the bytes, and files under t
   const start = code.indexOf("export async function uploadDocEditorImage(");
   assert.notEqual(start, -1);
   const body = code.slice(start, code.indexOf("\n}\n", start));
-  assert.match(body, /requirePermission\("docbuilder\.manage"\)/);
+  // Into a layout this person may edit (layoutAccess.test), docbuilder.manage otherwise.
+  assert.match(body, /requireAnyPermission\("docbuilder\.manage", "document_templates\.manage"\)/);
+  assert.match(body, /template \? await canEditLayout\(user, template\.key\) : await hasPermission\(user, "docbuilder\.manage"\)/);
   assert.match(body, /checkDocImage\(file\.size/);
   assert.match(body, /saveFile\(bytes, `image\.\$\{type\.ext\}`, type\.mime, tenantId\)/, "stored with the SNIFFED type, not the browser's");
   assert.match(body, /template \? template\.tenantId : await actingOwnerTenantId\(\)/);

@@ -5,12 +5,13 @@ import bcrypt from "bcryptjs";
 import QRCode from "qrcode";
 import { revalidatePath } from "next/cache";
 import { basePrisma, prisma } from "@/lib/db";
-import { createSessionCookie, getActiveTenantId, requireUser, requireOwner } from "@/lib/auth";
+import { createSessionCookie, getActiveTenantId, requireUser, requireOwner, requireTenantOwner } from "@/lib/auth";
 import { DEFAULT_BRAND, brandForTenant } from "@/lib/tenantBrand";
 import { encryptValue, decryptValue, putSetting } from "@/lib/settings";
 import { GOVERNANCE_TX, logAuditStrict } from "@/lib/audit";
 import { lockGovernanceAdmins } from "@/lib/governanceLock";
 import { isActingTenantMember } from "@/lib/tenantActor";
+import { PASSWORD_RULE, validPassword } from "@/lib/passwordPolicy";
 import {
   generateTotpSecret,
   totpKeyUri,
@@ -233,7 +234,9 @@ export async function setEmailOtp(enabled: boolean): Promise<ActionResult> {
 
 export async function saveSessionPolicy(formData: FormData) {
   return asActionResult(async () => {
-    const owner = await requireOwner();
+    const owner = await requireTenantOwner();
+    const tenantId = await getActiveTenantId();
+    if (!tenantId) refuse("Your session has no workspace — sign in again.");
     const minutes = parseInt(String(formData.get("idleMinutes") ?? "60"), 10);
     const safe = isNaN(minutes) || minutes < 5 ? 60 : Math.min(minutes, 1440);
     let revokedAt: number | null = null;
@@ -243,7 +246,13 @@ export async function saveSessionPolicy(formData: FormData) {
       // already live while the person was told the save failed — and every
       // existing session stayed valid under a policy nobody knew had changed.
       await putSetting("SESSION_IDLE_MINUTES", String(safe), tx);
-      await tx.$executeRaw`UPDATE "User" SET "sessionVersion" = "sessionVersion" + 1`;
+      // THIS workspace's people only. The policy is a per-workspace setting, but
+      // the sign-out bumped every User on the platform: one workspace changing
+      // its idle timeout logged out every other workspace's staff.
+      await tx.$executeRaw`
+        UPDATE "User" SET "sessionVersion" = "sessionVersion" + 1
+        WHERE "id" IN (SELECT "userId" FROM "TenantMember" WHERE "tenantId" = ${tenantId})
+      `;
       // The owner's own new version, read inside the same transaction.
       const rows = await tx.$queryRaw<Array<{ sessionVersion: number }>>`
         SELECT "sessionVersion" FROM "User" WHERE "id" = ${owner.id}
@@ -276,16 +285,27 @@ export async function saveSessionPolicy(formData: FormData) {
  * Membership, not assignability: a DISABLED member must stay manageable or
  * "Reactivate" cannot reach its own target.
  */
-async function assertManageableUser(userId: string): Promise<void> {
+async function assertManageableUser(
+  userId: string,
+  caller: { role: string },
+): Promise<void> {
   if (!(await isActingTenantMember(userId))) {
     throw new ActionRefusal("That person is not a member of this workspace.");
+  }
+  // A WORKSPACE owner manages their own team — never a PLATFORM owner who
+  // happens to be a member (role "owner" is platform-wide, see auth.ts).
+  if (caller.role !== "owner") {
+    const target = await basePrisma.user.findUnique({ where: { id: userId }, select: { role: true } });
+    if (target?.role === "owner") throw new ActionRefusal("Platform administrators can only be managed by the platform.");
   }
 }
 
 export async function setUserRole(userId: string, role: "owner" | "member"): Promise<ActionResult> {
   return asActionResult(async () => {
+    // PLATFORM owner only: "owner" is a platform-wide role (auth.ts), so granting
+    // it is not a workspace decision.
     const owner = await requireOwner();
-    await assertManageableUser(userId);
+    await assertManageableUser(userId, owner);
     await prisma.user.findUniqueOrThrow({ where: { id: userId }, select: { id: true } });
     const updated = await basePrisma.$transaction(async (tx) => {
       // Lock on the REQUESTED end state, not on what we read beforehand.
@@ -331,8 +351,8 @@ export async function setUserRole(userId: string, role: "owner" | "member"): Pro
 
 export async function ownerResetUser2fa(userId: string): Promise<ActionResult> {
   return asActionResult(async () => {
-    const owner = await requireOwner();
-    await assertManageableUser(userId);
+    const owner = await requireTenantOwner();
+    await assertManageableUser(userId, owner);
     const before = await prisma.user.findUniqueOrThrow({ where: { id: userId } });
     await basePrisma.$transaction(async (tx) => {
       const target = await tx.user.update({
@@ -375,9 +395,9 @@ export async function ownerResetUser2fa(userId: string): Promise<ActionResult> {
 
 export async function revokeUserSessions(userId: string): Promise<ActionResult> {
   return asActionResult(async () => {
-    const owner = await requireOwner();
+    const owner = await requireTenantOwner();
     if (userId === owner.id) throw new ActionRefusal("Use sign out to end your current session");
-    await assertManageableUser(userId);
+    await assertManageableUser(userId, owner);
     const target = await prisma.user.findUniqueOrThrow({ where: { id: userId } });
     await basePrisma.$transaction(async (tx) => {
       await bumpUserSessionVersion(userId, tx);
@@ -394,11 +414,54 @@ export async function revokeUserSessions(userId: string): Promise<ActionResult> 
   });
 }
 
+/**
+ * An owner sets a new password for a team member who is locked out (there is
+ * no other way back in). Same floor as every other password; the member is
+ * signed out everywhere, and the owner tells them the new password themselves.
+ *
+ * Owners are excluded: one owner must not be able to take over another's
+ * account this way — owners change their own password.
+ */
+export async function resetTeamMemberPassword(userId: string, formData: FormData): Promise<ActionResult> {
+  return asActionResult(async () => {
+    const owner = await requireTenantOwner();
+    if (userId === owner.id) refuse("Change your own password under My Account.");
+    await assertManageableUser(userId, owner);
+    const password = String(formData.get("password") ?? "");
+    if (!validPassword(password)) refuse(`The new password must be ${PASSWORD_RULE}.`);
+    const target = await prisma.user.findUniqueOrThrow({ where: { id: userId }, select: { name: true, role: true } });
+    const ownerRefusal = "Another owner's password can't be reset here — they change it themselves.";
+    if (target.role === "owner") refuse(ownerRefusal);
+    const passwordHash = await bcrypt.hash(password, 12);
+    await basePrisma.$transaction(async (tx) => {
+      // The non-owner check is re-made by the write itself: someone promoted to
+      // owner after the read above matches nothing, and the reset refuses.
+      const { count } = await tx.user.updateMany({
+        where: { id: userId, role: { not: "owner" } },
+        data: { passwordHash, passwordChangedAt: new Date() },
+      });
+      if (count === 0) refuse(ownerRefusal);
+      // Signed out everywhere — the same raw bump the role editor uses
+      // (sessionVersion is not on the Prisma model).
+      await tx.$executeRaw`UPDATE "User" SET "sessionVersion" = "sessionVersion" + 1 WHERE "id" = ${userId}`;
+      await logAuditStrict({
+        action: "security.password_reset_by_owner",
+        summary: `Reset ${target.name}'s password; their sessions were signed out`,
+        entityType: "User",
+        entityId: userId,
+        user: owner,
+      }, tx);
+    }, GOVERNANCE_TX);
+    revalidatePath("/settings/access");
+    return { success: `${target.name}'s password was reset. Give them the new password — they've been signed out everywhere.` };
+  });
+}
+
 export async function setUserDisabled(userId: string, disabled: boolean): Promise<ActionResult> {
   return asActionResult(async () => {
-    const owner = await requireOwner();
+    const owner = await requireTenantOwner();
     if (userId === owner.id) throw new ActionRefusal("You cannot disable your own account");
-    await assertManageableUser(userId);
+    await assertManageableUser(userId, owner);
     const target = await prisma.user.findUniqueOrThrow({ where: { id: userId } });
     await basePrisma.$transaction(async (tx) => {
       // Same invariant, same lock, same rule about staleness: ANY disable could

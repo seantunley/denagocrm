@@ -23,7 +23,7 @@ import {
 } from "@/components/ui/command";
 import { buildNav } from "@/components/nav-config";
 import { isPathEnabled } from "@/lib/modules/registry";
-import { SETTINGS_NAV_GROUPS, settingsHref, settingsItemEnabled } from "@/lib/settings-navigation";
+import { settingsHref, visibleSettingsGroups } from "@/lib/settings-navigation";
 import { searchRecords } from "@/app/actions/search";
 // The constants and the type come from a plain module, not the action: a
 // "use server" file may only export async functions.
@@ -35,10 +35,14 @@ export function openCommandMenu() {
 
 export default function CommandMenu({
   isAdmin,
+  isPlatformOwner = false,
   permissions = [],
   enabledModules,
 }: {
+  /** Owner of the workspace being viewed. */
   isAdmin: boolean;
+  /** The platform-wide owner role — sees platform-level settings too. */
+  isPlatformOwner?: boolean;
   permissions?: string[];
   enabledModules?: string[];
 }) {
@@ -75,12 +79,7 @@ export default function CommandMenu({
     ...(can("jobcards.manage") ? [{ href: "/jobcards/new", label: "New job card", icon: Plus }] : []),
     { href: "/search", label: "Search accessible records", icon: Search },
   ].filter((action) => packOn(action.href));
-  const settingsGroups = SETTINGS_NAV_GROUPS.map((group) => ({
-    ...group,
-    items: group.items.filter(
-      (item) => (isAdmin || item.key === "account") && settingsItemEnabled(item, enabledSet),
-    ),
-  })).filter((group) => group.items.length > 0);
+  const settingsGroups = visibleSettingsGroups({ isOwner: isAdmin, isPlatformOwner, permissions }, enabledSet);
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {

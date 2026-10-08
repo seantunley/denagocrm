@@ -1,7 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { requireOwner } from "@/lib/auth";
+import { requireTenantOwner } from "@/lib/auth";
 import { getSetting, putSetting } from "@/lib/settings";
 import { logAudit } from "@/lib/audit";
 import { withActingStaffScope } from "@/lib/actingScope";
@@ -30,7 +30,7 @@ export type SigningSecuritySettings = {
  */
 export async function readSigningSecuritySettings(): Promise<SigningSecuritySettings> {
   return withActingStaffScope(async () => {
-    await requireOwner();
+    await requireTenantOwner();
     const [policy, minValue] = await Promise.all([
       getSetting(SIGNING_OTP_POLICY_KEY).catch(() => null),
       getSetting(SIGNING_OTP_MIN_VALUE_KEY).catch(() => null),
@@ -52,7 +52,7 @@ export async function saveSigningSecuritySettings(
   formData: FormData,
 ): Promise<{ error?: string; ok?: string }> {
   return withActingStaffScope(async () => {
-    const user = await requireOwner();
+    const user = await requireTenantOwner();
 
     const policy = parseOtpPolicy(String(formData.get("policy") ?? ""));
     const rawMin = String(formData.get("minValue") ?? "").trim();
@@ -82,3 +82,6 @@ export async function saveSigningSecuritySettings(
     return { ok: "Saved." };
   });
 }
+
+// Automatic signing reminders were switched here. They are the ready-made
+// "Signing reminder" journey now, switched on Journeys — this page shows its state.

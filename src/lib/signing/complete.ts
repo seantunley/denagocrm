@@ -5,13 +5,14 @@ import { parseDocument } from "@/lib/doceditor/model";
 import { renderDocumentHtml, type StampField } from "@/lib/doceditor/serialize";
 import { htmlToPdf } from "@/lib/customDocs";
 import { sealPdf } from "@/lib/pdf/seal";
+import { getCompanyProfile } from "@/lib/companyProfile";
 import { saveFile, readFile, deleteFile } from "@/lib/storage";
-import { formatDateTime } from "@/lib/format";
+import { DEFAULT_REGIONAL, formatDateTime, type Regional } from "@/lib/format";
 import { logError } from "@/lib/errorLog";
 import { resolveTenantActor } from "@/lib/tenantActor";
 import { bindCtx, logoDataUri } from "./render";
 import { embedDocImages } from "@/lib/doceditor/renderGlobals";
-import { logSignEvent } from "./events";
+import { buildSignEvent, logSignEvent } from "./events";
 import { CLOSED_REQUEST_STATUSES, isRequestClosed } from "./status";
 import { requestTrustedTimestamp } from "./timestamp";
 import { runPostCompletion } from "./postComplete";
@@ -19,9 +20,15 @@ import { signedPdfIsSafeToDelete } from "./blobReferences";
 import {
   COMPLETED_EVENT,
   POST_COMPLETION_EVENT,
+  SIGNED_COPIES_OFF,
   deliverCompletionEmails,
 } from "./completionFanout";
+import { automationOn } from "@/lib/automationSwitch";
 import { exactTenantWhere } from "./recoveryScope";
+import { sendPushToAll } from "@/lib/push";
+import { issueInvoiceNumberInTx } from "@/lib/numbering";
+import { winLeadInTx } from "@/lib/quoteOutcome";
+import { payableTotalCents } from "@/lib/pricing";
 
 /** Internal sentinel: the completion claim was lost to a concurrent close. */
 class CompletionLost extends Error {}
@@ -51,25 +58,28 @@ type RecipientRow = {
  * signing — it is not nothing, but it is not proof of who held the link, and
  * dressing it up as verification would be worse than saying so.
  */
-function identityStatement(row: RecipientRow): string {
+/** Dates on the certificate read in the REQUEST's workspace time zone (bindCtx's regional). */
+type CertTime = Pick<Regional, "locale" | "timeZone">;
+
+function identityStatement(row: RecipientRow, r: CertTime): string {
   if (row.identityMethod === "email_otp") {
     return `Identity verified by one-time code sent to the email address on file${
-      row.identityVerifiedAt ? ` at ${formatDateTime(row.identityVerifiedAt)}` : ""}`;
+      row.identityVerifiedAt ? ` at ${formatDateTime(row.identityVerifiedAt, r)}` : ""}`;
   }
   if (row.identityMethod === "sms_otp") {
     return `Identity verified by one-time code sent to the mobile number on file${
-      row.identityVerifiedAt ? ` at ${formatDateTime(row.identityVerifiedAt)}` : ""}`;
+      row.identityVerifiedAt ? ` at ${formatDateTime(row.identityVerifiedAt, r)}` : ""}`;
   }
   return "Opened using the unique signing link sent to this recipient (no additional identity check was required for this document)";
 }
 
-function certificateHtml(title: string, requestId: string, rows: RecipientRow[]): string {
-  const signers = rows.map((r) => `
+function certificateHtml(title: string, requestId: string, rows: RecipientRow[], r: CertTime): string {
+  const signers = rows.map((row) => `
     <div style="border:1px solid #e2e8f0;border-radius:8px;padding:12px;margin:10px 0">
-      <div style="display:flex;justify-content:space-between"><strong>${esc(r.name)}</strong><span style="color:#64748b;font-size:9pt">${esc(r.role)}</span></div>
-      ${r.img ? `<img src="${r.img}" style="height:56px;margin:8px 0"/>` : `<div style="color:#94a3b8;font-size:9pt;margin:8px 0">(accepted without drawn signature)</div>`}
-      <div style="font-size:8.5pt;color:#64748b">Signed ${r.signedAt ? esc(formatDateTime(r.signedAt)) : "—"}${r.signerIp ? ` · IP ${esc(r.signerIp)}` : ""}</div>
-      <div style="font-size:8.5pt;color:#64748b">${esc(identityStatement(r))}</div>
+      <div style="display:flex;justify-content:space-between"><strong>${esc(row.name)}</strong><span style="color:#64748b;font-size:9pt">${esc(row.role)}</span></div>
+      ${row.img ? `<img src="${row.img}" style="height:56px;margin:8px 0"/>` : `<div style="color:#94a3b8;font-size:9pt;margin:8px 0">(accepted without drawn signature)</div>`}
+      <div style="font-size:8.5pt;color:#64748b">Signed ${row.signedAt ? esc(formatDateTime(row.signedAt, r)) : "—"}${row.signerIp ? ` · IP ${esc(row.signerIp)}` : ""}</div>
+      <div style="font-size:8.5pt;color:#64748b">${esc(identityStatement(row, r))}</div>
     </div>`).join("");
   return `<div style="page-break-before:always;padding-top:6px">
     <h1 style="font-size:18pt;color:#020617;margin:0 0 4px">Certificate of Completion</h1>
@@ -118,7 +128,7 @@ type AckSigner = { id: string; name: string };
  * field-id fragment so two identically- or blank-labelled fields are never
  * ambiguous. Returns "" (no page) when the document has no shared fields at all.
  */
-function acknowledgementsHtml(fields: AckField[], signers: AckSigner[]): string {
+function acknowledgementsHtml(fields: AckField[], signers: AckSigner[], r: CertTime): string {
   if (fields.length === 0) return "";
   const blocks = fields.map((f) => {
     const items = signers.map((signer) => {
@@ -127,7 +137,7 @@ function acknowledgementsHtml(fields: AckField[], signers: AckSigner[]): string 
       if (!response) {
         return `<li style="font-size:9pt;color:#94a3b8;margin:2px 0"><strong>${who}</strong> · Not answered</li>`;
       }
-      const when = esc(formatDateTime(response.filledAt));
+      const when = esc(formatDateTime(response.filledAt, r));
       return `<li style="font-size:9pt;color:#334155;margin:2px 0"><strong>${who}</strong> · ${esc(describeResponseValue(f.kind, response.value))} <span style="color:#94a3b8">· ${when}</span></li>`;
     }).join("");
     return `<div style="border:1px solid #e2e8f0;border-radius:8px;padding:12px;margin:10px 0">
@@ -141,6 +151,45 @@ function acknowledgementsHtml(fields: AckField[], signers: AckSigner[]): string 
     <p style="color:#64748b;font-size:10pt;margin:0 0 12px">Every expected signer’s response to a field any recipient could complete, in signer order. The document stamps the first response; all are recorded here.</p>
     ${blocks}
   </div>`;
+}
+
+/** Event: everyone signed, but the source record can no longer be signed. */
+export const COMPLETION_BLOCKED_EVENT = "completion_blocked";
+
+/**
+ * Tell staff a fully-signed request is stuck — once per request, however many
+ * times completion is re-attempted. The push names the request's own tenant:
+ * completion runs from the signer's public link and the recovery worker, neither
+ * of which has a staff session to address it from.
+ */
+async function reportCompletionBlocked(req: { id: string; title: string; quoteId: string | null; jobCardId: string | null; tenantId: string | null }): Promise<void> {
+  // "Once" is decided under the request's row lock: the signer's link and the
+  // recovery sweep can both arrive here, and a bare check-then-create let both
+  // see "not yet", both write the event and both notify. Only the caller whose
+  // transaction wrote the event sends the push.
+  const claimed = await prisma.$transaction(async (tx) => {
+    await tx.$executeRaw`SELECT id FROM "SignatureRequest" WHERE id = ${req.id} AND "tenantId" IS NOT DISTINCT FROM ${req.tenantId}::text FOR UPDATE`;
+    const already = await tx.signatureEvent.findFirst({
+      where: { requestId: req.id, type: COMPLETION_BLOCKED_EVENT },
+      select: { id: true },
+    });
+    if (already) return false;
+    await tx.signatureEvent.create({
+      data: buildSignEvent(req.id, { type: COMPLETION_BLOCKED_EVENT, actor: "system", metadata: { quoteId: req.quoteId, jobCardId: req.jobCardId } }),
+    });
+    return true;
+  });
+  if (!claimed) return;
+  const what = req.quoteId ? "quote" : req.jobCardId ? "job card" : "record";
+  await sendPushToAll(
+    {
+      title: "A signed document couldn't complete",
+      body: `Everyone signed “${req.title}”, but its ${what} changed after it was sent. Open it to send the current version.`.slice(0, 200),
+      url: `/signatures/${req.id}`,
+    },
+    "quote_signed",
+    { tenantId: req.tenantId },
+  ).catch(() => {});
 }
 
 /** Assemble the final signed PDF (document + certificate), seal it, file it, notify everyone. */
@@ -241,10 +290,20 @@ export async function completeSignatureRequest(requestId: string): Promise<void>
   const html = renderDocumentHtml(await embedDocImages(doc, req.tenantId), ctx, logoDataUri(), {
     hideOverlays: true,
     stampedFields,
-    appendHtml: certificateHtml(req.title, req.id, rows) + acknowledgementsHtml(ackFields, expectedSigners),
+    appendHtml:
+      certificateHtml(req.title, req.id, rows, ctx?.regional ?? DEFAULT_REGIONAL) +
+      acknowledgementsHtml(ackFields, expectedSigners, ctx?.regional ?? DEFAULT_REGIONAL),
   });
   let pdf = await htmlToPdf(html);
-  pdf = await sealPdf(pdf, { reason: `Signed: ${req.title}`, name: "Denago Cape Town" });
+  // The seal names the workspace that sealed it — this was "Denago Cape Town"
+  // on every tenant's signed contracts.
+  const company = await getCompanyProfile(req.tenantId);
+  pdf = await sealPdf(pdf, {
+    reason: `Signed: ${req.title}`,
+    name: company.name,
+    contactInfo: company.email,
+    location: company.address,
+  });
   const hash = crypto.createHash("sha256").update(pdf).digest("hex");
 
   // Independent proof of WHEN, requested BEFORE the completion transaction so a
@@ -324,13 +383,17 @@ export async function completeSignatureRequest(requestId: string): Promise<void>
         });
         if (signedQuote.count === 1) {
           sourceSigned = true;
-          const q = await tx.quote.findUnique({ where: { id: req.quoteId }, select: { leadId: true } });
+          // Signed is accepted: the quote becomes an invoice and gets its own number.
+          await issueInvoiceNumberInTx(tx, req.quoteId, req.tenantId);
+          const q = await tx.quote.findUnique({ where: { id: req.quoteId }, include: { items: true, fees: true } });
           if (q?.leadId) {
             // Win the lead in the SAME transaction, locked, so quote-accepted and
-            // lead-won can't diverge under a concurrent decline/accept.
-            await tx.$executeRaw`SELECT id FROM "Lead" WHERE id = ${q.leadId} FOR UPDATE`;
-            const won = await tx.lead.updateMany({ where: { id: q.leadId, deletedAt: null, status: "open" }, data: { status: "won" } });
-            if (won.count === 1) wonLeadId = q.leadId;
+            // lead-won can't diverge under a concurrent decline/accept — through
+            // the shared win, so the lead is worth what the customer signed for.
+            // The tenant is never null on a live row (RLS would not have shown it);
+            // the column type still allows it, so take whichever row names it.
+            const tenantId = req.tenantId ?? q.tenantId;
+            if (tenantId && (await winLeadInTx(tx, q.leadId, tenantId, Math.round(payableTotalCents(q))))) wonLeadId = q.leadId;
           }
         } else {
           // Didn't sign it. Completing anyway is only OK if the quote is ALREADY
@@ -379,7 +442,15 @@ export async function completeSignatureRequest(requestId: string): Promise<void>
     if (await signedPdfIsSafeToDelete(storedName, req.tenantId)) {
       await deleteFile(storedName).catch(() => {});
     }
-    if (err instanceof CompletionLost || err instanceof SourceCompletionLost) return;
+    if (err instanceof SourceCompletionLost) {
+      // Every signer has signed, but the quote/job card changed underneath the
+      // request (deleted, replaced by a revision) so it can never complete. This
+      // used to return silently and leave the request open forever (gap audit
+      // #32) — now staff are told, once, and the request page says why.
+      await reportCompletionBlocked(req).catch(() => {});
+      return;
+    }
+    if (err instanceof CompletionLost) return;
     throw err;
   }
 
@@ -415,18 +486,22 @@ export async function completeSignatureRequest(requestId: string): Promise<void>
   // the result discarded — and sendEmail NEVER THROWS, it returns { ok: false }
   // — so a fan-out that reached nobody looked exactly like one that reached
   // everybody, and the completion marker below was written over it.
-  const delivery = await deliverCompletionEmails({
-    requestId: req.id,
-    title: req.title,
-    pdf,
-    recipients: req.recipients.map((r) => ({
-      id: r.id,
-      name: r.name,
-      email: r.email,
-      completedEmailSentAt: r.completedEmailSentAt,
-    })),
-    tenantWhere,
-  });
+  // Only while the owner has signed copies on (Settings → Automatic jobs &
+  // messages; on by default). Off: the request still completes — nobody is emailed.
+  const delivery = (await automationOn("SIGNING_SIGNED_COPIES", req.tenantId))
+    ? await deliverCompletionEmails({
+        requestId: req.id,
+        title: req.title,
+        pdf,
+        recipients: req.recipients.map((r) => ({
+          id: r.id,
+          name: r.name,
+          email: r.email,
+          completedEmailSentAt: r.completedEmailSentAt,
+        })),
+        tenantWhere,
+      })
+    : SIGNED_COPIES_OFF;
 
   // LAST, not first, and ONLY on success. This event used to be written
   // immediately after the transaction, which made it a record that the commit

@@ -4,7 +4,7 @@ import { Prisma } from "@prisma/client";
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { basePrisma, prisma } from "@/lib/db";
-import { requireOwner } from "@/lib/auth";
+import { requireTenantOwner } from "@/lib/auth";
 import { DEFAULT_TENANT_ID } from "@/lib/tenant";
 import { writeTenantId } from "@/lib/tenantWrite";
 import { logAudit } from "@/lib/audit";
@@ -23,7 +23,7 @@ export async function restoreFlowVersionToDraft(
   versionId: string,
   formData: FormData,
 ) {
-  const owner = await requireOwner();
+  const owner = await requireTenantOwner();
   const expectedUpdatedAt = new Date(String(formData.get("expectedUpdatedAt") ?? ""));
   if (Number.isNaN(expectedUpdatedAt.getTime())) return;
   // Both the snapshot read and the draft write belong to the same workspace.

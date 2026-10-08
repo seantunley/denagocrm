@@ -1,6 +1,6 @@
+import { requireRoute } from "@/lib/permissions";
 import { notFound } from "next/navigation";
 import { prisma } from "@/lib/db";
-import { requireOwner } from "@/lib/auth";
 import {
   updateProduct,
   addProductColor,
@@ -8,6 +8,7 @@ import {
   deleteProduct,
 } from "@/app/actions/products";
 import ConfirmDelete from "@/components/ConfirmDelete";
+import { SaveForm, SaveButton } from "@/components/SaveForm";
 import ProductShowcaseForm from "@/components/ProductShowcaseForm";
 import { EntityDetailShell } from "@/components/entity-detail-shell";
 import { StatusPill } from "@/components/visual-system";
@@ -19,9 +20,9 @@ export default async function ProductDetailPage({
   params: Promise<{ id: string }>;
 }) {
   // Owner-only: this page renders the edit form and the delete control, whose
-  // actions are all requireOwner()-gated. The page must match them so the
+  // actions are all requireRoute("/products")-gated. The page must match them so the
   // authorization survives without the proxy (see /products list page).
-  await requireOwner();
+  await requireRoute("/products");
   const { id } = await params;
   const product = await prisma.product.findUnique({
     where: { id },
@@ -51,7 +52,7 @@ export default async function ProductDetailPage({
     >
 
       <div className="grid lg:grid-cols-2 gap-6 items-start">
-        <form action={updateProduct.bind(null, product.id)} className="card space-y-4">
+        <SaveForm action={updateProduct.bind(null, product.id)} success="Product saved" resetOnSuccess={false} className="card space-y-4">
           <h2 className="font-semibold">Details</h2>
           <div>
             <label className="label">Model name *</label>
@@ -97,8 +98,8 @@ export default async function ProductDetailPage({
               Active (available for new leads)
             </label>
           </div>
-          <button className="btn-primary">Save changes</button>
-        </form>
+          <SaveButton className="btn-primary">Save changes</SaveButton>
+        </SaveForm>
 
         <div className="card">
           <h2 className="font-semibold mb-4">Colours</h2>
@@ -119,10 +120,10 @@ export default async function ProductDetailPage({
               </li>
             ))}
           </ul>
-          <form action={addProductColor.bind(null, product.id)} className="flex gap-2">
+          <SaveForm action={addProductColor.bind(null, product.id)} success="Colour added" className="flex gap-2">
             <input name="name" className="input" placeholder="Add colour…" required />
-            <button className="btn-secondary">Add</button>
-          </form>
+            <SaveButton className="btn-secondary" pendingLabel="Adding…">Add</SaveButton>
+          </SaveForm>
           <p className="text-xs text-muted-foreground mt-3">
             Used by {product._count.leads} lead(s) and {product._count.vehicles} vehicle(s).
           </p>

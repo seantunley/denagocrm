@@ -1,6 +1,6 @@
+import { requireRoute } from "@/lib/permissions";
 import { prisma } from "@/lib/db";
 import Link from "next/link";
-import { requireOwner } from "@/lib/auth";
 import { decryptValue } from "@/lib/settings";
 import { getBotFaqs } from "@/lib/botAi";
 import { getBotKnowledgeEntries, knowledgeIsCurrent } from "@/lib/botKnowledge";
@@ -16,7 +16,7 @@ import { WorkspaceHero } from "@/components/workspace-hero";
 import { StatusPill, Surface } from "@/components/visual-system";
 
 export default async function ChatbotSettingsPage() {
-  await requireOwner();
+  await requireRoute("/chatbot");
   // `libraryDocuments` went on main; `tg` went here, when Telegram moved to
   // Settings → Integrations. Both removals stand.
   const [settings, botFaqs, knowledge, hasWhisper] = await Promise.all([

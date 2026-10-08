@@ -114,7 +114,7 @@ function StampView({ s }: { s: StampField }) {
 export function SignSurface({ token, title, recipientName, sheets, fields, stamps = [], senderName }: { token: string; title: string; recipientName: string; sheets: Sheets; fields: Field[]; stamps?: StampField[]; senderName?: string }) {
   // The company that sent this document, for the two places the copy names them.
   // Undefined keeps the original literal — see tests/customerBranding.test.ts.
-  const sender = senderName ?? "Denago";
+  const sender = senderName ?? "The sender";
   const [values, setValues] = useState<Record<string, string>>({});
   const [name, setName] = useState(recipientName);
   const [consent, setConsent] = useState(false);
@@ -183,6 +183,22 @@ export function SignSurface({ token, title, recipientName, sheets, fields, stamp
     } catch (e) { setErr(e instanceof Error ? e.message : "Could not decline."); }
     finally { setBusy(false); }
   };
+
+  // Declining is offered wherever signing is (Sean, 2026-10-08: "Send a quote to
+  // sign that they can't decline is not good") — it used to be one quiet grey
+  // button at the very bottom of the page, easy never to find.
+  const declineDialog = (trigger: React.ReactElement) => (
+    <TextPromptDialog
+      title="Decline this document?"
+      description={`Please tell us why, so we can put it right. ${sender} will be notified and the request can no longer be signed by you.`}
+      label="Reason (optional)"
+      placeholder="Tell us what needs attention"
+      required={false}
+      submitLabel="Decline document"
+      onSubmit={decline}
+      trigger={trigger}
+    />
+  );
 
   if (done === "signed") return <Card><h2 style={h2}>Signed ✓</h2><p style={p}>Thank you, {name}. Once everyone has signed, the completed sealed PDF will be emailed to you.</p></Card>;
   if (done === "declined") return <Card><h2 style={h2}>Declined</h2><p style={p}>You have declined this document. {sender} has been notified.</p></Card>;
@@ -256,17 +272,9 @@ export function SignSurface({ token, title, recipientName, sheets, fields, stamp
             <button type="button" disabled={busy} onClick={submit} style={{ flex: 1, minWidth: 180, background: "#ea580c", color: "#fff", border: "none", borderRadius: 8, padding: "12px 20px", fontWeight: 700, cursor: "pointer", opacity: busy ? 0.6 : 1 }}>
               {busy ? "Submitting…" : "Sign & submit"}
             </button>
-            <TextPromptDialog
-              title="Decline this document?"
-              description={`You can add an optional reason. ${sender} will be notified and the request can no longer be signed by you.`}
-              label="Reason (optional)"
-              placeholder="Tell us what needs attention"
-              required={false}
-              submitLabel="Decline document"
-              onSubmit={decline}
-              trigger={<button type="button" disabled={busy} style={{ background: "transparent", color: "#94a3b8", border: "1px solid #334155", borderRadius: 8, padding: "12px 16px", cursor: "pointer" }}>Decline</button>}
-            />
+            {declineDialog(<button type="button" disabled={busy} style={{ background: "transparent", color: "#e2e8f0", border: "1px solid #64748b", borderRadius: 8, padding: "12px 16px", fontWeight: 600, cursor: "pointer" }}>Decline</button>)}
           </div>
+          <div style={{ fontSize: 12.5, color: "#94a3b8" }}>Not ready to sign, or something needs to change? Choose Decline and tell {sender === "The sender" ? "the sender" : sender} why.</div>
         </div>
       </Card>
 
@@ -280,6 +288,7 @@ export function SignSurface({ token, title, recipientName, sheets, fields, stamp
             style={{ background: ACCENT, color: "#fff", border: "none", borderRadius: 8, padding: "8px 16px", fontWeight: 700, cursor: "pointer", fontSize: 13 }}>
             Go to sign →
           </button>
+          {declineDialog(<button type="button" disabled={busy} style={{ background: "transparent", color: "#e2e8f0", border: "1px solid #64748b", borderRadius: 8, padding: "8px 14px", fontWeight: 600, cursor: "pointer", fontSize: 13 }}>Decline</button>)}
         </div>
       )}
 

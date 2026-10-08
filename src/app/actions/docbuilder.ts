@@ -3,11 +3,18 @@
 import { asActionResult, refuse } from "@/lib/actionResult";
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/db";
-import { requirePermission, requireAnyPermission } from "@/lib/permissions";
+import { isModuleEnabled } from "@/lib/modules/enabled";
+import { hasPermission, requirePermission, requireAnyPermission } from "@/lib/permissions";
+import { canEditLayout } from "@/lib/docbuilder/layoutAccess";
 import { logAudit } from "@/lib/audit";
-import { listBuilderVersions } from "@/lib/docbuilder/store";
+// getBuilderTemplate, not a raw findUnique: it is where the module check lives.
+import { getBuilderTemplate, listBuilderVersions, withLegacyTextInlined } from "@/lib/docbuilder/store";
 import { STANDARD_TEMPLATE_KEYS, standardTemplateFor, type StandardDocKey } from "@/lib/doceditor/standardTemplates";
+import { defaultEmailBody, defaultEmailFrame, EMAIL_FRAME_KEY, emailKindOf } from "@/lib/doceditor/emailDefaults";
 import { withActingStaffScope } from "@/lib/actingScope";
+import { requiredRecordKind } from "@/lib/docbuilder/recordBinding";
+import { staleWordingWarnings } from "@/lib/doceditor/wordingCheck";
+import { quoteWordingSettings } from "@/lib/quoteFromLead";
 
 const BASE = "/document-studio";
 
@@ -32,7 +39,7 @@ export async function renameBuilderTemplate(id: string, formData: FormData) {
   return withActingStaffScope(async () => {
     const user = await requirePermission("docbuilder.manage");
     const name = String(formData.get("name") ?? "").trim();
-    if (!name) return;
+    if (!name || !(await getBuilderTemplate(id))) return;
     await prisma.docBuilderTemplate.update({ where: { id }, data: { name } });
     await logAudit({ action: "docbuilder.rename", summary: `Renamed document to “${name}”`, entityType: "DocBuilderTemplate", entityId: id, user });
     revalidatePath(BASE);
@@ -42,7 +49,7 @@ export async function renameBuilderTemplate(id: string, formData: FormData) {
 export async function setDefaultBuilderTemplate(id: string) {
   return asActionResult(async () => {
     const user = await requirePermission("docbuilder.manage");
-    const tpl = await prisma.docBuilderTemplate.findUnique({ where: { id } });
+    const tpl = await getBuilderTemplate(id);
     if (!tpl || tpl.deletedAt) refuse("That template no longer exists.");
     await prisma.$transaction([
       prisma.docBuilderTemplate.updateMany({ where: { key: tpl.key }, data: { isDefault: false } }),
@@ -54,11 +61,16 @@ export async function setDefaultBuilderTemplate(id: string) {
 }
 
 /** Snapshot the current draft as an immutable, restorable version and mark it published. */
-export async function publishBuilderVersion(id: string, label?: string): Promise<{ ok: boolean; version?: number }> {
+export async function publishBuilderVersion(id: string, label?: string): Promise<{ ok: boolean; version?: number; warnings?: string[] }> {
   return withActingStaffScope(async () => {
-    const user = await requirePermission("docbuilder.manage");
-    const tpl = await prisma.docBuilderTemplate.findUnique({ where: { id } });
-    if (!tpl || tpl.deletedAt) return { ok: false };
+    const user = await requireAnyPermission("docbuilder.manage", "document_templates.manage");
+    const found = await getBuilderTemplate(id);
+    if (!found || found.deletedAt) return { ok: false };
+    if (!(await canEditLayout(user, found.key))) return { ok: false };
+    // An invoice/agreement still reading bank details or clauses from the old
+    // form editor is published with that text written in, and its draft keeps
+    // it — from here on it is edited only in this editor.
+    const tpl = await withLegacyTextInlined(found);
     const last = await prisma.docBuilderVersion.findFirst({
       where: { templateId: id }, orderBy: { version: "desc" }, select: { version: true },
     });
@@ -67,7 +79,10 @@ export async function publishBuilderVersion(id: string, label?: string): Promise
       prisma.docBuilderVersion.create({
         data: { templateId: id, version, data: tpl.data as object, label: label?.trim() || null, publishedBy: user.name },
       }),
-      prisma.docBuilderTemplate.update({ where: { id }, data: { status: "published", publishedVersion: version } }),
+      prisma.docBuilderTemplate.update({
+        where: { id },
+        data: { status: "published", publishedVersion: version, ...(tpl.data !== found.data ? { data: tpl.data as object } : {}) },
+      }),
     ]);
     await logAudit({
       action: "docbuilder.publish",
@@ -76,7 +91,12 @@ export async function publishBuilderVersion(id: string, label?: string): Promise
     });
     revalidatePath(`/doc-editor/${id}`);
     revalidatePath(BASE);
-    return { ok: true, version };
+    // Non-blocking: published regardless, but typed-in wording that contradicts
+    // the quote settings is pointed out (the owner's text is never rewritten).
+    const warnings = requiredRecordKind(tpl.key) === "quote"
+      ? staleWordingWarnings(tpl.data, await quoteWordingSettings())
+      : [];
+    return { ok: true, version, warnings };
   });
 }
 
@@ -102,13 +122,22 @@ const RENDERED_WITHOUT_PUBLISH_SWITCH = new Set(["quote"]);
 
 export async function resetBuilderTemplateToStandard(id: string): Promise<{ ok: boolean; error?: string }> {
   return withActingStaffScope(async () => {
-    const user = await requirePermission("docbuilder.manage");
-    const tpl = await prisma.docBuilderTemplate.findUnique({ where: { id } });
+    const user = await requireAnyPermission("docbuilder.manage", "document_templates.manage");
+    const tpl = await getBuilderTemplate(id);
     if (!tpl || tpl.deletedAt) return { ok: false, error: "That template no longer exists." };
-    if (!(STANDARD_TEMPLATE_KEYS as string[]).includes(tpl.key)) {
+    if (!(await canEditLayout(user, tpl.key))) return { ok: false, error: "You don't have access to edit this layout." };
+    // A customer email resets to the standard wording / frame (never the
+    // workspace's older saved copy — the point is to take the current standard).
+    const emailKind = emailKindOf(tpl.key);
+    const isEmail = !!emailKind || tpl.key === EMAIL_FRAME_KEY;
+    if (!isEmail && !(STANDARD_TEMPLATE_KEYS as string[]).includes(tpl.key)) {
       return { ok: false, error: "There is no standard layout for this kind of document." };
     }
-    const standard = standardTemplateFor(tpl.key as StandardDocKey);
+    const standard = emailKind
+      ? defaultEmailBody(emailKind)
+      : isEmail
+        ? defaultEmailFrame()
+        : standardTemplateFor(tpl.key as StandardDocKey, { automotive: await isModuleEnabled("automotive") });
     await prisma.$transaction(async (tx) => {
       const last = await tx.docBuilderVersion.findFirst({
         where: { templateId: id }, orderBy: { version: "desc" }, select: { version: true },
@@ -139,9 +168,10 @@ export async function resetBuilderTemplateToStandard(id: string): Promise<{ ok: 
 /** Restore a prior version's JSON back onto the working draft. */
 export async function restoreBuilderVersion(id: string, versionId: string): Promise<{ ok: boolean }> {
   return withActingStaffScope(async () => {
-    const user = await requirePermission("docbuilder.manage");
-    const tpl = await prisma.docBuilderTemplate.findUnique({ where: { id } });
+    const user = await requireAnyPermission("docbuilder.manage", "document_templates.manage");
+    const tpl = await getBuilderTemplate(id);
     if (!tpl || tpl.deletedAt) return { ok: false };
+    if (!(await canEditLayout(user, tpl.key))) return { ok: false };
     const ver = await prisma.docBuilderVersion.findUnique({ where: { id: versionId } });
     if (!ver || ver.templateId !== id) return { ok: false };
     await prisma.docBuilderTemplate.update({ where: { id }, data: { data: ver.data as object } });
@@ -159,7 +189,11 @@ export async function restoreBuilderVersion(id: string, versionId: string): Prom
 /** Version history for the editor's history panel (metadata only). */
 export async function listBuilderVersionsAction(id: string) {
   return withActingStaffScope(async () => {
-    await requireAnyPermission("docbuilder.view", "docbuilder.manage");
+    const user = await requireAnyPermission("docbuilder.view", "docbuilder.manage", "document_templates.manage");
+    const tpl = await getBuilderTemplate(id);
+    if (!tpl) return [];
+    // docbuilder.view sees any layout's history; otherwise only a layout this person edits.
+    if (!(await hasPermission(user, "docbuilder.view")) && !(await canEditLayout(user, tpl.key))) return [];
     const rows = await listBuilderVersions(id);
     return rows.map((r) => ({
       id: r.id,
@@ -174,7 +208,7 @@ export async function listBuilderVersionsAction(id: string) {
 export async function deleteBuilderTemplate(id: string) {
   return asActionResult(async () => {
     const user = await requirePermission("docbuilder.manage");
-    const tpl = await prisma.docBuilderTemplate.findUnique({ where: { id } });
+    const tpl = await getBuilderTemplate(id);
     if (!tpl || tpl.deletedAt) refuse("That template no longer exists.");
     await prisma.docBuilderTemplate.update({ where: { id }, data: { deletedAt: new Date() } });
     await logAudit({ action: "docbuilder.delete", summary: `Deleted document “${tpl.name}”`, entityType: "DocBuilderTemplate", entityId: id, user });

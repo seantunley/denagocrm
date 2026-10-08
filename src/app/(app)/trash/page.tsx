@@ -1,10 +1,11 @@
+import { requireRoute } from "@/lib/permissions";
 import { differenceInCalendarDays, addDays } from "date-fns";
 import { ArchiveRestore, Trash2 } from "lucide-react";
 import { basePrisma } from "@/lib/db";
-import { requireOwner } from "@/lib/auth";
 import { isModuleEnabled } from "@/lib/modules/enabled";
 import { restoreFromTrash } from "@/app/actions/trash";
-import { TRASH_RETENTION_DAYS, actingTrashPredicate, type TrashModel } from "@/lib/trash";
+import { TRASH_RETENTION_DAYS, actingTrashPredicate, type RestorableModel } from "@/lib/trash";
+import { SaveForm, SaveButton } from "@/components/SaveForm";
 import { contactName, formatDateTime } from "@/lib/format";
 import { PageHeader } from "@/components/page-header";
 import {
@@ -18,14 +19,22 @@ import {
 import { EmptyState, StatusPill } from "@/components/visual-system";
 
 type Row = {
-  model: TrashModel;
+  model: RestorableModel;
   id: string;
   label: string;
   detail: string;
   deletedAt: Date;
   deletedByName: string | null;
   deleteReason: string | null;
+  /** Not swept by the nightly purge — stays until restored. */
+  kept?: boolean;
 };
+
+function PurgeIn({ row }: { row: Row }) {
+  if (row.kept) return <StatusPill tone="neutral">Kept</StatusPill>;
+  const daysLeft = Math.max(0, differenceInCalendarDays(addDays(row.deletedAt, TRASH_RETENTION_DAYS), new Date()));
+  return <StatusPill tone={daysLeft <= 7 ? "danger" : "neutral"}>{daysLeft} days</StatusPill>;
+}
 
 export default async function TrashPage() {
   // Owner-only. This previously called requireUser(), which is weaker than the
@@ -35,9 +44,9 @@ export default async function TrashPage() {
   // the page reads every soft-deleted contact, lead, vehicle, job card,
   // document, product, library document and quote through basePrisma, which
   // sets app.bypass_rls and is not soft-delete filtered. The proxy stays as the
-  // pre-filter (nicer redirect); requireOwner() is the actual boundary.
-  await requireOwner();
-  // …and owner of WHICH tenant. requireOwner() answers "is this person an
+  // pre-filter (nicer redirect); requireRoute("/trash") is the actual boundary.
+  await requireRoute("/trash");
+  // …and owner of WHICH tenant. requireRoute("/trash") answers "is this person an
   // owner", never "whose data may they see", so on its own it let an owner of
   // one tenant read every other tenant's deleted contacts, leads, quotes,
   // documents and vehicles — names, addresses, phone numbers, prices. The
@@ -50,13 +59,15 @@ export default async function TrashPage() {
   // would filter on the legacy untenanted value and show an empty Trash page
   // to every migrated tenant.
   // ACTING scope, not activeTenantPredicate: this page runs behind
-  // requireOwner() alone, no per-record ownership gate, so activeTenantPredicate
+  // requireRoute("/trash") alone, no per-record ownership gate, so activeTenantPredicate
   // answering `{}` while dormant (today's mode everywhere) meant every owner
   // saw every OTHER tenant's trash. See lib/trash.ts's actingTrashPredicate.
   const notNull = {
     deletedAt: { not: null },
     ...(await actingTrashPredicate("Trash page")),
   } as const;
+  // Named again at each newer query so the tenant is visible in the call itself.
+  const { tenantId } = notNull;
   const [automotiveOn, commerceOn] = await Promise.all([
     isModuleEnabled("automotive"),
     isModuleEnabled("commerce"),
@@ -80,7 +91,43 @@ export default async function TrashPage() {
       basePrisma.quote.findMany({ where: notNull, orderBy: { deletedAt: "desc" } }),
     ]);
 
+  // Records deleted with only `deletedAt` (no reason / deleted-by, never purged) —
+  // see RESTORE_ONLY_MODELS. Who deleted them and why is in the audit log.
+  const [fleets, parts, stockUnits, surveys, competitors, signWorkflows, docTemplates, builderTemplates, studioTemplates, docInstances, blocks] =
+    await Promise.all([
+      basePrisma.fleet.findMany({ where: { ...notNull, tenantId }, select: { id: true, name: true, deletedAt: true } }),
+      basePrisma.part.findMany({ where: { ...notNull, tenantId }, select: { id: true, name: true, sku: true, deletedAt: true } }),
+      // Not the incoming units a cancelled purchase order took with it — they
+      // would come back as stock arriving on an order that no longer exists.
+      basePrisma.stockUnit.findMany({
+        where: { ...notNull, tenantId, NOT: { purchaseOrder: { is: { status: "cancelled" } } } },
+        select: { id: true, stockNumber: true, deletedAt: true, product: { select: { name: true } } },
+      }),
+      basePrisma.survey.findMany({ where: { ...notNull, tenantId }, select: { id: true, title: true, deletedAt: true } }),
+      basePrisma.competitor.findMany({ where: { ...notNull, tenantId }, select: { id: true, name: true, deletedAt: true } }),
+      basePrisma.signWorkflow.findMany({ where: { ...notNull, tenantId }, select: { id: true, name: true, deletedAt: true } }),
+      basePrisma.docTemplateRecord.findMany({ where: { ...notNull, tenantId }, select: { id: true, name: true, deletedAt: true } }),
+      basePrisma.docBuilderTemplate.findMany({ where: { ...notNull, tenantId }, select: { id: true, name: true, deletedAt: true } }),
+      basePrisma.customDocTemplate.findMany({ where: { ...notNull, tenantId }, select: { id: true, name: true, deletedAt: true } }),
+      basePrisma.docInstance.findMany({ where: { ...notNull, tenantId }, select: { id: true, title: true, deletedAt: true } }),
+      basePrisma.reusableBlock.findMany({ where: { ...notNull, tenantId }, select: { id: true, name: true, deletedAt: true } }),
+    ]);
+  const keptRow = (model: RestorableModel, id: string, label: string, detail: string, deletedAt: Date | null): Row => ({
+    model, id, label, detail, deletedAt: deletedAt!, deletedByName: null, deleteReason: null, kept: true,
+  });
+
   const rows: Row[] = [
+    ...fleets.map((f) => keptRow("fleet", f.id, f.name, "Fleet — its members were unlinked when it was deleted", f.deletedAt)),
+    ...parts.map((p) => keptRow("part", p.id, p.name, `Part${p.sku ? ` — ${p.sku}` : ""}`, p.deletedAt)),
+    ...stockUnits.map((s) => keptRow("stockUnit", s.id, s.stockNumber ?? s.product.name, `Stock unit — ${s.product.name}`, s.deletedAt)),
+    ...surveys.map((s) => keptRow("survey", s.id, s.title, "Survey — comes back switched off", s.deletedAt)),
+    ...competitors.map((c) => keptRow("competitor", c.id, c.name, "Competitor", c.deletedAt)),
+    ...signWorkflows.map((w) => keptRow("signWorkflow", w.id, w.name, "Signing workflow", w.deletedAt)),
+    ...docTemplates.map((t) => keptRow("docTemplateRecord", t.id, t.name, "Document template", t.deletedAt)),
+    ...builderTemplates.map((t) => keptRow("docBuilderTemplate", t.id, t.name, "Document builder template", t.deletedAt)),
+    ...studioTemplates.map((t) => keptRow("customDocTemplate", t.id, t.name, "Studio template", t.deletedAt)),
+    ...docInstances.map((d) => keptRow("docInstance", d.id, d.title, "Studio document", d.deletedAt)),
+    ...blocks.map((b) => keptRow("reusableBlock", b.id, b.name, "Reusable block", b.deletedAt)),
     ...contacts.map((c) => ({
       model: "contact" as const, id: c.id, label: contactName(c),
       detail: "Contact", deletedAt: c.deletedAt!, deletedByName: c.deletedByName, deleteReason: c.deleteReason,
@@ -133,22 +180,21 @@ export default async function TrashPage() {
           mobile={
             <MobileDataList>
               {rows.map((row) => {
-                const daysLeft = Math.max(0, differenceInCalendarDays(addDays(row.deletedAt, TRASH_RETENTION_DAYS), new Date()));
                 return (
                   <MobileDataCard key={`${row.model}-${row.id}`}>
                     <MobileDataHeader
                       title={row.label}
                       detail={row.detail}
-                      aside={<StatusPill tone={daysLeft <= 7 ? "danger" : "neutral"}>{daysLeft} days</StatusPill>}
+                      aside={<PurgeIn row={row} />}
                     />
                     <MobileDataFields>
                       <MobileDataField label="Deleted by">{row.deletedByName ?? "Unknown"}</MobileDataField>
                       <MobileDataField label="Deleted">{formatDateTime(row.deletedAt)}</MobileDataField>
                       <MobileDataField label="Reason" wide>{row.deleteReason ?? "No reason recorded"}</MobileDataField>
                     </MobileDataFields>
-                    <form action={restoreFromTrash.bind(null, row.model, row.id)}>
-                      <button className="btn-secondary w-full"><ArchiveRestore className="size-4" />Restore item</button>
-                    </form>
+                    <SaveForm action={restoreFromTrash.bind(null, row.model, row.id)}>
+                      <SaveButton className="btn-secondary w-full" pendingLabel="Restoring…"><ArchiveRestore className="size-4" />Restore item</SaveButton>
+                    </SaveForm>
                   </MobileDataCard>
                 );
               })}
@@ -169,8 +215,6 @@ export default async function TrashPage() {
             </thead>
             <tbody>
               {rows.map((r) => {
-                const purgeDate = addDays(r.deletedAt, TRASH_RETENTION_DAYS);
-                const daysLeft = Math.max(0, differenceInCalendarDays(purgeDate, new Date()));
                 return (
                   <tr key={`${r.model}-${r.id}`}>
                     <td>
@@ -183,12 +227,12 @@ export default async function TrashPage() {
                     </td>
                     <td className="text-slate-400 text-xs">{formatDateTime(r.deletedAt)}</td>
                     <td>
-                      <StatusPill tone={daysLeft <= 7 ? "danger" : "neutral"}>{daysLeft} days</StatusPill>
+                      <PurgeIn row={r} />
                     </td>
                     <td>
-                      <form action={restoreFromTrash.bind(null, r.model, r.id)}>
-                        <button className="btn-secondary btn-sm"><ArchiveRestore className="size-3.5" />Restore</button>
-                      </form>
+                      <SaveForm action={restoreFromTrash.bind(null, r.model, r.id)}>
+                        <SaveButton className="btn-secondary btn-sm" pendingLabel="Restoring…"><ArchiveRestore className="size-3.5" />Restore</SaveButton>
+                      </SaveForm>
                     </td>
                   </tr>
                 );

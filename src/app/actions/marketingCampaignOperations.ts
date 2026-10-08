@@ -9,6 +9,7 @@ import { logAuditStrict } from "@/lib/audit";
 import { readCampaignDraftRecord } from "@/lib/marketingCampaignDrafts";
 import { transitionCampaign } from "@/lib/marketingCampaignWorkflow";
 import { withActingStaffScope } from "@/lib/actingScope";
+import { asActionResult, refuse } from "@/lib/actionResult";
 
 async function operationContext(permission: Parameters<typeof requirePermission>[0]) {
   await requireModuleEnabled("marketing");
@@ -43,10 +44,12 @@ export async function resumeCampaign(id: string) {
 }
 
 export async function cancelCampaign(id: string, formData: FormData) {
+  // In a confirmation dialog, which shows a refusal; a thrown Error is redacted.
+  return asActionResult(async () => {
   const { user, tenantId } = await operationContext("campaigns.cancel");
   const campaign = await campaignOrThrow(id, tenantId);
   const reason = String(formData.get("reason") ?? "").trim();
-  if (!reason) throw new Error("Cancellation reason is required");
+  if (!reason) refuse("Cancellation reason is required");
   await basePrisma.$transaction(async (tx) => {
     await tx.$executeRaw`
       UPDATE "CampaignRecipient"
@@ -63,6 +66,7 @@ export async function cancelCampaign(id: string, formData: FormData) {
   });
   await logAuditStrict({ action: "campaign.cancelled", summary: `Cancelled campaign “${campaign.name}”: ${reason}`, entityType: "Campaign", entityId: id, user, before: campaign, after: { status: "cancelled", reason } });
   revalidatePath(`/marketing/campaigns/${id}`);
+  });
 }
 
 export async function retryCampaignFailures(id: string) {

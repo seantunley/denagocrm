@@ -8,6 +8,8 @@ import { ActiveRichText, ReadOnlyRichText } from "./RichText";
 import { handoverChecklistHtml } from "@/lib/doceditor/handoverChecklist";
 import { ShowcaseBlockView } from "./ShowcaseBlockView";
 import { useDocEditorEnv } from "./EditorContext";
+import { useEditor } from "@/lib/doceditor/store";
+import { emailBlockPreviewHtml } from "@/lib/doceditor/emailRender";
 
 /** The workspace's own logo (resolved server-side, same as the printed banner). */
 function BannerView({ block }: { block: Extract<DocumentBlock, { type: "banner" }> }) {
@@ -33,8 +35,11 @@ function money(amount: number, currency: string): string {
 
 /** Renders one block's CONTENT for the editing canvas. Chrome (handles, outline) is added by the wrapper. */
 export function BlockView({ block, active }: { block: DocumentBlock; active: boolean }) {
-  // Shared blocks drawn in the showcase quotation's style render its HTML, as the PDF does.
-  if ((block.type === "infoCard" || block.type === "lineItems" || block.type === "terms") && block.look === "showcase") {
+  const { email } = useDocEditorEnv();
+  // In an email, text reads as the email will — its type, sizes and colours, sample details filled in.
+  if (email && !active && (block.type === "text" || block.type === "heading")) return <EmailBlockView block={block} />;
+  // Shared blocks drawn in the showcase (or classic) style render its HTML, as the PDF does.
+  if ((block.type === "infoCard" || block.type === "lineItems" || block.type === "terms") && (block.look === "showcase" || block.look === "classic")) {
     return <ShowcaseBlockView block={block} />;
   }
   switch (block.type) {
@@ -215,6 +220,34 @@ export function BlockView({ block, active }: { block: DocumentBlock; active: boo
 
     case "showcaseHeader": case "infoStrip": case "vehicleShowcase": case "totalsBox": case "acceptance": case "footerBand":
       return <ShowcaseBlockView block={block} />;
+
+    case "emailHeader": case "emailSignature": case "emailFooter": case "emailButton": case "emailFacts": case "emailBody":
+      return <EmailBlockView block={block} />;
   }
   return null;
+}
+
+/** A customer-email block, drawn by the email's own renderer with sample details. */
+function EmailBlockView({ block }: { block: DocumentBlock }) {
+  const { email, companyName } = useDocEditorEnv();
+  const doc = useEditor((s) => s.doc);
+  if (block.type === "emailBody") {
+    return (
+      <div className="rounded-lg border-2 border-dashed border-orange-300 bg-orange-50/60 px-4 py-6 text-center text-sm text-orange-800">
+        Each message&apos;s own content goes here — its headline, wording and button.
+      </div>
+    );
+  }
+  if (!email) return <div className="text-xs text-slate-400">Email block</div>;
+  const brand = { ...email.brand, companyName: email.brand.companyName || companyName };
+  const fields = { ...email.sample, sender_name: email.sample.sender_name || "Your name" };
+  // Our own renderer's escaped markup with sample values; nothing from a record.
+  // The frame's colours reach every block: a message's buttons and links take them too.
+  const html = emailBlockPreviewHtml(block, fields, brand, email.kind ? email.frame?.doc : doc);
+  // The header and footer run edge to edge of the card, as they send — out past the canvas's side margin.
+  if (block.type === "emailHeader" || block.type === "emailFooter") {
+    const bleed = (doc?.style.margin ?? 0) + 2;
+    return <div style={{ margin: `0 -${bleed}px` }} dangerouslySetInnerHTML={{ __html: html || `<div style="padding:16px;text-align:center;font-size:12px;color:#94a3b8;">Footer — nothing to show yet</div>` }} />;
+  }
+  return <div style={block.type === "emailSignature" ? { paddingBottom: 34 } : undefined} dangerouslySetInnerHTML={{ __html: html }} />;
 }

@@ -81,17 +81,20 @@ export const ROUTE_RULES = [
   // and land back on "/". The permission is the authority: journeys are
   // delegable workspace configuration, not platform administration.
   { prefix: "/journeys", anyOf: ["journeys.manage"] },
-  // Owner-only: bot configuration reads integration secrets, /products manages
-  // the catalogue, /trash reads every soft-deleted record through basePrisma
-  // (which bypasses the RLS extension). Their pages call requireOwner()
-  // themselves — this rule is the pre-filter, not the boundary.
-  { prefix: "/chatbot", owner: true },
-  { prefix: "/bot-builder", owner: true },
-  { prefix: "/products", owner: true },
-  { prefix: "/trash", owner: true },
+  // WORKSPACE owner: the bot, the catalogue and the trash are each a workspace's
+  // own. Bot configuration reads integration secrets — the workspace's own rows
+  // (settings.ts pins every read to the acting tenant); /trash reads through
+  // basePrisma but every query carries actingTrashPredicate's tenant. These were
+  // `owner: true` (PLATFORM owner), which a workspace's provisioned owner never
+  // is — so on every workspace but the founding one nobody could open them. The
+  // pages call requireTenantOwner() themselves; this rule is the pre-filter.
+  { prefix: "/chatbot", tenantOwner: true },
+  { prefix: "/bot-builder", tenantOwner: true },
+  { prefix: "/products", tenantOwner: true },
+  { prefix: "/trash", tenantOwner: true },
   // Repairs — the workspace issue inbox. Restricted to the owner, and not for
   // want of a narrower key: every fix route it links to is owner-gated already
-  // (/journeys calls requireOwner(), /settings/integration-overrides reads
+  // (/journeys calls requireOwner(), /settings/integrations reads
   // credential configuration), so a rule that let anyone else in would show them
   // problems they cannot act on and Fix buttons that bounce them back to "/".
   // The page also reports across domains — journeys, integrations — which no

@@ -1,6 +1,7 @@
 import { SaveForm, SaveButton } from "@/components/SaveForm";
 import { TICKET_TYPES, PRIORITIES } from "@/lib/helpdesk-constants";
 import { createTicket } from "@/app/actions/helpdesk";
+import ContactPicker from "@/components/ContactPicker";
 
 type Option = { id: string; label: string };
 
@@ -10,12 +11,7 @@ export function NewTicketForm({ contacts, mailboxes }: { contacts: Option[]; mai
     <SaveForm action={createTicket} success="Ticket created" className="card space-y-4">
       <div>
         <label className="label" htmlFor="contactId">Customer *</label>
-        <select id="contactId" name="contactId" required defaultValue="" className="input">
-          <option value="" disabled>Select a customer…</option>
-          {contacts.map((c) => (
-            <option key={c.id} value={c.id}>{c.label}</option>
-          ))}
-        </select>
+        <ContactPicker id="contactId" name="contactId" options={contacts} required />
       </div>
 
       <div>

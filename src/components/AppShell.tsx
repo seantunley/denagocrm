@@ -20,9 +20,26 @@ import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import ConnectivityIndicator from "@/components/ConnectivityIndicator";
 import { ActivityTypesProvider } from "@/components/ActivityTypesProvider";
+import { SettingsViewerProvider } from "@/components/SettingsViewer";
 import type { ActivityType } from "@/lib/activityTypes";
 
-type ShellUser = { id: string; name: string; role: string; permissions: string[]; avatarVersion?: string | null };
+type ShellUser = {
+  id: string;
+  name: string;
+  role: string;
+  permissions: string[];
+  avatarVersion?: string | null;
+  /**
+   * Owner of the WORKSPACE being viewed (requireTenantOwner) — what the nav and
+   * menus treat as "owner". `role === "owner"` is the PLATFORM-wide owner, which a
+   * workspace's own owner never has, so gating on it hid the owner's own
+   * surfaces (Chatbot, Flow builder, Trash, …) from every workspace but the first.
+   * Optional so existing test renders compile; absent means the platform answer.
+   */
+  isTenantOwner?: boolean;
+};
+
+const ownsWorkspace = (user: ShellUser) => user.isTenantOwner ?? user.role === "owner";
 
 /**
  * Help, Settings and the account menu, as one horizontal group.
@@ -49,7 +66,7 @@ function AccountCluster({ user, isOwner, tenantId }: { user: ShellUser; isOwner:
 }
 
 function SidebarInner({ user, inboxWaiting = 0, casesWaiting = 0, enabledModules, brand }: { user: ShellUser; inboxWaiting?: number; casesWaiting?: number; enabledModules?: string[]; brand?: { logoUrl: string | null; displayName: string } }) {
-  const isOwner = user.role === "owner";
+  const isOwner = ownsWorkspace(user);
   return (
     <div className="relative flex h-full flex-col overflow-hidden bg-sidebar">
       <div className="pointer-events-none absolute -left-28 top-24 size-64 rounded-full bg-orange-500/[0.055] blur-3xl" />
@@ -121,8 +138,9 @@ export default function AppShell({
   return (
     <TooltipProvider delayDuration={250}>
     <ActivityTypesProvider types={activityTypes}>
+    <SettingsViewerProvider isOwner={ownsWorkspace(user)} isPlatformOwner={user.role === "owner"} permissions={user.permissions} enabledModules={enabledModules}>
     <div className="min-h-screen">
-      <CommandMenu isAdmin={user.role === "owner"} permissions={user.permissions} enabledModules={enabledModules} />
+      <CommandMenu isAdmin={ownsWorkspace(user)} isPlatformOwner={user.role === "owner"} permissions={user.permissions} enabledModules={enabledModules} />
       <QuickCreateDialog />
       <Toaster />
 
@@ -148,7 +166,7 @@ export default function AppShell({
           />
         </div>
         <div className="flex w-[7.5rem] shrink-0 justify-end">
-          <AccountCluster user={user} isOwner={user.role === "owner"} tenantId={tenantId} />
+          <AccountCluster user={user} isOwner={ownsWorkspace(user)} tenantId={tenantId} />
         </div>
       </header>
 
@@ -160,7 +178,7 @@ export default function AppShell({
           <ClockWeather cities={weatherCities} />
         </div>
         <ConnectivityIndicator tenantId={tenantId} userId={user.id} />
-        <AccountCluster user={user} isOwner={user.role === "owner"} tenantId={tenantId} />
+        <AccountCluster user={user} isOwner={ownsWorkspace(user)} tenantId={tenantId} />
       </header>
 
       {/* Mobile drawer */}
@@ -195,6 +213,7 @@ export default function AppShell({
         </div>
       </main>
     </div>
+    </SettingsViewerProvider>
     </ActivityTypesProvider>
     </TooltipProvider>
   );

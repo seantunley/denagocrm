@@ -149,6 +149,13 @@ loaderKey._load = function (this: unknown, request: string, parent, isMain) {
   if (from.endsWith("journeyEvents.ts") && request === "./journeyContext") return journeyContext;
   if (from.endsWith("journeyScheduling.ts") && request === "./campaigns") return campaigns;
   if (from.endsWith("journeyScheduling.ts") && request === "./leadIdle") return leadIdle;
+  // The reminder sweeps' modules (service, signing, survey) reach the database
+  // through their own imports; nothing here enrols on those triggers, so they
+  // are inert stand-ins and no real client is ever built.
+  if (from.endsWith("journeyScheduling.ts") && request === "./modules/enabled") return { isModuleEnabled: async () => true };
+  if (from.endsWith("journeyScheduling.ts") && request === "./serviceReminders") return { vehiclesDueForService: async () => [] };
+  if (from.endsWith("journeyScheduling.ts") && request === "./signingReminders") return { signersAwaitingReminder: async () => [] };
+  if (from.endsWith("journeyScheduling.ts") && request === "./surveyDistributionQueue") return { unansweredAutomaticSurveys: async () => [] };
   return realLoad.call(this, request, parent, isMain);
 } as Loader;
 
@@ -571,7 +578,9 @@ test("the engine resolves ONE tenant per slice, and never reads it off a fetched
   // filter object would all match un-owned rows and re-open the hole the moment
   // enforcement went back to off.
   const helper = shipped("src/lib/journeyTenant.ts");
-  assert.match(helper, /writeTenantId\(\) \?\? DEFAULT_TENANT_ID/, "the founding tenant stands in when GLOBAL, and it throws when closed");
+  // ownedWriteTenantId: founding tenant only while dormant; refuses a system scope
+  // under enforcement and throws when closed (tests/noFoundingFallback.test.ts).
+  assert.match(helper, /return ownedWriteTenantId\(\);/, "the journey tenant never silently falls back to the founding workspace");
   for (const file of ["src/lib/journeyScheduling.ts", "src/lib/journeyEvents.ts", "src/lib/journeyTenant.ts"]) {
     const code = shipped(file);
     assert.ok(!/IS NOT DISTINCT FROM/i.test(code), `${file}: NULL-tolerant tenant matching is never correct here`);

@@ -6,6 +6,7 @@ import Module, { createRequire } from "node:module";
 import path from "node:path";
 import { deliverQuoteEmail, quotePdfFileName } from "../src/lib/quoteEmail";
 import { quotePrintLinks } from "../src/lib/quotePrintLinks";
+import { messagePlace } from "../src/lib/customerMessagePlaces";
 import {
   SIGNING_EMAILS,
   SIGNING_EMAIL_KINDS,
@@ -159,13 +160,17 @@ const VARS = {
   sender_name: "Pat",
 };
 
-test("Quote email is edited in Settings → Email templates beside the signing emails", () => {
-  assert.ok(SIGNING_EMAIL_KINDS.includes("quote"), "the settings loop renders every kind");
-  const settings = shipped("src/app/(app)/settings/page.tsx");
-  assert.match(settings, /SIGNING_EMAIL_KINDS\.map\(\(kind\) =>/);
-  assert.match(settings, /saveSigningEmailTemplate\.bind\(null, kind\)/);
-  assert.match(settings, /resetSigningEmailTemplate\.bind\(null, kind\)/);
+test("Quote email is edited on Document Studio beside the signing emails", () => {
+  assert.ok(SIGNING_EMAIL_KINDS.includes("quote"));
+  // The emails that send a document live with the documents (customerMessagePlaces.ts).
+  assert.equal(messagePlace("quote"), "documents");
+  // …as a document of the editor, like the documents beside it (EmailDesignCards → /doc-editor).
+  assert.match(shipped("src/app/(app)/document-studio/page.tsx"), /<EmailDesignCards kinds=\{emailKindsAt\("documents"\)\} frame \/>/);
+  const editors = shipped("src/components/CustomerMessageEditors.tsx");
+  assert.match(editors, /saveSigningEmailTemplate\.bind\(null, kind\)/);
+  assert.match(editors, /resetSigningEmailTemplate\.bind\(null, kind\)/);
   // The two-step picker is gone.
+  const settings = shipped("src/app/(app)/settings/page.tsx");
   assert.doesNotMatch(settings, /QUOTE_EMAIL_TEMPLATE|saveQuoteEmailSettings/);
   assert.doesNotMatch(shipped("src/app/actions/emails.ts"), /QUOTE_EMAIL_TEMPLATE|saveQuoteEmailSettings/);
 });
@@ -174,8 +179,8 @@ test("default Quote email: merge fields filled, no company literal, passes its o
   const def = SIGNING_EMAILS.quote;
   assert.equal(validateSigningTemplate("quote", def.subject, def.body), null);
   const e = renderSigningEmail("quote", null, VARS, BRAND);
-  assert.equal(e.subject, "Your quote Q-42 from Acme Carts");
-  assert.match(e.text, /^Hi Thandi,/);
+  assert.equal(e.subject, "Your quotation Q-42 from Acme Carts");
+  assert.match(e.text, /^Dear Thandi,/);
   assert.match(e.text, /Kind regards,\nPat\nAcme Carts$/);
   assert.doesNotMatch(e.html, /Open &amp; sign/, "no signing button on a quote email");
   for (const file of ["src/lib/quoteEmail.ts", "src/app/actions/quoteEmail.ts", "src/components/quotes/QuoteEmailDialog.tsx"]) {
@@ -195,7 +200,7 @@ test("an edited template round-trips: validated, stored as JSON, rendered back",
   assert.equal(e.text, "Morning Thandi Mokoena,\n\nHere it is.\n\nPat");
   // Reset = the stored row deleted → parse(null) → default wording.
   assert.equal(parseStoredSigningTemplate(null), null);
-  assert.equal(renderSigningEmail("quote", null, VARS, BRAND).subject, "Your quote Q-42 from Acme Carts");
+  assert.equal(renderSigningEmail("quote", null, VARS, BRAND).subject, "Your quotation Q-42 from Acme Carts");
   // Only this kind's fields; signing secrets are not quote fields.
   assert.match(validateSigningTemplate("quote", "Hi", "{{signing_link}}") ?? "", /Unknown field/);
 });
@@ -251,7 +256,7 @@ test("the quote email renders from the quote's tenant's template and brand only"
   assert.match(a.html, /011 000 0000/);
 
   const b = await tenantEmailContent("quote", "t_b", VARS);
-  assert.equal(b.subject, "Your quote Q-42 from Bravo", "tenant B has no override → default, never tenant A's");
+  assert.equal(b.subject, "Your quotation Q-42 from Bravo", "tenant B has no override → default, never tenant A's");
   assert.doesNotMatch(b.html, /Tenant A|011 000 0000|Acme/);
 
   const before = settingsReads.length;
@@ -301,7 +306,12 @@ test("print buttons use the same gate as the print routes", () => {
   // set canAccessQuote checks, empty without quote view permission.
   const quotes = shipped("src/app/(app)/quotes/page.tsx");
   assert.match(quotes, /requireAnyPermission\("quotes\.view_all", "quotes\.view_owned"\)/);
-  assert.match(quotes, /id: \{ in: accessibleQuoteIds \}/);
+  // The list's rows come from quoteListFilter (shared with the CSV export),
+  // which scopes them by getAccessibleQuoteIds.
+  assert.match(quotes, /const \{ where, all \} = await quoteListFilter\(user, \{ q, status \}\)/);
+  assert.match(quotes, /prisma\.quote\.findMany\(\{\s*where,/);
+  assert.match(shipped("src/lib/quoteListQuery.ts"), /getAccessibleQuoteIds\(user\)/);
+  assert.match(shipped("src/lib/quoteList.ts"), /input\.accessibleIds \? \[\{ id: \{ in: input\.accessibleIds \} \}\]/);
   assert.match(quotes, /quotePrintLinks\(quote\)/);
 
   const deliveries = shipped("src/app/(app)/deliveries/page.tsx");

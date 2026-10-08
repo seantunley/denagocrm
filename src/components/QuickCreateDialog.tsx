@@ -15,32 +15,40 @@ import ContactForm from "@/components/ContactForm";
 import JobCardForm from "@/components/JobCardForm";
 import VehicleForm from "@/components/VehicleForm";
 import type { FleetPicker } from "@/lib/fleetTypes";
-import { QuoteEditorDialog } from "@/components/quotes/QuoteEditorDialog";
+import { QuoteEditorDialog, type QuoteEditorDefaults } from "@/components/quotes/QuoteEditorDialog";
 import {
   createQuickContact,
   createQuickLead,
   createQuickVehicle,
   scheduleQuickActivity,
 } from "@/app/actions/quickCreate";
+import { createStaffAvailability } from "@/app/actions/staffAvailability";
+import { AvailabilityConflictDialog } from "@/components/AvailabilityConflictDialog";
 import LocationAutocomplete from "@/components/LocationAutocomplete";
 import { readPwaActivityShortcut } from "@/lib/pwaShortcuts";
 import { useActivityTypes } from "@/components/ActivityTypesProvider";
 import { pickableActivityTypes } from "@/lib/activityTypes";
+import ContactPicker from "@/components/ContactPicker";
+import { AttendeePicker } from "@/components/AttendeePicker";
 
-export type QuickCreateKind = "lead" | "contact" | "calendar" | "quote" | "jobcard" | "vehicle";
+export type QuickCreateKind = "lead" | "contact" | "calendar" | "availability" | "quote" | "jobcard" | "vehicle";
 
 export type QuickCreateDefaults = {
   dueDate?: string;
+  endDate?: string;
   workshop?: boolean;
   revalidate?: string;
   contactId?: string;
   contactLabel?: string;
+  /** Pre-selects the vehicle on a new job card (from a vehicle or customer page). */
+  vehicleId?: string;
 };
 
 const TITLES: Record<QuickCreateKind, string> = {
   lead: "New Lead",
   contact: "New Contact",
   calendar: "New Activity",
+  availability: "Block availability",
   quote: "New quote",
   jobcard: "New job card",
   vehicle: "Register vehicle",
@@ -57,7 +65,8 @@ type Options = {
   users: { id: string; name: string }[];
   vehicles: { id: string; label: string }[];
   fleetPicker: FleetPicker;
-  quoteDefaults: { validUntil: string; terms: string };
+  /** Sent only when the quote dialog is asked for (or the legacy full payload). */
+  quoteDefaults: QuoteEditorDefaults | null;
 };
 
 /** Global create dialog with contextual defaults and tenant-validated writes. */
@@ -68,6 +77,8 @@ export default function QuickCreateDialog() {
   const [optionsKind, setOptionsKind] = useState<QuickCreateKind | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [calendarType, setCalendarType] = useState<string>("call");
+  const [availabilityAllDay, setAvailabilityAllDay] = useState(false);
+  const [conflictMessage, setConflictMessage] = useState<string | null>(null);
   const activityTypes = useActivityTypes();
 
   // Close FOR REAL when the route changes. The Dialog wrapper only hides a
@@ -159,17 +170,37 @@ export default function QuickCreateDialog() {
 
   async function scheduleCalendar(formData: FormData) {
     try {
-      await scheduleQuickActivity(formData);
+      // A refusal (a calendar conflict, a full workshop slot, a follow-up with no
+      // note) comes back as a value.
+      const result = await scheduleQuickActivity(formData);
+      if (result?.error) {
+        setConflictMessage(result.error);
+        return;
+      }
       close();
-      toast.success("Activity scheduled");
+      toast.success(result?.success ?? "Activity scheduled");
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Could not schedule activity");
     }
   }
 
+  async function scheduleAvailability(formData: FormData) {
+    try {
+      const result = await createStaffAvailability(formData);
+      if (result.error) {
+        setConflictMessage(result.error);
+        return;
+      }
+      close();
+      toast.success(result.success ?? "Availability blocked");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Could not block availability");
+    }
+  }
+
   const currentOptions = optionsKind === kind ? options : null;
 
-  if (kind === "quote" && currentOptions) {
+  if (kind === "quote" && currentOptions?.quoteDefaults) {
     return (
       <QuoteEditorDialog
         open
@@ -177,11 +208,13 @@ export default function QuickCreateDialog() {
         contacts={currentOptions.contacts}
         products={currentOptions.products}
         defaults={currentOptions.quoteDefaults}
+        initialContactId={createDefaults.contactId}
       />
     );
   }
 
   return (
+    <>
     <Dialog open={Boolean(kind)} onOpenChange={(open) => !open && close()}>
       <ResponsiveDialogContent className="sm:max-w-2xl">
         <DialogHeader className="text-left">
@@ -217,7 +250,7 @@ export default function QuickCreateDialog() {
               <ContactForm action={createQuickContact} users={currentOptions.users} fleetPicker={currentOptions.fleetPicker} submitLabel="Create contact" variant="dialog" />
             )}
 
-            {kind === "jobcard" && <JobCardForm vehicles={currentOptions.vehicles} />}
+            {kind === "jobcard" && <JobCardForm vehicles={currentOptions.vehicles} defaultVehicleId={createDefaults.vehicleId} />}
 
             {kind === "vehicle" && (
               <VehicleForm
@@ -228,6 +261,82 @@ export default function QuickCreateDialog() {
                 showInitialKm
                 variant="dialog"
               />
+            )}
+
+            {kind === "availability" && (
+              <form action={scheduleAvailability} className="space-y-4">
+                <input type="hidden" name="revalidate" value={createDefaults.revalidate ?? "/calendar"} />
+                <div className="rounded-xl border border-amber-500/20 bg-amber-500/5 p-4">
+                  <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-amber-300">Staff availability</p>
+                  <p className="mt-1 text-sm text-muted-foreground">This blocks customer meetings and other scheduled work for the selected team member.</p>
+                </div>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <div>
+                    <label className="label">Reason *</label>
+                    <select name="summary" className={input} defaultValue="Leave" required>
+                      <option>Leave</option>
+                      <option>Personal appointment</option>
+                      <option>Training</option>
+                      <option>Off-site</option>
+                      <option>Internal meeting</option>
+                      <option>Unavailable</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="label">Team member *</label>
+                    <select name="assignedToId" className={input} defaultValue="">
+                      <option value="">Me</option>
+                      {currentOptions.users.map((user) => <option key={user.id} value={user.id}>{user.name}</option>)}
+                    </select>
+                  </div>
+                </div>
+                <label className="flex items-center gap-2 text-sm text-muted-foreground">
+                  <input
+                    type="checkbox"
+                    name="allDay"
+                    className="h-4 w-4 accent-orange-600"
+                    checked={availabilityAllDay}
+                    onChange={(event) => setAvailabilityAllDay(event.target.checked)}
+                  />
+                  All day / multiple full days
+                </label>
+                {availabilityAllDay ? (
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <div>
+                      <label className="label">First day *</label>
+                      <input type="date" name="startDate" className={input} required defaultValue={createDefaults.dueDate?.slice(0, 10)} />
+                    </div>
+                    <div>
+                      <label className="label">Last day *</label>
+                      <input type="date" name="endDate" className={input} required defaultValue={(createDefaults.endDate ?? createDefaults.dueDate)?.slice(0, 10)} />
+                    </div>
+                  </div>
+                ) : (
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <div>
+                      <label className="label">From *</label>
+                      <input type="datetime-local" name="startAt" className={input} required defaultValue={createDefaults.dueDate} />
+                    </div>
+                    <div>
+                      <label className="label">Until *</label>
+                      <input type="datetime-local" name="endAt" className={input} required defaultValue={createDefaults.endDate} />
+                    </div>
+                  </div>
+                )}
+                <div>
+                  <label className="label">Note *</label>
+                  <textarea
+                    name="note"
+                    className={`${input} min-h-24 resize-y`}
+                    required
+                    placeholder="e.g. Annual leave — out of office and not available for appointments"
+                  />
+                  <p className="mt-1.5 text-xs text-muted-foreground">The calendar shows this note with the staff member&apos;s name.</p>
+                </div>
+                <div className="flex justify-end border-t border-border pt-4">
+                  <button className="btn-primary">Block this time</button>
+                </div>
+              </form>
             )}
 
             {kind === "calendar" && (
@@ -253,19 +362,23 @@ export default function QuickCreateDialog() {
                     </select>
                   </div>
                   <div>
-                    <label className="label">When *</label>
+                    <label className="label">Starts *</label>
                     <input type="datetime-local" name="dueDate" className={input} defaultValue={createDefaults.dueDate} required />
+                  </div>
+                  <div>
+                    <label className="label">Ends *</label>
+                    <input type="datetime-local" name="endDate" className={input} defaultValue={createDefaults.endDate} required />
                   </div>
                 </div>
                 <div className="grid gap-3 sm:grid-cols-2">
                   <div>
                     <label className="label">Customer or contact</label>
-                    <select name="contactId" className={input} defaultValue={createDefaults.contactId ?? ""}>
-                      <option value="">—</option>
-                      {currentOptions.contacts.map((contact) => (
-                        <option key={contact.id} value={contact.id}>{contact.label}</option>
-                      ))}
-                    </select>
+                    <ContactPicker
+                      name="contactId"
+                      options={currentOptions.contacts}
+                      defaultValue={createDefaults.contactId ?? ""}
+                      emptyLabel="No customer"
+                    />
                   </div>
                   <div>
                     <label className="label">Assign to</label>
@@ -275,6 +388,7 @@ export default function QuickCreateDialog() {
                     </select>
                   </div>
                 </div>
+                <AttendeePicker users={currentOptions.users} />
                 <div>
                   <label className="label">Location</label>
                   <LocationAutocomplete className={input} placeholder="Showroom, workshop or customer address" />
@@ -307,5 +421,11 @@ export default function QuickCreateDialog() {
         )}
       </ResponsiveDialogContent>
     </Dialog>
+    <AvailabilityConflictDialog
+      message={conflictMessage}
+      onClose={() => setConflictMessage(null)}
+      title={kind === "availability" ? "Cannot block this time" : "Staff member unavailable"}
+    />
+    </>
   );
 }

@@ -11,7 +11,7 @@
  * exactly as the legacy InfoBlock filtered them.
  */
 import type { MergeContext } from "./merge";
-import { contactName, formatDate, formatZAR } from "@/lib/format";
+import { contactName, DEFAULT_REGIONAL, formatDate, formatZAR, type Regional } from "@/lib/format";
 import { computeWarranty, warrantyLabels } from "@/lib/warranty";
 import { jobLineCents } from "@/lib/workshop-constants";
 
@@ -72,7 +72,7 @@ const addressOf = (c: ContactForDoc | null) =>
   c ? [c.address, c.suburb, c.city, c.province, c.postalCode].filter(Boolean).join(", ") : "";
 
 /** Test-drive indemnity: the driver (lead), the vehicle of interest, today's date. */
-export function buildLeadContext(lead: LeadForDoc, now = new Date()): MergeContext {
+export function buildLeadContext(lead: LeadForDoc, now = new Date(), r: Regional = DEFAULT_REGIONAL): MergeContext {
   const vehicle = lead.product?.name ?? "Denago EV";
   const tokens: Record<string, string> = {
     "customer.name": lead.name,
@@ -87,7 +87,7 @@ export function buildLeadContext(lead: LeadForDoc, now = new Date()): MergeConte
     vehicle,
     "vehicle.color": lead.color ?? "",
     "vehicle.lines": lines(lead.color ? `Colour: ${lead.color}` : null),
-    "date.today": formatDate(now),
+    "date.today": formatDate(now, r),
   };
   const vars = {
     lead: { name: lead.name, status: lead.status, source: lead.source, hasContact: Boolean(lead.contact) },
@@ -107,12 +107,13 @@ export function buildWarrantyContext(
   claim: WarrantyClaimForDoc,
   parts: WarrantyPartForDoc[] = [],
   now = new Date(),
+  r: Regional = DEFAULT_REGIONAL,
 ): MergeContext {
   const v = claim.vehicle;
   const w = computeWarranty(v, now);
-  const warrantySummary = `Warranty: ${warrantyLabels[w.status]}${w.expiryDate ? ` (until ${formatDate(w.expiryDate)})` : ""}`;
+  const warrantySummary = `Warranty: ${warrantyLabels[w.status]}${w.expiryDate ? ` (until ${formatDate(w.expiryDate, r)})` : ""}`;
   const resolutionLine = claim.resolution
-    ? `${claim.resolution}${claim.resolvedAt ? ` (${formatDate(claim.resolvedAt)})` : ""}`
+    ? `${claim.resolution}${claim.resolvedAt ? ` (${formatDate(claim.resolvedAt, r)})` : ""}`
     : "";
   const tokens: Record<string, string> = {
     "customer.name": contactName(v.contact),
@@ -122,33 +123,35 @@ export function buildWarrantyContext(
     "customer.lines": lines(v.contact.phone, v.contact.email),
     "claim.number": `WC-${claim.id.slice(-6).toUpperCase()}`,
     "claim.status": claim.status,
-    "claim.date": formatDate(claim.claimedAt),
+    "claim.date": formatDate(claim.claimedAt, r),
     "claim.description": claim.description,
     "claim.resolution": claim.resolution ?? "",
-    "claim.resolvedAt": claim.resolvedAt ? formatDate(claim.resolvedAt) : "—",
+    "claim.resolvedAt": claim.resolvedAt ? formatDate(claim.resolvedAt, r) : "—",
     "claim.resolutionLine": resolutionLine,
     vehicle: v.model,
     "vehicle.vin": v.vin ?? "—",
     "vehicle.reg": v.regNumber ?? "—",
     "vehicle.color": v.color ?? "—",
-    "vehicle.purchased": v.purchaseDate ? formatDate(v.purchaseDate) : "—",
+    "vehicle.purchased": v.purchaseDate ? formatDate(v.purchaseDate, r) : "—",
     "vehicle.lines": lines(
       v.vin ? `VIN: ${v.vin}` : null,
-      v.purchaseDate ? `Purchased: ${formatDate(v.purchaseDate)}` : null,
+      v.purchaseDate ? `Purchased: ${formatDate(v.purchaseDate, r)}` : null,
       warrantySummary,
     ),
     "warranty.status": warrantyLabels[w.status],
-    "warranty.expiry": w.expiryDate ? formatDate(w.expiryDate) : "—",
+    "warranty.expiry": w.expiryDate ? formatDate(w.expiryDate, r) : "—",
     "warranty.summary": warrantySummary,
-    "date.today": formatDate(now),
+    "date.today": formatDate(now, r),
   };
   const items = parts.map((p) => ({
     cells: [
       { value: `${p.kind === "labour" ? "Labour — " : ""}${p.description}` },
       { value: String(p.qty) },
-      { value: formatZAR(p.unitPriceCents) },
-      { value: formatZAR(jobLineCents(p)) },
+      { value: formatZAR(p.unitPriceCents, r) },
+      { value: formatZAR(jobLineCents(p), r) },
     ],
+    unitPrice: p.unitPriceCents / 100,
+    lineTotal: jobLineCents(p) / 100,
   }));
   const vars = {
     claim: {

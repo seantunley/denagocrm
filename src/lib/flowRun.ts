@@ -1,5 +1,5 @@
 import { prisma } from "./db";
-import { getSetting } from "./settings";
+import { getRegionalSettings, getSetting } from "./settings";
 import { formatZAR } from "./format";
 import { matchByPhone } from "./whatsapp";
 import { generateBotReply, routeBotChoice, type BotMsg } from "./botAi";
@@ -18,6 +18,8 @@ import { recordBotFlowEventsTx, type BotFlowEventInput } from "./botFlowAnalytic
 import { completeInboundBotEventTx, currentInboundBotClaim } from "./botInboundEvent";
 import { decideInboundAct, HUMAN_RESPONSIBILITY_HOURS, type BotOwnership } from "./botOwnership";
 import type { FlowEntryContext } from "./flowRouting";
+import type { VoiceLanguage } from "./voiceLanguage";
+import { getCompanyProfile } from "./companyProfile";
 
 export const FLOW_MARKER = "🤖 Flow";
 const FLOW_VERSION_VAR = "__flow_version";
@@ -47,9 +49,12 @@ function handoffBody(context?: FlowHandoffContext): string {
 }
 
 async function priceList(): Promise<string> {
-  const products = await prisma.product.findMany({ where: { active: true }, include: { colors: true }, orderBy: { name: "asc" } });
+  const [products, regional] = await Promise.all([
+    prisma.product.findMany({ where: { active: true }, include: { colors: true }, orderBy: { name: "asc" } }),
+    getRegionalSettings(),
+  ]);
   if (!products.length) return "I'll have the team send you our current pricing 👍";
-  return "Here's our current range:\n" + products.map((p) => `• ${p.name}${p.basePriceCents ? ` — from ${formatZAR(p.basePriceCents)}` : ""}` + (p.colors.length ? ` (${p.colors.map((c) => c.name).join(", ")})` : "")).join("\n");
+  return "Here's our current range:\n" + products.map((p) => `• ${p.name}${p.basePriceCents ? ` — from ${formatZAR(p.basePriceCents, regional)}` : ""}` + (p.colors.length ? ` (${p.colors.map((c) => c.name).join(", ")})` : "")).join("\n");
 }
 async function coloursList(): Promise<string> {
   const products = await prisma.product.findMany({ where: { active: true }, include: { colors: true }, orderBy: { name: "asc" } });
@@ -103,7 +108,7 @@ export async function runWhatsAppFlow(digits: string, input: FlowInput, entryCon
   let seed: Record<string, string> = {};
   if (!existing || restart) {
     const contact = match.contactId ? await prisma.contact.findUnique({ where: { id: match.contactId } }) : null;
-    seed = greetingVars(contact?.firstName ?? null);
+    seed = greetingVars(contact?.firstName ?? null, (await getCompanyProfile()).name);
   }
   const builtins = flowRuntimeVars("whatsapp");
   const session: FlowSession = !existing || restart ? { nodeId: null, vars: { ...builtins, ...seed } } : { nodeId: existing.nodeId, vars: { ...existing.vars, ...builtins } };
@@ -161,7 +166,7 @@ export async function runWhatsAppFlow(digits: string, input: FlowInput, entryCon
   return true;
 }
 
-export async function runWhatsAppBot(digits: string, input: FlowInput, opts: { voiceNote?: boolean; entryContext?: FlowEntryContext } = {}): Promise<void> {
+export async function runWhatsAppBot(digits: string, input: FlowInput, opts: { voiceNote?: boolean; language?: VoiceLanguage | null; entryContext?: FlowEntryContext } = {}): Promise<void> {
   // Ownership gates EVERY route into the bot, not just the flow runner.
   //
   // maybeAutoReply never reads BotSession — its only brake is botShouldPause, a
@@ -182,7 +187,7 @@ export async function runWhatsAppBot(digits: string, input: FlowInput, opts: { v
     if (gate.act === "suppress") return;
   }
 
-  if (opts.voiceNote) { await maybeAutoReply(digits, input.text, { voiceNote: true }); return; }
+  if (opts.voiceNote) { await maybeAutoReply(digits, input.text, { voiceNote: true, language: opts.language ?? null }); return; }
   if (await isFlowEnabled()) { await runWhatsAppFlow(digits, input, opts.entryContext); return; }
   await maybeAutoReply(digits, input.text);
 }

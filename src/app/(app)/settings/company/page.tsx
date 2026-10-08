@@ -1,4 +1,4 @@
-import { requireOwner } from "@/lib/auth";
+import { requireTenantOwner } from "@/lib/auth";
 import { getCompanyProfile } from "@/lib/companyProfile";
 import { saveCompanyProfile } from "@/app/actions/company";
 import { SettingsWorkspace } from "@/components/settings-workspace";
@@ -20,7 +20,7 @@ const FIELDS: { name: string; label: string; placeholder?: string }[] = [
 ];
 
 export default async function CompanyProfilePage() {
-  await requireOwner();
+  await requireTenantOwner();
   const profile = await getCompanyProfile();
 
   return (

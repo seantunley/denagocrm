@@ -3,6 +3,7 @@ import { ChevronRight, MessageCircle } from "lucide-react";
 import RowModal from "@/components/RowModal";
 import InboxReply from "@/components/InboxReply";
 import { markThreadRead, setThreadArchived } from "@/app/actions/communications";
+import { SaveForm, SaveButton } from "@/components/SaveForm";
 import { formatDateTime } from "@/lib/format";
 import { storedFileSrc } from "@/lib/storedFileSrc";
 import { threadCollaborationKey, type InboxThread, type ThreadCollaboration } from "@/lib/inboxThreads";
@@ -121,9 +122,9 @@ export default function SocialThreadList({
                   {thread.href ? <Link href={thread.href} className="font-semibold text-primary hover:underline">{thread.name}</Link> : <span className="font-semibold">{thread.name}</span>}
                   <p className="text-[11px] text-muted-foreground">{meta.label} · {formatDateTime(thread.lastAt)}</p>
                 </div>
-                <form action={setThreadArchived.bind(null, thread.contactId, thread.leadId, thread.channel, !thread.archived)} className="ml-auto">
-                  <button type="submit" className="btn-secondary btn-sm">{thread.archived ? "Unarchive" : "Archive"}</button>
-                </form>
+                <SaveForm action={setThreadArchived.bind(null, thread.contactId, thread.leadId, thread.channel, !thread.archived)} className="ml-auto">
+                  <SaveButton className="btn-secondary btn-sm" pendingLabel="…">{thread.archived ? "Unarchive" : "Archive"}</SaveButton>
+                </SaveForm>
               </div>
 
               <div className="mt-4 max-h-[52vh] space-y-2 overflow-y-auto rounded-2xl border border-border bg-background/45 p-3 overscroll-contain">

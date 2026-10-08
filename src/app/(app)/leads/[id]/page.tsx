@@ -3,7 +3,6 @@ import { SaveForm, SaveButton } from "@/components/SaveForm";
 import { notFound } from "next/navigation";
 import { prisma } from "@/lib/db";
 import {
-  markWon,
   markLost,
   reopenLead,
   deleteLead,
@@ -14,12 +13,16 @@ import LeadForm from "@/components/LeadForm";
 import { createQuoteFromLead } from "@/app/actions/quotes";
 import CommsTimeline from "@/components/CommsTimeline";
 import ActivityPanel from "@/components/ActivityPanel";
+import VoiceDebriefButton from "@/components/VoiceDebriefButton";
 import EmailComposer from "@/components/EmailComposer";
 import { composerReplyToDefault } from "@/lib/replyToDefault";
 import LeadTimeline from "@/components/LeadTimeline";
 import { auditDetailFor } from "@/lib/auditDetailQuery";
 import ConfirmDelete from "@/components/ConfirmDelete";
 import AddToContactsButton from "@/components/AddToContactsButton";
+import MarkWonButton from "@/components/MarkWonDialog";
+import QuoteRowActions from "@/components/quotes/QuoteRowActions";
+import { hasPermission } from "@/lib/permissions";
 import CustomFieldsCard from "@/components/custom-fields/CustomFieldsCard";
 import MarkLeadViewed from "@/components/MarkLeadViewed";
 import WhatsAppPanel from "@/components/WhatsAppPanel";
@@ -33,15 +36,19 @@ import { listActingTenantStaff } from "@/lib/tenantActor";
 import { brandForTenant, teamSignoff } from "@/lib/tenantBrand";
 import { getActiveTenantId } from "@/lib/auth";
 import { isSmtpConfigured, renderTemplate, leadVars } from "@/lib/email";
+import { getRegionalSettings } from "@/lib/settings";
 import { contactName, formatDate, formatDateTime, formatZAR } from "@/lib/format";
 import { payableTotalCents } from "@/lib/pricing";
-import { getAccessibleQuoteIds } from "@/lib/permissions";
+import { getAccessibleContactIds, getAccessibleQuoteIds } from "@/lib/permissions";
 import { quotePrintLinks } from "@/lib/quotePrintLinks";
 import { isModuleEnabled } from "@/lib/modules/enabled";
 import { EntityDetailShell } from "@/components/entity-detail-shell";
 import { StatusPill } from "@/components/visual-system";
+import { LeadScoreBadge } from "@/components/LeadScoreBadge";
+import { scoreLeads } from "@/lib/leadScoreLoader";
 import { leadAttribution, isAdClick } from "@/lib/attribution";
-import { Car, Check, FileText } from "lucide-react";
+import { Car, FileText } from "lucide-react";
+import ContactPicker from "@/components/ContactPicker";
 
 const RESEARCH_SUBJECT = "🔎 AI research";
 
@@ -57,10 +64,10 @@ export default async function LeadDetailPage({
   searchParams,
 }: {
   params: Promise<{ id: string }>;
-  searchParams: Promise<{ tab?: string; schedule?: string }>;
+  searchParams: Promise<{ tab?: string; schedule?: string; edit?: string }>;
 }) {
   const { id } = await params;
-  const { tab, schedule } = await searchParams;
+  const { tab, schedule, edit } = await searchParams;
   const user = await requireUser();
   // The composer's Reply-To default: this person plus the mailbox IMAP reads, so
   // a customer's reply reaches both their inbox and this record's timeline. Never
@@ -75,16 +82,38 @@ export default async function LeadDetailPage({
       assignedTo: true,
       createdBy: true,
       communications: { include: { user: true }, orderBy: { occurredAt: "desc" } },
-      activities: { include: { assignedTo: true }, orderBy: { dueDate: "asc" } },
+      activities: {
+        include: {
+          assignedTo: true,
+          attendees: { select: { userId: true, user: { select: { name: true } } }, orderBy: { createdAt: "asc" } },
+        },
+        orderBy: { dueDate: "asc" },
+      },
       quotes: { where: { deletedAt: null }, include: { items: true, fees: { orderBy: { sortOrder: "asc" } } }, orderBy: { createdAt: "desc" } },
       researchNotes: { orderBy: { createdAt: "desc" } },
     },
   });
   if (!lead) notFound();
   const automotiveOn = await isModuleEnabled("automotive");
+  const [canCancelQuotes, canDuplicateQuotes, canBookTestDrive, canEditLead, accessibleContactIds, leadScore] = await Promise.all([
+    hasPermission(user, "quotes.change_status"),
+    hasPermission(user, "quotes.create"),
+    hasPermission(user, "activities.manage"),
+    hasPermission(user, "leads.edit"),
+    getAccessibleContactIds(user),
+    // The same loader the Today queue ranks by, so the badge here and the
+    // position there can never disagree. A closed deal scores 0 — skip the reads.
+    lead.status === "open" ? scoreLeads([lead]).then((scores) => scores.get(lead.id)) : undefined,
+  ]);
   const alreadyViewed = !!lead.viewedAt;
   const [contacts, users, templates, smtpConfigured, audit, waConfigured, libraryDocuments, products, stages] = await Promise.all([
-    prisma.contact.findMany({ orderBy: { firstName: "asc" }, take: 500 }),
+    // The customer pickers. `null` means unrestricted; `[]` means nothing
+    // accessible and must stay an impossible match, not an absent filter.
+    prisma.contact.findMany({
+      where: accessibleContactIds ? { id: { in: accessibleContactIds } } : {},
+      orderBy: { firstName: "asc" },
+      take: 500,
+    }),
     // Feeds BOTH pickers on this page — the lead's "Assigned to" in the edit
     // modal and the activity assignee in the Activities tab. `User` is a global
     // model, so `prisma.user.findMany` was listing every user on the platform in
@@ -112,7 +141,7 @@ export default async function LeadDetailPage({
   const libraryDocs = libraryDocuments
     .filter((d) => d.versions[0])
     .map((d) => ({ id: d.versions[0].id, label: `${d.name} (v${d.versions[0].version})` }));
-  const vars = leadVars(lead, teamSignoff(await brandForTenant(await getActiveTenantId())));
+  const vars = leadVars(lead, teamSignoff(await brandForTenant(await getActiveTenantId())), await getRegionalSettings());
   const renderedTemplates = templates.map((t) => ({
     id: t.id,
     name: t.name,
@@ -145,7 +174,15 @@ export default async function LeadDetailPage({
         backLabel="Leads"
         eyebrow="Sales opportunity"
         title={lead.title}
-        status={<StatusPill tone={lead.status === "won" ? "success" : lead.status === "lost" ? "danger" : "info"}>{lead.status === "open" ? lead.stage.name : lead.status}</StatusPill>}
+        status={<>
+          <StatusPill tone={lead.status === "won" ? "success" : lead.status === "lost" ? "danger" : "info"}>{lead.status === "open" ? lead.stage.name : lead.status}</StatusPill>
+          {leadScore && leadScore.score > 0 && (
+            <Link href="/today?view=all" className="inline-flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground" title={leadScore.reasons.join(" · ")}>
+              <LeadScoreBadge score={leadScore.score} />
+              {leadScore.reasons[0]}
+            </Link>
+          )}
+        </>}
         description={`${lead.name} · ${lead.source}`}
         meta={`Added ${formatDate(lead.createdAt)}${lead.assignedTo ? ` · Owner: ${lead.assignedTo.name}` : " · Unassigned"}`}
         facts={[
@@ -160,11 +197,17 @@ export default async function LeadDetailPage({
               <SaveForm success="Quote created" resetOnSuccess={false} action={createQuoteFromLead.bind(null, lead.id)}>
                 <SaveButton className="btn-primary"><FileText className="size-4" />Create quote</SaveButton>
               </SaveForm>
-              <SaveForm success="Marked won" resetOnSuccess={false} action={markWon.bind(null, lead.id)}>
-                <SaveButton className="btn bg-emerald-700 text-white hover:bg-emerald-600">
-                  <Check className="size-4" />Mark won
-                </SaveButton>
-              </SaveForm>
+              {/* Gap audit #24: book from the lead itself; the form opens with the
+                  lead (and its customer, when linked) already chosen. */}
+              {automotiveOn && canBookTestDrive && (
+                <Link
+                  href={`/test-drives?book=1&leadId=${lead.id}${lead.contactId ? `&contactId=${lead.contactId}` : ""}`}
+                  className="btn-secondary"
+                >
+                  Book test drive
+                </Link>
+              )}
+              <MarkWonButton leadId={lead.id} leadName={lead.name} />
               <ModalTrigger
                 label="Mark lost"
                 title={`Why was “${lead.title}” lost?`}
@@ -191,14 +234,17 @@ export default async function LeadDetailPage({
               <SaveButton className="btn-secondary">Reopen</SaveButton>
             </SaveForm>
           )}
-          <Link
-            href={`/leads/${lead.id}/indemnity`}
-            target="_blank"
-            className="btn-secondary"
-            title="Print a test-drive indemnity for this customer to sign"
-          >
-            <Car className="size-4" />Indemnity
-          </Link>
+          {/* A test-drive indemnity: automotive workspaces only. */}
+          {automotiveOn && (
+            <Link
+              href={`/leads/${lead.id}/indemnity`}
+              target="_blank"
+              className="btn-secondary"
+              title="Print a test-drive indemnity for this customer to sign"
+            >
+              <Car className="size-4" />Indemnity
+            </Link>
+          )}
           <ConfirmDelete
             action={deleteLead.bind(null, lead.id)}
             title={`Delete lead “${lead.title}”?`}
@@ -237,10 +283,13 @@ export default async function LeadDetailPage({
                     <div className="card">
                       <div className="flex items-center justify-between mb-3">
                         <h2 className="font-semibold">Details</h2>
-                        <ModalTrigger
+                        {/* THE lead editor. The old /leads/[id]/edit page was a second
+                            copy of this form and now opens this one (?edit=1). */}
+                        {canEditLead && <ModalTrigger
                           label="✎ Edit details"
                           title={`Edit “${lead.title}”`}
                           buttonClass="btn-secondary btn-sm"
+                          defaultOpen={edit === "1"}
                         >
                           <LeadForm
                             action={updateLead.bind(null, lead.id)}
@@ -256,7 +305,7 @@ export default async function LeadDetailPage({
                             defaults={lead}
                             submitLabel="Save changes"
                           />
-                        </ModalTrigger>
+                        </ModalTrigger>}
                       </div>
                       <dl className="space-y-2 text-sm max-w-xl">
                         {[
@@ -367,18 +416,12 @@ export default async function LeadDetailPage({
                       <label className="label">
                         {lead.contact ? "Change linked customer" : "Link to customer"}
                       </label>
-                      <select
+                      <ContactPicker
                         name="contactId"
-                        className="input"
+                        options={contacts.map((c) => ({ id: c.id, label: contactName(c) }))}
                         defaultValue={lead.contactId ?? ""}
-                      >
-                        <option value="">Select customer…</option>
-                        {contacts.map((c) => (
-                          <option key={c.id} value={c.id}>
-                            {contactName(c)}
-                          </option>
-                        ))}
-                      </select>
+                        required
+                      />
                       <SaveButton className="btn-secondary btn-sm w-full">Save customer link</SaveButton>
                     </SaveForm>
                   </div>
@@ -389,14 +432,17 @@ export default async function LeadDetailPage({
                 label: "Activities",
                 count: lead.activities.filter((a) => a.status === "planned").length,
                 content: (
-                  <ActivityPanel
-                    activities={lead.activities}
-                    users={users}
-                    currentUserId={user.id}
-                    leadId={lead.id}
-                    revalidate={path}
-                    startOpen={tab === "activities" && schedule === "1"}
-                  />
+                  <div className="space-y-3">
+                    {canBookTestDrive && <VoiceDebriefButton leadId={lead.id} />}
+                    <ActivityPanel
+                      activities={lead.activities}
+                      users={users}
+                      currentUserId={user.id}
+                      leadId={lead.id}
+                      revalidate={path}
+                      startOpen={tab === "activities" && schedule === "1"}
+                    />
+                  </div>
                 ),
               },
               {
@@ -448,6 +494,9 @@ export default async function LeadDetailPage({
                                   {link.label}
                                 </a>
                               ))}
+                              {!q.supersededAt && (
+                                <QuoteRowActions quoteId={q.id} number={q.number} status={q.status} signed={Boolean(q.signedAt)} canCancel={canCancelQuotes} canDuplicate={canDuplicateQuotes} />
+                              )}
                             </li>
                           );
                         })}

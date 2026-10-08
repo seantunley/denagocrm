@@ -5,7 +5,7 @@ import type { Prisma } from "@prisma/client";
 import { asActionResult, refuse, type ActionResult } from "@/lib/actionResult";
 import { prisma, basePrisma } from "@/lib/db";
 import { withEditableQuote } from "@/lib/quoteLock";
-import { requireOwner } from "@/lib/auth";
+import { requireTenantOwner } from "@/lib/auth";
 import {
   requireContactAccess,
   requireLeadAccess,
@@ -30,15 +30,15 @@ const str = (fd: FormData, k: string) => String(fd.get(k) ?? "").trim();
 
 /** Create or update a custom-field definition. Owner only. */
 export async function saveCustomFieldDef(formData: FormData) {
-  return withActingStaffScope(async () => {
-    const owner = await requireOwner();
+  return asActionResult(async () => {
+    const owner = await requireTenantOwner();
     const id = str(formData, "id") || null;
     const entity = str(formData, "entity");
     const label = str(formData, "label");
     const type = str(formData, "type") || "text";
-    if (!isCustomEntity(entity)) throw new Error("Unknown entity");
-    if (!isFieldType(type)) throw new Error("Unknown field type");
-    if (!label) throw new Error("Label is required");
+    if (!isCustomEntity(entity)) refuse("Choose what the field belongs to.");
+    if (!isFieldType(type)) refuse("Choose a field type.");
+    if (!label) refuse("Give the field a label.");
 
     const options =
       type === "select"
@@ -85,15 +85,16 @@ export async function saveCustomFieldDef(formData: FormData) {
     });
     revalidatePath("/settings/custom-fields");
     revalidatePath("/", "layout");
+    return { success: id ? "Field updated" : "Field added" };
   });
 }
 
 /** Delete a custom-field definition (and its values, via cascade). Owner only. */
 export async function deleteCustomFieldDef(id: string) {
-  return withActingStaffScope(async () => {
-    const owner = await requireOwner();
+  return asActionResult(async () => {
+    const owner = await requireTenantOwner();
     const def = await prisma.customFieldDef.findUnique({ where: { id } });
-    if (!def) return;
+    if (!def) refuse("That field is already gone — refresh the page.");
     await prisma.customFieldDef.delete({ where: { id } });
     await logAudit({
       action: "custom_field.deleted",

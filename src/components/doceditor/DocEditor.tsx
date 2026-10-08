@@ -5,6 +5,7 @@ import Link from "next/link";
 import { unstable_rethrow, useRouter } from "next/navigation";
 import { useEditor } from "@/lib/doceditor/store";
 import type { DocumentModel } from "@/lib/doceditor/model";
+import { staleWordingWarnings, type WordingSettings } from "@/lib/doceditor/wordingCheck";
 import { saveDocEditor, importDocEditorTemplate } from "@/app/actions/doceditor";
 import { publishBuilderVersion } from "@/app/actions/docbuilder";
 import { finaliseCustomDocument, saveCustomDocument } from "@/app/actions/customDocuments";
@@ -58,7 +59,17 @@ export function DocEditor({
   initialPublishState = "never",
   hasStandardLayout = false,
   mode = "template",
+  wordingSettings,
+  email,
 }: {
+  /**
+   * A customer EMAIL (template key `email:…`): `frame` for the shared frame,
+   * else one message. Shows a Subject line, previews as the email, and hides
+   * what only a printed document has (pages, record preview, export).
+   */
+  email?: { frame: boolean; backHref: string };
+  /** Quote-bound layouts only: warn when typed-in validity/VAT wording contradicts these. */
+  wordingSettings?: WordingSettings;
   id: string;
   initialDoc: DocumentModel;
   records: RecordOption[];
@@ -251,7 +262,14 @@ export function DocEditor({
       const result = await publishBuilderVersion(id);
       if (!result.ok) throw new Error("publish failed");
       setPublishState("live");
-      toast.success(`Published version ${result.version}. Quotes now use this layout.`);
+      toast.success(
+        email
+          ? email.frame
+            ? `Published version ${result.version}. Every customer email now uses this frame.`
+            : `Published version ${result.version}. Customers now get this email (once the email frame is published).`
+          : `Published version ${result.version}. Quotes now use this layout.`,
+      );
+      for (const warning of result.warnings ?? []) toast.warning(warning);
     } catch (error) {
       unstable_rethrow(error);
       toast.error("Not published. Nothing changed on real documents; try again.");
@@ -268,10 +286,13 @@ export function DocEditor({
     );
   }
 
+  const wordingWarnings = wordingSettings ? staleWordingWarnings(doc, wordingSettings) : [];
   const recordQuery = record
     ? `?record=${encodeURIComponent(record)}`
     : "";
-  const previewUrl = isDocument ? `/api/pdf/doc-instance/${id}` : `/api/pdf/doc-editor/${id}${recordQuery}`;
+  const previewUrl = email
+    ? `/api/email-preview/${id}`
+    : isDocument ? `/api/pdf/doc-instance/${id}` : `/api/pdf/doc-editor/${id}${recordQuery}`;
   const buttonClass =
     "inline-flex h-8 items-center gap-1.5 rounded-md border border-white/10 bg-white/[0.035] px-2.5 text-xs text-slate-300 transition hover:bg-white/[0.08] hover:text-white";
 
@@ -280,10 +301,10 @@ export function DocEditor({
       <BuilderWorkspaceBar
         identity={
           <Link
-            href="/document-studio"
+            href={email?.backHref ?? "/document-studio"}
             className="text-xs text-slate-400 hover:text-white"
           >
-            ← Document Studio
+            {email ? "← Customer messages" : "← Document Studio"}
           </Link>
         }
         title={
@@ -296,9 +317,13 @@ export function DocEditor({
           />
         }
         description={
-          isDocument
-            ? "Custom document · your own copy — editing it never changes the template"
-            : "Document Editor · drag content onto a print-ready canvas"
+          email
+            ? email.frame
+              ? "Customer email frame · the header, signature and footer every customer email shares"
+              : "Customer email · drag content onto the email; Preview shows exactly what the customer receives"
+            : isDocument
+              ? "Custom document · your own copy — editing it never changes the template"
+              : "Document Editor · drag content onto a print-ready canvas"
         }
         status={
           <div className="flex items-center gap-3">
@@ -385,15 +410,18 @@ export function DocEditor({
         <button type="button" className={buttonClass} onClick={redo} title="Redo (Ctrl+Shift+Z)">
           <Redo2 className="size-4" />
         </button>
+        {!email && (
         <button type="button" className={buttonClass} onClick={() => addPage()} title="Add a page">
           <Plus className="size-4" />
           <span className="hidden sm:inline">Page</span>
         </button>
+        )}
         {!isDocument && (<>
         <VersionHistory
           id={id}
           onPublished={() => setPublishState("live")}
           hasStandardLayout={hasStandardLayout}
+          standard={email ? (email.frame ? "standard frame" : "standard wording") : undefined}
           save={async () => {
             const current = useEditor.getState().doc;
             if (current) {
@@ -403,6 +431,7 @@ export function DocEditor({
           }}
         />
 
+        {!email && (
         <select
           className="h-8 rounded-md border border-slate-300 px-2 text-sm text-slate-700"
           value={record}
@@ -416,6 +445,7 @@ export function DocEditor({
             </option>
           ))}
         </select>
+        )}
         </>)}
         <a
           className={buttonClass}
@@ -430,7 +460,7 @@ export function DocEditor({
             record was chosen in the PREVIEW dropdown beside it — a third way to
             create a signing envelope for a quote, from a design tool, next to a
             control that says preview. Sending is the quote's Send tab. */}
-        {!isDocument && (<>
+        {!isDocument && !email && (<>
         <button
           type="button"
           className={buttonClass}
@@ -484,6 +514,28 @@ export function DocEditor({
           {saveState === "saving" ? "Saving…" : "Save"}
         </button>
       </BuilderWorkspaceBar>
+
+      {email && !email.frame && (
+        <div className="flex items-center gap-3 border-b border-slate-200 bg-white px-4 py-2">
+          <label htmlFor="email-subject" className="text-xs font-semibold uppercase tracking-wide text-slate-500">Subject</label>
+          <input
+            id="email-subject"
+            className="h-8 flex-1 rounded-md border border-slate-300 px-2 text-sm text-slate-800 focus:border-orange-400 focus:outline-none"
+            value={doc.email?.subject ?? ""}
+            placeholder="The subject line — fields like {{document_title}} are filled in for each customer"
+            onChange={(event) => {
+              const subject = event.target.value;
+              useEditor.getState().commit((d) => ({ ...d, email: { ...d.email, subject } }));
+            }}
+          />
+        </div>
+      )}
+
+      {wordingWarnings.length > 0 && (
+        <div role="status" className="border-b border-amber-300 bg-amber-50 px-4 py-2 text-xs text-amber-900">
+          {wordingWarnings.map((warning) => <p key={warning}>{warning}</p>)}
+        </div>
+      )}
 
       <DndController>
         <div className="flex min-h-0 flex-1">

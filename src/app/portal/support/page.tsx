@@ -8,6 +8,7 @@ import { requirePortalScope } from "@/lib/portalAccess";
 import { isModuleEnabled } from "@/lib/modules/enabled";
 import { PortalCaseForm } from "@/components/PortalExpansionForms";
 import { contactName, formatDate } from "@/lib/format";
+import { getRegionalSettings } from "@/lib/settings";
 import { EmptyState, PortalPageHeader, SectionHeading, StatusPill, Surface } from "@/components/visual-system";
 
 type CaseRow = {
@@ -35,6 +36,7 @@ export default async function PortalSupportPage() {
   if (!contact) redirect("/portal/login");
   // Cached per request — the layout and every page share one resolution.
   const brand = await portalBrand();
+  const regional = await getRegionalSettings();
   const scope = await requirePortalScope();
   const automotiveOn = await isModuleEnabled("automotive");
 
@@ -67,7 +69,7 @@ export default async function PortalSupportPage() {
       <PortalPageHeader eyebrow="We're here to help" title={automotiveOn ? "Support & warranty" : "Support"} description="Submit a request, track its progress and keep the conversation with our team in one secure place." />
 
       <Surface className="space-y-5 p-5 sm:p-6">
-        <SectionHeading title="Start a new request" description={brand.branded ? `Tell us what you need and we’ll route it to the right ${brand.displayName} specialist.` : "Tell us what you need and we’ll route it to the right Denago specialist."} action={<span className="grid size-10 place-items-center rounded-xl bg-primary/10 text-primary"><LifeBuoy className="size-5" /></span>} />
+        <SectionHeading title="Start a new request" description={brand.branded ? `Tell us what you need and we’ll route it to the right ${brand.displayName} specialist.` : "Tell us what you need and we’ll route it to the right specialist."} action={<span className="grid size-10 place-items-center rounded-xl bg-primary/10 text-primary"><LifeBuoy className="size-5" /></span>} />
         <PortalCaseForm
           automotive={automotiveOn}
           contacts={contacts.map((row) => ({ id: row.id, label: contactName(row) }))}
@@ -87,7 +89,7 @@ export default async function PortalSupportPage() {
                   <span className="grid size-9 shrink-0 place-items-center rounded-xl border border-white/[0.07] bg-white/[0.035] text-slate-400"><Headphones className="size-4" /></span>
                   <div className="min-w-0 flex-1">
                     <p className="truncate text-sm font-medium">C-{item.number.toString()} · {item.subject}</p>
-                    <p className="mt-1 text-xs text-slate-400">{item.type} · {item.priority} · updated {formatDate(item.updatedAt)}</p>
+                    <p className="mt-1 text-xs text-slate-400">{item.type} · {item.priority} · updated {formatDate(item.updatedAt, regional)}</p>
                   </div>
                   <StatusPill tone={statusTone(item.status)}>{item.status.replaceAll("_", " ")}</StatusPill>
                   <ArrowRight className="size-4 shrink-0 text-slate-600 transition-transform group-hover:translate-x-0.5 group-hover:text-orange-400" />

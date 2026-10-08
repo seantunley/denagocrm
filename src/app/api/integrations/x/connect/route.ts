@@ -1,15 +1,20 @@
 import crypto from "crypto";
 import { NextResponse } from "next/server";
 import { cookies } from "next/headers";
-import { getActiveTenantId, requireOwner } from "@/lib/auth";
-import { resolveTenantCredential } from "@/lib/settings";
+import { getActiveTenantId, requireTenantOwner } from "@/lib/auth";
+import { resolveIntegrationField } from "@/lib/settings";
 
 export async function GET(request: Request) {
-  await requireOwner();
+  // The workspace's own owner, as on the Integrations page that offers this
+  // button — the platform-owner-only guard here let no one else finish (review of #742).
+  // Everything below is bound to the ACTIVE workspace: its client id, and a state
+  // cookie naming it that the callback checks before writing anything.
+  await requireTenantOwner();
   const tenantId = await getActiveTenantId();
   if (!tenantId) return NextResponse.json({ error: "No active workspace." }, { status: 403 });
-  const clientId = await resolveTenantCredential(tenantId, "X_CLIENT_ID");
-  if (!clientId) return NextResponse.redirect(new URL("/settings?tab=integrations&x=missing-client", request.url));
+  // By the X app's set rule — the same one the callback's secret comes from.
+  const clientId = await resolveIntegrationField(tenantId, "x", "X_CLIENT_ID");
+  if (!clientId) return NextResponse.redirect(new URL("/settings/integrations?x=missing-client", request.url));
   const state = crypto.randomBytes(24).toString("base64url");
   const verifier = crypto.randomBytes(48).toString("base64url");
   const challenge = crypto.createHash("sha256").update(verifier).digest("base64url");

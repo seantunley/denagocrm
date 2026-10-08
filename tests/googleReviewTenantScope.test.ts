@@ -54,7 +54,7 @@ test("review sync resolves its tenant the same way its credentials do", () => {
   // The slice already knows which tenant it is: the credential lookup reads it
   // from the ambient scope. Reading the row's owner from anywhere else is how a
   // review fetched with tenant B's key came to be filed under tenant A.
-  assert.match(sync, /const tenantId = credentialTenantId \?\? DEFAULT_TENANT_ID;/);
+  assert.match(sync, /const tenantId = credentialTenantId \?\? ownedWriteTenantId\(\);/);
   assert.doesNotMatch(
     sync,
     /const tenantId = writeTenantId\(\)/,
@@ -131,7 +131,7 @@ test("the inbox review query names a tenant even while enforcement is dormant", 
   const page = src("src/app/(app)/inbox/page.tsx");
 
   // The session's workspace, resolved the same way in every enforcement mode.
-  assert.match(page, /const workspaceTenantId = \(await getActiveTenantId\(\)\) \?\? DEFAULT_TENANT_ID;/);
+  assert.match(page, /const workspaceTenantId = await getActiveTenantId\(\);\s*if \(!workspaceTenantId\) notFound\(\);/);
   assert.match(
     page,
     /where: \{ tenantId: workspaceTenantId, \.\.\.activeTenantPredicate\("inbox Google reviews"\) \}/,

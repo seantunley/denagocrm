@@ -2,6 +2,7 @@ import "server-only";
 import crypto from "crypto";
 import { headers } from "next/headers";
 import { prisma } from "@/lib/db";
+import { mirrorQuoteViewed } from "./quoteMirror";
 // The hash format lives in a module with no server binding, so evidence can be
 // verified by anything holding an export — not only by the system that wrote it.
 import { signEventPayloadHash, type SignEventInput } from "./evidenceHash";
@@ -55,6 +56,17 @@ export function buildSignEvent(requestId: string, e: {
   };
 }
 
+/**
+ * How a staff action reads in the signing evidence: "<company>: <name>", the
+ * company being the workspace's own (Company Profile). It was hard-coded
+ * "Denago: <name>", so every workspace's signing trail named Denago.
+ */
+export async function staffActor(userName: string, tenantId?: string | null): Promise<string> {
+  const { getCompanyProfile } = await import("@/lib/companyProfile");
+  const company = (await getCompanyProfile(tenantId).catch(() => null))?.name?.trim();
+  return company ? `${company}: ${userName}` : userName;
+}
+
 export async function logSignEvent(requestId: string, e: {
   type: string; recipientId?: string | null; actor: string; channel?: string | null; ip?: string | null; userAgent?: string | null; metadata?: object;
 }): Promise<void> {
@@ -63,7 +75,10 @@ export async function logSignEvent(requestId: string, e: {
 
 /** First-view bookkeeping — logs an "opened" event once and advances status. */
 export async function recordView(recipientId: string, requestId: string, name: string): Promise<void> {
-  const r = await prisma.signatureRecipient.findUnique({ where: { id: recipientId }, select: { viewedAt: true, status: true } });
+  const r = await prisma.signatureRecipient.findUnique({
+    where: { id: recipientId },
+    select: { viewedAt: true, status: true, role: true, email: true, request: { select: { quoteId: true, tenantId: true } } },
+  });
   if (r?.viewedAt) return; // already recorded
   const meta = await reqMeta();
   await prisma.signatureRecipient.update({
@@ -72,6 +87,8 @@ export async function recordView(recipientId: string, requestId: string, name: s
   });
   await logSignEvent(requestId, { type: "opened", recipientId, actor: name, channel: "web", ip: meta.ip, userAgent: meta.ua });
   await prisma.signatureRequest.updateMany({ where: { id: requestId, status: { in: ["sent", "draft"] } }, data: { status: "viewed" } });
+  // The customer opening it is the quote being opened.
+  if (r) await mirrorQuoteViewed({ tenantId: r.request.tenantId, quoteId: r.request.quoteId, requestId }, r);
 }
 
 export { signEventPayloadHash, canonicalJson, verifyEvidenceChain } from "./evidenceHash";

@@ -240,7 +240,39 @@ function preparedForHtml(b: InfoCardBlock, ctx: RenderCtx): string {
   </div>`;
 }
 
+// ── "classic": the invoice's quieter look (Sean's mock-up, 2026-10-07) ──
+/** Heights the invoice layout places its floating blocks by. */
+export const CLASSIC_HEADER_HEIGHT = 196;
+export const CLASSIC_FOOTER_HEIGHT = 60;
+
+/**
+ * A card with no box: a spaced label, an optional bold name, then its lines.
+ * A line written "Label: value" lines up in two columns (bank details, VAT no,
+ * T / E); a "Reference: …" line is picked out in a grey box, as a payment
+ * reference should be. Anything else prints as written.
+ */
+function classicCardHtml(b: InfoCardBlock, ctx: RenderCtx): string {
+  const lines = tok(b.lines, ctx).split("\n").map((l) => l.trim()).filter(Boolean);
+  const row = (text: string) => {
+    const kv = /^([^:]{1,24}):\s+(.+)$/.exec(text);
+    if (kv && kv[1].trim().toLowerCase() === "reference") {
+      return `<div style="margin-top:10px;display:flex;align-items:center;gap:18px;background:#eef0f3;border-radius:4px;padding:8px 12px;${KEEP_BG}"><span style="font-size:9pt;color:${INK}">${esc(kv[1].trim())}</span><span style="font-size:14pt;font-weight:800;color:${INK};white-space:nowrap">${esc(kv[2])}</span></div>`;
+    }
+    if (kv) {
+      return `<div style="display:grid;grid-template-columns:104px minmax(0,1fr);gap:12px;font-size:9pt;line-height:1.6"><span style="color:#374151">${esc(kv[1].trim())}</span><span style="color:${INK}">${esc(kv[2])}</span></div>`;
+    }
+    return `<div style="font-size:9.5pt;line-height:1.55;color:#1f2937">${esc(text)}</div>`;
+  };
+  const name = tok(b.name, ctx).trim();
+  return `<div style="box-sizing:border-box;height:100%;padding:4px 0 4px ${b.divider ? "22px;border-left:1px solid #e5e7eb" : "0"}">
+    <div style="font-size:7.5pt;font-weight:800;letter-spacing:1.4px;color:${INK};text-transform:uppercase">${esc(tok(b.label, ctx))}</div>
+    ${name ? `<div style="font-size:13pt;font-weight:800;color:${INK};margin:6px 0 4px">${esc(name)}</div>` : `<div style="height:8px"></div>`}
+    ${lines.map(row).join("")}
+  </div>`;
+}
+
 function lineItemsHtml(b: LineItemsBlock, ctx: RenderCtx): string {
+  if (b.look === "classic") return classicLineItemsHtml(b, ctx);
   const rows = ctx?.items ?? [];
   const cols = ctx?.bound ? b.columns.filter((c) => evaluateCondition(c.showIf, ctx.vars)) : b.columns;
   const border = "1px solid #e5e7eb";
@@ -261,25 +293,43 @@ function lineItemsHtml(b: LineItemsBlock, ctx: RenderCtx): string {
   const cell = (c: (typeof cols)[number], i: number, row: number, value: string) =>
     `<td style="text-align:${c.align};padding:7px 12px;font-size:9pt;color:#1f2937;border-bottom:${border};${i ? `border-left:${border};` : `border-left:${border};`}${i === cols.length - 1 ? `border-right:${border};` : ""}${row % 2 ? `background:#f8fafc;${KEEP_BG}` : ""}">${esc(value)}</td>`;
   const body = rows.length
-    ? rows.map((r, ri) => `<tr>${cols.map((c, i) => cell(c, i, ri, lineItemCell(c.key, r, b.vatRate))).join("")}</tr>`).join("")
+    ? rows.map((r, ri) => `<tr>${cols.map((c, i) => cell(c, i, ri, lineItemCell(c.key, r, b.vatRate, ctx?.regional))).join("")}</tr>`).join("")
     : `<tr><td colspan="${cols.length}" style="padding:9px 12px;color:#94a3b8;font-size:9pt;border:${border};border-top:none">Line items appear here when linked to a record</td></tr>`;
   return `<table style="width:100%;table-layout:fixed;border-collapse:separate;border-spacing:0;margin:8px 0 0">${colgroup}<thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>`;
 }
 
-function termsHtml(b: TermsBlock): string {
+/** The table with a light header row and plain ruled rows — no boxes, no stripes. */
+function classicLineItemsHtml(b: LineItemsBlock, ctx: RenderCtx): string {
+  const rows = ctx?.items ?? [];
+  const cols = ctx?.bound ? b.columns.filter((c) => evaluateCondition(c.showIf, ctx.vars)) : b.columns;
+  const rule = "1px solid #e5e7eb";
+  const moneyCols = cols.filter((c, i) => i > 0 && c.key !== "qty").length;
+  const widths = cols.map((c, i) => (i === 0 ? null : c.key === "qty" ? 9 : Math.floor(50 / Math.max(1, moneyCols))));
+  const colgroup = `<colgroup>${cols.map((_, i) => `<col${widths[i] != null ? ` style="width:${widths[i]}%"` : ""}>`).join("")}</colgroup>`;
+  const pad = (i: number) => (i === 0 ? "padding-left:16px;" : i === cols.length - 1 ? "padding-right:16px;" : "");
+  const head = cols.map((c, i) =>
+    `<th style="text-align:${c.align};background:#f3f4f6;color:${INK};padding:11px 12px;${pad(i)}font-size:7.5pt;font-weight:700;letter-spacing:1px;text-transform:uppercase;line-height:1.25;border-bottom:${rule};${KEEP_BG}">${withQualifier(c.header, "font-size:6pt;font-weight:600")}</th>`,
+  ).join("");
+  const body = rows.length
+    ? rows.map((r) => `<tr>${cols.map((c, i) => `<td style="text-align:${c.align};padding:12px;${pad(i)}font-size:9.5pt;color:#1f2937;border-bottom:${rule}">${esc(lineItemCell(c.key, r, b.vatRate, ctx?.regional))}</td>`).join("")}</tr>`).join("")
+    : `<tr><td colspan="${cols.length}" style="padding:12px 16px;color:#94a3b8;font-size:9pt;border-bottom:${rule}">Line items appear here when linked to a record</td></tr>`;
+  return `<table style="width:100%;table-layout:fixed;border-collapse:separate;border-spacing:0;margin:8px 0 0">${colgroup}<thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>`;
+}
+
+function termsHtml(b: TermsBlock, ctx: RenderCtx): string {
   const dot = `<span style="width:5px;height:5px;border-radius:50%;background:${ACCENT};flex:none;margin-top:5px;${KEEP_BG}"></span>`;
   // The same height as the acceptance card beside it (at least), so the pair reads as one row.
   return `<div style="${CARD}box-sizing:border-box;min-height:${acceptanceHeight()}px;padding:12px 14px">
     ${cardHeader("doc", b.title, ACCENT, 22)}
-    <div style="margin-top:6px">${b.items.map((it) => `<div style="display:flex;gap:7px;font-size:7.5pt;line-height:1.4;color:#4b5563;margin-bottom:3px">${dot}<span>${esc(it.text)}</span></div>`).join("")}</div>
+    <div style="margin-top:6px">${b.items.map((it) => `<div style="display:flex;gap:7px;font-size:7.5pt;line-height:1.4;color:#4b5563;margin-bottom:3px">${dot}<span>${esc(tok(it.text, ctx))}</span></div>`).join("")}</div>
   </div>`;
 }
 
 /** The showcase look of a shared block (infoCard / lineItems / terms), for serialize.ts and the canvas. */
 export function showcaseLookHtml(block: InfoCardBlock | LineItemsBlock | TermsBlock, ctx: RenderCtx): string {
-  if (block.type === "infoCard") return preparedForHtml(block, ctx);
+  if (block.type === "infoCard") return block.look === "classic" ? classicCardHtml(block, ctx) : preparedForHtml(block, ctx);
   if (block.type === "lineItems") return lineItemsHtml(block, ctx);
-  return termsHtml(block);
+  return termsHtml(block, ctx);
 }
 
 function acceptanceHtml(b: AcceptanceBlock, ctx: RenderCtx): string {
@@ -310,6 +360,25 @@ export function showcaseBlockHtml(block: ShowcaseBlock, ctx: RenderCtx, logoData
       const logo = block.showLogo && logoDataUri
         ? `<img src="${esc(logoDataUri)}" alt="" style="height:${c ? 30 : 46}px;width:auto;display:block"/>`
         : `<div style="color:#fff;font-weight:800;font-size:${c ? 14 : 18}pt;letter-spacing:2px;${TEXT_SHADOW}">${esc(tok("{{company.name}}", ctx))}</div>`;
+      // Classic: a taller band — logo and a short accent rule at the top; the
+      // title (and a line under it) bottom-left; the labelled number bottom-right.
+      if (block.style === "classic" && !c) {
+        const sub = tok(block.subtitle ?? "", ctx).trim();
+        const label = tok(block.numberLabel ?? "", ctx).trim();
+        return `<div style="${bandBackground(bgCss, block.bgImage, ctx, HEADER_OVERLAY)}box-sizing:border-box;height:${CLASSIC_HEADER_HEIGHT}px;padding:24px ${SHOWCASE_INSET}px 22px;display:flex;flex-direction:column;justify-content:space-between">
+          <div>${logo}<div style="width:46px;height:3px;background:${accentCss};margin-top:9px;border-radius:2px;${KEEP_BG}"></div></div>
+          <div style="display:flex;justify-content:space-between;align-items:flex-end;gap:18px">
+            <div style="min-width:0">
+              <div style="color:#fff;font-weight:800;font-size:25pt;letter-spacing:1px;line-height:1.05;${TEXT_SHADOW}">${esc(tok(block.title, ctx))}</div>
+              ${sub ? `<div style="color:#e5e7eb;font-size:11pt;margin-top:7px;${TEXT_SHADOW}">${esc(sub)}</div>` : ""}
+            </div>
+            <div style="text-align:right;flex:none">
+              ${label ? `<div style="color:#e5e7eb;font-size:7.5pt;letter-spacing:1.6px;text-transform:uppercase;${TEXT_SHADOW}">${esc(label)}</div>` : ""}
+              <div style="color:#fff;font-weight:800;font-size:21pt;white-space:nowrap;margin-top:3px;${TEXT_SHADOW}">${esc(tok(block.docNumber, ctx))}</div>
+            </div>
+          </div>
+        </div>`;
+      }
       return `<div style="${bandBackground(bgCss, block.bgImage, ctx, HEADER_OVERLAY)}box-sizing:border-box;min-height:${c ? SHOWCASE_COMPACT_HEADER_HEIGHT : 118}px;padding:${c ? 12 : 20}px ${SHOWCASE_INSET}px;display:flex;align-items:center;justify-content:space-between;gap:18px">
         <div style="min-width:0">${logo}${block.tagline.trim() && !c ? `<div style="color:#f1f5f9;font-size:7.5pt;font-weight:600;letter-spacing:3.5px;margin-top:10px;text-transform:uppercase;${TEXT_SHADOW}">${esc(tok(block.tagline, ctx))}</div>` : ""}</div>
         <div style="display:flex;align-items:stretch;gap:14px;flex:none">
@@ -323,6 +392,14 @@ export function showcaseBlockHtml(block: ShowcaseBlock, ctx: RenderCtx, logoData
     }
     case "infoStrip": {
       if (!block.items.length) return "";
+      // Classic: a full-width light-grey strip, no icons, larger values.
+      if (block.style === "classic") {
+        return `<div style="background:#f3f4f6;${KEEP_BG}border-bottom:1px solid #e5e7eb;display:grid;grid-template-columns:repeat(${block.items.length},1fr);padding:16px ${SHOWCASE_INSET}px">${block.items.map((it, i) => `<div style="min-width:0;line-height:1.3;${i ? "border-left:1px solid #d1d5db;padding-left:22px;" : ""}">
+            <div style="font-size:7pt;font-weight:600;letter-spacing:1.5px;color:#4b5563;text-transform:uppercase">${esc(tok(it.label, ctx))}</div>
+            <div style="font-size:12pt;font-weight:800;color:${INK};margin-top:5px">${esc(tok(it.value, ctx))}</div>
+            ${it.sub.trim() ? `<div style="font-size:7.5pt;color:#6b7280">${esc(tok(it.sub, ctx))}</div>` : ""}
+          </div>`).join("")}</div>`;
+      }
       return `<div style="display:grid;grid-template-columns:repeat(${block.items.length},1fr);padding:10px 0;border-bottom:1px solid #e5e7eb">${block.items.map((it, i) => `<div style="display:flex;gap:10px;align-items:center;min-width:0;padding:0 14px;${i ? "border-left:1px solid #d1d5db;" : "padding-left:4px;"}">
           ${lineIcon(it.icon, INK, 22)}
           <div style="min-width:0;line-height:1.3">
@@ -346,6 +423,16 @@ export function showcaseBlockHtml(block: ShowcaseBlock, ctx: RenderCtx, logoData
     }
     case "totalsBox": {
       const accentCss = cssColor(block.accent, ACCENT);
+      // Classic: plain subtotal / VAT lines, then the dark total bar (amount in the accent).
+      if (block.style === "classic") {
+        const lines = block.rows.map((r) => `<div style="display:flex;justify-content:space-between;gap:16px;padding:3px 4px;font-size:10pt;color:${INK}"><span>${withQualifier(tok(r.label, ctx), "font-size:8pt;color:#4b5563")}</span><span style="white-space:nowrap">${esc(tok(r.value, ctx))}</span></div>`).join("");
+        return `<div style="margin:12px 0 0">${lines}
+          <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;margin-top:10px;padding:14px 18px;border-radius:4px;background:${cssColor(block.bg, INK)};${KEEP_BG}">
+            <span style="color:#fff;font-size:9pt;font-weight:700;letter-spacing:1.4px;text-transform:uppercase;white-space:nowrap">${esc(tok(block.totalLabel, ctx))}</span>
+            <span style="color:${accentCss};font-size:21pt;font-weight:800;white-space:nowrap">${esc(tok(block.totalAmount, ctx))}</span>
+          </div>
+        </div>`;
+      }
       const rows = block.rows.map((r) => `<div style="display:flex;justify-content:space-between;gap:16px;padding:3px 14px;font-size:9pt;color:${INK}"><span style="font-weight:700">${withQualifier(tok(r.label, ctx), "font-weight:400;color:#6b7280")}</span><span style="white-space:nowrap">${esc(tok(r.value, ctx))}</span></div>`).join("");
       return `<div style="margin:10px 0 0">${rows ? `<div style="background:#f3f4f6;border-radius:4px;padding:5px 0;${KEEP_BG}">${rows}</div>` : ""}
         <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;margin-top:6px;padding:9px 14px;border-radius:4px;border-left:6px solid ${accentCss};background:${cssColor(block.bg, INK)};${KEEP_BG}">
@@ -359,6 +446,13 @@ export function showcaseBlockHtml(block: ShowcaseBlock, ctx: RenderCtx, logoData
     case "footerBand": {
       const accentCss = cssColor(block.accent, ACCENT);
       const bandBgCss = cssColor(block.bg, INK);
+      // Classic: one slim line — the subtitle — with an accent mark beside it.
+      if (block.style === "classic") {
+        return `<div style="${bandBackground(bandBgCss, block.bgImage, ctx, FOOTER_OVERLAY)}box-sizing:border-box;height:${CLASSIC_FOOTER_HEIGHT}px;overflow:hidden;padding:0 ${SHOWCASE_INSET}px;display:flex;align-items:center;gap:14px">
+          <div style="width:3px;height:24px;background:${accentCss};border-radius:2px;flex:none;${KEEP_BG}"></div>
+          <div style="color:#e5e7eb;font-size:9pt;letter-spacing:.3px;white-space:pre;overflow:hidden;text-overflow:ellipsis">${esc(tok(block.subtitle, ctx))}</div>
+        </div>`;
+      }
       const company = (k: string) => tok(`{{company.${k}}}`, ctx).trim();
       const item = (ic: string, text: string, clamp = 1) => text
         ? `<div style="display:flex;align-items:flex-start;gap:7px;min-width:0;color:#fff;font-size:7.5pt;line-height:1.35">${lineIcon(ic, accentCss, 13)}<span style="display:-webkit-box;-webkit-line-clamp:${clamp};-webkit-box-orient:vertical;overflow:hidden">${esc(text)}</span></div>`

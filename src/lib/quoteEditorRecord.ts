@@ -1,6 +1,7 @@
 import "server-only";
 import type { Prisma } from "@prisma/client";
-import { contactName, formatDate } from "@/lib/format";
+import { contactName, formatDate, type Regional } from "@/lib/format";
+import { calendarDateIn } from "@/lib/quoteExpiry";
 import type { QuoteEditorRecord } from "@/components/quotes/QuoteEditorDialog";
 
 /**
@@ -18,26 +19,14 @@ export type QuoteForEditor = Prisma.QuoteGetPayload<{
   include: { items: true; fees: true; lead: true; contact: true; createdBy: true };
 }>;
 
-/** The slim version rows the family/successor lookups need. */
-export type QuoteVersionRow = {
-  id: string;
-  number: number;
-  status: string;
-  createdAt: Date;
-  supersededAt: Date | null;
-  revisionOfId: string | null;
-  deletedAt: Date | null;
-};
-
-export const QUOTE_VERSION_SELECT = {
-  id: true,
-  number: true,
-  status: true,
-  createdAt: true,
-  supersededAt: true,
-  revisionOfId: true,
-  deletedAt: true,
-} as const;
+import type { QuoteVersionIndex } from "./quoteVersions";
+export {
+  QUOTE_VERSION_SELECT,
+  loadQuoteVersions,
+  quoteVersionIndex,
+  type QuoteVersionIndex,
+  type QuoteVersionRow,
+} from "./quoteVersions";
 
 export const QUOTE_EDITOR_INCLUDE = {
   items: true,
@@ -47,39 +36,6 @@ export const QUOTE_EDITOR_INCLUDE = {
   createdBy: true,
 } as const;
 
-/**
- * Version lookups precomputed once for a batch of quotes. The list builds
- * hundreds of records from one index; doing it per quote would be quadratic.
- */
-export type QuoteVersionIndex = {
-  rootFor: (id: string) => string;
-  familyOf: (id: string) => QuoteVersionRow[];
-  successorOf: (id: string) => QuoteVersionRow | null;
-};
-
-export function quoteVersionIndex(allVersions: QuoteVersionRow[]): QuoteVersionIndex {
-  const versionById = new Map(allVersions.map((version) => [version.id, version]));
-  const rootFor = (id: string) => {
-    let current = versionById.get(id);
-    const seen = new Set<string>();
-    while (current?.revisionOfId && !seen.has(current.id)) {
-      seen.add(current.id);
-      current = versionById.get(current.revisionOfId) ?? current;
-      if (!current.revisionOfId) break;
-    }
-    return current?.id ?? id;
-  };
-  const versionsByRoot = new Map<string, QuoteVersionRow[]>();
-  for (const version of allVersions) {
-    const root = rootFor(version.id);
-    versionsByRoot.set(root, [...(versionsByRoot.get(root) ?? []), version]);
-  }
-  return {
-    rootFor,
-    familyOf: (id) => versionsByRoot.get(rootFor(id)) ?? [],
-    successorOf: (id) => allVersions.find((version) => version.revisionOfId === id && !version.deletedAt) ?? null,
-  };
-}
 
 /**
  * `fleetNames` maps fleet id → name for the quotes in this batch, already
@@ -94,7 +50,9 @@ export function quoteVersionIndex(allVersions: QuoteVersionRow[]): QuoteVersionI
 export function buildQuoteEditorRecord(
   quote: QuoteForEditor,
   index: QuoteVersionIndex,
-  fleetNames: ReadonlyMap<string, string> = new Map(),
+  fleetNames: ReadonlyMap<string, string>,
+  /** The workspace calendar: the expiry is a date ON it, not a UTC day. */
+  r: Regional,
 ): QuoteEditorRecord {
   const lockedReason = quote.signToken
     ? "A signing link is active. Revoke it from the signature card before editing."
@@ -119,16 +77,16 @@ export function buildQuoteEditorRecord(
     fleetLabel: quote.fleetId ? fleetNames.get(quote.fleetId) ?? null : null,
     leadId: quote.leadId,
     leadLabel: quote.lead?.title ?? null,
-    validUntil: quote.validUntil?.toISOString().slice(0, 10) ?? "",
+    validUntil: quote.validUntil ? calendarDateIn(quote.validUntil, r.timeZone) : "",
     terms: quote.terms ?? "",
-    createdAt: formatDate(quote.createdAt),
+    createdAt: formatDate(quote.createdAt, r),
     createdByName: quote.createdBy?.name ?? null,
     editable: lockedReason === null,
     lockedReason,
-    supersededAt: quote.supersededAt ? formatDate(quote.supersededAt) : null,
+    supersededAt: quote.supersededAt ? formatDate(quote.supersededAt, r) : null,
     supersededById: successor?.id ?? null,
     supersededByNumber: successor?.number ?? null,
-    changeRequestedAt: quote.changeRequestedAt ? formatDate(quote.changeRequestedAt) : null,
+    changeRequestedAt: quote.changeRequestedAt ? formatDate(quote.changeRequestedAt, r) : null,
     changeRequestNote: quote.changeRequestNote,
     items: quote.items.map((item) => ({
       id: item.id,
@@ -141,11 +99,12 @@ export function buildQuoteEditorRecord(
       costCents: item.costCents,
       optional: item.optional,
       selected: item.selected,
+      taxRatePct: item.taxRatePct,
     })),
     taxInclusive: quote.taxInclusive,
     depositType: quote.depositType,
     depositValue: quote.depositValue,
-    fees: quote.fees.map((fee) => ({ id: fee.id, label: fee.label, kind: fee.kind, amountCents: fee.amountCents })),
+    fees: quote.fees.map((fee) => ({ id: fee.id, label: fee.label, kind: fee.kind, amountCents: fee.amountCents, taxRatePct: fee.taxRatePct })),
     versions: index
       .familyOf(quote.id)
       .toSorted((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
@@ -153,7 +112,7 @@ export function buildQuoteEditorRecord(
         id: version.id,
         number: version.number,
         status: version.status,
-        createdAt: formatDate(version.createdAt),
+        createdAt: formatDate(version.createdAt, r),
         superseded: Boolean(version.supersededAt),
         current: version.id === quote.id,
       })),

@@ -1,11 +1,14 @@
 "use client";
 
-import { useState, useEffect, useActionState } from "react";
+import { useState, useEffect, useActionState, useRef } from "react";
 import AiCheckButton from "@/components/AiCheckButton";
 import ModalPortal from "@/components/ui/modal-portal";
 import Link from "next/link";
-import { sendEmailAction, type SendEmailState } from "@/app/actions/emails";
+import { previewComposerEmail, sendEmailAction, type SendEmailState } from "@/app/actions/emails";
 import RichTextEditor from "@/components/RichTextEditor";
+import { EMAIL_UPLOAD_MAX_BYTES, EMAIL_UPLOAD_MAX_FILES } from "@/lib/emailUploads";
+
+const fileSize = (bytes: number) => (bytes < 1024 * 1024 ? `${Math.max(1, Math.round(bytes / 1024))} KB` : `${(bytes / 1024 / 1024).toFixed(1)} MB`);
 
 /** Converts a plain-text template into simple HTML paragraphs for the editor. */
 function textToHtml(text: string): string {
@@ -59,11 +62,51 @@ export default function EmailComposer({
   const [attachOpen, setAttachOpen] = useState(false);
   const [attached, setAttached] = useState<string[]>([]);
   const [attachFilter, setAttachFilter] = useState("");
+  // Files from the computer. The hidden file input is what the form posts, so it
+  // is rebuilt to hold exactly this list whenever a file is added or removed.
+  const [uploads, setUploads] = useState<File[]>([]);
+  const uploadRef = useRef<HTMLInputElement>(null);
+  const setUploadFiles = (picked: File[]) => {
+    // The same file (name, size, date) once: picking it again, or a second
+    // change event for one pick, never doubles it up.
+    const seen = new Set<string>();
+    const files = picked.filter((f) => {
+      const key = `${f.name}:${f.size}:${f.lastModified}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+    setUploads(files);
+    if (!uploadRef.current) return;
+    const dt = new DataTransfer();
+    files.forEach((f) => dt.items.add(f));
+    uploadRef.current.files = dt.files;
+  };
   const [state, formAction, pending] = useActionState<SendEmailState | undefined, FormData>(
     sendEmailAction,
     undefined
   );
 
+  // Preview: the server builds the same HTML the send does (message + signature).
+  const formRef = useRef<HTMLFormElement>(null);
+  // `sentState` is the send result the preview was opened against: once a send
+  // answers (sent, or an error to read on the form), the preview steps aside.
+  const [preview, setPreview] = useState<{ html: string; to: string; replyTo: string; sentState: typeof state } | null>(null);
+  const [previewing, setPreviewing] = useState(false);
+  const [previewError, setPreviewError] = useState("");
+  async function showPreview() {
+    const field = (name: string) => String(new FormData(formRef.current ?? undefined).get(name) ?? "").trim();
+    setPreviewing(true);
+    setPreviewError("");
+    try {
+      const { html } = await previewComposerEmail(body);
+      setPreview({ html, to: field("to"), replyTo: field("replyTo"), sentState: state });
+    } catch {
+      setPreviewError("Couldn't build the preview — try again.");
+    } finally {
+      setPreviewing(false);
+    }
+  }
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => e.key === "Escape" && setOpen(false);
@@ -122,7 +165,7 @@ export default function EmailComposer({
                 .
               </p>
             ) : (
-              <form action={formAction} className="space-y-3">
+              <form ref={formRef} action={formAction} className="space-y-3">
           {leadId && <input type="hidden" name="leadId" value={leadId} />}
           {contactId && <input type="hidden" name="contactId" value={contactId} />}
           <input type="hidden" name="revalidate" value={revalidate} />
@@ -223,6 +266,19 @@ export default function EmailComposer({
                   </span>
                 );
               })}
+              {uploads.map((file, i) => (
+                <span key={`${file.name}-${i}`} className="badge bg-slate-800 text-slate-200 gap-1.5 py-1">
+                  📎 {file.name} <span className="text-slate-500">{fileSize(file.size)}</span>
+                  <button
+                    type="button"
+                    onClick={() => setUploadFiles(uploads.filter((_, j) => j !== i))}
+                    className="text-slate-500 hover:text-red-400 cursor-pointer"
+                    aria-label={`Remove ${file.name}`}
+                  >
+                    ✕
+                  </button>
+                </span>
+              ))}
               <button
                 type="button"
                 onClick={() => setAttachOpen(true)}
@@ -231,10 +287,22 @@ export default function EmailComposer({
               >
                 📎 Attach from library
               </button>
-              {libraryDocs.length === 0 && (
-                <span className="text-xs text-slate-500">Library is empty.</span>
-              )}
+              <button type="button" onClick={() => uploadRef.current?.click()} className="btn-secondary btn-sm">
+                ⬆ Upload a file
+              </button>
+              {/* The form posts this input's files; it always holds exactly the chips above. */}
+              <input
+                ref={uploadRef}
+                type="file"
+                name="upload"
+                multiple
+                className="hidden"
+                onChange={(e) => setUploadFiles([...uploads, ...Array.from(e.target.files ?? [])])}
+              />
             </div>
+            <p className="mt-1 text-xs text-slate-500">
+              Up to {EMAIL_UPLOAD_MAX_FILES} files from your computer, {EMAIL_UPLOAD_MAX_BYTES / 1024 / 1024} MB in total.
+            </p>
             {attached.map((id) => (
               <input key={id} type="hidden" name="attach" value={id} />
             ))}
@@ -301,11 +369,70 @@ export default function EmailComposer({
               </div>
             </div>
           )}
+          {preview && preview.sentState === state && (
+            <div
+              className="fixed inset-0 z-[60] flex items-start justify-center bg-black/70 p-4 pt-8 overflow-y-auto"
+              onPointerDown={(e) => e.target === e.currentTarget && setPreview(null)}
+            >
+              <div className="card w-full max-w-3xl">
+                <div className="flex items-center justify-between mb-3">
+                  <h3 className="font-bold text-white">Preview — what the customer receives</h3>
+                  <button
+                    type="button"
+                    onClick={() => setPreview(null)}
+                    className="text-slate-400 hover:text-white text-2xl leading-none cursor-pointer"
+                    aria-label="Back to editing"
+                  >
+                    ×
+                  </button>
+                </div>
+                <dl className="mb-3 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-sm">
+                  <dt className="text-slate-500">To</dt>
+                  <dd className="text-slate-200 break-all">{preview.to || "—"}</dd>
+                  {preview.replyTo && (
+                    <>
+                      <dt className="text-slate-500">Reply to</dt>
+                      <dd className="text-slate-200 break-all">{preview.replyTo}</dd>
+                    </>
+                  )}
+                  <dt className="text-slate-500">Subject</dt>
+                  <dd className="text-slate-200">{subject || "—"}</dd>
+                  {(attached.length > 0 || uploads.length > 0) && (
+                    <>
+                      <dt className="text-slate-500">Attached</dt>
+                      <dd className="text-slate-200">
+                        {[...attached.map((id) => libraryDocs.find((x) => x.id === id)?.label ?? "Document"), ...uploads.map((f) => f.name)].join(", ")}
+                      </dd>
+                    </>
+                  )}
+                </dl>
+                {/* sandbox="": the message renders as HTML but can run nothing. */}
+                <iframe
+                  title="Email preview"
+                  sandbox=""
+                  srcDoc={preview.html}
+                  className="h-[60vh] w-full rounded-lg border border-slate-700 bg-white"
+                />
+                <div className="mt-4 flex gap-2">
+                  <button className="btn-primary" disabled={pending}>
+                    {pending ? "Sending…" : "Send email"}
+                  </button>
+                  <button type="button" onClick={() => setPreview(null)} className="btn-secondary">
+                    Back to editing
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
           {state?.error && <p className="text-sm text-red-400">{state.error}</p>}
           {state?.ok && <p className="text-sm text-emerald-400">{state.ok}</p>}
+          {previewError && <p className="text-sm text-red-400">{previewError}</p>}
           <div className="flex gap-2">
             <button className="btn-primary" disabled={pending}>
               {pending ? "Sending…" : "Send email"}
+            </button>
+            <button type="button" onClick={showPreview} className="btn-secondary" disabled={previewing || pending}>
+              {previewing ? "Building preview…" : "👁 Preview"}
             </button>
             <button type="button" onClick={() => setOpen(false)} className="btn-secondary">
               {state?.ok ? "Close" : "Cancel"}

@@ -163,8 +163,8 @@ test("your own account is reachable from the menu, not just the workspace's", ()
 test("the password section opens when it is linked to", () => {
   // A <details> that arrives closed has not answered the request.
   const page = src("src/app/(app)/settings/page.tsx");
-  assert.match(page, /searchParams: Promise<\{ tab\?: string; section\?: string \}>/);
-  assert.match(page, /const \{ tab: rawTab, section \} = await searchParams;/);
+  assert.match(page, /searchParams: Promise<\{ tab\?: string; section\?: string; open\?: string \}>/);
+  assert.match(page, /const \{ tab: rawTab, section, open \} = await searchParams;/);
   assert.match(page, /<details id="password" open=\{section === "password"\}>/);
 });
 

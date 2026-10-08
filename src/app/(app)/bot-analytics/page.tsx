@@ -10,7 +10,7 @@ import {
   Sparkles,
   UserRound,
 } from "lucide-react";
-import { requireOwner } from "@/lib/auth";
+import { requireTenantOwner } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 import { getBotFlowAnalyticsReport, type FlowTrendPoint } from "@/lib/botFlowAnalyticsReport";
 import { BOT_ANALYTICS_CHANNELS, BOT_ANALYTICS_RANGES } from "@/lib/botFlowAnalyticsFilters";
@@ -26,7 +26,7 @@ const shortDate = (value: string | Date) => new Date(value).toLocaleDateString("
 type Search = { flowId?: string; range?: string; channel?: string; version?: string };
 
 export default async function BotAnalyticsPage({ searchParams }: { searchParams: Promise<Search> }) {
-  await requireOwner();
+  await requireTenantOwner();
   const params = await searchParams;
   const scope = await flowScope();
   const flows = await prisma.botFlow.findMany({

@@ -51,6 +51,18 @@ export async function resolveCampaignRecipientTenant(
   return row ? { tenantId: row.tenantId } : null;
 }
 
+/** Owning tenant of an email's open-tracking token (the pixel in a sent email). */
+export async function resolveEmailOpenTenant(
+  openToken: string,
+): Promise<{ tenantId: string | null } | null> {
+  // A tracking id, not a credential (like campaign tokens): it can only bump an open count.
+  const row = await basePrisma.communication.findUnique({
+    where: { openToken },
+    select: { tenantId: true },
+  });
+  return row ? { tenantId: row.tenantId } : null;
+}
+
 /** Owning tenant of a public survey-response token (page load + submission). */
 export async function resolveSurveyResponseTenant(
   token: string,

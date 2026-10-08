@@ -1,8 +1,10 @@
 import { addCommunication, deleteCommunication } from "@/app/actions/communications";
 import ConfirmDelete from "@/components/ConfirmDelete";
+import { SaveForm, SaveButton } from "@/components/SaveForm";
 import { formatDateTime } from "@/lib/format";
 import { storedFileSrc } from "@/lib/storedFileSrc";
 import PasteImageInput from "@/components/PasteImageInput";
+import { SEEN_HINT, seenLabel } from "@/lib/emailOpenTracking";
 
 /* eslint-disable @next/next/no-img-element */
 const logo = (src: string, alt: string) => (
@@ -28,6 +30,10 @@ type Comm = {
   body: string;
   attachmentUrl?: string | null;
   occurredAt: Date;
+  /** The customer opened our outbound message (email open tracking, WhatsApp read receipts). */
+  seenAt?: Date | null;
+  /** How many times a tracked email was opened. */
+  openCount?: number;
   user: { name: string };
   /**
    * Which customer this entry belongs to. Only set where the timeline shows an
@@ -71,7 +77,7 @@ export default function CommsTimeline({
         <summary className="btn-secondary btn-sm inline-flex cursor-pointer select-none list-none [&::-webkit-details-marker]:hidden">
           + Log a call / email / note
         </summary>
-        <form action={addCommunication} className="mt-3 mb-2 space-y-3 rounded-lg bg-slate-800/40 p-4 border border-slate-800">
+        <SaveForm action={addCommunication} className="mt-3 mb-2 space-y-3 rounded-lg bg-slate-800/40 p-4 border border-slate-800">
         {contactId && <input type="hidden" name="contactId" value={contactId} />}
         {leadId && <input type="hidden" name="leadId" value={leadId} />}
         <input type="hidden" name="revalidate" value={revalidate} />
@@ -117,9 +123,9 @@ export default function CommsTimeline({
             <label className="label">When</label>
             <input type="datetime-local" name="occurredAt" className="input" />
           </div>
-          <button className="btn-primary">Log communication</button>
+          <SaveButton className="btn-primary" pendingLabel="Logging…">Log communication</SaveButton>
         </div>
-        </form>
+        </SaveForm>
       </details>
       )}
 
@@ -142,6 +148,11 @@ export default function CommsTimeline({
                     {formatDateTime(c.occurredAt)} — {c.user.name}
                     {c.ownerLabel ? ` · ${c.ownerLabel}` : ""}
                   </span>
+                  {seenLabel(c) && (
+                    <span className="badge bg-emerald-500/15 text-emerald-300" title={c.type === "email" ? SEEN_HINT : undefined}>
+                      {seenLabel(c)}
+                    </span>
+                  )}
                 </div>
                 {c.subject && (
                   <p className="text-sm font-medium text-slate-300">{c.subject}</p>

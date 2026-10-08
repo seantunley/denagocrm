@@ -2,7 +2,7 @@
 
 import crypto from "crypto";
 import { revalidatePath } from "next/cache";
-import { requireOwner } from "@/lib/auth";
+import { requireTenantOwner } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 import { putSetting, getSetting } from "@/lib/settings";
 import { getBotFaqs } from "@/lib/botAi";
@@ -36,7 +36,7 @@ async function knowledgeSource(tenantId: string, sourceDocumentId: string | unde
 
 export async function saveBotSettings(formData: FormData) {
   return withActingStaffScope(async () => {
-    const owner = await requireOwner();
+    const owner = await requireTenantOwner();
     const enabled = formData.get("enabled") === "on";
     const aiEnabled = formData.get("aiEnabled") === "on";
     const flowEnabled = formData.get("flowEnabled") === "on";
@@ -58,7 +58,7 @@ export async function saveBotSettings(formData: FormData) {
 
 export async function addFaq(formData: FormData) {
   return withActingStaffScope(async () => {
-    await requireOwner();
+    await requireTenantOwner();
     const question = clean(formData.get("question"), 500);
     const answer = clean(formData.get("answer"), 5000);
     const handoff = formData.get("handoff") === "on";
@@ -72,7 +72,7 @@ export async function addFaq(formData: FormData) {
 
 export async function deleteFaq(id: string) {
   return withActingStaffScope(async () => {
-    await requireOwner();
+    await requireTenantOwner();
     const faqs = (await getBotFaqs()).filter((f) => f.id !== id);
     await putSetting("BOT_FAQS", JSON.stringify(faqs));
     revalidatePath("/chatbot");
@@ -87,7 +87,7 @@ export async function deleteFaq(id: string) {
  */
 export async function addBotKnowledge(formData: FormData) {
   return withActingStaffScope(async () => {
-    const owner = await requireOwner();
+    const owner = await requireTenantOwner();
     const tenantId = await actingTenantId();
     const title = clean(formData.get("title"), 180);
     const content = clean(formData.get("content"), 5000);
@@ -117,7 +117,7 @@ export async function addBotKnowledge(formData: FormData) {
 /** Editing an approved fact always returns it to Draft for a fresh review. */
 export async function updateBotKnowledge(id: string, formData: FormData) {
   return withActingStaffScope(async () => {
-    const owner = await requireOwner();
+    const owner = await requireTenantOwner();
     const tenantId = await actingTenantId();
     const title = clean(formData.get("title"), 180);
     const content = clean(formData.get("content"), 5000);
@@ -141,7 +141,7 @@ export async function updateBotKnowledge(id: string, formData: FormData) {
 
 export async function setBotKnowledgeStatus(id: string, status: BotKnowledgeStatus) {
   return withActingStaffScope(async () => {
-    const owner = await requireOwner();
+    const owner = await requireTenantOwner();
     if (!(["draft", "approved", "expired"] as BotKnowledgeStatus[]).includes(status)) return;
     const tenantId = await actingTenantId();
     const current = await prisma.botKnowledgeEntry.findFirst({ where: { id, tenantId } });
@@ -166,7 +166,7 @@ export async function setBotKnowledgeStatus(id: string, status: BotKnowledgeStat
 
 export async function deleteBotKnowledge(id: string) {
   return withActingStaffScope(async () => {
-    const owner = await requireOwner();
+    const owner = await requireTenantOwner();
     const tenantId = await actingTenantId();
     const current = await prisma.botKnowledgeEntry.findFirst({ where: { id, tenantId } });
     if (!current) return;
@@ -178,14 +178,14 @@ export async function deleteBotKnowledge(id: string) {
 
 export async function whisperConfigured(): Promise<boolean> {
   return withActingStaffScope(async () => {
-    await requireOwner();
+    await requireTenantOwner();
     return Boolean(await getSetting("OPENAI_API_KEY"));
   });
 }
 
 export async function connectTelegram(formData: FormData): Promise<void> {
   return withActingStaffScope(async () => {
-    await requireOwner();
+    await requireTenantOwner();
     const token = clean(formData.get("token"), 500);
     if (!token) return;
     await putSetting("TELEGRAM_BOT_TOKEN", token);
@@ -196,24 +196,26 @@ export async function connectTelegram(formData: FormData): Promise<void> {
     const res = await setTelegramWebhook(`${appBaseUrl()}/api/webhooks/telegram`, secret);
     await putSetting("BOT_TG_ENABLED", res.ok ? "true" : "false");
     revalidatePath("/chatbot");
+    revalidatePath("/settings/integrations");
   });
 }
 
 export async function disconnectTelegram() {
   return withActingStaffScope(async () => {
-    await requireOwner();
+    await requireTenantOwner();
     const { deleteTelegramWebhook } = await import("@/lib/telegram");
     await deleteTelegramWebhook();
     await putSetting("BOT_TG_ENABLED", "false");
     await putSetting("TELEGRAM_BOT_TOKEN", "");
     await putSetting("TELEGRAM_WEBHOOK_SECRET", "");
     revalidatePath("/chatbot");
+    revalidatePath("/settings/integrations");
   });
 }
 
 export async function telegramStatus(): Promise<{ connected: boolean; enabled: boolean }> {
   return withActingStaffScope(async () => {
-    await requireOwner();
+    await requireTenantOwner();
     return { connected: Boolean(await getSetting("TELEGRAM_BOT_TOKEN")), enabled: (await getSetting("BOT_TG_ENABLED")) === "true" };
   });
 }

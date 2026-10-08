@@ -204,7 +204,7 @@ test("an unreadable row is not treated as an empty one", () => {
   const almostValid = { ...standardQuoteTemplate(), recipients: "not-an-array" };
   assert.equal(readTemplateDocument(almostValid).status, "unreadable");
   assert.ok(
-    JSON.stringify(almostValid).includes("Quote valid for 14 days."),
+    JSON.stringify(almostValid).includes("Quote valid until {{quote.validUntil}}."),
     "…and its pages still hold every term, which is what a blank canvas would have replaced",
   );
 
@@ -313,7 +313,7 @@ test("no caller falls back to a substitute on unsupported legacy data", () => {
 
   const envelope = read("src/lib/signing/autoEnvelope.ts");
   assert.ok(
-    envelope.indexOf('read.status !== "ok"') < envelope.indexOf("standardQuoteTemplate()"),
+    envelope.indexOf('read.status !== "ok"') < envelope.indexOf("standardQuoteTemplate({"),
     "autoEnvelope must return before it can substitute the standard template",
   );
 });

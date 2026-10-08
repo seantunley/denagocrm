@@ -3,6 +3,7 @@ import { prisma } from "@/lib/db";
 import { requireApiUser, apiAuthErrorResponse } from "@/lib/auth";
 import { hasPermission } from "@/lib/permissions";
 import { formatDateTime } from "@/lib/format";
+import { getCompanyProfile } from "@/lib/companyProfile";
 import { listStockUnits, stockDashboard } from "@/lib/stockPlatform";
 import StockReportDoc, { type StockReportMeta } from "@/lib/pdf/StockReportDoc";
 
@@ -63,6 +64,7 @@ export async function GET(req: Request) {
   const meta: StockReportMeta = {
     generatedAt: formatDateTime(new Date()),
     generatedBy: userName,
+    companyName: (await getCompanyProfile()).name,
     filterSummary,
     truncated: units.length >= REPORT_LIMIT,
   };

@@ -11,6 +11,7 @@ import { configuredSigningCertificateInfo, sealedPdfSignature } from "@/lib/pdf/
 import { logSignEvent } from "./events";
 import { runPostCompletion } from "./postComplete";
 import { COMPLETED_EVENT, POST_COMPLETION_EVENT } from "./completionFanout";
+import { automationOn } from "@/lib/automationSwitch";
 import { sourceSignedByThisRequest } from "./recoveryScope";
 import { signingSecurityMode } from "./securityPolicy";
 import { verifyEvidenceChain } from "./evidenceHash";
@@ -189,6 +190,9 @@ async function executeCompletionEmail(job: SigningJob): Promise<void> {
   `;
   const recipient = recipients[0];
   if (!recipient || !recipient.email || recipient.completedEmailSentAt) return;
+  // Signed copies are the owner's switch (Settings → Automatic jobs & messages;
+  // on by default). Off: the job is done — nobody is emailed.
+  if (!(await automationOn("SIGNING_SIGNED_COPIES", job.tenantId))) return;
 
   const request = await completionRequest(job);
   if (!request.signedPdfRef) throw new Error("Completed request has no sealed PDF reference");

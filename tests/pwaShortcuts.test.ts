@@ -23,8 +23,9 @@ function assertPngShortcutIcon(icon: {
   assert.equal(png.readUInt32BE(20), 192);
 }
 
-test("CRM manifest exposes launcher shortcuts inside the root app scope", () => {
-  const data = manifest();
+test("CRM manifest exposes launcher shortcuts inside the root app scope", async () => {
+  // Async: the name is the workspace's, resolved from the request's host.
+  const data = await manifest();
 
   assert.deepEqual(
     data.shortcuts?.map(({ name, url, icons }) => ({
@@ -76,7 +77,7 @@ test("activity launcher URL opens once and keeps unrelated calendar state", () =
 });
 
 test("Messages manifest exposes launcher shortcuts inside the messages scope", async () => {
-  const response = messagesManifest();
+  const response = await messagesManifest();
   const data = await response.json();
 
   assert.deepEqual(

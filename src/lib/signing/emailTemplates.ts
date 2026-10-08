@@ -1,5 +1,6 @@
 import { escapeHtml } from "@/lib/escapeHtml";
 import { renderTemplate } from "@/lib/template";
+import { emailDocToHtml, sanitizeEmailDoc, type EmailDoc } from "./emailDoc";
 
 /**
  * THE SIGNING EMAILS, AS EDITABLE TEMPLATES.
@@ -27,23 +28,61 @@ import { renderTemplate } from "@/lib/template";
  * link renders as the bulletproof button + the paste-this-link line.
  */
 
-// "quote" is not a signing email: it is the "Email quote" message (the quote PDF
-// is attached). It shares the editor, the validation and the branded shell, so it
-// is one more kind here rather than a second copy of all three.
-export type SigningEmailKind = "invite" | "reminder" | "completed" | "otp" | "quote";
+// Despite the name, this is the registry of EVERY system message a customer gets
+// from the CRM: the signing emails, "Email quote", and the codes, reminders,
+// recalls, review asks and survey invitations. One editor, one validation, one
+// branded shell — a kind each, rather than a copy of all three per message.
+// SMS kinds (`channel: "sms"`) share the fields and validation, with no subject
+// and no shell.
+export type SigningEmailKind =
+  | "invite"
+  | "reminder"
+  | "completed"
+  | "otp"
+  | "quote"
+  | "portal_code"
+  | "lookup_code"
+  | "lookup_code_sms"
+  | "service_reminder"
+  | "service_reminder_sms"
+  | "recall"
+  | "recall_sms"
+  | "review_delivery"
+  | "review_service"
+  | "survey_invite"
+  | "survey_invite_sms"
+  | "invite_whatsapp"
+  | "reminder_whatsapp"
+  | "survey_reminder"
+  | "survey_reminder_sms";
+
+/** Placeholders a message can't be sent without. Link ones render as a button when on a line of their own. */
+export type ActionField = "signing_link" | "code" | "review_link" | "survey_link";
 
 export type SigningEmailDef = {
   kind: SigningEmailKind;
   label: string;
   description: string;
-  /** AppSetting key the tenant's edited copy is stored under (JSON {subject, body}). */
+  /** Section in Settings → Email templates. */
+  group: string;
+  /** Unset = email. SMS and WhatsApp are plain text (isTextTemplate). */
+  channel?: "email" | "sms" | "whatsapp";
+  /** AppSetting key the tenant's edited copy is stored under (JSON {subject, body, doc?}). */
   settingKey: string;
+  /** Unused for SMS. */
   subject: string;
   body: string;
   /** Placeholders this kind may use. Anything else is refused on save and blank at send. */
   fields: readonly string[];
   /** The placeholder that can never be removed, or null. */
-  action: "signing_link" | "code" | null;
+  action: ActionField | null;
+};
+
+/** Button text, and the text-part lead-in, for each link action. */
+const LINK_ACTIONS: Partial<Record<ActionField, { button: string; lead: string }>> = {
+  signing_link: { button: "Open &amp; sign", lead: "Open and sign here:" },
+  review_link: { button: "Leave a review", lead: "Leave a review here:" },
+  survey_link: { button: "Answer the survey", lead: "Answer here:" },
 };
 
 const COMMON = [
@@ -53,6 +92,9 @@ const COMMON = [
   "quote_number",
   "company_name",
   "sender_name",
+  "sender_title",
+  "sender_mobile",
+  "sender_email",
   "company_phone",
   "company_email",
 ] as const;
@@ -65,88 +107,305 @@ export const SIGNING_FIELD_HELP: Record<string, string> = {
   quote_number: "Quote number, e.g. Q-1026 (blank if not a quote)",
   company_name: "Your company name",
   sender_name: "Name of the staff member who sent it",
+  sender_title: "Their job title (My account)",
+  sender_mobile: "Their mobile number (My account)",
+  sender_email: "Their email address",
   company_phone: "Company phone (Settings → Company profile)",
   company_email: "Company email (Settings → Company profile)",
   signing_link: "The personal signing link (required — shown as the button)",
   expiry_date: "Date the signing link expires (blank if none)",
   code: "The 6-digit verification code (required)",
   total: "Quote total incl. VAT, e.g. R 125 000,00",
+  company_contact: "Company name and phone, e.g. Acme on 021 000 0000",
+  model: "Vehicle model, e.g. Rover XL",
+  due_date: "Date the service is due",
+  recall_title: "Recall title",
+  recall_description: "What the recall is about",
+  item: "What was delivered or serviced",
+  review_link: "Your Google review link (required — shown as a button)",
+  survey_link: "The customer's personal survey link (required — shown as a button)",
+  survey_intro: "The survey's introduction (set on the survey)",
+  survey_title: "Survey title",
+  survey_subject: "Suggested subject for this kind of survey",
 };
 
-// The defaults are today's wording, so nothing a customer receives changes
-// until an owner edits a template.
+const PERSON = ["first_name", "recipient_name"] as const;
+const COMPANY = ["company_name", "company_phone", "company_email", "company_contact"] as const;
+
+// The standard wording — what a workspace sends until its owner writes its own.
+// Rewritten 2026-10-08 (Sean: "These emails also need to be re written. They
+// are not professional at all"): a formal greeting, full sentences, no emoji,
+// and every request to sign says the customer may decline instead.
 export const SIGNING_EMAILS: Record<SigningEmailKind, SigningEmailDef> = {
   invite: {
     kind: "invite",
+    group: "Signing & quotes",
     label: "Signing — invitation",
     description: "Sent when a document is sent for signature.",
     settingKey: "SIGNING_EMAIL_INVITE",
-    subject: "Please sign your document: {{document_title}}",
-    body: "Hi {{recipient_name}},\n\nPlease review and sign {{document_title}}.\n\n{{signing_link}}\n\nThank you,\n{{company_name}}",
+    subject: "{{document_title}} is ready for your signature",
+    body: "Dear {{recipient_name}},\n\n{{document_title}} is ready for your review. You can read it in full and sign it securely online, from any phone or computer, in a few minutes.\n\n{{signing_link}}\n\nIf anything needs to change, or you would prefer not to go ahead, please choose Decline on the same page and tell us why. We will be in touch.\n\nKind regards,\n{{company_name}}",
     fields: [...COMMON, "signing_link", "expiry_date"],
     action: "signing_link",
   },
   reminder: {
     kind: "reminder",
+    group: "Signing & quotes",
     label: "Signing — reminder",
     description: "Sent when a signer is reminded (manually, by the reminder schedule, or the next signer in sequence).",
     settingKey: "SIGNING_EMAIL_REMINDER",
-    subject: "Reminder — please sign: {{document_title}}",
-    body: "Hi {{recipient_name}},\n\nReminder — please review and sign {{document_title}}.\n\n{{signing_link}}\n\nThank you,\n{{company_name}}",
+    subject: "Reminder: {{document_title}} is awaiting your signature",
+    body: "Dear {{recipient_name}},\n\nThis is a courtesy reminder that {{document_title}} is still awaiting your signature. You can review and sign it securely online using the button below.\n\n{{signing_link}}\n\nIf you have any questions, or would prefer not to go ahead, please reply to this email or choose Decline on the signing page.\n\nKind regards,\n{{company_name}}",
+    fields: [...COMMON, "signing_link", "expiry_date"],
+    action: "signing_link",
+  },
+  // The WhatsApp texts used to be hard-coded in dispatch.ts — sent to customers
+  // in wording nobody could see or change. Defaults are that exact wording.
+  invite_whatsapp: {
+    kind: "invite_whatsapp",
+    group: "Signing & quotes",
+    label: "Signing — invitation (WhatsApp)",
+    description: "The WhatsApp message sent with a signing link, when the signer has a mobile number and WhatsApp is connected.",
+    channel: "whatsapp",
+    settingKey: "SIGNING_WHATSAPP_INVITE",
+    subject: "",
+    body: "Good day {{recipient_name}}. {{document_title}} from {{company_name}} is ready for your review.\nYou can sign it, or decline, securely here: {{signing_link}}",
+    fields: [...COMMON, "signing_link", "expiry_date"],
+    action: "signing_link",
+  },
+  reminder_whatsapp: {
+    kind: "reminder_whatsapp",
+    group: "Signing & quotes",
+    label: "Signing — reminder (WhatsApp)",
+    description: "The WhatsApp reminder to a signer (when reminders are on, or someone presses Resend).",
+    channel: "whatsapp",
+    settingKey: "SIGNING_WHATSAPP_REMINDER",
+    subject: "",
+    body: "Good day {{recipient_name}}. A courtesy reminder that {{document_title}} from {{company_name}} is awaiting your signature.\nYou can sign it, or decline, securely here: {{signing_link}}",
     fields: [...COMMON, "signing_link", "expiry_date"],
     action: "signing_link",
   },
   completed: {
     kind: "completed",
+    group: "Signing & quotes",
     label: "Signing — signed copy",
     description: "Sent to every recipient once everyone has signed. The sealed PDF is attached automatically.",
     settingKey: "SIGNING_EMAIL_COMPLETED",
-    subject: "Completed & signed: {{document_title}}",
-    body: "Hi {{recipient_name}},\n\nEveryone has signed \"{{document_title}}\". The final sealed PDF is attached.\n\n{{company_name}}",
+    subject: "Your signed copy of {{document_title}}",
+    body: "Dear {{recipient_name}},\n\nThank you. {{document_title}} has now been signed by all parties, and the completed copy is attached to this email for your records.\n\nIf you have any questions, we will be glad to help.\n\nKind regards,\n{{company_name}}",
     fields: [...COMMON],
     action: null,
   },
   otp: {
     kind: "otp",
+    group: "Signing & quotes",
     label: "Signing — verification code",
     description: "Sent when a document requires the signer to confirm their identity by email.",
     settingKey: "SIGNING_EMAIL_OTP",
-    subject: "Verification code: {{document_title}}",
-    body: "Hi {{recipient_name}},\n\nYour verification code for “{{document_title}}” is:\n\n{{code}}\n\nIt expires in 10 minutes. If you did not ask to sign this document, ignore this message and tell the sender.",
+    subject: "Your verification code for {{document_title}}",
+    body: "Dear {{recipient_name}},\n\nTo confirm your identity before signing {{document_title}}, please enter this verification code:\n\n{{code}}\n\nThe code is valid for 10 minutes. If you did not ask to sign this document, please disregard this email and let us know.\n\nKind regards,\n{{company_name}}",
     fields: [...COMMON, "code"],
     action: "code",
   },
   quote: {
     kind: "quote",
+    group: "Signing & quotes",
     label: "Quote email",
     description: "The starting wording for “Email quote” in the quote editor. Staff see it and can change it before each send; the quote PDF is attached automatically.",
     settingKey: "QUOTE_EMAIL",
-    subject: "Your quote {{quote_number}} from {{company_name}}",
-    body: "Hi {{first_name}},\n\nThank you for your interest. Your quote {{quote_number}} is attached as a PDF.\n\nIf you have any questions, or would like to go ahead, just reply to this email.\n\nKind regards,\n{{sender_name}}\n{{company_name}}",
+    subject: "Your quotation {{quote_number}} from {{company_name}}",
+    body: "Dear {{first_name}},\n\nThank you for the opportunity to quote. Please find quotation {{quote_number}} attached as a PDF for your consideration.\n\nShould you have any questions, or wish to change anything, I will be glad to assist. Simply reply to this email. When you are ready to proceed, let me know and I will arrange the next steps.\n\nKind regards,\n{{sender_name}}\n{{company_name}}",
     fields: [...COMMON, "total"],
     action: null,
+  },
+
+  portal_code: {
+    kind: "portal_code",
+    group: "Login & verification codes",
+    label: "Customer portal — login code",
+    description: "Emailed when a customer signs in to the customer portal.",
+    settingKey: "SYSTEM_EMAIL_PORTAL_CODE",
+    subject: "Your {{company_name}} login code",
+    body: "Please use the code below to sign in to your {{company_name}} customer portal:\n\n{{code}}\n\nThe code is valid for 10 minutes. If you did not request it, you can safely disregard this email.\n\nKind regards,\n{{company_name}}",
+    fields: [...PERSON, ...COMPANY, "code"],
+    action: "code",
+  },
+  lookup_code: {
+    kind: "lookup_code",
+    group: "Login & verification codes",
+    label: "Service lookup — code (email)",
+    description: "Sent when someone looks up a vehicle by VIN on your website (used when SMS isn't available).",
+    settingKey: "SYSTEM_EMAIL_LOOKUP_CODE",
+    subject: "Your {{company_name}} verification code",
+    body: "Please use the code below to confirm your details:\n\n{{code}}\n\nThe code is valid for 10 minutes. If you did not request it, you can safely disregard this email.\n\nKind regards,\n{{company_name}}",
+    fields: [...PERSON, ...COMPANY, "code"],
+    action: "code",
+  },
+  lookup_code_sms: {
+    kind: "lookup_code_sms",
+    group: "Login & verification codes",
+    channel: "sms",
+    label: "Service lookup — code (SMS)",
+    description: "Texted when someone looks up a vehicle by VIN on your website.",
+    settingKey: "SYSTEM_SMS_LOOKUP_CODE",
+    subject: "",
+    body: "{{company_name}}: your verification code is {{code}}. It expires in 10 minutes. If you didn't request this, ignore this message.",
+    fields: [...PERSON, ...COMPANY, "code"],
+    action: "code",
+  },
+
+  service_reminder: {
+    kind: "service_reminder",
+    group: "Service & aftersales",
+    label: "Service reminder (email)",
+    description: "Sent by the Remind button on Service due. (The nightly automatic reminder uses the template picked under Service reminders.)",
+    settingKey: "SYSTEM_EMAIL_SERVICE_REMINDER",
+    subject: "Your {{model}} is due for a service",
+    body: "Dear {{first_name}},\n\nOur records show that your {{model}} is due for its next service ({{due_date}}). Regular servicing keeps your vehicle safe and performing at its best.\n\nTo book a time that suits you, please reply to this email or contact {{company_contact}}.\n\nKind regards,\n{{company_name}}",
+    fields: [...PERSON, ...COMPANY, "model", "due_date"],
+    action: null,
+  },
+  service_reminder_sms: {
+    kind: "service_reminder_sms",
+    group: "Service & aftersales",
+    channel: "sms",
+    label: "Service reminder (SMS)",
+    description: "Texted by the Remind button when the customer can't be emailed.",
+    settingKey: "SYSTEM_SMS_SERVICE_REMINDER",
+    subject: "",
+    body: "Hi {{first_name}}, your {{model}} is due for a service ({{due_date}}). Call {{company_contact}} to book. Reply STOP to opt out.",
+    fields: [...PERSON, ...COMPANY, "model", "due_date"],
+    action: null,
+  },
+  recall: {
+    kind: "recall",
+    group: "Service & aftersales",
+    label: "Recall notice (email)",
+    description: "Sent to every owner of the affected model when you notify a recall.",
+    settingKey: "SYSTEM_EMAIL_RECALL",
+    subject: "Important notice for your {{model}}: {{recall_title}}",
+    body: "Dear {{first_name}},\n\nWe are writing to you about your {{model}}.\n\n{{recall_description}}\n\nThis work will be carried out at no charge to you. Please contact {{company_contact}} at your earliest convenience so that we can arrange a suitable time.\n\nWe apologise for the inconvenience and thank you for your understanding.\n\nKind regards,\n{{company_name}}",
+    fields: [...PERSON, ...COMPANY, "model", "recall_title", "recall_description"],
+    action: null,
+  },
+  recall_sms: {
+    kind: "recall_sms",
+    group: "Service & aftersales",
+    channel: "sms",
+    label: "Recall notice (SMS)",
+    description: "Texted to owners who can't be emailed.",
+    settingKey: "SYSTEM_SMS_RECALL",
+    subject: "",
+    body: "{{recall_title}}: {{recall_description}} Call {{company_contact}}.",
+    fields: [...PERSON, ...COMPANY, "model", "recall_title", "recall_description"],
+    action: null,
+  },
+
+  review_delivery: {
+    kind: "review_delivery",
+    group: "Reviews & surveys",
+    label: "Google review request — after delivery",
+    description: "Sent after a new vehicle is delivered (at most once every 90 days per customer, when a Google Place ID is set).",
+    settingKey: "SYSTEM_EMAIL_REVIEW_DELIVERY",
+    subject: "How are you enjoying your new {{item}}?",
+    body: "Dear {{first_name}},\n\nCongratulations on your new {{item}}, and thank you for choosing {{company_name}}.\n\nWe hope you are enjoying it. If you have a moment, we would be grateful if you would share your experience in a short Google review. It takes less than a minute and helps other customers choose with confidence.\n\n{{review_link}}\n\nShould you need anything at all, please contact {{company_contact}}.\n\nKind regards,\n{{company_name}}",
+    fields: [...PERSON, ...COMPANY, "item", "review_link"],
+    action: "review_link",
+  },
+  review_service: {
+    kind: "review_service",
+    group: "Reviews & surveys",
+    label: "Google review request — after a service",
+    description: "Sent when a job card is completed (at most once every 90 days per customer, when a Google Place ID is set).",
+    settingKey: "SYSTEM_EMAIL_REVIEW_SERVICE",
+    subject: "How was your recent service?",
+    body: "Dear {{first_name}},\n\nThank you for entrusting us with {{item}}. We hope everything is running exactly as it should.\n\nIf you were happy with the service, we would be grateful for a short Google review. It takes less than a minute.\n\n{{review_link}}\n\nIf anything was not to your satisfaction, please contact {{company_contact}} first so that we can put it right.\n\nKind regards,\n{{company_name}}",
+    fields: [...PERSON, ...COMPANY, "item", "review_link"],
+    action: "review_link",
+  },
+  survey_invite: {
+    kind: "survey_invite",
+    group: "Reviews & surveys",
+    label: "Survey invitation (email)",
+    description: "Sent when a survey is triggered for a customer. The introduction is set on each survey.",
+    settingKey: "SYSTEM_EMAIL_SURVEY_INVITE",
+    subject: "{{survey_subject}}",
+    body: "Dear {{first_name}},\n\n{{survey_intro}}\n\nYour feedback helps us to improve, and the survey takes less than a minute to complete.\n\n{{survey_link}}\n\nThank you for your time.\n\nKind regards,\n{{company_name}}",
+    fields: [...PERSON, ...COMPANY, "survey_title", "survey_intro", "survey_subject", "survey_link"],
+    action: "survey_link",
+  },
+  survey_invite_sms: {
+    kind: "survey_invite_sms",
+    group: "Reviews & surveys",
+    channel: "sms",
+    label: "Survey invitation (SMS)",
+    description: "Texted when the customer has no email address.",
+    settingKey: "SYSTEM_SMS_SURVEY_INVITE",
+    subject: "",
+    body: "Hi {{first_name}}, {{survey_intro}} {{survey_link}}",
+    fields: [...PERSON, ...COMPANY, "survey_title", "survey_intro", "survey_link"],
+    action: "survey_link",
+  },
+  // Reminders were hard-coded in surveyDistributionQueue.ts. Defaults are that wording.
+  survey_reminder: {
+    kind: "survey_reminder",
+    group: "Reviews & surveys",
+    label: "Survey reminder (email)",
+    description: "Sent once to a customer who hasn't answered — only when survey reminders are on (Settings → Automatic jobs & messages) or set on a distribution.",
+    settingKey: "SYSTEM_EMAIL_SURVEY_REMINDER",
+    subject: "Reminder: {{survey_title}}",
+    body: "Dear {{first_name}},\n\nThis is a courtesy reminder about our short survey. {{survey_intro}}\n\n{{survey_link}}\n\nThank you for your time.\n\nKind regards,\n{{company_name}}",
+    fields: [...PERSON, ...COMPANY, "survey_title", "survey_intro", "survey_subject", "survey_link"],
+    action: "survey_link",
+  },
+  survey_reminder_sms: {
+    kind: "survey_reminder_sms",
+    group: "Reviews & surveys",
+    channel: "sms",
+    label: "Survey reminder (SMS)",
+    description: "The text-message reminder, when the customer has no email address.",
+    settingKey: "SYSTEM_SMS_SURVEY_REMINDER",
+    subject: "",
+    body: "Hi {{first_name}}, a quick reminder: {{survey_intro}} {{survey_link}}",
+    fields: [...PERSON, ...COMPANY, "survey_title", "survey_intro", "survey_link"],
+    action: "survey_link",
   },
 };
 
 export const SIGNING_EMAIL_KINDS = Object.keys(SIGNING_EMAILS) as SigningEmailKind[];
 
+/** SMS and WhatsApp: plain text, no subject, no formatted body. */
+export function isTextTemplate(def: Pick<SigningEmailDef, "channel">): boolean {
+  return def.channel === "sms" || def.channel === "whatsapp";
+}
+
 /** Placeholders that carry a secret. They may appear in the body only — never the subject, which lands in previews, logs and timelines. */
-const SECRET_FIELDS = new Set(["signing_link", "code"]);
+const SECRET_FIELDS = new Set(["signing_link", "code", "survey_link"]);
 
 const PLACEHOLDER = /\{\{\s*(\w+)\s*\}\}/g;
 const MAX_SUBJECT = 200;
 const MAX_BODY = 5000;
+/** About four SMS segments — long enough for a real message, short enough not to cost a fortune per customer. */
+const MAX_SMS = 640;
 
-export type StoredSigningTemplate = { subject: string; body: string };
+/**
+ * `body` is always the plain text (it drives validation and the text/plain
+ * part). `doc` is the formatted version from the editor (emailDoc.ts), when the
+ * owner has saved one — kept as `unknown` here and sanitised against the kind's
+ * fields every time it is rendered.
+ */
+export type StoredSigningTemplate = { subject: string; body: string; doc?: unknown };
 
 /** Read a stored override back, defensively. Anything that is not one → null → default. */
-export function parseStoredSigningTemplate(raw: string | null | undefined): StoredSigningTemplate | null {
+export function parseStoredSigningTemplate(raw: string | null | undefined, kind?: SigningEmailKind): StoredSigningTemplate | null {
   if (!raw) return null;
   try {
-    const v = JSON.parse(raw) as { subject?: unknown; body?: unknown };
+    const v = JSON.parse(raw) as { subject?: unknown; body?: unknown; doc?: unknown };
     if (typeof v.subject !== "string" || typeof v.body !== "string") return null;
-    if (!v.subject.trim() || !v.body.trim()) return null;
-    return { subject: v.subject, body: v.body };
+    // Only an SMS has no subject.
+    const sms = kind ? isTextTemplate(SIGNING_EMAILS[kind]) : false;
+    if ((!sms && !v.subject.trim()) || !v.body.trim()) return null;
+    return Array.isArray(v.doc) ? { subject: v.subject, body: v.body, doc: v.doc } : { subject: v.subject, body: v.body };
   } catch {
     return null;
   }
@@ -155,9 +414,15 @@ export function parseStoredSigningTemplate(raw: string | null | undefined): Stor
 /** Why this template cannot be saved, or null when it can. */
 export function validateSigningTemplate(kind: SigningEmailKind, subject: string, body: string): string | null {
   const def = SIGNING_EMAILS[kind];
-  if (!subject.trim() || !body.trim()) return "Subject and body are both required.";
-  if (subject.length > MAX_SUBJECT) return `Subject is too long (max ${MAX_SUBJECT} characters).`;
-  if (body.length > MAX_BODY) return `Body is too long (max ${MAX_BODY} characters).`;
+  if (isTextTemplate(def)) {
+    if (!body.trim()) return "The message is required.";
+    if (body.length > MAX_SMS) return `The text message is too long (max ${MAX_SMS} characters).`;
+    subject = "";
+  } else {
+    if (!subject.trim() || !body.trim()) return "Subject and body are both required.";
+    if (subject.length > MAX_SUBJECT) return `Subject is too long (max ${MAX_SUBJECT} characters).`;
+    if (body.length > MAX_BODY) return `Body is too long (max ${MAX_BODY} characters).`;
+  }
   const used = (s: string) => [...s.matchAll(PLACEHOLDER)].map((m) => m[1]);
   const unknown = [...new Set([...used(subject), ...used(body)].filter((f) => !def.fields.includes(f)))];
   if (unknown.length) {
@@ -186,11 +451,30 @@ export type SigningEmailBrand = {
   accentText: string;
   phone: string;
   email: string;
+  /**
+   * Header background. "light" (white, the default) suits a dark logo; a logo
+   * drawn in white needs "dark" or "brand" or its lettering disappears.
+   */
+  header?: EmailHeaderStyle;
 };
+
+export type EmailHeaderStyle = "light" | "dark" | "brand";
+export const EMAIL_HEADER_STYLES: Record<EmailHeaderStyle, string> = {
+  light: "White",
+  dark: "Dark",
+  brand: "Brand colour",
+};
+export function parseEmailHeaderStyle(raw: string | null | undefined): EmailHeaderStyle {
+  return raw === "dark" || raw === "brand" ? raw : "light";
+}
 
 export const DEFAULT_ACCENT = "#ea580c";
 
-export type RenderedSigningEmail = { subject: string; html: string; text: string };
+/**
+ * `bodyText` (designed emails only): the message's own paragraphs, without the
+ * headline, figures, button or signature — what a per-send edit shows and replaces.
+ */
+export type RenderedSigningEmail = { subject: string; html: string; text: string; bodyText?: string };
 
 /**
  * Render one signing email.
@@ -225,11 +509,10 @@ export function renderSigningEmail(
   const actionLine = action ? new RegExp(`^\\{\\{\\s*${action}\\s*\\}\\}$`) : null;
   const paragraphs = body.split(/\n\s*\n/);
 
+  const link = action ? LINK_ACTIONS[action] : undefined;
   const text = paragraphs
     .map((p) => {
-      if (actionLine?.test(p.trim())) {
-        return action === "signing_link" ? `Open and sign here:\n${allowed.signing_link}` : allowed.code;
-      }
+      if (action && actionLine?.test(p.trim())) return link ? `${link.lead}\n${allowed[action]}` : allowed[action];
       return renderTemplate(p, allowed);
     })
     .join("\n\n");
@@ -237,26 +520,54 @@ export function renderSigningEmail(
   const escaped: Record<string, string> = Object.create(null);
   for (const [k, v] of Object.entries(allowed)) escaped[k] = escapeHtml(v);
   // Inline (mid-sentence) link/code: still clickable/prominent, still escaped.
-  if (allowed.signing_link) {
-    escaped.signing_link = `<a href="${escapeHtml(allowed.signing_link)}" style="color:${brand.accent};">${escapeHtml(allowed.signing_link)}</a>`;
+  for (const f of Object.keys(LINK_ACTIONS)) {
+    if (allowed[f]) escaped[f] = `<a href="${escapeHtml(allowed[f])}" style="color:${brand.accent};">${escapeHtml(allowed[f])}</a>`;
   }
   if (allowed.code) escaped.code = `<strong>${escapeHtml(allowed.code)}</strong>`;
 
   const P = `margin:0 0 16px;font-family:Helvetica,Arial,sans-serif;font-size:15px;line-height:1.55;color:#1e293b;`;
-  const content = paragraphs
-    .map((p) => {
-      if (actionLine?.test(p.trim())) {
-        return action === "signing_link"
-          ? signButton(allowed.signing_link, brand)
-          : `<p style="${P}"><span style="display:inline-block;padding:10px 18px;border:1px solid #e2e8f0;border-radius:8px;font-family:Consolas,Menlo,monospace;font-size:26px;font-weight:bold;letter-spacing:6px;color:#0f172a;">${escapeHtml(allowed.code)}</span></p>`;
-      }
-      // Escape the TEMPLATE first, then substitute already-escaped values:
-      // nothing the owner types or a customer's name contains becomes markup.
-      return `<p style="${P}">${renderTemplate(escapeHtml(p), escaped).replace(/\n/g, "<br>")}</p>`;
-    })
-    .join("\n");
+  const actionHtml = () =>
+    action && link
+      ? signButton(allowed[action], brand, link.button)
+      : `<p style="${P}"><span style="display:inline-block;padding:10px 18px;border:1px solid #e2e8f0;border-radius:8px;font-family:Consolas,Menlo,monospace;font-size:26px;font-weight:bold;letter-spacing:6px;color:#0f172a;">${escapeHtml(allowed.code)}</span></p>`;
+
+  // The formatted body, when the owner saved one; otherwise the plain paragraphs.
+  const doc: EmailDoc | null = tpl.doc ? sanitizeEmailDoc(tpl.doc, def.fields) : null;
+  if (doc && action && !doc.some((b) => b.children.some((c) => "type" in c && c.type === "mergeField" && c.token === action))) {
+    // Never send the email without what it was sent for.
+    doc.push({ type: "p", children: [{ type: "mergeField", token: action, children: [{ text: "" }] }] });
+  }
+  const content = doc
+    ? emailDocToHtml(doc, {
+        escaped,
+        paragraphStyle: P,
+        accent: brand.accent,
+        actionBlock: action ? (token) => (token === action ? actionHtml() : null) : null,
+      })
+    : paragraphs
+        .map((p) => {
+          if (actionLine?.test(p.trim())) return actionHtml();
+          // Escape the TEMPLATE first, then substitute already-escaped values:
+          // nothing the owner types or a customer's name contains becomes markup.
+          return `<p style="${P}">${renderTemplate(escapeHtml(p), escaped).replace(/\n/g, "<br>")}</p>`;
+        })
+        .join("\n");
 
   return { subject, html: shell(subject, content, brand), text };
+}
+
+/**
+ * Render one SMS kind: the template's text with the kind's own fields filled in,
+ * the action (code / link) appended if an edited template dropped it, and blank
+ * runs collapsed so an empty field doesn't leave a hole.
+ */
+export function renderSms(kind: SigningEmailKind, template: StoredSigningTemplate | null, vars: Record<string, string>): string {
+  const def = SIGNING_EMAILS[kind];
+  const allowed: Record<string, string> = Object.create(null);
+  for (const f of def.fields) allowed[f] = typeof vars[f] === "string" ? vars[f] : "";
+  let body = (template?.body ?? def.body).replace(/\r\n?/g, "\n").trim();
+  if (def.action && !new RegExp(`\\{\\{\\s*${def.action}\\s*\\}\\}`).test(body)) body += ` {{${def.action}}}`;
+  return renderTemplate(body, allowed).replace(/[ \t]{2,}/g, " ").replace(/\n{3,}/g, "\n\n").trim();
 }
 
 /**
@@ -268,17 +579,22 @@ export function renderSigningEmail(
  * roundrect instead, which is the only way to give it a full-size, rounded,
  * clickable button. Followed by the plain link for clients that block both.
  */
-export function signButton(url: string, brand: Pick<SigningEmailBrand, "accent" | "accentText">): string {
+export function signButton(
+  url: string,
+  brand: Pick<SigningEmailBrand, "accent" | "accentText">,
+  /** Already-HTML label — only ever one of the LINK_ACTIONS constants. */
+  label = "Open &amp; sign",
+): string {
   const href = escapeHtml(url);
   const font = "font-family:Helvetica,Arial,sans-serif;font-size:15px;font-weight:bold;";
   return `<!--[if mso]>
-<v:roundrect xmlns:v="urn:schemas-microsoft-com:vml" xmlns:w="urn:schemas-microsoft-com:office:word" href="${href}" style="height:46px;v-text-anchor:middle;width:200px;" arcsize="17%" stroke="f" fillcolor="${brand.accent}">
-<w:anchorlock/><center style="color:${brand.accentText};${font}">Open &amp; sign</center>
+<v:roundrect xmlns:v="urn:schemas-microsoft-com:vml" xmlns:w="urn:schemas-microsoft-com:office:word" href="${href}" style="height:46px;v-text-anchor:middle;width:220px;" arcsize="17%" stroke="f" fillcolor="${brand.accent}">
+<w:anchorlock/><center style="color:${brand.accentText};${font}">${label}</center>
 </v:roundrect>
 <![endif]--><!--[if !mso]><!-->
 <table role="presentation" border="0" cellspacing="0" cellpadding="0" style="margin:6px 0 16px;"><tr>
 <td align="center" bgcolor="${brand.accent}" style="background-color:${brand.accent};border-radius:8px;padding:13px 26px;">
-<a href="${href}" target="_blank" style="${font}color:${brand.accentText};text-decoration:none;display:inline-block;">Open &amp; sign</a>
+<a href="${href}" target="_blank" style="${font}color:${brand.accentText};text-decoration:none;display:inline-block;">${label}</a>
 </td></tr></table>
 <!--<![endif]-->
 <p style="margin:0 0 16px;font-family:Helvetica,Arial,sans-serif;font-size:12px;line-height:1.5;color:#64748b;">Or paste this link into your browser:<br><a href="${href}" style="color:#64748b;word-break:break-all;">${href}</a></p>`;
@@ -286,9 +602,19 @@ export function signButton(url: string, brand: Pick<SigningEmailBrand, "accent" 
 
 function shell(subject: string, content: string, brand: SigningEmailBrand): string {
   const name = escapeHtml(brand.companyName);
+  const style = brand.header ?? "light";
+  // Light: today's look — accent bar, white header. Dark / brand: the header IS
+  // the colour block (no separate bar), and the wordmark turns light.
+  const headerBg = style === "dark" ? "#0f172a" : style === "brand" ? brand.accent : null;
+  const wordmark = style === "dark" ? "#ffffff" : style === "brand" ? brand.accentText : "#0f172a";
   const header = brand.logoUrl
     ? `<img src="${escapeHtml(brand.logoUrl)}" alt="${name}" height="44" style="display:block;border:0;height:44px;width:auto;">`
-    : `<div style="font-family:Helvetica,Arial,sans-serif;font-size:16px;font-weight:800;letter-spacing:1px;color:#0f172a;">${escapeHtml(brand.companyName.toUpperCase())}</div>`;
+    : `<div style="font-family:Helvetica,Arial,sans-serif;font-size:16px;font-weight:800;letter-spacing:1px;color:${wordmark};">${escapeHtml(brand.companyName.toUpperCase())}</div>`;
+  const headerRows = headerBg
+    ? `<tr><td bgcolor="${headerBg}" style="padding:22px 28px;background-color:${headerBg};border-radius:10px 10px 0 0;">${header}</td></tr>
+<tr><td style="height:12px;line-height:12px;font-size:0;">&nbsp;</td></tr>`
+    : `<tr><td height="4" bgcolor="${brand.accent}" style="height:4px;line-height:4px;font-size:0;background-color:${brand.accent};border-radius:10px 10px 0 0;">&nbsp;</td></tr>
+<tr><td style="padding:24px 28px 8px;">${header}</td></tr>`;
   const footerLines = [
     brand.tagline ? `${name} — ${escapeHtml(brand.tagline)}` : name,
     [brand.phone, brand.email].filter((s) => s.trim()).map(escapeHtml).join(" &middot; "),
@@ -299,8 +625,7 @@ function shell(subject: string, content: string, brand: SigningEmailBrand): stri
 <body style="margin:0;padding:0;background-color:#f1f5f9;">
 <table role="presentation" width="100%" border="0" cellspacing="0" cellpadding="0" bgcolor="#f1f5f9" style="background-color:#f1f5f9;"><tr><td align="center" style="padding:24px 12px;">
 <table role="presentation" width="560" border="0" cellspacing="0" cellpadding="0" bgcolor="#ffffff" style="width:100%;max-width:560px;background-color:#ffffff;border-radius:10px;">
-<tr><td height="4" bgcolor="${brand.accent}" style="height:4px;line-height:4px;font-size:0;background-color:${brand.accent};border-radius:10px 10px 0 0;">&nbsp;</td></tr>
-<tr><td style="padding:24px 28px 8px;">${header}</td></tr>
+${headerRows}
 <tr><td style="padding:12px 28px 8px;">
 ${content}
 </td></tr>

@@ -21,6 +21,8 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { cancelActivity, completeActivity } from "@/app/actions/activities";
+import { SaveForm, SaveButton } from "@/components/SaveForm";
+import ConfirmActionDialog from "@/components/ConfirmActionDialog";
 import { isFutureDay } from "@/lib/activityDay";
 import { QuickCreateButton } from "@/components/QuickCreateButton";
 import { buttonVariants } from "@/components/ui/button";
@@ -130,6 +132,9 @@ export default async function ActivitiesPage({
   const activities = await prisma.activity.findMany({
     where: {
       status: "planned",
+      // Availability blocks live on the calendar, not in the task list (they never
+      // leave "planned", so they would sit here as overdue tasks forever).
+      availabilityBlock: false,
       ...(activityIds === null ? {} : { id: { in: activityIds } }),
       ...(mine ? { assignedToId: user.id } : {}),
       ...(type ? { type } : {}),
@@ -271,10 +276,10 @@ export default async function ActivitiesPage({
                     detail={relatedLabel}
                     meta={`${formatDue(activity.dueDate)} · ${activity.assignedTo.name}`}
                     action={canManage && !isFutureDay(activity.dueDate) ? (
-                      <form action={completeActivity.bind(null, activity.id)}>
+                      <SaveForm action={completeActivity.bind(null, activity.id)}>
                         <input type="hidden" name="revalidate" value="/activities" />
-                        <button className={buttonVariants({ variant: "outline", size: "sm" })} aria-label={`Complete ${activity.summary}`}><Check className="size-4" />Done</button>
-                      </form>
+                        <SaveButton pendingLabel="…" className={buttonVariants({ variant: "outline", size: "sm" })} aria-label={`Complete ${activity.summary}`}><Check className="size-4" />Done</SaveButton>
+                      </SaveForm>
                     ) : undefined}
                   />
                 );
@@ -535,7 +540,7 @@ export default async function ActivitiesPage({
 
                                 {canManage && !isFutureDay(activity.dueDate) && (
                                   <div className="flex items-center gap-2">
-                                    <form
+                                    <SaveForm
                                       action={completeActivity.bind(null, activity.id)}
                                       className="flex min-w-0 flex-1 items-center gap-2 sm:flex-none"
                                     >
@@ -550,7 +555,8 @@ export default async function ActivitiesPage({
                                         placeholder="Outcome note (optional)"
                                         aria-label={`Outcome note for ${activity.summary}`}
                                       />
-                                      <button
+                                      <SaveButton
+                                        pendingLabel="…"
                                         className={buttonVariants({
                                           variant: "secondary",
                                           size: "sm",
@@ -558,29 +564,31 @@ export default async function ActivitiesPage({
                                       >
                                         <Check className="size-3.5" />
                                         Done
-                                      </button>
-                                    </form>
-                                    <form
-                                      action={cancelActivity.bind(
-                                        null,
-                                        activity.id,
-                                        "/activities",
-                                      )}
-                                    >
-                                      <button
-                                        type="submit"
-                                        title="Cancel activity"
-                                        aria-label={`Cancel ${activity.summary}`}
-                                        className={buttonVariants({
-                                          variant: "ghost",
-                                          size: "icon-sm",
-                                          className:
-                                            "text-muted-foreground hover:text-destructive",
-                                        })}
-                                      >
-                                        <Trash2 className="size-3.5" />
-                                      </button>
-                                    </form>
+                                      </SaveButton>
+                                    </SaveForm>
+                                    <ConfirmActionDialog
+                                      trigger={
+                                        <button
+                                          type="button"
+                                          title="Cancel activity"
+                                          aria-label={`Cancel ${activity.summary}`}
+                                          className={buttonVariants({
+                                            variant: "ghost",
+                                            size: "icon-sm",
+                                            className:
+                                              "text-muted-foreground hover:text-destructive",
+                                          })}
+                                        >
+                                          <Trash2 className="size-3.5" />
+                                        </button>
+                                      }
+                                      title={`Cancel “${activity.summary}”?`}
+                                      description="It comes off the calendar and the to-do list."
+                                      confirmLabel="Cancel it"
+                                      destructive
+                                      success="Activity cancelled"
+                                      onConfirm={cancelActivity.bind(null, activity.id, "/activities")}
+                                    />
                                   </div>
                                 )}
                               </div>

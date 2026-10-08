@@ -32,7 +32,8 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { openCommandMenu } from "@/components/CommandMenu";
 import { APP_VERSION } from "@/lib/version";
-import { SETTINGS_NAV_GROUPS, settingsHref } from "@/lib/settings-navigation";
+import { settingsHref, visibleSettingsGroups } from "@/lib/settings-navigation";
+import { useSettingsViewer } from "@/components/SettingsViewer";
 
 const ROW =
   "group flex w-full items-center gap-2.5 rounded-lg px-2 py-1.5 text-[13px] text-muted-foreground transition-all hover:bg-sidebar-accent hover:text-sidebar-accent-foreground data-[state=open]:bg-sidebar-accent data-[state=open]:text-sidebar-accent-foreground";
@@ -73,16 +74,11 @@ export default function SidebarHelpSettings({
   compact?: boolean;
 }) {
   const pathname = usePathname();
-  const held = new Set(permissions);
-  const canSee = (item: (typeof SETTINGS_NAV_GROUPS)[number]["items"][number]) => {
-    if (isOwner || item.everyone) return true;
-    if (!item.permission) return false;
-    const need = Array.isArray(item.permission) ? item.permission : [item.permission];
-    return need.some((permission) => held.has(permission));
-  };
-  const settingsGroups = SETTINGS_NAV_GROUPS
-    .map((group) => ({ ...group, items: group.items.filter(canSee) }))
-    .filter((group) => group.items.length > 0);
+  const seen = useSettingsViewer();
+  const settingsGroups = visibleSettingsGroups(
+    { isOwner, isPlatformOwner: seen?.viewer.isPlatformOwner, permissions },
+    seen?.enabled,
+  );
 
   const triggerClass = compact ? ICON_TRIGGER : ROW;
   const panelSide = compact ? "bottom" : "right";
@@ -157,7 +153,7 @@ export default function SidebarHelpSettings({
 
           <div className="flex items-center justify-between border-t border-border/70 bg-muted/20 px-3 py-2">
             <DropdownMenuItem asChild className="rounded-lg px-2 py-1.5 text-xs">
-              <Link href="/help/welcome"><Info className="size-3.5" /> About Denago CRM</Link>
+              <Link href="/help/welcome"><Info className="size-3.5" /> About this CRM</Link>
             </DropdownMenuItem>
             <span className="pr-2 text-[10px] font-medium text-muted-foreground/70">v{APP_VERSION}</span>
           </div>

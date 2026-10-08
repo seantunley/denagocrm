@@ -6,6 +6,7 @@ import { contactName, formatDate, formatZAR } from "./format";
 import { payableTotalCents } from "./pricing";
 import { type MergeContext } from "./mergeFields";
 import { getCompanyProfile, companyTokens } from "./companyProfile";
+import { getRegionalSettings } from "./settings";
 import { escapeHtml } from "./escapeHtml";
 
 /**
@@ -18,7 +19,7 @@ export async function buildMergeContext(links: {
   quoteId?: string | null;
   userName?: string;
 }): Promise<MergeContext> {
-  const [contact, lead, quote, company] = await Promise.all([
+  const [contact, lead, quote, company, r] = await Promise.all([
     links.contactId ? prisma.contact.findUnique({ where: { id: links.contactId } }) : null,
     links.leadId
       ? prisma.lead.findUnique({ where: { id: links.leadId }, include: { product: true } })
@@ -27,6 +28,7 @@ export async function buildMergeContext(links: {
       ? prisma.quote.findUnique({ where: { id: links.quoteId }, include: { items: true, fees: { orderBy: { sortOrder: "asc" } } } })
       : null,
     getCompanyProfile(),
+    getRegionalSettings(),
   ]);
 
   // Lead can stand in for a missing contact
@@ -46,12 +48,12 @@ export async function buildMergeContext(links: {
       : "",
     "lead.title": lead?.title ?? "",
     "lead.product": lead?.product?.name ?? "",
-    "lead.value": lead ? formatZAR(lead.valueCents) : "",
+    "lead.value": lead ? formatZAR(lead.valueCents, r) : "",
     "quote.number": quote ? `Q-${quote.number}` : "",
-    "quote.total": quoteTotal !== null ? formatZAR(quoteTotal) : "",
-    "quote.date": quote ? formatDate(quote.createdAt) : "",
+    "quote.total": quoteTotal !== null ? formatZAR(quoteTotal, r) : "",
+    "quote.date": quote ? formatDate(quote.createdAt, r) : "",
     "user.name": links.userName ?? "",
-    "date.today": formatDate(new Date()),
+    "date.today": formatDate(new Date(), r),
   };
 }
 
@@ -70,8 +72,9 @@ export async function renderInstanceHtml(instance: {
   // source of truth) — not hard-coded — so changing Settings > Company updates
   // finalized Studio documents too.
   const company = await getCompanyProfile();
-  const appUrl = process.env.NEXT_PUBLIC_APP_URL || "https://crm.denagocpt.co.za";
-  const logoSrc = company.logoUrl?.trim() || `${appUrl}/branding/denago-cape-town-logo.png`;
+  // No logo configured → none (never another company's); the empty <span> keeps
+  // the title right-aligned in the flex header.
+  const logoSrc = company.logoUrl?.trim() ?? "";
   const footer = escapeHtml(
     [
       [company.name, company.tagline].filter((s) => s && s.trim()).join(" — "),
@@ -104,7 +107,7 @@ export async function renderInstanceHtml(instance: {
 </style></head>
 <body>
   <div class="doc-header">
-    <img src="${escapeHtml(logoSrc)}" alt="${escapeHtml(company.name)}" />
+    ${logoSrc ? `<img src="${escapeHtml(logoSrc)}" alt="${escapeHtml(company.name)}" />` : `<span></span>`}
     <div class="title">${escapeHtml(instance.title)}</div>
   </div>
   ${body}

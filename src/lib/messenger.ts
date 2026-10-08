@@ -3,13 +3,12 @@ import { decideEcho } from "./metaEcho";
 import { deleteCommunicationsAndReconcile } from "./conversations";
 import { prisma } from "./db";
 import { customerRecordTenantId } from "./customerRecordTenant";
-import { resolveTenantCredential } from "./settings";
+import { resolveIntegrationField, resolveTenantCredential } from "./settings";
 import { logAudit } from "./audit";
 import { sendPushToAll } from "./push";
 import { inboundCommunicationKey, isDedupeKeyConflict } from "./inboundMessageKey";
 import { currentInboundBotEventId } from "./botInboundEvent";
-import { DEFAULT_TENANT_ID } from "./tenant";
-import { writeTenantId } from "./tenantWrite";
+import { ownedWriteTenantId } from "./tenantWrite";
 import { createLeadRecordIfPipelineReady } from "./leadCreate";
 import { saveFile, shareableFileUrl } from "./storage";
 import { resolveTenantActor } from "./tenantActor";
@@ -341,7 +340,7 @@ async function persistAttachment(
 
 async function fetchProfileName(platform: DmPlatform, userId: string): Promise<string | null> {
   if (platform === "x") {
-    const token = await resolveTenantCredential(ambientTenantId(), "X_ACCESS_TOKEN");
+    const token = await resolveIntegrationField(ambientTenantId(), "x", "X_ACCESS_TOKEN");
     if (!token) return null;
     try {
       const res = await fetch(`https://api.x.com/2/users/${encodeURIComponent(userId)}`, {
@@ -413,7 +412,7 @@ export async function recordInboundDm(
       [idField]: senderId,
       // X user ids are global to X, not page-scoped like Meta PSIDs. Bind the
       // lookup explicitly even while ORM enforcement is dormant.
-      ...(platform === "x" ? { tenantId: writeTenantId() ?? DEFAULT_TENANT_ID } : {}),
+      ...(platform === "x" ? { tenantId: ownedWriteTenantId() } : {}),
     },
   });
 
@@ -427,7 +426,7 @@ export async function recordInboundDm(
         lastName: rest.join(" ") || null,
         source: platform,
         [idField]: senderId,
-        ...(platform === "x" ? { tenantId: writeTenantId() ?? DEFAULT_TENANT_ID } : {}),
+        ...(platform === "x" ? { tenantId: ownedWriteTenantId() } : {}),
         notes: profileName ? null : `Created from an inbound ${label} DM — name not yet available.`,
       },
     });
@@ -502,7 +501,7 @@ export async function recordInboundDm(
   // so the transcript's boundary matches the ledger's exactly.
   const identity = {
     ledgerEventId: currentInboundBotEventId(),
-    tenantId: writeTenantId() ?? DEFAULT_TENANT_ID,
+    tenantId: ownedWriteTenantId(),
     channel: platform,
     providerId: providerMessageId ?? "",
   };
@@ -623,7 +622,7 @@ export async function recordDmEcho(
   providerMessageId?: string | null,
 ) {
   // Scoped, or one tenant's send would suppress another tenant's echo.
-  const tenantId = writeTenantId() ?? DEFAULT_TENANT_ID;
+  const tenantId = ownedWriteTenantId();
   const decision = decideEcho({
     tenantId,
     providerMessageId,

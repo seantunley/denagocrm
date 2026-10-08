@@ -9,7 +9,7 @@ import ModalPortal from "@/components/ui/modal-portal";
 type Version = { id: string; version: number; label: string | null; publishedBy: string | null; publishedAt: string };
 
 /** Version history drawer: publish an immutable snapshot, list history, restore. */
-export function VersionHistory({ id, save, onPublished, hasStandardLayout = false }: { id: string; save: () => Promise<void>; onPublished?: () => void; hasStandardLayout?: boolean }) {
+export function VersionHistory({ id, save, onPublished, hasStandardLayout = false, standard = "standard layout" }: { id: string; save: () => Promise<void>; onPublished?: () => void; hasStandardLayout?: boolean; /** What a reset restores, in the button's words. */ standard?: string }) {
   const [open, setOpen] = useState(false);
   const [versions, setVersions] = useState<Version[]>([]);
   const [busy, setBusy] = useState<string | null>(null);
@@ -72,9 +72,9 @@ export function VersionHistory({ id, save, onPublished, hasStandardLayout = fals
               </button>
               {hasStandardLayout && (
                 <ConfirmActionDialog
-                  trigger={<button type="button" disabled={busy === "reset"} className="mt-2 w-full rounded-md border border-slate-300 py-1.5 text-sm text-slate-700 hover:bg-slate-50 disabled:opacity-60">{busy === "reset" ? "Resetting…" : "Reset draft to standard layout"}</button>}
-                  title="Reset the draft to the standard layout?"
-                  description="Your draft is replaced with the latest standard layout for this document type. Real documents keep using the published version until you press Publish, and the current layout stays in history so you can restore it."
+                  trigger={<button type="button" disabled={busy === "reset"} className="mt-2 w-full rounded-md border border-slate-300 py-1.5 text-sm text-slate-700 hover:bg-slate-50 disabled:opacity-60">{busy === "reset" ? "Resetting…" : `Reset draft to the ${standard}`}</button>}
+                  title={`Reset the draft to the ${standard}?`}
+                  description={`Your draft is replaced with the latest ${standard}. What customers receive keeps using the published version until you press Publish, and the current draft stays in history so you can restore it.`}
                   confirmLabel="Reset draft"
                   onConfirm={resetToStandard}
                 />

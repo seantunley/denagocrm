@@ -84,9 +84,11 @@ test("the manual Remind button cannot override the customer", () => {
   assert.match(fn, /sendSms\(verdict\.destination/);
 });
 
-test("the nightly run no longer trusts the included contact row", () => {
+test("the automatic reminder no longer trusts the included contact row", () => {
+  // The nightly job became the "Service-due reminder" journey's step sender.
   const code = shipped("src/lib/serviceReminders.ts");
-  const fn = code.slice(code.indexOf("export async function runServiceReminders"), code.indexOf("export async function remindVehicleService"));
+  const fn = code.slice(code.indexOf("export async function sendServiceDueReminder"), code.indexOf("export async function remindVehicleService"));
+  assert.ok(fn.indexOf("canContactPerson({") !== -1 && fn.indexOf("canContactPerson({") < fn.indexOf("await sendEmail("), "gated before it sends");
   // `include: { contact: true }` bypasses the soft-delete filter: a trashed
   // contact was still reminded. The gate reads deletedAt itself.
   assert.match(fn, /recordSuppressedReminder\(vehicle\.id, vehicle\.contactId, vehicle\.model, dueKey, verdict\.reason, "Automation"\)/);

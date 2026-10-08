@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/db";
-import { requireOwner } from "@/lib/auth";
+import { requireTenantOwner } from "@/lib/auth";
 import { putSetting } from "@/lib/settings";
 import { logAudit } from "@/lib/audit";
 import { enabledFlowChannels } from "@/lib/flowValidationServer";
@@ -28,7 +28,7 @@ function parseDefinition(raw: string): FlowSnippet["definition"] | null {
 
 export async function saveCurrentFlowAsSnippet(flowId: string, formData: FormData) {
   return withActingStaffScope(async () => {
-    const owner = await requireOwner();
+    const owner = await requireTenantOwner();
     const scope = await flowScope();
     const row = await prisma.botFlow.findFirst({ where: { id: flowId, ...scope } });
     if (!row) return;
@@ -49,7 +49,7 @@ export async function saveCurrentFlowAsSnippet(flowId: string, formData: FormDat
 
 export async function insertSavedFlowSnippet(flowId: string, snippetId: string) {
   return withActingStaffScope(async () => {
-    const owner = await requireOwner();
+    const owner = await requireTenantOwner();
     const scope = await flowScope();
     const [row, snippets] = await Promise.all([
       prisma.botFlow.findFirst({ where: { id: flowId, ...scope } }),
@@ -81,7 +81,7 @@ export async function insertSavedFlowSnippet(flowId: string, snippetId: string) 
 
 export async function deleteFlowSnippet(snippetId: string) {
   return withActingStaffScope(async () => {
-    const owner = await requireOwner();
+    const owner = await requireTenantOwner();
     const snippets = await getFlowSnippets();
     const current = snippets.find((item) => item.id === snippetId);
     if (!current) return;

@@ -4,19 +4,20 @@ import { withActingStaffScope } from "@/lib/actingScope";
 import { asActionResult, ActionRefusal, refuse } from "@/lib/actionResult";
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
-import { addDays } from "date-fns";
 import type { Prisma } from "@prisma/client";
 import { prisma, basePrisma } from "@/lib/db";
 import { payableTotalCents } from "@/lib/pricing";
-import { logAudit } from "@/lib/audit";
+import { logAudit, GOVERNANCE_TX } from "@/lib/audit";
 import { CLOSED_REQUEST_STATUSES } from "@/lib/signing/status";
-import { getSetting } from "@/lib/settings";
-import { markReferralEarned } from "@/lib/referrals";
 import { hasOpenSignatureRequest } from "@/lib/quoteLock";
+import { acceptQuoteInTx, afterDealWon, cancelQuoteInTx, duplicateQuoteInTx } from "@/lib/quoteOutcome";
+import { addStockEvent } from "@/lib/stockPlatform";
 import { nextQuoteNumber } from "@/lib/numbering";
 import { insertQuoteFromLead, quoteFromLeadDefaults } from "@/lib/quoteFromLead";
 import { actingTenantId } from "@/lib/actingTenant";
 import { feeRowsFor, itemRowsFor, priorById } from "@/lib/quoteRows";
+import { calendarDateInstant } from "@/lib/quoteExpiry";
+import { getRegionalSettings } from "@/lib/settings";
 import { emitLeadJourneyEvent } from "@/lib/leadJourneyEvents";
 import { formatZAR, contactName } from "@/lib/format";
 import { z } from "zod";
@@ -36,8 +37,8 @@ import {
 } from "@/lib/permissions";
 import {
   QUOTE_EDITOR_INCLUDE,
-  QUOTE_VERSION_SELECT,
   buildQuoteEditorRecord,
+  loadQuoteVersions,
   quoteVersionIndex,
 } from "@/lib/quoteEditorRecord";
 import type { QuoteEditorRecord } from "@/components/quotes/QuoteEditorDialog";
@@ -151,11 +152,7 @@ export async function createQuoteForContact(formData: FormData) {
     const product = productId
       ? await prisma.product.findUnique({ where: { id: productId } })
       : null;
-    const validDaysRaw = await getSetting("QUOTE_VALID_DAYS");
-    const validDays = validDaysRaw ? parseInt(validDaysRaw, 10) : 7;
-    const terms =
-      (await getSetting("QUOTE_TERMS")) ||
-      "Prices include VAT. Delivery arranged on acceptance. E&OE.";
+    const { validUntil, terms, regional } = await quoteFromLeadDefaults();
     // Advisory-locked allocation + insert in one transaction (#11). The bypass
     // client carries no tenant, so the row and its children are stamped here.
     const tenantId = await actingTenantId();
@@ -167,7 +164,7 @@ export async function createQuoteForContact(formData: FormData) {
           tenantId,
           contactId,
           createdById: user.id,
-          validUntil: addDays(new Date(), isNaN(validDays) ? 7 : validDays),
+          validUntil,
           terms,
           items: product
             ? {
@@ -178,6 +175,7 @@ export async function createQuoteForContact(formData: FormData) {
                     qty: 1,
                     unitPriceCents: product.basePriceCents,
                     productId: product.id,
+                    taxRatePct: regional.vatRatePct,
                   },
                 ],
               }
@@ -272,11 +270,7 @@ export async function createQuoteForFleet(formData: FormData) {
       );
     }
 
-    const validDaysRaw = await getSetting("QUOTE_VALID_DAYS");
-    const validDays = validDaysRaw ? parseInt(validDaysRaw, 10) : 7;
-    const terms =
-      (await getSetting("QUOTE_TERMS")) ||
-      "Prices include VAT. Delivery arranged on acceptance. E&OE.";
+    const { validUntil, terms } = await quoteFromLeadDefaults();
 
     // Advisory-locked allocation + insert in one transaction, same as every
     // other quote-creating path (#11).
@@ -290,7 +284,7 @@ export async function createQuoteForFleet(formData: FormData) {
           contactId: contact.id,
           fleetId: fleet.id,
           createdById: user.id,
-          validUntil: addDays(new Date(), isNaN(validDays) ? 7 : validDays),
+          validUntil,
           terms,
         },
         select: { id: true, number: true },
@@ -437,17 +431,19 @@ export async function saveQuoteDraft(input: QuoteDraftInput): Promise<QuoteDraft
     linkedLeadId = lead.id;
   }
 
+  // Needed on edits too: a line ADDED to an existing draft takes the workspace's
+  // current VAT rate, while the lines already on it keep their own.
+  const createDefaults = await quoteFromLeadDefaults();
+
+  // The editor sends a workspace-calendar date; it is stored as that date, not
+  // re-read through the server's clock — see quoteExpiry.ts.
   let validUntil: Date | null = null;
   if (data.validUntil) {
-    validUntil = new Date(`${data.validUntil}T12:00:00`);
-    if (Number.isNaN(validUntil.getTime())) {
+    validUntil = calendarDateInstant(data.validUntil, createDefaults.regional.timeZone);
+    if (!validUntil) {
       return { ok: false, error: "Enter a valid expiry date." };
     }
   }
-
-  const createDefaults = data.id
-    ? null
-    : await Promise.all([getSetting("QUOTE_VALID_DAYS"), getSetting("QUOTE_TERMS")]);
 
   // Resolved before the bypass transaction. This is the ACTOR, which is the
   // right owner for a quote being created here and only the FALLBACK for one
@@ -546,8 +542,8 @@ export async function saveQuoteDraft(input: QuoteDraftInput): Promise<QuoteDraft
       }
 
       // Inherit the hidden columns by row id, and KEEP that id — see quoteRows.
-      const itemRows = itemRowsFor(normalizedItems, priorById(existing.items));
-      const feeRows = feeRowsFor(normalizedFees, priorById(existing.fees));
+      const itemRows = itemRowsFor(normalizedItems, priorById(existing.items), createDefaults.regional.vatRatePct);
+      const feeRows = feeRowsFor(normalizedFees, priorById(existing.fees), createDefaults.regional.vatRatePct);
       // The QUOTE is the parent, so its children take ITS owner — the same
       // invariant createQuoteRevision applies to a copied quote. Stamping the
       // actor instead would split a quote across two workspaces whenever the
@@ -577,16 +573,11 @@ export async function saveQuoteDraft(input: QuoteDraftInput): Promise<QuoteDraft
     }
 
     const number = await nextQuoteNumber(tx); // advisory-locked allocation (#11)
-    const validDaysRaw = createDefaults?.[0];
-    const validDays = validDaysRaw ? parseInt(validDaysRaw, 10) : 7;
-    const defaultTerms =
-      createDefaults?.[1] ||
-      "Prices include VAT. Delivery arranged on acceptance. E&OE.";
 
     // Same builders, with NOTHING to inherit from — so a client-supplied id
     // finds no prior row and is dropped rather than choosing a primary key.
-    const itemRows = itemRowsFor(normalizedItems, new Map());
-    const feeRows = feeRowsFor(normalizedFees, new Map());
+    const itemRows = itemRowsFor(normalizedItems, new Map(), createDefaults.regional.vatRatePct);
+    const feeRows = feeRowsFor(normalizedFees, new Map(), createDefaults.regional.vatRatePct);
     return {
       // A brand-new quote has no prior owner, so the actor IS the parent's owner
       // here — and the children take the same value, which is the same
@@ -599,8 +590,8 @@ export async function saveQuoteDraft(input: QuoteDraftInput): Promise<QuoteDraft
           contactId: data.contactId,
           leadId: linkedLeadId,
           createdById: user.id,
-          validUntil: validUntil ?? addDays(new Date(), Number.isNaN(validDays) ? 7 : validDays),
-          terms: data.terms || defaultTerms,
+          validUntil: validUntil ?? createDefaults.validUntil,
+          terms: data.terms || createDefaults.terms,
           status: data.intent,
           ...cpqQuoteData,
           items: itemRows.length > 0 ? { create: itemRows.map((row) => ({ ...row, tenantId: actingTenant })) } : undefined,
@@ -667,9 +658,7 @@ export async function createQuoteRevision(quoteId: string) {
   return withActingStaffScope(async () => {
   return asActionResult(async () => {
     const user = await requireQuoteAccess(quoteId, "quotes.edit");
-    const validDaysRaw = await getSetting("QUOTE_VALID_DAYS");
-    const validDays = validDaysRaw ? parseInt(validDaysRaw, 10) : 7;
-    const validUntil = addDays(new Date(), isNaN(validDays) ? 7 : validDays);
+    const { validUntil } = await quoteFromLeadDefaults();
     // The ACTING workspace, and here it is a PREDICATE, not just a fallback owner.
     // `actingTenantId()` resolves the validated session workspace while enforcement
     // is dormant, which `writeTenantId()` does not — dormant is every environment
@@ -867,17 +856,37 @@ export async function setQuoteStatus(quoteId: string, status: string) {
     const user = await requireQuoteAccess(quoteId, "quotes.change_status");
     const allowed = new Set(["draft", "sent", "accepted", "declined"]);
     if (!allowed.has(status)) throw new ActionRefusal("Invalid quote status");
+    // ACCEPTING is the same act as "Mark won" with this quote chosen, so both go
+    // through the one shared definition — quote accepted (which is what puts it on
+    // Deliveries), lead won, both audited, in one locked transaction.
+    if (status === "accepted") {
+      const tenantId = await actingTenantId();
+      const accepted = await basePrisma.$transaction(
+        (tx) => acceptQuoteInTx(tx, quoteId, tenantId, user),
+        GOVERNANCE_TX,
+      );
+      if (accepted.kind === "gone") refuse("This quote can no longer be changed — reload the page.");
+      if (accepted.kind === "out_for_signature") {
+        refuse("This quote is out for signature — void the signing request before changing its status.");
+      }
+      if (accepted.wonLeadId) await afterDealWon(accepted.wonLeadId, accepted.quote.contactId);
+      revalidatePath("/quotes");
+      revalidatePath(`/quotes/${quoteId}`);
+      revalidatePath("/deliveries");
+      if (accepted.quote.leadId) revalidatePath(`/leads/${accepted.quote.leadId}`);
+      return { success: `Quote Q-${accepted.quote.number} accepted — it's on Deliveries` };
+    }
     // Lock the quote FOR UPDATE and re-check signed/superseded inside the
     // transaction so a concurrent createQuoteRevision can't supersede it between
-    // the check and the write — which would run lead-won/referral side-effects
-    // against an obsolete quote.
+    // the check and the write.
     const result = await basePrisma.$transaction(async (tx) => {
       await tx.$executeRaw`SELECT id FROM "Quote" WHERE id = ${quoteId} FOR UPDATE`;
       const before = await tx.quote.findUnique({ where: { id: quoteId } });
-      if (!before || before.deletedAt || before.signedAt || before.supersededAt) return null;
-      // Don't let staff manually accept/decline a quote that's out for signature —
-      // void the request first. (draft/sent moves are still allowed.)
-      if ((status === "accepted" || status === "declined") && (await hasOpenSignatureRequest(tx, quoteId))) {
+      // A cancelled quote is finished: Duplicate it to start again.
+      if (!before || before.deletedAt || before.signedAt || before.supersededAt || before.status === "cancelled") return null;
+      // Don't let staff manually decline a quote that's out for signature — void
+      // the request first. (draft/sent moves are still allowed.)
+      if (status === "declined" && (await hasOpenSignatureRequest(tx, quoteId))) {
         return { blocked: true as const };
       }
       const updated = await tx.quote.update({
@@ -888,21 +897,13 @@ export async function setQuoteStatus(quoteId: string, status: string) {
         // the line-items subtotal as the value of the sale.
         include: { items: true, fees: true, lead: true },
       });
-      // Win the lead in the SAME transaction, locked, so a concurrent accept/decline
-      // can't leave quote and lead status diverged (e.g. quote declined, lead won).
-      let wonLeadId: string | null = null;
-      if (status === "accepted" && updated.leadId) {
-        await tx.$executeRaw`SELECT id FROM "Lead" WHERE id = ${updated.leadId} FOR UPDATE`;
-        const won = await tx.lead.updateMany({ where: { id: updated.leadId, deletedAt: null, status: "open" }, data: { status: "won" } });
-        if (won.count === 1) wonLeadId = updated.leadId;
-      }
       // Reopen the lead in the SAME transaction when this quote stops being accepted,
       // so the status change and the reopen are atomic.
       let reopenedLead: { title: string; contactId: string | null } | null = null;
-      if (before.status === "accepted" && status !== "accepted" && updated.leadId) {
+      if (before.status === "accepted" && updated.leadId) {
         reopenedLead = await reopenLeadInTx(tx, updated.leadId);
       }
-      return { beforeStatus: before.status, quote: updated, wonLeadId, reopenedLead };
+      return { beforeStatus: before.status, quote: updated, reopenedLead };
     });
     // The transaction returns null BEFORE touching anything when the quote is
     // missing, deleted, signed or superseded — so this is "nothing happened",
@@ -912,13 +913,11 @@ export async function setQuoteStatus(quoteId: string, status: string) {
     if ("blocked" in result) {
       throw new ActionRefusal("This quote is out for signature — void the signing request before changing its status.");
     }
-    const { quote, wonLeadId, reopenedLead } = result;
+    const { quote, reopenedLead } = result;
     const total = payableTotalCents(quote);
     const verb =
       status === "sent"
         ? "sent to the customer"
-        : status === "accepted"
-        ? "accepted 🎉"
         : status === "declined"
         ? "declined"
         : "moved back to draft";
@@ -929,19 +928,6 @@ export async function setQuoteStatus(quoteId: string, status: string) {
       contactId: quote.contactId,
       user,
     });
-    // External, best-effort lead-won fan-out — gated on the in-transaction win so it
-    // fires exactly once and never for a quote that didn't actually win the lead.
-    if (wonLeadId) {
-      await markReferralEarned(wonLeadId).catch(() => {});
-      await emitLeadJourneyEvent("lead_won", wonLeadId);
-      await logAudit({
-        action: "lead.won",
-        summary: `Lead “${quote.lead?.title ?? ""}” won via accepted quote Q-${quote.number} 🎉`,
-        leadId: wonLeadId,
-        contactId: quote.contactId,
-        user,
-      });
-    }
     // "Quote declined" is offered as an enrolment trigger in the journey
     // builder, and was offered by the retired automations builder before it,
     // and NEITHER engine ever fired it: nothing in the codebase called
@@ -988,11 +974,8 @@ export async function quoteEditorRecord(id: string): Promise<QuoteEditorRecord |
 
     // The version family: every revision reachable from this one, so the Versions
     // tab and the superseded-successor link work the same as from the list.
-    const versions = await prisma.quote.findMany({
-      orderBy: { createdAt: "asc" },
-      select: QUOTE_VERSION_SELECT,
-      take: 2_000,
-    });
+    // Loaded by family, not "the oldest 2,000 rows", which lost newer quotes' history.
+    const versions = await loadQuoteVersions(prisma, [quote.id]);
     // Tenant-scoped, so a fleet id from another workspace resolves to nothing and
     // the quote reads as an ordinary customer quote rather than naming an account
     // this caller has no business seeing.
@@ -1001,6 +984,7 @@ export async function quoteEditorRecord(id: string): Promise<QuoteEditorRecord |
       quote,
       quoteVersionIndex(versions),
       new Map([...fleets].map(([id, fleet]) => [id, fleet.name])),
+      await getRegionalSettings(),
     );
   });
 }
@@ -1058,5 +1042,80 @@ export async function deleteQuote(id: string, formData: FormData) {
     }
     revalidatePath("/quotes");
     return { redirectTo: "/quotes" };
+  });
+}
+
+/**
+ * Cancel a quote — signed or not — keeping everything it produced. The same
+ * permission as the other lifecycle moves (accept / decline / back to draft);
+ * the work itself is {@link cancelQuoteInTx}.
+ */
+export async function cancelQuote(id: string, formData: FormData) {
+  return withActingStaffScope(async () => {
+  return asActionResult(async () => {
+    const user = await requireQuoteAccess(id, "quotes.change_status");
+    const reason = String(formData.get("reason") ?? "").trim();
+    if (!reason) refuse("Say why the quote is being cancelled.");
+    const tenantId = await actingTenantId();
+    const result = await basePrisma.$transaction(async (tx) => {
+      const cancelled = await cancelQuoteInTx(tx, { quoteId: id, tenantId, reason, actor: user });
+      if (cancelled.kind !== "cancelled") return { cancelled, reopenedLead: null };
+      // An accepted quote was the sale; cancelling it un-wins the lead unless
+      // another accepted quote still stands — same rule as trashing one.
+      const reopenedLead =
+        cancelled.wasAccepted && cancelled.quote.leadId ? await reopenLeadInTx(tx, cancelled.quote.leadId) : null;
+      return { cancelled, reopenedLead };
+    }, GOVERNANCE_TX);
+    const { cancelled, reopenedLead } = result;
+    if (cancelled.kind !== "cancelled") refuse(cancelled.message);
+    for (const unit of cancelled.releasedUnits) {
+      await addStockEvent({
+        stockUnitId: unit.id,
+        eventType: unit.to === "available" ? "reservation.released" : "unit.status_changed",
+        fromStatus: unit.from,
+        toStatus: unit.to,
+        leadId: unit.leadId,
+        quoteId: id,
+        reason: `Quote Q-${cancelled.quote.number} cancelled`,
+        actor: { id: user.id, name: user.name },
+      });
+    }
+    if (reopenedLead && cancelled.quote.leadId) {
+      await auditLeadReopened(reopenedLead, cancelled.quote.leadId, cancelled.quote.number, user);
+    }
+    revalidatePath("/quotes");
+    revalidatePath(`/quotes/${id}`);
+    revalidatePath("/deliveries");
+    revalidatePath("/stock");
+    if (cancelled.quote.leadId) revalidatePath(`/leads/${cancelled.quote.leadId}`);
+    if (cancelled.quote.contactId) revalidatePath(`/contacts/${cancelled.quote.contactId}`);
+    return { success: `Quote Q-${cancelled.quote.number} cancelled` };
+  });
+  });
+}
+
+/**
+ * A new, unsigned draft copy of a quote, opened in the editor. Same permission
+ * as creating a quote, on a quote the caller can access — the shape
+ * createQuoteRevision uses for its copy.
+ */
+export async function duplicateQuote(id: string) {
+  return withActingStaffScope(async () => {
+  return asActionResult(async () => {
+    const user = await requireQuoteAccess(id, "quotes.create");
+    // A fresh expiry — today + validity on the WORKSPACE calendar, the same
+    // default every new quote and revision gets — never the original's date.
+    const { validUntil } = await quoteFromLeadDefaults();
+    const tenantId = await actingTenantId();
+    const copy = await basePrisma.$transaction(
+      (tx) => duplicateQuoteInTx(tx, { quoteId: id, tenantId, actor: user, validUntil }),
+      GOVERNANCE_TX,
+    );
+    if (!copy) refuse("That quote is no longer available — reload the page.");
+    revalidatePath("/quotes");
+    if (copy.leadId) revalidatePath(`/leads/${copy.leadId}`);
+    if (copy.contactId) revalidatePath(`/contacts/${copy.contactId}`);
+    return { success: `Quote Q-${copy.number} created from Q-${copy.originalNumber}`, redirectTo: `/quotes?edit=${copy.id}` };
+  });
   });
 }
