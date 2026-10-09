@@ -165,7 +165,7 @@ const base: FinishedNoticeInput = {
   status: "completed",
   recipient: { status: "signed", signedOn: "30 Sept 2026, 17:50", declinedOn: null },
   completedOn: "30 Sept 2026",
-  expiredOn: null,
+  lastValidDay: null,
   emailHint: "jo••@example.com",
   copySent: true,
   signedCopiesOn: true,
@@ -187,7 +187,12 @@ test("a finished link says what happened to the document", () => {
   assert.doesNotMatch(declinedByOther.body, /You declined/, "another signer's decision is not this person's");
 
   assert.match(finishedNotice({ ...base, status: "voided" }).body, /^Acme Carts withdrew this document/);
-  assert.match(finishedNotice({ ...base, status: "expired", expiredOn: "6 Oct 2026" }).body, /expired on 6 Oct 2026\. Ask Acme Carts/);
+  assert.match(finishedNotice({ ...base, status: "expired", lastValidDay: "6 Oct 2026" }).body, /has expired — it was valid until 6 Oct 2026\. Ask Acme Carts/);
+  assert.equal(finishedNotice({ ...base, status: "expired" }).body, "This signing link has expired. Ask Acme Carts to send an updated document.");
+  // The page hands over the last day the link WORKED: a link ends at midnight,
+  // which is already the next day, and "expired on the 24th" contradicts a quote
+  // that says "valid until the 23rd".
+  assert.match(code("src/app/signing/[token]/page.tsx"), /lastValidDay: req\.expiresAt \? formatDate\(new Date\(req\.expiresAt\.getTime\(\) - 1\), regional\) : null,/);
   assert.equal(finishedNotice({ ...base, status: "rejected" }).title, "Document unavailable");
   assert.equal(finishedNotice({ ...base, status: "deleted" }).title, "Document unavailable");
 });

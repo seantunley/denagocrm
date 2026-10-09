@@ -67,7 +67,8 @@ async function renderSigningPage(token: string) {
         declinedOn: recipient.declinedAt ? formatDateTime(recipient.declinedAt, regional) : null,
       },
       completedOn: req.completedAt ? formatDate(req.completedAt, regional) : null,
-      expiredOn: req.expiresAt ? formatDate(req.expiresAt, regional) : null,
+      // The moment before the expiry: the last day the link actually worked.
+      lastValidDay: req.expiresAt ? formatDate(new Date(req.expiresAt.getTime() - 1), regional) : null,
       emailHint: recipient.email ? emailHint(recipient.email) : null,
       copySent: Boolean(recipient.completedEmailSentAt),
       signedCopiesOn: status === "completed" && (await automationOn("SIGNING_SIGNED_COPIES", req.tenantId).catch(() => false)),
@@ -87,7 +88,7 @@ async function renderSigningPage(token: string) {
 
   if (recipient.status === "signed") return <SigningMessage title="Already signed ✓" body="You've completed this document — thank you. A copy will be emailed to you once everyone has signed." brand={brand} />;
   if (recipient.status === "declined") {
-    return <SigningMessage {...finishedNotice({ status: "declined", recipient: { status: "declined", signedOn: null, declinedOn: null }, completedOn: null, expiredOn: null, emailHint: null, copySent: false, signedCopiesOn: false, sender })} brand={brand} />;
+    return <SigningMessage {...finishedNotice({ status: "declined", recipient: { status: "declined", signedOn: null, declinedOn: null }, completedOn: null, lastValidDay: null, emailHint: null, copySent: false, signedCopiesOn: false, sender })} brand={brand} />;
   }
   if (recipient.role === "viewer") return <SigningMessage title="View only" body="You've been added to view this document, no signature required." brand={brand} />;
 

@@ -22,7 +22,12 @@ export type FinishedNoticeInput = {
   /** This link's own recipient. */
   recipient: { status: string; signedOn: string | null; declinedOn: string | null };
   completedOn: string | null;
-  expiredOn: string | null;
+  /**
+   * The last DAY the link worked. A link expires at midnight — already the next
+   * day — so naming the expiry instant's date would say "expired on the 24th" to
+   * someone whose quote was valid until the 23rd.
+   */
+  lastValidDay: string | null;
   /** Masked address the signed copy goes to, when one is on file. */
   emailHint: string | null;
   /** The signed copy has already been emailed to that address. */
@@ -68,7 +73,7 @@ export function finishedNotice(input: FinishedNoticeInput): FinishedNotice {
   if (input.status === "expired") {
     return {
       title: "Link expired",
-      body: `This signing link expired${on(input.expiredOn)}. Ask ${sender} to send an updated document.`,
+      body: `This signing link has expired${input.lastValidDay ? ` — it was valid until ${input.lastValidDay}` : ""}. Ask ${sender} to send an updated document.`,
       canResendCopy: false,
     };
   }
