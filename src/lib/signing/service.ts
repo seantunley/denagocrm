@@ -100,6 +100,14 @@ export async function createSignatureRequestFromDoc(opts: {
   message?: string;
   createdById?: string | null;
   identityMode?: SigningIdentityMode;
+  /** When the links stop working — a quote's valid-until day (signing/expiry.ts). Null never expires. */
+  expiresAt?: Date | null;
+  /**
+   * The customer's contact details as the SOURCE RECORD holds them, for a record
+   * with no linked contact — a quote made straight from a lead. The linked
+   * contact's own details win when there is one.
+   */
+  customer?: { email: string | null; phone: string | null };
   client?: Prisma.TransactionClient;
 }): Promise<{ id: string; recipients: number; fields: number; identityMode: SigningIdentityMode }> {
   const { source } = opts;
@@ -163,8 +171,14 @@ export async function createSignatureRequestFromDoc(opts: {
         select: { phone: true, email: true, tenantId: true },
       })
     : null;
-  const contactPhone = contactOnFile?.phone ? normalizePhone(contactOnFile.phone) : null;
-  const contactEmail = contactOnFile?.email?.trim().toLowerCase() || null;
+  // A quote made straight from a lead has no contact; its customer's details are
+  // the lead's, handed in by the caller. Both the number AND the address fall
+  // back independently: the mobile used to be copied onto the signer only when
+  // an email also existed, so a customer reachable by WhatsApp alone was treated
+  // as unreachable and the send failed with "no email or phone on file".
+  const fallbackPhone = opts.customer?.phone ? normalizePhone(opts.customer.phone) : null;
+  const contactPhone = (contactOnFile?.phone ? normalizePhone(contactOnFile.phone) : null) ?? fallbackPhone;
+  const contactEmail = contactOnFile?.email?.trim().toLowerCase() || opts.customer?.email?.trim().toLowerCase() || null;
 
   // Raw capabilities, keyed by the recipient row they belong to. They exist here
   // only for the caller that has to build a URL, and are never written anywhere
@@ -200,6 +214,7 @@ export async function createSignatureRequestFromDoc(opts: {
         identityMode,
         ordering: opts.ordering ?? "parallel",
         message: opts.message ?? null,
+        expiresAt: opts.expiresAt ?? null,
         documentId: source.documentId ?? null,
         quoteId: source.quoteId ?? null,
         jobCardId: source.jobCardId ?? null,

@@ -1,14 +1,16 @@
+import Link from "next/link";
 import { notFound } from "next/navigation";
 import { requireAnyPermission } from "@/lib/permissions";
 import { prisma } from "@/lib/db";
-import { formatDateTime } from "@/lib/format";
+import { contactName, formatDate, formatDateTime } from "@/lib/format";
+import { canAccessSignatureRequest } from "@/lib/signing/access";
 import { SendVoidBar, RecipientControls } from "./SigningClient";
 import { EntityDetailShell } from "@/components/entity-detail-shell";
 import { StatusPill } from "@/components/visual-system";
 import { FileCheck2, FileText } from "lucide-react";
 import { SaveForm, SaveButton } from "@/components/SaveForm";
 import { resendSignedCopies } from "@/app/actions/signhub";
-import { isRequestClosed } from "@/lib/signing/status";
+import { isRequestClosed, lastValidDay } from "@/lib/signing/status";
 
 export const dynamic = "force-dynamic";
 
@@ -39,8 +41,26 @@ function describeResponse(kind: string, value: string): string {
   return value.length > 80 ? `${value.slice(0, 80)}…` : value;
 }
 
+/** How a request asks its signers to prove who they are, in the owner's words. */
+const IDENTITY_MODE: Record<string, string> = {
+  link: "Link only — no code",
+  otp: "One-time code, by email or SMS",
+  email_otp: "One-time code, by email",
+  sms_otp: "One-time code, by SMS",
+};
+
+/** What one signer actually proved — the same claims the certificate makes. */
+function identityProved(r: { identityMethod: string | null; identityVerifiedAt: Date | null }, witness: string | null): string | null {
+  const at = r.identityVerifiedAt ? ` · ${formatDateTime(r.identityVerifiedAt)}` : "";
+  if (r.identityMethod === "email_otp") return `Verified by a code to their email${at}`;
+  if (r.identityMethod === "sms_otp") return `Verified by a code to their mobile${at}`;
+  if (r.identityMethod === "in_person") return `Signed in person${witness ? `, witnessed by ${witness}` : ""}${at}`;
+  if (r.identityMethod === "staff_session") return "Signed while signed in to the CRM";
+  return null;
+}
+
 export default async function SignatureDetail({ params }: { params: Promise<{ id: string }> }) {
-  await requireAnyPermission("signing.view", "signing.manage");
+  const user = await requireAnyPermission("signing.view", "signing.manage");
   const { id } = await params;
   const req = await prisma.signatureRequest.findUnique({
     where: { id },
@@ -48,12 +68,35 @@ export default async function SignatureDetail({ params }: { params: Promise<{ id
       recipients: { orderBy: { order: "asc" } },
       events: { orderBy: { createdAt: "asc" } },
       fields: { include: { responses: { orderBy: { filledAt: "asc" } } } },
+      approvals: { orderBy: { order: "asc" } },
     },
   });
   if (!req || req.deletedAt) notFound();
+  // The same record check every action on this page already makes
+  // (lib/signing/access.ts). The page itself only checked the capability, so a
+  // user limited to their own quotes could open any request by id and read the
+  // customer, the document and the whole audit trail.
+  if (!(await canAccessSignatureRequest(user, req))) notFound();
 
   const card = "rounded-xl border border-border bg-card p-4 shadow-sm";
-  const closed = req.status === "completed" || req.status === "voided";
+  // EVERY closed state. Declined, rejected and expired requests used to keep
+  // their Resend, Void and per-signer buttons, none of which could do anything.
+  const closed = isRequestClosed(req.status);
+
+  // What this request is about, to link back to. Read separately from the
+  // blocked-completion probe below so each stays readable on its own.
+  const [linkedQuote, linkedJobCard, linkedContact] = await Promise.all([
+    req.quoteId ? prisma.quote.findUnique({ where: { id: req.quoteId }, select: { id: true, number: true, leadId: true, deletedAt: true } }) : null,
+    req.jobCardId ? prisma.jobCard.findUnique({ where: { id: req.jobCardId }, select: { id: true, number: true, deletedAt: true } }) : null,
+    req.contactId ? prisma.contact.findUnique({ where: { id: req.contactId }, select: { id: true, firstName: true, lastName: true, company: true, isCompany: true, deletedAt: true } }) : null,
+  ]);
+  // Who watched an in-person signature, from each signer's own signed event.
+  const witnessOf = new Map<string, string>();
+  for (const event of req.events) {
+    const name = event.type === "signed" && event.recipientId ? (event.metadata as { witness?: { name?: unknown } } | null)?.witness?.name : null;
+    if (typeof name === "string" && event.recipientId) witnessOf.set(event.recipientId, name);
+  }
+  const rejection = req.status === "rejected" ? [...req.approvals].reverse().find((step) => step.status === "rejected") : undefined;
 
   // ── Gap audit #32: the two states that used to look fine and weren't ──
   // 1. Everyone signed, but the quote/job card changed after sending, so the
@@ -101,16 +144,38 @@ export default async function SignatureDetail({ params }: { params: Promise<{ id
       backLabel="Signatures"
       eyebrow="Signing request"
       title={req.title}
-      status={<StatusPill tone={req.status === "completed" ? "success" : req.status === "declined" || req.status === "voided" ? "danger" : req.status === "draft" ? "neutral" : "info"}>{req.status.replace("_", " ")}</StatusPill>}
+      status={<StatusPill tone={req.status === "completed" ? "success" : ["declined", "voided", "rejected"].includes(req.status) ? "danger" : req.status === "expired" ? "warning" : req.status === "draft" ? "neutral" : "info"}>{req.status === "draft" ? "not sent" : req.status.replace("_", " ")}</StatusPill>}
       description={`${req.ordering === "sequential" ? "Sequential" : "Parallel"} signing workflow`}
       facts={[
         { label: "Signers", value: req.recipients.filter((recipient) => recipient.role !== "viewer").length },
-        { label: "Fields", value: req.fields.length },
         { label: "Completed", value: req.recipients.filter((recipient) => recipient.status === "signed").length },
-        { label: "Mode", value: req.ordering },
+        { label: "Signer check", value: IDENTITY_MODE[req.identityMode] ?? req.identityMode },
+        { label: req.status === "expired" ? "Link expired after" : "Link works until", value: req.expiresAt ? formatDate(lastValidDay(req.expiresAt)) : "No expiry" },
       ]}
-      actions={<SendVoidBar requestId={req.id} status={req.status} />}
+      actions={<SendVoidBar requestId={req.id} status={req.status} closed={closed} />}
     >
+      {/* What this is a signature ON. The page used to be a dead end: no way to
+          the quote, the job card or the customer it belonged to. */}
+      {(linkedQuote || linkedJobCard || linkedContact) && (
+        <div className={`${card} flex flex-wrap items-center gap-2 text-sm`}>
+          <span className="text-xs text-muted-foreground">For</span>
+          {linkedQuote && !linkedQuote.deletedAt && <Link className="btn-secondary btn-sm" href={`/quotes/${linkedQuote.id}`}>Quote Q-{linkedQuote.number}</Link>}
+          {linkedQuote?.deletedAt && <span className="text-xs text-muted-foreground">Quote Q-{linkedQuote.number} (deleted)</span>}
+          {linkedJobCard && !linkedJobCard.deletedAt && <Link className="btn-secondary btn-sm" href={`/jobcards/${linkedJobCard.id}`}>Job card #{linkedJobCard.number}</Link>}
+          {linkedContact && !linkedContact.deletedAt && <Link className="btn-secondary btn-sm" href={`/contacts/${linkedContact.id}`}>{contactName(linkedContact)}</Link>}
+          {linkedQuote?.leadId && <Link className="btn-secondary btn-sm" href={`/leads/${linkedQuote.leadId}`}>Lead</Link>}
+        </div>
+      )}
+      {rejection && (
+        <div className="rounded-xl border border-red-500/40 bg-red-500/10 p-4 text-sm">
+          <p className="font-semibold text-red-200">Not approved{rejection.label ? ` at “${rejection.label}”` : ""}</p>
+          <p className="mt-1 text-muted-foreground">
+            {rejection.decidedByName ?? "The approver"} rejected it{rejection.decidedAt ? ` on ${formatDateTime(rejection.decidedAt)}` : ""}, so it was never sent on.
+            {rejection.reason?.trim() ? ` Their reason: “${rejection.reason.trim()}”` : " They gave no reason."}
+            {" "}Start it again from the quote once it has been changed.
+          </p>
+        </div>
+      )}
       {blockedReason && (
         <div className="rounded-xl border border-amber-500/40 bg-amber-500/10 p-4 text-sm">
           <p className="font-semibold text-amber-200">Everyone signed, but this can&apos;t complete</p>
@@ -139,6 +204,30 @@ export default async function SignatureDetail({ params }: { params: Promise<{ id
         </div>
       </div>
 
+      {/* A workflow's approval gates. They hold the document back from the
+          customer and have no recipient row, so nothing on this page showed that
+          one existed, who had it or what they decided. */}
+      {req.approvals.length > 0 && (
+        <div className={card}>
+          <p className="mb-3 text-sm font-semibold text-foreground">Approvals</p>
+          <ul className="space-y-2">
+            {req.approvals.map((step) => (
+              <li key={step.id} className="flex flex-wrap items-start justify-between gap-2 rounded-lg border border-border/60 p-3">
+                <div className="min-w-0">
+                  <span className="text-sm font-medium text-foreground">{step.label}</span>
+                  <span className="ml-2 text-[11px] text-muted-foreground">{step.assigneeName ?? step.assigneeRole ?? "Owner"}</span>
+                  {step.reason?.trim() && <div className="mt-1 text-[11px] text-muted-foreground">“{step.reason.trim()}”</div>}
+                </div>
+                <span className={`text-xs font-semibold ${step.status === "approved" ? "text-emerald-300" : step.status === "rejected" ? "text-red-300" : "text-amber-300"}`}>
+                  {step.status === "pending" ? "waiting" : step.status}
+                  {step.decidedAt ? ` · ${formatDateTime(step.decidedAt)}` : ""}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
       <div className={card}>
         <p className="mb-3 text-sm font-semibold text-foreground">Recipients</p>
         <ul className="space-y-3">
@@ -153,8 +242,22 @@ export default async function SignatureDetail({ params }: { params: Promise<{ id
                 <span className={`text-xs font-semibold ${RSTATUS[r.status] ?? "text-slate-400"}`}>{r.status}</span>
               </div>
               <div className="mt-1 text-[11px] text-muted-foreground">
-                {r.signedAt ? `Signed ${formatDateTime(r.signedAt)}${r.signerIp ? ` · IP ${r.signerIp}` : ""}` : r.viewedAt ? `Viewed ${formatDateTime(r.viewedAt)}` : "Not yet opened"}
+                {r.signedAt
+                  ? `Signed ${formatDateTime(r.signedAt)}${r.signerIp ? ` · IP ${r.signerIp}` : ""}`
+                  : r.declinedAt
+                    ? `Declined ${formatDateTime(r.declinedAt)}`
+                    : r.viewedAt ? `Viewed ${formatDateTime(r.viewedAt)}` : "Not yet opened"}
               </div>
+              {/* The reason was recorded and shown on the quote, but not here —
+                  on the one page about this request. */}
+              {r.status === "declined" && (
+                <div className="mt-1 text-[11px] text-red-300">
+                  {r.declineReason?.trim() ? `Their reason: “${r.declineReason.trim()}”` : "They gave no reason."}
+                </div>
+              )}
+              {identityProved(r, witnessOf.get(r.id) ?? null) && (
+                <div className="mt-1 text-[11px] text-muted-foreground">{identityProved(r, witnessOf.get(r.id) ?? null)}</div>
+              )}
               {r.role !== "viewer" && r.status !== "signed" && !closed && (
                 <RecipientControls recipientId={r.id} requestId={req.id} email={r.email ?? ""} phone={r.phone ?? ""} inPersonHref={`/signatures/${req.id}/sign/${r.id}`} />
               )}

@@ -42,3 +42,38 @@ export function governingBinding(request: RequestBinding): GoverningBinding | nu
   if (request.contactId) return { kind: "contact", id: request.contactId };
   return null;
 }
+
+/** The records of each kind a user may open. `null` is "every one of that kind", as the permission scopes report it. */
+export type AccessibleRecordIds = {
+  quoteIds: string[] | null;
+  jobCardIds: string[] | null;
+  documentIds: string[] | null;
+  contactIds: string[] | null;
+  userId: string;
+};
+
+/**
+ * The same decision as {@link governingBinding}, as a LIST filter: the requests
+ * whose governing record this user may open.
+ *
+ * Each branch names the bindings ABOVE it as null, which is what makes it the
+ * same rule and not a looser one. Without those nulls this would read "a quote
+ * you can open, OR a contact you can open" — and a request for somebody else's
+ * quote would appear in the list of anyone who can see its customer, the exact
+ * escalation the precedence exists to stop.
+ *
+ * A request bound to nothing is its creator's.
+ */
+export function accessibleRequestWhere(ids: AccessibleRecordIds) {
+  // "Bound to one of this kind, and it is one they may open."
+  const among = (list: string[] | null) => (list === null ? { not: null } : { in: list });
+  return {
+    OR: [
+      { quoteId: among(ids.quoteIds) },
+      { quoteId: null, jobCardId: among(ids.jobCardIds) },
+      { quoteId: null, jobCardId: null, documentId: among(ids.documentIds) },
+      { quoteId: null, jobCardId: null, documentId: null, contactId: among(ids.contactIds) },
+      { quoteId: null, jobCardId: null, documentId: null, contactId: null, createdById: ids.userId },
+    ],
+  };
+}

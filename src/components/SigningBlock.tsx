@@ -5,7 +5,8 @@ import { useRouter } from "next/navigation";
 import CopyButton from "@/components/CopyButton";
 import SignatureCapture from "@/components/signing/SignatureCapture";
 import SignedDocPreview from "@/components/signing/SignedDocPreview";
-import { formatDateTime } from "@/lib/format";
+import { formatDate, formatDateTime } from "@/lib/format";
+import { isRequestClosed, lastValidDay } from "@/lib/signing/statusPolicy";
 import {
   startRecordSigning,
   recordSigningLink,
@@ -37,6 +38,8 @@ export type SigningState = {
   createdAt: Date | string;
   sentAt: Date | string | null;
   completedAt: Date | string | null;
+  expiresAt?: Date | string | null;
+  rejection?: { label: string; by: string | null; reason: string | null; at: Date | string | null } | null;
   recipients: SigningRecipientView[];
 } | null;
 
@@ -135,8 +138,14 @@ export default function SigningBlock({
     );
   }
 
-  const active = state && state.status !== "completed" && state.status !== "declined" && state.status !== "voided";
-  const declined = state?.recipients.find((r) => r.declinedAt);
+  // EVERY closed state, from the one shared definition. This compared against
+  // three of the five by hand, so a request an approver had rejected — or one
+  // that had expired — still read as out for signature: the card offered to
+  // resend a dead link, Void was refused, and there was no way to start again.
+  const active = Boolean(state) && !isRequestClosed(state!.status);
+  const declined = state?.status === "declined" ? state.recipients.find((r) => r.declinedAt) : undefined;
+  const rejected = state?.status === "rejected" ? state.rejection ?? { label: "", by: null, reason: null, at: null } : null;
+  const expired = state?.status === "expired";
   // An envelope that exists but has not gone out yet is Denago's step, not the
   // customer's — showing them a signing link they have never been sent is how
   // the old card managed to look "sent" before anything was. One button, and
@@ -169,18 +178,45 @@ export default function SigningBlock({
     <div className="card">
       <h2 className="font-semibold mb-1">✍ Online signature</h2>
       <p className="text-xs text-slate-400 mb-4">
+        {/* It said "Countersign in one click" on every quote. Whether we sign at all
+            is the LAYOUT's decision — a quote layout with only the customer's
+            signature block has nothing of ours to sign — so the card describes
+            what always happens and the review window offers the countersignature
+            when the document actually has one waiting. */}
         {kind === "quote"
-          ? "Countersign in one click, check the signed quote, then send it — the customer signs on their phone, which accepts the quote and wins the lead."
+          ? "Check the quote, then send it — the customer signs on their phone, which accepts the quote and wins the lead. If the layout carries our signature block, you countersign it in the review first."
           : `The customer opens a secure link, reviews ${refLabel}, and signs on their phone — no printing needed.`}
       </p>
 
+      {/* Every way a request can end without a signature says so, with the
+          reason, and leaves the start-again controls below it. The declined
+          banner used to say "Void the request below" about a request that was
+          already closed and had no such button. */}
       {declined && (
         <div className="rounded-lg bg-red-500/10 border border-red-500/30 px-3 py-2 mb-3">
           <p className="text-xs text-red-300">
-            ✗ Declined by the customer on {formatDateTime(declined.declinedAt!)}. Void the request below and send a fresh one if they change their mind.
+            ✗ Declined by {declined.name} on {formatDateTime(declined.declinedAt!)}. Nothing is out for signature now — send it again below if they change their mind.
           </p>
           <p className="mt-1 text-xs text-red-200">
             {declined.declineReason?.trim() ? `Their reason: “${declined.declineReason.trim()}”` : "They gave no reason."}
+          </p>
+        </div>
+      )}
+      {rejected && (
+        <div className="rounded-lg bg-red-500/10 border border-red-500/30 px-3 py-2 mb-3">
+          <p className="text-xs text-red-300">
+            ✗ Not approved{rejected.label ? ` at “${rejected.label}”` : ""}{rejected.by ? ` by ${rejected.by}` : ""}{rejected.at ? ` on ${formatDateTime(rejected.at)}` : ""}. It was not sent to the customer — change what needs changing and start again below.
+          </p>
+          <p className="mt-1 text-xs text-red-200">
+            {rejected.reason?.trim() ? `Their reason: “${rejected.reason.trim()}”` : "They gave no reason."}
+          </p>
+        </div>
+      )}
+      {expired && (
+        <div className="rounded-lg bg-amber-500/10 border border-amber-500/30 px-3 py-2 mb-3">
+          <p className="text-xs text-amber-200">
+            ⏱ The signing link expired{state?.expiresAt ? ` after ${formatDate(lastValidDay(state.expiresAt))}` : ""} without being signed, so it no longer works.{" "}
+            {kind === "quote" ? "Update the quote's valid-until date, then send it again below." : "Send it again below."}
           </p>
         </div>
       )}
@@ -238,6 +274,12 @@ export default function SigningBlock({
                 </div>
               ))}
 
+              {state.expiresAt && (
+                <p className="text-[11px] text-slate-500">
+                  The link stops working after {formatDate(lastValidDay(state.expiresAt))}{kind === "quote" ? ", the quote's valid-until date" : ""}.
+                </p>
+              )}
+
               <div className="flex gap-2 flex-wrap items-center">
                 <button className="btn-secondary btn-sm" disabled={busy !== null} onClick={() => run("open", async () => { await openPreview(); return { ok: true }; })}>
                   👁 View document
@@ -272,7 +314,7 @@ export default function SigningBlock({
             <div>
               <label className="mb-1 block text-[11px] font-medium text-slate-400">Signing workflow</label>
               <select value={workflowId} onChange={(e) => setWorkflowId(e.target.value)} className="w-full rounded-md border border-input bg-card px-2 py-1.5 text-sm text-foreground">
-                <option value="">Built-in — we countersign, then the customer</option>
+                <option value="">Built-in — as the layout is drawn</option>
                 {workflows.map((w) => <option key={w.id} value={w.id}>{w.name}</option>)}
               </select>
             </div>
@@ -296,35 +338,23 @@ export default function SigningBlock({
           <button
             className="btn-primary"
             disabled={busy !== null}
-            onClick={() => run("start", async () => {
+            onClick={() => run("start", () =>
               // undefined means "no explicit mode" — the workspace policy decides.
-              const started = await startRecordSigning(
+              //
+              // The click PREPARES the document and opens it; it signs nothing.
+              // It used to apply the sender's saved signature in the same click
+              // under a button reading "Countersign & review" — on every quote,
+              // including the ones whose layout has no block of ours to sign. The
+              // review window already knows whose turn it is (run() opens it on
+              // success), and offers "Countersign" there only when the document
+              // is waiting on the person looking at it.
+              startRecordSigning(
                 kind, id, workflowId || undefined,
                 identityChoice === "default" ? undefined : identityChoice,
-              );
-              // The built-in quote flow is countersign-then-send, so do the
-              // countersignature in the same click rather than making it a
-              // separate button the user has to find.
-              //
-              // But only when the caller is ACTUALLY the next signer. A workflow
-              // can put the customer — or another staff member — at the first
-              // node, and countersignRecord refuses to sign in their name. Asking
-              // regardless turned a perfectly started request into the flat error
-              // "<customer> signs next — this is not yours to sign", and because
-              // run() bails on a failed result the document never opened: the
-              // quote was left locked behind a request the card would not show.
-              // Ask the document who is up, then act as them or hand over.
-              if (!started.ok || !started.preview) return started;
-              const view = await signedRecordDoc(kind, id);
-              if (view?.next?.isMe) return countersignRecord(kind, id);
-              return started;
-            })}
+              ),
+            )}
           >
-            {busy === "start"
-              ? "Preparing…"
-              : kind === "quote"
-                ? "✍ Countersign & review"
-                : "👁 Review & send"}
+            {busy === "start" ? "Preparing…" : "👁 Review & send"}
           </button>
         </div>
       )}

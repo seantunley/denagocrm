@@ -1335,7 +1335,16 @@ export function QuoteEditorDialog({
                           <Button type="button" variant="outline" onClick={() => save("draft", { thenSign: true })} disabled={isPending}><PenLine />Continue to signing</Button>
                         </>
                       ) : (
-                        <div className="flex items-center gap-2 text-sm text-muted-foreground"><LockKeyhole className="size-4" />{signing?.locked ? "Out for signature — void the request below to edit." : "This version is already frozen."}</div>
+                        <div className="flex items-center gap-2 text-sm text-muted-foreground"><LockKeyhole className="size-4" />{
+                          // "Out for signature" only once it HAS gone out. A
+                          // document opened for review and not yet sent locks the
+                          // quote too, and used to be described as sent.
+                          !signing?.locked
+                            ? "This version is already frozen."
+                            : signing.state?.sentAt
+                              ? "Out for signature — void the request below to edit."
+                              : "A signing document is open but has not been sent — discard it below to edit."
+                        }</div>
                       )}
                       {/*
                         The record page calls this destination "Print / PDF" —
@@ -1378,7 +1387,7 @@ export function QuoteEditorDialog({
                   */}
                   {!savedQuote ? (
                     <FeedbackBanner tone="info" title="Save the quote to send it for signature">
-                      The signature card appears here the moment the quote exists — countersign, send the secure link and watch it land, without leaving the editor.
+                      The signature card appears here the moment the quote exists — check the document, send the secure link and watch it land, without leaving the editor.
                     </FeedbackBanner>
                   ) : signing ? (
                     <SigningBlock

@@ -9,6 +9,8 @@ import {
 } from "@/lib/signing/status";
 import { ApprovalActions } from "./ApprovalActions";
 import { COMPLETION_BLOCKED_EVENT } from "@/lib/signing/complete";
+import { accessibleSignatureRequestWhere } from "@/lib/signing/access";
+import { canActOnStep } from "@/lib/signing/approvals";
 import {
   CheckCircle2,
   Clock3,
@@ -87,7 +89,10 @@ export default async function SignaturesPage({
 }: {
   searchParams: Promise<{ status?: string | string[]; page?: string | string[] }>;
 }) {
-  await requireAnyPermission("signing.view", "signing.manage");
+  const user = await requireAnyPermission("signing.view", "signing.manage");
+  // Only the requests this person may open — the same record check every button
+  // on the page already makes, applied to what the page lists and counts.
+  const mine = await accessibleSignatureRequestWhere(user);
   const query = await searchParams;
   const requestedStatus = query.status;
   const activeView: SignatureRequestView =
@@ -97,10 +102,10 @@ export default async function SignaturesPage({
   const requestedPage = typeof query.page === "string" ? Number(query.page) : 1;
   const safeRequestedPage = Number.isInteger(requestedPage) && requestedPage > 0 ? requestedPage : 1;
 
-  const [statusGroups, pendingApprovals, completionSamples] = await Promise.all([
+  const [statusGroups, allPendingApprovals, completionSamples] = await Promise.all([
     prisma.signatureRequest.groupBy({
       by: ["status"],
-      where: { deletedAt: null },
+      where: { deletedAt: null, AND: [mine] },
       _count: { _all: true },
     }),
     prisma.approvalStep.findMany({
@@ -121,6 +126,7 @@ export default async function SignaturesPage({
         status: "completed",
         sentAt: { not: null },
         completedAt: { not: null },
+        AND: [mine],
       },
       select: { sentAt: true, completedAt: true },
       orderBy: { completedAt: "desc" },
@@ -128,6 +134,10 @@ export default async function SignaturesPage({
     }),
   ]);
 
+  // The approvals THIS person can decide. Listing everyone's put Approve and
+  // Reject beside steps the action then refused ("You are not the assigned
+  // approver"), and named documents the viewer could not open.
+  const pendingApprovals = allPendingApprovals.filter((step) => canActOnStep(step, user));
   const statusCounts = new Map(statusGroups.map((group) => [group.status, group._count._all]));
   const requestCounts = statusGroups.reduce<Record<SignatureRequestView, number>>(
     (counts, group) => {
@@ -155,7 +165,7 @@ export default async function SignaturesPage({
       ? { status: { notIn: [...CLOSED_REQUEST_STATUSES] } }
       : { status: activeView };
   const visibleRequests = await prisma.signatureRequest.findMany({
-    where: { deletedAt: null, ...viewStatusFilter },
+    where: { deletedAt: null, ...viewStatusFilter, AND: [mine] },
     orderBy: { updatedAt: "desc" },
     skip: (currentPage - 1) * PAGE_SIZE,
     take: PAGE_SIZE,
@@ -167,6 +177,9 @@ export default async function SignaturesPage({
   const needsAttention = await prisma.signatureRequest.findMany({
     where: {
       deletedAt: null,
+      // AND, never a spread: the access filter is itself an OR, and two ORs in
+      // one object would silently keep only the last.
+      AND: [mine],
       OR: [
         { status: { notIn: [...CLOSED_REQUEST_STATUSES] }, events: { some: { type: COMPLETION_BLOCKED_EVENT } } },
         { status: "completed", recipients: { some: { email: { not: null }, completedEmailSentAt: null } } },
@@ -193,8 +206,10 @@ export default async function SignaturesPage({
             <Link href="/settings/signing-workflows" className="btn-secondary btn-sm">
               <Workflow className="size-4" /> Workflows
             </Link>
-            <Link href="/documents" className="btn-primary btn-sm">
-              <FileText className="size-4" /> Open documents
+            {/* Where a request is started. "Open documents" led to an editor whose
+                "Send for signing" option was removed on 2026-08-02. */}
+            <Link href="/quotes" className="btn-primary btn-sm">
+              <FileText className="size-4" /> Quotes
             </Link>
           </>
         }
@@ -284,8 +299,8 @@ export default async function SignaturesPage({
           <EmptyState
             icon={FileSignature}
             title="No signature requests yet"
-            description="Open a document in the editor and choose “Send for signing” to start a tracked request."
-            action={<Link href="/documents" className="btn-primary btn-sm">Open documents</Link>}
+            description="Open a quote or a job card and use its Online signature card. The request appears here as soon as it is prepared."
+            action={<Link href="/quotes" className="btn-primary btn-sm">Open quotes</Link>}
             className="m-4"
           />
         ) : visibleRequests.length === 0 ? (
@@ -321,7 +336,8 @@ export default async function SignaturesPage({
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2">
                       <Link href={`/signatures/${r.id}`} className="truncate text-[13px] font-medium text-foreground hover:text-primary">{r.title}</Link>
-                      <StatusPill tone={requestTone(r.status)}>{r.status.replace("_", " ")}</StatusPill>
+                      {/* "draft" reads as a draft DOCUMENT. It is a request nobody has been sent. */}
+                      <StatusPill tone={requestTone(r.status)}>{r.status === "draft" ? "not sent" : r.status.replace("_", " ")}</StatusPill>
                     </div>
                     <div className="mt-0.5 text-[11px] text-muted-foreground">
                       {signed}/{signers.length} signed · {r.ordering}

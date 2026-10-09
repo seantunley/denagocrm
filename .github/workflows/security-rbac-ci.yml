@@ -418,6 +418,16 @@ jobs:
       - name: Inbox -- one loud conversation cannot starve the quiet ones
         run: npm run test:inbox-selection
 
+      # Expiry and void are each one conditional UPDATE away from doing the wrong
+      # thing, and neither can be read off the source: whether the status trigger
+      # really revokes the links, whether a request everyone has signed is left
+      # to complete, whether voiding takes the quote back to draft and a second
+      # void takes nothing. Those belong to the statements running against the
+      # triggers, so they are run. (Signing evidence is append-only, so its rows
+      # stay behind; nothing after this step reads signing tables.)
+      - name: Signing -- a request expires and voids the way the CRM says it does
+        run: npm run test:signing-lifecycle
+
       # A source test can assert that the ledger HAS a failureCode column and that
       # the writes share a transaction. It cannot show that any runtime path ever
       # sets that column, that a duplicate submission finds the bot already

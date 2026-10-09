@@ -14,6 +14,14 @@ export type RecordSigningState = {
   createdAt: Date;
   sentAt: Date | null;
   completedAt: Date | null;
+  /** When the signing links stop (or stopped) working — a quote's valid-until day. */
+  expiresAt: Date | null;
+  /**
+   * Who rejected it and why, when an approver in a workflow turned it down. A
+   * rejected request is CLOSED like a declined one; without this the card had
+   * nothing to say about it and treated it as still out for signature.
+   */
+  rejection: { label: string; by: string | null; reason: string | null; at: Date | null } | null;
   signedPdfHash: string | null;
   signedDocId: string | null;
   recipients: {
@@ -37,9 +45,13 @@ export async function activeRecordRequest(opts: { quoteId?: string | null; jobCa
   const req = await prisma.signatureRequest.findFirst({
     where: { ...where, status: { not: "voided" } },
     orderBy: { createdAt: "desc" },
-    include: { recipients: { orderBy: { order: "asc" } } },
+    include: {
+      recipients: { orderBy: { order: "asc" } },
+      approvals: { where: { status: "rejected" }, orderBy: { decidedAt: "desc" }, take: 1 },
+    },
   });
   if (!req) return null;
+  const rejected = req.status === "rejected" ? req.approvals[0] : undefined;
   return {
     requestId: req.id,
     status: req.status,
@@ -47,6 +59,10 @@ export async function activeRecordRequest(opts: { quoteId?: string | null; jobCa
     createdAt: req.createdAt,
     sentAt: req.sentAt,
     completedAt: req.completedAt,
+    expiresAt: req.expiresAt,
+    rejection: rejected
+      ? { label: rejected.label, by: rejected.decidedByName, reason: rejected.reason, at: rejected.decidedAt }
+      : null,
     signedPdfHash: req.signedPdfHash,
     signedDocId: req.signedDocId,
     recipients: req.recipients.map((r) => ({
