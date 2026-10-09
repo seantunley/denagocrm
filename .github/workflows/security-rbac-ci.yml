@@ -410,6 +410,14 @@ jobs:
       - name: Isolation -- one Google Place, two tenants, two reviews
         run: npm run test:review-isolation
 
+      # A workspace seals its signed PDFs with one certificate of its own. "One"
+      # is settled by a unique index when two completions arrive together on the
+      # first signature, "stored encrypted" by what is actually in the row, and
+      # "never silently temporary" by what reaches the error log when the row
+      # cannot be opened. None of those can be read off the source.
+      - name: Signing -- one sealing certificate per workspace, made once
+        run: npm run test:signing-seal
+
       # A source assertion cannot tell "the row budget is bounded" from "the row
       # budget is bounded PER CONVERSATION", and only the second one keeps a quiet
       # thread visible next to a busy one. Both shapes select threads first and

@@ -46,6 +46,10 @@ const SECRET_KEYS = new Set([
   // pending device login can be completed by whoever holds it.
   "CODEX_OAUTH_TOKENS",
   "CODEX_DEVICE_LOGIN",
+  // The workspace's own PDF sealing certificate AND its private key
+  // (lib/signing/sealIdentity.ts). Whoever holds it can seal a document as this
+  // company; it is written already-encrypted and never sent to a browser.
+  "SIGNING_SEAL_IDENTITY",
 ]);
 
 const PREFIX = "enc:v1:";

@@ -41,6 +41,7 @@
     "test:receipt-isolation": "tsx --tsconfig tsconfig.scripts.json scripts/test-receipt-tenant-isolation.ts",
     "test:migration-session": "tsx --tsconfig tsconfig.scripts.json scripts/test-migration-session-continuity.ts",
     "test:review-isolation": "tsx --tsconfig tsconfig.scripts.json scripts/test-google-review-tenant-isolation.ts",
+    "test:signing-seal": "tsx --tsconfig tsconfig.scripts.json scripts/test-signing-seal.ts",
     "test:dm-binding": "tsx --tsconfig tsconfig.scripts.json scripts/test-dm-conversation-binding.ts",
     "test:inbox-selection": "tsx --tsconfig tsconfig.scripts.json scripts/test-inbox-thread-selection.ts",
     "test:staff-reply": "tsx --tsconfig tsconfig.scripts.json scripts/test-staff-reply-durability.ts",

@@ -5,6 +5,7 @@ import { parseDocument } from "@/lib/doceditor/model";
 import { renderDocumentHtml, type StampField } from "@/lib/doceditor/serialize";
 import { htmlToPdf } from "@/lib/customDocs";
 import { sealPdf } from "@/lib/pdf/seal";
+import { sealIdentityFor } from "./sealIdentity";
 import { getCompanyProfile } from "@/lib/companyProfile";
 import { saveFile, readFile, deleteFile } from "@/lib/storage";
 import { DEFAULT_REGIONAL, formatDateTime, type Regional } from "@/lib/format";
@@ -298,12 +299,20 @@ export async function completeSignatureRequest(requestId: string): Promise<void>
   // The seal names the workspace that sealed it — this was "Denago Cape Town"
   // on every tenant's signed contracts.
   const company = await getCompanyProfile(req.tenantId);
-  pdf = await sealPdf(pdf, {
-    reason: `Signed: ${req.title}`,
-    name: company.name,
-    contactInfo: company.email,
-    location: company.address,
-  });
+  // …and it is sealed with that workspace's OWN certificate, the same one for
+  // every document it completes (sealIdentity.ts). Leaving the choice to the
+  // sealer is how a customer's contract came to be sealed by a throwaway
+  // "development" certificate made when the server last restarted.
+  pdf = await sealPdf(
+    pdf,
+    {
+      reason: `Signed: ${req.title}`,
+      name: company.name,
+      contactInfo: company.email,
+      location: company.address,
+    },
+    await sealIdentityFor(req.tenantId),
+  );
   const hash = crypto.createHash("sha256").update(pdf).digest("hex");
 
   // Independent proof of WHEN, requested BEFORE the completion transaction so a
