@@ -3,7 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { prisma } from "@/lib/db";
-import { requirePermission } from "@/lib/permissions";
+import { requireTenantOwner } from "@/lib/auth";
 import { logAudit } from "@/lib/audit";
 import { blankWorkflow, parseGraph } from "@/lib/signflow/model";
 import { withActingStaffScope } from "@/lib/actingScope";
@@ -12,10 +12,22 @@ import { requiredReason } from "@/lib/deleteReason";
 
 const BASE = "/settings/signing-workflows";
 
+/*
+ * Every action here is the workspace OWNER's, like the two screens that call
+ * them (settings/signing-workflows and signing-workflows/[id]).
+ *
+ * They used to ask for `signing.manage` — the permission for sending and chasing
+ * a document. A workflow is the rule that says whose approval a document needs
+ * before a customer may sign it, so anyone who could send a quote for signature
+ * could also rewrite the approval their own quote had to pass. It never
+ * mattered only because no role could hold `signing.manage`; it does the moment
+ * one can.
+ */
+
 /** Create a workflow seeded with the default Denago→customer chain, then open it. */
 export async function createSignWorkflow(formData: FormData) {
   return withActingStaffScope(async () => {
-    const user = await requirePermission("signing.manage");
+    const user = await requireTenantOwner();
     const name = String(formData.get("name") ?? "").trim() || "New signing workflow";
     const created = await prisma.signWorkflow.create({
       data: { name, graphJson: blankWorkflow() as object, createdById: user.id },
@@ -29,7 +41,7 @@ export async function createSignWorkflow(formData: FormData) {
 /** Persist the workflow graph (validated) + its name. */
 export async function saveSignWorkflow(id: string, name: string, graphJson: string): Promise<{ ok: boolean; error?: string }> {
   return withActingStaffScope(async () => {
-    const user = await requirePermission("signing.manage");
+    const user = await requireTenantOwner();
     let parsed: unknown;
     try { parsed = JSON.parse(graphJson); } catch { return { ok: false, error: "Invalid graph" }; }
     const graph = parseGraph(parsed);
@@ -47,7 +59,7 @@ export async function saveSignWorkflow(id: string, name: string, graphJson: stri
 
 export async function deleteSignWorkflow(id: string, formData?: FormData) {
   return asActionResult(async () => {
-    const user = await requirePermission("signing.manage");
+    const user = await requireTenantOwner();
     const reason = requiredReason(formData, "deleting this workflow");
     const wf = await prisma.signWorkflow.update({ where: { id }, data: { deletedAt: new Date() }, select: { name: true } });
     await logAudit({ action: "signflow.delete", summary: `Deleted the signing workflow “${wf.name}” — ${reason}`, entityType: "SignWorkflow", entityId: id, user });
@@ -60,7 +72,7 @@ export async function deleteSignWorkflow(id: string, formData?: FormData) {
 /** Rename convenience (from the list). */
 export async function renameSignWorkflow(id: string, name: string): Promise<{ ok: boolean }> {
   return withActingStaffScope(async () => {
-    await requirePermission("signing.manage");
+    await requireTenantOwner();
     await prisma.signWorkflow.update({ where: { id }, data: { name: name.trim() || "Untitled" } });
     revalidatePath(BASE);
     return { ok: true };
