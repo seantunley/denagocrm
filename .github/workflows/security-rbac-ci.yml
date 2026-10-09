@@ -394,6 +394,19 @@ jobs:
       - name: Migrations run every statement on one session
         run: npm run test:migration-session
 
+      # A job whose worker died halfway — the function hit its time limit while
+      # rendering a PDF — was left "running" and never claimed again: the claim
+      # had a lease test, and a status list that excluded the only state a lease
+      # is held in. A document everyone had signed then never finished and
+      # nothing reported it. Whether an expired lease is really reclaimed, and a
+      # live one left alone, is a property of the claim statement running against
+      # real rows. The same run checks that the list's and the page's two ways of
+      # asking "is this stalled?" agree, and that a completed document's evidence
+      # is read under tenant enforcement. (It works in a workspace of its own, so
+      # the workers it runs touch no other step's jobs.)
+      - name: Signing -- a signed document that did not finish is found, and retried
+        run: npm run test:signing-proof
+
       # A DM reply is delivered on the channel the stored Conversation names, so
       # that a caller with inbox.reply cannot choose Messenger or Instagram for a
       # customer who has both. The source tests can see that the resolver is
