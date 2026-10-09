@@ -48,7 +48,30 @@ type RecipientRow = {
   name: string; role: string; signedAt: Date | null; signerIp: string | null; img: string | null;
   /** How this signer was proved to be the intended recipient, if at all. */
   identityMethod: string | null; identityVerifiedAt: Date | null;
+  /** The member of staff who watched them sign, when it was signed in person. */
+  witnessName: string | null;
+  /** The consent wording they ticked, as recorded with the signature. */
+  consentText: string | null;
 };
+
+/**
+ * What each signer's own `signed` event recorded beside the signature: who
+ * witnessed it, and the words they agreed to. Read from the evidence chain, the
+ * one place neither can be restated after the fact. Older signatures recorded
+ * neither, and the certificate then simply does not claim them.
+ */
+function signedEvidence(events: { recipientId: string | null; metadata: unknown }[]): Map<string, { witnessName: string | null; consentText: string | null }> {
+  const out = new Map<string, { witnessName: string | null; consentText: string | null }>();
+  for (const event of events) {
+    if (!event.recipientId || !event.metadata || typeof event.metadata !== "object") continue;
+    const meta = event.metadata as { witness?: { name?: unknown }; consent?: { text?: unknown } };
+    out.set(event.recipientId, {
+      witnessName: typeof meta.witness?.name === "string" ? meta.witness.name : null,
+      consentText: typeof meta.consent?.text === "string" ? meta.consent.text : null,
+    });
+  }
+  return out;
+}
 
 /**
  * What the certificate is allowed to claim about a signer's identity.
@@ -62,6 +85,16 @@ type RecipientRow = {
 type CertTime = Pick<Regional, "locale" | "timeZone">;
 
 function identityStatement(row: RecipientRow, r: CertTime): string {
+  if (row.identityMethod === "in_person") {
+    // Named only when the evidence names them; never a witness the record cannot show.
+    return row.witnessName
+      ? `Signed in person, in the presence of ${row.witnessName}`
+      : "Signed in person, in the presence of a member of staff";
+  }
+  if (row.identityMethod === "staff_session") {
+    // A countersignature (countersign.ts). It was never "a link sent to this recipient".
+    return "Signed by a member of staff while signed in to their own account";
+  }
   if (row.identityMethod === "email_otp") {
     return `Identity verified by one-time code sent to the email address on file${
       row.identityVerifiedAt ? ` at ${formatDateTime(row.identityVerifiedAt, r)}` : ""}`;
@@ -80,6 +113,7 @@ function certificateHtml(title: string, requestId: string, rows: RecipientRow[],
       ${row.img ? `<img src="${row.img}" style="height:56px;margin:8px 0"/>` : `<div style="color:#94a3b8;font-size:9pt;margin:8px 0">(accepted without drawn signature)</div>`}
       <div style="font-size:8.5pt;color:#64748b">Signed ${row.signedAt ? esc(formatDateTime(row.signedAt, r)) : "—"}${row.signerIp ? ` · IP ${esc(row.signerIp)}` : ""}</div>
       <div style="font-size:8.5pt;color:#64748b">${esc(identityStatement(row, r))}</div>
+      ${row.consentText ? `<div style="font-size:8.5pt;color:#64748b">Agreed to: “${esc(row.consentText)}”</div>` : ""}
     </div>`).join("");
   return `<div style="page-break-before:always;padding-top:6px">
     <h1 style="font-size:18pt;color:#020617;margin:0 0 4px">Certificate of Completion</h1>
@@ -240,9 +274,19 @@ export async function completeSignatureRequest(requestId: string): Promise<void>
   // send time — never the live Product.
   const ctx = await bindCtx(req.quoteId, req.jobCardId, undefined, { liveVehicle: false });
 
+  const evidence = signedEvidence(await prisma.signatureEvent.findMany({
+    where: { requestId, type: "signed" },
+    orderBy: { createdAt: "asc" },
+    select: { recipientId: true, metadata: true },
+  }));
   const rows: RecipientRow[] = [];
   for (const r of req.recipients.filter((x) => x.status === "signed")) {
-    rows.push({ name: r.signedName || r.name, role: r.role, signedAt: r.signedAt, signerIp: r.signerIp, img: await sigImg(r.signatureRef), identityMethod: r.identityMethod, identityVerifiedAt: r.identityVerifiedAt });
+    rows.push({
+      name: r.signedName || r.name, role: r.role, signedAt: r.signedAt, signerIp: r.signerIp, img: await sigImg(r.signatureRef),
+      identityMethod: r.identityMethod, identityVerifiedAt: r.identityVerifiedAt,
+      witnessName: evidence.get(r.id)?.witnessName ?? null,
+      consentText: evidence.get(r.id)?.consentText ?? null,
+    });
   }
 
   // Stamp each signed field into the document at the exact spot it was placed.

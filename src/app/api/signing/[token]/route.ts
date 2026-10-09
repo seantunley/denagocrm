@@ -7,6 +7,8 @@ import { advanceAfterSignature } from "@/lib/signing/workflow";
 import { isRequestClosed } from "@/lib/signing/status";
 import { missingRequiredForRecipient } from "@/lib/signing/fieldValidation";
 import { loadRecipientIdentity, identityStatus } from "@/lib/signing/identity";
+import { verifyInPersonPass, inPersonEvidenceHash } from "@/lib/signing/inPerson";
+import { consentFor } from "@/lib/signing/consent";
 import { deleteUnreferencedSigningAssets } from "@/lib/signing/assetCompensation";
 import { signingReadiness } from "@/lib/signing/securityPolicy";
 import { logAudit } from "@/lib/audit";
@@ -36,6 +38,12 @@ class SignAbort extends Error {
 const bodySchema = z.object({
   name: z.string().trim().min(2).max(120),
   consent: z.literal(true),
+  // Which consent wording the page showed (lib/signing/consent.ts). Absent on a
+  // page opened before versions were sent.
+  consentVersion: z.string().min(1).max(40).optional(),
+  // A staff member's in-person pass (lib/signing/inPerson.ts), when the signer
+  // is using that member of staff's device.
+  inPerson: z.string().min(1).max(1200).optional(),
   fields: z.array(z.object({
     id: z.string().min(1).max(128),
     value: z.string().max(MAX_FIELD_VALUE_BYTES),
@@ -126,9 +134,23 @@ async function handleSign(token: string, req: Request): Promise<Response> {
   if (!recipient || !identity || !recipient.tenantId) return new Response("Not found", { status: 404 });
   const request = recipient.request;
 
-  // A direct API POST cannot bypass the step-up ceremony shown by the page.
+  // Signing on a member of staff's device, in front of them. The pass names this
+  // recipient and this workspace or it is refused; one that was sent and does
+  // not verify is an error, never quietly treated as "no pass".
+  const witness = submission.inPerson
+    ? verifyInPersonPass(submission.inPerson, recipient.id, recipient.tenantId)
+    : null;
+  if (submission.inPerson && !witness) {
+    return new Response("This in-person signing session has expired. Ask the staff member to open it again.", { status: 403 });
+  }
+  const consent = consentFor(submission.consentVersion);
+  if (!consent) return new Response("This page is out of date. Reload it and sign again.", { status: 409 });
+  const channel = witness ? "in_person" : "web";
+
+  // A direct API POST cannot bypass the step-up ceremony shown by the page. A
+  // witness standing next to the signer is the one thing that stands in for it.
   const assurance = identityStatus(identity);
-  if (assurance.required && !assurance.verified) {
+  if (assurance.required && !assurance.verified && !witness) {
     return new Response("Verify your identity before signing.", { status: 403 });
   }
 
@@ -254,7 +276,7 @@ async function handleSign(token: string, req: Request): Promise<Response> {
       if (!lockedRecipient || ["signed", "declined"].includes(lockedRecipient.status)) {
         throw new SignAbort(409, "This signing link has already been actioned.");
       }
-      if (lockedRequest.identityMode !== "link" && !lockedRecipient.identityVerifiedAt) {
+      if (lockedRequest.identityMode !== "link" && !lockedRecipient.identityVerifiedAt && !witness) {
         throw new SignAbort(403, "Verify your identity before signing.");
       }
 
@@ -285,6 +307,23 @@ async function handleSign(token: string, req: Request): Promise<Response> {
           signerIp: meta.ip,
           signerUserAgent: meta.ua,
           ...(signatureRef ? { signatureRef } : {}),
+          // Witnessed in person and not already proved by a code: the witness IS
+          // the identity check, so the certificate says that instead of reading
+          // as "link only". A code verified earlier keeps its own record.
+          ...(witness && !lockedRecipient.identityVerifiedAt
+            ? {
+                identityVerifiedAt: filledAt,
+                identityMethod: "in_person",
+                identityEvidenceHash: inPersonEvidenceHash({
+                  recipientId: recipient.id,
+                  requestId: request.id,
+                  witnessUserId: witness.userId,
+                  at: filledAt,
+                  ip: meta.ip,
+                  userAgent: meta.ua,
+                }),
+              }
+            : {}),
         },
       });
       if (claimed.count === 0) throw new SignAbort(409, "Already signed");
@@ -315,7 +354,7 @@ async function handleSign(token: string, req: Request): Promise<Response> {
             recipientId: recipient.id,
             type: "field_filled",
             actor: name,
-            channel: "web",
+            channel,
             metadata: { kind: update.kind },
           }),
         });
@@ -325,10 +364,16 @@ async function handleSign(token: string, req: Request): Promise<Response> {
           recipientId: recipient.id,
           type: "signed",
           actor: name,
-          channel: "web",
+          channel,
           ip: meta.ip,
           userAgent: meta.ua,
-          metadata: { identityMode: lockedRequest.identityMode },
+          // The words the signer agreed to, and who watched them sign — both
+          // inside the hash chain, where neither can be restated afterwards.
+          metadata: {
+            identityMode: lockedRequest.identityMode,
+            consent,
+            ...(witness ? { witness: { userId: witness.userId, name: witness.name } } : {}),
+          },
         }),
       });
       // SignatureRecipient_enqueue_transition runs after the status update and
@@ -351,7 +396,9 @@ async function handleSign(token: string, req: Request): Promise<Response> {
     : null;
   await logAudit({
     action: "signing.signed",
-    summary: `${name} signed “${request.title}”`,
+    summary: witness
+      ? `${name} signed “${request.title}” in person, witnessed by ${witness.name}`
+      : `${name} signed “${request.title}”`,
     contactId: request.contactId,
     leadId: auditLead,
     userName: name,

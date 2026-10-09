@@ -104,12 +104,18 @@ test("every customer-facing substitution names nobody when unbranded", () => {
     ["src/app/portal/support/page.tsx", '"Tell us what you need and we’ll route it to the right specialist."'],
     ["src/app/portal/support/[id]/page.tsx", '"Messages between you and our team."'],
     ["src/app/portal/support/[id]/page.tsx", '"Our team"'],
-    ["src/app/signing/[token]/page.tsx", '"This signing link is no longer active. Please contact the sender."'],
-    ["src/app/signing/[token]/page.tsx", '"This signing link has expired. Please ask the sender to resend it."'],
-    ["src/app/signing/[token]/page.tsx", '"You declined to sign this document. Contact the sender if this was a mistake."'],
   ];
   for (const [file, literal] of expected) {
     assert.ok(shipped(file).includes(`: ${literal}`), `${file}: the unbranded branch must be ${literal}`);
+    assert.doesNotMatch(shipped(file), /Denago/, `${file}: no fallback may name Denago`);
+  }
+  // The signing page's closed-link wording is one function now
+  // (lib/signing/finishedNotice.ts), given the brand name or null — its unbranded
+  // output is asserted by running it, in tests/signingCustomerDoor.test.ts. What
+  // is pinned here is that the page passes null, not a default name, when unbranded.
+  const page = shipped("src/app/signing/[token]/page.tsx");
+  assert.match(page, /const sender = brand\.branded \? brand\.displayName : null;/);
+  for (const file of ["src/app/signing/[token]/page.tsx", "src/app/signing/[token]/SigningShell.tsx", "src/lib/signing/finishedNotice.ts"]) {
     assert.doesNotMatch(shipped(file), /Denago/, `${file}: no fallback may name Denago`);
   }
 });
@@ -117,10 +123,14 @@ test("every customer-facing substitution names nobody when unbranded", () => {
 test("the signing shell shows the tenant logo, then name, then nothing", () => {
   // Three states, and the middle one matters: a tenant with a NAME but no logo
   // must render their name. Unresolved renders no wordmark — not Denago's.
-  const code = shipped("src/app/signing/[token]/page.tsx");
+  // The shell is shared by the customer's own link and the in-person screen.
+  const code = shipped("src/app/signing/[token]/SigningShell.tsx");
   assert.match(code, /brand\?\.logoUrl \? \(/, "a tenant logo wins");
   assert.match(code, /\) : brand\?\.branded \? \(/, "…then a tenant name");
   assert.doesNotMatch(code, /DENAGO/, "…and never the Denago wordmark");
+  for (const page of ["src/app/signing/[token]/page.tsx", "src/app/(handover)/signatures/[id]/sign/[recipientId]/page.tsx"]) {
+    assert.match(shipped(page), /<SigningShell brand=\{brand\}>/, `${page} must render inside the shared shell`);
+  }
 });
 
 test("SignSurface's sender name defaults to a neutral phrase", () => {
