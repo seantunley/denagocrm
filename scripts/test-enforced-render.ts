@@ -43,6 +43,9 @@
  * Run: NODE_ENV=test npm run test:enforced-render
  * Set REUSE_BUILD=1 to skip `next build` when .next is already a production build.
  */
+import { saveFile } from "../src/lib/storage";
+import * as signTokens from "../src/lib/signing/tokens";
+import { SIGNED_COPY_COOKIE, mintSignedCopyPass } from "../src/lib/signing/signedCopyPass";
 import { spawn, type ChildProcess } from "node:child_process";
 import { existsSync } from "node:fs";
 import path from "node:path";
@@ -167,6 +170,81 @@ function killTree(child: ChildProcess): void {
       child.kill("SIGKILL");
     }
   }
+}
+
+/**
+ * THE TWO COPIES A SIGNING LINK CAN HAND OUT, AND WHO MAY HAVE THEM.
+ *
+ * Both routes give a document to someone holding only a link, so both are asked
+ * over HTTP, against the production build, as the people who must be refused:
+ *
+ *   the signed copy    belongs to the browser that just signed. Its link is
+ *                      revoked by then, so the link authorises nothing — a pass
+ *                      cookie does. No cookie, or another signer's, is a 403
+ *                      that does not even say whether a copy exists.
+ *   the copy to keep   before signing is for whoever the page would show the
+ *                      document to — so not before the one-time code.
+ *
+ * Own workspace, left behind on purpose: taking a copy appends to the evidence
+ * trail, which nothing may delete.
+ */
+async function checkSigningCopies(): Promise<void> {
+  const tenantId = `copy_${SFX}`;
+  const pdf = Buffer.from(`%PDF-1.4\n% signing copy probe ${SFX}\n`, "utf8");
+  await basePrisma.tenant.create({ data: { id: tenantId, name: `Copy Probe ${SFX}`, slug: `copy-probe-${SFX}`, active: true } });
+  const stored = await saveFile(pdf, `copy-probe-${SFX}.pdf`, "application/pdf", tenantId);
+
+  const signer = (requestId: string, name: string, extra: Record<string, unknown> = {}) => {
+    const token = signTokens.newSignToken();
+    return basePrisma.signatureRecipient
+      .create({ data: { tenantId, requestId, name, email: `${name.toLowerCase()}-${SFX}@example.test`, token: signTokens.hashSignToken(token), ...extra } })
+      .then((row) => ({ id: row.id, token }));
+  };
+  const get = async (token: string, path: string, pass?: string) => {
+    const response = await fetch(`${BASE}/api/signing/${token}/${path}`, {
+      headers: pass ? { cookie: `${SIGNED_COPY_COOKIE}=${pass}` } : {},
+      redirect: "manual",
+      signal: AbortSignal.timeout(30_000),
+    });
+    return { status: response.status, body: Buffer.from(await response.arrayBuffer()) };
+  };
+
+  // A finished document: completed, both signers done, both links revoked.
+  const finished = await basePrisma.signatureRequest.create({
+    data: { tenantId, title: `Copy probe ${SFX}`, status: "completed", completedAt: new Date(), signedPdfRef: stored },
+  });
+  const done = { status: "signed", signedAt: new Date(), tokenRevokedAt: new Date() };
+  const ada = await signer(finished.id, "Ada", done);
+  const ben = await signer(finished.id, "Ben", done);
+
+  const bare = await get(ada.token, "signed");
+  const asked = await get(ada.token, "signed?check");
+  check(
+    "a finished link alone cannot fetch the signed copy, or learn whether one exists",
+    bare.status === 403 && asked.status === 403 && !bare.body.includes("%PDF"),
+    `signed → ${bare.status}, signed?check → ${asked.status}`,
+  );
+  const borrowed = await get(ada.token, "signed", mintSignedCopyPass(ben.id, tenantId));
+  check("…nor can another signer's pass", borrowed.status === 403, `status ${borrowed.status}`);
+  const pass = mintSignedCopyPass(ada.id, tenantId);
+  const ready = await get(ada.token, "signed?check", pass);
+  const copy = await get(ada.token, "signed", pass);
+  check(
+    "the browser that signed is told its copy is ready, and gets it",
+    ready.status === 200 && ready.body.toString("utf8").includes('"ready"') && copy.status === 200 && copy.body.equals(pdf),
+    `signed?check → ${ready.status} ${ready.body.toString("utf8").slice(0, 60)}, signed → ${copy.status} (${copy.body.length} bytes)`,
+  );
+
+  // An open document that asks for a one-time code nobody has entered yet.
+  const open = await basePrisma.signatureRequest.create({
+    data: { tenantId, title: `Copy probe open ${SFX}`, status: "sent", sentAt: new Date(), identityMode: "email_otp", unsignedPdfRef: stored },
+  });
+  const cy = await signer(open.id, "Cy", { status: "sent" });
+  const early = await get(cy.token, "document");
+  check("the copy to keep is refused before the one-time code", early.status === 403 && !early.body.includes("%PDF"), `status ${early.status}`);
+  await basePrisma.signatureRecipient.update({ where: { id: cy.id }, data: { identityVerifiedAt: new Date(), identityMethod: "email_otp" } });
+  const kept = await get(cy.token, "document");
+  check("…and served once it has been entered", kept.status === 200 && kept.body.equals(pdf), `status ${kept.status} (${kept.body.length} bytes)`);
 }
 
 /** Is anything already bound to our port? A bare TCP connect — no HTTP assumed. */
@@ -305,6 +383,10 @@ async function main(): Promise<void> {
       res.status === 200,
       `status ${res.status}${location ? ` → ${location}` : ""}`,
     );
+
+    // Public routes reached by a signing link alone — see checkSigningCopies.
+    // Before the scope checks below, so those cover these requests as well.
+    await checkSigningCopies();
 
     // THE SERVER'S OWN STDERR, which is the assertion that actually holds.
     //

@@ -38,6 +38,11 @@ export async function resolveSignRecipientTenant(
  *
  * Nothing that can open, fill, sign or decline a document may use this: those
  * routes keep resolveSignRecipientTenant, which fails closed on a revoked link.
+ *
+ * One route does hand a document back through it: the signed copy, to the
+ * browser that just signed (api/signing/[token]/signed). The link is not what
+ * authorises that — a pass cookie the sign route set is (signing/signedCopyPass.ts)
+ * — and without the pass a revoked link gets the same refusal there as anywhere.
  */
 export async function resolveSignRecipientTenantForNotice(
   token: string,
