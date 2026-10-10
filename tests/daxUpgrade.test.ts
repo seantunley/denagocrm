@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { researchGate } from "../src/lib/assistantResearchGate";
 import { formatDecision, matchDecisions, parseDecision } from "../src/lib/assistantDecisions";
-import { scoreRecorded } from "../evals/runResearchEval";
+import { runLive, scoreRecorded } from "../evals/runResearchEval";
 
 test("gate continues when a why-question has no lead_brief yet", () => {
   const d = researchGate({
@@ -65,4 +65,15 @@ test("eval runner scores a recorded trace", () => {
   ]);
   assert.equal(scores.length, 1);
   assert.ok(scores[0].score >= 80);
+});
+
+
+test("live runner scores answers from an ask function", async () => {
+  const scores = await runLive(async (question) => ({
+    tools: question.toLowerCase().includes("why") ? ["find_leads", "lead_brief"] : ["find_leads"],
+    steps: 2,
+    answer: question,
+  }));
+  assert.equal(scores.length, 5);
+  assert.ok(scores.every((s) => s.score >= 0));
 });
