@@ -94,6 +94,7 @@ export async function quoteSigningView(id: string): Promise<QuoteSigningView | n
     const quote = await prisma.quote.findUnique({
       where: { id },
       select: {
+        tenantId: true,
         status: true,
         deletedAt: true,
         supersededAt: true,
@@ -111,11 +112,17 @@ export async function quoteSigningView(id: string): Promise<QuoteSigningView | n
 
     const [state, savedWorkflows, defaultWorkflow] = await Promise.all([
       activeRecordRequest({ quoteId: id }),
-      prisma.signWorkflow.findMany({
-        where: { isArchived: false },
-        select: { id: true, name: true, graphJson: true },
-        orderBy: { updatedAt: "desc" },
-      }),
+      // The workflows of the QUOTE's workspace — the ones resolveEnvelope will
+      // accept for it. Named, not left to the scoped client, which adds the
+      // workspace only while tenant enforcement is on: with it off this offered
+      // every workspace's workflows. A quote with no workspace is offered none.
+      quote.tenantId
+        ? prisma.signWorkflow.findMany({
+            where: { tenantId: quote.tenantId, isArchived: false },
+            select: { id: true, name: true, graphJson: true },
+            orderBy: { updatedAt: "desc" },
+          })
+        : [],
       defaultSignWorkflowId(),
     ]);
     // For each workflow, the steps on THIS quote's path that have nobody in them
@@ -272,6 +279,12 @@ export async function startRecordSigning(
     });
     if (!envelope) {
       return { ok: false, error: "Could not prepare the document." };
+    }
+    // The workflow that was chosen is not one this quote can go through any
+    // more — deleted, archived, or not this workspace's. Nothing is sent: it
+    // used to go out the built-in way, without the approvals that were picked.
+    if ("workflowGone" in envelope) {
+      return { ok: false, error: "That signing workflow is no longer available. Refresh the page and choose again." };
     }
     // A step with nobody in it. Refused here as well as on the card: the card
     // asks, but the document must not be preparable by a caller that did not.

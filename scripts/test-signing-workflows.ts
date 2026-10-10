@@ -117,7 +117,7 @@ async function main() {
     JSON.stringify(refused && "missing" in refused ? refused.missing : refused && Object.keys(refused)),
   );
   const prepared = await envelope(discounted, { manager: { userId: manager.id } });
-  const frozen = prepared && !("missing" in prepared) ? prepared.frozen : undefined;
+  const frozen = prepared && "doc" in prepared ? prepared.frozen : undefined;
   check("with the manager chosen it is prepared, and the discount is frozen on the request", frozen?.vars.discount === 12.5, JSON.stringify(frozen?.vars));
   const frozenManager = frozen?.graph.nodes.manager;
   check(
@@ -133,8 +133,8 @@ async function main() {
   const small = await envelope(await quoteWith(6));
   check(
     "a 5% discount is under the threshold: nobody is asked for, and the path skips the approval",
-    Boolean(small && !("missing" in small) && small.frozen?.vars.discount === 5 && small.signers?.length === 2),
-    JSON.stringify(small && !("missing" in small) ? { vars: small.frozen?.vars, signers: small.signers?.map((s) => s.label) } : small),
+    Boolean(small && "doc" in small && small.frozen?.vars.discount === 5 && small.signers?.length === 2),
+    JSON.stringify(small && "doc" in small ? { vars: small.frozen?.vars, signers: small.signers?.map((s) => s.label) } : small),
   );
 
   // ── 2. An approval is delivered when it is raised ─────────────────────────

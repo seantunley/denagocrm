@@ -220,6 +220,30 @@ test("a quote starts on the workspace's default workflow, and only the owner cho
 
   const action = code("src/app/actions/signflowDefault.ts");
   assert.match(action, /const user = await requireTenantOwner\(\);/);
-  assert.match(action, /where: \{ id: workflowId, isArchived: false, deletedAt: null \}/);
+  assert.match(action, /where: \{ id: workflowId, tenantId: await actingTenantId\(\), isArchived: false, deletedAt: null \}/, "a workflow of THIS workspace that can still be offered");
   assert.equal((action.match(/await logAudit\(/g) ?? []).length, 2, "setting it and clearing it are both on the record");
+});
+
+test("a workflow is never read without the workspace it has to belong to", () => {
+  // The scoped client adds the workspace only while tenant enforcement is on. By
+  // id (or by nothing at all, for the two lists) a workspace was shown every
+  // other workspace's workflows, could save one as its default, and could send
+  // its own quote through one. scripts/test-signflow-send-workspace.ts drives all
+  // four doors against a real database with enforcement off; this pins the shape.
+  const page = code("src/app/(app)/settings/signing-workflows/page.tsx");
+  assert.match(page, /signWorkflow\.findMany\(\{ where: \{ tenantId: await actingTenantId\(\), isArchived: false \}/, "the list is this workspace's");
+
+  const view = code("src/app/actions/recordSigning.ts");
+  assert.match(view, /quote\.tenantId\s*\? prisma\.signWorkflow\.findMany\(\{\s*where: \{ tenantId: quote\.tenantId, isArchived: false \},/, "the send card offers the QUOTE's workspace's workflows, and none to a quote that has no workspace");
+
+  const envelope = code("src/lib/signing/autoEnvelope.ts");
+  assert.match(envelope, /where: \{ id: opts\.workflowId, tenantId: customer\.tenantId, isArchived: false, deletedAt: null \}/, "the send accepts the same set the card offers");
+  for (const file of ["src/app/(app)/settings/signing-workflows/page.tsx", "src/app/actions/recordSigning.ts", "src/lib/signing/autoEnvelope.ts", "src/app/actions/signflowDefault.ts"]) {
+    assert.doesNotMatch(code(file), /signWorkflow\.(findUnique|findUniqueOrThrow)\(/, `${file}: a unique selector cannot carry a workspace beside the id`);
+  }
+
+  // A chosen workflow that cannot be used stops the send. It used to fall
+  // through to the built-in flow, without the approvals the sender had picked.
+  assert.match(envelope, /if \(!saved\) return \{ workflowGone: true \};/);
+  assert.match(view, /if \("workflowGone" in envelope\) \{\s*return \{ ok: false, error: "That signing workflow is no longer available\./);
 });

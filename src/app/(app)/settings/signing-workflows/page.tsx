@@ -9,6 +9,7 @@ import { SETTINGS_NAV_GROUPS } from "@/lib/settings-navigation";
 import { SaveForm, SaveButton } from "@/components/SaveForm";
 import { setDefaultSignWorkflow } from "@/app/actions/signflowDefault";
 import { defaultSignWorkflowId } from "@/lib/signflow/defaultWorkflow";
+import { actingTenantId } from "@/lib/actingTenant";
 
 export const dynamic = "force-dynamic";
 
@@ -21,7 +22,10 @@ function signerCount(graph: unknown): number {
 
 export default async function SigningWorkflowsPage() {
   await requireTenantOwner();
-  const workflows = await prisma.signWorkflow.findMany({ where: { isArchived: false }, orderBy: { updatedAt: "desc" } });
+  // This workspace's, named here rather than left to the scoped client: it adds
+  // the workspace only while tenant enforcement is on, and with it off this list
+  // was every workspace's workflows — which is also where their ids came from.
+  const workflows = await prisma.signWorkflow.findMany({ where: { tenantId: await actingTenantId(), isArchived: false }, orderBy: { updatedAt: "desc" } });
   const defaultId = await defaultSignWorkflowId();
   const defaultWorkflow = workflows.find((w) => w.id === defaultId) ?? null;
 

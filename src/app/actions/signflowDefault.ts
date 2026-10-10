@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/db";
 import { requireTenantOwner } from "@/lib/auth";
+import { actingTenantId } from "@/lib/actingTenant";
 import { putSetting } from "@/lib/settings";
 import { logAudit } from "@/lib/audit";
 import { asActionResult, refuse } from "@/lib/actionResult";
@@ -18,6 +19,13 @@ import { SIGNING_DEFAULT_WORKFLOW_KEY, defaultSignWorkflowId } from "@/lib/signf
  * `workflowId` empty clears it. The id comes from a button on the settings
  * page, so it is looked up here rather than trusted: it has to be a workflow of
  * this workspace that can still be offered.
+ *
+ * "Of this workspace" is in the `where`, not left to the scoped client, which
+ * adds it only while tenant enforcement is on. Without it, with enforcement
+ * off, another workspace's workflow id passed this check: its name came back in
+ * the result and the audit entry, and its id was saved as this workspace's
+ * default. An id that is another workspace's is answered exactly as one that
+ * does not exist.
  */
 export async function setDefaultSignWorkflow(workflowId: string) {
   return asActionResult(async () => {
@@ -39,7 +47,7 @@ export async function setDefaultSignWorkflow(workflowId: string) {
     }
 
     const workflow = await prisma.signWorkflow.findFirst({
-      where: { id: workflowId, isArchived: false, deletedAt: null },
+      where: { id: workflowId, tenantId: await actingTenantId(), isArchived: false, deletedAt: null },
       select: { id: true, name: true },
     });
     if (!workflow) refuse("That workflow is no longer there — refresh the page.");
