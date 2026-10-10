@@ -43,13 +43,19 @@
  * Run: NODE_ENV=test npm run test:enforced-render
  * Set REUSE_BUILD=1 to skip `next build` when .next is already a production build.
  */
+import { saveFile } from "../src/lib/storage";
+import * as signTokens from "../src/lib/signing/tokens";
+import { SIGNED_COPY_COOKIE, mintSignedCopyPass } from "../src/lib/signing/signedCopyPass";
 import { spawn, type ChildProcess } from "node:child_process";
 import { existsSync } from "node:fs";
 import path from "node:path";
 import net from "node:net";
 import crypto from "node:crypto";
+import type { Prisma } from "@prisma/client";
 import { basePrisma } from "../src/lib/db";
 import { signFreshSession, SESSION_COOKIE } from "../src/lib/session";
+import { hashSignToken, newSignToken } from "../src/lib/signing/tokens";
+import { blankDocument } from "../src/lib/doceditor/factory";
 
 /**
  * Next's CLI, run through THIS node binary rather than through `npx`.
@@ -96,7 +102,13 @@ function assertDisposableDatabase(): void {
   }
 }
 
-type Fixture = { tenantId: string; userId: string; cookie: string };
+type Fixture = {
+  tenantId: string;
+  userId: string;
+  cookie: string;
+  /** Staff who are NOT owners: one whose role grants `library.view`, one with no role at all. */
+  staff: { roleId: string; grantedUserId: string; grantedCookie: string; bareUserId: string; bareCookie: string };
+};
 
 /**
  * A tenant, an OWNER in it, and the session cookie a browser would hold.
@@ -130,7 +142,38 @@ async function seedFixture(): Promise<Fixture> {
     60,
     { tid: tenantId },
   );
-  return { tenantId, userId: user.id, cookie };
+
+  // Two members who are not owners. Owners skip the permission lookup entirely,
+  // so an owner can never show whether that lookup finds the workspace it needs.
+  const member = async (label: string) => {
+    const created = await basePrisma.user.create({
+      data: {
+        name: `Render Probe ${label}`,
+        email: `render-probe-${label.toLowerCase()}-${SFX}@example.test`,
+        passwordHash: "not-a-real-hash-this-session-is-minted-directly",
+        role: "member",
+      },
+    });
+    await basePrisma.tenantMember.create({ data: { tenantId, userId: created.id } });
+    const session = await signFreshSession(
+      { id: created.id, name: created.name, email: created.email, role: created.role, grants: "", sessionVersion: 0 },
+      60,
+      { tid: tenantId },
+    );
+    return { id: created.id, cookie: session };
+  };
+  const granted = await member("Librarian");
+  const bare = await member("Bystander");
+  const role = await basePrisma.role.create({ data: { name: `Render Probe role ${SFX}`, tenantId } });
+  await basePrisma.rolePermission.create({ data: { roleId: role.id, permissionKey: "library.view", tenantId } });
+  await basePrisma.userRole.create({ data: { userId: granted.id, roleId: role.id, tenantId } });
+
+  return {
+    tenantId,
+    userId: user.id,
+    cookie,
+    staff: { roleId: role.id, grantedUserId: granted.id, grantedCookie: granted.cookie, bareUserId: bare.id, bareCookie: bare.cookie },
+  };
 }
 
 async function cleanup(fx: Fixture | null): Promise<void> {
@@ -138,7 +181,11 @@ async function cleanup(fx: Fixture | null): Promise<void> {
   // Narrow and ordered — children before parents. Best-effort: a failed cleanup
   // must not turn a passing test red, and the database is disposable anyway.
   await basePrisma.errorLog.deleteMany({ where: { tenantId: fx.tenantId } }).catch(() => {});
+  await basePrisma.userRole.deleteMany({ where: { tenantId: fx.tenantId } }).catch(() => {});
+  await basePrisma.rolePermission.deleteMany({ where: { tenantId: fx.tenantId } }).catch(() => {});
+  await basePrisma.role.deleteMany({ where: { tenantId: fx.tenantId } }).catch(() => {});
   await basePrisma.tenantMember.deleteMany({ where: { tenantId: fx.tenantId } }).catch(() => {});
+  await basePrisma.user.deleteMany({ where: { id: { in: [fx.staff.grantedUserId, fx.staff.bareUserId] } } }).catch(() => {});
   await basePrisma.user.delete({ where: { id: fx.userId } }).catch(() => {});
   await basePrisma.tenant.delete({ where: { id: fx.tenantId } }).catch(() => {});
 }
@@ -167,6 +214,81 @@ function killTree(child: ChildProcess): void {
       child.kill("SIGKILL");
     }
   }
+}
+
+/**
+ * THE TWO COPIES A SIGNING LINK CAN HAND OUT, AND WHO MAY HAVE THEM.
+ *
+ * Both routes give a document to someone holding only a link, so both are asked
+ * over HTTP, against the production build, as the people who must be refused:
+ *
+ *   the signed copy    belongs to the browser that just signed. Its link is
+ *                      revoked by then, so the link authorises nothing — a pass
+ *                      cookie does. No cookie, or another signer's, is a 403
+ *                      that does not even say whether a copy exists.
+ *   the copy to keep   before signing is for whoever the page would show the
+ *                      document to — so not before the one-time code.
+ *
+ * Own workspace, left behind on purpose: taking a copy appends to the evidence
+ * trail, which nothing may delete.
+ */
+async function checkSigningCopies(): Promise<void> {
+  const tenantId = `copy_${SFX}`;
+  const pdf = Buffer.from(`%PDF-1.4\n% signing copy probe ${SFX}\n`, "utf8");
+  await basePrisma.tenant.create({ data: { id: tenantId, name: `Copy Probe ${SFX}`, slug: `copy-probe-${SFX}`, active: true } });
+  const stored = await saveFile(pdf, `copy-probe-${SFX}.pdf`, "application/pdf", tenantId);
+
+  const signer = (requestId: string, name: string, extra: Record<string, unknown> = {}) => {
+    const token = signTokens.newSignToken();
+    return basePrisma.signatureRecipient
+      .create({ data: { tenantId, requestId, name, email: `${name.toLowerCase()}-${SFX}@example.test`, token: signTokens.hashSignToken(token), ...extra } })
+      .then((row) => ({ id: row.id, token }));
+  };
+  const get = async (token: string, path: string, pass?: string) => {
+    const response = await fetch(`${BASE}/api/signing/${token}/${path}`, {
+      headers: pass ? { cookie: `${SIGNED_COPY_COOKIE}=${pass}` } : {},
+      redirect: "manual",
+      signal: AbortSignal.timeout(30_000),
+    });
+    return { status: response.status, body: Buffer.from(await response.arrayBuffer()) };
+  };
+
+  // A finished document: completed, both signers done, both links revoked.
+  const finished = await basePrisma.signatureRequest.create({
+    data: { tenantId, title: `Copy probe ${SFX}`, status: "completed", completedAt: new Date(), signedPdfRef: stored },
+  });
+  const done = { status: "signed", signedAt: new Date(), tokenRevokedAt: new Date() };
+  const ada = await signer(finished.id, "Ada", done);
+  const ben = await signer(finished.id, "Ben", done);
+
+  const bare = await get(ada.token, "signed");
+  const asked = await get(ada.token, "signed?check");
+  check(
+    "a finished link alone cannot fetch the signed copy, or learn whether one exists",
+    bare.status === 403 && asked.status === 403 && !bare.body.includes("%PDF"),
+    `signed → ${bare.status}, signed?check → ${asked.status}`,
+  );
+  const borrowed = await get(ada.token, "signed", mintSignedCopyPass(ben.id, tenantId));
+  check("…nor can another signer's pass", borrowed.status === 403, `status ${borrowed.status}`);
+  const pass = mintSignedCopyPass(ada.id, tenantId);
+  const ready = await get(ada.token, "signed?check", pass);
+  const copy = await get(ada.token, "signed", pass);
+  check(
+    "the browser that signed is told its copy is ready, and gets it",
+    ready.status === 200 && ready.body.toString("utf8").includes('"ready"') && copy.status === 200 && copy.body.equals(pdf),
+    `signed?check → ${ready.status} ${ready.body.toString("utf8").slice(0, 60)}, signed → ${copy.status} (${copy.body.length} bytes)`,
+  );
+
+  // An open document that asks for a one-time code nobody has entered yet.
+  const open = await basePrisma.signatureRequest.create({
+    data: { tenantId, title: `Copy probe open ${SFX}`, status: "sent", sentAt: new Date(), identityMode: "email_otp", unsignedPdfRef: stored },
+  });
+  const cy = await signer(open.id, "Cy", { status: "sent" });
+  const early = await get(cy.token, "document");
+  check("the copy to keep is refused before the one-time code", early.status === 403 && !early.body.includes("%PDF"), `status ${early.status}`);
+  await basePrisma.signatureRecipient.update({ where: { id: cy.id }, data: { identityVerifiedAt: new Date(), identityMethod: "email_otp" } });
+  const kept = await get(cy.token, "document");
+  check("…and served once it has been entered", kept.status === 200 && kept.body.equals(pdf), `status ${kept.status} (${kept.body.length} bytes)`);
 }
 
 /** Is anything already bound to our port? A bare TCP connect — no HTTP assumed. */
@@ -253,6 +375,98 @@ async function startServer(): Promise<ChildProcess> {
   throw new Error(`next start was not reachable on ${BASE} within 90s`);
 }
 
+/**
+ * THE CUSTOMER'S SIGNING PAGE, BEFORE AND AFTER THE ONE-TIME CODE.
+ *
+ * A document can be sent so that the signer must enter a code, mailed to the
+ * address on file, before it opens. The page drew that check OVER the finished
+ * document: the customer saw a code prompt, and the response underneath carried
+ * every sheet. Holding the link was enough to read the document the code was
+ * there to protect — in a browser's view-source, or with no browser at all.
+ *
+ * So this asks the way that reader would: one plain request for the page, no
+ * JavaScript, and a look at what came back. It needs a real server because the
+ * question is what the SERVER sends, which no amount of reading the component
+ * can settle — the component was correct, and showed nothing.
+ *
+ * The second request is the control, and the assertion is worthless without it:
+ * "the sentence is absent" is also true of a page that could never have shown
+ * it. Marking the signer verified (what entering the code does) must make the
+ * very same link return it.
+ *
+ * Own workspace, and left behind on purpose. Opening a document appends to its
+ * evidence trail, which nothing may delete — by design — so the rows cannot be
+ * removed, and sharing the workspace above would stop THAT one being removed
+ * too. The database is disposable; the trail not being is the point.
+ */
+async function checkSigningGate(): Promise<void> {
+  const tenantId = `gate_${SFX}`;
+  const sentence = `Confidential clause ${SFX}`;
+  const token = newSignToken();
+
+  const document = blankDocument(`Gate probe ${SFX}`);
+  const block = document.pages[0].rows[0].columns[0].blocks[1];
+  if (block.type !== "text") throw new Error("blankDocument no longer starts with a heading and a text block");
+  block.value = [{ type: "p", children: [{ text: sentence }] }];
+
+  await basePrisma.tenant.create({ data: { id: tenantId, name: `Gate Probe ${SFX}`, slug: `gate-probe-${SFX}`, active: true } });
+  const request = await basePrisma.signatureRequest.create({
+    data: {
+      tenantId,
+      title: `Gate probe ${SFX}`,
+      status: "sent",
+      identityMode: "email_otp",
+      sentAt: new Date(),
+      snapshotJson: document as unknown as Prisma.InputJsonValue,
+    },
+  });
+  const recipient = await basePrisma.signatureRecipient.create({
+    data: {
+      tenantId,
+      requestId: request.id,
+      name: "Gate Probe Signer",
+      email: `gate-probe-${SFX}@example.test`,
+      status: "sent",
+      token: hashSignToken(token),
+    },
+  });
+
+  const open = async () => {
+    const response = await fetch(`${BASE}/signing/${token}`, { redirect: "manual", signal: AbortSignal.timeout(60_000) });
+    return { status: response.status, html: await response.text() };
+  };
+  const openedAt = async () =>
+    (await basePrisma.signatureRecipient.findUniqueOrThrow({ where: { id: recipient.id }, select: { viewedAt: true } })).viewedAt;
+
+  const before = await open();
+  check(
+    "a signer who has not entered their code is asked for it",
+    before.status === 200 && before.html.includes("Verify your identity"),
+    `status ${before.status}; the code prompt is ${before.html.includes("Verify your identity") ? "there" : "missing"}`,
+  );
+  check(
+    "…and is sent none of the document",
+    !before.html.includes(sentence),
+    "the response carries the document's own text before any code was entered — the check is drawn over the " +
+      "document instead of being answered before it is rendered (signing/[token]/page.tsx)",
+  );
+  check("…and the document is not recorded as opened by them", (await openedAt()) === null);
+
+  // What entering the right code does (verifyIdentityChallenge).
+  await basePrisma.signatureRecipient.update({
+    where: { id: recipient.id },
+    data: { identityVerifiedAt: new Date(), identityMethod: "email_otp" },
+  });
+  const after = await open();
+  check(
+    "once the code is accepted, the same link opens the document",
+    after.status === 200 && after.html.includes(sentence),
+    `status ${after.status}. Without this the check above proves nothing: a page that never renders the ` +
+      `sentence would pass it too.`,
+  );
+  check("…and only then is it recorded as opened", (await openedAt()) !== null);
+}
+
 async function main(): Promise<void> {
   assertDisposableDatabase();
 
@@ -269,6 +483,10 @@ async function main(): Promise<void> {
   try {
     fx = await seedFixture();
     server = await startServer();
+
+    // A public page: no session, and none of the fixture above. It runs first so
+    // the scope checks further down also cover a page reached by a link alone.
+    await checkSigningGate();
 
     // The moment the outage is reproduced or not. `/` renders (app)/layout.tsx
     // AND (app)/page.tsx, both of which call getCurrentUser() — so one of them
@@ -305,6 +523,10 @@ async function main(): Promise<void> {
       res.status === 200,
       `status ${res.status}${location ? ` → ${location}` : ""}`,
     );
+
+    // Public routes reached by a signing link alone — see checkSigningCopies.
+    // Before the scope checks below, so those cover these requests as well.
+    await checkSigningCopies();
 
     // THE SERVER'S OWN STDERR, which is the assertion that actually holds.
     //
@@ -355,6 +577,37 @@ async function main(): Promise<void> {
           "above may have passed against a page that never rendered the authenticated layout",
       );
     }
+
+    // ── A ROUTE HANDLER, AS STAFF WHO ARE NOT OWNERS ──────────────────────────
+    //
+    // Everything above is a page, as an owner. A route handler has no layout
+    // above it to establish the workspace, and the permission lookup counts a
+    // role only in the workspace being acted in — so a handler that asks
+    // `hasPermission(user, …)` without binding one looked the user's roles up in
+    // no workspace and refused everybody who was not an owner. Eleven handlers
+    // did, the document download among them, and nothing here could see it: the
+    // only user this test had was an owner, who skips the lookup.
+    //
+    // A made-up id, so nothing has to exist to be served: past the permission
+    // check the route answers 404, and refused by it, 403. The owner is the
+    // control that the route works at all; the member with no role is the
+    // control that passing is not the same as being open.
+    const libraryFile = (session: string) =>
+      fetch(`${BASE}/api/library/does-not-exist`, {
+        headers: { cookie: `${SESSION_COOKIE}=${session}` },
+        redirect: "manual",
+        signal: AbortSignal.timeout(30_000),
+      }).then((response) => response.status);
+    const [asOwner, asGranted, asBare] = [await libraryFile(fx.cookie), await libraryFile(fx.staff.grantedCookie), await libraryFile(fx.staff.bareCookie)];
+    check("a route handler lets the owner past its permission check", asOwner === 404, `status ${asOwner} (404 = past the check, nothing to serve)`);
+    check(
+      "…and a member whose role grants the permission",
+      asGranted === 404,
+      `status ${asGranted}. 403 means the handler read the member's roles in NO workspace and found none: ` +
+        `it checked permissions without binding the acting workspace (withActingStaffScope). ` +
+        `Owners skip that lookup, so only a non-owner shows it.`,
+    );
+    check("…but not a member whose role does not", asBare === 403, `status ${asBare} — the route must still refuse someone without the permission`);
   } finally {
     if (server) {
       killTree(server);

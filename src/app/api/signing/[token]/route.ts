@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { cookies } from "next/headers";
 import { prisma } from "@/lib/db";
 import { saveFile } from "@/lib/storage";
 import { isValidSignToken, hashSignToken } from "@/lib/signing/tokens";
@@ -7,12 +8,16 @@ import { advanceAfterSignature } from "@/lib/signing/workflow";
 import { isRequestClosed } from "@/lib/signing/status";
 import { missingRequiredForRecipient } from "@/lib/signing/fieldValidation";
 import { loadRecipientIdentity, identityStatus } from "@/lib/signing/identity";
+import { verifyInPersonPass, inPersonEvidenceHash } from "@/lib/signing/inPerson";
+import { consentFor } from "@/lib/signing/consent";
 import { deleteUnreferencedSigningAssets } from "@/lib/signing/assetCompensation";
 import { signingReadiness } from "@/lib/signing/securityPolicy";
 import { logAudit } from "@/lib/audit";
 import { withTokenTenantScope } from "@/lib/tenantScopeEntry";
 import { resolveSignRecipientTenant } from "@/lib/tokenTenant";
 import { rateLimitSigning } from "@/lib/signing/throttle";
+import { SIGNED_COPY_COOKIE, mintSignedCopyPass, signedCopyCookieOptions } from "@/lib/signing/signedCopyPass";
+import { runAfterResponse } from "@/lib/afterResponse";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -36,9 +41,19 @@ class SignAbort extends Error {
 const bodySchema = z.object({
   name: z.string().trim().min(2).max(120),
   consent: z.literal(true),
+  // Which consent wording the page showed (lib/signing/consent.ts). Absent on a
+  // page opened before versions were sent.
+  consentVersion: z.string().min(1).max(40).optional(),
+  // A staff member's in-person pass (lib/signing/inPerson.ts), when the signer
+  // is using that member of staff's device.
+  inPerson: z.string().min(1).max(1200).optional(),
   fields: z.array(z.object({
     id: z.string().min(1).max(128),
     value: z.string().max(MAX_FIELD_VALUE_BYTES),
+    // How a signature image was made: drawn with a finger or mouse, or the
+    // signer's typed name set in a script face. Recorded with the signature —
+    // the two are different acts and the evidence should say which it was.
+    method: z.enum(["drawn", "typed"]).optional(),
   })).max(200).default([]),
 }).strict();
 
@@ -126,9 +141,23 @@ async function handleSign(token: string, req: Request): Promise<Response> {
   if (!recipient || !identity || !recipient.tenantId) return new Response("Not found", { status: 404 });
   const request = recipient.request;
 
-  // A direct API POST cannot bypass the step-up ceremony shown by the page.
+  // Signing on a member of staff's device, in front of them. The pass names this
+  // recipient and this workspace or it is refused; one that was sent and does
+  // not verify is an error, never quietly treated as "no pass".
+  const witness = submission.inPerson
+    ? verifyInPersonPass(submission.inPerson, recipient.id, recipient.tenantId)
+    : null;
+  if (submission.inPerson && !witness) {
+    return new Response("This in-person signing session has expired. Ask the staff member to open it again.", { status: 403 });
+  }
+  const consent = consentFor(submission.consentVersion);
+  if (!consent) return new Response("This page is out of date. Reload it and sign again.", { status: 409 });
+  const channel = witness ? "in_person" : "web";
+
+  // A direct API POST cannot bypass the step-up ceremony shown by the page. A
+  // witness standing next to the signer is the one thing that stands in for it.
   const assurance = identityStatus(identity);
-  if (assurance.required && !assurance.verified) {
+  if (assurance.required && !assurance.verified && !witness) {
     return new Response("Verify your identity before signing.", { status: 403 });
   }
 
@@ -194,12 +223,13 @@ async function handleSign(token: string, req: Request): Promise<Response> {
   let signatureRef: string | null = null;
   const filledAt = new Date();
   const savedRefs: string[] = [];
-  const updates: { id: string; value: string; kind: string }[] = [];
+  const updates: { id: string; value: string; kind: string; method?: "drawn" | "typed" }[] = [];
   try {
     for (const field of fields) {
       const fieldRow = fillable.get(field.id)!;
       let value = field.value;
-      if (["signature", "initials", "stamp"].includes(fieldRow.kind)) {
+      const drawnOrTyped = ["signature", "initials", "stamp"].includes(fieldRow.kind);
+      if (drawnOrTyped) {
         const image = decodeSignaturePng(value);
         // The signature image belongs to the request being signed. There is no
         // session at all here — the caller is a customer holding a signing token —
@@ -215,7 +245,7 @@ async function handleSign(token: string, req: Request): Promise<Response> {
         value = ref;
         if (fieldRow.kind === "signature" && !signatureRef) signatureRef = ref;
       }
-      updates.push({ id: field.id, value, kind: fieldRow.kind });
+      updates.push({ id: field.id, value, kind: fieldRow.kind, ...(drawnOrTyped && field.method ? { method: field.method } : {}) });
     }
 
     await prisma.$transaction(async (tx) => {
@@ -254,7 +284,7 @@ async function handleSign(token: string, req: Request): Promise<Response> {
       if (!lockedRecipient || ["signed", "declined"].includes(lockedRecipient.status)) {
         throw new SignAbort(409, "This signing link has already been actioned.");
       }
-      if (lockedRequest.identityMode !== "link" && !lockedRecipient.identityVerifiedAt) {
+      if (lockedRequest.identityMode !== "link" && !lockedRecipient.identityVerifiedAt && !witness) {
         throw new SignAbort(403, "Verify your identity before signing.");
       }
 
@@ -285,6 +315,23 @@ async function handleSign(token: string, req: Request): Promise<Response> {
           signerIp: meta.ip,
           signerUserAgent: meta.ua,
           ...(signatureRef ? { signatureRef } : {}),
+          // Witnessed in person and not already proved by a code: the witness IS
+          // the identity check, so the certificate says that instead of reading
+          // as "link only". A code verified earlier keeps its own record.
+          ...(witness && !lockedRecipient.identityVerifiedAt
+            ? {
+                identityVerifiedAt: filledAt,
+                identityMethod: "in_person",
+                identityEvidenceHash: inPersonEvidenceHash({
+                  recipientId: recipient.id,
+                  requestId: request.id,
+                  witnessUserId: witness.userId,
+                  at: filledAt,
+                  ip: meta.ip,
+                  userAgent: meta.ua,
+                }),
+              }
+            : {}),
         },
       });
       if (claimed.count === 0) throw new SignAbort(409, "Already signed");
@@ -315,8 +362,8 @@ async function handleSign(token: string, req: Request): Promise<Response> {
             recipientId: recipient.id,
             type: "field_filled",
             actor: name,
-            channel: "web",
-            metadata: { kind: update.kind },
+            channel,
+            metadata: { kind: update.kind, ...(update.method ? { method: update.method } : {}) },
           }),
         });
       }
@@ -325,10 +372,16 @@ async function handleSign(token: string, req: Request): Promise<Response> {
           recipientId: recipient.id,
           type: "signed",
           actor: name,
-          channel: "web",
+          channel,
           ip: meta.ip,
           userAgent: meta.ua,
-          metadata: { identityMode: lockedRequest.identityMode },
+          // The words the signer agreed to, and who watched them sign — both
+          // inside the hash chain, where neither can be restated afterwards.
+          metadata: {
+            identityMode: lockedRequest.identityMode,
+            consent,
+            ...(witness ? { witness: { userId: witness.userId, name: witness.name } } : {}),
+          },
         }),
       });
       // SignatureRecipient_enqueue_transition runs after the status update and
@@ -351,14 +404,29 @@ async function handleSign(token: string, req: Request): Promise<Response> {
     : null;
   await logAudit({
     action: "signing.signed",
-    summary: `${name} signed “${request.title}”`,
+    summary: witness
+      ? `${name} signed “${request.title}” in person, witnessed by ${witness.name}`
+      : `${name} signed “${request.title}”`,
     contactId: request.contactId,
     leadId: auditLead,
     userName: name,
     entityType: "SignatureRequest",
     entityId: request.id,
   }).catch(() => {});
-  await advanceAfterSignature(request.id).catch(() => {});
+
+  // The signer is answered NOW. Sealing the document, filing it and emailing
+  // everyone used to run before this response, so the Sign button waited on a
+  // PDF render and a mail server — and if either was slow the signer was shown
+  // an error for a signature that had been saved. Their part is done at the
+  // commit above; the rest runs after the response and, if it is cut short, is
+  // picked up from the outbox the same commit wrote.
+  await runAfterResponse(() => advanceAfterSignature(request.id));
+
+  // On the signer's own device, a short-lived pass so this browser can fetch the
+  // signed copy once it exists (signedCopyPass.ts). Never on a member of staff's.
+  if (!witness) {
+    (await cookies()).set(SIGNED_COPY_COOKIE, mintSignedCopyPass(recipient.id, recipient.tenantId), signedCopyCookieOptions(token));
+  }
 
   return Response.json({ ok: true });
 }

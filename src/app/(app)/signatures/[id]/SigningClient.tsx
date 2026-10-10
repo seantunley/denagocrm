@@ -6,11 +6,16 @@ import { useRouter } from "next/navigation";
 import { sendRequest, resendRequest, voidRequest, remindRecipient, updateRecipientContact } from "@/app/actions/signhub";
 import ConfirmActionDialog from "@/components/ConfirmActionDialog";
 
-export function SendVoidBar({ requestId, status }: { requestId: string; status: string }) {
+/**
+ * `closed` is decided by the server from the ONE definition of a closed request
+ * (signing/statusPolicy.ts). This used to work it out here from two of the five
+ * closed states, so a declined, rejected or expired request kept a Resend and a
+ * Void that could only fail.
+ */
+export function SendVoidBar({ requestId, status, closed }: { requestId: string; status: string; closed: boolean }) {
   const router = useRouter();
   const [pending, start] = useTransition();
   const [msg, setMsg] = useState<string | null>(null);
-  const closed = status === "completed" || status === "voided";
   const isDraft = status === "draft";
 
   return (
@@ -19,7 +24,9 @@ export function SendVoidBar({ requestId, status }: { requestId: string; status: 
         <button type="button" disabled={pending} className="btn-primary btn-sm"
           onClick={() => start(async () => {
             const r = isDraft ? await sendRequest(requestId) : await resendRequest(requestId);
-            setMsg(r.ok ? `Sent to ${r.notified} recipient(s).` : r.error ?? "Failed");
+            // An approval being asked for is a success with nobody to count.
+            const sent = r.message ?? `Sent to ${r.notified} recipient(s).`;
+            setMsg(r.ok ? sent : r.error ?? "Failed");
             router.refresh();
           })}>
           {isDraft ? "Send for signing" : "Resend"}
@@ -29,7 +36,7 @@ export function SendVoidBar({ requestId, status }: { requestId: string; status: 
         <ConfirmActionDialog
           trigger={<button type="button" disabled={pending} className="btn-secondary btn-sm">Void</button>}
           title="Void signing request?"
-          description="Recipients will no longer be able to sign this request. The audit record will remain available."
+          description="Recipients will no longer be able to sign this request, and a quote it had marked as sent goes back to draft. The audit record will remain available."
           confirmLabel="Void request"
           destructive
           onConfirm={async () => { await voidRequest(requestId); router.refresh(); }}
@@ -45,6 +52,7 @@ export function RecipientControls({ recipientId, email: email0, phone: phone0, i
   const [pending, start] = useTransition();
   const [email, setEmail] = useState(email0);
   const [phone, setPhone] = useState(phone0);
+  const [msg, setMsg] = useState<string | null>(null);
   const dirty = email !== email0 || phone !== phone0;
   const inp = "h-8 rounded-md border border-input bg-card px-2 text-xs text-foreground";
 
@@ -57,8 +65,15 @@ export function RecipientControls({ recipientId, email: email0, phone: phone0, i
           onClick={() => start(async () => { await updateRecipientContact(recipientId, { email, phone }); router.refresh(); })}>Save</button>
       )}
       <button type="button" disabled={pending} className="btn-secondary btn-sm"
-        onClick={() => start(async () => { await remindRecipient(recipientId); router.refresh(); })}>Remind</button>
+        onClick={() => start(async () => {
+          // Say what happened. A reminder that reached nobody — no address on
+          // file, not their turn yet — used to look exactly like one that went.
+          const r = await remindRecipient(recipientId);
+          setMsg(r.ok ? "Reminder sent." : r.error ?? "The reminder was not sent.");
+          router.refresh();
+        })}>Remind</button>
       <Link href={inPersonHref} className="btn-secondary btn-sm">✍ Sign in person</Link>
+      {msg && <span className="text-xs text-muted-foreground">{msg}</span>}
     </div>
   );
 }

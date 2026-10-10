@@ -504,33 +504,26 @@ export async function uploadDeliveryPhotos(quoteId: string, formData: FormData) 
  * "Complete delivery" also uses — so the quote, its stock units and the
  * customer's vehicles end up the same whichever button was pressed.
  *
- * `handoverRunIds` — the guided checklist runs the customer is signing BESIDE.
- *
  * THIS IS AN EXPORTED SERVER ACTION, WHICH IS A PUBLIC POST ENDPOINT, AND ITS
- * ARGUMENTS COME FROM THE CLIENT. A stale legacy form, or a hand-made request,
- * can call this directly without going anywhere near completeGuidedDelivery; and
- * a Server Action's arguments are deserialised from the request, so a caller can
- * supply this third parameter as freely as any form field.
+ * ARGUMENTS COME FROM THE CLIENT. A stale form, or a hand-made request, can
+ * call this directly, whatever the screen was showing.
  *
- * So the guided-handover gate is enforced in deliverQuote, against the database,
- * for every caller — every id must be a COMPLETED run of THIS quote's handover
- * in the acting tenant, and a tenant with an ACTIVE quote.delivery template must
- * have one per template. A tenant with no active template is the legacy flow,
- * unchanged.
+ * So it carries nothing that matters. The guided handover's gate, the checklist
+ * runs and the customer's signature are decided in deliverQuote, against the
+ * database, for every caller — read from the delivery note the customer signed
+ * (lib/deliveryNoteSigning.ts). The runs used to be this action's third
+ * argument and the signature a field of its form; neither exists any more. What
+ * the form may add is an uploaded copy of the note and, where the customer did
+ * not sign, who handed over and the built-in ticks.
  *
- * The paperwork below (delivery note, customer signature) is STAGED by the
- * `collectEvidence` callback, which deliverQuote runs only AFTER every gate.
- * Staging uploads the blob only; the Document rows and the signature reference
- * are written inside the delivery transaction. If the delivery fails after
- * staging, each uploaded blob is deleted only when a fresh query proves no
- * Document row names it; otherwise — including a commit whose acknowledgement
- * was lost — it is kept, and the count is logged.
+ * That paperwork is STAGED by the `collectEvidence` callback, which
+ * deliverQuote runs only AFTER every gate. Staging uploads the blob only; the
+ * Document rows are written inside the delivery transaction. If the delivery
+ * fails after staging, each uploaded blob is deleted only when a fresh query
+ * proves no Document row names it; otherwise — including a commit whose
+ * acknowledgement was lost — it is kept, and the count is logged.
  */
-export async function markDelivered(
-  quoteId: string,
-  formData: FormData,
-  handoverRunIds?: readonly string[],
-): Promise<ActionResult> {
+export async function markDelivered(quoteId: string, formData: FormData): Promise<ActionResult> {
   return asFulfilmentAction(async () => {
     await requireModuleEnabled("automotive");
     const user = await requireQuoteAccess(quoteId, "deliveries.manage");
@@ -545,7 +538,6 @@ export async function markDelivered(
       quoteId,
       tenantId,
       user,
-      handoverRunIds,
       // Files are STAGED, not filed: `stage` uploads the blob only. deliverQuote
       // creates the Document rows inside the delivery transaction and deletes
       // these blobs if the delivery fails, so a refused delivery keeps nothing.
@@ -560,29 +552,16 @@ export async function markDelivered(
           });
         }
 
+        // Used only where the customer did not sign (a delivery confirmed without
+        // a signature, which has always been allowed where no guided handover is
+        // set up). With a signed note, deliverQuote reads both from the note.
         const deliveredByName = String(formData.get("deliveredByName") ?? "").trim() || null;
         let deliveryChecklist: object | undefined;
         try {
           const parsed = JSON.parse(String(formData.get("checklist") ?? ""));
           if (parsed && typeof parsed === "object") deliveryChecklist = parsed;
         } catch {}
-        let deliverySignatureRef: string | null = null;
-        const signature = String(formData.get("signature") ?? "");
-        if (signature.startsWith("data:image/png;base64,")) {
-          const buffer = Buffer.from(signature.split(",")[1], "base64");
-          if (buffer.length > 0 && buffer.length <= MAX_FILE) {
-            // The customer's signature on THIS quote's delivery — the quote owns it,
-            // for the same reason its invoice and delivery note do.
-            deliverySignatureRef = await stage({
-              buffer,
-              originalName: `delivery-signature-Q${quote.number}.png`,
-              mimeType: "image/png",
-              fileName: `Delivery signature — Q-${quote.number}`,
-              tag: "delivery-signature",
-            });
-          }
-        }
-        return { deliveredByName, deliveryChecklist, deliverySignatureRef };
+        return { deliveredByName, deliveryChecklist };
       },
     });
   });

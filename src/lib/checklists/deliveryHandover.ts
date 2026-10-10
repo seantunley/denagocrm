@@ -56,8 +56,8 @@ export type HandoverCandidateRun = {
  *
  * Asking once and carrying the ids through the review, the signature and the
  * write is what makes "the note they signed" a fact rather than a re-derivation.
- * The server still re-verifies the ids it is handed — see completeGuidedDelivery
- * — because they travel via the browser.
+ * The server still re-verifies the ids it is handed — see reviewedHandoverRuns
+ * (lib/deliveryNoteSigning.ts) — because they travel via the browser.
  *
  * Sorted here rather than relying on the caller's `orderBy`, so the two callers
  * cannot disagree by fetching in different orders.
@@ -99,8 +99,9 @@ export type DeliveryNoteRun = {
  * changed after it was signed. Per-entry snapshots froze the template's WORDING;
  * nothing froze WHICH RUN.
  *
- * `signedRunIds` is recorded by completeGuidedDelivery at the moment of signing.
- * Where it exists it is the whole answer, and a newer run cannot displace it.
+ * `signedRunIds` are the runs frozen into the delivery note the customer signed,
+ * recorded with the delivery (lib/quoteDelivery.ts). Where they exist they are
+ * the whole answer, and a newer run cannot displace them.
  *
  * Empty means either a delivery completed before those ids existed, or a note
  * that has not been signed yet. Both keep the previous selection: the first

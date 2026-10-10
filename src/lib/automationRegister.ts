@@ -245,11 +245,11 @@ export const AUTOMATIONS: Automation[] = [
   {
     key: "signing-housekeeping",
     label: "Signing housekeeping",
-    does: "Finishes signing work that was interrupted (seals, records, retries) and releases stuck claims. Sends what the signing request itself sends — see Next signer and Signed copies.",
+    does: "Finishes signing work that was interrupted (seals, records, retries) and releases stuck claims. Closes a signing request once its quote's valid-until date has passed — the link stops working then, and the quote shows it as expired so it can be sent again. Sends what the signing request itself sends — see Next signer and Signed copies.",
     reaches: "nobody",
     when: "Every 30 minutes",
     cron: "/api/cron/automations",
-    phases: ["stale-signing-claims"],
+    phases: ["stale-signing-claims", "expired-signing-links"],
   },
   {
     key: "lead-sync",

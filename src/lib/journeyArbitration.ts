@@ -20,22 +20,26 @@ import { activeTenantPredicate } from "./tenantPredicate";
  * None of these is exotic: an event burst on one lead is the ordinary case, and
  * `processJourneyEvents` walks a batch with no gap between the reads.
  *
- * ── Why this cannot use `prisma.$transaction` ────────────────────────────────
+ * ── Why this uses `basePrisma.$transaction` ──────────────────────────────────
  *
- * The exported `prisma` client wraps every model op in its OWN array
- * transaction (`withRlsScope` → `client.$transaction([setGuc, op])`) against the
- * TOP-LEVEL client, not against whatever `tx` handle it is called on. So inside
- * `prisma.$transaction(async (tx) => …)`, `tx.journeyRun.findMany()` escapes to
- * a different pooled connection — see the note in lib/db.ts, which records this
- * as a defect already fixed once. An advisory lock taken on the callback's
- * connection would guard nothing, and the reads would sit outside the
+ * When this was written it could not use `prisma.$transaction` at all. The
+ * exported `prisma` client wrapped every model op in its OWN array transaction
+ * against the TOP-LEVEL client, not against whatever `tx` handle it was called
+ * on, so inside `prisma.$transaction(async (tx) => …)` a `tx.journeyRun.findMany()`
+ * escaped to a different pooled connection. An advisory lock taken on the
+ * callback's connection guarded nothing, and the reads sat outside the
  * transaction entirely.
  *
- * `basePrisma.$transaction(async (tx) => …)` runs the callback on the RAW `tx`
- * with bypass set once at the top, so the lock and the statements genuinely
- * share one connection. The price is that the RLS extension is bypassed, which
- * is why every query below carries `activeTenantPredicate()` explicitly. That
- * is the same trade lib/trash.ts and lib/permissions.ts already make.
+ * That was true of every transaction on the scoped client, not only this one,
+ * and it is fixed where it was: lib/db.ts, Layer 2c, proved by
+ * scripts/test-scoped-transactions.ts. A scoped transaction is a real one now.
+ *
+ * This stays where it is all the same. `basePrisma.$transaction(async (tx) => …)`
+ * runs the callback on the RAW `tx` with bypass set once at the top; the price
+ * is that nothing scopes the statements, which is why every query below carries
+ * `activeTenantPredicate()` explicitly — the trade lib/trash.ts and
+ * lib/permissions.ts already make. It is proven as written, and moving it would
+ * buy nothing.
  */
 
 /**

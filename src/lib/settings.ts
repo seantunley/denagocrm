@@ -354,16 +354,16 @@ export async function putTenantCredentialBundle(
 ): Promise<void> {
   const rows = Object.entries(entries).filter(([, value]) => value !== "");
   if (rows.length === 0) return;
-  await basePrisma.$transaction(
-    rows.map(([key, value]) => {
+  await basePrisma.$transaction(async (tx) => {
+    for (const [key, value] of rows) {
       const stored = storedSettingValue(key, value);
-      return basePrisma.tenantIntegrationCredential.upsert({
+      await tx.tenantIntegrationCredential.upsert({
         where: { tenantId_key: { tenantId, key } },
         update: { value: stored },
         create: { tenantId, key, value: stored },
       });
-    }),
-  );
+    }
+  });
 }
 
 /**

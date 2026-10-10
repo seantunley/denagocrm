@@ -28,6 +28,9 @@ import {
   assertTestDriveCustomerAccess,
   requireTestDriveManageAccess,
 } from "@/lib/testDriveAccess";
+import { recordIndemnityWithdrawn, withdrawOpenIndemnity } from "@/lib/testDriveIndemnity";
+import { staffActor } from "@/lib/signing/events";
+import { TEST_DRIVE_INDEMNITY } from "@/lib/signing/subject";
 
 const text = (formData: FormData, key: string) => {
   const value = String(formData.get(key) ?? "").trim();
@@ -98,6 +101,21 @@ async function auditBooking(args: {
     before: args.before,
     after: args.after,
   });
+}
+
+/**
+ * The evidence entries for an indemnity that was open when its test drive was
+ * called off (withdrawOpenIndemnity closed it in the same transaction). After
+ * the commit, and never able to fail the cancellation it follows.
+ */
+async function indemnityWithdrawn(
+  requestIds: string[],
+  user: { name: string },
+  booking: { tenantId: string | null },
+  reason: string,
+) {
+  if (requestIds.length === 0) return;
+  await recordIndemnityWithdrawn(requestIds, await staffActor(user.name, booking.tenantId), reason).catch(() => {});
 }
 
 async function assertDemoVehicleAvailable(args: {
@@ -314,20 +332,37 @@ export async function saveDriverControls(id: string, formData: FormData) {
     const user = await requireTestDriveManageAccess(id);
     const before = await requireBooking(id);
     if (!["booked", "confirmed"].includes(before.status)) throw new ActionRefusal("Driver controls are locked after check-out");
-    const indemnityStatus = requiredText(formData, "indemnityStatus", "Indemnity status");
-    if (!["pending", "signed", "waived", "not_required"].includes(indemnityStatus)) throw new ActionRefusal("Invalid indemnity status");
+    // Absent when the indemnity was signed on a screen: that select is disabled,
+    // and a disabled field posts nothing.
+    const postedIndemnity = text(formData, "indemnityStatus");
+    if (postedIndemnity && !["pending", "signed", "waived", "not_required"].includes(postedIndemnity)) throw new ActionRefusal("Invalid indemnity status");
     const verified = formData.get("identityVerified") === "on";
-    const updated = await prisma.testDriveBooking.update({
-      where: { id },
-      data: {
-        driverLicenceNumber: text(formData, "driverLicenceNumber"),
-        driverLicenceExpiry: optionalDate(text(formData, "driverLicenceExpiry"), "Licence expiry"),
-        identityVerifiedAt: verified ? before.identityVerifiedAt ?? new Date() : null,
-        identityVerifiedById: verified ? user.id : null,
-        indemnityStatus,
-        emergencyContactName: text(formData, "emergencyContactName"),
-        emergencyContactPhone: text(formData, "emergencyContactPhone"),
-      },
+    const updated = await prisma.$transaction(async (tx) => {
+      // A SIGNED INDEMNITY ON FILE IS THE STATUS. This form posts whatever its
+      // dropdown showed when the page was rendered — so a tab opened before the
+      // driver signed would save "pending" straight over the "signed" their
+      // signature had just written, and the vehicle could not be checked out.
+      // The booking row is taken first, the lock completing an indemnity also
+      // takes first, so the answer cannot change between asking and writing.
+      await tx.$executeRaw`SELECT id FROM "TestDriveBooking" WHERE id = ${id} AND "tenantId" IS NOT DISTINCT FROM ${before.tenantId}::text FOR UPDATE`;
+      const signedOnFile = await tx.signatureRequest.findFirst({
+        where: { subjectType: TEST_DRIVE_INDEMNITY, subjectId: id, status: "completed" },
+        select: { id: true },
+      });
+      const indemnityStatus = signedOnFile ? "signed" : postedIndemnity;
+      if (!indemnityStatus) throw new ActionRefusal("Indemnity status is required");
+      return tx.testDriveBooking.update({
+        where: { id },
+        data: {
+          driverLicenceNumber: text(formData, "driverLicenceNumber"),
+          driverLicenceExpiry: optionalDate(text(formData, "driverLicenceExpiry"), "Licence expiry"),
+          identityVerifiedAt: verified ? before.identityVerifiedAt ?? new Date() : null,
+          identityVerifiedById: verified ? user.id : null,
+          indemnityStatus,
+          emergencyContactName: text(formData, "emergencyContactName"),
+          emergencyContactPhone: text(formData, "emergencyContactPhone"),
+        },
+      });
     });
     await auditBooking({ action: "test_drive.driver_controls_updated", summary: `Updated driver controls for ${updated.reference}`, user, booking: updated, before, after: updated });
     revalidatePath(`/test-drives/${id}`);
@@ -361,7 +396,7 @@ export async function checkOutTestDrive(id: string, formData: FormData) {
     if (startOdometerKm == null) throw new ActionRefusal("Start odometer is required");
     if (before.demoVehicle && startOdometerKm < before.demoVehicle.odometerKm) throw new ActionRefusal("Start odometer cannot be lower than the demo vehicle odometer");
 
-    const updated = await prisma.$transaction(async (tx) => {
+    const { updated, withdrawn } = await prisma.$transaction(async (tx) => {
       const result = await tx.testDriveBooking.update({
         where: { id },
         data: {
@@ -378,8 +413,11 @@ export async function checkOutTestDrive(id: string, formData: FormData) {
         where: { id: before.demoVehicleId! },
         data: { odometerKm: startOdometerKm, batteryLevelPct: startBatteryPct },
       });
-      return result;
+      // The vehicle has gone out on an indemnity recorded by hand (signed on
+      // paper, or waived): one left open on a screen is not signed afterwards.
+      return { updated: result, withdrawn: await withdrawOpenIndemnity(tx, result) };
     });
+    await indemnityWithdrawn(withdrawn, user, updated, "The vehicle was checked out on an indemnity recorded by hand");
     await auditBooking({ action: "test_drive.checked_out", summary: `Checked out ${updated.reference}`, user, booking: updated, before, after: updated });
     revalidatePath("/test-drives");
     revalidatePath("/test-drives/demo-fleet");
@@ -451,11 +489,13 @@ export async function cancelTestDrive(id: string, formData: FormData) {
     const before = await requireBooking(id);
     if (!["booked", "confirmed"].includes(before.status)) throw new ActionRefusal("Only an upcoming test drive can be cancelled");
     const reason = requiredText(formData, "reason", "Cancellation reason");
-    const updated = await prisma.$transaction(async (tx) => {
+    const { updated, withdrawn } = await prisma.$transaction(async (tx) => {
       const result = await tx.testDriveBooking.update({ where: { id }, data: { status: "cancelled", cancellationReason: reason } });
       if (before.activityId) await tx.activity.update({ where: { id: before.activityId }, data: { status: "canceled" } });
-      return result;
+      // Nobody signs an indemnity for a drive that is not happening.
+      return { updated: result, withdrawn: await withdrawOpenIndemnity(tx, result) };
     });
+    await indemnityWithdrawn(withdrawn, user, updated, "Test drive cancelled");
     await auditBooking({ action: "test_drive.cancelled", summary: `Cancelled ${updated.reference}`, user, booking: updated, before, after: updated });
     revalidatePath("/test-drives");
     revalidatePath(`/test-drives/${id}`);
@@ -469,11 +509,12 @@ export async function markTestDriveNoShow(id: string, formData: FormData) {
     const before = await requireBooking(id);
     if (!["booked", "confirmed"].includes(before.status)) throw new ActionRefusal("Only an upcoming test drive can be marked no-show");
     const reason = text(formData, "reason");
-    const updated = await prisma.$transaction(async (tx) => {
+    const { updated, withdrawn } = await prisma.$transaction(async (tx) => {
       const result = await tx.testDriveBooking.update({ where: { id }, data: { status: "no_show", noShowReason: reason } });
       if (before.activityId) await tx.activity.update({ where: { id: before.activityId }, data: { status: "canceled" } });
-      return result;
+      return { updated: result, withdrawn: await withdrawOpenIndemnity(tx, result) };
     });
+    await indemnityWithdrawn(withdrawn, user, updated, "Customer did not arrive");
     await auditBooking({ action: "test_drive.no_show", summary: `Marked ${updated.reference} as no-show`, user, booking: updated, before, after: updated });
     revalidatePath("/test-drives");
     revalidatePath(`/test-drives/${id}`);

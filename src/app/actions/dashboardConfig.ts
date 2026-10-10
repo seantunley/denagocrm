@@ -349,11 +349,11 @@ export async function reorderDashboards(slugs: unknown): Promise<ActionResult> {
     // One transaction, so a failure halfway does not leave the switcher in an
     // order the user never chose. Bounded by dashboardsPerUser, so this is at
     // most a dozen statements.
-    await prisma.$transaction(
-      [...named, ...rest].map((slug, index) =>
-        prisma.dashboard.update({ where: { id: idBySlug.get(slug)! }, data: { sortOrder: index } }),
-      ),
-    );
+    await prisma.$transaction(async (tx) => {
+      for (const [index, slug] of [...named, ...rest].entries()) {
+        await tx.dashboard.update({ where: { id: idBySlug.get(slug)! }, data: { sortOrder: index } });
+      }
+    });
     revalidateSwitcher();
   });
 }

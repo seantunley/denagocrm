@@ -414,7 +414,8 @@ test("the send and snapshot-render paths are wired to the frozen vehicle", () =>
     const body = render.slice(render.indexOf(`function ${fn}`), render.indexOf("\n}\n", render.indexOf(`function ${fn}`)));
     assert.match(body, /liveVehicle: false/, `${fn} must not read the live product`);
   }
-  assert.match(read("src/lib/signing/complete.ts"), /bindCtx\([^)]*\{ liveVehicle: false \}\)/, "the sealed PDF must not read the live product");
+  // (Other options may follow it — the sealed PDF also takes the request's frozen context.)
+  assert.match(read("src/lib/signing/complete.ts"), /bindCtx\([^)]*\{ liveVehicle: false[,} ]/, "the sealed PDF must not read the live product");
 });
 
 test("design-time preview shows placeholders, and poisoned colours never break out", () => {
