@@ -7,7 +7,7 @@ import { redactForLog } from "./redactLog";
  * The DAX daily brief — the PURE half. No database and no `server-only`, so the
  * tests drive it directly; `daxBrief.ts` is the loader that feeds it.
  *
- * ── DETERMINISTIC, NOT AN LLM ───────────────────────────────────────────────
+ * ── DETERMINISTIC, NOT AN LLM ────────────────────────────────────────────────────
  *
  * "Six things need your attention" has to be TRUE every time it is shown. A
  * model asked to summarise the CRM can miscount, drop the customer who has been
@@ -16,7 +16,7 @@ import { redactForLog } from "./redactLog";
  * Today queue, the deliveries board's stage rule), and DAX is handed the result
  * to reason ABOUT rather than asked to produce it.
  *
- * ── THE ORDER IS SEAN'S ─────────────────────────────────────────────────────
+ * ── THE ORDER IS SEAN'S ──────────────────────────────────────────────────────
  *
  * 1 customers waiting for a reply, 2 today's meetings and test drives, 3 overdue
  * commitments, 4 hot opportunities, 5 quotes needing attention, 6 operational
@@ -24,6 +24,10 @@ import { redactForLog } from "./redactLog";
  * score because it is a policy somebody stated, and a weighted sum would let
  * three stale deals outrank one waiting customer — the exact mistake it exists
  * to prevent.
+ *
+ * Within a group the named example is the highest-value lead when values differ
+ * (so the R180k stalled deal is named, not a small one). Waiting customers are
+ * the exception: the longest wait is named, because that is the policy.
  */
 
 export type BriefTone = "red" | "orange" | "green" | "info";
@@ -149,7 +153,13 @@ export function hotReason(reasons: string[]): string | null {
 
 type Row = { leadId: string | null; name: string; detail: string; href: string; valueCents: number };
 
-/** One line per group: the count, and the top example named. */
+/**
+ * One line per group: the count, and the top example named.
+ *
+ * The named example is the highest-value row when any row has a value; otherwise
+ * the first row (the one the caller sorted to the front — longest wait for
+ * waiting customers, soonest expiry, etc.). Group order itself is never changed.
+ */
 function group(
   key: string,
   tone: BriefTone,
@@ -159,7 +169,10 @@ function group(
   listHref: string,
 ): BriefItem | null {
   if (rows.length === 0) return null;
-  const top = rows[0];
+  const hasValue = rows.some((r) => r.valueCents > 0);
+  const top = hasValue
+    ? rows.reduce((best, row) => (row.valueCents > best.valueCents ? row : best), rows[0])
+    : rows[0];
   return {
     key,
     tone,
@@ -214,6 +227,8 @@ export function buildBrief(input: BriefInput): DaxBrief {
     if (!reason || waitingIds.has(lead.id)) continue;
     hot.push({ leadId: lead.id, name: lead.name, detail: reason, href: `/leads/${lead.id}`, valueCents: lead.valueCents });
   }
+  // Highest value first so the named example in a "looks close" group is the bigger deal.
+  hot.sort((a, b) => b.valueCents - a.valueCents);
 
   // Already said by "looks close" or "expiring" — once is enough.
   const said = new Set([...hot, ...expiring].map((row) => row.leadId));
@@ -374,6 +389,7 @@ export function briefForAssistant(brief: DaxBrief) {
       // `link`, the name every lookup uses, so DAX can cite the item (assistantReply).
       link: item.href,
       ...(item.count ? { count: item.count } : {}),
+      ...(item.valueCents ? { valueCents: item.valueCents } : {}),
     })),
     ...(brief.team
       ? {
