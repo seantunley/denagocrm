@@ -40,7 +40,10 @@ export type BriefItem = {
   detail?: string;
   href: string;
   count?: number;
+  /** Total value of every lead in this group. */
   valueCents?: number;
+  /** Value of the single named example (not the group total). */
+  exampleValueCents?: number;
 };
 
 /** One salesperson in the team view. */
@@ -167,9 +170,12 @@ function group(
   rows: Row[],
   title: (n: number) => string,
   listHref: string,
+  preferValue = true,
 ): BriefItem | null {
   if (rows.length === 0) return null;
-  const hasValue = rows.some((r) => r.valueCents > 0);
+  // Waiting customers keep longest-wait-first (caller already sorted). Every
+  // other group names the highest-value lead when values differ.
+  const hasValue = preferValue && rows.some((r) => r.valueCents > 0);
   const top = hasValue
     ? rows.reduce((best, row) => (row.valueCents > best.valueCents ? row : best), rows[0])
     : rows[0];
@@ -182,7 +188,10 @@ function group(
     // One thing → straight to it. Several → the list that holds them all.
     href: rows.length === 1 ? top.href : listHref,
     count: rows.length,
+    // Group total. The named example's own value is separate so DAX doesn't
+    // treat the total as the highlighted deal.
     valueCents: rows.reduce((sum, row) => sum + row.valueCents, 0),
+    exampleValueCents: top.valueCents > 0 ? top.valueCents : undefined,
   };
 }
 
@@ -249,7 +258,7 @@ export function buildBrief(input: BriefInput): DaxBrief {
       .map((q) => ({ leadId: null, name: `Q-${q.number}`, detail: q.customer, href: "/deliveries", valueCents: 0 }));
 
   const groups = [
-    group("waiting", "red", "🔴", waiting, (n) => plural(n, "customer waiting for a reply", "customers waiting for a reply"), "/inbox"),
+    group("waiting", "red", "🔴", waiting, (n) => plural(n, "customer waiting for a reply", "customers waiting for a reply"), "/inbox", false),
     agendaItem(input, now),
     group("overdue", "orange", "🟠", overdue, (n) => plural(n, "overdue follow-up", "overdue follow-ups"), "/leads/attention"),
     group("hot", "green", "🔥", hot, (n) => (n === 1 ? "1 deal looks close" : `${n} deals look close`), "/today"),
@@ -389,7 +398,8 @@ export function briefForAssistant(brief: DaxBrief) {
       // `link`, the name every lookup uses, so DAX can cite the item (assistantReply).
       link: item.href,
       ...(item.count ? { count: item.count } : {}),
-      ...(item.valueCents ? { valueCents: item.valueCents } : {}),
+      ...(item.valueCents ? { groupValueCents: item.valueCents } : {}),
+      ...(item.exampleValueCents ? { exampleValueCents: item.exampleValueCents } : {}),
     })),
     ...(brief.team
       ? {
