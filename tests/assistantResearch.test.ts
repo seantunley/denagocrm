@@ -49,7 +49,7 @@ test("the loop runs a batch side by side, skips repeats, and stops at the total 
   const lib = code("src/lib/crmAssistant.ts");
   const loop = lib.slice(lib.indexOf("const observations: Observation[] = [];"), lib.indexOf("const [profileRaw, company]"));
   assert.ok(loop.length > 200);
-  assert.match(loop, /step < MAX_STEPS && observations\.length < MAX_LOOKUPS/);
+  assert.match(loop, /step < maxSteps && observations\.length < MAX_LOOKUPS/);
   assert.match(loop, /const next = parseSteps\(reply\.text\)/);
   assert.match(loop, /if \(seen\.has\(key\)\) continue;/, "a lookup already run isn't run again");
   assert.match(loop, /fresh\.slice\(0, MAX_LOOKUPS - observations\.length\)/);
@@ -115,4 +115,15 @@ test("running for someone without a session re-checks membership, permission and
   assert.match(helper, /if \(!\(await hasAnyPermission\(user, \.\.\.ASSISTANT_PERMISSIONS\)\)\) return null;/);
   assert.match(helper, /if \(!\(await isModuleEnabled\("automation"\)\)\) return null;/);
   assert.match(code("src/app/actions/assistant.ts"), /import \{[^}]*\bASSISTANT_PERMISSIONS\b[^}]*\} from "@\/lib\/assistantUser";/);
+});
+
+
+test("complex questions get a larger research budget; simple ones do not", async () => {
+  const { isComplexQuestion, MAX_STEPS, MAX_STEPS_COMPLEX } = await import("../src/lib/crmAssistantPlan");
+  assert.equal(isComplexQuestion("how many leads came in last month"), false);
+  assert.equal(isComplexQuestion("show me Donovan's pipeline"), false);
+  assert.equal(isComplexQuestion("why is the Jacobs deal stuck and what should I do"), true);
+  assert.equal(isComplexQuestion("compare Donovan and Kristina's pipelines and tell me who needs help"), true);
+  assert.equal(isComplexQuestion("what's going on with the stalled deals"), true);
+  assert.ok(MAX_STEPS_COMPLEX > MAX_STEPS);
 });
