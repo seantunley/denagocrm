@@ -12,7 +12,7 @@
  *   - WhatsApp declining it (the ordinary case: outside the 24-hour window) is
  *     NOT a failed fan-out — or the completion marker would be withheld and the
  *     whole thing re-driven every half hour for a message that cannot arrive —
- *     and is still visible to staff;
+ *     and is still on the customer's record for staff to see;
  *   - nobody is sent it twice, nobody with an email address is sent it here, and
  *     a workspace with no WhatsApp account sends nothing.
  *
@@ -180,7 +180,7 @@ async function main() {
   const declined = await deliver(ws, second);
   check("the attempt is made", calls.filter((c) => c.kind === "message").length === 1);
   check("it is NOT a failed fan-out — the request can still be marked complete", declined.ok && declined.sent === 0 && declined.failures.length === 0, JSON.stringify(declined));
-  check("the signer is not recorded as having their copy, so Resend can try again", (await sentAt(second.recipients[0].id)) === null);
+  check("the signer is not recorded as having their copy", (await sentAt(second.recipients[0].id)) === null);
   const refused = await basePrisma.auditLog.findMany({ where: { contactId: second.contactId }, select: { action: true, summary: true } });
   check(
     "staff can see it was not delivered, and why, on the customer",
@@ -191,7 +191,7 @@ async function main() {
   messageReply = { status: 200, json: { messages: [{ id: "wamid.RETRY" }] } };
   calls.length = 0;
   const retried = await deliver(ws, { ...second, recipients: await fresh(second.recipients) });
-  check("…and a later try, once they have been in touch, delivers it", retried.sent === 1 && (await sentAt(second.recipients[0].id)) !== null);
+  check("…and a later run of the fan-out, once they have been in touch, delivers it", retried.sent === 1 && (await sentAt(second.recipients[0].id)) !== null);
 
   console.log("\nWho is NOT sent it on WhatsApp");
   const third = await request(ws, `Quote Q-9003 ${SFX}`, [{ name: "Eve Email", email: `eve-${SFX}@example.test`, phone: "082 555 0105" }]);

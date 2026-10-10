@@ -67,6 +67,15 @@ test("WhatsApp declining the copy is not a failed fan-out", () => {
   assert.match(fanout, /where: \{ \.\.\.opts\.tenantWhere, id: \{ in: unaddressed \}, phone: \{ not: null \} \}/, "numbers are read inside the named workspace only");
 });
 
+test("a refusal is said out loud to staff, inside the workspace it happened in", () => {
+  const fanout = code("src/lib/signing/completionFanout.ts");
+  // This signer has no email address: there is no second channel, and nobody
+  // goes looking at a customer's record for a message that did not arrive.
+  assert.match(fanout, /const tenantId = currentTenantScope\(\)\?\.tenantId;\s*if \(!result\.ok && tenantId\) \{\s*await sendPushToAll\(/);
+  assert.match(fanout, /"quote_signed",\s*\{ tenantId \},/, "a push with no workspace named goes to everyone on the platform");
+  assert.match(fanout, /url: `\/signatures\/\$\{opts\.requestId\}`/, "it opens the request, where the signed PDF is");
+});
+
 test("a signed contract goes to WhatsApp as an uploaded file, never as a link of ours", () => {
   const whatsapp = code("src/lib/whatsapp.ts");
   const send = whatsapp.slice(whatsapp.indexOf("export async function sendWhatsAppDocument("), whatsapp.indexOf("async function sendInteractive("));

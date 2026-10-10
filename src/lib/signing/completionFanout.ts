@@ -3,6 +3,8 @@ import { prisma } from "@/lib/db";
 import { sendEmail } from "@/lib/email";
 import { signingRecord } from "@/lib/outboundMessageLog";
 import { isWhatsAppConfigured, sendWhatsAppDocument, waDigits } from "@/lib/whatsapp";
+import { sendPushToAll } from "@/lib/push";
+import { currentTenantScope } from "@/lib/tenantScope";
 import { signingEmailContent, signingWhatsAppText } from "./signingEmail";
 import type { SweepTenantWhere } from "./recoveryScope";
 
@@ -132,9 +134,13 @@ export async function deliverCompletionEmails(opts: {
       // document within 24 hours of the customer's last message to the business,
       // so "not delivered" is an ordinary outcome here, not a fault to retry —
       // and a failure would hold back the completion marker and re-drive the
-      // whole fan-out every half hour for a message that cannot arrive. The
-      // attempt is on the customer's timeline either way (sendWhatsAppDocument),
-      // and "Resend signed copies" tries again once they have been in touch.
+      // whole fan-out every half hour for a message that cannot arrive. A
+      // refusal is written to the customer's record and pushed to staff
+      // (copyByWhatsApp), who have to get the copy to them another way.
+      //
+      // ponytail: the Signatures hub's "copy didn't reach everyone" check and its
+      // resend button still look only at signers with an email address. Widen
+      // them to a mobile-only signer once this has run against real traffic.
       const phone = phones.get(recipient.id);
       if (phone && !recipient.completedEmailSentAt && (await copyByWhatsApp(opts, recipient, phone))) {
         sent += 1;
@@ -195,6 +201,23 @@ async function copyByWhatsApp(
       caption,
       await signingRecord(opts.requestId, { label: "Signed document copy" }),
     );
+    // Said out loud, because nothing else will: this signer has no email address,
+    // so there is no second channel to fall back on, and a refusal that only
+    // sits on their record is one nobody goes looking for. Inside the workspace
+    // the send ran in, or not at all — a push with no workspace named goes to
+    // everyone on the platform.
+    const tenantId = currentTenantScope()?.tenantId;
+    if (!result.ok && tenantId) {
+      await sendPushToAll(
+        {
+          title: "A signed copy could not be delivered",
+          body: `${recipient.name} has no email address and WhatsApp did not accept their copy of “${opts.title}”. Please get it to them another way.`.slice(0, 200),
+          url: `/signatures/${opts.requestId}`,
+        },
+        "quote_signed",
+        { tenantId },
+      ).catch(() => 0);
+    }
     return result.ok;
   } catch (err) {
     // Recipient id, not number: this reaches the server log.
