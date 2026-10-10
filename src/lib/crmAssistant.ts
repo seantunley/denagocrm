@@ -1253,10 +1253,20 @@ function refused(what: string): ToolOutput {
 async function recallDecision(user: User, raw: z.infer<typeof decisionArgs>): Promise<ToolOutput> {
   const args = decisionArgs.parse(raw);
   // Same visibility as other memory: approved notes are shared; unreviewed notes belong to their creator.
+  const words = args.query.toLowerCase().split(/\W+/).filter((w) => w.length > 2).slice(0, 6);
+  // Match on content so older decisions that contain the query are found,
+  // not only the latest 40. Fall back to recent if the query has no usable words.
   const notes = await prisma.assistantNote.findMany({
-    where: { kind: "decision", tenantId: ownedWriteTenantId(), ...visibleTo(user.id) },
+    where: {
+      kind: "decision",
+      tenantId: ownedWriteTenantId(),
+      ...visibleTo(user.id),
+      ...(words.length
+        ? { OR: words.map((w) => ({ content: { contains: w, mode: "insensitive" as const } })) }
+        : {}),
+    },
     orderBy: { createdAt: "desc" },
-    take: 40,
+    take: 200,
     select: { content: true, createdAt: true },
   });
   const parsed = notes
