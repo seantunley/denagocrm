@@ -883,6 +883,7 @@ test("every WhatsApp path that presents the access token reports how it went", (
     "sendInteractive",
     "sendWhatsAppAudioId",
     "sendWhatsAppButtons",
+    "sendWhatsAppDocument",
     "sendWhatsAppImage",
     "sendWhatsAppList",
     "sendWhatsAppText",
