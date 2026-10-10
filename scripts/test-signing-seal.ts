@@ -86,7 +86,11 @@ async function main() {
     console.log("\n== at rest");
     const value = (await storedValue(tenantA)) ?? "";
     check("the stored value is encrypted", value.startsWith("enc:v1:"), value.slice(0, 12));
-    check("the private key is not readable in the row", !/BEGIN|passphrase|p12/.test(value));
+    // Looked for by what only the PLAINTEXT can hold: its quoted JSON keys, and the secrets themselves.
+    // This used to look for the bare letters "p12". The encrypted value is thousands of random letters
+    // and digits, which spell "p12" by chance about once in fifty runs — and CI failed at random.
+    const secrets = [racers[0].passphrase, racers[0].p12.toString("base64").slice(0, 48)].filter((s) => s.length >= 16);
+    check("the private key is not readable in the row", !/"p12"|"passphrase"|BEGIN/.test(value) && !secrets.some((s) => value.includes(s)));
 
     console.log("\n== after a restart");
     __resetSealIdentityCache();
