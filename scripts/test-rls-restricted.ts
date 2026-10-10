@@ -263,6 +263,82 @@ async function main() {
     check("off-mode scoped RAW call → sees both (unchanged from today)", scopedRawOff.length === 2);
     __setTenantEnforcingForTests(true);
 
+    // (13) THE SCOPED client's INTERACTIVE TRANSACTION.
+    //
+    //      It used to be a transaction in name only: every statement on `tx` ran
+    //      in a transaction of its own, each of which set its own GUC. It is a
+    //      real one now (db.ts Layer 2c), which moves the question this suite
+    //      exists to answer: the GUC is set ONCE, as the transaction's first
+    //      statement — and if that statement landed on any other connection,
+    //      this role would see ZERO rows in every transaction in the product
+    //      (assertion 1 is that), and a superuser run would never notice.
+    //
+    //      So, under tenant A: a model read AND a raw read on `tx` must each see
+    //      exactly A's row. One row rather than zero proves the setting is on
+    //      the transaction's own connection; one rather than two proves it is
+    //      the tenant's and not the bypass. And a raw write aimed at B's row,
+    //      which no application guard stands in front of, must change nothing.
+    type TxProbe = { model: { id: string }[]; raw: { id: string }[]; theirs: number };
+    const txA: TxProbe = await runInTenantScope({ tenantId: tA, system: false }, async () =>
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (scoped as any).$transaction(async (tx: any) => ({
+        model: await tx.contact.findMany({ where: { id: { in: [cA, cB] } }, select: { id: true } }),
+        raw: await tx.$queryRawUnsafe(`SELECT "id" FROM "Contact" WHERE "id" IN ('${cA}', '${cB}')`),
+        theirs: await tx.$executeRawUnsafe(`UPDATE "Contact" SET "firstName" = 'reached' WHERE "id" = '${cB}'`),
+      })),
+    );
+    check("scoped interactive tx, tenant A → a MODEL read on tx sees only A", txA.model.length === 1 && txA.model[0].id === cA);
+    check("scoped interactive tx, tenant A → a RAW read on tx sees only A (the GUC is on the transaction's own connection)", txA.raw.length === 1 && txA.raw[0].id === cA);
+    const bAfter = await basePrisma.contact.findUnique({ where: { id: cB }, select: { firstName: true } });
+    check("scoped interactive tx, tenant A → a RAW write on tx cannot reach B's row (RLS, no app guard in front of it)", txA.theirs === 0 && bAfter?.firstName === "B");
+
+    // (14) Two tenants' transactions open at the same moment keep their own
+    //      setting: it is transaction-local, on a connection each one holds.
+    const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+    const insideTx = (tenantId: string, wait: number) =>
+      runInTenantScope({ tenantId, system: false }, async () =>
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (scoped as any).$transaction(async (tx: any) => {
+          await pause(wait);
+          return tx.$queryRawUnsafe(`SELECT "id" FROM "Contact" WHERE "id" IN ('${cA}', '${cB}')`) as Promise<{ id: string }[]>;
+        }),
+      );
+    const [bothA, bothB] = await Promise.all([insideTx(tA, 120), insideTx(tB, 40)]);
+    check(
+      "two tenants' interactive transactions at once never share the GUC (A→A only, B→B only)",
+      bothA.length === 1 && bothA[0].id === cA && bothB.length === 1 && bothB[0].id === cB,
+    );
+
+    // (15) It IS a transaction under this role too: a write on `tx` is allowed
+    //      by the policy's WITH CHECK, and a throw takes it back.
+    await runInTenantScope({ tenantId: tA, system: false }, async () =>
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (scoped as any).$transaction(async (tx: any) => {
+        const changed = await tx.contact.updateMany({ where: { id: cA }, data: { firstName: "changed" } });
+        if (changed.count !== 1) throw new Error("the tenant's own row could not be written inside its transaction");
+        throw new Error("undo");
+      }),
+    ).catch((error: Error) => {
+      if (error.message !== "undo") throw error;
+    });
+    const aAfter = await basePrisma.contact.findUnique({ where: { id: cA }, select: { firstName: true } });
+    check("scoped interactive tx over the restricted role → writes its own row, and a throw undoes it", aAfter?.firstName === "A");
+
+    // (16) A trusted system scope, and off/monitor mode, take the bypass branch
+    //      — on the transaction's connection, or FORCE RLS would return nothing.
+    const systemTx: { id: string }[] = await runInTenantScope({ tenantId: null, system: true }, async () =>
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (scoped as any).$transaction((tx: any) => tx.contact.findMany({ where: { id: { in: [cA, cB] } }, select: { id: true } })),
+    );
+    check("scoped interactive tx, system scope → sees BOTH (bypass set on the transaction's connection)", systemTx.length === 2);
+    __setTenantEnforcingForTests(false);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const offTx: { id: string }[] = await (scoped as any).$transaction((tx: any) =>
+      tx.$queryRawUnsafe(`SELECT "id" FROM "Contact" WHERE "id" IN ('${cA}', '${cB}')`),
+    );
+    check("off-mode scoped interactive tx → a raw read on tx sees both under FORCE RLS (bypass path)", offTx.length === 2);
+    __setTenantEnforcingForTests(true);
+
     console.log(`\nRLS restricted-role proof: ${passed} passed, ${failed} failed.`);
     if (failed > 0) process.exit(1);
   } finally {
