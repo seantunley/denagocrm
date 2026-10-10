@@ -342,6 +342,16 @@ jobs:
       - name: Concurrency -- the platform can never be left with zero active admins
         run: npm run test:platform-admins
 
+      # With enforcement OFF, on purpose. The audit screen and its export read
+      # through the bypass client, so the workspace is in their queries only
+      # because somebody wrote it there -- and it was written behind
+      # `NOT tenantEnforcing() OR`, which is always true in every mode but one.
+      # The suites above run that one mode. This drives the real route and the
+      # real page as a member of each of two workspaces and reads what they
+      # answer with.
+      - name: Isolation -- the audit trail a person sees and exports is their workspace's, with enforcement off
+        run: npm run test:audit-workspace
+
       # A backup that quietly omits a column is worse than one that fails: one of
       # them you find out about. The exporter reads the table list from the
       # DATABASE and selects every column, so this asks the migrated schema

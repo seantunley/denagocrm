@@ -22,6 +22,7 @@
     "prisma:validate": "prisma validate --schema ./prisma",
     "verify:governance": "tsx --tsconfig tsconfig.scripts.json scripts/verify-governance.ts",
     "test:security": "tsx --tsconfig tsconfig.scripts.json scripts/test-security.ts",
+    "test:audit-workspace": "tsx --tsconfig tsconfig.harness.json scripts/test-audit-workspace.ts",
     "test:rbac": "tsx --tsconfig tsconfig.scripts.json scripts/test-rbac.ts",
     "test:integrity": "tsx --tsconfig tsconfig.scripts.json scripts/test-integrity.ts",
     "test:signing-upgrade": "tsx --tsconfig tsconfig.scripts.json scripts/test-signing-upgrade.ts",
