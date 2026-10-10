@@ -1260,10 +1260,14 @@ async function recallDecision(user: User, raw: z.infer<typeof decisionArgs>): Pr
     where: {
       kind: "decision",
       tenantId: ownedWriteTenantId(),
-      ...visibleTo(user.id),
-      ...(words.length
-        ? { OR: words.map((w) => ({ content: { contains: w, mode: "insensitive" as const } })) }
-        : {}),
+      // AND so the visibility OR and the keyword OR both apply.
+      // Spreading both at the top level would let the keyword OR overwrite visibility.
+      AND: [
+        visibleTo(user.id),
+        ...(words.length
+          ? [{ OR: words.map((w) => ({ content: { contains: w, mode: "insensitive" as const } })) }]
+          : []),
+      ],
     },
     orderBy: { createdAt: "desc" },
     take: 200,
