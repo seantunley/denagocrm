@@ -82,6 +82,82 @@ function resolveWho(who: SignerWho, opts: { customer: { name: string; email: str
   }
 }
 
+/** A step whose person the workflow leaves to whoever sends the document. */
+export type WorkflowAsk = {
+  nodeId: string;
+  /** What the step is called on the canvas, e.g. "Finance approval". */
+  label: string;
+  kind: "signer" | "approver";
+  /** The role the designer had in mind, when they named one. */
+  hint: string | null;
+};
+
+/** Who the sender put in a step: one of the team, or somebody outside it. */
+export type ChosenPerson = { userId: string } | { name: string; email: string };
+
+type People = { customer: { name: string; email: string | null }; staff?: Record<string, { name: string; email: string | null }> };
+
+/**
+ * Every step on THIS record's path that still has nobody in it.
+ *
+ * "Choose at send", a role and an unfilled email were all drawable, and none of
+ * them was ever asked for: the document went out to a recipient called "To be
+ * chosen" with no address, or parked on an approval nobody could be emailed.
+ *
+ * Walked the way the runtime walks it — conditions already decided, since the
+ * record's figures are frozen when it is sent — and down BOTH edges of an
+ * approval, because the "rejected" branch can end in a step that needs a person
+ * too, and finding that out after a rejection is finding it out too late.
+ */
+export function workflowAsks(graph: WorkflowGraph, opts: People & { vars: WorkflowContext }): WorkflowAsk[] {
+  const staff = opts.staff ?? {};
+  const asks: WorkflowAsk[] = [];
+  const seen = new Set<string>();
+  const queue: Array<string | undefined> = [graph.start];
+  while (queue.length > 0 && seen.size < 200) {
+    const id = queue.shift();
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    const node = graph.nodes[id];
+    if (!node || node.type === "end") continue;
+    if (node.type === "start") { queue.push(node.next); continue; }
+    if (node.type === "condition") { queue.push(evalCondition(node, opts.vars) ? node.whenTrue : node.whenFalse); continue; }
+
+    // The same answer compileWorkflow gets: a member of staff who is still on
+    // the team, the owner and the customer need nobody named; a role, a blank
+    // email, "choose at send" and someone who has since left all do.
+    if (resolveWho(node.who, { customer: opts.customer, staff }).needsInput) {
+      asks.push({
+        nodeId: node.id,
+        label: node.label || (node.type === "approval" ? "Approval" : "Signer"),
+        kind: node.type === "approval" ? "approver" : "signer",
+        hint: node.who.mode === "role" ? node.who.role ?? null : null,
+      });
+    }
+    if (node.type === "approval") queue.push(node.whenApproved, node.whenRejected);
+    else queue.push(node.next);
+  }
+  return asks;
+}
+
+/**
+ * The graph with the sender's choices written into the steps they were asked
+ * about. Returns a copy: the saved workflow is a design, and one send's people
+ * must not become everybody's.
+ */
+export function applyChosen(graph: WorkflowGraph, chosen: Record<string, ChosenPerson>): WorkflowGraph {
+  const nodes = { ...graph.nodes };
+  for (const [nodeId, person] of Object.entries(chosen)) {
+    const node = nodes[nodeId];
+    if (!node || (node.type !== "signer" && node.type !== "approval")) continue;
+    const who: SignerWho = "userId" in person
+      ? { mode: "staff", userId: person.userId }
+      : { mode: "email", name: person.name, email: person.email };
+    nodes[nodeId] = { ...node, who };
+  }
+  return { ...graph, nodes };
+}
+
 export function compileWorkflow(
   graph: WorkflowGraph,
   opts: { vars: WorkflowContext; customer: { name: string; email: string | null }; staff?: Record<string, { name: string; email: string | null }> }

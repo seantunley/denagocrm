@@ -376,6 +376,16 @@ jobs:
       - name: Concurrency -- a checklist revision cannot disagree with its template
         run: npm run test:checklist-concurrency
 
+      # A workflow rule on "Discount %" read a literal 0 and never fired, a step
+      # left for the sender to fill was never asked for, and an approver was told
+      # at the next cron run. The unit tests run the arithmetic; only the real
+      # send path and the real queue show that a discounted quote takes the
+      # approval branch, that an empty step stops the send, and that the email is
+      # attempted the moment the approval is raised -- including the one a queued
+      # job raises for the next approver.
+      - name: Signing -- a workflow's rules fire, its approvers are told at once
+        run: npm run test:signing-workflows
+
       # Two tenants, one shared phone number, one receipt. The structural tests can
       # assert that every query names a tenant; only a real database can show the
       # boundary holds. A phone number is not unique across tenants, which is what

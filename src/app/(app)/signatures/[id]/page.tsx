@@ -1,7 +1,9 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { requireAnyPermission } from "@/lib/permissions";
+import { hasPermission, requireAnyPermission } from "@/lib/permissions";
 import { prisma } from "@/lib/db";
+import { listTenantStaff } from "@/lib/tenantActor";
+import { reassignApprovalTo, resendApprovalLink } from "@/app/actions/signhub";
 import { contactName, formatDate, formatDateTime } from "@/lib/format";
 import { canAccessSignatureRequest } from "@/lib/signing/access";
 import { SendVoidBar, RecipientControls } from "./SigningClient";
@@ -97,6 +99,11 @@ export default async function SignatureDetail({ params }: { params: Promise<{ id
     if (typeof name === "string" && event.recipientId) witnessOf.set(event.recipientId, name);
   }
   const rejection = req.status === "rejected" ? [...req.approvals].reverse().find((step) => step.status === "rejected") : undefined;
+  // Who may send an approval again or hand it to someone else, and to whom.
+  // Only asked for when there is a waiting approval to act on.
+  const hasWaitingApproval = !closed && req.approvals.some((step) => step.status === "pending");
+  const canReassign = hasWaitingApproval && (await hasPermission(user, "signing.manage"));
+  const staff = canReassign ? await listTenantStaff() : [];
 
   // ── Gap audit #32: the two states that used to look fine and weren't ──
   // 1. Everyone signed, but the quote/job card changed after sending, so the
@@ -215,13 +222,33 @@ export default async function SignatureDetail({ params }: { params: Promise<{ id
               <li key={step.id} className="flex flex-wrap items-start justify-between gap-2 rounded-lg border border-border/60 p-3">
                 <div className="min-w-0">
                   <span className="text-sm font-medium text-foreground">{step.label}</span>
-                  <span className="ml-2 text-[11px] text-muted-foreground">{step.assigneeName ?? step.assigneeRole ?? "Owner"}</span>
+                  <span className="ml-2 text-[11px] text-muted-foreground">{step.assigneeName ?? step.assigneeRole ?? (step.assigneeType === "owner" ? "Owner" : "A member of the team")}</span>
                   {step.reason?.trim() && <div className="mt-1 text-[11px] text-muted-foreground">“{step.reason.trim()}”</div>}
                 </div>
                 <span className={`text-xs font-semibold ${step.status === "approved" ? "text-emerald-300" : step.status === "rejected" ? "text-red-300" : "text-amber-300"}`}>
                   {step.status === "pending" ? "waiting" : step.status}
                   {step.decidedAt ? ` · ${formatDateTime(step.decidedAt)}` : ""}
                 </span>
+                {/* A waiting approval used to be a dead end for everyone but the
+                    approver: the email went once, and nobody could send it again
+                    or give the decision to someone who was actually in. */}
+                {step.status === "pending" && canReassign && (
+                  <div className="flex w-full flex-wrap items-center gap-2 border-t border-border/40 pt-2">
+                    <SaveForm action={resendApprovalLink.bind(null, step.id)}>
+                      <SaveButton className="btn-secondary btn-sm" pendingLabel="Sending…">Send again</SaveButton>
+                    </SaveForm>
+                    <SaveForm action={reassignApprovalTo.bind(null, step.id)} className="flex flex-wrap items-center gap-2">
+                      <select name="userId" required defaultValue="" aria-label={`Reassign ${step.label} to`} className="rounded-md border border-input bg-card px-2 py-1.5 text-xs text-foreground">
+                        <option value="" disabled>Reassign to…</option>
+                        {staff.filter((person) => person.id !== step.assigneeUserId).map((person) => (
+                          <option key={person.id} value={person.id}>{person.name}</option>
+                        ))}
+                      </select>
+                      <SaveButton className="btn-secondary btn-sm" pendingLabel="Reassigning…">Reassign</SaveButton>
+                    </SaveForm>
+                    <span className="text-[11px] text-muted-foreground">Reassigning replaces the link already sent.</span>
+                  </div>
+                )}
               </li>
             ))}
           </ul>

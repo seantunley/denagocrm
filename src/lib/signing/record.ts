@@ -1,6 +1,7 @@
 import "server-only";
 import { prisma } from "@/lib/db";
 import { isRequestClosed } from "./status";
+import type { WorkflowAsk } from "@/lib/signflow/compile";
 
 /**
  * The signing state shown on a quote / job-card page. We surface the most recent
@@ -95,7 +96,12 @@ export type QuoteSigningView = {
   dealerSignedAt: Date | null;
   dealerSignedByName: string | null;
   hasSavedSignature: boolean;
-  workflows: { id: string; name: string }[];
+  /** Each with the steps on THIS quote's path that the sender has to put a person in. */
+  workflows: { id: string; name: string; asks: WorkflowAsk[] }[];
+  /** The team, for filling those steps. Empty when no workflow has one. */
+  staff: { id: string; name: string }[];
+  /** The workflow the card starts on (Settings → Signing workflows), or null for the built-in flow. */
+  defaultWorkflowId: string | null;
   state: RecordSigningState;
 };
 

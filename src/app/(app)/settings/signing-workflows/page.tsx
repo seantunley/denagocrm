@@ -6,6 +6,9 @@ import { parseGraph } from "@/lib/signflow/model";
 import { formatDateTime } from "@/lib/format";
 import { SettingsWorkspace } from "@/components/settings-workspace";
 import { SETTINGS_NAV_GROUPS } from "@/lib/settings-navigation";
+import { SaveForm, SaveButton } from "@/components/SaveForm";
+import { setDefaultSignWorkflow } from "@/app/actions/signflowDefault";
+import { defaultSignWorkflowId } from "@/lib/signflow/defaultWorkflow";
 
 export const dynamic = "force-dynamic";
 
@@ -19,6 +22,8 @@ function signerCount(graph: unknown): number {
 export default async function SigningWorkflowsPage() {
   await requireTenantOwner();
   const workflows = await prisma.signWorkflow.findMany({ where: { isArchived: false }, orderBy: { updatedAt: "desc" } });
+  const defaultId = await defaultSignWorkflowId();
+  const defaultWorkflow = workflows.find((w) => w.id === defaultId) ?? null;
 
   return (
     <SettingsWorkspace
@@ -36,16 +41,35 @@ export default async function SigningWorkflowsPage() {
         <button className="btn-primary">＋ Create</button>
       </form>
 
+      {/* Which workflow a quote starts on. Until this existed one had to be
+          picked by hand on every send, so a rule held only while everyone
+          remembered to pick it. */}
+      {workflows.length > 0 && (
+        <p className="text-sm text-slate-400">
+          {defaultWorkflow
+            ? <>Every quote starts on <b className="text-foreground">{defaultWorkflow.name}</b>. Whoever sends it can still choose another, or the built-in flow.</>
+            : <>No default: a quote is sent the built-in way — as its layout is drawn — unless a workflow is chosen when sending. Use <b className="text-foreground">Make default</b> to have every quote start on one.</>}
+        </p>
+      )}
+
       <div className="space-y-2">
         {workflows.length === 0 && <p className="text-sm text-slate-500">No workflows yet — create one above.</p>}
         {workflows.map((w) => (
-          <Link key={w.id} href={`/signing-workflows/${w.id}`} className="card flex items-center justify-between hover:border-blue-500/40">
-            <div>
-              <div className="font-medium">{w.name}</div>
+          <div key={w.id} className="card flex flex-wrap items-center justify-between gap-3 hover:border-blue-500/40">
+            <Link href={`/signing-workflows/${w.id}`} className="min-w-0 flex-1">
+              <div className="font-medium">
+                {w.name}
+                {w.id === defaultWorkflow?.id && <span className="ml-2 rounded-full bg-emerald-500/15 px-2 py-0.5 text-[11px] font-semibold text-emerald-300">Default for quotes</span>}
+              </div>
               <div className="text-xs text-slate-400">{signerCount(w.graphJson)} signer step(s) · updated {formatDateTime(w.updatedAt)}</div>
-            </div>
-            <span className="text-sm text-blue-400">Open →</span>
-          </Link>
+            </Link>
+            <SaveForm action={setDefaultSignWorkflow.bind(null, w.id === defaultWorkflow?.id ? "" : w.id)}>
+              <SaveButton className="btn-secondary btn-sm" pendingLabel="Saving…">
+                {w.id === defaultWorkflow?.id ? "Stop using as default" : "Make default"}
+              </SaveButton>
+            </SaveForm>
+            <Link href={`/signing-workflows/${w.id}`} className="text-sm text-blue-400">Open →</Link>
+          </div>
         ))}
       </div>
     </SettingsWorkspace>

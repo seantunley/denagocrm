@@ -6,7 +6,8 @@ import { requirePermission, requireAnyPermission } from "@/lib/permissions";
 import { logAudit } from "@/lib/audit";
 import { dispatchRequest, notifyRecipient, sendToRecipient } from "@/lib/signing/dispatch";
 import { logSignEvent, staffActor } from "@/lib/signing/events";
-import { approveStep, rejectStep, canActOnStep } from "@/lib/signing/approvals";
+import { approveStep, rejectStep, canActOnStep, resendApproval, reassignApproval } from "@/lib/signing/approvals";
+import { resolveTenantMemberUser } from "@/lib/tenantActor";
 import { isRequestClosed } from "@/lib/signing/status";
 import { voidOpenRequest } from "@/lib/signing/void";
 import { nextSigner } from "@/lib/signing/nextSigner";
@@ -39,6 +40,68 @@ export async function decideApproval(stepId: string, decision: "approve" | "reje
     revalidatePath("/signatures");
     revalidatePath(`/signatures/${step.requestId}`);
     return res;
+  });
+}
+
+/**
+ * The request an approval step belongs to, for someone who may manage it.
+ *
+ * Addressed by STEP id, so the record is one hop away — the same hop
+ * remindRecipient has to make. Null for "no such step" and "not yours" alike.
+ */
+async function manageableApproval(stepId: string) {
+  const step = await prisma.approvalStep.findUnique({ where: { id: stepId }, select: { id: true, requestId: true, label: true } });
+  if (!step) return null;
+  const access = await resolveSignatureRequestAccess(() =>
+    prisma.signatureRequest.findUnique({ where: { id: step.requestId }, select: { id: true, title: true, tenantId: true, deletedAt: true, ...REQUEST_BINDING_SELECT } }),
+  );
+  if (!access || access.request.deletedAt) return null;
+  return { step, user: access.user, request: access.request };
+}
+
+/** Send a waiting approver their link again. */
+export async function resendApprovalLink(stepId: string) {
+  return asActionResult(async () => {
+    const found = await manageableApproval(stepId);
+    if (!found) refuse("That approval is no longer there — refresh the page.");
+    const { step, user, request } = found;
+    const sent = await resendApproval(step.id, await staffActor(user.name, request.tenantId));
+    if (!sent.ok) refuse(sent.error ?? "The email could not be sent.");
+    await logAudit({
+      action: "signing.approval_resent",
+      summary: `Sent the approval link for “${request.title}” (${step.label}) again to ${sent.to}`,
+      entityType: "SignatureRequest",
+      entityId: request.id,
+      user,
+    });
+    revalidatePath(`/signatures/${request.id}`);
+    return { success: `Sent again to ${sent.to}` };
+  });
+}
+
+/** Hand a waiting approval to another member of staff; their link replaces the old one. */
+export async function reassignApprovalTo(stepId: string, form: FormData) {
+  return asActionResult(async () => {
+    const found = await manageableApproval(stepId);
+    if (!found) refuse("That approval is no longer there — refresh the page.");
+    const { step, user, request } = found;
+    // An active member of THIS workspace, looked up here — never whatever id the
+    // form carried.
+    const userId = String(form.get("userId") ?? "").trim();
+    const to = userId ? await resolveTenantMemberUser(userId) : null;
+    if (!to) refuse("Choose someone on your team.");
+    const moved = await reassignApproval(step.id, to, await staffActor(user.name, request.tenantId));
+    revalidatePath(`/signatures/${request.id}`);
+    revalidatePath("/signatures");
+    if (!moved.ok) refuse(moved.error ?? "The approval could not be reassigned.");
+    await logAudit({
+      action: "signing.approval_reassigned",
+      summary: `Reassigned the approval for “${request.title}” (${step.label}) to ${to.name}`,
+      entityType: "SignatureRequest",
+      entityId: request.id,
+      user,
+    });
+    return { success: `${to.name} has been sent the approval` };
   });
 }
 

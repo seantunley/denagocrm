@@ -1,7 +1,7 @@
 import "server-only";
 import { prisma } from "@/lib/db";
 import { isModuleEnabled } from "@/lib/modules/enabled";
-import { payableTotalCents } from "@/lib/pricing";
+import { payableTotalCents, quoteDiscountPct } from "@/lib/pricing";
 import { contactName } from "@/lib/format";
 import { listTenantStaff } from "@/lib/tenantActor";
 import { getLiveBuilderTemplate } from "@/lib/docbuilder/store";
@@ -19,8 +19,12 @@ import {
 } from "@/lib/doceditor/factory";
 import { parseGraph, type WorkflowGraph } from "@/lib/signflow/model";
 import {
+  applyChosen,
   compileWorkflow,
+  workflowAsks,
+  type ChosenPerson,
   type ResolvedSigner,
+  type WorkflowAsk,
   type WorkflowContext,
 } from "@/lib/signflow/compile";
 import {
@@ -385,7 +389,10 @@ async function quoteWorkflowContext(
     "retail";
   const product =
     quote?.lead?.product?.name ?? quote?.items?.[0]?.description ?? "";
-  return { total, discount: 0, segment, product };
+  // This was a literal 0, so a "Discount % > 10 → manager approves" rule could
+  // be drawn, saved and trusted, and never once fired.
+  const discount = quote ? quoteDiscountPct(quote.items) : 0;
+  return { total, discount, segment, product };
 }
 
 async function staffMap(): Promise<
@@ -439,13 +446,37 @@ function makeWorkflowSignable(
   return doc;
 }
 
+/**
+ * For each saved workflow, the steps on THIS quote's path that the sender still
+ * has to put a person in — what the send card asks for before it will prepare
+ * anything. Compiled against the quote as it stands now, exactly as the send is.
+ */
+export async function quoteWorkflowAsks(
+  quoteId: string,
+  workflows: Array<{ id: string; graphJson: unknown }>,
+): Promise<Record<string, WorkflowAsk[]>> {
+  const asks: Record<string, WorkflowAsk[]> = {};
+  if (workflows.length === 0) return asks;
+  const [customer, vars, staff] = await Promise.all([quoteCustomer(quoteId), quoteWorkflowContext(quoteId), staffMap()]);
+  if (!customer) return asks;
+  for (const workflow of workflows) {
+    const graph = parseGraph(workflow.graphJson);
+    asks[workflow.id] = graph
+      ? workflowAsks(graph, { vars, customer: { name: customer.customerName, email: customer.customerEmail }, staff })
+      : [];
+  }
+  return asks;
+}
+
 export async function resolveEnvelope(opts: {
   quoteId?: string | null;
   jobCardId?: string | null;
   templateId?: string | null;
   workflowId?: string | null;
+  /** Who the sender put in the steps the workflow left open, by node id. */
+  chosen?: Record<string, ChosenPerson> | null;
   signer?: { name: string; email: string | null } | null;
-}): Promise<EnvelopeResolution | null> {
+}): Promise<EnvelopeResolution | { missing: WorkflowAsk[] } | null> {
   const { quoteId, jobCardId, templateId } = opts;
   const customer = quoteId
     ? await quoteCustomer(quoteId)
@@ -484,15 +515,26 @@ export async function resolveEnvelope(opts: {
     const workflow = await prisma.signWorkflow.findUnique({
       where: { id: opts.workflowId },
     });
-    const graph =
+    const saved =
       workflow && !workflow.deletedAt
         ? parseGraph(workflow.graphJson)
         : null;
-    if (graph) {
+    if (saved) {
       const [vars, staff] = await Promise.all([
         quoteWorkflowContext(quoteId),
         staffMap(),
       ]);
+      // The people the sender chose go into THIS send's copy of the graph — the
+      // one compiled below and frozen on the request — never the saved design.
+      const graph = applyChosen(saved, opts.chosen ?? {});
+      const missing = workflowAsks(graph, {
+        vars,
+        customer: { name: customer.customerName, email: customer.customerEmail },
+        staff,
+      });
+      // Nothing is prepared while a step has nobody in it. It used to go out
+      // anyway, to a recipient called "To be chosen" with no address.
+      if (missing.length > 0) return { missing };
       const compiled = compileWorkflow(graph, {
         vars,
         customer: {
