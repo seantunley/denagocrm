@@ -7,6 +7,7 @@ import { useEditor } from "@/lib/doceditor/store";
 import type { DocumentModel } from "@/lib/doceditor/model";
 import { staleWordingWarnings, type WordingSettings } from "@/lib/doceditor/wordingCheck";
 import { designWarnings } from "@/lib/doceditor/designCheck";
+import { findPlaced, nudgePlaced } from "@/lib/doceditor/arrange";
 import { DesignCheckPanel } from "./DesignCheckPanel";
 import { saveDocEditor, importDocEditorTemplate } from "@/app/actions/doceditor";
 import { publishBuilderVersion } from "@/app/actions/docbuilder";
@@ -201,12 +202,32 @@ export function DocEditor({
         redo();
         return;
       }
+      // Arrow keys nudge what is placed on the page — a freely placed block, a
+      // signing field, or a selection of several — by 1px (Shift: 10). Escape lets go.
+      const nudge: Record<string, [number, number]> = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] };
+      if (!editable && nudge[event.key]) {
+        const { sel, picked, doc: current, arrange } = useEditor.getState();
+        const ids = (picked.length ? picked : [sel.blockId ?? sel.fieldId]).filter((x): x is string => !!x && !!current && !!findPlaced(current, x));
+        if (ids.length) {
+          event.preventDefault();
+          const step = event.shiftKey ? 10 : 1;
+          arrange((d) => nudgePlaced(d, ids, nudge[event.key][0] * step, nudge[event.key][1] * step));
+        }
+        return;
+      }
+      if (!editable && event.key === "Escape") {
+        useEditor.getState().select(null);
+        return;
+      }
       if (
         !editable &&
         (event.key === "Delete" || event.key === "Backspace")
       ) {
-        const { sel } = useEditor.getState();
-        if (sel.blockId) {
+        const { sel, picked, removePicked } = useEditor.getState();
+        if (picked.length) {
+          event.preventDefault();
+          removePicked();
+        } else if (sel.blockId) {
           event.preventDefault();
           remove(sel.blockId);
         } else if (sel.fieldId) {

@@ -16,6 +16,7 @@ import { sectionFromSelection } from "@/lib/doceditor/librarySection";
 import { toast } from "sonner";
 import { ShowcaseProps } from "./ShowcaseProps";
 import { DesignSection } from "./DesignSection";
+import { AlignOnPage, ArrangePanel } from "./ArrangePanel";
 import { IMAGE_ASPECT_LABELS, type ImageAspect } from "@/lib/doceditor/imageFrame";
 import { useState } from "react";
 import { uploadDocEditorImage } from "@/app/actions/doceditor";
@@ -39,6 +40,7 @@ function Section({ title, children }: { title: string; children: React.ReactNode
 export function PropertiesPanel() {
   const doc = useEditor((s) => s.doc);
   const sel = useEditor((s) => s.sel);
+  const picked = useEditor((s) => s.picked);
   if (!doc) return null;
 
   const block = sel.blockId ? getBlock(doc, sel.blockId) : null;
@@ -47,7 +49,7 @@ export function PropertiesPanel() {
 
   return (
     <div className="h-full overflow-y-auto">
-      {field ? <FieldProps field={field} /> : block ? <BlockProps block={block} floating={floating} /> : <DocumentProps />}
+      {picked.length >= 2 ? <ArrangePanel ids={picked} /> : field ? <FieldProps field={field} /> : block ? <BlockProps block={block} floating={floating} /> : <DocumentProps />}
     </div>
   );
 }
@@ -91,6 +93,7 @@ function FieldProps({ field }: { field: OverlayField }) {
         )}
       </Section>
       <Section title="Position & size">
+        <AlignOnPage id={field.id} />
         <div className="grid grid-cols-2 gap-2">
           <div><label className={lbl}>X</label><input type="number" className={inp} value={Math.round(field.anchor.x)} onChange={(e) => updateField(field.id, { anchor: { ...field.anchor, x: Number(e.target.value) } })} /></div>
           <div><label className={lbl}>Y</label><input type="number" className={inp} value={Math.round(field.anchor.y)} onChange={(e) => updateField(field.id, { anchor: { ...field.anchor, y: Number(e.target.value) } })} /></div>
@@ -170,6 +173,7 @@ function LayoutSection({ block, floating }: { block: DocumentBlock; floating: bo
       <Section title="Placement">
         <div className="mb-2 rounded-md bg-orange-50 px-2.5 py-2 text-[11px] text-orange-700">📌 Free placement — drag it anywhere on the page; drag the side handles to resize.</div>
         <FloatingPosition blockId={block.id} />
+        <AlignOnPage id={block.id} />
         {typeControls}
         <button type="button" onClick={() => dock(block.id)} className="w-full rounded-md border border-slate-300 py-1.5 text-sm text-slate-700 hover:bg-slate-50">⤵ Dock back into the flow</button>
       </Section>

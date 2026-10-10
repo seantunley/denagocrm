@@ -508,6 +508,8 @@ export const overlayFieldSchema = z.object({
   required: z.boolean().default(true),
   label: z.string().default(""),
   options: z.array(z.string()).default([]), // for dropdown/radio
+  /** Editor only: placed things sharing a groupId on a page are selected and moved as one (./arrange.ts). */
+  groupId: z.string().optional(),
 });
 export type OverlayField = z.infer<typeof overlayFieldSchema>;
 
@@ -543,6 +545,8 @@ export const floatingBlockSchema = z.object({
   y: z.number().default(48),
   width: z.number().default(280),
   block: blockSchema,
+  /** Editor only: see overlayFieldSchema.groupId. */
+  groupId: z.string().optional(),
 });
 export type FloatingBlock = z.infer<typeof floatingBlockSchema>;
 
