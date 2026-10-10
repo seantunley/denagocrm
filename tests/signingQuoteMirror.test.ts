@@ -24,8 +24,11 @@ test("only the CUSTOMER receiving or opening it counts — not an approver, view
   assert.equal((mirror.match(/isCustomerSigner\(recipient, tenantId\)/g) ?? []).length, 2);
 });
 
-test("sent: a draft only, never a signed, superseded or deleted quote — always in the request's own tenant", () => {
-  assert.match(mirror, /where: \{ id: quoteId, tenantId, status: "draft", deletedAt: null, signedAt: null, supersededAt: null \},\s*data: \{ status: "sent" \}/);
+test("sent: a draft or a declined quote, never a signed, superseded or deleted one — always in the request's own tenant", () => {
+  // Declined too (2026-10-09): a quote the customer turned down and was then
+  // sent again is out for signature. Accepted and cancelled stay untouched, and
+  // the old answer is cleared with the status so nothing reads it as current.
+  assert.match(mirror, /where: \{ id: quoteId, tenantId, status: \{ in: \["draft", "declined"\] \}, deletedAt: null, signedAt: null, supersededAt: null \},\s*data: \{ status: "sent", declinedAt: null, declineReason: null \}/);
   assert.match(mirror, /where: \{ id: quoteId, tenantId, viewedAt: null, deletedAt: null \}, data: \{ viewedAt: new Date\(\) \}/, "the FIRST open, never moved later");
   assert.match(mirror, /SELECT id FROM "Quote" WHERE id = \$\{quoteId\} AND "tenantId" = \$\{tenantId\} FOR UPDATE/);
   assert.match(mirror, /where: \{ id: requestId, tenantId, quoteId, status: \{ notIn: \[\.\.\.CLOSED_REQUEST_STATUSES\] \} \}/);
@@ -38,9 +41,11 @@ test("a void can't be undone: quote locked first (void's order), and only while 
   const check = guard.indexOf("status: { notIn: [...CLOSED_REQUEST_STATUSES] }");
   const write = guard.indexOf("if (open) await write(tx);");
   assert.ok(lock > 0 && lock < check && check < write);
-  // …the same order voiding uses: the quote, then the request.
-  const voidPath = code("src/app/actions/recordSigning.ts");
-  assert.match(voidPath, /if \(kind === "quote"\) await tx\.\$executeRaw`SELECT id FROM "Quote" WHERE id = \$\{id\} FOR UPDATE`;[\s\S]{0,200}tx\.signatureRequest\.updateMany/);
+  // …the same order voiding uses: the quote, then the request. Voiding is one
+  // shared transaction now (lib/signing/void.ts), behind both Void buttons.
+  const voidPath = code("src/lib/signing/void.ts");
+  assert.match(voidPath, /if \(quoteId\) await tx\.\$executeRaw`SELECT id FROM "Quote" WHERE id = \$\{quoteId\} AND "tenantId" = \$\{tenantId\} FOR UPDATE`;[\s\S]{0,400}tx\.signatureRequest\.updateMany/);
+  assert.match(code("src/app/actions/recordSigning.ts"), /await voidOpenRequest\(state\.requestId\)/);
 });
 
 test("it never costs the send or the open", () => {

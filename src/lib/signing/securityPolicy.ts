@@ -80,6 +80,22 @@ export function signingOtpHash(tenantId: string, recipientId: string, code: stri
     .digest("hex");
 }
 
+/**
+ * A keyed MAC under the signing secret, for a named purpose.
+ *
+ * Each purpose gets its OWN key, derived from the secret, rather than a prefix
+ * on the message. A prefix is only as separate as the other users of the secret
+ * allow: signingOtpHash signs `tenant:recipient:code` with the secret itself, so
+ * `domain:message` under the same key is the same computation whenever the
+ * strings line up. A derived key cannot line up with anything — and the NUL in
+ * the derivation label cannot occur in a tenant id, a recipient id or a code,
+ * so no OTP hash is ever a purpose key either.
+ */
+export function signingHmac(domain: string, message: string): string {
+  const key = crypto.createHmac("sha256", otpSecret()).update(`\u0000signing-purpose\u0000${domain}`).digest();
+  return crypto.createHmac("sha256", key).update(message).digest("hex");
+}
+
 export function safeEqualHex(a: string, b: string): boolean {
   if (!/^[a-f0-9]+$/i.test(a) || !/^[a-f0-9]+$/i.test(b) || a.length !== b.length) return false;
   return crypto.timingSafeEqual(Buffer.from(a, "hex"), Buffer.from(b, "hex"));

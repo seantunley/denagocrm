@@ -87,7 +87,10 @@ test("a genuine seal verifies over the bytes the PDF declares", async () => {
   assert.equal(result.contentVerified, true, result.reason ?? "");
   // The certificate is read OUT OF THE FILE, so it describes what sealed this
   // document rather than whatever is configured at validation time.
-  assert.match(result.certificate.subject, /Denago Development Seal/);
+  // …and with no certificate passed and none on the server, that is the
+  // temporary one. It used to call itself "Denago Development Seal" on every
+  // workspace's documents; it now says what it is.
+  assert.match(result.certificate.subject, /Temporary seal \(not a stored certificate\)/);
   assert.match(result.certificate.fingerprintSha256, /^[0-9a-f]{64}$/);
 });
 

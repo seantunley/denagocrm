@@ -13,6 +13,7 @@ import { computeWarranty, warrantyLabels, warrantyColors } from "@/lib/warranty"
 import { contactName, formatDate, formatDateTime, formatZAR, type Regional } from "@/lib/format";
 import { getRegionalSettings } from "@/lib/settings";
 import { payableTotalCents } from "@/lib/pricing";
+import { revealSignCapability } from "@/lib/signing/tokenVault";
 import { Button } from "@/components/ui/button";
 import { Eyebrow, MetricCard } from "@/components/visual-system";
 
@@ -126,9 +127,12 @@ export default async function PortalHome() {
           // `john_smith@…` would be handed the signing token belonging to
           // `john.smith@…` on the same quote, and could sign as them.
           recipients: {
-            where: { role: "signer", status: { notIn: ["signed", "declined"] } },
+            where: { role: "signer", status: { notIn: ["signed", "declined"] }, tokenRevokedAt: null },
             orderBy: { order: "asc" },
-            select: { token: true, email: true },
+            // The CIPHERTEXT, not `token`: that column is a digest, and a link
+            // built from it is hashed again by the signing page and matches
+            // nothing — "Review & sign" opened "page not found".
+            select: { tokenCiphertext: true, email: true },
           },
         },
       })
@@ -139,7 +143,11 @@ export default async function PortalHome() {
     if (!request.quoteId || signTokenByQuote.has(request.quoteId)) continue;
     // Exact, case-insensitive — a signing token goes to the person it names.
     const recipient = request.recipients.find((r) => r.email?.toLowerCase() === viewerEmail);
-    if (recipient) signTokenByQuote.set(request.quoteId, recipient.token);
+    // Revealed, never rotated: opening the portal must not be what kills the
+    // link already in the customer's inbox. No readable link means no button
+    // here, and that emailed link still works.
+    const link = recipient ? revealSignCapability(recipient.tokenCiphertext) : null;
+    if (link) signTokenByQuote.set(request.quoteId, link);
   }
 
   const unsignedQuotes = quotes.filter((quote) => signTokenByQuote.has(quote.id) && !quote.signedAt);

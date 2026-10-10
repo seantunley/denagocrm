@@ -1,6 +1,7 @@
 "use client";
 
-import { useState, type ReactNode } from "react";
+import { useState } from "react";
+import { useRouter } from "next/navigation";
 import type { IdentityStatus, IdentityChannel } from "@/lib/signing/identity";
 
 type Result = { ok: boolean; status?: IdentityStatus; error?: string };
@@ -16,23 +17,41 @@ type Result = { ok: boolean; status?: IdentityStatus; error?: string };
  * Only the masked hint is shown. It is enough for the signer to recognise which
  * of their own accounts is meant, and not enough for someone else holding the
  * link to learn the customer's email address or mobile number.
+ *
+ * THE DOCUMENT IS NOT IN THIS COMPONENT, and it takes no children so that it
+ * cannot be. A gate that wraps the document and chooses not to show it has
+ * already sent it: the browser holds every page before the code is asked for.
+ * The server renders this INSTEAD of the document (see page.tsx), and passing
+ * the check asks the server for the page again — which is the first moment the
+ * document leaves it.
  */
-export function IdentityGate({
-  token,
-  initial,
-  children,
-}: {
-  token: string;
-  initial: IdentityStatus;
-  children: ReactNode;
-}) {
+export function IdentityGate({ token, initial }: { token: string; initial: IdentityStatus }) {
+  const router = useRouter();
   const [status, setStatus] = useState(initial);
   const [code, setCode] = useState("");
   const [sentTo, setSentTo] = useState<IdentityChannel | null>(null);
   const [busy, setBusy] = useState(false);
+  const [opening, setOpening] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  if (!status.required || status.verified) return <>{children}</>;
+  const openDocument = () => {
+    setOpening(true);
+    router.refresh();
+  };
+
+  if (opening) {
+    return (
+      <div style={panel}>
+        <div style={heading}>Opening your document…</div>
+        <p style={{ color: "#cbd5e1", lineHeight: 1.55, margin: 0 }}>
+          {/* A refresh reports nothing back, so a signer on a dropped connection
+              is given a way forward rather than a message that never changes. */}
+          Thank you — that’s confirmed. If it doesn’t open in a few seconds,{" "}
+          <a href={`/signing/${token}`} style={{ color: "#fdba74" }}>tap here</a>.
+        </p>
+      </div>
+    );
+  }
 
   // No channel means no address AND no number on file for this signer. Offering
   // a button that cannot work would strand them on a dead end with no
@@ -60,6 +79,9 @@ export function IdentityGate({
       });
       const result = (await response.json()) as Result;
       if (!response.ok || !result.ok) throw new Error(result.error || "Could not send a verification code.");
+      // Already confirmed — in another tab, or a moment ago. No code was sent,
+      // so there is nothing to wait for.
+      if (result.status?.verified) return openDocument();
       if (result.status) setStatus(result.status);
       setSentTo(channel);
     } catch (err) {
@@ -80,7 +102,7 @@ export function IdentityGate({
       });
       const result = (await response.json()) as Result;
       if (!response.ok || !result.ok) throw new Error(result.error || "Could not verify your identity.");
-      setStatus(result.status ?? { ...status, verified: true });
+      openDocument();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not verify your identity.");
     } finally {

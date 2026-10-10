@@ -4,6 +4,7 @@ import { pruneRateLimits } from "@/lib/rateLimit";
 export const maxDuration = 60;
 import { recoverStaleSigningClaims } from "@/lib/signing/dispatch";
 import { recoverStrandedCompletions } from "@/lib/signing/recoverCompletions";
+import { expireOverdueSigningRequests } from "@/lib/signing/expiry";
 import { syncFacebookLeads } from "@/lib/metaLeadSync";
 import { syncGoogleReviews } from "@/lib/googleReviews";
 import { syncInboundEmail } from "@/lib/imapSync";
@@ -69,6 +70,15 @@ async function runOperationalQueues(tenantId: string | null, budget: CronSliceCo
   // /api/cron/journeys) — one engine for every automatic customer message, so a
   // customer can't be reminded by two.
   const staleSigningClaims = await phase("stale-signing-claims", recoverStaleSigningClaims, null);
+  // Signing links whose quote's valid-until date has passed (signing/expiry.ts).
+  // The signing routes already refuse them; this closes the request so the rest
+  // of the CRM stops treating a dead link as out for signature. Sends nothing.
+  // One concrete tenant, named — the same reasoning as the sweep below.
+  const expiredSigningLinks = await phase(
+    "expired-signing-links",
+    () => expireOverdueSigningRequests(tenantId ?? DEFAULT_TENANT_ID),
+    -1,
+  );
   // Completions that committed but never notified anyone. Runs alongside the
   // stale-claim sweep because it is the same class of problem at the other end
   // of the lifecycle: work the request can no longer re-drive by itself.
@@ -112,6 +122,7 @@ async function runOperationalQueues(tenantId: string | null, budget: CronSliceCo
   const repairs = await phase("repairs-detectors", runRepairsDetectors, null);
   return {
     staleSigningClaims,
+    expiredSigningLinks,
     strandedCompletions,
     fbLeads,
     googleReviews,

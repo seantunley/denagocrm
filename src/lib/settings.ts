@@ -46,6 +46,10 @@ const SECRET_KEYS = new Set([
   // pending device login can be completed by whoever holds it.
   "CODEX_OAUTH_TOKENS",
   "CODEX_DEVICE_LOGIN",
+  // The workspace's own PDF sealing certificate AND its private key
+  // (lib/signing/sealIdentity.ts). Whoever holds it can seal a document as this
+  // company; it is written already-encrypted and never sent to a browser.
+  "SIGNING_SEAL_IDENTITY",
 ]);
 
 const PREFIX = "enc:v1:";
@@ -350,16 +354,16 @@ export async function putTenantCredentialBundle(
 ): Promise<void> {
   const rows = Object.entries(entries).filter(([, value]) => value !== "");
   if (rows.length === 0) return;
-  await basePrisma.$transaction(
-    rows.map(([key, value]) => {
+  await basePrisma.$transaction(async (tx) => {
+    for (const [key, value] of rows) {
       const stored = storedSettingValue(key, value);
-      return basePrisma.tenantIntegrationCredential.upsert({
+      await tx.tenantIntegrationCredential.upsert({
         where: { tenantId_key: { tenantId, key } },
         update: { value: stored },
         create: { tenantId, key, value: stored },
       });
-    }),
-  );
+    }
+  });
 }
 
 /**

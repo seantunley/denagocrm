@@ -214,26 +214,124 @@ function refuseNestedRelationWrite(model: string, data: unknown): void {
  * transaction, so the GUC would have been set on a different connection from
  * the operation it is supposed to scope.
  */
-async function withRlsScope(client: any, execRaw: any, query: () => any): Promise<any> {
+/**
+ * `transaction` is the client's ORIGINAL `$transaction`, captured before
+ * Layer 2c replaces it — for the same reason `execRaw` is: Layer 2c refuses the
+ * array form to callers, and this is the one place that has to keep using it.
+ */
+async function withRlsScope(transaction: any, execRaw: any, query: () => any): Promise<any> {
   // Under enforcement with a tenant scope, pin app.current_tenant; otherwise
   // (off/monitor, system scope, or enforce+no-scope — Layer 1 scopeArgs already
   // threw TenantScopeError for any tenant-scoped model before we reach here) bypass.
   const scope = tenantEnforcing() ? currentTenantScope() : null;
   // Batch the GUC write and the operation in ONE array transaction on the SAME
-  // `client` — the documented Prisma RLS-extension pattern. `execRaw` (not a
+  // client — the documented Prisma RLS-extension pattern. `execRaw` (not a
   // model op, so it does not re-enter this extension) sets the GUC first, then
   // the guarded op runs on the same pinned connection and sees it. The
   // restricted-role (NOSUPERUSER NOBYPASSRLS) proof exercises this under FORCE RLS.
   const setGuc = scope?.tenantId
     ? execRaw`SELECT set_config('app.current_tenant', ${scope.tenantId}, TRUE)`
     : execRaw`SELECT set_config('app.bypass_rls', 'on', TRUE)`;
-  const [, result] = await client.$transaction([setGuc, query()]);
+  const [, result] = await transaction([setGuc, query()]);
   return result;
 }
 
+/**
+ * WHY THE ARRAY FORM IS REFUSED, ON BOTH CLIENTS.
+ *
+ * `$transaction([a, b])` cannot be made one transaction here. Its elements were
+ * created by this client before any transaction existed, so each still runs
+ * through the wrapper above — a transaction of its own that commits on its own
+ * — and the raw ones are not even deferred: `$executeRaw` here returns an
+ * ordinary promise that is already running by the time the array is built.
+ * Measured (scripts/test-scoped-transactions.ts, before this refusal existed):
+ * with two model updates and a failing third element, the first two stayed; and
+ * an array of raw statements ran every statement and THEN threw Prisma's "All
+ * elements of the array need to be Prisma Client promises", so the action
+ * failed after its work was done.
+ *
+ * Refusing costs the callers nothing they had: none of them was getting a
+ * transaction. The callback form is one, on both clients.
+ */
+function arrayTransactionRefused(): Error {
+  return new Error(
+    "An array passed to $transaction is not one transaction on this client — each element commits on its own. " +
+      "Pass a callback instead and run the statements on its `tx`: $transaction(async (tx) => { … }).",
+  );
+}
+
+/**
+ * WHY A TIMELINE MESSAGE CANNOT BE CREATED INSIDE A TRANSACTION.
+ *
+ * `communication.create` is hooked (Layer 1) to find or open the message's
+ * conversation and then recompute that conversation's counters, and both of
+ * those run through `basePrisma` — ANOTHER connection. That was harmless while
+ * a transaction here was not one. In a real transaction the insert on `tx`
+ * takes a key-share lock on the conversation row (its foreign key), the
+ * recompute then asks for that row FOR UPDATE from the other connection, and
+ * the transaction waits on itself until it times out. Measured: the full
+ * timeout, then "Transaction already closed", nothing saved, and an empty
+ * conversation left behind by the connection that was not rolled back.
+ *
+ * Nothing in the app does this — every one of the message writers creates on
+ * `prisma`, after its transaction if it has one — so it is refused in words
+ * rather than left to be found as a twenty-second hang.
+ *
+ * ponytail: a refusal, not support. If a change ever has to commit together
+ * with the message that records it, give conversations.ts's attach and
+ * recompute a client to run on, pass `tx`, and delete this.
+ */
+function messageInTransactionRefused(): Error {
+  return new Error(
+    "A timeline message cannot be created inside a transaction: attaching it to its conversation runs on another " +
+      "connection and would wait on this transaction's own locks. Create it with `prisma.communication.create` " +
+      "after the transaction has committed.",
+  );
+}
+
+/**
+ * A REAL interactive transaction on the scoped client.
+ *
+ * `client` is the scoped client's sibling: the same soft-delete filter and the
+ * same workspace scoping of each operation's arguments, WITHOUT the wrapper that
+ * gives every operation a transaction of its own. So an operation on `tx` stays
+ * on `tx`. Its raw methods are Prisma's own, bound to the transaction — not the
+ * replacements Layer 2b puts on the client, which open another one.
+ *
+ * The workspace setting is made ONCE, as the transaction's first statement, on
+ * the transaction's own connection — the same value `withRlsScope` would give
+ * each operation: the caller's workspace under enforcement, the bypass
+ * otherwise. `set_config(…, TRUE)` lasts until the transaction ends, so every
+ * statement after it, model or raw, runs under it. A transaction therefore
+ * belongs to the workspace it was opened in; a scope changed part-way through
+ * the callback does not move it, and row-level security refuses what no longer
+ * matches rather than letting it through.
+ */
+async function scopedTransaction(client: any, fn: (tx: any) => any, opts: unknown): Promise<any> {
+  // The miss-path recovery Layer 2 makes per operation (see there), made once
+  // for the whole transaction. It cannot widen anything: it runs only when there
+  // is NO scope, and binds the signed-in person's own workspace or nothing.
+  if (tenantEnforcing() && !currentTenantScope()) {
+    const { recoverStaffScopeFromSession } = await import("./scopeRecovery");
+    const recovered = await recoverStaffScopeFromSession();
+    if (recovered) return runInTenantScope(recovered, () => scopedTransaction(client, fn, opts));
+  }
+  const scope = tenantEnforcing() ? currentTenantScope() : null;
+  return client.$transaction(async (tx: any) => {
+    if (scope?.tenantId) {
+      await tx.$executeRaw`SELECT set_config('app.current_tenant', ${scope.tenantId}, TRUE)`;
+    } else {
+      await tx.$executeRaw`SELECT set_config('app.bypass_rls', 'on', TRUE)`;
+    }
+    return fn(tx);
+  }, opts);
+}
+
 function buildClient(raw: PrismaClient) {
-  // Layer 1: soft-delete filter + tenant scope arg manipulation (app-layer guard)
-  const guarded = raw.$extends({
+  // Layer 1: soft-delete filter + tenant scope arg manipulation (app-layer guard).
+  // In two steps — the filters, then the one hook that does work of its own — so
+  // that a transaction (Layer 2c) can have the first without the second.
+  const alive = raw.$extends({
     query: {
       $allModels: {
         async findMany({ model, args, query }: any) {
@@ -288,6 +386,10 @@ function buildClient(raw: PrismaClient) {
           return query(addAliveFilter(model, args));
         },
       },
+    },
+  });
+  const guarded = alive.$extends({
+    query: {
       communication: {
         async create({ args, query }: any) {
           // Threading and the tenant it forces on this row are ONE decision, taken in
@@ -329,7 +431,7 @@ function buildClient(raw: PrismaClient) {
   // Layer 2b replaces it. Layer 2 builds an ARRAY transaction, which accepts only
   // PrismaPromises; Layer 2b's replacement returns a plain Promise. See
   // withRlsScope for what happens when this distinction is lost.
-  const ref: { c: any; execRaw: any } = { c: null, execRaw: null };
+  const ref: { tx: any; execRaw: any } = { tx: null, execRaw: null };
   const scoped = guarded.$extends({
     query: {
       $allModels: {
@@ -362,7 +464,7 @@ function buildClient(raw: PrismaClient) {
             if (recovered) {
               return runInTenantScope(recovered, () => {
                 const scopedArgs = applyScopeArgs(model, operation, args);
-                return withRlsScope(ref.c, ref.execRaw, () => query(scopedArgs));
+                return withRlsScope(ref.tx, ref.execRaw, () => query(scopedArgs));
               });
             }
           }
@@ -370,15 +472,15 @@ function buildClient(raw: PrismaClient) {
           // Prisma's array $transaction loses AsyncLocalStorage context inside its
           // execution callbacks, so currentTenantScope() is unreachable in Layer 1.
           const scopedArgs = applyScopeArgs(model, operation, args);
-          return withRlsScope(ref.c, ref.execRaw, () => query(scopedArgs));
+          return withRlsScope(ref.tx, ref.execRaw, () => query(scopedArgs));
         },
       },
     },
   });
-  ref.c = scoped;
-  // BEFORE the loop below overwrites it. Bound, because it is read off the client
-  // here and called as a bare tagged template later.
+  // BEFORE the code below overwrites them. Bound, because they are read off the
+  // client here and called bare later.
   ref.execRaw = (scoped as any).$executeRaw.bind(scoped);
+  ref.tx = (scoped as any).$transaction.bind(scoped);
 
   // Layer 2b: THE SAME GUC, for RAW queries.
   //
@@ -426,6 +528,52 @@ function buildClient(raw: PrismaClient) {
         return tx[method](sql, ...values);
       });
   }
+
+  // Layer 2c: A TRANSACTION THAT IS ONE.
+  //
+  // `prisma.$transaction(async (tx) => …)` is how this codebase says "these
+  // changes belong together", and until this layer it was not a transaction.
+  // The `tx` Prisma handed back was still THIS client, so every model operation
+  // on it went through Layer 2 — whose batch replaces the transaction it was
+  // called in with one of its own — and every raw statement went through
+  // Layer 2b, which opens another. Each statement committed as it ran, on some
+  // other connection, while the interactive transaction sat idle and committed
+  // nothing at the end.
+  //
+  // Measured, with enforcement off and on (scripts/test-scoped-transactions.ts
+  // against the code before this layer): a throw kept every write made before
+  // it; `SELECT … FOR UPDATE` and `pg_advisory_xact_lock` on `tx` were released
+  // before the next line; and a callback that overran its timeout was reported
+  // as failed with all of its work saved.
+  //
+  // The callers were written for the real thing — lib/journeyArbitration.ts is
+  // the one place that had noticed, and worked round it. So the fix is here, in
+  // one place: the callback form opens its transaction on a SIBLING client that
+  // scopes each operation's arguments exactly as Layer 2 does and adds no
+  // transaction of its own. See scopedTransaction.
+  //
+  // Built on `alive`, NOT `guarded`. An extension added earlier runs earlier, so
+  // on `guarded` the message hook would already have opened a conversation on
+  // another connection before anything here could stop it. The filters are
+  // kept; the hook is replaced by a refusal — see messageInTransactionRefused.
+  const inTransaction = alive.$extends({
+    query: {
+      communication: {
+        async create() {
+          throw messageInTransactionRefused();
+        },
+      },
+      $allModels: {
+        async $allOperations({ model, operation, args, query }: any) {
+          return query(applyScopeArgs(model, operation, args));
+        },
+      },
+    },
+  });
+  scopedFull.$transaction = (arg: any, opts?: any) =>
+    typeof arg === "function"
+      ? scopedTransaction(inTransaction, arg, opts)
+      : Promise.reject(arrayTransactionRefused());
 
   return scoped;
 }
@@ -553,8 +701,9 @@ function buildBypassClient(raw: PrismaClient): PrismaClient {
   }
   // Interactive $transaction: run the whole callback on the raw `tx` with bypass set
   // once at the top (no per-op nesting to disturb the transaction-local GUC), so a
-  // later raw WRITE / FOR UPDATE inside the body keeps bypass. Array form keeps the
-  // native extended path (its elements each self-bypass).
+  // later raw WRITE / FOR UPDATE inside the body keeps bypass. The array form is
+  // refused: its elements each self-bypass in a transaction of their own, so it
+  // was never one — see arrayTransactionRefused.
   full.$transaction = (arg: any, opts: any) => {
     if (typeof arg === "function") {
       return raw.$transaction(async (tx: any) => {
@@ -562,7 +711,7 @@ function buildBypassClient(raw: PrismaClient): PrismaClient {
         return arg(tx);
       }, opts);
     }
-    return nat.tx(arg, opts);
+    return Promise.reject(arrayTransactionRefused());
   };
   return full as PrismaClient;
 }

@@ -85,3 +85,23 @@ export function quoteExpired(validUntil: Date | null, timeZone: string, now: Dat
   if (!validUntil) return false;
   return calendarDateIn(now, timeZone) > calendarDateIn(validUntil, timeZone);
 }
+
+/**
+ * The first instant AFTER `instant`'s calendar day in `timeZone` — midnight at
+ * the start of the next day there. It is the moment {@link quoteExpired} turns
+ * true for a quote valid until that day, as a timestamp something else can be
+ * compared against: a signing link stops working then, not at some hour of the
+ * server's own clock.
+ *
+ * Local noon is the anchor because it exists exactly once on every calendar day
+ * in every zone. Midnight is twelve hours before the next noon except on a night
+ * the clocks change, when it is eleven or thirteen — hence the correction.
+ */
+export function endOfCalendarDay(instant: Date, timeZone: string): Date {
+  const nextDay = addCalendarDays(calendarDateIn(instant, timeZone), 1);
+  const HOUR = 3_600_000;
+  let start = calendarDateInstant(nextDay, timeZone)!.getTime() - 12 * HOUR;
+  if (calendarDateIn(new Date(start), timeZone) !== nextDay) start += HOUR;
+  else if (calendarDateIn(new Date(start - 1), timeZone) === nextDay) start -= HOUR;
+  return new Date(start);
+}

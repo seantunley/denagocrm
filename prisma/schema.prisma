@@ -2313,6 +2313,25 @@ model SignatureRequest {
   contactId  String?
   templateId String? // DocBuilderTemplate it was generated from, if any
 
+  /// What the request is ABOUT when that is neither a quote nor a job card —
+  /// first, a test drive's indemnity (lib/signing/subject.ts).
+  ///
+  /// Deliberately not another of the source columns above. Those say which
+  /// record the document was generated from, who may open the request and what
+  /// gets marked signed, and every query on them assumes a quote or a job card.
+  /// There is no foreign key (the pair can name any table), so whatever acts on
+  /// it checks that row's own workspace against this request's.
+  subjectType String?
+  subjectId   String?
+  /// The subject's values as they were when the request was made: the tokens,
+  /// line items and conditions the layout reads.
+  ///
+  /// A quote or a job card is locked while it is out for signature, so its
+  /// document can be rendered from the live record. Nothing locks a test-drive
+  /// booking or its customer, so their details are frozen here, and every render
+  /// — the signer's screen, the sealed PDF, a later preview — reads these.
+  contextJson Json?
+
   snapshotJson   Json? // frozen resolved document at send time (what the signer sees)
   /// The BRAND as it was at send time — the {{company.*}} tokens and the logo.
   ///
@@ -2388,6 +2407,7 @@ model SignatureRequest {
   @@index([quoteId])
   @@index([jobCardId])
   @@index([contactId])
+  @@index([subjectType, subjectId])
   @@index([tenantId])
   @@unique([tenantId, id])
 }

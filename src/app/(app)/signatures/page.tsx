@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { requireAnyPermission } from "@/lib/permissions";
+import { hasPermission, requireAnyPermission } from "@/lib/permissions";
 import { prisma } from "@/lib/db";
 import { formatDate, formatDateTime } from "@/lib/format";
 import {
@@ -9,6 +9,12 @@ import {
 } from "@/lib/signing/status";
 import { ApprovalActions } from "./ApprovalActions";
 import { COMPLETION_BLOCKED_EVENT } from "@/lib/signing/complete";
+import { accessibleSignatureRequestWhere } from "@/lib/signing/access";
+import { canActOnStep } from "@/lib/signing/approvals";
+import { finishingStalledWhere, stuckSteps } from "@/lib/signing/stuck";
+import { allSignersSigned, stuckLabel, worstStep } from "@/lib/signing/stuckText";
+import { retryStuckSteps } from "@/app/actions/signhub";
+import { SaveForm, SaveButton } from "@/components/SaveForm";
 import {
   CheckCircle2,
   Clock3,
@@ -23,6 +29,9 @@ import { WorkspaceHero } from "@/components/workspace-hero";
 import { EmptyState, SectionHeading, StatusPill, Surface } from "@/components/visual-system";
 
 export const dynamic = "force-dynamic";
+// Retry (Needs attention) finishes a signed document from this page's action:
+// rendering and sealing the PDF, then mailing it. Seconds normally, not always.
+export const maxDuration = 60;
 
 // Per-recipient status → dot colour + label, for the signer chips on each row.
 const RECIPIENT_STATUS: Record<string, { dot: string; label: string }> = {
@@ -87,7 +96,10 @@ export default async function SignaturesPage({
 }: {
   searchParams: Promise<{ status?: string | string[]; page?: string | string[] }>;
 }) {
-  await requireAnyPermission("signing.view", "signing.manage");
+  const user = await requireAnyPermission("signing.view", "signing.manage");
+  // Only the requests this person may open — the same record check every button
+  // on the page already makes, applied to what the page lists and counts.
+  const mine = await accessibleSignatureRequestWhere(user);
   const query = await searchParams;
   const requestedStatus = query.status;
   const activeView: SignatureRequestView =
@@ -97,10 +109,10 @@ export default async function SignaturesPage({
   const requestedPage = typeof query.page === "string" ? Number(query.page) : 1;
   const safeRequestedPage = Number.isInteger(requestedPage) && requestedPage > 0 ? requestedPage : 1;
 
-  const [statusGroups, pendingApprovals, completionSamples] = await Promise.all([
+  const [statusGroups, allPendingApprovals, completionSamples] = await Promise.all([
     prisma.signatureRequest.groupBy({
       by: ["status"],
-      where: { deletedAt: null },
+      where: { deletedAt: null, AND: [mine] },
       _count: { _all: true },
     }),
     prisma.approvalStep.findMany({
@@ -121,6 +133,7 @@ export default async function SignaturesPage({
         status: "completed",
         sentAt: { not: null },
         completedAt: { not: null },
+        AND: [mine],
       },
       select: { sentAt: true, completedAt: true },
       orderBy: { completedAt: "desc" },
@@ -128,6 +141,10 @@ export default async function SignaturesPage({
     }),
   ]);
 
+  // The approvals THIS person can decide. Listing everyone's put Approve and
+  // Reject beside steps the action then refused ("You are not the assigned
+  // approver"), and named documents the viewer could not open.
+  const pendingApprovals = allPendingApprovals.filter((step) => canActOnStep(step, user));
   const statusCounts = new Map(statusGroups.map((group) => [group.status, group._count._all]));
   const requestCounts = statusGroups.reduce<Record<SignatureRequestView, number>>(
     (counts, group) => {
@@ -155,7 +172,7 @@ export default async function SignaturesPage({
       ? { status: { notIn: [...CLOSED_REQUEST_STATUSES] } }
       : { status: activeView };
   const visibleRequests = await prisma.signatureRequest.findMany({
-    where: { deletedAt: null, ...viewStatusFilter },
+    where: { deletedAt: null, ...viewStatusFilter, AND: [mine] },
     orderBy: { updatedAt: "desc" },
     skip: (currentPage - 1) * PAGE_SIZE,
     take: PAGE_SIZE,
@@ -164,17 +181,44 @@ export default async function SignaturesPage({
   // Gap audit #32: requests that look fine and aren't — everyone signed but the
   // record changed so it can't complete, or completed but a signed copy never
   // reached someone. Each opens to an explanation and the fix.
+  //
+  // And the ones nothing reported at all: a step that runs AFTER somebody acts
+  // (finishing the sealed PDF, asking the next signer, emailing an approver)
+  // failed, or the worker running it was cut off. The request went on reading
+  // "2/2 signed" with no warning.
+  const failedSteps = await stuckSteps();
+  const failedRequestIds = [...new Set(failedSteps.map((step) => step.requestId))];
   const needsAttention = await prisma.signatureRequest.findMany({
     where: {
       deletedAt: null,
+      // AND, never a spread: the access filter is itself an OR, and two ORs in
+      // one object would silently keep only the last.
+      AND: [mine],
       OR: [
         { status: { notIn: [...CLOSED_REQUEST_STATUSES] }, events: { some: { type: COMPLETION_BLOCKED_EVENT } } },
         { status: "completed", recipients: { some: { email: { not: null }, completedEmailSentAt: null } } },
+        finishingStalledWhere(),
+        { status: { notIn: [...CLOSED_REQUEST_STATUSES] }, id: { in: failedRequestIds } },
       ],
     },
-    select: { id: true, title: true, status: true },
+    select: {
+      id: true,
+      title: true,
+      status: true,
+      recipients: { select: { role: true, status: true } },
+      events: { where: { type: COMPLETION_BLOCKED_EVENT }, select: { id: true }, take: 1 },
+    },
     orderBy: { updatedAt: "desc" },
     take: 20,
+  });
+  // Retrying is an action, so it needs the grant the action checks.
+  const canRetry = await hasPermission(user, "signing.manage");
+  const attention = needsAttention.map((request) => {
+    if (request.status === "completed") return { ...request, label: "Signed copy not delivered", tone: "danger" as const, retry: false };
+    if (request.events.length > 0) return { ...request, label: "Can't complete", tone: "warning" as const, retry: false };
+    const everyoneSigned = allSignersSigned(request.recipients);
+    const step = worstStep(failedSteps.filter((failed) => failed.requestId === request.id));
+    return { ...request, label: stuckLabel(step?.jobType ?? "advance_signature", everyoneSigned), tone: "danger" as const, retry: canRetry };
   });
   const activeViewLabel = REQUEST_VIEWS.find((view) => view.value === activeView)?.label ?? "In Progress";
   const fallbackView = REQUEST_VIEWS.find(
@@ -193,8 +237,10 @@ export default async function SignaturesPage({
             <Link href="/settings/signing-workflows" className="btn-secondary btn-sm">
               <Workflow className="size-4" /> Workflows
             </Link>
-            <Link href="/documents" className="btn-primary btn-sm">
-              <FileText className="size-4" /> Open documents
+            {/* Where a request is started. "Open documents" led to an editor whose
+                "Send for signing" option was removed on 2026-08-02. */}
+            <Link href="/quotes" className="btn-primary btn-sm">
+              <FileText className="size-4" /> Quotes
             </Link>
           </>
         }
@@ -206,21 +252,24 @@ export default async function SignaturesPage({
         ]}
       />
 
-      {needsAttention.length > 0 && (
+      {attention.length > 0 && (
         <Surface className="overflow-hidden border-red-500/25 bg-red-500/[0.05]">
           <div className="border-b border-red-500/15 p-4">
             <SectionHeading
               title="Needs attention"
-              description="Signed by everyone but unable to complete, or completed without the signed copy reaching everyone."
+              description="Signed but not finished, unable to complete, or completed without the signed copy reaching everyone. Open one to see why."
             />
           </div>
           <ul className="divide-y divide-border/60 px-4">
-            {needsAttention.map((r) => (
+            {attention.map((r) => (
               <li key={r.id} className="flex flex-wrap items-center gap-3 py-3">
                 <Link href={`/signatures/${r.id}`} className="min-w-0 flex-1 truncate text-[13px] font-medium text-foreground hover:text-primary">{r.title}</Link>
-                <StatusPill tone={r.status === "completed" ? "danger" : "warning"}>
-                  {r.status === "completed" ? "Signed copy not delivered" : "Can't complete"}
-                </StatusPill>
+                <StatusPill tone={r.tone}>{r.label}</StatusPill>
+                {r.retry && (
+                  <SaveForm action={retryStuckSteps.bind(null, r.id)}>
+                    <SaveButton className="btn-secondary btn-sm" pendingLabel="Retrying…">Retry</SaveButton>
+                  </SaveForm>
+                )}
               </li>
             ))}
           </ul>
@@ -284,8 +333,8 @@ export default async function SignaturesPage({
           <EmptyState
             icon={FileSignature}
             title="No signature requests yet"
-            description="Open a document in the editor and choose “Send for signing” to start a tracked request."
-            action={<Link href="/documents" className="btn-primary btn-sm">Open documents</Link>}
+            description="Open a quote or a job card and use its Online signature card. The request appears here as soon as it is prepared."
+            action={<Link href="/quotes" className="btn-primary btn-sm">Open quotes</Link>}
             className="m-4"
           />
         ) : visibleRequests.length === 0 ? (
@@ -321,7 +370,8 @@ export default async function SignaturesPage({
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2">
                       <Link href={`/signatures/${r.id}`} className="truncate text-[13px] font-medium text-foreground hover:text-primary">{r.title}</Link>
-                      <StatusPill tone={requestTone(r.status)}>{r.status.replace("_", " ")}</StatusPill>
+                      {/* "draft" reads as a draft DOCUMENT. It is a request nobody has been sent. */}
+                      <StatusPill tone={requestTone(r.status)}>{r.status === "draft" ? "not sent" : r.status.replace("_", " ")}</StatusPill>
                     </div>
                     <div className="mt-0.5 text-[11px] text-muted-foreground">
                       {signed}/{signers.length} signed · {r.ordering}

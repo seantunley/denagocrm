@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
+import { isRequestClosed } from "../src/lib/signing/statusPolicy";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const read = (relative: string) => readFileSync(path.join(root, relative), "utf8");
@@ -109,8 +110,16 @@ test("terminal requests revoke bearer links", () => {
   assert.match(migration, /CREATE TRIGGER "SignatureRequest_revoke_tokens"/);
   assert.match(migration, /'completed','declined','expired','voided','rejected'/);
   assert.match(migration, /"tokenRevokedAt"/);
+  // The page closes on the SAME five states, through the one shared definition
+  // rather than a list of its own that could drift from the trigger's — and it
+  // decides that before the first thing that could render the document.
+  for (const status of ["completed", "declined", "expired", "voided", "rejected"]) {
+    assert.ok(isRequestClosed(status), `${status} must close the signing page`);
+  }
   const page = read("src/app/signing/[token]/page.tsx");
-  assert.match(page, /\["completed", "declined", "expired", "voided", "rejected"\]/);
+  const closedAt = page.indexOf("isRequestClosed(req.status) || recipient.tokenRevokedAt");
+  assert.notEqual(closedAt, -1, "the page must close on a finished request or a revoked link");
+  assert.ok(closedAt < page.indexOf("renderRequestSigningSheets(req)"), "…before the document is rendered");
 });
 
 test("strict production sealing has no silent self-signed fallback", () => {

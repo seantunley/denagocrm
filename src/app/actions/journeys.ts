@@ -352,20 +352,20 @@ export async function publishJourney(journeyId: string) {
     // can be told.
     await assertStepAssigneesResolve(draft.definition);
 
-    await prisma.$transaction([
-      prisma.journeyVersion.updateMany({
+    await prisma.$transaction(async (tx) => {
+      await tx.journeyVersion.updateMany({
         where: { journeyId, state: "published" },
         data: { state: "retired" },
-      }),
-      prisma.journeyVersion.update({
+      });
+      await tx.journeyVersion.update({
         where: { id: draft.id },
         data: { state: "published", publishedAt: new Date() },
-      }),
-      prisma.journey.update({
+      });
+      await tx.journey.update({
         where: { id: journeyId },
         data: { activeVersion: draft.version, status: "active" },
-      }),
-    ]);
+      });
+    });
     await logAudit({
       action: "journey.published",
       summary: `Published journey “${journey.name}” version ${draft.version}`,

@@ -8,6 +8,8 @@ import { logSignEvent } from "@/lib/signing/events";
 import { completeSignatureRequest } from "@/lib/signing/complete";
 import { notifyCreatorRejected } from "@/lib/signing/notify";
 import { CLOSED_REQUEST_STATUSES, isRequestClosed } from "@/lib/signing/status";
+import { runAfterResponse } from "@/lib/afterResponse";
+import { resolveTenantMemberUser } from "@/lib/tenantActor";
 
 /**
  * Runtime interpreter for workflow-driven signature requests. Unlike the static
@@ -132,13 +134,20 @@ async function materialise(requestId: string, node: SignNode, notify: boolean): 
     // ciphertext travels with it so the emailed link can be rebuilt without ever
     // recovering a secret from the lookup column.
     const capability = newSignCapability();
+    // A member of staff is stored on the graph by id alone, so the step had no
+    // name and every screen that lists approvals fell back to calling them
+    // "Owner". The name is read now, for display; who is EMAILED is still
+    // resolved live when the notification is sent (resolveApprover).
+    const assignee = node.who.mode === "staff" && node.who.userId
+      ? await resolveTenantMemberUser(node.who.userId).catch(() => null)
+      : null;
     const created = await prisma.approvalStep.createMany({
       data: [{
         requestId, nodeId: node.id, label, mode: "decision",
         assigneeType: node.who.mode === "staff" ? "staff" : node.who.mode === "owner" ? "owner" : "role",
         assigneeUserId: node.who.userId ?? null,
         assigneeRole: node.who.role ?? null,
-        assigneeName: node.who.name ?? null,
+        assigneeName: assignee?.name ?? node.who.name ?? null,
         assigneeEmail: node.who.email ?? null,
         token: capability.digest,
         tokenCiphertext: capability.ciphertext,
@@ -158,7 +167,35 @@ async function materialise(requestId: string, node: SignNode, notify: boolean): 
     // send then failed, nothing remained to retry and the approval was silently
     // never delivered. One owner, with retries, is the only shape where a
     // failure is recoverable.
+    //
+    // The owner is still the worker — but it is asked to run now rather than at
+    // its next scheduled time, which left an approver waiting up to half an hour
+    // for an email that was ready to send.
+    if (step.tenantId) await deliverQueuedNow(requestId, step.tenantId);
   }
+}
+
+/**
+ * Run the worker for this one request once the response has gone, so what was
+ * just queued for it is delivered in seconds instead of on the next cron run.
+ *
+ * NOT when a worker already holds this request: that is the worker itself
+ * arriving here (an approval granted by a job raising the next one). A second
+ * run would find the request leased, push the new job a minute into the future
+ * and so out of reach of the run that is about to look for it — turning "now"
+ * into "next cron". That run asks the queue again when its job is done.
+ *
+ * Imported lazily: the worker imports this module to advance a workflow.
+ */
+async function deliverQueuedNow(requestId: string, tenantId: string): Promise<void> {
+  const held = await prisma.signatureRequest
+    .findFirst({ where: { id: requestId, recoveryLeaseUntil: { gt: new Date() } }, select: { id: true } })
+    .catch(() => null);
+  if (held) return;
+  await runAfterResponse(async () => {
+    const { runSigningTransitionJobs } = await import("@/lib/signing/transitionWorker");
+    await runSigningTransitionJobs(tenantId, 5, { requestId });
+  });
 }
 
 /**

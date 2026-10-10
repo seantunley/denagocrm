@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import { getCurrentUser } from "@/lib/auth";
 import { canAccessJobCard } from "@/lib/permissions";
+import { withActingStaffScope } from "@/lib/actingScope";
 import { readFile } from "@/lib/storage";
 
 /**
@@ -12,7 +13,12 @@ import { readFile } from "@/lib/storage";
  *
  * ?v=annotated returns the flattened marked-up version when one exists, else the original.
  */
-export async function GET(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+export async function GET(req: NextRequest, context: { params: Promise<{ id: string }> }) {
+  // Bound to the acting workspace — a route handler has nothing above it that does (see withActingStaffScope).
+  return withActingStaffScope(() => handleGet(req, context));
+}
+
+async function handleGet(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   const user = await getCurrentUser();
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });

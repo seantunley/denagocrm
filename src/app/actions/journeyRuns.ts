@@ -178,11 +178,11 @@ export async function retryJourneyRun(runId: string) {
       }
     }
 
-    await prisma.$transaction([
-      prisma.journeyStepLog.deleteMany({
+    await prisma.$transaction(async (tx) => {
+      await tx.journeyStepLog.deleteMany({
         where: { runId, status: { in: ["running", "failed"] } },
-      }),
-      prisma.journeyRun.update({
+      });
+      await tx.journeyRun.update({
         where: { id: runId },
         data: {
           status: "queued",
@@ -191,8 +191,8 @@ export async function retryJourneyRun(runId: string) {
           nextRunAt: new Date(),
           completedAt: null,
         },
-      }),
-    ]);
+      });
+    });
     await logAudit({
       action: "journey.run_retried",
       summary: `Retried journey “${run.journey.name}” run ${run.id.slice(-8)}`,

@@ -176,35 +176,100 @@ test("every raw query on the scoped client is now covered by the patch", () => {
 test("the model-op path never uses the patched raw method", () => {
   const code = read("src/lib/db.ts");
 
-  // withRlsScope takes the raw executor as a parameter instead of reading it off
-  // the client it was handed. Reading it off `client` is the bug.
-  assert.match(code, /async function withRlsScope\(client: any, execRaw: any, query: \(\) => any\)/);
+  // withRlsScope takes the raw executor — and the transaction it batches on — as
+  // parameters instead of reading them off a client. Reading `$executeRaw` off
+  // the client is the bug above; reading `$transaction` off it would now reach
+  // Layer 2c, which refuses the array form.
+  assert.match(code, /async function withRlsScope\(transaction: any, execRaw: any, query: \(\) => any\)/);
   const start = code.indexOf("async function withRlsScope(");
   const body = code.slice(start, code.indexOf("\n}", start));
-  assert.doesNotMatch(body, /client\.\$executeRaw/, "must not read $executeRaw off the patched client");
+  assert.doesNotMatch(body, /\.\$executeRaw|\.\$transaction/, "must not read either off a patched client");
   assert.match(body, /execRaw`SELECT set_config\('app\.current_tenant'/);
   assert.match(body, /execRaw`SELECT set_config\('app\.bypass_rls'/);
   // The array transaction itself still belongs to the scoped client: both
   // promises have to come from the same client for Prisma to batch them.
-  assert.match(body, /await client\.\$transaction\(\[setGuc, query\(\)\]\)/);
+  assert.match(body, /await transaction\(\[setGuc, query\(\)\]\)/);
 });
 
-test("the unpatched executor is captured BEFORE the patch overwrites it", () => {
+test("the unpatched executor and transaction are captured BEFORE the patches overwrite them", () => {
   // Order is the whole fix. Captured after the loop, `ref.execRaw` would be the
-  // wrapper and nothing would change.
+  // wrapper and nothing would change; captured after Layer 2c, `ref.tx` would be
+  // the refusal and every model operation in the app would throw.
   const code = read("src/lib/db.ts");
   const captureAt = code.indexOf("ref.execRaw = (scoped as any).$executeRaw.bind(scoped);");
   const patchAt = code.indexOf("for (const method of [\"$executeRaw\"");
   assert.ok(captureAt !== -1, "the unpatched executor must be captured");
   assert.ok(patchAt !== -1, "the raw patch loop must still exist");
   assert.ok(captureAt < patchAt, "capture must happen before the overwrite");
-  assert.match(code, /withRlsScope\(ref\.c, ref\.execRaw, \(\) => query\(scopedArgs\)\)/);
+  const txCaptureAt = code.indexOf("ref.tx = (scoped as any).$transaction.bind(scoped);");
+  const txPatchAt = code.indexOf("scopedFull.$transaction = ");
+  assert.ok(txCaptureAt !== -1 && txPatchAt !== -1, "the native $transaction must be captured, and Layer 2c must still exist");
+  assert.ok(txCaptureAt < txPatchAt, "…and captured before it is replaced");
+  assert.equal((code.match(/withRlsScope\(ref\.tx, ref\.execRaw, \(\) => query\(scopedArgs\)\)/g) ?? []).length, 2, "both model-op paths batch on the native transaction");
 });
 
-test("no other array transaction is handed a raw promise", () => {
-  // The same trap for any caller doing $transaction([prisma.$queryRaw`…`, …]).
-  // There are none today; this fails if one is added, because it would break the
-  // same way and the error message points at Prisma rather than at this patch.
+/**
+ * A TRANSACTION ON THE SCOPED CLIENT HAS TO BE ONE.
+ *
+ * `prisma.$transaction(async (tx) => …)` handed back a `tx` that was still the
+ * scoped client, so every operation on it went through Layer 2 — whose batch
+ * replaces the transaction it was called in — and every raw statement through
+ * Layer 2b, which opens another. Each statement committed as it ran. The proof
+ * is scripts/test-scoped-transactions.ts, against a real database; these pin the
+ * shape that makes it true, for the places that cannot reach one.
+ */
+test("the callback form opens a real transaction on a sibling client that adds none of its own", () => {
+  const code = shipped("src/lib/db.ts");
+  const build = code.slice(code.indexOf("function buildClient("), code.indexOf("function buildBypassClient("));
+  // Built from the soft-delete filters, NOT from `scoped`: an operation on its
+  // `tx` must not reach Layer 2's batch, and its raw methods must be Prisma's own.
+  const sibling = build.slice(build.indexOf("const inTransaction = alive.$extends("), build.indexOf("scopedFull.$transaction = "));
+  assert.ok(sibling.length > 0, "the sibling client is gone — was Layer 2c restructured?");
+  assert.match(sibling, /return query\(applyScopeArgs\(model, operation, args\)\);/, "the workspace scoping of the arguments is kept");
+  assert.doesNotMatch(sibling, /withRlsScope|\$transaction\(/, "…and no transaction is opened per operation");
+  // …and NOT from `guarded` either. That layer's `communication.create` hook opens
+  // a conversation and recomputes it on ANOTHER connection, which then waits on
+  // the transaction's own lock; an extension added earlier runs earlier, so it
+  // cannot be pre-empted from here. The filters are shared, the hook is not.
+  assert.match(build, /const alive = raw\.\$extends\(\{/);
+  assert.match(build, /const guarded = alive\.\$extends\(\{\s*query: \{\s*communication: \{/, "the message hook is its own layer, on top of the filters");
+  assert.match(sibling, /communication: \{\s*async create\(\) \{\s*throw messageInTransactionRefused\(\);/, "a timeline message is refused inside a transaction");
+  assert.doesNotMatch(sibling, /attachToConversation|bumpConversation/);
+  assert.match(
+    build,
+    /scopedFull\.\$transaction = \(arg: any, opts\?: any\) =>\s*typeof arg === "function"\s*\? scopedTransaction\(inTransaction, arg, opts\)\s*: Promise\.reject\(arrayTransactionRefused\(\)\);/,
+  );
+
+  const tx = code.slice(code.indexOf("async function scopedTransaction("), code.indexOf("function buildClient("));
+  const setTenant = tx.indexOf("await tx.$executeRaw`SELECT set_config('app.current_tenant', ${scope.tenantId}, TRUE)`");
+  const setBypass = tx.indexOf("await tx.$executeRaw`SELECT set_config('app.bypass_rls', 'on', TRUE)`");
+  const run = tx.indexOf("return fn(tx);");
+  assert.ok(setTenant !== -1 && setBypass !== -1 && run !== -1);
+  assert.ok(setTenant < run && setBypass < run, "the setting is the transaction's FIRST statement, on `tx` itself — before anything the caller runs");
+  assert.match(tx, /const scope = tenantEnforcing\(\) \? currentTenantScope\(\) : null;/, "the same rule withRlsScope applies to a single operation");
+});
+
+test("the array form is refused on both clients", () => {
+  const code = shipped("src/lib/db.ts");
+  const bypass = code.slice(code.indexOf("function buildBypassClient("));
+  assert.match(bypass, /full\.\$transaction = \(arg: any, opts: any\) => \{\s*if \(typeof arg === "function"\) \{[\s\S]*?\}\s*return Promise\.reject\(arrayTransactionRefused\(\)\);\s*\};/);
+  // The two places that still build one are the mechanism itself: a setting and
+  // ONE operation, batched on the native transaction.
+  assert.equal((code.match(/await transaction\(\[setGuc, query\(\)\]\)/g) ?? []).length, 1);
+  assert.equal((code.match(/await nat\.tx\(\[/g) ?? []).length, 1);
+});
+
+test("nothing in the app passes $transaction an array", () => {
+  /*
+   * An array is not a transaction on either client: each element commits on its
+   * own, and a raw one is already running by the time the array is built. Two
+   * callers showed what that costs — reordering a pipeline's stages and a
+   * customer's reply on a support case both did their work and then threw.
+   *
+   * The guard that used to stand here looked for `$transaction([ … raw … ])` and
+   * missed both: one was longer than its 600-character window, the other built
+   * its array with `.map(`. So this reads the first argument, whatever it is.
+   */
   const root = path.join(dir, "..", "src");
   const offenders: string[] = [];
   const walk = (p: string) => {
@@ -212,18 +277,16 @@ test("no other array transaction is handed a raw promise", () => {
       const full = path.join(p, entry.name);
       if (entry.isDirectory()) walk(full);
       else if (/\.tsx?$/.test(entry.name)) {
-        const src = readFileSync(full, "utf8");
         if (full.endsWith(path.join("lib", "db.ts"))) continue; // the mechanism itself
-        for (const m of src.matchAll(/\$transaction\(\[([\s\S]{0,600}?)\]\)/g)) {
-          if (/\$(?:query|execute)Raw/.test(m[1])) offenders.push(path.relative(root, full));
+        const src = readFileSync(full, "utf8").replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+        for (const m of src.matchAll(/\$transaction\s*\(\s*([\s\S]{0,160})/g)) {
+          const first = m[1];
+          const isArray = /^\[/.test(first) || /^[\w.[\]!]+\s*\.\s*(?:map|flatMap|filter|concat)\s*\(/.test(first);
+          if (isArray) offenders.push(`${path.relative(root, full).replace(/\\/g, "/")}: $transaction(${first.split("\n")[0].slice(0, 60)}`);
         }
       }
     }
   };
   walk(root);
-  assert.deepEqual(
-    [...new Set(offenders)],
-    [],
-    "an array $transaction cannot contain a raw promise from the scoped client — use $transaction(async tx => …)",
-  );
+  assert.deepEqual(offenders, [], "pass a callback and run the statements on its `tx` — $transaction(async (tx) => { … })");
 });

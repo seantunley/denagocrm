@@ -487,6 +487,9 @@ const CUSTOMER_RECORD_WRITERS = [
   "src/lib/outboundMessageLog.ts",
   "src/lib/reviewRequests.ts",
   "src/lib/serviceReminders.ts",
+  // A signer's question from the signing page, on the customer's and the deal's
+  // timeline. No session exists there; stamped from the contact/lead it is about.
+  "src/lib/signing/question.ts",
   "src/lib/surveys.ts",
   // An inbound Telegram message on the customer's timeline (gap audit #29).
   // Stamped from the webhook's own tenant scope — the bot secret resolves it.

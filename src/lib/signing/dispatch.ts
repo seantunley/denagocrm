@@ -225,6 +225,40 @@ export async function dispatchRequest(requestId: string, opts?: { reminder?: boo
   return { targeted: targets.length, notified, unreachable };
 }
 
+/**
+ * Notify ONE named recipient and settle the request's send state around it.
+ *
+ * dispatchRequest() chooses its own targets from recipient order. For a plain
+ * sequential envelope that is the same recipient; for a branched workflow it is
+ * not, because a graph pre-creates a recipient per path and the lowest unsigned
+ * order can sit on a branch the condition never took. The caller has already
+ * resolved who is live (signing/nextSigner.ts), so send to exactly them.
+ */
+export async function sendToRecipient(
+  requestId: string,
+  recipientId: string,
+): Promise<{ notified: number; unreachable: number }> {
+  const before = await prisma.signatureRequest.findUnique({
+    where: { id: requestId },
+    select: { sentAt: true },
+  });
+  const outcome = await notifyRecipient(recipientId);
+  const notified = outcome.delivered ? 1 : 0;
+  const unreachable = outcome.reachable ? 0 : 1;
+  if (notified > 0) {
+    // Same bookkeeping dispatchRequest does on a first successful send, and
+    // conditional for the same reason: a void/decline can land during the
+    // provider call, and an unconditional update would resurrect it. sentAt is
+    // preserved once set — it is when the document FIRST went out, not when the
+    // latest signer in the chain was reached.
+    await prisma.signatureRequest.updateMany({
+      where: { id: requestId, status: { notIn: [...CLOSED_REQUEST_STATUSES] } },
+      data: { status: "sent", sentAt: before?.sentAt ?? new Date() },
+    });
+  }
+  return { notified, unreachable };
+}
+
 const STALE_SENDING_MINUTES = 10; // generous margin over any realistic email/WhatsApp provider round-trip
 
 /**

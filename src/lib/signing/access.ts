@@ -1,10 +1,13 @@
 import { prisma } from "@/lib/db";
-import { governingBinding as resolveBinding, type RequestBinding } from "./binding";
+import { accessibleRequestWhere, governingBinding as resolveBinding, type RequestBinding } from "./binding";
 import {
   canAccessContact,
   canAccessDocument,
   canAccessJobCard,
   canAccessQuote,
+  getAccessibleContactIds,
+  getAccessibleDocumentIds,
+  getAccessibleJobCardIds,
   getAccessibleQuoteIds,
   requirePermission,
   type PermissionKey,
@@ -73,6 +76,27 @@ export async function canAccessSignatureRequest(
   // exists so an unbound one fails safe rather than throwing.
   if (request.createdById && request.createdById === user.id) return true;
   return (await getAccessibleQuoteIds(user)) === null;
+}
+
+/**
+ * The list form of {@link canAccessSignatureRequest}: a `where` fragment for
+ * "the signature requests this person may open".
+ *
+ * The Signatures page listed every request in the workspace to anyone holding
+ * `signing.view` — titles, signers' names and email addresses, who had opened
+ * what — while every button on it refused the ones outside their records. An
+ * owner is unrestricted and gets no filter; everyone else gets the same
+ * precedence the single-record check applies, built from the same four scopes.
+ */
+export async function accessibleSignatureRequestWhere(user: PermissionUser) {
+  if (user.role === "owner") return {};
+  const [quoteIds, jobCardIds, documentIds, contactIds] = await Promise.all([
+    getAccessibleQuoteIds(user),
+    getAccessibleJobCardIds(user),
+    getAccessibleDocumentIds(user),
+    getAccessibleContactIds(user),
+  ]);
+  return accessibleRequestWhere({ quoteIds, jobCardIds, documentIds, contactIds, userId: user.id });
 }
 
 /**

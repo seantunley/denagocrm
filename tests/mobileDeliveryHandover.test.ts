@@ -39,7 +39,7 @@ test("mobile scheduled deliveries offer exactly one signature workflow", () => {
   // Either the guided completion, or the legacy control when nothing is
   // configured — chosen in ONE place, by the branch that knows.
   assert.match(mobile, /handover\?\.configured \?/);
-  assert.match(mobile, /<GuidedDeliveryCompletion quoteId=\{quote\.id\} runIds=\{handoverRuns\} \/>/);
+  assert.match(mobile, /<GuidedDeliveryCompletion quoteId=\{quote\.id\} runIds=\{handoverRuns\} signing=\{checklist\.signing\} \/>/);
   assert.equal(
     (mobile.match(/<ProofOfDelivery /g) ?? []).length,
     1,

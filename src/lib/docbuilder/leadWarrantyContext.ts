@@ -97,6 +97,57 @@ export function buildLeadContext(lead: LeadForDoc, now = new Date(), r: Regional
   return { tokens, items: [], vars };
 }
 
+export type TestDriveForDoc = {
+  driverLicenceNumber: string | null;
+  contact: ContactForDoc;
+  /** The demo vehicle booked for the drive, once one is assigned. */
+  vehicle: { name: string; color: string | null; regNumber: string | null } | null;
+  /** The model the customer asked to drive, until a demo vehicle is assigned. */
+  productName: string | null;
+  lead: { title: string; status: string; source: string } | null;
+};
+
+/**
+ * The indemnity signed from a test-drive BOOKING. The same tokens as a lead's
+ * (buildLeadContext), so one indemnity layout serves the printed form and the
+ * one signed on a screen — but the driver is the booking's customer, and the
+ * vehicle is the demo vehicle actually booked, with its registration, not the
+ * model the lead first asked about.
+ *
+ * The licence number goes under the driver's details when the booking has it:
+ * the printed form leaves a line to write it on, and nobody can write on a
+ * screen.
+ */
+export function buildTestDriveContext(drive: TestDriveForDoc, now = new Date(), r: Regional = DEFAULT_REGIONAL): MergeContext {
+  const vehicleName = drive.vehicle?.name ?? drive.productName;
+  const base = buildLeadContext(
+    {
+      title: drive.lead?.title ?? "",
+      name: contactName(drive.contact),
+      phone: drive.contact.phone ?? null,
+      email: drive.contact.email ?? null,
+      color: drive.vehicle?.color ?? null,
+      status: drive.lead?.status ?? "",
+      source: drive.lead?.source ?? "",
+      product: vehicleName ? { name: vehicleName } : null,
+      contact: drive.contact,
+    },
+    now,
+    r,
+  );
+  const reg = drive.vehicle?.regNumber ?? "";
+  const licence = drive.driverLicenceNumber ?? "";
+  return {
+    ...base,
+    tokens: {
+      ...base.tokens,
+      "customer.lines": lines(drive.contact.phone, drive.contact.email, licence ? `Driver's licence: ${licence}` : null),
+      "vehicle.reg": reg,
+      "vehicle.lines": lines(drive.vehicle?.color ? `Colour: ${drive.vehicle.color}` : null, reg ? `Reg: ${reg}` : null),
+    },
+  };
+}
+
 /**
  * Warranty claim: the claim, its vehicle and warranty standing, the owner, the
  * reported fault and resolution. `parts` are the lines of the claim's linked job
