@@ -510,6 +510,19 @@ jobs:
       - name: Inbox -- our own Meta echo is not recorded twice
         run: npm run test:meta-echo
 
+      # In-person signing was dead for two months with every structural test
+      # green: the screen handed the signing form a stored digest, and the route
+      # hashed it again and found nothing. Each half was right on its own. Only
+      # posting what the screen is given to the real route, against a real
+      # database with its real triggers, shows whether a signature lands -- and
+      # whether the staff witness pass stands in for the emailed code for exactly
+      # one signer and no longer than a visit.
+      #
+      # Last on purpose: signing evidence is append-only, so this leaves its rows
+      # behind, and nothing after it has to share a database with them.
+      - name: Signing -- an in-person signature actually submits
+        run: npm run test:in-person-signing
+
   # -- LANE 3: migrating a database that already has data ----------------------
   #
   # Its own job and its own scratch database, so its four minutes overlap the

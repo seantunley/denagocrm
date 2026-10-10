@@ -4,6 +4,14 @@ import { useRef, useState, useEffect, useCallback } from "react";
 import type { StampField } from "@/lib/doceditor/serialize";
 import { TextPromptDialog } from "@/components/TextPromptDialog";
 import { isFieldValueComplete } from "@/lib/signing/fieldValidation";
+import { SIGNING_CONSENT } from "@/lib/signing/consent";
+
+/**
+ * Set when the signer is using a member of staff's device, in front of them.
+ * `pass` is that member of staff vouching for who is signing (it stands in for
+ * the one-time code); the rest is where the device goes afterwards.
+ */
+export type InPersonSigning = { pass: string; staffName: string; doneHref: string };
 
 type Field = { id: string; kind: string; label: string; required: boolean; page: number; x: number; y: number; width: number; height: number };
 type Sheets = { width: number; height: number; margin: number; css: string; pages: string[] };
@@ -111,7 +119,7 @@ function StampView({ s }: { s: StampField }) {
   return <div style={{ ...box, display: "flex", alignItems: "flex-end", fontSize: 13, color: "#0f172a" }}>{s.text ?? ""}</div>;
 }
 
-export function SignSurface({ token, title, recipientName, sheets, fields, stamps = [], senderName }: { token: string; title: string; recipientName: string; sheets: Sheets; fields: Field[]; stamps?: StampField[]; senderName?: string }) {
+export function SignSurface({ token, title, recipientName, sheets, fields, stamps = [], senderName, inPerson }: { token: string; title: string; recipientName: string; sheets: Sheets; fields: Field[]; stamps?: StampField[]; senderName?: string; inPerson?: InPersonSigning }) {
   // The company that sent this document, for the two places the copy names them.
   // Undefined keeps the original literal — see tests/customerBranding.test.ts.
   const sender = senderName ?? "The sender";
@@ -166,7 +174,14 @@ export function SignSurface({ token, title, recipientName, sheets, fields, stamp
     try {
       const res = await fetch(`/api/signing/${token}`, {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: name.trim(), consent, fields: fields.map((f) => ({ id: f.id, value: vals[f.id] ?? (f.kind === "checkbox" ? "false" : "") })) }),
+        body: JSON.stringify({
+          name: name.trim(),
+          consent,
+          // Which wording the box above was ticked against — recorded with the signature.
+          consentVersion: SIGNING_CONSENT.version,
+          ...(inPerson ? { inPerson: inPerson.pass } : {}),
+          fields: fields.map((f) => ({ id: f.id, value: vals[f.id] ?? (f.kind === "checkbox" ? "false" : "") })),
+        }),
       });
       if (!res.ok) throw new Error(await res.text());
       setDone("signed");
@@ -177,7 +192,7 @@ export function SignSurface({ token, title, recipientName, sheets, fields, stamp
   const decline = async (reason: string) => {
     setBusy(true);
     try {
-      const res = await fetch(`/api/signing/${token}/decline`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ reason }) });
+      const res = await fetch(`/api/signing/${token}/decline`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ reason, ...(inPerson ? { inPerson: inPerson.pass } : {}) }) });
       if (!res.ok) throw new Error(await res.text());
       setDone("declined");
     } catch (e) { setErr(e instanceof Error ? e.message : "Could not decline."); }
@@ -200,8 +215,16 @@ export function SignSurface({ token, title, recipientName, sheets, fields, stamp
     />
   );
 
-  if (done === "signed") return <Card><h2 style={h2}>Signed ✓</h2><p style={p}>Thank you, {name}. Once everyone has signed, the completed sealed PDF will be emailed to you.</p></Card>;
-  if (done === "declined") return <Card><h2 style={h2}>Declined</h2><p style={p}>You have declined this document. {sender} has been notified.</p></Card>;
+  // On a member of staff's device the last screen also has to get the device
+  // back to them — the customer is holding somebody else's signed-in CRM.
+  const handBack = inPerson ? (
+    <p style={{ ...p, marginTop: 14 }}>
+      Please hand this device back to {inPerson.staffName}.{" "}
+      <a href={inPerson.doneHref} style={{ color: "#94a3b8", textDecoration: "underline" }}>Staff: back to the request</a>
+    </p>
+  ) : null;
+  if (done === "signed") return <Card><h2 style={h2}>Signed ✓</h2><p style={p}>Thank you, {name}. Once everyone has signed, the completed sealed PDF will be emailed to you.</p>{handBack}</Card>;
+  if (done === "declined") return <Card><h2 style={h2}>Declined</h2><p style={p}>You have declined this document. {sender} has been notified.</p>{handBack}</Card>;
 
   return (
     <div style={{ width: "100%", maxWidth: 900, display: "flex", flexDirection: "column", gap: 16, paddingBottom: 84 }}>
@@ -265,7 +288,7 @@ export function SignSurface({ token, title, recipientName, sheets, fields, stamp
           </div>
           <label style={{ display: "flex", gap: 8, alignItems: "flex-start", fontSize: 12.5, color: "#cbd5e1" }}>
             <input type="checkbox" checked={consent} onChange={(e) => setConsent(e.target.checked)} style={{ marginTop: 2 }} />
-            <span>I agree to sign this document electronically. My electronic signature is legally binding under the Electronic Communications and Transactions Act 25 of 2002 (South Africa).</span>
+            <span>{SIGNING_CONSENT.text}</span>
           </label>
           {err && <div style={{ color: "#fca5a5", fontSize: 13 }}>⚠ {err}</div>}
           <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
