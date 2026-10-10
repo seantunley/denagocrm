@@ -9,6 +9,7 @@ import { newBlock } from "@/lib/doceditor/factory";
 import { PAGE_SIZES, type DocumentBlock, type DocumentPage, type DocumentRow, type DocumentColumn } from "@/lib/doceditor/model";
 import { blockBoxCss, columnNeedsStretch } from "@/lib/doceditor/blockBox";
 import { docTypeCss } from "@/lib/doceditor/docStyles";
+import { runningText } from "@/lib/doceditor/pageFurniture";
 import { pageHasContent } from "@/lib/doceditor/ops";
 import ConfirmActionDialog from "@/components/ConfirmActionDialog";
 import { BlockView } from "./BlockView";
@@ -102,6 +103,8 @@ function PageView({
   const duplicatePage = useEditor((s) => s.duplicatePage);
   const movePage = useEditor((s) => s.movePage);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
+  const whole = useEditor((s) => s.doc);
+  const running = whole && !email ? runningText(whole, null, pIdx + 1, whole.pages.length) : null;
 
   useEffect(() => {
     const el = ref.current;
@@ -148,6 +151,12 @@ function PageView({
         <AddRowButton pageIdx={pIdx} active={!!hint && "pageIdx" in hint && hint.pageIdx === pIdx} />
       </div>
       {email?.message && <FramePart html={email.bottom} href={email.href} zoom={zoom} />}
+      {/* The running header and footer, in the margin where they print — on every sheet, with the page number. Set in the Document panel. */}
+      {running && ([["top", running.header], ["bottom", running.footer]] as const).map(([edge, words]) => (
+        <div key={edge} className="pointer-events-none absolute grid grid-cols-3 items-center" style={{ [edge]: 0, left: margin * zoom, right: margin * zoom, height: margin * zoom, fontSize: `${8 * zoom}pt`, lineHeight: 1.2, color: "#64748b" }}>
+          <span className="text-left">{words.left}</span><span className="text-center">{words.centre}</span><span className="text-right">{words.right}</span>
+        </div>
+      ))}
       <FloatingLayer page={page} zoom={zoom} />
       <OverlayLayer page={page} zoom={zoom} />
       {/* The page's own controls. An email is one card, not pages. */}

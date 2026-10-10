@@ -693,6 +693,8 @@ export const docStyleSchema = z.object({
 }).default({ fontFamily: "sans", pageSize: "A4", margin: 48, accent: "#ea580c", ink: "#020617" });
 export type DocStyle = z.infer<typeof docStyleSchema>;
 
+const runningLineSchema = z.object({ left: z.string().default(""), centre: z.string().default(""), right: z.string().default("") }).default({ left: "", centre: "", right: "" });
+
 export const documentSchema = z.object({
   schemaVersion: z.literal(1).default(1),
   title: z.string().default("Untitled proposal"),
@@ -701,6 +703,17 @@ export const documentSchema = z.object({
   pages: z.array(pageSchema).min(1),
   header: z.array(blockSchema).default([]),
   footer: z.array(blockSchema).default([]),
+  /**
+   * A line of text at the top and foot of every printed sheet (see
+   * ./pageFurniture.ts): left, centre and right, taking merge fields and the
+   * page counters {{page}} and {{pages}}. `skipFirst` leaves the first sheet —
+   * a cover — without them. Absent on every document made before it existed.
+   */
+  running: z.object({
+    header: runningLineSchema,
+    footer: runningLineSchema,
+    skipFirst: z.boolean().default(false),
+  }).optional(),
   /**
    * Set ONLY on a signing snapshot, at send time: the number of line-item rows
    * the layout was resolved for (overflow pages, the showcase hero's height).

@@ -19,6 +19,7 @@ import { DesignSection } from "./DesignSection";
 import { AlignOnPage, ArrangePanel } from "./ArrangePanel";
 import { TableStyleControls } from "./TableStyleControls";
 import { ContentBlockProps } from "./ContentBlockProps";
+import { RowSection, RunningSection } from "./PageFurnitureProps";
 import { IMAGE_ASPECT_LABELS, type ImageAspect } from "@/lib/doceditor/imageFrame";
 import { useState } from "react";
 import { uploadDocEditorImage } from "@/app/actions/doceditor";
@@ -327,6 +328,7 @@ function SaveToLibrary({ block, floating }: { block: DocumentBlock; floating: bo
 
 function BlockProps({ block, floating }: { block: DocumentBlock; floating: boolean }) {
   const remove = useEditor((s) => s.remove);
+  const { email } = useDocEditorEnv();
   return (
     <>
       <div className="border-b border-slate-100 p-3 text-sm font-medium capitalize text-slate-700">{EMAIL_BLOCK_NAMES[block.type] ?? `${block.type} block`}{floating ? " · floating" : ""}</div>
@@ -356,6 +358,8 @@ function BlockProps({ block, floating }: { block: DocumentBlock; floating: boole
       {(block.type === "text" || block.type === "heading") && <TextHint block={block} />}
       {block.type === "table" && <TableProps block={block} />}
       {block.type === "pageBreak" && <p className="p-3 text-xs text-slate-400">Forces the next content onto a new page.</p>}
+      {/* An email has no pages; a freely placed block is in no row. */}
+      {!floating && !email && block.type !== "pageBreak" && <RowSection block={block} />}
       <div className="space-y-2 p-3">
         <SaveToLibrary block={block} floating={floating} />
         <button type="button" onClick={() => remove(block.id)} className="w-full rounded-md border border-red-200 py-1.5 text-sm text-red-600 hover:bg-red-50">Delete block</button>
@@ -961,6 +965,7 @@ function DocumentProps() {
         </div>
       </Section>
       <DocumentStyleSection />
+      <RunningSection />
       <Section title="Recipients">
         <div className="space-y-2">
           {doc.recipients.map((r) => (
