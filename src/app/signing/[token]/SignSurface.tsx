@@ -6,6 +6,7 @@ import { TextPromptDialog } from "@/components/TextPromptDialog";
 import { isFieldValueComplete } from "@/lib/signing/fieldValidation";
 import { SIGNING_CONSENT } from "@/lib/signing/consent";
 import { signatureFont } from "./signatureFont";
+import { ViewBeacon } from "./ViewBeacon";
 
 /**
  * Set when the signer is using a member of staff's device, in front of them.
@@ -462,6 +463,7 @@ export function SignSurface({ token, title, recipientName, sheets, fields, stamp
 
   return (
     <div style={{ width: "100%", maxWidth: 900, display: "flex", flexDirection: "column", gap: 16, paddingBottom: 116 }}>
+      <ViewBeacon token={token} />
       <style dangerouslySetInnerHTML={{ __html: sheets.css }} />
       <style dangerouslySetInnerHTML={{ __html: SURFACE_CSS }} />
       <div style={{ textAlign: "center" }}>
