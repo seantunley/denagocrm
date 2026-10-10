@@ -45,3 +45,28 @@ function main() {
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) main();
+
+
+export type AskFn = (question: string) => Promise<{ tools: string[]; steps: number; answer: string; latencyMs?: number }>;
+
+/**
+ * Run the scenarios against a live ask function (askCrm in a script, or a
+ * mock in tests). Returns scores. Does not itself open a database.
+ */
+export async function runLive(ask: AskFn) {
+  const records = [];
+  for (const s of RESEARCH_SCENARIOS) {
+    const started = Date.now();
+    const result = await ask(s.question);
+    records.push({
+      scenarioId: s.id,
+      question: s.question,
+      tools: result.tools,
+      steps: result.steps,
+      hitBudget: false,
+      answer: result.answer,
+      latencyMs: result.latencyMs ?? Date.now() - started,
+    });
+  }
+  return scoreRecorded(records);
+}
