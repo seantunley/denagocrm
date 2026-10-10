@@ -219,3 +219,35 @@ test("briefForAssistant carries no phone number or email address", () => {
   assert.match(text, /customer waiting for a reply/);
   assert.ok(!("userId" in (briefForAssistant(brief).team?.[0] ?? {})));
 });
+
+
+test("waiting names the longest wait; other groups name the highest-value deal", () => {
+  // Waiting: small but longest wait must be named, not the high-value newer one.
+  const longWait = lead("small", ["unanswered_inbound"], { name: "Small Wait", valueCents: 15_000_00 });
+  longWait.signals[0].since = "2026-10-01T00:00:00.000Z";
+  const highWait = lead("big", ["unanswered_inbound"], { name: "Big Wait", valueCents: 180_000_00 });
+  highWait.signals[0].since = "2026-10-05T00:00:00.000Z";
+  const waitingBrief = buildBrief(input({ leads: [highWait, longWait] }));
+  const waiting = waitingBrief.items.find((i) => i.key === "waiting");
+  assert.ok(waiting);
+  assert.match(waiting.detail ?? "", /Small Wait/, "longest wait is named even if lower value");
+  assert.equal(waiting.exampleValueCents, 15_000_00);
+  assert.equal(waiting.valueCents, 15_000_00 + 180_000_00, "group total is the sum");
+
+  // Stale: highest value is named.
+  const smallStale = lead("s", ["stage_age"], { name: "Small Stale", valueCents: 10_000_00 });
+  const bigStale = lead("b", ["stage_age"], { name: "Big Stale", valueCents: 180_000_00 });
+  const staleBrief = buildBrief(input({ leads: [smallStale, bigStale] }));
+  const stale = staleBrief.items.find((i) => i.key === "stale");
+  assert.ok(stale);
+  assert.match(stale.detail ?? "", /Big Stale/);
+  assert.equal(stale.exampleValueCents, 180_000_00);
+
+  // Assistant view distinguishes group total from the named example.
+  const forModel = briefForAssistant(staleBrief);
+  const staleItem = forModel.items.find((i) => i.title.includes("stale"));
+  assert.ok(staleItem);
+  assert.equal(staleItem.groupValueCents, 10_000_00 + 180_000_00);
+  assert.equal(staleItem.exampleValueCents, 180_000_00);
+  assert.equal("valueCents" in staleItem, false, "bare valueCents is not sent — it was ambiguous");
+});
