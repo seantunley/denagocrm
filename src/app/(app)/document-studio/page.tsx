@@ -1,6 +1,7 @@
 import Link from "next/link";
 import {
   FileText,
+  FileDown,
   Layers3,
   PenLine,
   Plus,
@@ -229,12 +230,20 @@ export default async function DocumentStudioPage({
                         )}
                       </div>
                       {layout && editable ? (
-                        <Button asChild size="sm" className="shrink-0">
-                          <Link href={`/doc-editor/${layout.id}`}>
-                            <PenLine className="size-3.5" />
-                            Edit layout &amp; wording
-                          </Link>
-                        </Button>
+                        <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
+                          <Button asChild variant="outline" size="sm" title="Preview this layout as a PDF, with sample details">
+                            <a href={`/api/pdf/doc-editor/${layout.id}`} target="_blank" rel="noreferrer">
+                              <FileDown className="size-3.5" />
+                              Preview PDF
+                            </a>
+                          </Button>
+                          <Button asChild size="sm">
+                            <Link href={`/doc-editor/${layout.id}`}>
+                              <PenLine className="size-3.5" />
+                              Edit layout &amp; wording
+                            </Link>
+                          </Button>
+                        </div>
                       ) : (
                         <span className="shrink-0 text-[11px] text-muted-foreground">
                           {layout ? "Editing needs Document Builder access." : "No layout yet."}

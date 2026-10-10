@@ -215,7 +215,8 @@ async function main() {
   const mark = (row: typeof subject) =>
     basePrisma.$transaction(async (tx) => {
       await lockSubject(tx, row);
-      return completeSubject(tx, row);
+      // No sealed document to file: marking a booking does not need one.
+      return completeSubject(tx, row, null);
     });
   const status = async (id: string) => (await basePrisma.testDriveBooking.findUniqueOrThrow({ where: { id }, select: { indemnityStatus: true } })).indemnityStatus;
   if (sealed) {

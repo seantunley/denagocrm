@@ -5,6 +5,7 @@ import { parseDocument } from "@/lib/doceditor/model";
 import { renderDocumentHtml, type StampField } from "@/lib/doceditor/serialize";
 import { htmlToPdf } from "@/lib/customDocs";
 import { sealPdf } from "@/lib/pdf/seal";
+import { sealIdentityFor } from "./sealIdentity";
 import { getCompanyProfile } from "@/lib/companyProfile";
 import { saveFile, readFile, deleteFile } from "@/lib/storage";
 import { DEFAULT_REGIONAL, formatDateTime, type Regional } from "@/lib/format";
@@ -30,6 +31,7 @@ import { sendPushToAll } from "@/lib/push";
 import { issueInvoiceNumberInTx } from "@/lib/numbering";
 import { winLeadInTx } from "@/lib/quoteOutcome";
 import { payableTotalCents } from "@/lib/pricing";
+import { tenantOrigin } from "@/lib/tenantOrigin";
 
 /** Internal sentinel: the completion claim was lost to a concurrent close. */
 class CompletionLost extends Error {}
@@ -130,6 +132,21 @@ function certificateHtml(title: string, requestId: string, rows: RecipientRow[],
       here because the hash it covers includes this certificate; it is held with this record and can be produced
       on request.
     </div>
+  </div>`;
+}
+
+/**
+ * Where anyone holding this file can check it, printed under the certificate.
+ *
+ * The seal already proves the file to someone who can read a signature panel.
+ * Most people handed a contract cannot, and for a company's own certificate the
+ * panel says the signer is unknown. The page at this address answers in a
+ * sentence — and the address is the workspace's own, so a customer is not sent
+ * to a domain they have never heard of to check a document from this company.
+ */
+function verifyNoticeHtml(origin: string): string {
+  return `<div style="margin-top:10px;font-size:9pt;color:#334155">
+    To check that a copy of this document is genuine and unchanged, go to <strong>${esc(origin)}/verify</strong> and choose the file.
   </div>`;
 }
 
@@ -274,7 +291,7 @@ export async function completeSignatureRequest(requestId: string): Promise<void>
   // The sealed PDF renders the snapshot, whose showcase vehicle was frozen at
   // send time — never the live Product. A request about something other than a
   // quote or job card renders from the values frozen with it (contextJson).
-  const ctx = await bindCtx(req.quoteId, req.jobCardId, undefined, { liveVehicle: false, context: req.contextJson });
+  const ctx = await bindCtx(req.quoteId, req.jobCardId, undefined, { liveVehicle: false, context: req.contextJson, tenantId: req.tenantId });
 
   const evidence = signedEvidence(await prisma.signatureEvent.findMany({
     where: { requestId, type: "signed" },
@@ -338,18 +355,27 @@ export async function completeSignatureRequest(requestId: string): Promise<void>
     stampedFields,
     appendHtml:
       certificateHtml(req.title, req.id, rows, ctx?.regional ?? DEFAULT_REGIONAL) +
+      verifyNoticeHtml(await tenantOrigin(req.tenantId)) +
       acknowledgementsHtml(ackFields, expectedSigners, ctx?.regional ?? DEFAULT_REGIONAL),
   });
   let pdf = await htmlToPdf(html);
   // The seal names the workspace that sealed it — this was "Denago Cape Town"
   // on every tenant's signed contracts.
   const company = await getCompanyProfile(req.tenantId);
-  pdf = await sealPdf(pdf, {
-    reason: `Signed: ${req.title}`,
-    name: company.name,
-    contactInfo: company.email,
-    location: company.address,
-  });
+  // …and it is sealed with that workspace's OWN certificate, the same one for
+  // every document it completes (sealIdentity.ts). Leaving the choice to the
+  // sealer is how a customer's contract came to be sealed by a throwaway
+  // "development" certificate made when the server last restarted.
+  pdf = await sealPdf(
+    pdf,
+    {
+      reason: `Signed: ${req.title}`,
+      name: company.name,
+      contactInfo: company.email,
+      location: company.address,
+    },
+    await sealIdentityFor(req.tenantId),
+  );
   const hash = crypto.createHash("sha256").update(pdf).digest("hex");
 
   // Independent proof of WHEN, requested BEFORE the completion transaction so a
@@ -469,9 +495,9 @@ export async function completeSignatureRequest(requestId: string): Promise<void>
           if (!jc || jc.deletedAt || !jc.signedAt) throw new SourceCompletionLost();
         }
       } else {
-        // In the same transaction for the same reason: the booking must not be
-        // left reading "pending" beside a completed, sealed indemnity.
-        subjectSigned = await completeSubject(tx, req);
+        // In the same transaction for the same reason: a booking must not be left
+        // reading "pending" beside a completed, sealed indemnity.
+        subjectSigned = await completeSubject(tx, req, document?.id ?? null);
       }
     });
   } catch (err) {

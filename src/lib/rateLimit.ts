@@ -53,6 +53,19 @@ export const SIGNING_POLICY: RateLimitPolicy = {
 };
 
 /**
+ * What a signer READS through their link: a copy of the document, and whether
+ * their signed copy is ready yet. Counted apart from SIGNING_POLICY so that
+ * looking cannot use up the attempts signing needs — the page asks "is it ready?"
+ * a handful of times after a signature — and wider, because a read costs one
+ * stored file and no render, seal or email.
+ */
+export const SIGNING_READ_POLICY: RateLimitPolicy = {
+  limit: 40,
+  windowMs: 5 * 60 * 1000,
+  blockMs: 5 * 60 * 1000,
+};
+
+/**
  * Token-gated public actions that MUTATE: approving or rejecting a signing
  * workflow, submitting a survey response. Same shape as signing — a real
  * person does these once, so the limit is only ever reached by a machine.
@@ -61,6 +74,19 @@ export const PUBLIC_ACTION_POLICY: RateLimitPolicy = {
   limit: 10,
   windowMs: 5 * 60 * 1000,
   blockMs: 15 * 60 * 1000,
+};
+
+/**
+ * The public "is this document genuine?" check. Read-only, and it answers from
+ * a fingerprint the caller must already hold the whole file to produce, so this
+ * is not a guessing guard either — it stops the endpoint being used as a free
+ * lookup loop. A person checks a handful of files; a few more than the mutating
+ * actions above are allowed so a pile of contracts can be gone through.
+ */
+export const DOCUMENT_VERIFY_POLICY: RateLimitPolicy = {
+  limit: 30,
+  windowMs: 5 * 60 * 1000,
+  blockMs: 10 * 60 * 1000,
 };
 
 /**

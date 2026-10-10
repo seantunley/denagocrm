@@ -329,8 +329,9 @@ function packingList(): DocumentBlock {
 
 // Mirrors the fixed delivery-note print: meta line, deliver-to / details cards,
 // packing list, the guided handover checklist and signature, sign-off lines.
-function deliveryTemplate(): DocumentModel {
-  return documentModel("Delivery note", [
+/** The delivery note down to its checklist: who, what, and how it was handed over. */
+function deliveryRows(): DocumentBlock[][] {
+  return [
     [banner("DELIVERY NOTE", "{{delivery.number}}")],
     [text("{{delivery.meta}}")],
     [
@@ -339,9 +340,29 @@ function deliveryTemplate(): DocumentModel {
     ],
     [packingList()],
     [newBlock("handoverChecklist")],
+  ];
+}
+
+function deliveryTemplate(): DocumentModel {
+  return documentModel("Delivery note", [
+    ...deliveryRows(),
     signatureStrip("Received in good order — customer & date", "Driver & date"),
     [footer()],
   ]);
+}
+
+/**
+ * The standard delivery note for signing on a SCREEN: the printed one with its
+ * ruled sign-off lines replaced by the words they stood for. The customer's
+ * signature and date go on the page the signing engine adds for them — a
+ * packing list and a checklist with photos run to no fixed length, so nothing
+ * here can say where on a page they end. Who handed it over is in the note's
+ * own details, and on the certificate as the witness.
+ *
+ * Only the fallback: a published delivery layout is signed exactly as drawn.
+ */
+export function deliveryTemplateForScreen(): DocumentModel {
+  return documentModel("Delivery note", [...deliveryRows(), [text("Received in good order.")], [footer()]]);
 }
 
 /**

@@ -27,8 +27,9 @@ import {
   updateTestDriveBooking,
   uploadTestDriveAsset,
 } from "@/app/actions/testDrives";
+import { startTestDriveIndemnity } from "@/app/actions/testDriveIndemnity";
 import { indemnityState, type IndemnityState } from "@/lib/testDriveIndemnity";
-import { IndemnityStartButton } from "./IndemnityStartButton";
+import { SignOnDeviceButton } from "@/components/signing/SignOnDeviceButton";
 import { PageHeader } from "@/components/page-header";
 import { SaveForm, SaveButton } from "@/components/SaveForm";
 import ConfirmDelete from "@/components/ConfirmDelete";
@@ -458,7 +459,9 @@ function IndemnityPanel({ bookingId, state, canSign }: { bookingId: string; stat
       </p>
       <div className="flex flex-wrap items-center gap-2">
         {open && <Link href={`/test-drives/${bookingId}/indemnity`} className="btn-primary btn-sm">Continue signing</Link>}
-        <IndemnityStartButton bookingId={bookingId} again={open} />
+        <SignOnDeviceButton start={startTestDriveIndemnity.bind(null, bookingId)} className={open ? "btn-secondary btn-sm" : "btn-primary btn-sm"}>
+          {open ? "Start again" : "Sign indemnity on this device"}
+        </SignOnDeviceButton>
       </div>
     </div>
   );
