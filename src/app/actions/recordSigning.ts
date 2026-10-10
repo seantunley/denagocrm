@@ -15,6 +15,9 @@ import { logAudit } from "@/lib/audit";
 import { saveFile, deleteFile } from "@/lib/storage";
 import { CLOSED_REQUEST_STATUSES, isRequestClosed } from "@/lib/signing/status";
 import { quoteExpired } from "@/lib/quoteExpiry";
+import { quoteLinkExpiry } from "@/lib/signing/expiry";
+import { voidOpenRequest } from "@/lib/signing/void";
+import { nextSigner } from "@/lib/signing/nextSigner";
 import { getRegionalSettings } from "@/lib/settings";
 import { defaultBuilderTemplateId } from "@/lib/docbuilder/store";
 import { publishedBuilderTemplateFor } from "@/lib/docbuilder/published";
@@ -23,7 +26,7 @@ import { renderEnvelopePdf } from "@/lib/signing/render";
 import { createSignatureRequestFromDoc, type SigningIdentityMode } from "@/lib/signing/service";
 import { usableCapability } from "@/lib/signing/tokenVault";
 import { signUrl } from "@/lib/signing/dispatch";
-import { dispatchRequest, notifyRecipient } from "@/lib/signing/dispatch";
+import { dispatchRequest, notifyRecipient, sendToRecipient } from "@/lib/signing/dispatch";
 import { logSignEvent, staffActor } from "@/lib/signing/events";
 import { activeRecordRequest, isLockedForSigning, type QuoteSigningView } from "@/lib/signing/record";
 import { advanceWorkflow, repairWorkflow, pendingApprovalNode } from "@/lib/signflow/runtime";
@@ -281,6 +284,10 @@ export async function startRecordSigning(
       | { kind: "created"; requestId: string } = { kind: "stale" };
     try {
       outcome = await basePrisma.$transaction(async (tx) => {
+        // The link stops working when the quote does. Read under the same lock
+        // that proves this is the version being sent. A job card has no validity
+        // date, so its link has no expiry.
+        let linkExpiresAt: Date | null = null;
         if (quoteId) {
           await tx.$executeRaw`SELECT id FROM "Quote" WHERE id = ${quoteId} FOR UPDATE`;
           const q = await tx.quote.findUnique({
@@ -290,6 +297,7 @@ export async function startRecordSigning(
           if (!q || q.deletedAt || q.signedAt || q.supersededAt || quoteExpired(q.validUntil, timeZone) || q.updatedAt.getTime() !== sourceVersion) {
             return { kind: "stale" as const };
           }
+          linkExpiresAt = quoteLinkExpiry(q.validUntil, timeZone);
         } else {
           await tx.$executeRaw`SELECT id FROM "JobCard" WHERE id = ${jobCardId} FOR UPDATE`;
           const jc = await tx.jobCard.findUnique({
@@ -338,6 +346,10 @@ export async function startRecordSigning(
           },
           ordering: envelope.ordering,
           identityMode,
+          expiresAt: linkExpiresAt,
+          // The customer's details as the quote or job card holds them — for a
+          // quote made straight from a lead there is no contact to read them from.
+          customer: { email: envelope.customerEmail, phone: envelope.customerPhone },
           createdById: user.id,
           client: tx,
         });
@@ -387,22 +399,6 @@ export async function startRecordSigning(
       return { ok: true, requestId: outcome.requestId, preview: true };
     }
     const requestId: string = outcome.requestId;
-
-    if (envelope.customerPhone && envelope.customerEmail) {
-      const customer = await prisma.signatureRecipient.findFirst({
-        where: {
-          requestId,
-          email: envelope.customerEmail,
-          role: { not: "viewer" },
-        },
-      });
-      if (customer && !customer.phone) {
-        await prisma.signatureRecipient.update({
-          where: { id: customer.id },
-          data: { phone: envelope.customerPhone },
-        });
-      }
-    }
 
     // No branch below emails or messages anyone — they hand off to a review, an
     // in-person or a workflow-driven flow — so they log "Started", never "Sent".
@@ -474,37 +470,6 @@ export async function startRecordSigning(
   });
 }
 
-/**
- * The next recipient who may act, in signing order. Viewers never sign, and a
- * sequential envelope only ever has one live signer — so this is the single
- * "who is up" answer both the countersign and the send button key off.
- */
-async function nextSigner(requestId: string) {
-  const request = await prisma.signatureRequest.findUnique({
-    where: { id: requestId },
-    select: { workflowGraphJson: true, currentNodeId: true },
-  });
-  // A workflow envelope has a live node, and recipient ORDER is not it: a graph
-  // with branches pre-creates a recipient for every path, so the lowest unsigned
-  // order can easily be someone on a branch the condition did not take. Ask the
-  // interpreter which node it is actually sitting on.
-  if (request?.workflowGraphJson) {
-    if (!request.currentNodeId) return null; // not advanced yet — nobody is up
-    return prisma.signatureRecipient.findFirst({
-      where: {
-        requestId,
-        nodeId: request.currentNodeId,
-        role: { not: "viewer" },
-        status: { notIn: ["signed", "declined"] },
-      },
-    });
-  }
-  return prisma.signatureRecipient.findFirst({
-    where: { requestId, role: { not: "viewer" }, status: { notIn: ["signed", "declined"] } },
-    orderBy: { order: "asc" },
-  });
-}
-
 const sameParty = (a: string | null, b: string | null) =>
   Boolean(a && b && a.trim().toLowerCase() === b.trim().toLowerCase());
 
@@ -518,40 +483,6 @@ const sameParty = (a: string | null, b: string | null) =>
 const notTheReviewedDocument = (liveRequestId: string, reviewedRequestId: string) =>
   liveRequestId !== reviewedRequestId;
 const STALE_REVIEW = "This document changed since you opened it — close it and review it again before sending.";
-
-/**
- * Notify ONE named recipient and settle the request's send state around it.
- *
- * dispatchRequest() chooses its own targets from recipient order. For a plain
- * sequential envelope that is the same recipient; for a branched workflow it is
- * not, because a graph pre-creates a recipient per path and the lowest unsigned
- * order can sit on a branch the condition never took. The caller has already
- * resolved who is live, so send to exactly them.
- */
-async function sendToRecipient(
-  requestId: string,
-  recipientId: string,
-): Promise<{ notified: number; unreachable: number }> {
-  const before = await prisma.signatureRequest.findUnique({
-    where: { id: requestId },
-    select: { sentAt: true },
-  });
-  const outcome = await notifyRecipient(recipientId);
-  const notified = outcome.delivered ? 1 : 0;
-  const unreachable = outcome.reachable ? 0 : 1;
-  if (notified > 0) {
-    // Same bookkeeping dispatchRequest does on a first successful send, and
-    // conditional for the same reason: a void/decline can land during the
-    // provider call, and an unconditional update would resurrect it. sentAt is
-    // preserved once set — it is when the document FIRST went out, not when the
-    // latest signer in the chain was reached.
-    await prisma.signatureRequest.updateMany({
-      where: { id: requestId, status: { notIn: [...CLOSED_REQUEST_STATUSES] } },
-      data: { status: "sent", sentAt: before?.sentAt ?? new Date() },
-    });
-  }
-  return { notified, unreachable };
-}
 
 /**
  * Denago countersigns the open envelope with the signer's stored signature.
@@ -852,25 +783,11 @@ export async function voidRecordSigning(
       jobCardId: kind === "jobcard" ? id : null,
     });
     if (!state) return { ok: false, error: "No active request." };
-    // Universal lock order — SOURCE record first, THEN the request (matching
-    // completion / deletion / start) so void can't deadlock against a concurrent
-    // completion. Conditional void so it can't overwrite a request a concurrent
-    // signer just completed / declined (or another void); the quote drop-to-draft
-    // rides in the same transaction.
-    const voided = await basePrisma.$transaction(async (tx) => {
-      if (kind === "quote") await tx.$executeRaw`SELECT id FROM "Quote" WHERE id = ${id} FOR UPDATE`;
-      else await tx.$executeRaw`SELECT id FROM "JobCard" WHERE id = ${id} FOR UPDATE`;
-      const result = await tx.signatureRequest.updateMany({
-        where: { id: state.requestId, status: { notIn: [...CLOSED_REQUEST_STATUSES] } },
-        data: { status: "voided" },
-      });
-      if (result.count === 0) return 0;
-      if (kind === "quote") {
-        await tx.quote.updateMany({ where: { id, status: "sent", signedAt: null }, data: { status: "draft" } });
-      }
-      return result.count;
-    });
-    if (voided === 0) {
+    // The one void (lib/signing/void.ts): source record locked first, a
+    // conditional void, and a sent quote back to draft in the same transaction —
+    // shared with the Signatures page, whose own void used to leave the quote
+    // saying "Sent".
+    if (!(await voidOpenRequest(state.requestId))) {
       return { ok: false, error: "This request can no longer be voided." };
     }
     await logSignEvent(state.requestId, {
