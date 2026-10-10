@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { basePrisma } from "@/lib/db";
 import { getCurrentUser, getActiveTenantId } from "@/lib/auth";
 import { hasPermission } from "@/lib/permissions";
+import { withActingStaffScope } from "@/lib/actingScope";
 import { logAuditStrict } from "@/lib/audit";
 import { csvCell, csvRow } from "@/lib/csv";
 import { tenantEnforcing } from "@/lib/tenantEnforcement";
@@ -22,7 +23,12 @@ type AuditExportRow = {
   correlationId: string | null;
 };
 
+/** Bound to the acting workspace — a route handler has nothing above it that does (see withActingStaffScope). */
 export async function GET(request: NextRequest) {
+  return withActingStaffScope(() => handleGet(request));
+}
+
+async function handleGet(request: NextRequest) {
   const user = await getCurrentUser();
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   if (!(await hasPermission(user, "audit.export"))) {
