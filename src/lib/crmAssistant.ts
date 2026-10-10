@@ -48,7 +48,7 @@ import { safeCodexError } from "./codexErrors";
 import { webLookup } from "./crmAssistantWeb";
 import { assistantWebAllowed } from "./assistantUser";
 import { MAX_IMAGES_PER_QUESTION } from "./assistantImage";
-import { applyLearn, loadLearned, loadPlaybook, markNotesUsed } from "./assistantMemoryStore";
+import { applyLearn, loadLearned, loadPlaybook, markNotesUsed, saveDecision } from "./assistantMemoryStore";
 import { ACTION_INSTRUCTIONS, CHOICE_INSTRUCTIONS, type ActionCard, type ProposedAction } from "./assistantActions";
 import { describeSchedule, nextRun, scheduleInput } from "./assistantSchedule";
 import { describeWatch, watchInput } from "./assistantWatchRules";
@@ -1926,6 +1926,14 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
         return 0;
       })
     : 0;
+  // Case decisions are stored separately from prompt memory.
+  if (learn?.decision?.length && source !== "schedule") {
+    for (const d of learn.decision) {
+      await saveDecision(d.subject, d.text).catch(async (error: unknown) => {
+        await logError("crm-assistant", "decision write failed", error instanceof Error ? error.name : "unknown");
+      });
+    }
+  }
   // In the trail: that it learned, from whose conversation, how much — not the
   // text (that is in Settings → Assistant → Advanced, for the owner to review).
   if (learnedCount > 0) {
