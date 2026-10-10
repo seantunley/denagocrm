@@ -47,7 +47,7 @@ function main() {
 if (import.meta.url === `file://${process.argv[1]}`) main();
 
 
-export type AskFn = (question: string) => Promise<{ tools: string[]; steps: number; answer: string; latencyMs?: number }>;
+export type AskFn = (question: string) => Promise<{ tools: string[]; steps: number; answer: string; latencyMs?: number; tokens?: number }>;
 
 /**
  * Run the scenarios against a live ask function (askCrm in a script, or a
@@ -66,7 +66,41 @@ export async function runLive(ask: AskFn) {
       hitBudget: false,
       answer: result.answer,
       latencyMs: result.latencyMs ?? Date.now() - started,
+      ...(result.tokens !== undefined ? { tokens: result.tokens } : {}),
     });
   }
   return scoreRecorded(records);
+}
+
+
+/** Write scored traces to disk so a later run can re-score without calling the model. */
+export async function capture(ask: AskFn, outPath: string): Promise<void> {
+  const { writeFileSync } = await import("node:fs");
+  const records = [];
+  for (const s of RESEARCH_SCENARIOS) {
+    const started = Date.now();
+    const result = await ask(s.question);
+    records.push({
+      scenarioId: s.id,
+      question: s.question,
+      tools: result.tools,
+      steps: result.steps,
+      hitBudget: false,
+      answer: result.answer,
+      latencyMs: result.latencyMs ?? Date.now() - started,
+      ...(result.tokens !== undefined ? { tokens: result.tokens } : {}),
+    });
+  }
+  writeFileSync(outPath, JSON.stringify(records, null, 2));
+}
+
+/** Mean latency and total tokens across a set of recorded traces. */
+export function costSummary(records: { latencyMs?: number; tokens?: number }[]) {
+  const withLatency = records.filter((r) => r.latencyMs !== undefined);
+  const withTokens = records.filter((r) => r.tokens !== undefined);
+  const avgLatency = withLatency.length
+    ? Math.round(withLatency.reduce((s, r) => s + (r.latencyMs ?? 0), 0) / withLatency.length)
+    : null;
+  const totalTokens = withTokens.reduce((s, r) => s + (r.tokens ?? 0), 0);
+  return { avgLatencyMs: avgLatency, totalTokens, scenarios: records.length };
 }
