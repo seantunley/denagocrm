@@ -41,12 +41,12 @@ test("gate stops on empty results or step cap", () => {
 });
 
 test("decision round-trip and match", () => {
-  const raw = formatDecision({ subject: "pricing", text: "Hold the October promo", at: "2026-10-01T00:00:00Z" });
+  const raw = formatDecision({ kind: "topic", subject: "pricing", text: "Hold the October promo", at: "2026-10-01T00:00:00Z" });
   const parsed = parseDecision(raw, "2026-10-01T00:00:00Z");
   assert.ok(parsed);
   assert.equal(parsed.subject, "pricing");
   const hits = matchDecisions(
-    [parsed, { subject: "other", text: "unrelated", at: "2026-10-01T00:00:00Z" }],
+    [parsed, { kind: "topic", subject: "other", text: "unrelated", at: "2026-10-01T00:00:00Z" }],
     "october promo",
   );
   assert.equal(hits.length, 1);
@@ -105,6 +105,8 @@ test("decision recall checks lead access and save is unreviewed", () => {
   const lib = readFileSync(new URL("../src/lib/crmAssistant.ts", import.meta.url), "utf8");
   const store = readFileSync(new URL("../src/lib/assistantMemoryStore.ts", import.meta.url), "utf8");
   assert.match(lib, /canAccessLead\(user, d\.subject\)/, "recall filters by lead visibility");
+  assert.match(lib, /visibleTo\(user\.id\)/, "unreviewed notes from others are excluded");
+  assert.match(lib, /d\.kind === "lead"/, "lead check uses explicit kind, not a string heuristic");
   assert.match(store, /status: "unreviewed"/, "decisions are not auto-approved");
   assert.match(store, /createdById: userId/, "author is recorded");
 });
