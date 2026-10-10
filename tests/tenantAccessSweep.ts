@@ -36,10 +36,14 @@ import path from "node:path";
  *   basePrisma.$queryRaw  → SET LOCAL app.bypass_rls     → nothing bounds it
  * Lumping those together was the second error in the earlier revision. They are
  * separate categories here: `scoped-raw` (weaker — outside the app guard, RLS only)
- * and `bypass-raw` (unbounded). Layer 2b patches those methods as OWN PROPERTIES of
- * the two exported client objects, so only a literal `prisma.` / `basePrisma.`
- * receiver gets the treatment: raw SQL on an interactive `tx` from
- * `prisma.$transaction` sets no GUC at all and lands in `unknown-client`.
+ * and `bypass-raw` (unbounded). Only a literal `prisma.` / `basePrisma.` receiver
+ * is classified that way. Raw SQL on an interactive `tx` from `prisma.$transaction`
+ * runs under the setting the transaction made as its first statement (db.ts
+ * Layer 2c) — the caller's tenant, so RLS bounds it too — but it still lands in
+ * `unknown-client` here unless it names the tenant: the sweep reads call sites,
+ * and "bounded by whatever opened this transaction" is not something a call
+ * site says. (This comment used to say such a statement "sets no GUC at all".
+ * Measured, it set one — in a transaction of its own, which was the real defect.)
  *
  * ── What this sweep CANNOT see ─────────────────────────────────────────────────
  * See the header of tenantAccessRatchet.test.ts. It is a long list, and a shrinking
@@ -508,11 +512,11 @@ export function analyzeSource(
     const tables = [...statement.matchAll(SQL_TABLE)].map((t) => t[1]).filter((t) => models.has(t));
     if (tables.length === 0) continue; // no tenant-owned table named (set_config, global tables)
     if (SQL_NAMES_A_TENANT.test(statement)) continue;
-    // Layer 2b patches `$queryRaw` and friends as OWN PROPERTIES of the two exported
-    // client objects. An interactive transaction client is a different object built
-    // by Prisma, so it does NOT carry that patch: raw SQL on a `tx` from
-    // `prisma.$transaction` sets no GUC at all and is neither guarded nor RLS-bounded,
-    // however scoped it looks. Only a literal `prisma.` receiver earns `scoped-raw`.
+    // Only a literal `prisma.` receiver earns `scoped-raw`. Raw SQL on a `tx` from
+    // `prisma.$transaction` is RLS-bounded by the setting that transaction made
+    // as its first statement (db.ts Layer 2c), but the app guard is not in front
+    // of it and nothing at this call site says which tenant that was — so it
+    // stays `unknown-client` until the statement names one, as before.
     // A `tx` from `basePrisma.$transaction` IS bypassed, because buildBypassClient's
     // patched interactive $transaction sets app.bypass_rls at the top of the callback.
     const kind: FindingKind =

@@ -51,10 +51,10 @@ export async function setDefaultBuilderTemplate(id: string) {
     const user = await requirePermission("docbuilder.manage");
     const tpl = await getBuilderTemplate(id);
     if (!tpl || tpl.deletedAt) refuse("That template no longer exists.");
-    await prisma.$transaction([
-      prisma.docBuilderTemplate.updateMany({ where: { key: tpl.key }, data: { isDefault: false } }),
-      prisma.docBuilderTemplate.update({ where: { id }, data: { isDefault: true } }),
-    ]);
+    await prisma.$transaction(async (tx) => {
+      await tx.docBuilderTemplate.updateMany({ where: { key: tpl.key }, data: { isDefault: false } });
+      await tx.docBuilderTemplate.update({ where: { id }, data: { isDefault: true } });
+    });
     await logAudit({ action: "docbuilder.default", summary: `Set “${tpl.name}” as default ${tpl.key}`, entityType: "DocBuilderTemplate", entityId: id, user });
     revalidatePath(BASE);
   });
@@ -75,15 +75,15 @@ export async function publishBuilderVersion(id: string, label?: string): Promise
       where: { templateId: id }, orderBy: { version: "desc" }, select: { version: true },
     });
     const version = (last?.version ?? 0) + 1;
-    await prisma.$transaction([
-      prisma.docBuilderVersion.create({
+    await prisma.$transaction(async (tx) => {
+      await tx.docBuilderVersion.create({
         data: { templateId: id, version, data: tpl.data as object, label: label?.trim() || null, publishedBy: user.name },
-      }),
-      prisma.docBuilderTemplate.update({
+      });
+      await tx.docBuilderTemplate.update({
         where: { id },
         data: { status: "published", publishedVersion: version, ...(tpl.data !== found.data ? { data: tpl.data as object } : {}) },
-      }),
-    ]);
+      });
+    });
     await logAudit({
       action: "docbuilder.publish",
       summary: `Published version ${version} of “${tpl.name}”`,
