@@ -1261,11 +1261,18 @@ async function recallDecision(user: User, raw: z.infer<typeof decisionArgs>): Pr
   const decisions = notes
     .map((n) => parseDecision(n.content, n.createdAt.toISOString()))
     .filter((d): d is NonNullable<typeof d> => d !== null);
-  const hits = matchDecisions(decisions, args.query);
+  const matched = matchDecisions(decisions, args.query);
+  // A decision about a lead is only returned if this person can open that lead.
+  const visible = [];
+  for (const d of matched) {
+    const isLead = d.subject.startsWith("c") && d.subject.length > 20;
+    if (isLead && !(await canAccessLead(user, d.subject))) continue;
+    visible.push(d);
+  }
   return {
     truncated: false,
-    rows: hits.map((d) => ({ href: d.subject.startsWith("c") ? `/leads/${d.subject}` : "/ask", label: d.subject })),
-    data: hits.map((d) => ({ subject: d.subject, decision: d.text, at: d.at })),
+    rows: visible.map((d) => ({ href: d.subject.startsWith("c") && d.subject.length > 20 ? `/leads/${d.subject}` : "/ask", label: d.subject })),
+    data: visible.map((d) => ({ subject: d.subject, decision: d.text, at: d.at })),
   };
 }
 
@@ -1929,7 +1936,7 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
   // Case decisions are stored separately from prompt memory.
   if (learn?.decision?.length && source !== "schedule") {
     for (const d of learn.decision) {
-      await saveDecision(d.subject, d.text).catch(async (error: unknown) => {
+      await saveDecision(d.subject, d.text, user.id).catch(async (error: unknown) => {
         await logError("crm-assistant", "decision write failed", error instanceof Error ? error.name : "unknown");
       });
     }
