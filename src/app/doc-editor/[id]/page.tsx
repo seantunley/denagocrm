@@ -216,7 +216,7 @@ export default async function DocEditorPage({
   const wordingSettings = required === "quote" ? await quoteWordingSettings() : undefined;
 
   return (
-    <DocEditorEnvProvider value={{ templateId: template.id, logoSrc, companyName: company.name }}>
+    <DocEditorEnvProvider value={{ templateId: template.id, logoSrc, companyName: company.name, company: { name: company.name, tagline: company.tagline, address: company.address, phone: company.phone, email: company.email, website: company.website, facebook: company.facebook, instagram: company.instagram } }}>
       <DocEditor
         id={template.id}
         initialDoc={initialDoc}

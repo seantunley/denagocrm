@@ -5,6 +5,8 @@ import { getBlock } from "@/lib/doceditor/ops";
 import { newPricingLine } from "@/lib/doceditor/factory";
 import type { DocumentBlock, OverlayField, Recipient, PricingBlock, ImageBlock, DividerBlock, SpacerBlock, ConditionalBlock, TextBlock, BannerBlock, InfoCardBlock, TotalBandBlock, TermsBlock, FooterBlock, LineItemsBlock, LineItemColumn, EmailButtonBlock, EmailFactsBlock, EmailFooterBlock, EmailHeaderBlock, EmailSignatureBlock } from "@/lib/doceditor/model";
 import { cssColor } from "@/lib/doceditor/css";
+import { activePreset, recolour, STYLE_PRESETS } from "@/lib/doceditor/docStyles";
+import type { DocStyle } from "@/lib/doceditor/model";
 import { lineItemColKeys } from "@/lib/doceditor/model";
 import { recipientLabel } from "@/lib/signing/templateRecipients";
 import { ConditionField } from "@/lib/docbuilder/ConditionField";
@@ -815,6 +817,54 @@ function LineItemsProps({ block }: { block: LineItemsBlock }) {
 }
 
 // ── document + recipients ───────────────────────────────────────────
+/**
+ * The document's own style: a ready-made type setting, then the pieces of it,
+ * then the two brand colours. Changing a colour repaints every block drawn in
+ * the old one (docStyles.recolour) — it used to change link text and nothing else.
+ */
+function DocumentStyleSection() {
+  const style = useEditor((s) => s.doc!.style);
+  const setStyle = useEditor((s) => s.setStyle);
+  const commit = useEditor((s) => s.commit);
+  const preset = activePreset(style);
+  const size = style.bodySize ?? 11;
+  const spacing = style.lineHeight ?? 1.5;
+  return (
+    <Section title="Style">
+      <label className={lbl}>Ready-made</label>
+      <div className="mb-3 grid grid-cols-2 gap-1.5">
+        {STYLE_PRESETS.map((p) => (
+          <button
+            key={p.key} type="button" title={p.hint} aria-pressed={preset === p.key} onClick={() => setStyle({ ...p.style })}
+            className={`rounded-md border px-2 py-1.5 text-left text-xs ${preset === p.key ? "border-orange-400 bg-orange-50 text-orange-700" : "border-slate-300 text-slate-700 hover:bg-slate-50"}`}
+          >
+            <span className="block font-medium" style={{ fontFamily: (p.style.headingFont ?? p.style.fontFamily) === "serif" ? "Georgia,serif" : undefined }}>{p.name}</span>
+            <span className="block text-[10px] leading-tight text-slate-500">{p.hint}</span>
+          </button>
+        ))}
+      </div>
+      <div className="grid grid-cols-2 gap-2">
+        <div><label className={lbl}>Text</label>
+          <select className={inp} value={style.fontFamily} onChange={(e) => setStyle({ fontFamily: e.target.value as DocStyle["fontFamily"] })}><option value="sans">Sans</option><option value="serif">Serif</option><option value="mono">Mono</option></select>
+        </div>
+        <div><label className={lbl}>Headings</label>
+          <select className={inp} value={style.headingFont ?? ""} onChange={(e) => setStyle({ headingFont: (e.target.value || undefined) as DocStyle["headingFont"] })}><option value="">Same as text</option><option value="sans">Sans</option><option value="serif">Serif</option><option value="mono">Mono</option></select>
+        </div>
+      </div>
+      <div className="mt-2 grid grid-cols-2 gap-2">
+        <div><label className={lbl}>Text size ({size}pt)</label><input type="range" min={8} max={14} step={0.5} className="w-full" value={size} onChange={(e) => setStyle({ bodySize: Number(e.target.value) })} /></div>
+        <div><label className={lbl}>Line spacing ({spacing})</label><input type="range" min={1.1} max={2} step={0.05} className="w-full" value={spacing} onChange={(e) => setStyle({ lineHeight: Number(e.target.value) })} /></div>
+      </div>
+      <div className="mt-2 grid grid-cols-3 gap-2">
+        <div><label className={lbl}>Accent</label><input type="color" aria-label="Accent colour" value={style.accent} onChange={(e) => commit((d) => recolour(d, "accent", e.target.value))} className="h-8 w-full rounded border border-slate-300" /></div>
+        <div><label className={lbl}>Dark</label><input type="color" aria-label="Dark colour — bands, table headings, heading text" value={style.ink} onChange={(e) => commit((d) => recolour(d, "ink", e.target.value))} className="h-8 w-full rounded border border-slate-300" /></div>
+        <div><label className={lbl}>Text</label><input type="color" aria-label="Text colour" value={style.textColor ?? "#1e293b"} onChange={(e) => setStyle({ textColor: e.target.value })} className="h-8 w-full rounded border border-slate-300" /></div>
+      </div>
+      <p className="mt-2 text-[11px] text-slate-400">Accent and Dark repaint every block drawn in the old colour. A block you coloured differently is left alone. Blocks with their own designed type sizes (cards, bands, tables) keep them — use a block&apos;s Text size to change one.</p>
+    </Section>
+  );
+}
+
 function DocumentProps() {
   const doc = useEditor((s) => s.doc)!;
   const setStyle = useEditor((s) => s.setStyle);
@@ -865,15 +915,10 @@ function DocumentProps() {
           <div><label className={lbl}>Page size</label>
             <select className={inp} value={doc.style.pageSize} onChange={(e) => setStyle({ pageSize: e.target.value as "A4" | "Letter" })}><option value="A4">A4</option><option value="Letter">Letter</option></select>
           </div>
-          <div><label className={lbl}>Font</label>
-            <select className={inp} value={doc.style.fontFamily} onChange={(e) => setStyle({ fontFamily: e.target.value as "sans" | "serif" | "mono" })}><option value="sans">Sans</option><option value="serif">Serif</option><option value="mono">Mono</option></select>
-          </div>
-        </div>
-        <div className="mt-2 grid grid-cols-2 gap-2">
-          <div><label className={lbl}>Margin ({doc.style.margin}px)</label><input type="range" min={16} max={96} className="w-full" value={doc.style.margin} onChange={(e) => setStyle({ margin: Number(e.target.value) })} /></div>
-          <div><label className={lbl}>Accent</label><input type="color" value={doc.style.accent} onChange={(e) => setStyle({ accent: e.target.value })} className="h-8 w-full rounded border border-slate-300" /></div>
+          <div><label className={lbl}>Margin ({doc.style.margin}px)</label><input type="range" min={0} max={96} className="w-full" value={doc.style.margin} onChange={(e) => setStyle({ margin: Number(e.target.value) })} /></div>
         </div>
       </Section>
+      <DocumentStyleSection />
       <Section title="Recipients">
         <div className="space-y-2">
           {doc.recipients.map((r) => (

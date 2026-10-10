@@ -583,6 +583,15 @@ export const docStyleSchema = z.object({
   margin: z.number().default(48), // px
   accent: colorField("#ea580c"),
   ink: colorField("#020617"),
+  /**
+   * The document's type (see ./docStyles.ts). All optional: a stored document
+   * has none and prints exactly as it did — 11pt, 1.5, slate text, headings in
+   * the body's face.
+   */
+  bodySize: z.number().optional(),       // pt
+  lineHeight: z.number().optional(),     // a multiple
+  textColor: maybeColor,
+  headingFont: z.enum(["sans", "serif", "mono"]).optional(),
 }).default({ fontFamily: "sans", pageSize: "A4", margin: 48, accent: "#ea580c", ink: "#020617" });
 export type DocStyle = z.infer<typeof docStyleSchema>;
 
