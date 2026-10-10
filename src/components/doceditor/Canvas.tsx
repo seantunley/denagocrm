@@ -9,6 +9,7 @@ import { newBlock } from "@/lib/doceditor/factory";
 import { PAGE_SIZES, type DocumentBlock, type DocumentPage, type DocumentRow, type DocumentColumn } from "@/lib/doceditor/model";
 import { blockBoxCss } from "@/lib/doceditor/blockBox";
 import { pageHasContent } from "@/lib/doceditor/ops";
+import ConfirmActionDialog from "@/components/ConfirmActionDialog";
 import { BlockView } from "./BlockView";
 import { OverlayLayer } from "./OverlayLayer";
 import { FloatingLayer } from "./FloatingLayer";
@@ -94,6 +95,7 @@ function PageView({
   const removePage = useEditor((s) => s.removePage);
   const duplicatePage = useEditor((s) => s.duplicatePage);
   const movePage = useEditor((s) => s.movePage);
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
 
   useEffect(() => {
     const el = ref.current;
@@ -150,12 +152,22 @@ function PageView({
             <button type="button" className="rounded px-1 hover:bg-slate-200 hover:text-slate-700" title="Duplicate this page" aria-label={`Duplicate page ${pIdx + 1}`} onClick={() => duplicatePage(page.id)}>⧉</button>
             <button
               type="button" className="rounded px-1 hover:bg-red-100 hover:text-red-600 disabled:opacity-30" title={pageCount <= 1 ? "A document needs at least one page" : "Delete this page"} aria-label={`Delete page ${pIdx + 1}`} disabled={pageCount <= 1}
-              // Undo (Ctrl+Z) brings it back, but a page of work should not go on one stray click.
-              onClick={() => { if (!pageHasContent(page) || window.confirm(`Delete page ${pIdx + 1} and everything on it? You can undo this.`)) removePage(page.id); }}
+              // Undo brings it back, but a page of work should not go on one stray click:
+              // an empty page is deleted at once, one with content asks first.
+              onClick={() => (pageHasContent(page) ? setConfirmingDelete(true) : removePage(page.id))}
             >🗑</button>
           </span>
         )}
       </div>
+      <ConfirmActionDialog
+        open={confirmingDelete}
+        onOpenChange={setConfirmingDelete}
+        title={`Delete page ${pIdx + 1}?`}
+        description="Everything on this page goes with it — its content, freely placed blocks and signing fields. Undo will bring it back."
+        confirmLabel="Delete page"
+        destructive
+        onConfirm={() => removePage(page.id)}
+      />
 
       {/* Where the paper actually ends. Anything below a line prints on the next
           sheet, whatever this one looks like on screen. */}

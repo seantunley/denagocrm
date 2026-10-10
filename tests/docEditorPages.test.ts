@@ -76,7 +76,8 @@ test("the page controls and the working page are wired on the editor page", () =
   const canvas = readFileSync("src/components/doceditor/Canvas.tsx", "utf8");
   assert.match(canvas, /onMouseDownCapture=\{\(\) => setActivePage\(pIdx\)\}/, "any click on a page makes it the working page");
   for (const call of ["movePage(page.id, -1)", "movePage(page.id, 1)", "duplicatePage(page.id)", "removePage(page.id)"]) assert.ok(canvas.includes(call), call);
-  assert.match(canvas, /!pageHasContent\(page\) \|\| window\.confirm/, "a page with work on it is not deleted on one click");
+  assert.match(canvas, /pageHasContent\(page\) \? setConfirmingDelete\(true\) : removePage\(page\.id\)/, "a page with work on it is not deleted on one click");
+  assert.doesNotMatch(canvas, /window\.confirm|\balert\(/, "the product's own dialog, not the browser's");
   // A new signing field goes on the working page — it was always page 1.
   const palette = readFileSync("src/components/doceditor/Palette.tsx", "utf8");
   assert.doesNotMatch(palette, /addField\(0, field\)/);
