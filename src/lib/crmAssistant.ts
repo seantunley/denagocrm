@@ -3,7 +3,7 @@ import { z } from "zod";
 import { prisma } from "./db";
 import { logError } from "./errorLog";
 import { logAudit } from "./audit";
-import { codexRespond, isCodexConnected } from "./codex";
+import { codexRespond, isCodexConnected, type CodexResult } from "./codex";
 import { formatZAR, contactName } from "./format";
 import { payableTotalCents } from "./pricing";
 import { johannesburgDateKey } from "./activityDay";
@@ -34,6 +34,8 @@ import {
 } from "./permissions";
 import { ASSISTANT_PROFILE_KEY, parseProfile, selfKnowledge, soulText } from "./assistantSoul";
 import { LEARN_INSTRUCTIONS, memoryPrompt, methodInstructions } from "./assistantMemory";
+import { researchGate } from "./assistantResearchGate";
+import { matchDecisions, parseDecision } from "./assistantDecisions";
 import { CITE_RULE, REPLY_FORMAT, STATE_INSTRUCTIONS, citableLinks, resolveCitations, splitReply, type Evidence } from "./assistantReply";
 import { unsupportedFigures, unsupportedNote } from "./assistantVerify";
 import { salesStats } from "./crmAssistantStats";
@@ -46,7 +48,7 @@ import { safeCodexError } from "./codexErrors";
 import { webLookup } from "./crmAssistantWeb";
 import { assistantWebAllowed } from "./assistantUser";
 import { MAX_IMAGES_PER_QUESTION } from "./assistantImage";
-import { applyLearn, loadLearned, loadPlaybook, markNotesUsed } from "./assistantMemoryStore";
+import { applyLearn, loadLearned, loadPlaybook, markNotesUsed, saveDecision, visibleTo } from "./assistantMemoryStore";
 import { ACTION_INSTRUCTIONS, CHOICE_INSTRUCTIONS, type ActionCard, type ProposedAction } from "./assistantActions";
 import { describeSchedule, nextRun, scheduleInput } from "./assistantSchedule";
 import { describeWatch, watchInput } from "./assistantWatchRules";
@@ -54,6 +56,8 @@ import {
   ANSWER_RULES,
   MAX_LOOKUPS,
   MAX_STEPS,
+  MAX_STEPS_COMPLEX,
+  isComplexQuestion,
   activityArgs,
   conversationBlock,
   knowledgeArgs,
@@ -61,6 +65,7 @@ import {
   leadBriefArgs,
   parseSteps,
   planSaysAnswerNext,
+  decisionArgs,
   lookupStatus,
   isSmallTalk,
   resultsBlock,
@@ -1245,6 +1250,51 @@ function refused(what: string): ToolOutput {
   return { truncated: false, rows: [], data: [{ note: `You don't have access to ${what}.` }] };
 }
 
+async function recallDecision(user: User, raw: z.infer<typeof decisionArgs>): Promise<ToolOutput> {
+  const args = decisionArgs.parse(raw);
+  // Same visibility as other memory: approved notes are shared; unreviewed notes belong to their creator.
+  const words = args.query.toLowerCase().split(/\W+/).filter((w) => w.length > 2).slice(0, 6);
+  // Match on content so older decisions that contain the query are found,
+  // not only the latest 40. Fall back to recent if the query has no usable words.
+  const notes = await prisma.assistantNote.findMany({
+    where: {
+      kind: "decision",
+      tenantId: ownedWriteTenantId(),
+      // AND so the visibility OR and the keyword OR both apply.
+      // Spreading both at the top level would let the keyword OR overwrite visibility.
+      AND: [
+        visibleTo(user.id),
+        ...(words.length
+          ? [{ OR: words.map((w) => ({ content: { contains: w, mode: "insensitive" as const } })) }]
+          : []),
+      ],
+    },
+    orderBy: { createdAt: "desc" },
+    take: 200,
+    select: { content: true, createdAt: true },
+  });
+  const parsed = notes
+    .map((n) => parseDecision(n.content, n.createdAt.toISOString()))
+    .filter((d): d is NonNullable<typeof d> => d !== null);
+  // Filter by lead access BEFORE ranking, so inaccessible rows cannot crowd out
+  // accessible ones in the top matches.
+  const accessible = [];
+  for (const d of parsed) {
+    if (d.kind === "lead" && !(await canAccessLead(user, d.subject))) continue;
+    accessible.push(d);
+  }
+  const visible = matchDecisions(accessible, args.query);
+  return {
+    truncated: false,
+    rows: visible.map((d) => ({
+      href: d.kind === "lead" ? `/leads/${d.subject}` : "/ask",
+      label: d.subject,
+      detail: d.text.slice(0, 120),
+    })),
+    data: visible.map((d) => ({ kind: d.kind, subject: d.subject, decision: d.text, at: d.at })),
+  };
+}
+
 async function runTool(user: User, step: ToolStep): Promise<ToolOutput> {
   switch (step.tool) {
     case "find_leads": return findLeads(user, step.args);
@@ -1255,6 +1305,7 @@ async function runTool(user: User, step: ToolStep): Promise<ToolOutput> {
     case "knowledge": return knowledge(user, step.args);
     case "recall": return recall(user, step.args);
     case "playbook": return playbook(user, step.args);
+    case "recall_decision": return recallDecision(user, step.args);
     case "schedule": return schedule(user, step.args);
     case "vehicles": return vehicles(user, step.args);
     case "deliveries": return deliveries(user, step.args);
@@ -1669,7 +1720,22 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
   const cacheKey = `dax:${ownedWriteTenantId()}:${user.id}`;
   const breakerKey = ownedWriteTenantId();
 
-  // Research: look, see, look closer — at most MAX_STEPS rounds, MAX_LOOKUPS in all.
+  // Research: look, see, look closer. Complex questions get a larger step budget
+  // so the plan can re-plan after seeing results; ordinary questions stay short.
+  const complex = isComplexQuestion(question);
+  const maxSteps = complex ? MAX_STEPS_COMPLEX : MAX_STEPS;
+  // Leave room for the answer step and overhead inside the 300s route limit.
+  // Complex research stops early rather than risking a timeout with no answer.
+  const RESEARCH_BUDGET_MS = complex ? 180_000 : 90_000;
+  // Hard ceiling under the route's 300s, so a slow plan + retry + answer still finishes.
+  const HARD_DEADLINE_MS = 280_000;
+  const ANSWER_RESERVE_MS = 70_000;
+  const MIN_CALL_MS = 5_000;
+  const PLAN_MAX_MS = 45_000;
+  const ANSWER_MAX_MS = 60_000;
+  const elapsed = () => Date.now() - started;
+  // Time left for research after reserving the answer step.
+  const researchLeft = () => Math.min(RESEARCH_BUDGET_MS, HARD_DEADLINE_MS - ANSWER_RESERVE_MS) - elapsed();
   const observations: Observation[] = [];
   const progress = (status: string) => {
     try {
@@ -1707,24 +1773,32 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
     return { ok: true, answer: DEGRADED_NOTE, rows, tools: observations.map((o) => o.tool), learned: 0, actions: [], choices: [], saved: false };
   }
   // One research call, retried once on a passing ChatGPT fault (assistantBreaker).
+  // Timeout is recalculated on every attempt (including the retry) so a slow
+  // first try cannot hand the retry a stale 45s budget that blows past the reserve.
   const plan = (step: number, insist: boolean) =>
-    withRetry(breakerKey, () =>
-      codexRespond({ instructions, prompt: planPrompt(step, insist), images, reasoningEffort: "low", timeoutMs: 45_000, cacheKey, preferModel: PLAN_MODEL }),
-    );
+    withRetry(breakerKey, (): Promise<CodexResult> => {
+      const timeoutMs = Math.min(PLAN_MAX_MS, Math.max(0, researchLeft()));
+      if (timeoutMs < MIN_CALL_MS) {
+        return Promise.resolve({ error: "research budget spent" });
+      }
+      return codexRespond({ instructions, prompt: planPrompt(step, insist), images, reasoningEffort: complex ? "medium" : "low", timeoutMs, cacheKey, preferModel: PLAN_MODEL });
+    });
   const planPrompt = (step: number, insist: boolean) =>
     [
       conversation,
       whereTheyAre,
       `Question: ${question}`,
       observations.length ? resultsBlock("Lookups so far:", observations.map(observationText).join("\n\n")) : "",
-      `Rounds left: ${MAX_STEPS - step}. Lookups left: ${MAX_LOOKUPS - observations.length}.`,
+      `Rounds left: ${maxSteps - step}. Lookups left: ${MAX_LOOKUPS - observations.length}.`,
       insist ? PLAN_INSIST : "",
     ].filter(Boolean).join("\n\n");
   // Small talk ("thanks", 👍, "who are you?") skips research — it would only say
   // done — and so does a fast-path question, whose lookup is already known.
   const research = !(isSmallTalk(question) && !images.length) && !fast;
   if (fast) await runLookups(fast, 1);
-  for (let step = 0; research && step < MAX_STEPS && observations.length < MAX_LOOKUPS; step++) {
+  for (let step = 0; research && step < maxSteps && observations.length < MAX_LOOKUPS; step++) {
+    // Stop researching if the budget (or the answer reserve) is spent.
+    if (researchLeft() < MIN_CALL_MS) break;
     phase("planning");
     let reply = await plan(step, false);
     // Models sometimes answer in prose instead of choosing. Before anything has
@@ -1763,8 +1837,18 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
     const batch = fresh.slice(0, MAX_LOOKUPS - observations.length);
     if (!batch.length) break;
     await runLookups(batch, step + 1);
-    // "These are all I need": straight to the answer — no round spent on "done".
-    if (planSaysAnswerNext(reply.text)) break;
+    const lastEmpty = observations.slice(-batch.length).every((o) => !o.output.rows.length && !o.output.data.length);
+    const gate = researchGate({
+      question,
+      tools: observations.map((o) => o.tool),
+      lastRoundEmpty: lastEmpty,
+      planSaysAnswer: planSaysAnswerNext(reply.text),
+      stepsUsed: step + 1,
+      maxSteps,
+    });
+    // Deterministic: continue even if the plan said answer, when required evidence is missing.
+    if (gate === "continue") continue;
+    if (gate === "answer" || planSaysAnswerNext(reply.text)) break;
   }
 
   if (observations.length) progress("Writing it up…");
@@ -1818,7 +1902,9 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
     // Low: measured on the 25-question eval (2026-10-05) — the reasoning is done
     // by the lookups; the answer step writes up what they found.
     reasoningEffort: "low",
-    timeoutMs: 60_000,
+    // Cap the answer by remaining time under the hard deadline so a slow
+    // research phase cannot push the whole request past the route limit.
+    timeoutMs: Math.min(ANSWER_MAX_MS, Math.max(MIN_CALL_MS, HARD_DEADLINE_MS - elapsed())),
     cacheKey,
     onText: onAnswerText ? streamVisible(onAnswerText) : undefined,
   }));
@@ -1866,6 +1952,15 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
         return 0;
       })
     : 0;
+  // Case decisions are stored separately from prompt memory.
+  if (learn?.decision?.length && source !== "schedule") {
+    for (const d of learn.decision) {
+      if (d.kind === "lead" && !(await canAccessLead(user, d.subject))) continue;
+      await saveDecision(d.kind, d.subject, d.text, user.id).catch(async (error: unknown) => {
+        await logError("crm-assistant", "decision write failed", error instanceof Error ? error.name : "unknown");
+      });
+    }
+  }
   // In the trail: that it learned, from whose conversation, how much — not the
   // text (that is in Settings → Assistant → Advanced, for the owner to review).
   if (learnedCount > 0) {
@@ -1923,16 +2018,18 @@ async function resolveActions(user: User, proposals: ProposedAction[]): Promise<
       // No lead to check: it is saved for whoever presses Confirm, and runs as
       // them with their permissions at the time. Only the timing is checked
       // here — a one-off in the past never becomes a card.
-      const { type: _type, ...fields } = p;
+      // reason is display-only; the strict scheduleInput rejects unknown keys.
+      const { type: _type, reason: _reason, ...fields } = p;
       const parsed = scheduleInput.safeParse(fields);
       if (!parsed.success || !nextRun(parsed.data, new Date())) continue;
-      cards.push({ id: `a${index}-schedule`, kind: "schedule", title: describeSchedule(parsed.data), ...parsed.data });
+      cards.push({ id: `a${index}-schedule`, kind: "schedule", title: describeSchedule(parsed.data), ...parsed.data, ...(p.reason ? { reason: p.reason } : {}) });
       continue;
     }
     if (p.type === "watch") {
       // Checked again, with access, when Confirm saves it (createWatchForUser);
       // here only enough to word the card and drop what can't be valid.
-      const { type: _type, ...fields } = p;
+      // reason is display-only; the strict watchInput rejects unknown keys.
+      const { type: _type, reason: _reason, ...fields } = p;
       const parsed = watchInput.safeParse(fields);
       if (!parsed.success) continue;
       let customer: string | null = null;
@@ -1941,7 +2038,7 @@ async function resolveActions(user: User, proposals: ProposedAction[]): Promise<
         customer = (await prisma.lead.findUnique({ where: { id: parsed.data.leadId }, select: { name: true } }))?.name ?? null;
       }
       const quote = parsed.data.quoteId && /^Q-?\d+$/i.test(parsed.data.quoteId) ? parsed.data.quoteId.toUpperCase().replace(/^Q-?/, "Q-") : null;
-      cards.push({ id: `a${index}-watch`, kind: "watch", title: describeWatch(parsed.data, { customer, lead: customer, quote }), watch: parsed.data });
+      cards.push({ id: `a${index}-watch`, kind: "watch", title: describeWatch(parsed.data, { customer, lead: customer, quote }), watch: parsed.data, ...(p.reason ? { reason: p.reason } : {}) });
       continue;
     }
     if (p.type === "reschedule" || p.type === "cancel_activity") {
@@ -1955,12 +2052,12 @@ async function resolveActions(user: User, proposals: ProposedAction[]): Promise<
       if (!activity) continue;
       const leadLabel = activity.lead ? `${activity.lead.name} — ${activity.lead.title}` : activity.type;
       if (p.type === "cancel_activity") {
-        cards.push({ id: `a${index}-${p.activityId}`, kind: "cancel_activity", activityId: p.activityId, leadId: activity.leadId, leadLabel, fromDue: activity.dueDate.toISOString(), title: `Cancel “${activity.summary}” (${when(activity.dueDate)})` });
+        cards.push({ id: `a${index}-${p.activityId}`, kind: "cancel_activity", activityId: p.activityId, leadId: activity.leadId, leadLabel, fromDue: activity.dueDate.toISOString(), title: `Cancel “${activity.summary}” (${when(activity.dueDate)})`, ...(p.reason ? { reason: p.reason } : {}) });
       } else {
         const target = p.when.includes("T") ? p.when : `${p.when}T${saLocal(activity.dueDate).slice(11)}`;
         const at = new Date(`${target}:00+02:00`);
         if (Number.isNaN(at.getTime()) || at.getTime() < Date.now() - 60 * 60 * 1000) continue;
-        cards.push({ id: `a${index}-${p.activityId}`, kind: "reschedule", activityId: p.activityId, leadId: activity.leadId, leadLabel, when: target, fromDue: activity.dueDate.toISOString(), title: `Move “${activity.summary}” to ${when(at)}` });
+        cards.push({ id: `a${index}-${p.activityId}`, kind: "reschedule", activityId: p.activityId, leadId: activity.leadId, leadLabel, when: target, fromDue: activity.dueDate.toISOString(), title: `Move “${activity.summary}” to ${when(at)}`, ...(p.reason ? { reason: p.reason } : {}) });
       }
       continue;
     }
@@ -1980,14 +2077,14 @@ async function resolveActions(user: User, proposals: ProposedAction[]): Promise<
       const at = new Date(`${when}:00+02:00`);
       if (Number.isNaN(at.getTime()) || at.getTime() < Date.now() - 60 * 60 * 1000) continue;
       const label = at.toLocaleString("en-ZA", { timeZone: "Africa/Johannesburg", weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
-      cards.push({ id, kind: "follow_up", leadId: p.leadId, leadLabel, title: `${p.summary ?? `Follow-up ${p.activity}`} with ${lead.name} — ${label}`, when, activity: p.activity, summary: p.summary });
+      cards.push({ id, kind: "follow_up", leadId: p.leadId, leadLabel, title: `${p.summary ?? `Follow-up ${p.activity}`} with ${lead.name} — ${label}`, when, activity: p.activity, summary: p.summary, ...(p.reason ? { reason: p.reason } : {}) });
     } else if (p.type === "note") {
-      cards.push({ id, kind: "note", leadId: p.leadId, leadLabel, title: `Add a note to ${lead.name}'s lead`, text: p.text });
+      cards.push({ id, kind: "note", leadId: p.leadId, leadLabel, title: `Add a note to ${lead.name}'s lead`, text: p.text, ...(p.reason ? { reason: p.reason } : {}) });
     } else if (p.type === "assign") {
       const wanted = p.to.trim().toLowerCase();
       const person = staff.find((s) => s.name.toLowerCase() === wanted) ?? staff.find((s) => s.name.toLowerCase().startsWith(wanted));
       if (!person) continue;
-      cards.push({ id, kind: "assign", leadId: p.leadId, leadLabel, title: `Give ${lead.name}'s lead to ${person.name}`, userId: person.id, fromUserId: lead.assignedToId });
+      cards.push({ id, kind: "assign", leadId: p.leadId, leadLabel, title: `Give ${lead.name}'s lead to ${person.name}`, userId: person.id, fromUserId: lead.assignedToId, ...(p.reason ? { reason: p.reason } : {}) });
     } else if (p.type === "stage") {
       // Compared in code, exactly: a pipeline has a handful of stages, and an
       // insensitive `equals` would treat `_`/`%` in the name as wildcards.
@@ -1997,7 +2094,7 @@ async function resolveActions(user: User, proposals: ProposedAction[]): Promise<
         select: { id: true, name: true },
       })).find((s) => s.name.toLowerCase() === wantedStage);
       if (!stage || stage.id === lead.stageId) continue;
-      cards.push({ id, kind: "stage", leadId: p.leadId, leadLabel, title: `Move ${lead.name}'s lead to ${stage.name}`, stageId: stage.id, fromStageId: lead.stageId });
+      cards.push({ id, kind: "stage", leadId: p.leadId, leadLabel, title: `Move ${lead.name}'s lead to ${stage.name}`, stageId: stage.id, fromStageId: lead.stageId, ...(p.reason ? { reason: p.reason } : {}) });
     } else if (p.type === "draft_message") {
       // Where it would go, shown on the card before anyone presses Send — the
       // lead's own number or address, else its customer's. Never sent to ChatGPT.
@@ -2006,6 +2103,7 @@ async function resolveActions(user: User, proposals: ProposedAction[]): Promise<
         id, kind: "draft_message", leadId: p.leadId, leadLabel,
         title: `${p.channel === "whatsapp" ? "WhatsApp" : "Email"} to ${lead.name}`,
         channel: p.channel, subject: p.subject, body: p.body, to,
+        ...(p.reason ? { reason: p.reason } : {}),
       });
     } else if (p.type === "meeting") {
       const start = new Date(`${p.when}:00+02:00`);
@@ -2022,6 +2120,7 @@ async function resolveActions(user: User, proposals: ProposedAction[]): Promise<
         id, kind: "meeting", leadId: p.leadId, leadLabel, title: `${summary} — ${when(start)}`,
         start: p.when, end: saLocal(end), summary, attendeeIds: [...new Set(people.map((s) => s.id))],
         detail: `${p.minutes ?? 60} min${people.length ? ` · with ${people.map((s) => s.name).join(", ")}` : ""}`,
+        ...(p.reason ? { reason: p.reason } : {}),
       });
     } else if (p.type === "test_drive") {
       if (!lead.contactId || !(await isModuleEnabled("automotive"))) continue;
@@ -2036,11 +2135,12 @@ async function resolveActions(user: User, proposals: ProposedAction[]): Promise<
         id, kind: "test_drive", leadId: p.leadId, leadLabel, title: `Test drive for ${lead.name} — ${when(start)}`,
         contactId: lead.contactId, demoVehicleId: demo.id, branch: demo.branch, start: p.when, end: saLocal(end),
         detail: `${demo.name} · ${p.minutes ?? 60} min · ${demo.branch}`,
+        ...(p.reason ? { reason: p.reason } : {}),
       });
     } else if (p.type === "lost") {
       cards.push({ id, kind: "lost", leadId: p.leadId, leadLabel, title: `Mark ${lead.name}'s deal as lost`, reason: p.reason });
     } else if (p.type === "quote") {
-      cards.push({ id, kind: "quote", leadId: p.leadId, leadLabel, title: `Start a quote for ${lead.name}` });
+      cards.push({ id, kind: "quote", leadId: p.leadId, leadLabel, title: `Start a quote for ${lead.name}`, ...(p.reason ? { reason: p.reason } : {}) });
     }
   }
   return cards;
