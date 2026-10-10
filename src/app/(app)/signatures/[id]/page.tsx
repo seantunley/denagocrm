@@ -17,6 +17,7 @@ import { stuckSteps } from "@/lib/signing/stuck";
 import { allSignersSigned, failureInWords, finishingStalled, stuckExplanation, stuckHeadline, stuckProgress, worstStep } from "@/lib/signing/stuckText";
 import { loadEvidence } from "@/lib/signing/evidence";
 import { eventInWords } from "@/lib/signing/evidenceText";
+import { formatDuration, summariseViews } from "@/lib/signing/viewAnalytics";
 
 export const dynamic = "force-dynamic";
 // Retry finishes a signed document from this page's action: rendering and
@@ -86,6 +87,7 @@ export default async function SignatureDetail({ params }: { params: Promise<{ id
     include: {
       recipients: { orderBy: { order: "asc" } },
       events: { orderBy: { createdAt: "asc" } },
+      views: { orderBy: { startedAt: "asc" }, select: { startedAt: true, lastSeenAt: true, seconds: true, maxPage: true, sections: true } },
       fields: { include: { responses: { orderBy: { filledAt: "asc" } } } },
       approvals: { orderBy: { order: "asc" } },
     },
@@ -375,6 +377,28 @@ export default async function SignatureDetail({ params }: { params: Promise<{ id
           </ul>
         </div>
       )}
+
+      {(() => {
+        const views = summariseViews((req.views ?? []).map((v) => ({
+          startedAt: v.startedAt,
+          lastSeenAt: v.lastSeenAt,
+          seconds: v.seconds,
+          maxPage: v.maxPage,
+          sections: Array.isArray(v.sections) ? (v.sections as string[]) : [],
+        })));
+        if (!views.sessions) return null;
+        return (
+          <div className={card}>
+            <p className="mb-2 text-sm font-semibold text-foreground">Engagement</p>
+            <p className="text-sm text-muted-foreground">
+              Opened {views.sessions} {views.sessions === 1 ? "time" : "times"}, {formatDuration(views.totalSeconds)} total
+              {views.maxPage > 1 ? `, reached page ${views.maxPage}` : ""}
+              {views.sections.length ? `, saw ${views.sections.join(", ")}` : ""}.
+              {views.lastSeen ? ` Last seen ${formatDateTime(views.lastSeen)}.` : ""}
+            </p>
+          </div>
+        );
+      })()}
 
       <div className={card}>
         <p className="mb-3 text-sm font-semibold text-foreground">Recipients</p>
