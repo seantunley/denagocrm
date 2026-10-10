@@ -27,9 +27,12 @@ import {
   updateTestDriveBooking,
   uploadTestDriveAsset,
 } from "@/app/actions/testDrives";
+import { indemnityState, type IndemnityState } from "@/lib/testDriveIndemnity";
+import { IndemnityStartButton } from "./IndemnityStartButton";
 import { PageHeader } from "@/components/page-header";
 import { SaveForm, SaveButton } from "@/components/SaveForm";
 import ConfirmDelete from "@/components/ConfirmDelete";
+import AutoRefresh from "@/components/AutoRefresh";
 import { Surface } from "@/components/visual-system";
 import { ConflictAwareForm } from "@/components/ConflictAwareForm";
 
@@ -65,7 +68,7 @@ export default async function TestDriveDetailPage({ params }: { params: Promise<
   });
   if (!booking) notFound();
 
-  const [contact, lead, product, demos, staff, quotes] = await Promise.all([
+  const [contact, lead, product, demos, staff, quotes, indemnity] = await Promise.all([
     prisma.contact.findUnique({ where: { id: booking.contactId } }),
     booking.leadId ? prisma.lead.findUnique({ where: { id: booking.leadId } }) : null,
     booking.productId ? prisma.product.findUnique({ where: { id: booking.productId } }) : null,
@@ -80,6 +83,7 @@ export default async function TestDriveDetailPage({ params }: { params: Promise<
       take: 50,
       select: { id: true, number: true, status: true },
     }),
+    indemnityState(booking.id),
   ]);
   if (!contact) notFound();
 
@@ -204,6 +208,7 @@ export default async function TestDriveDetailPage({ params }: { params: Promise<
               <ShieldCheck className="size-4 text-primary" />
               <h2 className="font-semibold">Driver controls</h2>
             </div>
+            <IndemnityPanel bookingId={booking.id} state={indemnity} canSign={canManage && upcoming} />
             <SaveForm action={saveDriverControls.bind(null, booking.id)} success="Driver controls saved" resetOnSuccess={false} className="mt-4 grid gap-3 sm:grid-cols-2">
               <div>
                 <label className="label">Driver&apos;s licence number</label>
@@ -223,7 +228,15 @@ export default async function TestDriveDetailPage({ params }: { params: Promise<
               </div>
               <div>
                 <label className="label">Indemnity</label>
-                <select name="indemnityStatus" className="input" defaultValue={booking.indemnityStatus} disabled={!canManage || !upcoming}>
+                {/* Signed on a screen: the signed document is the status, and this
+                    cannot say otherwise (saveDriverControls holds the same line). */}
+                <select
+                  name="indemnityStatus"
+                  className="input"
+                  key={indemnity.kind === "signed" ? "signed-on-file" : "by-hand"}
+                  defaultValue={indemnity.kind === "signed" ? "signed" : booking.indemnityStatus}
+                  disabled={!canManage || !upcoming || indemnity.kind === "signed"}
+                >
                   <option value="pending">Pending</option>
                   <option value="signed">Signed</option>
                   <option value="waived">Waived</option>
@@ -403,6 +416,49 @@ export default async function TestDriveDetailPage({ params }: { params: Promise<
             </Surface>
           )}
         </aside>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * The indemnity, signed on this device. Above the driver-controls form and not
+ * inside it: its button makes a document, and must not be mistaken for (or
+ * submitted with) "Save driver controls".
+ */
+function IndemnityPanel({ bookingId, state, canSign }: { bookingId: string; state: IndemnityState; canSign: boolean }) {
+  if (state.kind === "signed") {
+    return (
+      <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-emerald-500/30 bg-emerald-500/5 p-3 text-sm">
+        <p>
+          <span className="font-medium text-emerald-300">Indemnity signed</span> by {state.signedByName} · {formatDateTime(state.signedAt)}
+        </p>
+        <a href={`/api/test-drives/${bookingId}/indemnity`} target="_blank" rel="noreferrer" className="btn-secondary btn-sm">
+          <FileText className="size-4" />Open signed copy
+        </a>
+      </div>
+    );
+  }
+  if (state.kind === "finishing") {
+    return (
+      <div role="status" className="mt-4 rounded-xl border border-amber-500/30 bg-amber-500/5 p-3 text-sm text-amber-200">
+        {state.signedByName} has signed the indemnity. The signed copy is being prepared — this updates by itself.
+        <AutoRefresh seconds={4} />
+      </div>
+    );
+  }
+  if (!canSign) return null;
+  const open = state.kind === "open";
+  return (
+    <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border bg-background/40 p-3 text-sm">
+      <p className="min-w-0 flex-1 text-muted-foreground">
+        {open
+          ? "The indemnity is open and waiting for the driver's signature."
+          : "Hand this device to the driver to read and sign the indemnity. The booking is marked Signed by itself."}
+      </p>
+      <div className="flex flex-wrap items-center gap-2">
+        {open && <Link href={`/test-drives/${bookingId}/indemnity`} className="btn-primary btn-sm">Continue signing</Link>}
+        <IndemnityStartButton bookingId={bookingId} again={open} />
       </div>
     </div>
   );

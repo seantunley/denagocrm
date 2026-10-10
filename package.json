@@ -29,6 +29,7 @@
     "test:signing-upgrade": "tsx --tsconfig tsconfig.scripts.json scripts/test-signing-upgrade.ts",
     "test:tenant-guard": "tsx --tsconfig tsconfig.scripts.json scripts/test-tenant-guard.ts",
     "test:rls-restricted": "tsx --tsconfig tsconfig.scripts.json scripts/test-rls-restricted.ts",
+    "test:test-drive-indemnity": "tsx --tsconfig tsconfig.scripts.json scripts/test-test-drive-indemnity.ts",
     "check:rls-role": "tsx --tsconfig tsconfig.scripts.json scripts/check-rls-role.ts",
     "test:tenant-e2e": "tsx --tsconfig tsconfig.scripts.json scripts/test-tenant-e2e.ts",
     "test:signflow-workspace": "tsx --tsconfig tsconfig.harness.json scripts/test-signflow-workspace.ts",

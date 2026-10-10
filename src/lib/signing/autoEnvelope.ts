@@ -287,7 +287,7 @@ function addRequiredSigningFields(
   }
 }
 
-function ensureSignable(
+export function ensureSignable(
   doc: DocumentModel,
   customer: { name: string; email: string | null; phone: string | null },
 ): DocumentModel {
