@@ -35,6 +35,8 @@ import ChecklistCard from "@/components/checklists/ChecklistCard";
 import GuidedDeliveryCompletion from "@/components/checklists/GuidedDeliveryCompletion";
 import { deliveryHandoverReadiness, handoverRunSelection } from "@/lib/checklists/deliveryHandover";
 import { runsForHost, templatesForHostRecord } from "@/lib/checklists/store";
+import { deliveryNoteState } from "@/lib/deliveryNoteSigning";
+import { deliveryNoteSigning, type DeliveryNoteSigning } from "@/components/signing/deliveryNoteSigning";
 
 export const metadata = { title: "Deliveries" };
 
@@ -93,14 +95,17 @@ export default async function DeliveriesPage() {
   const checklistByQuote = new Map<string, {
     templates: Awaited<ReturnType<typeof templatesForHostRecord>>;
     runs: Awaited<ReturnType<typeof runsForHost>>;
+    /** Whether the customer has signed this delivery's note yet. */
+    signing: DeliveryNoteSigning;
   }>();
   if (canManage) {
     await Promise.all(quotes.filter((quote) => colOf(quote) === "deliver").map(async (quote) => {
-      const [templates, runs] = await Promise.all([
+      const [templates, runs, note] = await Promise.all([
         templatesForHostRecord("quote.delivery", quote.id),
         runsForHost("quote.delivery", quote.id),
+        deliveryNoteState(quote.id),
       ]);
-      checklistByQuote.set(quote.id, { templates, runs });
+      checklistByQuote.set(quote.id, { templates, runs, signing: deliveryNoteSigning(note) });
     }));
   }
   // One batched, tenant-scoped lookup for the board — see lib/quoteBillTo.ts.
@@ -214,7 +219,7 @@ export default async function DeliveriesPage() {
                             />
                             {handover?.configured ? (
                               handover.ready ? (
-                                <GuidedDeliveryCompletion quoteId={quote.id} runIds={handoverRuns} />
+                                <GuidedDeliveryCompletion quoteId={quote.id} runIds={handoverRuns} signing={checklist.signing} />
                               ) : (
                                 <p className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-2.5 text-[11px] text-amber-200">
                                   Complete the guided handover above to unlock delivery-note review and customer signing.
@@ -222,7 +227,7 @@ export default async function DeliveriesPage() {
                               )
                             ) : (
                               <div>
-                                <ProofOfDelivery quoteId={quote.id} />
+                                <ProofOfDelivery quoteId={quote.id} signing={checklist.signing} />
                                 <p className="mt-1 text-[10px] text-muted-foreground/70">
                                   No guided delivery checklist is configured, so the standard proof-of-delivery flow is available.
                                 </p>
@@ -447,7 +452,7 @@ export default async function DeliveriesPage() {
                             )}
                             {handover?.configured ? (
                               handover.ready ? (
-                                <GuidedDeliveryCompletion quoteId={quote.id} runIds={handoverRuns} />
+                                <GuidedDeliveryCompletion quoteId={quote.id} runIds={handoverRuns} signing={checklist?.signing ?? { kind: "none" }} />
                               ) : (
                                 <p className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-2.5 text-[10px] text-amber-200">
                                   Complete the guided handover before customer signing is unlocked.
@@ -455,7 +460,7 @@ export default async function DeliveriesPage() {
                               )
                             ) : (
                               <div>
-                                <ProofOfDelivery quoteId={quote.id} />
+                                <ProofOfDelivery quoteId={quote.id} signing={checklist?.signing ?? { kind: "none" }} />
                                 <p className="mt-1 text-[10px] text-muted-foreground/70">
                                   No guided delivery checklist is configured; using the standard proof-of-delivery flow.
                                 </p>

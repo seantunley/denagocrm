@@ -55,15 +55,24 @@ async function whileRequestOpen(tenantId: string, quoteId: string, requestId: st
 
 type Mirror = { tenantId: string | null; quoteId: string | null; requestId: string };
 
-/** The customer's invitation went out: a draft quote is now sent. */
+/**
+ * The customer's invitation went out: the quote is now sent.
+ *
+ * From draft, and from DECLINED too. A quote the customer turned down and was
+ * then sent again is out for signature, not declined — left as it was, every
+ * reader of the quote (the gone-quiet nudge, the attention list, DAX) went on
+ * saying "declined" about a document sitting in the customer's inbox. The old
+ * answer is cleared with it; it stays on the request that was declined and in
+ * the audit trail.
+ */
 export async function mirrorQuoteSent({ tenantId, quoteId, requestId }: Mirror, recipient: Recipient): Promise<void> {
   if (!quoteId || !tenantId) return;
   try {
     if (!(await isCustomerSigner(recipient, tenantId))) return;
     await whileRequestOpen(tenantId, quoteId, requestId, (tx) =>
       tx.quote.updateMany({
-        where: { id: quoteId, tenantId, status: "draft", deletedAt: null, signedAt: null, supersededAt: null },
-        data: { status: "sent" },
+        where: { id: quoteId, tenantId, status: { in: ["draft", "declined"] }, deletedAt: null, signedAt: null, supersededAt: null },
+        data: { status: "sent", declinedAt: null, declineReason: null },
       }),
     );
   } catch (error) {

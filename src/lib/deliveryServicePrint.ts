@@ -110,9 +110,9 @@ export async function loadDeliveryEvidence(
   // had already given — the document changed after it was signed. The per-entry
   // snapshots froze the template's wording; nothing froze WHICH RUN.
   //
-  // completeGuidedDelivery now records the ids at the moment of signing, in the
-  // same write that records the delivery. Where they exist they are the whole
-  // answer, and a later run cannot appear on this note however new it is.
+  // The delivery now records the ids frozen into the note the customer signed,
+  // in the same write that records the delivery. Where they exist they are the
+  // whole answer, and a later run cannot appear on this note however new it is.
   /*
    * BEFORE SIGNING, THE REVIEWER SAYS WHICH RUNS. After it, the record does.
    *
@@ -175,22 +175,7 @@ export async function renderDeliveryNoteHtml(opts: {
 
   // ponytail: every checklist photo is embedded inline, which is what makes the
   // page self-contained for Save as PDF; thumbnail server-side if notes get heavy.
-  const runs: HandoverRun[] = guidedRunsForNote.length
-    ? await Promise.all(
-        guidedRunsForNote.map(async (run) => ({
-          name: run.template.name,
-          completed: run.completedAt ? formatDate(run.completedAt, base.regional) : null,
-          entries: await Promise.all(
-            run.entries.map(async (entry) => ({
-              label: entry.labelSnapshot,
-              mark: entry.status === "done" ? "done" as const : entry.status === "skipped" || entry.status === "na" ? "skipped" as const : "open" as const,
-              detail: guidedEntryDetail(entry),
-              photos: (await Promise.all(entry.photos.map((p) => embedStoredImage(p.url, quote.tenantId)))).filter((s): s is string => !!s),
-            })),
-          ),
-        })),
-      )
-    : [legacyRun(quote.deliveryChecklist)];
+  const runs = await handoverRuns(guidedRunsForNote, quote.deliveryChecklist, base.regional, (url) => embedStoredImage(url, quote.tenantId));
 
   const signature = signatureDoc ? await embedStoredImage(quote.deliverySignatureRef, quote.tenantId) : null;
   const ctx = deliveryNoteContext(base, {
@@ -205,6 +190,40 @@ export async function renderDeliveryNoteHtml(opts: {
   // record's workspace. The workspace logo arrives on ctx.logo from bindCtx.
   const doc = await embedDocImages(opts.doc, quote.tenantId ?? undefined);
   return renderDocumentHtml(doc, ctx, logoDataUri(), { hideOverlays: true, toolbarHtml: opts.toolbarHtml });
+}
+
+type EvidenceRun = Awaited<ReturnType<typeof loadDeliveryEvidence>>["guidedRunsForNote"][number];
+
+/**
+ * The checklist as the note draws it: the guided runs, or the pre-guided ticks
+ * when there are none.
+ *
+ * `photo` says what a stored photo becomes. A page printed now embeds the bytes.
+ * A delivery note made for signing keeps the reference instead — its values are
+ * frozen with the request, and megabytes of photo do not belong in that — and
+ * the signing renderer embeds them each time it draws the note.
+ */
+export async function handoverRuns(
+  guidedRuns: readonly EvidenceRun[],
+  legacyChecklist: unknown,
+  regional: Parameters<typeof formatDate>[1],
+  photo: (url: string) => Promise<string | null> | string | null,
+): Promise<HandoverRun[]> {
+  if (guidedRuns.length === 0) return [legacyRun(legacyChecklist)];
+  return Promise.all(
+    guidedRuns.map(async (run) => ({
+      name: run.template.name,
+      completed: run.completedAt ? formatDate(run.completedAt, regional) : null,
+      entries: await Promise.all(
+        run.entries.map(async (entry) => ({
+          label: entry.labelSnapshot,
+          mark: entry.status === "done" ? "done" as const : entry.status === "skipped" || entry.status === "na" ? "skipped" as const : "open" as const,
+          detail: guidedEntryDetail(entry),
+          photos: (await Promise.all(entry.photos.map((p) => photo(p.url)))).filter((s): s is string => !!s),
+        })),
+      ),
+    })),
+  );
 }
 
 /** The pre-guided proof-of-delivery ticks, or the default list unticked — as the fixed layout prints. */

@@ -79,6 +79,14 @@ function canonicalJson(value: unknown): string {
   return JSON.stringify(canonical(value));
 }
 
+/**
+ * `running` is claimable too — once its lease has run out. A worker that dies
+ * mid-job leaves the row in that state, and the lease test below only ever
+ * helped if the status list let such a row be considered. It did not, so the job
+ * was never tried again; and because the evidence check waits for its sibling
+ * jobs to finish, one orphan kept that check deferring every minute for good.
+ * (The same fix, for the same reason, as transitionWorker.ts.)
+ */
 async function claimJobs(tenantId: string, limit: number): Promise<SigningJob[]> {
   const owner = crypto.randomUUID();
   return basePrisma.$queryRaw<SigningJob[]>`
@@ -86,7 +94,7 @@ async function claimJobs(tenantId: string, limit: number): Promise<SigningJob[]>
       SELECT "id"
       FROM "SigningJob"
       WHERE "tenantId" = ${tenantId}
-        AND "status" IN ('pending','retry')
+        AND "status" IN ('pending','retry','running')
         AND "availableAt" <= NOW()
         AND ("leaseUntil" IS NULL OR "leaseUntil" < NOW())
       ORDER BY "availableAt" ASC, "createdAt" ASC

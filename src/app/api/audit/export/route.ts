@@ -2,9 +2,10 @@ import { NextRequest, NextResponse } from "next/server";
 import { basePrisma } from "@/lib/db";
 import { getCurrentUser, getActiveTenantId } from "@/lib/auth";
 import { hasPermission } from "@/lib/permissions";
+import { withActingStaffScope } from "@/lib/actingScope";
 import { logAuditStrict } from "@/lib/audit";
+import { ownAuditEvents } from "@/lib/auditScope";
 import { csvCell, csvRow } from "@/lib/csv";
-import { tenantEnforcing } from "@/lib/tenantEnforcement";
 
 export const dynamic = "force-dynamic";
 
@@ -22,7 +23,12 @@ type AuditExportRow = {
   correlationId: string | null;
 };
 
+/** Bound to the acting workspace — a route handler has nothing above it that does (see withActingStaffScope). */
 export async function GET(request: NextRequest) {
+  return withActingStaffScope(() => handleGet(request));
+}
+
+async function handleGet(request: NextRequest) {
   const user = await getCurrentUser();
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   if (!(await hasPermission(user, "audit.export"))) {
@@ -42,13 +48,11 @@ export async function GET(request: NextRequest) {
     ? new Date(`${toRaw}T23:59:59+02:00`)
     : null;
 
-  // Multi-tenancy readiness: bound the export to the requester's own tenant.
-  // DORMANT while tenantEnforcing() is false (every environment today) — the
-  // `NOT enforcing OR ...` clause is always true, so this is byte-for-byte the
-  // old query. Historic AuditEvent rows predate tenant stamping and are
-  // NULL-tenant; gating on tenantEnforcing() (rather than filtering
-  // unconditionally) avoids silently hiding them from today's export.
-  const enforcing = tenantEnforcing();
+  // This workspace's events and no other's, WHATEVER the enforcement mode — this
+  // runs on `basePrisma`, so nothing else scopes it. It used to be scoped only
+  // while enforcement was on, which left the export of every workspace's trail
+  // open in every other mode. See lib/auditScope.ts, including what happens to
+  // events that have no workspace.
   const activeTenantId = await getActiveTenantId();
 
   const rows = await basePrisma.$queryRaw<AuditExportRow[]>`
@@ -61,7 +65,7 @@ export async function GET(request: NextRequest) {
       AND (${query}::text IS NULL OR "summary" ILIKE '%' || ${query} || '%' OR "entityId" ILIKE '%' || ${query} || '%')
       AND (${from}::timestamp IS NULL OR "createdAt" >= ${from})
       AND (${to}::timestamp IS NULL OR "createdAt" <= ${to})
-      AND (NOT ${enforcing}::boolean OR "tenantId" IS NOT DISTINCT FROM ${activeTenantId})
+      AND ${ownAuditEvents(activeTenantId)}
     ORDER BY "createdAt" DESC
     LIMIT 10000
   `;

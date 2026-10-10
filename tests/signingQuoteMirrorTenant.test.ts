@@ -82,7 +82,9 @@ test("same email is a CRM user in ANOTHER tenant → still this tenant's custome
   await mirrorQuoteSent(ids, lisa);
   await mirrorQuoteViewed(ids, lisa);
   assert.equal(state.quoteWrites.length, 2);
-  assert.deepEqual(state.quoteWrites[0].data, { status: "sent" });
+  // Sent, and no longer declined: a quote the customer turned down and was then
+  // sent again must not go on reading as declined while it sits in their inbox.
+  assert.deepEqual(state.quoteWrites[0].data, { status: "sent", declinedAt: null, declineReason: null });
   assert.ok(state.quoteWrites[1].data.viewedAt instanceof Date);
   // Only ever asked about the request's own tenant.
   assert.ok(state.memberLookups.length > 0 && state.memberLookups.every((w) => w.tenantId === T_A));

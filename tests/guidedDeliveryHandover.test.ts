@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import test from "node:test";
 import {
   deliveryHandoverReadiness,
@@ -7,7 +7,10 @@ import {
   handoverRunSelection,
 } from "../src/lib/checklists/deliveryHandover";
 
-const actionSource = readFileSync("src/app/actions/guidedDelivery.ts", "utf8");
+// The customer signs the delivery note itself, on its own screen. What they are
+// about to sign for is checked when that is started, and frozen into the note.
+const startSource = readFileSync("src/app/actions/deliverySigning.ts", "utf8");
+const noteSigningSource = readFileSync("src/lib/deliveryNoteSigning.ts", "utf8");
 const pageSource = readFileSync("src/app/(app)/deliveries/page.tsx", "utf8");
 const completionSource = readFileSync("src/components/checklists/GuidedDeliveryCompletion.tsx", "utf8");
 const deliveryNoteSource = readFileSync("src/app/(print)/quotes/[id]/delivery-note/page.tsx", "utf8");
@@ -44,19 +47,80 @@ test("every active handover template needs a completed run before signing unlock
   assert.deepEqual(complete.missingTemplateIds, []);
 });
 
-test("server completion repeats the checklist, review, driver and signature gates", () => {
-  assert.match(actionSource, /withActingStaffScope\(async \(\) => \{/);
-  assert.match(actionSource, /requireQuoteAccess\(quoteId, "deliveries\.manage"\)/);
-  assert.match(actionSource, /host: "quote\.delivery", active: true/);
-  assert.match(actionSource, /hostType: "quote\.delivery"/);
-  assert.match(actionSource, /deliveryNoteReviewed/);
-  assert.match(actionSource, /deliveredByName/);
-  assert.match(actionSource, /SIGNATURE_PREFIX/);
-  assert.match(actionSource, /signatureBytes\.length > MAX_SIGNATURE_BYTES/);
-  assert.match(actionSource, /deliveryHandoverReadiness\(templates, runs\)/);
-  // Now carries the runs it pinned. The delegation is what this assertion is
-  // for; the third argument is what makes the signed note immutable.
-  assert.match(actionSource, /return markDelivered\(quoteId, formData, signedRunIds\)/);
+test("the server repeats the checklist, review and driver gates BEFORE the customer signs", () => {
+  // The screen only offers the button once the checklist is complete, but that
+  // is not a business rule until the server repeats it — and it has to be
+  // repeated where the customer is about to be handed the device, because what
+  // is checked there is what gets frozen into the note they sign.
+  assert.match(startSource, /withActingStaffScope\(async \(\) => \{/);
+  assert.match(startSource, /requireModuleEnabled\("automotive"\)/);
+  assert.match(startSource, /requireQuoteAccess\(quoteId, "deliveries\.manage"\)/);
+  assert.match(startSource, /reviewedHandoverRuns\(tenantId, quoteId, claimedRunIds\)/);
+  assert.match(startSource, /deliveryNoteReviewed/);
+  assert.match(startSource, /if \(!deliveredByName\) refuse\("Enter who handed over the vehicle\."\)/);
+  assert.ok(
+    startSource.indexOf("reviewedHandoverRuns(") < startSource.indexOf("await prepareDeliveryNote("),
+    "the handover is verified before any note is made",
+  );
+  assert.match(noteSigningSource, /host: "quote\.delivery", active: true/);
+  assert.match(noteSigningSource, /hostType: "quote\.delivery"/);
+  assert.match(noteSigningSource, /deliveryHandoverReadiness\(templates, runs\)/);
+});
+
+test("a guided handover is delivered against the customer's signature on the note, or not at all", () => {
+  // In deliverQuote, which every delivery button ends in — not in a wrapper a
+  // direct call could walk around. The guided handover used to have an action
+  // of its own that held this rule; it has none now, because there is nothing
+  // left for it to hold.
+  assert.equal(existsSync("src/app/actions/guidedDelivery.ts"), false, "the guided handover completes through markDelivered like any other");
+  assert.match(deliverySource, /const signed = catchUp \? null : await signedDeliveryNote\(quoteId, tenantId\);/);
+  const gate = deliverySource.slice(deliverySource.indexOf("if (handoverTemplates.length > 0) {"));
+  assert.match(gate, /^if \(handoverTemplates\.length > 0\) \{\s*if \(!signed\) \{\s*refuse\("This delivery uses a guided handover\./);
+  // A checklist switched on since, a run removed, a handover switched off: with
+  // a signed note every one of them means "sign again", in those words.
+  assert.match(deliverySource, /const CHANGED = "The handover changed after the customer signed the delivery note\. Ask them to sign it again from the delivery screen\.";/);
+  assert.match(gate, /if \(!readiness\.ready \|\| verifiedRuns\.length !== handoverTemplates\.length\) refuse\(CHANGED\);/);
+});
+
+test("the delivery is recorded against the note the customer signed, not against the form", () => {
+  const board = readFileSync("src/app/actions/fulfilment.ts", "utf8");
+  const md = board.slice(board.indexOf("export async function markDelivered("));
+  // The runs were this exported action's third argument and the signature a
+  // field of its form — both arrive through the browser. Neither exists now.
+  assert.match(md, /^export async function markDelivered\(quoteId: string, formData: FormData\): Promise<ActionResult> \{/);
+  assert.doesNotMatch(board, /handoverRunIds|formData\.get\("signature"\)|deliverySignatureRef/, "the board's actions carry no runs and no signature");
+  assert.doesNotMatch(deliverySource, /input\.handoverRunIds|handoverRunIds\?:/, "nor does the delivery accept any");
+  assert.match(deliverySource, /const requestedRunIds = \[\.\.\.new Set\(signed\?\.runIds \?\? \[\]\)\];/, "the runs are the signed note's");
+  // A caller cannot hand in a signature either: its evidence has no such field.
+  assert.match(deliverySource, /export type DeliveryEvidence = \{\s*deliveredByName\?: string \| null;\s*deliveryChecklist\?: object;\s*\};/);
+
+  const evidence = deliverySource.slice(deliverySource.indexOf("async (stage) => {"), deliverySource.indexOf("(evidence, documents) =>"));
+  assert.match(evidence, /if \(!signed\) return \{ deliveredByName: said\.deliveredByName, deliveryChecklist: said\.deliveryChecklist, deliverySignatureRef: null \};/, "unsigned: the caller's word, and no signature");
+  assert.match(evidence, /readFile\(signed\.signatureRef, quote\.tenantId\)/, "the signature they drew, read in the quote's own workspace");
+  assert.match(evidence, /return \{ deliveredByName: signed\.deliveredByName \|\| null, deliveryChecklist: signed\.checklist \?\? undefined, deliverySignatureRef \};/, "signed: the note's word over the caller's");
+
+  // The note is read before the transaction (its signature has to be staged
+  // first), so it is proved again inside it — after the quote's row is held and
+  // the requests are, so a signature landing this instant is seen.
+  const tx = deliverySource.slice(deliverySource.indexOf("(evidence, documents) =>"));
+  const held = tx.indexOf("tx.quote.updateMany(");
+  const requests = tx.indexOf("await holdSubjectRequests(tx, note, tenantId);");
+  const again = tx.indexOf("const current = await signedDeliveryNote(quoteId, tenantId, tx);");
+  const withdraw = tx.indexOf("withdrawnNotes = await withdrawOpenSubjectRequests(tx, note, tenantId);");
+  assert.ok(held >= 0 && held < requests && requests < again && again < withdraw, "quote row, then the requests, then the question, then the withdrawal");
+  assert.match(tx, /if \(\(current\?\.requestId \?\? null\) !== \(signed\?\.requestId \?\? null\)\) \{\s*refuse\("The delivery note changed while this delivery was being completed\./);
+  // And which note that is: the NEWEST one, signed or not — a note opened after
+  // an earlier signature means the handover changed, so there is no signed note
+  // until the customer signs the new one.
+  const standing = noteSigningSource.slice(noteSigningSource.indexOf("const newestNoteStanding = "), noteSigningSource.indexOf("export async function signedDeliveryNote("));
+  assert.match(standing, /orderBy: \{ createdAt: "desc" \}/);
+  // Asked through the delivery's raw transaction as well, where no scoped
+  // client adds the tenant or hides a trashed row — so the query says both.
+  assert.match(standing, /subjectId: quoteId,\s*tenantId,\s*deletedAt: null,/);
+  const lookup = noteSigningSource.slice(noteSigningSource.indexOf("export async function signedDeliveryNote("));
+  assert.match(lookup, /tx\.signatureRequest\.findFirst\(newestNoteStanding\(quoteId, tenantId\)\)\s*: prisma\.signatureRequest\.findFirst\(newestNoteStanding\(quoteId, tenantId\)\)/, "one question, whichever client asks it");
+  assert.match(lookup, /const signer = newest\?\.recipients\.find\(\(recipient\) => recipient\.status === "signed"\);/);
+  assert.match(lookup, /if \(!newest \|\| !signer \|\| !facts\) return null;/);
 });
 
 test("the guided UI reviews the actual delivery note before showing signature", () => {
@@ -69,7 +133,7 @@ test("the guided UI reviews the actual delivery note before showing signature", 
   assert.match(completionSource, /`\/quotes\/\$\{quoteId\}\/delivery-note\?runs=/);
   assert.match(completionSource, /previewHref = `\/quotes\/\$\{quoteId\}\/delivery-note\?embed=1&runs=\$\{encodeURIComponent\(runs\)\}`/);
   assert.match(completionSource, /src=\{previewHref\}/);
-  assert.match(completionSource, /completeGuidedDelivery\.bind\(null, quoteId\)/);
+  assert.match(completionSource, /action=\{markDelivered\.bind\(null, quoteId\)\}/);
 });
 
 test("embedded delivery-note review hides its nested print toolbar", () => {
@@ -96,9 +160,9 @@ test("the delivery note shows the guided snapshots being signed, then the stored
 test("Deliveries uses the old proof-of-delivery only as an unconfigured fallback", () => {
   assert.match(pageSource, /handover\?\.configured \? \(/);
   assert.match(pageSource, /handover\.ready \? \(/);
-  assert.match(pageSource, /<GuidedDeliveryCompletion quoteId=\{quote\.id\} runIds=\{handoverRuns\} \/>/);
+  assert.match(pageSource, /<GuidedDeliveryCompletion quoteId=\{quote\.id\} runIds=\{handoverRuns\} signing=\{checklist\.signing\} \/>/);
   assert.match(pageSource, /No guided delivery checklist is configured/);
-  assert.match(pageSource, /<ProofOfDelivery quoteId=\{quote\.id\} \/>/);
+  assert.match(pageSource, /<ProofOfDelivery quoteId=\{quote\.id\} signing=\{checklist\.signing\} \/>/);
 });
 
 /*
@@ -163,18 +227,21 @@ test("an incomplete run is never shown, signed or not", () => {
 /* The wiring: pinning at signing, and re-verifying what was pinned. */
 
 test("completion records the runs it validated, in the same write as the delivery", () => {
-  const guided = actionSource;
-  assert.match(guided, /select: \{ id: true, templateId: true, completedAt: true \}/, "the ids must be selected to be pinned");
-  assert.match(guided, /orderBy: \{ completedAt: "desc" \}/, "newest-first is what makes the choice deterministic");
-  assert.match(guided, /markDelivered\(quoteId, formData, signedRunIds\)/, "the pinned ids must reach the write");
+  // Validated when the customer is handed the note, frozen into it, and read
+  // back from it at completion.
+  assert.match(noteSigningSource, /select: \{ id: true, templateId: true, completedAt: true \}/, "the ids must be selected to be pinned");
+  assert.match(noteSigningSource, /orderBy: \{ completedAt: "desc" \}/, "newest-first is what makes the choice deterministic");
+  assert.match(noteSigningSource, /delivery: \{ \.\.\.\(ctx\.vars\.delivery as object\), runIds: facts\.runIds, checklist: facts\.checklist \}/, "the verified ids are frozen into the note that is signed");
+  assert.match(noteSigningSource, /const \{ driver, runIds, checklist \} = delivery as/, "and read back from it, by the server");
 
   const fulfilment = deliverySource;
   assert.match(fulfilment, /deliveryHandoverRunIds\s*\}/, "they must land in the delivery update itself");
 });
 
 test("the ids are re-verified against the quote, never trusted", () => {
-  // They arrive server-to-server, but a caller inside the process is still a
-  // caller — and a note signed against a partial set is worse than none.
+  // They come from the signed note now, and are still checked: a run can be
+  // removed after the note froze it — and a delivery recorded against a partial
+  // set is worse than none.
   const fulfilment = deliverySource;
   assert.match(fulfilment, /hostType: "quote\.delivery",\s*\n\s*hostId: quoteId,/, "scoped to THIS quote");
   assert.match(fulfilment, /completedAt: \{ not: null \}/, "and to completed runs only");
@@ -191,18 +258,19 @@ test("the note never re-derives the selection for itself", () => {
 });
 
 /*
- * THE GATE MUST HOLD FOR A DIRECT CALL, NOT ONLY THROUGH THE WRAPPER.
+ * THE GATE MUST HOLD FOR A DIRECT CALL, NOT ONLY THROUGH THE SCREEN.
  *
  * markDelivered is an exported Server Action, which is a public POST endpoint. A
- * stale legacy form or a hand-made request reaches it without going anywhere
- * near completeGuidedDelivery — so a readiness check that lives only in the
- * wrapper is optional, which is the same as absent. It would record a delivery
- * as signed with an EMPTY deliveryHandoverRunIds and no checklist behind it.
+ * stale legacy form or a hand-made request reaches it whatever the screen was
+ * showing — so a readiness check that lives only in what the screen offers is
+ * optional, which is the same as absent. It would record a delivery as signed
+ * with an EMPTY deliveryHandoverRunIds and no checklist behind it.
  *
- * And a Server Action's arguments are deserialised from the request, so the run
- * ids are client-supplied too. Re-verifying each id is necessary but not
- * sufficient: a caller could pass one genuine run while a second configured
- * checklist was still unfinished, and be recorded with partial evidence.
+ * A Server Action's arguments are deserialised from the request, so run ids
+ * passed to it were client-supplied too — which is why it takes none now: they
+ * come from the note the customer signed. Re-verifying each is still necessary
+ * and still not sufficient: one genuine run while a second configured checklist
+ * is unfinished would be partial evidence.
  */
 test("the legacy delivery action enforces the guided gate itself", () => {
   const fulfilment = deliverySource;
@@ -413,16 +481,28 @@ test("THE SUBMITTED IDS ARE VERIFIED, NOT TRUSTED", () => {
    * delivery template, and complete — so a forged value can pick a different one
    * of the customer's own completed runs and nothing else.
    */
-  assert.match(actionSource, /const claimedRunIds = String\(formData\.get\("runIds"\) \?\? ""\)/);
-  assert.match(actionSource, /const completedById = new Map\(runs\.filter\(\(run\) => run\.completedAt\)/);
-  assert.match(actionSource, /if \(!run\) \{[\s\S]*?refuse\(/, "an unknown id must be refused");
-  assert.match(actionSource, /if \(seenTemplates\.has\(run\.templateId\)\) \{[\s\S]*?refuse\(/,
-    "two runs for one template would make the signed document ambiguous");
-  assert.match(actionSource, /if \(templates\.some\(\(template\) => !seenTemplates\.has\(template\.id\)\)\) \{[\s\S]*?refuse\(/,
-    "a short list must not get a signature against a partial handover");
-  assert.match(actionSource, /signedRunIds = claimedRunIds;/);
-  // The action must no longer make its own choice.
-  assert.doesNotMatch(actionSource, /signedByTemplate/, "the action must not re-derive the selection");
+  assert.match(startSource, /const claimedRunIds = String\(formData\.get\("runIds"\) \?\? ""\)/);
+  const verify = noteSigningSource.slice(
+    noteSigningSource.indexOf("export async function reviewedHandoverRuns("),
+    noteSigningSource.indexOf("function handoverFactsOf("),
+  );
+  assert.match(verify, /const completedById = new Map\(runs\.filter\(\(run\) => run\.completedAt\)/);
+  assert.match(
+    verify,
+    /if \(!run \|\| seenTemplates\.has\(run\.templateId\)\) throw new ActionRefusal\(CHANGED\);/,
+    "an unknown id must be refused — and so must two runs for one template, which would make the signed document ambiguous",
+  );
+  assert.match(
+    verify,
+    /if \(templates\.some\(\(template\) => !seenTemplates\.has\(template\.id\)\)\) throw new ActionRefusal\(CHANGED\);/,
+    "a short list must not get a signature against a partial handover",
+  );
+  assert.match(verify, /return \{ guided: true, runIds: claimed \};/);
+  // What was verified is what gets frozen — the action hands on the verified
+  // list, not the one the browser sent.
+  assert.match(startSource, /facts: \{ deliveredByName, runIds: handover\.runIds, checklist \}/);
+  // Neither may make its own choice of runs — and nor may the delivery.
+  assert.doesNotMatch(startSource + noteSigningSource + deliverySource, /signedByTemplate|handoverRunSelection\(/, "the selection must not be re-derived on the server");
 });
 
 test("a signed note ignores the query parameter entirely", () => {

@@ -12,6 +12,7 @@ import "server-only";
 export {
   CLOSED_REQUEST_STATUSES,
   isRequestClosed,
+  lastValidDay,
   signatureRequestView,
 } from "./statusPolicy";
 export type { SignatureRequestView } from "./statusPolicy";
