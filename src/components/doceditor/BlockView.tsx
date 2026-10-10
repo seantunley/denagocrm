@@ -144,6 +144,9 @@ export function BlockView({ block, active }: { block: DocumentBlock; active: boo
       return <PrintedBlock block={block} hint={`🔗 Fills from the linked quote / job card${block.columns.some((c) => c.showIf?.trim()) ? " · some columns show only when their condition is met" : ""}`} />;
     case "divider": case "banner": case "infoCard": case "totalBand": case "terms": case "footer": case "handoverChecklist":
       return <PrintedBlock block={block} />;
+    // Details grid, payment schedule, comparison, callout, gallery, QR code: drawn by the print renderer; edited in the panel.
+    case "detailsGrid": case "paymentSchedule": case "comparison": case "callout": case "gallery": case "qr":
+      return <PrintedBlock block={block} />;
 
     case "conditional": {
       const badge = block.when?.trim() ? block.when : "always";

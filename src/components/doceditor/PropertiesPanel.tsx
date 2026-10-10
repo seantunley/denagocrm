@@ -18,6 +18,7 @@ import { ShowcaseProps } from "./ShowcaseProps";
 import { DesignSection } from "./DesignSection";
 import { AlignOnPage, ArrangePanel } from "./ArrangePanel";
 import { TableStyleControls } from "./TableStyleControls";
+import { ContentBlockProps } from "./ContentBlockProps";
 import { IMAGE_ASPECT_LABELS, type ImageAspect } from "@/lib/doceditor/imageFrame";
 import { useState } from "react";
 import { uploadDocEditorImage } from "@/app/actions/doceditor";
@@ -268,6 +269,7 @@ const FRAME_PARTS = new Set<string>(["emailHeader", "emailBody", "emailSignature
 /** Plain names for the email blocks ("emailHeader block" is the code's name, not the owner's). */
 const EMAIL_BLOCK_NAMES: Record<string, string> = {
   emailHeader: "Header", emailBody: "Message slot", emailSignature: "Signature", emailFooter: "Footer", emailButton: "Button", emailFacts: "Key figures",
+  detailsGrid: "Details grid", paymentSchedule: "Payment schedule", comparison: "Comparison table", callout: "Callout", gallery: "Photo gallery", qr: "QR code",
 };
 
 /**
@@ -344,6 +346,7 @@ function BlockProps({ block, floating }: { block: DocumentBlock; floating: boole
       {block.type === "footer" && <FooterProps block={block} />}
       {block.type === "lineItems" && <LineItemsProps block={block} />}
       {(block.type === "showcaseHeader" || block.type === "infoStrip" || block.type === "vehicleShowcase" || block.type === "totalsBox" || block.type === "acceptance" || block.type === "footerBand") && <ShowcaseProps block={block} />}
+      {(block.type === "detailsGrid" || block.type === "paymentSchedule" || block.type === "comparison" || block.type === "callout" || block.type === "gallery" || block.type === "qr") && <ContentBlockProps block={block} />}
       {block.type === "emailButton" && <EmailButtonProps block={block} />}
       {block.type === "emailFacts" && <EmailFactsProps block={block} />}
       {block.type === "emailFooter" && <EmailFooterProps block={block} />}

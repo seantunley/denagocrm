@@ -366,6 +366,67 @@ export const footerBandBlockSchema = z.object({
   style: bandStyle,
 });
 
+// ── content blocks (rendered by ./contentBlocks.ts) ──────────────────
+// Every text value here takes {{merge fields}}.
+/**
+ * Labels with their values, in columns: a details grid, a specification sheet,
+ * or banking details. `stacked` puts each label above its value; `inline` puts
+ * them side by side on one line.
+ */
+export const detailsGridBlockSchema = z.object({
+  ...base, type: z.literal("detailsGrid"),
+  title: z.string().default(""),
+  items: z.array(z.object({ label: z.string().default(""), value: z.string().default("") })).default([]),
+  columns: z.number().default(2),
+  layout: z.enum(["stacked", "inline"]).default("stacked"),
+  boxed: z.boolean().default(false),
+  accent: colorField("#ea580c"),
+});
+/**
+ * When each part of the total is due. A row either states a share of the
+ * document's total (`percent` — worked out from the quote or job card when the
+ * document is made) or carries a typed `amount`.
+ */
+export const paymentScheduleBlockSchema = z.object({
+  ...base, type: z.literal("paymentSchedule"),
+  title: z.string().default("PAYMENT SCHEDULE"),
+  rows: z.array(z.object({ label: z.string().default(""), due: z.string().default(""), percent: z.number().optional(), amount: z.string().default("") })).default([]),
+  accent: colorField("#ea580c"),
+});
+/** Options side by side: one row per feature, one column per option, one option picked out. A cell of "yes" / "no" draws a tick / a dash. */
+export const comparisonBlockSchema = z.object({
+  ...base, type: z.literal("comparison"),
+  options: z.array(z.object({ name: z.string().default(""), highlight: z.boolean().default(false) })).default([]),
+  rows: z.array(z.object({ label: z.string().default(""), cells: z.array(z.string()).default([]) })).default([]),
+  accent: colorField("#ea580c"),
+});
+/** A note set apart from the text around it. */
+export const calloutBlockSchema = z.object({
+  ...base, type: z.literal("callout"),
+  tone: z.enum(["info", "success", "warning", "accent"]).default("info"),
+  title: z.string().default(""),
+  text: z.string().default(""),
+  accent: colorField("#ea580c"),
+});
+/** Several pictures in a grid, each cropped to one shape. A picture is a stored upload or an https link, as for the image block. */
+export const galleryBlockSchema = z.object({
+  ...base, type: z.literal("gallery"),
+  images: z.array(z.object({ src: z.string().default(""), alt: z.string().default(""), caption: z.string().default("") })).default([]),
+  columns: z.number().default(3),
+  aspect: z.enum(["1:1", "4:3", "3:2", "16:9", "3:4"]).default("4:3"),
+  gap: z.number().default(8),
+  rounded: z.boolean().default(true),
+});
+/** A QR code for a link (a payment page, a booking page, the quote online), with a line of text beside it. */
+export const qrBlockSchema = z.object({
+  ...base, type: z.literal("qr"),
+  url: z.string().default(""),
+  label: z.string().default(""),
+  caption: z.string().default(""),
+  size: z.number().default(96),
+  showUrl: z.boolean().default(true),
+});
+
 // ── customer email blocks (rendered by ./emailRender.ts) ─────────────
 // Customer emails are documents in this editor too (Sean, 2026-10-08: "We have
 // all this advanced editing, and I get inline editing"). One shared FRAME
@@ -442,6 +503,7 @@ export const blockSchema: z.ZodType<DocumentBlock> = z.lazy(() => z.discriminate
   bannerBlockSchema, infoCardBlockSchema, lineItemsBlockSchema, totalBandBlockSchema, termsBlockSchema, footerBlockSchema,
   conditionalBlockSchema, handoverChecklistBlockSchema,
   showcaseHeaderBlockSchema, infoStripBlockSchema, vehicleShowcaseBlockSchema, totalsBoxBlockSchema, acceptanceBlockSchema, footerBandBlockSchema,
+  detailsGridBlockSchema, paymentScheduleBlockSchema, comparisonBlockSchema, calloutBlockSchema, galleryBlockSchema, qrBlockSchema,
   emailHeaderBlockSchema, emailBodyBlockSchema, emailSignatureBlockSchema, emailFooterBlockSchema, emailButtonBlockSchema, emailFactsBlockSchema,
 ])) as z.ZodType<DocumentBlock>;
 
@@ -468,6 +530,14 @@ export type AcceptanceBlock = z.infer<typeof acceptanceBlockSchema>;
 export type FooterBandBlock = z.infer<typeof footerBandBlockSchema>;
 export type ShowcaseBlock =
   | ShowcaseHeaderBlock | InfoStripBlock | VehicleShowcaseBlock | TotalsBoxBlock | AcceptanceBlock | FooterBandBlock;
+export type DetailsGridBlock = z.infer<typeof detailsGridBlockSchema>;
+export type PaymentScheduleBlock = z.infer<typeof paymentScheduleBlockSchema>;
+export type ComparisonBlock = z.infer<typeof comparisonBlockSchema>;
+export type CalloutBlock = z.infer<typeof calloutBlockSchema>;
+export type GalleryBlock = z.infer<typeof galleryBlockSchema>;
+export type QrBlock = z.infer<typeof qrBlockSchema>;
+export type ContentBlock = DetailsGridBlock | PaymentScheduleBlock | ComparisonBlock | CalloutBlock | GalleryBlock | QrBlock;
+export const CONTENT_BLOCK_TYPES = ["detailsGrid", "paymentSchedule", "comparison", "callout", "gallery", "qr"] as const;
 export type EmailHeaderBlock = z.infer<typeof emailHeaderBlockSchema>;
 export type EmailBodyBlock = z.infer<typeof emailBodyBlockSchema>;
 export type EmailSignatureBlock = z.infer<typeof emailSignatureBlockSchema>;
@@ -484,7 +554,7 @@ export type DocumentBlock =
   | TextBlock | HeadingBlock | ImageBlock | DividerBlock | SpacerBlock
   | PageBreakBlock | PricingBlock | TableBlock
   | BannerBlock | InfoCardBlock | LineItemsBlock | TotalBandBlock | TermsBlock | FooterBlock
-  | ConditionalBlock | HandoverChecklistBlock | ShowcaseBlock | EmailBlock;
+  | ConditionalBlock | HandoverChecklistBlock | ShowcaseBlock | ContentBlock | EmailBlock;
 export type BlockType = DocumentBlock["type"];
 
 // ── columns / rows / pages ──────────────────────────────────────────

@@ -33,6 +33,18 @@ const BRANDED: { type: BlockType; label: string; icon: string }[] = [
   { type: "footer", label: "Footer", icon: "‗" },
 ];
 
+/** Ready-made sections. Three of them are one block (a details grid) with different starting content. */
+const SECTIONS: { type: BlockType; label: string; icon: string; preset?: string }[] = [
+  { type: "detailsGrid", label: "Label / value grid", icon: "▤" },
+  { type: "detailsGrid", preset: "spec", label: "Specification grid", icon: "▦" },
+  { type: "detailsGrid", preset: "banking", label: "Banking details", icon: "🏦" },
+  { type: "paymentSchedule", label: "Payment schedule", icon: "①" },
+  { type: "comparison", label: "Comparison table", icon: "⇄" },
+  { type: "callout", label: "Callout", icon: "❕" },
+  { type: "gallery", label: "Photo gallery", icon: "▥" },
+  { type: "qr", label: "QR code / link", icon: "▣" },
+];
+
 const SHOWCASE: { type: BlockType; label: string; icon: string }[] = [
   { type: "showcaseHeader", label: "Header band", icon: "▀" },
   { type: "infoStrip", label: "Info strip", icon: "⋯" },
@@ -73,18 +85,18 @@ const TABS = ["Content", "Fields", "Library"] as const;
 
 // The Library tab — search, categories, previews and whole sections — lives in ./LibraryTab.
 
-function ContentItem({ type, label, icon }: { type: BlockType; label: string; icon: string }) {
+function ContentItem({ type, label, icon, preset }: { type: BlockType; label: string; icon: string; preset?: string }) {
   const appendToPage = useEditor((s) => s.appendToPage);
-  const pageCount = useEditor((s) => s.doc?.pages.length ?? 1);
   const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
-    id: `new-${type}`, data: { source: "new", blockType: type } satisfies DragData,
+    id: `new-${type}${preset ? `-${preset}` : ""}`, data: { source: "new", blockType: type, preset } satisfies DragData,
   });
   return (
     <button
       ref={setNodeRef} {...listeners} {...attributes}
       type="button"
-      onClick={() => appendToPage(pageCount - 1, newBlock(type))}
-      title="Drag onto the page, or click to add at the end"
+      // On the page the person is working on. It used to be the last page, always.
+      onClick={() => { const { activePage, doc } = useEditor.getState(); appendToPage(Math.min(activePage, Math.max(0, (doc?.pages.length ?? 1) - 1)), newBlock(type, preset)); }}
+      title="Drag onto the page, or click to add at the end of the page you are working on"
       className={`flex cursor-grab items-center gap-2 rounded-lg border border-slate-200 bg-white px-2.5 py-2 text-left text-sm text-slate-700 hover:border-orange-300 hover:bg-orange-50 ${isDragging ? "opacity-40" : ""}`}
     >
       <span className="grid h-6 w-6 place-items-center rounded bg-slate-100 text-xs">{icon}</span>
@@ -165,6 +177,10 @@ function DocumentPalette() {
             <p className="px-1 pt-2 text-[11px] font-medium text-slate-400">Branded (quote/proposal)</p>
             <div className="grid grid-cols-1 gap-1.5">
               {BRANDED.map((c) => <ContentItem key={c.type} {...c} />)}
+            </div>
+            <p className="px-1 pt-2 text-[11px] font-medium text-slate-400">Sections</p>
+            <div className="grid grid-cols-1 gap-1.5">
+              {SECTIONS.map((c) => <ContentItem key={`${c.type}-${c.preset ?? ""}`} {...c} />)}
             </div>
             <p className="px-1 pt-2 text-[11px] font-medium text-slate-400">Showcase quotation</p>
             <ShowcaseLayoutButton />
