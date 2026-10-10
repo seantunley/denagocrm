@@ -2401,6 +2401,7 @@ model SignatureRequest {
   recipients SignatureRecipient[]
   fields     SignatureField[]
   events     SignatureEvent[]
+  views      SignatureView[]
   approvals  ApprovalStep[]
 
   @@index([status, updatedAt])
@@ -2646,6 +2647,28 @@ model SignatureEvent {
   @@index([requestId, createdAt])
   @@index([tenantId])
   @@unique([requestId, sequence])
+}
+
+
+/// Engagement for a signing session. Operational, not evidence — heartbeats
+/// never enter the SignatureEvent hash chain.
+model SignatureView {
+  id          String   @id @default(cuid())
+  tenantId    String?
+  requestId   String
+  request     SignatureRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  recipientId String?
+  startedAt   DateTime @default(now())
+  lastSeenAt  DateTime @default(now())
+  seconds     Int      @default(0)
+  maxPage     Int      @default(1)
+  sections    Json?
+  channel     String?
+  ip          String?
+  userAgent   String?
+
+  @@index([requestId])
+  @@index([tenantId])
 }
 
 // ── Document Studio: free-form BlockNote documents ──────────────────
