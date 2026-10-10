@@ -55,6 +55,7 @@ export default function AssistantActionCard({ card }: { card: ActionCard }) {
 
   const leadLink = card.kind === "schedule" || card.kind === "watch" ? null : card.leadId ? `/leads/${card.leadId}` : null;
   const editable = state === "open" && !pending;
+  const reason = "reason" in card && card.reason ? card.reason : null;
 
   return (
     <div className={`rounded-lg border p-3 text-sm ${state === "done" ? "border-emerald-500/40" : "border-border"}`}>
@@ -70,6 +71,7 @@ export default function AssistantActionCard({ card }: { card: ActionCard }) {
           ) : (
             <p className="text-xs text-muted-foreground">{card.leadLabel}</p>
           )}
+          {reason && <p className="mt-1 text-xs text-muted-foreground">{reason}</p>}
         </div>
         {state === "open" && (
           <button type="button" onClick={() => setState("dismissed")} className="text-muted-foreground hover:text-foreground" aria-label="Dismiss">
