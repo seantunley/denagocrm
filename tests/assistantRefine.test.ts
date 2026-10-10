@@ -35,7 +35,7 @@ test("prose instead of a choice gets ONE firm retry on the first step, and is ne
   const lib = code("src/lib/crmAssistant.ts");
   assert.match(lib, /!parseSteps\(reply\.text\) && step === 0\) \{[\s\S]*?reply = await plan\(step, true\);/);
   // …through the one plan call, which builds the firm prompt when asked to insist.
-  assert.match(lib, /const plan = \(step: number, insist: boolean\) =>\s*withRetry\(breakerKey, \(\) =>\s*codexRespond\(\{ instructions, prompt: planPrompt\(step, insist\)/);
+  assert.match(lib, /const plan = \(step: number, insist: boolean\) =>\s*withRetry\(breakerKey, \(\): Promise<CodexResult> =>/);
   assert.match(lib, /export const PLAN_INSIST =\s*'Your last reply was prose\. Reply with ONE JSON object only/);
   assert.doesNotMatch(lib, /I couldn't work out what to look up/, "no more failing the question");
 });
