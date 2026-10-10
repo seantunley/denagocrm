@@ -229,8 +229,9 @@ function smallSignLine(label: string): DocumentBlock {
   return small(block);
 }
 
-function indemnityTemplate(): DocumentModel {
-  return documentModel("Test-drive indemnity", [
+/** The top of the indemnity: who is driving what, and when. */
+function indemnityHead(): DocumentBlock[][] {
+  return [
     [banner("TEST-DRIVE INDEMNITY", "")],
     [small(text("Date: {{date.today}}"))],
     [note("Please read and sign before the test drive.")],
@@ -238,21 +239,85 @@ function indemnityTemplate(): DocumentModel {
       infoCard("DRIVER", "{{customer.name}}", "{{customer.lines}}"),
       infoCard("VEHICLE", "{{vehicle}}", "{{vehicle.lines}}", INK),
     ],
+  ];
+}
+
+function indemnityWaiver(): DocumentBlock[] {
+  return [infoCard(
+    "INDEMNITY & WAIVER",
+    "",
+    "I, the undersigned, acknowledge that I am test-driving the vehicle entirely at my own risk. I confirm that I hold a valid driver's licence, will follow all instructions given by {{company.name}} staff, and accept liability for any damage caused by my negligence during the test drive. {{company.name}}, its owners and employees are indemnified against any claim for injury, loss or damage arising from the test drive, to the fullest extent permitted by law.",
+    SLATE,
+  )];
+}
+
+function indemnityTemplate(): DocumentModel {
+  return documentModel("Test-drive indemnity", [
+    ...indemnityHead(),
     [infoCard(
       "TO BE COMPLETED BY THE DRIVER",
       "",
       "Driver's licence number: ______________________________\n\nID / passport number: ______________________________",
       SLATE,
     )],
-    [infoCard(
-      "INDEMNITY & WAIVER",
-      "",
-      "I, the undersigned, acknowledge that I am test-driving the vehicle entirely at my own risk. I confirm that I hold a valid driver's licence, will follow all instructions given by {{company.name}} staff, and accept liability for any damage caused by my negligence during the test drive. {{company.name}}, its owners and employees are indemnified against any claim for injury, loss or damage arising from the test drive, to the fullest extent permitted by law.",
-      SLATE,
-    )],
+    indemnityWaiver(),
     [smallSignLine("Driver signature · Date"), smallSignLine("For {{company.name}} · Date")],
     [footer()],
   ]);
+}
+
+/**
+ * Where the driver signs on the screen version: page coordinates, inside the
+ * room SIGN_ROOM keeps open between the waiver and the footer.
+ *
+ * Signature fields sit at fixed places on the page while the text above them
+ * flows, so the two can only be kept apart by leaving room. What moves the text
+ * is small and known — none to three lines under the driver's name, none to two
+ * under the vehicle, and a waiver that runs a line or two longer for a long
+ * company name. Measured in a browser, the waiver ends between 344px (nothing
+ * but a name) and 450px (everything, and a 64-character company name) down the
+ * page; the room is that 106px range plus the 94px the label and box take, and
+ * the box sits where it is inside the room at both ends.
+ *
+ * ponytail: a fixed place, so text taller than that range would run under the
+ * box. If the standard wording grows, re-measure — or give the signing engine
+ * fields that flow with a block, which it does not have.
+ */
+export const INDEMNITY_SIGN_Y = 504;
+const SIGN_ROOM = 220;
+
+/**
+ * The standard indemnity for signing on a SCREEN — the printed one without the
+ * two parts that only work with a pen: the lines to write a licence and ID
+ * number on (the booking holds the licence number, and it prints under the
+ * driver's details), and the ruled signature lines. In their place the driver
+ * has a signature box and a date under the waiver, on the same page: the
+ * engine's own fallback is a page of its own for signatures, which here would
+ * be a second sheet holding one box.
+ *
+ * Only the fallback: a workspace that has published its own indemnity layout
+ * signs that one, exactly as drawn.
+ */
+export function indemnityTemplateForScreen(): DocumentModel {
+  const room = newBlock("spacer");
+  if (room.type === "spacer") room.height = SIGN_ROOM;
+  const doc = documentModel("Test-drive indemnity", [...indemnityHead(), indemnityWaiver(), [room], [footer()]]);
+  // The party, not a person: who the driver is comes from the booking when the
+  // indemnity is made (signing/templateRecipients.ts).
+  const driver = newRecipient({ party: "customer", name: "Driver", color: "#2563eb" });
+  doc.recipients = [driver];
+  const label = (x: number, value: string) => {
+    const block = text(value);
+    if (block.type === "text") block.value = [{ type: "p", children: [{ text: value, bold: true }] }];
+    return { id: uid(), x, y: INDEMNITY_SIGN_Y - 30, width: 250, block: small(block) };
+  };
+  const at = (x: number, y: number) => ({ mode: "page" as const, blockId: null, x, y });
+  doc.pages[0].floatingBlocks.push(label(70, "Driver's signature"), label(360, "Date"));
+  doc.pages[0].overlayFields.push(
+    newOverlayField("signature", { recipientId: driver.id, label: "Driver's signature", anchor: at(70, INDEMNITY_SIGN_Y), width: 250, height: 64 }),
+    newOverlayField("date", { recipientId: driver.id, label: "Date", anchor: at(360, INDEMNITY_SIGN_Y + 13), width: 160, height: 38 }),
+  );
+  return doc;
 }
 
 /** Description + quantity only: a delivery note and a service report list what, not what it cost. */
@@ -264,8 +329,9 @@ function packingList(): DocumentBlock {
 
 // Mirrors the fixed delivery-note print: meta line, deliver-to / details cards,
 // packing list, the guided handover checklist and signature, sign-off lines.
-function deliveryTemplate(): DocumentModel {
-  return documentModel("Delivery note", [
+/** The delivery note down to its checklist: who, what, and how it was handed over. */
+function deliveryRows(): DocumentBlock[][] {
+  return [
     [banner("DELIVERY NOTE", "{{delivery.number}}")],
     [text("{{delivery.meta}}")],
     [
@@ -274,9 +340,29 @@ function deliveryTemplate(): DocumentModel {
     ],
     [packingList()],
     [newBlock("handoverChecklist")],
+  ];
+}
+
+function deliveryTemplate(): DocumentModel {
+  return documentModel("Delivery note", [
+    ...deliveryRows(),
     signatureStrip("Received in good order — customer & date", "Driver & date"),
     [footer()],
   ]);
+}
+
+/**
+ * The standard delivery note for signing on a SCREEN: the printed one with its
+ * ruled sign-off lines replaced by the words they stood for. The customer's
+ * signature and date go on the page the signing engine adds for them — a
+ * packing list and a checklist with photos run to no fixed length, so nothing
+ * here can say where on a page they end. Who handed it over is in the note's
+ * own details, and on the certificate as the witness.
+ *
+ * Only the fallback: a published delivery layout is signed exactly as drawn.
+ */
+export function deliveryTemplateForScreen(): DocumentModel {
+  return documentModel("Delivery note", [...deliveryRows(), [text("Received in good order.")], [footer()]]);
 }
 
 /**

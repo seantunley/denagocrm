@@ -128,7 +128,7 @@ test("the signing shell shows the tenant logo, then name, then nothing", () => {
   assert.match(code, /brand\?\.logoUrl \? \(/, "a tenant logo wins");
   assert.match(code, /\) : brand\?\.branded \? \(/, "…then a tenant name");
   assert.doesNotMatch(code, /DENAGO/, "…and never the Denago wordmark");
-  for (const page of ["src/app/signing/[token]/page.tsx", "src/app/(handover)/signatures/[id]/sign/[recipientId]/page.tsx"]) {
+  for (const page of ["src/app/signing/[token]/page.tsx", "src/app/(handover)/InPersonSigning.tsx"]) {
     assert.match(shipped(page), /<SigningShell brand=\{brand\}>/, `${page} must render inside the shared shell`);
   }
 });

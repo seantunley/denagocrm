@@ -359,6 +359,59 @@ export async function sendWhatsAppAudioId(toDigits: string, mediaId: string): Pr
   return postWhatsAppMessage(creds, { to: toDigits, type: "audio", audio: { id: mediaId } });
 }
 
+/** WhatsApp's own limit on the text under a document. */
+const WA_CAPTION_MAX = 1024;
+
+/**
+ * Sends a document — a signed contract, as a PDF — on WhatsApp.
+ *
+ * Uploaded to Meta and sent by id, never by link: a signed contract must not sit
+ * at an address of ours that anyone holding it can open. Like every free-form
+ * message it is only delivered inside the 24-hour customer-service window; Meta
+ * can accept it here and report the failure afterwards, on the status webhook,
+ * against the `wamid` this returns.
+ *
+ * Never throws — an upload that times out comes back as a failed send, like a
+ * message that does. With `record`, both outcomes reach the customer's timeline.
+ */
+export async function sendWhatsAppDocument(
+  toDigits: string,
+  file: { content: Buffer; filename: string; contentType?: string },
+  caption: string,
+  record?: OutboundRecord,
+): Promise<WhatsAppSendResult> {
+  const logged = { channel: "whatsapp" as const, to: toDigits, text: caption, attachments: [file.filename] };
+  const failed = async (error: string): Promise<WhatsAppSendResult> => {
+    if (record) await recordOutboundFailure(logged, record, error);
+    return { ok: false, error };
+  };
+  const creds = await waCredentials();
+  if (!creds) return failed("WhatsApp is not configured (Settings → Integrations).");
+
+  let media: { id: string } | { error: string };
+  try {
+    media = await uploadWhatsAppMedia(file.content, file.contentType ?? "application/pdf", file.filename);
+  } catch (error) {
+    media = { error: whatsappTransportFailure(error).error ?? "Could not reach WhatsApp" };
+  }
+  if ("error" in media) return failed(media.error);
+
+  const sent = await postWhatsAppMessage(creds, {
+    to: toDigits,
+    type: "document",
+    document: { id: media.id, filename: file.filename, ...(caption ? { caption: caption.slice(0, WA_CAPTION_MAX) } : {}) },
+  });
+  if (!sent.ok) {
+    return failed(
+      sent.error?.includes("24")
+        ? "Outside the 24-hour reply window — the customer must message you first (or use an approved template from WhatsApp Manager)."
+        : sent.error ?? "WhatsApp send failed",
+    );
+  }
+  if (record) await recordOutboundMessage({ ...logged, messageId: sent.providerMessageId ?? null }, record);
+  return sent;
+}
+
 /** Shared sender behind the button and list messages — both report their outcome. */
 async function sendInteractive(toDigits: string, interactive: unknown): Promise<WhatsAppSendResult> {
   const creds = await waCredentials();

@@ -183,14 +183,15 @@ export async function tenantSmsContent(
  * NEVER THROWS: a failed lookup still sends the default text.
  */
 export async function signingWhatsAppText(
-  kind: "invite_whatsapp" | "reminder_whatsapp",
-  input: { requestId: string; title: string; recipientName: string; signingUrl: string },
+  kind: "invite_whatsapp" | "reminder_whatsapp" | "completed_whatsapp",
+  /** `signingUrl` for the kinds that carry a link; the signed-copy message has none. */
+  input: { requestId: string; title: string; recipientName: string; signingUrl?: string },
 ): Promise<string> {
   const vars: Record<string, string> = {
     recipient_name: input.recipientName,
     first_name: input.recipientName.trim().split(/\s+/)[0] ?? input.recipientName,
     document_title: input.title,
-    signing_link: input.signingUrl,
+    signing_link: input.signingUrl ?? "",
   };
   try {
     const req = await basePrisma.signatureRequest.findUnique({

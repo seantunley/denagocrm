@@ -397,6 +397,15 @@ jobs:
       - name: Concurrency -- two people cannot silently overwrite one reply draft
         run: npm run test:draft-concurrency
 
+      # The public "is this document genuine?" page is given a file's fingerprint
+      # and nothing else — no session, no token — and has to find the right
+      # workspace from it in a database walled off per workspace. Whether that
+      # lookup lands in the RIGHT workspace, names the right company, survives the
+      # request being trashed, and stops vouching for a file once the two records
+      # it relies on disagree, is a property of real rows in two workspaces.
+      - name: Signing -- a sealed document is vouched for by the workspace that sealed it
+        run: npm run test:signing-verify
+
       # Added HERE and not only to validate:security, for the reason stated
       # directly above: this workflow calls the suites individually, so a script
       # reachable only through that chain is never run by the thing gating the
@@ -435,6 +444,18 @@ jobs:
       # made the unscoped version a cross-tenant WRITE rather than a leak.
       - name: Isolation -- a delivery receipt cannot reach another tenant
         run: npm run test:receipt-isolation
+
+      # A test drive's indemnity is the first signature request that is about
+      # neither a quote nor a job card. What that changes only shows against a
+      # real database with tenant enforcement on: the driver's details are frozen
+      # into the request (rename the customer afterwards and the document does not
+      # move), a signature goes through the real signing route on a salesperson's
+      # pass, and completing it marks the booking -- its own, in its own
+      # workspace, never a trashed one. Sealing needs a browser process; where the
+      # runner has none the signature still stands and the marking step is run
+      # directly, and the script says which of the two it did.
+      - name: Signing -- a test drive's indemnity marks its own booking, and only that
+        run: npm run test:test-drive-indemnity
 
       # The migration runner now executes each migration.sql statement by
       # statement from its own client instead of shelling out to `db execute`.
@@ -476,6 +497,14 @@ jobs:
       - name: Isolation -- one Google Place, two tenants, two reviews
         run: npm run test:review-isolation
 
+      # A workspace seals its signed PDFs with one certificate of its own. "One"
+      # is settled by a unique index when two completions arrive together on the
+      # first signature, "stored encrypted" by what is actually in the row, and
+      # "never silently temporary" by what reaches the error log when the row
+      # cannot be opened. None of those can be read off the source.
+      - name: Signing -- one sealing certificate per workspace, made once
+        run: npm run test:signing-seal
+
       # A source assertion cannot tell "the row budget is bounded" from "the row
       # budget is bounded PER CONVERSATION", and only the second one keeps a quiet
       # thread visible next to a busy one. Both shapes select threads first and
@@ -501,6 +530,15 @@ jobs:
       # the customer. Those are behaviours, and only a real database shows them.
       - name: Inbox -- a staff reply is one durable decision
         run: npm run test:staff-reply
+
+      # A signer with no email address was sent nothing at all. Reading the code
+      # shows a WhatsApp branch exists; only the real senders against a real
+      # database show the PDF reaches the right number once, lands on that
+      # customer's timeline, and -- the part that matters most -- that WhatsApp
+      # declining it does not count as a failed fan-out and re-drive the whole
+      # completion every half hour. Meta is replaced by a stand-in; nothing is sent.
+      - name: Signing -- a signer with no email address gets their copy on WhatsApp
+        run: npm run test:signed-copy-whatsapp
 
       # Meta echoes every message the Page sends, including ours. The pure tests
       # exercise the rule that tells them apart; only a real database can hold a
@@ -532,6 +570,25 @@ jobs:
       # behind, and nothing after it has to share a database with them.
       - name: Signing -- an in-person signature actually submits
         run: npm run test:in-person-signing
+
+      # The customer signs the delivery note itself now, and the delivery is
+      # recorded against what that note froze. Only a real database shows the
+      # two halves agree: that signing the note delivers nothing, that the
+      # delivery takes who, which checklist runs and whose signature from the
+      # signed note and from nowhere else, and that a guided handover is refused
+      # without one.
+      #
+      # And it is what found that the delivery's "one transaction" was not one.
+      # The scoped client commits each statement on a `tx` handle as it runs, so
+      # a refusal part-way left the quote delivered; every source test and every
+      # fake was green. This drives the real thing: a note opened, or signed,
+      # while a delivery is being completed must leave NOTHING delivered.
+      #
+      # The harness tsconfig, because the delivery calls revalidatePath. After
+      # the step above for the same reason it is late: signing evidence is
+      # append-only, so these rows stay behind too.
+      - name: Signing -- a delivery is recorded against the note the customer signed, or not at all
+        run: npm run test:delivery-note-signing
 
   # -- LANE 3: migrating a database that already has data ----------------------
   #

@@ -27,6 +27,12 @@ const PUBLIC_PATHS = [
   "/api/signing",
   "/approvals", // internal approval gates: tokenised approve/reject pages (email links)
   "/api/approvals",
+  // "Is this the document that was signed?" — for whoever was handed the PDF, who
+  // has no account. The page fingerprints the file in the browser; the API takes
+  // only that fingerprint, is throttled by address, and answers with what the
+  // file itself already says (who sealed it, when). See api/verify/route.ts.
+  "/verify",
+  "/api/verify",
   "/api/track", // campaign open/click tracking
   "/api/unsubscribe", // one-click marketing unsubscribe
   // Tenant brand logos. Consumed by the login pages, which render pre-auth by
