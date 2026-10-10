@@ -1926,7 +1926,7 @@ async function resolveActions(user: User, proposals: ProposedAction[]): Promise<
       const { type: _type, ...fields } = p;
       const parsed = scheduleInput.safeParse(fields);
       if (!parsed.success || !nextRun(parsed.data, new Date())) continue;
-      cards.push({ id: `a${index}-schedule`, kind: "schedule", title: describeSchedule(parsed.data), ...parsed.data });
+      cards.push({ id: `a${index}-schedule`, kind: "schedule", title: describeSchedule(parsed.data), ...parsed.data, ...(p.reason ? { reason: p.reason } : {}) });
       continue;
     }
     if (p.type === "watch") {
@@ -1941,7 +1941,7 @@ async function resolveActions(user: User, proposals: ProposedAction[]): Promise<
         customer = (await prisma.lead.findUnique({ where: { id: parsed.data.leadId }, select: { name: true } }))?.name ?? null;
       }
       const quote = parsed.data.quoteId && /^Q-?\d+$/i.test(parsed.data.quoteId) ? parsed.data.quoteId.toUpperCase().replace(/^Q-?/, "Q-") : null;
-      cards.push({ id: `a${index}-watch`, kind: "watch", title: describeWatch(parsed.data, { customer, lead: customer, quote }), watch: parsed.data });
+      cards.push({ id: `a${index}-watch`, kind: "watch", title: describeWatch(parsed.data, { customer, lead: customer, quote }), watch: parsed.data, ...(p.reason ? { reason: p.reason } : {}) });
       continue;
     }
     if (p.type === "reschedule" || p.type === "cancel_activity") {
@@ -1955,12 +1955,12 @@ async function resolveActions(user: User, proposals: ProposedAction[]): Promise<
       if (!activity) continue;
       const leadLabel = activity.lead ? `${activity.lead.name} — ${activity.lead.title}` : activity.type;
       if (p.type === "cancel_activity") {
-        cards.push({ id: `a${index}-${p.activityId}`, kind: "cancel_activity", activityId: p.activityId, leadId: activity.leadId, leadLabel, fromDue: activity.dueDate.toISOString(), title: `Cancel “${activity.summary}” (${when(activity.dueDate)})` });
+        cards.push({ id: `a${index}-${p.activityId}`, kind: "cancel_activity", activityId: p.activityId, leadId: activity.leadId, leadLabel, fromDue: activity.dueDate.toISOString(), title: `Cancel “${activity.summary}” (${when(activity.dueDate)})`, ...(p.reason ? { reason: p.reason } : {}) });
       } else {
         const target = p.when.includes("T") ? p.when : `${p.when}T${saLocal(activity.dueDate).slice(11)}`;
         const at = new Date(`${target}:00+02:00`);
         if (Number.isNaN(at.getTime()) || at.getTime() < Date.now() - 60 * 60 * 1000) continue;
-        cards.push({ id: `a${index}-${p.activityId}`, kind: "reschedule", activityId: p.activityId, leadId: activity.leadId, leadLabel, when: target, fromDue: activity.dueDate.toISOString(), title: `Move “${activity.summary}” to ${when(at)}` });
+        cards.push({ id: `a${index}-${p.activityId}`, kind: "reschedule", activityId: p.activityId, leadId: activity.leadId, leadLabel, when: target, fromDue: activity.dueDate.toISOString(), title: `Move “${activity.summary}” to ${when(at)}`, ...(p.reason ? { reason: p.reason } : {}) });
       }
       continue;
     }
@@ -1980,14 +1980,14 @@ async function resolveActions(user: User, proposals: ProposedAction[]): Promise<
       const at = new Date(`${when}:00+02:00`);
       if (Number.isNaN(at.getTime()) || at.getTime() < Date.now() - 60 * 60 * 1000) continue;
       const label = at.toLocaleString("en-ZA", { timeZone: "Africa/Johannesburg", weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
-      cards.push({ id, kind: "follow_up", leadId: p.leadId, leadLabel, title: `${p.summary ?? `Follow-up ${p.activity}`} with ${lead.name} — ${label}`, when, activity: p.activity, summary: p.summary });
+      cards.push({ id, kind: "follow_up", leadId: p.leadId, leadLabel, title: `${p.summary ?? `Follow-up ${p.activity}`} with ${lead.name} — ${label}`, when, activity: p.activity, summary: p.summary, ...(p.reason ? { reason: p.reason } : {}) });
     } else if (p.type === "note") {
-      cards.push({ id, kind: "note", leadId: p.leadId, leadLabel, title: `Add a note to ${lead.name}'s lead`, text: p.text });
+      cards.push({ id, kind: "note", leadId: p.leadId, leadLabel, title: `Add a note to ${lead.name}'s lead`, text: p.text, ...(p.reason ? { reason: p.reason } : {}) });
     } else if (p.type === "assign") {
       const wanted = p.to.trim().toLowerCase();
       const person = staff.find((s) => s.name.toLowerCase() === wanted) ?? staff.find((s) => s.name.toLowerCase().startsWith(wanted));
       if (!person) continue;
-      cards.push({ id, kind: "assign", leadId: p.leadId, leadLabel, title: `Give ${lead.name}'s lead to ${person.name}`, userId: person.id, fromUserId: lead.assignedToId });
+      cards.push({ id, kind: "assign", leadId: p.leadId, leadLabel, title: `Give ${lead.name}'s lead to ${person.name}`, userId: person.id, fromUserId: lead.assignedToId, ...(p.reason ? { reason: p.reason } : {}) });
     } else if (p.type === "stage") {
       // Compared in code, exactly: a pipeline has a handful of stages, and an
       // insensitive `equals` would treat `_`/`%` in the name as wildcards.
@@ -1997,7 +1997,7 @@ async function resolveActions(user: User, proposals: ProposedAction[]): Promise<
         select: { id: true, name: true },
       })).find((s) => s.name.toLowerCase() === wantedStage);
       if (!stage || stage.id === lead.stageId) continue;
-      cards.push({ id, kind: "stage", leadId: p.leadId, leadLabel, title: `Move ${lead.name}'s lead to ${stage.name}`, stageId: stage.id, fromStageId: lead.stageId });
+      cards.push({ id, kind: "stage", leadId: p.leadId, leadLabel, title: `Move ${lead.name}'s lead to ${stage.name}`, stageId: stage.id, fromStageId: lead.stageId, ...(p.reason ? { reason: p.reason } : {}) });
     } else if (p.type === "draft_message") {
       // Where it would go, shown on the card before anyone presses Send — the
       // lead's own number or address, else its customer's. Never sent to ChatGPT.
@@ -2006,6 +2006,7 @@ async function resolveActions(user: User, proposals: ProposedAction[]): Promise<
         id, kind: "draft_message", leadId: p.leadId, leadLabel,
         title: `${p.channel === "whatsapp" ? "WhatsApp" : "Email"} to ${lead.name}`,
         channel: p.channel, subject: p.subject, body: p.body, to,
+        ...(p.reason ? { reason: p.reason } : {}),
       });
     } else if (p.type === "meeting") {
       const start = new Date(`${p.when}:00+02:00`);
@@ -2022,6 +2023,7 @@ async function resolveActions(user: User, proposals: ProposedAction[]): Promise<
         id, kind: "meeting", leadId: p.leadId, leadLabel, title: `${summary} — ${when(start)}`,
         start: p.when, end: saLocal(end), summary, attendeeIds: [...new Set(people.map((s) => s.id))],
         detail: `${p.minutes ?? 60} min${people.length ? ` · with ${people.map((s) => s.name).join(", ")}` : ""}`,
+        ...(p.reason ? { reason: p.reason } : {}),
       });
     } else if (p.type === "test_drive") {
       if (!lead.contactId || !(await isModuleEnabled("automotive"))) continue;
@@ -2036,11 +2038,12 @@ async function resolveActions(user: User, proposals: ProposedAction[]): Promise<
         id, kind: "test_drive", leadId: p.leadId, leadLabel, title: `Test drive for ${lead.name} — ${when(start)}`,
         contactId: lead.contactId, demoVehicleId: demo.id, branch: demo.branch, start: p.when, end: saLocal(end),
         detail: `${demo.name} · ${p.minutes ?? 60} min · ${demo.branch}`,
+        ...(p.reason ? { reason: p.reason } : {}),
       });
     } else if (p.type === "lost") {
       cards.push({ id, kind: "lost", leadId: p.leadId, leadLabel, title: `Mark ${lead.name}'s deal as lost`, reason: p.reason });
     } else if (p.type === "quote") {
-      cards.push({ id, kind: "quote", leadId: p.leadId, leadLabel, title: `Start a quote for ${lead.name}` });
+      cards.push({ id, kind: "quote", leadId: p.leadId, leadLabel, title: `Start a quote for ${lead.name}`, ...(p.reason ? { reason: p.reason } : {}) });
     }
   }
   return cards;
