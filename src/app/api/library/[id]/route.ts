@@ -2,11 +2,19 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import { getCurrentUser } from "@/lib/auth";
 import { hasAnyPermission } from "@/lib/permissions";
+import { withActingStaffScope } from "@/lib/actingScope";
 import { openFileStream } from "@/lib/storage";
 import { logError } from "@/lib/errorLog";
 
-/** Downloads a specific library document version. */
-export async function GET(
+/**
+ * Downloads a specific library document version.
+ * Bound to the acting workspace — a route handler has nothing above it that does (see withActingStaffScope).
+ */
+export async function GET(req: NextRequest, context: { params: Promise<{ id: string }> }) {
+  return withActingStaffScope(() => handleGet(req, context));
+}
+
+async function handleGet(
   _req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {

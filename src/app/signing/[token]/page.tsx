@@ -88,6 +88,22 @@ async function renderSigningPage(token: string) {
     if (waitingOn) return <Msg title="Not your turn yet" body={`Waiting for ${waitingOn.name} to sign first — we'll notify you when it's your turn.`} brand={brand} />;
   }
 
+  // A document that asks for a one-time code STAYS ON THE SERVER until the code
+  // has been entered. The check used to be drawn over the finished page: it hid
+  // the document from the eye and left every sheet of it in the response, so the
+  // link alone was enough to read what the code was there to protect. Nothing
+  // below this return runs for a signer who has not been checked — the sheets
+  // are never rendered, and the document is not marked as opened by them. The
+  // gate asks for this page again once the code is accepted.
+  const gate = identityStatus(identity);
+  if (gate.required && !gate.verified) {
+    return (
+      <Shell brand={brand}>
+        <IdentityGate token={token} initial={gate} />
+      </Shell>
+    );
+  }
+
   await recordView(recipient.id, req.id, recipient.name);
   const [sheets, stamps] = await Promise.all([renderRequestSigningSheets(req), signedFieldStamps(req.id, recipient.id)]);
   const myFields = req.fields
@@ -96,9 +112,7 @@ async function renderSigningPage(token: string) {
 
   return (
     <Shell brand={brand}>
-      <IdentityGate token={token} initial={identityStatus(identity)}>
-        <SignSurface token={token} title={req.title} recipientName={recipient.name} sheets={sheets} fields={myFields} stamps={stamps} senderName={brand.branded ? brand.displayName : undefined} />
-      </IdentityGate>
+      <SignSurface token={token} title={req.title} recipientName={recipient.name} sheets={sheets} fields={myFields} stamps={stamps} senderName={brand.branded ? brand.displayName : undefined} />
     </Shell>
   );
 }

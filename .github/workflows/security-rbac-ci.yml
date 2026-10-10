@@ -312,6 +312,20 @@ jobs:
         # LEVEL SECURITY itself is exercised.
         run: npm run test:rls-restricted
 
+      - name: A transaction on the scoped client is one -- it rolls back, and it holds its locks
+        # `prisma.$transaction(async (tx) => ...)` is how sixty-odd call sites say
+        # "these changes belong together". For as long as the scoped client
+        # existed it was not a transaction: every statement on `tx` committed as
+        # it ran, a refusal part-way kept the earlier steps, and a row lock was
+        # released before the next line. Every test of those call sites read
+        # source or drove a fake, so nothing saw it. This asks a real database:
+        # undo on a throw (model and raw), FOR UPDATE and advisory locks held,
+        # later statements seeing earlier ones -- and that it is still the SCOPED
+        # client inside. The step above proves the row-level-security half under
+        # the restricted role. The harness tsconfig, because it also drives a
+        # real caller (reordering a pipeline's stages) that reaches next/headers.
+        run: npm run test:scoped-transactions
+
       - name: Run two-tenant end-to-end CRM isolation suite
         # Ordinary CRM flows run as two different tenants through the REAL scoped
         # client under the restricted role -- the regression guard for real-flow
@@ -351,6 +365,16 @@ jobs:
       # was only ever exercised by somebody remembering to run it by hand.
       - name: Concurrency -- the platform can never be left with zero active admins
         run: npm run test:platform-admins
+
+      # With enforcement OFF, on purpose. The audit screen and its export read
+      # through the bypass client, so the workspace is in their queries only
+      # because somebody wrote it there -- and it was written behind
+      # `NOT tenantEnforcing() OR`, which is always true in every mode but one.
+      # The suites above run that one mode. This drives the real route and the
+      # real page as a member of each of two workspaces and reads what they
+      # answer with.
+      - name: Isolation -- the audit trail a person sees and exports is their workspace's, with enforcement off
+        run: npm run test:audit-workspace
 
       # A backup that quietly omits a column is worse than one that fails: one of
       # them you find out about. The exporter reads the table list from the

@@ -569,16 +569,22 @@ export async function reorderPipelineStages(pipelineId: string, stageIds: string
   if (actualIds.size !== stageIds.length || stageIds.some((id) => !actualIds.has(id))) {
     throw new Error("Stage order does not match the pipeline");
   }
-  await basePrisma.$transaction(
-    stageIds.map((stageId, index) =>
-      basePrisma.$executeRaw`UPDATE "PipelineStage" SET "order" = ${1000 + index} WHERE "id" = ${stageId} AND "pipelineId" = ${pipelineId} ${scope}`
-    )
-  );
-  await basePrisma.$transaction(
-    stageIds.map((stageId, index) =>
-      basePrisma.$executeRaw`UPDATE "PipelineStage" SET "order" = ${index} WHERE "id" = ${stageId} AND "pipelineId" = ${pipelineId} ${scope}`
-    )
-  );
+  // Two passes — park every stage out of the way, then number them — because
+  // ("pipelineId", "order") is unique and is checked statement by statement.
+  //
+  // In ONE transaction. This was two arrays of raw statements, and an array is
+  // not a transaction on this client: every UPDATE in the first array ran at
+  // once, each on its own, and `$transaction` then threw because raw statements
+  // here are not deferred — so the second pass never ran, the action reported a
+  // failure, and the stages were left numbered 1000, 1001, 1002…
+  await basePrisma.$transaction(async (tx) => {
+    for (const [index, stageId] of stageIds.entries()) {
+      await tx.$executeRaw`UPDATE "PipelineStage" SET "order" = ${1000 + index} WHERE "id" = ${stageId} AND "pipelineId" = ${pipelineId} ${scope}`;
+    }
+    for (const [index, stageId] of stageIds.entries()) {
+      await tx.$executeRaw`UPDATE "PipelineStage" SET "order" = ${index} WHERE "id" = ${stageId} AND "pipelineId" = ${pipelineId} ${scope}`;
+    }
+  });
 }
 
 export async function archivePipeline(id: string) {

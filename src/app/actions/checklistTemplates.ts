@@ -622,14 +622,14 @@ export async function reorderChecklistTemplates(
     const ordered = ids.data.filter((id) => owned.has(id));
     if (ordered.length === 0) return {};
 
-    await basePrisma.$transaction(
-      ordered.map((id, index) =>
-        basePrisma.checklistTemplate.updateMany({
+    await basePrisma.$transaction(async (tx) => {
+      for (const [index, id] of ordered.entries()) {
+        await tx.checklistTemplate.updateMany({
           where: { id, tenantId, host: host.id },
           data: { sortOrder: index },
-        }),
-      ),
-    );
+        });
+      }
+    });
     await logAudit({
       action: "checklist.templates_reordered",
       summary: `Reordered the checklists for ${host.label}`,
