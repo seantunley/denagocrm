@@ -55,7 +55,8 @@ export default function AssistantActionCard({ card }: { card: ActionCard }) {
 
   const leadLink = card.kind === "schedule" || card.kind === "watch" ? null : card.leadId ? `/leads/${card.leadId}` : null;
   const editable = state === "open" && !pending;
-  const reason = "reason" in card && card.reason ? card.reason : null;
+  // Lost already renders its own "Reason:" line; don't double it.
+  const reason = card.kind !== "lost" && "reason" in card && card.reason ? card.reason : null;
 
   return (
     <div className={`rounded-lg border p-3 text-sm ${state === "done" ? "border-emerald-500/40" : "border-border"}`}>
