@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { readFileSync } from "node:fs";
 import { researchGate } from "../src/lib/assistantResearchGate";
 import { formatDecision, matchDecisions, parseDecision } from "../src/lib/assistantDecisions";
 import { runLive, scoreRecorded } from "../evals/runResearchEval";
@@ -76,4 +77,34 @@ test("live runner scores answers from an ask function", async () => {
   }));
   assert.equal(scores.length, 5);
   assert.ok(scores.every((s) => s.score >= 0));
+});
+
+
+test("a two-person comparison needs evidence for both sides", () => {
+  const one = researchGate({
+    question: "Compare Donovan and Kristina's pipelines",
+    tools: ["find_leads"],
+    lastRoundEmpty: false,
+    planSaysAnswer: true,
+    stepsUsed: 1,
+    maxSteps: 6,
+  });
+  assert.equal(one, "continue", "one find_leads is not enough for two people");
+  const both = researchGate({
+    question: "Compare Donovan and Kristina's pipelines",
+    tools: ["find_leads", "find_leads"],
+    lastRoundEmpty: false,
+    planSaysAnswer: true,
+    stepsUsed: 2,
+    maxSteps: 6,
+  });
+  assert.equal(both, "answer");
+});
+
+test("decision recall checks lead access and save is unreviewed", () => {
+  const lib = readFileSync(new URL("../src/lib/crmAssistant.ts", import.meta.url), "utf8");
+  const store = readFileSync(new URL("../src/lib/assistantMemoryStore.ts", import.meta.url), "utf8");
+  assert.match(lib, /canAccessLead\(user, d\.subject\)/, "recall filters by lead visibility");
+  assert.match(store, /status: "unreviewed"/, "decisions are not auto-approved");
+  assert.match(store, /createdById: userId/, "author is recorded");
 });
