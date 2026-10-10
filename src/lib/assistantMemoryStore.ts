@@ -154,3 +154,26 @@ export async function applyLearn(userId: string | null, learn: LearnBlock): Prom
     return changed;
   });
 }
+
+
+/** Save a case decision (kind "decision"). Not part of the prompt-sized memory. */
+export async function saveDecision(
+  kind: "lead" | "topic",
+  subject: string,
+  decisionText: string,
+  userId: string | null,
+): Promise<void> {
+  const { formatDecision } = await import("./assistantDecisions");
+  await prisma.assistantNote.create({
+    data: {
+      tenantId: ownedWriteTenantId(),
+      kind: "decision",
+      name: subject.slice(0, 48),
+      content: formatDecision({ kind, subject, text: decisionText, at: new Date().toISOString() }),
+      // Same review path as other learned notes: applies immediately, owner approves.
+      status: "unreviewed",
+      createdById: userId,
+      source: "learned",
+    },
+  });
+}

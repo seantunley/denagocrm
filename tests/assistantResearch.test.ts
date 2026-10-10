@@ -49,7 +49,7 @@ test("the loop runs a batch side by side, skips repeats, and stops at the total 
   const lib = code("src/lib/crmAssistant.ts");
   const loop = lib.slice(lib.indexOf("const observations: Observation[] = [];"), lib.indexOf("const [profileRaw, company]"));
   assert.ok(loop.length > 200);
-  assert.match(loop, /step < MAX_STEPS && observations\.length < MAX_LOOKUPS/);
+  assert.match(loop, /step < maxSteps && observations\.length < MAX_LOOKUPS/);
   assert.match(loop, /const next = parseSteps\(reply\.text\)/);
   assert.match(loop, /if \(seen\.has\(key\)\) continue;/, "a lookup already run isn't run again");
   assert.match(loop, /fresh\.slice\(0, MAX_LOOKUPS - observations\.length\)/);
@@ -115,4 +115,37 @@ test("running for someone without a session re-checks membership, permission and
   assert.match(helper, /if \(!\(await hasAnyPermission\(user, \.\.\.ASSISTANT_PERMISSIONS\)\)\) return null;/);
   assert.match(helper, /if \(!\(await isModuleEnabled\("automation"\)\)\) return null;/);
   assert.match(code("src/app/actions/assistant.ts"), /import \{[^}]*\bASSISTANT_PERMISSIONS\b[^}]*\} from "@\/lib\/assistantUser";/);
+});
+
+
+test("complex questions get a larger research budget; simple ones do not", async () => {
+  const { isComplexQuestion, MAX_STEPS, MAX_STEPS_COMPLEX } = await import("../src/lib/crmAssistantPlan");
+  // Simple — stay on the short path.
+  assert.equal(isComplexQuestion("how many leads came in last month"), false);
+  assert.equal(isComplexQuestion("show me Donovan's pipeline"), false);
+  assert.equal(isComplexQuestion("what's on today"), false);
+  // Multi-hop / why / compare — larger budget.
+  assert.equal(isComplexQuestion("why is the Jacobs deal stuck and what should I do"), true);
+  assert.equal(isComplexQuestion("compare Donovan and Kristina's pipelines and tell me who needs help"), true);
+  assert.equal(isComplexQuestion("what's going on with the stalled deals"), true);
+  // Short but legitimate.
+  assert.equal(isComplexQuestion("Why no sales?"), true);
+  assert.equal(isComplexQuestion("why stalled"), true);
+  assert.equal(isComplexQuestion("compare them"), true);
+  // Follow-up style that still carries a signal.
+  assert.equal(isComplexQuestion("and what should I do about it"), true);
+  assert.equal(isComplexQuestion("so what's the root cause"), true);
+  assert.ok(MAX_STEPS_COMPLEX > MAX_STEPS);
+});
+
+test("research loop stops on the time budget before the step limit", () => {
+  const lib = code("src/lib/crmAssistant.ts");
+  const loop = lib.slice(lib.indexOf("const observations: Observation[] = [];"), lib.indexOf("const [profileRaw, company]"));
+  assert.match(loop, /RESEARCH_BUDGET_MS/);
+  assert.match(loop, /researchLeft\(\) < MIN_CALL_MS/);
+  assert.match(loop, /complex \? 180_000 : 90_000/);
+  // Each plan call is capped by remaining research time, not a fixed 45s.
+  assert.match(loop, /Math\.min\(PLAN_MAX_MS, Math\.max\(0, researchLeft\(\)\)\)/);
+  // Answer is capped by remaining time under the hard deadline.
+  assert.match(loop, /HARD_DEADLINE_MS - elapsed\(\)/);
 });
