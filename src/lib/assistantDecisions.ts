@@ -3,11 +3,15 @@
  * the prompt-sized business memory.
  *
  * Pure half: format, parse, and match. The store writes AssistantNote rows
- * with kind "decision" (name = lead id or topic slug, content = the decision).
+ * with kind "decision". Subject type is explicit (lead | topic) — never guessed
+ * from the string shape.
  */
 
+export type DecisionKind = "lead" | "topic";
+
 export type Decision = {
-  /** Lead id, or a short topic slug when it is not about one lead. */
+  kind: DecisionKind;
+  /** Lead id when kind is "lead"; a short topic slug otherwise. */
   subject: string;
   text: string;
   at: string; // ISO
@@ -15,16 +19,17 @@ export type Decision = {
 
 const MAX_TEXT = 400;
 
-/** "lead:abc | Wait until finance replies" or "topic:pricing | Hold the promo". */
+/** "lead:<id> | …" or "topic:<slug> | …". */
 export function formatDecision(d: Decision): string {
-  const kind = d.subject.startsWith("c") && d.subject.length > 20 ? "lead" : "topic";
-  return `${kind}:${d.subject} | ${d.text.slice(0, MAX_TEXT)}`;
+  return `${d.kind}:${d.subject} | ${d.text.slice(0, MAX_TEXT)}`;
 }
 
 export function parseDecision(content: string, at: string): Decision | null {
-  const m = content.match(/^(lead|topic):([^|]+)\|\s*(.+)$/s);
+  // No /s flag — the target does not support it. [\s\S] matches across lines.
+  const m = content.match(/^(lead|topic):([^|]+)\|\s*([\s\S]+)$/);
   if (!m) return null;
-  return { subject: m[2].trim(), text: m[3].trim(), at };
+  const kind = m[1] as DecisionKind;
+  return { kind, subject: m[2].trim(), text: m[3].trim(), at };
 }
 
 /**
