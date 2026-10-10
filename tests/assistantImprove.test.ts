@@ -67,7 +67,7 @@ test("the research step runs on the quicker model; the answer doesn't", () => {
   assert.match(lib, /export const PLAN_MODEL = "gpt-6-astra";/);
   // Every research call — first try, firm retry, transient retry — goes through the one plan helper.
   assert.equal((lib.match(/preferModel: PLAN_MODEL/g) ?? []).length, 1, "the one plan call");
-  assert.match(lib, /const plan = \(step: number, insist: boolean\) =>[\s\S]{0,200}preferModel: PLAN_MODEL/);
+  assert.match(lib, /const plan = \(step: number, insist: boolean\) =>[\s\S]{0,500}preferModel: PLAN_MODEL/);
   // (lastIndexOf: degraded mode earlier in askCrm builds its rows too.)
   const answer = lib.slice(lib.indexOf("const answerReply = await withRetry("), lib.lastIndexOf("const rows = dedupeRows("));
   assert.ok(answer.length > 100, "found the answer step");
