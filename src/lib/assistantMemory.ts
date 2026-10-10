@@ -47,11 +47,19 @@ export const playbookOp = z
   })
   .strict();
 
+export const decisionOp = z
+  .object({
+    subject: z.string().trim().min(1).max(80),
+    text: z.string().trim().min(3).max(400),
+  })
+  .strict();
 export const learnBlock = z
   .object({
     memory: z.array(noteOp).max(5).optional(),
     profile: z.array(noteOp).max(5).optional(),
     playbook: z.array(playbookOp).max(3).optional(),
+    /** Case decisions — stored separately, retrieved via recall_decision. */
+    decision: z.array(decisionOp).max(3).optional(),
   })
   .strict();
 export type LearnBlock = z.infer<typeof learnBlock>;
@@ -66,7 +74,8 @@ export const LEARN_INSTRUCTIONS = [
   "- profile: this person's own lasting preferences — how they like answers, their role, their area.",
   "- playbook: a named definition or procedure the person taught or corrected (\"hot lead means…\", \"our weekly review is…\"). name is lowercase-hyphenated.",
   "A correction from the person is the most important thing to learn. If an entry you were given is wrong or out of date, replace or remove it.",
-  "SKIP: anything about one particular customer or deal, data that lives in the CRM records, one-off tasks, guesses. Never store a phone number, email address or a customer's name.",
+  "SKIP for memory/profile/playbook: anything about one particular customer or deal, data that lives in the CRM records, one-off tasks, guesses. Never store a phone number, email address or a customer's name.",
+  '- decision: a decision made about a customer or topic this turn ({"subject":"<lead id or topic>","text":"<what was decided>"}). These are stored separately and retrieved with recall_decision — they do not go into the prompt. Use this when the person decides something ("wait until finance replies", "Kristina owns fleet quotes").',
   'Most answers learn nothing — then leave "learn" out.',
 ].join("\n");
 
