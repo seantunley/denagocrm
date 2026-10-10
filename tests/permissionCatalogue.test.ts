@@ -148,3 +148,33 @@ test("designing an approval workflow is the owner's, not everyone's who can send
     assert.match(shipped(page), /await requireTenantOwner\(\)/, `${page} is owner-only`);
   }
 });
+
+test("being the owner is not the same as it being your workflow: every lookup by id names the workspace", () => {
+  // The guard above says who is asking. The id in the request says nothing about
+  // whose row it names, and the scoped client adds the workspace only while
+  // tenant enforcement is on — so by id alone, one workspace's owner could save,
+  // rename and delete another's workflow. scripts/test-signflow-workspace.ts
+  // drives that against a real database with enforcement off; this pins the shape.
+  const actions = shipped("src/app/actions/signflow.ts");
+  // `update`, `delete` and `findUnique` take a unique selector, which cannot
+  // carry a workspace beside the id.
+  assert.doesNotMatch(actions, /signWorkflow\.(update|delete|findUnique|findUniqueOrThrow)\(/);
+  for (const name of ["saveSignWorkflow", "deleteSignWorkflow", "renameSignWorkflow"]) {
+    const start = actions.indexOf(`export async function ${name}(`);
+    const end = actions.indexOf("\nexport ", start + 1);
+    const body = end === -1 ? actions.slice(start) : actions.slice(start, end);
+    assert.match(body, /ownedWorkflowWhere\(id\)/, `${name} looks the workflow up as this workspace's`);
+    assert.match(body, /signWorkflow\.updateMany\(/, `${name} writes with the workspace in the where`);
+    assert.match(body, /\.count [!=]== 1/, `${name} checks it changed exactly one row`);
+  }
+  assert.match(actions, /signWorkflow\.create\(\{\s*data: \{ tenantId: await actingTenantId\(\),/, "a new workflow is stamped with its workspace");
+
+  const owned = shipped("src/lib/signflow/owned.ts");
+  assert.match(owned, /return \{ id, tenantId: await actingTenantId\(\), deletedAt: null \};/);
+  assert.match(owned, /signWorkflow\.findFirst\(\{ where: await ownedWorkflowWhere\(id\) \}\)/);
+
+  // The editor opens a workflow through that one function and nothing else.
+  const editor = shipped("src/app/(app)/signing-workflows/[id]/page.tsx");
+  assert.match(editor, /ownedSignWorkflow\(id\)/);
+  assert.doesNotMatch(editor, /signWorkflow\./);
+});

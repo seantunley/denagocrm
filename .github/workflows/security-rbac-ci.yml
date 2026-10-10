@@ -318,6 +318,16 @@ jobs:
         # leakage, not just RLS primitives.
         run: npm run test:tenant-e2e
 
+      # With enforcement OFF, on purpose. The suites above prove the guard; this
+      # proves a door that must hold without it. The workflow editor's actions
+      # looked a workflow up by the id the browser sent, so while enforcement was
+      # off one workspace's owner could save, rename and delete another's. The
+      # two-tenant harness only RECORDS what it finds in that mode -- it gates
+      # the enforced one -- so this is the test that fails. Real actions, a real
+      # session cookie, verdicts read back from the row.
+      - name: Isolation -- a signing workflow is its own workspace's, with enforcement off
+        run: npm run test:signflow-workspace
+
       # THE 2026-08-12 LOCKOUT, AS A TEST.
       #
       # Every tenant test above establishes scope by calling runInTenantScope
