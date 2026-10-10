@@ -8,6 +8,7 @@ import { useEditor } from "@/lib/doceditor/store";
 import { newBlock } from "@/lib/doceditor/factory";
 import { PAGE_SIZES, type DocumentBlock, type DocumentPage, type DocumentRow, type DocumentColumn } from "@/lib/doceditor/model";
 import { blockBoxCss } from "@/lib/doceditor/blockBox";
+import { pageHasContent } from "@/lib/doceditor/ops";
 import { BlockView } from "./BlockView";
 import { OverlayLayer } from "./OverlayLayer";
 import { FloatingLayer } from "./FloatingLayer";
@@ -87,6 +88,12 @@ function PageView({
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const [height, setHeight] = useState(0);
+  const pageCount = useEditor((s) => s.doc?.pages.length ?? 1);
+  const isActive = useEditor((s) => s.activePage === pIdx);
+  const setActivePage = useEditor((s) => s.setActivePage);
+  const removePage = useEditor((s) => s.removePage);
+  const duplicatePage = useEditor((s) => s.duplicatePage);
+  const movePage = useEditor((s) => s.movePage);
 
   useEffect(() => {
     const el = ref.current;
@@ -107,6 +114,9 @@ function PageView({
     <div
       ref={ref}
       data-page-idx={pIdx}
+      // Capture phase: blocks stop the click from bubbling, and the page a person
+      // is working on must be known whichever part of it they touched.
+      onMouseDownCapture={() => setActivePage(pIdx)}
       className="relative bg-white shadow-lg ring-1 ring-black/5"
       // Ink on paper whatever the app's theme: the sheet is white, so its text must never inherit the dark theme's light foreground.
       style={{ width: size.w * zoom, minHeight: sheet, color: "#0f172a", ...(email ? { background: email.card, borderRadius: 16 * zoom, overflow: "hidden" } : {}) }}
@@ -130,7 +140,22 @@ function PageView({
       {email?.message && <FramePart html={email.bottom} href={email.href} zoom={zoom} />}
       <FloatingLayer page={page} zoom={zoom} />
       <OverlayLayer page={page} zoom={zoom} />
-      <div className="pointer-events-none absolute -top-6 left-0 text-[11px] font-medium text-slate-400">Page {pIdx + 1}</div>
+      {/* The page's own controls. An email is one card, not pages. */}
+      <div className="absolute -top-6 left-0 flex items-center gap-1 text-[11px] font-medium text-slate-400">
+        <span className={isActive ? "text-orange-500" : undefined}>Page {pIdx + 1}{isActive && pageCount > 1 ? " · working here" : ""}</span>
+        {!email && (
+          <span className="ml-1 flex items-center gap-0.5" onMouseDown={(e) => e.stopPropagation()}>
+            <button type="button" className="rounded px-1 hover:bg-slate-200 hover:text-slate-700 disabled:opacity-30" title="Move this page earlier" aria-label={`Move page ${pIdx + 1} earlier`} disabled={pIdx === 0} onClick={() => movePage(page.id, -1)}>↑</button>
+            <button type="button" className="rounded px-1 hover:bg-slate-200 hover:text-slate-700 disabled:opacity-30" title="Move this page later" aria-label={`Move page ${pIdx + 1} later`} disabled={pIdx === pageCount - 1} onClick={() => movePage(page.id, 1)}>↓</button>
+            <button type="button" className="rounded px-1 hover:bg-slate-200 hover:text-slate-700" title="Duplicate this page" aria-label={`Duplicate page ${pIdx + 1}`} onClick={() => duplicatePage(page.id)}>⧉</button>
+            <button
+              type="button" className="rounded px-1 hover:bg-red-100 hover:text-red-600 disabled:opacity-30" title={pageCount <= 1 ? "A document needs at least one page" : "Delete this page"} aria-label={`Delete page ${pIdx + 1}`} disabled={pageCount <= 1}
+              // Undo (Ctrl+Z) brings it back, but a page of work should not go on one stray click.
+              onClick={() => { if (!pageHasContent(page) || window.confirm(`Delete page ${pIdx + 1} and everything on it? You can undo this.`)) removePage(page.id); }}
+            >🗑</button>
+          </span>
+        )}
+      </div>
 
       {/* Where the paper actually ends. Anything below a line prints on the next
           sheet, whatever this one looks like on screen. */}

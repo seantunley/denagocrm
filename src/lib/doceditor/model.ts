@@ -31,6 +31,13 @@ const colorField = (fallback: string) =>
   z.string().default(fallback).transform((value) => (isSafeCssColor(value) ? value : fallback));
 /** A colour that may be left unset ("use the default"); an unsafe value is unset too. */
 const optionalColor = z.string().default("").transform((value) => (isSafeCssColor(value) ? value : ""));
+/**
+ * The same, for a setting that is absent rather than "" when unset (a block's or
+ * a row's background). These two were plain strings: nothing renders them yet,
+ * but the moment something does, a stored value reaches a style attribute — so
+ * they are held to the colour rule before that day, not after.
+ */
+const maybeColor = z.string().transform((value) => (isSafeCssColor(value) ? value : undefined)).optional();
 
 /**
  * Page boxes in TWO units, and both are load-bearing.
@@ -69,7 +76,7 @@ export const layoutSettingsSchema = z.object({
   padding: boxSpacingSchema.optional(),
   margin: boxSpacingSchema.optional(),
   gap: z.number().optional(),
-  background: z.string().optional(),
+  background: maybeColor,
   /**
    * Type size relative to the block's own design (1 = as drawn, 0.6–2 allowed).
    *
@@ -448,7 +455,7 @@ export type DocumentColumn = z.infer<typeof columnSchema>;
 export const rowSettingsSchema = z.object({
   gap: z.number().default(16),
   padding: boxSpacingSchema.optional(),
-  background: z.string().optional(),
+  background: maybeColor,
   keepTogether: z.boolean().default(false),
   keepWithNext: z.boolean().default(false),
 }).default({ gap: 16, keepTogether: false, keepWithNext: false });

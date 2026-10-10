@@ -28,6 +28,47 @@ function BannerView({ block }: { block: Extract<DocumentBlock, { type: "banner" 
   );
 }
 
+/**
+ * A plain table, typed into where it stands.
+ *
+ * The panel said "Edit table cells inline on the page" and the page drew plain
+ * text: once a table was dropped in, its three sample cells could not be changed
+ * by any route. Every heading and cell is now a borderless field in place, so
+ * the table looks as it prints and is edited by clicking it. Columns, rows and
+ * colours are in the panel.
+ */
+function TableView({ block }: { block: Extract<DocumentBlock, { type: "table" }> }) {
+  const updateBlock = useEditor((s) => s.updateBlock);
+  const field: React.CSSProperties = { width: "100%", background: "transparent", border: "none", outline: "none", padding: 0, margin: 0, font: "inherit", color: "inherit" };
+  const setHeader = (ci: number, header: string) => updateBlock(block.id, { columns: block.columns.map((c, i) => (i === ci ? { ...c, header } : c)) } as Partial<DocumentBlock>);
+  const setCell = (ri: number, ci: number, value: string) => updateBlock(block.id, {
+    // A row saved with fewer cells than there are columns is padded as it is typed into.
+    rows: block.rows.map((r, i) => (i === ri ? { cells: block.columns.map((_, c) => (c === ci ? { value } : r.cells[c] ?? { value: "" })) } : r)),
+  } as Partial<DocumentBlock>);
+  return (
+    <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+      <thead>
+        <tr>{block.columns.map((c, ci) => (
+          <th key={ci} style={{ background: block.headerBg, color: block.headerColor, textAlign: c.align, padding: "5px 7px", fontSize: 10, width: `${c.widthPct}%` }}>
+            <input aria-label={`Column ${ci + 1} heading`} value={c.header} onChange={(e) => setHeader(ci, e.target.value)} style={{ ...field, textAlign: c.align, fontWeight: 700 }} />
+          </th>
+        ))}</tr>
+      </thead>
+      <tbody>
+        {block.rows.map((r, ri) => (
+          <tr key={ri} style={{ background: ri % 2 ? "#f8fafc" : "#fff" }}>
+            {block.columns.map((c, ci) => (
+              <td key={ci} style={{ textAlign: c.align, padding: "5px 7px", borderBottom: ".5px solid #e2e8f0" }}>
+                <input aria-label={`Row ${ri + 1}, ${c.header || `column ${ci + 1}`}`} value={r.cells[ci]?.value ?? ""} onChange={(e) => setCell(ri, ci, e.target.value)} style={{ ...field, textAlign: c.align }} />
+              </td>
+            ))}
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
+}
+
 function money(amount: number, currency: string): string {
   const n = Math.abs(amount).toLocaleString("en-ZA", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   return currency === "ZAR" ? `R ${n}` : `${currency} ${n}`;
@@ -81,20 +122,7 @@ export function BlockView({ block, active }: { block: DocumentBlock; active: boo
       );
 
     case "table":
-      return (
-        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
-          <thead>
-            <tr>{block.columns.map((c, i) => <th key={i} style={{ background: block.headerBg, color: block.headerColor, textAlign: c.align, padding: "5px 7px", fontSize: 10, width: `${c.widthPct}%` }}>{c.header}</th>)}</tr>
-          </thead>
-          <tbody>
-            {block.rows.map((r, ri) => (
-              <tr key={ri} style={{ background: ri % 2 ? "#f8fafc" : "#fff" }}>
-                {block.columns.map((c, ci) => <td key={ci} style={{ textAlign: c.align, padding: "5px 7px", borderBottom: ".5px solid #e2e8f0" }}>{r.cells[ci]?.value ?? ""}</td>)}
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      );
+      return <TableView block={block} />;
 
     case "pricing": {
       const { rows, subtotal, taxTotal, total } = computePricing(block);

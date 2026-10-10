@@ -193,6 +193,46 @@ function LayoutSection({ block, floating }: { block: DocumentBlock; floating: bo
   );
 }
 
+/** A plain table's shape: its columns, how many rows, and the heading colours. The words are typed on the page. */
+function TableProps({ block }: { block: Extract<DocumentBlock, { type: "table" }> }) {
+  const updateBlock = useEditor((s) => s.updateBlock);
+  const set = (patch: Partial<typeof block>) => updateBlock(block.id, patch as Partial<DocumentBlock>);
+  const columns = block.columns;
+  const setColumn = (i: number, patch: Partial<(typeof columns)[number]>) => set({ columns: columns.map((c, ci) => (ci === i ? { ...c, ...patch } : c)) });
+  const emptyRow = () => ({ cells: columns.map(() => ({ value: "" })) });
+  return (
+    <Section title="Table">
+      <p className="mb-2 text-[11px] text-slate-500">Click a heading or a cell on the page to type in it.</p>
+      <label className={lbl}>Columns</label>
+      <ul className="mb-2 space-y-1.5">
+        {columns.map((c, i) => (
+          <li key={i} className="flex items-center gap-1">
+            <span className="min-w-0 flex-1 truncate text-xs text-slate-700" title={c.header}>{c.header || `Column ${i + 1}`}</span>
+            <select aria-label={`Alignment of column ${i + 1}`} className="rounded border border-slate-300 px-1 py-1 text-xs text-slate-700" value={c.align} onChange={(e) => setColumn(i, { align: e.target.value as typeof c.align })}>
+              <option value="left">Left</option><option value="center">Centre</option><option value="right">Right</option>
+            </select>
+            <input aria-label={`Width of column ${i + 1}, percent`} type="number" min={5} max={90} step={5} className="w-14 rounded border border-slate-300 px-1 py-1 text-xs text-slate-700" value={c.widthPct} onChange={(e) => setColumn(i, { widthPct: Math.max(5, Math.min(90, Number(e.target.value) || 5)) })} />
+            <button
+              type="button" className="rounded px-1 text-xs text-red-500 hover:bg-red-50 disabled:opacity-30" title="Remove this column" aria-label={`Remove column ${i + 1}`} disabled={columns.length <= 1}
+              // The column goes with its cells, in every row.
+              onClick={() => set({ columns: columns.filter((_, ci) => ci !== i), rows: block.rows.map((r) => ({ cells: r.cells.filter((_, ci) => ci !== i) })) })}
+            >✕</button>
+          </li>
+        ))}
+      </ul>
+      <div className="mb-3 flex gap-1.5">
+        <button type="button" className="flex-1 rounded-md border border-slate-300 py-1 text-xs text-slate-700 hover:bg-slate-50 disabled:opacity-40" disabled={columns.length >= 8} onClick={() => set({ columns: [...columns, { header: "", align: "left", widthPct: 20 }], rows: block.rows.map((r) => ({ cells: [...columns.map((_, ci) => r.cells[ci] ?? { value: "" }), { value: "" }] })) })}>+ Column</button>
+        <button type="button" className="flex-1 rounded-md border border-slate-300 py-1 text-xs text-slate-700 hover:bg-slate-50" onClick={() => set({ rows: [...block.rows, emptyRow()] })}>+ Row</button>
+        <button type="button" className="flex-1 rounded-md border border-slate-300 py-1 text-xs text-slate-700 hover:bg-slate-50 disabled:opacity-40" disabled={block.rows.length === 0} title="Remove the last row" onClick={() => set({ rows: block.rows.slice(0, -1) })}>− Row</button>
+      </div>
+      <div className="flex gap-2">
+        <div className="flex-1"><label className={lbl}>Heading fill</label><input type="color" value={block.headerBg} onChange={(e) => set({ headerBg: e.target.value })} className="h-8 w-full rounded border border-slate-300" /></div>
+        <div className="flex-1"><label className={lbl}>Heading text</label><input type="color" value={block.headerColor} onChange={(e) => set({ headerColor: e.target.value })} className="h-8 w-full rounded border border-slate-300" /></div>
+      </div>
+    </Section>
+  );
+}
+
 const FRAME_PARTS = new Set<string>(["emailHeader", "emailBody", "emailSignature", "emailFooter"]);
 /** Plain names for the email blocks ("emailHeader block" is the code's name, not the owner's). */
 const EMAIL_BLOCK_NAMES: Record<string, string> = {
@@ -225,7 +265,7 @@ function BlockProps({ block, floating }: { block: DocumentBlock; floating: boole
       {block.type === "emailSignature" && <EmailSignatureProps block={block} />}
       {block.type === "emailBody" && <p className="p-3 text-xs text-slate-500">Where each email&apos;s own content goes. Keep exactly one.</p>}
       {(block.type === "text" || block.type === "heading") && <TextHint block={block} />}
-      {block.type === "table" && <p className="p-3 text-xs text-slate-400">Edit table cells inline on the page.</p>}
+      {block.type === "table" && <TableProps block={block} />}
       {block.type === "pageBreak" && <p className="p-3 text-xs text-slate-400">Forces the next content onto a new page.</p>}
       <div className="space-y-2 p-3">
         <TextPromptDialog
