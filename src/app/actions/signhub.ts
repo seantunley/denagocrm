@@ -22,6 +22,10 @@ import {
   canAccessSignatureRequest,
   resolveSignatureRequestAccess,
 } from "@/lib/signing/access";
+import { reviveStuckSteps, stuckSteps } from "@/lib/signing/stuck";
+import { failureInWords, finishingStalled, worstStep } from "@/lib/signing/stuckText";
+import { COMPLETION_BLOCKED_EVENT } from "@/lib/signing/complete";
+import { runSigningTransitionJobs } from "@/lib/signing/transitionWorker";
 
 /** Approve or reject a pending approval step from inside the app (hub queue). */
 export async function decideApproval(stepId: string, decision: "approve" | "reject", reason?: string): Promise<{ ok: boolean; error?: string }> {
@@ -191,6 +195,84 @@ export async function resendSignedCopies(requestId: string) {
     revalidatePath(`/signatures/${requestId}`);
     if (!delivery.ok) refuse(`Still couldn't send to ${delivery.failures.length} recipient${delivery.failures.length === 1 ? "" : "s"} — check their email address and the mail settings.`);
     return { success: delivery.sent ? `Sent to ${delivery.sent} recipient${delivery.sent === 1 ? "" : "s"}` : "Everyone already has it" };
+  });
+}
+
+/**
+ * Try a request's failed follow-up steps again, now.
+ *
+ * After someone signs, approves or declines, the request has one more thing to
+ * do — finish the sealed PDF, ask the next person, email the approver. When that
+ * step failed the request looked healthy and nobody could do anything about it
+ * but wait for the queue, which gives up after about a day.
+ *
+ * This does not run the step itself. It makes the failed jobs due and runs the
+ * transition worker, so a retry from here takes the same lease, the same
+ * bookkeeping and the same "already done" checks as every other attempt — a
+ * second way of finishing a signed document would be a second way of finishing
+ * it twice.
+ *
+ * It reports from what is true afterwards, never from the worker's counters: the
+ * question the person asked is "is it done now?".
+ */
+export async function retryStuckSteps(requestId: string) {
+  return asActionResult(async () => {
+    const access = await resolveSignatureRequestAccess(() =>
+      prisma.signatureRequest.findUnique({ where: { id: requestId }, include: { recipients: true } }),
+    );
+    if (!access) refuse("That signing request is no longer there — refresh the page.");
+    const { user, request: req } = access;
+    if (req.deletedAt || !req.tenantId) refuse("That signing request is no longer there — refresh the page.");
+    if (isRequestClosed(req.status)) refuse("This request is already finished.");
+
+    await reviveStuckSteps(requestId, req.tenantId);
+    const run = await runSigningTransitionJobs(req.tenantId);
+
+    const [after, left] = await Promise.all([
+      prisma.signatureRequest.findUnique({
+        where: { id: requestId },
+        select: {
+          status: true,
+          recipients: { select: { role: true, status: true, signedAt: true } },
+          approvals: { select: { status: true } },
+          events: { where: { type: COMPLETION_BLOCKED_EVENT }, select: { id: true }, take: 1 },
+        },
+      }),
+      stuckSteps([requestId]),
+    ]);
+    const finished = after?.status === "completed";
+    // No grace here: the attempt has just run, so "not finished" is the answer.
+    const stalled = Boolean(after) && finishingStalled({ ...after!, closed: isRequestClosed(after!.status) }, new Date(), 0);
+    const stillStuck = left.length > 0 || stalled;
+
+    await logAudit({
+      action: "signing.retry",
+      summary: `Retried a failed step on “${req.title}” — ${finished ? "it completed" : stillStuck ? "still not through" : "it went through"}`,
+      entityType: "SignatureRequest",
+      entityId: requestId,
+      contactId: req.contactId,
+      user,
+    });
+    revalidatePath("/signatures");
+    revalidatePath(`/signatures/${requestId}`);
+    if (req.quoteId) {
+      revalidatePath("/quotes");
+      revalidatePath(`/quotes/${req.quoteId}`);
+    }
+    if (req.jobCardId) revalidatePath(`/jobcards/${req.jobCardId}`);
+
+    if (finished) return { success: "Finished — it is signed, sealed and on its way to everyone." };
+    if (!stillStuck) return { success: "Done — that step went through." };
+    // The record it was sent from has changed, so no retry can ever finish it.
+    if (after?.events.length) refuse("It can't be finished: the quote or job card changed after this was sent. Void this request and send the current version.");
+    // Another worker held a request while this one looked: not a failure.
+    if (run.leased > 0) refuse("It is being worked on right now. Give it a minute and refresh.");
+    const worst = worstStep(left);
+    refuse(
+      worst?.lastError
+        ? `It failed again. ${failureInWords(worst.lastError)}`
+        : "It still could not be finished, and nothing reported why. Check Settings → System log, or contact support with this request open.",
+    );
   });
 }
 

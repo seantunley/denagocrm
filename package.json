@@ -42,6 +42,7 @@
     "test:draft-concurrency": "tsx --tsconfig tsconfig.scripts.json scripts/test-conversation-draft-concurrency.ts",
     "test:checklist-concurrency": "tsx --tsconfig tsconfig.scripts.json scripts/test-checklist-template-concurrency.ts",
     "test:receipt-isolation": "tsx --tsconfig tsconfig.scripts.json scripts/test-receipt-tenant-isolation.ts",
+    "test:signing-proof": "tsx --tsconfig tsconfig.scripts.json scripts/test-signing-proof.ts",
     "test:migration-session": "tsx --tsconfig tsconfig.scripts.json scripts/test-migration-session-continuity.ts",
     "test:review-isolation": "tsx --tsconfig tsconfig.scripts.json scripts/test-google-review-tenant-isolation.ts",
     "test:dm-binding": "tsx --tsconfig tsconfig.scripts.json scripts/test-dm-conversation-binding.ts",

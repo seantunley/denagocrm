@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { requireAnyPermission } from "@/lib/permissions";
+import { hasPermission, requireAnyPermission } from "@/lib/permissions";
 import { prisma } from "@/lib/db";
 import { formatDate, formatDateTime } from "@/lib/format";
 import {
@@ -11,6 +11,10 @@ import { ApprovalActions } from "./ApprovalActions";
 import { COMPLETION_BLOCKED_EVENT } from "@/lib/signing/complete";
 import { accessibleSignatureRequestWhere } from "@/lib/signing/access";
 import { canActOnStep } from "@/lib/signing/approvals";
+import { finishingStalledWhere, stuckSteps } from "@/lib/signing/stuck";
+import { allSignersSigned, stuckLabel, worstStep } from "@/lib/signing/stuckText";
+import { retryStuckSteps } from "@/app/actions/signhub";
+import { SaveForm, SaveButton } from "@/components/SaveForm";
 import {
   CheckCircle2,
   Clock3,
@@ -25,6 +29,9 @@ import { WorkspaceHero } from "@/components/workspace-hero";
 import { EmptyState, SectionHeading, StatusPill, Surface } from "@/components/visual-system";
 
 export const dynamic = "force-dynamic";
+// Retry (Needs attention) finishes a signed document from this page's action:
+// rendering and sealing the PDF, then mailing it. Seconds normally, not always.
+export const maxDuration = 60;
 
 // Per-recipient status → dot colour + label, for the signer chips on each row.
 const RECIPIENT_STATUS: Record<string, { dot: string; label: string }> = {
@@ -174,6 +181,13 @@ export default async function SignaturesPage({
   // Gap audit #32: requests that look fine and aren't — everyone signed but the
   // record changed so it can't complete, or completed but a signed copy never
   // reached someone. Each opens to an explanation and the fix.
+  //
+  // And the ones nothing reported at all: a step that runs AFTER somebody acts
+  // (finishing the sealed PDF, asking the next signer, emailing an approver)
+  // failed, or the worker running it was cut off. The request went on reading
+  // "2/2 signed" with no warning.
+  const failedSteps = await stuckSteps();
+  const failedRequestIds = [...new Set(failedSteps.map((step) => step.requestId))];
   const needsAttention = await prisma.signatureRequest.findMany({
     where: {
       deletedAt: null,
@@ -183,11 +197,28 @@ export default async function SignaturesPage({
       OR: [
         { status: { notIn: [...CLOSED_REQUEST_STATUSES] }, events: { some: { type: COMPLETION_BLOCKED_EVENT } } },
         { status: "completed", recipients: { some: { email: { not: null }, completedEmailSentAt: null } } },
+        finishingStalledWhere(),
+        { status: { notIn: [...CLOSED_REQUEST_STATUSES] }, id: { in: failedRequestIds } },
       ],
     },
-    select: { id: true, title: true, status: true },
+    select: {
+      id: true,
+      title: true,
+      status: true,
+      recipients: { select: { role: true, status: true } },
+      events: { where: { type: COMPLETION_BLOCKED_EVENT }, select: { id: true }, take: 1 },
+    },
     orderBy: { updatedAt: "desc" },
     take: 20,
+  });
+  // Retrying is an action, so it needs the grant the action checks.
+  const canRetry = await hasPermission(user, "signing.manage");
+  const attention = needsAttention.map((request) => {
+    if (request.status === "completed") return { ...request, label: "Signed copy not delivered", tone: "danger" as const, retry: false };
+    if (request.events.length > 0) return { ...request, label: "Can't complete", tone: "warning" as const, retry: false };
+    const everyoneSigned = allSignersSigned(request.recipients);
+    const step = worstStep(failedSteps.filter((failed) => failed.requestId === request.id));
+    return { ...request, label: stuckLabel(step?.jobType ?? "advance_signature", everyoneSigned), tone: "danger" as const, retry: canRetry };
   });
   const activeViewLabel = REQUEST_VIEWS.find((view) => view.value === activeView)?.label ?? "In Progress";
   const fallbackView = REQUEST_VIEWS.find(
@@ -221,21 +252,24 @@ export default async function SignaturesPage({
         ]}
       />
 
-      {needsAttention.length > 0 && (
+      {attention.length > 0 && (
         <Surface className="overflow-hidden border-red-500/25 bg-red-500/[0.05]">
           <div className="border-b border-red-500/15 p-4">
             <SectionHeading
               title="Needs attention"
-              description="Signed by everyone but unable to complete, or completed without the signed copy reaching everyone."
+              description="Signed but not finished, unable to complete, or completed without the signed copy reaching everyone. Open one to see why."
             />
           </div>
           <ul className="divide-y divide-border/60 px-4">
-            {needsAttention.map((r) => (
+            {attention.map((r) => (
               <li key={r.id} className="flex flex-wrap items-center gap-3 py-3">
                 <Link href={`/signatures/${r.id}`} className="min-w-0 flex-1 truncate text-[13px] font-medium text-foreground hover:text-primary">{r.title}</Link>
-                <StatusPill tone={r.status === "completed" ? "danger" : "warning"}>
-                  {r.status === "completed" ? "Signed copy not delivered" : "Can't complete"}
-                </StatusPill>
+                <StatusPill tone={r.tone}>{r.label}</StatusPill>
+                {r.retry && (
+                  <SaveForm action={retryStuckSteps.bind(null, r.id)}>
+                    <SaveButton className="btn-secondary btn-sm" pendingLabel="Retrying…">Retry</SaveButton>
+                  </SaveForm>
+                )}
               </li>
             ))}
           </ul>
