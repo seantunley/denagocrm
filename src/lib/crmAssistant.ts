@@ -48,7 +48,7 @@ import { safeCodexError } from "./codexErrors";
 import { webLookup } from "./crmAssistantWeb";
 import { assistantWebAllowed } from "./assistantUser";
 import { MAX_IMAGES_PER_QUESTION } from "./assistantImage";
-import { applyLearn, loadLearned, loadPlaybook, markNotesUsed, saveDecision } from "./assistantMemoryStore";
+import { applyLearn, loadLearned, loadPlaybook, markNotesUsed, saveDecision, visibleTo } from "./assistantMemoryStore";
 import { ACTION_INSTRUCTIONS, CHOICE_INSTRUCTIONS, type ActionCard, type ProposedAction } from "./assistantActions";
 import { describeSchedule, nextRun, scheduleInput } from "./assistantSchedule";
 import { describeWatch, watchInput } from "./assistantWatchRules";
@@ -1252,8 +1252,9 @@ function refused(what: string): ToolOutput {
 
 async function recallDecision(user: User, raw: z.infer<typeof decisionArgs>): Promise<ToolOutput> {
   const args = decisionArgs.parse(raw);
+  // Same visibility as other memory: approved notes are shared; unreviewed notes belong to their creator.
   const notes = await prisma.assistantNote.findMany({
-    where: { kind: "decision", tenantId: ownedWriteTenantId() },
+    where: { kind: "decision", tenantId: ownedWriteTenantId(), ...visibleTo(user.id) },
     orderBy: { createdAt: "desc" },
     take: 40,
     select: { content: true, createdAt: true },
@@ -1262,17 +1263,20 @@ async function recallDecision(user: User, raw: z.infer<typeof decisionArgs>): Pr
     .map((n) => parseDecision(n.content, n.createdAt.toISOString()))
     .filter((d): d is NonNullable<typeof d> => d !== null);
   const matched = matchDecisions(decisions, args.query);
-  // A decision about a lead is only returned if this person can open that lead.
+  // Explicit kind — a lead decision is only returned if this person can open that lead.
   const visible = [];
   for (const d of matched) {
-    const isLead = d.subject.startsWith("c") && d.subject.length > 20;
-    if (isLead && !(await canAccessLead(user, d.subject))) continue;
+    if (d.kind === "lead" && !(await canAccessLead(user, d.subject))) continue;
     visible.push(d);
   }
   return {
     truncated: false,
-    rows: visible.map((d) => ({ href: d.subject.startsWith("c") && d.subject.length > 20 ? `/leads/${d.subject}` : "/ask", label: d.subject })),
-    data: visible.map((d) => ({ subject: d.subject, decision: d.text, at: d.at })),
+    rows: visible.map((d) => ({
+      href: d.kind === "lead" ? `/leads/${d.subject}` : "/ask",
+      label: d.subject,
+      detail: d.text.slice(0, 120),
+    })),
+    data: visible.map((d) => ({ kind: d.kind, subject: d.subject, decision: d.text, at: d.at })),
   };
 }
 
@@ -1936,7 +1940,8 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
   // Case decisions are stored separately from prompt memory.
   if (learn?.decision?.length && source !== "schedule") {
     for (const d of learn.decision) {
-      await saveDecision(d.subject, d.text, user.id).catch(async (error: unknown) => {
+      if (d.kind === "lead" && !(await canAccessLead(user, d.subject))) continue;
+      await saveDecision(d.kind, d.subject, d.text, user.id).catch(async (error: unknown) => {
         await logError("crm-assistant", "decision write failed", error instanceof Error ? error.name : "unknown");
       });
     }
