@@ -3,7 +3,7 @@ import { z } from "zod";
 import { prisma } from "./db";
 import { logError } from "./errorLog";
 import { logAudit } from "./audit";
-import { codexRespond, isCodexConnected } from "./codex";
+import { codexRespond, isCodexConnected, type CodexResult } from "./codex";
 import { formatZAR, contactName } from "./format";
 import { payableTotalCents } from "./pricing";
 import { johannesburgDateKey } from "./activityDay";
@@ -1727,10 +1727,10 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
   // Timeout is recalculated on every attempt (including the retry) so a slow
   // first try cannot hand the retry a stale 45s budget that blows past the reserve.
   const plan = (step: number, insist: boolean) =>
-    withRetry(breakerKey, () => {
+    withRetry(breakerKey, (): Promise<CodexResult> => {
       const timeoutMs = Math.min(PLAN_MAX_MS, Math.max(0, researchLeft()));
       if (timeoutMs < MIN_CALL_MS) {
-        return Promise.resolve({ error: "research budget spent", transient: false });
+        return Promise.resolve({ error: "research budget spent" });
       }
       return codexRespond({ instructions, prompt: planPrompt(step, insist), images, reasoningEffort: complex ? "medium" : "low", timeoutMs, cacheKey, preferModel: PLAN_MODEL });
     });
