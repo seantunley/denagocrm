@@ -4,10 +4,14 @@ import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/db";
 import { requirePermission, requireAnyPermission } from "@/lib/permissions";
 import { logAudit } from "@/lib/audit";
-import { dispatchRequest, notifyRecipient } from "@/lib/signing/dispatch";
+import { dispatchRequest, notifyRecipient, sendToRecipient } from "@/lib/signing/dispatch";
 import { logSignEvent, staffActor } from "@/lib/signing/events";
-import { approveStep, rejectStep, canActOnStep } from "@/lib/signing/approvals";
-import { CLOSED_REQUEST_STATUSES, isRequestClosed } from "@/lib/signing/status";
+import { approveStep, rejectStep, canActOnStep, resendApproval, reassignApproval } from "@/lib/signing/approvals";
+import { resolveTenantMemberUser } from "@/lib/tenantActor";
+import { isRequestClosed } from "@/lib/signing/status";
+import { voidOpenRequest } from "@/lib/signing/void";
+import { nextSigner } from "@/lib/signing/nextSigner";
+import { advanceWorkflow, pendingApprovalNode } from "@/lib/signflow/runtime";
 import { withActingStaffScope } from "@/lib/actingScope";
 import { asActionResult, refuse } from "@/lib/actionResult";
 import { readFile } from "@/lib/storage";
@@ -19,6 +23,10 @@ import {
   canAccessSignatureRequest,
   resolveSignatureRequestAccess,
 } from "@/lib/signing/access";
+import { reviveStuckSteps, stuckSteps } from "@/lib/signing/stuck";
+import { failureInWords, finishingStalled, worstStep } from "@/lib/signing/stuckText";
+import { COMPLETION_BLOCKED_EVENT } from "@/lib/signing/complete";
+import { runSigningTransitionJobs } from "@/lib/signing/transitionWorker";
 
 /** Approve or reject a pending approval step from inside the app (hub queue). */
 export async function decideApproval(stepId: string, decision: "approve" | "reject", reason?: string): Promise<{ ok: boolean; error?: string }> {
@@ -39,7 +47,69 @@ export async function decideApproval(stepId: string, decision: "approve" | "reje
   });
 }
 
-export async function sendRequest(requestId: string): Promise<{ ok: boolean; notified?: number; error?: string }> {
+/**
+ * The request an approval step belongs to, for someone who may manage it.
+ *
+ * Addressed by STEP id, so the record is one hop away — the same hop
+ * remindRecipient has to make. Null for "no such step" and "not yours" alike.
+ */
+async function manageableApproval(stepId: string) {
+  const step = await prisma.approvalStep.findUnique({ where: { id: stepId }, select: { id: true, requestId: true, label: true } });
+  if (!step) return null;
+  const access = await resolveSignatureRequestAccess(() =>
+    prisma.signatureRequest.findUnique({ where: { id: step.requestId }, select: { id: true, title: true, tenantId: true, deletedAt: true, ...REQUEST_BINDING_SELECT } }),
+  );
+  if (!access || access.request.deletedAt) return null;
+  return { step, user: access.user, request: access.request };
+}
+
+/** Send a waiting approver their link again. */
+export async function resendApprovalLink(stepId: string) {
+  return asActionResult(async () => {
+    const found = await manageableApproval(stepId);
+    if (!found) refuse("That approval is no longer there — refresh the page.");
+    const { step, user, request } = found;
+    const sent = await resendApproval(step.id, await staffActor(user.name, request.tenantId));
+    if (!sent.ok) refuse(sent.error ?? "The email could not be sent.");
+    await logAudit({
+      action: "signing.approval_resent",
+      summary: `Sent the approval link for “${request.title}” (${step.label}) again to ${sent.to}`,
+      entityType: "SignatureRequest",
+      entityId: request.id,
+      user,
+    });
+    revalidatePath(`/signatures/${request.id}`);
+    return { success: `Sent again to ${sent.to}` };
+  });
+}
+
+/** Hand a waiting approval to another member of staff; their link replaces the old one. */
+export async function reassignApprovalTo(stepId: string, form: FormData) {
+  return asActionResult(async () => {
+    const found = await manageableApproval(stepId);
+    if (!found) refuse("That approval is no longer there — refresh the page.");
+    const { step, user, request } = found;
+    // An active member of THIS workspace, looked up here — never whatever id the
+    // form carried.
+    const userId = String(form.get("userId") ?? "").trim();
+    const to = userId ? await resolveTenantMemberUser(userId) : null;
+    if (!to) refuse("Choose someone on your team.");
+    const moved = await reassignApproval(step.id, to, await staffActor(user.name, request.tenantId));
+    revalidatePath(`/signatures/${request.id}`);
+    revalidatePath("/signatures");
+    if (!moved.ok) refuse(moved.error ?? "The approval could not be reassigned.");
+    await logAudit({
+      action: "signing.approval_reassigned",
+      summary: `Reassigned the approval for “${request.title}” (${step.label}) to ${to.name}`,
+      entityType: "SignatureRequest",
+      entityId: request.id,
+      user,
+    });
+    return { success: `${to.name} has been sent the approval` };
+  });
+}
+
+export async function sendRequest(requestId: string): Promise<{ ok: boolean; notified?: number; error?: string; message?: string }> {
   return withActingStaffScope(async () => {
     const access = await resolveSignatureRequestAccess(() =>
       prisma.signatureRequest.findUnique({ where: { id: requestId }, include: { recipients: true } }),
@@ -51,7 +121,29 @@ export async function sendRequest(requestId: string): Promise<{ ok: boolean; not
     const reachable = req.recipients.filter((r) => r.role !== "viewer" && (r.email || r.phone));
     if (reachable.length === 0) return { ok: false, error: "Add an email or phone to at least one signer first." };
 
-    const { notified, unreachable } = await dispatchRequest(requestId);
+    let notified: number;
+    let unreachable: number;
+    if (req.workflowGraphJson) {
+      // A workflow decides who goes first, and it may be nobody who signs: an
+      // approval gate has no recipient. Sending by recipient order from here
+      // skipped the gate entirely and mailed the customer. Do what the quote's
+      // own card does — reach whoever the current node is waiting on, or raise
+      // the approval.
+      const recipient = await nextSigner(requestId);
+      if (!recipient) {
+        const gate = await pendingApprovalNode(requestId);
+        if (!gate) return { ok: false, error: "Nobody is waiting to sign this request." };
+        if (gate.raised) return { ok: false, error: `Waiting on “${gate.label}” — the approver has already been asked.` };
+        await advanceWorkflow(requestId);
+        await logAudit({ action: "signing.send", summary: `Sent “${req.title}” for approval (${gate.label})`, entityType: "SignatureRequest", entityId: requestId, user });
+        revalidatePath("/signatures");
+        revalidatePath(`/signatures/${requestId}`);
+        return { ok: true, notified: 0, message: `Sent for approval — ${gate.label}.` };
+      }
+      ({ notified, unreachable } = await sendToRecipient(requestId, recipient.id));
+    } else {
+      ({ notified, unreachable } = await dispatchRequest(requestId));
+    }
     revalidatePath("/signatures");
     revalidatePath(`/signatures/${requestId}`);
     // Truthful reporting: never log a successful send, or report ok, merely
@@ -77,7 +169,7 @@ export async function sendRequest(requestId: string): Promise<{ ok: boolean; not
  * includes them, so the hub reported "Sent to N recipient(s)" when nothing
  * actually went out. Mirrors the already-correct resendRecordSigning.
  */
-export async function resendRequest(requestId: string): Promise<{ ok: boolean; notified?: number; error?: string }> {
+export async function resendRequest(requestId: string): Promise<{ ok: boolean; notified?: number; error?: string; message?: string }> {
   return withActingStaffScope(async () => {
     const access = await resolveSignatureRequestAccess(() =>
       prisma.signatureRequest.findUnique({ where: { id: requestId }, include: { recipients: true } }),
@@ -90,10 +182,34 @@ export async function resendRequest(requestId: string): Promise<{ ok: boolean; n
     const reachable = req.recipients.filter((r) => r.role !== "viewer" && (r.email || r.phone));
     if (reachable.length === 0) return { ok: false, error: "Add an email or phone to at least one signer first." };
 
-    const { notified } = await dispatchRequest(requestId, { reminder: true });
-    await logAudit({ action: "signing.remind", summary: `Resent “${req.title}” for signing`, entityType: "SignatureRequest", entityId: requestId, user });
+    // WHO is resent to. dispatchRequest picks its targets by recipient ORDER, and
+    // a workflow pre-creates a recipient for every path — so here it could hand
+    // the customer a live signing link while a manager's approval was still
+    // pending, or nudge someone on a branch the document never took. A workflow
+    // request is resent to whoever its current node is waiting on, and to nobody
+    // when that is an approval. Same rule as the resend on the quote's own card.
+    let notified: number;
+    if (req.workflowGraphJson) {
+      const recipient = await nextSigner(requestId);
+      if (!recipient) {
+        const gate = await pendingApprovalNode(requestId);
+        return {
+          ok: false,
+          error: gate
+            ? `Waiting on “${gate.label}” — nobody can sign until it is approved.`
+            : "Nobody is waiting to sign this request.",
+        };
+      }
+      notified = (await notifyRecipient(recipient.id, { reminder: true })).delivered ? 1 : 0;
+    } else {
+      ({ notified } = await dispatchRequest(requestId, { reminder: true }));
+    }
     revalidatePath("/signatures");
     revalidatePath(`/signatures/${requestId}`);
+    // Truthful reporting: a resend that reached nobody is not logged as one and
+    // is not reported as "Sent to 0 recipient(s)".
+    if (notified === 0) return { ok: false, notified: 0, error: "The reminder could not be delivered — check the signer's contact details." };
+    await logAudit({ action: "signing.remind", summary: `Resent “${req.title}” for signing`, entityType: "SignatureRequest", entityId: requestId, user });
     return { ok: true, notified };
   });
 }
@@ -145,17 +261,109 @@ export async function resendSignedCopies(requestId: string) {
   });
 }
 
-export async function remindRecipient(recipientId: string): Promise<{ ok: boolean }> {
+/**
+ * Try a request's failed follow-up steps again, now.
+ *
+ * After someone signs, approves or declines, the request has one more thing to
+ * do — finish the sealed PDF, ask the next person, email the approver. When that
+ * step failed the request looked healthy and nobody could do anything about it
+ * but wait for the queue, which gives up after about a day.
+ *
+ * This does not run the step itself. It makes the failed jobs due and runs the
+ * transition worker, so a retry from here takes the same lease, the same
+ * bookkeeping and the same "already done" checks as every other attempt — a
+ * second way of finishing a signed document would be a second way of finishing
+ * it twice.
+ *
+ * It reports from what is true afterwards, never from the worker's counters: the
+ * question the person asked is "is it done now?".
+ */
+export async function retryStuckSteps(requestId: string) {
+  return asActionResult(async () => {
+    const access = await resolveSignatureRequestAccess(() =>
+      prisma.signatureRequest.findUnique({ where: { id: requestId }, include: { recipients: true } }),
+    );
+    if (!access) refuse("That signing request is no longer there — refresh the page.");
+    const { user, request: req } = access;
+    if (req.deletedAt || !req.tenantId) refuse("That signing request is no longer there — refresh the page.");
+    if (isRequestClosed(req.status)) refuse("This request is already finished.");
+
+    await reviveStuckSteps(requestId, req.tenantId);
+    const run = await runSigningTransitionJobs(req.tenantId);
+
+    const [after, left] = await Promise.all([
+      prisma.signatureRequest.findUnique({
+        where: { id: requestId },
+        select: {
+          status: true,
+          recipients: { select: { role: true, status: true, signedAt: true } },
+          approvals: { select: { status: true } },
+          events: { where: { type: COMPLETION_BLOCKED_EVENT }, select: { id: true }, take: 1 },
+        },
+      }),
+      stuckSteps([requestId]),
+    ]);
+    const finished = after?.status === "completed";
+    // No grace here: the attempt has just run, so "not finished" is the answer.
+    const stalled = Boolean(after) && finishingStalled({ ...after!, closed: isRequestClosed(after!.status) }, new Date(), 0);
+    const stillStuck = left.length > 0 || stalled;
+
+    await logAudit({
+      action: "signing.retry",
+      summary: `Retried a failed step on “${req.title}” — ${finished ? "it completed" : stillStuck ? "still not through" : "it went through"}`,
+      entityType: "SignatureRequest",
+      entityId: requestId,
+      contactId: req.contactId,
+      user,
+    });
+    revalidatePath("/signatures");
+    revalidatePath(`/signatures/${requestId}`);
+    if (req.quoteId) {
+      revalidatePath("/quotes");
+      revalidatePath(`/quotes/${req.quoteId}`);
+    }
+    if (req.jobCardId) revalidatePath(`/jobcards/${req.jobCardId}`);
+
+    if (finished) return { success: "Finished — it is signed, sealed and on its way to everyone." };
+    if (!stillStuck) return { success: "Done — that step went through." };
+    // The record it was sent from has changed, so no retry can ever finish it.
+    if (after?.events.length) refuse("It can't be finished: the quote or job card changed after this was sent. Void this request and send the current version.");
+    // Another worker held a request while this one looked: not a failure.
+    if (run.leased > 0) refuse("It is being worked on right now. Give it a minute and refresh.");
+    const worst = worstStep(left);
+    refuse(
+      worst?.lastError
+        ? `It failed again. ${failureInWords(worst.lastError)}`
+        : "It still could not be finished, and nothing reported why. Check Settings → System log, or contact support with this request open.",
+    );
+  });
+}
+
+export async function remindRecipient(recipientId: string): Promise<{ ok: boolean; error?: string }> {
   return withActingStaffScope(async () => {
     const user = await requirePermission("signing.manage");
-    const r = await prisma.signatureRecipient.findUnique({ where: { id: recipientId } });
+    const r = await prisma.signatureRecipient.findUnique({
+      where: { id: recipientId },
+      include: { request: { select: { ordering: true, workflowGraphJson: true } } },
+    });
     // Addressed by recipient id, so the record this ultimately touches is one hop
     // away — and that hop is where the authorization was missing. A reminder
     // re-delivers the signing link, so it must be gated like the send itself.
-    if (!r || !(await canAccessRecipient(user, recipientId))) return { ok: false };
+    if (!r || !(await canAccessRecipient(user, recipientId))) return { ok: false, error: "Not found" };
+    // A reminder carries a working signing link, so it goes only to someone whose
+    // turn it is. In a request signed in order — or one waiting on an approval —
+    // reminding the wrong row handed them the document early.
+    if (r.request.workflowGraphJson || r.request.ordering === "sequential") {
+      const next = await nextSigner(r.requestId);
+      if (next?.id !== r.id) {
+        return { ok: false, error: next ? `${next.name} signs before ${r.name}.` : `It is not ${r.name}'s turn to sign yet.` };
+      }
+    }
     const outcome = await notifyRecipient(recipientId, { reminder: true });
     revalidatePath(`/signatures/${r.requestId}`);
-    if (!outcome.delivered) return { ok: false };
+    if (!outcome.delivered) {
+      return { ok: false, error: outcome.reachable ? "The reminder could not be delivered — try again shortly." : `${r.name} has no email address or mobile number.` };
+    }
     await logAudit({ action: "signing.remind", summary: `Reminded ${r.name}`, entityType: "SignatureRecipient", entityId: recipientId, user });
     return { ok: true };
   });
@@ -168,18 +376,20 @@ export async function voidRequest(requestId: string, reason?: string): Promise<{
     );
     if (!access) return { ok: false };
     const { user, request: req } = access;
-    // CONDITIONAL void — only an OPEN request. An unconditional update would
-    // overwrite a request a concurrent signer just completed / declined (or a
-    // workflow rejection), silently discarding that terminal state.
-    const voided = await prisma.signatureRequest.updateMany({
-      where: { id: requestId, status: { notIn: [...CLOSED_REQUEST_STATUSES] } },
-      data: { status: "voided" },
-    });
-    if (voided.count === 0) return { ok: false };
+    // The one void (lib/signing/void.ts) — the same transaction the quote's own
+    // card runs. This used to void the request and stop there, so the quote went
+    // on saying "Sent" about a document nobody could sign any more.
+    const voided = await voidOpenRequest(requestId);
+    if (!voided) return { ok: false };
     await logSignEvent(requestId, { type: "voided", actor: await staffActor(user.name, req.tenantId), metadata: { reason: reason ?? "" } });
     await logAudit({ action: "signing.void", summary: `Voided “${req.title}”`, entityType: "SignatureRequest", entityId: requestId, user });
     revalidatePath("/signatures");
     revalidatePath(`/signatures/${requestId}`);
+    if (voided.quoteId) {
+      revalidatePath("/quotes");
+      revalidatePath(`/quotes/${voided.quoteId}`);
+    }
+    if (voided.jobCardId) revalidatePath(`/jobcards/${voided.jobCardId}`);
     return { ok: true };
   });
 }

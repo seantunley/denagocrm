@@ -3,7 +3,7 @@ import { basePrisma, prisma } from "@/lib/db";
 import { sendEmail } from "@/lib/email";
 import { logSignEvent, buildSignEvent } from "./events";
 import { isRequestClosed } from "./status";
-import { usableCapability } from "./tokenVault";
+import { newSignCapability, usableCapability } from "./tokenVault";
 import { advanceWorkflow } from "@/lib/signflow/runtime";
 import { resolveTenantActor, resolveTenantMemberUser } from "@/lib/tenantActor";
 import { tenantEnforcing } from "@/lib/tenantEnforcement";
@@ -76,14 +76,22 @@ async function approvalAlreadySent(tenantId: string, requestId: string, stepId: 
  * truthfully. `approval_sent` means SMTP accepted the message, never merely that
  * an attempt was made.
  */
-export async function notifyApprover(stepId: string): Promise<ApprovalDeliveryResult> {
+export async function notifyApprover(
+  stepId: string,
+  /**
+   * `again` is a person asking for the link to be sent once more — the approver
+   * lost it, or it was just handed to someone else. It skips the duplicate
+   * check, which exists to stop the WORKER repeating itself, not a person.
+   */
+  opts: { again?: { by: string } } = {},
+): Promise<ApprovalDeliveryResult> {
   const step = await prisma.approvalStep.findUnique({
     where: { id: stepId },
     include: { request: true },
   });
   if (!step || !step.tenantId) return { ok: false, error: "Approval step not found or has no tenant owner" };
   if (isRequestClosed(step.request.status) || step.status !== "pending") return { ok: true, skipped: true };
-  if (await approvalAlreadySent(step.tenantId, step.requestId, step.id)) return { ok: true, skipped: true };
+  if (!opts.again && (await approvalAlreadySent(step.tenantId, step.requestId, step.id))) return { ok: true, skipped: true };
 
   const who = await resolveApprover(step);
   if (!who.email) return { ok: false, error: `No deliverable email for approval “${step.label}”` };
@@ -122,10 +130,93 @@ ${brand.displayName}`,
 
   await logSignEvent(step.requestId, {
     type: "approval_sent",
-    actor: "system",
+    actor: opts.again?.by ?? "system",
     channel: "email",
-    metadata: { to: who.email, label: step.label, stepId: step.id },
+    metadata: { to: who.email, label: step.label, stepId: step.id, ...(opts.again ? { again: true } : {}) },
   });
+  return { ok: true };
+}
+
+/** A person may ask for the link again, but not hold the button down. */
+const RESEND_COOLDOWN_MS = 60 * 1000;
+
+/** When this step's link was last emailed, or null if it never was. */
+async function lastApprovalSentAt(tenantId: string, requestId: string, stepId: string): Promise<Date | null> {
+  const rows = await basePrisma.$queryRaw<Array<{ at: Date | null }>>`
+    SELECT MAX("createdAt") AS "at" FROM "SignatureEvent"
+    WHERE "tenantId" = ${tenantId}
+      AND "requestId" = ${requestId}
+      AND "type" = 'approval_sent'
+      AND "metadata"->>'stepId' = ${stepId}
+  `;
+  return rows[0]?.at ?? null;
+}
+
+/**
+ * Send a waiting approver their link again.
+ *
+ * The approval email used to be the only way in for an approver who is not
+ * signed in to the CRM, and it could be sent exactly once: one lost in a spam
+ * folder left the document parked behind a gate nobody could re-open.
+ */
+export async function resendApproval(stepId: string, by: string): Promise<{ ok: boolean; error?: string; to?: string }> {
+  const step = await prisma.approvalStep.findUnique({ where: { id: stepId }, include: { request: { select: { status: true } } } });
+  if (!step || !step.tenantId) return { ok: false, error: "That approval is no longer there." };
+  if (step.status !== "pending" || isRequestClosed(step.request.status)) return { ok: false, error: "That approval has already been decided, or its request is closed." };
+  const last = await lastApprovalSentAt(step.tenantId, step.requestId, step.id);
+  if (last && Date.now() - last.getTime() < RESEND_COOLDOWN_MS) {
+    return { ok: false, error: "It was sent a moment ago — give it a minute before sending again." };
+  }
+  const who = await resolveApprover(step);
+  const sent = await notifyApprover(step.id, { again: { by } });
+  if (!sent.ok) return { ok: false, error: sent.error ?? "The email could not be sent." };
+  return { ok: true, to: who.name };
+}
+
+/**
+ * Hand a waiting approval to another member of staff.
+ *
+ * The step keeps its place in the workflow; only who decides it changes. The
+ * link already sent is REPLACED, not shared: the first approver's link stops
+ * working the moment the new one exists, so being taken off a decision takes
+ * you off it. The swap is conditional on the step still being pending, so a
+ * decision made a moment earlier is never overwritten by a reassignment.
+ */
+export async function reassignApproval(
+  stepId: string,
+  to: { id: string; name: string; email: string | null },
+  by: string,
+): Promise<{ ok: boolean; error?: string }> {
+  const step = await prisma.approvalStep.findUnique({ where: { id: stepId }, include: { request: { select: { status: true } } } });
+  if (!step || !step.tenantId) return { ok: false, error: "That approval is no longer there." };
+  if (step.status !== "pending" || isRequestClosed(step.request.status)) return { ok: false, error: "That approval has already been decided, or its request is closed." };
+  if (step.assigneeType === "staff" && step.assigneeUserId === to.id) return { ok: false, error: `${to.name} already has this approval.` };
+  if (!to.email) return { ok: false, error: `${to.name} has no email address to send the approval to.` };
+
+  const before = await resolveApprover(step);
+  const capability = newSignCapability();
+  const moved = await prisma.approvalStep.updateMany({
+    where: { id: step.id, tenantId: step.tenantId, status: "pending" },
+    data: {
+      assigneeType: "staff",
+      assigneeUserId: to.id,
+      assigneeRole: null,
+      assigneeName: to.name,
+      assigneeEmail: to.email,
+      token: capability.digest,
+      tokenCiphertext: capability.ciphertext,
+    },
+  });
+  if (moved.count !== 1) return { ok: false, error: "That approval was decided while you were choosing." };
+
+  await logSignEvent(step.requestId, {
+    type: "approval_reassigned",
+    actor: by,
+    metadata: { stepId: step.id, label: step.label, from: before.name, to: to.name },
+  });
+  const sent = await notifyApprover(step.id, { again: { by } });
+  // The hand-over itself has happened; say so, and say the email did not go.
+  if (!sent.ok) return { ok: false, error: `Reassigned to ${to.name}, but the email could not be sent: ${sent.error ?? "unknown error"}. Use Send again.` };
   return { ok: true };
 }
 
