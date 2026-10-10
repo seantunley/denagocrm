@@ -31,8 +31,14 @@ function missingRequired(question: string, tools: string[]): string | null {
   if (WHY_OR_STUCK.test(question) && !tools.includes("lead_brief") && !tools.includes("sales_stats")) {
     return "why/stuck needs lead_brief or sales_stats";
   }
-  if (COMPARE.test(question) && tools.filter((t) => t === "find_leads" || t === "sales_stats").length < 1) {
-    return "comparison needs at least one pipeline lookup";
+  if (COMPARE.test(question)) {
+    const pipelineLookups = tools.filter((t) => t === "find_leads" || t === "sales_stats").length;
+    // A comparison of two people needs evidence for both sides, not one shared lookup.
+    const namesTwo = /\b(and|vs\.?|versus)\b/i.test(question);
+    if (namesTwo && pipelineLookups < 2 && !tools.includes("sales_stats")) {
+      return "comparison of two needs a lookup for each, or sales_stats";
+    }
+    if (pipelineLookups < 1) return "comparison needs at least one pipeline lookup";
   }
   return null;
 }
