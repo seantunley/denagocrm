@@ -7,7 +7,7 @@ import { useDraggable } from "@dnd-kit/core";
 import { useEditor } from "@/lib/doceditor/store";
 import { newBlock } from "@/lib/doceditor/factory";
 import { PAGE_SIZES, type DocumentBlock, type DocumentPage, type DocumentRow, type DocumentColumn } from "@/lib/doceditor/model";
-import { blockBoxCss } from "@/lib/doceditor/blockBox";
+import { blockBoxCss, columnNeedsStretch } from "@/lib/doceditor/blockBox";
 import { pageHasContent } from "@/lib/doceditor/ops";
 import ConfirmActionDialog from "@/components/ConfirmActionDialog";
 import { BlockView } from "./BlockView";
@@ -259,7 +259,8 @@ function RowView({ row, hint }: { row: DocumentRow; hint: Hint }) {
 
 function ColumnView({ col, hint }: { col: DocumentColumn; hint: Hint }) {
   return (
-    <div className="min-w-0">
+    // A flex column only when a block in it rests in the middle or at the bottom — as the PDF does.
+    <div className="min-w-0" style={columnNeedsStretch(col.blocks) ? { display: "flex", flexDirection: "column" } : undefined}>
       {col.blocks.map((b) => <BlockWrapper key={b.id} block={b} hint={hint} />)}
     </div>
   );
@@ -285,13 +286,10 @@ function BlockWrapper({ block, hint }: { block: DocumentBlock; hint: Hint }) {
 
   // The same box and type settings the PDF applies, from the same function — so
   // a text size or alignment set here shows here, not only in the preview.
+  // Where the block SITS goes on this wrapper (the editor's own 2px of chrome
+  // stays); what it LOOKS like goes on the box round its content, below.
   const box = blockBoxCss(block, "flow");
-  const align = block.settings?.horizontalAlignment;
-  const boxStyle: React.CSSProperties = {
-    ...(box.width ? { width: box.width, marginLeft: align === "right" || align === "centre" ? "auto" : undefined, marginRight: align === "right" ? undefined : "auto" } : {}),
-    ...(box.fontSize ? { fontSize: box.fontSize } : {}),
-    ...(box.textAlign ? { textAlign: box.textAlign } : {}),
-  };
+  const boxStyle: React.CSSProperties = { ...box.outer };
 
   return (
     <div
@@ -317,7 +315,9 @@ function BlockWrapper({ block, hint }: { block: DocumentBlock; hint: Hint }) {
         </div>
       )}
 
-      <BlockView block={block} active={active} />
+      <div style={{ ...box.inner, ...(box.inner.border || box.inner.padding ? { boxSizing: "border-box" as const } : {}) }}>
+        <BlockView block={block} active={active} />
+      </div>
 
       {showHint === "above" && <Indicator kind="h" pos="top" />}
       {showHint === "below" && <Indicator kind="h" pos="bottom" />}
