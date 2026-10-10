@@ -312,6 +312,20 @@ jobs:
         # LEVEL SECURITY itself is exercised.
         run: npm run test:rls-restricted
 
+      - name: A transaction on the scoped client is one -- it rolls back, and it holds its locks
+        # `prisma.$transaction(async (tx) => ...)` is how sixty-odd call sites say
+        # "these changes belong together". For as long as the scoped client
+        # existed it was not a transaction: every statement on `tx` committed as
+        # it ran, a refusal part-way kept the earlier steps, and a row lock was
+        # released before the next line. Every test of those call sites read
+        # source or drove a fake, so nothing saw it. This asks a real database:
+        # undo on a throw (model and raw), FOR UPDATE and advisory locks held,
+        # later statements seeing earlier ones -- and that it is still the SCOPED
+        # client inside. The step above proves the row-level-security half under
+        # the restricted role. The harness tsconfig, because it also drives a
+        # real caller (reordering a pipeline's stages) that reaches next/headers.
+        run: npm run test:scoped-transactions
+
       - name: Run two-tenant end-to-end CRM isolation suite
         # Ordinary CRM flows run as two different tenants through the REAL scoped
         # client under the restricted role -- the regression guard for real-flow
