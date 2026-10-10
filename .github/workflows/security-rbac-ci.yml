@@ -397,6 +397,15 @@ jobs:
       - name: Concurrency -- two people cannot silently overwrite one reply draft
         run: npm run test:draft-concurrency
 
+      # The public "is this document genuine?" page is given a file's fingerprint
+      # and nothing else — no session, no token — and has to find the right
+      # workspace from it in a database walled off per workspace. Whether that
+      # lookup lands in the RIGHT workspace, names the right company, survives the
+      # request being trashed, and stops vouching for a file once the two records
+      # it relies on disagree, is a property of real rows in two workspaces.
+      - name: Signing -- a sealed document is vouched for by the workspace that sealed it
+        run: npm run test:signing-verify
+
       # Added HERE and not only to validate:security, for the reason stated
       # directly above: this workflow calls the suites individually, so a script
       # reachable only through that chain is never run by the thing gating the

@@ -90,6 +90,30 @@ export async function resolveEmailOpenTenant(
   return row ? { tenantId: row.tenantId } : null;
 }
 
+/**
+ * Owning workspace of a SEALED DOCUMENT, found from the SHA-256 of the file.
+ *
+ * For the public "is this document genuine?" page, which has no session and no
+ * token — only a file somebody was handed. The digest covers every byte of that
+ * file, so presenting it IS presenting the document: there is nothing to guess
+ * or walk, and a match tells the holder only about the file already in their
+ * hands. The custody row is immutable and outlives a trashed request, which is
+ * right: a signed contract does not stop being genuine when someone tidies up.
+ *
+ * Format-checked here, so nothing but a digest ever reaches the query.
+ */
+export async function resolveSealedDocument(
+  sha256: string,
+): Promise<{ tenantId: string; requestId: string } | null> {
+  if (!/^[0-9a-f]{64}$/.test(sha256)) return null;
+  const row = await basePrisma.legalArtifact.findFirst({
+    where: { sha256 },
+    orderBy: { createdAt: "asc" },
+    select: { tenantId: true, requestId: true },
+  });
+  return row?.tenantId ? { tenantId: row.tenantId, requestId: row.requestId } : null;
+}
+
 /** Owning tenant of a public survey-response token (page load + submission). */
 export async function resolveSurveyResponseTenant(
   token: string,

@@ -42,6 +42,7 @@
     "preview:branding": "tsx --tsconfig tsconfig.scripts.json scripts/preview-branding.ts",
     "check:backup-coverage": "tsx --tsconfig tsconfig.scripts.json scripts/check-backup-coverage.ts",
     "test:draft-concurrency": "tsx --tsconfig tsconfig.scripts.json scripts/test-conversation-draft-concurrency.ts",
+    "test:signing-verify": "tsx --tsconfig tsconfig.scripts.json scripts/test-signing-verify.ts",
     "test:checklist-concurrency": "tsx --tsconfig tsconfig.scripts.json scripts/test-checklist-template-concurrency.ts",
     "test:signing-workflows": "tsx --tsconfig tsconfig.scripts.json scripts/test-signing-workflows.ts",
     "test:signflow-send-workspace": "tsx --tsconfig tsconfig.harness.json scripts/test-signflow-send-workspace.ts",

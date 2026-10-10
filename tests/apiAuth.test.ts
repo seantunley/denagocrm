@@ -54,6 +54,18 @@ const PUBLIC_PREFIXES = [
   // caller cannot tell accepted from throttled from malformed. See the route's
   // header comment, and tests/cspReporting.test.ts which pins each of those.
   "csp-report",
+  // "Is this the document that was signed?" PUBLIC BY NECESSITY: the person
+  // asking is whoever was handed the PDF, and they have no account and no token
+  // — only the file. It is bounded by what it takes and what it gives back
+  // instead of by a guard: POST only, a body cap, a strict 64-hex schema, and a
+  // per-IP throttle that runs before any lookup. The file itself is never sent
+  // (the browser fingerprints it). A match answers with who sealed the document,
+  // when, its title and the number of signers — all printed in the file the
+  // caller already holds — and names nobody; anything else is one identical
+  // "no match". See the route's header comment and tests/signingVerifyPage.test.ts.
+  // The trailing slash matters: this excuses that one route, not a future
+  // "verify-something".
+  "verify/",
 ];
 
 // NOTE: this proves an authENTICATION guard is invoked; it does not prove
