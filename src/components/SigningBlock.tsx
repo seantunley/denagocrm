@@ -5,7 +5,9 @@ import { useRouter } from "next/navigation";
 import CopyButton from "@/components/CopyButton";
 import SignatureCapture from "@/components/signing/SignatureCapture";
 import SignedDocPreview from "@/components/signing/SignedDocPreview";
-import { formatDateTime } from "@/lib/format";
+import { formatDate, formatDateTime } from "@/lib/format";
+import { isRequestClosed, lastValidDay } from "@/lib/signing/statusPolicy";
+import type { ChosenPerson, WorkflowAsk } from "@/lib/signflow/compile";
 import {
   startRecordSigning,
   recordSigningLink,
@@ -37,6 +39,8 @@ export type SigningState = {
   createdAt: Date | string;
   sentAt: Date | string | null;
   completedAt: Date | string | null;
+  expiresAt?: Date | string | null;
+  rejection?: { label: string; by: string | null; reason: string | null; at: Date | string | null } | null;
   recipients: SigningRecipientView[];
 } | null;
 
@@ -48,6 +52,19 @@ type ActionResult = {
   preview?: boolean;
   needsSignature?: boolean;
 };
+
+/** What the sender has entered for one open step: a team member's id, "other" for someone outside it, or "". */
+type Choice = { who: string; name: string; email: string };
+const NOBODY: Choice = { who: "", name: "", email: "" };
+
+/** The person a choice names, or null while it is incomplete. The server checks again. */
+function asPerson(choice: Choice): ChosenPerson | null {
+  if (!choice.who) return null;
+  if (choice.who !== "other") return { userId: choice.who };
+  const name = choice.name.trim();
+  const email = choice.email.trim();
+  return name.length >= 2 && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) ? { name, email } : null;
+}
 
 /** "Send for signature" card on quote / job card pages — driven by the signing hub. */
 export default function SigningBlock({
@@ -62,6 +79,8 @@ export default function SigningBlock({
   hasSavedSignature,
   state,
   workflows = [],
+  staff = [],
+  defaultWorkflowId = null,
   onChanged,
 }: {
   kind: "quote" | "jobcard";
@@ -74,7 +93,12 @@ export default function SigningBlock({
   dealerSignedByName?: string | null;
   hasSavedSignature?: boolean;
   state: SigningState;
-  workflows?: { id: string; name: string }[];
+  /** `asks`: the steps on this record's path that the workflow left for the sender to fill. */
+  workflows?: { id: string; name: string; asks?: WorkflowAsk[] }[];
+  /** The team, offered for those steps. */
+  staff?: { id: string; name: string }[];
+  /** The workflow the card starts on (Settings → Signing workflows). */
+  defaultWorkflowId?: string | null;
   /**
    * Called whenever this card changes the record's signing state. On a page,
    * router.refresh() re-reads the props and that is enough. Inside the quote
@@ -85,7 +109,12 @@ export default function SigningBlock({
   onChanged?: () => void;
 }) {
   const router = useRouter();
-  const [workflowId, setWorkflowId] = useState("");
+  // Starts on the workspace's default workflow. It was "" every time, so an
+  // approval rule only applied for as long as everyone remembered to pick it.
+  const [workflowId, setWorkflowId] = useState(defaultWorkflowId ?? "");
+  // Who the sender has put in each step the chosen workflow left open, by node
+  // id. `who` is a team member's id, "other" for someone outside it, or "".
+  const [chosen, setChosen] = useState<Record<string, Choice>>({});
   // Off by default: the customer sees the step only when someone decided this
   // particular document was worth it.
   // THREE states, because two cannot express "let the workspace decide".
@@ -121,6 +150,13 @@ export default function SigningBlock({
     setPreview(view);
   }, [kind, id]);
 
+  // The steps the chosen workflow leaves to the sender, and who has been put in each.
+  const asks = workflows.find((workflow) => workflow.id === workflowId)?.asks ?? [];
+  const pick = (nodeId: string): Choice => chosen[nodeId] ?? NOBODY;
+  const choose = (nodeId: string, change: Partial<Choice>) =>
+    setChosen((all) => ({ ...all, [nodeId]: { ...(all[nodeId] ?? NOBODY), ...change } }));
+  const everyoneChosen = asks.every((ask) => asPerson(pick(ask.nodeId)) !== null);
+
   // Record already signed (via the hub or the historic legacy flow).
   if (signedAt) {
     return (
@@ -135,8 +171,14 @@ export default function SigningBlock({
     );
   }
 
-  const active = state && state.status !== "completed" && state.status !== "declined" && state.status !== "voided";
-  const declined = state?.recipients.find((r) => r.declinedAt);
+  // EVERY closed state, from the one shared definition. This compared against
+  // three of the five by hand, so a request an approver had rejected — or one
+  // that had expired — still read as out for signature: the card offered to
+  // resend a dead link, Void was refused, and there was no way to start again.
+  const active = Boolean(state) && !isRequestClosed(state!.status);
+  const declined = state?.status === "declined" ? state.recipients.find((r) => r.declinedAt) : undefined;
+  const rejected = state?.status === "rejected" ? state.rejection ?? { label: "", by: null, reason: null, at: null } : null;
+  const expired = state?.status === "expired";
   // An envelope that exists but has not gone out yet is Denago's step, not the
   // customer's — showing them a signing link they have never been sent is how
   // the old card managed to look "sent" before anything was. One button, and
@@ -169,18 +211,45 @@ export default function SigningBlock({
     <div className="card">
       <h2 className="font-semibold mb-1">✍ Online signature</h2>
       <p className="text-xs text-slate-400 mb-4">
+        {/* It said "Countersign in one click" on every quote. Whether we sign at all
+            is the LAYOUT's decision — a quote layout with only the customer's
+            signature block has nothing of ours to sign — so the card describes
+            what always happens and the review window offers the countersignature
+            when the document actually has one waiting. */}
         {kind === "quote"
-          ? "Countersign in one click, check the signed quote, then send it — the customer signs on their phone, which accepts the quote and wins the lead."
+          ? "Check the quote, then send it — the customer signs on their phone, which accepts the quote and wins the lead. If the layout carries our signature block, you countersign it in the review first."
           : `The customer opens a secure link, reviews ${refLabel}, and signs on their phone — no printing needed.`}
       </p>
 
+      {/* Every way a request can end without a signature says so, with the
+          reason, and leaves the start-again controls below it. The declined
+          banner used to say "Void the request below" about a request that was
+          already closed and had no such button. */}
       {declined && (
         <div className="rounded-lg bg-red-500/10 border border-red-500/30 px-3 py-2 mb-3">
           <p className="text-xs text-red-300">
-            ✗ Declined by the customer on {formatDateTime(declined.declinedAt!)}. Void the request below and send a fresh one if they change their mind.
+            ✗ Declined by {declined.name} on {formatDateTime(declined.declinedAt!)}. Nothing is out for signature now — send it again below if they change their mind.
           </p>
           <p className="mt-1 text-xs text-red-200">
             {declined.declineReason?.trim() ? `Their reason: “${declined.declineReason.trim()}”` : "They gave no reason."}
+          </p>
+        </div>
+      )}
+      {rejected && (
+        <div className="rounded-lg bg-red-500/10 border border-red-500/30 px-3 py-2 mb-3">
+          <p className="text-xs text-red-300">
+            ✗ Not approved{rejected.label ? ` at “${rejected.label}”` : ""}{rejected.by ? ` by ${rejected.by}` : ""}{rejected.at ? ` on ${formatDateTime(rejected.at)}` : ""}. It was not sent to the customer — change what needs changing and start again below.
+          </p>
+          <p className="mt-1 text-xs text-red-200">
+            {rejected.reason?.trim() ? `Their reason: “${rejected.reason.trim()}”` : "They gave no reason."}
+          </p>
+        </div>
+      )}
+      {expired && (
+        <div className="rounded-lg bg-amber-500/10 border border-amber-500/30 px-3 py-2 mb-3">
+          <p className="text-xs text-amber-200">
+            ⏱ The signing link expired{state?.expiresAt ? ` after ${formatDate(lastValidDay(state.expiresAt))}` : ""} without being signed, so it no longer works.{" "}
+            {kind === "quote" ? "Update the quote's valid-until date, then send it again below." : "Send it again below."}
           </p>
         </div>
       )}
@@ -238,6 +307,12 @@ export default function SigningBlock({
                 </div>
               ))}
 
+              {state.expiresAt && (
+                <p className="text-[11px] text-slate-500">
+                  The link stops working after {formatDate(lastValidDay(state.expiresAt))}{kind === "quote" ? ", the quote's valid-until date" : ""}.
+                </p>
+              )}
+
               <div className="flex gap-2 flex-wrap items-center">
                 <button className="btn-secondary btn-sm" disabled={busy !== null} onClick={() => run("open", async () => { await openPreview(); return { ok: true }; })}>
                   👁 View document
@@ -272,9 +347,58 @@ export default function SigningBlock({
             <div>
               <label className="mb-1 block text-[11px] font-medium text-slate-400">Signing workflow</label>
               <select value={workflowId} onChange={(e) => setWorkflowId(e.target.value)} className="w-full rounded-md border border-input bg-card px-2 py-1.5 text-sm text-foreground">
-                <option value="">Built-in — we countersign, then the customer</option>
-                {workflows.map((w) => <option key={w.id} value={w.id}>{w.name}</option>)}
+                <option value="">Built-in — as the layout is drawn</option>
+                {workflows.map((w) => <option key={w.id} value={w.id}>{w.name}{w.id === defaultWorkflowId ? " (default)" : ""}</option>)}
               </select>
+            </div>
+          )}
+          {/* A step the workflow leaves to whoever sends it — "choose at send", a
+              role, a blank address. It was never asked for: the document went
+              out to a recipient called "To be chosen" with nowhere to send it. */}
+          {asks.length > 0 && (
+            <div className="space-y-2 rounded-md border border-amber-500/30 bg-amber-500/5 px-2.5 py-2">
+              <p className="text-[11px] font-medium text-amber-200">
+                Choose {asks.length === 1 ? "who fills this step" : `who fills these ${asks.length} steps`} before sending.
+              </p>
+              {asks.map((ask) => {
+                const choice = pick(ask.nodeId);
+                return (
+                  <div key={ask.nodeId} className="space-y-1">
+                    <label htmlFor={`ask-${ask.nodeId}`} className="block text-[11px] font-medium text-slate-400">
+                      {ask.label}{ask.hint ? ` (${ask.hint})` : ""} — {ask.kind === "approver" ? "approves" : "signs"}
+                    </label>
+                    <select
+                      id={`ask-${ask.nodeId}`}
+                      value={choice.who}
+                      onChange={(e) => choose(ask.nodeId, { who: e.target.value })}
+                      className="w-full rounded-md border border-input bg-card px-2 py-1.5 text-sm text-foreground"
+                    >
+                      <option value="">Choose…</option>
+                      {staff.map((person) => <option key={person.id} value={person.id}>{person.name}</option>)}
+                      <option value="other">Someone else — enter their details</option>
+                    </select>
+                    {choice.who === "other" && (
+                      <div className="grid grid-cols-1 gap-1.5 sm:grid-cols-2">
+                        <input
+                          value={choice.name}
+                          onChange={(e) => choose(ask.nodeId, { name: e.target.value })}
+                          placeholder="Full name"
+                          aria-label={`${ask.label}: full name`}
+                          className="rounded-md border border-input bg-card px-2 py-1.5 text-sm text-foreground"
+                        />
+                        <input
+                          type="email"
+                          value={choice.email}
+                          onChange={(e) => choose(ask.nodeId, { email: e.target.value })}
+                          placeholder="Email address"
+                          aria-label={`${ask.label}: email address`}
+                          className="rounded-md border border-input bg-card px-2 py-1.5 text-sm text-foreground"
+                        />
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
             </div>
           )}
           <div className="rounded-md border border-input bg-card/50 px-2.5 py-2">
@@ -295,36 +419,27 @@ export default function SigningBlock({
           </div>
           <button
             className="btn-primary"
-            disabled={busy !== null}
-            onClick={() => run("start", async () => {
+            disabled={busy !== null || !everyoneChosen}
+            title={everyoneChosen ? undefined : "Choose who fills each step first"}
+            onClick={() => run("start", () =>
               // undefined means "no explicit mode" — the workspace policy decides.
-              const started = await startRecordSigning(
+              //
+              // The click PREPARES the document and opens it; it signs nothing.
+              // It used to apply the sender's saved signature in the same click
+              // under a button reading "Countersign & review" — on every quote,
+              // including the ones whose layout has no block of ours to sign. The
+              // review window already knows whose turn it is (run() opens it on
+              // success), and offers "Countersign" there only when the document
+              // is waiting on the person looking at it.
+              startRecordSigning(
                 kind, id, workflowId || undefined,
                 identityChoice === "default" ? undefined : identityChoice,
-              );
-              // The built-in quote flow is countersign-then-send, so do the
-              // countersignature in the same click rather than making it a
-              // separate button the user has to find.
-              //
-              // But only when the caller is ACTUALLY the next signer. A workflow
-              // can put the customer — or another staff member — at the first
-              // node, and countersignRecord refuses to sign in their name. Asking
-              // regardless turned a perfectly started request into the flat error
-              // "<customer> signs next — this is not yours to sign", and because
-              // run() bails on a failed result the document never opened: the
-              // quote was left locked behind a request the card would not show.
-              // Ask the document who is up, then act as them or hand over.
-              if (!started.ok || !started.preview) return started;
-              const view = await signedRecordDoc(kind, id);
-              if (view?.next?.isMe) return countersignRecord(kind, id);
-              return started;
-            })}
+                // Checked again on the server, which refuses a step left empty.
+                asks.length > 0 ? Object.fromEntries(asks.map((ask) => [ask.nodeId, asPerson(pick(ask.nodeId))!])) : undefined,
+              ),
+            )}
           >
-            {busy === "start"
-              ? "Preparing…"
-              : kind === "quote"
-                ? "✍ Countersign & review"
-                : "👁 Review & send"}
+            {busy === "start" ? "Preparing…" : "👁 Review & send"}
           </button>
         </div>
       )}

@@ -1,7 +1,7 @@
 import "server-only";
 import { prisma } from "@/lib/db";
 import { isModuleEnabled } from "@/lib/modules/enabled";
-import { payableTotalCents } from "@/lib/pricing";
+import { payableTotalCents, quoteDiscountPct } from "@/lib/pricing";
 import { contactName } from "@/lib/format";
 import { listTenantStaff } from "@/lib/tenantActor";
 import { getLiveBuilderTemplate } from "@/lib/docbuilder/store";
@@ -19,8 +19,12 @@ import {
 } from "@/lib/doceditor/factory";
 import { parseGraph, type WorkflowGraph } from "@/lib/signflow/model";
 import {
+  applyChosen,
   compileWorkflow,
+  workflowAsks,
+  type ChosenPerson,
   type ResolvedSigner,
+  type WorkflowAsk,
   type WorkflowContext,
 } from "@/lib/signflow/compile";
 import {
@@ -56,6 +60,7 @@ async function quoteCustomer(quoteId: string) {
   });
   if (!quote) return null;
   return {
+    tenantId: quote.tenantId,
     title: `Quote Q-${quote.number}`,
     refLabel: `Q-${quote.number}`,
     contactId: quote.contactId ?? null,
@@ -74,6 +79,7 @@ async function jobCardCustomer(jobCardId: string) {
   });
   if (!jobCard) return null;
   return {
+    tenantId: jobCard.tenantId,
     title: `Job card #${jobCard.number}`,
     refLabel: `#${jobCard.number}`,
     contactId: jobCard.contactId ?? null,
@@ -385,7 +391,10 @@ async function quoteWorkflowContext(
     "retail";
   const product =
     quote?.lead?.product?.name ?? quote?.items?.[0]?.description ?? "";
-  return { total, discount: 0, segment, product };
+  // This was a literal 0, so a "Discount % > 10 → manager approves" rule could
+  // be drawn, saved and trusted, and never once fired.
+  const discount = quote ? quoteDiscountPct(quote.items) : 0;
+  return { total, discount, segment, product };
 }
 
 async function staffMap(): Promise<
@@ -439,13 +448,37 @@ function makeWorkflowSignable(
   return doc;
 }
 
+/**
+ * For each saved workflow, the steps on THIS quote's path that the sender still
+ * has to put a person in — what the send card asks for before it will prepare
+ * anything. Compiled against the quote as it stands now, exactly as the send is.
+ */
+export async function quoteWorkflowAsks(
+  quoteId: string,
+  workflows: Array<{ id: string; graphJson: unknown }>,
+): Promise<Record<string, WorkflowAsk[]>> {
+  const asks: Record<string, WorkflowAsk[]> = {};
+  if (workflows.length === 0) return asks;
+  const [customer, vars, staff] = await Promise.all([quoteCustomer(quoteId), quoteWorkflowContext(quoteId), staffMap()]);
+  if (!customer) return asks;
+  for (const workflow of workflows) {
+    const graph = parseGraph(workflow.graphJson);
+    asks[workflow.id] = graph
+      ? workflowAsks(graph, { vars, customer: { name: customer.customerName, email: customer.customerEmail }, staff })
+      : [];
+  }
+  return asks;
+}
+
 export async function resolveEnvelope(opts: {
   quoteId?: string | null;
   jobCardId?: string | null;
   templateId?: string | null;
   workflowId?: string | null;
+  /** Who the sender put in the steps the workflow left open, by node id. */
+  chosen?: Record<string, ChosenPerson> | null;
   signer?: { name: string; email: string | null } | null;
-}): Promise<EnvelopeResolution | null> {
+}): Promise<EnvelopeResolution | { missing: WorkflowAsk[] } | { workflowGone: true } | null> {
   const { quoteId, jobCardId, templateId } = opts;
   const customer = quoteId
     ? await quoteCustomer(quoteId)
@@ -481,36 +514,54 @@ export async function resolveEnvelope(opts: {
   let frozen: { graph: WorkflowGraph; vars: WorkflowContext } | undefined;
 
   if (quoteId && opts.workflowId) {
-    const workflow = await prisma.signWorkflow.findUnique({
-      where: { id: opts.workflowId },
+    // A workflow of the QUOTE's own workspace, that can still be offered — the
+    // same set the send card lists. The id arrives from the browser, and the
+    // scoped client adds the workspace only while tenant enforcement is on: by
+    // id alone, with it off, one workspace's quote could be sent through
+    // another's workflow, raising approvals for that workspace's people.
+    const workflow = customer.tenantId
+      ? await prisma.signWorkflow.findFirst({
+          where: { id: opts.workflowId, tenantId: customer.tenantId, isArchived: false, deletedAt: null },
+        })
+      : null;
+    const saved = workflow ? parseGraph(workflow.graphJson) : null;
+    // A CHOSEN workflow that cannot be used STOPS the send, as a chosen layout
+    // that cannot be read does above. It used to fall through to the built-in
+    // flow: the document went out with none of the approvals the sender had
+    // picked, and nothing on screen said so.
+    if (!saved) return { workflowGone: true };
+    const [vars, staff] = await Promise.all([
+      quoteWorkflowContext(quoteId),
+      staffMap(),
+    ]);
+    // The people the sender chose go into THIS send's copy of the graph — the
+    // one compiled below and frozen on the request — never the saved design.
+    const graph = applyChosen(saved, opts.chosen ?? {});
+    const missing = workflowAsks(graph, {
+      vars,
+      customer: { name: customer.customerName, email: customer.customerEmail },
+      staff,
     });
-    const graph =
-      workflow && !workflow.deletedAt
-        ? parseGraph(workflow.graphJson)
-        : null;
-    if (graph) {
-      const [vars, staff] = await Promise.all([
-        quoteWorkflowContext(quoteId),
-        staffMap(),
-      ]);
-      const compiled = compileWorkflow(graph, {
-        vars,
-        customer: {
-          name: customer.customerName,
-          email: customer.customerEmail,
-        },
-        staff,
-      });
-      if (compiled.signers.length > 0) {
-        doc = makeWorkflowSignable(doc, compiled.signers);
-        ordering = "sequential";
-        cosign = true;
-        signers = compiled.signers;
-        const hasApprovalOrBranch = Object.values(graph.nodes).some(
-          (node) => node.type === "approval" || node.type === "condition",
-        );
-        if (hasApprovalOrBranch) frozen = { graph, vars };
-      }
+    // Nothing is prepared while a step has nobody in it. It used to go out
+    // anyway, to a recipient called "To be chosen" with no address.
+    if (missing.length > 0) return { missing };
+    const compiled = compileWorkflow(graph, {
+      vars,
+      customer: {
+        name: customer.customerName,
+        email: customer.customerEmail,
+      },
+      staff,
+    });
+    if (compiled.signers.length > 0) {
+      doc = makeWorkflowSignable(doc, compiled.signers);
+      ordering = "sequential";
+      cosign = true;
+      signers = compiled.signers;
+      const hasApprovalOrBranch = Object.values(graph.nodes).some(
+        (node) => node.type === "approval" || node.type === "condition",
+      );
+      if (hasApprovalOrBranch) frozen = { graph, vars };
     }
   }
 

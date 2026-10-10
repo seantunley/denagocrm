@@ -352,7 +352,12 @@ test("session GUCs really do span separate statements, in every migration that u
   //
   // 18 → 19: 20261007150000_quote_invoice_numbers numbers the existing accepted
   // quotes' invoices on Quote, which FORCEs RLS — the same reason.
-  assert.equal(spans.length, 19, "nineteen migrations set a session GUC");
+  //
+  // 19 → 20: 20261010090000_signing_permissions_grantable grants Signatures to
+  // the roles that could already send a document for signature. It reads Role
+  // and RolePermission and writes RolePermission, all FORCE RLS — without the
+  // escape the SELECT matches no role and nothing is granted.
+  assert.equal(spans.length, 20, "twenty migrations set a session GUC");
   for (const { name, between } of spans) {
     assert.ok(between > 0, `${name}: a SET with no following statement would not need session pinning`);
   }

@@ -275,6 +275,13 @@ export async function actingOwnerTenantId(): Promise<string> {
  * NEVER WIDENS. An already-bound scope wins and this is a bare `fn()`; with no
  * resolvable session it is also a bare `fn()`, so the downstream guards fail closed
  * exactly as they do today rather than inventing a workspace.
+ *
+ * A ROUTE HANDLER NEEDS IT FOR THE SAME REASON. It has no layout above it, and
+ * the permission lookup reads the workspace from the ambient scope: unbound, a
+ * handler that asks `hasPermission(user, …)` looks the user's roles up in no
+ * workspace, finds none, and refuses every member of staff who is not an owner.
+ * Eleven handlers did, the document download among them
+ * (tests/routeHandlersBindWorkspace.test.ts keeps a twelfth from joining them).
  */
 export async function withActingStaffScope<T>(fn: () => Promise<T>): Promise<T> {
   if (currentTenantScope()) return fn();
