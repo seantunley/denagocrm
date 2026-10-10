@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { cookies } from "next/headers";
 import { prisma } from "@/lib/db";
 import { saveFile } from "@/lib/storage";
 import { isValidSignToken, hashSignToken } from "@/lib/signing/tokens";
@@ -15,6 +16,8 @@ import { logAudit } from "@/lib/audit";
 import { withTokenTenantScope } from "@/lib/tenantScopeEntry";
 import { resolveSignRecipientTenant } from "@/lib/tokenTenant";
 import { rateLimitSigning } from "@/lib/signing/throttle";
+import { SIGNED_COPY_COOKIE, mintSignedCopyPass, signedCopyCookieOptions } from "@/lib/signing/signedCopyPass";
+import { runAfterResponse } from "@/lib/afterResponse";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -47,6 +50,10 @@ const bodySchema = z.object({
   fields: z.array(z.object({
     id: z.string().min(1).max(128),
     value: z.string().max(MAX_FIELD_VALUE_BYTES),
+    // How a signature image was made: drawn with a finger or mouse, or the
+    // signer's typed name set in a script face. Recorded with the signature —
+    // the two are different acts and the evidence should say which it was.
+    method: z.enum(["drawn", "typed"]).optional(),
   })).max(200).default([]),
 }).strict();
 
@@ -216,12 +223,13 @@ async function handleSign(token: string, req: Request): Promise<Response> {
   let signatureRef: string | null = null;
   const filledAt = new Date();
   const savedRefs: string[] = [];
-  const updates: { id: string; value: string; kind: string }[] = [];
+  const updates: { id: string; value: string; kind: string; method?: "drawn" | "typed" }[] = [];
   try {
     for (const field of fields) {
       const fieldRow = fillable.get(field.id)!;
       let value = field.value;
-      if (["signature", "initials", "stamp"].includes(fieldRow.kind)) {
+      const drawnOrTyped = ["signature", "initials", "stamp"].includes(fieldRow.kind);
+      if (drawnOrTyped) {
         const image = decodeSignaturePng(value);
         // The signature image belongs to the request being signed. There is no
         // session at all here — the caller is a customer holding a signing token —
@@ -237,7 +245,7 @@ async function handleSign(token: string, req: Request): Promise<Response> {
         value = ref;
         if (fieldRow.kind === "signature" && !signatureRef) signatureRef = ref;
       }
-      updates.push({ id: field.id, value, kind: fieldRow.kind });
+      updates.push({ id: field.id, value, kind: fieldRow.kind, ...(drawnOrTyped && field.method ? { method: field.method } : {}) });
     }
 
     await prisma.$transaction(async (tx) => {
@@ -355,7 +363,7 @@ async function handleSign(token: string, req: Request): Promise<Response> {
             type: "field_filled",
             actor: name,
             channel,
-            metadata: { kind: update.kind },
+            metadata: { kind: update.kind, ...(update.method ? { method: update.method } : {}) },
           }),
         });
       }
@@ -405,7 +413,20 @@ async function handleSign(token: string, req: Request): Promise<Response> {
     entityType: "SignatureRequest",
     entityId: request.id,
   }).catch(() => {});
-  await advanceAfterSignature(request.id).catch(() => {});
+
+  // The signer is answered NOW. Sealing the document, filing it and emailing
+  // everyone used to run before this response, so the Sign button waited on a
+  // PDF render and a mail server — and if either was slow the signer was shown
+  // an error for a signature that had been saved. Their part is done at the
+  // commit above; the rest runs after the response and, if it is cut short, is
+  // picked up from the outbox the same commit wrote.
+  await runAfterResponse(() => advanceAfterSignature(request.id));
+
+  // On the signer's own device, a short-lived pass so this browser can fetch the
+  // signed copy once it exists (signedCopyPass.ts). Never on a member of staff's.
+  if (!witness) {
+    (await cookies()).set(SIGNED_COPY_COOKIE, mintSignedCopyPass(recipient.id, recipient.tenantId), signedCopyCookieOptions(token));
+  }
 
   return Response.json({ ok: true });
 }
