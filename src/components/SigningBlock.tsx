@@ -7,6 +7,7 @@ import SignatureCapture from "@/components/signing/SignatureCapture";
 import SignedDocPreview from "@/components/signing/SignedDocPreview";
 import { formatDate, formatDateTime } from "@/lib/format";
 import { isRequestClosed, lastValidDay } from "@/lib/signing/statusPolicy";
+import type { ChosenPerson, WorkflowAsk } from "@/lib/signflow/compile";
 import {
   startRecordSigning,
   recordSigningLink,
@@ -52,6 +53,19 @@ type ActionResult = {
   needsSignature?: boolean;
 };
 
+/** What the sender has entered for one open step: a team member's id, "other" for someone outside it, or "". */
+type Choice = { who: string; name: string; email: string };
+const NOBODY: Choice = { who: "", name: "", email: "" };
+
+/** The person a choice names, or null while it is incomplete. The server checks again. */
+function asPerson(choice: Choice): ChosenPerson | null {
+  if (!choice.who) return null;
+  if (choice.who !== "other") return { userId: choice.who };
+  const name = choice.name.trim();
+  const email = choice.email.trim();
+  return name.length >= 2 && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) ? { name, email } : null;
+}
+
 /** "Send for signature" card on quote / job card pages — driven by the signing hub. */
 export default function SigningBlock({
   kind,
@@ -65,6 +79,8 @@ export default function SigningBlock({
   hasSavedSignature,
   state,
   workflows = [],
+  staff = [],
+  defaultWorkflowId = null,
   onChanged,
 }: {
   kind: "quote" | "jobcard";
@@ -77,7 +93,12 @@ export default function SigningBlock({
   dealerSignedByName?: string | null;
   hasSavedSignature?: boolean;
   state: SigningState;
-  workflows?: { id: string; name: string }[];
+  /** `asks`: the steps on this record's path that the workflow left for the sender to fill. */
+  workflows?: { id: string; name: string; asks?: WorkflowAsk[] }[];
+  /** The team, offered for those steps. */
+  staff?: { id: string; name: string }[];
+  /** The workflow the card starts on (Settings → Signing workflows). */
+  defaultWorkflowId?: string | null;
   /**
    * Called whenever this card changes the record's signing state. On a page,
    * router.refresh() re-reads the props and that is enough. Inside the quote
@@ -88,7 +109,12 @@ export default function SigningBlock({
   onChanged?: () => void;
 }) {
   const router = useRouter();
-  const [workflowId, setWorkflowId] = useState("");
+  // Starts on the workspace's default workflow. It was "" every time, so an
+  // approval rule only applied for as long as everyone remembered to pick it.
+  const [workflowId, setWorkflowId] = useState(defaultWorkflowId ?? "");
+  // Who the sender has put in each step the chosen workflow left open, by node
+  // id. `who` is a team member's id, "other" for someone outside it, or "".
+  const [chosen, setChosen] = useState<Record<string, Choice>>({});
   // Off by default: the customer sees the step only when someone decided this
   // particular document was worth it.
   // THREE states, because two cannot express "let the workspace decide".
@@ -123,6 +149,13 @@ export default function SigningBlock({
     }
     setPreview(view);
   }, [kind, id]);
+
+  // The steps the chosen workflow leaves to the sender, and who has been put in each.
+  const asks = workflows.find((workflow) => workflow.id === workflowId)?.asks ?? [];
+  const pick = (nodeId: string): Choice => chosen[nodeId] ?? NOBODY;
+  const choose = (nodeId: string, change: Partial<Choice>) =>
+    setChosen((all) => ({ ...all, [nodeId]: { ...(all[nodeId] ?? NOBODY), ...change } }));
+  const everyoneChosen = asks.every((ask) => asPerson(pick(ask.nodeId)) !== null);
 
   // Record already signed (via the hub or the historic legacy flow).
   if (signedAt) {
@@ -315,8 +348,57 @@ export default function SigningBlock({
               <label className="mb-1 block text-[11px] font-medium text-slate-400">Signing workflow</label>
               <select value={workflowId} onChange={(e) => setWorkflowId(e.target.value)} className="w-full rounded-md border border-input bg-card px-2 py-1.5 text-sm text-foreground">
                 <option value="">Built-in — as the layout is drawn</option>
-                {workflows.map((w) => <option key={w.id} value={w.id}>{w.name}</option>)}
+                {workflows.map((w) => <option key={w.id} value={w.id}>{w.name}{w.id === defaultWorkflowId ? " (default)" : ""}</option>)}
               </select>
+            </div>
+          )}
+          {/* A step the workflow leaves to whoever sends it — "choose at send", a
+              role, a blank address. It was never asked for: the document went
+              out to a recipient called "To be chosen" with nowhere to send it. */}
+          {asks.length > 0 && (
+            <div className="space-y-2 rounded-md border border-amber-500/30 bg-amber-500/5 px-2.5 py-2">
+              <p className="text-[11px] font-medium text-amber-200">
+                Choose {asks.length === 1 ? "who fills this step" : `who fills these ${asks.length} steps`} before sending.
+              </p>
+              {asks.map((ask) => {
+                const choice = pick(ask.nodeId);
+                return (
+                  <div key={ask.nodeId} className="space-y-1">
+                    <label htmlFor={`ask-${ask.nodeId}`} className="block text-[11px] font-medium text-slate-400">
+                      {ask.label}{ask.hint ? ` (${ask.hint})` : ""} — {ask.kind === "approver" ? "approves" : "signs"}
+                    </label>
+                    <select
+                      id={`ask-${ask.nodeId}`}
+                      value={choice.who}
+                      onChange={(e) => choose(ask.nodeId, { who: e.target.value })}
+                      className="w-full rounded-md border border-input bg-card px-2 py-1.5 text-sm text-foreground"
+                    >
+                      <option value="">Choose…</option>
+                      {staff.map((person) => <option key={person.id} value={person.id}>{person.name}</option>)}
+                      <option value="other">Someone else — enter their details</option>
+                    </select>
+                    {choice.who === "other" && (
+                      <div className="grid grid-cols-1 gap-1.5 sm:grid-cols-2">
+                        <input
+                          value={choice.name}
+                          onChange={(e) => choose(ask.nodeId, { name: e.target.value })}
+                          placeholder="Full name"
+                          aria-label={`${ask.label}: full name`}
+                          className="rounded-md border border-input bg-card px-2 py-1.5 text-sm text-foreground"
+                        />
+                        <input
+                          type="email"
+                          value={choice.email}
+                          onChange={(e) => choose(ask.nodeId, { email: e.target.value })}
+                          placeholder="Email address"
+                          aria-label={`${ask.label}: email address`}
+                          className="rounded-md border border-input bg-card px-2 py-1.5 text-sm text-foreground"
+                        />
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
             </div>
           )}
           <div className="rounded-md border border-input bg-card/50 px-2.5 py-2">
@@ -337,7 +419,8 @@ export default function SigningBlock({
           </div>
           <button
             className="btn-primary"
-            disabled={busy !== null}
+            disabled={busy !== null || !everyoneChosen}
+            title={everyoneChosen ? undefined : "Choose who fills each step first"}
             onClick={() => run("start", () =>
               // undefined means "no explicit mode" — the workspace policy decides.
               //
@@ -351,6 +434,8 @@ export default function SigningBlock({
               startRecordSigning(
                 kind, id, workflowId || undefined,
                 identityChoice === "default" ? undefined : identityChoice,
+                // Checked again on the server, which refuses a step left empty.
+                asks.length > 0 ? Object.fromEntries(asks.map((ask) => [ask.nodeId, asPerson(pick(ask.nodeId))!])) : undefined,
               ),
             )}
           >

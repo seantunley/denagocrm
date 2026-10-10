@@ -41,6 +41,8 @@
     "check:backup-coverage": "tsx --tsconfig tsconfig.scripts.json scripts/check-backup-coverage.ts",
     "test:draft-concurrency": "tsx --tsconfig tsconfig.scripts.json scripts/test-conversation-draft-concurrency.ts",
     "test:checklist-concurrency": "tsx --tsconfig tsconfig.scripts.json scripts/test-checklist-template-concurrency.ts",
+    "test:signing-workflows": "tsx --tsconfig tsconfig.scripts.json scripts/test-signing-workflows.ts",
+    "test:signflow-send-workspace": "tsx --tsconfig tsconfig.harness.json scripts/test-signflow-send-workspace.ts",
     "test:receipt-isolation": "tsx --tsconfig tsconfig.scripts.json scripts/test-receipt-tenant-isolation.ts",
     "test:signing-proof": "tsx --tsconfig tsconfig.scripts.json scripts/test-signing-proof.ts",
     "test:migration-session": "tsx --tsconfig tsconfig.scripts.json scripts/test-migration-session-continuity.ts",

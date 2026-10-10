@@ -1402,6 +1402,8 @@ export function QuoteEditorDialog({
                       hasSavedSignature={signing.hasSavedSignature}
                       state={signing.state}
                       workflows={signing.workflows}
+                      staff={signing.staff}
+                      defaultWorkflowId={signing.defaultWorkflowId}
                       onChanged={reloadSigning}
                     />
                   ) : signingReady ? (

@@ -102,7 +102,7 @@ export function blankWorkflow(): WorkflowGraph {
 }
 
 export const CONDITION_LABEL: Record<ConditionField, string> = {
-  total: "Quote total (R)", discount: "Discount %", segment: "Customer segment", product: "Product / model",
+  total: "Quote total (R)", discount: "Discount % (whole quote)", segment: "Customer segment", product: "Product / model",
 };
 export const OP_LABEL: Record<ConditionOp, string> = {
   gt: ">", gte: "≥", lt: "<", lte: "≤", eq: "=", neq: "≠", contains: "contains",

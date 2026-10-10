@@ -21,7 +21,10 @@ import { nextSigner } from "@/lib/signing/nextSigner";
 import { getRegionalSettings } from "@/lib/settings";
 import { defaultBuilderTemplateId } from "@/lib/docbuilder/store";
 import { publishedBuilderTemplateFor } from "@/lib/docbuilder/published";
-import { resolveEnvelope } from "@/lib/signing/autoEnvelope";
+import { quoteWorkflowAsks, resolveEnvelope } from "@/lib/signing/autoEnvelope";
+import { askList, parseChosen } from "@/lib/signflow/chosen";
+import { defaultSignWorkflowId } from "@/lib/signflow/defaultWorkflow";
+import { listTenantStaff } from "@/lib/tenantActor";
 import { renderEnvelopePdf } from "@/lib/signing/render";
 import { createSignatureRequestFromDoc, type SigningIdentityMode } from "@/lib/signing/service";
 import { usableCapability } from "@/lib/signing/tokenVault";
@@ -91,6 +94,7 @@ export async function quoteSigningView(id: string): Promise<QuoteSigningView | n
     const quote = await prisma.quote.findUnique({
       where: { id },
       select: {
+        tenantId: true,
         status: true,
         deletedAt: true,
         supersededAt: true,
@@ -106,14 +110,29 @@ export async function quoteSigningView(id: string): Promise<QuoteSigningView | n
     // it — findUnique is not soft-delete filtered, hence the explicit check.
     if (!quote || quote.deletedAt || quote.supersededAt) return null;
 
-    const [state, workflows] = await Promise.all([
+    const [state, savedWorkflows, defaultWorkflow] = await Promise.all([
       activeRecordRequest({ quoteId: id }),
-      prisma.signWorkflow.findMany({
-        where: { isArchived: false },
-        select: { id: true, name: true },
-        orderBy: { updatedAt: "desc" },
-      }),
+      // The workflows of the QUOTE's workspace — the ones resolveEnvelope will
+      // accept for it. Named, not left to the scoped client, which adds the
+      // workspace only while tenant enforcement is on: with it off this offered
+      // every workspace's workflows. A quote with no workspace is offered none.
+      quote.tenantId
+        ? prisma.signWorkflow.findMany({
+            where: { tenantId: quote.tenantId, isArchived: false },
+            select: { id: true, name: true, graphJson: true },
+            orderBy: { updatedAt: "desc" },
+          })
+        : [],
+      defaultSignWorkflowId(),
     ]);
+    // For each workflow, the steps on THIS quote's path that have nobody in them
+    // yet, so the card can ask before anything is prepared. The team is only
+    // loaded when there is such a step to fill.
+    const asks = await quoteWorkflowAsks(id, savedWorkflows).catch(() => ({} as Awaited<ReturnType<typeof quoteWorkflowAsks>>));
+    const workflows = savedWorkflows.map((workflow) => ({ id: workflow.id, name: workflow.name, asks: asks[workflow.id] ?? [] }));
+    const staff = workflows.some((workflow) => workflow.asks.length > 0)
+      ? (await listTenantStaff()).map((person) => ({ id: person.id, name: person.name }))
+      : [];
 
     return {
       status: quote.status,
@@ -126,6 +145,10 @@ export async function quoteSigningView(id: string): Promise<QuoteSigningView | n
       dealerSignedByName: quote.dealerSignedByName,
       hasSavedSignature: Boolean(user.drawnSignatureRef),
       workflows,
+      staff,
+      // Only a workflow that can actually be offered: one deleted or archived
+      // since it was made the default must not be the card's starting point.
+      defaultWorkflowId: workflows.some((workflow) => workflow.id === defaultWorkflow) ? defaultWorkflow : null,
       state,
     };
   });
@@ -207,9 +230,17 @@ export async function startRecordSigning(
   // and silently disabled the workspace policy — the service treats an explicit
   // mode as outranking it, correctly, so the default has to be absence.
   identityMode?: SigningIdentityMode,
+  /**
+   * Who the sender put in the steps the workflow left open ("choose at send", a
+   * role, a blank address), by node id. Untyped on purpose: it arrives from the
+   * browser, and parseChosen is what decides whether it is a set of people.
+   */
+  chosen?: unknown,
 ): Promise<Result> {
   return withActingStaffScope(async () => {
     const user = await requireRecordSigningAccess(kind, id);
+    const people = parseChosen(chosen);
+    if (!people) return { ok: false, error: "Give each person you chose a name and a valid email address." };
     const quoteId = kind === "quote" ? id : null;
     const jobCardId = kind === "jobcard" ? id : null;
 
@@ -243,10 +274,22 @@ export async function startRecordSigning(
       jobCardId,
       templateId,
       workflowId,
+      chosen: people,
       signer: { name: user.name, email: user.email },
     });
     if (!envelope) {
       return { ok: false, error: "Could not prepare the document." };
+    }
+    // The workflow that was chosen is not one this quote can go through any
+    // more — deleted, archived, or not this workspace's. Nothing is sent: it
+    // used to go out the built-in way, without the approvals that were picked.
+    if ("workflowGone" in envelope) {
+      return { ok: false, error: "That signing workflow is no longer available. Refresh the page and choose again." };
+    }
+    // A step with nobody in it. Refused here as well as on the card: the card
+    // asks, but the document must not be preparable by a caller that did not.
+    if ("missing" in envelope) {
+      return { ok: false, error: `Choose who will act as ${askList(envelope.missing)} before sending.` };
     }
 
     const pdf = await renderEnvelopePdf(envelope.doc, quoteId, jobCardId);
