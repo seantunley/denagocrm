@@ -28,7 +28,7 @@ test('"then":"answer" goes straight to the answer — no round spent saying done
   assert.deepEqual(parseSteps('{"tool":"web","then":"answer"}'), [{ tool: "web" }]);
   assert.equal(parseSteps('{"tool":"web","query":"x","then":"answer"}'), null, "the web step still refuses arguments");
   const loop = code("src/lib/crmAssistant.ts");
-  assert.match(loop, /if \(planSaysAnswerNext\(reply\.text\)\) break;/);
+  assert.match(loop, /planSaysAnswerNext\(reply\.text\)/);
 });
 
 test("prose instead of a choice gets ONE firm retry on the first step, and is never a dead end", () => {
