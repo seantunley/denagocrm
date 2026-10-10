@@ -2,7 +2,8 @@ import "server-only";
 import { prisma } from "@/lib/db";
 import { sendEmail } from "@/lib/email";
 import { signingRecord } from "@/lib/outboundMessageLog";
-import { signingEmailContent } from "./signingEmail";
+import { isWhatsAppConfigured, sendWhatsAppDocument, waDigits } from "@/lib/whatsapp";
+import { signingEmailContent, signingWhatsAppText } from "./signingEmail";
 import type { SweepTenantWhere } from "./recoveryScope";
 
 /**
@@ -77,7 +78,9 @@ export function describeError(err: unknown): string {
 
 /**
  * Send the sealed PDF to every recipient who has an address and has not already
- * had it, recording each success on the recipient row.
+ * had it, recording each success on the recipient row. A recipient with no
+ * address and a mobile number is sent it on WhatsApp instead, best-effort (the
+ * name predates that; `completedEmailSentAt` likewise means "has their copy").
  *
  * `tenantWhere` is an EXPLICIT tenant fragment, not ambient scope: the delivery
  * marker is a write, and the db.ts guard rewrites nothing while enforcement is
@@ -95,8 +98,50 @@ export async function deliverCompletionEmails(opts: {
   let sent = 0;
   let skipped = 0;
 
+  const recordDelivery = async (recipientId: string) => {
+    try {
+      await prisma.signatureRecipient.updateMany({
+        where: { ...opts.tenantWhere, id: recipientId },
+        data: { completedEmailSentAt: new Date() },
+      });
+    } catch (err) {
+      // The message WENT. Failing to record that is a bookkeeping loss, not a
+      // delivery one, and counting it as a failure would withhold the completion
+      // marker and send this person their contract a second time. Log and move on.
+      console.error(`[signing] delivered the sealed PDF to recipient ${recipientId} but could not record it`, err);
+    }
+  };
+
+  // Mobile numbers for whoever has no address, looked up here so that none of
+  // the callers has to remember to pass one.
+  const unaddressed = opts.recipients.filter((r) => !r.email && !r.completedEmailSentAt).map((r) => r.id);
+  const phones = new Map<string, string>();
+  if (unaddressed.length > 0) {
+    const rows = await prisma.signatureRecipient
+      .findMany({ where: { ...opts.tenantWhere, id: { in: unaddressed }, phone: { not: null } }, select: { id: true, phone: true } })
+      .catch(() => []);
+    for (const row of rows) if (row.phone?.trim()) phones.set(row.id, row.phone.trim());
+  }
+
   for (const recipient of opts.recipients) {
-    if (!recipient.email) continue; // nothing to send to — not a failure
+    if (!recipient.email) {
+      // No address. Someone who signed a contract and was sent nothing is the
+      // case this branch exists for: try the number on file, on WhatsApp.
+      //
+      // BEST-EFFORT, and deliberately not a `failure`. WhatsApp only delivers a
+      // document within 24 hours of the customer's last message to the business,
+      // so "not delivered" is an ordinary outcome here, not a fault to retry —
+      // and a failure would hold back the completion marker and re-drive the
+      // whole fan-out every half hour for a message that cannot arrive. The
+      // attempt is on the customer's timeline either way (sendWhatsAppDocument),
+      // and "Resend signed copies" tries again once they have been in touch.
+      const phone = phones.get(recipient.id);
+      if (phone && !recipient.completedEmailSentAt && (await copyByWhatsApp(opts, recipient, phone))) {
+        sent += 1;
+        await recordDelivery(recipient.id);
+      }
+      continue;
+    }
     if (recipient.completedEmailSentAt) {
       skipped += 1;
       continue; // already has it; re-sending a signed contract is not a fix
@@ -123,21 +168,37 @@ export async function deliverCompletionEmails(opts: {
     }
 
     sent += 1;
-    try {
-      await prisma.signatureRecipient.updateMany({
-        where: { ...opts.tenantWhere, id: recipient.id },
-        data: { completedEmailSentAt: new Date() },
-      });
-    } catch (err) {
-      // The message WENT. Failing to record that is a bookkeeping loss, not a
-      // delivery one, and counting it as a failure would withhold the completion
-      // marker and mail this person their contract a second time. Log and move on.
-      console.error(
-        `[signing] delivered the sealed PDF to recipient ${recipient.id} but could not record it`,
-        err,
-      );
-    }
+    await recordDelivery(recipient.id);
   }
 
   return { ok: failures.length === 0, sent, skipped, failures };
+}
+
+/**
+ * The sealed PDF as a WhatsApp document, with the workspace's own wording under
+ * it ("Signing — signed copy (WhatsApp)", edited in Document Studio). True only
+ * when WhatsApp accepted it; never throws.
+ */
+async function copyByWhatsApp(
+  opts: { requestId: string; title: string; pdf: Buffer },
+  recipient: FanoutRecipient,
+  phone: string,
+): Promise<boolean> {
+  try {
+    if (!(await isWhatsAppConfigured())) return false;
+    const caption = await signingWhatsAppText("completed_whatsapp", {
+      requestId: opts.requestId, title: opts.title, recipientName: recipient.name,
+    });
+    const result = await sendWhatsAppDocument(
+      waDigits(phone),
+      { content: opts.pdf, filename: `${opts.title}.pdf` },
+      caption,
+      await signingRecord(opts.requestId, { label: "Signed document copy" }),
+    );
+    return result.ok;
+  } catch (err) {
+    // Recipient id, not number: this reaches the server log.
+    console.error(`[signing] could not send the sealed PDF to recipient ${recipient.id} on WhatsApp`, err);
+    return false;
+  }
 }

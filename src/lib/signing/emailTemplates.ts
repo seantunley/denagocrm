@@ -53,6 +53,7 @@ export type SigningEmailKind =
   | "survey_invite_sms"
   | "invite_whatsapp"
   | "reminder_whatsapp"
+  | "completed_whatsapp"
   | "survey_reminder"
   | "survey_reminder_sms";
 
@@ -193,6 +194,20 @@ export const SIGNING_EMAILS: Record<SigningEmailKind, SigningEmailDef> = {
     settingKey: "SIGNING_EMAIL_COMPLETED",
     subject: "{{document_title}} — signed and complete",
     body: "Dear {{recipient_name}},\n\nThank you. {{document_title}} has now been signed by all parties. Your completed, sealed copy is attached for your records.\n\nIf you need anything further, simply reply to this email and we will be happy to assist.\n\nKind regards,\n{{company_name}}",
+    fields: [...COMMON],
+    action: null,
+  },
+  // The signed copy for a signer who has no email address: without this they
+  // signed a contract and were sent nothing.
+  completed_whatsapp: {
+    kind: "completed_whatsapp",
+    group: "Signing & quotes",
+    label: "Signing — signed copy (WhatsApp)",
+    description: "The message that goes with the signed PDF on WhatsApp, to a signer who has a mobile number and no email address. WhatsApp only delivers it within 24 hours of their last message to you.",
+    channel: "whatsapp",
+    settingKey: "SIGNING_WHATSAPP_COMPLETED",
+    subject: "",
+    body: "Good day {{recipient_name}}. Thank you — {{document_title}} from {{company_name}} has now been signed by all parties. Your completed copy is attached for your records.",
     fields: [...COMMON],
     action: null,
   },

@@ -426,6 +426,15 @@ jobs:
       - name: Inbox -- a staff reply is one durable decision
         run: npm run test:staff-reply
 
+      # A signer with no email address was sent nothing at all. Reading the code
+      # shows a WhatsApp branch exists; only the real senders against a real
+      # database show the PDF reaches the right number once, lands on that
+      # customer's timeline, and -- the part that matters most -- that WhatsApp
+      # declining it does not count as a failed fan-out and re-drive the whole
+      # completion every half hour. Meta is replaced by a stand-in; nothing is sent.
+      - name: Signing -- a signer with no email address gets their copy on WhatsApp
+        run: npm run test:signed-copy-whatsapp
+
       # Meta echoes every message the Page sends, including ours. The pure tests
       # exercise the rule that tells them apart; only a real database can hold a
       # row in the state the worker is in between Meta accepting a send and the
