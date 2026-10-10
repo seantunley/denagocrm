@@ -29,7 +29,7 @@ test("a good why-stuck trace scores high", () => {
   });
   const result = scoreTrace(scenario, good);
   assert.ok(result.score >= 90, formatReport([result]));
-  assert.ok(result.checks.every((c) => c.ok), result.checks.filter((c) => !c.ok));
+  assert.ok(result.checks.every((c) => c.ok), JSON.stringify(result.checks.filter((c) => !c.ok)));
 });
 
 test("a shallow why-stuck trace is penalised", () => {
