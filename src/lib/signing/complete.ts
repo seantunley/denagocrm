@@ -29,6 +29,7 @@ import { sendPushToAll } from "@/lib/push";
 import { issueInvoiceNumberInTx } from "@/lib/numbering";
 import { winLeadInTx } from "@/lib/quoteOutcome";
 import { payableTotalCents } from "@/lib/pricing";
+import { tenantOrigin } from "@/lib/tenantOrigin";
 
 /** Internal sentinel: the completion claim was lost to a concurrent close. */
 class CompletionLost extends Error {}
@@ -95,6 +96,21 @@ function certificateHtml(title: string, requestId: string, rows: RecipientRow[],
       here because the hash it covers includes this certificate; it is held with this record and can be produced
       on request.
     </div>
+  </div>`;
+}
+
+/**
+ * Where anyone holding this file can check it, printed under the certificate.
+ *
+ * The seal already proves the file to someone who can read a signature panel.
+ * Most people handed a contract cannot, and for a company's own certificate the
+ * panel says the signer is unknown. The page at this address answers in a
+ * sentence — and the address is the workspace's own, so a customer is not sent
+ * to a domain they have never heard of to check a document from this company.
+ */
+function verifyNoticeHtml(origin: string): string {
+  return `<div style="margin-top:10px;font-size:9pt;color:#334155">
+    To check that a copy of this document is genuine and unchanged, go to <strong>${esc(origin)}/verify</strong> and choose the file.
   </div>`;
 }
 
@@ -292,6 +308,7 @@ export async function completeSignatureRequest(requestId: string): Promise<void>
     stampedFields,
     appendHtml:
       certificateHtml(req.title, req.id, rows, ctx?.regional ?? DEFAULT_REGIONAL) +
+      verifyNoticeHtml(await tenantOrigin(req.tenantId)) +
       acknowledgementsHtml(ackFields, expectedSigners, ctx?.regional ?? DEFAULT_REGIONAL),
   });
   let pdf = await htmlToPdf(html);

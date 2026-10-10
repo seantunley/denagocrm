@@ -64,6 +64,19 @@ export const PUBLIC_ACTION_POLICY: RateLimitPolicy = {
 };
 
 /**
+ * The public "is this document genuine?" check. Read-only, and it answers from
+ * a fingerprint the caller must already hold the whole file to produce, so this
+ * is not a guessing guard either — it stops the endpoint being used as a free
+ * lookup loop. A person checks a handful of files; a few more than the mutating
+ * actions above are allowed so a pile of contracts can be gone through.
+ */
+export const DOCUMENT_VERIFY_POLICY: RateLimitPolicy = {
+  limit: 30,
+  windowMs: 5 * 60 * 1000,
+  blockMs: 10 * 60 * 1000,
+};
+
+/**
  * API-key endpoints (intake, bookings, service lookup). Far more generous:
  * these are machine-to-machine and a busy website can legitimately post a
  * burst of leads. The point is not to police normal traffic — it is that a
