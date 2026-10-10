@@ -49,6 +49,7 @@ export const playbookOp = z
 
 export const decisionOp = z
   .object({
+    kind: z.enum(["lead", "topic"]),
     subject: z.string().trim().min(1).max(80),
     text: z.string().trim().min(3).max(400),
   })
