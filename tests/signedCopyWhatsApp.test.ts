@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { SIGNING_EMAILS, isTextTemplate, renderSms, validateSigningTemplate } from "../src/lib/signing/emailTemplates";
-import { AUTOMATIONS } from "../src/lib/automationRegister";
+import { AUTOMATIONS, automationDefault } from "../src/lib/automationRegister";
 
 /**
  * The signed copy on WhatsApp, for a signer with no email address.
@@ -47,14 +47,32 @@ test("the signed-copy message cannot be given a signing link", () => {
   assert.equal(validateSigningTemplate("completed_whatsapp", "", def.body), null, "the default passes its own validation");
 });
 
-test("the owner can see that signed copies also go by WhatsApp, and when they will not arrive", () => {
-  const entry = AUTOMATIONS.find((a) => a.key === "signed-copies");
-  assert.ok(entry);
-  assert.deepEqual(entry.messages, ["completed", "completed_whatsapp"]);
-  assert.ok(entry.channels?.includes("WhatsApp") && entry.channels.includes("email"));
-  assert.match(entry.does, /no email address/);
+test("the WhatsApp copy has a switch of its own, and it is OFF until the owner turns it on", () => {
+  const entry = AUTOMATIONS.find((a) => a.key === "signed-copies-whatsapp");
+  assert.ok(entry, "listed on Settings → Automatic jobs & messages");
+  assert.equal(entry.reaches, "customer");
+  assert.deepEqual(entry.setting, { key: "SIGNING_SIGNED_COPIES_WHATSAPP", defaultOn: false });
+  assert.equal(automationDefault("SIGNING_SIGNED_COPIES_WHATSAPP"), false);
+  assert.deepEqual(entry.channels, ["WhatsApp"]);
+  assert.deepEqual(entry.messages, ["completed_whatsapp"], "with a link to the wording it sends");
+  assert.match(entry.does, /NO email address/);
   assert.match(entry.does, /24 hours/, "the limit is WhatsApp's, and the description says so");
-  assert.deepEqual(entry.setting, { key: "SIGNING_SIGNED_COPIES", defaultOn: true }, "one switch governs both: it is the same automatic message");
+
+  // It does NOT ride on the emailed copy's switch. That one is on — the owner
+  // chose it, for email — and would have started a new kind of message to
+  // customers the day this shipped, without anyone having chosen it.
+  const emailed = AUTOMATIONS.find((a) => a.key === "signed-copies");
+  assert.deepEqual(emailed?.channels, ["email"]);
+  assert.deepEqual(emailed?.messages, ["completed"]);
+  assert.match(emailed?.does ?? "", /Signed copies by WhatsApp/, "and says where the other one is");
+});
+
+test("no number is even looked up while the switch is off", () => {
+  const fanout = code("src/lib/signing/completionFanout.ts");
+  assert.match(fanout, /if \(unaddressed\.length > 0 && \(await whatsAppCopiesOn\(\)\)\) \{/, "off means nobody to send to, whichever caller it is");
+  const on = fanout.slice(fanout.indexOf("async function whatsAppCopiesOn"));
+  assert.match(on, /const tenantId = currentTenantScope\(\)\?\.tenantId;\s*if \(!tenantId\) return false;/, "no workspace in scope is off");
+  assert.match(on, /return automationOn\(SIGNED_COPIES_WHATSAPP_SWITCH, tenantId\)\.catch\(\(\) => false\);/, "a setting that cannot be read is off");
 });
 
 test("WhatsApp declining the copy is not a failed fan-out", () => {

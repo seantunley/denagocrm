@@ -14,7 +14,8 @@
  *     whole thing re-driven every half hour for a message that cannot arrive —
  *     and is still on the customer's record for staff to see;
  *   - nobody is sent it twice, nobody with an email address is sent it here, and
- *     a workspace with no WhatsApp account sends nothing.
+ *     a workspace with no WhatsApp account sends nothing;
+ *   - and none of it happens at all until the owner has switched it on.
  *
  * WhatsApp itself is replaced by a stand-in `fetch`: every request the code
  * would make to Meta is captured and answered here. Nothing leaves the machine.
@@ -26,7 +27,7 @@
 import { basePrisma } from "../src/lib/db";
 import { runInTenantScope } from "../src/lib/tenantScope";
 import { putTenantCredentialBundle } from "../src/lib/settings";
-import { deliverCompletionEmails, type FanoutRecipient } from "../src/lib/signing/completionFanout";
+import { SIGNED_COPIES_WHATSAPP_SWITCH, deliverCompletionEmails, type FanoutRecipient } from "../src/lib/signing/completionFanout";
 import { exactTenantWhere } from "../src/lib/signing/recoveryScope";
 import { hashSignToken, newSignToken } from "../src/lib/signing/tokens";
 
@@ -126,9 +127,22 @@ const sentAt = async (recipientId: string) =>
 
 // ── The test ────────────────────────────────────────────────────────────────
 
+/** The owner switching "Signed copies by WhatsApp" on for one workspace. */
+const switchOn = (tenantId: string) =>
+  basePrisma.appSetting.create({ data: { tenantId, key: SIGNED_COPIES_WHATSAPP_SWITCH, value: "true" } });
+
 async function main() {
   guardEnvironment();
   const ws = await workspace("a", true);
+
+  console.log("\nBefore the owner has switched it on");
+  const untouched = await request(ws, `Quote Q-9000 ${SFX}`, [{ name: "Zed Default", phone: "082 555 0100" }]);
+  calls.length = 0;
+  const off = await deliver(ws, untouched);
+  check("nothing is sent to WhatsApp — the switch is off unless somebody turns it on", calls.length === 0, JSON.stringify(calls.map((c) => c.kind)));
+  check("…the signer is not marked as having a copy, and it is not a failure", off.ok && off.sent === 0 && (await sentAt(untouched.recipients[0].id)) === null, JSON.stringify(off));
+
+  await switchOn(ws.tenantId);
 
   console.log("\nA signer with a mobile number and no email address");
   const first = await request(ws, `Quote Q-9001 ${SFX}`, [
@@ -205,6 +219,7 @@ async function main() {
   check("a recipient outside the named workspace is not looked up, so not messaged", calls.length === 0 && wrongOwner.sent === 0 && (await sentAt(fourth.recipients[0].id)) === null);
 
   const bare = await workspace("b", false);
+  await switchOn(bare.tenantId);
   const fifth = await request(bare, `Quote Q-9005 ${SFX}`, [{ name: "Gus Unconnected", phone: "082 555 0107" }]);
   calls.length = 0;
   const unconnected = await deliver(bare, fifth);

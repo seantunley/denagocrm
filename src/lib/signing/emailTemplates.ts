@@ -203,7 +203,7 @@ export const SIGNING_EMAILS: Record<SigningEmailKind, SigningEmailDef> = {
     kind: "completed_whatsapp",
     group: "Signing & quotes",
     label: "Signing — signed copy (WhatsApp)",
-    description: "The message that goes with the signed PDF on WhatsApp, to a signer who has a mobile number and no email address. WhatsApp only delivers it within 24 hours of their last message to you.",
+    description: "The message that goes with the signed PDF on WhatsApp, to a signer who has a mobile number and no email address — sent only while “Signed copies by WhatsApp” is switched on (Settings → Automatic jobs & messages). WhatsApp only delivers it within 24 hours of their last message to you.",
     channel: "whatsapp",
     settingKey: "SIGNING_WHATSAPP_COMPLETED",
     subject: "",

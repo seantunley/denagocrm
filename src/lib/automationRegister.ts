@@ -139,15 +139,30 @@ export const AUTOMATIONS: Automation[] = [
   {
     key: "signed-copies",
     notJourney: "Part of a signing request a person sent: the copy of what they signed.",
-    messages: ["completed", "completed_whatsapp"],
+    messages: ["completed"],
     label: "Signed copies",
-    does: "When everyone has signed, the signed PDF is emailed to each person on the request who has an email address. Someone with a mobile number and no email address is sent it on WhatsApp instead — which only arrives if they have messaged you in the last 24 hours.",
+    does: "When everyone has signed, the signed PDF is emailed to each person on the request who has an email address. Someone with no email address is not sent it here — see Signed copies by WhatsApp.",
     reaches: "customer",
-    channels: ["email", "WhatsApp"],
+    channels: ["email"],
     when: "When a signing request completes (and a retry sweep every 30 minutes)",
     setting: { key: "SIGNING_SIGNED_COPIES", defaultOn: true },
     cron: "/api/cron/automations",
     phases: ["stranded-completions"],
+  },
+  {
+    // Its own switch, and OFF: this is a message to a customer that nobody was
+    // sending before, on a channel the emailed copy never used. Riding on the
+    // switch above — which is on — would have started it for every workspace
+    // the day it shipped, without anyone having chosen it.
+    key: "signed-copies-whatsapp",
+    notJourney: "Part of a signing request a person sent: the copy of what they signed, for a signer with no email address.",
+    messages: ["completed_whatsapp"],
+    label: "Signed copies by WhatsApp",
+    does: "When everyone has signed, a signer who has a mobile number and NO email address is sent the signed PDF on WhatsApp. WhatsApp only delivers it if they have messaged you in the last 24 hours; when it refuses, your team gets a notification so the copy can be given to them another way.",
+    reaches: "customer",
+    channels: ["WhatsApp"],
+    when: "When a signing request completes (and a retry sweep every 30 minutes)",
+    setting: { key: "SIGNING_SIGNED_COPIES_WHATSAPP", defaultOn: false },
   },
   {
     key: "signing-next-signer",

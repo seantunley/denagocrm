@@ -4,6 +4,7 @@ import { sendEmail } from "@/lib/email";
 import { signingRecord } from "@/lib/outboundMessageLog";
 import { isWhatsAppConfigured, sendWhatsAppDocument, waDigits } from "@/lib/whatsapp";
 import { sendPushToAll } from "@/lib/push";
+import { automationOn } from "@/lib/automationSwitch";
 import { currentTenantScope } from "@/lib/tenantScope";
 import { signingEmailContent, signingWhatsAppText } from "./signingEmail";
 import type { SweepTenantWhere } from "./recoveryScope";
@@ -115,10 +116,12 @@ export async function deliverCompletionEmails(opts: {
   };
 
   // Mobile numbers for whoever has no address, looked up here so that none of
-  // the callers has to remember to pass one.
+  // the callers has to remember to pass one — and ONLY when the owner has
+  // switched the WhatsApp copy on. With it off there are no numbers, so the
+  // branch below has nobody to send to, whichever caller this is.
   const unaddressed = opts.recipients.filter((r) => !r.email && !r.completedEmailSentAt).map((r) => r.id);
   const phones = new Map<string, string>();
-  if (unaddressed.length > 0) {
+  if (unaddressed.length > 0 && (await whatsAppCopiesOn())) {
     const rows = await prisma.signatureRecipient
       .findMany({ where: { ...opts.tenantWhere, id: { in: unaddressed }, phone: { not: null } }, select: { id: true, phone: true } })
       .catch(() => []);
@@ -178,6 +181,23 @@ export async function deliverCompletionEmails(opts: {
   }
 
   return { ok: failures.length === 0, sent, skipped, failures };
+}
+
+/** The owner's switch for the WhatsApp copy (Settings → Automatic jobs & messages). OFF until they turn it on. */
+export const SIGNED_COPIES_WHATSAPP_SWITCH = "SIGNING_SIGNED_COPIES_WHATSAPP";
+
+/**
+ * Has the owner of the workspace this is running in switched the WhatsApp copy
+ * on? Its own switch rather than the emailed copy's: that one is on, and a
+ * customer must never start receiving a new kind of message because a switch
+ * somebody set for a different one happened to cover it.
+ *
+ * No workspace in scope, or a setting that cannot be read, is "off".
+ */
+async function whatsAppCopiesOn(): Promise<boolean> {
+  const tenantId = currentTenantScope()?.tenantId;
+  if (!tenantId) return false;
+  return automationOn(SIGNED_COPIES_WHATSAPP_SWITCH, tenantId).catch(() => false);
 }
 
 /**
