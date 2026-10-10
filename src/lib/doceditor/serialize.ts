@@ -482,9 +482,9 @@ export function renderSigningSheets(input: DocumentModel, ctxIn: RenderCtx, logo
     ${DOCUMENT_FONT_FACE}
     .sg-sheet { font-family:${font}; font-size:${t.body}; line-height:${t.lineHeight}; color:${t.text}; -webkit-font-smoothing:antialiased; }
     .sg-sheet * { box-sizing:border-box; }
-    .sg-sheet h1 { font-size:${t.h1}; margin:0 0 8px; color:${t.ink}; ${t.headingFont}}
-    .sg-sheet h2 { font-size:${t.h2}; margin:12px 0 6px; color:${t.ink}; ${t.headingFont}}
-    .sg-sheet h3 { font-size:${t.h3}; margin:10px 0 4px; color:${t.ink}; ${t.headingFont}}
+    .sg-sheet h1 { font-size:${t.h1}; margin:0 0 8px; color:${cssColor(doc.style.ink, "#020617")}; ${t.headingFont}}
+    .sg-sheet h2 { font-size:${t.h2}; margin:12px 0 6px; color:${cssColor(doc.style.ink, "#020617")}; ${t.headingFont}}
+    .sg-sheet h3 { font-size:${t.h3}; margin:10px 0 4px; color:${cssColor(doc.style.ink, "#020617")}; ${t.headingFont}}
     .sg-sheet p { margin:0 0 8px; }
     .sg-sheet a { color:${cssColor(doc.style.accent, "#ea580c")}; }
     .sg-sheet strong { font-weight:700; }
@@ -529,9 +529,9 @@ export function renderDocumentHtml(
     @page { size: ${pageCss}; margin: ${m}px; }
     * { box-sizing: border-box; }
     body { font-family: ${font}; font-size: ${t.body}; line-height: ${t.lineHeight}; color: ${t.text}; margin: 0; -webkit-font-smoothing: antialiased; }
-    h1 { font-size: ${t.h1}; margin: 0 0 8px; color: ${t.ink}; ${t.headingFont}}
-    h2 { font-size: ${t.h2}; margin: 12px 0 6px; color: ${t.ink}; ${t.headingFont}}
-    h3 { font-size: ${t.h3}; margin: 10px 0 4px; color: ${t.ink}; ${t.headingFont}}
+    h1 { font-size: ${t.h1}; margin: 0 0 8px; color: ${cssColor(doc.style.ink, "#020617")}; ${t.headingFont}}
+    h2 { font-size: ${t.h2}; margin: 12px 0 6px; color: ${cssColor(doc.style.ink, "#020617")}; ${t.headingFont}}
+    h3 { font-size: ${t.h3}; margin: 10px 0 4px; color: ${cssColor(doc.style.ink, "#020617")}; ${t.headingFont}}
     p { margin: 0 0 8px; }
     a { color: ${cssColor(doc.style.accent, "#ea580c")}; }
     strong { font-weight: 700; }

@@ -50,6 +50,9 @@ test("type settings are bounded and a colour is a colour", () => {
   raw.style.textColor = `#fff" onmouseover="alert(1)" x="`;
   raw.style.headingFont = "Comic Sans; background:url(x)";
   assert.equal(documentSchema.safeParse(raw).success, false, "a face is one of a fixed list");
+  // The editor page's own rules are built from checked colours too, whatever they are handed.
+  const hostile = docTypeCss({ ...doc.style, ink: "red} body{display:none", accent: `#fff" onload="x`, textColor: "url(x)" }, ".doc-canvas");
+  assert.doesNotMatch(hostile, /display:none|onload|url\(/);
   raw.style.headingFont = "serif";
   assert.equal(documentSchema.parse(raw).style.textColor, undefined, "an unsafe colour is dropped");
 });
