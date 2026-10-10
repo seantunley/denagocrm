@@ -56,7 +56,7 @@ test("small talk skips the research round — and nothing that could be about th
     assert.equal(isSmallTalk(q), false, q);
   }
   assert.match(lib, /const research = !\(isSmallTalk\(question\) && !images\.length\) && !fast;/, "an attached image always gets the normal path");
-  assert.match(lib, /for \(let step = 0; research && step < MAX_STEPS/);
+  assert.match(lib, /for \(let step = 0; research && step < maxSteps/);
 });
 
 test("no hedging filler", () => {
@@ -67,7 +67,7 @@ test("the research step runs on the quicker model; the answer doesn't", () => {
   assert.match(lib, /export const PLAN_MODEL = "gpt-6-astra";/);
   // Every research call — first try, firm retry, transient retry — goes through the one plan helper.
   assert.equal((lib.match(/preferModel: PLAN_MODEL/g) ?? []).length, 1, "the one plan call");
-  assert.match(lib, /const plan = \(step: number, insist: boolean\) =>[\s\S]{0,200}preferModel: PLAN_MODEL/);
+  assert.match(lib, /const plan = \(step: number, insist: boolean\) =>[\s\S]{0,400}preferModel: PLAN_MODEL/);
   // (lastIndexOf: degraded mode earlier in askCrm builds its rows too.)
   const answer = lib.slice(lib.indexOf("const answerReply = await withRetry("), lib.lastIndexOf("const rows = dedupeRows("));
   assert.ok(answer.length > 100, "found the answer step");
