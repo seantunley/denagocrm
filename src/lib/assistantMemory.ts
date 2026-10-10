@@ -76,7 +76,7 @@ export const LEARN_INSTRUCTIONS = [
   "- playbook: a named definition or procedure the person taught or corrected (\"hot lead means…\", \"our weekly review is…\"). name is lowercase-hyphenated.",
   "A correction from the person is the most important thing to learn. If an entry you were given is wrong or out of date, replace or remove it.",
   "SKIP for memory/profile/playbook: anything about one particular customer or deal, data that lives in the CRM records, one-off tasks, guesses. Never store a phone number, email address or a customer's name.",
-  '- decision: a decision made about a customer or topic this turn ({"subject":"<lead id or topic>","text":"<what was decided>"}). These are stored separately and retrieved with recall_decision — they do not go into the prompt. Use this when the person decides something ("wait until finance replies", "Kristina owns fleet quotes").',
+  '- decision: a decision made about a customer or topic this turn. kind is required: "lead" (subject is a lead id) or "topic". Example: {"decision":[{"kind":"lead","subject":"<lead id>","text":"Wait until finance replies"}]}. These are stored separately and retrieved with recall_decision — they do not go into the prompt.',
   'Most answers learn nothing — then leave "learn" out.',
 ].join("\n");
 
