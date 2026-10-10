@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { basePrisma } from "@/lib/db";
 import { getCurrentUser, getActiveTenantId } from "@/lib/auth";
 import { canAccessCase, canAccessContact } from "@/lib/permissions";
+import { withActingStaffScope } from "@/lib/actingScope";
 import { readFile } from "@/lib/storage";
 import { tenantEnforcing } from "@/lib/tenantEnforcement";
 
@@ -14,7 +15,12 @@ type UploadRow = {
   mimeType: string;
 };
 
-export async function GET(
+/** Bound to the acting workspace — a route handler has nothing above it that does (see withActingStaffScope). */
+export async function GET(request: Request, context: { params: Promise<{ id: string }> }) {
+  return withActingStaffScope(() => handleGet(request, context));
+}
+
+async function handleGet(
   _request: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {

@@ -27,13 +27,24 @@ export type TransitionJobRun = {
   leased: number;
 };
 
+/**
+ * `transition_running` is claimable too — once its lease has run out.
+ *
+ * A job is left in that state when the worker running it dies: the function hit
+ * its time limit halfway through rendering a PDF, or the process was recycled.
+ * Nothing then moved it on. The lease test below was written for exactly that,
+ * but the status list excluded the only state a lease is ever held in, so the
+ * job sat there for good — a document everyone had signed, never finished, never
+ * retried and never reported. A live run still holds an unexpired lease and is
+ * left alone.
+ */
 async function claimJobs(tenantId: string, limit: number, requestId: string | null): Promise<TransitionJob[]> {
   const owner = `transition:${crypto.randomUUID()}`;
   return basePrisma.$queryRaw<TransitionJob[]>`
     WITH candidates AS (
       SELECT "id" FROM "SigningJob"
       WHERE "tenantId" = ${tenantId}
-        AND "status" IN ('transition','transition_retry')
+        AND "status" IN ('transition','transition_retry','transition_running')
         AND "availableAt" <= NOW()
         AND ("leaseUntil" IS NULL OR "leaseUntil" < NOW())
         AND (${requestId}::text IS NULL OR "requestId" = ${requestId})

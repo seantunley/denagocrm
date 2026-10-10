@@ -9,12 +9,29 @@ import { canAccessSignatureRequest } from "@/lib/signing/access";
 import { SendVoidBar, RecipientControls } from "./SigningClient";
 import { EntityDetailShell } from "@/components/entity-detail-shell";
 import { StatusPill } from "@/components/visual-system";
-import { FileCheck2, FileText } from "lucide-react";
+import { Download, FileCheck2, FileText } from "lucide-react";
 import { SaveForm, SaveButton } from "@/components/SaveForm";
-import { resendSignedCopies } from "@/app/actions/signhub";
+import { resendSignedCopies, retryStuckSteps } from "@/app/actions/signhub";
 import { isRequestClosed, lastValidDay } from "@/lib/signing/status";
+import { stuckSteps } from "@/lib/signing/stuck";
+import { allSignersSigned, failureInWords, finishingStalled, stuckExplanation, stuckHeadline, stuckProgress, worstStep } from "@/lib/signing/stuckText";
+import { loadEvidence } from "@/lib/signing/evidence";
+import { eventInWords } from "@/lib/signing/evidenceText";
 
 export const dynamic = "force-dynamic";
+// Retry finishes a signed document from this page's action: rendering and
+// sealing the PDF, then mailing it. Seconds normally, not always.
+export const maxDuration = 60;
+
+/** A time-stamp authority is recorded as the address that was asked; show who, not the URL. */
+function authorityName(authority: string | null): string {
+  if (!authority) return "an independent authority";
+  try {
+    return new URL(authority).host;
+  } catch {
+    return authority;
+  }
+}
 
 const RSTATUS: Record<string, string> = {
   pending: "text-slate-400", sent: "text-blue-300", viewed: "text-indigo-300", signed: "text-emerald-300", declined: "text-red-300",
@@ -109,7 +126,7 @@ export default async function SignatureDetail({ params }: { params: Promise<{ id
   // 1. Everyone signed, but the quote/job card changed after sending, so the
   //    request can never complete. Same test completion applies (complete.ts):
   //    the quote is gone or superseded, or the job card is gone.
-  const allSigned = req.recipients.some((r) => r.role !== "viewer") && req.recipients.filter((r) => r.role !== "viewer").every((r) => r.status === "signed");
+  const allSigned = allSignersSigned(req.recipients);
   let blockedReason: string | null = null;
   if (allSigned && !isRequestClosed(req.status)) {
     if (req.quoteId) {
@@ -123,6 +140,15 @@ export default async function SignatureDetail({ params }: { params: Promise<{ id
   }
   // 2. Completed, but the signed copy never reached some recipients.
   const missingCopy = req.status === "completed" ? req.recipients.filter((r) => r.email && !r.completedEmailSentAt) : [];
+  // 3. The one nothing reported: a step that runs after somebody acts failed —
+  //    or the worker running it was cut off — and the request went on reading
+  //    "2/2 signed". A blocked completion (1) is its own message, with its own fix.
+  const failedStep = closed || blockedReason ? null : worstStep(await stuckSteps([req.id]));
+  const stalled = !blockedReason && finishingStalled({ status: req.status, closed, recipients: req.recipients, approvals: req.approvals }, new Date());
+  const stuck = failedStep || stalled ? { jobType: failedStep?.jobType ?? "advance_signature", step: failedStep } : null;
+  const canManage = await hasPermission(user, "signing.manage");
+  // What proves a completed document is the one that was signed.
+  const evidence = req.status === "completed" ? await loadEvidence(req) : null;
 
   // Shared fields (recipientId null, fillable by anyone) keep only the FIRST
   // value on SignatureField — the one the sealed PDF stamps. Every signer's own
@@ -191,6 +217,27 @@ export default async function SignatureDetail({ params }: { params: Promise<{ id
           </p>
         </div>
       )}
+      {stuck && (
+        <div className="flex flex-wrap items-start gap-3 rounded-xl border border-red-500/40 bg-red-500/10 p-4 text-sm">
+          <div className="min-w-0 flex-1">
+            <p className="font-semibold text-red-200">{stuckHeadline(stuck.jobType, allSigned)}</p>
+            <p className="mt-1 text-muted-foreground">
+              {stuckExplanation(stuck.jobType, allSigned)}
+              {stuck.step ? ` ${stuckProgress(stuck.step, formatDateTime(stuck.step.availableAt))}` : ""}
+            </p>
+            {stuck.step?.lastError && (
+              <p className="mt-1 text-[11px] text-muted-foreground/80">
+                What went wrong: {failureInWords(stuck.step.lastError)} The technical detail is in Settings → System log.
+              </p>
+            )}
+          </div>
+          {canManage && (
+            <SaveForm action={retryStuckSteps.bind(null, req.id)}>
+              <SaveButton className="btn-primary btn-sm" pendingLabel="Retrying…">Retry now</SaveButton>
+            </SaveForm>
+          )}
+        </div>
+      )}
       {missingCopy.length > 0 && (
         <div className="flex flex-wrap items-center gap-3 rounded-xl border border-red-500/40 bg-red-500/10 p-4 text-sm">
           <div className="min-w-0 flex-1">
@@ -210,6 +257,80 @@ export default async function SignatureDetail({ params }: { params: Promise<{ id
           {req.signedPdfHash && <span className="self-center text-[10px] text-muted-foreground">sha256 {req.signedPdfHash.slice(0, 16)}…</span>}
         </div>
       </div>
+
+      {/* What proves this is the document that was signed. All of it was already
+          recorded — the seal, an independent time-stamp, a chained audit trail and
+          a check of the stored file after sealing — and none of it was shown. */}
+      {evidence && (
+        <div className={card}>
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+            <p className="text-sm font-semibold text-foreground">Evidence</p>
+            <a className="btn-secondary btn-sm" href={`/api/signatures/${req.id}/evidence`}><Download className="size-4" />Download evidence pack</a>
+          </div>
+          <dl className="grid gap-x-6 gap-y-3 text-sm sm:grid-cols-2">
+            <div>
+              <dt className="text-[11px] uppercase tracking-wide text-muted-foreground">Sealed</dt>
+              <dd className="text-foreground">
+                {formatDateTime(evidence.sealedAt)}
+                {evidence.certificate && (
+                  <span className="block text-[11px] text-muted-foreground">
+                    with “{evidence.certificate.name}”{evidence.certificate.trusted ? "" : " — not a publicly issued certificate"}
+                  </span>
+                )}
+              </dd>
+            </div>
+            <div>
+              <dt className="text-[11px] uppercase tracking-wide text-muted-foreground">Unchanged since sealing</dt>
+              <dd className={evidence.check && !evidence.check.valid ? "font-semibold text-red-300" : "text-foreground"}>
+                {!evidence.check
+                  ? "Not checked yet"
+                  : evidence.check.valid
+                    ? "Yes"
+                    : "The last check FAILED"}
+                <span className="block text-[11px] font-normal text-muted-foreground">
+                  {!evidence.check
+                    ? "The stored file is checked automatically after sealing, within the hour."
+                    : evidence.check.valid
+                      ? `File, seal and audit trail last verified ${formatDateTime(evidence.check.at)}`
+                      : `${formatDateTime(evidence.check.at)} — ${evidence.check.errors.join("; ").slice(0, 240)}`}
+                </span>
+              </dd>
+            </div>
+            <div>
+              <dt className="text-[11px] uppercase tracking-wide text-muted-foreground">Independent time-stamp</dt>
+              <dd className={evidence.timestamp && !evidence.timestamp.verified ? "font-semibold text-red-300" : "text-foreground"}>
+                {evidence.timestamp
+                  ? `${formatDateTime(evidence.timestamp.at)}${evidence.timestamp.verified ? "" : " — could not be verified"}`
+                  : "None"}
+                <span className="block text-[11px] font-normal text-muted-foreground">
+                  {evidence.timestamp
+                    ? `From ${authorityName(evidence.timestamp.authority)}, over this exact file`
+                    : "The time-stamp service did not answer when this was sealed. The seal and audit trail are unaffected."}
+                </span>
+              </dd>
+            </div>
+            <div>
+              <dt className="text-[11px] uppercase tracking-wide text-muted-foreground">Audit trail</dt>
+              <dd className={evidence.check?.chainVerified === false ? "font-semibold text-red-300" : "text-foreground"}>
+                {req.events.length} entries
+                {evidence.check?.chainVerified === true ? ", unbroken" : evidence.check?.chainVerified === false ? " — the chain is BROKEN" : ""}
+                <span className="block text-[11px] font-normal text-muted-foreground">Each entry is locked to the one before it, so none can be changed or removed unnoticed.</span>
+              </dd>
+            </div>
+            {evidence.sha256 && (
+              <div className="sm:col-span-2">
+                <dt className="text-[11px] uppercase tracking-wide text-muted-foreground">Fingerprint of the signed PDF (SHA-256)</dt>
+                <dd className="break-all font-mono text-[11px] text-foreground">{evidence.sha256}</dd>
+              </div>
+            )}
+          </dl>
+          <p className="mt-3 text-[11px] text-muted-foreground">
+            The evidence pack is one file to hand to an attorney or the customer: the signed PDF, the full audit trail, the time-stamp, and a page
+            explaining how to check each of them without this system.
+            {evidence.retainUntil ? ` This record is kept until ${formatDate(evidence.retainUntil)}.` : ""}
+          </p>
+        </div>
+      )}
 
       {/* A workflow's approval gates. They hold the document back from the
           customer and have no recipient row, so nothing on this page showed that
@@ -347,7 +468,7 @@ export default async function SignatureDetail({ params }: { params: Promise<{ id
               <li key={e.id} className="flex items-start gap-3 text-[12px]">
                 <span className={`mt-1 h-1.5 w-1.5 flex-shrink-0 rounded-full ${failed ? "bg-red-400" : "bg-primary/70"}`} />
                 <div className="min-w-0">
-                  <span className="font-medium text-foreground">{e.type.replace("_", " ")}</span>
+                  <span className="font-medium text-foreground">{eventInWords(e.type)}</span>
                   <span className="text-muted-foreground"> · {e.actor}{e.channel ? ` · ${e.channel}` : ""}{e.ip ? ` · ${e.ip}` : ""}</span>
                   {delivery && (
                     delivery.ok ? (
