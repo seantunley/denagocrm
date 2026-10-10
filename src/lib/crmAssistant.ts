@@ -34,6 +34,8 @@ import {
 } from "./permissions";
 import { ASSISTANT_PROFILE_KEY, parseProfile, selfKnowledge, soulText } from "./assistantSoul";
 import { LEARN_INSTRUCTIONS, memoryPrompt, methodInstructions } from "./assistantMemory";
+import { researchGate } from "./assistantResearchGate";
+import { matchDecisions, parseDecision } from "./assistantDecisions";
 import { CITE_RULE, REPLY_FORMAT, STATE_INSTRUCTIONS, citableLinks, resolveCitations, splitReply, type Evidence } from "./assistantReply";
 import { unsupportedFigures, unsupportedNote } from "./assistantVerify";
 import { salesStats } from "./crmAssistantStats";
@@ -61,6 +63,7 @@ import {
   leadBriefArgs,
   parseSteps,
   planSaysAnswerNext,
+  decisionArgs,
   lookupStatus,
   isSmallTalk,
   resultsBlock,
@@ -1245,6 +1248,25 @@ function refused(what: string): ToolOutput {
   return { truncated: false, rows: [], data: [{ note: `You don't have access to ${what}.` }] };
 }
 
+async function recallDecision(user: User, raw: z.infer<typeof decisionArgs>): Promise<ToolOutput> {
+  const args = decisionArgs.parse(raw);
+  const notes = await prisma.assistantNote.findMany({
+    where: { kind: "decision", tenantId: ownedWriteTenantId() },
+    orderBy: { createdAt: "desc" },
+    take: 40,
+    select: { content: true, createdAt: true },
+  });
+  const decisions = notes
+    .map((n) => parseDecision(n.content, n.createdAt.toISOString()))
+    .filter((d): d is NonNullable<typeof d> => d !== null);
+  const hits = matchDecisions(decisions, args.query);
+  return {
+    truncated: false,
+    rows: hits.map((d) => ({ href: d.subject.startsWith("c") ? `/leads/${d.subject}` : "/ask", label: d.subject })),
+    data: hits.map((d) => ({ subject: d.subject, decision: d.text, at: d.at })),
+  };
+}
+
 async function runTool(user: User, step: ToolStep): Promise<ToolOutput> {
   switch (step.tool) {
     case "find_leads": return findLeads(user, step.args);
@@ -1255,6 +1277,7 @@ async function runTool(user: User, step: ToolStep): Promise<ToolOutput> {
     case "knowledge": return knowledge(user, step.args);
     case "recall": return recall(user, step.args);
     case "playbook": return playbook(user, step.args);
+    case "recall_decision": return recallDecision(user, step.args);
     case "schedule": return schedule(user, step.args);
     case "vehicles": return vehicles(user, step.args);
     case "deliveries": return deliveries(user, step.args);
@@ -1763,8 +1786,18 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
     const batch = fresh.slice(0, MAX_LOOKUPS - observations.length);
     if (!batch.length) break;
     await runLookups(batch, step + 1);
-    // "These are all I need": straight to the answer — no round spent on "done".
-    if (planSaysAnswerNext(reply.text)) break;
+    const lastEmpty = observations.slice(-batch.length).every((o) => !o.output.rows.length && !o.output.data.length);
+    const gate = researchGate({
+      question,
+      tools: observations.map((o) => o.tool),
+      lastRoundEmpty: lastEmpty,
+      planSaysAnswer: planSaysAnswerNext(reply.text),
+      stepsUsed: step + 1,
+      maxSteps: MAX_STEPS,
+    });
+    // Deterministic: continue even if the plan said answer, when required evidence is missing.
+    if (gate === "continue") continue;
+    if (gate === "answer" || planSaysAnswerNext(reply.text)) break;
   }
 
   if (observations.length) progress("Writing it up…");
