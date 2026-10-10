@@ -1,0 +1,20 @@
+[
+  {
+    "scenarioId": "why-stuck",
+    "question": "Why is the Jacobs deal stuck and what should we do to close it?",
+    "tools": ["find_leads", "lead_brief"],
+    "steps": 2,
+    "hitBudget": false,
+    "answer": "The Jacobs deal has been quiet for 12 days. Suggest a follow-up call.",
+    "latencyMs": 6100
+  },
+  {
+    "scenarioId": "simple-count",
+    "question": "how many leads came in last month",
+    "tools": ["find_leads"],
+    "steps": 1,
+    "hitBudget": false,
+    "answer": "14 leads came in last month.",
+    "latencyMs": 2100
+  }
+]
