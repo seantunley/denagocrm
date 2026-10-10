@@ -1818,7 +1818,7 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
       lastRoundEmpty: lastEmpty,
       planSaysAnswer: planSaysAnswerNext(reply.text),
       stepsUsed: step + 1,
-      maxSteps: MAX_STEPS,
+      maxSteps,
     });
     // Deterministic: continue even if the plan said answer, when required evidence is missing.
     if (gate === "continue") continue;
