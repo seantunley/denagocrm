@@ -1675,6 +1675,9 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
   // so the plan can re-plan after seeing results; ordinary questions stay short.
   const complex = isComplexQuestion(question);
   const maxSteps = complex ? MAX_STEPS_COMPLEX : MAX_STEPS;
+  // Leave room for the answer step (60s) and overhead inside the 300s route limit.
+  // Complex research stops early rather than risking a timeout with no answer.
+  const RESEARCH_BUDGET_MS = complex ? 180_000 : 90_000;
   const observations: Observation[] = [];
   const progress = (status: string) => {
     try {
@@ -1730,6 +1733,8 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
   const research = !(isSmallTalk(question) && !images.length) && !fast;
   if (fast) await runLookups(fast, 1);
   for (let step = 0; research && step < maxSteps && observations.length < MAX_LOOKUPS; step++) {
+    // Stop researching if the budget is spent — the answer step still runs with what we have.
+    if (Date.now() - started > RESEARCH_BUDGET_MS) break;
     phase("planning");
     let reply = await plan(step, false);
     // Models sometimes answer in prose instead of choosing. Before anything has
