@@ -5,6 +5,7 @@ import Moveable from "react-moveable";
 import { useEditor } from "@/lib/doceditor/store";
 import type { DocumentPage } from "@/lib/doceditor/model";
 import { blockBoxCss } from "@/lib/doceditor/blockBox";
+import { alignmentGuides } from "./alignmentGuides";
 import { BlockView } from "./BlockView";
 
 /**
@@ -28,6 +29,7 @@ export function FloatingLayer({ page, zoom }: { page: DocumentPage; zoom: number
         return (
           <div
             key={fb.id}
+            data-float-id={fb.id}
             ref={isSel ? setTargetEl : undefined}
             onMouseDown={(e) => { e.stopPropagation(); select(fb.block.id); }}
             className={`pointer-events-auto absolute rounded bg-white/0 ${isSel ? "outline outline-2 outline-orange-400" : "hover:outline hover:outline-1 hover:outline-dashed hover:outline-slate-300"}`}
@@ -52,6 +54,7 @@ export function FloatingLayer({ page, zoom }: { page: DocumentPage; zoom: number
           target={targetEl}
           draggable resizable origin={false} throttleDrag={0}
           renderDirections={["e", "w"]}
+          {...alignmentGuides(targetEl)}
           onDrag={({ target, left, top }) => { const el = target as HTMLElement; el.style.left = `${left}px`; el.style.top = `${top}px`; }}
           onDragEnd={({ target }) => {
             const el = target as HTMLElement;

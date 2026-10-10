@@ -11,6 +11,7 @@
  */
 import type { DocumentModel, DocumentBlock, DocumentRow } from "./model";
 import { newColumn, newRow, uid } from "./factory";
+import { carryAcceptanceFields } from "./fieldSnap";
 
 export type DropZone = "above" | "below" | "left" | "right" | "centre";
 
@@ -220,7 +221,13 @@ export function updateFloating(doc: DocumentModel, blockId: string, patch: { x?:
   const next = clone(doc);
   for (const page of next.pages) {
     const fb = page.floatingBlocks.find((f) => f.block.id === blockId);
-    if (fb) { Object.assign(fb, patch); return next; }
+    if (fb) {
+      const before = { x: fb.x, y: fb.y, width: fb.width };
+      Object.assign(fb, patch);
+      // An acceptance card takes the signature and date fields on its lines with it.
+      if (fb.block.type === "acceptance") page.overlayFields = carryAcceptanceFields(page.overlayFields, before, { x: fb.x, y: fb.y, width: fb.width });
+      return next;
+    }
   }
   return doc;
 }
