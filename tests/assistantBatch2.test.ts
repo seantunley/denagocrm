@@ -158,7 +158,28 @@ test("a card about a record that has moved on is refused, not applied", () => {
   assert.match(check, /activity\.status === "planned" && activity\.dueDate\.toISOString\(\) === card\.fromDue/);
   assert.match(check, /if \(!lead \|\| lead\.status !== "open"\) return false;/);
   const lib = code("src/lib/crmAssistant.ts");
-  assert.match(lib, /stageId: stage\.id, fromStageId: lead\.stageId \}/);
-  assert.match(lib, /userId: person\.id, fromUserId: lead\.assignedToId \}/);
+  // reason is optional and spread after the ids; the from* fields must still be present.
+  assert.match(lib, /stageId: stage\.id, fromStageId: lead\.stageId/);
+  assert.match(lib, /userId: person\.id, fromUserId: lead\.assignedToId/);
   assert.equal((lib.match(/fromDue: activity\.dueDate\.toISOString\(\)/g) ?? []).length, 2);
+});
+
+
+/* ── Reason field regressions ────────────────────────────────────────────── */
+
+test("schedule and watch strip reason before the strict validators", () => {
+  const lib = code("src/lib/crmAssistant.ts");
+  // reason is display-only; leaving it on the object would fail .strict() and drop the card.
+  assert.match(lib, /const \{ type: _type, reason: _reason, \.\.\.fields \} = p;[\s\S]{0,120}scheduleInput\.safeParse\(fields\)/);
+  assert.match(lib, /const \{ type: _type, reason: _reason, \.\.\.fields \} = p;[\s\S]{0,120}watchInput\.safeParse\(fields\)/);
+  // And the reason is still attached to the card.
+  assert.match(lib, /kind: "schedule"[\s\S]{0,200}\.\.\.\(p\.reason \? \{ reason: p\.reason \} : \{\}\)/);
+  assert.match(lib, /kind: "watch"[\s\S]{0,200}\.\.\.\(p\.reason \? \{ reason: p\.reason \} : \{\}\)/);
+});
+
+test("lost cards do not double-render the reason", () => {
+  const card = code("src/components/AssistantActionCard.tsx");
+  // Generic reason is skipped for lost; the dedicated line remains.
+  assert.match(card, /card\.kind !== "lost" && "reason" in card && card\.reason/);
+  assert.match(card, /card\.kind === "lost" && <p[\s\S]*?>Reason: \{card\.reason\}<\/p>/);
 });
