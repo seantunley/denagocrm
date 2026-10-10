@@ -56,7 +56,7 @@ test("small talk skips the research round — and nothing that could be about th
     assert.equal(isSmallTalk(q), false, q);
   }
   assert.match(lib, /const research = !\(isSmallTalk\(question\) && !images\.length\) && !fast;/, "an attached image always gets the normal path");
-  assert.match(lib, /for \(let step = 0; research && step < MAX_STEPS/);
+  assert.match(lib, /for \(let step = 0; research && step < maxSteps/);
 });
 
 test("no hedging filler", () => {

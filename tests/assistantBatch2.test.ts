@@ -97,7 +97,7 @@ test("with the breaker open, DAX answers from the CRM where it can, else says so
   assert.match(lib, /if \(breakerOpen\(breakerKey\)\) \{\s*if \(!fast\) return \{ ok: false, error: DEGRADED_ERROR \};\s*await runLookups\(fast, 1\);/);
   assert.match(lib, /return \{ ok: true, answer: DEGRADED_NOTE, rows,/);
   // Both model calls go through the retry/breaker.
-  assert.match(lib, /withRetry\(breakerKey, \(\) =>\s*codexRespond\(\{ instructions, prompt: planPrompt/);
+  assert.match(lib, /withRetry\(breakerKey, \(\): Promise<CodexResult> =>/);
   assert.match(lib, /const answerReply = await withRetry\(breakerKey, \(\) => codexRespond\(/);
 });
 
