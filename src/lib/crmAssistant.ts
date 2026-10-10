@@ -1923,7 +1923,8 @@ async function resolveActions(user: User, proposals: ProposedAction[]): Promise<
       // No lead to check: it is saved for whoever presses Confirm, and runs as
       // them with their permissions at the time. Only the timing is checked
       // here — a one-off in the past never becomes a card.
-      const { type: _type, ...fields } = p;
+      // reason is display-only; the strict scheduleInput rejects unknown keys.
+      const { type: _type, reason: _reason, ...fields } = p;
       const parsed = scheduleInput.safeParse(fields);
       if (!parsed.success || !nextRun(parsed.data, new Date())) continue;
       cards.push({ id: `a${index}-schedule`, kind: "schedule", title: describeSchedule(parsed.data), ...parsed.data, ...(p.reason ? { reason: p.reason } : {}) });
@@ -1932,7 +1933,8 @@ async function resolveActions(user: User, proposals: ProposedAction[]): Promise<
     if (p.type === "watch") {
       // Checked again, with access, when Confirm saves it (createWatchForUser);
       // here only enough to word the card and drop what can't be valid.
-      const { type: _type, ...fields } = p;
+      // reason is display-only; the strict watchInput rejects unknown keys.
+      const { type: _type, reason: _reason, ...fields } = p;
       const parsed = watchInput.safeParse(fields);
       if (!parsed.success) continue;
       let customer: string | null = null;
