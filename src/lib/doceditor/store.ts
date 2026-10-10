@@ -3,6 +3,7 @@
 import { create } from "zustand";
 import type { DocumentModel, DocumentBlock, OverlayField, Recipient, DocStyle, LayoutSettings } from "./model";
 import { newPage, newRecipient } from "./factory";
+import type { LibrarySection } from "./librarySection";
 import * as ops from "./ops";
 import { getBlock } from "./ops";
 
@@ -48,7 +49,7 @@ interface EditorState {
   detach: (id: string) => void;
   dock: (id: string) => void;
   updateFloating: (id: string, patch: { x?: number; y?: number; width?: number }) => void;
-  insertLibrary: (blocks: DocumentBlock[]) => void;
+  insertLibrary: (section: LibrarySection) => void;
 
   // pages
   addPage: () => void;
@@ -132,12 +133,9 @@ export const useEditor = create<EditorState>((set, get) => ({
   detach: (id) => { get().commit((d) => ops.detachBlock(d, id)); },
   dock: (id) => { get().commit((d) => ops.dockFloating(d, id)); },
   updateFloating: (id, patch) => get().commit((d) => ops.updateFloating(d, id, patch)),
-  insertLibrary: (blocks) => get().commit((d) => {
-    let next = d;
-    const pageIdx = Math.max(0, d.pages.length - 1);
-    for (const b of blocks) next = ops.appendRow(next, pageIdx, ops.cloneWithNewIds(b));
-    return next;
-  }),
+  // Beside what the person has selected, or on the page they are working on —
+  // not "the end of the last page", which is where it always used to land.
+  insertLibrary: (section) => get().commit((d) => ops.insertSection(d, section, { afterBlockId: get().sel.blockId, pageIdx: get().activePage })),
   toggleLock: (id) => get().commit((d) => { const b = getBlock(d, id); return b ? ops.updateBlock(d, id, { locked: !b.locked } as Partial<DocumentBlock>) : d; }),
   toggleHide: (id) => get().commit((d) => { const b = getBlock(d, id); return b ? ops.updateBlock(d, id, { hidden: !b.hidden } as Partial<DocumentBlock>) : d; }),
   moveToPage: (id, pageIdx) => get().commit((d) => ops.moveBlockToPage(d, id, pageIdx)),
