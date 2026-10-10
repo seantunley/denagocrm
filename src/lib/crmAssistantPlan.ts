@@ -214,7 +214,7 @@ export function planInstructions(ctx: PlanContext): string {
     "YOU NEVER WRITE THE ANSWER — another step does, from what you look up. Your whole reply is ONE JSON object and nothing else: no prose, no summary of results, no markdown.",
     'Shape: {"tool":"find_leads","args":{...}} or {"tool":"done"}',
     'Add "then":"answer" when these lookups are all the question needs (most questions) — the answer is written straight after them, saving a round: {"tool":"lead_brief","args":{"lead":"Anna"},"then":"answer"}. Leave "then" out when you must see the results before choosing the next lookup (especially "why is this stuck", comparisons, or "what should I do" questions). On those, look, read what came back, then decide the next lookup.',
-    `When you need several lookups that don't depend on each other's results (two people's pipelines, a customer's brief AND the calendar), ask for them together — up to ${MAX_PARALLEL} at once: {"lookups":[{"tool":"find_leads","args":{"assignedTo":"Donovan"}},{"tool":"find_leads","args":{"assignedTo":"Kristina"}}],"then":"answer"}. If one needs another's result (find the stalled deals, THEN read the worst one), ask for the first only.`,
+    `When you need several lookups that don't depend on each other's results (two people's pipelines, a customer's brief AND the calendar), ask for them together — up to ${MAX_PARALLEL} at once: {"lookups":[{"tool":"find_leads","args":{"assignedTo":"Donovan"}},{"tool":"find_leads","args":{"assignedTo":"Kristina"}}]}. Add "then":"answer" only if those results will fully answer the question. For a comparison that asks who needs help, or a "why is this stuck" question, leave "then" out so you can read the results and look closer (lead_brief on the worst, sales_stats, etc.). If one needs another's result (find the stalled deals, THEN read the worst one), ask for the first only.`,
     // ── From here on it varies (by day, person, workspace): keep it LAST. ──
     `Today is ${ctx.today} (South Africa). The person asking is ${ctx.userName}; "me"/"my"/"I" means them.`,
     `Stages: ${ctx.stages.join(", ") || "(none)"}.`,
@@ -351,12 +351,12 @@ export function isSmallTalk(question: string): boolean {
  */
 export function isComplexQuestion(question: string): boolean {
   const q = question.trim().toLowerCase();
-  if (q.length < 20) return false;
-  // Explicit multi-step / reasoning language.
-  if (/\b(why|compare|versus|vs\.?|difference between|who should|what should|recommend|analyse|analyze|break down|dig into|look closer|root cause|what\'s going on|what is going on|help me understand)\b/.test(q)) return true;
-  // Asks for both data and a next action.
-  if (/\b(and then|then tell me|and what|so what|next step|what to do|plan for|how to fix|why is .* stuck|why is .* quiet|why is .* stalled)\b/.test(q)) return true;
-  // Comparison of two named things.
+  if (!q) return false;
+  // Strong multi-hop signals — short questions count ("why no sales?").
+  if (/\b(why|compare|versus|vs\.?|difference between|who should|what should|recommend|analyse|analyze|break down|dig into|look closer|root cause|what\'s going on|what is going on|help me understand|how come)\b/.test(q)) return true;
+  // Asks for data and a next action, or an explicit follow-up investigation.
+  if (/\b(and then|then tell me|and what|so what|next step|what to do|plan for|how to fix|stuck|stalled|quiet|no sales|no activity)\b/.test(q)) return true;
+  // Comparison of two named things or pipelines.
   if (/\b(and|vs|versus)\b/.test(q) && /\b(donovan|kristina|pipeline|team|salesperson|rep)\b/.test(q)) return true;
   return false;
 }
