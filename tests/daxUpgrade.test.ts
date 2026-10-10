@@ -121,3 +121,13 @@ test("cost summary reports latency and tokens", () => {
   assert.equal(summary.totalTokens, 600);
   assert.equal(summary.scenarios, 2);
 });
+
+
+test("decision search keeps visibility and keywords under AND", () => {
+  const lib = readFileSync(new URL("../src/lib/crmAssistant.ts", import.meta.url), "utf8");
+  const recall = lib.slice(lib.indexOf("async function recallDecision"), lib.indexOf("async function runTool"));
+  // Visibility OR and keyword OR must both survive — AND, not a second top-level OR.
+  assert.match(recall, /AND:\s*\[\s*visibleTo\(user\.id\)/, "visibility is inside AND");
+  assert.match(recall, /OR: words\.map/, "keyword match is present");
+  assert.doesNotMatch(recall, /\.\.\.visibleTo\(user\.id\),\s*\.\.\.\(words/, "visibility is not spread beside a keyword OR");
+});
