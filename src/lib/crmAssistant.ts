@@ -54,6 +54,8 @@ import {
   ANSWER_RULES,
   MAX_LOOKUPS,
   MAX_STEPS,
+  MAX_STEPS_COMPLEX,
+  isComplexQuestion,
   activityArgs,
   conversationBlock,
   knowledgeArgs,
@@ -1669,7 +1671,10 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
   const cacheKey = `dax:${ownedWriteTenantId()}:${user.id}`;
   const breakerKey = ownedWriteTenantId();
 
-  // Research: look, see, look closer — at most MAX_STEPS rounds, MAX_LOOKUPS in all.
+  // Research: look, see, look closer. Complex questions get a larger step budget
+  // so the plan can re-plan after seeing results; ordinary questions stay short.
+  const complex = isComplexQuestion(question);
+  const maxSteps = complex ? MAX_STEPS_COMPLEX : MAX_STEPS;
   const observations: Observation[] = [];
   const progress = (status: string) => {
     try {
@@ -1709,7 +1714,7 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
   // One research call, retried once on a passing ChatGPT fault (assistantBreaker).
   const plan = (step: number, insist: boolean) =>
     withRetry(breakerKey, () =>
-      codexRespond({ instructions, prompt: planPrompt(step, insist), images, reasoningEffort: "low", timeoutMs: 45_000, cacheKey, preferModel: PLAN_MODEL }),
+      codexRespond({ instructions, prompt: planPrompt(step, insist), images, reasoningEffort: complex ? "medium" : "low", timeoutMs: 45_000, cacheKey, preferModel: PLAN_MODEL }),
     );
   const planPrompt = (step: number, insist: boolean) =>
     [
@@ -1717,14 +1722,14 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
       whereTheyAre,
       `Question: ${question}`,
       observations.length ? resultsBlock("Lookups so far:", observations.map(observationText).join("\n\n")) : "",
-      `Rounds left: ${MAX_STEPS - step}. Lookups left: ${MAX_LOOKUPS - observations.length}.`,
+      `Rounds left: ${maxSteps - step}. Lookups left: ${MAX_LOOKUPS - observations.length}.`,
       insist ? PLAN_INSIST : "",
     ].filter(Boolean).join("\n\n");
   // Small talk ("thanks", 👍, "who are you?") skips research — it would only say
   // done — and so does a fast-path question, whose lookup is already known.
   const research = !(isSmallTalk(question) && !images.length) && !fast;
   if (fast) await runLookups(fast, 1);
-  for (let step = 0; research && step < MAX_STEPS && observations.length < MAX_LOOKUPS; step++) {
+  for (let step = 0; research && step < maxSteps && observations.length < MAX_LOOKUPS; step++) {
     phase("planning");
     let reply = await plan(step, false);
     // Models sometimes answer in prose instead of choosing. Before anything has
