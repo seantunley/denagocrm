@@ -142,6 +142,10 @@ test("research loop stops on the time budget before the step limit", () => {
   const lib = code("src/lib/crmAssistant.ts");
   const loop = lib.slice(lib.indexOf("const observations: Observation[] = [];"), lib.indexOf("const [profileRaw, company]"));
   assert.match(loop, /RESEARCH_BUDGET_MS/);
-  assert.match(loop, /Date\.now\(\) - started > RESEARCH_BUDGET_MS/);
+  assert.match(loop, /researchLeft\(\) < MIN_CALL_MS/);
   assert.match(loop, /complex \? 180_000 : 90_000/);
+  // Each plan call is capped by remaining research time, not a fixed 45s.
+  assert.match(loop, /Math\.min\(PLAN_MAX_MS, Math\.max\(0, researchLeft\(\)\)\)/);
+  // Answer is capped by remaining time under the hard deadline.
+  assert.match(loop, /HARD_DEADLINE_MS - elapsed\(\)/);
 });
