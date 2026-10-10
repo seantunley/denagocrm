@@ -31,6 +31,7 @@
     "test:rls-restricted": "tsx --tsconfig tsconfig.scripts.json scripts/test-rls-restricted.ts",
     "check:rls-role": "tsx --tsconfig tsconfig.scripts.json scripts/check-rls-role.ts",
     "test:tenant-e2e": "tsx --tsconfig tsconfig.scripts.json scripts/test-tenant-e2e.ts",
+    "test:signflow-workspace": "tsx --tsconfig tsconfig.harness.json scripts/test-signflow-workspace.ts",
     "test:enforced-render": "tsx --tsconfig tsconfig.scripts.json scripts/test-enforced-render.ts",
     "platform:create-admin": "tsx --tsconfig tsconfig.scripts.json scripts/create-platform-admin.ts",
     "test:platform-admins": "tsx --tsconfig tsconfig.scripts.json scripts/test-platform-admin-concurrency.ts",
