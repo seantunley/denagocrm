@@ -23,6 +23,7 @@ const text = z.string().trim().min(1);
 const at = z.string().trim().regex(/^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2})?$/);
 const atTime = z.string().trim().regex(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/);
 const minutes = z.number().int().min(15).max(480);
+const reason = z.string().trim().min(3).max(160).optional();
 
 export const proposedAction = z.discriminatedUnion("type", [
   z.object({
@@ -31,16 +32,18 @@ export const proposedAction = z.discriminatedUnion("type", [
     when: at,
     activity: z.enum(["call", "whatsapp", "email", "meeting", "todo"]).default("call"),
     summary: text.max(120).optional(),
+    reason,
   }).strict(),
-  z.object({ type: z.literal("note"), leadId, text: text.max(2000) }).strict(),
-  z.object({ type: z.literal("assign"), leadId, to: text.max(80) }).strict(),
-  z.object({ type: z.literal("stage"), leadId, stage: text.max(80) }).strict(),
+  z.object({ type: z.literal("note"), leadId, text: text.max(2000), reason }).strict(),
+  z.object({ type: z.literal("assign"), leadId, to: text.max(80), reason }).strict(),
+  z.object({ type: z.literal("stage"), leadId, stage: text.max(80), reason }).strict(),
   z.object({
     type: z.literal("draft_message"),
     leadId,
     channel: z.enum(["whatsapp", "email"]),
     subject: text.max(150).optional(),
     body: text.max(2000),
+    reason,
   }).strict(),
   // A meeting at a set time, with colleagues — through the calendar's own
   // booking, so a clash with anyone's diary is refused there.
@@ -51,19 +54,20 @@ export const proposedAction = z.discriminatedUnion("type", [
     minutes: minutes.optional(),
     with: z.array(text.max(80)).max(5).optional(),
     summary: text.max(120).optional(),
+    reason,
   }).strict(),
-  z.object({ type: z.literal("test_drive"), leadId, when: atTime, minutes: minutes.optional(), vehicle: text.max(80) }).strict(),
-  z.object({ type: z.literal("reschedule"), activityId, when: at }).strict(),
-  z.object({ type: z.literal("cancel_activity"), activityId }).strict(),
+  z.object({ type: z.literal("test_drive"), leadId, when: atTime, minutes: minutes.optional(), vehicle: text.max(80), reason }).strict(),
+  z.object({ type: z.literal("reschedule"), activityId, when: at, reason }).strict(),
+  z.object({ type: z.literal("cancel_activity"), activityId, reason }).strict(),
   z.object({ type: z.literal("lost"), leadId, reason: text.max(300) }).strict(),
-  z.object({ type: z.literal("quote"), leadId }).strict(),
+  z.object({ type: z.literal("quote"), leadId, reason }).strict(),
   // A question to run later, as the person — no lead: it names its own subject.
   // Cross-field rules (weekday only for weekly…) are checked by scheduleInput
   // when it becomes a card and again when it is saved.
-  z.object({ type: z.literal("schedule"), ...scheduleFields }).strict(),
+  z.object({ type: z.literal("schedule"), ...scheduleFields, reason }).strict(),
   // "Tell me when…" — checked by fixed rules every half hour; it only ever
   // notifies the person who confirmed it (assistantWatch).
-  z.object({ type: z.literal("watch"), ...watchFields }).strict(),
+  z.object({ type: z.literal("watch"), ...watchFields, reason }).strict(),
 ]);
 export type ProposedAction = z.infer<typeof proposedAction>;
 
@@ -72,7 +76,8 @@ export const MAX_ACTIONS = 4;
 export const ACTION_INSTRUCTIONS = [
   "TASKS. You can't change anything yourself, but you can PROPOSE up to 4 tasks for the person to confirm with one click. Propose when they ask you to do something (\"remind me…\", \"give it to Donovan\", \"draft a message…\", \"book Anna a test drive\"), or offer one when you recommend a concrete next step.",
   'Put them under "actions" in the reply block:',
-  '"actions":[{"type":"follow_up","leadId":"<id>","when":"YYYY-MM-DDTHH:MM","activity":"call|whatsapp|email|meeting|todo","summary":"..."},{"type":"note","leadId":"<id>","text":"..."},{"type":"assign","leadId":"<id>","to":"<person>"},{"type":"stage","leadId":"<id>","stage":"<stage>"},{"type":"draft_message","leadId":"<id>","channel":"whatsapp|email","subject":"<email only>","body":"..."},{"type":"meeting","leadId":"<id>","when":"YYYY-MM-DDTHH:MM","minutes":60,"with":["<colleague>"],"summary":"..."},{"type":"test_drive","leadId":"<id>","when":"YYYY-MM-DDTHH:MM","minutes":60,"vehicle":"<demo vehicle name>"},{"type":"reschedule","activityId":"<id>","when":"YYYY-MM-DDTHH:MM"},{"type":"cancel_activity","activityId":"<id>"},{"type":"lost","leadId":"<id>","reason":"..."},{"type":"quote","leadId":"<id>"},{"type":"schedule","question":"...","cadence":"once|daily|weekdays|weekly","weekday":1,"timeOfDay":"HH:MM","onDate":"YYYY-MM-DD"},{"type":"watch","kind":"quote_viewed|quote_unsigned|lead_quiet|test_drive_no_follow_up|delivery_deposit_due","quoteId":"Q-1042","leadId":"<id>","product":"<product>","thresholdHours":48,"thresholdDays":3}]',
+  '"actions":[{"type":"follow_up","leadId":"<id>","when":"YYYY-MM-DDTHH:MM","activity":"call|whatsapp|email|meeting|todo","summary":"...","reason":"why this helps"},{"type":"note","leadId":"<id>","text":"..."},{"type":"assign","leadId":"<id>","to":"<person>"},{"type":"stage","leadId":"<id>","stage":"<stage>"},{"type":"draft_message","leadId":"<id>","channel":"whatsapp|email","subject":"<email only>","body":"..."},{"type":"meeting","leadId":"<id>","when":"YYYY-MM-DDTHH:MM","minutes":60,"with":["<colleague>"],"summary":"..."},{"type":"test_drive","leadId":"<id>","when":"YYYY-MM-DDTHH:MM","minutes":60,"vehicle":"<demo vehicle name>"},{"type":"reschedule","activityId":"<id>","when":"YYYY-MM-DDTHH:MM"},{"type":"cancel_activity","activityId":"<id>"},{"type":"lost","leadId":"<id>","reason":"..."},{"type":"quote","leadId":"<id>"},{"type":"schedule","question":"...","cadence":"once|daily|weekdays|weekly","weekday":1,"timeOfDay":"HH:MM","onDate":"YYYY-MM-DD"},{"type":"watch","kind":"quote_viewed|quote_unsigned|lead_quiet|test_drive_no_follow_up|delivery_deposit_due","quoteId":"Q-1042","leadId":"<id>","product":"<product>","thresholdHours":48,"thresholdDays":3}]',
+  "- Add a short \"reason\" (under 160 characters) on any proposal when you know why it helps — the card shows it so the person sees the point before confirming. Skip it when the title already says everything.",
   "- watch: when they say \"tell me when / let me know if\" something happens — quote_viewed (quoteId: the customer opens that quote), quote_unsigned (viewed but not signed after thresholdHours; one quoteId or all theirs), lead_quiet (no customer contact for thresholdDays; one leadId, or every open lead for a product), test_drive_no_follow_up (a test drive done thresholdHours ago with nothing planned next), delivery_deposit_due (delivery within thresholdHours and no deposit). Only the fields that kind uses. It only ever tells THEM — it never contacts a customer. Offer one yourself when it would help (\"I can tell you when Anna opens it\").",
   "- schedule: a question for you to answer on your own LATER or REPEATEDLY (\"every Monday at 7 tell me which deals went quiet\", \"Friday at 9, has Anna signed?\"). weekday (0 = Sunday … 6 = Saturday) only with weekly; onDate only with once. Schedules run on the hour or half past, so timeOfDay is always HH:00 or HH:30 — if they ask for 07:10, propose 07:00 and say it runs on the half hour. It runs later with no conversation, so the question must stand alone — name the customer or thing (\"Has Anna Jacobs signed her quote?\"), never \"her\" or \"that deal\". No leadId. A plain reminder to do something with a lead (\"remind me to call Anna Friday\") is a follow_up, not a schedule.",
   "- meeting / test_drive: check the calendar (schedule) and, for a test drive, the demo vehicle's bookings (vehicles kind demo) BEFORE proposing — never a slot that clashes. vehicle is the demo vehicle's name exactly as listed. reschedule / cancel_activity need an activity id from the results.",
@@ -161,7 +166,7 @@ export function splitChoices(reply: string): { answer: string; choices: string[]
  * Only the field the card changes is compared: a lead touched in some other
  * way (a note, being opened) doesn't make "give it to Donovan" wrong.
  */
-type LeadCard = { id: string; leadId: string; leadLabel: string; title: string };
+type LeadCard = { id: string; leadId: string; leadLabel: string; title: string; reason?: string };
 export const STALE_CARD = "This changed since DAX suggested it — ask again to see where it stands now.";
 export type ActionCard =
   | (LeadCard & { kind: "follow_up"; when: string; activity: string; summary?: string })
@@ -173,7 +178,7 @@ export type ActionCard =
   | (LeadCard & { kind: "test_drive"; contactId: string; demoVehicleId: string; branch: string; start: string; end: string; detail: string })
   | (LeadCard & { kind: "lost"; reason: string })
   | (LeadCard & { kind: "quote" })
-  | { id: string; kind: "reschedule"; activityId: string; title: string; when: string; leadId: string | null; leadLabel: string; fromDue: string }
-  | { id: string; kind: "cancel_activity"; activityId: string; title: string; leadId: string | null; leadLabel: string; fromDue: string }
-  | { id: string; kind: "schedule"; title: string; question: string; cadence: Cadence; weekday?: number; timeOfDay: string; onDate?: string }
-  | { id: string; kind: "watch"; title: string; watch: WatchInput };
+  | { id: string; kind: "reschedule"; activityId: string; title: string; when: string; leadId: string | null; leadLabel: string; fromDue: string; reason?: string }
+  | { id: string; kind: "cancel_activity"; activityId: string; title: string; leadId: string | null; leadLabel: string; fromDue: string; reason?: string }
+  | { id: string; kind: "schedule"; title: string; question: string; cadence: Cadence; weekday?: number; timeOfDay: string; onDate?: string; reason?: string }
+  | { id: string; kind: "watch"; title: string; watch: WatchInput; reason?: string };
