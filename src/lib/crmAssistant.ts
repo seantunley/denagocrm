@@ -1675,9 +1675,18 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
   // so the plan can re-plan after seeing results; ordinary questions stay short.
   const complex = isComplexQuestion(question);
   const maxSteps = complex ? MAX_STEPS_COMPLEX : MAX_STEPS;
-  // Leave room for the answer step (60s) and overhead inside the 300s route limit.
+  // Leave room for the answer step and overhead inside the 300s route limit.
   // Complex research stops early rather than risking a timeout with no answer.
   const RESEARCH_BUDGET_MS = complex ? 180_000 : 90_000;
+  // Hard ceiling under the route's 300s, so a slow plan + retry + answer still finishes.
+  const HARD_DEADLINE_MS = 280_000;
+  const ANSWER_RESERVE_MS = 70_000;
+  const MIN_CALL_MS = 5_000;
+  const PLAN_MAX_MS = 45_000;
+  const ANSWER_MAX_MS = 60_000;
+  const elapsed = () => Date.now() - started;
+  // Time left for research after reserving the answer step.
+  const researchLeft = () => Math.min(RESEARCH_BUDGET_MS, HARD_DEADLINE_MS - ANSWER_RESERVE_MS) - elapsed();
   const observations: Observation[] = [];
   const progress = (status: string) => {
     try {
@@ -1715,10 +1724,17 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
     return { ok: true, answer: DEGRADED_NOTE, rows, tools: observations.map((o) => o.tool), learned: 0, actions: [], choices: [], saved: false };
   }
   // One research call, retried once on a passing ChatGPT fault (assistantBreaker).
-  const plan = (step: number, insist: boolean) =>
-    withRetry(breakerKey, () =>
-      codexRespond({ instructions, prompt: planPrompt(step, insist), images, reasoningEffort: complex ? "medium" : "low", timeoutMs: 45_000, cacheKey, preferModel: PLAN_MODEL }),
+  // Timeout is the remaining research budget, capped at PLAN_MAX_MS, so a single
+  // call (and its retry) cannot consume the answer reserve.
+  const plan = (step: number, insist: boolean) => {
+    const timeoutMs = Math.min(PLAN_MAX_MS, Math.max(0, researchLeft()));
+    if (timeoutMs < MIN_CALL_MS) {
+      return Promise.resolve({ error: "research budget spent", transient: false });
+    }
+    return withRetry(breakerKey, () =>
+      codexRespond({ instructions, prompt: planPrompt(step, insist), images, reasoningEffort: complex ? "medium" : "low", timeoutMs, cacheKey, preferModel: PLAN_MODEL }),
     );
+  };
   const planPrompt = (step: number, insist: boolean) =>
     [
       conversation,
@@ -1733,8 +1749,8 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
   const research = !(isSmallTalk(question) && !images.length) && !fast;
   if (fast) await runLookups(fast, 1);
   for (let step = 0; research && step < maxSteps && observations.length < MAX_LOOKUPS; step++) {
-    // Stop researching if the budget is spent — the answer step still runs with what we have.
-    if (Date.now() - started > RESEARCH_BUDGET_MS) break;
+    // Stop researching if the budget (or the answer reserve) is spent.
+    if (researchLeft() < MIN_CALL_MS) break;
     phase("planning");
     let reply = await plan(step, false);
     // Models sometimes answer in prose instead of choosing. Before anything has
@@ -1828,7 +1844,9 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
     // Low: measured on the 25-question eval (2026-10-05) — the reasoning is done
     // by the lookups; the answer step writes up what they found.
     reasoningEffort: "low",
-    timeoutMs: 60_000,
+    // Cap the answer by remaining time under the hard deadline so a slow
+    // research phase cannot push the whole request past the route limit.
+    timeoutMs: Math.min(ANSWER_MAX_MS, Math.max(MIN_CALL_MS, HARD_DEADLINE_MS - elapsed())),
     cacheKey,
     onText: onAnswerText ? streamVisible(onAnswerText) : undefined,
   }));
