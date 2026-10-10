@@ -419,7 +419,9 @@ test("validation describes the certificate that sealed the file, and checks that
   // document was sealed. Asking the certificate about its own notBefore cannot
   // answer no.
   assert.doesNotMatch(seal, /signer\.parsed\.validity\.notBefore\)/);
-  assert.match(worker, /sealedPdfSignature\(bytes, await sealValidationInstant\(job, artifact\)\)/);
+  // The call gained a third argument — the workspace's own certificate, for the
+  // fingerprint route of trust — and the instant it asks about is unchanged.
+  assert.match(worker, /sealedPdfSignature\(\s*bytes,\s*await sealValidationInstant\(job, artifact\),\s*workspaceIdentity \? sealCertificateInfo\(workspaceIdentity\) : null,\s*\)/);
   assert.match(worker, /verifyTimestampToken\(request\.timestampToken/);
   // Behaviour, not just shape: tests/sealedPdfSignature.test.ts seals a real PDF
   // and attacks it; tests/sealValidationInstant.test.ts asks the same seal at two

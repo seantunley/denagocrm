@@ -15,62 +15,66 @@ import {
   verifyAttributeSignature,
 } from "@/lib/signing/cms";
 import { verifyCertificatePath } from "@/lib/signing/x509Path";
+import { serverSealMaterial, temporarySealMaterial, type SealMaterial } from "@/lib/signing/sealMaterial";
 
 /**
  * Applies a PKCS#7 digital seal to the completed PDF. Strict production mode
  * refuses to sign unless the private artifact store, tenant enforcement and a
- * configured PKCS#12 identity are all present. A process-generated self-signed
- * identity is retained only for local/test compatibility and can never silently
- * become the production trust anchor.
+ * configured PKCS#12 identity are all present.
+ *
+ * WHICH certificate seals is the caller's to say: completion passes the
+ * workspace's own (signing/sealIdentity.ts). With none passed, this falls back
+ * to the server's certificate, and — outside strict mode — to a temporary one
+ * made in memory. That last fallback is for a laptop and a test run; it sealed a
+ * customer's contract on live, unnoticed, when the environment certificate went
+ * missing, which is why completion no longer relies on it.
  */
 
-const DEVELOPMENT_PASSPHRASE = "denago-development-only";
-
-type SignerMaterial = { p12: Buffer; passphrase: string; trusted: boolean };
-
-function getSigner(): SignerMaterial {
-  const b64 = process.env.BUILDER_SIGN_P12_BASE64;
-  const pass = process.env.BUILDER_SIGN_P12_PASSPHRASE;
-  if (b64 && pass) return { p12: Buffer.from(b64, "base64"), passphrase: pass, trusted: true };
+/** The certificate available without a database: the server's, else a temporary one. */
+function getSigner(): SealMaterial {
+  const server = serverSealMaterial();
+  if (server) return server;
   if (signingSecurityMode() === "strict") {
     // assertSigningRuntimeReady gives the operator the full configuration list.
     assertSigningRuntimeReady("PDF sealing");
     throw new Error("Trusted PDF signing identity is unavailable");
   }
-  return { p12: makeDevelopmentP12(), passphrase: DEVELOPMENT_PASSPHRASE, trusted: false };
+  return temporarySealMaterial();
 }
 
-let developmentCache: Buffer | null = null;
-
-function makeDevelopmentP12(): Buffer {
-  if (developmentCache) return developmentCache;
-  const keys = forge.pki.rsa.generateKeyPair(2048);
-  const cert = forge.pki.createCertificate();
-  cert.publicKey = keys.publicKey;
-  cert.serialNumber = "01";
-  cert.validity.notBefore = new Date();
-  cert.validity.notAfter = new Date();
-  cert.validity.notAfter.setFullYear(cert.validity.notBefore.getFullYear() + 1);
-  const attrs = [
-    { name: "commonName", value: "Denago Development Seal" },
-    { name: "organizationName", value: "Development" },
-    { name: "countryName", value: "ZA" },
-  ];
-  cert.setSubject(attrs);
-  cert.setIssuer(attrs);
-  cert.sign(keys.privateKey, forge.md.sha256.create());
-  const asn1 = forge.pkcs12.toPkcs12Asn1(keys.privateKey, [cert], DEVELOPMENT_PASSPHRASE, { algorithm: "3des" });
-  developmentCache = Buffer.from(forge.asn1.toDer(asn1).getBytes(), "binary");
-  return developmentCache;
-}
-
-function certificateFrom(material: SignerMaterial): forge.pki.Certificate {
+function certificateFrom(material: SealMaterial): forge.pki.Certificate {
   const asn1 = forge.asn1.fromDer(material.p12.toString("binary"));
   const store = forge.pkcs12.pkcs12FromAsn1(asn1, material.passphrase);
   const bags = store.getBags({ bagType: forge.pki.oids.certBag });
   const cert = bags[forge.pki.oids.certBag]?.[0]?.cert;
   if (!cert) throw new Error("The PKCS#12 signing identity contains no certificate");
   return cert;
+}
+
+/**
+ * A certificate's subject or issuer as a person reads it: "CN=…, O=…".
+ *
+ * forge hands back a UTF8String attribute as its raw BYTES — one character per
+ * byte — so a name with anything outside ASCII read as "SociÃ©tÃ©". Modern
+ * certificates use UTF8String for every name, so that was any certificate whose
+ * holder is not spelled in plain English letters. The string type is on the
+ * attribute; decode when it says UTF-8, and leave a value alone when its bytes
+ * turn out not to be.
+ */
+function distinguishedName(attrs: forge.pki.CertificateField[]): string {
+  return attrs
+    .map((attr) => {
+      let value = String(attr.value ?? "");
+      if ((attr.valueTagClass as unknown) === forge.asn1.Type.UTF8) {
+        try {
+          value = forge.util.decodeUtf8(value);
+        } catch {
+          // Not valid UTF-8 after all: show what is there rather than nothing.
+        }
+      }
+      return `${attr.shortName || attr.name}=${value}`;
+    })
+    .join(", ");
 }
 
 export type SigningCertificateInfo = {
@@ -84,15 +88,17 @@ export type SigningCertificateInfo = {
 };
 
 export function configuredSigningCertificateInfo(): SigningCertificateInfo {
-  const material = getSigner();
+  return sealCertificateInfo(getSigner());
+}
+
+/** Who a given certificate is, read out of its PKCS#12. */
+export function sealCertificateInfo(material: SealMaterial): SigningCertificateInfo {
   const cert = certificateFrom(material);
   const der = Buffer.from(forge.asn1.toDer(forge.pki.certificateToAsn1(cert)).getBytes(), "binary");
-  const name = (attrs: forge.pki.CertificateField[]) =>
-    attrs.map((attr) => `${attr.shortName || attr.name}=${attr.value}`).join(", ");
   return {
     fingerprintSha256: crypto.createHash("sha256").update(der).digest("hex"),
-    subject: name(cert.subject.attributes),
-    issuer: name(cert.issuer.attributes),
+    subject: distinguishedName(cert.subject.attributes),
+    issuer: distinguishedName(cert.issuer.attributes),
     serialNumber: cert.serialNumber,
     validFrom: cert.validity.notBefore.toISOString(),
     validTo: cert.validity.notAfter.toISOString(),
@@ -129,7 +135,9 @@ function assertConfiguredCertificateInDate(): void {
 
 export async function sealPdf(
   pdfBuffer: Buffer,
-  meta: { reason: string; name: string; location?: string; contactInfo?: string }
+  meta: { reason: string; name: string; location?: string; contactInfo?: string },
+  /** The certificate to seal with — the workspace's own. Omitted: the server's, else a temporary one. */
+  material?: SealMaterial,
 ): Promise<Buffer> {
   if (signingSecurityMode() === "strict") {
     assertSigningRuntimeReady("PDF sealing");
@@ -142,7 +150,7 @@ export async function sealPdf(
     name: meta.name,
     location: meta.location ?? "",
   });
-  const { p12, passphrase } = getSigner();
+  const { p12, passphrase } = material ?? getSigner();
   const signer = new P12Signer(p12, { passphrase });
   return new SignPdf().sign(withPlaceholder, signer);
 }
@@ -239,7 +247,16 @@ function sealParts(pdf: Buffer): SealParts | null {
  * Returns null when the file carries no recognisable signature, which the caller
  * records as an error rather than silently substituting today's configuration.
  */
-export function sealedPdfSignature(pdf: Buffer, at: Date): SealedPdfSignature | null {
+export function sealedPdfSignature(
+  pdf: Buffer,
+  at: Date,
+  /**
+   * The identity this document's WORKSPACE is configured to seal with
+   * (sealIdentity.ts → configuredSealIdentity), for the fingerprint route of
+   * trust. Omitted, the server's own certificate is compared instead.
+   */
+  configured?: SigningCertificateInfo | null,
+): SealedPdfSignature | null {
   let parts: ReturnType<typeof sealParts>;
   try {
     parts = sealParts(pdf);
@@ -259,12 +276,10 @@ export function sealedPdfSignature(pdf: Buffer, at: Date): SealedPdfSignature | 
   const signer = resolveSigner(signerInfo, certs);
   if (!signer) return null;
 
-  const name = (attrs: forge.pki.CertificateField[]) =>
-    attrs.map((attr) => `${attr.shortName || attr.name}=${attr.value}`).join(", ");
   const certificate: SigningCertificateInfo = {
     fingerprintSha256: crypto.createHash("sha256").update(signer.der).digest("hex"),
-    subject: name(signer.parsed.subject.attributes),
-    issuer: name(signer.parsed.issuer.attributes),
+    subject: distinguishedName(signer.parsed.subject.attributes),
+    issuer: distinguishedName(signer.parsed.issuer.attributes),
     serialNumber: signer.parsed.serialNumber,
     validFrom: signer.parsed.validity.notBefore.toISOString(),
     validTo: signer.parsed.validity.notAfter.toISOString(),
@@ -302,7 +317,7 @@ export function sealedPdfSignature(pdf: Buffer, at: Date): SealedPdfSignature | 
 
   // `at` is the instant the document was actually sealed. Asking the certificate
   // whether it was valid at its own notBefore is a question that answers itself.
-  const trust = sealedPdfTrust(signer.der, certs.map((candidate) => candidate.der), at);
+  const trust = sealedPdfTrust(signer.der, certs.map((candidate) => candidate.der), at, configured);
   return {
     certificate: { ...certificate, trusted: trust.trusted },
     contentVerified: true,
@@ -327,12 +342,20 @@ export function sealedPdfSignature(pdf: Buffer, at: Date): SealedPdfSignature | 
  * system can vouch for them any more — and it is why a certificate that chains
  * to a public root is the better choice for anything that must outlive its key.
  */
-function sealedPdfTrust(signerDer: Buffer, poolDer: Buffer[], at: Date): { trusted: boolean; reason: string | null } {
+function sealedPdfTrust(
+  signerDer: Buffer,
+  poolDer: Buffer[],
+  at: Date,
+  workspaceIdentity?: SigningCertificateInfo | null,
+): { trusted: boolean; reason: string | null } {
   const path = verifyCertificatePath({ leafDer: signerDer, poolDer, at });
   if (path.ok) return { trusted: true, reason: null };
 
   try {
-    const configured = configuredSigningCertificateInfo();
+    // The workspace's own certificate when the caller knows it; the server's
+    // otherwise. A temporary certificate is never "the configured identity" —
+    // its `trusted` is false, so the comparison below cannot pass for it.
+    const configured = workspaceIdentity ?? configuredSigningCertificateInfo();
     const fingerprint = crypto.createHash("sha256").update(signerDer).digest("hex");
     if (configured.trusted && configured.fingerprintSha256 === fingerprint) {
       // BEING the configured identity is not a licence to be out of date. An
