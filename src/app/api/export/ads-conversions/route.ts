@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import { getCurrentUser } from "@/lib/auth";
 import { hasPermission } from "@/lib/permissions";
+import { withActingStaffScope } from "@/lib/actingScope";
 import { logAudit } from "@/lib/audit";
 import { csvRow } from "@/lib/csv";
 import { leadAttribution } from "@/lib/attribution";
@@ -19,6 +20,11 @@ import { leadAttribution } from "@/lib/attribution";
  * different upload template, and are rare enough here to skip.
  */
 export async function GET(req: NextRequest) {
+  // Bound to the acting workspace — a route handler has nothing above it that does (see withActingStaffScope).
+  return withActingStaffScope(() => handleGet(req));
+}
+
+async function handleGet(req: NextRequest) {
   // This exports every won lead's Google Click ID + deal value — commercially
   // sensitive attribution data. Gate to owner or reports.view_all; hasPermission
   // already returns true for owners.

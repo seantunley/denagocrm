@@ -99,7 +99,13 @@ function assertDisposableDatabase(): void {
   }
 }
 
-type Fixture = { tenantId: string; userId: string; cookie: string };
+type Fixture = {
+  tenantId: string;
+  userId: string;
+  cookie: string;
+  /** Staff who are NOT owners: one whose role grants `library.view`, one with no role at all. */
+  staff: { roleId: string; grantedUserId: string; grantedCookie: string; bareUserId: string; bareCookie: string };
+};
 
 /**
  * A tenant, an OWNER in it, and the session cookie a browser would hold.
@@ -133,7 +139,38 @@ async function seedFixture(): Promise<Fixture> {
     60,
     { tid: tenantId },
   );
-  return { tenantId, userId: user.id, cookie };
+
+  // Two members who are not owners. Owners skip the permission lookup entirely,
+  // so an owner can never show whether that lookup finds the workspace it needs.
+  const member = async (label: string) => {
+    const created = await basePrisma.user.create({
+      data: {
+        name: `Render Probe ${label}`,
+        email: `render-probe-${label.toLowerCase()}-${SFX}@example.test`,
+        passwordHash: "not-a-real-hash-this-session-is-minted-directly",
+        role: "member",
+      },
+    });
+    await basePrisma.tenantMember.create({ data: { tenantId, userId: created.id } });
+    const session = await signFreshSession(
+      { id: created.id, name: created.name, email: created.email, role: created.role, grants: "", sessionVersion: 0 },
+      60,
+      { tid: tenantId },
+    );
+    return { id: created.id, cookie: session };
+  };
+  const granted = await member("Librarian");
+  const bare = await member("Bystander");
+  const role = await basePrisma.role.create({ data: { name: `Render Probe role ${SFX}`, tenantId } });
+  await basePrisma.rolePermission.create({ data: { roleId: role.id, permissionKey: "library.view", tenantId } });
+  await basePrisma.userRole.create({ data: { userId: granted.id, roleId: role.id, tenantId } });
+
+  return {
+    tenantId,
+    userId: user.id,
+    cookie,
+    staff: { roleId: role.id, grantedUserId: granted.id, grantedCookie: granted.cookie, bareUserId: bare.id, bareCookie: bare.cookie },
+  };
 }
 
 async function cleanup(fx: Fixture | null): Promise<void> {
@@ -141,7 +178,11 @@ async function cleanup(fx: Fixture | null): Promise<void> {
   // Narrow and ordered — children before parents. Best-effort: a failed cleanup
   // must not turn a passing test red, and the database is disposable anyway.
   await basePrisma.errorLog.deleteMany({ where: { tenantId: fx.tenantId } }).catch(() => {});
+  await basePrisma.userRole.deleteMany({ where: { tenantId: fx.tenantId } }).catch(() => {});
+  await basePrisma.rolePermission.deleteMany({ where: { tenantId: fx.tenantId } }).catch(() => {});
+  await basePrisma.role.deleteMany({ where: { tenantId: fx.tenantId } }).catch(() => {});
   await basePrisma.tenantMember.deleteMany({ where: { tenantId: fx.tenantId } }).catch(() => {});
+  await basePrisma.user.deleteMany({ where: { id: { in: [fx.staff.grantedUserId, fx.staff.bareUserId] } } }).catch(() => {});
   await basePrisma.user.delete({ where: { id: fx.userId } }).catch(() => {});
   await basePrisma.tenant.delete({ where: { id: fx.tenantId } }).catch(() => {});
 }
@@ -454,6 +495,37 @@ async function main(): Promise<void> {
           "above may have passed against a page that never rendered the authenticated layout",
       );
     }
+
+    // ── A ROUTE HANDLER, AS STAFF WHO ARE NOT OWNERS ──────────────────────────
+    //
+    // Everything above is a page, as an owner. A route handler has no layout
+    // above it to establish the workspace, and the permission lookup counts a
+    // role only in the workspace being acted in — so a handler that asks
+    // `hasPermission(user, …)` without binding one looked the user's roles up in
+    // no workspace and refused everybody who was not an owner. Eleven handlers
+    // did, the document download among them, and nothing here could see it: the
+    // only user this test had was an owner, who skips the lookup.
+    //
+    // A made-up id, so nothing has to exist to be served: past the permission
+    // check the route answers 404, and refused by it, 403. The owner is the
+    // control that the route works at all; the member with no role is the
+    // control that passing is not the same as being open.
+    const libraryFile = (session: string) =>
+      fetch(`${BASE}/api/library/does-not-exist`, {
+        headers: { cookie: `${SESSION_COOKIE}=${session}` },
+        redirect: "manual",
+        signal: AbortSignal.timeout(30_000),
+      }).then((response) => response.status);
+    const [asOwner, asGranted, asBare] = [await libraryFile(fx.cookie), await libraryFile(fx.staff.grantedCookie), await libraryFile(fx.staff.bareCookie)];
+    check("a route handler lets the owner past its permission check", asOwner === 404, `status ${asOwner} (404 = past the check, nothing to serve)`);
+    check(
+      "…and a member whose role grants the permission",
+      asGranted === 404,
+      `status ${asGranted}. 403 means the handler read the member's roles in NO workspace and found none: ` +
+        `it checked permissions without binding the acting workspace (withActingStaffScope). ` +
+        `Owners skip that lookup, so only a non-owner shows it.`,
+    );
+    check("…but not a member whose role does not", asBare === 403, `status ${asBare} — the route must still refuse someone without the permission`);
   } finally {
     if (server) {
       killTree(server);

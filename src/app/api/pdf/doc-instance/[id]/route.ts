@@ -1,5 +1,6 @@
 import { getCurrentUser } from "@/lib/auth";
 import { hasAnyPermission } from "@/lib/permissions";
+import { withActingStaffScope } from "@/lib/actingScope";
 import { prisma } from "@/lib/db";
 import { parseDocument } from "@/lib/doceditor/model";
 import { renderModelToPdf } from "@/lib/doceditor/generate";
@@ -15,7 +16,12 @@ export const maxDuration = 60;
  * as opening it: document view permissions plus every linked record; a
  * forbidden document is indistinguishable from a missing one.
  */
-export async function GET(_request: Request, context: { params: Promise<{ id: string }> }) {
+/** Bound to the acting workspace — a route handler has nothing above it that does (see withActingStaffScope). */
+export async function GET(request: Request, context: { params: Promise<{ id: string }> }) {
+  return withActingStaffScope(() => handleGet(request, context));
+}
+
+async function handleGet(_request: Request, context: { params: Promise<{ id: string }> }) {
   const user = await getCurrentUser();
   if (!user) return new Response("Unauthorized", { status: 401 });
   if (!(await hasAnyPermission(user, "documents.view_all", "documents.view_owned", "documents.manage"))) {
