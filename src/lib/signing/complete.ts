@@ -274,7 +274,7 @@ export async function completeSignatureRequest(requestId: string): Promise<void>
   // The sealed PDF renders the snapshot, whose showcase vehicle was frozen at
   // send time — never the live Product. A request about something other than a
   // quote or job card renders from the values frozen with it (contextJson).
-  const ctx = await bindCtx(req.quoteId, req.jobCardId, undefined, { liveVehicle: false, context: req.contextJson });
+  const ctx = await bindCtx(req.quoteId, req.jobCardId, undefined, { liveVehicle: false, context: req.contextJson, tenantId: req.tenantId });
 
   const evidence = signedEvidence(await prisma.signatureEvent.findMany({
     where: { requestId, type: "signed" },
@@ -469,9 +469,9 @@ export async function completeSignatureRequest(requestId: string): Promise<void>
           if (!jc || jc.deletedAt || !jc.signedAt) throw new SourceCompletionLost();
         }
       } else {
-        // In the same transaction for the same reason: the booking must not be
-        // left reading "pending" beside a completed, sealed indemnity.
-        subjectSigned = await completeSubject(tx, req);
+        // In the same transaction for the same reason: a booking must not be left
+        // reading "pending" beside a completed, sealed indemnity.
+        subjectSigned = await completeSubject(tx, req, document?.id ?? null);
       }
     });
   } catch (err) {

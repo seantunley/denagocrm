@@ -49,8 +49,9 @@ function fn(code: string, name: string): string {
 test("both delivery buttons call the ONE shared deliver function", () => {
   assert.match(fn(fulfilment, "markDelivered"), /return deliverQuote\(\{/, "Deliveries board → deliverQuote");
   assert.match(fn(stock, "deliverStockUnit"), /return deliverQuote\(\{/, "stock page → deliverQuote");
-  // The guided handover reaches it through markDelivered.
-  assert.match(src("src/app/actions/guidedDelivery.ts"), /return markDelivered\(quoteId, formData, signedRunIds\)/);
+  // The guided handover reaches it through markDelivered too — the same action,
+  // not one of its own.
+  assert.match(src("src/components/checklists/GuidedDeliveryCompletion.tsx"), /action=\{markDelivered\.bind\(null, quoteId\)\}/);
 });
 
 test("neither entry point keeps a private copy of the delivery", () => {
@@ -66,13 +67,48 @@ test("neither entry point keeps a private copy of the delivery", () => {
 
 test("the delivery marks the quote delivered AND moves every allocated unit to delivered, in one transaction", () => {
   const body = fn(delivery, "deliverQuote");
-  const tx = body.slice(body.indexOf("prisma.$transaction("));
-  assert.ok(body.includes("prisma.$transaction("), "quote, stock and vehicles commit together");
-  assert.match(tx, /tx\.quote\.updateMany\(\{\s*where: \{ id: quoteId, tenantId, deliveredAt: null \},\s*data: \{ deliveredAt,/);
-  assert.match(tx, /tx\.stockUnit\.updateMany\(\{\s*where: \{ id: unit\.id, status: DELIVERABLE_STATUS, deletedAt: null \},\s*data: \{\s*status: "delivered"/);
+  const tx = body.slice(body.indexOf("basePrisma.$transaction("));
+  assert.ok(body.includes("basePrisma.$transaction("), "quote, stock and vehicles commit together");
+  assert.match(tx, /tx\.quote\.updateMany\(\{\s*where: \{ id: quoteId, tenantId, deliveredAt: null, deletedAt: null \},\s*data: \{ deliveredAt,/);
+  assert.match(tx, /tx\.stockUnit\.updateMany\(\{\s*where: \{ id: unit\.id, tenantId, status: DELIVERABLE_STATUS, deletedAt: null \},\s*data: \{\s*status: "delivered"/);
   // Every unit allocated to the quote is handed over — none is left "allocated".
   assert.match(body, /stockUnit\.findMany\(\{\s*where: \{ soldQuoteId: quoteId, tenantId, deletedAt: null \}/);
   assert.match(body, /const outstanding = units\.filter\(\(unit\) => !\(DELIVERED_STOCK_STATUSES/);
+});
+
+/*
+ * "ONE TRANSACTION" HAS TO BE ONE.
+ *
+ * It was `prisma.$transaction`, and the scoped client wraps every operation —
+ * on a `tx` handle as much as anywhere — in a transaction of its own
+ * (lib/db.ts → withRlsScope). Each statement committed as it ran: a refusal
+ * further down left the quote delivered with its stock still allocated, and a
+ * row lock was gone before the next statement. Nothing here could see that —
+ * the tests around this one read source and drive fakes. The real-database
+ * test did (scripts/test-delivery-note-signing.ts: a delivery it had just been
+ * refused was delivered).
+ *
+ * basePrisma's interactive transaction runs on the raw connection. The price is
+ * that nothing scopes or stamps inside it, so every statement says so itself.
+ */
+test("the delivery's transaction is a real one, and says for itself what the scoped client used to add", () => {
+  const body = fn(delivery, "deliverQuote");
+  assert.match(body, /\(evidence, documents\) => basePrisma\.\$transaction\(async \(tx\) => \{/);
+  assert.equal((strip(body).match(/\$transaction\(/g) ?? []).length, 1, "and it is the only one");
+  const tx = strip(body.slice(body.indexOf("basePrisma.$transaction("), body.indexOf("const actor = {")));
+  // Every model statement on the raw transaction names the tenant…
+  const statements = tx.match(/tx\.\w+\.\w+\(\{[\s\S]*?\}\)/g) ?? [];
+  assert.ok(statements.length >= 5, `expected the quote, document, stock and vehicle statements, found ${statements.length}`);
+  for (const statement of statements) assert.match(statement, /tenantId/, `no tenant named in: ${statement.slice(0, 80)}`);
+  // …every update of a soft-deleted model refuses a trashed row…
+  for (const statement of statements.filter((s) => /\.(updateMany|count)\(/.test(s))) {
+    assert.match(statement, /deletedAt: null/, `a trashed row could match: ${statement.slice(0, 80)}`);
+  }
+  // …and the vehicle it creates is stamped, or RLS would hide it from its own workspace.
+  assert.match(tx, /tx\.vehicle\.create\(\{\s*data: \{\s*tenantId,/);
+  // Nothing inside reaches for another connection: a statement on the scoped
+  // client here would wait on this transaction's own locks.
+  assert.doesNotMatch(tx, /(^|[^a-zA-Z.])prisma\./, "only `tx` inside the transaction");
 });
 
 /* ── a cart that is not ready blocks the WHOLE delivery ──────────────────── */
@@ -96,7 +132,7 @@ test("the readiness gate runs before ANY write, and the transaction re-checks it
   const gate = body.indexOf("refuse(notReadyMessage(quote.number, notReady))");
   assert.notEqual(gate, -1, "deliverQuote must refuse on a not-ready cart");
   assert.match(body, /const notReady = outstanding\.filter\(\(unit\) => unit\.status !== DELIVERABLE_STATUS\);/);
-  for (const write of ["input.collectEvidence(", "prisma.$transaction(", "tx.quote.updateMany(", "tx.vehicle.create("]) {
+  for (const write of ["input.collectEvidence(", "basePrisma.$transaction(", "tx.quote.updateMany(", "tx.vehicle.create("]) {
     const at = body.indexOf(write);
     assert.ok(at > gate, `${write} must come after the readiness gate — a refusal must leave nothing behind`);
   }
@@ -142,18 +178,18 @@ test("a VIN on another customer refuses the WHOLE delivery before any write", ()
   assert.match(body, /select: \{ id: true, contactId: true \}/, "the owner is read with the match");
   const gate = body.indexOf('if (match === "conflict") refuse(vinConflictMessage(unit.serial));');
   assert.notEqual(gate, -1, "a conflicting owner must refuse");
-  for (const write of ["input.collectEvidence(", "prisma.$transaction(", "tx.quote.updateMany(", "tx.stockUnit.updateMany(", "tx.vehicle.create("]) {
+  for (const write of ["input.collectEvidence(", "basePrisma.$transaction(", "tx.quote.updateMany(", "tx.stockUnit.updateMany(", "tx.vehicle.create("]) {
     assert.ok(body.indexOf(write) > gate, `${write} must come after the ownership check`);
   }
 });
 
 test("ownership is re-proved inside the transaction; an unowned vehicle is attached conditionally and audited", () => {
   const body = fn(delivery, "deliverQuote");
-  const tx = body.slice(body.indexOf("prisma.$transaction("));
+  const tx = body.slice(body.indexOf("basePrisma.$transaction("));
   // Reuse: still this customer's at commit time, or the lot rolls back.
-  assert.match(tx, /tx\.vehicle\.count\(\{ where: \{ id: existing\.id, contactId: contact!\.id \} \}\)/);
+  assert.match(tx, /tx\.vehicle\.count\(\{ where: \{ id: existing\.id, tenantId, contactId: contact!\.id, deletedAt: null \} \}\)/);
   // Attach: only if the owner is still the one read — never overwrites a real owner.
-  assert.match(tx, /tx\.vehicle\.updateMany\(\{\s*where: \{ id: existing\.id, contactId: existing\.contactId \},\s*data: \{ contactId: contact!\.id \}/);
+  assert.match(tx, /tx\.vehicle\.updateMany\(\{\s*where: \{ id: existing\.id, tenantId, contactId: existing\.contactId, deletedAt: null \},\s*data: \{ contactId: contact!\.id \}/);
   assert.match(tx, /if \(owned\.count !== 1\) refuse\(vinConflictMessage\(/);
   assert.match(body, /action: "vehicle\.owner_attached"/);
   // No other path writes a vehicle's owner.
@@ -399,7 +435,7 @@ test("the delivery files its evidence through staging: rows in the transaction, 
     /\.(create|createMany|update|updateMany|upsert|delete|deleteMany)\(|logAudit\(|addStockEvent\(|emitLeadJourneyEvent\(|saveFile\(|\$transaction\(/,
     "no write, upload, audit, timeline or journey event before the staged commit",
   );
-  const tx = body.slice(body.indexOf("prisma.$transaction("));
+  const tx = body.slice(body.indexOf("basePrisma.$transaction("));
   assert.match(tx, /for \(const document of documents\) \{\s*await tx\.document\.create\(/, "Document rows are created inside the transaction");
   assert.doesNotMatch(strip(body), /prisma\.document\.create\(/, "never outside it");
   assert.match(body, /remove: deleteFile,/, "cleanup reuses the storage delete helper");

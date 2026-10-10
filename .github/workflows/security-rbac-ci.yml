@@ -459,6 +459,25 @@ jobs:
       - name: Signing -- an in-person signature actually submits
         run: npm run test:in-person-signing
 
+      # The customer signs the delivery note itself now, and the delivery is
+      # recorded against what that note froze. Only a real database shows the
+      # two halves agree: that signing the note delivers nothing, that the
+      # delivery takes who, which checklist runs and whose signature from the
+      # signed note and from nowhere else, and that a guided handover is refused
+      # without one.
+      #
+      # And it is what found that the delivery's "one transaction" was not one.
+      # The scoped client commits each statement on a `tx` handle as it runs, so
+      # a refusal part-way left the quote delivered; every source test and every
+      # fake was green. This drives the real thing: a note opened, or signed,
+      # while a delivery is being completed must leave NOTHING delivered.
+      #
+      # The harness tsconfig, because the delivery calls revalidatePath. After
+      # the step above for the same reason it is late: signing evidence is
+      # append-only, so these rows stay behind too.
+      - name: Signing -- a delivery is recorded against the note the customer signed, or not at all
+        run: npm run test:delivery-note-signing
+
   # -- LANE 3: migrating a database that already has data ----------------------
   #
   # Its own job and its own scratch database, so its four minutes overlap the
