@@ -5,12 +5,14 @@ import { parseDocument } from "@/lib/doceditor/model";
 import { renderDocumentHtml, type StampField } from "@/lib/doceditor/serialize";
 import { htmlToPdf } from "@/lib/customDocs";
 import { sealPdf } from "@/lib/pdf/seal";
+import { sealIdentityFor } from "./sealIdentity";
 import { getCompanyProfile } from "@/lib/companyProfile";
 import { saveFile, readFile, deleteFile } from "@/lib/storage";
 import { DEFAULT_REGIONAL, formatDateTime, type Regional } from "@/lib/format";
 import { logError } from "@/lib/errorLog";
 import { resolveTenantActor } from "@/lib/tenantActor";
 import { bindCtx, logoDataUri } from "./render";
+import { afterSubjectSigned, completeSubject, lockSubject } from "./subjectCompletion";
 import { embedDocImages } from "@/lib/doceditor/renderGlobals";
 import { buildSignEvent, logSignEvent } from "./events";
 import { CLOSED_REQUEST_STATUSES, isRequestClosed } from "./status";
@@ -49,7 +51,30 @@ type RecipientRow = {
   name: string; role: string; signedAt: Date | null; signerIp: string | null; img: string | null;
   /** How this signer was proved to be the intended recipient, if at all. */
   identityMethod: string | null; identityVerifiedAt: Date | null;
+  /** The member of staff who watched them sign, when it was signed in person. */
+  witnessName: string | null;
+  /** The consent wording they ticked, as recorded with the signature. */
+  consentText: string | null;
 };
+
+/**
+ * What each signer's own `signed` event recorded beside the signature: who
+ * witnessed it, and the words they agreed to. Read from the evidence chain, the
+ * one place neither can be restated after the fact. Older signatures recorded
+ * neither, and the certificate then simply does not claim them.
+ */
+function signedEvidence(events: { recipientId: string | null; metadata: unknown }[]): Map<string, { witnessName: string | null; consentText: string | null }> {
+  const out = new Map<string, { witnessName: string | null; consentText: string | null }>();
+  for (const event of events) {
+    if (!event.recipientId || !event.metadata || typeof event.metadata !== "object") continue;
+    const meta = event.metadata as { witness?: { name?: unknown }; consent?: { text?: unknown } };
+    out.set(event.recipientId, {
+      witnessName: typeof meta.witness?.name === "string" ? meta.witness.name : null,
+      consentText: typeof meta.consent?.text === "string" ? meta.consent.text : null,
+    });
+  }
+  return out;
+}
 
 /**
  * What the certificate is allowed to claim about a signer's identity.
@@ -63,6 +88,16 @@ type RecipientRow = {
 type CertTime = Pick<Regional, "locale" | "timeZone">;
 
 function identityStatement(row: RecipientRow, r: CertTime): string {
+  if (row.identityMethod === "in_person") {
+    // Named only when the evidence names them; never a witness the record cannot show.
+    return row.witnessName
+      ? `Signed in person, in the presence of ${row.witnessName}`
+      : "Signed in person, in the presence of a member of staff";
+  }
+  if (row.identityMethod === "staff_session") {
+    // A countersignature (countersign.ts). It was never "a link sent to this recipient".
+    return "Signed by a member of staff while signed in to their own account";
+  }
   if (row.identityMethod === "email_otp") {
     return `Identity verified by one-time code sent to the email address on file${
       row.identityVerifiedAt ? ` at ${formatDateTime(row.identityVerifiedAt, r)}` : ""}`;
@@ -81,6 +116,7 @@ function certificateHtml(title: string, requestId: string, rows: RecipientRow[],
       ${row.img ? `<img src="${row.img}" style="height:56px;margin:8px 0"/>` : `<div style="color:#94a3b8;font-size:9pt;margin:8px 0">(accepted without drawn signature)</div>`}
       <div style="font-size:8.5pt;color:#64748b">Signed ${row.signedAt ? esc(formatDateTime(row.signedAt, r)) : "—"}${row.signerIp ? ` · IP ${esc(row.signerIp)}` : ""}</div>
       <div style="font-size:8.5pt;color:#64748b">${esc(identityStatement(row, r))}</div>
+      ${row.consentText ? `<div style="font-size:8.5pt;color:#64748b">Agreed to: “${esc(row.consentText)}”</div>` : ""}
     </div>`).join("");
   return `<div style="page-break-before:always;padding-top:6px">
     <h1 style="font-size:18pt;color:#020617;margin:0 0 4px">Certificate of Completion</h1>
@@ -253,12 +289,23 @@ export async function completeSignatureRequest(requestId: string): Promise<void>
   }
 
   // The sealed PDF renders the snapshot, whose showcase vehicle was frozen at
-  // send time — never the live Product.
-  const ctx = await bindCtx(req.quoteId, req.jobCardId, undefined, { liveVehicle: false });
+  // send time — never the live Product. A request about something other than a
+  // quote or job card renders from the values frozen with it (contextJson).
+  const ctx = await bindCtx(req.quoteId, req.jobCardId, undefined, { liveVehicle: false, context: req.contextJson, tenantId: req.tenantId });
 
+  const evidence = signedEvidence(await prisma.signatureEvent.findMany({
+    where: { requestId, type: "signed" },
+    orderBy: { createdAt: "asc" },
+    select: { recipientId: true, metadata: true },
+  }));
   const rows: RecipientRow[] = [];
   for (const r of req.recipients.filter((x) => x.status === "signed")) {
-    rows.push({ name: r.signedName || r.name, role: r.role, signedAt: r.signedAt, signerIp: r.signerIp, img: await sigImg(r.signatureRef), identityMethod: r.identityMethod, identityVerifiedAt: r.identityVerifiedAt });
+    rows.push({
+      name: r.signedName || r.name, role: r.role, signedAt: r.signedAt, signerIp: r.signerIp, img: await sigImg(r.signatureRef),
+      identityMethod: r.identityMethod, identityVerifiedAt: r.identityVerifiedAt,
+      witnessName: evidence.get(r.id)?.witnessName ?? null,
+      consentText: evidence.get(r.id)?.consentText ?? null,
+    });
   }
 
   // Stamp each signed field into the document at the exact spot it was placed.
@@ -315,12 +362,20 @@ export async function completeSignatureRequest(requestId: string): Promise<void>
   // The seal names the workspace that sealed it — this was "Denago Cape Town"
   // on every tenant's signed contracts.
   const company = await getCompanyProfile(req.tenantId);
-  pdf = await sealPdf(pdf, {
-    reason: `Signed: ${req.title}`,
-    name: company.name,
-    contactInfo: company.email,
-    location: company.address,
-  });
+  // …and it is sealed with that workspace's OWN certificate, the same one for
+  // every document it completes (sealIdentity.ts). Leaving the choice to the
+  // sealer is how a customer's contract came to be sealed by a throwaway
+  // "development" certificate made when the server last restarted.
+  pdf = await sealPdf(
+    pdf,
+    {
+      reason: `Signed: ${req.title}`,
+      name: company.name,
+      contactInfo: company.email,
+      location: company.address,
+    },
+    await sealIdentityFor(req.tenantId),
+  );
   const hash = crypto.createHash("sha256").update(pdf).digest("hex");
 
   // Independent proof of WHEN, requested BEFORE the completion transaction so a
@@ -352,6 +407,7 @@ export async function completeSignatureRequest(requestId: string): Promise<void>
   // A lost claim rolls the Document row back; the blob is kept only once claimed.
   let documentId: string | null = null;
   let sourceSigned = false;
+  let subjectSigned = false;
   let wonLeadId: string | null = null;
   try {
     await prisma.$transaction(async (tx) => {
@@ -362,6 +418,8 @@ export async function completeSignatureRequest(requestId: string): Promise<void>
       // other needed). Locking the source row up front makes the order consistent.
       if (req.quoteId) await tx.$executeRaw`SELECT id FROM "Quote" WHERE id = ${req.quoteId} FOR UPDATE`;
       else if (req.jobCardId) await tx.$executeRaw`SELECT id FROM "JobCard" WHERE id = ${req.jobCardId} FOR UPDATE`;
+      // …or the record a request about neither is for (a test drive's booking).
+      else await lockSubject(tx, req);
       // Always created when an uploader exists (the normal path, and what makes
       // the signed contract findable); null only in the logged anomaly above,
       // where completing still beats stranding a signature.
@@ -436,6 +494,10 @@ export async function completeSignatureRequest(requestId: string): Promise<void>
           const jc = await tx.jobCard.findUnique({ where: { id: req.jobCardId }, select: { signedAt: true, deletedAt: true } });
           if (!jc || jc.deletedAt || !jc.signedAt) throw new SourceCompletionLost();
         }
+      } else {
+        // In the same transaction for the same reason: a booking must not be left
+        // reading "pending" beside a completed, sealed indemnity.
+        subjectSigned = await completeSubject(tx, req, document?.id ?? null);
       }
     });
   } catch (err) {
@@ -476,6 +538,12 @@ export async function completeSignatureRequest(requestId: string): Promise<void>
   // writes. Parent and children are created in one transaction, so the request's
   // own tenantId is exactly its recipients'.
   const tenantWhere = exactTenantWhere(req.tenantId);
+
+  // ponytail: best-effort, outside the recoverable fan-out below — a crash right
+  // here loses this one audit line (the booking is already marked, and the
+  // signature is on the customer's timeline). Move it into runPostCompletion if
+  // a subject ever has an effect that must not be lost.
+  if (subjectSigned) await afterSubjectSigned(req, signerName).catch(() => {});
 
   // External fan-out only (referral, automations, push, audit). The core source
   // state is already committed above; this never unwinds it — but it now REPORTS

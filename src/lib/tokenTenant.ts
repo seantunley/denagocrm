@@ -27,6 +27,33 @@ export async function resolveSignRecipientTenant(
   return { tenantId: row.tenantId };
 }
 
+/**
+ * The owning tenant of a signing link that may already be FINISHED.
+ *
+ * Only for telling the person holding it what became of their document — signed,
+ * declined, withdrawn, expired — and for sending their own signed copy to the
+ * address on file again. A revoked link used to resolve to nothing at all, so a
+ * customer who reopened it after signing met a bare "page not found" with no way
+ * to tell a finished document from a broken one.
+ *
+ * Nothing that can open, fill, sign or decline a document may use this: those
+ * routes keep resolveSignRecipientTenant, which fails closed on a revoked link.
+ *
+ * One route does hand a document back through it: the signed copy, to the
+ * browser that just signed (api/signing/[token]/signed). The link is not what
+ * authorises that — a pass cookie the sign route set is (signing/signedCopyPass.ts)
+ * — and without the pass a revoked link gets the same refusal there as anywhere.
+ */
+export async function resolveSignRecipientTenantForNotice(
+  token: string,
+): Promise<{ tenantId: string | null } | null> {
+  const row = await basePrisma.signatureRecipient.findUnique({
+    where: { token: hashSignToken(token) },
+    select: { tenantId: true },
+  });
+  return row ? { tenantId: row.tenantId } : null;
+}
+
 export async function resolveApprovalStepTenant(
   token: string,
 ): Promise<{ tenantId: string | null } | null> {

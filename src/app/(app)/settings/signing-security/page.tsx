@@ -1,9 +1,12 @@
 import Link from "next/link";
-import { ShieldCheck, Clock, BellOff } from "lucide-react";
+import { ShieldCheck, Clock, BellOff, Stamp } from "lucide-react";
 import { requireTenantOwner } from "@/lib/auth";
 import { SettingsWorkspace } from "@/components/settings-workspace";
 import { SETTINGS_NAV_GROUPS } from "@/lib/settings-navigation";
-import { readSigningSecuritySettings } from "@/app/actions/signingSecuritySettings";
+import { readSealCertificate, readSigningSecuritySettings } from "@/app/actions/signingSecuritySettings";
+import { getRegionalSettings } from "@/lib/settings";
+import { formatDate } from "@/lib/format";
+import { SealCertificateForm } from "./SealCertificateForm";
 import { readReadyMadeJourneys } from "@/app/actions/automationSettings";
 import { timestampAuthorityUrl, timestampingEnabled } from "@/lib/signing/timestamp";
 import { SigningSecurityForm } from "./SigningSecurityForm";
@@ -12,7 +15,12 @@ export const dynamic = "force-dynamic";
 
 export default async function SigningSecurityPage() {
   await requireTenantOwner();
-  const [settings, readyMade] = await Promise.all([readSigningSecuritySettings(), readReadyMadeJourneys()]);
+  const [settings, readyMade, seal, regional] = await Promise.all([
+    readSigningSecuritySettings(),
+    readReadyMadeJourneys(),
+    readSealCertificate(),
+    getRegionalSettings(),
+  ]);
   const signingReminder = readyMade.rows.find((row) => row.key === "signing-reminders");
   const tsaOn = timestampingEnabled();
   const tsaUrl = timestampAuthorityUrl();
@@ -61,6 +69,70 @@ export default async function SigningSecurityPage() {
             <Link href="/journeys" className="text-primary underline">
               Switch it on or off, or change when it sends, in Journeys
             </Link>
+          </p>
+        </section>
+
+        <section className="card p-5">
+          <h2 className="flex items-center gap-2 font-semibold">
+            <Stamp className="size-4 text-orange-500" />
+            The seal on signed documents
+          </h2>
+          <p className="mt-1.5 max-w-2xl text-sm text-muted-foreground">
+            Every completed document is sealed, so anyone can tell if it was changed afterwards. The seal is
+            made with a certificate in your company’s name, and the same one is used for every document you
+            complete.
+          </p>
+          {seal.source === "unreadable" ? (
+            <div role="alert" className="mt-4 rounded-xl border border-red-500/40 bg-red-500/10 p-4 text-sm">
+              <p className="font-semibold text-red-200">Your certificate can’t be opened</p>
+              <p className="mt-1 text-muted-foreground">
+                A certificate is stored for this workspace but the server cannot read it — usually because the
+                server’s encryption key changed. Until that is put right, documents are sealed with a temporary
+                certificate that is different every time the server restarts. They are still sealed and still
+                valid; they just won’t carry your certificate. Contact support before sending more documents
+                for signature.
+              </p>
+            </div>
+          ) : seal.source === "none" ? (
+            <div className="mt-4 rounded-xl border border-border p-4 text-sm">
+              <p className="font-medium">No certificate yet</p>
+              <p className="mt-1 text-muted-foreground">
+                One is created automatically the first time a document is completed. You can also create it now.
+              </p>
+              <SealCertificateForm />
+            </div>
+          ) : (
+            <dl className="mt-4 grid gap-3 sm:grid-cols-2">
+              <div className="rounded-xl border border-border p-4">
+                <dt className="text-xs text-muted-foreground">In use</dt>
+                <dd className="mt-1 font-medium text-emerald-500">
+                  {seal.source === "server" ? "The server’s certificate" : "Your workspace’s own certificate"}
+                </dd>
+                <dd className="mt-1 text-xs text-muted-foreground">
+                  {seal.source === "server"
+                    ? "Set by whoever runs this server, and used for every workspace on it."
+                    : "Kept encrypted with this workspace’s settings. It is never replaced automatically."}
+                </dd>
+              </div>
+              <div className="rounded-xl border border-border p-4">
+                <dt className="text-xs text-muted-foreground">Valid</dt>
+                <dd className="mt-1 text-sm font-medium">
+                  {seal.validFrom ? formatDate(seal.validFrom, regional) : "—"} to {seal.validTo ? formatDate(seal.validTo, regional) : "—"}
+                </dd>
+              </div>
+              <div className="rounded-xl border border-border p-4 sm:col-span-2">
+                <dt className="text-xs text-muted-foreground">Name on the certificate</dt>
+                <dd className="mt-1 break-words text-sm">{seal.subject}</dd>
+                <dt className="mt-3 text-xs text-muted-foreground">Fingerprint (SHA-256)</dt>
+                <dd className="mt-1 break-all font-mono text-xs">{seal.fingerprint}</dd>
+              </div>
+            </dl>
+          )}
+          <p className="mt-3 max-w-2xl text-xs text-muted-foreground">
+            A PDF reader will say the signer’s identity can’t be verified. That is expected: this is your own
+            certificate, not one bought from a certificate authority. The reader still shows whether the
+            document has been altered since it was sealed, and the fingerprint above is how a sealed document
+            can be matched to you.
           </p>
         </section>
 

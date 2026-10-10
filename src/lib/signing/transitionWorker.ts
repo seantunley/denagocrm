@@ -27,15 +27,27 @@ export type TransitionJobRun = {
   leased: number;
 };
 
-async function claimJobs(tenantId: string, limit: number): Promise<TransitionJob[]> {
+/**
+ * `transition_running` is claimable too — once its lease has run out.
+ *
+ * A job is left in that state when the worker running it dies: the function hit
+ * its time limit halfway through rendering a PDF, or the process was recycled.
+ * Nothing then moved it on. The lease test below was written for exactly that,
+ * but the status list excluded the only state a lease is ever held in, so the
+ * job sat there for good — a document everyone had signed, never finished, never
+ * retried and never reported. A live run still holds an unexpired lease and is
+ * left alone.
+ */
+async function claimJobs(tenantId: string, limit: number, requestId: string | null): Promise<TransitionJob[]> {
   const owner = `transition:${crypto.randomUUID()}`;
   return basePrisma.$queryRaw<TransitionJob[]>`
     WITH candidates AS (
       SELECT "id" FROM "SigningJob"
       WHERE "tenantId" = ${tenantId}
-        AND "status" IN ('transition','transition_retry')
+        AND "status" IN ('transition','transition_retry','transition_running')
         AND "availableAt" <= NOW()
         AND ("leaseUntil" IS NULL OR "leaseUntil" < NOW())
+        AND (${requestId}::text IS NULL OR "requestId" = ${requestId})
       ORDER BY "availableAt", "createdAt"
       LIMIT ${limit}
       FOR UPDATE SKIP LOCKED
@@ -154,33 +166,60 @@ async function retry(job: TransitionJob, error: unknown): Promise<"retry" | "dea
   return dead ? "dead" : "retry";
 }
 
-export async function runSigningTransitionJobs(tenantId: string, limit = 20): Promise<TransitionJobRun> {
+/**
+ * How many times one run goes back to the queue.
+ *
+ * A job can queue the next one: an approval that is granted raises the following
+ * approval, and telling that approver is itself a job. A single pass left it for
+ * the next scheduled run — half an hour for an email that was ready to go — so
+ * the queue is asked again until a pass finds nothing new. It cannot spin: a job
+ * that failed or was leased is pushed into the future and is not claimable again
+ * in the same run.
+ */
+const MAX_PASSES = 4;
+
+/**
+ * `only.requestId` confines a run to one request's jobs. That is what a web
+ * request uses to deliver what it has just queued (deliverQueuedNow in
+ * signflow/runtime.ts) without taking on the whole workspace's backlog — a PDF
+ * render for somebody else's document — inside its own time limit.
+ */
+export async function runSigningTransitionJobs(
+  tenantId: string,
+  limit = 20,
+  only: { requestId?: string } = {},
+): Promise<TransitionJobRun> {
   if (!tenantId) throw new Error("Signing transition jobs require a concrete tenant id");
   return runInTenantScope({ tenantId, system: false }, async () => {
-    const jobs = await claimJobs(tenantId, Math.max(1, Math.min(limit, 50)));
-    const result: TransitionJobRun = { claimed: jobs.length, completed: 0, retried: 0, dead: 0, leased: 0 };
+    const result: TransitionJobRun = { claimed: 0, completed: 0, retried: 0, dead: 0, leased: 0 };
 
-    for (const job of jobs) {
-      const owner = await claimRequest(job);
-      if (!owner) {
-        result.leased += 1;
-        await basePrisma.$executeRaw`
-          UPDATE "SigningJob"
-          SET "status" = 'transition_retry', "availableAt" = NOW() + INTERVAL '1 minute',
-              "leaseUntil" = NULL, "leaseOwner" = NULL, "updatedAt" = NOW()
-          WHERE "id" = ${job.id} AND "tenantId" = ${job.tenantId}
-        `;
-        continue;
-      }
-      try {
-        await execute(job);
-        await complete(job);
-        result.completed += 1;
-      } catch (error) {
-        const state = await retry(job, error);
-        result[state === "dead" ? "dead" : "retried"] += 1;
-      } finally {
-        await releaseRequest(job, owner);
+    for (let pass = 0; pass < MAX_PASSES; pass++) {
+      const jobs = await claimJobs(tenantId, Math.max(1, Math.min(limit, 50)), only.requestId ?? null);
+      if (jobs.length === 0) break;
+      result.claimed += jobs.length;
+
+      for (const job of jobs) {
+        const owner = await claimRequest(job);
+        if (!owner) {
+          result.leased += 1;
+          await basePrisma.$executeRaw`
+            UPDATE "SigningJob"
+            SET "status" = 'transition_retry', "availableAt" = NOW() + INTERVAL '1 minute',
+                "leaseUntil" = NULL, "leaseOwner" = NULL, "updatedAt" = NOW()
+            WHERE "id" = ${job.id} AND "tenantId" = ${job.tenantId}
+          `;
+          continue;
+        }
+        try {
+          await execute(job);
+          await complete(job);
+          result.completed += 1;
+        } catch (error) {
+          const state = await retry(job, error);
+          result[state === "dead" ? "dead" : "retried"] += 1;
+        } finally {
+          await releaseRequest(job, owner);
+        }
       }
     }
 

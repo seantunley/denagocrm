@@ -77,7 +77,7 @@ export const PUSH_KINDS = [
   { id: "portal_profile", label: "Profile change requests", desc: "A customer requests a change to their contact details" },
   { id: "quote_viewed", label: "Quote opened", desc: "Customer views their signing link" },
   { id: "quote_signed", label: "Quote / job card signed", desc: "Customer signs online" },
-  { id: "quote_feedback", label: "Quote declined / changes", desc: "Customer declines or requests changes" },
+  { id: "quote_feedback", label: "Quote questions / changes", desc: "Customer asks a question on the signing page, or requests changes" },
   { id: "review", label: "Google reviews", desc: "A new review appears" },
   { id: "email_in", label: "Email replies", desc: "A customer replies to an email (IMAP)" },
   { id: "referral", label: "Referral fees", desc: "A referred deal is won — fee due" },

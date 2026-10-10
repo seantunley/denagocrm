@@ -53,6 +53,19 @@ export const SIGNING_POLICY: RateLimitPolicy = {
 };
 
 /**
+ * What a signer READS through their link: a copy of the document, and whether
+ * their signed copy is ready yet. Counted apart from SIGNING_POLICY so that
+ * looking cannot use up the attempts signing needs — the page asks "is it ready?"
+ * a handful of times after a signature — and wider, because a read costs one
+ * stored file and no render, seal or email.
+ */
+export const SIGNING_READ_POLICY: RateLimitPolicy = {
+  limit: 40,
+  windowMs: 5 * 60 * 1000,
+  blockMs: 5 * 60 * 1000,
+};
+
+/**
  * Token-gated public actions that MUTATE: approving or rejecting a signing
  * workflow, submitting a survey response. Same shape as signing — a real
  * person does these once, so the limit is only ever reached by a machine.

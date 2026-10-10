@@ -7,7 +7,8 @@ import { signingRecord } from "@/lib/outboundMessageLog";
 import { signingEmailContent } from "./signingEmail";
 import { logError } from "@/lib/errorLog";
 import { runInTenantScope } from "@/lib/tenantScope";
-import { configuredSigningCertificateInfo, sealedPdfSignature } from "@/lib/pdf/seal";
+import { configuredSigningCertificateInfo, sealCertificateInfo, sealedPdfSignature } from "@/lib/pdf/seal";
+import { configuredSealIdentity } from "./sealIdentity";
 import { logSignEvent } from "./events";
 import { runPostCompletion } from "./postComplete";
 import { COMPLETED_EVENT, POST_COMPLETION_EVENT } from "./completionFanout";
@@ -79,6 +80,14 @@ function canonicalJson(value: unknown): string {
   return JSON.stringify(canonical(value));
 }
 
+/**
+ * `running` is claimable too — once its lease has run out. A worker that dies
+ * mid-job leaves the row in that state, and the lease test below only ever
+ * helped if the status list let such a row be considered. It did not, so the job
+ * was never tried again; and because the evidence check waits for its sibling
+ * jobs to finish, one orphan kept that check deferring every minute for good.
+ * (The same fix, for the same reason, as transitionWorker.ts.)
+ */
 async function claimJobs(tenantId: string, limit: number): Promise<SigningJob[]> {
   const owner = crypto.randomUUID();
   return basePrisma.$queryRaw<SigningJob[]>`
@@ -86,7 +95,7 @@ async function claimJobs(tenantId: string, limit: number): Promise<SigningJob[]>
       SELECT "id"
       FROM "SigningJob"
       WHERE "tenantId" = ${tenantId}
-        AND "status" IN ('pending','retry')
+        AND "status" IN ('pending','retry','running')
         AND "availableAt" <= NOW()
         AND ("leaseUntil" IS NULL OR "leaseUntil" < NOW())
       ORDER BY "availableAt" ASC, "createdAt" ASC
@@ -393,7 +402,15 @@ async function executeArtifactVerification(job: SigningJob): Promise<void> {
   // current identity as evidence about a document sealed years ago is false the
   // moment a certificate is rotated — and this record exists specifically to say
   // what sealed it.
-  const sealed = sealedPdfSignature(bytes, await sealValidationInstant(job, artifact));
+  // Trusted by fingerprint when it is THIS workspace's own certificate — each
+  // workspace seals with its own now, so the server's certificate alone would
+  // call every correctly sealed document untrusted.
+  const workspaceIdentity = await configuredSealIdentity(job.tenantId);
+  const sealed = sealedPdfSignature(
+    bytes,
+    await sealValidationInstant(job, artifact),
+    workspaceIdentity ? sealCertificateInfo(workspaceIdentity) : null,
+  );
   const certificate = sealed?.certificate ?? configuredSigningCertificateInfo();
   if (!sealed) errors.push("sealed PDF carries no readable signing certificate");
   // "This file has not changed since we filed it" and "this certificate sealed
