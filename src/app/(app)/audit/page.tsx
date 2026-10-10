@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { basePrisma } from "@/lib/db";
 import { getActiveTenantId } from "@/lib/auth";
-import { tenantEnforcing } from "@/lib/tenantEnforcement";
+import { ownAuditEvents } from "@/lib/auditScope";
 import { listActingTenantStaff } from "@/lib/tenantActor";
 import { formatDateTime } from "@/lib/format";
 import { hasPermission, requirePermission } from "@/lib/permissions";
@@ -52,17 +52,14 @@ export default async function AuditPage({
   // Multi-tenancy: the four reads below run on `basePrisma`, which DELIBERATELY
   // bypasses the tenant guard, so the predicate has to be written by hand — the
   // same reasoning spelled out at permissions.ts (documentTenantWhere) and
-  // settings/page.tsx (the System Log). This page had none, on the table that
-  // records every actor, every entity id and a free-text summary of every change.
+  // settings/page.tsx (the System Log). This is the table that records every
+  // actor, every entity id and a free-text summary of every change.
   //
-  // DORMANT while tenantEnforcing() is false, which is every environment today:
-  // `NOT false OR …` is always true, so these are byte-for-byte the old queries.
-  // Historic AuditEvent rows predate tenant stamping and are NULL-tenant, so
-  // filtering unconditionally would blank the page rather than scope it.
-  //
-  // This is the exact clause /api/audit/export/route.ts:64 already carries. The
-  // export was scoped and the page it exports from was not.
-  const enforcing = tenantEnforcing();
+  // This workspace's events and no other's, WHATEVER the enforcement mode. The
+  // predicate used to apply only while enforcement was on, so in every other
+  // mode this screen listed every workspace's trail. One fragment, shared with
+  // the export this page links to, so the two cannot drift: lib/auditScope.ts,
+  // which also says what happens to events that have no workspace.
   const activeTenantId = await getActiveTenantId();
   const [events, eventTypes, entityTypes, actors] = await Promise.all([
     basePrisma.$queryRaw<AuditEventRow[]>`
@@ -73,7 +70,7 @@ export default async function AuditPage({
         AND (${query}::text IS NULL OR "summary" ILIKE '%' || ${query} || '%' OR "entityId" ILIKE '%' || ${query} || '%')
         AND (${from}::timestamp IS NULL OR "createdAt" >= ${from})
         AND (${to}::timestamp IS NULL OR "createdAt" <= ${to})
-        AND (NOT ${enforcing}::boolean OR "tenantId" IS NOT DISTINCT FROM ${activeTenantId})
+        AND ${ownAuditEvents(activeTenantId)}
       ORDER BY "createdAt" DESC LIMIT 500
     `,
     // The filter dropdowns are scoped too. An unscoped DISTINCT is a smaller leak
@@ -81,13 +78,13 @@ export default async function AuditPage({
     // types and entity types exist across every workspace on the platform.
     basePrisma.$queryRaw<Array<{ value: string }>>`
       SELECT DISTINCT "eventType" AS value FROM "AuditEvent"
-      WHERE (NOT ${enforcing}::boolean OR "tenantId" IS NOT DISTINCT FROM ${activeTenantId})
+      WHERE ${ownAuditEvents(activeTenantId)}
       ORDER BY value
     `,
     basePrisma.$queryRaw<Array<{ value: string }>>`
       SELECT DISTINCT "entityType" AS value FROM "AuditEvent"
       WHERE "entityType" IS NOT NULL
-        AND (NOT ${enforcing}::boolean OR "tenantId" IS NOT DISTINCT FROM ${activeTenantId})
+        AND ${ownAuditEvents(activeTenantId)}
       ORDER BY value
     `,
     // The actor dropdown listed every User row on the platform, by name. `User` is

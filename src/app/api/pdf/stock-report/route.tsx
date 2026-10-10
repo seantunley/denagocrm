@@ -2,6 +2,7 @@ import { renderToBuffer } from "@react-pdf/renderer";
 import { prisma } from "@/lib/db";
 import { requireApiUser, apiAuthErrorResponse } from "@/lib/auth";
 import { hasPermission } from "@/lib/permissions";
+import { withActingStaffScope } from "@/lib/actingScope";
 import { formatDateTime } from "@/lib/format";
 import { getCompanyProfile } from "@/lib/companyProfile";
 import { listStockUnits, stockDashboard } from "@/lib/stockPlatform";
@@ -25,7 +26,12 @@ const STATUS_LABEL: Record<string, string> = {
 
 const REPORT_LIMIT = 250;
 
+/** Bound to the acting workspace — a route handler has nothing above it that does (see withActingStaffScope). */
 export async function GET(req: Request) {
+  return withActingStaffScope(() => handleGet(req));
+}
+
+async function handleGet(req: Request) {
   // Auth only inside the try — react-pdf JSX must not be constructed in a
   // try/catch (react-hooks/error-boundaries).
   let userName: string;
