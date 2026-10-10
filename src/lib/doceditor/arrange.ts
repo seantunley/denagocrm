@@ -8,7 +8,7 @@
  * editor's selection already uses for it).
  */
 import type { DocumentModel, DocumentPage } from "./model";
-import { PAGE_SIZES } from "./model";
+import { pageMargin, pageSizeOf } from "./model";
 import { updateFloating } from "./ops";
 
 export type Rect = { x: number; y: number; w: number; h: number };
@@ -172,9 +172,9 @@ export function removePlaced(doc: DocumentModel, ids: string[]): DocumentModel {
   };
 }
 
-/** The page inside its margins, as a box to line a single thing up within (the whole sheet when the margin is 0). */
-export function pageBox(doc: DocumentModel): Rect {
-  const size = PAGE_SIZES[doc.style.pageSize];
-  const m = doc.style.margin;
+/** A page inside its margins, as a box to line a single thing up within (the whole sheet when the margin is 0). */
+export function pageBox(doc: DocumentModel, page: DocumentPage = doc.pages[0]): Rect {
+  const size = pageSizeOf(doc.style);
+  const m = pageMargin(doc, page);
   return { x: m, y: m, w: size.w - m * 2, h: size.h - m * 2 };
 }

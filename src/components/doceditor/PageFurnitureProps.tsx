@@ -65,6 +65,42 @@ export function RunningSection() {
   );
 }
 
+/**
+ * The page being worked on: a margin of its own, in place of the document's —
+ * a cover that runs to the edge of the paper, a letter page with wide margins.
+ */
+export function PageSection() {
+  const doc = useEditor((s) => s.doc);
+  const activePage = useEditor((s) => s.activePage);
+  const commit = useEditor((s) => s.commit);
+  if (!doc) return null;
+  const index = Math.min(activePage, doc.pages.length - 1);
+  const page = doc.pages[index];
+  const own = page.margin !== undefined;
+  const setMargin = (margin: number | undefined) => commit((d) => ({
+    ...d,
+    pages: d.pages.map((p) => {
+      if (p.id !== page.id) return p;
+      const { margin: _old, ...rest } = p;
+      void _old;
+      return margin === undefined ? rest : { ...rest, margin };
+    }),
+  }));
+  return (
+    <Section title={`Page ${index + 1}${doc.pages.length > 1 ? ` of ${doc.pages.length}` : ""}`}>
+      <label className={check}><input type="checkbox" checked={own} onChange={(e) => setMargin(e.target.checked ? doc.style.margin : undefined)} /> A margin of its own</label>
+      {own && (
+        <div className="mt-2"><label className={lbl}>This page&apos;s margin ({page.margin}px)</label><input type="range" min={0} max={120} className="w-full" value={page.margin} onChange={(e) => setMargin(Number(e.target.value))} /></div>
+      )}
+      <p className="mt-2 text-[11px] text-slate-400">
+        {own
+          ? "Text and blocks in rows move with the margin. Anything placed by hand — a freely placed block, a signing field — stays where it is on the sheet."
+          : `Uses the document's margin (${doc.style.margin}px). Click a page to choose which one this is.`}
+      </p>
+    </Section>
+  );
+}
+
 /** The row a flowed block sits in: the gap between its columns, and what it does at a page break. */
 export function RowSection({ block }: { block: DocumentBlock }) {
   const row = useEditor((s) => s.doc?.pages.flatMap((p) => p.rows).find((r) => r.columns.some((c) => c.blocks.some((b) => b.id === block.id))));

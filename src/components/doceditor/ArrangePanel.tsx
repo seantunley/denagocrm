@@ -43,7 +43,7 @@ export function AlignOnPage({ id }: { id: string }) {
       <label className={lbl}>Line up on the page</label>
       <div className="flex gap-1">
         {MODES.map(([mode, icon]) => (
-          <button key={mode} type="button" className={btn} title={`${PAGE_TITLES[mode]} of the page (inside its margins)`} aria-label={`Line up on the page: ${mode}`} onClick={() => arrange((d) => movePlaced(d, alignRects(rectsOf(d, [id]), mode, pageBox(d))))}>{icon}</button>
+          <button key={mode} type="button" className={btn} title={`${PAGE_TITLES[mode]} of the page (inside its margins)`} aria-label={`Line up on the page: ${mode}`} onClick={() => arrange((d) => movePlaced(d, alignRects(rectsOf(d, [id]), mode, pageBox(d, d.pages[findPlaced(d, id)?.pageIdx ?? 0]))))}>{icon}</button>
         ))}
       </div>
     </div>

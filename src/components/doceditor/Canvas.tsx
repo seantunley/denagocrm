@@ -6,10 +6,10 @@ import { emailFramePreview } from "@/lib/doceditor/emailRender";
 import { useDraggable } from "@dnd-kit/core";
 import { useEditor } from "@/lib/doceditor/store";
 import { newBlock } from "@/lib/doceditor/factory";
-import { PAGE_SIZES, type DocumentBlock, type DocumentPage, type DocumentRow, type DocumentColumn } from "@/lib/doceditor/model";
+import { pageMargin, pageSizeOf, type DocumentBlock, type DocumentPage, type DocumentRow, type DocumentColumn } from "@/lib/doceditor/model";
 import { blockBoxCss, columnNeedsStretch } from "@/lib/doceditor/blockBox";
 import { docTypeCss } from "@/lib/doceditor/docStyles";
-import { runningText } from "@/lib/doceditor/pageFurniture";
+import { MIN_RUNNING_MARGIN, runningText } from "@/lib/doceditor/pageFurniture";
 import { pageHasContent } from "@/lib/doceditor/ops";
 import ConfirmActionDialog from "@/components/ConfirmActionDialog";
 import { BlockView } from "./BlockView";
@@ -33,7 +33,7 @@ export function Canvas({ zoom }: { zoom: number }) {
   );
 
   if (!doc) return null;
-  const size = PAGE_SIZES[doc.style.pageSize];
+  const size = pageSizeOf(doc.style);
   const around = email && frame ? { ...frame, message: !!email.kind, href: email.frame?.href ?? null } : undefined;
 
   return (
@@ -44,7 +44,7 @@ export function Canvas({ zoom }: { zoom: number }) {
           wraps here as it prints. An email is drawn by its own renderer. */}
       {!email && <style>{docTypeCss(doc.style, ".doc-canvas", "var(--font-geist-sans),Helvetica,Arial,sans-serif")}</style>}
       {doc.pages.map((page, pIdx) => (
-        <PageView key={page.id} page={page} pIdx={pIdx} zoom={zoom} size={size} margin={doc.style.margin} fontFamily={doc.style.fontFamily} hint={hint} email={around} />
+        <PageView key={page.id} page={page} pIdx={pIdx} zoom={zoom} size={size} margin={pageMargin(doc, page)} fontFamily={doc.style.fontFamily} hint={hint} email={around} />
       ))}
     </div>
   );
@@ -104,7 +104,8 @@ function PageView({
   const movePage = useEditor((s) => s.movePage);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const whole = useEditor((s) => s.doc);
-  const running = whole && !email ? runningText(whole, null, pIdx + 1, whole.pages.length) : null;
+  // (A page with too little margin of its own has nowhere to set them — as in print.)
+  const running = whole && !email && margin >= MIN_RUNNING_MARGIN ? runningText(whole, null, pIdx + 1, whole.pages.length) : null;
 
   useEffect(() => {
     const el = ref.current;
