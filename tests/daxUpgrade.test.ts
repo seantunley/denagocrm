@@ -3,7 +3,7 @@ import { test } from "node:test";
 import { readFileSync } from "node:fs";
 import { researchGate } from "../src/lib/assistantResearchGate";
 import { formatDecision, matchDecisions, parseDecision } from "../src/lib/assistantDecisions";
-import { runLive, scoreRecorded } from "../evals/runResearchEval";
+import { costSummary, runLive, scoreRecorded } from "../evals/runResearchEval";
 
 test("gate continues when a why-question has no lead_brief yet", () => {
   const d = researchGate({
@@ -109,4 +109,15 @@ test("decision recall checks lead access and save is unreviewed", () => {
   assert.match(lib, /d\.kind === "lead"/, "lead check uses explicit kind, not a string heuristic");
   assert.match(store, /status: "unreviewed"/, "decisions are not auto-approved");
   assert.match(store, /createdById: userId/, "author is recorded");
+});
+
+
+test("cost summary reports latency and tokens", () => {
+  const summary = costSummary([
+    { latencyMs: 1000, tokens: 200 },
+    { latencyMs: 3000, tokens: 400 },
+  ]);
+  assert.equal(summary.avgLatencyMs, 2000);
+  assert.equal(summary.totalTokens, 600);
+  assert.equal(summary.scenarios, 2);
 });
