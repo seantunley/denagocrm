@@ -333,6 +333,21 @@ async function main() {
     check("a sender with an active quote is admitted without a classifier call, whatever they send", trusted.outcome.admit && r?.decidedBy === "relationship" && r?.classification === "customer_support" && aiCalls === calls, `${r?.decidedBy} · contact tenant ${contact?.tenantId}`);
   }
 
+  {
+    // A person on staff replied from the inbox: that is a delivery-queue row marked origin = staff.
+    const known = newSender();
+    await basePrisma.botFlowOutbox.create({ data: { tenantId: DEFAULT_TENANT_ID, channel: "whatsapp", key: known, batchId: `scr_${SFX}_staff`, sequence: 0, origin: "staff", status: "sent", sentAt: new Date(), payload: { type: "text", text: "Hi, thanks for your message" } } });
+    const calls = aiCalls;
+    const replied = await deliver(known, SUSPENSION);
+    const r = await row(replied.providerId);
+    check("a sender staff have replied to from the inbox is admitted without a classifier call", replied.outcome.admit && r?.decidedBy === "relationship" && r?.reasonCodes.includes("rel_staffReplied") === true && aiCalls === calls, `${r?.decidedBy} ${r?.reasonCodes.join(",")}`);
+    const botOnly = newSender();
+    await basePrisma.botFlowOutbox.create({ data: { tenantId: DEFAULT_TENANT_ID, channel: "whatsapp", key: botOnly, batchId: `scr_${SFX}_bot`, sequence: 0, origin: "bot", status: "sent", sentAt: new Date(), payload: { type: "text", text: "Hello! How can I help?" } } });
+    const botReplied = await deliver(botOnly, SUSPENSION);
+    check("…but a sender only the CHATBOT has answered is still screened, and held", botReplied.outcome.admit === false && (await row(botReplied.providerId))?.decidedBy === "ai");
+    await basePrisma.botFlowOutbox.deleteMany({ where: { tenantId: DEFAULT_TENANT_ID, batchId: { startsWith: `scr_${SFX}_` } } });
+  }
+
   console.log("\nCorrections: labelled examples, repeat campaigns, and broad rules that wait for an owner");
   {
     const labelled = await labelSpam(DEFAULT_TENANT_ID, [heldMessage.outcome.screeningId!], reviewer);

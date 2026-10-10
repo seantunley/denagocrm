@@ -75,9 +75,17 @@ const NOT_BOT = { OR: [{ subject: null }, { NOT: { subject: { startsWith: "🤖"
  * query that named one here would find nothing and no customer would ever be
  * recognised.
  */
-async function loadRelationship(channel: ScreenedChannel, who: { contactId: string | null; leadId: string | null }): Promise<Relationship> {
+async function loadRelationship(tenantId: string, channel: ScreenedChannel, senderId: string, who: { contactId: string | null; leadId: string | null }): Promise<Relationship> {
   const { contactId, leadId } = who;
-  if (!contactId && !leadId) return NO_RELATIONSHIP;
+  // "A person on staff wrote to them" has an exact record: a reply sent from the
+  // inbox is a delivery-queue row marked origin = staff, keyed by this very
+  // sender. Asked first and on its own, because the transcript cannot always
+  // tell a person's reply from the chatbot's.
+  const staffSent = await basePrisma.botFlowOutbox.findFirst({
+    where: { tenantId, channel, key: senderId, origin: "staff", status: "sent", sentAt: { gt: new Date(Date.now() - 90 * DAY) } },
+    select: { id: true },
+  });
+  if (!contactId && !leadId) return { ...NO_RELATIONSHIP, staffReplied: Boolean(staffSent) };
   const owner = [...(contactId ? [{ contactId }] : []), ...(leadId ? [{ leadId }] : [])];
   const [reply, quote, job, drive] = await Promise.all([
     prisma.communication.findFirst({
@@ -88,7 +96,7 @@ async function loadRelationship(channel: ScreenedChannel, who: { contactId: stri
     contactId ? prisma.jobCard.findFirst({ where: { contactId }, select: { id: true } }) : null,
     contactId ? prisma.testDriveBooking.findFirst({ where: { contactId, status: { notIn: ["cancelled", "no_show"] } }, select: { id: true } }) : null,
   ]);
-  return { staffReplied: Boolean(reply), activeQuote: Boolean(quote), serviceRecord: Boolean(job), booking: Boolean(drive) };
+  return { staffReplied: Boolean(staffSent) || Boolean(reply), activeQuote: Boolean(quote), serviceRecord: Boolean(job), booking: Boolean(drive) };
 }
 
 async function recentHistory(channel: ScreenedChannel, who: { contactId: string | null; leadId: string | null }) {
@@ -135,7 +143,7 @@ async function decide(tenantId: string, input: ScreenInput, policy: ScreeningPol
   }
 
   const [relationship, patterns, confirmed, burst] = await Promise.all([
-    rule ? NO_RELATIONSHIP : loadRelationship(input.channel, who),
+    rule ? NO_RELATIONSHIP : loadRelationship(tenantId, input.channel, input.senderId, who),
     rule ? [] : basePrisma.inboundSpamPattern.findMany({ where: { tenantId, status: "active" }, select: { kind: true, value: true }, take: 500 }),
     rule ? [] : basePrisma.inboundScreening.findMany({ where: { tenantId, staffLabel: "spam", body: { not: "" } }, orderBy: { labelledAt: "desc" }, take: 200, select: { body: true } }),
     rule ? [] : basePrisma.inboundScreening.findMany({ where: { tenantId, channel, senderId, receivedAt: { gt: since(policy.burstWindowSeconds * 1000) } }, select: { body: true }, take: 200 }),
