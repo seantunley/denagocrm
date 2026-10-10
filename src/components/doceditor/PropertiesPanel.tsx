@@ -100,6 +100,22 @@ function FieldProps({ field }: { field: OverlayField }) {
 }
 
 // ── blocks ──────────────────────────────────────────────────────────
+/** Exact position and width for a freely placed block — typing a number is the only way to line two things up precisely. */
+function FloatingPosition({ blockId }: { blockId: string }) {
+  const placed = useEditor((s) => s.doc?.pages.flatMap((p) => p.floatingBlocks).find((fb) => fb.block.id === blockId));
+  const updateFloating = useEditor((s) => s.updateFloating);
+  if (!placed) return null;
+  const field = (label: string, key: "x" | "y" | "width", min: number) => (
+    <label className="flex-1 text-[11px] font-medium text-slate-500">{label}
+      <input
+        type="number" min={min} step={1} className={inp} value={Math.round(placed[key])}
+        onChange={(e) => { const n = Number(e.target.value); if (Number.isFinite(n)) updateFloating(blockId, { [key]: Math.max(min, n) }); }}
+      />
+    </label>
+  );
+  return <div className={`${row} flex gap-2`}>{field("From left", "x", 0)}{field("From top", "y", 0)}{field("Width", "width", 60)}</div>;
+}
+
 function LayoutSection({ block, floating }: { block: DocumentBlock; floating: boolean }) {
   const updateBlock = useEditor((s) => s.updateBlock);
   const detach = useEditor((s) => s.detach);
@@ -122,10 +138,35 @@ function LayoutSection({ block, floating }: { block: DocumentBlock; floating: bo
     >{label}</button>
   );
 
+  // Text size and alignment: the same two controls whether the block sits in
+  // the flow or is placed freely. They used to vanish for a floated block.
+  const typeControls = (
+    <>
+      <div className={row}>
+        <label className={lbl}>Text size ({Math.round(scale * 100)}%)</label>
+        <input
+          type="range" min={60} max={200} step={5} className="w-full" value={Math.round(scale * 100)}
+          onChange={(e) => set({ fontScale: Number(e.target.value) / 100 })}
+        />
+        {scale !== 1 && (
+          <button type="button" className="mt-1 text-[11px] text-slate-500 underline hover:text-slate-700" onClick={() => set({ fontScale: undefined })}>
+            Reset to the block&apos;s own size
+          </button>
+        )}
+      </div>
+      <div className={row}>
+        <label className={lbl}>Text alignment{textAlign ? "" : " — as designed"}</label>
+        <div className="flex gap-1">{textAlignBtn("left", "Left")}{textAlignBtn("centre", "Centre")}{textAlignBtn("right", "Right")}</div>
+      </div>
+    </>
+  );
+
   if (floating) {
     return (
       <Section title="Placement">
         <div className="mb-2 rounded-md bg-orange-50 px-2.5 py-2 text-[11px] text-orange-700">📌 Free placement — drag it anywhere on the page; drag the side handles to resize.</div>
+        <FloatingPosition blockId={block.id} />
+        {typeControls}
         <button type="button" onClick={() => dock(block.id)} className="w-full rounded-md border border-slate-300 py-1.5 text-sm text-slate-700 hover:bg-slate-50">⤵ Dock back into the flow</button>
       </Section>
     );
@@ -145,22 +186,7 @@ function LayoutSection({ block, floating }: { block: DocumentBlock; floating: bo
           <div className="flex gap-1">{alignBtn("left", "Left")}{alignBtn("centre", "Centre")}{alignBtn("right", "Right")}</div>
         </div>
       )}
-      <div className={row}>
-        <label className={lbl}>Text size ({Math.round(scale * 100)}%)</label>
-        <input
-          type="range" min={60} max={200} step={5} className="w-full" value={Math.round(scale * 100)}
-          onChange={(e) => set({ fontScale: Number(e.target.value) / 100 })}
-        />
-        {scale !== 1 && (
-          <button type="button" className="mt-1 text-[11px] text-slate-500 underline hover:text-slate-700" onClick={() => set({ fontScale: undefined })}>
-            Reset to the block&apos;s own size
-          </button>
-        )}
-      </div>
-      <div className={row}>
-        <label className={lbl}>Text alignment{textAlign ? "" : " — as designed"}</label>
-        <div className="flex gap-1">{textAlignBtn("left", "Left")}{textAlignBtn("centre", "Centre")}{textAlignBtn("right", "Right")}</div>
-      </div>
+      {typeControls}
       <button type="button" onClick={() => detach(block.id)} className="w-full rounded-md border border-orange-200 py-1.5 text-sm text-orange-600 hover:bg-orange-50">⤢ Free placement (drag anywhere)</button>
       <p className="mt-2 text-[11px] text-slate-400">Or drop another block on this one’s left/right edge to build columns.</p>
     </Section>

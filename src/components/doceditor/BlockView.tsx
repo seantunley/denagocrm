@@ -51,9 +51,12 @@ export function BlockView({ block, active }: { block: DocumentBlock; active: boo
       // An uploaded image is a private stored ref; the browser reaches it through /api/stored.
       const raw = typeof block.src === "string" ? block.src.trim() : "";
       const src = /^data:image\//i.test(raw) ? raw : storedFileSrc(raw);
-      const valid = !!src && /^(https?:|data:image\/|\/api\/stored\?)/i.test(src);
+      // The same rule the PDF applies (https only), and the same placement: an image
+      // sits where the block's text alignment puts it. The page used to centre every
+      // image and accept http — so it showed a picture the PDF then moved, or dropped.
+      const valid = !!src && /^(https:|data:image\/|\/api\/stored\?)/i.test(src);
       return (
-        <div style={{ textAlign: "center" }}>
+        <div>
           {valid ? (
             // eslint-disable-next-line @next/next/no-img-element
             <img src={src} alt={block.alt} style={{ width: `${block.widthPct}%`, height: "auto", borderRadius: block.rounded ? 8 : 0 }} />

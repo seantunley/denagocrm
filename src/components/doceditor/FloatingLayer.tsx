@@ -4,6 +4,7 @@ import { useState } from "react";
 import Moveable from "react-moveable";
 import { useEditor } from "@/lib/doceditor/store";
 import type { DocumentPage } from "@/lib/doceditor/model";
+import { blockBoxCss } from "@/lib/doceditor/blockBox";
 import { BlockView } from "./BlockView";
 
 /**
@@ -37,7 +38,10 @@ export function FloatingLayer({ page, zoom }: { page: DocumentPage; zoom: number
                 showcase acceptance card) keeps its lines under the overlay
                 fields, which are also placed at `px × zoom`. */}
             <div style={{ zoom }}>
-              <BlockView block={fb.block} active={active} />
+              {/* Text size and alignment apply to a freely placed block exactly as the PDF applies them. */}
+              <div style={blockBoxCss(fb.block, "floating")}>
+                <BlockView block={fb.block} active={active} />
+              </div>
             </div>
           </div>
         );
