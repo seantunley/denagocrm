@@ -32,7 +32,8 @@ const code = (rel: string) => src(rel).replace(/\/\*[\s\S]*?\*\//g, "").replace(
 const fnBody = (source: string, name: string) => {
   const start = source.indexOf(`export async function ${name}(`);
   assert.notEqual(start, -1, `${name} is gone — was it renamed?`);
-  return source.slice(start, source.indexOf("\n}", start));
+  // "\n}\n" and not "\n}": an options type in the signature closes with "\n}): …".
+  return source.slice(start, source.indexOf("\n}\n", start));
 };
 
 const drive: TestDriveForDoc = {
@@ -130,12 +131,13 @@ test("every render of a request reads its frozen context — the signer's screen
   for (const fn of ["renderRequestDocHtml", "renderRequestSigningSheets"]) {
     const body = fnBody(render, fn);
     assert.match(body, /"contextJson"/, `${fn} must REQUIRE the column, so no caller can render without it`);
-    assert.match(body, /bindCtx\(req\.quoteId, req\.jobCardId, frozen, \{ liveVehicle: false, context: req\.contextJson \}\)/);
+    assert.match(body, /bindCtx\(req\.quoteId, req\.jobCardId, frozen, \{ liveVehicle: false, context: req\.contextJson, tenantId: req\.tenantId \}\)/);
   }
-  assert.match(render, /return withCompany\(parseSubjectContext\(opts\?\.context\)\);/, "used only when there is no quote or job card to read");
+  assert.match(render, /return withCompany\(await frozenContext\(opts\?\.context, opts\?\.tenantId\)\);/, "used only when there is no quote or job card to read");
+  assert.match(render, /const context = parseSubjectContext\(value\);/);
   assert.match(
     code("src/lib/signing/complete.ts"),
-    /bindCtx\(req\.quoteId, req\.jobCardId, undefined, \{ liveVehicle: false, context: req\.contextJson \}\)/,
+    /bindCtx\(req\.quoteId, req\.jobCardId, undefined, \{ liveVehicle: false, context: req\.contextJson, tenantId: req\.tenantId \}\)/,
     "the sealed PDF must show what the signer was shown",
   );
   const service = code("src/lib/signing/service.ts");
@@ -153,7 +155,7 @@ test("the booking is marked inside the completion transaction, after its row is 
   const body = tx.slice(0, end);
   const lock = body.indexOf("await lockSubject(tx, req)");
   const claim = body.indexOf('status: "completed"');
-  const mark = body.indexOf("subjectSigned = await completeSubject(tx, req)");
+  const mark = body.indexOf("subjectSigned = await completeSubject(tx, req, document?.id ?? null)");
   assert.ok(lock !== -1 && claim !== -1 && mark !== -1, "all three are in the one transaction");
   assert.ok(lock < claim, "the booking is locked BEFORE the request is claimed — the order starting a new indemnity takes");
   assert.ok(claim < mark, "and marked only once the claim has succeeded (a lost claim throws before it)");
@@ -163,7 +165,8 @@ test("the booking is found in the request's own workspace, and only a live one i
   const hooks = code("src/lib/signing/subjectCompletion.ts");
   assert.match(hooks, /FROM "TestDriveBooking" WHERE id = \$\{req\.subjectId\} AND "tenantId" = \$\{req\.tenantId\} FOR UPDATE/);
   const mark = fnBody(hooks, "completeSubject");
-  assert.match(mark, /if \(req\.subjectType !== TEST_DRIVE_INDEMNITY \|\| !req\.subjectId \|\| !req\.tenantId\) return false;/, "no tenant, no write");
+  assert.match(mark, /if \(!req\.subjectId \|\| !req\.tenantId\) return false;/, "no tenant, no write — whatever the request is about");
+  assert.match(mark, /if \(req\.subjectType === TEST_DRIVE_INDEMNITY\) \{/);
   assert.match(mark, /where: \{ id: req\.subjectId, tenantId: req\.tenantId, deletedAt: null, indemnityStatus: \{ not: "signed" \} \}/);
   assert.match(mark, /data: \{ indemnityStatus: "signed" \}/);
   assert.doesNotMatch(mark, /throw/, "an indemnity stands whatever became of the booking — completing never refuses");
@@ -186,28 +189,39 @@ test("a form rendered before the driver signed cannot save 'pending' over the si
 // ── One live indemnity per booking ──────────────────────────────────────────
 
 test("starting again replaces what was opened, and never what was signed", () => {
-  const lib = code("src/lib/testDriveIndemnity.ts");
-  const prepare = fnBody(lib, "prepareIndemnity");
-  const bookingLock = prepare.indexOf('FROM "TestDriveBooking" WHERE id = ${bookingId} AND "tenantId" = ${tenantId} FOR UPDATE');
-  const hold = prepare.indexOf("await holdIndemnityRequests(tx, { id: bookingId, tenantId })");
-  const signed = prepare.indexOf('if (signed) return "signed" as const;');
-  const withdraw = prepare.indexOf("await withdrawOpenIndemnity(tx, { id: bookingId, tenantId })");
-  const create = prepare.indexOf("await createSignatureRequestFromDoc({");
-  for (const [name, at] of Object.entries({ bookingLock, hold, signed, withdraw, create })) assert.notEqual(at, -1, `${name} is missing`);
-  assert.ok(bookingLock < hold && hold < signed && signed < withdraw && withdraw < create, "booking, then its requests, then ask, then replace, then make");
+  // The rules are shared by every request about a record (signing/subjectRequests.ts).
+  const shared = code("src/lib/signing/subjectRequests.ts");
+  const open = fnBody(shared, "openSubjectRequest");
+  const record = open.indexOf("if (!(await opts.holdRecord(tx))) return \"gone\" as const;");
+  const hold = open.indexOf("await holdSubjectRequests(tx, subject, tenantId)");
+  const signed = open.indexOf('if (!opts.again && (await subjectIsSigned(tx, subject, tenantId))) return "signed" as const;');
+  const withdraw = open.indexOf("await withdrawOpenSubjectRequests(tx, subject, tenantId)");
+  const create = open.indexOf("await createSignatureRequestFromDoc({");
+  for (const [name, at] of Object.entries({ record, hold, signed, withdraw, create })) assert.notEqual(at, -1, `${name} is missing`);
+  assert.ok(record < hold && hold < signed && signed < withdraw && withdraw < create, "the record, then its requests, then ask, then replace, then make");
+  // …and for an indemnity the record is the booking, in its own workspace, still
+  // upcoming — and a signed one is final: it never asks to be signed for again.
+  const prepare = fnBody(code("src/lib/testDriveIndemnity.ts"), "prepareIndemnity");
+  assert.doesNotMatch(prepare, /again:/, "an indemnity that has been signed is not replaced");
+  assert.match(prepare, /holdRecord: async \(tx\) => \{\s*await tx\.\$executeRaw`SELECT id FROM "TestDriveBooking" WHERE id = \$\{bookingId\} AND "tenantId" = \$\{tenantId\} FOR UPDATE`;/);
+  assert.match(prepare, /return Boolean\(live && UPCOMING_TEST_DRIVE_STATUSES\.includes\(live\.status\)\);/);
   // The rule itself, in the one statement that withdraws.
-  const withdrawSql = fnBody(lib, "withdrawOpenIndemnity");
+  const withdrawSql = fnBody(shared, "withdrawOpenSubjectRequests");
   assert.match(withdrawSql, /SET "status" = 'voided'/);
-  assert.match(withdrawSql, /r\."tenantId" = \$\{booking\.tenantId\}/);
+  assert.match(withdrawSql, /r\."tenantId" = \$\{tenantId\}/);
   assert.match(withdrawSql, /NOT EXISTS \(\s*SELECT 1 FROM "SignatureRecipient" s WHERE s\."requestId" = r\."id" AND s\."status" = 'signed'\s*\)/);
-  assert.match(withdrawSql, /await holdIndemnityRequests\(tx, /, "it waits for a signature being submitted before deciding nobody has signed");
+  assert.match(withdrawSql, /await holdSubjectRequests\(tx, subject, tenantId\)/, "it waits for a signature being submitted before deciding nobody has signed");
+  assert.match(withdrawSql, /if \(!tenantId\) return \[\];/, "no workspace, nothing withdrawn");
 });
 
 test("only the driver signs: a layout asking anyone else is refused, not silently waited on", () => {
+  const only = code("src/lib/signing/subjectRequests.ts");
+  const rule = only.slice(only.indexOf("export function signedByCustomerOnly("), only.indexOf("\n}", only.indexOf("export function signedByCustomerOnly(")));
+  assert.match(rule, /recipient\.role !== "viewer" && recipient\.party !== "customer"/);
+  assert.match(rule, /if \(someoneElse\) return \{ alsoAsks: recipientLabel\(someoneElse\) \};/);
   const prepare = fnBody(code("src/lib/testDriveIndemnity.ts"), "prepareIndemnity");
-  assert.match(prepare, /recipient\.role !== "viewer" && recipient\.party !== "customer"/);
-  assert.match(prepare, /if \(someoneElse\) \{\s*throw new ActionRefusal\(/);
-  assert.ok(prepare.indexOf("if (someoneElse)") < prepare.indexOf("await toPdf("), "refused before anything is rendered or stored");
+  assert.match(prepare, /if \("alsoAsks" in signable\) \{\s*throw new ActionRefusal\(/);
+  assert.ok(prepare.indexOf('if ("alsoAsks" in signable)') < prepare.indexOf("await toPdf("), "refused before anything is rendered or stored");
   assert.match(prepare, /if \(!contact \|\| contact\.tenantId !== tenantId\)/, "the customer is the booking's workspace's own");
 });
 

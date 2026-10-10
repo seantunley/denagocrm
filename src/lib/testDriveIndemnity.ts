@@ -1,22 +1,25 @@
 import "server-only";
-import { Prisma } from "@prisma/client";
-import { prisma, basePrisma } from "@/lib/db";
+import type { Prisma } from "@prisma/client";
+import { prisma } from "@/lib/db";
 import { ActionRefusal } from "@/lib/actionFailure";
 import { contactName } from "@/lib/format";
 import { getRegionalSettings } from "@/lib/settings";
-import { saveFile, deleteFile } from "@/lib/storage";
 import { printableRecordLayout } from "@/lib/docbuilder/leadWarrantyRecords";
 import { buildTestDriveContext } from "@/lib/docbuilder/leadWarrantyContext";
 import type { MergeContext } from "@/lib/docbuilder/merge";
 import type { DocumentModel } from "@/lib/doceditor/model";
 import { indemnityTemplateForScreen } from "@/lib/doceditor/standardTemplates";
-import { ensureSignable } from "@/lib/signing/autoEnvelope";
-import { recipientLabel, resolvePartyRecipients } from "@/lib/signing/templateRecipients";
 import { renderEnvelopePdf } from "@/lib/signing/render";
-import { createSignatureRequestFromDoc } from "@/lib/signing/service";
-import { logSignEvent, staffActor } from "@/lib/signing/events";
-import { CLOSED_REQUEST_STATUSES } from "@/lib/signing/status";
+import { staffActor } from "@/lib/signing/events";
 import { TEST_DRIVE_INDEMNITY } from "@/lib/signing/subject";
+import {
+  openSubjectRequest,
+  recordSubjectWithdrawn,
+  signedByCustomerOnly,
+  subjectSigningState,
+  withdrawOpenSubjectRequests,
+  type SubjectSigningState,
+} from "@/lib/signing/subjectRequests";
 import { UPCOMING_TEST_DRIVE_STATUSES } from "@/lib/testDriveBooking";
 
 /**
@@ -28,117 +31,37 @@ import { UPCOMING_TEST_DRIVE_STATUSES } from "@/lib/testDriveBooking";
  * booking Signed in the same transaction that seals the document
  * (signing/subjectCompletion.ts).
  *
- * One live indemnity per booking. Starting one replaces any that was opened and
+ * One live indemnity per booking, by the rules every such request shares
+ * (signing/subjectRequests.ts): starting one replaces any that was opened and
  * not signed, so the document always carries today's date and the customer's
  * details as they are now — they are frozen into the request when it is made.
  */
 
 /** Where a booking's indemnity stands, as far as signing on a screen goes. */
-export type IndemnityState =
-  | { kind: "none" }
-  /** Opened and waiting for the driver. */
-  | { kind: "open"; requestId: string; recipientId: string; startedAt: Date }
-  /** The driver has signed; the document is being sealed and filed. */
-  | { kind: "finishing"; requestId: string; signedByName: string }
-  | { kind: "signed"; requestId: string; signedByName: string; signedAt: Date };
+export type IndemnityState = SubjectSigningState;
 
-const OPEN = { notIn: [...CLOSED_REQUEST_STATUSES] };
+const indemnityOf = (bookingId: string) => ({ type: TEST_DRIVE_INDEMNITY, id: bookingId });
 
-export async function indemnityState(bookingId: string): Promise<IndemnityState> {
-  const requests = await prisma.signatureRequest.findMany({
-    where: {
-      subjectType: TEST_DRIVE_INDEMNITY,
-      subjectId: bookingId,
-      deletedAt: null,
-      OR: [{ status: "completed" }, { status: OPEN }],
-    },
-    orderBy: { createdAt: "desc" },
-    select: {
-      id: true,
-      status: true,
-      createdAt: true,
-      completedAt: true,
-      recipients: {
-        where: { role: { not: "viewer" } },
-        orderBy: { order: "asc" },
-        select: { id: true, name: true, signedName: true, signedAt: true, status: true },
-      },
-    },
-  });
-  const signedBy = (request: (typeof requests)[number]) => {
-    const who = request.recipients.find((recipient) => recipient.status === "signed");
-    return { name: who?.signedName || who?.name || "the driver", at: who?.signedAt ?? null };
-  };
-
-  const completed = requests.find((request) => request.status === "completed");
-  if (completed) {
-    const who = signedBy(completed);
-    return { kind: "signed", requestId: completed.id, signedByName: who.name, signedAt: who.at ?? completed.completedAt ?? completed.createdAt };
-  }
-  const open = requests[0];
-  if (!open) return { kind: "none" };
-  const waiting = open.recipients.find((recipient) => recipient.status !== "signed" && recipient.status !== "declined");
-  if (waiting) return { kind: "open", requestId: open.id, recipientId: waiting.id, startedAt: open.createdAt };
-  // Everyone has signed and it is not completed yet: sealing takes a few
-  // seconds, and is retried in the background if it fails.
-  return open.recipients.some((recipient) => recipient.status === "signed")
-    ? { kind: "finishing", requestId: open.id, signedByName: signedBy(open).name }
-    : { kind: "none" };
-}
-
-type RawTx = Pick<Prisma.TransactionClient, "$queryRaw">;
-
-/**
- * Hold every request for this booking's indemnity, so a signature being
- * submitted right now has either landed or not by the next statement.
- *
- * The signing route locks the request row while it records a signature. A
- * statement that started before that commit would still see "nobody has signed"
- * for the signer's row, and withdraw a document the driver had just signed. So:
- * take the rows first, and only then ask.
- */
-async function holdIndemnityRequests(tx: RawTx, booking: { id: string; tenantId: string }): Promise<void> {
-  await tx.$queryRaw`
-    SELECT r."id" FROM "SignatureRequest" r
-     WHERE r."subjectType" = ${TEST_DRIVE_INDEMNITY} AND r."subjectId" = ${booking.id} AND r."tenantId" = ${booking.tenantId}
-       FOR UPDATE
-  `;
+export function indemnityState(bookingId: string): Promise<IndemnityState> {
+  return subjectSigningState(indemnityOf(bookingId));
 }
 
 /**
- * Withdraw a booking's indemnity that was opened and never signed — when a new
- * one replaces it, or the test drive is cancelled. Run inside the caller's
- * transaction, AFTER it holds the booking row (the lock order completion takes).
- *
- * One that has a signature on it is left alone: it is on its way to being
- * sealed, and a cancelled booking does not un-sign what the driver signed.
- *
- * Raw SQL so the base client's transaction and the workspace-scoped one both
- * fit. Returns the ids, for {@link recordIndemnityWithdrawn} once committed.
+ * Withdraw a booking's indemnity that was opened and never signed — the test
+ * drive was cancelled, missed, or went out on an indemnity recorded by hand.
+ * Inside the caller's transaction, AFTER it holds the booking row. One with a
+ * signature on it is left alone.
  */
-export async function withdrawOpenIndemnity(tx: RawTx, booking: { id: string; tenantId: string | null }): Promise<string[]> {
-  if (!booking.tenantId) return [];
-  await holdIndemnityRequests(tx, { id: booking.id, tenantId: booking.tenantId });
-  const rows = await tx.$queryRaw<Array<{ id: string }>>`
-    UPDATE "SignatureRequest" r
-       SET "status" = 'voided', "updatedAt" = NOW()
-     WHERE r."subjectType" = ${TEST_DRIVE_INDEMNITY}
-       AND r."subjectId" = ${booking.id}
-       AND r."tenantId" = ${booking.tenantId}
-       AND r."status" NOT IN (${Prisma.join([...CLOSED_REQUEST_STATUSES])})
-       AND NOT EXISTS (
-         SELECT 1 FROM "SignatureRecipient" s WHERE s."requestId" = r."id" AND s."status" = 'signed'
-       )
-    RETURNING r."id"
-  `;
-  return rows.map((row) => row.id);
+export function withdrawOpenIndemnity(
+  tx: Pick<Prisma.TransactionClient, "$queryRaw">,
+  booking: { id: string; tenantId: string | null },
+): Promise<string[]> {
+  return withdrawOpenSubjectRequests(tx, indemnityOf(booking.id), booking.tenantId);
 }
 
 /** The evidence entry for each request {@link withdrawOpenIndemnity} closed. */
-export async function recordIndemnityWithdrawn(requestIds: string[], actor: string, reason: string): Promise<void> {
-  for (const requestId of requestIds) {
-    await logSignEvent(requestId, { type: "voided", actor, metadata: { via: "test_drive", reason } });
-  }
+export function recordIndemnityWithdrawn(requestIds: string[], actor: string, reason: string): Promise<void> {
+  return recordSubjectWithdrawn(requestIds, actor, "test_drive", reason);
 }
 
 /**
@@ -151,7 +74,8 @@ export async function prepareIndemnity(
   bookingId: string,
   user: { id: string; name: string; email?: string | null },
   /** The unsigned PDF. It is rendered by a browser process, so the database test brings its own. */
-  toPdf: (doc: DocumentModel, context: MergeContext) => Promise<Buffer> = (doc, context) => renderEnvelopePdf(doc, null, null, context),
+  toPdf: (doc: DocumentModel, context: MergeContext, tenantId: string) => Promise<Buffer> = (doc, context, tenantId) =>
+    renderEnvelopePdf(doc, null, null, { context, tenantId }),
 ): Promise<{ requestId: string; replaced: string[] }> {
   const booking = await prisma.testDriveBooking.findFirst({
     where: { id: bookingId, deletedAt: null },
@@ -178,19 +102,19 @@ export async function prepareIndemnity(
   const layout = (await printableRecordLayout("indemnity")) ?? indemnityTemplateForScreen();
   const title = `Test-drive indemnity — ${booking.reference}`;
   layout.title = title;
-  const driver = { name: contactName(contact), email: contact.email ?? null, phone: contact.phone ?? null };
-  resolvePartyRecipients(layout, { denago: { name: user.name, email: user.email ?? null }, customer: driver });
   // Only the driver signs here. A layout that also asks someone else to sign
   // would wait on a signature this screen never collects, and the booking would
   // never be marked — so say so now instead.
-  const someoneElse = layout.recipients.find((recipient) => recipient.role !== "viewer" && recipient.party !== "customer");
-  if (someoneElse) {
+  const signable = signedByCustomerOnly(layout, {
+    staff: { name: user.name, email: user.email ?? null },
+    customer: { name: contactName(contact), email: contact.email ?? null, phone: contact.phone ?? null },
+  });
+  if ("alsoAsks" in signable) {
     throw new ActionRefusal(
-      `Your indemnity layout also asks for a signature from “${recipientLabel(someoneElse)}”. Signing on this device collects the driver's only — ` +
+      `Your indemnity layout also asks for a signature from “${signable.alsoAsks}”. Signing on this device collects the driver's only — ` +
         "remove that signature block in Document Studio, or mark the indemnity signed by hand.",
     );
   }
-  const doc = ensureSignable(layout, driver);
   const context = buildTestDriveContext(
     {
       driverLicenceNumber: booking.driverLicenceNumber,
@@ -205,61 +129,23 @@ export async function prepareIndemnity(
     regional,
   );
 
-  // Rendered and stored BEFORE the lock, like a quote's: a PDF render must not
-  // hold a row lock, and the file has to exist before a request can name it.
-  const pdf = await toPdf(doc, context);
-  const storedName = await saveFile(pdf, `${title}.pdf`, "application/pdf", tenantId);
-
-  let outcome: { requestId: string; replaced: string[] } | "gone" | "signed" = "gone";
-  let committed = false;
-  try {
-    outcome = await basePrisma.$transaction(async (tx) => {
-      // The booking row is the mutex for its indemnity: taken first here, and
-      // first by completion (lockSubject), so the two cannot interleave.
+  const outcome = await openSubjectRequest({
+    subject: indemnityOf(bookingId),
+    tenantId,
+    // The booking row is the mutex for its indemnity: taken first here, and
+    // first by completion (lockSubject), so the two cannot interleave.
+    holdRecord: async (tx) => {
       await tx.$executeRaw`SELECT id FROM "TestDriveBooking" WHERE id = ${bookingId} AND "tenantId" = ${tenantId} FOR UPDATE`;
-      const live = await tx.testDriveBooking.findFirst({
-        where: { id: bookingId, tenantId, deletedAt: null },
-        select: { status: true },
-      });
-      if (!live || !UPCOMING_TEST_DRIVE_STATUSES.includes(live.status)) return "gone" as const;
-      await holdIndemnityRequests(tx, { id: bookingId, tenantId });
-      // Signed — completed, or signed and still being sealed. Never replaced.
-      const signed = await tx.signatureRequest.findFirst({
-        where: {
-          subjectType: TEST_DRIVE_INDEMNITY,
-          subjectId: bookingId,
-          tenantId,
-          OR: [{ status: "completed" }, { status: OPEN, recipients: { some: { status: "signed" } } }],
-        },
-        select: { id: true },
-      });
-      if (signed) return "signed" as const;
-
-      const replaced = await withdrawOpenIndemnity(tx, { id: bookingId, tenantId });
-      const created = await createSignatureRequestFromDoc({
-        doc,
-        title,
-        unsignedPdfRef: storedName,
-        // No document or record of its own beside the customer: who may open it
-        // in the Signatures list follows who may open the customer.
-        source: { contactId: contact.id, subject: { type: TEST_DRIVE_INDEMNITY, id: bookingId } },
-        context,
-        createdById: user.id,
-        client: tx,
-      });
-      return { requestId: created.id, replaced };
-    });
-    committed = typeof outcome === "object";
-  } finally {
-    // A thrown commit is not a rollback (recordSigning.ts spells this out): the
-    // file goes only when a read PROVES no request names it.
-    if (!committed) {
-      const named = await basePrisma.signatureRequest
-        .findFirst({ where: { unsignedPdfRef: storedName }, select: { id: true } })
-        .then(Boolean, () => true);
-      if (!named) await deleteFile(storedName).catch(() => {});
-    }
-  }
+      const live = await tx.testDriveBooking.findFirst({ where: { id: bookingId, tenantId, deletedAt: null }, select: { status: true } });
+      return Boolean(live && UPCOMING_TEST_DRIVE_STATUSES.includes(live.status));
+    },
+    doc: signable.doc,
+    title,
+    context,
+    contactId: contact.id,
+    createdById: user.id,
+    pdf: await toPdf(signable.doc, context, tenantId),
+  });
   if (outcome === "signed") throw new ActionRefusal("The indemnity for this test drive has already been signed.");
   if (outcome === "gone") throw new ActionRefusal("This test drive changed while the indemnity was being prepared — refresh and try again.");
   await recordIndemnityWithdrawn(outcome.replaced, await staffActor(user.name, tenantId), "Replaced by a new indemnity").catch(() => {});

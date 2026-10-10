@@ -17,6 +17,14 @@ import type { MergeContext } from "@/lib/docbuilder/merge";
 /** A test drive's indemnity. `subjectId` is the TestDriveBooking's id. */
 export const TEST_DRIVE_INDEMNITY = "test_drive_indemnity";
 
+/**
+ * The delivery note the customer signs at handover. `subjectId` is the QUOTE's
+ * id — and it is here, not in `quoteId`, on purpose: `quoteId` means "this
+ * request is the quote itself", and completing such a request marks the quote
+ * accepted and wins the lead. Receiving the goods is a different signature.
+ */
+export const DELIVERY_NOTE = "delivery_note";
+
 export type RequestSubject = { type: string; id: string };
 
 /** The columns that say what a request is about, and whose it is. */

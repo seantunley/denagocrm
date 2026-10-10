@@ -52,7 +52,9 @@ test("every fulfilment quote mutation carries the tenant on the destructive stat
     assert.match(fn, /if \(updated\.count !== 1\) refuse\(QUOTE_GONE\);/, `${name} must refuse a zero-row tenant-bound update`);
   }
   assert.match(slice("rescheduleDelivery", "registerDeliveryPhotos"), /quote\.updateMany\(\{\s*where: \{ id: quoteId, tenantId, deliveredAt: null/);
-  assert.match(delivery, /tx\.quote\.updateMany\(\{\s*where: \{ id: quoteId, tenantId, deliveredAt: null \}/, "the delivery must tenant-bind its quote update");
+  // `deletedAt: null` is written out because the delivery's transaction is
+  // basePrisma's — a real one, where no scoped client adds it (oneDeliveryFlow.test.ts).
+  assert.match(delivery, /tx\.quote\.updateMany\(\{\s*where: \{ id: quoteId, tenantId, deliveredAt: null, deletedAt: null \}/, "the delivery must tenant-bind its quote update");
   assert.match(delivery, /if \(updated\.count !== 1\) refuse\(/, "and refuse a zero-row update");
 });
 
