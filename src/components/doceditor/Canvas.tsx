@@ -111,6 +111,9 @@ function PageView({
   // How many sheets this page's content will actually print onto.
   // An email is one continuous card, never paginated.
   const sheets = email ? 1 : Math.max(1, Math.ceil(height / sheet - 0.001));
+  // Only the page knows how many sheets its content really takes; the design check reads it from the store.
+  const setPageSheets = useEditor((s) => s.setPageSheets);
+  useEffect(() => { setPageSheets(page.id, sheets); }, [page.id, sheets, setPageSheets]);
 
   return (
     <div
