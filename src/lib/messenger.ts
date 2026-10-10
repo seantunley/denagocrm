@@ -428,7 +428,13 @@ export async function recordInboundDm(
         lastName: rest.join(" ") || null,
         source: platform,
         [idField]: senderId,
-        ...(platform === "x" ? { tenantId: ownedWriteTenantId() } : {}),
+        // Owned like the lead that may be opened for it a few lines below
+        // (leadCreate stamps ownedWriteTenantId()). Left tenantless — which is
+        // what happened on Messenger and Instagram while enforcement is off —
+        // the ad lead's (tenantId, contactId) key cannot point at this contact
+        // and the lead insert is refused. Under enforcement this is the value
+        // the guard stamps anyway.
+        tenantId: ownedWriteTenantId(),
         notes: profileName ? null : `Created from an inbound ${label} DM — name not yet available.`,
       },
     });
@@ -493,6 +499,9 @@ export async function recordInboundDm(
           summary: `Lead “${title}” created — DM conversation started from an ad`,
           userName: "System",
         },
+        // A restore from quarantine: the lead is recorded, but no "New lead" push
+        // and no lead_created journey — see NewLead.quiet.
+        quiet: options.quiet === true,
       });
       if (lead) leadId = lead.id;
     }

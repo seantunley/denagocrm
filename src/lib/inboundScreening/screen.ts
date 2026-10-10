@@ -142,10 +142,12 @@ async function decide(tenantId: string, input: ScreenInput, policy: ScreeningPol
     return { ...base, quarantine: false, classification: "uncertain", uncertain: false, decidedBy: rule === "allow" ? "sender_allow" : "rule", reasonCodes: ["menu_reply"], reason: "A reply to the chatbot's own menu." };
   }
 
-  const [relationship, patterns, confirmed, burst] = await Promise.all([
+  // Broad rules are ONLY the ones an owner has switched on. A person's "spam"
+  // label on one message is an example and a proposal — it is never read here,
+  // so it cannot hold another sender's message by itself.
+  const [relationship, patterns, burst] = await Promise.all([
     rule ? NO_RELATIONSHIP : loadRelationship(tenantId, input.channel, input.senderId, who),
     rule ? [] : basePrisma.inboundSpamPattern.findMany({ where: { tenantId, status: "active" }, select: { kind: true, value: true }, take: 500 }),
-    rule ? [] : basePrisma.inboundScreening.findMany({ where: { tenantId, staffLabel: "spam", body: { not: "" } }, orderBy: { labelledAt: "desc" }, take: 200, select: { body: true } }),
     rule ? [] : basePrisma.inboundScreening.findMany({ where: { tenantId, channel, senderId, receivedAt: { gt: since(policy.burstWindowSeconds * 1000) } }, select: { body: true }, take: 200 }),
   ]);
 
@@ -153,7 +155,6 @@ async function decide(tenantId: string, input: ScreenInput, policy: ScreeningPol
     text: input.text,
     senderRule: rule,
     relationship,
-    confirmedSpam: confirmed.map((c) => normalizeText(c.body)),
     activeTextPatterns: patterns.filter((p) => p.kind === "text").map((p) => p.value),
     activeDomains: patterns.filter((p) => p.kind === "domain").map((p) => p.value),
     recentFromSender: burst.map((b) => normalizeText(b.body)),

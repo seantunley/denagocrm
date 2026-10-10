@@ -13,7 +13,7 @@ import {
  */
 
 const base: RuleInput = {
-  text: "", senderRule: null, relationship: NO_RELATIONSHIP, confirmedSpam: [], activeTextPatterns: [], activeDomains: [], recentFromSender: [], policy: DEFAULT_POLICY,
+  text: "", senderRule: null, relationship: NO_RELATIONSHIP, activeTextPatterns: [], activeDomains: [], recentFromSender: [], policy: DEFAULT_POLICY,
 };
 const decide = (over: Partial<RuleInput>) => decideByRules({ ...base, ...over });
 
@@ -57,13 +57,13 @@ test("a block holds everything from the sender and needs no model; an allow beat
   // Blocking is a decision about a sender, not a classification of the message.
   assert.equal(blocked.outcome === "quarantine" && blocked.classification, "uncertain");
   assert.equal(decide({ text: "", senderRule: "block" }).outcome, "quarantine");
-  const allowed = decide({ text: SUSPENSION, senderRule: "allow", confirmedSpam: [normalizeText(SUSPENSION)], activeDomains: ["meta-appeal-center.help"] });
+  const allowed = decide({ text: SUSPENSION, senderRule: "allow", activeTextPatterns: [normalizeText(SUSPENSION)], activeDomains: ["meta-appeal-center.help"] });
   assert.deepEqual([allowed.outcome, allowed.outcome === "admit" && allowed.decidedBy], ["admit", "sender_allow"]);
 });
 
-test("a real relationship admits without a model, even for wording once marked as spam", () => {
+test("a real relationship admits without a model, even for wording an owner made a spam rule", () => {
   for (const key of ["staffReplied", "activeQuote", "serviceRecord", "booking"] as const) {
-    const v = decide({ text: SUSPENSION, relationship: { ...NO_RELATIONSHIP, [key]: true }, confirmedSpam: [normalizeText(SUSPENSION)] });
+    const v = decide({ text: SUSPENSION, relationship: { ...NO_RELATIONSHIP, [key]: true }, activeTextPatterns: [normalizeText(SUSPENSION)] });
     assert.deepEqual([v.outcome, v.outcome === "admit" && v.classification, v.outcome === "admit" && v.decidedBy], ["admit", "customer_support", "relationship"], key);
   }
   // A contact row or a lead is not a relationship: neither is a field on the type.
@@ -72,15 +72,24 @@ test("a real relationship admits without a model, even for wording once marked a
 
 test("repeat spam is caught through small variations — different numbers, case, punctuation, emoji", () => {
   assert.ok(similarity(normalizeText(SUSPENSION), normalizeText(SUSPENSION_VARIANT)) >= 0.8);
-  const v = decide({ text: SUSPENSION_VARIANT, confirmedSpam: [normalizeText(SUSPENSION)] });
-  assert.deepEqual([v.outcome, v.outcome === "quarantine" && v.reasonCodes[0]], ["quarantine", "repeat_of_confirmed_spam"]);
-  // …but a different message is not, however spammy the corpus.
-  assert.equal(decide({ text: "Hi, is the suspension on the Rover XL adjustable for a heavier load?", confirmedSpam: [normalizeText(SUSPENSION)] }).outcome, "undecided");
+  const v = decide({ text: SUSPENSION_VARIANT, activeTextPatterns: [normalizeText(SUSPENSION)] });
+  assert.deepEqual([v.outcome, v.outcome === "quarantine" && v.reasonCodes[0]], ["quarantine", "matches_spam_rule"]);
+  // …but a different message is not, however spammy the rule.
+  assert.equal(decide({ text: "Hi, is the suspension on the Rover XL adjustable for a heavier load?", activeTextPatterns: [normalizeText(SUSPENSION)] }).outcome, "undecided");
+});
+
+test("a person's 'spam' label is not an input to the rules at all — only owner-approved rules hold other senders", () => {
+  const rules = readFileSync("src/lib/inboundScreening/rules.ts", "utf8");
+  const stage = readFileSync("src/lib/inboundScreening/screen.ts", "utf8");
+  assert.doesNotMatch(rules, /confirmedSpam/);
+  // The stage reads broad rules only where status is "active", and never reads staff labels to decide.
+  assert.match(stage, /inboundSpamPattern\.findMany\(\{ where: \{ tenantId, status: "active" \}/);
+  assert.doesNotMatch(stage, /staffLabel/);
 });
 
 test("a short message can never match a spam example, even an identical one", () => {
   for (const text of ["hi", "price?", "hello there", "how much is it"]) {
-    assert.equal(decide({ text, confirmedSpam: [normalizeText(text)], activeTextPatterns: [normalizeText(text)] }).outcome, "undecided", text);
+    assert.equal(decide({ text, activeTextPatterns: [normalizeText(text)] }).outcome, "undecided", text);
   }
 });
 
@@ -173,6 +182,26 @@ test("screening runs before any side effect in both webhooks, and after the staf
   const meta = readFileSync("src/app/api/webhooks/meta/route.ts", "utf8");
   const dm = meta.slice(meta.indexOf("for (const ev of entry.messaging"), meta.indexOf("reportUnmappedEndpoint(platform"));
   assert.ok(sorted(order(dm, "ev.delivery || ev.read", "ev.message?.is_echo", "claimInboundBotEvent", "screenInbound(", "if (!screened.admit) return;", "recordInboundDm(", "runDmFlow(")));
+});
+
+test("a restore is quiet all the way down: no message push, no new-lead push, no lead_created journey", () => {
+  const review = readFileSync("src/lib/inboundScreening/review.ts", "utf8");
+  assert.equal((review.match(/\{ quiet: true \}/g) ?? []).length, 2, "both channels are restored quietly");
+  // The DM recorder hands the intent to the one lead creator…
+  assert.match(readFileSync("src/lib/messenger.ts", "utf8"), /quiet: options\.quiet === true,/);
+  // …which returns before BOTH the push and the journey event, and after the audit line.
+  const create = readFileSync("src/lib/leadCreate.ts", "utf8");
+  const at = (needle: string) => create.indexOf(needle);
+  assert.ok(at("if (!input.audit.strict) await logAudit(auditFor(lead));") < at("if (input.quiet) return lead;"));
+  assert.ok(at("if (input.quiet) return lead;") < at("await sendPushToAll({ title: push.title"));
+  assert.ok(at("if (input.quiet) return lead;") < at('await emitLeadJourneyEvent("lead_created"'));
+});
+
+test("an interrupted restore is a lease that expires, and what is listed as held includes it", () => {
+  const review = readFileSync("src/lib/inboundScreening/review.ts", "utf8");
+  assert.match(review, /OR: \[\{ state: "quarantined" \}, \{ state: "restoring", updatedAt: \{ lt: restoreLeaseCutoff\(\) \} \}\]/);
+  const panel = readFileSync("src/app/(app)/inbox/SpamPanel.tsx", "utf8");
+  assert.equal((panel.match(/\{ state: "restoring", updatedAt: \{ lt: restoreLeaseCutoff\(\) \} \}/g) ?? []).length, 2, "the count and the list both include a stale restore");
 });
 
 test("the stage cannot lose a message: any failure inside it admits", () => {

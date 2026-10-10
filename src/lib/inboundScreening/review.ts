@@ -19,6 +19,17 @@ const refuse = (message: string): never => { throw new ReviewRefusal(message); }
 export type Reviewer = { id: string; name: string };
 
 /**
+ * How long a restore may hold its claim before it is treated as interrupted.
+ * A restore is a handful of queries and, at worst, five attachment downloads;
+ * two minutes is far past a live one and short enough that nobody waits long.
+ * ponytail: a fixed lease read off `updatedAt`, no heartbeat — add one if a
+ * restore ever legitimately runs longer than this.
+ */
+export const RESTORE_LEASE_MS = 2 * 60 * 1000;
+export const restoreLeaseCutoff = () => new Date(Date.now() - RESTORE_LEASE_MS);
+/** A restore that claimed the message and never finished: shown in quarantine again, and restorable. */
+export const restoreInterrupted = (row: { state: string; updatedAt: Date }) => row.state === "restoring" && row.updatedAt < restoreLeaseCutoff();
+/**
  * "Not spam — restore": admit the original message, exactly once.
  *
  * The row is claimed first (quarantined → restoring) with a counted update, so
@@ -34,7 +45,9 @@ export type Reviewer = { id: string; name: string };
 export async function restoreScreening(tenantId: string, id: string, by: Reviewer): Promise<{ contactId: string | null; leadId: string | null }> {
   const row = await basePrisma.inboundScreening.findFirst({ where: { id, tenantId } });
   if (!row) refuse("That message is no longer here.");
-  if (row!.state !== "quarantined") refuse(row!.state === "restored" ? "That message was already restored." : "That message is not in quarantine.");
+  const interrupted = restoreInterrupted(row!);
+  if (row!.state === "restoring" && !interrupted) refuse("Someone is restoring that message right now.");
+  if (row!.state !== "quarantined" && !interrupted) refuse(row!.state === "restored" ? "That message was already restored." : "That message is not in quarantine.");
 
   // Today's policy, not the day it arrived: a sender blocked since stays out.
   const rule = await basePrisma.inboundSenderRule.findFirst({
@@ -43,7 +56,16 @@ export async function restoreScreening(tenantId: string, id: string, by: Reviewe
   });
   if (rule?.rule === "block") refuse("This sender is blocked. Unblock them first, then restore the message.");
 
-  const claimed = await basePrisma.inboundScreening.updateMany({ where: { id, tenantId, state: "quarantined" }, data: { state: "restoring" } });
+  // The claim is a LEASE. `updatedAt` is stamped by this write, so a claim whose
+  // holder died (the server was recycled between the claim and the recording)
+  // goes stale after RESTORE_LEASE_MS and can be taken again — by this same
+  // function, the same way. Retrying is safe at any point of the first attempt:
+  // the transcript's dedupe key refuses a second copy of the message, and the
+  // contact and lead are found rather than created again.
+  const claimed = await basePrisma.inboundScreening.updateMany({
+    where: { id, tenantId, OR: [{ state: "quarantined" }, { state: "restoring", updatedAt: { lt: restoreLeaseCutoff() } }] },
+    data: { state: "restoring" },
+  });
   if (claimed.count !== 1) refuse("Someone else just restored that message.");
 
   try {

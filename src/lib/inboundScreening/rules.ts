@@ -8,7 +8,7 @@
  *   1. a person's standing decision about the sender (block, then allow)
  *   2. nothing readable → not enough evidence, never spam
  *   3. a real relationship with this workspace → a customer, never screened out
- *   4. wording a person has confirmed as spam before (small variations included)
+ *   4. wording an owner has switched on as a spam rule (small variations included)
  *   5. a link domain an owner has switched on as a spam rule
  *   6. the same message hammered at machine speed by a stranger
  *   7. otherwise: undecided — ask the classifier, within its budget
@@ -172,9 +172,7 @@ export type RuleInput = {
   text: string;
   senderRule: SenderRule;
   relationship: Relationship;
-  /** Normalised wording people have confirmed as spam in this workspace (newest first, bounded by the caller). */
-  confirmedSpam: string[];
-  /** Normalised wording an owner has switched on as a rule. */
+  /** Normalised wording an owner has switched on as a rule (proposed by a person's "spam" label, small variations matched). */
   activeTextPatterns: string[];
   /** Link domains an owner has switched on as a rule. */
   activeDomains: string[];
@@ -213,11 +211,10 @@ export function decideByRules(input: RuleInput): RuleVerdict {
   // 4 + 5. Wording or a link domain already confirmed as spam.
   const longEnough = words(normalized).length >= policy.repeatMinWords;
   if (longEnough) {
+    // ONLY wording an owner switched on. A person marking one message as spam
+    // proposes a rule and holds nobody else's messages until an owner agrees.
     if (input.activeTextPatterns.some((p) => similarity(normalized, p) >= policy.repeatSimilarity)) {
       return { outcome: "quarantine", decidedBy: "rule", classification: "spam", reasonCodes: ["matches_spam_rule"], reason: "Matches a spam rule you switched on." };
-    }
-    if (input.confirmedSpam.some((p) => similarity(normalized, p) >= policy.repeatSimilarity)) {
-      return { outcome: "quarantine", decidedBy: "rule", classification: "spam", reasonCodes: ["repeat_of_confirmed_spam"], reason: "Almost identical to a message you marked as spam." };
     }
   }
   const domains = extractDomains(input.text);
@@ -285,7 +282,6 @@ export const REASON_TEXT: Record<string, string> = {
   sender_allowed: "You always allow this sender",
   no_readable_text: "Nothing readable to judge",
   matches_spam_rule: "Matches a spam rule you switched on",
-  repeat_of_confirmed_spam: "Almost identical to a message marked as spam",
   spam_link_domain: "Links to a site set as a spam rule",
   repeated_burst: "Same message sent over and over",
   has_link: "Contains a link",

@@ -43,7 +43,17 @@ export type LeadAudit = {
 };
 
 export type LeadPush = { title: string; body: string; kind: PushKind };
-export type NewLead = NewLeadFields & { audit: LeadAudit; push?: LeadPush | null };
+export type NewLead = NewLeadFields & {
+  audit: LeadAudit;
+  push?: LeadPush | null;
+  /**
+   * Record the lead and nothing else: no "New lead" push and no `lead_created`
+   * journey event. For a message a person is restoring from quarantine — they
+   * are looking at it, and automations written for a fresh enquiry must not
+   * fire for one that may be days old. Routing and the audit line still happen.
+   */
+  quiet?: boolean;
+};
 
 async function resolveStageId(stageId?: string | null): Promise<string | null> {
   if (stageId) return stageId;
@@ -142,6 +152,7 @@ async function createInStage(input: NewLead, stageId: string) {
   const push = input.push === undefined
     ? { title: "New lead 🚀", body: `${lead.title} — ${lead.name} (via ${lead.source})`, kind: "lead_new" as const }
     : input.push;
+  if (input.quiet) return lead;
   if (push) {
     await sendPushToAll({ title: push.title, body: push.body, url: `/leads/${lead.id}` }, push.kind).catch(() => {});
   }

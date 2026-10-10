@@ -23,7 +23,7 @@ import { getSetting, putSetting } from "../src/lib/settings";
 import { recordInboundWhatsApp } from "../src/lib/whatsapp";
 import { withInboundBotEvent } from "../src/lib/botInboundEvent";
 import { linkScreening, screenInbound, SCREENING_MODE_SETTING, SCREENING_POLICY_SETTING, type ScreenInput, type ScreenOutcome } from "../src/lib/inboundScreening/screen";
-import { ReviewRefusal, labelSpam, markThreadSpam, restoreScreening, screeningMetrics, setPatternStatus, setSenderRule } from "../src/lib/inboundScreening/review";
+import { RESTORE_LEASE_MS, ReviewRefusal, labelSpam, markThreadSpam, restoreLeaseCutoff, restoreScreening, screeningMetrics, setPatternStatus, setSenderRule } from "../src/lib/inboundScreening/review";
 import { DEFAULT_POLICY } from "../src/lib/inboundScreening/rules";
 
 const SFX = Math.random().toString(16).slice(2, 10);
@@ -84,6 +84,7 @@ let n = 0;
 /** A fresh WhatsApp sender: 11 digits unique to this run. */
 const newSender = () => `2783${SFX.replace(/[^0-9]/g, "").padEnd(4, "7").slice(0, 4)}${String(++n).padStart(3, "0")}`;
 const senders: string[] = [];
+const dmSenders: string[] = [];
 const events: string[] = [];
 
 const SUSPENSION = "Dear user, your Facebook page 48213 has been scheduled for permanent suspension for violating community standards. Verify your account within 24 hours at https://meta-appeal-center.help/verify/48213";
@@ -140,19 +141,28 @@ async function seed() {
 
 async function cleanup() {
   for (const tenantId of [DEFAULT_TENANT_ID, OTHER]) {
-    await basePrisma.inboundScreening.deleteMany({ where: { tenantId, OR: [{ senderId: { in: senders } }, { providerId: { contains: SFX } }] } });
+    await basePrisma.inboundScreening.deleteMany({ where: { tenantId, OR: [{ senderId: { in: [...senders, ...dmSenders] } }, { providerId: { contains: SFX } }] } });
     await basePrisma.inboundSenderRule.deleteMany({ where: { tenantId, senderId: { in: senders } } });
     await basePrisma.inboundSpamPattern.deleteMany({ where: { tenantId, createdById: reviewer.id } });
   }
-  const contacts = await basePrisma.contact.findMany({ where: { OR: senders.flatMap((s) => [{ whatsapp: `+${s}` }, { phone: `+${s}` }]) }, select: { id: true } });
+  const contacts = await basePrisma.contact.findMany({ where: { OR: [...senders.flatMap((s) => [{ whatsapp: `+${s}` }, { phone: `+${s}` }]), ...dmSenders.map((s) => ({ messengerPsid: s }))] }, select: { id: true } });
   const ids = contacts.map((c) => c.id);
   if (ids.length) {
+    const leadIds = (await basePrisma.lead.findMany({ where: { contactId: { in: ids } }, select: { id: true } })).map((l) => l.id);
+    if (leadIds.length) {
+      await basePrisma.communication.deleteMany({ where: { leadId: { in: leadIds } } });
+      await basePrisma.conversation.deleteMany({ where: { leadId: { in: leadIds } } });
+      await basePrisma.auditLog.deleteMany({ where: { leadId: { in: leadIds } } }).catch(() => {});
+      await basePrisma.lead.deleteMany({ where: { id: { in: leadIds } } });
+    }
     await basePrisma.quote.deleteMany({ where: { contactId: { in: ids } } });
     await basePrisma.communication.deleteMany({ where: { contactId: { in: ids } } });
     await basePrisma.conversation.deleteMany({ where: { contactId: { in: ids } } });
     await basePrisma.auditLog.deleteMany({ where: { contactId: { in: ids } } }).catch(() => {});
     await basePrisma.contact.deleteMany({ where: { id: { in: ids } } });
   }
+  await basePrisma.pipelineStage.deleteMany({ where: { tenantId: DEFAULT_TENANT_ID, name: `Screening test ${SFX}` } });
+  await basePrisma.salesPipeline.deleteMany({ where: { tenantId: DEFAULT_TENANT_ID, name: `Screening test ${SFX}` } });
   await basePrisma.botInboundEvent.deleteMany({ where: { id: { in: events } } });
   await basePrisma.appSetting.deleteMany({ where: { tenantId: OTHER } });
   await basePrisma.user.deleteMany({ where: { id: reviewer.id } });
@@ -358,9 +368,17 @@ async function main() {
 
     script = () => ({ body: verdict("uncertain", ["too_little_to_tell"], true) });
     let calls = aiCalls;
+    const unapproved = await deliver(newSender(), SUSPENSION_VARIANT);
+    check("a staff 'spam' label alone does NOT hold the same campaign from another sender — it goes to the classifier like any message", unapproved.outcome.admit === true && (await row(unapproved.providerId))?.decidedBy === "ai" && aiCalls === calls + 1);
+    const wordingRule = proposals.find((p) => p.kind === "text")!;
+    await setPatternStatus(DEFAULT_TENANT_ID, wordingRule.id, "active", reviewer);
+    calls = aiCalls;
     const variant = await deliver(newSender(), SUSPENSION_VARIANT);
     const vr = await row(variant.providerId);
-    check("the same campaign from a NEW sender, reworded slightly, is held by rule with no classifier call", variant.outcome.admit === false && vr?.decidedBy === "rule" && vr?.reasonCodes[0] === "repeat_of_confirmed_spam" && aiCalls === calls);
+    check("once an OWNER switches the wording rule on, the campaign from a new sender, reworded slightly, is held with no classifier call", variant.outcome.admit === false && vr?.decidedBy === "rule" && vr?.reasonCodes[0] === "matches_spam_rule" && aiCalls === calls);
+    await setPatternStatus(DEFAULT_TENANT_ID, wordingRule.id, "disabled", reviewer);
+    const offAgain = await deliver(newSender(), SUSPENSION_VARIANT);
+    check("…and switching the wording rule off again reverses it", offAgain.outcome.admit === true);
 
     const domainOnly = "Claim your free golf cart voucher today only at https://meta-appeal-center.help/free before it expires tonight";
     const notYet = await deliver(newSender(), domainOnly);
@@ -398,6 +416,69 @@ async function main() {
     check("a late redelivery of the restored message adds nothing", (await footprint(from)).messages === 1 && redelivered.outcome.admit === false);
     const next = await deliver(from, "Sorry — I meant to ask how much the Rover XL6 is?");
     check("the restored sender's next message is judged on its own merits and admitted", next.outcome.admit === true && (await footprint(from)).messages === 2);
+  }
+
+  console.log("\nAn interrupted restore can always be finished");
+  {
+    const promo = "Grow your instagram followers fast with our premium package, limited offer today";
+    const setClaim = (id: string, ageMs: number) => basePrisma.inboundScreening.updateMany({ where: { id, tenantId: DEFAULT_TENANT_ID }, data: { state: "restoring", updatedAt: new Date(Date.now() - ageMs) } });
+    const listed = (id: string) => basePrisma.inboundScreening.count({ where: { id, tenantId: DEFAULT_TENANT_ID, OR: [{ state: "quarantined" }, { state: "restoring", updatedAt: { lt: restoreLeaseCutoff() } }] } });
+
+    // The server died between claiming the message and recording it.
+    const a = newSender();
+    const heldA = await deliver(a, promo);
+    await setClaim(heldA.outcome.screeningId!, 5_000);
+    check("a restore in progress (claimed seconds ago) is left alone", (await refuses(() => restoreScreening(DEFAULT_TENANT_ID, heldA.outcome.screeningId!, reviewer)))?.includes("right now") === true && (await footprint(a)).messages === 0);
+    check("…and is not yet back in the quarantine list", (await listed(heldA.outcome.screeningId!)) === 0);
+    await setClaim(heldA.outcome.screeningId!, RESTORE_LEASE_MS + 60_000);
+    check("once its claim has gone stale it is back in the quarantine list", (await listed(heldA.outcome.screeningId!)) === 1);
+    const raced = await Promise.all([1, 2].map(() => refuses(() => restoreScreening(DEFAULT_TENANT_ID, heldA.outcome.screeningId!, reviewer))));
+    check("two people retrying it at once: one finishes it, one is refused", raced.filter((x) => x === null).length === 1, JSON.stringify(raced));
+    check("…and the message is in the inbox exactly once, marked restored", (await footprint(a)).messages === 1 && (await row(heldA.providerId))?.state === "restored");
+
+    // The server died AFTER the message was recorded but before the row said so.
+    const b = newSender();
+    const heldB = await deliver(b, promo);
+    const rowB = await row(heldB.providerId);
+    await withInboundBotEvent({ rowId: rowB!.eventId, leaseAttempt: null }, () => recordInboundWhatsApp(b, null, promo, heldB.providerId, { quiet: true }));
+    await setClaim(rowB!.id, RESTORE_LEASE_MS + 60_000);
+    check("(setup) the message was already recorded when the first restore died", (await footprint(b)).messages === 1);
+    check("retrying finishes it without a second copy", (await refuses(() => restoreScreening(DEFAULT_TENANT_ID, rowB!.id, reviewer))) === null && (await footprint(b)).messages === 1 && (await footprint(b)).contacts === 1 && (await row(heldB.providerId))?.state === "restored");
+  }
+
+  console.log("\nRestoring an ad-attributed Messenger message");
+  {
+    const psid = `psid_scr_${SFX}`;
+    dmSenders.push(psid);
+    const providerId = `mid.${SFX}.ad`;
+    const referral = { ref: "spring-promo", ad_id: "120200000000000", source: "ADS" };
+    const text = "Dear user, your page is scheduled for permanent suspension. Verify your account at https://meta-appeal-center.help/now";
+    const where = { tenantId: DEFAULT_TENANT_ID, channel: "messenger", providerId };
+    const event = await basePrisma.botInboundEvent.create({ data: where, select: { id: true } });
+    events.push(event.id);
+    const screened = await withInboundBotEvent({ rowId: event.id, leaseAttempt: 1 }, () => screenInbound({
+      channel: "messenger", senderId: psid, providerId, senderName: null, kind: "text", text, wouldOpenLead: true,
+      payload: { via: "dm", platform: "messenger", senderId: psid, text, referral, attachments: [] },
+    }));
+    const held = await basePrisma.inboundScreening.findFirst({ where });
+    const people = () => basePrisma.contact.findMany({ where: { messengerPsid: psid }, select: { id: true } });
+    check("an ad-click scam on Messenger is held; no contact and no lead were created, and that is recorded", screened.admit === false && (await people()).length === 0 && (held?.suppressed as { newLead?: boolean })?.newLead === true);
+    // With enforcement off, lead creation takes the FIRST stage in the database, and a shared test
+    // database's first stage can be another test workspace's. Give this workspace the first one.
+    const pipeline = await basePrisma.salesPipeline.create({ data: { name: `Screening test ${SFX}`, tenantId: DEFAULT_TENANT_ID }, select: { id: true } });
+    await basePrisma.pipelineStage.create({ data: { name: `Screening test ${SFX}`, order: -999_999, pipelineId: pipeline.id, tenantId: DEFAULT_TENANT_ID } });
+    const stages = 1;
+    const restored = await refuses(() => restoreScreening(DEFAULT_TENANT_ID, held!.id, reviewer));
+    const contacts = await people();
+    const leads = contacts.length ? await basePrisma.lead.findMany({ where: { contactId: contacts[0].id }, select: { id: true } }) : [];
+    check("restoring it records one contact, one message and — the pipeline being set up — one lead", restored === null && contacts.length === 1 && (await basePrisma.communication.count({ where: { contactId: contacts[0].id } })) === 1 && leads.length === (stages > 0 ? 1 : 0), `${restored} contacts ${contacts.length} leads ${leads.length} stages ${stages}`);
+    if (leads.length) {
+      // NewLead.quiet: the lead is recorded, and the automations written for a fresh enquiry do not fire.
+      const [runs] = await basePrisma.$queryRaw<{ n: number }[]>`SELECT count(*)::int n FROM "JourneyRun" WHERE "leadId" = ${leads[0].id}`;
+      check("no journey was started for the restored lead", runs.n === 0);
+    }
+    await refuses(() => restoreScreening(DEFAULT_TENANT_ID, held!.id, reviewer));
+    check("restoring twice adds no second lead", contacts.length === 1 && (await basePrisma.lead.count({ where: { contactId: contacts[0].id } })) === leads.length);
   }
 
   console.log("\nSpam the filter missed");

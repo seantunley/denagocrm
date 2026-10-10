@@ -4,7 +4,7 @@ import { SaveForm, SaveButton } from "@/components/SaveForm";
 import { Surface } from "@/components/visual-system";
 import { CLASS_LABEL, inertPreview, reasonText, type ScreeningClass } from "@/lib/inboundScreening/rules";
 import { screeningSettings } from "@/lib/inboundScreening/screen";
-import { screeningMetrics } from "@/lib/inboundScreening/review";
+import { restoreLeaseCutoff, screeningMetrics } from "@/lib/inboundScreening/review";
 import { clearSenderRule, decideSpamPattern, saveScreeningSettings } from "@/app/actions/inboundSpam";
 import { formatDateTime } from "@/lib/format";
 
@@ -12,7 +12,18 @@ const channelLabel: Record<string, string> = { whatsapp: "WhatsApp", messenger: 
 
 /** How many messages are held right now — the tab's count. One workspace, named. */
 export async function quarantineCount(tenantId: string): Promise<number> {
-  return basePrisma.inboundScreening.count({ where: { tenantId, state: "quarantined" } });
+  // "Held" includes a restore that was interrupted (its claim has gone stale): it
+  // is back in the list, so a message can never sit unseen in a half-done state.
+  return basePrisma.inboundScreening.count({ where: { tenantId, OR: [{ state: "quarantined" }, { state: "restoring", updatedAt: { lt: restoreLeaseCutoff() } }] } });
+}
+
+/** The quarantine list: held messages, and any whose restore was interrupted. One workspace, named. */
+async function heldMessages(tenantId: string) {
+  return basePrisma.inboundScreening.findMany({
+    where: { tenantId, OR: [{ state: "quarantined" }, { state: "restoring", updatedAt: { lt: restoreLeaseCutoff() } }] },
+    orderBy: { receivedAt: "desc" }, take: 200,
+    select: { id: true, channel: true, senderId: true, senderName: true, receivedAt: true, body: true, reason: true, reasonCodes: true, decidedBy: true, staffLabel: true, classification: true, state: true },
+  });
 }
 
 /** Senders (by contact and channel) whose recent messages the filter read as a business approach. One workspace, named. */
@@ -31,10 +42,7 @@ export async function businessApproachSenders(tenantId: string): Promise<{ conta
  */
 export default async function SpamPanel({ tenantId, canReview, isOwner }: { tenantId: string; canReview: boolean; isOwner: boolean }) {
   const [held, rules, patterns, metrics, settings] = await Promise.all([
-    basePrisma.inboundScreening.findMany({
-      where: { tenantId, state: "quarantined" }, orderBy: { receivedAt: "desc" }, take: 200,
-      select: { id: true, channel: true, senderId: true, senderName: true, receivedAt: true, body: true, reason: true, reasonCodes: true, decidedBy: true, staffLabel: true, classification: true },
-    }),
+    heldMessages(tenantId),
     basePrisma.inboundSenderRule.findMany({ where: { tenantId }, orderBy: { updatedAt: "desc" }, take: 200 }),
     basePrisma.inboundSpamPattern.findMany({ where: { tenantId, status: { in: ["proposed", "active"] } }, orderBy: [{ status: "asc" }, { hits: "desc" }], take: 100 }),
     screeningMetrics(tenantId, 30),
@@ -45,7 +53,7 @@ export default async function SpamPanel({ tenantId, canReview, isOwner }: { tena
   const rows: QuarantineRow[] = held.map((r) => ({
     id: r.id, channel: r.channel, sender: senderLabel(r.channel, r.senderId, r.senderName), senderKey: `${r.channel}:${r.senderId}`,
     receivedAt: r.receivedAt.toISOString(), preview: inertPreview(r.body),
-    reason: r.reason || reasonText(r.reasonCodes, CLASS_LABEL[r.classification as ScreeningClass] ?? "Held"),
+    reason: (r.state === "restoring" ? "A restore of this message was interrupted — restore it again. " : "") + (r.reason || reasonText(r.reasonCodes, CLASS_LABEL[r.classification as ScreeningClass] ?? "Held")),
     cause: r.decidedBy === "sender_block" ? "blocked" : "filter", confirmed: r.staffLabel === "spam",
   }));
   const { mode, policy } = settings;
