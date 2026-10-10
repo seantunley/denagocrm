@@ -47,7 +47,7 @@ test("independent lookups come as one batch; a bad one is dropped, not the batch
 
 test("the loop runs a batch side by side, skips repeats, and stops at the total cap", () => {
   const lib = code("src/lib/crmAssistant.ts");
-  const loop = lib.slice(lib.indexOf("const observations: Observation[] = [];"), lib.indexOf("const [profileRaw, company]"));
+  const loop = lib.slice(lib.indexOf("const complex = isComplexQuestion"), lib.indexOf("const [profileRaw, company]"));
   assert.ok(loop.length > 200);
   assert.match(loop, /step < maxSteps && observations\.length < MAX_LOOKUPS/);
   assert.match(loop, /const next = parseSteps\(reply\.text\)/);
@@ -140,7 +140,7 @@ test("complex questions get a larger research budget; simple ones do not", async
 
 test("research loop stops on the time budget before the step limit", () => {
   const lib = code("src/lib/crmAssistant.ts");
-  const loop = lib.slice(lib.indexOf("const observations: Observation[] = [];"), lib.indexOf("const [profileRaw, company]"));
+  const loop = lib.slice(lib.indexOf("const complex = isComplexQuestion"), lib.indexOf("const [profileRaw, company]"));
   assert.match(loop, /RESEARCH_BUDGET_MS/);
   assert.match(loop, /researchLeft\(\) < MIN_CALL_MS/);
   assert.match(loop, /complex \? 180_000 : 90_000/);
