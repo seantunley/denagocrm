@@ -25,6 +25,8 @@ import {
 } from "./identityPolicy";
 import { buildSignEvent } from "./events";
 import { snapFieldsToAcceptanceCards } from "@/lib/doceditor/fieldSnap";
+import type { MergeContext } from "@/lib/docbuilder/merge";
+import type { RequestSubject } from "./subject";
 
 export type RequestSource = {
   documentId?: string | null;
@@ -32,6 +34,8 @@ export type RequestSource = {
   jobCardId?: string | null;
   contactId?: string | null;
   templateId?: string | null;
+  /** What the request is about when that is neither a quote nor a job card (signing/subject.ts). */
+  subject?: RequestSubject | null;
 };
 
 /**
@@ -96,6 +100,12 @@ export async function createSignatureRequestFromDoc(opts: {
   title: string;
   unsignedPdfRef: string | null;
   source: RequestSource;
+  /**
+   * The subject's values, frozen now — what its document renders from for as
+   * long as the request exists. Only for a request with a `source.subject`: a
+   * quote or job card renders from its own (locked) record.
+   */
+  context?: MergeContext | null;
   ordering?: "parallel" | "sequential";
   message?: string;
   createdById?: string | null;
@@ -205,6 +215,9 @@ export async function createSignatureRequestFromDoc(opts: {
         jobCardId: source.jobCardId ?? null,
         contactId: source.contactId ?? null,
         templateId: source.templateId ?? null,
+        subjectType: source.subject?.type ?? null,
+        subjectId: source.subject?.id ?? null,
+        ...(opts.context ? { contextJson: opts.context as object } : {}),
         snapshotJson: frozenDoc as object,
         // Frozen beside the document, not resolved at render — see frozenBrand.ts.
         brandJson: brand as object,

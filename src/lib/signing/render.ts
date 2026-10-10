@@ -12,6 +12,7 @@ import { embedStoredImage } from "@/lib/storedImage";
 import { getCompanyProfile, companyTokens } from "@/lib/companyProfile";
 import { getRegionalSettings } from "@/lib/settings";
 import { parseFrozenBrand, type FrozenBrand } from "./frozenBrand";
+import { parseSubjectContext } from "./subject";
 import type { SignatureRequest } from "@prisma/client";
 // The built-in logo is only the FALLBACK now: bindCtx puts the workspace's own
 // (or the frozen) logo on the context, and the renderer prefers that.
@@ -36,8 +37,13 @@ export async function bindCtx(
    * `liveVehicle: false` when rendering a signature request's SNAPSHOT: its
    * vehicleShowcase blocks carry the vehicle frozen at send time, and the live
    * Product must not be read at all (see freezeVehicleShowcase).
+   *
+   * `context` is a request's `contextJson`: the values of a record that is
+   * neither a quote nor a job card, frozen when the request was made
+   * (signing/subject.ts). It is what such a document renders from — there is no
+   * live record to read, on purpose.
    */
-  opts?: { liveVehicle?: boolean },
+  opts?: { liveVehicle?: boolean; context?: unknown },
 ): Promise<RenderCtx> {
   // Inject the editable Company Profile as {{company.*}} tokens so the brand footer
   // resolves dynamically — even when a document is sent for signing with NO linked
@@ -84,23 +90,28 @@ export async function bindCtx(
     const signatureSrc = jc?.signedAt ? await embedStoredImage(jc.signatureRef, jc.tenantId) : null;
     if (jc) return withCompany(buildJobCardContext(jc, signatureSrc, regional));
   }
-  // No linked record → still resolve the global brand tokens (unbound).
-  return withCompany(null);
+  // Neither a quote nor a job card: the values frozen with the request, when it
+  // has them. Without → still resolve the global brand tokens (unbound).
+  return withCompany(parseSubjectContext(opts?.context));
 }
 
-/** Render the frozen document of a signature request to print-ready HTML, bound to its record. */
-export async function renderRequestDocHtml(req: Pick<SignatureRequest, "snapshotJson" | "brandJson" | "quoteId" | "jobCardId"> & OwnedBy): Promise<string> {
+/**
+ * Render the frozen document of a signature request to print-ready HTML, bound to its record.
+ * `contextJson` is REQUIRED of the row (here and in the sheets below), so no caller can render a
+ * request about something other than a quote or job card without the values frozen for it.
+ */
+export async function renderRequestDocHtml(req: Pick<SignatureRequest, "snapshotJson" | "brandJson" | "quoteId" | "jobCardId" | "contextJson"> & OwnedBy): Promise<string> {
   const parsed = parseDocument(req.snapshotJson);
   if (!parsed) return "<p style='padding:24px;color:#64748b'>This document is unavailable.</p>";
   const doc = await embedDocImages(parsed, req.tenantId);
   const frozen = parseFrozenBrand(req.brandJson);
-  const ctx = await bindCtx(req.quoteId, req.jobCardId, frozen, { liveVehicle: false });
+  const ctx = await bindCtx(req.quoteId, req.jobCardId, frozen, { liveVehicle: false, context: req.contextJson });
   return renderDocumentHtml(doc, ctx, frozen?.logoUrl ?? logoDataUri());
 }
 
-/** Render a bound document to an unsigned print-ready PDF (overlay fields hidden). */
-export async function renderEnvelopePdf(doc: DocumentModel, quoteId: string | null, jobCardId: string | null): Promise<Buffer> {
-  const ctx = await bindCtx(quoteId, jobCardId);
+/** Render a bound document to an unsigned print-ready PDF (overlay fields hidden). `context`: see bindCtx. */
+export async function renderEnvelopePdf(doc: DocumentModel, quoteId: string | null, jobCardId: string | null, context?: unknown): Promise<Buffer> {
+  const ctx = await bindCtx(quoteId, jobCardId, undefined, { context });
   const html = renderDocumentHtml(await embedDocImages(doc), ctx, logoDataUri(), { hideOverlays: true });
   return htmlToPdf(html);
 }
@@ -135,14 +146,14 @@ export async function signedFieldStamps(requestId: string, excludeRecipientId: s
 }
 
 /** Interactive per-page sheets for the signing surface, bound to the record. */
-export async function renderRequestSigningSheets(req: Pick<SignatureRequest, "snapshotJson" | "brandJson" | "quoteId" | "jobCardId"> & OwnedBy): Promise<{ width: number; height: number; margin: number; css: string; pages: string[] }> {
+export async function renderRequestSigningSheets(req: Pick<SignatureRequest, "snapshotJson" | "brandJson" | "quoteId" | "jobCardId" | "contextJson"> & OwnedBy): Promise<{ width: number; height: number; margin: number; css: string; pages: string[] }> {
   const parsed = parseDocument(req.snapshotJson);
   const doc = parsed && (await embedDocImages(parsed, req.tenantId));
   if (!doc) return { width: 794, height: 1123, margin: 40, css: "", pages: ["<div style='padding:24px;color:#64748b'>This document is unavailable.</div>"] };
   // The sheets the SIGNER is looking at. These must match the sealed PDF exactly
   // — it is rendered from the same snapshot — so they take the frozen brand too.
   const frozen = parseFrozenBrand(req.brandJson);
-  const ctx = await bindCtx(req.quoteId, req.jobCardId, frozen, { liveVehicle: false });
+  const ctx = await bindCtx(req.quoteId, req.jobCardId, frozen, { liveVehicle: false, context: req.contextJson });
   return renderSigningSheets(doc, ctx, frozen?.logoUrl ?? logoDataUri());
 }
 

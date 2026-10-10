@@ -383,6 +383,18 @@ jobs:
       - name: Isolation -- a delivery receipt cannot reach another tenant
         run: npm run test:receipt-isolation
 
+      # A test drive's indemnity is the first signature request that is about
+      # neither a quote nor a job card. What that changes only shows against a
+      # real database with tenant enforcement on: the driver's details are frozen
+      # into the request (rename the customer afterwards and the document does not
+      # move), a signature goes through the real signing route on a salesperson's
+      # pass, and completing it marks the booking -- its own, in its own
+      # workspace, never a trashed one. Sealing needs a browser process; where the
+      # runner has none the signature still stands and the marking step is run
+      # directly, and the script says which of the two it did.
+      - name: Signing -- a test drive's indemnity marks its own booking, and only that
+        run: npm run test:test-drive-indemnity
+
       # The migration runner now executes each migration.sql statement by
       # statement from its own client instead of shelling out to `db execute`.
       # Ten migrations SET a session GUC and RESET it up to 80 statements later,

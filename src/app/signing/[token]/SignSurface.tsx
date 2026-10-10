@@ -11,7 +11,7 @@ import { SIGNING_CONSENT } from "@/lib/signing/consent";
  * `pass` is that member of staff vouching for who is signing (it stands in for
  * the one-time code); the rest is where the device goes afterwards.
  */
-export type InPersonSigning = { pass: string; staffName: string; doneHref: string };
+export type InPersonSigning = { pass: string; staffName: string; doneHref: string; /** What doneHref leads back to. Default: "the request". */ backTo?: string };
 
 type Field = { id: string; kind: string; label: string; required: boolean; page: number; x: number; y: number; width: number; height: number };
 type Sheets = { width: number; height: number; margin: number; css: string; pages: string[] };
@@ -220,7 +220,7 @@ export function SignSurface({ token, title, recipientName, sheets, fields, stamp
   const handBack = inPerson ? (
     <p style={{ ...p, marginTop: 14 }}>
       Please hand this device back to {inPerson.staffName}.{" "}
-      <a href={inPerson.doneHref} style={{ color: "#94a3b8", textDecoration: "underline" }}>Staff: back to the request</a>
+      <a href={inPerson.doneHref} style={{ color: "#94a3b8", textDecoration: "underline" }}>Staff: back to {inPerson.backTo ?? "the request"}</a>
     </p>
   ) : null;
   if (done === "signed") return <Card><h2 style={h2}>Signed ✓</h2><p style={p}>Thank you, {name}. Once everyone has signed, the completed sealed PDF will be emailed to you.</p>{handBack}</Card>;

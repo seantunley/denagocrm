@@ -30,7 +30,10 @@ const src = (rel: string) => readFileSync(new URL(`../${rel}`, import.meta.url),
 /** Code only — a rule that survives solely in a comment is not a rule. */
 const code = (rel: string) => src(rel).replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
 
+// The page decides who may run in-person signing for a request; the screen is
+// shared with the test drive's indemnity, which decides that on the booking.
 const IN_PERSON_PAGE = "src/app/(handover)/signatures/[id]/sign/[recipientId]/page.tsx";
+const IN_PERSON_SCREEN = "src/app/(handover)/InPersonSigning.tsx";
 
 // ── The in-person pass ──────────────────────────────────────────────────────
 
@@ -79,7 +82,7 @@ test("a pass is not interchangeable with any other value made under the same sec
 // ── What the in-person screen hands over ────────────────────────────────────
 
 test("the in-person screen submits to the real link, never the stored digest", () => {
-  const page = code(IN_PERSON_PAGE);
+  const page = code(IN_PERSON_SCREEN);
   assert.match(page, /usableCapability\("signatureRecipient", recipient\.id, recipient\.tokenCiphertext, recipient\.token\)/);
   assert.match(page, /token=\{link\}/, "the surface gets what usableCapability returned");
   assert.doesNotMatch(page, /token=\{recipient\.token\}/, "the digest column is not a link");
@@ -95,11 +98,20 @@ test("the in-person screen is outside the CRM shell and checks the record, not j
   assert.ok(!existsSync(new URL("../src/app/(app)/signatures/[id]/sign/[recipientId]/page.tsx", import.meta.url)), "the copy inside the app shell must be gone — two pages cannot own one URL");
   const page = code(IN_PERSON_PAGE);
   assert.match(page, /requirePermission\("signing\.manage"\)/);
-  assert.match(page, /canAccessSignatureRequest\(user, req\)/, "signing.manage is not access to this record");
-  assert.doesNotMatch(page, /AppShell|IdentityGate/, "no CRM chrome, and no emailed code with staff standing there");
-  assert.match(page, /mintInPersonPass\(recipient\.id, recipient\.tenantId, \{ userId: user\.id, name: user\.name \}\)/);
+  assert.match(page, /canAccessSignatureRequest\(user, recipient\.request\)/, "signing.manage is not access to this record");
+  // Both checks come before the screen is rendered at all — it mints the pass.
+  assert.ok(page.indexOf("canAccessSignatureRequest(") < page.indexOf("<InPersonSigning"), "the record check precedes the screen");
+  assert.match(page, /<InPersonSigning user=\{user\} recipient=\{recipient\} tenantId=\{recipient\.tenantId\}/);
+  const screen = code(IN_PERSON_SCREEN);
+  for (const source of [page, screen]) {
+    assert.doesNotMatch(source, /AppShell|IdentityGate/, "no CRM chrome, and no emailed code with staff standing there");
+  }
+  assert.match(screen, /mintInPersonPass\(recipient\.id, tenantId, \{ userId: user\.id, name: user\.name \}\)/);
   // Whose turn it is still applies: a pass is not a way round an approval.
-  assert.match(page, /req\.workflowGraphJson && req\.currentNodeId !== recipient\.nodeId/);
+  assert.match(screen, /req\.workflowGraphJson && req\.currentNodeId !== recipient\.nodeId/);
+  // The screen decides nothing about WHO may use it, so nothing may reach it
+  // except through a page that has: it is not a route, and exports no page.
+  assert.doesNotMatch(screen, /export default/, "the screen must not become a page of its own");
   const layout = code("src/app/(handover)/layout.tsx");
   assert.match(layout, /assertPathModuleEnabled\(\)/);
   assert.doesNotMatch(layout, /AppShell/);
