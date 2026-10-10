@@ -1259,16 +1259,17 @@ async function recallDecision(user: User, raw: z.infer<typeof decisionArgs>): Pr
     take: 40,
     select: { content: true, createdAt: true },
   });
-  const decisions = notes
+  const parsed = notes
     .map((n) => parseDecision(n.content, n.createdAt.toISOString()))
     .filter((d): d is NonNullable<typeof d> => d !== null);
-  const matched = matchDecisions(decisions, args.query);
-  // Explicit kind — a lead decision is only returned if this person can open that lead.
-  const visible = [];
-  for (const d of matched) {
+  // Filter by lead access BEFORE ranking, so inaccessible rows cannot crowd out
+  // accessible ones in the top matches.
+  const accessible = [];
+  for (const d of parsed) {
     if (d.kind === "lead" && !(await canAccessLead(user, d.subject))) continue;
-    visible.push(d);
+    accessible.push(d);
   }
+  const visible = matchDecisions(accessible, args.query);
   return {
     truncated: false,
     rows: visible.map((d) => ({
