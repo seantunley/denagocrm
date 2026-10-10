@@ -1724,17 +1724,16 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
     return { ok: true, answer: DEGRADED_NOTE, rows, tools: observations.map((o) => o.tool), learned: 0, actions: [], choices: [], saved: false };
   }
   // One research call, retried once on a passing ChatGPT fault (assistantBreaker).
-  // Timeout is the remaining research budget, capped at PLAN_MAX_MS, so a single
-  // call (and its retry) cannot consume the answer reserve.
-  const plan = (step: number, insist: boolean) => {
-    const timeoutMs = Math.min(PLAN_MAX_MS, Math.max(0, researchLeft()));
-    if (timeoutMs < MIN_CALL_MS) {
-      return Promise.resolve({ error: "research budget spent", transient: false });
-    }
-    return withRetry(breakerKey, () =>
-      codexRespond({ instructions, prompt: planPrompt(step, insist), images, reasoningEffort: complex ? "medium" : "low", timeoutMs, cacheKey, preferModel: PLAN_MODEL }),
-    );
-  };
+  // Timeout is recalculated on every attempt (including the retry) so a slow
+  // first try cannot hand the retry a stale 45s budget that blows past the reserve.
+  const plan = (step: number, insist: boolean) =>
+    withRetry(breakerKey, () => {
+      const timeoutMs = Math.min(PLAN_MAX_MS, Math.max(0, researchLeft()));
+      if (timeoutMs < MIN_CALL_MS) {
+        return Promise.resolve({ error: "research budget spent", transient: false });
+      }
+      return codexRespond({ instructions, prompt: planPrompt(step, insist), images, reasoningEffort: complex ? "medium" : "low", timeoutMs, cacheKey, preferModel: PLAN_MODEL });
+    });
   const planPrompt = (step: number, insist: boolean) =>
     [
       conversation,
