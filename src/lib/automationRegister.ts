@@ -243,6 +243,14 @@ export const AUTOMATIONS: Automation[] = [
     cron: "/api/cron/research",
   },
   {
+    key: "inbound-spam-filter",
+    label: "Spam filter for incoming messages",
+    does: "Checks each incoming WhatsApp, Messenger and Instagram message before the inbox, the chatbot or your notifications see it. In “Quarantine” it holds spam and messages from senders you blocked in Inbox → Spam, where a person can restore them; in “Observe only” it holds nothing and only records what it would do. Off unless an owner turns it on. Sends nothing to anyone.",
+    reaches: "nobody",
+    when: "When a message arrives",
+    managedAt: { label: "Inbox → Spam", href: "/inbox?tab=spam" },
+  },
+  {
     key: "signing-housekeeping",
     label: "Signing housekeeping",
     does: "Finishes signing work that was interrupted (seals, records, retries) and releases stuck claims. Closes a signing request once its quote's valid-until date has passed — the link stops working then, and the quote shows it as expired so it can be sent again. Sends what the signing request itself sends — see Next signer and Signed copies.",
