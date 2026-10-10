@@ -157,7 +157,7 @@ export async function applyLearn(userId: string | null, learn: LearnBlock): Prom
 
 
 /** Save a case decision (kind "decision"). Not part of the prompt-sized memory. */
-export async function saveDecision(subject: string, decisionText: string): Promise<void> {
+export async function saveDecision(subject: string, decisionText: string, userId: string | null): Promise<void> {
   const { formatDecision } = await import("./assistantDecisions");
   await prisma.assistantNote.create({
     data: {
@@ -165,7 +165,9 @@ export async function saveDecision(subject: string, decisionText: string): Promi
       kind: "decision",
       name: subject.slice(0, 48),
       content: formatDecision({ subject, text: decisionText, at: new Date().toISOString() }),
-      status: "approved",
+      // Same review path as other learned notes: applies immediately, owner approves.
+      status: "unreviewed",
+      createdById: userId,
       source: "learned",
     },
   });
