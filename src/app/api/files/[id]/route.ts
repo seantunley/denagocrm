@@ -2,12 +2,26 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import { getCurrentUser } from "@/lib/auth";
 import { canAccessDocument } from "@/lib/permissions";
+import { withActingStaffScope } from "@/lib/actingScope";
 import { portalCanAccessDocument } from "@/lib/portalAccess";
 import { isModuleEnabled } from "@/lib/modules/enabled";
 import { isAutomotiveOwnedDocument } from "@/lib/modules/registry";
 import { openFileStream } from "@/lib/storage";
 
-export async function GET(
+/**
+ * Bound to the acting workspace — a route handler has nothing above it that does.
+ *
+ * Without it the permission lookup found no workspace and therefore no roles,
+ * so this answered Forbidden to every member of staff who is not an owner, on
+ * documents their role allows (owners skip the lookup). The wrapper never
+ * widens: with no staff session it runs bare, and the portal branch below
+ * decides on the portal's own session exactly as before.
+ */
+export async function GET(req: NextRequest, context: { params: Promise<{ id: string }> }) {
+  return withActingStaffScope(() => handleGet(req, context));
+}
+
+async function handleGet(
   _req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {

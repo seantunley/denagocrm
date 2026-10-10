@@ -1,6 +1,6 @@
 import "server-only";
 import { revalidatePath } from "next/cache";
-import { prisma } from "@/lib/db";
+import { basePrisma, prisma } from "@/lib/db";
 import { refuse } from "@/lib/actionResult";
 import { logAudit } from "@/lib/audit";
 import { ciExactIds } from "@/lib/ciExact";
@@ -16,10 +16,14 @@ import {
   type VinMatch,
 } from "@/lib/deliveryVehicles";
 import { addStockEvent } from "@/lib/stockPlatform";
-import { deleteFile, saveFile } from "@/lib/storage";
+import { deleteFile, readFile, saveFile } from "@/lib/storage";
 import { logError } from "@/lib/errorLog";
 import { withStagedEvidence, type StageFile } from "@/lib/stagedEvidence";
+import { signedDeliveryNote } from "@/lib/deliveryNoteSigning";
 import { signedPdfIsSafeToDelete } from "@/lib/signing/blobReferences";
+import { staffActor } from "@/lib/signing/events";
+import { DELIVERY_NOTE } from "@/lib/signing/subject";
+import { holdSubjectRequests, recordSubjectWithdrawn, withdrawOpenSubjectRequests } from "@/lib/signing/subjectRequests";
 import type { PermissionUser } from "@/lib/permissions";
 
 /**
@@ -41,10 +45,10 @@ import type { PermissionUser } from "@/lib/permissions";
  */
 
 export const QUOTE_GONE = "This quote is no longer available in this workspace.";
+/** What a caller may say about a delivery the customer did not sign for. */
 export type DeliveryEvidence = {
   deliveredByName?: string | null;
   deliveryChecklist?: object;
-  deliverySignatureRef?: string | null;
 };
 
 type QuoteForEvidence = { id: string; number: number; contactId: string | null; tenantId: string | null };
@@ -54,14 +58,17 @@ export async function deliverQuote(input: {
   /** The ACTING tenant, resolved by the caller inside its action scope. */
   tenantId: string;
   user: PermissionUser;
-  /** Guided-handover runs the customer signed beside (see markDelivered). */
-  handoverRunIds?: readonly string[];
   warrantyMonths?: number;
   /**
-   * The caller's paperwork (delivery note, signature). Runs AFTER every gate.
-   * Files go through `stage`, which only uploads the blob: its Document row is
-   * created inside the delivery transaction, and if the delivery fails for any
-   * reason the blobs this attempt uploaded are deleted (lib/stagedEvidence.ts).
+   * The caller's paperwork: an uploaded delivery note, and — where the customer
+   * did not sign — who handed over and the built-in ticks. Runs AFTER every
+   * gate. Files go through `stage`, which only uploads the blob: its Document
+   * row is created inside the delivery transaction, and if the delivery fails
+   * for any reason the blobs this attempt uploaded are deleted
+   * (lib/stagedEvidence.ts).
+   *
+   * Not the signature, and not the checklist runs. Those are read from the note
+   * the customer signed, below, for every caller.
    */
   collectEvidence?: (quote: QuoteForEvidence, stage: StageFile) => Promise<DeliveryEvidence>;
 }): Promise<{ redirectTo: string }> {
@@ -107,18 +114,38 @@ export async function deliverQuote(input: {
   const notReady = outstanding.filter((unit) => unit.status !== DELIVERABLE_STATUS);
   if (notReady.length > 0) refuse(notReadyMessage(quote.number, notReady));
 
+  /*
+   * THE NOTE THE CUSTOMER SIGNED IS THE EVIDENCE, WHEN THERE IS ONE.
+   *
+   * The customer signs the delivery note itself, on its own screen
+   * (lib/deliveryNoteSigning.ts), and who handed over, which checklist runs and
+   * the built-in ticks are frozen into it. A delivery is recorded against what
+   * that note says — for every caller, whichever button was pressed.
+   *
+   * None of it is an argument any more. The runs and the signature used to
+   * arrive with the request, and a value the browser can set is not evidence;
+   * they can now only come from a note the customer signed.
+   *
+   * Read here, before anything is written, and proved again inside the
+   * transaction once the quote's row is held.
+   */
+  const signed = catchUp ? null : await signedDeliveryNote(quoteId, tenantId);
+  // With a signed note, a gate below that does not hold means the handover moved on after they signed.
+  const CHANGED = "The handover changed after the customer signed the delivery note. Ask them to sign it again from the delivery screen.";
+
   let deliveryHandoverRunIds: string[] = [];
   if (!catchUp) {
     if (!quote.deliveryScheduledFor) refuse("Schedule the delivery on the Deliveries board before marking it delivered.");
 
     /*
-     * Re-verified, not trusted. Each id must be a COMPLETED run of this quote's
-     * own delivery handover, in this tenant. Anything that does not resolve is a
-     * caller passing ids it should not have, so the whole delivery is refused
-     * rather than signed against a partial set — a delivery note showing three of
-     * four checklists is worse than one that refuses to be produced.
+     * Re-verified, not trusted — a run can be removed after the note froze it.
+     * Each id must still be a COMPLETED run of this quote's own delivery
+     * handover, in this tenant. Anything that does not resolve refuses the whole
+     * delivery rather than recording it against a partial set — a delivery note
+     * showing three of four checklists is worse than one that refuses to be
+     * produced.
      */
-    const requestedRunIds = [...new Set(input.handoverRunIds ?? [])];
+    const requestedRunIds = [...new Set(signed?.runIds ?? [])];
     let verifiedRuns: { id: string; templateId: string; completedAt: Date | null }[] = [];
     if (requestedRunIds.length) {
       verifiedRuns = await prisma.checklistRun.findMany({
@@ -131,22 +158,22 @@ export async function deliverQuote(input: {
         },
         select: { id: true, templateId: true, completedAt: true },
       });
-      if (verifiedRuns.length !== requestedRunIds.length) {
-        refuse("The handover checklists could not be confirmed. Reload the delivery and try again.");
-      }
+      if (verifiedRuns.length !== requestedRunIds.length) refuse(CHANGED);
     }
 
     /*
      * THE GUIDED GATE, ENFORCED FOR EVERY CALLER.
      *
-     * completeGuidedDelivery checks readiness before delegating, but the board's
-     * markDelivered and the stock page's deliverStockUnit are exported Server
-     * Actions — reachable by a stale legacy form or a hand-made request. The gate
-     * lives here so no entry point can skip it: a stock-page delivery on a tenant
-     * with a guided handover is refused and pointed at the delivery screen.
+     * The screen only offers "Complete delivery" once the customer has signed,
+     * but the board's markDelivered and the stock page's deliverStockUnit are
+     * exported Server Actions — reachable by a stale form or a hand-made
+     * request. The gate lives here so no entry point can skip it: a guided
+     * handover is delivered against the note the customer signed — one completed
+     * run for every active checklist, frozen into it — or it is not delivered.
      *
      * Scoped to what the tenant has actually configured: no active template means
-     * no guided handover, and the legacy proof-of-delivery flow is untouched.
+     * no guided handover, and a delivery may be confirmed without a signature as
+     * it always could.
      */
     const handoverTemplates = await prisma.checklistTemplate.findMany({
       where: { tenantId, host: "quote.delivery", active: true },
@@ -154,20 +181,15 @@ export async function deliverQuote(input: {
       orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
     });
     if (handoverTemplates.length > 0) {
+      if (!signed) {
+        refuse("This delivery uses a guided handover. Complete it on the Deliveries board and ask the customer to sign the delivery note.");
+      }
+      // A checklist activated since, or two runs for one: not what they signed for.
       const readiness = deliveryHandoverReadiness(handoverTemplates, verifiedRuns);
-      if (!readiness.ready) {
-        const missing = handoverTemplates
-          .filter((template) => readiness.missingTemplateIds.includes(template.id))
-          .map((template) => template.name);
-        refuse(
-          `This delivery uses a guided handover. Complete ${missing.length === 1 ? `“${missing[0]}”` : missing.join(", ")} and sign from the delivery screen.`,
-        );
-      }
-      if (verifiedRuns.length !== handoverTemplates.length) {
-        refuse("The signed handover must include exactly one completed run for each active checklist. Reload the delivery and review it again.");
-      }
+      if (!readiness.ready || verifiedRuns.length !== handoverTemplates.length) refuse(CHANGED);
     } else if (requestedRunIds.length > 0) {
-      refuse("This delivery does not have an active guided handover. Reload the delivery and try again.");
+      // Signed beside a guided handover that has since been switched off.
+      refuse(CHANGED);
     }
 
     const runByTemplate = new Map(verifiedRuns.map((run) => [run.templateId, run.id]));
@@ -228,7 +250,25 @@ export async function deliverQuote(input: {
    *     it — the second waits on the row lock, matches nothing, and is refused
    *     with every row rolled back;
    *   - audit, stock timeline and the journey event run only after the commit.
+   *
+   * ── WHY THE TRANSACTION IS basePrisma's ─────────────────────────────────────
+   *
+   * This said "one transaction" while it was `prisma.$transaction`, and it was
+   * not one. The scoped client wraps every operation — on a `tx` handle as much
+   * as anywhere — in a transaction of its own (lib/db.ts → withRlsScope; the
+   * note in lib/journeyArbitration.ts records the same thing), so each statement
+   * here committed as it ran. A refusal three lines down left the quote marked
+   * delivered with its stock still allocated, and the lock an update takes was
+   * gone before the next statement. scripts/test-delivery-note-signing.ts found
+   * it: a delivery it had just been refused was delivered.
+   *
+   * basePrisma's interactive transaction runs on the raw connection and is a
+   * real one. The price is that nothing scopes or stamps for us inside it —
+   * which is why every statement below names the tenant, every update names
+   * `deletedAt: null`, and the vehicle is created with its `tenantId` written
+   * out. Exactly what the scoped client would have added, said in the open.
    */
+  let withdrawnNotes: string[] = [];
   const vehicleIds = await withStagedEvidence(
     {
       save: (buffer, originalName, mimeType) => saveFile(buffer, originalName, mimeType, quote.tenantId),
@@ -249,16 +289,56 @@ export async function deliverQuote(input: {
           { tenantId: quote.tenantId, alert: false },
         ),
     },
-    async (stage) => (!catchUp && input.collectEvidence
-      ? input.collectEvidence({ id: quote.id, number: quote.number, contactId: quote.contactId, tenantId: quote.tenantId }, stage)
-      : {}),
-    (evidence, documents) => prisma.$transaction(async (tx) => {
+    async (stage) => {
+      if (catchUp) return {};
+      const said = input.collectEvidence
+        ? await input.collectEvidence({ id: quote.id, number: quote.number, contactId: quote.contactId, tenantId: quote.tenantId }, stage)
+        : {};
+      // No signed note: the caller's word for who and what, and no signature.
+      if (!signed) return { deliveredByName: said.deliveredByName, deliveryChecklist: said.deliveryChecklist, deliverySignatureRef: null };
+      // A copy of the signature they drew, filed as this delivery's own — the
+      // printed delivery note shows it, as it always has. Unreadable is not a
+      // reason to refuse a delivery the customer signed for: the sealed note
+      // carries the signature either way.
+      const drawn = signed.signatureRef ? await readFile(signed.signatureRef, quote.tenantId).catch(() => null) : null;
+      const deliverySignatureRef = drawn
+        ? await stage({
+            buffer: drawn,
+            originalName: `delivery-signature-Q${quote.number}.png`,
+            mimeType: "image/png",
+            fileName: `Delivery signature — Q-${quote.number}`,
+            tag: "delivery-signature",
+          })
+        : null;
+      // Who and what come from the note they signed, over anything the caller gathered.
+      return { deliveredByName: signed.deliveredByName || null, deliveryChecklist: signed.checklist ?? undefined, deliverySignatureRef };
+    },
+    (evidence, documents) => basePrisma.$transaction(async (tx) => {
       if (!catchUp) {
         const updated = await tx.quote.updateMany({
-          where: { id: quoteId, tenantId, deliveredAt: null },
+          where: { id: quoteId, tenantId, deliveredAt: null, deletedAt: null },
           data: { deliveredAt, ...evidence, deliveryHandoverRunIds },
         });
         if (updated.count !== 1) refuse("This delivery was just completed by someone else. Refresh and check it.");
+        /*
+         * THE NOTE IS PROVED AGAIN, UNDER THE QUOTE'S LOCK.
+         *
+         * It was read before the transaction — its signature had to be staged
+         * first — and a note can be opened or signed in between. The update
+         * above holds the quote's row, so no new note can be opened now; holding
+         * the requests lets a signature being submitted this instant land before
+         * the question is asked. If the answer is not the one this delivery was
+         * built on, nothing is delivered.
+         */
+        const note = { type: DELIVERY_NOTE, id: quoteId };
+        await holdSubjectRequests(tx, note, tenantId);
+        const current = await signedDeliveryNote(quoteId, tenantId, tx);
+        if ((current?.requestId ?? null) !== (signed?.requestId ?? null)) {
+          refuse("The delivery note changed while this delivery was being completed. Refresh and check it.");
+        }
+        // A delivery note left open on a signing screen and never signed goes
+        // with the delivery it was for. One the customer signed is never touched.
+        withdrawnNotes = await withdrawOpenSubjectRequests(tx, note, tenantId);
       }
       // The paperwork's rows commit or roll back WITH the delivery they evidence.
       // The quote owns them, as it owns its invoice and proof of payment.
@@ -279,7 +359,7 @@ export async function deliverQuote(input: {
         // line (qty × price), which would over-state revenue for multi-quantity quotes.
         const saleLine = quote.items.find((item) => item.productId === unit.productId && item.selected);
         const moved = await tx.stockUnit.updateMany({
-          where: { id: unit.id, status: DELIVERABLE_STATUS, deletedAt: null },
+          where: { id: unit.id, tenantId, status: DELIVERABLE_STATUS, deletedAt: null },
           data: {
             status: "delivered",
             soldAt: unit.soldAt ?? deliveredAt,
@@ -296,16 +376,17 @@ export async function deliverQuote(input: {
           // a vehicle transferred in between matches nothing and refuses the lot.
           const owned = existing.match === "attach"
             ? await tx.vehicle.updateMany({
-                where: { id: existing.id, contactId: existing.contactId },
+                where: { id: existing.id, tenantId, contactId: existing.contactId, deletedAt: null },
                 data: { contactId: contact!.id },
               })
-            : { count: await tx.vehicle.count({ where: { id: existing.id, contactId: contact!.id } }) };
+            : { count: await tx.vehicle.count({ where: { id: existing.id, tenantId, contactId: contact!.id, deletedAt: null } }) };
           if (owned.count !== 1) refuse(vinConflictMessage(unit.serial ?? ""));
           ids.push(existing.id);
           continue;
         }
         const vehicle = await tx.vehicle.create({
           data: {
+            tenantId,
             model: unit.product.name,
             vin: unit.serial,
             color: unit.color,
@@ -324,6 +405,11 @@ export async function deliverQuote(input: {
   );
 
   const actor = { id: user.id, name: user.name };
+  // The evidence entry for a delivery note withdrawn above; never a reason to
+  // report a committed delivery as failed.
+  if (withdrawnNotes.length > 0) {
+    await recordSubjectWithdrawn(withdrawnNotes, await staffActor(user.name, tenantId), "delivery", "The delivery was completed without it").catch(() => {});
+  }
   for (const unit of outstanding) {
     const match = existingVehicle.get(unit.id)?.match;
     const outcome = match === "reuse"

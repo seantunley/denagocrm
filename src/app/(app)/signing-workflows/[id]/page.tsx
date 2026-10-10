@@ -1,8 +1,8 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { prisma } from "@/lib/db";
 import { requireTenantOwner } from "@/lib/auth";
 import { parseGraph, blankWorkflow } from "@/lib/signflow/model";
+import { ownedSignWorkflow } from "@/lib/signflow/owned";
 import { deleteSignWorkflow } from "@/app/actions/signflow";
 import ConfirmDelete from "@/components/ConfirmDelete";
 import { listActingTenantStaff } from "@/lib/tenantActor";
@@ -14,13 +14,15 @@ export default async function SignWorkflowEditor({ params }: { params: Promise<{
   await requireTenantOwner();
   const { id } = await params;
   const [wf, users] = await Promise.all([
-    prisma.signWorkflow.findUnique({ where: { id } }),
+    // This workspace's, or nothing: an id from another workspace is a 404 here,
+    // the same as a deleted one.
+    ownedSignWorkflow(id),
     // Scope the approval-assignee picker to THIS tenant's active, non-disabled
     // members, so a workflow can't persist another tenant's (or a disabled) user id
     // onto an ApprovalStep.
     listActingTenantStaff(),
   ]);
-  if (!wf || wf.deletedAt) notFound();
+  if (!wf) notFound();
   const graph = parseGraph(wf.graphJson) ?? blankWorkflow();
 
   return (

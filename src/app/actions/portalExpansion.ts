@@ -271,12 +271,16 @@ export async function addPortalCaseMessage(
     // rejects it and the customer can no longer reply at all. Production is full
     // of exactly those cases, awaiting backfill.
     const tenantId = await tenantOfCase(caseId);
-    await basePrisma.$transaction([
-      basePrisma.$executeRaw`
+    // A callback, not an array: an array of raw statements is not a transaction
+    // on this client. Both statements ran on their own and `$transaction` then
+    // threw, so the customer's message was saved, they were told it had failed,
+    // and nothing below — the notification to staff included — ever ran.
+    await basePrisma.$transaction(async (tx) => {
+      await tx.$executeRaw`
         INSERT INTO "CustomerCaseMessage" ("id", "tenantId", "caseId", "contactId", "direction", "type", "body")
         VALUES (${crypto.randomUUID()}, ${tenantId}, ${caseId}, ${contact.id}, 'customer', 'customer', ${body})
-      `,
-      basePrisma.$executeRaw`
+      `;
+      await tx.$executeRaw`
         UPDATE "CustomerCase" SET "status" = CASE
             WHEN "status" IN ('resolved', 'closed', 'cancelled') THEN 'open'
             WHEN "status" = 'waiting_customer' THEN 'waiting_internal'
@@ -284,8 +288,8 @@ export async function addPortalCaseMessage(
           "lastReplyAt" = CURRENT_TIMESTAMP, "lastReplyBy" = 'customer',
           "updatedAt" = CURRENT_TIMESTAMP
         WHERE "id" = ${caseId} AND "tenantId" IS NOT DISTINCT FROM ${tenantId}
-      `,
-    ]);
+      `;
+    });
     const rows = await basePrisma.$queryRaw<Array<{ number: bigint }>>`
       SELECT "number" FROM "CustomerCase" WHERE "id" = ${caseId}
     `;

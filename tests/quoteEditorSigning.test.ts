@@ -283,11 +283,13 @@ test("a branched workflow acts on the live node, not the lowest order", () => {
   // A graph pre-creates a recipient for every path, so the lowest unsigned
   // `order` is routinely someone on a branch the condition never took —
   // countersigning, previewing or sending against them is the wrong party.
-  // nextSigner is module-private, so slice it rather than using actionBody().
-  const source = shipped("src/app/actions/recordSigning.ts");
-  const start = source.indexOf("async function nextSigner(");
+  // nextSigner has its own module now (lib/signing/nextSigner.ts): the Signatures
+  // page's Resend needed the same answer and was sending by order without it.
+  const source = shipped("src/lib/signing/nextSigner.ts");
+  const start = source.indexOf("export async function nextSigner(");
   assert.notEqual(start, -1, "nextSigner not found — was it renamed?");
-  const body = source.slice(start, source.indexOf("\nconst sameParty", start));
+  const body = source.slice(start);
+  assert.doesNotMatch(shipped("src/app/actions/recordSigning.ts"), /async function nextSigner\(/, "one definition, not a second private copy");
   assert.match(body, /workflowGraphJson/, "a workflow envelope must be recognised");
   assert.match(body, /nodeId: request\.currentNodeId/, "…and resolved through the interpreter's live node");
   assert.match(body, /if \(!request\.currentNodeId\) return null/, "un-advanced means nobody is up yet");
@@ -451,18 +453,21 @@ test("the start button never offers to countersign someone else's node", () => {
   // — this is not yours to sign", and because run() bails on a failed result the
   // document never opened. The quote sat locked behind a request the card would
   // not show.
+  //
+  // The start click no longer countersigns at all (2026-10-09): it applied the
+  // sender's signature under a button reading "Countersign & review" on every
+  // quote, including ones whose layout has no block of ours. It prepares the
+  // document and opens the review, and the review is where "who is up" decides.
   const card = shipped("src/components/SigningBlock.tsx");
-  const start = card.indexOf("const started = await startRecordSigning(");
+  const start = card.indexOf('run("start"');
   assert.notEqual(start, -1, "the start handler not found — was it rewritten?");
-  const end = card.indexOf("})}", start);
+  const end = card.indexOf('busy === "start"', start);
   assert.notEqual(end, -1, "the handler's end not found — the slice would run to EOF");
   const handler = card.slice(start, end);
-
-  const check = handler.search(/view\?\.next\?\.isMe/);
-  const sign = handler.search(/countersignRecord\(kind, id\)/);
-  assert.notEqual(check, -1, "who is up must decide whether to countersign");
-  assert.notEqual(sign, -1, "the one-click countersign must survive for the built-in flow");
-  assert.ok(check < sign, `the check must gate the countersign (check ${check}, sign ${sign})`);
+  assert.match(handler, /startRecordSigning\(/);
+  assert.doesNotMatch(handler, /countersignRecord/, "the start click must not sign in anyone's name");
+  // run() lands every successful step on the document.
+  assert.match(card, /await openPreview\(\);\s*refresh\(\);/);
 
   // And the review card offers the right button in that state.
   const preview = shipped("src/components/signing/SignedDocPreview.tsx");

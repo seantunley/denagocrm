@@ -54,7 +54,7 @@ test("every phase of the automations cron, and everything it runs directly, is o
  */
 
 /** Customer messages that are NOT journeys, and why — each is part of something a person did. */
-const NOT_JOURNEYS = ["signed-copies", "signing-next-signer", "surveys", "campaigns", "chatbot", "inbound-email"];
+const NOT_JOURNEYS = ["signed-copies", "signed-copies-whatsapp", "signing-next-signer", "surveys", "campaigns", "chatbot", "inbound-email"];
 
 test("every customer message is a journey, or a documented exception that says why", () => {
   const customer = AUTOMATIONS.filter((a) => a.reaches === "customer");
@@ -159,6 +159,10 @@ test("each moved message has ONE sender, reached only from a journey step", () =
 test("every switch on the page is actually obeyed by the code it names — none is decorative", () => {
   const where: Record<string, string[]> = {
     SIGNING_SIGNED_COPIES: ["src/lib/signing/complete.ts", "src/lib/signing/recoverCompletions.ts", "src/lib/signing/jobWorker.ts"],
+    // Gated once, inside the one function every sender of signed copies goes
+    // through — including the manual resend, which must not start a WhatsApp
+    // message the owner never switched on.
+    SIGNING_SIGNED_COPIES_WHATSAPP: ["src/lib/signing/completionFanout.ts"],
   };
   const keys = AUTOMATIONS.flatMap((a) => (a.setting ? [a.setting.key] : []));
   assert.deepEqual(keys.filter((k) => !where[k]).sort(), [], "a switch with no known gate — add it here and gate the code");
@@ -168,6 +172,11 @@ test("every switch on the page is actually obeyed by the code it names — none 
   assert.equal((code("src/lib/signing/complete.ts").match(/automationOn\("SIGNING_SIGNED_COPIES", req\.tenantId\)\)\s*\?\s*await deliverCompletionEmails/g) ?? []).length, 1);
   // The manual "resend signed copies" button is a person's click — not gated.
   assert.doesNotMatch(code("src/app/actions/signhub.ts"), /automationOn/);
+  // The WhatsApp copy: no number is read unless its own switch is on.
+  const fanout = code("src/lib/signing/completionFanout.ts");
+  assert.match(fanout, /export const SIGNED_COPIES_WHATSAPP_SWITCH = "SIGNING_SIGNED_COPIES_WHATSAPP";/);
+  assert.match(fanout, /if \(unaddressed\.length > 0 && \(await whatsAppCopiesOn\(\)\)\) \{/);
+  assert.match(fanout, /return automationOn\(SIGNED_COPIES_WHATSAPP_SWITCH, tenantId\)/);
 });
 
 test("an unset or unreadable switch never messages a customer on a guess", () => {

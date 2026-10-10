@@ -3,6 +3,7 @@ import { test } from "node:test";
 import { readFileSync, readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
+import { ownAuditEvents } from "../src/lib/auditScope";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const read = (rel: string) => readFileSync(path.join(root, rel), "utf8");
@@ -138,7 +139,7 @@ test("every audit read names its tenant, and the actor list is this tenant's sta
   const auditReads = [...code.matchAll(/FROM "AuditEvent"/g)];
   assert.ok(auditReads.length >= 3, `expected the AuditEvent reads, found ${auditReads.length}`);
 
-  const clauses = [...code.matchAll(/NOT \$\{enforcing\}::boolean OR "tenantId" IS NOT DISTINCT FROM \$\{activeTenantId\}/g)];
+  const clauses = [...code.matchAll(/\$\{ownAuditEvents\(activeTenantId\)\}/g)];
   assert.equal(
     clauses.length,
     auditReads.length,
@@ -156,18 +157,33 @@ test("every audit read names its tenant, and the actor list is this tenant's sta
   );
 });
 
-test("the audit page scopes exactly the way its own export route does", () => {
+test("the audit page scopes exactly the way its own export route does — whatever the enforcement mode", () => {
   // These two read the same table through the same client for the same person.
-  // They drifted once; naming the pairing here is what stops them drifting again.
+  // They drifted once; they now share ONE fragment, and naming the pairing here
+  // is what stops one of them growing its own again.
   const page = shipped("src/app/(app)/audit/page.tsx");
   const exportRoute = shipped("src/app/api/audit/export/route.ts");
-  const clause = /AND \(NOT \$\{enforcing\}::boolean OR "tenantId" IS NOT DISTINCT FROM \$\{activeTenantId\}\)/;
+  const clause = /AND \$\{ownAuditEvents\(activeTenantId\)\}/;
   assert.match(exportRoute, clause, "the export route's clause moved — update the page to match");
   assert.match(page, clause, "the page must carry the same clause as the export");
   for (const code of [page, exportRoute]) {
-    assert.match(code, /tenantEnforcing\(\)/, "the clause is dormant until enforcement is on");
+    // This test used to REQUIRE `tenantEnforcing()` here, and that was the
+    // defect: `NOT enforcing OR "tenantId" …` is always true with enforcement
+    // off, so in every environment but production these read every workspace's
+    // trail. scripts/test-audit-workspace.ts drives the route and the page against
+    // a real database with enforcement off; this keeps the switch from returning.
+    assert.doesNotMatch(code, /enforcing/i, "the workspace predicate must not depend on the enforcement mode");
     assert.match(code, /getActiveTenantId\(\)/);
   }
+
+  // The fragment itself, executed. Strict equality: `IS NOT DISTINCT FROM` would
+  // match a sign-in with no workspace to the events that have none.
+  const mine = ownAuditEvents("tenant_a");
+  assert.equal(mine.sql, '"tenantId" = ?');
+  assert.deepEqual(mine.values, ["tenant_a"]);
+  const nobody = ownAuditEvents(null);
+  assert.equal(nobody.sql, '"tenantId" = ?', "no workspace is still an equality, which NULL never satisfies");
+  assert.deepEqual(nobody.values, [null]);
 });
 
 /* ── P4 / P5 / P6 — edit pages under a read-guarded layout ────────────── */

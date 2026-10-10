@@ -45,6 +45,27 @@ export function quoteTotalCents(lines: PricedLine[]): number {
   return lines.reduce((sum, line) => (isLineIncluded(line) ? sum + lineNetCents(line) : sum), 0);
 }
 
+/**
+ * The discount given on a quote as a whole: what was taken off, as a percentage
+ * of what its lines would have cost at their listed prices. One decimal place.
+ *
+ * The whole quote, not the steepest line — "30% off a R500 accessory on a
+ * R240 000 vehicle" is a 0.1% discount and should not send a deal for approval.
+ * Only lines that are charged count: an optional add-on the customer did not
+ * take is not part of the price, and a trade-in or credit (a line that takes
+ * money OFF) is not something a discount is measured against.
+ */
+export function quoteDiscountPct(lines: PricedLine[]): number {
+  let listed = 0;
+  let charged = 0;
+  for (const line of lines) {
+    if (!isLineIncluded(line) || line.qty <= 0 || line.unitPriceCents <= 0) continue;
+    listed += Math.round(line.qty * line.unitPriceCents);
+    charged += lineNetCents(line);
+  }
+  return listed > 0 ? Math.round(((listed - charged) / listed) * 1000) / 10 : 0;
+}
+
 // ── CPQ pricing engine ────────────────────────────────────────────────────────
 
 /**

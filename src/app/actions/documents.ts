@@ -334,10 +334,10 @@ export async function setDefaultDocTemplate(id: string) {
     const user = await requirePermission("document_templates.manage");
     const rec = await getTemplateRecord(id);
     if (!rec) refuse(TEMPLATE_GONE);
-    await prisma.$transaction([
-      prisma.docTemplateRecord.updateMany({ where: { docType: rec.docType }, data: { isDefault: false } }),
-      prisma.docTemplateRecord.update({ where: { id }, data: { isDefault: true } }),
-    ]);
+    await prisma.$transaction(async (tx) => {
+      await tx.docTemplateRecord.updateMany({ where: { docType: rec.docType }, data: { isDefault: false } });
+      await tx.docTemplateRecord.update({ where: { id }, data: { isDefault: true } });
+    });
     await logAudit({ action: "doctemplate.default", summary: `“${rec.name}” is now the default ${rec.docType} template`, user });
     revalidatePath("/document-studio");
     revalidatePath(`/settings/documents/t/${id}`);

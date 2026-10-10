@@ -42,6 +42,7 @@ import { payableTotalCents } from "@/lib/pricing";
 import { getAccessibleContactIds, getAccessibleQuoteIds } from "@/lib/permissions";
 import { quotePrintLinks } from "@/lib/quotePrintLinks";
 import { isModuleEnabled } from "@/lib/modules/enabled";
+import { UPCOMING_TEST_DRIVE_STATUSES } from "@/lib/testDriveBooking";
 import { EntityDetailShell } from "@/components/entity-detail-shell";
 import { StatusPill } from "@/components/visual-system";
 import { LeadScoreBadge } from "@/components/LeadScoreBadge";
@@ -106,6 +107,15 @@ export default async function LeadDetailPage({
     lead.status === "open" ? scoreLeads([lead]).then((scores) => scores.get(lead.id)) : undefined,
   ]);
   const alreadyViewed = !!lead.viewedAt;
+  // This lead's next test drive whose indemnity is still outstanding — it is
+  // signed on a screen from the booking, so the lead points there.
+  const testDriveToSign = automotiveOn && canBookTestDrive
+    ? await prisma.testDriveBooking.findFirst({
+        where: { leadId: lead.id, deletedAt: null, status: { in: UPCOMING_TEST_DRIVE_STATUSES }, indemnityStatus: "pending" },
+        orderBy: { scheduledStart: "asc" },
+        select: { id: true },
+      })
+    : null;
   const [contacts, users, templates, smtpConfigured, audit, waConfigured, libraryDocuments, products, stages] = await Promise.all([
     // The customer pickers. `null` means unrestricted; `[]` means nothing
     // accessible and must stay an impossible match, not an absent filter.
@@ -233,6 +243,16 @@ export default async function LeadDetailPage({
             <SaveForm success="Lead reopened" resetOnSuccess={false} action={reopenLead.bind(null, lead.id)}>
               <SaveButton className="btn-secondary">Reopen</SaveButton>
             </SaveForm>
+          )}
+          {/* Signed on a screen, from the test drive it is for — when one is coming up. */}
+          {testDriveToSign && (
+            <Link
+              href={`/test-drives/${testDriveToSign.id}`}
+              className="btn-secondary"
+              title="Open the test drive to sign its indemnity on this device"
+            >
+              <Car className="size-4" />Sign indemnity
+            </Link>
           )}
           {/* A test-drive indemnity: automotive workspaces only. */}
           {automotiveOn && (

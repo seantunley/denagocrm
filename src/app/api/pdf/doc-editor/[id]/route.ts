@@ -1,5 +1,6 @@
 import { getCurrentUser } from "@/lib/auth";
 import { hasAnyPermission } from "@/lib/permissions";
+import { withActingStaffScope } from "@/lib/actingScope";
 import { canEditLayout } from "@/lib/docbuilder/layoutAccess";
 import { getBuilderTemplate } from "@/lib/docbuilder/store";
 import {
@@ -14,7 +15,12 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
-export async function GET(
+/** Bound to the acting workspace — a route handler has nothing above it that does (see withActingStaffScope). */
+export async function GET(request: Request, context: { params: Promise<{ id: string }> }) {
+  return withActingStaffScope(() => handleGet(request, context));
+}
+
+async function handleGet(
   request: Request,
   context: { params: Promise<{ id: string }> },
 ) {
