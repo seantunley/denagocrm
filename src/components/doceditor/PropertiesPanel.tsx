@@ -14,6 +14,7 @@ import { TextPromptDialog } from "@/components/TextPromptDialog";
 import { toast } from "sonner";
 import { ShowcaseProps } from "./ShowcaseProps";
 import { DesignSection } from "./DesignSection";
+import { IMAGE_ASPECT_LABELS, type ImageAspect } from "@/lib/doceditor/imageFrame";
 import { useState } from "react";
 import { uploadDocEditorImage } from "@/app/actions/doceditor";
 import { checkDocImage, DOC_IMAGE_ACCEPT } from "@/lib/doceditor/imageUpload";
@@ -294,9 +295,52 @@ function TextHint({ block }: { block: TextBlock | { type: string } }) {
   return <p className="p-3 text-xs text-slate-400">Click the text on the page to edit it directly — bold, headings, and ＋ variable are in the floating toolbar.</p>;
 }
 
+/**
+ * A shape for the picture, how it sits in it, and a caption. Replacing the
+ * picture (above) keeps all of this, so a layout survives a new photo.
+ */
+function ImageFraming({ block }: { block: ImageBlock }) {
+  const updateBlock = useEditor((s) => s.updateBlock);
+  const set = (patch: Partial<ImageBlock>, history = true) => updateBlock(block.id, patch as Partial<DocumentBlock>, history);
+  const shaped = !!block.aspect && block.aspect !== "original";
+  const filling = shaped && block.fit !== "contain";
+  return (
+    <div className="mt-3 border-t border-slate-100 pt-3">
+      <div className={row}>
+        <label className={lbl} htmlFor={`aspect-${block.id}`}>Shape</label>
+        <select id={`aspect-${block.id}`} className={inp} value={block.aspect ?? "original"} onChange={(e) => set({ aspect: e.target.value === "original" ? undefined : (e.target.value as ImageAspect) })}>
+          <option value="original">As the picture is</option>
+          {(Object.keys(IMAGE_ASPECT_LABELS) as ImageAspect[]).map((a) => <option key={a} value={a}>{IMAGE_ASPECT_LABELS[a]}</option>)}
+        </select>
+      </div>
+      {shaped && (
+        <div className={row}>
+          <label className={lbl}>In that shape, the picture</label>
+          <div className="flex gap-1">
+            {([["cover", "Fills it (cropped)"], ["contain", "Fits inside it"]] as const).map(([value, label]) => (
+              <button key={value} type="button" onClick={() => set({ fit: value === "cover" ? undefined : value })}
+                className={`flex-1 rounded border px-2 py-1 text-xs ${(block.fit ?? "cover") === value ? "border-orange-400 bg-orange-50 text-orange-600" : "border-slate-300 text-slate-600 hover:bg-slate-50"}`}>{label}</button>
+            ))}
+          </div>
+        </div>
+      )}
+      {filling && (
+        <div className={row}>
+          <label className={lbl}>Keep in view — across ({Math.round(block.focalX ?? 50)}%)</label>
+          <input type="range" min={0} max={100} className="w-full" value={block.focalX ?? 50} onChange={(e) => set({ focalX: Number(e.target.value) }, false)} />
+          <label className={`${lbl} mt-2`}>Keep in view — down ({Math.round(block.focalY ?? 50)}%)</label>
+          <input type="range" min={0} max={100} className="w-full" value={block.focalY ?? 50} onChange={(e) => set({ focalY: Number(e.target.value) }, false)} />
+          <p className="mt-1 text-[11px] text-slate-400">Nothing is cut from the file — move these and the rest of the picture is still there.</p>
+        </div>
+      )}
+      <div className={row}><label className={lbl}>Caption</label><input className={inp} value={block.caption ?? ""} placeholder="A line under the picture" onChange={(e) => set({ caption: e.target.value || undefined })} /></div>
+    </div>
+  );
+}
+
 function ImageProps({ block }: { block: ImageBlock }) {
   const updateBlock = useEditor((s) => s.updateBlock);
-  const { templateId } = useDocEditorEnv();
+  const { templateId, email } = useDocEditorEnv();
   const [busy, setBusy] = useState(false);
   // An uploaded image's src is a private stored ref — not something to show or edit as a URL.
   const uploaded = !!block.src && storedFileSrc(block.src) !== block.src;
@@ -338,6 +382,8 @@ function ImageProps({ block }: { block: ImageBlock }) {
       <div className={row}><label className={lbl}>Alt text</label><input className={inp} value={block.alt} onChange={(e) => updateBlock(block.id, { alt: e.target.value })} /></div>
       <div className={row}><label className={lbl}>Width ({block.widthPct}%)</label><input type="range" min={10} max={100} className="w-full" value={block.widthPct} onChange={(e) => updateBlock(block.id, { widthPct: Number(e.target.value) }, false)} /></div>
       <label className="flex items-center gap-2 text-sm text-slate-700"><input type="checkbox" checked={block.rounded} onChange={(e) => updateBlock(block.id, { rounded: e.target.checked })} /> Rounded corners</label>
+      {/* An email client decides how a picture is framed; a shape or a crop set here would not survive it. */}
+      {!email && <ImageFraming block={block} />}
     </Section>
   );
 }

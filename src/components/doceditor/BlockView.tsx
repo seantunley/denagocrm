@@ -4,6 +4,7 @@ import type { DocumentBlock } from "@/lib/doceditor/model";
 import { computePricing } from "@/lib/doceditor/serialize";
 import { brandFooterContent, SOCIAL_ICON_PATHS, COMPANY_DEFAULTS } from "@/lib/companyBrand";
 import { storedFileSrc } from "@/lib/storedFileSrc";
+import { imageFrame } from "@/lib/doceditor/imageFrame";
 import { ActiveRichText, ReadOnlyRichText } from "./RichText";
 import { handoverChecklistHtml } from "@/lib/doceditor/handoverChecklist";
 import { ShowcaseBlockView } from "./ShowcaseBlockView";
@@ -100,12 +101,13 @@ export function BlockView({ block, active }: { block: DocumentBlock; active: boo
         <div>
           {valid ? (
             // eslint-disable-next-line @next/next/no-img-element
-            <img src={src} alt={block.alt} style={{ width: `${block.widthPct}%`, height: "auto", borderRadius: block.rounded ? 8 : 0 }} />
+            <img src={src} alt={block.alt} style={{ height: "auto", ...imageFrame(block) }} />
           ) : (
             <div className="flex items-center justify-center rounded border border-dashed border-slate-300 bg-slate-50 text-slate-400" style={{ height: 120, fontSize: 13 }}>
               🖼 Upload an image or add a URL in the panel →
             </div>
           )}
+          {block.caption?.trim() ? <div style={{ fontSize: "8.5pt", color: "#64748b", marginTop: 4, lineHeight: 1.35 }}>{block.caption}</div> : null}
         </div>
       );
     }
