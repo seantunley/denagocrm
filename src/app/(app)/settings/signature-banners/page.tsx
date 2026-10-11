@@ -1,6 +1,8 @@
 import { getActiveTenantId, requireTenantOwner } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 import { contactName, formatDate, formatDateTime } from "@/lib/format";
+import { LEGAL_LINE_KEY, cleanLegalLine } from "@/lib/emailLegalLine";
+import { getSetting } from "@/lib/settings";
 import { listActingTenantStaff, listActingTenantTeams } from "@/lib/tenantActor";
 import { bannerDayValue, bannerPosition, bannerState, pickBanner } from "@/lib/signatureBanners";
 import { BANNER_SELECT, senderTeamIds } from "@/lib/signatureBannerStore";
@@ -94,6 +96,7 @@ export default async function SignatureBannersPage() {
         staff={staff.map(({ id, name }) => ({ id, name }))}
         teams={teams.map(({ id, name }) => ({ id, name }))}
         clicks={clicks}
+        legalLine={cleanLegalLine(await getSetting(LEGAL_LINE_KEY))}
         showingNowId={pickBanner(rows, { id: user.id, teamIds: myTeamIds }, now)?.id ?? null}
       />
     </SettingsWorkspace>

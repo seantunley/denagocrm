@@ -1421,6 +1421,10 @@ model Communication {
   /// When the customer first clicked the signature banner in this sent email
   /// (lib/signatureBanners.ts). Null = no click, or the email carried no banner.
   bannerClickedAt DateTime?
+  /// This email's own id inside its signature banner's link, so a click can be
+  /// tied to it. Deliberately NOT the open token: that exists only while open
+  /// tracking is on, and a click must be attributable either way.
+  bannerRef       String?  @unique
   archivedAt     DateTime? // when the thread carrying this message was archived out of the inbox (NULL = active)
 
   // Multi-tenancy (Phase B — additive/inert): owning tenant. See Contact.tenantId.
@@ -2710,8 +2714,11 @@ model SignatureBanner {
   /// Also on a quote a person emails from the CRM. Off unless the owner ticks it:
   /// a quote is a document the customer acts on, and the banner is marketing.
   onQuoteEmails Boolean @default(false)
-  /// The unguessable id in the banner's link (/api/track/b/<token>).
+  /// The token of the banner's CURRENT link (a SignatureBannerLink row) — what an
+  /// email sent now carries. Changing `linkUrl` makes a new link and points this
+  /// at it; links already in customers' inboxes keep their own destination.
   token      String    @unique
+  links      SignatureBannerLink[]
   /// Emails sent carrying it, and clicks on it. Only ever go up.
   sentCount  Int       @default(0)
   clickCount Int       @default(0)
@@ -2722,8 +2729,23 @@ model SignatureBanner {
   @@index([tenantId, active])
 }
 
+/// One destination a banner has had, and the token that leads to it
+/// (/api/track/b/<token>). Never updated: an email sent in October keeps
+/// opening October's page after the owner points the banner somewhere new.
+model SignatureBannerLink {
+  id        String          @id @default(cuid())
+  tenantId  String
+  bannerId  String
+  banner    SignatureBanner @relation(fields: [bannerId], references: [id], onDelete: Cascade)
+  token     String          @unique
+  linkUrl   String
+  createdAt DateTime        @default(now())
+
+  @@index([tenantId, bannerId])
+}
+
 /// One click on a banner. `communicationId` is the sent email it came from,
-/// when the email was open-tracked. No IP address or browser string is kept.
+/// when that is known. No IP address or browser string is kept.
 model SignatureBannerClick {
   id              String          @id @default(cuid())
   tenantId        String

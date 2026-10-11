@@ -82,7 +82,9 @@ export async function resolveCampaignRecipientTenant(
 export async function resolveSignatureBannerTenant(
   token: string,
 ): Promise<{ tenantId: string | null } | null> {
-  const row = await basePrisma.signatureBanner.findUnique({
+  // The LINK table, not the banner: a banner's own token moves on when its
+  // destination is changed, and the old links must still resolve.
+  const row = await basePrisma.signatureBannerLink.findUnique({
     where: { token },
     select: { tenantId: true },
   });

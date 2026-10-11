@@ -4,7 +4,8 @@ import { useRef, useState, useTransition } from "react";
 import Link from "next/link";
 import { toast } from "sonner";
 import { CalendarClock, MousePointerClick, Pencil, Plus, Send } from "lucide-react";
-import { saveMarketingBanner, setMarketingBannerActive } from "@/app/actions/signatureBanners";
+import { saveEmailLegalLine, saveMarketingBanner, setMarketingBannerActive } from "@/app/actions/signatureBanners";
+import { LEGAL_LINE_MAX } from "@/lib/emailLegalLine";
 import ConfirmActionDialog from "@/components/ConfirmActionDialog";
 import { StatusPill } from "@/components/visual-system";
 import { Dialog, DialogDescription, DialogHeader, DialogTitle, ResponsiveDialogContent } from "@/components/ui/dialog";
@@ -61,10 +62,13 @@ export default function SignatureBanners({
   teams,
   clicks,
   showingNowId,
+  legalLine,
 }: {
   banners: BannerView[];
   staff: Person[];
   teams: Person[];
+  /** The line at the foot of every email (lib/emailLegalLine.ts). Empty = none. */
+  legalLine: string;
   clicks: ClickView[];
   /** The banner the viewer's own emails carry right now, if any. */
   showingNowId: string | null;
@@ -126,8 +130,51 @@ export default function SignatureBanners({
         </section>
       )}
 
+      <LegalLine initial={legalLine} />
+
       <BannerDialog key={editing === "new" ? "new" : editing?.id ?? "closed"} editing={editing} staff={staff} teams={teams} onClose={() => setEditing(null)} />
     </div>
+  );
+}
+
+/**
+ * The legal line. Not a banner and not marketing: it goes on every email the
+ * CRM sends, to every recipient, and has no switch per customer — which is why
+ * it sits apart, with its own Save.
+ */
+function LegalLine({ initial }: { initial: string }) {
+  const [value, setValue] = useState(initial);
+  const [saving, startSave] = useTransition();
+  return (
+    <section className="card p-4">
+      <h2 className="text-sm font-semibold text-foreground">Legal line on every email</h2>
+      <p className="mt-0.5 text-xs text-muted-foreground">
+        One line at the foot of every email the CRM sends — yours, quotes, signing invitations, reminders. Use it for your
+        registered company name and registration number. It is not marketing: everyone gets it, including customers who
+        opted out. Leave it empty for none.
+      </p>
+      <form
+        className="mt-3 flex flex-wrap items-start gap-2"
+        action={(formData) =>
+          startSave(async () => {
+            const result = await saveEmailLegalLine(formData).catch(() => ({ error: "Could not save the legal line." }));
+            if (result?.error) toast.error(result.error);
+            else toast.success(value.trim() ? "Saved. Every email sent from now on carries it." : "Removed.");
+          })
+        }
+      >
+        <input
+          name="legalLine"
+          value={value}
+          onChange={(event) => setValue(event.target.value)}
+          maxLength={LEGAL_LINE_MAX}
+          aria-label="Legal line"
+          placeholder="e.g. Example Motors (Pty) Ltd · Reg. no. 2019/123456/07 · VAT no. 4123456789"
+          className="input min-w-0 flex-1 basis-96"
+        />
+        <button type="submit" className="btn-secondary btn-sm" disabled={saving || value.trim() === initial.trim()}>{saving ? "Saving…" : "Save legal line"}</button>
+      </form>
+    </section>
   );
 }
 

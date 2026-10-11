@@ -2,9 +2,20 @@ import "server-only";
 import { prisma } from "./db";
 import { ciExactIds } from "./ciExact";
 import { contactName } from "./format";
-import { OPEN_TOKEN } from "./emailOpenTracking";
 import { sendPushToAll } from "./push";
-import { bannerClickUrl, bannerHtml, bannerPosition, isBannerLink, pickBanner, placeBannerInEmail, type BannerPlace, type BannerRow } from "./signatureBanners";
+import {
+  BANNER_REF,
+  bannerRecipients,
+  bannerClickUrl,
+  bannerHtml,
+  bannerPosition,
+  chooseBanner,
+  eligibleBanners,
+  isBannerLink,
+  placeBannerInEmail,
+  type BannerPlace,
+  type BannerRow,
+} from "./signatureBanners";
 
 /** What the rules (signatureBanners.ts) need of a banner — the one select for every reader. */
 export const BANNER_SELECT = {
@@ -18,36 +29,45 @@ export async function senderTeamIds(tenantId: string, userId: string): Promise<s
   return rows.map((row) => row.teamId);
 }
 
+/** The banners this person's emails could carry right now, the default first (lib/signatureBanners.ts → eligibleBanners). */
+export async function bannersForSender(tenantId: string, senderId: string, place: BannerPlace = "composer"): Promise<BannerRow[]> {
+  const banners = await prisma.signatureBanner.findMany({ where: { tenantId, active: true }, select: BANNER_SELECT });
+  if (banners.length === 0) return [];
+  // Team membership is only looked up when some banner is for a team.
+  const teamIds = banners.some((banner) => banner.teamIds.length > 0) ? await senderTeamIds(tenantId, senderId) : [];
+  return eligibleBanners(banners, { id: senderId, teamIds }, new Date(), place);
+}
+
 /**
  * The banner an email from `senderId` to `to` carries, or null.
  *
- * A banner is marketing, so the recipient's opt-out is checked HERE, at the one
+ * A banner is marketing, so the recipients' opt-out is checked HERE, at the one
  * door every sender goes through — by the record the email is filed on, and by
- * the address itself, because the composer's "To" is free text and the same
- * person can be on file twice.
+ * EVERY address it is going to, because the composer's "To" is free text and the
+ * same person can be on file twice. An email to more people than can be checked
+ * carries no banner at all: a partial check would be a guess about the rest.
  */
 export async function bannerForEmail(input: {
   tenantId: string;
   senderId: string;
   place?: BannerPlace;
+  /** The sender's pick in the composer: a banner id, NO_BANNER, or nothing for the default. */
+  choice?: string | null;
   to?: string;
   contactId?: string | null;
   leadId?: string | null;
 }): Promise<BannerRow | null> {
   const { tenantId } = input;
-  const banners = await prisma.signatureBanner.findMany({ where: { tenantId, active: true }, select: BANNER_SELECT });
-  if (banners.length === 0) return null;
-  // Team membership is only looked up when some banner is for a team.
-  const teamIds = banners.some((banner) => banner.teamIds.length > 0) ? await senderTeamIds(tenantId, input.senderId) : [];
-  const banner = pickBanner(banners, { id: input.senderId, teamIds }, new Date(), input.place ?? "composer");
+  const banner = chooseBanner(await bannersForSender(tenantId, input.senderId, input.place ?? "composer"), input.choice);
   if (!banner) return null;
 
-  const addresses = (input.to ?? "").split(/[,;]/).map((address) => address.trim()).filter(Boolean);
+  const addresses = bannerRecipients(input.to);
+  if (addresses === null) return null;
   const lead = input.leadId ? await prisma.lead.findFirst({ where: { id: input.leadId, tenantId }, select: { contactId: true } }) : null;
   // Whoever is on file under an address typed in "To" — an exact, case-folded
   // match (lib/ciExact.ts), then read back through the guarded client below, so
   // a contact in another workspace can never decide anything here.
-  const byAddress = (await Promise.all(addresses.slice(0, 20).map((address) => ciExactIds("contactEmail", address)))).flat();
+  const byAddress = (await Promise.all(addresses.map((address) => ciExactIds("contactEmail", address)))).flat();
   const contactIds = [input.contactId, lead?.contactId, ...byAddress].filter((id): id is string => Boolean(id));
   if (contactIds.length === 0) return banner;
   const optedOut = await prisma.contact.findFirst({
@@ -84,28 +104,44 @@ export async function recordBannerSent(tenantId: string, bannerId: string): Prom
   await prisma.signatureBanner.updateMany({ where: { id: bannerId, tenantId }, data: { sentCount: { increment: 1 } } }).catch(() => {});
 }
 
-/**
- * A click on a banner's link: count it, tie it to the email it came from when
- * that is known, mark that email's timeline entry and tell whoever sent it (both
- * once per email), and answer with where to send the customer — the banner's own
- * stored address, never anything from the request. Null for a token that matches
- * no banner.
- */
-export async function recordBannerClick(token: string, emailRef: string | null): Promise<string | null> {
-  const banner = await prisma.signatureBanner.findUnique({ where: { token }, select: { id: true, tenantId: true, name: true, linkUrl: true } });
-  if (!banner || !isBannerLink(banner.linkUrl)) return null;
-  const { tenantId } = banner;
+export type BannerLink = { tenantId: string; bannerId: string; bannerName: string; destination: string };
 
+/**
+ * Where a banner link leads, from its token — the address frozen on the LINK
+ * (SignatureBannerLink) when the email was sent, not whatever the banner points
+ * at today. Reads only; null for an unknown token or an address that is no
+ * longer a plain https link.
+ */
+export async function resolveBannerLink(token: string): Promise<BannerLink | null> {
+  const link = await prisma.signatureBannerLink.findUnique({
+    where: { token },
+    select: { tenantId: true, bannerId: true, linkUrl: true, banner: { select: { name: true } } },
+  });
+  if (!link || !isBannerLink(link.linkUrl)) return null;
+  return { tenantId: link.tenantId, bannerId: link.bannerId, bannerName: link.banner.name, destination: link.linkUrl };
+}
+
+/**
+ * Record a click on a resolved link: count it, tie it to the email it came from
+ * when that is known, mark that email's timeline entry and tell whoever sent it
+ * (both once per email).
+ *
+ * Kept apart from resolveBannerLink on purpose. The customer is sent on as soon
+ * as the destination is known; if anything here throws, the caller logs it and
+ * the customer still reaches the page they clicked for.
+ */
+export async function recordBannerClick(link: BannerLink, emailRef: string | null): Promise<void> {
+  const { tenantId, bannerId } = link;
   const email =
-    emailRef && OPEN_TOKEN.test(emailRef)
+    emailRef && BANNER_REF.test(emailRef)
       ? await prisma.communication.findFirst({
-          where: { openToken: emailRef, tenantId },
+          where: { bannerRef: emailRef, tenantId },
           select: { id: true, userId: true, contactId: true, leadId: true, contact: true, lead: { select: { name: true } } },
         })
       : null;
 
-  await prisma.signatureBanner.updateMany({ where: { id: banner.id, tenantId }, data: { clickCount: { increment: 1 } } });
-  await prisma.signatureBannerClick.create({ data: { tenantId, bannerId: banner.id, communicationId: email?.id ?? null } });
+  await prisma.signatureBanner.updateMany({ where: { id: bannerId, tenantId }, data: { clickCount: { increment: 1 } } });
+  await prisma.signatureBannerClick.create({ data: { tenantId, bannerId, communicationId: email?.id ?? null } });
 
   // "First click" is decided by the database, in one statement: of two clicks
   // arriving together only one finds the stamp empty, so the sender is told once.
@@ -119,12 +155,11 @@ export async function recordBannerClick(token: string, emailRef: string | null):
     await sendPushToAll(
       {
         title: "Banner clicked",
-        body: `${who} clicked “${banner.name}” in your email`,
+        body: `${who} clicked “${link.bannerName}” in your email`,
         url: email.leadId ? `/leads/${email.leadId}` : email.contactId ? `/contacts/${email.contactId}` : "/settings/signature-banners",
       },
       "banner_click",
       { tenantId, userId: email.userId },
     ).catch(() => 0);
   }
-  return banner.linkUrl;
 }

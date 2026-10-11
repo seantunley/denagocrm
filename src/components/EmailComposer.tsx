@@ -4,7 +4,7 @@ import { useState, useEffect, useActionState, useRef } from "react";
 import AiCheckButton from "@/components/AiCheckButton";
 import ModalPortal from "@/components/ui/modal-portal";
 import Link from "next/link";
-import { previewComposerEmail, sendEmailAction, type SendEmailState } from "@/app/actions/emails";
+import { composerBannerChoices, previewComposerEmail, sendEmailAction, type SendEmailState } from "@/app/actions/emails";
 import RichTextEditor from "@/components/RichTextEditor";
 import { EMAIL_UPLOAD_MAX_BYTES, EMAIL_UPLOAD_MAX_FILES } from "@/lib/emailUploads";
 
@@ -59,6 +59,15 @@ export default function EmailComposer({
   const [open, setOpen] = useState(false);
   const [subject, setSubject] = useState("");
   const [body, setBody] = useState("");
+  // The signature banners this person may send with (Settings → Signature banners), default first.
+  // Fetched when the composer opens; none means no picker at all.
+  const [banners, setBanners] = useState<{ id: string; name: string }[]>([]);
+  useEffect(() => {
+    if (!open) return;
+    let alive = true;
+    composerBannerChoices().then((list) => alive && setBanners(list), () => {});
+    return () => { alive = false; };
+  }, [open]);
   const [attachOpen, setAttachOpen] = useState(false);
   const [attached, setAttached] = useState<string[]>([]);
   const [attachFilter, setAttachFilter] = useState("");
@@ -100,7 +109,7 @@ export default function EmailComposer({
     setPreviewError("");
     try {
       // Who it is going to decides whether the signature banner shows (a customer who opted out of marketing gets none).
-      const { html } = await previewComposerEmail(body, { to: field("to"), contactId, leadId });
+      const { html } = await previewComposerEmail(body, { to: field("to"), contactId, leadId, choice: field("banner") });
       setPreview({ html, to: field("to"), replyTo: field("replyTo"), sentState: state });
     } catch {
       setPreviewError("Couldn't build the preview — try again.");
@@ -245,6 +254,21 @@ export default function EmailComposer({
               .
             </p>
           </div>
+          {banners.length > 0 && (
+            <div>
+              <label className="label" htmlFor="email-banner">Marketing banner</label>
+              <select id="email-banner" name="banner" className="input" defaultValue="">
+                <option value="">{banners[0].name} (the usual one)</option>
+                {banners.slice(1).map((banner) => (
+                  <option key={banner.id} value={banner.id}>{banner.name}</option>
+                ))}
+                <option value="none">No banner on this email</option>
+              </select>
+              <p className="mt-1 text-xs text-slate-500">
+                A customer who opted out of marketing never gets a banner, whatever is chosen here. Preview shows what goes out.
+              </p>
+            </div>
+          )}
           <div>
             <label className="label">Attachments</label>
             <div className="flex flex-wrap items-center gap-1.5">

@@ -12,6 +12,7 @@ import {
 } from "@/app/actions/settings";
 import { signatureCompanyFrom, buildSignature, parseSignatureDesign, SIGNATURE_DESIGN_KEY } from "@/lib/signature";
 import SignatureDesignEditor from "@/components/SignatureDesignEditor";
+import SendingDomainCheck from "@/components/settings/SendingDomainCheck";
 import { getSetting } from "@/lib/settings";
 import { getCompanyProfile } from "@/lib/companyProfile";
 import { tenantOrigin } from "@/lib/tenantOrigin";
@@ -696,6 +697,7 @@ export default async function SettingsPage({
                 </div>
               </SaveForm>
               <TestEmailButton />
+              {setting("SMTP_HOST") && <SendingDomainCheck />}
             </Row>
 
             <Row

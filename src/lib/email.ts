@@ -2,7 +2,8 @@ import nodemailer from "nodemailer";
 import { PLATFORM_TEAM_SIGNOFF } from "./platformIdentity";
 import { getSetting, resolveIntegrationBundleForTenant } from "./settings";
 import { EMAIL_OPEN_TRACKING_KEY, newOpenToken, openTrackingOn, withOpenPixel } from "./emailOpenTracking";
-import { EMAIL_REF_MARKER } from "./signatureBanners";
+import { withBannerRef } from "./signatureBanners";
+import { LEGAL_LINE_KEY, htmlWithLegalLine, textWithLegalLine } from "./emailLegalLine";
 import { currentTenantScope } from "./tenantScope";
 import { inlineImages, workspaceLogoLoader } from "./emailInlineLogo";
 import { DEFAULT_REGIONAL, formatZAR, type Regional } from "./format";
@@ -140,7 +141,7 @@ export async function sendEmail(input: {
    * Communication, or the mail is not to a customer.
    */
   record?: OutboundRecord;
-}): Promise<{ ok: boolean; error?: string; openToken?: string }> {
+}): Promise<{ ok: boolean; error?: string; openToken?: string; bannerRef?: string }> {
   const logged: Parameters<typeof recordOutboundMessage>[0] = { channel: "email" as const, to: input.to, subject: input.subject, text: input.text, attachments: input.attachments?.map((a) => a.filename) };
   const config = await getSmtpConfig();
   if (!config) {
@@ -160,10 +161,16 @@ export async function sendEmail(input: {
       requireTLS: !config.secure,
       auth: config.user ? { user: config.user, pass: config.pass ?? "" } : undefined,
     });
+    // The workspace's legal line (lib/emailLegalLine.ts), at the foot of every
+    // email that leaves — added here, at the one place all of them pass. Unset
+    // adds nothing. Never a reason to fail the send.
+    const legalLine = await getSetting(LEGAL_LINE_KEY).catch(() => null);
+    const text = legalLine && input.text ? textWithLegalLine(input.text, legalLine) : input.text;
     // Open tracking: the pixel on the workspace's own address, its token on the
     // timeline entry. Never a reason to fail the send.
     let openToken: string | undefined;
-    let html = input.html;
+    const untracked = input.html && legalLine ? htmlWithLegalLine(input.html, legalLine) : input.html;
+    let html = untracked;
     if (html && input.trackOpens) {
       try {
         if (openTrackingOn(await getSetting(EMAIL_OPEN_TRACKING_KEY))) {
@@ -174,13 +181,19 @@ export async function sendEmail(input: {
         }
       } catch {
         openToken = undefined;
-        html = input.html;
+        html = untracked;
       }
     }
-    // A signature banner's link names the email it is in by this email's own
-    // tracking token (lib/signatureBanners.ts) — or by nothing, when the email is
-    // not tracked: the click is still counted, it just belongs to no email.
-    if (html?.includes(EMAIL_REF_MARKER)) html = html.replaceAll(EMAIL_REF_MARKER, openToken ?? "");
+    // A signature banner's link names the email it is in (lib/signatureBanners.ts)
+    // by an id of its own — NOT the open token, which exists only while open
+    // tracking is switched on. Switching that off must not also stop a click
+    // being tied to its email, shown on the timeline and reported to the sender.
+    let bannerRef: string | undefined;
+    if (html) {
+      const referenced = withBannerRef(html, newOpenToken);
+      html = referenced.html;
+      if (referenced.ref) logged.bannerRef = bannerRef = referenced.ref;
+    }
     // The workspace's logo travels INSIDE the message (see emailInlineLogo.ts), so
     // it shows without the reader allowing remote images. Never a reason to fail:
     // anything that goes wrong leaves the original linked logo.
@@ -193,7 +206,7 @@ export async function sendEmail(input: {
       from: (input.senderName && personFrom(workspaceFrom, input.senderName)) || workspaceFrom,
       to: input.to,
       subject: input.subject,
-      text: input.text,
+      text,
       html: inline?.html ?? html,
       // Inline logos ride along as cid attachments; the timeline's attachment
       // list (`logged`) stays what the sender attached.
@@ -206,7 +219,7 @@ export async function sendEmail(input: {
     });
     await noteSmtpOutcome(config, null);
     if (input.record) await recordOutboundMessage({ ...logged, messageId: info?.messageId ?? null }, input.record);
-    return { ok: true, ...(openToken ? { openToken } : {}) };
+    return { ok: true, ...(openToken ? { openToken } : {}), ...(bannerRef ? { bannerRef } : {}) };
   } catch (err) {
     await noteSmtpOutcome(config, err);
     const { logError } = await import("./errorLog");

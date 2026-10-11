@@ -69,6 +69,16 @@ export function bannerState(banner: Pick<BannerRow, "active" | "startsAt" | "end
  * recently, then the newest.
  */
 export function pickBanner<T extends BannerRow>(banners: readonly T[], sender: BannerSender, now: Date, place: BannerPlace = "composer"): T | null {
+  return eligibleBanners(banners, sender, now, place)[0] ?? null;
+}
+
+/**
+ * Every banner an email from this sender could carry right now, the default
+ * first. The composer offers these to the person writing (chooseBanner): they
+ * may swap the promotion for the standing banner, or send without one — but
+ * only ever one the owner switched on, for them, that is in date.
+ */
+export function eligibleBanners<T extends BannerRow>(banners: readonly T[], sender: BannerSender, now: Date, place: BannerPlace = "composer"): T[] {
   // Named people OR anyone in a named team; nobody named at all means everyone.
   const forSender = (banner: T) =>
     (banner.senderIds.length === 0 && banner.teamIds.length === 0) ||
@@ -81,16 +91,94 @@ export function pickBanner<T extends BannerRow>(banners: readonly T[], sender: B
   live.sort(
     (a, b) => Number(Boolean(b.endsAt)) - Number(Boolean(a.endsAt)) || started(b) - started(a) || b.createdAt.getTime() - a.createdAt.getTime(),
   );
-  return live[0] ?? null;
+  return live;
+}
+
+/** What the composer posts when the sender wants no banner on this one email. */
+export const NO_BANNER = "none";
+
+/**
+ * The sender's choice, applied to what they are allowed: "none" is no banner, an
+ * id is that banner IF it is one of theirs right now, and anything else — blank,
+ * stale, made up — is the default. A choice can never reach a banner that is
+ * off, out of date or for somebody else.
+ */
+export function chooseBanner<T extends BannerRow>(eligible: readonly T[], choice: string | null | undefined): T | null {
+  if (choice === NO_BANNER) return null;
+  return eligible.find((banner) => banner.id === choice) ?? eligible[0] ?? null;
 }
 
 /**
  * Stands in the banner's link for "the email this banner was sent in". The mail
- * sender (lib/email.ts) swaps it for the email's open-tracking token, or for
- * nothing when the email is not tracked — a click is then counted but belongs
- * to no email.
+ * sender (lib/email.ts) swaps it for an id made for that one email and kept on
+ * its timeline entry (Communication.bannerRef) — its own id, not the open
+ * token, so it is there whether or not open tracking is switched on.
  */
 export const EMAIL_REF_MARKER = "__crm_email_ref__";
+
+/** The shape of an email's banner reference and of a link token (both made by newOpenToken). */
+export const BANNER_REF = /^[A-Za-z0-9_-]{24,64}$/;
+
+/**
+ * The most recipients an email may have and still carry a banner. Every one of
+ * them is checked for a marketing opt-out; past this many the banner is left
+ * off rather than sent on a partial check.
+ */
+export const BANNER_MAX_RECIPIENTS = 20;
+
+/**
+ * The addresses an email is going to, for the opt-out check — every one of them,
+ * or `null` when there are more than can be checked, in which case the email
+ * carries no banner. Never a partial list: an unchecked recipient is one who may
+ * have opted out.
+ */
+export function bannerRecipients(to: string | null | undefined): string[] | null {
+  const addresses = [...new Set((to ?? "").split(/[,;]/).map((address) => address.trim().toLowerCase()).filter(Boolean))];
+  return addresses.length > BANNER_MAX_RECIPIENTS ? null : addresses;
+}
+
+/**
+ * Give an email its own banner reference, if it carries a banner link: every
+ * EMAIL_REF_MARKER becomes one fresh id, returned so it can be kept on the
+ * email's timeline entry. Independent of open tracking by construction — it
+ * takes no setting, only the HTML.
+ */
+export function withBannerRef(html: string, makeRef: () => string): { html: string; ref: string | null } {
+  if (!html.includes(EMAIL_REF_MARKER)) return { html, ref: null };
+  const ref = makeRef();
+  return { html: html.replaceAll(EMAIL_REF_MARKER, ref), ref };
+}
+
+/**
+ * What saving a banner does to its link. A destination is never edited in place:
+ * a NEW address gets a new token (so emails already sent keep the old address),
+ * the same address keeps its token, and a token with no link row gets one.
+ */
+export function nextBannerLink(input: { current: { linkUrl: string; token: string }; linkUrl: string; hasLinkRow: boolean; newToken: () => string }): { token: string; createLink: boolean } {
+  if (input.current.linkUrl !== input.linkUrl) return { token: input.newToken(), createLink: true };
+  return { token: input.current.token, createLink: !input.hasLinkRow };
+}
+
+/**
+ * A click, in the only safe order: find where the link leads, THEN try to count
+ * it. The customer is owed the page they clicked for; the count is ours to lose.
+ * A failure to record is handed to `onRecordError` and the destination is still
+ * returned. Null only when the link itself is unknown.
+ */
+export async function bannerClickDestination<L extends { destination: string }>(
+  deps: { resolve: (token: string) => Promise<L | null>; record: (link: L, emailRef: string | null) => Promise<void>; onRecordError: (error: unknown) => unknown },
+  token: string,
+  emailRef: string | null,
+): Promise<string | null> {
+  const link = await deps.resolve(token);
+  if (!link) return null;
+  try {
+    await deps.record(link, emailRef);
+  } catch (error) {
+    try { await deps.onRecordError(error); } catch { /* logging must not cost the customer their page either */ }
+  }
+  return link.destination;
+}
 
 /** The address a banner's link points at: our own redirect, which knows the real destination. */
 export function bannerClickUrl(origin: string, token: string): string {

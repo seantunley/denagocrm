@@ -2,9 +2,17 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { readFileSync } from "node:fs";
 import {
+  BANNER_MAX_RECIPIENTS,
   BANNER_MAX_WIDTH,
   EMAIL_REF_MARKER,
+  NO_BANNER,
+  bannerClickDestination,
   bannerClickUrl,
+  bannerRecipients,
+  chooseBanner,
+  eligibleBanners,
+  nextBannerLink,
+  withBannerRef,
   bannerDay,
   bannerDayValue,
   bannerDisplaySize,
@@ -148,12 +156,15 @@ test("click rate reads sensibly at the edges", () => {
 test("the click route never reads its destination from the request", () => {
   const route = src("src/app/api/track/b/[token]/route.ts");
   assert.doesNotMatch(route, /searchParams\.get\("u"\)|searchParams\.get\("url"\)|searchParams\.get\("to"\)/);
-  assert.match(route, /recordBannerClick\(token, req\.nextUrl\.searchParams\.get\("e"\)\)/);
+  assert.match(route, /bannerClickDestination\(\s*\{\s*resolve: resolveBannerLink,\s*record: recordBannerClick,/);
   assert.match(route, /NextResponse\.redirect\(destination \?\? appBaseUrl\(\)/);
   const store = src("src/lib/signatureBannerStore.ts");
-  assert.match(store, /if \(!banner \|\| !isBannerLink\(banner\.linkUrl\)\) return null;/);
-  // The email a click belongs to is looked up inside the banner's own workspace.
-  assert.match(store, /where: \{ openToken: emailRef, tenantId \}/);
+  // The destination comes off the LINK row, frozen when the email was sent.
+  assert.match(store, /prisma\.signatureBannerLink\.findUnique\(\{\s*where: \{ token \},/);
+  assert.match(store, /if \(!link \|\| !isBannerLink\(link\.linkUrl\)\) return null;/);
+  // The email a click belongs to is looked up inside the banner's own workspace, by its own reference.
+  assert.match(store, /where: \{ bannerRef: emailRef, tenantId \}/);
+  assert.doesNotMatch(store, /openToken/, "attribution does not lean on open tracking");
   assert.doesNotMatch(store, /ipAddress|userAgent|headers\(/, "a click row keeps no IP address or browser");
 });
 
@@ -163,15 +174,102 @@ test("a customer who opted out of marketing gets no banner — checked where eve
   assert.match(store, /ciExactIds\("contactEmail", address\)/, "by the address typed, not only the record it is filed on");
   const composer = src("src/app/actions/emails.ts");
   assert.match(composer, /bannerForEmail\(\{ tenantId, senderId: user\.id, \.\.\.recipient \}\)/);
-  assert.match(composer, /composerHtml\(user, bodyHtml, profile, \{ to, contactId, leadId \}\)/);
+  assert.match(composer, /composerHtml\(user, bodyHtml, profile, \{ to, contactId, leadId, choice \}\)/);
+  // Every address, or no banner: never the first few.
+  assert.match(store, /const addresses = bannerRecipients\(input\.to\);\s*if \(addresses === null\) return null;/);
+  assert.match(store, /addresses\.map\(\(address\) => ciExactIds\("contactEmail", address\)\)/);
+  assert.doesNotMatch(store, /\.slice\(/, "no recipient is left unchecked");
+});
+
+test("review #851/4: every recipient is checked for an opt-out, or the email carries no banner", () => {
+  const many = Array.from({ length: 25 }, (_, i) => `person${i}@example.co.za`);
+  assert.equal(bannerRecipients(many.join(", ")), null, "25 recipients: too many to check, so no banner");
+  assert.equal(bannerRecipients(many.slice(0, BANNER_MAX_RECIPIENTS).join("; "))?.length, BANNER_MAX_RECIPIENTS, "the limit itself is checked in full");
+  // The 21st is exactly the one the old code skipped.
+  assert.equal(bannerRecipients(many.slice(0, 21).join(",")), null);
+  assert.deepEqual(bannerRecipients(" A@Example.co.za , a@example.co.za ;b@example.co.za"), ["a@example.co.za", "b@example.co.za"]);
+  assert.deepEqual(bannerRecipients(""), []);
+});
+
+test("review #851/1: changing a banner's address never changes links already sent", () => {
+  let made = 0;
+  const newToken = () => `new-token-${++made}`;
+  const current = { linkUrl: "https://example.co.za/october", token: "october-token" };
+  // A new address: a NEW token for emails sent from now on; the old token (and its link row) is untouched.
+  assert.deepEqual(nextBannerLink({ current, linkUrl: "https://example.co.za/november", hasLinkRow: true, newToken }), { token: "new-token-1", createLink: true });
+  // The same address: same token, nothing new.
+  assert.deepEqual(nextBannerLink({ current, linkUrl: current.linkUrl, hasLinkRow: true, newToken }), { token: "october-token", createLink: false });
+  // A token with no link row (a save that failed half-way) gets its row, under the same token.
+  assert.deepEqual(nextBannerLink({ current, linkUrl: current.linkUrl, hasLinkRow: false, newToken }), { token: "october-token", createLink: true });
+  assert.equal(made, 1, "a token is only made when the address changes");
+
+  const actions = src("src/app/actions/signatureBanners.ts");
+  // The link row is written BEFORE the banner points at it, and link rows are only ever created.
+  assert.ok(actions.indexOf("if (createLink) await prisma.signatureBannerLink.create(") < actions.indexOf("data: { ...data, token, ...(image ?? {}) }"));
+  assert.doesNotMatch(actions + src("src/lib/signatureBannerStore.ts"), /signatureBannerLink\.(update|updateMany|upsert|delete|deleteMany)\(/, "a link's address is never edited or removed");
+  // And the public resolver reads the link table, so an old token still finds its workspace.
+  assert.match(src("src/lib/tokenTenant.ts"), /basePrisma\.signatureBannerLink\.findUnique\(\{\s*where: \{ token \},/);
+});
+
+test("review #851/2: a click is tied to its email whether or not open tracking is on", () => {
+  const sent = withBannerRef(`<a href="https://crm.example/api/track/b/tok?e=${EMAIL_REF_MARKER}">x</a><a href="y?e=${EMAIL_REF_MARKER}">again</a>`, () => "ref-for-this-email");
+  assert.equal(sent.ref, "ref-for-this-email");
+  assert.equal(sent.html.split("ref-for-this-email").length - 1, 2, "every banner link in the email names the same email");
+  assert.doesNotMatch(sent.html, /__crm_email_ref__/);
+  let called = 0;
+  assert.deepEqual(withBannerRef("<p>no banner here</p>", () => { called++; return "unused"; }), { html: "<p>no banner here</p>", ref: null });
+  assert.equal(called, 0, "an email with no banner gets no reference");
+
+  // In the mail sender it sits OUTSIDE the open-tracking branch, and is stored under its own column.
+  const email = src("src/lib/email.ts");
+  const tracking = email.slice(email.indexOf("if (html && input.trackOpens) {"), email.indexOf("let bannerRef: string | undefined;"));
+  assert.ok(tracking.length > 0 && !tracking.includes("withBannerRef"), "not inside the tracking branch");
+  assert.match(email, /const referenced = withBannerRef\(html, newOpenToken\);/);
+  assert.match(email, /if \(referenced\.ref\) logged\.bannerRef = bannerRef = referenced\.ref;/);
+  assert.match(src("src/lib/outboundMessageLog.ts"), /\.\.\.\(msg\.bannerRef \? \{ bannerRef: msg\.bannerRef \} : \{\}\),/);
+  assert.match(src("src/app/actions/emails.ts"), /\.\.\.\(result\.bannerRef \? \{ bannerRef: result\.bannerRef \} : \{\}\),/);
+  assert.match(src("prisma/schema.prisma"), /bannerRef\s+String\?\s+@unique/);
+});
+
+test("review #851/3: the customer reaches the page even when counting the click fails", async () => {
+  const link = { destination: "https://example.co.za/november" };
+  const errors: unknown[] = [];
+  const failing = { resolve: async () => link, record: async () => { throw new Error("database is down"); }, onRecordError: (e: unknown) => { errors.push(e); } };
+  assert.equal(await bannerClickDestination(failing, "tok", "ref"), link.destination, "sent on regardless");
+  assert.equal(errors.length, 1, "and the failure is reported, not swallowed");
+  // Even the reporting failing does not cost them the page.
+  assert.equal(await bannerClickDestination({ ...failing, onRecordError: () => { throw new Error("log is down too"); } }, "tok", null), link.destination);
+  // An unknown link is the only thing that lands on home — and nothing is recorded for it.
+  let recorded = 0;
+  assert.equal(await bannerClickDestination({ resolve: async () => null, record: async () => { recorded++; }, onRecordError: () => {} }, "nope", null), null);
+  assert.equal(recorded, 0);
+  // Resolved first, recorded second.
+  const order: string[] = [];
+  await bannerClickDestination({ resolve: async () => { order.push("resolve"); return link; }, record: async () => { order.push("record"); }, onRecordError: () => {} }, "tok", null);
+  assert.deepEqual(order, ["resolve", "record"]);
+});
+
+test("the sender may pick among their own live banners, or none — never anything else", () => {
+  const promo = banner({ id: "promo", endsAt: day("2026-11-30") });
+  const standing = banner({ id: "standing" });
+  const off = banner({ id: "off", active: false });
+  const theirs = banner({ id: "someone-elses", senderIds: ["u9"] });
+  const mine = eligibleBanners([standing, off, theirs, promo], { id: "u1" }, NOW);
+  assert.deepEqual(mine.map((b) => b.id), ["promo", "standing"], "the default first; off and other people's are not offered");
+  assert.equal(chooseBanner(mine, "")?.id, "promo");
+  assert.equal(chooseBanner(mine, "standing")?.id, "standing");
+  assert.equal(chooseBanner(mine, NO_BANNER), null);
+  for (const forged of ["off", "someone-elses", "made-up"]) assert.equal(chooseBanner(mine, forged)?.id, "promo", `${forged} falls back to the default`);
+  assert.equal(chooseBanner([], "standing"), null);
+  const composer = src("src/components/EmailComposer.tsx");
+  assert.match(composer, /<option value="none">No banner on this email<\/option>/);
+  assert.match(src("src/app/actions/emails.ts"), /const choice = String\(formData\.get\("banner"\) \?\? ""\)\.slice\(0, 64\);/);
 });
 
 test("a preview's banner is not a tracked link, and a sent email's is", () => {
   const composer = src("src/app/actions/emails.ts");
   assert.match(composer, /bannerHtml\(banner, preview \? banner\.linkUrl : bannerClickUrl\(origin, banner\.token\)\)/);
   assert.match(composer, /if \(bannerId && sendingTenantId\) await recordBannerSent\(sendingTenantId, bannerId\);/);
-  // The mail sender fills in which email the banner is in, or nothing.
-  assert.match(src("src/lib/email.ts"), /html\.replaceAll\(EMAIL_REF_MARKER, openToken \?\? ""\)/);
   assert.equal(EMAIL_REF_MARKER, "__crm_email_ref__");
 });
 
@@ -194,8 +292,8 @@ test("the first click is decided by the database, so the sender is told once", (
 
 test("a new banner is saved switched off, and only the workspace owner can change one", () => {
   const actions = src("src/app/actions/signatureBanners.ts");
-  assert.match(actions, /data: \{ tenantId, \.\.\.data, \.\.\.image, active: false, token:/);
-  assert.equal((actions.match(/await workspace\(\)/g) ?? []).length, 2, "both actions");
+  assert.match(actions, /data: \{ tenantId, \.\.\.data, \.\.\.image, active: false, token \}/);
+  assert.equal((actions.match(/await workspace\(\)/g) ?? []).length, 3, "all three actions");
   assert.match(actions, /const user = await requireTenantOwner\(\);/);
   // Every write names the workspace: the owner check says who is asking, not whose row it is.
   assert.match(actions, /updateMany\(\{ where: \{ id, tenantId \}/);
@@ -205,7 +303,7 @@ test("a new banner is saved switched off, and only the workspace owner can chang
 
 test("the tables are isolated per workspace, additively", () => {
   const sql = src("prisma/migrations/20261011140000_signature_banners/migration.sql");
-  for (const table of ["SignatureBanner", "SignatureBannerClick"]) {
+  for (const table of ["SignatureBanner", "SignatureBannerLink", "SignatureBannerClick"]) {
     assert.match(sql, new RegExp(`ALTER TABLE "${table}" ENABLE ROW LEVEL SECURITY;`));
     assert.match(sql, new RegExp(`ALTER TABLE "${table}" FORCE ROW LEVEL SECURITY;`));
     assert.match(sql, new RegExp(`CREATE POLICY "${table}_tenant_isolation" ON "${table}"`));

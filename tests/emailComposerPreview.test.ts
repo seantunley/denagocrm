@@ -11,15 +11,15 @@ test("Preview and Send build the email with the same function, so the preview is
   assert.match(preview, /requireAnyPermission\(\.\.\.CUSTOMER_RECORD_WRITE_PERMISSIONS\)/, "same gate as sending");
   assert.match(preview, /composerHtml\(user,/);
   // Send passes who it is going to (the signature banner depends on it); Preview passes the same, plus "this is a preview".
-  assert.match(send, /await composerHtml\(user, bodyHtml, profile, \{ to, contactId, leadId \}\)/);
-  assert.match(preview, /await composerHtml\(user, String\(bodyHtml \?\? ""\)\.trim\(\), await getCompanyProfile\(\), \{ to, contactId, leadId \}, true\)/);
+  assert.match(send, /await composerHtml\(user, bodyHtml, profile, \{ to, contactId, leadId, choice \}\)/);
+  assert.match(preview, /await composerHtml\(user, String\(bodyHtml \?\? ""\)\.trim\(\), await getCompanyProfile\(\), \{ to, contactId, leadId, choice \}, true\)/);
   assert.doesNotMatch(preview, /sendEmail\(/, "a preview never sends");
 });
 
 test("the preview renders in a sandboxed frame and offers Send from it", () => {
   const composer = src("src/components/EmailComposer.tsx");
   assert.match(composer, /sandbox=""\s+srcDoc=\{preview\.html\}/);
-  assert.match(composer, /previewComposerEmail\(body, \{ to: field\("to"\), contactId, leadId \}\)/);
+  assert.match(composer, /previewComposerEmail\(body, \{ to: field\("to"\), contactId, leadId, choice: field\("banner"\) \}\)/);
   // Any send outcome (sent, or an error to read on the form) closes the preview.
   assert.match(composer, /preview && preview\.sentState === state/);
 });

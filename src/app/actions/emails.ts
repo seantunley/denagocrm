@@ -46,7 +46,8 @@ import { withActingStaffScope } from "@/lib/actingScope";
 import { EMAIL_OPEN_TRACKING_KEY } from "@/lib/emailOpenTracking";
 import { MESSAGE_PLACES } from "@/lib/customerMessagePlaces";
 import { bannerClickUrl, bannerHtml, bannerPosition } from "@/lib/signatureBanners";
-import { bannerForEmail, recordBannerSent } from "@/lib/signatureBannerStore";
+import { LEGAL_LINE_KEY, htmlWithLegalLine } from "@/lib/emailLegalLine";
+import { bannerForEmail, bannersForSender, recordBannerSent } from "@/lib/signatureBannerStore";
 
 export type SendEmailState = { ok?: string; error?: string };
 
@@ -57,7 +58,20 @@ async function tenantIdFor(userId: string): Promise<string | null> {
 
 type ComposerUser = Awaited<ReturnType<typeof requireAnyPermission>>;
 
-type ComposerRecipient = { to?: string; contactId?: string | null; leadId?: string | null };
+/** `choice`: the banner the sender picked in the composer — an id, "none", or blank for the default. */
+type ComposerRecipient = { to?: string; contactId?: string | null; leadId?: string | null; choice?: string | null };
+
+/**
+ * The banners the person writing may put on this email (Settings → Signature
+ * banners decides which are theirs), the default first. Empty = no picker.
+ * They choose among what the owner switched on, or none; nothing else.
+ */
+export async function composerBannerChoices(): Promise<{ id: string; name: string }[]> {
+  const user = await requireAnyPermission(...CUSTOMER_RECORD_WRITE_PERMISSIONS);
+  const tenantId = await tenantIdFor(user.id);
+  if (!tenantId) return [];
+  return (await bannersForSender(tenantId, user.id).catch(() => [])).map(({ id, name }) => ({ id, name }));
+}
 
 /**
  * The composer email's HTML: the message, the sender's signature, and under it
@@ -84,8 +98,12 @@ async function composerHtml(
   const marketing = banner ? bannerHtml(banner, preview ? banner.linkUrl : bannerClickUrl(origin, banner.token)) : "";
   // Under the signature, or — the owner's choice per banner — at the top of the email, above the message.
   const above = Boolean(banner) && bannerPosition(banner!.position) === "above";
-  const html = buildEmailHtml(bodyHtml, buildSignature(user, company) + (above ? "" : marketing));
-  return { html: above ? html.replace(/<body[^>]*>/i, (open) => `${open}${marketing}`) : html, tenantId, bannerId: banner?.id ?? null };
+  const built = buildEmailHtml(bodyHtml, buildSignature(user, company) + (above ? "" : marketing));
+  const html = above ? built.replace(/<body[^>]*>/i, (open) => `${open}${marketing}`) : built;
+  // The legal line is added to every email where it leaves (lib/email.ts). A preview never gets
+  // there, so it is added here for the preview alone — or Preview would not be what Send sends.
+  const legalLine = preview ? await getSetting(LEGAL_LINE_KEY).catch(() => null) : null;
+  return { html: legalLine ? htmlWithLegalLine(html, legalLine) : html, tenantId, bannerId: banner?.id ?? null };
 }
 
 /** The composer's Preview (Sean, 2026-10-07: "a preview on the email, to view before it sends"). Sends nothing. */
@@ -95,7 +113,8 @@ export async function previewComposerEmail(bodyHtml: string, recipient: Composer
   const contactId = recipient.contactId && (await canAccessContact(user, recipient.contactId)) ? recipient.contactId : null;
   const leadId = recipient.leadId && (await canAccessLead(user, recipient.leadId)) ? recipient.leadId : null;
   const to = String(recipient.to ?? "").slice(0, 1000);
-  const { html } = await composerHtml(user, String(bodyHtml ?? "").trim(), await getCompanyProfile(), { to, contactId, leadId }, true);
+  const choice = String(recipient.choice ?? "").slice(0, 64);
+  const { html } = await composerHtml(user, String(bodyHtml ?? "").trim(), await getCompanyProfile(), { to, contactId, leadId, choice }, true);
   return { html };
 }
 
@@ -137,7 +156,9 @@ export async function sendEmailAction(
     return { error: "You don't have access to that lead." };
   }
   const profile = await getCompanyProfile();
-  const { html, tenantId: sendingTenantId, bannerId } = await composerHtml(user, bodyHtml, profile, { to, contactId, leadId });
+  // The sender's pick of banner for this one email (or "none"); only ever among the banners that are theirs.
+  const choice = String(formData.get("banner") ?? "").slice(0, 64);
+  const { html, tenantId: sendingTenantId, bannerId } = await composerHtml(user, bodyHtml, profile, { to, contactId, leadId, choice });
 
   // Library attachments (selected version ids)
   const attachIds = formData.getAll("attach").map(String).filter(Boolean);
@@ -212,6 +233,7 @@ export async function sendEmailAction(
       userId: user.id,
       tenantId: await customerRecordTenantId({ contactId, leadId }),
       ...(result.openToken ? { openToken: result.openToken } : {}),
+      ...(result.bannerRef ? { bannerRef: result.bannerRef } : {}),
     },
   });
   await logAudit({

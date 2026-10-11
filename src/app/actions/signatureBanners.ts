@@ -7,6 +7,8 @@ import { withActingStaffScope } from "@/lib/actingScope";
 import { getActiveTenantId, requireTenantOwner } from "@/lib/auth";
 import { logAudit } from "@/lib/audit";
 import { prisma } from "@/lib/db";
+import { LEGAL_LINE_KEY, cleanLegalLine } from "@/lib/emailLegalLine";
+import { putSetting } from "@/lib/settings";
 import { savePublicAsset } from "@/lib/storage";
 import { listActingTenantStaff, listActingTenantTeams } from "@/lib/tenantActor";
 import {
@@ -19,6 +21,7 @@ import {
   bannerDisplaySize,
   bannerPosition,
   isBannerLink,
+  nextBannerLink,
 } from "@/lib/signatureBanners";
 
 const PAGE = "/settings/signature-banners";
@@ -100,18 +103,52 @@ export async function saveMarketingBanner(formData: FormData): Promise<ActionRes
       }
 
       const data = { name, linkUrl, altText, startsAt, endsAt, senderIds, teamIds, position, onQuoteEmails };
+      /*
+       * A DESTINATION IS NEVER EDITED IN PLACE. Every email already sent carries
+       * a link token, and a customer may click it weeks later. So a link row
+       * (SignatureBannerLink) freezes token → address, and changing the address
+       * makes a NEW token for emails sent from now on; the old token keeps
+       * opening the page it was sent with. The link row is written before the
+       * banner points at it, so a banner never names a token that leads nowhere.
+       */
+      const newToken = () => randomBytes(24).toString("base64url");
       if (id) {
-        const changed = await prisma.signatureBanner.updateMany({ where: { id, tenantId }, data: { ...data, ...(image ?? {}) } });
+        const existing = await prisma.signatureBanner.findFirst({ where: { id, tenantId }, select: { linkUrl: true, token: true } });
+        if (!existing) refuse("That banner no longer exists. Refresh and try again.");
+        const hasLinkRow = Boolean(await prisma.signatureBannerLink.findFirst({ where: { tenantId, token: existing.token }, select: { id: true } }));
+        const { token, createLink } = nextBannerLink({ current: existing, linkUrl, hasLinkRow, newToken });
+        if (createLink) await prisma.signatureBannerLink.create({ data: { tenantId, bannerId: id, token, linkUrl } });
+        const changed = await prisma.signatureBanner.updateMany({ where: { id, tenantId }, data: { ...data, token, ...(image ?? {}) } });
         if (changed.count !== 1) refuse("That banner no longer exists. Refresh and try again.");
       } else {
         if (!image) refuse("Choose the banner image.");
-        await prisma.signatureBanner.create({
-          data: { tenantId, ...data, ...image, active: false, token: randomBytes(24).toString("base64url") },
-        });
+        const token = newToken();
+        const created = await prisma.signatureBanner.create({ data: { tenantId, ...data, ...image, active: false, token }, select: { id: true } });
+        await prisma.signatureBannerLink.create({ data: { tenantId, bannerId: created.id, token, linkUrl } });
       }
       await logAudit({
         action: id ? "signature_banner.updated" : "signature_banner.created",
         summary: `${id ? "Changed" : "Added"} the email signature banner “${name}”${endsOn ? `, ending ${endsOn}` : ""}`,
+        user,
+      });
+      revalidatePath(PAGE);
+    }),
+  );
+}
+
+/**
+ * The workspace's legal line (lib/emailLegalLine.ts): one sentence at the foot
+ * of every email the CRM sends. Owner only. Blank removes it.
+ */
+export async function saveEmailLegalLine(formData: FormData): Promise<ActionResult> {
+  return withActingStaffScope(() =>
+    asActionResult(async () => {
+      const { user } = await workspace();
+      const line = cleanLegalLine(String(formData.get("legalLine") ?? ""));
+      await putSetting(LEGAL_LINE_KEY, line);
+      await logAudit({
+        action: "settings.email_legal_line.saved",
+        summary: line ? "Set the legal line shown at the foot of every email" : "Removed the legal line from the foot of every email",
         user,
       });
       revalidatePath(PAGE);
@@ -124,9 +161,14 @@ export async function setMarketingBannerActive(id: string, active: boolean): Pro
   return withActingStaffScope(() =>
     asActionResult(async () => {
       const { user, tenantId } = await workspace();
-      const banner = await prisma.signatureBanner.findFirst({ where: { id: String(id), tenantId }, select: { id: true, name: true, endsAt: true } });
+      const banner = await prisma.signatureBanner.findFirst({ where: { id: String(id), tenantId }, select: { id: true, name: true, endsAt: true, token: true, linkUrl: true } });
       if (!banner) refuse("That banner no longer exists. Refresh and try again.");
       if (active && banner.endsAt && banner.endsAt <= new Date()) refuse("This banner's last day has passed. Give it a new end date first.");
+      // A banner goes in front of customers only with a link that leads somewhere:
+      // if its link row is missing (a save that failed half-way), make it now.
+      if (active && !(await prisma.signatureBannerLink.findFirst({ where: { tenantId, token: banner.token }, select: { id: true } }))) {
+        await prisma.signatureBannerLink.create({ data: { tenantId, bannerId: banner.id, token: banner.token, linkUrl: banner.linkUrl } });
+      }
       await prisma.signatureBanner.updateMany({ where: { id: banner.id, tenantId }, data: { active: Boolean(active) } });
       await logAudit({
         action: active ? "signature_banner.switched_on" : "signature_banner.switched_off",
