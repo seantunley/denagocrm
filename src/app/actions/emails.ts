@@ -1,6 +1,10 @@
 "use server";
 
 import { asActionResult, refuse } from "@/lib/actionResult";
+import { formatDate } from "@/lib/format";
+import { redactSensitive, sendWarning } from "@/lib/sendCheck";
+import { secureLinkDays, secureLinkExpiry, secureLinksHtml, secureLinksText } from "@/lib/secureLinks";
+import { attachSecureLinksToEmail, createSecureLinks, discardSecureLinks, type SecureFile } from "@/lib/secureLinkStore";
 import { revalidatePath } from "next/cache";
 import { basePrisma, prisma } from "@/lib/db";
 import { customerRecordTenantId } from "@/lib/customerRecordTenant";
@@ -36,7 +40,16 @@ import {
   type SignatureDesign,
 } from "@/lib/signature";
 import { getCompanyProfile } from "@/lib/companyProfile";
-import { readFile, savePublicAsset } from "@/lib/storage";
+import { isPublicBlobRef, readFile, saveFile, savePublicAsset, storesPrivately } from "@/lib/storage";
+
+/**
+ * A secure link promises to expire and to be recallable. A file in the public
+ * Blob store has a URL of its own that neither promise reaches, so a secure
+ * link is only made where files are stored privately. Said before anything is
+ * stored or sent.
+ */
+const NO_PRIVATE_STORE =
+  "Secure links need the private file store, which is not switched on for this CRM. Nothing was sent — untick “Send as a secure link” to attach the files instead.";
 import { MAX_LOGO_BYTES } from "@/lib/emailInlineLogo";
 import { emailUploads } from "@/lib/emailUploads";
 import { resolveActingTenant } from "@/lib/tenantContext";
@@ -63,10 +76,82 @@ async function composerHtml(user: ComposerUser, bodyHtml: string, profile: Await
   return buildEmailHtml(bodyHtml, buildSignature(user, company));
 }
 
-/** The composer's Preview (Sean, 2026-10-07: "a preview on the email, to view before it sends"). Sends nothing. */
-export async function previewComposerEmail(bodyHtml: string): Promise<{ html: string }> {
+/**
+ * The composer's Preview (Sean, 2026-10-07: "a preview on the email, to view before it sends"). Sends nothing.
+ *
+ * `secureFiles`: files that will go as secure links rather than attachments.
+ * The preview shows the same block the email will carry, with links that lead
+ * nowhere — real links are only made when the email is actually sent.
+ */
+export async function previewComposerEmail(
+  bodyHtml: string,
+  secureFiles?: { files: { name: string; sizeBytes: number }[]; days: number },
+): Promise<{ html: string }> {
   const user = await requireAnyPermission(...CUSTOMER_RECORD_WRITE_PERMISSIONS);
-  return { html: await composerHtml(user, String(bodyHtml ?? "").trim(), await getCompanyProfile()) };
+  const files = (secureFiles?.files ?? []).slice(0, 20).map((file) => ({ name: String(file.name).slice(0, 200), sizeBytes: Number(file.sizeBytes) || 0, url: "#" }));
+  const block = files.length ? secureLinksHtml(files, formatDate(secureLinkExpiry(new Date(), secureLinkDays(secureFiles?.days)))) : "";
+  return { html: await composerHtml(user, String(bodyHtml ?? "").trim() + block, await getCompanyProfile()) };
+}
+
+/** The addresses already on the customer record this email is filed on — only for records the caller may open. */
+async function customerAddresses(user: ComposerUser, contactId: string | null, leadId: string | null): Promise<string[]> {
+  const [contact, lead] = await Promise.all([
+    contactId && (await canAccessContact(user, contactId)) ? prisma.contact.findUnique({ where: { id: contactId }, select: { email: true } }) : null,
+    leadId && (await canAccessLead(user, leadId)) ? prisma.lead.findUnique({ where: { id: leadId }, select: { email: true, contact: { select: { email: true } } } }) : null,
+  ]);
+  return [contact?.email, lead?.email, lead?.contact?.email].filter((address): address is string => Boolean(address?.trim()));
+}
+
+/**
+ * The check before an email goes (lib/sendCheck.ts): does it carry an ID number,
+ * bank or card details, or a personal document, to an address that is not on
+ * this customer's record? The composer asks this when Send is pressed and shows
+ * the answer; sendEmailAction asks it again and refuses unless it was confirmed,
+ * so the warning cannot be skipped by a stale or altered page.
+ */
+export async function checkComposerEmail(input: {
+  to: string;
+  subject: string;
+  bodyHtml: string;
+  contactId?: string | null;
+  leadId?: string | null;
+  fileNames: string[];
+  secureLinks: boolean;
+}): Promise<{ warning: string | null; error?: string }> {
+  const user = await requireAnyPermission(...CUSTOMER_RECORD_WRITE_PERMISSIONS);
+  if (input.secureLinks && !storesPrivately()) return { warning: null, error: NO_PRIVATE_STORE };
+  const warning = sendWarning({
+    subject: String(input.subject ?? "").slice(0, 500),
+    bodyText: htmlToText(String(input.bodyHtml ?? "")).slice(0, 100_000),
+    fileNames: (input.fileNames ?? []).slice(0, 30).map((name) => String(name).slice(0, 200)),
+    secureLinks: Boolean(input.secureLinks),
+    to: String(input.to ?? "").slice(0, 1000),
+    customerAddresses: await customerAddresses(user, input.contactId || null, input.leadId || null),
+  });
+  return { warning: warning?.text ?? null };
+}
+
+/**
+ * Recall a secure link: it stops working at once, and the customer who opens it
+ * is told the file was withdrawn. For anyone who may write to the customer the
+ * link was sent to. It cannot be undone — send the file again instead.
+ */
+export async function recallSecureLink(id: string): Promise<{ error?: string }> {
+  const user = await requireAnyPermission(...CUSTOMER_RECORD_WRITE_PERMISSIONS);
+  const tenantId = await tenantIdFor(user.id);
+  if (!tenantId) return { error: "No workspace attached to this sign-in — sign out and back in." };
+  // The caller's permission says what they may do; the row says whose it is.
+  const link = await prisma.secureFileLink.findFirst({ where: { id: String(id), tenantId }, select: { id: true, fileName: true, contactId: true, leadId: true, revokedAt: true } });
+  if (!link) return { error: "That link no longer exists." };
+  if (link.contactId && !(await canAccessContact(user, link.contactId))) return { error: "You don't have access to that contact." };
+  if (link.leadId && !(await canAccessLead(user, link.leadId))) return { error: "You don't have access to that lead." };
+  if (!link.revokedAt) {
+    await prisma.secureFileLink.updateMany({ where: { id: link.id, tenantId, revokedAt: null }, data: { revokedAt: new Date(), revokedById: user.id } });
+    await logAudit({ action: "secure_link.recalled", summary: `Recalled the secure link for “${link.fileName}”`, contactId: link.contactId, leadId: link.leadId, user });
+  }
+  if (link.leadId) revalidatePath(`/leads/${link.leadId}`);
+  if (link.contactId) revalidatePath(`/contacts/${link.contactId}`);
+  return {};
 }
 
 /** Sends an email and logs it as an outbound communication on the lead/contact. */
@@ -107,12 +192,19 @@ export async function sendEmailAction(
     return { error: "You don't have access to that lead." };
   }
   const profile = await getCompanyProfile();
-  const html = await composerHtml(user, bodyHtml, profile);
+  // Send the files as secure links instead of attachments (lib/secureLinks.ts):
+  // the file stays in our store, the email carries a link that expires and can be recalled.
+  const asSecureLinks = formData.get("secureLinks") === "on";
+  const secureFiles: SecureFile[] = [];
+  // Uploads to store for a secure link — only once every check below has passed.
+  const secureUploads: { name: string; type: string; size: number; buffer: Buffer }[] = [];
 
   // Library attachments (selected version ids)
   const attachIds = formData.getAll("attach").map(String).filter(Boolean);
   const attachments: { filename: string; content: Buffer; contentType?: string }[] = [];
   const attachedNames: string[] = [];
+  // The files' own names, for the check before sending (lib/sendCheck.ts).
+  const fileNames: string[] = [];
   if (attachIds.length > 0) {
     // Gate the document library — otherwise any crm/workshop user could read
     // arbitrary library files off storage and exfiltrate them as attachments to
@@ -125,13 +217,30 @@ export async function sendEmailAction(
       include: { document: true },
     });
     for (const v of versions) {
+      fileNames.push(v.fileName);
+      attachedNames.push(`${v.document.name} (v${v.version})`);
+      // As a secure link the library's own stored file is pointed at; nothing is read or copied —
+      // unless that file sits in the PUBLIC store (uploaded before the private one was switched
+      // on). Its own URL would outlive the link, so a private copy is made and linked instead.
+      if (asSecureLinks && isPublicBlobRef(v.storedName)) {
+        try {
+          const buffer = await readFile(v.storedName);
+          secureUploads.push({ name: v.fileName, type: v.mimeType, size: buffer.length, buffer });
+        } catch {
+          return { error: `“${v.fileName}” could not be read from storage.` };
+        }
+        continue;
+      }
+      if (asSecureLinks) {
+        secureFiles.push({ fileName: v.fileName, storedRef: v.storedName, mimeType: v.mimeType, sizeBytes: v.sizeBytes });
+        continue;
+      }
       try {
         attachments.push({
           filename: v.fileName,
           content: await readFile(v.storedName),
           contentType: v.mimeType,
         });
-        attachedNames.push(`${v.document.name} (v${v.version})`);
       } catch {
         return { error: `Attachment “${v.fileName}” could not be read from storage.` };
       }
@@ -144,9 +253,50 @@ export async function sendEmailAction(
   const uploads = emailUploads(formData);
   if ("error" in uploads) return { error: uploads.error };
   for (const file of uploads.files) {
-    attachments.push({ filename: file.name, content: Buffer.from(await file.arrayBuffer()), contentType: file.type || undefined });
+    const buffer = Buffer.from(await file.arrayBuffer());
+    fileNames.push(file.name);
     attachedNames.push(file.name);
+    if (asSecureLinks) secureUploads.push({ name: file.name, type: file.type || "application/octet-stream", size: buffer.length, buffer });
+    else attachments.push({ filename: file.name, content: buffer, contentType: file.type || undefined });
   }
+  const secure = asSecureLinks && fileNames.length > 0;
+  if (secure && !storesPrivately()) return { error: NO_PRIVATE_STORE };
+
+  // THE CHECK BEFORE IT GOES (lib/sendCheck.ts). The composer asks this when Send
+  // is pressed and shows the warning; here it is asked again, and an email that
+  // would be warned about is refused unless the sender confirmed it. Before any
+  // file is stored or any link is made.
+  const warning = sendWarning({ subject, bodyText, fileNames, secureLinks: secure, to, customerAddresses: await customerAddresses(user, contactId, leadId) });
+  const confirmed = formData.get("sensitiveOk") === "1";
+  if (warning && !confirmed) {
+    return { error: `${warning.text} Press Send again to see the warning and confirm.` };
+  }
+
+  // Secure links: store what was uploaded, make one link per file, and put the
+  // links where the attachments would have been — in the message, above the signature.
+  const sendingTenantId = secure ? await tenantIdFor(user.id) : null;
+  let links: Awaited<ReturnType<typeof createSecureLinks>> = [];
+  let messageHtml = bodyHtml;
+  let linksText = "";
+  let expiresLabel = "";
+  if (secure) {
+    if (!sendingTenantId) return { error: "No workspace attached to this sign-in — sign out and back in." };
+    const expiresAt = secureLinkExpiry(new Date(), secureLinkDays(formData.get("secureDays")));
+    expiresLabel = formatDate(expiresAt);
+    try {
+      for (const upload of secureUploads) {
+        secureFiles.push({ fileName: upload.name, storedRef: await saveFile(upload.buffer, upload.name, upload.type, sendingTenantId), mimeType: upload.type, sizeBytes: upload.size });
+      }
+      links = await createSecureLinks({ tenantId: sendingTenantId, files: secureFiles, expiresAt, createdById: user.id, sentTo: to, contactId, leadId });
+    } catch {
+      return { error: "The files could not be stored for a secure link. Nothing was sent — try again, or send them as attachments." };
+    }
+    const origin = (await tenantOrigin(sendingTenantId)).replace(/\/$/, "");
+    const lines = links.map((link) => ({ name: link.fileName, url: `${origin}/f/${link.token}`, sizeBytes: link.sizeBytes }));
+    messageHtml = bodyHtml + secureLinksHtml(lines, expiresLabel);
+    linksText = secureLinksText(lines, expiresLabel);
+  }
+  const html = await composerHtml(user, messageHtml, profile);
 
   const result = await sendEmail({
     to,
@@ -156,7 +306,7 @@ export async function sendEmailAction(
     // doing it. It carried Denago's trading name and landline out of every
     // workspace. Built from the same profile the HTML signature uses, with empty
     // parts dropped rather than left as dangling separators.
-    text: `${bodyText}\n\n--\n${[user.name, profile.name, profile.phone].filter((s) => s && s.trim()).join(" · ")}`,
+    text: `${bodyText}${linksText}\n\n--\n${[user.name, profile.name, profile.phone].filter((s) => s && s.trim()).join(" · ")}`,
     html,
     attachments,
     replyTo: replyTo.value ?? undefined,
@@ -165,16 +315,21 @@ export async function sendEmailAction(
     // The person writing it: "Sean Tunley · Denago Cape Town" on the From line.
     senderName: user.name,
   });
-  if (!result.ok) return { error: result.error };
+  if (!result.ok) {
+    // The email never left, so its links must not be left working.
+    if (secure && sendingTenantId) await discardSecureLinks(sendingTenantId, links.map((link) => link.id)).catch(() => {});
+    return { error: result.error };
+  }
 
-  await prisma.communication.create({
+  const filesNote = secure ? `Sent as secure links, until ${expiresLabel}` : "Attachments";
+  const sent = await prisma.communication.create({
     data: {
       type: "email",
       direction: "outbound",
       subject,
       body:
         attachedNames.length > 0
-          ? `${bodyText}\n\n[Attachments: ${attachedNames.join(", ")}]`
+          ? `${bodyText}\n\n[${filesNote}: ${attachedNames.join(", ")}]`
           : bodyText,
       leadId,
       contactId,
@@ -182,15 +337,22 @@ export async function sendEmailAction(
       tenantId: await customerRecordTenantId({ contactId, leadId }),
       ...(result.openToken ? { openToken: result.openToken } : {}),
     },
+    select: { id: true },
   });
+  if (secure && sendingTenantId) await attachSecureLinksToEmail(sendingTenantId, links.map((link) => link.id), sent.id).catch(() => {});
   await logAudit({
     action: "email.sent",
     // Where replies were directed is part of what was sent, and it is the one
     // detail nobody can recover afterwards — the message has left, and the header
     // exists only in the recipient's copy.
-    summary: `Sent email to ${to}: “${subject}”${
-      attachedNames.length > 0 ? ` (attached: ${attachedNames.join(", ")})` : ""
-    }${replyTo.value ? ` (replies to: ${replyTo.value})` : ""}`,
+    // The subject and file names are what the sender typed, and may hold the very
+    // number the check flagged. The email keeps them; this entry does not.
+    summary: `Sent email to ${to}: “${redactSensitive(subject)}”${
+      attachedNames.length > 0 ? ` (${secure ? `as secure links until ${expiresLabel}` : "attached"}: ${redactSensitive(attachedNames.join(", "))})` : ""
+    }${replyTo.value ? ` (replies to: ${replyTo.value})` : ""}${
+      // WHAT was flagged, never the number itself: an audit entry must not become a second copy of it.
+      warning ? ` — sent after a sensitive-data warning (${warning.kinds.join(", ")})` : ""
+    }`,
     contactId,
     leadId,
     user,

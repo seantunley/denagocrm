@@ -78,6 +78,22 @@ export async function resolveCampaignRecipientTenant(
   return row ? { tenantId: row.tenantId } : null;
 }
 
+/**
+ * Owning tenant of a secure file link (lib/secureLinks.ts). The link's value is
+ * a credential — it opens a customer's document — so, like a signing link, it
+ * is hashed before it is looked up and never compared in the clear. A recalled
+ * or expired link still resolves: the page has to be able to say what became of it.
+ */
+export async function resolveSecureFileTenant(
+  token: string,
+): Promise<{ tenantId: string | null } | null> {
+  const row = await basePrisma.secureFileLink.findUnique({
+    where: { token: hashSignToken(token) },
+    select: { tenantId: true },
+  });
+  return row ? { tenantId: row.tenantId } : null;
+}
+
 /** Owning tenant of an email's open-tracking token (the pixel in a sent email). */
 export async function resolveEmailOpenTenant(
   openToken: string,

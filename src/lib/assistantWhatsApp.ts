@@ -3,10 +3,13 @@ import crypto from "crypto";
 import { basePrisma } from "./db";
 import { getSetting } from "./settings";
 import { currentTenantScope } from "./tenantScope";
-import { fetchWhatsAppMedia, matchByPhone, sendWhatsAppAudioId, sendWhatsAppButtons, sendWhatsAppText, uploadWhatsAppMedia, waDigits } from "./whatsapp";
+import { fetchWhatsAppMedia, matchByPhone, sendWhatsAppAudioId, sendWhatsAppButtons, sendWhatsAppText, showWhatsAppTyping, uploadWhatsAppMedia, waDigits } from "./whatsapp";
 import { transcribeVoice, transcribeVoiceDetailed } from "./transcribe";
 import { askCrm } from "./crmAssistant";
-import { ASK_LIMIT_MESSAGE, assistantAskAllowed, assistantUserFor, assistantVoiceReplyAllowed } from "./assistantUser";
+import type { ActionCard } from "./assistantActions";
+import { confirmFromWhatsApp, confirmingOnWhatsAppOn, offerConfirmations } from "./assistantWhatsAppConfirm";
+import { ASK_LIMIT_MESSAGE, assistantAskAllowed, assistantImageAllowed, assistantUserFor, assistantVoiceReplyAllowed } from "./assistantUser";
+import { MAX_IMAGE_BYTES, cleanJpeg, jpegDataUrl } from "./assistantImage";
 import { canSynthesizeVoice } from "./elevenlabs";
 import { synthesiseAnswer } from "./assistantVoice";
 import { ASSISTANT_VOICE_REPLIES_KEY, voiceLanguageFor, voiceRepliesSwitchOn } from "./assistantVoiceRules";
@@ -24,9 +27,11 @@ import {
   businessNumberFromLabel,
   linkCodeHashInput,
   maskWaId,
+  parseConfirmId,
   parseLinkCode,
   planWhatsAppReply,
   whatsappSwitchOn,
+  type LinkRefusal,
   type WhatsAppReplyPlan,
 } from "./assistantWhatsAppRules";
 
@@ -77,7 +82,14 @@ export async function businessWhatsAppNumber(tenantId: string) {
   return businessNumberFromLabel(endpoint?.label);
 }
 
-export type StaffWhatsAppInput = { text: string } | { voiceMediaId: string };
+export type StaffWhatsAppInput =
+  /** choiceId: the id of a tapped button, when the text is a button's title. */
+  | { text: string; choiceId?: string }
+  | { voiceMediaId: string }
+  /** A photo, file or video. Only a photo can be read; the others are answered with why not. */
+  | { mediaId: string; mediaKind: "image" | "document" | "video"; caption: string };
+
+const IMAGE_QUESTION = "What's in this image, and what should I do with it?";
 
 /**
  * A message to the business number. True: it was a staff member's (or their link
@@ -88,7 +100,7 @@ export type StaffWhatsAppInput = { text: string } | { voiceMediaId: string };
  * claim and Meta redelivers, and the redelivery asks the same question again. They
  * never turn into `false`, because "couldn't tell" is not "customer".
  */
-export async function handleStaffWhatsApp(from: string, input: StaffWhatsAppInput): Promise<boolean> {
+export async function handleStaffWhatsApp(from: string, input: StaffWhatsAppInput, messageId?: string | null): Promise<boolean> {
   // A REAL workspace scope or nothing. withChannelTenantScope binds one only
   // when the business number is mapped to a workspace; an unmapped number runs
   // with no scope (dormant) or not at all (enforcing). A system scope bypasses
@@ -171,6 +183,15 @@ export async function handleStaffWhatsApp(from: string, input: StaffWhatsAppInpu
   const user = await assistantUserFor(link.userId);
   if (!user) return false;
 
+  // A tapped Confirm button on a task proposed here earlier. Reached only now —
+  // every check above has passed for THIS message — and it is not a question:
+  // nothing is asked, and it does not count against the ask limit.
+  const pendingId = "text" in input ? parseConfirmId(input.choiceId) : null;
+  if (pendingId) {
+    await confirmFromWhatsApp(tenantId, user, waId, pendingId);
+    return true;
+  }
+
   // The person's ONE ask limit, shared with the page and the bubble — a phone is
   // not a second allowance. Counted before a voice note is fetched or
   // transcribed, so the cap bounds that work too.
@@ -178,6 +199,14 @@ export async function handleStaffWhatsApp(from: string, input: StaffWhatsAppInpu
     await sendPlan(waId, { texts: [ASK_LIMIT_MESSAGE], buttons: null });
     return true;
   }
+
+  // "typing…" while the answer is worked out. Only HERE — after the number is
+  // known to be a current staff member's and their limit allows the question —
+  // so a customer's chat never shows it and their message is never marked read
+  // by us. Started, not awaited: it must not delay the answer (it cannot reject).
+  // ponytail: Meta drops the indicator after 25 seconds and it is not renewed;
+  // re-send it on a timer if answers routinely take longer than that.
+  const typing = showWhatsAppTyping(messageId);
 
   let question = "text" in input ? input.text : null;
   // A voice note in gets a voice note back — only when the owner switched voice
@@ -202,6 +231,22 @@ export async function handleStaffWhatsApp(from: string, input: StaffWhatsAppInpu
       return true;
     }
   }
+  // A photo: read it, as the Ask page does, under the same limits (JPEG only,
+  // size-capped, rebuilt by cleanJpeg so no metadata reaches the model, the
+  // person's hourly image allowance). Downloaded only here — after the number is
+  // known to be staff. A file or video is not read; the person is told, and the
+  // message still ends here rather than being filed as a customer's.
+  let images: string[] = [];
+  if ("mediaKind" in input) {
+    const say = async (text: string) => { await sendPlan(waId, { texts: [text], buttons: null }); await typing; return true; };
+    if (input.mediaKind !== "image") return say("I can read photos and screenshots, but not files or videos yet. Send it as a photo, or type your question.");
+    if (!(await assistantImageAllowed(user.id))) return say("That's a lot of images this hour — give it a while and try again.");
+    const media = input.mediaId ? await fetchWhatsAppMedia(input.mediaId).catch(() => null) : null;
+    const cleaned = media && media.contentType.startsWith("image/jpeg") && media.buffer.length <= MAX_IMAGE_BYTES ? cleanJpeg(new Uint8Array(media.buffer)) : null;
+    if (!cleaned) return say("I couldn't read that image — try sending it again as a photo.");
+    images = [jpegDataUrl(cleaned)];
+    question = input.caption.trim() || IMAGE_QUESTION;
+  }
   const q = String(question ?? "").trim().slice(0, QUESTION_CHARS);
   if (!q) {
     await sendPlan(waId, { texts: ["Ask me anything about your leads, quotes or calendar."], buttons: null });
@@ -212,8 +257,11 @@ export async function handleStaffWhatsApp(from: string, input: StaffWhatsAppInpu
   // exchange. It is never a customer Communication, never a lead, never the bot.
   let plan: WhatsAppReplyPlan;
   let answer: string | null = null;
+  let proposed: ActionCard[] = [];
   try {
-    const result = await askCrm(user, q, null, { source: "whatsapp" });
+    // Tasks are proposed only when the owner lets them be confirmed here.
+    const result = await askCrm(user, q, null, { source: "whatsapp", images, proposeTasks: await confirmingOnWhatsAppOn() });
+    if (result.ok) proposed = result.actions;
     plan = result.ok ? planWhatsAppReply(result.answer, result.choices) : { texts: [result.error], buttons: null };
     if (result.ok) answer = result.answer;
   } catch (error) {
@@ -224,6 +272,10 @@ export async function handleStaffWhatsApp(from: string, input: StaffWhatsAppInpu
   // the voice is still being made. The voice note is a convenience on top.
   await sendPlan(waId, plan);
   if (voiceBack && answer) await sendVoiceAnswer(user.id, waId, answer, heard);
+  // After the answer (and its voice note): each task it set up, with its Confirm button.
+  await offerConfirmations(tenantId, user.id, waId, proposed);
+  // Settled before the function ends, so the request is never left running on a serverless host.
+  await typing;
   return true;
 }
 
@@ -304,7 +356,7 @@ async function verifyLinkCode(tenantId: string, waId: string, code: string): Pro
   if (match.sessionVersion === null || security.sessionVersion !== match.sessionVersion) {
     await basePrisma.assistantPhoneLink.updateMany({
       where: { id: match.id, tenantId, codeHash: match.codeHash },
-      data: { codeHash: null, codeExpiresAt: null },
+      data: { codeHash: null, codeExpiresAt: null, refusedReason: "signed_out" satisfies LinkRefusal },
     });
     await logAudit({
       action: "assistant.whatsapp_link_refused",
@@ -327,7 +379,7 @@ async function verifyLinkCode(tenantId: string, waId: string, code: string): Pro
   if (customer.contactId || customer.leadId || customer.ambiguous) {
     await basePrisma.assistantPhoneLink.updateMany({
       where: { id: match.id, tenantId, codeHash: match.codeHash },
-      data: { codeHash: null, codeExpiresAt: null },
+      data: { codeHash: null, codeExpiresAt: null, refusedReason: "customer_number" satisfies LinkRefusal },
     });
     await logAudit({
       action: "assistant.whatsapp_link_refused",
@@ -352,7 +404,7 @@ async function verifyLinkCode(tenantId: string, waId: string, code: string): Pro
     // used in the meantime links nothing.
     const done = await tx.assistantPhoneLink.updateMany({
       where: { id: match.id, tenantId, codeHash: match.codeHash, codeExpiresAt: { gt: now } },
-      data: { waId, verifiedAt: now, codeHash: null, codeExpiresAt: null, sessionVersion: security.sessionVersion },
+      data: { waId, verifiedAt: now, codeHash: null, codeExpiresAt: null, refusedReason: null, sessionVersion: security.sessionVersion },
     });
     return done.count === 1;
   });

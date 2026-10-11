@@ -35,6 +35,9 @@ const TOKEN_PATH_PREFIXES = [
   "api/track/o",
   "api/track/c",
   "api/unsubscribe",
+  // /f/:token and /api/f/:token — SecureFileLink (the link IS the authority to download the file)
+  "f",
+  "api/f",
 ] as const;
 
 /**

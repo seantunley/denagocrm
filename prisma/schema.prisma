@@ -133,6 +133,45 @@ model LibraryDocument {
   @@unique([tenantId, id])
 }
 
+/// A file sent to a customer as a LINK instead of an attachment
+/// (lib/secureLinks.ts): it expires, it can be recalled, and the sender is told
+/// when it is first downloaded. The file stays in our store; the email carries
+/// only the link.
+///
+/// `token` is the SHA-256 of the value in the link — the link itself is never
+/// stored, so a copy of this table opens nothing. No IP address or browser
+/// string is kept about whoever downloads it.
+model SecureFileLink {
+  id              String    @id @default(cuid())
+  tenantId        String
+  token           String    @unique
+  fileName        String
+  /// Where the bytes are (lib/storage.ts ref). Never shown to anyone.
+  storedRef       String
+  mimeType        String
+  sizeBytes       Int
+  /// The address(es) the email carrying it went to, as typed.
+  sentTo          String
+  contactId       String?
+  leadId          String?
+  /// The sent email it rode in, once that is filed on the timeline.
+  communicationId String?
+  createdById     String
+  createdAt       DateTime  @default(now())
+  expiresAt       DateTime
+  /// Recalled by a member of staff: the link stops working at once.
+  revokedAt       DateTime?
+  revokedById     String?
+  /// Downloads. `firstOpenedAt` is the read receipt; both only ever move forward.
+  firstOpenedAt   DateTime?
+  lastOpenedAt    DateTime?
+  openCount       Int       @default(0)
+
+  @@index([tenantId, contactId, createdAt])
+  @@index([tenantId, leadId, createdAt])
+  @@index([communicationId])
+}
+
 model LibraryVersion {
   id         String   @id @default(cuid())
   tenantId String? // Multi-tenancy (Phase B — additive/inert): owning tenant.
@@ -1080,10 +1119,35 @@ model AssistantPhoneLink {
   /// The account's sessionVersion when linked. A linked number is a sign-in:
   /// any later bump (password reset, sign out everywhere, disable) ends it.
   sessionVersion Int?
+  /// Why the last code sent did not link (LINK_REFUSALS key); cleared by a new code or a link.
+  refusedReason String?
   createdAt     DateTime  @default(now())
 
   @@unique([tenantId, userId])
   @@unique([tenantId, waId])
+}
+
+/// A task the assistant proposed on WhatsApp, waiting for that person to tap
+/// Confirm. The card is exactly what was shown; it runs at most once, only for
+/// the person it was offered to, and not after it expires.
+model AssistantPendingAction {
+  id          String    @id @default(cuid())
+  tenantId    String
+  userId      String
+  /// The ActionCard as proposed (assistantActions.ts) — re-checked when it runs.
+  card        Json
+  expiresAt   DateTime
+  /// Set by the one tap that claimed it; a second tap finds it taken. Cleared
+  /// again only when the action reported that it changed nothing.
+  confirmedAt DateTime?
+  /// It ran and succeeded. Never runs again.
+  completedAt DateTime?
+  /// It threw part-way, so how far it got is unknown. Never runs again.
+  failedAt    DateTime?
+  createdAt   DateTime  @default(now())
+
+  @@index([tenantId, userId, createdAt])
+  @@index([tenantId, expiresAt])
 }
 
 /// What the assistant has learned. kind: "memory" (workspace facts and

@@ -53,7 +53,10 @@ export default function AssistantActionCard({ card }: { card: ActionCard }) {
     }
   };
 
-  const leadLink = card.kind === "schedule" || card.kind === "watch" ? null : card.leadId ? `/leads/${card.leadId}` : null;
+  const leadLink =
+    card.kind === "schedule" || card.kind === "watch" ? null
+    : card.kind === "customer_note" ? `/contacts/${card.contactId}`
+    : card.leadId ? `/leads/${card.leadId}` : null;
   const editable = state === "open" && !pending;
   // Lost already renders its own "Reason:" line; don't double it.
   const reason = card.kind !== "lost" && "reason" in card && card.reason ? card.reason : null;
@@ -80,7 +83,9 @@ export default function AssistantActionCard({ card }: { card: ActionCard }) {
           </button>
         )}
       </div>
-      {card.kind === "note" && <p className="mt-2 whitespace-pre-line text-xs text-muted-foreground">{card.text}</p>}
+      {(card.kind === "note" || card.kind === "customer_note") && (
+        <p className="mt-2 whitespace-pre-line text-xs text-muted-foreground">{card.pin ? "📌 " : ""}{card.text}</p>
+      )}
       {card.kind === "schedule" && <p className="mt-2 whitespace-pre-line text-xs">&ldquo;{card.question}&rdquo;</p>}
       {(card.kind === "meeting" || card.kind === "test_drive") && <p className="mt-1 text-xs text-muted-foreground">{card.detail}</p>}
       {card.kind === "lost" && <p className="mt-2 text-xs text-muted-foreground">Reason: {card.reason}</p>}
