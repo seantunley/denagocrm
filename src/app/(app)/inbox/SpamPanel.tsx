@@ -83,11 +83,14 @@ export default async function SpamPanel({ tenantId, canReview, isOwner, params =
           <label className="text-xs">Decision<select name="spamCause" defaultValue={filters.cause} className="input mt-1">
             <option value="">All decisions</option><option value="filter">Filter decisions</option><option value="blocked">Blocked senders</option>
           </select></label>
+          <label className="text-xs">Human review<select name="spamReview" defaultValue={filters.review} className="input mt-1">
+            <option value="">All review states</option><option value="unreviewed">Not reviewed yet</option><option value="spam">Reviewed — spam</option><option value="not_spam">Reviewed — not spam</option>
+          </select></label>
           <label className="min-w-48 flex-1 text-xs">Search messages or senders<input name="spamSearch" defaultValue={filters.search} maxLength={120} className="input mt-1" /></label>
           <button type="submit" className="btn-secondary btn-sm">Apply filters</button>
         </form>
         {filters.view === "observe" && <p className="mb-3 text-xs text-muted-foreground">These messages already reached the inbox. Confirm spam or mark them not spam to assess the filter before enabling Quarantine. Feedback does not replay messages or activate broad rules.</p>}
-        <SpamQuarantine key={`${filters.view}:${queue.page}:${filters.search}:${filters.channel}:${filters.cause}`} rows={rows} canReview={canReview} />
+        <SpamQuarantine key={`${filters.view}:${queue.page}:${filters.search}:${filters.channel}:${filters.cause}:${filters.review}`} rows={rows} canReview={canReview} />
         <nav aria-label="Message review pages" className="mt-3 flex items-center justify-between gap-3 text-xs">
           {queue.page > 1 ? <Link href={reviewPageHref(filters, queue.page - 1)} scroll={false} className="btn-secondary btn-sm">Previous</Link> : <span />}
           <span>{queue.total} messages · Page {queue.page} of {queue.pages}</span>

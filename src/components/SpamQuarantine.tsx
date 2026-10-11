@@ -2,6 +2,7 @@
 
 import { useState, useTransition } from "react";
 import { useRouter, unstable_rethrow } from "next/navigation";
+import ConfirmActionDialog from "@/components/ConfirmActionDialog";
 import { ShieldAlert, ShieldCheck } from "lucide-react";
 import { toast } from "sonner";
 import { confirmSpam, correctObservedSpam, decideSender, restoreSpam } from "@/app/actions/inboundSpam";
@@ -101,7 +102,7 @@ export default function SpamQuarantine({ rows, canReview }: { rows: QuarantineRo
                   <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] ${row.cause === "blocked" ? "bg-sky-500/10 text-sky-300" : "bg-amber-500/10 text-amber-300"}`}>
                     <ShieldAlert className="size-3" aria-hidden="true" />{row.state === "admitted" ? (row.observed ? "Observe decision — admitted" : "Admitted to inbox") : row.state === "restored" ? "Restored" : row.cause === "blocked" ? "Held by sender block" : "Held by the filter"}
                   </span>
-                  {row.staffLabel && <span className="rounded-full bg-muted px-2 py-0.5 text-[10px] text-muted-foreground">{row.staffLabel === "spam" ? "Confirmed spam" : "Reviewed: not spam"}</span>}
+                  <span className={`rounded-full px-2 py-0.5 text-[10px] ${row.staffLabel ? "bg-emerald-500/10 text-emerald-300" : "bg-muted text-muted-foreground"}`}>{row.staffLabel === "spam" ? "Reviewed: spam" : row.staffLabel === "not_spam" ? "Reviewed: not spam" : "Not reviewed yet"}</span>
                   <time className="ml-auto text-[11px] text-muted-foreground" dateTime={row.receivedAt}>{new Date(row.receivedAt).toLocaleString("en-ZA", { dateStyle: "medium", timeStyle: "short" })}</time>
                 </div>
                 {/* Plain text only: never a link, never an image, never unfurled. */}
@@ -115,7 +116,18 @@ export default function SpamQuarantine({ rows, canReview }: { rows: QuarantineRo
                   {row.observed && <button type="button" className="btn-secondary btn-sm" disabled={pending} onClick={() => run(() => correctObservedSpam([row.id]))}>Not spam</button>}
                   {row.cause === "blocked"
                     ? <button type="button" className="btn-secondary btn-sm" disabled={pending} onClick={() => run(() => decideSender(row.id, "clear"))}>Unblock sender</button>
-                    : <button type="button" className="btn-secondary btn-sm" disabled={pending} onClick={() => run(() => decideSender(row.id, "block"))}>Block sender</button>}
+                    : <ConfirmActionDialog
+                        trigger={<button type="button" className="btn-secondary btn-sm" disabled={pending}>Block sender</button>}
+                        title={`Block ${row.sender}?`}
+                        description="When Quarantine mode is enabled, all future messages from this sender on this channel will be held, including genuine enquiries. You can undo this in Sender decisions."
+                        confirmLabel="Block sender"
+                        destructive
+                        onConfirm={async () => {
+                          const result = await decideSender(row.id, "block");
+                          if (!result.error) { setPicked(new Set()); router.refresh(); }
+                          return result;
+                        }}
+                      />}
                   <button type="button" className="btn-secondary btn-sm" disabled={pending} onClick={() => run(() => decideSender(row.id, "allow"))}>Always allow sender</button>
                 </div>
               )}

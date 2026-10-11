@@ -80,6 +80,7 @@ const sensible = (content: string): Script => {
 /* ── fixtures ─────────────────────────────────────────────────────────── */
 
 const OTHER = `tenant_scr_${SFX}`;
+const METRICS = `tenant_metrics_${SFX}`;
 const reviewer = { id: `u_scr_${SFX}`, name: `Screening Tester ${SFX}` };
 let n = 0;
 /** A fresh WhatsApp sender: 11 digits unique to this run. */
@@ -137,11 +138,12 @@ async function seed() {
   for (const key of [SCREENING_MODE_SETTING, SCREENING_POLICY_SETTING, "ANTHROPIC_API_KEY"]) saved[key] = await getSetting(key);
   await putSetting("ANTHROPIC_API_KEY", "test-key-not-real");
   await basePrisma.tenant.create({ data: { id: OTHER, name: `Other Dealership ${SFX}`, slug: `other-scr-${SFX}` } });
+  await basePrisma.tenant.create({ data: { id: METRICS, name: `Metrics fixture ${SFX}`, slug: `metrics-scr-${SFX}` } });
   await basePrisma.user.create({ data: { id: reviewer.id, name: reviewer.name, email: `scr.${SFX}@example.test`, passwordHash: "x", role: "sales" } });
 }
 
 async function cleanup() {
-  for (const tenantId of [DEFAULT_TENANT_ID, OTHER]) {
+  for (const tenantId of [DEFAULT_TENANT_ID, OTHER, METRICS]) {
     await basePrisma.inboundScreening.deleteMany({ where: { tenantId, OR: [{ senderId: { in: [...senders, ...dmSenders] } }, { providerId: { contains: SFX } }] } });
     await basePrisma.inboundSenderRule.deleteMany({ where: { tenantId, senderId: { in: senders } } });
     await basePrisma.inboundSpamPattern.deleteMany({ where: { tenantId, createdById: reviewer.id } });
@@ -167,7 +169,7 @@ async function cleanup() {
   await basePrisma.botInboundEvent.deleteMany({ where: { id: { in: events } } });
   await basePrisma.appSetting.deleteMany({ where: { tenantId: OTHER } });
   await basePrisma.user.deleteMany({ where: { id: reviewer.id } });
-  await basePrisma.tenant.deleteMany({ where: { id: OTHER } });
+  await basePrisma.tenant.deleteMany({ where: { id: { in: [OTHER, METRICS] } } });
   for (const [key, value] of Object.entries(saved)) {
     if (value === null) await basePrisma.appSetting.deleteMany({ where: { tenantId: DEFAULT_TENANT_ID, key } });
     else await putSetting(key, value);
@@ -208,6 +210,9 @@ async function main() {
     check("Observe review lists would-have-held decisions, not genuine admissions", observed.rows.some((m) => m.id === r!.id) && !observed.rows.some((m) => m.id === genuine.outcome.screeningId));
     check("another workspace cannot label our observed decision", await labelObservedNotSpam(OTHER, [r!.id], reviewer) === 0);
     check("staff can record an observed false positive", await labelObservedNotSpam(DEFAULT_TENANT_ID, [r!.id], reviewer) === 1);
+    const unreviewed = await reviewMessages(DEFAULT_TENANT_ID, reviewFilters({ spamView: "observe", spamReview: "unreviewed" }));
+    const reviewed = await reviewMessages(DEFAULT_TENANT_ID, reviewFilters({ spamView: "observe", spamReview: "not_spam" }));
+    check("Observe filters separate reviewed corrections from unreviewed decisions", !unreviewed.rows.some((m) => m.id === r!.id) && reviewed.rows.some((m) => m.id === r!.id));
     check("observe correction preserves verdict and never replays admission", (await row(providerId))?.classification === "spam" && (await row(providerId))?.staffLabel === "not_spam" && (await footprint(from)).messages === 1);
 
   }
@@ -590,13 +595,37 @@ async function main() {
     await setSenderRule(DEFAULT_TENANT_ID, "whatsapp", shared, null, reviewer);
   }
 
-  console.log("\nThe numbers add up");
+  console.log("\nMetrics: exact counts in an isolated workspace and one-day window");
   {
-    const m = await screeningMetrics(DEFAULT_TENANT_ID, 1);
-    const rows = await basePrisma.inboundScreening.findMany({ where: { tenantId: DEFAULT_TENANT_ID, providerId: { contains: SFX }, decidedBy: { not: "staff" } }, select: { state: true, aiUsed: true, staffLabel: true } });
-    check("held = quarantined + restored", rows.filter((r) => r.state !== "admitted").length <= m.quarantined && m.restoredAsGenuine >= 1);
-    check("AI checks counted are the calls actually made", rows.filter((r) => r.aiUsed).length <= m.aiCalls && m.aiCalls <= aiCalls);
-    check("missed and reviewed are counted from people's labels", m.missedMarkedByStaff >= 1 && m.reviewed >= 2);
+    // Earlier restore tests intentionally backdate arrivals by three days.
+    // Comparing those all-time rows to one-day workspace metrics was invalid.
+    // This workspace has only the fixtures below, so CI's unrelated seed data,
+    // pagination fixtures, and another tenant's AI calls cannot affect expectations.
+    const now = new Date();
+    const recent = new Date(now.getTime() - 3600000);
+    const old = new Date(now.getTime() - 3 * 86400000);
+    const withheld = { staffPush: true, botRun: true, newContact: true, newLead: true };
+    const common = { tenantId: METRICS, channel: "whatsapp", senderId: `metrics.${SFX}`, kind: "text", body: "Metrics fixture", payload: {}, classification: "spam", decidedBy: "ai", reasonCodes: [], reason: "Fixture", policyVersion: "test", mode: "quarantine", receivedAt: recent };
+    await basePrisma.inboundScreening.createMany({ data: [
+      { ...common, providerId: `metrics.${SFX}.held`, state: "quarantined", aiUsed: true, aiInputTokens: 100, aiOutputTokens: 20, latencyMs: 10, suppressed: withheld },
+      { ...common, providerId: `metrics.${SFX}.restored`, state: "restored", aiUsed: true, aiInputTokens: 200, aiOutputTokens: 30, latencyMs: 20, suppressed: withheld, staffLabel: "not_spam", labelledAt: now },
+      { ...common, providerId: `metrics.${SFX}.restoring`, state: "restoring", decidedBy: "rule", latencyMs: 30, suppressed: { ...withheld, newContact: false, newLead: false } },
+      { ...common, providerId: `metrics.${SFX}.observe`, state: "admitted", mode: "observe", aiUsed: true, aiInputTokens: 50, aiOutputTokens: 10, latencyMs: 40, suppressed: withheld, staffLabel: "spam", labelledAt: now },
+      { ...common, providerId: `metrics.${SFX}.failed`, state: "admitted", decidedBy: "fallback", aiUsed: true, failure: "timeout", latencyMs: 50 },
+      { ...common, providerId: `metrics.${SFX}.staff`, state: "admitted", decidedBy: "staff", staffLabel: "spam", labelledAt: now, latencyMs: 100 },
+      { ...common, providerId: `metrics.${SFX}.old-held`, state: "quarantined", receivedAt: old, aiUsed: true, aiInputTokens: 500, aiOutputTokens: 100, suppressed: withheld },
+      { ...common, providerId: `metrics.${SFX}.old-missed`, state: "admitted", receivedAt: old, staffLabel: "spam", labelledAt: now },
+    ] });
+    const m = await screeningMetrics(METRICS, 1);
+    check("screened excludes older arrivals and staff-only labels", m.screened === 5, String(m.screened));
+    check("held includes quarantined, restoring and restored within the same window", m.quarantined === 3 && m.restoredAsGenuine === 1);
+    check("Observe would-hold is counted separately from actual quarantine", m.observedWouldQuarantine === 1);
+    check("AI checks count eligible recorded attempts, including a failed call", m.aiCalls === 4 && m.aiInputTokens === 350 && m.aiOutputTokens === 60 && m.failures === 1);
+    check("reviewed counts labels on eligible screened arrivals", m.reviewed === 2);
+    check("missed counts recent staff corrections, even for older or unscreened messages", m.missedMarkedByStaff === 3);
+    check("suppression counts exclude Observe and distinguish restored contacts and leads", m.suppressedPushes === 3 && m.suppressedBotRuns === 3 && m.suppressedNewContacts === 1 && m.suppressedNewLeads === 1);
+    check("latency uses exactly the five eligible decisions", m.medianLatencyMs === 30 && m.p95LatencyMs === 48, `${m.medianLatencyMs}/${m.p95LatencyMs}`);
+    check("another workspace's screened traffic does not alter exact fixture counts", (await screeningMetrics(OTHER, 1)).screened === 3 && m.screened === 5);
   }
 }
 

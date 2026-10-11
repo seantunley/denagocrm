@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { ChevronRight, MessageCircle } from "lucide-react";
+import ConfirmActionDialog from "@/components/ConfirmActionDialog";
 import RowModal from "@/components/RowModal";
 import InboxReply from "@/components/InboxReply";
 import { markThreadRead, setThreadArchived } from "@/app/actions/communications";
@@ -132,9 +133,14 @@ export default function SocialThreadList({
                       <SaveForm action={markConversationSpam.bind(null, thread.contactId, thread.channel)}>
                         <SaveButton className="btn-secondary btn-sm" pendingLabel="…">Mark as spam</SaveButton>
                       </SaveForm>
-                      <SaveForm action={markAndBlockConversationSpam.bind(null, thread.contactId, thread.channel)}>
-                        <SaveButton className="btn-secondary btn-sm" pendingLabel="…">Spam &amp; block sender</SaveButton>
-                      </SaveForm>
+                      <ConfirmActionDialog
+                        trigger={<button type="button" className="btn-secondary btn-sm">Spam &amp; block sender</button>}
+                        title={`Block ${thread.name}?`}
+                        description="This archives the conversation as spam and blocks this sender on this channel. When Quarantine mode is enabled, future messages from them will be held even if genuine. You can remove the block in Spam → Sender decisions."
+                        confirmLabel="Mark spam and block"
+                        destructive
+                        onConfirm={markAndBlockConversationSpam.bind(null, thread.contactId, thread.channel)}
+                      />
                     </>
                   ) : null}
                   <SaveForm action={setThreadArchived.bind(null, thread.contactId, thread.leadId, thread.channel, !thread.archived)}>
