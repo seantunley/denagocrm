@@ -18,13 +18,13 @@ import type { HelpArticle } from "../types";
 export const dashboardArticles: HelpArticle[] = [
   {
     slug: "dashboards-overview",
-    title: "Your dashboard: how it is put together",
+    title: "Your dashboards: how they are put together",
     summary: "Dashboards, tabs, sections and cards — what each level is for, and why the screen is yours alone.",
     category: "getting-started",
     audience: "everyone",
     keywords: ["dashboard", "home", "home screen", "tabs", "sections", "cards", "layout", "widgets", "tiles"],
     body: [
-      { type: "p", text: "Your dashboard is the screen you land on when you sign in. It summarises what needs you — new leads, work due, headline numbers — and every tile on it is a link into the list behind it. It is also **yours**: you arrange it, and nothing you do to it changes anybody else's screen." },
+      { type: "p", text: "Your dashboard is where your charts and cards live. Open it from **Dashboards** in the sidebar, or from the link at the foot of Home. It summarises the business — new leads, work due, headline numbers — and every tile on it is a link into the list behind it. It is also **yours**: you arrange it, and nothing you do to it changes anybody else's screen." },
       { type: "h", text: "Four levels, nested" },
       { type: "table", headers: ["Level", "What it is", "Reach for it when"], rows: [
         ["Dashboard", "A whole named screen with its own address.", "You want a separate screen for a separate job — a sales screen and a workshop screen, rather than one screen with everything on it."],
