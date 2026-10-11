@@ -18,7 +18,7 @@ import { basePrisma } from "../src/lib/db";
 import { DEFAULT_TENANT_ID } from "../src/lib/tenant";
 import { runInTenantScope } from "../src/lib/tenantScope";
 import { __setTenantEnforcingForTests } from "../src/lib/tenantEnforcement";
-import { customersNamed, leadBrief } from "../src/lib/crmAssistant";
+import { customersNamed, findActivities, leadBrief } from "../src/lib/crmAssistant";
 import type { PermissionUser } from "../src/lib/permissions";
 import { resolveTenantActor } from "../src/lib/tenantActor";
 
@@ -47,6 +47,7 @@ const STAND_IN = id("standin");
 const STAGE = id("stage");
 const C = { noLead: id("c-nolead"), othersSameName: id("c-other"), withLead: id("c-withlead"), twinA: id("c-twin-a"), twinB: id("c-twin-b"), deleted: id("c-deleted"), conly: id("c-conly"), leadNamedDifferently: id("c-diffname") };
 const L = { withLead: id("l-withlead"), diffName: id("l-diffname") };
+const A = { block: id("a-block"), call: id("a-call"), lateBlock: id("a-lateblock") };
 const scoped = <R>(fn: () => Promise<R>) => runInTenantScope({ tenantId: T, system: false }, fn);
 type Found = Awaited<ReturnType<typeof customersNamed>>;
 const idsOf = (found: Found) => found.map((c) => c.contactId).sort();
@@ -98,6 +99,7 @@ async function seed() {
 async function cleanup() {
   // Before the users: a message cannot outlive the account it is filed under.
   await basePrisma.communication.deleteMany({ where: { OR: [{ leadId: { in: Object.values(L) } }, { contactId: { in: Object.values(C) } }] } });
+  await basePrisma.activity.deleteMany({ where: { id: { in: Object.values(A) } } });
   await basePrisma.lead.deleteMany({ where: { id: { in: Object.values(L) } } });
   await basePrisma.contact.deleteMany({ where: { id: { in: Object.values(C) } } });
   await basePrisma.$executeRaw`DELETE FROM "PipelineStage" WHERE "id" = ${STAGE}`;
@@ -149,6 +151,33 @@ async function main() {
     check("is not refused: their customer is found", b.customers?.[0]?.contactId === C.conly, b.note);
     const none = await brief(customersOnly, `Yan Deal${SFX}`);
     check("still sees no lead, and no customer that is not theirs", !none.id && !none.customers?.length && /don't have access to leads/.test(none.note ?? ""), JSON.stringify(none));
+  }
+
+  console.log("\nThe calendar: blocked time is on it");
+  {
+    // "What is in my calendar this week?" came back "nothing" for someone whose Tuesday was blocked.
+    const at = (daysAhead: number, hour: number) => new Date(new Date(`${new Date(Date.now() + 2 * 3_600_000 + daysAhead * 86_400_000).toISOString().slice(0, 10)}T${String(hour).padStart(2, "0")}:00:00+02:00`));
+    const item = <E extends { type: string; summary: string; dueDate: Date }>(aid: string, extra: E) => ({ id: aid, tenantId: T, assignedToId: rep.id, createdById: rep.id, status: "planned", ...extra });
+    await basePrisma.activity.createMany({
+      data: [
+        item(A.block, { type: "availability", summary: `Admin ${SFX}`, note: "Paperwork", dueDate: at(2, 9), endDate: at(2, 11), availabilityBlock: true }),
+        item(A.call, { type: "call", summary: `Call Yan ${SFX}`, dueDate: at(1, 10), leadId: L.withLead, contactId: C.withLead }),
+        item(A.lateBlock, { type: "availability", summary: `Old leave ${SFX}`, note: "Leave", dueDate: at(-3, 9), endDate: at(-3, 17), availabilityBlock: true }),
+      ],
+    });
+    type Row = { summary?: string; type?: string; blockedTime?: boolean; time?: string; until?: string; note?: string };
+    const find = async (args: Parameters<typeof findActivities>[1]) => (await scoped(() => findActivities(rep, args))).data as Row[];
+    const week = await find({ when: "this_week", assignedTo: "Rep" });
+    const blocked = week.find((r) => r.summary === `Admin ${SFX}`);
+    check("blocked time shows in the week's calendar", Boolean(blocked), JSON.stringify(week.map((r) => r.summary)));
+    check("…as what it is, with its hours", blocked?.type === "blocked time" && blocked.blockedTime === true && blocked.time === "09:00" && blocked.until === "11:00", JSON.stringify(blocked));
+    check("…alongside the ordinary activities", week.some((r) => r.summary === `Call Yan ${SFX}` && r.type === "call" && !r.blockedTime));
+    const overdue = await find({ when: "overdue", assignedTo: "Rep" });
+    check("but time off is never listed as OVERDUE work", !overdue.some((r) => r.summary === `Old leave ${SFX}`), JSON.stringify(overdue.map((r) => r.summary)));
+    const toDo = await find({ when: "today_and_overdue", assignedTo: "Rep" });
+    check("…nor as something to get done today", !toDo.some((r) => r.blockedTime));
+    const empty = await find({ when: "this_week", assignedTo: "Customers Only" });
+    check("an empty calendar says which days it covered, and that blocked time was looked for", empty.length === 1 && /from \w{3},? \d+ \w+ to \w{3},? \d+ \w+/.test(empty[0].note ?? "") && /and no blocked time/.test(empty[0].note ?? ""), JSON.stringify(empty));
   }
 
   console.log("\nWho did it: the author of each entry on a lead");

@@ -405,7 +405,7 @@ async function findQuotes(user: User, raw: z.infer<typeof quoteArgs>): Promise<T
   };
 }
 
-async function findActivities(user: User, raw: z.infer<typeof activityArgs>): Promise<ToolOutput> {
+export async function findActivities(user: User, raw: z.infer<typeof activityArgs>): Promise<ToolOutput> {
   if (!(await hasAnyPermission(user, "activities.view", "activities.manage"))) return refused("activities");
   const args = activityArgs.parse(raw);
   const ids = await getAccessibleActivityIds(user);
