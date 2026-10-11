@@ -104,7 +104,7 @@ export async function startWhatsAppLink(): Promise<WhatsAppLinkStart> {
     const link = await basePrisma.assistantPhoneLink.upsert({
       where: { tenantId_userId: { tenantId, userId: user.id } },
       create: { tenantId, userId: user.id, codeHash, codeExpiresAt, sessionVersion },
-      update: { codeHash, codeExpiresAt, waId: null, verifiedAt: null, sessionVersion },
+      update: { codeHash, codeExpiresAt, waId: null, verifiedAt: null, refusedReason: null, sessionVersion },
       select: { id: true },
     });
     await logAudit({

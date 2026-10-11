@@ -4,6 +4,7 @@ import { notFound } from "next/navigation";
 import { prisma } from "@/lib/db";
 import { deleteContact } from "@/app/actions/contacts";
 import CommsTimeline from "@/components/CommsTimeline";
+import SecureLinksPanel from "@/components/SecureLinksPanel";
 import CustomFieldsCard from "@/components/custom-fields/CustomFieldsCard";
 import DocumentsPanel from "@/components/DocumentsPanel";
 import PortalUploadsList, { type PortalUploadRow } from "@/components/PortalUploadsList";
@@ -201,7 +202,7 @@ export default async function ContactDetailPage({
     : [[], null];
   const libraryDocs = libraryDocuments
     .filter((d) => d.versions[0])
-    .map((d) => ({ id: d.versions[0].id, label: `${d.name} (v${d.versions[0].version})` }));
+    .map((d) => ({ id: d.versions[0].id, label: `${d.name} (v${d.versions[0].version})`, fileName: d.versions[0].fileName }));
   const vars = contactVars(contact, teamSignoff(await brandForTenant(await getActiveTenantId())));
   const renderedTemplates = templates.map((t) => ({
     id: t.id,
@@ -443,6 +444,7 @@ export default async function ContactDetailPage({
                           userName: c.user.name,
                         }))}
                     />
+                    <SecureLinksPanel contactId={contact.id} />
                     <CommsTimeline
                       communications={comms}
                       contactId={contact.id}

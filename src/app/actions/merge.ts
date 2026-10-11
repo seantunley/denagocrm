@@ -107,6 +107,8 @@ export async function mergeContacts(keepId: string, otherIdsCsv: string, formDat
         await move(tx.marketingCampaignEvent, "contactId", "campaign events");
         await move(tx.surveyFollowUp, "contactId", "survey follow-ups");
         await move(tx.botFlowOutbox, "contactId", "queued bot messages");
+        // Files sent as secure links: they must stay recallable from the record that survives.
+        await move(tx.secureFileLink, "contactId", "secure file links");
 
         // Referral has two contact links. Move both, then drop any self-referral
         // the merge created (referrer === referred → a customer referring itself,

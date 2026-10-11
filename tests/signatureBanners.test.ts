@@ -182,7 +182,8 @@ test("a customer who opted out of marketing gets no banner — checked where eve
   assert.match(store, /ciExactIds\("contactEmail", address\)/, "by the address typed, not only the record it is filed on");
   const composer = src("src/app/actions/emails.ts");
   assert.match(composer, /bannerForEmail\(\{ tenantId, senderId: user\.id, \.\.\.recipient \}\)/);
-  assert.match(composer, /composerHtml\(user, bodyHtml, profile, \{ to, contactId, leadId, choice \}\)/);
+  // messageHtml: the message plus its secure-link block when files go as links — the banner rules are unchanged by it.
+  assert.match(composer, /composerHtml\(user, messageHtml, profile, \{ to, contactId, leadId, choice \}\)/);
   // Every address, or no banner: never the first few.
   assert.match(store, /const addresses = bannerRecipients\(input\.to\);\s*if \(addresses === null\) return null;/);
   assert.match(store, /addresses\.map\(\(address\) => ciExactIds\("contactEmail", address\)\)/);
@@ -346,7 +347,9 @@ test("the sender may pick among their own live banners, or none — never anythi
 test("a preview's banner is not a tracked link, and a sent email's is", () => {
   const composer = src("src/app/actions/emails.ts");
   assert.match(composer, /bannerHtml\(banner, preview \? banner\.linkUrl : bannerClickUrl\(origin, banner\.token\)\)/);
-  assert.match(composer, /if \(bannerId && sendingTenantId\) await recordBannerSent\(sendingTenantId, bannerId\);/);
+  assert.match(composer, /if \(bannerId && bannerTenantId\) await recordBannerSent\(bannerTenantId, bannerId\);/);
+  // …and only after the email has actually left: a failed send counts nothing.
+  assert.ok(composer.indexOf("return { error: result.error };") < composer.indexOf("await recordBannerSent(bannerTenantId, bannerId)"));
   assert.equal(EMAIL_REF_MARKER, "__crm_email_ref__");
 });
 

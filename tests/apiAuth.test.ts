@@ -41,6 +41,12 @@ const PUBLIC_PREFIXES = [
   // in the request — and for any other token it redirects home. It reads nothing
   // back. See lib/signatureBanners.ts.
   "track/b/",
+  // Secure file download. PUBLIC BY NECESSITY: the customer has no account, so
+  // the link is the authority — stored only as a hash, checked on every request,
+  // dead once recalled or expired, throttled, and POST-only so a mail gateway's
+  // prefetch of the link downloads nothing. It streams exactly one file: the one
+  // that link was made for, read as that link's own workspace.
+  "f/",
   // Domain reachability check. PUBLIC BY NECESSITY, and the necessity is the
   // whole function: we fetch it ourselves, over the internet, at the hostname
   // being verified, to learn whether that hostname reaches this deployment. A
