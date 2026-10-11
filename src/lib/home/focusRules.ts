@@ -19,10 +19,15 @@ export type HomeNumber = {
   label: string;
   /** The figure, formatted. */
   value: string;
+  /** The figure as a number (rand for money, a count otherwise) — for a tile that counts up to it. */
+  amount: number;
+  display: "int" | "zar";
   /** What it is measured against — a target, last month, a count. Never empty: a bare figure says nothing. */
   context: string;
   /** Up or down against the comparison, when there is one. */
   direction?: "up" | "down";
+  /** The change against the same days last month, in percent; null when there is nothing to compare with. */
+  delta: number | null;
   /** 0–1 of a target reached, when the figure is progress toward one. */
   progress?: number;
   /** Something here needs the viewer. Used for exactly one thing: overdue work. */
@@ -52,34 +57,36 @@ export type HomeFigures = {
 };
 
 const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
+const rand = (cents: number) => Math.round(cents / 100);
 
-/** "▲ 12% on last month" — or, with nothing to compare against, a plain statement. */
-function against(current: number, previous: number): { context: string; direction?: "up" | "down" } {
-  if (previous === 0) return { context: current > 0 ? "none by this day last month" : "same as last month" };
+/** "12% up on last month" — or, with nothing to compare against, a plain statement and no percentage. */
+function against(current: number, previous: number): { context: string; direction?: "up" | "down"; delta: number | null } {
+  if (previous === 0) return { context: current > 0 ? "none by this day last month" : "same as last month", delta: null };
   const pct = Math.round(((current - previous) / previous) * 100);
-  if (pct === 0) return { context: "level with last month" };
-  return { context: `${Math.abs(pct)}% ${pct > 0 ? "up" : "down"} on last month`, direction: pct > 0 ? "up" : "down" };
+  if (pct === 0) return { context: "level with last month", delta: 0 };
+  return { context: `${Math.abs(pct)}% ${pct > 0 ? "up" : "down"} on last month`, direction: pct > 0 ? "up" : "down", delta: pct };
 }
 
 /** The numbers for the top of the home screen, most important first, never more than MAX_HOME_NUMBERS. */
 export function homeNumbers(f: HomeFigures): HomeNumber[] {
   const out: HomeNumber[] = [];
   if (f.seesLeads) {
+    const sold = { key: "sales" as const, label: "Sold this month", value: formatZARCompact(f.wonCents), amount: rand(f.wonCents), display: "zar" as const };
     // With a target, the question is "how far along are we?"; without one, "how does it compare?".
     if (f.salesTargetCents > 0) {
       const progress = Math.min(1, Math.max(0, f.wonCents / f.salesTargetCents));
-      out.push({ key: "sales", label: "Sold this month", value: formatZARCompact(f.wonCents), context: `${Math.round(progress * 100)}% of ${formatZARCompact(f.salesTargetCents)} target`, progress, href: "/targets" });
+      out.push({ ...sold, context: `${Math.round(progress * 100)}% of ${formatZARCompact(f.salesTargetCents)} target`, delta: against(f.wonCents, f.prevWonCents).delta, progress, href: "/targets" });
     } else {
-      out.push({ key: "sales", label: "Sold this month", value: formatZARCompact(f.wonCents), ...against(f.wonCents, f.prevWonCents), href: "/leads" });
+      out.push({ ...sold, ...against(f.wonCents, f.prevWonCents), href: "/leads" });
     }
-    out.push({ key: "pipeline", label: "Open pipeline", value: formatZARCompact(f.openPipelineCents), context: `across ${plural(f.openDeals, "open deal")}`, href: "/leads" });
-    out.push({ key: "new-leads", label: "New leads this month", value: String(f.newLeads), ...against(f.newLeads, f.prevNewLeads), href: "/leads" });
+    out.push({ key: "pipeline", label: "Open pipeline", value: formatZARCompact(f.openPipelineCents), amount: rand(f.openPipelineCents), display: "zar", context: `across ${plural(f.openDeals, "open deal")}`, delta: null, href: "/leads" });
+    out.push({ key: "new-leads", label: "New leads this month", value: String(f.newLeads), amount: f.newLeads, display: "int", ...against(f.newLeads, f.prevNewLeads), href: "/leads" });
   }
   if (f.seesActivities) {
-    out.push({ key: "overdue", label: "Overdue for you", value: String(f.overdueMine), context: f.overdueMine === 0 ? "nothing past due" : "planned and past due", alert: f.overdueMine > 0, href: "/activities" });
+    out.push({ key: "overdue", label: "Overdue for you", value: String(f.overdueMine), amount: f.overdueMine, display: "int", context: f.overdueMine === 0 ? "nothing past due" : "planned and past due", delta: null, alert: f.overdueMine > 0, href: "/activities" });
   }
   if (f.seesSigning) {
-    out.push({ key: "waiting", label: "Out for signature", value: String(f.waitingSignature), context: f.waitingSignature === 0 ? "nothing waiting on a customer" : "waiting on a customer", href: "/signatures" });
+    out.push({ key: "waiting", label: "Out for signature", value: String(f.waitingSignature), amount: f.waitingSignature, display: "int", context: f.waitingSignature === 0 ? "nothing waiting on a customer" : "waiting on a customer", delta: null, href: "/signatures" });
   }
   return out.slice(0, MAX_HOME_NUMBERS);
 }
@@ -99,4 +106,9 @@ export function homeBriefLine(day: { toContact: number; overdueMine: number; wai
   }
   const tail = day.waitingSignature > 0 ? ` ${plural(day.waitingSignature, "quote")} ${day.waitingSignature === 1 ? "is" : "are"} out for signature.` : "";
   return `${needs.join(" and ")}.${tail}`.replace(/^./, (c) => c.toUpperCase());
+}
+
+/** How urgent the day is — sets the colour of the summary band. Calm is the default, and a good thing. */
+export function homeMood(day: { toContact: number; overdueMine: number }): "calm" | "busy" | "behind" {
+  return day.overdueMine > 0 ? "behind" : day.toContact > 0 ? "busy" : "calm";
 }

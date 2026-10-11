@@ -3,9 +3,9 @@ import { prisma } from "@/lib/db";
 import { loadTodayLeads, type TodayLead } from "@/lib/leadScoreLoader";
 import {
   dashboardViewer, dashboardWindow, grants, leadWhere, quoteWhere,
-  leadsThisMonth, prevLeadCount, wonThisMonth, prevWonValue, plannedActivities,
+  leadsThisMonth, prevLeadCount, wonThisMonth, prevWonValue, plannedActivities, dailySeries,
 } from "@/lib/dashboard/data";
-import { homeBriefLine, homeNumbers, HOME_QUEUE_SIZE, type HomeNumber } from "./focusRules";
+import { homeBriefLine, homeMood, homeNumbers, HOME_QUEUE_SIZE, type HomeNumber } from "./focusRules";
 
 /**
  * Everything the home screen shows, loaded once.
@@ -28,6 +28,12 @@ export type HomeFocus = {
   agenda: Awaited<ReturnType<typeof plannedActivities>>["today"] | null;
   /** Quotes out with customers, or null when the viewer may not see signing. */
   waitingSignature: number | null;
+  /** How urgent the day is: sets the colour of the summary band. */
+  mood: "calm" | "busy" | "behind";
+  /** Day-by-day this month, for the small trend line behind a number. Only for figures that have a daily shape. */
+  sparks: Partial<Record<HomeNumber["key"], number[]>>;
+  /** Open deals by stage, in pipeline order — the one chart on the page. Empty when the viewer may not see deals. */
+  stages: { name: string; color: string; count: number; value: number }[];
 };
 
 /** Signing requests still out with a customer, counted only over quotes the viewer may read. */
@@ -45,20 +51,20 @@ async function quotesOutForSignature(): Promise<number> {
 
 export async function loadHomeFocus({ mine }: { mine: boolean }): Promise<HomeFocus> {
   const { user, access } = await dashboardViewer();
-  const { todayStart, period } = await dashboardWindow();
+  const { todayStart, period, daysSoFar } = await dashboardWindow();
   const seesLeads = grants(access, "leads.view_all", "leads.view_owned");
   const seesActivities = grants(access, "activities.view", "activities.manage");
   const seesSigning = grants(access, "signing.view", "signing.manage") && grants(access, "quotes.view_all", "quotes.view_owned");
 
   const openWhere = seesLeads ? { ...(await leadWhere()), status: "open" } : null;
-  const [today, won, prevWon, created, prevCreated, pipeline, openDeals, target, overdueMine, agenda, waiting] = await Promise.all([
+  const [today, won, prevWon, created, prevCreated, open, target, overdueMine, agenda, waiting] = await Promise.all([
     seesLeads ? loadTodayLeads(user, { mine }) : { leads: [] as TodayLead[], truncated: false },
     seesLeads ? wonThisMonth() : [],
     seesLeads ? prevWonValue() : 0,
     seesLeads ? leadsThisMonth() : [],
     seesLeads ? prevLeadCount() : 0,
-    openWhere ? prisma.lead.aggregate({ where: openWhere, _sum: { valueCents: true } }) : null,
-    openWhere ? prisma.lead.count({ where: openWhere }) : 0,
+    // One read gives the pipeline's total, its size and its shape by stage.
+    openWhere ? prisma.lead.findMany({ where: openWhere, select: { valueCents: true, stage: { select: { id: true, name: true, color: true, order: true } } } }) : [],
     seesLeads ? prisma.target.findFirst({ where: { period, metric: "sales_value" }, select: { value: true } }) : null,
     // The viewer's OWN overdue work: assignedToId is the caller, so this is nobody else's whatever their permissions.
     seesActivities ? prisma.activity.count({ where: { status: "planned", availabilityBlock: false, dueDate: { lt: todayStart }, assignedToId: user.id } }) : 0,
@@ -73,15 +79,30 @@ export async function loadHomeFocus({ mine }: { mine: boolean }): Promise<HomeFo
     wonCents: won.reduce((sum, w) => sum + w.valueCents, 0),
     prevWonCents: prevWon,
     salesTargetCents: target?.value ?? 0,
-    openPipelineCents: pipeline?._sum.valueCents ?? 0,
-    openDeals,
+    openPipelineCents: open.reduce((sum, lead) => sum + lead.valueCents, 0),
+    openDeals: open.length,
     newLeads: created.length,
     prevNewLeads: prevCreated,
     overdueMine,
     waitingSignature: waiting ?? 0,
   });
+  const byStage = new Map<string, { name: string; color: string; count: number; value: number; order: number }>();
+  for (const lead of open) {
+    const stage = byStage.get(lead.stage.id) ?? { name: lead.stage.name, color: lead.stage.color, count: 0, value: 0, order: lead.stage.order };
+    stage.count += 1;
+    stage.value += lead.valueCents;
+    byStage.set(lead.stage.id, stage);
+  }
   return {
     numbers,
+    mood: homeMood({ toContact: worth.length, overdueMine }),
+    sparks: seesLeads
+      ? {
+          sales: dailySeries(won.map((w) => w.updatedAt), daysSoFar, (i) => Math.round(won[i].valueCents / 100)),
+          "new-leads": dailySeries(created.map((lead) => lead.createdAt), daysSoFar),
+        }
+      : {},
+    stages: [...byStage.values()].sort((a, b) => a.order - b.order).map(({ order: _order, ...stage }) => { void _order; return stage; }),
     brief: homeBriefLine({ toContact: worth.length, overdueMine, waitingSignature: waiting ?? 0, meetingsToday: agenda?.today.length ?? 0 }),
     queue: worth.slice(0, HOME_QUEUE_SIZE),
     queueMore: Math.max(0, worth.length - HOME_QUEUE_SIZE),

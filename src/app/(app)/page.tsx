@@ -102,28 +102,20 @@ export default async function HomePage({
         }))}
       />
 
-      <header>
-        <h1 className="text-xl font-semibold tracking-tight text-foreground">
-          {greeting}, {firstName}
-        </h1>
-        {/* One sentence does the job of several charts: how much needs you, and of what kind. */}
-        <p className="mt-1 text-sm text-muted-foreground">{focus.brief}</p>
-      </header>
-
-      <FocusHome focus={focus} mine={mine} canSeeTeam={canSeeTeam} />
+      <FocusHome focus={focus} mine={mine} canSeeTeam={canSeeTeam} greeting={greeting} firstName={firstName} />
 
       {/* Detail, on demand: DAX's fuller brief folds open; charts and custom cards are a click away. */}
-      <footer className="space-y-3 border-t border-border/60 pt-4">
+      <footer className="space-y-3">
         {briefHasMore && brief && (
-          <details className="group">
-            <summary className="cursor-pointer text-sm font-medium text-muted-foreground hover:text-foreground">DAX&apos;s brief for today</summary>
+          <details className="group rounded-2xl border border-border bg-card px-4 py-3 sm:px-5">
+            <summary className="cursor-pointer text-sm font-semibold text-foreground">DAX&apos;s brief for today</summary>
             <div className="mt-3"><DaxBriefCard brief={brief} /></div>
           </details>
         )}
-        <Link href={`/d/${DEFAULT_DASHBOARD_SLUG}`} className="inline-flex items-center gap-2 text-sm font-medium text-muted-foreground hover:text-foreground">
-          <LayoutGrid className="size-4" aria-hidden />
-          Dashboards — charts, targets and your own cards
-          <ArrowRight className="size-3.5" aria-hidden />
+        <Link href={`/d/${DEFAULT_DASHBOARD_SLUG}`} className="group flex items-center gap-3 rounded-2xl border border-border bg-card px-4 py-3 text-sm transition-colors hover:border-primary/40 sm:px-5">
+          <span className="flex size-9 shrink-0 items-center justify-center rounded-full bg-primary/15"><LayoutGrid className="size-4 text-primary" aria-hidden /></span>
+          <span className="flex-1"><span className="block font-semibold text-foreground">Dashboards</span><span className="text-muted-foreground">Charts, targets and the cards you arranged</span></span>
+          <ArrowRight className="size-4 text-muted-foreground transition-transform group-hover:translate-x-0.5" aria-hidden />
         </Link>
       </footer>
     </div>
