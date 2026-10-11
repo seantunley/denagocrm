@@ -47,7 +47,7 @@ export const PERMISSIONS = [
   "parts.view", "parts.manage", "warranty.view", "warranty.manage",
   "fleets.view", "fleets.manage", "stock.view", "stock.manage",
   "library.view", "library.manage", "activities.view", "activities.manage",
-  "inbox.view", "inbox.reply", "deliveries.view", "deliveries.manage",
+  "inbox.view", "inbox.reply", "inbox.spam", "deliveries.view", "deliveries.manage",
   "referrals.view", "referrals.manage",
   "reports.view", "reports.view_all", "reports.view_team",
   "portal_access.manage", "privacy.export",

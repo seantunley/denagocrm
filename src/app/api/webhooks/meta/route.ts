@@ -8,6 +8,7 @@ import { createIntakeLead } from "@/lib/leadIntake";
 import { parseLeadFields, metaSource } from "@/lib/metaLead";
 import { recordInboundDm, recordDmEcho, type DmPlatform } from "@/lib/messenger";
 import { runDmFlow } from "@/lib/flowDm";
+import { linkScreening, screenInbound } from "@/lib/inboundScreening/screen";
 import { metaReceipt } from "@/lib/deliveryReceipts";
 import { applyReceipt } from "@/lib/messageReceipts";
 import { withChannelTenantScope, validateInSystemScope } from "@/lib/tenantScopeEntry";
@@ -119,8 +120,25 @@ export async function POST(req: NextRequest) {
           const claim = outcome.claim;
           try {
             await withInboundBotEvent(claim, async () => {
+              // Spam screening, before anything is recorded: recordInboundDm is
+              // where the contact, the ad-attributed lead (with its push and its
+              // journeys), the attachments and the staff push all happen. A held
+              // message stops here; returning completes the claim. A tapped
+              // button or postback answers the chatbot's own question, so only a
+              // sender block can hold it.
+              const screened = await screenInbound({
+                channel: platform === "instagram" ? "instagram" : "messenger",
+                senderId, providerId, senderName: null,
+                kind: payload ? "choice" : text ? "text" : "media",
+                text: payload && !ev.message?.text ? "" : ev.message?.text ?? "",
+                isMenuReply: Boolean(payload),
+                wouldOpenLead: Boolean(referral),
+                payload: { via: "dm", platform: platform === "instagram" ? "instagram" : "messenger", senderId, text, referral, attachments },
+              });
+              if (!screened.admit) return;
               const receivedAfter = new Date(Date.now() - 1000);
-              await recordInboundDm(platform, senderId, text, referral, attachments, providerId);
+              const recorded = await recordInboundDm(platform, senderId, text, referral, attachments, providerId);
+              await linkScreening(screened, recorded?.contactId);
               const fileUrl = attachments.length ? await latestPersistedDmAttachment(platform, senderId, receivedAfter) : undefined;
               const entryContext = referral ? {
                 referralRef: referral.ref ? String(referral.ref) : undefined,
