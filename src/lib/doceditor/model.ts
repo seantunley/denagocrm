@@ -77,6 +77,14 @@ export const layoutSettingsSchema = z.object({
   margin: boxSpacingSchema.optional(),
   gap: z.number().optional(),
   background: maybeColor,
+  /** A border round the block: its colour, thickness in px (0 = none) and corner radius in px. */
+  borderColor: maybeColor,
+  borderWidth: z.number().optional(),
+  radius: z.number().optional(),
+  /** Type: weight, line spacing (a multiple, e.g. 1.5) and letter spacing in px. Unset = as the block is designed. */
+  fontWeight: z.enum(["normal", "medium", "bold"]).optional(),
+  lineHeight: z.number().optional(),
+  letterSpacing: z.number().optional(),
   /**
    * Type size relative to the block's own design (1 = as drawn, 0.6–2 allowed).
    *

@@ -41,7 +41,7 @@ export function FloatingLayer({ page, zoom }: { page: DocumentPage; zoom: number
                 fields, which are also placed at `px × zoom`. */}
             <div style={{ zoom }}>
               {/* Text size and alignment apply to a freely placed block exactly as the PDF applies them. */}
-              <div style={blockBoxCss(fb.block, "floating")}>
+              <div style={blockBoxCss(fb.block, "floating").inner}>
                 <BlockView block={fb.block} active={active} />
               </div>
             </div>

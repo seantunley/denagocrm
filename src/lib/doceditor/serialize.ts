@@ -7,7 +7,7 @@
  * (resolves inline variables, prunes conditionals, fills bound pricing tables).
  */
 import { cssColor } from "./css";
-import { blockBoxCss, boxCssText } from "./blockBox";
+import { blockBoxCss, boxCssText, columnNeedsStretch } from "./blockBox";
 import type {
   DocumentModel, DocumentBlock, DocumentColumn, DocumentRow, DocumentPage,
   PricingBlock, PricingLine, TableBlock, OverlayField, DocStyle,
@@ -174,9 +174,12 @@ function tableHtml(b: TableBlock): string {
 
 function blockHtml(block: DocumentBlock, ctx: RenderCtx, style: DocStyle, logoDataUri?: string): string {
   if (block.hidden) return "";
-  const pad = block.settings?.padding;
-  const padCss = pad ? `padding:${pad.top ?? 0}px ${pad.right ?? 0}px ${pad.bottom ?? 0}px ${pad.left ?? 0}px;` : "";
-  const wrap = (inner: string) => `<div style="${padCss}">${inner}</div>`;
+  // Padding used to be applied HERE, and only by the handful of blocks that call
+  // wrap() — so the same setting did something on a text block and nothing on a
+  // table. It now belongs to the block's box (blockBoxCss), which every block
+  // gets. No saved document had a block padding (checked on live), and the
+  // empty style attribute is kept so existing output is byte for byte the same.
+  const wrap = (inner: string) => `<div style="">${inner}</div>`;
   switch (block.type) {
     case "heading":
     case "text":
@@ -313,14 +316,20 @@ function blockBoxStyle(b: DocumentBlock): string {
  * as it always did — no wrapper is added.
  */
 function floatingInner(b: DocumentBlock, inner: string): string {
+  // A hidden block prints nothing — not an empty box with its border and fill.
+  if (b.hidden) return inner;
   const box = boxCssText(blockBoxCss(b, "floating"));
   return box ? `<div style="${box}">${inner}</div>` : inner;
 }
 
 function columnHtml(col: DocumentColumn, ctx: RenderCtx, style: DocStyle, logoDataUri?: string): string {
-  return `<div style="min-width:0">${col.blocks.map((b) => {
+  // A block set to rest in the middle or at the bottom needs its column to be a
+  // flex column (a row's columns are all as tall as the tallest, so there is
+  // spare height to place it in). Any other column is exactly as it always was.
+  const stretch = columnNeedsStretch(col.blocks.filter((b) => !b.hidden)) ? ";display:flex;flex-direction:column" : "";
+  return `<div style="min-width:0${stretch}">${col.blocks.map((b) => {
     const inner = blockHtml(b, ctx, style, logoDataUri);
-    const box = blockBoxStyle(b);
+    const box = b.hidden ? "" : blockBoxStyle(b);
     return box ? `<div style="${box}">${inner}</div>` : inner;
   }).join("")}</div>`;
 }

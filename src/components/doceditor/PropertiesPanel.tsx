@@ -13,6 +13,7 @@ import { saveLibraryItem } from "@/app/actions/doclibrary";
 import { TextPromptDialog } from "@/components/TextPromptDialog";
 import { toast } from "sonner";
 import { ShowcaseProps } from "./ShowcaseProps";
+import { DesignSection } from "./DesignSection";
 import { useState } from "react";
 import { uploadDocEditorImage } from "@/app/actions/doceditor";
 import { checkDocImage, DOC_IMAGE_ACCEPT } from "@/lib/doceditor/imageUpload";
@@ -246,6 +247,8 @@ function BlockProps({ block, floating }: { block: DocumentBlock; floating: boole
       <div className="border-b border-slate-100 p-3 text-sm font-medium capitalize text-slate-700">{EMAIL_BLOCK_NAMES[block.type] ?? `${block.type} block`}{floating ? " · floating" : ""}</div>
       {/* The frame's own parts run the width of the email: no column width, text scale or free placement. */}
       {block.type !== "pageBreak" && !FRAME_PARTS.has(block.type) && <LayoutSection block={block} floating={floating} />}
+      {/* One set of design controls for every document block. An email is laid out by its frame and its client, not by these. */}
+      {block.type !== "pageBreak" && !FRAME_PARTS.has(block.type) && !block.type.startsWith("email") && <DesignSection block={block} floating={floating} />}
       {block.type === "image" && <ImageProps block={block} />}
       {block.type === "pricing" && <PricingProps block={block} />}
       {block.type === "divider" && <DividerProps block={block} />}

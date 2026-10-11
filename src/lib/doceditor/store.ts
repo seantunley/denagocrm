@@ -1,7 +1,7 @@
 "use client";
 
 import { create } from "zustand";
-import type { DocumentModel, DocumentBlock, OverlayField, Recipient, DocStyle } from "./model";
+import type { DocumentModel, DocumentBlock, OverlayField, Recipient, DocStyle, LayoutSettings } from "./model";
 import { newPage, newRecipient } from "./factory";
 import * as ops from "./ops";
 import { getBlock } from "./ops";
@@ -58,6 +58,9 @@ interface EditorState {
   /** The page the person last clicked on — where a new signing field or library item goes. */
   activePage: number;
   setActivePage: (pageIdx: number) => void;
+  /** A copied block style, waiting to be pasted onto another block. Not part of the document or its undo history. */
+  styleClipboard: Partial<LayoutSettings> | null;
+  copyStyle: (style: Partial<LayoutSettings>) => void;
 
   // overlay fields
   addField: (pageIdx: number, field: OverlayField) => void;
@@ -80,6 +83,8 @@ export const useEditor = create<EditorState>((set, get) => ({
   sel: { blockId: null, fieldId: null },
   activeTextBlockId: null,
   activePage: 0,
+  styleClipboard: null,
+  copyStyle: (style) => set({ styleClipboard: style }),
   linked: null,
   past: [],
   future: [],
