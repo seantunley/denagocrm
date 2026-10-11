@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { basePrisma } from "@/lib/db";
 import SpamQuarantine, { type QuarantineRow } from "@/components/SpamQuarantine";
 import { SaveForm, SaveButton } from "@/components/SaveForm";
@@ -8,6 +9,8 @@ import { restoreLeaseCutoff, screeningMetrics } from "@/lib/inboundScreening/rev
 import { clearSenderRule, decideSpamPattern, saveScreeningSettings } from "@/app/actions/inboundSpam";
 import { formatDateTime } from "@/lib/format";
 
+import { REVIEW_VIEWS, reviewFilters, reviewMessages, reviewPageHref, type ReviewParams } from "@/lib/inboundScreening/queue";
+
 const channelLabel: Record<string, string> = { whatsapp: "WhatsApp", messenger: "Messenger", instagram: "Instagram" };
 
 /** How many messages are held right now — the tab's count. One workspace, named. */
@@ -15,15 +18,6 @@ export async function quarantineCount(tenantId: string): Promise<number> {
   // "Held" includes a restore that was interrupted (its claim has gone stale): it
   // is back in the list, so a message can never sit unseen in a half-done state.
   return basePrisma.inboundScreening.count({ where: { tenantId, OR: [{ state: "quarantined" }, { state: "restoring", updatedAt: { lt: restoreLeaseCutoff() } }] } });
-}
-
-/** The quarantine list: held messages, and any whose restore was interrupted. One workspace, named. */
-async function heldMessages(tenantId: string) {
-  return basePrisma.inboundScreening.findMany({
-    where: { tenantId, OR: [{ state: "quarantined" }, { state: "restoring", updatedAt: { lt: restoreLeaseCutoff() } }] },
-    orderBy: { receivedAt: "desc" }, take: 200,
-    select: { id: true, channel: true, senderId: true, senderName: true, receivedAt: true, body: true, reason: true, reasonCodes: true, decidedBy: true, staffLabel: true, classification: true, state: true },
-  });
 }
 
 /** Senders (by contact and channel) whose recent messages the filter read as a business approach. One workspace, named. */
@@ -40,9 +34,10 @@ export async function businessApproachSenders(tenantId: string): Promise<{ conta
  * Inbox → Spam. Everything is read for ONE named workspace. Message text is
  * made inert here, on the server, before it reaches the browser.
  */
-export default async function SpamPanel({ tenantId, canReview, isOwner }: { tenantId: string; canReview: boolean; isOwner: boolean }) {
-  const [held, rules, patterns, metrics, settings] = await Promise.all([
-    heldMessages(tenantId),
+export default async function SpamPanel({ tenantId, canReview, isOwner, params = {} }: { tenantId: string; canReview: boolean; isOwner: boolean; params?: ReviewParams }) {
+  const filters = reviewFilters(params);
+  const [queue, rules, patterns, metrics, settings] = await Promise.all([
+    reviewMessages(tenantId, filters),
     basePrisma.inboundSenderRule.findMany({ where: { tenantId }, orderBy: { updatedAt: "desc" }, take: 200 }),
     basePrisma.inboundSpamPattern.findMany({ where: { tenantId, status: { in: ["proposed", "active"] } }, orderBy: [{ status: "asc" }, { hits: "desc" }], take: 100 }),
     screeningMetrics(tenantId, 30),
@@ -50,11 +45,12 @@ export default async function SpamPanel({ tenantId, canReview, isOwner }: { tena
   ]);
 
   const senderLabel = (channel: string, senderId: string, name: string | null) => name?.trim() || (channel === "whatsapp" ? `+${senderId}` : `${channelLabel[channel] ?? channel} user …${senderId.slice(-4)}`);
-  const rows: QuarantineRow[] = held.map((r) => ({
-    id: r.id, channel: r.channel, sender: senderLabel(r.channel, r.senderId, r.senderName), senderKey: `${r.channel}:${r.senderId}`,
-    receivedAt: r.receivedAt.toISOString(), preview: inertPreview(r.body),
+  const rows: QuarantineRow[] = queue.rows.map((r) => ({
+    id: r.id, channel: r.channel, sender: senderLabel(r.channel, r.senderId, r.senderName),
+    receivedAt: r.receivedAt.toISOString(), preview: inertPreview(r.body), fullText: inertPreview(r.body, 4001),
+    state: r.state, observed: r.mode === "observe" && r.state === "admitted", staffLabel: r.staffLabel,
     reason: (r.state === "restoring" ? "A restore of this message was interrupted — restore it again. " : "") + (r.reason || reasonText(r.reasonCodes, CLASS_LABEL[r.classification as ScreeningClass] ?? "Held")),
-    cause: r.decidedBy === "sender_block" ? "blocked" : "filter", confirmed: r.staffLabel === "spam",
+    cause: r.decidedBy === "sender_block" ? "blocked" : "filter",
   }));
   const { mode, policy } = settings;
   const pct = (part: number, whole: number) => (whole > 0 ? `${Math.round((part / whole) * 100)}%` : "—");
@@ -75,8 +71,28 @@ export default async function SpamPanel({ tenantId, canReview, isOwner }: { tena
       )}
 
       <section>
-        <div className="mb-3"><h2 className="text-sm font-semibold">Quarantine</h2><p className="mt-1 text-xs text-muted-foreground">Held messages created no contact, lead, notification or chatbot reply. Nothing here is deleted automatically.</p></div>
-        <SpamQuarantine rows={rows} canReview={canReview} />
+        <div className="mb-3"><h2 className="text-sm font-semibold">Message review</h2><p className="mt-1 text-xs text-muted-foreground">Review held messages, check Observe decisions, or find spam that reached the inbox. Confirmed spam is kept separately; nothing is deleted automatically.</p></div>
+        <form action="/inbox" method="get" className="mb-4 flex flex-wrap items-end gap-3">
+          <input type="hidden" name="tab" value="spam" />
+          <label className="text-xs">View<select name="spamView" defaultValue={filters.view} className="input mt-1">
+            {Object.entries(REVIEW_VIEWS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+          </select></label>
+          <label className="text-xs">Channel<select name="spamChannel" defaultValue={filters.channel} className="input mt-1">
+            <option value="">All channels</option>{Object.entries(channelLabel).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+          </select></label>
+          <label className="text-xs">Decision<select name="spamCause" defaultValue={filters.cause} className="input mt-1">
+            <option value="">All decisions</option><option value="filter">Filter decisions</option><option value="blocked">Blocked senders</option>
+          </select></label>
+          <label className="min-w-48 flex-1 text-xs">Search messages or senders<input name="spamSearch" defaultValue={filters.search} maxLength={120} className="input mt-1" /></label>
+          <button type="submit" className="btn-secondary btn-sm">Apply filters</button>
+        </form>
+        {filters.view === "observe" && <p className="mb-3 text-xs text-muted-foreground">These messages already reached the inbox. Confirm spam or mark them not spam to assess the filter before enabling Quarantine. Feedback does not replay messages or activate broad rules.</p>}
+        <SpamQuarantine key={`${filters.view}:${queue.page}:${filters.search}:${filters.channel}:${filters.cause}`} rows={rows} canReview={canReview} />
+        <nav aria-label="Message review pages" className="mt-3 flex items-center justify-between gap-3 text-xs">
+          {queue.page > 1 ? <Link href={reviewPageHref(filters, queue.page - 1)} scroll={false} className="btn-secondary btn-sm">Previous</Link> : <span />}
+          <span>{queue.total} messages · Page {queue.page} of {queue.pages}</span>
+          {queue.page < queue.pages ? <Link href={reviewPageHref(filters, queue.page + 1)} scroll={false} className="btn-secondary btn-sm">Next</Link> : <span />}
+        </nav>
       </section>
 
       <section>

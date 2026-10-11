@@ -11,7 +11,7 @@ import { logAudit } from "@/lib/audit";
 import { putSetting, getSetting } from "@/lib/settings";
 import { DEFAULT_POLICY, parseMode, parsePolicy, type ScreeningPolicy } from "@/lib/inboundScreening/rules";
 import { SCREENING_MODE_SETTING, SCREENING_POLICY_SETTING } from "@/lib/inboundScreening/screen";
-import { ReviewRefusal, labelSpam, markThreadSpam, restoreScreening, setPatternStatus, setSenderRule } from "@/lib/inboundScreening/review";
+import { ReviewRefusal, labelObservedNotSpam, labelSpam, markThreadSpam, restoreScreening, setPatternStatus, setSenderRule } from "@/lib/inboundScreening/review";
 
 /**
  * Reviewing quarantine. Every action: the `inbox.spam` permission, the acting
@@ -69,6 +69,17 @@ export async function confirmSpam(ids: string[]): Promise<ActionResult> {
   }));
 }
 
+/** Observe mode has already admitted the message: feedback must not replay it. */
+export async function correctObservedSpam(ids: string[]): Promise<ActionResult> {
+  return asActionResult(() => reviewing(async ({ tenantId, by }) => {
+    const count = await labelObservedNotSpam(tenantId, idList(ids), by);
+    if (!count) refuse("Those observed messages are no longer here.");
+    await logAudit({ action: "inbox.spam.corrected", summary: `Marked ${count} observed messages as not spam`, entityType: "InboundScreening", userName: by.name, metadata: { count } });
+    done();
+    return { success: "Recorded as not spam. The messages were already in your inbox; nothing was replayed." };
+  }));
+}
+
 /** Block, always allow, or clear the decision — for the SENDER of one screened message. */
 export async function decideSender(screeningId: string, rule: "allow" | "block" | "clear"): Promise<ActionResult> {
   return asActionResult(() => reviewing(async ({ tenantId, by }) => {
@@ -99,14 +110,22 @@ export async function clearSenderRule(ruleId: string): Promise<ActionResult> {
 
 /** Spam the filter missed: mark a conversation that is already in the inbox. */
 export async function markConversationSpam(contactId: string, channel: string): Promise<ActionResult> {
+  return markConversationAsSpam(contactId, channel, false);
+}
+
+export async function markAndBlockConversationSpam(contactId: string, channel: string): Promise<ActionResult> {
+  return markConversationAsSpam(contactId, channel, true);
+}
+
+async function markConversationAsSpam(contactId: string, channel: string, blockSender: boolean): Promise<ActionResult> {
   return asActionResult(() => reviewing(async ({ tenantId, by }) => {
     const user = await requirePermission("inbox.spam");
     if (!["whatsapp", "messenger", "instagram"].includes(channel)) refuse("That channel isn't screened.");
     if (!(await canAccessContact(user, contactId))) refuse("You don't have access to that customer.");
-    const n = await markThreadSpam(tenantId, contactId, channel, by);
-    await logAudit({ action: "inbox.spam.marked", summary: "Marked a conversation as spam and archived it", entityType: "Contact", entityId: contactId, contactId, userName: by.name, metadata: { channel, examples: n } });
+    const n = await markThreadSpam(tenantId, contactId, channel, by, blockSender);
+    await logAudit({ action: "inbox.spam.marked", summary: "Marked a conversation as spam and archived it", entityType: "Contact", entityId: contactId, contactId, userName: by.name, metadata: { channel, examples: n, blockSender } });
     done();
-    return { success: "Marked as spam and archived. To stop this sender for good, block them from the Spam tab." };
+    return { success: blockSender ? "Marked as spam and archived. Sender blocked when Quarantine mode is enabled." : "Marked as spam and archived. You can review or block this sender in Spam → Missed spam." };
   }));
 }
 

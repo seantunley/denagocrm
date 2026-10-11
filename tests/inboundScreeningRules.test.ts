@@ -201,7 +201,8 @@ test("an interrupted restore is a lease that expires, and what is listed as held
   const review = readFileSync("src/lib/inboundScreening/review.ts", "utf8");
   assert.match(review, /OR: \[\{ state: "quarantined" \}, \{ state: "restoring", updatedAt: \{ lt: restoreLeaseCutoff\(\) \} \}\]/);
   const panel = readFileSync("src/app/(app)/inbox/SpamPanel.tsx", "utf8");
-  assert.equal((panel.match(/\{ state: "restoring", updatedAt: \{ lt: restoreLeaseCutoff\(\) \} \}/g) ?? []).length, 2, "the count and the list both include a stale restore");
+  const queue = readFileSync("src/lib/inboundScreening/queue.ts", "utf8");
+  for (const source of [panel, queue]) assert.match(source, /\{ state: "restoring", updatedAt: \{ lt: restoreLeaseCutoff\(\) \} \}/, "the count and paginated list both include a stale restore");
 });
 
 test("the stage cannot lose a message: any failure inside it admits", () => {

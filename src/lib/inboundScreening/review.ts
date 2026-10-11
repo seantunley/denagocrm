@@ -6,6 +6,7 @@ import { recordInboundDm } from "@/lib/messenger";
 import { SCREENING_POLICY_VERSION, extractDomains, normalizeText, parsePolicy, type ScreeningMode } from "./rules";
 import { SCREENING_POLICY_SETTING, type InboundPayload } from "./screen";
 import { getSetting } from "@/lib/settings";
+import { recomputeConversationDerivedState } from "@/lib/conversations";
 
 /**
  * What a person does about screened messages. Every function takes the acting
@@ -78,10 +79,15 @@ export async function restoreScreening(tenantId: string, id: string, by: Reviewe
     // File it where it belongs in time: the day it was sent, not the day it was restored.
     if (row!.eventId) {
       // The guarded client: the row just written belongs to the acting workspace.
-      await prisma.communication.updateMany({
-        where: { dedupeKey: { startsWith: `inbound:${row!.eventId}` } },
-        data: { occurredAt: row!.receivedAt },
-      });
+      const where = { dedupeKey: { startsWith: `inbound:${row!.eventId}` } };
+      await prisma.communication.updateMany({ where, data: { occurredAt: row!.receivedAt } });
+      // create() already rolled the conversation forward using restore-time.
+      // updateMany has no bookkeeping hook: repair its projection after dating
+      // the transcript, including retries whose message was already inserted.
+      const messages = await prisma.communication.findMany({ where, select: { conversationId: true } });
+      for (const conversationId of new Set(messages.map((m) => m.conversationId))) {
+        if (conversationId) await recomputeConversationDerivedState(conversationId);
+      }
     }
     await basePrisma.inboundScreening.updateMany({
       where: { id, tenantId, state: "restoring" },
@@ -141,6 +147,15 @@ export async function labelSpam(tenantId: string, ids: string[], by: Reviewer): 
   return rows.length;
 }
 
+/** Correct an observe-mode decision without admitting or replaying it again. */
+export async function labelObservedNotSpam(tenantId: string, ids: string[], by: Reviewer): Promise<number> {
+  const changed = await basePrisma.inboundScreening.updateMany({
+    where: { tenantId, id: { in: ids.slice(0, 100) }, mode: "observe", state: "admitted" },
+    data: { staffLabel: "not_spam", labelledById: by.id, labelledAt: new Date() },
+  });
+  return changed.count;
+}
+
 /** Owner only (the action checks): switch a proposed broad rule on, or off again. */
 export async function setPatternStatus(tenantId: string, id: string, status: "active" | "disabled", by: Reviewer): Promise<void> {
   const done = await basePrisma.inboundSpamPattern.updateMany({ where: { id, tenantId }, data: { status, decidedById: by.id } });
@@ -151,15 +166,19 @@ export async function setPatternStatus(tenantId: string, id: string, status: "ac
  * Spam the filter missed: a conversation already in the inbox that a person
  * marks as spam. Labels what the filter recorded for that sender (or writes a
  * labelled example if it recorded nothing) and archives the thread. It does
- * not block the sender — that is a separate decision.
+ * only blocks the sender when the caller explicitly requests that separate action.
  */
-export async function markThreadSpam(tenantId: string, contactId: string, channel: string, by: Reviewer): Promise<number> {
+export async function markThreadSpam(tenantId: string, contactId: string, channel: string, by: Reviewer, blockSender = false): Promise<number> {
   // The customer and their messages are read through the guarded client (bound to
   // the acting workspace under enforcement). The CALLER proves the row is theirs
   // in both modes — the action asks canAccessContact before it gets here.
   const contact = await prisma.contact.findFirst({ where: { id: contactId }, select: { id: true, firstName: true, lastName: true, whatsapp: true, phone: true, messengerPsid: true, instagramId: true } });
   if (!contact) refuse("That customer is no longer here.");
   const senderId = channel === "whatsapp" ? (contact!.whatsapp ?? contact!.phone ?? "").replace(/\D/g, "") : channel === "instagram" ? contact!.instagramId ?? "" : contact!.messengerPsid ?? "";
+  if (blockSender) {
+    if (!senderId) refuse("This conversation has no channel identity to block.");
+    await setSenderRule(tenantId, channel, senderId, "block", by, `${contact!.firstName} ${contact!.lastName ?? ""}`.trim());
+  }
   let rows = await basePrisma.inboundScreening.findMany({
     where: { tenantId, channel, state: "admitted", staffLabel: null, OR: [{ contactId }, ...(senderId ? [{ senderId }] : [])] },
     orderBy: { receivedAt: "desc" }, take: 20, select: { id: true },
