@@ -10,7 +10,7 @@ import { recipientLabel } from "@/lib/signing/templateRecipients";
 import { ConditionField } from "@/lib/docbuilder/ConditionField";
 import { validateExpression } from "@/lib/docbuilder/expr";
 import { saveLibraryItem } from "@/app/actions/doclibrary";
-import { TextPromptDialog } from "@/components/TextPromptDialog";
+import { sectionFromSelection } from "@/lib/doceditor/librarySection";
 import { toast } from "sonner";
 import { ShowcaseProps } from "./ShowcaseProps";
 import { DesignSection } from "./DesignSection";
@@ -241,6 +241,59 @@ const EMAIL_BLOCK_NAMES: Record<string, string> = {
   emailHeader: "Header", emailBody: "Message slot", emailSignature: "Signature", emailFooter: "Footer", emailButton: "Button", emailFacts: "Key figures",
 };
 
+/**
+ * Save the selection to the content library: this block, its whole row of
+ * columns, or — for a freely placed block — the block where it sits, with an
+ * acceptance card's signature and date. Named, and filed under a category.
+ */
+function SaveToLibrary({ block, floating }: { block: DocumentBlock; floating: boolean }) {
+  const [open, setOpen] = useState(false);
+  const [name, setName] = useState("");
+  const [category, setCategory] = useState("");
+  const [scope, setScope] = useState<"block" | "row">("block");
+  const [busy, setBusy] = useState(false);
+  // How many columns the block's row has: a single-column row IS the block, so the choice is not offered.
+  const columns = useEditor((s) => s.doc?.pages.flatMap((p) => p.rows).find((r) => r.columns.some((c) => c.blocks.some((b) => b.id === block.id)))?.columns.length ?? 1);
+  const save = async () => {
+    const doc = useEditor.getState().doc;
+    const section = doc ? sectionFromSelection(doc, block.id, scope) : null;
+    if (!section || !name.trim()) return;
+    setBusy(true);
+    try {
+      const result = await saveLibraryItem({ name, category, section });
+      if (!result.ok) { toast.error("That could not be saved to the library."); return; }
+      toast.success(`Saved to the content library${section.fields.length ? `, with its ${section.fields.length} signing field${section.fields.length === 1 ? "" : "s"}` : ""}`);
+      setOpen(false); setName("");
+    } catch {
+      toast.error("That did not reach the server. Try again.");
+    } finally {
+      setBusy(false);
+    }
+  };
+  if (!open) return <button type="button" onClick={() => setOpen(true)} className="w-full rounded-md border border-slate-300 py-1.5 text-sm text-slate-700 hover:bg-slate-50">Save to content library</button>;
+  return (
+    <div className="rounded-md border border-slate-200 bg-slate-50 p-2.5">
+      <label className={lbl} htmlFor={`lib-name-${block.id}`}>Name</label>
+      <input id={`lib-name-${block.id}`} className={`${inp} mb-2`} value={name} autoFocus placeholder="e.g. Standard warranty terms" onChange={(e) => setName(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") void save(); }} />
+      <label className={lbl} htmlFor={`lib-cat-${block.id}`}>Category (optional)</label>
+      <input id={`lib-cat-${block.id}`} className={`${inp} mb-2`} value={category} placeholder="e.g. Terms, Headers, Payment" onChange={(e) => setCategory(e.target.value)} />
+      {floating ? (
+        <p className="mb-2 text-[11px] text-slate-500">Saved where it sits on the page{block.type === "acceptance" ? ", with the signature and date on its lines" : ""}.</p>
+      ) : columns > 1 ? (
+        <div className="mb-2 flex gap-1">
+          {([["block", "This block"], ["row", `Its whole row (${columns} columns)`]] as const).map(([value, label]) => (
+            <button key={value} type="button" onClick={() => setScope(value)} className={`flex-1 rounded border px-2 py-1 text-xs ${scope === value ? "border-orange-400 bg-orange-50 text-orange-600" : "border-slate-300 bg-white text-slate-600 hover:bg-slate-50"}`}>{label}</button>
+          ))}
+        </div>
+      ) : null}
+      <div className="flex gap-1.5">
+        <button type="button" disabled={busy || !name.trim()} onClick={() => void save()} className="flex-1 rounded-md bg-slate-900 py-1.5 text-sm text-white hover:bg-slate-800 disabled:opacity-40">{busy ? "Saving…" : "Save"}</button>
+        <button type="button" onClick={() => setOpen(false)} className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-50">Cancel</button>
+      </div>
+    </div>
+  );
+}
+
 function BlockProps({ block, floating }: { block: DocumentBlock; floating: boolean }) {
   const remove = useEditor((s) => s.remove);
   return (
@@ -272,18 +325,7 @@ function BlockProps({ block, floating }: { block: DocumentBlock; floating: boole
       {block.type === "table" && <TableProps block={block} />}
       {block.type === "pageBreak" && <p className="p-3 text-xs text-slate-400">Forces the next content onto a new page.</p>}
       <div className="space-y-2 p-3">
-        <TextPromptDialog
-          trigger={<button type="button" className="w-full rounded-md border border-slate-300 py-1.5 text-sm text-slate-700 hover:bg-slate-50">Save to content library</button>}
-          title="Save reusable content"
-          description="Give this block a clear name so your team can find it in the Library palette."
-          label="Library item name"
-          placeholder="e.g. Standard warranty terms"
-          submitLabel="Save to library"
-          onSubmit={async (name) => {
-            await saveLibraryItem({ name, category: "", blocks: [block] });
-            toast.success("Saved to the content library");
-          }}
-        />
+        <SaveToLibrary block={block} floating={floating} />
         <button type="button" onClick={() => remove(block.id)} className="w-full rounded-md border border-red-200 py-1.5 text-sm text-red-600 hover:bg-red-50">Delete block</button>
       </div>
     </>

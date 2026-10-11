@@ -305,6 +305,46 @@ export function duplicatePage(doc: DocumentModel, pageId: string): DocumentModel
   return { ...doc, pages };
 }
 
+/**
+ * Copy a library section into the document, with fresh ids throughout.
+ *
+ * WHERE: its rows go straight after the row holding `afterBlockId` (the block
+ * the person has selected); with nothing selected — or a freely placed block
+ * selected — they go at the end of page `pageIdx`. Its freely placed blocks and
+ * signing fields go on that same page, at the positions they were saved at.
+ * It used to be "the end of the last page", always.
+ *
+ * WHO SIGNS: a saved field remembers a party (customer, Denago), not a
+ * recipient id from the document it came from. It is given to this document's
+ * recipient of that party, or left unassigned for the person to assign.
+ */
+export function insertSection(
+  doc: DocumentModel,
+  section: { rows: DocumentRow[]; floats: DocumentModel["pages"][number]["floatingBlocks"]; fields: (DocumentModel["pages"][number]["overlayFields"][number] & { party?: string })[] },
+  at: { afterBlockId?: string | null; pageIdx: number },
+): DocumentModel {
+  const next = clone(doc);
+  const loc = at.afterBlockId ? findBlockLoc(next, at.afterBlockId) : null;
+  const pageIdx = loc ? loc.pageIdx : Math.max(0, Math.min(at.pageIdx, next.pages.length - 1));
+  const page = next.pages[pageIdx];
+
+  const rows = clone(section.rows).map((row) => {
+    row.id = uid();
+    for (const col of row.columns) { col.id = uid(); col.blocks = col.blocks.map(reid); }
+    return row;
+  });
+  if (loc) page.rows.splice(loc.rowIdx + 1, 0, ...rows);
+  else page.rows.push(...rows);
+
+  for (const fb of clone(section.floats)) page.floatingBlocks.push({ ...fb, id: uid(), block: reid(fb.block) });
+  for (const saved of clone(section.fields)) {
+    const { party, ...field } = saved;
+    const recipient = party ? next.recipients.find((r) => r.party === party) : undefined;
+    page.overlayFields.push({ ...field, id: uid(), recipientId: recipient?.id ?? null });
+  }
+  return next;
+}
+
 /** Is there anything on this page a person would be sorry to lose? */
 export function pageHasContent(page: DocumentModel["pages"][number]): boolean {
   return page.rows.some((r) => r.columns.some((c) => c.blocks.length > 0)) || page.floatingBlocks.length > 0 || page.overlayFields.length > 0;
