@@ -95,14 +95,16 @@ test("after several lookups it may save the method as a playbook — never on a 
   assert.match(code("src/lib/crmAssistant.ts"), /LEARN_INSTRUCTIONS,[\s\S]{0,300}methodInstructions\(observations\),\s*\]/);
 });
 
-test("tasks are proposed only in chat; a scheduled run asks nothing back", async () => {
+test("tasks are proposed only where someone can confirm them; a scheduled run asks nothing back", async () => {
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   const { CHANNEL_RULES } = require("../src/lib/crmAssistant") as typeof import("../src/lib/crmAssistant");
   assert.equal(CHANNEL_RULES.chat, "");
   assert.match(CHANNEL_RULES.schedule, /don't ask them anything and don't offer choices/);
   assert.match(CHANNEL_RULES.whatsapp, /put the draft itself in your answer/);
   const lib = code("src/lib/crmAssistant.ts");
-  assert.match(lib, /const actions = source !== "chat" \? \[\] : await resolveActions/);
+  // The chat, or WhatsApp when its caller can offer a Confirm button (assistantWhatsAppConfirm.test.ts) — never a schedule or a watch.
+  assert.match(lib, /const proposes = source === "chat" \|\| \(source === "whatsapp" && opts\.proposeTasks === true\);/);
+  assert.match(lib, /const actions = !proposes \? \[\] : await resolveActions/);
   assert.match(lib, /const choices = source === "schedule" \? \[\] : reply\.choices;/);
   assert.match(lib, /source,\s*scheduleId: source === "schedule" \? opts\.scheduleId \?\? null : null,/);
   // The browser can't pick a source: the chat passes only the checked image(s).

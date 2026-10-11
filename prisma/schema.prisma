@@ -1127,6 +1127,29 @@ model AssistantPhoneLink {
   @@unique([tenantId, waId])
 }
 
+/// A task the assistant proposed on WhatsApp, waiting for that person to tap
+/// Confirm. The card is exactly what was shown; it runs at most once, only for
+/// the person it was offered to, and not after it expires.
+model AssistantPendingAction {
+  id          String    @id @default(cuid())
+  tenantId    String
+  userId      String
+  /// The ActionCard as proposed (assistantActions.ts) — re-checked when it runs.
+  card        Json
+  expiresAt   DateTime
+  /// Set by the one tap that claimed it; a second tap finds it taken. Cleared
+  /// again only when the action reported that it changed nothing.
+  confirmedAt DateTime?
+  /// It ran and succeeded. Never runs again.
+  completedAt DateTime?
+  /// It threw part-way, so how far it got is unknown. Never runs again.
+  failedAt    DateTime?
+  createdAt   DateTime  @default(now())
+
+  @@index([tenantId, userId, createdAt])
+  @@index([tenantId, expiresAt])
+}
+
 /// What the assistant has learned. kind: "memory" (workspace facts and
 /// conventions), "profile" (one user's preferences — userId set) or "playbook"
 /// (a named definition or procedure). It writes these on its own; the owner
