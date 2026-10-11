@@ -124,7 +124,8 @@ export default function EmailComposer({
     const data = new FormData(event.currentTarget);
     setChecking(true);
     try {
-      const { warning: found } = await checkComposerEmail({
+      setPreviewError("");
+      const { warning: found, error: blocked } = await checkComposerEmail({
         to: String(data.get("to") ?? ""),
         subject: String(data.get("subject") ?? ""),
         bodyHtml: body,
@@ -133,6 +134,12 @@ export default function EmailComposer({
         fileNames: allFiles.map((f) => f.name),
         secureLinks: secure && allFiles.length > 0,
       });
+      if (blocked) {
+        // Cannot go as written (no private store for a secure link): say so here, with the form intact.
+        setPreview(null);
+        setPreviewError(blocked);
+        return;
+      }
       if (found) {
         setPreview(null);
         setWarning(found);

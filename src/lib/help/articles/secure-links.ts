@@ -56,6 +56,7 @@ export const secureLinkArticles: HelpArticle[] = [
         items: [
           "The same file limits as attachments apply: the composer says how many files and how large.",
           "A recalled link cannot be switched back on. Send the file again.",
+          "Secure links need the CRM's private file store. Where that is not switched on, the composer says so and sends nothing; attach the file instead.",
           "Secure links are offered in the email composer. Quotes and signing documents have their own secure signing links.",
         ],
       },
@@ -91,8 +92,8 @@ export const secureLinkArticles: HelpArticle[] = [
           "**Send anyway** sends it. Use this when the address is right, for example the customer's finance broker.",
         ],
       },
-      { type: "callout", tone: "info", text: "A file sent as a **secure link** does not trigger the warning by its name, because a link can be recalled. A number typed into the message still does — that is a copy nobody can take back." },
-      { type: "callout", tone: "info", text: "When someone chooses **Send anyway**, the audit log records that the email was sent after a warning and what kind of thing was found. It never records the number itself." },
+      { type: "callout", tone: "info", text: "A personal document sent as a **secure link** is still asked about. The link expires and can be recalled, but it does not check who opens it: whoever receives the email can download the file straight away. The warning says so." },
+      { type: "callout", tone: "info", text: "When someone chooses **Send anyway**, the audit log records that the email was sent after a warning and what kind of thing was found. It never records the number itself — an ID, card or bank account number in the subject line or a file name is replaced with \"[number removed]\" in the audit entry." },
       { type: "h", text: "What it does not do" },
       {
         type: "list",

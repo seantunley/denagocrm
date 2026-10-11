@@ -13,7 +13,7 @@ import {
   secureLinksHtml,
   secureLinksText,
 } from "../src/lib/secureLinks";
-import { isCardNumber, isSaIdNumber, looksSensitiveFile, luhnValid, recipientsOffRecord, secureLinkHint, sendWarning, sensitiveFindings } from "../src/lib/sendCheck";
+import { isCardNumber, isSaIdNumber, looksSensitiveFile, luhnValid, recipientsOffRecord, redactSensitive, secureLinkHint, sendWarning, sensitiveFindings } from "../src/lib/sendCheck";
 
 const src = (rel: string) => readFileSync(new URL(`../${rel}`, import.meta.url), "utf8").replace(/\r\n/g, "\n");
 const NOW = new Date("2026-11-10T10:00:00Z");
@@ -226,16 +226,67 @@ test("the sender is stopped only when something sensitive is headed off the reco
   assert.ok(sendWarning({ ...base, bodyText: "", subject: `ID ${SA_ID}`, to: "broker@other.co.za" }));
 });
 
-test("a personal document as an attachment warns; the same file as a secure link does not", () => {
+test("a personal document to an unfamiliar address warns — as an attachment AND as a secure link", () => {
   const base = { subject: "Docs", bodyText: "As requested.", fileNames: ["ID copy.pdf"], to: "broker@other.co.za", customerAddresses: ["thabo@example.co.za"] };
-  assert.match(sendWarning({ ...base, secureLinks: false })!.text, /an attachment that looks like a personal document \(“ID copy\.pdf”\)/);
-  assert.equal(sendWarning({ ...base, secureLinks: true }), null, "a link can be recalled — that is the remedy");
-  // …but a number typed in the message is still a copy that cannot be recalled.
+  const attached = sendWarning({ ...base, secureLinks: false })!;
+  assert.match(attached.text, /an attachment that looks like a personal document \(“ID copy\.pdf”\)/);
+  assert.doesNotMatch(attached.text, /secure link/);
+  // A link can be recalled, but the wrong person can download it first: still asked, and told why.
+  const linked = sendWarning({ ...base, secureLinks: true })!;
+  assert.ok(linked, "a secure link does not vouch for the address");
+  assert.deepEqual(linked.kinds, ["file-name"]);
+  assert.match(linked.text, /going to broker@other\.co\.za/);
+  assert.match(linked.text, /can be recalled, but it does not check who opens it/);
+  // To the customer's own address: no warning either way.
+  assert.equal(sendWarning({ ...base, secureLinks: true, to: "thabo@example.co.za" }), null);
+  assert.equal(sendWarning({ ...base, secureLinks: false, to: "thabo@example.co.za" }), null);
+  // A number typed in the message is warned about too, without the link sentence (no file is involved).
   assert.ok(sendWarning({ ...base, secureLinks: true, bodyText: `ID ${SA_ID}` }));
+  assert.doesNotMatch(sendWarning({ ...base, fileNames: [], secureLinks: true, bodyText: `ID ${SA_ID}` })!.text, /secure link/);
   // The nudge while composing: shown for an attachment, gone once it is a secure link.
   assert.match(secureLinkHint(["ID copy.pdf", "Brochure.pdf"], false) ?? "", /“ID copy\.pdf” looks like a personal document/);
   assert.equal(secureLinkHint(["ID copy.pdf"], true), null);
   assert.equal(secureLinkHint(["Brochure.pdf"], false), null);
+});
+
+test("A FLAGGED NUMBER NEVER REACHES THE AUDIT ENTRY: the subject and file names are redacted", () => {
+  assert.equal(redactSensitive(`ID ${SA_ID} for Thabo`), "ID [number removed] for Thabo");
+  assert.equal(redactSensitive(`Card ${CARD}`), "Card [number removed]");
+  assert.equal(redactSensitive("Card 4111 1111 1111 1111 on file"), "Card [number removed] on file");
+  assert.equal(redactSensitive("Account number: 1234567890 at FNB"), "Account number: [number removed] at FNB");
+  assert.equal(redactSensitive(`ID copy ${SA_ID}.pdf`), "ID copy [number removed].pdf", "a file name too");
+  // Whatever the check flags, the redaction removes: no flagged number survives it.
+  for (const text of [`ID ${SA_ID}`, `pay with ${CARD}`, "acc no 62123456789", `${SA_ID} and ${CARD}`]) {
+    assert.ok(sensitiveFindings(text).length > 0, text);
+    assert.deepEqual(sensitiveFindings(redactSensitive(text)), [], text);
+    assert.ok(!redactSensitive(text).includes(SA_ID) && !redactSensitive(text).includes(CARD));
+  }
+  // Ordinary numbers are left alone: a quote number, a phone number, an order number.
+  for (const text of ["Quote Q-1022 for you", "Call 082 123 4567", "Order 1234567890123"]) assert.equal(redactSensitive(text), text);
+  // …and the audit entry is built from the redacted subject and file names — never the raw ones.
+  const actions = src("src/app/actions/emails.ts");
+  const audit = actions.slice(actions.indexOf('action: "email.sent"'), actions.indexOf("export async function sendTestEmail"));
+  assert.match(audit, /summary: `Sent email to \$\{to\}: “\$\{redactSensitive\(subject\)\}”/);
+  assert.match(audit, /redactSensitive\(attachedNames\.join\(", "\)\)/);
+  assert.doesNotMatch(audit, /\$\{subject\}|\$\{attachedNames/, "the raw subject or names must not be in the summary");
+});
+
+test("A SECURE LINK IS ONLY MADE WHERE FILES ARE STORED PRIVATELY", () => {
+  const storage = src("src/lib/storage.ts");
+  assert.match(storage, /export const storesPrivately = \(\) => privateMode\(\) \|\| !publicToken\(\);/);
+  assert.match(storage, /export const isPublicBlobRef = \(ref: string\) => isTrustedBlobRef\(ref\) && !isPrivateBlobRef\(ref\);/);
+  const actions = src("src/app/actions/emails.ts");
+  const send = actions.slice(actions.indexOf("export async function sendEmailAction"), actions.indexOf("export async function sendTestEmail"));
+  // Refused before the check, before anything is stored, before anything is sent.
+  const refuse = send.indexOf("if (secure && !storesPrivately()) return { error: NO_PRIVATE_STORE };");
+  assert.ok(refuse > 0);
+  assert.ok(refuse < send.indexOf("await saveFile(") && refuse < send.indexOf("await sendEmail("));
+  // A library file still in the public store is copied into the private one, not pointed at.
+  assert.match(send, /if \(asSecureLinks && isPublicBlobRef\(v\.storedName\)\) \{[\s\S]*?secureUploads\.push\(\{ name: v\.fileName,[\s\S]*?continue;/);
+  // The composer is told before the form is submitted, so nothing typed is lost.
+  const check = actions.slice(actions.indexOf("export async function checkComposerEmail"), actions.indexOf("export async function recallSecureLink"));
+  assert.match(check, /if \(input\.secureLinks && !storesPrivately\(\)\) return \{ warning: null, error: NO_PRIVATE_STORE \};/);
+  assert.match(src("src/components/EmailComposer.tsx"), /if \(blocked\) \{[\s\S]*?setPreviewError\(blocked\);\s*return;/);
 });
 
 test("the server refuses an unconfirmed send, the composer asks first, and the audit names the kind only", () => {

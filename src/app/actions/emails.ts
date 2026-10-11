@@ -2,7 +2,7 @@
 
 import { asActionResult, refuse } from "@/lib/actionResult";
 import { formatDate } from "@/lib/format";
-import { sendWarning } from "@/lib/sendCheck";
+import { redactSensitive, sendWarning } from "@/lib/sendCheck";
 import { secureLinkDays, secureLinkExpiry, secureLinksHtml, secureLinksText } from "@/lib/secureLinks";
 import { attachSecureLinksToEmail, createSecureLinks, discardSecureLinks, type SecureFile } from "@/lib/secureLinkStore";
 import { revalidatePath } from "next/cache";
@@ -40,7 +40,16 @@ import {
   type SignatureDesign,
 } from "@/lib/signature";
 import { getCompanyProfile } from "@/lib/companyProfile";
-import { readFile, saveFile, savePublicAsset } from "@/lib/storage";
+import { isPublicBlobRef, readFile, saveFile, savePublicAsset, storesPrivately } from "@/lib/storage";
+
+/**
+ * A secure link promises to expire and to be recallable. A file in the public
+ * Blob store has a URL of its own that neither promise reaches, so a secure
+ * link is only made where files are stored privately. Said before anything is
+ * stored or sent.
+ */
+const NO_PRIVATE_STORE =
+  "Secure links need the private file store, which is not switched on for this CRM. Nothing was sent — untick “Send as a secure link” to attach the files instead.";
 import { MAX_LOGO_BYTES } from "@/lib/emailInlineLogo";
 import { emailUploads } from "@/lib/emailUploads";
 import { resolveActingTenant } from "@/lib/tenantContext";
@@ -108,8 +117,9 @@ export async function checkComposerEmail(input: {
   leadId?: string | null;
   fileNames: string[];
   secureLinks: boolean;
-}): Promise<{ warning: string | null }> {
+}): Promise<{ warning: string | null; error?: string }> {
   const user = await requireAnyPermission(...CUSTOMER_RECORD_WRITE_PERMISSIONS);
+  if (input.secureLinks && !storesPrivately()) return { warning: null, error: NO_PRIVATE_STORE };
   const warning = sendWarning({
     subject: String(input.subject ?? "").slice(0, 500),
     bodyText: htmlToText(String(input.bodyHtml ?? "")).slice(0, 100_000),
@@ -209,7 +219,18 @@ export async function sendEmailAction(
     for (const v of versions) {
       fileNames.push(v.fileName);
       attachedNames.push(`${v.document.name} (v${v.version})`);
-      // As a secure link the library's own stored file is pointed at; nothing is read or copied.
+      // As a secure link the library's own stored file is pointed at; nothing is read or copied —
+      // unless that file sits in the PUBLIC store (uploaded before the private one was switched
+      // on). Its own URL would outlive the link, so a private copy is made and linked instead.
+      if (asSecureLinks && isPublicBlobRef(v.storedName)) {
+        try {
+          const buffer = await readFile(v.storedName);
+          secureUploads.push({ name: v.fileName, type: v.mimeType, size: buffer.length, buffer });
+        } catch {
+          return { error: `“${v.fileName}” could not be read from storage.` };
+        }
+        continue;
+      }
       if (asSecureLinks) {
         secureFiles.push({ fileName: v.fileName, storedRef: v.storedName, mimeType: v.mimeType, sizeBytes: v.sizeBytes });
         continue;
@@ -239,6 +260,7 @@ export async function sendEmailAction(
     else attachments.push({ filename: file.name, content: buffer, contentType: file.type || undefined });
   }
   const secure = asSecureLinks && fileNames.length > 0;
+  if (secure && !storesPrivately()) return { error: NO_PRIVATE_STORE };
 
   // THE CHECK BEFORE IT GOES (lib/sendCheck.ts). The composer asks this when Send
   // is pressed and shows the warning; here it is asked again, and an email that
@@ -323,8 +345,10 @@ export async function sendEmailAction(
     // Where replies were directed is part of what was sent, and it is the one
     // detail nobody can recover afterwards — the message has left, and the header
     // exists only in the recipient's copy.
-    summary: `Sent email to ${to}: “${subject}”${
-      attachedNames.length > 0 ? ` (${secure ? `as secure links until ${expiresLabel}` : "attached"}: ${attachedNames.join(", ")})` : ""
+    // The subject and file names are what the sender typed, and may hold the very
+    // number the check flagged. The email keeps them; this entry does not.
+    summary: `Sent email to ${to}: “${redactSensitive(subject)}”${
+      attachedNames.length > 0 ? ` (${secure ? `as secure links until ${expiresLabel}` : "attached"}: ${redactSensitive(attachedNames.join(", "))})` : ""
     }${replyTo.value ? ` (replies to: ${replyTo.value})` : ""}${
       // WHAT was flagged, never the number itself: an audit entry must not become a second copy of it.
       warning ? ` — sent after a sensitive-data warning (${warning.kinds.join(", ")})` : ""

@@ -336,6 +336,16 @@ function classifyRef(ref: string): "blob" | "local" {
 const isBlobRef = (ref: string) => classifyRef(ref) === "blob";
 
 /**
+ * Is a file saved NOW kept out of public reach? Yes in the private Blob store,
+ * and on local disk (never served except through our own routes). No in the
+ * public Blob store: its URL works for anyone who learns it, for as long as the
+ * file exists — so nothing that promises to expire or be recalled may live there.
+ */
+export const storesPrivately = () => privateMode() || !publicToken();
+/** A file already in the PUBLIC Blob store (stored before the private store was switched on). */
+export const isPublicBlobRef = (ref: string) => isTrustedBlobRef(ref) && !isPrivateBlobRef(ref);
+
+/**
  * A URL the BROWSER can load for itself, or null when the bytes have to be
  * proxied through us.
  *

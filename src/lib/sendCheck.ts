@@ -57,6 +57,12 @@ export function isCardNumber(value: string): boolean {
 const SENSITIVE_FILE = /(^|[^a-z])(id|i\.d|identity|id[-_ ]?copy|id[-_ ]?doc(ument)?|passport|licen[cs]e|bank|statement|payslip|pay[-_ ]?slip|salary|proof[-_ ]?of|fica|kyc|tax|irp5|credit[-_ ]?(app|report|check)|finance[-_ ]?app)([^a-z]|$)/i;
 export const looksSensitiveFile = (name: string) => SENSITIVE_FILE.test(name.replace(/\.[a-z0-9]{1,5}$/i, ""));
 
+// Runs of digits, allowing the spaces and dashes people type inside long numbers.
+const DIGIT_RUN = /\d(?:[ -]?\d){8,18}/g;
+// A bank account: 8–12 digits with the words that go with one nearby. The words are what
+// separate it from a phone number or a quote number, which this must not flag.
+const BANK_ACCOUNT = /(?:acc(?:ount|t)?\.?\s*(?:no|number|nr|#)?|banking details|branch code|iban)\s*[:\-#.]?\s*([\d][\d -]{6,16}\d)/gi;
+
 /**
  * What in this email is sensitive. Each KIND is reported once, as a label a
  * person can read — never the number itself, which must not end up in a
@@ -64,15 +70,12 @@ export const looksSensitiveFile = (name: string) => SENSITIVE_FILE.test(name.rep
  */
 export function sensitiveFindings(text: string, fileNames: readonly string[] = []): SensitiveFinding[] {
   const found = new Map<SensitiveKind, string>();
-  // Runs of digits, allowing the spaces and dashes people type inside long numbers.
-  for (const [run] of text.matchAll(/\d(?:[ -]?\d){8,18}/g)) {
+  for (const [run] of text.matchAll(DIGIT_RUN)) {
     const d = digitsOf(run);
     if (isSaIdNumber(d)) found.set("sa-id", "an ID number");
     else if (isCardNumber(d)) found.set("card", "a card number");
   }
-  // A bank account: 8–12 digits with the words that go with one nearby. The words are what
-  // separate it from a phone number or a quote number, which this must not flag.
-  for (const match of text.matchAll(/(?:acc(?:ount|t)?\.?\s*(?:no|number|nr|#)?|banking details|branch code|iban)\s*[:\-#.]?\s*([\d][\d -]{6,16}\d)/gi)) {
+  for (const match of text.matchAll(BANK_ACCOUNT)) {
     const d = digitsOf(match[1]);
     if (d.length >= 8 && d.length <= 12) found.set("bank-account", "bank account details");
   }
@@ -98,9 +101,10 @@ export type SendWarning = { text: string; kinds: SensitiveKind[] };
 
 /**
  * Should the sender be stopped and asked? Only when there is something
- * sensitive AND somewhere it should not obviously go. Files sent as secure links
- * are left out of it: a link can be recalled, which is the remedy this warning
- * would otherwise be asking for.
+ * sensitive AND somewhere it should not obviously go. A file sent as a secure
+ * link is asked about like any other: the link expires and can be recalled, but
+ * it does not check who opens it, so the wrong person can download the file the
+ * moment it arrives. The warning says so rather than staying quiet.
  */
 export function sendWarning(input: {
   subject: string;
@@ -111,7 +115,7 @@ export function sendWarning(input: {
   to: string;
   customerAddresses: readonly (string | null | undefined)[];
 }): SendWarning | null {
-  const findings = sensitiveFindings(`${input.subject}\n${input.bodyText}`, input.secureLinks ? [] : input.fileNames);
+  const findings = sensitiveFindings(`${input.subject}\n${input.bodyText}`, input.fileNames);
   if (findings.length === 0) return null;
   const strangers = recipientsOffRecord(input.to, input.customerAddresses);
   if (strangers.length === 0) return null;
@@ -119,10 +123,28 @@ export function sendWarning(input: {
   const list = what.length === 1 ? what[0] : `${what.slice(0, -1).join(", ")} and ${what[what.length - 1]}`;
   const who = strangers.length === 1 ? strangers[0] : `${strangers.length} addresses`;
   const known = input.customerAddresses.some((address) => (address ?? "").trim());
+  const viaLink = input.secureLinks && findings.some((finding) => finding.kind === "file-name");
   return {
     kinds: findings.map((finding) => finding.kind),
-    text: `This email has ${list}, and it is going to ${who}, which ${strangers.length === 1 ? "is" : "are"} not ${known ? "the address on this customer's record" : "an address on any customer record here"}.`,
+    text: `This email has ${list}, and it is going to ${who}, which ${strangers.length === 1 ? "is" : "are"} not ${known ? "the address on this customer's record" : "an address on any customer record here"}.${
+      viaLink ? " A secure link expires and can be recalled, but it does not check who opens it — whoever receives this email can download the file straight away." : ""
+    }`,
   };
+}
+
+/**
+ * The same text with any ID, card or bank account number taken out — for
+ * anything that outlives the email itself (the audit trail). The email's own
+ * subject stays as written on the timeline; a log must not be a second copy.
+ */
+export function redactSensitive(text: string): string {
+  const REMOVED = "[number removed]";
+  return text
+    .replace(BANK_ACCOUNT, (whole: string, number: string) => {
+      const d = digitsOf(number);
+      return d.length >= 8 && d.length <= 12 ? whole.replace(number, REMOVED) : whole;
+    })
+    .replace(DIGIT_RUN, (run) => (isSaIdNumber(run) || isCardNumber(run) ? REMOVED : run));
 }
 
 /** A softer nudge, shown while composing: this file would be better as a secure link. Never blocks. */
