@@ -4,7 +4,9 @@ import { useState, useEffect, useActionState, useRef } from "react";
 import AiCheckButton from "@/components/AiCheckButton";
 import ModalPortal from "@/components/ui/modal-portal";
 import Link from "next/link";
-import { previewComposerEmail, sendEmailAction, type SendEmailState } from "@/app/actions/emails";
+import { checkComposerEmail, previewComposerEmail, sendEmailAction, type SendEmailState } from "@/app/actions/emails";
+import { SECURE_LINK_DAYS, SECURE_LINK_DEFAULT_DAYS } from "@/lib/secureLinks";
+import { secureLinkHint } from "@/lib/sendCheck";
 import RichTextEditor from "@/components/RichTextEditor";
 import { EMAIL_UPLOAD_MAX_BYTES, EMAIL_UPLOAD_MAX_FILES } from "@/lib/emailUploads";
 
@@ -87,6 +89,63 @@ export default function EmailComposer({
     undefined
   );
 
+  // Secure links: send the files as expiring, recallable links instead of attachments (lib/secureLinks.ts).
+  const [secure, setSecure] = useState(false);
+  const [days, setDays] = useState<number>(SECURE_LINK_DEFAULT_DAYS);
+  const allFiles = [
+    ...attached.map((id) => ({ name: libraryDocs.find((x) => x.id === id)?.label ?? "Document", sizeBytes: 0 })),
+    ...uploads.map((f) => ({ name: f.name, sizeBytes: f.size })),
+  ];
+  const linkHint = secureLinkHint(allFiles.map((f) => f.name), secure);
+
+  /*
+   * The check before it goes (lib/sendCheck.ts). Asked when Send is pressed, and
+   * BEFORE the form is submitted — a submitted form is reset, which would drop
+   * the chosen files and the typed address, so a warning shown after a round trip
+   * would be a warning about an email the sender could no longer send as written.
+   * The server asks the same question again and refuses an unconfirmed send.
+   */
+  const [warning, setWarning] = useState<string | null>(null);
+  const [checking, setChecking] = useState(false);
+  const passCheck = useRef(false);
+  const confirmedRef = useRef<HTMLInputElement>(null);
+  const submitNow = (confirmed: boolean) => {
+    if (confirmedRef.current) confirmedRef.current.value = confirmed ? "1" : "";
+    passCheck.current = true;
+    setWarning(null);
+    formRef.current?.requestSubmit();
+  };
+  async function onSubmit(event: React.FormEvent<HTMLFormElement>) {
+    if (passCheck.current) {
+      passCheck.current = false;
+      return; // checked (or confirmed): let the form go
+    }
+    event.preventDefault();
+    const data = new FormData(event.currentTarget);
+    setChecking(true);
+    try {
+      const { warning: found } = await checkComposerEmail({
+        to: String(data.get("to") ?? ""),
+        subject: String(data.get("subject") ?? ""),
+        bodyHtml: body,
+        contactId,
+        leadId,
+        fileNames: allFiles.map((f) => f.name),
+        secureLinks: secure && allFiles.length > 0,
+      });
+      if (found) {
+        setPreview(null);
+        setWarning(found);
+        return;
+      }
+    } catch {
+      // The check could not run; the server will make it again and refuse if it must.
+    } finally {
+      setChecking(false);
+    }
+    submitNow(false);
+  }
+
   // Preview: the server builds the same HTML the send does (message + signature).
   const formRef = useRef<HTMLFormElement>(null);
   // `sentState` is the send result the preview was opened against: once a send
@@ -99,7 +158,8 @@ export default function EmailComposer({
     setPreviewing(true);
     setPreviewError("");
     try {
-      const { html } = await previewComposerEmail(body);
+      // Files going as secure links are shown where they will sit in the email (the links are only made on Send).
+      const { html } = await previewComposerEmail(body, secure && allFiles.length > 0 ? { files: allFiles, days } : undefined);
       setPreview({ html, to: field("to"), replyTo: field("replyTo"), sentState: state });
     } catch {
       setPreviewError("Couldn't build the preview — try again.");
@@ -165,7 +225,9 @@ export default function EmailComposer({
                 .
               </p>
             ) : (
-              <form ref={formRef} action={formAction} className="space-y-3">
+              <form ref={formRef} action={formAction} onSubmit={onSubmit} className="space-y-3">
+          {/* "1" once the sender has read the sensitive-data warning and chosen to send anyway. */}
+          <input ref={confirmedRef} type="hidden" name="sensitiveOk" defaultValue="" />
           {leadId && <input type="hidden" name="leadId" value={leadId} />}
           {contactId && <input type="hidden" name="contactId" value={contactId} />}
           <input type="hidden" name="revalidate" value={revalidate} />
@@ -306,6 +368,31 @@ export default function EmailComposer({
             {attached.map((id) => (
               <input key={id} type="hidden" name="attach" value={id} />
             ))}
+            {allFiles.length > 0 && (
+              <div className="mt-3 rounded-lg border border-slate-800 p-3">
+                <label className="flex items-start gap-2 text-sm text-slate-200">
+                  <input type="checkbox" name="secureLinks" checked={secure} onChange={(e) => setSecure(e.target.checked)} className="mt-0.5" />
+                  <span>
+                    Send {allFiles.length === 1 ? "this file" : "these files"} as a secure link, not an attachment
+                    <span className="block text-xs text-slate-500">
+                      The customer gets a link to download {allFiles.length === 1 ? "it" : "them"}. It stops working on the date you choose, you can
+                      recall it from this record, and you are told when it is first downloaded. Use it for ID copies, bank and finance documents.
+                    </span>
+                  </span>
+                </label>
+                {secure && (
+                  <label className="mt-2 flex items-center gap-2 pl-6 text-xs text-slate-400">
+                    Link works for
+                    <select name="secureDays" className="input w-auto py-1 text-xs" value={days} onChange={(e) => setDays(Number(e.target.value))}>
+                      {SECURE_LINK_DAYS.map((d) => (
+                        <option key={d} value={d}>{d === 1 ? "1 day" : `${d} days`}</option>
+                      ))}
+                    </select>
+                  </label>
+                )}
+                {linkHint && <p className="mt-2 text-xs text-amber-300">{linkHint}</p>}
+              </div>
+            )}
           </div>
 
           {attachOpen && (
@@ -424,12 +511,25 @@ export default function EmailComposer({
               </div>
             </div>
           )}
+          {warning && (
+            <div role="alertdialog" aria-labelledby="send-warning-title" className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-4">
+              <p id="send-warning-title" className="text-sm font-semibold text-amber-200">Check before you send</p>
+              <p className="mt-1 text-sm text-amber-100">{warning}</p>
+              <p className="mt-1 text-xs text-amber-200/80">
+                Nothing has been sent. If the address is right, you can send it. If it holds a personal document, a secure link is safer than an attachment: it expires and can be recalled.
+              </p>
+              <div className="mt-3 flex flex-wrap gap-2">
+                <button type="button" className="btn-secondary btn-sm" onClick={() => setWarning(null)}>Go back and change it</button>
+                <button type="button" className="btn-primary btn-sm" onClick={() => submitNow(true)} disabled={pending}>Send anyway</button>
+              </div>
+            </div>
+          )}
           {state?.error && <p className="text-sm text-red-400">{state.error}</p>}
           {state?.ok && <p className="text-sm text-emerald-400">{state.ok}</p>}
           {previewError && <p className="text-sm text-red-400">{previewError}</p>}
           <div className="flex gap-2">
-            <button className="btn-primary" disabled={pending}>
-              {pending ? "Sending…" : "Send email"}
+            <button className="btn-primary" disabled={pending || checking}>
+              {pending ? "Sending…" : checking ? "Checking…" : "Send email"}
             </button>
             <button type="button" onClick={showPreview} className="btn-secondary" disabled={previewing || pending}>
               {previewing ? "Building preview…" : "👁 Preview"}

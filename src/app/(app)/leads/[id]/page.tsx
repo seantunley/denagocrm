@@ -12,6 +12,7 @@ import {
 import LeadForm from "@/components/LeadForm";
 import { createQuoteFromLead } from "@/app/actions/quotes";
 import CommsTimeline from "@/components/CommsTimeline";
+import SecureLinksPanel from "@/components/SecureLinksPanel";
 import ActivityPanel from "@/components/ActivityPanel";
 import VoiceDebriefButton from "@/components/VoiceDebriefButton";
 import EmailComposer from "@/components/EmailComposer";
@@ -559,6 +560,7 @@ export default async function LeadDetailPage({
                           userName: c.user.name,
                         }))}
                     />
+                    <SecureLinksPanel leadId={lead.id} />
                     <CommsTimeline
                       communications={comms}
                       leadId={lead.id}

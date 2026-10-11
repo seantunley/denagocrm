@@ -4,6 +4,7 @@ import { notFound } from "next/navigation";
 import { prisma } from "@/lib/db";
 import { deleteContact } from "@/app/actions/contacts";
 import CommsTimeline from "@/components/CommsTimeline";
+import SecureLinksPanel from "@/components/SecureLinksPanel";
 import CustomFieldsCard from "@/components/custom-fields/CustomFieldsCard";
 import DocumentsPanel from "@/components/DocumentsPanel";
 import PortalUploadsList, { type PortalUploadRow } from "@/components/PortalUploadsList";
@@ -443,6 +444,7 @@ export default async function ContactDetailPage({
                           userName: c.user.name,
                         }))}
                     />
+                    <SecureLinksPanel contactId={contact.id} />
                     <CommsTimeline
                       communications={comms}
                       contactId={contact.id}
