@@ -23,6 +23,8 @@ import { WorkspaceHero } from "@/components/workspace-hero";
 import { SaveForm, SaveButton } from "@/components/SaveForm";
 import { listDeadBotConversations } from "@/lib/deadBotConversations";
 import { retryDeadBotConversation, retryFailedMessage } from "@/app/actions/botDeliveries";
+import { isTenantOwner } from "@/lib/auth";
+import SpamPanel, { businessApproachSenders, quarantineCount } from "./SpamPanel";
 
 export const metadata = { title: "Social inbox" };
 
@@ -69,6 +71,17 @@ export default async function InboxPage({ searchParams }: { searchParams: Promis
     listDeadBotConversations(),
   ]);
   const collabStaff = staff.map((person) => ({ id: person.id, name: person.name }));
+  // Spam screening. Quarantined messages never became Communication rows, so
+  // nothing above — threads, unread, reply due, handoffs — can count them.
+  const [canReviewSpam, isOwner, heldCount, businessRows] = await Promise.all([
+    hasPermission(user, "inbox.spam"),
+    isTenantOwner(),
+    quarantineCount(workspaceTenantId),
+    // People the filter read as a supplier, partner or other business — shown apart from sales.
+    businessApproachSenders(workspaceTenantId),
+  ]);
+  const businessKeys = new Set(businessRows.map((row) => `${row.channel}:${row.contactId}`));
+  const businessThreads = threadList.filter((thread) => thread.contactId && businessKeys.has(`${thread.channel}:${thread.contactId}`));
   const unread = threadList.filter((thread) => thread.unread).length;
   const awaiting = threadList.filter((thread) => thread.awaiting).length;
   const handoffThreads = threadList.filter((thread) => collaboration.get(thread.key)?.bot.mode === "handoff");
@@ -239,18 +252,21 @@ export default async function InboxPage({ searchParams }: { searchParams: Promis
       </div>
 
       <Tabs
-        initialKey={tab === "comments" ? "comments" : "all"}
+        initialKey={tab === "comments" ? "comments" : tab === "spam" ? "spam" : tab === "business" ? "business" : "all"}
         tabs={[
           { key: "handoffs", label: "Bot handoffs", count: handoffThreads.length + deadConversations.length, content: handoffsPanel },
-          { key: "all", label: "All", count: unread, content: <SocialThreadList delivery={delivery} collaboration={collaboration} staff={collabStaff} canCollaborate={canCollaborate} viewerId={user.id} list={threadList} empty="No conversations yet. Messages appear here as soon as a connected customer channel receives one." /> },
+          { key: "all", label: "All", count: unread, content: <SocialThreadList canMarkSpam={canReviewSpam} delivery={delivery} collaboration={collaboration} staff={collabStaff} canCollaborate={canCollaborate} viewerId={user.id} list={threadList} empty="No conversations yet. Messages appear here as soon as a connected customer channel receives one." /> },
           { key: "whatsapp", label: "WhatsApp", count: threadList.filter((thread) => thread.channel === "whatsapp" && thread.unread).length, content: <SocialThreadList delivery={delivery} collaboration={collaboration} staff={collabStaff} canCollaborate={canCollaborate} viewerId={user.id} list={threadList.filter((thread) => thread.channel === "whatsapp")} empty="No WhatsApp conversations yet. Connect the WhatsApp Business number in Settings → Integrations." /> },
           { key: "messenger", label: "Messenger", count: threadList.filter((thread) => thread.channel === "messenger" && thread.unread).length, content: <SocialThreadList delivery={delivery} collaboration={collaboration} staff={collabStaff} canCollaborate={canCollaborate} viewerId={user.id} list={threadList.filter((thread) => thread.channel === "messenger")} empty="No Messenger conversations yet." /> },
           { key: "instagram", label: "Instagram", count: threadList.filter((thread) => thread.channel === "instagram" && thread.unread).length, content: <SocialThreadList delivery={delivery} collaboration={collaboration} staff={collabStaff} canCollaborate={canCollaborate} viewerId={user.id} list={threadList.filter((thread) => thread.channel === "instagram")} empty="No Instagram DMs yet. They appear once the Instagram account and Meta messaging permissions are connected." /> },
           { key: "x", label: "X", count: threadList.filter((thread) => thread.channel === "x" && thread.unread).length, content: <SocialThreadList delivery={delivery} collaboration={collaboration} staff={collabStaff} canCollaborate={canCollaborate} viewerId={user.id} list={threadList.filter((thread) => thread.channel === "x")} empty="No X conversations yet. Connect the tenant's X account in Settings → Integrations." /> },
           { key: "telegram", label: "Telegram", count: threadList.filter((thread) => thread.channel === "telegram" && thread.unread).length, content: <SocialThreadList delivery={delivery} collaboration={collaboration} staff={collabStaff} canCollaborate={canCollaborate} viewerId={user.id} list={threadList.filter((thread) => thread.channel === "telegram")} empty="No Telegram conversations yet. They appear once the Telegram bot is connected in Settings → Integrations." /> },
+          { key: "business", label: "Business", count: businessThreads.filter((thread) => thread.unread).length, content: <SocialThreadList canMarkSpam={canReviewSpam} delivery={delivery} collaboration={collaboration} staff={collabStaff} canCollaborate={canCollaborate} viewerId={user.id} list={businessThreads} empty="No supplier, partnership or other business approaches. When the spam filter is on, messages it reads as a business writing to you — not a customer, and not spam — are listed here as well as under All." /> },
           { key: "comments", label: "Comments", count: unreadComments, content: commentsPanel },
           { key: "reviews", label: "Google Reviews", count: reviews.length, content: reviewsPanel },
           { key: "archived", label: "Archived", count: archivedList.length, content: <SocialThreadList delivery={delivery} collaboration={collaboration} staff={collabStaff} canCollaborate={canCollaborate} viewerId={user.id} list={archivedList} empty="Nothing archived. Archive finished or test conversations to keep the active queue focused." /> },
+          // A count of what is HELD, shown quietly: no push, no badge elsewhere.
+          { key: "spam", label: "Spam", count: heldCount, content: <SpamPanel tenantId={workspaceTenantId} canReview={canReviewSpam} isOwner={isOwner} /> },
         ]}
       />
     </div>
