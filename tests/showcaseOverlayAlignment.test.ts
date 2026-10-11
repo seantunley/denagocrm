@@ -101,7 +101,9 @@ test("editor canvas: content zooms with its position, so the boxes stay on the l
   // The floating block is POSITIONED at px × zoom and its CONTENT is zoomed by
   // the same factor; the overlay field is positioned and sized at px × zoom.
   assert.match(floating, /left: fb\.x \* zoom, top: fb\.y \* zoom, width: fb\.width \* zoom/);
-  assert.match(floating, /<div style=\{\{ zoom \}\}>\s*<BlockView/);
+  // (Between the zoomed box and the block sits one wrapper carrying the block's
+  // own text size and alignment — type settings, no geometry.)
+  assert.match(floating, /<div style=\{\{ zoom \}\}>[\s\S]{0,260}<div style=\{blockBoxCss\(fb\.block, "floating"\)\}>\s*<BlockView/);
   assert.match(overlay, /left: f\.anchor\.x \* zoom, top: f\.anchor\.y \* zoom, width: f\.width \* zoom, height: f\.height \* zoom/);
   assert.match(canvas, /style=\{\{ zoom, fontFamily/, "the flowed content zooms too");
   for (const zoom of [0.75, 0.9, 1, 1.25]) {

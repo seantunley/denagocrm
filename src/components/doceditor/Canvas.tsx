@@ -7,6 +7,7 @@ import { useDraggable } from "@dnd-kit/core";
 import { useEditor } from "@/lib/doceditor/store";
 import { newBlock } from "@/lib/doceditor/factory";
 import { PAGE_SIZES, type DocumentBlock, type DocumentPage, type DocumentRow, type DocumentColumn } from "@/lib/doceditor/model";
+import { blockBoxCss } from "@/lib/doceditor/blockBox";
 import { BlockView } from "./BlockView";
 import { OverlayLayer } from "./OverlayLayer";
 import { FloatingLayer } from "./FloatingLayer";
@@ -245,11 +246,15 @@ function BlockWrapper({ block, hint }: { block: DocumentBlock; hint: Hint }) {
   const active = activeTextId === block.id;
   const showHint = hint && "targetId" in hint && hint.targetId === block.id ? hint.zone : null;
 
-  const w = block.settings?.width;
+  // The same box and type settings the PDF applies, from the same function — so
+  // a text size or alignment set here shows here, not only in the preview.
+  const box = blockBoxCss(block, "flow");
   const align = block.settings?.horizontalAlignment;
-  const boxStyle: React.CSSProperties = w && w < 100
-    ? { width: `${w}%`, marginLeft: align === "right" || align === "centre" ? "auto" : undefined, marginRight: align === "left" || align === "centre" || align === undefined || align === "stretch" ? "auto" : undefined }
-    : {};
+  const boxStyle: React.CSSProperties = {
+    ...(box.width ? { width: box.width, marginLeft: align === "right" || align === "centre" ? "auto" : undefined, marginRight: align === "right" ? undefined : "auto" } : {}),
+    ...(box.fontSize ? { fontSize: box.fontSize } : {}),
+    ...(box.textAlign ? { textAlign: box.textAlign } : {}),
+  };
 
   return (
     <div

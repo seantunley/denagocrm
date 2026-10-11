@@ -162,8 +162,23 @@ test("the total band never wraps its amount", () => {
 test("the type scale is applied once, not squared", () => {
   // totalBand computes its own point sizes from the scale because its type is
   // fixed in pt; the wrapper must not ALSO multiply it.
-  const code = shipped("src/lib/doceditor/serialize.ts");
-  assert.match(code, /b\.type !== "totalBand"/, "the wrapper must skip the block that scales itself");
+  // The wrapper's style is worked out in ONE place, read by the PDF and the editor page alike.
+  const box = shipped("src/lib/doceditor/blockBox.ts");
+  assert.match(box, /block\.type !== "totalBand"/, "the wrapper must skip the block that scales itself");
+  assert.match(shipped("src/lib/doceditor/serialize.ts"), /boxCssText\(blockBoxCss\(b, "flow"\)\)/, "the PDF takes its wrapper style from there");
+});
+
+test("the editor page and a freely placed block show the same text size and alignment as the PDF", () => {
+  // Both settings were applied by the PDF's flow wrapper only: the editor page
+  // ignored them, and a block lost them on every surface once placed freely.
+  const serializer = shipped("src/lib/doceditor/serialize.ts");
+  assert.equal((serializer.match(/floatingInner\(fb\.block, blockHtml\(fb\.block/g) ?? []).length, 2, "the PDF and the signing sheets both style a floated block");
+  assert.match(shipped("src/components/doceditor/Canvas.tsx"), /blockBoxCss\(block, "flow"\)/);
+  assert.match(shipped("src/components/doceditor/FloatingLayer.tsx"), /blockBoxCss\(fb\.block, "floating"\)/);
+  // …and a floated block keeps the controls that set them.
+  const panel = shipped("src/components/doceditor/PropertiesPanel.tsx");
+  const floating = panel.slice(panel.indexOf("if (floating) {"), panel.indexOf('<Section title="Layout">'));
+  assert.match(floating, /\{typeControls\}/, "text size and alignment are offered on a floated block too");
 });
 
 test("alignment and size are offered on every block, not only narrow ones", () => {

@@ -7,6 +7,7 @@
  * (resolves inline variables, prunes conditionals, fills bound pricing tables).
  */
 import { cssColor } from "./css";
+import { blockBoxCss, boxCssText } from "./blockBox";
 import type {
   DocumentModel, DocumentBlock, DocumentColumn, DocumentRow, DocumentPage,
   PricingBlock, PricingLine, TableBlock, OverlayField, DocStyle,
@@ -301,20 +302,19 @@ function blockHtml(block: DocumentBlock, ctx: RenderCtx, style: DocStyle, logoDa
  * only way to change them without editing each one.
  */
 function blockBoxStyle(b: DocumentBlock): string {
-  const w = b.settings?.width;
-  const align = b.settings?.horizontalAlignment;
-  const scale = b.settings?.fontScale;
-  const textAlign = b.settings?.textAlign;
-  let style = "";
-  if (w && w < 100) {
-    const margin = align === "right" ? "0 0 0 auto" : align === "centre" ? "0 auto" : "0 auto 0 0";
-    style += `width:${w}%;margin:${margin};`;
-  }
-  // totalBand sets its own point sizes from the scale (its type is fixed in pt,
-  // so an inherited em would not reach it) — applying it here too would square it.
-  if (scale && scale !== 1 && b.type !== "totalBand") style += `font-size:${scale}em;`;
-  if (textAlign) style += `text-align:${textAlign === "centre" ? "center" : textAlign};`;
-  return style;
+  // Decided in blockBoxCss — the one place the editor page reads too.
+  return boxCssText(blockBoxCss(b, "flow"));
+}
+
+/**
+ * A block in free placement: its type settings (text size, alignment) apply
+ * exactly as they do in the flow. They used to be dropped here, so a block lost
+ * its styling the moment it was placed freely. A block with neither set renders
+ * as it always did — no wrapper is added.
+ */
+function floatingInner(b: DocumentBlock, inner: string): string {
+  const box = boxCssText(blockBoxCss(b, "floating"));
+  return box ? `<div style="${box}">${inner}</div>` : inner;
 }
 
 function columnHtml(col: DocumentColumn, ctx: RenderCtx, style: DocStyle, logoDataUri?: string): string {
@@ -389,7 +389,7 @@ function pageHtml(page: DocumentPage, doc: DocumentModel, ctx: RenderCtx, logoDa
   // Free-placement content: absolutely positioned within the page box (coords are
   // page-relative but the page margin already offsets the flow, so shift by margin).
   const floats = page.floatingBlocks.map((fb) =>
-    `<div style="position:absolute;left:${fb.x - doc.style.margin}px;top:${fb.y - doc.style.margin}px;width:${fb.width}px">${blockHtml(fb.block, ctx, doc.style, logoDataUri)}</div>`
+    `<div style="position:absolute;left:${fb.x - doc.style.margin}px;top:${fb.y - doc.style.margin}px;width:${fb.width}px">${floatingInner(fb.block, blockHtml(fb.block, ctx, doc.style, logoDataUri))}</div>`
   ).join("");
   const size = PAGE_SIZES[doc.style.pageSize];
   /*
@@ -447,7 +447,7 @@ export function renderSigningSheets(input: DocumentModel, ctxIn: RenderCtx, logo
     const rows = page.rows.map((r) => rowHtml(r, ctx, doc.style, logoDataUri)).join("");
     // Free-placement blocks sit at raw sheet coordinates (sheet edge origin).
     const floats = page.floatingBlocks.map((fb) =>
-      `<div style="position:absolute;left:${fb.x}px;top:${fb.y}px;width:${fb.width}px">${blockHtml(fb.block, ctx, doc.style, logoDataUri)}</div>`
+      `<div style="position:absolute;left:${fb.x}px;top:${fb.y}px;width:${fb.width}px">${floatingInner(fb.block, blockHtml(fb.block, ctx, doc.style, logoDataUri))}</div>`
     ).join("");
     return `<div style="position:absolute;inset:0;padding:${m}px">${rows}</div>${floats}`;
   });
