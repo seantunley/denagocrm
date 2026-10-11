@@ -5,14 +5,22 @@ import { getBlock } from "@/lib/doceditor/ops";
 import { newPricingLine } from "@/lib/doceditor/factory";
 import type { DocumentBlock, OverlayField, Recipient, PricingBlock, ImageBlock, DividerBlock, SpacerBlock, ConditionalBlock, TextBlock, BannerBlock, InfoCardBlock, TotalBandBlock, TermsBlock, FooterBlock, LineItemsBlock, LineItemColumn, EmailButtonBlock, EmailFactsBlock, EmailFooterBlock, EmailHeaderBlock, EmailSignatureBlock } from "@/lib/doceditor/model";
 import { cssColor } from "@/lib/doceditor/css";
+import { activePreset, recolour, STYLE_PRESETS } from "@/lib/doceditor/docStyles";
+import type { DocStyle } from "@/lib/doceditor/model";
 import { lineItemColKeys } from "@/lib/doceditor/model";
 import { recipientLabel } from "@/lib/signing/templateRecipients";
 import { ConditionField } from "@/lib/docbuilder/ConditionField";
 import { validateExpression } from "@/lib/docbuilder/expr";
 import { saveLibraryItem } from "@/app/actions/doclibrary";
-import { TextPromptDialog } from "@/components/TextPromptDialog";
+import { sectionFromSelection } from "@/lib/doceditor/librarySection";
 import { toast } from "sonner";
 import { ShowcaseProps } from "./ShowcaseProps";
+import { DesignSection } from "./DesignSection";
+import { AlignOnPage, ArrangePanel } from "./ArrangePanel";
+import { TableStyleControls } from "./TableStyleControls";
+import { ContentBlockProps } from "./ContentBlockProps";
+import { PageSection, RowSection, RunningSection } from "./PageFurnitureProps";
+import { IMAGE_ASPECT_LABELS, type ImageAspect } from "@/lib/doceditor/imageFrame";
 import { useState } from "react";
 import { uploadDocEditorImage } from "@/app/actions/doceditor";
 import { checkDocImage, DOC_IMAGE_ACCEPT } from "@/lib/doceditor/imageUpload";
@@ -35,6 +43,7 @@ function Section({ title, children }: { title: string; children: React.ReactNode
 export function PropertiesPanel() {
   const doc = useEditor((s) => s.doc);
   const sel = useEditor((s) => s.sel);
+  const picked = useEditor((s) => s.picked);
   if (!doc) return null;
 
   const block = sel.blockId ? getBlock(doc, sel.blockId) : null;
@@ -43,7 +52,7 @@ export function PropertiesPanel() {
 
   return (
     <div className="h-full overflow-y-auto">
-      {field ? <FieldProps field={field} /> : block ? <BlockProps block={block} floating={floating} /> : <DocumentProps />}
+      {picked.length >= 2 ? <ArrangePanel ids={picked} /> : field ? <FieldProps field={field} /> : block ? <BlockProps block={block} floating={floating} /> : <DocumentProps />}
     </div>
   );
 }
@@ -87,6 +96,7 @@ function FieldProps({ field }: { field: OverlayField }) {
         )}
       </Section>
       <Section title="Position & size">
+        <AlignOnPage id={field.id} />
         <div className="grid grid-cols-2 gap-2">
           <div><label className={lbl}>X</label><input type="number" className={inp} value={Math.round(field.anchor.x)} onChange={(e) => updateField(field.id, { anchor: { ...field.anchor, x: Number(e.target.value) } })} /></div>
           <div><label className={lbl}>Y</label><input type="number" className={inp} value={Math.round(field.anchor.y)} onChange={(e) => updateField(field.id, { anchor: { ...field.anchor, y: Number(e.target.value) } })} /></div>
@@ -100,6 +110,22 @@ function FieldProps({ field }: { field: OverlayField }) {
 }
 
 // ── blocks ──────────────────────────────────────────────────────────
+/** Exact position and width for a freely placed block — typing a number is the only way to line two things up precisely. */
+function FloatingPosition({ blockId }: { blockId: string }) {
+  const placed = useEditor((s) => s.doc?.pages.flatMap((p) => p.floatingBlocks).find((fb) => fb.block.id === blockId));
+  const updateFloating = useEditor((s) => s.updateFloating);
+  if (!placed) return null;
+  const field = (label: string, key: "x" | "y" | "width", min: number) => (
+    <label className="flex-1 text-[11px] font-medium text-slate-500">{label}
+      <input
+        type="number" min={min} step={1} className={inp} value={Math.round(placed[key])}
+        onChange={(e) => { const n = Number(e.target.value); if (Number.isFinite(n)) updateFloating(blockId, { [key]: Math.max(min, n) }); }}
+      />
+    </label>
+  );
+  return <div className={`${row} flex gap-2`}>{field("From left", "x", 0)}{field("From top", "y", 0)}{field("Width", "width", 60)}</div>;
+}
+
 function LayoutSection({ block, floating }: { block: DocumentBlock; floating: boolean }) {
   const updateBlock = useEditor((s) => s.updateBlock);
   const detach = useEditor((s) => s.detach);
@@ -122,10 +148,36 @@ function LayoutSection({ block, floating }: { block: DocumentBlock; floating: bo
     >{label}</button>
   );
 
+  // Text size and alignment: the same two controls whether the block sits in
+  // the flow or is placed freely. They used to vanish for a floated block.
+  const typeControls = (
+    <>
+      <div className={row}>
+        <label className={lbl}>Text size ({Math.round(scale * 100)}%)</label>
+        <input
+          type="range" min={60} max={200} step={5} className="w-full" value={Math.round(scale * 100)}
+          onChange={(e) => set({ fontScale: Number(e.target.value) / 100 })}
+        />
+        {scale !== 1 && (
+          <button type="button" className="mt-1 text-[11px] text-slate-500 underline hover:text-slate-700" onClick={() => set({ fontScale: undefined })}>
+            Reset to the block&apos;s own size
+          </button>
+        )}
+      </div>
+      <div className={row}>
+        <label className={lbl}>Text alignment{textAlign ? "" : " — as designed"}</label>
+        <div className="flex gap-1">{textAlignBtn("left", "Left")}{textAlignBtn("centre", "Centre")}{textAlignBtn("right", "Right")}</div>
+      </div>
+    </>
+  );
+
   if (floating) {
     return (
       <Section title="Placement">
         <div className="mb-2 rounded-md bg-orange-50 px-2.5 py-2 text-[11px] text-orange-700">📌 Free placement — drag it anywhere on the page; drag the side handles to resize.</div>
+        <FloatingPosition blockId={block.id} />
+        <AlignOnPage id={block.id} />
+        {typeControls}
         <button type="button" onClick={() => dock(block.id)} className="w-full rounded-md border border-slate-300 py-1.5 text-sm text-slate-700 hover:bg-slate-50">⤵ Dock back into the flow</button>
       </Section>
     );
@@ -145,24 +197,71 @@ function LayoutSection({ block, floating }: { block: DocumentBlock; floating: bo
           <div className="flex gap-1">{alignBtn("left", "Left")}{alignBtn("centre", "Centre")}{alignBtn("right", "Right")}</div>
         </div>
       )}
-      <div className={row}>
-        <label className={lbl}>Text size ({Math.round(scale * 100)}%)</label>
-        <input
-          type="range" min={60} max={200} step={5} className="w-full" value={Math.round(scale * 100)}
-          onChange={(e) => set({ fontScale: Number(e.target.value) / 100 })}
-        />
-        {scale !== 1 && (
-          <button type="button" className="mt-1 text-[11px] text-slate-500 underline hover:text-slate-700" onClick={() => set({ fontScale: undefined })}>
-            Reset to the block&apos;s own size
-          </button>
-        )}
-      </div>
-      <div className={row}>
-        <label className={lbl}>Text alignment{textAlign ? "" : " — as designed"}</label>
-        <div className="flex gap-1">{textAlignBtn("left", "Left")}{textAlignBtn("centre", "Centre")}{textAlignBtn("right", "Right")}</div>
-      </div>
+      {typeControls}
       <button type="button" onClick={() => detach(block.id)} className="w-full rounded-md border border-orange-200 py-1.5 text-sm text-orange-600 hover:bg-orange-50">⤢ Free placement (drag anywhere)</button>
       <p className="mt-2 text-[11px] text-slate-400">Or drop another block on this one’s left/right edge to build columns.</p>
+    </Section>
+  );
+}
+
+/** A plain table's shape: its columns, how many rows, and the heading colours. The words are typed on the page. */
+function TableProps({ block }: { block: Extract<DocumentBlock, { type: "table" }> }) {
+  const updateBlock = useEditor((s) => s.updateBlock);
+  const set = (patch: Partial<typeof block>) => updateBlock(block.id, patch as Partial<DocumentBlock>);
+  const columns = block.columns;
+  const setColumn = (i: number, patch: Partial<(typeof columns)[number]>) => set({ columns: columns.map((c, ci) => (ci === i ? { ...c, ...patch } : c)) });
+  const emptyRow = () => ({ cells: columns.map(() => ({ value: "" })) });
+  const setRows = (rows: typeof block.rows) => set({ rows });
+  const moveRow = (i: number, by: -1 | 1) => { const rows = [...block.rows]; [rows[i], rows[i + by]] = [rows[i + by], rows[i]]; setRows(rows); };
+  return (
+    <Section title="Table">
+      <p className="mb-2 text-[11px] text-slate-500">Click a heading or a cell on the page to type in it.</p>
+      <label className={lbl}>Columns</label>
+      <ul className="mb-2 space-y-1.5">
+        {columns.map((c, i) => (
+          <li key={i} className="flex items-center gap-1">
+            <span className="min-w-0 flex-1 truncate text-xs text-slate-700" title={c.header}>{c.header || `Column ${i + 1}`}</span>
+            <select aria-label={`Alignment of column ${i + 1}`} className="rounded border border-slate-300 px-1 py-1 text-xs text-slate-700" value={c.align} onChange={(e) => setColumn(i, { align: e.target.value as typeof c.align })}>
+              <option value="left">Left</option><option value="center">Centre</option><option value="right">Right</option>
+            </select>
+            <input aria-label={`Width of column ${i + 1}, percent`} type="number" min={5} max={90} step={5} className="w-14 rounded border border-slate-300 px-1 py-1 text-xs text-slate-700" value={c.widthPct} onChange={(e) => setColumn(i, { widthPct: Math.max(5, Math.min(90, Number(e.target.value) || 5)) })} />
+            <button
+              type="button" className="rounded px-1 text-xs text-red-500 hover:bg-red-50 disabled:opacity-30" title="Remove this column" aria-label={`Remove column ${i + 1}`} disabled={columns.length <= 1}
+              // The column goes with its cells, in every row.
+              onClick={() => set({ columns: columns.filter((_, ci) => ci !== i), rows: block.rows.map((r) => ({ ...r, cells: r.cells.filter((_, ci) => ci !== i) })) })}
+            >✕</button>
+          </li>
+        ))}
+      </ul>
+      <div className="mb-3 flex gap-1.5">
+        <button type="button" className="flex-1 rounded-md border border-slate-300 py-1 text-xs text-slate-700 hover:bg-slate-50 disabled:opacity-40" disabled={columns.length >= 8} onClick={() => set({ columns: [...columns, { header: "", align: "left", widthPct: 20 }], rows: block.rows.map((r) => ({ ...r, cells: [...columns.map((_, ci) => r.cells[ci] ?? { value: "" }), { value: "" }] })) })}>+ Column</button>
+        <button type="button" className="flex-1 rounded-md border border-slate-300 py-1 text-xs text-slate-700 hover:bg-slate-50" onClick={() => set({ rows: [...block.rows, emptyRow()] })}>+ Row</button>
+        <button type="button" className="flex-1 rounded-md border border-slate-300 py-1 text-xs text-slate-700 hover:bg-slate-50 disabled:opacity-40" disabled={block.rows.length === 0} title="Remove the last row" onClick={() => set({ rows: block.rows.slice(0, -1) })}>− Row</button>
+      </div>
+      <div className="flex gap-2">
+        <div className="flex-1"><label className={lbl}>Heading fill</label><input type="color" value={block.headerBg} onChange={(e) => set({ headerBg: e.target.value })} className="h-8 w-full rounded border border-slate-300" /></div>
+        <div className="flex-1"><label className={lbl}>Heading text</label><input type="color" value={block.headerColor} onChange={(e) => set({ headerColor: e.target.value })} className="h-8 w-full rounded border border-slate-300" /></div>
+      </div>
+      <div className="mt-3"><TableStyleControls value={block.tableStyle} onChange={(tableStyle) => set({ tableStyle })} /></div>
+      {block.rows.length > 0 && (
+        <>
+          <label className={`${lbl} mt-3`}>Rows</label>
+          <ul className="space-y-1">
+            {block.rows.map((r, i) => (
+              <li key={i} className="flex items-center gap-1">
+                <span className="min-w-0 flex-1 truncate text-xs text-slate-700" title={r.cells[0]?.value}>{r.cells[0]?.value || `Row ${i + 1}`}</span>
+                {/* A group heading spans the table; a subtotal is bold with a rule above it. Its figures are typed, not added up. */}
+                <select aria-label={`Kind of row ${i + 1}`} className="rounded border border-slate-300 px-1 py-1 text-xs text-slate-700" value={r.kind ?? ""} onChange={(e) => setRows(block.rows.map((x, ri) => (ri === i ? { cells: x.cells, ...(e.target.value ? { kind: e.target.value as "group" | "subtotal" } : {}) } : x)))}>
+                  <option value="">Row</option><option value="group">Group heading</option><option value="subtotal">Subtotal</option>
+                </select>
+                <button type="button" className="rounded px-1 text-xs text-slate-400 hover:text-slate-700 disabled:opacity-30" title="Move up" aria-label={`Move row ${i + 1} up`} disabled={i === 0} onClick={() => moveRow(i, -1)}>▲</button>
+                <button type="button" className="rounded px-1 text-xs text-slate-400 hover:text-slate-700 disabled:opacity-30" title="Move down" aria-label={`Move row ${i + 1} down`} disabled={i === block.rows.length - 1} onClick={() => moveRow(i, 1)}>▼</button>
+                <button type="button" className="rounded px-1 text-xs text-red-500 hover:bg-red-50" title="Remove this row" aria-label={`Remove row ${i + 1}`} onClick={() => setRows(block.rows.filter((_, ri) => ri !== i))}>✕</button>
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
     </Section>
   );
 }
@@ -171,15 +270,72 @@ const FRAME_PARTS = new Set<string>(["emailHeader", "emailBody", "emailSignature
 /** Plain names for the email blocks ("emailHeader block" is the code's name, not the owner's). */
 const EMAIL_BLOCK_NAMES: Record<string, string> = {
   emailHeader: "Header", emailBody: "Message slot", emailSignature: "Signature", emailFooter: "Footer", emailButton: "Button", emailFacts: "Key figures",
+  detailsGrid: "Details grid", paymentSchedule: "Payment schedule", comparison: "Comparison table", callout: "Callout", gallery: "Photo gallery", qr: "QR code",
 };
+
+/**
+ * Save the selection to the content library: this block, its whole row of
+ * columns, or — for a freely placed block — the block where it sits, with an
+ * acceptance card's signature and date. Named, and filed under a category.
+ */
+function SaveToLibrary({ block, floating }: { block: DocumentBlock; floating: boolean }) {
+  const [open, setOpen] = useState(false);
+  const [name, setName] = useState("");
+  const [category, setCategory] = useState("");
+  const [scope, setScope] = useState<"block" | "row">("block");
+  const [busy, setBusy] = useState(false);
+  // How many columns the block's row has: a single-column row IS the block, so the choice is not offered.
+  const columns = useEditor((s) => s.doc?.pages.flatMap((p) => p.rows).find((r) => r.columns.some((c) => c.blocks.some((b) => b.id === block.id)))?.columns.length ?? 1);
+  const save = async () => {
+    const doc = useEditor.getState().doc;
+    const section = doc ? sectionFromSelection(doc, block.id, scope) : null;
+    if (!section || !name.trim()) return;
+    setBusy(true);
+    try {
+      const result = await saveLibraryItem({ name, category, section });
+      if (!result.ok) { toast.error("That could not be saved to the library."); return; }
+      toast.success(`Saved to the content library${section.fields.length ? `, with its ${section.fields.length} signing field${section.fields.length === 1 ? "" : "s"}` : ""}`);
+      setOpen(false); setName("");
+    } catch {
+      toast.error("That did not reach the server. Try again.");
+    } finally {
+      setBusy(false);
+    }
+  };
+  if (!open) return <button type="button" onClick={() => setOpen(true)} className="w-full rounded-md border border-slate-300 py-1.5 text-sm text-slate-700 hover:bg-slate-50">Save to content library</button>;
+  return (
+    <div className="rounded-md border border-slate-200 bg-slate-50 p-2.5">
+      <label className={lbl} htmlFor={`lib-name-${block.id}`}>Name</label>
+      <input id={`lib-name-${block.id}`} className={`${inp} mb-2`} value={name} autoFocus placeholder="e.g. Standard warranty terms" onChange={(e) => setName(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") void save(); }} />
+      <label className={lbl} htmlFor={`lib-cat-${block.id}`}>Category (optional)</label>
+      <input id={`lib-cat-${block.id}`} className={`${inp} mb-2`} value={category} placeholder="e.g. Terms, Headers, Payment" onChange={(e) => setCategory(e.target.value)} />
+      {floating ? (
+        <p className="mb-2 text-[11px] text-slate-500">Saved where it sits on the page{block.type === "acceptance" ? ", with the signature and date on its lines" : ""}.</p>
+      ) : columns > 1 ? (
+        <div className="mb-2 flex gap-1">
+          {([["block", "This block"], ["row", `Its whole row (${columns} columns)`]] as const).map(([value, label]) => (
+            <button key={value} type="button" onClick={() => setScope(value)} className={`flex-1 rounded border px-2 py-1 text-xs ${scope === value ? "border-orange-400 bg-orange-50 text-orange-600" : "border-slate-300 bg-white text-slate-600 hover:bg-slate-50"}`}>{label}</button>
+          ))}
+        </div>
+      ) : null}
+      <div className="flex gap-1.5">
+        <button type="button" disabled={busy || !name.trim()} onClick={() => void save()} className="flex-1 rounded-md bg-slate-900 py-1.5 text-sm text-white hover:bg-slate-800 disabled:opacity-40">{busy ? "Saving…" : "Save"}</button>
+        <button type="button" onClick={() => setOpen(false)} className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-50">Cancel</button>
+      </div>
+    </div>
+  );
+}
 
 function BlockProps({ block, floating }: { block: DocumentBlock; floating: boolean }) {
   const remove = useEditor((s) => s.remove);
+  const { email } = useDocEditorEnv();
   return (
     <>
       <div className="border-b border-slate-100 p-3 text-sm font-medium capitalize text-slate-700">{EMAIL_BLOCK_NAMES[block.type] ?? `${block.type} block`}{floating ? " · floating" : ""}</div>
       {/* The frame's own parts run the width of the email: no column width, text scale or free placement. */}
       {block.type !== "pageBreak" && !FRAME_PARTS.has(block.type) && <LayoutSection block={block} floating={floating} />}
+      {/* One set of design controls for every document block. An email is laid out by its frame and its client, not by these. */}
+      {block.type !== "pageBreak" && !FRAME_PARTS.has(block.type) && !block.type.startsWith("email") && <DesignSection block={block} floating={floating} />}
       {block.type === "image" && <ImageProps block={block} />}
       {block.type === "pricing" && <PricingProps block={block} />}
       {block.type === "divider" && <DividerProps block={block} />}
@@ -192,6 +348,7 @@ function BlockProps({ block, floating }: { block: DocumentBlock; floating: boole
       {block.type === "footer" && <FooterProps block={block} />}
       {block.type === "lineItems" && <LineItemsProps block={block} />}
       {(block.type === "showcaseHeader" || block.type === "infoStrip" || block.type === "vehicleShowcase" || block.type === "totalsBox" || block.type === "acceptance" || block.type === "footerBand") && <ShowcaseProps block={block} />}
+      {(block.type === "detailsGrid" || block.type === "paymentSchedule" || block.type === "comparison" || block.type === "callout" || block.type === "gallery" || block.type === "qr") && <ContentBlockProps block={block} />}
       {block.type === "emailButton" && <EmailButtonProps block={block} />}
       {block.type === "emailFacts" && <EmailFactsProps block={block} />}
       {block.type === "emailFooter" && <EmailFooterProps block={block} />}
@@ -199,21 +356,12 @@ function BlockProps({ block, floating }: { block: DocumentBlock; floating: boole
       {block.type === "emailSignature" && <EmailSignatureProps block={block} />}
       {block.type === "emailBody" && <p className="p-3 text-xs text-slate-500">Where each email&apos;s own content goes. Keep exactly one.</p>}
       {(block.type === "text" || block.type === "heading") && <TextHint block={block} />}
-      {block.type === "table" && <p className="p-3 text-xs text-slate-400">Edit table cells inline on the page.</p>}
+      {block.type === "table" && <TableProps block={block} />}
       {block.type === "pageBreak" && <p className="p-3 text-xs text-slate-400">Forces the next content onto a new page.</p>}
+      {/* An email has no pages; a freely placed block is in no row. */}
+      {!floating && !email && block.type !== "pageBreak" && <RowSection block={block} />}
       <div className="space-y-2 p-3">
-        <TextPromptDialog
-          trigger={<button type="button" className="w-full rounded-md border border-slate-300 py-1.5 text-sm text-slate-700 hover:bg-slate-50">Save to content library</button>}
-          title="Save reusable content"
-          description="Give this block a clear name so your team can find it in the Library palette."
-          label="Library item name"
-          placeholder="e.g. Standard warranty terms"
-          submitLabel="Save to library"
-          onSubmit={async (name) => {
-            await saveLibraryItem({ name, category: "", blocks: [block] });
-            toast.success("Saved to the content library");
-          }}
-        />
+        <SaveToLibrary block={block} floating={floating} />
         <button type="button" onClick={() => remove(block.id)} className="w-full rounded-md border border-red-200 py-1.5 text-sm text-red-600 hover:bg-red-50">Delete block</button>
       </div>
     </>
@@ -225,9 +373,52 @@ function TextHint({ block }: { block: TextBlock | { type: string } }) {
   return <p className="p-3 text-xs text-slate-400">Click the text on the page to edit it directly — bold, headings, and ＋ variable are in the floating toolbar.</p>;
 }
 
+/**
+ * A shape for the picture, how it sits in it, and a caption. Replacing the
+ * picture (above) keeps all of this, so a layout survives a new photo.
+ */
+function ImageFraming({ block }: { block: ImageBlock }) {
+  const updateBlock = useEditor((s) => s.updateBlock);
+  const set = (patch: Partial<ImageBlock>, history = true) => updateBlock(block.id, patch as Partial<DocumentBlock>, history);
+  const shaped = !!block.aspect && block.aspect !== "original";
+  const filling = shaped && block.fit !== "contain";
+  return (
+    <div className="mt-3 border-t border-slate-100 pt-3">
+      <div className={row}>
+        <label className={lbl} htmlFor={`aspect-${block.id}`}>Shape</label>
+        <select id={`aspect-${block.id}`} className={inp} value={block.aspect ?? "original"} onChange={(e) => set({ aspect: e.target.value === "original" ? undefined : (e.target.value as ImageAspect) })}>
+          <option value="original">As the picture is</option>
+          {(Object.keys(IMAGE_ASPECT_LABELS) as ImageAspect[]).map((a) => <option key={a} value={a}>{IMAGE_ASPECT_LABELS[a]}</option>)}
+        </select>
+      </div>
+      {shaped && (
+        <div className={row}>
+          <label className={lbl}>In that shape, the picture</label>
+          <div className="flex gap-1">
+            {([["cover", "Fills it (cropped)"], ["contain", "Fits inside it"]] as const).map(([value, label]) => (
+              <button key={value} type="button" onClick={() => set({ fit: value === "cover" ? undefined : value })}
+                className={`flex-1 rounded border px-2 py-1 text-xs ${(block.fit ?? "cover") === value ? "border-orange-400 bg-orange-50 text-orange-600" : "border-slate-300 text-slate-600 hover:bg-slate-50"}`}>{label}</button>
+            ))}
+          </div>
+        </div>
+      )}
+      {filling && (
+        <div className={row}>
+          <label className={lbl}>Keep in view — across ({Math.round(block.focalX ?? 50)}%)</label>
+          <input type="range" min={0} max={100} className="w-full" value={block.focalX ?? 50} onChange={(e) => set({ focalX: Number(e.target.value) }, false)} />
+          <label className={`${lbl} mt-2`}>Keep in view — down ({Math.round(block.focalY ?? 50)}%)</label>
+          <input type="range" min={0} max={100} className="w-full" value={block.focalY ?? 50} onChange={(e) => set({ focalY: Number(e.target.value) }, false)} />
+          <p className="mt-1 text-[11px] text-slate-400">Nothing is cut from the file — move these and the rest of the picture is still there.</p>
+        </div>
+      )}
+      <div className={row}><label className={lbl}>Caption</label><input className={inp} value={block.caption ?? ""} placeholder="A line under the picture" onChange={(e) => set({ caption: e.target.value || undefined })} /></div>
+    </div>
+  );
+}
+
 function ImageProps({ block }: { block: ImageBlock }) {
   const updateBlock = useEditor((s) => s.updateBlock);
-  const { templateId } = useDocEditorEnv();
+  const { templateId, email } = useDocEditorEnv();
   const [busy, setBusy] = useState(false);
   // An uploaded image's src is a private stored ref — not something to show or edit as a URL.
   const uploaded = !!block.src && storedFileSrc(block.src) !== block.src;
@@ -269,6 +460,8 @@ function ImageProps({ block }: { block: ImageBlock }) {
       <div className={row}><label className={lbl}>Alt text</label><input className={inp} value={block.alt} onChange={(e) => updateBlock(block.id, { alt: e.target.value })} /></div>
       <div className={row}><label className={lbl}>Width ({block.widthPct}%)</label><input type="range" min={10} max={100} className="w-full" value={block.widthPct} onChange={(e) => updateBlock(block.id, { widthPct: Number(e.target.value) }, false)} /></div>
       <label className="flex items-center gap-2 text-sm text-slate-700"><input type="checkbox" checked={block.rounded} onChange={(e) => updateBlock(block.id, { rounded: e.target.checked })} /> Rounded corners</label>
+      {/* An email client decides how a picture is framed; a shape or a crop set here would not survive it. */}
+      {!email && <ImageFraming block={block} />}
     </Section>
   );
 }
@@ -475,6 +668,7 @@ function PricingProps({ block }: { block: PricingBlock }) {
         <label className="mb-2 flex items-center gap-2 text-sm text-slate-700"><input type="checkbox" checked={block.showTax} onChange={(e) => updateBlock(block.id, { showTax: e.target.checked })} /> Show tax column</label>
         <label className="flex items-center gap-2 text-sm text-slate-700"><input type="checkbox" checked={block.showDiscount} onChange={(e) => updateBlock(block.id, { showDiscount: e.target.checked })} /> Show discount column</label>
       </Section>
+      <Section title="Table style"><TableStyleControls value={block.tableStyle} onChange={(tableStyle) => updateBlock(block.id, { tableStyle })} /></Section>
       {!block.bound && (
         <Section title="Line items">
           <div className="space-y-2">
@@ -622,6 +816,10 @@ function LineItemsProps({ block }: { block: LineItemsBlock }) {
           <div className="mt-2"><label className={lbl}>VAT rate (%) — prices are VAT-inclusive</label><input type="number" className={inp} value={block.vatRate} onChange={(e) => updateBlock(block.id, { vatRate: Number(e.target.value) })} /></div>
         )}
       </Section>
+      {/* The showcase and classic looks are drawn to fixed measurements the page layout (and its overflow onto a second page) depends on. */}
+      {!block.look || block.look === "standard" ? (
+        <Section title="Table style"><TableStyleControls value={block.tableStyle} onChange={(tableStyle) => updateBlock(block.id, { tableStyle })} /></Section>
+      ) : null}
       <Section title="Columns">
         <div className="space-y-2">
           {block.columns.map((c, i) => (
@@ -639,6 +837,13 @@ function LineItemsProps({ block }: { block: LineItemsBlock }) {
                 <select className="rounded border border-slate-300 px-1 text-xs" value={c.align} onChange={(e) => setCols(block.columns.map((x, j) => (j === i ? { ...x, align: e.target.value as "left" | "right" } : x)))}>
                   <option value="left">Left</option><option value="right">Right</option>
                 </select>
+                {(!block.look || block.look === "standard") && (
+                  <input
+                    type="number" min={5} max={90} step={5} className="w-16 rounded border border-slate-300 px-1 text-xs" title="Width, as a percent of the table. Empty = sized by its content." aria-label={`Width of column ${i + 1}, percent`} placeholder="auto"
+                    value={c.widthPct ?? ""}
+                    onChange={(e) => setCols(block.columns.map((x, j) => { if (j !== i) return x; const { widthPct: _w, ...rest } = x; void _w; const n = Number(e.target.value); return e.target.value && n > 0 ? { ...rest, widthPct: Math.min(90, n) } : rest; }))}
+                  />
+                )}
               </div>
               <input
                 className={`w-full rounded-md border px-2 py-1 text-xs ${validateExpression(c.showIf) ? "border-red-400" : "border-slate-200"}`}
@@ -658,6 +863,54 @@ function LineItemsProps({ block }: { block: LineItemsBlock }) {
 }
 
 // ── document + recipients ───────────────────────────────────────────
+/**
+ * The document's own style: a ready-made type setting, then the pieces of it,
+ * then the two brand colours. Changing a colour repaints every block drawn in
+ * the old one (docStyles.recolour) — it used to change link text and nothing else.
+ */
+function DocumentStyleSection() {
+  const style = useEditor((s) => s.doc!.style);
+  const setStyle = useEditor((s) => s.setStyle);
+  const commit = useEditor((s) => s.commit);
+  const preset = activePreset(style);
+  const size = style.bodySize ?? 11;
+  const spacing = style.lineHeight ?? 1.5;
+  return (
+    <Section title="Style">
+      <label className={lbl}>Ready-made</label>
+      <div className="mb-3 grid grid-cols-2 gap-1.5">
+        {STYLE_PRESETS.map((p) => (
+          <button
+            key={p.key} type="button" title={p.hint} aria-pressed={preset === p.key} onClick={() => setStyle({ ...p.style })}
+            className={`rounded-md border px-2 py-1.5 text-left text-xs ${preset === p.key ? "border-orange-400 bg-orange-50 text-orange-700" : "border-slate-300 text-slate-700 hover:bg-slate-50"}`}
+          >
+            <span className="block font-medium" style={{ fontFamily: (p.style.headingFont ?? p.style.fontFamily) === "serif" ? "Georgia,serif" : undefined }}>{p.name}</span>
+            <span className="block text-[10px] leading-tight text-slate-500">{p.hint}</span>
+          </button>
+        ))}
+      </div>
+      <div className="grid grid-cols-2 gap-2">
+        <div><label className={lbl}>Text</label>
+          <select className={inp} value={style.fontFamily} onChange={(e) => setStyle({ fontFamily: e.target.value as DocStyle["fontFamily"] })}><option value="sans">Sans</option><option value="serif">Serif</option><option value="mono">Mono</option></select>
+        </div>
+        <div><label className={lbl}>Headings</label>
+          <select className={inp} value={style.headingFont ?? ""} onChange={(e) => setStyle({ headingFont: (e.target.value || undefined) as DocStyle["headingFont"] })}><option value="">Same as text</option><option value="sans">Sans</option><option value="serif">Serif</option><option value="mono">Mono</option></select>
+        </div>
+      </div>
+      <div className="mt-2 grid grid-cols-2 gap-2">
+        <div><label className={lbl}>Text size ({size}pt)</label><input type="range" min={8} max={14} step={0.5} className="w-full" value={size} onChange={(e) => setStyle({ bodySize: Number(e.target.value) })} /></div>
+        <div><label className={lbl}>Line spacing ({spacing})</label><input type="range" min={1.1} max={2} step={0.05} className="w-full" value={spacing} onChange={(e) => setStyle({ lineHeight: Number(e.target.value) })} /></div>
+      </div>
+      <div className="mt-2 grid grid-cols-3 gap-2">
+        <div><label className={lbl}>Accent</label><input type="color" aria-label="Accent colour" value={style.accent} onChange={(e) => commit((d) => recolour(d, "accent", e.target.value))} className="h-8 w-full rounded border border-slate-300" /></div>
+        <div><label className={lbl}>Dark</label><input type="color" aria-label="Dark colour — bands, table headings, heading text" value={style.ink} onChange={(e) => commit((d) => recolour(d, "ink", e.target.value))} className="h-8 w-full rounded border border-slate-300" /></div>
+        <div><label className={lbl}>Text</label><input type="color" aria-label="Text colour" value={style.textColor ?? "#1e293b"} onChange={(e) => setStyle({ textColor: e.target.value })} className="h-8 w-full rounded border border-slate-300" /></div>
+      </div>
+      <p className="mt-2 text-[11px] text-slate-400">Accent and Dark repaint every block drawn in the old colour. A block you coloured differently is left alone. Blocks with their own designed type sizes (cards, bands, tables) keep them — use a block&apos;s Text size to change one.</p>
+    </Section>
+  );
+}
+
 function DocumentProps() {
   const doc = useEditor((s) => s.doc)!;
   const setStyle = useEditor((s) => s.setStyle);
@@ -708,15 +961,16 @@ function DocumentProps() {
           <div><label className={lbl}>Page size</label>
             <select className={inp} value={doc.style.pageSize} onChange={(e) => setStyle({ pageSize: e.target.value as "A4" | "Letter" })}><option value="A4">A4</option><option value="Letter">Letter</option></select>
           </div>
-          <div><label className={lbl}>Font</label>
-            <select className={inp} value={doc.style.fontFamily} onChange={(e) => setStyle({ fontFamily: e.target.value as "sans" | "serif" | "mono" })}><option value="sans">Sans</option><option value="serif">Serif</option><option value="mono">Mono</option></select>
+          <div><label className={lbl}>Turned</label>
+            {/* Portrait is stored as nothing at all — it is what every document already is. */}
+            <select className={inp} value={doc.style.orientation ?? "portrait"} onChange={(e) => setStyle({ orientation: e.target.value === "landscape" ? "landscape" : undefined })}><option value="portrait">Upright (portrait)</option><option value="landscape">On its side (landscape)</option></select>
           </div>
-        </div>
-        <div className="mt-2 grid grid-cols-2 gap-2">
-          <div><label className={lbl}>Margin ({doc.style.margin}px)</label><input type="range" min={16} max={96} className="w-full" value={doc.style.margin} onChange={(e) => setStyle({ margin: Number(e.target.value) })} /></div>
-          <div><label className={lbl}>Accent</label><input type="color" value={doc.style.accent} onChange={(e) => setStyle({ accent: e.target.value })} className="h-8 w-full rounded border border-slate-300" /></div>
+          <div className="col-span-2"><label className={lbl}>Margin ({doc.style.margin}px)</label><input type="range" min={0} max={96} className="w-full" value={doc.style.margin} onChange={(e) => setStyle({ margin: Number(e.target.value) })} /></div>
         </div>
       </Section>
+      <PageSection />
+      <DocumentStyleSection />
+      <RunningSection />
       <Section title="Recipients">
         <div className="space-y-2">
           {doc.recipients.map((r) => (

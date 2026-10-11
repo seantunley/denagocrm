@@ -6,6 +6,10 @@ import { unstable_rethrow, useRouter } from "next/navigation";
 import { useEditor } from "@/lib/doceditor/store";
 import type { DocumentModel } from "@/lib/doceditor/model";
 import { staleWordingWarnings, type WordingSettings } from "@/lib/doceditor/wordingCheck";
+import { designWarnings } from "@/lib/doceditor/designCheck";
+import { findPlaced, nudgePlaced } from "@/lib/doceditor/arrange";
+import { DesignCheckPanel } from "./DesignCheckPanel";
+import { PageStrip } from "./PageStrip";
 import { saveDocEditor, importDocEditorTemplate } from "@/app/actions/doceditor";
 import { publishBuilderVersion } from "@/app/actions/docbuilder";
 import { finaliseCustomDocument, saveCustomDocument } from "@/app/actions/customDocuments";
@@ -89,8 +93,11 @@ export function DocEditor({
   const remove = useEditor((state) => state.remove);
   const removeField = useEditor((state) => state.removeField);
   const addPage = useEditor((state) => state.addPage);
+  const pageSheets = useEditor((state) => state.pageSheets);
 
   const [zoom, setZoom] = useState(0.9);
+  // Page thumbnails: null = decide by the document (shown once it has more than one page).
+  const [showPages, setShowPages] = useState<boolean | null>(null);
   const [saveState, setSaveState] = useState<
     "idle" | "saving" | "saved"
   >("idle");
@@ -198,12 +205,32 @@ export function DocEditor({
         redo();
         return;
       }
+      // Arrow keys nudge what is placed on the page — a freely placed block, a
+      // signing field, or a selection of several — by 1px (Shift: 10). Escape lets go.
+      const nudge: Record<string, [number, number]> = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] };
+      if (!editable && nudge[event.key]) {
+        const { sel, picked, doc: current, arrange } = useEditor.getState();
+        const ids = (picked.length ? picked : [sel.blockId ?? sel.fieldId]).filter((x): x is string => !!x && !!current && !!findPlaced(current, x));
+        if (ids.length) {
+          event.preventDefault();
+          const step = event.shiftKey ? 10 : 1;
+          arrange((d) => nudgePlaced(d, ids, nudge[event.key][0] * step, nudge[event.key][1] * step));
+        }
+        return;
+      }
+      if (!editable && event.key === "Escape") {
+        useEditor.getState().select(null);
+        return;
+      }
       if (
         !editable &&
         (event.key === "Delete" || event.key === "Backspace")
       ) {
-        const { sel } = useEditor.getState();
-        if (sel.blockId) {
+        const { sel, picked, removePicked } = useEditor.getState();
+        if (picked.length) {
+          event.preventDefault();
+          removePicked();
+        } else if (sel.blockId) {
           event.preventDefault();
           remove(sel.blockId);
         } else if (sel.fieldId) {
@@ -287,6 +314,8 @@ export function DocEditor({
   }
 
   const wordingWarnings = wordingSettings ? staleWordingWarnings(doc, wordingSettings) : [];
+  // The design check, with what only the drawn page can measure (how many sheets each page takes).
+  const checkWarnings = designWarnings(doc, { sheets: pageSheets });
   const recordQuery = record
     ? `?record=${encodeURIComponent(record)}`
     : "";
@@ -531,6 +560,8 @@ export function DocEditor({
         </div>
       )}
 
+      <DesignCheckPanel warnings={checkWarnings} />
+
       {wordingWarnings.length > 0 && (
         <div role="status" className="border-b border-amber-300 bg-amber-50 px-4 py-2 text-xs text-amber-900">
           {wordingWarnings.map((warning) => <p key={warning}>{warning}</p>)}
@@ -550,6 +581,8 @@ export function DocEditor({
             </div>
             <Palette />
           </aside>
+          {/* Page thumbnails: on once there is more than one page, unless switched off (bottom bar). An email is one card. */}
+          {!email && (showPages ?? doc.pages.length > 1) && <PageStrip />}
           <main className="min-w-0 flex-1 overflow-auto">
             <Canvas zoom={zoom} />
           </main>
@@ -571,6 +604,11 @@ export function DocEditor({
         <span>
           {doc.pages.length} page{doc.pages.length > 1 ? "s" : ""}
         </span>
+        {!email && (
+          <button type="button" className="hidden rounded px-1 hover:bg-slate-100 md:inline" aria-pressed={showPages ?? doc.pages.length > 1} onClick={() => setShowPages(!(showPages ?? doc.pages.length > 1))}>
+            {(showPages ?? doc.pages.length > 1) ? "Hide page thumbnails" : "Show page thumbnails"}
+          </button>
+        )}
         <span className="flex items-center gap-1">
           <button
             type="button"

@@ -11,6 +11,7 @@
  */
 import type { DocumentModel, DocumentBlock, DocumentRow } from "./model";
 import { newColumn, newRow, uid } from "./factory";
+import { carryAcceptanceFields } from "./fieldSnap";
 
 export type DropZone = "above" | "below" | "left" | "right" | "centre";
 
@@ -220,7 +221,13 @@ export function updateFloating(doc: DocumentModel, blockId: string, patch: { x?:
   const next = clone(doc);
   for (const page of next.pages) {
     const fb = page.floatingBlocks.find((f) => f.block.id === blockId);
-    if (fb) { Object.assign(fb, patch); return next; }
+    if (fb) {
+      const before = { x: fb.x, y: fb.y, width: fb.width };
+      Object.assign(fb, patch);
+      // An acceptance card takes the signature and date fields on its lines with it.
+      if (fb.block.type === "acceptance") page.overlayFields = carryAcceptanceFields(page.overlayFields, before, { x: fb.x, y: fb.y, width: fb.width });
+      return next;
+    }
   }
   return doc;
 }
@@ -245,6 +252,102 @@ function reid(block: DocumentBlock): DocumentBlock {
   block.id = uid();
   if (block.type === "conditional") block.blocks = block.blocks.map(reid);
   return block;
+}
+
+// ── pages ───────────────────────────────────────────────────────────
+
+/** Remove a page and everything on it. The last page stays: a document always has one. */
+export function removePage(doc: DocumentModel, pageId: string): DocumentModel {
+  if (doc.pages.length <= 1 || !doc.pages.some((p) => p.id === pageId)) return doc;
+  return { ...doc, pages: doc.pages.filter((p) => p.id !== pageId) };
+}
+
+/** Move a page one place earlier (-1) or later (+1). A move off either end changes nothing. */
+export function movePage(doc: DocumentModel, pageId: string, by: -1 | 1): DocumentModel {
+  const from = doc.pages.findIndex((p) => p.id === pageId);
+  const to = from + by;
+  if (from < 0 || to < 0 || to >= doc.pages.length) return doc;
+  const pages = [...doc.pages];
+  [pages[from], pages[to]] = [pages[to], pages[from]];
+  return { ...doc, pages };
+}
+
+/**
+ * A copy of a page, placed straight after it, with a fresh id on EVERYTHING it
+ * holds — rows, columns, blocks, freely placed blocks and signing fields. Two
+ * things sharing an id would be one thing to the editor (select one, both
+ * light up; delete one, both go) and one field to the signing engine.
+ *
+ * The copy's groups ("these move together when the page overflows") point at
+ * the copy's own blocks and fields, not the original's. A signing field keeps
+ * its recipient: the same person signs the copy.
+ */
+export function duplicatePage(doc: DocumentModel, pageId: string): DocumentModel {
+  const at = doc.pages.findIndex((p) => p.id === pageId);
+  if (at < 0) return doc;
+  const page = clone(doc.pages[at]);
+  const renamed = new Map<string, string>();
+  const fresh = (old: string) => { const id = uid(); renamed.set(old, id); return id; };
+  page.id = uid();
+  for (const row of page.rows) {
+    row.id = uid();
+    for (const col of row.columns) { col.id = uid(); col.blocks = col.blocks.map(reid); }
+  }
+  for (const fb of page.floatingBlocks) { fb.id = fresh(fb.id); fb.block = reid(fb.block); }
+  for (const field of page.overlayFields) field.id = fresh(field.id);
+  for (const group of page.overflowGroups ?? []) {
+    group.floatIds = group.floatIds.map((id) => renamed.get(id) ?? id);
+    group.fieldIds = group.fieldIds.map((id) => renamed.get(id) ?? id);
+    for (const fb of group.nextPageFloats ?? []) { fb.id = uid(); fb.block = reid(fb.block); }
+  }
+  const pages = [...doc.pages];
+  pages.splice(at + 1, 0, page);
+  return { ...doc, pages };
+}
+
+/**
+ * Copy a library section into the document, with fresh ids throughout.
+ *
+ * WHERE: its rows go straight after the row holding `afterBlockId` (the block
+ * the person has selected); with nothing selected — or a freely placed block
+ * selected — they go at the end of page `pageIdx`. Its freely placed blocks and
+ * signing fields go on that same page, at the positions they were saved at.
+ * It used to be "the end of the last page", always.
+ *
+ * WHO SIGNS: a saved field remembers a party (customer, Denago), not a
+ * recipient id from the document it came from. It is given to this document's
+ * recipient of that party, or left unassigned for the person to assign.
+ */
+export function insertSection(
+  doc: DocumentModel,
+  section: { rows: DocumentRow[]; floats: DocumentModel["pages"][number]["floatingBlocks"]; fields: (DocumentModel["pages"][number]["overlayFields"][number] & { party?: string })[] },
+  at: { afterBlockId?: string | null; pageIdx: number },
+): DocumentModel {
+  const next = clone(doc);
+  const loc = at.afterBlockId ? findBlockLoc(next, at.afterBlockId) : null;
+  const pageIdx = loc ? loc.pageIdx : Math.max(0, Math.min(at.pageIdx, next.pages.length - 1));
+  const page = next.pages[pageIdx];
+
+  const rows = clone(section.rows).map((row) => {
+    row.id = uid();
+    for (const col of row.columns) { col.id = uid(); col.blocks = col.blocks.map(reid); }
+    return row;
+  });
+  if (loc) page.rows.splice(loc.rowIdx + 1, 0, ...rows);
+  else page.rows.push(...rows);
+
+  for (const fb of clone(section.floats)) page.floatingBlocks.push({ ...fb, id: uid(), block: reid(fb.block) });
+  for (const saved of clone(section.fields)) {
+    const { party, ...field } = saved;
+    const recipient = party ? next.recipients.find((r) => r.party === party) : undefined;
+    page.overlayFields.push({ ...field, id: uid(), recipientId: recipient?.id ?? null });
+  }
+  return next;
+}
+
+/** Is there anything on this page a person would be sorry to lose? */
+export function pageHasContent(page: DocumentModel["pages"][number]): boolean {
+  return page.rows.some((r) => r.columns.some((c) => c.blocks.length > 0)) || page.floatingBlocks.length > 0 || page.overlayFields.length > 0;
 }
 
 /** Deep-clone a block with fresh ids (for inserting library items). */

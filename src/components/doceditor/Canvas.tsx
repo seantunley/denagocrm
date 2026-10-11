@@ -6,7 +6,12 @@ import { emailFramePreview } from "@/lib/doceditor/emailRender";
 import { useDraggable } from "@dnd-kit/core";
 import { useEditor } from "@/lib/doceditor/store";
 import { newBlock } from "@/lib/doceditor/factory";
-import { PAGE_SIZES, type DocumentBlock, type DocumentPage, type DocumentRow, type DocumentColumn } from "@/lib/doceditor/model";
+import { pageMargin, pageSizeOf, type DocumentBlock, type DocumentPage, type DocumentRow, type DocumentColumn } from "@/lib/doceditor/model";
+import { blockBoxCss, columnNeedsStretch } from "@/lib/doceditor/blockBox";
+import { docTypeCss } from "@/lib/doceditor/docStyles";
+import { MIN_RUNNING_MARGIN, runningText } from "@/lib/doceditor/pageFurniture";
+import { pageHasContent } from "@/lib/doceditor/ops";
+import ConfirmActionDialog from "@/components/ConfirmActionDialog";
 import { BlockView } from "./BlockView";
 import { OverlayLayer } from "./OverlayLayer";
 import { FloatingLayer } from "./FloatingLayer";
@@ -28,13 +33,18 @@ export function Canvas({ zoom }: { zoom: number }) {
   );
 
   if (!doc) return null;
-  const size = PAGE_SIZES[doc.style.pageSize];
+  const size = pageSizeOf(doc.style);
   const around = email && frame ? { ...frame, message: !!email.kind, href: email.frame?.href ?? null } : undefined;
 
   return (
     <div className="flex flex-col items-center gap-10 py-10" style={frame ? { background: frame.page } : undefined} onMouseDown={() => select(null)}>
+      {/* The document's own type — face, size, spacing, heading sizes — from the
+          one function the printed page fills its rules from (docStyles.ts). Sans
+          is Geist, the app's own copy of the font the renderer embeds, so text
+          wraps here as it prints. An email is drawn by its own renderer. */}
+      {!email && <style>{docTypeCss(doc.style, ".doc-canvas", "var(--font-geist-sans),Helvetica,Arial,sans-serif")}</style>}
       {doc.pages.map((page, pIdx) => (
-        <PageView key={page.id} page={page} pIdx={pIdx} zoom={zoom} size={size} margin={doc.style.margin} fontFamily={doc.style.fontFamily} hint={hint} email={around} />
+        <PageView key={page.id} page={page} pIdx={pIdx} zoom={zoom} size={size} margin={pageMargin(doc, page)} fontFamily={doc.style.fontFamily} hint={hint} email={around} />
       ))}
     </div>
   );
@@ -86,6 +96,16 @@ function PageView({
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const [height, setHeight] = useState(0);
+  const pageCount = useEditor((s) => s.doc?.pages.length ?? 1);
+  const isActive = useEditor((s) => s.activePage === pIdx);
+  const setActivePage = useEditor((s) => s.setActivePage);
+  const removePage = useEditor((s) => s.removePage);
+  const duplicatePage = useEditor((s) => s.duplicatePage);
+  const movePage = useEditor((s) => s.movePage);
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
+  const whole = useEditor((s) => s.doc);
+  // (A page with too little margin of its own has nowhere to set them — as in print.)
+  const running = whole && !email && margin >= MIN_RUNNING_MARGIN ? runningText(whole, null, pIdx + 1, whole.pages.length) : null;
 
   useEffect(() => {
     const el = ref.current;
@@ -101,11 +121,17 @@ function PageView({
   // How many sheets this page's content will actually print onto.
   // An email is one continuous card, never paginated.
   const sheets = email ? 1 : Math.max(1, Math.ceil(height / sheet - 0.001));
+  // Only the page knows how many sheets its content really takes; the design check reads it from the store.
+  const setPageSheets = useEditor((s) => s.setPageSheets);
+  useEffect(() => { setPageSheets(page.id, sheets); }, [page.id, sheets, setPageSheets]);
 
   return (
     <div
       ref={ref}
       data-page-idx={pIdx}
+      // Capture phase: blocks stop the click from bubbling, and the page a person
+      // is working on must be known whichever part of it they touched.
+      onMouseDownCapture={() => setActivePage(pIdx)}
       className="relative bg-white shadow-lg ring-1 ring-black/5"
       // Ink on paper whatever the app's theme: the sheet is white, so its text must never inherit the dark theme's light foreground.
       style={{ width: size.w * zoom, minHeight: sheet, color: "#0f172a", ...(email ? { background: email.card, borderRadius: 16 * zoom, overflow: "hidden" } : {}) }}
@@ -119,17 +145,47 @@ function PageView({
             CONTENT has to scale by the same factor or it lays out at 100% inside
             a 90% box — wrapping differently from print, and leaving fixed-height
             content (a signature line) where no overlay field expects it. */}
-        {/* Sans is Geist — the app's own copy of the font the renderer embeds as
-            the document face — so text wraps on the canvas as it prints. */}
-        <div style={{ zoom, fontFamily: fontFamily === "serif" ? "Georgia,serif" : fontFamily === "mono" ? "monospace" : "var(--font-geist-sans),Helvetica,Arial,sans-serif" }}>
+        {/* An email keeps its own face; a document's type comes from .doc-canvas (see Canvas). */}
+        <div className={email ? undefined : "doc-canvas"} style={{ zoom, ...(email ? { fontFamily: fontFamily === "serif" ? "Georgia,serif" : fontFamily === "mono" ? "monospace" : "var(--font-geist-sans),Helvetica,Arial,sans-serif" } : {}) }}>
           {page.rows.map((row) => <RowView key={row.id} row={row} hint={hint} />)}
         </div>
         <AddRowButton pageIdx={pIdx} active={!!hint && "pageIdx" in hint && hint.pageIdx === pIdx} />
       </div>
       {email?.message && <FramePart html={email.bottom} href={email.href} zoom={zoom} />}
+      {/* The running header and footer, in the margin where they print — on every sheet, with the page number. Set in the Document panel. */}
+      {running && ([["top", running.header], ["bottom", running.footer]] as const).map(([edge, words]) => (
+        <div key={edge} className="pointer-events-none absolute grid grid-cols-3 items-center" style={{ [edge]: 0, left: margin * zoom, right: margin * zoom, height: margin * zoom, fontSize: `${8 * zoom}pt`, lineHeight: 1.2, color: "#64748b" }}>
+          <span className="text-left">{words.left}</span><span className="text-center">{words.centre}</span><span className="text-right">{words.right}</span>
+        </div>
+      ))}
       <FloatingLayer page={page} zoom={zoom} />
       <OverlayLayer page={page} zoom={zoom} />
-      <div className="pointer-events-none absolute -top-6 left-0 text-[11px] font-medium text-slate-400">Page {pIdx + 1}</div>
+      {/* The page's own controls. An email is one card, not pages. */}
+      <div className="absolute -top-6 left-0 flex items-center gap-1 text-[11px] font-medium text-slate-400">
+        <span className={isActive ? "text-orange-500" : undefined}>Page {pIdx + 1}{isActive && pageCount > 1 ? " · working here" : ""}</span>
+        {!email && (
+          <span className="ml-1 flex items-center gap-0.5" onMouseDown={(e) => e.stopPropagation()}>
+            <button type="button" className="rounded px-1 hover:bg-slate-200 hover:text-slate-700 disabled:opacity-30" title="Move this page earlier" aria-label={`Move page ${pIdx + 1} earlier`} disabled={pIdx === 0} onClick={() => movePage(page.id, -1)}>↑</button>
+            <button type="button" className="rounded px-1 hover:bg-slate-200 hover:text-slate-700 disabled:opacity-30" title="Move this page later" aria-label={`Move page ${pIdx + 1} later`} disabled={pIdx === pageCount - 1} onClick={() => movePage(page.id, 1)}>↓</button>
+            <button type="button" className="rounded px-1 hover:bg-slate-200 hover:text-slate-700" title="Duplicate this page" aria-label={`Duplicate page ${pIdx + 1}`} onClick={() => duplicatePage(page.id)}>⧉</button>
+            <button
+              type="button" className="rounded px-1 hover:bg-red-100 hover:text-red-600 disabled:opacity-30" title={pageCount <= 1 ? "A document needs at least one page" : "Delete this page"} aria-label={`Delete page ${pIdx + 1}`} disabled={pageCount <= 1}
+              // Undo brings it back, but a page of work should not go on one stray click:
+              // an empty page is deleted at once, one with content asks first.
+              onClick={() => (pageHasContent(page) ? setConfirmingDelete(true) : removePage(page.id))}
+            >🗑</button>
+          </span>
+        )}
+      </div>
+      <ConfirmActionDialog
+        open={confirmingDelete}
+        onOpenChange={setConfirmingDelete}
+        title={`Delete page ${pIdx + 1}?`}
+        description="Everything on this page goes with it — its content, freely placed blocks and signing fields. Undo will bring it back."
+        confirmLabel="Delete page"
+        destructive
+        onConfirm={() => removePage(page.id)}
+      />
 
       {/* Where the paper actually ends. Anything below a line prints on the next
           sheet, whatever this one looks like on screen. */}
@@ -221,7 +277,8 @@ function RowView({ row, hint }: { row: DocumentRow; hint: Hint }) {
 
 function ColumnView({ col, hint }: { col: DocumentColumn; hint: Hint }) {
   return (
-    <div className="min-w-0">
+    // A flex column only when a block in it rests in the middle or at the bottom — as the PDF does.
+    <div className="min-w-0" style={columnNeedsStretch(col.blocks) ? { display: "flex", flexDirection: "column" } : undefined}>
       {col.blocks.map((b) => <BlockWrapper key={b.id} block={b} hint={hint} />)}
     </div>
   );
@@ -245,11 +302,12 @@ function BlockWrapper({ block, hint }: { block: DocumentBlock; hint: Hint }) {
   const active = activeTextId === block.id;
   const showHint = hint && "targetId" in hint && hint.targetId === block.id ? hint.zone : null;
 
-  const w = block.settings?.width;
-  const align = block.settings?.horizontalAlignment;
-  const boxStyle: React.CSSProperties = w && w < 100
-    ? { width: `${w}%`, marginLeft: align === "right" || align === "centre" ? "auto" : undefined, marginRight: align === "left" || align === "centre" || align === undefined || align === "stretch" ? "auto" : undefined }
-    : {};
+  // The same box and type settings the PDF applies, from the same function — so
+  // a text size or alignment set here shows here, not only in the preview.
+  // Where the block SITS goes on this wrapper (the editor's own 2px of chrome
+  // stays); what it LOOKS like goes on the box round its content, below.
+  const box = blockBoxCss(block, "flow");
+  const boxStyle: React.CSSProperties = { ...box.outer };
 
   return (
     <div
@@ -275,7 +333,9 @@ function BlockWrapper({ block, hint }: { block: DocumentBlock; hint: Hint }) {
         </div>
       )}
 
-      <BlockView block={block} active={active} />
+      <div style={{ ...box.inner, ...(box.inner.border || box.inner.padding ? { boxSizing: "border-box" as const } : {}) }}>
+        <BlockView block={block} active={active} />
+      </div>
 
       {showHint === "above" && <Indicator kind="h" pos="top" />}
       {showHint === "below" && <Indicator kind="h" pos="bottom" />}
