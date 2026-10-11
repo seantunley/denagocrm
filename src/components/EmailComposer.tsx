@@ -4,7 +4,7 @@ import { useState, useEffect, useActionState, useRef } from "react";
 import AiCheckButton from "@/components/AiCheckButton";
 import ModalPortal from "@/components/ui/modal-portal";
 import Link from "next/link";
-import { checkComposerEmail, previewComposerEmail, sendEmailAction, type SendEmailState } from "@/app/actions/emails";
+import { checkComposerEmail, composerBannerChoices, previewComposerEmail, sendEmailAction, type SendEmailState } from "@/app/actions/emails";
 import { SECURE_LINK_DAYS, SECURE_LINK_DEFAULT_DAYS } from "@/lib/secureLinks";
 import { secureLinkHint } from "@/lib/sendCheck";
 import RichTextEditor from "@/components/RichTextEditor";
@@ -62,6 +62,15 @@ export default function EmailComposer({
   const [open, setOpen] = useState(false);
   const [subject, setSubject] = useState("");
   const [body, setBody] = useState("");
+  // The signature banners this person may send with (Settings → Signature banners), default first.
+  // Fetched when the composer opens; none means no picker at all.
+  const [banners, setBanners] = useState<{ id: string; name: string }[]>([]);
+  useEffect(() => {
+    if (!open) return;
+    let alive = true;
+    composerBannerChoices().then((list) => alive && setBanners(list), () => {});
+    return () => { alive = false; };
+  }, [open]);
   const [attachOpen, setAttachOpen] = useState(false);
   const [attached, setAttached] = useState<string[]>([]);
   const [attachFilter, setAttachFilter] = useState("");
@@ -169,8 +178,13 @@ export default function EmailComposer({
     setPreviewing(true);
     setPreviewError("");
     try {
+      // Who it is going to decides whether the signature banner shows (a customer who opted out of marketing gets none).
       // Files going as secure links are shown where they will sit in the email (the links are only made on Send).
-      const { html } = await previewComposerEmail(body, secure && allFiles.length > 0 ? { files: allFiles, days } : undefined);
+      const { html } = await previewComposerEmail(
+        body,
+        { to: field("to"), contactId, leadId, choice: field("banner") },
+        secure && allFiles.length > 0 ? { files: allFiles, days } : undefined,
+      );
       setPreview({ html, to: field("to"), replyTo: field("replyTo"), sentState: state });
     } catch {
       setPreviewError("Couldn't build the preview — try again.");
@@ -317,6 +331,21 @@ export default function EmailComposer({
               .
             </p>
           </div>
+          {banners.length > 0 && (
+            <div>
+              <label className="label" htmlFor="email-banner">Marketing banner</label>
+              <select id="email-banner" name="banner" className="input" defaultValue="">
+                <option value="">{banners[0].name} (the usual one)</option>
+                {banners.slice(1).map((banner) => (
+                  <option key={banner.id} value={banner.id}>{banner.name}</option>
+                ))}
+                <option value="none">No banner on this email</option>
+              </select>
+              <p className="mt-1 text-xs text-slate-500">
+                A customer who opted out of marketing never gets a banner, whatever is chosen here. Preview shows what goes out.
+              </p>
+            </div>
+          )}
           <div>
             <label className="label">Attachments</label>
             <div className="flex flex-wrap items-center gap-1.5">

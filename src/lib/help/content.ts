@@ -24,6 +24,7 @@ import marketingGovernance from "./data/marketing-governance.json";
 import commsAutomation from "./data/comms-automation.json";
 import channels from "./data/channels.json";
 import admin from "./data/admin.json";
+import { signatureBannerArticles } from "./articles/signature-banners";
 
 // data/marketing.json is the original generated marketing set. Where an article
 // has since been re-authored by hand under the SAME slug, the generated one is
@@ -77,6 +78,7 @@ export const HELP_ARTICLES: HelpArticle[] = [
   ...homeArticles,
   ...dashboardArticles,
   ...tenantOnboardingArticles,
+  ...signatureBannerArticles,
   ...offlineChecklistArticles,
   ...xAndAttentionArticles,
   ...generated(crm),

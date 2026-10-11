@@ -17,6 +17,8 @@ import { loadBillToFleet, quoteBillTo } from "@/lib/quoteBillTo";
 import { validateSigningTemplate } from "@/lib/signing/emailTemplates";
 import { tenantEmailContent } from "@/lib/signing/signingEmail";
 import { deliverQuoteEmail, quotePdfFileName } from "@/lib/quoteEmail";
+import { emailWithBanner, recordBannerSent } from "@/lib/signatureBannerStore";
+import { tenantOrigin } from "@/lib/tenantOrigin";
 
 export type QuoteEmailDraft =
   | { ok: true; to: string; subject: string; body: string; fileName: string }
@@ -124,6 +126,20 @@ export async function sendQuoteEmail(
     const unchanged = standard.subject === subject && (standard.bodyText ?? standard.text).replace(/\r\n?/g, "\n").trim() === body;
     const email = unchanged ? standard : await tenantEmailContent("quote", quote.tenantId, vars, { subject, body });
     const replyTo = await composerReplyToDefault(user.email);
+    // A signature banner the owner ticked "also on quote emails" for (Settings →
+    // Signature banners) — never for a customer who opted out of marketing.
+    const marketed = email.html
+      ? await emailWithBanner({
+          html: email.html,
+          origin: await tenantOrigin(quote.tenantId),
+          tenantId: quote.tenantId,
+          senderId: user.id,
+          place: "quote",
+          to: to.value,
+          contactId: quote.contactId,
+          leadId: quote.leadId,
+        })
+      : { html: email.html, bannerId: null };
 
     const result = await deliverQuoteEmail(
       { to: to.value, fileName },
@@ -147,7 +163,7 @@ export async function sendQuoteEmail(
             to: mail.to,
             subject: email.subject,
             text: email.text,
-            html: email.html,
+            html: marketed.html,
             attachments: mail.attachments,
             replyTo: replyTo || undefined,
             // "Opened" on the quote email's timeline entry (unless switched off).
@@ -187,6 +203,7 @@ export async function sendQuoteEmail(
       },
     );
     if (!result.ok) return result;
+    if (marketed.bannerId && quote.tenantId) await recordBannerSent(quote.tenantId, marketed.bannerId);
 
     revalidatePath("/quotes");
     if (quote.leadId) revalidatePath(`/leads/${quote.leadId}`);

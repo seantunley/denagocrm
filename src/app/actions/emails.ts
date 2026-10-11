@@ -58,6 +58,9 @@ import { tenantOrigin } from "@/lib/tenantOrigin";
 import { withActingStaffScope } from "@/lib/actingScope";
 import { EMAIL_OPEN_TRACKING_KEY } from "@/lib/emailOpenTracking";
 import { MESSAGE_PLACES } from "@/lib/customerMessagePlaces";
+import { bannerClickUrl, bannerHtml, bannerPosition } from "@/lib/signatureBanners";
+import { LEGAL_LINE_KEY, htmlWithLegalLine } from "@/lib/emailLegalLine";
+import { bannerForEmail, bannersForSender, recordBannerSent } from "@/lib/signatureBannerStore";
 
 export type SendEmailState = { ok?: string; error?: string };
 
@@ -68,16 +71,60 @@ async function tenantIdFor(userId: string): Promise<string | null> {
 
 type ComposerUser = Awaited<ReturnType<typeof requireAnyPermission>>;
 
-/** The composer email's HTML: the message plus the sender's signature. One builder, so Preview is what Send sends. */
-async function composerHtml(user: ComposerUser, bodyHtml: string, profile: Awaited<ReturnType<typeof getCompanyProfile>>) {
+/** `choice`: the banner the sender picked in the composer — an id, "none", or blank for the default. */
+type ComposerRecipient = { to?: string; contactId?: string | null; leadId?: string | null; choice?: string | null };
+
+/**
+ * The banners the person writing may put on this email (Settings → Signature
+ * banners decides which are theirs), the default first. Empty = no picker.
+ * They choose among what the owner switched on, or none; nothing else.
+ */
+export async function composerBannerChoices(): Promise<{ id: string; name: string }[]> {
+  const user = await requireAnyPermission(...CUSTOMER_RECORD_WRITE_PERMISSIONS);
+  const tenantId = await tenantIdFor(user.id);
+  if (!tenantId) return [];
+  return (await bannersForSender(tenantId, user.id).catch(() => [])).map(({ id, name }) => ({ id, name }));
+}
+
+/**
+ * The composer email's HTML: the message, the sender's signature, and under it
+ * the signature banner that is live for this sender (Settings → Signature
+ * banners) — unless the recipient opted out of marketing. One builder, so
+ * Preview is what Send sends; only the banner's LINK differs (`preview`), so
+ * that trying it in the preview is not counted as a customer's click.
+ */
+async function composerHtml(
+  user: ComposerUser,
+  bodyHtml: string,
+  profile: Awaited<ReturnType<typeof getCompanyProfile>>,
+  recipient: ComposerRecipient = {},
+  preview = false,
+): Promise<{ html: string; tenantId: string | null; bannerId: string | null }> {
   // The workspace's signature design (Settings → My account → Email signature), same as the settings preview.
   const design = parseSignatureDesign(await getSetting(SIGNATURE_DESIGN_KEY));
-  const company = signatureCompanyFrom(profile, await tenantOrigin(await tenantIdFor(user.id)), design);
-  return buildEmailHtml(bodyHtml, buildSignature(user, company));
+  const tenantId = await tenantIdFor(user.id);
+  const company = signatureCompanyFrom(profile, await tenantOrigin(tenantId), design);
+  // The banner's link is on the same origin as the signature's own images: the workspace's.
+  const origin = company.assetBase;
+  // Never a reason to lose the email: a banner that can't be worked out is an email without one.
+  const banner = tenantId ? await bannerForEmail({ tenantId, senderId: user.id, ...recipient }).catch(() => null) : null;
+  const marketing = banner ? bannerHtml(banner, preview ? banner.linkUrl : bannerClickUrl(origin, banner.token)) : "";
+  // Under the signature, or — the owner's choice per banner — at the top of the email, above the message.
+  const above = Boolean(banner) && bannerPosition(banner!.position) === "above";
+  const built = buildEmailHtml(bodyHtml, buildSignature(user, company) + (above ? "" : marketing));
+  const html = above ? built.replace(/<body[^>]*>/i, (open) => `${open}${marketing}`) : built;
+  // The legal line is added to every email where it leaves (lib/email.ts). A preview never gets
+  // there, so it is added here for the preview alone — or Preview would not be what Send sends.
+  const legalLine = preview ? await getSetting(LEGAL_LINE_KEY).catch(() => null) : null;
+  return { html: legalLine ? htmlWithLegalLine(html, legalLine) : html, tenantId, bannerId: banner?.id ?? null };
 }
 
 /**
  * The composer's Preview (Sean, 2026-10-07: "a preview on the email, to view before it sends"). Sends nothing.
+ *
+ * `recipient`: who it is going to and the banner the sender picked, so the
+ * preview carries the same signature banner the email will (or none, for a
+ * customer who opted out of marketing).
  *
  * `secureFiles`: files that will go as secure links rather than attachments.
  * The preview shows the same block the email will carry, with links that lead
@@ -85,12 +132,19 @@ async function composerHtml(user: ComposerUser, bodyHtml: string, profile: Await
  */
 export async function previewComposerEmail(
   bodyHtml: string,
+  recipient: ComposerRecipient = {},
   secureFiles?: { files: { name: string; sizeBytes: number }[]; days: number },
 ): Promise<{ html: string }> {
   const user = await requireAnyPermission(...CUSTOMER_RECORD_WRITE_PERMISSIONS);
+  // Only records the caller may open decide anything here — the same rule Send applies.
+  const contactId = recipient.contactId && (await canAccessContact(user, recipient.contactId)) ? recipient.contactId : null;
+  const leadId = recipient.leadId && (await canAccessLead(user, recipient.leadId)) ? recipient.leadId : null;
+  const to = String(recipient.to ?? "").slice(0, 1000);
+  const choice = String(recipient.choice ?? "").slice(0, 64);
   const files = (secureFiles?.files ?? []).slice(0, 20).map((file) => ({ name: String(file.name).slice(0, 200), sizeBytes: Number(file.sizeBytes) || 0, url: "#" }));
   const block = files.length ? secureLinksHtml(files, formatDate(secureLinkExpiry(new Date(), secureLinkDays(secureFiles?.days)))) : "";
-  return { html: await composerHtml(user, String(bodyHtml ?? "").trim() + block, await getCompanyProfile()) };
+  const { html } = await composerHtml(user, String(bodyHtml ?? "").trim() + block, await getCompanyProfile(), { to, contactId, leadId, choice }, true);
+  return { html };
 }
 
 /** The addresses already on the customer record this email is filed on — only for records the caller may open. */
@@ -192,6 +246,8 @@ export async function sendEmailAction(
     return { error: "You don't have access to that lead." };
   }
   const profile = await getCompanyProfile();
+  // The sender's pick of banner for this one email (or "none"); only ever among the banners that are theirs.
+  const choice = String(formData.get("banner") ?? "").slice(0, 64);
   // Send the files as secure links instead of attachments (lib/secureLinks.ts):
   // the file stays in our store, the email carries a link that expires and can be recalled.
   const asSecureLinks = formData.get("secureLinks") === "on";
@@ -296,7 +352,8 @@ export async function sendEmailAction(
     messageHtml = bodyHtml + secureLinksHtml(lines, expiresLabel);
     linksText = secureLinksText(lines, expiresLabel);
   }
-  const html = await composerHtml(user, messageHtml, profile);
+  // The message (with its secure-link block, if any), the signature, and the signature banner for this sender and recipient.
+  const { html, tenantId: bannerTenantId, bannerId } = await composerHtml(user, messageHtml, profile, { to, contactId, leadId, choice });
 
   const result = await sendEmail({
     to,
@@ -320,6 +377,7 @@ export async function sendEmailAction(
     if (secure && sendingTenantId) await discardSecureLinks(sendingTenantId, links.map((link) => link.id)).catch(() => {});
     return { error: result.error };
   }
+  if (bannerId && bannerTenantId) await recordBannerSent(bannerTenantId, bannerId);
 
   const filesNote = secure ? `Sent as secure links, until ${expiresLabel}` : "Attachments";
   const sent = await prisma.communication.create({
@@ -336,6 +394,7 @@ export async function sendEmailAction(
       userId: user.id,
       tenantId: await customerRecordTenantId({ contactId, leadId }),
       ...(result.openToken ? { openToken: result.openToken } : {}),
+      ...(result.bannerRef ? { bannerRef: result.bannerRef } : {}),
     },
     select: { id: true },
   });

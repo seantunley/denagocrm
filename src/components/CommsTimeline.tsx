@@ -34,6 +34,8 @@ type Comm = {
   seenAt?: Date | null;
   /** How many times a tracked email was opened. */
   openCount?: number;
+  /** The customer clicked the signature banner in this sent email. */
+  bannerClickedAt?: Date | null;
   user: { name: string };
   /**
    * Which customer this entry belongs to. Only set where the timeline shows an

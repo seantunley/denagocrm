@@ -12,6 +12,7 @@ import {
 } from "@/app/actions/settings";
 import { signatureCompanyFrom, buildSignature, parseSignatureDesign, SIGNATURE_DESIGN_KEY } from "@/lib/signature";
 import SignatureDesignEditor from "@/components/SignatureDesignEditor";
+import SendingDomainCheck from "@/components/settings/SendingDomainCheck";
 import { getSetting } from "@/lib/settings";
 import { getCompanyProfile } from "@/lib/companyProfile";
 import { tenantOrigin } from "@/lib/tenantOrigin";
@@ -336,6 +337,12 @@ export default async function SettingsPage({
                   initial={signatureDesign}
                   canEdit={isAdmin}
                 />
+                {isAdmin && (
+                  <p className="text-xs text-muted-foreground">
+                    Want a promotion under the signature? Add a marketing banner, with dates, on{" "}
+                    <Link href="/settings/signature-banners" className="text-primary hover:underline">Signature banners</Link>.
+                  </p>
+                )}
                 <details className="rounded-lg border border-border">
                   <summary className="px-4 py-2.5 cursor-pointer text-sm text-muted-foreground">
                     Advanced: use your own HTML instead{currentUser.signatureHtml?.trim() ? " (in use on your emails)" : ""}
@@ -690,6 +697,7 @@ export default async function SettingsPage({
                 </div>
               </SaveForm>
               <TestEmailButton />
+              {setting("SMTP_HOST") && <SendingDomainCheck />}
             </Row>
 
             <Row

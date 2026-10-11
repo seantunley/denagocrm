@@ -50,6 +50,8 @@ export type OutboundMessage = {
   occurredAt?: Date;
   /** An email's open-tracking token (lib/emailOpenTracking.ts), kept on its timeline entry. */
   openToken?: string;
+  /** The email's id inside its signature banner link (lib/signatureBanners.ts), kept on its timeline entry. */
+  bannerRef?: string;
 };
 
 export const SECRET_MASK = "••••••";
@@ -83,6 +85,7 @@ export function outboundTimelineEntry(msg: OutboundMessage, record: OutboundReco
     messageId: msg.messageId ?? null,
     occurredAt: msg.occurredAt ?? new Date(),
     ...(msg.openToken ? { openToken: msg.openToken } : {}),
+    ...(msg.bannerRef ? { bannerRef: msg.bannerRef } : {}),
   };
 }
 

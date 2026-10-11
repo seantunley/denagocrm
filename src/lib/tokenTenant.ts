@@ -78,6 +78,19 @@ export async function resolveCampaignRecipientTenant(
   return row ? { tenantId: row.tenantId } : null;
 }
 
+/** Owning tenant of an email signature banner's link token. A tracking id, not a credential: it can only count a click. */
+export async function resolveSignatureBannerTenant(
+  token: string,
+): Promise<{ tenantId: string | null } | null> {
+  // The LINK table, not the banner: a banner's own token moves on when its
+  // destination is changed, and the old links must still resolve.
+  const row = await basePrisma.signatureBannerLink.findUnique({
+    where: { token },
+    select: { tenantId: true },
+  });
+  return row ? { tenantId: row.tenantId } : null;
+}
+
 /**
  * Owning tenant of a secure file link (lib/secureLinks.ts). The link's value is
  * a credential — it opens a customer's document — so, like a signing link, it

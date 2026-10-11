@@ -141,6 +141,7 @@ export default async function LeadTimeline({
     occurredAt: Date;
     seenAt?: Date | null;
     openCount?: number;
+    bannerClickedAt?: Date | null;
     user: { name: string };
   }[];
   activities?: {

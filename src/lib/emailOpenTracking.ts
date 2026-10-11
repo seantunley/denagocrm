@@ -23,10 +23,14 @@ export const openTrackingOn = (setting: string | null | undefined) => setting !=
 export const newOpenToken = () => randomBytes(24).toString("base64url");
 
 /** The timeline badge for an outbound message the customer opened/read, or null. One wording for every timeline. */
-export function seenLabel(c: { type: string; direction: string | null; seenAt?: Date | null; openCount?: number }): string | null {
-  if (c.direction !== "outbound" || !c.seenAt) return null;
+export function seenLabel(c: { type: string; direction: string | null; seenAt?: Date | null; openCount?: number; bannerClickedAt?: Date | null }): string | null {
+  if (c.direction !== "outbound") return null;
+  // A click on the signature banner (lib/signatureBanners.ts) is stronger news than an open, and can
+  // arrive without one: a mail app that blocks images never loads the pixel, but its reader can still click.
+  const clicked = c.bannerClickedAt ? `Clicked your banner ${formatDateTime(c.bannerClickedAt)}` : "";
+  if (!c.seenAt) return clicked ? `👆 ${clicked}` : null;
   const times = c.openCount && c.openCount > 1 ? ` · ${c.openCount}×` : "";
-  return `👁 ${c.type === "email" ? "Opened" : "Read"} ${formatDateTime(c.seenAt)}${times}`;
+  return `👁 ${c.type === "email" ? "Opened" : "Read"} ${formatDateTime(c.seenAt)}${times}${clicked ? ` · 👆 ${clicked}` : ""}`;
 }
 
 export const SEEN_HINT = "The customer's mail app loaded this email. Apple Mail can do this on its own, so treat it as a strong hint, not proof.";

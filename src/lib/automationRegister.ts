@@ -203,6 +203,17 @@ export const AUTOMATIONS: Automation[] = [
     phases: ["campaign-queue"],
   },
   {
+    key: "signature-banners",
+    notJourney: "Not a message of its own: a banner under the signature of an email a person wrote and sent. Each banner has its own switch and starts off.",
+    messagesAt: { label: "each banner", href: "/settings/signature-banners" },
+    label: "Email signature banners",
+    does: "Adds the marketing banner that is switched on and in date to emails your team writes to customers — and to quotes they email, for a banner ticked for that — and notifies whoever wrote the email when the customer clicks it. A customer who opted out of marketing gets no banner. Signing invitations and automatic messages never carry one. Sends nothing by itself.",
+    reaches: "customer",
+    channels: ["email"],
+    when: "On each email a person sends, while a banner is switched on and within its dates",
+    managedAt: { label: "Signature banners", href: "/settings/signature-banners" },
+  },
+  {
     key: "chatbot",
     notJourney: "A reply to a customer who messaged first, while the chatbot is switched on.",
     messagesAt: { label: "the chatbot", href: "/chatbot" },

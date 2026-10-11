@@ -35,6 +35,12 @@ const PUBLIC_PREFIXES = [
   // that matches a sent email, only bumps that email's open count — it returns
   // nothing and reads nothing back. See lib/emailOpenTracking.ts.
   "track/e/",
+  // Email signature banner click. PUBLIC BY NECESSITY: the customer's browser
+  // opens it with no session. For a token that matches a banner it counts the
+  // click and redirects to the address STORED on that banner — never to anything
+  // in the request — and for any other token it redirects home. It reads nothing
+  // back. See lib/signatureBanners.ts.
+  "track/b/",
   // Secure file download. PUBLIC BY NECESSITY: the customer has no account, so
   // the link is the authority — stored only as a hash, checked on every request,
   // dead once recalled or expired, throttled, and POST-only so a mail gateway's

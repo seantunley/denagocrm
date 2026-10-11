@@ -34,6 +34,8 @@ const TOKEN_PATH_PREFIXES = [
   "s",
   "api/track/o",
   "api/track/c",
+  // /api/track/b/:token — SignatureBanner.token (email signature banner click)
+  "api/track/b",
   "api/unsubscribe",
   // /f/:token and /api/f/:token — SecureFileLink (the link IS the authority to download the file)
   "f",

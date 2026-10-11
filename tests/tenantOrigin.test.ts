@@ -358,6 +358,8 @@ test("no outbound URL builder is left on the platform base by accident", () => {
       "defines appBaseUrl and uses it as the fallback when a brand has no origin",
     "src/app/api/track/c/[token]/route.ts":
       "the fail-closed redirect for a token that resolved to nothing — there is no tenant to resolve an origin from, and home on the platform host is where this surface already sends an unparseable link",
+    "src/app/api/track/b/[token]/route.ts":
+      "the same fail-closed redirect for a signature-banner token that resolved to nothing — a real token goes to the address stored on the banner, never to a URL built here",
     "src/app/actions/bot.ts":
       "the Telegram WEBHOOK we ask Telegram to call. Inbound, not outbound — it must be the platform's own address, and a tenant domain here would break the bot if that domain ever moved",
   };
