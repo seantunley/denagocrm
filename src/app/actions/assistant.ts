@@ -36,11 +36,22 @@ import { revalidatePath } from "next/cache";
  * trusted beyond what those actions re-check. A draft message is never sent
  * from here: the person copies it into the conversation and sends it there.
  */
-export async function runAssistantAction(card: ActionCard): Promise<{ ok: boolean; error?: string; success?: string; href?: string }> {
+/**
+ * A refusal made BEFORE anything that writes was called: the card was out of
+ * date, the lead is gone, the schedule was invalid. `unchanged` is the proof a
+ * caller needs before it may offer the same task again (confirming on WhatsApp
+ * does). It is NEVER set on an error that came back from the action a card hands
+ * to: that action may have written part of its work before failing — a note
+ * saved and its pin failed is the case that showed it — so such an error says
+ * only "not completed", not "nothing happened".
+ */
+const untouched = (error: string) => ({ ok: false as const, error, unchanged: true as const });
+
+export async function runAssistantAction(card: ActionCard): Promise<{ ok: boolean; error?: string; success?: string; href?: string; unchanged?: boolean }> {
   return withActingStaffScope(async () => {
     const user = await requireAnyPermission(...ASSISTANT_PERMISSIONS);
     if (!(await isModuleEnabled("automation"))) {
-      return { ok: false, error: "Ask the CRM is part of the Automation & AI module, which is off for this workspace." };
+      return untouched("Ask the CRM is part of the Automation & AI module, which is off for this workspace.");
     }
     // The action it hands to writes its own audit entry; this one records that
     // the change came from the assistant's proposal, on the lead's timeline.
@@ -55,9 +66,9 @@ export async function runAssistantAction(card: ActionCard): Promise<{ ok: boolea
         const parsed = scheduleInput.safeParse({
           question: card.question, cadence: card.cadence, weekday: card.weekday, timeOfDay: card.timeOfDay, onDate: card.onDate,
         });
-        if (!parsed.success) return { ok: false, error: "That schedule isn't valid — ask again." };
+        if (!parsed.success) return untouched("That schedule isn't valid — ask again.");
         const nextRunAt = nextRun(parsed.data, new Date());
-        if (!nextRunAt) return { ok: false, error: "That time has already passed — ask again with a new one." };
+        if (!nextRunAt) return untouched("That time has already passed — ask again with a new one.");
         const tenantId = ownedWriteTenantId();
         const saved = await withScheduleSlot(user.id, (tx) =>
           tx.assistantSchedule.create({
@@ -84,7 +95,7 @@ export async function runAssistantAction(card: ActionCard): Promise<{ ok: boolea
       }
       case "follow_up": {
         const lead = await prisma.lead.findUnique({ where: { id: card.leadId }, select: { contactId: true } });
-        if (!lead) return { ok: false, error: "That lead is no longer there." };
+        if (!lead) return untouched("That lead is no longer there.");
         const result = await scheduleFollowUp({
           leadId: card.leadId,
           contactId: lead.contactId,
@@ -129,14 +140,14 @@ export async function runAssistantAction(card: ActionCard): Promise<{ ok: boolea
         return { ok: true, success: card.pin === true ? "Note added and pinned" : "Note added", href: `/contacts/${card.contactId}` };
       }
       case "assign": {
-        if (!(await stillAsProposed(card))) return { ok: false, error: STALE_CARD };
+        if (!(await stillAsProposed(card))) return untouched(STALE_CARD);
         const result = await assignLead(card.leadId, card.userId);
         if (!result.ok) return { ok: false, error: result.error };
         await confirmed(`give the lead to ${result.assignee.name}`, card.leadId);
         return { ok: true, success: `Given to ${result.assignee.name}` };
       }
       case "stage": {
-        if (!(await stillAsProposed(card))) return { ok: false, error: STALE_CARD };
+        if (!(await stillAsProposed(card))) return untouched(STALE_CARD);
         const result = await moveLead(card.leadId, card.stageId);
         if (!result.ok) return { ok: false, error: result.error ?? "That move isn't allowed yet." };
         await confirmed("move the lead to another stage", card.leadId);
@@ -144,7 +155,7 @@ export async function runAssistantAction(card: ActionCard): Promise<{ ok: boolea
       }
       case "meeting": {
         const lead = await prisma.lead.findUnique({ where: { id: card.leadId }, select: { contactId: true } });
-        if (!lead) return { ok: false, error: "That lead is no longer there." };
+        if (!lead) return untouched("That lead is no longer there.");
         const form = new FormData();
         form.set("type", "meeting");
         form.set("summary", card.summary);
@@ -172,21 +183,21 @@ export async function runAssistantAction(card: ActionCard): Promise<{ ok: boolea
         return { ok: true, success: result.success ?? "Test drive booked" };
       }
       case "reschedule": {
-        if (!(await stillAsProposed(card))) return { ok: false, error: STALE_CARD };
+        if (!(await stillAsProposed(card))) return untouched(STALE_CARD);
         const result = await rescheduleActivity(card.activityId, card.when);
         if (!result.ok) return { ok: false, error: result.error ?? "Couldn't move it." };
         if (card.leadId) await confirmed("reschedule an activity", card.leadId);
         return { ok: true, success: "Moved" };
       }
       case "cancel_activity": {
-        if (!(await stillAsProposed(card))) return { ok: false, error: STALE_CARD };
+        if (!(await stillAsProposed(card))) return untouched(STALE_CARD);
         const result = await cancelActivity(card.activityId, "/assistant");
         if (result.error) return { ok: false, error: result.error };
         if (card.leadId) await confirmed("cancel an activity", card.leadId);
         return { ok: true, success: "Cancelled" };
       }
       case "lost": {
-        if (!(await stillAsProposed(card))) return { ok: false, error: STALE_CARD };
+        if (!(await stillAsProposed(card))) return untouched(STALE_CARD);
         const form = new FormData();
         form.set("lostReason", card.reason);
         const result = await markLost(card.leadId, form);

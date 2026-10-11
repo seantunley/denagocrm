@@ -150,7 +150,7 @@ test("each phase is timed — numbers only — and the median is what the owner 
 test("a card about a record that has moved on is refused, not applied", () => {
   const action = code("src/app/actions/assistant.ts");
   for (const kind of ["assign", "stage", "reschedule", "cancel_activity", "lost"]) {
-    assert.match(action, new RegExp(`case "${kind}": \\{\\s*if \\(!\\(await stillAsProposed\\(card\\)\\)\\) return \\{ ok: false, error: STALE_CARD \\};`), kind);
+    assert.match(action, new RegExp(`case "${kind}": \\{\\s*if \\(!\\(await stillAsProposed\\(card\\)\\)\\) return untouched\\(STALE_CARD\\);`), kind);
   }
   const check = action.slice(action.indexOf("async function stillAsProposed"));
   assert.match(check, /if \(card\.kind === "stage"\) return lead\.stageId === card\.fromStageId;/);

@@ -137,9 +137,11 @@ async function whyNotClaimable(tenantId: string, userId: string, pendingId: stri
  *
  * AT MOST ONCE comes first. So what happens after a claim depends on whether we
  * KNOW nothing was changed:
- *  - the action answered "not done" (refused, out of date, invalid) — it changed
- *    nothing, so the claim is RELEASED and Confirm can be tapped again;
- *  - the action threw — it may have got part-way, so the task is marked FAILED
+ *  - it was turned away BEFORE anything that writes was called (out of date, the
+ *    lead gone, an invalid schedule) and says so with `unchanged` — proof that
+ *    nothing changed, so the claim is RELEASED and Confirm can be tapped again;
+ *  - it came back with any other error, or threw — it may have got part-way (a
+ *    note saved, its pin failed), so the task is marked FAILED
  *    and cannot be retried from a phone. Retrying an unknown is how a note gets
  *    written twice.
  */
@@ -173,18 +175,26 @@ export async function confirmFromWhatsApp(tenantId: string, user: PermissionUser
   try {
     result = await runAsLinkedStaff(user.id, () => runAssistantAction(card));
   } catch (error) {
-    if (isRefusal(error)) {
-      // Refused by the CRM's own guard before anything ran.
-      await settle({ confirmedAt: null });
-      return say(waId, "You don't have permission to do that. Nothing was changed.");
-    }
+    // Anything thrown — a guard's refusal included — ends this task. A refusal
+    // usually comes before any write, but from here it cannot be told apart from
+    // one raised part-way through, and trying again would not change the answer.
     await settle({ failedAt: new Date() });
+    if (isRefusal(error)) return say(waId, "You don't have permission to do that.");
     await logError("assistant-whatsapp", "confirmed action threw", error instanceof Error ? error.name : "unknown").catch(() => {});
     return say(waId, "That didn't go through, and I can't tell how far it got. Check the record in the CRM, then ask me again if it's still needed.");
   }
   if (!result.ok) {
-    await settle({ confirmedAt: null });
-    return say(waId, `Not done: ${result.error ?? "it couldn't be completed."}\n\nNothing was changed. You can tap Confirm again until it expires.`);
+    // RETRY ONLY ON PROOF. `unchanged` is set by runAssistantAction solely on a
+    // refusal made before it called anything that writes. An error that came
+    // back FROM the action is not that proof: adding a pinned note saves the
+    // note, then pins it, and a failed pin returns an error with the note
+    // already saved. Releasing on any error let a second tap write it twice.
+    if (result.unchanged === true) {
+      await settle({ confirmedAt: null });
+      return say(waId, `Not done: ${result.error ?? "it couldn't be completed."}\n\nNothing was changed. You can tap Confirm again until it expires.`);
+    }
+    await settle({ failedAt: new Date() });
+    return say(waId, `That didn't complete: ${result.error ?? "it couldn't be completed."}\n\nPart of it may have been saved, so I won't try it again from here. Check the record in the CRM, then ask me again if it's still needed.`);
   }
   await settle({ completedAt: new Date() });
 

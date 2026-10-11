@@ -112,7 +112,7 @@ const state = {
   ran: [] as { asUserId: string; card: Record<string, unknown> }[],
   audits: [] as { action: string; summary: string; leadId?: string }[],
   errors: [] as string[],
-  outcome: { ok: true, success: "Note added" } as { ok: boolean; success?: string; error?: string } | "refuse" | "throw",
+  outcome: { ok: true, success: "Note added" } as { ok: boolean; success?: string; error?: string; unchanged?: boolean } | "refuse" | "throw",
   failTextContaining: "",
   seq: 0,
 };
@@ -276,26 +276,34 @@ test("nothing runs: switch off, expired, someone else's, another workspace's, an
 });
 
 test("after a claim: 'nothing changed' can be tried again; 'don't know how far it got' cannot — and neither is ever reported as done", async () => {
-  // The action answered "not done": it changed nothing, so the claim is released and Confirm works again.
-  state.outcome = { ok: false, error: "Somebody else's diary is busy then." };
+  // PROVEN unchanged — turned away before anything that writes was called: released, and Confirm works again.
+  state.outcome = { ok: false, error: "This changed since DAX suggested it — ask again to see where it stands now.", unchanged: true };
   const retry = pendingRow();
   await confirmFromWhatsApp("t1", me, PHONE, retry.id);
-  assert.match(state.sent.at(-1)?.text ?? "", /^Not done: Somebody else's diary is busy then\.\n\nNothing was changed\. You can tap Confirm again until it expires\./);
+  assert.match(state.sent.at(-1)?.text ?? "", /^Not done: This changed since DAX suggested it[\s\S]*\n\nNothing was changed\. You can tap Confirm again until it expires\./);
   assert.equal(retry.confirmedAt, null, "released");
   assert.equal(retry.completedAt, null);
   assert.equal(retry.failedAt, null);
-  state.outcome = { ok: true, success: "Meeting booked" };
+  state.outcome = { ok: true, success: "Lead moved" };
   await confirmFromWhatsApp("t1", me, PHONE, retry.id);
-  assert.equal(state.sent.at(-1)?.text, "✅ Meeting booked", "the same button, tapped again, now does it");
+  assert.equal(state.sent.at(-1)?.text, "✅ Lead moved", "the same button, tapped again, now does it");
   assert.notEqual(retry.completedAt, null, "…and is recorded as done");
   assert.equal(state.ran.length, 2, "tried twice, done once");
 
-  // Refused by the CRM's own guard before anything ran: released too, and said plainly.
+  // An error that came back FROM the action, with no proof: NOT released. The words do not claim nothing changed.
+  state.outcome = { ok: false, error: "Somebody else's diary is busy then." };
+  const unproven = pendingRow();
+  await confirmFromWhatsApp("t1", me, PHONE, unproven.id);
+  assert.match(state.sent.at(-1)?.text ?? "", /^That didn't complete: Somebody else's diary is busy then\.\n\nPart of it may have been saved, so I won't try it again from here\./);
+  assert.ok(unproven.failedAt instanceof Date, "failed, not released");
+  assert.doesNotMatch(state.sent.at(-1)?.text ?? "", /Nothing was changed|tap Confirm again/);
+
+  // Refused by a guard: it ends there too — from here a refusal before a write and one part-way look the same.
   state.outcome = "refuse";
   const refused = pendingRow();
   await confirmFromWhatsApp("t1", me, PHONE, refused.id);
-  assert.equal(state.sent.at(-1)?.text, "You don't have permission to do that. Nothing was changed.");
-  assert.equal(refused.confirmedAt, null);
+  assert.equal(state.sent.at(-1)?.text, "You don't have permission to do that.");
+  assert.ok(refused.failedAt instanceof Date);
 
   // It THREW: it may have got part-way. Marked failed; a second tap does not run it again.
   state.outcome = "throw";
@@ -312,6 +320,52 @@ test("after a claim: 'nothing changed' can be tried again; 'don't know how far i
   assert.match(state.sent.at(-1)?.text ?? "", /failed when it was tried/);
 
   assert.equal(state.audits.filter((a) => a.action === "assistant.whatsapp_confirmed").length, 1, "one confirmation recorded: the one that happened");
+});
+
+test("A PINNED NOTE WHOSE PIN FAILS IS NOT WRITTEN TWICE: the note was saved, so the same Confirm cannot run again", async () => {
+  // What addCommunication does when the pin fails after the note is created: the note is in
+  // the database, and an error comes back. Simulated here at that boundary — the real thing
+  // is run against a database, with the pin made to fail, in the end-to-end script.
+  const notes: string[] = [];
+  const pinned = { ...NOTE, title: "Add a pinned note to Anna's lead", pin: true };
+  const row = pendingRow({ card: pinned });
+  state.outcome = { ok: false, error: "Couldn't save that — try again." };
+  const writeThenFail = state.ran;
+  await confirmFromWhatsApp("t1", me, PHONE, row.id);
+  for (const run of writeThenFail) if (run.card === pinned) notes.push(String(run.card.text)); // the write that DID happen
+  assert.deepEqual(notes, ["Wants white."]);
+  assert.ok(row.failedAt instanceof Date, "ended: how far it got is not known to be 'nowhere'");
+  assert.equal(row.confirmedAt instanceof Date, true, "and NOT released");
+  assert.match(state.sent.at(-1)?.text ?? "", /Part of it may have been saved, so I won't try it again from here\. Check the record in the CRM/);
+
+  // The same button again — and again, and twice at once.
+  state.outcome = { ok: true, success: "Note added and pinned" };
+  await confirmFromWhatsApp("t1", me, PHONE, row.id);
+  await Promise.all([confirmFromWhatsApp("t1", me, PHONE, row.id), confirmFromWhatsApp("t1", me, PHONE, row.id)]);
+  assert.equal(state.ran.filter((run) => run.card === pinned).length, 1, "the action ran ONCE: no second note");
+  assert.ok(state.sent.slice(-3).every((s) => /failed when it was tried/.test(s.text)));
+  assert.equal(state.audits.length, 0, "and nothing is recorded as confirmed");
+
+  // The proof is given only where it can be: `unchanged` is set on returns made BEFORE a write-capable call…
+  const action = code("src/app/actions/assistant.ts");
+  const run = action.slice(action.indexOf("export async function runAssistantAction"), action.indexOf("export async function sendAssistantDraft"));
+  assert.match(action, /const untouched = \(error: string\) => \(\{ ok: false as const, error, unchanged: true as const \}\);/);
+  assert.equal((run.match(/return untouched\(/g) ?? []).length, 10);
+  // …and never on an error handed back by the action a card delegates to.
+  for (const delegated of run.match(/if \((?:!result\.ok|result\??\.error|!saved(?:\.ok)?)\) (?:\{\s*)?return [^\n]*/g) ?? []) {
+    assert.doesNotMatch(delegated, /untouched|unchanged/, delegated);
+  }
+  assert.ok((run.match(/if \((?:!result\.ok|result\??\.error)\) return \{ ok: false/g) ?? []).length >= 10, "every delegate's error is returned unproven");
+  // Every `untouched` return precedes the call that could write, within its own case.
+  for (const block of run.split(/\n      case "/).slice(1)) {
+    const firstWrite = block.search(/await (scheduleFollowUp|addCommunication|assignLead|moveLead|scheduleActivity|createTestDriveBooking|rescheduleActivity|cancelActivity|markLost|createQuoteFromLead|createWatchForUser|withScheduleSlot)\(/);
+    const lastUntouched = block.lastIndexOf("return untouched(");
+    if (lastUntouched > -1 && firstWrite > -1) assert.ok(lastUntouched < firstWrite, block.slice(0, 30));
+  }
+  // And the caller releases on that proof alone.
+  const lib = code("src/lib/assistantWhatsAppConfirm.ts");
+  assert.match(lib, /if \(result\.unchanged === true\) \{\s*await settle\(\{ confirmedAt: null \}\);/);
+  assert.equal((lib.match(/settle\(\{ confirmedAt: null \}\)/g) ?? []).length, 1, "one way to release a claim, and it needs the proof");
 });
 
 test("old pending tasks are deleted a day after their window closes — done, failed or never tapped — and newer ones are kept", async () => {
