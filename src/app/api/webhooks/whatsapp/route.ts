@@ -132,7 +132,7 @@ export async function POST(req: NextRequest) {
 
               if (message.type === "text") {
                 const text = message.text?.body ?? "";
-                if (await handleStaffWhatsApp(from, { text })) return;
+                if (await handleStaffWhatsApp(from, { text }, message.id)) return;
                 if (await held("text", text, text)) return;
                 await link(await recordInboundWhatsApp(from, profileName, text, String(message.id ?? "")));
                 await runWhatsAppBot(from, { text }, { entryContext });
@@ -143,13 +143,19 @@ export async function POST(req: NextRequest) {
                 const title: string = btn?.title ?? list?.title ?? "";
                 if (!id) return;
                 // A tapped quick reply: its title is the staff member's next question.
-                if (await handleStaffWhatsApp(from, { text: title })) return;
+                if (await handleStaffWhatsApp(from, { text: title }, message.id)) return;
                 if (await held("choice", title, `👆 ${title}`, true)) return;
                 await link(await recordInboundWhatsApp(from, profileName, `👆 ${title}`, String(message.id ?? "")));
                 await runWhatsAppBot(from, { text: title, choiceId: id }, { entryContext });
               } else if (message.type === "image" || message.type === "document" || message.type === "video") {
                 const media = message.image ?? message.document ?? message.video;
                 const caption: string = media?.caption ?? "";
+                // A staff member's photo is a question for the assistant; their file or
+                // video gets a "can't read that" from it. Either way it must NOT carry on
+                // below: recording it would create a customer contact on the staff
+                // member's own number, and a number on a customer record is unlinked
+                // from the assistant on its next message.
+                if (await handleStaffWhatsApp(from, { mediaId: String(media?.id ?? ""), mediaKind: message.type, caption }, message.id)) return;
                 // Before the download: a quarantined sender's file is never fetched or stored.
                 if (await held("media", caption, `📎 ${caption || "[file]"}`)) return;
                 let fileUrl: string | undefined;
@@ -178,7 +184,7 @@ export async function POST(req: NextRequest) {
                 if (!mediaId) return;
                 // Handed the media ID, not the audio: the voice note is fetched and
                 // transcribed there only once the number is known to be staff.
-                if (await handleStaffWhatsApp(from, { voiceMediaId: mediaId })) return;
+                if (await handleStaffWhatsApp(from, { voiceMediaId: mediaId }, message.id)) return;
                 // Before the download and the (paid) transcription. A voice note has
                 // no readable text yet, so only a sender block can hold it here —
                 // unheard audio is never judged to be spam.

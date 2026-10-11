@@ -1,6 +1,7 @@
 import { Prisma } from "@prisma/client";
 import { basePrisma, prisma } from "./db";
 import { logAudit } from "./audit";
+import { logError } from "./errorLog";
 import { activeTenantPredicate } from "./tenantPredicate";
 import { PHONE_TAIL_SQL, phoneTail } from "./phoneMatch";
 import {
@@ -311,6 +312,36 @@ async function postWhatsAppMessage(creds: WhatsAppCredentials, message: Record<s
   const json = await res.json().catch(() => null);
   await noteWhatsAppOutcome(creds, res, res.ok ? null : json);
   return whatsappSendResult(res, json);
+}
+
+/** How long a typing indicator may hold things up. It is decoration: slow means skipped. */
+const TYPING_TIMEOUT_MS = 4_000;
+
+/**
+ * "typing…" in the sender's chat, shown against THEIR message (Meta needs its
+ * id) until we reply or 25 seconds pass, whichever is first. Meta also marks
+ * that message as read — the two cannot be separated.
+ *
+ * Best-effort by contract: it never throws and never rejects, so a caller can
+ * start it and carry on. A failure is logged as a status only and does NOT go
+ * through noteWhatsAppOutcome — an indicator Meta declines must not flag the
+ * whole connection as "Reconnect needed".
+ */
+export async function showWhatsAppTyping(messageId: string | null | undefined): Promise<void> {
+  if (!messageId) return;
+  try {
+    const creds = await waCredentials();
+    if (!creds) return;
+    const res = await fetch(`${GRAPH}/${creds.phoneNumberId}/messages`, {
+      signal: AbortSignal.timeout(TYPING_TIMEOUT_MS),
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${creds.token}` },
+      body: JSON.stringify({ messaging_product: "whatsapp", status: "read", message_id: messageId, typing_indicator: { type: "text" } }),
+    });
+    if (!res.ok) await logError("whatsapp-typing", "typing indicator declined", `HTTP ${res.status}`).catch(() => {});
+  } catch (error) {
+    await logError("whatsapp-typing", "typing indicator failed", error instanceof Error ? error.name : "unknown").catch(() => {});
+  }
 }
 
 /** Sends an image by URL (e.g. a brochure) on WhatsApp. */

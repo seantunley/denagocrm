@@ -127,6 +127,7 @@ loaderKey._load = function (this: unknown, request: string, parent, isMain) {
         waDigits: (p: string) => p.replace(/\D/g, ""),
         matchByPhone: async () => ({ contactId: null, leadId: null, ambiguous: false }),
         fetchWhatsAppMedia: async () => ({ buffer: Buffer.from("x"), contentType: "audio/ogg" }),
+        showWhatsAppTyping: async () => {},
         sendWhatsAppText: async (to: string, body: string) => { state.sent.push({ kind: "text", to, body }); return { ok: true }; },
         sendWhatsAppButtons: async (to: string, body: string) => { state.sent.push({ kind: "buttons", to, body }); return { ok: true }; },
         uploadWhatsAppMedia: async (_b: Buffer, contentType: string, filename: string) =>
