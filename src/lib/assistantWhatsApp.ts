@@ -27,6 +27,7 @@ import {
   parseLinkCode,
   planWhatsAppReply,
   whatsappSwitchOn,
+  type LinkRefusal,
   type WhatsAppReplyPlan,
 } from "./assistantWhatsAppRules";
 
@@ -304,7 +305,7 @@ async function verifyLinkCode(tenantId: string, waId: string, code: string): Pro
   if (match.sessionVersion === null || security.sessionVersion !== match.sessionVersion) {
     await basePrisma.assistantPhoneLink.updateMany({
       where: { id: match.id, tenantId, codeHash: match.codeHash },
-      data: { codeHash: null, codeExpiresAt: null },
+      data: { codeHash: null, codeExpiresAt: null, refusedReason: "signed_out" satisfies LinkRefusal },
     });
     await logAudit({
       action: "assistant.whatsapp_link_refused",
@@ -327,7 +328,7 @@ async function verifyLinkCode(tenantId: string, waId: string, code: string): Pro
   if (customer.contactId || customer.leadId || customer.ambiguous) {
     await basePrisma.assistantPhoneLink.updateMany({
       where: { id: match.id, tenantId, codeHash: match.codeHash },
-      data: { codeHash: null, codeExpiresAt: null },
+      data: { codeHash: null, codeExpiresAt: null, refusedReason: "customer_number" satisfies LinkRefusal },
     });
     await logAudit({
       action: "assistant.whatsapp_link_refused",
@@ -352,7 +353,7 @@ async function verifyLinkCode(tenantId: string, waId: string, code: string): Pro
     // used in the meantime links nothing.
     const done = await tx.assistantPhoneLink.updateMany({
       where: { id: match.id, tenantId, codeHash: match.codeHash, codeExpiresAt: { gt: now } },
-      data: { waId, verifiedAt: now, codeHash: null, codeExpiresAt: null, sessionVersion: security.sessionVersion },
+      data: { waId, verifiedAt: now, codeHash: null, codeExpiresAt: null, refusedReason: null, sessionVersion: security.sessionVersion },
     });
     return done.count === 1;
   });

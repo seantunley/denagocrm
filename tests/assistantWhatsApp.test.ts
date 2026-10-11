@@ -12,6 +12,7 @@ import {
   formatLinkCode,
   linkCodeHashInput,
   linkCodeText,
+  linkRefusalText,
   maskWaId,
   parseLinkCode,
   planWhatsAppReply,
@@ -41,6 +42,7 @@ type Link = {
   id: string; tenantId: string; userId: string;
   waId: string | null; codeHash: string | null; codeExpiresAt: Date | null; verifiedAt: Date | null;
   sessionVersion?: number | null;
+  refusedReason?: string | null;
 };
 type Where = Record<string, unknown>;
 
@@ -287,6 +289,11 @@ test("a matching code links exactly the SENDING number, to that person, and is u
   assert.ok(theirs.codeHash);
   assert.match(state.sent[0].text, /^✅ Linked — I'm /);
   assert.equal(state.sent[0].to, STAFF);
+  assert.equal(mine.refusedReason, null, "a link clears any earlier refusal");
+  assert.equal(linkRefusalText("something else"), null, "an unknown reason shows nothing");
+  // A new code clears it too, and the page shows it: the reason must not outlive the attempt it describes.
+  assert.match(code("src/app/actions/assistantWhatsApp.ts"), /update: \{ codeHash, codeExpiresAt, waId: null, verifiedAt: null, refusedReason: null,/);
+  assert.match(code("src/app/(app)/assistant/page.tsx"), /refused: linkRefusalText\(link\?\.refusedReason\)/);
   // Used: the same code again links nothing new.
   assert.equal(await handleStaffWhatsApp(CUSTOMER, { text: "DAX 123456" }), false);
   assert.equal(mine.waId, STAFF);
@@ -305,6 +312,9 @@ test("a customer's number is never linked, even with a valid code — and the co
     assert.equal(row.verifiedAt, null);
     assert.equal(row.codeHash, null, `${kind}: the code can't be retried`);
     assert.equal(state.sent.length, 0, "no DAX reply to a customer's phone");
+    // The person who asked is told on the Ask page instead — the phone never is.
+    assert.equal(row.refusedReason, "customer_number", `${kind}: the reason is kept for the page`);
+    assert.match(linkRefusalText(row.refusedReason) ?? "", /saved on a customer or an open lead/);
     assert.match(state.audits.at(-1) ?? "", /Refused to link WhatsApp •••000: that number is on a customer record/);
     // …and it is still not staff afterwards.
     assert.equal(await handleStaffWhatsApp(CUSTOMER, { text: "what's in the pipeline?" }), false);
@@ -651,7 +661,7 @@ test("link and unlink touch only the caller's own row, behind the gate and the s
   assert.match(start, /where: \{ tenantId_userId: \{ tenantId, userId: user\.id \} \}/);
   // Only the hash is stored; re-linking clears the old number.
   assert.match(start, /create: \{ tenantId, userId: user\.id, codeHash, codeExpiresAt, sessionVersion \}/);
-  assert.match(start, /update: \{ codeHash, codeExpiresAt, waId: null, verifiedAt: null, sessionVersion \}/);
+  assert.match(start, /update: \{ codeHash, codeExpiresAt, waId: null, verifiedAt: null, refusedReason: null, sessionVersion \}/);
   assert.match(start, /const sessionVersion = await callerSessionVersion\(\);/, "the code belongs to the sign-in that asked for it");
   assert.doesNotMatch(start, /code: code|codeHash: code\b/);
   assert.match(start, /logAudit\(/);

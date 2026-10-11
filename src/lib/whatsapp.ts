@@ -241,6 +241,7 @@ export async function matchByPhone(digits: string): Promise<PhoneMatch> {
       SELECT "id", "contactId" FROM "Lead"
       WHERE ${leadTail} = ${tail}
         AND "status" = 'open'
+        AND "deletedAt" IS NULL
         AND (${unscoped} OR "tenantId" IS NOT DISTINCT FROM ${scopedTenantId})
       ORDER BY "createdAt" ASC, "id" ASC
       LIMIT ${CANDIDATE_LIMIT}`,
