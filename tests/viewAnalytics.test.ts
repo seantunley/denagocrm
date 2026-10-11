@@ -59,7 +59,7 @@ test("the table is a workspace's own: required workspace, row-level security ena
   // Additive only, and nothing personal: this is an indication, not evidence.
   assert.doesNotMatch(sql, /DROP TABLE|DROP COLUMN|"ip"|"userAgent"/i);
   const model = /model SignatureView \{([\s\S]*?)\n\}/.exec(readFileSync("prisma/schema.prisma", "utf8"))?.[1] ?? "";
-  assert.match(model, /tenantId\s+String\n/, "the workspace is required");
+  assert.match(model, /tenantId\s+String\s*\r?\n/, "the workspace is required");
   assert.doesNotMatch(model, /\bip\b|userAgent|sections/);
 });
 
