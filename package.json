@@ -57,6 +57,7 @@
     "test:signing-lifecycle": "tsx --tsconfig tsconfig.scripts.json scripts/test-signing-lifecycle.ts",
     "test:staff-reply": "tsx --tsconfig tsconfig.scripts.json scripts/test-staff-reply-durability.ts",
     "test:meta-echo": "tsx --tsconfig tsconfig.scripts.json scripts/test-meta-echo-dedupe.ts",
+    "test:inbound-screening": "tsx --tsconfig tsconfig.scripts.json scripts/test-inbound-screening.ts",
     "test:in-person-signing": "tsx --tsconfig tsconfig.scripts.json scripts/test-in-person-signing.ts",
     "test:tenant-isolation": "tsx --tsconfig tsconfig.harness.json scripts/test-tenant-isolation.ts",
     "harness:provision": "tsx --tsconfig tsconfig.harness.json scripts/harness/provision-only.ts",
