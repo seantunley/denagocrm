@@ -76,6 +76,8 @@ export type SparkStat = {
   href: string;
   spark: number[]; // daily series
   tone?: "default" | "warn";
+  /** A short line under the figure saying what it is measured against. */
+  context?: string;
 };
 
 const zarCompact = (n: number) =>
@@ -173,6 +175,8 @@ export function StatSparkCard({ stat, icon }: { stat: SparkStat; icon: React.Rea
             </Tooltip>
           )}
         </div>
+        {/* What the figure is measured against, in words (the home screen gives every number one). */}
+        {stat.context && <p className="mt-1 truncate text-[11px] text-muted-foreground">{stat.context}</p>}
       </div>
     </Link>
   );

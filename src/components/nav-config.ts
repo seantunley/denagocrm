@@ -1,5 +1,6 @@
 import {
   LayoutDashboard,
+  House,
   ChartColumnIncreasing,
   Target,
   MessageSquare,
@@ -59,7 +60,12 @@ export function buildNav(
   const permissions = new Set(permissionList);
   const can = (...keys: string[]) => isAdmin || keys.some((key) => permissions.has(key));
 
-  const topLinks: NavLink[] = [{ href: "/", label: "Dashboard", icon: LayoutDashboard }];
+  // Home is the "what to do next" screen. The dashboards — charts and cards people arranged — have their own entry,
+  // so moving them off the home screen did not move them out of sight.
+  const topLinks: NavLink[] = [
+    { href: "/", label: "Home", icon: House, keywords: ["start", "do next", "overview"] },
+    { href: "/d/home", label: "Dashboards", icon: LayoutDashboard, keywords: ["dashboard", "charts", "cards", "widgets"] },
+  ];
   if (can("leads.view_all", "leads.view_owned")) topLinks.push({ href: "/today", label: "Today", icon: Sun, keywords: ["lead score", "who to call", "next"] });
   if (can("reports.view", "reports.view_all", "reports.view_team")) {
     topLinks.push({ href: "/reports", label: "Reports", icon: ChartColumnIncreasing });
