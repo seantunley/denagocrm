@@ -1,5 +1,6 @@
 import "server-only";
 import { pdfImageHostAllowed } from "./pdfImageHosts";
+import { pdfPaperFor } from "./pdfPaper";
 import { verifiedTenantHosts } from "./tenantOrigin";
 import { prisma } from "./db";
 import { contactName, formatDate, formatZAR } from "./format";
@@ -178,7 +179,8 @@ export async function htmlToPdf(html: string, opts?: HtmlPdfOptions): Promise<Bu
     await page.evaluate(() => document.fonts.ready);
     const useFrame = Boolean(opts?.headerTemplate || opts?.footerTemplate);
     const pdf = await page.pdf({
-      format: "A4",
+      // The paper the document itself asks for (pdfPaper.ts): a Letter document used to be printed on A4.
+      format: pdfPaperFor(html),
       printBackground: true,
       ...(useFrame
         ? {

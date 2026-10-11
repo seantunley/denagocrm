@@ -122,6 +122,12 @@ export async function embedDocImages(doc: DocumentModel, tenantId?: string | nul
     if (node.type === "image" && typeof node.src === "string" && isStoredFileRef(node.src.trim())) {
       return { ...node, src: (await embedStoredImage(node.src.trim(), owner)) ?? "" };
     }
+    // A gallery's pictures are stored uploads too — embedded by the same owner-checked reader.
+    if (node.type === "gallery" && Array.isArray(node.images)) {
+      const images = await Promise.all((node.images as { src?: unknown }[]).map(async (image) =>
+        typeof image?.src === "string" && isStoredFileRef(image.src.trim()) ? { ...image, src: (await embedStoredImage(image.src.trim(), owner)) ?? "" } : image));
+      return { ...node, images };
+    }
     const entries = await Promise.all(Object.entries(node).map(async ([k, v]) => [k, await walk(v)] as const));
     return Object.fromEntries(entries);
   };

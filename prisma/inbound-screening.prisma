@@ -1,0 +1,105 @@
+/// One row per customer message the screening stage looked at: the durable
+/// receipt of the message AND the decision about it.
+///
+/// Receipt and admission are separate facts. A quarantined message lives ONLY
+/// here — no Contact, Communication, Conversation, lead, push or bot run exists
+/// for it — and `payload` holds exactly what the normal path needs to admit it
+/// later, once. An admitted message has its usual rows and this one beside it.
+///
+/// Unique on the provider's message id, so a webhook redelivery reuses the
+/// verdict instead of classifying (and paying) again.
+model InboundScreening {
+  id         String @id @default(cuid())
+  tenantId   String
+  channel    String // whatsapp | messenger | instagram
+  senderId   String // stable channel identity: WhatsApp digits, Messenger PSID, Instagram id — never a display name
+  providerId String // the provider's message id
+  eventId    String? // BotInboundEvent row that carried it; the transcript's dedupe identity on restore
+
+  senderName String?
+  kind       String  @default("text") // text | choice | media | voice
+  body       String  @default("") // what the customer wrote (bounded); empty when there was no readable text
+  payload    Json // what admitting this message needs: see InboundPayload in src/lib/inboundScreening/types.ts
+
+  /// sales_enquiry | customer_support | business_approach | uncertain | spam
+  classification String
+  uncertain      Boolean  @default(false)
+  /// rule | ai | sender_block | sender_allow | relationship | fallback | staff
+  decidedBy      String
+  reasonCodes    String[] @default([])
+  reason         String   @default("")
+  policyVersion  String
+  model          String?
+  aiUsed         Boolean  @default(false)
+  aiInputTokens  Int?
+  aiOutputTokens Int?
+  latencyMs      Int      @default(0)
+  /// Set when the classifier could not answer (timeout, error, budget): the
+  /// message went through the normal workflow with this as its diagnostic.
+  failure        String?
+
+  mode  String // observe | quarantine — the workspace setting when this message arrived
+  /// admitted | quarantined | restoring | restored
+  state String
+  /// What quarantine withheld (or, in observe mode, would have): staff push,
+  /// bot reply, new contact, new lead, handoff.
+  suppressed Json?
+
+  /// A person's verdict, when one has been given: spam | not_spam.
+  staffLabel   String?
+  labelledById String?
+  labelledAt   DateTime?
+  restoredById String?
+  restoredAt   DateTime?
+  /// Set on restore/admit: where the message now lives.
+  contactId String?
+
+  receivedAt DateTime @default(now())
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@unique([tenantId, channel, providerId])
+  @@index([tenantId, state, receivedAt])
+  @@index([tenantId, channel, senderId, receivedAt])
+  @@index([tenantId, staffLabel])
+  @@index([tenantId, contactId])
+}
+
+/// A person's standing decision about ONE sender on ONE channel — separate from
+/// any classification of a message. `block` quarantines everything from them
+/// without asking the classifier; `allow` admits everything from them.
+model InboundSenderRule {
+  id          String   @id @default(cuid())
+  tenantId    String
+  channel     String
+  senderId    String
+  rule        String // allow | block
+  senderName  String?
+  note        String?
+  createdById String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([tenantId, channel, senderId])
+  @@index([tenantId, rule])
+}
+
+/// A broad rule — a campaign's wording or a link domain — that quarantines
+/// messages from ANY sender. Never created active by a single correction: a
+/// staff "spam" label proposes one, and an owner switches it on (or off again).
+model InboundSpamPattern {
+  id            String   @id @default(cuid())
+  tenantId      String
+  kind          String // text | domain
+  value         String // normalised wording, or a bare domain
+  status        String   @default("proposed") // proposed | active | disabled
+  sourceId      String? // the InboundScreening it came from
+  hits          Int      @default(0)
+  createdById   String?
+  decidedById   String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@unique([tenantId, kind, value])
+  @@index([tenantId, status])
+}

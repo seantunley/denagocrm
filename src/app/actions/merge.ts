@@ -100,6 +100,9 @@ export async function mergeContacts(keepId: string, otherIdsCsv: string, formDat
         await move(tx.testDriveBooking, "contactId", "test drives");
         await move(tx.journeyRun, "contactId", "journeys");
         await move(tx.marketingTouch, "contactId", "marketing touches");
+        // The spam filter's note of whose message it judged: follows the person, so
+        // "business approach" and a later "mark as spam" still find it.
+        await move(tx.inboundScreening, "contactId", "screened messages");
         await move(tx.campaignConversion, "contactId", "conversions");
         await move(tx.marketingCampaignEvent, "contactId", "campaign events");
         await move(tx.surveyFollowUp, "contactId", "survey follow-ups");
