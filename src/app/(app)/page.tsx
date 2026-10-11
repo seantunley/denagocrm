@@ -89,7 +89,8 @@ export default async function HomePage({
   const briefHasMore = !!brief && (brief.items.length > 0 || !!brief.team?.length);
 
   return (
-    <div className="mx-auto max-w-6xl space-y-6">
+    // Full width, like every other page in the app: no centred column with empty gutters either side.
+    <div className="space-y-6">
       <FollowUpPrompts
         prompts={myOverdue.map((a) => ({
           id: a.id,
