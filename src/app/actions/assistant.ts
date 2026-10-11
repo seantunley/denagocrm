@@ -101,11 +101,32 @@ export async function runAssistantAction(card: ActionCard): Promise<{ ok: boolea
         form.set("leadId", card.leadId);
         form.set("body", card.text);
         form.set("type", "note");
+        // addCommunication's own pin: the same switch the note box has.
+        if (card.pin === true) form.set("pin", "on");
         form.set("revalidate", `/leads/${card.leadId}`);
         const result = await addCommunication(form);
         if (result?.error) return { ok: false, error: result.error };
-        await confirmed("add a note", card.leadId);
-        return { ok: true, success: "Note added" };
+        await confirmed(`add a note${card.pin === true ? " (pinned)" : ""}`, card.leadId);
+        return { ok: true, success: card.pin === true ? "Note added and pinned" : "Note added" };
+      }
+      case "customer_note": {
+        // On the customer, not a deal. addCommunication checks that this person
+        // may write to customer records and can open THIS customer.
+        const form = new FormData();
+        form.set("contactId", card.contactId);
+        form.set("body", card.text);
+        form.set("type", "note");
+        if (card.pin === true) form.set("pin", "on");
+        form.set("revalidate", `/contacts/${card.contactId}`);
+        const result = await addCommunication(form);
+        if (result?.error) return { ok: false, error: result.error };
+        await logAudit({
+          action: "assistant.action_confirmed",
+          summary: `Confirmed the assistant's proposal: add a note${card.pin === true ? " (pinned)" : ""}`,
+          user,
+          contactId: card.contactId,
+        });
+        return { ok: true, success: card.pin === true ? "Note added and pinned" : "Note added", href: `/contacts/${card.contactId}` };
       }
       case "assign": {
         if (!(await stillAsProposed(card))) return { ok: false, error: STALE_CARD };

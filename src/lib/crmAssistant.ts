@@ -19,6 +19,7 @@ import { firstCustomerView, memoCustomer } from "./signing/customerView";
 import { accessibleTestDriveWhere } from "./testDriveAccess";
 import { contactActivityWhere, contactCommunicationWhere, latestContactAt } from "./customerContact";
 import {
+  canAccessContact,
   canAccessConversation,
   canAccessLead,
   canAccessQuote,
@@ -482,6 +483,36 @@ async function findActivities(user: User, raw: z.infer<typeof activityArgs>): Pr
 }
 
 /**
+ * Customers matching a name, for when no lead does. Every word of the name must
+ * be in the first name, last name or company ("Sean Tunley" is two columns).
+ * Only customers this person can open; no phone numbers or emails — enough to
+ * tell them apart and to address a note, nothing more.
+ */
+async function customersWithoutLead(user: User, needle: string) {
+  const ids = await getAccessibleContactIds(user);
+  if (ids !== null && ids.length === 0) return [];
+  const words = needle.split(/\s+/).filter(Boolean).slice(0, 4);
+  if (words.length === 0) return [];
+  const found = await prisma.contact.findMany({
+    where: {
+      deletedAt: null,
+      ...(ids === null ? {} : { id: { in: ids } }),
+      AND: words.map((word) => ({ OR: [{ firstName: fuzzy(word) }, { lastName: fuzzy(word) }, { company: fuzzy(word) }] })),
+    },
+    orderBy: { updatedAt: "desc" },
+    take: 5,
+    select: { id: true, firstName: true, lastName: true, company: true, city: true, createdAt: true },
+  });
+  return found.map((c) => ({
+    contactId: c.id,
+    name: [c.firstName, c.lastName].filter(Boolean).join(" "),
+    company: c.company,
+    city: c.city,
+    customerSince: dateKey(c.createdAt),
+  }));
+}
+
+/**
  * One lead in depth — what a colleague would read before saying "here's what
  * I'd do": the deal, every recent message both ways, its quotes (opened?
  * signed?), its activities and any research. Phone numbers and emails are left
@@ -512,7 +543,21 @@ async function leadBrief(user: User, raw: z.infer<typeof leadBriefArgs>): Promis
     take: 5,
     select: { id: true, title: true, name: true, status: true, stage: { select: { name: true } } },
   });
-  if (matches.length === 0) return { truncated: false, rows: [], data: [{ note: `No lead you can see matches "${needle}".` }] };
+  if (matches.length === 0) {
+    // No lead — but the person may be a CUSTOMER with no deal (a service customer,
+    // someone whose lead was deleted, the owner's own test record). Saying only
+    // "no lead matches" read as "no such person", and left nothing to hang a note on.
+    const customers = looksLikeId ? [] : await customersWithoutLead(user, needle);
+    if (customers.length === 0) return { truncated: false, rows: [], data: [{ note: `No lead or customer you can see matches "${needle}".` }] };
+    return {
+      truncated: false,
+      rows: [],
+      data: [{
+        note: `No lead you can see matches "${needle}", but ${customers.length === 1 ? "a customer record does" : `${customers.length} customer records do`}. There is no deal to report on. A note can go on the customer (customer_note with the contactId)${customers.length > 1 ? " — ask which one first" : ""}.`,
+        customers,
+      }],
+    };
+  }
   // Several match ("Lisa"): read the likeliest — an open lead, the most recently
   // worked — in full, and name the rest. Stopping at a list of names left the
   // answer with no quotes or messages to answer from.
@@ -2061,6 +2106,20 @@ async function resolveActions(user: User, proposals: ProposedAction[]): Promise<
       }
       continue;
     }
+    if (p.type === "customer_note") {
+      // Only a customer this person can open, and not one in the bin. addCommunication
+      // checks access again when the card is confirmed.
+      if (!(await canAccessContact(user, p.contactId))) continue;
+      const contact = await prisma.contact.findFirst({ where: { id: p.contactId, deletedAt: null }, select: { firstName: true, lastName: true } });
+      if (!contact) continue;
+      const name = [contact.firstName, contact.lastName].filter(Boolean).join(" ");
+      cards.push({
+        id: `a${index}-${p.contactId}`, kind: "customer_note", contactId: p.contactId, leadId: null, leadLabel: name,
+        title: `Add a ${p.pin ? "pinned " : ""}note to ${name}'s customer record`, text: p.text,
+        ...(p.pin ? { pin: true } : {}), ...(p.reason ? { reason: p.reason } : {}),
+      });
+      continue;
+    }
     if (!(await canAccessLead(user, p.leadId))) continue;
     const lead = await prisma.lead.findUnique({
       where: { id: p.leadId },
@@ -2079,7 +2138,7 @@ async function resolveActions(user: User, proposals: ProposedAction[]): Promise<
       const label = at.toLocaleString("en-ZA", { timeZone: "Africa/Johannesburg", weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
       cards.push({ id, kind: "follow_up", leadId: p.leadId, leadLabel, title: `${p.summary ?? `Follow-up ${p.activity}`} with ${lead.name} — ${label}`, when, activity: p.activity, summary: p.summary, ...(p.reason ? { reason: p.reason } : {}) });
     } else if (p.type === "note") {
-      cards.push({ id, kind: "note", leadId: p.leadId, leadLabel, title: `Add a note to ${lead.name}'s lead`, text: p.text, ...(p.reason ? { reason: p.reason } : {}) });
+      cards.push({ id, kind: "note", leadId: p.leadId, leadLabel, title: `Add a ${p.pin ? "pinned " : ""}note to ${lead.name}'s lead`, text: p.text, ...(p.pin ? { pin: true } : {}), ...(p.reason ? { reason: p.reason } : {}) });
     } else if (p.type === "assign") {
       const wanted = p.to.trim().toLowerCase();
       const person = staff.find((s) => s.name.toLowerCase() === wanted) ?? staff.find((s) => s.name.toLowerCase().startsWith(wanted));
