@@ -505,6 +505,14 @@ jobs:
       - name: Signing -- one sealing certificate per workspace, made once
         run: npm run test:signing-seal
 
+      # "The figures only ever go up" is a claim about two reports from the
+      # signing page landing together. Reading the row, taking the larger figure
+      # and writing it back reads as correct and still loses the newer one. Only
+      # overlapping writes against a real row can tell the two apart — and the
+      # script proves its own control: the read-then-write shape does lose here.
+      - name: Signing -- engagement reports that arrive together cannot undo each other
+        run: npm run test:signature-view
+
       # A source assertion cannot tell "the row budget is bounded" from "the row
       # budget is bounded PER CONVERSATION", and only the second one keeps a quiet
       # thread visible next to a busy one. Both shapes select threads first and

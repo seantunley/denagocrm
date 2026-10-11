@@ -6,6 +6,7 @@ import { TextPromptDialog } from "@/components/TextPromptDialog";
 import { isFieldValueComplete } from "@/lib/signing/fieldValidation";
 import { SIGNING_CONSENT } from "@/lib/signing/consent";
 import { signatureFont } from "./signatureFont";
+import { ViewBeacon } from "./ViewBeacon";
 
 /**
  * Set when the signer is using a member of staff's device, in front of them.
@@ -462,6 +463,8 @@ export function SignSurface({ token, title, recipientName, sheets, fields, stamp
 
   return (
     <div style={{ width: "100%", maxWidth: 900, display: "flex", flexDirection: "column", gap: 16, paddingBottom: 116 }}>
+      {/* On a member of staff's device, in front of them, there is nothing to learn — and it is not the customer's time. */}
+      {!inPerson && <ViewBeacon token={token} />}
       <style dangerouslySetInnerHTML={{ __html: sheets.css }} />
       <style dangerouslySetInnerHTML={{ __html: SURFACE_CSS }} />
       <div style={{ textAlign: "center" }}>
@@ -488,7 +491,7 @@ export function SignSurface({ token, title, recipientName, sheets, fields, stamp
           Zoomed in, a sheet is wider than the screen and this scrolls sideways. */}
       <div ref={wrapRef} style={{ width: "100%", overflowX: zoom > 1 ? "auto" : "visible" }}>
         {sheets.pages.map((pageHtml, i) => (
-          <div key={i} style={{ width: sheets.width * scale, height: sheets.height * scale, position: "relative", margin: "0 auto 16px", boxShadow: "0 6px 24px rgba(0,0,0,.35)", background: "#fff" }}>
+          <div key={i} data-sign-page={i + 1} style={{ width: sheets.width * scale, height: sheets.height * scale, position: "relative", margin: "0 auto 16px", boxShadow: "0 6px 24px rgba(0,0,0,.35)", background: "#fff" }}>
             <div style={{ width: sheets.width, height: sheets.height, transform: `scale(${scale})`, transformOrigin: "top left", position: "absolute", top: 0, left: 0 }}>
               <div className="sg-sheet" style={{ position: "absolute", inset: 0 }} dangerouslySetInnerHTML={{ __html: pageHtml }} />
               {stamps.filter((s) => s.page === i).map((s, si) => <StampView key={`s${si}`} s={s} />)}

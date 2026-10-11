@@ -2401,6 +2401,7 @@ model SignatureRequest {
   recipients SignatureRecipient[]
   fields     SignatureField[]
   events     SignatureEvent[]
+  views      SignatureView[]
   approvals  ApprovalStep[]
 
   @@index([status, updatedAt])
@@ -2535,6 +2536,7 @@ model SignatureRecipient {
 
   fields    SignatureField[]
   responses SignatureFieldResponse[]
+  views     SignatureView[]
 
   @@index([requestId, order])
   @@index([tenantId])
@@ -2646,6 +2648,35 @@ model SignatureEvent {
   @@index([requestId, createdAt])
   @@index([tenantId])
   @@unique([requestId, sequence])
+}
+
+
+/// One sitting with a signing page: when a recipient had the document open, for
+/// how long the tab was actually in view, and the furthest page they reached.
+///
+/// Operational, not evidence — it never enters the SignatureEvent hash chain,
+/// and it is reported by the signer's own browser, so it is an indication and
+/// not a proof. For that reason it holds NO personal detail of its own: no IP
+/// address, no browser string. Who it was is the recipient row it points at.
+///
+/// The workspace is required and is the request's own: a row that belongs to
+/// no workspace is a row every workspace's policy hides and nobody can see.
+model SignatureView {
+  id          String             @id @default(cuid())
+  tenantId    String
+  requestId   String
+  request     SignatureRequest   @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  recipientId String
+  recipient   SignatureRecipient @relation(fields: [recipientId], references: [id], onDelete: Cascade)
+  startedAt   DateTime           @default(now())
+  lastSeenAt  DateTime           @default(now())
+  /// Seconds the tab was visible. Only ever goes up.
+  seconds     Int                @default(0)
+  /// The furthest page that came into view. Only ever goes up.
+  maxPage     Int                @default(1)
+
+  @@index([tenantId, requestId])
+  @@index([recipientId, startedAt])
 }
 
 // ── Document Studio: free-form BlockNote documents ──────────────────
