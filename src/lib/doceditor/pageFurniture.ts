@@ -84,10 +84,11 @@ export function runningText(doc: DocumentModel, ctx: Tokens, pageNumber: number,
 const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
 
 /** Those lines as HTML laid in a sheet's top and bottom margin (sheet-edge coordinates) — for the signing page. */
-export function runningSheetHtml(doc: DocumentModel, ctx: Tokens, pageNumber: number, pageCount: number): string {
+export function runningSheetHtml(doc: DocumentModel, ctx: Tokens, pageNumber: number, pageCount: number, margin: number = doc.style.margin): string {
   const text = runningText(doc, ctx, pageNumber, pageCount);
-  if (!text) return "";
-  const m = doc.style.margin;
+  // `margin` is this sheet's own (a page may have one): with too little there is nowhere to set them, as in print.
+  if (!text || margin < MIN_RUNNING_MARGIN) return "";
+  const m = margin;
   const line = (words: Record<Slot, string>, edge: "top" | "bottom") =>
     `<div style="position:absolute;${edge}:0;left:${m}px;right:${m}px;height:${m}px;display:grid;grid-template-columns:1fr 1fr 1fr;align-items:center;font-size:8pt;line-height:1.2;color:#64748b;pointer-events:none"><span style="text-align:left">${esc(words.left)}</span><span style="text-align:center">${esc(words.centre)}</span><span style="text-align:right">${esc(words.right)}</span></div>`;
   return line(text.header, "top") + line(text.footer, "bottom");

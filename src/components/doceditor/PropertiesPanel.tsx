@@ -19,7 +19,7 @@ import { DesignSection } from "./DesignSection";
 import { AlignOnPage, ArrangePanel } from "./ArrangePanel";
 import { TableStyleControls } from "./TableStyleControls";
 import { ContentBlockProps } from "./ContentBlockProps";
-import { RowSection, RunningSection } from "./PageFurnitureProps";
+import { PageSection, RowSection, RunningSection } from "./PageFurnitureProps";
 import { IMAGE_ASPECT_LABELS, type ImageAspect } from "@/lib/doceditor/imageFrame";
 import { useState } from "react";
 import { uploadDocEditorImage } from "@/app/actions/doceditor";
@@ -961,9 +961,14 @@ function DocumentProps() {
           <div><label className={lbl}>Page size</label>
             <select className={inp} value={doc.style.pageSize} onChange={(e) => setStyle({ pageSize: e.target.value as "A4" | "Letter" })}><option value="A4">A4</option><option value="Letter">Letter</option></select>
           </div>
-          <div><label className={lbl}>Margin ({doc.style.margin}px)</label><input type="range" min={0} max={96} className="w-full" value={doc.style.margin} onChange={(e) => setStyle({ margin: Number(e.target.value) })} /></div>
+          <div><label className={lbl}>Turned</label>
+            {/* Portrait is stored as nothing at all — it is what every document already is. */}
+            <select className={inp} value={doc.style.orientation ?? "portrait"} onChange={(e) => setStyle({ orientation: e.target.value === "landscape" ? "landscape" : undefined })}><option value="portrait">Upright (portrait)</option><option value="landscape">On its side (landscape)</option></select>
+          </div>
+          <div className="col-span-2"><label className={lbl}>Margin ({doc.style.margin}px)</label><input type="range" min={0} max={96} className="w-full" value={doc.style.margin} onChange={(e) => setStyle({ margin: Number(e.target.value) })} /></div>
         </div>
       </Section>
+      <PageSection />
       <DocumentStyleSection />
       <RunningSection />
       <Section title="Recipients">

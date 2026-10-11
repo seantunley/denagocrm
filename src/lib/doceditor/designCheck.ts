@@ -1,4 +1,4 @@
-import { PAGE_SIZES, type DocumentBlock, type DocumentModel, type OverlayField } from "./model";
+import { pageSizeOf, type DocumentBlock, type DocumentModel, type OverlayField } from "./model";
 import { VARIABLES } from "./variables";
 import { MIN_RUNNING_MARGIN } from "./pageFurniture";
 
@@ -68,7 +68,7 @@ export function designWarnings(doc: DocumentModel, measured: Measured = {}): Des
   const out: DesignWarning[] = [];
   // An email is one card laid out by the frame and the mail client: pages, sheets and signing fields do not apply.
   if (doc.style.pageSize === "Email") return out;
-  const size = PAGE_SIZES[doc.style.pageSize];
+  const size = pageSizeOf(doc.style);
 
   doc.pages.forEach((page, index) => {
     const n = index + 1;

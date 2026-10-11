@@ -13,7 +13,7 @@ import type {
   DocumentModel, DocumentBlock, DocumentColumn, DocumentRow, DocumentPage,
   PricingBlock, PricingLine, TableBlock, OverlayField, DocStyle,
 } from "./model";
-import { PAGE_SIZES } from "./model";
+import { pageMargin, pageSizeOf } from "./model";
 import { plateToHtmlBody } from "@/lib/docbuilder/plateSerialize";
 import { evaluateCondition } from "@/lib/docbuilder/expr";
 import { brandFooterContent, SOCIAL_ICON_PATHS } from "@/lib/companyBrand";
@@ -431,18 +431,28 @@ function stampFieldHtml(s: StampField, margin: number): string {
 
 function pageHtml(page: DocumentPage, doc: DocumentModel, ctx: RenderCtx, logoDataUri?: string, isLast?: boolean, hideOverlays?: boolean, stamps?: StampField[]): string {
   const rows = page.rows.map((r) => rowHtml(r, ctx, doc.style, logoDataUri)).join("");
+  /*
+   * THIS PAGE'S margin — its own when it has one, else the document's. Everything
+   * placed by hand (a signing field, a signed stamp, a freely placed block) is
+   * stored in sheet-edge coordinates and printed inside the page's content box,
+   * so each is shifted by the margin OF THE PAGE IT IS ON. Using the document's
+   * margin for a page with its own would print every signature that far out of
+   * place.
+   */
+  const margin = pageMargin(doc, page);
+  const own = ownMarginName(doc, page);
   // When stamping signed values, suppress the empty dashed template boxes.
   const fields = hideOverlays || stamps ? "" : page.overlayFields.map((f) => {
     const rc = doc.recipients.find((r) => r.id === f.recipientId)?.color ?? "#2563eb";
-    return overlayFieldHtml(f, rc, doc.style.margin);
+    return overlayFieldHtml(f, rc, margin);
   }).join("");
-  const stamped = (stamps ?? []).map((s) => stampFieldHtml(s, doc.style.margin)).join("");
+  const stamped = (stamps ?? []).map((s) => stampFieldHtml(s, margin)).join("");
   // Free-placement content: absolutely positioned within the page box (coords are
   // page-relative but the page margin already offsets the flow, so shift by margin).
   const floats = page.floatingBlocks.map((fb) =>
-    `<div style="position:absolute;left:${fb.x - doc.style.margin}px;top:${fb.y - doc.style.margin}px;width:${fb.width}px">${floatingInner(fb.block, blockHtml(fb.block, ctx, doc.style, logoDataUri))}</div>`
+    `<div style="position:absolute;left:${fb.x - margin}px;top:${fb.y - margin}px;width:${fb.width}px">${floatingInner(fb.block, blockHtml(fb.block, ctx, doc.style, logoDataUri))}</div>`
   ).join("");
-  const size = PAGE_SIZES[doc.style.pageSize];
+  const size = pageSizeOf(doc.style);
   /*
    * EVERY DOCUMENT PRINTED ONTO A SECOND, NEARLY EMPTY PAGE. Two separate causes,
    * and the first hid the second.
@@ -459,7 +469,14 @@ function pageHtml(page: DocumentPage, doc: DocumentModel, ctx: RenderCtx, logoDa
    * pixel one, because A4 is 1122.52 CSS px and not 1123 — `1123 - margins` was
    * half a pixel over on its own.
    */
-  return `<div class="doc-page" style="position:relative;display:flow-root;min-height:calc(${size.cssH} - ${doc.style.margin * 2}px);${isLast ? "" : "page-break-after:always;"}">${rows}${fields}${floats}${stamped}</div>`;
+  // A page with its own margin is a NAMED page: the @page rule of that name (renderDocumentHtml) gives the printer its margin.
+  return `<div class="doc-page${own ? ` ${own}` : ""}" style="${own ? `page:${own};` : ""}position:relative;display:flow-root;min-height:calc(${size.cssH} - ${margin * 2}px);${isLast ? "" : "page-break-after:always;"}">${rows}${fields}${floats}${stamped}</div>`;
+}
+
+/** The CSS name of a page's own margin ("pm-24"), or "" when it uses the document's. */
+function ownMarginName(doc: DocumentModel, page: DocumentPage): string {
+  const margin = pageMargin(doc, page);
+  return margin === doc.style.margin ? "" : `pm-${Math.round(margin)}`;
 }
 
 /**
@@ -492,16 +509,18 @@ export function renderSigningSheets(input: DocumentModel, ctxIn: RenderCtx, logo
   // A signing snapshot was laid out at send time (layoutRows), so this is fixed for it.
   const { doc, ctx } = laidOut(input, ctxIn);
   const m = doc.style.margin;
-  const size = PAGE_SIZES[doc.style.pageSize];
+  const size = pageSizeOf(doc.style);
   const font = fontStack(doc.style.fontFamily);
   const pages = doc.pages.map((page, pageIdx) => {
+    // This sheet's content is inset by ITS page's margin (its own, or the document's).
+    const inset = pageMargin(doc, page);
     const rows = page.rows.map((r) => rowHtml(r, ctx, doc.style, logoDataUri)).join("");
     // Free-placement blocks sit at raw sheet coordinates (sheet edge origin).
     const floats = page.floatingBlocks.map((fb) =>
       `<div style="position:absolute;left:${fb.x}px;top:${fb.y}px;width:${fb.width}px">${floatingInner(fb.block, blockHtml(fb.block, ctx, doc.style, logoDataUri))}</div>`
     ).join("");
     // The running header and footer, drawn in this sheet's margin as they print ("" when the document has none).
-    return `<div style="position:absolute;inset:0;padding:${m}px">${rows}</div>${floats}${runningSheetHtml(doc, ctx, pageIdx + 1, doc.pages.length)}`;
+    return `<div style="position:absolute;inset:0;padding:${inset}px">${rows}</div>${floats}${runningSheetHtml(doc, ctx, pageIdx + 1, doc.pages.length, inset)}`;
   });
   // The document's type settings (docStyles.ts); with none set these are the values they always were.
   const t = docType(doc.style);
@@ -549,13 +568,24 @@ export function renderDocumentHtml(
   const lastIdx = doc.pages.length - 1;
   const stamped = opts?.stampedFields;
   const body = doc.pages.map((p, i) => pageHtml(p, doc, ctx, logoDataUri, i === lastIdx && !opts?.appendHtml, opts?.hideOverlays, stamped ? stamped.filter((s) => s.page === i) : undefined)).join("") + (opts?.appendHtml ?? "");
-  const pageCss = doc.style.pageSize === "A4" ? "A4" : "letter";
+  const pageCss = `${doc.style.pageSize === "A4" ? "A4" : "letter"}${doc.style.orientation === "landscape" ? " landscape" : ""}`;
   // The running header and footer, as page-margin boxes (pageFurniture.ts). Nothing at all for a document without them.
   const running = runningCss(doc, ctx, font);
-  const size = PAGE_SIZES[doc.style.pageSize];
+  const size = pageSizeOf(doc.style);
+  /*
+   * Pages with their own margin. In print each is a named page whose @page rule
+   * carries that margin; on screen, where the margin is drawn as padding, each
+   * gets its own padding and its own inset for what is placed by hand. Empty —
+   * and so not a byte of CSS — for a document whose pages all share one margin.
+   */
+  const ownMargins = [...new Set(doc.pages.map((page) => ownMarginName(doc, page)).filter(Boolean))].map((name) => ({ name, px: Number(name.slice(3)) }));
+  const namedPages = ownMargins.map(({ name, px }) => ` @page ${name} { margin: ${px}px; }`).join("");
+  const namedScreen = ownMargins.map(({ name, px }) => `
+      .doc-page.${name} { padding: ${px}px; }
+      .doc-page.${name} > [style*="position:absolute"] { margin: ${px}px 0 0 ${px}px; }`).join("");
   return `<!doctype html><html><head><meta charset="utf-8"><style>
     ${DOCUMENT_FONT_FACE}
-    @page { size: ${pageCss}; margin: ${m}px; ${running.page}}${running.first}
+    @page { size: ${pageCss}; margin: ${m}px; ${running.page}}${running.first}${namedPages}
     * { box-sizing: border-box; }
     body { font-family: ${font}; font-size: ${t.body}; line-height: ${t.lineHeight}; color: ${t.text}; margin: 0; -webkit-font-smoothing: antialiased; }
     h1 { font-size: ${t.h1}; margin: 0 0 8px; color: ${cssColor(doc.style.ink, "#020617")}; ${t.headingFont}}
@@ -631,7 +661,7 @@ export function renderDocumentHtml(
          now drawn as padding, the on-screen sheet is the whole sheet. Without
          this it was two margins short, and anything placed near the foot of
          the page hung off the bottom of the white sheet. */
-      .doc-page { min-height: ${size.cssH} !important; }
+      .doc-page { min-height: ${size.cssH} !important; }${namedScreen}
     }
   </style></head><body>${[
     opts?.toolbarHtml ?? "",

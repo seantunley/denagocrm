@@ -54,12 +54,29 @@ const maybeColor = z.string().transform((value) => (isSafeCssColor(value) ? valu
  * visible sliver of unusable paper; stating the real measurement costs nothing.
  */
 export const PAGE_SIZES = {
-  A4: { w: 794, h: 1123, cssH: "297mm" }, // px @ 96dpi; cssH is exact
-  Letter: { w: 816, h: 1056, cssH: "11in" },
+  A4: { w: 794, h: 1123, cssH: "297mm", cssW: "210mm" }, // px @ 96dpi; cssH / cssW are exact
+  Letter: { w: 816, h: 1056, cssH: "11in", cssW: "8.5in" },
   /** A customer email (./emailRender.ts): the 600px card mail apps show. Never printed. */
-  Email: { w: 600, h: 760, cssH: "201.08mm" },
+  Email: { w: 600, h: 760, cssH: "201.08mm", cssW: "158.75mm" },
 } as const;
 export type PageSizeName = keyof typeof PAGE_SIZES;
+
+/**
+ * The sheet a document is laid out on: its paper, turned on its side when the
+ * document is landscape. Everything that needs the sheet's size asks here, so
+ * the editor page, the signing sheet and the PDF cannot disagree about it.
+ * (An email is a card, not paper: it has no orientation.)
+ */
+export function pageSizeOf(style: { pageSize: PageSizeName; orientation?: "portrait" | "landscape" }): { w: number; h: number; cssH: string } {
+  const paper = PAGE_SIZES[style.pageSize];
+  return style.orientation === "landscape" && style.pageSize !== "Email" ? { w: paper.h, h: paper.w, cssH: paper.cssW } : paper;
+}
+
+/** A page's margin: its own when it has one (a full-bleed cover, a wide-margined letter page), else the document's. */
+export function pageMargin(doc: { style: { margin: number } }, page: { margin?: number }): number {
+  const own = Number(page.margin);
+  return page.margin !== undefined && Number.isFinite(own) ? Math.min(200, Math.max(0, own)) : doc.style.margin;
+}
 
 // ── shared ──────────────────────────────────────────────────────────
 export const boxSpacingSchema = z.object({
@@ -672,12 +689,16 @@ export const pageSchema = z.object({
   overlayFields: z.array(overlayFieldSchema).default([]),
   floatingBlocks: z.array(floatingBlockSchema).default([]),
   overflowGroups: z.array(overflowGroupSchema).optional(),
+  /** This page's own margin in px, in place of the document's (see pageMargin). Absent = the document's. */
+  margin: z.number().optional(),
 });
 export type DocumentPage = z.infer<typeof pageSchema>;
 
 export const docStyleSchema = z.object({
   fontFamily: z.enum(["sans", "serif", "mono"]).default("sans"),
   pageSize: z.enum(["A4", "Letter", "Email"]).default("A4"),
+  /** The paper turned on its side (see pageSizeOf). Absent = portrait, as every document was. */
+  orientation: z.enum(["portrait", "landscape"]).optional(),
   margin: z.number().default(48), // px
   accent: colorField("#ea580c"),
   ink: colorField("#020617"),
