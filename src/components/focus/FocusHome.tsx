@@ -122,7 +122,7 @@ export function FocusHome({
       <div className="grid gap-5 lg:grid-cols-3">
         {/* ── do next ── */}
         {focus.seesLeads && (
-          <section aria-labelledby="do-next" className="min-w-0 rounded-2xl border border-border bg-card p-4 sm:p-5 lg:col-span-2">
+          <section aria-labelledby="do-next" className="min-w-0 rounded-2xl border border-border bg-card p-4 sm:p-5 lg:col-span-2 lg:self-start">
             <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
               <h2 id="do-next" className="flex items-center gap-2 text-sm font-semibold text-foreground">
                 <Flame className="size-4 text-primary" aria-hidden />
