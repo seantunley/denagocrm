@@ -12,7 +12,8 @@ test("the inbox has a Comments tab with the moderation list", () => {
   assert.match(inbox, /\{ key: "comments", label: "Comments", count: unreadComments, content: commentsPanel \}/);
   assert.match(inbox, /loadCommentThreads\(\{ archived: false \}\)/);
   assert.match(inbox, /loadCommentThreads\(\{ archived: true \}\)/);
-  assert.match(inbox, /initialKey=\{tab === "comments" \? "comments" : "all"\}/);
+  // Spam and Business are linkable tabs too; anything else still opens "All".
+  assert.match(inbox, /initialKey=\{tab === "comments" \? "comments" : tab === "spam" \? "spam" : tab === "business" \? "business" : "all"\}/);
   // Comments never join the conversation lists: those are built from DMs only.
   assert.doesNotMatch(inbox, /buildInboxThreads\([^)]*omment/);
 });
