@@ -25,6 +25,7 @@ import { DOCUMENT_FONT_FACE } from "./documentFont";
 import { docType, fontStack } from "./docStyles";
 import { tableLook } from "./tableStyle";
 import { contentBlockHtml } from "./contentBlocks";
+import { runningCss, runningSheetHtml } from "./pageFurniture";
 import { DEFAULT_REGIONAL, formatZAR, regionalFrom, type Regional } from "@/lib/format";
 import type { TableRow } from "@/lib/docbuilder/blocks";
 
@@ -326,9 +327,14 @@ function blockHtml(block: DocumentBlock, ctx: RenderCtx, style: DocStyle, logoDa
  * sample row where the record's lines will go.
  */
 export function blockPreviewHtml(block: DocumentBlock, style: DocStyle, env: { company: Record<string, string>; logo?: string }): string {
+  return blockHtml(block, previewContext(env), style);
+}
+
+/** The editor's own render context: the workspace's company details and logo, one sample line item, no record. */
+export function previewContext(env: { company: Record<string, string>; logo?: string }): NonNullable<RenderCtx> {
   const tokens = Object.fromEntries(Object.entries(env.company).map(([key, value]) => [`company.${key}`, value]));
   const sample: LineItemRow = { cells: [{ value: "Sample item" }, { value: "1" }, { value: money(1150) }, { value: money(1150) }], qty: 1, unitPrice: 1150, lineTotal: 1150 };
-  return blockHtml(block, { tokens, items: [sample], vars: {}, bound: false, logo: env.logo }, style);
+  return { tokens, items: [sample], vars: {}, bound: false, logo: env.logo };
 }
 
 /**
@@ -373,7 +379,8 @@ function rowHtml(row: DocumentRow, ctx: RenderCtx, style: DocStyle, logoDataUri?
   const cols = row.columns;
   const template = cols.map((c) => `${c.widthPercent}fr`).join(" ");
   const gap = row.settings?.gap ?? 16;
-  const keep = row.settings?.keepTogether ? "break-inside:avoid;" : "";
+  // Keep the row whole on one page; keep it on the same page as the row after it (a heading with what it heads).
+  const keep = (row.settings?.keepTogether ? "break-inside:avoid;" : "") + (row.settings?.keepWithNext ? "break-after:avoid;" : "");
   return `<div style="display:grid;grid-template-columns:${template};gap:${gap}px;${rowSpacing(row)}${keep}">${cols.map((c) => columnHtml(c, ctx, style, logoDataUri)).join("")}</div>`;
 }
 
@@ -487,13 +494,14 @@ export function renderSigningSheets(input: DocumentModel, ctxIn: RenderCtx, logo
   const m = doc.style.margin;
   const size = PAGE_SIZES[doc.style.pageSize];
   const font = fontStack(doc.style.fontFamily);
-  const pages = doc.pages.map((page) => {
+  const pages = doc.pages.map((page, pageIdx) => {
     const rows = page.rows.map((r) => rowHtml(r, ctx, doc.style, logoDataUri)).join("");
     // Free-placement blocks sit at raw sheet coordinates (sheet edge origin).
     const floats = page.floatingBlocks.map((fb) =>
       `<div style="position:absolute;left:${fb.x}px;top:${fb.y}px;width:${fb.width}px">${floatingInner(fb.block, blockHtml(fb.block, ctx, doc.style, logoDataUri))}</div>`
     ).join("");
-    return `<div style="position:absolute;inset:0;padding:${m}px">${rows}</div>${floats}`;
+    // The running header and footer, drawn in this sheet's margin as they print ("" when the document has none).
+    return `<div style="position:absolute;inset:0;padding:${m}px">${rows}</div>${floats}${runningSheetHtml(doc, ctx, pageIdx + 1, doc.pages.length)}`;
   });
   // The document's type settings (docStyles.ts); with none set these are the values they always were.
   const t = docType(doc.style);
@@ -542,10 +550,12 @@ export function renderDocumentHtml(
   const stamped = opts?.stampedFields;
   const body = doc.pages.map((p, i) => pageHtml(p, doc, ctx, logoDataUri, i === lastIdx && !opts?.appendHtml, opts?.hideOverlays, stamped ? stamped.filter((s) => s.page === i) : undefined)).join("") + (opts?.appendHtml ?? "");
   const pageCss = doc.style.pageSize === "A4" ? "A4" : "letter";
+  // The running header and footer, as page-margin boxes (pageFurniture.ts). Nothing at all for a document without them.
+  const running = runningCss(doc, ctx, font);
   const size = PAGE_SIZES[doc.style.pageSize];
   return `<!doctype html><html><head><meta charset="utf-8"><style>
     ${DOCUMENT_FONT_FACE}
-    @page { size: ${pageCss}; margin: ${m}px; }
+    @page { size: ${pageCss}; margin: ${m}px; ${running.page}}${running.first}
     * { box-sizing: border-box; }
     body { font-family: ${font}; font-size: ${t.body}; line-height: ${t.lineHeight}; color: ${t.text}; margin: 0; -webkit-font-smoothing: antialiased; }
     h1 { font-size: ${t.h1}; margin: 0 0 8px; color: ${cssColor(doc.style.ink, "#020617")}; ${t.headingFont}}
