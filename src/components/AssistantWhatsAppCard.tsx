@@ -81,7 +81,8 @@ export default function AssistantWhatsAppCard({ name, linked, refused }: { name:
           </div>
           {checked && !pending && (
             <p role="status" className="text-xs text-muted-foreground">
-              Not linked yet — the code hasn&apos;t arrived. Give it a few seconds and check again.
+              Not linked yet. Check that you sent the code exactly as shown, to the number above, then check again — or ask
+              for a new code.
             </p>
           )}
           <p className="text-xs text-muted-foreground">
