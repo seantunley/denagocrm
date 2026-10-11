@@ -1080,6 +1080,8 @@ model AssistantPhoneLink {
   /// The account's sessionVersion when linked. A linked number is a sign-in:
   /// any later bump (password reset, sign out everywhere, disable) ends it.
   sessionVersion Int?
+  /// Why the last code sent did not link (LINK_REFUSALS key); cleared by a new code or a link.
+  refusedReason String?
   createdAt     DateTime  @default(now())
 
   @@unique([tenantId, userId])

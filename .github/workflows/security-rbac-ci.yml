@@ -566,6 +566,13 @@ jobs:
       - name: Inbox -- spam screening holds, restores once, and never loses a message
         run: npm run test:inbound-screening
 
+      # "Whose number is this?" is raw SQL, so the soft-delete filter is not
+      # applied for it. A number on a lead binned months earlier still matched:
+      # that person's messages were filed on the deleted lead, where nobody sees
+      # them. A source test shows the predicate is written; this shows what it does.
+      - name: Inbox -- a deleted lead does not capture a phone number
+        run: npm run test:phone-match
+
       # In-person signing was dead for two months with every structural test
       # green: the screen handed the signing form a stored digest, and the route
       # hashed it again and found nothing. Each half was right on its own. Only

@@ -78,6 +78,20 @@ export function linkCodeHashInput(tenantId: string, userId: string, code: string
   return `assistant-whatsapp-link\u0000${tenantId}\u0000${userId}\u0000${code}`;
 }
 
+/**
+ * Why a code that DID match was not allowed to link the phone, as the person is
+ * told on the Ask page. Never sent to the phone itself: a refused number may be
+ * a customer's, and a customer is not messaged about our linking.
+ */
+export const LINK_REFUSALS = {
+  customer_number:
+    "That phone wasn't linked: its number is saved on a customer or an open lead in this workspace. Take the number off that record, or use a different phone, then ask for a new code.",
+  signed_out: "That code wasn't accepted because your sign-ins were reset after you asked for it. Ask for a new code.",
+} as const;
+export type LinkRefusal = keyof typeof LINK_REFUSALS;
+export const linkRefusalText = (reason: string | null | undefined): string | null =>
+  reason && reason in LINK_REFUSALS ? LINK_REFUSALS[reason as LinkRefusal] : null;
+
 /** A linked number as it is shown back: the last three digits only. */
 export function maskWaId(waId: string | null | undefined): string {
   const digits = String(waId ?? "").replace(/\D/g, "");
