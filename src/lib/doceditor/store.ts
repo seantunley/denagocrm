@@ -1,7 +1,7 @@
 "use client";
 
 import { create } from "zustand";
-import type { DocumentModel, DocumentBlock, OverlayField, Recipient, DocStyle, LayoutSettings } from "./model";
+import type { DocumentModel, DocumentBlock, OverlayField, Recipient, DocStyle, LayoutSettings, RowSettings } from "./model";
 import { newPage, newRecipient } from "./factory";
 import type { LibrarySection } from "./librarySection";
 import * as ops from "./ops";
@@ -65,6 +65,8 @@ interface EditorState {
   toggleHide: (id: string) => void;
   moveToPage: (id: string, pageIdx: number) => void;
   setColumnWidths: (rowId: string, widths: number[]) => void;
+  /** A row's own settings: the gap between its columns, and how it behaves at a page break. */
+  updateRow: (rowId: string, patch: Partial<RowSettings>) => void;
 
   // free placement (floating content)
   detach: (id: string) => void;
@@ -199,6 +201,10 @@ export const useEditor = create<EditorState>((set, get) => ({
   toggleHide: (id) => get().commit((d) => { const b = getBlock(d, id); return b ? ops.updateBlock(d, id, { hidden: !b.hidden } as Partial<DocumentBlock>) : d; }),
   moveToPage: (id, pageIdx) => get().commit((d) => ops.moveBlockToPage(d, id, pageIdx)),
   setColumnWidths: (rowId, widths) => get().commit((d) => ops.setColumnWidths(d, rowId, widths)),
+  updateRow: (rowId, patch) => get().commit((d) => ({
+    ...d,
+    pages: d.pages.map((p) => (p.rows.some((r) => r.id === rowId) ? { ...p, rows: p.rows.map((r) => (r.id === rowId ? { ...r, settings: { ...r.settings, ...patch } } : r)) } : p)),
+  })),
 
   addPage: () => get().commit((d) => ({ ...d, pages: [...d.pages, newPage()] })),
   removePage: (pageId) => { get().commit((d) => ops.removePage(d, pageId)); set((s) => ({ sel: { blockId: null, fieldId: null }, activeTextBlockId: null, picked: [], activePage: Math.min(s.activePage, Math.max(0, (s.doc?.pages.length ?? 1) - 1)) })); },

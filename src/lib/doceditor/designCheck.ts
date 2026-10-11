@@ -1,5 +1,6 @@
-import { PAGE_SIZES, type DocumentBlock, type DocumentModel, type OverlayField } from "./model";
+import { pageSizeOf, type DocumentBlock, type DocumentModel, type OverlayField } from "./model";
 import { VARIABLES } from "./variables";
+import { MIN_RUNNING_MARGIN } from "./pageFurniture";
 
 /**
  * A design check: things in a layout that will look wrong, or go wrong for a
@@ -22,7 +23,7 @@ import { VARIABLES } from "./variables";
 export type DesignWarning = {
   code:
     | "fields-overlap" | "field-off-page" | "field-unassigned" | "float-off-page"
-    | "unknown-variable" | "empty-page" | "tiny-text" | "image-missing" | "page-overflows" | "field-on-overflow";
+    | "unknown-variable" | "empty-page" | "tiny-text" | "image-missing" | "page-overflows" | "field-on-overflow" | "running-no-margin";
   message: string;
   /** 1-based, as the editor labels pages. */
   page: number;
@@ -67,7 +68,7 @@ export function designWarnings(doc: DocumentModel, measured: Measured = {}): Des
   const out: DesignWarning[] = [];
   // An email is one card laid out by the frame and the mail client: pages, sheets and signing fields do not apply.
   if (doc.style.pageSize === "Email") return out;
-  const size = PAGE_SIZES[doc.style.pageSize];
+  const size = pageSizeOf(doc.style);
 
   doc.pages.forEach((page, index) => {
     const n = index + 1;
@@ -129,6 +130,12 @@ export function designWarnings(doc: DocumentModel, measured: Measured = {}): Des
       }
     }
   });
+
+  // A running header or footer is set in the page margin: with too little margin it has nowhere to print.
+  const lines = doc.running ? [doc.running.header, doc.running.footer] : [];
+  if (doc.style.margin < MIN_RUNNING_MARGIN && lines.some((line) => Object.values(line).some((text) => text.trim()))) {
+    out.push({ code: "running-no-margin", page: 1, message: `The header and footer on every page are set in the page margin, and this document's margin is ${doc.style.margin}px — they need at least ${MIN_RUNNING_MARGIN}px, so they will not print.` });
+  }
   return out;
 }
 

@@ -5,6 +5,7 @@ import { blockPreviewHtml } from "@/lib/doceditor/serialize";
 import { COMPANY_DEFAULTS } from "@/lib/companyBrand";
 import { storedFileSrc } from "@/lib/storedFileSrc";
 import { imageFrame } from "@/lib/doceditor/imageFrame";
+import { tableLook } from "@/lib/doceditor/tableStyle";
 import { ActiveRichText, ReadOnlyRichText } from "./RichText";
 import { ShowcaseBlockView } from "./ShowcaseBlockView";
 import { useDocEditorEnv } from "./EditorContext";
@@ -51,22 +52,32 @@ function TableView({ block }: { block: Extract<DocumentBlock, { type: "table" }>
   const setHeader = (ci: number, header: string) => updateBlock(block.id, { columns: block.columns.map((c, i) => (i === ci ? { ...c, header } : c)) } as Partial<DocumentBlock>);
   const setCell = (ri: number, ci: number, value: string) => updateBlock(block.id, {
     // A row saved with fewer cells than there are columns is padded as it is typed into.
-    rows: block.rows.map((r, i) => (i === ri ? { cells: block.columns.map((_, c) => (c === ci ? { value } : r.cells[c] ?? { value: "" })) } : r)),
+    rows: block.rows.map((r, i) => (i === ri ? { ...r, cells: block.columns.map((_, c) => (c === ci ? { value } : r.cells[c] ?? { value: "" })) } : r)),
   } as Partial<DocumentBlock>);
+  // The same look the print works out (tableStyle.ts): spacing, rules, tinted rows.
+  const look = tableLook(block.tableStyle, [6, 8]);
+  const rule: React.CSSProperties = look.borders === "grid" ? { border: ".5px solid #e2e8f0" } : look.borders === "none" ? {} : { borderBottom: ".5px solid #e2e8f0" };
   return (
     <table style={{ width: "100%", borderCollapse: "collapse", margin: "6px 0" }}>
       <thead>
         <tr>{block.columns.map((c, ci) => (
-          <th key={ci} style={{ background: block.headerBg, color: block.headerColor, textAlign: c.align, padding: "6px 8px", fontSize: "8pt", width: `${c.widthPct}%` }}>
+          <th key={ci} style={{ background: block.headerBg, color: block.headerColor, textAlign: c.align, padding: look.pad, fontSize: "8pt", width: `${c.widthPct}%` }}>
             <input aria-label={`Column ${ci + 1} heading`} value={c.header} onChange={(e) => setHeader(ci, e.target.value)} style={{ ...field, textAlign: c.align, fontWeight: 700 }} />
           </th>
         ))}</tr>
       </thead>
       <tbody>
-        {block.rows.map((r, ri) => (
-          <tr key={ri} style={{ background: ri % 2 ? "#f8fafc" : "#fff" }}>
+        {block.rows.map((r, ri) => r.kind === "group" ? (
+          // A group heading: its first cell, across the whole table.
+          <tr key={ri} style={{ background: "#f1f5f9" }}>
+            <td colSpan={block.columns.length} style={{ padding: look.pad, ...rule, fontSize: "8.5pt", fontWeight: 700, letterSpacing: ".5px", textTransform: "uppercase", color: "#334155" }}>
+              <input aria-label={`Row ${ri + 1}, group heading`} value={r.cells[0]?.value ?? ""} placeholder="Group heading" onChange={(e) => setCell(ri, 0, e.target.value)} style={{ ...field, textTransform: "uppercase" }} />
+            </td>
+          </tr>
+        ) : (
+          <tr key={ri} style={{ background: r.kind === "subtotal" ? "#fff" : look.rowBg(ri) }}>
             {block.columns.map((c, ci) => (
-              <td key={ci} style={{ textAlign: c.align, padding: "6px 8px", borderBottom: ".5px solid #e2e8f0", fontSize: "10pt" }}>
+              <td key={ci} style={{ textAlign: c.align, padding: look.pad, ...rule, fontSize: "10pt", ...(r.kind === "subtotal" ? { fontWeight: 700, borderTop: "1px solid #94a3b8" } : {}) }}>
                 <input aria-label={`Row ${ri + 1}, ${c.header || `column ${ci + 1}`}`} value={r.cells[ci]?.value ?? ""} onChange={(e) => setCell(ri, ci, e.target.value)} style={{ ...field, textAlign: c.align }} />
               </td>
             ))}
@@ -132,6 +143,9 @@ export function BlockView({ block, active }: { block: DocumentBlock; active: boo
     case "lineItems":
       return <PrintedBlock block={block} hint={`🔗 Fills from the linked quote / job card${block.columns.some((c) => c.showIf?.trim()) ? " · some columns show only when their condition is met" : ""}`} />;
     case "divider": case "banner": case "infoCard": case "totalBand": case "terms": case "footer": case "handoverChecklist":
+      return <PrintedBlock block={block} />;
+    // Details grid, payment schedule, comparison, callout, gallery, QR code: drawn by the print renderer; edited in the panel.
+    case "detailsGrid": case "paymentSchedule": case "comparison": case "callout": case "gallery": case "qr":
       return <PrintedBlock block={block} />;
 
     case "conditional": {

@@ -134,6 +134,14 @@ test("AN UNKNOWN WHATSAPP NUMBER BECOMES A CONTACT, NOT A SALES LEAD", () => {
   assert.match(source, /prisma\.contact\.create/, "the message still needs a person to hang off");
 });
 
+test("A DELETED LEAD IS NOT A MATCH: its number is nobody's", () => {
+  // The raw query bypasses the soft-delete filter. Without this, a message from
+  // a number on a binned lead was filed on that lead — where nobody can see it —
+  // and the same number could never be linked to the assistant.
+  const source = read("src/lib/whatsapp.ts");
+  assert.match(source, /FROM "Lead"\s+WHERE [^\n]+\s+AND "status" = 'open'\s+AND "deletedAt" IS NULL/);
+});
+
 test("Messenger and Instagram keep creating a lead only for ad-attributed DMs", () => {
   // The channel that already had this right. An ad referral IS evidence of
   // sales intent; an ordinary DM is not.

@@ -127,6 +127,7 @@ loaderKey._load = function (this: unknown, request: string, parent, isMain) {
         waDigits: (p: string) => p.replace(/\D/g, ""),
         matchByPhone: async () => ({ contactId: null, leadId: null, ambiguous: false }),
         fetchWhatsAppMedia: async () => ({ buffer: Buffer.from("x"), contentType: "audio/ogg" }),
+        showWhatsAppTyping: async () => {},
         sendWhatsAppText: async (to: string, body: string) => { state.sent.push({ kind: "text", to, body }); return { ok: true }; },
         sendWhatsAppButtons: async (to: string, body: string) => { state.sent.push({ kind: "buttons", to, body }); return { ok: true }; },
         uploadWhatsAppMedia: async (_b: Buffer, contentType: string, filename: string) =>
@@ -142,6 +143,12 @@ loaderKey._load = function (this: unknown, request: string, parent, isMain) {
       };
       case "./crmAssistant": return {
         askCrm: async () => ({ ok: true, answer: ANSWER, rows: [], tools: [], learned: 0, actions: [], choices: [] }),
+      };
+      // Confirming tasks is another test's subject; here it is off and offers nothing.
+      case "./assistantWhatsAppConfirm": return {
+        confirmingOnWhatsAppOn: async () => false,
+        offerConfirmations: async () => {},
+        confirmFromWhatsApp: async () => {},
       };
       case "./assistantUser": return {
         assistantUserFor: async (id: string) => ({ id, name: id, email: `${id}@x`, role: "staff" }),

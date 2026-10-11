@@ -505,6 +505,14 @@ jobs:
       - name: Signing -- one sealing certificate per workspace, made once
         run: npm run test:signing-seal
 
+      # "The figures only ever go up" is a claim about two reports from the
+      # signing page landing together. Reading the row, taking the larger figure
+      # and writing it back reads as correct and still loses the newer one. Only
+      # overlapping writes against a real row can tell the two apart — and the
+      # script proves its own control: the read-then-write shape does lose here.
+      - name: Signing -- engagement reports that arrive together cannot undo each other
+        run: npm run test:signature-view
+
       # A source assertion cannot tell "the row budget is bounded" from "the row
       # budget is bounded PER CONVERSATION", and only the second one keeps a quiet
       # thread visible next to a busy one. Both shapes select threads first and
@@ -557,6 +565,20 @@ jobs:
       # not exist for another. The classifier's HTTP call is scripted.
       - name: Inbox -- spam screening holds, restores once, and never loses a message
         run: npm run test:inbound-screening
+
+      # The assistant finding a CUSTOMER to put a note on: with no lead, with a
+      # lead, several of one name — and never somebody else's or a deleted one,
+      # for a person who may open customers but not leads. Real permission rows;
+      # the model is never called.
+      - name: Assistant -- finds the right customer for the right person
+        run: npm run test:assistant-customers
+
+      # "Whose number is this?" is raw SQL, so the soft-delete filter is not
+      # applied for it. A number on a lead binned months earlier still matched:
+      # that person's messages were filed on the deleted lead, where nobody sees
+      # them. A source test shows the predicate is written; this shows what it does.
+      - name: Inbox -- a deleted lead does not capture a phone number
+        run: npm run test:phone-match
 
       # In-person signing was dead for two months with every structural test
       # green: the screen handed the signing form a stored digest, and the route

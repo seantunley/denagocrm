@@ -59,15 +59,15 @@ export const gettingStartedArticles: HelpArticle[] = [
     audience: "everyone",
     keywords: ["navigation", "sidebar", "menu", "dashboard", "search", "command", "layout", "find"],
     body: [
-      { type: "p", text: "The app has three constants: the **sidebar** on the left for navigation, the **top bar** for search and quick actions, and the main area where your work happens." },
+      { type: "p", text: "The app has three constants: the **sidebar** on the left for search, quick actions and navigation, the **top bar** for the clock and weather, Help, Settings and your account, and the main area where your work happens." },
       { type: "h", text: "The sidebar" },
       { type: "p", text: "Modules are grouped by the kind of work they do — Social, CRM, Marketing, Stock, Workshop, Automation and so on. You only see the groups and links your role can access, so your sidebar may be shorter than a colleague's." },
       { type: "h", text: "Home and Dashboards" },
       { type: "p", text: "**Home** is where you land: one line about your day, a few numbers, and the deals most worth contacting next. Every number is a link to the list behind it. Your charts and the cards you arranged live under **Dashboards**, the next link down." },
       { type: "h", text: "Search from anywhere" },
-      { type: "p", text: "The quickest way to reach a record is the global search / command menu in the top bar." },
+      { type: "p", text: "The quickest way to reach a record is the search box at the top of the sidebar." },
       { type: "steps", items: [
-        "Click the search box in the top bar (or press the keyboard shortcut shown in it).",
+        "Click **Search…** at the top of the sidebar (or press the keyboard shortcut shown in it).",
         "Start typing a name, phone number, quote number or vehicle.",
         "Pick a result to jump straight to it, or choose a quick action such as creating a new lead.",
       ] },

@@ -17,6 +17,9 @@ import { toast } from "sonner";
 import { ShowcaseProps } from "./ShowcaseProps";
 import { DesignSection } from "./DesignSection";
 import { AlignOnPage, ArrangePanel } from "./ArrangePanel";
+import { TableStyleControls } from "./TableStyleControls";
+import { ContentBlockProps } from "./ContentBlockProps";
+import { PageSection, RowSection, RunningSection } from "./PageFurnitureProps";
 import { IMAGE_ASPECT_LABELS, type ImageAspect } from "@/lib/doceditor/imageFrame";
 import { useState } from "react";
 import { uploadDocEditorImage } from "@/app/actions/doceditor";
@@ -208,6 +211,8 @@ function TableProps({ block }: { block: Extract<DocumentBlock, { type: "table" }
   const columns = block.columns;
   const setColumn = (i: number, patch: Partial<(typeof columns)[number]>) => set({ columns: columns.map((c, ci) => (ci === i ? { ...c, ...patch } : c)) });
   const emptyRow = () => ({ cells: columns.map(() => ({ value: "" })) });
+  const setRows = (rows: typeof block.rows) => set({ rows });
+  const moveRow = (i: number, by: -1 | 1) => { const rows = [...block.rows]; [rows[i], rows[i + by]] = [rows[i + by], rows[i]]; setRows(rows); };
   return (
     <Section title="Table">
       <p className="mb-2 text-[11px] text-slate-500">Click a heading or a cell on the page to type in it.</p>
@@ -223,13 +228,13 @@ function TableProps({ block }: { block: Extract<DocumentBlock, { type: "table" }
             <button
               type="button" className="rounded px-1 text-xs text-red-500 hover:bg-red-50 disabled:opacity-30" title="Remove this column" aria-label={`Remove column ${i + 1}`} disabled={columns.length <= 1}
               // The column goes with its cells, in every row.
-              onClick={() => set({ columns: columns.filter((_, ci) => ci !== i), rows: block.rows.map((r) => ({ cells: r.cells.filter((_, ci) => ci !== i) })) })}
+              onClick={() => set({ columns: columns.filter((_, ci) => ci !== i), rows: block.rows.map((r) => ({ ...r, cells: r.cells.filter((_, ci) => ci !== i) })) })}
             >✕</button>
           </li>
         ))}
       </ul>
       <div className="mb-3 flex gap-1.5">
-        <button type="button" className="flex-1 rounded-md border border-slate-300 py-1 text-xs text-slate-700 hover:bg-slate-50 disabled:opacity-40" disabled={columns.length >= 8} onClick={() => set({ columns: [...columns, { header: "", align: "left", widthPct: 20 }], rows: block.rows.map((r) => ({ cells: [...columns.map((_, ci) => r.cells[ci] ?? { value: "" }), { value: "" }] })) })}>+ Column</button>
+        <button type="button" className="flex-1 rounded-md border border-slate-300 py-1 text-xs text-slate-700 hover:bg-slate-50 disabled:opacity-40" disabled={columns.length >= 8} onClick={() => set({ columns: [...columns, { header: "", align: "left", widthPct: 20 }], rows: block.rows.map((r) => ({ ...r, cells: [...columns.map((_, ci) => r.cells[ci] ?? { value: "" }), { value: "" }] })) })}>+ Column</button>
         <button type="button" className="flex-1 rounded-md border border-slate-300 py-1 text-xs text-slate-700 hover:bg-slate-50" onClick={() => set({ rows: [...block.rows, emptyRow()] })}>+ Row</button>
         <button type="button" className="flex-1 rounded-md border border-slate-300 py-1 text-xs text-slate-700 hover:bg-slate-50 disabled:opacity-40" disabled={block.rows.length === 0} title="Remove the last row" onClick={() => set({ rows: block.rows.slice(0, -1) })}>− Row</button>
       </div>
@@ -237,6 +242,26 @@ function TableProps({ block }: { block: Extract<DocumentBlock, { type: "table" }
         <div className="flex-1"><label className={lbl}>Heading fill</label><input type="color" value={block.headerBg} onChange={(e) => set({ headerBg: e.target.value })} className="h-8 w-full rounded border border-slate-300" /></div>
         <div className="flex-1"><label className={lbl}>Heading text</label><input type="color" value={block.headerColor} onChange={(e) => set({ headerColor: e.target.value })} className="h-8 w-full rounded border border-slate-300" /></div>
       </div>
+      <div className="mt-3"><TableStyleControls value={block.tableStyle} onChange={(tableStyle) => set({ tableStyle })} /></div>
+      {block.rows.length > 0 && (
+        <>
+          <label className={`${lbl} mt-3`}>Rows</label>
+          <ul className="space-y-1">
+            {block.rows.map((r, i) => (
+              <li key={i} className="flex items-center gap-1">
+                <span className="min-w-0 flex-1 truncate text-xs text-slate-700" title={r.cells[0]?.value}>{r.cells[0]?.value || `Row ${i + 1}`}</span>
+                {/* A group heading spans the table; a subtotal is bold with a rule above it. Its figures are typed, not added up. */}
+                <select aria-label={`Kind of row ${i + 1}`} className="rounded border border-slate-300 px-1 py-1 text-xs text-slate-700" value={r.kind ?? ""} onChange={(e) => setRows(block.rows.map((x, ri) => (ri === i ? { cells: x.cells, ...(e.target.value ? { kind: e.target.value as "group" | "subtotal" } : {}) } : x)))}>
+                  <option value="">Row</option><option value="group">Group heading</option><option value="subtotal">Subtotal</option>
+                </select>
+                <button type="button" className="rounded px-1 text-xs text-slate-400 hover:text-slate-700 disabled:opacity-30" title="Move up" aria-label={`Move row ${i + 1} up`} disabled={i === 0} onClick={() => moveRow(i, -1)}>▲</button>
+                <button type="button" className="rounded px-1 text-xs text-slate-400 hover:text-slate-700 disabled:opacity-30" title="Move down" aria-label={`Move row ${i + 1} down`} disabled={i === block.rows.length - 1} onClick={() => moveRow(i, 1)}>▼</button>
+                <button type="button" className="rounded px-1 text-xs text-red-500 hover:bg-red-50" title="Remove this row" aria-label={`Remove row ${i + 1}`} onClick={() => setRows(block.rows.filter((_, ri) => ri !== i))}>✕</button>
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
     </Section>
   );
 }
@@ -245,6 +270,7 @@ const FRAME_PARTS = new Set<string>(["emailHeader", "emailBody", "emailSignature
 /** Plain names for the email blocks ("emailHeader block" is the code's name, not the owner's). */
 const EMAIL_BLOCK_NAMES: Record<string, string> = {
   emailHeader: "Header", emailBody: "Message slot", emailSignature: "Signature", emailFooter: "Footer", emailButton: "Button", emailFacts: "Key figures",
+  detailsGrid: "Details grid", paymentSchedule: "Payment schedule", comparison: "Comparison table", callout: "Callout", gallery: "Photo gallery", qr: "QR code",
 };
 
 /**
@@ -302,6 +328,7 @@ function SaveToLibrary({ block, floating }: { block: DocumentBlock; floating: bo
 
 function BlockProps({ block, floating }: { block: DocumentBlock; floating: boolean }) {
   const remove = useEditor((s) => s.remove);
+  const { email } = useDocEditorEnv();
   return (
     <>
       <div className="border-b border-slate-100 p-3 text-sm font-medium capitalize text-slate-700">{EMAIL_BLOCK_NAMES[block.type] ?? `${block.type} block`}{floating ? " · floating" : ""}</div>
@@ -321,6 +348,7 @@ function BlockProps({ block, floating }: { block: DocumentBlock; floating: boole
       {block.type === "footer" && <FooterProps block={block} />}
       {block.type === "lineItems" && <LineItemsProps block={block} />}
       {(block.type === "showcaseHeader" || block.type === "infoStrip" || block.type === "vehicleShowcase" || block.type === "totalsBox" || block.type === "acceptance" || block.type === "footerBand") && <ShowcaseProps block={block} />}
+      {(block.type === "detailsGrid" || block.type === "paymentSchedule" || block.type === "comparison" || block.type === "callout" || block.type === "gallery" || block.type === "qr") && <ContentBlockProps block={block} />}
       {block.type === "emailButton" && <EmailButtonProps block={block} />}
       {block.type === "emailFacts" && <EmailFactsProps block={block} />}
       {block.type === "emailFooter" && <EmailFooterProps block={block} />}
@@ -330,6 +358,8 @@ function BlockProps({ block, floating }: { block: DocumentBlock; floating: boole
       {(block.type === "text" || block.type === "heading") && <TextHint block={block} />}
       {block.type === "table" && <TableProps block={block} />}
       {block.type === "pageBreak" && <p className="p-3 text-xs text-slate-400">Forces the next content onto a new page.</p>}
+      {/* An email has no pages; a freely placed block is in no row. */}
+      {!floating && !email && block.type !== "pageBreak" && <RowSection block={block} />}
       <div className="space-y-2 p-3">
         <SaveToLibrary block={block} floating={floating} />
         <button type="button" onClick={() => remove(block.id)} className="w-full rounded-md border border-red-200 py-1.5 text-sm text-red-600 hover:bg-red-50">Delete block</button>
@@ -638,6 +668,7 @@ function PricingProps({ block }: { block: PricingBlock }) {
         <label className="mb-2 flex items-center gap-2 text-sm text-slate-700"><input type="checkbox" checked={block.showTax} onChange={(e) => updateBlock(block.id, { showTax: e.target.checked })} /> Show tax column</label>
         <label className="flex items-center gap-2 text-sm text-slate-700"><input type="checkbox" checked={block.showDiscount} onChange={(e) => updateBlock(block.id, { showDiscount: e.target.checked })} /> Show discount column</label>
       </Section>
+      <Section title="Table style"><TableStyleControls value={block.tableStyle} onChange={(tableStyle) => updateBlock(block.id, { tableStyle })} /></Section>
       {!block.bound && (
         <Section title="Line items">
           <div className="space-y-2">
@@ -785,6 +816,10 @@ function LineItemsProps({ block }: { block: LineItemsBlock }) {
           <div className="mt-2"><label className={lbl}>VAT rate (%) — prices are VAT-inclusive</label><input type="number" className={inp} value={block.vatRate} onChange={(e) => updateBlock(block.id, { vatRate: Number(e.target.value) })} /></div>
         )}
       </Section>
+      {/* The showcase and classic looks are drawn to fixed measurements the page layout (and its overflow onto a second page) depends on. */}
+      {!block.look || block.look === "standard" ? (
+        <Section title="Table style"><TableStyleControls value={block.tableStyle} onChange={(tableStyle) => updateBlock(block.id, { tableStyle })} /></Section>
+      ) : null}
       <Section title="Columns">
         <div className="space-y-2">
           {block.columns.map((c, i) => (
@@ -802,6 +837,13 @@ function LineItemsProps({ block }: { block: LineItemsBlock }) {
                 <select className="rounded border border-slate-300 px-1 text-xs" value={c.align} onChange={(e) => setCols(block.columns.map((x, j) => (j === i ? { ...x, align: e.target.value as "left" | "right" } : x)))}>
                   <option value="left">Left</option><option value="right">Right</option>
                 </select>
+                {(!block.look || block.look === "standard") && (
+                  <input
+                    type="number" min={5} max={90} step={5} className="w-16 rounded border border-slate-300 px-1 text-xs" title="Width, as a percent of the table. Empty = sized by its content." aria-label={`Width of column ${i + 1}, percent`} placeholder="auto"
+                    value={c.widthPct ?? ""}
+                    onChange={(e) => setCols(block.columns.map((x, j) => { if (j !== i) return x; const { widthPct: _w, ...rest } = x; void _w; const n = Number(e.target.value); return e.target.value && n > 0 ? { ...rest, widthPct: Math.min(90, n) } : rest; }))}
+                  />
+                )}
               </div>
               <input
                 className={`w-full rounded-md border px-2 py-1 text-xs ${validateExpression(c.showIf) ? "border-red-400" : "border-slate-200"}`}
@@ -919,10 +961,16 @@ function DocumentProps() {
           <div><label className={lbl}>Page size</label>
             <select className={inp} value={doc.style.pageSize} onChange={(e) => setStyle({ pageSize: e.target.value as "A4" | "Letter" })}><option value="A4">A4</option><option value="Letter">Letter</option></select>
           </div>
-          <div><label className={lbl}>Margin ({doc.style.margin}px)</label><input type="range" min={0} max={96} className="w-full" value={doc.style.margin} onChange={(e) => setStyle({ margin: Number(e.target.value) })} /></div>
+          <div><label className={lbl}>Turned</label>
+            {/* Portrait is stored as nothing at all — it is what every document already is. */}
+            <select className={inp} value={doc.style.orientation ?? "portrait"} onChange={(e) => setStyle({ orientation: e.target.value === "landscape" ? "landscape" : undefined })}><option value="portrait">Upright (portrait)</option><option value="landscape">On its side (landscape)</option></select>
+          </div>
+          <div className="col-span-2"><label className={lbl}>Margin ({doc.style.margin}px)</label><input type="range" min={0} max={96} className="w-full" value={doc.style.margin} onChange={(e) => setStyle({ margin: Number(e.target.value) })} /></div>
         </div>
       </Section>
+      <PageSection />
       <DocumentStyleSection />
+      <RunningSection />
       <Section title="Recipients">
         <div className="space-y-2">
           {doc.recipients.map((r) => (

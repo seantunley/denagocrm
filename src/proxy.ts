@@ -34,6 +34,11 @@ const PUBLIC_PATHS = [
   "/verify",
   "/api/verify",
   "/api/track", // campaign open/click tracking
+  // Secure file links (lib/secureLinks.ts): a customer with no account opens a
+  // file sent as an expiring, recallable link. The page hands over nothing; the
+  // download is a POST that checks the link every time. See both routes' headers.
+  "/f",
+  "/api/f",
   "/api/unsubscribe", // one-click marketing unsubscribe
   // Tenant brand logos. Consumed by the login pages, which render pre-auth by
   // definition; the route itself only ever streams the object a platform admin

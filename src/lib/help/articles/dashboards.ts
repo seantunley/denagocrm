@@ -51,7 +51,7 @@ export const dashboardArticles: HelpArticle[] = [
       ] },
       { type: "p", text: "The last three belong to the vehicle and workshop pack: if your dealership does not have it switched on, those cards do not exist for anyone. The rest depend on your permissions, so your dashboard may be shorter than a colleague's." },
       { type: "h", text: "Yours is yours" },
-      { type: "p", text: "Dashboards are per person. Building one does not publish it, there is no way to push yours onto a colleague, and nobody else can open it — a dashboard address that is not yours simply does not exist as far as your account is concerned." },
+      { type: "p", text: "Dashboards are per person. Building one does not publish it, and nobody else can open it — a dashboard address that is not yours simply does not exist as far as your account is concerned. The one exception is the workspace owner, who can press **Share with workspace** on a dashboard of their own. Everyone in the workspace then sees it in their dashboard switcher, marked **Shared with you — view only**: they can look, but only the owner can change it. Each card on it still shows a person only what their own access allows." },
       { type: "callout", tone: "info", text: "You do not have to build anything. Until you change something you get the standard dashboard, and it keeps up with the app — a card added in a later release appears on it without you lifting a finger. The first change you make turns it into your own screen, and from then on it is yours to keep." },
       { type: "callout", tone: "tip", text: "A card never shows you a row you could not open on its own page. See **What a card can and cannot show** for what that means in practice." },
     ],

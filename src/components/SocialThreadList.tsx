@@ -14,7 +14,11 @@ import { EmptyState, StatusPill } from "@/components/visual-system";
 import { RECEIPT_CHANNELS } from "@/lib/deliveryReceipts";
 import { deliveryLabel, type DeliveryState } from "@/lib/messageDelivery";
 
-export const CHANNEL_META: Record<string, { label: string; icon: React.ReactNode }> = {
+// Keyed on the thread's own channel type, not `string`: a channel the inbox
+// lists but this map lacks is then a compile error. It was `string`, Telegram
+// threads were added to the inbox without an entry here, and the first Telegram
+// conversation would have thrown on `meta.icon` and taken the whole list down.
+export const CHANNEL_META: Record<InboxThread["channel"], { label: string; icon: React.ReactNode }> = {
   whatsapp: {
     label: "WhatsApp",
     // eslint-disable-next-line @next/next/no-img-element
@@ -34,6 +38,11 @@ export const CHANNEL_META: Record<string, { label: string; icon: React.ReactNode
     label: "X",
     // eslint-disable-next-line @next/next/no-img-element
     icon: <img src="/branding/social-x.svg" alt="X" className="size-4 rounded-sm" />,
+  },
+  telegram: {
+    label: "Telegram",
+    // eslint-disable-next-line @next/next/no-img-element
+    icon: <img src="/branding/social-telegram.svg" alt="Telegram" className="size-4 rounded-sm" />,
   },
 };
 

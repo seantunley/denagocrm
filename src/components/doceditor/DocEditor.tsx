@@ -9,6 +9,7 @@ import { staleWordingWarnings, type WordingSettings } from "@/lib/doceditor/word
 import { designWarnings } from "@/lib/doceditor/designCheck";
 import { findPlaced, nudgePlaced } from "@/lib/doceditor/arrange";
 import { DesignCheckPanel } from "./DesignCheckPanel";
+import { PageStrip } from "./PageStrip";
 import { saveDocEditor, importDocEditorTemplate } from "@/app/actions/doceditor";
 import { publishBuilderVersion } from "@/app/actions/docbuilder";
 import { finaliseCustomDocument, saveCustomDocument } from "@/app/actions/customDocuments";
@@ -95,6 +96,8 @@ export function DocEditor({
   const pageSheets = useEditor((state) => state.pageSheets);
 
   const [zoom, setZoom] = useState(0.9);
+  // Page thumbnails: null = decide by the document (shown once it has more than one page).
+  const [showPages, setShowPages] = useState<boolean | null>(null);
   const [saveState, setSaveState] = useState<
     "idle" | "saving" | "saved"
   >("idle");
@@ -578,6 +581,8 @@ export function DocEditor({
             </div>
             <Palette />
           </aside>
+          {/* Page thumbnails: on once there is more than one page, unless switched off (bottom bar). An email is one card. */}
+          {!email && (showPages ?? doc.pages.length > 1) && <PageStrip />}
           <main className="min-w-0 flex-1 overflow-auto">
             <Canvas zoom={zoom} />
           </main>
@@ -599,6 +604,11 @@ export function DocEditor({
         <span>
           {doc.pages.length} page{doc.pages.length > 1 ? "s" : ""}
         </span>
+        {!email && (
+          <button type="button" className="hidden rounded px-1 hover:bg-slate-100 md:inline" aria-pressed={showPages ?? doc.pages.length > 1} onClick={() => setShowPages(!(showPages ?? doc.pages.length > 1))}>
+            {(showPages ?? doc.pages.length > 1) ? "Hide page thumbnails" : "Show page thumbnails"}
+          </button>
+        )}
         <span className="flex items-center gap-1">
           <button
             type="button"

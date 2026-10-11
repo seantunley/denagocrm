@@ -6,9 +6,10 @@ import { emailFramePreview } from "@/lib/doceditor/emailRender";
 import { useDraggable } from "@dnd-kit/core";
 import { useEditor } from "@/lib/doceditor/store";
 import { newBlock } from "@/lib/doceditor/factory";
-import { PAGE_SIZES, type DocumentBlock, type DocumentPage, type DocumentRow, type DocumentColumn } from "@/lib/doceditor/model";
+import { pageMargin, pageSizeOf, type DocumentBlock, type DocumentPage, type DocumentRow, type DocumentColumn } from "@/lib/doceditor/model";
 import { blockBoxCss, columnNeedsStretch } from "@/lib/doceditor/blockBox";
 import { docTypeCss } from "@/lib/doceditor/docStyles";
+import { MIN_RUNNING_MARGIN, runningText } from "@/lib/doceditor/pageFurniture";
 import { pageHasContent } from "@/lib/doceditor/ops";
 import ConfirmActionDialog from "@/components/ConfirmActionDialog";
 import { BlockView } from "./BlockView";
@@ -32,7 +33,7 @@ export function Canvas({ zoom }: { zoom: number }) {
   );
 
   if (!doc) return null;
-  const size = PAGE_SIZES[doc.style.pageSize];
+  const size = pageSizeOf(doc.style);
   const around = email && frame ? { ...frame, message: !!email.kind, href: email.frame?.href ?? null } : undefined;
 
   return (
@@ -43,7 +44,7 @@ export function Canvas({ zoom }: { zoom: number }) {
           wraps here as it prints. An email is drawn by its own renderer. */}
       {!email && <style>{docTypeCss(doc.style, ".doc-canvas", "var(--font-geist-sans),Helvetica,Arial,sans-serif")}</style>}
       {doc.pages.map((page, pIdx) => (
-        <PageView key={page.id} page={page} pIdx={pIdx} zoom={zoom} size={size} margin={doc.style.margin} fontFamily={doc.style.fontFamily} hint={hint} email={around} />
+        <PageView key={page.id} page={page} pIdx={pIdx} zoom={zoom} size={size} margin={pageMargin(doc, page)} fontFamily={doc.style.fontFamily} hint={hint} email={around} />
       ))}
     </div>
   );
@@ -102,6 +103,9 @@ function PageView({
   const duplicatePage = useEditor((s) => s.duplicatePage);
   const movePage = useEditor((s) => s.movePage);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
+  const whole = useEditor((s) => s.doc);
+  // (A page with too little margin of its own has nowhere to set them — as in print.)
+  const running = whole && !email && margin >= MIN_RUNNING_MARGIN ? runningText(whole, null, pIdx + 1, whole.pages.length) : null;
 
   useEffect(() => {
     const el = ref.current;
@@ -148,6 +152,12 @@ function PageView({
         <AddRowButton pageIdx={pIdx} active={!!hint && "pageIdx" in hint && hint.pageIdx === pIdx} />
       </div>
       {email?.message && <FramePart html={email.bottom} href={email.href} zoom={zoom} />}
+      {/* The running header and footer, in the margin where they print — on every sheet, with the page number. Set in the Document panel. */}
+      {running && ([["top", running.header], ["bottom", running.footer]] as const).map(([edge, words]) => (
+        <div key={edge} className="pointer-events-none absolute grid grid-cols-3 items-center" style={{ [edge]: 0, left: margin * zoom, right: margin * zoom, height: margin * zoom, fontSize: `${8 * zoom}pt`, lineHeight: 1.2, color: "#64748b" }}>
+          <span className="text-left">{words.left}</span><span className="text-center">{words.centre}</span><span className="text-right">{words.right}</span>
+        </div>
+      ))}
       <FloatingLayer page={page} zoom={zoom} />
       <OverlayLayer page={page} zoom={zoom} />
       {/* The page's own controls. An email is one card, not pages. */}

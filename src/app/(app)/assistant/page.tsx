@@ -22,7 +22,7 @@ import { basePrisma, prisma } from "@/lib/db";
 import { actingOwnerTenantId } from "@/lib/actingScope";
 import { isWhatsAppConfigured } from "@/lib/whatsapp";
 import { assistantWhatsAppOn } from "@/lib/assistantWhatsApp";
-import { maskWaId } from "@/lib/assistantWhatsAppRules";
+import { linkRefusalText, maskWaId } from "@/lib/assistantWhatsAppRules";
 import AssistantWhatsAppCard from "@/components/AssistantWhatsAppCard";
 
 export const dynamic = "force-dynamic";
@@ -33,15 +33,15 @@ export const metadata = { title: "Ask the CRM" };
  * connected (the page above has already checked the person may use the
  * assistant). Null hides it. The person's own link, read by (workspace, person).
  */
-async function whatsappCard(userId: string): Promise<{ linked: string | null } | null> {
+async function whatsappCard(userId: string): Promise<{ linked: string | null; refused: string | null } | null> {
   if (!(await assistantWhatsAppOn()) || !(await isWhatsAppConfigured())) return null;
   const tenantId = await actingOwnerTenantId().catch(() => null);
   if (!tenantId) return null;
   const link = await basePrisma.assistantPhoneLink.findUnique({
     where: { tenantId_userId: { tenantId, userId } },
-    select: { waId: true, verifiedAt: true },
+    select: { waId: true, verifiedAt: true, refusedReason: true },
   });
-  return { linked: link?.waId && link.verifiedAt ? maskWaId(link.waId) : null };
+  return { linked: link?.waId && link.verifiedAt ? maskWaId(link.waId) : null, refused: linkRefusalText(link?.refusedReason) };
 }
 
 export default async function AssistantPage() {
@@ -174,7 +174,7 @@ export default async function AssistantPage() {
           </ul>
         )}
       </section>
-      {whatsapp &&<AssistantWhatsAppCard name={profile.name} linked={whatsapp.linked} />}
+      {whatsapp &&<AssistantWhatsAppCard name={profile.name} linked={whatsapp.linked} refused={whatsapp.refused} />}
       <details className="card p-4 text-sm">
         <summary className="cursor-pointer font-medium">
           About you — what {profile.name} knows{aboutMe.length ? ` (${aboutMe.length})` : ""}

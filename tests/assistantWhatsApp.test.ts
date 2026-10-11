@@ -12,6 +12,7 @@ import {
   formatLinkCode,
   linkCodeHashInput,
   linkCodeText,
+  linkRefusalText,
   maskWaId,
   parseLinkCode,
   planWhatsAppReply,
@@ -41,6 +42,7 @@ type Link = {
   id: string; tenantId: string; userId: string;
   waId: string | null; codeHash: string | null; codeExpiresAt: Date | null; verifiedAt: Date | null;
   sessionVersion?: number | null;
+  refusedReason?: string | null;
 };
 type Where = Record<string, unknown>;
 
@@ -56,6 +58,15 @@ const state = {
   sent: [] as { to: string; text: string; buttons?: string[] }[],
   asked: [] as { userId: string; question: string; source?: string }[],
   mediaFetched: 0,
+  typing: [] as { id: string; sentBefore: number }[],
+  media: null as { buffer: Buffer; contentType: string } | null,
+  imageAllowed: true,
+  askedImages: [] as string[][],
+  confirmOn: false,
+  proposals: [] as { kind: string; title: string }[],
+  proposeTasks: [] as boolean[],
+  offered: [] as { tenantId: string; userId: string; waId: string; kinds: string[]; sentBefore: number }[],
+  confirmed: [] as { tenantId: string; userId: string; waId: string; pendingId: string }[],
   errors: [] as string[],
   audits: [] as string[],
   guesses: new Map<string, number>(),
@@ -116,7 +127,9 @@ loaderKey._load = function (this: unknown, request: string, parent, isMain) {
         sendWhatsAppButtons: async (to: string, text: string, buttons: { title: string }[]) => {
           state.sent.push({ to, text, buttons: buttons.map((b) => b.title) }); return { ok: true };
         },
-        fetchWhatsAppMedia: async () => { state.mediaFetched++; return { buffer: Buffer.from("x"), contentType: "audio/ogg" }; },
+        fetchWhatsAppMedia: async () => { state.mediaFetched++; return state.media ?? { buffer: Buffer.from("x"), contentType: "audio/ogg" }; },
+        // Recorded with what had been sent by then, to show it comes BEFORE the answer.
+        showWhatsAppTyping: async (id: string | null | undefined) => { if (id) state.typing.push({ id, sentBefore: state.sent.length }); },
         // A number on a customer record in this workspace (the real one scopes by tenant).
         matchByPhone: async (digits: string) => ({
           contactId: state.customers.has(digits) ? "contact-1" : null,
@@ -126,9 +139,25 @@ loaderKey._load = function (this: unknown, request: string, parent, isMain) {
       };
       case "./transcribe": return { transcribeVoice: async () => "what is overdue today" };
       case "./crmAssistant": return {
-        askCrm: async (user: { id: string }, question: string, _page: unknown, opts: { source?: string }) => {
+        askCrm: async (user: { id: string }, question: string, _page: unknown, opts: { source?: string; images?: string[]; proposeTasks?: boolean }) => {
           state.asked.push({ userId: user.id, question, source: opts.source });
+          state.askedImages.push(opts.images ?? []);
+          state.proposeTasks.push(opts.proposeTasks === true);
+          // As the real one: proposals come back only when the caller said it can confirm them.
+          if (opts.proposeTasks === true && state.proposals.length) {
+            return { ok: true, answer: "Set up for you to confirm.", rows: [], tools: [], learned: 0, actions: state.proposals, choices: [] };
+          }
           return { ok: true, answer: "Two follow-ups are overdue.", rows: [], tools: [], learned: 0, actions: [], choices: ["Show them"] };
+        },
+      };
+      // The confirm step itself is proved in assistantWhatsAppConfirm.test.ts; here, only WHEN it is reached.
+      case "./assistantWhatsAppConfirm": return {
+        confirmingOnWhatsAppOn: async () => state.confirmOn,
+        offerConfirmations: async (tenantId: string, userId: string, waId: string, cards: { kind: string }[]) => {
+          state.offered.push({ tenantId, userId, waId, kinds: cards.map((c) => c.kind), sentBefore: state.sent.length });
+        },
+        confirmFromWhatsApp: async (tenantId: string, user: { id: string }, waId: string, pendingId: string) => {
+          state.confirmed.push({ tenantId, userId: user.id, waId, pendingId });
         },
       };
       case "./assistantUser": return {
@@ -140,6 +169,7 @@ loaderKey._load = function (this: unknown, request: string, parent, isMain) {
           return n <= ASK_LIMIT;
         },
         ASK_LIMIT_MESSAGE: "You've asked a lot in the last hour — give it a few minutes and try again.",
+        assistantImageAllowed: async () => state.imageAllowed,
       };
       case "./userSecurity": return {
         // Strict: a failed read throws (no version-0 fallback).
@@ -194,6 +224,15 @@ beforeEach(() => {
   state.sent = [];
   state.asked = [];
   state.mediaFetched = 0;
+  state.typing = [];
+  state.media = null;
+  state.imageAllowed = true;
+  state.askedImages = [];
+  state.confirmOn = false;
+  state.proposals = [];
+  state.proposeTasks = [];
+  state.offered = [];
+  state.confirmed = [];
   state.errors = [];
   state.audits = [];
   state.guesses = new Map();
@@ -287,6 +326,11 @@ test("a matching code links exactly the SENDING number, to that person, and is u
   assert.ok(theirs.codeHash);
   assert.match(state.sent[0].text, /^✅ Linked — I'm /);
   assert.equal(state.sent[0].to, STAFF);
+  assert.equal(mine.refusedReason, null, "a link clears any earlier refusal");
+  assert.equal(linkRefusalText("something else"), null, "an unknown reason shows nothing");
+  // A new code clears it too, and the page shows it: the reason must not outlive the attempt it describes.
+  assert.match(code("src/app/actions/assistantWhatsApp.ts"), /update: \{ codeHash, codeExpiresAt, waId: null, verifiedAt: null, refusedReason: null,/);
+  assert.match(code("src/app/(app)/assistant/page.tsx"), /refused: linkRefusalText\(link\?\.refusedReason\)/);
   // Used: the same code again links nothing new.
   assert.equal(await handleStaffWhatsApp(CUSTOMER, { text: "DAX 123456" }), false);
   assert.equal(mine.waId, STAFF);
@@ -305,6 +349,9 @@ test("a customer's number is never linked, even with a valid code — and the co
     assert.equal(row.verifiedAt, null);
     assert.equal(row.codeHash, null, `${kind}: the code can't be retried`);
     assert.equal(state.sent.length, 0, "no DAX reply to a customer's phone");
+    // The person who asked is told on the Ask page instead — the phone never is.
+    assert.equal(row.refusedReason, "customer_number", `${kind}: the reason is kept for the page`);
+    assert.match(linkRefusalText(row.refusedReason) ?? "", /saved on a customer or an open lead/);
     assert.match(state.audits.at(-1) ?? "", /Refused to link WhatsApp •••000: that number is on a customer record/);
     // …and it is still not staff afterwards.
     assert.equal(await handleStaffWhatsApp(CUSTOMER, { text: "what's in the pipeline?" }), false);
@@ -494,6 +541,117 @@ test("a linked staff member is answered on WhatsApp, as themselves, with buttons
   assert.equal(state.asked[2].question, "what is overdue today");
 });
 
+test("'typing…' shows while DAX works it out — for staff only, before the answer, and never for a customer", async () => {
+  verified("u1", STAFF);
+  assert.equal(await handleStaffWhatsApp(STAFF, { text: "what's overdue?" }, "wamid.ASK1"), true);
+  assert.deepEqual(state.typing, [{ id: "wamid.ASK1", sentBefore: 0 }], "shown against their message, before anything is sent");
+  assert.equal(state.sent.length, 1, "the answer still goes");
+  // A voice note too.
+  assert.equal(await handleStaffWhatsApp(STAFF, { voiceMediaId: "m1" }, "wamid.ASK2"), true);
+  assert.equal(state.typing[1]?.id, "wamid.ASK2");
+  // No message id (an older caller): the answer goes, with no indicator.
+  state.typing = [];
+  assert.equal(await handleStaffWhatsApp(STAFF, { text: "pipeline?" }), true);
+  assert.deepEqual(state.typing, []);
+
+  // A CUSTOMER's chat never shows it, and their message is never marked read by us: an unknown
+  // number, a number that has landed on a customer record, a link code that is refused, the
+  // switch being off, a person over their limit.
+  assert.equal(await handleStaffWhatsApp(CUSTOMER, { text: "how much is the scooter?" }, "wamid.CUST"), false);
+  state.customers.add(STAFF);
+  assert.equal(await handleStaffWhatsApp(STAFF, { text: "pipeline?" }, "wamid.NOWCUST"), false);
+  state.customers.clear();
+  state.links = [];
+  state.customers.add(CUSTOMER);
+  pending("u1", "123456");
+  assert.equal(await handleStaffWhatsApp(CUSTOMER, { text: "DAX 123456" }, "wamid.CODE"), false);
+  state.customers.clear();
+  state.links = [];
+  verified("u1", STAFF);
+  state.switch = "off";
+  assert.equal(await handleStaffWhatsApp(STAFF, { text: "pipeline?" }, "wamid.OFF"), false);
+  state.switch = "on";
+  state.asks.set("u1", ASK_LIMIT);
+  assert.equal(await handleStaffWhatsApp(STAFF, { text: "pipeline?" }, "wamid.LIMIT"), true);
+  assert.deepEqual(state.typing, [], "none of these showed typing");
+
+  // It is started after every staff check and is the only caller; and it can never flag the connection or throw.
+  const lib = code("src/lib/assistantWhatsApp.ts");
+  const handler = lib.slice(lib.indexOf("export async function handleStaffWhatsApp"), lib.indexOf("async function sendVoiceAnswer"));
+  assert.ok(handler.indexOf("assistantAskAllowed(user.id)") < handler.indexOf("showWhatsAppTyping(messageId)"));
+  assert.ok(handler.indexOf("showWhatsAppTyping(messageId)") < handler.indexOf("await askCrm("));
+  assert.equal(lib.match(/showWhatsAppTyping\(/g)?.length, 1);
+  const wa = code("src/lib/whatsapp.ts");
+  const typing = wa.slice(wa.indexOf("export async function showWhatsAppTyping"), wa.indexOf("export async function sendWhatsAppImage"));
+  assert.match(typing, /status: "read", message_id: messageId, typing_indicator: \{ type: "text" \}/);
+  assert.match(typing, /AbortSignal\.timeout\(TYPING_TIMEOUT_MS\)/);
+  assert.doesNotMatch(typing, /noteWhatsAppOutcome|throw /, "a declined indicator must not mark the connection broken, or throw");
+  for (const file of ["src/lib/bot.ts", "src/lib/flowRun.ts", "src/app/api/webhooks/whatsapp/route.ts"]) {
+    assert.doesNotMatch(code(file), /showWhatsAppTyping/, `${file}: the customer chatbot does not use it`);
+  }
+});
+
+test("tasks are proposed and offered only when the owner allows confirming; a tapped Confirm is reached only as verified staff", async () => {
+  const CONFIRM = "daxc:cmpendingpendingpendingpe";
+  verified("u1", STAFF);
+  state.proposals = [{ kind: "note", title: "Add a note to Anna's lead" }];
+
+  // Switch off (the default): the assistant is not asked for tasks, and nothing is offered.
+  assert.equal(await handleStaffWhatsApp(STAFF, { text: "note on Anna: wants white" }), true);
+  assert.deepEqual(state.proposeTasks, [false]);
+  assert.deepEqual(state.offered.map((o) => o.kinds), [[]], "called with nothing to offer");
+
+  // Switch on: asked for tasks, and what it proposed is offered — to this person, in this workspace, AFTER the answer.
+  state.confirmOn = true;
+  state.sent = [];
+  state.offered = [];
+  assert.equal(await handleStaffWhatsApp(STAFF, { text: "note on Anna: wants white" }), true);
+  assert.equal(state.proposeTasks.at(-1), true);
+  assert.deepEqual(state.offered, [{ tenantId: "t1", userId: "u1", waId: STAFF, kinds: ["note"], sentBefore: 1 }]);
+
+  // A tapped Confirm: handed to the confirm step as this person; nothing is asked, and it is not counted as a question.
+  const asked = state.asked.length;
+  const asks = state.asks.get("u1");
+  assert.equal(await handleStaffWhatsApp(STAFF, { text: "Confirm", choiceId: CONFIRM }), true);
+  assert.deepEqual(state.confirmed, [{ tenantId: "t1", userId: "u1", waId: STAFF, pendingId: "cmpendingpendingpendingpe" }]);
+  assert.equal(state.asked.length, asked);
+  assert.equal(state.asks.get("u1"), asks);
+  // An ordinary quick-reply button (dax:0) is still just the next question.
+  assert.equal(await handleStaffWhatsApp(STAFF, { text: "Show them", choiceId: "dax:0" }), true);
+  assert.equal(state.confirmed.length, 1);
+  assert.equal(state.asked.at(-1)?.question, "Show them");
+
+  // NEVER for anyone who is not verified staff right now — the same button id from:
+  state.confirmed = [];
+  assert.equal(await handleStaffWhatsApp(CUSTOMER, { text: "Confirm", choiceId: CONFIRM }), false, "an unknown number");
+  state.customers.add(STAFF);
+  assert.equal(await handleStaffWhatsApp(STAFF, { text: "Confirm", choiceId: CONFIRM }), false, "a number now on a customer record");
+  state.customers.clear();
+  state.links = [];
+  verified("u1", STAFF);
+  state.sessionVersions.set("u1", 2);
+  assert.equal(await handleStaffWhatsApp(STAFF, { text: "Confirm", choiceId: CONFIRM }), true, "sign-ins reset: told once, unlinked");
+  state.sessionVersions.set("u1", 1);
+  state.links = [];
+  verified("u1", STAFF);
+  state.members.delete("u1");
+  assert.equal(await handleStaffWhatsApp(STAFF, { text: "Confirm", choiceId: CONFIRM }), false, "no longer a member");
+  state.members.add("u1");
+  state.switch = "off";
+  assert.equal(await handleStaffWhatsApp(STAFF, { text: "Confirm", choiceId: CONFIRM }), false, "the assistant's WhatsApp switch off");
+  assert.deepEqual(state.confirmed, [], "none of these reached the confirm step");
+
+  // In the code: the confirm branch sits after every staff check, and the webhook passes the button's id.
+  const lib = code("src/lib/assistantWhatsApp.ts");
+  const handler = lib.slice(lib.indexOf("export async function handleStaffWhatsApp"), lib.indexOf("async function sendVoiceAnswer"));
+  const at = handler.indexOf("await confirmFromWhatsApp(tenantId, user, waId, pendingId)");
+  for (const before of ["readUserSecurityStateStrict(link.userId)", "await matchByPhone(waId)", "await assistantUserFor(link.userId)"]) {
+    assert.ok(handler.indexOf(before) > -1 && handler.indexOf(before) < at, before);
+  }
+  assert.ok(at < handler.indexOf("assistantAskAllowed(user.id)"));
+  assert.match(code("src/app/api/webhooks/whatsapp/route.ts"), /handleStaffWhatsApp\(from, \{ text: title, choiceId: id \}, message\.id\)/);
+});
+
 test("questions are capped at 500 characters and by the person's ONE ask limit", async () => {
   verified("u1", STAFF);
   await handleStaffWhatsApp(STAFF, { text: "x".repeat(900) });
@@ -595,9 +753,10 @@ test("the route asks handleStaffWhatsApp FIRST and skips the inbox and the bot o
   const interactive = branch('} else if (message.type === "interactive")', '} else if (message.type === "image"');
   const audio = branch('} else if (message.type === "audio"', "await completeInboundBotEvent(claim)");
   for (const [name, body, call] of [
-    ["text", text, "handleStaffWhatsApp(from, { text })"],
-    ["interactive", interactive, "handleStaffWhatsApp(from, { text: title })"],
-    ["audio", audio, "handleStaffWhatsApp(from, { voiceMediaId: mediaId })"],
+    // message.id: what "typing…" is shown against while the answer is worked out.
+    ["text", text, "handleStaffWhatsApp(from, { text }, message.id)"],
+    ["interactive", interactive, "handleStaffWhatsApp(from, { text: title, choiceId: id }, message.id)"],
+    ["audio", audio, "handleStaffWhatsApp(from, { voiceMediaId: mediaId }, message.id)"],
   ] as const) {
     const at = body.indexOf(`if (await ${call}) return;`);
     assert.ok(at > -1, `${name}: must ask and return on a yes`);
@@ -617,8 +776,64 @@ test("the route asks handleStaffWhatsApp FIRST and skips the inbox and the bot o
   assert.ok(route.indexOf('withChannelTenantScope("whatsapp", phoneNumberId') < route.indexOf("handleStaffWhatsApp(from"));
   // Inside the claimed handler, so a redelivery is not answered twice.
   assert.ok(route.indexOf("withInboundBotEvent(claim") < route.indexOf("handleStaffWhatsApp(from"));
-  // Images and files from staff take today's path.
-  assert.doesNotMatch(branch('} else if (message.type === "image"', '} else if (message.type === "audio"'), /handleStaffWhatsApp/);
+  // A photo, file or video from staff is asked about too — BEFORE screening, the download and the
+  // customer inbox. Left to carry on, it was recorded as a customer message, which created a contact
+  // on the staff member's own number; a number on a customer record is then unlinked from the assistant.
+  const media = branch('} else if (message.type === "image"', '} else if (message.type === "audio"');
+  const asked = media.indexOf("if (await handleStaffWhatsApp(from, { mediaId: String(media?.id ?? \"\"), mediaKind: message.type, caption }, message.id)) return;");
+  assert.ok(asked > -1);
+  for (const later of ['held("media"', "fetchWhatsAppMedia(", "saveFile(", "recordInboundWhatsApp(", "runWhatsAppBot("]) assert.ok(asked < media.indexOf(later), later);
+});
+
+// The smallest complete JPEG cleanJpeg accepts, with a metadata segment that must not survive.
+const seg = (marker: number, payload: number[]) => [0xff, marker, (payload.length + 2) >> 8, (payload.length + 2) & 0xff, ...payload];
+const EXIF = seg(0xe1, [..."Exif\0\0GPS -33.9249,18.4241"].map((c) => c.charCodeAt(0)));
+const PHOTO = Buffer.from([
+  0xff, 0xd8, ...EXIF, ...seg(0xdb, [0x00, ...Array(64).fill(1)]), ...seg(0xc4, [0x00, 1, ...Array(15).fill(0), 0x00]),
+  ...seg(0xc0, [8, 0, 16, 0, 16, 1, 1, 0x11, 0]), ...seg(0xda, [1, 1, 0x00, 0, 63, 0]), 0x12, 0x34, 0xff, 0xd9,
+]);
+
+test("a photo from staff is read by the assistant; a file or video is answered, and none becomes a customer message", async () => {
+  verified("u1", STAFF);
+  state.media = { buffer: PHOTO, contentType: "image/jpeg" };
+  // With a caption: the caption is the question.
+  assert.equal(await handleStaffWhatsApp(STAFF, { mediaId: "m1", mediaKind: "image", caption: "  whose quote is this?  " }, "wamid.IMG"), true);
+  assert.equal(state.asked[0].question, "whose quote is this?");
+  assert.equal(state.asked[0].source, "whatsapp");
+  assert.equal(state.askedImages[0].length, 1);
+  assert.match(state.askedImages[0][0], /^data:image\/jpeg;base64,/);
+  const sent = Buffer.from(state.askedImages[0][0].split(",")[1], "base64").toString("latin1");
+  assert.ok(!sent.includes("GPS") && !sent.includes("Exif"), "rebuilt: no metadata reaches the model");
+  assert.equal(state.typing[0]?.id, "wamid.IMG");
+  // Without one: a default question.
+  await handleStaffWhatsApp(STAFF, { mediaId: "m1", mediaKind: "image", caption: "" });
+  assert.equal(state.asked[1].question, "What's in this image, and what should I do with it?");
+
+  // Not read, but ANSWERED — each returns true, so the route never files it as a customer's.
+  const refusals: [string, () => void, Parameters<typeof handleStaffWhatsApp>[1], RegExp][] = [
+    ["a file", () => {}, { mediaId: "m2", mediaKind: "document", caption: "" }, /not files or videos yet/],
+    ["a video", () => {}, { mediaId: "m2", mediaKind: "video", caption: "" }, /not files or videos yet/],
+    ["not a JPEG", () => { state.media = { buffer: PHOTO, contentType: "image/png" }; }, { mediaId: "m3", mediaKind: "image", caption: "" }, /couldn't read that image/],
+    ["broken bytes", () => { state.media = { buffer: Buffer.from("not a picture"), contentType: "image/jpeg" }; }, { mediaId: "m3", mediaKind: "image", caption: "" }, /couldn't read that image/],
+    ["no media id", () => {}, { mediaId: "", mediaKind: "image", caption: "" }, /couldn't read that image/],
+    ["over the hourly image allowance", () => { state.imageAllowed = false; }, { mediaId: "m3", mediaKind: "image", caption: "" }, /a lot of images this hour/],
+  ];
+  for (const [name, arrange, input, reply] of refusals) {
+    state.media = { buffer: PHOTO, contentType: "image/jpeg" };
+    state.imageAllowed = true;
+    state.sent = [];
+    const before = state.asked.length;
+    arrange();
+    assert.equal(await handleStaffWhatsApp(STAFF, input), true, `${name}: dealt with here`);
+    assert.equal(state.asked.length, before, `${name}: nothing is asked`);
+    assert.match(state.sent[0]?.text ?? "", reply, name);
+  }
+
+  // A CUSTOMER's photo is none of this: not staff → false, and it is never downloaded here.
+  state.media = { buffer: PHOTO, contentType: "image/jpeg" };
+  const fetched = state.mediaFetched;
+  assert.equal(await handleStaffWhatsApp(CUSTOMER, { mediaId: "m9", mediaKind: "image", caption: "is this in stock?" }), false);
+  assert.equal(state.mediaFetched, fetched, "a customer's photo is not fetched by the assistant");
 });
 
 test("the staff path never writes a customer record or runs the bot", () => {
@@ -628,7 +843,7 @@ test("the staff path never writes a customer record or runs the bot", () => {
   for (const call of lib.match(/sendWhatsApp(Text|Buttons)\([^)]*\)/g) ?? []) {
     assert.doesNotMatch(call, /record/, call);
   }
-  assert.match(lib, /askCrm\(user, q, null, \{ source: "whatsapp" \}\)/);
+  assert.match(lib, /askCrm\(user, q, null, \{ source: "whatsapp", images, proposeTasks: await confirmingOnWhatsAppOn\(\) \}\)/);
   // Every lookup names the workspace the route entered for the business number.
   assert.match(lib, /const scope = currentTenantScope\(\);\s*if \(!scope \|\| scope\.system \|\| !scope\.tenantId\) return false;\s*const tenantId = scope\.tenantId;/);
   // …and it is the first thing the handler does: nothing runs before it.
@@ -651,7 +866,7 @@ test("link and unlink touch only the caller's own row, behind the gate and the s
   assert.match(start, /where: \{ tenantId_userId: \{ tenantId, userId: user\.id \} \}/);
   // Only the hash is stored; re-linking clears the old number.
   assert.match(start, /create: \{ tenantId, userId: user\.id, codeHash, codeExpiresAt, sessionVersion \}/);
-  assert.match(start, /update: \{ codeHash, codeExpiresAt, waId: null, verifiedAt: null, sessionVersion \}/);
+  assert.match(start, /update: \{ codeHash, codeExpiresAt, waId: null, verifiedAt: null, refusedReason: null, sessionVersion \}/);
   assert.match(start, /const sessionVersion = await callerSessionVersion\(\);/, "the code belongs to the sign-in that asked for it");
   assert.doesNotMatch(start, /code: code|codeHash: code\b/);
   assert.match(start, /logAudit\(/);
@@ -675,6 +890,7 @@ test("it knows about WhatsApp — and the pinned claims stay true", async () => 
   const about = selfKnowledge("DAX");
   assert.match(about, /link their own WhatsApp/);
   assert.match(about, /one-time code/);
-  assert.match(about, /There you only answer — tasks still need a tap on Confirm in the CRM/);
+  assert.match(about, /reaches them with a Confirm button only if the owner has allowed confirming on WhatsApp; otherwise tasks still need a tap on Confirm in the CRM/);
+  assert.match(about, /A message to a customer is never sent from WhatsApp/);
   assert.match(about, /you never send anything to a customer/);
 });

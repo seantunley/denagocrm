@@ -13,7 +13,8 @@ import { tenantObserving, tenantEnforcing, mayRetryTenantlessSession } from "./t
 import { honoredTenantClaim, resolveLoginTenant } from "./tenant";
 import { ensureFoundingMembership } from "./provisioning";
 import { establishStaffTenantScope, validateInSystemScope } from "./tenantScopeEntry";
-import { withTenant, withSystemScope, enterTenantScope } from "./tenantScope";
+import { AsyncLocalStorage } from "node:async_hooks";
+import { withTenant, withSystemScope, enterTenantScope, currentTenantScope } from "./tenantScope";
 import {
   verifySession,
   signFreshSession,
@@ -116,6 +117,9 @@ const resolveCurrentUser = cache(async () => {
  * make the next gap silent instead of loud.
  */
 export async function getCurrentUser() {
+  // A verified linked phone acting as its owner (see runAsLinkedStaff below).
+  const linked = linkedStaff.getStore();
+  if (linked) return linked;
   const resolved = await resolveCurrentUser();
   if (!resolved) return null;
   if (resolved.scope) enterTenantScope(resolved.scope);
@@ -126,6 +130,43 @@ export async function requireUser() {
   const user = await getCurrentUser();
   if (!user) redirect("/login");
   return user;
+}
+
+type SignedInUser = NonNullable<Awaited<ReturnType<typeof resolveCurrentUser>>>["user"];
+const linkedStaff = new AsyncLocalStorage<SignedInUser>();
+
+/**
+ * Run `fn` with `userId` as the signed-in person, WITHOUT a browser session.
+ *
+ * ONE CALLER, ON PURPOSE: a staff member confirming, from their linked WhatsApp,
+ * a task the assistant proposed (lib/assistantWhatsAppConfirm). A linked phone is
+ * a sign-in — proved by a one-time code, tied to the account's sessionVersion,
+ * re-checked on every message — and the CRM's actions find their actor through
+ * getCurrentUser(). This is the door that lets that sign-in reach them, so the
+ * action's own permission checks, record-access checks and audit entry all run
+ * exactly as they do for a click in the CRM, as that person.
+ *
+ * What it refuses, so that it can never be wider than a real sign-in:
+ *  - no workspace scope, or a system scope: there must be exactly the ONE
+ *    workspace the caller already established (the business number's);
+ *  - an account that is gone or disabled, checked here and now — not trusted
+ *    from the caller.
+ * The caller is responsible for what makes it THIS person: the verified link and
+ * its sessionVersion (handleStaffWhatsApp checks both before anything else).
+ *
+ * `run`, not `enterWith`: the identity exists only inside `fn`'s own call tree
+ * and is gone when it returns. tests/assistantWhatsAppConfirm.test.ts keeps a
+ * second caller from appearing.
+ */
+export async function runAsLinkedStaff<T>(userId: string, fn: () => Promise<T>): Promise<T> {
+  const scope = currentTenantScope();
+  if (!scope || scope.system || !scope.tenantId) throw new Error("runAsLinkedStaff: needs one workspace scope");
+  const [user, security] = await Promise.all([
+    basePrisma.user.findUnique({ where: { id: userId } }),
+    getUserSecurityStateFresh(userId),
+  ]);
+  if (!user || !security || security.disabledAt) throw new Error("runAsLinkedStaff: no such active account");
+  return linkedStaff.run(user, fn);
 }
 
 /**

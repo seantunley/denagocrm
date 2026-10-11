@@ -17,7 +17,7 @@ import { formatDateTime } from "@/lib/format";
 import { runSpeed } from "@/lib/assistantRun";
 import { unlinkWhatsAppFor } from "@/app/actions/assistantWhatsApp";
 import ConfirmActionDialog from "@/components/ConfirmActionDialog";
-import { ASSISTANT_WHATSAPP_KEY, maskWaId, whatsappSwitchOn } from "@/lib/assistantWhatsAppRules";
+import { ASSISTANT_WHATSAPP_CONFIRM_KEY, ASSISTANT_WHATSAPP_KEY, maskWaId, whatsappConfirmOn, whatsappSwitchOn } from "@/lib/assistantWhatsAppRules";
 import { actingOwnerTenantId } from "@/lib/actingScope";
 
 /** Who has a WhatsApp linked — masked — so the owner can see it, even for someone who has since lost access. */
@@ -69,7 +69,7 @@ const FEEDBACK_REASON_LABELS: Record<string, string> = {
 export default async function AssistantSettingsPage() {
   await requireTenantOwner();
   if (!(await isModuleEnabled("automation"))) notFound();
-  const [profile, notes, staff, tidiedAt, tidySummary, whatsappOn, phones, ratings, speed, voiceOn] = await Promise.all([
+  const [profile, notes, staff, tidiedAt, tidySummary, whatsappOn, phones, ratings, speed, voiceOn, confirmOn] = await Promise.all([
     getSetting(ASSISTANT_PROFILE_KEY).then(parseProfile),
     prisma.assistantNote.findMany({ orderBy: [{ status: "desc" }, { createdAt: "desc" }] }),
     listActingTenantStaff(),
@@ -82,6 +82,7 @@ export default async function AssistantSettingsPage() {
     ratingsSince(30),
     runSpeed(7).catch(() => ({ runs: 0, medians: {} as Record<string, number> })),
     getSetting(ASSISTANT_VOICE_REPLIES_KEY).then(voiceRepliesSwitchOn),
+    getSetting(ASSISTANT_WHATSAPP_CONFIRM_KEY).then(whatsappConfirmOn),
   ]);
   const rated = (rating: string) => ratings.filter((r) => r.feedback === rating).reduce((n, r) => n + r._count._all, 0);
   const wrongBecause = ratings.filter((r) => r.feedback === "down" && r.feedbackReason);
@@ -213,8 +214,27 @@ export default async function AssistantSettingsPage() {
             <span className="block text-xs text-muted-foreground">
               Each person can link their own WhatsApp on the Ask page — by sending a one-time code from that phone to
               the business number — and then ask {profile.name} by messaging the business number. Answers can contain
-              customer details, and they go to that staff member&apos;s phone. On WhatsApp it only answers; tasks still
-              need the CRM. Off: messages from staff phones are treated like any other, as today.
+              customer details, and they go to that staff member&apos;s phone. On WhatsApp it only answers, unless you
+              also allow confirming below. Off: messages from staff phones are treated like any other, as today.
+            </span>
+          </span>
+        </label>
+        <label className="flex cursor-pointer items-start gap-2 text-sm">
+          <input
+            type="checkbox"
+            name="whatsappConfirm"
+            defaultChecked={confirmOn}
+            className="mt-1 accent-primary"
+          />
+          <span>
+            <span className="block font-medium">Let staff confirm {profile.name}&apos;s tasks on WhatsApp</span>
+            <span className="block text-xs text-muted-foreground">
+              When {profile.name} proposes a task on WhatsApp — a note, a follow-up, moving a lead to another stage,
+              giving a lead to someone, booking or moving a meeting — it comes with a Confirm button. Tapping it within
+              15 minutes does it, as that person, with their own permissions, and it is recorded in the audit trail.
+              Nothing happens without the tap. Messages to customers, test drives, marking a deal lost and starting a
+              quote are never done from WhatsApp. Turn this on only if a linked phone being unlocked in the wrong hands
+              is a risk you accept: with it off, a phone can read answers but change nothing.
             </span>
           </span>
         </label>

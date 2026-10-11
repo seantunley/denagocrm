@@ -17,6 +17,7 @@ import { stuckSteps } from "@/lib/signing/stuck";
 import { allSignersSigned, failureInWords, finishingStalled, stuckExplanation, stuckHeadline, stuckProgress, worstStep } from "@/lib/signing/stuckText";
 import { loadEvidence } from "@/lib/signing/evidence";
 import { eventInWords } from "@/lib/signing/evidenceText";
+import { engagementLine, summariseViews } from "@/lib/signing/viewAnalytics";
 
 export const dynamic = "force-dynamic";
 // Retry finishes a signed document from this page's action: rendering and
@@ -86,6 +87,7 @@ export default async function SignatureDetail({ params }: { params: Promise<{ id
     include: {
       recipients: { orderBy: { order: "asc" } },
       events: { orderBy: { createdAt: "asc" } },
+      views: { orderBy: { startedAt: "asc" }, select: { startedAt: true, lastSeenAt: true, seconds: true, maxPage: true } },
       fields: { include: { responses: { orderBy: { filledAt: "asc" } } } },
       approvals: { orderBy: { order: "asc" } },
     },
@@ -375,6 +377,22 @@ export default async function SignatureDetail({ params }: { params: Promise<{ id
           </ul>
         </div>
       )}
+
+      {(() => {
+        const views = summariseViews(req.views ?? []);
+        if (!views.sessions) return null;
+        return (
+          <div className={card}>
+            <p className="mb-2 text-sm font-semibold text-foreground">Engagement</p>
+            <p className="text-sm text-muted-foreground">
+              {engagementLine(views)}
+              {views.lastSeen ? ` Last open ${formatDateTime(views.lastSeen)}.` : ""}
+            </p>
+            {/* Reported by the reader's own browser: a guide to interest, never proof that something was read. */}
+            <p className="mt-1 text-xs text-muted-foreground/70">On the customer&apos;s own device. An indication only — the audit trail below is the record.</p>
+          </div>
+        );
+      })()}
 
       <div className={card}>
         <p className="mb-3 text-sm font-semibold text-foreground">Recipients</p>

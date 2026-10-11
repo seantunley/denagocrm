@@ -29,7 +29,13 @@ test("a timeout is a failed send the outbox retries, not a throw", () => {
   assert.equal(classifyDeliveryFailure(whatsappTransportFailure(new TypeError("fetch failed")).error!), "transient_network");
   // Every /messages send goes through the wrapped helper.
   const wa = src("src/lib/whatsapp.ts");
-  assert.equal(wa.match(/\/messages`/g)?.length, 1, "one fetch to /messages, inside postWhatsAppMessage");
+  // …and the only other fetch to /messages is the "typing…" indicator, which is not a message: nothing is
+  // delivered, so there is nothing to retry or to record as failed. A third would be a send that skipped the helper.
+  assert.equal(wa.match(/\/messages`/g)?.length, 2, "postWhatsAppMessage and showWhatsAppTyping only");
+  const send = wa.slice(wa.indexOf("async function postWhatsAppMessage"), wa.indexOf("const TYPING_TIMEOUT_MS"));
+  const typing = wa.slice(wa.indexOf("export async function showWhatsAppTyping"), wa.indexOf("export async function sendWhatsAppImage"));
+  assert.equal(send.match(/\/messages`/g)?.length, 1);
+  assert.equal(typing.match(/\/messages`/g)?.length, 1);
   assert.match(wa, /catch \(error\) \{\s*return whatsappTransportFailure\(error\);/);
 });
 

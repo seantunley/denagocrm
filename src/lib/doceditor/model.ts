@@ -54,12 +54,29 @@ const maybeColor = z.string().transform((value) => (isSafeCssColor(value) ? valu
  * visible sliver of unusable paper; stating the real measurement costs nothing.
  */
 export const PAGE_SIZES = {
-  A4: { w: 794, h: 1123, cssH: "297mm" }, // px @ 96dpi; cssH is exact
-  Letter: { w: 816, h: 1056, cssH: "11in" },
+  A4: { w: 794, h: 1123, cssH: "297mm", cssW: "210mm" }, // px @ 96dpi; cssH / cssW are exact
+  Letter: { w: 816, h: 1056, cssH: "11in", cssW: "8.5in" },
   /** A customer email (./emailRender.ts): the 600px card mail apps show. Never printed. */
-  Email: { w: 600, h: 760, cssH: "201.08mm" },
+  Email: { w: 600, h: 760, cssH: "201.08mm", cssW: "158.75mm" },
 } as const;
 export type PageSizeName = keyof typeof PAGE_SIZES;
+
+/**
+ * The sheet a document is laid out on: its paper, turned on its side when the
+ * document is landscape. Everything that needs the sheet's size asks here, so
+ * the editor page, the signing sheet and the PDF cannot disagree about it.
+ * (An email is a card, not paper: it has no orientation.)
+ */
+export function pageSizeOf(style: { pageSize: PageSizeName; orientation?: "portrait" | "landscape" }): { w: number; h: number; cssH: string } {
+  const paper = PAGE_SIZES[style.pageSize];
+  return style.orientation === "landscape" && style.pageSize !== "Email" ? { w: paper.h, h: paper.w, cssH: paper.cssW } : paper;
+}
+
+/** A page's margin: its own when it has one (a full-bleed cover, a wide-margined letter page), else the document's. */
+export function pageMargin(doc: { style: { margin: number } }, page: { margin?: number }): number {
+  const own = Number(page.margin);
+  return page.margin !== undefined && Number.isFinite(own) ? Math.min(200, Math.max(0, own)) : doc.style.margin;
+}
 
 // ── shared ──────────────────────────────────────────────────────────
 export const boxSpacingSchema = z.object({
@@ -105,6 +122,23 @@ export const bindingSchema = z.object({
   fallback: z.string().default(""),
 });
 export type Binding = z.infer<typeof bindingSchema>;
+
+/**
+ * How a table is drawn (see ./tableStyle.ts) — shared by the plain table, the
+ * standard line-items table and the pricing table. Every part is optional and
+ * its absence is the look these tables always had: normal spacing, a rule under
+ * each row, alternate rows tinted, the heading repeated on each printed page.
+ */
+export const tableStyleSchema = z.object({
+  density: z.enum(["compact", "normal", "relaxed"]),
+  borders: z.enum(["rows", "grid", "none"]),
+  zebra: z.boolean(),
+  /** Print the heading row again at the top of each page the table runs onto. */
+  repeatHeader: z.boolean(),
+  /** Never split one row across two pages. */
+  keepRows: z.boolean(),
+}).partial().optional();
+export type TableStyle = z.infer<typeof tableStyleSchema>;
 
 // ── blocks (flow content) ───────────────────────────────────────────
 const base = { id: z.string(), settings: layoutSettingsSchema, locked: z.boolean().default(false), hidden: z.boolean().default(false) };
@@ -161,13 +195,16 @@ export const pricingBlockSchema = z.object({
   showTax: z.boolean().default(true),
   showDiscount: z.boolean().default(true),
   accent: colorField("#ea580c"),
+  tableStyle: tableStyleSchema,
 });
 
 export const tableBlockSchema = z.object({
   ...base, type: z.literal("table"),
   columns: z.array(z.object({ header: z.string(), align: z.enum(["left", "center", "right"]).default("left"), widthPct: z.number().default(25) })).default([]),
-  rows: z.array(z.object({ cells: z.array(z.object({ value: z.string() })) })).default([]),
+  /** `kind`: a group heading (its first cell, across the whole table) or a subtotal row (bold, ruled above). Unset = an ordinary row. */
+  rows: z.array(z.object({ cells: z.array(z.object({ value: z.string() })), kind: z.enum(["group", "subtotal"]).optional() })).default([]),
   headerBg: colorField("#020617"), headerColor: colorField("#ffffff"),
+  tableStyle: tableStyleSchema,
 });
 
 /**
@@ -209,6 +246,8 @@ export const lineItemColumnSchema = z.object({
   header: z.string(),
   align: z.enum(["left", "right"]).default("left"),
   showIf: z.string().default(""),   // safe expression against the record; empty = always show
+  /** A fixed share of the table's width, in percent. Unset = sized by its content, as before. */
+  widthPct: z.number().optional(),
 });
 export const lineItemsBlockSchema = z.object({
   ...base, type: z.literal("lineItems"),
@@ -222,6 +261,8 @@ export const lineItemsBlockSchema = z.object({
     { key: "unitPrice", header: "Unit price", align: "right", showIf: "" },
     { key: "total", header: "Total", align: "right", showIf: "" },
   ]),
+  /** Standard look only: the showcase and classic looks are drawn to fixed measurements the page layout depends on. */
+  tableStyle: tableStyleSchema,
 });
 export type LineItemColumn = z.infer<typeof lineItemColumnSchema>;
 export const totalBandBlockSchema = z.object({
@@ -342,6 +383,67 @@ export const footerBandBlockSchema = z.object({
   style: bandStyle,
 });
 
+// ── content blocks (rendered by ./contentBlocks.ts) ──────────────────
+// Every text value here takes {{merge fields}}.
+/**
+ * Labels with their values, in columns: a details grid, a specification sheet,
+ * or banking details. `stacked` puts each label above its value; `inline` puts
+ * them side by side on one line.
+ */
+export const detailsGridBlockSchema = z.object({
+  ...base, type: z.literal("detailsGrid"),
+  title: z.string().default(""),
+  items: z.array(z.object({ label: z.string().default(""), value: z.string().default("") })).default([]),
+  columns: z.number().default(2),
+  layout: z.enum(["stacked", "inline"]).default("stacked"),
+  boxed: z.boolean().default(false),
+  accent: colorField("#ea580c"),
+});
+/**
+ * When each part of the total is due. A row either states a share of the
+ * document's total (`percent` — worked out from the quote or job card when the
+ * document is made) or carries a typed `amount`.
+ */
+export const paymentScheduleBlockSchema = z.object({
+  ...base, type: z.literal("paymentSchedule"),
+  title: z.string().default("PAYMENT SCHEDULE"),
+  rows: z.array(z.object({ label: z.string().default(""), due: z.string().default(""), percent: z.number().optional(), amount: z.string().default("") })).default([]),
+  accent: colorField("#ea580c"),
+});
+/** Options side by side: one row per feature, one column per option, one option picked out. A cell of "yes" / "no" draws a tick / a dash. */
+export const comparisonBlockSchema = z.object({
+  ...base, type: z.literal("comparison"),
+  options: z.array(z.object({ name: z.string().default(""), highlight: z.boolean().default(false) })).default([]),
+  rows: z.array(z.object({ label: z.string().default(""), cells: z.array(z.string()).default([]) })).default([]),
+  accent: colorField("#ea580c"),
+});
+/** A note set apart from the text around it. */
+export const calloutBlockSchema = z.object({
+  ...base, type: z.literal("callout"),
+  tone: z.enum(["info", "success", "warning", "accent"]).default("info"),
+  title: z.string().default(""),
+  text: z.string().default(""),
+  accent: colorField("#ea580c"),
+});
+/** Several pictures in a grid, each cropped to one shape. A picture is a stored upload or an https link, as for the image block. */
+export const galleryBlockSchema = z.object({
+  ...base, type: z.literal("gallery"),
+  images: z.array(z.object({ src: z.string().default(""), alt: z.string().default(""), caption: z.string().default("") })).default([]),
+  columns: z.number().default(3),
+  aspect: z.enum(["1:1", "4:3", "3:2", "16:9", "3:4"]).default("4:3"),
+  gap: z.number().default(8),
+  rounded: z.boolean().default(true),
+});
+/** A QR code for a link (a payment page, a booking page, the quote online), with a line of text beside it. */
+export const qrBlockSchema = z.object({
+  ...base, type: z.literal("qr"),
+  url: z.string().default(""),
+  label: z.string().default(""),
+  caption: z.string().default(""),
+  size: z.number().default(96),
+  showUrl: z.boolean().default(true),
+});
+
 // ── customer email blocks (rendered by ./emailRender.ts) ─────────────
 // Customer emails are documents in this editor too (Sean, 2026-10-08: "We have
 // all this advanced editing, and I get inline editing"). One shared FRAME
@@ -418,6 +520,7 @@ export const blockSchema: z.ZodType<DocumentBlock> = z.lazy(() => z.discriminate
   bannerBlockSchema, infoCardBlockSchema, lineItemsBlockSchema, totalBandBlockSchema, termsBlockSchema, footerBlockSchema,
   conditionalBlockSchema, handoverChecklistBlockSchema,
   showcaseHeaderBlockSchema, infoStripBlockSchema, vehicleShowcaseBlockSchema, totalsBoxBlockSchema, acceptanceBlockSchema, footerBandBlockSchema,
+  detailsGridBlockSchema, paymentScheduleBlockSchema, comparisonBlockSchema, calloutBlockSchema, galleryBlockSchema, qrBlockSchema,
   emailHeaderBlockSchema, emailBodyBlockSchema, emailSignatureBlockSchema, emailFooterBlockSchema, emailButtonBlockSchema, emailFactsBlockSchema,
 ])) as z.ZodType<DocumentBlock>;
 
@@ -444,6 +547,14 @@ export type AcceptanceBlock = z.infer<typeof acceptanceBlockSchema>;
 export type FooterBandBlock = z.infer<typeof footerBandBlockSchema>;
 export type ShowcaseBlock =
   | ShowcaseHeaderBlock | InfoStripBlock | VehicleShowcaseBlock | TotalsBoxBlock | AcceptanceBlock | FooterBandBlock;
+export type DetailsGridBlock = z.infer<typeof detailsGridBlockSchema>;
+export type PaymentScheduleBlock = z.infer<typeof paymentScheduleBlockSchema>;
+export type ComparisonBlock = z.infer<typeof comparisonBlockSchema>;
+export type CalloutBlock = z.infer<typeof calloutBlockSchema>;
+export type GalleryBlock = z.infer<typeof galleryBlockSchema>;
+export type QrBlock = z.infer<typeof qrBlockSchema>;
+export type ContentBlock = DetailsGridBlock | PaymentScheduleBlock | ComparisonBlock | CalloutBlock | GalleryBlock | QrBlock;
+export const CONTENT_BLOCK_TYPES = ["detailsGrid", "paymentSchedule", "comparison", "callout", "gallery", "qr"] as const;
 export type EmailHeaderBlock = z.infer<typeof emailHeaderBlockSchema>;
 export type EmailBodyBlock = z.infer<typeof emailBodyBlockSchema>;
 export type EmailSignatureBlock = z.infer<typeof emailSignatureBlockSchema>;
@@ -460,7 +571,7 @@ export type DocumentBlock =
   | TextBlock | HeadingBlock | ImageBlock | DividerBlock | SpacerBlock
   | PageBreakBlock | PricingBlock | TableBlock
   | BannerBlock | InfoCardBlock | LineItemsBlock | TotalBandBlock | TermsBlock | FooterBlock
-  | ConditionalBlock | HandoverChecklistBlock | ShowcaseBlock | EmailBlock;
+  | ConditionalBlock | HandoverChecklistBlock | ShowcaseBlock | ContentBlock | EmailBlock;
 export type BlockType = DocumentBlock["type"];
 
 // ── columns / rows / pages ──────────────────────────────────────────
@@ -578,12 +689,16 @@ export const pageSchema = z.object({
   overlayFields: z.array(overlayFieldSchema).default([]),
   floatingBlocks: z.array(floatingBlockSchema).default([]),
   overflowGroups: z.array(overflowGroupSchema).optional(),
+  /** This page's own margin in px, in place of the document's (see pageMargin). Absent = the document's. */
+  margin: z.number().optional(),
 });
 export type DocumentPage = z.infer<typeof pageSchema>;
 
 export const docStyleSchema = z.object({
   fontFamily: z.enum(["sans", "serif", "mono"]).default("sans"),
   pageSize: z.enum(["A4", "Letter", "Email"]).default("A4"),
+  /** The paper turned on its side (see pageSizeOf). Absent = portrait, as every document was. */
+  orientation: z.enum(["portrait", "landscape"]).optional(),
   margin: z.number().default(48), // px
   accent: colorField("#ea580c"),
   ink: colorField("#020617"),
@@ -599,6 +714,8 @@ export const docStyleSchema = z.object({
 }).default({ fontFamily: "sans", pageSize: "A4", margin: 48, accent: "#ea580c", ink: "#020617" });
 export type DocStyle = z.infer<typeof docStyleSchema>;
 
+const runningLineSchema = z.object({ left: z.string().default(""), centre: z.string().default(""), right: z.string().default("") }).default({ left: "", centre: "", right: "" });
+
 export const documentSchema = z.object({
   schemaVersion: z.literal(1).default(1),
   title: z.string().default("Untitled proposal"),
@@ -607,6 +724,17 @@ export const documentSchema = z.object({
   pages: z.array(pageSchema).min(1),
   header: z.array(blockSchema).default([]),
   footer: z.array(blockSchema).default([]),
+  /**
+   * A line of text at the top and foot of every printed sheet (see
+   * ./pageFurniture.ts): left, centre and right, taking merge fields and the
+   * page counters {{page}} and {{pages}}. `skipFirst` leaves the first sheet —
+   * a cover — without them. Absent on every document made before it existed.
+   */
+  running: z.object({
+    header: runningLineSchema,
+    footer: runningLineSchema,
+    skipFirst: z.boolean().default(false),
+  }).optional(),
   /**
    * Set ONLY on a signing snapshot, at send time: the number of line-item rows
    * the layout was resolved for (overflow pages, the showcase hero's height).
