@@ -14,6 +14,7 @@ import { addCommunication } from "@/app/actions/communications";
 import { assignLead, markLost, moveLead } from "@/app/actions/leads";
 import { createQuoteFromLead } from "@/app/actions/quotes";
 import { createTestDriveBooking } from "@/app/actions/testDrives";
+import { createStaffAvailability } from "@/app/actions/staffAvailability";
 import { sendWhatsAppMessage } from "@/app/actions/whatsapp";
 import { sendEmailAction } from "@/app/actions/emails";
 import { canAccessLead } from "@/lib/permissions";
@@ -181,6 +182,27 @@ export async function runAssistantAction(card: ActionCard): Promise<{ ok: boolea
         if (result.error) return { ok: false, error: result.error };
         await confirmed("book a test drive", card.leadId);
         return { ok: true, success: result.success ?? "Test drive booked" };
+      }
+      case "block_time": {
+        // A personal calendar item. No assignee is passed, so it is the
+        // signed-in person's OWN calendar — the card cannot name anybody else's.
+        // createStaffAvailability needs activities.manage, requires the note,
+        // and refuses a block that clashes with something already booked.
+        const form = new FormData();
+        form.set("summary", card.summary);
+        form.set("note", card.detail);
+        if (card.allDay) {
+          form.set("allDay", "on");
+          form.set("startDate", card.start);
+          form.set("endDate", card.end);
+        } else {
+          form.set("startAt", card.start);
+          form.set("endAt", card.end);
+        }
+        const result = await createStaffAvailability(form);
+        if (result.error) return { ok: false, error: result.error };
+        await logAudit({ action: "assistant.action_confirmed", summary: "Confirmed the assistant's proposal: block time on their own calendar", user });
+        return { ok: true, success: "Time blocked on your calendar", href: "/calendar" };
       }
       case "reschedule": {
         if (!(await stillAsProposed(card))) return untouched(STALE_CARD);

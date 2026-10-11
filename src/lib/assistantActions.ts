@@ -61,6 +61,19 @@ export const proposedAction = z.discriminatedUnion("type", [
     reason,
   }).strict(),
   z.object({ type: z.literal("test_drive"), leadId, when: atTime, minutes: minutes.optional(), vehicle: text.max(80), reason }).strict(),
+  // A personal calendar item: time blocked on the person's OWN calendar, tied to
+  // no lead or customer. `when` with a time blocks `minutes` from then (an hour
+  // if not given); a date alone blocks the whole day, through `until` if given.
+  // The calendar asks why the time is unavailable, so `note` is required.
+  z.object({
+    type: z.literal("block_time"),
+    when: at,
+    minutes: z.number().int().min(15).max(720).optional(),
+    until: z.string().trim().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+    summary: text.max(120).optional(),
+    note: text.max(300),
+    reason,
+  }).strict(),
   z.object({ type: z.literal("reschedule"), activityId, when: at, reason }).strict(),
   z.object({ type: z.literal("cancel_activity"), activityId, reason }).strict(),
   z.object({ type: z.literal("lost"), leadId, reason: text.max(300) }).strict(),
@@ -87,7 +100,9 @@ export const ACTION_INSTRUCTIONS = [
   "- meeting / test_drive: check the calendar (schedule) and, for a test drive, the demo vehicle's bookings (vehicles kind demo) BEFORE proposing — never a slot that clashes. vehicle is the demo vehicle's name exactly as listed. reschedule / cancel_activity need an activity id from the results.",
   "- lost: only when the person says the deal is lost or asks you to close it; the reason in their words. quote: starts a draft quote on the lead for them to fill in — nothing is sent.",
   "- note goes on a lead. customer_note goes on a CUSTOMER — use it when they say \"customer\" or \"contact\", or when the person has no lead (lead_brief lists matching customers with their contactId when no lead matches). If several customers match, ask which one before proposing. pin:true only when they ask for the note to be pinned; it keeps it at the top of the timeline.",
+  "- MISSING DETAILS: when a task needs something they have not told you — what to call it, the day or time, how long, why, which customer, who to give it to — ASK for exactly that in one short question, and offer choices where there are obvious ones (CHOICES). Ask for everything that is missing at once rather than one thing per message. Propose the task as soon as you have what it needs. Never invent a required detail, never guess a time, and never refuse or say it cannot be done because a detail is missing.",
   "- contactId, like leadId, must be an id that appears in the CRM results above.",
+  '- block_time: a PERSONAL calendar item — time blocked on the person\'s own calendar, with no lead or customer ("block tomorrow 9 to 11 for admin", "I\'m at the dentist Friday afternoon", "put me down as on leave next week"). {"type":"block_time","when":"YYYY-MM-DDTHH:MM","minutes":120,"summary":"Admin","note":"why the time is unavailable"}; a date with no time ("when":"YYYY-MM-DD", optional "until":"YYYY-MM-DD") blocks whole days. note is required — use their own words for why, and ask if they gave none. Check the calendar (schedule) first: it is refused if it clashes with something already booked. It is only ever for the person asking; you cannot block a colleague\'s calendar. Never tell them a personal item is impossible or needs a lead.',
   "- leadId and activityId must be ids that appear in the CRM results above — never invent one. If you don't have it, look the lead up first or don't propose.",
   "- People and stages exactly as listed. Times are South African time.",
   "- draft_message: write it in the business's voice, ready to send. The person reads it, can edit it, and sends it with their own click — it never goes out on its own.",
@@ -186,6 +201,8 @@ export type ActionCard =
   | (LeadCard & { kind: "test_drive"; contactId: string; demoVehicleId: string; branch: string; start: string; end: string; detail: string })
   | (LeadCard & { kind: "lost"; reason: string })
   | (LeadCard & { kind: "quote" })
+  // The person's own calendar, never somebody else's: nothing on the card says whose it is, so it can only be the confirmer's.
+  | { id: string; kind: "block_time"; leadId: null; leadLabel: string; title: string; allDay: boolean; start: string; end: string; summary: string; detail: string; reason?: string }
   | { id: string; kind: "reschedule"; activityId: string; title: string; when: string; leadId: string | null; leadLabel: string; fromDue: string; reason?: string }
   | { id: string; kind: "cancel_activity"; activityId: string; title: string; leadId: string | null; leadLabel: string; fromDue: string; reason?: string }
   | { id: string; kind: "schedule"; title: string; question: string; cadence: Cadence; weekday?: number; timeOfDay: string; onDate?: string; reason?: string }

@@ -87,7 +87,7 @@ export default function AssistantActionCard({ card }: { card: ActionCard }) {
         <p className="mt-2 whitespace-pre-line text-xs text-muted-foreground">{card.pin ? "📌 " : ""}{card.text}</p>
       )}
       {card.kind === "schedule" && <p className="mt-2 whitespace-pre-line text-xs">&ldquo;{card.question}&rdquo;</p>}
-      {(card.kind === "meeting" || card.kind === "test_drive") && <p className="mt-1 text-xs text-muted-foreground">{card.detail}</p>}
+      {(card.kind === "meeting" || card.kind === "test_drive" || card.kind === "block_time") && <p className="mt-1 text-xs text-muted-foreground">{card.detail}</p>}
       {card.kind === "lost" && <p className="mt-2 text-xs text-muted-foreground">Reason: {card.reason}</p>}
       {draft && (
         <div className="mt-2 space-y-1.5">
