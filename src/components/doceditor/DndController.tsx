@@ -10,7 +10,7 @@ import { getBlock, type DropZone } from "@/lib/doceditor/ops";
 import { newBlock } from "@/lib/doceditor/factory";
 import type { DocumentBlock, BlockType } from "@/lib/doceditor/model";
 
-export type DragData = { source: "new"; blockType: BlockType } | { source: "move"; blockId: string };
+export type DragData = { source: "new"; blockType: BlockType; preset?: string } | { source: "move"; blockId: string };
 export type Hint = { targetId: string; zone: DropZone } | { pageIdx: number; zone: "append" } | null;
 
 const HintContext = createContext<Hint>(null);
@@ -68,7 +68,7 @@ export function DndController({ children }: { children: React.ReactNode }) {
     if (!data || !h) return;
     const moveId = data.source === "move" ? data.blockId : undefined;
     const incoming: DocumentBlock =
-      data.source === "new" ? newBlock(data.blockType)
+      data.source === "new" ? newBlock(data.blockType, data.preset)
         : (getBlock(useEditor.getState().doc, data.blockId) as DocumentBlock);
     if (!incoming) return;
     if ("targetId" in h) dropRelative(h.targetId, h.zone, incoming, moveId);

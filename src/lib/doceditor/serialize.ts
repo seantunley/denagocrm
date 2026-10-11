@@ -24,6 +24,7 @@ import { storedFileSrc } from "@/lib/storedFileSrc";
 import { DOCUMENT_FONT_FACE } from "./documentFont";
 import { docType, fontStack } from "./docStyles";
 import { tableLook } from "./tableStyle";
+import { contentBlockHtml } from "./contentBlocks";
 import { DEFAULT_REGIONAL, formatZAR, regionalFrom, type Regional } from "@/lib/format";
 import type { TableRow } from "@/lib/docbuilder/blocks";
 
@@ -301,6 +302,10 @@ function blockHtml(block: DocumentBlock, ctx: RenderCtx, style: DocStyle, logoDa
     case "showcaseHeader": case "infoStrip": case "vehicleShowcase": case "totalsBox": case "acceptance": case "footerBand":
       // The same embedded-only logo as the banner: the workspace's, else the built-in.
       return showcaseBlockHtml(block, ctx, [ctx?.logo, logoDataUri].find((src) => src && /^data:image\//i.test(src)));
+
+    // Details grid, payment schedule, comparison, callout, gallery, QR code — see ./contentBlocks.ts.
+    case "detailsGrid": case "paymentSchedule": case "comparison": case "callout": case "gallery": case "qr":
+      return contentBlockHtml(block, ctx);
 
     // Customer email blocks belong to email documents, rendered by ./emailRender.ts —
     // never to a printed one.
