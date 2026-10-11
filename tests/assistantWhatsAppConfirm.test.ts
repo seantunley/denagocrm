@@ -48,10 +48,9 @@ test("only internal changes can be confirmed from a phone — nothing that reach
   assert.deepEqual(splitForWhatsApp_cards(cards), { confirmable: [{ kind: "note" }, { kind: "stage" }], crmOnly: [{ kind: "draft_message" }, { kind: "quote" }] });
   // Every confirmable kind is one the CRM's own Confirm knows how to run.
   const run = code("src/app/actions/assistant.ts");
-  for (const kind of WHATSAPP_CONFIRMABLE) {
-    if (kind === "customer_note") continue; // arrives with the customer-notes change; harmless to allow before it does
-    assert.match(run, new RegExp(`case "${kind}": \\{`), kind);
-  }
+  for (const kind of WHATSAPP_CONFIRMABLE) assert.match(run, new RegExp(`case "${kind}": \\{`), kind);
+  // …and a customer note is audited on the CUSTOMER it changed.
+  assert.match(code("src/lib/assistantWhatsAppConfirm.ts"), /\.\.\.\(card\.kind === "customer_note" \? \{ contactId: card\.contactId \} : \{\}\),/);
 });
 
 test("a Confirm button names its pending row and nothing else; the prompt says what will happen", () => {

@@ -193,7 +193,9 @@ export async function confirmFromWhatsApp(tenantId: string, user: PermissionUser
     action: "assistant.whatsapp_confirmed",
     summary: `Confirmed on WhatsApp: ${card.title}`,
     user,
+    // On the record it changed: the lead's timeline, or the customer's for a customer note.
     ...("leadId" in card && card.leadId ? { leadId: card.leadId } : {}),
+    ...(card.kind === "customer_note" ? { contactId: card.contactId } : {}),
   });
   return say(waId, `✅ ${result.success ?? "Done"}`);
 }
