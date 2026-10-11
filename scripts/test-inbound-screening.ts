@@ -16,14 +16,15 @@
  * SAFETY: refuses to run outside NODE_ENV=test on a *_test database, and removes
  * every row it creates.
  */
-import { basePrisma } from "../src/lib/db";
+import { basePrisma, prisma } from "../src/lib/db";
 import { DEFAULT_TENANT_ID } from "../src/lib/tenant";
 import { runInTenantScope } from "../src/lib/tenantScope";
 import { getSetting, putSetting } from "../src/lib/settings";
 import { recordInboundWhatsApp } from "../src/lib/whatsapp";
 import { withInboundBotEvent } from "../src/lib/botInboundEvent";
 import { linkScreening, screenInbound, SCREENING_MODE_SETTING, SCREENING_POLICY_SETTING, type ScreenInput, type ScreenOutcome } from "../src/lib/inboundScreening/screen";
-import { RESTORE_LEASE_MS, ReviewRefusal, labelSpam, markThreadSpam, restoreLeaseCutoff, restoreScreening, screeningMetrics, setPatternStatus, setSenderRule } from "../src/lib/inboundScreening/review";
+import { RESTORE_LEASE_MS, ReviewRefusal, labelObservedNotSpam, labelSpam, markThreadSpam, restoreLeaseCutoff, restoreScreening, screeningMetrics, setPatternStatus, setSenderRule } from "../src/lib/inboundScreening/review";
+import { reviewFilters, reviewMessages } from "../src/lib/inboundScreening/queue";
 import { DEFAULT_POLICY } from "../src/lib/inboundScreening/rules";
 
 const SFX = Math.random().toString(16).slice(2, 10);
@@ -79,6 +80,7 @@ const sensible = (content: string): Script => {
 /* ── fixtures ─────────────────────────────────────────────────────────── */
 
 const OTHER = `tenant_scr_${SFX}`;
+const METRICS = `tenant_metrics_${SFX}`;
 const reviewer = { id: `u_scr_${SFX}`, name: `Screening Tester ${SFX}` };
 let n = 0;
 /** A fresh WhatsApp sender: 11 digits unique to this run. */
@@ -136,11 +138,12 @@ async function seed() {
   for (const key of [SCREENING_MODE_SETTING, SCREENING_POLICY_SETTING, "ANTHROPIC_API_KEY"]) saved[key] = await getSetting(key);
   await putSetting("ANTHROPIC_API_KEY", "test-key-not-real");
   await basePrisma.tenant.create({ data: { id: OTHER, name: `Other Dealership ${SFX}`, slug: `other-scr-${SFX}` } });
+  await basePrisma.tenant.create({ data: { id: METRICS, name: `Metrics fixture ${SFX}`, slug: `metrics-scr-${SFX}` } });
   await basePrisma.user.create({ data: { id: reviewer.id, name: reviewer.name, email: `scr.${SFX}@example.test`, passwordHash: "x", role: "sales" } });
 }
 
 async function cleanup() {
-  for (const tenantId of [DEFAULT_TENANT_ID, OTHER]) {
+  for (const tenantId of [DEFAULT_TENANT_ID, OTHER, METRICS]) {
     await basePrisma.inboundScreening.deleteMany({ where: { tenantId, OR: [{ senderId: { in: [...senders, ...dmSenders] } }, { providerId: { contains: SFX } }] } });
     await basePrisma.inboundSenderRule.deleteMany({ where: { tenantId, senderId: { in: senders } } });
     await basePrisma.inboundSpamPattern.deleteMany({ where: { tenantId, createdById: reviewer.id } });
@@ -166,7 +169,7 @@ async function cleanup() {
   await basePrisma.botInboundEvent.deleteMany({ where: { id: { in: events } } });
   await basePrisma.appSetting.deleteMany({ where: { tenantId: OTHER } });
   await basePrisma.user.deleteMany({ where: { id: reviewer.id } });
-  await basePrisma.tenant.deleteMany({ where: { id: OTHER } });
+  await basePrisma.tenant.deleteMany({ where: { id: { in: [OTHER, METRICS] } } });
   for (const [key, value] of Object.entries(saved)) {
     if (value === null) await basePrisma.appSetting.deleteMany({ where: { tenantId: DEFAULT_TENANT_ID, key } });
     else await putSetting(key, value);
@@ -203,6 +206,15 @@ async function main() {
     check("what it WOULD have withheld is recorded", withheldIs(r?.suppressed, { staffPush: true, botRun: true, newContact: true, newLead: false }), JSON.stringify(r?.suppressed));
     const genuine = await deliver(newSender(), "Hi, how much is the Rover XL6?");
     check("a genuine enquiry records nothing withheld", (await row(genuine.providerId))?.suppressed === null);
+    const observed = await reviewMessages(DEFAULT_TENANT_ID, reviewFilters({ spamView: "observe" }));
+    check("Observe review lists would-have-held decisions, not genuine admissions", observed.rows.some((m) => m.id === r!.id) && !observed.rows.some((m) => m.id === genuine.outcome.screeningId));
+    check("another workspace cannot label our observed decision", await labelObservedNotSpam(OTHER, [r!.id], reviewer) === 0);
+    check("staff can record an observed false positive", await labelObservedNotSpam(DEFAULT_TENANT_ID, [r!.id], reviewer) === 1);
+    const unreviewed = await reviewMessages(DEFAULT_TENANT_ID, reviewFilters({ spamView: "observe", spamReview: "unreviewed" }));
+    const reviewed = await reviewMessages(DEFAULT_TENANT_ID, reviewFilters({ spamView: "observe", spamReview: "not_spam" }));
+    check("Observe filters separate reviewed corrections from unreviewed decisions", !unreviewed.rows.some((m) => m.id === r!.id) && reviewed.rows.some((m) => m.id === r!.id));
+    check("observe correction preserves verdict and never replays admission", (await row(providerId))?.classification === "spam" && (await row(providerId))?.staffLabel === "not_spam" && (await footprint(from)).messages === 1);
+
   }
 
   console.log("\nQuarantine: genuine messages pass");
@@ -399,6 +411,7 @@ async function main() {
     const from = newSender();
     const held = await deliver(from, "Grow your instagram followers fast with our premium package, limited offer", { name: "Thandi Mokoena" });
     check("(setup) the message is held and nothing exists for the sender", held.outcome.admit === false && (await footprint(from)).contacts === 0);
+    await basePrisma.inboundScreening.update({ where: { id: held.outcome.screeningId! }, data: { receivedAt: new Date(Date.now() - 3 * 86400000) } });
     const before = aiCalls;
     const results = await Promise.all([1, 2, 3].map(() => refuses(() => restoreScreening(DEFAULT_TENANT_ID, held.outcome.screeningId!, reviewer))));
     const fp = await footprint(from);
@@ -408,14 +421,33 @@ async function main() {
     check("the row says restored, by whom, labelled not spam, and where it went", r?.state === "restored" && r?.restoredById === reviewer.id && r?.staffLabel === "not_spam" && r?.contactId === fp.ids[0]);
     const message = await basePrisma.communication.findFirst({ where: { contactId: fp.ids[0] }, select: { body: true, occurredAt: true, direction: true } });
     check("the message is the original, filed at the time it was sent", message?.body.includes("followers") === true && message?.direction === "inbound" && message?.occurredAt.getTime() === r?.receivedAt.getTime());
-    const conversation = await basePrisma.conversation.findFirst({ where: { contactId: fp.ids[0] }, select: { unread: true, lastDirection: true } });
+    const conversation = await basePrisma.conversation.findFirst({ where: { contactId: fp.ids[0] }, select: { unread: true, lastDirection: true, lastMessageAt: true, lastInboundAt: true } });
     check("it shows as waiting on a person (unread, customer spoke last)", conversation?.unread === true && conversation?.lastDirection === "inbound");
+    check("restore dates the conversation summary as well as the transcript", conversation?.lastMessageAt.getTime() === r?.receivedAt.getTime() && conversation?.lastInboundAt?.getTime() === r?.receivedAt.getTime());
     check("no chatbot reply was queued and the classifier was not asked again", fp.outbox === 0 && aiCalls === before);
     check("restoring it again is refused", (await refuses(() => restoreScreening(DEFAULT_TENANT_ID, held.outcome.screeningId!, reviewer)))?.includes("already restored") === true);
     const redelivered = await deliver(from, "Grow your instagram followers fast with our premium package, limited offer", { providerId: held.providerId });
     check("a late redelivery of the restored message adds nothing", (await footprint(from)).messages === 1 && redelivered.outcome.admit === false);
     const next = await deliver(from, "Sorry — I meant to ask how much the Rover XL6 is?");
     check("the restored sender's next message is judged on its own merits and admitted", next.outcome.admit === true && (await footprint(from)).messages === 2);
+  }
+
+  console.log("\nRestore older than a later staff reply");
+  {
+    const from = newSender();
+    const held = await deliver(from, SUSPENSION);
+    const old = new Date(Date.now() - 3 * 86400000);
+    await basePrisma.inboundScreening.update({ where: { id: held.outcome.screeningId! }, data: { receivedAt: old } });
+    await deliver(from, "hi");
+    const contactId = (await footprint(from)).ids[0];
+    const sent = new Date(Date.now() - 1000);
+    await prisma.communication.create({ data: { type: "whatsapp", direction: "outbound", body: "Staff follow up", occurredAt: sent, contactId, userId: reviewer.id } });
+    // Keep the greeting older than the staff response too.
+    await basePrisma.communication.updateMany({ where: { contactId, direction: "inbound" }, data: { occurredAt: new Date(sent.getTime() - 1000) } });
+    await restoreScreening(DEFAULT_TENANT_ID, held.outcome.screeningId!, reviewer);
+    const conversation = await basePrisma.conversation.findFirst({ where: { contactId } });
+    check("restoring old inbound preserves the newer outbound direction and time", conversation?.lastDirection === "outbound" && conversation?.lastMessageAt.getTime() === sent.getTime());
+    check("restored unread status remains explicit", conversation?.unread === true);
   }
 
   console.log("\nAn interrupted restore can always be finished");
@@ -493,6 +525,33 @@ async function main() {
     check("marking the conversation labels the filter's own row as spam (a miss)", count === 1 && r?.staffLabel === "spam" && r?.state === "admitted" && r?.classification === "sales_enquiry");
     check("the thread is archived, not deleted", (await basePrisma.communication.count({ where: { contactId, archivedAt: { not: null } } })) === 1);
     check("the sender is NOT blocked by that — blocking is a separate decision", (await basePrisma.inboundSenderRule.count({ where: { tenantId: DEFAULT_TENANT_ID, senderId: from } })) === 0);
+    const missedRows = await reviewMessages(DEFAULT_TENANT_ID, reviewFilters({ spamView: "missed", spamSearch: from }));
+    check("missed spam is reviewable by sender", missedRows.rows.some((m) => m.id === r!.id));
+    await markThreadSpam(DEFAULT_TENANT_ID, contactId, "whatsapp", reviewer, true);
+    const calls = aiCalls;
+    check("explicit spam-and-block stops the next message without AI", !(await deliver(from, "hi again")).outcome.admit && aiCalls === calls);
+
+  }
+
+  console.log("\nReview pagination and workspace isolation");
+  {
+    const sender = newSender(); senders.push(sender);
+    const stamp = new Date(Date.now() - 60000);
+    await basePrisma.inboundScreening.createMany({ data: Array.from({ length: 205 }, (_, i) => ({
+      tenantId: DEFAULT_TENANT_ID, channel: "whatsapp", senderId: sender, providerId: `pages.${SFX}.${i}`,
+      kind: "text", body: `Review paging example ${i}`, payload: {}, classification: "spam", decidedBy: "rule", reasonCodes: [], reason: "Test", policyVersion: "test", mode: "quarantine", state: "quarantined", receivedAt: new Date(stamp.getTime() + i), staffLabel: i === 204 ? "spam" : null,
+    })) });
+    const filters = reviewFilters({ spamSearch: sender });
+    const first = await reviewMessages(DEFAULT_TENANT_ID, filters);
+    const last = await reviewMessages(DEFAULT_TENANT_ID, { ...filters, page: 5 });
+    check("needs-review excludes confirmed spam and pages at fifty", first.total === 204 && first.rows.length === 50 && first.pages === 5);
+    check("oldest messages beyond two hundred remain reachable", last.rows.length === 4 && last.rows.some((r) => r.body === "Review paging example 0"));
+    check("pagination does not repeat rows", !last.rows.some((r) => first.rows.some((f) => f.id === r.id)));
+    check("confirmed spam is separately recoverable", (await reviewMessages(DEFAULT_TENANT_ID, { ...filters, view: "confirmed" })).total === 1);
+    check("review search cannot expose another workspace", (await reviewMessages(OTHER, filters)).total === 0);
+    check("channel is applied before paging", (await reviewMessages(DEFAULT_TENANT_ID, { ...filters, channel: "instagram" })).total === 0);
+    check("out-of-range page recovers to the last page", (await reviewMessages(DEFAULT_TENANT_ID, { ...filters, page: 999 })).page === 5);
+    check("malformed query parameters use safe defaults", reviewFilters({ spamView: "__proto__", spamPage: "Infinity", spamSearch: ["bad"] }).view === "pending" && reviewFilters({ spamPage: "-2" }).page === 1);
   }
 
   console.log("\nSpending is bounded, and a limit is not a verdict");
@@ -536,13 +595,37 @@ async function main() {
     await setSenderRule(DEFAULT_TENANT_ID, "whatsapp", shared, null, reviewer);
   }
 
-  console.log("\nThe numbers add up");
+  console.log("\nMetrics: exact counts in an isolated workspace and one-day window");
   {
-    const m = await screeningMetrics(DEFAULT_TENANT_ID, 1);
-    const rows = await basePrisma.inboundScreening.findMany({ where: { tenantId: DEFAULT_TENANT_ID, providerId: { contains: SFX }, decidedBy: { not: "staff" } }, select: { state: true, aiUsed: true, staffLabel: true } });
-    check("held = quarantined + restored", rows.filter((r) => r.state !== "admitted").length <= m.quarantined && m.restoredAsGenuine >= 1);
-    check("AI checks counted are the calls actually made", rows.filter((r) => r.aiUsed).length <= m.aiCalls && m.aiCalls <= aiCalls);
-    check("missed and reviewed are counted from people's labels", m.missedMarkedByStaff >= 1 && m.reviewed >= 2);
+    // Earlier restore tests intentionally backdate arrivals by three days.
+    // Comparing those all-time rows to one-day workspace metrics was invalid.
+    // This workspace has only the fixtures below, so CI's unrelated seed data,
+    // pagination fixtures, and another tenant's AI calls cannot affect expectations.
+    const now = new Date();
+    const recent = new Date(now.getTime() - 3600000);
+    const old = new Date(now.getTime() - 3 * 86400000);
+    const withheld = { staffPush: true, botRun: true, newContact: true, newLead: true };
+    const common = { tenantId: METRICS, channel: "whatsapp", senderId: `metrics.${SFX}`, kind: "text", body: "Metrics fixture", payload: {}, classification: "spam", decidedBy: "ai", reasonCodes: [], reason: "Fixture", policyVersion: "test", mode: "quarantine", receivedAt: recent };
+    await basePrisma.inboundScreening.createMany({ data: [
+      { ...common, providerId: `metrics.${SFX}.held`, state: "quarantined", aiUsed: true, aiInputTokens: 100, aiOutputTokens: 20, latencyMs: 10, suppressed: withheld },
+      { ...common, providerId: `metrics.${SFX}.restored`, state: "restored", aiUsed: true, aiInputTokens: 200, aiOutputTokens: 30, latencyMs: 20, suppressed: withheld, staffLabel: "not_spam", labelledAt: now },
+      { ...common, providerId: `metrics.${SFX}.restoring`, state: "restoring", decidedBy: "rule", latencyMs: 30, suppressed: { ...withheld, newContact: false, newLead: false } },
+      { ...common, providerId: `metrics.${SFX}.observe`, state: "admitted", mode: "observe", aiUsed: true, aiInputTokens: 50, aiOutputTokens: 10, latencyMs: 40, suppressed: withheld, staffLabel: "spam", labelledAt: now },
+      { ...common, providerId: `metrics.${SFX}.failed`, state: "admitted", decidedBy: "fallback", aiUsed: true, failure: "timeout", latencyMs: 50 },
+      { ...common, providerId: `metrics.${SFX}.staff`, state: "admitted", decidedBy: "staff", staffLabel: "spam", labelledAt: now, latencyMs: 100 },
+      { ...common, providerId: `metrics.${SFX}.old-held`, state: "quarantined", receivedAt: old, aiUsed: true, aiInputTokens: 500, aiOutputTokens: 100, suppressed: withheld },
+      { ...common, providerId: `metrics.${SFX}.old-missed`, state: "admitted", receivedAt: old, staffLabel: "spam", labelledAt: now },
+    ] });
+    const m = await screeningMetrics(METRICS, 1);
+    check("screened excludes older arrivals and staff-only labels", m.screened === 5, String(m.screened));
+    check("held includes quarantined, restoring and restored within the same window", m.quarantined === 3 && m.restoredAsGenuine === 1);
+    check("Observe would-hold is counted separately from actual quarantine", m.observedWouldQuarantine === 1);
+    check("AI checks count eligible recorded attempts, including a failed call", m.aiCalls === 4 && m.aiInputTokens === 350 && m.aiOutputTokens === 60 && m.failures === 1);
+    check("reviewed counts labels on eligible screened arrivals", m.reviewed === 2);
+    check("missed counts recent staff corrections, even for older or unscreened messages", m.missedMarkedByStaff === 3);
+    check("suppression counts exclude Observe and distinguish restored contacts and leads", m.suppressedPushes === 3 && m.suppressedBotRuns === 3 && m.suppressedNewContacts === 1 && m.suppressedNewLeads === 1);
+    check("latency uses exactly the five eligible decisions", m.medianLatencyMs === 30 && m.p95LatencyMs === 48, `${m.medianLatencyMs}/${m.p95LatencyMs}`);
+    check("another workspace's screened traffic does not alter exact fixture counts", (await screeningMetrics(OTHER, 1)).screened === 3 && m.screened === 5);
   }
 }
 

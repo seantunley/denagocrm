@@ -1,9 +1,10 @@
 import Link from "next/link";
 import { ChevronRight, MessageCircle } from "lucide-react";
+import ConfirmActionDialog from "@/components/ConfirmActionDialog";
 import RowModal from "@/components/RowModal";
 import InboxReply from "@/components/InboxReply";
 import { markThreadRead, setThreadArchived } from "@/app/actions/communications";
-import { markConversationSpam } from "@/app/actions/inboundSpam";
+import { markAndBlockConversationSpam, markConversationSpam } from "@/app/actions/inboundSpam";
 import { SaveForm, SaveButton } from "@/components/SaveForm";
 import { formatDateTime } from "@/lib/format";
 import { storedFileSrc } from "@/lib/storedFileSrc";
@@ -128,9 +129,19 @@ export default function SocialThreadList({
                 </div>
                 <div className="ml-auto flex flex-wrap gap-2">
                   {canMarkSpam && !thread.archived && thread.contactId && ["whatsapp", "messenger", "instagram"].includes(thread.channel) ? (
-                    <SaveForm action={markConversationSpam.bind(null, thread.contactId, thread.channel)}>
-                      <SaveButton className="btn-secondary btn-sm" pendingLabel="…">Mark as spam</SaveButton>
-                    </SaveForm>
+                    <>
+                      <SaveForm action={markConversationSpam.bind(null, thread.contactId, thread.channel)}>
+                        <SaveButton className="btn-secondary btn-sm" pendingLabel="…">Mark as spam</SaveButton>
+                      </SaveForm>
+                      <ConfirmActionDialog
+                        trigger={<button type="button" className="btn-secondary btn-sm">Spam &amp; block sender</button>}
+                        title={`Block ${thread.name}?`}
+                        description="This archives the conversation as spam and blocks this sender on this channel. When Quarantine mode is enabled, future messages from them will be held even if genuine. You can remove the block in Spam → Sender decisions."
+                        confirmLabel="Mark spam and block"
+                        destructive
+                        onConfirm={markAndBlockConversationSpam.bind(null, thread.contactId, thread.channel)}
+                      />
+                    </>
                   ) : null}
                   <SaveForm action={setThreadArchived.bind(null, thread.contactId, thread.leadId, thread.channel, !thread.archived)}>
                     <SaveButton className="btn-secondary btn-sm" pendingLabel="…">{thread.archived ? "Unarchive" : "Archive"}</SaveButton>
