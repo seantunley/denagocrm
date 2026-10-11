@@ -47,6 +47,11 @@ export function mergeViewReport(current: { seconds: number; maxPage: number }, r
   };
 }
 
+/** What one report is worth on its own: its figures, bounded. (What is stored is raised to these, never lowered — see ./viewReport.ts.) */
+export function boundedViewReport(report: { seconds?: unknown; page?: unknown }): { seconds: number; maxPage: number } {
+  return mergeViewReport({ seconds: 0, maxPage: 1 }, report);
+}
+
 export function summariseViews(rows: ViewRow[]): ViewSummary {
   if (!rows.length) return { sessions: 0, totalSeconds: 0, maxPage: 0, firstOpened: null, lastSeen: null };
   return {

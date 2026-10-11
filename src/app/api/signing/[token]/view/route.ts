@@ -1,7 +1,8 @@
 import { prisma } from "@/lib/db";
 import { isValidSignToken, hashSignToken } from "@/lib/signing/tokens";
 import { isRequestClosed } from "@/lib/signing/status";
-import { mergeViewReport, MAX_VIEWS_PER_RECIPIENT } from "@/lib/signing/viewAnalytics";
+import { MAX_VIEWS_PER_RECIPIENT } from "@/lib/signing/viewAnalytics";
+import { applyViewReport } from "@/lib/signing/viewReport";
 import { withTokenTenantScope } from "@/lib/tenantScopeEntry";
 import { resolveSignRecipientTenant } from "@/lib/tokenTenant";
 import { throttlePublic } from "@/lib/publicThrottle";
@@ -17,7 +18,7 @@ export const dynamic = "force-dynamic";
  * reader got.
  *
  * Public, addressed by the signing link, so everything it is told is treated as
- * a claim: the figures are bounded and only ever go up (mergeViewReport), a
+ * a claim: the figures are bounded and only ever go up (applyViewReport), a
  * sitting can only be updated through the link that opened it, and the number
  * of sittings per recipient is capped. It stores no IP address and no browser
  * string — this is an indication for staff, not evidence.
@@ -62,17 +63,10 @@ async function handle(token: string, body: Body): Promise<Response> {
   }
 
   if ((body.event === "heartbeat" || body.event === "close") && typeof body.viewId === "string" && body.viewId.length <= 64) {
-    // Only a sitting opened through THIS link: the id alone is not enough.
-    const view = await prisma.signatureView.findFirst({
-      where: { id: body.viewId, recipientId: recipient.id, requestId: request.id },
-      select: { id: true, seconds: true, maxPage: true },
-    });
-    if (!view) return Response.json({ ok: false }, { status: 404 });
-    await prisma.signatureView.updateMany({
-      where: { id: view.id, recipientId: recipient.id, requestId: request.id },
-      data: { lastSeenAt: new Date(), ...mergeViewReport(view, body) },
-    });
-    return Response.json({ ok: true });
+    // Only a sitting opened through THIS link: the id alone is not enough. The figures are raised
+    // by the database itself, so two reports arriving together cannot undo each other (viewReport.ts).
+    const found = await applyViewReport(prisma, { id: body.viewId, recipientId: recipient.id, requestId: request.id }, body);
+    return found ? Response.json({ ok: true }) : Response.json({ ok: false }, { status: 404 });
   }
 
   return Response.json({ ok: false }, { status: 400 });
