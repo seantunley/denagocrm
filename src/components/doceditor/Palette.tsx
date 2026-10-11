@@ -194,7 +194,10 @@ function DocumentPalette() {
 
   const addOverlay = (kind: OverlayField["kind"]) => {
     const field = newOverlayField(kind);
-    addField(0, field);
+    // On the page the person is working on. It used to be page 1, always — a
+    // signature for page 3 had to be made on page 1 and could not be dragged across.
+    const { activePage, doc } = useEditor.getState();
+    addField(Math.min(activePage, Math.max(0, (doc?.pages.length ?? 1) - 1)), field);
     selectField(field.id);
   };
 

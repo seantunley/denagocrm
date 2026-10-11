@@ -53,6 +53,11 @@ interface EditorState {
   // pages
   addPage: () => void;
   removePage: (pageId: string) => void;
+  duplicatePage: (pageId: string) => void;
+  movePage: (pageId: string, by: -1 | 1) => void;
+  /** The page the person last clicked on — where a new signing field or library item goes. */
+  activePage: number;
+  setActivePage: (pageIdx: number) => void;
 
   // overlay fields
   addField: (pageIdx: number, field: OverlayField) => void;
@@ -74,6 +79,7 @@ export const useEditor = create<EditorState>((set, get) => ({
   doc: undefined as unknown as DocumentModel, // set by load() on mount
   sel: { blockId: null, fieldId: null },
   activeTextBlockId: null,
+  activePage: 0,
   linked: null,
   past: [],
   future: [],
@@ -133,7 +139,10 @@ export const useEditor = create<EditorState>((set, get) => ({
   setColumnWidths: (rowId, widths) => get().commit((d) => ops.setColumnWidths(d, rowId, widths)),
 
   addPage: () => get().commit((d) => ({ ...d, pages: [...d.pages, newPage()] })),
-  removePage: (pageId) => get().commit((d) => (d.pages.length <= 1 ? d : { ...d, pages: d.pages.filter((p) => p.id !== pageId) })),
+  removePage: (pageId) => { get().commit((d) => ops.removePage(d, pageId)); set((s) => ({ sel: { blockId: null, fieldId: null }, activeTextBlockId: null, activePage: Math.min(s.activePage, Math.max(0, (s.doc?.pages.length ?? 1) - 1)) })); },
+  duplicatePage: (pageId) => get().commit((d) => ops.duplicatePage(d, pageId)),
+  movePage: (pageId, by) => get().commit((d) => ops.movePage(d, pageId, by)),
+  setActivePage: (pageIdx) => set((s) => (s.activePage === pageIdx ? s : { activePage: pageIdx })),
 
   addField: (pageIdx, field) => get().commit((d) => {
     const pages = d.pages.map((p, i) => (i === pageIdx ? { ...p, overlayFields: [...p.overlayFields, field] } : p));
