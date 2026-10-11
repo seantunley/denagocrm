@@ -205,7 +205,9 @@ export default function AppShell({
 
       <main className="relative lg:pl-60">
         <div className="pointer-events-none fixed inset-x-0 top-0 -z-10 h-72 bg-[radial-gradient(circle_at_65%_0%,rgba(249,115,22,.045),transparent_42%)] lg:left-60" />
-        <div className="denago-workspace mx-auto max-w-[1800px] p-3 pb-24 pt-15 sm:p-4 sm:pb-24 sm:pt-16 lg:p-5 lg:pt-19">
+        {/* No width cap: the page runs to the same edges as the top bar (both lg:px-5). Capped and centred, it sat
+            inside the bar on a wide screen — the bar's ends hung out past the content and the two never lined up. */}
+        <div className="denago-workspace p-3 pb-24 pt-15 sm:p-4 sm:pb-24 sm:pt-16 lg:p-5 lg:pt-19">
           {/* ClockWeather moved into the top bar — it was already desktop-only
               furniture at the top of the page, so the bar is where it belongs
               and the page keeps the vertical space the bar takes. */}

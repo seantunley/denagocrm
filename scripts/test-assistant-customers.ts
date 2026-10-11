@@ -20,6 +20,7 @@ import { runInTenantScope } from "../src/lib/tenantScope";
 import { __setTenantEnforcingForTests } from "../src/lib/tenantEnforcement";
 import { customersNamed, leadBrief } from "../src/lib/crmAssistant";
 import type { PermissionUser } from "../src/lib/permissions";
+import { resolveTenantActor } from "../src/lib/tenantActor";
 
 const SFX = Math.random().toString(16).slice(2, 10);
 let passed = 0;
@@ -42,6 +43,7 @@ const rep: PermissionUser = { id: id("rep"), name: "Rep", email: `${id("rep")}@e
 const outsider: PermissionUser = { id: id("out"), name: "Outsider", email: `${id("out")}@example.invalid`, role: "member" };
 const customersOnly: PermissionUser = { id: id("conly"), name: "Customers Only", email: `${id("conly")}@example.invalid`, role: "member" };
 const ROLE = id("role");
+const STAND_IN = id("standin");
 const STAGE = id("stage");
 const C = { noLead: id("c-nolead"), othersSameName: id("c-other"), withLead: id("c-withlead"), twinA: id("c-twin-a"), twinB: id("c-twin-b"), deleted: id("c-deleted"), conly: id("c-conly"), leadNamedDifferently: id("c-diffname") };
 const L = { withLead: id("l-withlead"), diffName: id("l-diffname") };
@@ -55,6 +57,10 @@ async function seed() {
   await basePrisma.user.createMany({
     data: [rep, outsider, customersOnly].map((u) => ({ id: u.id, name: u.name, email: u.email, passwordHash: "test", role: "member", modules: "crm" })),
   });
+  // The workspace's STAND-IN account is its oldest active member — the one automated entries are
+  // filed under. Created long ago, so it is the oldest whatever else this database holds.
+  await basePrisma.user.create({ data: { id: STAND_IN, name: "Oldest Member", email: `${STAND_IN}@example.invalid`, passwordHash: "test", role: "member", modules: "crm", createdAt: new Date("1990-01-01T00:00:00Z") } });
+  await basePrisma.$executeRaw`INSERT INTO "TenantMember" ("id", "tenantId", "userId") VALUES (${`tm-${STAND_IN}`}, ${T}, ${STAND_IN})`;
   // A role with customers but NOT leads: the combination no seeded role has.
   await basePrisma.$executeRaw`INSERT INTO "Role" ("id", "tenantId", "name", "description", "system", "createdAt", "updatedAt") VALUES (${ROLE}, ${T}, ${`Customers only ${SFX}`}, 'test', false, now(), now())`;
   await basePrisma.$executeRaw`INSERT INTO "RolePermission" ("roleId", "permissionKey", "tenantId") VALUES (${ROLE}, 'contacts.view_owned', ${T})`;
@@ -90,13 +96,16 @@ async function seed() {
 }
 
 async function cleanup() {
+  // Before the users: a message cannot outlive the account it is filed under.
+  await basePrisma.communication.deleteMany({ where: { OR: [{ leadId: { in: Object.values(L) } }, { contactId: { in: Object.values(C) } }] } });
   await basePrisma.lead.deleteMany({ where: { id: { in: Object.values(L) } } });
   await basePrisma.contact.deleteMany({ where: { id: { in: Object.values(C) } } });
   await basePrisma.$executeRaw`DELETE FROM "PipelineStage" WHERE "id" = ${STAGE}`;
   await basePrisma.$executeRaw`DELETE FROM "UserRole" WHERE "userId" IN (${rep.id}, ${outsider.id}, ${customersOnly.id})`;
   await basePrisma.$executeRaw`DELETE FROM "RolePermission" WHERE "roleId" = ${ROLE}`;
   await basePrisma.$executeRaw`DELETE FROM "Role" WHERE "id" = ${ROLE}`;
-  await basePrisma.user.deleteMany({ where: { id: { in: [rep.id, outsider.id, customersOnly.id] } } });
+  await basePrisma.$executeRaw`DELETE FROM "TenantMember" WHERE "userId" = ${STAND_IN}`;
+  await basePrisma.user.deleteMany({ where: { id: { in: [rep.id, outsider.id, customersOnly.id, STAND_IN] } } });
 }
 
 async function main() {
@@ -140,6 +149,47 @@ async function main() {
     check("is not refused: their customer is found", b.customers?.[0]?.contactId === C.conly, b.note);
     const none = await brief(customersOnly, `Yan Deal${SFX}`);
     check("still sees no lead, and no customer that is not theirs", !none.id && !none.customers?.length && /don't have access to leads/.test(none.note ?? ""), JSON.stringify(none));
+  }
+
+  console.log("\nWho did it: the author of each entry on a lead");
+  {
+    // The account automated entries are filed under, as the application resolves it — whoever that is here.
+    const standIn = await scoped(() => resolveTenantActor());
+    const when = (minutesAgo: number) => new Date(Date.now() - minutesAgo * 60_000);
+    const say = (userId: string, body: string, minutesAgo: number, extra: Record<string, unknown> = {}) =>
+      ({ tenantId: T, leadId: L.withLead, contactId: C.withLead, type: "note", body, userId, occurredAt: when(minutesAgo), ...extra });
+    await basePrisma.communication.createMany({
+      data: [
+        say(outsider.id, `Called her ${SFX}`, 30),
+        say(rep.id, `Sent the spec sheet ${SFX}`, 20, { type: "email", direction: "outbound" }),
+        // A customer's own WhatsApp: it arrives by itself and is filed under the stand-in account. Nobody on staff wrote it.
+        say(STAND_IN, `Is the white one in stock ${SFX}`, 10, { type: "whatsapp", direction: "inbound" }),
+        // An INCOMING CALL a colleague logged by hand (Log a call / email / note): the customer rang, the colleague recorded it.
+        say(outsider.id, `She rang about colours ${SFX}`, 8, { type: "call", direction: "inbound" }),
+        // An incoming email a colleague typed in by hand: under their account, not the stand-in.
+        say(outsider.id, `Forwarded her email ${SFX}`, 7, { type: "email", direction: "inbound" }),
+        say(STAND_IN, `Thanks for your enquiry ${SFX}`, 5, { type: "whatsapp", direction: "outbound" }),
+      ],
+    });
+    const data = (await scoped(() => leadBrief(rep, { lead: `Yan Deal${SFX}` }))).data[0] as {
+      who?: string; createdBy?: string;
+      messages: { text: string; from: string; loggedBy?: string }[];
+    };
+    const message = (needle: string) => data.messages.find((m) => m.text.includes(needle));
+    check("the note a colleague logged names that colleague — not the person asking", message("Called her")?.loggedBy === "Outsider", JSON.stringify(message("Called her")));
+    check("the asker's own entry names them", message("Sent the spec sheet")?.loggedBy === "Rep", JSON.stringify(message("Sent the spec sheet")));
+    const fromCustomer = message("Is the white one in stock");
+    check("a customer's own WhatsApp is from the customer, with NO staff author", fromCustomer?.from === "customer" && fromCustomer.loggedBy === undefined, JSON.stringify(fromCustomer));
+    const call = message("She rang about colours");
+    check("an incoming call a colleague logged is FROM the customer and LOGGED BY that colleague", call?.from === "customer" && call.loggedBy === "Outsider", JSON.stringify(call));
+    const typedIn = message("Forwarded her email");
+    check("an incoming email a colleague typed in by hand names them too", typedIn?.from === "customer" && typedIn.loggedBy === "Outsider", JSON.stringify(typedIn));
+    check("the stand-in account resolves to the workspace's oldest member", standIn?.id === STAND_IN, JSON.stringify(standIn));
+    const automatic = message("Thanks for your enquiry");
+    check("an entry under the stand-in account is NOT credited to that person as a fact", automatic?.loggedBy === "Oldest Member or an automatic entry", JSON.stringify(automatic));
+    check("the rule for reading these fields is sent with the data", /never guess a person from the wording of a note/.test(data.who ?? ""));
+    check("the lead's creator is given", typeof data.createdBy === "string" && data.createdBy.startsWith("Rep"), String(data.createdBy));
+    check("only names: no staff id or email in what is handed over", !JSON.stringify(data).includes(outsider.id) && !JSON.stringify(data).includes("@example.invalid"));
   }
 
   console.log("\nWhat leaves the database");
