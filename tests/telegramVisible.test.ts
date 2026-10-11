@@ -48,3 +48,11 @@ test("Telegram is a channel in the inbox, and staff can reply (text)", () => {
   assert.match(reply, /: platform === "telegram" \? contact\.telegramChatId/);
   assert.match(reply, /if \(platform === "telegram" && hasFile\) \{/);
 });
+
+test("the inbox list can draw a Telegram conversation", () => {
+  // The list reads each thread's label and icon from this map with no fallback,
+  // so a channel missing from it throws for the whole list, not just one row.
+  const list = src("src/components/SocialThreadList.tsx");
+  assert.match(list, /CHANNEL_META: Record<InboxThread\["channel"\],/, "keyed on the thread's channel, so a missing one cannot compile");
+  assert.match(list, /telegram: \{\s*label: "Telegram",/);
+});
