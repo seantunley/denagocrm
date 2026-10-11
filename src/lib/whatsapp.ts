@@ -528,6 +528,8 @@ export async function recordInboundWhatsApp(
   text: string,
   /** The provider's message id, so a redelivery reuses this row instead of adding one. */
   providerMessageId?: string,
+  /** `quiet`: a person is restoring this from quarantine — they are looking at it, so nobody is buzzed. */
+  options: { quiet?: boolean } = {},
 ) {
   const match = await matchByPhone(fromDigits);
   let { contactId } = match;
@@ -582,7 +584,7 @@ export async function recordInboundWhatsApp(
   // Tenant-aware actor: under enforcement, a member of THIS channel's tenant scope
   // (established by the webhook chokepoint); dormant → the oldest active user.
   const firstUser = await resolveTenantActor();
-  if (!firstUser) return;
+  if (!firstUser) return { contactId, leadId, inserted: false };
   // create(), NOT createMany(): db.ts extends communication.create to resolve and
   // attach the Conversation and then bump its counters, unread flag and
   // last-inbound timestamp. There is no createMany hook, so batching would file
@@ -623,7 +625,7 @@ export async function recordInboundWhatsApp(
   // already went out", and ordering it here is what keeps them close enough to be
   // honest: the only way to reach this on a replay is a genuine duplicate insert.
   if (inserted) {
-    await sendPushToAll({
+    if (!options.quiet) await sendPushToAll({
       title: "New WhatsApp message 💬",
       body: `${profileName ?? "+" + fromDigits}: ${text.slice(0, 80)}`,
       url: "/messages",
@@ -632,6 +634,7 @@ export async function recordInboundWhatsApp(
 
   const { reopenThreadOnInbound } = await import("@/lib/reopenThread");
   await reopenThreadOnInbound(contactId, leadId, "whatsapp");
+  return { contactId, leadId, inserted };
 
   // Notify on every inbound — WhatsApp is the primary contact channel. Opens the
   // Messages app so replies aren't lost in the CRM.
