@@ -6,6 +6,8 @@ import { unstable_rethrow, useRouter } from "next/navigation";
 import { useEditor } from "@/lib/doceditor/store";
 import type { DocumentModel } from "@/lib/doceditor/model";
 import { staleWordingWarnings, type WordingSettings } from "@/lib/doceditor/wordingCheck";
+import { designWarnings } from "@/lib/doceditor/designCheck";
+import { DesignCheckPanel } from "./DesignCheckPanel";
 import { saveDocEditor, importDocEditorTemplate } from "@/app/actions/doceditor";
 import { publishBuilderVersion } from "@/app/actions/docbuilder";
 import { finaliseCustomDocument, saveCustomDocument } from "@/app/actions/customDocuments";
@@ -89,6 +91,7 @@ export function DocEditor({
   const remove = useEditor((state) => state.remove);
   const removeField = useEditor((state) => state.removeField);
   const addPage = useEditor((state) => state.addPage);
+  const pageSheets = useEditor((state) => state.pageSheets);
 
   const [zoom, setZoom] = useState(0.9);
   const [saveState, setSaveState] = useState<
@@ -287,6 +290,8 @@ export function DocEditor({
   }
 
   const wordingWarnings = wordingSettings ? staleWordingWarnings(doc, wordingSettings) : [];
+  // The design check, with what only the drawn page can measure (how many sheets each page takes).
+  const checkWarnings = designWarnings(doc, { sheets: pageSheets });
   const recordQuery = record
     ? `?record=${encodeURIComponent(record)}`
     : "";
@@ -530,6 +535,8 @@ export function DocEditor({
           />
         </div>
       )}
+
+      <DesignCheckPanel warnings={checkWarnings} />
 
       {wordingWarnings.length > 0 && (
         <div role="status" className="border-b border-amber-300 bg-amber-50 px-4 py-2 text-xs text-amber-900">

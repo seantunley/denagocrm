@@ -62,6 +62,9 @@ interface EditorState {
   /** A copied block style, waiting to be pasted onto another block. Not part of the document or its undo history. */
   styleClipboard: Partial<LayoutSettings> | null;
   copyStyle: (style: Partial<LayoutSettings>) => void;
+  /** How many sheets each page prints on, measured by the editor page (only it can know) — read by the design check. */
+  pageSheets: Record<string, number>;
+  setPageSheets: (pageId: string, sheets: number) => void;
 
   // overlay fields
   addField: (pageIdx: number, field: OverlayField) => void;
@@ -86,6 +89,8 @@ export const useEditor = create<EditorState>((set, get) => ({
   activePage: 0,
   styleClipboard: null,
   copyStyle: (style) => set({ styleClipboard: style }),
+  pageSheets: {},
+  setPageSheets: (pageId, sheets) => set((s) => (s.pageSheets[pageId] === sheets ? s : { pageSheets: { ...s.pageSheets, [pageId]: sheets } })),
   linked: null,
   past: [],
   future: [],

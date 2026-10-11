@@ -14,6 +14,8 @@ import { defaultEmailBody, defaultEmailFrame, EMAIL_FRAME_KEY, emailKindOf } fro
 import { withActingStaffScope } from "@/lib/actingScope";
 import { requiredRecordKind } from "@/lib/docbuilder/recordBinding";
 import { staleWordingWarnings } from "@/lib/doceditor/wordingCheck";
+import { designWarnings, summariseWarnings } from "@/lib/doceditor/designCheck";
+import { parseDocument } from "@/lib/doceditor/model";
 import { quoteWordingSettings } from "@/lib/quoteFromLead";
 
 const BASE = "/document-studio";
@@ -96,6 +98,11 @@ export async function publishBuilderVersion(id: string, label?: string): Promise
     const warnings = requiredRecordKind(tpl.key) === "quote"
       ? staleWordingWarnings(tpl.data, await quoteWordingSettings())
       : [];
+    // The design check, as one line. Unassigned signing fields are left out here:
+    // a layout is published with them unassigned and a send names the signer.
+    const published = parseDocument(tpl.data);
+    const design = published ? summariseWarnings(designWarnings(published).filter((w) => w.code !== "field-unassigned")) : "";
+    if (design) warnings.push(`Design check — ${design}. Open the editor's Design check to see each one.`);
     return { ok: true, version, warnings };
   });
 }
