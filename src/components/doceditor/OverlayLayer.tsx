@@ -4,6 +4,7 @@ import { useState } from "react";
 import Moveable from "react-moveable";
 import { useEditor } from "@/lib/doceditor/store";
 import type { DocumentPage, OverlayField } from "@/lib/doceditor/model";
+import { alignmentGuides } from "./alignmentGuides";
 
 const KIND_LABEL: Record<OverlayField["kind"], string> = {
   signature: "Signature", initials: "Initials", date: "Date", text: "Text field", checkbox: "Checkbox",
@@ -49,6 +50,7 @@ export function OverlayLayer({ page, zoom }: { page: DocumentPage; zoom: number 
         <Moveable
           target={targetEl}
           draggable resizable origin={false} throttleDrag={0}
+          {...alignmentGuides(targetEl)}
           onDrag={({ target, left, top }) => { const el = target as HTMLElement; el.style.left = `${left}px`; el.style.top = `${top}px`; }}
           onDragEnd={({ target }) => {
             const el = target as HTMLElement;

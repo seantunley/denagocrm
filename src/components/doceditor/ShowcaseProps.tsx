@@ -161,7 +161,7 @@ export function ShowcaseProps({ block }: { block: ShowcaseBlock }) {
         <Field label="Name value" value={block.nameValue} onChange={(nameValue) => set({ nameValue })} />
         <Field label="Signature label" value={block.signatureLabel} onChange={(signatureLabel) => set({ signatureLabel })} />
         <Field label="Date label" value={block.dateLabel} onChange={(dateLabel) => set({ dateLabel })} />
-        <p className={hint}>The signature and date are separate signing fields placed on these lines. If you move this card, move those two fields with it.</p>
+        <p className={hint}>The signature and date are signing fields placed on these lines. They move with the card: drag or resize it and they stay on its lines.</p>
       </>);
     case "footerBand":
       return wrap("Footer band", <>
