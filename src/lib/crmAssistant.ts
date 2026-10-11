@@ -7,7 +7,8 @@ import { codexRespond, isCodexConnected, type CodexResult } from "./codex";
 import { formatZAR, contactName } from "./format";
 import { payableTotalCents } from "./pricing";
 import { johannesburgDateKey } from "./activityDay";
-import { listActingTenantStaff } from "./tenantActor";
+import { listActingTenantStaff, resolveTenantActor } from "./tenantActor";
+import { WHO_LEGEND, messageAuthor, whoLogged } from "./assistantWho";
 import { getAccessibleActivityIds } from "./activityAccess";
 import { getSetting } from "./settings";
 import { getCompanyProfile } from "./companyProfile";
@@ -592,6 +593,7 @@ export async function leadBrief(user: User, raw: z.infer<typeof leadBriefArgs>):
       stage: { select: { name: true } },
       product: { select: { name: true } },
       assignedTo: { select: { name: true } },
+      createdBy: { select: { id: true, name: true } },
     },
   });
   // The lead's own messages and activities AND the customer's that aren't on any
@@ -604,24 +606,35 @@ export async function leadBrief(user: User, raw: z.infer<typeof leadBriefArgs>):
       where: theirs,
       orderBy: { occurredAt: "desc" },
       take: 15,
-      select: { occurredAt: true, direction: true, type: true, subject: true, body: true },
+      select: { occurredAt: true, direction: true, type: true, subject: true, body: true, user: { select: { id: true, name: true } } },
     }),
     prisma.activity.findMany({
       where: theirs,
       orderBy: { dueDate: "desc" },
       take: 10,
-      select: { type: true, summary: true, status: true, dueDate: true, doneAt: true, note: true },
+      select: {
+        type: true, summary: true, status: true, dueDate: true, doneAt: true, note: true,
+        assignedTo: { select: { id: true, name: true } },
+        createdBy: { select: { id: true, name: true } },
+      },
     }),
   ]);
+  // The account automated entries are filed under (assistantWho.ts): a row in its
+  // name is that person OR nobody. If it cannot be established — the lookup fails,
+  // or finds nobody — it is null, and then NO name is given as certain: "could not
+  // check" must not read as "checked, and a person wrote it".
+  const standInId = (await resolveTenantActor().catch(() => null))?.id ?? null;
   // Test drives for this lead, through the test-drive page's own visibility rule.
   const testDrives = (await isModuleEnabled("automotive"))
     ? await prisma.testDriveBooking.findMany({
         where: { leadId: lead.id, deletedAt: null, ...(await accessibleTestDriveWhere(user)) },
         orderBy: { scheduledStart: "desc" },
         take: 5,
-        select: { status: true, scheduledStart: true, salesOutcome: true, customerFeedback: true, demoVehicle: { select: { name: true } } },
+        select: { status: true, scheduledStart: true, salesOutcome: true, customerFeedback: true, salespersonId: true, demoVehicle: { select: { name: true } } },
       })
     : [];
+  // A test drive names its salesperson by id only; the workspace's own staff list puts a name to it.
+  const staffName = testDrives.length ? new Map((await listActingTenantStaff().catch(() => [])).map((s) => [s.id, s.name])) : new Map<string, string>();
   const quotes = (await hasAnyPermission(user, "quotes.view_all", "quotes.view_owned"))
     ? await quotesForLead(user, lead.id)
     : [];
@@ -657,29 +670,44 @@ export async function leadBrief(user: User, raw: z.infer<typeof leadBriefArgs>):
       source: lead.source,
       assignedTo: lead.assignedTo?.name ?? "unassigned",
       created: dateKey(lead.createdAt),
+      // A lead from the website, a chatbot or an import has no person behind it either.
+      ...(whoLogged(lead.createdBy, standInId) ? { createdBy: whoLogged(lead.createdBy, standInId) } : {}),
       ...(lead.wonAt ? { won: dateKey(lead.wonAt) } : {}),
       ...(lead.lostAt ? { lost: dateKey(lead.lostAt), lostReason: lead.lostReason } : {}),
       notes: clip(lead.notes, 800),
       research: lead.research ? { when: dateKey(lead.researchedAt), summary: clip(lead.research, 1500) } : null,
-      messages: communications.map((c) => ({
-        when: dateKey(c.occurredAt),
-        from: c.direction === "inbound" ? "customer" : "us",
-        channel: c.type,
-        text: clip([c.subject, c.body].filter(Boolean).join(" — "), 300),
-      })),
-      activities: activities.map((a) => ({
-        type: a.type,
-        summary: a.summary,
-        status: a.status,
-        due: dateKey(a.dueDate),
-        ...(a.doneAt ? { done: dateKey(a.doneAt) } : {}),
-        note: clip(a.note, 200),
-      })),
+      who: WHO_LEGEND,
+      messages: communications.map((c) => {
+        // Whose words, and who recorded them — not the same for a call a member of staff logged.
+        const { from, loggedBy } = messageAuthor(c, standInId);
+        return {
+          when: dateKey(c.occurredAt),
+          from,
+          ...(loggedBy ? { loggedBy } : {}),
+          channel: c.type,
+          text: clip([c.subject, c.body].filter(Boolean).join(" — "), 300),
+        };
+      }),
+      activities: activities.map((a) => {
+        const scheduledBy = whoLogged(a.createdBy, standInId);
+        return {
+          type: a.type,
+          summary: a.summary,
+          status: a.status,
+          due: dateKey(a.dueDate),
+          ...(a.doneAt ? { done: dateKey(a.doneAt) } : {}),
+          // Whose it is to do — a person, always: an activity is assigned to someone.
+          assignedTo: a.assignedTo?.name ?? null,
+          ...(scheduledBy ? { scheduledBy } : {}),
+          note: clip(a.note, 200),
+        };
+      }),
       quotes,
       testDrives: testDrives.map((t) => ({
         when: dateKey(t.scheduledStart),
         status: t.status,
         vehicle: t.demoVehicle?.name ?? null,
+        ...(staffName.get(t.salespersonId) ? { salesperson: staffName.get(t.salespersonId) } : {}),
         outcome: t.salesOutcome,
         feedback: clip(t.customerFeedback, 200),
       })),
