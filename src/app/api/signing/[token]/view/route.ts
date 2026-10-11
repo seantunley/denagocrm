@@ -48,6 +48,8 @@ async function handle(token: string, body: Body): Promise<Response> {
   if (recipient.tokenRevokedAt || request.deletedAt || isRequestClosed(request.status) || (request.expiresAt && request.expiresAt < new Date())) {
     return Response.json({ ok: false }, { status: 409 });
   }
+  // A sitting belongs to the workspace that owns the REQUEST it is a sitting with.
+  const tenantId = request.tenantId ?? ownedWriteTenantId();
 
   if (body.event === "open") {
     // Reloading the page over and over must not write without limit. Past the cap the page is told
@@ -55,8 +57,7 @@ async function handle(token: string, body: Body): Promise<Response> {
     const sittings = await prisma.signatureView.count({ where: { recipientId: recipient.id } });
     if (sittings >= MAX_VIEWS_PER_RECIPIENT) return Response.json({ ok: true });
     const view = await prisma.signatureView.create({
-      // The sitting belongs to the workspace that owns the REQUEST it is a sitting with.
-      data: { tenantId: request.tenantId ?? ownedWriteTenantId(), requestId: request.id, recipientId: recipient.id },
+      data: { tenantId, requestId: request.id, recipientId: recipient.id },
       select: { id: true },
     });
     return Response.json({ ok: true, viewId: view.id });
@@ -65,7 +66,7 @@ async function handle(token: string, body: Body): Promise<Response> {
   if ((body.event === "heartbeat" || body.event === "close") && typeof body.viewId === "string" && body.viewId.length <= 64) {
     // Only a sitting opened through THIS link: the id alone is not enough. The figures are raised
     // by the database itself, so two reports arriving together cannot undo each other (viewReport.ts).
-    const found = await applyViewReport(prisma, { id: body.viewId, recipientId: recipient.id, requestId: request.id }, body);
+    const found = await applyViewReport(prisma, { id: body.viewId, tenantId, recipientId: recipient.id, requestId: request.id }, body);
     return found ? Response.json({ ok: true }) : Response.json({ ok: false }, { status: 404 });
   }
 

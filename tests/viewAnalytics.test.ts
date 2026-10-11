@@ -39,7 +39,7 @@ test("a report from the browser can only move a sitting forwards, and never past
 
 test("the writer raises each figure only when the report is larger, and says when there is no such sitting", async () => {
   // A stand-in table that applies `lt` the way the database does, and records what it was asked.
-  const row = { id: "v1", recipientId: "r1", requestId: "q1", seconds: 120, maxPage: 3, lastSeenAt: new Date(0) };
+  const row = { id: "v1", tenantId: "t1", recipientId: "r1", requestId: "q1", seconds: 120, maxPage: 3, lastSeenAt: new Date(0) };
   const calls: string[] = [];
   const db = { signatureView: { updateMany: async ({ where, data }: { where: Record<string, unknown>; data: Record<string, unknown> }) => {
     calls.push(Object.keys(data).join());
@@ -47,7 +47,7 @@ test("the writer raises each figure only when the report is larger, and says whe
     if (matches) Object.assign(row, data);
     return { count: matches ? 1 : 0 };
   } } };
-  const which = { id: "v1", recipientId: "r1", requestId: "q1" };
+  const which = { id: "v1", tenantId: "t1", recipientId: "r1", requestId: "q1" };
   assert.equal(await applyViewReport(db, which, { seconds: 30, page: 5 }, new Date(1000)), true);
   assert.deepEqual([row.seconds, row.maxPage, row.lastSeenAt.getTime()], [120, 5, 1000], "the smaller time is left; the further page is taken");
   assert.equal(await applyViewReport(db, which, { seconds: 500, page: 1 }), true);
@@ -55,6 +55,9 @@ test("the writer raises each figure only when the report is larger, and says whe
   calls.length = 0;
   assert.equal(await applyViewReport(db, { ...which, recipientId: "someone-else" }, { seconds: 999, page: 9 }), false);
   assert.deepEqual([row.seconds, row.maxPage, calls.length], [500, 5, 1], "another link's report changes nothing and stops at the first step");
+  // Every id right, the workspace wrong: still nothing. The writer names the workspace itself, on any client.
+  assert.equal(await applyViewReport(db, { ...which, tenantId: "t2" }, { seconds: 999, page: 9 }), false);
+  assert.deepEqual([row.seconds, row.maxPage], [500, 5]);
 });
 
 test("durations and the line staff read", () => {
@@ -88,14 +91,16 @@ test("the table is a workspace's own: required workspace, row-level security ena
 test("the public route trusts the link, not the id, and stores nothing about the device", () => {
   const route = readFileSync("src/app/api/signing/[token]/view/route.ts", "utf8");
   // The sitting is stamped with the workspace of the request it belongs to.
-  assert.match(route, /data: \{ tenantId: request\.tenantId \?\? ownedWriteTenantId\(\), requestId: request\.id, recipientId: recipient\.id \}/);
+  assert.match(route, /data: \{ tenantId, requestId: request\.id, recipientId: recipient\.id \}/);
   // An update names the recipient and the request the link resolves to, and goes through the one atomic writer.
-  assert.match(route, /applyViewReport\(prisma, \{ id: body\.viewId, recipientId: recipient\.id, requestId: request\.id \}, body\)/);
+  assert.match(route, /applyViewReport\(prisma, \{ id: body\.viewId, tenantId, recipientId: recipient\.id, requestId: request\.id \}, body\)/);
+  assert.match(route, /const tenantId = request\.tenantId \?\? ownedWriteTenantId\(\);/, "the workspace is the request's own");
   assert.doesNotMatch(route, /signatureView\.(findFirst|update)\b|signatureView\.updateMany/, "the route never reads a sitting and writes it back itself");
   const writer = readFileSync("src/lib/signing/viewReport.ts", "utf8");
   // Each figure is raised by the database in one statement — never read, compared here, and written back.
-  assert.match(writer, /where: \{ \.\.\.which, seconds: \{ lt: next\.seconds \} \}, data: \{ seconds: next\.seconds \}/);
-  assert.match(writer, /where: \{ \.\.\.which, maxPage: \{ lt: next\.maxPage \} \}, data: \{ maxPage: next\.maxPage \}/);
+  assert.match(writer, /where: \{ id, tenantId, recipientId, requestId, seconds: \{ lt: next\.seconds \} \}, data: \{ seconds: next\.seconds \}/);
+  assert.match(writer, /where: \{ id, tenantId, recipientId, requestId, maxPage: \{ lt: next\.maxPage \} \}, data: \{ maxPage: next\.maxPage \}/);
+  assert.equal((writer.match(/where: \{ id, tenantId, recipientId, requestId\b/g) ?? []).length, 3, "every write names the workspace");
   assert.doesNotMatch(writer, /find(First|Unique|Many)/);
   assert.match(route, /if \(sittings >= MAX_VIEWS_PER_RECIPIENT\) return Response\.json\(\{ ok: true \}\);/);
   assert.match(route, /recipient\.tokenRevokedAt \|\| request\.deletedAt \|\| isRequestClosed\(request\.status\)/);

@@ -58,7 +58,7 @@ async function sitting(tenantId: string, label: string) {
     data: { tenantId, requestId: request.id, name: `Signer ${label}`, status: "sent", token: createHash("sha256").update(randomBytes(32)).digest("hex") },
   });
   const view = await basePrisma.signatureView.create({ data: { tenantId, requestId: request.id, recipientId: recipient.id } });
-  return { id: view.id, recipientId: recipient.id, requestId: request.id };
+  return { id: view.id, tenantId, recipientId: recipient.id, requestId: request.id };
 }
 const read = (id: string) => basePrisma.signatureView.findUniqueOrThrow({ where: { id }, select: { seconds: true, maxPage: true } });
 const shuffled = <T,>(list: T[]): T[] => list.map((v) => [Math.random(), v] as const).sort((a, b) => a[0] - b[0]).map(([, v]) => v);
@@ -99,9 +99,13 @@ async function main() {
 
     console.log("\n== only through the link that opened it");
     const b = await sitting(tenantB, "B");
-    const wrongLink = await applyViewReport(basePrisma, { id: b.id, recipientId: a.recipientId, requestId: a.requestId }, { seconds: 900, page: 9 });
+    const wrongLink = await applyViewReport(basePrisma, { id: b.id, tenantId: tenantB, recipientId: a.recipientId, requestId: a.requestId }, { seconds: 900, page: 9 });
     const untouched = await read(b.id);
     check("another recipient's link cannot change a sitting, even knowing its id", wrongLink === false && untouched.seconds === 0 && untouched.maxPage === 1);
+    // This client can see every workspace (it bypasses the policy), so only the writer's own WHERE stands in the way.
+    const wrongWorkspace = await applyViewReport(basePrisma, { ...b, tenantId: tenantA }, { seconds: 900, page: 9 });
+    const stillUntouched = await read(b.id);
+    check("every id right but the workspace wrong: nothing changes, even on a client that sees all workspaces", wrongWorkspace === false && stillUntouched.seconds === 0 && stillUntouched.maxPage === 1);
     check("a sitting that does not exist is reported as such", (await applyViewReport(basePrisma, { ...a, id: "no-such-sitting" }, { seconds: 1 })) === false);
 
     console.log("\n== the control: reading, then writing, DOES lose updates here");
