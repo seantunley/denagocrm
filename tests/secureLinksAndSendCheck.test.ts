@@ -271,6 +271,29 @@ test("A FLAGGED NUMBER NEVER REACHES THE AUDIT ENTRY: the subject and file names
   assert.doesNotMatch(audit, /\$\{subject\}|\$\{attachedNames/, "the raw subject or names must not be in the summary");
 });
 
+test("A LIBRARY FILE IS CHECKED BY ITS FILE NAME, NOT ITS TITLE — in the composer as on the server", () => {
+  // A library document titled harmlessly over a file that is not: the title and the stored name differ.
+  const title = "Customer paperwork (v2)";
+  const stored = "ID copy.pdf";
+  const base = { subject: "Docs", bodyText: "As requested.", secureLinks: false, to: "broker@other.co.za", customerAddresses: ["thabo@example.co.za"] };
+  assert.equal(sendWarning({ ...base, fileNames: [title] }), null, "the title alone says nothing");
+  assert.ok(sendWarning({ ...base, fileNames: [stored] }), "the file name does");
+  assert.equal(secureLinkHint([title], false), null);
+  assert.ok(secureLinkHint([stored], false));
+  // So both sides must read the file name. The server does…
+  const actions = src("src/app/actions/emails.ts");
+  assert.match(actions, /for \(const v of versions\) \{\s*fileNames\.push\(v\.fileName\);/);
+  // …and the composer is given it, and uses it for the check it makes before submitting. Had it used the
+  // title, the browser would pass an email the server then refuses, with no "Send anyway" to press.
+  const composer = src("src/components/EmailComposer.tsx");
+  assert.match(composer, /libraryDocs\?: \{ id: string; label: string; fileName: string \}\[\];/);
+  assert.match(composer, /\.\.\.attached\.map\(\(id\) => \(\{ name: libraryDocs\.find\(\(x\) => x\.id === id\)\?\.fileName \?\? "Document", sizeBytes: 0 \}\)\),/);
+  assert.match(composer, /fileNames: allFiles\.map\(\(f\) => f\.name\),/);
+  for (const page of ["src/app/(app)/leads/[id]/page.tsx", "src/app/(app)/contacts/[id]/page.tsx"]) {
+    assert.match(src(page), /label: `\$\{d\.name\} \(v\$\{d\.versions\[0\]\.version\}\)`, fileName: d\.versions\[0\]\.fileName \}/, page);
+  }
+});
+
 test("A SECURE LINK IS ONLY MADE WHERE FILES ARE STORED PRIVATELY", () => {
   const storage = src("src/lib/storage.ts");
   assert.match(storage, /export const storesPrivately = \(\) => privateMode\(\) \|\| !publicToken\(\);/);

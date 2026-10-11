@@ -202,7 +202,7 @@ export default async function ContactDetailPage({
     : [[], null];
   const libraryDocs = libraryDocuments
     .filter((d) => d.versions[0])
-    .map((d) => ({ id: d.versions[0].id, label: `${d.name} (v${d.versions[0].version})` }));
+    .map((d) => ({ id: d.versions[0].id, label: `${d.name} (v${d.versions[0].version})`, fileName: d.versions[0].fileName }));
   const vars = contactVars(contact, teamSignoff(await brandForTenant(await getActiveTenantId())));
   const renderedTemplates = templates.map((t) => ({
     id: t.id,

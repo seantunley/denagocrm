@@ -48,7 +48,8 @@ export default function EmailComposer({
   leadId?: string;
   contactId?: string;
   revalidate: string;
-  libraryDocs?: { id: string; label: string }[];
+  /** `label` is what the sender sees; `fileName` is the stored file's own name — what the customer receives and what the send check reads. */
+  libraryDocs?: { id: string; label: string; fileName: string }[];
   aiConfigured?: boolean;
   /**
    * Pre-filled Reply-To — the sender plus the CRM's own mailbox, resolved by
@@ -93,7 +94,10 @@ export default function EmailComposer({
   const [secure, setSecure] = useState(false);
   const [days, setDays] = useState<number>(SECURE_LINK_DEFAULT_DAYS);
   const allFiles = [
-    ...attached.map((id) => ({ name: libraryDocs.find((x) => x.id === id)?.label ?? "Document", sizeBytes: 0 })),
+    // The FILE's name, not the library title: the server checks the file name when it sends, and a title
+    // that reads harmlessly ("Customer paperwork") over a file called "ID copy.pdf" would pass here and be
+    // refused there, with no way to confirm.
+    ...attached.map((id) => ({ name: libraryDocs.find((x) => x.id === id)?.fileName ?? "Document", sizeBytes: 0 })),
     ...uploads.map((f) => ({ name: f.name, sizeBytes: f.size })),
   ];
   const linkHint = secureLinkHint(allFiles.map((f) => f.name), secure);
