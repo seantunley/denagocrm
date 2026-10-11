@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
-import { requireUser } from "@/lib/auth";
+import { requireUser, getActiveTenantId } from "@/lib/auth";
+import { brandForTenant, DEFAULT_BRAND } from "@/lib/tenantBrand";
 import ArticleBody from "@/components/help/ArticleBody";
 import PrintButton from "@/components/help/PrintButton";
 import { categoriesWithArticles } from "@/lib/help/content";
@@ -12,6 +13,8 @@ const AUDIENCE_LABEL: Record<string, string> = { everyone: "", managers: "Manage
 export default async function ManualPage() {
   await requireUser();
   const enabled = await getEnabledModuleIds();
+  // The workspace's own name on the cover — a second workspace must not print another company's manual.
+  const brand = await brandForTenant(await getActiveTenantId()).catch(() => DEFAULT_BRAND);
   const categories = categoriesWithArticles(enabled);
   const articleCount = categories.reduce((n, c) => n + c.articles.length, 0);
 
@@ -23,7 +26,7 @@ export default async function ManualPage() {
       <header className="mb-10 border-b-2 border-orange-500 pb-6">
         <div className="flex items-start justify-between gap-4">
           <div>
-            <p className="text-xs font-semibold uppercase tracking-[0.2em] text-orange-600">Denago Cape Town</p>
+            <p className="text-xs font-semibold uppercase tracking-[0.2em] text-orange-600">{brand.displayName}</p>
             <h1 className="mt-1 text-3xl font-bold tracking-tight text-slate-900">User Manual</h1>
             <p className="mt-2 text-sm text-slate-500">
               The complete guide to the CRM — {articleCount} articles across {categories.length} areas.
