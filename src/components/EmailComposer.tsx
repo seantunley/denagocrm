@@ -99,7 +99,8 @@ export default function EmailComposer({
     setPreviewing(true);
     setPreviewError("");
     try {
-      const { html } = await previewComposerEmail(body);
+      // Who it is going to decides whether the signature banner shows (a customer who opted out of marketing gets none).
+      const { html } = await previewComposerEmail(body, { to: field("to"), contactId, leadId });
       setPreview({ html, to: field("to"), replyTo: field("replyTo"), sentState: state });
     } catch {
       setPreviewError("Couldn't build the preview — try again.");

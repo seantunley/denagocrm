@@ -78,6 +78,17 @@ export async function resolveCampaignRecipientTenant(
   return row ? { tenantId: row.tenantId } : null;
 }
 
+/** Owning tenant of an email signature banner's link token. A tracking id, not a credential: it can only count a click. */
+export async function resolveSignatureBannerTenant(
+  token: string,
+): Promise<{ tenantId: string | null } | null> {
+  const row = await basePrisma.signatureBanner.findUnique({
+    where: { token },
+    select: { tenantId: true },
+  });
+  return row ? { tenantId: row.tenantId } : null;
+}
+
 /** Owning tenant of an email's open-tracking token (the pixel in a sent email). */
 export async function resolveEmailOpenTenant(
   openToken: string,

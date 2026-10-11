@@ -1,0 +1,76 @@
+import type { HelpArticle } from "../types";
+
+export const signatureBannerArticles: HelpArticle[] = [
+  {
+    slug: "signature-banners",
+    title: "Signature banners: marketing under your email signature",
+    summary: "Put a banner under your team's email signature, run a promotion over it for a set time, and see which customers click.",
+    category: "admin",
+    audience: "admins",
+    keywords: ["signature banner", "email signature marketing", "banner", "promotion", "special", "campaign", "rocketseed", "click tracking", "temporary signature", "email footer advert"],
+    body: [
+      { type: "p", text: "A **signature banner** is a picture with a link that sits under the signature on emails your team writes to customers from the CRM. Every email your team already sends becomes a quiet advert for a special, an event or a new model — without anyone having to remember to add it." },
+      { type: "p", text: "Open it from **Settings → Signature banners** (in the Communications group). Only the workspace owner can add or change banners." },
+      { type: "h", text: "Standing banners and promotions" },
+      {
+        type: "table",
+        headers: ["Kind", "How to set it", "What it does"],
+        rows: [
+          ["Standing banner", "Leave **Last day** empty.", "Shows on every email until you switch it off."],
+          ["Promotion", "Give it a **First day** and a **Last day**.", "Takes over from the standing banner while it runs. After its last day your standing banner comes back by itself."],
+        ],
+      },
+      { type: "p", text: "Only one banner shows on an email. If several are live at once, a banner with a last day wins over one without; of two promotions, the one that started later wins." },
+      { type: "h", text: "Add a banner" },
+      {
+        type: "steps",
+        items: [
+          "Open **Settings → Signature banners** and click **New banner**.",
+          "Give it a **Name**. Only your team sees this.",
+          "Choose the **Banner image**: a wide PNG, JPG or GIF up to 300 KB. A 1200 × 300 image works well and stays sharp on phones.",
+          "Under **Where a click goes**, paste the full web address, starting with https://.",
+          "Fill in **Words shown when the image is blocked** — a short sentence that makes sense by itself.",
+          "For a promotion, set the **First day** and **Last day**.",
+          "Under **Whose emails carry it**, leave **Everyone's**, or choose **Only these teams' and people's** and tick them. A team means whoever is in it when the email is sent.",
+          "Under **Where it sits**, choose **Under the signature** or **At the top of the email, above the message**.",
+          "Tick **Also on quotes my team emails from the CRM** if you want it on quote emails too.",
+          "Click **Add banner**. It is saved switched off.",
+          "When you are ready, click **Switch on** and confirm.",
+        ],
+      },
+      { type: "callout", tone: "info", text: "Nothing reaches a customer until you switch a banner on. Switching on asks you to confirm, because from that moment every email your team writes carries it." },
+      { type: "h", text: "What you see for each banner" },
+      {
+        type: "table",
+        headers: ["Label", "Meaning"],
+        rows: [
+          ["Live", "It is on emails now."],
+          ["Scheduled", "It is switched on and waiting for its first day."],
+          ["Off", "It is switched off."],
+          ["Ended", "Its last day has passed. Edit the dates to run it again."],
+          ["On your emails now", "This is the banner your own emails carry at the moment."],
+        ],
+      },
+      { type: "p", text: "Each banner also shows how many **emails were sent with it**, how many **clicks** it has had and its **click rate**. **Recent clicks** at the bottom of the page lists who clicked what, with a link to their record." },
+      { type: "h", text: "When a customer clicks" },
+      { type: "p", text: "The click is shown on that email's entry in the customer's timeline, as **Clicked your banner** with the date and time, next to **Opened**." },
+      { type: "p", text: "Whoever wrote the email gets a notification the first time that customer clicks the banner in it. It is a good moment to phone them. The notification goes to that person's own devices only, and the owner can switch **Signature banner clicks** off for the workspace under Settings → Notifications." },
+      { type: "callout", tone: "warning", text: "Some company mail systems open every link in an email to check it is safe. A click that arrives seconds after you send, from a business address, may be one of those rather than a person. Treat clicks as a strong hint, not proof." },
+      { type: "h", text: "Which emails carry a banner" },
+      {
+        type: "list",
+        items: [
+          "Emails a person writes in the CRM's email composer — from a lead, a contact or anywhere else **Send email** appears. The composer's **Preview** shows the banner exactly as it will go out.",
+          "A quote a person emails from the CRM — but only for a banner you ticked **Also on quotes my team emails from the CRM** for. On a quote email the banner is centred, above or below the whole email.",
+          "**Not** signing invitations, signed copies, service reminders or any other automatic message. Those never carry a banner.",
+          "**Not** emails to a customer who has opted out of marketing. The CRM checks both the record and the address you typed.",
+          "**Not** emails sent from Outlook, Gmail or your phone's mail app. Only email sent from the CRM passes through it.",
+        ],
+      },
+      { type: "h", text: "Changing a banner" },
+      { type: "p", text: "Click **Edit** to change the name, picture, link, dates or people. Changes apply to emails sent from then on; an email already sent keeps the picture it went out with. **Switch off** stops a banner at once." },
+      { type: "callout", tone: "tip", text: "Keep the picture simple: one message, large text, and the offer's end date if it has one. Many mail apps hide pictures until the reader allows them, so the words you typed for that case matter as much as the picture." },
+      { type: "callout", tone: "info", text: "A banner on a one-to-one email still counts as marketing. That is why customers who opted out never receive one, and why each banner has its own switch and starts off." },
+    ],
+  },
+];

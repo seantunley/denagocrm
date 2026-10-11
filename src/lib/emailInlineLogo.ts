@@ -103,6 +103,11 @@ async function loadWorkspaceLogo(tenantId: string, src: string): Promise<LoadedI
     return raw ? decryptValue(raw).trim() : "";
   };
   const configured = [value("COMPANY_LOGO_URL"), parseSignatureDesign(value(SIGNATURE_DESIGN_KEY)).bannerUrl];
+  // …or one of this workspace's signature banners (lib/signatureBanners.ts),
+  // matched on the exact stored address for the same reason.
+  if (!configured.includes(src) && (await basePrisma.signatureBanner.findFirst({ where: { tenantId, imageUrl: src }, select: { id: true } }))) {
+    configured.push(src);
+  }
   if (!configured.includes(src) || /\.private\.blob\.|\/api\/stored/i.test(src)) return null;
   const response = await fetch(src, { signal: AbortSignal.timeout(5000), redirect: "error" });
   const contentType = (response.headers.get("content-type") ?? "").split(";")[0].trim().toLowerCase();

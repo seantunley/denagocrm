@@ -1418,6 +1418,9 @@ model Communication {
   /// first load sets `seenAt` — the customer opened it. Null = not tracked.
   openToken      String?  @unique
   openCount      Int      @default(0)
+  /// When the customer first clicked the signature banner in this sent email
+  /// (lib/signatureBanners.ts). Null = no click, or the email carried no banner.
+  bannerClickedAt DateTime?
   archivedAt     DateTime? // when the thread carrying this message was archived out of the inbox (NULL = active)
 
   // Multi-tenancy (Phase B — additive/inert): owning tenant. See Contact.tenantId.
@@ -2677,6 +2680,60 @@ model SignatureView {
 
   @@index([tenantId, requestId])
   @@index([recipientId, startedAt])
+}
+
+// ── Email signature banners (signature marketing) ───────────────────
+/// A marketing banner shown under the sender's signature on emails the team
+/// writes (lib/signatureBanners.ts). Off until the owner switches it on; with
+/// dates it goes live and ends by itself, and the standing banner (no end date)
+/// shows again. The destination is stored here and never taken from the link,
+/// so the click route cannot be turned into an open redirect.
+model SignatureBanner {
+  id         String    @id @default(cuid())
+  tenantId   String
+  name       String
+  /// A public https image (the mail app loads it; the send path embeds it).
+  imageUrl   String
+  /// Shown size in the email, in px.
+  width      Int
+  height     Int
+  linkUrl    String
+  altText    String    @default("")
+  active     Boolean   @default(false)
+  startsAt   DateTime?
+  endsAt     DateTime?
+  /// Whose emails carry it: these people, and everyone in these teams. Both empty = everyone's.
+  senderIds  String[]  @default([])
+  teamIds    String[]  @default([])
+  /// "below" the signature, or "above" the message (the top of the email).
+  position   String    @default("below")
+  /// Also on a quote a person emails from the CRM. Off unless the owner ticks it:
+  /// a quote is a document the customer acts on, and the banner is marketing.
+  onQuoteEmails Boolean @default(false)
+  /// The unguessable id in the banner's link (/api/track/b/<token>).
+  token      String    @unique
+  /// Emails sent carrying it, and clicks on it. Only ever go up.
+  sentCount  Int       @default(0)
+  clickCount Int       @default(0)
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+  clicks     SignatureBannerClick[]
+
+  @@index([tenantId, active])
+}
+
+/// One click on a banner. `communicationId` is the sent email it came from,
+/// when the email was open-tracked. No IP address or browser string is kept.
+model SignatureBannerClick {
+  id              String          @id @default(cuid())
+  tenantId        String
+  bannerId        String
+  banner          SignatureBanner @relation(fields: [bannerId], references: [id], onDelete: Cascade)
+  communicationId String?
+  clickedAt       DateTime        @default(now())
+
+  @@index([tenantId, bannerId, clickedAt])
+  @@index([communicationId])
 }
 
 // ── Document Studio: free-form BlockNote documents ──────────────────

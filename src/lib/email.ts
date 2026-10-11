@@ -2,6 +2,7 @@ import nodemailer from "nodemailer";
 import { PLATFORM_TEAM_SIGNOFF } from "./platformIdentity";
 import { getSetting, resolveIntegrationBundleForTenant } from "./settings";
 import { EMAIL_OPEN_TRACKING_KEY, newOpenToken, openTrackingOn, withOpenPixel } from "./emailOpenTracking";
+import { EMAIL_REF_MARKER } from "./signatureBanners";
 import { currentTenantScope } from "./tenantScope";
 import { inlineImages, workspaceLogoLoader } from "./emailInlineLogo";
 import { DEFAULT_REGIONAL, formatZAR, type Regional } from "./format";
@@ -176,6 +177,10 @@ export async function sendEmail(input: {
         html = input.html;
       }
     }
+    // A signature banner's link names the email it is in by this email's own
+    // tracking token (lib/signatureBanners.ts) — or by nothing, when the email is
+    // not tracked: the click is still counted, it just belongs to no email.
+    if (html?.includes(EMAIL_REF_MARKER)) html = html.replaceAll(EMAIL_REF_MARKER, openToken ?? "");
     // The workspace's logo travels INSIDE the message (see emailInlineLogo.ts), so
     // it shows without the reader allowing remote images. Never a reason to fail:
     // anything that goes wrong leaves the original linked logo.

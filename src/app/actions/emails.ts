@@ -45,6 +45,8 @@ import { tenantOrigin } from "@/lib/tenantOrigin";
 import { withActingStaffScope } from "@/lib/actingScope";
 import { EMAIL_OPEN_TRACKING_KEY } from "@/lib/emailOpenTracking";
 import { MESSAGE_PLACES } from "@/lib/customerMessagePlaces";
+import { bannerClickUrl, bannerHtml, bannerPosition } from "@/lib/signatureBanners";
+import { bannerForEmail, recordBannerSent } from "@/lib/signatureBannerStore";
 
 export type SendEmailState = { ok?: string; error?: string };
 
@@ -55,18 +57,46 @@ async function tenantIdFor(userId: string): Promise<string | null> {
 
 type ComposerUser = Awaited<ReturnType<typeof requireAnyPermission>>;
 
-/** The composer email's HTML: the message plus the sender's signature. One builder, so Preview is what Send sends. */
-async function composerHtml(user: ComposerUser, bodyHtml: string, profile: Awaited<ReturnType<typeof getCompanyProfile>>) {
+type ComposerRecipient = { to?: string; contactId?: string | null; leadId?: string | null };
+
+/**
+ * The composer email's HTML: the message, the sender's signature, and under it
+ * the signature banner that is live for this sender (Settings → Signature
+ * banners) — unless the recipient opted out of marketing. One builder, so
+ * Preview is what Send sends; only the banner's LINK differs (`preview`), so
+ * that trying it in the preview is not counted as a customer's click.
+ */
+async function composerHtml(
+  user: ComposerUser,
+  bodyHtml: string,
+  profile: Awaited<ReturnType<typeof getCompanyProfile>>,
+  recipient: ComposerRecipient = {},
+  preview = false,
+): Promise<{ html: string; tenantId: string | null; bannerId: string | null }> {
   // The workspace's signature design (Settings → My account → Email signature), same as the settings preview.
   const design = parseSignatureDesign(await getSetting(SIGNATURE_DESIGN_KEY));
-  const company = signatureCompanyFrom(profile, await tenantOrigin(await tenantIdFor(user.id)), design);
-  return buildEmailHtml(bodyHtml, buildSignature(user, company));
+  const tenantId = await tenantIdFor(user.id);
+  const company = signatureCompanyFrom(profile, await tenantOrigin(tenantId), design);
+  // The banner's link is on the same origin as the signature's own images: the workspace's.
+  const origin = company.assetBase;
+  // Never a reason to lose the email: a banner that can't be worked out is an email without one.
+  const banner = tenantId ? await bannerForEmail({ tenantId, senderId: user.id, ...recipient }).catch(() => null) : null;
+  const marketing = banner ? bannerHtml(banner, preview ? banner.linkUrl : bannerClickUrl(origin, banner.token)) : "";
+  // Under the signature, or — the owner's choice per banner — at the top of the email, above the message.
+  const above = Boolean(banner) && bannerPosition(banner!.position) === "above";
+  const html = buildEmailHtml(bodyHtml, buildSignature(user, company) + (above ? "" : marketing));
+  return { html: above ? html.replace(/<body[^>]*>/i, (open) => `${open}${marketing}`) : html, tenantId, bannerId: banner?.id ?? null };
 }
 
 /** The composer's Preview (Sean, 2026-10-07: "a preview on the email, to view before it sends"). Sends nothing. */
-export async function previewComposerEmail(bodyHtml: string): Promise<{ html: string }> {
+export async function previewComposerEmail(bodyHtml: string, recipient: ComposerRecipient = {}): Promise<{ html: string }> {
   const user = await requireAnyPermission(...CUSTOMER_RECORD_WRITE_PERMISSIONS);
-  return { html: await composerHtml(user, String(bodyHtml ?? "").trim(), await getCompanyProfile()) };
+  // Only records the caller may open decide anything here — the same rule Send applies.
+  const contactId = recipient.contactId && (await canAccessContact(user, recipient.contactId)) ? recipient.contactId : null;
+  const leadId = recipient.leadId && (await canAccessLead(user, recipient.leadId)) ? recipient.leadId : null;
+  const to = String(recipient.to ?? "").slice(0, 1000);
+  const { html } = await composerHtml(user, String(bodyHtml ?? "").trim(), await getCompanyProfile(), { to, contactId, leadId }, true);
+  return { html };
 }
 
 /** Sends an email and logs it as an outbound communication on the lead/contact. */
@@ -107,7 +137,7 @@ export async function sendEmailAction(
     return { error: "You don't have access to that lead." };
   }
   const profile = await getCompanyProfile();
-  const html = await composerHtml(user, bodyHtml, profile);
+  const { html, tenantId: sendingTenantId, bannerId } = await composerHtml(user, bodyHtml, profile, { to, contactId, leadId });
 
   // Library attachments (selected version ids)
   const attachIds = formData.getAll("attach").map(String).filter(Boolean);
@@ -166,6 +196,7 @@ export async function sendEmailAction(
     senderName: user.name,
   });
   if (!result.ok) return { error: result.error };
+  if (bannerId && sendingTenantId) await recordBannerSent(sendingTenantId, bannerId);
 
   await prisma.communication.create({
     data: {

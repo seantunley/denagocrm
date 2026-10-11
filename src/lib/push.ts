@@ -80,6 +80,7 @@ export const PUSH_KINDS = [
   { id: "quote_feedback", label: "Quote questions / changes", desc: "Customer asks a question on the signing page, or requests changes" },
   { id: "review", label: "Google reviews", desc: "A new review appears" },
   { id: "email_in", label: "Email replies", desc: "A customer replies to an email (IMAP)" },
+  { id: "banner_click", label: "Signature banner clicks", desc: "A customer clicks the banner under your email signature — sent only to whoever wrote the email" },
   { id: "referral", label: "Referral fees", desc: "A referred deal is won — fee due" },
   { id: "competitor", label: "Competitor changes", desc: "A material change on a monitored competitor page" },
   { id: "system_error", label: "System errors", desc: "Something in the CRM failed (throttled to 1/30min)" },

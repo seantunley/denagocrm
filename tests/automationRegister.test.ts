@@ -54,7 +54,7 @@ test("every phase of the automations cron, and everything it runs directly, is o
  */
 
 /** Customer messages that are NOT journeys, and why — each is part of something a person did. */
-const NOT_JOURNEYS = ["signed-copies", "signed-copies-whatsapp", "signing-next-signer", "surveys", "campaigns", "chatbot", "inbound-email"];
+const NOT_JOURNEYS = ["signed-copies", "signed-copies-whatsapp", "signing-next-signer", "surveys", "campaigns", "signature-banners", "chatbot", "inbound-email"];
 
 test("every customer message is a journey, or a documented exception that says why", () => {
   const customer = AUTOMATIONS.filter((a) => a.reaches === "customer");
