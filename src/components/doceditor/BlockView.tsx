@@ -1,31 +1,38 @@
 "use client";
 
 import type { DocumentBlock } from "@/lib/doceditor/model";
-import { computePricing } from "@/lib/doceditor/serialize";
-import { brandFooterContent, SOCIAL_ICON_PATHS, COMPANY_DEFAULTS } from "@/lib/companyBrand";
+import { blockPreviewHtml } from "@/lib/doceditor/serialize";
+import { COMPANY_DEFAULTS } from "@/lib/companyBrand";
 import { storedFileSrc } from "@/lib/storedFileSrc";
 import { imageFrame } from "@/lib/doceditor/imageFrame";
 import { ActiveRichText, ReadOnlyRichText } from "./RichText";
-import { handoverChecklistHtml } from "@/lib/doceditor/handoverChecklist";
 import { ShowcaseBlockView } from "./ShowcaseBlockView";
 import { useDocEditorEnv } from "./EditorContext";
 import { useEditor } from "@/lib/doceditor/store";
 import { emailBlockPreviewHtml } from "@/lib/doceditor/emailRender";
 
-/** The workspace's own logo (resolved server-side, same as the printed banner). */
-function BannerView({ block }: { block: Extract<DocumentBlock, { type: "banner" }> }) {
-  const { logoSrc, companyName } = useDocEditorEnv();
+/**
+ * A block drawn by the PRINT renderer, on the editor page.
+ *
+ * Each of these used to be redrawn by hand here, in pixels where the print uses
+ * points: a card, a table or a totals band was about a quarter smaller on the
+ * page than on paper, and drifted further with every change made to only one
+ * of the two. There is now one drawing. Its settings are in the panel.
+ *
+ * Our own renderer's escaped, colour-checked markup — the same the PDF prints —
+ * with merge fields left as written and the workspace's own logo and details.
+ */
+function PrintedBlock({ block, hint }: { block: DocumentBlock; hint?: string }) {
+  const { logoSrc, companyName, company } = useDocEditorEnv();
+  const style = useEditor((s) => s.doc?.style);
+  if (!style) return null;
+  // A hidden block prints nothing; on the page it stays, dimmed by its wrapper, so it can be shown again.
+  const html = blockPreviewHtml({ ...block, hidden: false }, style, { company: { ...COMPANY_DEFAULTS, ...company, name: company?.name || companyName || COMPANY_DEFAULTS.name }, logo: logoSrc || undefined });
   return (
-    <div style={{ background: block.bg, borderRadius: 8, padding: "14px 18px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-      {block.showLogo && logoSrc ? (
-        // eslint-disable-next-line @next/next/no-img-element
-        <img src={logoSrc} alt={companyName} style={{ height: 32, width: "auto" }} />
-      ) : <span style={{ color: "#fff", fontWeight: 800, letterSpacing: 1 }}>{companyName.toUpperCase()}</span>}
-      <div style={{ textAlign: "right" }}>
-        <div style={{ color: "#fff", fontWeight: 800, fontSize: 20, letterSpacing: 1 }}>{block.title}</div>
-        <div style={{ color: block.accent, fontWeight: 800 }}>{block.docNumber}</div>
-      </div>
-    </div>
+    <>
+      <div dangerouslySetInnerHTML={{ __html: html }} />
+      {hint ? <div style={{ fontSize: "7.5pt", color: "#94a3b8", marginTop: 2 }}>{hint}</div> : null}
+    </>
   );
 }
 
@@ -36,7 +43,7 @@ function BannerView({ block }: { block: Extract<DocumentBlock, { type: "banner" 
  * text: once a table was dropped in, its three sample cells could not be changed
  * by any route. Every heading and cell is now a borderless field in place, so
  * the table looks as it prints and is edited by clicking it. Columns, rows and
- * colours are in the panel.
+ * colours are in the panel. Sizes and spacing are the print's (serialize.ts tableHtml).
  */
 function TableView({ block }: { block: Extract<DocumentBlock, { type: "table" }> }) {
   const updateBlock = useEditor((s) => s.updateBlock);
@@ -47,10 +54,10 @@ function TableView({ block }: { block: Extract<DocumentBlock, { type: "table" }>
     rows: block.rows.map((r, i) => (i === ri ? { cells: block.columns.map((_, c) => (c === ci ? { value } : r.cells[c] ?? { value: "" })) } : r)),
   } as Partial<DocumentBlock>);
   return (
-    <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+    <table style={{ width: "100%", borderCollapse: "collapse", margin: "6px 0" }}>
       <thead>
         <tr>{block.columns.map((c, ci) => (
-          <th key={ci} style={{ background: block.headerBg, color: block.headerColor, textAlign: c.align, padding: "5px 7px", fontSize: 10, width: `${c.widthPct}%` }}>
+          <th key={ci} style={{ background: block.headerBg, color: block.headerColor, textAlign: c.align, padding: "6px 8px", fontSize: "8pt", width: `${c.widthPct}%` }}>
             <input aria-label={`Column ${ci + 1} heading`} value={c.header} onChange={(e) => setHeader(ci, e.target.value)} style={{ ...field, textAlign: c.align, fontWeight: 700 }} />
           </th>
         ))}</tr>
@@ -59,7 +66,7 @@ function TableView({ block }: { block: Extract<DocumentBlock, { type: "table" }>
         {block.rows.map((r, ri) => (
           <tr key={ri} style={{ background: ri % 2 ? "#f8fafc" : "#fff" }}>
             {block.columns.map((c, ci) => (
-              <td key={ci} style={{ textAlign: c.align, padding: "5px 7px", borderBottom: ".5px solid #e2e8f0" }}>
+              <td key={ci} style={{ textAlign: c.align, padding: "6px 8px", borderBottom: ".5px solid #e2e8f0", fontSize: "10pt" }}>
                 <input aria-label={`Row ${ri + 1}, ${c.header || `column ${ci + 1}`}`} value={r.cells[ci]?.value ?? ""} onChange={(e) => setCell(ri, ci, e.target.value)} style={{ ...field, textAlign: c.align }} />
               </td>
             ))}
@@ -68,11 +75,6 @@ function TableView({ block }: { block: Extract<DocumentBlock, { type: "table" }>
       </tbody>
     </table>
   );
-}
-
-function money(amount: number, currency: string): string {
-  const n = Math.abs(amount).toLocaleString("en-ZA", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-  return currency === "ZAR" ? `R ${n}` : `${currency} ${n}`;
 }
 
 /** Renders one block's CONTENT for the editing canvas. Chrome (handles, outline) is added by the wrapper. */
@@ -112,8 +114,7 @@ export function BlockView({ block, active }: { block: DocumentBlock; active: boo
       );
     }
 
-    case "divider":
-      return <hr style={{ border: "none", borderTop: `${block.thickness}px solid ${block.color}`, margin: "8px 0" }} />;
+    // Kept visible on the page: a spacer prints as empty space, a page break as nothing at all.
     case "spacer":
       return <div style={{ height: block.height }} className="rounded bg-slate-50/60" />;
     case "pageBreak":
@@ -126,116 +127,12 @@ export function BlockView({ block, active }: { block: DocumentBlock; active: boo
     case "table":
       return <TableView block={block} />;
 
-    case "pricing": {
-      const { rows, subtotal, taxTotal, total } = computePricing(block);
-      return (
-        <div>
-          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
-            <thead>
-              <tr>
-                {["Item", "Qty", "Unit", block.showDiscount ? "Disc" : null, block.showTax ? "Tax" : null, "Amount"].filter(Boolean).map((h, i) => (
-                  <th key={i} style={{ background: block.accent, color: "#fff", textAlign: i === 0 ? "left" : "right", padding: "6px 8px", fontSize: 9, textTransform: "uppercase" }}>{h}</th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((r, i) => (
-                <tr key={r.line.id} style={{ background: i % 2 ? "#f8fafc" : "#fff" }}>
-                  <td style={{ padding: "6px 8px", borderBottom: ".5px solid #e2e8f0" }}>
-                    <div style={{ fontWeight: 600, color: "#020617" }}>{r.line.name}</div>
-                    {r.line.description ? <div style={{ fontSize: 10, color: "#64748b" }}>{r.line.description}</div> : null}
-                  </td>
-                  <td style={{ textAlign: "right", padding: "6px 8px", borderBottom: ".5px solid #e2e8f0" }}>{r.line.qty}</td>
-                  <td style={{ textAlign: "right", padding: "6px 8px", borderBottom: ".5px solid #e2e8f0" }}>{money(r.line.unitPrice, block.currency)}</td>
-                  {block.showDiscount ? <td style={{ textAlign: "right", padding: "6px 8px", borderBottom: ".5px solid #e2e8f0" }}>{r.line.discountPct || 0}%</td> : null}
-                  {block.showTax ? <td style={{ textAlign: "right", padding: "6px 8px", borderBottom: ".5px solid #e2e8f0" }}>{money(r.tax, block.currency)}</td> : null}
-                  <td style={{ textAlign: "right", padding: "6px 8px", borderBottom: ".5px solid #e2e8f0", fontWeight: 600 }}>{money(r.total, block.currency)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-          <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 6 }}>
-            <table style={{ fontSize: 12 }}>
-              <tbody>
-                <tr><td style={{ padding: "1px 10px", color: "#64748b" }}>Subtotal</td><td style={{ textAlign: "right" }}>{money(subtotal, block.currency)}</td></tr>
-                {block.showTax ? <tr><td style={{ padding: "1px 10px", color: "#64748b" }}>Tax</td><td style={{ textAlign: "right" }}>{money(taxTotal, block.currency)}</td></tr> : null}
-                <tr><td style={{ padding: "4px 10px", fontWeight: 700, color: block.accent }}>Total</td><td style={{ textAlign: "right", fontWeight: 700, color: block.accent }}>{money(total, block.currency)}</td></tr>
-              </tbody>
-            </table>
-          </div>
-          {block.bound ? <div style={{ fontSize: 10, color: block.accent, marginTop: 4 }}>🔗 Lines auto-fill from the linked record on generate</div> : null}
-        </div>
-      );
-    }
-
-    case "banner":
-      return <BannerView block={block} />;
-    case "infoCard":
-      return (
-        <div style={{ background: "#f8fafc", borderLeft: `3px solid ${block.accent}`, borderRadius: 6, padding: "10px 12px" }}>
-          <div style={{ fontSize: 8, fontWeight: 700, letterSpacing: 1, color: block.accent }}>{block.label}</div>
-          <div style={{ fontSize: 13, fontWeight: 700, color: "#020617", margin: "2px 0" }}>{block.name}</div>
-          <div style={{ fontSize: 11, color: "#64748b", whiteSpace: "pre-wrap" }}>{block.lines}</div>
-        </div>
-      );
-    case "lineItems": {
-      const sample: Record<string, string> = { description: "Denago EV Rover XL", qty: "1", unitPrice: "R 235 000,00", unitPriceExVat: "R 204 347,83", vat: "R 30 652,17", subtotal: "R 204 347,83", total: "R 235 000,00" };
-      return (
-        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
-          <thead><tr>{block.columns.map((c, i) => <th key={i} style={{ background: block.headerBg, color: block.headerColor, textAlign: c.align, padding: "6px 8px", fontSize: 9, textTransform: "uppercase" }}>{c.header}{c.showIf?.trim() ? <span title={`Only shown when: ${c.showIf}`}> ⌥</span> : null}</th>)}</tr></thead>
-          <tbody>
-            <tr>{block.columns.map((c, i) => <td key={i} style={{ textAlign: c.align, padding: "6px 8px", borderBottom: ".5px solid #e2e8f0", color: "#64748b" }}>{sample[c.key]}</td>)}</tr>
-            <tr><td colSpan={block.columns.length} style={{ padding: "4px 8px", color: "#94a3b8", fontSize: 10 }}>🔗 fills from the linked quote / job card on generate</td></tr>
-          </tbody>
-        </table>
-      );
-    }
-    case "totalBand":
-      return (
-        <div style={{ display: "flex", justifyContent: "flex-end" }}>
-          <div style={{ background: block.color, color: "#fff", borderRadius: 6, padding: "8px 18px", display: "flex", gap: 14, alignItems: "center" }}>
-            <span style={{ fontSize: 9, fontWeight: 700, letterSpacing: 1 }}>{block.label}</span>
-            <span style={{ fontSize: 16, fontWeight: 800 }}>{block.amount}</span>
-          </div>
-        </div>
-      );
-    case "terms":
-      return (
-        <div style={{ background: "#f8fafc", borderRadius: 6, padding: "10px 12px" }}>
-          {block.title ? <div style={{ fontSize: 8, fontWeight: 700, letterSpacing: 1, color: "#64748b", marginBottom: 5 }}>{block.title}</div> : null}
-          {block.items.map((it, i) => <div key={i} style={{ fontSize: 11, color: "#64748b", marginBottom: 2 }}>• {it.text}</div>)}
-        </div>
-      );
-    case "footer": {
-      if (block.variant === "simple") {
-        return (
-          <div style={{ borderTop: `1.5px solid ${block.accent}`, paddingTop: 6, textAlign: "center" }}>
-            {block.lines.map((l, i) => <div key={i} style={{ fontSize: i === 0 ? 9 : 8, fontWeight: i === 0 ? 700 : 400, color: i === 0 ? "#334155" : "#64748b" }}>{l.text}</div>)}
-          </div>
-        );
-      }
-      // Editor preview uses the Company Profile defaults; the exported PDF resolves
-      // the live {{company.*}} tokens for whatever the tenant has saved.
-      const f = brandFooterContent((k) => COMPANY_DEFAULTS[k] ?? "");
-      return (
-        <div style={{ borderTop: "1px solid #e2e8f0", paddingTop: 9, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 18 }}>
-          <div style={{ minWidth: 0 }}>
-            <div style={{ fontSize: 10, fontWeight: 700, color: "#0f172a" }}>{f.title}</div>
-            {f.contact && <div style={{ fontSize: 8.5, color: "#64748b", marginTop: 2 }}>{f.contact}</div>}
-            {f.web && <div style={{ fontSize: 8.5, color: "#2563eb", marginTop: 1 }}>{f.web}</div>}
-          </div>
-          <div style={{ display: "flex", alignItems: "center", gap: 7, whiteSpace: "nowrap" }}>
-            <svg width={13} height={13} viewBox="0 0 24 24" fill="#1877f2" style={{ display: "inline-block", verticalAlign: "middle" }}><path d={SOCIAL_ICON_PATHS.facebook} /></svg>
-            <svg width={13} height={13} viewBox="0 0 24 24" fill="#e4405f" style={{ display: "inline-block", verticalAlign: "middle" }}><path d={SOCIAL_ICON_PATHS.instagram} /></svg>
-            {f.instagram && <span style={{ fontSize: 8.5, color: "#0f172a", fontWeight: 600 }}>{f.instagram}</span>}
-          </div>
-        </div>
-      );
-    }
-
-    case "handoverChecklist":
-      // Our own escaped markup, sample data only — the same renderer the print uses.
-      return <div dangerouslySetInnerHTML={{ __html: handoverChecklistHtml(null) }} />;
+    case "pricing":
+      return <PrintedBlock block={block} hint={block.bound ? "🔗 Lines fill from the linked record when the document is generated" : undefined} />;
+    case "lineItems":
+      return <PrintedBlock block={block} hint={`🔗 Fills from the linked quote / job card${block.columns.some((c) => c.showIf?.trim()) ? " · some columns show only when their condition is met" : ""}`} />;
+    case "divider": case "banner": case "infoCard": case "totalBand": case "terms": case "footer": case "handoverChecklist":
+      return <PrintedBlock block={block} />;
 
     case "conditional": {
       const badge = block.when?.trim() ? block.when : "always";

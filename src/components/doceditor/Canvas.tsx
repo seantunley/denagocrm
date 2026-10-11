@@ -8,6 +8,7 @@ import { useEditor } from "@/lib/doceditor/store";
 import { newBlock } from "@/lib/doceditor/factory";
 import { PAGE_SIZES, type DocumentBlock, type DocumentPage, type DocumentRow, type DocumentColumn } from "@/lib/doceditor/model";
 import { blockBoxCss, columnNeedsStretch } from "@/lib/doceditor/blockBox";
+import { docTypeCss } from "@/lib/doceditor/docStyles";
 import { pageHasContent } from "@/lib/doceditor/ops";
 import ConfirmActionDialog from "@/components/ConfirmActionDialog";
 import { BlockView } from "./BlockView";
@@ -36,6 +37,11 @@ export function Canvas({ zoom }: { zoom: number }) {
 
   return (
     <div className="flex flex-col items-center gap-10 py-10" style={frame ? { background: frame.page } : undefined} onMouseDown={() => select(null)}>
+      {/* The document's own type — face, size, spacing, heading sizes — from the
+          one function the printed page fills its rules from (docStyles.ts). Sans
+          is Geist, the app's own copy of the font the renderer embeds, so text
+          wraps here as it prints. An email is drawn by its own renderer. */}
+      {!email && <style>{docTypeCss(doc.style, ".doc-canvas", "var(--font-geist-sans),Helvetica,Arial,sans-serif")}</style>}
       {doc.pages.map((page, pIdx) => (
         <PageView key={page.id} page={page} pIdx={pIdx} zoom={zoom} size={size} margin={doc.style.margin} fontFamily={doc.style.fontFamily} hint={hint} email={around} />
       ))}
@@ -135,9 +141,8 @@ function PageView({
             CONTENT has to scale by the same factor or it lays out at 100% inside
             a 90% box — wrapping differently from print, and leaving fixed-height
             content (a signature line) where no overlay field expects it. */}
-        {/* Sans is Geist — the app's own copy of the font the renderer embeds as
-            the document face — so text wraps on the canvas as it prints. */}
-        <div style={{ zoom, fontFamily: fontFamily === "serif" ? "Georgia,serif" : fontFamily === "mono" ? "monospace" : "var(--font-geist-sans),Helvetica,Arial,sans-serif" }}>
+        {/* An email keeps its own face; a document's type comes from .doc-canvas (see Canvas). */}
+        <div className={email ? undefined : "doc-canvas"} style={{ zoom, ...(email ? { fontFamily: fontFamily === "serif" ? "Georgia,serif" : fontFamily === "mono" ? "monospace" : "var(--font-geist-sans),Helvetica,Arial,sans-serif" } : {}) }}>
           {page.rows.map((row) => <RowView key={row.id} row={row} hint={hint} />)}
         </div>
         <AddRowButton pageIdx={pIdx} active={!!hint && "pageIdx" in hint && hint.pageIdx === pIdx} />

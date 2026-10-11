@@ -14,6 +14,8 @@ export type DocEditorEnv = {
   templateId: string | null;
   logoSrc: string;
   companyName: string;
+  /** The Company profile's own details (name, tagline, address, phone, email, website, socials), so a footer on the page reads as it prints. */
+  company?: Record<string, string>;
   /**
    * Set when the document is a customer EMAIL (template key `email:…`): which
    * message (null = the shared frame), the fields it can use, sample values for

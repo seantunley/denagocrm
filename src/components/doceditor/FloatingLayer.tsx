@@ -7,6 +7,7 @@ import type { DocumentPage } from "@/lib/doceditor/model";
 import { blockBoxCss } from "@/lib/doceditor/blockBox";
 import { alignmentGuides } from "./alignmentGuides";
 import { BlockView } from "./BlockView";
+import { useDocEditorEnv } from "./EditorContext";
 
 /**
  * Free-placement content layer: blocks detached from the flow, absolutely
@@ -18,6 +19,8 @@ export function FloatingLayer({ page, zoom }: { page: DocumentPage; zoom: number
   const activeTextId = useEditor((s) => s.activeTextBlockId);
   const updateFloating = useEditor((s) => s.updateFloating);
   const [targetEl, setTargetEl] = useState<HTMLElement | null>(null);
+  // A freely placed block takes the document's type like any other (an email is drawn by its own renderer).
+  const { email } = useDocEditorEnv();
 
   const selected = page.floatingBlocks.find((fb) => fb.block.id === sel.blockId) ?? null;
 
@@ -39,7 +42,7 @@ export function FloatingLayer({ page, zoom }: { page: DocumentPage; zoom: number
                 same factor as its position — so a fixed-geometry block (the
                 showcase acceptance card) keeps its lines under the overlay
                 fields, which are also placed at `px × zoom`. */}
-            <div style={{ zoom }}>
+            <div className={email ? undefined : "doc-canvas"} style={{ zoom }}>
               {/* Text size and alignment apply to a freely placed block exactly as the PDF applies them. */}
               <div style={blockBoxCss(fb.block, "floating").inner}>
                 <BlockView block={fb.block} active={active} />

@@ -21,7 +21,8 @@ import { handoverChecklistHtml } from "./handoverChecklist";
 import { showcaseBlockHtml, showcaseLookHtml } from "./showcaseRender";
 import { layoutRowsFor, resolveOverflowGroups } from "./overflow";
 import { storedFileSrc } from "@/lib/storedFileSrc";
-import { DOCUMENT_FONT_FACE, DOCUMENT_FONT_FAMILY } from "./documentFont";
+import { DOCUMENT_FONT_FACE } from "./documentFont";
+import { docType, fontStack } from "./docStyles";
 import { DEFAULT_REGIONAL, formatZAR, regionalFrom, type Regional } from "@/lib/format";
 import type { TableRow } from "@/lib/docbuilder/blocks";
 
@@ -63,11 +64,6 @@ function nl2br(s: string): string { return esc(s).replace(/\n/g, "<br/>"); }
 /** Resolve {{tokens}} in a plain string field against the bound record (kept literal for sample data). */
 function tok(s: string, ctx: RenderCtx): string {
   return (s ?? "").replace(/\{\{\s*([\w.]+)\s*\}\}/g, (_, k: string) => ctx?.tokens?.[k] ?? `{{${k}}}`);
-}
-function fontStack(f: DocStyle["fontFamily"]): string {
-  // Sans leads with the embedded Geist (DOCUMENT_FONT_FACE): the PDF renderer has
-  // no Helvetica/Arial, and its fallback printed uneven, jagged letters.
-  return f === "serif" ? "Georgia, 'Times New Roman', serif" : f === "mono" ? "'Courier New', monospace" : `'${DOCUMENT_FONT_FAMILY}', Helvetica, Arial, sans-serif`;
 }
 /** An amount in rand-units (not cents) in the given currency/locale. */
 function money(amount: number, m: Pick<Regional, "currency" | "locale"> = DEFAULT_REGIONAL): string {
@@ -300,6 +296,23 @@ function blockHtml(block: DocumentBlock, ctx: RenderCtx, style: DocStyle, logoDa
 }
 
 /**
+ * One block exactly as it prints, for the editor page.
+ *
+ * The page used to redraw each block by hand in React, in pixels where the
+ * print uses points — so every card, table and band was about a quarter smaller
+ * on the page than on paper, and the "prints on 2 sheets" guide under-counted.
+ * Drawing the page from this is what makes the two the same thing.
+ *
+ * Unbound: merge fields stay as written, and a line-items table shows one
+ * sample row where the record's lines will go.
+ */
+export function blockPreviewHtml(block: DocumentBlock, style: DocStyle, env: { company: Record<string, string>; logo?: string }): string {
+  const tokens = Object.fromEntries(Object.entries(env.company).map(([key, value]) => [`company.${key}`, value]));
+  const sample: LineItemRow = { cells: [{ value: "Sample item" }, { value: "1" }, { value: money(1150) }, { value: money(1150) }], qty: 1, unitPrice: 1150, lineTotal: 1150 };
+  return blockHtml(block, { tokens, items: [sample], vars: {}, bound: false, logo: env.logo }, style);
+}
+
+/**
  * Per-block box + type: width and placement within its column (PandaDoc-style
  * narrow blocks), plus the typography settings that apply to every block.
  *
@@ -463,13 +476,15 @@ export function renderSigningSheets(input: DocumentModel, ctxIn: RenderCtx, logo
     ).join("");
     return `<div style="position:absolute;inset:0;padding:${m}px">${rows}</div>${floats}`;
   });
+  // The document's type settings (docStyles.ts); with none set these are the values they always were.
+  const t = docType(doc.style);
   const css = `
     ${DOCUMENT_FONT_FACE}
-    .sg-sheet { font-family:${font}; font-size:11pt; line-height:1.5; color:#1e293b; -webkit-font-smoothing:antialiased; }
+    .sg-sheet { font-family:${font}; font-size:${t.body}; line-height:${t.lineHeight}; color:${t.text}; -webkit-font-smoothing:antialiased; }
     .sg-sheet * { box-sizing:border-box; }
-    .sg-sheet h1 { font-size:20pt; margin:0 0 8px; color:${cssColor(doc.style.ink, "#020617")}; }
-    .sg-sheet h2 { font-size:15pt; margin:12px 0 6px; color:${cssColor(doc.style.ink, "#020617")}; }
-    .sg-sheet h3 { font-size:12pt; margin:10px 0 4px; color:${cssColor(doc.style.ink, "#020617")}; }
+    .sg-sheet h1 { font-size:${t.h1}; margin:0 0 8px; color:${cssColor(doc.style.ink, "#020617")}; ${t.headingFont}}
+    .sg-sheet h2 { font-size:${t.h2}; margin:12px 0 6px; color:${cssColor(doc.style.ink, "#020617")}; ${t.headingFont}}
+    .sg-sheet h3 { font-size:${t.h3}; margin:10px 0 4px; color:${cssColor(doc.style.ink, "#020617")}; ${t.headingFont}}
     .sg-sheet p { margin:0 0 8px; }
     .sg-sheet a { color:${cssColor(doc.style.accent, "#ea580c")}; }
     .sg-sheet strong { font-weight:700; }
@@ -499,6 +514,8 @@ export function renderDocumentHtml(
   // following page (overflow.ts). A signing snapshot was laid out at send time.
   const { doc, ctx } = laidOut(input, ctxIn);
   const font = fontStack(doc.style.fontFamily);
+  // The document's type settings (docStyles.ts); with none set these are the values they always were.
+  const t = docType(doc.style);
   const m = doc.style.margin;
   const header = doc.header.length ? doc.header.map((b) => blockHtml(b, ctx, doc.style, logoDataUri)).join("") : "";
   const footer = doc.footer.length ? doc.footer.map((b) => blockHtml(b, ctx, doc.style, logoDataUri)).join("") : "";
@@ -511,10 +528,10 @@ export function renderDocumentHtml(
     ${DOCUMENT_FONT_FACE}
     @page { size: ${pageCss}; margin: ${m}px; }
     * { box-sizing: border-box; }
-    body { font-family: ${font}; font-size: 11pt; line-height: 1.5; color: #1e293b; margin: 0; -webkit-font-smoothing: antialiased; }
-    h1 { font-size: 20pt; margin: 0 0 8px; color: ${cssColor(doc.style.ink, "#020617")}; }
-    h2 { font-size: 15pt; margin: 12px 0 6px; color: ${cssColor(doc.style.ink, "#020617")}; }
-    h3 { font-size: 12pt; margin: 10px 0 4px; color: ${cssColor(doc.style.ink, "#020617")}; }
+    body { font-family: ${font}; font-size: ${t.body}; line-height: ${t.lineHeight}; color: ${t.text}; margin: 0; -webkit-font-smoothing: antialiased; }
+    h1 { font-size: ${t.h1}; margin: 0 0 8px; color: ${cssColor(doc.style.ink, "#020617")}; ${t.headingFont}}
+    h2 { font-size: ${t.h2}; margin: 12px 0 6px; color: ${cssColor(doc.style.ink, "#020617")}; ${t.headingFont}}
+    h3 { font-size: ${t.h3}; margin: 10px 0 4px; color: ${cssColor(doc.style.ink, "#020617")}; ${t.headingFont}}
     p { margin: 0 0 8px; }
     a { color: ${cssColor(doc.style.accent, "#ea580c")}; }
     strong { font-weight: 700; }
