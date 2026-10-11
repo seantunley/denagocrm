@@ -202,10 +202,10 @@
       {"type": "steps", "items": [
         "Review each group — the shared email or phone is shown, with each contact's lead, vehicle and communication counts to help you judge which is the master.",
         "On the record you want to keep, choose **Keep this one → merge others in**.",
-        "The other contacts are merged into it and then removed."
+        "Type a short reason under **Why are these the same person?** and choose **Merge**.","The other contacts are merged into it and leave the contact list."
       ]},
       {"type": "p", "text": "Merging moves every linked lead, vehicle, job card, quote, communication, activity, document and audit entry onto the kept contact, and copies over any tags. Blank fields on the kept contact are filled from the duplicates. The merged-away contacts are soft-deleted with a \"Merged into…\" reason."},
-      {"type": "callout", "tone": "warning", "text": "This tool requires the merge permission and access to every contact in the group. Check you are keeping the right record before merging — the action reassigns all history to it."}
+      {"type": "callout", "tone": "warning", "text": "This tool requires the merge permission and access to every contact in the group. Check you are keeping the right record before merging — the action reassigns all history to it, and a merge can't be undone."}
     ]
   },
   {

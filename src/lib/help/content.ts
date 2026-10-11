@@ -9,6 +9,9 @@ import { xAndAttentionArticles } from "./articles/x-and-attention";
 import { journeysArticles } from "./articles/journeys";
 import { secureLinkArticles } from "./articles/secure-links";
 import { offlineChecklistArticles } from "./articles/offline-checklists";
+import { documentStudioArticles } from "./articles/document-studio";
+import { signingAndInboxArticles } from "./articles/signing-and-inbox";
+import { assistantAndMoreArticles } from "./articles/assistant-and-more";
 import crm from "./data/crm.json";
 import sales from "./data/sales.json";
 import stock from "./data/stock.json";
@@ -46,25 +49,56 @@ const REPLACED_MARKETING_SLUGS = new Set([
 ]);
 const preservedLegacyMarketing = (marketing as HelpArticle[]).filter((article) => !REPLACED_MARKETING_SLUGS.has(article.slug));
 
+// The same rule for the other generated files: an article re-authored by hand
+// under its old slug (so existing links keep working) is dropped from the
+// generated set here. Each line names the hand-authored file that replaces it.
+const REPLACED_GENERATED_SLUGS = new Set([
+  // articles/document-studio.ts — the document editor upgrade
+  "studio-overview",
+  "studio-operational-templates",
+  "studio-free-form-documents",
+  "documents-generate-and-sign",
+  "admin-documents-templates",
+  // articles/signing-and-inbox.ts — the signature train and inbound spam screening
+  "signatures-sign-a-quote",
+  "signatures-hub",
+  "signing-workflows-builder",
+  "admin-signing-workflows",
+  "inbox-overview",
+  "inbox-replying",
+  // articles/assistant-and-more.ts — the settings menu was regrouped
+  "admin-settings-overview",
+]);
+const generated = (articles: unknown) => (articles as HelpArticle[]).filter((article) => !REPLACED_GENERATED_SLUGS.has(article.slug));
+
 export const HELP_ARTICLES: HelpArticle[] = [
   ...gettingStartedArticles,
   ...dashboardArticles,
   ...tenantOnboardingArticles,
   ...offlineChecklistArticles,
   ...xAndAttentionArticles,
-  ...(crm as HelpArticle[]),
-  ...(sales as HelpArticle[]),
-  ...(stock as HelpArticle[]),
-  ...(workshop as HelpArticle[]),
-  ...(testDrives as HelpArticle[]),
-  ...(documents as HelpArticle[]),
+  ...generated(crm),
+  ...generated(sales),
+  ...signingAndInboxArticles.filter((article) => article.category === "sales"),
+  ...generated(stock),
+  ...generated(workshop),
+  ...generated(testDrives),
+  ...generated(documents),
+  ...documentStudioArticles.filter((article) => article.category === "documents"),
   ...preservedLegacyMarketing,
   ...(marketingGovernance as HelpArticle[]),
   ...journeysArticles,
   ...secureLinkArticles,
-  ...(commsAutomation as HelpArticle[]),
-  ...(channels as HelpArticle[]),
-  ...(admin as HelpArticle[]),
+  // The inbox guides lead their category, as the generated ones they replace did.
+  ...signingAndInboxArticles.filter((article) => article.category === "comms"),
+  ...generated(commsAutomation),
+  ...generated(channels),
+  ...generated(admin),
+  // Order within a category follows this list, so what is left of the
+  // hand-authored sets reads after the generated articles of its category.
+  ...documentStudioArticles.filter((article) => article.category !== "documents"),
+  ...signingAndInboxArticles.filter((article) => article.category !== "sales" && article.category !== "comms"),
+  ...assistantAndMoreArticles,
 ];
 
 const BY_SLUG = new Map(HELP_ARTICLES.map((article) => [article.slug, article]));
