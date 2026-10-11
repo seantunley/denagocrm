@@ -97,12 +97,18 @@ test("a note can go on a CUSTOMER with no lead, and be pinned — proposed, chec
   assert.match(branch, /continue;\s*\}\s*$/, "a customer note never falls through to the lead checks");
 
   // When no lead matches a name, matching customers are reported — with ids, without contact details.
-  const find = lib.slice(lib.indexOf("async function customersWithoutLead"), lib.indexOf("async function leadBrief"));
+  const find = lib.slice(lib.indexOf("export async function customersNamed"), lib.indexOf("export async function leadBrief"));
   assert.match(find, /const ids = await getAccessibleContactIds\(user\);\s*if \(ids !== null && ids\.length === 0\) return \[\];/);
   assert.match(find, /deletedAt: null,\s*\.\.\.\(ids === null \? \{\} : \{ id: \{ in: ids \} \}\)/);
   assert.match(find, /AND: words\.map\(/, "every word of the name must match: first and last name are separate columns");
   assert.doesNotMatch(find, /phone|email|whatsapp/i, "nothing that identifies beyond a name goes to the model");
-  assert.match(lib, /const customers = looksLikeId \? \[\] : await customersWithoutLead\(user, needle\);/);
+  // Customers are looked up whether or not a lead matches, and BEFORE lead access is demanded — someone who
+  // may open customers but not leads is not refused. (Who is found for whom is proved on a real database:
+  // scripts/test-assistant-customers.ts.)
+  const brief = lib.slice(lib.indexOf("export async function leadBrief"), lib.indexOf("async function quotesForLead"));
+  assert.match(brief, /if \(!\(await hasAnyPermission\(user, "leads\.view_all", "leads\.view_owned"\)\)\) \{\s*const customers = await customersFor\(\);\s*return customers\.length \? customersOnly\(customers, "You can't see leads here\."\) : refused\("leads"\);/);
+  assert.match(brief, /const customerRecords = await customersFor\(lead\.contactId\);/, "a lead that matches still brings its customer");
+  assert.match(brief, /if \(matches\.length === 0\) \{[\s\S]*?const customers = await customersFor\(\);/);
 
   // Confirmed: through addCommunication (its own permission and customer-access checks), pinned by ITS switch.
   const action = code("src/app/actions/assistant.ts");

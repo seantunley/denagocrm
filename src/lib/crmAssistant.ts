@@ -483,26 +483,36 @@ async function findActivities(user: User, raw: z.infer<typeof activityArgs>): Pr
 }
 
 /**
- * Customers matching a name, for when no lead does. Every word of the name must
- * be in the first name, last name or company ("Sean Tunley" is two columns).
- * Only customers this person can open; no phone numbers or emails — enough to
- * tell them apart and to address a note, nothing more.
+ * Customer records for a name — whether or not a lead matches it too. A customer
+ * and a deal are different things to put a note on, and "the customer John
+ * Smith" has to be findable when John also has a lead.
+ *
+ * Every word of the name must be in the first name, last name or company ("Sean
+ * Tunley" is two columns). `ownId` adds one customer by id: the matched lead's
+ * own customer (whose name may differ from the lead's), or the customer page the
+ * person is looking at. Only customers this person can open — which is their
+ * CUSTOMER access, asked on its own, not their lead access. No phone numbers or
+ * emails: enough to tell them apart and to address a note, nothing more.
  */
-async function customersWithoutLead(user: User, needle: string) {
+export async function customersNamed(user: User, needle: string, ownId?: string | null) {
   const ids = await getAccessibleContactIds(user);
   if (ids !== null && ids.length === 0) return [];
   const words = needle.split(/\s+/).filter(Boolean).slice(0, 4);
-  if (words.length === 0) return [];
+  const byName = words.length ? [{ AND: words.map((word) => ({ OR: [{ firstName: fuzzy(word) }, { lastName: fuzzy(word) }, { company: fuzzy(word) }] })) }] : [];
+  const byId = ownId ? [{ id: ownId }] : [];
+  if (byName.length + byId.length === 0) return [];
   const found = await prisma.contact.findMany({
     where: {
       deletedAt: null,
       ...(ids === null ? {} : { id: { in: ids } }),
-      AND: words.map((word) => ({ OR: [{ firstName: fuzzy(word) }, { lastName: fuzzy(word) }, { company: fuzzy(word) }] })),
+      OR: [...byId, ...byName],
     },
     orderBy: { updatedAt: "desc" },
     take: 5,
     select: { id: true, firstName: true, lastName: true, company: true, city: true, createdAt: true },
   });
+  // The named one first: it is the one "this customer" most likely means.
+  found.sort((a, b) => Number(b.id === ownId) - Number(a.id === ownId));
   return found.map((c) => ({
     contactId: c.id,
     name: [c.firstName, c.lastName].filter(Boolean).join(" "),
@@ -518,12 +528,28 @@ async function customersWithoutLead(user: User, needle: string) {
  * signed?), its activities and any research. Phone numbers and emails are left
  * out: nothing here needs them to reason, so they don't go to ChatGPT.
  */
-async function leadBrief(user: User, raw: z.infer<typeof leadBriefArgs>): Promise<ToolOutput> {
-  if (!(await hasAnyPermission(user, "leads.view_all", "leads.view_owned"))) return refused("leads");
+export async function leadBrief(user: User, raw: z.infer<typeof leadBriefArgs>): Promise<ToolOutput> {
   const { lead: needle } = leadBriefArgs.parse(raw);
+  const looksLikeId = /^c[a-z0-9]{20,}$/i.test(needle);
+  // By name, or — for an id — the customer that id names (the bubble on a customer page).
+  const customersFor = (ownId?: string | null) => (looksLikeId ? customersNamed(user, "", ownId ?? needle) : customersNamed(user, needle, ownId));
+  const customersOnly = (customers: Awaited<ReturnType<typeof customersNamed>>, why: string): ToolOutput => ({
+    truncated: false,
+    rows: [],
+    data: [{
+      note: `${why} ${customers.length === 1 ? "A customer record matches" : `${customers.length} customer records match`}. There is no deal to report on. A note can go on the customer (customer_note with the contactId)${customers.length > 1 ? " — ask which one first" : ""}.`,
+      customers,
+    }],
+  });
+  // Someone who may open customers but not leads still has customers to ask
+  // about. Refusing here, before looking, turned "you can't see leads" into "you
+  // can't see this customer" — who they can.
+  if (!(await hasAnyPermission(user, "leads.view_all", "leads.view_owned"))) {
+    const customers = await customersFor();
+    return customers.length ? customersOnly(customers, "You can't see leads here.") : refused("leads");
+  }
   const ids = await getAccessibleLeadIds(user);
   const visible = ids === null ? {} : { id: { in: ids } };
-  const looksLikeId = /^c[a-z0-9]{20,}$/i.test(needle);
   const matches = await prisma.lead.findMany({
     where: {
       deletedAt: null,
@@ -547,16 +573,9 @@ async function leadBrief(user: User, raw: z.infer<typeof leadBriefArgs>): Promis
     // No lead — but the person may be a CUSTOMER with no deal (a service customer,
     // someone whose lead was deleted, the owner's own test record). Saying only
     // "no lead matches" read as "no such person", and left nothing to hang a note on.
-    const customers = looksLikeId ? [] : await customersWithoutLead(user, needle);
+    const customers = await customersFor();
     if (customers.length === 0) return { truncated: false, rows: [], data: [{ note: `No lead or customer you can see matches "${needle}".` }] };
-    return {
-      truncated: false,
-      rows: [],
-      data: [{
-        note: `No lead you can see matches "${needle}", but ${customers.length === 1 ? "a customer record does" : `${customers.length} customer records do`}. There is no deal to report on. A note can go on the customer (customer_note with the contactId)${customers.length > 1 ? " — ask which one first" : ""}.`,
-        customers,
-      }],
-    };
+    return customersOnly(customers, `No lead you can see matches "${needle}".`);
   }
   // Several match ("Lisa"): read the likeliest — an open lead, the most recently
   // worked — in full, and name the rest. Stopping at a list of names left the
@@ -606,10 +625,19 @@ async function leadBrief(user: User, raw: z.infer<typeof leadBriefArgs>): Promis
   const quotes = (await hasAnyPermission(user, "quotes.view_all", "quotes.view_owned"))
     ? await quotesForLead(user, lead.id)
     : [];
+  // The CUSTOMER behind this lead, and any other customer of the same name — a
+  // lead matching does not mean the deal is what they meant to write on.
+  const customerRecords = await customersFor(lead.contactId);
 
   return {
     truncated: false,
     data: [{
+      ...(customerRecords.length
+        ? {
+            customerRecords,
+            customerRecordsNote: "Customer records for this name. A note on the CUSTOMER is customer_note with the contactId; a note on this deal is note with the lead id. Use the customer when they say \"customer\" or \"contact\", and ask which one if several match.",
+          }
+        : {}),
       ...(others.length
         ? {
             matched: `${matches.length} leads match "${needle}" — this is the likeliest (open, most recently worked).`,
