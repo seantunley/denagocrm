@@ -7,11 +7,13 @@
  * (resolves inline variables, prunes conditionals, fills bound pricing tables).
  */
 import { cssColor } from "./css";
+import { blockBoxCss, boxCssText, columnNeedsStretch } from "./blockBox";
+import { imageFrame, imageFrameCss } from "./imageFrame";
 import type {
   DocumentModel, DocumentBlock, DocumentColumn, DocumentRow, DocumentPage,
   PricingBlock, PricingLine, TableBlock, OverlayField, DocStyle,
 } from "./model";
-import { PAGE_SIZES } from "./model";
+import { pageMargin, pageSizeOf } from "./model";
 import { plateToHtmlBody } from "@/lib/docbuilder/plateSerialize";
 import { evaluateCondition } from "@/lib/docbuilder/expr";
 import { brandFooterContent, SOCIAL_ICON_PATHS } from "@/lib/companyBrand";
@@ -19,7 +21,11 @@ import { handoverChecklistHtml } from "./handoverChecklist";
 import { showcaseBlockHtml, showcaseLookHtml } from "./showcaseRender";
 import { layoutRowsFor, resolveOverflowGroups } from "./overflow";
 import { storedFileSrc } from "@/lib/storedFileSrc";
-import { DOCUMENT_FONT_FACE, DOCUMENT_FONT_FAMILY } from "./documentFont";
+import { DOCUMENT_FONT_FACE } from "./documentFont";
+import { docType, fontStack } from "./docStyles";
+import { tableLook } from "./tableStyle";
+import { contentBlockHtml } from "./contentBlocks";
+import { runningCss, runningSheetHtml } from "./pageFurniture";
 import { DEFAULT_REGIONAL, formatZAR, regionalFrom, type Regional } from "@/lib/format";
 import type { TableRow } from "@/lib/docbuilder/blocks";
 
@@ -62,11 +68,6 @@ function nl2br(s: string): string { return esc(s).replace(/\n/g, "<br/>"); }
 function tok(s: string, ctx: RenderCtx): string {
   return (s ?? "").replace(/\{\{\s*([\w.]+)\s*\}\}/g, (_, k: string) => ctx?.tokens?.[k] ?? `{{${k}}}`);
 }
-function fontStack(f: DocStyle["fontFamily"]): string {
-  // Sans leads with the embedded Geist (DOCUMENT_FONT_FACE): the PDF renderer has
-  // no Helvetica/Arial, and its fallback printed uneven, jagged letters.
-  return f === "serif" ? "Georgia, 'Times New Roman', serif" : f === "mono" ? "'Courier New', monospace" : `'${DOCUMENT_FONT_FAMILY}', Helvetica, Arial, sans-serif`;
-}
 /** An amount in rand-units (not cents) in the given currency/locale. */
 function money(amount: number, m: Pick<Regional, "currency" | "locale"> = DEFAULT_REGIONAL): string {
   return formatZAR(Math.round(amount * 100), m);
@@ -101,17 +102,19 @@ function pricingHtml(block: PricingBlock, ctx: RenderCtx): string {
   // where it doesn't (the editor canvas), and never a code Intl would reject.
   const cur = ctx?.regional ?? { currency: regionalFrom({ currency: b.currency }).currency, locale: DEFAULT_REGIONAL.locale };
   const cols = ["Item", "Qty", "Unit", b.showDiscount ? "Disc" : null, b.showTax ? "Tax" : null, "Amount"].filter(Boolean) as string[];
-  const head = cols.map((c, i) => `<th style="text-align:${i === 0 ? "left" : "right"};background:${cssColor(b.accent, "#ea580c")};color:#fff;padding:7px 9px;font-size:8pt;letter-spacing:.5px;text-transform:uppercase">${esc(c)}</th>`).join("");
+  const look = tableLook(b.tableStyle, [7, 9]);
+  const cell = `padding:${look.pad};${look.cellRule}`;
+  const head = cols.map((c, i) => `<th style="text-align:${i === 0 ? "left" : "right"};background:${cssColor(b.accent, "#ea580c")};color:#fff;padding:${look.pad};font-size:8pt;letter-spacing:.5px;text-transform:uppercase">${esc(c)}</th>`).join("");
   const body = rows.map((r, i) => {
     const cells = [
-      `<td style="padding:7px 9px;border-bottom:.5px solid #e2e8f0"><div style="font-weight:600;color:#020617">${esc(r.line.name)}</div>${r.line.description ? `<div style="font-size:8pt;color:#64748b">${esc(r.line.description)}</div>` : ""}</td>`,
-      `<td style="text-align:right;padding:7px 9px;border-bottom:.5px solid #e2e8f0">${esc(r.line.qty)}</td>`,
-      `<td style="text-align:right;padding:7px 9px;border-bottom:.5px solid #e2e8f0">${money(r.line.unitPrice, cur)}</td>`,
-      b.showDiscount ? `<td style="text-align:right;padding:7px 9px;border-bottom:.5px solid #e2e8f0">${r.line.discountPct || 0}%</td>` : "",
-      b.showTax ? `<td style="text-align:right;padding:7px 9px;border-bottom:.5px solid #e2e8f0">${money(r.tax, cur)}</td>` : "",
-      `<td style="text-align:right;padding:7px 9px;border-bottom:.5px solid #e2e8f0;font-weight:600">${money(r.total, cur)}</td>`,
+      `<td style="${cell}"><div style="font-weight:600;color:#020617">${esc(r.line.name)}</div>${r.line.description ? `<div style="font-size:8pt;color:#64748b">${esc(r.line.description)}</div>` : ""}</td>`,
+      `<td style="text-align:right;${cell}">${esc(r.line.qty)}</td>`,
+      `<td style="text-align:right;${cell}">${money(r.line.unitPrice, cur)}</td>`,
+      b.showDiscount ? `<td style="text-align:right;${cell}">${r.line.discountPct || 0}%</td>` : "",
+      b.showTax ? `<td style="text-align:right;${cell}">${money(r.tax, cur)}</td>` : "",
+      `<td style="text-align:right;${cell};font-weight:600">${money(r.total, cur)}</td>`,
     ].join("");
-    return `<tr style="background:${i % 2 ? "#f8fafc" : "#fff"}">${cells}</tr>`;
+    return `<tr style="${look.tr}background:${look.rowBg(i)}">${cells}</tr>`;
   }).join("");
   const totals = `
     <div style="display:flex;justify-content:flex-end;margin-top:8px">
@@ -121,7 +124,7 @@ function pricingHtml(block: PricingBlock, ctx: RenderCtx): string {
         <tr><td style="padding:6px 10px;font-weight:700;color:${cssColor(b.accent, "#ea580c")}">Total</td><td style="padding:6px 0;text-align:right;font-weight:700;font-size:12pt;color:${cssColor(b.accent, "#ea580c")}">${money(total, cur)}</td></tr>
       </table>
     </div>`;
-  return `<div style="margin:6px 0"><table style="width:100%;border-collapse:collapse"><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>${totals}</div>`;
+  return `<div style="margin:6px 0"><table style="width:100%;border-collapse:collapse"><thead${theadAttr(look)}><tr>${head}</tr></thead><tbody>${body}</tbody></table>${totals}</div>`;
 }
 function parseMoney(s?: string): number {
   if (!s) return 0;
@@ -165,17 +168,29 @@ export function lineItemCell(
   }
 }
 
+/** The style attribute for a <thead> — nothing at all unless the heading is set not to repeat. */
+const theadAttr = (look: { thead: string }) => (look.thead ? ` style="${look.thead}"` : "");
+
 function tableHtml(b: TableBlock): string {
-  const head = b.columns.map((c) => `<th style="text-align:${c.align};background:${cssColor(b.headerBg, "#020617")};color:${cssColor(b.headerColor, "#ffffff")};padding:6px 8px;font-size:8pt;width:${c.widthPct}%">${esc(c.header)}</th>`).join("");
-  const body = b.rows.map((r, i) => `<tr style="background:${i % 2 ? "#f8fafc" : "#fff"}">${b.columns.map((c, ci) => `<td style="text-align:${c.align};padding:6px 8px;border-bottom:.5px solid #e2e8f0;font-size:10pt">${esc(r.cells[ci]?.value ?? "")}</td>`).join("")}</tr>`).join("");
-  return `<table style="width:100%;border-collapse:collapse;margin:6px 0"><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>`;
+  const look = tableLook(b.tableStyle, [6, 8]);
+  const head = b.columns.map((c) => `<th style="text-align:${c.align};background:${cssColor(b.headerBg, "#020617")};color:${cssColor(b.headerColor, "#ffffff")};padding:${look.pad};font-size:8pt;width:${c.widthPct}%">${esc(c.header)}</th>`).join("");
+  const body = b.rows.map((r, i) => {
+    // A group heading: its first cell, across the table. A subtotal: an ordinary row, bold, ruled above.
+    if (r.kind === "group") return `<tr style="${look.tr}background:#f1f5f9"><td colspan="${b.columns.length}" style="padding:${look.pad};${look.cellRule};font-size:8.5pt;font-weight:700;letter-spacing:.5px;text-transform:uppercase;color:#334155">${esc(r.cells[0]?.value ?? "")}</td></tr>`;
+    const subtotal = r.kind === "subtotal" ? ";font-weight:700;border-top:1px solid #94a3b8" : "";
+    return `<tr style="${look.tr}background:${r.kind === "subtotal" ? "#fff" : look.rowBg(i)}">${b.columns.map((c, ci) => `<td style="text-align:${c.align};padding:${look.pad};${look.cellRule};font-size:10pt${subtotal}">${esc(r.cells[ci]?.value ?? "")}</td>`).join("")}</tr>`;
+  }).join("");
+  return `<table style="width:100%;border-collapse:collapse;margin:6px 0"><thead${theadAttr(look)}><tr>${head}</tr></thead><tbody>${body}</tbody></table>`;
 }
 
 function blockHtml(block: DocumentBlock, ctx: RenderCtx, style: DocStyle, logoDataUri?: string): string {
   if (block.hidden) return "";
-  const pad = block.settings?.padding;
-  const padCss = pad ? `padding:${pad.top ?? 0}px ${pad.right ?? 0}px ${pad.bottom ?? 0}px ${pad.left ?? 0}px;` : "";
-  const wrap = (inner: string) => `<div style="${padCss}">${inner}</div>`;
+  // Padding used to be applied HERE, and only by the handful of blocks that call
+  // wrap() — so the same setting did something on a text block and nothing on a
+  // table. It now belongs to the block's box (blockBoxCss), which every block
+  // gets. No saved document had a block padding (checked on live), and the
+  // empty style attribute is kept so existing output is byte for byte the same.
+  const wrap = (inner: string) => `<div style="">${inner}</div>`;
   switch (block.type) {
     case "heading":
     case "text":
@@ -189,7 +204,9 @@ function blockHtml(block: DocumentBlock, ctx: RenderCtx, style: DocStyle, logoDa
       const raw = tok(String(block.src || ""), ctx).trim();
       const src = /^data:image\//i.test(raw) ? raw : storedFileSrc(raw);
       if (!src || !/^(https:|data:image\/|\/api\/stored\?)/i.test(src)) return "";
-      return wrap(`<img src="${esc(src)}" alt="${esc(block.alt)}" style="width:${Math.max(5, Math.min(100, block.widthPct))}%;height:auto;${block.rounded ? "border-radius:8px;" : ""}"/>`);
+      // The frame (width, shape, crop, corners) comes from imageFrame — the editor page reads it too.
+      const caption = block.caption?.trim() ? `<div style="font-size:8.5pt;color:#64748b;margin-top:4px;line-height:1.35">${esc(tok(block.caption, ctx))}</div>` : "";
+      return wrap(`<img src="${esc(src)}" alt="${esc(block.alt)}" style="${imageFrameCss(imageFrame(block))}"/>${caption}`);
     }
     case "divider":
       return `<hr style="border:none;border-top:${block.thickness}px solid ${cssColor(block.color, "#ea580c")};margin:10px 0"/>`;
@@ -229,11 +246,13 @@ function blockHtml(block: DocumentBlock, ctx: RenderCtx, style: DocStyle, logoDa
       // Conditional columns: only when bound to a record, drop columns whose condition
       // is false. An unbound (globals-only) preview keeps all columns as a placeholder.
       const cols = ctx?.bound ? block.columns.filter((c) => evaluateCondition(c.showIf, ctx.vars)) : block.columns;
-      const head = `<tr>${cols.map((c) => `<th style="text-align:${c.align};background:${cssColor(block.headerBg, "#020617")};color:${cssColor(block.headerColor, "#ffffff")};padding:7px 9px;font-size:8pt;letter-spacing:.5px;text-transform:uppercase">${esc(c.header)}</th>`).join("")}</tr>`;
+      const look = tableLook(block.tableStyle, [7, 9]);
+      const width = (c: (typeof cols)[number]) => (c.widthPct ? `;width:${Math.max(1, Math.min(100, Number(c.widthPct) || 0))}%` : "");
+      const head = `<tr>${cols.map((c) => `<th style="text-align:${c.align};background:${cssColor(block.headerBg, "#020617")};color:${cssColor(block.headerColor, "#ffffff")};padding:${look.pad};font-size:8pt;letter-spacing:.5px;text-transform:uppercase${width(c)}">${esc(c.header)}</th>`).join("")}</tr>`;
       const body = rows.length
-        ? rows.map((r, i) => `<tr style="background:${i % 2 ? "#f8fafc" : "#fff"}">${cols.map((c) => `<td style="text-align:${c.align};padding:7px 9px;border-bottom:.5px solid #e2e8f0">${esc(lineItemCell(c.key, r, block.vatRate, ctx?.regional))}</td>`).join("")}</tr>`).join("")
+        ? rows.map((r, i) => `<tr style="${look.tr}background:${look.rowBg(i)}">${cols.map((c) => `<td style="text-align:${c.align};padding:${look.pad};${look.cellRule}">${esc(lineItemCell(c.key, r, block.vatRate, ctx?.regional))}</td>`).join("")}</tr>`).join("")
         : `<tr><td colspan="${cols.length}" style="padding:7px 9px;color:#94a3b8">Line items appear here when linked to a record</td></tr>`;
-      return `<table style="width:100%;border-collapse:collapse;margin:6px 0"><thead>${head}</thead><tbody>${body}</tbody></table>`;
+      return `<table style="width:100%;border-collapse:collapse;margin:6px 0"><thead${theadAttr(look)}>${head}</thead><tbody>${body}</tbody></table>`;
     }
     case "totalBand": {
       // The amount must never wrap. It is the one number on the page a reader
@@ -285,11 +304,37 @@ function blockHtml(block: DocumentBlock, ctx: RenderCtx, style: DocStyle, logoDa
       // The same embedded-only logo as the banner: the workspace's, else the built-in.
       return showcaseBlockHtml(block, ctx, [ctx?.logo, logoDataUri].find((src) => src && /^data:image\//i.test(src)));
 
+    // Details grid, payment schedule, comparison, callout, gallery, QR code — see ./contentBlocks.ts.
+    case "detailsGrid": case "paymentSchedule": case "comparison": case "callout": case "gallery": case "qr":
+      return contentBlockHtml(block, ctx);
+
     // Customer email blocks belong to email documents, rendered by ./emailRender.ts —
     // never to a printed one.
     case "emailHeader": case "emailBody": case "emailSignature": case "emailFooter": case "emailButton": case "emailFacts":
       return "";
   }
+}
+
+/**
+ * One block exactly as it prints, for the editor page.
+ *
+ * The page used to redraw each block by hand in React, in pixels where the
+ * print uses points — so every card, table and band was about a quarter smaller
+ * on the page than on paper, and the "prints on 2 sheets" guide under-counted.
+ * Drawing the page from this is what makes the two the same thing.
+ *
+ * Unbound: merge fields stay as written, and a line-items table shows one
+ * sample row where the record's lines will go.
+ */
+export function blockPreviewHtml(block: DocumentBlock, style: DocStyle, env: { company: Record<string, string>; logo?: string }): string {
+  return blockHtml(block, previewContext(env), style);
+}
+
+/** The editor's own render context: the workspace's company details and logo, one sample line item, no record. */
+export function previewContext(env: { company: Record<string, string>; logo?: string }): NonNullable<RenderCtx> {
+  const tokens = Object.fromEntries(Object.entries(env.company).map(([key, value]) => [`company.${key}`, value]));
+  const sample: LineItemRow = { cells: [{ value: "Sample item" }, { value: "1" }, { value: money(1150) }, { value: money(1150) }], qty: 1, unitPrice: 1150, lineTotal: 1150 };
+  return { tokens, items: [sample], vars: {}, bound: false, logo: env.logo };
 }
 
 /**
@@ -301,26 +346,31 @@ function blockHtml(block: DocumentBlock, ctx: RenderCtx, style: DocStyle, logoDa
  * only way to change them without editing each one.
  */
 function blockBoxStyle(b: DocumentBlock): string {
-  const w = b.settings?.width;
-  const align = b.settings?.horizontalAlignment;
-  const scale = b.settings?.fontScale;
-  const textAlign = b.settings?.textAlign;
-  let style = "";
-  if (w && w < 100) {
-    const margin = align === "right" ? "0 0 0 auto" : align === "centre" ? "0 auto" : "0 auto 0 0";
-    style += `width:${w}%;margin:${margin};`;
-  }
-  // totalBand sets its own point sizes from the scale (its type is fixed in pt,
-  // so an inherited em would not reach it) — applying it here too would square it.
-  if (scale && scale !== 1 && b.type !== "totalBand") style += `font-size:${scale}em;`;
-  if (textAlign) style += `text-align:${textAlign === "centre" ? "center" : textAlign};`;
-  return style;
+  // Decided in blockBoxCss — the one place the editor page reads too.
+  return boxCssText(blockBoxCss(b, "flow"));
+}
+
+/**
+ * A block in free placement: its type settings (text size, alignment) apply
+ * exactly as they do in the flow. They used to be dropped here, so a block lost
+ * its styling the moment it was placed freely. A block with neither set renders
+ * as it always did — no wrapper is added.
+ */
+function floatingInner(b: DocumentBlock, inner: string): string {
+  // A hidden block prints nothing — not an empty box with its border and fill.
+  if (b.hidden) return inner;
+  const box = boxCssText(blockBoxCss(b, "floating"));
+  return box ? `<div style="${box}">${inner}</div>` : inner;
 }
 
 function columnHtml(col: DocumentColumn, ctx: RenderCtx, style: DocStyle, logoDataUri?: string): string {
-  return `<div style="min-width:0">${col.blocks.map((b) => {
+  // A block set to rest in the middle or at the bottom needs its column to be a
+  // flex column (a row's columns are all as tall as the tallest, so there is
+  // spare height to place it in). Any other column is exactly as it always was.
+  const stretch = columnNeedsStretch(col.blocks.filter((b) => !b.hidden)) ? ";display:flex;flex-direction:column" : "";
+  return `<div style="min-width:0${stretch}">${col.blocks.map((b) => {
     const inner = blockHtml(b, ctx, style, logoDataUri);
-    const box = blockBoxStyle(b);
+    const box = b.hidden ? "" : blockBoxStyle(b);
     return box ? `<div style="${box}">${inner}</div>` : inner;
   }).join("")}</div>`;
 }
@@ -329,7 +379,8 @@ function rowHtml(row: DocumentRow, ctx: RenderCtx, style: DocStyle, logoDataUri?
   const cols = row.columns;
   const template = cols.map((c) => `${c.widthPercent}fr`).join(" ");
   const gap = row.settings?.gap ?? 16;
-  const keep = row.settings?.keepTogether ? "break-inside:avoid;" : "";
+  // Keep the row whole on one page; keep it on the same page as the row after it (a heading with what it heads).
+  const keep = (row.settings?.keepTogether ? "break-inside:avoid;" : "") + (row.settings?.keepWithNext ? "break-after:avoid;" : "");
   return `<div style="display:grid;grid-template-columns:${template};gap:${gap}px;${rowSpacing(row)}${keep}">${cols.map((c) => columnHtml(c, ctx, style, logoDataUri)).join("")}</div>`;
 }
 
@@ -380,18 +431,28 @@ function stampFieldHtml(s: StampField, margin: number): string {
 
 function pageHtml(page: DocumentPage, doc: DocumentModel, ctx: RenderCtx, logoDataUri?: string, isLast?: boolean, hideOverlays?: boolean, stamps?: StampField[]): string {
   const rows = page.rows.map((r) => rowHtml(r, ctx, doc.style, logoDataUri)).join("");
+  /*
+   * THIS PAGE'S margin — its own when it has one, else the document's. Everything
+   * placed by hand (a signing field, a signed stamp, a freely placed block) is
+   * stored in sheet-edge coordinates and printed inside the page's content box,
+   * so each is shifted by the margin OF THE PAGE IT IS ON. Using the document's
+   * margin for a page with its own would print every signature that far out of
+   * place.
+   */
+  const margin = pageMargin(doc, page);
+  const own = ownMarginName(doc, page);
   // When stamping signed values, suppress the empty dashed template boxes.
   const fields = hideOverlays || stamps ? "" : page.overlayFields.map((f) => {
     const rc = doc.recipients.find((r) => r.id === f.recipientId)?.color ?? "#2563eb";
-    return overlayFieldHtml(f, rc, doc.style.margin);
+    return overlayFieldHtml(f, rc, margin);
   }).join("");
-  const stamped = (stamps ?? []).map((s) => stampFieldHtml(s, doc.style.margin)).join("");
+  const stamped = (stamps ?? []).map((s) => stampFieldHtml(s, margin)).join("");
   // Free-placement content: absolutely positioned within the page box (coords are
   // page-relative but the page margin already offsets the flow, so shift by margin).
   const floats = page.floatingBlocks.map((fb) =>
-    `<div style="position:absolute;left:${fb.x - doc.style.margin}px;top:${fb.y - doc.style.margin}px;width:${fb.width}px">${blockHtml(fb.block, ctx, doc.style, logoDataUri)}</div>`
+    `<div style="position:absolute;left:${fb.x - margin}px;top:${fb.y - margin}px;width:${fb.width}px">${floatingInner(fb.block, blockHtml(fb.block, ctx, doc.style, logoDataUri))}</div>`
   ).join("");
-  const size = PAGE_SIZES[doc.style.pageSize];
+  const size = pageSizeOf(doc.style);
   /*
    * EVERY DOCUMENT PRINTED ONTO A SECOND, NEARLY EMPTY PAGE. Two separate causes,
    * and the first hid the second.
@@ -408,7 +469,14 @@ function pageHtml(page: DocumentPage, doc: DocumentModel, ctx: RenderCtx, logoDa
    * pixel one, because A4 is 1122.52 CSS px and not 1123 — `1123 - margins` was
    * half a pixel over on its own.
    */
-  return `<div class="doc-page" style="position:relative;display:flow-root;min-height:calc(${size.cssH} - ${doc.style.margin * 2}px);${isLast ? "" : "page-break-after:always;"}">${rows}${fields}${floats}${stamped}</div>`;
+  // A page with its own margin is a NAMED page: the @page rule of that name (renderDocumentHtml) gives the printer its margin.
+  return `<div class="doc-page${own ? ` ${own}` : ""}" style="${own ? `page:${own};` : ""}position:relative;display:flow-root;min-height:calc(${size.cssH} - ${margin * 2}px);${isLast ? "" : "page-break-after:always;"}">${rows}${fields}${floats}${stamped}</div>`;
+}
+
+/** The CSS name of a page's own margin ("pm-24"), or "" when it uses the document's. */
+function ownMarginName(doc: DocumentModel, page: DocumentPage): string {
+  const margin = pageMargin(doc, page);
+  return margin === doc.style.margin ? "" : `pm-${Math.round(margin)}`;
 }
 
 /**
@@ -441,23 +509,28 @@ export function renderSigningSheets(input: DocumentModel, ctxIn: RenderCtx, logo
   // A signing snapshot was laid out at send time (layoutRows), so this is fixed for it.
   const { doc, ctx } = laidOut(input, ctxIn);
   const m = doc.style.margin;
-  const size = PAGE_SIZES[doc.style.pageSize];
+  const size = pageSizeOf(doc.style);
   const font = fontStack(doc.style.fontFamily);
-  const pages = doc.pages.map((page) => {
+  const pages = doc.pages.map((page, pageIdx) => {
+    // This sheet's content is inset by ITS page's margin (its own, or the document's).
+    const inset = pageMargin(doc, page);
     const rows = page.rows.map((r) => rowHtml(r, ctx, doc.style, logoDataUri)).join("");
     // Free-placement blocks sit at raw sheet coordinates (sheet edge origin).
     const floats = page.floatingBlocks.map((fb) =>
-      `<div style="position:absolute;left:${fb.x}px;top:${fb.y}px;width:${fb.width}px">${blockHtml(fb.block, ctx, doc.style, logoDataUri)}</div>`
+      `<div style="position:absolute;left:${fb.x}px;top:${fb.y}px;width:${fb.width}px">${floatingInner(fb.block, blockHtml(fb.block, ctx, doc.style, logoDataUri))}</div>`
     ).join("");
-    return `<div style="position:absolute;inset:0;padding:${m}px">${rows}</div>${floats}`;
+    // The running header and footer, drawn in this sheet's margin as they print ("" when the document has none).
+    return `<div style="position:absolute;inset:0;padding:${inset}px">${rows}</div>${floats}${runningSheetHtml(doc, ctx, pageIdx + 1, doc.pages.length, inset)}`;
   });
+  // The document's type settings (docStyles.ts); with none set these are the values they always were.
+  const t = docType(doc.style);
   const css = `
     ${DOCUMENT_FONT_FACE}
-    .sg-sheet { font-family:${font}; font-size:11pt; line-height:1.5; color:#1e293b; -webkit-font-smoothing:antialiased; }
+    .sg-sheet { font-family:${font}; font-size:${t.body}; line-height:${t.lineHeight}; color:${t.text}; -webkit-font-smoothing:antialiased; }
     .sg-sheet * { box-sizing:border-box; }
-    .sg-sheet h1 { font-size:20pt; margin:0 0 8px; color:${cssColor(doc.style.ink, "#020617")}; }
-    .sg-sheet h2 { font-size:15pt; margin:12px 0 6px; color:${cssColor(doc.style.ink, "#020617")}; }
-    .sg-sheet h3 { font-size:12pt; margin:10px 0 4px; color:${cssColor(doc.style.ink, "#020617")}; }
+    .sg-sheet h1 { font-size:${t.h1}; margin:0 0 8px; color:${cssColor(doc.style.ink, "#020617")}; ${t.headingFont}}
+    .sg-sheet h2 { font-size:${t.h2}; margin:12px 0 6px; color:${cssColor(doc.style.ink, "#020617")}; ${t.headingFont}}
+    .sg-sheet h3 { font-size:${t.h3}; margin:10px 0 4px; color:${cssColor(doc.style.ink, "#020617")}; ${t.headingFont}}
     .sg-sheet p { margin:0 0 8px; }
     .sg-sheet a { color:${cssColor(doc.style.accent, "#ea580c")}; }
     .sg-sheet strong { font-weight:700; }
@@ -487,22 +560,37 @@ export function renderDocumentHtml(
   // following page (overflow.ts). A signing snapshot was laid out at send time.
   const { doc, ctx } = laidOut(input, ctxIn);
   const font = fontStack(doc.style.fontFamily);
+  // The document's type settings (docStyles.ts); with none set these are the values they always were.
+  const t = docType(doc.style);
   const m = doc.style.margin;
   const header = doc.header.length ? doc.header.map((b) => blockHtml(b, ctx, doc.style, logoDataUri)).join("") : "";
   const footer = doc.footer.length ? doc.footer.map((b) => blockHtml(b, ctx, doc.style, logoDataUri)).join("") : "";
   const lastIdx = doc.pages.length - 1;
   const stamped = opts?.stampedFields;
   const body = doc.pages.map((p, i) => pageHtml(p, doc, ctx, logoDataUri, i === lastIdx && !opts?.appendHtml, opts?.hideOverlays, stamped ? stamped.filter((s) => s.page === i) : undefined)).join("") + (opts?.appendHtml ?? "");
-  const pageCss = doc.style.pageSize === "A4" ? "A4" : "letter";
-  const size = PAGE_SIZES[doc.style.pageSize];
+  const pageCss = `${doc.style.pageSize === "A4" ? "A4" : "letter"}${doc.style.orientation === "landscape" ? " landscape" : ""}`;
+  // The running header and footer, as page-margin boxes (pageFurniture.ts). Nothing at all for a document without them.
+  const running = runningCss(doc, ctx, font);
+  const size = pageSizeOf(doc.style);
+  /*
+   * Pages with their own margin. In print each is a named page whose @page rule
+   * carries that margin; on screen, where the margin is drawn as padding, each
+   * gets its own padding and its own inset for what is placed by hand. Empty —
+   * and so not a byte of CSS — for a document whose pages all share one margin.
+   */
+  const ownMargins = [...new Set(doc.pages.map((page) => ownMarginName(doc, page)).filter(Boolean))].map((name) => ({ name, px: Number(name.slice(3)) }));
+  const namedPages = ownMargins.map(({ name, px }) => ` @page ${name} { margin: ${px}px; }`).join("");
+  const namedScreen = ownMargins.map(({ name, px }) => `
+      .doc-page.${name} { padding: ${px}px; }
+      .doc-page.${name} > [style*="position:absolute"] { margin: ${px}px 0 0 ${px}px; }`).join("");
   return `<!doctype html><html><head><meta charset="utf-8"><style>
     ${DOCUMENT_FONT_FACE}
-    @page { size: ${pageCss}; margin: ${m}px; }
+    @page { size: ${pageCss}; margin: ${m}px; ${running.page}}${running.first}${namedPages}
     * { box-sizing: border-box; }
-    body { font-family: ${font}; font-size: 11pt; line-height: 1.5; color: #1e293b; margin: 0; -webkit-font-smoothing: antialiased; }
-    h1 { font-size: 20pt; margin: 0 0 8px; color: ${cssColor(doc.style.ink, "#020617")}; }
-    h2 { font-size: 15pt; margin: 12px 0 6px; color: ${cssColor(doc.style.ink, "#020617")}; }
-    h3 { font-size: 12pt; margin: 10px 0 4px; color: ${cssColor(doc.style.ink, "#020617")}; }
+    body { font-family: ${font}; font-size: ${t.body}; line-height: ${t.lineHeight}; color: ${t.text}; margin: 0; -webkit-font-smoothing: antialiased; }
+    h1 { font-size: ${t.h1}; margin: 0 0 8px; color: ${cssColor(doc.style.ink, "#020617")}; ${t.headingFont}}
+    h2 { font-size: ${t.h2}; margin: 12px 0 6px; color: ${cssColor(doc.style.ink, "#020617")}; ${t.headingFont}}
+    h3 { font-size: ${t.h3}; margin: 10px 0 4px; color: ${cssColor(doc.style.ink, "#020617")}; ${t.headingFont}}
     p { margin: 0 0 8px; }
     a { color: ${cssColor(doc.style.accent, "#ea580c")}; }
     strong { font-weight: 700; }
@@ -573,7 +661,7 @@ export function renderDocumentHtml(
          now drawn as padding, the on-screen sheet is the whole sheet. Without
          this it was two margins short, and anything placed near the foot of
          the page hung off the bottom of the white sheet. */
-      .doc-page { min-height: ${size.cssH} !important; }
+      .doc-page { min-height: ${size.cssH} !important; }${namedScreen}
     }
   </style></head><body>${[
     opts?.toolbarHtml ?? "",

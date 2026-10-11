@@ -28,7 +28,8 @@ export function newPricingLine(over: Partial<PricingLine> = {}): PricingLine {
   return { id: uid(), name: "Item", description: "", sku: "", qty: 1, unitPrice: 0, discountPct: 0, taxPct: 15, optional: false, selected: true, ...over };
 }
 
-export function newBlock(type: BlockType): DocumentBlock {
+/** `preset`: a named starting point for a block that has several (a details grid: "spec", "banking"). */
+export function newBlock(type: BlockType, preset?: string): DocumentBlock {
   switch (type) {
     case "text":
       return { id: uid(), type, ...emptyLayout, value: [{ type: "p", children: [{ text: "Type your text here…" }] }] };
@@ -108,6 +109,39 @@ export function newBlock(type: BlockType): DocumentBlock {
       };
     case "footerBand":
       return { id: uid(), type, ...emptyLayout, subtitle: "{{company.tagline}}", bg: "#020617", accent: "#ea580c", bgImage: "" };
+    // Content blocks (./contentBlocks.ts).
+    case "detailsGrid": {
+      const grid = { id: uid(), type, ...emptyLayout, accent: "#ea580c" } as const;
+      // One block, three starting points: a specification sheet and banking details are details grids.
+      if (preset === "spec") return { ...grid, title: "SPECIFICATIONS", columns: 3, layout: "stacked", boxed: false, items: [
+        { label: "Model", value: "{{vehicle}}" }, { label: "Colour", value: "" }, { label: "Warranty", value: "" },
+        { label: "Range", value: "" }, { label: "Top speed", value: "" }, { label: "Seats", value: "" },
+      ] };
+      if (preset === "banking") return { ...grid, title: "BANKING DETAILS", columns: 1, layout: "inline", boxed: true, items: [
+        { label: "Account name", value: "{{company.name}}" }, { label: "Bank", value: "" }, { label: "Account number", value: "" },
+        { label: "Branch code", value: "" }, { label: "Reference", value: "{{quote.number}}" },
+      ] };
+      return { ...grid, title: "", columns: 2, layout: "stacked", boxed: false, items: [
+        { label: "Customer", value: "{{customer.name}}" }, { label: "Date", value: "{{date.today}}" },
+        { label: "Phone", value: "{{customer.phone}}" }, { label: "Email", value: "{{customer.email}}" },
+      ] };
+    }
+    case "paymentSchedule":
+      return { id: uid(), type, ...emptyLayout, title: "PAYMENT SCHEDULE", accent: "#ea580c", rows: [
+        { label: "Deposit", due: "On acceptance", percent: 50, amount: "" },
+        { label: "Balance", due: "On delivery", percent: 50, amount: "" },
+      ] };
+    case "comparison":
+      return { id: uid(), type, ...emptyLayout, accent: "#ea580c",
+        options: [{ name: "Standard", highlight: false }, { name: "Premium", highlight: true }],
+        rows: [{ label: "Warranty", cells: ["12 months", "24 months"] }, { label: "Delivery included", cells: ["no", "yes"] }, { label: "Service plan", cells: ["no", "yes"] }],
+      };
+    case "callout":
+      return { id: uid(), type, ...emptyLayout, tone: "info", accent: "#ea580c", title: "Please note", text: "Type the note here." };
+    case "gallery":
+      return { id: uid(), type, ...emptyLayout, columns: 3, aspect: "4:3", gap: 8, rounded: true, images: [{ src: "", alt: "", caption: "" }, { src: "", alt: "", caption: "" }, { src: "", alt: "", caption: "" }] };
+    case "qr":
+      return { id: uid(), type, ...emptyLayout, url: "{{company.website}}", label: "Scan to visit us", caption: "", size: 96, showUrl: true };
     // Customer email blocks (./emailRender.ts).
     case "emailBody":
       return { id: uid(), type, ...emptyLayout };

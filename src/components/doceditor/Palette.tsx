@@ -1,15 +1,14 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { useDraggable } from "@dnd-kit/core";
 import { useEditor } from "@/lib/doceditor/store";
 import { newBlock, newOverlayField } from "@/lib/doceditor/factory";
 import { showcaseQuoteTemplate } from "@/lib/doceditor/standardTemplates";
 import ConfirmActionDialog from "@/components/ConfirmActionDialog";
-import type { BlockType, DocumentBlock, OverlayField } from "@/lib/doceditor/model";
+import type { BlockType, OverlayField } from "@/lib/doceditor/model";
 import type { DragData } from "./DndController";
-import { listLibraryItems, deleteLibraryItem } from "@/app/actions/doclibrary";
-import { listClauseBlocks } from "@/app/actions/customDocuments";
+import { LibraryTab } from "./LibraryTab";
 import { useDocEditorEnv } from "./EditorContext";
 
 const CONTENT: { type: BlockType; label: string; icon: string }[] = [
@@ -32,6 +31,18 @@ const BRANDED: { type: BlockType; label: string; icon: string }[] = [
   { type: "terms", label: "Terms", icon: "§" },
   { type: "handoverChecklist", label: "Handover checklist (bound)", icon: "☑" },
   { type: "footer", label: "Footer", icon: "‗" },
+];
+
+/** Ready-made sections. Three of them are one block (a details grid) with different starting content. */
+const SECTIONS: { type: BlockType; label: string; icon: string; preset?: string }[] = [
+  { type: "detailsGrid", label: "Label / value grid", icon: "▤" },
+  { type: "detailsGrid", preset: "spec", label: "Specification grid", icon: "▦" },
+  { type: "detailsGrid", preset: "banking", label: "Banking details", icon: "🏦" },
+  { type: "paymentSchedule", label: "Payment schedule", icon: "①" },
+  { type: "comparison", label: "Comparison table", icon: "⇄" },
+  { type: "callout", label: "Callout", icon: "❕" },
+  { type: "gallery", label: "Photo gallery", icon: "▥" },
+  { type: "qr", label: "QR code / link", icon: "▣" },
 ];
 
 const SHOWCASE: { type: BlockType; label: string; icon: string }[] = [
@@ -72,75 +83,20 @@ const FIELDS: { kind: OverlayField["kind"]; label: string; icon: string }[] = [
 
 const TABS = ["Content", "Fields", "Library"] as const;
 
-type LibItem = { id: string; name: string; category: string | null; blocks: DocumentBlock[] };
+// The Library tab — search, categories, previews and whole sections — lives in ./LibraryTab.
 
-// The content library needs docbuilder.manage; a custom document is edited with
-// documents.manage. Someone without it gets an empty library, not a stuck spinner.
-const loadLibrary = () => listLibraryItems().then((r) => r as LibItem[], () => [] as LibItem[]);
-const loadClauses = () => listClauseBlocks().then((r) => r as LibItem[], () => [] as LibItem[]);
-
-function LibraryTab() {
-  const insertLibrary = useEditor((s) => s.insertLibrary);
-  const [items, setItems] = useState<LibItem[]>([]);
-  const [clauses, setClauses] = useState<LibItem[]>([]);
-  const [loading, setLoading] = useState(true);
-  const refresh = async () => { setLoading(true); setItems(await loadLibrary()); setClauses(await loadClauses()); setLoading(false); };
-  useEffect(() => {
-    let alive = true;
-    Promise.all([loadLibrary(), loadClauses()]).then(([lib, cl]) => { if (alive) { setItems(lib); setClauses(cl); setLoading(false); } });
-    return () => { alive = false; };
-  }, []);
-
-  return (
-    <>
-      <div className="flex items-center justify-between px-1">
-        <p className="text-[11px] text-slate-400">Saved blocks — click to add to the last page.</p>
-        <button type="button" className="text-[11px] text-slate-400 hover:text-slate-600" onClick={refresh}>↻</button>
-      </div>
-      {loading ? (
-        <p className="p-3 text-xs text-slate-400">Loading…</p>
-      ) : items.length === 0 ? (
-        <p className="p-3 text-xs text-slate-400">Nothing saved yet. Select a block on the page → “Save to content library”.</p>
-      ) : (
-        <div className="space-y-1.5">
-          {items.map((it) => (
-            <div key={it.id} className="flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 py-2 text-sm hover:border-orange-300">
-              <button type="button" className="flex-1 text-left text-slate-700" onClick={() => insertLibrary(it.blocks)} title="Insert into the document">
-                {it.name}{it.category ? <span className="ml-1 text-[10px] text-slate-400">{it.category}</span> : null}
-              </button>
-              <button type="button" className="px-1 text-red-400 hover:text-red-600" title="Delete" onClick={async () => { await deleteLibraryItem(it.id); refresh(); }}>✕</button>
-            </div>
-          ))}
-        </div>
-      )}
-      {clauses.length > 0 && (
-        <>
-          <p className="px-1 pt-3 text-[11px] font-medium text-slate-400">Clauses — copied in; edit them in Document Studio.</p>
-          <div className="space-y-1.5">
-            {clauses.map((it) => (
-              <button key={it.id} type="button" className="block w-full rounded-lg border border-slate-200 bg-white px-2.5 py-2 text-left text-sm text-slate-700 hover:border-orange-300" onClick={() => insertLibrary(it.blocks)} title="Insert this clause into the document">
-                {it.name}{it.category ? <span className="ml-1 text-[10px] text-slate-400">{it.category}</span> : null}
-              </button>
-            ))}
-          </div>
-        </>
-      )}
-    </>
-  );
-}
-
-function ContentItem({ type, label, icon }: { type: BlockType; label: string; icon: string }) {
+function ContentItem({ type, label, icon, preset }: { type: BlockType; label: string; icon: string; preset?: string }) {
   const appendToPage = useEditor((s) => s.appendToPage);
-  const pageCount = useEditor((s) => s.doc?.pages.length ?? 1);
   const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
-    id: `new-${type}`, data: { source: "new", blockType: type } satisfies DragData,
+    id: `new-${type}${preset ? `-${preset}` : ""}`, data: { source: "new", blockType: type, preset } satisfies DragData,
   });
   return (
     <button
       ref={setNodeRef} {...listeners} {...attributes}
       type="button"
-      onClick={() => appendToPage(pageCount - 1, newBlock(type))}
-      title="Drag onto the page, or click to add at the end"
+      // On the page the person is working on. It used to be the last page, always.
+      onClick={() => { const { activePage, doc } = useEditor.getState(); appendToPage(Math.min(activePage, Math.max(0, (doc?.pages.length ?? 1) - 1)), newBlock(type, preset)); }}
+      title="Drag onto the page, or click to add at the end of the page you are working on"
       className={`flex cursor-grab items-center gap-2 rounded-lg border border-slate-200 bg-white px-2.5 py-2 text-left text-sm text-slate-700 hover:border-orange-300 hover:bg-orange-50 ${isDragging ? "opacity-40" : ""}`}
     >
       <span className="grid h-6 w-6 place-items-center rounded bg-slate-100 text-xs">{icon}</span>
@@ -194,7 +150,10 @@ function DocumentPalette() {
 
   const addOverlay = (kind: OverlayField["kind"]) => {
     const field = newOverlayField(kind);
-    addField(0, field);
+    // On the page the person is working on. It used to be page 1, always — a
+    // signature for page 3 had to be made on page 1 and could not be dragged across.
+    const { activePage, doc } = useEditor.getState();
+    addField(Math.min(activePage, Math.max(0, (doc?.pages.length ?? 1) - 1)), field);
     selectField(field.id);
   };
 
@@ -218,6 +177,10 @@ function DocumentPalette() {
             <p className="px-1 pt-2 text-[11px] font-medium text-slate-400">Branded (quote/proposal)</p>
             <div className="grid grid-cols-1 gap-1.5">
               {BRANDED.map((c) => <ContentItem key={c.type} {...c} />)}
+            </div>
+            <p className="px-1 pt-2 text-[11px] font-medium text-slate-400">Sections</p>
+            <div className="grid grid-cols-1 gap-1.5">
+              {SECTIONS.map((c) => <ContentItem key={`${c.type}-${c.preset ?? ""}`} {...c} />)}
             </div>
             <p className="px-1 pt-2 text-[11px] font-medium text-slate-400">Showcase quotation</p>
             <ShowcaseLayoutButton />
