@@ -5,6 +5,7 @@ import { warmUpForCron } from "@/lib/cronPreflight";
 import { runCronPerTenant } from "@/lib/tenantCron";
 import { runDueAssistantSchedules, SCHEDULE_RUN_RESERVE_MS } from "@/lib/assistantScheduleRun";
 import { runAssistantWatches } from "@/lib/assistantWatch";
+import { prunePendingActions } from "@/lib/assistantWhatsAppConfirm";
 
 /**
  * Scheduled assistant questions ("every Monday at 7, which deals went quiet?")
@@ -44,11 +45,19 @@ export async function GET(req: NextRequest) {
   // caught here, logged by its name only, never a record or a label.
   const startedAt = Date.now();
   const watches = await runCronPerTenant(
-    async (tenantId, budget) =>
-      runAssistantWatches(budget).catch(async (error: unknown) => {
+    async (tenantId, budget) => {
+      // Tasks offered on WhatsApp are kept a day past their 15-minute window, then
+      // deleted here: one indexed delete per workspace, on a tick that already runs.
+      if (tenantId) {
+        await prunePendingActions(tenantId).catch((error: unknown) =>
+          logError("assistant-schedule", "pending task clean-up failed", error instanceof Error ? error.name : "unknown", { tenantId }),
+        );
+      }
+      return runAssistantWatches(budget).catch(async (error: unknown) => {
         await logError("assistant-schedule", "watch run failed", error instanceof Error ? error.name : "unknown", { tenantId });
         return { checked: 0, fired: 0 };
-      }),
+      });
+    },
     { maxRuntimeMs: Math.min(WATCH_BUDGET_MS, routeBudget.remainingMs), rotationWindowMs: 30 * 60 * 1000 },
   ).catch(async (error: unknown) => {
     await logError("assistant-schedule", "watch run failed", error instanceof Error ? error.name : "unknown");

@@ -144,6 +144,12 @@ loaderKey._load = function (this: unknown, request: string, parent, isMain) {
       case "./crmAssistant": return {
         askCrm: async () => ({ ok: true, answer: ANSWER, rows: [], tools: [], learned: 0, actions: [], choices: [] }),
       };
+      // Confirming tasks is another test's subject; here it is off and offers nothing.
+      case "./assistantWhatsAppConfirm": return {
+        confirmingOnWhatsAppOn: async () => false,
+        offerConfirmations: async () => {},
+        confirmFromWhatsApp: async () => {},
+      };
       case "./assistantUser": return {
         assistantUserFor: async (id: string) => ({ id, name: id, email: `${id}@x`, role: "staff" }),
         assistantAskAllowed: async () => true,

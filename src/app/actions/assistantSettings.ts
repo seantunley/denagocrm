@@ -16,6 +16,7 @@ import {
 } from "@/lib/assistantSoul";
 import { ASSISTANT_VOICE_REPLIES_KEY, voiceRepliesSwitchOn } from "@/lib/assistantVoiceRules";
 import { saveAssistantWhatsApp } from "@/app/actions/assistantWhatsApp";
+import { ASSISTANT_WHATSAPP_CONFIRM_KEY, whatsappConfirmOn } from "@/lib/assistantWhatsAppRules";
 
 /**
  * The workspace's assistant: its name, tone, workspace instructions and soul.
@@ -72,7 +73,21 @@ export async function saveAssistantWhatsAppCard(formData: FormData) {
         });
         revalidatePath("/settings/assistant");
       }
-      return { success: `${whatsapp.success ?? "Saved"}${on ? " · voice replies on" : ""}` };
+      // Confirming tasks from a phone. Default OFF: it lets a linked phone CHANGE
+      // records, where until now it could only read answers. Audited both ways.
+      const confirm = formData.get("whatsappConfirm") === "on";
+      if (confirm !== whatsappConfirmOn(await getSetting(ASSISTANT_WHATSAPP_CONFIRM_KEY))) {
+        await putSetting(ASSISTANT_WHATSAPP_CONFIRM_KEY, confirm ? "on" : "off");
+        await logAudit({
+          action: confirm ? "assistant.whatsapp_confirm_enabled" : "assistant.whatsapp_confirm_disabled",
+          summary: confirm
+            ? "Let staff confirm the assistant's proposed tasks from their linked WhatsApp"
+            : "Turned off confirming the assistant's tasks on WhatsApp",
+          user,
+        });
+        revalidatePath("/settings/assistant");
+      }
+      return { success: `${whatsapp.success ?? "Saved"}${on ? " · voice replies on" : ""}${confirm ? " · confirming on WhatsApp on" : ""}` };
     }),
   );
 }

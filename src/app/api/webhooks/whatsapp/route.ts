@@ -143,7 +143,7 @@ export async function POST(req: NextRequest) {
                 const title: string = btn?.title ?? list?.title ?? "";
                 if (!id) return;
                 // A tapped quick reply: its title is the staff member's next question.
-                if (await handleStaffWhatsApp(from, { text: title }, message.id)) return;
+                if (await handleStaffWhatsApp(from, { text: title, choiceId: id }, message.id)) return;
                 if (await held("choice", title, `👆 ${title}`, true)) return;
                 await link(await recordInboundWhatsApp(from, profileName, `👆 ${title}`, String(message.id ?? "")));
                 await runWhatsAppBot(from, { text: title, choiceId: id }, { entryContext });

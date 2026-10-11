@@ -92,6 +92,81 @@ export type LinkRefusal = keyof typeof LINK_REFUSALS;
 export const linkRefusalText = (reason: string | null | undefined): string | null =>
   reason && reason in LINK_REFUSALS ? LINK_REFUSALS[reason as LinkRefusal] : null;
 
+/*
+ * ── CONFIRMING A TASK ON WHATSAPP ───────────────────────────────────────────
+ *
+ * The assistant never changes anything itself: it proposes, a person confirms.
+ * In the CRM that is a card with a Confirm button. On WhatsApp it is a message
+ * with a Confirm button — when the workspace owner has switched this on. The
+ * tap is the person's click; without it nothing happens.
+ */
+
+/** The owner's switch (AppSetting). Absent or anything but "on" is OFF. */
+export const ASSISTANT_WHATSAPP_CONFIRM_KEY = "ASSISTANT_WHATSAPP_CONFIRM";
+export const whatsappConfirmOn = (raw: string | null | undefined): boolean => raw === "on";
+
+/** How long a proposed task can still be confirmed. After that: ask again. */
+export const PENDING_ACTION_TTL_MS = 15 * 60 * 1000;
+
+/**
+ * What may be confirmed from a phone: changes INSIDE the CRM only.
+ *
+ * Left out on purpose, and they stay in the CRM:
+ *  - draft_message — a message to a customer. It is read, edited and sent by the
+ *    person, on the record, never from a chat with the assistant;
+ *  - test_drive — books a customer onto a vehicle;
+ *  - lost, quote — closing a deal and starting a quote deserve the screen.
+ * A kind not named here is not confirmable: a new kind is CRM-only until someone
+ * decides otherwise.
+ */
+export const WHATSAPP_CONFIRMABLE: ReadonlySet<string> = new Set([
+  "note", "customer_note", "follow_up", "assign", "stage", "meeting", "reschedule", "cancel_activity", "schedule", "watch",
+]);
+
+/** Proposed cards, split into those that get a Confirm button here and those that need the CRM. */
+export function splitForWhatsApp_cards<T extends { kind: string }>(cards: readonly T[]): { confirmable: T[]; crmOnly: T[] } {
+  return {
+    confirmable: cards.filter((card) => WHATSAPP_CONFIRMABLE.has(card.kind)),
+    crmOnly: cards.filter((card) => !WHATSAPP_CONFIRMABLE.has(card.kind)),
+  };
+}
+
+/** The Confirm button's id: names the pending row and nothing else. */
+export const confirmButtonId = (pendingId: string) => `daxc:${pendingId}`;
+/** A tapped button's id → the pending row it names, or null when it is not a Confirm button of ours. */
+export function parseConfirmId(choiceId: string | null | undefined): string | null {
+  const match = /^daxc:(c[a-z0-9]{20,40})$/.exec(String(choiceId ?? ""));
+  return match ? match[1] : null;
+}
+
+/**
+ * What the person is shown before they can tap Confirm — ALL of it, or nothing.
+ *
+ * THE RULE: what Confirm writes is exactly what was shown. A button message's
+ * body holds 1,024 characters and a note can be 2,000, so the first version cut
+ * the prompt to fit: the person confirmed a note whose second half they had
+ * never seen. Nothing here is ever truncated. When the whole thing fits the
+ * button message, that is all there is. When it does not, the full text goes
+ * first as ordinary messages (4,096 characters each, split on a boundary and
+ * never dropped) and the button message points back at them. When even the
+ * pointer cannot be shown whole, there is no button at all (null): that task is
+ * confirmed in the CRM.
+ *
+ * Every field of a card that the person would otherwise be agreeing to unseen
+ * is listed here: a note's text, a scheduled question, a meeting's detail.
+ */
+export function confirmMessages(card: { title: string; text?: unknown; question?: unknown; detail?: unknown; reason?: unknown }): { before: string[]; body: string } | null {
+  const shown = [card.title, card.text, card.question, card.detail, card.reason]
+    .filter((part): part is string => typeof part === "string" && part.trim().length > 0)
+    .map((part) => part.trim());
+  const footer = `Tap Confirm within ${PENDING_ACTION_TTL_MS / 60_000} minutes and I'll do it. Nothing changes until you do.`;
+  const whole = [...shown, footer].join("\n\n");
+  if (whole.length <= WA_BODY_MAX) return { before: [], body: whole };
+  const before = splitForWhatsApp(shown.join("\n\n"));
+  const body = `${card.title.trim()}\n\nThe full text is in the message${before.length === 1 ? "" : "s"} above — read ${before.length === 1 ? "it" : "them"} first. ${footer}`;
+  return body.length <= WA_BODY_MAX ? { before, body } : null;
+}
+
 /** A linked number as it is shown back: the last three digits only. */
 export function maskWaId(waId: string | null | undefined): string {
   const digits = String(waId ?? "").replace(/\D/g, "");
