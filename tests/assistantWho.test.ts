@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { readFileSync } from "node:fs";
-import { OR_AUTOMATIC, WHO_LEGEND, whoLogged } from "../src/lib/assistantWho";
+import { OR_AUTOMATIC, WHO_LEGEND, messageAuthor, whoLogged } from "../src/lib/assistantWho";
 
 /*
  * WHO did it. The assistant was told what a note said and when, but not who
@@ -29,9 +29,46 @@ test("an entry under the stand-in account is NOT said to be that person's: it ma
   const who = whoLogged(SEAN, STAND_IN);
   assert.equal(who, `Sean Tunley ${OR_AUTOMATIC}`);
   assert.notEqual(who, "Sean Tunley", "the bare name would be the confident wrong answer this exists to stop");
-  // No stand-in known (the lookup failed): the name is given as it is rather than withheld.
-  assert.equal(whoLogged(SEAN, null), "Sean Tunley");
-  assert.equal(whoLogged(SEAN, undefined), "Sean Tunley");
+});
+
+test("WHEN THE STAND-IN CANNOT BE ESTABLISHED, no name is certain — 'could not check' is not 'a person wrote it'", () => {
+  // The lookup failed, or found nobody. An automated entry filed under the owner must still not be credited to the owner…
+  for (const unknown of [null, undefined, ""]) {
+    assert.equal(whoLogged(SEAN, unknown), `Sean Tunley ${OR_AUTOMATIC}`, String(unknown));
+    // …and with nothing to compare against, a colleague's name is not certain either. The name is kept; the doubt is added.
+    assert.equal(whoLogged(DONOVAN, unknown), `Donovan Petersen ${OR_AUTOMATIC}`, String(unknown));
+  }
+  // The same through a message: an outbound automatic reply, with the stand-in unknown.
+  assert.deepEqual(messageAuthor({ direction: "outbound", type: "whatsapp", user: SEAN }, null), { from: "us", loggedBy: `Sean Tunley ${OR_AUTOMATIC}` });
+  // In the brief, a failed lookup becomes exactly that null — it is never swallowed into "certain".
+  const lib = code("src/lib/crmAssistant.ts");
+  assert.match(lib, /const standInId = \(await resolveTenantActor\(\)\.catch\(\(\) => null\)\)\?\.id \?\? null;/);
+  const who = code("src/lib/assistantWho.ts");
+  assert.match(who, /return standInId && person\.id !== standInId \? name : `\$\{name\} \$\{OR_AUTOMATIC\}`;/, "certain ONLY when the stand-in is known and this is somebody else");
+});
+
+test("an INCOMING CALL a member of staff logged keeps that member of staff; a customer's own WhatsApp has no staff author", () => {
+  // Donovan logs an inbound phone call (Log a call / email / note): the customer rang, Donovan recorded it.
+  assert.deepEqual(messageAuthor({ direction: "inbound", type: "call", user: DONOVAN }, STAND_IN), { from: "customer", loggedBy: "Donovan Petersen" });
+  assert.deepEqual(messageAuthor({ direction: "inbound", type: "meeting", user: DONOVAN }, STAND_IN), { from: "customer", loggedBy: "Donovan Petersen" });
+  assert.deepEqual(messageAuthor({ direction: "inbound", type: "note", user: DONOVAN }, STAND_IN), { from: "customer", loggedBy: "Donovan Petersen" });
+  // The same call logged under the stand-in account: still from the customer, the logger given with the doubt.
+  assert.deepEqual(messageAuthor({ direction: "inbound", type: "call", user: SEAN }, STAND_IN), { from: "customer", loggedBy: `Sean Tunley ${OR_AUTOMATIC}` });
+
+  // An inbound WhatsApp arrives by itself and is filed under the stand-in: nobody on staff logged it.
+  assert.deepEqual(messageAuthor({ direction: "inbound", type: "whatsapp", user: SEAN }, STAND_IN), { from: "customer", loggedBy: null });
+  for (const channel of ["email", "sms", "messenger", "instagram", "telegram"]) {
+    assert.deepEqual(messageAuthor({ direction: "inbound", type: channel, user: SEAN }, STAND_IN), { from: "customer", loggedBy: null }, channel);
+  }
+  // …but an inbound email a colleague typed in by hand is under THEIR account, and names them.
+  assert.deepEqual(messageAuthor({ direction: "inbound", type: "email", user: DONOVAN }, STAND_IN), { from: "customer", loggedBy: "Donovan Petersen" });
+  // With the stand-in unknown, an inbound channel message claims nothing about who logged it.
+  assert.deepEqual(messageAuthor({ direction: "inbound", type: "whatsapp", user: DONOVAN }, null), { from: "customer", loggedBy: null });
+
+  // Outbound, and entries with no direction (a plain note): ours, by whoever logged it.
+  assert.deepEqual(messageAuthor({ direction: "outbound", type: "email", user: DONOVAN }, STAND_IN), { from: "us", loggedBy: "Donovan Petersen" });
+  assert.deepEqual(messageAuthor({ direction: null, type: "note", user: DONOVAN }, STAND_IN), { from: "us", loggedBy: "Donovan Petersen" });
+  assert.deepEqual(messageAuthor({ direction: null, type: "note", user: null }, STAND_IN), { from: "us", loggedBy: null });
 });
 
 test("no author means no author — never an invented one", () => {
@@ -65,11 +102,12 @@ test("a lead's brief carries who logged each message, who owns and who scheduled
   assert.match(brief, /salesperson: staffName\.get\(t\.salespersonId\)/);
 });
 
-test("a customer's own message is never given a staff author", () => {
+test("the brief asks ONE rule who each message is from and who logged it — never direction alone", () => {
   const lib = code("src/lib/crmAssistant.ts");
-  // The row's user is only the stand-in there: an inbound message has no loggedBy at all.
-  assert.match(lib, /const loggedBy = c\.direction === "inbound" \? null : whoLogged\(c\.user, standInId\);/);
-  assert.match(lib, /from: c\.direction === "inbound" \? "customer" : "us",/);
+  assert.match(lib, /const \{ from, loggedBy \} = messageAuthor\(c, standInId\);/);
+  // The first version: "inbound means the customer wrote it and nobody logged it". It lost the staff member who logged an incoming call.
+  assert.doesNotMatch(lib, /c\.direction === "inbound" \? null : whoLogged/);
+  assert.match(WHO_LEGEND, /"from: customer" with a loggedBy means the customer rang or wrote and that member of staff recorded it/);
 });
 
 test("still nothing that identifies a customer beyond what the brief already gave: no ids, emails or numbers of staff either", () => {

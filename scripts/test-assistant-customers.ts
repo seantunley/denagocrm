@@ -162,9 +162,13 @@ async function main() {
       data: [
         say(outsider.id, `Called her ${SFX}`, 30),
         say(rep.id, `Sent the spec sheet ${SFX}`, 20, { type: "email", direction: "outbound" }),
-        // A customer's own message: the row needs a user, and gets one, but nobody on staff wrote it.
-        say(rep.id, `Is the white one in stock ${SFX}`, 10, { type: "whatsapp", direction: "inbound" }),
-        ...(standIn ? [say(standIn.id, `Thanks for your enquiry ${SFX}`, 5, { type: "whatsapp", direction: "outbound" })] : []),
+        // A customer's own WhatsApp: it arrives by itself and is filed under the stand-in account. Nobody on staff wrote it.
+        say(STAND_IN, `Is the white one in stock ${SFX}`, 10, { type: "whatsapp", direction: "inbound" }),
+        // An INCOMING CALL a colleague logged by hand (Log a call / email / note): the customer rang, the colleague recorded it.
+        say(outsider.id, `She rang about colours ${SFX}`, 8, { type: "call", direction: "inbound" }),
+        // An incoming email a colleague typed in by hand: under their account, not the stand-in.
+        say(outsider.id, `Forwarded her email ${SFX}`, 7, { type: "email", direction: "inbound" }),
+        say(STAND_IN, `Thanks for your enquiry ${SFX}`, 5, { type: "whatsapp", direction: "outbound" }),
       ],
     });
     const data = (await scoped(() => leadBrief(rep, { lead: `Yan Deal${SFX}` }))).data[0] as {
@@ -175,7 +179,11 @@ async function main() {
     check("the note a colleague logged names that colleague — not the person asking", message("Called her")?.loggedBy === "Outsider", JSON.stringify(message("Called her")));
     check("the asker's own entry names them", message("Sent the spec sheet")?.loggedBy === "Rep", JSON.stringify(message("Sent the spec sheet")));
     const fromCustomer = message("Is the white one in stock");
-    check("a customer's own message is from the customer, with NO staff author", fromCustomer?.from === "customer" && fromCustomer.loggedBy === undefined, JSON.stringify(fromCustomer));
+    check("a customer's own WhatsApp is from the customer, with NO staff author", fromCustomer?.from === "customer" && fromCustomer.loggedBy === undefined, JSON.stringify(fromCustomer));
+    const call = message("She rang about colours");
+    check("an incoming call a colleague logged is FROM the customer and LOGGED BY that colleague", call?.from === "customer" && call.loggedBy === "Outsider", JSON.stringify(call));
+    const typedIn = message("Forwarded her email");
+    check("an incoming email a colleague typed in by hand names them too", typedIn?.from === "customer" && typedIn.loggedBy === "Outsider", JSON.stringify(typedIn));
     check("the stand-in account resolves to the workspace's oldest member", standIn?.id === STAND_IN, JSON.stringify(standIn));
     const automatic = message("Thanks for your enquiry");
     check("an entry under the stand-in account is NOT credited to that person as a fact", automatic?.loggedBy === "Oldest Member or an automatic entry", JSON.stringify(automatic));

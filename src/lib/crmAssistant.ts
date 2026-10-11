@@ -8,7 +8,7 @@ import { formatZAR, contactName } from "./format";
 import { payableTotalCents } from "./pricing";
 import { johannesburgDateKey } from "./activityDay";
 import { listActingTenantStaff, resolveTenantActor } from "./tenantActor";
-import { WHO_LEGEND, whoLogged } from "./assistantWho";
+import { WHO_LEGEND, messageAuthor, whoLogged } from "./assistantWho";
 import { getAccessibleActivityIds } from "./activityAccess";
 import { getSetting } from "./settings";
 import { getCompanyProfile } from "./companyProfile";
@@ -620,7 +620,9 @@ export async function leadBrief(user: User, raw: z.infer<typeof leadBriefArgs>):
     }),
   ]);
   // The account automated entries are filed under (assistantWho.ts): a row in its
-  // name is that person OR nobody. A lookup that fails costs the doubt, not the answer.
+  // name is that person OR nobody. If it cannot be established — the lookup fails,
+  // or finds nobody — it is null, and then NO name is given as certain: "could not
+  // check" must not read as "checked, and a person wrote it".
   const standInId = (await resolveTenantActor().catch(() => null))?.id ?? null;
   // Test drives for this lead, through the test-drive page's own visibility rule.
   const testDrives = (await isModuleEnabled("automotive"))
@@ -676,11 +678,11 @@ export async function leadBrief(user: User, raw: z.infer<typeof leadBriefArgs>):
       research: lead.research ? { when: dateKey(lead.researchedAt), summary: clip(lead.research, 1500) } : null,
       who: WHO_LEGEND,
       messages: communications.map((c) => {
-        // A customer's own message has no staff author: the row's user is only the stand-in.
-        const loggedBy = c.direction === "inbound" ? null : whoLogged(c.user, standInId);
+        // Whose words, and who recorded them — not the same for a call a member of staff logged.
+        const { from, loggedBy } = messageAuthor(c, standInId);
         return {
           when: dateKey(c.occurredAt),
-          from: c.direction === "inbound" ? "customer" : "us",
+          from,
           ...(loggedBy ? { loggedBy } : {}),
           channel: c.type,
           text: clip([c.subject, c.body].filter(Boolean).join(" — "), 300),
