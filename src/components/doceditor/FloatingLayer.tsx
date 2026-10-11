@@ -18,6 +18,9 @@ export function FloatingLayer({ page, zoom }: { page: DocumentPage; zoom: number
   const select = useEditor((s) => s.select);
   const activeTextId = useEditor((s) => s.activeTextBlockId);
   const updateFloating = useEditor((s) => s.updateFloating);
+  const picked = useEditor((s) => s.picked);
+  const togglePick = useEditor((s) => s.togglePick);
+  const dragPlacedTo = useEditor((s) => s.dragPlacedTo);
   const [targetEl, setTargetEl] = useState<HTMLElement | null>(null);
   // A freely placed block takes the document's type like any other (an email is drawn by its own renderer).
   const { email } = useDocEditorEnv();
@@ -34,8 +37,9 @@ export function FloatingLayer({ page, zoom }: { page: DocumentPage; zoom: number
             key={fb.id}
             data-float-id={fb.id}
             ref={isSel ? setTargetEl : undefined}
-            onMouseDown={(e) => { e.stopPropagation(); select(fb.block.id); }}
-            className={`pointer-events-auto absolute rounded bg-white/0 ${isSel ? "outline outline-2 outline-orange-400" : "hover:outline hover:outline-1 hover:outline-dashed hover:outline-slate-300"}`}
+            // Shift-click adds it to (or takes it out of) a selection of several placed things.
+            onMouseDown={(e) => { e.stopPropagation(); if (e.shiftKey) togglePick(fb.block.id); else select(fb.block.id); }}
+            className={`pointer-events-auto absolute rounded bg-white/0 ${isSel ? "outline outline-2 outline-orange-400" : picked.includes(fb.block.id) ? "outline outline-2 outline-dashed outline-orange-400" : "hover:outline hover:outline-1 hover:outline-dashed hover:outline-slate-300"}`}
             style={{ left: fb.x * zoom, top: fb.y * zoom, width: fb.width * zoom }}
           >
             {/* The block lays out at its real width and is zoomed as a whole, the
@@ -61,7 +65,8 @@ export function FloatingLayer({ page, zoom }: { page: DocumentPage; zoom: number
           onDrag={({ target, left, top }) => { const el = target as HTMLElement; el.style.left = `${left}px`; el.style.top = `${top}px`; }}
           onDragEnd={({ target }) => {
             const el = target as HTMLElement;
-            updateFloating(selected.block.id, { x: Math.max(0, parseFloat(el.style.left) / zoom), y: Math.max(0, parseFloat(el.style.top) / zoom) });
+            // The rest of a selection (or its group) follows by the same distance.
+            dragPlacedTo(selected.block.id, { x: Math.max(0, parseFloat(el.style.left) / zoom), y: Math.max(0, parseFloat(el.style.top) / zoom) });
           }}
           onResize={({ target, width, drag }) => {
             const el = target as HTMLElement;

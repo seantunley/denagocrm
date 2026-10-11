@@ -16,6 +16,9 @@ export function OverlayLayer({ page, zoom }: { page: DocumentPage; zoom: number 
   const sel = useEditor((s) => s.sel);
   const selectField = useEditor((s) => s.selectField);
   const updateField = useEditor((s) => s.updateField);
+  const picked = useEditor((s) => s.picked);
+  const togglePick = useEditor((s) => s.togglePick);
+  const dragPlacedTo = useEditor((s) => s.dragPlacedTo);
   const recipients = useEditor((s) => s.doc?.recipients ?? []);
   const [targetEl, setTargetEl] = useState<HTMLElement | null>(null);
 
@@ -33,8 +36,9 @@ export function OverlayLayer({ page, zoom }: { page: DocumentPage; zoom: number 
             key={f.id}
             ref={isSel ? setTargetEl : undefined}
             data-field-id={f.id}
-            onMouseDown={(e) => { e.stopPropagation(); selectField(f.id); }}
-            className={`pointer-events-auto absolute flex cursor-move flex-col items-center justify-center rounded text-center ${isSel ? "z-10" : ""}`}
+            // Shift-click adds it to (or takes it out of) a selection of several placed things.
+            onMouseDown={(e) => { e.stopPropagation(); if (e.shiftKey) togglePick(f.id); else selectField(f.id); }}
+            className={`pointer-events-auto absolute flex cursor-move flex-col items-center justify-center rounded text-center ${isSel ? "z-10" : ""} ${!isSel && picked.includes(f.id) ? "outline outline-2 outline-offset-2 outline-dashed outline-orange-400" : ""}`}
             style={{
               left: f.anchor.x * zoom, top: f.anchor.y * zoom, width: f.width * zoom, height: f.height * zoom,
               border: `1.5px dashed ${color}`, background: `${color}14`, color, fontSize: 11, fontWeight: 600,
@@ -54,7 +58,8 @@ export function OverlayLayer({ page, zoom }: { page: DocumentPage; zoom: number 
           onDrag={({ target, left, top }) => { const el = target as HTMLElement; el.style.left = `${left}px`; el.style.top = `${top}px`; }}
           onDragEnd={({ target }) => {
             const el = target as HTMLElement;
-            updateField(selectedField.id, { anchor: { ...selectedField.anchor, x: Math.max(0, parseFloat(el.style.left) / zoom), y: Math.max(0, parseFloat(el.style.top) / zoom) } });
+            // The rest of a selection (or its group) follows by the same distance.
+            dragPlacedTo(selectedField.id, { x: Math.max(0, parseFloat(el.style.left) / zoom), y: Math.max(0, parseFloat(el.style.top) / zoom) });
           }}
           onResize={({ target, width, height, drag }) => {
             const el = target as HTMLElement;
