@@ -4,7 +4,15 @@ import { readFileSync } from "node:fs";
 import {
   BANNER_MAX_RECIPIENTS,
   BANNER_MAX_WIDTH,
+  CLICK_DEDUPE_MINUTES,
+  CLICK_MAX_ANONYMOUS_PER_DAY,
+  CLICK_MAX_PER_EMAIL,
+  CLICK_RETENTION_DAYS,
   EMAIL_REF_MARKER,
+  anonymousClickDay,
+  clickDedupeCutoff,
+  clickRetentionCutoff,
+  emailClickAllowed,
   NO_BANNER,
   bannerClickDestination,
   bannerClickUrl,
@@ -156,7 +164,7 @@ test("click rate reads sensibly at the edges", () => {
 test("the click route never reads its destination from the request", () => {
   const route = src("src/app/api/track/b/[token]/route.ts");
   assert.doesNotMatch(route, /searchParams\.get\("u"\)|searchParams\.get\("url"\)|searchParams\.get\("to"\)/);
-  assert.match(route, /bannerClickDestination\(\s*\{\s*resolve: resolveBannerLink,\s*record: recordBannerClick,/);
+  assert.match(route, /bannerClickDestination\(\s*\{\s*resolve: resolveBannerLink,/);
   assert.match(route, /NextResponse\.redirect\(destination \?\? appBaseUrl\(\)/);
   const store = src("src/lib/signatureBannerStore.ts");
   // The destination comes off the LINK row, frozen when the email was sent.
@@ -234,19 +242,88 @@ test("review #851/2: a click is tied to its email whether or not open tracking i
 test("review #851/3: the customer reaches the page even when counting the click fails", async () => {
   const link = { destination: "https://example.co.za/november" };
   const errors: unknown[] = [];
-  const failing = { resolve: async () => link, record: async () => { throw new Error("database is down"); }, onRecordError: (e: unknown) => { errors.push(e); } };
+  // `defer` as the platform provides it: the work is kept and run after the response.
+  const later: (() => Promise<void>)[] = [];
+  const defer = (work: () => Promise<void>) => { later.push(work); };
+  const failing = { resolve: async () => link, record: async () => { throw new Error("database is down"); }, onRecordError: (e: unknown) => { errors.push(e); }, defer };
   assert.equal(await bannerClickDestination(failing, "tok", "ref"), link.destination, "sent on regardless");
+  await later.shift()!();
   assert.equal(errors.length, 1, "and the failure is reported, not swallowed");
-  // Even the reporting failing does not cost them the page.
+  // Even the reporting failing does not escape into the platform's hook.
   assert.equal(await bannerClickDestination({ ...failing, onRecordError: () => { throw new Error("log is down too"); } }, "tok", null), link.destination);
-  // An unknown link is the only thing that lands on home — and nothing is recorded for it.
+  await assert.doesNotReject(later.shift()!());
+  // An unknown link is the only thing that lands on home — and nothing is recorded or scheduled for it.
   let recorded = 0;
-  assert.equal(await bannerClickDestination({ resolve: async () => null, record: async () => { recorded++; }, onRecordError: () => {} }, "nope", null), null);
+  assert.equal(await bannerClickDestination({ resolve: async () => null, record: async () => { recorded++; }, onRecordError: () => {}, defer }, "nope", null), null);
+  assert.equal(later.length, 0);
   assert.equal(recorded, 0);
-  // Resolved first, recorded second.
-  const order: string[] = [];
-  await bannerClickDestination({ resolve: async () => { order.push("resolve"); return link; }, record: async () => { order.push("record"); }, onRecordError: () => {} }, "tok", null);
-  assert.deepEqual(order, ["resolve", "record"]);
+  // The hook itself failing still sends them on, and is reported.
+  const hookErrors: unknown[] = [];
+  assert.equal(await bannerClickDestination({ resolve: async () => link, record: async () => {}, onRecordError: (e) => { hookErrors.push(e); }, defer: () => { throw new Error("no after() here"); } }, "tok", null), link.destination);
+  assert.equal(hookErrors.length, 1);
+});
+
+test("review #851/5: the customer is not kept waiting for the count or the notification", async () => {
+  const link = { destination: "https://example.co.za/november" };
+  let started = 0;
+  let finished = 0;
+  const later: (() => Promise<void>)[] = [];
+  // A recording that takes "forever": a stalled database write, or a push service that never answers.
+  let release: () => void = () => {};
+  const stalled = new Promise<void>((resolve) => { release = resolve; });
+  const deps = {
+    resolve: async () => link,
+    record: async () => { started++; await stalled; finished++; },
+    onRecordError: () => {},
+    defer: (work: () => Promise<void>) => { later.push(work); },
+  };
+  // The destination comes back while nothing has been recorded — or even started.
+  assert.equal(await bannerClickDestination(deps, "tok", "ref"), link.destination);
+  assert.equal(started, 0, "recording has not begun when the customer is redirected");
+  assert.equal(later.length, 1, "it is handed to the run-after-the-response hook exactly once");
+  const running = later[0]();
+  await Promise.resolve();
+  assert.equal(started, 1);
+  assert.equal(finished, 0, "still stalled — and the customer left long ago");
+  release();
+  await running;
+  assert.equal(finished, 1);
+
+  const route = src("src/app/api/track/b/[token]/route.ts");
+  assert.match(route, /import \{ after, NextRequest, NextResponse \} from "next\/server";/);
+  assert.match(route, /defer: \(work\) => after\(work\),/);
+  assert.doesNotMatch(route, /await recordBannerClick/, "the route never awaits the recording");
+  // Deferred work runs after the request's scope is gone, so it opens its own on the link's workspace.
+  assert.match(route, /async \(\) => \(\{ tenantId: link\.tenantId \}\),\s*\(\) => recordBannerClick\(link, emailRef\),/);
+});
+
+test("review #851/5: what a replayed or scanned link may write is bounded", () => {
+  const now = new Date("2026-11-10T12:00:00Z");
+  assert.equal(clickDedupeCutoff(now).toISOString(), "2026-11-10T11:50:00.000Z", `one counted click per email per ${CLICK_DEDUPE_MINUTES} minutes`);
+  assert.equal(emailClickAllowed(0), true);
+  assert.equal(emailClickAllowed(CLICK_MAX_PER_EMAIL - 1), true);
+  assert.equal(emailClickAllowed(CLICK_MAX_PER_EMAIL), false, "and no more than the cap in all");
+  assert.equal(anonymousClickDay(now), "2026-11-10");
+  assert.equal(clickRetentionCutoff(now).toISOString(), new Date(now.getTime() - CLICK_RETENTION_DAYS * 86_400_000).toISOString());
+  assert.ok(CLICK_MAX_ANONYMOUS_PER_DAY > 0 && CLICK_MAX_ANONYMOUS_PER_DAY <= 1000);
+
+  const store = src("src/lib/signatureBannerStore.ts");
+  const record = store.slice(store.indexOf("export async function recordBannerClick"));
+  // The time gate is ONE conditional statement, so two fetches arriving together cannot both pass.
+  assert.match(record, /where: \{ id: email\.id, tenantId, OR: \[\{ bannerLastClickAt: null \}, \{ bannerLastClickAt: \{ lt: clickDedupeCutoff\(now\) \} \}\] \},\s*data: \{ bannerLastClickAt: now \},/);
+  assert.match(record, /if \(gate\.count !== 1\) return;/);
+  assert.match(record, /if \(!emailClickAllowed\(counted\)\) return;/);
+  // Clicks tied to no email take a place under a daily cap, also one statement each.
+  assert.match(record, /anonymousDay: day, anonymousClicks: \{ lt: CLICK_MAX_ANONYMOUS_PER_DAY \} \},\s*data: \{ anonymousClicks: \{ increment: 1 \} \},/);
+  assert.match(record, /if \(underCap\.count !== 1\) return;/);
+  // Nothing is counted, and no row written, before the gates.
+  const gates = record.indexOf("if (underCap.count !== 1) return;");
+  assert.ok(gates > 0 && record.indexOf("clickCount: { increment: 1 }") > gates && record.indexOf("signatureBannerClick.create(") > gates);
+  assert.ok(record.indexOf("signatureBannerClick.create(") < record.indexOf("sendPushToAll("), "an uncounted click notifies nobody");
+  // And old rows are removed as new ones arrive.
+  assert.match(record, /signatureBannerClick\.deleteMany\(\{ where: \{ tenantId, bannerId, clickedAt: \{ lt: clickRetentionCutoff\(now\) \} \} \}\)/);
+  // Deliberately not an IP limit: scanners and mail proxies share addresses.
+  assert.doesNotMatch(src("src/app/api/track/b/[token]/route.ts") + store, /throttlePublic|checkPublicThrottle/);
 });
 
 test("the sender may pick among their own live banners, or none — never anything else", () => {

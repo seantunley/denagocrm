@@ -159,23 +159,76 @@ export function nextBannerLink(input: { current: { linkUrl: string; token: strin
   return { token: input.current.token, createLink: !input.hasLinkRow };
 }
 
+/*
+ * ── HOW MUCH A PUBLIC LINK MAY WRITE ────────────────────────────────────────
+ *
+ * The click link is public by necessity, and it is fetched by more than people:
+ * company mail gateways open every link to scan it, often twice, and anyone
+ * holding a link can replay it. Left alone, each fetch would add a row and bump
+ * a counter — inflated figures and unbounded writes from an address nobody has
+ * to sign in to reach.
+ *
+ * An IP limit is the wrong tool (see lib/publicThrottle.ts): scanners and mail
+ * proxies share a handful of addresses, so it would block real customers before
+ * it slowed a determined replay. The bounds are on what the link itself can do:
+ *
+ *  - a click tied to an email counts once per CLICK_DEDUPE_MINUTES for that
+ *    email, and CLICK_MAX_PER_EMAIL times in all;
+ *  - a click tied to no email counts up to CLICK_MAX_ANONYMOUS_PER_DAY times a
+ *    day per banner;
+ *  - click rows older than CLICK_RETENTION_DAYS are removed.
+ *
+ * Past a bound the customer is still sent to the page. Only the counting stops.
+ */
+export const CLICK_DEDUPE_MINUTES = 10;
+export const CLICK_MAX_PER_EMAIL = 20;
+export const CLICK_MAX_ANONYMOUS_PER_DAY = 500;
+export const CLICK_RETENTION_DAYS = 400;
+
+/** The moment before which an email's last counted click no longer blocks a new one. */
+export const clickDedupeCutoff = (now: Date) => new Date(now.getTime() - CLICK_DEDUPE_MINUTES * 60_000);
+/** The moment before which click rows are no longer kept. */
+export const clickRetentionCutoff = (now: Date) => new Date(now.getTime() - CLICK_RETENTION_DAYS * 86_400_000);
+/** The calendar day (UTC) anonymous clicks are counted against. */
+export const anonymousClickDay = (now: Date) => now.toISOString().slice(0, 10);
+
+/** May one more click be counted for an email that already has `counted`? (The time gate is the database's.) */
+export const emailClickAllowed = (counted: number) => counted < CLICK_MAX_PER_EMAIL;
+
 /**
- * A click, in the only safe order: find where the link leads, THEN try to count
- * it. The customer is owed the page they clicked for; the count is ours to lose.
- * A failure to record is handed to `onRecordError` and the destination is still
- * returned. Null only when the link itself is unknown.
+ * A click, in the only safe order: find where the link leads and ANSWER; count
+ * it afterwards. The customer is owed the page they clicked for, and owed it
+ * now — so the counting, the timeline stamp and the notification are handed to
+ * `defer` (the platform's run-after-the-response hook) and never awaited here.
+ * A slow database or a stalled push service costs the customer nothing.
+ *
+ * A failure while recording goes to `onRecordError`. Null only when the link
+ * itself is unknown, in which case nothing is recorded at all.
  */
 export async function bannerClickDestination<L extends { destination: string }>(
-  deps: { resolve: (token: string) => Promise<L | null>; record: (link: L, emailRef: string | null) => Promise<void>; onRecordError: (error: unknown) => unknown },
+  deps: {
+    resolve: (token: string) => Promise<L | null>;
+    record: (link: L, emailRef: string | null) => Promise<void>;
+    onRecordError: (error: unknown) => unknown;
+    defer: (work: () => Promise<void>) => void;
+  },
   token: string,
   emailRef: string | null,
 ): Promise<string | null> {
   const link = await deps.resolve(token);
   if (!link) return null;
+  const work = async () => {
+    try {
+      await deps.record(link, emailRef);
+    } catch (error) {
+      try { await deps.onRecordError(error); } catch { /* logging must not throw into the platform's hook either */ }
+    }
+  };
   try {
-    await deps.record(link, emailRef);
+    deps.defer(work);
   } catch (error) {
-    try { await deps.onRecordError(error); } catch { /* logging must not cost the customer their page either */ }
+    // No way to run it later (the hook itself failed): the click goes uncounted, and we say so.
+    try { await deps.onRecordError(error); } catch { /* as above */ }
   }
   return link.destination;
 }

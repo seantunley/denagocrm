@@ -1425,6 +1425,10 @@ model Communication {
   /// tied to it. Deliberately NOT the open token: that exists only while open
   /// tracking is on, and a click must be attributable either way.
   bannerRef       String?  @unique
+  /// The last click that was COUNTED for this email. A click is counted only
+  /// when this is empty or older than CLICK_DEDUPE_MINUTES, decided in one
+  /// statement, so a link scanner fetching twice is one click.
+  bannerLastClickAt DateTime?
   archivedAt     DateTime? // when the thread carrying this message was archived out of the inbox (NULL = active)
 
   // Multi-tenancy (Phase B — additive/inert): owning tenant. See Contact.tenantId.
@@ -2722,6 +2726,11 @@ model SignatureBanner {
   /// Emails sent carrying it, and clicks on it. Only ever go up.
   sentCount  Int       @default(0)
   clickCount Int       @default(0)
+  /// Clicks that could not be tied to an email, counted per day so they can be
+  /// capped (lib/signatureBanners.ts → CLICK_MAX_ANONYMOUS_PER_DAY): the link is
+  /// public, and nothing else bounds what replaying it can write.
+  anonymousDay    String?
+  anonymousClicks Int     @default(0)
   createdAt  DateTime  @default(now())
   updatedAt  DateTime  @updatedAt
   clicks     SignatureBannerClick[]

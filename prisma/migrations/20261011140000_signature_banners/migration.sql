@@ -21,6 +21,8 @@ CREATE TABLE IF NOT EXISTS "SignatureBanner" (
   "token" TEXT NOT NULL,
   "sentCount" INTEGER NOT NULL DEFAULT 0,
   "clickCount" INTEGER NOT NULL DEFAULT 0,
+  "anonymousDay" TEXT,
+  "anonymousClicks" INTEGER NOT NULL DEFAULT 0,
   "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
   "updatedAt" TIMESTAMP(3) NOT NULL,
   CONSTRAINT "SignatureBanner_pkey" PRIMARY KEY ("id"),
@@ -69,6 +71,8 @@ ALTER TABLE "Communication" ADD COLUMN IF NOT EXISTS "bannerClickedAt" TIMESTAMP
 -- token, so a click is attributable whether or not open tracking is on.
 ALTER TABLE "Communication" ADD COLUMN IF NOT EXISTS "bannerRef" TEXT;
 CREATE UNIQUE INDEX IF NOT EXISTS "Communication_bannerRef_key" ON "Communication"("bannerRef");
+-- The last click COUNTED for the email: what makes repeated fetches of one link one click.
+ALTER TABLE "Communication" ADD COLUMN IF NOT EXISTS "bannerLastClickAt" TIMESTAMP(3);
 
 -- New tables reach crm_app through ALTER DEFAULT PRIVILEGES; the policy is
 -- what makes the grant safe. One workspace never reads or writes another's.

@@ -5,7 +5,12 @@ import { contactName } from "./format";
 import { sendPushToAll } from "./push";
 import {
   BANNER_REF,
+  CLICK_MAX_ANONYMOUS_PER_DAY,
+  anonymousClickDay,
   bannerRecipients,
+  clickDedupeCutoff,
+  clickRetentionCutoff,
+  emailClickAllowed,
   bannerClickUrl,
   bannerHtml,
   bannerPosition,
@@ -126,9 +131,9 @@ export async function resolveBannerLink(token: string): Promise<BannerLink | nul
  * when that is known, mark that email's timeline entry and tell whoever sent it
  * (both once per email).
  *
- * Kept apart from resolveBannerLink on purpose. The customer is sent on as soon
- * as the destination is known; if anything here throws, the caller logs it and
- * the customer still reaches the page they clicked for.
+ * Kept apart from resolveBannerLink on purpose, and run AFTER the customer has
+ * been sent on (the route defers it): nothing here — a slow write, a stalled
+ * push service, an error — can delay or lose the page they clicked for.
  */
 export async function recordBannerClick(link: BannerLink, emailRef: string | null): Promise<void> {
   const { tenantId, bannerId } = link;
@@ -140,8 +145,41 @@ export async function recordBannerClick(link: BannerLink, emailRef: string | nul
         })
       : null;
 
+  /*
+   * IS THIS CLICK COUNTED? Decided by the database, one statement per gate, so
+   * that two fetches of the same link arriving together cannot both pass (a mail
+   * gateway scanning a link often fetches it twice). See the bounds in
+   * lib/signatureBanners.ts. A click that is not counted writes NOTHING more.
+   */
+  const now = new Date();
+  if (email) {
+    const gate = await prisma.communication.updateMany({
+      where: { id: email.id, tenantId, OR: [{ bannerLastClickAt: null }, { bannerLastClickAt: { lt: clickDedupeCutoff(now) } }] },
+      data: { bannerLastClickAt: now },
+    });
+    if (gate.count !== 1) return;
+    const counted = await prisma.signatureBannerClick.count({ where: { tenantId, bannerId, communicationId: email.id } });
+    if (!emailClickAllowed(counted)) return;
+  } else {
+    const day = anonymousClickDay(now);
+    // The first anonymous click of a new day resets the day's count; any other takes a place under the cap.
+    const firstToday = await prisma.signatureBanner.updateMany({
+      where: { id: bannerId, tenantId, OR: [{ anonymousDay: null }, { anonymousDay: { not: day } }] },
+      data: { anonymousDay: day, anonymousClicks: 1 },
+    });
+    if (firstToday.count !== 1) {
+      const underCap = await prisma.signatureBanner.updateMany({
+        where: { id: bannerId, tenantId, anonymousDay: day, anonymousClicks: { lt: CLICK_MAX_ANONYMOUS_PER_DAY } },
+        data: { anonymousClicks: { increment: 1 } },
+      });
+      if (underCap.count !== 1) return;
+    }
+  }
+
   await prisma.signatureBanner.updateMany({ where: { id: bannerId, tenantId }, data: { clickCount: { increment: 1 } } });
   await prisma.signatureBannerClick.create({ data: { tenantId, bannerId, communicationId: email?.id ?? null } });
+  // Old click rows go as new ones arrive, so the table cannot grow without end. The totals on the banner stay.
+  await prisma.signatureBannerClick.deleteMany({ where: { tenantId, bannerId, clickedAt: { lt: clickRetentionCutoff(now) } } }).catch(() => {});
 
   // "First click" is decided by the database, in one statement: of two clicks
   // arriving together only one finds the stamp empty, so the sender is told once.
