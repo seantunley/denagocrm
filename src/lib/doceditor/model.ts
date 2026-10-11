@@ -121,6 +121,17 @@ export const headingBlockSchema = z.object({
 export const imageBlockSchema = z.object({
   ...base, type: z.literal("image"),
   src: z.string().default(""), alt: z.string().default(""), widthPct: z.number().default(100), rounded: z.boolean().default(false),
+  /**
+   * A shape for the picture to fill or fit (see ./imageFrame.ts). All optional:
+   * an image saved before these existed has none and frames exactly as it did.
+   */
+  aspect: z.enum(["original", "1:1", "4:3", "3:2", "16:9", "3:4", "2:3"]).optional(),
+  fit: z.enum(["cover", "contain"]).optional(),
+  /** Where the picture is held when it is cropped to fill: 0–100 across and down. Unset = the centre. */
+  focalX: z.number().optional(),
+  focalY: z.number().optional(),
+  /** A line of text under the picture. */
+  caption: z.string().optional(),
 });
 export const dividerBlockSchema = z.object({
   ...base, type: z.literal("divider"), color: colorField("#e2e8f0"), thickness: z.number().default(1),

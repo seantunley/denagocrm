@@ -8,6 +8,7 @@
  */
 import { cssColor } from "./css";
 import { blockBoxCss, boxCssText, columnNeedsStretch } from "./blockBox";
+import { imageFrame, imageFrameCss } from "./imageFrame";
 import type {
   DocumentModel, DocumentBlock, DocumentColumn, DocumentRow, DocumentPage,
   PricingBlock, PricingLine, TableBlock, OverlayField, DocStyle,
@@ -193,7 +194,9 @@ function blockHtml(block: DocumentBlock, ctx: RenderCtx, style: DocStyle, logoDa
       const raw = tok(String(block.src || ""), ctx).trim();
       const src = /^data:image\//i.test(raw) ? raw : storedFileSrc(raw);
       if (!src || !/^(https:|data:image\/|\/api\/stored\?)/i.test(src)) return "";
-      return wrap(`<img src="${esc(src)}" alt="${esc(block.alt)}" style="width:${Math.max(5, Math.min(100, block.widthPct))}%;height:auto;${block.rounded ? "border-radius:8px;" : ""}"/>`);
+      // The frame (width, shape, crop, corners) comes from imageFrame — the editor page reads it too.
+      const caption = block.caption?.trim() ? `<div style="font-size:8.5pt;color:#64748b;margin-top:4px;line-height:1.35">${esc(tok(block.caption, ctx))}</div>` : "";
+      return wrap(`<img src="${esc(src)}" alt="${esc(block.alt)}" style="${imageFrameCss(imageFrame(block))}"/>${caption}`);
     }
     case "divider":
       return `<hr style="border:none;border-top:${block.thickness}px solid ${cssColor(block.color, "#ea580c")};margin:10px 0"/>`;
