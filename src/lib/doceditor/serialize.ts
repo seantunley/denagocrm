@@ -23,6 +23,7 @@ import { layoutRowsFor, resolveOverflowGroups } from "./overflow";
 import { storedFileSrc } from "@/lib/storedFileSrc";
 import { DOCUMENT_FONT_FACE } from "./documentFont";
 import { docType, fontStack } from "./docStyles";
+import { tableLook } from "./tableStyle";
 import { DEFAULT_REGIONAL, formatZAR, regionalFrom, type Regional } from "@/lib/format";
 import type { TableRow } from "@/lib/docbuilder/blocks";
 
@@ -99,17 +100,19 @@ function pricingHtml(block: PricingBlock, ctx: RenderCtx): string {
   // where it doesn't (the editor canvas), and never a code Intl would reject.
   const cur = ctx?.regional ?? { currency: regionalFrom({ currency: b.currency }).currency, locale: DEFAULT_REGIONAL.locale };
   const cols = ["Item", "Qty", "Unit", b.showDiscount ? "Disc" : null, b.showTax ? "Tax" : null, "Amount"].filter(Boolean) as string[];
-  const head = cols.map((c, i) => `<th style="text-align:${i === 0 ? "left" : "right"};background:${cssColor(b.accent, "#ea580c")};color:#fff;padding:7px 9px;font-size:8pt;letter-spacing:.5px;text-transform:uppercase">${esc(c)}</th>`).join("");
+  const look = tableLook(b.tableStyle, [7, 9]);
+  const cell = `padding:${look.pad};${look.cellRule}`;
+  const head = cols.map((c, i) => `<th style="text-align:${i === 0 ? "left" : "right"};background:${cssColor(b.accent, "#ea580c")};color:#fff;padding:${look.pad};font-size:8pt;letter-spacing:.5px;text-transform:uppercase">${esc(c)}</th>`).join("");
   const body = rows.map((r, i) => {
     const cells = [
-      `<td style="padding:7px 9px;border-bottom:.5px solid #e2e8f0"><div style="font-weight:600;color:#020617">${esc(r.line.name)}</div>${r.line.description ? `<div style="font-size:8pt;color:#64748b">${esc(r.line.description)}</div>` : ""}</td>`,
-      `<td style="text-align:right;padding:7px 9px;border-bottom:.5px solid #e2e8f0">${esc(r.line.qty)}</td>`,
-      `<td style="text-align:right;padding:7px 9px;border-bottom:.5px solid #e2e8f0">${money(r.line.unitPrice, cur)}</td>`,
-      b.showDiscount ? `<td style="text-align:right;padding:7px 9px;border-bottom:.5px solid #e2e8f0">${r.line.discountPct || 0}%</td>` : "",
-      b.showTax ? `<td style="text-align:right;padding:7px 9px;border-bottom:.5px solid #e2e8f0">${money(r.tax, cur)}</td>` : "",
-      `<td style="text-align:right;padding:7px 9px;border-bottom:.5px solid #e2e8f0;font-weight:600">${money(r.total, cur)}</td>`,
+      `<td style="${cell}"><div style="font-weight:600;color:#020617">${esc(r.line.name)}</div>${r.line.description ? `<div style="font-size:8pt;color:#64748b">${esc(r.line.description)}</div>` : ""}</td>`,
+      `<td style="text-align:right;${cell}">${esc(r.line.qty)}</td>`,
+      `<td style="text-align:right;${cell}">${money(r.line.unitPrice, cur)}</td>`,
+      b.showDiscount ? `<td style="text-align:right;${cell}">${r.line.discountPct || 0}%</td>` : "",
+      b.showTax ? `<td style="text-align:right;${cell}">${money(r.tax, cur)}</td>` : "",
+      `<td style="text-align:right;${cell};font-weight:600">${money(r.total, cur)}</td>`,
     ].join("");
-    return `<tr style="background:${i % 2 ? "#f8fafc" : "#fff"}">${cells}</tr>`;
+    return `<tr style="${look.tr}background:${look.rowBg(i)}">${cells}</tr>`;
   }).join("");
   const totals = `
     <div style="display:flex;justify-content:flex-end;margin-top:8px">
@@ -119,7 +122,7 @@ function pricingHtml(block: PricingBlock, ctx: RenderCtx): string {
         <tr><td style="padding:6px 10px;font-weight:700;color:${cssColor(b.accent, "#ea580c")}">Total</td><td style="padding:6px 0;text-align:right;font-weight:700;font-size:12pt;color:${cssColor(b.accent, "#ea580c")}">${money(total, cur)}</td></tr>
       </table>
     </div>`;
-  return `<div style="margin:6px 0"><table style="width:100%;border-collapse:collapse"><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>${totals}</div>`;
+  return `<div style="margin:6px 0"><table style="width:100%;border-collapse:collapse"><thead${theadAttr(look)}><tr>${head}</tr></thead><tbody>${body}</tbody></table>${totals}</div>`;
 }
 function parseMoney(s?: string): number {
   if (!s) return 0;
@@ -163,10 +166,19 @@ export function lineItemCell(
   }
 }
 
+/** The style attribute for a <thead> — nothing at all unless the heading is set not to repeat. */
+const theadAttr = (look: { thead: string }) => (look.thead ? ` style="${look.thead}"` : "");
+
 function tableHtml(b: TableBlock): string {
-  const head = b.columns.map((c) => `<th style="text-align:${c.align};background:${cssColor(b.headerBg, "#020617")};color:${cssColor(b.headerColor, "#ffffff")};padding:6px 8px;font-size:8pt;width:${c.widthPct}%">${esc(c.header)}</th>`).join("");
-  const body = b.rows.map((r, i) => `<tr style="background:${i % 2 ? "#f8fafc" : "#fff"}">${b.columns.map((c, ci) => `<td style="text-align:${c.align};padding:6px 8px;border-bottom:.5px solid #e2e8f0;font-size:10pt">${esc(r.cells[ci]?.value ?? "")}</td>`).join("")}</tr>`).join("");
-  return `<table style="width:100%;border-collapse:collapse;margin:6px 0"><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>`;
+  const look = tableLook(b.tableStyle, [6, 8]);
+  const head = b.columns.map((c) => `<th style="text-align:${c.align};background:${cssColor(b.headerBg, "#020617")};color:${cssColor(b.headerColor, "#ffffff")};padding:${look.pad};font-size:8pt;width:${c.widthPct}%">${esc(c.header)}</th>`).join("");
+  const body = b.rows.map((r, i) => {
+    // A group heading: its first cell, across the table. A subtotal: an ordinary row, bold, ruled above.
+    if (r.kind === "group") return `<tr style="${look.tr}background:#f1f5f9"><td colspan="${b.columns.length}" style="padding:${look.pad};${look.cellRule};font-size:8.5pt;font-weight:700;letter-spacing:.5px;text-transform:uppercase;color:#334155">${esc(r.cells[0]?.value ?? "")}</td></tr>`;
+    const subtotal = r.kind === "subtotal" ? ";font-weight:700;border-top:1px solid #94a3b8" : "";
+    return `<tr style="${look.tr}background:${r.kind === "subtotal" ? "#fff" : look.rowBg(i)}">${b.columns.map((c, ci) => `<td style="text-align:${c.align};padding:${look.pad};${look.cellRule};font-size:10pt${subtotal}">${esc(r.cells[ci]?.value ?? "")}</td>`).join("")}</tr>`;
+  }).join("");
+  return `<table style="width:100%;border-collapse:collapse;margin:6px 0"><thead${theadAttr(look)}><tr>${head}</tr></thead><tbody>${body}</tbody></table>`;
 }
 
 function blockHtml(block: DocumentBlock, ctx: RenderCtx, style: DocStyle, logoDataUri?: string): string {
@@ -232,11 +244,13 @@ function blockHtml(block: DocumentBlock, ctx: RenderCtx, style: DocStyle, logoDa
       // Conditional columns: only when bound to a record, drop columns whose condition
       // is false. An unbound (globals-only) preview keeps all columns as a placeholder.
       const cols = ctx?.bound ? block.columns.filter((c) => evaluateCondition(c.showIf, ctx.vars)) : block.columns;
-      const head = `<tr>${cols.map((c) => `<th style="text-align:${c.align};background:${cssColor(block.headerBg, "#020617")};color:${cssColor(block.headerColor, "#ffffff")};padding:7px 9px;font-size:8pt;letter-spacing:.5px;text-transform:uppercase">${esc(c.header)}</th>`).join("")}</tr>`;
+      const look = tableLook(block.tableStyle, [7, 9]);
+      const width = (c: (typeof cols)[number]) => (c.widthPct ? `;width:${Math.max(1, Math.min(100, Number(c.widthPct) || 0))}%` : "");
+      const head = `<tr>${cols.map((c) => `<th style="text-align:${c.align};background:${cssColor(block.headerBg, "#020617")};color:${cssColor(block.headerColor, "#ffffff")};padding:${look.pad};font-size:8pt;letter-spacing:.5px;text-transform:uppercase${width(c)}">${esc(c.header)}</th>`).join("")}</tr>`;
       const body = rows.length
-        ? rows.map((r, i) => `<tr style="background:${i % 2 ? "#f8fafc" : "#fff"}">${cols.map((c) => `<td style="text-align:${c.align};padding:7px 9px;border-bottom:.5px solid #e2e8f0">${esc(lineItemCell(c.key, r, block.vatRate, ctx?.regional))}</td>`).join("")}</tr>`).join("")
+        ? rows.map((r, i) => `<tr style="${look.tr}background:${look.rowBg(i)}">${cols.map((c) => `<td style="text-align:${c.align};padding:${look.pad};${look.cellRule}">${esc(lineItemCell(c.key, r, block.vatRate, ctx?.regional))}</td>`).join("")}</tr>`).join("")
         : `<tr><td colspan="${cols.length}" style="padding:7px 9px;color:#94a3b8">Line items appear here when linked to a record</td></tr>`;
-      return `<table style="width:100%;border-collapse:collapse;margin:6px 0"><thead>${head}</thead><tbody>${body}</tbody></table>`;
+      return `<table style="width:100%;border-collapse:collapse;margin:6px 0"><thead${theadAttr(look)}>${head}</thead><tbody>${body}</tbody></table>`;
     }
     case "totalBand": {
       // The amount must never wrap. It is the one number on the page a reader

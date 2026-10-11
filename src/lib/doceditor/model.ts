@@ -106,6 +106,23 @@ export const bindingSchema = z.object({
 });
 export type Binding = z.infer<typeof bindingSchema>;
 
+/**
+ * How a table is drawn (see ./tableStyle.ts) — shared by the plain table, the
+ * standard line-items table and the pricing table. Every part is optional and
+ * its absence is the look these tables always had: normal spacing, a rule under
+ * each row, alternate rows tinted, the heading repeated on each printed page.
+ */
+export const tableStyleSchema = z.object({
+  density: z.enum(["compact", "normal", "relaxed"]),
+  borders: z.enum(["rows", "grid", "none"]),
+  zebra: z.boolean(),
+  /** Print the heading row again at the top of each page the table runs onto. */
+  repeatHeader: z.boolean(),
+  /** Never split one row across two pages. */
+  keepRows: z.boolean(),
+}).partial().optional();
+export type TableStyle = z.infer<typeof tableStyleSchema>;
+
 // ── blocks (flow content) ───────────────────────────────────────────
 const base = { id: z.string(), settings: layoutSettingsSchema, locked: z.boolean().default(false), hidden: z.boolean().default(false) };
 
@@ -161,13 +178,16 @@ export const pricingBlockSchema = z.object({
   showTax: z.boolean().default(true),
   showDiscount: z.boolean().default(true),
   accent: colorField("#ea580c"),
+  tableStyle: tableStyleSchema,
 });
 
 export const tableBlockSchema = z.object({
   ...base, type: z.literal("table"),
   columns: z.array(z.object({ header: z.string(), align: z.enum(["left", "center", "right"]).default("left"), widthPct: z.number().default(25) })).default([]),
-  rows: z.array(z.object({ cells: z.array(z.object({ value: z.string() })) })).default([]),
+  /** `kind`: a group heading (its first cell, across the whole table) or a subtotal row (bold, ruled above). Unset = an ordinary row. */
+  rows: z.array(z.object({ cells: z.array(z.object({ value: z.string() })), kind: z.enum(["group", "subtotal"]).optional() })).default([]),
   headerBg: colorField("#020617"), headerColor: colorField("#ffffff"),
+  tableStyle: tableStyleSchema,
 });
 
 /**
@@ -209,6 +229,8 @@ export const lineItemColumnSchema = z.object({
   header: z.string(),
   align: z.enum(["left", "right"]).default("left"),
   showIf: z.string().default(""),   // safe expression against the record; empty = always show
+  /** A fixed share of the table's width, in percent. Unset = sized by its content, as before. */
+  widthPct: z.number().optional(),
 });
 export const lineItemsBlockSchema = z.object({
   ...base, type: z.literal("lineItems"),
@@ -222,6 +244,8 @@ export const lineItemsBlockSchema = z.object({
     { key: "unitPrice", header: "Unit price", align: "right", showIf: "" },
     { key: "total", header: "Total", align: "right", showIf: "" },
   ]),
+  /** Standard look only: the showcase and classic looks are drawn to fixed measurements the page layout depends on. */
+  tableStyle: tableStyleSchema,
 });
 export type LineItemColumn = z.infer<typeof lineItemColumnSchema>;
 export const totalBandBlockSchema = z.object({
