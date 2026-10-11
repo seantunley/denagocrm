@@ -548,6 +548,16 @@ jobs:
       - name: Inbox -- our own Meta echo is not recorded twice
         run: npm run test:meta-echo
 
+      # Spam screening decides whether a customer message exists in the CRM at
+      # all, so the claims that matter are about what is and is NOT in the
+      # database afterwards: a held message leaves no contact, message,
+      # conversation or lead; restoring it admits it exactly once under three
+      # simultaneous clicks; a redelivery is not judged twice; a failing
+      # classifier never costs a message; one workspace's blocks and examples do
+      # not exist for another. The classifier's HTTP call is scripted.
+      - name: Inbox -- spam screening holds, restores once, and never loses a message
+        run: npm run test:inbound-screening
+
       # In-person signing was dead for two months with every structural test
       # green: the screen handed the signing form a stored digest, and the route
       # hashed it again and found nothing. Each half was right on its own. Only
