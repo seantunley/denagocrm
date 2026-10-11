@@ -22,7 +22,7 @@ import type { HomeNumber } from "@/lib/home/focusRules";
 function NumberTile({ n }: { n: HomeNumber }) {
   const Trend = n.direction === "up" ? ArrowUpRight : n.direction === "down" ? ArrowDownRight : null;
   return (
-    <Link href={n.href} className="group min-w-0 rounded-xl px-3 py-2.5 transition-colors hover:bg-accent/40 focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary">
+    <Link href={n.href} className="group min-w-[9.5rem] shrink-0 snap-start rounded-xl px-3 py-2.5 transition-colors hover:bg-accent/40 focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary sm:min-w-0 sm:shrink">
       <p className="truncate text-xs text-muted-foreground">{n.label}</p>
       <p className={`mt-0.5 truncate text-2xl font-semibold tabular-nums tracking-tight ${n.alert ? "text-red-400" : "text-foreground"}`}>{n.value}</p>
       {n.progress !== undefined && (
@@ -42,7 +42,9 @@ export function FocusHome({ focus, mine, canSeeTeam }: { focus: HomeFocus; mine:
   return (
     <div className="space-y-6">
       {focus.numbers.length > 0 && (
-        <section aria-label="At a glance" className="grid grid-cols-2 gap-x-2 gap-y-1 border-y border-border/60 py-2 sm:grid-cols-3 lg:grid-cols-5">
+        // On a phone the numbers are one row that scrolls sideways, so the queue — the reason to open this
+        // page — is not pushed down a screen. From a tablet up they are a grid.
+        <section aria-label="At a glance" className="-mx-1 flex snap-x gap-1 overflow-x-auto border-y border-border/60 py-2 [scrollbar-width:none] sm:mx-0 sm:grid sm:grid-cols-3 sm:gap-x-2 sm:gap-y-1 sm:overflow-visible lg:grid-cols-5">
           {focus.numbers.map((n) => <NumberTile key={n.key} n={n} />)}
         </section>
       )}
@@ -71,9 +73,10 @@ export function FocusHome({ focus, mine, canSeeTeam }: { focus: HomeFocus; mine:
             ) : (
               <ul className="divide-y divide-border/60 border-y border-border/60">
                 {focus.queue.map((lead) => (
-                  <li key={lead.id} className="flex items-center gap-3 py-3">
+                  // On a phone the action sits under the reason, full width, so neither squeezes the other.
+                  <li key={lead.id} className="flex flex-wrap items-center gap-x-3 gap-y-2 py-3">
                     <LeadScoreBadge score={lead.score} />
-                    <div className="min-w-0 flex-1">
+                    <div className="min-w-0 flex-1 basis-40">
                       <p className="flex flex-wrap items-baseline gap-x-2">
                         <Link href={`/leads/${lead.id}`} className="truncate text-sm font-medium text-foreground hover:underline">{lead.name}</Link>
                         {lead.valueCents > 0 && <span className="text-xs tabular-nums text-muted-foreground">{formatZAR(lead.valueCents)}</span>}
@@ -82,7 +85,7 @@ export function FocusHome({ focus, mine, canSeeTeam }: { focus: HomeFocus; mine:
                       {/* Why it is here. A ranked list with no reasons is a list nobody trusts. */}
                       <p className="mt-0.5 truncate text-xs text-muted-foreground">{lead.reasons.slice(0, 2).join(" · ")}</p>
                     </div>
-                    <Link href={`/leads/${lead.id}`} className="btn-secondary btn-sm shrink-0">
+                    <Link href={`/leads/${lead.id}`} className="btn-secondary btn-sm w-full shrink-0 justify-center sm:w-auto">
                       {lead.action}
                       <ArrowRight className="size-3.5" aria-hidden />
                     </Link>
