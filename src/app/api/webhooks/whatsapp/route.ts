@@ -10,6 +10,7 @@ import { voiceLanguage } from "@/lib/voiceLanguage";
 import { saveFile } from "@/lib/storage";
 import { runWhatsAppBot } from "@/lib/flowRun";
 import { handleStaffWhatsApp } from "@/lib/assistantWhatsApp";
+import { linkScreening, screenInbound, type ScreenOutcome } from "@/lib/inboundScreening/screen";
 import { withChannelTenantScope, validateInSystemScope } from "@/lib/tenantScopeEntry";
 import { reportUnmappedEndpoint } from "@/lib/channelRegistration";
 import { resolveChannelTenant } from "@/lib/channelTenant";
@@ -109,10 +110,31 @@ export async function POST(req: NextRequest) {
               // question must never become a customer Communication or a bot
               // reply. Every no (switch off, unknown number) is today's path,
               // unchanged. Images and files from staff take today's path too.
+              // Spam screening: asked AFTER the staff check (a staff question is
+              // never a customer message) and BEFORE anything is recorded,
+              // downloaded, transcribed, pushed or answered. True = the message
+              // is held in quarantine and this event is finished: returning
+              // completes the claim, so Meta does not redeliver it. With
+              // screening off, or on any failure inside it, this is always false.
+              let screened: ScreenOutcome | null = null;
+              const held = async (kind: "text" | "choice" | "media" | "voice", text: string, loggedText: string, isMenuReply = false) => {
+                screened = await screenInbound({
+                  channel: "whatsapp", senderId: from, providerId: String(message.id ?? ""), senderName: profileName,
+                  kind, text, isMenuReply, payload: { via: "whatsapp", from, profileName, loggedText },
+                });
+                return !screened.admit;
+              };
+              // After the message is recorded exactly as before: note on its
+              // screening row whose message it turned out to be.
+              const link = async (recorded: { contactId: string | null } | undefined) => {
+                if (screened) await linkScreening(screened, recorded?.contactId);
+              };
+
               if (message.type === "text") {
                 const text = message.text?.body ?? "";
                 if (await handleStaffWhatsApp(from, { text })) return;
-                await recordInboundWhatsApp(from, profileName, text, String(message.id ?? ""));
+                if (await held("text", text, text)) return;
+                await link(await recordInboundWhatsApp(from, profileName, text, String(message.id ?? "")));
                 await runWhatsAppBot(from, { text }, { entryContext });
               } else if (message.type === "interactive") {
                 const btn = message.interactive?.button_reply;
@@ -122,11 +144,14 @@ export async function POST(req: NextRequest) {
                 if (!id) return;
                 // A tapped quick reply: its title is the staff member's next question.
                 if (await handleStaffWhatsApp(from, { text: title })) return;
-                await recordInboundWhatsApp(from, profileName, `👆 ${title}`, String(message.id ?? ""));
+                if (await held("choice", title, `👆 ${title}`, true)) return;
+                await link(await recordInboundWhatsApp(from, profileName, `👆 ${title}`, String(message.id ?? "")));
                 await runWhatsAppBot(from, { text: title, choiceId: id }, { entryContext });
               } else if (message.type === "image" || message.type === "document" || message.type === "video") {
                 const media = message.image ?? message.document ?? message.video;
                 const caption: string = media?.caption ?? "";
+                // Before the download: a quarantined sender's file is never fetched or stored.
+                if (await held("media", caption, `📎 ${caption || "[file]"}`)) return;
                 let fileUrl: string | undefined;
                 if (media?.id) {
                   const dl = await fetchWhatsAppMedia(media.id).catch(() => null);
@@ -146,7 +171,7 @@ export async function POST(req: NextRequest) {
                     fileUrl = await saveFile(dl.buffer, `whatsapp.${ext}`, dl.contentType, channelTenantId).catch(() => undefined);
                   }
                 }
-                await recordInboundWhatsApp(from, profileName, `📎 ${caption || "[file]"}`, String(message.id ?? ""));
+                await link(await recordInboundWhatsApp(from, profileName, `📎 ${caption || "[file]"}`, String(message.id ?? "")));
                 await runWhatsAppBot(from, { text: caption, fileUrl }, { entryContext });
               } else if (message.type === "audio" || message.type === "voice") {
                 const mediaId: string | undefined = message.audio?.id ?? message.voice?.id;
@@ -154,13 +179,17 @@ export async function POST(req: NextRequest) {
                 // Handed the media ID, not the audio: the voice note is fetched and
                 // transcribed there only once the number is known to be staff.
                 if (await handleStaffWhatsApp(from, { voiceMediaId: mediaId })) return;
+                // Before the download and the (paid) transcription. A voice note has
+                // no readable text yet, so only a sender block can hold it here —
+                // unheard audio is never judged to be spam.
+                if (await held("voice", "", "🎤 [Voice note]")) return;
                 const media = await fetchWhatsAppMedia(mediaId).catch(() => null);
                 const heard = media ? await transcribeVoiceDetailed(media.buffer, media.contentType).catch(() => null) : null;
                 const transcript = heard?.text ?? null;
                 // Afrikaans / isiZulu / … : shown to staff, and answered in kind.
                 const language = voiceLanguage(heard?.languageCode, heard?.languageProbability);
                 const logged = transcript ? `🎤 ${language ? `(${language.name}) ` : ""}${transcript}` : "🎤 [Voice note]";
-                await recordInboundWhatsApp(from, profileName, logged, String(message.id ?? ""));
+                await link(await recordInboundWhatsApp(from, profileName, logged, String(message.id ?? "")));
                 await runWhatsAppBot(from, { text: transcript ?? "[The customer sent a voice note.]" }, { voiceNote: true, language, entryContext });
               }
             });

@@ -357,7 +357,11 @@ test("session GUCs really do span separate statements, in every migration that u
   // the roles that could already send a document for signature. It reads Role
   // and RolePermission and writes RolePermission, all FORCE RLS — without the
   // escape the SELECT matches no role and nothing is granted.
-  assert.equal(spans.length, 20, "twenty migrations set a session GUC");
+  //
+  // 20 → 21: 20261011090000_inbound_screening gives `inbox.spam` to every role
+  // that already holds `inbox.reply`. Same tables, same reason: without the
+  // escape the SELECT over RolePermission matches nothing and nobody is granted.
+  assert.equal(spans.length, 21, "twenty-one migrations set a session GUC");
   for (const { name, between } of spans) {
     assert.ok(between > 0, `${name}: a SET with no following statement would not need session pinning`);
   }
