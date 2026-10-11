@@ -1098,11 +1098,17 @@ model AssistantPendingAction {
   /// The ActionCard as proposed (assistantActions.ts) — re-checked when it runs.
   card        Json
   expiresAt   DateTime
-  /// Set by the one tap that claimed it; a second tap finds it taken.
+  /// Set by the one tap that claimed it; a second tap finds it taken. Cleared
+  /// again only when the action reported that it changed nothing.
   confirmedAt DateTime?
+  /// It ran and succeeded. Never runs again.
+  completedAt DateTime?
+  /// It threw part-way, so how far it got is unknown. Never runs again.
+  failedAt    DateTime?
   createdAt   DateTime  @default(now())
 
   @@index([tenantId, userId, createdAt])
+  @@index([tenantId, expiresAt])
 }
 
 /// What the assistant has learned. kind: "memory" (workspace facts and

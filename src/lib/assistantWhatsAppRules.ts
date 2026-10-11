@@ -139,14 +139,32 @@ export function parseConfirmId(choiceId: string | null | undefined): string | nu
   return match ? match[1] : null;
 }
 
-/** What the person reads above the Confirm button: what will happen, in full, and until when. */
-export function confirmPrompt(card: { title: string; text?: unknown; reason?: unknown; detail?: unknown }): string {
-  const lines = [card.title];
-  for (const extra of [card.text, card.detail, card.reason]) {
-    if (typeof extra === "string" && extra.trim()) lines.push(extra.trim());
-  }
-  lines.push(`Tap Confirm within ${PENDING_ACTION_TTL_MS / 60_000} minutes and I'll do it. Nothing changes until you do.`);
-  return lines.join("\n\n").slice(0, WA_BODY_MAX);
+/**
+ * What the person is shown before they can tap Confirm — ALL of it, or nothing.
+ *
+ * THE RULE: what Confirm writes is exactly what was shown. A button message's
+ * body holds 1,024 characters and a note can be 2,000, so the first version cut
+ * the prompt to fit: the person confirmed a note whose second half they had
+ * never seen. Nothing here is ever truncated. When the whole thing fits the
+ * button message, that is all there is. When it does not, the full text goes
+ * first as ordinary messages (4,096 characters each, split on a boundary and
+ * never dropped) and the button message points back at them. When even the
+ * pointer cannot be shown whole, there is no button at all (null): that task is
+ * confirmed in the CRM.
+ *
+ * Every field of a card that the person would otherwise be agreeing to unseen
+ * is listed here: a note's text, a scheduled question, a meeting's detail.
+ */
+export function confirmMessages(card: { title: string; text?: unknown; question?: unknown; detail?: unknown; reason?: unknown }): { before: string[]; body: string } | null {
+  const shown = [card.title, card.text, card.question, card.detail, card.reason]
+    .filter((part): part is string => typeof part === "string" && part.trim().length > 0)
+    .map((part) => part.trim());
+  const footer = `Tap Confirm within ${PENDING_ACTION_TTL_MS / 60_000} minutes and I'll do it. Nothing changes until you do.`;
+  const whole = [...shown, footer].join("\n\n");
+  if (whole.length <= WA_BODY_MAX) return { before: [], body: whole };
+  const before = splitForWhatsApp(shown.join("\n\n"));
+  const body = `${card.title.trim()}\n\nThe full text is in the message${before.length === 1 ? "" : "s"} above — read ${before.length === 1 ? "it" : "them"} first. ${footer}`;
+  return body.length <= WA_BODY_MAX ? { before, body } : null;
 }
 
 /** A linked number as it is shown back: the last three digits only. */

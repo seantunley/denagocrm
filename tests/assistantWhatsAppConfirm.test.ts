@@ -9,7 +9,7 @@ import {
   PENDING_ACTION_TTL_MS,
   WHATSAPP_CONFIRMABLE,
   confirmButtonId,
-  confirmPrompt,
+  confirmMessages,
   parseConfirmId,
   splitForWhatsApp_cards,
   whatsappConfirmOn,
@@ -61,15 +61,51 @@ test("a Confirm button names its pending row and nothing else; the prompt says w
   for (const not of [null, undefined, "", "dax:0", "daxc:", "daxc:short", `daxc:${id}; DROP`, `xdaxc:${id}`, `daxc:${id.toUpperCase()}`]) {
     assert.equal(parseConfirmId(not), null, String(not));
   }
-  const prompt = confirmPrompt({ title: "Add a pinned note to Anna's lead", text: "Wants white.", reason: "She asked twice." });
-  assert.match(prompt, /^Add a pinned note to Anna's lead\n\nWants white\.\n\nShe asked twice\.\n\nTap Confirm within 15 minutes/);
-  assert.match(prompt, /Nothing changes until you do\./);
-  assert.ok(confirmPrompt({ title: "x".repeat(5000) }).length <= 1024, "fits a WhatsApp button message");
+  const prompt = confirmMessages({ title: "Add a pinned note to Anna's lead", text: "Wants white.", reason: "She asked twice." })!;
+  assert.deepEqual(prompt.before, [], "it all fits the button message");
+  assert.match(prompt.body, /^Add a pinned note to Anna's lead\n\nWants white\.\n\nShe asked twice\.\n\nTap Confirm within 15 minutes/);
+  assert.match(prompt.body, /Nothing changes until you do\./);
+  // A scheduled question and a meeting's detail are shown too — they are what is being agreed to.
+  assert.match(confirmMessages({ title: "Every Monday at 07:00", question: "Which deals went quiet?" })!.body, /Which deals went quiet\?/);
+  assert.match(confirmMessages({ title: "Meeting — Fri 10:00", detail: "With Donovan, 45 minutes" })!.body, /With Donovan, 45 minutes/);
+});
+
+test("WHAT CONFIRM WRITES IS EXACTLY WHAT WAS SHOWN: a long note is never cut to fit the button", () => {
+  const squash = (s: string) => s.replace(/\s+/g, "");
+  // Distinct sentences, so a missing or repeated stretch cannot hide.
+  const sentences = (n: number) => Array.from({ length: n }, (_, i) => `Sentence number ${i + 1} of the note says something the customer asked for.`).join(" ");
+  for (const length of [900, 1100, 2000]) {
+    const text = sentences(40).slice(0, length).trim();
+    const title = "Add a note to Anna's lead";
+    const messages = confirmMessages({ title, text, reason: "She asked twice." })!;
+    assert.ok(messages, `${length}: offered`);
+    assert.ok(messages.body.length <= 1024, `${length}: the button message fits WhatsApp's limit as written, not by cutting`);
+    for (const part of messages.before) assert.ok(part.length <= 4096);
+    // Every character of the note is in what the person was sent.
+    const sent = squash([...messages.before, messages.body].join(" "));
+    assert.ok(sent.includes(squash(text)), `${length}: the whole note text was shown`);
+    assert.ok(sent.includes(squash("She asked twice.")), `${length}: and the reason`);
+    if (messages.before.length) {
+      assert.match(messages.body, /^Add a note to Anna's lead\n\nThe full text is in the message above — read it first\. Tap Confirm within 15 minutes/);
+      assert.ok(!messages.body.includes("Sentence number"), "the button message does not carry a partial copy that could be mistaken for the whole");
+    }
+  }
+  // The old behaviour, named: 1,024 characters of a 2,000-character note.
+  const long = sentences(40).slice(0, 2000);
+  assert.equal(confirmMessages({ title: "t", text: long })!.before.join("").length >= long.trim().length, true);
+  // A note longer than one ordinary message is split, not dropped.
+  const huge = sentences(200);
+  const split = confirmMessages({ title: "t", text: huge })!;
+  assert.ok(split.before.length >= 2);
+  assert.equal(squash(split.before.join(" ")), squash(`t\n\n${huge}`));
+  assert.match(split.body, /The full text is in the messages above — read them first\./);
+  // When even the pointer cannot be shown whole, there is NO button: it is confirmed in the CRM.
+  assert.equal(confirmMessages({ title: "x".repeat(1100), text: "y" }), null);
 });
 
 /* ── the confirm step, run against fakes ───────────────────────────────── */
 
-type Pending = { id: string; tenantId: string; userId: string; card: Record<string, unknown>; expiresAt: Date; confirmedAt: Date | null };
+type Pending = { id: string; tenantId: string; userId: string; card: Record<string, unknown>; expiresAt: Date; confirmedAt: Date | null; completedAt: Date | null; failedAt: Date | null };
 const state = {
   on: true,
   rows: [] as Pending[],
@@ -78,20 +114,30 @@ const state = {
   audits: [] as { action: string; summary: string; leadId?: string }[],
   errors: [] as string[],
   outcome: { ok: true, success: "Note added" } as { ok: boolean; success?: string; error?: string } | "refuse" | "throw",
+  failTextContaining: "",
   seq: 0,
 };
 type Where = Record<string, unknown>;
 const matches = (row: Pending, where: Where) =>
   Object.entries(where).every(([key, want]) => {
     const have = (row as unknown as Record<string, unknown>)[key];
-    if (key === "expiresAt") return row.expiresAt.getTime() > ((want as { gt: Date }).gt).getTime();
+    if (key === "expiresAt") {
+      const range = want as { gt?: Date; lt?: Date };
+      return range.gt ? row.expiresAt.getTime() > range.gt.getTime() : row.expiresAt.getTime() < range.lt!.getTime();
+    }
+    if (want instanceof Date) return have instanceof Date && have.getTime() === want.getTime();
     return want === null ? have === null : have === want;
   });
 const table = {
-  create: async ({ data }: { data: Omit<Pending, "id" | "confirmedAt"> }) => {
-    const row: Pending = { id: `cmpending${String(++state.seq).padStart(17, "0")}`, confirmedAt: null, ...data };
+  create: async ({ data }: { data: Pick<Pending, "tenantId" | "userId" | "card" | "expiresAt"> }) => {
+    const row: Pending = { id: `cmpending${String(++state.seq).padStart(17, "0")}`, confirmedAt: null, completedAt: null, failedAt: null, ...data };
     state.rows.push(row);
     return { id: row.id };
+  },
+  deleteMany: async ({ where }: { where: Where }) => {
+    const before = state.rows.length;
+    state.rows = state.rows.filter((row) => !matches(row, where));
+    return { count: before - state.rows.length };
   },
   updateMany: async ({ where, data }: { where: Where; data: Partial<Pending> }) => {
     const hit = state.rows.filter((row) => matches(row, where));
@@ -113,7 +159,11 @@ loaderKey._load = function (this: unknown, request: string, parent, isMain) {
       case "./audit": return { logAudit: async (entry: { action: string; summary: string; leadId?: string }) => { state.audits.push({ action: entry.action, summary: entry.summary, leadId: entry.leadId }); } };
       case "./errorLog": return { logError: async (...args: unknown[]) => { state.errors.push(args.map(String).join(" ")); } };
       case "./whatsapp": return {
-        sendWhatsAppText: async (to: string, text: string) => { state.sent.push({ to, text }); return { ok: true }; },
+        sendWhatsAppText: async (to: string, text: string) => {
+          if (state.failTextContaining && text.includes(state.failTextContaining)) return { ok: false };
+          state.sent.push({ to, text });
+          return { ok: true };
+        },
         sendWhatsAppButtons: async (to: string, text: string, buttons: { id: string; title: string }[]) => { state.sent.push({ to, text, buttons }); return { ok: true }; },
       };
       // The real one is proved by its source below; here it records WHO the action ran as.
@@ -133,14 +183,14 @@ loaderKey._load = function (this: unknown, request: string, parent, isMain) {
 let asUser: string | null = null;
 
 const require_ = createRequire(import.meta.url);
-const { confirmFromWhatsApp, offerConfirmations } = require_("../src/lib/assistantWhatsAppConfirm.ts") as typeof import("../src/lib/assistantWhatsAppConfirm");
+const { PENDING_ACTION_RETENTION_MS, confirmFromWhatsApp, offerConfirmations, prunePendingActions } = require_("../src/lib/assistantWhatsAppConfirm.ts") as typeof import("../src/lib/assistantWhatsAppConfirm");
 
 const LEAD = "cmabcdefghijklmnopqrstuv";
 const PHONE = "27821234567";
 const me = { id: "u1", name: "Sean", email: "s@x", role: "staff" } as never;
 const NOTE = { id: "a0", kind: "note", leadId: LEAD, leadLabel: "Anna — Rover", title: "Add a note to Anna's lead", text: "Wants white." };
 const pendingRow = (over: Partial<Pending> = {}): Pending => {
-  const row: Pending = { id: `cmpending${String(++state.seq).padStart(17, "0")}`, tenantId: "t1", userId: "u1", card: NOTE, expiresAt: new Date(Date.now() + 60_000), confirmedAt: null, ...over };
+  const row: Pending = { id: `cmpending${String(++state.seq).padStart(17, "0")}`, tenantId: "t1", userId: "u1", card: NOTE, expiresAt: new Date(Date.now() + 60_000), confirmedAt: null, completedAt: null, failedAt: null, ...over };
   state.rows.push(row);
   return row;
 };
@@ -153,6 +203,32 @@ beforeEach(() => {
   state.audits = [];
   state.errors = [];
   state.outcome = { ok: true, success: "Note added" };
+  state.failTextContaining = "";
+});
+
+test("a long note: the full text is delivered BEFORE the button exists — and if it is not delivered, there is no button", async () => {
+  const text = Array.from({ length: 20 }, (_, i) => `Line ${i + 1}: the customer wants delivery before month end and asked twice.`).join(" ");
+  assert.ok(text.length > 1024 && text.length <= 2000);
+  const long = { ...NOTE, text } as never;
+
+  await offerConfirmations("t1", "u1", PHONE, [long]);
+  assert.equal(state.sent.length, 2);
+  assert.equal(state.sent[0].buttons, undefined, "first, an ordinary message");
+  assert.ok(state.sent[0].text.includes(text), "…carrying the WHOLE note");
+  assert.deepEqual(state.sent[1].buttons, [{ id: `daxc:${state.rows[0].id}`, title: "Confirm" }]);
+  assert.match(state.sent[1].text, /The full text is in the message above — read it first\./);
+  // What is stored — what Confirm will write — is that same text, whole.
+  assert.equal((state.rows[0].card as { text: string }).text, text);
+
+  // The text fails to send: nothing to confirm is created, and the person is told it needs the CRM.
+  state.rows = [];
+  state.sent = [];
+  state.failTextContaining = "Line 1:";
+  await offerConfirmations("t1", "u1", PHONE, [long]);
+  assert.deepEqual(state.rows, [], "no pending task without its text having been shown");
+  assert.ok(!state.sent.some((s) => s.buttons), "no Confirm button");
+  assert.match(state.sent.at(-1)?.text ?? "", /^This one needs the CRM/);
+  assert.ok(state.errors.some((e) => e.includes("no button offered")));
 });
 
 test("a tap runs the task ONCE, as the person it was offered to, and says so", async () => {
@@ -160,13 +236,15 @@ test("a tap runs the task ONCE, as the person it was offered to, and says so", a
   await confirmFromWhatsApp("t1", me, PHONE, row.id);
   assert.deepEqual(state.ran, [{ asUserId: "u1", card: NOTE }], "the stored card, run as that person through the CRM's own Confirm");
   assert.ok(row.confirmedAt instanceof Date);
+  assert.ok(row.completedAt instanceof Date, "recorded as DONE, not merely claimed");
+  assert.equal(row.failedAt, null);
   assert.deepEqual(state.sent, [{ to: PHONE, text: "✅ Note added" }]);
   assert.deepEqual(state.audits, [{ action: "assistant.whatsapp_confirmed", summary: "Confirmed on WhatsApp: Add a note to Anna's lead", leadId: LEAD }]);
 
   // A second tap, or a redelivery that got past the webhook's own claim: nothing runs again.
   await confirmFromWhatsApp("t1", me, PHONE, row.id);
   assert.equal(state.ran.length, 1);
-  assert.match(state.sent[1].text, /already been done or it has expired/);
+  assert.equal(state.sent[1].text, "That one is already done.");
   // Two taps at the same moment: one conditional update each, and only one finds the row unclaimed.
   const other = pendingRow();
   await Promise.all([confirmFromWhatsApp("t1", me, PHONE, other.id), confirmFromWhatsApp("t1", me, PHONE, other.id)]);
@@ -176,10 +254,14 @@ test("a tap runs the task ONCE, as the person it was offered to, and says so", a
 test("nothing runs: switch off, expired, someone else's, another workspace's, an unknown id, a kind that is not confirmable", async () => {
   const cases: [string, () => string, RegExp][] = [
     ["the owner's switch off", () => { state.on = false; return pendingRow().id; }, /switched off for this workspace/],
-    ["expired", () => pendingRow({ expiresAt: new Date(Date.now() - 1000) }).id, /already been done or it has expired/],
-    ["offered to someone else", () => pendingRow({ userId: "u2" }).id, /already been done or it has expired/],
-    ["another workspace's", () => pendingRow({ tenantId: "t2" }).id, /already been done or it has expired/],
-    ["an id that was never issued", () => "cmneverissuedneverissuedne", /already been done or it has expired/],
+    ["expired", () => pendingRow({ expiresAt: new Date(Date.now() - 1000) }).id, /has expired — a task can be confirmed for 15 minutes/],
+    // Somebody else's, another workspace's and a made-up id all read the same: nothing is revealed about a task that is not yours.
+    ["offered to someone else", () => pendingRow({ userId: "u2" }).id, /^That one can't be confirmed — ask me again/],
+    ["another workspace's", () => pendingRow({ tenantId: "t2" }).id, /^That one can't be confirmed — ask me again/],
+    ["an id that was never issued", () => "cmneverissuedneverissuedne", /^That one can't be confirmed — ask me again/],
+    ["one already done", () => pendingRow({ confirmedAt: new Date(), completedAt: new Date() }).id, /^That one is already done\.$/],
+    ["one that failed earlier", () => pendingRow({ confirmedAt: new Date(), failedAt: new Date() }).id, /failed when it was tried[\s\S]*can't be tried again from here/],
+    ["one being run right now", () => pendingRow({ confirmedAt: new Date() }).id, /^That one is being done right now\.$/],
     ["a message to a customer", () => pendingRow({ card: { ...NOTE, kind: "draft_message" } }).id, /needs the CRM/],
     ["a test drive", () => pendingRow({ card: { ...NOTE, kind: "test_drive" } }).id, /needs the CRM/],
   ];
@@ -194,19 +276,64 @@ test("nothing runs: switch off, expired, someone else's, another workspace's, an
   }
 });
 
-test("a refusal or a failure is reported as one — never as done", async () => {
+test("after a claim: 'nothing changed' can be tried again; 'don't know how far it got' cannot — and neither is ever reported as done", async () => {
+  // The action answered "not done": it changed nothing, so the claim is released and Confirm works again.
+  state.outcome = { ok: false, error: "Somebody else's diary is busy then." };
+  const retry = pendingRow();
+  await confirmFromWhatsApp("t1", me, PHONE, retry.id);
+  assert.match(state.sent.at(-1)?.text ?? "", /^Not done: Somebody else's diary is busy then\.\n\nNothing was changed\. You can tap Confirm again until it expires\./);
+  assert.equal(retry.confirmedAt, null, "released");
+  assert.equal(retry.completedAt, null);
+  assert.equal(retry.failedAt, null);
+  state.outcome = { ok: true, success: "Meeting booked" };
+  await confirmFromWhatsApp("t1", me, PHONE, retry.id);
+  assert.equal(state.sent.at(-1)?.text, "✅ Meeting booked", "the same button, tapped again, now does it");
+  assert.notEqual(retry.completedAt, null, "…and is recorded as done");
+  assert.equal(state.ran.length, 2, "tried twice, done once");
+
+  // Refused by the CRM's own guard before anything ran: released too, and said plainly.
   state.outcome = "refuse";
-  await confirmFromWhatsApp("t1", me, PHONE, pendingRow().id);
-  assert.equal(state.sent.at(-1)?.text, "You don't have permission to do that.");
-  state.outcome = { ok: false, error: "This changed since DAX suggested it — ask again to see where it stands now." };
-  await confirmFromWhatsApp("t1", me, PHONE, pendingRow().id);
-  assert.match(state.sent.at(-1)?.text ?? "", /^Not done: This changed since/);
+  const refused = pendingRow();
+  await confirmFromWhatsApp("t1", me, PHONE, refused.id);
+  assert.equal(state.sent.at(-1)?.text, "You don't have permission to do that. Nothing was changed.");
+  assert.equal(refused.confirmedAt, null);
+
+  // It THREW: it may have got part-way. Marked failed; a second tap does not run it again.
   state.outcome = "throw";
-  await confirmFromWhatsApp("t1", me, PHONE, pendingRow().id);
-  assert.match(state.sent.at(-1)?.text ?? "", /didn't go through\. Check the record in the CRM/);
+  const broke = pendingRow();
+  await confirmFromWhatsApp("t1", me, PHONE, broke.id);
+  assert.match(state.sent.at(-1)?.text ?? "", /didn't go through, and I can't tell how far it got\. Check the record in the CRM/);
+  assert.ok(broke.failedAt instanceof Date);
+  assert.equal(broke.completedAt, null);
   assert.ok(state.errors.some((e) => e.includes("confirmed action threw")));
-  assert.deepEqual(state.audits, [], "no confirmation is recorded for something that did not happen");
-  assert.ok(!state.sent.some((s) => s.text.startsWith("✅")));
+  const ranBefore = state.ran.length;
+  state.outcome = { ok: true, success: "Note added" };
+  await confirmFromWhatsApp("t1", me, PHONE, broke.id);
+  assert.equal(state.ran.length, ranBefore, "a failed task is NOT retried — retrying an unknown is how a note is written twice");
+  assert.match(state.sent.at(-1)?.text ?? "", /failed when it was tried/);
+
+  assert.equal(state.audits.filter((a) => a.action === "assistant.whatsapp_confirmed").length, 1, "one confirmation recorded: the one that happened");
+});
+
+test("old pending tasks are deleted a day after their window closes — done, failed or never tapped — and newer ones are kept", async () => {
+  const hours = (n: number) => new Date(Date.now() - n * 3_600_000);
+  assert.equal(PENDING_ACTION_RETENTION_MS, 24 * 60 * 60 * 1000);
+  const oldDone = pendingRow({ expiresAt: hours(25), confirmedAt: hours(25.2), completedAt: hours(25.2) });
+  const oldFailed = pendingRow({ expiresAt: hours(30), confirmedAt: hours(30.1), failedAt: hours(30.1) });
+  const oldUntapped = pendingRow({ expiresAt: hours(48) });
+  const recentDone = pendingRow({ expiresAt: hours(2), confirmedAt: hours(2.1), completedAt: hours(2.1) });
+  const waiting = pendingRow();
+  const otherWorkspace = pendingRow({ tenantId: "t2", expiresAt: hours(72) });
+  assert.equal(await prunePendingActions("t1"), 3);
+  const left = state.rows.map((row) => row.id);
+  for (const gone of [oldDone, oldFailed, oldUntapped]) assert.ok(!left.includes(gone.id));
+  for (const kept of [recentDone, waiting]) assert.ok(left.includes(kept.id));
+  assert.ok(left.includes(otherWorkspace.id), "only the workspace it was asked to clean");
+  // …and it runs on a tick that already exists, per workspace, without stopping the watches if it fails.
+  const route = code("src/app/api/cron/assistant/route.ts");
+  assert.match(route, /if \(tenantId\) \{\s*await prunePendingActions\(tenantId\)\.catch\(/);
+  assert.ok(route.indexOf("prunePendingActions(tenantId)") < route.indexOf("runAssistantWatches(budget)"));
+  assert.match(code("src/lib/assistantWhatsAppConfirm.ts"), /deleteMany\(\{\s*where: \{ tenantId, expiresAt: \{ lt: new Date\(now\.getTime\(\) - PENDING_ACTION_RETENTION_MS\) \} \},/);
 });
 
 test("offers: a Confirm button per internal task when on; everything named as CRM-only when off — never silently dropped", async () => {
@@ -236,8 +363,10 @@ test("offers: a Confirm button per internal task when on; everything named as CR
 
 test("the claim is one conditional update naming workspace, person, unclaimed and unexpired — and the kind is re-checked before it runs", () => {
   const lib = code("src/lib/assistantWhatsAppConfirm.ts");
-  assert.match(lib, /updateMany\(\{\s*where: \{ id: pendingId, tenantId, userId: user\.id, confirmedAt: null, expiresAt: \{ gt: now \} \},\s*data: \{ confirmedAt: now \},/);
+  assert.match(lib, /updateMany\(\{\s*where: \{ id: pendingId, tenantId, userId: user\.id, confirmedAt: null, completedAt: null, failedAt: null, expiresAt: \{ gt: now \} \},\s*data: \{ confirmedAt: now \},/);
   assert.match(lib, /if \(claimed\.count !== 1\) return say\(/);
+  // Whatever a run ends as, it is written against THIS claim only — it cannot undo or overwrite a later one.
+  assert.match(lib, /updateMany\(\{ where: \{ id: pendingId, tenantId, userId: user\.id, confirmedAt: now, completedAt: null, failedAt: null \}, data \}\)/);
   const order = ["confirmingOnWhatsAppOn()", "assistantPendingAction.updateMany(", "WHATSAPP_CONFIRMABLE.has(String(card.kind))", "runAsLinkedStaff(user.id, () => runAssistantAction(card))"].map((needle) => lib.indexOf(needle));
   assert.ok(order.every((at, i) => at > -1 && (i === 0 || order[i - 1] < at)), "switch, claim, kind, run — in that order");
   // It changes records only through the CRM's own Confirm, and can send nothing to a customer.
