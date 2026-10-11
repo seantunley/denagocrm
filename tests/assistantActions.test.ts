@@ -75,6 +75,59 @@ test("proposals are checked against what this person may touch, names resolved, 
   assert.doesNotMatch(resolve, /scheduleFollowUp|assignLead|moveLead|addCommunication|\.create\(|\.update\(/, "resolving runs nothing");
 });
 
+test("a note can go on a CUSTOMER with no lead, and be pinned — proposed, checked, and saved by the note box's own action", () => {
+  const CONTACT = "cmzyxwvutsrqponmlkjihgfe";
+  // Parsed: pin is optional and a boolean; a customer note names a contact, never a lead.
+  const { actions } = splitActions(
+    `Set up for you to confirm.\nACTIONS: [{"type":"customer_note","contactId":"${CONTACT}","text":"Testing","pin":true},{"type":"note","leadId":"${LEAD}","text":"Call back","pin":true},{"type":"note","leadId":"${LEAD}","text":"Plain"},{"type":"customer_note","leadId":"${LEAD}","text":"wrong id field"},{"type":"customer_note","contactId":"${CONTACT}","text":"x","pin":"yes"}]`,
+  );
+  assert.deepEqual(actions, [
+    { type: "customer_note", contactId: CONTACT, text: "Testing", pin: true },
+    { type: "note", leadId: LEAD, text: "Call back", pin: true },
+    { type: "note", leadId: LEAD, text: "Plain" },
+  ]);
+
+  // Resolved: only a customer this person can open, not one in the bin; nothing is run.
+  const lib = code("src/lib/crmAssistant.ts");
+  const resolve = lib.slice(lib.indexOf("async function resolveActions"), lib.indexOf("function dedupeRows"));
+  const branch = resolve.slice(resolve.indexOf('if (p.type === "customer_note")'), resolve.indexOf("if (!(await canAccessLead(user, p.leadId))) continue;"));
+  assert.match(branch, /if \(!\(await canAccessContact\(user, p\.contactId\)\)\) continue;/);
+  assert.match(branch, /where: \{ id: p\.contactId, deletedAt: null \}/);
+  assert.match(branch, /kind: "customer_note", contactId: p\.contactId, leadId: null/);
+  assert.match(branch, /continue;\s*\}\s*$/, "a customer note never falls through to the lead checks");
+
+  // When no lead matches a name, matching customers are reported — with ids, without contact details.
+  const find = lib.slice(lib.indexOf("export async function customersNamed"), lib.indexOf("export async function leadBrief"));
+  assert.match(find, /const ids = await getAccessibleContactIds\(user\);\s*if \(ids !== null && ids\.length === 0\) return \[\];/);
+  assert.match(find, /deletedAt: null,\s*\.\.\.\(ids === null \? \{\} : \{ id: \{ in: ids \} \}\)/);
+  assert.match(find, /AND: words\.map\(/, "every word of the name must match: first and last name are separate columns");
+  assert.doesNotMatch(find, /phone|email|whatsapp/i, "nothing that identifies beyond a name goes to the model");
+  // Customers are looked up whether or not a lead matches, and BEFORE lead access is demanded — someone who
+  // may open customers but not leads is not refused. (Who is found for whom is proved on a real database:
+  // scripts/test-assistant-customers.ts.)
+  const brief = lib.slice(lib.indexOf("export async function leadBrief"), lib.indexOf("async function quotesForLead"));
+  assert.match(brief, /if \(!\(await hasAnyPermission\(user, "leads\.view_all", "leads\.view_owned"\)\)\) \{\s*const customers = await customersFor\(\);\s*return customers\.length \? customersOnly\(customers, "You can't see leads here\."\) : refused\("leads"\);/);
+  assert.match(brief, /const customerRecords = await customersFor\(lead\.contactId\);/, "a lead that matches still brings its customer");
+  assert.match(brief, /if \(matches\.length === 0\) \{[\s\S]*?const customers = await customersFor\(\);/);
+
+  // Confirmed: through addCommunication (its own permission and customer-access checks), pinned by ITS switch.
+  const action = code("src/app/actions/assistant.ts");
+  const run = action.slice(action.indexOf('case "customer_note"'), action.indexOf('case "assign"'));
+  assert.match(run, /form\.set\("contactId", card\.contactId\);/);
+  assert.doesNotMatch(run, /form\.set\("leadId"/);
+  assert.match(run, /if \(card\.pin === true\) form\.set\("pin", "on"\);/);
+  assert.match(run, /const result = await addCommunication\(form\);\s*if \(result\?\.error\) return \{ ok: false, error: result\.error \};/);
+  assert.match(run, /contactId: card\.contactId,\s*\}\);/, "the confirmation is audited on the customer");
+  const save = code("src/app/actions/communications.ts");
+  assert.match(save, /if \(contactId && !\(await canAccessContact\(user, contactId\)\)\)\s*refuse\(/);
+  assert.match(save, /if \(formData\.get\("pin"\) === "on"\) \{\s*await toggleTimelinePin\("communication", communication\.id, user\.id\);/);
+
+  // The card says what it will do and links to the customer.
+  const card = code("src/components/AssistantActionCard.tsx");
+  assert.match(card, /card\.kind === "customer_note" \? `\/contacts\/\$\{card\.contactId\}`/);
+  assert.match(card, /\(card\.kind === "note" \|\| card\.kind === "customer_note"\)/);
+});
+
 test("Confirm runs the action a person would use by hand — and Confirm never sends", () => {
   const action = code("src/app/actions/assistant.ts");
   const run = action.slice(action.indexOf("export async function runAssistantAction"), action.indexOf("export async function sendAssistantDraft"));

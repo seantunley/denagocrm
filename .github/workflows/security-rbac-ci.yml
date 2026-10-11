@@ -566,6 +566,13 @@ jobs:
       - name: Inbox -- spam screening holds, restores once, and never loses a message
         run: npm run test:inbound-screening
 
+      # The assistant finding a CUSTOMER to put a note on: with no lead, with a
+      # lead, several of one name — and never somebody else's or a deleted one,
+      # for a person who may open customers but not leads. Real permission rows;
+      # the model is never called.
+      - name: Assistant -- finds the right customer for the right person
+        run: npm run test:assistant-customers
+
       # "Whose number is this?" is raw SQL, so the soft-delete filter is not
       # applied for it. A number on a lead binned months earlier still matched:
       # that person's messages were filed on the deleted lead, where nobody sees

@@ -59,6 +59,7 @@
     "test:staff-reply": "tsx --tsconfig tsconfig.scripts.json scripts/test-staff-reply-durability.ts",
     "test:meta-echo": "tsx --tsconfig tsconfig.scripts.json scripts/test-meta-echo-dedupe.ts",
     "test:inbound-screening": "tsx --tsconfig tsconfig.scripts.json scripts/test-inbound-screening.ts",
+    "test:assistant-customers": "tsx --tsconfig tsconfig.scripts.json scripts/test-assistant-customers.ts",
     "test:phone-match": "tsx --tsconfig tsconfig.scripts.json scripts/test-phone-match.ts",
     "test:in-person-signing": "tsx --tsconfig tsconfig.scripts.json scripts/test-in-person-signing.ts",
     "test:tenant-isolation": "tsx --tsconfig tsconfig.harness.json scripts/test-tenant-isolation.ts",
