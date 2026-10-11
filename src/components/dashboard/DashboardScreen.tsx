@@ -86,7 +86,8 @@ export default async function DashboardScreen({
           {dashboards.map((entry) => (
             <Link
               key={entry.id}
-              href={entry.slug === "home" ? "/" : `/d/${entry.slug}`}
+              // Every dashboard, the first one included, lives under /d/. "/" is the home screen (what to do next).
+              href={`/d/${entry.slug}`}
               className={cn(
                 "rounded-md px-2 py-1 text-xs font-medium transition-colors",
                 entry.slug === dashboard.slug

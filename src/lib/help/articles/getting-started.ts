@@ -36,7 +36,7 @@ export const gettingStartedArticles: HelpArticle[] = [
       { type: "steps", items: [
         "Go to the CRM address in your browser and enter your email and password.",
         "If prompted, enter your six-digit verification code, or approve with your passkey.",
-        "You'll land on your Dashboard.",
+        "You'll land on Home.",
       ] },
       { type: "h", text: "Turn on two-factor authentication" },
       { type: "p", text: "Two-factor authentication (2FA) adds a second step so a stolen password alone can't get in. Set it up under **Settings → My Account** (or Security)." },
@@ -62,8 +62,8 @@ export const gettingStartedArticles: HelpArticle[] = [
       { type: "p", text: "The app has three constants: the **sidebar** on the left for search, quick actions and navigation, the **top bar** for the clock and weather, Help, Settings and your account, and the main area where your work happens." },
       { type: "h", text: "The sidebar" },
       { type: "p", text: "Modules are grouped by the kind of work they do — Social, CRM, Marketing, Stock, Workshop, Automation and so on. You only see the groups and links your role can access, so your sidebar may be shorter than a colleague's." },
-      { type: "h", text: "The dashboard" },
-      { type: "p", text: "Your home screen summarises what needs attention — new leads, tasks due, and headline numbers. Tiles are links: click one to jump straight to the underlying list, already filtered." },
+      { type: "h", text: "Home and Dashboards" },
+      { type: "p", text: "**Home** is where you land: one line about your day, a few numbers, and the deals most worth contacting next. Every number is a link to the list behind it. Your charts and the cards you arranged live under **Dashboards**, the next link down." },
       { type: "h", text: "Search from anywhere" },
       { type: "p", text: "The quickest way to reach a record is the search box at the top of the sidebar." },
       { type: "steps", items: [
