@@ -1591,6 +1591,8 @@ export type AskOptions = {
   source?: AskSource;
   scheduleId?: string;
   images?: string[];
+  /** WhatsApp only: the caller can offer a Confirm button, so tasks may be proposed. Ignored for other sources. */
+  proposeTasks?: boolean;
   /**
    * The answer so far, while it is being written — only the part that is safe
    * to show (assistantStream.visibleAnswer: never a LEARN/ACTIONS/CHOICES line).
@@ -1665,12 +1667,24 @@ export const CHANNEL_RULES: Record<AskSource, string> = {
     "The person is asking on WhatsApp from their phone. Keep it short and scannable, plain text, no links to rows. You can't set up tasks here (those need a tap on Confirm in the CRM): say in words what you'd do, and if they want a message drafted, put the draft itself in your answer so they can copy it.",
 };
 
+/**
+ * WhatsApp, when the workspace owner lets staff confirm tasks there. The caller
+ * (assistantWhatsApp) sends each proposal with a Confirm button; nothing happens
+ * until it is tapped. A message to a customer stays out of it.
+ */
+export const WHATSAPP_CONFIRM_RULE =
+  "The person is asking on WhatsApp from their phone. Keep it short and scannable, plain text, no links to rows. You CAN set up tasks here: each one you propose is sent to them with a Confirm button and happens only when they tap it — so say what you have set up for them to confirm, never that it is done. A message to a customer is the exception: it is never sent from WhatsApp, so put the draft itself in your answer for them to copy, and do not propose draft_message.";
+
 export async function askCrm(user: User, asked: string, page?: string | null, opts: AskOptions = {}): Promise<AssistantResult> {
   // Everything the model reads is stripped of invisible characters — the
   // question, the conversation, the workspace's names and notes, and every
   // lookup (observationText) — not only what gets stored.
   const question = stripInvisible(asked);
   const source = opts.source ?? "chat";
+  // Tasks are proposed only where the person can CONFIRM them: the CRM chat's
+  // cards, and WhatsApp when its caller says it can offer a Confirm button.
+  // Never a scheduled run or a watch — nobody is there to confirm anything.
+  const proposes = source === "chat" || (source === "whatsapp" && opts.proposeTasks === true);
   const started = Date.now();
   const timings = opts.timings ?? {};
   let lap = started;
@@ -1881,9 +1895,9 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
       REPLY_FORMAT,
       STATE_INSTRUCTIONS,
       LEARN_INSTRUCTIONS,
-      source === "chat" ? ACTION_INSTRUCTIONS : "",
+      proposes ? ACTION_INSTRUCTIONS : "",
       source === "schedule" ? "" : CHOICE_INSTRUCTIONS,
-      CHANNEL_RULES[source],
+      source === "whatsapp" && proposes ? WHATSAPP_CONFIRM_RULE : CHANNEL_RULES[source],
       learned,
       images.length ? IMAGE_RULE : "",
       methodInstructions(observations),
@@ -1940,8 +1954,8 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
   // A scheduled run learns nothing: it reads customer text daily with nobody
   // watching, so an injected "remember this" would be written with no one there.
   const learn = source === "schedule" ? null : reply.learn;
-  // Off-chat, a stray ACTIONS line is removed from the answer and dropped — no card to confirm it.
-  const actions = source !== "chat" ? [] : await resolveActions(user, proposals).catch(async (error: unknown) => {
+  // Where nothing can confirm it, a stray ACTIONS line is removed from the answer and dropped.
+  const actions = !proposes ? [] : await resolveActions(user, proposals).catch(async (error: unknown) => {
     await logError("crm-assistant", "task proposals failed", error instanceof Error ? error.name : "unknown");
     return [];
   });

@@ -92,6 +92,63 @@ export type LinkRefusal = keyof typeof LINK_REFUSALS;
 export const linkRefusalText = (reason: string | null | undefined): string | null =>
   reason && reason in LINK_REFUSALS ? LINK_REFUSALS[reason as LinkRefusal] : null;
 
+/*
+ * ── CONFIRMING A TASK ON WHATSAPP ───────────────────────────────────────────
+ *
+ * The assistant never changes anything itself: it proposes, a person confirms.
+ * In the CRM that is a card with a Confirm button. On WhatsApp it is a message
+ * with a Confirm button — when the workspace owner has switched this on. The
+ * tap is the person's click; without it nothing happens.
+ */
+
+/** The owner's switch (AppSetting). Absent or anything but "on" is OFF. */
+export const ASSISTANT_WHATSAPP_CONFIRM_KEY = "ASSISTANT_WHATSAPP_CONFIRM";
+export const whatsappConfirmOn = (raw: string | null | undefined): boolean => raw === "on";
+
+/** How long a proposed task can still be confirmed. After that: ask again. */
+export const PENDING_ACTION_TTL_MS = 15 * 60 * 1000;
+
+/**
+ * What may be confirmed from a phone: changes INSIDE the CRM only.
+ *
+ * Left out on purpose, and they stay in the CRM:
+ *  - draft_message — a message to a customer. It is read, edited and sent by the
+ *    person, on the record, never from a chat with the assistant;
+ *  - test_drive — books a customer onto a vehicle;
+ *  - lost, quote — closing a deal and starting a quote deserve the screen.
+ * A kind not named here is not confirmable: a new kind is CRM-only until someone
+ * decides otherwise.
+ */
+export const WHATSAPP_CONFIRMABLE: ReadonlySet<string> = new Set([
+  "note", "customer_note", "follow_up", "assign", "stage", "meeting", "reschedule", "cancel_activity", "schedule", "watch",
+]);
+
+/** Proposed cards, split into those that get a Confirm button here and those that need the CRM. */
+export function splitForWhatsApp_cards<T extends { kind: string }>(cards: readonly T[]): { confirmable: T[]; crmOnly: T[] } {
+  return {
+    confirmable: cards.filter((card) => WHATSAPP_CONFIRMABLE.has(card.kind)),
+    crmOnly: cards.filter((card) => !WHATSAPP_CONFIRMABLE.has(card.kind)),
+  };
+}
+
+/** The Confirm button's id: names the pending row and nothing else. */
+export const confirmButtonId = (pendingId: string) => `daxc:${pendingId}`;
+/** A tapped button's id → the pending row it names, or null when it is not a Confirm button of ours. */
+export function parseConfirmId(choiceId: string | null | undefined): string | null {
+  const match = /^daxc:(c[a-z0-9]{20,40})$/.exec(String(choiceId ?? ""));
+  return match ? match[1] : null;
+}
+
+/** What the person reads above the Confirm button: what will happen, in full, and until when. */
+export function confirmPrompt(card: { title: string; text?: unknown; reason?: unknown; detail?: unknown }): string {
+  const lines = [card.title];
+  for (const extra of [card.text, card.detail, card.reason]) {
+    if (typeof extra === "string" && extra.trim()) lines.push(extra.trim());
+  }
+  lines.push(`Tap Confirm within ${PENDING_ACTION_TTL_MS / 60_000} minutes and I'll do it. Nothing changes until you do.`);
+  return lines.join("\n\n").slice(0, WA_BODY_MAX);
+}
+
 /** A linked number as it is shown back: the last three digits only. */
 export function maskWaId(waId: string | null | undefined): string {
   const digits = String(waId ?? "").replace(/\D/g, "");

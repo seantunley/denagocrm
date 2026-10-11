@@ -6,6 +6,8 @@ import { currentTenantScope } from "./tenantScope";
 import { fetchWhatsAppMedia, matchByPhone, sendWhatsAppAudioId, sendWhatsAppButtons, sendWhatsAppText, showWhatsAppTyping, uploadWhatsAppMedia, waDigits } from "./whatsapp";
 import { transcribeVoice, transcribeVoiceDetailed } from "./transcribe";
 import { askCrm } from "./crmAssistant";
+import type { ActionCard } from "./assistantActions";
+import { confirmFromWhatsApp, confirmingOnWhatsAppOn, offerConfirmations } from "./assistantWhatsAppConfirm";
 import { ASK_LIMIT_MESSAGE, assistantAskAllowed, assistantImageAllowed, assistantUserFor, assistantVoiceReplyAllowed } from "./assistantUser";
 import { MAX_IMAGE_BYTES, cleanJpeg, jpegDataUrl } from "./assistantImage";
 import { canSynthesizeVoice } from "./elevenlabs";
@@ -25,6 +27,7 @@ import {
   businessNumberFromLabel,
   linkCodeHashInput,
   maskWaId,
+  parseConfirmId,
   parseLinkCode,
   planWhatsAppReply,
   whatsappSwitchOn,
@@ -80,7 +83,8 @@ export async function businessWhatsAppNumber(tenantId: string) {
 }
 
 export type StaffWhatsAppInput =
-  | { text: string }
+  /** choiceId: the id of a tapped button, when the text is a button's title. */
+  | { text: string; choiceId?: string }
   | { voiceMediaId: string }
   /** A photo, file or video. Only a photo can be read; the others are answered with why not. */
   | { mediaId: string; mediaKind: "image" | "document" | "video"; caption: string };
@@ -179,6 +183,15 @@ export async function handleStaffWhatsApp(from: string, input: StaffWhatsAppInpu
   const user = await assistantUserFor(link.userId);
   if (!user) return false;
 
+  // A tapped Confirm button on a task proposed here earlier. Reached only now —
+  // every check above has passed for THIS message — and it is not a question:
+  // nothing is asked, and it does not count against the ask limit.
+  const pendingId = "text" in input ? parseConfirmId(input.choiceId) : null;
+  if (pendingId) {
+    await confirmFromWhatsApp(tenantId, user, waId, pendingId);
+    return true;
+  }
+
   // The person's ONE ask limit, shared with the page and the bubble — a phone is
   // not a second allowance. Counted before a voice note is fetched or
   // transcribed, so the cap bounds that work too.
@@ -244,8 +257,11 @@ export async function handleStaffWhatsApp(from: string, input: StaffWhatsAppInpu
   // exchange. It is never a customer Communication, never a lead, never the bot.
   let plan: WhatsAppReplyPlan;
   let answer: string | null = null;
+  let proposed: ActionCard[] = [];
   try {
-    const result = await askCrm(user, q, null, { source: "whatsapp", images });
+    // Tasks are proposed only when the owner lets them be confirmed here.
+    const result = await askCrm(user, q, null, { source: "whatsapp", images, proposeTasks: await confirmingOnWhatsAppOn() });
+    if (result.ok) proposed = result.actions;
     plan = result.ok ? planWhatsAppReply(result.answer, result.choices) : { texts: [result.error], buttons: null };
     if (result.ok) answer = result.answer;
   } catch (error) {
@@ -256,6 +272,8 @@ export async function handleStaffWhatsApp(from: string, input: StaffWhatsAppInpu
   // the voice is still being made. The voice note is a convenience on top.
   await sendPlan(waId, plan);
   if (voiceBack && answer) await sendVoiceAnswer(user.id, waId, answer, heard);
+  // After the answer (and its voice note): each task it set up, with its Confirm button.
+  await offerConfirmations(tenantId, user.id, waId, proposed);
   // Settled before the function ends, so the request is never left running on a serverless host.
   await typing;
   return true;
