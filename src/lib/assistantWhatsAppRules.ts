@@ -135,7 +135,8 @@ export const WHATSAPP_CONFIRMABLE: ReadonlySet<string> = new Set([
   "note", "customer_note", "follow_up", "assign", "stage", "meeting", "block_time", "reschedule", "cancel_activity", "schedule", "watch",
   // quote_add: the same kind of change — it adds to a DRAFT, and the updated PDF comes back to this phone.
   // quote_pdf: sends the confirmer their own copy of a quote's PDF — to this phone, and nowhere else.
-  "quote_build", "quote_add", "quote_pdf",
+  // quote_change: changes rows on a DRAFT, shown before and after — the same kind of internal change.
+  "quote_build", "quote_add", "quote_change", "quote_pdf",
 ]);
 
 /** Proposed cards, split into those that get a Confirm button here and those that need the CRM. */

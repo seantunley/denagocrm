@@ -72,7 +72,7 @@ test("\"send me the PDF of Q-1030\": a task that names a quote and nothing else,
 
   // Confirm: access asked again, a linked phone required, ONE update queued for the signed-in person — no number anywhere.
   const action = code("src/app/actions/assistant.ts");
-  const run = action.slice(action.indexOf('case "quote_pdf": {'), action.indexOf('case "quote_add": {'));
+  const run = action.slice(action.indexOf('case "quote_pdf": {'), action.indexOf('case "quote_change": {'));
   assert.match(run, /!quote \|\| !\(await canAccessQuote\(user, quote\.id\)\)\) return untouched/);
   assert.match(run, /assistantPhoneLink\.findFirst\(\{ where: \{ userId: user\.id, verifiedAt: \{ not: null \}, waId: \{ not: null \} \}/);
   assert.match(run, /userId: user\.id,\s*source: QUOTE_PDF_SOURCE,\s*quoteId: quote\.id,/);
@@ -123,7 +123,7 @@ test("Confirm saves through the quote editor's own door, keeping every existing 
 test("ADD-ONLY is done under the quote's lock, from what is on the quote THEN — it rewrites nothing (review of #879)", () => {
   const quotes = code("src/app/actions/quotes.ts");
   const tx = quotes.slice(quotes.indexOf("const result = await basePrisma.$transaction(async (tx) => {"), quotes.indexOf("if (result === REPEATED) {"));
-  const add = tx.slice(tx.indexOf("if (data.appendOnly) {"), tx.indexOf("if (existing.leadId && existing.contactId && existing.contactId !== data.contactId) {"));
+  const add = tx.slice(tx.indexOf("if (data.appendOnly) {"), tx.indexOf("if (data.changes) {"));
   assert.ok(add.length > 0);
   // After the lock and the editability check, which read the quote as it is now.
   assert.ok(tx.indexOf("FOR UPDATE") < tx.indexOf("if (data.appendOnly) {"));
@@ -145,9 +145,9 @@ test("ONE CONFIRM, ONE CHANGE: the card's key is spent in the transaction that m
   assert.ok(CONFIRM_KEY.test("qk_0123456789abcdef0123456789abcdef"));
   for (const bad of ["", "qk_short", "cmabcdefghijklmnopqrstuv", "qk_0123456789abcdef0123456789abcdeg", "qk_0123456789abcdef0123456789abcdef0"]) assert.ok(!CONFIRM_KEY.test(bad), bad);
 
-  // Minted on the server when the card is made — for both quote cards.
+  // Minted on the server when the card is made — for every card that changes a quote (build, add, change).
   const assistant = code("src/lib/crmAssistant.ts");
-  assert.equal((assistant.match(/confirmKey: `qk_\$\{randomBytes\(16\)\.toString\("hex"\)\}`,/g) ?? []).length, 2);
+  assert.equal((assistant.match(/confirmKey: `qk_\$\{randomBytes\(16\)\.toString\("hex"\)\}`,/g) ?? []).length, 3);
 
   const quotes = code("src/app/actions/quotes.ts");
   assert.match(quotes, /confirmKey: z\.string\(\)\.regex\(CONFIRM_KEY\)\.optional\(\),/);
@@ -162,11 +162,11 @@ test("ONE CONFIRM, ONE CHANGE: the card's key is spent in the transaction that m
   assert.match(claim, /card: \{ kind: "confirm_key", what \}/);
 
   const tx = quotes.slice(quotes.indexOf("const result = await basePrisma.$transaction(async (tx) => {"), quotes.indexOf("if (result === REPEATED) {"));
-  // Claimed before anything is written, in both paths: adding to a draft, and creating a quote.
+  // Claimed before anything is written, in every path: adding to a draft, changing its rows, and creating a quote.
   const add = tx.slice(tx.indexOf("if (data.appendOnly) {"));
   assert.ok(add.indexOf("claimConfirmKey(tx,") < add.indexOf("tx.quote.updateMany("));
   assert.ok(tx.indexOf('claimConfirmKey(tx, "a new quote")') < tx.indexOf("const number = await nextQuoteNumber(tx);"));
-  assert.equal((tx.match(/if \(!\(await claimConfirmKey\(tx, [^)]*\)\)\) return REPEATED;/g) ?? []).length, 2);
+  assert.equal((tx.match(/if \(!\(await claimConfirmKey\(tx, [^)]*\)\)\) return REPEATED;/g) ?? []).length, 3);
   // Two at the same instant: the loser's key collides, its transaction is undone, and it is reported as repeated.
   assert.match(tx, /\(error as \{ code\?: string \}\)\.code === "P2002"\) return REPEATED;/);
   assert.match(quotes, /if \(result === REPEATED\) \{\s*return \{ ok: false, error: "That was already confirmed[^"]*", repeated: true \};/);

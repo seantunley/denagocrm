@@ -85,7 +85,7 @@ export default function AssistantActionCard({
     card.kind === "schedule" || card.kind === "watch" ? null
     : card.kind === "customer_note" ? `/contacts/${card.contactId}`
     // A quote for a customer directly (no deal): the link is to the customer.
-    : (card.kind === "quote_build" || card.kind === "quote_add") && !card.leadId ? `/contacts/${card.contactId}`
+    : (card.kind === "quote_build" || card.kind === "quote_add" || card.kind === "quote_change") && !card.leadId ? `/contacts/${card.contactId}`
     : card.leadId ? `/leads/${card.leadId}` : null;
   const editable = state === "open" && !pending;
   // Lost already renders its own "Reason:" line; don't double it.
@@ -117,7 +117,7 @@ export default function AssistantActionCard({
         <p className="mt-2 whitespace-pre-line text-xs text-muted-foreground">{card.pin ? "📌 " : ""}{card.text}</p>
       )}
       {/* The whole quote, line by line at catalogue prices: what Confirm will create, as a draft. */}
-      {(card.kind === "quote_build" || card.kind === "quote_add") && <p className="mt-2 whitespace-pre-line text-xs text-muted-foreground">{card.text}</p>}
+      {(card.kind === "quote_build" || card.kind === "quote_add" || card.kind === "quote_change") && <p className="mt-2 whitespace-pre-line text-xs text-muted-foreground">{card.text}</p>}
       {card.kind === "schedule" && <p className="mt-2 whitespace-pre-line text-xs">&ldquo;{card.question}&rdquo;</p>}
       {(card.kind === "meeting" || card.kind === "test_drive" || card.kind === "block_time") && <p className="mt-1 text-xs text-muted-foreground">{card.detail}</p>}
       {card.kind === "lost" && <p className="mt-2 text-xs text-muted-foreground">Reason: {card.reason}</p>}

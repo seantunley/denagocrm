@@ -104,8 +104,8 @@ test("A QUOTE IS FOR A CUSTOMER — a lead is not required", () => {
   assert.match(run, /contactId: card\.contactId,\s*leadId: card\.leadId \?\? null,/);
   // Recorded on the deal when there is one, otherwise on the customer — never on nothing.
   assert.match(run, /\.\.\.\(card\.leadId \? \{ leadId: card\.leadId \} : \{ contactId: card\.contactId \}\),/);
-  assert.match(code("src/lib/assistantWhatsAppConfirm.ts"), /\(card\.kind === "quote_build" \|\| card\.kind === "quote_add"\) && !card\.leadId \? \{ contactId: card\.contactId \} : \{\}/);
-  assert.match(code("src/components/AssistantActionCard.tsx"), /\(card\.kind === "quote_build" \|\| card\.kind === "quote_add"\) && !card\.leadId \? `\/contacts\/\$\{card\.contactId\}`/);
+  assert.match(code("src/lib/assistantWhatsAppConfirm.ts"), /\(card\.kind === "quote_build" \|\| card\.kind === "quote_add" \|\| card\.kind === "quote_change"\) && !card\.leadId \? \{ contactId: card\.contactId \} : \{\}/);
+  assert.match(code("src/components/AssistantActionCard.tsx"), /\(card\.kind === "quote_build" \|\| card\.kind === "quote_add" \|\| card\.kind === "quote_change"\) && !card\.leadId \? `\/contacts\/\$\{card\.contactId\}`/);
 });
 
 test("a product can be named by its catalogue id or its catalogue NAME — and a name must mean exactly one product", () => {
@@ -275,5 +275,5 @@ test("THE PDF GOES TO THE PERSON WHO ASKED — the only number it can reach is t
 });
 
 test("in the CRM chat the card shows the same lines before Confirm", () => {
-  assert.match(code("src/components/AssistantActionCard.tsx"), /\(card\.kind === "quote_build" \|\| card\.kind === "quote_add"\) && <p className="mt-2 whitespace-pre-line text-xs text-muted-foreground">\{card\.text\}<\/p>/);
+  assert.match(code("src/components/AssistantActionCard.tsx"), /\(card\.kind === "quote_build" \|\| card\.kind === "quote_add" \|\| card\.kind === "quote_change"\) && <p className="mt-2 whitespace-pre-line text-xs text-muted-foreground">\{card\.text\}<\/p>/);
 });

@@ -258,7 +258,7 @@ export async function confirmFromWhatsApp(tenantId: string, user: PermissionUser
     ...("leadId" in card && card.leadId ? { leadId: card.leadId } : {}),
     ...(card.kind === "customer_note" ? { contactId: card.contactId } : {}),
     // A quote built for a customer directly (no deal) is recorded on the customer.
-    ...((card.kind === "quote_build" || card.kind === "quote_add") && !card.leadId ? { contactId: card.contactId } : {}),
+    ...((card.kind === "quote_build" || card.kind === "quote_add" || card.kind === "quote_change") && !card.leadId ? { contactId: card.contactId } : {}),
   });
   await say(waId, `✅ ${result.success ?? "Done"}`);
   // A quote it built: runAssistantAction has queued the PDF as an update for this
