@@ -1729,8 +1729,13 @@ export type AskOptions = {
   source?: AskSource;
   scheduleId?: string;
   images?: string[];
-  /** WhatsApp only: the caller can offer a Confirm button, so tasks may be proposed. Ignored for other sources. */
-  proposeTasks?: boolean;
+  /**
+   * WhatsApp only (ignored for other sources): what the caller can do with a
+   * proposed task. `true` — offer a Confirm button on the phone. `"saved"` —
+   * nothing can be confirmed on the phone, but the task is kept as a card on
+   * the person's Ask page. Absent or false — tasks are not proposed.
+   */
+  proposeTasks?: boolean | "saved";
   /**
    * The answer so far, while it is being written — only the part that is safe
    * to show (assistantStream.visibleAnswer: never a LEARN/ACTIONS/CHOICES line).
@@ -1811,7 +1816,21 @@ export const CHANNEL_RULES: Record<AskSource, string> = {
  * until it is tapped. A message to a customer stays out of it.
  */
 export const WHATSAPP_CONFIRM_RULE =
-  "The person is asking on WhatsApp from their phone. Keep it short and scannable, plain text, no links to rows. You CAN set up tasks here: each one you propose is sent to them with a Confirm button and happens only when they tap it — so say what you have set up for them to confirm, never that it is done. A message to a customer is the exception: it is never sent from WhatsApp, so put the draft itself in your answer for them to copy, and do not propose draft_message.";
+  "The person is asking on WhatsApp from their phone. Keep it short and scannable, plain text, no links to rows. You CAN set up tasks here: each one you propose is sent to them with a Confirm button and happens only when they tap it — so say what you have set up for them to confirm, never that it is done. A message to a customer, a test drive, marking a deal lost and starting a quote are the exceptions: they are never done from WhatsApp. Propose them as usual and each is saved as a card on their Ask page in the CRM, where they confirm or send it — say it is saved there for them, never that it was sent or done. For a message to a customer, also put the draft in your answer so they can read it now.";
+
+/**
+ * WhatsApp, when confirming there is NOT allowed (the default). Nothing can be
+ * changed from the phone — but the task the person asked for is not thrown
+ * away: the caller saves each proposal as a card on their Ask page.
+ */
+export const WHATSAPP_SAVED_RULE =
+  "The person is asking on WhatsApp from their phone. Keep it short and scannable, plain text, no links to rows. Nothing can be changed from here, but you CAN set tasks up: each one you propose is saved as a card on their Ask page in the CRM, where they press Confirm (or Send, for a message to a customer). So say what you have saved for them to confirm in the CRM — never that it is done, and never that anything was sent. For a message to a customer, also put the draft in your answer so they can read it now.";
+
+/** What the assistant is told about where it is being asked, and what becomes of a task it proposes there. */
+function channelRule(source: AskSource, proposes: boolean, proposeTasks: AskOptions["proposeTasks"]): string {
+  if (source !== "whatsapp" || !proposes) return CHANNEL_RULES[source];
+  return proposeTasks === "saved" ? WHATSAPP_SAVED_RULE : WHATSAPP_CONFIRM_RULE;
+}
 
 export async function askCrm(user: User, asked: string, page?: string | null, opts: AskOptions = {}): Promise<AssistantResult> {
   // Everything the model reads is stripped of invisible characters — the
@@ -1820,9 +1839,10 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
   const question = stripInvisible(asked);
   const source = opts.source ?? "chat";
   // Tasks are proposed only where the person can CONFIRM them: the CRM chat's
-  // cards, and WhatsApp when its caller says it can offer a Confirm button.
+  // cards, and WhatsApp when its caller says what it will do with one — offer a
+  // Confirm button, or keep it as a card for the CRM ("saved").
   // Never a scheduled run or a watch — nobody is there to confirm anything.
-  const proposes = source === "chat" || (source === "whatsapp" && opts.proposeTasks === true);
+  const proposes = source === "chat" || (source === "whatsapp" && (opts.proposeTasks === true || opts.proposeTasks === "saved"));
   const started = Date.now();
   const timings = opts.timings ?? {};
   let lap = started;
@@ -2035,7 +2055,7 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
       LEARN_INSTRUCTIONS,
       proposes ? ACTION_INSTRUCTIONS : "",
       source === "schedule" ? "" : CHOICE_INSTRUCTIONS,
-      source === "whatsapp" && proposes ? WHATSAPP_CONFIRM_RULE : CHANNEL_RULES[source],
+      channelRule(source, proposes, opts.proposeTasks),
       learned,
       images.length ? IMAGE_RULE : "",
       methodInstructions(observations),

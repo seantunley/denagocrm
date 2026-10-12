@@ -3,7 +3,7 @@
 import { useState, useTransition } from "react";
 import Link from "next/link";
 import { Check, Copy, Loader2, Send, X } from "lucide-react";
-import { runAssistantAction, sendAssistantDraft } from "@/app/actions/assistant";
+import { confirmSavedAssistantCard, runAssistantAction, sendAssistantDraft, settleSavedAssistantCard } from "@/app/actions/assistant";
 import type { ActionCard } from "@/lib/assistantActions";
 
 /**
@@ -12,8 +12,18 @@ import type { ActionCard } from "@/lib/assistantActions";
  * and can be changed; it goes to the customer ONLY when the person presses
  * Send, and the address it goes to is read again on the server.
  */
-export default function AssistantActionCard({ card }: { card: ActionCard }) {
-  const [state, setState] = useState<"open" | "done" | "dismissed">("open");
+export default function AssistantActionCard({
+  card,
+  /**
+   * Set when this card was SAVED (proposed on WhatsApp, done here). Confirm then
+   * runs the stored card by its id, once; dismissing or sending removes it from
+   * the list for good, not just from this screen.
+   */
+  savedId,
+}: { card: ActionCard; savedId?: string }) {
+  // "failed": a SAVED card that was tried and may have got part-way. It cannot be
+  // tried again, so it keeps its message and loses its buttons.
+  const [state, setState] = useState<"open" | "done" | "failed" | "dismissed">("open");
   const [message, setMessage] = useState<string | null>(null);
   const [href, setHref] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
@@ -21,17 +31,32 @@ export default function AssistantActionCard({ card }: { card: ActionCard }) {
   const [subject, setSubject] = useState(draft?.subject ?? "");
   const [body, setBody] = useState(draft?.body ?? "");
   // One per card: a second press after a dropped connection is the same message, not a second one.
-  const [compositionId] = useState(() => `dax-${card.id}-${Math.random().toString(36).slice(2)}`);
+  // A saved card keeps the SAME id across reloads, so sending it again after a reload is still the same message.
+  const [compositionId] = useState(() => (savedId ? `dax-saved-${savedId}` : `dax-${card.id}-${Math.random().toString(36).slice(2)}`));
 
   if (state === "dismissed") return null;
 
+  const dismiss = () => {
+    // Not while Confirm or Send is running: the card would vanish and the action
+    // go on regardless. (The server refuses to delete a claimed card too.)
+    if (pending) return;
+    setState("dismissed");
+    if (savedId) void settleSavedAssistantCard(savedId, "dismissed").catch(() => {});
+  };
+
   const confirm = () =>
     startTransition(async () => {
-      const result = await runAssistantAction(card).catch(() => ({ ok: false, error: "Couldn't reach the server — try again." }));
+      const result = await (savedId ? confirmSavedAssistantCard(savedId) : runAssistantAction(card)).catch(() => ({ ok: false, error: "Couldn't reach the server — try again.", unreached: true }));
       setMessage(result.ok ? ("success" in result && result.success) || "Done" : result.error ?? "That didn't work.");
       if (result.ok) {
         setState("done");
         if ("href" in result && result.href) setHref(result.href);
+      } else if (savedId && !("unreached" in result) && !("unchanged" in result && result.unchanged === true)) {
+        // The server tried it and cannot say nothing changed, or it is no longer
+        // waiting: either way this card will not run again, so it offers nothing
+        // more. (Not reaching the server, or being told nothing changed, leaves
+        // Confirm in place — pressing it again is safe: it runs at most once.)
+        setState("failed");
       }
     });
 
@@ -41,7 +66,10 @@ export default function AssistantActionCard({ card }: { card: ActionCard }) {
       const result = await sendAssistantDraft({ leadId: draft.leadId, channel: draft.channel, subject, body, compositionId })
         .catch(() => ({ ok: false, error: "Couldn't reach the server — check the conversation before trying again." }));
       setMessage(result.ok ? ("success" in result && result.success) || "Sent" : result.error ?? "That didn't send.");
-      if (result.ok) setState("done");
+      if (result.ok) {
+        setState("done");
+        if (savedId) await settleSavedAssistantCard(savedId, "sent").catch(() => {});
+      }
     });
 
   const copy = async () => {
@@ -78,7 +106,7 @@ export default function AssistantActionCard({ card }: { card: ActionCard }) {
           {reason && <p className="mt-1 text-xs text-muted-foreground">{reason}</p>}
         </div>
         {state === "open" && (
-          <button type="button" onClick={() => setState("dismissed")} className="text-muted-foreground hover:text-foreground" aria-label="Dismiss">
+          <button type="button" onClick={dismiss} disabled={pending} className="text-muted-foreground hover:text-foreground disabled:opacity-40" aria-label="Dismiss">
             <X className="size-4" />
           </button>
         )}

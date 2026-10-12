@@ -1168,6 +1168,12 @@ model AssistantPendingAction {
   completedAt DateTime?
   /// It threw part-way, so how far it got is unknown. Never runs again.
   failedAt    DateTime?
+  /// Proposed on WhatsApp, but a task that is only ever done in the CRM (a test
+  /// drive, a lost deal, a quote, a message to a customer) — or one that could
+  /// not be offered a button there. Kept as a card on the Ask page, so the
+  /// person does not have to ask again. NEVER has a WhatsApp button, and the
+  /// WhatsApp confirm path does not read these rows.
+  forCrm      Boolean   @default(false)
   createdAt   DateTime  @default(now())
 
   @@index([tenantId, userId, createdAt])
