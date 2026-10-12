@@ -347,9 +347,10 @@ test("the sender may pick among their own live banners, or none — never anythi
 test("a preview's banner is not a tracked link, and a sent email's is", () => {
   const composer = src("src/app/actions/emails.ts");
   assert.match(composer, /bannerHtml\(banner, preview \? banner\.linkUrl : bannerClickUrl\(origin, banner\.token\)\)/);
-  assert.match(composer, /if \(bannerId && bannerTenantId\) await recordBannerSent\(bannerTenantId, bannerId\);/);
+  // (Wrapped as bookkeeping: once the email has left, a failed count must not report the send as failed.)
+  assert.match(composer, /if \(bannerId && bannerTenantId\) await bookkeeping\("count the banner", \(\) => recordBannerSent\(bannerTenantId, bannerId\)\);/);
   // …and only after the email has actually left: a failed send counts nothing.
-  assert.ok(composer.indexOf("return { error: result.error };") < composer.indexOf("await recordBannerSent(bannerTenantId, bannerId)"));
+  assert.ok(composer.indexOf("return { error: result.error };") < composer.indexOf("recordBannerSent(bannerTenantId, bannerId)"));
   assert.equal(EMAIL_REF_MARKER, "__crm_email_ref__");
 });
 
