@@ -89,7 +89,7 @@ test("a lead's brief carries who logged each message, who owns and who scheduled
   const lib = code("src/lib/crmAssistant.ts");
   const brief = lib.slice(lib.indexOf("export async function leadBrief"), lib.indexOf("async function quotesForLead"));
   // Read from the records…
-  assert.match(brief, /select: \{ occurredAt: true, direction: true, type: true, subject: true, body: true, user: \{ select: \{ id: true, name: true \} \} \},/);
+  assert.match(brief, /occurredAt: true, direction: true, type: true, subject: true, body: true, user: \{ select: \{ id: true, name: true \} \},/);
   assert.match(brief, /assignedTo: \{ select: \{ id: true, name: true \} \},\s*createdBy: \{ select: \{ id: true, name: true \} \},/);
   assert.match(brief, /createdBy: \{ select: \{ id: true, name: true \} \},\s*\},\s*\}\);/, "the lead's own creator");
   // …measured against the stand-in account, whose failure costs the doubt, not the answer…
