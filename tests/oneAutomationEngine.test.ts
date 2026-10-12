@@ -236,12 +236,52 @@ const EMITTED_EVENT_TRIGGERS = (() => {
   for (const rel of ALL_SOURCES) {
     // emitContactJourneyEvent is the same emitter for a customer rather than a
     // lead (a job card completed, a vehicle delivered) — same gate, same contract.
-    for (const [, trigger] of shipped(rel).matchAll(/emit(?:Lead|Contact)JourneyEvent\(\s*"([a-z_]+)"/g)) {
+    // emitQuoteJourneyEvent and emitTestDriveJourneyEvent are those same two,
+    // chosen by whether the quote or booking has a lead (asserted just below).
+    for (const [, trigger] of shipped(rel).matchAll(/emit(?:Lead|Contact|Quote|TestDrive)JourneyEvent\(\s*"([a-z_]+)"/g)) {
       found.add(trigger);
     }
   }
   return found;
 })();
+
+test("the quote and test-drive emitters are the lead and customer emitters, not a third way in", () => {
+  // The reachability check above counts a call to either as "emitted". That is
+  // only true while they do nothing but hand over to the two real emitters —
+  // same Marketing gate, same never-rejects contract, same dedupe.
+  const code = shipped("src/lib/leadJourneyEvents.ts");
+  assert.match(code, /if \(owner\.leadId\) return emitLeadJourneyEvent\(trigger, owner\.leadId, options\);\s*if \(owner\.contactId\) return emitContactJourneyEvent\(trigger, owner\.contactId, options\);/);
+  for (const helper of ["emitQuoteJourneyEvent", "emitTestDriveJourneyEvent"]) {
+    const body = code.slice(code.indexOf(`export async function ${helper}`)).split("\nexport ")[0];
+    assert.match(body, /await emitForLeadOrContact\(trigger, /, `${helper} must go through the shared hand-over`);
+    assert.doesNotMatch(body, /emitJourneyEvent\(|prisma\./, `${helper} must not write an event or read a record itself`);
+  }
+});
+
+test("each quote and test-drive trigger fires from every place that event really happens", () => {
+  // A trigger fired from ONE of two doors enrols some customers and not others,
+  // with nothing to show which. Every writer of the state is named here.
+  const testDrives = shipped("src/app/actions/testDrives.ts");
+  assert.match(testDrives, /emitTestDriveJourneyEvent\("test_drive_booked", booking\)/, "booked in the Test drives module");
+  assert.match(shipped("src/app/actions/leads.ts"), /if \(booked\) await emitTestDriveJourneyEvent\("test_drive_booked", booked\)/, "booked from the lead's page — a NEW booking only, not a reschedule");
+  assert.match(testDrives, /emitTestDriveJourneyEvent\("test_drive_completed", updated, \{ outcome: salesOutcome \}\)/);
+  assert.match(testDrives, /emitTestDriveJourneyEvent\("test_drive_no_show", updated\)/);
+  // The only two creators of a booking, and the only writers of those two statuses.
+  const writers = (pattern: RegExp) => ALL_SOURCES.filter((rel) => pattern.test(shipped(rel))).sort();
+  assert.deepEqual(writers(/createBookedTestDrive\(tx,/), ["src/app/actions/leads.ts", "src/app/actions/testDrives.ts"]);
+  assert.deepEqual(writers(/testDriveBooking\.update[\s\S]{0,160}status: "(completed|no_show)"/), ["src/app/actions/testDrives.ts"]);
+
+  // A quote becomes "sent" by email or by a signing invitation; "opened" on the signing page.
+  assert.match(shipped("src/app/actions/quoteEmail.ts"), /if \(result\.markedSent\) await emitQuoteJourneyEvent\("quote_sent", quote, /, "only when this email is what made it sent");
+  const mirror = shipped("src/lib/signing/quoteMirror.ts");
+  assert.match(mirror, /if \(becameSent\) await tellJourneys\(tenantId, quoteId, \(quote\) => emitQuoteJourneyEvent\("quote_sent", quote, `sent:request:\$\{requestId\}`\)\)/);
+  assert.match(mirror, /if \(firstView\) await tellJourneys\(tenantId, quoteId, \(quote\) => emitQuoteJourneyEvent\("quote_opened", quote, "opened"\)\)/);
+  // From the public page or cron there may be no workspace bound: the request's own is named.
+  assert.match(mirror, /basePrisma\.quote\.findFirst\(\{ where: \{ id: quoteId, tenantId \}/);
+  assert.match(mirror, /runInTenantScope\(\{ tenantId, system: false \}, \(\) => emit\(quote\)\)/);
+  assert.deepEqual(writers(/quote\.updateMany\(\{[\s\S]{0,420}data: \{ status: "sent"/), ["src/app/actions/quoteEmail.ts", "src/lib/signing/quoteMirror.ts"]);
+  assert.deepEqual(writers(/quote\.update(Many)?\(\{[^;]{0,200}data: \{ viewedAt: new Date\(\)/), ["src/lib/signing/quoteMirror.ts"]);
+});
 
 for (const trigger of JOURNEY_EVENT_TRIGGERS) {
   test(`the builder offers "${trigger}" and a write path emits it`, () => {

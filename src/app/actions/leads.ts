@@ -4,7 +4,7 @@ import { asActionResult, ActionRefusal, refuse } from "@/lib/actionResult";
 import { revalidatePath } from "next/cache";
 import { prisma, basePrisma } from "@/lib/db";
 import { contactName, parseRands } from "@/lib/format";
-import { emitLeadJourneyEvent } from "@/lib/leadJourneyEvents";
+import { emitLeadJourneyEvent, emitTestDriveJourneyEvent } from "@/lib/leadJourneyEvents";
 import { recordReferral } from "@/lib/referrals";
 import { logAudit, logAuditStrict, GOVERNANCE_TX } from "@/lib/audit";
 import { softDeleteRecord } from "@/lib/trash";
@@ -877,6 +877,7 @@ export async function moveLeadToTestDrive(
   const expectedReturnAt = new Date(when.getTime() + DEFAULT_TEST_DRIVE_MINUTES * 60_000);
   const branch = data.location.trim() || "Showroom";
   let bookingReference = "";
+  let booked: { id: string; reference: string; leadId: string | null; contactId: string } | null = null;
   const lead = await prisma.$transaction(async (tx) => {
     const updated = await tx.lead.update({
       where: { id: leadId },
@@ -963,6 +964,8 @@ export async function moveLeadToTestDrive(
         adoptActivityId: adopt,
       });
       bookingReference = booking.reference;
+      // A NEW booking — a reschedule above is the same booking, moved.
+      booked = booking;
     }
     // INSIDE the transaction, with `tx`. Written after the move and the booking
     // but committed with them: a strict audit throws on failure, and outside this
@@ -1010,6 +1013,8 @@ export async function moveLeadToTestDrive(
     user,
   });
   if (changingStage) await emitLeadJourneyEvent("stage_entered", leadId);
+  // Booked from the lead's own page: the same event the Test drives module raises.
+  if (booked) await emitTestDriveJourneyEvent("test_drive_booked", booked);
   revalidatePath("/leads");
   revalidatePath("/calendar");
   revalidatePath("/test-drives");

@@ -80,6 +80,12 @@ export const JOURNEY_TRIGGER_LABELS: Record<JourneyTrigger, string> = {
   referral_earned: "Referral is earned",
   job_completed: "Job card is completed",
   vehicle_delivered: "Vehicle registered as a new delivery",
+  quote_sent: "Quote is sent to the customer",
+  // The signing page, not an email being opened: that is the view the CRM records.
+  quote_opened: "Customer opens a quote sent for signing",
+  test_drive_booked: "Test drive is booked",
+  test_drive_completed: "Test drive is completed",
+  test_drive_no_show: "Customer misses a test drive",
   lead_idle: "Lead becomes idle",
   contact_segment: "Contact joins a saved segment",
   purchase_anniversary: "Purchase anniversary",
@@ -112,6 +118,11 @@ const FILTERLESS_TRIGGER_TYPES = [
   "referral_earned",
   "job_completed",
   "vehicle_delivered",
+  "quote_sent",
+  "quote_opened",
+  "test_drive_booked",
+  "test_drive_completed",
+  "test_drive_no_show",
   // Scheduled, but with nothing to tell two apart: the sweep is the same each time.
   "service_due",
 ] as const;

@@ -1,6 +1,7 @@
 "use server";
 
 import { createBookedTestDrive, demoVehicleUnavailable } from "@/lib/testDriveBooking";
+import { emitTestDriveJourneyEvent } from "@/lib/leadJourneyEvents";
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/db";
 import { agreedTenantId } from "@/lib/compositeTenantRules";
@@ -242,6 +243,8 @@ export async function createTestDriveBooking(formData: FormData) {
       booking,
       after: booking,
     });
+    // After the booking is committed. It never rejects, so it cannot undo one.
+    await emitTestDriveJourneyEvent("test_drive_booked", booking);
     revalidatePath("/test-drives");
     revalidatePath("/calendar");
     // Returned, not thrown: SaveForm navigates only when the action says it saved.
@@ -476,6 +479,9 @@ export async function completeTestDrive(id: string, formData: FormData) {
       return result;
     });
     await auditBooking({ action: "test_drive.completed", summary: `Completed ${updated.reference}`, user, booking: updated, before, after: updated });
+    // What the salesperson recorded is kept on the event and shows in the trace.
+    // A step cannot branch on it yet: conditions read only the event's type.
+    await emitTestDriveJourneyEvent("test_drive_completed", updated, { outcome: salesOutcome });
     revalidatePath("/test-drives");
     revalidatePath("/test-drives/demo-fleet");
     revalidatePath(`/test-drives/${id}`);
@@ -516,6 +522,7 @@ export async function markTestDriveNoShow(id: string, formData: FormData) {
     });
     await indemnityWithdrawn(withdrawn, user, updated, "Customer did not arrive");
     await auditBooking({ action: "test_drive.no_show", summary: `Marked ${updated.reference} as no-show`, user, booking: updated, before, after: updated });
+    await emitTestDriveJourneyEvent("test_drive_no_show", updated);
     revalidatePath("/test-drives");
     revalidatePath(`/test-drives/${id}`);
     revalidatePath("/calendar");
