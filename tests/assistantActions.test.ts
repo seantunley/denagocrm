@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { readFileSync } from "node:fs";
-import { MAX_ACTIONS, MAX_CHOICES, splitActions, splitChoices } from "../src/lib/assistantActions";
+import { ACTION_INSTRUCTIONS, MAX_ACTIONS, MAX_CHOICES, splitActions, splitChoices } from "../src/lib/assistantActions";
+import { WHATSAPP_CONFIRMABLE } from "../src/lib/assistantWhatsAppRules";
 import { splitLearn } from "../src/lib/assistantMemory";
 
 const code = (rel: string) =>
@@ -126,6 +127,54 @@ test("a note can go on a CUSTOMER with no lead, and be pinned — proposed, chec
   const card = code("src/components/AssistantActionCard.tsx");
   assert.match(card, /card\.kind === "customer_note" \? `\/contacts\/\$\{card\.contactId\}`/);
   assert.match(card, /\(card\.kind === "note" \|\| card\.kind === "customer_note"\)/);
+});
+
+test("a PERSONAL calendar item can be proposed: time blocked on the asker's own calendar, with no lead", () => {
+  // Asked to block two hours, the assistant said it "can only propose a meeting linked to a lead" (Sean, 2026-10-11).
+  const { actions } = splitActions(
+    `Set up for you to confirm.\nACTIONS: [` +
+      `{"type":"block_time","when":"2026-10-12T09:00","minutes":120,"summary":"Admin","note":"Catching up on paperwork"},` +
+      `{"type":"block_time","when":"2026-10-19","until":"2026-10-23","note":"On leave"},` +
+      `{"type":"block_time","when":"2026-10-12T09:00","summary":"No reason given"},` +
+      `{"type":"block_time","when":"2026-10-12T09:00","note":"x","minutes":5},` +
+      `{"type":"block_time","when":"2026-10-12T09:00","note":"For Donovan","assignedTo":"Donovan"},` +
+      `{"type":"block_time","when":"tomorrow","note":"x"}]`,
+  );
+  assert.deepEqual(actions, [
+    { type: "block_time", when: "2026-10-12T09:00", minutes: 120, summary: "Admin", note: "Catching up on paperwork" },
+    { type: "block_time", when: "2026-10-19", until: "2026-10-23", note: "On leave" },
+  ], "a note is required; 15 minutes at least; a real date; and nobody else's calendar can be named");
+
+  // Resolved to a card for the asker's own calendar — no lead, no assignee, and never one in the past.
+  const lib = code("src/lib/crmAssistant.ts");
+  const resolve = lib.slice(lib.indexOf("async function resolveActions"), lib.indexOf("function dedupeRows"));
+  const branch = resolve.slice(resolve.indexOf('if (p.type === "block_time")'), resolve.indexOf('if (p.type === "watch")'));
+  assert.match(branch, /kind: "block_time" as const, leadId: null, leadLabel: "Your calendar"/);
+  assert.match(branch, /start\.getTime\(\) < Date\.now\(\) - 60 \* 60 \* 1000\) continue;/);
+  assert.match(branch, /if \(p\.when < johannesburgDateKey\(new Date\(\)\)\) continue;/);
+  assert.match(branch, /\(p\.minutes \?\? 60\) \* 60 \* 1000/, "an hour when no length is given");
+  assert.doesNotMatch(branch, /assignedTo|userId|canAccessLead/, "whose calendar is never taken from the proposal");
+
+  // Confirmed through the calendar's own action: its permission, its required note, its clash check.
+  const action = code("src/app/actions/assistant.ts");
+  const run = action.slice(action.indexOf('case "block_time"'), action.indexOf('case "reschedule"'));
+  assert.match(run, /const result = await createStaffAvailability\(form\);\s*if \(result\.error\) return \{ ok: false, error: result\.error \};/);
+  assert.doesNotMatch(run, /assignedToId/, "no assignee is passed, so it is the confirmer's own calendar");
+  assert.match(run, /form\.set\("note", card\.detail\);/);
+  assert.match(run, /if \(card\.allDay\) \{\s*form\.set\("allDay", "on"\);\s*form\.set\("startDate", card\.start\);\s*form\.set\("endDate", card\.end\);/);
+  const calendar = code("src/app/actions/staffAvailability.ts");
+  assert.match(calendar, /const user = await requirePermission\("activities\.manage"\);/);
+  assert.match(calendar, /const assignedTo = assignee \?\? user;/);
+  assert.match(calendar, /if \(conflict\) return \{ conflict \} as const;/);
+
+  // The assistant is told it exists, and to ask for what is missing rather than refuse.
+  assert.match(ACTION_INSTRUCTIONS, /block_time: a PERSONAL calendar item/);
+  assert.match(ACTION_INSTRUCTIONS, /Never tell them a personal item is impossible or needs a lead\./);
+  assert.match(ACTION_INSTRUCTIONS, /MISSING DETAILS: when a task needs something they have not told you/);
+  assert.match(ACTION_INSTRUCTIONS, /Never invent a required detail, never guess a time, and never refuse or say it cannot be done because a detail is missing\./);
+  // It can be confirmed from WhatsApp: it changes only the person's own calendar.
+  assert.ok(WHATSAPP_CONFIRMABLE.has("block_time"));
+  assert.match(code("src/components/AssistantActionCard.tsx"), /card\.kind === "test_drive" \|\| card\.kind === "block_time"\) && <p[^>]*>\{card\.detail\}<\/p>/);
 });
 
 test("Confirm runs the action a person would use by hand — and Confirm never sends", () => {
