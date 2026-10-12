@@ -1018,6 +1018,10 @@ model AssistantTurn {
   /// How many of its WhatsApp messages have gone (a long answer is several). A
   /// send that stopped half-way resumes here instead of ending or starting over.
   whatsappPartsSent Int @default(0)
+  /// A quote whose PDF goes to the person's linked WhatsApp with this update
+  /// (source "quote_pdf": a draft the assistant built for them). Sent after the
+  /// text, by the same claimed, retried delivery — never to a customer.
+  quoteId String?
   /// The person's thumbs on this answer: "up" | "down".
   feedback       String?
   feedbackReason String?

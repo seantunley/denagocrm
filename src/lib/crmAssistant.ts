@@ -52,7 +52,7 @@ import { webLookup } from "./crmAssistantWeb";
 import { assistantWebAllowed } from "./assistantUser";
 import { MAX_IMAGES_PER_QUESTION } from "./assistantImage";
 import { applyLearn, loadLearned, loadPlaybook, markNotesUsed, saveDecision, visibleTo } from "./assistantMemoryStore";
-import { ACTION_INSTRUCTIONS, CHOICE_INSTRUCTIONS, type ActionCard, type ProposedAction } from "./assistantActions";
+import { ACTION_INSTRUCTIONS, CHOICE_INSTRUCTIONS, quoteBuildText, type ActionCard, type ProposedAction, type QuoteBuildLine } from "./assistantActions";
 import { describeSchedule, nextRun, scheduleInput } from "./assistantSchedule";
 import { describeWatch, watchInput } from "./assistantWatchRules";
 import {
@@ -854,6 +854,10 @@ async function knowledge(user: User, raw: z.infer<typeof knowledgeArgs>): Promis
     data: [{
       company: company ? { name: company.name, tagline: company.tagline, website: company.website, address: company.address } : null,
       products: relevant.map((p) => ({
+        // The id a quote_build line names (assistantActions.QUOTE_BUILD_RULE). Without
+        // it the assistant knew the product and its price and could not put it on a
+        // quote: an id it made up fails the catalogue check and the task is dropped.
+        productId: p.id,
         product: p.name,
         category: p.category,
         price: formatZAR(p.basePriceCents),
@@ -2352,6 +2356,30 @@ async function resolveActions(user: User, proposals: ProposedAction[]): Promise<
       cards.push({ id, kind: "lost", leadId: p.leadId, leadLabel, title: `Mark ${lead.name}'s deal as lost`, reason: p.reason });
     } else if (p.type === "quote") {
       cards.push({ id, kind: "quote", leadId: p.leadId, leadLabel, title: `Start a quote for ${lead.name}`, ...(p.reason ? { reason: p.reason } : {}) });
+    } else if (p.type === "quote_build") {
+      // Only for someone who may create quotes, on a lead with a customer (a
+      // quote belongs to one), and only catalogue products that are on sale —
+      // read through the workspace's own client, so another workspace's product
+      // id reads as missing. The PRICE is the catalogue's, never the model's.
+      if (!lead.contactId || !(await hasPermission(user, "quotes.create"))) continue;
+      const products = await prisma.product.findMany({
+        where: { id: { in: [...new Set(p.lines.map((line) => line.productId))] }, active: true, deletedAt: null },
+        select: { id: true, name: true, basePriceCents: true },
+      });
+      const byId = new Map(products.map((product) => [product.id, product]));
+      if (p.lines.some((line) => !byId.has(line.productId))) continue;
+      const lines: QuoteBuildLine[] = p.lines.map((line) => {
+        const product = byId.get(line.productId)!;
+        return {
+          productId: product.id, description: product.name, qty: line.qty, unitPriceCents: product.basePriceCents,
+          discountPct: line.discountPct ?? 0, ...(line.colour ? { colour: line.colour } : {}),
+        };
+      });
+      cards.push({
+        id, kind: "quote_build", leadId: p.leadId, leadLabel, contactId: lead.contactId, lines,
+        title: `Create a draft quote for ${lead.name}`, text: quoteBuildText(lines, (cents) => formatZAR(cents)),
+        ...(p.reason ? { reason: p.reason } : {}),
+      });
     }
   }
   return cards;

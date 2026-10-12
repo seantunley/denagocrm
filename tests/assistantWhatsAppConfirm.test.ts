@@ -117,8 +117,16 @@ const state = {
   ran: [] as { asUserId: string; card: Record<string, unknown> }[],
   audits: [] as { action: string; summary: string; leadId?: string }[],
   errors: [] as string[],
-  outcome: { ok: true, success: "Note added" } as { ok: boolean; success?: string; error?: string; unchanged?: boolean } | "refuse" | "throw",
+  outcome: { ok: true, success: "Note added" } as { ok: boolean; success?: string; error?: string; unchanged?: boolean; quote?: { id: string; number: number } } | "refuse" | "throw",
   failTextContaining: "",
+  /** Where each run said Confirm was pressed. */
+  via: [] as (string | undefined)[],
+  /** Documents sent on WhatsApp: the full argument list of each call. */
+  documents: [] as unknown[][],
+  /** Quote PDFs rendered, and as whom. */
+  rendered: [] as { quoteId: string; asUserId: string }[],
+  failDocuments: false,
+  noPdf: false,
   seq: 0,
 };
 type Where = Record<string, unknown>;
@@ -178,12 +186,22 @@ loaderKey._load = function (this: unknown, request: string, parent, isMain) {
           state.sent.push({ to, text, buttons });
           return { ok: true };
         },
+        // Every argument is kept: a fourth one (`record`) would file the send on a customer's timeline.
+        sendWhatsAppDocument: async (...args: unknown[]) => {
+          if (state.failDocuments) return { ok: false };
+          state.documents.push(args);
+          return { ok: true };
+        },
+      };
+      case "./quotePdf": return {
+        quotePdf: async (quoteId: string) => { state.rendered.push({ quoteId, asUserId: asUser ?? "NOBODY" }); return state.noPdf ? null : Buffer.from("%PDF-1.7 quote"); },
       };
       // The real one is proved by its source below; here it records WHO the action ran as.
       case "./auth": return { runAsLinkedStaff: async (userId: string, fn: () => Promise<unknown>) => { asUser = userId; try { return await fn(); } finally { asUser = null; } } };
       case "@/app/actions/assistant": return {
-        runAssistantAction: async (card: Record<string, unknown>) => {
+        runAssistantAction: async (card: Record<string, unknown>, via?: string) => {
           state.ran.push({ asUserId: asUser ?? "NOBODY", card });
+          state.via.push(via);
           if (state.outcome === "refuse") throw Object.assign(new Error("NEXT_REDIRECT"), { digest: "NEXT_REDIRECT;replace;/;307;" });
           if (state.outcome === "throw") throw new Error("database unavailable");
           return state.outcome;
@@ -219,6 +237,44 @@ beforeEach(() => {
   state.errors = [];
   state.outcome = { ok: true, success: "Note added" };
   state.failTextContaining = "";
+  state.documents = [];
+  state.rendered = [];
+  state.failDocuments = false;
+  state.noPdf = false;
+  state.via = [];
+});
+
+const QUOTE_BUILD = {
+  id: "a0", kind: "quote_build", leadId: LEAD, leadLabel: "Anna — Rover", contactId: "cmcontactabcdefghijklmno", title: "Create a draft quote for Anna",
+  lines: [{ productId: "cmproductabcdefghijklmno", description: "Rover XL", qty: 1, unitPriceCents: 24990000, discountPct: 0 }],
+  text: "1 × Rover XL — R 249 900,00 each\nCatalogue prices. Created as a DRAFT — it is not sent to the customer.",
+};
+
+test("A QUOTE DAX BUILT: offered with every line, confirmed once — and the confirm step itself sends no document", async () => {
+  assert.ok(WHATSAPP_CONFIRMABLE.has("quote_build"));
+  // Offered with every line shown before the button exists.
+  await offerConfirmations("t1", "u1", PHONE, [QUOTE_BUILD] as never[]);
+  const offer = state.sent.find((s) => s.buttons);
+  assert.match(offer?.text ?? "", /^Create a draft quote for Anna\n\n1 × Rover XL — R 249 900,00 each\nCatalogue prices\. Created as a DRAFT — it is not sent to the customer\./);
+
+  const row = state.rows[0];
+  state.sent = [];
+  state.outcome = { ok: true, success: "Draft quote Q-1030 created — R 249 900,00. It has NOT been sent to the customer.", quote: { id: "cmquoteabcdefghijklmnopq", number: 1030 } };
+  await confirmFromWhatsApp("t1", me, PHONE, row.id);
+  assert.equal(state.ran.length, 1);
+  // Told the action where Confirm was pressed, so it leaves the PDF's send to the WhatsApp door.
+  assert.deepEqual(state.via, ["whatsapp"]);
+  assert.deepEqual(state.sent.map((s) => s.text), ["✅ Draft quote Q-1030 created — R 249 900,00. It has NOT been sent to the customer."]);
+  // THE CONFIRM STEP SENDS NO DOCUMENT ITSELF. The PDF is queued by the action and
+  // delivered by the assistant's durable update sender (tests/assistantWhatsApp.test.ts):
+  // re-verified phone, retried, never lost with this request.
+  assert.deepEqual(state.documents, []);
+  assert.deepEqual(state.rendered, []);
+  const lib = code("src/lib/assistantWhatsAppConfirm.ts");
+  assert.doesNotMatch(lib, /sendWhatsAppDocument|quotePdf\(|sendWhatsAppTemplate/);
+  // Tapped again: nothing runs a second time — so there is never a second quote.
+  await confirmFromWhatsApp("t1", me, PHONE, row.id);
+  assert.equal(state.ran.length, 1);
 });
 
 test("a long note: the full text is delivered BEFORE the button exists — and if it is not delivered, there is no button", async () => {
@@ -370,7 +426,11 @@ test("A PINNED NOTE WHOSE PIN FAILS IS NOT WRITTEN TWICE: the note was saved, so
   const action = code("src/app/actions/assistant.ts");
   const run = action.slice(action.indexOf("export async function runAssistantAction"), action.indexOf("export async function sendAssistantDraft"));
   assert.match(action, /const untouched = \(error: string\) => \(\{ ok: false as const, error, unchanged: true as const \}\);/);
-  assert.equal((run.match(/return untouched\(/g) ?? []).length, 10);
+  // (Four of them are quote_build's: lead gone, customer changed, invalid lines, catalogue changed — each before saveQuoteDraft.)
+  assert.equal((run.match(/return untouched\(/g) ?? []).length, 14);
+  const quoteBuild = run.slice(run.indexOf('case "quote_build": {'));
+  assert.equal((quoteBuild.slice(0, quoteBuild.indexOf("await saveQuoteDraft(")).match(/return untouched\(/g) ?? []).length, 4);
+  assert.equal((quoteBuild.slice(quoteBuild.indexOf("await saveQuoteDraft("), quoteBuild.indexOf("default:")).match(/untouched\(/g) ?? []).length, 0);
   // …and never on an error handed back by the action a card delegates to.
   for (const delegated of run.match(/if \((?:!result\.ok|result\??\.error|!saved(?:\.ok)?)\) (?:\{\s*)?return [^\n]*/g) ?? []) {
     assert.doesNotMatch(delegated, /untouched|unchanged/, delegated);
@@ -527,7 +587,7 @@ test("the claim is one conditional update naming workspace, person, unclaimed an
   assert.match(lib, /if \(claimed\.count !== 1\) return say\(/);
   // Whatever a run ends as, it is written against THIS claim only — it cannot undo or overwrite a later one.
   assert.match(lib, /updateMany\(\{ where: \{ id: pendingId, tenantId, userId: user\.id, confirmedAt: now, completedAt: null, failedAt: null \}, data \}\)/);
-  const order = ["confirmingOnWhatsAppOn()", "assistantPendingAction.updateMany(", "WHATSAPP_CONFIRMABLE.has(String(card.kind))", "runAsLinkedStaff(user.id, () => runAssistantAction(card))"].map((needle) => lib.indexOf(needle));
+  const order = ["confirmingOnWhatsAppOn()", "assistantPendingAction.updateMany(", "WHATSAPP_CONFIRMABLE.has(String(card.kind))", "runAsLinkedStaff(user.id, () => runAssistantAction(card, \"whatsapp\"))"].map((needle) => lib.indexOf(needle));
   assert.ok(order.every((at, i) => at > -1 && (i === 0 || order[i - 1] < at)), "switch, claim, kind, run — in that order");
   // It changes records only through the CRM's own Confirm, and can send nothing to a customer.
   assert.doesNotMatch(lib, /prisma\.(lead|contact|communication|activity|quote)\b|sendEmail|sendMessenger|sendTelegram|sendAssistantDraft/);

@@ -125,9 +125,15 @@ export const CRM_CARD_TTL_MS = 24 * 60 * 60 * 1000;
  *  - lost, quote — closing a deal and starting a quote deserve the screen.
  * A kind not named here is not confirmable: a new kind is CRM-only until someone
  * decides otherwise.
+ *
+ * quote_build IS here (Sean, 2026-10-12): it creates a DRAFT quote from lines the
+ * person has read in full, and sends its PDF back to the phone that confirmed
+ * it. It is still an internal change — the draft reaches no customer, is not
+ * marked sent, and sending it stays a step in the CRM.
  */
 export const WHATSAPP_CONFIRMABLE: ReadonlySet<string> = new Set([
   "note", "customer_note", "follow_up", "assign", "stage", "meeting", "block_time", "reschedule", "cancel_activity", "schedule", "watch",
+  "quote_build",
 ]);
 
 /** Proposed cards, split into those that get a Confirm button here and those that need the CRM. */
@@ -184,7 +190,15 @@ export function confirmMessages(card: { title: string; text?: unknown; question?
  */
 
 /** The kinds of answer nobody was waiting on a screen for. */
-export const PROACTIVE_SOURCES = ["schedule", "watch", "handoff"] as const;
+export const PROACTIVE_SOURCES = ["schedule", "watch", "handoff", "quote_pdf"] as const;
+/**
+ * A draft quote the assistant built for this person, with its PDF. It rides the
+ * same delivery as a briefing — claimed, sent whole, retried by the half-hourly
+ * sweep — so the PDF is not lost when the request that created the quote ends
+ * first. Unlike the others the person ASKED for it, so it goes to their linked
+ * phone even when they have switched general updates off.
+ */
+export const QUOTE_PDF_SOURCE = "quote_pdf";
 
 /**
  * The owner's switch (AppSetting): when the chatbot hands a conversation to a
@@ -340,6 +354,7 @@ export function updateText(turn: { source: string; question: string; answer: str
   const heading =
     turn.source === "watch" ? `👀 You asked me to watch: ${turn.question.trim()}`
     : turn.source === "handoff" ? `🙋 ${turn.question.trim()}`
+    : turn.source === QUOTE_PDF_SOURCE ? `🧾 ${turn.question.trim()}`
     : `⏰ Scheduled: ${turn.question.trim()}`;
   return `${heading}\n\n${turn.answer.trim()}`;
 }
