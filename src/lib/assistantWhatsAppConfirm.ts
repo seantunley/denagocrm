@@ -10,6 +10,7 @@ import type { PermissionUser } from "./permissions";
 import { runAssistantAction } from "@/app/actions/assistant";
 import {
   ASSISTANT_WHATSAPP_CONFIRM_KEY,
+  CRM_CARD_TTL_MS,
   PENDING_ACTION_TTL_MS,
   WHATSAPP_CONFIRMABLE,
   confirmButtonId,
@@ -79,10 +80,40 @@ export async function offerConfirmations(tenantId: string, userId: string, waId:
       if (!sent.ok) await logError("assistant-whatsapp", "confirm offer send failed");
     }
     if (elsewhere.length > 0) {
-      await say(waId, `${elsewhere.length === 1 ? "This one needs" : "These need"} the CRM — ask me there and confirm on the card:\n${elsewhere.map((card) => `• ${card.title}`).join("\n")}`);
+      // KEPT, not only named. These are done in the CRM — but the person has
+      // already said what they want, so each is saved as a card on their Ask
+      // page instead of having to be asked for again there. Saved first: the
+      // message must not promise a card that is not there.
+      const saved = await saveForCrm(tenantId, userId, elsewhere);
+      const list = elsewhere.map((card) => `• ${card.title}`).join("\n");
+      await say(
+        waId,
+        saved
+          ? `${elsewhere.length === 1 ? "This one is" : "These are"} done in the CRM. I've saved ${elsewhere.length === 1 ? "it" : "them"} on your Ask page — open it and press Confirm (kept for a day):\n${list}`
+          : `${elsewhere.length === 1 ? "This one needs" : "These need"} the CRM — ask me there and confirm on the card:\n${list}`,
+      );
     }
   } catch (error) {
     await logError("assistant-whatsapp", "offering confirmations failed", error instanceof Error ? error.name : "unknown").catch(() => {});
+  }
+}
+
+/**
+ * Cards for the CRM: the same table as a WhatsApp offer, marked `forCrm`, with a
+ * day to be confirmed instead of fifteen minutes. A phone can never confirm one
+ * — no button is sent for it and confirmFromWhatsApp does not read it — so what
+ * a phone may change is exactly what it was before. True: all of them were saved.
+ */
+async function saveForCrm(tenantId: string, userId: string, cards: readonly ActionCard[]): Promise<boolean> {
+  try {
+    const expiresAt = new Date(Date.now() + CRM_CARD_TTL_MS);
+    await basePrisma.assistantPendingAction.createMany({
+      data: cards.map((card) => ({ tenantId, userId, card: card as object, expiresAt, forCrm: true })),
+    });
+    return true;
+  } catch (error) {
+    await logError("assistant-whatsapp", "saving a task for the CRM failed", error instanceof Error ? error.name : "unknown").catch(() => {});
+    return false;
   }
 }
 
@@ -114,7 +145,8 @@ const isRefusal = (error: unknown) =>
  */
 async function whyNotClaimable(tenantId: string, userId: string, pendingId: string, now: Date): Promise<string> {
   const row = await basePrisma.assistantPendingAction.findFirst({
-    where: { id: pendingId, tenantId, userId },
+    // A card saved for the CRM reads as "no such task" here, like any id that was never a button.
+    where: { id: pendingId, tenantId, userId, forCrm: false },
     select: { confirmedAt: true, completedAt: true, failedAt: true, expiresAt: true },
   });
   if (!row) return "That one can't be confirmed — ask me again if you still want it.";
@@ -154,7 +186,8 @@ export async function confirmFromWhatsApp(tenantId: string, user: PermissionUser
   // (The workspace and person are written out in every query here, not spread in:
   // the tenant-access sweep reads the call site.)
   const claimed = await basePrisma.assistantPendingAction.updateMany({
-    where: { id: pendingId, tenantId, userId: user.id, confirmedAt: null, completedAt: null, failedAt: null, expiresAt: { gt: now } },
+    // forCrm: false — a card saved for the CRM is never confirmed from a phone, whatever id arrives.
+    where: { id: pendingId, tenantId, userId: user.id, forCrm: false, confirmedAt: null, completedAt: null, failedAt: null, expiresAt: { gt: now } },
     data: { confirmedAt: now },
   });
   if (claimed.count !== 1) return say(waId, await whyNotClaimable(tenantId, user.id, pendingId, now));

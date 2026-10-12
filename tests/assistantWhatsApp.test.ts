@@ -78,7 +78,7 @@ const state = {
   askedImages: [] as string[][],
   confirmOn: false,
   proposals: [] as { kind: string; title: string }[],
-  proposeTasks: [] as boolean[],
+  proposeTasks: [] as (boolean | "saved")[],
   offered: [] as { tenantId: string; userId: string; waId: string; kinds: string[]; sentBefore: number }[],
   confirmed: [] as { tenantId: string; userId: string; waId: string; pendingId: string }[],
   errors: [] as string[],
@@ -199,12 +199,12 @@ loaderKey._load = function (this: unknown, request: string, parent, isMain) {
       };
       case "./transcribe": return { transcribeVoice: async () => "what is overdue today" };
       case "./crmAssistant": return {
-        askCrm: async (user: { id: string }, question: string, _page: unknown, opts: { source?: string; images?: string[]; proposeTasks?: boolean }) => {
+        askCrm: async (user: { id: string }, question: string, _page: unknown, opts: { source?: string; images?: string[]; proposeTasks?: boolean | "saved" }) => {
           state.asked.push({ userId: user.id, question, source: opts.source });
           state.askedImages.push(opts.images ?? []);
-          state.proposeTasks.push(opts.proposeTasks === true);
-          // As the real one: proposals come back only when the caller said it can confirm them.
-          if (opts.proposeTasks === true && state.proposals.length) {
+          state.proposeTasks.push(opts.proposeTasks ?? false);
+          // As the real one: proposals come back only when the caller said what it will do with them.
+          if (opts.proposeTasks && state.proposals.length) {
             return { ok: true, answer: "Set up for you to confirm.", rows: [], tools: [], learned: 0, actions: state.proposals, choices: [] };
           }
           return { ok: true, answer: "Two follow-ups are overdue.", rows: [], tools: [], learned: 0, actions: [], choices: ["Show them"] };
@@ -666,15 +666,16 @@ test("'typing…' shows while DAX works it out — for staff only, before the an
   }
 });
 
-test("tasks are proposed and offered only when the owner allows confirming; a tapped Confirm is reached only as verified staff", async () => {
+test("a task asked for on WhatsApp is never thrown away: saved for the CRM by default, a Confirm button when the owner allows it; a tapped Confirm is reached only as verified staff", async () => {
   const CONFIRM = "daxc:cmpendingpendingpendingpe";
   verified("u1", STAFF);
   state.proposals = [{ kind: "note", title: "Add a note to Anna's lead" }];
 
-  // Switch off (the default): the assistant is not asked for tasks, and nothing is offered.
+  // Switch off (the default): the assistant is told its tasks will be SAVED, and what it
+  // proposed is handed on — the confirm module, which knows the switch is off, keeps it for the CRM.
   assert.equal(await handleStaffWhatsApp(STAFF, { text: "note on Anna: wants white" }), true);
-  assert.deepEqual(state.proposeTasks, [false]);
-  assert.deepEqual(state.offered.map((o) => o.kinds), [[]], "called with nothing to offer");
+  assert.deepEqual(state.proposeTasks, ["saved"]);
+  assert.deepEqual(state.offered.map((o) => o.kinds), [["note"]], "handed on, not dropped");
 
   // Switch on: asked for tasks, and what it proposed is offered — to this person, in this workspace, AFTER the answer.
   state.confirmOn = true;
@@ -918,7 +919,7 @@ test("the staff path never writes a customer record or runs the bot", () => {
   for (const call of lib.match(/sendWhatsApp(Text|Buttons)\([^)]*\)/g) ?? []) {
     assert.doesNotMatch(call, /record/, call);
   }
-  assert.match(lib, /askCrm\(user, q, null, \{ source: "whatsapp", images, proposeTasks: await confirmingOnWhatsAppOn\(\) \}\)/);
+  assert.match(lib, /askCrm\(user, q, null, \{ source: "whatsapp", images, proposeTasks: \(await confirmingOnWhatsAppOn\(\)\) \? true : "saved" \}\)/);
   // Every lookup names the workspace the route entered for the business number.
   assert.match(lib, /const scope = currentTenantScope\(\);\s*if \(!scope \|\| scope\.system \|\| !scope\.tenantId\) return false;\s*const tenantId = scope\.tenantId;/);
   // …and it is the first thing the handler does: nothing runs before it.
@@ -1367,7 +1368,8 @@ test("it knows about WhatsApp — and the pinned claims stay true", async () => 
   const about = selfKnowledge("DAX");
   assert.match(about, /link their own WhatsApp/);
   assert.match(about, /one-time code/);
-  assert.match(about, /reaches them with a Confirm button only if the owner has allowed confirming on WhatsApp; otherwise tasks still need a tap on Confirm in the CRM/);
+  assert.match(about, /reaches them with a Confirm button only if the owner has allowed confirming on WhatsApp\./);
+  assert.match(about, /is saved as a card on their Ask page in the CRM, kept for a day, where they press Confirm or Send/);
   assert.match(about, /A message to a customer is never sent from WhatsApp/);
   assert.match(about, /you never send anything to a customer/);
 });

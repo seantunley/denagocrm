@@ -324,6 +324,80 @@ async function stillAsProposed(card: ActionCard): Promise<boolean> {
 const escapeHtml =(s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 
 /**
+ * Confirm a card that was SAVED for the CRM — a task the assistant proposed on
+ * WhatsApp that is only done here (assistantWhatsAppConfirm.ts, `forCrm`).
+ *
+ * The card that runs is the one in the database, found by the signed-in
+ * person's own id: nothing the page sends is trusted but which row. And it runs
+ * AT MOST ONCE, by the same rule as a tap on WhatsApp — the claim is one
+ * conditional update, so a double click, two tabs, or a reload after a dropped
+ * connection cannot run it twice. Afterwards:
+ *   done      → it is finished and leaves the list;
+ *   unchanged → the action proved it wrote nothing (out of date, lead gone):
+ *               the claim is released, and it can be confirmed again;
+ *   anything else, or a throw → how far it got is unknown: marked failed, and
+ *               never retried. Retrying an unknown is how a note is written twice.
+ */
+export async function confirmSavedAssistantCard(savedId: string): Promise<{ ok: boolean; error?: string; success?: string; href?: string; unchanged?: boolean }> {
+  return withActingStaffScope(async () => {
+    const user = await requireAnyPermission(...ASSISTANT_PERMISSIONS);
+    const id = String(savedId ?? "");
+    const now = new Date();
+    const claimed = await prisma.assistantPendingAction.updateMany({
+      where: { id, userId: user.id, forCrm: true, confirmedAt: null, completedAt: null, failedAt: null, expiresAt: { gt: now } },
+      data: { confirmedAt: now },
+    });
+    if (claimed.count !== 1) return { ok: false, error: "That card is no longer waiting — it was already confirmed or dismissed, or it has expired. Ask again if you still want it." };
+    // Guarded on THIS claim, so nothing a later attempt did is undone by this one finishing.
+    const settle = (data: { completedAt?: Date; failedAt?: Date; confirmedAt?: null }) =>
+      prisma.assistantPendingAction.updateMany({ where: { id, userId: user.id, forCrm: true, confirmedAt: now, completedAt: null, failedAt: null }, data });
+    const saved = await prisma.assistantPendingAction.findFirst({ where: { id, userId: user.id, forCrm: true }, select: { card: true } });
+    const card = saved?.card as ActionCard | undefined;
+    // A message to a customer is never sent by Confirm: it has its own Send, where the wording is read and can be changed.
+    if (!card || typeof card.kind !== "string" || card.kind === "draft_message") {
+      await settle({ failedAt: new Date() });
+      return { ok: false, error: "That card can't be confirmed here." };
+    }
+    try {
+      const result = await runAssistantAction(card);
+      if (result.ok) await settle({ completedAt: new Date() });
+      else if (result.unchanged === true) await settle({ confirmedAt: null });
+      else await settle({ failedAt: new Date() });
+      // The page is NOT refreshed here. The card on screen shows what happened —
+      // done, with its link, or why it failed — and a refresh would remove it
+      // (it is no longer waiting) before the person had read that. It is gone
+      // the next time the page loads.
+      return result.ok || result.unchanged === true
+        ? result
+        : { ok: false, error: `${result.error ?? "That didn't work."} It won't be tried again from this card, because I can't be sure nothing was changed — check the record, then ask again if it's still needed.` };
+    } catch (error) {
+      await settle({ failedAt: new Date() });
+      throw error;
+    }
+  });
+}
+
+/**
+ * A saved card is finished with, without Confirm: dismissed (removed), or its
+ * drafted message was sent (kept as done until it is pruned). The person's own
+ * card only — the row is named by their id.
+ */
+export async function settleSavedAssistantCard(savedId: string, outcome: "sent" | "dismissed"): Promise<{ ok: boolean }> {
+  return withActingStaffScope(async () => {
+    const user = await requireAnyPermission(...ASSISTANT_PERMISSIONS);
+    const id = String(savedId ?? "");
+    const changed =
+      outcome === "dismissed"
+        ? await prisma.assistantPendingAction.deleteMany({ where: { id, userId: user.id, forCrm: true, completedAt: null } })
+        : outcome === "sent"
+          ? await prisma.assistantPendingAction.updateMany({ where: { id, userId: user.id, forCrm: true, completedAt: null }, data: { completedAt: new Date() } })
+          : { count: 0 };
+    // No refresh, for the same reason as above: a sent card stays on screen saying "Sent".
+    return { ok: changed.count === 1 };
+  });
+}
+
+/**
  * 👍 / 👎 on one of the person's OWN answers, with a reason when it was wrong —
  * kept on the turn for the owner to read (Settings → Assistant), never sent
  * anywhere. Their own turns only: the update names the user.

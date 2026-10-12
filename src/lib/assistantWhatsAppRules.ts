@@ -107,6 +107,13 @@ export const whatsappConfirmOn = (raw: string | null | undefined): boolean => ra
 
 /** How long a proposed task can still be confirmed. After that: ask again. */
 export const PENDING_ACTION_TTL_MS = 15 * 60 * 1000;
+/**
+ * How long a task proposed on WhatsApp but done in the CRM waits as a card on
+ * the Ask page. A day, not fifteen minutes: the person is on their phone now
+ * and at a desk later. Not longer, because a card describes the record as it
+ * was when it was proposed — the action re-checks, but a stale card is clutter.
+ */
+export const CRM_CARD_TTL_MS = 24 * 60 * 60 * 1000;
 
 /**
  * What may be confirmed from a phone: changes INSIDE the CRM only.

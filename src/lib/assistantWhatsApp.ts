@@ -293,8 +293,10 @@ export async function handleStaffWhatsApp(from: string, input: StaffWhatsAppInpu
   let answer: string | null = null;
   let proposed: ActionCard[] = [];
   try {
-    // Tasks are proposed only when the owner lets them be confirmed here.
-    const result = await askCrm(user, q, null, { source: "whatsapp", images, proposeTasks: await confirmingOnWhatsAppOn() });
+    // A task asked for here is never thrown away. With the owner's switch on it
+    // gets a Confirm button; without it NOTHING can be changed from this phone,
+    // and the task is kept as a card on the person's Ask page instead ("saved").
+    const result = await askCrm(user, q, null, { source: "whatsapp", images, proposeTasks: (await confirmingOnWhatsAppOn()) ? true : "saved" });
     if (result.ok) proposed = result.actions;
     plan = result.ok ? planWhatsAppReply(result.answer, result.choices) : { texts: [result.error], buttons: null };
     if (result.ok) answer = result.answer;
