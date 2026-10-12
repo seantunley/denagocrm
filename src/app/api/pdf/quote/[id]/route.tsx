@@ -4,6 +4,7 @@ import { requireApiTenantOwner, apiAuthErrorResponse } from "@/lib/auth";
 import QuoteDoc from "@/lib/pdf/QuoteDoc";
 import { loadBillToFleet } from "@/lib/quoteBillTo";
 import { getCompanyProfile } from "@/lib/companyProfile";
+import { quotePdfFileName } from "@/lib/quoteEmail";
 import { getRegionalSettings } from "@/lib/settings";
 import { withActingStaffScope } from "@/lib/actingScope";
 
@@ -65,7 +66,8 @@ export async function GET(req: Request, ctx: { params: Promise<{ id: string }> }
   return new Response(new Uint8Array(buf), {
     headers: {
       "Content-Type": "application/pdf",
-      "Content-Disposition": `inline; filename="quote-${quote.number}.pdf"`,
+      // The same name it is emailed and sent under. filename* carries any character; filename is the plain fallback.
+      "Content-Disposition": `inline; filename="Q-${quote.number}.pdf"; filename*=UTF-8''${encodeURIComponent(quotePdfFileName(quote.number, company.name))}`,
     },
   });
   });

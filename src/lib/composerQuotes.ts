@@ -21,9 +21,11 @@ export const COMPOSER_QUOTE_STATUSES: readonly string[] = ["draft", "sent", "acc
 export function composerQuotes(
   quotes: { id: string; number: number; status: string; supersededAt: Date | null; deletedAt?: Date | null; items: unknown[] }[],
   canSendQuotes: boolean,
+  /** The business's name, for the file name the customer receives (quotePdfFileName). */
+  businessName: string,
 ): ComposerQuote[] {
   if (!canSendQuotes) return [];
   return quotes
     .filter((q) => !q.deletedAt && !q.supersededAt && q.items.length > 0 && COMPOSER_QUOTE_STATUSES.includes(q.status))
-    .map((q) => ({ id: q.id, label: `Q-${q.number}`, fileName: quotePdfFileName(q.number), draft: q.status === "draft" }));
+    .map((q) => ({ id: q.id, label: `Q-${q.number}`, fileName: quotePdfFileName(q.number, businessName), draft: q.status === "draft" }));
 }

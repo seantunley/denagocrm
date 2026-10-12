@@ -8,7 +8,14 @@
  * branded shell. No company name, phone or address lives in code.
  */
 
-export const quotePdfFileName = (quoteNumber: number) => `Quote-Q-${quoteNumber}.pdf`;
+/**
+ * What a quote's PDF is called, everywhere it leaves the CRM: the quote number,
+ * then the business's name as the company profile gives it — "Q-1029 Denago
+ * Cape Town.pdf" (Sean, 2026-10-12). Characters a file name cannot carry are
+ * dropped; with no name set it is just the number.
+ */
+export const quotePdfFileName = (quoteNumber: number, businessName: string | null | undefined) =>
+  `${`Q-${quoteNumber} ${(businessName ?? "").replace(/[\\/:*?"<>|\u0000-\u001f]+/g, " ").replace(/\s+/g, " ").trim().slice(0, 80)}`.trim()}.pdf`;
 
 export type QuoteEmailAttachment = { filename: string; content: Buffer; contentType: string };
 

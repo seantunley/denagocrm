@@ -375,7 +375,7 @@ export async function sendEmailAction(
     if (quote._count.items === 0) return { error: `Add at least one line to quote Q-${quote.number} before sending it.` };
     const pdf = await quotePdf(quote.id);
     if (!pdf) return { error: `The PDF for quote Q-${quote.number} could not be generated. Nothing was sent.` };
-    const name = quotePdfFileName(quote.number);
+    const name = quotePdfFileName(quote.number, profile.name);
     fileNames.push(name);
     attachedNames.push(name);
     if (asSecureLinks) secureUploads.push({ name, type: "application/pdf", size: pdf.length, buffer: pdf });

@@ -60,7 +60,15 @@ function fakes(opts: { pdf?: Buffer | null; sendOk?: boolean }) {
   };
 }
 
-const mail = { to: "a@b.co", fileName: quotePdfFileName(7) };
+const mail = { to: "a@b.co", fileName: quotePdfFileName(7, "Denago Cape Town") };
+
+test("a quote PDF is named by its number and the business: Q-1029 Denago Cape Town.pdf", () => {
+  assert.equal(quotePdfFileName(1029, "Denago Cape Town"), "Q-1029 Denago Cape Town.pdf");
+  // What a file name cannot carry is dropped; no name set is just the number.
+  assert.equal(quotePdfFileName(1029, ' A/B: "Motors"  <Pty>\n'), "Q-1029 A B Motors Pty.pdf");
+  assert.equal(quotePdfFileName(1029, ""), "Q-1029.pdf");
+  assert.equal(quotePdfFileName(1029, null), "Q-1029.pdf");
+});
 
 test("status changes only AFTER a successful send", async () => {
   const f = fakes({});
@@ -88,7 +96,7 @@ test("the quote PDF is attached", async () => {
   await deliverQuoteEmail(mail, f.deps);
   assert.deepEqual(
     f.attachments().map((a) => [a.filename, a.contentType, a.content.toString()]),
-    [["Quote-Q-7.pdf", "application/pdf", "%PDF-1.7"]],
+    [["Q-7 Denago Cape Town.pdf", "application/pdf", "%PDF-1.7"]],
   );
 });
 
