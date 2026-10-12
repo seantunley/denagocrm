@@ -3,6 +3,8 @@
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/db";
 import { customerRecordTenantId } from "@/lib/customerRecordTenant";
+import { postedDealId } from "@/lib/customerTimeline";
+import { resolveFiling } from "@/lib/customerTimelineFiling";
 import {
   CUSTOMER_RECORD_WRITE_PERMISSIONS,
   canAccessContact,
@@ -65,12 +67,18 @@ export async function addCommunication(formData: FormData) {
     // Access-check the client-supplied links BEFORE writing: without this a user
     // could attach a communication to any contact/lead id they cannot otherwise
     // see. Each supplied id must be individually accessible (owners pass through).
-    const contactId = str("contactId");
-    const leadId = str("leadId");
-    if (contactId && !(await canAccessContact(user, contactId)))
+    const postedContactId = str("contactId");
+    // "The customer in general" (DealField's last option) is no deal.
+    const postedLeadId = postedDealId(str("leadId"));
+    if (postedContactId && !(await canAccessContact(user, postedContactId)))
       refuse("You don't have access to that customer.");
-    if (leadId && !(await canAccessLead(user, leadId)))
+    if (postedLeadId && !(await canAccessLead(user, postedLeadId)))
       refuse("You don't have access to that lead.");
+    // ONE TIMELINE: an entry on a deal also carries the deal's customer, and a
+    // deal chosen on a customer's page must be THAT customer's (lib/customerTimeline).
+    const filing = await resolveFiling({ leadId: postedLeadId, contactId: postedContactId });
+    if (!filing.ok) refuse(filing.error);
+    const { contactId, leadId } = filing;
 
     // ONE owner for the row and its image, resolved once. The attachment belongs to
     // the customer record the note is filed against, exactly as the Communication

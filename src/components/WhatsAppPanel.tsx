@@ -3,6 +3,8 @@
 import { useActionState, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { sendWhatsAppMessage, type WaState } from "@/app/actions/whatsapp";
+import DealField from "@/components/DealField";
+import type { DealOption } from "@/lib/customerTimeline";
 
 type WaMessage = {
   id: string;
@@ -19,7 +21,10 @@ export default function WhatsAppPanel({
   messages,
   configured,
   revalidate,
+  deals = [],
 }: {
+  /** The customer's open deals, on a customer's page (lib/customerTimeline.dealChoice). */
+  deals?: readonly DealOption[];
   phone: string | null;
   contactId?: string;
   leadId?: string;
@@ -111,10 +116,12 @@ export default function WhatsAppPanel({
       </div>
 
       {configured ? (
-        <form ref={formRef} action={formAction} className="mt-3 flex gap-2 items-end">
+        <form ref={formRef} action={formAction} className="mt-3 flex flex-wrap gap-2 items-end">
           <input type="hidden" name="phone" value={phone} />
           {contactId && <input type="hidden" name="contactId" value={contactId} />}
           {leadId && <input type="hidden" name="leadId" value={leadId} />}
+          {/* On a customer's page: which of their deals this is about (asked only when there are several). */}
+          {!leadId && deals.length > 0 && <div className="w-full"><DealField deals={deals} id="whatsapp-deal" /></div>}
           <input type="hidden" name="revalidate" value={revalidate} />
           <input type="hidden" name="compositionId" value={compositionId} />
           <textarea

@@ -7,6 +7,8 @@ import Link from "next/link";
 import { checkComposerEmail, composerBannerChoices, previewComposerEmail, sendEmailAction, type SendEmailState } from "@/app/actions/emails";
 import { SECURE_LINK_DAYS, SECURE_LINK_DEFAULT_DAYS } from "@/lib/secureLinks";
 import { secureLinkHint } from "@/lib/sendCheck";
+import DealField from "@/components/DealField";
+import type { DealOption } from "@/lib/customerTimeline";
 import type { ComposerQuote } from "@/lib/composerQuotes";
 import RichTextEditor from "@/components/RichTextEditor";
 import { EMAIL_UPLOAD_MAX_BYTES, EMAIL_UPLOAD_MAX_FILES } from "@/lib/emailUploads";
@@ -40,10 +42,13 @@ export default function EmailComposer({
   contactId,
   revalidate,
   libraryDocs = [],
+  deals = [],
   quotes = [],
   aiConfigured = false,
   defaultReplyTo = "",
 }: {
+  /** The customer's open deals, on a customer's page (lib/customerTimeline.dealChoice). */
+  deals?: readonly DealOption[];
   /**
    * This customer's quotes the sender may email (lib/composerQuotes.ts). Attaching
    * one sends the same PDF "Email quote" does, and a draft is marked sent once the
@@ -266,6 +271,8 @@ export default function EmailComposer({
           <input ref={confirmedRef} type="hidden" name="sensitiveOk" defaultValue="" />
           {leadId && <input type="hidden" name="leadId" value={leadId} />}
           {contactId && <input type="hidden" name="contactId" value={contactId} />}
+          {/* On a customer's page: which of their deals this email is about (asked only when there are several). */}
+          {!leadId && deals.length > 0 && <DealField deals={deals} id="email-deal" />}
           <input type="hidden" name="revalidate" value={revalidate} />
           <div className="grid md:grid-cols-2 gap-3">
             <div>
