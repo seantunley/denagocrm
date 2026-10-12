@@ -4,6 +4,7 @@ import { logError } from "./errorLog";
 import { logAudit } from "./audit";
 import { askCrm, type AssistantResult } from "./crmAssistant";
 import { assistantAskAllowed, assistantUserFor } from "./assistantUser";
+import { sendUpdatesToLinkedPhone } from "./assistantWhatsApp";
 import { MAX_ACTIVE_SCHEDULES, SCHEDULE_SKIPPED_NOTE, SCHEDULE_UNSAVED_NOTE, nextRun, scheduleFailureNote } from "./assistantSchedule";
 import { currentTenantScope } from "./tenantScope";
 import { sendPushToAll } from "./push";
@@ -185,6 +186,15 @@ export async function runDueAssistantSchedules(budget: CronSliceContext): Promis
         "assistant",
         { tenantId, userId: user.id },
       ).catch((error: unknown) => logError("assistant-schedule", "push failed", error instanceof Error ? error.name : "unknown"));
+    }
+    // And to the phone they linked, when they have one and want it there. What
+    // was saved is what is sent: this adds a copy, and whatever happens to it —
+    // no phone, switched off, WhatsApp's 24-hour rule — costs nothing in the CRM.
+    if (delivered) {
+      const outcome = await sendUpdatesToLinkedPhone(tenantId, user.id, { shouldStop: budget.shouldStop });
+      // That it happened, only — never what was asked or what was found.
+      if (outcome === "failed") await logError("assistant-schedule", "briefing not sent to WhatsApp").catch(() => {});
+      if (outcome === "not_safe") await logError("assistant-schedule", "briefing not sent to WhatsApp: the linked phone is no longer safe").catch(() => {});
     }
   }
   return { ran };

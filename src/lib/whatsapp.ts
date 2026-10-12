@@ -344,6 +344,19 @@ export async function showWhatsAppTyping(messageId: string | null | undefined): 
   }
 }
 
+/**
+ * Sends an APPROVED TEMPLATE message — the only thing WhatsApp accepts outside
+ * the 24 hours after a person last wrote. The template itself (its wording, its
+ * button) is created and approved in WhatsApp Manager; here it is only named.
+ * No variables: the templates this CRM uses carry none, so there is nothing of
+ * ours in a message Meta has not seen.
+ */
+export async function sendWhatsAppTemplate(toDigits: string, name: string, languageCode: string): Promise<WhatsAppSendResult> {
+  const creds = await waCredentials();
+  if (!creds) return { ok: false, error: "WhatsApp is not configured (Settings → Integrations)." };
+  return postWhatsAppMessage(creds, { to: toDigits, type: "template", template: { name, language: { code: languageCode } } });
+}
+
 /** Sends an image by URL (e.g. a brochure) on WhatsApp. */
 export async function sendWhatsAppImage(toDigits: string, url: string, caption?: string): Promise<WhatsAppSendResult> {
   const creds = await waCredentials();

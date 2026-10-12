@@ -1008,6 +1008,16 @@ model AssistantTurn {
   scheduleId String?
   /// When the person saw a scheduled answer or a watch firing (null = the bubble shows a dot).
   seenAt     DateTime?
+  /// When a scheduled answer or watch alert was also delivered to the person's
+  /// linked WhatsApp. Null = not sent there (yet): it waits for the next time
+  /// WhatsApp will accept a message to them.
+  whatsappSentAt DateTime?
+  /// A sender is working on it now. It EXPIRES: a claim older than a few minutes
+  /// belongs to a run that stopped, and the next sender takes it over.
+  whatsappClaimedAt DateTime?
+  /// How many of its WhatsApp messages have gone (a long answer is several). A
+  /// send that stopped half-way resumes here instead of ending or starting over.
+  whatsappPartsSent Int @default(0)
   /// The person's thumbs on this answer: "up" | "down".
   feedback       String?
   feedbackReason String?
@@ -1121,6 +1131,20 @@ model AssistantPhoneLink {
   sessionVersion Int?
   /// Why the last code sent did not link (LINK_REFUSALS key); cleared by a new code or a link.
   refusedReason String?
+  /// Also send what the assistant produces on its own — scheduled briefings, watch
+  /// alerts — to the linked phone (the person's own switch on the Ask page).
+  updatesOnWhatsApp Boolean @default(true)
+  /// When a template was last sent to say "you have an update" (WhatsApp allows
+  /// nothing else outside 24 hours). Cleared when the person next writes, so one
+  /// nudge covers everything waiting and is not repeated every tick.
+  nudgedAt      DateTime?
+  /// When the template last FAILED to go for a passing reason (WhatsApp could not
+  /// be reached). It is tried again, but not before a pause.
+  nudgeFailedAt DateTime?
+  /// When this phone last wrote to the business number as verified staff. WhatsApp
+  /// accepts a free message only within 24 hours of it — and usually ACCEPTS a
+  /// late one and fails it afterwards, so the answer is not asked of Meta.
+  lastInboundAt DateTime?
   createdAt     DateTime  @default(now())
 
   @@unique([tenantId, userId])

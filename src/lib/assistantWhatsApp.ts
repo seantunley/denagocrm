@@ -3,7 +3,7 @@ import crypto from "crypto";
 import { basePrisma } from "./db";
 import { getSetting } from "./settings";
 import { currentTenantScope } from "./tenantScope";
-import { fetchWhatsAppMedia, matchByPhone, sendWhatsAppAudioId, sendWhatsAppButtons, sendWhatsAppText, showWhatsAppTyping, uploadWhatsAppMedia, waDigits } from "./whatsapp";
+import { fetchWhatsAppMedia, matchByPhone, sendWhatsAppAudioId, sendWhatsAppButtons, sendWhatsAppTemplate, sendWhatsAppText, showWhatsAppTyping, uploadWhatsAppMedia, waDigits } from "./whatsapp";
 import { transcribeVoice, transcribeVoiceDetailed } from "./transcribe";
 import { askCrm } from "./crmAssistant";
 import type { ActionCard } from "./assistantActions";
@@ -21,15 +21,30 @@ import { rateLimitKey, registerRateLimitAttempt } from "./rateLimit";
 import { readUserSecurityStateStrict } from "./userSecurity";
 import {
   ASSISTANT_WHATSAPP_KEY,
+  ASSISTANT_WHATSAPP_TEMPLATE_KEY,
   LINK_GUESS_POLICY,
   LINK_GUESS_WORKSPACE_POLICY,
+  NUDGE_EVERY_MS,
+  NUDGE_RETRY_MS,
+  UPDATE_CLAIM_MS,
+  UPDATE_MAX,
+  UPDATE_SEND_RESERVE_MS,
+  nudgeFailureMayPass,
+  PROACTIVE_SOURCES,
   QUESTION_CHARS,
+  UPDATE_BATCH,
+  UPDATE_WAIT_MS,
   businessNumberFromLabel,
   linkCodeHashInput,
   maskWaId,
+  outsideReplyWindow,
   parseConfirmId,
   parseLinkCode,
+  parseUpdateTemplate,
   planWhatsAppReply,
+  replyWindowOpen,
+  splitForWhatsApp,
+  updateText,
   whatsappSwitchOn,
   type LinkRefusal,
   type WhatsAppReplyPlan,
@@ -84,7 +99,8 @@ export async function businessWhatsAppNumber(tenantId: string) {
 
 export type StaffWhatsAppInput =
   /** choiceId: the id of a tapped button, when the text is a button's title. */
-  | { text: string; choiceId?: string }
+  /** templateReply: the tap on a message template's button ("Show me") — the way in, not a question. */
+  | { text: string; choiceId?: string; templateReply?: boolean }
   | { voiceMediaId: string }
   /** A photo, file or video. Only a photo can be read; the others are answered with why not. */
   | { mediaId: string; mediaKind: "image" | "document" | "video"; caption: string };
@@ -182,6 +198,24 @@ export async function handleStaffWhatsApp(from: string, input: StaffWhatsAppInpu
   // as anyone's, and the link stays for the owner to see.
   const user = await assistantUserFor(link.userId);
   if (!user) return false;
+
+  // THEY HAVE JUST WRITTEN, so WhatsApp's 24 hours are open: whatever the
+  // assistant produced on its own and could not send (a scheduled briefing, a
+  // watch alert) goes now, before the answer to this message. The "you have an
+  // update" template may be sent again after their next silence. Recorded here,
+  // after every check above: only a message from verified staff opens it.
+  await basePrisma.assistantPhoneLink.updateMany({ where: { id: link.id, tenantId, waId }, data: { lastInboundAt: new Date(), nudgedAt: null, nudgeFailedAt: null } });
+  const caughtUp = await sendUpdatesToLinkedPhone(tenantId, user.id, { windowOpen: true });
+  // A backlog past what one message may carry: said, never silently left behind.
+  if (caughtUp === "more") await sendPlan(waId, { texts: ["There are more updates waiting. Send me any message and I'll carry on — they are all in the CRM too."], buttons: null });
+  // The tap on the template's button asks nothing: it was only the way in.
+  if ("text" in input && input.templateReply) {
+    // Never "nothing is waiting" when something is and could not be sent.
+    if (caughtUp === "more") return true;
+    if (caughtUp === "failed" || caughtUp === "not_safe") await sendPlan(waId, { texts: ["I couldn't send your update here just now. It is in the CRM, on the Ask page."], buttons: null });
+    else if (caughtUp !== "sent") await sendPlan(waId, { texts: ["Nothing new is waiting — it is all in the CRM. Ask me anything."], buttons: null });
+    return true;
+  }
 
   // A tapped Confirm button on a task proposed here earlier. Reached only now —
   // every check above has passed for THIS message — and it is not a question:
@@ -404,7 +438,7 @@ async function verifyLinkCode(tenantId: string, waId: string, code: string): Pro
     // used in the meantime links nothing.
     const done = await tx.assistantPhoneLink.updateMany({
       where: { id: match.id, tenantId, codeHash: match.codeHash, codeExpiresAt: { gt: now } },
-      data: { waId, verifiedAt: now, codeHash: null, codeExpiresAt: null, refusedReason: null, sessionVersion: security.sessionVersion },
+      data: { waId, verifiedAt: now, codeHash: null, codeExpiresAt: null, refusedReason: null, sessionVersion: security.sessionVersion, lastInboundAt: now, nudgedAt: null, nudgeFailedAt: null },
     });
     return done.count === 1;
   });
@@ -420,6 +454,235 @@ async function verifyLinkCode(tenantId: string, waId: string, code: string): Pro
   const name = parseProfile(await getSetting(ASSISTANT_PROFILE_KEY).catch(() => null)).name;
   await sendPlan(waId, { texts: [`✅ Linked — I'm ${name}. Ask me anything about your leads, quotes or calendar.`], buttons: null });
   return true;
+}
+
+export type UpdateDelivery =
+  /** Everything waiting went to the person's linked phone. */
+  | "sent"
+  /** Nothing was waiting. */
+  | "nothing"
+  /** Nowhere to send: the workspace switch is off, no linked phone, or the person turned this off. */
+  | "not_wanted"
+  /** A linked phone exists but is no longer safely theirs — sign-ins reset, or the number is now on a customer record. */
+  | "not_safe"
+  /** WhatsApp would not take a message, so the approved template went instead: "you have an update". */
+  | "nudged"
+  /** WhatsApp would not take a message and there is no template to send (or one went recently). It waits. */
+  | "waiting"
+  /** UPDATE_MAX went and there are more: the next message from them, or the next tick, carries on. */
+  | "more"
+  | "failed";
+
+/**
+ * What the assistant produces ON ITS OWN — a scheduled briefing, a watch alert —
+ * sent to the phone the person linked, as well as (never instead of) their
+ * history in the CRM. Sean, 2026-10-12: "it arrived on the desktop DAX but not
+ * WhatsApp … DAX must be able to send me things proactively."
+ *
+ * WHAT IS WAITING is read from the person's own history: schedule and watch
+ * turns from the last day that have not gone to WhatsApp yet. So this needs no
+ * queue of its own, and it can be called at any moment something might have
+ * changed — after a run, after an alert, and when the person next writes.
+ *
+ * THE SAME TESTS AS AN INCOMING MESSAGE, made here because this is not a reply:
+ * nobody has just proved they hold the phone. Before CRM data goes anywhere the
+ * link must be verified, its sign-in still valid (a password reset or "sign out
+ * everywhere" ends it), and the number must not have landed on a customer record
+ * since. Any doubt and nothing is sent; it is still in the CRM. Nothing is
+ * cleared from here: the next message from that phone does that, with its audit.
+ *
+ * WHATSAPP'S OWN RULE. A business may write freely only within 24 hours of the
+ * person's last message; outside that only a message template Meta has approved
+ * is delivered. Meta is NOT asked which it is — it usually accepts a late
+ * message and fails it afterwards, when it would already be marked as sent
+ * here. The link records when the phone last wrote (`lastInboundAt`), and that
+ * decides. Outside the 24 hours the workspace's template goes instead — "you
+ * have an update", no data in it — at most once a day and not again until they
+ * write; their reply opens the 24 hours and this runs again (`windowOpen`),
+ * delivering all of it. With no template set, it simply waits.
+ *
+ * The caller has established the workspace scope and that this person may use
+ * the assistant.
+ */
+export async function sendUpdatesToLinkedPhone(
+  tenantId: string,
+  userId: string,
+  /** shouldStop: a cron's budget. Asked before every message; what is left waits for the next run ("more"). */
+  opts: { windowOpen?: boolean; shouldStop?: (reserveMs?: number) => boolean } = {},
+): Promise<UpdateDelivery> {
+  // Room for one more message: a send may take its whole timeout, then its writes.
+  const outOfTime = () => opts.shouldStop?.(UPDATE_SEND_RESERVE_MS) === true;
+  try {
+    if (!(await assistantWhatsAppOn())) return "not_wanted";
+    const link = await basePrisma.assistantPhoneLink.findFirst({
+      where: { tenantId, userId, verifiedAt: { not: null }, updatesOnWhatsApp: true },
+      select: { id: true, waId: true, sessionVersion: true, nudgedAt: true, nudgeFailedAt: true, lastInboundAt: true },
+    });
+    if (!link?.waId) return "not_wanted";
+    // WAITING: not finished, and not being sent by somebody else right now. A
+    // claim that has outlived UPDATE_CLAIM_MS belongs to a run that stopped.
+    const waiting = () =>
+      basePrisma.assistantTurn.findMany({
+        where: {
+          tenantId, userId, source: { in: [...PROACTIVE_SOURCES] }, whatsappSentAt: null, createdAt: { gt: new Date(Date.now() - UPDATE_WAIT_MS) },
+          OR: [{ whatsappClaimedAt: null }, { whatsappClaimedAt: { lt: new Date(Date.now() - UPDATE_CLAIM_MS) } }],
+        },
+        orderBy: { createdAt: "asc" },
+        take: UPDATE_BATCH,
+        select: { id: true, source: true, question: true, answer: true },
+      });
+    let batch = await waiting();
+    if (batch.length === 0) return "nothing";
+    const security = await readUserSecurityStateStrict(userId);
+    if (!security || link.sessionVersion === null || security.sessionVersion !== link.sessionVersion) return "not_safe";
+    const customer = await matchByPhone(link.waId);
+    if (customer.contactId || customer.leadId || customer.ambiguous) return "not_safe";
+
+    if (!opts.windowOpen && !replyWindowOpen(link.lastInboundAt)) return await nudgeWithTemplate(tenantId, link);
+
+    // ALL OF IT, a batch at a time until none is left — "tap and everything that
+    // was waiting arrives" is the promise. Every pass either finishes updates
+    // (they stop being waiting) or returns, so it ends; UPDATE_MAX bounds one call.
+    for (let done = 0; batch.length > 0; batch = await waiting()) {
+      for (const turn of batch) {
+        if (done >= UPDATE_MAX || outOfTime()) return "more";
+        const refused = await sendOneUpdate(tenantId, userId, link.waId, turn, outOfTime);
+        if (refused === OUT_OF_TIME) return "more";
+        // Meta saying "24 hours" although our clock said otherwise: the template is the way through.
+        if (refused !== null) return outsideReplyWindow(refused) && !opts.windowOpen ? await nudgeWithTemplate(tenantId, link) : "failed";
+        done++;
+      }
+    }
+    return "sent";
+  } catch (error) {
+    await logError("assistant-whatsapp", "update send threw", error instanceof Error ? error.name : "unknown").catch(() => {});
+    return "failed";
+  }
+}
+
+/**
+ * One update, every part of it. Null = it is finished (or another sender has it
+ * and will finish it); otherwise why WhatsApp refused.
+ *
+ * A LONG ANSWER IS SEVERAL MESSAGES, and "sent" means all of them. So it is
+ * never marked sent until the last has gone, and how many have gone is written
+ * after each one: a send that fails or stops after part one resumes at part two
+ * — it neither ends there nor starts over.
+ *
+ * THE CLAIM EXPIRES. It is taken before anything is sent, so a cron run and an
+ * incoming message at the same moment never both send it; and it is a time, not
+ * a flag, so a run that stops mid-way leaves the update to the next sender
+ * after UPDATE_CLAIM_MS instead of claimed for ever.
+ *
+ * What is NOT promised: exactly once. A run that stops after WhatsApp took a
+ * part and before that was written sends that one part again. A repeated
+ * paragraph is the price of never losing one.
+ */
+async function sendOneUpdate(
+  tenantId: string,
+  userId: string,
+  waId: string,
+  turn: { id: string; source: string; question: string; answer: string },
+  outOfTime: () => boolean,
+): Promise<string | null | typeof OUT_OF_TIME> {
+  // The workspace and the person are written out in every call below, not passed
+  // in a variable: each one must show for itself whose row it touches.
+  const id = turn.id;
+  // THIS claim, by its own time. Every write below names it, so a sender that
+  // was slow enough to lose its claim to another cannot write over that one's
+  // progress — its write matches nothing, and it stops.
+  const mine = new Date();
+  const claimed = await basePrisma.assistantTurn.updateMany({
+    where: { id, tenantId, userId, whatsappSentAt: null, OR: [{ whatsappClaimedAt: null }, { whatsappClaimedAt: { lt: new Date(Date.now() - UPDATE_CLAIM_MS) } }] },
+    data: { whatsappClaimedAt: mine },
+  });
+  if (claimed.count !== 1) return null;
+  // Read AFTER the claim: where a sender that stopped had got to.
+  const progress = await basePrisma.assistantTurn.findFirst({ where: { id, tenantId, userId }, select: { whatsappPartsSent: true } });
+  const parts = splitForWhatsApp(updateText(turn));
+  for (let part = Math.min(progress?.whatsappPartsSent ?? 0, parts.length); part < parts.length; part++) {
+    // No time left for another message: given back as it stands, for the next run.
+    if (outOfTime()) {
+      await basePrisma.assistantTurn.updateMany({ where: { id, tenantId, userId, whatsappClaimedAt: mine }, data: { whatsappClaimedAt: null } });
+      return OUT_OF_TIME;
+    }
+    const sent = await sendWhatsAppText(waId, parts[part]);
+    if (!sent.ok) {
+      // Given back at once, with what has gone kept: the next attempt starts at this part.
+      await basePrisma.assistantTurn.updateMany({ where: { id, tenantId, userId, whatsappClaimedAt: mine }, data: { whatsappClaimedAt: null } });
+      return sent.error ?? "WhatsApp send failed";
+    }
+    const noted = await basePrisma.assistantTurn.updateMany({ where: { id, tenantId, userId, whatsappClaimedAt: mine }, data: { whatsappPartsSent: part + 1 } });
+    // The claim is no longer ours (this took longer than it lasts): the sender that has it now carries on.
+    if (noted.count !== 1) return null;
+  }
+  await basePrisma.assistantTurn.updateMany({ where: { id, tenantId, userId, whatsappClaimedAt: mine }, data: { whatsappSentAt: new Date(), whatsappClaimedAt: null } });
+  return null;
+}
+const OUT_OF_TIME = Symbol("out of time");
+
+/**
+ * The template: it says only that something is waiting, and carries nothing of
+ * the CRM's. Once per silence when it GOES. When it does not:
+ *  - WhatsApp could not be reached, or was busy: the nudge is given back and
+ *    tried again after NUDGE_RETRY_MS — by the next tick, which sweeps for
+ *    updates still waiting. An update is not lost to one bad minute.
+ *  - Meta will not have the template (no such name, not approved, paused): it
+ *    is NOT sent again for NUDGE_EVERY_MS. Repeating a rejected template helps
+ *    nobody and costs the number its standing; the owner fixes the setting.
+ */
+async function nudgeWithTemplate(tenantId: string, link: { id: string; waId: string | null; nudgedAt: Date | null; nudgeFailedAt: Date | null }): Promise<UpdateDelivery> {
+  const template = parseUpdateTemplate(await getSetting(ASSISTANT_WHATSAPP_TEMPLATE_KEY).catch(() => null));
+  if (!template || !link.waId) return "waiting";
+  if (link.nudgedAt && Date.now() - link.nudgedAt.getTime() < NUDGE_EVERY_MS) return "waiting";
+  if (link.nudgeFailedAt && Date.now() - link.nudgeFailedAt.getTime() < NUDGE_RETRY_MS) return "waiting";
+  // Claimed BEFORE it is sent, on the value read: two ticks cannot both nudge.
+  const before = link.nudgedAt;
+  const claimed = await basePrisma.assistantPhoneLink.updateMany({ where: { id: link.id, tenantId, nudgedAt: before }, data: { nudgedAt: new Date() } });
+  if (claimed.count !== 1) return "waiting";
+  // A send that THROWS is a passing failure too: the claim must not outlive it.
+  const sent = await sendWhatsAppTemplate(link.waId, template.name, template.language).catch(() => ({ ok: false, error: "Could not reach WhatsApp" }));
+  if (sent.ok) {
+    if (link.nudgeFailedAt) await basePrisma.assistantPhoneLink.updateMany({ where: { id: link.id, tenantId }, data: { nudgeFailedAt: null } });
+    return "nudged";
+  }
+  if (nudgeFailureMayPass(sent.error)) {
+    await basePrisma.assistantPhoneLink.updateMany({ where: { id: link.id, tenantId }, data: { nudgedAt: before, nudgeFailedAt: new Date() } });
+    await logError("assistant-whatsapp", "update template could not be sent, will retry").catch(() => {});
+  } else {
+    await logError("assistant-whatsapp", "update template refused by WhatsApp, not retried today").catch(() => {});
+  }
+  return "failed";
+}
+
+/**
+ * The half-hourly look for updates still waiting, in the workspace whose scope
+ * this runs in. Without it an update that could not go — WhatsApp down for a
+ * minute, a nudge that failed — would wait for the person's next message or
+ * their next briefing, and a one-off could reach a day old unsent. Each person
+ * is re-checked as on any other path: still a member, still allowed the assistant.
+ */
+export async function sweepWaitingUpdates(tenantId: string, budget: { shouldStop: (reserveMs?: number) => boolean }): Promise<{ people: number }> {
+  // IT SHARES A TICK with the watches and the scheduled questions, and every
+  // send waits on WhatsApp. So it asks the budget before each person, and
+  // sendUpdatesToLinkedPhone asks again before each message: when time is
+  // short it stops, and what is left is here for the next tick.
+  if (budget.shouldStop(UPDATE_SEND_RESERVE_MS)) return { people: 0 };
+  if (!(await assistantWhatsAppOn())) return { people: 0 };
+  const waiting = await basePrisma.assistantTurn.findMany({
+    where: { tenantId, source: { in: [...PROACTIVE_SOURCES] }, whatsappSentAt: null, createdAt: { gt: new Date(Date.now() - UPDATE_WAIT_MS) } },
+    distinct: ["userId"],
+    select: { userId: true },
+    take: 200,
+  });
+  let people = 0;
+  for (const { userId } of waiting) {
+    if (budget.shouldStop(UPDATE_SEND_RESERVE_MS)) break;
+    if (!(await assistantUserFor(userId))) continue;
+    await sendUpdatesToLinkedPhone(tenantId, userId, { shouldStop: budget.shouldStop });
+    people++;
+  }
+  return { people };
 }
 
 /**

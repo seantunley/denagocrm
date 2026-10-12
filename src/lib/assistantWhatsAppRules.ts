@@ -167,6 +167,88 @@ export function confirmMessages(card: { title: string; text?: unknown; question?
   return body.length <= WA_BODY_MAX ? { before, body } : null;
 }
 
+/*
+ * ── WHAT THE ASSISTANT SENDS ON ITS OWN ─────────────────────────────────────
+ *
+ * A scheduled briefing or a watch alert, sent to the person's linked phone as
+ * well as their history. Nobody asked a question just then, so WhatsApp's
+ * 24-hour rule decides whether a message is accepted at all — see
+ * sendUpdatesToLinkedPhone.
+ */
+
+/** The kinds of answer nobody was waiting on a screen for. */
+export const PROACTIVE_SOURCES = ["schedule", "watch"] as const;
+/** How long an update keeps trying to reach WhatsApp. After a day it is old news: it stays in the CRM only. */
+export const UPDATE_WAIT_MS = 24 * 60 * 60 * 1000;
+/** Read this many at a time, oldest first — and keep reading until none are left. */
+export const UPDATE_BATCH = 5;
+/**
+ * The most one call sends. A day of briefings and alerts is far fewer; past this
+ * the person is told there is more, and their next message (or the next tick)
+ * carries on — one call never holds a webhook open for a backlog.
+ */
+export const UPDATE_MAX = 30;
+/**
+ * How long a sender's claim on one update lasts. Sending it takes seconds; a
+ * claim older than this belongs to a run that stopped, and is taken over.
+ */
+export const UPDATE_CLAIM_MS = 5 * 60 * 1000;
+/**
+ * What a cron must still have left to start one more message: a send may take
+ * its whole 15-second timeout, and its writes follow. With less than this the
+ * sender stops and leaves the rest for the next tick — it never eats the time
+ * kept for the scheduled questions that run after it.
+ */
+export const UPDATE_SEND_RESERVE_MS = 20_000;
+/** One "you have an update" template per silence, and never more often than this. */
+export const NUDGE_EVERY_MS = 20 * 60 * 60 * 1000;
+/** After the template failed for a passing reason: not again before this (the next half-hourly tick is after it). */
+export const NUDGE_RETRY_MS = 25 * 60 * 1000;
+
+/**
+ * Did the template fail for a reason that may pass — WhatsApp unreachable, busy,
+ * or rate-limited — rather than because Meta will not have it (no such template,
+ * not approved, paused)? A passing failure is tried again after a pause; a
+ * refusal is not repeated, because sending a rejected template again and again
+ * is how a number loses its standing. Unknown wording counts as a refusal.
+ */
+export const nudgeFailureMayPass = (error: string | null | undefined): boolean =>
+  /could not reach whatsapp|whatsapp api error (429|5\d\d)|rate limit|temporar|try again|timed? ?out|service unavailable/i.test(String(error ?? ""));
+
+/**
+ * The owner's setting (AppSetting): the approved template to send when WhatsApp
+ * will take nothing else. Stored as "name" or "name|language" — the template's
+ * name exactly as it is in WhatsApp Manager, and its language code (en, en_US,
+ * af…). Blank = no template: updates then reach a phone only inside 24 hours.
+ */
+export const ASSISTANT_WHATSAPP_TEMPLATE_KEY = "ASSISTANT_WHATSAPP_TEMPLATE";
+export function parseUpdateTemplate(raw: string | null | undefined): { name: string; language: string } | null {
+  const [name, language] = String(raw ?? "").split("|").map((part) => part.trim());
+  // Meta's own shape: lower-case letters, digits and underscores; a language like en or en_US.
+  if (!/^[a-z0-9_]{1,512}$/.test(name ?? "")) return null;
+  return { name, language: /^[a-z]{2,3}(_[A-Z]{2})?$/.test(language ?? "") ? language : "en" };
+}
+export const formatUpdateTemplate = (name: string, language: string) => `${name.trim()}|${language.trim() || "en"}`;
+
+/**
+ * May a free message be sent now? Only within 24 hours of the person's last
+ * message — less a margin, so one sent at 23:59 is not failed at 24:01. WE keep
+ * that time: Meta usually accepts a late message and fails it afterwards, by
+ * which time it would have been marked as delivered. Never written = closed.
+ */
+export const REPLY_WINDOW_MS = 24 * 60 * 60 * 1000 - 10 * 60 * 1000;
+export const replyWindowOpen = (lastInboundAt: Date | null | undefined, now = Date.now()): boolean =>
+  Boolean(lastInboundAt) && now - lastInboundAt!.getTime() < REPLY_WINDOW_MS;
+
+/** Was a send refused because the person has not written in the last 24 hours? (Meta 131047, and our own wording of it.) */
+export const outsideReplyWindow = (error: string | null | undefined): boolean => /131047|24-hour|24 hours|re-?engag/i.test(String(error ?? ""));
+
+/** An update as it is sent: what it is, then all of it. */
+export function updateText(turn: { source: string; question: string; answer: string }): string {
+  const heading = turn.source === "watch" ? `👀 You asked me to watch: ${turn.question.trim()}` : `⏰ Scheduled: ${turn.question.trim()}`;
+  return `${heading}\n\n${turn.answer.trim()}`;
+}
+
 /** A linked number as it is shown back: the last three digits only. */
 export function maskWaId(waId: string | null | undefined): string {
   const digits = String(waId ?? "").replace(/\D/g, "");
