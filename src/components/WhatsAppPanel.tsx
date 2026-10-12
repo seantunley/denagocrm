@@ -1,6 +1,6 @@
 "use client";
 
-import { useActionState, useEffect, useRef } from "react";
+import { useActionState, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { sendWhatsAppMessage, type WaState } from "@/app/actions/whatsapp";
 
@@ -34,8 +34,26 @@ export default function WhatsAppPanel({
   const formRef = useRef<HTMLFormElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
 
+  /**
+   * THE SEND KEY this box owes the server. sendWhatsAppMessage refuses a reply
+   * without one ("missing its send key") — it is what lets a second press of
+   * Send resolve to the message already queued instead of delivering it twice.
+   * The inbox's reply box has supplied one since that rule was made; this box,
+   * on the lead and customer pages, never did, so every send from it failed.
+   *
+   * One per composition, as InboxReply does it: made once the box is in the
+   * browser (not while rendering — the server and the browser would disagree),
+   * kept across a failed send so a retry is the same message, and replaced only
+   * when a send is confirmed, so two identical replies stay two messages.
+   */
+  const [compositionId, setCompositionId] = useState<string>("");
   useEffect(() => {
-    if (state?.ok) formRef.current?.reset();
+    if (!compositionId) setCompositionId(crypto.randomUUID());
+  }, [compositionId]);
+  useEffect(() => {
+    if (!state?.ok) return;
+    formRef.current?.reset();
+    setCompositionId(crypto.randomUUID());
   }, [state]);
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
@@ -98,6 +116,7 @@ export default function WhatsAppPanel({
           {contactId && <input type="hidden" name="contactId" value={contactId} />}
           {leadId && <input type="hidden" name="leadId" value={leadId} />}
           <input type="hidden" name="revalidate" value={revalidate} />
+          <input type="hidden" name="compositionId" value={compositionId} />
           <textarea
             name="text"
             rows={1}
@@ -105,7 +124,8 @@ export default function WhatsAppPanel({
             placeholder="Type a WhatsApp message…"
             className="input flex-1"
           />
-          <button className="btn bg-emerald-700 text-white hover:bg-emerald-600" disabled={pending}>
+          {/* Not until the key exists: a send without it is refused. */}
+          <button className="btn bg-emerald-700 text-white hover:bg-emerald-600" disabled={pending || !compositionId}>
             {pending ? "…" : "Send"}
           </button>
         </form>
