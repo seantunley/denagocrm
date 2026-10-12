@@ -27,7 +27,8 @@ import { redeemReferral } from "@/app/actions/referrals";
 import { isWhatsAppConfigured } from "@/lib/whatsapp";
 import { formatDateTime } from "@/lib/format";
 import { requireUser } from "@/lib/auth";
-import { hasPermission } from "@/lib/permissions";
+import { getAccessibleLeadIds, hasPermission } from "@/lib/permissions";
+import { customerHistoryWhere, viewableDealIds } from "@/lib/customerHistory";
 import { contactHealth } from "@/lib/healthData";
 import { healthLabels } from "@/lib/health";
 import { recordConsent, anonymizeContact } from "@/app/actions/privacy";
@@ -140,13 +141,19 @@ export default async function ContactDetailPage({
     prisma.emailTemplate.findMany({ orderBy: { name: "asc" } }),
     isSmtpConfigured(),
     isWhatsAppConfigured(),
+    // THE HISTORY OF THIS CUSTOMER AND OF THEIR DEALS — the deals THIS PERSON MAY
+    // OPEN (lib/customerHistory.ts). It used to take every deal of the customer,
+    // and every entry naming the customer whatever deal it was also about, so
+    // someone who may open the customer but not one of their deals read that
+    // deal's audit trail here: stage moves, quotes, who did what.
     prisma.auditLog.findMany({
-      where: {
-        OR: [
-          { contactId: contact.id },
-          { leadId: { in: (await prisma.lead.findMany({ where: { contactId: contact.id }, select: { id: true } })).map((l) => l.id) } },
-        ],
-      },
+      where: customerHistoryWhere(
+        contact.id,
+        viewableDealIds(
+          (await prisma.lead.findMany({ where: { contactId: contact.id }, select: { id: true } })).map((l) => l.id),
+          await getAccessibleLeadIds(user),
+        ),
+      ),
       orderBy: { createdAt: "desc" },
       take: 100,
     }),
