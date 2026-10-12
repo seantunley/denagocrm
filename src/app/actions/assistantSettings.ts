@@ -4,7 +4,8 @@ import { revalidatePath } from "next/cache";
 import { requireTenantOwner } from "@/lib/auth";
 import { getSetting, putSetting } from "@/lib/settings";
 import { logAudit } from "@/lib/audit";
-import { withActingStaffScope } from "@/lib/actingScope";
+import { withActingStaffScope, actingOwnerTenantId } from "@/lib/actingScope";
+import { basePrisma } from "@/lib/db";
 import { asActionResult, refuse } from "@/lib/actionResult";
 import {
   ASSISTANT_PROFILE_KEY,
@@ -16,7 +17,7 @@ import {
 } from "@/lib/assistantSoul";
 import { ASSISTANT_VOICE_REPLIES_KEY, voiceRepliesSwitchOn } from "@/lib/assistantVoiceRules";
 import { saveAssistantWhatsApp } from "@/app/actions/assistantWhatsApp";
-import { ASSISTANT_WHATSAPP_CONFIRM_KEY, ASSISTANT_WHATSAPP_TEMPLATE_KEY, formatUpdateTemplate, parseUpdateTemplate, whatsappConfirmOn } from "@/lib/assistantWhatsAppRules";
+import { ASSISTANT_WHATSAPP_CONFIRM_KEY, ASSISTANT_WHATSAPP_HANDOFF_KEY, ASSISTANT_WHATSAPP_HANDOFF_TO_KEY, ASSISTANT_WHATSAPP_TEMPLATE_KEY, formatUpdateTemplate, handoffRecipient, parseUpdateTemplate, whatsappConfirmOn, whatsappHandoffOn } from "@/lib/assistantWhatsAppRules";
 
 /**
  * The workspace's assistant: its name, tone, workspace instructions and soul.
@@ -52,18 +53,65 @@ export async function saveAssistantProfile(formData: FormData) {
 }
 
 /**
+ * What the "on WhatsApp" card's form may ask for, or a refusal. Writes nothing.
+ *
+ * WHO a handoff goes to: "all" (or blank), or a member of THIS workspace with a
+ * verified linked phone. Anything else is refused by name — a value that is not
+ * an id is not quietly read as "everyone".
+ *
+ * The update template: the approved one that says "you have an update" when
+ * WhatsApp will take nothing else (nothing from that phone in 24 hours). Blank = none.
+ */
+async function checkWhatsAppCard(formData: FormData) {
+  const rawRecipient = String(formData.get("whatsappHandoffTo") ?? "").trim();
+  const wanted = handoffRecipient(rawRecipient);
+  if (rawRecipient && rawRecipient !== "all" && !wanted) {
+    refuse("That isn't a team member — choose a person from the list, or Everyone. Nothing was changed.");
+  }
+  const tenantId = await actingOwnerTenantId();
+  const linked = wanted
+    ? await basePrisma.assistantPhoneLink.findFirst({ where: { tenantId, userId: wanted, verifiedAt: { not: null }, waId: { not: null } }, select: { userId: true } })
+    : null;
+  if (wanted && !linked) refuse("That person has no linked WhatsApp — they link it themselves on the Ask page, then you can choose them here. Nothing was changed.");
+  const templateName = String(formData.get("updateTemplate") ?? "").trim();
+  const template = templateName ? parseUpdateTemplate(formatUpdateTemplate(templateName, String(formData.get("updateTemplateLanguage") ?? ""))) : null;
+  if (templateName && !template) {
+    refuse("The template name must be exactly as it is in WhatsApp Manager: lower-case letters, numbers and underscores only. Nothing was changed.");
+  }
+  return { wanted, template };
+}
+
+/**
  * The "on WhatsApp" card's Save: the WhatsApp switch (saved by its own action,
  * unchanged) and, in the same form, voice replies. Voice replies default OFF —
  * every spoken answer costs ElevenLabs credit — and are audited only when they
  * actually change, so re-saving the card doesn't fill the trail.
  */
 export async function saveAssistantWhatsAppCard(formData: FormData) {
+  // EVERYTHING ON THIS CARD IS CHECKED BEFORE ANY OF IT IS SAVED — before the
+  // WhatsApp switch below too. The first version saved each switch as it went
+  // and validated the handoff recipient afterwards: choose someone whose phone
+  // had just been unlinked, and the form reported an error with the handoff
+  // switch ALREADY on — pointing at whoever the old setting named, which could
+  // be everyone. A handoff carries a customer's details, so a refused save must
+  // leave nothing changed.
+  const checked = await asActionResult(() =>
+    withActingStaffScope(async () => {
+      await requireTenantOwner();
+      await checkWhatsAppCard(formData);
+      return { success: "ok" };
+    }),
+  );
+  if (checked.error) return checked;
   const whatsapp = await saveAssistantWhatsApp(formData);
   if (whatsapp.error) return whatsapp;
   return asActionResult(() =>
     withActingStaffScope(async () => {
       const user = await requireTenantOwner();
-      const on = formData.get("voiceReplies") === "on";
+      // Checked again here, at the moment of saving: the same answers, re-read.
+      const { wanted, template } = await checkWhatsAppCard(formData);
+
+      const on =formData.get("voiceReplies") === "on";
       if (on !== voiceRepliesSwitchOn(await getSetting(ASSISTANT_VOICE_REPLIES_KEY))) {
         await putSetting(ASSISTANT_VOICE_REPLIES_KEY, on ? "on" : "off");
         await logAudit({
@@ -87,13 +135,35 @@ export async function saveAssistantWhatsAppCard(formData: FormData) {
         });
         revalidatePath("/settings/assistant");
       }
-      // The approved template that says "you have an update" when WhatsApp will
-      // take nothing else (nothing from that phone in 24 hours). Blank = none.
-      const templateName = String(formData.get("updateTemplate") ?? "").trim();
-      const template = templateName ? parseUpdateTemplate(formatUpdateTemplate(templateName, String(formData.get("updateTemplateLanguage") ?? ""))) : null;
-      if (templateName && !template) {
-        return refuse("The template name must be exactly as it is in WhatsApp Manager: lower-case letters, numbers and underscores only.");
+      // WHO a handoff goes to (validated above) — saved BEFORE the switch below, so
+      // handoffs are never on, even for a moment, with the previous recipient.
+      const to = wanted ?? "all";
+      if (to !== ((await getSetting(ASSISTANT_WHATSAPP_HANDOFF_TO_KEY)) || "all")) {
+        await putSetting(ASSISTANT_WHATSAPP_HANDOFF_TO_KEY, to);
+        await logAudit({
+          action: "assistant.whatsapp_handoff_recipient",
+          summary: wanted ? "Chatbot handoffs on WhatsApp now go to one chosen team member" : "Chatbot handoffs on WhatsApp now go to everyone with a linked phone who may open the inbox",
+          user,
+          entityType: wanted ? "User" : undefined,
+          entityId: wanted ?? undefined,
+        });
+        revalidatePath("/settings/assistant");
       }
+      // Telling staff on their linked WhatsApp when the chatbot hands a conversation
+      // to a person. Default OFF; it only ever messages staff. Audited both ways.
+      const handoff = formData.get("whatsappHandoff") === "on";
+      if (handoff !== whatsappHandoffOn(await getSetting(ASSISTANT_WHATSAPP_HANDOFF_KEY))) {
+        await putSetting(ASSISTANT_WHATSAPP_HANDOFF_KEY, handoff ? "on" : "off");
+        await logAudit({
+          action: handoff ? "assistant.whatsapp_handoff_enabled" : "assistant.whatsapp_handoff_disabled",
+          summary: handoff
+            ? "Chatbot handoffs now go to a person's linked WhatsApp, with the customer's details and the chat so far"
+            : "Turned off sending chatbot handoffs to a person's WhatsApp",
+          user,
+        });
+        revalidatePath("/settings/assistant");
+      }
+      // The update template (validated above).
       const stored = template ? formatUpdateTemplate(template.name, template.language) : "";
       if (stored !== ((await getSetting(ASSISTANT_WHATSAPP_TEMPLATE_KEY)) ?? "")) {
         await putSetting(ASSISTANT_WHATSAPP_TEMPLATE_KEY, stored);

@@ -3,7 +3,7 @@ import { getRegionalSettings, getSetting } from "./settings";
 import { formatZAR } from "./format";
 import { matchByPhone } from "./whatsapp";
 import { generateBotReply, routeBotChoice, type BotMsg } from "./botAi";
-import { sendPushToAll } from "./push";
+import { notifyHandoff } from "./handoffNotify";
 import { maybeAutoReply } from "./bot";
 import { flowRuntimeVars, greetingVars } from "./flowSession";
 import { resolveTenantActor } from "./tenantActor";
@@ -81,7 +81,16 @@ function buildCtx(digits: string, match: { contactId: string | null; leadId: str
       else if (match.leadId) { const l = await prisma.lead.findUnique({ where: { id: match.leadId } }); name = l?.name?.split(" ")[0] ?? null; }
       return (await generateBotReply({ history: await whatsappHistory(match.contactId, match.leadId, digits), customerName: name, isCustomer })) ?? { reply: "Let me get one of our team to help you with that — they'll be in touch shortly 👍", handoff: true, confidence: "low", intent: "unknown", handoffReason: "AI unavailable" };
     },
-    handoff: async (_vars, context) => { await sendPushToAll({ title: "WhatsApp needs you 🙋", body: handoffBody(context), url: match.contactId ? `/contacts/${match.contactId}` : match.leadId ? `/leads/${match.leadId}` : "/inbox" }, "bot_handoff").catch(() => {}); },
+    handoff: async (vars, context) => {
+      await notifyHandoff({
+        channel: "WhatsApp",
+        body: handoffBody(context),
+        url: match.contactId ? `/contacts/${match.contactId}` : match.leadId ? `/leads/${match.leadId}` : "/inbox",
+        customer: { contactId: match.contactId, leadId: match.leadId, waDigits: digits },
+        answers: vars,
+        chat: () => whatsappHistory(match.contactId, match.leadId, digits),
+      });
+    },
     ...crmActions("whatsapp", { contactId: match.contactId, leadId: match.leadId }),
   };
 }

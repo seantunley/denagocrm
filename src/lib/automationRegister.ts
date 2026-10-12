@@ -253,12 +253,21 @@ export const AUTOMATIONS: Automation[] = [
   {
     key: "assistant-schedules",
     label: "Scheduled DAX questions",
-    does: "Answers questions a person scheduled for themselves, as them, and tells them it's ready.",
+    does: "Answers questions a person scheduled for themselves, as them, and tells them it's ready. Also sends the answer, and anything they asked DAX to watch for, to the WhatsApp they linked — unless they switched that off on the Ask page.",
     reaches: "staff",
-    channels: ["push"],
+    channels: ["push", "whatsapp"],
     when: "Every 30 minutes",
     managedAt: { label: "Ask DAX", href: "/assistant" },
     cron: "/api/cron/assistant",
+  },
+  {
+    key: "chatbot-handoff-notice",
+    label: "Chatbot handoff to a person",
+    does: "When the chatbot passes a customer to a person, tells the team with a phone notification. Only if an owner switches it on, it also sends that person — on the WhatsApp they linked themselves — the customer's name and number, what they want, the chat so far and a link to chat to them, and logs the handoff on the customer's record. The customer is not contacted by it.",
+    reaches: "staff",
+    channels: ["push", "whatsapp"],
+    when: "When the chatbot hands a conversation over",
+    managedAt: { label: "Settings → Assistant", href: "/settings/assistant" },
   },
   {
     key: "lead-research",

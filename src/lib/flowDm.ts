@@ -3,7 +3,7 @@ import { resolveTenantActor } from "./tenantActor";
 import { getSetting } from "./settings";
 import { generateBotReply, routeBotChoice } from "./botAi";
 import { priceList, coloursList } from "./botAnswers";
-import { sendPushToAll } from "./push";
+import { notifyHandoff } from "./handoffNotify";
 import { advanceFlow, greetingVars } from "./flowSession";
 import { crmActions } from "./flowActions";
 import { choiceId as encodeChoice, type FlowHandoffContext } from "./flow";
@@ -36,7 +36,7 @@ export async function runDmFlow(platform: DmPlatform, senderId: string, text: st
       dynamicAnswer: (source) => source === "colours" ? coloursList() : priceList(),
       routeChoice: ({ prompt, text: freeText, options }) => routeBotChoice({ prompt, text: freeText, options }),
       aiReply: async (vars) => (await generateBotReply({ history: state.msgs, customerName: vars.name ?? null, isCustomer: false })) ?? { reply: "Let me get one of our team to help — I'll pass this on now 👍", handoff: true, confidence: "low", intent: "unknown", handoffReason: "AI unavailable" },
-      handoff: async (_vars, context) => { await sendPushToAll({ title: `${platform === "instagram" ? "Instagram" : "Messenger"} needs you 🙋`, body: handoffBody(context), url: "/inbox" }, "bot_handoff").catch(() => {}); },
+      handoff: async (vars, context) => { await notifyHandoff({ channel: platform === "instagram" ? "Instagram" : "Messenger", body: handoffBody(context), url: "/inbox", customer: { contactId: contact?.id ?? null, leadId: null }, answers: vars, chat: () => state.msgs }); },
       ...crmActions(platform, { contactId: contact?.id ?? null, leadId: null }),
     }),
     greetingVars(contact?.firstName ?? null, (await getCompanyProfile()).name),
