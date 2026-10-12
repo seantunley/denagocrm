@@ -15,9 +15,16 @@ import type { ActionCard } from "@/lib/assistantActions";
  * one, the whole section) would vanish before the person had seen "Done" or
  * been given its link. So the list is the one this visit started with: each
  * card shows its own outcome, and a finished one is gone on the next visit.
+ *
+ * Held cards are never dropped by a refresh, but NEW ones are taken in: a task
+ * saved from the phone while this page is open appears on the next refresh
+ * instead of waiting for the page to be left and reopened.
  */
 export default function SavedAssistantCards({ name, cards }: { name: string; cards: { id: string; card: ActionCard }[] }) {
-  const [held] = useState(cards);
+  const [held, setHeld] = useState(cards);
+  const arrived = cards.filter((card) => !held.some((kept) => kept.id === card.id));
+  // Adjusting state while rendering (React's pattern for state derived from props): no effect, no extra paint.
+  if (arrived.length > 0) setHeld([...held, ...arrived]);
   if (held.length === 0) return null;
   const one = held.length === 1;
   return (

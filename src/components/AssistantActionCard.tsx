@@ -37,6 +37,9 @@ export default function AssistantActionCard({
   if (state === "dismissed") return null;
 
   const dismiss = () => {
+    // Not while Confirm or Send is running: the card would vanish and the action
+    // go on regardless. (The server refuses to delete a claimed card too.)
+    if (pending) return;
     setState("dismissed");
     if (savedId) void settleSavedAssistantCard(savedId, "dismissed").catch(() => {});
   };
@@ -103,7 +106,7 @@ export default function AssistantActionCard({
           {reason && <p className="mt-1 text-xs text-muted-foreground">{reason}</p>}
         </div>
         {state === "open" && (
-          <button type="button" onClick={dismiss} className="text-muted-foreground hover:text-foreground" aria-label="Dismiss">
+          <button type="button" onClick={dismiss} disabled={pending} className="text-muted-foreground hover:text-foreground disabled:opacity-40" aria-label="Dismiss">
             <X className="size-4" />
           </button>
         )}

@@ -56,6 +56,8 @@ export async function offerConfirmations(tenantId: string, userId: string, waId:
     const on = await confirmingOnWhatsAppOn();
     const { confirmable, crmOnly } = splitForWhatsApp_cards(cards);
     const elsewhere = on ? [...crmOnly] : [...cards];
+    // Could have been confirmed here, but its Confirm button did not arrive.
+    const unbuttoned = new Set<ActionCard>();
     for (const card of on ? confirmable : []) {
       // What will be shown, in full. Null: it cannot be shown whole, so it gets no button.
       const messages = confirmMessages(card);
@@ -77,7 +79,18 @@ export async function offerConfirmations(tenantId: string, userId: string, waId:
         select: { id: true },
       });
       const sent = await sendWhatsAppButtons(waId, messages.body, [{ id: confirmButtonId(pending.id), title: "Confirm" }]);
-      if (!sent.ok) await logError("assistant-whatsapp", "confirm offer send failed");
+      if (!sent.ok) {
+        await logError("assistant-whatsapp", "confirm offer send failed");
+        // NO BUTTON ARRIVED, so this row can never be confirmed from the phone —
+        // and, not being a CRM card, it was not on the Ask page either: the task
+        // was kept where nobody could reach it. It goes to the Ask page with the
+        // rest. The unreachable row is removed; if that fails it simply expires.
+        await basePrisma.assistantPendingAction
+          .deleteMany({ where: { id: pending.id, tenantId, userId, forCrm: false, confirmedAt: null } })
+          .catch(() => {});
+        unbuttoned.add(card);
+        elsewhere.push(card);
+      }
     }
     if (elsewhere.length > 0) {
       // KEPT, not only named. These are done in the CRM — but the person has
@@ -86,9 +99,13 @@ export async function offerConfirmations(tenantId: string, userId: string, waId:
       // message must not promise a card that is not there.
       const saved = await saveForCrm(tenantId, userId, elsewhere);
       const list = elsewhere.map((card) => `• ${card.title}`).join("\n");
+      // Why it is in the CRM, truthfully: a button that failed to send is not "done in the CRM" by rule.
+      const allUnbuttoned = elsewhere.every((card) => unbuttoned.has(card));
       await say(
         waId,
-        saved
+        saved && allUnbuttoned
+          ? `I couldn't send the Confirm button for ${elsewhere.length === 1 ? "this one" : "these"}, so I've saved ${elsewhere.length === 1 ? "it" : "them"} on your Ask page in the CRM — open it and press Confirm (kept for a day):\n${list}`
+          : saved
           ? `${elsewhere.length === 1 ? "This one is" : "These are"} done in the CRM. I've saved ${elsewhere.length === 1 ? "it" : "them"} on your Ask page — open it and press Confirm (kept for a day):\n${list}`
           : `${elsewhere.length === 1 ? "This one needs" : "These need"} the CRM — ask me there and confirm on the card:\n${list}`,
       );

@@ -388,7 +388,11 @@ export async function settleSavedAssistantCard(savedId: string, outcome: "sent" 
     const id = String(savedId ?? "");
     const changed =
       outcome === "dismissed"
-        ? await prisma.assistantPendingAction.deleteMany({ where: { id, userId: user.id, forCrm: true, completedAt: null } })
+        ? // confirmedAt: null — NOT WHILE IT IS RUNNING. Confirm claims the card by
+          // setting confirmedAt; a dismissal that could delete a claimed row made
+          // the card vanish while its action went on and completed. A claim is
+          // released (set back to null) only when the action proved it wrote nothing.
+          await prisma.assistantPendingAction.deleteMany({ where: { id, userId: user.id, forCrm: true, confirmedAt: null, completedAt: null } })
         : outcome === "sent"
           ? await prisma.assistantPendingAction.updateMany({ where: { id, userId: user.id, forCrm: true, completedAt: null }, data: { completedAt: new Date() } })
           : { count: 0 };
