@@ -4,6 +4,9 @@ import { basePrisma } from "./db";
 import { getSetting } from "./settings";
 import { currentTenantScope } from "./tenantScope";
 import { fetchWhatsAppMedia, matchByPhone, sendWhatsAppAudioId, sendWhatsAppButtons, sendWhatsAppTemplate, sendWhatsAppText, showWhatsAppTyping, uploadWhatsAppMedia, waDigits } from "./whatsapp";
+import { sendWhatsAppDocument } from "./whatsapp";
+import { quotePdf } from "./quotePdf";
+import { quotePdfFileName } from "./quoteEmail";
 import { transcribeVoice, transcribeVoiceDetailed } from "./transcribe";
 import { askCrm } from "./crmAssistant";
 import type { ActionCard } from "./assistantActions";
@@ -31,6 +34,7 @@ import {
   UPDATE_SEND_RESERVE_MS,
   nudgeFailureMayPass,
   PROACTIVE_SOURCES,
+  QUOTE_PDF_SOURCE,
   QUESTION_CHARS,
   UPDATE_BATCH,
   UPDATE_WAIT_MS,
@@ -223,6 +227,13 @@ export async function handleStaffWhatsApp(from: string, input: StaffWhatsAppInpu
   const pendingId = "text" in input ? parseConfirmId(input.choiceId) : null;
   if (pendingId) {
     await confirmFromWhatsApp(tenantId, user, waId, pendingId);
+    // WHAT THE CONFIRMED TASK QUEUED FOR THEM. A quote the assistant built leaves
+    // its PDF as an update for this person (source "quote_pdf"); it goes now,
+    // after the "done" reply above, while WhatsApp will take it. Same delivery as
+    // a briefing: if this webhook ends first, or WhatsApp refuses, the half-hourly
+    // sweep or their next message sends it — and tapping Confirm again cannot make
+    // a second quote. Nothing queued: this sends nothing.
+    await sendUpdatesToLinkedPhone(tenantId, user.id, { windowOpen: true });
     return true;
   }
 
@@ -517,24 +528,29 @@ export async function sendUpdatesToLinkedPhone(
   try {
     if (!(await assistantWhatsAppOn())) return "not_wanted";
     const link = await basePrisma.assistantPhoneLink.findFirst({
-      where: { tenantId, userId, verifiedAt: { not: null }, updatesOnWhatsApp: true },
-      select: { id: true, waId: true, sessionVersion: true, nudgedAt: true, nudgeFailedAt: true, lastInboundAt: true },
+      where: { tenantId, userId, verifiedAt: { not: null } },
+      select: { id: true, waId: true, sessionVersion: true, nudgedAt: true, nudgeFailedAt: true, lastInboundAt: true, updatesOnWhatsApp: true },
     });
     if (!link?.waId) return "not_wanted";
+    // "Send my updates to this phone" switched off: briefings, alerts and handoffs
+    // stay in the CRM. A quote PDF is not one of those — the person asked for it —
+    // so it alone still goes.
+    const sources: string[] = link.updatesOnWhatsApp ? [...PROACTIVE_SOURCES] : [QUOTE_PDF_SOURCE];
     // WAITING: not finished, and not being sent by somebody else right now. A
     // claim that has outlived UPDATE_CLAIM_MS belongs to a run that stopped.
     const waiting = () =>
       basePrisma.assistantTurn.findMany({
         where: {
-          tenantId, userId, source: { in: [...PROACTIVE_SOURCES] }, whatsappSentAt: null, createdAt: { gt: new Date(Date.now() - UPDATE_WAIT_MS) },
+          tenantId, userId, source: { in: sources }, whatsappSentAt: null, createdAt: { gt: new Date(Date.now() - UPDATE_WAIT_MS) },
           OR: [{ whatsappClaimedAt: null }, { whatsappClaimedAt: { lt: new Date(Date.now() - UPDATE_CLAIM_MS) } }],
         },
         orderBy: { createdAt: "asc" },
         take: UPDATE_BATCH,
-        select: { id: true, source: true, question: true, answer: true },
+        select: { id: true, source: true, question: true, answer: true, quoteId: true },
       });
     let batch = await waiting();
-    if (batch.length === 0) return "nothing";
+    // Updates switched off and no PDF they asked for: as before, nothing is wanted here.
+    if (batch.length === 0) return link.updatesOnWhatsApp ? "nothing" : "not_wanted";
     const security = await readUserSecurityStateStrict(userId);
     if (!security || link.sessionVersion === null || security.sessionVersion !== link.sessionVersion) return "not_safe";
     const customer = await matchByPhone(link.waId);
@@ -584,7 +600,7 @@ async function sendOneUpdate(
   tenantId: string,
   userId: string,
   waId: string,
-  turn: { id: string; source: string; question: string; answer: string },
+  turn: { id: string; source: string; question: string; answer: string; quoteId?: string | null },
   outOfTime: () => boolean,
 ): Promise<string | null | typeof OUT_OF_TIME> {
   // The workspace and the person are written out in every call below, not passed
@@ -618,7 +634,64 @@ async function sendOneUpdate(
     // The claim is no longer ours (this took longer than it lasts): the sender that has it now carries on.
     if (noted.count !== 1) return null;
   }
+  // THE PDF, after the words and before this update counts as sent. A failure
+  // here gives the update back with its text already counted as gone, so the
+  // next attempt — the sweep, or the person's next message — sends only the PDF.
+  // The quote is never created again: this only ever reads it.
+  if (turn.quoteId) {
+    if (outOfTime()) {
+      await basePrisma.assistantTurn.updateMany({ where: { id, tenantId, userId, whatsappClaimedAt: mine }, data: { whatsappClaimedAt: null } });
+      return OUT_OF_TIME;
+    }
+    const refused = await sendQuotePdfToStaff(tenantId, userId, waId, turn.quoteId);
+    if (refused !== null) {
+      await basePrisma.assistantTurn.updateMany({ where: { id, tenantId, userId, whatsappClaimedAt: mine }, data: { whatsappClaimedAt: null } });
+      return refused;
+    }
+  }
   await basePrisma.assistantTurn.updateMany({ where: { id, tenantId, userId, whatsappClaimedAt: mine }, data: { whatsappSentAt: new Date(), whatsappClaimedAt: null } });
+  return null;
+}
+
+/**
+ * A quote's PDF to A MEMBER OF STAFF's linked phone — the one who had the
+ * assistant build it (Sean, 2026-10-12: "deliver the PDF to WhatsApp, but NEVER
+ * send to customer"). Null = finished; otherwise why WhatsApp refused (retried).
+ *
+ * `waId` comes from sendUpdatesToLinkedPhone, which has JUST re-checked, for this
+ * very send: the link is verified, its sign-in still valid, and the number is not
+ * on any customer record. No other number is read or accepted here.
+ *
+ * THEIR OWN QUOTE ONLY: the row must be in this workspace and created by this
+ * person — which a quote the assistant built for them always is. Anything else
+ * (deleted since, somebody else's id in the column) sends no document.
+ *
+ * Sent with no `record`: nothing is written to a customer's timeline, because no
+ * customer is in this message. Nothing here changes the quote: not its status,
+ * not its "emailed" mark. Sending it to the customer stays the person's own step.
+ */
+async function sendQuotePdfToStaff(tenantId: string, userId: string, waId: string, quoteId: string): Promise<string | null> {
+  // Still a member who may use the assistant, asked now — not when the quote was built.
+  const user = await assistantUserFor(userId);
+  if (!user) return null;
+  const quote = await basePrisma.quote.findFirst({ where: { id: quoteId, tenantId, createdById: userId, deletedAt: null }, select: { id: true, number: true } });
+  if (!quote) return null;
+  const pdf = await quotePdf(quote.id);
+  if (!pdf) {
+    // Not a passing failure: the text (with its link) has gone, and trying again would not make a PDF.
+    await sendWhatsAppText(waId, `I couldn't make the PDF for Q-${quote.number}. The draft is in the CRM — open Quotes and look for Q-${quote.number}.`).catch(() => {});
+    await logError("assistant-whatsapp", "quote PDF could not be rendered for the person who asked").catch(() => {});
+    return null;
+  }
+  const sent = await sendWhatsAppDocument(waId, { content: pdf, filename: quotePdfFileName(quote.number), contentType: "application/pdf" }, `Draft quote Q-${quote.number} — for you. Not sent to the customer.`);
+  if (!sent.ok) return sent.error ?? "WhatsApp document send failed";
+  await logAudit({
+    action: "assistant.quote_pdf_to_staff",
+    summary: `Sent the PDF of draft quote Q-${quote.number} to the linked WhatsApp of the person who asked for it (not to the customer)`,
+    user,
+    entityType: "Quote",
+    entityId: quote.id,
+  }).catch(() => {});
   return null;
 }
 const OUT_OF_TIME = Symbol("out of time");

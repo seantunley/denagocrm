@@ -854,6 +854,10 @@ async function knowledge(user: User, raw: z.infer<typeof knowledgeArgs>): Promis
     data: [{
       company: company ? { name: company.name, tagline: company.tagline, website: company.website, address: company.address } : null,
       products: relevant.map((p) => ({
+        // The id a quote_build line names (assistantActions.QUOTE_BUILD_RULE). Without
+        // it the assistant knew the product and its price and could not put it on a
+        // quote: an id it made up fails the catalogue check and the task is dropped.
+        productId: p.id,
         product: p.name,
         category: p.category,
         price: formatZAR(p.basePriceCents),

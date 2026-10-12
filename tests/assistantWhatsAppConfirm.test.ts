@@ -119,6 +119,8 @@ const state = {
   errors: [] as string[],
   outcome: { ok: true, success: "Note added" } as { ok: boolean; success?: string; error?: string; unchanged?: boolean; quote?: { id: string; number: number } } | "refuse" | "throw",
   failTextContaining: "",
+  /** Where each run said Confirm was pressed. */
+  via: [] as (string | undefined)[],
   /** Documents sent on WhatsApp: the full argument list of each call. */
   documents: [] as unknown[][],
   /** Quote PDFs rendered, and as whom. */
@@ -197,8 +199,9 @@ loaderKey._load = function (this: unknown, request: string, parent, isMain) {
       // The real one is proved by its source below; here it records WHO the action ran as.
       case "./auth": return { runAsLinkedStaff: async (userId: string, fn: () => Promise<unknown>) => { asUser = userId; try { return await fn(); } finally { asUser = null; } } };
       case "@/app/actions/assistant": return {
-        runAssistantAction: async (card: Record<string, unknown>) => {
+        runAssistantAction: async (card: Record<string, unknown>, via?: string) => {
           state.ran.push({ asUserId: asUser ?? "NOBODY", card });
+          state.via.push(via);
           if (state.outcome === "refuse") throw Object.assign(new Error("NEXT_REDIRECT"), { digest: "NEXT_REDIRECT;replace;/;307;" });
           if (state.outcome === "throw") throw new Error("database unavailable");
           return state.outcome;
@@ -238,6 +241,7 @@ beforeEach(() => {
   state.rendered = [];
   state.failDocuments = false;
   state.noPdf = false;
+  state.via = [];
 });
 
 const QUOTE_BUILD = {
@@ -246,7 +250,7 @@ const QUOTE_BUILD = {
   text: "1 × Rover XL — R 249 900,00 each\nCatalogue prices. Created as a DRAFT — it is not sent to the customer.",
 };
 
-test("A QUOTE DAX BUILT: confirmed on WhatsApp, its PDF goes to the phone that confirmed it — and nowhere else", async () => {
+test("A QUOTE DAX BUILT: offered with every line, confirmed once — and the confirm step itself sends no document", async () => {
   assert.ok(WHATSAPP_CONFIRMABLE.has("quote_build"));
   // Offered with every line shown before the button exists.
   await offerConfirmations("t1", "u1", PHONE, [QUOTE_BUILD] as never[]);
@@ -255,57 +259,22 @@ test("A QUOTE DAX BUILT: confirmed on WhatsApp, its PDF goes to the phone that c
 
   const row = state.rows[0];
   state.sent = [];
-  state.outcome = { ok: true, success: "Draft quote Q-1030 created. It has NOT been sent to the customer.", quote: { id: "cmquoteabcdefghijklmnopq", number: 1030 } };
+  state.outcome = { ok: true, success: "Draft quote Q-1030 created — R 249 900,00. It has NOT been sent to the customer.", quote: { id: "cmquoteabcdefghijklmnopq", number: 1030 } };
   await confirmFromWhatsApp("t1", me, PHONE, row.id);
   assert.equal(state.ran.length, 1);
-  assert.equal(state.sent[0].text, "✅ Draft quote Q-1030 created. It has NOT been sent to the customer.");
-  // Rendered as the person who asked — the document they would get by opening the quote.
-  assert.deepEqual(state.rendered, [{ quoteId: "cmquoteabcdefghijklmnopq", asUserId: "u1" }]);
-  // ONE document, to the SAME phone the tap came from, and with no `record` argument:
-  // nothing is filed on a customer's timeline, because no customer is in this message.
-  assert.equal(state.documents.length, 1);
-  const [to, file, caption, ...rest] = state.documents[0] as [string, { filename: string; contentType: string; content: Buffer }, string, ...unknown[]];
-  assert.equal(to, PHONE);
-  assert.equal(file.filename, "Quote-Q-1030.pdf");
-  assert.equal(file.contentType, "application/pdf");
-  assert.equal(caption, "Draft quote Q-1030 — for you. Not sent to the customer.");
-  assert.deepEqual(rest, [], "no record: this is not a message to a customer");
-  assert.ok(state.audits.some((a) => a.action === "assistant.quote_pdf_to_staff" && /Q-1030/.test(a.summary) && /not to the customer/.test(a.summary)));
-  // Tapped again: nothing runs and no second PDF goes.
-  await confirmFromWhatsApp("t1", me, PHONE, row.id);
-  assert.equal(state.documents.length, 1);
-});
-
-test("the PDF is an extra, never the task: if it cannot be made or sent the quote still exists and the person is told where", async () => {
-  for (const break_ of ["noPdf", "failDocuments"] as const) {
-    state.sent = [];
-    state.documents = [];
-    state.noPdf = break_ === "noPdf";
-    state.failDocuments = break_ === "failDocuments";
-    const row = pendingRow({ card: QUOTE_BUILD });
-    state.outcome = { ok: true, success: "Draft quote Q-1031 created. It has NOT been sent to the customer.", quote: { id: "cmquoteabcdefghijklmnopq", number: 1031 } };
-    await confirmFromWhatsApp("t1", me, PHONE, row.id);
-    assert.ok(row.completedAt instanceof Date, `${break_}: the task is done`);
-    assert.equal(state.documents.length, 0);
-    assert.equal(state.sent.at(-1)?.text, "I couldn't send the PDF here. The draft is in the CRM — open Quotes and look for Q-1031.");
-    assert.ok(!state.audits.some((a) => a.action === "assistant.quote_pdf_to_staff"), "not logged as sent when it was not");
-    state.audits = [];
-  }
-});
-
-test("no PDF for anything that is not a built quote, or for one that did not succeed", async () => {
-  // Another kind, even if its result somehow carried a quote.
-  const note = pendingRow();
-  state.outcome = { ok: true, success: "Note added", quote: { id: "cmquoteabcdefghijklmnopq", number: 1 } };
-  await confirmFromWhatsApp("t1", me, PHONE, note.id);
-  // A built quote that was turned away, and one that failed.
-  for (const outcome of [{ ok: false, error: "The catalogue changed", unchanged: true }, { ok: false, error: "nope" }] as const) {
-    const row = pendingRow({ card: QUOTE_BUILD });
-    state.outcome = { ...outcome };
-    await confirmFromWhatsApp("t1", me, PHONE, row.id);
-  }
+  // Told the action where Confirm was pressed, so it leaves the PDF's send to the WhatsApp door.
+  assert.deepEqual(state.via, ["whatsapp"]);
+  assert.deepEqual(state.sent.map((s) => s.text), ["✅ Draft quote Q-1030 created — R 249 900,00. It has NOT been sent to the customer."]);
+  // THE CONFIRM STEP SENDS NO DOCUMENT ITSELF. The PDF is queued by the action and
+  // delivered by the assistant's durable update sender (tests/assistantWhatsApp.test.ts):
+  // re-verified phone, retried, never lost with this request.
   assert.deepEqual(state.documents, []);
   assert.deepEqual(state.rendered, []);
+  const lib = code("src/lib/assistantWhatsAppConfirm.ts");
+  assert.doesNotMatch(lib, /sendWhatsAppDocument|quotePdf\(|sendWhatsAppTemplate/);
+  // Tapped again: nothing runs a second time — so there is never a second quote.
+  await confirmFromWhatsApp("t1", me, PHONE, row.id);
+  assert.equal(state.ran.length, 1);
 });
 
 test("a long note: the full text is delivered BEFORE the button exists — and if it is not delivered, there is no button", async () => {
@@ -618,7 +587,7 @@ test("the claim is one conditional update naming workspace, person, unclaimed an
   assert.match(lib, /if \(claimed\.count !== 1\) return say\(/);
   // Whatever a run ends as, it is written against THIS claim only — it cannot undo or overwrite a later one.
   assert.match(lib, /updateMany\(\{ where: \{ id: pendingId, tenantId, userId: user\.id, confirmedAt: now, completedAt: null, failedAt: null \}, data \}\)/);
-  const order = ["confirmingOnWhatsAppOn()", "assistantPendingAction.updateMany(", "WHATSAPP_CONFIRMABLE.has(String(card.kind))", "runAsLinkedStaff(user.id, () => runAssistantAction(card))"].map((needle) => lib.indexOf(needle));
+  const order = ["confirmingOnWhatsAppOn()", "assistantPendingAction.updateMany(", "WHATSAPP_CONFIRMABLE.has(String(card.kind))", "runAsLinkedStaff(user.id, () => runAssistantAction(card, \"whatsapp\"))"].map((needle) => lib.indexOf(needle));
   assert.ok(order.every((at, i) => at > -1 && (i === 0 || order[i - 1] < at)), "switch, claim, kind, run — in that order");
   // It changes records only through the CRM's own Confirm, and can send nothing to a customer.
   assert.doesNotMatch(lib, /prisma\.(lead|contact|communication|activity|quote)\b|sendEmail|sendMessenger|sendTelegram|sendAssistantDraft/);

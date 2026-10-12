@@ -57,7 +57,7 @@ type Link = {
   updatesOnWhatsApp?: boolean; nudgedAt?: Date | null; nudgeFailedAt?: Date | null; lastInboundAt?: Date | null;
 };
 /** An answer in a person's history. Only schedule and watch ones are ever sent to a phone. */
-type Turn = { id: string; tenantId: string; userId: string; source: string; question: string; answer: string; createdAt: Date; whatsappSentAt: Date | null; whatsappClaimedAt: Date | null; whatsappPartsSent: number };
+type Turn = { id: string; tenantId: string; userId: string; source: string; question: string; answer: string; createdAt: Date; whatsappSentAt: Date | null; whatsappClaimedAt: Date | null; whatsappPartsSent: number; quoteId?: string | null };
 type Where = Record<string, unknown>;
 
 type Scope = { tenantId: string | null; system: boolean } | undefined;
@@ -103,6 +103,16 @@ const state = {
   templateTries: 0,
   /** Run as each text is accepted: time passing, or another sender acting meanwhile. */
   onSend: null as (() => void) | null,
+  /** Quotes in the database, for a built quote's PDF. */
+  quotes: [] as { id: string; tenantId: string; createdById: string; deletedAt: Date | null; number: number }[],
+  /** Documents sent on WhatsApp: the full argument list of each call. */
+  documents: [] as unknown[][],
+  /** Quote PDFs rendered. */
+  rendered: [] as string[],
+  /** The document send failing (the texts still go), and the renderer producing nothing. */
+  documentFails: false,
+  noPdf: false,
+  onConfirm: null as (() => void) | null,
 };
 const ASK_LIMIT = 60;
 
@@ -147,6 +157,8 @@ const turnTable = {
   },
 };
 const fakeDb = {
+  // Quotes as the PDF sender looks them up: by id, workspace, who created it, not deleted.
+  quote: { findFirst: async ({ where }: { where: Where }) => state.quotes.find((q) => matches(q, where)) ?? null },
   assistantTurn: turnTable,
   assistantPhoneLink: linkTable,
   $transaction: async (fn: (tx: unknown) => Promise<unknown>) => fn({ assistantPhoneLink: linkTable, $executeRaw: async () => 0 }),
@@ -187,6 +199,12 @@ loaderKey._load = function (this: unknown, request: string, parent, isMain) {
         sendWhatsAppButtons: async (to: string, text: string, buttons: { title: string }[]) => {
           state.sent.push({ to, text, buttons: buttons.map((b) => b.title) }); return { ok: true };
         },
+        // Every argument kept: a fourth (`record`) would file the send on a customer's timeline.
+        sendWhatsAppDocument: async (...args: unknown[]) => {
+          if (state.documentFails) return { ok: false, error: "Could not reach WhatsApp (timed out)" };
+          state.documents.push(args);
+          return { ok: true };
+        },
         fetchWhatsAppMedia: async () => { state.mediaFetched++; return state.media ?? { buffer: Buffer.from("x"), contentType: "audio/ogg" }; },
         // Recorded with what had been sent by then, to show it comes BEFORE the answer.
         showWhatsAppTyping: async (id: string | null | undefined) => { if (id) state.typing.push({ id, sentBefore: state.sent.length }); },
@@ -197,6 +215,7 @@ loaderKey._load = function (this: unknown, request: string, parent, isMain) {
           ambiguous: state.ambiguous.has(digits),
         }),
       };
+      case "./quotePdf": return { quotePdf: async (quoteId: string) => { state.rendered.push(quoteId); return state.noPdf ? null : Buffer.from("%PDF-1.7 quote"); } };
       case "./transcribe": return { transcribeVoice: async () => "what is overdue today" };
       case "./crmAssistant": return {
         askCrm: async (user: { id: string }, question: string, _page: unknown, opts: { source?: string; images?: string[]; proposeTasks?: boolean | "saved" }) => {
@@ -218,6 +237,8 @@ loaderKey._load = function (this: unknown, request: string, parent, isMain) {
         },
         confirmFromWhatsApp: async (tenantId: string, user: { id: string }, waId: string, pendingId: string) => {
           state.confirmed.push({ tenantId, userId: user.id, waId, pendingId });
+          // What the real confirm step leaves behind for a built quote: a queued update naming the quote.
+          state.onConfirm?.();
         },
       };
       case "./assistantUser": return {
@@ -315,6 +336,12 @@ beforeEach(() => {
   state.textFailsFrom = null;
   state.templateFails = null;
   state.templateTries = 0;
+  state.quotes = [];
+  state.documents = [];
+  state.rendered = [];
+  state.documentFails = false;
+  state.noPdf = false;
+  state.onConfirm = null;
   state.onSend = null;
 });
 
@@ -1319,7 +1346,9 @@ test("a sender that lost its claim cannot write over the one that took it", asyn
   assert.equal(turn.whatsappSentAt, null, "and it is not marked sent on that sender's behalf");
   const lib = code("src/lib/assistantWhatsApp.ts");
   const one = lib.slice(lib.indexOf("async function sendOneUpdate"), lib.indexOf("const OUT_OF_TIME"));
-  assert.equal(one.match(/whatsappClaimedAt: mine \}, data:/g)?.length, 4, "every write after the claim names the claim");
+  // (Two of the six give an update back when its PDF cannot go yet — out of time, or WhatsApp refused the document.)
+  assert.equal(one.match(/whatsappClaimedAt: mine \}, data:/g)?.length, 6, "every write after the claim names the claim");
+  assert.equal(one.match(/assistantTurn\.updateMany\(/g)?.length, 7, "the claim itself, and six writes that name it");
 });
 
 test("which template failures may pass, and which are refusals", () => {
@@ -1344,7 +1373,7 @@ test("the rules: the window, the template name, and what is sent", () => {
   assert.equal(outsideReplyWindow("Outside the 24-hour reply window — the customer must message you first"), true);
   assert.equal(outsideReplyWindow("(#131047) Re-engagement message"), true);
   assert.equal(outsideReplyWindow("WhatsApp send failed"), false);
-  assert.deepEqual([...PROACTIVE_SOURCES], ["schedule", "watch", "handoff"]);
+  assert.deepEqual([...PROACTIVE_SOURCES], ["schedule", "watch", "handoff", "quote_pdf"]);
 });
 
 test("wired where it must be: after a saved briefing, after a saved alert, on the template's button — and each switch is the right person's", () => {
@@ -1375,6 +1404,136 @@ test("wired where it must be: after a saved briefing, after a saved alert, on th
   const settings = code("src/app/actions/assistantSettings.ts");
   const card = settings.slice(settings.indexOf("export async function saveAssistantWhatsAppCard"));
   assert.match(card, /const user = await requireTenantOwner\(\);[\s\S]*putSetting\(ASSISTANT_WHATSAPP_TEMPLATE_KEY, stored\);\s*await logAudit\(/);
+});
+
+/* ── a quote the assistant built: its PDF, to the person who asked ─────── */
+
+const QUOTE_ID = "cmquoteabcdefghijklmnopq";
+/** A draft quote u1 had the assistant build, and the update that carries its PDF. */
+function builtQuote(over: Partial<Turn> = {}) {
+  state.quotes.push({ id: QUOTE_ID, tenantId: "t1", createdById: "u1", deletedAt: null, number: 1030 });
+  const turn = waitingTurn("quote", 0, "quote_pdf");
+  Object.assign(turn, { question: "Draft quote Q-1030", answer: "I've created draft quote Q-1030. It has NOT been sent to the customer.", quoteId: QUOTE_ID, ...over });
+  return turn;
+}
+
+test("A BUILT QUOTE'S PDF goes to the linked phone of the person who asked: the words, then the document — and nothing to a customer", async () => {
+  const link = verified("u1", STAFF);
+  link.lastInboundAt = new Date();
+  const turn = builtQuote();
+  assert.equal(await sendUpdatesToLinkedPhone("t1", "u1"), "sent");
+  assert.match(state.sent[0].text, /^🧾 Draft quote Q-1030\n\nI've created draft quote Q-1030\. It has NOT been sent to the customer\./);
+  assert.deepEqual(state.rendered, [QUOTE_ID]);
+  // ONE document, to the linked staff phone, with no fourth argument: no customer timeline entry.
+  assert.equal(state.documents.length, 1);
+  const [to, file, caption, ...rest] = state.documents[0] as [string, { filename: string; contentType: string }, string, ...unknown[]];
+  assert.equal(to, STAFF);
+  assert.equal(file.filename, "Quote-Q-1030.pdf");
+  assert.equal(file.contentType, "application/pdf");
+  assert.equal(caption, "Draft quote Q-1030 — for you. Not sent to the customer.");
+  assert.deepEqual(rest, []);
+  assert.ok(turn.whatsappSentAt instanceof Date, "finished only once the document has gone");
+  assert.ok(state.audits.some((summary) => /Q-1030/.test(summary) && /not to the customer/.test(summary)));
+  // Run again: nothing is waiting, nothing is re-sent.
+  assert.equal(await sendUpdatesToLinkedPhone("t1", "u1"), "nothing");
+  assert.equal(state.documents.length, 1);
+});
+
+test("THE PDF IS NOT LOST when its send fails: the update stays waiting, and the retry sends ONLY the document", async () => {
+  // Review of #872: the task was marked done before the PDF was rendered and sent, so a
+  // crash or timeout there lost the PDF for good and a second tap could not bring it back.
+  const link = verified("u1", STAFF);
+  link.lastInboundAt = new Date();
+  const turn = builtQuote();
+  state.documentFails = true;
+  assert.equal(await sendUpdatesToLinkedPhone("t1", "u1"), "failed");
+  assert.equal(state.sent.length, 1, "the words went");
+  assert.equal(turn.whatsappSentAt, null, "…but it is NOT finished");
+  assert.equal(turn.whatsappClaimedAt, null, "given back at once for the next sender");
+  assert.equal(turn.whatsappPartsSent, 1, "with the words counted as gone");
+  // The half-hourly sweep (or their next message) tries again.
+  state.documentFails = false;
+  await sweepWaitingUpdates("t1", { shouldStop: () => false });
+  assert.equal(state.sent.length, 1, "the words are not repeated");
+  assert.equal(state.documents.length, 1, "the document arrives");
+  assert.notEqual(state.turns.find((t) => t.id === "quote")?.whatsappSentAt ?? null, null, "and only now is it finished");
+  // Never a second quote: this path only ever reads the quote.
+  const lib = code("src/lib/assistantWhatsApp.ts");
+  const sender = lib.slice(lib.indexOf("async function sendQuotePdfToStaff("), lib.indexOf("const OUT_OF_TIME"));
+  assert.doesNotMatch(sender, /quote\.(create|update|updateMany|delete)|saveQuoteDraft|runAssistantAction|status:/);
+});
+
+test("it is re-checked at the moment of sending: a phone no longer safely theirs, or a quote not theirs, gets no document", async () => {
+  // The number has landed on a customer record since: nothing of it goes anywhere.
+  let link = verified("u1", STAFF);
+  link.lastInboundAt = new Date();
+  builtQuote();
+  state.customers.add(STAFF);
+  assert.equal(await sendUpdatesToLinkedPhone("t1", "u1"), "not_safe");
+  assert.deepEqual([state.sent.length, state.documents.length], [0, 0]);
+  state.customers = new Set();
+  // Sign-ins reset since the phone was linked.
+  state.sessionVersions.set("u1", 2);
+  assert.equal(await sendUpdatesToLinkedPhone("t1", "u1"), "not_safe");
+  assert.equal(state.documents.length, 0);
+  state.sessionVersions = new Map();
+
+  // A quote somebody else created, another workspace's, or one deleted since: the words go, no document does.
+  for (const change of [{ createdById: "u2" }, { tenantId: "t2" }, { deletedAt: new Date() }]) {
+    state.links = []; state.turns = []; state.quotes = []; state.sent = []; state.documents = []; state.rendered = [];
+    link = verified("u1", STAFF);
+    link.lastInboundAt = new Date();
+    const turn = builtQuote();
+    Object.assign(state.quotes[0], change);
+    assert.equal(await sendUpdatesToLinkedPhone("t1", "u1"), "sent", JSON.stringify(change));
+    assert.deepEqual([state.rendered.length, state.documents.length], [0, 0], JSON.stringify(change));
+    assert.ok(turn.whatsappSentAt instanceof Date);
+  }
+  // No longer a member who may use the assistant: no document.
+  state.links = []; state.turns = []; state.quotes = []; state.sent = []; state.documents = [];
+  link = verified("u1", STAFF);
+  link.lastInboundAt = new Date();
+  builtQuote();
+  state.members = new Set(["u2"]);
+  await sendUpdatesToLinkedPhone("t1", "u1");
+  assert.equal(state.documents.length, 0);
+});
+
+test("a PDF that cannot be made is said once and not retried for ever", async () => {
+  const link = verified("u1", STAFF);
+  link.lastInboundAt = new Date();
+  const turn = builtQuote();
+  state.noPdf = true;
+  assert.equal(await sendUpdatesToLinkedPhone("t1", "u1"), "sent");
+  assert.equal(state.documents.length, 0);
+  assert.match(state.sent.at(-1)?.text ?? "", /^I couldn't make the PDF for Q-1030\. The draft is in the CRM/);
+  assert.ok(turn.whatsappSentAt instanceof Date);
+});
+
+test("they ASKED for it: the PDF goes even with 'send my updates to this phone' off — and nothing else does", async () => {
+  const link = verified("u1", STAFF);
+  link.lastInboundAt = new Date();
+  link.updatesOnWhatsApp = false;
+  const brief = waitingTurn("brief", 0, "schedule");
+  const turn = builtQuote();
+  assert.equal(await sendUpdatesToLinkedPhone("t1", "u1"), "sent");
+  assert.equal(state.documents.length, 1);
+  assert.ok(turn.whatsappSentAt instanceof Date);
+  assert.equal(brief.whatsappSentAt, null, "the briefing stays in the CRM, as they chose");
+  // With no PDF waiting it is what it always was.
+  assert.equal(await sendUpdatesToLinkedPhone("t1", "u1"), "not_wanted");
+});
+
+test("confirmed on WhatsApp: what the task queued is sent straight after the confirm step's own reply", async () => {
+  verified("u1", STAFF);
+  state.confirmOn = true;
+  state.onConfirm = () => { builtQuote(); };
+  assert.equal(await handleStaffWhatsApp(STAFF, { text: "Confirm", choiceId: "daxc:cmpendingpendingpendingpe" }), true);
+  assert.equal(state.confirmed.length, 1);
+  assert.equal(state.documents.length, 1, "the PDF follows the confirm");
+  assert.equal((state.documents[0] as unknown[])[0], STAFF);
+  const lib = code("src/lib/assistantWhatsApp.ts");
+  assert.match(lib, /await confirmFromWhatsApp\(tenantId, user, waId, pendingId\);[\s\S]{0,700}await sendUpdatesToLinkedPhone\(tenantId, user\.id, \{ windowOpen: true \}\);\s*return true;/);
 });
 
 test("it knows about WhatsApp — and the pinned claims stay true", async () => {

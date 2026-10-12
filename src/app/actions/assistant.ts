@@ -9,6 +9,13 @@ import { isCodexConnected } from "@/lib/codex";
 import { ASSISTANT_PROFILE_KEY, parseProfile } from "@/lib/assistantSoul";
 import { QUOTE_BUILD_MAX_LINES, STALE_CARD, type ActionCard } from "@/lib/assistantActions";
 import { editorDefaults, quoteFromLeadDefaults } from "@/lib/quoteFromLead";
+import { QUOTE_PDF_SOURCE } from "@/lib/assistantWhatsAppRules";
+import { payableTotalCents } from "@/lib/pricing";
+import { formatZAR } from "@/lib/format";
+import { tenantOrigin } from "@/lib/tenantOrigin";
+
+/** How long a Confirm in the CRM waits for a built quote's PDF to go to WhatsApp before leaving it to the sweep. */
+const QUOTE_PDF_SEND_WAIT_MS = 4_000;
 import { prisma } from "@/lib/db";
 import { cancelActivity, rescheduleActivity, scheduleActivity, scheduleFollowUp } from "@/app/actions/activities";
 import { addCommunication } from "@/app/actions/communications";
@@ -51,7 +58,14 @@ const untouched = (error: string) => ({ ok: false as const, error, unchanged: tr
 
 export async function runAssistantAction(
   card: ActionCard,
-  /** `quote`: the draft a quote_build created — so the WhatsApp door can hand its PDF back to the person who asked. */
+  /**
+   * Where Confirm was pressed. It decides one thing: who sends a built quote's
+   * PDF to the person's linked phone — this action ("crm"), or the WhatsApp door
+   * after its own reply ("whatsapp"). Either way it is queued first, so a wrong
+   * value here can only make the PDF arrive by the half-hourly sweep instead.
+   */
+  via: "crm" | "whatsapp" = "crm",
+  /** `quote`: the draft a quote_build created. */
 ): Promise<{ ok: boolean; error?: string; success?: string; href?: string; unchanged?: boolean; quote?: { id: string; number: number } }> {
   return withActingStaffScope(async () => {
     const user = await requireAnyPermission(...ASSISTANT_PERMISSIONS);
@@ -274,9 +288,53 @@ export async function runAssistantAction(
         // saveQuoteDraft validates before it writes (a colour the product does not come in, say).
         if (!saved.ok) return { ok: false, error: saved.error };
         await confirmed(`create draft quote Q-${saved.quote.number}`, card.leadId);
+        // THE QUOTE EXISTS. Everything below is about telling the person, and none
+        // of it may undo that or report it as failed.
+        //
+        // The total as the QUOTE works it out (VAT, discounts) — read back from
+        // what was saved, never computed on the side.
+        const built = await prisma.quote.findUnique({ where: { id: saved.quote.id }, include: { items: true, fees: true } }).catch(() => null);
+        const total = built ? formatZAR(Math.round(payableTotalCents(built))) : null;
+        // ITS PDF, TO THEIR LINKED WHATSAPP — queued, not sent from here. It is
+        // written as an update for this person (source "quote_pdf", naming the
+        // quote), which the assistant's own delivery sends: claimed, retried by the
+        // half-hourly sweep, to a phone it re-verifies and refuses if it is a
+        // customer's. So the PDF follows whether they confirmed in the CRM or on
+        // WhatsApp, and is not lost if this request ends before WhatsApp answers.
+        // With no linked phone it simply stays in their Ask history, with the link.
+        const tenantId = ownedWriteTenantId();
+        const queued = await prisma.assistantTurn
+          .create({
+            data: {
+              tenantId,
+              userId: user.id,
+              source: QUOTE_PDF_SOURCE,
+              quoteId: saved.quote.id,
+              question: `Draft quote Q-${saved.quote.number}`,
+              answer: `I've created draft quote Q-${saved.quote.number}${total ? ` (${total})` : ""}. It has NOT been sent to the customer — sending it is your step.\n${(await tenantOrigin(tenantId).catch(() => "")).replace(/\/$/, "")}/quotes?edit=${saved.quote.id}`,
+            },
+            select: { id: true },
+          })
+          .catch(async (err: unknown) => {
+            const { logError } = await import("@/lib/errorLog");
+            await logError("assistant-quote-pdf", err instanceof Error ? err.name : "unknown").catch(() => {});
+            return null;
+          });
+        // Confirmed in the CRM: try the send now, briefly — the click does not wait
+        // on WhatsApp, and whatever is not sent in that time is the sweep's. (On
+        // WhatsApp the caller sends it itself, after its own "done" message.)
+        if (queued && via === "crm") {
+          const { sendUpdatesToLinkedPhone } = await import("@/lib/assistantWhatsApp");
+          let timer: ReturnType<typeof setTimeout> | undefined;
+          await Promise.race([
+            sendUpdatesToLinkedPhone(tenantId, user.id).catch(() => "failed" as const),
+            new Promise((resolve) => { timer = setTimeout(resolve, QUOTE_PDF_SEND_WAIT_MS); }),
+          ]);
+          clearTimeout(timer);
+        }
         return {
           ok: true,
-          success: `Draft quote Q-${saved.quote.number} created. It has NOT been sent to the customer.`,
+          success: `Draft quote Q-${saved.quote.number} created${total ? ` — ${total}` : ""}. It has NOT been sent to the customer.`,
           href: `/quotes?edit=${saved.quote.id}`,
           quote: { id: saved.quote.id, number: saved.quote.number },
         };
