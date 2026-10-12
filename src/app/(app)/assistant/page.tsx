@@ -78,11 +78,17 @@ export default async function AssistantPage() {
     d.toLocaleString("en-ZA", { timeZone: "Africa/Johannesburg", weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
 
   return (
-    <div className="mx-auto max-w-3xl space-y-6">
+    // FULL WIDTH, like every other page: no centred column with empty gutters.
+    // On a wide screen the conversation takes the room and everything you manage
+    // (scheduled, watching, your phone, what it knows about you) sits beside it,
+    // so none of it is below a long conversation. Narrower, the same order stacks.
+    <div className="space-y-6">
       <PageHeader
         title={profile.name === "Assistant" ? "Ask the CRM" : `Ask ${profile.name}`}
         description="Your sales colleague: it reads your leads, quotes, activities and the business's own knowledge, and tells you what it means — never more than your own lists show you."
       />
+      <div className="grid items-start gap-6 xl:grid-cols-[minmax(0,1fr)_minmax(22rem,28rem)]">
+      <div className="min-w-0">
       {connected ? (
         <AssistantChat name={profile.name} history={history.map(({ question, answer, source }) => ({ question, answer, source }))} listen={listen} />
       ) : (
@@ -91,6 +97,8 @@ export default async function AssistantPage() {
           <Link href="/settings/integrations" className="text-primary underline">Connect ChatGPT</Link> to start asking.
         </p>
       )}
+      </div>
+      <aside className="min-w-0 space-y-6">
       <section className="card space-y-3 p-4 text-sm">
         <h2 className="font-medium">⏰ Scheduled</h2>
         {schedules.length === 0 ? (
@@ -224,6 +232,8 @@ export default async function AssistantPage() {
           <SaveButton className="btn-secondary btn-sm">Tell {profile.name}</SaveButton>
         </SaveForm>
       </details>
+      </aside>
+      </div>
     </div>
   );
 }
