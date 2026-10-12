@@ -52,7 +52,7 @@ import { webLookup } from "./crmAssistantWeb";
 import { assistantWebAllowed } from "./assistantUser";
 import { MAX_IMAGES_PER_QUESTION } from "./assistantImage";
 import { applyLearn, loadLearned, loadPlaybook, markNotesUsed, saveDecision, visibleTo } from "./assistantMemoryStore";
-import { ACTION_INSTRUCTIONS, CHOICE_INSTRUCTIONS, quoteBuildText, type ActionCard, type ProposedAction, type QuoteBuildLine } from "./assistantActions";
+import { ACTION_INSTRUCTIONS, CHOICE_INSTRUCTIONS, matchCatalogueProduct, quoteBuildText, type ActionCard, type ProposedAction, type QuoteBuildLine } from "./assistantActions";
 import { describeSchedule, nextRun, scheduleInput } from "./assistantSchedule";
 import { describeWatch, watchInput } from "./assistantWatchRules";
 import {
@@ -576,7 +576,7 @@ export async function leadBrief(user: User, raw: z.infer<typeof leadBriefArgs>):
     truncated: false,
     rows: [],
     data: [{
-      note: `${why} ${customers.length === 1 ? "A customer record matches" : `${customers.length} customer records match`}. There is no deal to report on. A note can go on the customer (customer_note with the contactId)${customers.length > 1 ? " — ask which one first" : ""}.`,
+      note: `${why} ${customers.length === 1 ? "A customer record matches" : `${customers.length} customer records match`}. There is no deal to report on — which stops nothing: a quote can be made for the customer directly (quote_build with the contactId; no lead is needed), and a note can go on them (customer_note with the contactId)${customers.length > 1 ? " — ask which one first" : ""}.`,
       customers,
     }],
   });
@@ -2276,6 +2276,58 @@ async function resolveActions(user: User, proposals: ProposedAction[]): Promise<
       });
       continue;
     }
+    if (p.type === "quote_build") {
+      // A QUOTE IS FOR A CUSTOMER: on one of their deals (leadId), or on none
+      // (contactId) — an existing customer wanting another quote is existing
+      // business, not a new lead. Only for someone who may create quotes, on a
+      // record they may open; saveQuoteDraft checks all of it again at Confirm.
+      if (!(await hasPermission(user, "quotes.create"))) continue;
+      let forDeal: { id: string; label: string } | null = null;
+      let customerId: string | null = null;
+      let customerName = "";
+      if (p.leadId) {
+        if (!(await canAccessLead(user, p.leadId))) continue;
+        const deal = await prisma.lead.findUnique({ where: { id: p.leadId }, select: { name: true, title: true, contactId: true } });
+        // A deal with no customer linked cannot be quoted: a quote belongs to a customer.
+        if (!deal?.contactId) continue;
+        forDeal = { id: p.leadId, label: `${deal.name} — ${deal.title}` };
+        customerId = deal.contactId;
+        customerName = deal.name;
+      } else if (p.contactId) {
+        if (!(await canAccessContact(user, p.contactId))) continue;
+        const contact = await prisma.contact.findFirst({ where: { id: p.contactId, deletedAt: null }, select: { firstName: true, lastName: true } });
+        if (!contact) continue;
+        customerId = p.contactId;
+        customerName = [contact.firstName, contact.lastName].filter(Boolean).join(" ");
+      }
+      if (!customerId) continue;
+      // CATALOGUE PRODUCTS ON SALE ONLY, read through the workspace's own client —
+      // another workspace's product reads as missing. A line names its product by
+      // id, or by name: a name that is not exactly one product proposes nothing
+      // (matchCatalogueProduct). The PRICE is the catalogue's, never the model's.
+      const catalogue = await prisma.product.findMany({
+        where: { active: true, deletedAt: null },
+        orderBy: { name: "asc" },
+        take: 200,
+        select: { id: true, name: true, basePriceCents: true },
+      });
+      const matched = p.lines.map((line) => matchCatalogueProduct(catalogue, line));
+      if (matched.some((product) => !product)) continue;
+      const lines: QuoteBuildLine[] = p.lines.map((line, at) => {
+        const product = matched[at]!;
+        return {
+          productId: product.id, description: product.name, qty: line.qty, unitPriceCents: product.basePriceCents,
+          discountPct: line.discountPct ?? 0, ...(line.colour ? { colour: line.colour } : {}),
+        };
+      });
+      cards.push({
+        id: `a${index}-${forDeal?.id ?? customerId}`, kind: "quote_build", leadId: forDeal?.id ?? null,
+        leadLabel: forDeal?.label ?? customerName, contactId: customerId, lines,
+        title: `Create a draft quote for ${customerName}`, text: quoteBuildText(lines, (cents) => formatZAR(cents)),
+        ...(p.reason ? { reason: p.reason } : {}),
+      });
+      continue;
+    }
     if (!(await canAccessLead(user, p.leadId))) continue;
     const lead = await prisma.lead.findUnique({
       where: { id: p.leadId },
@@ -2356,30 +2408,6 @@ async function resolveActions(user: User, proposals: ProposedAction[]): Promise<
       cards.push({ id, kind: "lost", leadId: p.leadId, leadLabel, title: `Mark ${lead.name}'s deal as lost`, reason: p.reason });
     } else if (p.type === "quote") {
       cards.push({ id, kind: "quote", leadId: p.leadId, leadLabel, title: `Start a quote for ${lead.name}`, ...(p.reason ? { reason: p.reason } : {}) });
-    } else if (p.type === "quote_build") {
-      // Only for someone who may create quotes, on a lead with a customer (a
-      // quote belongs to one), and only catalogue products that are on sale —
-      // read through the workspace's own client, so another workspace's product
-      // id reads as missing. The PRICE is the catalogue's, never the model's.
-      if (!lead.contactId || !(await hasPermission(user, "quotes.create"))) continue;
-      const products = await prisma.product.findMany({
-        where: { id: { in: [...new Set(p.lines.map((line) => line.productId))] }, active: true, deletedAt: null },
-        select: { id: true, name: true, basePriceCents: true },
-      });
-      const byId = new Map(products.map((product) => [product.id, product]));
-      if (p.lines.some((line) => !byId.has(line.productId))) continue;
-      const lines: QuoteBuildLine[] = p.lines.map((line) => {
-        const product = byId.get(line.productId)!;
-        return {
-          productId: product.id, description: product.name, qty: line.qty, unitPriceCents: product.basePriceCents,
-          discountPct: line.discountPct ?? 0, ...(line.colour ? { colour: line.colour } : {}),
-        };
-      });
-      cards.push({
-        id, kind: "quote_build", leadId: p.leadId, leadLabel, contactId: lead.contactId, lines,
-        title: `Create a draft quote for ${lead.name}`, text: quoteBuildText(lines, (cents) => formatZAR(cents)),
-        ...(p.reason ? { reason: p.reason } : {}),
-      });
     }
   }
   return cards;

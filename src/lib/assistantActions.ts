@@ -83,12 +83,26 @@ export const proposedAction = z.discriminatedUnion("type", [
   // A draft quote WITH its lines. Catalogue products only: the price is the
   // catalogue's, read again when the card is built and again when it is
   // confirmed — never a figure the model supplied.
+  //
+  // FOR A CUSTOMER — with a deal, or without one. An existing customer who wants
+  // another quote is existing business, not a new lead (Sean, 2026-10-12): the
+  // CRM has always let a quote be made for a customer directly, and the first
+  // version of this task wrongly insisted on a lead. `leadId` when the quote is
+  // for a deal; otherwise `contactId`. (Both optional here because a
+  // discriminated union cannot carry an either/or rule — the card builder
+  // refuses a task that names neither.)
+  //
+  // A product is named by its catalogue id, or by its NAME exactly as the
+  // catalogue lists it — resolved against the catalogue when the card is built,
+  // so a name that is not one product there proposes nothing.
   z.object({
     type: z.literal("quote_build"),
-    leadId,
+    leadId: leadId.optional(),
+    contactId: z.string().trim().min(10).max(40).optional(),
     lines: z.array(
       z.object({
-        productId: z.string().trim().min(10).max(40),
+        productId: z.string().trim().min(10).max(40).optional(),
+        product: text.max(120).optional(),
         qty: z.number().int().min(1).max(500),
         discountPct: z.number().min(0).max(100).optional(),
         colour: text.max(60).optional(),
@@ -115,18 +129,19 @@ export const MAX_ACTIONS = 4;
  */
 export const QUOTE_BUILD_RULE =
   "- quote_build: BUILD a draft quote with its lines, when they ask you to quote someone (\"quote Erik for a Rover XL\", \"do a quote for two Nomads for Anna\"). " +
-  "ASK FIRST for everything you do not have, all in one message: which customer (their lead — look it up; if they have none, say a lead is needed first), which product(s), how many of each, any discount (a percentage, per line), and the colour if they want one. " +
-  "Products come ONLY from the catalogue: look them up with knowledge and use the product's id as productId — if what they named is not in the catalogue, say so and list what is. " +
+  "ASK FIRST for everything you do not have, all in one message: which customer, which product(s), how many of each, any discount (a percentage, per line), and the colour if they want one. " +
+  "A QUOTE IS FOR A CUSTOMER — A LEAD IS NOT REQUIRED. An existing customer who wants another quote is existing business: quote them directly with contactId (lead_brief lists matching customers with their contactId when there is no lead). Use leadId instead only when the quote is for one of their open deals; if they have several open deals and it is not clear which, ask which one or whether it is separate from all of them. Never say a lead is needed, and never tell them to create one first. " +
+  "Products come ONLY from the catalogue. ALWAYS look the catalogue up with knowledge BEFORE you answer anything about a quote — never say you cannot verify a product without having looked. Name each line's product by its productId from those results (or, failing that, \"product\" with its name exactly as the catalogue lists it). If what they named is not in the catalogue, say so and list what is. " +
   "The price is always the catalogue's: never put a price in the task, and if they want a different price, a once-off line, a fee or a deposit, tell them that part is done on the quote in the CRM after it is created. " +
   `At most ${QUOTE_BUILD_MAX_LINES} lines. One quote per task. ` +
-  "Confirming creates a DRAFT quote on the lead; when they confirm on WhatsApp the PDF comes back to THEM on WhatsApp. " +
+  "Confirming creates a DRAFT quote for that customer (on the deal, when one was named); the PDF comes back to THEM on their linked WhatsApp. " +
   "It is NEVER sent to the customer and never marked sent: do not offer to send it, email it or WhatsApp it to the customer — sending a quote is their own step in the CRM. " +
   "quote (no lines) is only for \"start a quote\" with nothing said about what goes on it.";
 
 export const ACTION_INSTRUCTIONS = [
   "TASKS. You can't change anything yourself, but you can PROPOSE up to 4 tasks for the person to confirm with one click. Propose when they ask you to do something (\"remind me…\", \"give it to Donovan\", \"draft a message…\", \"book Anna a test drive\"), or offer one when you recommend a concrete next step.",
   'Put them under "actions" in the reply block:',
-  '"actions":[{"type":"follow_up","leadId":"<id>","when":"YYYY-MM-DDTHH:MM","activity":"call|whatsapp|email|meeting|todo","summary":"...","reason":"why this helps"},{"type":"note","leadId":"<id>","text":"...","pin":false},{"type":"customer_note","contactId":"<id>","text":"...","pin":false},{"type":"assign","leadId":"<id>","to":"<person>"},{"type":"stage","leadId":"<id>","stage":"<stage>"},{"type":"draft_message","leadId":"<id>","channel":"whatsapp|email","subject":"<email only>","body":"..."},{"type":"meeting","leadId":"<id>","when":"YYYY-MM-DDTHH:MM","minutes":60,"with":["<colleague>"],"summary":"..."},{"type":"test_drive","leadId":"<id>","when":"YYYY-MM-DDTHH:MM","minutes":60,"vehicle":"<demo vehicle name>"},{"type":"reschedule","activityId":"<id>","when":"YYYY-MM-DDTHH:MM"},{"type":"cancel_activity","activityId":"<id>"},{"type":"lost","leadId":"<id>","reason":"..."},{"type":"quote","leadId":"<id>"},{"type":"quote_build","leadId":"<id>","lines":[{"productId":"<id>","qty":1,"discountPct":0,"colour":"<optional>"}]},{"type":"schedule","question":"...","cadence":"once|daily|weekdays|weekly","weekday":1,"timeOfDay":"HH:MM","onDate":"YYYY-MM-DD"},{"type":"watch","kind":"quote_viewed|quote_unsigned|lead_quiet|test_drive_no_follow_up|delivery_deposit_due","quoteId":"Q-1042","leadId":"<id>","product":"<product>","thresholdHours":48,"thresholdDays":3}]',
+  '"actions":[{"type":"follow_up","leadId":"<id>","when":"YYYY-MM-DDTHH:MM","activity":"call|whatsapp|email|meeting|todo","summary":"...","reason":"why this helps"},{"type":"note","leadId":"<id>","text":"...","pin":false},{"type":"customer_note","contactId":"<id>","text":"...","pin":false},{"type":"assign","leadId":"<id>","to":"<person>"},{"type":"stage","leadId":"<id>","stage":"<stage>"},{"type":"draft_message","leadId":"<id>","channel":"whatsapp|email","subject":"<email only>","body":"..."},{"type":"meeting","leadId":"<id>","when":"YYYY-MM-DDTHH:MM","minutes":60,"with":["<colleague>"],"summary":"..."},{"type":"test_drive","leadId":"<id>","when":"YYYY-MM-DDTHH:MM","minutes":60,"vehicle":"<demo vehicle name>"},{"type":"reschedule","activityId":"<id>","when":"YYYY-MM-DDTHH:MM"},{"type":"cancel_activity","activityId":"<id>"},{"type":"lost","leadId":"<id>","reason":"..."},{"type":"quote","leadId":"<id>"},{"type":"quote_build","contactId":"<customer id — or leadId for one of their deals>","lines":[{"productId":"<id>","qty":1,"discountPct":0,"colour":"<optional>"}]},{"type":"schedule","question":"...","cadence":"once|daily|weekdays|weekly","weekday":1,"timeOfDay":"HH:MM","onDate":"YYYY-MM-DD"},{"type":"watch","kind":"quote_viewed|quote_unsigned|lead_quiet|test_drive_no_follow_up|delivery_deposit_due","quoteId":"Q-1042","leadId":"<id>","product":"<product>","thresholdHours":48,"thresholdDays":3}]',
   "- Add a short \"reason\" (under 160 characters) on any proposal when you know why it helps — the card shows it so the person sees the point before confirming. Skip it when the title already says everything.",
   "- watch: when they say \"tell me when / let me know if\" something happens — quote_viewed (quoteId: the customer opens that quote), quote_unsigned (viewed but not signed after thresholdHours; one quoteId or all theirs), lead_quiet (no customer contact for thresholdDays; one leadId, or every open lead for a product), test_drive_no_follow_up (a test drive done thresholdHours ago with nothing planned next), delivery_deposit_due (delivery within thresholdHours and no deposit). Only the fields that kind uses. It only ever tells THEM — it never contacts a customer. Offer one yourself when it would help (\"I can tell you when Anna opens it\").",
   "- schedule: a question for you to answer on your own LATER or REPEATEDLY (\"every Monday at 7 tell me which deals went quiet\", \"Friday at 9, has Anna signed?\"). weekday (0 = Sunday … 6 = Saturday) only with weekly; onDate only with once. Schedules run on the hour or half past, so timeOfDay is always HH:00 or HH:30 — if they ask for 07:10, propose 07:00 and say it runs on the half hour. It runs later with no conversation, so the question must stand alone — name the customer or thing (\"Has Anna Jacobs signed her quote?\"), never \"her\" or \"that deal\". No leadId. A plain reminder to do something with a lead (\"remind me to call Anna Friday\") is a follow_up, not a schedule.",
@@ -225,6 +240,34 @@ type LeadCard = { id: string; leadId: string; leadLabel: string; title: string; 
 export type QuoteBuildLine = { productId: string; description: string; qty: number; unitPriceCents: number; discountPct: number; colour?: string };
 
 /**
+ * Which catalogue product a quote line means — by its id, or by its name.
+ *
+ * By NAME because the assistant does not always carry an id through a
+ * conversation, and a made-up id used to drop the whole quote without a word.
+ * A name must mean exactly ONE product to count: the same name ignoring case
+ * and spacing, or failing that the only product whose name contains it
+ * ("Rover XL" → "Denago Rover XL"). Two candidates, or none, is no match — a
+ * guess here would put the wrong vehicle on a quote at its catalogue price.
+ */
+export function matchCatalogueProduct<P extends { id: string; name: string }>(
+  catalogue: readonly P[],
+  line: { productId?: string; product?: string },
+): P | null {
+  if (line.productId) {
+    const byId = catalogue.find((product) => product.id === line.productId);
+    if (byId) return byId;
+  }
+  const squash = (text: string) => text.toLowerCase().replace(/\s+/g, " ").trim();
+  const wanted = squash(line.product ?? "");
+  if (!wanted) return null;
+  const exact = catalogue.filter((product) => squash(product.name) === wanted);
+  if (exact.length === 1) return exact[0];
+  if (exact.length > 1) return null;
+  const containing = catalogue.filter((product) => squash(product.name).includes(wanted));
+  return containing.length === 1 ? containing[0] : null;
+}
+
+/**
  * A built quote, as the person reads it before confirming: one line each, at
  * the CATALOGUE price, with any discount said. No grand total: VAT, fees and
  * deposit are worked out by the quote itself once it exists, and a figure
@@ -254,7 +297,8 @@ export type ActionCard =
   | (LeadCard & { kind: "quote" })
   // `text` is the whole quote as the person reads it before confirming (lines, catalogue prices, discounts).
   // `lines` carries the catalogue price each was SHOWN at, so a price that changed since is caught at Confirm.
-  | (LeadCard & { kind: "quote_build"; contactId: string; lines: QuoteBuildLine[]; text: string })
+  // leadId null: a quote for the customer directly, on no deal — leadLabel is then the customer's name.
+  | { id: string; kind: "quote_build"; leadId: string | null; leadLabel: string; title: string; reason?: string; contactId: string; lines: QuoteBuildLine[]; text: string }
   // The person's own calendar, never somebody else's: nothing on the card says whose it is, so it can only be the confirmer's.
   | { id: string; kind: "block_time"; leadId: null; leadLabel: string; title: string; allDay: boolean; start: string; end: string; summary: string; detail: string; reason?: string }
   | { id: string; kind: "reschedule"; activityId: string; title: string; when: string; leadId: string | null; leadLabel: string; fromDue: string; reason?: string }
