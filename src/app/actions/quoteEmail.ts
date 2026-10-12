@@ -5,7 +5,7 @@ import { prisma } from "@/lib/db";
 import { withActingStaffScope } from "@/lib/actingScope";
 import { getCurrentUser } from "@/lib/auth";
 import { canAccessQuote, hasPermission, type PermissionUser } from "@/lib/permissions";
-import { markQuoteSentIfDraft, quotePdf } from "@/lib/quoteEmailSend";
+import { markQuoteSentIfDraft, quotePdf, recordQuoteEmailed } from "@/lib/quoteEmailSend";
 import { sendEmail } from "@/lib/email";
 import { composerReplyToDefault } from "@/lib/replyToDefault";
 import { parseReplyTo } from "@/lib/replyToAddresses";
@@ -247,8 +247,7 @@ export async function sendQuoteEmail(
     // turn a sent email into an error. The quote's own screen reads it back; it
     // used to learn of a send only from a pop-up that had already gone.
     const emailedAt = new Date();
-    await prisma.quote
-      .updateMany({ where: { id: quoteId, tenantId: quote.tenantId }, data: { emailedAt, emailedTo: to.value } })
+    await recordQuoteEmailed(quote, to.value, emailedAt)
       .catch(async (err) => {
         const { logError } = await import("@/lib/errorLog");
         await logError("quote-email-recorded", err instanceof Error ? err.name : "unknown").catch(() => {});

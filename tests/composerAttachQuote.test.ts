@@ -44,18 +44,71 @@ test("the send action checks every attached quote itself, before anything is sen
   assert.match(attach, /fileNames\.push\(name\)/);
 });
 
-test("a quote is marked sent only after the email has gone, and never fails a delivered email", () => {
+const sendAction = () => {
   const action = shipped("src/app/actions/emails.ts");
-  const send = action.slice(action.indexOf("export async function sendEmailAction"), action.indexOf("export async function sendTestEmail"));
+  return action.slice(action.indexOf("export async function sendEmailAction"), action.indexOf("export async function sendTestEmail"));
+};
+
+test("a quote is marked sent only after the email has gone", () => {
+  const send = sendAction();
   const failed = send.indexOf("if (!result.ok) {");
-  const marked = send.indexOf("await markQuoteSentIfDraft(quote)");
+  const marked = send.indexOf("markQuoteSentIfDraft(quote)");
   assert.ok(failed > 0 && marked > failed, "marked after the send's failure has returned");
   assert.equal((send.match(/markQuoteSentIfDraft\(/g) ?? []).length, 1);
-  const after = send.slice(marked - 200);
-  assert.match(after, /try \{/);
-  assert.match(after, /action: "quote\.emailed"/);
-  assert.match(after, /if \(markedSent\) await emitQuoteJourneyEvent\("quote_sent", quote,/);
-  assert.match(after, /\} catch \(err\) \{/);
+  assert.match(send, /action: "quote\.emailed"/);
+  assert.match(send, /if \(markedSent\) await bookkeeping\([^,]+, \(\) => emitQuoteJourneyEvent\("quote_sent", quote,/);
+});
+
+test("AFTER THE EMAIL HAS GONE NOTHING CAN FAIL THE ACTION — and one failed write does not cost the others", () => {
+  // Review of #871: the quote was marked sent only after the timeline entry and
+  // the audit line had both been written, so a failed audit write left a quote
+  // the customer was holding marked draft — and told staff the email failed.
+  const send = sendAction();
+  const after = send.slice(send.indexOf("THE EMAIL HAS GONE"));
+  assert.ok(after.length > 0);
+  // Every write after the send goes through the one wrapper that catches and logs.
+  assert.match(after, /const bookkeeping = async <T,>\(what: string, work: \(\) => Promise<T>\): Promise<T \| undefined> => \{\s*try \{\s*return await work\(\);\s*\} catch \(err\) \{/);
+  const body = after.slice(after.indexOf("const emailedAt = new Date();"));
+  for (const write of ["markQuoteSentIfDraft(quote)", "recordQuoteEmailed(quote, to, emailedAt)", 'action: "quote.emailed"', "recordBannerSent(bannerTenantId, bannerId)", "prisma.communication.create({", 'action: "email.sent"']) {
+    const at = body.indexOf(write);
+    assert.ok(at > 0, write);
+    assert.match(body.slice(Math.max(0, at - 260), at), /bookkeeping\(/, `${write} is not isolated`);
+  }
+  // No bare await of a database write, and no error return, once the email has gone.
+  assert.doesNotMatch(body, /^\s*await (prisma\.|logAudit\(|markQuoteSentIfDraft\(|recordQuoteEmailed\()/m);
+  assert.doesNotMatch(body, /return \{ error:/);
+  // THE QUOTE FIRST: its status and "emailed" mark are attempted before the timeline entry and the email's audit line.
+  assert.ok(body.indexOf("markQuoteSentIfDraft(quote)") < body.indexOf("prisma.communication.create({"));
+  assert.ok(body.indexOf("recordQuoteEmailed(quote, to, emailedAt)") < body.indexOf('action: "email.sent"'));
+  // A send that could not be filed says so — and says not to send it again.
+  assert.match(body, /It could not be added to the timeline — but it WAS sent\. Do not send it again\./);
+});
+
+test("the quote's own 'emailed' mark is written from the composer too — for a draft and for one already sent", () => {
+  // Review of #871: #867 added Quote.emailedAt/emailedTo for the Send tab; the composer marked sent and wrote neither.
+  const send = sendAction();
+  // Not inside `if (markedSent)`: emailing an already-sent quote again moves the time on.
+  assert.match(send, /if \(markedSent\) nowSent\.push\(quote\.number\);\s*\/\/[^\n]*\n\s*await bookkeeping\(`record Q-\$\{quote\.number\} emailed`, \(\) => recordQuoteEmailed\(quote, to, emailedAt\)\);/);
+  const shared = shipped("src/lib/quoteEmailSend.ts");
+  assert.match(shared, /updateMany\(\{ where: \{ id: quote\.id, tenantId: quote\.tenantId \}, data: \{ emailedAt: at, emailedTo: to \} \}\)/);
+  // One writer of it, shared by both doors.
+  assert.match(shipped("src/app/actions/quoteEmail.ts"), /await recordQuoteEmailed\(quote, to\.value, emailedAt\)/);
+  assert.match(send, /tenantId: true,/);
+});
+
+test("THE SERVER refuses a declined or cancelled quote posted straight at it — the composer's list is not the rule", async () => {
+  // Review of #871: only the browser left obsolete quotes out.
+  const { COMPOSER_QUOTE_STATUSES } = await import("../src/lib/composerQuotes");
+  assert.deepEqual([...COMPOSER_QUOTE_STATUSES], ["draft", "sent", "accepted"]);
+  for (const status of ["declined", "cancelled", "expired", ""]) assert.equal(COMPOSER_QUOTE_STATUSES.includes(status), false, status);
+  const send = sendAction();
+  const attach = send.slice(send.indexOf('formData.getAll("attachQuote")'), send.indexOf("const secure = asSecureLinks"));
+  assert.match(attach, /id: true, number: true, status: true,/);
+  assert.match(attach, /if \(!COMPOSER_QUOTE_STATUSES\.includes\(quote\.status\)\) \{\s*return \{ error: `Quote Q-\$\{quote\.number\} is \$\{quote\.status\} — it can't be sent to the customer\. Nothing was sent\.` \};/);
+  // Checked before the PDF is rendered, so before anything can be attached or sent.
+  assert.ok(attach.indexOf("COMPOSER_QUOTE_STATUSES.includes(quote.status)") < attach.indexOf("await quotePdf(quote.id)"));
+  // And the composer offers from the same list.
+  assert.match(shipped("src/lib/composerQuotes.ts"), /COMPOSER_QUOTE_STATUSES\.includes\(q\.status\)/);
 });
 
 test("both doors share one rule for marking a quote sent", () => {

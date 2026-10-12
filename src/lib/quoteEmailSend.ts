@@ -24,6 +24,16 @@ export async function quotePdf(quoteId: string): Promise<Buffer | null> {
 }
 
 /**
+ * ON THE QUOTE ITSELF: when it was last emailed and to whom (the quote's Send tab
+ * reads it back — "Emailed to the customer"). Called only AFTER the email has
+ * gone, and whatever the quote's status: emailing an already-sent quote again
+ * moves the time on too. The row is named by its workspace as well as its id.
+ */
+export async function recordQuoteEmailed(quote: { id: string; tenantId: string | null }, to: string, at: Date = new Date()): Promise<void> {
+  await prisma.quote.updateMany({ where: { id: quote.id, tenantId: quote.tenantId }, data: { emailedAt: at, emailedTo: to } });
+}
+
+/**
  * Called only AFTER the email has gone. Only a draft moves, and only the version
  * that was rendered: an edit saved while the PDF was being made bumps updatedAt,
  * and the quote then stays a draft rather than freezing a price the customer
