@@ -25,9 +25,14 @@ import {
   CUSTOMER_RECORD_WRITE_PERMISSIONS,
   canAccessContact,
   canAccessLead,
+  canAccessQuote,
   hasAnyPermission,
+  hasPermission,
   requireAnyPermission,
 } from "@/lib/permissions";
+import { quotePdfFileName } from "@/lib/quoteEmail";
+import { markQuoteSentIfDraft, quotePdf } from "@/lib/quoteEmailSend";
+import { emitQuoteJourneyEvent } from "@/lib/leadJourneyEvents";
 import { logAudit } from "@/lib/audit";
 import { sendEmail } from "@/lib/email";
 import {
@@ -48,6 +53,9 @@ import { isPublicBlobRef, readFile, saveFile, savePublicAsset, storesPrivately }
  * link is only made where files are stored privately. Said before anything is
  * stored or sent.
  */
+/** Each attached quote is a PDF rendered during the send; a handful is plenty for one email. */
+const MAX_QUOTES_PER_EMAIL = 5;
+
 const NO_PRIVATE_STORE =
   "Secure links need the private file store, which is not switched on for this CRM. Nothing was sent — untick “Send as a secure link” to attach the files instead.";
 import { MAX_LOGO_BYTES } from "@/lib/emailInlineLogo";
@@ -315,6 +323,43 @@ export async function sendEmailAction(
     if (asSecureLinks) secureUploads.push({ name: file.name, type: file.type || "application/octet-stream", size: buffer.length, buffer });
     else attachments.push({ filename: file.name, content: buffer, contentType: file.type || undefined });
   }
+  // QUOTES ATTACHED FROM THE COMPOSER ("Attach quote"). The same PDF "Email quote"
+  // sends, under the same permission on the same quote — and, further down, the
+  // same consequence: a draft that has gone to the customer is a sent quote. An
+  // email with the quote PDF uploaded by hand could not be told from any other
+  // file, so the quote stayed a draft after the customer had it.
+  const quoteIds = [...new Set(formData.getAll("attachQuote").map(String).filter(Boolean))];
+  const sentQuotes: { id: string; number: number; updatedAt: Date; leadId: string | null; contactId: string | null }[] = [];
+  if (quoteIds.length > MAX_QUOTES_PER_EMAIL) return { error: `Attach at most ${MAX_QUOTES_PER_EMAIL} quotes to one email.` };
+  if (quoteIds.length > 0 && !(await hasPermission(user, "quotes.change_status"))) {
+    return { error: "Your role can't send quotes to customers." };
+  }
+  for (const quoteId of quoteIds) {
+    if (!(await canAccessQuote(user, quoteId))) return { error: "You don't have access to that quote." };
+    const quote = await prisma.quote.findUnique({
+      where: { id: quoteId },
+      select: {
+        id: true, number: true, updatedAt: true, deletedAt: true, supersededAt: true, leadId: true, contactId: true,
+        _count: { select: { items: true } },
+      },
+    });
+    if (!quote || quote.deletedAt) return { error: "That quote no longer exists." };
+    // Only this customer's quotes: the composer is open on one lead or one customer,
+    // and the email is logged there. Another customer's quote does not belong in it.
+    const theirs = (leadId && quote.leadId === leadId) || (contactId && quote.contactId === contactId);
+    if (!theirs) return { error: `Quote Q-${quote.number} belongs to a different customer.` };
+    if (quote.supersededAt) return { error: `Quote Q-${quote.number} has been replaced by a revision — attach the latest one.` };
+    if (quote._count.items === 0) return { error: `Add at least one line to quote Q-${quote.number} before sending it.` };
+    const pdf = await quotePdf(quote.id);
+    if (!pdf) return { error: `The PDF for quote Q-${quote.number} could not be generated. Nothing was sent.` };
+    const name = quotePdfFileName(quote.number);
+    fileNames.push(name);
+    attachedNames.push(name);
+    if (asSecureLinks) secureUploads.push({ name, type: "application/pdf", size: pdf.length, buffer: pdf });
+    else attachments.push({ filename: name, content: pdf, contentType: "application/pdf" });
+    sentQuotes.push(quote);
+  }
+
   const secure = asSecureLinks && fileNames.length > 0;
   if (secure && !storesPrivately()) return { error: NO_PRIVATE_STORE };
 
@@ -416,8 +461,31 @@ export async function sendEmailAction(
     leadId,
     user,
   });
+  // The email has gone, so its quotes have gone: mark each draft sent, the way
+  // "Email quote" does, and say so in the audit trail. Nothing here may turn a
+  // delivered email into an error — a quote left a draft is said, not thrown.
+  const nowSent: number[] = [];
+  for (const quote of sentQuotes) {
+    try {
+      const markedSent = await markQuoteSentIfDraft(quote);
+      if (markedSent) nowSent.push(quote.number);
+      await logAudit({
+        action: "quote.emailed",
+        summary: `Emailed quote Q-${quote.number} to ${to} from the email composer${markedSent ? " — marked sent" : ""}`,
+        leadId: quote.leadId,
+        contactId: quote.contactId,
+        user,
+      });
+      if (markedSent) await emitQuoteJourneyEvent("quote_sent", quote, `sent:${Date.now()}`);
+    } catch (err) {
+      const { logError } = await import("@/lib/errorLog");
+      await logError("composer-quote-sent", err instanceof Error ? err.name : "unknown").catch(() => {});
+    }
+  }
+  if (sentQuotes.length > 0) revalidatePath("/quotes");
   revalidatePath(String(formData.get("revalidate") ?? "/"));
-  return { ok: `Email sent to ${to}.` };
+  const quoteNote = nowSent.length > 0 ? ` ${nowSent.map((n) => `Quote Q-${n}`).join(", ")} marked sent.` : "";
+  return { ok: `Email sent to ${to}.${quoteNote}` };
 }
 
 export async function sendTestEmail(

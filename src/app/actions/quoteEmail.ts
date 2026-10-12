@@ -5,8 +5,7 @@ import { prisma } from "@/lib/db";
 import { withActingStaffScope } from "@/lib/actingScope";
 import { getCurrentUser } from "@/lib/auth";
 import { canAccessQuote, hasPermission, type PermissionUser } from "@/lib/permissions";
-import { htmlToPdf } from "@/lib/customDocs";
-import { renderQuotePrintHtml } from "@/lib/quotePrintDocument";
+import { markQuoteSentIfDraft, quotePdf } from "@/lib/quoteEmailSend";
 import { sendEmail } from "@/lib/email";
 import { composerReplyToDefault } from "@/lib/replyToDefault";
 import { parseReplyTo } from "@/lib/replyToAddresses";
@@ -147,17 +146,7 @@ export async function sendQuoteEmail(
       {
         // The same renderer the Print / PDF button serves, so the attachment is
         // exactly what Preview showed.
-        renderPdf: async () => {
-          const html = await renderQuotePrintHtml({ quoteId });
-          if (!html) return null;
-          try {
-            return await htmlToPdf(html);
-          } catch (err) {
-            const { logError } = await import("@/lib/errorLog");
-            await logError("quote-email-pdf", err);
-            return null;
-          }
-        },
+        renderPdf: () => quotePdf(quoteId),
         // `record`: the shared timeline entry, written once SMTP accepts the mail.
         send: (mail) =>
           sendEmail({
@@ -173,23 +162,8 @@ export async function sendQuoteEmail(
             senderName: user.name,
             record: { contactId: quote.contactId, leadId: quote.leadId, userId: user.id, label: "Quote email" },
           }),
-        // Only a draft moves, and only the version that was rendered: an edit
-        // saved while the PDF was being made bumps updatedAt, and the quote then
-        // stays a draft rather than freezing a price the customer never saw.
-        markSentIfDraft: async () =>
-          (
-            await prisma.quote.updateMany({
-              where: {
-                id: quoteId,
-                status: "draft",
-                updatedAt: quote.updatedAt,
-                deletedAt: null,
-                signedAt: null,
-                supersededAt: null,
-              },
-              data: { status: "sent" },
-            })
-          ).count === 1,
+        // Only a draft moves, and only the version that was rendered (lib/quoteEmailSend.ts).
+        markSentIfDraft: () => markQuoteSentIfDraft(quote),
         audit: async (sent) => {
           await logAudit({
             action: "quote.emailed",

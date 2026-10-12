@@ -7,6 +7,7 @@ import Link from "next/link";
 import { checkComposerEmail, composerBannerChoices, previewComposerEmail, sendEmailAction, type SendEmailState } from "@/app/actions/emails";
 import { SECURE_LINK_DAYS, SECURE_LINK_DEFAULT_DAYS } from "@/lib/secureLinks";
 import { secureLinkHint } from "@/lib/sendCheck";
+import type { ComposerQuote } from "@/lib/composerQuotes";
 import RichTextEditor from "@/components/RichTextEditor";
 import { EMAIL_UPLOAD_MAX_BYTES, EMAIL_UPLOAD_MAX_FILES } from "@/lib/emailUploads";
 
@@ -39,9 +40,16 @@ export default function EmailComposer({
   contactId,
   revalidate,
   libraryDocs = [],
+  quotes = [],
   aiConfigured = false,
   defaultReplyTo = "",
 }: {
+  /**
+   * This customer's quotes the sender may email (lib/composerQuotes.ts). Attaching
+   * one sends the same PDF "Email quote" does, and a draft is marked sent once the
+   * email has gone. Empty — no quotes, or a role that can't send them — shows nothing.
+   */
+  quotes?: ComposerQuote[];
   defaultTo: string;
   templates: RenderedTemplate[];
   smtpConfigured: boolean;
@@ -74,6 +82,8 @@ export default function EmailComposer({
   const [attachOpen, setAttachOpen] = useState(false);
   const [attached, setAttached] = useState<string[]>([]);
   const [attachFilter, setAttachFilter] = useState("");
+  const [attachedQuotes, setAttachedQuotes] = useState<string[]>([]);
+  const pickedQuotes = quotes.filter((q) => attachedQuotes.includes(q.id));
   // Files from the computer. The hidden file input is what the form posts, so it
   // is rebuilt to hold exactly this list whenever a file is added or removed.
   const [uploads, setUploads] = useState<File[]>([]);
@@ -108,6 +118,7 @@ export default function EmailComposer({
     // refused there, with no way to confirm.
     ...attached.map((id) => ({ name: libraryDocs.find((x) => x.id === id)?.fileName ?? "Document", sizeBytes: 0 })),
     ...uploads.map((f) => ({ name: f.name, sizeBytes: f.size })),
+    ...pickedQuotes.map((q) => ({ name: q.fileName, sizeBytes: 0 })),
   ];
   const linkHint = secureLinkHint(allFiles.map((f) => f.name), secure);
 
@@ -381,6 +392,30 @@ export default function EmailComposer({
                   </button>
                 </span>
               ))}
+              {pickedQuotes.map((q) => (
+                <span key={q.id} className="badge bg-slate-800 text-slate-200 gap-1.5 py-1" data-testid="attached-quote">
+                  🧾 {q.fileName}
+                  <button
+                    type="button"
+                    onClick={() => setAttachedQuotes((a) => a.filter((x) => x !== q.id))}
+                    className="text-slate-500 hover:text-red-400 cursor-pointer"
+                    aria-label={`Remove ${q.fileName}`}
+                  >
+                    ✕
+                  </button>
+                </span>
+              ))}
+              {quotes.filter((q) => !attachedQuotes.includes(q.id)).map((q) => (
+                <button
+                  key={q.id}
+                  type="button"
+                  onClick={() => setAttachedQuotes((a) => [...a, q.id])}
+                  className="btn-secondary btn-sm"
+                  title={q.draft ? "Attaches the quote PDF. The quote is marked sent when the email goes." : "Attaches the quote PDF."}
+                >
+                  🧾 Attach quote {q.label}
+                </button>
+              ))}
               <button
                 type="button"
                 onClick={() => setAttachOpen(true)}
@@ -408,6 +443,14 @@ export default function EmailComposer({
             {attached.map((id) => (
               <input key={id} type="hidden" name="attach" value={id} />
             ))}
+            {pickedQuotes.map((q) => (
+              <input key={q.id} type="hidden" name="attachQuote" value={q.id} />
+            ))}
+            {pickedQuotes.some((q) => q.draft) && (
+              <p className="mt-1 text-xs text-amber-300" data-testid="quote-will-be-sent">
+                {pickedQuotes.filter((q) => q.draft).map((q) => q.label).join(", ")} {pickedQuotes.filter((q) => q.draft).length === 1 ? "is a draft and" : "are drafts and"} will be marked sent when this email goes. After that, changes need a revision.
+              </p>
+            )}
             {allFiles.length > 0 && (
               <div className="mt-3 rounded-lg border border-slate-800 p-3">
                 <label className="flex items-start gap-2 text-sm text-slate-200">

@@ -10,6 +10,7 @@ import DocumentsPanel from "@/components/DocumentsPanel";
 import PortalUploadsList, { type PortalUploadRow } from "@/components/PortalUploadsList";
 import ActivityPanel from "@/components/ActivityPanel";
 import EmailComposer from "@/components/EmailComposer";
+import { composerQuotes } from "@/lib/composerQuotes";
 import { composerReplyToDefault } from "@/lib/replyToDefault";
 import LeadTimeline from "@/components/LeadTimeline";
 import { auditDetailFor } from "@/lib/auditDetailQuery";
@@ -424,6 +425,7 @@ export default async function ContactDetailPage({
                       contactId={contact.id}
                       revalidate={path}
                       libraryDocs={libraryDocs}
+                      quotes={composerQuotes(contact.quotes, canCancelQuotes)}
                       aiConfigured={aiOn}
                       defaultReplyTo={replyToDefault}
                     />
