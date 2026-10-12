@@ -4,7 +4,7 @@ import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { Loader2, MessageCircle } from "lucide-react";
 import ConfirmActionDialog from "@/components/ConfirmActionDialog";
-import { startWhatsAppLink, unlinkMyWhatsApp, type WhatsAppLinkStart } from "@/app/actions/assistantWhatsApp";
+import { setMyWhatsAppUpdates, startWhatsAppLink, unlinkMyWhatsApp, type WhatsAppLinkStart } from "@/app/actions/assistantWhatsApp";
 
 /**
  * "DAX on WhatsApp" on the Ask page: link your OWN phone by sending a one-time
@@ -13,7 +13,7 @@ import { startWhatsAppLink, unlinkMyWhatsApp, type WhatsAppLinkStart } from "@/a
  * the last code sent did not link, or null. The phone is never told — the page
  * is, so "I've sent it" re-reads the link and shows what happened.
  */
-export default function AssistantWhatsAppCard({ name, linked, refused }: { name: string; linked: string | null; refused: string | null }) {
+export default function AssistantWhatsAppCard({ name, linked, refused, updates }: { name: string; linked: string | null; refused: string | null; updates: boolean }) {
   const router = useRouter();
   const [start, setStart] = useState<WhatsAppLinkStart | null>(null);
   const [checked, setChecked] = useState(false);
@@ -57,6 +57,32 @@ export default function AssistantWhatsAppCard({ name, linked, refused }: { name:
             onConfirm={unlinkMyWhatsApp}
           />
         </div>
+      )}
+      {linked && (
+        <label className="flex cursor-pointer items-start gap-2">
+          <input
+            type="checkbox"
+            className="mt-1 accent-primary"
+            checked={updates}
+            disabled={pending}
+            onChange={(e) => {
+              const on = e.target.checked;
+              startTransition(async () => {
+                await setMyWhatsAppUpdates(on);
+                router.refresh();
+              });
+            }}
+          />
+          <span>
+            <span className="block font-medium">Send my scheduled briefings and alerts to this phone too</span>
+            <span className="block text-xs text-muted-foreground">
+              They are always here in the CRM as well. WhatsApp only lets {name} write to you freely within 24 hours of
+              your last message to the business number. After that you get a short &ldquo;you have an update&rdquo;
+              message instead (if your workspace has set one up) — tap its button and everything that was waiting
+              arrives. Anything older than a day stays in the CRM only.
+            </span>
+          </span>
+        </label>
       )}
       {refused && !linked && (
         <p role="alert" className="rounded-lg border border-destructive/40 bg-destructive/5 p-3 text-destructive">

@@ -16,7 +16,7 @@ import {
 } from "@/lib/assistantSoul";
 import { ASSISTANT_VOICE_REPLIES_KEY, voiceRepliesSwitchOn } from "@/lib/assistantVoiceRules";
 import { saveAssistantWhatsApp } from "@/app/actions/assistantWhatsApp";
-import { ASSISTANT_WHATSAPP_CONFIRM_KEY, whatsappConfirmOn } from "@/lib/assistantWhatsAppRules";
+import { ASSISTANT_WHATSAPP_CONFIRM_KEY, ASSISTANT_WHATSAPP_TEMPLATE_KEY, formatUpdateTemplate, parseUpdateTemplate, whatsappConfirmOn } from "@/lib/assistantWhatsAppRules";
 
 /**
  * The workspace's assistant: its name, tone, workspace instructions and soul.
@@ -83,6 +83,25 @@ export async function saveAssistantWhatsAppCard(formData: FormData) {
           summary: confirm
             ? "Let staff confirm the assistant's proposed tasks from their linked WhatsApp"
             : "Turned off confirming the assistant's tasks on WhatsApp",
+          user,
+        });
+        revalidatePath("/settings/assistant");
+      }
+      // The approved template that says "you have an update" when WhatsApp will
+      // take nothing else (nothing from that phone in 24 hours). Blank = none.
+      const templateName = String(formData.get("updateTemplate") ?? "").trim();
+      const template = templateName ? parseUpdateTemplate(formatUpdateTemplate(templateName, String(formData.get("updateTemplateLanguage") ?? ""))) : null;
+      if (templateName && !template) {
+        return refuse("The template name must be exactly as it is in WhatsApp Manager: lower-case letters, numbers and underscores only.");
+      }
+      const stored = template ? formatUpdateTemplate(template.name, template.language) : "";
+      if (stored !== ((await getSetting(ASSISTANT_WHATSAPP_TEMPLATE_KEY)) ?? "")) {
+        await putSetting(ASSISTANT_WHATSAPP_TEMPLATE_KEY, stored);
+        await logAudit({
+          action: template ? "assistant.whatsapp_template_set" : "assistant.whatsapp_template_cleared",
+          summary: template
+            ? `Set the WhatsApp template the assistant uses to say an update is waiting: ${template.name} (${template.language})`
+            : "Removed the WhatsApp template the assistant uses to say an update is waiting",
           user,
         });
         revalidatePath("/settings/assistant");

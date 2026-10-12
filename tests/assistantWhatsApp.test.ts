@@ -8,6 +8,11 @@ import {
   LINK_CODE_TTL_MS,
   LINK_GUESS_POLICY,
   LINK_GUESS_WORKSPACE_POLICY,
+  PROACTIVE_SOURCES,
+  formatUpdateTemplate,
+  outsideReplyWindow,
+  parseUpdateTemplate,
+  replyWindowOpen,
   businessNumberFromLabel,
   formatLinkCode,
   linkCodeHashInput,
@@ -43,7 +48,10 @@ type Link = {
   waId: string | null; codeHash: string | null; codeExpiresAt: Date | null; verifiedAt: Date | null;
   sessionVersion?: number | null;
   refusedReason?: string | null;
+  updatesOnWhatsApp?: boolean; nudgedAt?: Date | null; lastInboundAt?: Date | null;
 };
+/** An answer in a person's history. Only schedule and watch ones are ever sent to a phone. */
+type Turn = { id: string; tenantId: string; userId: string; source: string; question: string; answer: string; createdAt: Date; whatsappSentAt: Date | null };
 type Where = Record<string, unknown>;
 
 type Scope = { tenantId: string | null; system: boolean } | undefined;
@@ -76,13 +84,20 @@ const state = {
   /** Each account's current sessionVersion (bumped by a password reset / sign out everywhere). */
   sessionVersions: new Map<string, number>(),
   securityDown: false,
+  turns: [] as Turn[],
+  /** The owner's template setting, as stored. */
+  template: null as string | null,
+  templatesSent: [] as { to: string; name: string; language: string }[],
+  /** Meta refusing a text for the 24-hour rule although our clock said it was open. */
+  metaRefuses: false,
 };
 const ASK_LIMIT = 60;
 
-function matches(row: Link, where: Where): boolean {
+function matches(row: object, where: Where): boolean {
   return Object.entries(where).every(([key, cond]) => {
     const value = (row as Record<string, unknown>)[key];
     if (cond && typeof cond === "object" && !(cond instanceof Date)) {
+      if ("in" in cond) return (cond as { in: unknown[] }).in.includes(value);
       if ("not" in cond) return (cond as { not: unknown }).not === null ? value !== null : value !== (cond as { not: unknown }).not;
       if ("gt" in cond) return value instanceof Date && value > (cond as { gt: Date }).gt;
     }
@@ -103,7 +118,17 @@ const linkTable = {
     return { count: hit.length };
   },
 };
+const turnTable = {
+  findMany: async ({ where, take }: { where: Where; take?: number }) =>
+    state.turns.filter((t) => matches(t, where)).sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime()).slice(0, take),
+  updateMany: async ({ where, data }: { where: Where; data: Partial<Turn> }) => {
+    const hit = state.turns.filter((t) => matches(t, where));
+    for (const t of hit) Object.assign(t, data);
+    return { count: hit.length };
+  },
+};
 const fakeDb = {
+  assistantTurn: turnTable,
   assistantPhoneLink: linkTable,
   $transaction: async (fn: (tx: unknown) => Promise<unknown>) => fn({ assistantPhoneLink: linkTable, $executeRaw: async () => 0 }),
 };
@@ -119,11 +144,17 @@ loaderKey._load = function (this: unknown, request: string, parent, isMain) {
   if (fromLib(parent)) {
     switch (request) {
       case "./db": return { basePrisma: fakeDb };
-      case "./settings": return { getSetting: async (key: string) => (key === "ASSISTANT_WHATSAPP" ? state.switch : null) };
+      case "./settings": return { getSetting: async (key: string) => (key === "ASSISTANT_WHATSAPP" ? state.switch : key === "ASSISTANT_WHATSAPP_TEMPLATE" ? state.template : null) };
       case "./tenantScope": return { currentTenantScope: () => state.scope };
       case "./whatsapp": return {
         waDigits: (p: string) => { const d = p.replace(/\D/g, ""); return d.startsWith("0") ? "27" + d.slice(1) : d; },
-        sendWhatsAppText: async (to: string, text: string) => { state.sent.push({ to, text }); return { ok: true }; },
+        sendWhatsAppText: async (to: string, text: string) => {
+          // The real one's wording for Meta's 131047.
+          if (state.metaRefuses) return { ok: false, error: "Outside the 24-hour reply window — the customer must message you first (or use an approved template from WhatsApp Manager)." };
+          state.sent.push({ to, text });
+          return { ok: true };
+        },
+        sendWhatsAppTemplate: async (to: string, name: string, language: string) => { state.templatesSent.push({ to, name, language }); return { ok: true }; },
         sendWhatsAppButtons: async (to: string, text: string, buttons: { title: string }[]) => {
           state.sent.push({ to, text, buttons: buttons.map((b) => b.title) }); return { ok: true };
         },
@@ -196,7 +227,7 @@ loaderKey._load = function (this: unknown, request: string, parent, isMain) {
 } as Loader;
 
 const require_ = createRequire(import.meta.url);
-const { handleStaffWhatsApp, hashLinkCode } = require_("../src/lib/assistantWhatsApp.ts") as typeof import("../src/lib/assistantWhatsApp");
+const { handleStaffWhatsApp, hashLinkCode, sendUpdatesToLinkedPhone } = require_("../src/lib/assistantWhatsApp.ts") as typeof import("../src/lib/assistantWhatsApp");
 
 const STAFF = "27821234567";
 const CUSTOMER = "27839990000";
@@ -209,8 +240,15 @@ function pending(userId: string, codeText: string, expires = soon(), tenantId = 
   return row;
 }
 function verified(userId: string, waId: string, tenantId = "t1"): Link {
-  const row: Link = { id: `linked-${tenantId}-${userId}`, tenantId, userId, waId, codeHash: null, codeExpiresAt: null, verifiedAt: new Date(), sessionVersion: 1 };
+  const row: Link = { id: `linked-${tenantId}-${userId}`, tenantId, userId, waId, codeHash: null, codeExpiresAt: null, verifiedAt: new Date(), sessionVersion: 1, updatesOnWhatsApp: true, nudgedAt: null, lastInboundAt: null };
   state.links.push(row);
+  return row;
+}
+const HOUR = 3_600_000;
+/** A scheduled briefing (or watch alert) saved to u1's history `hoursAgo` hours ago, not yet on their phone. */
+function waitingTurn(id: string, hoursAgo = 0, source = "schedule", userId = "u1"): Turn {
+  const row: Turn = { id, tenantId: "t1", userId, source, question: `Question ${id}`, answer: `Answer ${id}`, createdAt: new Date(Date.now() - hoursAgo * HOUR), whatsappSentAt: null };
+  state.turns.push(row);
   return row;
 }
 
@@ -241,6 +279,10 @@ beforeEach(() => {
   state.ambiguous = new Set();
   state.sessionVersions = new Map();
   state.securityDown = false;
+  state.turns = [];
+  state.template = null;
+  state.templatesSent = [];
+  state.metaRefuses = false;
 });
 
 /* ── the gate, behaviourally ───────────────────────────────────────────── */
@@ -883,6 +925,195 @@ test("link and unlink touch only the caller's own row, behind the gate and the s
   // The card shows only when the switch is on and WhatsApp is connected.
   const page = code("src/app/(app)/assistant/page.tsx");
   assert.match(page, /if \(!\(await assistantWhatsAppOn\(\)\) \|\| !\(await isWhatsAppConfigured\(\)\)\) return null;/);
+});
+
+/* ── what the assistant sends on its own: scheduled briefings and watch alerts ── */
+
+test("a scheduled briefing goes to the linked phone when they wrote in the last 24 hours — once", async () => {
+  verified("u1", STAFF).lastInboundAt = new Date(Date.now() - 3 * HOUR);
+  const brief = waitingTurn("brief");
+  const alert = waitingTurn("alert", 0, "watch");
+  assert.equal(await sendUpdatesToLinkedPhone("t1", "u1"), "sent");
+  assert.deepEqual(state.sent.map((s) => s.to), [STAFF, STAFF]);
+  assert.ok(state.sent.some((s) => s.text === "⏰ Scheduled: Question brief\n\nAnswer brief"), "all of it, under what it is");
+  assert.ok(state.sent.some((s) => s.text.startsWith("👀 You asked me to watch: Question alert")));
+  assert.ok(brief.whatsappSentAt && alert.whatsappSentAt);
+  assert.equal(state.templatesSent.length, 0, "no template when a message will do");
+  // The next run has nothing left to send.
+  assert.equal(await sendUpdatesToLinkedPhone("t1", "u1"), "nothing");
+  assert.equal(state.sent.length, 2);
+});
+
+test("only schedule and watch answers, only this person's, only from the last day", async () => {
+  verified("u1", STAFF).lastInboundAt = new Date();
+  waitingTurn("typed", 0, "chat");
+  waitingTurn("asked-on-phone", 0, "whatsapp");
+  waitingTurn("someone-elses", 0, "schedule", "u2");
+  waitingTurn("stale", 25);
+  assert.equal(await sendUpdatesToLinkedPhone("t1", "u1"), "nothing");
+  assert.equal(state.sent.length, 0);
+});
+
+test("outside the 24 hours NOTHING of the CRM is sent: the template goes instead, once, and it all waits", async () => {
+  state.template = "assistant_update_ready|en";
+  const link = verified("u1", STAFF);
+  link.lastInboundAt = new Date(Date.now() - 30 * HOUR);
+  const brief = waitingTurn("brief");
+  assert.equal(await sendUpdatesToLinkedPhone("t1", "u1"), "nudged");
+  assert.deepEqual(state.templatesSent, [{ to: STAFF, name: "assistant_update_ready", language: "en" }]);
+  assert.equal(state.sent.length, 0, "Meta would accept the text and fail it later — so it is never tried");
+  assert.equal(brief.whatsappSentAt, null, "still waiting");
+  assert.ok(link.nudgedAt);
+  // The next tick, and the next briefing, do not send the template again.
+  waitingTurn("second");
+  assert.equal(await sendUpdatesToLinkedPhone("t1", "u1"), "waiting");
+  assert.equal(state.templatesSent.length, 1);
+});
+
+test("a link that has never written in is outside the 24 hours; with no template set it simply waits", async () => {
+  verified("u1", STAFF);
+  const brief = waitingTurn("brief");
+  assert.equal(await sendUpdatesToLinkedPhone("t1", "u1"), "waiting");
+  assert.equal(state.sent.length + state.templatesSent.length, 0);
+  assert.equal(brief.whatsappSentAt, null);
+  // A name that is not a template name is no template.
+  state.template = "Not A Template!";
+  assert.equal(await sendUpdatesToLinkedPhone("t1", "u1"), "waiting");
+  assert.equal(state.templatesSent.length, 0);
+});
+
+test("the tap on the template's button delivers everything that was waiting — and asks nothing", async () => {
+  state.template = "assistant_update_ready";
+  const link = verified("u1", STAFF);
+  link.lastInboundAt = new Date(Date.now() - 30 * HOUR);
+  const brief = waitingTurn("brief", 2);
+  assert.equal(await sendUpdatesToLinkedPhone("t1", "u1"), "nudged");
+  assert.equal(await handleStaffWhatsApp(STAFF, { text: "Show me", templateReply: true }, "wamid.tap"), true);
+  assert.deepEqual(state.sent.map((s) => s.text), ["⏰ Scheduled: Question brief\n\nAnswer brief"]);
+  assert.ok(brief.whatsappSentAt);
+  assert.equal(state.asked.length, 0, "the button is not a question");
+  assert.equal(link.nudgedAt, null, "after their next silence the template may go again");
+  assert.ok(link.lastInboundAt && Date.now() - link.lastInboundAt.getTime() < 5_000, "their message opened the 24 hours");
+  // A tap with nothing waiting says so, and still asks nothing.
+  state.sent = [];
+  assert.equal(await handleStaffWhatsApp(STAFF, { text: "Show me", templateReply: true }, "wamid.tap2"), true);
+  assert.match(state.sent[0].text, /Nothing new is waiting/);
+  assert.equal(state.asked.length, 0);
+  // Something IS waiting but cannot be sent: it never says "nothing is waiting".
+  waitingTurn("stuck");
+  state.metaRefuses = true;
+  assert.equal(await handleStaffWhatsApp(STAFF, { text: "Show me", templateReply: true }, "wamid.tap2b"), true);
+  assert.equal(state.turns.find((t) => t.id === "stuck")?.whatsappSentAt, null);
+  assert.equal(state.asked.length, 0);
+  state.metaRefuses = false;
+  // From a phone that is not linked staff it is nobody's.
+  assert.equal(await handleStaffWhatsApp(CUSTOMER, { text: "Show me", templateReply: true }, "wamid.tap3"), false);
+});
+
+test("any message from the person delivers what was waiting first, then answers them", async () => {
+  verified("u1", STAFF);
+  waitingTurn("brief", 5);
+  assert.equal(await handleStaffWhatsApp(STAFF, { text: "what is overdue today" }, "wamid.q"), true);
+  assert.equal(state.sent[0].text, "⏰ Scheduled: Question brief\n\nAnswer brief");
+  assert.equal(state.asked.length, 1);
+  assert.ok(state.sent.length >= 2, "and their own question is answered after it");
+});
+
+test("their own switch, the workspace switch, a reset sign-in and a customer's number each stop it — and nothing is marked sent", async () => {
+  const fresh = () => {
+    state.links = [];
+    state.turns = [];
+    state.sent = [];
+    const link = verified("u1", STAFF);
+    link.lastInboundAt = new Date();
+    return { link, brief: waitingTurn("brief") };
+  };
+  let { link, brief } = fresh();
+  link.updatesOnWhatsApp = false;
+  assert.equal(await sendUpdatesToLinkedPhone("t1", "u1"), "not_wanted");
+
+  ({ link, brief } = fresh());
+  state.switch = "off";
+  assert.equal(await sendUpdatesToLinkedPhone("t1", "u1"), "not_wanted");
+  state.switch = "on";
+
+  ({ link, brief } = fresh());
+  state.sessionVersions.set("u1", 2);
+  assert.equal(await sendUpdatesToLinkedPhone("t1", "u1"), "not_safe");
+  state.sessionVersions = new Map();
+
+  ({ link, brief } = fresh());
+  state.customers.add(STAFF);
+  assert.equal(await sendUpdatesToLinkedPhone("t1", "u1"), "not_safe");
+  state.customers = new Set();
+
+  // A link in another workspace is not this one's.
+  ({ link, brief } = fresh());
+  link.tenantId = "t2";
+  assert.equal(await sendUpdatesToLinkedPhone("t1", "u1"), "not_wanted");
+
+  assert.equal(state.sent.length + state.templatesSent.length, 0);
+  assert.equal(brief.whatsappSentAt, null);
+});
+
+test("Meta refusing although our clock said open: it is not marked sent, and the template is the way through", async () => {
+  state.template = "assistant_update_ready|en_US";
+  verified("u1", STAFF).lastInboundAt = new Date();
+  const brief = waitingTurn("brief");
+  state.metaRefuses = true;
+  assert.equal(await sendUpdatesToLinkedPhone("t1", "u1"), "nudged");
+  assert.equal(brief.whatsappSentAt, null, "released: it waits for the tap");
+  assert.deepEqual(state.templatesSent, [{ to: STAFF, name: "assistant_update_ready", language: "en_US" }]);
+  // Refused straight after they wrote is not the 24-hour rule: no template, a failure.
+  state.templatesSent = [];
+  assert.equal(await sendUpdatesToLinkedPhone("t1", "u1", { windowOpen: true }), "failed");
+  assert.equal(state.templatesSent.length, 0);
+  assert.equal(brief.whatsappSentAt, null);
+});
+
+test("the rules: the window, the template name, and what is sent", () => {
+  const now = Date.now();
+  assert.equal(replyWindowOpen(null), false);
+  assert.equal(replyWindowOpen(new Date(now - 23 * HOUR), now), true);
+  assert.equal(replyWindowOpen(new Date(now - 24 * HOUR + 60_000), now), false, "a margin: not sent at 23:59 to fail at 24:01");
+  assert.deepEqual(parseUpdateTemplate("assistant_update_ready"), { name: "assistant_update_ready", language: "en" });
+  assert.deepEqual(parseUpdateTemplate("dax_update|af"), { name: "dax_update", language: "af" });
+  assert.equal(parseUpdateTemplate(""), null);
+  assert.equal(parseUpdateTemplate("Has Spaces"), null);
+  assert.equal(parseUpdateTemplate(formatUpdateTemplate(" dax_update ", ""))?.language, "en");
+  assert.equal(outsideReplyWindow("Outside the 24-hour reply window — the customer must message you first"), true);
+  assert.equal(outsideReplyWindow("(#131047) Re-engagement message"), true);
+  assert.equal(outsideReplyWindow("WhatsApp send failed"), false);
+  assert.deepEqual([...PROACTIVE_SOURCES], ["schedule", "watch"]);
+});
+
+test("wired where it must be: after a saved briefing, after a saved alert, on the template's button — and each switch is the right person's", () => {
+  const run = code("src/lib/assistantScheduleRun.ts");
+  assert.match(run, /if \(delivered\) \{\s*const outcome = await sendUpdatesToLinkedPhone\(tenantId, user\.id\);/);
+  const watch = code("src/lib/assistantWatch.ts");
+  assert.match(watch, /if \(!delivered\) continue;[\s\S]*const outcome = await sendUpdatesToLinkedPhone\(tenantId, user\.id\);/);
+  // A failure is logged as a fixed line (assistantSchedules/assistantWatch tests forbid anything else in it).
+  for (const src of [run, watch]) assert.match(src, /if \(outcome === "failed"\) await logError\("assistant-(schedule|watch)", "(briefing|alert) not sent to WhatsApp"\)/);
+  const route = code("src/app/api/webhooks/whatsapp/route.ts");
+  assert.match(route, /\} else if \(message\.type === "button"\) \{[\s\S]*?await handleStaffWhatsApp\(from, \{ text: String\(message\.button\?\.text \?\? ""\), templateReply: true \}, message\.id\);\s*\} else if/);
+  // The window opens only after every check on the incoming message has passed.
+  const lib = code("src/lib/assistantWhatsApp.ts");
+  const handler = lib.slice(lib.indexOf("export async function handleStaffWhatsApp"), lib.indexOf("// A tapped Confirm button"));
+  assert.ok(handler.indexOf("const user = await assistantUserFor(link.userId);") < handler.indexOf("lastInboundAt: new Date()"));
+  assert.match(handler, /where: \{ id: link\.id, tenantId, waId \}, data: \{ lastInboundAt: new Date\(\), nudgedAt: null \}/);
+  assert.match(lib, /if \(caughtUp === "failed" \|\| caughtUp === "not_safe"\) await sendPlan\(waId, \{ texts: \["I couldn't send your update here just now\./, "a failed delivery is not reported as 'nothing waiting'");
+  // The template carries no variables: nothing of the CRM's is in it.
+  const wa = code("src/lib/whatsapp.ts");
+  assert.match(wa, /type: "template", template: \{ name, language: \{ code: languageCode \} \} \}\)/);
+  // Each person's own switch names only their own row; the template is the owner's, and audited.
+  const actions = code("src/app/actions/assistantWhatsApp.ts");
+  const mine = actions.slice(actions.indexOf("export async function setMyWhatsAppUpdates"), actions.indexOf("export async function unlinkMyWhatsApp"));
+  assert.match(mine, /const user = await requireUser\(\);/);
+  assert.match(mine, /where: \{ tenantId, userId: user\.id, updatesOnWhatsApp: on !== true \}/);
+  assert.match(mine, /logAudit\(/);
+  const settings = code("src/app/actions/assistantSettings.ts");
+  const card = settings.slice(settings.indexOf("export async function saveAssistantWhatsAppCard"));
+  assert.match(card, /const user = await requireTenantOwner\(\);[\s\S]*putSetting\(ASSISTANT_WHATSAPP_TEMPLATE_KEY, stored\);\s*await logAudit\(/);
 });
 
 test("it knows about WhatsApp — and the pinned claims stay true", async () => {

@@ -573,6 +573,12 @@ jobs:
       - name: Assistant -- finds the right customer for the right person
         run: npm run test:assistant-customers
 
+      # A scheduled briefing going to a linked phone: what is waiting, claimed
+      # before it is sent and released when it could not be, the template nudge
+      # claimed once. No WhatsApp connection here, so nothing is ever sent.
+      - name: Assistant -- updates to a linked phone are claimed, released and never lost
+        run: npm run test:assistant-updates-whatsapp
+
       # "Whose number is this?" is raw SQL, so the soft-delete filter is not
       # applied for it. A number on a lead binned months earlier still matched:
       # that person's messages were filed on the deleted lead, where nobody sees

@@ -17,7 +17,7 @@ import { formatDateTime } from "@/lib/format";
 import { runSpeed } from "@/lib/assistantRun";
 import { unlinkWhatsAppFor } from "@/app/actions/assistantWhatsApp";
 import ConfirmActionDialog from "@/components/ConfirmActionDialog";
-import { ASSISTANT_WHATSAPP_CONFIRM_KEY, ASSISTANT_WHATSAPP_KEY, maskWaId, whatsappConfirmOn, whatsappSwitchOn } from "@/lib/assistantWhatsAppRules";
+import { ASSISTANT_WHATSAPP_CONFIRM_KEY, ASSISTANT_WHATSAPP_KEY, ASSISTANT_WHATSAPP_TEMPLATE_KEY, maskWaId, parseUpdateTemplate, whatsappConfirmOn, whatsappSwitchOn } from "@/lib/assistantWhatsAppRules";
 import { actingOwnerTenantId } from "@/lib/actingScope";
 
 /** Who has a WhatsApp linked — masked — so the owner can see it, even for someone who has since lost access. */
@@ -69,7 +69,7 @@ const FEEDBACK_REASON_LABELS: Record<string, string> = {
 export default async function AssistantSettingsPage() {
   await requireTenantOwner();
   if (!(await isModuleEnabled("automation"))) notFound();
-  const [profile, notes, staff, tidiedAt, tidySummary, whatsappOn, phones, ratings, speed, voiceOn, confirmOn] = await Promise.all([
+  const [profile, notes, staff, tidiedAt, tidySummary, whatsappOn, phones, ratings, speed, voiceOn, confirmOn, updateTemplate] = await Promise.all([
     getSetting(ASSISTANT_PROFILE_KEY).then(parseProfile),
     prisma.assistantNote.findMany({ orderBy: [{ status: "desc" }, { createdAt: "desc" }] }),
     listActingTenantStaff(),
@@ -83,6 +83,7 @@ export default async function AssistantSettingsPage() {
     runSpeed(7).catch(() => ({ runs: 0, medians: {} as Record<string, number> })),
     getSetting(ASSISTANT_VOICE_REPLIES_KEY).then(voiceRepliesSwitchOn),
     getSetting(ASSISTANT_WHATSAPP_CONFIRM_KEY).then(whatsappConfirmOn),
+    getSetting(ASSISTANT_WHATSAPP_TEMPLATE_KEY).then(parseUpdateTemplate),
   ]);
   const rated = (rating: string) => ratings.filter((r) => r.feedback === rating).reduce((n, r) => n + r._count._all, 0);
   const wrongBecause = ratings.filter((r) => r.feedback === "down" && r.feedbackReason);
@@ -254,6 +255,29 @@ export default async function AssistantSettingsPage() {
             </span>
           </span>
         </label>
+        <div className="space-y-2 border-t border-border/60 pt-4 text-sm">
+          <span className="block font-medium">Scheduled briefings and alerts on WhatsApp</span>
+          <span className="block text-xs text-muted-foreground">
+            A scheduled briefing or a watch alert also goes to the person&apos;s linked phone (each person can switch that
+            off on the Ask page). WhatsApp only lets a business write freely to someone who messaged it in the last 24
+            hours. After that it accepts only a message template it has approved — so create one in WhatsApp Manager
+            (category Utility, no variables, one quick-reply button), for example: &ldquo;Your CRM assistant has an
+            update ready for you. Tap below to read it.&rdquo; with the button &ldquo;Show me&rdquo;. Enter its name
+            here once it is approved. {profile.name} sends it at most once a day, and not again until the person replies; their tap
+            delivers everything that was waiting. Left blank: updates reach a phone only inside the 24 hours, and are
+            always in the CRM.
+          </span>
+          <div className="flex flex-wrap gap-3">
+            <label className="min-w-0 flex-1 text-xs text-muted-foreground">
+              Template name
+              <input name="updateTemplate" defaultValue={updateTemplate?.name ?? ""} placeholder="assistant_update_ready" className="input mt-1 w-full font-mono" autoComplete="off" />
+            </label>
+            <label className="w-28 text-xs text-muted-foreground">
+              Language code
+              <input name="updateTemplateLanguage" defaultValue={updateTemplate?.language ?? "en"} placeholder="en" className="input mt-1 w-full font-mono" autoComplete="off" />
+            </label>
+          </div>
+        </div>
         <div className="flex justify-end border-t border-border/60 pt-4">
           <SaveButton>Save</SaveButton>
         </div>

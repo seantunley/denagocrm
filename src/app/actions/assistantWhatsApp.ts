@@ -147,6 +147,34 @@ export async function unlinkWhatsAppFor(userId: string) {
 }
 
 /**
+ * The caller's OWN switch: whether scheduled briefings and watch alerts also go
+ * to their linked phone. Theirs alone — the row is named by their own id in
+ * their own workspace, never by anything sent from the page.
+ */
+export async function setMyWhatsAppUpdates(on: boolean) {
+  return asActionResult(() =>
+    withActingStaffScope(async () => {
+      const user = await requireUser();
+      const tenantId = await actingOwnerTenantId();
+      const changed = await basePrisma.assistantPhoneLink.updateMany({
+        where: { tenantId, userId: user.id, updatesOnWhatsApp: on !== true },
+        data: { updatesOnWhatsApp: on === true },
+      });
+      if (changed.count) {
+        await logAudit({
+          action: on === true ? "assistant.whatsapp_updates_on" : "assistant.whatsapp_updates_off",
+          summary: on === true ? "Asked for scheduled briefings and alerts on their WhatsApp" : "Turned off scheduled briefings and alerts on their WhatsApp",
+          user,
+          entityType: "AssistantPhoneLink",
+        });
+      }
+      revalidate();
+      return { success: on === true ? "On — briefings and alerts also go to your phone" : "Off — they stay in the CRM" };
+    }),
+  );
+}
+
+/**
  * Remove the caller's OWN link — always allowed while signed in to the
  * workspace, switch or no switch: taking your number back is never gated.
  */

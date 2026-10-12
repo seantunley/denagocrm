@@ -886,6 +886,7 @@ test("every WhatsApp path that presents the access token reports how it went", (
     "sendWhatsAppDocument",
     "sendWhatsAppImage",
     "sendWhatsAppList",
+    "sendWhatsAppTemplate",
     "sendWhatsAppText",
     "uploadWhatsAppMedia",
   ];

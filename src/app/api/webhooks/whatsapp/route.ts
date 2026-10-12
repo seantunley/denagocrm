@@ -147,6 +147,12 @@ export async function POST(req: NextRequest) {
                 if (await held("choice", title, `👆 ${title}`, true)) return;
                 await link(await recordInboundWhatsApp(from, profileName, `👆 ${title}`, String(message.id ?? "")));
                 await runWhatsAppBot(from, { text: title, choiceId: id }, { entryContext });
+              } else if (message.type === "button") {
+                // The tap on a message TEMPLATE's button — a different message type
+                // from a tapped reply button. Only the assistant's "you have an
+                // update" template has one today: from linked staff it delivers what
+                // was waiting. From anyone else it is left alone, as it always was.
+                await handleStaffWhatsApp(from, { text: String(message.button?.text ?? ""), templateReply: true }, message.id);
               } else if (message.type === "image" || message.type === "document" || message.type === "video") {
                 const media = message.image ?? message.document ?? message.video;
                 const caption: string = media?.caption ?? "";
