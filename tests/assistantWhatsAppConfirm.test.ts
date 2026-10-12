@@ -430,8 +430,12 @@ test("A PINNED NOTE WHOSE PIN FAILS IS NOT WRITTEN TWICE: the note was saved, so
   // (And five are quote_add's: nothing to add, an invalid fee, quote gone or not theirs, no longer a draft, catalogue changed.)
   // (And two are quote_pdf's: quote gone or not theirs, no linked phone — each before its one write.)
   // (And one more of quote_add's: a card with no confirm key.)
-  assert.equal((run.match(/return untouched\(/g) ?? []).length, 23);
-  const quotePdfCase = run.slice(run.indexOf('case "quote_pdf": {'), run.indexOf('case "quote_add": {'));
+  assert.equal((run.match(/return untouched\(/g) ?? []).length, 27);
+  const quotePdfCase = run.slice(run.indexOf('case "quote_pdf": {'), run.indexOf('case "quote_change": {'));
+  // (And four are quote_change's: no key, nothing to change, quote gone or not theirs, no longer a draft — each before the save.)
+  const quoteChange = run.slice(run.indexOf('case "quote_change": {'), run.indexOf('case "quote_add": {'));
+  assert.equal((quoteChange.slice(0, quoteChange.indexOf("await saveQuoteDraft(")).match(/return untouched\(/g) ?? []).length, 4);
+  assert.equal((quoteChange.slice(quoteChange.indexOf("await saveQuoteDraft(")).match(/untouched\(/g) ?? []).length, 0);
   assert.equal((quotePdfCase.slice(0, quotePdfCase.indexOf("assistantTurn.create(")).match(/return untouched\(/g) ?? []).length, 2);
   assert.equal((quotePdfCase.slice(quotePdfCase.indexOf("assistantTurn.create(")).match(/untouched\(/g) ?? []).length, 0);
   const quoteAdd = run.slice(run.indexOf('case "quote_add": {'));

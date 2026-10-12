@@ -95,6 +95,31 @@ const quoteDraftSchema = z.object({
    * deposit are left as they are, whatever else this request says.
    */
   appendOnly: z.boolean().optional(),
+  /**
+   * On an existing draft: CHANGE or REMOVE rows that are already on it (the
+   * assistant's "rename the delivery fee", "make it 3", "take that off"). Each
+   * names a row by id and says how it read when the change was proposed (`was`);
+   * a row that no longer reads that way stops the whole save. Nothing else on the
+   * quote is touched, and `items` / `fees` in the same request are ignored.
+   * A line's price is not among the things that can be changed.
+   */
+  changes: z.array(z.discriminatedUnion("row", [
+    z.object({
+      row: z.literal("fee"), id: z.string().trim().min(1),
+      was: z.object({ label: z.string(), amountCents: z.number().int() }),
+      remove: z.literal(true).optional(),
+      label: z.string().trim().min(1).max(120).optional(),
+      amountCents: z.number().int().positive().max(100_000_000).optional(),
+    }).strict(),
+    z.object({
+      row: z.literal("line"), id: z.string().trim().min(1),
+      was: z.object({ description: z.string(), qty: z.number(), discountPct: z.number(), colour: z.string().nullable() }),
+      remove: z.literal(true).optional(),
+      qty: z.number().int().min(1).max(500).optional(),
+      discountPct: z.number().finite().min(0).max(100).optional(),
+      colour: z.string().trim().min(1).max(100).optional(),
+    }).strict(),
+  ])).min(1).max(20).optional(),
   /** The key of the assistant card being confirmed: a card is carried out once (see claimConfirmKey). */
   confirmKey: z.string().regex(CONFIRM_KEY).optional(),
 });
@@ -102,6 +127,8 @@ const quoteDraftSchema = z.object({
 /** How long a spent confirm key is kept: longer than a card stays in the Ask history (30 days). */
 const CONFIRM_KEY_KEPT_MS = 35 * 24 * 60 * 60 * 1000;
 const REPEATED = "repeated" as const;
+/** A row a change names no longer reads the way the card showed it. */
+const STALE = "stale" as const;
 type PricedItem = Parameters<typeof payableTotalCents>[0]["items"][number];
 type PricedFee = NonNullable<Parameters<typeof payableTotalCents>[0]["fees"]>[number];
 
@@ -595,6 +622,70 @@ export async function saveQuoteDraft(input: QuoteDraftInput): Promise<QuoteDraft
           depositValue: existing.depositValue,
         });
       }
+      /*
+       * CHANGE ROWS (the assistant's "rename the delivery fee", "take it off").
+       *
+       * WHAT WAS SHOWN IS WHAT IS CHANGED. The card showed each row as it read
+       * then; under this lock every one of them must still read that way, or
+       * nothing is changed at all — a colleague's edit in between is neither
+       * overwritten nor built upon. Then only the named rows are written: each
+       * by its id, on THIS quote. A product line's price cannot be changed here.
+       */
+      if (data.changes) {
+        if (data.intent !== "draft" || existing.contactId !== data.contactId) return null;
+        const ownerTenantId = existing.tenantId ?? actingTenant;
+        for (const change of data.changes) {
+          if (change.row === "fee") {
+            const fee = existing.fees.find((row) => row.id === change.id);
+            if (!fee || fee.label !== change.was.label || fee.amountCents !== change.was.amountCents) return STALE;
+            continue;
+          }
+          const line = existing.items.find((row) => row.id === change.id);
+          if (
+            !line || line.description !== change.was.description || line.qty !== change.was.qty ||
+            line.discountPct !== change.was.discountPct || (line.colorPreference ?? null) !== change.was.colour
+          ) return STALE;
+          if (change.colour && !change.remove) {
+            // Only a colour this line's PRODUCT comes in, spelled as the catalogue spells it.
+            const product = line.productId
+              ? await tx.product.findFirst({ where: { id: line.productId, tenantId: ownerTenantId }, select: { colors: { select: { name: true } } } })
+              : null;
+            if (!product?.colors.some((colour) => colour.name === change.colour)) return STALE;
+          }
+        }
+        if (!(await claimConfirmKey(tx, `Q-${existing.number}`))) return REPEATED;
+        const touched = await tx.quote.updateMany({ where: { id: existing.id, tenantId: actingTenant, status: "draft" }, data: { status: "draft" } });
+        if (touched.count !== 1) return null;
+        let items = existing.items;
+        let fees = existing.fees;
+        for (const change of data.changes) {
+          // Each write names the row, THIS quote and its workspace in the call itself, and must hit exactly one row.
+          if (change.row === "fee") {
+            const set = { ...(change.label !== undefined ? { label: change.label } : {}), ...(change.amountCents !== undefined ? { amountCents: change.amountCents } : {}) };
+            const done = change.remove
+              ? await tx.quoteFee.deleteMany({ where: { id: change.id, quoteId: existing.id, tenantId: ownerTenantId } })
+              : await tx.quoteFee.updateMany({ where: { id: change.id, quoteId: existing.id, tenantId: ownerTenantId }, data: set });
+            if (done.count !== 1) throw new Error("quote change: a fee was not there to change");
+            fees = change.remove ? fees.filter((row) => row.id !== change.id) : fees.map((row) => (row.id === change.id ? { ...row, ...set } : row));
+          } else {
+            const set = {
+              ...(change.qty !== undefined ? { qty: change.qty } : {}),
+              ...(change.discountPct !== undefined ? { discountPct: change.discountPct } : {}),
+              ...(change.colour !== undefined ? { colorPreference: change.colour } : {}),
+            };
+            const done = change.remove
+              ? await tx.quoteItem.deleteMany({ where: { id: change.id, quoteId: existing.id, tenantId: ownerTenantId } })
+              : await tx.quoteItem.updateMany({ where: { id: change.id, quoteId: existing.id, tenantId: ownerTenantId }, data: set });
+            if (done.count !== 1) throw new Error("quote change: a line was not there to change");
+            items = change.remove ? items.filter((row) => row.id !== change.id) : items.map((row) => (row.id === change.id ? { ...row, ...set } : row));
+          }
+        }
+        return finish(items, fees, {
+          taxInclusive: existing.taxInclusive,
+          depositType: existing.depositType === "percent" || existing.depositType === "amount" ? existing.depositType : null,
+          depositValue: existing.depositValue,
+        });
+      }
       // CHANGING the customer is refused; FILLING IN a missing one is not. A
       // quote made from a lead with no customer yet used to be stuck: the editor
       // locked the box and this refused any value, so it could never get one.
@@ -722,6 +813,9 @@ export async function saveQuoteDraft(input: QuoteDraftInput): Promise<QuoteDraft
     throw error;
   });
 
+  if (result === STALE) {
+    return { ok: false, error: "That quote has changed since this was suggested, so nothing was changed. Ask again to see it as it is now." };
+  }
   if (result === REPEATED) {
     return { ok: false, error: "That was already confirmed — open the quote to see it. Nothing was added twice.", repeated: true };
   }

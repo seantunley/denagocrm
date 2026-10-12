@@ -386,6 +386,48 @@ export async function runAssistantAction(
         await sendQueuedPdfNow();
         return { ok: true, success: `The PDF of Q-${quote.number} is on its way to your WhatsApp. It has NOT been sent to the customer.`, href: `/quotes?edit=${quote.id}` };
       }
+      case "quote_change": {
+        // CHANGES rows already on a draft, through the quote editor's own save in
+        // its change-rows mode: each row is named by id with how it read on the
+        // card, and the save changes it only if it still reads that way under the
+        // save's lock — so what was confirmed is what was shown. saveQuoteDraft
+        // re-checks that this person may edit this quote and that it is still an
+        // editable draft, and bounds every value. The card's key makes it happen once.
+        if (!CONFIRM_KEY.test(String(card.confirmKey ?? ""))) return untouched(STALE_CARD);
+        const changes = Array.isArray(card.changes) ? card.changes : [];
+        if (changes.length === 0 || changes.length > QUOTE_ADD_MAX_FEES + QUOTE_BUILD_MAX_LINES) return untouched("That isn't valid — ask again.");
+        const quote = await prisma.quote.findFirst({ where: { id: String(card.quoteId ?? ""), deletedAt: null }, select: { id: true, status: true, contactId: true, leadId: true } });
+        // Asked here as a yes/no: saveQuoteDraft's own check REDIRECTS, which a Confirm tapped on WhatsApp has nowhere to follow.
+        if (!quote || !(await hasPermission(user, "quotes.edit")) || !(await canAccessQuote(user, quote.id))) return untouched("That quote is no longer there.");
+        if (quote.status !== "draft" || !quote.contactId) return untouched("That quote is no longer a draft, so it can't be changed from here — revise it in the CRM.");
+        const saved = await saveQuoteDraft({
+          id: quote.id,
+          contactId: quote.contactId,
+          terms: "",
+          intent: "draft",
+          items: [],
+          changes,
+          confirmKey: card.confirmKey,
+          pdfToMyWhatsApp: true,
+        });
+        if (!saved.ok && saved.repeated) return { ok: true, success: "Already changed — nothing was done twice. It has NOT been sent to the customer.", href: `/quotes?edit=${quote.id}` };
+        if (!saved.ok) return { ok: false, error: saved.error };
+        await logAudit({
+          action: "assistant.action_confirmed",
+          summary: `Confirmed the assistant's proposal: change draft quote Q-${saved.quote.number}`,
+          user,
+          ...(quote.leadId ? { leadId: quote.leadId } : { contactId: quote.contactId }),
+        });
+        const after = await prisma.quote.findUnique({ where: { id: quote.id }, include: { items: true, fees: true } }).catch(() => null);
+        const total = after ? formatZAR(Math.round(payableTotalCents(after))) : null;
+        await sendQueuedPdfNow();
+        return {
+          ok: true,
+          success: `Draft quote Q-${saved.quote.number} changed${total ? ` — now ${total}` : ""}. It has NOT been sent to the customer.`,
+          href: `/quotes?edit=${quote.id}`,
+          quote: { id: quote.id, number: saved.quote.number },
+        };
+      }
       case "quote_add": {
         // ADDS to a draft, through the same door the quote editor saves through, in
         // its ADD-ONLY mode: only the new fees and lines are sent, and they are

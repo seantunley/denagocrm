@@ -323,7 +323,11 @@ test("saving from the editor stops resetting the columns it never shows", () => 
   const code = shipped("src/app/actions/quotes.ts");
   const at = code.indexOf("const itemRows = itemRowsFor(normalizedItems, priorById(existing.items), ");
   assert.ok(at > 0, "the previous rows must be read before they are deleted");
-  assert.ok(at < code.indexOf("tx.quoteItem.deleteMany"), "…BEFORE, or there is nothing left to read");
+  // The editor's own rewrite — the delete of EVERY row of the quote. (The assistant's "remove this line" is a
+  // different delete, of one named row, earlier in the file; it rewrites nothing.)
+  const rewrite = code.indexOf("tx.quoteItem.deleteMany({ where: { quoteId: existing.id } })");
+  assert.ok(rewrite > 0);
+  assert.ok(at < rewrite, "…BEFORE, or there is nothing left to read");
   assert.match(code, /id: z\.string\(\)\.trim\(\)\.min\(1\)\.nullable\(\)\.optional\(\)/, "the payload must identify the row");
 
   // The inheritance itself, and the id-reuse that makes it work on the SECOND

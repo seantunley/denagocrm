@@ -53,7 +53,7 @@ import { webLookup } from "./crmAssistantWeb";
 import { assistantWebAllowed } from "./assistantUser";
 import { MAX_IMAGES_PER_QUESTION } from "./assistantImage";
 import { applyLearn, loadLearned, loadPlaybook, markNotesUsed, saveDecision, visibleTo } from "./assistantMemoryStore";
-import { ACTION_INSTRUCTIONS, CHOICE_INSTRUCTIONS, quoteAddText, quoteBuildText, type ActionCard, type ProposedAction, type QuoteBuildLine } from "./assistantActions";
+import { ACTION_INSTRUCTIONS, CHOICE_INSTRUCTIONS, matchQuoteRow, quoteAddText, quoteBuildText, quoteChangeText, type ActionCard, type ProposedAction, type QuoteBuildLine, type QuoteChange } from "./assistantActions";
 import { knowledgeProducts, resolveCatalogueProduct } from "./catalogueLookup";
 import { describeSchedule, nextRun, scheduleInput } from "./assistantSchedule";
 import { describeWatch, watchInput } from "./assistantWatchRules";
@@ -2286,6 +2286,60 @@ async function resolveActions(user: User, proposals: ProposedAction[]): Promise<
         id: `a${index}-${quote.id}`, kind: "quote_pdf", leadId: quote.leadId, quoteId: quote.id, quoteNumber: quote.number,
         leadLabel: [quote.contact?.firstName, quote.contact?.lastName].filter(Boolean).join(" ") || `Q-${quote.number}`,
         title: `Send me the PDF of quote Q-${quote.number}`,
+        ...(p.reason ? { reason: p.reason } : {}),
+      });
+      continue;
+    }
+    if (p.type === "quote_change") {
+      // ONLY A DRAFT THIS PERSON MAY EDIT AND OPEN, and only rows that are ON it:
+      // each target must mean exactly one fee or line there, and must actually
+      // change something. One target that does not → no card at all, rather than
+      // part of what was asked. The save checks every row again under its lock.
+      if (!(await hasPermission(user, "quotes.edit"))) continue;
+      const number = /^Q-?(\d+)$/i.exec(p.quote)?.[1];
+      const quote = await prisma.quote.findFirst({
+        where: { deletedAt: null, ...(number ? { number: Number(number) } : { id: p.quote }) },
+        select: {
+          id: true, number: true, status: true, contactId: true, leadId: true, contact: { select: { firstName: true, lastName: true } },
+          items: { select: { id: true, description: true, qty: true, discountPct: true, colorPreference: true, product: { select: { colors: { select: { name: true } } } } } },
+          fees: { select: { id: true, label: true, amountCents: true } },
+        },
+      });
+      if (!quote || quote.status !== "draft" || !quote.contactId || !(await canAccessQuote(user, quote.id))) continue;
+      const changes: QuoteChange[] = [];
+      let unclear = false;
+      for (const wanted of p.fees ?? []) {
+        const fee = matchQuoteRow(quote.fees, (row) => row.label, wanted.fee);
+        const was = fee ? { label: fee.label, amountCents: fee.amountCents } : null;
+        const label = wanted.label && wanted.label !== was?.label ? wanted.label : undefined;
+        const amountCents = wanted.amount != null && Math.round(wanted.amount * 100) !== was?.amountCents ? Math.round(wanted.amount * 100) : undefined;
+        if (!fee || !was || changes.some((change) => change.id === fee.id)) { unclear = true; break; }
+        if (wanted.remove) changes.push({ row: "fee", id: fee.id, was, remove: true });
+        else if (label !== undefined || amountCents !== undefined) changes.push({ row: "fee", id: fee.id, was, ...(label !== undefined ? { label } : {}), ...(amountCents !== undefined ? { amountCents } : {}) });
+        else { unclear = true; break; }
+      }
+      for (const wanted of unclear ? [] : p.lines ?? []) {
+        const line = matchQuoteRow(quote.items, (row) => row.description, wanted.line);
+        const was = line ? { description: line.description, qty: line.qty, discountPct: line.discountPct, colour: line.colorPreference } : null;
+        const qty = wanted.qty != null && wanted.qty !== was?.qty ? wanted.qty : undefined;
+        const discountPct = wanted.discountPct != null && wanted.discountPct !== was?.discountPct ? wanted.discountPct : undefined;
+        if (!line || !was || changes.some((change) => change.id === line.id)) { unclear = true; break; }
+        // A colour the PRODUCT comes in, spelled as the catalogue spells it — anything else is no change at all.
+        const offered = wanted.colour ? line.product?.colors.find((colour) => colour.name.toLowerCase() === wanted.colour!.toLowerCase())?.name : undefined;
+        if (wanted.colour && !offered) { unclear = true; break; }
+        const colour = offered && offered !== was.colour ? offered : undefined;
+        if (wanted.remove) changes.push({ row: "line", id: line.id, was, remove: true });
+        else if (qty !== undefined || discountPct !== undefined || colour !== undefined) {
+          changes.push({ row: "line", id: line.id, was, ...(qty !== undefined ? { qty } : {}), ...(discountPct !== undefined ? { discountPct } : {}), ...(colour !== undefined ? { colour } : {}) });
+        } else { unclear = true; break; }
+      }
+      if (unclear || changes.length === 0) continue;
+      cards.push({
+        id: `a${index}-${quote.id}`, kind: "quote_change", leadId: quote.leadId,
+        leadLabel: [quote.contact?.firstName, quote.contact?.lastName].filter(Boolean).join(" "),
+        quoteId: quote.id, quoteNumber: quote.number, contactId: quote.contactId, changes,
+        title: `Change draft quote Q-${quote.number}`, text: quoteChangeText(changes, (cents) => formatZAR(cents)),
+        confirmKey: `qk_${randomBytes(16).toString("hex")}`,
         ...(p.reason ? { reason: p.reason } : {}),
       });
       continue;
