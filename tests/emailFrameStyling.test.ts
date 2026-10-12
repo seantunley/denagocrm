@@ -349,6 +349,7 @@ test("the standard wording is professional: a formal greeting, no emoji, no chat
     const words = `${def.subject}\n${def.body}`;
     assert.doesNotMatch(words, /\p{Extended_Pictographic}/u, def.kind);
     assert.doesNotMatch(words, /\bHi\b|we'd|we'll|didn't|you're|just (reply|call)|mean the world|100%/i, def.kind);
-    assert.match(def.body, /Kind regards,\n(\{\{sender_name\}\}\n)?\{\{company_name\}\}$/, def.kind);
+    // The quote email ends at "Kind regards," — the sender's own signature follows it (quoteEmailSignature.test.ts).
+    assert.match(def.body, def.kind === "quote" ? /Kind regards,$/ : /Kind regards,\n(\{\{sender_name\}\}\n)?\{\{company_name\}\}$/, def.kind);
   }
 });

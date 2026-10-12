@@ -102,8 +102,9 @@ test("tasks are proposed only where someone can confirm them; a scheduled run as
   assert.match(CHANNEL_RULES.schedule, /don't ask them anything and don't offer choices/);
   assert.match(CHANNEL_RULES.whatsapp, /put the draft itself in your answer/);
   const lib = code("src/lib/crmAssistant.ts");
-  // The chat, or WhatsApp when its caller can offer a Confirm button (assistantWhatsAppConfirm.test.ts) — never a schedule or a watch.
-  assert.match(lib, /const proposes = source === "chat" \|\| \(source === "whatsapp" && opts\.proposeTasks === true\);/);
+  // The chat, or WhatsApp when its caller says what it will do with a task — a Confirm button, or a card
+  // saved for the CRM (assistantWhatsAppConfirm.test.ts) — never a schedule or a watch.
+  assert.match(lib, /const proposes = source === "chat" \|\| \(source === "whatsapp" && \(opts\.proposeTasks === true \|\| opts\.proposeTasks === "saved"\)\);/);
   assert.match(lib, /const actions = !proposes \? \[\] : await resolveActions/);
   assert.match(lib, /const choices = source === "schedule" \? \[\] : reply\.choices;/);
   assert.match(lib, /source,\s*scheduleId: source === "schedule" \? opts\.scheduleId \?\? null : null,/);
