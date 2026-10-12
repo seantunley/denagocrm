@@ -438,16 +438,25 @@ export async function findActivities(user: User, raw: z.infer<typeof activityArg
   // "what is in my calendar this week?" came back "nothing" for someone whose
   // Tuesday was blocked (Sean, 2026-10-11). It is left out only of the two
   // WORK lists, where it does not belong: time off is never "overdue" and is
-  // not something to get done today.
-  const workList = !dated && (args.when === "overdue" || args.when === "today_and_overdue");
+  // not something to get done today — whether or not dates were given with it.
+  const workList = args.when === "overdue" || args.when === "today_and_overdue";
+  const window: { gte?: Date; lt?: Date } = dated ?? range;
   const activities = await prisma.activity.findMany({
     where: {
       ...(ids === null ? {} : { id: { in: ids } }),
       status: history ? { notIn: CANCELLED } : "planned",
       ...(workList ? { availabilityBlock: false } : {}),
-      dueDate: dated ?? range,
       ...(args.type ? { type: fuzzy(args.type) } : {}),
       AND: [
+        // Everything is placed by when it STARTS — except blocked time, which
+        // lasts: leave from Sunday to Wednesday is in Monday's week although it
+        // began before it. The same overlap rule the calendar page draws by.
+        {
+          OR: [
+            { dueDate: window },
+            ...(!workList && window.gte ? [{ availabilityBlock: true, dueDate: { lt: window.gte }, endDate: { gt: window.gte } }] : []),
+          ],
+        },
         // Theirs, or a meeting they're an attendee of.
         ...(args.assignedTo
           ? [{ OR: [{ assignedTo: { name: fuzzy(args.assignedTo) } }, { attendees: { some: { user: { name: fuzzy(args.assignedTo) } } } }] }]
@@ -470,11 +479,10 @@ export async function findActivities(user: User, raw: z.infer<typeof activityArg
   if (page.length === 0) {
     // "Nothing" with no dates reads as "nothing ever". Say what was looked at:
     // whose, which days, and that it means the calendar including blocked time.
-    const window = dated ?? range;
     const day = (d: Date) => d.toLocaleDateString("en-ZA", { timeZone: "Africa/Johannesburg", weekday: "short", day: "numeric", month: "short" });
-    const from = "gte" in window && window.gte ? day(window.gte) : null;
+    const from = window.gte ? day(window.gte) : null;
     // `lt` is the first moment AFTER the window: its last day is the day before.
-    const to = "lt" in window && window.lt ? day(new Date(window.lt.getTime() - 1)) : null;
+    const to = window.lt ? day(new Date(window.lt.getTime() - 1)) : null;
     const span = from && to ? (from === to ? `on ${from}` : `from ${from} to ${to}`) : from ? `from ${from} onwards` : to ? `up to ${to}` : "";
     return {
       truncated: false,
@@ -498,7 +506,8 @@ export async function findActivities(user: User, raw: z.infer<typeof activityArg
       ...(a.availabilityBlock && a.endDate ? { until: a.allDay ? dateKey(new Date(a.endDate.getTime() - 1)) : saLocal(a.endDate).slice(11) } : {}),
       ...(a.availabilityBlock ? { blockedTime: true } : {}),
       ...(history ? { status: a.status } : {}),
-      ...(a.status === "planned" && a.dueDate < startOfToday ? { overdue: true } : {}),
+      // Leave that began yesterday is not late.
+      ...(a.status === "planned" && !a.availabilityBlock && a.dueDate < startOfToday ? { overdue: true } : {}),
       assignedTo: a.assignedTo.name,
       customer: a.lead?.name ?? null,
       leadId: a.leadId,

@@ -47,7 +47,7 @@ const STAND_IN = id("standin");
 const STAGE = id("stage");
 const C = { noLead: id("c-nolead"), othersSameName: id("c-other"), withLead: id("c-withlead"), twinA: id("c-twin-a"), twinB: id("c-twin-b"), deleted: id("c-deleted"), conly: id("c-conly"), leadNamedDifferently: id("c-diffname") };
 const L = { withLead: id("l-withlead"), diffName: id("l-diffname") };
-const A = { block: id("a-block"), call: id("a-call"), lateBlock: id("a-lateblock") };
+const A = { block: id("a-block"), call: id("a-call"), lateBlock: id("a-lateblock"), longLeave: id("a-longleave") };
 const scoped = <R>(fn: () => Promise<R>) => runInTenantScope({ tenantId: T, system: false }, fn);
 type Found = Awaited<ReturnType<typeof customersNamed>>;
 const idsOf = (found: Found) => found.map((c) => c.contactId).sort();
@@ -176,6 +176,23 @@ async function main() {
     check("but time off is never listed as OVERDUE work", !overdue.some((r) => r.summary === `Old leave ${SFX}`), JSON.stringify(overdue.map((r) => r.summary)));
     const toDo = await find({ when: "today_and_overdue", assignedTo: "Rep" });
     check("…nor as something to get done today", !toDo.some((r) => r.blockedTime));
+    // Dates given with a work list do not turn it back into a calendar.
+    const key = (daysAhead: number) => new Date(Date.now() + 2 * 3_600_000 + daysAhead * 86_400_000).toISOString().slice(0, 10);
+    const overdueDated = await find({ when: "overdue", assignedTo: "Rep", from: key(-5), to: key(-1) });
+    check("…also when the overdue question names dates", !overdueDated.some((r) => r.blockedTime), JSON.stringify(overdueDated.map((r) => r.summary)));
+
+    // Leave from two days ago until the day after tomorrow: it began BEFORE the week asked about and runs into it.
+    await basePrisma.activity.create({
+      data: item(A.longLeave, { type: "availability", summary: `Long leave ${SFX}`, note: "Leave", dueDate: at(-2, 0), endDate: at(3, 0), allDay: true, availabilityBlock: true }),
+    });
+    type Lasting = Row & { due?: string; overdue?: boolean };
+    const during = (await find({ when: "this_week", assignedTo: "Rep" }) as Lasting[]).find((r) => r.summary === `Long leave ${SFX}`);
+    check("leave that began before the week and ends inside it is in the week", Boolean(during), JSON.stringify(during));
+    check("…with the day it began and its last day, and never as overdue", during?.due === key(-2) && during.until === key(2) && !during.overdue, JSON.stringify(during));
+    check("…and in a dated question for a day in the middle of it", (await find({ when: "upcoming", assignedTo: "Rep", from: key(1), to: key(1) })).some((r) => r.summary === `Long leave ${SFX}`));
+    check("…but not for a day after it has ended", !(await find({ when: "upcoming", assignedTo: "Rep", from: key(3), to: key(4) })).some((r) => r.summary === `Long leave ${SFX}`));
+    check("an ordinary activity is still placed by when it starts", !(await find({ when: "upcoming", assignedTo: "Rep", from: key(2), to: key(4) })).some((r) => r.summary === `Call Yan ${SFX}`));
+
     const empty = await find({ when: "this_week", assignedTo: "Customers Only" });
     check("an empty calendar says which days it covered, and that blocked time was looked for", empty.length === 1 && /from \w{3},? \d+ \w+ to \w{3},? \d+ \w+/.test(empty[0].note ?? "") && /and no blocked time/.test(empty[0].note ?? ""), JSON.stringify(empty));
   }
