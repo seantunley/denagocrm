@@ -27,9 +27,18 @@ export function dealTimelineWhere(deal: { id: string; contactId: string | null }
   return { OR: [{ leadId: deal.id }, ...(deal.contactId ? [{ contactId: deal.contactId, leadId: null }] : [])] };
 }
 
-/** A customer's timeline. `dealIds`: their deals the VIEWER may open — a deal they cannot open contributes nothing. */
+/**
+ * A customer's timeline. `dealIds`: their deals the VIEWER may open.
+ *
+ * A DEAL THEY CANNOT OPEN CONTRIBUTES NOTHING — including the entries of it that
+ * also carry this customer, which is every new one (filedOn stamps a deal's
+ * entry with its customer). So "filed on this customer" is not enough to show a
+ * row: it must be on NO deal, or on a deal in `dealIds`. Matching on the
+ * customer alone showed a salesperson who may open the customer but not one of
+ * their deals that deal's calls and messages (review of #874).
+ */
 export function customerTimelineWhere(contactId: string, dealIds: readonly string[]) {
-  return { OR: [{ contactId }, ...(dealIds.length > 0 ? [{ leadId: { in: [...dealIds] } }] : [])] };
+  return { OR: [{ contactId, leadId: null }, ...(dealIds.length > 0 ? [{ leadId: { in: [...dealIds] } }] : [])] };
 }
 
 /** The form value for "this is about the customer, not one deal". */

@@ -45,9 +45,19 @@ test("A DEAL's timeline: its own entries and the customer's that sit on no deal 
 
 test("A CUSTOMER's timeline: everything on them and on every deal of theirs the viewer may open", () => {
   assert.deepEqual(shown(customerTimelineWhere("c1", ["d1", "d2"])), ["on-deal-1", "on-deal-1-and-customer", "on-deal-2", "on-customer-only"]);
-  // A deal the viewer cannot open contributes only what was ALSO filed on the customer.
-  assert.deepEqual(shown(customerTimelineWhere("c1", ["d2"])), ["on-deal-1-and-customer", "on-deal-2", "on-customer-only"]);
-  assert.deepEqual(shown(customerTimelineWhere("c1", [])), ["on-deal-1-and-customer", "on-deal-2", "on-customer-only"]);
+  // A DEAL THE VIEWER CANNOT OPEN CONTRIBUTES NOTHING — not even the entries of it that
+  // also carry this customer, which is how every new deal entry is filed (review of #874:
+  // matching on the customer alone showed a rep who may open the customer, but not deal 1,
+  // deal 1's calls).
+  assert.deepEqual(shown(customerTimelineWhere("c1", ["d2"])), ["on-deal-2", "on-customer-only"]);
+  assert.deepEqual(shown(customerTimelineWhere("c1", ["d1"])), ["on-deal-1", "on-deal-1-and-customer", "on-customer-only"]);
+  // May open none of the deals: only what is on the customer and on no deal.
+  assert.deepEqual(shown(customerTimelineWhere("c1", [])), ["on-customer-only"]);
+  // The clause itself: "filed on this customer" is never enough on its own.
+  for (const dealIds of [[], ["d1"], ["d1", "d2"]]) {
+    const where = customerTimelineWhere("c1", dealIds);
+    assert.ok(!where.OR.some((alt) => "contactId" in alt && !("leadId" in alt)), JSON.stringify(where));
+  }
   // Never another customer's.
   for (const where of [customerTimelineWhere("c1", ["d1", "d2"]), dealTimelineWhere({ id: "d1", contactId: "c1" })]) {
     assert.ok(!shown(where).some((id) => id.startsWith("other-")));
