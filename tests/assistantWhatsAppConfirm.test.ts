@@ -426,10 +426,10 @@ test("A PINNED NOTE WHOSE PIN FAILS IS NOT WRITTEN TWICE: the note was saved, so
   const action = code("src/app/actions/assistant.ts");
   const run = action.slice(action.indexOf("export async function runAssistantAction"), action.indexOf("export async function sendAssistantDraft"));
   assert.match(action, /const untouched = \(error: string\) => \(\{ ok: false as const, error, unchanged: true as const \}\);/);
-  // (Four of them are quote_build's: lead gone, customer changed, invalid lines, catalogue changed — each before saveQuoteDraft.)
-  assert.equal((run.match(/return untouched\(/g) ?? []).length, 14);
+  // (Five of them are quote_build's: lead gone, lead's customer changed, customer gone, invalid lines, catalogue changed — each before saveQuoteDraft.)
+  assert.equal((run.match(/return untouched\(/g) ?? []).length, 15);
   const quoteBuild = run.slice(run.indexOf('case "quote_build": {'));
-  assert.equal((quoteBuild.slice(0, quoteBuild.indexOf("await saveQuoteDraft(")).match(/return untouched\(/g) ?? []).length, 4);
+  assert.equal((quoteBuild.slice(0, quoteBuild.indexOf("await saveQuoteDraft(")).match(/return untouched\(/g) ?? []).length, 5);
   assert.equal((quoteBuild.slice(quoteBuild.indexOf("await saveQuoteDraft("), quoteBuild.indexOf("default:")).match(/untouched\(/g) ?? []).length, 0);
   // …and never on an error handed back by the action a card delegates to.
   for (const delegated of run.match(/if \((?:!result\.ok|result\??\.error|!saved(?:\.ok)?)\) (?:\{\s*)?return [^\n]*/g) ?? []) {

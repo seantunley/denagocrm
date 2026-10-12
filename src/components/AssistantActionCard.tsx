@@ -84,6 +84,8 @@ export default function AssistantActionCard({
   const leadLink =
     card.kind === "schedule" || card.kind === "watch" ? null
     : card.kind === "customer_note" ? `/contacts/${card.contactId}`
+    // A quote for a customer directly (no deal): the link is to the customer.
+    : card.kind === "quote_build" && !card.leadId ? `/contacts/${card.contactId}`
     : card.leadId ? `/leads/${card.leadId}` : null;
   const editable = state === "open" && !pending;
   // Lost already renders its own "Reason:" line; don't double it.

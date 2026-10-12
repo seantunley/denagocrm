@@ -91,7 +91,8 @@ test("a note can go on a CUSTOMER with no lead, and be pinned — proposed, chec
   // Resolved: only a customer this person can open, not one in the bin; nothing is run.
   const lib = code("src/lib/crmAssistant.ts");
   const resolve = lib.slice(lib.indexOf("async function resolveActions"), lib.indexOf("function dedupeRows"));
-  const branch = resolve.slice(resolve.indexOf('if (p.type === "customer_note")'), resolve.indexOf("if (!(await canAccessLead(user, p.leadId))) continue;"));
+  // (Up to the next customer-level branch — a quote for a customer — which comes before the lead checks.)
+  const branch = resolve.slice(resolve.indexOf('if (p.type === "customer_note")'), resolve.indexOf('if (p.type === "quote_build")'));
   assert.match(branch, /if \(!\(await canAccessContact\(user, p\.contactId\)\)\) continue;/);
   assert.match(branch, /where: \{ id: p\.contactId, deletedAt: null \}/);
   assert.match(branch, /kind: "customer_note", contactId: p\.contactId, leadId: null/);

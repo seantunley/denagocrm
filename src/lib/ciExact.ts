@@ -53,6 +53,10 @@ const TARGETS = {
   supportMailboxEmail: { table: "SupportMailbox", column: "email", fold: "lower" },
   vehicleVin: { table: "Vehicle", column: "vin", fold: "upper" },
   stockUnitSerial: { table: "StockUnit", column: "serial", fold: "upper" },
+  // Not identity, but the same comparison: "the product CALLED this" for the
+  // assistant's quote builder (lib/catalogueLookup.ts). With ILIKE, a `_` or `%`
+  // in a name would match other products and could put the wrong one on a quote.
+  productName: { table: "Product", column: "name", fold: "lower" },
 } as const;
 
 export type CiExactTarget = keyof typeof TARGETS;

@@ -255,9 +255,18 @@ export async function runAssistantAction(
         // catalogue's as it stands NOW — a product withdrawn or re-priced since
         // the card was shown means the person agreed to something else, and
         // nothing is created (`untouched`: it can be asked for again).
-        const lead = await prisma.lead.findUnique({ where: { id: card.leadId }, select: { contactId: true } });
-        if (!lead) return untouched("That lead is no longer there.");
-        if (!lead.contactId || lead.contactId !== card.contactId) return untouched(STALE_CARD);
+        //
+        // FOR A CUSTOMER — on one of their deals, or on none. With a deal, it must
+        // still be there and still be this customer's. With none, the customer must
+        // still be there; saveQuoteDraft then checks this person may quote them.
+        if (card.leadId) {
+          const lead = await prisma.lead.findUnique({ where: { id: card.leadId }, select: { contactId: true } });
+          if (!lead) return untouched("That lead is no longer there.");
+          if (!lead.contactId || lead.contactId !== card.contactId) return untouched(STALE_CARD);
+        } else {
+          const customer = await prisma.contact.findFirst({ where: { id: String(card.contactId ?? ""), deletedAt: null }, select: { id: true } });
+          if (!customer) return untouched("That customer is no longer there.");
+        }
         const lines = Array.isArray(card.lines) ? card.lines : [];
         if (lines.length === 0 || lines.length > QUOTE_BUILD_MAX_LINES) return untouched("That quote isn't valid — ask again.");
         const products = await prisma.product.findMany({
@@ -270,8 +279,8 @@ export async function runAssistantAction(
         }
         const defaults = await quoteFromLeadDefaults();
         const saved = await saveQuoteDraft({
-          contactId: lead.contactId,
-          leadId: card.leadId,
+          contactId: card.contactId,
+          leadId: card.leadId ?? null,
           validUntil: editorDefaults(defaults).validUntil,
           terms: defaults.terms,
           intent: "draft",
@@ -290,7 +299,13 @@ export async function runAssistantAction(
         });
         // saveQuoteDraft validates before it writes (a colour the product does not come in, say).
         if (!saved.ok) return { ok: false, error: saved.error };
-        await confirmed(`create draft quote Q-${saved.quote.number}`, card.leadId);
+        // On the deal's record when there is one; otherwise on the customer's.
+        await logAudit({
+          action: "assistant.action_confirmed",
+          summary: `Confirmed the assistant's proposal: create draft quote Q-${saved.quote.number}`,
+          user,
+          ...(card.leadId ? { leadId: card.leadId } : { contactId: card.contactId }),
+        });
         // THE QUOTE EXISTS. Everything below is about telling the person, and none
         // of it may undo that or report it as failed.
         //

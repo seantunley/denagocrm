@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
-import { ACTION_INSTRUCTIONS, QUOTE_BUILD_MAX_LINES, QUOTE_BUILD_RULE, parseActionList, quoteBuildText } from "../src/lib/assistantActions";
+import { ACTION_INSTRUCTIONS, QUOTE_BUILD_MAX_LINES, QUOTE_BUILD_RULE, matchCatalogueProduct, parseActionList, quoteBuildText } from "../src/lib/assistantActions";
 
 /*
  * DAX builds a quote (Sean, 2026-10-12: "DAX must be able to generate a quote
@@ -49,26 +49,105 @@ test("what the person reads before confirming: every line at its catalogue price
 
 test("DAX is told to ask first, to use the catalogue only, and never to offer sending it to the customer", () => {
   assert.ok(ACTION_INSTRUCTIONS.includes(QUOTE_BUILD_RULE));
-  assert.match(ACTION_INSTRUCTIONS, /\{"type":"quote_build","leadId":"<id>","lines":\[\{"productId":"<id>","qty":1,"discountPct":0,"colour":"<optional>"\}\]\}/);
+  // TWO examples, one per id — never one field described as taking either (review of #876:
+  // "contactId: <customer id — or leadId…>" invited a deal's id into contactId, where it matched no customer).
+  assert.match(ACTION_INSTRUCTIONS, /\{"type":"quote_build","contactId":"<the contactId of a CUSTOMER — a quote for the customer, on no deal>","lines":\[\{"productId":"<id>","qty":1,"discountPct":0,"colour":"<optional>"\}\]\}/);
+  assert.match(ACTION_INSTRUCTIONS, /\{"type":"quote_build","leadId":"<the leadId of a DEAL — a quote for that deal; give no contactId>","lines":\[\{"productId":"<id>","qty":1\}\]\}/);
+  assert.doesNotMatch(ACTION_INSTRUCTIONS, /"contactId":"[^"]*leadId/, "no example puts a lead id in contactId");
+  assert.match(QUOTE_BUILD_RULE, /a contactId goes ONLY in contactId, a leadId ONLY in leadId, and a task gives one of them, not both/);
   assert.match(QUOTE_BUILD_RULE, /ASK FIRST for everything you do not have, all in one message: which customer[^.]*which product\(s\), how many of each, any discount[^.]*and the colour/);
   assert.match(QUOTE_BUILD_RULE, /Products come ONLY from the catalogue/);
   assert.match(QUOTE_BUILD_RULE, /The price is always the catalogue's: never put a price in the task/);
-  assert.match(QUOTE_BUILD_RULE, /the PDF comes back to THEM on WhatsApp/);
+  assert.match(QUOTE_BUILD_RULE, /the PDF comes back to THEM on their linked WhatsApp/);
   assert.match(QUOTE_BUILD_RULE, /It is NEVER sent to the customer and never marked sent: do not offer to send it, email it or WhatsApp it to the customer/);
 });
 
-test("the card is built from the CATALOGUE as the workspace has it, for someone who may create quotes", () => {
+/** The card builder's quote branch: from its `if` to the lead checks that follow it. */
+const quoteBranch = () => {
   const lib = code("src/lib/crmAssistant.ts");
-  const at = lib.indexOf('} else if (p.type === "quote_build") {');
-  const build = lib.slice(at, lib.indexOf("return cards;", at));
+  const at = lib.indexOf('if (p.type === "quote_build") {');
   assert.ok(at > 0);
-  assert.match(build, /if \(!lead\.contactId \|\| !\(await hasPermission\(user, "quotes\.create"\)\)\) continue;/);
-  // The workspace's own client, products on sale only; an unknown id drops the whole card.
-  assert.match(build, /await prisma\.product\.findMany\(\{\s*where: \{ id: \{ in: [^}]*\}, active: true, deletedAt: null \},/);
-  assert.match(build, /if \(p\.lines\.some\(\(line\) => !byId\.has\(line\.productId\)\)\) continue;/);
+  return lib.slice(at, lib.indexOf("if (!(await canAccessLead(user, p.leadId))) continue;\n    const lead = await prisma.lead.findUnique({", at));
+};
+
+test("A QUOTE IS FOR A CUSTOMER — a lead is not required", () => {
+  // Sean, 2026-10-12, after DAX answered "I can't set up the draft quote yet because Test
+  // Customer has a customer record but no lead": "If any existing customer wants a new
+  // quote, it is not a new lead, its existing business." The CRM always allowed it; the
+  // first version of this task wrongly insisted on a lead.
+  const CONTACT = "cmcontactabcdefghijklmno";
+  assert.equal(parseActionList([{ type: "quote_build", contactId: CONTACT, lines: [{ productId: PRODUCT, qty: 1 }] }]).length, 1, "a customer and no lead");
+  assert.equal(parseActionList([{ type: "quote_build", leadId: LEAD, lines: [{ productId: PRODUCT, qty: 1 }] }]).length, 1, "or one of their deals");
+  // DAX is told so, in as many words.
+  assert.match(QUOTE_BUILD_RULE, /A QUOTE IS FOR A CUSTOMER — A LEAD IS NOT REQUIRED\./);
+  assert.match(QUOTE_BUILD_RULE, /quote them directly with contactId/);
+  assert.match(QUOTE_BUILD_RULE, /Never say a lead is needed, and never tell them to create one first\./);
+  assert.doesNotMatch(QUOTE_BUILD_RULE, /say a lead is needed first/);
+  // …and so is the lookup that used to tell it only a NOTE could go on a customer with no deal.
+  assert.match(code("src/lib/crmAssistant.ts"), /There is no deal to report on — which stops nothing: a quote can be made for the customer directly \(quote_build with the contactId; no lead is needed\)/);
+
+  const build = quoteBranch();
+  // Handled before the lead checks, for a deal OR a customer; a task naming neither proposes nothing.
+  assert.match(build, /if \(dealId\) \{\s*if \(!\(await canAccessLead\(user, dealId\)\)\) continue;/);
+  assert.match(build, /\} else if \(contactId\) \{\s*if \(!\(await canAccessContact\(user, contactId\)\)\) continue;/);
+  // An id put in the wrong field is not dropped in silence: a "contactId" that is no customer
+  // here is read as a deal — and then checked as a deal, with a deal's own access check.
+  assert.match(build, /if \(contactId && !\(await prisma\.contact\.findFirst\(\{ where: \{ id: contactId \}, select: \{ id: true \} \}\)\)\) \{\s*dealId = contactId;\s*contactId = null;/);
+  assert.ok(build.indexOf("dealId = contactId;") < build.indexOf("canAccessLead(user, dealId)"));
+  assert.match(build, /if \(!customerId\) continue;/);
+  assert.match(build, /leadId: forDeal\?\.id \?\? null,/);
+
+  const actions = code("src/app/actions/assistant.ts");
+  const run = actions.slice(actions.indexOf('case "quote_build": {'), actions.indexOf("default:", actions.indexOf('case "quote_build": {')));
+  // No deal: the customer must still be there; the save then checks this person may quote them.
+  assert.match(run, /\} else \{\s*const customer = await prisma\.contact\.findFirst\(\{ where: \{ id: String\(card\.contactId \?\? ""\), deletedAt: null \}, select: \{ id: true \} \}\);\s*if \(!customer\) return untouched\("That customer is no longer there\."\);/);
+  assert.match(run, /contactId: card\.contactId,\s*leadId: card\.leadId \?\? null,/);
+  // Recorded on the deal when there is one, otherwise on the customer — never on nothing.
+  assert.match(run, /\.\.\.\(card\.leadId \? \{ leadId: card\.leadId \} : \{ contactId: card\.contactId \}\),/);
+  assert.match(code("src/lib/assistantWhatsAppConfirm.ts"), /card\.kind === "quote_build" && !card\.leadId \? \{ contactId: card\.contactId \} : \{\}/);
+  assert.match(code("src/components/AssistantActionCard.tsx"), /card\.kind === "quote_build" && !card\.leadId \? `\/contacts\/\$\{card\.contactId\}`/);
+});
+
+test("a product can be named by its catalogue id or its catalogue NAME — and a name must mean exactly one product", () => {
+  const catalogue = [
+    { id: "p1", name: "Denago Rover XL" },
+    { id: "p2", name: "Denago Rover XL Lifted" },
+    { id: "p3", name: "Denago EV Nomad" },
+    { id: "p4", name: "City Cart" },
+  ];
+  assert.equal(matchCatalogueProduct(catalogue, { productId: "p3" })?.id, "p3");
+  // The exact name, whatever the case or spacing.
+  assert.equal(matchCatalogueProduct(catalogue, { product: "  denago   rover xl " })?.id, "p1");
+  // A shorter name that only one product contains.
+  assert.equal(matchCatalogueProduct(catalogue, { product: "Nomad" })?.id, "p3");
+  assert.equal(matchCatalogueProduct(catalogue, { product: "city cart" })?.id, "p4");
+  // Two candidates is no match: a guess would put the wrong vehicle on the quote.
+  assert.equal(matchCatalogueProduct(catalogue, { product: "Rover" }), null);
+  assert.equal(matchCatalogueProduct(catalogue, { product: "Denago" }), null);
+  // Not in the catalogue, or nothing given.
+  assert.equal(matchCatalogueProduct(catalogue, { product: "Golf Buggy" }), null);
+  assert.equal(matchCatalogueProduct(catalogue, {}), null);
+  // A made-up id falls back to the name — it used to drop the quote without a word.
+  assert.equal(matchCatalogueProduct(catalogue, { productId: "invented", product: "City Cart" })?.id, "p4");
+  assert.equal(matchCatalogueProduct(catalogue, { productId: "invented" }), null);
+  // The task carries either; a price still cannot ride along.
+  assert.equal(parseActionList([{ type: "quote_build", leadId: LEAD, lines: [{ product: "Rover XL", qty: 1 }] }]).length, 1);
+  assert.equal(parseActionList([{ type: "quote_build", leadId: LEAD, lines: [{ product: "Rover XL", qty: 1, unitPriceCents: 1 }] }]).length, 0);
+});
+
+test("the card is built from the CATALOGUE as the workspace has it, for someone who may create quotes", () => {
+  const build = quoteBranch();
+  assert.match(build, /if \(!\(await hasPermission\(user, "quotes\.create"\)\)\) continue;/);
+  // The workspace's own client, products on sale only; a line that matches no ONE product drops the whole card.
+  // (Looked up across the whole catalogue — tests/catalogueLookup.test.ts.)
+  assert.match(build, /const matched = await Promise\.all\(p\.lines\.map\(\(line\) => resolveCatalogueProduct\(line\)\)\);\s*if \(matched\.some\(\(product\) => !product\)\) continue;/);
+  assert.match(code("src/lib/catalogueLookup.ts"), /const ON_SALE = \{ active: true, deletedAt: null \};/);
   // The price on the card is the product's, not anything from the proposal.
   assert.match(build, /unitPriceCents: product\.basePriceCents/);
   assert.match(build, /description: product\.name/);
+  // The planner is told to look the catalogue up for any quote — DAX had answered "I don't have a catalogue result".
+  assert.match(code("src/lib/crmAssistantPlan.ts"), /ALWAYS run this when the person asks for a quote or names a product to quote/);
+  assert.match(QUOTE_BUILD_RULE, /ALWAYS look the catalogue up with knowledge BEFORE you answer anything about a quote — never say you cannot verify a product without having looked\./);
 });
 
 test("CONFIRM CREATES A DRAFT AND NOTHING ELSE: catalogue re-read, stale prices refused, never sent", () => {
@@ -96,14 +175,13 @@ test("DAX CAN NAME A CATALOGUE PRODUCT: the knowledge tool gives it each product
   const at = lib.indexOf("async function knowledge(");
   const tool = lib.slice(at, lib.indexOf("\n}\n", at));
   assert.ok(at > 0);
-  assert.match(tool, /select: \{ id: true, name: true, category: true, basePriceCents: true,/);
+  assert.match(code("src/lib/catalogueLookup.ts"), /const KNOWLEDGE_FIELDS = \{ id: true, name: true, category: true, basePriceCents: true,/);
   assert.match(tool, /products: relevant\.map\(\(p\) => \(\{[\s\S]{0,420}productId: p\.id,\s*product: p\.name,/);
   // …and that is the name the task and the rule use for it.
-  assert.match(QUOTE_BUILD_RULE, /use the product's id as productId/);
+  assert.match(QUOTE_BUILD_RULE, /Name each line's product by its productId from those results/);
   assert.equal(parseActionList([{ type: "quote_build", leadId: LEAD, lines: [{ productId: PRODUCT, qty: 1 }] }]).length, 1);
-  // The card builder accepts exactly such an id — read from the same catalogue, on sale only.
-  const build = lib.slice(lib.indexOf('} else if (p.type === "quote_build") {'));
-  assert.match(build, /where: \{ id: \{ in: \[\.\.\.new Set\(p\.lines\.map\(\(line\) => line\.productId\)\)\] \}, active: true, deletedAt: null \}/);
+  // The card builder accepts exactly such an id — matched against the same catalogue, on sale only.
+  assert.match(quoteBranch(), /resolveCatalogueProduct\(line\)/);
 });
 
 test("THE PDF IS QUEUED WITH THE QUOTE — delivered wherever Confirm was pressed, by the delivery that retries", () => {
