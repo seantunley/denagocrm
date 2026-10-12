@@ -81,6 +81,55 @@ export async function emitLeadJourneyEvent(
 }
 
 /**
+ * Something happened to a record that belongs to a lead when it has one and to
+ * a customer otherwise — a quote, a test drive. ONE event, for the lead if there
+ * is a lead: that is where a sales journey runs. A quote or a test drive made
+ * for a customer with no lead still enrols, as that customer.
+ */
+async function emitForLeadOrContact(
+  trigger: JourneyEventTrigger,
+  owner: { leadId: string | null; contactId: string | null },
+  options: { occurrence: string; payload: Record<string, unknown> },
+): Promise<void> {
+  if (owner.leadId) return emitLeadJourneyEvent(trigger, owner.leadId, options);
+  if (owner.contactId) return emitContactJourneyEvent(trigger, owner.contactId, options);
+}
+
+/**
+ * A quote went to the customer, or the customer opened it.
+ *
+ * `occurrence` is the caller's, because only the caller knows what makes this
+ * time distinct: a quote is opened for the first time once, but it can be sent,
+ * declined and sent again — and the second sending is a second event.
+ */
+export async function emitQuoteJourneyEvent(
+  trigger: "quote_sent" | "quote_opened",
+  quote: { id: string; number: number; leadId: string | null; contactId: string | null },
+  occurrence: string,
+): Promise<void> {
+  await emitForLeadOrContact(trigger, quote, {
+    occurrence: `quote:${quote.id}:${occurrence}`,
+    payload: { quoteId: quote.id, quoteNumber: quote.number },
+  });
+}
+
+/**
+ * A test drive was booked, completed, or the customer did not arrive. Each
+ * happens to a booking once (a status only moves forward), so the booking and
+ * the trigger are the occurrence.
+ */
+export async function emitTestDriveJourneyEvent(
+  trigger: "test_drive_booked" | "test_drive_completed" | "test_drive_no_show",
+  booking: { id: string; reference: string; leadId: string | null; contactId: string | null },
+  payload: Record<string, unknown> = {},
+): Promise<void> {
+  await emitForLeadOrContact(trigger, booking, {
+    occurrence: `test-drive:${booking.id}:${trigger}`,
+    payload: { ...payload, testDriveId: booking.id, testDriveReference: booking.reference },
+  });
+}
+
+/**
  * The same, for something that happened to a CUSTOMER rather than a lead — a job
  * card completed, a vehicle registered as a new delivery. These used to send the
  * Google review request straight from the action; now they only tell the journey

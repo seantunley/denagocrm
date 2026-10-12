@@ -20,6 +20,14 @@ export const JOURNEY_EVENT_TRIGGERS = [
   // request directly, outside any journey — the "two engines" Sean asked about.
   "job_completed",
   "vehicle_delivered",
+  // Quotes and test drives (emitQuoteJourneyEvent / emitTestDriveJourneyEvent):
+  // for the lead when the record has one, otherwise for the customer. The first
+  // of the triggers rebuilt from the automation platform that never reached main.
+  "quote_sent",
+  "quote_opened",
+  "test_drive_booked",
+  "test_drive_completed",
+  "test_drive_no_show",
 ] as const;
 
 /** Triggers the cron enrols for by sweeping records (journeyScheduling.ts). */
