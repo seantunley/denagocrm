@@ -279,7 +279,11 @@ test("each quote and test-drive trigger fires from every place that event really
   // From the public page or cron there may be no workspace bound: the request's own is named.
   assert.match(mirror, /basePrisma\.quote\.findFirst\(\{ where: \{ id: quoteId, tenantId \}/);
   assert.match(mirror, /runInTenantScope\(\{ tenantId, system: false \}, \(\) => emit\(quote\)\)/);
-  assert.deepEqual(writers(/quote\.updateMany\(\{[\s\S]{0,420}data: \{ status: "sent"/), ["src/app/actions/quoteEmail.ts", "src/lib/signing/quoteMirror.ts"]);
+  // The email write is one shared function with two callers — "Email quote" and
+  // the composer's "Attach quote" — and each caller fires the trigger itself.
+  assert.deepEqual(writers(/quote\.updateMany\(\{[\s\S]{0,420}data: \{ status: "sent"/), ["src/lib/quoteEmailSend.ts", "src/lib/signing/quoteMirror.ts"]);
+  assert.deepEqual(writers(/markQuoteSentIfDraft\(quote\)/), ["src/app/actions/emails.ts", "src/app/actions/quoteEmail.ts"]);
+  assert.match(shipped("src/app/actions/emails.ts"), /if \(markedSent\) await bookkeeping\([^,]+, \(\) => emitQuoteJourneyEvent\("quote_sent", quote, /, "the composer: only when this email is what made it sent");
   assert.deepEqual(writers(/quote\.update(Many)?\(\{[^;]{0,200}data: \{ viewedAt: new Date\(\)/), ["src/lib/signing/quoteMirror.ts"]);
 });
 

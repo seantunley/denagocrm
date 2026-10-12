@@ -96,8 +96,11 @@ test("the PDF comes from the Print / PDF renderer", () => {
   const action = shipped("src/app/actions/quoteEmail.ts");
   const route = shipped("src/app/(print)/quotes/[id]/print/route.ts");
   assert.match(route, /renderQuotePrintHtml\(/);
-  assert.match(action, /renderQuotePrintHtml\(\{ quoteId \}\)/);
-  assert.match(action, /htmlToPdf\(html\)/);
+  // One renderer for every door that emails a quote (lib/quoteEmailSend.ts).
+  assert.match(action, /renderPdf: \(\) => quotePdf\(quoteId\)/);
+  const shared = shipped("src/lib/quoteEmailSend.ts");
+  assert.match(shared, /renderQuotePrintHtml\(\{ quoteId \}\)/);
+  assert.match(shared, /htmlToPdf\(html\)/);
 });
 
 test("nothing is sent without the explicit Send click", () => {
@@ -128,7 +131,8 @@ test("emailing a quote needs what every other send of a quote needs", () => {
   // The sibling it mirrors.
   assert.match(shipped("src/app/actions/quotes.ts"), /requireQuoteAccess\(quoteId, "quotes\.change_status"\)/);
   // Only a draft moves to sent.
-  assert.match(action, /status: "draft",\s*updatedAt: quote\.updatedAt/);
+  assert.match(action, /markSentIfDraft: \(\) => markQuoteSentIfDraft\(quote\)/);
+  assert.match(shipped("src/lib/quoteEmailSend.ts"), /status: "draft", updatedAt: quote\.updatedAt/);
 });
 
 test("the send lands on the customer's timeline through sendEmail's shared record", () => {

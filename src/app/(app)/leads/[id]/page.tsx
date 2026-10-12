@@ -17,6 +17,7 @@ import SecureLinksPanel from "@/components/SecureLinksPanel";
 import ActivityPanel from "@/components/ActivityPanel";
 import VoiceDebriefButton from "@/components/VoiceDebriefButton";
 import EmailComposer from "@/components/EmailComposer";
+import { composerQuotes } from "@/lib/composerQuotes";
 import { composerReplyToDefault } from "@/lib/replyToDefault";
 import LeadTimeline from "@/components/LeadTimeline";
 import { auditDetailFor } from "@/lib/auditDetailQuery";
@@ -554,6 +555,7 @@ export default async function LeadDetailPage({
                       leadId={lead.id}
                       revalidate={path}
                       libraryDocs={libraryDocs}
+                      quotes={composerQuotes(lead.quotes, canCancelQuotes)}
                       aiConfigured={aiOn}
                       defaultReplyTo={replyToDefault}
                     />

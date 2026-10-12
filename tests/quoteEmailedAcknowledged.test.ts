@@ -13,10 +13,11 @@ test("a sent quote email is recorded on the quote, after the send and never inst
   const action = shipped("src/app/actions/quoteEmail.ts");
   const send = action.slice(action.indexOf("export async function sendQuoteEmail"));
   const delivered = send.indexOf("if (!result.ok) return result;");
-  const recorded = send.indexOf("data: { emailedAt, emailedTo: to.value }");
+  // Written by the one function both doors share (the composer's "Attach quote" is the other).
+  const recorded = send.indexOf("await recordQuoteEmailed(quote, to.value, emailedAt)");
   assert.ok(delivered > 0 && recorded > delivered, "recorded only once the email has gone");
   // The row is named by its workspace as well as its id.
-  assert.match(send, /updateMany\(\{ where: \{ id: quoteId, tenantId: quote\.tenantId \}, data: \{ emailedAt, emailedTo: to\.value \} \}\)/);
+  assert.match(shipped("src/lib/quoteEmailSend.ts"), /updateMany\(\{ where: \{ id: quote\.id, tenantId: quote\.tenantId \}, data: \{ emailedAt: at, emailedTo: to \} \}\)/);
   // A failure to record must not report a delivered email as failed.
   assert.match(send.slice(recorded, recorded + 200), /\.catch\(/);
   assert.match(send, /to: to\.value,\s+emailedAt: emailedAt\.toISOString\(\),\s+markedSent: result\.markedSent,/);

@@ -11,6 +11,7 @@ import PortalUploadsList, { type PortalUploadRow } from "@/components/PortalUplo
 import ActivityPanel from "@/components/ActivityPanel";
 import EmailComposer from "@/components/EmailComposer";
 import { customerTimelineWhere, type DealOption } from "@/lib/customerTimeline";
+import { composerQuotes } from "@/lib/composerQuotes";
 import { composerReplyToDefault } from "@/lib/replyToDefault";
 import LeadTimeline from "@/components/LeadTimeline";
 import { auditDetailFor } from "@/lib/auditDetailQuery";
@@ -443,6 +444,7 @@ export default async function ContactDetailPage({
                       deals={openDeals}
                       revalidate={path}
                       libraryDocs={libraryDocs}
+                      quotes={composerQuotes(contact.quotes, canCancelQuotes)}
                       aiConfigured={aiOn}
                       defaultReplyTo={replyToDefault}
                     />

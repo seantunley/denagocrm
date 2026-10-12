@@ -27,9 +27,15 @@ import {
   CUSTOMER_RECORD_WRITE_PERMISSIONS,
   canAccessContact,
   canAccessLead,
+  canAccessQuote,
   hasAnyPermission,
+  hasPermission,
   requireAnyPermission,
 } from "@/lib/permissions";
+import { quotePdfFileName } from "@/lib/quoteEmail";
+import { markQuoteSentIfDraft, quotePdf, recordQuoteEmailed } from "@/lib/quoteEmailSend";
+import { COMPOSER_QUOTE_STATUSES } from "@/lib/composerQuotes";
+import { emitQuoteJourneyEvent } from "@/lib/leadJourneyEvents";
 import { logAudit } from "@/lib/audit";
 import { sendEmail } from "@/lib/email";
 import {
@@ -50,6 +56,9 @@ import { isPublicBlobRef, readFile, saveFile, savePublicAsset, storesPrivately }
  * link is only made where files are stored privately. Said before anything is
  * stored or sent.
  */
+/** Each attached quote is a PDF rendered during the send; a handful is plenty for one email. */
+const MAX_QUOTES_PER_EMAIL = 5;
+
 const NO_PRIVATE_STORE =
   "Secure links need the private file store, which is not switched on for this CRM. Nothing was sent — untick “Send as a secure link” to attach the files instead.";
 import { MAX_LOGO_BYTES } from "@/lib/emailInlineLogo";
@@ -323,6 +332,57 @@ export async function sendEmailAction(
     if (asSecureLinks) secureUploads.push({ name: file.name, type: file.type || "application/octet-stream", size: buffer.length, buffer });
     else attachments.push({ filename: file.name, content: buffer, contentType: file.type || undefined });
   }
+  // QUOTES ATTACHED FROM THE COMPOSER ("Attach quote"). The same PDF "Email quote"
+  // sends, under the same permission on the same quote — and, further down, the
+  // same consequence: a draft that has gone to the customer is a sent quote. An
+  // email with the quote PDF uploaded by hand could not be told from any other
+  // file, so the quote stayed a draft after the customer had it.
+  const quoteIds = [...new Set(formData.getAll("attachQuote").map(String).filter(Boolean))];
+  const sentQuotes: { id: string; number: number; updatedAt: Date; leadId: string | null; contactId: string | null; tenantId: string | null }[] = [];
+  if (quoteIds.length > MAX_QUOTES_PER_EMAIL) return { error: `Attach at most ${MAX_QUOTES_PER_EMAIL} quotes to one email.` };
+  if (quoteIds.length > 0 && !(await hasPermission(user, "quotes.change_status"))) {
+    return { error: "Your role can't send quotes to customers." };
+  }
+  for (const quoteId of quoteIds) {
+    if (!(await canAccessQuote(user, quoteId))) return { error: "You don't have access to that quote." };
+    const quote = await prisma.quote.findUnique({
+      where: { id: quoteId },
+      select: {
+        id: true, number: true, status: true, updatedAt: true, deletedAt: true, supersededAt: true, leadId: true, contactId: true, tenantId: true,
+        _count: { select: { items: true } },
+      },
+    });
+    if (!quote || quote.deletedAt) return { error: "That quote no longer exists." };
+    // The composer does not OFFER a declined or cancelled quote — but that list is
+    // drawn in the browser, and an id can be posted without it. The same list,
+    // enforced here.
+    if (!COMPOSER_QUOTE_STATUSES.includes(quote.status)) {
+      return { error: `Quote Q-${quote.number} is ${quote.status} — it can't be sent to the customer. Nothing was sent.` };
+    }
+    // Only this customer's quotes: the composer is open on one lead or one customer,
+    // and the email is logged there. Another customer's quote does not belong in it.
+    const theirs = (leadId && quote.leadId === leadId) || (contactId && quote.contactId === contactId);
+    if (!theirs) return { error: `Quote Q-${quote.number} belongs to a different customer.` };
+    // AN EMAIL ON ONE DEAL DOES NOT CARRY ANOTHER DEAL'S QUOTE. The customer can
+    // have several deals, and the email is filed on the one it was written about:
+    // attaching deal B's quote to an email filed on deal A would put B's quotation
+    // on A's history, and mark B's quote sent from a conversation about A. A
+    // quote that is on no deal (made for the customer directly) may go with any.
+    if (leadId && quote.leadId && quote.leadId !== leadId) {
+      return { error: `Quote Q-${quote.number} belongs to a different deal of this customer — send it from that deal, or choose that deal for this email. Nothing was sent.` };
+    }
+    if (quote.supersededAt) return { error: `Quote Q-${quote.number} has been replaced by a revision — attach the latest one.` };
+    if (quote._count.items === 0) return { error: `Add at least one line to quote Q-${quote.number} before sending it.` };
+    const pdf = await quotePdf(quote.id);
+    if (!pdf) return { error: `The PDF for quote Q-${quote.number} could not be generated. Nothing was sent.` };
+    const name = quotePdfFileName(quote.number);
+    fileNames.push(name);
+    attachedNames.push(name);
+    if (asSecureLinks) secureUploads.push({ name, type: "application/pdf", size: pdf.length, buffer: pdf });
+    else attachments.push({ filename: name, content: pdf, contentType: "application/pdf" });
+    sentQuotes.push(quote);
+  }
+
   const secure = asSecureLinks && fileNames.length > 0;
   if (secure && !storesPrivately()) return { error: NO_PRIVATE_STORE };
 
@@ -385,29 +445,72 @@ export async function sendEmailAction(
     if (secure && sendingTenantId) await discardSecureLinks(sendingTenantId, links.map((link) => link.id)).catch(() => {});
     return { error: result.error };
   }
-  if (bannerId && bannerTenantId) await recordBannerSent(bannerTenantId, bannerId);
+
+  /*
+   * THE EMAIL HAS GONE. From here nothing may fail the action: an error returned
+   * now tells the sender it did not send, and they send it again — to a customer
+   * who already has it. So every piece of bookkeeping below stands ALONE: it is
+   * tried, a failure is logged, and the next one is still attempted. One failed
+   * write must not cost the others (the first version marked the quote sent only
+   * after the timeline entry and the audit line had both succeeded, so a failed
+   * audit write left a quote the customer was holding marked draft).
+   */
+  const bookkeeping = async <T,>(what: string, work: () => Promise<T>): Promise<T | undefined> => {
+    try {
+      return await work();
+    } catch (err) {
+      const { logError } = await import("@/lib/errorLog");
+      await logError("composer-after-send", `${what}: ${err instanceof Error ? err.name : "unknown"}`).catch(() => {});
+      return undefined;
+    }
+  };
+
+  // The quotes FIRST: what the quote says about itself is what staff act on next.
+  const emailedAt = new Date();
+  const nowSent: number[] = [];
+  for (const quote of sentQuotes) {
+    // A draft the customer now holds is a sent quote — the rule "Email quote" uses.
+    const markedSent = (await bookkeeping(`mark Q-${quote.number} sent`, () => markQuoteSentIfDraft(quote))) === true;
+    if (markedSent) nowSent.push(quote.number);
+    // When it was emailed and to whom, on the quote — a draft, or one sent before and emailed again.
+    await bookkeeping(`record Q-${quote.number} emailed`, () => recordQuoteEmailed(quote, to, emailedAt));
+    await bookkeeping(`audit Q-${quote.number} emailed`, () =>
+      logAudit({
+        action: "quote.emailed",
+        summary: `Emailed quote Q-${quote.number} to ${to} from the email composer${markedSent ? " — marked sent" : ""}`,
+        leadId: quote.leadId,
+        contactId: quote.contactId,
+        user,
+      }),
+    );
+    if (markedSent) await bookkeeping(`quote_sent trigger for Q-${quote.number}`, () => emitQuoteJourneyEvent("quote_sent", quote, `sent:${Date.now()}`));
+  }
+
+  if (bannerId && bannerTenantId) await bookkeeping("count the banner", () => recordBannerSent(bannerTenantId, bannerId));
 
   const filesNote = secure ? `Sent as secure links, until ${expiresLabel}` : "Attachments";
-  const sent = await prisma.communication.create({
-    data: {
-      type: "email",
-      direction: "outbound",
-      subject,
-      body:
-        attachedNames.length > 0
-          ? `${bodyText}\n\n[${filesNote}: ${attachedNames.join(", ")}]`
-          : bodyText,
-      leadId,
-      contactId,
-      userId: user.id,
-      tenantId: await customerRecordTenantId({ contactId, leadId }),
-      ...(result.openToken ? { openToken: result.openToken } : {}),
-      ...(result.bannerRef ? { bannerRef: result.bannerRef } : {}),
-    },
-    select: { id: true },
-  });
-  if (secure && sendingTenantId) await attachSecureLinksToEmail(sendingTenantId, links.map((link) => link.id), sent.id).catch(() => {});
-  await logAudit({
+  const sent = await bookkeeping("file it on the timeline", async () =>
+    prisma.communication.create({
+      data: {
+        type: "email",
+        direction: "outbound",
+        subject,
+        body:
+          attachedNames.length > 0
+            ? `${bodyText}\n\n[${filesNote}: ${attachedNames.join(", ")}]`
+            : bodyText,
+        leadId,
+        contactId,
+        userId: user.id,
+        tenantId: await customerRecordTenantId({ contactId, leadId }),
+        ...(result.openToken ? { openToken: result.openToken } : {}),
+        ...(result.bannerRef ? { bannerRef: result.bannerRef } : {}),
+      },
+      select: { id: true },
+    }),
+  );
+  if (sent && secure && sendingTenantId) await attachSecureLinksToEmail(sendingTenantId, links.map((link) => link.id), sent.id).catch(() => {});
+  await bookkeeping("audit the email", () => logAudit({
     action: "email.sent",
     // Where replies were directed is part of what was sent, and it is the one
     // detail nobody can recover afterwards — the message has left, and the header
@@ -423,9 +526,13 @@ export async function sendEmailAction(
     contactId,
     leadId,
     user,
-  });
+  }));
+  if (sentQuotes.length > 0) revalidatePath("/quotes");
   revalidatePath(String(formData.get("revalidate") ?? "/"));
-  return { ok: `Email sent to ${to}.` };
+  const quoteNote = nowSent.length > 0 ? ` ${nowSent.map((n) => `Quote Q-${n}`).join(", ")} marked sent.` : "";
+  // Sent, but not on the timeline: said plainly, with the one instruction that matters.
+  const unfiled = sent ? "" : " It could not be added to the timeline — but it WAS sent. Do not send it again.";
+  return { ok: `Email sent to ${to}.${quoteNote}${unfiled}` };
 }
 
 export async function sendTestEmail(
