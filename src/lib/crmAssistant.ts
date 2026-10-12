@@ -405,7 +405,7 @@ async function findQuotes(user: User, raw: z.infer<typeof quoteArgs>): Promise<T
   };
 }
 
-async function findActivities(user: User, raw: z.infer<typeof activityArgs>): Promise<ToolOutput> {
+export async function findActivities(user: User, raw: z.infer<typeof activityArgs>): Promise<ToolOutput> {
   if (!(await hasAnyPermission(user, "activities.view", "activities.manage"))) return refused("activities");
   const args = activityArgs.parse(raw);
   const ids = await getAccessibleActivityIds(user);
@@ -433,14 +433,30 @@ async function findActivities(user: User, raw: z.infer<typeof activityArgs>): Pr
   // never shown (both spellings are in the data).
   const history = args.when === "past" || dated !== null;
   const take = args.limit ?? 15;
+  // BLOCKED TIME IS ON THE CALENDAR. This search is what the assistant is told
+  // IS the calendar, and it used to leave blocked time out of every answer — so
+  // "what is in my calendar this week?" came back "nothing" for someone whose
+  // Tuesday was blocked (Sean, 2026-10-11). It is left out only of the two
+  // WORK lists, where it does not belong: time off is never "overdue" and is
+  // not something to get done today — whether or not dates were given with it.
+  const workList = args.when === "overdue" || args.when === "today_and_overdue";
+  const window: { gte?: Date; lt?: Date } = dated ?? range;
   const activities = await prisma.activity.findMany({
     where: {
       ...(ids === null ? {} : { id: { in: ids } }),
       status: history ? { notIn: CANCELLED } : "planned",
-      availabilityBlock: false,
-      dueDate: dated ?? range,
+      ...(workList ? { availabilityBlock: false } : {}),
       ...(args.type ? { type: fuzzy(args.type) } : {}),
       AND: [
+        // Everything is placed by when it STARTS — except blocked time, which
+        // lasts: leave from Sunday to Wednesday is in Monday's week although it
+        // began before it. The same overlap rule the calendar page draws by.
+        {
+          OR: [
+            { dueDate: window },
+            ...(!workList && window.gte ? [{ availabilityBlock: true, dueDate: { lt: window.gte }, endDate: { gt: window.gte } }] : []),
+          ],
+        },
         // Theirs, or a meeting they're an attendee of.
         ...(args.assignedTo
           ? [{ OR: [{ assignedTo: { name: fuzzy(args.assignedTo) } }, { attendees: { some: { user: { name: fuzzy(args.assignedTo) } } } }] }]
@@ -452,7 +468,7 @@ async function findActivities(user: User, raw: z.infer<typeof activityArgs>): Pr
     orderBy: { dueDate: args.when === "overdue" || (args.when === "past" && !dated) ? "desc" : "asc" },
     take: take + 1,
     select: {
-      id: true, type: true, summary: true, dueDate: true, status: true, leadId: true, contactId: true,
+      id: true, type: true, summary: true, dueDate: true, endDate: true, allDay: true, availabilityBlock: true, status: true, leadId: true, contactId: true,
       assignedTo: { select: { name: true } },
       lead: { select: { name: true } },
     },
@@ -460,17 +476,38 @@ async function findActivities(user: User, raw: z.infer<typeof activityArgs>): Pr
   const page = activities.slice(0, take);
   const href = (a: (typeof activities)[number]) =>
     a.leadId ? `/leads/${a.leadId}` : a.contactId ? `/contacts/${a.contactId}` : "/activities";
+  if (page.length === 0) {
+    // "Nothing" with no dates reads as "nothing ever". Say what was looked at:
+    // whose, which days, and that it means the calendar including blocked time.
+    const day = (d: Date) => d.toLocaleDateString("en-ZA", { timeZone: "Africa/Johannesburg", weekday: "short", day: "numeric", month: "short" });
+    const from = window.gte ? day(window.gte) : null;
+    // `lt` is the first moment AFTER the window: its last day is the day before.
+    const to = window.lt ? day(new Date(window.lt.getTime() - 1)) : null;
+    const span = from && to ? (from === to ? `on ${from}` : `from ${from} to ${to}`) : from ? `from ${from} onwards` : to ? `up to ${to}` : "";
+    return {
+      truncated: false,
+      rows: [],
+      data: [{
+        note: `Nothing ${history ? "recorded" : "planned"} ${span}${args.assignedTo ? ` for ${args.assignedTo}` : ""}${args.search ? ` matching "${args.search}"` : ""}${args.type ? ` of type ${args.type}` : ""} — no calls, meetings, to-dos or events${workList ? "" : ", and no blocked time"}. Give those dates in your answer.${history ? "" : " Completed items are not included: ask with \"past\" for what was done."}`,
+      }],
+    };
+  }
   return {
     truncated: activities.length > take,
     data: page.map((a) => ({
       // The id is what a reschedule or cancel proposal names.
       id: a.id,
       link: href(a),
-      type: a.type,
+      type: a.availabilityBlock ? "blocked time" : a.type,
       summary: a.summary,
       due: dateKey(a.dueDate),
+      // A calendar item has a time of day, and blocked time an end: "Tuesday, blocked 09:00–11:00".
+      ...(a.allDay ? { allDay: true } : { time: saLocal(a.dueDate).slice(11) }),
+      ...(a.availabilityBlock && a.endDate ? { until: a.allDay ? dateKey(new Date(a.endDate.getTime() - 1)) : saLocal(a.endDate).slice(11) } : {}),
+      ...(a.availabilityBlock ? { blockedTime: true } : {}),
       ...(history ? { status: a.status } : {}),
-      ...(a.status === "planned" && a.dueDate < startOfToday ? { overdue: true } : {}),
+      // Leave that began yesterday is not late.
+      ...(a.status === "planned" && !a.availabilityBlock && a.dueDate < startOfToday ? { overdue: true } : {}),
       assignedTo: a.assignedTo.name,
       customer: a.lead?.name ?? null,
       leadId: a.leadId,
@@ -2138,6 +2175,24 @@ async function resolveActions(user: User, proposals: ProposedAction[]): Promise<
       const parsed = scheduleInput.safeParse(fields);
       if (!parsed.success || !nextRun(parsed.data, new Date())) continue;
       cards.push({ id: `a${index}-schedule`, kind: "schedule", title: describeSchedule(parsed.data), ...parsed.data, ...(p.reason ? { reason: p.reason } : {}) });
+      continue;
+    }
+    if (p.type === "block_time") {
+      // The person's own calendar: nothing to check access to. The clash check is
+      // the calendar's own, made when Confirm saves it (createStaffAvailability);
+      // here only the timing is worked out, and a block in the past is dropped.
+      const summary = p.summary ?? "Unavailable";
+      const base = { id: `a${index}-block`, kind: "block_time" as const, leadId: null, leadLabel: "Your calendar", summary, detail: p.note, ...(p.reason ? { reason: p.reason } : {}) };
+      if (p.when.includes("T")) {
+        const start = new Date(`${p.when}:00+02:00`);
+        if (Number.isNaN(start.getTime()) || start.getTime() < Date.now() - 60 * 60 * 1000) continue;
+        const end = new Date(start.getTime() + (p.minutes ?? 60) * 60 * 1000);
+        cards.push({ ...base, allDay: false, start: p.when, end: saLocal(end), title: `Block your calendar: ${summary} — ${when(start)} to ${saLocal(end).slice(11)}` });
+      } else {
+        if (p.when < johannesburgDateKey(new Date())) continue;
+        const until = p.until && p.until > p.when ? p.until : p.when;
+        cards.push({ ...base, allDay: true, start: p.when, end: until, title: `Block your calendar: ${summary} — all day ${p.when}${until === p.when ? "" : ` to ${until}`}` });
+      }
       continue;
     }
     if (p.type === "watch") {

@@ -120,7 +120,7 @@ export const PENDING_ACTION_TTL_MS = 15 * 60 * 1000;
  * decides otherwise.
  */
 export const WHATSAPP_CONFIRMABLE: ReadonlySet<string> = new Set([
-  "note", "customer_note", "follow_up", "assign", "stage", "meeting", "reschedule", "cancel_activity", "schedule", "watch",
+  "note", "customer_note", "follow_up", "assign", "stage", "meeting", "block_time", "reschedule", "cancel_activity", "schedule", "watch",
 ]);
 
 /** Proposed cards, split into those that get a Confirm button here and those that need the CRM. */

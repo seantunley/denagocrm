@@ -33,15 +33,42 @@ test("a past day or period can be asked about", () => {
   assert.match(plan, /What HAPPENED \("what golf days did we have last month", "what was on 22 September"\) → "past" with from\/to/);
 });
 
+test("BLOCKED TIME IS ON THE CALENDAR: a calendar question finds it — only the two work lists leave it out", () => {
+  // "What is in my calendar this week?" answered "nothing" for someone whose Tuesday was blocked,
+  // because this search — which the assistant is told IS the calendar — dropped blocked time always.
+  const find = fn("findActivities");
+  // A work list stays a work list when dates are given with it.
+  assert.match(find, /const workList = args\.when === "overdue" \|\| args\.when === "today_and_overdue";/);
+  // Blocked time LASTS: leave that began before the window and runs into it is in it.
+  assert.match(find, /\.\.\.\(!workList && window\.gte \? \[\{ availabilityBlock: true, dueDate: \{ lt: window\.gte \}, endDate: \{ gt: window\.gte \} \}\] : \[\]\),/);
+  assert.match(find, /a\.status === "planned" && !a\.availabilityBlock && a\.dueDate < startOfToday/, "leave that began yesterday is not overdue");
+  assert.match(find, /\.\.\.\(workList \? \{ availabilityBlock: false \} : \{\}\),/);
+  assert.doesNotMatch(find, /status: history \? \{ notIn: CANCELLED \} : "planned",\s*availabilityBlock: false,/, "the unconditional exclusion is gone");
+  // It is shown as what it is, with when it ends.
+  assert.match(find, /type: a\.availabilityBlock \? "blocked time" : a\.type,/);
+  assert.match(find, /\.\.\.\(a\.availabilityBlock \? \{ blockedTime: true \} : \{\}\),/);
+  assert.match(find, /\.\.\.\(a\.allDay \? \{ allDay: true \} : \{ time: saLocal\(a\.dueDate\)\.slice\(11\) \}\),/);
+  // An empty answer names the days it covered, and whether blocked time was looked for.
+  assert.match(find, /if \(page\.length === 0\) \{/);
+  assert.match(find, /Give those dates in your answer\./);
+  assert.match(find, /\$\{workList \? "" : ", and no blocked time"\}/);
+  assert.match(find, /const to = window\.lt \? day\(new Date\(window\.lt\.getTime\(\) - 1\)\) : null;/, "the last day of the window, not the day after it");
+  // And the assistant is told so when it chooses a lookup.
+  const plan = planInstructions({ today: "2026-10-11", userName: "Sean", stages: [], staff: [], activityTypes: [] });
+  assert.match(plan, /the calendar: calls, meetings, to-dos, test drives, events, and blocked time \(personal items: leave, an appointment, admin time\)/);
+  assert.match(plan, /"What is in my calendar \/ diary this week" → this_week with assignedTo: today and the next six days, blocked time included — say which dates that covers\./);
+});
+
 test("looking back includes what was DONE — never what was cancelled (either spelling)", () => {
   assert.match(lib, /const CANCELLED = \["canceled", "cancelled"\];/);
   const find = fn("findActivities");
   assert.match(find, /const history = args\.when === "past" \|\| dated !== null;/);
   assert.match(find, /status: history \? \{ notIn: CANCELLED \} : "planned",/, "what's still to do stays planned-only");
-  assert.match(find, /dueDate: dated \?\? range,/);
+  assert.match(find, /const window: \{ gte\?: Date; lt\?: Date \} = dated \?\? range;/);
+  assert.match(find, /\{ dueDate: window \},/);
   assert.match(find, /args\.to \? \{ lt: new Date\(new Date\(`\$\{args\.to\}T00:00:00\+02:00`\)\.getTime\(\) \+ DAY\) \}/, "the whole last day");
   assert.match(find, /\.\.\.\(history \? \{ status: a\.status \} : \{\}\),/, "each result says planned or done");
-  assert.match(find, /\.\.\.\(a\.status === "planned" && a\.dueDate < startOfToday \? \{ overdue: true \} : \{\}\),/, "a done meeting isn't 'overdue'");
+  assert.match(find, /\.\.\.\(a\.status === "planned" && !a\.availabilityBlock && a\.dueDate < startOfToday \? \{ overdue: true \} : \{\}\),/, "a done meeting isn't 'overdue'");
 });
 
 /* ── schedule is the AVAILABILITY tool (#782 review) ──────────────────────── */
