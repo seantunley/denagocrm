@@ -354,7 +354,18 @@ export function buildEmailHtml(bodyHtml: string, signature: string): string {
   // The font link only helps mail apps that load web fonts (Apple Mail, iOS);
   // the rest ignore it and use the fallbacks in each font-family.
   return `<!DOCTYPE html>
-<html><head><link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@500;800&amp;display=swap" rel="stylesheet" />
+<html><head>${SIGNATURE_HEAD}</head><body style="font-family:Arial,Helvetica,sans-serif;font-size:14px;color:#1e293b;line-height:1.6;">
+${inlineEmailStyles(bodyHtml)}
+${signature}
+</body></html>`;
+}
+
+/**
+ * What a signature needs in the email's <head>: its font, and the rules that
+ * stack the card signature on a phone. One copy, for every email that carries a
+ * signature — a signature placed in an email without it squeezes on a phone.
+ */
+const SIGNATURE_HEAD = `<link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@500;800&amp;display=swap" rel="stylesheet" />
 <style>
 /* Phones: the card signature's panel stacks above the name instead of squeezing beside it. */
 @media (max-width: 600px) {
@@ -362,10 +373,42 @@ export function buildEmailHtml(bodyHtml: string, signature: string): string {
   .sig-banner { width: 100% !important; max-width: ${BANNER_WIDTH}px !important; height: auto !important; }
   .sig-details { display: block !important; border-left: 0 !important; padding-left: 0 !important; }
 }
-</style></head><body style="font-family:Arial,Helvetica,sans-serif;font-size:14px;color:#1e293b;line-height:1.6;">
-${inlineEmailStyles(bodyHtml)}
-${signature}
-</body></html>`;
+</style>`;
+
+/**
+ * Put the sender's signature into a FINISHED email — a whole HTML document in
+ * the workspace's branded layout, such as the quote email.
+ *
+ * WHERE: at the layout's own mark (`slot`), which sits inside the card straight
+ * under the message — so it reads "Kind regards," and then the person, with the
+ * company footer after them. The first version put it under the whole card,
+ * after the footer, where it looked like an afterthought. A layout with no mark
+ * gets it under everything, before </body>, centred with the card.
+ *
+ * The composer builds its email around the signature; a templated email is
+ * already complete by the time a person's signature is known, which is why this
+ * exists. It brings the same head rules the composer's email has.
+ */
+export function placeSignatureInEmail(html: string, signature: string, slot?: string): string {
+  if (!signature.trim()) return html;
+  // Before </head> — or, for a document with no closing head tag, straight
+  // before <body>, which is the same place.
+  const withHead = /<\/head>/i.test(html)
+    ? html.replace(/<\/head>/i, `${SIGNATURE_HEAD}</head>`)
+    : /<body[\s>]/i.test(html) ? html.replace(/<body([\s>])/i, `${SIGNATURE_HEAD}<body$1`) : html;
+  // A function as the replacement: a "$" in a signature is text, not a pattern.
+  if (slot && withHead.includes(slot)) return withHead.replace(slot, () => `<div style="padding:2px 0 14px;">${signature}</div>`);
+  const block = `<div style="text-align:center;padding:4px 12px 0;"><div style="display:inline-block;text-align:left;max-width:100%;font-family:Arial,Helvetica,sans-serif;font-size:14px;color:#1e293b;line-height:1.6;">${signature}</div></div>`;
+  return /<\/body>/i.test(withHead) ? withHead.replace(/<\/body>/i, () => `${block}</body>`) : `${withHead}${block}`;
+}
+
+/**
+ * The same signature for the plain-text half of an email: who sent it and how
+ * to reach them. Mail apps that show text only would otherwise end at "Kind
+ * regards," with nobody's name under it.
+ */
+export function signatureText(user: { name: string; email: string; mobile?: string | null; jobTitle?: string | null }, companyName: string): string {
+  return [user.name, user.jobTitle, companyName, user.mobile, user.email].map((line) => String(line ?? "").trim()).filter(Boolean).join("\n");
 }
 
 /** Plain-text fallback / timeline version of an HTML email. */
