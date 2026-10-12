@@ -33,7 +33,57 @@ export function seenLabel(c: { type: string; direction: string | null; seenAt?: 
   return `👁 ${c.type === "email" ? "Opened" : "Read"} ${formatDateTime(c.seenAt)}${times}${clicked ? ` · 👆 ${clicked}` : ""}`;
 }
 
-export const SEEN_HINT = "The customer's mail app loaded this email. Apple Mail can do this on its own, so treat it as a strong hint, not proof.";
+/**
+ * The same fact for the assistant, which was asked "has he opened his email?" and
+ * could only say the CRM doesn't show it — its lookup never read these columns.
+ *
+ * TWO SEPARATE FACTS, each said only as far as the CRM knows it (review of #868):
+ *
+ * `emailOpen` — what tracking saw. Never a yes/no about READING:
+ *   "opened"            an open was detected (when, how often). Not proof it was read.
+ *   "no_open_detected"  tracked, and no open recorded. NOT "unread": a mail app
+ *                       that blocks images never reports one. (The first version
+ *                       said `opened: false`, which reads as proof it was not.)
+ *   "not_tracked"       the CRM cannot tell either way.
+ *
+ * `provenance` — whether the CRM itself sent it:
+ *   "sent_by_crm"    the mail server accepted it from the CRM: it carries the
+ *                    tracking token or the server's message id.
+ *   "recorded_only"  a timeline entry with neither. It may be an email somebody
+ *                    logged by hand; the entry alone does not establish it was sent.
+ *                    (An email the composer sent with tracking switched off stores
+ *                    neither either, so it reads as this — the cautious answer.)
+ */
+export type EmailOpenFact = {
+  emailOpen: "opened" | "no_open_detected" | "not_tracked";
+  openedAt?: string;
+  openedTimes?: number;
+  provenance: "sent_by_crm" | "recorded_only";
+};
+export function openedFact(c: {
+  type: string;
+  direction: string | null;
+  openToken?: string | null;
+  messageId?: string | null;
+  seenAt?: Date | null;
+  openCount?: number;
+}): EmailOpenFact | Record<string, never> {
+  if (c.direction !== "outbound" || c.type !== "email") return {};
+  const provenance = c.openToken || c.messageId ? "sent_by_crm" : "recorded_only";
+  if (c.seenAt) {
+    return { emailOpen: "opened", openedAt: c.seenAt.toISOString(), ...(c.openCount && c.openCount > 1 ? { openedTimes: c.openCount } : {}), provenance };
+  }
+  return { emailOpen: c.openToken ? "no_open_detected" : "not_tracked", provenance };
+}
+
+export const OPENED_LEGEND =
+  "On an outbound email, `emailOpen` is what open-tracking saw — never whether it was READ. " +
+  "\"opened\": tracking detected an open at `openedAt` (the mail app loaded it; Apple Mail can do that unread) — say it was opened, not that it was read. " +
+  "\"no_open_detected\": tracking was on and no open is recorded — the recipient may still have read it (mail apps that block images report nothing); say no open has been detected, never that it is unread or unopened for certain. " +
+  "\"not_tracked\": the CRM cannot tell whether it was opened. " +
+  "`provenance` — \"sent_by_crm\": the mail server accepted it from the CRM. \"recorded_only\": an email is logged on the timeline, which alone does not establish that it was sent — say it is recorded, not that it went out.";
+
+export const SEEN_HINT ="The customer's mail app loaded this email. Apple Mail can do this on its own, so treat it as a strong hint, not proof.";
 
 /** The pixel, at the very end of the HTML (after the signature), on the workspace's own address. */
 export function withOpenPixel(html: string, origin: string, token: string): string {

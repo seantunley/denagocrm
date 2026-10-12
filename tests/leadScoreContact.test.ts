@@ -8,11 +8,12 @@ import Module, { createRequire } from "node:module";
  * "inbound" — is never "the customer wrote to us", and never "last contact".
  */
 
-type Comm = { leadId: string; type: string; direction: string | null; occurredAt: Date };
-type Act = { leadId: string; type: string; status: string; availabilityBlock: boolean; doneAt: Date | null; dueDate: Date };
+type Comm = { leadId: string | null; contactId?: string | null; type: string; direction: string | null; occurredAt: Date };
+type Act = { leadId: string | null; contactId?: string | null; type: string; status: string; availabilityBlock: boolean; doneAt: Date | null; dueDate: Date };
 type Where = Record<string, unknown>;
 
-const state = { comms: [] as Comm[], acts: [] as Act[] };
+/** `links`: which customer each lead belongs to (Lead.contactId). */
+const state = { comms: [] as Comm[], acts: [] as Act[], links: [] as { id: string; contactId: string | null }[] };
 const day = (n: number) => new Date(Date.UTC(2026, 9, n, 9));
 
 function passes(row: Record<string, unknown>, where: Where): boolean {
@@ -28,21 +29,26 @@ function passes(row: Record<string, unknown>, where: Where): boolean {
   });
 }
 
-function groupBy<T extends { leadId: string }>(rows: T[], args: { where: Where; _max?: Record<string, true>; _min?: Record<string, true> }) {
+function groupBy<T extends { leadId: string | null; contactId?: string | null }>(rows: T[], args: { by?: string[]; where: Where; _max?: Record<string, true>; _min?: Record<string, true> }) {
   const field = Object.keys(args._max ?? args._min ?? {})[0] as keyof T;
+  const key = (args.by?.[0] ?? "leadId") as "leadId" | "contactId";
   const pickMax = Boolean(args._max);
   const out = new Map<string, Date | null>();
-  for (const row of rows.filter((r) => passes(r as Record<string, unknown>, args.where))) {
+  // A missing column reads as null, as it does in the database.
+  for (const row of rows.filter((r) => passes({ contactId: null, ...r } as Record<string, unknown>, args.where))) {
+    const group = row[key];
+    if (!group) continue;
     const v = row[field] as unknown as Date | null;
-    const cur = out.get(row.leadId) ?? null;
-    if (v && (!cur || (pickMax ? v > cur : v < cur))) out.set(row.leadId, v);
+    const cur = out.get(group) ?? null;
+    if (v && (!cur || (pickMax ? v > cur : v < cur))) out.set(group, v);
   }
-  return [...out].map(([leadId, v]) => ({ leadId, [pickMax ? "_max" : "_min"]: { [field]: v } }));
+  return [...out].map(([group, v]) => ({ [key]: group, [pickMax ? "_max" : "_min"]: { [field]: v } }));
 }
 
 const fakePrisma = {
-  communication: { groupBy: async (args: { where: Where; _max: Record<string, true> }) => groupBy(state.comms, args) },
-  activity: { groupBy: async (args: { where: Where; _max?: Record<string, true>; _min?: Record<string, true> }) => groupBy(state.acts, args) },
+  lead: { findMany: async (args: { where: Where }) => state.links.filter((link) => passes(link as Record<string, unknown>, args.where)) },
+  communication: { groupBy: async (args: { by?: string[]; where: Where; _max: Record<string, true> }) => groupBy(state.comms, args) },
+  activity: { groupBy: async (args: { by?: string[]; where: Where; _max?: Record<string, true>; _min?: Record<string, true> }) => groupBy(state.acts, args) },
   quote: { groupBy: async () => [] },
 };
 
@@ -68,6 +74,40 @@ const waiting = (s: { reasons: string[] }) => s.reasons.some((r) => /waiting on 
 beforeEach(() => {
   state.comms = [];
   state.acts = [];
+  state.links = [];
+});
+
+const uncontacted = (s: { reasons: string[] }) => s.reasons.some((r) => /not contacted yet|Never contacted/.test(r));
+
+test("AN EMAIL FILED ON THE CUSTOMER, WITH NO LEAD, IS CONTACT: the lead no longer says 'not contacted yet'", async () => {
+  // Sean, 2026-10-12: a lead on Today read "New lead — not contacted yet" with
+  // an email to that customer sent the same morning. The email was written from
+  // the customer's page, so it carried the customer and no lead.
+  state.links = [{ id: "lead1", contactId: "cust1" }];
+  assert.ok(uncontacted(await score()), "nothing at all yet");
+  state.comms = [{ leadId: null, contactId: "cust1", type: "email", direction: "outbound", occurredAt: day(10) }];
+  assert.equal(uncontacted(await score()), false, "the customer was emailed");
+  // And the customer's own lead-less message (an inbox reply, Messenger) is "waiting on our reply".
+  state.comms = [{ leadId: null, contactId: "cust1", type: "email", direction: "inbound", occurredAt: day(10) }];
+  assert.ok(waiting(await score()));
+  // A finished call or meeting booked on the customer counts the same way.
+  state.comms = [];
+  state.acts = [{ leadId: null, contactId: "cust1", type: "call", status: "done", availabilityBlock: false, doneAt: day(10), dueDate: day(10) }];
+  assert.equal(uncontacted(await score()), false);
+});
+
+test("…but not another customer's, not the customer's rows on ANOTHER lead, and never a note", async () => {
+  state.links = [{ id: "lead1", contactId: "cust1" }];
+  state.comms = [
+    { leadId: null, contactId: "cust2", type: "email", direction: "outbound", occurredAt: day(10) }, // somebody else
+    { leadId: "lead2", contactId: "cust1", type: "email", direction: "outbound", occurredAt: day(10) }, // this customer's other deal
+    { leadId: null, contactId: "cust1", type: "note", direction: "outbound", occurredAt: day(10) }, // written for ourselves
+  ];
+  assert.ok(uncontacted(await score()));
+  // A lead with no customer attached reads only its own rows, as before.
+  state.links = [{ id: "lead1", contactId: null }];
+  state.comms = [{ leadId: null, contactId: null, type: "email", direction: "outbound", occurredAt: day(10) }];
+  assert.ok(uncontacted(await score()));
 });
 
 test("a real inbound message we haven't answered IS 'waiting on our reply'", async () => {

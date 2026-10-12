@@ -16,8 +16,9 @@ import { contactActivityWhere, contactCommunicationWhere } from "./customerConta
  * through `getAccessibleLeadIds` — a queue that tells a rep who to call must not
  * be able to name a deal they cannot open.
  *
- * Six grouped queries over the id set, then an in-memory join: a fixed number of
- * round trips whether the list holds one lead or five hundred.
+ * Grouped queries over the id set (six by lead, three by the leads' customers),
+ * then an in-memory join: a fixed number of round trips whether the list holds
+ * one lead or five hundred.
  */
 
 /**
@@ -74,6 +75,29 @@ export async function scoreLeads(leads: ScorableLead[], now: Date = new Date()):
     }),
   ]);
 
+  // THE CUSTOMER'S OWN ROWS THAT SIT ON NO LEAD count as contact with this lead
+  // too. An email sent from the customer's page, a reply in the inbox, a
+  // Messenger message: each is filed on the customer with no lead. Reading only
+  // `leadId` rows, a lead whose customer had been emailed that morning still
+  // said "New lead — not contacted yet". The same widening the gone-quiet list
+  // (leadIdle.ts) and the assistant (crmAssistant.ts) already apply. Not the
+  // customer's rows on ANOTHER lead — those are another deal's contact.
+  const links = await prisma.lead.findMany({ where: { id: leadId, contactId: { not: null } }, select: { id: true, contactId: true } });
+  const customerOf = new Map(links.map((link) => [link.id, link.contactId as string]));
+  const contactId = { in: [...new Set(customerOf.values())] };
+  const [customerContact, customerInbound, customerDone] = customerOf.size
+    ? await Promise.all([
+        prisma.communication.groupBy({ by: ["contactId"], where: { contactId, leadId: null, ...contactCommunicationWhere }, _max: { occurredAt: true } }),
+        prisma.communication.groupBy({ by: ["contactId"], where: { contactId, leadId: null, direction: "inbound", ...contactCommunicationWhere }, _max: { occurredAt: true } }),
+        prisma.activity.groupBy({ by: ["contactId"], where: { contactId, leadId: null, ...contactActivityWhere }, _max: { doneAt: true } }),
+      ])
+    : [[], [], []];
+  const byCustomer = <T extends { contactId: string | null }>(rows: T[], pick: (row: T) => Date | null) =>
+    new Map(rows.filter((row) => row.contactId).map((row) => [row.contactId as string, pick(row)]));
+  const customerComm = byCustomer(customerContact, (row) => row._max.occurredAt);
+  const customerWrote = byCustomer(customerInbound, (row) => row._max.occurredAt);
+  const customerActivity = byCustomer(customerDone, (row) => row._max.doneAt);
+
   const byLead = <T extends { leadId: string | null }, V>(rows: T[], pick: (row: T) => V) =>
     new Map(rows.filter((row) => row.leadId).map((row) => [row.leadId as string, pick(row)]));
   const lastComm = byLead(contact, (row) => row._max.occurredAt);
@@ -85,6 +109,7 @@ export async function scoreLeads(leads: ScorableLead[], now: Date = new Date()):
 
   for (const lead of leads) {
     const next = nextPlanned.get(lead.id) ?? null;
+    const customer = customerOf.get(lead.id) ?? "";
     out.set(
       lead.id,
       scoreLead(
@@ -95,8 +120,8 @@ export async function scoreLeads(leads: ScorableLead[], now: Date = new Date()):
           stageIsClosed: lead.stage.isClosed,
           daysInStage: Math.floor((now.getTime() - lead.stageEnteredAt.getTime()) / DAY_MS),
           staleAfterDays: lead.stage.staleAfterDays,
-          lastContactAt: latest(lastComm.get(lead.id), lastDone.get(lead.id)),
-          lastInboundAt: lastInbound.get(lead.id) ?? null,
+          lastContactAt: latest(latest(lastComm.get(lead.id), lastDone.get(lead.id)), latest(customerComm.get(customer), customerActivity.get(customer))),
+          lastInboundAt: latest(lastInbound.get(lead.id), customerWrote.get(customer)),
           quoteViewedAt: quoteViewed.get(lead.id) ?? null,
           quoteSentNotSigned: quoteOutstanding.has(lead.id),
           hasOverdueActivity: next !== null && next < now,
