@@ -114,17 +114,31 @@ test("THE PDF IS QUEUED WITH THE QUOTE — delivered wherever Confirm was presse
   const actions = code("src/app/actions/assistant.ts");
   const at = actions.indexOf('case "quote_build": {');
   const run = actions.slice(at, actions.indexOf("default:", at));
-  const saved = run.indexOf("await saveQuoteDraft(");
-  const queued = run.indexOf("source: QUOTE_PDF_SOURCE,");
-  assert.ok(saved > 0 && queued > saved, "queued after the quote exists");
-  assert.match(run, /userId: user\.id,\s*source: QUOTE_PDF_SOURCE,\s*quoteId: saved\.quote\.id,/);
-  // For the signed-in person only: nothing on the card says who it is for.
-  assert.doesNotMatch(run.slice(queued - 200, queued + 400), /card\.(userId|to|waId|phone)/);
-  // A failure to queue never turns a created quote into an error.
-  assert.match(run.slice(queued), /\.catch\(async \(err: unknown\) => \{/);
-  // Confirmed in the CRM: this action tries the send, briefly; on WhatsApp the door sends it after its reply.
-  assert.match(run, /if \(queued && via === "crm"\) \{/);
-  assert.match(run, /sendUpdatesToLinkedPhone\(tenantId, user\.id\)\.catch\(/);
+  // ATOMIC (second review of #872): the delivery record used to be written AFTER the
+  // quote, in its own statement, with its failure swallowed — a built quote could exist
+  // with nothing for the retrying delivery to find. It is now written by the save
+  // itself, inside the transaction that creates the quote: both, or neither.
+  assert.match(run, /intent: "draft",[\s\S]{0,420}pdfToMyWhatsApp: true,/);
+  assert.doesNotMatch(run, /assistantTurn\.create|source: QUOTE_PDF_SOURCE/, "the action no longer writes the record itself");
+  const quotes = code("src/app/actions/quotes.ts");
+  const tx = quotes.slice(quotes.indexOf("const result = await basePrisma.$transaction(async (tx) => {"), quotes.indexOf("if (!result) {"));
+  const createdAt = tx.indexOf("const created = await tx.quote.create({");
+  const queuedAt = tx.indexOf("await tx.assistantTurn.create({");
+  assert.ok(createdAt > 0 && queuedAt > createdAt, "written on the SAME transaction client, after the quote row");
+  assert.equal((quotes.match(/assistantTurn\.create\(/g) ?? []).length, 1, "and nowhere outside it");
+  const record = tx.slice(queuedAt, queuedAt + 620);
+  // For the signed-in person only — the input names no recipient, and cannot.
+  assert.match(record, /tenantId: actingTenant,\s*userId: user\.id,\s*source: QUOTE_PDF_SOURCE,\s*quoteId: created\.id,/);
+  assert.match(quotes, /pdfToMyWhatsApp: z\.boolean\(\)\.optional\(\),/);
+  assert.doesNotMatch(quotes, /pdfTo(Phone|Number|User)|deliverTo/);
+  // Only a NEW draft: never on an edit, never on a save that marks the quote sent.
+  assert.match(tx, /if \(data\.pdfToMyWhatsApp && data\.intent === "draft"\) \{/);
+  assert.ok(tx.indexOf("if (data.pdfToMyWhatsApp") > tx.indexOf("const number = await nextQuoteNumber(tx);"), "in the create path only");
+  // It says the number, the quote's own total, and that it was not sent.
+  assert.match(record, /I've created draft quote Q-\$\{number\} \(\$\{formatZAR\(Math\.round\(total\)\)\}\)\. It has NOT been sent to the customer/);
+  // Confirmed in the CRM: this action tries the send, briefly, and cannot be failed by it; on WhatsApp the door sends it after its reply.
+  assert.match(run, /if \(via === "crm"\) \{/);
+  assert.match(run, /return sendUpdatesToLinkedPhone\(ownedWriteTenantId\(\), user\.id\);\s*\}\)\(\)\.catch\(/);
   assert.match(run, /setTimeout\(resolve, QUOTE_PDF_SEND_WAIT_MS\)/);
   assert.match(actions, /via: "crm" \| "whatsapp" = "crm",/);
   // The total the person is told is the QUOTE's own (VAT, discounts), read back from what was saved.
@@ -165,6 +179,11 @@ test("THE PDF GOES TO THE PERSON WHO ASKED — the only number it can reach is t
   assert.match(renderer, /renderQuotePrintHtml\(\{ quoteId \}\)/);
   // The renderer it uses cannot change a quote: it holds no database client at all.
   assert.doesNotMatch(renderer, /prisma|updateMany|status/);
+  // TWO KINDS OF FAILURE (second review of #872): nothing to render is permanent; a
+  // conversion that did not work this time is passing, and must not close the delivery.
+  assert.match(renderer, /if \(!html\) return \{ ok: false, reason: "no_document" \};/);
+  assert.match(renderer, /return \{ ok: true, pdf: await htmlToPdf\(html\) \};\s*\} catch \(err\) \{\s*await logPdfError\(err\);\s*return \{ ok: false, reason: "failed" \};/);
+  assert.match(send, /if \(rendered\.reason === "failed"\) return "The quote PDF could not be rendered just now";/);
 });
 
 test("in the CRM chat the card shows the same lines before Confirm", () => {

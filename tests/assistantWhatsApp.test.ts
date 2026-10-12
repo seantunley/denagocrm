@@ -111,7 +111,7 @@ const state = {
   rendered: [] as string[],
   /** The document send failing (the texts still go), and the renderer producing nothing. */
   documentFails: false,
-  noPdf: false,
+  noPdf: false as false | "no_document" | "failed",
   onConfirm: null as (() => void) | null,
 };
 const ASK_LIMIT = 60;
@@ -215,7 +215,11 @@ loaderKey._load = function (this: unknown, request: string, parent, isMain) {
           ambiguous: state.ambiguous.has(digits),
         }),
       };
-      case "./quotePdf": return { quotePdf: async (quoteId: string) => { state.rendered.push(quoteId); return state.noPdf ? null : Buffer.from("%PDF-1.7 quote"); } };
+      // As the real one: a PDF, or why not — "no_document" (nothing to render) or "failed" (did not work this time).
+      case "./quotePdf": return { quotePdf: async (quoteId: string) => {
+        state.rendered.push(quoteId);
+        return state.noPdf ? { ok: false, reason: state.noPdf } : { ok: true, pdf: Buffer.from("%PDF-1.7 quote") };
+      } };
       case "./transcribe": return { transcribeVoice: async () => "what is overdue today" };
       case "./crmAssistant": return {
         askCrm: async (user: { id: string }, question: string, _page: unknown, opts: { source?: string; images?: string[]; proposeTasks?: boolean | "saved" }) => {
@@ -1499,15 +1503,43 @@ test("it is re-checked at the moment of sending: a phone no longer safely theirs
   assert.equal(state.documents.length, 0);
 });
 
-test("a PDF that cannot be made is said once and not retried for ever", async () => {
+test("NOTHING TO RENDER is permanent: said once, and not retried for ever", async () => {
   const link = verified("u1", STAFF);
   link.lastInboundAt = new Date();
   const turn = builtQuote();
-  state.noPdf = true;
+  state.noPdf = "no_document";
   assert.equal(await sendUpdatesToLinkedPhone("t1", "u1"), "sent");
   assert.equal(state.documents.length, 0);
   assert.match(state.sent.at(-1)?.text ?? "", /^I couldn't make the PDF for Q-1030\. The draft is in the CRM/);
   assert.ok(turn.whatsappSentAt instanceof Date);
+});
+
+test("A PDF THAT FAILED TO RENDER THIS TIME is retried — the delivery is not closed on a hiccup", async () => {
+  // Second review of #872: the renderer returned "no PDF" for a conversion failure too
+  // (the PDF engine would not start, a timeout), and the update was marked finished.
+  const link = verified("u1", STAFF);
+  link.lastInboundAt = new Date();
+  builtQuote();
+  const waiting = () => state.turns.find((t) => t.id === "quote")!;
+  state.noPdf = "failed";
+  assert.equal(await sendUpdatesToLinkedPhone("t1", "u1"), "failed");
+  assert.equal(state.sent.length, 1, "the words went; nothing claims the PDF cannot be made");
+  assert.equal(state.documents.length, 0);
+  assert.equal(waiting().whatsappSentAt, null, "NOT finished");
+  assert.equal(waiting().whatsappClaimedAt, null, "given back for the next sender");
+  assert.equal(waiting().whatsappPartsSent, 1);
+  // A rendering failure is not WhatsApp's 24-hour rule: no template is sent in its place.
+  assert.deepEqual(state.templatesSent, []);
+  // Still failing on the sweep: still waiting, still nothing false said.
+  await sweepWaitingUpdates("t1", { shouldStop: () => false });
+  assert.equal(waiting().whatsappSentAt, null);
+  assert.equal(state.sent.length, 1);
+  // The engine is back: the retry sends the document, and only the document.
+  state.noPdf = false;
+  await sweepWaitingUpdates("t1", { shouldStop: () => false });
+  assert.equal(state.documents.length, 1);
+  assert.equal(state.sent.length, 1);
+  assert.notEqual(waiting().whatsappSentAt, null);
 });
 
 test("they ASKED for it: the PDF goes even with 'send my updates to this phone' off — and nothing else does", async () => {

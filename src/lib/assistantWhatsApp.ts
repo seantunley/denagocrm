@@ -676,13 +676,18 @@ async function sendQuotePdfToStaff(tenantId: string, userId: string, waId: strin
   if (!user) return null;
   const quote = await basePrisma.quote.findFirst({ where: { id: quoteId, tenantId, createdById: userId, deletedAt: null }, select: { id: true, number: true } });
   if (!quote) return null;
-  const pdf = await quotePdf(quote.id);
-  if (!pdf) {
-    // Not a passing failure: the text (with its link) has gone, and trying again would not make a PDF.
+  const rendered = await quotePdf(quote.id);
+  if (!rendered.ok) {
+    // PASSING (the PDF engine would not start, timed out…): the update is given
+    // back and tried again — by the sweep, or their next message — for as long as
+    // an update waits (a day). Closing it here lost the PDF to one bad minute.
+    if (rendered.reason === "failed") return "The quote PDF could not be rendered just now";
+    // PERMANENT (nothing to render): said once; trying again would not make a PDF.
     await sendWhatsAppText(waId, `I couldn't make the PDF for Q-${quote.number}. The draft is in the CRM — open Quotes and look for Q-${quote.number}.`).catch(() => {});
-    await logError("assistant-whatsapp", "quote PDF could not be rendered for the person who asked").catch(() => {});
+    await logError("assistant-whatsapp", "quote PDF has no document to render for the person who asked").catch(() => {});
     return null;
   }
+  const pdf = rendered.pdf;
   const sent = await sendWhatsAppDocument(waId, { content: pdf, filename: quotePdfFileName(quote.number), contentType: "application/pdf" }, `Draft quote Q-${quote.number} — for you. Not sent to the customer.`);
   if (!sent.ok) return sent.error ?? "WhatsApp document send failed";
   await logAudit({
