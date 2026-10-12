@@ -49,6 +49,23 @@ const sendAction = () => {
   return action.slice(action.indexOf("export async function sendEmailAction"), action.indexOf("export async function sendTestEmail"));
 };
 
+test("an email filed on one deal does not carry another deal's quote", () => {
+  // Review of #871–#874: once the customer's page can file an email on a chosen deal,
+  // attaching a DIFFERENT deal's quote would put that quotation on the wrong deal's
+  // history and mark it sent from a conversation about another deal.
+  const send = sendAction();
+  const attach = send.slice(send.indexOf('formData.getAll("attachQuote")'), send.indexOf("const secure = asSecureLinks"));
+  assert.match(attach, /if \(leadId && quote\.leadId && quote\.leadId !== leadId\) \{\s*return \{ error: `Quote Q-\$\{quote\.number\} belongs to a different deal of this customer/);
+  // Refused before the PDF is rendered, so before anything can be attached, sent or marked.
+  assert.ok(attach.indexOf("quote.leadId !== leadId") < attach.indexOf("await quotePdf(quote.id)"));
+  // As the rule reads it: the same deal passes; a quote on no deal passes; an email on no deal passes.
+  const refused = (emailDeal: string | null, quoteDeal: string | null) => Boolean(emailDeal && quoteDeal && quoteDeal !== emailDeal);
+  assert.equal(refused("A", "B"), true);
+  assert.equal(refused("A", "A"), false);
+  assert.equal(refused("A", null), false);
+  assert.equal(refused(null, "B"), false);
+});
+
 test("a quote is marked sent only after the email has gone", () => {
   const send = sendAction();
   const failed = send.indexOf("if (!result.ok) {");

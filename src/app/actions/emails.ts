@@ -355,6 +355,14 @@ export async function sendEmailAction(
     // and the email is logged there. Another customer's quote does not belong in it.
     const theirs = (leadId && quote.leadId === leadId) || (contactId && quote.contactId === contactId);
     if (!theirs) return { error: `Quote Q-${quote.number} belongs to a different customer.` };
+    // AN EMAIL ON ONE DEAL DOES NOT CARRY ANOTHER DEAL'S QUOTE. The customer can
+    // have several deals, and the email is filed on the one it was written about:
+    // attaching deal B's quote to an email filed on deal A would put B's quotation
+    // on A's history, and mark B's quote sent from a conversation about A. A
+    // quote that is on no deal (made for the customer directly) may go with any.
+    if (leadId && quote.leadId && quote.leadId !== leadId) {
+      return { error: `Quote Q-${quote.number} belongs to a different deal of this customer — send it from that deal, or choose that deal for this email. Nothing was sent.` };
+    }
     if (quote.supersededAt) return { error: `Quote Q-${quote.number} has been replaced by a revision — attach the latest one.` };
     if (quote._count.items === 0) return { error: `Add at least one line to quote Q-${quote.number} before sending it.` };
     const pdf = await quotePdf(quote.id);
