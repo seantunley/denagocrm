@@ -174,7 +174,9 @@ test("lookups follow the module and the page: deliveries need automotive, prices
   assert.match(deliveries, /isModuleEnabled\("automotive"\)/);
   const knowledge = lib.slice(lib.indexOf("async function knowledge("), lib.indexOf("async function knowledge(") + 1200);
   assert.match(knowledge, /const seesProducts = await hasAnyPermission\(user, "leads\.view_all", "leads\.view_owned", "quotes\.view_all", "quotes\.view_owned", "quotes\.create"\);/);
-  assert.match(knowledge, /seesProducts\s*\? prisma\.product\.findMany/);
+  // The catalogue query itself lives in lib/catalogueLookup.ts (it searches the whole catalogue);
+  // what is pinned here is that it runs ONLY for someone who sees products.
+  assert.match(knowledge, /seesProducts\s*\? knowledgeProducts\(words\) : Promise\.resolve\(\[\]\)/);
 });
 
 test("a linked phone is a sign-in: the schema carries the session version it was linked under", () => {

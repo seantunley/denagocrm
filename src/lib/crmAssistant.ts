@@ -52,7 +52,8 @@ import { webLookup } from "./crmAssistantWeb";
 import { assistantWebAllowed } from "./assistantUser";
 import { MAX_IMAGES_PER_QUESTION } from "./assistantImage";
 import { applyLearn, loadLearned, loadPlaybook, markNotesUsed, saveDecision, visibleTo } from "./assistantMemoryStore";
-import { ACTION_INSTRUCTIONS, CHOICE_INSTRUCTIONS, matchCatalogueProduct, quoteBuildText, type ActionCard, type ProposedAction, type QuoteBuildLine } from "./assistantActions";
+import { ACTION_INSTRUCTIONS, CHOICE_INSTRUCTIONS, quoteBuildText, type ActionCard, type ProposedAction, type QuoteBuildLine } from "./assistantActions";
+import { knowledgeProducts, resolveCatalogueProduct } from "./catalogueLookup";
 import { describeSchedule, nextRun, scheduleInput } from "./assistantSchedule";
 import { describeWatch, watchInput } from "./assistantWatchRules";
 import {
@@ -813,20 +814,14 @@ async function knowledge(user: User, raw: z.infer<typeof knowledgeArgs>): Promis
   const seesProducts = await hasAnyPermission(user, "leads.view_all", "leads.view_owned", "quotes.view_all", "quotes.view_owned", "quotes.create");
   const [company, products, approved] = await Promise.all([
     getCompanyProfile().catch(() => null),
-    seesProducts
-      ? prisma.product.findMany({
-          where: { active: true, deletedAt: null },
-          orderBy: { name: "asc" },
-          take: 60,
-          select: { id: true, name: true, category: true, basePriceCents: true, description: true, showcaseTagline: true, showcaseSpecs: true },
-        })
-      : Promise.resolve([]),
+    // A small catalogue whole; a large one where it matches the topic — searched
+    // in the database, across ALL of it (lib/catalogueLookup.ts). It used to take
+    // the first 60 by name and look inside those, so a product further down the
+    // alphabet was never shown, and so could never be quoted.
+    seesProducts ? knowledgeProducts(words) : Promise.resolve([]),
     searchBotKnowledge(topic).catch(() => []),
   ]);
-  // A small catalogue is worth showing whole; a large one only where it matches.
-  const relevant = products.length <= 15
-    ? products
-    : products.filter((p) => words.some((w) => `${p.name} ${p.category ?? ""} ${p.description ?? ""}`.toLowerCase().includes(w)));
+  const relevant = products;
 
   let competitors: unknown[] = [];
   if ((await hasPermission(user, "competitors.view")) && (await isModuleEnabled("automation"))) {
@@ -2285,33 +2280,39 @@ async function resolveActions(user: User, proposals: ProposedAction[]): Promise<
       let forDeal: { id: string; label: string } | null = null;
       let customerId: string | null = null;
       let customerName = "";
-      if (p.leadId) {
-        if (!(await canAccessLead(user, p.leadId))) continue;
-        const deal = await prisma.lead.findUnique({ where: { id: p.leadId }, select: { name: true, title: true, contactId: true } });
+      // WHICH RECORD THE ID NAMES. A deal's id belongs in leadId and a customer's
+      // in contactId, and the instructions say so twice — but an id put in the
+      // wrong one of the two used to drop the quote without a word. So an id
+      // given as a customer that is no customer here is read as a deal. It is
+      // only ever looked up as what it IS, with that record's own access check.
+      let dealId = p.leadId ?? null;
+      let contactId = dealId ? null : p.contactId ?? null;
+      if (contactId && !(await prisma.contact.findFirst({ where: { id: contactId }, select: { id: true } }))) {
+        dealId = contactId;
+        contactId = null;
+      }
+      if (dealId) {
+        if (!(await canAccessLead(user, dealId))) continue;
+        const deal = await prisma.lead.findUnique({ where: { id: dealId }, select: { name: true, title: true, contactId: true } });
         // A deal with no customer linked cannot be quoted: a quote belongs to a customer.
         if (!deal?.contactId) continue;
-        forDeal = { id: p.leadId, label: `${deal.name} — ${deal.title}` };
+        forDeal = { id: dealId, label: `${deal.name} — ${deal.title}` };
         customerId = deal.contactId;
         customerName = deal.name;
-      } else if (p.contactId) {
-        if (!(await canAccessContact(user, p.contactId))) continue;
-        const contact = await prisma.contact.findFirst({ where: { id: p.contactId, deletedAt: null }, select: { firstName: true, lastName: true } });
+      } else if (contactId) {
+        if (!(await canAccessContact(user, contactId))) continue;
+        const contact = await prisma.contact.findFirst({ where: { id: contactId, deletedAt: null }, select: { firstName: true, lastName: true } });
         if (!contact) continue;
-        customerId = p.contactId;
+        customerId = contactId;
         customerName = [contact.firstName, contact.lastName].filter(Boolean).join(" ");
       }
       if (!customerId) continue;
       // CATALOGUE PRODUCTS ON SALE ONLY, read through the workspace's own client —
       // another workspace's product reads as missing. A line names its product by
-      // id, or by name: a name that is not exactly one product proposes nothing
-      // (matchCatalogueProduct). The PRICE is the catalogue's, never the model's.
-      const catalogue = await prisma.product.findMany({
-        where: { active: true, deletedAt: null },
-        orderBy: { name: "asc" },
-        take: 200,
-        select: { id: true, name: true, basePriceCents: true },
-      });
-      const matched = p.lines.map((line) => matchCatalogueProduct(catalogue, line));
+      // id, or by name: a name that is not exactly one product proposes nothing.
+      // Looked up in the database across the WHOLE catalogue (resolveCatalogueProduct)
+      // — not inside a first page of it. The PRICE is the catalogue's, never the model's.
+      const matched = await Promise.all(p.lines.map((line) => resolveCatalogueProduct(line)));
       if (matched.some((product) => !product)) continue;
       const lines: QuoteBuildLine[] = p.lines.map((line, at) => {
         const product = matched[at]!;
