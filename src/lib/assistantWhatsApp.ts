@@ -538,7 +538,7 @@ export async function sendUpdatesToLinkedPhone(
     const customer = await matchByPhone(link.waId);
     if (customer.contactId || customer.leadId || customer.ambiguous) return "not_safe";
 
-    if (!opts.windowOpen && !replyWindowOpen(link.lastInboundAt)) return await nudgeWithTemplate(tenantId, link);
+    if (!opts.windowOpen && !replyWindowOpen(link.lastInboundAt)) return await nudgeWithTemplate(tenantId, link, outOfTime);
 
     // ALL OF IT, a batch at a time until none is left — "tap and everything that
     // was waiting arrives" is the promise. Every pass either finishes updates
@@ -549,7 +549,7 @@ export async function sendUpdatesToLinkedPhone(
         const refused = await sendOneUpdate(tenantId, userId, link.waId, turn, outOfTime);
         if (refused === OUT_OF_TIME) return "more";
         // Meta saying "24 hours" although our clock said otherwise: the template is the way through.
-        if (refused !== null) return outsideReplyWindow(refused) && !opts.windowOpen ? await nudgeWithTemplate(tenantId, link) : "failed";
+        if (refused !== null) return outsideReplyWindow(refused) && !opts.windowOpen ? await nudgeWithTemplate(tenantId, link, outOfTime) : "failed";
         done++;
       }
     }
@@ -631,7 +631,15 @@ const OUT_OF_TIME = Symbol("out of time");
  *    is NOT sent again for NUDGE_EVERY_MS. Repeating a rejected template helps
  *    nobody and costs the number its standing; the owner fixes the setting.
  */
-async function nudgeWithTemplate(tenantId: string, link: { id: string; waId: string | null; nudgedAt: Date | null; nudgeFailedAt: Date | null }): Promise<UpdateDelivery> {
+async function nudgeWithTemplate(
+  tenantId: string,
+  link: { id: string; waId: string | null; nudgedAt: Date | null; nudgeFailedAt: Date | null },
+  outOfTime: () => boolean,
+): Promise<UpdateDelivery> {
+  // A template is a send like any other, and waits on WhatsApp like any other:
+  // with no time left for one it is not started — nothing is claimed, and the
+  // next tick sends it.
+  if (outOfTime()) return "waiting";
   const template = parseUpdateTemplate(await getSetting(ASSISTANT_WHATSAPP_TEMPLATE_KEY).catch(() => null));
   if (!template || !link.waId) return "waiting";
   if (link.nudgedAt && Date.now() - link.nudgedAt.getTime() < NUDGE_EVERY_MS) return "waiting";

@@ -1287,6 +1287,20 @@ test("a budget already spent sends nothing at all, and one that runs out mid-bri
   assert.deepEqual(state.sent.map((s) => s.text), parts);
 });
 
+test("the template waits on WhatsApp too: with no time left it is not started, and not counted as made", async () => {
+  state.template = "assistant_update_ready";
+  const link = verified("u1", STAFF);
+  link.lastInboundAt = new Date(Date.now() - 30 * HOUR);
+  waitingTurn("brief");
+  // Under the 20 seconds a send may need.
+  assert.equal(await sendUpdatesToLinkedPhone("t1", "u1", { shouldStop: (reserveMs = 0) => 10_000 < reserveMs }), "waiting");
+  assert.equal(state.templateTries, 0);
+  assert.equal(link.nudgedAt, null, "nothing claimed: the next tick is free to send it");
+  // The next tick has time.
+  assert.equal(await sendUpdatesToLinkedPhone("t1", "u1", PLENTY), "nudged");
+  assert.equal(state.templatesSent.length, 1);
+});
+
 test("a sender that lost its claim cannot write over the one that took it", async () => {
   verified("u1", STAFF).lastInboundAt = new Date();
   const { turn, parts } = longTurn("overtaken");
