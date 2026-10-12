@@ -15,6 +15,7 @@ import AssistantChat from "@/components/AssistantChat";
 import ConfirmActionDialog from "@/components/ConfirmActionDialog";
 import { deleteAssistantNote, saveMyAssistantNote } from "@/app/actions/assistantNotes";
 import { deleteAssistantSchedule, setAssistantScheduleActive } from "@/app/actions/assistantSchedules";
+import EditScheduleDialog from "@/components/EditScheduleDialog";
 import { deleteAssistantWatch, setAssistantWatchActive } from "@/app/actions/assistantWatches";
 import { ONE_SHOT_KINDS, type WatchKind } from "@/lib/assistantWatchRules";
 import { SaveForm, SaveButton } from "@/components/SaveForm";
@@ -110,6 +111,7 @@ export default async function AssistantPage() {
                   </p>
                 </div>
                 <div className="flex shrink-0 gap-3">
+                  <EditScheduleDialog schedule={{ id: s.id, question: s.question, cadence: s.cadence, weekday: s.weekday, timeOfDay: s.timeOfDay, onDate: s.onDate }} />
                   <ConfirmActionDialog
                     trigger={<button type="button" className="text-xs text-muted-foreground hover:text-foreground">{s.active ? "Pause" : "Resume"}</button>}
                     title={s.active ? "Pause this?" : "Resume this?"}

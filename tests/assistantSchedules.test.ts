@@ -247,13 +247,13 @@ test("pause, resume and delete act only on the caller's own schedule, behind the
   assert.doesNotMatch(actions, /export (const|function|class|type|let)\b/, "a server-action file exports only async functions");
   const gate = actions.slice(actions.indexOf("async function gate"), actions.indexOf("async function ownSchedule"));
   assert.match(gate, /await requireAnyPermission\(\.\.\.ASSISTANT_PERMISSIONS\);\s*if \(!\(await isModuleEnabled\("automation"\)\)\)/);
-  for (const name of ["setAssistantScheduleActive", "deleteAssistantSchedule"]) {
+  for (const name of ["setAssistantScheduleActive", "updateAssistantSchedule", "deleteAssistantSchedule"]) {
     const body = actions.slice(actions.indexOf(`export async function ${name}`));
     assert.match(body.slice(0, 300), /const user = await gate\(\);\s*const schedule = await ownSchedule\(id, user\.id\);/, name);
   }
   // Every read and write of a schedule is keyed on the caller and the workspace as well as the id.
   const queries = actions.match(/assistantSchedule\.\w+\(\{\s*where: \{[^}]*\}/g) ?? [];
-  assert.equal(queries.length, 4);
+  assert.equal(queries.length, 5);
   for (const q of queries) {
     assert.match(q, /userId/, q);
     assert.match(q, /tenantId/, q);
@@ -264,6 +264,45 @@ test("pause, resume and delete act only on the caller's own schedule, behind the
   assert.match(actions, /const nextRunAt = nextRun\(schedule, new Date\(\)\);/);
   assert.match(actions, /withScheduleSlot\(user\.id,/);
   for (const audit of ["assistant.schedule_resumed", "assistant.schedule_paused", "assistant.schedule_deleted"]) assert.ok(actions.includes(audit), audit);
+});
+
+test("a scheduled question can be EDITED — by its owner, under the rules that created it, without changing whether it runs", () => {
+  // Before: only Pause and Delete. A typo or a different time meant deleting it and asking again (Sean, 2026-10-11).
+  const actions = code("src/app/actions/assistantSchedules.ts");
+  const edit = actions.slice(actions.indexOf("export async function updateAssistantSchedule"), actions.indexOf("export async function deleteAssistantSchedule"));
+  // The same validation as creating one: nothing a card could not have saved can be typed in.
+  assert.match(edit, /const parsed = scheduleInput\.safeParse\(input\);\s*if \(!parsed\.success\) refuse\(/);
+  // Only the caller's own row, named by id AND person AND workspace.
+  assert.match(edit, /updateMany\(\{\s*where: \{ id: schedule\.id, tenantId: schedule\.tenantId, userId: user\.id \},/);
+  // Running stays running (from now, no backfill); paused stays paused. `active` is never written here.
+  assert.match(edit, /const nextRunAt = schedule\.active \? nextRun\(next, new Date\(\)\) : null;/);
+  assert.match(edit, /if \(schedule\.active && !nextRunAt\) refuse\("That time has already passed — choose a later one\."\);/);
+  assert.doesNotMatch(edit, /\bactive:/, "editing does not pause or resume — that has its own limit on how many may run");
+  assert.doesNotMatch(edit, /userId: (?!user\.id)|tenantId: (?!schedule\.tenantId)/, "it cannot be moved to another person or workspace");
+  assert.match(edit, /data: \{ question: next\.question, cadence: next\.cadence, weekday: next\.weekday \?\? null, timeOfDay: next\.timeOfDay, onDate: next\.onDate \?\? null, nextRunAt \},/);
+  // Audited by timing only — the question may name a customer.
+  assert.match(edit, /action: "assistant\.schedule_edited"/);
+  const audit = edit.slice(edit.indexOf("await logAudit("), edit.indexOf("revalidatePath"));
+  assert.doesNotMatch(audit, /\.question|\$\{[^}]*question/, "the question text stays out of the audit trail");
+  assert.match(audit, /describeSchedule\(schedule\)\} → \$\{describeSchedule\(next\)\}/, "what it was, and what it is now");
+
+  // What the rules do with an edit (the same parser the action uses).
+  const ok = scheduleInput.safeParse({ question: "Which notes were added yesterday?", cadence: "weekly", weekday: 1, timeOfDay: "07:10" });
+  assert.ok(ok.success && ok.data.timeOfDay === "07:00", "a time snaps to the half hour it will really run at");
+  assert.equal(scheduleInput.safeParse({ question: "x", cadence: "daily", weekday: 1, timeOfDay: "08:00" }).success, false, "a weekday only with weekly");
+  assert.equal(scheduleInput.safeParse({ question: "x", cadence: "once", timeOfDay: "08:00" }).success, false, "a one-off needs its date");
+  assert.equal(scheduleInput.safeParse({ question: "  ", cadence: "daily", timeOfDay: "08:00" }).success, false, "a question is required");
+  assert.equal(scheduleInput.safeParse({ question: "x", cadence: "daily", timeOfDay: "08:00", userId: "someone-else" }).success, false, "nothing extra is accepted");
+
+  // On the page: an Edit beside Pause and Delete, offering only what the rules allow.
+  const page = code("src/app/(app)/assistant/page.tsx");
+  assert.match(page, /<EditScheduleDialog schedule=\{\{ id: s\.id, question: s\.question, cadence: s\.cadence, weekday: s\.weekday, timeOfDay: s\.timeOfDay, onDate: s\.onDate \}\} \/>/);
+  const dialog = code("src/components/EditScheduleDialog.tsx");
+  assert.match(dialog, /await updateAssistantSchedule\(schedule\.id, \{/);
+  assert.match(dialog, /\.\.\.\(form\.cadence === "weekly" \? \{ weekday: form\.weekday \} : \{\}\),\s*\.\.\.\(form\.cadence === "once" \? \{ onDate: form\.onDate \} : \{\}\),/);
+  assert.match(dialog, /Array\.from\(\{ length: 48 \}/, "half-hour times only");
+  assert.match(dialog, /if \(result\?\.error\) \{\s*setError\(result\.error\);\s*return;/, "a refusal is shown in the dialog, which stays open");
+  assert.doesNotMatch(dialog, /window\.confirm|\bconfirm\(|\balert\(/, "never a browser dialog");
 });
 
 test("the cron is registered on the shared beat and runs per workspace", () => {
