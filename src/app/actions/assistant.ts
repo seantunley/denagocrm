@@ -7,8 +7,11 @@ import { assistantTurnsToday } from "@/lib/crmAssistant";
 import { getSetting } from "@/lib/settings";
 import { isCodexConnected } from "@/lib/codex";
 import { ASSISTANT_PROFILE_KEY, parseProfile } from "@/lib/assistantSoul";
-import { QUOTE_BUILD_MAX_LINES, STALE_CARD, type ActionCard } from "@/lib/assistantActions";
+import { QUOTE_ADD_MAX_FEES, QUOTE_ADD_MAX_FEE_RANDS, QUOTE_BUILD_MAX_LINES, STALE_CARD, type ActionCard } from "@/lib/assistantActions";
 import { editorDefaults, quoteFromLeadDefaults } from "@/lib/quoteFromLead";
+import { calendarDateIn } from "@/lib/quoteExpiry";
+import { QUOTE_PDF_SOURCE } from "@/lib/assistantWhatsAppRules";
+import { tenantOrigin } from "@/lib/tenantOrigin";
 import { payableTotalCents } from "@/lib/pricing";
 import { formatZAR } from "@/lib/format";
 
@@ -23,7 +26,7 @@ import { createTestDriveBooking } from "@/app/actions/testDrives";
 import { createStaffAvailability } from "@/app/actions/staffAvailability";
 import { sendWhatsAppMessage } from "@/app/actions/whatsapp";
 import { sendEmailAction } from "@/app/actions/emails";
-import { canAccessLead } from "@/lib/permissions";
+import { canAccessLead, canAccessQuote, hasPermission } from "@/lib/permissions";
 import { createWatchForUser } from "@/lib/assistantWatch";
 import { assistantVoiceRepliesOn } from "@/lib/assistantVoice";
 import { ASSISTANT_PERMISSIONS } from "@/lib/assistantUser";
@@ -74,6 +77,23 @@ export async function runAssistantAction(
     // the change came from the assistant's proposal, on the lead's timeline.
     const confirmed = (what: string, leadId: string) =>
       logAudit({ action: "assistant.action_confirmed", summary: `Confirmed the assistant's proposal: ${what}`, user, leadId });
+    // A quote's PDF queued for this person (saveQuoteDraft, pdfToMyWhatsApp): when
+    // Confirm was pressed in the CRM, try the send now, briefly — the click does
+    // not wait on WhatsApp, and whatever is not sent in that time is the sweep's.
+    // (On WhatsApp the caller sends it itself, after its own "done" message.)
+    // Nothing here may fail the action: the quote is saved.
+    const sendQueuedPdfNow = async () => {
+      if (via !== "crm") return;
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      await Promise.race([
+        (async () => {
+          const { sendUpdatesToLinkedPhone } = await import("@/lib/assistantWhatsApp");
+          return sendUpdatesToLinkedPhone(ownedWriteTenantId(), user.id);
+        })().catch(() => "failed" as const),
+        new Promise((resolve) => { timer = setTimeout(resolve, QUOTE_PDF_SEND_WAIT_MS); }),
+      ]);
+      clearTimeout(timer);
+    };
     switch (card?.kind) {
       case "schedule": {
         // Saved for the SIGNED-IN person, always: nothing on the card says who
@@ -324,23 +344,113 @@ export async function runAssistantAction(
         // Confirmed in the CRM: try the send now, briefly — the click does not wait
         // on WhatsApp, and whatever is not sent in that time is the sweep's. (On
         // WhatsApp the caller sends it itself, after its own "done" message.)
-        if (via === "crm") {
-          let timer: ReturnType<typeof setTimeout> | undefined;
-          // Nothing here may fail the action: the quote exists, and the sweep sends what this does not.
-          await Promise.race([
-            (async () => {
-              const { sendUpdatesToLinkedPhone } = await import("@/lib/assistantWhatsApp");
-              return sendUpdatesToLinkedPhone(ownedWriteTenantId(), user.id);
-            })().catch(() => "failed" as const),
-            new Promise((resolve) => { timer = setTimeout(resolve, QUOTE_PDF_SEND_WAIT_MS); }),
-          ]);
-          clearTimeout(timer);
-        }
+        await sendQueuedPdfNow();
         return {
           ok: true,
           success: `Draft quote Q-${saved.quote.number} created${total ? ` — ${total}` : ""}. It has NOT been sent to the customer.`,
           href: `/quotes?edit=${saved.quote.id}`,
           quote: { id: saved.quote.id, number: saved.quote.number },
+        };
+      }
+      case "quote_pdf": {
+        // THEIR OWN COPY, TO THEIR OWN PHONE. The card names a quote and no
+        // recipient: it is queued as an update for the signed-in person, and the
+        // assistant's delivery sends it to the phone THEY linked — re-verified at
+        // send time, refused if it is a customer's number, and the quote re-checked
+        // against their access there too. Nothing on the quote changes.
+        const quote = await prisma.quote.findFirst({ where: { id: String(card.quoteId ?? ""), deletedAt: null }, select: { id: true, number: true, status: true, leadId: true, contactId: true } });
+        if (!quote || !(await canAccessQuote(user, quote.id))) return untouched("That quote is no longer there.");
+        const linked = await prisma.assistantPhoneLink.findFirst({ where: { userId: user.id, verifiedAt: { not: null }, waId: { not: null } }, select: { id: true } });
+        if (!linked) return untouched("Link your WhatsApp first (Ask page → DAX on WhatsApp) — the PDF goes to your own linked number.");
+        const tenantId = ownedWriteTenantId();
+        const origin = (await tenantOrigin(tenantId).catch(() => "")).replace(/\/$/, "");
+        await prisma.assistantTurn.create({
+          data: {
+            tenantId,
+            userId: user.id,
+            source: QUOTE_PDF_SOURCE,
+            quoteId: quote.id,
+            question: `PDF of quote Q-${quote.number}`,
+            answer: `Here is quote Q-${quote.number} as it stands now (${quote.status}). This copy has NOT been sent to the customer.\n${origin}/quotes?edit=${quote.id}`,
+          },
+        });
+        await logAudit({
+          action: "assistant.action_confirmed",
+          summary: `Confirmed the assistant's proposal: send me the PDF of quote Q-${quote.number}`,
+          user,
+          ...(quote.leadId ? { leadId: quote.leadId } : quote.contactId ? { contactId: quote.contactId } : {}),
+        });
+        await sendQueuedPdfNow();
+        return { ok: true, success: `The PDF of Q-${quote.number} is on its way to your WhatsApp. It has NOT been sent to the customer.`, href: `/quotes?edit=${quote.id}` };
+      }
+      case "quote_add": {
+        // ADDS to a draft, through the same door the quote editor saves through:
+        // everything already on the quote goes back exactly as it is (each row by
+        // its id, so its hidden columns survive), with the new fees and lines after
+        // it. saveQuoteDraft re-checks that this person may edit this quote and that
+        // it is still an editable draft — sent, signed or out for signature refuses.
+        const fees = Array.isArray(card.fees) ? card.fees : [];
+        const lines = Array.isArray(card.lines) ? card.lines : [];
+        if (fees.length + lines.length === 0 || fees.length > QUOTE_ADD_MAX_FEES || lines.length > QUOTE_BUILD_MAX_LINES) return untouched("That isn't valid — ask again.");
+        if (fees.some((fee) => !Number.isInteger(fee.amountCents) || fee.amountCents <= 0 || fee.amountCents > QUOTE_ADD_MAX_FEE_RANDS * 100 || !String(fee.label ?? "").trim())) {
+          return untouched("That isn't valid — ask again.");
+        }
+        const quote = await prisma.quote.findFirst({ where: { id: String(card.quoteId ?? ""), deletedAt: null }, include: { items: { orderBy: { sortOrder: "asc" } }, fees: { orderBy: { sortOrder: "asc" } } } });
+        // Asked here as a yes/no: saveQuoteDraft's own check REDIRECTS, which a Confirm tapped on WhatsApp has nowhere to follow.
+        if (!quote || !(await hasPermission(user, "quotes.edit")) || !(await canAccessQuote(user, quote.id))) return untouched("That quote is no longer there.");
+        if (quote.status !== "draft" || !quote.contactId) return untouched("That quote is no longer a draft, so it can't be added to — revise it in the CRM.");
+        const products = await prisma.product.findMany({
+          where: { id: { in: [...new Set(lines.map((line) => String(line.productId)))] }, active: true, deletedAt: null },
+          select: { id: true, name: true, basePriceCents: true },
+        });
+        const byId = new Map(products.map((product) => [product.id, product]));
+        if (lines.some((line) => byId.get(line.productId)?.basePriceCents !== line.unitPriceCents)) {
+          return untouched("The catalogue changed since DAX suggested this — ask again to see today's prices.");
+        }
+        const { regional } = await quoteFromLeadDefaults();
+        const saved = await saveQuoteDraft({
+          id: quote.id,
+          contactId: quote.contactId,
+          validUntil: quote.validUntil ? calendarDateIn(quote.validUntil, regional.timeZone) : null,
+          terms: quote.terms ?? "",
+          intent: "draft",
+          taxInclusive: quote.taxInclusive,
+          depositType: quote.depositType === "percent" || quote.depositType === "amount" ? quote.depositType : null,
+          depositValue: quote.depositValue,
+          pdfToMyWhatsApp: true,
+          items: [
+            ...quote.items.map((item) => ({
+              id: item.id, description: item.description, qty: item.qty, unitPriceCents: item.unitPriceCents, productId: item.productId,
+              colorPreference: item.colorPreference, discountPct: item.discountPct, taxRatePct: item.taxRatePct,
+            })),
+            ...lines.map((line) => {
+              const product = byId.get(line.productId)!;
+              return {
+                description: product.name, qty: line.qty, unitPriceCents: product.basePriceCents, productId: product.id,
+                discountPct: line.discountPct, ...(line.colour ? { colorPreference: line.colour } : {}),
+              };
+            }),
+          ],
+          fees: [
+            ...quote.fees.map((fee) => ({ id: fee.id, label: fee.label, kind: fee.kind === "delivery" ? "delivery" as const : "fee" as const, amountCents: fee.amountCents, taxRatePct: fee.taxRatePct })),
+            ...fees.map((fee) => ({ label: String(fee.label).trim(), kind: fee.delivery ? "delivery" as const : "fee" as const, amountCents: fee.amountCents })),
+          ],
+        });
+        if (!saved.ok) return { ok: false, error: saved.error };
+        await logAudit({
+          action: "assistant.action_confirmed",
+          summary: `Confirmed the assistant's proposal: add to draft quote Q-${saved.quote.number}`,
+          user,
+          ...(quote.leadId ? { leadId: quote.leadId } : { contactId: quote.contactId }),
+        });
+        const after = await prisma.quote.findUnique({ where: { id: quote.id }, include: { items: true, fees: true } }).catch(() => null);
+        const total = after ? formatZAR(Math.round(payableTotalCents(after))) : null;
+        await sendQueuedPdfNow();
+        return {
+          ok: true,
+          success: `Draft quote Q-${saved.quote.number} updated${total ? ` — now ${total}` : ""}. It has NOT been sent to the customer.`,
+          href: `/quotes?edit=${quote.id}`,
+          quote: { id: quote.id, number: saved.quote.number },
         };
       }
       default:

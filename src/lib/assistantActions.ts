@@ -26,6 +26,9 @@ const minutes = z.number().int().min(15).max(480);
 const reason = z.string().trim().min(3).max(160).optional();
 /** The most lines the assistant may put on a quote it builds. A longer quote is built in the editor. */
 export const QUOTE_BUILD_MAX_LINES = 10;
+/** Fees the assistant may add to a draft in one go, and the most one may be (rands). More than that is the editor's. */
+export const QUOTE_ADD_MAX_FEES = 5;
+export const QUOTE_ADD_MAX_FEE_RANDS = 1_000_000;
 
 export const proposedAction = z.discriminatedUnion("type", [
   z.object({
@@ -110,6 +113,33 @@ export const proposedAction = z.discriminatedUnion("type", [
     ).min(1).max(QUOTE_BUILD_MAX_LINES),
     reason,
   }).strict(),
+  // ADD to a quote that is still a DRAFT (Sean, 2026-10-12: "Please add R5000
+  // Delivery Fee to the quote" was refused). `quote` is its number ("Q-1030").
+  // A fee carries the amount the PERSON said, in rands — there is no catalogue
+  // to take it from — and the card shows it before anything is saved. A product
+  // line is the same as on quote_build: catalogue product, catalogue price.
+  // It only adds: nothing already on the quote is changed or removed.
+  z.object({
+    type: z.literal("quote_add"),
+    quote: text.max(40),
+    fees: z.array(
+      z.object({ label: text.max(120), amount: z.number().positive().max(QUOTE_ADD_MAX_FEE_RANDS), delivery: z.boolean().optional() }).strict(),
+    ).max(QUOTE_ADD_MAX_FEES).optional(),
+    lines: z.array(
+      z.object({
+        productId: z.string().trim().min(10).max(40).optional(),
+        product: text.max(120).optional(),
+        qty: z.number().int().min(1).max(500),
+        discountPct: z.number().min(0).max(100).optional(),
+        colour: text.max(60).optional(),
+      }).strict(),
+    ).max(QUOTE_BUILD_MAX_LINES).optional(),
+    reason,
+  }).strict(),
+  // "Send me the PDF of Q-1030" (Sean, 2026-10-12): the quote as it stands now, to
+  // the linked WhatsApp of the person asking. It names a quote and nothing else —
+  // there is no recipient to give, so it can only ever go to them.
+  z.object({ type: z.literal("quote_pdf"), quote: text.max(40), reason }).strict(),
   // A question to run later, as the person — no lead: it names its own subject.
   // Cross-field rules (weekday only for weekly…) are checked by scheduleInput
   // when it becomes a card and again when it is saved.
@@ -132,22 +162,40 @@ export const QUOTE_BUILD_RULE =
   "ASK FIRST for everything you do not have, all in one message: which customer, which product(s), how many of each, any discount (a percentage, per line), and the colour if they want one. " +
   "A QUOTE IS FOR A CUSTOMER — A LEAD IS NOT REQUIRED. An existing customer who wants another quote is existing business: quote them directly with contactId (lead_brief lists matching customers with their contactId when there is no lead). Use leadId instead only when the quote is for one of their open deals — the two are different ids and are never interchangeable: a contactId goes ONLY in contactId, a leadId ONLY in leadId, and a task gives one of them, not both; if they have several open deals and it is not clear which, ask which one or whether it is separate from all of them. Never say a lead is needed, and never tell them to create one first. " +
   "Products come ONLY from the catalogue. ALWAYS look the catalogue up with knowledge BEFORE you answer anything about a quote — never say you cannot verify a product without having looked. Name each line's product by its productId from those results (or, failing that, \"product\" with its name exactly as the catalogue lists it). If what they named is not in the catalogue, say so and list what is. " +
-  "The price is always the catalogue's: never put a price in the task, and if they want a different price, a once-off line, a fee or a deposit, tell them that part is done on the quote in the CRM after it is created. " +
+  "The price is always the catalogue's: never put a price in the task, and if they want a different price, a once-off product line or a deposit, tell them that part is done on the quote in the CRM after it is created. A fee (delivery, licensing, admin) is added afterwards with quote_add. " +
   `At most ${QUOTE_BUILD_MAX_LINES} lines. One quote per task. ` +
   "Confirming creates a DRAFT quote for that customer (on the deal, when one was named); the PDF comes back to THEM on their linked WhatsApp. " +
+  "THE PDF IS DELIVERED FOR YOU, as its own document message, moments after they press Confirm, and again after a quote_add — you do not attach it yourself. So never say a PDF cannot be sent or attached on WhatsApp. If they ask where it is: it follows the confirmation, it is retried automatically for a day if WhatsApp was unavailable, and the quote is in the CRM meanwhile. To send one again, or the PDF of any quote they can open, propose quote_pdf. " +
   "It is NEVER sent to the customer and never marked sent: do not offer to send it, email it or WhatsApp it to the customer — sending a quote is their own step in the CRM. " +
   "quote (no lines) is only for \"start a quote\" with nothing said about what goes on it.";
+
+/** Adding to a draft quote (Sean, 2026-10-12: "Please add R5000 Delivery Fee to the quote"). */
+export const QUOTE_ADD_RULE =
+  "- quote_add: ADD to a quote that is still a DRAFT, when they ask (\"add R5000 delivery fee to the quote\", \"put another Nomad on Q-1030\"). \"quote\" is its number (Q-1030) — the one you were just talking about, and ask which if that is not clear. " +
+  "A fee goes in \"fees\": its label in their words, and \"amount\" in RANDS exactly as THEY said it (R5000 → 5000) — never an amount you worked out or assumed, and ask if they gave none; \"delivery\":true when it is a delivery charge. " +
+  "A product goes in \"lines\", exactly as on quote_build: catalogue products at the catalogue price, looked up first. " +
+  "It only ADDS. It cannot change or remove what is already on the quote, change a price, or add a deposit — say those are done on the quote in the CRM. Never say you cannot add a fee or a line to a draft quote. " +
+  "Only a draft: a quote already sent, signed or out for signature cannot be added to — say so. Confirming saves it and sends the updated PDF to THEM on their linked WhatsApp, never to the customer. " +
+  "Do not state a new total yourself — the card and the PDF carry it.";
+
+/** A quote's PDF, to the person asking (Sean, 2026-10-12: want a "send me the PDF of Q-1030" task). */
+export const QUOTE_PDF_RULE =
+  "- quote_pdf: SEND THEM a quote's PDF, when they ask for it (\"send me the PDF of Q-1030\", \"can I have that quote as a PDF\"). \"quote\" is its number. " +
+  "It goes to THEIR OWN linked WhatsApp, as the quote stands now — draft or not. It is never sent to the customer and changes nothing on the quote: " +
+  "if they want it sent to the customer, that is their own step in the CRM. Never say you cannot send a quote's PDF.";
 
 export const ACTION_INSTRUCTIONS = [
   "TASKS. You can't change anything yourself, but you can PROPOSE up to 4 tasks for the person to confirm with one click. Propose when they ask you to do something (\"remind me…\", \"give it to Donovan\", \"draft a message…\", \"book Anna a test drive\"), or offer one when you recommend a concrete next step.",
   'Put them under "actions" in the reply block:',
-  '"actions":[{"type":"follow_up","leadId":"<id>","when":"YYYY-MM-DDTHH:MM","activity":"call|whatsapp|email|meeting|todo","summary":"...","reason":"why this helps"},{"type":"note","leadId":"<id>","text":"...","pin":false},{"type":"customer_note","contactId":"<id>","text":"...","pin":false},{"type":"assign","leadId":"<id>","to":"<person>"},{"type":"stage","leadId":"<id>","stage":"<stage>"},{"type":"draft_message","leadId":"<id>","channel":"whatsapp|email","subject":"<email only>","body":"..."},{"type":"meeting","leadId":"<id>","when":"YYYY-MM-DDTHH:MM","minutes":60,"with":["<colleague>"],"summary":"..."},{"type":"test_drive","leadId":"<id>","when":"YYYY-MM-DDTHH:MM","minutes":60,"vehicle":"<demo vehicle name>"},{"type":"reschedule","activityId":"<id>","when":"YYYY-MM-DDTHH:MM"},{"type":"cancel_activity","activityId":"<id>"},{"type":"lost","leadId":"<id>","reason":"..."},{"type":"quote","leadId":"<id>"},{"type":"quote_build","contactId":"<the contactId of a CUSTOMER — a quote for the customer, on no deal>","lines":[{"productId":"<id>","qty":1,"discountPct":0,"colour":"<optional>"}]},{"type":"quote_build","leadId":"<the leadId of a DEAL — a quote for that deal; give no contactId>","lines":[{"productId":"<id>","qty":1}]},{"type":"schedule","question":"...","cadence":"once|daily|weekdays|weekly","weekday":1,"timeOfDay":"HH:MM","onDate":"YYYY-MM-DD"},{"type":"watch","kind":"quote_viewed|quote_unsigned|lead_quiet|test_drive_no_follow_up|delivery_deposit_due","quoteId":"Q-1042","leadId":"<id>","product":"<product>","thresholdHours":48,"thresholdDays":3}]',
+  '"actions":[{"type":"follow_up","leadId":"<id>","when":"YYYY-MM-DDTHH:MM","activity":"call|whatsapp|email|meeting|todo","summary":"...","reason":"why this helps"},{"type":"note","leadId":"<id>","text":"...","pin":false},{"type":"customer_note","contactId":"<id>","text":"...","pin":false},{"type":"assign","leadId":"<id>","to":"<person>"},{"type":"stage","leadId":"<id>","stage":"<stage>"},{"type":"draft_message","leadId":"<id>","channel":"whatsapp|email","subject":"<email only>","body":"..."},{"type":"meeting","leadId":"<id>","when":"YYYY-MM-DDTHH:MM","minutes":60,"with":["<colleague>"],"summary":"..."},{"type":"test_drive","leadId":"<id>","when":"YYYY-MM-DDTHH:MM","minutes":60,"vehicle":"<demo vehicle name>"},{"type":"reschedule","activityId":"<id>","when":"YYYY-MM-DDTHH:MM"},{"type":"cancel_activity","activityId":"<id>"},{"type":"lost","leadId":"<id>","reason":"..."},{"type":"quote","leadId":"<id>"},{"type":"quote_build","contactId":"<the contactId of a CUSTOMER — a quote for the customer, on no deal>","lines":[{"productId":"<id>","qty":1,"discountPct":0,"colour":"<optional>"}]},{"type":"quote_build","leadId":"<the leadId of a DEAL — a quote for that deal; give no contactId>","lines":[{"productId":"<id>","qty":1}]},{"type":"quote_add","quote":"Q-1030","fees":[{"label":"Delivery fee","amount":5000,"delivery":true}],"lines":[{"productId":"<id>","qty":1}]},{"type":"quote_pdf","quote":"Q-1030"},{"type":"schedule","question":"...","cadence":"once|daily|weekdays|weekly","weekday":1,"timeOfDay":"HH:MM","onDate":"YYYY-MM-DD"},{"type":"watch","kind":"quote_viewed|quote_unsigned|lead_quiet|test_drive_no_follow_up|delivery_deposit_due","quoteId":"Q-1042","leadId":"<id>","product":"<product>","thresholdHours":48,"thresholdDays":3}]',
   "- Add a short \"reason\" (under 160 characters) on any proposal when you know why it helps — the card shows it so the person sees the point before confirming. Skip it when the title already says everything.",
   "- watch: when they say \"tell me when / let me know if\" something happens — quote_viewed (quoteId: the customer opens that quote), quote_unsigned (viewed but not signed after thresholdHours; one quoteId or all theirs), lead_quiet (no customer contact for thresholdDays; one leadId, or every open lead for a product), test_drive_no_follow_up (a test drive done thresholdHours ago with nothing planned next), delivery_deposit_due (delivery within thresholdHours and no deposit). Only the fields that kind uses. It only ever tells THEM — it never contacts a customer. Offer one yourself when it would help (\"I can tell you when Anna opens it\").",
   "- schedule: a question for you to answer on your own LATER or REPEATEDLY (\"every Monday at 7 tell me which deals went quiet\", \"Friday at 9, has Anna signed?\"). weekday (0 = Sunday … 6 = Saturday) only with weekly; onDate only with once. Schedules run on the hour or half past, so timeOfDay is always HH:00 or HH:30 — if they ask for 07:10, propose 07:00 and say it runs on the half hour. It runs later with no conversation, so the question must stand alone — name the customer or thing (\"Has Anna Jacobs signed her quote?\"), never \"her\" or \"that deal\". No leadId. A plain reminder to do something with a lead (\"remind me to call Anna Friday\") is a follow_up, not a schedule.",
   "- meeting / test_drive: check the calendar (schedule) and, for a test drive, the demo vehicle's bookings (vehicles kind demo) BEFORE proposing — never a slot that clashes. vehicle is the demo vehicle's name exactly as listed. reschedule / cancel_activity need an activity id from the results.",
   "- lost: only when the person says the deal is lost or asks you to close it; the reason in their words. quote: starts a draft quote on the lead for them to fill in — nothing is sent.",
   QUOTE_BUILD_RULE,
+  QUOTE_ADD_RULE,
+  QUOTE_PDF_RULE,
   "- note goes on a lead. customer_note goes on a CUSTOMER — use it when they say \"customer\" or \"contact\", or when the person has no lead (lead_brief lists matching customers with their contactId when no lead matches). If several customers match, ask which one before proposing. pin:true only when they ask for the note to be pinned; it keeps it at the top of the timeline.",
   "- MISSING DETAILS: when a task needs something they have not told you — what to call it, the day or time, how long, why, which customer, who to give it to — ASK for exactly that in one short question, and offer choices where there are obvious ones (CHOICES). Ask for everything that is missing at once rather than one thing per message. Propose the task as soon as you have what it needs. Never invent a required detail, never guess a time, and never refuse or say it cannot be done because a detail is missing.",
   "- contactId, like leadId, must be an id that appears in the CRM results above.",
@@ -282,6 +330,18 @@ export function quoteBuildText(lines: readonly QuoteBuildLine[], money: (cents: 
   ].join("\n");
 }
 
+export type QuoteAddFee = { label: string; amountCents: number; delivery: boolean };
+/** What a quote_add card adds, as the person reads it before confirming. */
+export function quoteAddText(lines: readonly QuoteBuildLine[], fees: readonly QuoteAddFee[], money: (cents: number) => string): string {
+  return [
+    ...fees.map((fee) => `${fee.delivery ? "Delivery" : "Fee"}: ${fee.label} — ${money(fee.amountCents)}`),
+    ...lines.map((line) =>
+      `${line.qty} × ${line.description}${line.colour ? ` (${line.colour})` : ""} — ${money(line.unitPriceCents)} each${line.discountPct > 0 ? `, less ${line.discountPct}%` : ""}`,
+    ),
+    "Added to the DRAFT — nothing already on it changes, and it is not sent to the customer.",
+  ].join("\n");
+}
+
 export const STALE_CARD ="This changed since DAX suggested it — ask again to see where it stands now.";
 export type ActionCard =
   | (LeadCard & { kind: "follow_up"; when: string; activity: string; summary?: string })
@@ -299,6 +359,10 @@ export type ActionCard =
   // `lines` carries the catalogue price each was SHOWN at, so a price that changed since is caught at Confirm.
   // leadId null: a quote for the customer directly, on no deal — leadLabel is then the customer's name.
   | { id: string; kind: "quote_build"; leadId: string | null; leadLabel: string; title: string; reason?: string; contactId: string; lines: QuoteBuildLine[]; text: string }
+  // An addition to a DRAFT quote: `fees` at the amount the person said, `lines` at the catalogue price each was shown at.
+  | { id: string; kind: "quote_add"; leadId: string | null; leadLabel: string; title: string; reason?: string; quoteId: string; quoteNumber: number; contactId: string; lines: QuoteBuildLine[]; fees: QuoteAddFee[]; text: string }
+  // A quote's PDF to the confirmer's own linked WhatsApp — the card names a quote, never a recipient.
+  | { id: string; kind: "quote_pdf"; leadId: string | null; leadLabel: string; title: string; reason?: string; quoteId: string; quoteNumber: number }
   // The person's own calendar, never somebody else's: nothing on the card says whose it is, so it can only be the confirmer's.
   | { id: string; kind: "block_time"; leadId: null; leadLabel: string; title: string; allDay: boolean; start: string; end: string; summary: string; detail: string; reason?: string }
   | { id: string; kind: "reschedule"; activityId: string; title: string; when: string; leadId: string | null; leadLabel: string; fromDue: string; reason?: string }

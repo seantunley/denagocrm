@@ -82,7 +82,7 @@ const quoteDraftSchema = z.object({
     }),
   ).max(20).optional(),
   /**
-   * On a NEW draft: also queue this quote's PDF for the person saving it, to the
+   * On a draft (new, or one being added to): also queue this quote's PDF for the person saving it, to the
    * WhatsApp THEY linked (the assistant's "build me a quote"). It says who by
    * being who is signed in — there is no recipient to name — so the most anyone
    * can do with it is have their own draft sent to their own verified phone.
@@ -573,14 +573,29 @@ export async function saveQuoteDraft(input: QuoteDraftInput): Promise<QuoteDraft
       if (feeRows.length > 0) {
         await tx.quoteFee.createMany({ data: feeRows.map((row) => ({ ...row, quoteId: existing.id, tenantId: quoteTenantId })) });
       }
+      const rewritten = await tx.quote.findUniqueOrThrow({ where: { id: existing.id } });
+      // THE UPDATED PDF, FOR THE PERSON WHO CHANGED IT (the assistant's "add to
+      // the quote") — in this transaction for the same reason as on a new quote
+      // below, and to the same place: their own linked phone, never a customer.
+      // It is THEIR update, not a child of the quote, so it is filed in the
+      // workspace they are acting in — where their phone link is looked up.
+      if (data.pdfToMyWhatsApp && data.intent === "draft") {
+        const total = payableTotalCents({ items: itemRows, fees: feeRows, ...cpqQuoteData });
+        await tx.assistantTurn.create({
+          data: {
+            tenantId: actingTenant,
+            userId: user.id,
+            source: QUOTE_PDF_SOURCE,
+            quoteId: existing.id,
+            question: `Draft quote Q-${existing.number} updated`,
+            answer: `I've updated draft quote Q-${existing.number} (now ${formatZAR(Math.round(total))}). It has NOT been sent to the customer — sending it is your step.\n${quoteOrigin}/quotes?edit=${existing.id}`,
+          },
+        });
+      }
       // The rows as PERSISTED, so the audit figure below is the one the database
       // and every screen agree on. Built from normalizedItems it silently
       // counted a declined add-on that nothing else charges for.
-      return {
-        quote: await tx.quote.findUniqueOrThrow({ where: { id: existing.id } }),
-        itemRows,
-        feeRows,
-      };
+      return { quote: rewritten, itemRows, feeRows };
     }
 
     const number = await nextQuoteNumber(tx); // advisory-locked allocation (#11)

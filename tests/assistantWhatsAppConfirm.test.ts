@@ -427,10 +427,18 @@ test("A PINNED NOTE WHOSE PIN FAILS IS NOT WRITTEN TWICE: the note was saved, so
   const run = action.slice(action.indexOf("export async function runAssistantAction"), action.indexOf("export async function sendAssistantDraft"));
   assert.match(action, /const untouched = \(error: string\) => \(\{ ok: false as const, error, unchanged: true as const \}\);/);
   // (Five of them are quote_build's: lead gone, lead's customer changed, customer gone, invalid lines, catalogue changed — each before saveQuoteDraft.)
-  assert.equal((run.match(/return untouched\(/g) ?? []).length, 15);
-  const quoteBuild = run.slice(run.indexOf('case "quote_build": {'));
+  // (And five are quote_add's: nothing to add, an invalid fee, quote gone or not theirs, no longer a draft, catalogue changed.)
+  // (And two are quote_pdf's: quote gone or not theirs, no linked phone — each before its one write.)
+  assert.equal((run.match(/return untouched\(/g) ?? []).length, 22);
+  const quotePdfCase = run.slice(run.indexOf('case "quote_pdf": {'), run.indexOf('case "quote_add": {'));
+  assert.equal((quotePdfCase.slice(0, quotePdfCase.indexOf("assistantTurn.create(")).match(/return untouched\(/g) ?? []).length, 2);
+  assert.equal((quotePdfCase.slice(quotePdfCase.indexOf("assistantTurn.create(")).match(/untouched\(/g) ?? []).length, 0);
+  const quoteAdd = run.slice(run.indexOf('case "quote_add": {'));
+  assert.equal((quoteAdd.slice(0, quoteAdd.indexOf("await saveQuoteDraft(")).match(/return untouched\(/g) ?? []).length, 5);
+  assert.equal((quoteAdd.slice(quoteAdd.indexOf("await saveQuoteDraft("), quoteAdd.indexOf("default:")).match(/untouched\(/g) ?? []).length, 0);
+  const quoteBuild = run.slice(run.indexOf('case "quote_build": {'), run.indexOf('case "quote_pdf": {'));
   assert.equal((quoteBuild.slice(0, quoteBuild.indexOf("await saveQuoteDraft(")).match(/return untouched\(/g) ?? []).length, 5);
-  assert.equal((quoteBuild.slice(quoteBuild.indexOf("await saveQuoteDraft("), quoteBuild.indexOf("default:")).match(/untouched\(/g) ?? []).length, 0);
+  assert.equal((quoteBuild.slice(quoteBuild.indexOf("await saveQuoteDraft(")).match(/untouched\(/g) ?? []).length, 0);
   // …and never on an error handed back by the action a card delegates to.
   for (const delegated of run.match(/if \((?:!result\.ok|result\??\.error|!saved(?:\.ok)?)\) (?:\{\s*)?return [^\n]*/g) ?? []) {
     assert.doesNotMatch(delegated, /untouched|unchanged/, delegated);

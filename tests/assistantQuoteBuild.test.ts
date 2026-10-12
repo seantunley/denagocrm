@@ -98,14 +98,14 @@ test("A QUOTE IS FOR A CUSTOMER — a lead is not required", () => {
   assert.match(build, /leadId: forDeal\?\.id \?\? null,/);
 
   const actions = code("src/app/actions/assistant.ts");
-  const run = actions.slice(actions.indexOf('case "quote_build": {'), actions.indexOf("default:", actions.indexOf('case "quote_build": {')));
+  const run = actions.slice(actions.indexOf('case "quote_build": {'), actions.indexOf('case "quote_pdf": {'));
   // No deal: the customer must still be there; the save then checks this person may quote them.
   assert.match(run, /\} else \{\s*const customer = await prisma\.contact\.findFirst\(\{ where: \{ id: String\(card\.contactId \?\? ""\), deletedAt: null \}, select: \{ id: true \} \}\);\s*if \(!customer\) return untouched\("That customer is no longer there\."\);/);
   assert.match(run, /contactId: card\.contactId,\s*leadId: card\.leadId \?\? null,/);
   // Recorded on the deal when there is one, otherwise on the customer — never on nothing.
   assert.match(run, /\.\.\.\(card\.leadId \? \{ leadId: card\.leadId \} : \{ contactId: card\.contactId \}\),/);
-  assert.match(code("src/lib/assistantWhatsAppConfirm.ts"), /card\.kind === "quote_build" && !card\.leadId \? \{ contactId: card\.contactId \} : \{\}/);
-  assert.match(code("src/components/AssistantActionCard.tsx"), /card\.kind === "quote_build" && !card\.leadId \? `\/contacts\/\$\{card\.contactId\}`/);
+  assert.match(code("src/lib/assistantWhatsAppConfirm.ts"), /\(card\.kind === "quote_build" \|\| card\.kind === "quote_add"\) && !card\.leadId \? \{ contactId: card\.contactId \} : \{\}/);
+  assert.match(code("src/components/AssistantActionCard.tsx"), /\(card\.kind === "quote_build" \|\| card\.kind === "quote_add"\) && !card\.leadId \? `\/contacts\/\$\{card\.contactId\}`/);
 });
 
 test("a product can be named by its catalogue id or its catalogue NAME — and a name must mean exactly one product", () => {
@@ -153,7 +153,7 @@ test("the card is built from the CATALOGUE as the workspace has it, for someone 
 test("CONFIRM CREATES A DRAFT AND NOTHING ELSE: catalogue re-read, stale prices refused, never sent", () => {
   const actions = code("src/app/actions/assistant.ts");
   const at = actions.indexOf('case "quote_build": {');
-  const run = actions.slice(at, actions.indexOf("default:", at));
+  const run = actions.slice(at, actions.indexOf('case "quote_pdf": {'));
   assert.ok(at > 0);
   // Turned away BEFORE anything is written when the card no longer matches the world.
   assert.match(run, /if \(!lead\.contactId \|\| lead\.contactId !== card\.contactId\) return untouched\(STALE_CARD\);/);
@@ -191,7 +191,7 @@ test("THE PDF IS QUEUED WITH THE QUOTE — delivered wherever Confirm was presse
   // person, straight after the quote is saved, and the assistant's durable sender delivers.
   const actions = code("src/app/actions/assistant.ts");
   const at = actions.indexOf('case "quote_build": {');
-  const run = actions.slice(at, actions.indexOf("default:", at));
+  const run = actions.slice(at, actions.indexOf('case "quote_pdf": {'));
   // ATOMIC (second review of #872): the delivery record used to be written AFTER the
   // quote, in its own statement, with its failure swallowed — a built quote could exist
   // with nothing for the retrying delivery to find. It is now written by the save
@@ -201,23 +201,28 @@ test("THE PDF IS QUEUED WITH THE QUOTE — delivered wherever Confirm was presse
   const quotes = code("src/app/actions/quotes.ts");
   const tx = quotes.slice(quotes.indexOf("const result = await basePrisma.$transaction(async (tx) => {"), quotes.indexOf("if (!result) {"));
   const createdAt = tx.indexOf("const created = await tx.quote.create({");
-  const queuedAt = tx.indexOf("await tx.assistantTurn.create({");
+  const queuedAt = tx.indexOf("await tx.assistantTurn.create({", createdAt);
   assert.ok(createdAt > 0 && queuedAt > createdAt, "written on the SAME transaction client, after the quote row");
-  assert.equal((quotes.match(/assistantTurn\.create\(/g) ?? []).length, 1, "and nowhere outside it");
+  // Two, both inside the transaction: this one, and the one for a draft that was added to (assistantQuoteAdd.test.ts).
+  assert.equal((quotes.match(/assistantTurn\.create\(/g) ?? []).length, 2, "and nowhere outside it");
+  assert.equal((tx.match(/await tx\.assistantTurn\.create\(/g) ?? []).length, 2);
   const record = tx.slice(queuedAt, queuedAt + 620);
   // For the signed-in person only — the input names no recipient, and cannot.
   assert.match(record, /tenantId: actingTenant,\s*userId: user\.id,\s*source: QUOTE_PDF_SOURCE,\s*quoteId: created\.id,/);
   assert.match(quotes, /pdfToMyWhatsApp: z\.boolean\(\)\.optional\(\),/);
   assert.doesNotMatch(quotes, /pdfTo(Phone|Number|User)|deliverTo/);
-  // Only a NEW draft: never on an edit, never on a save that marks the quote sent.
-  assert.match(tx, /if \(data\.pdfToMyWhatsApp && data\.intent === "draft"\) \{/);
-  assert.ok(tx.indexOf("if (data.pdfToMyWhatsApp") > tx.indexOf("const number = await nextQuoteNumber(tx);"), "in the create path only");
+  // Only a DRAFT, in both paths: never on a save that marks the quote sent.
+  assert.equal((tx.match(/if \(data\.pdfToMyWhatsApp && data\.intent === "draft"\) \{/g) ?? []).length, 2);
+  assert.equal((tx.match(/assistantTurn\.create\(/g) ?? []).length, 2, "each write sits behind that test");
   // It says the number, the quote's own total, and that it was not sent.
   assert.match(record, /I've created draft quote Q-\$\{number\} \(\$\{formatZAR\(Math\.round\(total\)\)\}\)\. It has NOT been sent to the customer/);
   // Confirmed in the CRM: this action tries the send, briefly, and cannot be failed by it; on WhatsApp the door sends it after its reply.
-  assert.match(run, /if \(via === "crm"\) \{/);
-  assert.match(run, /return sendUpdatesToLinkedPhone\(ownedWriteTenantId\(\), user\.id\);\s*\}\)\(\)\.catch\(/);
-  assert.match(run, /setTimeout\(resolve, QUOTE_PDF_SEND_WAIT_MS\)/);
+  // (One helper, shared with quote_add: it does nothing unless Confirm was pressed in the CRM.)
+  assert.match(run, /await sendQueuedPdfNow\(\);\s*return \{\s*ok: true,/);
+  const sendNow = actions.slice(actions.indexOf("const sendQueuedPdfNow = async () => {"), actions.indexOf("switch (card?.kind) {"));
+  assert.match(sendNow, /if \(via !== "crm"\) return;/);
+  assert.match(sendNow, /return sendUpdatesToLinkedPhone\(ownedWriteTenantId\(\), user\.id\);\s*\}\)\(\)\.catch\(/);
+  assert.match(sendNow, /setTimeout\(resolve, QUOTE_PDF_SEND_WAIT_MS\)/);
   assert.match(actions, /via: "crm" \| "whatsapp" = "crm",/);
   // The total the person is told is the QUOTE's own (VAT, discounts), read back from what was saved.
   assert.match(run, /const total = built \? formatZAR\(Math\.round\(payableTotalCents\(built\)\)\) : null;/);
@@ -247,12 +252,15 @@ test("THE PDF GOES TO THE PERSON WHO ASKED — the only number it can reach is t
   assert.match(deliver, /if \(customer\.contactId \|\| customer\.leadId \|\| customer\.ambiguous\) return "not_safe";/);
   // The one document send in the module: to `waId`, three arguments — no `record`, so no customer timeline.
   assert.equal((lib.match(/sendWhatsAppDocument\(/g) ?? []).length, 1);
-  assert.match(send, /await sendWhatsAppDocument\(waId, \{ content: pdf, filename: quotePdfFileName\(quote\.number, \(await getCompanyProfile\(tenantId\)\)\.name\), contentType: "application\/pdf" \}, `Draft quote Q-\$\{quote\.number\} — for you\. Not sent to the customer\.`\)/);
-  // Their own quote, in this workspace, still there.
-  assert.match(send, /basePrisma\.quote\.findFirst\(\{ where: \{ id: quoteId, tenantId, createdById: userId, deletedAt: null \}, select: \{ id: true, number: true \} \}\)/);
+  assert.match(send, /await sendWhatsAppDocument\(waId, \{ content: pdf, filename: quotePdfFileName\(quote\.number, \(await getCompanyProfile\(tenantId\)\)\.name\), contentType: "application\/pdf" \}, `\$\{what\} Q-\$\{quote\.number\} — for you\. This copy was not sent to the customer\.`\)/);
+  // In this workspace, still there — and theirs, or one they may open NOW (a colleague's
+  // draft they added to, or a quote whose PDF they asked for: assistantQuoteAdd.test.ts).
+  assert.match(send, /basePrisma\.quote\.findFirst\(\{ where: \{ id: quoteId, tenantId, deletedAt: null \}, select: \{ id: true, number: true, status: true, createdById: true \} \}\)/);
+  assert.match(send, /if \(quote\.createdById !== userId && !\(await canAccessQuote\(user, quote\.id\)\)\) return null;/);
+  assert.ok(send.indexOf("canAccessQuote(user, quote.id)") < send.indexOf("await quotePdf(quote.id)"), "before anything is rendered");
   // It looks up no customer and no other number, and changes nothing about the quote.
   const body = send.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
-  assert.doesNotMatch(body, /contact\.|lead\.|\.phone|\.whatsapp|quote\.(update|updateMany|create|delete)|markQuoteSentIfDraft|sendEmail|status:|emailedAt/);
+  assert.doesNotMatch(body, /contact\.|lead\.|\.phone|\.whatsapp|quote\.(update|updateMany|create|delete)\(|markQuoteSentIfDraft|sendEmail|status: (?!true)|emailedAt/);
   const renderer = code("src/lib/quotePdf.ts");
   assert.match(renderer, /renderQuotePrintHtml\(\{ quoteId \}\)/);
   // The renderer it uses cannot change a quote: it holds no database client at all.
@@ -265,5 +273,5 @@ test("THE PDF GOES TO THE PERSON WHO ASKED — the only number it can reach is t
 });
 
 test("in the CRM chat the card shows the same lines before Confirm", () => {
-  assert.match(code("src/components/AssistantActionCard.tsx"), /card\.kind === "quote_build" && <p className="mt-2 whitespace-pre-line text-xs text-muted-foreground">\{card\.text\}<\/p>/);
+  assert.match(code("src/components/AssistantActionCard.tsx"), /\(card\.kind === "quote_build" \|\| card\.kind === "quote_add"\) && <p className="mt-2 whitespace-pre-line text-xs text-muted-foreground">\{card\.text\}<\/p>/);
 });
