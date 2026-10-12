@@ -53,6 +53,22 @@ const nextConfig: NextConfig = {
     "/signatures/**": [CHROMIUM_FILES],
     "/api/signing/**": [CHROMIUM_FILES],
     "/api/sign/**": [CHROMIUM_FILES],
+    // A QUOTE'S PDF IS NOW MADE IN FOUR MORE PLACES, and each failed in production
+    // with the chromium error until it was listed here (found 2026-10-12, when a
+    // quote DAX built arrived on WhatsApp without its PDF — locally these all pass,
+    // because a dev machine renders with its own Chrome):
+    //  - the WhatsApp webhook: a tapped Confirm on a quote DAX built, and the
+    //    catch-up of waiting updates on any message from a linked staff phone;
+    //  - the assistant's cron tick: the half-hourly retry of a PDF still waiting;
+    //  - a lead's and a customer's page: "Attach quote" in the email composer
+    //    renders the quote there (and the quote editor's "Email quote" opens there);
+    //  - the Ask page: confirming a quote DAX built, in the CRM chat.
+    // tests/pdfRoutesBundleChromium.test.ts keeps this list honest.
+    "/api/webhooks/whatsapp": [CHROMIUM_FILES],
+    "/api/cron/assistant": [CHROMIUM_FILES],
+    "/leads/**": [CHROMIUM_FILES],
+    "/contacts/**": [CHROMIUM_FILES],
+    "/assistant": [CHROMIUM_FILES],
   },
   async headers() {
     return [
