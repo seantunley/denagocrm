@@ -1,4 +1,5 @@
 import "server-only";
+import { randomBytes } from "node:crypto";
 import { z } from "zod";
 import { prisma } from "./db";
 import { logError } from "./errorLog";
@@ -52,7 +53,7 @@ import { webLookup } from "./crmAssistantWeb";
 import { assistantWebAllowed } from "./assistantUser";
 import { MAX_IMAGES_PER_QUESTION } from "./assistantImage";
 import { applyLearn, loadLearned, loadPlaybook, markNotesUsed, saveDecision, visibleTo } from "./assistantMemoryStore";
-import { ACTION_INSTRUCTIONS, CHOICE_INSTRUCTIONS, quoteBuildText, type ActionCard, type ProposedAction, type QuoteBuildLine } from "./assistantActions";
+import { ACTION_INSTRUCTIONS, CHOICE_INSTRUCTIONS, quoteAddText, quoteBuildText, type ActionCard, type ProposedAction, type QuoteBuildLine } from "./assistantActions";
 import { knowledgeProducts, resolveCatalogueProduct } from "./catalogueLookup";
 import { describeSchedule, nextRun, scheduleInput } from "./assistantSchedule";
 import { describeWatch, watchInput } from "./assistantWatchRules";
@@ -2271,6 +2272,55 @@ async function resolveActions(user: User, proposals: ProposedAction[]): Promise<
       });
       continue;
     }
+    if (p.type === "quote_pdf") {
+      // A quote THEY may open, with something on it. Read through the workspace's
+      // own client by its number; Confirm checks again.
+      if (!(await hasAnyPermission(user, "quotes.view_all", "quotes.view_owned"))) continue;
+      const number = /^Q-?(\d+)$/i.exec(p.quote)?.[1];
+      const quote = await prisma.quote.findFirst({
+        where: { deletedAt: null, ...(number ? { number: Number(number) } : { id: p.quote }) },
+        select: { id: true, number: true, leadId: true, contact: { select: { firstName: true, lastName: true } }, _count: { select: { items: true } } },
+      });
+      if (!quote || quote._count.items === 0 || !(await canAccessQuote(user, quote.id))) continue;
+      cards.push({
+        id: `a${index}-${quote.id}`, kind: "quote_pdf", leadId: quote.leadId, quoteId: quote.id, quoteNumber: quote.number,
+        leadLabel: [quote.contact?.firstName, quote.contact?.lastName].filter(Boolean).join(" ") || `Q-${quote.number}`,
+        title: `Send me the PDF of quote Q-${quote.number}`,
+        ...(p.reason ? { reason: p.reason } : {}),
+      });
+      continue;
+    }
+    if (p.type === "quote_add") {
+      // ONLY A DRAFT THIS PERSON MAY EDIT AND OPEN. Read through the workspace's
+      // own client by its number; saveQuoteDraft checks all of it again at Confirm
+      // (and refuses one out for signature).
+      if (!(await hasPermission(user, "quotes.edit"))) continue;
+      const number = /^Q-?(\d+)$/i.exec(p.quote)?.[1];
+      const quote = await prisma.quote.findFirst({
+        where: { deletedAt: null, ...(number ? { number: Number(number) } : { id: p.quote }) },
+        select: { id: true, number: true, status: true, contactId: true, leadId: true, contact: { select: { firstName: true, lastName: true } } },
+      });
+      if (!quote || quote.status !== "draft" || !quote.contactId || !(await canAccessQuote(user, quote.id))) continue;
+      const fees = (p.fees ?? []).map((fee) => ({ label: fee.label, amountCents: Math.round(fee.amount * 100), delivery: fee.delivery === true }));
+      const matched = await Promise.all((p.lines ?? []).map((line) => resolveCatalogueProduct(line)));
+      if (matched.some((product) => !product) || fees.length + matched.length === 0) continue;
+      const lines: QuoteBuildLine[] = (p.lines ?? []).map((line, at) => {
+        const product = matched[at]!;
+        return {
+          productId: product.id, description: product.name, qty: line.qty, unitPriceCents: product.basePriceCents,
+          discountPct: line.discountPct ?? 0, ...(line.colour ? { colour: line.colour } : {}),
+        };
+      });
+      const customerName = [quote.contact?.firstName, quote.contact?.lastName].filter(Boolean).join(" ");
+      cards.push({
+        id: `a${index}-${quote.id}`, kind: "quote_add", leadId: quote.leadId, leadLabel: customerName,
+        quoteId: quote.id, quoteNumber: quote.number, contactId: quote.contactId, lines, fees,
+        title: `Add to draft quote Q-${quote.number}`, text: quoteAddText(lines, fees, (cents) => formatZAR(cents)),
+        confirmKey: `qk_${randomBytes(16).toString("hex")}`,
+        ...(p.reason ? { reason: p.reason } : {}),
+      });
+      continue;
+    }
     if (p.type === "quote_build") {
       // A QUOTE IS FOR A CUSTOMER: on one of their deals (leadId), or on none
       // (contactId) — an existing customer wanting another quote is existing
@@ -2325,6 +2375,7 @@ async function resolveActions(user: User, proposals: ProposedAction[]): Promise<
         id: `a${index}-${forDeal?.id ?? customerId}`, kind: "quote_build", leadId: forDeal?.id ?? null,
         leadLabel: forDeal?.label ?? customerName, contactId: customerId, lines,
         title: `Create a draft quote for ${customerName}`, text: quoteBuildText(lines, (cents) => formatZAR(cents)),
+        confirmKey: `qk_${randomBytes(16).toString("hex")}`,
         ...(p.reason ? { reason: p.reason } : {}),
       });
       continue;

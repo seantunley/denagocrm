@@ -8,6 +8,7 @@ import type { Prisma } from "@prisma/client";
 import { prisma, basePrisma } from "@/lib/db";
 import { payableTotalCents } from "@/lib/pricing";
 import { QUOTE_PDF_SOURCE } from "@/lib/assistantWhatsAppRules";
+import { CONFIRM_KEY } from "@/lib/assistantActions";
 import { tenantOrigin } from "@/lib/tenantOrigin";
 import { logAudit, GOVERNANCE_TX } from "@/lib/audit";
 import { CLOSED_REQUEST_STATUSES } from "@/lib/signing/status";
@@ -82,13 +83,27 @@ const quoteDraftSchema = z.object({
     }),
   ).max(20).optional(),
   /**
-   * On a NEW draft: also queue this quote's PDF for the person saving it, to the
+   * On a draft (new, or one being added to): also queue this quote's PDF for the person saving it, to the
    * WhatsApp THEY linked (the assistant's "build me a quote"). It says who by
    * being who is signed in — there is no recipient to name — so the most anyone
    * can do with it is have their own draft sent to their own verified phone.
    */
   pdfToMyWhatsApp: z.boolean().optional(),
+  /**
+   * On an existing draft: `items` and `fees` are ADDITIONS. Nothing already on
+   * the quote is changed — its rows, customer, expiry, terms, VAT mode and
+   * deposit are left as they are, whatever else this request says.
+   */
+  appendOnly: z.boolean().optional(),
+  /** The key of the assistant card being confirmed: a card is carried out once (see claimConfirmKey). */
+  confirmKey: z.string().regex(CONFIRM_KEY).optional(),
 });
+
+/** How long a spent confirm key is kept: longer than a card stays in the Ask history (30 days). */
+const CONFIRM_KEY_KEPT_MS = 35 * 24 * 60 * 60 * 1000;
+const REPEATED = "repeated" as const;
+type PricedItem = Parameters<typeof payableTotalCents>[0]["items"][number];
+type PricedFee = NonNullable<Parameters<typeof payableTotalCents>[0]["fees"]>[number];
 
 export type QuoteDraftInput = z.input<typeof quoteDraftSchema>;
 
@@ -102,7 +117,8 @@ export type QuoteDraftResult =
         updatedAt: string;
       };
     }
-  | { ok: false; error: string };
+  /** `repeated`: this exact assistant card was already carried out — nothing was changed this time. */
+  | { ok: false; error: string; repeated?: true };
 
 /** Creates a draft quote from a lead, pre-filled with its product line. */
 async function createQuoteFromLeadRecord(leadId: string) {
@@ -460,6 +476,29 @@ export async function saveQuoteDraft(input: QuoteDraftInput): Promise<QuoteDraft
   const actingTenant = await actingTenantId();
   // Resolved outside the transaction (a settings read), for the link in the update below.
   const quoteOrigin = data.pdfToMyWhatsApp ? (await tenantOrigin(actingTenant).catch(() => "")).replace(/\/$/, "") : "";
+  /*
+   * ONE CONFIRM, ONE CHANGE. A card the assistant proposed carries a key minted
+   * on the server when the card was made. It is recorded HERE, in the
+   * transaction that makes the change — as a row whose primary key IS the key —
+   * so the change and the record of it exist together or not at all, and a
+   * second Confirm of the same card (the browser lost the first answer and the
+   * person pressed again) finds it and changes nothing. It is a spent
+   * AssistantPendingAction: completed, never offered, pruned with the rest.
+   */
+  const claimConfirmKey = async (tx: Prisma.TransactionClient, what: string): Promise<boolean> => {
+    if (!data.confirmKey) return true;
+    // This workspace's row only (a bypass transaction: the predicate is the boundary). A key that somehow
+    // existed elsewhere would still stop the insert below on its primary key, which is reported the same way.
+    if (await tx.assistantPendingAction.findFirst({ where: { id: data.confirmKey, tenantId: actingTenant }, select: { id: true } })) return false;
+    const now = new Date();
+    await tx.assistantPendingAction.create({
+      data: {
+        id: data.confirmKey, tenantId: actingTenant, userId: user.id, card: { kind: "confirm_key", what },
+        confirmedAt: now, completedAt: now, expiresAt: new Date(now.getTime() + CONFIRM_KEY_KEPT_MS),
+      },
+    });
+    return true;
+  };
   const result = await basePrisma.$transaction(async (tx) => {
     if (data.id) {
       // Lock the quote row FOR UPDATE and re-check editability inside the
@@ -502,6 +541,59 @@ export async function saveQuoteDraft(input: QuoteDraftInput): Promise<QuoteDraft
         (await hasOpenSignatureRequest(tx, existing.id))
       ) {
         return null;
+      }
+      // The end of every edit: the quote as saved, and — for the assistant — the
+      // updated PDF queued for the person who changed it. In this transaction for
+      // the same reason as on a new quote below, and to the same place: their own
+      // linked phone, never a customer. It is THEIR update, not a child of the
+      // quote, so it is filed in the workspace they are acting in — where their
+      // phone link is looked up.
+      const finish = async (itemRows: PricedItem[], feeRows: PricedFee[], cpq: typeof cpqQuoteData) => {
+        const rewritten = await tx.quote.findUniqueOrThrow({ where: { id: existing.id } });
+        if (data.pdfToMyWhatsApp && data.intent === "draft") {
+          const total = payableTotalCents({ items: itemRows, fees: feeRows, ...cpq });
+          await tx.assistantTurn.create({
+            data: {
+              tenantId: actingTenant,
+              userId: user.id,
+              source: QUOTE_PDF_SOURCE,
+              quoteId: existing.id,
+              question: `Draft quote Q-${existing.number} updated`,
+              answer: `I've updated draft quote Q-${existing.number} (now ${formatZAR(Math.round(total))}). It has NOT been sent to the customer — sending it is your step.\n${quoteOrigin}/quotes?edit=${existing.id}`,
+            },
+          });
+        }
+        // The rows as PERSISTED, so the audit figure below is the one the database
+        // and every screen agree on. Built from normalizedItems it silently
+        // counted a declined add-on that nothing else charges for.
+        return { quote: rewritten, itemRows, feeRows, cpq };
+      };
+      /*
+       * ADD ONLY (the assistant's "add a delivery fee to the quote").
+       *
+       * The rows in the request are ADDITIONS. Nothing already on the quote is
+       * read from the request, deleted or rewritten — so there is nothing of
+       * anybody else's for this save to overwrite. (Its first version sent the
+       * whole quote back, read BEFORE this lock: an edit a colleague saved in
+       * between would have been replaced by the copy read earlier. Review of
+       * #879.) The header is left exactly as it is; only its updatedAt moves.
+       */
+      if (data.appendOnly) {
+        if (data.intent !== "draft" || existing.contactId !== data.contactId) return null;
+        if (!(await claimConfirmKey(tx, `Q-${existing.number}`))) return REPEATED;
+        const touched = await tx.quote.updateMany({ where: { id: existing.id, tenantId: actingTenant, status: "draft" }, data: { status: "draft" } });
+        if (touched.count !== 1) return null;
+        // The quote is the parent: what is added takes ITS owner (see below).
+        const ownerTenantId = existing.tenantId ?? actingTenant;
+        const addedItems = itemRowsFor(normalizedItems, new Map(), createDefaults.regional.vatRatePct);
+        const addedFees = feeRowsFor(normalizedFees, new Map(), createDefaults.regional.vatRatePct).map((row, at) => ({ ...row, sortOrder: existing.fees.length + at }));
+        if (addedItems.length > 0) await tx.quoteItem.createMany({ data: addedItems.map((row) => ({ ...row, quoteId: existing.id, tenantId: ownerTenantId })) });
+        if (addedFees.length > 0) await tx.quoteFee.createMany({ data: addedFees.map((row) => ({ ...row, quoteId: existing.id, tenantId: ownerTenantId })) });
+        return finish([...existing.items, ...addedItems], [...existing.fees, ...addedFees], {
+          taxInclusive: existing.taxInclusive,
+          depositType: existing.depositType === "percent" || existing.depositType === "amount" ? existing.depositType : null,
+          depositValue: existing.depositValue,
+        });
       }
       // CHANGING the customer is refused; FILLING IN a missing one is not. A
       // quote made from a lead with no customer yet used to be stuck: the editor
@@ -573,16 +665,11 @@ export async function saveQuoteDraft(input: QuoteDraftInput): Promise<QuoteDraft
       if (feeRows.length > 0) {
         await tx.quoteFee.createMany({ data: feeRows.map((row) => ({ ...row, quoteId: existing.id, tenantId: quoteTenantId })) });
       }
-      // The rows as PERSISTED, so the audit figure below is the one the database
-      // and every screen agree on. Built from normalizedItems it silently
-      // counted a declined add-on that nothing else charges for.
-      return {
-        quote: await tx.quote.findUniqueOrThrow({ where: { id: existing.id } }),
-        itemRows,
-        feeRows,
-      };
+      return finish(itemRows, feeRows, cpqQuoteData);
     }
 
+    // A Confirm that already created its quote creates no second one.
+    if (!(await claimConfirmKey(tx, "a new quote"))) return REPEATED;
     const number = await nextQuoteNumber(tx); // advisory-locked allocation (#11)
 
     // Same builders, with NOTHING to inherit from — so a client-supplied id
@@ -627,9 +714,17 @@ export async function saveQuoteDraft(input: QuoteDraftInput): Promise<QuoteDraft
         },
       });
     }
-    return { quote: created, itemRows, feeRows };
+    return { quote: created, itemRows: itemRows as PricedItem[], feeRows: feeRows as PricedFee[], cpq: cpqQuoteData };
+  }).catch((error: unknown) => {
+    // Two Confirms of the same card at the same moment: the second one's key
+    // collides on its primary key and its whole transaction is undone.
+    if (data.confirmKey && typeof error === "object" && error !== null && (error as { code?: string }).code === "P2002") return REPEATED;
+    throw error;
   });
 
+  if (result === REPEATED) {
+    return { ok: false, error: "That was already confirmed — open the quote to see it. Nothing was added twice.", repeated: true };
+  }
   if (!result) {
     return {
       ok: false,
@@ -637,7 +732,7 @@ export async function saveQuoteDraft(input: QuoteDraftInput): Promise<QuoteDraft
     };
   }
 
-  const { quote: saved, itemRows, feeRows } = result;
+  const { quote: saved, itemRows, feeRows, cpq } = result;
   // The figure that lands in the audit trail as the value of this quote — so it
   // is the payable total, fees and delivery included, not the line subtotal.
   //
@@ -645,7 +740,7 @@ export async function saveQuoteDraft(input: QuoteDraftInput): Promise<QuoteDraft
   // carries no optional/selected, so quotePricing counted every line: a quote
   // with an add-on the customer had declined recorded a sale worth more than
   // the database, the preview and the printed document all say it is.
-  const total = payableTotalCents({ items: itemRows, fees: feeRows, ...cpqQuoteData });
+  const total = payableTotalCents({ items: itemRows, fees: feeRows, ...cpq });
   await logAudit({
     action: data.intent === "sent" ? "quote.sent" : data.id ? "quote.updated" : "quote.created",
     summary:

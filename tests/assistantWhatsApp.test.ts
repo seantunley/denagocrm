@@ -104,7 +104,11 @@ const state = {
   /** Run as each text is accepted: time passing, or another sender acting meanwhile. */
   onSend: null as (() => void) | null,
   /** Quotes in the database, for a built quote's PDF. */
-  quotes: [] as { id: string; tenantId: string; createdById: string; deletedAt: Date | null; number: number }[],
+  quotes: [] as { id: string; tenantId: string; createdById: string; deletedAt: Date | null; number: number; status?: string }[],
+  /** Quotes somebody else created that the person may still open (the real check is their own access rules). */
+  canOpen: new Set<string>(),
+  /** Whether the person may create quotes (the narrow case: their own fresh draft, without quote-viewing access). */
+  mayCreateQuotes: false,
   /** Documents sent on WhatsApp: the full argument list of each call. */
   documents: [] as unknown[][],
   /** Quote PDFs rendered. */
@@ -264,6 +268,10 @@ loaderKey._load = function (this: unknown, request: string, parent, isMain) {
           if (state.securityDown) throw new Error("database unavailable");
           return { sessionVersion: state.sessionVersions.get(id) ?? 1, disabledAt: null };
         },
+      };
+      case "./permissions": return {
+        canAccessQuote: async (_user: unknown, quoteId: string) => state.canOpen.has(quoteId),
+        hasPermission: async (_user: unknown, permission: string) => permission === "quotes.create" && state.mayCreateQuotes,
       };
       case "./audit": return { logAudit: async (e: { summary: string }) => { state.audits.push(e.summary); } };
       case "./errorLog": return { logError: async (...args: unknown[]) => { state.errors.push(args.map(String).join(" ")); } };
@@ -1417,7 +1425,10 @@ test("wired where it must be: after a saved briefing, after a saved alert, on th
 const QUOTE_ID = "cmquoteabcdefghijklmnopq";
 /** A draft quote u1 had the assistant build, and the update that carries its PDF. */
 function builtQuote(over: Partial<Turn> = {}) {
-  state.quotes.push({ id: QUOTE_ID, tenantId: "t1", createdById: "u1", deletedAt: null, number: 1030 });
+  state.quotes.push({ id: QUOTE_ID, tenantId: "t1", createdById: "u1", deletedAt: null, number: 1030, status: "draft" });
+  // The ordinary case: they may open the quote they had built.
+  state.canOpen = new Set([QUOTE_ID]);
+  state.mayCreateQuotes = false;
   const turn = waitingTurn("quote", 0, "quote_pdf");
   Object.assign(turn, { question: "Draft quote Q-1030", answer: "I've created draft quote Q-1030. It has NOT been sent to the customer.", quoteId: QUOTE_ID, ...over });
   return turn;
@@ -1436,7 +1447,7 @@ test("A BUILT QUOTE'S PDF goes to the linked phone of the person who asked: the 
   assert.equal(to, STAFF);
   assert.equal(file.filename, "Q-1030 Denago Cape Town.pdf");
   assert.equal(file.contentType, "application/pdf");
-  assert.equal(caption, "Draft quote Q-1030 — for you. Not sent to the customer.");
+  assert.equal(caption, "Draft quote Q-1030 — for you. This copy was not sent to the customer.");
   assert.deepEqual(rest, []);
   assert.ok(turn.whatsappSentAt instanceof Date, "finished only once the document has gone");
   assert.ok(state.audits.some((summary) => /Q-1030/.test(summary) && /not to the customer/.test(summary)));
@@ -1466,7 +1477,7 @@ test("THE PDF IS NOT LOST when its send fails: the update stays waiting, and the
   // Never a second quote: this path only ever reads the quote.
   const lib = code("src/lib/assistantWhatsApp.ts");
   const sender = lib.slice(lib.indexOf("async function sendQuotePdfToStaff("), lib.indexOf("const OUT_OF_TIME"));
-  assert.doesNotMatch(sender, /quote\.(create|update|updateMany|delete)|saveQuoteDraft|runAssistantAction|status:/);
+  assert.doesNotMatch(sender, /quote\.(create|update|updateMany|delete)\(|saveQuoteDraft|runAssistantAction|status: (?!true)/);
 });
 
 test("it is re-checked at the moment of sending: a phone no longer safely theirs, or a quote not theirs, gets no document", async () => {
@@ -1484,17 +1495,51 @@ test("it is re-checked at the moment of sending: a phone no longer safely theirs
   assert.equal(state.documents.length, 0);
   state.sessionVersions = new Map();
 
-  // A quote somebody else created, another workspace's, or one deleted since: the words go, no document does.
-  for (const change of [{ createdById: "u2" }, { tenantId: "t2" }, { deletedAt: new Date() }]) {
+  // A quote they may not open NOW — somebody else's, or THEIR OWN after their access was taken away while it
+  // waited (review of #879: the creator was not re-checked) — another workspace's, or one deleted since:
+  // the words go, no document does.
+  for (const change of [
+    { createdById: "u2", cannotOpen: true },
+    { cannotOpen: true },
+    // Their own, cannot browse quotes, may still create them — but it is no longer a draft: not the narrow case.
+    { cannotOpen: true, mayCreate: true, status: "sent" },
+    { tenantId: "t2" },
+    { deletedAt: new Date() },
+  ] as { createdById?: string; tenantId?: string; deletedAt?: Date; status?: string; cannotOpen?: boolean; mayCreate?: boolean }[]) {
     state.links = []; state.turns = []; state.quotes = []; state.sent = []; state.documents = []; state.rendered = [];
     link = verified("u1", STAFF);
     link.lastInboundAt = new Date();
     const turn = builtQuote();
-    Object.assign(state.quotes[0], change);
+    const { cannotOpen, mayCreate, ...row } = change;
+    Object.assign(state.quotes[0], row);
+    if (cannotOpen) state.canOpen = new Set();
+    state.mayCreateQuotes = mayCreate === true;
     assert.equal(await sendUpdatesToLinkedPhone("t1", "u1"), "sent", JSON.stringify(change));
     assert.deepEqual([state.rendered.length, state.documents.length], [0, 0], JSON.stringify(change));
     assert.ok(turn.whatsappSentAt instanceof Date);
   }
+  // THE NARROW CASE KEPT: allowed to create quotes but not to browse them — the draft they have just had built still arrives.
+  state.links = []; state.turns = []; state.quotes = []; state.sent = []; state.documents = []; state.rendered = [];
+  link = verified("u1", STAFF);
+  link.lastInboundAt = new Date();
+  builtQuote();
+  state.canOpen = new Set();
+  state.mayCreateQuotes = true;
+  assert.equal(await sendUpdatesToLinkedPhone("t1", "u1"), "sent");
+  assert.equal(state.documents.length, 1);
+  state.mayCreateQuotes = false;
+  // A COLLEAGUE'S QUOTE THEY MAY OPEN (they added to it, or asked for its PDF): the document goes —
+  // and a quote that is no longer a draft is not called one.
+  state.links = []; state.turns = []; state.quotes = []; state.sent = []; state.documents = []; state.rendered = [];
+  link = verified("u1", STAFF);
+  link.lastInboundAt = new Date();
+  builtQuote();
+  Object.assign(state.quotes[0], { createdById: "u2", status: "sent" });
+  state.canOpen = new Set([QUOTE_ID]);
+  assert.equal(await sendUpdatesToLinkedPhone("t1", "u1"), "sent");
+  assert.equal(state.documents.length, 1);
+  assert.equal((state.documents[0] as unknown[])[2], "Quote Q-1030 — for you. This copy was not sent to the customer.");
+  state.canOpen = new Set();
   // No longer a member who may use the assistant: no document.
   state.links = []; state.turns = []; state.quotes = []; state.sent = []; state.documents = [];
   link = verified("u1", STAFF);

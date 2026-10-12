@@ -20,6 +20,7 @@ import { ASSISTANT_VOICE_REPLIES_KEY, voiceLanguageFor, voiceRepliesSwitchOn } f
 import { voiceLanguage, type VoiceLanguage } from "./voiceLanguage";
 import { ASSISTANT_PROFILE_KEY, parseProfile } from "./assistantSoul";
 import { logAudit } from "./audit";
+import { canAccessQuote, hasPermission } from "./permissions";
 import { logError } from "./errorLog";
 import { rateLimitKey, registerRateLimitAttempt } from "./rateLimit";
 import { readUserSecurityStateStrict } from "./userSecurity";
@@ -675,8 +676,22 @@ async function sendQuotePdfToStaff(tenantId: string, userId: string, waId: strin
   // Still a member who may use the assistant, asked now — not when the quote was built.
   const user = await assistantUserFor(userId);
   if (!user) return null;
-  const quote = await basePrisma.quote.findFirst({ where: { id: quoteId, tenantId, createdById: userId, deletedAt: null }, select: { id: true, number: true } });
+  const quote = await basePrisma.quote.findFirst({ where: { id: quoteId, tenantId, deletedAt: null }, select: { id: true, number: true, status: true, createdById: true } });
   if (!quote) return null;
+  // MAY THEY OPEN THIS QUOTE NOW? Asked for EVERY delivery, their own quotes
+  // included: the update may have waited (a day, at most) and their access can
+  // have been taken away meanwhile — having created a quote is not a standing
+  // right to its PDF. (Review of #879: the check was skipped for the creator.)
+  // canAccessQuote is their quote-viewing permission AND their access to this record.
+  //
+  // One case it does not cover is kept, narrowly: somebody allowed to CREATE
+  // quotes but not to browse them still gets the draft they have just had built —
+  // only theirs, only while it is a draft, only while they may still create quotes.
+  const mayOpen =
+    (await canAccessQuote(user, quote.id)) ||
+    (quote.createdById === userId && quote.status === "draft" && (await hasPermission(user, "quotes.create")));
+  if (!mayOpen) return null;
+  const what = quote.status === "draft" ? "Draft quote" : "Quote";
   const rendered = await quotePdf(quote.id);
   if (!rendered.ok) {
     // PASSING (the PDF engine would not start, timed out…): the update is given
@@ -689,11 +704,11 @@ async function sendQuotePdfToStaff(tenantId: string, userId: string, waId: strin
     return null;
   }
   const pdf = rendered.pdf;
-  const sent = await sendWhatsAppDocument(waId, { content: pdf, filename: quotePdfFileName(quote.number, (await getCompanyProfile(tenantId)).name), contentType: "application/pdf" }, `Draft quote Q-${quote.number} — for you. Not sent to the customer.`);
+  const sent = await sendWhatsAppDocument(waId, { content: pdf, filename: quotePdfFileName(quote.number, (await getCompanyProfile(tenantId)).name), contentType: "application/pdf" }, `${what} Q-${quote.number} — for you. This copy was not sent to the customer.`);
   if (!sent.ok) return sent.error ?? "WhatsApp document send failed";
   await logAudit({
     action: "assistant.quote_pdf_to_staff",
-    summary: `Sent the PDF of draft quote Q-${quote.number} to the linked WhatsApp of the person who asked for it (not to the customer)`,
+    summary: `Sent the PDF of ${what.toLowerCase()} Q-${quote.number} to the linked WhatsApp of the person who asked for it (not to the customer)`,
     user,
     entityType: "Quote",
     entityId: quote.id,

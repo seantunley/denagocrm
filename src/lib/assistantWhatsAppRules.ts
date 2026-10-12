@@ -133,7 +133,9 @@ export const CRM_CARD_TTL_MS = 24 * 60 * 60 * 1000;
  */
 export const WHATSAPP_CONFIRMABLE: ReadonlySet<string> = new Set([
   "note", "customer_note", "follow_up", "assign", "stage", "meeting", "block_time", "reschedule", "cancel_activity", "schedule", "watch",
-  "quote_build",
+  // quote_add: the same kind of change — it adds to a DRAFT, and the updated PDF comes back to this phone.
+  // quote_pdf: sends the confirmer their own copy of a quote's PDF — to this phone, and nowhere else.
+  "quote_build", "quote_add", "quote_pdf",
 ]);
 
 /** Proposed cards, split into those that get a Confirm button here and those that need the CRM. */
