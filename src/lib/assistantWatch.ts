@@ -563,7 +563,7 @@ export async function runAssistantWatches(budget: CronSliceContext): Promise<{ c
       { tenantId, userId: user.id },
     ).catch((error: unknown) => logError("assistant-watch", "push failed", error instanceof Error ? error.name : "unknown"));
     // And to the phone they linked — the same rules as a scheduled briefing.
-    const outcome = await sendUpdatesToLinkedPhone(tenantId, user.id);
+    const outcome = await sendUpdatesToLinkedPhone(tenantId, user.id, { shouldStop: budget.shouldStop });
     if (outcome === "failed") await logError("assistant-watch", "alert not sent to WhatsApp").catch(() => {});
     if (outcome === "not_safe") await logError("assistant-watch", "alert not sent to WhatsApp: the linked phone is no longer safe").catch(() => {});
   }

@@ -193,6 +193,13 @@ export const UPDATE_MAX = 30;
  * claim older than this belongs to a run that stopped, and is taken over.
  */
 export const UPDATE_CLAIM_MS = 5 * 60 * 1000;
+/**
+ * What a cron must still have left to start one more message: a send may take
+ * its whole 15-second timeout, and its writes follow. With less than this the
+ * sender stops and leaves the rest for the next tick — it never eats the time
+ * kept for the scheduled questions that run after it.
+ */
+export const UPDATE_SEND_RESERVE_MS = 20_000;
 /** One "you have an update" template per silence, and never more often than this. */
 export const NUDGE_EVERY_MS = 20 * 60 * 60 * 1000;
 /** After the template failed for a passing reason: not again before this (the next half-hourly tick is after it). */

@@ -101,7 +101,7 @@ async function main() {
     console.log("\nThe half-hourly sweep");
     await basePrisma.assistantTurn.update({ where: { id: TURN.brief }, data: { whatsappSentAt: null, whatsappPartsSent: 0 } });
     // The test user is in no role, so may not use the assistant: the sweep finds the update and sends that person nothing.
-    const swept = await scoped(() => sweepWaitingUpdates(T));
+    const swept = await scoped(() => sweepWaitingUpdates(T, { shouldStop: () => false }));
     check("it runs against the real table, and sends nothing to someone who may not use the assistant", swept.people === 0 && (await sentAt(TURN.brief)) === null, JSON.stringify(swept));
 
     console.log("\nWho it is for");

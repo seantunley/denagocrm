@@ -191,7 +191,7 @@ export async function runDueAssistantSchedules(budget: CronSliceContext): Promis
     // was saved is what is sent: this adds a copy, and whatever happens to it —
     // no phone, switched off, WhatsApp's 24-hour rule — costs nothing in the CRM.
     if (delivered) {
-      const outcome = await sendUpdatesToLinkedPhone(tenantId, user.id);
+      const outcome = await sendUpdatesToLinkedPhone(tenantId, user.id, { shouldStop: budget.shouldStop });
       // That it happened, only — never what was asked or what was found.
       if (outcome === "failed") await logError("assistant-schedule", "briefing not sent to WhatsApp").catch(() => {});
       if (outcome === "not_safe") await logError("assistant-schedule", "briefing not sent to WhatsApp: the linked phone is no longer safe").catch(() => {});

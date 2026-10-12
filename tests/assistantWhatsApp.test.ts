@@ -12,6 +12,7 @@ import {
   PROACTIVE_SOURCES,
   UPDATE_CLAIM_MS,
   UPDATE_MAX,
+  UPDATE_SEND_RESERVE_MS,
   nudgeFailureMayPass,
   updateText,
   formatUpdateTemplate,
@@ -100,6 +101,8 @@ const state = {
   /** The template send's failure: an error text, "throws", or null for success. */
   templateFails: null as string | null,
   templateTries: 0,
+  /** Run as each text is accepted: time passing, or another sender acting meanwhile. */
+  onSend: null as (() => void) | null,
 };
 const ASK_LIMIT = 60;
 
@@ -170,6 +173,8 @@ loaderKey._load = function (this: unknown, request: string, parent, isMain) {
           // WhatsApp unreachable from the Nth text of this test onwards (the real one's wording).
           if (state.textFailsFrom !== null && state.sent.length >= state.textFailsFrom) return { ok: false, error: "Could not reach WhatsApp (timed out)" };
           state.sent.push({ to, text });
+          // What a send costs, or what happens while it is in flight.
+          state.onSend?.();
           return { ok: true };
         },
         sendWhatsAppTemplate: async (to: string, name: string, language: string) => {
@@ -310,6 +315,7 @@ beforeEach(() => {
   state.textFailsFrom = null;
   state.templateFails = null;
   state.templateTries = 0;
+  state.onSend = null;
 });
 
 /* ── the gate, behaviourally ───────────────────────────────────────────── */
@@ -1217,16 +1223,88 @@ test("the half-hourly sweep retries what is still waiting — for people who may
   const theirs = waitingTurn("theirs", 0, "watch", "u2");
   const leavers = waitingTurn("leavers", 0, "schedule", "gone");
   waitingTurn("done").whatsappSentAt = new Date();
-  assert.deepEqual(await sweepWaitingUpdates("t1"), { people: 2 });
+  assert.deepEqual(await sweepWaitingUpdates("t1", PLENTY), { people: 2 });
   assert.ok(mine.whatsappSentAt && theirs.whatsappSentAt);
   assert.equal(leavers.whatsappSentAt, null, "someone who lost access is sent nothing");
   assert.equal(state.sent.length, 2);
   state.switch = "off";
   waitingTurn("later");
-  assert.deepEqual(await sweepWaitingUpdates("t1"), { people: 0 });
-  // The cron calls it for every workspace, and its failure cannot stop the watches or the schedules.
+  assert.deepEqual(await sweepWaitingUpdates("t1", PLENTY), { people: 0 });
+  // The cron calls it for every workspace WITH ITS BUDGET, and its failure cannot stop the watches or the schedules.
   const cron = code("src/app/api/cron/assistant/route.ts");
-  assert.match(cron, /await sweepWaitingUpdates\(tenantId\)\.catch\(\(error: unknown\) =>\s*logError\("assistant-schedule", "waiting updates sweep failed"/);
+  assert.match(cron, /await sweepWaitingUpdates\(tenantId, budget\)\.catch\(\(error: unknown\) =>\s*logError\("assistant-schedule", "waiting updates sweep failed"/);
+});
+
+/* ── a cron's time is shared (second review of #860) ───────────────────── */
+
+/** A cron budget with all the time in the world. */
+const PLENTY = { shouldStop: () => false };
+/** A budget on a clock the test moves: `left` ms remain, and each WhatsApp send costs `perSend` of them. */
+function budgetOf(left: number, perSend: number) {
+  const clock = { left, asked: [] as (number | undefined)[] };
+  state.onSend = () => { clock.left -= perSend; };
+  return { clock, shouldStop: (reserveMs = 0) => (clock.asked.push(reserveMs), clock.left < reserveMs) };
+}
+
+test("the sweep stops when the cron's time is short — a slow WhatsApp cannot eat the scheduled questions' time", async () => {
+  // Three people, three briefings each; every send takes 15 seconds; the tick has 60 seconds for this.
+  const people = ["u1", "u2", "u3"];
+  state.members = new Set(people);
+  people.forEach((u, i) => { verified(u, `2782555010${i}`).lastInboundAt = new Date(); });
+  const turns = people.flatMap((u) => [1, 2, 3].map((n) => waitingTurn(`${u}-${n}`, 5 - n, "schedule", u)));
+  const { clock, shouldStop } = budgetOf(60_000, 15_000);
+  const swept = await sweepWaitingUpdates("t1", { shouldStop });
+  // 60s → send (45s left) → send (30s) → send (15s, under the 20s a message needs) → stop.
+  assert.equal(state.sent.length, 3, "it sent what there was time for, and no more");
+  assert.equal(swept.people, 1, "and did not start on the next person");
+  assert.ok(clock.left >= 0, `never past the budget (${clock.left} ms left)`);
+  assert.ok(clock.asked.every((reserve) => reserve === UPDATE_SEND_RESERVE_MS), "every check keeps room for a whole message");
+  assert.equal(turns.filter((t) => t.whatsappSentAt).length, 3);
+  assert.ok(turns.filter((t) => !t.whatsappSentAt).every((t) => t.whatsappClaimedAt === null), "nothing unfinished is left claimed");
+  // The next tick, with time, finishes the job: nothing was lost and nothing is sent twice.
+  state.onSend = null;
+  await sweepWaitingUpdates("t1", PLENTY);
+  assert.ok(turns.every((t) => t.whatsappSentAt));
+  assert.equal(state.sent.length, 9);
+  assert.equal(new Set(state.sent.map((s) => s.text)).size, 9);
+});
+
+test("a budget already spent sends nothing at all, and one that runs out mid-briefing leaves it resumable", async () => {
+  verified("u1", STAFF).lastInboundAt = new Date();
+  const { turn, parts } = longTurn("slow");
+  assert.deepEqual(await sweepWaitingUpdates("t1", budgetOf(5_000, 15_000)), { people: 0 });
+  assert.equal(state.sent.length, 0);
+  assert.equal(turn.whatsappClaimedAt, null);
+  // Time for exactly one message of a several-message briefing.
+  const { shouldStop } = budgetOf(30_000, 15_000);
+  assert.equal(await sendUpdatesToLinkedPhone("t1", "u1", { shouldStop }), "more");
+  assert.deepEqual(state.sent.map((s) => s.text), [parts[0]]);
+  assert.equal(turn.whatsappPartsSent, 1);
+  assert.equal(turn.whatsappSentAt, null);
+  assert.equal(turn.whatsappClaimedAt, null, "given back at once, not left to expire");
+  state.onSend = null;
+  assert.equal(await sendUpdatesToLinkedPhone("t1", "u1"), "sent");
+  assert.deepEqual(state.sent.map((s) => s.text), parts);
+});
+
+test("a sender that lost its claim cannot write over the one that took it", async () => {
+  verified("u1", STAFF).lastInboundAt = new Date();
+  const { turn, parts } = longTurn("overtaken");
+  // While this sender's first message is in flight, its claim expires and another sender takes the briefing and finishes it.
+  const takenAt = new Date();
+  state.onSend = () => {
+    state.onSend = null;
+    Object.assign(turn, { whatsappClaimedAt: takenAt, whatsappPartsSent: parts.length });
+  };
+  // Not a failure: the briefing is the other sender's now, and nothing is left for this one to do.
+  assert.equal(await sendUpdatesToLinkedPhone("t1", "u1"), "sent");
+  assert.equal(state.sent.length, 1, "it sends no further messages of it");
+  assert.equal(turn.whatsappPartsSent, parts.length, "the other sender's progress is not put back to 1");
+  assert.equal(turn.whatsappClaimedAt, takenAt, "nor its claim cleared");
+  assert.equal(turn.whatsappSentAt, null, "and it is not marked sent on that sender's behalf");
+  const lib = code("src/lib/assistantWhatsApp.ts");
+  const one = lib.slice(lib.indexOf("async function sendOneUpdate"), lib.indexOf("const OUT_OF_TIME"));
+  assert.equal(one.match(/whatsappClaimedAt: mine \}, data:/g)?.length, 4, "every write after the claim names the claim");
 });
 
 test("which template failures may pass, and which are refusals", () => {
@@ -1256,9 +1334,10 @@ test("the rules: the window, the template name, and what is sent", () => {
 
 test("wired where it must be: after a saved briefing, after a saved alert, on the template's button — and each switch is the right person's", () => {
   const run = code("src/lib/assistantScheduleRun.ts");
-  assert.match(run, /if \(delivered\) \{\s*const outcome = await sendUpdatesToLinkedPhone\(tenantId, user\.id\);/);
+  // Both run inside a cron: each hands over that cron's budget.
+  assert.match(run, /if \(delivered\) \{\s*const outcome = await sendUpdatesToLinkedPhone\(tenantId, user\.id, \{ shouldStop: budget\.shouldStop \}\);/);
   const watch = code("src/lib/assistantWatch.ts");
-  assert.match(watch, /if \(!delivered\) continue;[\s\S]*const outcome = await sendUpdatesToLinkedPhone\(tenantId, user\.id\);/);
+  assert.match(watch, /if \(!delivered\) continue;[\s\S]*const outcome = await sendUpdatesToLinkedPhone\(tenantId, user\.id, \{ shouldStop: budget\.shouldStop \}\);/);
   // A failure is logged as a fixed line (assistantSchedules/assistantWatch tests forbid anything else in it).
   for (const src of [run, watch]) assert.match(src, /if \(outcome === "failed"\) await logError\("assistant-(schedule|watch)", "(briefing|alert) not sent to WhatsApp"\)/);
   const route = code("src/app/api/webhooks/whatsapp/route.ts");

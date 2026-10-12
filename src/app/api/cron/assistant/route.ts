@@ -62,7 +62,7 @@ export async function GET(req: NextRequest) {
       // unreachable, a nudge failed) are tried again here — otherwise they would
       // wait for the person's next message, and a one-off could go stale unsent.
       if (tenantId) {
-        await sweepWaitingUpdates(tenantId).catch((error: unknown) =>
+        await sweepWaitingUpdates(tenantId, budget).catch((error: unknown) =>
           logError("assistant-schedule", "waiting updates sweep failed", error instanceof Error ? error.name : "unknown", { tenantId }),
         );
       }

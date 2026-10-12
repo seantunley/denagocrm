@@ -28,6 +28,7 @@ import {
   NUDGE_RETRY_MS,
   UPDATE_CLAIM_MS,
   UPDATE_MAX,
+  UPDATE_SEND_RESERVE_MS,
   nudgeFailureMayPass,
   PROACTIVE_SOURCES,
   QUESTION_CHARS,
@@ -503,7 +504,14 @@ export type UpdateDelivery =
  * The caller has established the workspace scope and that this person may use
  * the assistant.
  */
-export async function sendUpdatesToLinkedPhone(tenantId: string, userId: string, opts: { windowOpen?: boolean } = {}): Promise<UpdateDelivery> {
+export async function sendUpdatesToLinkedPhone(
+  tenantId: string,
+  userId: string,
+  /** shouldStop: a cron's budget. Asked before every message; what is left waits for the next run ("more"). */
+  opts: { windowOpen?: boolean; shouldStop?: (reserveMs?: number) => boolean } = {},
+): Promise<UpdateDelivery> {
+  // Room for one more message: a send may take its whole timeout, then its writes.
+  const outOfTime = () => opts.shouldStop?.(UPDATE_SEND_RESERVE_MS) === true;
   try {
     if (!(await assistantWhatsAppOn())) return "not_wanted";
     const link = await basePrisma.assistantPhoneLink.findFirst({
@@ -537,8 +545,9 @@ export async function sendUpdatesToLinkedPhone(tenantId: string, userId: string,
     // (they stop being waiting) or returns, so it ends; UPDATE_MAX bounds one call.
     for (let done = 0; batch.length > 0; batch = await waiting()) {
       for (const turn of batch) {
-        if (done >= UPDATE_MAX) return "more";
-        const refused = await sendOneUpdate(tenantId, userId, link.waId, turn);
+        if (done >= UPDATE_MAX || outOfTime()) return "more";
+        const refused = await sendOneUpdate(tenantId, userId, link.waId, turn, outOfTime);
+        if (refused === OUT_OF_TIME) return "more";
         // Meta saying "24 hours" although our clock said otherwise: the template is the way through.
         if (refused !== null) return outsideReplyWindow(refused) && !opts.windowOpen ? await nudgeWithTemplate(tenantId, link) : "failed";
         done++;
@@ -569,30 +578,48 @@ export async function sendUpdatesToLinkedPhone(tenantId: string, userId: string,
  * part and before that was written sends that one part again. A repeated
  * paragraph is the price of never losing one.
  */
-async function sendOneUpdate(tenantId: string, userId: string, waId: string, turn: { id: string; source: string; question: string; answer: string }): Promise<string | null> {
+async function sendOneUpdate(
+  tenantId: string,
+  userId: string,
+  waId: string,
+  turn: { id: string; source: string; question: string; answer: string },
+  outOfTime: () => boolean,
+): Promise<string | null | typeof OUT_OF_TIME> {
   // The workspace and the person are written out in every call below, not passed
   // in a variable: each one must show for itself whose row it touches.
   const id = turn.id;
+  // THIS claim, by its own time. Every write below names it, so a sender that
+  // was slow enough to lose its claim to another cannot write over that one's
+  // progress — its write matches nothing, and it stops.
+  const mine = new Date();
   const claimed = await basePrisma.assistantTurn.updateMany({
     where: { id, tenantId, userId, whatsappSentAt: null, OR: [{ whatsappClaimedAt: null }, { whatsappClaimedAt: { lt: new Date(Date.now() - UPDATE_CLAIM_MS) } }] },
-    data: { whatsappClaimedAt: new Date() },
+    data: { whatsappClaimedAt: mine },
   });
   if (claimed.count !== 1) return null;
   // Read AFTER the claim: where a sender that stopped had got to.
   const progress = await basePrisma.assistantTurn.findFirst({ where: { id, tenantId, userId }, select: { whatsappPartsSent: true } });
   const parts = splitForWhatsApp(updateText(turn));
   for (let part = Math.min(progress?.whatsappPartsSent ?? 0, parts.length); part < parts.length; part++) {
+    // No time left for another message: given back as it stands, for the next run.
+    if (outOfTime()) {
+      await basePrisma.assistantTurn.updateMany({ where: { id, tenantId, userId, whatsappClaimedAt: mine }, data: { whatsappClaimedAt: null } });
+      return OUT_OF_TIME;
+    }
     const sent = await sendWhatsAppText(waId, parts[part]);
     if (!sent.ok) {
       // Given back at once, with what has gone kept: the next attempt starts at this part.
-      await basePrisma.assistantTurn.updateMany({ where: { id, tenantId, userId }, data: { whatsappClaimedAt: null } });
+      await basePrisma.assistantTurn.updateMany({ where: { id, tenantId, userId, whatsappClaimedAt: mine }, data: { whatsappClaimedAt: null } });
       return sent.error ?? "WhatsApp send failed";
     }
-    await basePrisma.assistantTurn.updateMany({ where: { id, tenantId, userId }, data: { whatsappPartsSent: part + 1 } });
+    const noted = await basePrisma.assistantTurn.updateMany({ where: { id, tenantId, userId, whatsappClaimedAt: mine }, data: { whatsappPartsSent: part + 1 } });
+    // The claim is no longer ours (this took longer than it lasts): the sender that has it now carries on.
+    if (noted.count !== 1) return null;
   }
-  await basePrisma.assistantTurn.updateMany({ where: { id, tenantId, userId }, data: { whatsappSentAt: new Date(), whatsappClaimedAt: null } });
+  await basePrisma.assistantTurn.updateMany({ where: { id, tenantId, userId, whatsappClaimedAt: mine }, data: { whatsappSentAt: new Date(), whatsappClaimedAt: null } });
   return null;
 }
+const OUT_OF_TIME = Symbol("out of time");
 
 /**
  * The template: it says only that something is waiting, and carries nothing of
@@ -635,7 +662,12 @@ async function nudgeWithTemplate(tenantId: string, link: { id: string; waId: str
  * their next briefing, and a one-off could reach a day old unsent. Each person
  * is re-checked as on any other path: still a member, still allowed the assistant.
  */
-export async function sweepWaitingUpdates(tenantId: string): Promise<{ people: number }> {
+export async function sweepWaitingUpdates(tenantId: string, budget: { shouldStop: (reserveMs?: number) => boolean }): Promise<{ people: number }> {
+  // IT SHARES A TICK with the watches and the scheduled questions, and every
+  // send waits on WhatsApp. So it asks the budget before each person, and
+  // sendUpdatesToLinkedPhone asks again before each message: when time is
+  // short it stops, and what is left is here for the next tick.
+  if (budget.shouldStop(UPDATE_SEND_RESERVE_MS)) return { people: 0 };
   if (!(await assistantWhatsAppOn())) return { people: 0 };
   const waiting = await basePrisma.assistantTurn.findMany({
     where: { tenantId, source: { in: [...PROACTIVE_SOURCES] }, whatsappSentAt: null, createdAt: { gt: new Date(Date.now() - UPDATE_WAIT_MS) } },
@@ -645,8 +677,9 @@ export async function sweepWaitingUpdates(tenantId: string): Promise<{ people: n
   });
   let people = 0;
   for (const { userId } of waiting) {
+    if (budget.shouldStop(UPDATE_SEND_RESERVE_MS)) break;
     if (!(await assistantUserFor(userId))) continue;
-    await sendUpdatesToLinkedPhone(tenantId, userId);
+    await sendUpdatesToLinkedPhone(tenantId, userId, { shouldStop: budget.shouldStop });
     people++;
   }
   return { people };
