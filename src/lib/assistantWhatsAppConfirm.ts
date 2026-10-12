@@ -223,7 +223,8 @@ export async function confirmFromWhatsApp(tenantId: string, user: PermissionUser
 
   let result: Awaited<ReturnType<typeof runAssistantAction>>;
   try {
-    result = await runAsLinkedStaff(user.id, () => runAssistantAction(card));
+    // "whatsapp": a built quote's PDF is sent from here, after the ✅ — not by the action itself.
+    result = await runAsLinkedStaff(user.id, () => runAssistantAction(card, "whatsapp"));
   } catch (error) {
     // Anything thrown — a guard's refusal included — ends this task. A refusal
     // usually comes before any write, but from here it cannot be told apart from
@@ -257,5 +258,8 @@ export async function confirmFromWhatsApp(tenantId: string, user: PermissionUser
     ...("leadId" in card && card.leadId ? { leadId: card.leadId } : {}),
     ...(card.kind === "customer_note" ? { contactId: card.contactId } : {}),
   });
-  return say(waId, `✅ ${result.success ?? "Done"}`);
+  await say(waId, `✅ ${result.success ?? "Done"}`);
+  // A quote it built: runAssistantAction has queued the PDF as an update for this
+  // person, and the caller (handleStaffWhatsApp) sends what is waiting once this
+  // returns. Nothing is sent to anyone from here beyond the line above.
 }

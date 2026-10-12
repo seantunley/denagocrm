@@ -7,6 +7,8 @@ import { revalidatePath } from "next/cache";
 import type { Prisma } from "@prisma/client";
 import { prisma, basePrisma } from "@/lib/db";
 import { payableTotalCents } from "@/lib/pricing";
+import { QUOTE_PDF_SOURCE } from "@/lib/assistantWhatsAppRules";
+import { tenantOrigin } from "@/lib/tenantOrigin";
 import { logAudit, GOVERNANCE_TX } from "@/lib/audit";
 import { CLOSED_REQUEST_STATUSES } from "@/lib/signing/status";
 import { hasOpenSignatureRequest } from "@/lib/quoteLock";
@@ -79,6 +81,13 @@ const quoteDraftSchema = z.object({
       taxRatePct: z.number().finite().min(0).max(100).optional(),
     }),
   ).max(20).optional(),
+  /**
+   * On a NEW draft: also queue this quote's PDF for the person saving it, to the
+   * WhatsApp THEY linked (the assistant's "build me a quote"). It says who by
+   * being who is signed in — there is no recipient to name — so the most anyone
+   * can do with it is have their own draft sent to their own verified phone.
+   */
+  pdfToMyWhatsApp: z.boolean().optional(),
 });
 
 export type QuoteDraftInput = z.input<typeof quoteDraftSchema>;
@@ -449,6 +458,8 @@ export async function saveQuoteDraft(input: QuoteDraftInput): Promise<QuoteDraft
   // right owner for a quote being created here and only the FALLBACK for one
   // that already exists — see quoteTenantId in the edit path below.
   const actingTenant = await actingTenantId();
+  // Resolved outside the transaction (a settings read), for the link in the update below.
+  const quoteOrigin = data.pdfToMyWhatsApp ? (await tenantOrigin(actingTenant).catch(() => "")).replace(/\/$/, "") : "";
   const result = await basePrisma.$transaction(async (tx) => {
     if (data.id) {
       // Lock the quote row FOR UPDATE and re-check editability inside the
@@ -578,29 +589,45 @@ export async function saveQuoteDraft(input: QuoteDraftInput): Promise<QuoteDraft
     // finds no prior row and is dropped rather than choosing a primary key.
     const itemRows = itemRowsFor(normalizedItems, new Map(), createDefaults.regional.vatRatePct);
     const feeRows = feeRowsFor(normalizedFees, new Map(), createDefaults.regional.vatRatePct);
-    return {
-      // A brand-new quote has no prior owner, so the actor IS the parent's owner
-      // here — and the children take the same value, which is the same
-      // parent-owns-child invariant the edit path above applies to an existing
-      // quote. Nested creates inherit nothing in Prisma, hence the explicit stamp.
-      quote: await tx.quote.create({
+    // A brand-new quote has no prior owner, so the actor IS the parent's owner
+    // here — and the children take the same value, which is the same
+    // parent-owns-child invariant the edit path above applies to an existing
+    // quote. Nested creates inherit nothing in Prisma, hence the explicit stamp.
+    const created = await tx.quote.create({
+      data: {
+        number,
+        tenantId: actingTenant,
+        contactId: data.contactId,
+        leadId: linkedLeadId,
+        createdById: user.id,
+        validUntil: validUntil ?? createDefaults.validUntil,
+        terms: data.terms || createDefaults.terms,
+        status: data.intent,
+        ...cpqQuoteData,
+        items: itemRows.length > 0 ? { create: itemRows.map((row) => ({ ...row, tenantId: actingTenant })) } : undefined,
+        fees: feeRows.length > 0 ? { create: feeRows.map((row) => ({ ...row, tenantId: actingTenant })) } : undefined,
+      },
+    });
+    // ITS PDF, FOR THE PERSON WHO MADE IT — written in THIS transaction, so a
+    // quote the assistant built and the record that gets its PDF to them exist
+    // together or not at all. (Written after the quote instead, a failure there
+    // left a quote with nothing for the retrying delivery to find.) It is an
+    // update for the SIGNED-IN person only, sent to the phone they linked
+    // themselves and re-verified at send time — never to a customer. A draft only.
+    if (data.pdfToMyWhatsApp && data.intent === "draft") {
+      const total = payableTotalCents({ items: itemRows, fees: feeRows, ...cpqQuoteData });
+      await tx.assistantTurn.create({
         data: {
-          number,
           tenantId: actingTenant,
-          contactId: data.contactId,
-          leadId: linkedLeadId,
-          createdById: user.id,
-          validUntil: validUntil ?? createDefaults.validUntil,
-          terms: data.terms || createDefaults.terms,
-          status: data.intent,
-          ...cpqQuoteData,
-          items: itemRows.length > 0 ? { create: itemRows.map((row) => ({ ...row, tenantId: actingTenant })) } : undefined,
-          fees: feeRows.length > 0 ? { create: feeRows.map((row) => ({ ...row, tenantId: actingTenant })) } : undefined,
+          userId: user.id,
+          source: QUOTE_PDF_SOURCE,
+          quoteId: created.id,
+          question: `Draft quote Q-${number}`,
+          answer: `I've created draft quote Q-${number} (${formatZAR(Math.round(total))}). It has NOT been sent to the customer — sending it is your step.\n${quoteOrigin}/quotes?edit=${created.id}`,
         },
-      }),
-      itemRows,
-      feeRows,
-    };
+      });
+    }
+    return { quote: created, itemRows, feeRows };
   });
 
   if (!result) {
