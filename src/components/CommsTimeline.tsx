@@ -4,6 +4,8 @@ import { SaveForm, SaveButton } from "@/components/SaveForm";
 import { formatDateTime } from "@/lib/format";
 import { storedFileSrc } from "@/lib/storedFileSrc";
 import PasteImageInput from "@/components/PasteImageInput";
+import DealField from "@/components/DealField";
+import type { DealOption } from "@/lib/customerTimeline";
 import { SEEN_HINT, seenLabel } from "@/lib/emailOpenTracking";
 
 /* eslint-disable @next/next/no-img-element */
@@ -54,7 +56,10 @@ export default function CommsTimeline({
   revalidate,
   hideCreate = false,
   emptyText = "No communications logged yet.",
+  deals = [],
 }: {
+  /** The customer's open deals, on a customer's page (lib/customerTimeline.dealChoice). */
+  deals?: readonly DealOption[];
   communications: Comm[];
   contactId?: string;
   leadId?: string;
@@ -82,6 +87,8 @@ export default function CommsTimeline({
         <SaveForm action={addCommunication} className="mt-3 mb-2 space-y-3 rounded-lg bg-slate-800/40 p-4 border border-slate-800">
         {contactId && <input type="hidden" name="contactId" value={contactId} />}
         {leadId && <input type="hidden" name="leadId" value={leadId} />}
+        {/* On a customer's page: which of their deals this is about (asked only when there are several). */}
+        {!leadId && deals.length > 0 && <DealField deals={deals} id="comms-deal" />}
         <input type="hidden" name="revalidate" value={revalidate} />
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
           <div>

@@ -10,6 +10,7 @@ import DocumentsPanel from "@/components/DocumentsPanel";
 import PortalUploadsList, { type PortalUploadRow } from "@/components/PortalUploadsList";
 import ActivityPanel from "@/components/ActivityPanel";
 import EmailComposer from "@/components/EmailComposer";
+import { customerTimelineWhere, type DealOption } from "@/lib/customerTimeline";
 import { composerQuotes } from "@/lib/composerQuotes";
 import { composerReplyToDefault } from "@/lib/replyToDefault";
 import LeadTimeline from "@/components/LeadTimeline";
@@ -75,7 +76,6 @@ export default async function ContactDetailPage({
     include: {
       vehicles: { where: { deletedAt: null }, include: { serviceRecords: true, mileageLogs: true } },
       leads: { where: { deletedAt: null }, include: { stage: true, product: true, createdBy: true }, orderBy: { createdAt: "desc" } },
-      communications: { include: { user: true }, orderBy: { occurredAt: "desc" } },
       documents: { where: { deletedAt: null }, include: { uploadedBy: true }, orderBy: { createdAt: "desc" } },
       // Quotes are shown ALONGSIDE the files in the Documents tab. Previously the
       // tab listed only Document rows, so a quote only appeared once somebody had
@@ -86,13 +86,6 @@ export default async function ContactDetailPage({
         include: { items: true, fees: { orderBy: { sortOrder: "asc" } } },
         orderBy: { createdAt: "desc" },
       },
-      activities: {
-        include: {
-          assignedTo: true,
-          attendees: { select: { userId: true, user: { select: { name: true } } }, orderBy: { createdAt: "asc" } },
-        },
-        orderBy: { dueDate: "asc" },
-      },
       consentRecords: { orderBy: { createdAt: "desc" } },
       researchNotes: { orderBy: { createdAt: "desc" } },
       tags: true,
@@ -101,6 +94,28 @@ export default async function ContactDetailPage({
     },
   });
   if (!contact) notFound();
+  // ONE TIMELINE (lib/customerTimeline.ts): everything filed on this customer AND
+  // everything filed on any of their deals — a call logged on the deal, a quote
+  // emailed from it. They used to show only on the deal's own page. A deal this
+  // person may not open contributes nothing.
+  const accessibleLeadIds = await getAccessibleLeadIds(user);
+  const myDeals = contact.leads.filter((deal) => accessibleLeadIds === null || accessibleLeadIds.includes(deal.id));
+  const timelineWhere = customerTimelineWhere(contact.id, myDeals.map((deal) => deal.id));
+  const [timelineComms, activities] = await Promise.all([
+    prisma.communication.findMany({ where: timelineWhere, include: { user: true }, orderBy: { occurredAt: "desc" } }),
+    prisma.activity.findMany({
+      where: timelineWhere,
+      include: {
+        assignedTo: true,
+        attendees: { select: { userId: true, user: { select: { name: true } } }, orderBy: { createdAt: "asc" } },
+      },
+      orderBy: { dueDate: "asc" },
+    }),
+  ]);
+  const dealTitle = new Map(myDeals.map((deal) => [deal.id, deal.title]));
+  // What is being written from here is about WHICH deal? None open: the customer.
+  // One: that one. More than one: the form asks (dealChoice).
+  const openDeals: DealOption[] = myDeals.filter((deal) => deal.status === "open").map((deal) => ({ id: deal.id, label: deal.title }));
   // Document.quoteId is a bare column with no Prisma relation, so the quote's
   // paperwork has to be fetched separately — the same way the deliveries board
   // does it. Fetching BY QUOTE rather than by contact matters: a signed PDF or an
@@ -226,7 +241,10 @@ export default async function ContactDetailPage({
 
   // Research is stored on the contact itself (Research tab). Legacy research
   // notes (pre-migration) are still filtered out of the comms timeline.
-  const comms = contact.communications.filter((c) => c.subject !== RESEARCH_SUBJECT);
+  const comms = timelineComms
+    .filter((c) => c.subject !== RESEARCH_SUBJECT)
+    // Said which deal it belongs to, when it is a deal's entry.
+    .map((c) => (c.leadId && dealTitle.has(c.leadId) ? { ...c, ownerLabel: `Deal: ${dealTitle.get(c.leadId)}` } : c));
   const health = await contactHealth(contact.id);
 
   return (
@@ -241,7 +259,7 @@ export default async function ContactDetailPage({
       facts={[
         ...(automotiveOn ? [{ label: "Vehicles", value: contact.vehicles.length }] : []),
         { label: "Open leads", value: contact.leads.filter((lead) => lead.status === "open").length },
-        { label: "Activities", value: contact.activities.filter((activity) => activity.status === "planned").length },
+        { label: "Activities", value: activities.filter((activity) => activity.status === "planned").length },
         { label: "Documents", value: looseDocuments.length + quoteDocuments.length },
       ]}
       actions={<>
@@ -329,10 +347,10 @@ export default async function ContactDetailPage({
               {
                 key: "activities",
                 label: "Activities",
-                count: contact.activities.filter((a) => a.status === "planned").length,
+                count: activities.filter((a) => a.status === "planned").length,
                 content: (
                   <ActivityPanel
-                    activities={contact.activities}
+                    activities={activities}
                     users={users}
                     currentUserId={user.id}
                     contactId={contact.id}
@@ -430,6 +448,7 @@ export default async function ContactDetailPage({
                       templates={renderedTemplates}
                       smtpConfigured={smtpConfigured}
                       contactId={contact.id}
+                      deals={openDeals}
                       revalidate={path}
                       libraryDocs={libraryDocs}
                       quotes={composerQuotes(contact.quotes, canCancelQuotes)}
@@ -439,6 +458,7 @@ export default async function ContactDetailPage({
                     <WhatsAppPanel
                       phone={contact.whatsapp ?? contact.phone}
                       contactId={contact.id}
+                      deals={openDeals}
                       configured={waConfigured}
                       revalidate={path}
                       messages={comms
@@ -457,6 +477,7 @@ export default async function ContactDetailPage({
                     <CommsTimeline
                       communications={comms}
                       contactId={contact.id}
+                      deals={openDeals}
                       revalidate={path}
                     />
                   </>
@@ -739,11 +760,12 @@ export default async function ContactDetailPage({
 
         <LeadTimeline
           contactId={contact.id}
+          deals={openDeals}
           revalidate={path}
           audit={history}
           auditDetail={await auditDetailFor(history)}
           communications={comms}
-          activities={contact.activities}
+          activities={activities}
           creationNote={
             contact.notes
               ? {
