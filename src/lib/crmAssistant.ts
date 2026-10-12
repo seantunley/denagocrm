@@ -1,4 +1,5 @@
 import "server-only";
+import { randomBytes } from "node:crypto";
 import { z } from "zod";
 import { prisma } from "./db";
 import { logError } from "./errorLog";
@@ -2315,6 +2316,7 @@ async function resolveActions(user: User, proposals: ProposedAction[]): Promise<
         id: `a${index}-${quote.id}`, kind: "quote_add", leadId: quote.leadId, leadLabel: customerName,
         quoteId: quote.id, quoteNumber: quote.number, contactId: quote.contactId, lines, fees,
         title: `Add to draft quote Q-${quote.number}`, text: quoteAddText(lines, fees, (cents) => formatZAR(cents)),
+        confirmKey: `qk_${randomBytes(16).toString("hex")}`,
         ...(p.reason ? { reason: p.reason } : {}),
       });
       continue;
@@ -2373,6 +2375,7 @@ async function resolveActions(user: User, proposals: ProposedAction[]): Promise<
         id: `a${index}-${forDeal?.id ?? customerId}`, kind: "quote_build", leadId: forDeal?.id ?? null,
         leadLabel: forDeal?.label ?? customerName, contactId: customerId, lines,
         title: `Create a draft quote for ${customerName}`, text: quoteBuildText(lines, (cents) => formatZAR(cents)),
+        confirmKey: `qk_${randomBytes(16).toString("hex")}`,
         ...(p.reason ? { reason: p.reason } : {}),
       });
       continue;

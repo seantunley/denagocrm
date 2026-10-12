@@ -7,9 +7,8 @@ import { assistantTurnsToday } from "@/lib/crmAssistant";
 import { getSetting } from "@/lib/settings";
 import { isCodexConnected } from "@/lib/codex";
 import { ASSISTANT_PROFILE_KEY, parseProfile } from "@/lib/assistantSoul";
-import { QUOTE_ADD_MAX_FEES, QUOTE_ADD_MAX_FEE_RANDS, QUOTE_BUILD_MAX_LINES, STALE_CARD, type ActionCard } from "@/lib/assistantActions";
+import { CONFIRM_KEY, QUOTE_ADD_MAX_FEES, QUOTE_ADD_MAX_FEE_RANDS, QUOTE_BUILD_MAX_LINES, STALE_CARD, type ActionCard } from "@/lib/assistantActions";
 import { editorDefaults, quoteFromLeadDefaults } from "@/lib/quoteFromLead";
-import { calendarDateIn } from "@/lib/quoteExpiry";
 import { QUOTE_PDF_SOURCE } from "@/lib/assistantWhatsAppRules";
 import { tenantOrigin } from "@/lib/tenantOrigin";
 import { payableTotalCents } from "@/lib/pricing";
@@ -309,6 +308,10 @@ export async function runAssistantAction(
           // together or not at all, so there is never a built quote with nothing
           // for the retrying delivery to find.
           pdfToMyWhatsApp: true,
+          // ONE CONFIRM, ONE QUOTE: the card's key is spent in the transaction that
+          // creates the quote, so a Confirm pressed again after a lost answer creates
+          // no second quote. (A card proposed before keys existed has none, and runs as it did.)
+          ...(CONFIRM_KEY.test(String(card.confirmKey ?? "")) ? { confirmKey: card.confirmKey } : {}),
           items: lines.map((line) => {
             const product = byId.get(line.productId)!;
             return {
@@ -384,18 +387,21 @@ export async function runAssistantAction(
         return { ok: true, success: `The PDF of Q-${quote.number} is on its way to your WhatsApp. It has NOT been sent to the customer.`, href: `/quotes?edit=${quote.id}` };
       }
       case "quote_add": {
-        // ADDS to a draft, through the same door the quote editor saves through:
-        // everything already on the quote goes back exactly as it is (each row by
-        // its id, so its hidden columns survive), with the new fees and lines after
-        // it. saveQuoteDraft re-checks that this person may edit this quote and that
-        // it is still an editable draft — sent, signed or out for signature refuses.
+        // ADDS to a draft, through the same door the quote editor saves through, in
+        // its ADD-ONLY mode: only the new fees and lines are sent, and they are
+        // added inside the save's own lock on the quote — nothing already on it is
+        // read here, sent back or rewritten, so an edit somebody else saves a moment
+        // before cannot be undone by this. saveQuoteDraft re-checks that this person
+        // may edit this quote and that it is still an editable draft — sent, signed
+        // or out for signature refuses. The card's key makes it happen once.
+        if (!CONFIRM_KEY.test(String(card.confirmKey ?? ""))) return untouched(STALE_CARD);
         const fees = Array.isArray(card.fees) ? card.fees : [];
         const lines = Array.isArray(card.lines) ? card.lines : [];
         if (fees.length + lines.length === 0 || fees.length > QUOTE_ADD_MAX_FEES || lines.length > QUOTE_BUILD_MAX_LINES) return untouched("That isn't valid — ask again.");
         if (fees.some((fee) => !Number.isInteger(fee.amountCents) || fee.amountCents <= 0 || fee.amountCents > QUOTE_ADD_MAX_FEE_RANDS * 100 || !String(fee.label ?? "").trim())) {
           return untouched("That isn't valid — ask again.");
         }
-        const quote = await prisma.quote.findFirst({ where: { id: String(card.quoteId ?? ""), deletedAt: null }, include: { items: { orderBy: { sortOrder: "asc" } }, fees: { orderBy: { sortOrder: "asc" } } } });
+        const quote = await prisma.quote.findFirst({ where: { id: String(card.quoteId ?? ""), deletedAt: null }, select: { id: true, status: true, contactId: true, leadId: true } });
         // Asked here as a yes/no: saveQuoteDraft's own check REDIRECTS, which a Confirm tapped on WhatsApp has nowhere to follow.
         if (!quote || !(await hasPermission(user, "quotes.edit")) || !(await canAccessQuote(user, quote.id))) return untouched("That quote is no longer there.");
         if (quote.status !== "draft" || !quote.contactId) return untouched("That quote is no longer a draft, so it can't be added to — revise it in the CRM.");
@@ -407,35 +413,26 @@ export async function runAssistantAction(
         if (lines.some((line) => byId.get(line.productId)?.basePriceCents !== line.unitPriceCents)) {
           return untouched("The catalogue changed since DAX suggested this — ask again to see today's prices.");
         }
-        const { regional } = await quoteFromLeadDefaults();
         const saved = await saveQuoteDraft({
           id: quote.id,
           contactId: quote.contactId,
-          validUntil: quote.validUntil ? calendarDateIn(quote.validUntil, regional.timeZone) : null,
-          terms: quote.terms ?? "",
+          // Add-only: the quote's own expiry, terms, VAT mode and deposit are not sent and not touched.
+          terms: "",
           intent: "draft",
-          taxInclusive: quote.taxInclusive,
-          depositType: quote.depositType === "percent" || quote.depositType === "amount" ? quote.depositType : null,
-          depositValue: quote.depositValue,
+          appendOnly: true,
+          confirmKey: card.confirmKey,
           pdfToMyWhatsApp: true,
-          items: [
-            ...quote.items.map((item) => ({
-              id: item.id, description: item.description, qty: item.qty, unitPriceCents: item.unitPriceCents, productId: item.productId,
-              colorPreference: item.colorPreference, discountPct: item.discountPct, taxRatePct: item.taxRatePct,
-            })),
-            ...lines.map((line) => {
-              const product = byId.get(line.productId)!;
-              return {
-                description: product.name, qty: line.qty, unitPriceCents: product.basePriceCents, productId: product.id,
-                discountPct: line.discountPct, ...(line.colour ? { colorPreference: line.colour } : {}),
-              };
-            }),
-          ],
-          fees: [
-            ...quote.fees.map((fee) => ({ id: fee.id, label: fee.label, kind: fee.kind === "delivery" ? "delivery" as const : "fee" as const, amountCents: fee.amountCents, taxRatePct: fee.taxRatePct })),
-            ...fees.map((fee) => ({ label: String(fee.label).trim(), kind: fee.delivery ? "delivery" as const : "fee" as const, amountCents: fee.amountCents })),
-          ],
+          items: lines.map((line) => {
+            const product = byId.get(line.productId)!;
+            return {
+              description: product.name, qty: line.qty, unitPriceCents: product.basePriceCents, productId: product.id,
+              discountPct: line.discountPct, ...(line.colour ? { colorPreference: line.colour } : {}),
+            };
+          }),
+          fees: fees.map((fee) => ({ label: String(fee.label).trim(), kind: fee.delivery ? "delivery" as const : "fee" as const, amountCents: fee.amountCents })),
         });
+        // Already carried out (the first Confirm's answer never reached them): said as done, and nothing is added again.
+        if (!saved.ok && saved.repeated) return { ok: true, success: "Already added — nothing was added twice. It has NOT been sent to the customer.", href: `/quotes?edit=${quote.id}` };
         if (!saved.ok) return { ok: false, error: saved.error };
         await logAudit({
           action: "assistant.action_confirmed",

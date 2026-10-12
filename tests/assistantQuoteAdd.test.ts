@@ -103,15 +103,71 @@ test("Confirm saves through the quote editor's own door, keeping every existing 
   assert.match(branch, /intent: "draft",/);
   assert.doesNotMatch(branch, /intent: "sent"/);
   assert.match(branch, /pdfToMyWhatsApp: true,/);
-  // Existing rows go back by id, so their hidden columns (cost, optional, selected) survive.
-  assert.match(branch, /\.\.\.quote\.items\.map\(\(item\) => \(\{\s*id: item\.id,/);
-  assert.match(branch, /\.\.\.quote\.fees\.map\(\(fee\) => \(\{ id: fee\.id,/);
-  // The quote's own expiry, terms, VAT mode and deposit are sent back as they are.
-  assert.match(branch, /validUntil: quote\.validUntil \? calendarDateIn\(quote\.validUntil, regional\.timeZone\) : null,/);
-  assert.match(branch, /terms: quote\.terms \?\? "",\s*intent: "draft",\s*taxInclusive: quote\.taxInclusive,/);
+  // ADD-ONLY (review of #879, finding 1): the action sends the additions and nothing else. It does not read the
+  // quote's rows, so it holds no copy of them that could be out of date by the time the save locks the quote.
+  assert.match(branch, /appendOnly: true,/);
+  // (Up to and including the save. Afterwards it reads the saved quote once, to report the new total.)
+  const upToSave = branch.slice(0, branch.indexOf("if (!saved.ok"));
+  assert.doesNotMatch(upToSave, /quote\.items|quote\.fees|include: \{|validUntil|taxInclusive|depositType|depositValue/);
+  // ONCE (finding 2): no key, no run; and a card already carried out is reported as done, not run again.
+  assert.match(branch, /if \(!CONFIRM_KEY\.test\(String\(card\.confirmKey \?\? ""\)\)\) return untouched\(STALE_CARD\);/);
+  assert.match(branch, /confirmKey: card\.confirmKey,/);
+  assert.match(branch, /if \(!saved\.ok && saved\.repeated\) return \{ ok: true, success: "Already added — nothing was added twice\./);
 
   // The edit path writes the delivery record in the same transaction as the rows.
   const quotes = code("src/app/actions/quotes.ts");
   const edit = quotes.slice(quotes.indexOf("if (data.id) {"), quotes.indexOf("const number = await nextQuoteNumber(tx)", quotes.indexOf("if (data.id) {")));
   assert.match(edit, /if \(data\.pdfToMyWhatsApp && data\.intent === "draft"\) \{[\s\S]*?await tx\.assistantTurn\.create\(\{[\s\S]*?userId: user\.id,\s*source: QUOTE_PDF_SOURCE,\s*quoteId: existing\.id,/);
+});
+
+test("ADD-ONLY is done under the quote's lock, from what is on the quote THEN — it rewrites nothing (review of #879)", () => {
+  const quotes = code("src/app/actions/quotes.ts");
+  const tx = quotes.slice(quotes.indexOf("const result = await basePrisma.$transaction(async (tx) => {"), quotes.indexOf("if (result === REPEATED) {"));
+  const add = tx.slice(tx.indexOf("if (data.appendOnly) {"), tx.indexOf("if (existing.leadId && existing.contactId && existing.contactId !== data.contactId) {"));
+  assert.ok(add.length > 0);
+  // After the lock and the editability check, which read the quote as it is now.
+  assert.ok(tx.indexOf("FOR UPDATE") < tx.indexOf("if (data.appendOnly) {"));
+  assert.ok(tx.indexOf("(await hasOpenSignatureRequest(tx, existing.id))") < tx.indexOf("if (data.appendOnly) {"));
+  // It only creates rows. Nothing is deleted, and the header is not written from the request.
+  assert.doesNotMatch(add, /deleteMany|priorById|data\.terms|validUntil|cpqQuoteData|contactId: data\.contactId/);
+  assert.match(add, /data: \{ status: "draft" \}/);
+  assert.match(add, /itemRowsFor\(normalizedItems, new Map\(\)/);
+  assert.match(add, /feeRowsFor\(normalizedFees, new Map\(\)/);
+  assert.match(add, /sortOrder: existing\.fees\.length \+ at/);
+  // The total it reports is worked out from the rows read under the lock plus what was added, with the quote's own VAT mode and deposit.
+  assert.match(add, /return finish\(\[\.\.\.existing\.items, \.\.\.addedItems\], \[\.\.\.existing\.fees, \.\.\.addedFees\], \{\s*taxInclusive: existing\.taxInclusive,/);
+  // A different customer than the quote's, or anything but a draft save, is refused.
+  assert.match(add, /if \(data\.intent !== "draft" \|\| existing\.contactId !== data\.contactId\) return null;/);
+});
+
+test("ONE CONFIRM, ONE CHANGE: the card's key is spent in the transaction that makes the change (review of #879)", async () => {
+  const { CONFIRM_KEY } = await import("../src/lib/assistantActions");
+  assert.ok(CONFIRM_KEY.test("qk_0123456789abcdef0123456789abcdef"));
+  for (const bad of ["", "qk_short", "cmabcdefghijklmnopqrstuv", "qk_0123456789abcdef0123456789abcdeg", "qk_0123456789abcdef0123456789abcdef0"]) assert.ok(!CONFIRM_KEY.test(bad), bad);
+
+  // Minted on the server when the card is made — for both quote cards.
+  const assistant = code("src/lib/crmAssistant.ts");
+  assert.equal((assistant.match(/confirmKey: `qk_\$\{randomBytes\(16\)\.toString\("hex"\)\}`,/g) ?? []).length, 2);
+
+  const quotes = code("src/app/actions/quotes.ts");
+  assert.match(quotes, /confirmKey: z\.string\(\)\.regex\(CONFIRM_KEY\)\.optional\(\),/);
+  const claim = quotes.slice(quotes.indexOf("const claimConfirmKey = async ("), quotes.indexOf("const result = await basePrisma.$transaction("));
+  // The key IS the row's primary key: found → already done; otherwise written on the SAME transaction client.
+  assert.match(claim, /if \(await tx\.assistantPendingAction\.findFirst\(\{ where: \{ id: data\.confirmKey, tenantId: actingTenant \}, select: \{ id: true \} \}\)\) return false;/);
+  assert.match(claim, /await tx\.assistantPendingAction\.create\(\{\s*data: \{\s*id: data\.confirmKey, tenantId: actingTenant, userId: user\.id,/);
+  // Spent, never offered: completed at once, so neither the WhatsApp confirm path nor the Ask page's list picks it up.
+  assert.match(claim, /confirmedAt: now, completedAt: now,/);
+  assert.doesNotMatch(claim, /forCrm: true/);
+  // It holds no customer details.
+  assert.match(claim, /card: \{ kind: "confirm_key", what \}/);
+
+  const tx = quotes.slice(quotes.indexOf("const result = await basePrisma.$transaction(async (tx) => {"), quotes.indexOf("if (result === REPEATED) {"));
+  // Claimed before anything is written, in both paths: adding to a draft, and creating a quote.
+  const add = tx.slice(tx.indexOf("if (data.appendOnly) {"));
+  assert.ok(add.indexOf("claimConfirmKey(tx,") < add.indexOf("tx.quote.updateMany("));
+  assert.ok(tx.indexOf('claimConfirmKey(tx, "a new quote")') < tx.indexOf("const number = await nextQuoteNumber(tx);"));
+  assert.equal((tx.match(/if \(!\(await claimConfirmKey\(tx, [^)]*\)\)\) return REPEATED;/g) ?? []).length, 2);
+  // Two at the same instant: the loser's key collides, its transaction is undone, and it is reported as repeated.
+  assert.match(tx, /\(error as \{ code\?: string \}\)\.code === "P2002"\) return REPEATED;/);
+  assert.match(quotes, /if \(result === REPEATED\) \{\s*return \{ ok: false, error: "That was already confirmed[^"]*", repeated: true \};/);
 });

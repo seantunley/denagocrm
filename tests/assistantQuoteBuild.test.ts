@@ -256,7 +256,9 @@ test("THE PDF GOES TO THE PERSON WHO ASKED — the only number it can reach is t
   // In this workspace, still there — and theirs, or one they may open NOW (a colleague's
   // draft they added to, or a quote whose PDF they asked for: assistantQuoteAdd.test.ts).
   assert.match(send, /basePrisma\.quote\.findFirst\(\{ where: \{ id: quoteId, tenantId, deletedAt: null \}, select: \{ id: true, number: true, status: true, createdById: true \} \}\)/);
-  assert.match(send, /if \(quote\.createdById !== userId && !\(await canAccessQuote\(user, quote\.id\)\)\) return null;/);
+  // EVERY delivery asks whether they may open it now — their own quotes included (review of #879).
+  assert.match(send, /const mayOpen =\s*\(await canAccessQuote\(user, quote\.id\)\) \|\|\s*\(quote\.createdById === userId && quote\.status === "draft" && \(await hasPermission\(user, "quotes\.create"\)\)\);\s*if \(!mayOpen\) return null;/);
+  assert.doesNotMatch(send, /createdById !== userId/, "no path skips the check for the creator");
   assert.ok(send.indexOf("canAccessQuote(user, quote.id)") < send.indexOf("await quotePdf(quote.id)"), "before anything is rendered");
   // It looks up no customer and no other number, and changes nothing about the quote.
   const body = send.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");

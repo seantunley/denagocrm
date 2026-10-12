@@ -75,8 +75,12 @@ test("an existing quote's children inherit the QUOTE's owner, not the editor's",
   // The edit path's child writes, from the derivation to the re-read that ends it.
   const editChildren = source.slice(
     source.indexOf("const quoteTenantId ="),
-    source.indexOf("tx.quote.findUniqueOrThrow"),
+    source.indexOf("return finish(itemRows, feeRows, cpqQuoteData);"),
   );
+  // The add-only path (the assistant adding a fee or a line) follows the same rule for what it adds.
+  const added = source.slice(source.indexOf("if (data.appendOnly) {"), source.indexOf("// CHANGING the customer is refused"));
+  assert.match(added, /const ownerTenantId = existing\.tenantId \?\? actingTenant;/);
+  assert.equal((added.match(/quoteId: existing\.id, tenantId: ownerTenantId/g) ?? []).length, 2, "added items and added fees");
   assert.ok(editChildren.length > 0, "the edit path's child writes must be locatable");
   assert.doesNotMatch(
     editChildren,

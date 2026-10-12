@@ -20,7 +20,7 @@ import { ASSISTANT_VOICE_REPLIES_KEY, voiceLanguageFor, voiceRepliesSwitchOn } f
 import { voiceLanguage, type VoiceLanguage } from "./voiceLanguage";
 import { ASSISTANT_PROFILE_KEY, parseProfile } from "./assistantSoul";
 import { logAudit } from "./audit";
-import { canAccessQuote } from "./permissions";
+import { canAccessQuote, hasPermission } from "./permissions";
 import { logError } from "./errorLog";
 import { rateLimitKey, registerRateLimitAttempt } from "./rateLimit";
 import { readUserSecurityStateStrict } from "./userSecurity";
@@ -678,9 +678,19 @@ async function sendQuotePdfToStaff(tenantId: string, userId: string, waId: strin
   if (!user) return null;
   const quote = await basePrisma.quote.findFirst({ where: { id: quoteId, tenantId, deletedAt: null }, select: { id: true, number: true, status: true, createdById: true } });
   if (!quote) return null;
-  // Somebody else's quote (they added to a colleague's draft, or asked for its PDF):
-  // only while they may still open it — asked now, with their own access rules.
-  if (quote.createdById !== userId && !(await canAccessQuote(user, quote.id))) return null;
+  // MAY THEY OPEN THIS QUOTE NOW? Asked for EVERY delivery, their own quotes
+  // included: the update may have waited (a day, at most) and their access can
+  // have been taken away meanwhile — having created a quote is not a standing
+  // right to its PDF. (Review of #879: the check was skipped for the creator.)
+  // canAccessQuote is their quote-viewing permission AND their access to this record.
+  //
+  // One case it does not cover is kept, narrowly: somebody allowed to CREATE
+  // quotes but not to browse them still gets the draft they have just had built —
+  // only theirs, only while it is a draft, only while they may still create quotes.
+  const mayOpen =
+    (await canAccessQuote(user, quote.id)) ||
+    (quote.createdById === userId && quote.status === "draft" && (await hasPermission(user, "quotes.create")));
+  if (!mayOpen) return null;
   const what = quote.status === "draft" ? "Draft quote" : "Quote";
   const rendered = await quotePdf(quote.id);
   if (!rendered.ok) {

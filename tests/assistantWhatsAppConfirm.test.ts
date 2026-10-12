@@ -429,12 +429,13 @@ test("A PINNED NOTE WHOSE PIN FAILS IS NOT WRITTEN TWICE: the note was saved, so
   // (Five of them are quote_build's: lead gone, lead's customer changed, customer gone, invalid lines, catalogue changed — each before saveQuoteDraft.)
   // (And five are quote_add's: nothing to add, an invalid fee, quote gone or not theirs, no longer a draft, catalogue changed.)
   // (And two are quote_pdf's: quote gone or not theirs, no linked phone — each before its one write.)
-  assert.equal((run.match(/return untouched\(/g) ?? []).length, 22);
+  // (And one more of quote_add's: a card with no confirm key.)
+  assert.equal((run.match(/return untouched\(/g) ?? []).length, 23);
   const quotePdfCase = run.slice(run.indexOf('case "quote_pdf": {'), run.indexOf('case "quote_add": {'));
   assert.equal((quotePdfCase.slice(0, quotePdfCase.indexOf("assistantTurn.create(")).match(/return untouched\(/g) ?? []).length, 2);
   assert.equal((quotePdfCase.slice(quotePdfCase.indexOf("assistantTurn.create(")).match(/untouched\(/g) ?? []).length, 0);
   const quoteAdd = run.slice(run.indexOf('case "quote_add": {'));
-  assert.equal((quoteAdd.slice(0, quoteAdd.indexOf("await saveQuoteDraft(")).match(/return untouched\(/g) ?? []).length, 5);
+  assert.equal((quoteAdd.slice(0, quoteAdd.indexOf("await saveQuoteDraft(")).match(/return untouched\(/g) ?? []).length, 6);
   assert.equal((quoteAdd.slice(quoteAdd.indexOf("await saveQuoteDraft("), quoteAdd.indexOf("default:")).match(/untouched\(/g) ?? []).length, 0);
   const quoteBuild = run.slice(run.indexOf('case "quote_build": {'), run.indexOf('case "quote_pdf": {'));
   assert.equal((quoteBuild.slice(0, quoteBuild.indexOf("await saveQuoteDraft(")).match(/return untouched\(/g) ?? []).length, 5);

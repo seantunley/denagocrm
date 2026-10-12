@@ -330,7 +330,13 @@ export function quoteBuildText(lines: readonly QuoteBuildLine[], money: (cents: 
   ].join("\n");
 }
 
-export type QuoteAddFee = { label: string; amountCents: number; delivery: boolean };
+/**
+ * The key a quote card is confirmed with — minted on the server when the card is
+ * made, and spent in the transaction that carries the card out, so a second
+ * Confirm of the same card changes nothing (app/actions/quotes.ts claimConfirmKey).
+ */
+export const CONFIRM_KEY = /^qk_[a-f0-9]{32}$/;
+export type QuoteAddFee ={ label: string; amountCents: number; delivery: boolean };
 /** What a quote_add card adds, as the person reads it before confirming. */
 export function quoteAddText(lines: readonly QuoteBuildLine[], fees: readonly QuoteAddFee[], money: (cents: number) => string): string {
   return [
@@ -358,9 +364,10 @@ export type ActionCard =
   // `text` is the whole quote as the person reads it before confirming (lines, catalogue prices, discounts).
   // `lines` carries the catalogue price each was SHOWN at, so a price that changed since is caught at Confirm.
   // leadId null: a quote for the customer directly, on no deal — leadLabel is then the customer's name.
-  | { id: string; kind: "quote_build"; leadId: string | null; leadLabel: string; title: string; reason?: string; contactId: string; lines: QuoteBuildLine[]; text: string }
+  // `confirmKey`: this card is carried out once, however often Confirm reaches the server (CONFIRM_KEY).
+  | { id: string; kind: "quote_build"; leadId: string | null; leadLabel: string; title: string; reason?: string; contactId: string; lines: QuoteBuildLine[]; text: string; confirmKey: string }
   // An addition to a DRAFT quote: `fees` at the amount the person said, `lines` at the catalogue price each was shown at.
-  | { id: string; kind: "quote_add"; leadId: string | null; leadLabel: string; title: string; reason?: string; quoteId: string; quoteNumber: number; contactId: string; lines: QuoteBuildLine[]; fees: QuoteAddFee[]; text: string }
+  | { id: string; kind: "quote_add"; leadId: string | null; leadLabel: string; title: string; reason?: string; quoteId: string; quoteNumber: number; contactId: string; lines: QuoteBuildLine[]; fees: QuoteAddFee[]; text: string; confirmKey: string }
   // A quote's PDF to the confirmer's own linked WhatsApp — the card names a quote, never a recipient.
   | { id: string; kind: "quote_pdf"; leadId: string | null; leadLabel: string; title: string; reason?: string; quoteId: string; quoteNumber: number }
   // The person's own calendar, never somebody else's: nothing on the card says whose it is, so it can only be the confirmer's.
