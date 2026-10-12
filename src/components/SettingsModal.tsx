@@ -25,7 +25,7 @@ export default function SettingsModal({ children }: { children: React.ReactNode 
     <Dialog open onOpenChange={(open) => { if (!open) router.back(); }}>
       <DialogContent
         showCloseButton
-        className="flex h-[88vh] max-h-[88vh] w-full max-w-5xl flex-col overflow-hidden p-0 sm:max-w-5xl"
+        className="flex h-[88vh] max-h-[88vh] w-[96vw] max-w-[1500px] flex-col overflow-hidden p-0 sm:max-w-[1500px]"
       >
         <DialogTitle className="sr-only">Settings</DialogTitle>
         <div className="min-h-0 flex-1 overflow-y-auto p-6 pr-14 sm:p-8 sm:pr-14">

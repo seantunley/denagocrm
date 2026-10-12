@@ -72,7 +72,8 @@ export default async function ProductsPage() {
           }
           desktop={
             <div className="card p-0 overflow-x-auto">
-              <table className="table-base">
+              {/* Only the colours wrap: a price, a model name or a column heading broken over two lines reads as two things. */}
+              <table className="table-base [&_td:not(:nth-child(3))]:whitespace-nowrap [&_th]:whitespace-nowrap">
           <thead>
             <tr>
               <th>Model</th>
