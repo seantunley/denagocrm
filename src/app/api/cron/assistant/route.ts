@@ -6,6 +6,7 @@ import { runCronPerTenant } from "@/lib/tenantCron";
 import { runDueAssistantSchedules, SCHEDULE_RUN_RESERVE_MS } from "@/lib/assistantScheduleRun";
 import { runAssistantWatches } from "@/lib/assistantWatch";
 import { prunePendingActions } from "@/lib/assistantWhatsAppConfirm";
+import { sweepWaitingUpdates } from "@/lib/assistantWhatsApp";
 
 /**
  * Scheduled assistant questions ("every Monday at 7, which deals went quiet?")
@@ -53,10 +54,19 @@ export async function GET(req: NextRequest) {
           logError("assistant-schedule", "pending task clean-up failed", error instanceof Error ? error.name : "unknown", { tenantId }),
         );
       }
-      return runAssistantWatches(budget).catch(async (error: unknown) => {
+      const watched = await runAssistantWatches(budget).catch(async (error: unknown) => {
         await logError("assistant-schedule", "watch run failed", error instanceof Error ? error.name : "unknown", { tenantId });
         return { checked: 0, fired: 0 };
       });
+      // Briefings and alerts still waiting to reach a linked phone (WhatsApp was
+      // unreachable, a nudge failed) are tried again here — otherwise they would
+      // wait for the person's next message, and a one-off could go stale unsent.
+      if (tenantId) {
+        await sweepWaitingUpdates(tenantId).catch((error: unknown) =>
+          logError("assistant-schedule", "waiting updates sweep failed", error instanceof Error ? error.name : "unknown", { tenantId }),
+        );
+      }
+      return watched;
     },
     { maxRuntimeMs: Math.min(WATCH_BUDGET_MS, routeBudget.remainingMs), rotationWindowMs: 30 * 60 * 1000 },
   ).catch(async (error: unknown) => {

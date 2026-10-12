@@ -19,7 +19,7 @@ import { runInTenantScope } from "../src/lib/tenantScope";
 import { getSetting, putSetting } from "../src/lib/settings";
 import { isWhatsAppConfigured } from "../src/lib/whatsapp";
 import { readUserSecurityStateStrict } from "../src/lib/userSecurity";
-import { sendUpdatesToLinkedPhone } from "../src/lib/assistantWhatsApp";
+import { sendUpdatesToLinkedPhone, sweepWaitingUpdates } from "../src/lib/assistantWhatsApp";
 import { ASSISTANT_WHATSAPP_KEY, ASSISTANT_WHATSAPP_TEMPLATE_KEY } from "../src/lib/assistantWhatsAppRules";
 
 const SFX = Math.random().toString(16).slice(2, 10);
@@ -72,8 +72,9 @@ async function main() {
     check("with no template it waits", (await run()) === "waiting");
     check("…and nothing is marked as sent", (await sentAt(TURN.brief)) === null && (await sentAt(TURN.alert)) === null);
     await scoped(() => putSetting(ASSISTANT_WHATSAPP_TEMPLATE_KEY, "assistant_update_ready|en"));
-    // No WhatsApp connection here, so the template is refused — after it was claimed.
-    check("with a template, the nudge is claimed before it is sent", (await run()) === "failed" && (await link()).nudgedAt !== null);
+    // No WhatsApp connection here, so the template is refused — after it was claimed. "Not configured" is a
+    // refusal, not a passing failure: the claim stays, so it is not sent again and again.
+    check("with a template, the nudge is claimed before it is sent", (await run()) === "failed" && (await link()).nudgedAt !== null && (await link()).nudgeFailedAt === null);
     check("…and a second run does not try the template again", (await run()) === "waiting");
     check("…and the briefing is still waiting", (await sentAt(TURN.brief)) === null);
 
@@ -81,12 +82,29 @@ async function main() {
     await basePrisma.assistantPhoneLink.update({ where: { id: LINK }, data: { lastInboundAt: new Date(), nudgedAt: null } });
     // The send is refused (no connection): the claim must be given back, or the briefing would never arrive.
     check("a briefing that could not be sent is released, not lost", (await run()) === "failed" && (await sentAt(TURN.brief)) === null && (await sentAt(TURN.alert)) === null);
-    await basePrisma.assistantTurn.updateMany({ where: { id: { in: [TURN.brief, TURN.alert] } }, data: { whatsappSentAt: new Date() } });
+    const state = (id: string) => basePrisma.assistantTurn.findUniqueOrThrow({ where: { id }, select: { whatsappSentAt: true, whatsappClaimedAt: true, whatsappPartsSent: true } });
+    check("…and its claim is given back at once, with nothing counted as gone", (await state(TURN.brief)).whatsappClaimedAt === null && (await state(TURN.brief)).whatsappPartsSent === 0);
+
+    console.log("\nA sender that stopped mid-way");
+    // Both are short: one WhatsApp message each. "1 part gone" = everything gone, so resuming needs no send —
+    // which is the only way to see a take-over finish in a database with no WhatsApp connection.
+    await basePrisma.assistantTurn.updateMany({ where: { id: { in: [TURN.brief, TURN.alert] } }, data: { whatsappClaimedAt: new Date(), whatsappPartsSent: 1 } });
+    check("a live claim is left alone: nobody else sends it", (await run()) === "nothing" && (await sentAt(TURN.brief)) === null);
+    await basePrisma.assistantTurn.updateMany({ where: { id: { in: [TURN.brief, TURN.alert] } }, data: { whatsappClaimedAt: new Date(Date.now() - 6 * 60_000) } });
+    check("a claim that has expired is taken over, and the update is finished from where it had got to", (await run()) === "sent");
+    const finished = await state(TURN.brief);
+    check("…marked sent, claim cleared, progress kept", finished.whatsappSentAt !== null && finished.whatsappClaimedAt === null && finished.whatsappPartsSent === 1, JSON.stringify(finished));
+    check("…the alert too: the queue was worked to its end", (await sentAt(TURN.alert)) !== null);
     check("once both have gone there is nothing left: a typed answer and a day-old briefing are never sent", (await run()) === "nothing");
     check("…and those two were never claimed", (await sentAt(TURN.typed)) === null && (await sentAt(TURN.stale)) === null);
 
+    console.log("\nThe half-hourly sweep");
+    await basePrisma.assistantTurn.update({ where: { id: TURN.brief }, data: { whatsappSentAt: null, whatsappPartsSent: 0 } });
+    // The test user is in no role, so may not use the assistant: the sweep finds the update and sends that person nothing.
+    const swept = await scoped(() => sweepWaitingUpdates(T));
+    check("it runs against the real table, and sends nothing to someone who may not use the assistant", swept.people === 0 && (await sentAt(TURN.brief)) === null, JSON.stringify(swept));
+
     console.log("\nWho it is for");
-    await basePrisma.assistantTurn.update({ where: { id: TURN.brief }, data: { whatsappSentAt: null } });
     await basePrisma.assistantPhoneLink.update({ where: { id: LINK }, data: { updatesOnWhatsApp: false } });
     check("the person's own switch off: nothing is sent or claimed", (await run()) === "not_wanted" && (await sentAt(TURN.brief)) === null);
     await basePrisma.assistantPhoneLink.update({ where: { id: LINK }, data: { updatesOnWhatsApp: true } });

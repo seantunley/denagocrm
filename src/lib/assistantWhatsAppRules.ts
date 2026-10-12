@@ -180,10 +180,33 @@ export function confirmMessages(card: { title: string; text?: unknown; question?
 export const PROACTIVE_SOURCES = ["schedule", "watch"] as const;
 /** How long an update keeps trying to reach WhatsApp. After a day it is old news: it stays in the CRM only. */
 export const UPDATE_WAIT_MS = 24 * 60 * 60 * 1000;
-/** At most this many in one go, oldest first — a morning's worth, not a backlog. */
+/** Read this many at a time, oldest first — and keep reading until none are left. */
 export const UPDATE_BATCH = 5;
+/**
+ * The most one call sends. A day of briefings and alerts is far fewer; past this
+ * the person is told there is more, and their next message (or the next tick)
+ * carries on — one call never holds a webhook open for a backlog.
+ */
+export const UPDATE_MAX = 30;
+/**
+ * How long a sender's claim on one update lasts. Sending it takes seconds; a
+ * claim older than this belongs to a run that stopped, and is taken over.
+ */
+export const UPDATE_CLAIM_MS = 5 * 60 * 1000;
 /** One "you have an update" template per silence, and never more often than this. */
 export const NUDGE_EVERY_MS = 20 * 60 * 60 * 1000;
+/** After the template failed for a passing reason: not again before this (the next half-hourly tick is after it). */
+export const NUDGE_RETRY_MS = 25 * 60 * 1000;
+
+/**
+ * Did the template fail for a reason that may pass — WhatsApp unreachable, busy,
+ * or rate-limited — rather than because Meta will not have it (no such template,
+ * not approved, paused)? A passing failure is tried again after a pause; a
+ * refusal is not repeated, because sending a rejected template again and again
+ * is how a number loses its standing. Unknown wording counts as a refusal.
+ */
+export const nudgeFailureMayPass = (error: string | null | undefined): boolean =>
+  /could not reach whatsapp|whatsapp api error (429|5\d\d)|rate limit|temporar|try again|timed? ?out|service unavailable/i.test(String(error ?? ""));
 
 /**
  * The owner's setting (AppSetting): the approved template to send when WhatsApp
