@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import Module, { createRequire } from "node:module";
 import {
   ASSISTANT_WHATSAPP_CONFIRM_KEY,
+  CRM_CARD_TTL_MS,
   PENDING_ACTION_TTL_MS,
   WHATSAPP_CONFIRMABLE,
   confirmButtonId,
@@ -104,9 +105,13 @@ test("WHAT CONFIRM WRITES IS EXACTLY WHAT WAS SHOWN: a long note is never cut to
 
 /* ── the confirm step, run against fakes ───────────────────────────────── */
 
-type Pending = { id: string; tenantId: string; userId: string; card: Record<string, unknown>; expiresAt: Date; confirmedAt: Date | null; completedAt: Date | null; failedAt: Date | null };
+type Pending = { id: string; tenantId: string; userId: string; card: Record<string, unknown>; expiresAt: Date; confirmedAt: Date | null; completedAt: Date | null; failedAt: Date | null; forCrm: boolean };
 const state = {
   on: true,
+  /** The database refusing to save a card for the CRM. */
+  saveFails: false,
+  /** WhatsApp refusing the Confirm button (the text before it still goes). */
+  failButtons: false,
   rows: [] as Pending[],
   sent: [] as { to: string; text: string; buttons?: { id: string; title: string }[] }[],
   ran: [] as { asUserId: string; card: Record<string, unknown> }[],
@@ -129,9 +134,14 @@ const matches = (row: Pending, where: Where) =>
   });
 const table = {
   create: async ({ data }: { data: Pick<Pending, "tenantId" | "userId" | "card" | "expiresAt"> }) => {
-    const row: Pending = { id: `cmpending${String(++state.seq).padStart(17, "0")}`, confirmedAt: null, completedAt: null, failedAt: null, ...data };
+    const row: Pending = { id: `cmpending${String(++state.seq).padStart(17, "0")}`, confirmedAt: null, completedAt: null, failedAt: null, forCrm: false, ...data };
     state.rows.push(row);
     return { id: row.id };
+  },
+  createMany: async ({ data }: { data: (Pick<Pending, "tenantId" | "userId" | "card" | "expiresAt"> & { forCrm?: boolean })[] }) => {
+    if (state.saveFails) throw new Error("database unavailable");
+    for (const item of data) state.rows.push({ id: `cmpending${String(++state.seq).padStart(17, "0")}`, confirmedAt: null, completedAt: null, failedAt: null, forCrm: false, ...item });
+    return { count: data.length };
   },
   deleteMany: async ({ where }: { where: Where }) => {
     const before = state.rows.length;
@@ -163,7 +173,11 @@ loaderKey._load = function (this: unknown, request: string, parent, isMain) {
           state.sent.push({ to, text });
           return { ok: true };
         },
-        sendWhatsAppButtons: async (to: string, text: string, buttons: { id: string; title: string }[]) => { state.sent.push({ to, text, buttons }); return { ok: true }; },
+        sendWhatsAppButtons: async (to: string, text: string, buttons: { id: string; title: string }[]) => {
+          if (state.failButtons) return { ok: false };
+          state.sent.push({ to, text, buttons });
+          return { ok: true };
+        },
       };
       // The real one is proved by its source below; here it records WHO the action ran as.
       case "./auth": return { runAsLinkedStaff: async (userId: string, fn: () => Promise<unknown>) => { asUser = userId; try { return await fn(); } finally { asUser = null; } } };
@@ -189,13 +203,15 @@ const PHONE = "27821234567";
 const me = { id: "u1", name: "Sean", email: "s@x", role: "staff" } as never;
 const NOTE = { id: "a0", kind: "note", leadId: LEAD, leadLabel: "Anna — Rover", title: "Add a note to Anna's lead", text: "Wants white." };
 const pendingRow = (over: Partial<Pending> = {}): Pending => {
-  const row: Pending = { id: `cmpending${String(++state.seq).padStart(17, "0")}`, tenantId: "t1", userId: "u1", card: NOTE, expiresAt: new Date(Date.now() + 60_000), confirmedAt: null, completedAt: null, failedAt: null, ...over };
+  const row: Pending = { id: `cmpending${String(++state.seq).padStart(17, "0")}`, tenantId: "t1", userId: "u1", card: NOTE, expiresAt: new Date(Date.now() + 60_000), confirmedAt: null, completedAt: null, failedAt: null, forCrm: false, ...over };
   state.rows.push(row);
   return row;
 };
 
 beforeEach(() => {
   state.on = true;
+  state.saveFails = false;
+  state.failButtons = false;
   state.rows = [];
   state.sent = [];
   state.ran = [];
@@ -219,14 +235,16 @@ test("a long note: the full text is delivered BEFORE the button exists — and i
   // What is stored — what Confirm will write — is that same text, whole.
   assert.equal((state.rows[0].card as { text: string }).text, text);
 
-  // The text fails to send: nothing to confirm is created, and the person is told it needs the CRM.
+  // The text fails to send: nothing that a PHONE can confirm is created — it is kept for the CRM instead.
   state.rows = [];
   state.sent = [];
   state.failTextContaining = "Line 1:";
   await offerConfirmations("t1", "u1", PHONE, [long]);
-  assert.deepEqual(state.rows, [], "no pending task without its text having been shown");
+  assert.deepEqual(state.rows.filter((row) => !row.forCrm), [], "no button-confirmable task without its text having been shown");
+  assert.equal(state.rows.length, 1, "kept as a card for the CRM, with the whole note");
+  assert.equal((state.rows[0].card as { text: string }).text, text);
   assert.ok(!state.sent.some((s) => s.buttons), "no Confirm button");
-  assert.match(state.sent.at(-1)?.text ?? "", /^This one needs the CRM/);
+  assert.match(state.sent.at(-1)?.text ?? "", /^This one is done in the CRM\. I've saved it on your Ask page/);
   assert.ok(state.errors.some((e) => e.includes("no button offered")));
 });
 
@@ -263,6 +281,8 @@ test("nothing runs: switch off, expired, someone else's, another workspace's, an
     ["one being run right now", () => pendingRow({ confirmedAt: new Date() }).id, /^That one is being done right now\.$/],
     ["a message to a customer", () => pendingRow({ card: { ...NOTE, kind: "draft_message" } }).id, /needs the CRM/],
     ["a test drive", () => pendingRow({ card: { ...NOTE, kind: "test_drive" } }).id, /needs the CRM/],
+    // A card SAVED for the CRM — even of a kind a phone may confirm — is no task at all as far as a phone is concerned.
+    ["a card saved for the CRM", () => pendingRow({ forCrm: true, expiresAt: new Date(Date.now() + 3_600_000) }).id, /^That one can't be confirmed — ask me again/],
   ];
   for (const [name, arrange, reply] of cases) {
     state.on = true;
@@ -389,34 +409,121 @@ test("old pending tasks are deleted a day after their window closes — done, fa
   assert.match(code("src/lib/assistantWhatsAppConfirm.ts"), /deleteMany\(\{\s*where: \{ tenantId, expiresAt: \{ lt: new Date\(now\.getTime\(\) - PENDING_ACTION_RETENTION_MS\) \} \},/);
 });
 
-test("offers: a Confirm button per internal task when on; everything named as CRM-only when off — never silently dropped", async () => {
+test("offers: a Confirm button per internal task when on; everything else SAVED as a card for the CRM — never silently dropped, never asked for twice", async () => {
   const cards = [NOTE, { ...NOTE, id: "a1", kind: "draft_message", title: "Draft a WhatsApp to Anna" }, { ...NOTE, id: "a2", kind: "stage", title: "Move Anna to Quoted", text: undefined }] as never[];
   await offerConfirmations("t1", "u1", PHONE, cards);
-  assert.equal(state.rows.length, 2, "one pending row per confirmable task");
+  const buttons = state.rows.filter((row) => !row.forCrm);
+  const kept = state.rows.filter((row) => row.forCrm);
+  assert.equal(buttons.length, 2, "one pending row per confirmable task");
   assert.ok(state.rows.every((row) => row.tenantId === "t1" && row.userId === "u1" && row.confirmedAt === null));
-  assert.ok(state.rows.every((row) => Math.abs(row.expiresAt.getTime() - Date.now() - PENDING_ACTION_TTL_MS) < 5000));
+  assert.ok(buttons.every((row) => Math.abs(row.expiresAt.getTime() - Date.now() - PENDING_ACTION_TTL_MS) < 5000));
   const offers = state.sent.filter((s) => s.buttons);
-  assert.deepEqual(offers.map((s) => s.buttons), state.rows.map((row) => [{ id: `daxc:${row.id}`, title: "Confirm" }]));
+  assert.deepEqual(offers.map((s) => s.buttons), buttons.map((row) => [{ id: `daxc:${row.id}`, title: "Confirm" }]));
   assert.match(offers[0].text, /^Add a note to Anna's lead\n\nWants white\./);
-  assert.match(state.sent.at(-1)?.text ?? "", /^This one needs the CRM[\s\S]*• Draft a WhatsApp to Anna$/);
+  // The customer message is kept as a card — the whole card, for a day — and no button is ever sent for it.
+  assert.equal(kept.length, 1);
+  assert.equal(kept[0].card.kind, "draft_message");
+  assert.ok(Math.abs(kept[0].expiresAt.getTime() - Date.now() - CRM_CARD_TTL_MS) < 5000);
+  assert.ok(!state.sent.some((s) => s.buttons?.some((b) => b.id.includes(kept[0].id))), "a saved card never has a WhatsApp button");
+  assert.match(state.sent.at(-1)?.text ?? "", /^This one is done in the CRM\. I've saved it on your Ask page — open it and press Confirm \(kept for a day\):\n• Draft a WhatsApp to Anna$/);
 
   state.rows = [];
   state.sent = [];
   state.on = false;
   await offerConfirmations("t1", "u1", PHONE, cards);
-  assert.deepEqual(state.rows, [], "switch off: nothing can be confirmed here, so nothing is stored");
+  assert.equal(state.rows.length, 3, "switch off: nothing can be confirmed on the phone, so all three are kept for the CRM");
+  assert.ok(state.rows.every((row) => row.forCrm), "and none of them is a phone-confirmable task");
   assert.ok(!state.sent.some((s) => s.buttons));
-  assert.match(state.sent[0].text, /^These need the CRM[\s\S]*• Add a note to Anna's lead\n• Draft a WhatsApp to Anna\n• Move Anna to Quoted$/);
+  assert.match(state.sent[0].text, /^These are done in the CRM\. I've saved them on your Ask page[\s\S]*• Add a note to Anna's lead\n• Draft a WhatsApp to Anna\n• Move Anna to Quoted$/);
+
+  // The save fails: the message must not promise a card that is not there.
+  state.rows = [];
+  state.sent = [];
+  state.saveFails = true;
+  await offerConfirmations("t1", "u1", PHONE, cards);
+  assert.deepEqual(state.rows, []);
+  assert.match(state.sent[0].text, /^These need the CRM — ask me there and confirm on the card:/);
+  assert.ok(state.errors.some((e) => e.includes("saving a task for the CRM failed")));
+  state.saveFails = false;
   state.sent = [];
   await offerConfirmations("t1", "u1", PHONE, []);
   assert.deepEqual(state.sent, [], "no tasks, no message");
+});
+
+test("A CONFIRM BUTTON THAT FAILS TO SEND does not strand the task: it becomes a card on the Ask page, and the person is told", async () => {
+  // Review of #864: the pending row was saved, the button failed, and only an
+  // error was logged — a task with no button, and not on the Ask page either.
+  state.failButtons = true;
+  await offerConfirmations("t1", "u1", PHONE, [NOTE] as never[]);
+  assert.equal(state.rows.length, 1, "exactly one row: the unreachable phone row is gone, the CRM card is there");
+  assert.equal(state.rows[0].forCrm, true);
+  assert.equal(state.rows[0].card.kind, "note");
+  assert.ok(Math.abs(state.rows[0].expiresAt.getTime() - Date.now() - CRM_CARD_TTL_MS) < 5000, "kept for a day, like any saved card");
+  assert.ok(!state.sent.some((s) => s.buttons), "no button was delivered");
+  assert.match(state.sent.at(-1)?.text ?? "", /^I couldn't send the Confirm button for this one, so I've saved it on your Ask page in the CRM — open it and press Confirm \(kept for a day\):\n• Add a note to Anna's lead$/);
+  assert.ok(state.errors.some((e) => e.includes("confirm offer send failed")));
+
+  // Mixed with a task that is CRM-only by rule: one message, both listed, both saved, said as "done in the CRM".
+  state.rows = [];
+  state.sent = [];
+  await offerConfirmations("t1", "u1", PHONE, [NOTE, { ...NOTE, id: "a1", kind: "draft_message", title: "Draft a WhatsApp to Anna" }] as never[]);
+  assert.equal(state.rows.length, 2);
+  assert.ok(state.rows.every((row) => row.forCrm));
+  assert.match(state.sent.at(-1)?.text ?? "", /^These are done in the CRM\. I've saved them on your Ask page[\s\S]*• Draft a WhatsApp to Anna\n• Add a note to Anna's lead$/);
+
+  // And when the card cannot be saved either, nothing is promised.
+  state.rows = [];
+  state.sent = [];
+  state.saveFails = true;
+  await offerConfirmations("t1", "u1", PHONE, [NOTE] as never[]);
+  assert.deepEqual(state.rows, []);
+  assert.match(state.sent.at(-1)?.text ?? "", /^This one needs the CRM — ask me there and confirm on the card:/);
+});
+
+test("CONFIRM AND DISMISS AT ONCE: a card that Confirm has claimed cannot be dismissed out from under its action", async () => {
+  const actions = code("src/app/actions/assistant.ts");
+  const settle = actions.slice(actions.indexOf("export async function settleSavedAssistantCard")).split("\n/**")[0];
+  // The two statements as shipped; the wheres below are theirs, run against the same fake table.
+  assert.match(actions, /where: \{ id, userId: user\.id, forCrm: true, confirmedAt: null, completedAt: null, failedAt: null, expiresAt: \{ gt: now \} \},\s*data: \{ confirmedAt: now \}/);
+  assert.match(settle, /deleteMany\(\{ where: \{ id, userId: user\.id, forCrm: true, confirmedAt: null, completedAt: null \} \}\)/);
+  const now = new Date();
+  const claim = (id: string) => table.updateMany({ where: { id, userId: "u1", forCrm: true, confirmedAt: null, completedAt: null, failedAt: null, expiresAt: { gt: now } }, data: { confirmedAt: now } });
+  const dismiss = (id: string) => table.deleteMany({ where: { id, userId: "u1", forCrm: true, confirmedAt: null, completedAt: null } });
+
+  // Confirm first: the dismissal that arrives while it runs deletes nothing.
+  const running = pendingRow({ forCrm: true });
+  const [claimed, dismissed] = await Promise.all([claim(running.id), dismiss(running.id)]);
+  assert.equal(claimed.count, 1);
+  assert.equal(dismissed.count, 0, "refused while the action is running");
+  assert.equal(state.rows.length, 1, "the card is still there to carry its outcome");
+  // Dismiss first: the Confirm that arrives after finds nothing to run.
+  const gone = pendingRow({ forCrm: true });
+  assert.equal((await dismiss(gone.id)).count, 1);
+  assert.equal((await claim(gone.id)).count, 0);
+  // Released because the action proved nothing changed: it can be dismissed again.
+  await table.updateMany({ where: { id: running.id }, data: { confirmedAt: null } });
+  assert.equal((await dismiss(running.id)).count, 1);
+
+  // And the card itself: no dismissing while Confirm or Send is in flight.
+  const card = code("src/components/AssistantActionCard.tsx");
+  assert.match(card, /const dismiss = \(\) => \{[\s\S]{0,260}if \(pending\) return;/);
+  assert.match(card, /onClick=\{dismiss\} disabled=\{pending\}/);
+});
+
+test("a task saved while the Ask page is open appears on refresh, and a finished card keeps its place and its message", () => {
+  const list = code("src/components/SavedAssistantCards.tsx");
+  assert.match(list, /const arrived = cards\.filter\(\(card\) => !held\.some\(\(kept\) => kept\.id === card\.id\)\);/);
+  // Added to what is held — never replacing it, which is what dropped a just-confirmed card.
+  assert.match(list, /if \(arrived\.length > 0\) setHeld\(\[\.\.\.held, \.\.\.arrived\]\);/);
+  assert.doesNotMatch(list, /setHeld\(cards\)/);
+  assert.match(list, /key=\{saved\.id\}/, "keyed by the saved id, so a card's own state survives the list growing");
 });
 
 /* ── the wiring ────────────────────────────────────────────────────────── */
 
 test("the claim is one conditional update naming workspace, person, unclaimed and unexpired — and the kind is re-checked before it runs", () => {
   const lib = code("src/lib/assistantWhatsAppConfirm.ts");
-  assert.match(lib, /updateMany\(\{\s*where: \{ id: pendingId, tenantId, userId: user\.id, confirmedAt: null, completedAt: null, failedAt: null, expiresAt: \{ gt: now \} \},\s*data: \{ confirmedAt: now \},/);
+  assert.match(lib, /where: \{ id: pendingId, tenantId, userId: user\.id, forCrm: false, confirmedAt: null, completedAt: null, failedAt: null, expiresAt: \{ gt: now \} \},\s*data: \{ confirmedAt: now \},/);
   assert.match(lib, /if \(claimed\.count !== 1\) return say\(/);
   // Whatever a run ends as, it is written against THIS claim only — it cannot undo or overwrite a later one.
   assert.match(lib, /updateMany\(\{ where: \{ id: pendingId, tenantId, userId: user\.id, confirmedAt: now, completedAt: null, failedAt: null \}, data \}\)/);
@@ -427,18 +534,26 @@ test("the claim is one conditional update naming workspace, person, unclaimed an
   for (const call of lib.match(/sendWhatsApp(Text|Buttons)\([^)]*\)/g) ?? []) assert.match(call, /^sendWhatsApp(Text|Buttons)\(waId,/, "replies go to the linked phone only");
 });
 
-test("tasks are proposed only where they can be confirmed: the chat, and WhatsApp when its caller says so — never a scheduled run", () => {
+test("tasks are proposed only where they can be confirmed: the chat, and WhatsApp when its caller says what it will do with one — never a scheduled run", () => {
   const lib = code("src/lib/crmAssistant.ts");
-  assert.match(lib, /const proposes = source === "chat" \|\| \(source === "whatsapp" && opts\.proposeTasks === true\);/);
+  assert.match(lib, /const proposes = source === "chat" \|\| \(source === "whatsapp" && \(opts\.proposeTasks === true \|\| opts\.proposeTasks === "saved"\)\);/);
   assert.match(lib, /proposes \? ACTION_INSTRUCTIONS : "",/);
   assert.match(lib, /const actions = !proposes \? \[\] : await resolveActions\(user, proposals\)/);
-  assert.match(lib, /source === "whatsapp" && proposes \? WHATSAPP_CONFIRM_RULE : CHANNEL_RULES\[source\],/);
+  assert.match(lib, /if \(source !== "whatsapp" \|\| !proposes\) return CHANNEL_RULES\[source\];\s*return proposeTasks === "saved" \? WHATSAPP_SAVED_RULE : WHATSAPP_CONFIRM_RULE;/);
+  assert.match(lib, /channelRule\(source, proposes, opts\.proposeTasks\),/);
   // eslint-disable-next-line @typescript-eslint/no-require-imports
-  const { WHATSAPP_CONFIRM_RULE, CHANNEL_RULES } = require_("../src/lib/crmAssistant") as typeof import("../src/lib/crmAssistant");
+  const { WHATSAPP_CONFIRM_RULE, WHATSAPP_SAVED_RULE, CHANNEL_RULES } = require_("../src/lib/crmAssistant") as typeof import("../src/lib/crmAssistant");
   assert.match(WHATSAPP_CONFIRM_RULE, /happens only when they tap it/);
   assert.match(WHATSAPP_CONFIRM_RULE, /never that it is done/);
-  assert.match(WHATSAPP_CONFIRM_RULE, /never sent from WhatsApp[\s\S]*do not propose draft_message/);
-  assert.match(CHANNEL_RULES.whatsapp, /You can't set up tasks here/, "the default, with the switch off, is unchanged");
+  // What a phone may never do is told to the assistant as SAVED for the CRM — never as sent or done.
+  assert.match(WHATSAPP_CONFIRM_RULE, /never done from WhatsApp[\s\S]*saved as a card on their Ask page[\s\S]*never that it was sent or done/);
+  // The default, with the owner's switch off: nothing changes from the phone, and the assistant must not say otherwise.
+  assert.match(WHATSAPP_SAVED_RULE, /Nothing can be changed from here/);
+  assert.match(WHATSAPP_SAVED_RULE, /saved as a card on their Ask page in the CRM/);
+  assert.match(WHATSAPP_SAVED_RULE, /never that it is done, and never that anything was sent/);
+  assert.doesNotMatch(WHATSAPP_SAVED_RULE, /Confirm button and happens|tap it/);
+  // A caller that says nothing still gets no tasks (a scheduled run, an older caller).
+  assert.match(CHANNEL_RULES.whatsapp, /You can't set up tasks here/);
 });
 
 test("the door that lets a phone act as its owner: one caller, one workspace, a live account, and gone when the call returns", () => {
@@ -484,4 +599,70 @@ test("the pending table belongs to a workspace: tenantId on every row, row secur
   assert.match(sql, /ENABLE ROW LEVEL SECURITY;[\s\S]*DROP POLICY IF EXISTS[\s\S]*CREATE POLICY "AssistantPendingAction_tenant_isolation"[\s\S]*FORCE ROW LEVEL SECURITY;/);
   const lib = code("src/lib/assistantWhatsAppConfirm.ts");
   for (const query of lib.match(/assistantPendingAction\.(create|updateMany|findFirst)\(\{[\s\S]*?\}\)/g) ?? []) assert.match(query, /tenantId/, query.slice(0, 80));
+});
+
+/* ── cards saved for the CRM ───────────────────────────────────────────── */
+
+test("a card saved for the CRM is stamped with its workspace and person, and the phone path cannot reach it", () => {
+  const lib = code("src/lib/assistantWhatsAppConfirm.ts");
+  assert.match(lib, /createMany\(\{\s*data: cards\.map\(\(card\) => \(\{ tenantId, userId, card: card as object, expiresAt, forCrm: true \}\)\),/);
+  // Saved BEFORE the person is told so, and the wording follows what actually happened.
+  assert.ok(lib.indexOf("const saved = await saveForCrm(tenantId, userId, elsewhere);") < lib.indexOf("I've saved"));
+  // Both phone-side lookups exclude saved cards: the claim, and the "why not" that follows a failed claim.
+  // (The third: removing a phone row whose button never arrived — a phone row only, never a saved card.)
+  assert.equal(lib.match(/forCrm: false/g)?.length, 3);
+  assert.match(lib, /deleteMany\(\{ where: \{ id: pending\.id, tenantId, userId, forCrm: false, confirmedAt: null \} \}\)/);
+  const sql = readFileSync(join(root, "prisma/migrations/20261012110000_assistant_pending_for_crm/migration.sql"), "utf8");
+  assert.match(sql, /ALTER TABLE "AssistantPendingAction" ADD COLUMN IF NOT EXISTS "forCrm" BOOLEAN NOT NULL DEFAULT false;/);
+});
+
+test("confirming a saved card in the CRM: the stored card, the person's own, at most once — and a customer message is never sent by Confirm", () => {
+  const actions = code("src/app/actions/assistant.ts");
+  const confirm = actions.slice(actions.indexOf("export async function confirmSavedAssistantCard"), actions.indexOf("export async function settleSavedAssistantCard"));
+  // The same gate as every other assistant action, then ONE conditional update as the claim.
+  assert.match(confirm, /const user = await requireAnyPermission\(\.\.\.ASSISTANT_PERMISSIONS\);/);
+  assert.match(confirm, /updateMany\(\{\s*where: \{ id, userId: user\.id, forCrm: true, confirmedAt: null, completedAt: null, failedAt: null, expiresAt: \{ gt: now \} \},\s*data: \{ confirmedAt: now \},/);
+  assert.match(confirm, /if \(claimed\.count !== 1\) return \{ ok: false, error: "That card is no longer waiting/);
+  // What runs is read from the database by the person's own id — nothing the page sent but which row.
+  assert.match(confirm, /findFirst\(\{ where: \{ id, userId: user\.id, forCrm: true \}, select: \{ card: true \} \}\)/);
+  assert.match(confirm, /await runAssistantAction\(card\)/);
+  assert.doesNotMatch(confirm, /savedId\.|JSON\.parse|formData/);
+  // Done, proven-unchanged (released) and unknown (failed, never retried) are three different endings, each guarded on this claim.
+  assert.match(confirm, /where: \{ id, userId: user\.id, forCrm: true, confirmedAt: now, completedAt: null, failedAt: null \}, data \}\)/);
+  assert.match(confirm, /if \(result\.ok\) await settle\(\{ completedAt: new Date\(\) \}\);\s*else if \(result\.unchanged === true\) await settle\(\{ confirmedAt: null \}\);\s*else await settle\(\{ failedAt: new Date\(\) \}\);/);
+  assert.match(confirm, /catch \(error\) \{\s*await settle\(\{ failedAt: new Date\(\) \}\);\s*throw error;/);
+  // A drafted customer message has its own Send, where the wording is read first.
+  assert.match(confirm, /card\.kind === "draft_message"\) \{\s*await settle\(\{ failedAt: new Date\(\) \}\);/);
+  assert.doesNotMatch(confirm, /sendAssistantDraft|sendWhatsApp|sendEmail/);
+
+  const settle = actions.slice(actions.indexOf("export async function settleSavedAssistantCard")).split("\n/**")[0];
+  assert.match(settle, /const user = await requireAnyPermission\(\.\.\.ASSISTANT_PERMISSIONS\);/);
+  assert.match(settle, /deleteMany\(\{ where: \{ id, userId: user\.id, forCrm: true, confirmedAt: null, completedAt: null \} \}\)/);
+  assert.match(settle, /updateMany\(\{ where: \{ id, userId: user\.id, forCrm: true, completedAt: null \}, data: \{ completedAt: new Date\(\) \} \}\)/);
+});
+
+test("the Ask page shows a person only their own waiting saved cards, and the card settles on the server", () => {
+  const page = code("src/app/(app)/assistant/page.tsx");
+  assert.match(page, /prisma\.assistantPendingAction\.findMany\(\{\s*where: \{ userId: user\.id, forCrm: true, confirmedAt: null, completedAt: null, failedAt: null, expiresAt: \{ gt: new Date\(\) \} \},/);
+  // ALWAYS rendered, and it holds the list the visit started with: confirming a card runs a CRM
+  // action that refreshes the page, and a card rendered from the fresh list would vanish before "Done" was read.
+  assert.match(page, /\n\s*<SavedAssistantCards name=\{profile\.name\} cards=\{savedCards\} \/>/);
+  assert.doesNotMatch(page, /savedCards\.length > 0 &&/);
+  const list = code("src/components/SavedAssistantCards.tsx");
+  assert.match(list, /const \[held, setHeld\] = useState\(cards\);/);
+  assert.match(list, /if \(held\.length === 0\) return null;/);
+  assert.match(list, /<AssistantActionCard key=\{saved\.id\} card=\{saved\.card\} savedId=\{saved\.id\} \/>/);
+  assert.match(list, /Nothing happens until you press Confirm or Send/);
+  // …and the two actions do not refresh the page themselves.
+  const actions = code("src/app/actions/assistant.ts");
+  const savedActions = actions.slice(actions.indexOf("export async function confirmSavedAssistantCard")).split("\n/**\n * 👍")[0];
+  assert.doesNotMatch(savedActions.replace(/\/\/.*$/gm, ""), /revalidatePath\(/);
+  const card = code("src/components/AssistantActionCard.tsx");
+  // A saved card that was tried and may have got part-way loses its Confirm button: it will not run again.
+  assert.match(card, /else if \(savedId && !\("unreached" in result\) && !\("unchanged" in result && result\.unchanged === true\)\) \{[\s\S]*?setState\("failed"\);/);
+  assert.match(card, /await \(savedId \? confirmSavedAssistantCard\(savedId\) : runAssistantAction\(card\)\)/);
+  // Dismissing a saved card removes it for good; a sent draft is marked done; and a saved draft keeps ONE send id across reloads.
+  assert.match(card, /if \(savedId\) void settleSavedAssistantCard\(savedId, "dismissed"\)/);
+  assert.match(card, /if \(savedId\) await settleSavedAssistantCard\(savedId, "sent"\)/);
+  assert.match(card, /savedId \? `dax-saved-\$\{savedId\}` : /);
 });

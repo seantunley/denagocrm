@@ -1,7 +1,7 @@
 import { getSetting } from "./settings";
 import { generateBotReply, routeBotChoice } from "./botAi";
 import { priceList, coloursList } from "./botAnswers";
-import { sendPushToAll } from "./push";
+import { notifyHandoff } from "./handoffNotify";
 import { advanceFlow, greetingVars } from "./flowSession";
 import { crmActions } from "./flowActions";
 import type { FlowHandoffContext } from "./flow";
@@ -44,7 +44,7 @@ export async function runTelegramFlow(chatId: number | string, text: string, cal
       dynamicAnswer: (s) => s === "colours" ? coloursList() : priceList(),
       routeChoice: ({ prompt, text: freeText, options }) => routeBotChoice({ prompt, text: freeText, options }),
       aiReply: async (vars) => (await generateBotReply({ history: state.msgs, customerName: vars.name ?? null, isCustomer: false })) ?? { reply: "Let me get a team member to help 👍", handoff: true, confidence: "low", intent: "unknown", handoffReason: "AI unavailable" },
-      handoff: async (_vars, context) => { await sendPushToAll({ title: "Telegram needs you 🙋", body: handoffBody(context), url: "/inbox" }, "bot_handoff").catch(() => {}); },
+      handoff: async (vars, context) => { await notifyHandoff({ channel: "Telegram", body: handoffBody(context), url: "/inbox", customer: { contactId: contact?.id ?? null, leadId: null }, answers: vars, chat: () => state.msgs }); },
       ...crmActions("telegram", { contactId: contact?.id ?? null, leadId: null }),
     }),
     greetingVars(contact?.firstName ?? null, (await getCompanyProfile()).name),

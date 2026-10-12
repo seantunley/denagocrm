@@ -11,6 +11,7 @@ import { sendPushToAll } from "./push";
 import { getSetting } from "./settings";
 import { ASSISTANT_PROFILE_KEY, parseProfile } from "./assistantSoul";
 import type { CronSliceContext } from "./tenantCron";
+import { PROACTIVE_SOURCES } from "./assistantWhatsAppRules";
 
 /**
  * Budget to keep in hand before STARTING a scheduled question. askCrm's worst
@@ -59,7 +60,7 @@ export async function withScheduleSlot<T>(userId: string, write: (tx: Tx) => Pro
  */
 export async function markScheduledTurnsSeen(userId: string) {
   await prisma.assistantTurn.updateMany({
-    where: { userId, source: { in: ["schedule", "watch"] }, seenAt: null },
+    where: { userId, source: { in: [...PROACTIVE_SOURCES] }, seenAt: null },
     data: { seenAt: new Date() },
   });
 }

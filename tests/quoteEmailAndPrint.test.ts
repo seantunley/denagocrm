@@ -185,7 +185,8 @@ test("default Quote email: merge fields filled, no company literal, passes its o
   const e = renderSigningEmail("quote", null, VARS, BRAND);
   assert.equal(e.subject, "Your quotation Q-42 from Acme Carts");
   assert.match(e.text, /^Dear Thandi,/);
-  assert.match(e.text, /Kind regards,\nPat\nAcme Carts$/);
+  // No typed name: the sender's own signature is added under it when it is sent (quoteEmailSignature.test.ts).
+  assert.match(e.text, /Kind regards,$/);
   assert.doesNotMatch(e.html, /Open &amp; sign/, "no signing button on a quote email");
   for (const file of ["src/lib/quoteEmail.ts", "src/app/actions/quoteEmail.ts", "src/components/quotes/QuoteEmailDialog.tsx"]) {
     assert.doesNotMatch(shipped(file), /denago|073\s?789|maitland|cape town/i, file);

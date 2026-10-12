@@ -229,7 +229,10 @@ export const SIGNING_EMAILS: Record<SigningEmailKind, SigningEmailDef> = {
     description: "The starting wording for “Email quote” in the quote editor. Staff see it and can change it before each send; the quote PDF is attached automatically.",
     settingKey: "QUOTE_EMAIL",
     subject: "Your quotation {{quote_number}} from {{company_name}}",
-    body: "Dear {{first_name}},\n\nThank you for considering {{company_name}}. Please find quotation {{quote_number}} attached for your review.\n\nIf you have any questions, would like to discuss an option, or need anything adjusted, simply reply to this email and I will be happy to assist. When you are ready to proceed, I will take care of the next steps.\n\nKind regards,\n{{sender_name}}\n{{company_name}}",
+    body: "Dear {{first_name}},\n\nThank you for considering {{company_name}}. Please find quotation {{quote_number}} attached for your review.\n\nIf you have any questions, would like to discuss an option, or need anything adjusted, simply reply to this email and I will be happy to assist. When you are ready to proceed, I will take care of the next steps.\n\nKind regards,",
+    // Ends at "Kind regards," on purpose: this is the one message a named person
+    // sends by pressing Send, and their own signature (name, title, numbers, in
+    // the workspace's design) is added under it — typed names would print it twice.
     fields: [...COMMON, "total"],
     action: null,
   },
@@ -489,7 +492,18 @@ export const DEFAULT_ACCENT = "#ea580c";
  * `bodyText` (designed emails only): the message's own paragraphs, without the
  * headline, figures, button or signature — what a per-send edit shows and replaces.
  */
-export type RenderedSigningEmail = { subject: string; html: string; text: string; bodyText?: string };
+export type RenderedSigningEmail = {
+  subject: string;
+  html: string;
+  text: string;
+  bodyText?: string;
+  /**
+   * True when the email was rendered from the layout designed in the editor.
+   * That layout has its own signature block (the owner chooses its lines), so
+   * nothing may add a second signature to it.
+   */
+  designed?: boolean;
+};
 
 /**
  * Render one signing email.
@@ -568,8 +582,14 @@ export function renderSigningEmail(
         })
         .join("\n");
 
-  return { subject, html: shell(subject, content, brand), text };
+  // The quote email is sent by a named person, whose signature is put in at this
+  // mark when it is sent (placeSignatureInEmail) — inside the card, straight under
+  // the message. A comment: an email that is never signed is unchanged by it.
+  return { subject, html: shell(subject, kind === "quote" ? `${content}\n${SENDER_SIGNATURE_SLOT}` : content, brand), text };
 }
+
+/** Where the sender's signature goes in an email that a named person sends. */
+export const SENDER_SIGNATURE_SLOT = "<!--sender-signature-->";
 
 /**
  * Render one SMS kind: the template's text with the kind's own fields filled in,

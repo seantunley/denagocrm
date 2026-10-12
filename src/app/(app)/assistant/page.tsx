@@ -12,6 +12,8 @@ import { describeSchedule } from "@/lib/assistantSchedule";
 import { isExpired } from "@/lib/assistantMemory";
 import { assistantVoiceRepliesOn } from "@/lib/assistantVoice";
 import AssistantChat from "@/components/AssistantChat";
+import SavedAssistantCards from "@/components/SavedAssistantCards";
+import type { ActionCard } from "@/lib/assistantActions";
 import ConfirmActionDialog from "@/components/ConfirmActionDialog";
 import { deleteAssistantNote, saveMyAssistantNote } from "@/app/actions/assistantNotes";
 import { deleteAssistantSchedule, setAssistantScheduleActive } from "@/app/actions/assistantSchedules";
@@ -52,7 +54,7 @@ export default async function AssistantPage() {
     "activities.view", "activities.manage",
   );
   if (!(await isModuleEnabled("automation"))) notFound();
-  const [listen, connected, profile, history, aboutMe, schedules, whatsapp, watches] = await Promise.all([
+  const [listen, connected, profile, history, aboutMe, schedules, whatsapp, watches, saved] = await Promise.all([
     assistantVoiceRepliesOn().catch(() => false),
     isCodexConnected(),
     getSetting(ASSISTANT_PROFILE_KEY).then(parseProfile),
@@ -71,9 +73,22 @@ export default async function AssistantPage() {
       orderBy: { createdAt: "asc" },
       select: { id: true, kind: true, label: true, active: true, lastFiredAt: true },
     }),
+    // Tasks this person asked for on WhatsApp that are only done here, still
+    // waiting: their own, not confirmed, not failed, not expired.
+    prisma.assistantPendingAction.findMany({
+      where: { userId: user.id, forCrm: true, confirmedAt: null, completedAt: null, failedAt: null, expiresAt: { gt: new Date() } },
+      orderBy: { createdAt: "asc" },
+      take: 20,
+      select: { id: true, card: true, createdAt: true },
+    }),
     // Being on this page is seeing them: the bubble's unread dot goes.
     markScheduledTurnsSeen(user.id),
   ]);
+  // What was stored is a card the assistant proposed; anything that is not shaped like one is left out, not rendered.
+  const savedCards = saved.flatMap((row) => {
+    const card = row.card as ActionCard | null;
+    return card && typeof card === "object" && typeof card.kind === "string" && typeof card.title === "string" ? [{ id: row.id, card }] : [];
+  });
   const saWhen = (d: Date) =>
     d.toLocaleString("en-ZA", { timeZone: "Africa/Johannesburg", weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
 
@@ -93,7 +108,10 @@ export default async function AssistantPage() {
         description="Your sales colleague: it reads your leads, quotes, activities and the business's own knowledge, and tells you what it means — never more than your own lists show you."
       />
       <div className="grid items-start gap-6 2xl:grid-cols-[minmax(0,1fr)_minmax(22rem,28rem)]">
-      <div className="min-w-0">
+      <div className="min-w-0 space-y-6">
+      {/* What is waiting on you comes first, above the conversation. Always rendered: it holds the
+          list this visit started with, and shows nothing when that was empty. */}
+      <SavedAssistantCards name={profile.name} cards={savedCards} />
       {connected ? (
         <AssistantChat name={profile.name} history={history.map(({ question, answer, source }) => ({ question, answer, source }))} listen={listen} />
       ) : (

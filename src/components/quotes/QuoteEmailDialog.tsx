@@ -20,12 +20,16 @@ export default function QuoteEmailDialog({
   quoteId,
   disabled,
   disabledReason,
+  alreadyEmailed,
   onSent,
 }: {
   quoteId: string;
   disabled?: boolean;
   disabledReason?: string;
-  onSent?: () => void;
+  /** This quote has been emailed before: the button then offers to email it AGAIN, not as if for the first time. */
+  alreadyEmailed?: boolean;
+  /** Told what was sent, so the screen underneath can say so at once rather than wait on a refetch. */
+  onSent?: (sent: { to: string; emailedAt: string; markedSent: boolean }) => void;
 }) {
   const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState<{ to: string; subject: string; body: string; fileName: string } | null>(null);
@@ -57,14 +61,14 @@ export default function QuoteEmailDialog({
       }
       toast.success(result.message);
       setOpen(false);
-      onSent?.();
+      onSent?.({ to: result.to, emailedAt: result.emailedAt, markedSent: result.markedSent });
     });
   }
 
   return (
     <>
       <Button type="button" variant="outline" onClick={openDialog} disabled={disabled} title={disabled ? disabledReason : undefined}>
-        <Mail />Email quote
+        <Mail />{alreadyEmailed ? "Email again" : "Email quote"}
       </Button>
       <Dialog open={open} onOpenChange={(next) => { if (!sending) setOpen(next); }}>
         <ResponsiveDialogContent className="z-[110] sm:max-w-xl">
@@ -88,7 +92,7 @@ export default function QuoteEmailDialog({
               <div className="space-y-1.5">
                 <Label htmlFor="quote-email-body">Message</Label>
                 <Textarea id="quote-email-body" rows={9} value={draft.body} onChange={(e) => setDraft({ ...draft, body: e.target.value })} />
-                <p className="text-xs text-muted-foreground">Sent in your branded layout (logo and company details added). Default wording: Settings → Email templates → Quote email.</p>
+                <p className="text-xs text-muted-foreground">Sent in your branded layout (logo and company details added), with your own email signature under it — so there is no need to type your name. Default wording: Settings → Email templates → Quote email.</p>
               </div>
               <div className="flex items-center justify-between gap-3 rounded-xl border border-border bg-muted/30 px-3 py-2 text-sm">
                 <span className="flex min-w-0 items-center gap-2"><Paperclip className="size-4 shrink-0" /><span className="truncate">{draft.fileName}</span></span>

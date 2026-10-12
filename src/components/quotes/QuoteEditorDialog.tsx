@@ -54,7 +54,7 @@ import CustomFieldsForm from "@/components/custom-fields/CustomFieldsForm";
 import { quoteSigningView } from "@/app/actions/recordSigning";
 import type { QuoteSigningView } from "@/lib/signing/record";
 import { feeRows, quotePricing } from "@/lib/pricing";
-import { formatDate, formatZAR, type Regional } from "@/lib/format";
+import { formatDate, formatDateTime, formatZAR, type Regional } from "@/lib/format";
 import { calendarDateInstant } from "@/lib/quoteExpiry";
 import SigningBlock from "@/components/SigningBlock";
 import QuoteEmailDialog from "@/components/quotes/QuoteEmailDialog";
@@ -425,6 +425,14 @@ export function QuoteEditorDialog({
       live = false;
     };
   }, [signingQuoteId, signingNonce]);
+
+  // The email that just went from this dialog, kept with the quote it was for.
+  // It answers at once; the fetched view takes over on the next open.
+  const [justEmailed, setJustEmailed] = useState<{ quoteId: string; at: string; to: string } | null>(null);
+  const emailed =
+    justEmailed && justEmailed.quoteId === signingQuoteId
+      ? { at: justEmailed.at, to: justEmailed.to }
+      : signing?.emailed ?? null;
 
   const currentSnapshot = useMemo(() => draftSnapshot(draft), [draft]);
   const dirty = currentSnapshot !== initialSnapshot;
@@ -1321,6 +1329,13 @@ export function QuoteEditorDialog({
                       <div className="rounded-xl border border-white/[0.07] bg-black/15 p-4"><p className="text-[10px] uppercase tracking-wider text-muted-foreground">Line items</p><p className="mt-2 text-sm font-semibold">{draft.lines.length}</p></div>
                       <div className="rounded-xl border border-primary/20 bg-primary/[0.06] p-4"><p className="text-[10px] uppercase tracking-wider text-primary">Total incl. VAT</p><p className="mt-2 text-sm font-semibold text-primary">{rands(calculated.total)}</p></div>
                     </div>
+                    {emailed && (
+                      <div className="mt-6" data-testid="quote-emailed">
+                        <FeedbackBanner tone="success" title="Emailed to the customer">
+                          Sent to {emailed.to} on {formatDateTime(emailed.at, regional)}.
+                        </FeedbackBanner>
+                      </div>
+                    )}
                     <div className="mt-6 flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center">
                       {editable ? (
                         <>
@@ -1362,7 +1377,17 @@ export function QuoteEditorDialog({
                           quoteId={savedQuote.id}
                           disabled={dirty}
                           disabledReason="Save your changes first — the email attaches the saved quote."
-                          onSent={() => { reloadSigning(); router.refresh(); }}
+                          alreadyEmailed={Boolean(emailed)}
+                          onSent={(sent) => {
+                            // Say so HERE, now. The email pop-up has closed and
+                            // its toast is gone in seconds; this tab used to go
+                            // on offering "Save & mark sent" for a quote the
+                            // customer already had.
+                            setJustEmailed({ quoteId: savedQuote.id, at: sent.emailedAt, to: sent.to });
+                            if (sent.markedSent) setSavedQuote((current) => (current && current.id === savedQuote.id ? { ...current, status: "sent" } : current));
+                            reloadSigning();
+                            router.refresh();
+                          }}
                         />
                       )}
                       {savedQuote && quotePrintLinks({ id: savedQuote.id, status: currentStatus }).map((link) => (
