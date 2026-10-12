@@ -1327,6 +1327,12 @@ model Quote {
   declinedAt           DateTime?
   declineReason        String?
   reminderSentAt       DateTime? // unsigned-quote nudge already sent
+  /// When THIS version was last emailed to the customer from "Email quote", and
+  /// to which address — so the quote's own screen can say so, instead of the
+  /// only trace being a pop-up that has gone. A revision is a new row and
+  /// starts with neither: the new version has not been emailed.
+  emailedAt            DateTime?
+  emailedTo            String?
   // Fulfilment flow after signing (all set manually from the Deliveries board)
   invoicedAt           DateTime?
   /// The tax invoice's OWN number, from the workspace's invoice sequence — not

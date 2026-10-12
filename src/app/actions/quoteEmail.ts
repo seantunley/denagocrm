@@ -28,7 +28,10 @@ export type QuoteEmailDraft =
   | { ok: true; to: string; subject: string; body: string; fileName: string }
   | { ok: false; error: string };
 
-export type QuoteEmailResult = { ok: true; message: string } | { ok: false; error: string };
+export type QuoteEmailResult =
+  /** `to` and `emailedAt`: what the quote's screen shows straight away. `markedSent`: this email is what made the quote sent. */
+  | { ok: true; message: string; to: string; emailedAt: string; markedSent: boolean }
+  | { ok: false; error: string };
 
 /**
  * Emailing a quote is sending it to the customer, so it takes the permission
@@ -265,6 +268,18 @@ export async function sendQuoteEmail(
     if (result.markedSent) await emitQuoteJourneyEvent("quote_sent", quote, `sent:${Date.now()}`);
     if (marketed.bannerId && quote.tenantId) await recordBannerSent(quote.tenantId, marketed.bannerId);
 
+    // ON THE QUOTE ITSELF: when it was emailed and to whom. The email has gone, so
+    // this is recorded whatever became of the status — and its failure must not
+    // turn a sent email into an error. The quote's own screen reads it back; it
+    // used to learn of a send only from a pop-up that had already gone.
+    const emailedAt = new Date();
+    await prisma.quote
+      .updateMany({ where: { id: quoteId, tenantId: quote.tenantId }, data: { emailedAt, emailedTo: to.value } })
+      .catch(async (err) => {
+        const { logError } = await import("@/lib/errorLog");
+        await logError("quote-email-recorded", err instanceof Error ? err.name : "unknown").catch(() => {});
+      });
+
     revalidatePath("/quotes");
     if (quote.leadId) revalidatePath(`/leads/${quote.leadId}`);
     if (quote.contactId) revalidatePath(`/contacts/${quote.contactId}`);
@@ -274,6 +289,12 @@ export async function sendQuoteEmail(
         : result.markedSent
           ? " Quote marked sent."
           : "";
-    return { ok: true, message: `Quote Q-${quote.number} emailed to ${to.value}.${note}` };
+    return {
+      ok: true,
+      message: `Quote Q-${quote.number} emailed to ${to.value}.${note}`,
+      to: to.value,
+      emailedAt: emailedAt.toISOString(),
+      markedSent: result.markedSent,
+    };
   });
 }

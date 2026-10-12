@@ -104,6 +104,8 @@ export async function quoteSigningView(id: string): Promise<QuoteSigningView | n
         signedPdfHash: true,
         dealerSignedAt: true,
         dealerSignedByName: true,
+        emailedAt: true,
+        emailedTo: true,
       },
     });
     // A superseded version is not signable and the record page hides the card for
@@ -143,6 +145,8 @@ export async function quoteSigningView(id: string): Promise<QuoteSigningView | n
       signedPdfHash: quote.signedPdfHash,
       dealerSignedAt: quote.dealerSignedAt,
       dealerSignedByName: quote.dealerSignedByName,
+      // This version was emailed to the customer from "Email quote": when, and to which address.
+      emailed: quote.emailedAt && quote.emailedTo ? { at: quote.emailedAt, to: quote.emailedTo } : null,
       hasSavedSignature: Boolean(user.drawnSignatureRef),
       workflows,
       staff,
