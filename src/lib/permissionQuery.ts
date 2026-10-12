@@ -15,6 +15,41 @@ export const RBAC_UNAVAILABLE = "__rbac_unavailable__";
 export const RBAC_INITIALIZED = "__rbac_initialized__";
 
 /**
+ * The workspace a role lookup is made in: the bound one, or — when none is bound
+ * — the signed-in session's own, re-derived here.
+ *
+ * WHY THE SECOND HALF. In a Server Action the scope `getCurrentUser()` enters does
+ * not reach the action that called it (scopeRecovery.ts has the measurements).
+ * The tenant-scoped `prisma` and the record-access checks each recover it at their
+ * own point of use; this lookup did not. So in any action not wrapped in
+ * `withActingStaffScope`, a member's roles were looked up in NO workspace, none
+ * were found, and `requirePermission` sent them to the home page — for holding
+ * exactly the permission the action asked for. Owners never reach this query,
+ * which is how it went unseen: found 2026-10-12 when a sales rep opening the
+ * email composer was redirected away from the customer she was writing to.
+ *
+ * It cannot widen anything. It runs only when NO scope is bound, and yields the
+ * session's own workspace (fully revalidated: revocation, disabled account,
+ * session version) or nothing. With no session at all — the WhatsApp door, a
+ * cron — it is null, as it was.
+ */
+export async function workspaceForRoleLookup(
+  bound: { tenantId?: string | null } | null | undefined,
+  recover: () => Promise<{ tenantId?: string | null } | null>,
+): Promise<string | null> {
+  // A bound scope always wins — one with no workspace (the global owner's) included.
+  if (bound) return bound.tenantId ?? null;
+  return (await recover())?.tenantId ?? null;
+}
+
+const actingWorkspaceId = () =>
+  workspaceForRoleLookup(currentTenantScope(), async () => {
+    // Imported here, not at the top: scopeRecovery is server-only and reaches the session modules.
+    const { recoverStaffScopeFromSession } = await import("./scopeRecovery");
+    return recoverStaffScopeFromSession();
+  });
+
+/**
  * THE RBAC enforcement flip (see the deferred-scoping notes in settings.ts's
  * createUser and accessControl.ts's updateUserRoles): every UserRole write already
  * stamps its owning tenant, but reads stayed tenant-agnostic on purpose, so this one
@@ -30,13 +65,14 @@ export const RBAC_INITIALIZED = "__rbac_initialized__";
 export async function getUserPermissions(userId: string): Promise<Set<string>> {
   try {
     const enforcing = tenantEnforcing();
+    const tenantId = enforcing ? await actingWorkspaceId() : null;
     const rows = enforcing
       ? await basePrisma.$queryRaw<Array<{ key: string }>>`
           SELECT DISTINCT rp."permissionKey" AS key
           FROM "UserRole" ur
           JOIN "RolePermission" rp ON rp."roleId" = ur."roleId"
           WHERE ur."userId" = ${userId}
-            AND ur."tenantId" IS NOT DISTINCT FROM ${currentTenantScope()?.tenantId ?? null}
+            AND ur."tenantId" IS NOT DISTINCT FROM ${tenantId}
           UNION
           SELECT ${RBAC_INITIALIZED} AS key
           WHERE EXISTS (SELECT 1 FROM "Role" LIMIT 1)
