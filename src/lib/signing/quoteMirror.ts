@@ -3,6 +3,8 @@ import { basePrisma } from "@/lib/db";
 import { logError } from "@/lib/errorLog";
 import { ciExactIds } from "@/lib/ciExact";
 import { CLOSED_REQUEST_STATUSES } from "./status";
+import { runInTenantScope } from "@/lib/tenantScope";
+import { emitQuoteJourneyEvent } from "@/lib/leadJourneyEvents";
 
 /**
  * A quote sent from the signing hub HAS been sent, and opened when the customer
@@ -56,6 +58,22 @@ async function whileRequestOpen(tenantId: string, quoteId: string, requestId: st
 type Mirror = { tenantId: string | null; quoteId: string | null; requestId: string };
 
 /**
+ * Tell the journey engine, AFTER the quote's own change has committed.
+ *
+ * The emitter reads through the workspace-scoped client, and these mirrors run
+ * from the public signing page and from cron, where there may be no workspace
+ * bound at all. So the quote is read here with its tenant named, and the
+ * emitter is run inside that workspace's scope — the request's own, never an
+ * ambient one. It never rejects; a journey can never cost the send or the view.
+ */
+type QuoteForJourney = { id: string; number: number; leadId: string | null; contactId: string | null };
+async function tellJourneys(tenantId: string, quoteId: string, emit: (quote: QuoteForJourney) => Promise<void>): Promise<void> {
+  const quote = await basePrisma.quote.findFirst({ where: { id: quoteId, tenantId }, select: { id: true, number: true, leadId: true, contactId: true } });
+  if (!quote) return;
+  await runInTenantScope({ tenantId, system: false }, () => emit(quote));
+}
+
+/**
  * The customer's invitation went out: the quote is now sent.
  *
  * From draft, and from DECLINED too. A quote the customer turned down and was
@@ -69,12 +87,17 @@ export async function mirrorQuoteSent({ tenantId, quoteId, requestId }: Mirror, 
   if (!quoteId || !tenantId) return;
   try {
     if (!(await isCustomerSigner(recipient, tenantId))) return;
-    await whileRequestOpen(tenantId, quoteId, requestId, (tx) =>
-      tx.quote.updateMany({
+    let becameSent = false;
+    await whileRequestOpen(tenantId, quoteId, requestId, async (tx) => {
+      const moved = await tx.quote.updateMany({
         where: { id: quoteId, tenantId, status: { in: ["draft", "declined"] }, deletedAt: null, signedAt: null, supersededAt: null },
         data: { status: "sent", declinedAt: null, declineReason: null },
-      }),
-    );
+      });
+      becameSent = moved.count === 1;
+    });
+    // Only when THIS invitation is what made it sent — and keyed on the request,
+    // so a quote declined and sent again (a new request) is a second sending.
+    if (becameSent) await tellJourneys(tenantId, quoteId, (quote) => emitQuoteJourneyEvent("quote_sent", quote, `sent:request:${requestId}`));
   } catch (error) {
     // Never at the cost of the send itself.
     await logError("signing", "couldn't mark the quote sent", error instanceof Error ? error.name : "unknown");
@@ -86,9 +109,13 @@ export async function mirrorQuoteViewed({ tenantId, quoteId, requestId }: Mirror
   if (!quoteId || !tenantId) return;
   try {
     if (!(await isCustomerSigner(recipient, tenantId))) return;
-    await whileRequestOpen(tenantId, quoteId, requestId, (tx) =>
-      tx.quote.updateMany({ where: { id: quoteId, tenantId, viewedAt: null, deletedAt: null }, data: { viewedAt: new Date() } }),
-    );
+    let firstView = false;
+    await whileRequestOpen(tenantId, quoteId, requestId, async (tx) => {
+      const seen = await tx.quote.updateMany({ where: { id: quoteId, tenantId, viewedAt: null, deletedAt: null }, data: { viewedAt: new Date() } });
+      firstView = seen.count === 1;
+    });
+    // The FIRST time, which is the only time viewedAt is written: once per quote.
+    if (firstView) await tellJourneys(tenantId, quoteId, (quote) => emitQuoteJourneyEvent("quote_opened", quote, "opened"));
   } catch (error) {
     await logError("signing", "couldn't mark the quote viewed", error instanceof Error ? error.name : "unknown");
   }

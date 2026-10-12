@@ -17,6 +17,7 @@ import { loadBillToFleet, quoteBillTo } from "@/lib/quoteBillTo";
 import { validateSigningTemplate } from "@/lib/signing/emailTemplates";
 import { tenantEmailContent } from "@/lib/signing/signingEmail";
 import { deliverQuoteEmail, quotePdfFileName } from "@/lib/quoteEmail";
+import { emitQuoteJourneyEvent } from "@/lib/leadJourneyEvents";
 import { emailWithBanner, recordBannerSent } from "@/lib/signatureBannerStore";
 import { tenantOrigin } from "@/lib/tenantOrigin";
 
@@ -203,6 +204,10 @@ export async function sendQuoteEmail(
       },
     );
     if (!result.ok) return result;
+    // Only when THIS email is what made it sent: a quote already sent and emailed
+    // again is not sent a second time. The moment is the occurrence, because a
+    // quote can be declined and sent again, and that is a second sending.
+    if (result.markedSent) await emitQuoteJourneyEvent("quote_sent", quote, `sent:${Date.now()}`);
     if (marketed.bannerId && quote.tenantId) await recordBannerSent(quote.tenantId, marketed.bannerId);
 
     revalidatePath("/quotes");

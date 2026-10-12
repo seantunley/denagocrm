@@ -50,6 +50,7 @@ const moduleQueries: Array<{ fn: string; args: unknown[] }> = [];
 let marketingOn = true;
 let emitThrows = false;
 const contacts = new Set(["c1"]);
+const leads = new Set(["l1"]);
 
 /* ── the signing sender's fakes ────────────────────────────────────────── */
 const recipientWrites: Array<{ where: Record<string, unknown>; data: Record<string, unknown> }> = [];
@@ -101,7 +102,11 @@ loaderKey._load = function (this: unknown, request: string, parent, isMain) {
     };
   }
   if (from(parent, "src/lib/leadJourneyEvents.ts")) {
-    if (request === "./db") return { prisma: { contact: { findUnique: async ({ where }: { where: { id: string } }) => (contacts.has(where.id) ? { id: where.id } : null) } } };
+    if (request === "./db") return { prisma: {
+      contact: { findUnique: async ({ where }: { where: { id: string } }) => (contacts.has(where.id) ? { id: where.id } : null) },
+      // A lead in this workspace, as the scoped client would return it.
+      lead: { findUnique: async ({ where }: { where: { id: string } }) => (leads.has(where.id) ? { id: where.id, stageId: "stage_quoted", updatedAt: new Date("2026-10-12T08:00:00Z") } : null) },
+    } };
     if (request === "./modules/enabled") return { isModuleEnabled: async () => marketingOn };
     if (request === "./journeyEvents") return {
       emitJourneyEvent: async (event: Record<string, unknown>) => {
@@ -138,7 +143,7 @@ loaderKey._load = function (this: unknown, request: string, parent, isMain) {
 const require_ = createRequire(import.meta.url);
 const { executeJourneyStep } = require_("../src/lib/journeyStepExecutor.ts") as typeof import("../src/lib/journeyStepExecutor");
 const { runScheduledJourneyEnrollments } = require_("../src/lib/journeyScheduling.ts") as typeof import("../src/lib/journeyScheduling");
-const { emitContactJourneyEvent } = require_("../src/lib/leadJourneyEvents.ts") as typeof import("../src/lib/leadJourneyEvents");
+const { emitContactJourneyEvent, emitQuoteJourneyEvent, emitTestDriveJourneyEvent } = require_("../src/lib/leadJourneyEvents.ts") as typeof import("../src/lib/leadJourneyEvents");
 const { remindSigner } = require_("../src/lib/signingReminders.ts") as typeof import("../src/lib/signingReminders");
 
 const step = (type: string) => ({ id: "s1", type, config: {} }) as Parameters<typeof executeJourneyStep>[0]["step"];
@@ -261,6 +266,60 @@ test("a completed job card enrols the customer once per completion, through the 
 
   emitThrows = true;
   await emitContactJourneyEvent("vehicle_delivered", "c1", { occurrence: "vehicle:v1" }); // must not reject
+});
+
+/* ── quotes and test drives: for the lead when there is one ─────────────── */
+
+test("a test drive enrols the LEAD when the booking has one, the customer when it has not — once per booking and stage", async () => {
+  const withLead = { id: "td1", reference: "TD-1001", leadId: "l1", contactId: "c1" };
+  await emitTestDriveJourneyEvent("test_drive_booked", withLead);
+  assert.equal(emitted.length, 1, "one event, not one for the lead and another for the customer");
+  assert.equal(emitted[0].type, "test_drive_booked");
+  assert.equal(emitted[0].entityType, "lead");
+  assert.equal(emitted[0].entityId, "l1");
+  assert.equal(emitted[0].dedupeKey, "lead-event:test_drive_booked:l1:test-drive:td1:test_drive_booked");
+  assert.deepEqual(emitted[0].payload, { testDriveId: "td1", testDriveReference: "TD-1001", stageId: "stage_quoted" });
+
+  // Completed carries what the salesperson recorded (kept on the event; no step branches on it yet).
+  await emitTestDriveJourneyEvent("test_drive_completed", withLead, { outcome: "follow_up" });
+  assert.equal((emitted[1].payload as { outcome?: string }).outcome, "follow_up");
+  assert.notEqual(emitted[1].dedupeKey, emitted[0].dedupeKey, "booked and completed are two events on one booking");
+
+  // A walk-in with no lead: the customer is who the journey is for.
+  await emitTestDriveJourneyEvent("test_drive_no_show", { id: "td2", reference: "TD-1002", leadId: null, contactId: "c1" });
+  assert.equal(emitted[2].entityType, "contact");
+  assert.equal(emitted[2].dedupeKey, "contact-event:test_drive_no_show:c1:test-drive:td2:test_drive_no_show");
+
+  // Somebody else's lead reads as missing through the scoped client: nothing.
+  await emitTestDriveJourneyEvent("test_drive_booked", { id: "td3", reference: "TD-1003", leadId: "another-workspaces-lead", contactId: "c1" });
+  assert.equal(emitted.length, 3);
+});
+
+test("a quote sent or opened enrols its lead (or its customer), keyed so a second sending is a second event", async () => {
+  const quote = { id: "q1", number: 1022, leadId: "l1", contactId: "c1" };
+  await emitQuoteJourneyEvent("quote_sent", quote, "sent:request:r1");
+  await emitQuoteJourneyEvent("quote_sent", quote, "sent:request:r2");
+  await emitQuoteJourneyEvent("quote_opened", quote, "opened");
+  assert.deepEqual(emitted.map((e) => e.dedupeKey), [
+    "lead-event:quote_sent:l1:quote:q1:sent:request:r1",
+    "lead-event:quote_sent:l1:quote:q1:sent:request:r2",
+    "lead-event:quote_opened:l1:quote:q1:opened",
+  ]);
+  assert.deepEqual(emitted[0].payload, { quoteId: "q1", quoteNumber: 1022, stageId: "stage_quoted" });
+
+  await emitQuoteJourneyEvent("quote_sent", { id: "q2", number: 1023, leadId: null, contactId: "c1" }, "sent:1");
+  assert.equal(emitted[3].entityType, "contact");
+  // No lead and no customer: nobody to enrol, and no error.
+  await emitQuoteJourneyEvent("quote_sent", { id: "q3", number: 1024, leadId: null, contactId: null }, "sent:1");
+  assert.equal(emitted.length, 4);
+
+  marketingOn = false;
+  await emitQuoteJourneyEvent("quote_opened", quote, "opened");
+  assert.equal(emitted.length, 4, "Marketing off: nothing is written");
+  marketingOn = true;
+  emitThrows = true;
+  await emitQuoteJourneyEvent("quote_opened", quote, "opened"); // must not reject into the send or the view
+  await emitTestDriveJourneyEvent("test_drive_completed", { id: "td1", reference: "TD-1001", leadId: "l1", contactId: "c1" });
 });
 
 /* ── the signing sender ────────────────────────────────────────────────── */
