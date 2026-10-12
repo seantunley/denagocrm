@@ -95,6 +95,8 @@ export type QuoteSigningView = {
   signedPdfHash: string | null;
   dealerSignedAt: Date | null;
   dealerSignedByName: string | null;
+  /** When this version was last emailed from "Email quote", and to which address. Null: it has not been. */
+  emailed: { at: Date; to: string } | null;
   hasSavedSignature: boolean;
   /** Each with the steps on THIS quote's path that the sender has to put a person in. */
   workflows: { id: string; name: string; asks: WorkflowAsk[] }[];

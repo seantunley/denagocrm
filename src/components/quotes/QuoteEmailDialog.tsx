@@ -20,12 +20,16 @@ export default function QuoteEmailDialog({
   quoteId,
   disabled,
   disabledReason,
+  alreadyEmailed,
   onSent,
 }: {
   quoteId: string;
   disabled?: boolean;
   disabledReason?: string;
-  onSent?: () => void;
+  /** This quote has been emailed before: the button then offers to email it AGAIN, not as if for the first time. */
+  alreadyEmailed?: boolean;
+  /** Told what was sent, so the screen underneath can say so at once rather than wait on a refetch. */
+  onSent?: (sent: { to: string; emailedAt: string; markedSent: boolean }) => void;
 }) {
   const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState<{ to: string; subject: string; body: string; fileName: string } | null>(null);
@@ -57,14 +61,14 @@ export default function QuoteEmailDialog({
       }
       toast.success(result.message);
       setOpen(false);
-      onSent?.();
+      onSent?.({ to: result.to, emailedAt: result.emailedAt, markedSent: result.markedSent });
     });
   }
 
   return (
     <>
       <Button type="button" variant="outline" onClick={openDialog} disabled={disabled} title={disabled ? disabledReason : undefined}>
-        <Mail />Email quote
+        <Mail />{alreadyEmailed ? "Email again" : "Email quote"}
       </Button>
       <Dialog open={open} onOpenChange={(next) => { if (!sending) setOpen(next); }}>
         <ResponsiveDialogContent className="z-[110] sm:max-w-xl">
