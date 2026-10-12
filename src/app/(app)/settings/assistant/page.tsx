@@ -17,7 +17,7 @@ import { formatDateTime } from "@/lib/format";
 import { runSpeed } from "@/lib/assistantRun";
 import { unlinkWhatsAppFor } from "@/app/actions/assistantWhatsApp";
 import ConfirmActionDialog from "@/components/ConfirmActionDialog";
-import { ASSISTANT_WHATSAPP_CONFIRM_KEY, ASSISTANT_WHATSAPP_KEY, ASSISTANT_WHATSAPP_TEMPLATE_KEY, maskWaId, parseUpdateTemplate, whatsappConfirmOn, whatsappSwitchOn } from "@/lib/assistantWhatsAppRules";
+import { ASSISTANT_WHATSAPP_CONFIRM_KEY, ASSISTANT_WHATSAPP_HANDOFF_KEY, ASSISTANT_WHATSAPP_HANDOFF_TO_KEY, ASSISTANT_WHATSAPP_KEY, ASSISTANT_WHATSAPP_TEMPLATE_KEY, handoffRecipient, maskWaId, parseUpdateTemplate, whatsappConfirmOn, whatsappHandoffOn, whatsappSwitchOn } from "@/lib/assistantWhatsAppRules";
 import { actingOwnerTenantId } from "@/lib/actingScope";
 
 /** Who has a WhatsApp linked — masked — so the owner can see it, even for someone who has since lost access. */
@@ -69,7 +69,7 @@ const FEEDBACK_REASON_LABELS: Record<string, string> = {
 export default async function AssistantSettingsPage() {
   await requireTenantOwner();
   if (!(await isModuleEnabled("automation"))) notFound();
-  const [profile, notes, staff, tidiedAt, tidySummary, whatsappOn, phones, ratings, speed, voiceOn, confirmOn, updateTemplate] = await Promise.all([
+  const [profile, notes, staff, tidiedAt, tidySummary, whatsappOn, phones, ratings, speed, voiceOn, confirmOn, updateTemplate, handoffOn, handoffTo] = await Promise.all([
     getSetting(ASSISTANT_PROFILE_KEY).then(parseProfile),
     prisma.assistantNote.findMany({ orderBy: [{ status: "desc" }, { createdAt: "desc" }] }),
     listActingTenantStaff(),
@@ -84,6 +84,8 @@ export default async function AssistantSettingsPage() {
     getSetting(ASSISTANT_VOICE_REPLIES_KEY).then(voiceRepliesSwitchOn),
     getSetting(ASSISTANT_WHATSAPP_CONFIRM_KEY).then(whatsappConfirmOn),
     getSetting(ASSISTANT_WHATSAPP_TEMPLATE_KEY).then(parseUpdateTemplate),
+    getSetting(ASSISTANT_WHATSAPP_HANDOFF_KEY).then(whatsappHandoffOn),
+    getSetting(ASSISTANT_WHATSAPP_HANDOFF_TO_KEY).then(handoffRecipient),
   ]);
   const rated = (rating: string) => ratings.filter((r) => r.feedback === rating).reduce((n, r) => n + r._count._all, 0);
   const wrongBecause = ratings.filter((r) => r.feedback === "down" && r.feedbackReason);
@@ -253,6 +255,41 @@ export default async function AssistantSettingsPage() {
               the CRM get a Listen button. English and Afrikaans only. Uses your ElevenLabs credit for every character
               spoken.
             </span>
+          </span>
+        </label>
+        <label className="flex cursor-pointer items-start gap-2 text-sm">
+          <input type="checkbox" name="whatsappHandoff" defaultChecked={handoffOn} className="mt-1 accent-primary" />
+          <span>
+            <span className="block font-medium">Hand a customer to a person on WhatsApp when the chatbot passes them on</span>
+            <span className="block text-xs text-muted-foreground">
+              When the chatbot on WhatsApp, Messenger, Instagram or Telegram has finished with an enquiry and passes it
+              to a person, that person gets it on the WhatsApp they linked: the customer&apos;s name and number, what
+              they want, the chat so far, a link that opens a WhatsApp chat with the customer from their own phone, and
+              a link to the record. Each handoff is logged on the customer&apos;s record with who it went to. Spam and
+              blocked senders never reach the chatbot, so they are never handed on.
+            </span>
+            <span className="mt-1 block text-xs text-muted-foreground">
+              Three things to know. It only goes to a phone that person linked themselves on the Ask page — to use a
+              second business number, link that number. WhatsApp&apos;s 24-hour rule applies, with the template below
+              standing in when they have not written recently. And the CRM logs the handoff, not the conversation after
+              it: a chat carried on from another number is not in the CRM unless that number is connected to it too.
+              What the customer is told at that moment is the wording of the chatbot&apos;s own handoff step.
+            </span>
+          </span>
+        </label>
+        <label className="block pl-6 text-xs text-muted-foreground">
+          Hand over to
+          <select name="whatsappHandoffTo" defaultValue={handoffTo ?? "all"} className="input mt-1 w-full max-w-sm">
+            <option value="all">Everyone with a linked phone who may open the inbox</option>
+            {phones.map((p) => (
+              <option key={p.userId} value={p.userId}>
+                {nameOf.get(p.userId) ?? "A former team member"} ({maskWaId(p.waId)})
+              </option>
+            ))}
+          </select>
+          <span className="mt-1 block">
+            Only people who have linked a phone are listed. If the person chosen unlinks, nobody is handed to until you
+            choose again — it never falls back to somebody else.
           </span>
         </label>
         <div className="space-y-2 border-t border-border/60 pt-4 text-sm">

@@ -196,8 +196,9 @@ test("pause, resume and delete act only on the caller's own watch, behind the as
 });
 
 test("fired watches light the bubble and every watch is listed on the Ask page", () => {
-  assert.match(src("src/lib/assistantScheduleRun.ts"), /source: \{ in: \["schedule", "watch"\] \}, seenAt: null/);
-  assert.match(src("src/app/(app)/layout.tsx"), /source: \{ in: \["schedule", "watch"\] \}, seenAt: null/);
+  // The shared list of what arrives on its own — "watch" is in it (asserted in assistantSchedules.test.ts).
+  assert.match(src("src/lib/assistantScheduleRun.ts"), /source: \{ in: \[\.\.\.PROACTIVE_SOURCES\] \}, seenAt: null/);
+  assert.match(src("src/app/(app)/layout.tsx"), /source: \{ in: \[\.\.\.PROACTIVE_SOURCES\] \}, seenAt: null/);
   const page = src("src/app/(app)/assistant/page.tsx");
   assert.match(page, /prisma\.assistantWatch\.findMany\(\{\s*where: \{ userId: user\.id \}/);
   assert.match(page, /onConfirm=\{deleteAssistantWatch\.bind\(null, w\.id\)\}/);

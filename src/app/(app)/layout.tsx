@@ -17,6 +17,7 @@ import AppContextMenu from "@/components/AppContextMenu";
 import SessionKeeper from "@/components/SessionKeeper";
 import AssistantBubble from "@/components/AssistantBubble";
 import { prisma } from "@/lib/db";
+import { PROACTIVE_SOURCES } from "@/lib/assistantWhatsAppRules";
 
 /**
  * Tab title and icon from the SESSION's workspace. The root layout can only go
@@ -111,7 +112,7 @@ export default async function AppLayout({
   // nothing until it's opened; one indexed count of their own turns, and only
   // when the bubble shows.
   const assistantUnseen = showAssistant
-    ? await prisma.assistantTurn.count({ where: { userId: user.id, source: { in: ["schedule", "watch"] }, seenAt: null } }).catch(() => 0)
+    ? await prisma.assistantTurn.count({ where: { userId: user.id, source: { in: [...PROACTIVE_SOURCES] }, seenAt: null } }).catch(() => 0)
     : 0;
 
   return (

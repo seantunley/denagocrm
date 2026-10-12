@@ -321,14 +321,15 @@ test("scheduled answers are labelled, dotted until seen, and seen when opened", 
   assert.match(lib.slice(lib.indexOf("export async function assistantTurnsToday")).slice(0, 600), /select: \{ question: true, answer: true, source: true \}/);
   assert.match(lib.slice(lib.indexOf("export async function assistantHistory")).slice(0, 600), /source: true/);
   const seen = code("src/lib/assistantScheduleRun.ts");
-  assert.match(seen, /export async function markScheduledTurnsSeen\(userId: string\) \{\s*await prisma\.assistantTurn\.updateMany\(\{\s*where: \{ userId, source: \{ in: \["schedule", "watch"\] \}, seenAt: null \},\s*data: \{ seenAt: new Date\(\) \}/, "their own scheduled and watch turns only");
+  assert.match(seen, /export async function markScheduledTurnsSeen\(userId: string\) \{\s*await prisma\.assistantTurn\.updateMany\(\{\s*where: \{ userId, source: \{ in: \[\.\.\.PROACTIVE_SOURCES\] \}, seenAt: null \},\s*data: \{ seenAt: new Date\(\) \}/, "their own scheduled and watch turns only");
   const open = code("src/app/actions/assistant.ts");
   assert.match(open.slice(open.indexOf("export async function openAssistantBubble")), /markScheduledTurnsSeen\(user\.id\)/);
   const page = code("src/app/(app)/assistant/page.tsx");
   assert.match(page, /markScheduledTurnsSeen\(user\.id\)/);
   assert.match(page, /prisma\.assistantSchedule\.findMany\(\{\s*where: \{ userId: user\.id \}/, "the page lists only your own");
   const layout = code("src/app/(app)/layout.tsx");
-  assert.match(layout, /const assistantUnseen = showAssistant\s*\? await prisma\.assistantTurn\.count\(\{ where: \{ userId: user\.id, source: \{ in: \["schedule", "watch"\] \}, seenAt: null \} \}\)/);
+  assert.match(layout, /const assistantUnseen = showAssistant\s*\? await prisma\.assistantTurn\.count\(\{ where: \{ userId: user\.id, source: \{ in: \[\.\.\.PROACTIVE_SOURCES\] \}, seenAt: null \} \}\)/);
+  // (The list itself — schedule, watch, handoff — is asserted in assistantWhatsApp.test.ts.)
   const chat = code("src/components/AssistantChat.tsx");
   assert.match(chat, /turn\.source === "schedule" \? <p[^>]*>⏰ Scheduled<\/p>/);
   const bubble = code("src/components/AssistantBubble.tsx");
