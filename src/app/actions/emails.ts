@@ -8,6 +8,8 @@ import { attachSecureLinksToEmail, createSecureLinks, discardSecureLinks, type S
 import { revalidatePath } from "next/cache";
 import { basePrisma, prisma } from "@/lib/db";
 import { customerRecordTenantId } from "@/lib/customerRecordTenant";
+import { postedDealId } from "@/lib/customerTimeline";
+import { resolveFiling } from "@/lib/customerTimelineFiling";
 import { getSetting, putSetting } from "@/lib/settings";
 import { getActiveTenantId, requireTenantOwner } from "@/lib/auth";
 import {
@@ -221,8 +223,9 @@ export async function sendEmailAction(
   const to = String(formData.get("to") ?? "").trim();
   const subject = String(formData.get("subject") ?? "").trim();
   const bodyHtml = String(formData.get("bodyHtml") ?? "").trim();
-  const leadId = String(formData.get("leadId") ?? "").trim() || null;
-  const contactId = String(formData.get("contactId") ?? "").trim() || null;
+  // "The customer in general" (DealField's last option) is no deal.
+  const postedLeadId = postedDealId(formData.get("leadId"));
+  const postedContactId = String(formData.get("contactId") ?? "").trim() || null;
 
   const bodyText = htmlToText(bodyHtml);
   if (!to || !subject || !bodyText) {
@@ -239,12 +242,17 @@ export async function sendEmailAction(
   // Don't let a caller log an email against — or pull context from — a contact or
   // lead they can't access. (`to` stays free-form: the CRM legitimately emails
   // addresses that aren't the record's stored email.)
-  if (contactId && !(await canAccessContact(user, contactId))) {
+  if (postedContactId && !(await canAccessContact(user, postedContactId))) {
     return { error: "You don't have access to that contact." };
   }
-  if (leadId && !(await canAccessLead(user, leadId))) {
+  if (postedLeadId && !(await canAccessLead(user, postedLeadId))) {
     return { error: "You don't have access to that lead." };
   }
+  // ONE TIMELINE: an email on a deal also carries the deal's customer, and a deal
+  // chosen on a customer's page must be THAT customer's (lib/customerTimeline).
+  const filing = await resolveFiling({ leadId: postedLeadId, contactId: postedContactId });
+  if (!filing.ok) return { error: filing.error };
+  const { contactId, leadId } = filing;
   const profile = await getCompanyProfile();
   // The sender's pick of banner for this one email (or "none"); only ever among the banners that are theirs.
   const choice = String(formData.get("banner") ?? "").slice(0, 64);

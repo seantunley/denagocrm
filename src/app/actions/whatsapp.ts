@@ -6,6 +6,8 @@ import { waDigits } from "@/lib/whatsapp";
 import { deliveryStateForMessages, enqueueStaffMessage, flushBotOutboxConversation } from "@/lib/botOutbox";
 import { sendOutcomeMessage, staffReplyIdempotencyKey } from "@/lib/messageDelivery";
 import { withActingStaffScope } from "@/lib/actingScope";
+import { postedDealId } from "@/lib/customerTimeline";
+import { resolveFiling } from "@/lib/customerTimelineFiling";
 
 export type WaState = { ok?: string; error?: string };
 
@@ -17,11 +19,17 @@ export async function sendWhatsAppMessage(
     const user = await requirePermission("inbox.reply");
     const phone = String(formData.get("phone") ?? "").trim();
     const text = String(formData.get("text") ?? "").trim();
-    const contactId = String(formData.get("contactId") ?? "").trim() || null;
-    const leadId = String(formData.get("leadId") ?? "").trim() || null;
+    const postedContactId = String(formData.get("contactId") ?? "").trim() || null;
+    // "The customer in general" (DealField's last option) is no deal.
+    const postedLeadId = postedDealId(formData.get("leadId"));
     if (!phone || !text) return { error: "Message is required." };
-    if (contactId && !(await canAccessContact(user, contactId))) return { error: "Customer access denied." };
-    if (leadId && !(await canAccessLead(user, leadId))) return { error: "Lead access denied." };
+    if (postedContactId && !(await canAccessContact(user, postedContactId))) return { error: "Customer access denied." };
+    if (postedLeadId && !(await canAccessLead(user, postedLeadId))) return { error: "Lead access denied." };
+    // ONE TIMELINE: a message on a deal also carries the deal's customer, and a
+    // deal chosen on a customer's page must be THAT customer's (lib/customerTimeline).
+    const filing = await resolveFiling({ leadId: postedLeadId, contactId: postedContactId });
+    if (!filing.ok) return { error: filing.error };
+    const { contactId, leadId } = filing;
 
     const digits = waDigits(phone);
 

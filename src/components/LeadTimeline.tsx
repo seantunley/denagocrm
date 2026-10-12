@@ -1,6 +1,8 @@
 import { Check, Pin, PinOff } from "lucide-react";
 import { storedFileSrc } from "@/lib/storedFileSrc";
 import { completeActivity } from "@/app/actions/activities";
+import DealField from "@/components/DealField";
+import type { DealOption } from "@/lib/customerTimeline";
 import {
   addCommunication,
   toggleCommunicationPin,
@@ -118,7 +120,10 @@ export default async function LeadTimeline({
   creationNote,
   leadNotes = [],
   notesFromLeadId = null,
+  deals = [],
 }: {
+  /** The customer's open deals, on a customer's page (lib/customerTimeline.dealChoice). */
+  deals?: readonly DealOption[];
   leadId?: string;
   contactId?: string;
   revalidate: string;
@@ -475,6 +480,8 @@ export default async function LeadTimeline({
         {contactId && (
           <input type="hidden" name="contactId" value={contactId} />
         )}
+        {/* On a customer's page: which of their deals this note is about (asked only when there are several). */}
+        {!leadId && deals.length > 0 && <DealField deals={deals} id="timeline-note-deal" />}
         <input type="hidden" name="type" value="note" />
         <input type="hidden" name="direction" value="" />
         <input type="hidden" name="revalidate" value={revalidate} />

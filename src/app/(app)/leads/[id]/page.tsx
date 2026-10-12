@@ -12,6 +12,7 @@ import {
 import LeadForm from "@/components/LeadForm";
 import { createQuoteFromLead } from "@/app/actions/quotes";
 import CommsTimeline from "@/components/CommsTimeline";
+import { dealTimelineWhere } from "@/lib/customerTimeline";
 import SecureLinksPanel from "@/components/SecureLinksPanel";
 import ActivityPanel from "@/components/ActivityPanel";
 import VoiceDebriefButton from "@/components/VoiceDebriefButton";
@@ -83,14 +84,6 @@ export default async function LeadDetailPage({
       contact: true,
       assignedTo: true,
       createdBy: true,
-      communications: { include: { user: true }, orderBy: { occurredAt: "desc" } },
-      activities: {
-        include: {
-          assignedTo: true,
-          attendees: { select: { userId: true, user: { select: { name: true } } }, orderBy: { createdAt: "asc" } },
-        },
-        orderBy: { dueDate: "asc" },
-      },
       quotes: { where: { deletedAt: null }, include: { items: true, fees: { orderBy: { sortOrder: "asc" } } }, orderBy: { createdAt: "desc" } },
       researchNotes: { orderBy: { createdAt: "desc" } },
     },
@@ -106,6 +99,25 @@ export default async function LeadDetailPage({
     // The same loader the Today queue ranks by, so the badge here and the
     // position there can never disagree. A closed deal scores 0 — skip the reads.
     lead.status === "open" ? scoreLeads([lead]).then((scores) => scores.get(lead.id)) : undefined,
+  ]);
+  // ONE TIMELINE (lib/customerTimeline.ts): this deal's entries AND the
+  // customer's that sit on no deal — an email written from the customer's page,
+  // an inbox reply. They used to be invisible here. The customer's are included
+  // only when this person may open that customer; another deal's stay with it.
+  const timelineWhere = dealTimelineWhere({
+    id: lead.id,
+    contactId: lead.contactId && (accessibleContactIds === null || accessibleContactIds.includes(lead.contactId)) ? lead.contactId : null,
+  });
+  const [timelineComms, activities] = await Promise.all([
+    prisma.communication.findMany({ where: timelineWhere, include: { user: true }, orderBy: { occurredAt: "desc" } }),
+    prisma.activity.findMany({
+      where: timelineWhere,
+      include: {
+        assignedTo: true,
+        attendees: { select: { userId: true, user: { select: { name: true } } }, orderBy: { createdAt: "asc" } },
+      },
+      orderBy: { dueDate: "asc" },
+    }),
   ]);
   const alreadyViewed = !!lead.viewedAt;
   // This lead's next test drive whose indemnity is still outstanding — it is
@@ -167,7 +179,10 @@ export default async function LeadDetailPage({
 
   // Research is stored on the lead itself (Research tab). Legacy research
   // notes (pre-migration) are still filtered out of the comms timeline.
-  const comms = lead.communications.filter((c) => c.subject !== RESEARCH_SUBJECT);
+  const comms = timelineComms
+    .filter((c) => c.subject !== RESEARCH_SUBJECT)
+    // Said where it came from: an entry filed on the customer, not on this deal.
+    .map((c) => (c.leadId ? c : { ...c, ownerLabel: "on the customer's record" }));
 
   // Marketing attribution the website captured with the enquiry (ad click / UTMs).
   const attribution = leadAttribution(lead.raw);
@@ -199,7 +214,7 @@ export default async function LeadDetailPage({
         facts={[
           { label: "Estimated value", value: lead.valueCents ? formatZAR(lead.valueCents) : "Not set" },
           { label: "Product", value: lead.product?.name || "Not selected" },
-          { label: "Activities", value: lead.activities.filter((activity) => activity.status === "planned").length },
+          { label: "Activities", value: activities.filter((activity) => activity.status === "planned").length },
           { label: "Quotes", value: lead.quotes.length },
         ]}
         actions={<>
@@ -451,12 +466,12 @@ export default async function LeadDetailPage({
               {
                 key: "activities",
                 label: "Activities",
-                count: lead.activities.filter((a) => a.status === "planned").length,
+                count: activities.filter((a) => a.status === "planned").length,
                 content: (
                   <div className="space-y-3">
                     {canBookTestDrive && <VoiceDebriefButton leadId={lead.id} />}
                     <ActivityPanel
-                      activities={lead.activities}
+                      activities={activities}
                       users={users}
                       currentUserId={user.id}
                       leadId={lead.id}
@@ -592,7 +607,7 @@ export default async function LeadDetailPage({
           audit={audit}
           auditDetail={await auditDetailFor(audit)}
           communications={comms}
-          activities={lead.activities}
+          activities={activities}
           creationNote={
             lead.notes
               ? {
