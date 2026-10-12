@@ -104,7 +104,7 @@ export async function tenantEmailContent(
       for (const f of def.fields) fields[f] = typeof values[f] === "string" ? (values[f] as string) : "";
       for (const f of ["company_name", "company_phone", "company_email"] as const) fields[f] = all[f];
       const design = body ?? defaultEmailBody(kind, parseStoredSigningTemplate(setting(def.settingKey), kind));
-      return renderEmailDocument({
+      return { designed: true, ...renderEmailDocument({
         frame,
         // A per-send edit (the quote dialog) changes the words, not the design.
         body: override
@@ -114,7 +114,7 @@ export async function tenantEmailContent(
         // The same look the editor shows (emailBrandFor), so the canvas never disagrees with the send.
         brand: await emailBrandFor(tenantId),
         action: def.action ?? null,
-      });
+      }) };
     }
 
     return renderSigningEmail(kind, stored, all, {

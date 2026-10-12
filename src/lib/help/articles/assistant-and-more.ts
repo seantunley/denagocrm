@@ -447,6 +447,9 @@ export const assistantAndMoreArticles: HelpArticle[] = [
         ["**Settings → Email**", "Login and verification codes, which are rarely changed."],
       ] },
       { type: "p", text: "The **Customer messages** page also ends with a list headed **All customer messages**: every message a customer can receive, with a link to where its wording is edited. Text messages and WhatsApp messages stay as plain text and are edited on the same pages." },
+      { type: "h", text: "Who signs a quote email" },
+      { type: "p", text: "A quote email is sent by a person pressing **Email quote**, so it is signed by that person: their name, job title, mobile and email, in your workspace's signature style, straight under the message. The details come from **Settings → My account**. The standard wording therefore ends at \"Kind regards,\" with no name typed after it. If you saved your own wording that still types a name, remove it there, or the name will appear twice." },
+      { type: "p", text: "Inside the email the header already shows your logo and the footer your company details, so the signature leaves those out. Once you publish the email frame, its own signature block takes over and you choose which lines it shows." },
       { type: "h", text: "Draft until published" },
       { type: "p", text: "Each email shows a label: **Published** or **Not published yet**. Your edits are saved as a draft as you work, and customers keep getting the last published version until you press **Publish**." },
       { type: "table", headers: ["Situation", "What customers receive"], rows: [

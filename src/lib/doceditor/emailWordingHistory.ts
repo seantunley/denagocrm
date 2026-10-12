@@ -175,5 +175,14 @@ export const STANDARD_WORDING_2026_10_08: Partial<Record<SigningEmailKind, Email
   },
 };
 
-/** Every replaced revision, oldest first. */
+/**
+ * Every replaced revision, oldest first.
+ *
+ * NOT a revision: 2026-10-12, when the Quote email stopped typing the sender's
+ * name after "Kind regards,". A designed message never held those name lines —
+ * building one drops them, because the frame's signature block carries the
+ * name — so that change produced the same designed email as before, and
+ * recording it here would have made every current draft look out of date.
+ * (tests/quoteEmailSignature.test.ts holds this.)
+ */
 export const REPLACED_STANDARD_WORDINGS = [STANDARD_WORDING_2026_10_07, STANDARD_WORDING_2026_10_08];

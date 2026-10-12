@@ -14,12 +14,15 @@ import { logAudit } from "@/lib/audit";
 import { formatZAR } from "@/lib/format";
 import { payableTotalCents } from "@/lib/pricing";
 import { loadBillToFleet, quoteBillTo } from "@/lib/quoteBillTo";
-import { validateSigningTemplate } from "@/lib/signing/emailTemplates";
+import { SENDER_SIGNATURE_SLOT, validateSigningTemplate } from "@/lib/signing/emailTemplates";
 import { tenantEmailContent } from "@/lib/signing/signingEmail";
 import { deliverQuoteEmail, quotePdfFileName } from "@/lib/quoteEmail";
 import { emitQuoteJourneyEvent } from "@/lib/leadJourneyEvents";
 import { emailWithBanner, recordBannerSent } from "@/lib/signatureBannerStore";
 import { tenantOrigin } from "@/lib/tenantOrigin";
+import { getSetting } from "@/lib/settings";
+import { getCompanyProfile } from "@/lib/companyProfile";
+import { SIGNATURE_DESIGN_KEY, buildSignature, parseSignatureDesign, placeSignatureInEmail, signatureCompanyFrom, signatureText } from "@/lib/signature";
 
 export type QuoteEmailDraft =
   | { ok: true; to: string; subject: string; body: string; fileName: string }
@@ -75,6 +78,52 @@ async function quoteVars(quote: LoadedQuote, user: PermissionUser) {
   };
 }
 
+/**
+ * The quote email with the sender's signature under it: the workspace's design
+ * (Settings → My account → Email signature) with this person's name, title and
+ * numbers — or their own custom signature, if they have one. Built exactly as
+ * the composer builds it, so the two never look different.
+ *
+ * Never a reason to lose the email: if the signature cannot be built, the email
+ * goes as it was.
+ */
+async function signQuoteEmail(
+  user: PermissionUser,
+  tenantId: string | null,
+  email: { html: string; text: string; designed?: boolean },
+): Promise<{ html: string; text: string }> {
+  // The layout designed in the editor signs itself: it has a signature block
+  // whose lines the owner chose. A second signature must not be added to it.
+  if (email.designed) return email;
+  try {
+    const [person, profile, design, origin] = await Promise.all([
+      prisma.user.findUnique({ where: { id: user.id }, select: { name: true, email: true, mobile: true, jobTitle: true, signatureHtml: true } }),
+      getCompanyProfile(tenantId),
+      getSetting(SIGNATURE_DESIGN_KEY).then(parseSignatureDesign),
+      tenantOrigin(tenantId),
+    ]);
+    if (!person) return email;
+    // THE PERSON, in the workspace's signature style. Inside the branded card the
+    // header already carries the logo and the footer the company's details, so
+    // the signature leaves out the logo panel, tagline and address — the same
+    // rule the designed layout's signature block follows (emailRender.ts). That
+    // also keeps it inside the card's width: the logo panel alone is wider.
+    const company = signatureCompanyFrom(
+      { ...profile, tagline: "", address: "", phone: "", logoUrl: "" },
+      origin,
+      { ...design, bannerUrl: "" },
+    );
+    return {
+      html: email.html ? placeSignatureInEmail(email.html, buildSignature(person, company), SENDER_SIGNATURE_SLOT) : email.html,
+      text: `${email.text.trimEnd()}\n\n${signatureText(person, profile.name)}`,
+    };
+  } catch (err) {
+    const { logError } = await import("@/lib/errorLog");
+    await logError("quote-email-signature", err instanceof Error ? err.name : "unknown").catch(() => {});
+    return email;
+  }
+}
+
 /** What the dialog shows before anything is sent: the tenant's saved Quote email, merged. Sends nothing. */
 export async function quoteEmailDraft(quoteId: string): Promise<QuoteEmailDraft> {
   return withActingStaffScope(async () => {
@@ -127,11 +176,17 @@ export async function sendQuoteEmail(
     const unchanged = standard.subject === subject && (standard.bodyText ?? standard.text).replace(/\r\n?/g, "\n").trim() === body;
     const email = unchanged ? standard : await tenantEmailContent("quote", quote.tenantId, vars, { subject, body });
     const replyTo = await composerReplyToDefault(user.email);
+    // THE SENDER'S OWN SIGNATURE, as on every email they write in the composer
+    // (Settings → My account → Email signature). A quote is emailed by a named
+    // person pressing Send; it used to end in typed text while their other
+    // emails carried the branded card (Sean, 2026-10-12).
+    const signed = await signQuoteEmail(user, quote.tenantId, email);
     // A signature banner the owner ticked "also on quote emails" for (Settings →
-    // Signature banners) — never for a customer who opted out of marketing.
-    const marketed = email.html
+    // Signature banners) — never for a customer who opted out of marketing. It
+    // goes under the signature, as in the composer.
+    const marketed = signed.html
       ? await emailWithBanner({
-          html: email.html,
+          html: signed.html,
           origin: await tenantOrigin(quote.tenantId),
           tenantId: quote.tenantId,
           senderId: user.id,
@@ -140,7 +195,7 @@ export async function sendQuoteEmail(
           contactId: quote.contactId,
           leadId: quote.leadId,
         })
-      : { html: email.html, bannerId: null };
+      : { html: signed.html, bannerId: null };
 
     const result = await deliverQuoteEmail(
       { to: to.value, fileName },
@@ -163,7 +218,7 @@ export async function sendQuoteEmail(
           sendEmail({
             to: mail.to,
             subject: email.subject,
-            text: email.text,
+            text: signed.text,
             html: marketed.html,
             attachments: mail.attachments,
             replyTo: replyTo || undefined,
