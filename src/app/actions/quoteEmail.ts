@@ -136,7 +136,7 @@ export async function quoteEmailDraft(quoteId: string): Promise<QuoteEmailDraft>
     const { to, vars } = await quoteVars(quote, user);
     const email = await tenantEmailContent("quote", quote.tenantId, vars);
     // A designed email edits its paragraphs only; its headline, figures and signature stay as designed.
-    return { ok: true, to, subject: email.subject, body: email.bodyText ?? email.text, fileName: quotePdfFileName(quote.number) };
+    return { ok: true, to, subject: email.subject, body: email.bodyText ?? email.text, fileName: quotePdfFileName(quote.number, (await getCompanyProfile(quote.tenantId)).name) };
   });
 }
 
@@ -168,7 +168,7 @@ export async function sendQuoteEmail(
     if (quote.supersededAt) return { ok: false, error: "This version has been replaced by a revision — email the latest one." };
     if (quote.items.length === 0) return { ok: false, error: "Add at least one line before sending the quote." };
 
-    const fileName = quotePdfFileName(quote.number);
+    const fileName = quotePdfFileName(quote.number, (await getCompanyProfile(quote.tenantId)).name);
     const { vars } = await quoteVars(quote, user);
     // Rendered escaped into the branded shell; CR/LF cannot reach the subject.
     // Left exactly as prefilled → send the saved template itself, so its

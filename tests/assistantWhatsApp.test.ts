@@ -216,6 +216,8 @@ loaderKey._load = function (this: unknown, request: string, parent, isMain) {
         }),
       };
       // As the real one: a PDF, or why not — "no_document" (nothing to render) or "failed" (did not work this time).
+      // The business's name, as the workspace's company profile gives it — it names the PDF.
+      case "./companyProfile": return { getCompanyProfile: async () => ({ name: "Denago Cape Town" }) };
       case "./quotePdf": return { quotePdf: async (quoteId: string) => {
         state.rendered.push(quoteId);
         return state.noPdf ? { ok: false, reason: state.noPdf } : { ok: true, pdf: Buffer.from("%PDF-1.7 quote") };
@@ -1432,7 +1434,7 @@ test("A BUILT QUOTE'S PDF goes to the linked phone of the person who asked: the 
   assert.equal(state.documents.length, 1);
   const [to, file, caption, ...rest] = state.documents[0] as [string, { filename: string; contentType: string }, string, ...unknown[]];
   assert.equal(to, STAFF);
-  assert.equal(file.filename, "Quote-Q-1030.pdf");
+  assert.equal(file.filename, "Q-1030 Denago Cape Town.pdf");
   assert.equal(file.contentType, "application/pdf");
   assert.equal(caption, "Draft quote Q-1030 — for you. Not sent to the customer.");
   assert.deepEqual(rest, []);

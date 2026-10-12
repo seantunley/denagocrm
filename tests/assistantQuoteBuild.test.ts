@@ -247,7 +247,7 @@ test("THE PDF GOES TO THE PERSON WHO ASKED — the only number it can reach is t
   assert.match(deliver, /if \(customer\.contactId \|\| customer\.leadId \|\| customer\.ambiguous\) return "not_safe";/);
   // The one document send in the module: to `waId`, three arguments — no `record`, so no customer timeline.
   assert.equal((lib.match(/sendWhatsAppDocument\(/g) ?? []).length, 1);
-  assert.match(send, /await sendWhatsAppDocument\(waId, \{ content: pdf, filename: quotePdfFileName\(quote\.number\), contentType: "application\/pdf" \}, `Draft quote Q-\$\{quote\.number\} — for you\. Not sent to the customer\.`\)/);
+  assert.match(send, /await sendWhatsAppDocument\(waId, \{ content: pdf, filename: quotePdfFileName\(quote\.number, \(await getCompanyProfile\(tenantId\)\)\.name\), contentType: "application\/pdf" \}, `Draft quote Q-\$\{quote\.number\} — for you\. Not sent to the customer\.`\)/);
   // Their own quote, in this workspace, still there.
   assert.match(send, /basePrisma\.quote\.findFirst\(\{ where: \{ id: quoteId, tenantId, createdById: userId, deletedAt: null \}, select: \{ id: true, number: true \} \}\)/);
   // It looks up no customer and no other number, and changes nothing about the quote.

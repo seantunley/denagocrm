@@ -451,7 +451,7 @@ export default async function ContactDetailPage({
                       deals={openDeals}
                       revalidate={path}
                       libraryDocs={libraryDocs}
-                      quotes={composerQuotes(contact.quotes, canCancelQuotes)}
+                      quotes={composerQuotes(contact.quotes, canCancelQuotes, (company ?? (await getCompanyProfile())).name)}
                       aiConfigured={aiOn}
                       defaultReplyTo={replyToDefault}
                     />

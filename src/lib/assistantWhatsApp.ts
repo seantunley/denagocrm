@@ -7,6 +7,7 @@ import { fetchWhatsAppMedia, matchByPhone, sendWhatsAppAudioId, sendWhatsAppButt
 import { sendWhatsAppDocument } from "./whatsapp";
 import { quotePdf } from "./quotePdf";
 import { quotePdfFileName } from "./quoteEmail";
+import { getCompanyProfile } from "./companyProfile";
 import { transcribeVoice, transcribeVoiceDetailed } from "./transcribe";
 import { askCrm } from "./crmAssistant";
 import type { ActionCard } from "./assistantActions";
@@ -688,7 +689,7 @@ async function sendQuotePdfToStaff(tenantId: string, userId: string, waId: strin
     return null;
   }
   const pdf = rendered.pdf;
-  const sent = await sendWhatsAppDocument(waId, { content: pdf, filename: quotePdfFileName(quote.number), contentType: "application/pdf" }, `Draft quote Q-${quote.number} — for you. Not sent to the customer.`);
+  const sent = await sendWhatsAppDocument(waId, { content: pdf, filename: quotePdfFileName(quote.number, (await getCompanyProfile(tenantId)).name), contentType: "application/pdf" }, `Draft quote Q-${quote.number} — for you. Not sent to the customer.`);
   if (!sent.ok) return sent.error ?? "WhatsApp document send failed";
   await logAudit({
     action: "assistant.quote_pdf_to_staff",

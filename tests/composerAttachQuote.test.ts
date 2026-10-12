@@ -15,13 +15,14 @@ const quote = (over: Partial<{ id: string; number: number; status: string; super
 });
 
 test("the composer offers the customer's live, current quotes — and none to a role that can't send them", () => {
-  assert.deepEqual(composerQuotes([quote()], true), [{ id: "q1", label: "Q-1027", fileName: "Quote-Q-1027.pdf", draft: true }]);
-  assert.deepEqual(composerQuotes([quote({ status: "sent" })], true)[0].draft, false);
-  assert.deepEqual(composerQuotes([quote()], false), []);
-  assert.deepEqual(composerQuotes([quote({ supersededAt: new Date() })], true), [], "a replaced version");
-  assert.deepEqual(composerQuotes([quote({ deletedAt: new Date() })], true), [], "a binned quote");
-  assert.deepEqual(composerQuotes([quote({ items: [] })], true), [], "an empty quote");
-  for (const status of ["declined", "cancelled"]) assert.deepEqual(composerQuotes([quote({ status })], true), [], status);
+  const NAME = "Denago Cape Town";
+  assert.deepEqual(composerQuotes([quote()], true, NAME), [{ id: "q1", label: "Q-1027", fileName: "Q-1027 Denago Cape Town.pdf", draft: true }]);
+  assert.deepEqual(composerQuotes([quote({ status: "sent" })], true, NAME)[0].draft, false);
+  assert.deepEqual(composerQuotes([quote()], false, NAME), []);
+  assert.deepEqual(composerQuotes([quote({ supersededAt: new Date() })], true, NAME), [], "a replaced version");
+  assert.deepEqual(composerQuotes([quote({ deletedAt: new Date() })], true, NAME), [], "a binned quote");
+  assert.deepEqual(composerQuotes([quote({ items: [] })], true, NAME), [], "an empty quote");
+  for (const status of ["declined", "cancelled"]) assert.deepEqual(composerQuotes([quote({ status })], true, NAME), [], status);
 });
 
 test("the send action checks every attached quote itself, before anything is sent", () => {
@@ -38,7 +39,7 @@ test("the send action checks every attached quote itself, before anything is sen
   assert.match(attach, /quote\._count\.items === 0/);
   // The same PDF, under the same file name; and it can go as a secure link like any other file.
   assert.match(attach, /await quotePdf\(quote\.id\)/);
-  assert.match(attach, /quotePdfFileName\(quote\.number\)/);
+  assert.match(attach, /quotePdfFileName\(quote\.number, profile\.name\)/);
   assert.match(attach, /if \(asSecureLinks\) secureUploads\.push/);
   // Its name is in the list the sensitive-data check reads.
   assert.match(attach, /fileNames\.push\(name\)/);
@@ -143,6 +144,6 @@ test("the composer shows what is attached, posts it, and warns that a draft will
   // The quote's file name is in the list the send check and the secure-link option read.
   assert.match(composer, /\.\.\.pickedQuotes\.map\(\(q\) => \(\{ name: q\.fileName, sizeBytes: 0 \}\)\)/);
   for (const page of ["src/app/(app)/leads/[id]/page.tsx", "src/app/(app)/contacts/[id]/page.tsx"]) {
-    assert.match(shipped(page), /quotes=\{composerQuotes\((lead|contact)\.quotes, canCancelQuotes\)\}/, page);
+    assert.match(shipped(page), /quotes=\{composerQuotes\((lead|contact)\.quotes, canCancelQuotes, \((company \?\? \()?await getCompanyProfile\(\)\)+\.name\)\}/, page);
   }
 });
