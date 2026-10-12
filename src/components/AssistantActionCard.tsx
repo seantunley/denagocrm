@@ -114,6 +114,8 @@ export default function AssistantActionCard({
       {(card.kind === "note" || card.kind === "customer_note") && (
         <p className="mt-2 whitespace-pre-line text-xs text-muted-foreground">{card.pin ? "📌 " : ""}{card.text}</p>
       )}
+      {/* The whole quote, line by line at catalogue prices: what Confirm will create, as a draft. */}
+      {card.kind === "quote_build" && <p className="mt-2 whitespace-pre-line text-xs text-muted-foreground">{card.text}</p>}
       {card.kind === "schedule" && <p className="mt-2 whitespace-pre-line text-xs">&ldquo;{card.question}&rdquo;</p>}
       {(card.kind === "meeting" || card.kind === "test_drive" || card.kind === "block_time") && <p className="mt-1 text-xs text-muted-foreground">{card.detail}</p>}
       {card.kind === "lost" && <p className="mt-2 text-xs text-muted-foreground">Reason: {card.reason}</p>}

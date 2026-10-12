@@ -4,7 +4,9 @@ import { getSetting } from "./settings";
 import { logAudit } from "./audit";
 import { logError } from "./errorLog";
 import { runAsLinkedStaff } from "./auth";
-import { sendWhatsAppButtons, sendWhatsAppText } from "./whatsapp";
+import { sendWhatsAppButtons, sendWhatsAppDocument, sendWhatsAppText } from "./whatsapp";
+import { quotePdf } from "./quotePdf";
+import { quotePdfFileName } from "./quoteEmail";
 import type { ActionCard } from "./assistantActions";
 import type { PermissionUser } from "./permissions";
 import { runAssistantAction } from "@/app/actions/assistant";
@@ -257,5 +259,49 @@ export async function confirmFromWhatsApp(tenantId: string, user: PermissionUser
     ...("leadId" in card && card.leadId ? { leadId: card.leadId } : {}),
     ...(card.kind === "customer_note" ? { contactId: card.contactId } : {}),
   });
-  return say(waId, `✅ ${result.success ?? "Done"}`);
+  await say(waId, `✅ ${result.success ?? "Done"}`);
+  if (card.kind === "quote_build" && result.quote) await sendQuoteToAsker(tenantId, user, waId, result.quote);
+}
+
+/**
+ * The quote DAX just built, as a PDF, to THE PERSON WHO ASKED FOR IT — and to
+ * nobody else (Sean, 2026-10-12: "deliver the PDF to WhatsApp, but NEVER send to
+ * customer").
+ *
+ * What makes that true rather than hoped for:
+ *  - `waId` is the phone this tap came from: a VERIFIED link to this member of
+ *    staff, which the caller has already refused if it is also a customer's
+ *    number. No other number is read, looked up or accepted here;
+ *  - it is sent with no `record`, so nothing is written to a customer's timeline
+ *    — there is no customer in this message;
+ *  - the quote is left exactly as it was created: a draft. Nothing here marks it
+ *    sent, emails it or starts a signing request. Sending it is the person's own
+ *    step, in the CRM.
+ *
+ * Rendered as the person, through the same renderer Print / PDF uses, so it is
+ * the document they would get by opening the quote. A failure costs the PDF, not
+ * the quote: it exists, and they are told where.
+ */
+async function sendQuoteToAsker(tenantId: string, user: PermissionUser, waId: string, quote: { id: string; number: number }): Promise<void> {
+  try {
+    const pdf = await runAsLinkedStaff(user.id, () => quotePdf(quote.id));
+    const sent = pdf
+      ? await sendWhatsAppDocument(waId, { content: pdf, filename: quotePdfFileName(quote.number), contentType: "application/pdf" }, `Draft quote Q-${quote.number} — for you. Not sent to the customer.`)
+      : { ok: false };
+    if (sent.ok) {
+      await logAudit({
+        action: "assistant.quote_pdf_to_staff",
+        summary: `Sent the PDF of draft quote Q-${quote.number} to ${user.name}'s linked WhatsApp (not to the customer)`,
+        user,
+        entityType: "Quote",
+        entityId: quote.id,
+      });
+      return;
+    }
+    await logError("assistant-whatsapp", "quote PDF could not be sent to the person who asked");
+  } catch (error) {
+    await logError("assistant-whatsapp", "quote PDF to the asker threw", error instanceof Error ? error.name : "unknown").catch(() => {});
+  }
+  await say(waId, `I couldn't send the PDF here. The draft is in the CRM — open Quotes and look for Q-${quote.number}.`);
+  void tenantId;
 }

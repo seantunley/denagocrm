@@ -125,9 +125,15 @@ export const CRM_CARD_TTL_MS = 24 * 60 * 60 * 1000;
  *  - lost, quote — closing a deal and starting a quote deserve the screen.
  * A kind not named here is not confirmable: a new kind is CRM-only until someone
  * decides otherwise.
+ *
+ * quote_build IS here (Sean, 2026-10-12): it creates a DRAFT quote from lines the
+ * person has read in full, and sends its PDF back to the phone that confirmed
+ * it. It is still an internal change — the draft reaches no customer, is not
+ * marked sent, and sending it stays a step in the CRM.
  */
 export const WHATSAPP_CONFIRMABLE: ReadonlySet<string> = new Set([
   "note", "customer_note", "follow_up", "assign", "stage", "meeting", "block_time", "reschedule", "cancel_activity", "schedule", "watch",
+  "quote_build",
 ]);
 
 /** Proposed cards, split into those that get a Confirm button here and those that need the CRM. */

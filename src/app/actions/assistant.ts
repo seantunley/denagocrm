@@ -7,12 +7,13 @@ import { assistantTurnsToday } from "@/lib/crmAssistant";
 import { getSetting } from "@/lib/settings";
 import { isCodexConnected } from "@/lib/codex";
 import { ASSISTANT_PROFILE_KEY, parseProfile } from "@/lib/assistantSoul";
-import { STALE_CARD, type ActionCard } from "@/lib/assistantActions";
+import { QUOTE_BUILD_MAX_LINES, STALE_CARD, type ActionCard } from "@/lib/assistantActions";
+import { editorDefaults, quoteFromLeadDefaults } from "@/lib/quoteFromLead";
 import { prisma } from "@/lib/db";
 import { cancelActivity, rescheduleActivity, scheduleActivity, scheduleFollowUp } from "@/app/actions/activities";
 import { addCommunication } from "@/app/actions/communications";
 import { assignLead, markLost, moveLead } from "@/app/actions/leads";
-import { createQuoteFromLead } from "@/app/actions/quotes";
+import { createQuoteFromLead, saveQuoteDraft } from "@/app/actions/quotes";
 import { createTestDriveBooking } from "@/app/actions/testDrives";
 import { createStaffAvailability } from "@/app/actions/staffAvailability";
 import { sendWhatsAppMessage } from "@/app/actions/whatsapp";
@@ -48,7 +49,10 @@ import { revalidatePath } from "next/cache";
  */
 const untouched = (error: string) => ({ ok: false as const, error, unchanged: true as const });
 
-export async function runAssistantAction(card: ActionCard): Promise<{ ok: boolean; error?: string; success?: string; href?: string; unchanged?: boolean }> {
+export async function runAssistantAction(
+  card: ActionCard,
+  /** `quote`: the draft a quote_build created — so the WhatsApp door can hand its PDF back to the person who asked. */
+): Promise<{ ok: boolean; error?: string; success?: string; href?: string; unchanged?: boolean; quote?: { id: string; number: number } }> {
   return withActingStaffScope(async () => {
     const user = await requireAnyPermission(...ASSISTANT_PERMISSIONS);
     if (!(await isModuleEnabled("automation"))) {
@@ -232,6 +236,50 @@ export async function runAssistantAction(card: ActionCard): Promise<{ ok: boolea
         if (result.error) return { ok: false, error: result.error };
         await confirmed("start a quote", card.leadId);
         return { ok: true, success: "Draft quote started", href: result.redirectTo };
+      }
+      case "quote_build": {
+        // A DRAFT, and nothing more: no status change, no email, no signing
+        // request. Whatever was on the card, the lines saved are the
+        // catalogue's as it stands NOW — a product withdrawn or re-priced since
+        // the card was shown means the person agreed to something else, and
+        // nothing is created (`untouched`: it can be asked for again).
+        const lead = await prisma.lead.findUnique({ where: { id: card.leadId }, select: { contactId: true } });
+        if (!lead) return untouched("That lead is no longer there.");
+        if (!lead.contactId || lead.contactId !== card.contactId) return untouched(STALE_CARD);
+        const lines = Array.isArray(card.lines) ? card.lines : [];
+        if (lines.length === 0 || lines.length > QUOTE_BUILD_MAX_LINES) return untouched("That quote isn't valid — ask again.");
+        const products = await prisma.product.findMany({
+          where: { id: { in: [...new Set(lines.map((line) => String(line.productId)))] }, active: true, deletedAt: null },
+          select: { id: true, name: true, basePriceCents: true },
+        });
+        const byId = new Map(products.map((product) => [product.id, product]));
+        if (lines.some((line) => byId.get(line.productId)?.basePriceCents !== line.unitPriceCents)) {
+          return untouched("The catalogue changed since DAX suggested this — ask again to see today's prices.");
+        }
+        const defaults = await quoteFromLeadDefaults();
+        const saved = await saveQuoteDraft({
+          contactId: lead.contactId,
+          leadId: card.leadId,
+          validUntil: editorDefaults(defaults).validUntil,
+          terms: defaults.terms,
+          intent: "draft",
+          items: lines.map((line) => {
+            const product = byId.get(line.productId)!;
+            return {
+              description: product.name, qty: line.qty, unitPriceCents: product.basePriceCents, productId: product.id,
+              discountPct: line.discountPct, ...(line.colour ? { colorPreference: line.colour } : {}),
+            };
+          }),
+        });
+        // saveQuoteDraft validates before it writes (a colour the product does not come in, say).
+        if (!saved.ok) return { ok: false, error: saved.error };
+        await confirmed(`create draft quote Q-${saved.quote.number}`, card.leadId);
+        return {
+          ok: true,
+          success: `Draft quote Q-${saved.quote.number} created. It has NOT been sent to the customer.`,
+          href: `/quotes?edit=${saved.quote.id}`,
+          quote: { id: saved.quote.id, number: saved.quote.number },
+        };
       }
       default:
         return { ok: false, error: "Messages go out only with the Send button on their card." };
