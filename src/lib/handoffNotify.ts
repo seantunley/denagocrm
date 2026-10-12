@@ -74,7 +74,37 @@ type BotChat = readonly { role: "user" | "assistant"; content: string }[];
  */
 export async function notifyHandoff(handoff: Handoff): Promise<void> {
   await sendPushToAll({ title: `${handoff.channel} needs you 🙋`, body: handoff.body, url: handoff.url }, "bot_handoff").catch(() => {});
-  await tellLinkedPhones(handoff).catch((error: unknown) => logError("bot-handoff", "sending the handoff to linked phones failed", error instanceof Error ? error.name : "unknown").catch(() => {}));
+  // ONE DEADLINE FOR THE WHOLE NOTICE — preparing it as well as sending it.
+  // This runs inside the bot's own turn, before the customer's reply is queued.
+  // The first version bounded only the final send: reading the customer and the
+  // chat, checking each recipient and writing the records were awaited with no
+  // limit, so a slow database held the customer's reply for as long as it took.
+  // Now the work starts, the turn waits HANDOFF_SEND_WAIT_MS for it at most, and
+  // carries on. The work itself is not cancelled: it is handed to the platform
+  // to finish after the response (below), and whatever was already written is
+  // delivered by the half-hourly sweep in any case.
+  const work = tellLinkedPhones(handoff).catch((error: unknown) =>
+    logError("bot-handoff", "sending the handoff to linked phones failed", error instanceof Error ? error.name : "unknown").catch(() => {}),
+  );
+  await finishAfterResponse(work);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  await Promise.race([work, new Promise((resolve) => { timer = setTimeout(resolve, HANDOFF_SEND_WAIT_MS); })]);
+  clearTimeout(timer);
+}
+
+/**
+ * Ask the platform to keep this request alive until `work` settles, so a notice
+ * the bot's turn stopped waiting for is still finished rather than cut off when
+ * the response goes. Outside a request (a script, a test) there is nothing to
+ * ask and `after` throws: then the work simply runs for as long as the process does.
+ */
+async function finishAfterResponse(work: Promise<unknown>): Promise<void> {
+  try {
+    const { after } = await import("next/server");
+    after(() => work);
+  } catch {
+    // No request to outlive.
+  }
 }
 
 /** The customer as the CRM knows them, through the workspace-scoped client: another workspace's record reads as missing. */
@@ -123,18 +153,22 @@ async function tellLinkedPhones(handoff: Handoff): Promise<void> {
     crmUrl: `${origin}${handoff.url}`,
   });
 
-  const told: { id: string; name: string }[] = [];
-  for (const { userId } of links) {
-    // Still a member who may use the assistant — and who may open the inbox,
-    // since a customer's conversation is what they are being given.
-    const user = await assistantUserFor(userId);
-    if (!user || !(await hasAnyPermission(user, "inbox.view", "inbox.reply"))) continue;
-    await basePrisma.assistantTurn.create({
-      data: { tenantId, userId, question: `${handoff.channel} chat handed to you`, answer, source: "handoff" },
-    });
-    told.push({ id: userId, name: user.name });
-  }
+  // Still a member who may use the assistant — and who may open the inbox,
+  // since a customer's conversation is what they are being given. Checked for
+  // everyone at once, and their records written in ONE statement: with fifty
+  // recipients this was a hundred and fifty queries one after another.
+  const told = (
+    await Promise.all(
+      links.map(async ({ userId }) => {
+        const user = await assistantUserFor(userId);
+        return user && (await hasAnyPermission(user, "inbox.view", "inbox.reply")) ? { id: userId, name: user.name } : null;
+      }),
+    )
+  ).filter((person): person is { id: string; name: string } => person !== null);
   if (told.length === 0) return;
+  await basePrisma.assistantTurn.createMany({
+    data: told.map((person) => ({ tenantId, userId: person.id, question: `${handoff.channel} chat handed to you`, answer, source: "handoff" })),
+  });
 
   // LOGGED, on the customer's own record: that the chatbot handed them over, and to whom.
   // Names of staff only — nothing of what the customer said goes into the audit summary.
@@ -146,11 +180,9 @@ async function tellLinkedPhones(handoff: Handoff): Promise<void> {
     userName: "Chatbot",
   });
 
-  // SENT NOW, but the customer does not wait on it. This runs inside the bot's
-  // own turn, before the customer's reply is queued, and a send to WhatsApp can
-  // take its whole timeout. So it is given a moment and then left to finish on
-  // its own: if the request ends first, the handoff is still waiting, its claim
-  // expires, and the half-hourly sweep sends it.
-  const sending = Promise.all(told.map((person) => sendUpdatesToLinkedPhone(tenantId, person.id))).catch(() => {});
-  await Promise.race([sending, new Promise((resolve) => setTimeout(resolve, HANDOFF_SEND_WAIT_MS))]);
+  // SENT NOW. The customer does not wait on it: notifyHandoff gives this whole
+  // function one deadline and then carries on. If the request ends before a send
+  // does, the handoff is still waiting, its claim expires, and the half-hourly
+  // sweep sends it.
+  await Promise.all(told.map((person) => sendUpdatesToLinkedPhone(tenantId, person.id))).catch(() => {});
 }

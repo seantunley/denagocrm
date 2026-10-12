@@ -49,6 +49,9 @@ const state = {
   audits: [] as { action: string; summary: string; contactId?: string | null; leadId?: string | null; userName?: string }[],
   sends: [] as { tenantId: string; userId: string }[],
   sendTakesMs: 0,
+  prepTakesMs: 0,
+  /** How many statements wrote handoff records. */
+  turnWrites: 0,
   sendThrows: false,
   pushThrows: false,
   errors: [] as string[],
@@ -67,12 +70,20 @@ loaderKey._load = function (this: unknown, request: string, parent, isMain) {
             state.links
               .filter((l) => l.tenantId === where.tenantId && l.verifiedAt && l.waId && l.updatesOnWhatsApp && (where.userId === undefined || l.userId === where.userId))
               .map((l) => ({ userId: l.userId })) },
-          assistantTurn: { create: async ({ data }: { data: (typeof state.turns)[number] }) => { state.turns.push(data); return data; } },
+          assistantTurn: { createMany: async ({ data }: { data: (typeof state.turns)[number][] }) => {
+            state.turnWrites += 1;
+            state.turns.push(...data);
+            return { count: data.length };
+          } },
         },
         // The workspace-scoped client: a record in another workspace reads as missing.
         prisma: {
           contact: { findUnique: async ({ where }: { where: { id: string } }) => state.contacts.get(where.id) ?? null },
-          lead: { findUnique: async ({ where }: { where: { id: string } }) => state.leads.get(where.id) ?? null },
+          lead: { findUnique: async ({ where }: { where: { id: string } }) => {
+            // A slow database, while the notice is still being PREPARED.
+            if (state.prepTakesMs) await new Promise((resolve) => setTimeout(resolve, state.prepTakesMs));
+            return state.leads.get(where.id) ?? null;
+          } },
         },
       };
       case "./settings": return { getSetting: async (key: string) => (key === ASSISTANT_WHATSAPP_HANDOFF_KEY ? state.handoffSwitch : key === ASSISTANT_WHATSAPP_HANDOFF_TO_KEY ? state.handoffTo : null) };
@@ -139,6 +150,8 @@ beforeEach(() => {
   state.audits = [];
   state.sends = [];
   state.sendTakesMs = 0;
+  state.prepTakesMs = 0;
+  state.turnWrites = 0;
   state.sendThrows = false;
   state.pushThrows = false;
   state.errors = [];
@@ -269,9 +282,67 @@ test("LOGGED IN THE CRM: on the customer's own record, saying who it went to —
   assert.equal(entry.userName, "Chatbot");
   assert.equal(entry.summary, "Chatbot handed this WhatsApp conversation to Name of sean, Name of donovan on WhatsApp, with the customer's details and the chat so far");
   assert.doesNotMatch(entry.summary, /Rover|price|Anna|082|2782/, "names of staff only");
-  // Logged BEFORE the sending is waited on, so a slow WhatsApp cannot leave a handoff unrecorded.
+  // Logged BEFORE any sending starts, so a slow WhatsApp cannot leave a handoff unrecorded.
   const lib = code("src/lib/handoffNotify.ts");
-  assert.ok(lib.indexOf('action: "bot.handoff_to_whatsapp"') < lib.indexOf("await Promise.race("));
+  assert.ok(lib.indexOf('action: "bot.handoff_to_whatsapp"') < lib.indexOf("sendUpdatesToLinkedPhone(tenantId, person.id)"));
+});
+
+test("THE DEADLINE COVERS PREPARING THE NOTICE, not only sending it: a slow database cannot hold the customer's reply", async () => {
+  // Review of #865: only the final send was bounded. Reading the customer and
+  // the chat, checking recipients and writing the records were awaited without limit.
+  link("u1");
+  state.prepTakesMs = HANDOFF_SEND_WAIT_MS + 1500;
+  const started = Date.now();
+  await notifyHandoff(HANDOFF);
+  const waited = Date.now() - started;
+  assert.ok(waited < HANDOFF_SEND_WAIT_MS + 1000, `returned after ${waited} ms, not after the slow read`);
+  assert.equal(state.pushes.length, 1, "the push went first, as always");
+  // Not cancelled: the notice finishes on its own once the database answers.
+  assert.equal(state.turns.length, 0, "still preparing when the bot's turn moved on");
+  await new Promise((resolve) => setTimeout(resolve, 2000));
+  assert.equal(state.turns.length, 1, "and it was still written and sent");
+  assert.deepEqual(state.sends, [{ tenantId: "t1", userId: "u1" }]);
+  assert.equal(state.audits.length, 1);
+
+  const lib = code("src/lib/handoffNotify.ts");
+  // One race, around the whole of it; none left inside.
+  assert.equal((lib.match(/Promise\.race\(/g) ?? []).length, 1);
+  assert.match(lib, /const work = tellLinkedPhones\(handoff\)\.catch\(/);
+  assert.match(lib, /await Promise\.race\(\[work, new Promise\(\(resolve\) => \{ timer = setTimeout\(resolve, HANDOFF_SEND_WAIT_MS\); \}\)\]\);/);
+  // And the platform is asked to let it finish after the response.
+  assert.match(lib, /const \{ after \} = await import\("next\/server"\);\s*after\(\(\) => work\);/);
+});
+
+test("many recipients cost one write, not one each — and their checks run together", async () => {
+  for (let i = 0; i < 12; i += 1) link(`u${i}`);
+  await notifyHandoff(HANDOFF);
+  assert.equal(state.turns.length, 12);
+  assert.equal(state.turnWrites, 1);
+  assert.equal(state.sends.length, 12);
+  const lib = code("src/lib/handoffNotify.ts");
+  assert.doesNotMatch(lib, /for \(const \{ userId \} of links\)/, "no query-per-recipient loop");
+  assert.match(lib, /await basePrisma\.assistantTurn\.createMany\(/);
+});
+
+test("A REFUSED SAVE CHANGES NOTHING: the recipient and the template are checked before any switch is saved", () => {
+  // Review of #865: the handoff switch was saved, THEN the recipient was validated —
+  // an unlinked choice left handoffs on, going to whoever the old setting named.
+  const actions = code("src/app/actions/assistantSettings.ts");
+  const card = actions.slice(actions.indexOf("export async function saveAssistantWhatsAppCard"));
+  const firstSave = Math.min(card.indexOf("await saveAssistantWhatsApp(formData)"), card.indexOf("putSetting("));
+  const preCheck = card.indexOf("await checkWhatsAppCard(formData);");
+  assert.ok(preCheck > 0 && preCheck < firstSave, "checked before the WhatsApp switch and before every setting");
+  assert.match(card, /if \(checked\.error\) return checked;\s*const whatsapp = await saveAssistantWhatsApp\(formData\);/);
+  // The check itself writes nothing.
+  const check = actions.slice(actions.indexOf("async function checkWhatsAppCard"), actions.indexOf("export async function saveAssistantWhatsAppCard"));
+  assert.doesNotMatch(check, /putSetting|logAudit|\.create\(|\.update|\.delete/);
+  // A value that is not an id is refused by name, never read as "everyone".
+  assert.match(check, /if \(rawRecipient && rawRecipient !== "all" && !wanted\) \{\s*refuse\("That isn't a team member/);
+  assert.equal(handoffRecipient("someone; DROP"), null);
+  assert.equal(handoffRecipient("all"), null);
+  assert.equal(handoffRecipient(""), null);
+  // When turning it on for one person, WHO is saved before the switch: never on with the old recipient.
+  assert.ok(card.indexOf("await putSetting(ASSISTANT_WHATSAPP_HANDOFF_TO_KEY, to);") < card.indexOf("await putSetting(ASSISTANT_WHATSAPP_HANDOFF_KEY,"));
 });
 
 test("no real workspace, or WhatsApp for staff switched off: the push goes and nothing else happens", async () => {
@@ -326,7 +397,7 @@ test("every handoff goes through the one door, with the customer and the chat �
   // The customer is read through the workspace-scoped client; the link names its workspace and must be verified.
   assert.match(lib, /await prisma\.contact\.findUnique\(/);
   assert.match(lib, /where: \{ tenantId, verifiedAt: \{ not: null \}, waId: \{ not: null \}, updatesOnWhatsApp: true, \.\.\.\(only \? \{ userId: only \} : \{\}\) \}/);
-  assert.match(lib, /data: \{ tenantId, userId, question: `\$\{handoff\.channel\} chat handed to you`, answer, source: "handoff" \}/);
+  assert.match(lib, /told\.map\(\(person\) => \(\{ tenantId, userId: person\.id, question: `\$\{handoff\.channel\} chat handed to you`, answer, source: "handoff" \}\)\)/);
 });
 
 test("the settings: the owner's, audited, off by default, the recipient checked against real links, described where it is switched, and on the Automatic jobs page", () => {
@@ -334,8 +405,8 @@ test("the settings: the owner's, audited, off by default, the recipient checked 
   const card = actions.slice(actions.indexOf("export async function saveAssistantWhatsAppCard"));
   assert.match(card, /const user = await requireTenantOwner\(\);[\s\S]*const handoff = formData\.get\("whatsappHandoff"\) === "on";\s*if \(handoff !== whatsappHandoffOn\(await getSetting\(ASSISTANT_WHATSAPP_HANDOFF_KEY\)\)\) \{\s*await putSetting\(ASSISTANT_WHATSAPP_HANDOFF_KEY, handoff \? "on" : "off"\);\s*await logAudit\(/);
   // The recipient is not whatever the form sent: it must be a verified link in THIS workspace.
-  assert.match(card, /findFirst\(\{ where: \{ tenantId, userId: wanted, verifiedAt: \{ not: null \}, waId: \{ not: null \} \}, select: \{ userId: true \} \}\)/);
-  assert.match(card, /if \(wanted && !linked\) return refuse\("That person has no linked WhatsApp/);
+  assert.match(actions, /findFirst\(\{ where: \{ tenantId, userId: wanted, verifiedAt: \{ not: null \}, waId: \{ not: null \} \}, select: \{ userId: true \} \}\)/);
+  assert.match(actions, /if \(wanted && !linked\) refuse\("That person has no linked WhatsApp/);
   assert.match(card, /await putSetting\(ASSISTANT_WHATSAPP_HANDOFF_TO_KEY, to\);\s*await logAudit\(/);
   const page = code("src/app/(app)/settings/assistant/page.tsx");
   assert.match(page, /<input type="checkbox" name="whatsappHandoff" defaultChecked=\{handoffOn\}/);
