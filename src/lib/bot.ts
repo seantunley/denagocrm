@@ -2,7 +2,7 @@ import { prisma } from "./db";
 import { customerRecordTenantId } from "./customerRecordTenant";
 import { getSetting } from "./settings";
 import { sendWhatsAppText, uploadWhatsAppMedia, sendWhatsAppAudioId, matchByPhone } from "./whatsapp";
-import { sendPushToAll } from "./push";
+import { notifyHandoff } from "./handoffNotify";
 import { resolveTenantActor } from "./tenantActor";
 import { isBotAiEnabled, generateBotReply, type BotMsg } from "./botAi";
 import { elevenLabsTTS, canSynthesizeVoice } from "./elevenlabs";
@@ -201,14 +201,14 @@ export async function maybeAutoReply(
       if (!sent.ok) return;
       await logOutbound(sentVoice ? `🎤 ${ai.reply}` : ai.reply, handoff ? `${AI_MARKER} → handoff` : AI_MARKER, contactId, leadId, fromDigits, sent.providerMessageId);
       if (handoff) {
-        await sendPushToAll(
-          {
-            title: "WhatsApp needs you 🙋",
-            body: `${name ?? "A customer"} — the assistant handed the chat over.`,
-            url: contactId ? `/contacts/${contactId}` : leadId ? `/leads/${leadId}` : "/inbox",
-          },
-          "bot_handoff"
-        ).catch(() => {});
+        await notifyHandoff({
+          channel: "WhatsApp",
+          body: `${name ?? "A customer"} — the assistant handed the chat over.`,
+          url: contactId ? `/contacts/${contactId}` : leadId ? `/leads/${leadId}` : "/inbox",
+          customer: { contactId, leadId, waDigits: fromDigits },
+          // What was said, and the reply that handed it over.
+          chat: () => [...history, { role: "assistant" as const, content: ai.reply ?? "" }],
+        });
       }
       return;
     }

@@ -9,6 +9,7 @@ import { payableTotalCents } from "./pricing";
 import { johannesburgDateKey } from "./activityDay";
 import { listActingTenantStaff, resolveTenantActor } from "./tenantActor";
 import { WHO_LEGEND, messageAuthor, whoLogged } from "./assistantWho";
+import { OPENED_LEGEND, openedFact } from "./emailOpenTracking";
 import { getAccessibleActivityIds } from "./activityAccess";
 import { getSetting } from "./settings";
 import { getCompanyProfile } from "./companyProfile";
@@ -643,7 +644,11 @@ export async function leadBrief(user: User, raw: z.infer<typeof leadBriefArgs>):
       where: theirs,
       orderBy: { occurredAt: "desc" },
       take: 15,
-      select: { occurredAt: true, direction: true, type: true, subject: true, body: true, user: { select: { id: true, name: true } } },
+      select: {
+        occurredAt: true, direction: true, type: true, subject: true, body: true, user: { select: { id: true, name: true } },
+        // Whether an email we sent was opened (lib/emailOpenTracking.ts).
+        openToken: true, messageId: true, seenAt: true, openCount: true,
+      },
     }),
     prisma.activity.findMany({
       where: theirs,
@@ -714,6 +719,7 @@ export async function leadBrief(user: User, raw: z.infer<typeof leadBriefArgs>):
       notes: clip(lead.notes, 800),
       research: lead.research ? { when: dateKey(lead.researchedAt), summary: clip(lead.research, 1500) } : null,
       who: WHO_LEGEND,
+      opens: OPENED_LEGEND,
       messages: communications.map((c) => {
         // Whose words, and who recorded them — not the same for a call a member of staff logged.
         const { from, loggedBy } = messageAuthor(c, standInId);
@@ -723,6 +729,7 @@ export async function leadBrief(user: User, raw: z.infer<typeof leadBriefArgs>):
           ...(loggedBy ? { loggedBy } : {}),
           channel: c.type,
           text: clip([c.subject, c.body].filter(Boolean).join(" — "), 300),
+          ...openedFact(c),
         };
       }),
       activities: activities.map((a) => {

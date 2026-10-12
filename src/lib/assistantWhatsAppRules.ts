@@ -190,7 +190,92 @@ export function confirmMessages(card: { title: string; text?: unknown; question?
  */
 
 /** The kinds of answer nobody was waiting on a screen for. */
-export const PROACTIVE_SOURCES = ["schedule", "watch"] as const;
+export const PROACTIVE_SOURCES = ["schedule", "watch", "handoff"] as const;
+
+/**
+ * The owner's switch (AppSetting): when the chatbot hands a conversation to a
+ * person, also tell staff on their linked WhatsApp. Default OFF — it exists and
+ * can be seen in Settings → Assistant before it does anything. It only ever
+ * messages STAFF, on the phone each linked themselves; a customer is not
+ * contacted by it.
+ */
+export const ASSISTANT_WHATSAPP_HANDOFF_KEY = "ASSISTANT_WHATSAPP_HANDOFF";
+export const whatsappHandoffOn = (raw: string | null | undefined): boolean => raw === "on";
+/** How long the bot's turn waits for handoff notices to go before carrying on without them (they finish, or the sweep sends them). */
+export const HANDOFF_SEND_WAIT_MS = 4_000;
+
+/**
+ * WHO the handoff goes to (AppSetting). A staff member's id — that person only —
+ * or blank/"all": everyone with a linked phone who may open the inbox. Whoever
+ * it names must still have a VERIFIED linked phone: the customer's details go
+ * to a number that proved it belongs to that person, never to one typed in.
+ */
+export const ASSISTANT_WHATSAPP_HANDOFF_TO_KEY = "ASSISTANT_WHATSAPP_HANDOFF_TO";
+export const handoffRecipient = (raw: string | null | undefined): string | null => {
+  const value = String(raw ?? "").trim();
+  return value && value !== "all" && /^[A-Za-z0-9_-]{1,64}$/.test(value) ? value : null;
+};
+
+/** How much of the chat so far goes with a handoff: the last few messages, each cut to a readable length. */
+export const HANDOFF_CHAT_MESSAGES = 8;
+export const HANDOFF_CHAT_CHARS = 300;
+/** At most this many of the customer's own answers to the chatbot's questions. */
+export const HANDOFF_ANSWERS = 10;
+
+export type HandoffDetails = {
+  /** What the chatbot understood: its one-line summary or reason. */
+  summary: string;
+  customer: { name: string | null; phone: string | null; email: string | null };
+  /** What the customer answered to the chatbot's questions (name → value). */
+  answers: Record<string, string>;
+  /** The conversation so far, oldest first. */
+  chat: { from: "customer" | "bot"; text: string }[];
+  /** The customer's WhatsApp number in digits, when there is one: makes the tap-to-chat link. */
+  waDigits: string | null;
+  /** Their record, or the inbox, as a full address. */
+  crmUrl: string;
+};
+
+/**
+ * A handoff as the staff member receives it: who the customer is, how to reach
+ * them, what they want, what was said, and two links — one that opens a
+ * WhatsApp chat with the customer from whichever number the staff member's
+ * phone uses, one to the record. Everything the person needs to carry on the
+ * conversation themselves.
+ *
+ * An answer is shown only when its name is a plain word (the chatbot's own
+ * variable names) and it is short: a variable holding something internal, or a
+ * whole essay, is left out rather than forwarded.
+ */
+export function handoffText(details: HandoffDetails): string {
+  const { customer } = details;
+  const who = [
+    customer.name?.trim() || "Name not given",
+    customer.phone?.trim() ? `Phone: ${customer.phone.trim()}` : null,
+    customer.email?.trim() ? `Email: ${customer.email.trim()}` : null,
+  ].filter(Boolean);
+  const answers = Object.entries(details.answers)
+    .filter(([key, value]) => /^[a-z][a-z0-9_]{0,30}$/i.test(key) && typeof value === "string" && value.trim() && value.length <= 200)
+    .slice(0, HANDOFF_ANSWERS)
+    .map(([key, value]) => `${key.replace(/_/g, " ")}: ${value.trim()}`);
+  const chat = details.chat
+    .filter((message) => message.text.trim())
+    .slice(-HANDOFF_CHAT_MESSAGES)
+    .map((message) => {
+      const text = message.text.trim().replace(/\s+/g, " ");
+      return `${message.from === "customer" ? "Customer" : "Chatbot"}: ${text.length > HANDOFF_CHAT_CHARS ? `${text.slice(0, HANDOFF_CHAT_CHARS - 1)}…` : text}`;
+    });
+  return [
+    who.join("\n"),
+    details.summary.trim() ? `What they need: ${details.summary.trim()}` : null,
+    answers.length ? `Their answers:\n${answers.join("\n")}` : null,
+    chat.length ? `The chat so far:\n${chat.join("\n")}` : null,
+    [
+      details.waDigits ? `Chat to them on WhatsApp: https://wa.me/${details.waDigits}` : "No WhatsApp number on record — reply from the CRM inbox.",
+      `Their record in the CRM: ${details.crmUrl}`,
+    ].join("\n"),
+  ].filter(Boolean).join("\n\n");
+}
 /** How long an update keeps trying to reach WhatsApp. After a day it is old news: it stays in the CRM only. */
 export const UPDATE_WAIT_MS = 24 * 60 * 60 * 1000;
 /** Read this many at a time, oldest first — and keep reading until none are left. */
@@ -258,7 +343,10 @@ export const outsideReplyWindow = (error: string | null | undefined): boolean =>
 
 /** An update as it is sent: what it is, then all of it. */
 export function updateText(turn: { source: string; question: string; answer: string }): string {
-  const heading = turn.source === "watch" ? `👀 You asked me to watch: ${turn.question.trim()}` : `⏰ Scheduled: ${turn.question.trim()}`;
+  const heading =
+    turn.source === "watch" ? `👀 You asked me to watch: ${turn.question.trim()}`
+    : turn.source === "handoff" ? `🙋 ${turn.question.trim()}`
+    : `⏰ Scheduled: ${turn.question.trim()}`;
   return `${heading}\n\n${turn.answer.trim()}`;
 }
 

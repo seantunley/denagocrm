@@ -25,7 +25,8 @@ type Turn = {
 const scheduledLabel = (turn: Turn) =>
   turn.source === "schedule" ? <p className="text-[11px] font-medium text-muted-foreground">⏰ Scheduled</p>
     : turn.source === "watch" ? <p className="text-[11px] font-medium text-muted-foreground">👀 Something you&apos;re watching</p>
-      : null;
+      : turn.source === "handoff" ? <p className="text-[11px] font-medium text-muted-foreground">🙋 The chatbot handed a conversation to a person</p>
+        : null;
 
 /**
  * The answer, with its evidence: each [[n]] the server numbered becomes a small
