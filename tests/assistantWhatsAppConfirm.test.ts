@@ -611,7 +611,7 @@ test("tasks are proposed only where they can be confirmed: the chat, and WhatsAp
   const lib = code("src/lib/crmAssistant.ts");
   assert.match(lib, /const proposes = source === "chat" \|\| \(source === "whatsapp" && \(opts\.proposeTasks === true \|\| opts\.proposeTasks === "saved"\)\);/);
   assert.match(lib, /proposes \? ACTION_INSTRUCTIONS : "",/);
-  assert.match(lib, /const actions = !proposes \? \[\] : await resolveActions\(user, proposals\)/);
+  assert.match(lib, /const actions = !proposes \? \[\] : await resolveActions\(user, proposals, problems\)/);
   assert.match(lib, /if \(source !== "whatsapp" \|\| !proposes\) return CHANNEL_RULES\[source\];\s*return proposeTasks === "saved" \? WHATSAPP_SAVED_RULE : WHATSAPP_CONFIRM_RULE;/);
   assert.match(lib, /channelRule\(source, proposes, opts\.proposeTasks\),/);
   // eslint-disable-next-line @typescript-eslint/no-require-imports

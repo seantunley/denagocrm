@@ -53,7 +53,7 @@ import { webLookup } from "./crmAssistantWeb";
 import { assistantWebAllowed } from "./assistantUser";
 import { MAX_IMAGES_PER_QUESTION } from "./assistantImage";
 import { applyLearn, loadLearned, loadPlaybook, markNotesUsed, saveDecision, visibleTo } from "./assistantMemoryStore";
-import { ACTION_INSTRUCTIONS, CHOICE_INSTRUCTIONS, matchQuoteRow, quoteAddText, quoteBuildText, quoteChangeText, type ActionCard, type ProposedAction, type QuoteBuildLine, type QuoteChange } from "./assistantActions";
+import { ACTION_INSTRUCTIONS, CHOICE_INSTRUCTIONS, matchQuoteRow, notSetUpNote, quoteAddText, quoteBuildText, quoteChangeText, type ActionCard, type ProposedAction, type QuoteBuildLine, type QuoteChange } from "./assistantActions";
 import { knowledgeProducts, resolveCatalogueProduct } from "./catalogueLookup";
 import { describeSchedule, nextRun, scheduleInput } from "./assistantSchedule";
 import { describeWatch, watchInput } from "./assistantWatchRules";
@@ -395,6 +395,7 @@ async function findQuotes(user: User, raw: z.infer<typeof quoteArgs>): Promise<T
       leadId: quote.lead?.id ?? null,
       customer: customer(quote),
       total: formatZAR(total),
+      ...quoteContents(quote),
       created: dateKey(quote.createdAt),
       ...quoteFacts(quote, signing.get(quote.id)),
       viewedByCustomer: viewedByCustomer(quote, signing.get(quote.id)),
@@ -405,6 +406,27 @@ async function findQuotes(user: User, raw: z.infer<typeof quoteArgs>): Promise<T
       detail: `${quoteFacts(quote, signing.get(quote.id)).status} · ${formatZAR(total)} · viewed ${viewedByCustomer(quote, signing.get(quote.id))}`,
       href: `/quotes/${quote.id}`,
     })),
+  };
+}
+
+/**
+ * WHAT IS ON A QUOTE: its lines and its fees, as they are named there.
+ *
+ * A quote used to reach the assistant as a number, a customer and a total. Asked
+ * to "make the colour white" on a quote with one vehicle on it, it could not see
+ * that there was one vehicle, or what colour it was — so it asked which line, and
+ * once proposed a change to a colour the line already had (Sean, 2026-10-13: "If
+ * there is only one cart on the quote, why ask the question?"). These are the
+ * names quote_change matches against, so they are given exactly as stored.
+ */
+function quoteContents(quote: {
+  items: { description: string; qty: number; discountPct: number; colorPreference: string | null }[];
+  fees: { label: string; amountCents: number }[];
+}): { lines: string[]; fees: string[] } {
+  return {
+    lines: quote.items.slice(0, 12).map((item) =>
+      `${item.qty} × ${item.description}${item.colorPreference ? ` — colour ${item.colorPreference}` : ""}${item.discountPct > 0 ? ` — ${item.discountPct}% off` : ""}`),
+    fees: quote.fees.slice(0, 12).map((fee) => `${fee.label} — ${formatZAR(fee.amountCents)}`),
   };
 }
 
@@ -785,6 +807,7 @@ async function quotesForLead(user: User, leadId: string) {
     link: `/quotes/${q.id}`,
     ...quoteFacts(q, signing.get(q.id)),
     total: formatZAR(payableTotalCents(q)),
+    ...quoteContents(q),
     created: dateKey(q.createdAt),
     validUntil: q.validUntil ? dateKey(q.validUntil) : null,
     viewedByCustomer: viewedByCustomer(q, signing.get(q.id)),
@@ -2113,17 +2136,24 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
   // must not vouch for itself this turn.
   const flagged = unsupportedFigures(resolved.plain, [question, ...history.map((t) => t.question), ...observations.map((o) => o.output.data)]);
   const note = flagged.length ? `\n\n${unsupportedNote(flagged)}` : "";
-  const cited = resolved.cited + note;
-  const answer = resolved.plain + note;
   const proposals = reply.actions;
   // A scheduled run learns nothing: it reads customer text daily with nobody
   // watching, so an injected "remember this" would be written with no one there.
   const learn = source === "schedule" ? null : reply.learn;
   // Where nothing can confirm it, a stray ACTIONS line is removed from the answer and dropped.
-  const actions = !proposes ? [] : await resolveActions(user, proposals).catch(async (error: unknown) => {
+  const problems: string[] = [];
+  const actions = !proposes ? [] : await resolveActions(user, proposals, problems).catch(async (error: unknown) => {
     await logError("crm-assistant", "task proposals failed", error instanceof Error ? error.name : "unknown");
     return [];
   });
+  // THE ANSWER WAS WRITTEN BEFORE ANY TASK WAS CHECKED, and says "I've set that up"
+  // of every task it tried to propose. Each one that did not become a card is
+  // corrected here, under the answer and everywhere it is shown or kept — with
+  // its reason where the task could give one (assistantActions.notSetUpNote).
+  const notSetUp = proposes ? notSetUpNote(problems, Math.max(0, reply.attempted - actions.length - problems.length)) : "";
+  const tail = note + (notSetUp ? `\n\n${notSetUp}` : "");
+  const cited = resolved.cited + tail;
+  const answer = resolved.plain + tail;
   const choices = source === "schedule" ? [] : reply.choices;
   const learnedCount = learn
     ? await applyLearn(user.id, learn).catch(async (error: unknown) => {
@@ -2188,7 +2218,12 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
  * pipeline); anything that doesn't resolve is dropped, not guessed. Nothing runs
  * here — the card's Confirm calls the existing action, which checks it all again.
  */
-async function resolveActions(user: User, proposals: ProposedAction[]): Promise<ActionCard[]> {
+async function resolveActions(
+  user: User,
+  proposals: ProposedAction[],
+  /** Filled with why a proposal became no card, where the task can say (see notSetUpNote). The caller counts the rest. */
+  problems: string[] = [],
+): Promise<ActionCard[]> {
   if (!proposals.length) return [];
   const staff = await listActingTenantStaff();
   const cards: ActionCard[] = [];
@@ -2275,13 +2310,14 @@ async function resolveActions(user: User, proposals: ProposedAction[]): Promise<
     if (p.type === "quote_pdf") {
       // A quote THEY may open, with something on it. Read through the workspace's
       // own client by its number; Confirm checks again.
-      if (!(await hasAnyPermission(user, "quotes.view_all", "quotes.view_owned"))) continue;
+      if (!(await hasAnyPermission(user, "quotes.view_all", "quotes.view_owned"))) { problems.push("Your role can't open quotes."); continue; }
       const number = /^Q-?(\d+)$/i.exec(p.quote)?.[1];
       const quote = await prisma.quote.findFirst({
         where: { deletedAt: null, ...(number ? { number: Number(number) } : { id: p.quote }) },
         select: { id: true, number: true, leadId: true, contact: { select: { firstName: true, lastName: true } }, _count: { select: { items: true } } },
       });
-      if (!quote || quote._count.items === 0 || !(await canAccessQuote(user, quote.id))) continue;
+      if (!quote || !(await canAccessQuote(user, quote.id))) { problems.push(`I can't find quote ${p.quote} among the ones you can open.`); continue; }
+      if (quote._count.items === 0) { problems.push(`Q-${quote.number} has nothing on it yet, so there is no PDF to send.`); continue; }
       cards.push({
         id: `a${index}-${quote.id}`, kind: "quote_pdf", leadId: quote.leadId, quoteId: quote.id, quoteNumber: quote.number,
         leadLabel: [quote.contact?.firstName, quote.contact?.lastName].filter(Boolean).join(" ") || `Q-${quote.number}`,
@@ -2295,7 +2331,9 @@ async function resolveActions(user: User, proposals: ProposedAction[]): Promise<
       // each target must mean exactly one fee or line there, and must actually
       // change something. One target that does not → no card at all, rather than
       // part of what was asked. The save checks every row again under its lock.
-      if (!(await hasPermission(user, "quotes.edit"))) continue;
+      // Every way out of here without a card says WHY (problems): the answer has
+      // already told the person it was set up, and they are owed the correction.
+      if (!(await hasPermission(user, "quotes.edit"))) { problems.push("Your role can't edit quotes."); continue; }
       const number = /^Q-?(\d+)$/i.exec(p.quote)?.[1];
       const quote = await prisma.quote.findFirst({
         where: { deletedAt: null, ...(number ? { number: Number(number) } : { id: p.quote }) },
@@ -2305,35 +2343,52 @@ async function resolveActions(user: User, proposals: ProposedAction[]): Promise<
           fees: { select: { id: true, label: true, amountCents: true } },
         },
       });
-      if (!quote || quote.status !== "draft" || !quote.contactId || !(await canAccessQuote(user, quote.id))) continue;
+      // Not there and not theirs read the same: saying which would confirm the quote exists.
+      if (!quote || !(await canAccessQuote(user, quote.id))) { problems.push(`I can't find quote ${p.quote} among the ones you can open.`); continue; }
+      const ref = `Q-${quote.number}`;
+      if (quote.status !== "draft" || !quote.contactId) { problems.push(`${ref} is not a draft with a customer on it, so it can't be changed from here — open it in the CRM.`); continue; }
       const changes: QuoteChange[] = [];
-      let unclear = false;
+      const named = (rows: readonly string[]) => (rows.length ? rows.map((row) => `"${row}"`).join(", ") : "none");
+      let problem: string | null = null;
       for (const wanted of p.fees ?? []) {
-        const fee = matchQuoteRow(quote.fees, (row) => row.label, wanted.fee);
-        const was = fee ? { label: fee.label, amountCents: fee.amountCents } : null;
-        const label = wanted.label && wanted.label !== was?.label ? wanted.label : undefined;
-        const amountCents = wanted.amount != null && Math.round(wanted.amount * 100) !== was?.amountCents ? Math.round(wanted.amount * 100) : undefined;
-        if (!fee || !was || changes.some((change) => change.id === fee.id)) { unclear = true; break; }
+        // No name given: the only fee on the quote, when there is exactly one.
+        const fee = wanted.fee ? matchQuoteRow(quote.fees, (row) => row.label, wanted.fee) : quote.fees.length === 1 ? quote.fees[0] : null;
+        if (!fee || changes.some((change) => change.id === fee.id)) {
+          problem = `${wanted.fee ? `${ref} has no single fee called "${wanted.fee}"` : `Which fee on ${ref}?`} Its fees: ${named(quote.fees.map((row) => row.label))}.`;
+          break;
+        }
+        const was = { label: fee.label, amountCents: fee.amountCents };
+        const label = wanted.label && wanted.label !== was.label ? wanted.label : undefined;
+        const amountCents = wanted.amount != null && Math.round(wanted.amount * 100) !== was.amountCents ? Math.round(wanted.amount * 100) : undefined;
         if (wanted.remove) changes.push({ row: "fee", id: fee.id, was, remove: true });
         else if (label !== undefined || amountCents !== undefined) changes.push({ row: "fee", id: fee.id, was, ...(label !== undefined ? { label } : {}), ...(amountCents !== undefined ? { amountCents } : {}) });
-        else { unclear = true; break; }
+        else { problem = `On ${ref} the fee "${fee.label}" (${formatZAR(fee.amountCents)}) is already as you asked — there is nothing to change.`; break; }
       }
-      for (const wanted of unclear ? [] : p.lines ?? []) {
-        const line = matchQuoteRow(quote.items, (row) => row.description, wanted.line);
-        const was = line ? { description: line.description, qty: line.qty, discountPct: line.discountPct, colour: line.colorPreference } : null;
-        const qty = wanted.qty != null && wanted.qty !== was?.qty ? wanted.qty : undefined;
-        const discountPct = wanted.discountPct != null && wanted.discountPct !== was?.discountPct ? wanted.discountPct : undefined;
-        if (!line || !was || changes.some((change) => change.id === line.id)) { unclear = true; break; }
+      for (const wanted of problem ? [] : p.lines ?? []) {
+        // No name given: the only line on the quote, when there is exactly one.
+        const line = wanted.line ? matchQuoteRow(quote.items, (row) => row.description, wanted.line) : quote.items.length === 1 ? quote.items[0] : null;
+        if (!line || changes.some((change) => change.id === line.id)) {
+          problem = `${wanted.line ? `${ref} has no single line matching "${wanted.line}"` : `Which line on ${ref}?`} Its lines: ${named(quote.items.map((row) => row.description))}.`;
+          break;
+        }
+        const was = { description: line.description, qty: line.qty, discountPct: line.discountPct, colour: line.colorPreference };
+        const qty = wanted.qty != null && wanted.qty !== was.qty ? wanted.qty : undefined;
+        const discountPct = wanted.discountPct != null && wanted.discountPct !== was.discountPct ? wanted.discountPct : undefined;
         // A colour the PRODUCT comes in, spelled as the catalogue spells it — anything else is no change at all.
-        const offered = wanted.colour ? line.product?.colors.find((colour) => colour.name.toLowerCase() === wanted.colour!.toLowerCase())?.name : undefined;
-        if (wanted.colour && !offered) { unclear = true; break; }
+        const colours = line.product?.colors.map((colour) => colour.name) ?? [];
+        const offered = wanted.colour ? colours.find((colour) => colour.toLowerCase() === wanted.colour!.toLowerCase()) : undefined;
+        if (wanted.colour && !offered) { problem = `"${wanted.colour}" is not a colour the ${line.description} comes in${colours.length ? ` (${colours.join(", ")})` : ""}.`; break; }
         const colour = offered && offered !== was.colour ? offered : undefined;
         if (wanted.remove) changes.push({ row: "line", id: line.id, was, remove: true });
         else if (qty !== undefined || discountPct !== undefined || colour !== undefined) {
           changes.push({ row: "line", id: line.id, was, ...(qty !== undefined ? { qty } : {}), ...(discountPct !== undefined ? { discountPct } : {}), ...(colour !== undefined ? { colour } : {}) });
-        } else { unclear = true; break; }
+        } else {
+          problem = `On ${ref} the ${line.description} is already ${[`${was.qty} of them`, was.colour ?? "no colour chosen", was.discountPct > 0 ? `${was.discountPct}% off` : "no discount"].join(", ")} — there is nothing to change.`;
+          break;
+        }
       }
-      if (unclear || changes.length === 0) continue;
+      if (!problem && changes.length === 0) problem = `Nothing to change on ${ref} was named.`;
+      if (problem) { problems.push(problem); continue; }
       cards.push({
         id: `a${index}-${quote.id}`, kind: "quote_change", leadId: quote.leadId,
         leadLabel: [quote.contact?.firstName, quote.contact?.lastName].filter(Boolean).join(" "),
@@ -2348,16 +2403,19 @@ async function resolveActions(user: User, proposals: ProposedAction[]): Promise<
       // ONLY A DRAFT THIS PERSON MAY EDIT AND OPEN. Read through the workspace's
       // own client by its number; saveQuoteDraft checks all of it again at Confirm
       // (and refuses one out for signature).
-      if (!(await hasPermission(user, "quotes.edit"))) continue;
+      if (!(await hasPermission(user, "quotes.edit"))) { problems.push("Your role can't edit quotes."); continue; }
       const number = /^Q-?(\d+)$/i.exec(p.quote)?.[1];
       const quote = await prisma.quote.findFirst({
         where: { deletedAt: null, ...(number ? { number: Number(number) } : { id: p.quote }) },
         select: { id: true, number: true, status: true, contactId: true, leadId: true, contact: { select: { firstName: true, lastName: true } } },
       });
-      if (!quote || quote.status !== "draft" || !quote.contactId || !(await canAccessQuote(user, quote.id))) continue;
+      if (!quote || !(await canAccessQuote(user, quote.id))) { problems.push(`I can't find quote ${p.quote} among the ones you can open.`); continue; }
+      if (quote.status !== "draft" || !quote.contactId) { problems.push(`Q-${quote.number} is not a draft with a customer on it, so it can't be added to from here — open it in the CRM.`); continue; }
       const fees = (p.fees ?? []).map((fee) => ({ label: fee.label, amountCents: Math.round(fee.amount * 100), delivery: fee.delivery === true }));
       const matched = await Promise.all((p.lines ?? []).map((line) => resolveCatalogueProduct(line)));
-      if (matched.some((product) => !product) || fees.length + matched.length === 0) continue;
+      const unknown = (p.lines ?? []).filter((_, at) => !matched[at]).map((line) => line.product ?? "a product");
+      if (unknown.length > 0) { problems.push(`Not one product in the catalogue: ${unknown.map((name) => `"${name}"`).join(", ")} — say it as the catalogue names it.`); continue; }
+      if (fees.length + matched.length === 0) { problems.push(`Nothing to add to Q-${quote.number} was named.`); continue; }
       const lines: QuoteBuildLine[] = (p.lines ?? []).map((line, at) => {
         const product = matched[at]!;
         return {

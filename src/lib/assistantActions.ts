@@ -146,7 +146,8 @@ export const proposedAction = z.discriminatedUnion("type", [
     quote: text.max(40),
     fees: z.array(
       z.object({
-        fee: text.max(120),
+        // Left out when the quote has only one fee: there is nothing to tell apart.
+        fee: text.max(120).optional(),
         label: text.max(120).optional(),
         amount: z.number().positive().max(QUOTE_ADD_MAX_FEE_RANDS).optional(),
         remove: z.boolean().optional(),
@@ -154,7 +155,8 @@ export const proposedAction = z.discriminatedUnion("type", [
     ).max(QUOTE_ADD_MAX_FEES).optional(),
     lines: z.array(
       z.object({
-        line: text.max(200),
+        // Left out when the quote has only one line ("make the colour white" on a quote with one vehicle).
+        line: text.max(200).optional(),
         qty: z.number().int().min(1).max(500).optional(),
         discountPct: z.number().min(0).max(100).optional(),
         colour: text.max(60).optional(),
@@ -210,6 +212,9 @@ export const QUOTE_CHANGE_RULE =
   "- quote_change: CHANGE or REMOVE something already on a quote that is still a DRAFT (\"rename the delivery fee to Delivery Fee - Hermanus\", \"make the delivery R6000\", \"take the delivery fee off\", \"make it 3 Rovers\", \"give 5% off the Nomad\", \"change the Rover from Lava to White\", \"remove the Scout\"). \"quote\" is its number. " +
   "A fee goes in \"fees\": \"fee\" is the fee as it is called NOW (\"Delivery Fee\"), then what changes — \"label\" (its new name, in their words), \"amount\" (rands, exactly as they said it), or \"remove\":true. " +
   "A product line goes in \"lines\": \"line\" is the product as it is on the quote now, then \"qty\", \"discountPct\", \"colour\" (one the product comes in) or \"remove\":true. Only what they asked to change. " +
+  "The quote's lines and fees are in the quote results (\"lines\", \"fees\") — look the quote up and read them before you answer; name the row as it is written there. " +
+  "WHEN THE QUOTE HAS ONLY ONE LINE (or only one fee), that is the one they mean: leave \"line\" (or \"fee\") out and do not ask which. Ask which only when there are several and what they said does not single one out. " +
+  "If it is already the way they asked (the colour is already White), say so and propose nothing. " +
   "It cannot set a product's price (that is the catalogue's), change the customer, the expiry, the terms or the deposit — say those are done on the quote in the CRM. " +
   "Only a draft. Never add a second fee to \"rename\" one, and never say you cannot rename, change or remove a fee or a line on a draft quote. " +
   "Confirming saves it and sends the updated PDF to THEM on their linked WhatsApp, never to the customer. Do not state a new total yourself.";
@@ -242,6 +247,29 @@ export const ACTION_INSTRUCTIONS = [
   "- draft_message: write it in the business's voice, ready to send. The person reads it, can edit it, and sends it with their own click — it never goes out on its own.",
   "- In your answer, never say you did it — say you've set it up for them to confirm.",
 ].join("\n");
+
+/**
+ * THE ANSWER MUST NOT SAY A TASK WAS SET UP WHEN IT WAS NOT.
+ *
+ * The assistant writes its answer and proposes its tasks in the same breath, so
+ * the answer says "I've set that up for you to confirm" before anything has
+ * checked the task. A task that then turns out to be nothing — the colour was
+ * already White, the fee is not on that quote, the person may not edit it — used
+ * to be dropped without a word, and the sentence stood (Sean, 2026-10-13: told a
+ * colour change was waiting on his Ask page; nothing had been saved anywhere).
+ *
+ * `reasons` are the ones a task could give for itself; `unexplained` counts
+ * those that came to nothing without one. Either way the person is told, under
+ * the answer, that it was not set up.
+ */
+export function notSetUpNote(reasons: readonly string[], unexplained: number): string {
+  if (reasons.length === 0 && unexplained <= 0) return "";
+  const lines = [...reasons];
+  if (unexplained > 0) {
+    lines.push(`${unexplained === 1 ? "A task" : `${unexplained} tasks`} I mentioned could not be set up. Ask again with the exact details — for a quote: its number, and the fee or line as it is named on the quote.`);
+  }
+  return `⚠️ NOT set up — there is nothing to confirm for this, and nothing was saved or changed:\n${lines.map((line) => `• ${line}`).join("\n")}`;
+}
 
 /** A list of proposals → the valid ones. Each stands alone: one malformed entry doesn't sink the others. */
 export function parseActionList(raw: unknown): ProposedAction[] {

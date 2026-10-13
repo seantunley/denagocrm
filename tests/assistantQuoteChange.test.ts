@@ -78,16 +78,70 @@ test("DAX is told it can, and it is confirmable on WhatsApp", () => {
 test("a card only for a draft they may edit and open, for rows that are on it, with a colour the product comes in", () => {
   const assistant = code("src/lib/crmAssistant.ts");
   const branch = assistant.slice(assistant.indexOf('if (p.type === "quote_change")'), assistant.indexOf('if (p.type === "quote_add")'));
-  assert.match(branch, /hasPermission\(user, "quotes\.edit"\)\)\) continue;/);
-  assert.match(branch, /quote\.status !== "draft" \|\| !quote\.contactId \|\| !\(await canAccessQuote\(user, quote\.id\)\)\) continue;/);
+  assert.match(branch, /if \(!\(await hasPermission\(user, "quotes\.edit"\)\)\) \{ problems\.push\("Your role can't edit quotes\."\); continue; \}/);
+  // Not there and not theirs are told the same way: no card, and no hint that the quote exists.
+  assert.match(branch, /if \(!quote \|\| !\(await canAccessQuote\(user, quote\.id\)\)\) \{ problems\.push\(`I can't find quote \$\{p\.quote\} among the ones you can open\.`\); continue; \}/);
+  assert.match(branch, /if \(quote\.status !== "draft" \|\| !quote\.contactId\) \{ problems\.push\(/);
+  assert.ok(branch.indexOf("canAccessQuote(user, quote.id)") < branch.indexOf("const ref = `Q-${quote.number}`;"), "nothing about the quote is said before access is checked");
   assert.match(branch, /await prisma\.quote\.findFirst\(/);
-  assert.match(branch, /matchQuoteRow\(quote\.fees, \(row\) => row\.label, wanted\.fee\)/);
-  assert.match(branch, /matchQuoteRow\(quote\.items, \(row\) => row\.description, wanted\.line\)/);
-  // One unclear target, or nothing actually changing, and there is no card — never part of what was asked.
-  assert.match(branch, /if \(unclear \|\| changes\.length === 0\) continue;/);
-  assert.match(branch, /line\.product\?\.colors\.find\(\(colour\) => colour\.name\.toLowerCase\(\) === wanted\.colour!\.toLowerCase\(\)\)\?\.name/);
-  assert.match(branch, /if \(wanted\.colour && !offered\) \{ unclear = true; break; \}/);
+  // A named row must mean exactly one; an unnamed one is the ONLY row of its kind, or nothing.
+  assert.match(branch, /wanted\.fee \? matchQuoteRow\(quote\.fees, \(row\) => row\.label, wanted\.fee\) : quote\.fees\.length === 1 \? quote\.fees\[0\] : null;/);
+  assert.match(branch, /wanted\.line \? matchQuoteRow\(quote\.items, \(row\) => row\.description, wanted\.line\) : quote\.items\.length === 1 \? quote\.items\[0\] : null;/);
+  // One unclear target, or nothing actually changing, and there is no card — never part of what was asked. And it says why.
+  assert.match(branch, /if \(problem\) \{ problems\.push\(problem\); continue; \}/);
+  assert.ok(branch.indexOf("if (problem) { problems.push(problem); continue; }") < branch.indexOf("cards.push({"));
+  assert.match(branch, /colours\.find\(\(colour\) => colour\.toLowerCase\(\) === wanted\.colour!\.toLowerCase\(\)\)/);
+  assert.match(branch, /if \(wanted\.colour && !offered\) \{ problem = `"\$\{wanted\.colour\}" is not a colour the \$\{line\.description\} comes in/);
+  // ALREADY AS ASKED is said, not dropped (2026-10-13: "change the Rover to White" — it already was).
+  assert.match(branch, /problem = `On \$\{ref\} the \$\{line\.description\} is already /);
+  assert.match(branch, /problem = `On \$\{ref\} the fee "\$\{fee\.label\}" \(\$\{formatZAR\(fee\.amountCents\)\}\) is already as you asked/);
   assert.match(branch, /confirmKey: `qk_\$\{randomBytes\(16\)\.toString\("hex"\)\}`,/);
+});
+
+test("with ONE line on the quote, the line need not be named — and the same for a fee (2026-10-13: \"why ask the question?\")", () => {
+  assert.equal(propose({ type: "quote_change", quote: "Q-1031", lines: [{ colour: "White" }] }).length, 1);
+  assert.equal(propose({ type: "quote_change", quote: "Q-1031", fees: [{ remove: true }] }).length, 1);
+  assert.match(ACTION_INSTRUCTIONS, /WHEN THE QUOTE HAS ONLY ONE LINE \(or only one fee\), that is the one they mean: leave "line" \(or "fee"\) out and do not ask which\./);
+  assert.match(ACTION_INSTRUCTIONS, /The quote's lines and fees are in the quote results/);
+  assert.match(ACTION_INSTRUCTIONS, /If it is already the way they asked \(the colour is already White\), say so and propose nothing\./);
+
+  // DAX is SHOWN what is on a quote: its lines (with colour) and fees, as they are named there — in both quote lookups.
+  const assistant = code("src/lib/crmAssistant.ts");
+  assert.equal((assistant.match(/\.\.\.quoteContents\((quote|q)\),/g) ?? []).length, 2);
+  const contents = assistant.slice(assistant.indexOf("function quoteContents("), assistant.indexOf("export async function findActivities("));
+  assert.match(contents, /`\$\{item\.qty\} × \$\{item\.description\}\$\{item\.colorPreference \? ` — colour \$\{item\.colorPreference\}` : ""\}/);
+  assert.match(contents, /fees: quote\.fees\.slice\(0, 12\)\.map\(\(fee\) => `\$\{fee\.label\} — \$\{formatZAR\(fee\.amountCents\)\}`\),/);
+  // What a quote costs to make, and which lines are optional, are not among them.
+  assert.doesNotMatch(contents, /costCents|unitPriceCents|optional|selected/);
+});
+
+test("THE ANSWER IS CORRECTED when a task it speaks of was not set up (2026-10-13: told a change was waiting; nothing was saved)", async () => {
+  const { notSetUpNote } = await import("../src/lib/assistantActions");
+  const { splitReply, REPLY_MARKER } = await import("../src/lib/assistantReply");
+  assert.equal(notSetUpNote([], 0), "");
+  assert.equal(
+    notSetUpNote(["On Q-1030 the Denago EV Rover XL is already 1 of them, White, no discount — there is nothing to change."], 0),
+    "⚠️ NOT set up — there is nothing to confirm for this, and nothing was saved or changed:\n• On Q-1030 the Denago EV Rover XL is already 1 of them, White, no discount — there is nothing to change.",
+  );
+  assert.match(notSetUpNote([], 1), /^⚠️ NOT set up[^\n]*\n• A task I mentioned could not be set up\./);
+  assert.match(notSetUpNote(["x"], 2), /• x\n• 2 tasks I mentioned could not be set up\./);
+
+  // The reply says how many tasks it TRIED to propose, counting the malformed ones the parser throws away.
+  const reply = (actions: unknown[]) => splitReply(`I've set that up for you to confirm.\n${REPLY_MARKER}\n${JSON.stringify({ actions })}`);
+  const ok = { type: "quote_change", quote: "Q-1030", lines: [{ colour: "White" }] };
+  assert.deepEqual([reply([ok]).attempted, reply([ok]).actions.length], [1, 1]);
+  assert.deepEqual([reply([{ ...ok, lines: [{ color: "White" }] }]).attempted, reply([{ ...ok, lines: [{ color: "White" }] }]).actions.length], [1, 0], "a misspelt field: tried, and not made");
+  assert.deepEqual([reply([ok, { type: "made_up" }]).attempted, reply([ok, { type: "made_up" }]).actions.length], [2, 1]);
+  assert.equal(splitReply("Just an answer.").attempted, 0);
+
+  // Wired: counted against the cards that came out, with the reasons the tasks gave; appended to the answer
+  // that is shown, cited AND saved — only where tasks can be proposed at all.
+  const assistant = code("src/lib/crmAssistant.ts");
+  assert.match(assistant, /const actions = !proposes \? \[\] : await resolveActions\(user, proposals, problems\)\.catch\(/);
+  assert.match(assistant, /const notSetUp = proposes \? notSetUpNote\(problems, Math\.max\(0, reply\.attempted - actions\.length - problems\.length\)\) : "";/);
+  assert.match(assistant, /const tail = note \+ \(notSetUp \? `\\n\\n\$\{notSetUp\}` : ""\);\s*const cited = resolved\.cited \+ tail;\s*const answer = resolved\.plain \+ tail;/);
+  const answerAt = assistant.indexOf("const answer = resolved.plain + tail;");
+  assert.ok(answerAt > 0 && answerAt < assistant.indexOf("tools: observations.map((o) => ({ tool: o.tool, args: o.args })) as object,"), "before the turn is saved, so the kept answer carries it too");
 });
 
 test("Confirm hands the changes to the quote editor's save — once, and never as a send", () => {
