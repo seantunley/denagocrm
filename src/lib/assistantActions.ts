@@ -258,17 +258,51 @@ export const ACTION_INSTRUCTIONS = [
  * to be dropped without a word, and the sentence stood (Sean, 2026-10-13: told a
  * colour change was waiting on his Ask page; nothing had been saved anywhere).
  *
- * `reasons` are the ones a task could give for itself; `unexplained` counts
- * those that came to nothing without one. Either way the person is told, under
- * the answer, that it was not set up.
+ * THE ANSWER IS REPLACED, NOT ANNOTATED. The first fix kept the sentence and put
+ * a correction under it, so the person read "I've set that up" and "NOT set up"
+ * in one message (review of #882). What they are told about tasks is now written
+ * from the cards that exist — never from what the assistant said it had done:
+ *
+ *  - some task did not become a card → the answer is: what IS waiting for
+ *    Confirm (by its card's title), and what is not, with why;
+ *  - no task at all, yet the words claim one was set up → the answer is that
+ *    nothing was set up;
+ *  - otherwise the assistant's own answer stands (null).
+ *
+ * `reasons` are the ones a task gave for itself; `unexplained` counts those that
+ * came to nothing without one.
  */
-export function notSetUpNote(reasons: readonly string[], unexplained: number): string {
-  if (reasons.length === 0 && unexplained <= 0) return "";
-  const lines = [...reasons];
+export function settledAnswer(written: string, cards: readonly { title: string }[], reasons: readonly string[], unexplained: number): string | null {
+  const failed = [...reasons];
   if (unexplained > 0) {
-    lines.push(`${unexplained === 1 ? "A task" : `${unexplained} tasks`} I mentioned could not be set up. Ask again with the exact details — for a quote: its number, and the fee or line as it is named on the quote.`);
+    failed.push(`${unexplained === 1 ? "A task" : `${unexplained} tasks`} could not be set up. Ask again with the exact details — for a quote: its number, and the fee or line as it is named on the quote.`);
   }
-  return `⚠️ NOT set up — there is nothing to confirm for this, and nothing was saved or changed:\n${lines.map((line) => `• ${line}`).join("\n")}`;
+  const bullets = (lines: readonly string[]) => lines.map((line) => `• ${line}`).join("\n");
+  if (failed.length > 0) {
+    if (cards.length === 0) return `I couldn't set that up — there is nothing to confirm, and nothing was saved or changed.\n${bullets(failed)}`;
+    return `Set up for you to confirm:\n${bullets(cards.map((card) => card.title))}\n\nNOT set up — nothing was saved or changed for this:\n${bullets(failed)}`;
+  }
+  if (cards.length === 0 && claimsSetUp(written)) {
+    return "I haven't set anything up — there is nothing to confirm, and nothing was saved or changed. Tell me exactly what you want done (for a quote: its number, and what should be different) and I'll set it up for you to confirm.";
+  }
+  return null;
+}
+
+/**
+ * Do these words tell the person a task is waiting for them to confirm?
+ *
+ * Only asked when NO card exists, where such a sentence cannot be true. It looks
+ * for the assistant saying, of itself and in the past tense, that it set
+ * something up / saved / queued / created / added / booked / scheduled it — together
+ * with the waiting-to-be-confirmed part ("to confirm", "on your Ask page", "tap
+ * Confirm"). Saying a thing CAN be set up, or asking a question, does not match.
+ */
+export function claimsSetUp(written: string): boolean {
+  const text = written.replace(/[’‘]/g, "'");
+  const did = /\bI(?:'ve| have)\s+(?:now\s+|just\s+|also\s+)?(?:set\b[^.?!\n]{0,80}?\bup\b|set up|saved|queued|created|added|booked|scheduled|prepared|lined up)/i;
+  const waiting = /\b(?:to|can|and)\s+confirm\b|\bfor (?:you|your) (?:to confirm|confirmation)\b|\bAsk page\b|\b(?:tap|press|hit|click)\s+confirm\b|\bconfirm button\b/i;
+  return text.split(/(?<=[.?!])\s+|\n+/).some((sentence) => !sentence.trim().endsWith("?") && did.test(sentence) && waiting.test(sentence))
+    || (did.test(text) && /\bAsk page\b|\b(?:tap|press|hit|click)\s+confirm\b/i.test(text) && !/\?\s*$/.test(text.trim()));
 }
 
 /** A list of proposals → the valid ones. Each stands alone: one malformed entry doesn't sink the others. */

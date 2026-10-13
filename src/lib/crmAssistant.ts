@@ -53,7 +53,7 @@ import { webLookup } from "./crmAssistantWeb";
 import { assistantWebAllowed } from "./assistantUser";
 import { MAX_IMAGES_PER_QUESTION } from "./assistantImage";
 import { applyLearn, loadLearned, loadPlaybook, markNotesUsed, saveDecision, visibleTo } from "./assistantMemoryStore";
-import { ACTION_INSTRUCTIONS, CHOICE_INSTRUCTIONS, matchQuoteRow, notSetUpNote, quoteAddText, quoteBuildText, quoteChangeText, type ActionCard, type ProposedAction, type QuoteBuildLine, type QuoteChange } from "./assistantActions";
+import { ACTION_INSTRUCTIONS, CHOICE_INSTRUCTIONS, matchQuoteRow, quoteAddText, quoteBuildText, quoteChangeText, settledAnswer, type ActionCard, type ProposedAction, type QuoteBuildLine, type QuoteChange } from "./assistantActions";
 import { knowledgeProducts, resolveCatalogueProduct } from "./catalogueLookup";
 import { describeSchedule, nextRun, scheduleInput } from "./assistantSchedule";
 import { describeWatch, watchInput } from "./assistantWatchRules";
@@ -2147,13 +2147,14 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
     return [];
   });
   // THE ANSWER WAS WRITTEN BEFORE ANY TASK WAS CHECKED, and says "I've set that up"
-  // of every task it tried to propose. Each one that did not become a card is
-  // corrected here, under the answer and everywhere it is shown or kept — with
-  // its reason where the task could give one (assistantActions.notSetUpNote).
-  const notSetUp = proposes ? notSetUpNote(problems, Math.max(0, reply.attempted - actions.length - problems.length)) : "";
-  const tail = note + (notSetUp ? `\n\n${notSetUp}` : "");
-  const cited = resolved.cited + tail;
-  const answer = resolved.plain + tail;
+  // of every task it tried to propose — or of one it never proposed at all. What
+  // the person is told about tasks comes from the cards that EXIST: where the
+  // words and the cards disagree, the words are replaced (not added to), here,
+  // for everywhere the answer is shown or kept (assistantActions.settledAnswer).
+  const settled = proposes ? settledAnswer(resolved.plain, actions, problems, Math.max(0, reply.attempted - actions.length - problems.length)) : null;
+  // A replaced answer carries none of the original's figures or citations, so neither its note nor its links.
+  const cited = settled ?? resolved.cited + note;
+  const answer = settled ?? resolved.plain + note;
   const choices = source === "schedule" ? [] : reply.choices;
   const learnedCount = learn
     ? await applyLearn(user.id, learn).catch(async (error: unknown) => {
@@ -2207,7 +2208,7 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
     });
   return {
     ok: true, answer, rows, tools, learned: learnedCount, actions, choices, saved: saved !== null,
-    ...(source === "chat" && evidence.length ? { cited, evidence } : {}),
+    ...(source === "chat" && evidence.length && !settled ? { cited, evidence } : {}),
     ...(saved ? { turnId: saved } : {}),
   };
 }
