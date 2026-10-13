@@ -51,7 +51,9 @@ test("every answer goes through the check, and the note is part of what's saved 
   assert.match(src, /const flagged = unsupportedFigures\(resolved\.plain, \[question, \.\.\.history\.map\(\(t\) => t\.question\), \.\.\.observations\.map\(\(o\) => o\.output\.data\)\]\);/);
   const call = src.slice(src.indexOf("const flagged = unsupportedFigures("), src.indexOf("\n", src.indexOf("const flagged = unsupportedFigures(")));
   assert.doesNotMatch(call, /conversation|\.answer|\.state/, "nothing DAX wrote is evidence");
-  assert.match(src, /const cited = resolved\.cited \+ note;\s*const answer = resolved\.plain \+ note;/);
+  // The note is still part of both — unless the whole answer was replaced because it spoke of a task that was
+  // never set up (settledAnswer): that text holds none of the original's figures.
+  assert.match(src, /const cited = settled \?\? resolved\.cited \+ note;\s*const answer = settled \?\? resolved\.plain \+ note;/);
   const plan = readFileSync(new URL("../src/lib/crmAssistantPlan.ts", import.meta.url), "utf8");
   assert.match(plan, /with \\"My read:\\"/);
   assert.match(plan, /with \\"Not in the CRM:\\"/);

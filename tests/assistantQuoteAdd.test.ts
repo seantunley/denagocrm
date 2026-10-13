@@ -67,8 +67,9 @@ test("\"send me the PDF of Q-1030\": a task that names a quote and nothing else,
   // A card only for a quote they may open, with something on it.
   const assistant = code("src/lib/crmAssistant.ts");
   const card = assistant.slice(assistant.indexOf('if (p.type === "quote_pdf")'), assistant.indexOf('if (p.type === "quote_add")'));
-  assert.match(card, /hasAnyPermission\(user, "quotes\.view_all", "quotes\.view_owned"\)\)\) continue;/);
-  assert.match(card, /!quote \|\| quote\._count\.items === 0 \|\| !\(await canAccessQuote\(user, quote\.id\)\)\) continue;/);
+  assert.match(card, /if \(!\(await hasAnyPermission\(user, "quotes\.view_all", "quotes\.view_owned"\)\)\) \{ problems\.push\("Your role can't open quotes\."\); continue; \}/);
+  assert.match(card, /if \(!quote \|\| !\(await canAccessQuote\(user, quote\.id\)\)\) \{ problems\.push\(`I can't find quote \$\{p\.quote\} among the ones you can open\.`\); continue; \}/);
+  assert.match(card, /if \(quote\._count\.items === 0\) \{ problems\.push\(/);
 
   // Confirm: access asked again, a linked phone required, ONE update queued for the signed-in person — no number anywhere.
   const action = code("src/app/actions/assistant.ts");
@@ -85,8 +86,9 @@ test("\"send me the PDF of Q-1030\": a task that names a quote and nothing else,
 test("only a draft the person may edit and open becomes a card", () => {
   const assistant = code("src/lib/crmAssistant.ts");
   const branch = assistant.slice(assistant.indexOf('if (p.type === "quote_add")'), assistant.indexOf('if (p.type === "quote_build")'));
-  assert.match(branch, /hasPermission\(user, "quotes\.edit"\)\)\) continue;/);
-  assert.match(branch, /quote\.status !== "draft" \|\| !quote\.contactId \|\| !\(await canAccessQuote\(user, quote\.id\)\)\) continue;/);
+  assert.match(branch, /if \(!\(await hasPermission\(user, "quotes\.edit"\)\)\) \{ problems\.push\("Your role can't edit quotes\."\); continue; \}/);
+  assert.match(branch, /if \(!quote \|\| !\(await canAccessQuote\(user, quote\.id\)\)\) \{ problems\.push\(`I can't find quote \$\{p\.quote\} among the ones you can open\.`\); continue; \}/);
+  assert.match(branch, /if \(quote\.status !== "draft" \|\| !quote\.contactId\) \{ problems\.push\(/);
   // Read through the workspace's own client — never the bypass one.
   assert.match(branch, /await prisma\.quote\.findFirst\(/);
   assert.match(branch, /resolveCatalogueProduct\(line\)/);

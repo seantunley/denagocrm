@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { learnBlock, scanEntry, splitLearn, type LearnBlock } from "./assistantMemory";
-import { parseActionList, parseChoiceList, splitActions, splitChoices, type ProposedAction } from "./assistantActions";
+import { MAX_ACTIONS, parseActionList, parseChoiceList, splitActions, splitChoices, type ProposedAction } from "./assistantActions";
 
 /**
  * DAX's reply, as one contract: the answer the person reads, then (only when
@@ -78,7 +78,8 @@ export function parseState(raw: unknown): ConversationState | null {
   return Object.keys(kept).length ? kept : null;
 }
 
-export type ParsedReply = { answer: string; learn: LearnBlock | null; actions: ProposedAction[]; choices: string[]; state: ConversationState | null };
+/** `attempted`: how many tasks the reply tried to propose — `actions` holds only the well-formed ones. */
+export type ParsedReply = { answer: string; learn: LearnBlock | null; actions: ProposedAction[]; attempted: number; choices: string[]; state: ConversationState | null };
 
 /** The reply → the answer and its validated block (or the legacy trailer lines). */
 export function splitReply(reply: string): ParsedReply {
@@ -91,10 +92,14 @@ export function splitReply(reply: string): ParsedReply {
   const learn = block && "learn" in block ? learnBlock.safeParse(block.learn) : null;
   const actions = block ? parseActionList(block.actions) : [];
   const choices = block ? parseChoiceList(block.choices) : [];
+  // How many tasks it TRIED to propose, valid or not — the answer may speak of
+  // every one of them, so the caller needs to know when fewer came out the other end.
+  const tried = block && Array.isArray(block.actions) ? Math.min(block.actions.length, MAX_ACTIONS) : 0;
   return {
     answer: before.answer,
     learn: learn?.success ? learn.data : before.learn,
     actions: actions.length ? actions : before.actions,
+    attempted: Math.max(tried, before.attempted),
     choices: choices.length ? choices : before.choices,
     state: block && "state" in block ? parseState(block.state) : null,
   };
@@ -104,7 +109,7 @@ function legacy(reply: string): ParsedReply {
   const learnSplit = splitLearn(reply);
   const choiceSplit = splitChoices(learnSplit.answer);
   const { answer, actions } = splitActions(choiceSplit.answer);
-  return { answer, learn: learnSplit.learn, actions, choices: choiceSplit.choices, state: null };
+  return { answer, learn: learnSplit.learn, actions, attempted: actions.length, choices: choiceSplit.choices, state: null };
 }
 
 /** The block's JSON object (a code fence around it tolerated), or null. */

@@ -105,7 +105,8 @@ test("every record a lookup lists carries a link to cite", () => {
   assert.match(code("src/lib/daxBriefRules.ts"), /link: item\.href/);
   // The chips come only from this answer's own lookups, and only in chat.
   assert.match(lib, /for \(const o of observations\) citableLinks\(o\.output\.data, citable\);/);
-  assert.match(lib, /\.\.\.\(source === "chat" && evidence\.length \? \{ cited, evidence \} : \{\}\)/);
+  // (Not on an answer that was replaced because it claimed a task that was never set up: that text cites nothing.)
+  assert.match(lib, /\.\.\.\(source === "chat" && evidence\.length && !settled \? \{ cited, evidence \} : \{\}\)/);
   // What is stored and sent anywhere else is the plain answer.
   assert.match(lib, /const resolved = resolveCitations\(reply\.answer, citable\);/);
 });
