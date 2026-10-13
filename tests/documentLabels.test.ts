@@ -80,6 +80,44 @@ test("relabel: only a document they can open, by someone who may upload, only to
   assert.ok(relabel.indexOf("requireDocumentAccess(") < relabel.indexOf("prisma.document.updateMany("));
 });
 
+test("EVERY screen that sets a tag by hand follows the same rule — the repository's Manage dialog too (review of #883)", () => {
+  const actions = code("src/app/actions/documents.ts");
+  const rename = actions.slice(actions.indexOf("export async function renameDocument("), actions.indexOf("export async function moveDocument("));
+  // It no longer stores whatever is posted.
+  assert.doesNotMatch(rename, /const tag = String\(formData\.get\("tag"\) \?\? ""\)\.trim\(\) \|\| null;/);
+  // Unchanged stays as it is (the name can still be edited); a CRM-set tag is never changed; anything else must be a listed type.
+  assert.match(rename, /const wanted = posted === null \? doc\.tag : String\(posted\)\.trim\(\) \|\| null;/);
+  assert.match(rename, /if \(wanted !== doc\.tag\) \{\s*if \(!isPersonLabel\(doc\.tag\)\) refuse\(SET_BY_CRM\);\s*const chosen = chosenDocumentType\(wanted, parseDocumentTypes\(await getSetting\(DOCUMENT_TYPES_KEY\)\)\);\s*if \(!chosen\.ok\) refuse\(NOT_A_TYPE\);\s*tag = chosen\.type;\s*\}/);
+  assert.ok(rename.indexOf("requireDocumentAccess(") < rename.indexOf("prisma.document.findUnique("));
+  // A repository upload, likewise — and checked before the file is stored.
+  const upload = actions.slice(actions.indexOf("export async function uploadRepoDocument("));
+  assert.match(upload, /const chosen = chosenDocumentType\(formData\.get\("tag"\), parseDocumentTypes\(await getSetting\(DOCUMENT_TYPES_KEY\)\)\);\s*if \(!chosen\.ok\) refuse\(NOT_A_TYPE\);/);
+  assert.ok(upload.indexOf("if (!chosen.ok) refuse(NOT_A_TYPE);") < upload.indexOf("await saveFile("));
+  assert.match(upload, /tag: chosen\.type,/);
+  // No action in the file stores a posted tag unchecked any more.
+  assert.doesNotMatch(actions, /tag: String\(formData\.get\("tag"\)/);
+
+  // The dialog offers the workspace's types, not "pop" / "invoice"; a CRM-set label is shown, not offered.
+  const row = code("src/components/RepoRow.tsx");
+  assert.doesNotMatch(row, /"pop"|"invoice"|const TAGS/);
+  assert.match(row, /\{isPersonLabel\(doc\.tag\) \? \(\s*<select name="tag"/);
+  assert.match(row, /\{\(targets\.documentTypes \?\? \[\]\)\.map\(\(type\) => <option key=\{type\} value=\{type\}>\{type\}<\/option>\)\}/);
+  assert.match(code("src/app/(app)/documents/page.tsx"), /documentTypes: parseDocumentTypes\(await getSetting\(DOCUMENT_TYPES_KEY\)\),/);
+});
+
+test("a change to a document filed against a QUOTE is recorded on that quote's customer and deal (review of #883)", () => {
+  const actions = code("src/app/actions/documents.ts");
+  const trail = actions.slice(actions.indexOf("async function documentTrail("), actions.indexOf("export async function uploadDocument("));
+  assert.match(trail, /if \(doc\.contactId\) return \{ contactId: doc\.contactId \};/);
+  assert.match(trail, /prisma\.quote\.findUnique\(\{ where: \{ id: doc\.quoteId \}, select: \{ contactId: true, leadId: true \} \}\)/);
+  const relabel = actions.slice(actions.indexOf("export async function relabelDocument("), actions.indexOf("export async function deleteDocument("));
+  assert.match(relabel, /select: \{ fileName: true, contactId: true, quoteId: true \}/);
+  assert.match(relabel, /\.\.\.\(doc \? await documentTrail\(doc\) : \{\}\),/);
+  assert.doesNotMatch(relabel, /contactId: doc\?\.contactId,/);
+  const rename = actions.slice(actions.indexOf("export async function renameDocument("), actions.indexOf("export async function moveDocument("));
+  assert.match(rename, /\.\.\.\(await documentTrail\(doc\)\), user \}\);/);
+});
+
 test("the form: a dropdown of the workspace's types and of the customer's quotes — one target, and no free text", () => {
   const fields = code("src/components/DocumentUploadFields.tsx");
   assert.match(fields, /<select name="label" defaultValue="" className="input h-9 text-sm">/);

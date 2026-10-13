@@ -51,6 +51,8 @@ import LibraryItemActions from "@/components/documents/LibraryItemActions";
 import { AddDocumentsForm } from "@/components/LibraryUploader";
 import ModalTrigger from "@/components/Modal";
 import { type MoveTargets } from "@/components/RepoRow";
+import { DOCUMENT_TYPES_KEY, parseDocumentTypes } from "@/lib/documentLabels";
+import { getSetting } from "@/lib/settings";
 import PortalUploadsList, { type PortalUploadRow } from "@/components/PortalUploadsList";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -448,6 +450,8 @@ export default async function DocumentsPage({
       id: quote.id,
       label: `Q-${quote.number}${quote.contact ? ` — ${contactName(quote.contact)}` : ""}`,
     })),
+    // What a document can be labelled as here: the workspace's own list (Settings → Quotes → Document types).
+    documentTypes: parseDocumentTypes(await getSetting(DOCUMENT_TYPES_KEY)),
   };
 
   /* ── Where am I, and what does dropping a file here do? ──────────── */

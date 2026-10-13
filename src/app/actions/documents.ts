@@ -15,7 +15,7 @@ import {
   parseDocumentTarget,
 } from "@/lib/documentUpload";
 import { authorizeDocumentTarget } from "@/lib/documentUploadAuth";
-import { DOCUMENT_TYPES_KEY, SYSTEM_DOCUMENT_TAGS, chosenDocumentType, parseDocumentTypes } from "@/lib/documentLabels";
+import { DOCUMENT_TYPES_KEY, SYSTEM_DOCUMENT_TAGS, chosenDocumentType, isPersonLabel, parseDocumentTypes } from "@/lib/documentLabels";
 import { getSetting } from "@/lib/settings";
 import { actingOwnerTenantId } from "@/lib/actingScope";
 import { requiredReason } from "@/lib/deleteReason";
@@ -103,6 +103,22 @@ async function uploadTargetTenantId(target: UploadTarget): Promise<string | null
 const TOO_BIG = "That file is over the 25 MB limit.";
 const NO_FILE = "Choose a file to upload.";
 const NOT_A_TYPE = "That document type is not on the list any more — refresh the page and choose again.";
+const SET_BY_CRM = "That document's label is set by the CRM and can't be changed.";
+
+/**
+ * Whose trail a change to a document belongs on.
+ *
+ * A file uploaded against a QUOTE carries the quote and no customer, so an entry
+ * recorded with `contactId: doc.contactId` landed on nobody's record (review of
+ * #883). The quote's customer and deal are used instead — read from the quote the
+ * document is already filed against, which the caller has been given access to.
+ */
+async function documentTrail(doc: { contactId: string | null; quoteId: string | null }): Promise<{ contactId?: string; leadId?: string }> {
+  if (doc.contactId) return { contactId: doc.contactId };
+  if (!doc.quoteId) return {};
+  const quote = await prisma.quote.findUnique({ where: { id: doc.quoteId }, select: { contactId: true, leadId: true } });
+  return { ...(quote?.contactId ? { contactId: quote.contactId } : {}), ...(quote?.leadId ? { leadId: quote.leadId } : {}) };
+}
 
 export async function uploadDocument(formData: FormData) {
   return asActionResult(async () => {
@@ -277,12 +293,12 @@ export async function relabelDocument(id: string, revalidate: string, formData: 
       where: { id, deletedAt: null, OR: [{ tag: null }, { tag: { notIn: [...SYSTEM_DOCUMENT_TAGS] } }] },
       data: { tag: chosen.type },
     });
-    if (changed.count !== 1) refuse("That document's label is set by the CRM and can't be changed.");
-    const doc = await prisma.document.findUnique({ where: { id }, select: { fileName: true, contactId: true } });
+    if (changed.count !== 1) refuse(SET_BY_CRM);
+    const doc = await prisma.document.findUnique({ where: { id }, select: { fileName: true, contactId: true, quoteId: true } });
     await logAudit({
       action: "document.relabelled",
       summary: `Labelled document “${doc?.fileName ?? "document"}” ${chosen.type ? `as ${chosen.type}` : "as not labelled"}`,
-      contactId: doc?.contactId,
+      ...(doc ? await documentTrail(doc) : {}),
       user,
     });
     revalidatePath(revalidate);
@@ -453,10 +469,31 @@ export async function renameDocument(id: string, formData: FormData) {
   return asActionResult(async () => {
     const user = await requireDocumentAccess(id, "documents.manage");
     const fileName = String(formData.get("fileName") ?? "").trim();
-    const tag = String(formData.get("tag") ?? "").trim() || null;
     if (!fileName) refuse("Give the document a name.");
+    const doc = await prisma.document.findUnique({ where: { id }, select: { tag: true, contactId: true, quoteId: true } });
+    if (!doc) refuse("That document is no longer there — refresh the page.");
+    /*
+     * THE TAG, by the same rule as everywhere else (lib/documentLabels).
+     *
+     * This used to store whatever was posted — and the form offered "pop" and
+     * "invoice", the tags the deliveries board reads to show a deposit paid and an
+     * invoice issued. Anyone managing documents could put either on any file
+     * (review of #883). Now:
+     *  - a tag the CRM wrote is never changed here (the name still can be);
+     *  - a tag left as it is stays as it is, even an old one that is on no list;
+     *  - anything else must be one of the workspace's document types, or none.
+     */
+    const posted = formData.get("tag");
+    const wanted = posted === null ? doc.tag : String(posted).trim() || null;
+    let tag = doc.tag;
+    if (wanted !== doc.tag) {
+      if (!isPersonLabel(doc.tag)) refuse(SET_BY_CRM);
+      const chosen = chosenDocumentType(wanted, parseDocumentTypes(await getSetting(DOCUMENT_TYPES_KEY)));
+      if (!chosen.ok) refuse(NOT_A_TYPE);
+      tag = chosen.type;
+    }
     await prisma.document.update({ where: { id }, data: { fileName, tag } });
-    await logAudit({ action: "document.updated", summary: `Renamed/re-tagged “${fileName}”`, user });
+    await logAudit({ action: "document.updated", summary: `Renamed/re-tagged “${fileName}”`, ...(await documentTrail(doc)), user });
     revalidatePath("/documents");
     return { success: "Saved" };
   });
@@ -497,6 +534,9 @@ export async function uploadRepoDocument(formData: FormData) {
     // A repository upload is filed against no contact, vehicle, job card or quote —
     // there is genuinely no parent to inherit from, so the acting workspace owns it.
     const tenantId = await actingOwnerTenantId();
+    // A tag given by hand is one of the workspace's document types, or none — never one of the CRM's own.
+    const chosen = chosenDocumentType(formData.get("tag"), parseDocumentTypes(await getSetting(DOCUMENT_TYPES_KEY)));
+    if (!chosen.ok) refuse(NOT_A_TYPE);
     const storedName = await saveFile(Buffer.from(await file.arrayBuffer()), file.name, mimeType, tenantId);
     await prisma.document.create({
       data: {
@@ -505,7 +545,7 @@ export async function uploadRepoDocument(formData: FormData) {
         mimeType,
         sizeBytes: file.size,
         tenantId,
-        tag: String(formData.get("tag") ?? "").trim() || null,
+        tag: chosen.type,
         uploadedById: user.id,
       },
     });
