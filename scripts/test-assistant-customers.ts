@@ -48,6 +48,9 @@ const STAGE = id("stage");
 const C = { noLead: id("c-nolead"), othersSameName: id("c-other"), withLead: id("c-withlead"), twinA: id("c-twin-a"), twinB: id("c-twin-b"), deleted: id("c-deleted"), conly: id("c-conly"), leadNamedDifferently: id("c-diffname") };
 const L = { withLead: id("l-withlead"), diffName: id("l-diffname") };
 const A = { block: id("a-block"), call: id("a-call"), lateBlock: id("a-lateblock"), longLeave: id("a-longleave") };
+/** Quotes for the "a customer's quotes" checks: numbers well clear of real ones, three in a row. */
+const QUOTE_NO = 900_000_000 + Math.floor(Math.random() * 90_000_000);
+const Q = { direct: id("q-direct"), deleted: id("q-deleted"), superseded: id("q-superseded"), conly: id("q-conly") };
 const scoped = <R>(fn: () => Promise<R>) => runInTenantScope({ tenantId: T, system: false }, fn);
 type Found = Awaited<ReturnType<typeof customersNamed>>;
 const idsOf = (found: Found) => found.map((c) => c.contactId).sort();
@@ -94,12 +97,31 @@ async function seed() {
       { id: L.diffName, tenantId: T, title: "Fleet order", name: `Fleetco${SFX}`, stageId: STAGE, contactId: C.leadNamedDifferently, assignedToId: rep.id, createdById: rep.id },
     ],
   });
+  // Quotes made for a customer DIRECTLY (no lead): one live, one deleted, one a revision replaced —
+  // and one on the customer of somebody who holds no quote permission at all.
+  const quote = (qid: string, number: number, contactId: string, createdById: string, extra: Record<string, unknown> = {}) =>
+    basePrisma.quote.create({
+      data: {
+        id: qid, number, tenantId: T, contactId, createdById, status: "draft", ...extra,
+        items: { create: [{ tenantId: T, description: "Denago EV Rover XL", qty: 1, unitPriceCents: 23_500_000, costCents: 11_111_100, colorPreference: "White" }] },
+        fees: { create: [{ tenantId: T, label: "Delivery Fee", kind: "delivery", amountCents: 500_000 }] },
+      },
+      select: { id: true },
+    });
+  await quote(Q.direct, QUOTE_NO, C.twinA, rep.id);
+  await quote(Q.deleted, QUOTE_NO + 1, C.twinA, rep.id, { deletedAt: new Date() });
+  await quote(Q.superseded, QUOTE_NO + 2, C.twinA, rep.id, { supersededAt: new Date() });
+  await quote(Q.conly, QUOTE_NO + 3, C.conly, customersOnly.id);
 }
 
 async function cleanup() {
   // Before the users: a message cannot outlive the account it is filed under.
   await basePrisma.communication.deleteMany({ where: { OR: [{ leadId: { in: Object.values(L) } }, { contactId: { in: Object.values(C) } }] } });
   await basePrisma.activity.deleteMany({ where: { id: { in: Object.values(A) } } });
+  // Before the customers and the users: a quote's lines and fees go with it.
+  await basePrisma.quoteItem.deleteMany({ where: { quoteId: { in: Object.values(Q) } } });
+  await basePrisma.quoteFee.deleteMany({ where: { quoteId: { in: Object.values(Q) } } });
+  await basePrisma.quote.deleteMany({ where: { id: { in: Object.values(Q) } } });
   await basePrisma.lead.deleteMany({ where: { id: { in: Object.values(L) } } });
   await basePrisma.contact.deleteMany({ where: { id: { in: Object.values(C) } } });
   await basePrisma.$executeRaw`DELETE FROM "PipelineStage" WHERE "id" = ${STAGE}`;
@@ -243,8 +265,28 @@ async function main() {
     const found = await scoped(() => customersNamed(rep, `Twin Same${SFX}`));
     const text = JSON.stringify(found);
     check("no phone number and no email address", !text.includes("082 555 0199") && !text.includes("@example.invalid"), text.slice(0, 200));
-    check("only the fields needed to tell customers apart", Object.keys(found[0] ?? {}).sort().join() === "city,company,contactId,customerSince,name");
+    // …and their quotes (2026-10-13): a quote made for a customer directly is on no lead, so without this
+    // a customer came back as a name and a city, and the quote the person named could not be seen at all.
+    check("only the fields needed to tell customers apart, and their quotes", Object.keys(found[0] ?? {}).sort().join() === "city,company,contactId,customerSince,name,quotes");
     check("an unknown name finds nobody", (await scoped(() => customersNamed(rep, `Nobody Atall${SFX}`))).length === 0);
+  }
+
+  console.log("\nA customer's quotes");
+  {
+    const found = await scoped(() => customersNamed(rep, `Twin Same${SFX}`));
+    const quotesOf = (contactId: string) => (found.find((c) => c.contactId === contactId)?.quotes ?? []) as { quote: string; status: string; onADeal: boolean; lines: string[]; fees: string[] }[];
+    const hers = quotesOf(C.twinA);
+    check("a quote made for the customer directly — on no lead — is listed on the customer", hers.length === 1 && hers[0].quote === `Q-${QUOTE_NO}` && hers[0].onADeal === false, JSON.stringify(hers));
+    check("with what is on it: the line, its quantity and colour, and the fee by its label", hers[0]?.lines.join() === "1 × Denago EV Rover XL — colour White" && /^Delivery Fee — /.test(hers[0]?.fees[0] ?? ""), JSON.stringify(hers[0]));
+    check("a deleted quote and one a revision replaced are not listed", !JSON.stringify(found).includes(`Q-${QUOTE_NO + 1}`) && !JSON.stringify(found).includes(`Q-${QUOTE_NO + 2}`));
+    check("the other customer of that name has none", quotesOf(C.twinB).length === 0);
+    const text = JSON.stringify(found);
+    check("still no phone number and no email address", !text.includes("082 555 0199") && !text.includes("@example.invalid"));
+    check("no cost and no price per line — only what is printed on the quote's rows", !/costCents|unitPriceCents|"optional"|"selected"/.test(text));
+    // Somebody who may open customers but holds NO quote permission: the customer, and no quotes.
+    const own = await scoped(() => customersNamed(customersOnly, `Solo Cust${SFX}`));
+    check("without a quote permission the customer is found…", own.length === 1 && own[0].contactId === C.conly, JSON.stringify(idsOf(own)));
+    check("…and none of their quotes are handed over", Array.isArray(own[0]?.quotes) && own[0].quotes.length === 0, JSON.stringify(own[0]?.quotes));
   }
 }
 

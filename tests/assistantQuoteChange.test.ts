@@ -105,9 +105,10 @@ test("with ONE line on the quote, the line need not be named — and the same fo
   assert.match(ACTION_INSTRUCTIONS, /The quote's lines and fees are in the quote results/);
   assert.match(ACTION_INSTRUCTIONS, /If it is already the way they asked \(the colour is already White\), say so and propose nothing\./);
 
-  // DAX is SHOWN what is on a quote: its lines (with colour) and fees, as they are named there — in both quote lookups.
+  // DAX is SHOWN what is on a quote: its lines (with colour) and fees, as they are named there — in the quote
+  // search, a lead's quotes, and a customer's quotes.
   const assistant = code("src/lib/crmAssistant.ts");
-  assert.equal((assistant.match(/\.\.\.quoteContents\((quote|q)\),/g) ?? []).length, 2);
+  assert.equal((assistant.match(/\.\.\.quoteContents\((quote|q)\),/g) ?? []).length, 3);
   const contents = assistant.slice(assistant.indexOf("function quoteContents("), assistant.indexOf("export async function findActivities("));
   assert.match(contents, /`\$\{item\.qty\} × \$\{item\.description\}\$\{item\.colorPreference \? ` — colour \$\{item\.colorPreference\}` : ""\}/);
   assert.match(contents, /fees: quote\.fees\.slice\(0, 12\)\.map\(\(fee\) => `\$\{fee\.label\} — \$\{formatZAR\(fee\.amountCents\)\}`\),/);
@@ -219,4 +220,48 @@ test("UNDER THE LOCK: every row must still read as the card showed it, or nothin
   assert.match(schema, /qty: z\.number\(\)\.int\(\)\.min\(1\)\.max\(500\)\.optional\(\),/);
   assert.doesNotMatch(schema, /unitPriceCents/);
   assert.match(quotes, /if \(result === STALE\) \{\s*return \{ ok: false, error: "That quote has changed since this was suggested, so nothing was changed\./);
+});
+
+test("A QUOTE CAN BE LOOKED UP BY ITS NUMBER — or its lines are only seen when it happens to be among the newest", async () => {
+  // Sean, 2026-10-13, "On quote q-1031 make colour white": the search had status, age and value filters and no
+  // way to ask for one quote, so the quote named was found by luck or not at all.
+  const { quoteArgs, planInstructions } = await import("../src/lib/crmAssistantPlan");
+  for (const number of ["Q-1031", "q-1031", "Q1031", "1031", 1031]) assert.equal(quoteArgs.safeParse({ number }).success, true, String(number));
+  for (const bad of ["Q-", "Q-10 31", "1031; drop", "Q-1031 OR 1=1", -3, 0, 1.5, "Q-12345678901"]) assert.equal(quoteArgs.safeParse({ number: bad }).success, false, String(bad));
+  assert.equal(quoteArgs.safeParse({ number: "Q-1031", id: "x" }).success, false, "still no other way in");
+
+  // DAX is told to use it whenever a quote is named, and what comes back.
+  const plan = code("src/lib/crmAssistantPlan.ts");
+  assert.match(plan, /find_quotes: \{"number":"Q-1031" \(ONE quote by its number — use this whenever they name a quote; it returns that quote\\'s lines with quantity and colour, and its fees\)/);
+  assert.equal(typeof planInstructions, "function");
+
+  // That one quote — and still only if this person may open it: the number narrows, the access filter stays.
+  const assistant = code("src/lib/crmAssistant.ts");
+  const find = assistant.slice(assistant.indexOf("async function findQuotes("), assistant.indexOf("function quoteContents("));
+  assert.match(find, /const wantedNumber = args\.number === undefined \? null : Number\(String\(args\.number\)\.replace\(\/\^Q-\?\/i, ""\)\);/);
+  assert.match(find, /\.\.\.\(wantedNumber === null \? \{ supersededAt: null \} : \{ number: wantedNumber \}\),\s*\.\.\.\(ids === null \? \{\} : \{ id: \{ in: ids \} \}\),/);
+  assert.match(find, /const ids = await getAccessibleQuoteIds\(user\);/);
+  assert.match(find, /\.\.\.quoteContents\(quote\),/);
+});
+
+test("A CUSTOMER'S RECORD LISTS THEIR QUOTES — a quote on no deal was invisible (2026-10-13: DAX asked for a screenshot)", () => {
+  const assistant = code("src/lib/crmAssistant.ts");
+  const named = assistant.slice(assistant.indexOf("export async function customersNamed("), assistant.indexOf("export async function leadBrief("));
+  // Only quotes this person may open: their quote permission, then their access to each quote.
+  assert.match(named, /const quoteIds = \(await hasAnyPermission\(user, "quotes\.view_all", "quotes\.view_owned"\)\) \? await getAccessibleQuoteIds\(user\) : \[\];/);
+  assert.match(named, /where: \{ contactId: \{ in: found\.map\(\(c\) => c\.id\) \}, deletedAt: null, supersededAt: null, \.\.\.\(quoteIds === null \? \{\} : \{ id: \{ in: quoteIds \} \}\) \},/);
+  assert.match(named, /found\.length === 0 \|\| \(quoteIds !== null && quoteIds\.length === 0\) \? \[\]/, "no quote access, no quote query");
+  // Each with its number and what is on it — the names quote_change matches against.
+  assert.match(named, /quotes: quotes\.filter\(\(q\) => q\.contactId === c\.id\)\.slice\(0, 5\)\.map\(\(q\) => \(\{\s*quote: `Q-\$\{q\.number\}`,/);
+  assert.match(named, /\.\.\.quoteContents\(q\),/);
+  // Still no phone numbers or emails on a customer.
+  assert.doesNotMatch(named, /phone|email/i);
+});
+
+test("DAX proposes the change even when it cannot see the quote — and never asks the person for a screenshot", () => {
+  assert.match(ACTION_INSTRUCTIONS, /IF YOU CANNOT SEE WHAT IS ON THE QUOTE, PROPOSE THE CHANGE ANYWAY/);
+  assert.match(ACTION_INSTRUCTIONS, /NEVER ask the person for a screenshot, or to tell you what is on a quote, or what its status is\./);
+  // …which is safe because a task that finds no such row says so, with what IS on the quote (settledAnswer).
+  const assistant = code("src/lib/crmAssistant.ts");
+  assert.match(assistant, /`\$\{ref\} has no single fee called "\$\{wanted\.fee\}"` : `Which fee on \$\{ref\}\?`\} Its fees: \$\{named\(quote\.fees\.map\(\(row\) => row\.label\)\)\}\./);
 });

@@ -58,6 +58,12 @@ export const leadArgs = z
 
 export const quoteArgs = z
   .object({
+    /**
+     * ONE quote, by its number ("Q-1031" or 1031). Without it a quote the person
+     * names is only found if it happens to be among the newest few — so the
+     * assistant could not read what was on it (Sean, 2026-10-13).
+     */
+    number: z.union([z.number().int().positive(), z.string().trim().regex(/^(?:Q-?)?\d{1,9}$/i)]).optional(),
     status: z.enum(["draft", "sent", "accepted", "declined", "cancelled"]).optional(),
     /** Sent, not yet signed, declined or cancelled. */
     awaitingSignature: z.boolean().optional(),
@@ -194,7 +200,7 @@ export function planInstructions(ctx: PlanContext): string {
     "- pipeline_summary: {} — open leads counted and valued per stage.",
     "- daily_brief: {} — what needs this person's attention today, already prioritised (customers waiting for a reply, today's meetings and test drives, overdue follow-ups, deals that look close, quotes needing attention, delivery problems, stalled deals) — and, for an owner or team manager, their team's. Use it for \"what needs my attention\", \"what should I do today\", \"plan my day\", \"where does my team need help\".",
     '- sales_stats: {"period":"this_month|last_month|last_30_days|last_90_days|this_quarter|this_year" (default this_month),"assignedTo":"<person>"} — the numbers behind "how are we doing / why are sales slower / who needs help": new leads, how many reach a quote, won and lost, win rate, quotes issued/opened/signed, lead sources, lost reasons, the open pipeline per stage with what is stalled, each salesperson\'s open deals, next steps, overdue work and quiet customers — each against the period before.',
-    '- find_quotes: {"status":"draft|sent|accepted|declined|cancelled","awaitingSignature":true,"viewed":true|false,"minValue":<rands>,"olderThanDays":<days>,"expiringWithinDays":<0-60, still-open quotes running out>,"limit":<1-25>}',
+    '- find_quotes: {"number":"Q-1031" (ONE quote by its number — use this whenever they name a quote; it returns that quote\'s lines with quantity and colour, and its fees),"status":"draft|sent|accepted|declined|cancelled","awaitingSignature":true,"viewed":true|false,"minValue":<rands>,"olderThanDays":<days>,"expiringWithinDays":<0-60, still-open quotes running out>,"limit":<1-25>}',
     '- schedule: {"person":"<person>","from":"YYYY-MM-DD","days":<1-14>} — who is busy when (meetings, blocked time, test drives with their demo vehicle). Check it BEFORE suggesting a meeting or test-drive time; never suggest a slot that clashes.',
     '- vehicles: {"kind":"demo|stock|customer" (required),"search":"<model, reg, stock no. or customer>","status":"<status>","limit":<1-25>} — demo vehicles and their upcoming bookings, stock units (available/reserved/sold), or a customer\'s own vehicles.',
     '- deliveries: {"stage":"to_invoice|awaiting_deposit|to_schedule|scheduled|overdue|delivered_recently","limit":<1-25>} — signed deals on their way to the customer: invoicing, deposit, delivery date. With NO stage it returns every stage at once, each deal labelled — use that for "what\'s waiting / in progress"; ask for one stage only when that is all the question wants.',

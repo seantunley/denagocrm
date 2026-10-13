@@ -340,10 +340,14 @@ async function findQuotes(user: User, raw: z.infer<typeof quoteArgs>): Promise<T
   const isCustomer = memoCustomer((r) => isCustomerSigner(r, ownedWriteTenantId()));
   const openedInHub: string[] = [];
   for (const r of hub) if (await firstCustomerView(r.recipients, isCustomer)) openedInHub.push(r.quoteId!);
+  // A quote named by its number: that one quote, whatever its age or status —
+  // including one a revision has replaced, which is still the quote they named.
+  // The access filter below applies to it like any other.
+  const wantedNumber = args.number === undefined ? null : Number(String(args.number).replace(/^Q-?/i, ""));
   const quotes = await prisma.quote.findMany({
     where: {
       deletedAt: null,
-      supersededAt: null,
+      ...(wantedNumber === null ? { supersededAt: null } : { number: wantedNumber }),
       ...(ids === null ? {} : { id: { in: ids } }),
       ...(args.awaitingSignature
         ? {
@@ -576,12 +580,35 @@ export async function customersNamed(user: User, needle: string, ownId?: string 
   });
   // The named one first: it is the one "this customer" most likely means.
   found.sort((a, b) => Number(b.id === ownId) - Number(a.id === ownId));
+  /*
+   * THEIR QUOTES TOO. A quote made for a customer directly sits on no lead, so a
+   * customer with no deal used to come back as a name and a city — and a quote
+   * the person had just been talking about could not be seen at all (Sean,
+   * 2026-10-13: asked to rename a fee on Q-1031, the assistant found the
+   * customer, saw no quote, and asked HIM for a screenshot of it). Only quotes
+   * this person may open, current ones, the newest few — with what is on them.
+   */
+  const quoteIds = (await hasAnyPermission(user, "quotes.view_all", "quotes.view_owned")) ? await getAccessibleQuoteIds(user) : [];
+  const quotes = found.length === 0 || (quoteIds !== null && quoteIds.length === 0) ? [] : await prisma.quote.findMany({
+    where: { contactId: { in: found.map((c) => c.id) }, deletedAt: null, supersededAt: null, ...(quoteIds === null ? {} : { id: { in: quoteIds } }) },
+    orderBy: { createdAt: "desc" },
+    take: 40,
+    select: { id: true, number: true, status: true, contactId: true, leadId: true, taxInclusive: true, depositType: true, depositValue: true, items: true, fees: true },
+  });
   return found.map((c) => ({
     contactId: c.id,
     name: [c.firstName, c.lastName].filter(Boolean).join(" "),
     company: c.company,
     city: c.city,
     customerSince: dateKey(c.createdAt),
+    quotes: quotes.filter((q) => q.contactId === c.id).slice(0, 5).map((q) => ({
+      quote: `Q-${q.number}`,
+      link: `/quotes/${q.id}`,
+      status: q.status,
+      onADeal: q.leadId != null,
+      total: formatZAR(payableTotalCents(q)),
+      ...quoteContents(q),
+    })),
   }));
 }
 
