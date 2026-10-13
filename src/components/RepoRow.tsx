@@ -18,6 +18,7 @@ import {
 import { Button, buttonVariants } from "@/components/ui/button";
 import { SaveForm, SaveButton } from "@/components/SaveForm";
 import { renameDocument, moveDocument, replaceDocument } from "@/app/actions/documents";
+import { isPersonLabel } from "@/lib/documentLabels";
 import RecordContextMenu from "@/components/RecordContextMenu";
 
 export type RepoDoc = {
@@ -36,9 +37,9 @@ export type MoveTargets = {
   contacts: { id: string; label: string }[];
   vehicles: { id: string; label: string }[];
   quotes: { id: string; label: string }[];
+  /** The workspace's document types — what a document can be labelled as by hand (lib/documentLabels). */
+  documentTypes?: string[];
 };
-
-const TAGS = ["", "invoice", "pop", "delivery-note", "delivery-photo", "delivery-signature", "checkin", "other"];
 
 const input =
   "w-full rounded-md border border-input bg-card px-3 py-2 text-sm text-foreground outline-none focus:border-ring focus:ring-2 focus:ring-ring/20";
@@ -147,13 +148,20 @@ export function ManageDocumentDialog({
             <label className="block text-xs font-medium text-muted-foreground">Name & tag</label>
             <div className="flex gap-2">
               <input name="fileName" defaultValue={doc.fileName} className={input} required />
-              <select name="tag" defaultValue={doc.tag ?? ""} className={`${input} !w-40`}>
-                {TAGS.map((tag) => (
-                  <option key={tag} value={tag}>
-                    {tag || "— no tag —"}
-                  </option>
-                ))}
-              </select>
+              {/* A label the CRM set (signed copy, the customer's proof of payment…) is what other screens
+                  read, so it is shown and not offered for change — and "pop" or "invoice" are no longer
+                  choices here. Anything else is one of the workspace's document types. No `tag` is posted
+                  for a CRM-set label, which the action reads as "leave it". */}
+              {isPersonLabel(doc.tag) ? (
+                <select name="tag" defaultValue={doc.tag ?? ""} className={`${input} !w-48`}>
+                  <option value="">Not labelled</option>
+                  {/* An older label that is on no list any more stays selectable as itself, so saving the name does not drop it. */}
+                  {doc.tag && !(targets.documentTypes ?? []).includes(doc.tag) && <option value={doc.tag}>{doc.tag}</option>}
+                  {(targets.documentTypes ?? []).map((type) => <option key={type} value={type}>{type}</option>)}
+                </select>
+              ) : (
+                <span className={`${input} !w-48 truncate text-muted-foreground`} title="Set by the CRM">{doc.tag} · set by the CRM</span>
+              )}
             </div>
             <SaveButton className={buttonVariants({ size: "sm" })}>Save</SaveButton>
           </SaveForm>

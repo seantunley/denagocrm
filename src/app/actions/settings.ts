@@ -17,6 +17,7 @@ import {
 } from "@/lib/pipelines";
 import { stageTenantId, UNREACHABLE_STAGE_MESSAGE } from "@/lib/pipelineTenantRule";
 import { putSetting, getSetting, getRegionalSettings, REGIONAL_KEYS } from "@/lib/settings";
+import { DOCUMENT_TYPES_KEY, parseDocumentTypes } from "@/lib/documentLabels";
 import { regionalFrom } from "@/lib/format";
 import { quoteValidDays } from "@/lib/quoteExpiry";
 import {
@@ -354,6 +355,21 @@ export async function changeOwnPassword(
     });
     revalidatePath("/settings");
     return { ok: "Password updated. Other signed-in devices have been signed out." };
+  });
+}
+
+/**
+ * The workspace's document types (Settings → Quotes → Document types): what an
+ * uploaded document can be labelled as. Stored tidied — one per line, repeats and
+ * the CRM's own tags dropped — so what is saved is exactly what the dropdown shows.
+ * Empty goes back to the standard list.
+ */
+export async function saveDocumentTypes(formData: FormData) {
+  return asActionResult(async () => {
+    await requireTenantOwner();
+    const raw = String(formData.get("types") ?? "");
+    await putSetting(DOCUMENT_TYPES_KEY, raw.trim() ? parseDocumentTypes(raw).join("\n") : "");
+    revalidatePath("/settings");
   });
 }
 
