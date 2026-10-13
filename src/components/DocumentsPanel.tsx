@@ -1,11 +1,15 @@
 import Link from "next/link";
-import { uploadDocument, deleteDocument } from "@/app/actions/documents";
+import { uploadDocument, deleteDocument, relabelDocument } from "@/app/actions/documents";
 import ConfirmDelete from "@/components/ConfirmDelete";
+import DocumentUploadFields from "@/components/DocumentUploadFields";
+import ModalTrigger from "@/components/Modal";
+import { DOCUMENT_TYPES_KEY, isPersonLabel, parseDocumentTypes } from "@/lib/documentLabels";
+import { getSetting } from "@/lib/settings";
 import { SaveForm, SaveButton } from "@/components/SaveForm";
 import QuoteRowActions from "@/components/quotes/QuoteRowActions";
 import { StatusPill } from "@/components/visual-system";
 import { formatDate, formatZAR } from "@/lib/format";
-import { FileText, Upload } from "lucide-react";
+import { FileText, Tag, Upload } from "lucide-react";
 
 function humanSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -85,8 +89,12 @@ function statusTone(status: string): "neutral" | "success" | "danger" | "info" {
   return "neutral";
 }
 
-function DocRow({ doc, revalidate }: { doc: Doc; revalidate: string }) {
-  const label = doc.tag ? TAG_LABELS[doc.tag] : null;
+function DocRow({ doc, revalidate, types }: { doc: Doc; revalidate: string; types: readonly string[] }) {
+  // What it IS leads: a type somebody chose ("Supplier quote") is the document's
+  // name on this list, with the file name beneath. A tag the CRM wrote keeps its
+  // wording and its place in the small print.
+  const chosen = doc.tag && isPersonLabel(doc.tag) ? doc.tag : null;
+  const system = doc.tag && !chosen ? TAG_LABELS[doc.tag] ?? null : null;
   return (
     <li className="group flex items-center gap-3 py-2">
       <span className="grid size-8 shrink-0 place-items-center rounded-lg border border-border bg-muted/30 text-muted-foreground">
@@ -98,14 +106,30 @@ function DocRow({ doc, revalidate }: { doc: Doc; revalidate: string }) {
           className="block truncate text-sm font-medium text-orange-400 hover:underline"
           target="_blank"
         >
-          {doc.fileName}
+          {chosen ?? doc.fileName}
         </a>
-        <p className="text-xs text-slate-400">
-          {label ? `${label} · ` : ""}
+        <p className="truncate text-xs text-slate-400">
+          {chosen ? `${doc.fileName} · ` : ""}
+          {system ? `${system} · ` : ""}
           {humanSize(doc.sizeBytes)} · {formatDate(doc.createdAt)} · {doc.uploadedBy.name}
           {doc.ownerLabel ? ` · ${doc.ownerLabel}` : ""}
         </p>
       </div>
+      {/* Only a label a person chose (or none yet) can be changed — never a tag the CRM wrote. */}
+      {isPersonLabel(doc.tag) && (
+        <ModalTrigger label={<><Tag className="size-3" />{chosen ? "Relabel" : "Label"}</>} title={`Label “${doc.fileName}”`} buttonClass="inline-flex shrink-0 cursor-pointer items-center gap-1 text-xs text-muted-foreground hover:text-foreground">
+          <SaveForm action={relabelDocument.bind(null, doc.id, revalidate)} success="Label saved" className="grid gap-3 p-4">
+            <label className="grid gap-1 text-xs text-muted-foreground">
+              What is it?
+              <select name="label" defaultValue={chosen && types.includes(chosen) ? chosen : ""} className="input h-9 text-sm">
+                <option value="">Not labelled</option>
+                {types.map((type) => <option key={type} value={type}>{type}</option>)}
+              </select>
+            </label>
+            <SaveButton className="btn-primary btn-sm">Save label</SaveButton>
+          </SaveForm>
+        </ModalTrigger>
+      )}
       <div className="opacity-0 group-hover:opacity-100">
         <ConfirmDelete
           action={deleteDocument.bind(null, doc.id, revalidate)}
@@ -119,7 +143,7 @@ function DocRow({ doc, revalidate }: { doc: Doc; revalidate: string }) {
   );
 }
 
-export default function DocumentsPanel({
+export default async function DocumentsPanel({
   documents,
   quoteGroups,
   contactId,
@@ -150,6 +174,10 @@ export default function DocumentsPanel({
   emptyText?: string;
 }) {
   const grouped = quoteGroups && quoteGroups.length > 0;
+  // The workspace's document types (Settings → Quotes → Document types): the dropdown on upload and on Label.
+  const types = parseDocumentTypes(await getSetting(DOCUMENT_TYPES_KEY));
+  // A document can be filed against a quote that is still current — not one a revision replaced.
+  const fileAgainst = (quoteGroups ?? []).filter((group) => !group.superseded).map((group) => ({ id: group.id, label: `Q-${group.number} (${group.status})` }));
   return (
     <div className="card">
       <div className="mb-4 flex items-center justify-between gap-3">
@@ -162,7 +190,9 @@ export default function DocumentsPanel({
           action={uploadDocument}
           className="mb-4 grid gap-2 rounded-xl border border-border bg-muted/20 p-3"
         >
-          {contactId && <input type="hidden" name="contactId" value={contactId} />}
+          {/* What it is, and which quote it belongs to. It also carries the customer as the
+              target — or the quote instead, when one is chosen: an upload names ONE record. */}
+          <DocumentUploadFields types={types} quotes={fileAgainst} contactId={contactId} />
           {vehicleId && <input type="hidden" name="vehicleId" value={vehicleId} />}
           {jobCardId && <input type="hidden" name="jobCardId" value={jobCardId} />}
           <input type="hidden" name="revalidate" value={revalidate} />
@@ -215,7 +245,7 @@ export default function DocumentsPanel({
               ) : (
                 <ul className="mt-1 divide-y divide-slate-800">
                   {[...group.documents].sort(byLifecycle).map((doc) => (
-                    <DocRow key={doc.id} doc={doc} revalidate={revalidate} />
+                    <DocRow key={doc.id} doc={doc} revalidate={revalidate} types={types} />
                   ))}
                 </ul>
               )}
@@ -235,7 +265,7 @@ export default function DocumentsPanel({
           )}
           <ul className="divide-y divide-slate-800">
             {documents.map((doc) => (
-              <DocRow key={doc.id} doc={doc} revalidate={revalidate} />
+              <DocRow key={doc.id} doc={doc} revalidate={revalidate} types={types} />
             ))}
           </ul>
         </>

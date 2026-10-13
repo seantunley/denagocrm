@@ -15,6 +15,8 @@ import {
   parseDocumentTarget,
 } from "@/lib/documentUpload";
 import { authorizeDocumentTarget } from "@/lib/documentUploadAuth";
+import { DOCUMENT_TYPES_KEY, SYSTEM_DOCUMENT_TAGS, chosenDocumentType, parseDocumentTypes } from "@/lib/documentLabels";
+import { getSetting } from "@/lib/settings";
 import { actingOwnerTenantId } from "@/lib/actingScope";
 import { requiredReason } from "@/lib/deleteReason";
 import { DOC_DEFS, defaultTemplate, mergeTemplate, isDocKey } from "@/lib/docTemplates";
@@ -100,6 +102,7 @@ async function uploadTargetTenantId(target: UploadTarget): Promise<string | null
  */
 const TOO_BIG = "That file is over the 25 MB limit.";
 const NO_FILE = "Choose a file to upload.";
+const NOT_A_TYPE = "That document type is not on the list any more — refresh the page and choose again.";
 
 export async function uploadDocument(formData: FormData) {
   return asActionResult(async () => {
@@ -107,6 +110,11 @@ export async function uploadDocument(formData: FormData) {
     const file = formData.get("file");
     if (!(file instanceof File) || file.size === 0) refuse(NO_FILE);
     if (file.size > MAX_SIZE) refuse(TOO_BIG);
+    // WHAT IT IS: one of the workspace's own document types, or none. Checked
+    // against the list as it stands now — the dropdown is a convenience, this is
+    // the rule — and before the file is stored, so a refusal leaves nothing behind.
+    const chosen = chosenDocumentType(formData.get("label"), parseDocumentTypes(await getSetting(DOCUMENT_TYPES_KEY)));
+    if (!chosen.ok) refuse(NOT_A_TYPE);
 
     const buffer = Buffer.from(await file.arrayBuffer());
     const mimeType = file.type || "application/octet-stream";
@@ -130,14 +138,19 @@ export async function uploadDocument(formData: FormData) {
         vehicleId: target.kind === "vehicle" ? target.vehicleId : null,
         jobCardId: target.kind === "jobCard" ? target.jobCardId : null,
         quoteId: target.kind === "quote" ? target.quoteId : null,
+        tag: chosen.type,
         uploadedById: user.id,
       },
       include: { vehicle: true, jobCard: true },
     });
+    // Filed against a quote: said so in the trail, on that quote's customer and deal
+    // (the quote is the one record this upload was authorised against).
+    const quote = doc.quoteId ? await prisma.quote.findUnique({ where: { id: doc.quoteId }, select: { number: true, contactId: true, leadId: true } }) : null;
     await logAudit({
       action: "document.uploaded",
-      summary: `Uploaded document “${file.name}”`,
-      contactId: doc.contactId ?? doc.vehicle?.contactId ?? doc.jobCard?.contactId,
+      summary: `Uploaded document “${file.name}”${chosen.type ? ` as ${chosen.type}` : ""}${quote ? ` against Q-${quote.number}` : ""}`,
+      contactId: doc.contactId ?? doc.vehicle?.contactId ?? doc.jobCard?.contactId ?? quote?.contactId,
+      ...(quote?.leadId ? { leadId: quote.leadId } : {}),
       user,
     });
     revalidatePath(String(formData.get("revalidate") ?? "/"));
@@ -238,6 +251,43 @@ export async function registerUploadedDocument(input: {
     });
     revalidatePath("/documents");
   }, { scope: "document-upload-register" });
+}
+
+/**
+ * Change what a document is labelled as — to another of the workspace's document
+ * types, or to none. For a file that was uploaded unlabelled, or labelled wrongly:
+ * the alternative was deleting it and uploading it again.
+ *
+ * Only a label a person chose can be changed. A tag the CRM wrote ("signed",
+ * "pop", "delivery-note"…) is what other screens read to know a deposit was paid
+ * or a contract signed, so it is left alone — the update itself only matches a
+ * row that has no such tag, whatever the form says.
+ *
+ * WHO: anyone who may upload documents, on a document they can open. Saying what
+ * a file is belongs to filing it — a sales rep who uploaded "Supplier quote" under
+ * the wrong label could not otherwise put it right (the first version asked for
+ * documents.manage, which is the permission to DELETE; found testing as a rep).
+ */
+export async function relabelDocument(id: string, revalidate: string, formData: FormData) {
+  return asActionResult(async () => {
+    const user = await requireDocumentAccess(id, "documents.upload");
+    const chosen = chosenDocumentType(formData.get("label"), parseDocumentTypes(await getSetting(DOCUMENT_TYPES_KEY)));
+    if (!chosen.ok) refuse(NOT_A_TYPE);
+    const changed = await prisma.document.updateMany({
+      where: { id, deletedAt: null, OR: [{ tag: null }, { tag: { notIn: [...SYSTEM_DOCUMENT_TAGS] } }] },
+      data: { tag: chosen.type },
+    });
+    if (changed.count !== 1) refuse("That document's label is set by the CRM and can't be changed.");
+    const doc = await prisma.document.findUnique({ where: { id }, select: { fileName: true, contactId: true } });
+    await logAudit({
+      action: "document.relabelled",
+      summary: `Labelled document “${doc?.fileName ?? "document"}” ${chosen.type ? `as ${chosen.type}` : "as not labelled"}`,
+      contactId: doc?.contactId,
+      user,
+    });
+    revalidatePath(revalidate);
+    return { success: "Label saved" };
+  });
 }
 
 export async function deleteDocument(id: string, revalidate: string, formData: FormData) {

@@ -6,6 +6,7 @@ import { redirect } from "next/navigation";
 import {
   saveMyProfile,
   saveQuoteDefaults,
+  saveDocumentTypes,
   saveRegionalSettings,
   saveWorkshopSettings,
   saveNotificationPrefs,
@@ -43,6 +44,7 @@ import { basePrisma } from "@/lib/db";
 import { REGIONAL_KEYS } from "@/lib/settings";
 import { formatDate, formatDateTime, formatZAR, regionalFrom } from "@/lib/format";
 import { DEFAULT_QUOTE_TERMS, quoteValidDays } from "@/lib/quoteExpiry";
+import { DOCUMENT_TYPES_KEY, DOCUMENT_TYPES_MAX, parseDocumentTypes } from "@/lib/documentLabels";
 import { ABSOLUTE_SESSION_HOURS } from "@/lib/session";
 import { decryptValue } from "@/lib/settings";
 import { PUSH_KINDS } from "@/lib/push";
@@ -973,6 +975,36 @@ export default async function SettingsPage({
                   </p>
                 </div>
                 <SaveButton className="btn-primary">Save quote defaults</SaveButton>
+              </SaveForm>
+            </Row>
+            <Row
+              title="Document types"
+              status={
+                <span className="badge bg-muted text-muted-foreground">
+                  {parseDocumentTypes(setting(DOCUMENT_TYPES_KEY)).length} types
+                </span>
+              }
+              action="Edit"
+            >
+              <p className="text-xs text-muted-foreground mb-4">
+                What an uploaded document can be labelled as — the list offered in the &ldquo;What is it?&rdquo; dropdown when a
+                file is uploaded on a customer, vehicle or job card. Removing a type does not change documents already labelled with it.
+              </p>
+              <SaveForm success="Document types saved" resetOnSuccess={false} action={saveDocumentTypes} className="space-y-4 max-w-xl">
+                <div>
+                  <label className="label" htmlFor="document-types">Document types (one per line)</label>
+                  <textarea
+                    id="document-types"
+                    name="types"
+                    className="input"
+                    rows={10}
+                    defaultValue={parseDocumentTypes(setting(DOCUMENT_TYPES_KEY)).join("\n")}
+                  />
+                  <p className="text-xs text-muted-foreground mt-1">
+                    Up to {DOCUMENT_TYPES_MAX}, in the order they should appear. Leave it empty to go back to the standard list.
+                  </p>
+                </div>
+                <SaveButton className="btn-primary">Save document types</SaveButton>
               </SaveForm>
             </Row>
             <Row
