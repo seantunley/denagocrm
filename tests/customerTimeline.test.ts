@@ -102,7 +102,8 @@ test("WHERE A NEW ENTRY IS FILED: a deal's entry always carries the deal's custo
 test("every door that writes a timeline entry files it by that rule, after its own access checks", () => {
   for (const [file, postedLead] of [
     ["src/app/actions/communications.ts", 'postedDealId(str("leadId"))'],
-    ["src/app/actions/emails.ts", 'postedDealId(formData.get("leadId"))'],
+    // The composer's send (and scheduled sends) since 2026-10-15.
+    ["src/lib/composerSend.ts", 'postedDealId(formData.get("leadId"))'],
     ["src/app/actions/whatsapp.ts", 'postedDealId(formData.get("leadId"))'],
   ] as const) {
     const src = code(file);

@@ -226,8 +226,8 @@ test("the settings preview renders what the send path renders", () => {
   // The one screen where you check your signature must not be the one screen
   // that lies about it.
   const settings = shipped("src/app/(app)/settings/page.tsx");
-  const action = shipped("src/app/actions/emails.ts");
-  for (const [file, code] of [["settings", settings], ["emails action", action]] as const) {
+  const action = shipped("src/lib/composerSend.ts");
+  for (const [file, code] of [["settings", settings], ["composer send", action]] as const) {
     assert.match(code, /getCompanyProfile\(\)/, `${file} must resolve the profile`);
     assert.match(code, /signatureCompanyFrom\(profile, await tenantOrigin\(/, `${file} must map it through the ONE helper, on the tenant origin`);
   }
