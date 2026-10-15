@@ -13,7 +13,10 @@ type Act = { leadId: string | null; contactId?: string | null; type: string; sta
 type Where = Record<string, unknown>;
 
 /** `links`: which customer each lead belongs to (Lead.contactId). */
-const state = { comms: [] as Comm[], acts: [] as Act[], links: [] as { id: string; contactId: string | null }[] };
+type QuoteRow = { leadId: string | null; contactId: string | null; deletedAt: Date | null; emailedAt: Date | null; viewedAt: Date | null; signedAt: Date | null };
+const state = { comms: [] as Comm[], acts: [] as Act[], links: [] as { id: string; contactId: string | null }[], quotes: [] as QuoteRow[] };
+/** Every `where` the loader sent to quote.findMany — what the database was actually asked for. */
+const quoteQueries: Where[] = [];
 const day = (n: number) => new Date(Date.UTC(2026, 9, n, 9));
 
 function passes(row: Record<string, unknown>, where: Where): boolean {
@@ -49,7 +52,13 @@ const fakePrisma = {
   lead: { findMany: async (args: { where: Where }) => state.links.filter((link) => passes(link as Record<string, unknown>, args.where)) },
   communication: { groupBy: async (args: { by?: string[]; where: Where; _max: Record<string, true> }) => groupBy(state.comms, args) },
   activity: { groupBy: async (args: { by?: string[]; where: Where; _max?: Record<string, true>; _min?: Record<string, true> }) => groupBy(state.acts, args) },
-  quote: { groupBy: async () => [] },
+  quote: {
+    groupBy: async () => [],
+    findMany: async (args: { where: Where }) => {
+      quoteQueries.push(args.where);
+      return state.quotes.filter((quote) => passes(quote as unknown as Record<string, unknown>, args.where));
+    },
+  },
 };
 
 type Loader = (request: string, parent: { filename?: string } | undefined, isMain: boolean) => unknown;
@@ -75,6 +84,63 @@ beforeEach(() => {
   state.comms = [];
   state.acts = [];
   state.links = [];
+  state.quotes = [];
+});
+
+const quoteRow = (over: Partial<QuoteRow>): QuoteRow => ({ leadId: null, contactId: null, deletedAt: null, emailedAt: null, viewedAt: null, signedAt: null, ...over });
+
+test("A QUOTE IS PART OF THE CONTACT (Sean, 2026-10-15: a lead in Quoted, its quote emailed from Outlook, said 'not contacted yet')", async () => {
+  // What production held: the quote made for the CUSTOMER (no deal) as a draft, then the lead created in Quoted.
+  state.links = [{ id: "lead1", contactId: "cust1" }];
+  state.quotes = [quoteRow({ contactId: "cust1" })];
+  const drafted = await score();
+  assert.equal(uncontacted(drafted), false, "never 'not contacted yet' when a quote exists");
+  assert.ok(drafted.reasons.includes("Quote ready — no contact with the customer logged in the CRM"), JSON.stringify(drafted.reasons));
+  assert.equal(drafted.action, "Log how the quote reached them, or send it from the CRM");
+
+  // A quote that REACHED the customer is contact at that moment — emailed from the CRM, opened, or signed —
+  // on the lead or on the customer with no deal. Then there is nothing about contact to say at all.
+  for (const reached of [{ emailedAt: day(10) }, { viewedAt: day(10) }, { signedAt: day(10) }]) {
+    for (const where of [{ leadId: "lead1", contactId: "cust1" }, { contactId: "cust1" }]) {
+      state.quotes = [quoteRow({ ...where, ...reached })];
+      const s = await score();
+      assert.equal(s.reasons.some((r) => /not contacted|no contact with the customer logged|Never contacted|No contact for/.test(r)), false, JSON.stringify({ where, reached, reasons: s.reasons }));
+    }
+  }
+  // Long ago is still "no contact for N days", counted from the quote.
+  state.quotes = [quoteRow({ leadId: "lead1", emailedAt: day(1) })];
+  assert.ok((await score()).reasons.some((r) => /^No contact for 10 days$/.test(r)), "counted from the quote, not from nothing");
+});
+
+test("ONLY THESE LEADS' QUOTES ARE READ: never the whole workspace's customer quotes (review of #885)", async () => {
+  // Scoring two leads asks for those leads' quotes, and for quotes on no deal of THEIR customers — nothing else.
+  state.links = [{ id: "lead1", contactId: "cust1" }];
+  state.quotes = [quoteRow({ contactId: "cust2" }), quoteRow({ contactId: "cust3" }), quoteRow({ contactId: "cust1" })];
+  quoteQueries.length = 0;
+  await scoreLeads([LEAD, { ...LEAD, id: "lead9" }], day(11));
+  const customerLevel = quoteQueries.filter((where) => "contactId" in where);
+  const leadLevel = quoteQueries.filter((where) => "leadId" in where && !("contactId" in where));
+  assert.equal(customerLevel.length, 1);
+  assert.deepEqual(customerLevel[0].contactId, { in: ["cust1"] }, "only the scored leads' own customers");
+  assert.equal(customerLevel[0].leadId, null);
+  assert.deepEqual(leadLevel.map((where) => where.leadId), [{ in: ["lead1", "lead9"] }], "only the scored leads");
+  // No lead with a customer: no customer-level query at all.
+  state.links = [];
+  quoteQueries.length = 0;
+  await score();
+  assert.equal(quoteQueries.filter((where) => "contactId" in where).length, 0);
+});
+
+test("…but not another customer's quote, a quote on the customer's OTHER deal, or a deleted one", async () => {
+  state.links = [{ id: "lead1", contactId: "cust1" }];
+  state.quotes = [
+    quoteRow({ contactId: "cust2", emailedAt: day(10) }), // somebody else
+    quoteRow({ leadId: "lead2", contactId: "cust1", emailedAt: day(10) }), // this customer's other deal
+    quoteRow({ leadId: "lead1", contactId: "cust1", emailedAt: day(10), deletedAt: day(10) }), // in the trash
+  ];
+  const s = await score();
+  assert.ok(uncontacted(s), JSON.stringify(s.reasons));
+  assert.equal(s.reasons.includes("Quote ready — no contact with the customer logged in the CRM"), false);
 });
 
 const uncontacted = (s: { reasons: string[] }) => s.reasons.some((r) => /not contacted yet|Never contacted/.test(r));

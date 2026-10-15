@@ -382,6 +382,7 @@ export const assistantAndMoreArticles: HelpArticle[] = [
         ["A new lead, added in the last 3 days, not contacted yet", "30", "New lead — not contacted yet"],
         ["The customer opened the quote in the last 2 days", "25", "Opened the quote …"],
         ["An older lead that has never been contacted", "20", "Never contacted — added …"],
+        ["A quote exists for the deal, but no contact with the customer is logged (for example, the quote was emailed from Outlook)", "20", "Quote ready — no contact with the customer logged in the CRM"],
         ["The customer wrote in the last 3 days and you answered", "15", "Replied …"],
         ["A planned follow-up is overdue", "15", "Overdue follow-up"],
         ["The customer opened the quote 3 to 7 days ago", "12", "Opened the quote …"],
