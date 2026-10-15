@@ -4,8 +4,8 @@ import { useEditorState, type Editor } from "@tiptap/react";
 import { useRef, useState, type ReactNode } from "react";
 import { EmailButtonDialog } from "@/components/RichTextEditor";
 import {
-  AlignCenter, AlignJustify, AlignLeft, AlignRight, Bold, Eraser, Highlighter, ImageIcon, IndentDecrease, IndentIncrease,
-  Italic, Link2, List, ListOrdered, Minus, RectangleHorizontal, Strikethrough, Table2, Underline, Unlink,
+  AlignCenter, AlignJustify, AlignLeft, AlignRight, Bold, Eraser, Heading2, Highlighter, ImageIcon, IndentDecrease, IndentIncrease,
+  Italic, Link2, List, ListOrdered, Minus, MoveVertical, RectangleHorizontal, Strikethrough, Table2, Underline, Unlink,
 } from "lucide-react";
 import { TextPromptDialog } from "@/components/TextPromptDialog";
 import { emailReadyImage } from "@/components/emailBlockStyle";
@@ -82,7 +82,7 @@ export default function EmailRibbon({
     selector: ({ editor: e }) => (e
       ? {
           bold: e.isActive("bold"), italic: e.isActive("italic"), underline: e.isActive("underline"), strike: e.isActive("strike"),
-          bullet: e.isActive("bulletList"), ordered: e.isActive("orderedList"), link: e.isActive("link"), table: e.isActive("table"), button: e.isActive("emailButton"),
+          heading: e.isActive("heading", { level: 2 }), bullet: e.isActive("bulletList"), ordered: e.isActive("orderedList"), link: e.isActive("link"), table: e.isActive("table"), button: e.isActive("emailButton"),
           font: String(e.getAttributes("textStyle").fontFamily ?? ""), size: String(e.getAttributes("textStyle").fontSize ?? ""),
           align: String(e.getAttributes("paragraph").textAlign ?? e.getAttributes("heading").textAlign ?? "left"),
         }
@@ -134,6 +134,7 @@ export default function EmailRibbon({
       </Group>
 
       <Group label="Paragraph">
+        <Tool title="Heading" active={at.heading} onClick={() => run().toggleHeading({ level: 2 }).run()}><Heading2 className="size-4" /></Tool>
         <Tool title="Bullets" active={at.bullet} onClick={() => run().toggleBulletList().run()}><List className="size-4" /></Tool>
         <Tool title="Numbering" active={at.ordered} onClick={() => run().toggleOrderedList().run()}><ListOrdered className="size-4" /></Tool>
         <Tool title="Decrease indent (Ctrl+[)" onClick={() => run().outdentEmailBlock().run()}><IndentDecrease className="size-4" /></Tool>
@@ -184,6 +185,7 @@ export default function EmailRibbon({
         <Tool title="Button (a link styled as a button, safe in every mail client)" active={at.button} onClick={() => setButtonOpen(true)}><RectangleHorizontal className="size-4" /></Tool>
         <EmailButtonDialog editor={editor} open={buttonOpen} onClose={() => setButtonOpen(false)} />
         <Tool title="Divider line" onClick={() => run().insertEmailDivider().run()}><Minus className="size-4" /></Tool>
+        <Tool title="Space (vertical gap that every mail client keeps)" onClick={() => run().insertEmailSpacer(24).run()}><MoveVertical className="size-4" /></Tool>
       </Group>
 
       {options && <Group label="Options">{options}</Group>}

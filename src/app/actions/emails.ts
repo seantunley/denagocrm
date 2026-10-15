@@ -2,7 +2,7 @@
 
 import { asActionResult, refuse } from "@/lib/actionResult";
 import { formatDate } from "@/lib/format";
-import { redactSensitive, sendWarning } from "@/lib/sendCheck";
+import { picturesIn, redactSensitive, sendWarning } from "@/lib/sendCheck";
 import { secureLinkDays, secureLinkExpiry, secureLinksHtml, secureLinksText } from "@/lib/secureLinks";
 import { attachSecureLinksToEmail, createSecureLinks, discardSecureLinks, type SecureFile } from "@/lib/secureLinkStore";
 import { revalidatePath } from "next/cache";
@@ -197,6 +197,8 @@ export async function checkComposerEmail(input: {
     // Everyone it goes to — To, Cc and Bcc — as Send asks it.
     to: [input.to, input.cc, input.bcc].map((list) => String(list ?? "").slice(0, 1000)).filter(Boolean).join(", "),
     customerAddresses: await customerAddresses(user, input.contactId || null, input.leadId || null),
+    // Pictures in the message: what they show cannot be read, so they are asked about too (review of #886).
+    pictures: picturesIn(String(input.bodyHtml ?? "")),
   });
   return { warning: warning?.text ?? null };
 }
@@ -412,7 +414,7 @@ export async function sendEmailAction(
   // would be warned about is refused unless the sender confirmed it. Before any
   // file is stored or any link is made.
   // Asked of EVERYONE it goes to: an ID number copied to a stranger is no safer for being in Cc.
-  const warning = sendWarning({ subject, bodyText, fileNames, secureLinks: secure, to: everyone, customerAddresses: await customerAddresses(user, contactId, leadId) });
+  const warning = sendWarning({ subject, bodyText, fileNames, secureLinks: secure, to: everyone, customerAddresses: await customerAddresses(user, contactId, leadId), pictures: picturesIn(bodyHtml) });
   const confirmed = formData.get("sensitiveOk") === "1";
   if (warning && !confirmed) {
     return { error: `${warning.text} Press Send again to see the warning and confirm.` };

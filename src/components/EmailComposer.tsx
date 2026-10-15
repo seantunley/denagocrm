@@ -613,6 +613,19 @@ export default function EmailComposer({
                 <dl className="mb-3 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-sm">
                   <dt className="text-slate-500">To</dt>
                   <dd className="text-slate-200 break-all">{preview.to || "—"}</dd>
+                  {preview.cc && (
+                    <>
+                      <dt className="text-slate-500">Cc</dt>
+                      <dd className="text-slate-200 break-all">{preview.cc}</dd>
+                    </>
+                  )}
+                  {/* Bcc is shown to the sender only — it is not in the email the others receive. */}
+                  {preview.bcc && (
+                    <>
+                      <dt className="text-slate-500">Bcc</dt>
+                      <dd className="text-slate-200 break-all">{preview.bcc} <span className="text-slate-500">(not shown to the others)</span></dd>
+                    </>
+                  )}
                   {preview.replyTo && (
                     <>
                       <dt className="text-slate-500">Reply to</dt>
