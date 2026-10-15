@@ -26,8 +26,8 @@ test("the composer offers the customer's live, current quotes — and none to a 
 });
 
 test("the send action checks every attached quote itself, before anything is sent", () => {
-  const action = shipped("src/app/actions/emails.ts");
-  const send = action.slice(action.indexOf("export async function sendEmailAction"), action.indexOf("export async function sendTestEmail"));
+  // The send itself lives in lib/composerSend.ts (shared with scheduled sends), since 2026-10-15.
+  const send = shipped("src/lib/composerSend.ts").split("export async function sendComposerForm")[1];
   const attach = send.slice(send.indexOf('formData.getAll("attachQuote")'), send.indexOf("const secure = asSecureLinks"));
   assert.ok(attach.length > 0, "the quotes are gathered before the send check and the send");
   // The permission and the quote: the pair "Email quote" requires.
@@ -45,10 +45,8 @@ test("the send action checks every attached quote itself, before anything is sen
   assert.match(attach, /fileNames\.push\(name\)/);
 });
 
-const sendAction = () => {
-  const action = shipped("src/app/actions/emails.ts");
-  return action.slice(action.indexOf("export async function sendEmailAction"), action.indexOf("export async function sendTestEmail"));
-};
+// The send itself lives in lib/composerSend.ts (shared with scheduled sends), since 2026-10-15.
+const sendAction = () => shipped("src/lib/composerSend.ts").split("export async function sendComposerForm")[1];
 
 test("an email filed on one deal does not carry another deal's quote", () => {
   // Review of #871–#874: once the customer's page can file an email on a chosen deal,
@@ -133,7 +131,7 @@ test("both doors share one rule for marking a quote sent", () => {
   const shared = shipped("src/lib/quoteEmailSend.ts");
   assert.match(shared, /where: \{ id: quote\.id, status: "draft", updatedAt: quote\.updatedAt, deletedAt: null, signedAt: null, supersededAt: null \}/);
   assert.match(shipped("src/app/actions/quoteEmail.ts"), /markQuoteSentIfDraft\(quote\)/);
-  assert.doesNotMatch(shipped("src/app/actions/emails.ts"), /status: "sent"/);
+  assert.doesNotMatch(shipped("src/app/actions/emails.ts") + shipped("src/lib/composerSend.ts"), /status: "sent"/);
 });
 
 test("the composer shows what is attached, posts it, and warns that a draft will be marked sent", () => {

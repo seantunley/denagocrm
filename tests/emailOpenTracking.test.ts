@@ -41,7 +41,7 @@ test("sendEmail only tracks when asked AND the workspace hasn't switched it off"
 });
 
 test("the composer and quote emails ask for tracking, and the composer stores the token", () => {
-  const composer = src("src/app/actions/emails.ts");
+  const composer = src("src/lib/composerSend.ts");
   assert.match(composer, /trackOpens: true/);
   assert.match(composer, /result\.openToken \? \{ openToken: result\.openToken \}/);
   assert.match(src("src/app/actions/quoteEmail.ts"), /trackOpens: true/);

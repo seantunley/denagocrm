@@ -191,7 +191,7 @@ test("the settings preview and the send path resolve the same origin", () => {
   // a different origin it would be the one screen that lies about it.
   assert.equal(signatureCompanyFrom({ ...BLANK_PROFILE }, "https://acme.co.za").assetBase, "https://acme.co.za");
   assert.equal(signatureCompanyFrom({ ...BLANK_PROFILE }).assetBase, "", "omitted means the platform default");
-  for (const file of ["src/app/(app)/settings/page.tsx", "src/app/actions/emails.ts"]) {
+  for (const file of ["src/app/(app)/settings/page.tsx", "src/lib/composerSend.ts"]) {
     assert.match(shipped(file), /signatureCompanyFrom\(profile, await tenantOrigin\(/, `${file}`);
   }
 });
