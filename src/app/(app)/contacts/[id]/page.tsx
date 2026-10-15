@@ -479,6 +479,7 @@ export default async function ContactDetailPage({
                       contactId={contact.id}
                       deals={openDeals}
                       revalidate={path}
+                      replyable
                     />
                   </>
                 ),
