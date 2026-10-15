@@ -203,6 +203,25 @@ export default function EmailComposer({
 
   // Preview: the server builds the same HTML the send does (message + signature).
   const formRef = useRef<HTMLFormElement>(null);
+  // YOUR SIGNATURE under the message while you write, as in Outlook (Sean, 2026-10-15) — built by the server exactly
+  // as Send adds it (Preview's builder, with no message), and again when the banner or the recipient changes, since
+  // a customer who opted out of marketing gets no banner. Shown, not editable: it is added when the email goes.
+  const [signatureHtml, setSignatureHtml] = useState("");
+  const [signatureHeight, setSignatureHeight] = useState(0);
+  const signatureAsk = useRef(0);
+  function loadSignature() {
+    const form = formRef.current;
+    const field = (name: string) => String((form ? new FormData(form).get(name) : null) ?? "").trim();
+    const ask = ++signatureAsk.current;
+    previewComposerEmail("", { to: field("to"), contactId, leadId, choice: field("banner") }).then(
+      ({ html }) => { if (ask === signatureAsk.current) setSignatureHtml(html); },
+      () => {},
+    );
+  }
+  useEffect(() => {
+    if (open) loadSignature();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- once per opening; the fields reload it themselves
+  }, [open]);
   // `sentState` is the send result the preview was opened against: once a send
   // answers (sent, or an error to read on the form), the preview steps aside.
   const [preview, setPreview] = useState<{ html: string; to: string; cc: string; bcc: string; replyTo: string; sentState: typeof state } | null>(null);
@@ -346,6 +365,7 @@ export default function EmailComposer({
                     className={RIBBON_SELECT}
                     defaultValue=""
                     aria-label="Marketing banner"
+                    onChange={loadSignature}
                     title="The marketing banner under your signature. A customer who opted out of marketing never gets one, whatever is chosen. Preview shows what goes out."
                   >
                     <option value="">Banner: {banners[0].name}</option>
@@ -371,7 +391,7 @@ export default function EmailComposer({
             <div className="min-w-0 flex-1 space-y-1.5">
               <AddressRow label="To">
                 {/* A list, as in Outlook: the server checks every address (parseAddressList). */}
-                <input name="to" type="text" className={ADDRESS_INPUT} required defaultValue={defaultTo} autoComplete="off" spellCheck={false} placeholder="name@example.com, …" />
+                <input name="to" type="text" className={ADDRESS_INPUT} required defaultValue={defaultTo} autoComplete="off" spellCheck={false} placeholder="name@example.com, …" onBlur={loadSignature} />
               </AddressRow>
               <AddressRow label="Cc">
                 <input name="cc" type="text" className={ADDRESS_INPUT} autoComplete="off" spellCheck={false} />
@@ -526,8 +546,19 @@ export default function EmailComposer({
               onEditorReady={setEditor}
               placeholder="Write your message — paste a screenshot with Ctrl+V"
             />
+            {signatureHtml && (
+              // No scripts (no allow-scripts); same origin only so its height can be read. Clicks pass to the page.
+              <iframe
+                title="Your signature"
+                sandbox="allow-same-origin"
+                srcDoc={signatureHtml}
+                className="pointer-events-none block w-full border-0 px-4 sm:px-8"
+                style={{ height: signatureHeight }}
+                onLoad={(event) => setSignatureHeight(event.currentTarget.contentDocument?.documentElement.scrollHeight ?? 0)}
+              />
+            )}
             <p className="px-6 pb-6 text-xs text-slate-400 sm:px-10">
-              Your signature{banners.length > 0 ? " and banner are" : " is"} added here when it is sent — Preview shows exactly what goes.{" "}
+              Your signature{banners.length > 0 ? " and banner are" : " is"} added like this when it is sent — Preview shows the whole email.{" "}
               <Link href="/settings?tab=team" className="text-blue-600 hover:underline">Edit your signature</Link>
             </p>
           </div>
