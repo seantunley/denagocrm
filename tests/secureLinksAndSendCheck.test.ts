@@ -13,7 +13,34 @@ import {
   secureLinksHtml,
   secureLinksText,
 } from "../src/lib/secureLinks";
-import { isCardNumber, isSaIdNumber, looksSensitiveFile, luhnValid, recipientsOffRecord, redactSensitive, secureLinkHint, sendWarning, sensitiveFindings } from "../src/lib/sendCheck";
+import { isCardNumber, isSaIdNumber, looksSensitiveFile, luhnValid, picturesIn, recipientsOffRecord, redactSensitive, secureLinkHint, sendWarning, sensitiveFindings } from "../src/lib/sendCheck";
+
+test("A PICTURE IN THE MESSAGE is asked about when anyone it goes to is off the record — its contents cannot be read (review of #886)", () => {
+  // A pasted screenshot of a bank statement, the customer in To and a stranger in Cc: the warning, saying why.
+  const base = { subject: "The details", bodyText: "See the screenshot below.", fileNames: [], secureLinks: false, customerAddresses: ["anna@example.co.za"] };
+  const warned = sendWarning({ ...base, to: "anna@example.co.za, someone@else.co.za", pictures: 1 });
+  assert.ok(warned);
+  assert.deepEqual(warned.kinds, ["picture"]);
+  assert.match(warned.text, /^This email has a picture in the message, and it is going to someone@else\.co\.za, which is not the address on this customer's record\./);
+  assert.match(warned.text, /The CRM cannot read what a picture shows — check it shows no ID number, bank or card details, or anything else private\./);
+  // Two pictures, and an ID number in the text as well: both are named.
+  const both = sendWarning({ ...base, bodyText: "ID 8001015009087", to: "x@y.co.za", pictures: 2 });
+  assert.match(both?.text ?? "", /has an ID number and 2 pictures in the message/);
+  assert.match(both?.text ?? "", /check none of them shows an ID number, bank or card details, or anything else private\./);
+  assert.deepEqual(both?.kinds, ["sa-id", "picture"]);
+  // Only to the customer's own address: no warning — the same rule as for text.
+  assert.equal(sendWarning({ ...base, to: "anna@example.co.za", pictures: 3 }), null);
+  // No pictures and nothing sensitive: nothing to ask.
+  assert.equal(sendWarning({ ...base, to: "x@y.co.za", pictures: 0 }), null);
+  assert.equal(sendWarning({ ...base, to: "x@y.co.za" }), null);
+
+  // Counted from the message itself, on BOTH sides: the composer's check and the send.
+  assert.equal(picturesIn('<p>a</p><img src="data:image/png;base64,AA"><IMG src="https://x/y.png">'), 2);
+  assert.equal(picturesIn("<p>no pictures</p>"), 0);
+  const actions = readFileSync(new URL("../src/app/actions/emails.ts", import.meta.url), "utf8");
+  assert.match(actions, /pictures: picturesIn\(String\(input\.bodyHtml \?\? ""\)\),/, "the check before Send");
+  assert.match(actions, /const warning = sendWarning\(\{[^\n]*pictures: picturesIn\(bodyHtml\) \}\);/, "and the send itself, which refuses an unconfirmed one");
+});
 
 const src = (rel: string) => readFileSync(new URL(`../${rel}`, import.meta.url), "utf8").replace(/\r\n/g, "\n");
 const NOW = new Date("2026-11-10T10:00:00Z");
@@ -266,7 +293,8 @@ test("A FLAGGED NUMBER NEVER REACHES THE AUDIT ENTRY: the subject and file names
   // …and the audit entry is built from the redacted subject and file names — never the raw ones.
   const actions = src("src/app/actions/emails.ts");
   const audit = actions.slice(actions.indexOf('action: "email.sent"'), actions.indexOf("export async function sendTestEmail"));
-  assert.match(audit, /summary: `Sent email to \$\{to\}: “\$\{redactSensitive\(subject\)\}”/);
+  // (With whoever was copied in, now that there are Cc and Bcc — addresses, which the check never redacts.)
+  assert.match(audit, /summary: `Sent email to \$\{to\}\$\{cc \? ` \(cc \$\{cc\}\)` : ""\}\$\{bcc \? ` \(bcc \$\{bcc\}\)` : ""\}: “\$\{redactSensitive\(subject\)\}”/);
   assert.match(audit, /redactSensitive\(attachedNames\.join\(", "\)\)/);
   assert.doesNotMatch(audit, /\$\{subject\}|\$\{attachedNames/, "the raw subject or names must not be in the summary");
 });

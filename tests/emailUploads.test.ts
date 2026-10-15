@@ -36,7 +36,8 @@ test("the send action attaches them and names them like library files; the compo
   // Checked and attached BEFORE the mail goes.
   assert.ok(action.indexOf("emailUploads(formData)") < action.indexOf("const result = await sendEmail({"));
   const composer = readFileSync(new URL("../src/components/EmailComposer.tsx", import.meta.url), "utf8");
-  assert.match(composer, /⬆ Upload a file/);
+  // Offered on the ribbon now, as Outlook's "Attach File" (Sean, 2026-10-15).
+  assert.match(composer, /onClick=\{\(\) => uploadRef\.current\?\.click\(\)\}[^>]*>\s*<Paperclip className="size-4" \/>Attach file/);
   assert.match(composer, /type="file"\s+name="upload"\s+multiple/);
   assert.match(composer, /uploadRef\.current\.files = dt\.files;/, "the posted input always holds exactly the chips shown");
 });

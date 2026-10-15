@@ -45,6 +45,18 @@ export async function inlineImages(html: string, load: ImageLoader): Promise<{ h
   for (const raw of raws) {
     // Attribute values arrive HTML-escaped (escapeHtml turns & into &amp;).
     const src = raw.replace(/&amp;/g, "&");
+    // A SCREENSHOT PASTED INTO THE MESSAGE (Sean, 2026-10-15: "I must be able to
+    // paste in image screenshots, like Outlook"). It arrives as a data: URI, which
+    // most mail clients will not show — Gmail strips them — so it goes the way the
+    // logo does: inside the message, as an inline attachment.
+    const pasted = pastedImage(src);
+    if (pasted) {
+      const n = attachments.length + 1;
+      const cid = `image${n}@inline`;
+      attachments.push({ filename: `image${n}.${TYPE_EXT[pasted.contentType] ?? "png"}`, content: pasted.content, contentType: pasted.contentType, cid });
+      out = out.split(`src="${raw}"`).join(`src="cid:${cid}"`);
+      continue;
+    }
     if (!/^https:\/\//i.test(src)) continue;
     const image = await load(src).catch(() => null);
     if (!image) continue;
@@ -54,6 +66,19 @@ export async function inlineImages(html: string, load: ImageLoader): Promise<{ h
     out = out.split(`src="${raw}"`).join(`src="cid:${cid}"`);
   }
   return { html: out, attachments };
+}
+
+/** The largest image pasted into a message that is embedded. The composer shrinks a screenshot well below this first. */
+export const MAX_PASTED_IMAGE_BYTES = 3 * 1024 * 1024;
+const PASTED = /^data:(image\/(?:png|jpeg|gif|webp));base64,([A-Za-z0-9+/=\s]+)$/i;
+
+/** A pasted image's bytes, or null for anything else — another type (no SVG: it can carry script), too big, or not base64. */
+export function pastedImage(src: string): LoadedImage | null {
+  const match = PASTED.exec(src);
+  if (!match) return null;
+  const content = Buffer.from(match[2].replace(/\s+/g, ""), "base64");
+  if (content.length === 0 || content.length > MAX_PASTED_IMAGE_BYTES) return null;
+  return { content, contentType: match[1].toLowerCase() };
 }
 
 // A campaign sends the same logo to every recipient: read it once, not per mail.

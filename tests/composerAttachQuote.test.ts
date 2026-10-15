@@ -139,7 +139,8 @@ test("both doors share one rule for marking a quote sent", () => {
 test("the composer shows what is attached, posts it, and warns that a draft will be marked sent", () => {
   const composer = shipped("src/components/EmailComposer.tsx");
   assert.match(composer, /name="attachQuote" value=\{q\.id\}/);
-  assert.match(composer, /Attach quote \{q\.label\}/);
+  // On the ribbon's Insert group, beside Attach file and Library (the title says what it does).
+  assert.match(composer, /<Receipt className="size-4" \/>Quote \{q\.label\}/);
   assert.match(composer, /will be marked sent when this email goes/);
   // The quote's file name is in the list the send check and the secure-link option read.
   assert.match(composer, /\.\.\.pickedQuotes\.map\(\(q\) => \(\{ name: q\.fileName, sizeBytes: 0 \}\)\)/);

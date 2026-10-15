@@ -137,6 +137,6 @@ test("both pages read by the one rule, respect what the viewer may open, and say
   assert.equal((customer.match(/deals=\{openDeals\}/g) ?? []).length, 4);
   // The forms ask only where there is no deal already (a customer's page), never on a deal's.
   for (const file of ["src/components/EmailComposer.tsx", "src/components/WhatsAppPanel.tsx", "src/components/CommsTimeline.tsx", "src/components/LeadTimeline.tsx"]) {
-    assert.match(code(file), /\{!leadId && deals\.length > 0 && (<div className="w-full">)?<DealField deals=\{deals\}/, file);
+    assert.match(code(file), /\{!leadId && deals\.length > 0 && (<div className="(?:w-full|pt-1)">)?<DealField deals=\{deals\}/, file);
   }
 });

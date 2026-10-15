@@ -4,7 +4,9 @@ import { useEditor, EditorContent, type Editor } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
 import Image from "@tiptap/extension-image";
 import { Table, TableRow, TableCell, TableHeader } from "@tiptap/extension-table";
-import { TextStyle, Color } from "@tiptap/extension-text-style";
+import { TextStyle, Color, FontFamily, FontSize, BackgroundColor } from "@tiptap/extension-text-style";
+import type { EditorView } from "@tiptap/pm/view";
+import { EmailBlockStyle, emailReadyImage } from "@/components/emailBlockStyle";
 import { useEffect, useRef, useState } from "react";
 import { TextPromptDialog } from "@/components/TextPromptDialog";
 import ModalPortal from "@/components/ui/modal-portal";
@@ -43,7 +45,7 @@ function Btn({
  * prompts, plus the brand colour row and alignment — the four things a button
  * has. Editing an existing button reopens the same dialog pre-filled.
  */
-function EmailButtonDialog({
+export function EmailButtonDialog({
   editor,
   open,
   onClose,
@@ -217,6 +219,10 @@ export default function RichTextEditor({
   onImageUpload,
   onEditorReady,
   emailTools = false,
+  appearance = "dark",
+  showToolbar = true,
+  pasteImages = false,
+  onImageProblem,
 }: {
   value: string;
   onChange: (html: string) => void;
@@ -244,24 +250,65 @@ export default function RichTextEditor({
    * (the 1:1 composer and marketing templates) turn it on.
    */
   emailTools?: boolean;
+  /**
+   * "page": the message on a white page with dark text — what the customer will
+   * see — filling its container, as in Outlook. "dark" (default): the CRM's own
+   * dark field, as every other surface has it.
+   */
+  appearance?: "dark" | "page";
+  /** False: no toolbar here — the caller draws its own (EmailRibbon) from the editor it is handed. */
+  showToolbar?: boolean;
+  /**
+   * Paste or drop a picture straight into the message, as in Outlook (Sean,
+   * 2026-10-15: "I must be able to paste in image screenshots"). Shrunk in the
+   * browser first (emailReadyImage) and kept in the message; the send embeds it
+   * inside the email (lib/emailInlineLogo.ts). `onImageProblem` hears about one
+   * that could not be used.
+   */
+  pasteImages?: boolean;
+  onImageProblem?: (message: string) => void;
 }) {
+  // Pictures pasted or dropped in: each shrunk, then put where the cursor is.
+  const takeImages = (view: EditorView, files: File[]) => {
+    const images = files.filter((file) => file.type.startsWith("image/"));
+    if (!pasteImages || images.length === 0) return false;
+    for (const file of images) {
+      void emailReadyImage(file).then((src) => {
+        if (!src) {
+          onImageProblem?.(`“${file.name || "That picture"}” couldn't be added — use a PNG, JPEG, GIF or WebP image under about 2.5 MB.`);
+          return;
+        }
+        const node = view.state.schema.nodes.image?.create({ src });
+        if (node) view.dispatch(view.state.tr.replaceSelectionWith(node).scrollIntoView());
+      });
+    }
+    return true;
+  };
   const editor = useEditor({
     extensions: [
       StarterKit.configure({ link: { openOnClick: false } }),
       TextStyle,
       Color,
-      Image,
+      // A pasted screenshot is kept in the message as a data: image until it is sent.
+      Image.configure({ allowBase64: pasteImages }),
       Table.configure({ resizable: false }),
       TableRow,
       TableCell,
       TableHeader,
-      ...(emailTools ? [EmailButton, EmailDivider, EmailSpacer] : []),
+      // Outlook's formatting: typeface, size, highlight, alignment and indent — all inline styles, which mail clients keep.
+      ...(emailTools ? [EmailButton, EmailDivider, EmailSpacer, FontFamily, FontSize, BackgroundColor, EmailBlockStyle] : []),
     ],
     content: value,
     immediatelyRender: false,
     editorProps: {
+      // A screenshot on the clipboard arrives as a file and no text; copied text with a picture in it is left to the editor.
+      handlePaste: (view, event) =>
+        !event.clipboardData?.getData("text/plain") && takeImages(view, Array.from(event.clipboardData?.files ?? [])),
+      handleDrop: (view, event) => takeImages(view, Array.from((event as DragEvent).dataTransfer?.files ?? [])),
       attributes: {
-        class:
+        class: appearance === "page"
+          ? "min-h-[50vh] px-6 py-5 sm:px-10 sm:py-8 bg-white text-[15px] leading-relaxed text-slate-900 outline-none [&_a]:text-blue-700 [&_a]:underline [&_table]:border-collapse [&_td]:border [&_td]:border-slate-300 [&_td]:px-2 [&_td]:py-1 [&_th]:border [&_th]:border-slate-300 [&_th]:px-2 [&_th]:py-1 [&_th]:bg-slate-100 [&_ul]:list-disc [&_ul]:pl-6 [&_ol]:list-decimal [&_ol]:pl-6 [&_h2]:text-xl [&_h2]:font-bold [&_p]:my-2 [&_img]:max-w-full [&_img]:h-auto [&_table[data-email-block]_td]:!border-0 [&_table[data-email-block]_td]:!px-0 [&_table[data-email-block]_td]:!py-0 [&_.ProseMirror-selectednode]:outline-2 [&_.ProseMirror-selectednode]:outline-dashed [&_.ProseMirror-selectednode]:outline-blue-500"
+          :
           // The last four rules: email BLOCKS (button/divider/spacer) are layout
           // tables, so they must not inherit the bordered data-table styling
           // above them, and a selected atom needs a visible outline or clicking
@@ -289,12 +336,22 @@ export default function RichTextEditor({
   }, [editor, onEditorReady]);
 
   if (!editor) {
-    return <div className="input min-h-40 animate-pulse" />;
+    return <div className={appearance === "page" ? "h-full min-h-60 animate-pulse bg-white" : "input min-h-40 animate-pulse"} />;
+  }
+
+  if (appearance === "page") {
+    // The page fills its container; the container scrolls. Clicking anywhere on the page puts the cursor in it.
+    return (
+      <div className="flex min-h-full flex-col bg-white" onClick={(event) => { if (event.target === event.currentTarget) editor.chain().focus("end").run(); }}>
+        {showToolbar && <Toolbar editor={editor} onImageUpload={onImageUpload} emailTools={emailTools} />}
+        <EditorContent editor={editor} className="flex-1 [&>.ProseMirror]:min-h-full" />
+      </div>
+    );
   }
 
   return (
     <div className="rounded-lg border border-slate-700 bg-slate-900 focus-within:border-orange-500">
-      <Toolbar editor={editor} onImageUpload={onImageUpload} emailTools={emailTools} />
+      {showToolbar && <Toolbar editor={editor} onImageUpload={onImageUpload} emailTools={emailTools} />}
       <EditorContent editor={editor} />
     </div>
   );

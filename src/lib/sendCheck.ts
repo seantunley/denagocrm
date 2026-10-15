@@ -97,7 +97,16 @@ export function recipientsOffRecord(to: string, customerAddresses: readonly (str
   return addressesOf(to).filter((address) => !known.has(address));
 }
 
-export type SendWarning = { text: string; kinds: SensitiveKind[] };
+export type SendWarning = { text: string; kinds: (SensitiveKind | "picture")[] };
+
+/**
+ * How many pictures are IN the message — pasted screenshots, inserted images.
+ * The check reads text and file names; a picture is neither, and a screenshot of
+ * a bank statement or an ID is exactly what gets pasted (review of #886).
+ */
+export function picturesIn(html: string): number {
+  return (String(html ?? "").match(/<img\b/gi) ?? []).length;
+}
 
 /**
  * Should the sender be stopped and asked? Only when there is something
@@ -114,20 +123,31 @@ export function sendWarning(input: {
   secureLinks: boolean;
   to: string;
   customerAddresses: readonly (string | null | undefined)[];
+  /**
+   * Pictures in the message (picturesIn). What one shows cannot be read, so any
+   * picture going to an address off the record is asked about — the sender is the
+   * only one who can see whether it is a bank statement.
+   */
+  pictures?: number;
 }): SendWarning | null {
   const findings = sensitiveFindings(`${input.subject}\n${input.bodyText}`, input.fileNames);
-  if (findings.length === 0) return null;
+  const pictures = Math.max(0, input.pictures ?? 0);
+  if (findings.length === 0 && pictures === 0) return null;
   const strangers = recipientsOffRecord(input.to, input.customerAddresses);
   if (strangers.length === 0) return null;
-  const what = findings.map((finding) => finding.label);
+  const what = [...findings.map((finding) => finding.label), ...(pictures > 0 ? [pictures === 1 ? "a picture in the message" : `${pictures} pictures in the message`] : [])];
   const list = what.length === 1 ? what[0] : `${what.slice(0, -1).join(", ")} and ${what[what.length - 1]}`;
   const who = strangers.length === 1 ? strangers[0] : `${strangers.length} addresses`;
   const known = input.customerAddresses.some((address) => (address ?? "").trim());
   const viaLink = input.secureLinks && findings.some((finding) => finding.kind === "file-name");
   return {
-    kinds: findings.map((finding) => finding.kind),
+    kinds: [...findings.map((finding) => finding.kind), ...(pictures > 0 ? ["picture" as const] : [])],
     text: `This email has ${list}, and it is going to ${who}, which ${strangers.length === 1 ? "is" : "are"} not ${known ? "the address on this customer's record" : "an address on any customer record here"}.${
       viaLink ? " A secure link expires and can be recalled, but it does not check who opens it — whoever receives this email can download the file straight away." : ""
+    }${
+      pictures > 0
+        ? ` The CRM cannot read what a picture shows — check ${pictures === 1 ? "it shows no ID number, bank or card details" : "none of them shows an ID number, bank or card details"}, or anything else private.`
+        : ""
     }`,
   };
 }

@@ -11,7 +11,24 @@ import DealField from "@/components/DealField";
 import type { DealOption } from "@/lib/customerTimeline";
 import type { ComposerQuote } from "@/lib/composerQuotes";
 import RichTextEditor from "@/components/RichTextEditor";
+import EmailRibbon from "@/components/EmailRibbon";
+import type { Editor } from "@tiptap/react";
+import { FileText, Paperclip, Receipt, Send, X } from "lucide-react";
 import { EMAIL_UPLOAD_MAX_BYTES, EMAIL_UPLOAD_MAX_FILES } from "@/lib/emailUploads";
+
+const RIBBON_TEXT_BUTTON = "inline-flex h-8 items-center gap-1.5 rounded-md px-2 text-xs text-slate-200 hover:bg-white/10 disabled:opacity-40";
+const RIBBON_SELECT = "h-8 max-w-48 rounded-md border border-white/10 bg-slate-900 px-2 text-xs text-slate-100";
+const ADDRESS_INPUT = "min-w-0 flex-1 border-0 border-b border-white/10 bg-transparent px-1 py-1 text-sm text-white outline-none focus:border-orange-500";
+
+/** One of Outlook's header rows: a boxed label, then the field. */
+function AddressRow({ label, className = "", children }: { label: string; className?: string; children: React.ReactNode }) {
+  return (
+    <div className={`flex items-center gap-2 ${className}`}>
+      <span className="w-16 shrink-0 rounded-md border border-white/15 px-2 py-1 text-center text-xs text-slate-300">{label}</span>
+      {children}
+    </div>
+  );
+}
 
 const fileSize = (bytes: number) => (bytes < 1024 * 1024 ? `${Math.max(1, Math.round(bytes / 1024))} KB` : `${(bytes / 1024 / 1024).toFixed(1)} MB`);
 
@@ -156,6 +173,8 @@ export default function EmailComposer({
       setPreviewError("");
       const { warning: found, error: blocked } = await checkComposerEmail({
         to: String(data.get("to") ?? ""),
+        cc: String(data.get("cc") ?? ""),
+        bcc: String(data.get("bcc") ?? ""),
         subject: String(data.get("subject") ?? ""),
         bodyHtml: body,
         contactId,
@@ -186,7 +205,13 @@ export default function EmailComposer({
   const formRef = useRef<HTMLFormElement>(null);
   // `sentState` is the send result the preview was opened against: once a send
   // answers (sent, or an error to read on the form), the preview steps aside.
-  const [preview, setPreview] = useState<{ html: string; to: string; replyTo: string; sentState: typeof state } | null>(null);
+  const [preview, setPreview] = useState<{ html: string; to: string; cc: string; bcc: string; replyTo: string; sentState: typeof state } | null>(null);
+  // The editor, for the ribbon above the address rows (Outlook's layout puts the formatting at the top).
+  const [editor, setEditor] = useState<Editor | null>(null);
+  const [showBcc, setShowBcc] = useState(false);
+  const [showReplyTo, setShowReplyTo] = useState(false);
+  // A pasted or chosen picture that could not be used: said under the message, never in a browser pop-up.
+  const [imageProblem, setImageProblem] = useState("");
   const [previewing, setPreviewing] = useState(false);
   const [previewError, setPreviewError] = useState("");
   async function showPreview() {
@@ -201,7 +226,7 @@ export default function EmailComposer({
         { to: field("to"), contactId, leadId, choice: field("banner") },
         secure && allFiles.length > 0 ? { files: allFiles, days } : undefined,
       );
-      setPreview({ html, to: field("to"), replyTo: field("replyTo"), sentState: state });
+      setPreview({ html, to: field("to"), cc: field("cc"), bcc: field("bcc"), replyTo: field("replyTo"), sentState: state });
     } catch {
       setPreviewError("Couldn't build the preview — try again.");
     } finally {
@@ -240,25 +265,32 @@ export default function EmailComposer({
 
       {open && (
         <ModalPortal>
+        {/*
+          OUTLOOK'S LAYOUT (Sean, 2026-10-15: "Can we not build this as our email
+          editor? I find this one is so hard to work with"): nearly the whole
+          screen; the ribbon along the top; Send on the left of compact To / Cc /
+          Subject rows; attachments as chips under them; then the message on a
+          white page — what the customer will see — using all the height left.
+        */}
         <div
-          className="fixed inset-0 z-50 flex items-start justify-center bg-black/70 p-4 pt-8 overflow-y-auto"
+          className="fixed inset-0 z-50 flex items-stretch justify-center bg-black/70 p-0 sm:p-3"
           onPointerDown={(e) => e.target === e.currentTarget && setOpen(false)}
         >
-          <div className="card w-full max-w-3xl pb-6">
-            <div className="flex items-center justify-between mb-4">
-              <h2 className="text-xl font-bold text-white">✉️ Send email</h2>
+          <div className="flex h-full w-full max-w-[1500px] flex-col overflow-hidden border border-white/10 bg-card shadow-2xl sm:rounded-xl">
+            <div className="flex items-center justify-between gap-3 border-b border-white/10 px-4 py-2">
+              <h2 className="truncate text-sm font-semibold text-white">{subject.trim() || "New email"}</h2>
               <button
                 type="button"
                 onClick={() => setOpen(false)}
-                className="text-slate-400 hover:text-white text-2xl leading-none cursor-pointer"
+                className="grid size-8 place-items-center rounded-md text-slate-400 hover:bg-white/10 hover:text-white"
                 aria-label="Close"
               >
-                ×
+                <X className="size-4" />
               </button>
             </div>
 
             {!smtpConfigured ? (
-              <p className="text-sm text-slate-400">
+              <p className="p-6 text-sm text-slate-400">
                 Email sending isn&apos;t configured yet — add your SMTP details in{" "}
                 <Link href="/settings?tab=email" className="text-orange-400 hover:underline">
                   Settings → Email
@@ -266,106 +298,117 @@ export default function EmailComposer({
                 .
               </p>
             ) : (
-              <form ref={formRef} action={formAction} onSubmit={onSubmit} className="space-y-3">
+              <form ref={formRef} action={formAction} onSubmit={onSubmit} className="flex min-h-0 flex-1 flex-col">
           {/* "1" once the sender has read the sensitive-data warning and chosen to send anyway. */}
           <input ref={confirmedRef} type="hidden" name="sensitiveOk" defaultValue="" />
           {leadId && <input type="hidden" name="leadId" value={leadId} />}
           {contactId && <input type="hidden" name="contactId" value={contactId} />}
-          {/* On a customer's page: which of their deals this email is about (asked only when there are several). */}
-          {!leadId && deals.length > 0 && <DealField deals={deals} id="email-deal" />}
           <input type="hidden" name="revalidate" value={revalidate} />
-          <div className="grid md:grid-cols-2 gap-3">
-            <div>
-              <label className="label">To</label>
-              <input name="to" type="email" className="input" required defaultValue={defaultTo} />
-            </div>
-            <div>
-              <label className="label">Template</label>
-              <select
-                className="input"
-                defaultValue=""
-                onChange={(e) => applyTemplate(e.target.value)}
-              >
-                <option value="">— write from scratch —</option>
-                {templates.map((t) => (
-                  <option key={t.id} value={t.id}>
-                    {t.name}
-                  </option>
+
+          <EmailRibbon
+            // Built afresh once the editor exists: its state hook is bound to the editor it first sees, and a
+            // ribbon first drawn before the editor was ready stayed an empty strip until something was typed.
+            key={editor ? "ready" : "waiting"}
+            editor={editor}
+            onImageProblem={setImageProblem}
+            insert={
+              <>
+                <button type="button" onClick={() => uploadRef.current?.click()} className={RIBBON_TEXT_BUTTON} title={`Attach a file from your computer — up to ${EMAIL_UPLOAD_MAX_FILES} files, ${EMAIL_UPLOAD_MAX_BYTES / 1024 / 1024} MB in total`}>
+                  <Paperclip className="size-4" />Attach file
+                </button>
+                <button type="button" onClick={() => setAttachOpen(true)} className={RIBBON_TEXT_BUTTON} disabled={libraryDocs.length === 0} title="Attach a document from the library">
+                  <FileText className="size-4" />Library
+                </button>
+                {quotes.filter((q) => !attachedQuotes.includes(q.id)).map((q) => (
+                  <button
+                    key={q.id}
+                    type="button"
+                    onClick={() => setAttachedQuotes((a) => [...a, q.id])}
+                    className={RIBBON_TEXT_BUTTON}
+                    title={q.draft ? "Attaches the quote PDF. The quote is marked sent when the email goes." : "Attaches the quote PDF."}
+                  >
+                    <Receipt className="size-4" />Quote {q.label}
+                  </button>
                 ))}
-              </select>
+              </>
+            }
+            options={
+              <>
+                <select className={RIBBON_SELECT} defaultValue="" onChange={(e) => applyTemplate(e.target.value)} aria-label="Template" title="Start from a template">
+                  <option value="">Template…</option>
+                  {templates.map((t) => (
+                    <option key={t.id} value={t.id}>{t.name}</option>
+                  ))}
+                </select>
+                {banners.length > 0 && (
+                  <select
+                    name="banner"
+                    className={RIBBON_SELECT}
+                    defaultValue=""
+                    aria-label="Marketing banner"
+                    title="The marketing banner under your signature. A customer who opted out of marketing never gets one, whatever is chosen. Preview shows what goes out."
+                  >
+                    <option value="">Banner: {banners[0].name}</option>
+                    {banners.slice(1).map((banner) => (
+                      <option key={banner.id} value={banner.id}>Banner: {banner.name}</option>
+                    ))}
+                    <option value="none">No banner</option>
+                  </select>
+                )}
+              </>
+            }
+          />
+
+          {/* SEND on the left of the address rows, as in Outlook. */}
+          <div className="flex gap-3 border-b border-white/10 px-3 py-2.5">
+            <button
+              className="flex w-20 shrink-0 flex-col items-center justify-center gap-1 rounded-lg bg-orange-600 text-sm font-semibold text-white hover:bg-orange-500 disabled:opacity-60"
+              disabled={pending || checking}
+            >
+              <Send className="size-5" />
+              {pending ? "Sending…" : checking ? "Checking…" : "Send"}
+            </button>
+            <div className="min-w-0 flex-1 space-y-1.5">
+              <AddressRow label="To">
+                {/* A list, as in Outlook: the server checks every address (parseAddressList). */}
+                <input name="to" type="text" className={ADDRESS_INPUT} required defaultValue={defaultTo} autoComplete="off" spellCheck={false} placeholder="name@example.com, …" />
+              </AddressRow>
+              <AddressRow label="Cc">
+                <input name="cc" type="text" className={ADDRESS_INPUT} autoComplete="off" spellCheck={false} />
+                {!showBcc && <button type="button" className="shrink-0 text-xs text-slate-400 hover:text-white" onClick={() => setShowBcc(true)}>Bcc</button>}
+                {!showReplyTo && <button type="button" className="shrink-0 text-xs text-slate-400 hover:text-white" onClick={() => setShowReplyTo(true)} title={`Replies go to: ${defaultReplyTo || "the workspace address"}`}>Reply to</button>}
+              </AddressRow>
+              {/* Hidden, not removed, until asked for: a value typed in stays when the row is folded away again. */}
+              <AddressRow label="Bcc" className={showBcc ? "" : "hidden"}>
+                <input name="bcc" type="text" className={ADDRESS_INPUT} autoComplete="off" spellCheck={false} />
+              </AddressRow>
+              <AddressRow label="Reply to" className={showReplyTo ? "" : "hidden"}>
+                <input
+                  name="replyTo"
+                  className={ADDRESS_INPUT}
+                  defaultValue={defaultReplyTo}
+                  placeholder="you@example.com, crm@example.com"
+                  // NOT type="email". That input type validates a SINGLE address, so
+                  // the browser would reject the two-address default this field exists
+                  // to provide. The server validates the list — see parseReplyTo — and
+                  // it is the server's answer that matters, since the value reaches a
+                  // mail header.
+                  type="text"
+                  autoComplete="off"
+                  spellCheck={false}
+                  title="Where the customer's reply goes. The CRM mailbox keeps the reply on this record, and yours puts it in your normal inbox. Clear it to send replies to the workspace address only."
+                />
+              </AddressRow>
+              <AddressRow label="Subject">
+                <input name="subject" className={ADDRESS_INPUT} required value={subject} onChange={(e) => setSubject(e.target.value)} />
+              </AddressRow>
+              {/* On a customer's page: which of their deals this email is about (asked only when there are several). */}
+              {!leadId && deals.length > 0 && <div className="pt-1"><DealField deals={deals} id="email-deal" /></div>}
             </div>
           </div>
-          <div>
-            <label className="label" htmlFor="email-reply-to">
-              Reply to
-            </label>
-            <input
-              id="email-reply-to"
-              name="replyTo"
-              className="input"
-              defaultValue={defaultReplyTo}
-              placeholder="you@example.com, crm@example.com"
-              // NOT type="email". That input type validates a SINGLE address, so
-              // the browser would reject the two-address default this field exists
-              // to provide. The server validates the list — see parseReplyTo — and
-              // it is the server's answer that matters, since the value reaches a
-              // mail header.
-              type="text"
-              autoComplete="off"
-              spellCheck={false}
-              aria-describedby="email-reply-to-hint"
-            />
-            <p id="email-reply-to-hint" className="mt-1 text-xs text-slate-400">
-              Where the customer&apos;s reply goes. Separate several with commas — the CRM mailbox
-              keeps the reply on this record, and yours puts it in your normal inbox. Clear it to
-              send replies to the workspace address only.
-            </p>
-          </div>
-          <div>
-            <label className="label">Subject</label>
-            <input
-              name="subject"
-              className="input"
-              required
-              value={subject}
-              onChange={(e) => setSubject(e.target.value)}
-            />
-          </div>
-          <div>
-            <label className="label">Message</label>
-            <input type="hidden" name="bodyHtml" value={body} />
-            <RichTextEditor value={body} onChange={setBody} emailTools />
-            <AiCheckButton
-              getDraft={() => body.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim()}
-              contactId={contactId}
-              leadId={leadId}
-              configured={aiConfigured}
-            />
-            <p className="text-xs text-slate-500 mt-1">
-              Your branded signature is added automatically —{" "}
-              <Link href="/settings?tab=team" className="text-orange-400 hover:underline">
-                edit it in Settings
-              </Link>
-              .
-            </p>
-          </div>
-          {banners.length > 0 && (
-            <div>
-              <label className="label" htmlFor="email-banner">Marketing banner</label>
-              <select id="email-banner" name="banner" className="input" defaultValue="">
-                <option value="">{banners[0].name} (the usual one)</option>
-                {banners.slice(1).map((banner) => (
-                  <option key={banner.id} value={banner.id}>{banner.name}</option>
-                ))}
-                <option value="none">No banner on this email</option>
-              </select>
-              <p className="mt-1 text-xs text-slate-500">
-                A customer who opted out of marketing never gets a banner, whatever is chosen here. Preview shows what goes out.
-              </p>
-            </div>
-          )}
-          <div>
-            <label className="label">Attachments</label>
+
+          {/* ATTACHMENTS as chips under the subject, as in Outlook. */}
+          <div className={allFiles.length > 0 ? "border-b border-white/10 px-3 py-2" : "hidden"}>
             <div className="flex flex-wrap items-center gap-1.5">
               {attached.map((id) => {
                 const d = libraryDocs.find((x) => x.id === id);
@@ -412,41 +455,7 @@ export default function EmailComposer({
                   </button>
                 </span>
               ))}
-              {quotes.filter((q) => !attachedQuotes.includes(q.id)).map((q) => (
-                <button
-                  key={q.id}
-                  type="button"
-                  onClick={() => setAttachedQuotes((a) => [...a, q.id])}
-                  className="btn-secondary btn-sm"
-                  title={q.draft ? "Attaches the quote PDF. The quote is marked sent when the email goes." : "Attaches the quote PDF."}
-                >
-                  🧾 Attach quote {q.label}
-                </button>
-              ))}
-              <button
-                type="button"
-                onClick={() => setAttachOpen(true)}
-                className="btn-secondary btn-sm"
-                disabled={libraryDocs.length === 0}
-              >
-                📎 Attach from library
-              </button>
-              <button type="button" onClick={() => uploadRef.current?.click()} className="btn-secondary btn-sm">
-                ⬆ Upload a file
-              </button>
-              {/* The form posts this input's files; it always holds exactly the chips above. */}
-              <input
-                ref={uploadRef}
-                type="file"
-                name="upload"
-                multiple
-                className="hidden"
-                onChange={(e) => setUploadFiles([...uploads, ...Array.from(e.target.files ?? [])])}
-              />
             </div>
-            <p className="mt-1 text-xs text-slate-500">
-              Up to {EMAIL_UPLOAD_MAX_FILES} files from your computer, {EMAIL_UPLOAD_MAX_BYTES / 1024 / 1024} MB in total.
-            </p>
             {attached.map((id) => (
               <input key={id} type="hidden" name="attach" value={id} />
             ))}
@@ -459,7 +468,7 @@ export default function EmailComposer({
               </p>
             )}
             {allFiles.length > 0 && (
-              <div className="mt-3 rounded-lg border border-slate-800 p-3">
+              <div className="mt-2">
                 <label className="flex items-start gap-2 text-sm text-slate-200">
                   <input type="checkbox" name="secureLinks" checked={secure} onChange={(e) => setSecure(e.target.checked)} className="mt-0.5" />
                   <span>
@@ -483,6 +492,44 @@ export default function EmailComposer({
                 {linkHint && <p className="mt-2 text-xs text-amber-300">{linkHint}</p>}
               </div>
             )}
+          </div>
+          {/* The form posts this input's files; it always holds exactly the chips above. Opened from Insert → Attach file. */}
+          <input
+            ref={uploadRef}
+            type="file"
+            name="upload"
+            multiple
+            className="hidden"
+            onChange={(e) => setUploadFiles([...uploads, ...Array.from(e.target.files ?? [])])}
+          />
+
+          {/* THE MESSAGE, on a white page: what the customer sees. It takes all the height that is left. */}
+          <div
+            className="min-h-0 flex-1 cursor-text overflow-y-auto bg-white"
+            // A click anywhere on the white page — below the last line too — puts the cursor in the message, as in Outlook.
+            onMouseDown={(event) => {
+              const target = event.target as HTMLElement;
+              if (!editor || target.closest(".ProseMirror, a, button, input")) return;
+              event.preventDefault();
+              editor.chain().focus("end").run();
+            }}
+          >
+            <input type="hidden" name="bodyHtml" value={body} />
+            <RichTextEditor
+              value={body}
+              onChange={setBody}
+              emailTools
+              appearance="page"
+              showToolbar={false}
+              pasteImages
+              onImageProblem={setImageProblem}
+              onEditorReady={setEditor}
+              placeholder="Write your message — paste a screenshot with Ctrl+V"
+            />
+            <p className="px-6 pb-6 text-xs text-slate-400 sm:px-10">
+              Your signature{banners.length > 0 ? " and banner are" : " is"} added here when it is sent — Preview shows exactly what goes.{" "}
+              <Link href="/settings?tab=team" className="text-blue-600 hover:underline">Edit your signature</Link>
+            </p>
           </div>
 
           {attachOpen && (
@@ -566,6 +613,19 @@ export default function EmailComposer({
                 <dl className="mb-3 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-sm">
                   <dt className="text-slate-500">To</dt>
                   <dd className="text-slate-200 break-all">{preview.to || "—"}</dd>
+                  {preview.cc && (
+                    <>
+                      <dt className="text-slate-500">Cc</dt>
+                      <dd className="text-slate-200 break-all">{preview.cc}</dd>
+                    </>
+                  )}
+                  {/* Bcc is shown to the sender only — it is not in the email the others receive. */}
+                  {preview.bcc && (
+                    <>
+                      <dt className="text-slate-500">Bcc</dt>
+                      <dd className="text-slate-200 break-all">{preview.bcc} <span className="text-slate-500">(not shown to the others)</span></dd>
+                    </>
+                  )}
                   {preview.replyTo && (
                     <>
                       <dt className="text-slate-500">Reply to</dt>
@@ -601,6 +661,8 @@ export default function EmailComposer({
               </div>
             </div>
           )}
+          {/* The foot of the window: anything to read before it goes, and the secondary actions. Send is top left. */}
+          <div className="space-y-2 border-t border-white/10 px-3 py-2.5">
           {warning && (
             <div role="alertdialog" aria-labelledby="send-warning-title" className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-4">
               <p id="send-warning-title" className="text-sm font-semibold text-amber-200">Check before you send</p>
@@ -617,16 +679,21 @@ export default function EmailComposer({
           {state?.error && <p className="text-sm text-red-400">{state.error}</p>}
           {state?.ok && <p className="text-sm text-emerald-400">{state.ok}</p>}
           {previewError && <p className="text-sm text-red-400">{previewError}</p>}
-          <div className="flex gap-2">
-            <button className="btn-primary" disabled={pending || checking}>
-              {pending ? "Sending…" : checking ? "Checking…" : "Send email"}
-            </button>
-            <button type="button" onClick={showPreview} className="btn-secondary" disabled={previewing || pending}>
+          {imageProblem && <p className="text-sm text-amber-300">{imageProblem} <button type="button" className="underline" onClick={() => setImageProblem("")}>OK</button></p>}
+          <div className="flex flex-wrap items-center gap-2">
+            <button type="button" onClick={showPreview} className="btn-secondary btn-sm" disabled={previewing || pending}>
               {previewing ? "Building preview…" : "👁 Preview"}
             </button>
-            <button type="button" onClick={() => setOpen(false)} className="btn-secondary">
-              {state?.ok ? "Close" : "Cancel"}
+            <AiCheckButton
+              getDraft={() => body.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim()}
+              contactId={contactId}
+              leadId={leadId}
+              configured={aiConfigured}
+            />
+            <button type="button" onClick={() => setOpen(false)} className="btn-secondary btn-sm ml-auto">
+              {state?.ok ? "Close" : "Discard"}
             </button>
+          </div>
           </div>
         </form>
             )}

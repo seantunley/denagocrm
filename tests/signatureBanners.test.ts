@@ -340,7 +340,9 @@ test("the sender may pick among their own live banners, or none — never anythi
   for (const forged of ["off", "someone-elses", "made-up"]) assert.equal(chooseBanner(mine, forged)?.id, "promo", `${forged} falls back to the default`);
   assert.equal(chooseBanner([], "standing"), null);
   const composer = src("src/components/EmailComposer.tsx");
-  assert.match(composer, /<option value="none">No banner on this email<\/option>/);
+  // On the ribbon's Options now: the usual one first, the sender's others, or none.
+  assert.match(composer, /<select\s+name="banner"/);
+  assert.match(composer, /<option value="none">No banner<\/option>/);
   assert.match(src("src/app/actions/emails.ts"), /const choice = String\(formData\.get\("banner"\) \?\? ""\)\.slice\(0, 64\);/);
 });
 
