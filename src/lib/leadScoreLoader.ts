@@ -98,6 +98,37 @@ export async function scoreLeads(leads: ScorableLead[], now: Date = new Date()):
   const customerWrote = byCustomer(customerInbound, (row) => row._max.occurredAt);
   const customerActivity = byCustomer(customerDone, (row) => row._max.doneAt);
 
+  /*
+   * QUOTES ARE PART OF THE CONTACT. A quote that has reached the customer —
+   * emailed from the CRM, opened, or signed — is contact at that moment; and a
+   * quote at all, even a draft, means the deal is being worked. Both read on the
+   * lead AND on its customer with no deal (a quote made for the customer
+   * directly), the same widening as the messages above. Without this a lead in
+   * Quoted, whose quote went out from Outlook, scored "New lead — not contacted
+   * yet" (Sean, 2026-10-15).
+   */
+  const [leadQuotes, customerQuotes] = await Promise.all([
+    prisma.quote.findMany({ where: { leadId, deletedAt: null }, select: { leadId: true, emailedAt: true, viewedAt: true, signedAt: true } }),
+    customerOf.size
+      ? prisma.quote.findMany({ where: { contactId, leadId: null, deletedAt: null }, select: { contactId: true, emailedAt: true, viewedAt: true, signedAt: true } })
+      : Promise.resolve([] as { contactId: string | null; emailedAt: Date | null; viewedAt: Date | null; signedAt: Date | null }[]),
+  ]);
+  const reached = (quote: { emailedAt: Date | null; viewedAt: Date | null; signedAt: Date | null }) => latest(latest(quote.emailedAt, quote.viewedAt), quote.signedAt);
+  const quoteTouch = new Map<string, Date | null>();
+  const quoted = new Set<string>();
+  for (const quote of leadQuotes) {
+    if (!quote.leadId) continue;
+    quoted.add(quote.leadId);
+    quoteTouch.set(quote.leadId, latest(quoteTouch.get(quote.leadId), reached(quote)));
+  }
+  const customerQuoteTouch = new Map<string, Date | null>();
+  const customerQuoted = new Set<string>();
+  for (const quote of customerQuotes) {
+    if (!quote.contactId) continue;
+    customerQuoted.add(quote.contactId);
+    customerQuoteTouch.set(quote.contactId, latest(customerQuoteTouch.get(quote.contactId), reached(quote)));
+  }
+
   const byLead = <T extends { leadId: string | null }, V>(rows: T[], pick: (row: T) => V) =>
     new Map(rows.filter((row) => row.leadId).map((row) => [row.leadId as string, pick(row)]));
   const lastComm = byLead(contact, (row) => row._max.occurredAt);
@@ -120,13 +151,17 @@ export async function scoreLeads(leads: ScorableLead[], now: Date = new Date()):
           stageIsClosed: lead.stage.isClosed,
           daysInStage: Math.floor((now.getTime() - lead.stageEnteredAt.getTime()) / DAY_MS),
           staleAfterDays: lead.stage.staleAfterDays,
-          lastContactAt: latest(latest(lastComm.get(lead.id), lastDone.get(lead.id)), latest(customerComm.get(customer), customerActivity.get(customer))),
+          lastContactAt: latest(
+            latest(latest(lastComm.get(lead.id), lastDone.get(lead.id)), latest(customerComm.get(customer), customerActivity.get(customer))),
+            latest(quoteTouch.get(lead.id), customerQuoteTouch.get(customer)),
+          ),
           lastInboundAt: latest(lastInbound.get(lead.id), customerWrote.get(customer)),
           quoteViewedAt: quoteViewed.get(lead.id) ?? null,
           quoteSentNotSigned: quoteOutstanding.has(lead.id),
           hasOverdueActivity: next !== null && next < now,
           nextPlannedActivityAt: next,
           createdAt: lead.createdAt,
+          hasQuote: quoted.has(lead.id) || customerQuoted.has(customer),
         },
         now,
       ),

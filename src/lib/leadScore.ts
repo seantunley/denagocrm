@@ -46,6 +46,14 @@ export type LeadScoreInput = {
   /** Earliest planned activity (may itself be overdue); null = no next step. */
   nextPlannedActivityAt: Date | null;
   createdAt: Date;
+  /**
+   * A quote exists for this deal — on the lead, or made for its customer on no
+   * deal — even if nothing shows it went out. It is not contact; it is why
+   * "not contacted yet" would be the wrong thing to say (Sean, 2026-10-15: a
+   * lead in Quoted, its quote emailed from Outlook, scored "New lead — not
+   * contacted yet"). Optional: a caller that does not know says nothing new.
+   */
+  hasQuote?: boolean;
 };
 
 export type LeadScore = {
@@ -156,7 +164,16 @@ export function scoreLead(input: LeadScoreInput, now: Date = new Date()): LeadSc
   // ── Contact / silence ─────────────────────────────────────────────────────
   // Exclusive with "awaiting": when the customer wrote last, the silence is ours
   // and the awaiting reason already says so in better words.
-  if (input.lastContactAt === null) {
+  if (input.lastContactAt === null && input.hasQuote) {
+    // A QUOTE EXISTS, so somebody has been working with this customer — the CRM
+    // just holds no record of reaching them (most often: the quote went out from
+    // an ordinary mail program). Said as what is known, not as "not contacted".
+    hits.push({
+      points: W.neverContacted,
+      reason: "Quote ready — no contact with the customer logged in the CRM",
+      action: "Log how the quote reached them, or send it from the CRM",
+    });
+  } else if (input.lastContactAt === null) {
     const age = calendarDaysAgo(input.createdAt, now);
     hits.push(
       age <= NEW_LEAD_DAYS
