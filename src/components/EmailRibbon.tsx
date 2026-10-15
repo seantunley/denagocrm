@@ -169,8 +169,8 @@ export default function EmailRibbon({
             const file = event.target.files?.[0];
             event.target.value = "";
             if (!file) return;
-            const src = await emailReadyImage(file);
-            if (src) run().setImage({ src }).run();
+            const picture = await emailReadyImage(file);
+            if (picture) run().setImage(picture).run();
             else onImageProblem?.(`“${file.name}” couldn't be added — use a PNG, JPEG, GIF or WebP image under about 2.5 MB.`);
           }}
         />
