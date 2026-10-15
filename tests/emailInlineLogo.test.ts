@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { inlineImages, readCapped, type ImageLoader } from "../src/lib/emailInlineLogo";
+import { MAX_PASTED_IMAGE_BYTES, inlineImages, pastedImage, readCapped, type ImageLoader } from "../src/lib/emailInlineLogo";
 
 // Mail clients block remote images until the reader allows them, so a linked
 // logo arrived as a broken-image box. The workspace's logo is now embedded as a
@@ -22,11 +22,30 @@ test("the workspace logo becomes a cid attachment, escaped & and all", async () 
   assert.equal(out.html.match(/src="cid:logo1@inline"/g)?.length, 2);
 });
 
-test("other images — the tracking pixel, data URIs, http — are untouched", async () => {
-  const html = `<img src="https://crm.example.com/api/track/o/abc" width="1"><img src="data:image/png;base64,AAAA"><img src="http://x/y.png">`;
+test("other images — the tracking pixel, http, an SVG or oversized data image — are untouched", async () => {
+  const big = Buffer.alloc(MAX_PASTED_IMAGE_BYTES + 1).toString("base64");
+  const html = `<img src="https://crm.example.com/api/track/o/abc" width="1"><img src="data:image/svg+xml;base64,PHN2Zy8+"><img src="data:image/png;base64,${big}"><img src="data:text/html;base64,PGI+"><img src="http://x/y.png">`;
   const out = await inlineImages(html, loader);
   assert.equal(out.html, html);
   assert.equal(out.attachments.length, 0);
+});
+
+test("A SCREENSHOT PASTED INTO THE MESSAGE travels inside it (Sean, 2026-10-15: 'paste in image screenshots, like Outlook')", async () => {
+  // Most mail clients will not show a data: image (Gmail strips them), so it becomes an inline attachment.
+  const shot = Buffer.from([0x89, 0x50, 0x4e, 0x47, 1, 2, 3]).toString("base64");
+  const jpeg = Buffer.from([0xff, 0xd8, 0xff, 9]).toString("base64");
+  const html = `<p>See below</p><img src="data:image/png;base64,${shot}"><img src="${LOGO}"><img src="data:image/jpeg;base64,${jpeg}"><img src="data:image/png;base64,${shot}">`;
+  const out = await inlineImages(html, loader);
+  assert.doesNotMatch(out.html, /data:image/);
+  assert.equal(out.attachments.length, 3, "the same image twice is attached once");
+  assert.deepEqual(out.attachments.map((a) => [a.filename, a.contentType]), [["image1.png", "image/png"], ["logo2.png", "image/png"], ["image3.jpg", "image/jpeg"]]);
+  assert.equal(out.attachments[0].content.toString("base64"), shot);
+  assert.equal((out.html.match(/src="cid:image1@inline"/g) ?? []).length, 2);
+  assert.match(out.html, /<p>See below<\/p>/);
+  // Only the four photo types, never SVG (it can carry script), and only up to the size limit.
+  assert.equal(pastedImage("data:image/gif;base64,R0lGOD")?.contentType, "image/gif");
+  assert.equal(pastedImage("data:image/webp;base64,UklGRg==")?.contentType, "image/webp");
+  for (const bad of ["data:image/svg+xml;base64,PHN2Zy8+", "data:text/plain;base64,aGk=", "data:image/png,notbase64", "https://x/y.png", "data:image/png;base64,"]) assert.equal(pastedImage(bad), null, bad);
 });
 
 test("a loader failure leaves the linked logo, never fails the email", async () => {

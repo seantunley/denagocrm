@@ -58,13 +58,15 @@ import { isPublicBlobRef, readFile, saveFile, savePublicAsset, storesPrivately }
  */
 /** Each attached quote is a PDF rendered during the send; a handful is plenty for one email. */
 const MAX_QUOTES_PER_EMAIL = 5;
+/** The most addresses in each of To, Cc and Bcc. A customer email, not a mailing — that is what campaigns are for. */
+const MAX_RECIPIENTS = 10;
 
 const NO_PRIVATE_STORE =
   "Secure links need the private file store, which is not switched on for this CRM. Nothing was sent — untick “Send as a secure link” to attach the files instead.";
 import { MAX_LOGO_BYTES } from "@/lib/emailInlineLogo";
 import { emailUploads } from "@/lib/emailUploads";
 import { resolveActingTenant } from "@/lib/tenantContext";
-import { parseReplyTo } from "@/lib/replyToAddresses";
+import { parseAddressList, parseReplyTo } from "@/lib/replyToAddresses";
 import { tenantOrigin } from "@/lib/tenantOrigin";
 import { withActingStaffScope } from "@/lib/actingScope";
 import { EMAIL_OPEN_TRACKING_KEY } from "@/lib/emailOpenTracking";
@@ -176,6 +178,8 @@ async function customerAddresses(user: ComposerUser, contactId: string | null, l
  */
 export async function checkComposerEmail(input: {
   to: string;
+  cc?: string;
+  bcc?: string;
   subject: string;
   bodyHtml: string;
   contactId?: string | null;
@@ -190,7 +194,8 @@ export async function checkComposerEmail(input: {
     bodyText: htmlToText(String(input.bodyHtml ?? "")).slice(0, 100_000),
     fileNames: (input.fileNames ?? []).slice(0, 30).map((name) => String(name).slice(0, 200)),
     secureLinks: Boolean(input.secureLinks),
-    to: String(input.to ?? "").slice(0, 1000),
+    // Everyone it goes to — To, Cc and Bcc — as Send asks it.
+    to: [input.to, input.cc, input.bcc].map((list) => String(list ?? "").slice(0, 1000)).filter(Boolean).join(", "),
     customerAddresses: await customerAddresses(user, input.contactId || null, input.leadId || null),
   });
   return { warning: warning?.text ?? null };
@@ -229,7 +234,23 @@ export async function sendEmailAction(
   // was gated on the VIEW list, so a read-only rep could send on the company's
   // behalf. Sending is not a read, whatever the record gate says.
   const user = await requireAnyPermission(...CUSTOMER_RECORD_WRITE_PERMISSIONS);
-  const to = String(formData.get("to") ?? "").trim();
+  // TO, CC AND BCC: address lists, as in Outlook (Sean, 2026-10-15). Each reaches a
+  // mail header, so each is held to the rule Reply-to is — every part a plain
+  // address, refused rather than trimmed — and To, which used to go to the mail
+  // server as typed with no check here at all, now is too.
+  const lists = {
+    To: parseAddressList(String(formData.get("to") ?? ""), MAX_RECIPIENTS),
+    Cc: parseAddressList(String(formData.get("cc") ?? ""), MAX_RECIPIENTS),
+    Bcc: parseAddressList(String(formData.get("bcc") ?? ""), MAX_RECIPIENTS),
+  };
+  for (const [field, list] of Object.entries(lists)) {
+    if (!list.ok) return { error: `${field} is not a valid address list: ${list.invalid.join(", ")}` };
+  }
+  const to = lists.To.ok ? lists.To.value ?? "" : "";
+  const cc = lists.Cc.ok ? lists.Cc.value ?? "" : "";
+  const bcc = lists.Bcc.ok ? lists.Bcc.value ?? "" : "";
+  /** Everyone it goes to — what the check before sending asks about. */
+  const everyone = [to, cc, bcc].filter(Boolean).join(", ");
   const subject = String(formData.get("subject") ?? "").trim();
   const bodyHtml = String(formData.get("bodyHtml") ?? "").trim();
   // "The customer in general" (DealField's last option) is no deal.
@@ -390,7 +411,8 @@ export async function sendEmailAction(
   // is pressed and shows the warning; here it is asked again, and an email that
   // would be warned about is refused unless the sender confirmed it. Before any
   // file is stored or any link is made.
-  const warning = sendWarning({ subject, bodyText, fileNames, secureLinks: secure, to, customerAddresses: await customerAddresses(user, contactId, leadId) });
+  // Asked of EVERYONE it goes to: an ID number copied to a stranger is no safer for being in Cc.
+  const warning = sendWarning({ subject, bodyText, fileNames, secureLinks: secure, to: everyone, customerAddresses: await customerAddresses(user, contactId, leadId) });
   const confirmed = formData.get("sensitiveOk") === "1";
   if (warning && !confirmed) {
     return { error: `${warning.text} Press Send again to see the warning and confirm.` };
@@ -434,6 +456,8 @@ export async function sendEmailAction(
     text: `${bodyText}${linksText}\n\n--\n${[user.name, profile.name, profile.phone].filter((s) => s && s.trim()).join(" · ")}`,
     html,
     attachments,
+    ...(cc ? { cc } : {}),
+    ...(bcc ? { bcc } : {}),
     replyTo: replyTo.value ?? undefined,
     // "Opened" on the timeline entry below (unless switched off in Settings → Email).
     trackOpens: true,
@@ -495,10 +519,11 @@ export async function sendEmailAction(
         type: "email",
         direction: "outbound",
         subject,
+        // Who else it went to is part of what was sent, and is otherwise only in the recipients' copies.
         body:
-          attachedNames.length > 0
+          (attachedNames.length > 0
             ? `${bodyText}\n\n[${filesNote}: ${attachedNames.join(", ")}]`
-            : bodyText,
+            : bodyText) + (cc ? `\n[Cc: ${cc}]` : "") + (bcc ? `\n[Bcc: ${bcc}]` : ""),
         leadId,
         contactId,
         userId: user.id,
@@ -517,7 +542,7 @@ export async function sendEmailAction(
     // exists only in the recipient's copy.
     // The subject and file names are what the sender typed, and may hold the very
     // number the check flagged. The email keeps them; this entry does not.
-    summary: `Sent email to ${to}: “${redactSensitive(subject)}”${
+    summary: `Sent email to ${to}${cc ? ` (cc ${cc})` : ""}${bcc ? ` (bcc ${bcc})` : ""}: “${redactSensitive(subject)}”${
       attachedNames.length > 0 ? ` (${secure ? `as secure links until ${expiresLabel}` : "attached"}: ${redactSensitive(attachedNames.join(", "))})` : ""
     }${replyTo.value ? ` (replies to: ${replyTo.value})` : ""}${
       // WHAT was flagged, never the number itself: an audit entry must not become a second copy of it.

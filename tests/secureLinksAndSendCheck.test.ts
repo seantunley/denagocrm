@@ -266,7 +266,8 @@ test("A FLAGGED NUMBER NEVER REACHES THE AUDIT ENTRY: the subject and file names
   // …and the audit entry is built from the redacted subject and file names — never the raw ones.
   const actions = src("src/app/actions/emails.ts");
   const audit = actions.slice(actions.indexOf('action: "email.sent"'), actions.indexOf("export async function sendTestEmail"));
-  assert.match(audit, /summary: `Sent email to \$\{to\}: “\$\{redactSensitive\(subject\)\}”/);
+  // (With whoever was copied in, now that there are Cc and Bcc — addresses, which the check never redacts.)
+  assert.match(audit, /summary: `Sent email to \$\{to\}\$\{cc \? ` \(cc \$\{cc\}\)` : ""\}\$\{bcc \? ` \(bcc \$\{bcc\}\)` : ""\}: “\$\{redactSensitive\(subject\)\}”/);
   assert.match(audit, /redactSensitive\(attachedNames\.join\(", "\)\)/);
   assert.doesNotMatch(audit, /\$\{subject\}|\$\{attachedNames/, "the raw subject or names must not be in the summary");
 });

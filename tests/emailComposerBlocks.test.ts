@@ -145,8 +145,10 @@ test("accessibility: layout tables announce as presentation, spacing is invisibl
 
 test("both email surfaces get the tools; the editor loads the nodes only when asked", () => {
   const editor = src("src/components/RichTextEditor.tsx");
-  assert.match(editor, /\.\.\.\(emailTools \? \[EmailButton, EmailDivider, EmailSpacer\] : \[\]\)/, "blocks are opt-in per surface");
-  assert.match(src("src/components/EmailComposer.tsx"), /<RichTextEditor value=\{body\} onChange=\{setBody\} emailTools \/>/);
+  // (With Outlook's formatting — typeface, size, highlight, alignment, indent — in the same opt-in list.)
+  assert.match(editor, /\.\.\.\(emailTools \? \[EmailButton, EmailDivider, EmailSpacer, FontFamily, FontSize, BackgroundColor, EmailBlockStyle\] : \[\]\)/, "blocks are opt-in per surface");
+  // The composer: the tools, on the white page, with its ribbon drawn above the address rows and pasted pictures allowed.
+  assert.match(src("src/components/EmailComposer.tsx"), /<RichTextEditor\s+value=\{body\}\s+onChange=\{setBody\}\s+emailTools\s+appearance="page"\s+showToolbar=\{false\}\s+pasteImages/);
   assert.match(src("src/components/marketing/TemplateWorkspace.tsx"), /emailTools\r?\n/, "template workspace opts in");
 });
 

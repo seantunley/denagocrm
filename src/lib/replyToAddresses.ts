@@ -61,6 +61,16 @@ export type ReplyToResult =
  * CRM mailbox is the same address.
  */
 export function parseReplyTo(raw: string): ReplyToResult {
+  return parseAddressList(raw, MAX_REPLY_TO);
+}
+
+/**
+ * The same rule for any address list that reaches a header — Reply-To, and the
+ * composer's To, Cc and Bcc (Sean, 2026-10-15: "Can we not build this as our
+ * email editor?", of Outlook's). Every part must be a plain address; none is
+ * quietly dropped; repeats go; at most `max`.
+ */
+export function parseAddressList(raw: string, max: number): ReplyToResult {
   const parts = raw
     .split(/[,;]/)
     .map((part) => part.trim())
@@ -80,7 +90,7 @@ export function parseReplyTo(raw: string): ReplyToResult {
   }
   // A cap, because this is a header and the field is free-form. Five is far more
   // than the two the default composes and still bounded.
-  if (unique.length > MAX_REPLY_TO) return { ok: false, invalid: [`more than ${MAX_REPLY_TO} addresses`] };
+  if (unique.length > max) return { ok: false, invalid: [`more than ${max} addresses`] };
   return { ok: true, value: unique.join(", ") };
 }
 

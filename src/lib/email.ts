@@ -83,6 +83,14 @@ export function personFrom(workspaceFrom: string, senderName: string): { name: s
 
 export async function sendEmail(input: {
   to: string;
+  /**
+   * Cc and Bcc, as comma-separated address lists — callers validate them
+   * (parseAddressList) exactly as they do `to`. Omitted when absent, so mail that
+   * names neither is what it was before these fields existed. Bcc never appears
+   * in the message itself; nodemailer only uses it to address the envelope.
+   */
+  cc?: string;
+  bcc?: string;
   subject: string;
   text: string;
   html?: string;
@@ -205,6 +213,8 @@ export async function sendEmail(input: {
     const info = await transporter.sendMail({
       from: (input.senderName && personFrom(workspaceFrom, input.senderName)) || workspaceFrom,
       to: input.to,
+      ...(input.cc ? { cc: input.cc } : {}),
+      ...(input.bcc ? { bcc: input.bcc } : {}),
       subject: input.subject,
       text,
       html: inline?.html ?? html,
