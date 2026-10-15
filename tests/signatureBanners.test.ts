@@ -180,7 +180,7 @@ test("a customer who opted out of marketing gets no banner — checked where eve
   const store = src("src/lib/signatureBannerStore.ts");
   assert.match(store, /where: \{ tenantId, marketingOptOut: true, id: \{ in: contactIds \} \}/);
   assert.match(store, /ciExactIds\("contactEmail", address\)/, "by the address typed, not only the record it is filed on");
-  const composer = src("src/app/actions/emails.ts");
+  const composer = src("src/lib/composerSend.ts");
   assert.match(composer, /bannerForEmail\(\{ tenantId, senderId: user\.id, \.\.\.recipient \}\)/);
   // messageHtml: the message plus its secure-link block when files go as links — the banner rules are unchanged by it.
   assert.match(composer, /composerHtml\(user, messageHtml, profile, \{ to, contactId, leadId, choice \}\)/);
@@ -236,7 +236,7 @@ test("review #851/2: a click is tied to its email whether or not open tracking i
   assert.match(email, /const referenced = withBannerRef\(html, newOpenToken\);/);
   assert.match(email, /if \(referenced\.ref\) logged\.bannerRef = bannerRef = referenced\.ref;/);
   assert.match(src("src/lib/outboundMessageLog.ts"), /\.\.\.\(msg\.bannerRef \? \{ bannerRef: msg\.bannerRef \} : \{\}\),/);
-  assert.match(src("src/app/actions/emails.ts"), /\.\.\.\(result\.bannerRef \? \{ bannerRef: result\.bannerRef \} : \{\}\),/);
+  assert.match(src("src/lib/composerSend.ts"), /\.\.\.\(result\.bannerRef \? \{ bannerRef: result\.bannerRef \} : \{\}\),/);
   assert.match(src("prisma/schema.prisma"), /bannerRef\s+String\?\s+@unique/);
 });
 
@@ -343,11 +343,11 @@ test("the sender may pick among their own live banners, or none — never anythi
   // On the ribbon's Options now: the usual one first, the sender's others, or none.
   assert.match(composer, /<select\s+name="banner"/);
   assert.match(composer, /<option value="none">No banner<\/option>/);
-  assert.match(src("src/app/actions/emails.ts"), /const choice = String\(formData\.get\("banner"\) \?\? ""\)\.slice\(0, 64\);/);
+  assert.match(src("src/lib/composerSend.ts"), /const choice = String\(formData\.get\("banner"\) \?\? ""\)\.slice\(0, 64\);/);
 });
 
 test("a preview's banner is not a tracked link, and a sent email's is", () => {
-  const composer = src("src/app/actions/emails.ts");
+  const composer = src("src/lib/composerSend.ts");
   assert.match(composer, /bannerHtml\(banner, preview \? banner\.linkUrl : bannerClickUrl\(origin, banner\.token\)\)/);
   // (Wrapped as bookkeeping: once the email has left, a failed count must not report the send as failed.)
   assert.match(composer, /if \(bannerId && bannerTenantId\) await bookkeeping\("count the banner", \(\) => recordBannerSent\(bannerTenantId, bannerId\)\);/);

@@ -7,7 +7,8 @@ const src = (path: string) => readFileSync(new URL(`../${path}`, import.meta.url
 test("Preview and Send build the email with the same function, so the preview is what goes out", () => {
   const actions = src("src/app/actions/emails.ts");
   const preview = actions.slice(actions.indexOf("export async function previewComposerEmail"), actions.indexOf("export async function sendEmailAction"));
-  const send = actions.slice(actions.indexOf("export async function sendEmailAction"), actions.indexOf("export async function sendTestEmail"));
+  // The send itself lives in lib/composerSend.ts (shared with scheduled sends), since 2026-10-15.
+  const send = src("src/lib/composerSend.ts").split("export async function sendComposerForm")[1];
   assert.match(preview, /requireAnyPermission\(\.\.\.CUSTOMER_RECORD_WRITE_PERMISSIONS\)/, "same gate as sending");
   assert.match(preview, /composerHtml\(user,/);
   // `messageHtml` is the message plus, when files go as secure links, the block that lists them. Send passes

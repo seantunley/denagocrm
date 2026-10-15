@@ -172,6 +172,55 @@ model SecureFileLink {
   @@index([communicationId])
 }
 
+/// An email written in the composer and not sent yet (Sean, 2026-10-15): a DRAFT
+/// kept as it is written, so closing the composer or the tab loses nothing; or a
+/// SCHEDULED send that the scheduled-emails cron sends at `sendAt`, as the person
+/// who scheduled it, with every check Send makes run again at that moment.
+///
+/// `status`: draft | scheduled | sending | sent | failed | cancelled. A row is
+/// claimed (scheduled → sending) in one statement before it is sent, so it can
+/// never go twice; one left in "sending" is shown as such, never retried.
+///
+/// Files: library versions and quotes are kept by id (`attachIds`, `quoteIds`)
+/// and read at send time. Files from the computer are kept only for a scheduled
+/// send — stored privately (`files`: name, type, size, storedRef) — never in a draft.
+model EmailDraft {
+  id            String    @id @default(cuid())
+  tenantId      String
+  /// The person writing it. Only they see their drafts; a scheduled send goes as them.
+  userId        String
+  contactId     String?
+  leadId        String?
+  to            String    @default("")
+  cc            String    @default("")
+  bcc           String    @default("")
+  replyTo       String    @default("")
+  subject       String    @default("")
+  bodyHtml      String    @default("")
+  attachIds     String[]  @default([])
+  quoteIds      String[]  @default([])
+  files         Json?
+  banner        String    @default("")
+  secureLinks   Boolean   @default(false)
+  secureDays    Int?
+  /// The timeline email this answers (Reply / Reply all).
+  inReplyToId   String?
+  /// The sender read the sensitive-data warning and chose to send (lib/sendCheck.ts).
+  sensitiveOk   Boolean   @default(false)
+  status        String    @default("draft")
+  sendAt        DateTime?
+  /// Why a scheduled send did not go — said on the record, in words.
+  error         String?
+  communicationId String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  @@index([tenantId, userId, status])
+  @@index([tenantId, contactId, status])
+  @@index([tenantId, leadId, status])
+  @@index([status, sendAt])
+}
+
 model LibraryVersion {
   id         String   @id @default(cuid())
   tenantId String? // Multi-tenancy (Phase B — additive/inert): owning tenant.

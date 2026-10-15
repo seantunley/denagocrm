@@ -190,6 +190,19 @@ export const AUTOMATIONS: Automation[] = [
     phases: ["survey-distribution-queue"],
   },
   {
+    key: "scheduled-emails",
+    notJourney: "Each one is an email a person wrote in the composer and chose to send later — it goes as them, at the time they chose.",
+    messagesAt: { label: "the customer's Communications tab", href: "/contacts" },
+    // Nothing to switch on: each is scheduled, and can be cancelled, by a person on the customer's record.
+    managedAt: { label: "Each customer's Communications tab", href: "/contacts" },
+    label: "Scheduled emails",
+    does: "Sends an email a person wrote and scheduled for later, at the time they chose, as them — with every check Send makes run again at that moment (their access, the quote, the sensitive-data check). Each email waiting is listed on the customer's record with who scheduled it and when it goes, and can be cancelled or taken back to edit until then. If it cannot go, it is not sent and the record says why.",
+    reaches: "customer",
+    channels: ["email"],
+    when: "Every 30 minutes, on the hour and half hour",
+    cron: "/api/cron/scheduled-emails",
+  },
+  {
     key: "campaigns",
     notJourney: "A person writes each campaign and a second person approves it.",
     messagesAt: { label: "each campaign", href: "/marketing/campaigns" },

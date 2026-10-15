@@ -128,7 +128,7 @@ test("a hostile value cannot reach the header through the DEFAULT either", () =>
 /* ── the wiring ─────────────────────────────────────────────────────────── */
 
 test("the action refuses an invalid list rather than sending without it", () => {
-  const code = shipped("src/app/actions/emails.ts");
+  const code = shipped("src/lib/composerSend.ts");
   const parse = code.indexOf("parseReplyTo(");
   const send = code.indexOf("await sendEmail({");
   assert.ok(parse > 0 && parse < send, "the list must be validated before the send");
@@ -176,7 +176,7 @@ test("the field is not type=email, which would reject the default", () => {
 test("the audit records where replies were directed", () => {
   // The header exists only in the recipient's copy once the message has left, so
   // this is the only place it can be recovered.
-  assert.match(shipped("src/app/actions/emails.ts"), /replies to: \$\{replyTo\.value\}/);
+  assert.match(shipped("src/lib/composerSend.ts"), /replies to: \$\{replyTo\.value\}/);
 });
 
 test("the default resolver cannot take down the pages that render it", () => {
