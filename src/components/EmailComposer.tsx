@@ -15,6 +15,8 @@ import EmailRibbon from "@/components/EmailRibbon";
 import type { Editor } from "@tiptap/react";
 import { FileText, Paperclip, Receipt, Send, Mail, X } from "lucide-react";
 import { EMAIL_UPLOAD_MAX_BYTES, EMAIL_UPLOAD_MAX_FILES } from "@/lib/emailUploads";
+import { COMPOSE_REPLY_EVENT, replyDraft, type ComposeReplyDetail } from "@/lib/emailReply";
+import { formatDateTime } from "@/lib/format";
 
 const RIBBON_TEXT_BUTTON = "inline-flex h-8 items-center gap-1.5 rounded-md px-2 text-xs text-slate-200 hover:bg-white/10 disabled:opacity-40";
 const RIBBON_SELECT = "h-8 max-w-48 rounded-md border border-white/10 bg-slate-900 px-2 text-xs text-slate-100";
@@ -132,6 +134,25 @@ export default function EmailComposer({
     sendEmailAction,
     undefined
   );
+
+  // REPLY / REPLY ALL / FORWARD from an email on the timeline (EmailReplyButtons): the composer opens with the
+  // email quoted, the addresses filled and — for a reply — the email it answers, so it threads in their mailbox.
+  // Tied to the send result it was opened against (as the preview is): once that email has gone, it lapses, and
+  // the next email is not quietly copied to the last one's Cc.
+  const [reply, setReply] = useState<{ to: string; cc: string; inReplyTo: string; sentState: typeof state } | null>(null);
+  const replying = reply && reply.sentState === state ? reply : null;
+  useEffect(() => {
+    const onReply = (event: Event) => {
+      const { email, kind } = (event as CustomEvent<ComposeReplyDetail>).detail;
+      const draft = replyDraft(email, kind, { customer: defaultTo, when: formatDateTime(email.occurredAt) });
+      setReply({ to: kind === "forward" ? "" : defaultTo, cc: draft.cc, inReplyTo: kind === "forward" ? "" : email.id, sentState: state });
+      setSubject(draft.subject);
+      setBody(draft.html);
+      setOpen(true);
+    };
+    window.addEventListener(COMPOSE_REPLY_EVENT, onReply);
+    return () => window.removeEventListener(COMPOSE_REPLY_EVENT, onReply);
+  }, [defaultTo, state]);
 
   // Secure links: send the files as expiring, recallable links instead of attachments (lib/secureLinks.ts).
   const [secure, setSecure] = useState(false);
@@ -323,6 +344,8 @@ export default function EmailComposer({
               <form ref={formRef} action={formAction} onSubmit={onSubmit} className="flex min-h-0 flex-1 flex-col">
           {/* "1" once the sender has read the sensitive-data warning and chosen to send anyway. */}
           <input ref={confirmedRef} type="hidden" name="sensitiveOk" defaultValue="" />
+          {/* The timeline email this answers: the server checks it is this customer's and threads the reply to it. */}
+          <input type="hidden" name="inReplyTo" value={replying?.inReplyTo ?? ""} />
           {leadId && <input type="hidden" name="leadId" value={leadId} />}
           {contactId && <input type="hidden" name="contactId" value={contactId} />}
           <input type="hidden" name="revalidate" value={revalidate} />
@@ -394,10 +417,10 @@ export default function EmailComposer({
             <div className="min-w-0 flex-1 space-y-1.5">
               <AddressRow label="To">
                 {/* A list, as in Outlook: the server checks every address (parseAddressList). */}
-                <input name="to" type="text" className={ADDRESS_INPUT} required defaultValue={defaultTo} autoComplete="off" spellCheck={false} placeholder="name@example.com, …" onBlur={loadSignature} />
+                <input name="to" type="text" className={ADDRESS_INPUT} required defaultValue={replying ? replying.to : defaultTo} autoComplete="off" spellCheck={false} placeholder="name@example.com, …" onBlur={loadSignature} />
               </AddressRow>
               <AddressRow label="Cc">
-                <input name="cc" type="text" className={ADDRESS_INPUT} autoComplete="off" spellCheck={false} />
+                <input name="cc" type="text" className={ADDRESS_INPUT} defaultValue={replying?.cc ?? ""} autoComplete="off" spellCheck={false} />
                 {!showBcc && <button type="button" className="shrink-0 text-xs text-slate-400 hover:text-white" onClick={() => setShowBcc(true)}>Bcc</button>}
                 {!showReplyTo && <button type="button" className="shrink-0 text-xs text-slate-400 hover:text-white" onClick={() => setShowReplyTo(true)} title={`Replies go to: ${defaultReplyTo || "the workspace address"}`}>Reply to</button>}
               </AddressRow>
