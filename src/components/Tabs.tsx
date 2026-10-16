@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, type ReactNode } from "react";
+import { useId, useState, type ReactNode } from "react";
 import { cn } from "@/lib/utils";
 
 export type TabDef = {
@@ -24,7 +24,9 @@ export type TabDef = {
   lazy?: boolean;
 };
 
-export default function Tabs({ tabs, initialKey }: { tabs: TabDef[]; initialKey?: string }) {
+export default function Tabs({ tabs, initialKey, overflowKeys = [] }: { tabs: TabDef[]; initialKey?: string; overflowKeys?: string[] }) {
+  const id = useId();
+  const overflow = tabs.filter((tab) => overflowKeys.includes(tab.key));
   const first =
     initialKey && tabs.some((t) => t.key === initialKey) ? initialKey : tabs[0]?.key;
   const [active, setActive] = useState(first);
@@ -37,16 +39,18 @@ export default function Tabs({ tabs, initialKey }: { tabs: TabDef[]; initialKey?
 
   return (
     <div>
-      <div className="mb-5 flex w-fit max-w-full gap-1 overflow-x-auto overflow-y-hidden rounded-xl border border-border bg-card/70 p-1 shadow-sm [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-        {tabs.map((t) => (
+      <div role="group" aria-label="Record sections" className="mb-5 flex w-fit max-w-full gap-1 overflow-x-auto overflow-y-hidden rounded-xl border border-border bg-card/70 p-1 shadow-sm [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+        {tabs.filter((tab) => !overflowKeys.includes(tab.key)).map((t) => (
           <button
             key={t.key}
             type="button"
             onClick={() => select(t.key)}
+            aria-pressed={active === t.key}
+            aria-controls={`${id}-${t.key}`}
             className={cn(
-              "select-none whitespace-nowrap rounded-lg px-3.5 py-2 text-[13px] font-medium transition-all",
+              "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary select-none whitespace-nowrap rounded-lg px-3.5 py-2 text-[13px] font-medium transition-all",
               active === t.key
-                ? "bg-white/[0.07] text-foreground shadow-sm"
+                ? "bg-primary/10 text-primary shadow-sm"
                 : "text-muted-foreground hover:bg-white/[0.035] hover:text-foreground"
             )}
           >
@@ -65,10 +69,14 @@ export default function Tabs({ tabs, initialKey }: { tabs: TabDef[]; initialKey?
             )}
           </button>
         ))}
+        {overflow.length > 0 && <select aria-label="More customer sections" value={overflowKeys.includes(active ?? "") ? active : ""} onChange={(event) => event.target.value && select(event.target.value)} className={cn("min-h-10 max-w-40 shrink-0 rounded-lg bg-card px-2 text-[13px] font-medium focus-visible:ring-2 focus-visible:ring-primary", overflowKeys.includes(active ?? "") ? "text-primary" : "text-muted-foreground")}>
+          <option value="" disabled>More</option>
+          {overflow.map((tab) => <option key={tab.key} value={tab.key}>{tab.label}{tab.count ? ` (${tab.count})` : ""}</option>)}
+        </select>}
       </div>
       {/* Panels stay mounted so in-progress form input survives tab switches */}
       {tabs.map((t) => (
-        <div key={t.key} hidden={active !== t.key} className="space-y-6">
+        <div key={t.key} id={`${id}-${t.key}`} aria-label={t.label} hidden={active !== t.key} className="space-y-6">
           {!t.lazy || opened.includes(t.key) ? t.content : null}
         </div>
       ))}

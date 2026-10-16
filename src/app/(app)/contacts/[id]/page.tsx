@@ -3,7 +3,10 @@ import { SaveForm, SaveButton } from "@/components/SaveForm";
 import { notFound } from "next/navigation";
 import { prisma } from "@/lib/db";
 import { deleteContact } from "@/app/actions/contacts";
-import CommsTimeline from "@/components/CommsTimeline";
+import CustomerComposer from "@/components/CustomerComposer";
+import CustomerLogForm from "@/components/CustomerLogForm";
+import { Popover, PopoverTrigger, PopoverContent } from "@/components/ui/popover";
+import { Mail, Phone, MoreHorizontal, Info, CalendarDays } from "lucide-react";
 import SecureLinksPanel from "@/components/SecureLinksPanel";
 import CustomFieldsCard from "@/components/custom-fields/CustomFieldsCard";
 import DocumentsPanel from "@/components/DocumentsPanel";
@@ -52,10 +55,13 @@ export const maxDuration = 300;
 
 export default async function ContactDetailPage({
   params,
+  searchParams,
 }: {
+  searchParams: Promise<{ tab?: string }>;
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
+  const { tab } = await searchParams;
   const user = await requireUser();
   const isOwner = await isTenantOwner();
   // Same default as the lead page — this person plus the mailbox IMAP reads, so a
@@ -71,6 +77,7 @@ export default async function ContactDetailPage({
     hasPermission(user, "jobcards.manage"),
   ]);
   const canCreateQuote = canDuplicateQuotes;
+  const [canEditContact, canDeleteContact] = await Promise.all([hasPermission(user, "contacts.edit"), hasPermission(user, "contacts.delete")]);
   const contact = await prisma.contact.findUnique({
     where: { id },
     include: {
@@ -246,6 +253,31 @@ export default async function ContactDetailPage({
     // Said which deal it belongs to, when it is a deal's entry.
     .map((c) => (c.leadId && dealTitle.has(c.leadId) ? { ...c, ownerLabel: `Deal: ${dealTitle.get(c.leadId)}` } : c));
   const health = await contactHealth(contact.id);
+  const nextActivity = activities.find((activity) => activity.status === "planned");
+  const visibleOpenDeals = myDeals.filter((deal) => deal.status === "open");
+  const context = <>
+    <section className="rounded-xl border border-border bg-card p-4">
+      <h2 className="mb-3 flex items-center gap-2 text-sm font-semibold"><CalendarDays className="size-4 text-muted-foreground" />Next action</h2>
+      {nextActivity ? <>
+        <p className="text-sm font-medium">{nextActivity.summary}</p>
+        <p className={`mt-1 text-xs ${nextActivity.dueDate < new Date() ? "text-amber-400" : "text-muted-foreground"}`}>{nextActivity.dueDate < new Date() ? "Overdue · " : ""}{formatDateTime(nextActivity.dueDate)}</p>
+        <p className="mt-1 text-xs text-muted-foreground">{nextActivity.assignedTo?.name ?? "Unassigned"}</p>
+        {nextActivity.note && <p className="mt-2 whitespace-pre-wrap break-words text-xs text-muted-foreground">{nextActivity.note}</p>}
+      </> : <p className="text-sm text-muted-foreground">No follow-up scheduled.</p>}
+      <Link href={`${path}?tab=activities`} className="mt-3 inline-flex text-xs font-medium text-primary hover:underline">{nextActivity ? "Manage activities" : "Schedule an activity"}</Link>
+    </section>
+    <section className="rounded-xl border border-border bg-card p-4">
+      <h2 className="mb-3 text-sm font-semibold">Open deals <span className="ml-1 text-xs text-muted-foreground">{visibleOpenDeals.length}</span></h2>
+      {visibleOpenDeals.length === 0 ? <p className="text-sm text-muted-foreground">No open deals.</p> : <ul className="divide-y divide-border">{visibleOpenDeals.map((deal) => <li key={deal.id} className="space-y-2 py-3 first:pt-0 last:pb-0">
+        <Link href={`/leads/${deal.id}`} className="block break-words text-sm font-medium hover:text-primary">{deal.title}</Link>
+        {deal.product && <p className="text-xs text-muted-foreground">{deal.product.name}</p>}
+        <div className="flex flex-wrap items-center justify-between gap-2 text-xs"><span className="rounded-md bg-muted px-2 py-1 text-muted-foreground">{deal.stage.name}</span><span>{formatZAR(deal.valueCents)}</span></div>
+      </li>)}</ul>}
+      {contact.quotes.length > 0 && <div className="mt-4 border-t border-border pt-3"><p className="text-xs text-muted-foreground">Latest quote</p><Link href={`${path}?tab=documents`} className="mt-1 block text-sm hover:text-primary">Q-{contact.quotes[0].number} · {contact.quotes[0].status}</Link><p className="mt-1 text-xs text-muted-foreground">{formatZAR(payableTotalCents(contact.quotes[0]))}</p></div>}
+    </section>
+    <details className="rounded-xl border border-border bg-card p-4"><summary className="cursor-pointer text-sm font-medium">Secure links</summary><div className="mt-3"><SecureLinksPanel contactId={contact.id} /></div></details>
+  </>;
+
 
   return (
     <EntityDetailShell
@@ -253,25 +285,19 @@ export default async function ContactDetailPage({
       backLabel="Contacts"
       eyebrow={contact.isCompany ? "Company account" : "Customer profile"}
       title={contactName(contact)}
-      status={<StatusPill tone={health.tier === "healthy" ? "success" : health.tier === "at_risk" ? "danger" : "warning"}>{healthLabels[health.tier]} · {health.score}</StatusPill>}
-      description={[contact.email, contact.phone, contact.city].filter(Boolean).join(" · ") || "No contact details recorded"}
-      meta={`${contact.owner ? `Owner: ${contact.owner.name}` : "No owner assigned"} · added${contact.createdBy ? ` by ${contact.createdBy.name}` : ""} at ${formatDateTime(contact.createdAt)}`}
-      facts={[
-        ...(automotiveOn ? [{ label: "Vehicles", value: contact.vehicles.length }] : []),
-        { label: "Open leads", value: contact.leads.filter((lead) => lead.status === "open").length },
-        { label: "Activities", value: activities.filter((activity) => activity.status === "planned").length },
-        { label: "Documents", value: looseDocuments.length + quoteDocuments.length },
-      ]}
+      status={<Popover><PopoverTrigger asChild><button type="button" className="inline-flex items-center gap-1 rounded-md focus-visible:ring-2 focus-visible:ring-primary" aria-label="Explain customer health score"><StatusPill tone={health.tier === "healthy" || health.tier === "vip" ? "success" : health.tier === "at_risk" ? "danger" : "warning"}>{healthLabels[health.tier]} · {health.score}/100</StatusPill><Info className="size-3.5 text-muted-foreground" /></button></PopoverTrigger><PopoverContent><h2 className="text-sm font-semibold">Customer health · {health.score}/100</h2><p className="mt-2 text-xs text-muted-foreground">A relationship score based on ownership, service, contact recency, feedback, referrals and open issues.</p><ul className="mt-2 space-y-1 text-xs">{health.reasons.map((reason) => <li key={reason}>{reason}</li>)}</ul></PopoverContent></Popover>}
+      description={<div className="flex flex-wrap items-center gap-x-4 gap-y-1">
+        {contact.email && <a href={`mailto:${contact.email}`} className="inline-flex min-w-0 items-center gap-1.5 break-all hover:text-primary"><Mail className="size-3.5 shrink-0" />{contact.email}</a>}
+        {contact.phone && <a href={`tel:${contact.phone}`} className="inline-flex items-center gap-1.5 hover:text-primary"><Phone className="size-3.5" />{contact.phone}</a>}
+        {contact.city && <span>{contact.city}</span>}
+        {!contact.email && !contact.phone && !contact.city && "No contact details recorded"}
+      </div>}
+      meta={<div className="flex flex-wrap items-center gap-x-3 gap-y-1">{contact.owner ? <span>Owner: {contact.owner.name}</span> : canEditContact ? <Link href={`${path}/edit`} className="font-medium text-primary hover:underline">Assign owner</Link> : <span>No owner assigned</span>}<span>Added {formatDate(contact.createdAt)}{contact.createdBy ? ` by ${contact.createdBy.name}` : ""}</span></div>}
       actions={<>
           {/* Start the next thing for THIS customer from their own page (gap audit
               #24) — each pre-filled with them, and only for staff allowed to. */}
-          {canCreateLead && (
-            <QuickCreateButton kind="lead" defaults={{ contactId: contact.id, contactLabel: contactName(contact) }} className="btn-secondary">
-              New lead
-            </QuickCreateButton>
-          )}
           {canCreateQuote && (
-            <QuickCreateButton kind="quote" defaults={{ contactId: contact.id }} className="btn-secondary">
+            <QuickCreateButton kind="quote" defaults={{ contactId: contact.id }} className="btn-primary">
               New quote
             </QuickCreateButton>
           )}
@@ -279,6 +305,12 @@ export default async function ContactDetailPage({
             <Link href={`/test-drives?book=1&contactId=${contact.id}`} className="btn-secondary">
               Book test drive
             </Link>
+          )}
+          <Popover><PopoverTrigger asChild><button type="button" className="btn-secondary" aria-label="More customer actions"><MoreHorizontal className="size-4" />More</button></PopoverTrigger><PopoverContent align="end" className="flex w-56 flex-col gap-2 p-2">
+          {canCreateLead && (
+            <QuickCreateButton kind="lead" defaults={{ contactId: contact.id, contactLabel: contactName(contact) }} className="btn-secondary">
+              New lead
+            </QuickCreateButton>
           )}
           {automotiveOn && canOpenJobCard && contact.vehicles.length > 0 && (
             <QuickCreateButton
@@ -290,21 +322,72 @@ export default async function ContactDetailPage({
               New job card
             </QuickCreateButton>
           )}
-          <Link href={`/contacts/${contact.id}/edit`} className="btn-secondary">
-            Edit
-          </Link>
-          <ConfirmDelete
+          {canEditContact && <Link href={`/contacts/${contact.id}/edit`} className="btn-secondary">
+            Edit customer
+          </Link>}
+          {canDeleteContact && <ConfirmDelete
+            triggerClass="btn-secondary text-red-400"
             action={deleteContact.bind(null, contact.id)}
             title={`Delete contact ${contactName(contact)}?`}
             description={`The contact moves to the Trash and can be restored for 60 days.${automotiveOn ? " Their vehicles and job cards stay in place." : ""}`}
-          />
+          />}
+          </PopoverContent></Popover>
         </>}
     >
 
-      <div className="grid lg:grid-cols-3 gap-6">
-        <div className="lg:col-span-2 min-w-0">
+      <div>
+        <div className="min-w-0">
           <Tabs
+            key={tab ?? "comms"}
+            initialKey={tab ?? "comms"}
+            overflowKeys={["research", "referrals", "privacy"]}
             tabs={[
+              {
+                key: "comms",
+                label: "Communications",
+                count: comms.length,
+                content: (
+        <LeadTimeline
+          workspace={{ context, composer: <CustomerComposer email={<EmailComposer compactTrigger
+                      defaultTo={contact.email ?? ""}
+                      templates={renderedTemplates}
+                      smtpConfigured={smtpConfigured}
+                      contactId={contact.id}
+                      deals={openDeals}
+                      revalidate={path}
+                      libraryDocs={libraryDocs}
+                      quotes={composerQuotes(contact.quotes, canCancelQuotes, (company ?? (await getCompanyProfile())).name)}
+                      aiConfigured={aiOn}
+                      defaultReplyTo={replyToDefault}
+                    />} whatsapp={<WhatsAppPanel composerOnly phone={contact.whatsapp ?? contact.phone} contactId={contact.id} deals={openDeals} configured={waConfigured} revalidate={path} messages={[]} />} note={<CustomerLogForm mode="note" contactId={contact.id} deals={openDeals} revalidate={path} />} call={<CustomerLogForm mode="call" contactId={contact.id} deals={openDeals} revalidate={path} />} /> }}
+          contactId={contact.id}
+          revalidate={path}
+          audit={history}
+          auditDetail={await auditDetailFor(history)}
+          communications={comms}
+          activities={activities}
+          creationNote={
+            contact.notes
+              ? {
+                  text: contact.notes,
+                  when: contact.createdAt,
+                  who: contact.createdBy?.name ?? "System",
+                }
+              : null
+          }
+          notesFromLeadId={contact.notesFromLeadId}
+          leadNotes={myDeals
+            .filter((lead) => lead.notes?.trim())
+            .map((lead) => ({
+              leadId: lead.id,
+              title: lead.title,
+              text: lead.notes!,
+              when: lead.createdAt,
+              who: lead.createdBy?.name ?? `via ${lead.source}`,
+            }))}
+        />
+                ),
+              },
               {
                 key: "details",
                 label: "Details",
@@ -401,16 +484,16 @@ export default async function ContactDetailPage({
               }] : []),
               {
                 key: "leads",
-                label: "Leads",
-                count: contact.leads.length,
+                label: "Deals",
+                count: myDeals.length,
                 content: (
                   <div className="card">
                     <h2 className="font-semibold mb-3">Leads</h2>
-                    {contact.leads.length === 0 ? (
+                    {myDeals.length === 0 ? (
                       <p className="text-sm text-slate-400">No leads linked.</p>
                     ) : (
                       <ul className="space-y-2">
-                        {contact.leads.map((l) => (
+                        {myDeals.map((l) => (
                           <li key={l.id} className="flex items-center gap-2">
                             <Link
                               href={`/leads/${l.id}`}
@@ -435,52 +518,6 @@ export default async function ContactDetailPage({
                       </ul>
                     )}
                   </div>
-                ),
-              },
-              {
-                key: "comms",
-                label: "Communications",
-                count: comms.length,
-                content: (
-                  <>
-                    <EmailComposer
-                      defaultTo={contact.email ?? ""}
-                      templates={renderedTemplates}
-                      smtpConfigured={smtpConfigured}
-                      contactId={contact.id}
-                      deals={openDeals}
-                      revalidate={path}
-                      libraryDocs={libraryDocs}
-                      quotes={composerQuotes(contact.quotes, canCancelQuotes, (company ?? (await getCompanyProfile())).name)}
-                      aiConfigured={aiOn}
-                      defaultReplyTo={replyToDefault}
-                    />
-                    <WhatsAppPanel
-                      phone={contact.whatsapp ?? contact.phone}
-                      contactId={contact.id}
-                      deals={openDeals}
-                      configured={waConfigured}
-                      revalidate={path}
-                      messages={comms
-                        .filter((c) => c.type === "whatsapp")
-                        .slice()
-                        .reverse()
-                        .map((c) => ({
-                          id: c.id,
-                          direction: c.direction,
-                          body: c.body,
-                          occurredAt: c.occurredAt.toISOString(),
-                          userName: c.user.name,
-                        }))}
-                    />
-                    <SecureLinksPanel contactId={contact.id} />
-                    <CommsTimeline
-                      communications={comms}
-                      contactId={contact.id}
-                      deals={openDeals}
-                      revalidate={path}
-                    />
-                  </>
                 ),
               },
               {
@@ -758,34 +795,7 @@ export default async function ContactDetailPage({
           />
         </div>
 
-        <LeadTimeline
-          contactId={contact.id}
-          deals={openDeals}
-          revalidate={path}
-          audit={history}
-          auditDetail={await auditDetailFor(history)}
-          communications={comms}
-          activities={activities}
-          creationNote={
-            contact.notes
-              ? {
-                  text: contact.notes,
-                  when: contact.createdAt,
-                  who: contact.createdBy?.name ?? "System",
-                }
-              : null
-          }
-          notesFromLeadId={contact.notesFromLeadId}
-          leadNotes={contact.leads
-            .filter((lead) => lead.notes?.trim())
-            .map((lead) => ({
-              leadId: lead.id,
-              title: lead.title,
-              text: lead.notes!,
-              when: lead.createdAt,
-              who: lead.createdBy?.name ?? `via ${lead.source}`,
-            }))}
-        />
+
       </div>
     </EntityDetailShell>
   );

@@ -22,6 +22,7 @@ export default function WhatsAppPanel({
   configured,
   revalidate,
   deals = [],
+  composerOnly = false,
 }: {
   /** The customer's open deals, on a customer's page (lib/customerTimeline.dealChoice). */
   deals?: readonly DealOption[];
@@ -30,6 +31,7 @@ export default function WhatsAppPanel({
   leadId?: string;
   messages: WaMessage[];
   configured: boolean;
+  composerOnly?: boolean;
   revalidate: string;
 }) {
   const [state, formAction, pending] = useActionState<WaState | undefined, FormData>(
@@ -65,6 +67,7 @@ export default function WhatsAppPanel({
   }, [messages.length]);
 
   if (!phone) {
+    if (composerOnly) return <p className="text-sm text-muted-foreground">Add a phone number in customer details to use WhatsApp.</p>;
     return (
       <details className="card">
         <summary className="font-semibold cursor-pointer select-none">💬 WhatsApp</summary>
@@ -76,15 +79,15 @@ export default function WhatsAppPanel({
   const waLink = `https://wa.me/${phone.replace(/\D/g, "").replace(/^0/, "27")}`;
 
   return (
-    <details className="card" open={messages.length > 0}>
-      <summary className="font-semibold cursor-pointer select-none">
+    <details className={composerOnly ? "" : "card"} open={composerOnly || messages.length > 0}>
+      <summary className={composerOnly ? "hidden" : "font-semibold cursor-pointer select-none"}>
         💬 WhatsApp{" "}
         <span className="text-xs text-slate-500 font-normal">
           {messages.length > 0 ? `(${messages.length})` : ""}
         </span>
       </summary>
 
-      <div ref={scrollRef} className="mt-4 max-h-80 overflow-y-auto space-y-2 pr-1">
+      {!composerOnly && <div ref={scrollRef} className="mt-4 max-h-80 overflow-y-auto space-y-2 pr-1">
         {messages.length === 0 && (
           <p className="text-sm text-slate-500">No WhatsApp messages yet.</p>
         )}
@@ -113,8 +116,9 @@ export default function WhatsAppPanel({
             </p>
           </div>
         ))}
-      </div>
+      </div>}
 
+      {composerOnly && <p className="text-xs text-muted-foreground">Send a WhatsApp message to {phone}</p>}
       {configured ? (
         <form ref={formRef} action={formAction} className="mt-3 flex flex-wrap gap-2 items-end">
           <input type="hidden" name="phone" value={phone} />
@@ -125,6 +129,7 @@ export default function WhatsAppPanel({
           <input type="hidden" name="revalidate" value={revalidate} />
           <input type="hidden" name="compositionId" value={compositionId} />
           <textarea
+            aria-label="WhatsApp message"
             name="text"
             rows={1}
             required
@@ -133,7 +138,7 @@ export default function WhatsAppPanel({
           />
           {/* Not until the key exists: a send without it is refused. */}
           <button className="btn bg-emerald-700 text-white hover:bg-emerald-600" disabled={pending || !compositionId}>
-            {pending ? "…" : "Send"}
+            {pending ? "Sending…" : composerOnly ? "Send WhatsApp" : "Send"}
           </button>
         </form>
       ) : (
@@ -148,7 +153,8 @@ export default function WhatsAppPanel({
           </a>
         </p>
       )}
-      {state?.error && <p className="text-sm text-red-400 mt-2">{state.error}</p>}
+      {composerOnly && state?.ok && <p role="status" className="mt-2 text-sm text-emerald-400">Message queued. Delivery updates appear in the history.</p>}
+      {state?.error && <p role="alert" className="text-sm text-red-400 mt-2">{state.error}</p>}
     </details>
   );
 }

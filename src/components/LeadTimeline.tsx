@@ -1,10 +1,14 @@
-import { Check, Pin, PinOff } from "lucide-react";
+import { Check, Pin, PinOff, Mail, MessageSquare, Phone, StickyNote, CalendarDays, History } from "lucide-react";
+import CustomerHistory from "@/components/CustomerHistory";
+import { customerHistoryDay } from "@/lib/customerHistoryFilters";
+import ConfirmDelete from "@/components/ConfirmDelete";
 import { storedFileSrc } from "@/lib/storedFileSrc";
 import { completeActivity } from "@/app/actions/activities";
 import DealField from "@/components/DealField";
 import type { DealOption } from "@/lib/customerTimeline";
 import {
   addCommunication,
+  deleteCommunication,
   toggleCommunicationPin,
 } from "@/app/actions/communications";
 import {
@@ -63,6 +67,11 @@ type PinTarget = {
 
 type Item = {
   id: string;
+  type?: string;
+  communicationId?: string;
+  ownerLabel?: string | null;
+  attachmentType?: string | null;
+  deliveredAt?: Date | null;
   icon: React.ReactNode;
   title: string;
   body?: string | null;
@@ -121,7 +130,9 @@ export default async function LeadTimeline({
   leadNotes = [],
   notesFromLeadId = null,
   deals = [],
+  workspace,
 }: {
+  workspace?: { composer: React.ReactNode; context: React.ReactNode };
   /** The customer's open deals, on a customer's page (lib/customerTimeline.dealChoice). */
   deals?: readonly DealOption[];
   leadId?: string;
@@ -143,6 +154,9 @@ export default async function LeadTimeline({
     subject: string | null;
     body: string;
     attachmentUrl?: string | null;
+    attachmentType?: string | null;
+    deliveredAt?: Date | null;
+    ownerLabel?: string | null;
     occurredAt: Date;
     seenAt?: Date | null;
     openCount?: number;
@@ -215,6 +229,7 @@ export default async function LeadTimeline({
   const items: Item[] = [
     ...activities.map((activity): Item => ({
       id: `act-${activity.id}`,
+      type: "activity",
       icon: icons[activity.type] ?? icons.activity,
       title: activity.summary,
       body:
@@ -233,6 +248,7 @@ export default async function LeadTimeline({
     })),
     ...audit.map((entry): Item => ({
       id: `a-${entry.id}`,
+      type: "audit",
       icon: icons[entry.action.split(".")[0]] ?? "•",
       title: entry.summary,
       who: entry.userName,
@@ -241,6 +257,11 @@ export default async function LeadTimeline({
     })),
     ...communications.map((communication): Item => ({
       id: `c-${communication.id}`,
+      type: communication.type,
+      communicationId: communication.id,
+      ownerLabel: communication.ownerLabel,
+      attachmentType: communication.attachmentType,
+      deliveredAt: communication.direction === "outbound" ? communication.deliveredAt : null,
       icon: icons[communication.type] ?? "💬",
       title: `${communication.type.charAt(0).toUpperCase() + communication.type.slice(1)}${
         communication.direction ? ` (${communication.direction})` : ""
@@ -258,6 +279,7 @@ export default async function LeadTimeline({
       ? [
           {
             id: "creation-note",
+            type: "note",
             icon: icons.creation,
             title: contactId ? "Original contact note" : "Original lead note",
             body: creationNote.text,
@@ -272,6 +294,7 @@ export default async function LeadTimeline({
       : []),
     ...shownLeadNotes.map((note): Item => ({
       id: `lead-note-${note.leadId}`,
+      type: "note",
       icon: icons.lead,
       title: `Original lead note — ${note.title}`,
       body: note.text,
@@ -309,7 +332,7 @@ export default async function LeadTimeline({
             aria-label={
               isPinned ? "Unpin timeline entry" : "Pin timeline entry"
             }
-            className={`inline-flex h-9 items-center gap-1.5 rounded-full border px-3 text-xs font-semibold transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-orange-400/70 ${
+            className={workspace ? "inline-flex min-h-8 items-center gap-1.5 rounded-md px-2 text-xs text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-primary" : `inline-flex h-9 items-center gap-1.5 rounded-full border px-3 text-xs font-semibold transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-orange-400/70 ${
               isPinned
                 ? "border-orange-400/50 bg-orange-500/20 text-orange-100 shadow-sm shadow-orange-950/30 hover:bg-orange-500/30"
                 : "border-slate-600 bg-slate-800 text-slate-200 hover:border-orange-400/50 hover:bg-orange-500/10 hover:text-orange-100"
@@ -324,6 +347,51 @@ export default async function LeadTimeline({
           </SaveButton>
         </SaveForm>
       ) : null;
+
+    if (workspace) {
+      const Icon = item.type === "email" ? Mail : item.type === "call" ? Phone : item.type === "note" ? StickyNote : item.type === "activity" ? CalendarDays : item.type === "audit" ? History : MessageSquare;
+      return (
+        <li key={item.id} className={inPinnedShelf ? "min-w-0 border-l-2 border-amber-400/50 pl-3" : "group min-w-0 border-b border-border/60 py-4 last:border-0"}>
+          <div className="flex items-start gap-3">
+            {!inPinnedShelf && <span className="mt-0.5 rounded-lg bg-muted p-2 text-muted-foreground"><Icon className="size-4" aria-hidden="true" /></span>}
+            <div className="min-w-0 flex-1">
+              <div className="flex flex-wrap items-center gap-2">
+                <p className="break-words text-sm font-medium [overflow-wrap:anywhere]">{item.title}</p>
+                {item.type === "note" && <span className="text-xs text-muted-foreground">Internal</span>}
+                {item.pending && <span className="text-xs text-amber-400">{item.when < new Date() ? "Overdue" : "Upcoming"}</span>}
+                {item.activityStatus && item.activityStatus !== "planned" && <span className="text-xs text-muted-foreground">{activityStatusLabel(item.activityStatus)}</span>}
+              </div>
+              <p className="mt-1 text-xs text-muted-foreground">{item.who} · {formatDateTime(item.when)}</p>
+              {item.ownerLabel && <p className="mt-1 text-xs text-primary">{item.ownerLabel}</p>}
+              {item.body && item.body !== "🖼 Image" && (item.body.length > (inPinnedShelf ? 140 : 350) ? (
+                <details className="mt-2 text-sm text-muted-foreground">
+                  <summary className="cursor-pointer whitespace-pre-wrap break-words [overflow-wrap:anywhere]">{item.body.slice(0, inPinnedShelf ? 140 : 350)}… <span className="text-primary">Read more</span></summary>
+                  <p className="mt-2 whitespace-pre-wrap break-words [overflow-wrap:anywhere]">{item.body}</p>
+                </details>
+              ) : <p className="mt-2 whitespace-pre-wrap break-words text-sm text-muted-foreground [overflow-wrap:anywhere]">{item.body}</p>)}
+              {item.image && <a href={item.image} target="_blank" rel="noopener noreferrer" className="mt-2 inline-flex max-w-full flex-col gap-1 text-xs text-primary">
+                {(!item.attachmentType || item.attachmentType === "image") && (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img src={item.image} alt="Attached image" loading="lazy" className={inPinnedShelf ? "max-h-20 max-w-full rounded-md border border-border object-contain" : "max-h-28 max-w-full rounded-md border border-border object-contain"} />
+                )}
+                Open attachment in new tab
+              </a>}
+              {item.seen ? <p className="mt-2 text-xs text-emerald-400" title={item.type === "email" ? SEEN_HINT : undefined}>{item.seen}</p> : item.deliveredAt ? <p className="mt-2 text-xs text-emerald-400">Delivered · {formatDateTime(item.deliveredAt)}</p> : null}
+              {item.changed && item.changed.length > 0 && <details className="mt-2 text-xs"><summary className="cursor-pointer text-muted-foreground">{item.changed.length} field changes</summary><dl className="mt-2 space-y-2">{item.changed.map((change) => <div key={change.field}><dt className="font-medium">{fieldLabel(change.field)}</dt><dd className="break-words text-muted-foreground [overflow-wrap:anywhere]"><span className="line-through">{auditValue(change.before)}</span> → {auditValue(change.after)}</dd></div>)}</dl></details>}
+              <div className="mt-2 flex flex-wrap items-center gap-2">
+                {pinButton}
+                {!inPinnedShelf && item.communicationId && <ConfirmDelete action={deleteCommunication.bind(null, item.communicationId, revalidate)} title="Delete this timeline entry?" description="This cannot be undone. The deletion is recorded in the customer history." trigger="Delete entry" triggerClass="rounded-md px-2 py-2 text-xs text-muted-foreground hover:text-red-400 focus-visible:ring-2 focus-visible:ring-primary" />}
+              </div>
+              {!inPinnedShelf && item.pending && item.activityId && !isFutureDay(item.when) && <SaveForm action={completeActivity.bind(null, item.activityId)} className="mt-3 flex flex-wrap gap-2">
+                <input type="hidden" name="revalidate" value={revalidate} />
+                <input name="note" aria-label="Activity completion note" placeholder="Completion note (optional)" className="input min-w-0 flex-1 text-xs" />
+                <SaveButton className="btn-secondary btn-sm" pendingLabel="Saving…"><Check className="mr-1 size-3" />Mark done</SaveButton>
+              </SaveForm>}
+            </div>
+          </div>
+        </li>
+      );
+    }
 
     return (
       <li
@@ -455,6 +523,17 @@ export default async function LeadTimeline({
       </li>
     );
   };
+
+  if (workspace) {
+    // Pins are shortcuts in the sidebar; the complete, chronological history remains filterable.
+    const chronological = [...items].sort((a, b) => b.when.getTime() - a.when.getTime());
+    return <CustomerHistory
+      composer={workspace.composer}
+      context={workspace.context}
+      pinned={pinnedItems.map((item) => renderItem(item, true))}
+      entries={chronological.map((item) => ({ id: item.id, type: item.type ?? "audit", day: customerHistoryDay(item.when), content: renderItem(item) }))}
+    />;
+  }
 
   return (
     <div id="live-timeline" className="card min-w-0 scroll-mt-24">
