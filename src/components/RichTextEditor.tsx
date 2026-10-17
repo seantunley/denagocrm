@@ -1,6 +1,6 @@
 "use client";
 
-import { useEditor, EditorContent, type Editor } from "@tiptap/react";
+import { useEditor, useEditorState, EditorContent, type Editor } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
 import Image from "@tiptap/extension-image";
 import { Table, TableRow, TableCell, TableHeader } from "@tiptap/extension-table";
@@ -307,7 +307,7 @@ export default function RichTextEditor({
       handleDrop: (view, event) => takeImages(view, Array.from((event as DragEvent).dataTransfer?.files ?? [])),
       attributes: {
         class: appearance === "page"
-          ? "min-h-[50vh] px-6 py-5 sm:px-10 sm:py-8 bg-white text-[15px] leading-relaxed text-slate-900 outline-none [&_a]:text-blue-700 [&_a]:underline [&_table]:border-collapse [&_td]:border [&_td]:border-slate-300 [&_td]:px-2 [&_td]:py-1 [&_th]:border [&_th]:border-slate-300 [&_th]:px-2 [&_th]:py-1 [&_th]:bg-slate-100 [&_ul]:list-disc [&_ul]:pl-6 [&_ol]:list-decimal [&_ol]:pl-6 [&_h2]:text-xl [&_h2]:font-bold [&_p]:my-2 [&_img]:max-w-full [&_img]:h-auto [&_table[data-email-block]_td]:!border-0 [&_table[data-email-block]_td]:!px-0 [&_table[data-email-block]_td]:!py-0 [&_.ProseMirror-selectednode]:outline-2 [&_.ProseMirror-selectednode]:outline-dashed [&_.ProseMirror-selectednode]:outline-blue-500"
+          ? "min-h-72 px-5 py-6 sm:px-10 sm:py-8 bg-white text-[15px] leading-relaxed text-slate-900 outline-none [&_a]:text-blue-700 [&_a]:underline [&_table]:border-collapse [&_td]:border [&_td]:border-slate-300 [&_td]:px-2 [&_td]:py-1 [&_th]:border [&_th]:border-slate-300 [&_th]:px-2 [&_th]:py-1 [&_th]:bg-slate-100 [&_ul]:list-disc [&_ul]:pl-6 [&_ol]:list-decimal [&_ol]:pl-6 [&_h2]:text-xl [&_h2]:font-bold [&_p]:my-2 [&_img]:max-w-full [&_img]:h-auto [&_table[data-email-block]_td]:!border-0 [&_table[data-email-block]_td]:!px-0 [&_table[data-email-block]_td]:!py-0 [&_.ProseMirror-selectednode]:outline-2 [&_.ProseMirror-selectednode]:outline-dashed [&_.ProseMirror-selectednode]:outline-blue-500"
           :
           // The last four rules: email BLOCKS (button/divider/spacer) are layout
           // tables, so they must not inherit the bordered data-table styling
@@ -315,10 +315,15 @@ export default function RichTextEditor({
           // it looks like nothing happened.
           "prose-invert min-h-40 max-h-96 overflow-y-auto px-3 py-2 text-sm text-slate-100 outline-none [&_a]:text-orange-400 [&_a]:underline [&_table]:border-collapse [&_td]:border [&_td]:border-slate-600 [&_td]:px-2 [&_td]:py-1 [&_th]:border [&_th]:border-slate-600 [&_th]:px-2 [&_th]:py-1 [&_th]:bg-slate-800 [&_ul]:list-disc [&_ul]:pl-5 [&_ol]:list-decimal [&_ol]:pl-5 [&_h2]:text-lg [&_h2]:font-bold [&_img]:max-w-full [&_table[data-email-block]_td]:!border-0 [&_table[data-email-block]_td]:!px-0 [&_table[data-email-block]_td]:!py-0 [&_.ProseMirror-selectednode]:outline-2 [&_.ProseMirror-selectednode]:outline-dashed [&_.ProseMirror-selectednode]:outline-orange-500",
         "data-placeholder": placeholder ?? "",
+        role: "textbox",
+        "aria-label": emailTools ? "Email message" : "Message",
+        "aria-multiline": "true",
       },
     },
     onUpdate: ({ editor }) => onChange(editor.getHTML()),
   });
+
+  const empty = useEditorState({ editor, selector: ({ editor: current }) => current?.isEmpty ?? true });
 
   // keep external value changes (e.g. template applied) in sync
   useEffect(() => {
@@ -342,9 +347,10 @@ export default function RichTextEditor({
   if (appearance === "page") {
     // The page fills its container; the container scrolls. Clicking anywhere on the page puts the cursor in it.
     return (
-      <div className="flex min-h-full flex-col bg-white" onClick={(event) => { if (event.target === event.currentTarget) editor.chain().focus("end").run(); }}>
+      <div className="relative flex min-h-72 flex-col bg-white" onClick={(event) => { if (event.target === event.currentTarget) editor.chain().focus("end").run(); }}>
         {showToolbar && <Toolbar editor={editor} onImageUpload={onImageUpload} emailTools={emailTools} />}
-        <EditorContent editor={editor} className="flex-1 [&>.ProseMirror]:min-h-full" />
+        {empty && <p aria-hidden="true" className="pointer-events-none absolute left-5 top-8 text-[15px] text-slate-400 sm:left-10 sm:top-10">{placeholder ?? "Write your message…"}</p>}
+        <EditorContent editor={editor} className="min-h-72 flex-1" />
       </div>
     );
   }

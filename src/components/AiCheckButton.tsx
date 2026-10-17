@@ -16,11 +16,13 @@ export default function AiCheckButton({
   contactId,
   leadId,
   configured,
+  label = "Check my message",
 }: {
   getDraft: () => string;
   contactId?: string | null;
   leadId?: string | null;
   configured: boolean;
+  label?: string;
 }) {
   const [state, check, pending] = useActionState<AiCheckState | undefined, FormData>(
     checkDraft,
@@ -45,7 +47,7 @@ export default function AiCheckButton({
         disabled={pending}
         title="AI proofread: spelling, wrong names, odd numbers"
       >
-        {pending ? "✨ Checking…" : "✨ Check my message"}
+        {pending ? "✨ Checking…" : label}
       </button>
       {state?.ok && <span className="text-xs text-emerald-400 ml-2">Looks good ✓</span>}
       {state?.error && <span className="text-xs text-red-400 ml-2">{state.error}</span>}

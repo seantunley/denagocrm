@@ -237,7 +237,7 @@ export default async function ContactDetailPage({
     : [[], null];
   const libraryDocs = libraryDocuments
     .filter((d) => d.versions[0])
-    .map((d) => ({ id: d.versions[0].id, label: `${d.name} (v${d.versions[0].version})`, fileName: d.versions[0].fileName }));
+    .map((d) => ({ id: d.versions[0].id, label: `${d.name} (v${d.versions[0].version})`, fileName: d.versions[0].fileName, sizeBytes: d.versions[0].sizeBytes }));
   const vars = contactVars(contact, teamSignoff(await brandForTenant(await getActiveTenantId())));
   const renderedTemplates = templates.map((t) => ({
     id: t.id,
@@ -353,7 +353,7 @@ export default async function ContactDetailPage({
                 count: comms.length,
                 content: (
         <LeadTimeline
-          workspace={{ context, composer: <CustomerComposer email={<EmailComposer compactTrigger
+          workspace={{ context, composer: <CustomerComposer email={<EmailComposer key={contact.id} compactTrigger
                       defaultTo={contact.email ?? ""}
                       templates={renderedTemplates}
                       smtpConfigured={smtpConfigured}

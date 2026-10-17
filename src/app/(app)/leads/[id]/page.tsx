@@ -165,7 +165,7 @@ export default async function LeadDetailPage({
   ]);
   const libraryDocs = libraryDocuments
     .filter((d) => d.versions[0])
-    .map((d) => ({ id: d.versions[0].id, label: `${d.name} (v${d.versions[0].version})`, fileName: d.versions[0].fileName }));
+    .map((d) => ({ id: d.versions[0].id, label: `${d.name} (v${d.versions[0].version})`, fileName: d.versions[0].fileName, sizeBytes: d.versions[0].sizeBytes }));
   const vars = leadVars(lead, teamSignoff(await brandForTenant(await getActiveTenantId())), await getRegionalSettings());
   const renderedTemplates = templates.map((t) => ({
     id: t.id,
@@ -549,7 +549,7 @@ export default async function LeadDetailPage({
                 count: comms.length,
                 content: (
                   <>
-                    <EmailComposer
+                    <EmailComposer key={lead.id}
                       defaultTo={lead.email ?? ""}
                       templates={renderedTemplates}
                       smtpConfigured={smtpConfigured}
