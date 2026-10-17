@@ -13,7 +13,7 @@ import type { ComposerQuote } from "@/lib/composerQuotes";
 import RichTextEditor from "@/components/RichTextEditor";
 import EmailRibbon from "@/components/EmailRibbon";
 import type { Editor } from "@tiptap/react";
-import { FileText, Paperclip, Receipt, Send, X } from "lucide-react";
+import { FileText, Paperclip, Receipt, Send, Mail, X } from "lucide-react";
 import { EMAIL_UPLOAD_MAX_BYTES, EMAIL_UPLOAD_MAX_FILES } from "@/lib/emailUploads";
 
 const RIBBON_TEXT_BUTTON = "inline-flex h-8 items-center gap-1.5 rounded-md px-2 text-xs text-slate-200 hover:bg-white/10 disabled:opacity-40";
@@ -63,6 +63,7 @@ export default function EmailComposer({
   quotes = [],
   aiConfigured = false,
   defaultReplyTo = "",
+  compactTrigger = false,
 }: {
   /** The customer's open deals, on a customer's page (lib/customerTimeline.dealChoice). */
   deals?: readonly DealOption[];
@@ -88,6 +89,7 @@ export default function EmailComposer({
    * screen behaves exactly as it did before this field existed.
    */
   defaultReplyTo?: string;
+  compactTrigger?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const [subject, setSubject] = useState("");
@@ -257,10 +259,9 @@ export default function EmailComposer({
       <button
         type="button"
         onClick={() => setOpen(true)}
-        className="card w-full text-left font-semibold hover:border-orange-600/60 transition-colors cursor-pointer flex items-center justify-between"
+        className={compactTrigger ? "inline-flex min-h-10 items-center gap-2 rounded-lg px-3 text-sm font-medium text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary" : "card w-full text-left font-semibold hover:border-orange-600/60 transition-colors cursor-pointer flex items-center justify-between"}
       >
-        <span>✉️ Send email</span>
-        <span className="text-xs text-slate-500 font-normal">opens composer</span>
+        {compactTrigger ? <><Mail className="size-4" aria-hidden="true" />Email</> : <><span>✉️ Send email</span><span className="text-xs text-slate-500 font-normal">opens composer</span></>}
       </button>
 
       {open && (
