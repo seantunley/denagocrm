@@ -47,7 +47,9 @@ export default function EmailWaitingList({
   const button = "cursor-pointer text-xs text-orange-400 hover:underline";
 
   return (
-    <div className="card mt-2 space-y-2 py-3" data-testid="email-waiting">
+    // basis-full + order-last: in the customer workspace's button row (#891) the list takes a line of its own,
+    // under all the buttons. Neither does anything where the parent is not a flex row.
+    <div className="card order-last mt-2 basis-full space-y-2 py-3" data-testid="email-waiting">
       {items.map((item) => (
         <div key={item.id} className="flex flex-wrap items-baseline gap-x-3 gap-y-1 text-sm">
           <span className="shrink-0">
