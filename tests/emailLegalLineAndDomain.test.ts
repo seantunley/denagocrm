@@ -40,7 +40,7 @@ test("the legal line is added where every email leaves, shown in the preview, an
   // A tracking failure falls back to the email WITH its legal line, not without.
   assert.match(email, /openToken = undefined;\s*html = untracked;/);
   assert.match(email, /subject: input\.subject,\s*text,\s*html: inline\?\.html \?\? html,/);
-  const composer = src("src/app/actions/emails.ts");
+  const composer = src("src/lib/composerSend.ts");
   assert.match(composer, /const legalLine = preview \? await getSetting\(LEGAL_LINE_KEY\)\.catch\(\(\) => null\) : null;/, "preview only — the sender adds it for a real send");
   const actions = src("src/app/actions/signatureBanners.ts");
   const save = actions.slice(actions.indexOf("export async function saveEmailLegalLine"), actions.indexOf("export async function setMarketingBannerActive"));

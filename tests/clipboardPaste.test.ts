@@ -19,5 +19,6 @@ test("the message editor opens its own right-click menu, and Shift or a long-pre
   const editor = readFileSync("src/components/RichTextEditor.tsx", "utf8");
   assert.equal(editor.match(/<EditorContextMenu /g)?.length, 2, "both editor appearances get the menu");
   // Escape closing the menu (or a dialog) must not also close the composer and lose the email.
-  assert.match(readFileSync("src/components/EmailComposer.tsx", "utf8"), /e\.key === "Escape" && !e\.defaultPrevented && setOpen\(false\)/);
+  // (It closes the way the close button does — keeping the draft, #890.)
+  assert.match(readFileSync("src/components/EmailComposer.tsx", "utf8"), /e\.key === "Escape" && !e\.defaultPrevented && closeRef\.current\(\)/);
 });

@@ -135,7 +135,8 @@ test("the five card images travel inside the email; nothing else matches, and th
 });
 
 test("the send and the settings preview both use the workspace's saved design", () => {
-  for (const file of ["src/app/actions/emails.ts", "src/app/(app)/settings/page.tsx"]) {
+  // The send's HTML is built in lib/composerSend.ts (shared with scheduled sends) since 2026-10-15.
+  for (const file of ["src/lib/composerSend.ts", "src/app/(app)/settings/page.tsx"]) {
     const code = src(file);
     assert.match(code, /parseSignatureDesign\(await getSetting\(SIGNATURE_DESIGN_KEY\)\)/, file);
     assert.match(code, /signatureCompanyFrom\(profile, await tenantOrigin\([^;]*\), (signatureD|d)esign\)/, file);

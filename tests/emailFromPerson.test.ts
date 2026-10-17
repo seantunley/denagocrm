@@ -37,7 +37,7 @@ test("nothing to add, or nothing safe to parse → the workspace's From, unchang
 test("only mail a person writes carries it — the composer, a quote they email, a help-desk reply", () => {
   const code = (rel: string) => readFileSync(new URL(`../${rel}`, import.meta.url), "utf8");
   assert.match(code("src/lib/email.ts"), /from: \(input\.senderName && personFrom\(workspaceFrom, input\.senderName\)\) \|\| workspaceFrom,/);
-  assert.match(code("src/app/actions/emails.ts"), /senderName: user\.name,/);
+  assert.match(code("src/lib/composerSend.ts"), /senderName: user\.name,/);
   assert.match(code("src/app/actions/quoteEmail.ts"), /senderName: user\.name,/);
   assert.match(code("src/app/actions/helpdesk.ts"), /emailTicketReply\(item, replyId, body, user\.id, user\.name\)/);
   // Automatic mail stays the workspace's own.

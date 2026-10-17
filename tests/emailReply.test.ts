@@ -30,14 +30,14 @@ test("REVIEW OF #889: an inbound email's words never become the Cc, nor a note",
   assert.equal(replyDraft({ ...sent, cc: null }, "reply-all", { customer: "", when: "x" }).cc, "", "the body's [Cc: …] line is not read even on a sent email");
   const buttons = readFileSync(new URL("../src/components/EmailReplyButtons.tsx", import.meta.url), "utf8");
   assert.match(buttons, /\{email\.cc && <button/, "Reply all is offered on the stored Cc alone");
-  // The composer's send keeps it in its own column.
-  const actions = readFileSync(new URL("../src/app/actions/emails.ts", import.meta.url), "utf8");
+  // The composer's send keeps it in its own column (the send core, lib/composerSend.ts).
+  const actions = readFileSync(new URL("../src/lib/composerSend.ts", import.meta.url), "utf8");
   assert.match(actions, /\.\.\.\(cc \? \{ cc \} : \{\}\),/);
   assert.match(readFileSync(new URL("../prisma/migrations/20261014120000_communication_cc/migration.sql", import.meta.url), "utf8"), /ADD COLUMN IF NOT EXISTS "cc" TEXT;/);
 });
 
 test("REVIEW OF #889: a reply is threaded only to an email on a deal the sender may open", () => {
-  const actions = readFileSync(new URL("../src/app/actions/emails.ts", import.meta.url), "utf8");
+  const actions = readFileSync(new URL("../src/lib/composerSend.ts", import.meta.url), "utf8");
   assert.match(actions, /select: \{ messageId: true, references: true, leadId: true \},/);
   // A deal's page posts the deal alone: the email must be on THAT deal's timeline, not another of the customer's.
   assert.match(actions, /\.\.\.\(!postedContactId && leadId \? dealTimelineWhere\(\{ id: leadId, contactId \}\) : contactId \? \{ OR: \[\{ contactId \}, \{ lead: \{ contactId \} \}\] \} : \{ id: "" \}\),/);
