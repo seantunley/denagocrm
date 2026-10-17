@@ -9,6 +9,7 @@ import type { EditorView } from "@tiptap/pm/view";
 import { EmailBlockStyle, emailReadyImage } from "@/components/emailBlockStyle";
 import { useEffect, useRef, useState } from "react";
 import { TextPromptDialog } from "@/components/TextPromptDialog";
+import { EditorContextMenu } from "@/components/EditorContextMenu";
 import ModalPortal from "@/components/ui/modal-portal";
 import { EmailButton, EmailDivider, EmailSpacer } from "@/components/emailBlockNodes";
 import { EMAIL_BUTTON_COLORS } from "@/lib/emailBlockHtml";
@@ -344,7 +345,9 @@ export default function RichTextEditor({
     return (
       <div className="flex min-h-full flex-col bg-white" onClick={(event) => { if (event.target === event.currentTarget) editor.chain().focus("end").run(); }}>
         {showToolbar && <Toolbar editor={editor} onImageUpload={onImageUpload} emailTools={emailTools} />}
-        <EditorContent editor={editor} className="flex-1 [&>.ProseMirror]:min-h-full" />
+        <EditorContextMenu editor={editor} onPastedImages={(files) => takeImages(editor.view, files)} className="flex flex-1 flex-col">
+          <EditorContent editor={editor} className="flex-1 [&>.ProseMirror]:min-h-full" />
+        </EditorContextMenu>
       </div>
     );
   }
@@ -352,7 +355,9 @@ export default function RichTextEditor({
   return (
     <div className="rounded-lg border border-slate-700 bg-slate-900 focus-within:border-orange-500">
       {showToolbar && <Toolbar editor={editor} onImageUpload={onImageUpload} emailTools={emailTools} />}
-      <EditorContent editor={editor} />
+      <EditorContextMenu editor={editor} onPastedImages={(files) => takeImages(editor.view, files)}>
+        <EditorContent editor={editor} />
+      </EditorContextMenu>
     </div>
   );
 }

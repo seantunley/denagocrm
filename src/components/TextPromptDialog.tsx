@@ -22,8 +22,14 @@ export function TextPromptDialog({
   required = true,
   submitLabel = "Save",
   onSubmit,
+  open: openProp,
+  onOpenChange,
 }: {
-  trigger: ReactNode;
+  /** Omitted when the caller opens it itself (`open`) — e.g. from a right-click menu, which has no button to anchor to. */
+  trigger?: ReactNode;
+  /** Controlled open. Mount it when opening, so the field starts from `defaultValue`. */
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
   title: string;
   description?: string;
   label: string;
@@ -33,7 +39,12 @@ export function TextPromptDialog({
   submitLabel?: string;
   onSubmit: (value: string) => void | Promise<void>;
 }) {
-  const [open, setOpen] = useState(false);
+  const [ownOpen, setOwnOpen] = useState(false);
+  const open = openProp ?? ownOpen;
+  const setOpen = (next: boolean) => {
+    if (openProp === undefined) setOwnOpen(next);
+    onOpenChange?.(next);
+  };
   const [value, setValue] = useState(defaultValue);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -67,7 +78,7 @@ export function TextPromptDialog({
         }
       }}
     >
-      <DialogTrigger asChild>{trigger}</DialogTrigger>
+      {trigger && <DialogTrigger asChild>{trigger}</DialogTrigger>}
       <ResponsiveDialogContent className="sm:max-w-md" aria-busy={busy}>
         <DialogHeader className="text-left">
           <DialogTitle>{title}</DialogTitle>

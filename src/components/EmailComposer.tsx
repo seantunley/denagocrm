@@ -237,7 +237,9 @@ export default function EmailComposer({
   }
   useEffect(() => {
     if (!open) return;
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && setOpen(false);
+    // An Escape that closed something ON the composer — the right-click menu, a dialog (Radix marks it handled) —
+    // must not also close the composer and lose the email.
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && !e.defaultPrevented && setOpen(false);
     document.addEventListener("keydown", onKey);
     document.body.style.overflow = "hidden";
     return () => {
