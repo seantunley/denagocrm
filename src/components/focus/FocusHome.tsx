@@ -39,7 +39,8 @@ const MOOD = {
 function TargetRing({ progress, label }: { progress: number; label: string }) {
   const R = 46, C = 2 * Math.PI * R;
   return (
-    <Link href="/targets" className="group flex shrink-0 items-center gap-4" aria-label={`Sales target: ${label}`}>
+    // Targets is a desktop page (lib/phoneScope.ts): on a phone the progress is shown, but it opens nothing.
+    <Link href="/targets" className="group flex shrink-0 items-center gap-4 max-md:pointer-events-none" aria-label={`Sales target: ${label}`}>
       <div className="relative size-28">
         <svg viewBox="0 0 110 110" className="size-28 -rotate-90">
           <circle cx="55" cy="55" r={R} fill="none" stroke="currentColor" strokeWidth="9" className="text-foreground/10" />
@@ -93,7 +94,7 @@ export function FocusHome({
           {sales?.progress !== undefined ? (
             <TargetRing progress={sales.progress} label={`${sales.value} sold — ${sales.context}`} />
           ) : sales ? (
-            <Link href="/targets" className="group flex shrink-0 items-center gap-3 rounded-xl border border-dashed border-border px-4 py-3 text-sm text-muted-foreground hover:border-primary/50 hover:text-foreground">
+            <Link href="/targets" className="group flex shrink-0 items-center gap-3 rounded-xl border border-dashed border-border px-4 py-3 text-sm text-muted-foreground hover:border-primary/50 hover:text-foreground max-md:hidden">
               <Target className="size-5 text-primary" aria-hidden />
               <span><span className="block font-medium text-foreground">{sales.value} sold this month</span>Set a target to track progress</span>
             </Link>

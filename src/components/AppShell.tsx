@@ -59,6 +59,15 @@ function AccountCluster({ user, isOwner, tenantId }: { user: ShellUser; isOwner:
     // spending most of that 0.075 gap on the background it sits over. At /25 it
     // landed ~0.190 — a step too small to read as a group at all.
     <div className="flex items-center gap-0.5 rounded-xl border border-sidebar-border/70 bg-sidebar-accent p-1 transition-colors hover:border-sidebar-border hover:brightness-110">
+      {/* On a phone, Search lives up here — the bottom bar is the role's own places (MobileCompanionNav). */}
+      <button
+        type="button"
+        onClick={openCommandMenu}
+        aria-label="Search"
+        className="grid size-7 place-items-center rounded-lg text-muted-foreground hover:text-foreground md:hidden"
+      >
+        <Search className="size-3.5" />
+      </button>
       <SidebarHelpSettings isOwner={isOwner} permissions={user.permissions} compact />
       <div className="mx-0.5 h-5 w-px bg-sidebar-border/70" aria-hidden />
       <AccountMenu user={user} isOwner={isOwner} tenantId={tenantId} compact />

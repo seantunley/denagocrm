@@ -11,6 +11,9 @@
  * 768px; a tablet keeps every page.
  */
 
+/** What a phone is — the same line as Tailwind's `md:` (768px), which the CSS-only parts use. */
+export const PHONE_MEDIA = "(max-width: 767px)";
+
 /** The sections of the app a phone keeps — each with everything under it. */
 export const PHONE_PATHS = [
   // Sales
@@ -39,6 +42,18 @@ export function onPhone(pathname: string, tab?: string | null): boolean {
   if (NOT_ON_PHONE.some((base) => under(path, base))) return false;
   if (path === "/settings") return PHONE_SETTINGS_TABS.has(tab ?? "");
   return PHONE_PATHS.some((base) => under(path, base));
+}
+
+/**
+ * Whose bottom bar a phone shows (Sean, 2026-10-17). Someone who sells gets the
+ * sales bar even if they can also see the workshop or deliveries — a sales rep's
+ * role includes deliveries; workshop next; then deliveries alone.
+ */
+export function phoneRole(can: { sales: boolean; workshop: boolean; delivery: boolean }): "sales" | "workshop" | "delivery" | "other" {
+  if (can.sales) return "sales";
+  if (can.workshop) return "workshop";
+  if (can.delivery) return "delivery";
+  return "other";
 }
 
 /** A menu link, as the phone menu decides it (its own ?tab= included). */

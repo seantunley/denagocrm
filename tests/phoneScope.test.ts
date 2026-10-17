@@ -41,10 +41,42 @@ test("the phone menu is the full menu filtered: no Automation, Marketing or Gove
   assert.match(shell, /<PhoneGate>\{children\}<\/PhoneGate>/);
 });
 
-test("a page outside it says so on a phone, with Open anyway; the DAX button is hidden on a phone", () => {
+test("a page outside it is not available on a phone — the notice, and no way through; no DAX button", () => {
   const gate = readFileSync("src/components/PhoneGate.tsx", "utf8");
   assert.match(gate, /className="md:hidden" data-testid="phone-notice"/);
-  assert.match(gate, />\s*Open anyway\s*</);
+  // "The desktop features must not be available" (Sean, 2026-10-17): no Open anyway.
+  assert.doesNotMatch(gate, />\s*Open anyway\s*<|setOpenedAnyway|<button/);
   assert.match(gate, /<div className="max-md:hidden">\{children\}<\/div>/);
   assert.match(readFileSync("src/app/(app)/layout.tsx", "utf8"), /<div className="max-md:hidden"><AssistantBubble /);
+});
+
+test("the phone's bottom bar is the role's own places — no More", async () => {
+  const { phoneRole } = await import("../src/lib/phoneScope");
+  assert.equal(phoneRole({ sales: true, workshop: true, delivery: true }), "sales");
+  assert.equal(phoneRole({ sales: false, workshop: true, delivery: true }), "workshop");
+  assert.equal(phoneRole({ sales: false, workshop: false, delivery: true }), "delivery");
+  assert.equal(phoneRole({ sales: false, workshop: false, delivery: false }), "other");
+  const nav = readFileSync("src/components/MobileCompanionNav.tsx", "utf8");
+  const phoneBar = nav.slice(nav.indexOf("{/* The phone (below 768px). */}"), nav.indexOf("{/* A tablet keeps the full bar"));
+  assert.match(phoneBar, /md:hidden" aria-label="Primary navigation"/);
+  assert.doesNotMatch(phoneBar, /onMore|More</, "no More on a phone");
+  assert.match(nav, /role === "sales" \? \[places\.leads, places\.customers, places\.inbox\]/);
+  assert.match(nav, /role === "workshop" \? \[places\.jobcards, places\.vehicles, tasks\]/);
+  assert.match(nav, /role === "delivery" \? \[places\.deliveries, places\.customers, tasks\]/);
+  // A tablet keeps the full bar.
+  assert.match(nav, /hidden grid-cols-5[^"]*md:grid lg:hidden" aria-label="Primary navigation"/);
+});
+
+test("on a phone nothing offers a desktop page: Search, the account menu, the gear, Capture", () => {
+  const menu = readFileSync("src/components/CommandMenu.tsx", "utf8");
+  assert.match(menu, /if \(next\) setPhone\(window\.matchMedia\(PHONE_MEDIA\)\.matches\);/);
+  for (const list of ["shownTopLinks", "shownGroups", "shownActions", "shownSettings"]) assert.match(menu, new RegExp(`\\{${list}\\.`), list);
+  assert.match(menu, /hits\.filter\(\(hit\) => keep\(hit\.href\)\)/);
+  assert.match(menu, /\{isAdmin && !phone && \(/);
+  const account = readFileSync("src/components/AccountMenu.tsx", "utf8");
+  assert.match(account, /<DropdownMenuItem asChild className="max-md:hidden">\s*<Link href="\/settings">/);
+  assert.match(account, /<DropdownMenuItem asChild className="max-md:hidden">\s*<Link href="\/trash">/);
+  assert.match(readFileSync("src/components/SidebarHelpSettings.tsx", "utf8"), /className=\{compact \? `\$\{triggerClass\} max-md:hidden` : triggerClass\} aria-label=\{compact \? "Settings" : undefined\}/);
+  assert.match(readFileSync("src/components/AppShell.tsx", "utf8"), /aria-label="Search"\s+className="[^"]*md:hidden"/);
+  assert.match(readFileSync("src/components/MobileCompanionNav.tsx", "utf8"), /<Link href="\/documents" className="[^"]*max-md:hidden">/);
 });

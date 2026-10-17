@@ -149,15 +149,16 @@ export default function AccountMenu({
             Change password
           </Link>
         </DropdownMenuItem>
-        <DropdownMenuSeparator />
-        <DropdownMenuItem asChild>
+        {/* Workspace settings and Trash are desktop features: not offered on a phone (lib/phoneScope.ts). */}
+        <DropdownMenuSeparator className="max-md:hidden" />
+        <DropdownMenuItem asChild className="max-md:hidden">
           <Link href="/settings">
             <Settings className="size-4" />
             Workspace settings
           </Link>
         </DropdownMenuItem>
         {isOwner && (
-          <DropdownMenuItem asChild>
+          <DropdownMenuItem asChild className="max-md:hidden">
             <Link href="/trash">
               <Trash2 className="size-4" />
               Trash
