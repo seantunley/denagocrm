@@ -1510,7 +1510,10 @@ model Communication {
   dedupeKey      String? @unique
   inReplyTo      String? // email In-Reply-To header
   references     String? // email References chain (space-separated Message-IDs)
-  readAt         DateTime? // when staff first opened the conversation carrying this inbound message
+  /// Who a sent email was copied to, as the composer sent it. Reply all reads
+  /// this — never "[Cc: …]" in the body, which an inbound email can contain.
+  cc             String?
+  readAt        DateTime? // when staff first opened the conversation carrying this inbound message
   /// The customer's side of an OUTBOUND message: when the platform reported it
   /// delivered to their device, and when they opened it. Distinct from `readAt`,
   /// which is about OUR staff opening THEIR message — the two look alike and mean

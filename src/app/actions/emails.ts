@@ -8,7 +8,7 @@ import { attachSecureLinksToEmail, createSecureLinks, discardSecureLinks, type S
 import { revalidatePath } from "next/cache";
 import { basePrisma, prisma } from "@/lib/db";
 import { customerRecordTenantId } from "@/lib/customerRecordTenant";
-import { postedDealId } from "@/lib/customerTimeline";
+import { dealTimelineWhere, postedDealId } from "@/lib/customerTimeline";
 import { resolveFiling } from "@/lib/customerTimelineFiling";
 import { getSetting, putSetting } from "@/lib/settings";
 import { getActiveTenantId, requireTenantOwner } from "@/lib/auth";
@@ -74,6 +74,7 @@ import { MESSAGE_PLACES } from "@/lib/customerMessagePlaces";
 import { bannerClickUrl, bannerHtml, bannerPosition } from "@/lib/signatureBanners";
 import { LEGAL_LINE_KEY, htmlWithLegalLine } from "@/lib/emailLegalLine";
 import { bannerForEmail, bannersForSender, recordBannerSent } from "@/lib/signatureBannerStore";
+import { threadableMessageId } from "@/lib/emailReply";
 
 export type SendEmailState = { ok?: string; error?: string };
 
@@ -285,6 +286,29 @@ export async function sendEmailAction(
   const filing = await resolveFiling({ leadId: postedLeadId, contactId: postedContactId });
   if (!filing.ok) return { error: filing.error };
   const { contactId, leadId } = filing;
+  // A REPLY to an email on the timeline (Reply / Reply all): threaded to it in their mailbox, when the CRM knows
+  // the Message-ID it went or came with. The id is posted by the browser, so it must be an email filed on THIS
+  // timeline the reply is written from — the caller's access to the customer says nothing about a row named by id.
+  // From a DEAL's page (it posts the deal alone): that deal's timeline, exactly as the page shows it. From the
+  // CUSTOMER's page: the customer's timeline, where an email on a deal counts only if the caller may open that deal —
+  // the same rules that decide whether each page shows it at all (lib/customerTimeline).
+  const inReplyToId = String(formData.get("inReplyTo") ?? "").trim().slice(0, 64);
+  const found = inReplyToId
+    ? await prisma.communication.findFirst({
+        where: {
+          id: inReplyToId,
+          type: "email",
+          ...(!postedContactId && leadId ? dealTimelineWhere({ id: leadId, contactId }) : contactId ? { OR: [{ contactId }, { lead: { contactId } }] } : { id: "" }),
+        },
+        select: { messageId: true, references: true, leadId: true },
+      })
+    : null;
+  const answering = found && (!found.leadId || (await canAccessLead(user, found.leadId))) ? found : null;
+  if (inReplyToId && !answering) return { error: "The email you are replying to is not on this customer's timeline. Nothing was sent." };
+  const parentId = threadableMessageId(answering?.messageId);
+  const references = parentId
+    ? [...String(answering?.references ?? "").split(/\s+/).filter((id) => threadableMessageId(id)), parentId].slice(-20).join(" ")
+    : "";
   const profile = await getCompanyProfile();
   // The sender's pick of banner for this one email (or "none"); only ever among the banners that are theirs.
   const choice = String(formData.get("banner") ?? "").slice(0, 64);
@@ -461,6 +485,7 @@ export async function sendEmailAction(
     ...(cc ? { cc } : {}),
     ...(bcc ? { bcc } : {}),
     replyTo: replyTo.value ?? undefined,
+    ...(parentId ? { headers: { "In-Reply-To": parentId, References: references } } : {}),
     // "Opened" on the timeline entry below (unless switched off in Settings → Email).
     trackOpens: true,
     // The person writing it: "Sean Tunley · Denago Cape Town" on the From line.
@@ -526,12 +551,17 @@ export async function sendEmailAction(
           (attachedNames.length > 0
             ? `${bodyText}\n\n[${filesNote}: ${attachedNames.join(", ")}]`
             : bodyText) + (cc ? `\n[Cc: ${cc}]` : "") + (bcc ? `\n[Bcc: ${bcc}]` : ""),
+        // …and kept apart from the words, which a customer's own email can make say anything: Reply all reads this.
+        ...(cc ? { cc } : {}),
         leadId,
         contactId,
         userId: user.id,
         tenantId: await customerRecordTenantId({ contactId, leadId }),
         ...(result.openToken ? { openToken: result.openToken } : {}),
         ...(result.bannerRef ? { bannerRef: result.bannerRef } : {}),
+        // Kept so a reply to THIS email threads too, and the customer's answer can be matched to it.
+        ...(threadableMessageId(result.messageId) ? { messageId: result.messageId } : {}),
+        ...(parentId ? { inReplyTo: parentId, references } : {}),
       },
       select: { id: true },
     }),

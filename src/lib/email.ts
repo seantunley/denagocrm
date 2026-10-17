@@ -149,7 +149,7 @@ export async function sendEmail(input: {
    * Communication, or the mail is not to a customer.
    */
   record?: OutboundRecord;
-}): Promise<{ ok: boolean; error?: string; openToken?: string; bannerRef?: string }> {
+}): Promise<{ ok: boolean; error?: string; openToken?: string; bannerRef?: string; messageId?: string }> {
   const logged: Parameters<typeof recordOutboundMessage>[0] = { channel: "email" as const, to: input.to, subject: input.subject, text: input.text, attachments: input.attachments?.map((a) => a.filename) };
   const config = await getSmtpConfig();
   if (!config) {
@@ -229,7 +229,8 @@ export async function sendEmail(input: {
     });
     await noteSmtpOutcome(config, null);
     if (input.record) await recordOutboundMessage({ ...logged, messageId: info?.messageId ?? null }, input.record);
-    return { ok: true, ...(openToken ? { openToken } : {}), ...(bannerRef ? { bannerRef } : {}) };
+    // The Message-ID it went with, so a reply to it can be threaded (lib/emailReply.ts).
+    return { ok: true, ...(openToken ? { openToken } : {}), ...(bannerRef ? { bannerRef } : {}), ...(info?.messageId ? { messageId: String(info.messageId) } : {}) };
   } catch (err) {
     await noteSmtpOutcome(config, err);
     const { logError } = await import("./errorLog");
