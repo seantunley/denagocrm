@@ -10,7 +10,6 @@ import { SECURE_LINK_DAYS, SECURE_LINK_DEFAULT_DAYS } from "@/lib/secureLinks";
 import { secureLinkHint } from "@/lib/sendCheck";
 import { parseAddressList, parseReplyTo } from "@/lib/replyToAddresses";
 import { EMAIL_UPLOAD_MAX_BYTES, EMAIL_UPLOAD_MAX_FILES, emailUploads } from "@/lib/emailUploads";
-import { readEmailDraft, writeEmailDraft, type EmailComposerDraft } from "@/lib/emailComposerDraft";
 import { dealChoice, NO_DEAL, postedDealId, type DealOption } from "@/lib/customerTimeline";
 import type { ComposerQuote } from "@/lib/composerQuotes";
 import { Dialog, DialogContent, DialogTitle, DialogDescription } from "@/components/ui/dialog";
@@ -27,6 +26,12 @@ function textToHtml(text: string): string {
   return esc.split(/\n{2,}/).map((p) => `<p>${p.replace(/\n/g, "<br>")}</p>`).join("");
 }
 export type RenderedTemplate = { id: string; name: string; subject: string; body: string };
+type EmailComposerDraft = {
+  to: string; cc: string; bcc: string; replyTo: string;
+  subject: string; body: string; banner: string; dealId: string;
+  attached: string[]; attachedQuotes: string[]; uploads: File[];
+  secure: boolean; days: number;
+};
 
 export default function EmailComposer({ defaultTo, templates, smtpConfigured, leadId, contactId, revalidate,
   libraryDocs = [], deals = [], quotes = [], aiConfigured = false, defaultReplyTo = "", compactTrigger = false,
@@ -43,16 +48,13 @@ export default function EmailComposer({ defaultTo, templates, smtpConfigured, le
   const { to, cc, bcc, replyTo, subject, body, banner, dealId, attached, attachedQuotes, uploads, secure, days } = draft;
   const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(false);
-  const [identity, setIdentity] = useState<{ from: string; draftKey: string } | null>(null);
-  const [saveStatus, setSaveStatus] = useState("");
+  const [identity, setIdentity] = useState<{ from: string } | null>(null);
   const [dirty, setDirty] = useState(false);
   const [state, setState] = useState<SendEmailState | undefined>();
   const [pending, setPending] = useState(false);
   const [checking, setChecking] = useState(false);
-  const [closing, setClosing] = useState(false);
-  const busy = pending || checking || closing;
+  const busy = pending || checking;
   const sending = useRef(false);
-  const closingRef = useRef(false);
   const [warning, setWarning] = useState<string | null>(null);
   const [previewError, setPreviewError] = useState("");
   const [imageProblem, setImageProblem] = useState("");
@@ -65,20 +67,13 @@ export default function EmailComposer({ defaultTo, templates, smtpConfigured, le
   useEffect(() => { editor?.setEditable(!busy, false); }, [editor, busy]);
   const formRef = useRef<HTMLFormElement>(null);
   const uploadRef = useRef<HTMLInputElement>(null);
-  const autosaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  // Serialize saves and deletion so an in-flight autosave cannot resurrect a sent/discarded draft.
-  const writes = useRef<Promise<void>>(Promise.resolve());
-  function persist(data: EmailComposerDraft | null) {
-    if (!data && autosaveTimer.current) clearTimeout(autosaveTimer.current);
-    if (!identity) return Promise.reject(new Error("Draft storage unavailable"));
-    const task = writes.current.catch(() => {}).then(() => writeEmailDraft(identity.draftKey, data));
-    writes.current = task;
-    return task;
-  }
+  // NOTHING IS STORED ON THE DEVICE (review of #893): the message — and any file attached from the computer — is
+  // kept in memory while the page is open, closing the window keeps it, and leaving the page asks first. A copy in
+  // the browser's storage outlived sign-out for a week, unencrypted, on whatever device it was written on.
   function update(patch: Partial<EmailComposerDraft>) {
-    if (sending.current || closingRef.current) return;
+    if (sending.current) return;
     setDraft((previous) => ({ ...previous, ...patch }));
-    setDirty(true); setSaveStatus("Saving…"); setState(undefined); setWarning(null);
+    setDirty(true); setState(undefined); setWarning(null);
   }
   const setBody = (html: string) => update({ body: html });
   const pickedQuotes = quotes.filter((q) => attachedQuotes.includes(q.id));
@@ -96,53 +91,26 @@ export default function EmailComposer({ defaultTo, templates, smtpConfigured, le
       const nextIdentity = await composerIdentity(contactId, leadId);
       const availableBanners = await composerBannerChoices().catch(() => []);
       setBanners(availableBanners); setIdentity(nextIdentity);
-      try {
-        const saved = await readEmailDraft(nextIdentity.draftKey);
-        const restored = saved ?? (identity?.draftKey === nextIdentity.draftKey && dirty ? draft : freshDraft());
-        const next = { ...restored,
-          attached: restored.attached.filter((key) => libraryDocs.some((d) => d.id === key)),
-          attachedQuotes: restored.attachedQuotes.filter((key) => quotes.some((q) => q.id === key)),
-          banner: restored.banner === "none" || availableBanners.some((b) => b.id === restored.banner) ? restored.banner : "",
-          dealId: leadId ?? (choice.ask ? (restored.dealId === NO_DEAL || deals.some((d) => d.id === restored.dealId) ? restored.dealId : "") : choice.leadId ?? ""),
-        };
-        setDraft(next); setDirty(Boolean(saved) || (identity?.draftKey === nextIdentity.draftKey && dirty));
-        setShowCc(Boolean(next.cc)); setShowBcc(Boolean(next.bcc)); setShowReplyTo(next.replyTo !== defaultReplyTo);
-        setSaveStatus(saved ? "Draft restored on this device" : "");
-        if (saved && (next.attached.length !== saved.attached.length || next.attachedQuotes.length !== saved.attachedQuotes.length)) setPreviewError("Some saved attachments are no longer available. Review your attachments before sending.");
-      } catch {
-        if (identity?.draftKey !== nextIdentity.draftKey) { setDraft(freshDraft()); setDirty(false); }
-        setSaveStatus("Draft recovery unavailable on this device");
-      }
+      // What was written before closing the window is still here (the component is keyed by the record).
+      const next = dirty ? { ...draft, banner: draft.banner === "none" || availableBanners.some((b) => b.id === draft.banner) ? draft.banner : "" } : freshDraft();
+      setDraft(next);
+      setShowCc(Boolean(next.cc)); setShowBcc(Boolean(next.bcc)); setShowReplyTo(next.replyTo !== defaultReplyTo);
       setState(undefined); setOpen(true);
     } catch { setPreviewError("Could not load the sender or customer context. Refresh the page and try again."); }
     finally { setLoading(false); }
   }
 
+  // An unsent message — window open or closed — lives only in this page: leaving it asks first.
   useEffect(() => {
-    if (!open || !identity || !dirty || state?.ok || closing) return;
-    let alive = true;
-    const timer = setTimeout(() => {
-      const task = writes.current.catch(() => {}).then(() => writeEmailDraft(identity.draftKey, draft));
-      writes.current = task;
-      void task.then(() => { if (alive) setSaveStatus("Draft saved on this device"); }, () => { if (alive) setSaveStatus("Draft not saved — keep this window open"); });
-    }, 400);
-    autosaveTimer.current = timer;
-    return () => { alive = false; clearTimeout(timer); };
-  }, [draft, dirty, identity, open, state?.ok, closing]);
-
-  useEffect(() => {
-    if (!open || !dirty || saveStatus === "Draft saved on this device") return;
+    if (!dirty || state?.ok) return;
     const warn = (event: BeforeUnloadEvent) => { event.preventDefault(); event.returnValue = ""; };
     window.addEventListener("beforeunload", warn);
     return () => window.removeEventListener("beforeunload", warn);
-  }, [open, dirty, saveStatus]);
+  }, [dirty, state?.ok]);
 
-  async function closeComposer() {
-    if (sending.current || closingRef.current) return;
-    closingRef.current = true; setClosing(true);
-    try { if (dirty && !state?.ok) await persist(draft); setOpen(false); }
-    catch { setSaveStatus("Draft not saved — keep this window open or explicitly discard it"); }
-    finally { closingRef.current = false; setClosing(false); }
+  function closeComposer() {
+    if (sending.current) return;
+    setOpen(false);
   }
   function setUploadFiles(picked: File[]) {
     const seen = new Set<string>();
@@ -152,7 +120,7 @@ export default function EmailComposer({ defaultTo, templates, smtpConfigured, le
     update({ uploads: files });
   }
   async function submit(confirmed = false) {
-    if (sending.current || closingRef.current || !formRef.current?.reportValidity()) return;
+    if (sending.current || !formRef.current?.reportValidity()) return;
     setState(undefined); setPreviewError("");
     for (const [label, raw] of [["To", to], ["Cc", cc], ["Bcc", bcc]]) {
       const parsed = parseAddressList(raw, 10);
@@ -175,8 +143,6 @@ export default function EmailComposer({ defaultTo, templates, smtpConfigured, le
       setState(result); setPreview(null);
       if (result.ok) {
         setDirty(false); setDraft(freshDraft());
-        try { await persist(null); setSaveStatus(""); }
-        catch { setSaveStatus("Sent, but the saved draft could not be cleared. Do not resend it."); }
         router.refresh();
       }
     } catch {
@@ -225,12 +191,8 @@ export default function EmailComposer({ defaultTo, templates, smtpConfigured, le
     setConfirmTemplate(false); setTemplateOpen(false);
   }
   const [discardOpen, setDiscardOpen] = useState(false);
-  async function discard() {
-    if (closingRef.current) return;
-    closingRef.current = true; setClosing(true);
-    try { await persist(null); setDraft(freshDraft()); setDirty(false); setSaveStatus(""); setState(undefined); setDiscardOpen(false); setOpen(false); }
-    catch { setPreviewError("Could not remove the saved draft. Try again before closing."); setDiscardOpen(false); }
-    finally { closingRef.current = false; setClosing(false); }
+  function discard() {
+    setDraft(freshDraft()); setDirty(false); setState(undefined); setDiscardOpen(false); setOpen(false);
   }
   const [attachmentPreview, setAttachmentPreview] = useState<{ name: string; src: string; image?: boolean; local?: boolean } | null>(null);
   useEffect(() => () => { if (attachmentPreview?.local) URL.revokeObjectURL(attachmentPreview.src); }, [attachmentPreview]);
@@ -249,8 +211,8 @@ export default function EmailComposer({ defaultTo, templates, smtpConfigured, le
     <Dialog open={open} onOpenChange={(next) => { if (!next) void closeComposer(); }}>
       <DialogContent showCloseButton={false} className="top-0 translate-y-0 sm:top-1/2 sm:-translate-y-1/2 flex h-[100dvh] max-h-[100dvh] w-full max-w-full flex-col gap-0 overflow-hidden rounded-none border-border bg-card p-0 sm:h-[94dvh] sm:max-w-[min(1400px,96vw)] sm:rounded-xl" onEscapeKeyDown={(event) => { if (busy) event.preventDefault(); }} onPointerDownOutside={(event) => event.preventDefault()}>
         <div className="flex shrink-0 items-center justify-between gap-3 border-b border-border px-5 py-3">
-          <div className="min-w-0"><DialogTitle className="truncate text-base">{subject.trim() || "New email"}</DialogTitle><DialogDescription className="sr-only">Compose an email. Drafts are saved on this device for seven days, separately for your account, workspace and customer.</DialogDescription></div>
-          <button type="button" onClick={() => void closeComposer()} disabled={busy} aria-label="Save draft and close" className={TOOL}><X className="size-4" /></button>
+          <div className="min-w-0"><DialogTitle className="truncate text-base">{subject.trim() || "New email"}</DialogTitle><DialogDescription className="sr-only">Compose an email. Closing this window keeps your message while this page is open.</DialogDescription></div>
+          <button type="button" onClick={() => closeComposer()} disabled={busy} aria-label="Close — your message is kept while this page is open" className={TOOL}><X className="size-4" /></button>
         </div>
         {!smtpConfigured ? <p className="p-6 text-sm text-muted-foreground">Email sending isn&apos;t configured. <Link href="/settings?tab=email" className="text-primary underline">Open email settings</Link></p> : (
           <form ref={formRef} onSubmit={(event) => { event.preventDefault(); void submit(); }} className="flex min-h-0 flex-1 flex-col">
@@ -286,7 +248,7 @@ export default function EmailComposer({ defaultTo, templates, smtpConfigured, le
                   <div className="flex flex-wrap gap-2">
                     {attached.map((key) => { const doc = libraryDocs.find((d) => d.id === key); return <span key={key} className="inline-flex max-w-full items-center gap-2 rounded-lg border border-border bg-muted/40 px-3 py-2 text-xs"><button type="button" className="min-w-0 break-all text-left hover:text-primary" onClick={() => setAttachmentPreview({ name: doc?.fileName ?? "Document", src: `/api/library/${key}` })}>{doc?.fileName ?? "Document"}{doc?.sizeBytes ? ` · ${fileSize(doc.sizeBytes)}` : ""}</button><button type="button" aria-label={`Remove ${doc?.fileName ?? "document"}`} onClick={() => update({ attached: attached.filter((value) => value !== key) })}><X className="size-3.5" /></button><input type="hidden" name="attach" value={key} /></span>; })}
                     {uploads.map((file, index) => <span key={`${file.name}-${index}`} className="inline-flex max-w-full items-center gap-2 rounded-lg border border-border bg-muted/40 px-3 py-2 text-xs"><button type="button" className="min-w-0 break-all text-left hover:text-primary" onClick={() => previewUpload(file)}>{file.name} <span className="text-muted-foreground">· {fileSize(file.size)}</span></button><button type="button" aria-label={`Remove ${file.name}`} onClick={() => setUploadFiles(uploads.filter((_, i) => i !== index))}><X className="size-3.5" /></button></span>)}
-                    {pickedQuotes.map((q) => <span key={q.id} data-testid="attached-quote" className="inline-flex max-w-full items-center gap-2 rounded-lg border border-border bg-muted/40 px-3 py-2 text-xs"><button type="button" className="min-w-0 break-all text-left hover:text-primary" onClick={() => setAttachmentPreview({ name: `${q.label} · ${q.fileName}`, src: `/api/pdf/quote/${q.id}` })}>{q.label} · {q.fileName}</button><button type="button" aria-label={`Remove ${q.fileName}`} onClick={() => update({ attachedQuotes: attachedQuotes.filter((key) => key !== q.id) })}><X className="size-3.5" /></button><input type="hidden" name="attachQuote" value={q.id} /></span>)}
+                    {pickedQuotes.map((q) => <span key={q.id} data-testid="attached-quote" className="inline-flex max-w-full items-center gap-2 rounded-lg border border-border bg-muted/40 px-3 py-2 text-xs"><button type="button" className="min-w-0 break-all text-left hover:text-primary" onClick={() => setAttachmentPreview({ name: `${q.label} · ${q.fileName}`, src: `/quotes/${q.id}/print` })}>{q.label} · {q.fileName}</button><button type="button" aria-label={`Remove ${q.fileName}`} onClick={() => update({ attachedQuotes: attachedQuotes.filter((key) => key !== q.id) })}><X className="size-3.5" /></button><input type="hidden" name="attachQuote" value={q.id} /></span>)}
                   </div>
                   {pickedQuotes.some((q) => q.draft) && <p data-testid="quote-will-be-sent" className="text-xs text-amber-300">{pickedQuotes.filter((q) => q.draft).map((q) => q.label).join(", ")} will be marked sent when this email goes. Later changes require a revision.</p>}
                   <details><summary className="cursor-pointer text-xs text-muted-foreground">File delivery: {secure ? "secure links" : "attachments"}</summary><div className="mt-2 space-y-2 text-xs"><label className="flex items-center gap-2"><input type="checkbox" name="secureLinks" checked={secure} onChange={(event) => update({ secure: event.target.checked })} />Send files as expiring, recallable secure links</label>{secure && <label className="flex items-center gap-2">Link works for<select name="secureDays" className="input !w-auto py-1 text-xs" value={days} onChange={(event) => update({ days: Number(event.target.value) })}>{SECURE_LINK_DAYS.map((d) => <option key={d} value={d}>{d} {d === 1 ? "day" : "days"}</option>)}</select></label>}</div></details>
@@ -320,8 +282,7 @@ export default function EmailComposer({ defaultTo, templates, smtpConfigured, le
                 <button type="submit" className="btn-primary gap-2" disabled={busy || Boolean(state?.ok)}><Send className="size-4" />{pending ? "Sending…" : checking ? "Checking…" : "Send email"}</button>
                 <button type="button" onClick={() => void showPreview()} className="btn-secondary gap-1.5" disabled={previewing || busy}><Eye className="size-4" />{previewing ? "Preparing…" : "Preview"}</button>
                 <AiCheckButton getDraft={() => editor?.getText() ?? ""} contactId={contactId} leadId={leadId} configured={aiConfigured} label="Check wording" />
-                <span role="status" className="ml-auto text-[11px] text-muted-foreground" title="Stored on this device for seven days, scoped to your account, workspace and customer.">{saveStatus}</span>
-                <button type="button" disabled={busy} className={TOOL} onClick={() => dirty ? setDiscardOpen(true) : void closeComposer()}>{state?.ok ? "Close" : "Discard"}</button>
+                <button type="button" disabled={busy} className={`${TOOL} ml-auto`} onClick={() => dirty ? setDiscardOpen(true) : closeComposer()}>{state?.ok ? "Close" : "Discard"}</button>
               </div>
             </div>
           </form>
@@ -351,8 +312,8 @@ export default function EmailComposer({ defaultTo, templates, smtpConfigured, le
             <div className="flex gap-2"><button type="button" className="btn-primary" disabled={busy || Boolean(state?.ok)} onClick={() => void submit()}>Send email</button><button type="button" className="btn-secondary" onClick={() => setPreview(null)}>Back to editing</button></div></>}
         </DialogContent></Dialog>
         <Dialog open={discardOpen} onOpenChange={setDiscardOpen}><DialogContent>
-          <DialogTitle>Discard this draft?</DialogTitle><DialogDescription>This removes the message and its saved draft from this device. Use the close button to save it for later instead.</DialogDescription>
-          <div className="flex justify-end gap-2"><button type="button" disabled={busy} className="btn-secondary" onClick={() => setDiscardOpen(false)}>Keep editing</button><button type="button" disabled={busy} className="btn-danger" onClick={() => void discard()}>Discard draft</button></div>
+          <DialogTitle>Discard this email?</DialogTitle><DialogDescription>This clears the message and its attachments. Use the close button to keep it while this page is open instead.</DialogDescription>
+          <div className="flex justify-end gap-2"><button type="button" disabled={busy} className="btn-secondary" onClick={() => setDiscardOpen(false)}>Keep editing</button><button type="button" disabled={busy} className="btn-danger" onClick={() => discard()}>Discard email</button></div>
         </DialogContent></Dialog>
         <Dialog open={Boolean(attachmentPreview)} onOpenChange={(next) => { if (!next) setAttachmentPreview(null); }}><DialogContent className="max-h-[90dvh] overflow-y-auto sm:max-w-4xl">
           <DialogTitle className="break-all">{attachmentPreview?.name}</DialogTitle><DialogDescription>Attachment preview. Close to return to your draft.</DialogDescription>

@@ -83,7 +83,6 @@ test("the ten overlays that had the bug are all portalled", () => {
   // opens the right dialog on the right page.
   for (const rel of [
     "src/components/CameraCapture.tsx",
-    "src/components/EmailComposer.tsx",
     "src/components/KanbanBoard.tsx",
     "src/components/PhotoAnnotator.tsx",
     "src/components/ProofOfDelivery.tsx",
@@ -95,4 +94,7 @@ test("the ten overlays that had the bug are all portalled", () => {
   ]) {
     assert.match(read(rel), /<ModalPortal>/, `${rel} must portal its overlay`);
   }
+  // The email composer is a Radix Dialog now (#893), which portals itself.
+  assert.match(read("src/components/EmailComposer.tsx"), /from "@\/components\/ui\/dialog"/);
+  assert.match(read("src/components/ui/dialog.tsx"), /<DialogPrimitive\.Portal /);
 });

@@ -341,7 +341,9 @@ test("the sender may pick among their own live banners, or none — never anythi
   assert.equal(chooseBanner([], "standing"), null);
   const composer = src("src/components/EmailComposer.tsx");
   // On the ribbon's Options now: the usual one first, the sender's others, or none.
-  assert.match(composer, /<select\s+name="banner"/);
+  // A picker in the ribbon's row, posted through one hidden field (#893).
+  assert.match(composer, /<input type="hidden" name="banner" value=\{banner\} \/>/);
+  assert.match(composer, /<select [^>]*value=\{banner\} onChange=\{\(event\) => update\(\{ banner: event\.target\.value \}\)\}><option value="">\{banners\[0\]\.name\} \(default\)<\/option>/);
   assert.match(composer, /<option value="none">No banner<\/option>/);
   assert.match(src("src/app/actions/emails.ts"), /const choice = String\(formData\.get\("banner"\) \?\? ""\)\.slice\(0, 64\);/);
 });
