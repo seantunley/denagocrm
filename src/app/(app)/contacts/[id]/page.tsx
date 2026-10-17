@@ -31,7 +31,7 @@ import { redeemReferral } from "@/app/actions/referrals";
 import { isWhatsAppConfigured } from "@/lib/whatsapp";
 import { formatDateTime } from "@/lib/format";
 import { requireUser } from "@/lib/auth";
-import { getAccessibleLeadIds, hasPermission } from "@/lib/permissions";
+import { getAccessibleLeadIds, getAccessibleQuoteIds, hasPermission } from "@/lib/permissions";
 import { customerHistoryWhere, viewableDealIds } from "@/lib/customerHistory";
 import { contactHealth } from "@/lib/healthData";
 import { healthLabels } from "@/lib/health";
@@ -78,6 +78,11 @@ export default async function ContactDetailPage({
   ]);
   const canCreateQuote = canDuplicateQuotes;
   const [canEditContact, canDeleteContact] = await Promise.all([hasPermission(user, "contacts.edit"), hasPermission(user, "contacts.delete")]);
+  // THE QUOTES THIS VIEWER MAY OPEN — not every quote on the customer. Opening a customer is not permission to
+  // read their quotations: the sidebar's latest quote (number, status, value), the Documents tab and the email
+  // composer's quote buttons all read `contact.quotes`, so it is narrowed here, once (review of #891).
+  // `null`: workspace-wide quote access, nothing to narrow.
+  const quoteIds = (await hasPermission(user, "quotes.view_all")) ? null : await getAccessibleQuoteIds(user);
   const contact = await prisma.contact.findUnique({
     where: { id },
     include: {
@@ -89,7 +94,7 @@ export default async function ContactDetailPage({
       // generated or uploaded a PDF for it — and an accepted, signed quote with no
       // generated PDF looked as though it had disappeared.
       quotes: {
-        where: { deletedAt: null },
+        where: { deletedAt: null, ...(quoteIds ? { id: { in: quoteIds } } : {}) },
         include: { items: true, fees: { orderBy: { sortOrder: "asc" } } },
         orderBy: { createdAt: "desc" },
       },
