@@ -83,8 +83,14 @@ export const EmailBlockStyle = Extension.create({
  * `maxWidth` pixels across and re-encoded, so a full-screen screenshot does not
  * go out at full size. PNG keeps a screenshot's text crisp; a photo, or a PNG
  * that is still too big, becomes JPEG. Null when the browser cannot read it.
+ *
+ * `width` is how wide it SHOWS: at most an email's width (EMAIL_PICTURE_WIDTH),
+ * as a width attribute — the one size Outlook on a desktop obeys; it ignores the
+ * CSS that keeps a picture inside the page, so a 1600-pixel screenshot went out
+ * 1600 pixels wide. The pixels stay, so it is sharp, and it can be dragged bigger.
  */
-export async function emailReadyImage(file: Blob, maxWidth = 1600, maxBytes = 2.5 * 1024 * 1024): Promise<string | null> {
+export const EMAIL_PICTURE_WIDTH = 600;
+export async function emailReadyImage(file: Blob, maxWidth = 1600, maxBytes = 2.5 * 1024 * 1024): Promise<{ src: string; width: number } | null> {
   if (!/^image\/(png|jpeg|gif|webp)$/i.test(file.type)) return null;
   const bitmap = await createImageBitmap(file).catch(() => null);
   if (!bitmap) return null;
@@ -96,12 +102,13 @@ export async function emailReadyImage(file: Blob, maxWidth = 1600, maxBytes = 2.
   if (!context) return null;
   context.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
   bitmap.close();
+  const width = Math.min(canvas.width, EMAIL_PICTURE_WIDTH);
   const png = canvas.toDataURL("image/png");
   // base64 is 4 characters per 3 bytes.
-  if (file.type !== "image/jpeg" && png.length * 0.75 <= maxBytes) return png;
+  if (file.type !== "image/jpeg" && png.length * 0.75 <= maxBytes) return { src: png, width };
   for (const quality of [0.86, 0.75, 0.6]) {
     const jpeg = canvas.toDataURL("image/jpeg", quality);
-    if (jpeg.length * 0.75 <= maxBytes) return jpeg;
+    if (jpeg.length * 0.75 <= maxBytes) return { src: jpeg, width };
   }
   return null;
 }
