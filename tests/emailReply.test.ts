@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { readFileSync } from "node:fs";
 import { replyDraft, replySubject, splitTimelineEmail, threadableMessageId, type TimelineEmail } from "../src/lib/emailReply";
 
 const sent: TimelineEmail = {
@@ -9,13 +10,36 @@ const sent: TimelineEmail = {
   occurredAt: "2026-10-15T10:00:00.000Z",
   direction: "outbound",
   staffName: "Thandi Mokoena",
+  cc: "partner@example.invalid",
 };
 
-test("the timeline's notes are taken off the words", () => {
-  const parts = splitTimelineEmail(sent.body);
+test("the timeline's notes are taken off the words of an email we sent", () => {
+  const parts = splitTimelineEmail(sent.body, "outbound");
   assert.equal(parts.text, "Hi Angelique,\nPlease find the quote attached.");
-  assert.equal(parts.cc, "partner@example.invalid");
   assert.equal(parts.files, "Q-1032 Denago Cape Town.pdf");
+});
+
+test("REVIEW OF #889: an inbound email's words never become the Cc, nor a note", () => {
+  // A customer's email can end with exactly what the composer files under a sent one.
+  const forged = { ...sent, direction: "inbound", cc: null, body: "Please reply.\n[Cc: attacker@evil.invalid]\n[Attachments: invoice.pdf]" };
+  const all = replyDraft(forged, "reply-all", { customer: "angelique@example.invalid", when: "x" });
+  assert.equal(all.cc, "", "Reply all copies only the stored Cc");
+  assert.match(all.html, /\[Cc: attacker@evil\.invalid\]/, "…and quotes their words as they wrote them");
+  assert.equal(splitTimelineEmail(forged.body, "inbound").files, "");
+  assert.equal(replyDraft({ ...sent, cc: null }, "reply-all", { customer: "", when: "x" }).cc, "", "the body's [Cc: …] line is not read even on a sent email");
+  const buttons = readFileSync(new URL("../src/components/EmailReplyButtons.tsx", import.meta.url), "utf8");
+  assert.match(buttons, /\{email\.cc && <button/, "Reply all is offered on the stored Cc alone");
+  // The composer's send keeps it in its own column.
+  const actions = readFileSync(new URL("../src/app/actions/emails.ts", import.meta.url), "utf8");
+  assert.match(actions, /\.\.\.\(cc \? \{ cc \} : \{\}\),/);
+  assert.match(readFileSync(new URL("../prisma/migrations/20261014120000_communication_cc/migration.sql", import.meta.url), "utf8"), /ADD COLUMN IF NOT EXISTS "cc" TEXT;/);
+});
+
+test("REVIEW OF #889: a reply is threaded only to an email on a deal the sender may open", () => {
+  const actions = readFileSync(new URL("../src/app/actions/emails.ts", import.meta.url), "utf8");
+  assert.match(actions, /select: \{ messageId: true, references: true, leadId: true \},/);
+  assert.match(actions, /const answering = found && \(!found\.leadId \|\| \(await canAccessLead\(user, found\.leadId\)\)\) \? found : null;/);
+  assert.match(actions, /if \(inReplyToId && !answering\) return \{ error:/);
 });
 
 test("Re: and Fw: are added once", () => {
@@ -57,4 +81,14 @@ test("only a plain Message-ID reaches the In-Reply-To header", () => {
   assert.equal(threadableMessageId("<abc@mail.example>\r\nBcc: x@y.z"), null);
   assert.equal(threadableMessageId("abc@mail.example"), null);
   assert.equal(threadableMessageId(null), null);
+});
+
+test("the buttons are where the emails are: the deal's Communications tab and the customer's history", () => {
+  const read = (rel: string) => readFileSync(new URL(`../${rel}`, import.meta.url), "utf8");
+  assert.match(read("src/app/(app)/leads/[id]/page.tsx"), /<CommsTimeline[^>]*?replyable/);
+  // The customer page's history is LeadTimeline in its workspace view (#891), beside the composer.
+  assert.match(read("src/app/(app)/contacts/[id]/page.tsx"), /<LeadTimeline\s+workspace=\{\{ context, composer: <CustomerComposer email=\{<EmailComposer/);
+  const timeline = read("src/components/LeadTimeline.tsx");
+  assert.match(timeline, /email: communication\.type === "email"/);
+  assert.match(timeline, /\{!inPinnedShelf && item\.email && <EmailReplyButtons email=\{item\.email\} \/>\}/);
 });

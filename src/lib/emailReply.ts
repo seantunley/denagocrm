@@ -26,25 +26,29 @@ export type TimelineEmail = {
   direction: string | null;
   /** The member of staff on the entry: who wrote it, for an outbound email. */
   staffName: string;
+  /** Who it was copied to, from its own column (Communication.cc) — never read out of the words. */
+  cc: string | null;
 };
 
 const NOTE_LINE = /^\[(Cc|Bcc|Attachments|Sent as secure links[^:]*): (.*)\]$/;
 
-/** The words of the email, and the notes the composer filed with it. */
-export function splitTimelineEmail(body: string): { text: string; cc: string; files: string } {
+/**
+ * The words of the email, and which files it carried. The note lines are the composer's, so they are read only on
+ * an email WE sent; an inbound email is quoted exactly as it came — its words may look like a note, and are not one.
+ * Who to copy is never taken from here (see TimelineEmail.cc).
+ */
+export function splitTimelineEmail(body: string, direction: string | null): { text: string; files: string } {
   const lines = String(body ?? "").replace(/\r\n/g, "\n").split("\n");
-  let cc = "";
   let files = "";
-  while (lines.length > 0) {
+  while (direction === "outbound" && lines.length > 0) {
     const last = lines[lines.length - 1].trim();
     if (last === "") { lines.pop(); continue; }
     const note = NOTE_LINE.exec(last);
     if (!note) break;
-    if (note[1] === "Cc") cc = note[2].trim();
-    else if (note[1] !== "Bcc") files = note[2].trim(); // a Bcc stays hidden: replying never re-copies a blind copy
+    if (note[1] !== "Cc" && note[1] !== "Bcc") files = note[2].trim(); // a Bcc stays hidden: replying never re-copies a blind copy
     lines.pop();
   }
-  return { text: lines.join("\n").trimEnd(), cc, files };
+  return { text: lines.join("\n").trimEnd(), files };
 }
 
 /** "Re: Your quote", once — "Re: Re: Re:" is what a CRM looks like when nobody checked. */
@@ -65,7 +69,7 @@ export function replyDraft(email: TimelineEmail, kind: ReplyKind, input: { custo
   html: string;
   cc: string;
 } {
-  const { text, cc, files } = splitTimelineEmail(email.body);
+  const { text, files } = splitTimelineEmail(email.body, email.direction);
   const author = email.direction === "inbound" ? input.customer || "The customer" : email.staffName;
   const quoted = `<p>${escapeHtml(text).replace(/\n/g, "<br>")}</p>`;
   const head =
@@ -79,7 +83,7 @@ export function replyDraft(email: TimelineEmail, kind: ReplyKind, input: { custo
   return {
     subject: replySubject(email.subject, kind),
     html: `<p></p><p></p>${filesNote}${head}<blockquote>${quoted}</blockquote>`,
-    cc: kind === "reply-all" ? cc : "",
+    cc: kind === "reply-all" ? email.cc ?? "" : "",
   };
 }
 

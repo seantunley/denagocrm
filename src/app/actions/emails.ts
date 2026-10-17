@@ -288,14 +288,17 @@ export async function sendEmailAction(
   const { contactId, leadId } = filing;
   // A REPLY to an email on the timeline (Reply / Reply all): threaded to it in their mailbox, when the CRM knows
   // the Message-ID it went or came with. The id is posted by the browser, so it must be an email filed on THIS
-  // customer — the caller's access to the customer says nothing about a row named by id.
+  // customer — the caller's access to the customer says nothing about a row named by id — and, when it was filed on
+  // a deal, a deal the caller may open: the same rule that decides whether the timeline shows it at all
+  // (customerTimelineWhere over the caller's accessible deals).
   const inReplyToId = String(formData.get("inReplyTo") ?? "").trim().slice(0, 64);
-  const answering = inReplyToId
+  const found = inReplyToId
     ? await prisma.communication.findFirst({
         where: { id: inReplyToId, type: "email", OR: [...(contactId ? [{ contactId }] : []), ...(leadId ? [{ leadId }] : [])] },
-        select: { messageId: true, references: true },
+        select: { messageId: true, references: true, leadId: true },
       })
     : null;
+  const answering = found && (!found.leadId || (await canAccessLead(user, found.leadId))) ? found : null;
   if (inReplyToId && !answering) return { error: "The email you are replying to is not on this customer's timeline. Nothing was sent." };
   const parentId = threadableMessageId(answering?.messageId);
   const references = parentId
@@ -543,6 +546,8 @@ export async function sendEmailAction(
           (attachedNames.length > 0
             ? `${bodyText}\n\n[${filesNote}: ${attachedNames.join(", ")}]`
             : bodyText) + (cc ? `\n[Cc: ${cc}]` : "") + (bcc ? `\n[Bcc: ${bcc}]` : ""),
+        // …and kept apart from the words, which a customer's own email can make say anything: Reply all reads this.
+        ...(cc ? { cc } : {}),
         leadId,
         contactId,
         userId: user.id,

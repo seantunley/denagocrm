@@ -32,6 +32,8 @@ type Comm = {
   subject: string | null;
   body: string;
   attachmentUrl?: string | null;
+  /** Who a sent email was copied to (Communication.cc) — Reply all's addresses. */
+  cc?: string | null;
   occurredAt: Date;
   /** The customer opened our outbound message (email open tracking, WhatsApp read receipts). */
   seenAt?: Date | null;
@@ -183,7 +185,7 @@ export default function CommsTimeline({
                 <p className="text-sm text-slate-400 whitespace-pre-wrap break-words [overflow-wrap:anywhere]">{c.body}</p>
                 {replyable && c.type === "email" && (
                   <EmailReplyButtons
-                    email={{ id: c.id, subject: c.subject, body: c.body, occurredAt: c.occurredAt.toISOString(), direction: c.direction, staffName: c.user.name }}
+                    email={{ id: c.id, subject: c.subject, body: c.body, occurredAt: c.occurredAt.toISOString(), direction: c.direction, staffName: c.user.name, cc: c.cc ?? null }}
                   />
                 )}
               </div>
