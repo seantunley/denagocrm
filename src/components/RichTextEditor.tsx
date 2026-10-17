@@ -9,11 +9,17 @@ import type { EditorView } from "@tiptap/pm/view";
 import { EmailBlockStyle, emailReadyImage } from "@/components/emailBlockStyle";
 import { useEffect, useRef, useState } from "react";
 import { TextPromptDialog } from "@/components/TextPromptDialog";
+import { EditorContextMenu } from "@/components/EditorContextMenu";
 import ModalPortal from "@/components/ui/modal-portal";
 import { EmailButton, EmailDivider, EmailSpacer } from "@/components/emailBlockNodes";
 import { EMAIL_BUTTON_COLORS } from "@/lib/emailBlockHtml";
 
 const COLORS = ["#1e293b", "#ea580c", "#2563eb", "#059669", "#dc2626"];
+
+// A picture's resize handles (Image `resize`) arrive unstyled — zero-sized and invisible. Small corner squares,
+// shown while the pointer is over the picture or it is selected.
+const RESIZE_HANDLES =
+  "[&_[data-resize-handle]]:z-10 [&_[data-resize-handle]]:size-3 [&_[data-resize-handle]]:rounded-sm [&_[data-resize-handle]]:border [&_[data-resize-handle]]:border-white [&_[data-resize-handle]]:bg-blue-600 [&_[data-resize-handle]]:opacity-0 [&_[data-resize-handle=bottom-right]]:cursor-nwse-resize [&_[data-resize-handle=bottom-left]]:cursor-nesw-resize [&_[data-resize-container]:hover_[data-resize-handle]]:opacity-100 [&_.ProseMirror-selectednode_[data-resize-handle]]:opacity-100";
 
 function Btn({
   onClick,
@@ -273,12 +279,12 @@ export default function RichTextEditor({
     const images = files.filter((file) => file.type.startsWith("image/"));
     if (!pasteImages || images.length === 0) return false;
     for (const file of images) {
-      void emailReadyImage(file).then((src) => {
-        if (!src) {
+      void emailReadyImage(file).then((picture) => {
+        if (!picture) {
           onImageProblem?.(`“${file.name || "That picture"}” couldn't be added — use a PNG, JPEG, GIF or WebP image under about 2.5 MB.`);
           return;
         }
-        const node = view.state.schema.nodes.image?.create({ src });
+        const node = view.state.schema.nodes.image?.create(picture);
         if (node) view.dispatch(view.state.tr.replaceSelectionWith(node).scrollIntoView());
       });
     }
@@ -290,7 +296,9 @@ export default function RichTextEditor({
       TextStyle,
       Color,
       // A pasted screenshot is kept in the message as a data: image until it is sent.
-      Image.configure({ allowBase64: pasteImages }),
+      // In an email, a picture has corner handles to drag it bigger or smaller (Sean, 2026-10-15); the
+      // size goes out as its width attribute, which every mail client obeys.
+      Image.configure({ allowBase64: pasteImages, resize: emailTools ? { enabled: true, directions: ["bottom-right", "bottom-left"], minWidth: 40, alwaysPreserveAspectRatio: true } : false }),
       Table.configure({ resizable: false }),
       TableRow,
       TableCell,
@@ -306,14 +314,14 @@ export default function RichTextEditor({
         !event.clipboardData?.getData("text/plain") && takeImages(view, Array.from(event.clipboardData?.files ?? [])),
       handleDrop: (view, event) => takeImages(view, Array.from((event as DragEvent).dataTransfer?.files ?? [])),
       attributes: {
-        class: appearance === "page"
+        class: `${RESIZE_HANDLES} ` + (appearance === "page"
           ? "min-h-72 px-5 py-6 sm:px-10 sm:py-8 bg-white text-[15px] leading-relaxed text-slate-900 outline-none [&_a]:text-blue-700 [&_a]:underline [&_table]:border-collapse [&_td]:border [&_td]:border-slate-300 [&_td]:px-2 [&_td]:py-1 [&_th]:border [&_th]:border-slate-300 [&_th]:px-2 [&_th]:py-1 [&_th]:bg-slate-100 [&_ul]:list-disc [&_ul]:pl-6 [&_ol]:list-decimal [&_ol]:pl-6 [&_h2]:text-xl [&_h2]:font-bold [&_p]:my-2 [&_img]:max-w-full [&_img]:h-auto [&_table[data-email-block]_td]:!border-0 [&_table[data-email-block]_td]:!px-0 [&_table[data-email-block]_td]:!py-0 [&_.ProseMirror-selectednode]:outline-2 [&_.ProseMirror-selectednode]:outline-dashed [&_.ProseMirror-selectednode]:outline-blue-500"
           :
           // The last four rules: email BLOCKS (button/divider/spacer) are layout
           // tables, so they must not inherit the bordered data-table styling
           // above them, and a selected atom needs a visible outline or clicking
           // it looks like nothing happened.
-          "prose-invert min-h-40 max-h-96 overflow-y-auto px-3 py-2 text-sm text-slate-100 outline-none [&_a]:text-orange-400 [&_a]:underline [&_table]:border-collapse [&_td]:border [&_td]:border-slate-600 [&_td]:px-2 [&_td]:py-1 [&_th]:border [&_th]:border-slate-600 [&_th]:px-2 [&_th]:py-1 [&_th]:bg-slate-800 [&_ul]:list-disc [&_ul]:pl-5 [&_ol]:list-decimal [&_ol]:pl-5 [&_h2]:text-lg [&_h2]:font-bold [&_img]:max-w-full [&_table[data-email-block]_td]:!border-0 [&_table[data-email-block]_td]:!px-0 [&_table[data-email-block]_td]:!py-0 [&_.ProseMirror-selectednode]:outline-2 [&_.ProseMirror-selectednode]:outline-dashed [&_.ProseMirror-selectednode]:outline-orange-500",
+          "prose-invert min-h-40 max-h-96 overflow-y-auto px-3 py-2 text-sm text-slate-100 outline-none [&_a]:text-orange-400 [&_a]:underline [&_table]:border-collapse [&_td]:border [&_td]:border-slate-600 [&_td]:px-2 [&_td]:py-1 [&_th]:border [&_th]:border-slate-600 [&_th]:px-2 [&_th]:py-1 [&_th]:bg-slate-800 [&_ul]:list-disc [&_ul]:pl-5 [&_ol]:list-decimal [&_ol]:pl-5 [&_h2]:text-lg [&_h2]:font-bold [&_img]:max-w-full [&_table[data-email-block]_td]:!border-0 [&_table[data-email-block]_td]:!px-0 [&_table[data-email-block]_td]:!py-0 [&_.ProseMirror-selectednode]:outline-2 [&_.ProseMirror-selectednode]:outline-dashed [&_.ProseMirror-selectednode]:outline-orange-500"),
         "data-placeholder": placeholder ?? "",
         role: "textbox",
         "aria-label": emailTools ? "Email message" : "Message",
@@ -350,7 +358,9 @@ export default function RichTextEditor({
       <div className="relative flex min-h-72 flex-col bg-white" onClick={(event) => { if (event.target === event.currentTarget) editor.chain().focus("end").run(); }}>
         {showToolbar && <Toolbar editor={editor} onImageUpload={onImageUpload} emailTools={emailTools} />}
         {empty && <p aria-hidden="true" className="pointer-events-none absolute left-5 top-8 text-[15px] text-slate-400 sm:left-10 sm:top-10">{placeholder ?? "Write your message…"}</p>}
-        <EditorContent editor={editor} className="min-h-72 flex-1" />
+        <EditorContextMenu editor={editor} onPastedImages={(files) => takeImages(editor.view, files)} className="flex min-h-72 flex-1 flex-col">
+          <EditorContent editor={editor} className="flex-1 [&>.ProseMirror]:min-h-full" />
+        </EditorContextMenu>
       </div>
     );
   }
@@ -358,7 +368,9 @@ export default function RichTextEditor({
   return (
     <div className="rounded-lg border border-slate-700 bg-slate-900 focus-within:border-orange-500">
       {showToolbar && <Toolbar editor={editor} onImageUpload={onImageUpload} emailTools={emailTools} />}
-      <EditorContent editor={editor} />
+      <EditorContextMenu editor={editor} onPastedImages={(files) => takeImages(editor.view, files)}>
+        <EditorContent editor={editor} />
+      </EditorContextMenu>
     </div>
   );
 }

@@ -583,6 +583,7 @@ export default async function LeadDetailPage({
                       communications={comms}
                       leadId={lead.id}
                       revalidate={path}
+                      replyable
                     />
                   </>
                 ),

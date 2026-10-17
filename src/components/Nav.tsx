@@ -6,6 +6,7 @@ import { usePathname } from "next/navigation";
 import { ChevronRight } from "lucide-react";
 import { buildNav, type NavLink } from "@/components/nav-config";
 import { cn } from "@/lib/utils";
+import { linkOnPhone } from "@/lib/phoneScope";
 
 const STORAGE_KEY = "denago-nav-collapsed";
 
@@ -47,17 +48,24 @@ export default function Nav({
   permissions = [],
   enabledModules,
   badges = {},
+  phone = false,
 }: {
   isAdmin?: boolean;
   permissions?: string[];
   enabledModules?: string[];
   badges?: Record<string, number>;
+  /** The phone's menu (lib/phoneScope.ts): only the sections the phone keeps; a group left empty is dropped. */
+  phone?: boolean;
 }) {
-  const { topLinks, groups } = buildNav(
+  const built = buildNav(
     isAdmin,
     permissions,
     enabledModules ? new Set(enabledModules) : undefined,
   );
+  const topLinks = phone ? built.topLinks.filter((link) => linkOnPhone(link.href)) : built.topLinks;
+  const groups = phone
+    ? built.groups.map((group) => ({ ...group, links: group.links.filter((link) => linkOnPhone(link.href)) })).filter((group) => group.links.length > 0)
+    : built.groups;
   const pathname = usePathname();
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
 

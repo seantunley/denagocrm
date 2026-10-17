@@ -15,6 +15,7 @@ import CommandMenu, { openCommandMenu } from "@/components/CommandMenu";
 import QuickActions from "@/components/QuickActions";
 import QuickCreateDialog from "@/components/QuickCreateDialog";
 import MobileCompanionNav from "@/components/MobileCompanionNav";
+import PhoneGate from "@/components/PhoneGate";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -58,6 +59,15 @@ function AccountCluster({ user, isOwner, tenantId }: { user: ShellUser; isOwner:
     // spending most of that 0.075 gap on the background it sits over. At /25 it
     // landed ~0.190 — a step too small to read as a group at all.
     <div className="flex items-center gap-0.5 rounded-xl border border-sidebar-border/70 bg-sidebar-accent p-1 transition-colors hover:border-sidebar-border hover:brightness-110">
+      {/* On a phone, Search lives up here — the bottom bar is the role's own places (MobileCompanionNav). */}
+      <button
+        type="button"
+        onClick={openCommandMenu}
+        aria-label="Search"
+        className="grid size-7 place-items-center rounded-lg text-muted-foreground hover:text-foreground md:hidden"
+      >
+        <Search className="size-3.5" />
+      </button>
       <SidebarHelpSettings isOwner={isOwner} permissions={user.permissions} compact />
       <div className="mx-0.5 h-5 w-px bg-sidebar-border/70" aria-hidden />
       <AccountMenu user={user} isOwner={isOwner} tenantId={tenantId} compact />
@@ -65,7 +75,7 @@ function AccountCluster({ user, isOwner, tenantId }: { user: ShellUser; isOwner:
   );
 }
 
-function SidebarInner({ user, inboxWaiting = 0, casesWaiting = 0, enabledModules, brand }: { user: ShellUser; inboxWaiting?: number; casesWaiting?: number; enabledModules?: string[]; brand?: { logoUrl: string | null; displayName: string } }) {
+function SidebarInner({ user, inboxWaiting = 0, casesWaiting = 0, enabledModules, brand, phone = false }: { user: ShellUser; inboxWaiting?: number; casesWaiting?: number; enabledModules?: string[]; brand?: { logoUrl: string | null; displayName: string }; phone?: boolean }) {
   const isOwner = ownsWorkspace(user);
   return (
     <div className="relative flex h-full flex-col overflow-hidden bg-sidebar">
@@ -91,12 +101,13 @@ function SidebarInner({ user, inboxWaiting = 0, casesWaiting = 0, enabledModules
             ⌘K
           </kbd>
         </button>
-        <QuickActions isAdmin={isOwner} permissions={user.permissions} enabledModules={enabledModules} />
+        {/* On the phone, Capture on the bottom bar is the way to start something. */}
+        {!phone && <QuickActions isAdmin={isOwner} permissions={user.permissions} enabledModules={enabledModules} />}
       </div>
 
       {/* Nav */}
       <div className="relative flex-1 overflow-y-auto px-3 py-3">
-        <Nav isAdmin={isOwner} permissions={user.permissions} enabledModules={enabledModules} badges={{ "/inbox": inboxWaiting, "/cases": casesWaiting }} />
+        <Nav isAdmin={isOwner} permissions={user.permissions} enabledModules={enabledModules} badges={{ "/inbox": inboxWaiting, "/cases": casesWaiting }} phone={phone} />
       </div>
 
     </div>
@@ -163,6 +174,7 @@ export default function AppShell({
             logoUrl={brand?.logoUrl ?? null}
             alt={brand?.displayName ?? "Denago Cape Town"}
             className="h-6 w-auto max-w-full object-contain"
+            wordmarkClassName="text-xs"
           />
         </div>
         <div className="flex w-[7.5rem] shrink-0 justify-end">
@@ -185,7 +197,8 @@ export default function AppShell({
       <Sheet key={pathname} open={mobileOpen} onOpenChange={setMobileOpen}>
         <SheetContent side="left" className="w-72 border-sidebar-border p-0">
           <SheetTitle className="sr-only">Navigation</SheetTitle>
-          <SidebarInner user={user} inboxWaiting={inboxWaiting} casesWaiting={casesWaiting} enabledModules={enabledModules} brand={brand} />
+          {/* The drawer is the phone's (and a small tablet's) menu: the phone app's sections only (lib/phoneScope.ts). */}
+          <SidebarInner user={user} inboxWaiting={inboxWaiting} casesWaiting={casesWaiting} enabledModules={enabledModules} brand={brand} phone />
         </SheetContent>
       </Sheet>
 
@@ -211,7 +224,8 @@ export default function AppShell({
           {/* ClockWeather moved into the top bar — it was already desktop-only
               furniture at the top of the page, so the bar is where it belongs
               and the page keeps the vertical space the bar takes. */}
-          {children}
+          {/* On a phone, a page outside the phone app says so first (lib/phoneScope.ts). */}
+          <PhoneGate>{children}</PhoneGate>
         </div>
       </main>
     </div>

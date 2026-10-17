@@ -39,10 +39,14 @@ test("A PICTURE IN THE MESSAGE is asked about when anyone it goes to is off the 
   assert.equal(picturesIn("<p>no pictures</p>"), 0);
   const actions = readFileSync(new URL("../src/app/actions/emails.ts", import.meta.url), "utf8");
   assert.match(actions, /pictures: picturesIn\(String\(input\.bodyHtml \?\? ""\)\),/, "the check before Send");
-  assert.match(actions, /const warning = sendWarning\(\{[^\n]*pictures: picturesIn\(bodyHtml\) \}\);/, "and the send itself, which refuses an unconfirmed one");
+  assert.match(sendCode(), /const warning = sendWarning\(\{[^\n]*pictures: picturesIn\(bodyHtml\) \}\);/, "and the send itself, which refuses an unconfirmed one");
 });
 
 const src = (rel: string) => readFileSync(new URL(`../${rel}`, import.meta.url), "utf8").replace(/\r\n/g, "\n");
+/** The send itself: lib/composerSend.ts (shared with scheduled sends) since 2026-10-15. */
+function sendCode() {
+  return src("src/lib/composerSend.ts").split("export async function sendComposerForm")[1];
+}
 const NOW = new Date("2026-11-10T10:00:00Z");
 
 /** A made-up but well-formed South African ID number: born 1 Jan 1980, citizen, with its real check digit. */
@@ -165,8 +169,7 @@ test("recall is the caller's permission AND the row's workspace AND the record's
 });
 
 test("sending as secure links attaches nothing, and a failed send leaves no working link", () => {
-  const actions = src("src/app/actions/emails.ts");
-  const send = actions.slice(actions.indexOf("export async function sendEmailAction"), actions.indexOf("export async function sendTestEmail"));
+  const send = sendCode();
   assert.match(send, /if \(asSecureLinks\) \{\s*secureFiles\.push\(\{ fileName: v\.fileName, storedRef: v\.storedName,/);
   assert.match(send, /if \(asSecureLinks\) secureUploads\.push\(/);
   assert.match(send, /messageHtml = bodyHtml \+ secureLinksHtml\(lines, expiresLabel\);/);
@@ -291,10 +294,11 @@ test("A FLAGGED NUMBER NEVER REACHES THE AUDIT ENTRY: the subject and file names
   // Ordinary numbers are left alone: a quote number, a phone number, an order number.
   for (const text of ["Quote Q-1022 for you", "Call 082 123 4567", "Order 1234567890123"]) assert.equal(redactSensitive(text), text);
   // …and the audit entry is built from the redacted subject and file names — never the raw ones.
-  const actions = src("src/app/actions/emails.ts");
-  const audit = actions.slice(actions.indexOf('action: "email.sent"'), actions.indexOf("export async function sendTestEmail"));
-  // (With whoever was copied in, now that there are Cc and Bcc — addresses, which the check never redacts.)
-  assert.match(audit, /summary: `Sent email to \$\{to\}\$\{cc \? ` \(cc \$\{cc\}\)` : ""\}\$\{bcc \? ` \(bcc \$\{bcc\}\)` : ""\}: “\$\{redactSensitive\(subject\)\}”/);
+  const send = sendCode();
+  const audit = send.slice(send.indexOf('action: "email.sent"'));
+  // (With whoever was copied in, now that there are Cc and Bcc — addresses, which the check never redacts.
+  // A scheduled send says so: "Sent scheduled email to …".)
+  assert.match(audit, /summary: `\$\{scheduled \? "Sent scheduled email" : "Sent email"\} to \$\{to\}\$\{cc \? ` \(cc \$\{cc\}\)` : ""\}\$\{bcc \? ` \(bcc \$\{bcc\}\)` : ""\}: “\$\{redactSensitive\(subject\)\}”/);
   assert.match(audit, /redactSensitive\(attachedNames\.join\(", "\)\)/);
   assert.doesNotMatch(audit, /\$\{subject\}|\$\{attachedNames/, "the raw subject or names must not be in the summary");
 });
@@ -309,8 +313,7 @@ test("A LIBRARY FILE IS CHECKED BY ITS FILE NAME, NOT ITS TITLE — in the compo
   assert.equal(secureLinkHint([title], false), null);
   assert.ok(secureLinkHint([stored], false));
   // So both sides must read the file name. The server does…
-  const actions = src("src/app/actions/emails.ts");
-  assert.match(actions, /for \(const v of versions\) \{\s*fileNames\.push\(v\.fileName\);/);
+  assert.match(sendCode(), /for \(const v of versions\) \{\s*fileNames\.push\(v\.fileName\);/);
   // …and the composer is given it, and uses it for the check it makes before submitting. Had it used the
   // title, the browser would pass an email the server then refuses, with no "Send anyway" to press.
   const composer = src("src/components/EmailComposer.tsx");
@@ -327,7 +330,7 @@ test("A SECURE LINK IS ONLY MADE WHERE FILES ARE STORED PRIVATELY", () => {
   assert.match(storage, /export const storesPrivately = \(\) => privateMode\(\) \|\| !publicToken\(\);/);
   assert.match(storage, /export const isPublicBlobRef = \(ref: string\) => isTrustedBlobRef\(ref\) && !isPrivateBlobRef\(ref\);/);
   const actions = src("src/app/actions/emails.ts");
-  const send = actions.slice(actions.indexOf("export async function sendEmailAction"), actions.indexOf("export async function sendTestEmail"));
+  const send = sendCode();
   // Refused before the check, before anything is stored, before anything is sent.
   const refuse = send.indexOf("if (secure && !storesPrivately()) return { error: NO_PRIVATE_STORE };");
   assert.ok(refuse > 0);
@@ -345,11 +348,12 @@ test("A SECURE LINK IS ONLY MADE WHERE FILES ARE STORED PRIVATELY", () => {
 
 test("the server refuses an unconfirmed send, the composer asks first, and the audit names the kind only", () => {
   const actions = src("src/app/actions/emails.ts");
-  const send = actions.slice(actions.indexOf("export async function sendEmailAction"), actions.indexOf("export async function sendTestEmail"));
+  const send = sendCode();
   assert.match(send, /const confirmed = formData\.get\("sensitiveOk"\) === "1";\s*if \(warning && !confirmed\) \{\s*return \{ error:/);
   assert.match(send, /sent after a sensitive-data warning \(\$\{warning\.kinds\.join\(", "\)\}\)/);
   // The addresses compared against come only from records the caller may open.
-  const addresses = actions.slice(actions.indexOf("async function customerAddresses"), actions.indexOf("export async function checkComposerEmail"));
+  const shared = src("src/lib/composerSend.ts");
+  const addresses = shared.slice(shared.indexOf("async function customerAddresses"), shared.indexOf("export async function sendComposerForm"));
   assert.match(addresses, /contactId && \(await canAccessContact\(user, contactId\)\)/);
   assert.match(addresses, /leadId && \(await canAccessLead\(user, leadId\)\)/);
   const check = actions.slice(actions.indexOf("export async function checkComposerEmail"), actions.indexOf("export async function recallSecureLink"));
@@ -360,8 +364,9 @@ test("the server refuses an unconfirmed send, the composer asks first, and the a
   // The form never posts itself; submit() checks first and only sends past a warning when Send anyway was pressed.
   assert.match(composer, /<form ref=\{formRef\} onSubmit=\{\(event\) => \{ event\.preventDefault\(\); void submit\(\); \}\}/);
   assert.match(composer, /data\.set\("sensitiveOk", confirmed \? "1" : ""\);/);
-  assert.match(composer, /if \(check\.warning && !confirmed\) \{ setPreview\(null\); setWarning\(check\.warning\); return; \}/);
-  assert.match(composer, /onClick=\{\(\) => void submit\(true\)\} disabled=\{busy\}>Send anyway</);
+  assert.match(composer, /if \(check\.warning && !confirmed\) \{ setPreview\(null\); setWarnedSendAt\(sendAt\); setWarning\(check\.warning\); return; \}/);
+  // A warning raised while SCHEDULING confirms the schedule — it never sends now (#890).
+  assert.match(composer, /onClick=\{\(\) => void submit\(true, warnedSendAt\)\} disabled=\{busy\}>\{warnedSendAt \? "Schedule anyway" : "Send anyway"\}</);
   assert.match(composer, />Back to editing</);
   assert.doesNotMatch(composer, /window\.confirm|confirm\(/, "never a browser dialog");
 });

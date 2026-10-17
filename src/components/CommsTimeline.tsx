@@ -7,6 +7,7 @@ import PasteImageInput from "@/components/PasteImageInput";
 import DealField from "@/components/DealField";
 import type { DealOption } from "@/lib/customerTimeline";
 import { SEEN_HINT, seenLabel } from "@/lib/emailOpenTracking";
+import EmailReplyButtons from "@/components/EmailReplyButtons";
 
 /* eslint-disable @next/next/no-img-element */
 const logo = (src: string, alt: string) => (
@@ -31,6 +32,8 @@ type Comm = {
   subject: string | null;
   body: string;
   attachmentUrl?: string | null;
+  /** Who a sent email was copied to (Communication.cc) — Reply all's addresses. */
+  cc?: string | null;
   occurredAt: Date;
   /** The customer opened our outbound message (email open tracking, WhatsApp read receipts). */
   seenAt?: Date | null;
@@ -57,7 +60,10 @@ export default function CommsTimeline({
   hideCreate = false,
   emptyText = "No communications logged yet.",
   deals = [],
+  replyable = false,
 }: {
+  /** The page has the email composer beside this timeline: emails get Reply / Reply all / Forward. */
+  replyable?: boolean;
   /** The customer's open deals, on a customer's page (lib/customerTimeline.dealChoice). */
   deals?: readonly DealOption[];
   communications: Comm[];
@@ -177,6 +183,11 @@ export default function CommsTimeline({
                   </a>
                 )}
                 <p className="text-sm text-slate-400 whitespace-pre-wrap break-words [overflow-wrap:anywhere]">{c.body}</p>
+                {replyable && c.type === "email" && (
+                  <EmailReplyButtons
+                    email={{ id: c.id, subject: c.subject, body: c.body, occurredAt: c.occurredAt.toISOString(), direction: c.direction, staffName: c.user.name, cc: c.cc ?? null }}
+                  />
+                )}
               </div>
               <div className="opacity-0 group-hover:opacity-100">
                 <ConfirmDelete

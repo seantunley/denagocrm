@@ -461,7 +461,6 @@ const CUSTOMER_RECORD_WRITERS = [
   // thread is the side that already knows.
   "src/app/actions/comments.ts",
   "src/app/actions/communications.ts",
-  "src/app/actions/emails.ts",
   "src/app/actions/fulfilment.ts",
   "src/app/actions/leads.ts",
   "src/app/actions/messenger.ts",
@@ -476,6 +475,8 @@ const CUSTOMER_RECORD_WRITERS = [
   // Inbound comments on posts and ads. Stamped from the channel scope the Page
   // id established, exactly as the DM and WhatsApp webhooks are.
   "src/lib/commentThreads.ts",
+  // The composer's email on the timeline — sent now, or scheduled and sent by the cron (since 2026-10-15).
+  "src/lib/composerSend.ts",
   "src/lib/botOutbox.ts",
   "src/lib/flowActions.ts",
   "src/lib/governedSurveyRuntime.ts",

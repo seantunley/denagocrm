@@ -29,6 +29,8 @@ import { type FieldChange } from "@/lib/auditDetail";
 import { FOLLOW_UP_TYPE } from "@/lib/followUp";
 import { distinctLeadNotes } from "@/lib/timelineNotes";
 import PasteImageInput from "@/components/PasteImageInput";
+import EmailReplyButtons from "@/components/EmailReplyButtons";
+import type { TimelineEmail } from "@/lib/emailReply";
 
 /* eslint-disable @next/next/no-img-element */
 const logo = (src: string, alt: string) => (
@@ -87,6 +89,8 @@ type Item = {
   pinTarget?: PinTarget;
   /** Field-level changes behind an audit entry, when the event recorded any. */
   changed?: FieldChange[];
+  /** An email, for Reply / Reply all / Forward in the composer beside the timeline (workspace view). */
+  email?: TimelineEmail;
 };
 
 /** `firstName` → "First name". Field names are for developers, not for a timeline. */
@@ -156,6 +160,8 @@ export default async function LeadTimeline({
     attachmentUrl?: string | null;
     attachmentType?: string | null;
     deliveredAt?: Date | null;
+    /** Who a sent email was copied to (Communication.cc) — Reply all's addresses. */
+    cc?: string | null;
     ownerLabel?: string | null;
     occurredAt: Date;
     seenAt?: Date | null;
@@ -272,6 +278,9 @@ export default async function LeadTimeline({
       who: communication.user.name,
       when: communication.occurredAt,
       seen: seenLabel(communication),
+      email: communication.type === "email"
+        ? { id: communication.id, subject: communication.subject, body: communication.body, occurredAt: communication.occurredAt.toISOString(), direction: communication.direction, staffName: communication.user.name, cc: communication.cc ?? null }
+        : undefined,
       pinnedAt: pinnedAt("communication", communication.id),
       pinTarget: { kind: "communication", itemId: communication.id },
     })),
@@ -378,6 +387,7 @@ export default async function LeadTimeline({
               </a>}
               {item.seen ? <p className="mt-2 text-xs text-emerald-400" title={item.type === "email" ? SEEN_HINT : undefined}>{item.seen}</p> : item.deliveredAt ? <p className="mt-2 text-xs text-emerald-400">Delivered · {formatDateTime(item.deliveredAt)}</p> : null}
               {item.changed && item.changed.length > 0 && <details className="mt-2 text-xs"><summary className="cursor-pointer text-muted-foreground">{item.changed.length} field changes</summary><dl className="mt-2 space-y-2">{item.changed.map((change) => <div key={change.field}><dt className="font-medium">{fieldLabel(change.field)}</dt><dd className="break-words text-muted-foreground [overflow-wrap:anywhere]"><span className="line-through">{auditValue(change.before)}</span> → {auditValue(change.after)}</dd></div>)}</dl></details>}
+              {!inPinnedShelf && item.email && <EmailReplyButtons email={item.email} />}
               <div className="mt-2 flex flex-wrap items-center gap-2">
                 {pinButton}
                 {!inPinnedShelf && item.communicationId && <ConfirmDelete action={deleteCommunication.bind(null, item.communicationId, revalidate)} title="Delete this timeline entry?" description="This cannot be undone. The deletion is recorded in the customer history." trigger="Delete entry" triggerClass="rounded-md px-2 py-2 text-xs text-muted-foreground hover:text-red-400 focus-visible:ring-2 focus-visible:ring-primary" />}

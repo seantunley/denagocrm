@@ -13,6 +13,10 @@
       "schedule": "*/30 * * * *"
     },
     {
+      "path": "/api/cron/scheduled-emails",
+      "schedule": "*/30 * * * *"
+    },
+    {
       "path": "/api/cron/journeys",
       "schedule": "*/30 * * * *"
     },

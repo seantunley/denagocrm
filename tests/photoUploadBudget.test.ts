@@ -186,7 +186,10 @@ test("the capture menu requires both the write and route-read permissions it nee
     /can\("jobcards\.manage"\) && can\("jobcards\.view_all", "jobcards\.view_owned"\) && packOn\("\/jobcards"\)/,
   );
   assert.match(nav, /can\("deliveries\.manage"\) && packOn\("\/deliveries"\)/);
-  assert.doesNotMatch(nav, /can\("deliveries\.view", "deliveries\.manage"\)/, "view is not enough to upload");
+  // In the CAPTURE sheet. (The phone's bottom bar links to Deliveries on view — that is navigation, not an upload.)
+  const capture = nav.slice(nav.indexOf("<Sheet open={captureOpen}"));
+  assert.ok(capture.length > 0);
+  assert.doesNotMatch(capture, /can\("deliveries\.view", "deliveries\.manage"\)/, "view is not enough to upload");
 });
 
 /**

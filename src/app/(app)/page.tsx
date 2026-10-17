@@ -112,7 +112,8 @@ export default async function HomePage({
             <div className="mt-3"><DaxBriefCard brief={brief} /></div>
           </details>
         )}
-        <Link href={`/d/${DEFAULT_DASHBOARD_SLUG}`} className="group flex items-center gap-3 rounded-2xl border border-border bg-card px-4 py-3 text-sm transition-colors hover:border-primary/40 sm:px-5">
+        {/* Dashboards are a desktop feature: not offered on a phone (lib/phoneScope.ts). */}
+        <Link href={`/d/${DEFAULT_DASHBOARD_SLUG}`} className="group flex items-center gap-3 rounded-2xl border border-border bg-card px-4 py-3 text-sm transition-colors hover:border-primary/40 max-md:hidden sm:px-5">
           <span className="flex size-9 shrink-0 items-center justify-center rounded-full bg-primary/15"><LayoutGrid className="size-4 text-primary" aria-hidden /></span>
           <span className="flex-1"><span className="block font-semibold text-foreground">Dashboards</span><span className="text-muted-foreground">Charts, targets and the cards you arranged</span></span>
           <ArrowRight className="size-4 text-muted-foreground transition-transform group-hover:translate-x-0.5" aria-hidden />

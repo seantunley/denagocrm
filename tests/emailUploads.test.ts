@@ -30,9 +30,11 @@ test("refused before sending: too many, too big in total, or a program", () => {
 });
 
 test("the send action attaches them and names them like library files; the composer offers Upload a file", () => {
-  const action = readFileSync(new URL("../src/app/actions/emails.ts", import.meta.url), "utf8");
+  // The send itself lives in lib/composerSend.ts (shared with scheduled sends), since 2026-10-15.
+  const action = readFileSync(new URL("../src/lib/composerSend.ts", import.meta.url), "utf8");
   assert.match(action, /const uploads = emailUploads\(formData\);\s*if \("error" in uploads\) return \{ error: uploads\.error \};/);
-  assert.match(action, /attachedNames\.push\(file\.name\);\s*if \(asSecureLinks\) secureUploads\.push\([^\n]+\);\s*else attachments\.push\(\{ filename: file\.name, content: buffer, contentType: file\.type \|\| undefined \}\);/);
+  // Named on the check first; read and attached only when it is really going (not when it is being scheduled).
+  assert.match(action, /attachedNames\.push\(file\.name\);\s*if \(options\.check\) continue;\s*const buffer = Buffer\.from\(await file\.arrayBuffer\(\)\);\s*if \(asSecureLinks\) secureUploads\.push\([^\n]+\);\s*else attachments\.push\(\{ filename: file\.name, content: buffer, contentType: file\.type \|\| undefined \}\);/);
   // Checked and attached BEFORE the mail goes.
   assert.ok(action.indexOf("emailUploads(formData)") < action.indexOf("const result = await sendEmail({"));
   const composer = readFileSync(new URL("../src/components/EmailComposer.tsx", import.meta.url), "utf8");

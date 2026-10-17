@@ -4,17 +4,21 @@ import { useState, useEffect, useRef } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import type { Editor } from "@tiptap/react";
-import { FileText, Paperclip, Receipt, Send, X, Eye, LayoutTemplate, ChevronDown, Mail } from "lucide-react";
-import { checkComposerEmail, composerBannerChoices, composerIdentity, previewComposerEmail, sendEmailAction, type SendEmailState } from "@/app/actions/emails";
+import { Clock, FileText, Paperclip, Receipt, Send, X, Eye, LayoutTemplate, ChevronDown, Mail } from "lucide-react";
+import { checkComposerEmail, composerBannerChoices, composerIdentity, discardEmailDraft, openEmailDraft, previewComposerEmail, saveEmailDraft, sendEmailAction, type SendEmailState } from "@/app/actions/emails";
 import { SECURE_LINK_DAYS, SECURE_LINK_DEFAULT_DAYS } from "@/lib/secureLinks";
 import { secureLinkHint } from "@/lib/sendCheck";
 import { parseAddressList, parseReplyTo } from "@/lib/replyToAddresses";
 import { EMAIL_UPLOAD_MAX_BYTES, EMAIL_UPLOAD_MAX_FILES, emailUploads } from "@/lib/emailUploads";
 import { dealChoice, NO_DEAL, postedDealId, type DealOption } from "@/lib/customerTimeline";
 import type { ComposerQuote } from "@/lib/composerQuotes";
+import { COMPOSE_REPLY_EVENT, replyDraft, type ComposeReplyDetail } from "@/lib/emailReply";
+import { localInputValue, nextHalfHour, quickSendTimes } from "@/lib/emailSchedule";
+import { formatDateTime } from "@/lib/format";
 import { Dialog, DialogContent, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import AiCheckButton from "@/components/AiCheckButton";
 import EmailRecipients from "@/components/EmailRecipients";
+import EmailWaitingList from "@/components/EmailWaitingList";
 import RichTextEditor from "@/components/RichTextEditor";
 import EmailRibbon from "@/components/EmailRibbon";
 
@@ -31,6 +35,8 @@ type EmailComposerDraft = {
   subject: string; body: string; banner: string; dealId: string;
   attached: string[]; attachedQuotes: string[]; uploads: File[];
   secure: boolean; days: number;
+  /** The timeline email this answers (Reply / Reply all): the server checks it and threads the reply to it. */
+  inReplyTo: string;
 };
 
 export default function EmailComposer({ defaultTo, templates, smtpConfigured, leadId, contactId, revalidate,
@@ -43,9 +49,9 @@ export default function EmailComposer({ defaultTo, templates, smtpConfigured, le
   const router = useRouter();
   const choice = dealChoice(deals);
   const freshDraft = (): EmailComposerDraft => ({ to: defaultTo, cc: "", bcc: "", replyTo: defaultReplyTo, subject: "", body: "", banner: "",
-    dealId: leadId ?? (choice.ask ? "" : choice.leadId ?? ""), attached: [], attachedQuotes: [], uploads: [], secure: false, days: SECURE_LINK_DEFAULT_DAYS });
+    dealId: leadId ?? (choice.ask ? "" : choice.leadId ?? ""), attached: [], attachedQuotes: [], uploads: [], secure: false, days: SECURE_LINK_DEFAULT_DAYS, inReplyTo: "" });
   const [draft, setDraft] = useState<EmailComposerDraft>(freshDraft);
-  const { to, cc, bcc, replyTo, subject, body, banner, dealId, attached, attachedQuotes, uploads, secure, days } = draft;
+  const { to, cc, bcc, replyTo, subject, body, banner, dealId, attached, attachedQuotes, uploads, secure, days, inReplyTo } = draft;
   const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(false);
   const [identity, setIdentity] = useState<{ from: string } | null>(null);
@@ -67,13 +73,19 @@ export default function EmailComposer({ defaultTo, templates, smtpConfigured, le
   useEffect(() => { editor?.setEditable(!busy, false); }, [editor, busy]);
   const formRef = useRef<HTMLFormElement>(null);
   const uploadRef = useRef<HTMLInputElement>(null);
-  // NOTHING IS STORED ON THE DEVICE (review of #893): the message — and any file attached from the computer — is
-  // kept in memory while the page is open, closing the window keeps it, and leaving the page asks first. A copy in
-  // the browser's storage outlived sign-out for a week, unencrypted, on whatever device it was written on.
+  // DRAFTS ARE KEPT ON THE SERVER (lib/emailDrafts.ts, #890), never on the device (review of #893: a browser copy
+  // outlived sign-out for a week, unencrypted). What is written is saved a moment after each change; closing the
+  // window keeps it; it waits on this record to be continued. Files from the computer are not kept with a draft.
+  const draftIdRef = useRef<string | null>(null);
+  const [draftId, setDraftId] = useState<string | null>(null);
+  const [savedAt, setSavedAt] = useState("");
+  const [unsaved, setUnsaved] = useState(false);
+  const [waitingKey, setWaitingKey] = useState(0);
+  const adoptDraft = (id: string | null) => { draftIdRef.current = id; setDraftId(id); setSavedAt(""); };
   function update(patch: Partial<EmailComposerDraft>) {
     if (sending.current) return;
     setDraft((previous) => ({ ...previous, ...patch }));
-    setDirty(true); setState(undefined); setWarning(null);
+    setDirty(true); setUnsaved(true); setState(undefined); setWarning(null);
   }
   const setBody = (html: string) => update({ body: html });
   const pickedQuotes = quotes.filter((q) => attachedQuotes.includes(q.id));
@@ -84,7 +96,8 @@ export default function EmailComposer({ defaultTo, templates, smtpConfigured, le
   ];
   const linkHint = secureLinkHint(allFiles.map((f) => f.name), secure);
 
-  async function openComposer() {
+  /** Open the window — on what was being written, or on `start` (a reply, a draft continued). */
+  async function openComposer(start?: EmailComposerDraft) {
     if (loading) return;
     setLoading(true); setPreviewError(""); setWarning(null); setImageProblem("");
     try {
@@ -92,24 +105,92 @@ export default function EmailComposer({ defaultTo, templates, smtpConfigured, le
       const availableBanners = await composerBannerChoices().catch(() => []);
       setBanners(availableBanners); setIdentity(nextIdentity);
       // What was written before closing the window is still here (the component is keyed by the record).
-      const next = dirty ? { ...draft, banner: draft.banner === "none" || availableBanners.some((b) => b.id === draft.banner) ? draft.banner : "" } : freshDraft();
+      const base = start ?? (dirty ? draft : freshDraft());
+      const next = { ...base, banner: base.banner === "none" || availableBanners.some((b) => b.id === base.banner) ? base.banner : "" };
       setDraft(next);
+      if (start) setDirty(true);
       setShowCc(Boolean(next.cc)); setShowBcc(Boolean(next.bcc)); setShowReplyTo(next.replyTo !== defaultReplyTo);
       setState(undefined); setOpen(true);
     } catch { setPreviewError("Could not load the sender or customer context. Refresh the page and try again."); }
     finally { setLoading(false); }
   }
 
-  // An unsent message — window open or closed — lives only in this page: leaving it asks first.
+  // REPLY / REPLY ALL / FORWARD from an email on the timeline (EmailReplyButtons, #889): the composer opens with the
+  // addresses filled, the email quoted and — for a reply — the email it answers. Reply all's Cc is the one stored
+  // with that email (Communication.cc), never read out of its words.
+  const openRef = useRef(openComposer);
+  useEffect(() => { openRef.current = openComposer; });
   useEffect(() => {
-    if (!dirty || state?.ok) return;
+    const onReply = (event: Event) => {
+      const { email, kind } = (event as CustomEvent<ComposeReplyDetail>).detail;
+      const reply = replyDraft(email, kind, { customer: defaultTo, when: formatDateTime(email.occurredAt) });
+      adoptDraft(null);
+      void openRef.current({ ...freshDraft(), to: kind === "forward" ? "" : defaultTo, cc: reply.cc, subject: reply.subject, body: reply.html, inReplyTo: kind === "forward" ? "" : email.id });
+    };
+    window.addEventListener(COMPOSE_REPLY_EVENT, onReply);
+    return () => window.removeEventListener(COMPOSE_REPLY_EVENT, onReply);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- freshDraft reads only props
+  }, [defaultTo]);
+
+  /** Continue a draft from the waiting list — or take back a scheduled send to edit it. A problem to show, if any. */
+  async function openDraft(id: string): Promise<string | undefined> {
+    const opened = await openEmailDraft(id);
+    if (!opened.draft) return opened.error ?? "That draft could not be opened.";
+    const d = opened.draft;
+    adoptDraft(d.id);
+    await openComposer({
+      to: d.to, cc: d.cc, bcc: d.bcc, replyTo: d.replyTo, subject: d.subject, body: d.bodyHtml, banner: d.banner,
+      dealId: leadId ?? d.leadId ?? (choice.ask ? "" : choice.leadId ?? ""),
+      attached: d.attachIds.filter((key) => libraryDocs.some((doc) => doc.id === key)),
+      attachedQuotes: d.quoteIds.filter((key) => quotes.some((q) => q.id === key)),
+      uploads: [], secure: d.secureLinks, days: d.secureDays ?? SECURE_LINK_DEFAULT_DAYS, inReplyTo: d.inReplyToId ?? "",
+    });
+    setUnsaved(false);
+    if (opened.filesDropped?.length) setImageProblem(`Files from your computer are not kept with a draft — attach again: ${opened.filesDropped.join(", ")}.`);
+    return undefined;
+  }
+
+  // AUTOSAVE a moment after the last change. Nothing is kept for an empty email, or once it has gone.
+  const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const written = useRef(draft);
+  useEffect(() => { written.current = draft; });
+  async function saveDraftNow() {
+    const now = written.current;
+    if (sending.current) return;
+    if (!now.subject.trim() && !now.body.replace(/<[^>]+>/g, "").trim()) return;
+    const saved = await saveEmailDraft(draftIdRef.current, {
+      to: now.to, cc: now.cc, bcc: now.bcc, replyTo: now.replyTo, subject: now.subject, bodyHtml: now.body,
+      contactId: contactId ?? null, leadId: now.dealId || leadId || null,
+      attachIds: now.attached, quoteIds: now.attachedQuotes, banner: now.banner,
+      secureLinks: now.secure, secureDays: now.days, inReplyToId: now.inReplyTo || null,
+    }).catch(() => null);
+    if (saved?.id) {
+      if (saved.id !== draftIdRef.current) setWaitingKey((key) => key + 1);
+      draftIdRef.current = saved.id; setDraftId(saved.id);
+      setSavedAt(formatDateTime(new Date()));
+      if (written.current === now) setUnsaved(false);
+    }
+  }
+  useEffect(() => {
+    if (!open || !dirty || state?.ok) return;
+    if (saveTimer.current) clearTimeout(saveTimer.current);
+    saveTimer.current = setTimeout(() => { saveTimer.current = null; void saveDraftNow(); }, 1500);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- saves on a change to what is written
+  }, [draft]);
+  const cancelSave = () => { if (saveTimer.current) clearTimeout(saveTimer.current); saveTimer.current = null; };
+
+  // Only what is not yet saved — or a file from the computer, which a draft does not keep — is lost by leaving.
+  useEffect(() => {
+    if (!dirty || state?.ok || (!unsaved && uploads.length === 0)) return;
     const warn = (event: BeforeUnloadEvent) => { event.preventDefault(); event.returnValue = ""; };
     window.addEventListener("beforeunload", warn);
     return () => window.removeEventListener("beforeunload", warn);
-  }, [dirty, state?.ok]);
+  }, [dirty, unsaved, uploads.length, state?.ok]);
 
+  /** Close the window, keeping what is written: a save still waiting is made now. */
   function closeComposer() {
     if (sending.current) return;
+    if (saveTimer.current) { cancelSave(); void saveDraftNow(); }
     setOpen(false);
   }
   function setUploadFiles(picked: File[]) {
@@ -119,7 +200,15 @@ export default function EmailComposer({ defaultTo, templates, smtpConfigured, le
     if ("error" in checked) { setImageProblem(checked.error); return; }
     update({ uploads: files });
   }
-  async function submit(confirmed = false) {
+
+  // SEND LATER (#890): at the time chosen, on the hour or half hour, as the sender, after the same checks.
+  const [scheduleOpen, setScheduleOpen] = useState(false);
+  const [laterAt, setLaterAt] = useState("");
+  // The time a warning was raised for, so "Schedule anyway" schedules — never sends now.
+  const [warnedSendAt, setWarnedSendAt] = useState<Date | null>(null);
+
+  /** Send now — or, with `sendAt`, schedule it. The time is put in what is posted here, in code, never in a field. */
+  async function submit(confirmed = false, sendAt: Date | null = null) {
     if (sending.current || !formRef.current?.reportValidity()) return;
     setState(undefined); setPreviewError("");
     for (const [label, raw] of [["To", to], ["Cc", cc], ["Bcc", bcc]]) {
@@ -129,20 +218,27 @@ export default function EmailComposer({ defaultTo, templates, smtpConfigured, le
     const replies = parseReplyTo(replyTo);
     if (!replies.ok) { setState({ error: `Check Reply-to: ${replies.invalid.join(", ")}.` }); return; }
     if (!subject.trim() || editor?.isEmpty !== false) { setState({ error: "Add a subject and message before sending." }); return; }
+    // Going now (or being scheduled): no autosave may follow and keep a draft of an email that has gone.
+    cancelSave();
     // Snapshot before disabling controls. Files are controlled, so failures never clear the upload input's only copy.
     const data = new FormData(formRef.current);
     uploads.forEach((file) => data.append("upload", file));
     data.set("sensitiveOk", confirmed ? "1" : "");
+    data.set("draftId", draftIdRef.current ?? "");
+    if (sendAt) data.set("sendAt", sendAt.toISOString()); else data.delete("sendAt");
     sending.current = true; setChecking(true);
     try {
       const check = await checkComposerEmail({ to, cc, bcc, subject, bodyHtml: body, contactId, leadId: postedDealId(dealId) ?? leadId, fileNames: allFiles.map((f) => f.name), secureLinks: secure && allFiles.length > 0 });
       if (check.error) { setPreview(null); setState({ error: check.error }); return; }
-      if (check.warning && !confirmed) { setPreview(null); setWarning(check.warning); return; }
+      if (check.warning && !confirmed) { setPreview(null); setWarnedSendAt(sendAt); setWarning(check.warning); return; }
       setWarning(null); setChecking(false); setPending(true);
       const result = await sendEmailAction(undefined, data);
       setState(result); setPreview(null);
       if (result.ok) {
-        setDirty(false); setDraft(freshDraft());
+        // Sent or scheduled: the draft is done with, and the composer is ready for the next email.
+        adoptDraft(null);
+        setDirty(false); setUnsaved(false); setDraft(freshDraft()); setScheduleOpen(false); setLaterAt("");
+        setWaitingKey((key) => key + 1);
         router.refresh();
       }
     } catch {
@@ -166,6 +262,8 @@ export default function EmailComposer({ defaultTo, templates, smtpConfigured, le
     } catch { setPreviewError("Couldn't build the preview — try again."); }
     finally { setPreviewing(false); }
   }
+  // YOUR SIGNATURE under the message while you write (#888): built by the server exactly as Send adds it (Preview's
+  // builder, with no message), again when the recipient or banner changes — a customer who opted out gets no banner.
   const [signature, setSignature] = useState<{ html: string; key: string } | null>(null);
   const signatureKey = `${to}:${banner}`;
   useEffect(() => {
@@ -192,7 +290,11 @@ export default function EmailComposer({ defaultTo, templates, smtpConfigured, le
   }
   const [discardOpen, setDiscardOpen] = useState(false);
   function discard() {
-    setDraft(freshDraft()); setDirty(false); setState(undefined); setDiscardOpen(false); setOpen(false);
+    // Thrown away: the saved draft too, so it is not offered again.
+    cancelSave();
+    if (draftIdRef.current) void discardEmailDraft(draftIdRef.current).then(() => setWaitingKey((key) => key + 1));
+    adoptDraft(null);
+    setDraft(freshDraft()); setDirty(false); setUnsaved(false); setState(undefined); setDiscardOpen(false); setOpen(false);
   }
   const [attachmentPreview, setAttachmentPreview] = useState<{ name: string; src: string; image?: boolean; local?: boolean } | null>(null);
   useEffect(() => () => { if (attachmentPreview?.local) URL.revokeObjectURL(attachmentPreview.src); }, [attachmentPreview]);
@@ -208,11 +310,12 @@ export default function EmailComposer({ defaultTo, templates, smtpConfigured, le
       {!compactTrigger && <span className="text-xs font-normal text-muted-foreground">Compose a message</span>}
     </button>
     {!open && previewError && <p role="alert" className="mt-2 text-sm text-red-300">{previewError}</p>}
-    <Dialog open={open} onOpenChange={(next) => { if (!next) void closeComposer(); }}>
+    <EmailWaitingList contactId={contactId} leadId={leadId} revalidate={revalidate} refreshKey={waitingKey} onOpen={openDraft} />
+    <Dialog open={open} onOpenChange={(next) => { if (!next) closeComposer(); }}>
       <DialogContent showCloseButton={false} className="top-0 translate-y-0 sm:top-1/2 sm:-translate-y-1/2 flex h-[100dvh] max-h-[100dvh] w-full max-w-full flex-col gap-0 overflow-hidden rounded-none border-border bg-card p-0 sm:h-[94dvh] sm:max-w-[min(1400px,96vw)] sm:rounded-xl" onEscapeKeyDown={(event) => { if (busy) event.preventDefault(); }} onPointerDownOutside={(event) => event.preventDefault()}>
         <div className="flex shrink-0 items-center justify-between gap-3 border-b border-border px-5 py-3">
-          <div className="min-w-0"><DialogTitle className="truncate text-base">{subject.trim() || "New email"}</DialogTitle><DialogDescription className="sr-only">Compose an email. Closing this window keeps your message while this page is open.</DialogDescription></div>
-          <button type="button" onClick={() => closeComposer()} disabled={busy} aria-label="Close — your message is kept while this page is open" className={TOOL}><X className="size-4" /></button>
+          <div className="min-w-0"><DialogTitle className="truncate text-base">{subject.trim() || "New email"}</DialogTitle><DialogDescription className="sr-only">Compose an email. Closing this window keeps what you have written as a draft on this record.</DialogDescription></div>
+          <button type="button" onClick={() => closeComposer()} disabled={busy} aria-label="Close" title="Close — what you have written is kept as a draft" className={TOOL}><X className="size-4" /></button>
         </div>
         {!smtpConfigured ? <p className="p-6 text-sm text-muted-foreground">Email sending isn&apos;t configured. <Link href="/settings?tab=email" className="text-primary underline">Open email settings</Link></p> : (
           <form ref={formRef} onSubmit={(event) => { event.preventDefault(); void submit(); }} className="flex min-h-0 flex-1 flex-col">
@@ -220,6 +323,8 @@ export default function EmailComposer({ defaultTo, templates, smtpConfigured, le
             <input type="hidden" name="revalidate" value={revalidate} />
             <input type="hidden" name="banner" value={banner} />
             <input type="hidden" name="bodyHtml" value={body} />
+            <input type="hidden" name="inReplyTo" value={inReplyTo} />
+            <input type="hidden" name="draftId" value={draftId ?? ""} />
             <fieldset disabled={busy} className="m-0 flex min-h-0 flex-1 flex-col border-0 p-0">
               <div className="min-h-0 flex-1 overflow-y-auto">
                 <div className="space-y-2.5 px-4 py-3 sm:px-6">
@@ -273,16 +378,32 @@ export default function EmailComposer({ defaultTo, templates, smtpConfigured, le
               </div>
             </fieldset>
             <div className="shrink-0 space-y-2 border-t border-border bg-card px-4 py-3 sm:px-5">
-              {warning && <div role="alert" className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-sm"><p className="font-semibold text-amber-200">Check before you send</p><p className="mt-1 text-amber-100">{warning}</p><div className="mt-3 flex gap-2"><button type="button" className="btn-secondary btn-sm" onClick={() => setWarning(null)}>Back to editing</button><button type="button" className="btn-primary btn-sm" onClick={() => void submit(true)} disabled={busy}>Send anyway</button></div></div>}
+              {scheduleOpen && <div className="rounded-lg border border-border bg-muted/30 p-3" data-testid="schedule-send">
+                <p className="text-sm font-semibold">Send later</p>
+                <p className="mt-0.5 text-xs text-muted-foreground">It goes at the time you choose — on the hour or half hour — as you, after the same checks Send makes. Until then it waits on this customer&apos;s record, where it can be edited or cancelled.</p>
+                <div className="mt-2 flex flex-wrap items-center gap-2">
+                  {quickSendTimes(new Date()).map((option) => <button key={option.label} type="button" className="btn-secondary btn-sm" onClick={() => setLaterAt(localInputValue(option.at))}>{option.label}</button>)}
+                  <input type="datetime-local" step={1800} aria-label="Send at" className="input h-8 w-auto py-0 text-sm" value={laterAt} onChange={(event) => setLaterAt(event.target.value)} />
+                  <button type="button" className="btn-primary btn-sm gap-1.5" disabled={!laterAt || busy} onClick={() => {
+                    // A time between runs goes at the next one: say so by showing it, rather than surprising anyone.
+                    const at = nextHalfHour(new Date(laterAt));
+                    setLaterAt(localInputValue(at));
+                    void submit(false, at);
+                  }}><Clock className="size-4" />Schedule send</button>
+                </div>
+              </div>}
+              {warning && <div role="alert" className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-sm"><p className="font-semibold text-amber-200">Check before you send</p><p className="mt-1 text-amber-100">{warning}</p><div className="mt-3 flex gap-2"><button type="button" className="btn-secondary btn-sm" onClick={() => setWarning(null)}>Back to editing</button><button type="button" className="btn-primary btn-sm" onClick={() => void submit(true, warnedSendAt)} disabled={busy}>{warnedSendAt ? "Schedule anyway" : "Send anyway"}</button></div></div>}
               {state?.error && <p role="alert" className="text-sm text-red-300">{state.error}</p>}
               {state?.ok && <p role="status" className="text-sm text-emerald-400">{state.ok}</p>}
               {previewError && <p role="alert" className="text-xs text-red-300">{previewError}</p>}
               {imageProblem && <p role="alert" className="text-xs text-amber-300">{imageProblem} <button type="button" className="underline" onClick={() => setImageProblem("")}>Dismiss</button></p>}
               <div className="flex flex-wrap items-center gap-2">
                 <button type="submit" className="btn-primary gap-2" disabled={busy || Boolean(state?.ok)}><Send className="size-4" />{pending ? "Sending…" : checking ? "Checking…" : "Send email"}</button>
+                <button type="button" onClick={() => setScheduleOpen((shown) => !shown)} aria-expanded={scheduleOpen} className="btn-secondary gap-1.5" disabled={busy || Boolean(state?.ok)} title="Send it later, at a time you choose"><Clock className="size-4" />Send later</button>
                 <button type="button" onClick={() => void showPreview()} className="btn-secondary gap-1.5" disabled={previewing || busy}><Eye className="size-4" />{previewing ? "Preparing…" : "Preview"}</button>
                 <AiCheckButton getDraft={() => editor?.getText() ?? ""} contactId={contactId} leadId={leadId} configured={aiConfigured} label="Check wording" />
-                <button type="button" disabled={busy} className={`${TOOL} ml-auto`} onClick={() => dirty ? setDiscardOpen(true) : closeComposer()}>{state?.ok ? "Close" : "Discard"}</button>
+                {savedAt && !state?.ok && <span role="status" className="ml-auto text-xs text-muted-foreground">Draft saved {savedAt}</span>}
+                <button type="button" disabled={busy} className={`${TOOL} ${savedAt && !state?.ok ? "" : "ml-auto"}`} onClick={() => dirty ? setDiscardOpen(true) : closeComposer()}>{state?.ok ? "Close" : "Discard"}</button>
               </div>
             </div>
           </form>
@@ -312,7 +433,7 @@ export default function EmailComposer({ defaultTo, templates, smtpConfigured, le
             <div className="flex gap-2"><button type="button" className="btn-primary" disabled={busy || Boolean(state?.ok)} onClick={() => void submit()}>Send email</button><button type="button" className="btn-secondary" onClick={() => setPreview(null)}>Back to editing</button></div></>}
         </DialogContent></Dialog>
         <Dialog open={discardOpen} onOpenChange={setDiscardOpen}><DialogContent>
-          <DialogTitle>Discard this email?</DialogTitle><DialogDescription>This clears the message and its attachments. Use the close button to keep it while this page is open instead.</DialogDescription>
+          <DialogTitle>Discard this email?</DialogTitle><DialogDescription>This deletes the message, its attachments and its saved draft. Use the close button to keep it as a draft instead.</DialogDescription>
           <div className="flex justify-end gap-2"><button type="button" disabled={busy} className="btn-secondary" onClick={() => setDiscardOpen(false)}>Keep editing</button><button type="button" disabled={busy} className="btn-danger" onClick={() => discard()}>Discard email</button></div>
         </DialogContent></Dialog>
         <Dialog open={Boolean(attachmentPreview)} onOpenChange={(next) => { if (!next) setAttachmentPreview(null); }}><DialogContent className="max-h-[90dvh] overflow-y-auto sm:max-w-4xl">
