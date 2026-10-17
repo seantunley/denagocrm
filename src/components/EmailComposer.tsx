@@ -312,7 +312,9 @@ export default function EmailComposer({ defaultTo, templates, smtpConfigured, le
     {!open && previewError && <p role="alert" className="mt-2 text-sm text-red-300">{previewError}</p>}
     <EmailWaitingList contactId={contactId} leadId={leadId} revalidate={revalidate} refreshKey={waitingKey} onOpen={openDraft} />
     <Dialog open={open} onOpenChange={(next) => { if (!next) closeComposer(); }}>
-      <DialogContent showCloseButton={false} className="top-0 translate-y-0 sm:top-1/2 sm:-translate-y-1/2 flex h-[100dvh] max-h-[100dvh] w-full max-w-full flex-col gap-0 overflow-hidden rounded-none border-border bg-card p-0 sm:h-[94dvh] sm:max-w-[min(1400px,96vw)] sm:rounded-xl" onEscapeKeyDown={(event) => { if (busy) event.preventDefault(); }} onPointerDownOutside={(event) => event.preventDefault()}>
+      {/* A window in front of the page, as Outlook's is (Sean, 2026-10-18: "it looks weird when this window is open"):
+          the default 50% backdrop barely dims this dark app, and a border-coloured edge vanished into it. */}
+      <DialogContent showCloseButton={false} overlayClassName="bg-black/75 backdrop-blur-[2px]" className="top-0 translate-y-0 sm:top-1/2 sm:-translate-y-1/2 flex h-[100dvh] max-h-[100dvh] w-full max-w-full flex-col gap-0 overflow-hidden rounded-none border-white/15 bg-card p-0 shadow-2xl shadow-black/70 sm:h-[94dvh] sm:max-w-[min(1400px,96vw)] sm:rounded-xl" onEscapeKeyDown={(event) => { if (busy) event.preventDefault(); }} onPointerDownOutside={(event) => event.preventDefault()}>
         <div className="flex shrink-0 items-center justify-between gap-3 border-b border-border px-5 py-3">
           <div className="min-w-0"><DialogTitle className="truncate text-base">{subject.trim() || "New email"}</DialogTitle><DialogDescription className="sr-only">Compose an email. Closing this window keeps what you have written as a draft on this record.</DialogDescription></div>
           <button type="button" onClick={() => closeComposer()} disabled={busy} aria-label="Close" title="Close — what you have written is kept as a draft" className={TOOL}><X className="size-4" /></button>
@@ -326,7 +328,7 @@ export default function EmailComposer({ defaultTo, templates, smtpConfigured, le
             <input type="hidden" name="inReplyTo" value={inReplyTo} />
             <input type="hidden" name="draftId" value={draftId ?? ""} />
             <fieldset disabled={busy} className="m-0 flex min-h-0 flex-1 flex-col border-0 p-0">
-              <div className="min-h-0 flex-1 overflow-y-auto">
+              <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
                 <div className="space-y-2.5 px-4 py-3 sm:px-6">
                   <div className="flex items-baseline gap-3 text-xs"><span className="w-16 shrink-0 text-muted-foreground">From</span><span className="break-all">{identity?.from}</span></div>
                   <div className="flex items-start gap-3"><span className={`${LABEL} py-2.5`}>To</span><EmailRecipients label="To" name="to" value={to} onChange={(value) => update({ to: value })} required disabled={busy} /></div>
@@ -359,7 +361,7 @@ export default function EmailComposer({ defaultTo, templates, smtpConfigured, le
                   <details><summary className="cursor-pointer text-xs text-muted-foreground">File delivery: {secure ? "secure links" : "attachments"}</summary><div className="mt-2 space-y-2 text-xs"><label className="flex items-center gap-2"><input type="checkbox" name="secureLinks" checked={secure} onChange={(event) => update({ secure: event.target.checked })} />Send files as expiring, recallable secure links</label>{secure && <label className="flex items-center gap-2">Link works for<select name="secureDays" className="input !w-auto py-1 text-xs" value={days} onChange={(event) => update({ days: Number(event.target.value) })}>{SECURE_LINK_DAYS.map((d) => <option key={d} value={d}>{d} {d === 1 ? "day" : "days"}</option>)}</select></label>}</div></details>
                   {linkHint && <p className="text-xs text-amber-300">{linkHint}</p>}
                 </div>}
-                <div className="cursor-text bg-[#e9ebee] px-2 py-4 sm:px-6 sm:py-5" onMouseDown={(event) => { if (editor && event.target === event.currentTarget) { event.preventDefault(); editor.chain().focus("end").run(); } }}>
+                <div className="flex-1 cursor-text bg-[#e9ebee] px-2 py-4 sm:px-6 sm:py-5" onMouseDown={(event) => { if (editor && event.target === event.currentTarget) { event.preventDefault(); editor.chain().focus("end").run(); } }}>
                   <div className="mx-auto max-w-[820px] overflow-hidden rounded-sm bg-white shadow-sm" style={{ fontFamily: "Arial, Helvetica, sans-serif" }}>
                     <RichTextEditor
                       value={body}
