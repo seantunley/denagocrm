@@ -42,10 +42,13 @@
 function Wordmark({ name, className }: { name: string; className?: string }) {
   return (
     <span
-      className={`inline-flex items-center whitespace-nowrap font-semibold uppercase tracking-[0.14em] ${className ?? ""}`}
+      className={`inline-block max-w-full truncate align-middle font-semibold uppercase tracking-[0.14em] ${className ?? ""}`}
       // The name is the workspace's own and is bounded at 120 characters on
       // write, but a long one still has to fit a header rather than push the
-      // layout sideways — hence nowrap plus the caller's height class.
+      // layout sideways — one line, and an ellipsis where it runs out of room.
+      // (It used to be clipped instead: the phone's top bar showed "AGO CAPE T",
+      // cut on both sides, on every page.)
+      title={name}
     >
       {name}
     </span>
