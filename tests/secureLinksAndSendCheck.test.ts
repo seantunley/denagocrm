@@ -317,11 +317,11 @@ test("A LIBRARY FILE IS CHECKED BY ITS FILE NAME, NOT ITS TITLE — in the compo
   // …and the composer is given it, and uses it for the check it makes before submitting. Had it used the
   // title, the browser would pass an email the server then refuses, with no "Send anyway" to press.
   const composer = src("src/components/EmailComposer.tsx");
-  assert.match(composer, /libraryDocs\?: \{ id: string; label: string; fileName: string \}\[\];/);
-  assert.match(composer, /\.\.\.attached\.map\(\(id\) => \(\{ name: libraryDocs\.find\(\(x\) => x\.id === id\)\?\.fileName \?\? "Document", sizeBytes: 0 \}\)\),/);
+  assert.match(composer, /libraryDocs\?: \{ id: string; label: string; fileName: string; sizeBytes\?: number \}\[\];/);
+  assert.match(composer, /\.\.\.attached\.map\(\(key\) => \(\{ name: libraryDocs\.find\(\(d\) => d\.id === key\)\?\.fileName \?\? "Document",/);
   assert.match(composer, /fileNames: allFiles\.map\(\(f\) => f\.name\),/);
   for (const page of ["src/app/(app)/leads/[id]/page.tsx", "src/app/(app)/contacts/[id]/page.tsx"]) {
-    assert.match(src(page), /label: `\$\{d\.name\} \(v\$\{d\.versions\[0\]\.version\}\)`, fileName: d\.versions\[0\]\.fileName \}/, page);
+    assert.match(src(page), /label: `\$\{d\.name\} \(v\$\{d\.versions\[0\]\.version\}\)`, fileName: d\.versions\[0\]\.fileName,/, page);
   }
 });
 
@@ -340,7 +340,10 @@ test("A SECURE LINK IS ONLY MADE WHERE FILES ARE STORED PRIVATELY", () => {
   // The composer is told before the form is submitted, so nothing typed is lost.
   const check = actions.slice(actions.indexOf("export async function checkComposerEmail"), actions.indexOf("export async function recallSecureLink"));
   assert.match(check, /if \(input\.secureLinks && !storesPrivately\(\)\) return \{ warning: null, error: NO_PRIVATE_STORE \};/);
-  assert.match(src("src/components/EmailComposer.tsx"), /if \(blocked\) \{[\s\S]*?setPreviewError\(blocked\);\s*return;/);
+  // The check runs before the send, and its refusal stops there with the message on screen.
+  const composer = src("src/components/EmailComposer.tsx");
+  assert.match(composer, /const check = await checkComposerEmail\(\{[^\n]*secureLinks: secure && allFiles\.length > 0 \}\);\s*if \(check\.error\) \{ setPreview\(null\); setState\(\{ error: check\.error \}\); return; \}/);
+  assert.ok(composer.indexOf("checkComposerEmail({") < composer.indexOf("await sendEmailAction("));
 });
 
 test("the server refuses an unconfirmed send, the composer asks first, and the audit names the kind only", () => {
@@ -358,10 +361,12 @@ test("the server refuses an unconfirmed send, the composer asks first, and the a
   assert.match(check, /return \{ warning: warning\?\.text \?\? null \};/, "words only — never the findings' raw text");
 
   const composer = src("src/components/EmailComposer.tsx");
-  assert.match(composer, /<form ref=\{formRef\} action=\{formAction\} onSubmit=\{onSubmit\}/);
-  assert.match(composer, /event\.preventDefault\(\);/);
-  assert.match(composer, /<input ref=\{confirmedRef\} type="hidden" name="sensitiveOk" defaultValue="" \/>/);
-  assert.match(composer, /\{scheduling \? "Schedule anyway" : "Send anyway"\}/);
-  assert.match(composer, />Go back and change it</);
+  // The form never posts itself; submit() checks first and only sends past a warning when Send anyway was pressed.
+  assert.match(composer, /<form ref=\{formRef\} onSubmit=\{\(event\) => \{ event\.preventDefault\(\); void submit\(\); \}\}/);
+  assert.match(composer, /data\.set\("sensitiveOk", confirmed \? "1" : ""\);/);
+  assert.match(composer, /if \(check\.warning && !confirmed\) \{ setPreview\(null\); setWarnedSendAt\(sendAt\); setWarning\(check\.warning\); return; \}/);
+  // A warning raised while SCHEDULING confirms the schedule — it never sends now (#890).
+  assert.match(composer, /onClick=\{\(\) => void submit\(true, warnedSendAt\)\} disabled=\{busy\}>\{warnedSendAt \? "Schedule anyway" : "Send anyway"\}</);
+  assert.match(composer, />Back to editing</);
   assert.doesNotMatch(composer, /window\.confirm|confirm\(/, "never a browser dialog");
 });

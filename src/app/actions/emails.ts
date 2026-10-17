@@ -26,7 +26,7 @@ import {
   requireAnyPermission,
 } from "@/lib/permissions";
 import { logAudit } from "@/lib/audit";
-import { sendEmail } from "@/lib/email";
+import { getSmtpConfig, fromHeader, personFrom, sendEmail } from "@/lib/email";
 import {
   htmlToText,
   parseSignatureDesign,
@@ -89,6 +89,19 @@ export async function composerBannerChoices(): Promise<{ id: string; name: strin
   const tenantId = await tenantIdFor(user.id);
   if (!tenantId) return [];
   return (await bannersForSender(tenantId, user.id).catch(() => [])).map(({ id, name }) => ({ id, name }));
+}
+
+/** Only public sender information leaves the server: the From line the customer will see. */
+export async function composerIdentity(contactId?: string, leadId?: string): Promise<{ from: string }> {
+  return withActingStaffScope(async () => {
+    const user = await requireAnyPermission(...CUSTOMER_RECORD_WRITE_PERMISSIONS);
+    if (contactId && !(await canAccessContact(user, contactId))) throw new Error("Contact unavailable");
+    if (leadId && !(await canAccessLead(user, leadId))) throw new Error("Lead unavailable");
+    const config = await getSmtpConfig();
+    const workspaceFrom = config ? fromHeader(config) : "Email not configured";
+    const person = config ? personFrom(workspaceFrom, user.name) : null;
+    return { from: person ? `${person.name} <${person.address}>` : workspaceFrom };
+  });
 }
 
 /**

@@ -106,17 +106,19 @@ test("the table is isolated per workspace, additively", () => {
 
 test("the composer keeps a draft as it is written, ends it on send, and offers Later", () => {
   const composer = src("src/components/EmailComposer.tsx");
-  assert.match(composer, /saveTimer\.current = setTimeout\(\(\) => void saveDraftNow\(\), 1500\);/);
-  // Closing keeps it — a save still waiting is made before the form goes away.
-  assert.match(fn(composer, "closeComposer"), /void saveDraftNow\(\);/);
-  // Sending or scheduling cancels a waiting save, so no draft of a sent email is made.
-  assert.match(fn(composer, "onSubmit"), /clearTimeout\(saveTimer\.current\);/);
+  assert.match(composer, /saveTimer\.current = setTimeout\(\(\) => \{ saveTimer\.current = null; void saveDraftNow\(\); \}, 1500\);/);
+  // Closing keeps it — a save still waiting is made before the window goes away.
+  assert.match(composer, /function closeComposer\(\) \{\s*if \(sending\.current\) return;\s*if \(saveTimer\.current\) \{ cancelSave\(\); void saveDraftNow\(\); \}/);
+  // Sending or scheduling cancels a waiting save, so no draft of a sent email is made — before anything is posted.
+  const submit = composer.slice(composer.indexOf("async function submit("), composer.indexOf("const [preview, setPreview]"));
+  assert.ok(submit.indexOf("cancelSave();") > 0 && submit.indexOf("cancelSave();") < submit.indexOf("sendEmailAction("));
   assert.match(composer, /<input type="hidden" name="draftId" value=\{draftId \?\? ""\} \/>/);
-  // The time is STATE in a controlled field — a value written into the field directly was reset by React's next
-  // render, and "Schedule send" sent the email at once (found testing it). And if it is ever missing, nothing goes.
-  assert.match(composer, /<input type="hidden" name="sendAt" value=\{sendAt\} \/>/);
+  // The time goes into what is POSTED, set in code at the moment of sending (#893 builds the FormData itself) —
+  // never written into a field, which React reset on its next render, and "Schedule send" sent the email at once
+  // (found testing it). Send now (no time) removes any.
+  assert.match(submit, /if \(sendAt\) data\.set\("sendAt", sendAt\.toISOString\(\)\); else data\.delete\("sendAt"\);/);
+  assert.doesNotMatch(composer, /name="sendAt"/);
   assert.doesNotMatch(composer, /\.value = at\.toISOString\(\)/);
-  assert.match(fn(composer, "onSubmit"), /if \(schedulingRef\.current && !new FormData\(event\.currentTarget\)\.get\("sendAt"\)\) \{\s*event\.preventDefault\(\);/);
-  assert.match(composer, /nextHalfHour\(new Date\(laterAt\)\)/);
+  assert.match(composer, /const at = nextHalfHour\(new Date\(laterAt\)\);[\s\S]{0,80}void submit\(false, at\);/);
   assert.match(composer, /<EmailWaitingList /);
 });

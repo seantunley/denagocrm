@@ -52,7 +52,7 @@ export async function isSmtpConfigured(): Promise<boolean> {
  * display name like "Denago Cape Town"), pair it with the authenticated SMTP
  * user so the message has a valid sender and isn't rejected/dropped.
  */
-function fromHeader(config: SmtpConfig): string {
+export function fromHeader(config: SmtpConfig): string {
   const from = config.from.trim();
   if (from.includes("@")) return from;
   if (config.user && config.user.includes("@")) return `${from} <${config.user}>`;
