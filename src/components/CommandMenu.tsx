@@ -22,6 +22,7 @@ import {
   CommandSeparator,
 } from "@/components/ui/command";
 import { buildNav } from "@/components/nav-config";
+import { linkOnPhone, PHONE_MEDIA } from "@/lib/phoneScope";
 import { isPathEnabled } from "@/lib/modules/registry";
 import { settingsHref, visibleSettingsGroups } from "@/lib/settings-navigation";
 import { searchRecords } from "@/app/actions/search";
@@ -80,6 +81,14 @@ export default function CommandMenu({
     { href: "/search", label: "Search accessible records", icon: Search },
   ].filter((action) => packOn(action.href));
   const settingsGroups = visibleSettingsGroups({ isOwner: isAdmin, isPlatformOwner, permissions }, enabledSet);
+  // ON A PHONE, only the phone app's pages (lib/phoneScope.ts) — the desktop features are not on offer there
+  // (Sean, 2026-10-17). Decided when the palette OPENS, from the screen it opens on.
+  const [phone, setPhone] = useState(false);
+  const keep = (href: string) => !phone || linkOnPhone(href);
+  const shownTopLinks = topLinks.filter((link) => keep(link.href));
+  const shownGroups = groups.map((group) => ({ ...group, links: group.links.filter((link) => keep(link.href)) })).filter((group) => group.links.length > 0);
+  const shownActions = quickActions.filter((action) => keep(action.href));
+  const shownSettings = settingsGroups.map((group) => ({ ...group, items: group.items.filter((item) => keep(settingsHref(item))) })).filter((group) => group.items.length > 0);
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -138,6 +147,7 @@ export default function CommandMenu({
    * render and the synchronous setState the hooks lint warns about.
    */
   function setPaletteOpen(next: boolean) {
+    if (next) setPhone(window.matchMedia(PHONE_MEDIA).matches);
     setOpen(next);
     if (!next) {
       setTerm("");
@@ -167,7 +177,7 @@ export default function CommandMenu({
   const searchable = term.trim().length >= MIN_SEARCH_TERM;
   // DERIVED, not cleared in an effect: a term too short to search shows nothing,
   // without a render pass whose only job is to empty a list.
-  const visibleHits = searchable ? hits : [];
+  const visibleHits = searchable ? hits.filter((hit) => keep(hit.href)) : [];
 
   const grouped = SEARCH_GROUPS.map((group) => ({
     ...group,
@@ -233,7 +243,7 @@ export default function CommandMenu({
         {(grouped.length > 0 || searchable) && <CommandSeparator />}
 
         <CommandGroup heading="Quick actions">
-          {quickActions.map((action) => (
+          {shownActions.map((action) => (
             <CommandItem key={action.href} value={`action ${action.label}`} onSelect={() => go(action.href)}>
               <action.icon className="size-4 text-muted-foreground" />
               {action.label}
@@ -244,7 +254,7 @@ export default function CommandMenu({
         <CommandSeparator />
 
         <CommandGroup heading="Go to">
-          {topLinks.map((link) => (
+          {shownTopLinks.map((link) => (
             <CommandItem key={link.href} value={`page ${link.label}`} onSelect={() => go(link.href)}>
               <link.icon className="size-4 text-muted-foreground" />
               {link.label}
@@ -252,7 +262,7 @@ export default function CommandMenu({
           ))}
         </CommandGroup>
 
-        {groups.map((group) => (
+        {shownGroups.map((group) => (
           <CommandGroup key={group.key} heading={group.label}>
             {group.links.map((link) => (
               <CommandItem key={link.href} value={`${group.label} ${link.label}`} onSelect={() => go(link.href)}>
@@ -265,7 +275,7 @@ export default function CommandMenu({
 
         <CommandSeparator />
         <CommandGroup heading="Settings">
-          {settingsGroups.flatMap((group) =>
+          {shownSettings.flatMap((group) =>
             group.items.map((item) => (
               <CommandItem
                 key={item.key}
@@ -280,7 +290,7 @@ export default function CommandMenu({
           )}
         </CommandGroup>
 
-        {isAdmin && (
+        {isAdmin && !phone && (
           <>
             <CommandSeparator />
             <CommandGroup heading="Account">

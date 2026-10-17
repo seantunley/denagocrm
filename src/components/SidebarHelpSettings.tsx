@@ -162,7 +162,8 @@ export default function SidebarHelpSettings({
 
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
-          <button type="button" className={triggerClass} aria-label={compact ? "Settings" : undefined}>
+          {/* Not on a phone: Settings there is the person's own account, under their avatar (lib/phoneScope.ts). */}
+          <button type="button" className={compact ? `${triggerClass} max-md:hidden` : triggerClass} aria-label={compact ? "Settings" : undefined}>
             <span className={compact ? "contents" : "grid size-7 place-items-center rounded-md border border-sidebar-border bg-sidebar-accent/50 text-muted-foreground transition-colors group-hover:text-primary group-data-[state=open]:text-primary"}>
               <Settings className="size-3.5" />
             </span>

@@ -5,17 +5,23 @@ import Link from "next/link";
 import {
   CalendarPlus,
   Camera,
+  Car,
   CirclePlus,
   FileText,
   FileUp,
+  KanbanSquare,
   LayoutDashboard,
   ListChecks,
   Menu,
+  MessageSquare,
   Route,
   Search,
+  Truck,
   UserPlus,
+  Users,
   Wrench,
 } from "lucide-react";
+import { phoneRole } from "@/lib/phoneScope";
 import { openCommandMenu } from "@/components/CommandMenu";
 import { openQuickCreate, type QuickCreateKind } from "@/components/QuickCreateDialog";
 import { Sheet, SheetClose, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
@@ -77,9 +83,47 @@ export default function MobileCompanionNav({
     selected ? "bg-primary/10 text-primary" : "text-muted-foreground",
   );
 
+  // THE PHONE'S BAR IS THE ROLE'S OWN PLACES (Sean, 2026-10-17): no More, no side menu — the desktop features are
+  // not on a phone. Sales: Leads · Customers · Inbox. Workshop: Job cards · Vehicles · Tasks. Delivery: Deliveries
+  // · Customers · Tasks. A place the person may not open becomes Search (which is in the phone's top bar too).
+  type Place = { href: string; label: string; icon: typeof ListChecks; badge?: number };
+  const tasks: Place = { href: task.href, label: "Tasks", icon: ListChecks, badge: task.badge };
+  const places = {
+    leads: can("leads.view_all", "leads.view_owned") && packOn("/leads") ? { href: "/leads", label: "Leads", icon: KanbanSquare } : null,
+    customers: can("contacts.view_all", "contacts.view_owned") && packOn("/contacts") ? { href: "/contacts", label: "Customers", icon: Users } : null,
+    inbox: can("inbox.view", "inbox.reply") && packOn("/inbox") ? { href: "/inbox", label: "Inbox", icon: MessageSquare, badge: inboxWaiting } : null,
+    jobcards: can("jobcards.view_all", "jobcards.view_owned") && packOn("/jobcards") ? { href: "/jobcards", label: "Job cards", icon: Wrench } : null,
+    vehicles: can("vehicles.view_all", "vehicles.view_owned") && packOn("/vehicles") ? { href: "/vehicles", label: "Vehicles", icon: Car } : null,
+    deliveries: can("deliveries.view", "deliveries.manage") && packOn("/deliveries") ? { href: "/deliveries", label: "Deliveries", icon: Truck } : null,
+  };
+  const role = phoneRole({ sales: Boolean(places.leads), workshop: Boolean(places.jobcards), delivery: Boolean(places.deliveries) });
+  const [first, second, third]: (Place | null)[] =
+    role === "sales" ? [places.leads, places.customers, places.inbox]
+      : role === "workshop" ? [places.jobcards, places.vehicles, tasks]
+        : role === "delivery" ? [places.deliveries, places.customers, tasks]
+          : [tasks, places.customers, null];
+  const placeLink = (place: Place | null) => place ? (
+    <Link key={place.href} href={place.href} aria-current={active(place.href) ? "page" : undefined} className={itemClass(active(place.href))}>
+      <place.icon className="size-[18px]" />{place.label}
+      {(place.badge ?? 0) > 0 && <span className="absolute right-[22%] top-1.5 min-w-4 rounded-full bg-primary px-1 text-center text-[8px] font-bold leading-4 text-primary-foreground">{place.badge! > 99 ? "99+" : place.badge}</span>}
+    </Link>
+  ) : (
+    <button key="search" type="button" onClick={openCommandMenu} className={itemClass()}><Search className="size-[18px]" />Search</button>
+  );
+
   return (
     <>
-      <nav data-mobile-navigation="true" className="fixed inset-x-3 bottom-[max(.75rem,env(safe-area-inset-bottom))] z-50 grid grid-cols-5 rounded-2xl border border-sidebar-border bg-sidebar/95 p-1.5 shadow-[0_22px_60px_rgba(0,0,0,.55)] backdrop-blur-xl lg:hidden" aria-label="Primary navigation">
+      {/* The phone (below 768px). */}
+      <nav data-mobile-navigation="true" data-phone-navigation={role} className="fixed inset-x-3 bottom-[max(.75rem,env(safe-area-inset-bottom))] z-50 grid grid-cols-5 rounded-2xl border border-sidebar-border bg-sidebar/95 p-1.5 shadow-[0_22px_60px_rgba(0,0,0,.55)] backdrop-blur-xl md:hidden" aria-label="Primary navigation">
+        <Link href="/" aria-current={active("/") ? "page" : undefined} className={itemClass(active("/"))}><LayoutDashboard className="size-[18px]" />Home</Link>
+        {placeLink(first)}
+        <button type="button" onClick={() => setCaptureOpen(true)} className="flex min-h-12 flex-col items-center justify-center gap-1 rounded-xl bg-primary text-[10px] font-semibold text-primary-foreground shadow-lg shadow-primary/20"><CirclePlus className="size-5" />Capture</button>
+        {placeLink(second)}
+        {placeLink(third)}
+      </nav>
+
+      {/* A tablet keeps the full bar, More and the side menu included. */}
+      <nav data-mobile-navigation="true" className="fixed inset-x-3 bottom-[max(.75rem,env(safe-area-inset-bottom))] z-50 hidden grid-cols-5 rounded-2xl border border-sidebar-border bg-sidebar/95 p-1.5 shadow-[0_22px_60px_rgba(0,0,0,.55)] backdrop-blur-xl md:grid lg:hidden" aria-label="Primary navigation">
         <Link href="/" aria-current={active("/") ? "page" : undefined} className={itemClass(active("/"))}><LayoutDashboard className="size-[18px]" />Home</Link>
         <Link href={task.href} aria-current={active(task.href) ? "page" : undefined} className={itemClass(active(task.href))}>
           <ListChecks className="size-[18px]" />Tasks
@@ -101,7 +145,8 @@ export default function MobileCompanionNav({
             {can("activities.manage") && packOn("/test-drives") && <SheetClose asChild><Link href="/test-drives" className="flex items-center gap-3 rounded-xl border border-border bg-card p-3"><span className="grid size-9 place-items-center rounded-lg bg-amber-400/10 text-amber-300"><Route className="size-4" /></span><span><span className="block text-sm font-medium">Book test drive</span><span className="mt-0.5 block text-xs text-muted-foreground">Start a booking or check current drives</span></span></Link></SheetClose>}
             {can("jobcards.manage") && can("jobcards.view_all", "jobcards.view_owned") && packOn("/jobcards") && <SheetClose asChild><Link href="/jobcards" className="flex items-center gap-3 rounded-xl border border-border bg-card p-3"><span className="grid size-9 place-items-center rounded-lg bg-violet-400/10 text-violet-300"><Wrench className="size-4" /></span><span><span className="block text-sm font-medium">Job card photos</span><span className="mt-0.5 block text-xs text-muted-foreground">Choose a current job and open the camera</span></span></Link></SheetClose>}
             {can("deliveries.manage") && packOn("/deliveries") && <SheetClose asChild><Link href="/deliveries" className="flex items-center gap-3 rounded-xl border border-border bg-card p-3"><span className="grid size-9 place-items-center rounded-lg bg-emerald-400/10 text-emerald-300"><Camera className="size-4" /></span><span><span className="block text-sm font-medium">Delivery photos</span><span className="mt-0.5 block text-xs text-muted-foreground">Choose a handover and capture evidence</span></span></Link></SheetClose>}
-            {can("documents.upload") && packOn("/documents") && <SheetClose asChild><Link href="/documents" className="flex items-center gap-3 rounded-xl border border-border bg-card p-3"><span className="grid size-9 place-items-center rounded-lg bg-sky-400/10 text-sky-300"><FileUp className="size-4" /></span><span><span className="block text-sm font-medium">Upload document</span><span className="mt-0.5 block text-xs text-muted-foreground">Photograph, upload and file a document</span></span></Link></SheetClose>}
+            {/* Documents is a desktop page — not offered on a phone (lib/phoneScope.ts). */}
+            {can("documents.upload") && packOn("/documents") && <SheetClose asChild><Link href="/documents" className="flex items-center gap-3 rounded-xl border border-border bg-card p-3 max-md:hidden"><span className="grid size-9 place-items-center rounded-lg bg-sky-400/10 text-sky-300"><FileUp className="size-4" /></span><span><span className="block text-sm font-medium">Upload document</span><span className="mt-0.5 block text-xs text-muted-foreground">Photograph, upload and file a document</span></span></Link></SheetClose>}
 
             {captures.length > 0 && <p className="px-1 pt-2 text-[11px] font-medium text-muted-foreground">Quick records</p>}
             {captures.map(({ label, detail, icon: Icon, kind }) => (

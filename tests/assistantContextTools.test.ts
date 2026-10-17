@@ -121,7 +121,8 @@ test("in the bubble it reads like a chat: oldest first, composer at the bottom, 
 test("the bubble: same gate as the page, today's conversation only, no load until opened", () => {
   const layout = code("src/app/(app)/layout.tsx");
   assert.match(layout, /enabledModules === null \|\| enabledModules\.has\("automation"\)/);
-  assert.match(layout, /\{showAssistant && <AssistantBubble unseen=\{assistantUnseen\} \/>\}/);
+  // Same gate; on a phone it is hidden (lib/phoneScope.ts — there, DAX is on WhatsApp).
+  assert.match(layout, /\{showAssistant && <div className="max-md:hidden"><AssistantBubble unseen=\{assistantUnseen\} \/><\/div>\}/);
   const lib = code("src/lib/crmAssistant.ts");
   const today = lib.slice(lib.indexOf("export async function assistantTurnsToday"));
   assert.match(today.slice(0, 500), /where: \{ userId, createdAt: \{ gte: startOfToday \} \}/);
