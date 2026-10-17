@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { readFileSync } from "node:fs";
+import { dealTimelineWhere } from "../src/lib/customerTimeline";
 import { replyDraft, replySubject, splitTimelineEmail, threadableMessageId, type TimelineEmail } from "../src/lib/emailReply";
 
 const sent: TimelineEmail = {
@@ -38,6 +39,9 @@ test("REVIEW OF #889: an inbound email's words never become the Cc, nor a note",
 test("REVIEW OF #889: a reply is threaded only to an email on a deal the sender may open", () => {
   const actions = readFileSync(new URL("../src/app/actions/emails.ts", import.meta.url), "utf8");
   assert.match(actions, /select: \{ messageId: true, references: true, leadId: true \},/);
+  // A deal's page posts the deal alone: the email must be on THAT deal's timeline, not another of the customer's.
+  assert.match(actions, /\.\.\.\(!postedContactId && leadId \? dealTimelineWhere\(\{ id: leadId, contactId \}\) : contactId \? \{ OR: \[\{ contactId \}, \{ lead: \{ contactId \} \}\] \} : \{ id: "" \}\),/);
+  assert.deepEqual(dealTimelineWhere({ id: "d1", contactId: "c1" }), { OR: [{ leadId: "d1" }, { contactId: "c1", leadId: null }] });
   assert.match(actions, /const answering = found && \(!found\.leadId \|\| \(await canAccessLead\(user, found\.leadId\)\)\) \? found : null;/);
   assert.match(actions, /if \(inReplyToId && !answering\) return \{ error:/);
 });

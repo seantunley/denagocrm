@@ -8,7 +8,7 @@ import { attachSecureLinksToEmail, createSecureLinks, discardSecureLinks, type S
 import { revalidatePath } from "next/cache";
 import { basePrisma, prisma } from "@/lib/db";
 import { customerRecordTenantId } from "@/lib/customerRecordTenant";
-import { postedDealId } from "@/lib/customerTimeline";
+import { dealTimelineWhere, postedDealId } from "@/lib/customerTimeline";
 import { resolveFiling } from "@/lib/customerTimelineFiling";
 import { getSetting, putSetting } from "@/lib/settings";
 import { getActiveTenantId, requireTenantOwner } from "@/lib/auth";
@@ -288,13 +288,18 @@ export async function sendEmailAction(
   const { contactId, leadId } = filing;
   // A REPLY to an email on the timeline (Reply / Reply all): threaded to it in their mailbox, when the CRM knows
   // the Message-ID it went or came with. The id is posted by the browser, so it must be an email filed on THIS
-  // customer — the caller's access to the customer says nothing about a row named by id — and, when it was filed on
-  // a deal, a deal the caller may open: the same rule that decides whether the timeline shows it at all
-  // (customerTimelineWhere over the caller's accessible deals).
+  // timeline the reply is written from — the caller's access to the customer says nothing about a row named by id.
+  // From a DEAL's page (it posts the deal alone): that deal's timeline, exactly as the page shows it. From the
+  // CUSTOMER's page: the customer's timeline, where an email on a deal counts only if the caller may open that deal —
+  // the same rules that decide whether each page shows it at all (lib/customerTimeline).
   const inReplyToId = String(formData.get("inReplyTo") ?? "").trim().slice(0, 64);
   const found = inReplyToId
     ? await prisma.communication.findFirst({
-        where: { id: inReplyToId, type: "email", OR: [...(contactId ? [{ contactId }] : []), ...(leadId ? [{ leadId }] : [])] },
+        where: {
+          id: inReplyToId,
+          type: "email",
+          ...(!postedContactId && leadId ? dealTimelineWhere({ id: leadId, contactId }) : contactId ? { OR: [{ contactId }, { lead: { contactId } }] } : { id: "" }),
+        },
         select: { messageId: true, references: true, leadId: true },
       })
     : null;
