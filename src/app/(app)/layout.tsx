@@ -148,7 +148,8 @@ export default async function AppLayout({
         {children}
         {modal}
       </AppShell>
-      {showAssistant && <AssistantBubble unseen={assistantUnseen} />}
+      {/* Not on a phone (Sean, 2026-10-17): there, DAX is on WhatsApp (lib/phoneScope.ts). */}
+      {showAssistant && <div className="max-md:hidden"><AssistantBubble unseen={assistantUnseen} /></div>}
     </>
   );
 }

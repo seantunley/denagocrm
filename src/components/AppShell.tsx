@@ -15,6 +15,7 @@ import CommandMenu, { openCommandMenu } from "@/components/CommandMenu";
 import QuickActions from "@/components/QuickActions";
 import QuickCreateDialog from "@/components/QuickCreateDialog";
 import MobileCompanionNav from "@/components/MobileCompanionNav";
+import PhoneGate from "@/components/PhoneGate";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -65,7 +66,7 @@ function AccountCluster({ user, isOwner, tenantId }: { user: ShellUser; isOwner:
   );
 }
 
-function SidebarInner({ user, inboxWaiting = 0, casesWaiting = 0, enabledModules, brand }: { user: ShellUser; inboxWaiting?: number; casesWaiting?: number; enabledModules?: string[]; brand?: { logoUrl: string | null; displayName: string } }) {
+function SidebarInner({ user, inboxWaiting = 0, casesWaiting = 0, enabledModules, brand, phone = false }: { user: ShellUser; inboxWaiting?: number; casesWaiting?: number; enabledModules?: string[]; brand?: { logoUrl: string | null; displayName: string }; phone?: boolean }) {
   const isOwner = ownsWorkspace(user);
   return (
     <div className="relative flex h-full flex-col overflow-hidden bg-sidebar">
@@ -91,12 +92,13 @@ function SidebarInner({ user, inboxWaiting = 0, casesWaiting = 0, enabledModules
             ⌘K
           </kbd>
         </button>
-        <QuickActions isAdmin={isOwner} permissions={user.permissions} enabledModules={enabledModules} />
+        {/* On the phone, Capture on the bottom bar is the way to start something. */}
+        {!phone && <QuickActions isAdmin={isOwner} permissions={user.permissions} enabledModules={enabledModules} />}
       </div>
 
       {/* Nav */}
       <div className="relative flex-1 overflow-y-auto px-3 py-3">
-        <Nav isAdmin={isOwner} permissions={user.permissions} enabledModules={enabledModules} badges={{ "/inbox": inboxWaiting, "/cases": casesWaiting }} />
+        <Nav isAdmin={isOwner} permissions={user.permissions} enabledModules={enabledModules} badges={{ "/inbox": inboxWaiting, "/cases": casesWaiting }} phone={phone} />
       </div>
 
     </div>
@@ -163,6 +165,7 @@ export default function AppShell({
             logoUrl={brand?.logoUrl ?? null}
             alt={brand?.displayName ?? "Denago Cape Town"}
             className="h-6 w-auto max-w-full object-contain"
+            wordmarkClassName="text-xs"
           />
         </div>
         <div className="flex w-[7.5rem] shrink-0 justify-end">
@@ -185,7 +188,8 @@ export default function AppShell({
       <Sheet key={pathname} open={mobileOpen} onOpenChange={setMobileOpen}>
         <SheetContent side="left" className="w-72 border-sidebar-border p-0">
           <SheetTitle className="sr-only">Navigation</SheetTitle>
-          <SidebarInner user={user} inboxWaiting={inboxWaiting} casesWaiting={casesWaiting} enabledModules={enabledModules} brand={brand} />
+          {/* The drawer is the phone's (and a small tablet's) menu: the phone app's sections only (lib/phoneScope.ts). */}
+          <SidebarInner user={user} inboxWaiting={inboxWaiting} casesWaiting={casesWaiting} enabledModules={enabledModules} brand={brand} phone />
         </SheetContent>
       </Sheet>
 
@@ -211,7 +215,8 @@ export default function AppShell({
           {/* ClockWeather moved into the top bar — it was already desktop-only
               furniture at the top of the page, so the bar is where it belongs
               and the page keeps the vertical space the bar takes. */}
-          {children}
+          {/* On a phone, a page outside the phone app says so first (lib/phoneScope.ts). */}
+          <PhoneGate>{children}</PhoneGate>
         </div>
       </main>
     </div>

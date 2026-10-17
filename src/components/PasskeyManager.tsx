@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useState, useSyncExternalStore, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { startRegistration } from "@simplewebauthn/browser";
 import { Fingerprint, Plus, Trash2, KeyRound } from "lucide-react";
@@ -15,6 +15,9 @@ export type PasskeyRow = {
   lastUsedAt: string | null; // ISO
 };
 
+/** Passkey support never changes while the page is open: nothing to subscribe to. */
+const noSubscribe = () => () => {};
+
 function when(iso: string | null): string {
   if (!iso) return "never";
   const d = new Date(iso);
@@ -27,9 +30,14 @@ export default function PasskeyManager({ passkeys }: { passkeys: PasskeyRow[] })
   const [error, setError] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
 
-  const supported =
-    typeof window !== "undefined" &&
-    typeof window.PublicKeyCredential !== "undefined";
+  // Read the same way on both sides of hydration: "not supported" on the server, the truth once in the browser.
+  // A `typeof window` test here drew one thing on the server and another in the browser, and React threw the
+  // section away and rebuilt it (a hydration error on My Account — where a phone adds its fingerprint or face).
+  const supported = useSyncExternalStore(
+    noSubscribe,
+    () => typeof window.PublicKeyCredential !== "undefined",
+    () => false,
+  );
 
   async function enrol(nickname: string) {
     setError(null);

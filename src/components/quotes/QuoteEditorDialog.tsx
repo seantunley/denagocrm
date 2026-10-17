@@ -813,7 +813,9 @@ export function QuoteEditorDialog({
               <span className="grid size-9 place-items-center rounded-xl border border-primary/20 bg-primary/10 text-primary">
                 <FileText className="size-[18px]" />
               </span>
-              <div className="min-w-0 flex-1">
+              {/* On a phone the title takes its own row and the buttons wrap below it — sharing the row, the
+                  quote number and the customer were squeezed to "Q…" and "Tx…". */}
+              <div className="min-w-0 flex-1 max-sm:basis-[calc(100%-3rem)]">
                 <div className="flex flex-wrap items-center gap-2">
                   <DialogTitle className="truncate text-xl tracking-[-0.03em]">
                     {savedQuote ? `Quote Q-${savedQuote.number}` : "New quote"}
