@@ -153,7 +153,8 @@ export default function WhatsAppPanel({
           </a>
         </p>
       )}
-      {composerOnly && state?.ok && <p role="status" className="mt-2 text-sm text-emerald-400">Message queued. Delivery updates appear in the history.</p>}
+      {/* What became of THIS message (sent, still queued, or refused), as the send action read it back — not a fixed "queued". */}
+      {composerOnly && state?.ok && <p role="status" className="mt-2 text-sm text-emerald-400">{state.ok}</p>}
       {state?.error && <p role="alert" className="text-sm text-red-400 mt-2">{state.error}</p>}
     </details>
   );

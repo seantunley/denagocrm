@@ -21,7 +21,7 @@ import { auditDetailFor } from "@/lib/auditDetailQuery";
 import ConfirmDelete from "@/components/ConfirmDelete";
 import { QuickCreateButton } from "@/components/QuickCreateButton";
 import WhatsAppPanel from "@/components/WhatsAppPanel";
-import Tabs from "@/components/Tabs";
+import Tabs, { TabLink } from "@/components/Tabs";
 import CopyButton from "@/components/CopyButton";
 import ResearchTabPanel from "@/components/ResearchTabPanel";
 import { isAiConfigured, isResearchConfigured } from "@/lib/ai";
@@ -264,7 +264,7 @@ export default async function ContactDetailPage({
         <p className="mt-1 text-xs text-muted-foreground">{nextActivity.assignedTo?.name ?? "Unassigned"}</p>
         {nextActivity.note && <p className="mt-2 whitespace-pre-wrap break-words text-xs text-muted-foreground">{nextActivity.note}</p>}
       </> : <p className="text-sm text-muted-foreground">No follow-up scheduled.</p>}
-      <Link href={`${path}?tab=activities`} className="mt-3 inline-flex text-xs font-medium text-primary hover:underline">{nextActivity ? "Manage activities" : "Schedule an activity"}</Link>
+      <TabLink tab="activities" className="mt-3 inline-flex text-xs font-medium text-primary hover:underline">{nextActivity ? "Manage activities" : "Schedule an activity"}</TabLink>
     </section>
     <section className="rounded-xl border border-border bg-card p-4">
       <h2 className="mb-3 text-sm font-semibold">Open deals <span className="ml-1 text-xs text-muted-foreground">{visibleOpenDeals.length}</span></h2>
@@ -273,7 +273,7 @@ export default async function ContactDetailPage({
         {deal.product && <p className="text-xs text-muted-foreground">{deal.product.name}</p>}
         <div className="flex flex-wrap items-center justify-between gap-2 text-xs"><span className="rounded-md bg-muted px-2 py-1 text-muted-foreground">{deal.stage.name}</span><span>{formatZAR(deal.valueCents)}</span></div>
       </li>)}</ul>}
-      {contact.quotes.length > 0 && <div className="mt-4 border-t border-border pt-3"><p className="text-xs text-muted-foreground">Latest quote</p><Link href={`${path}?tab=documents`} className="mt-1 block text-sm hover:text-primary">Q-{contact.quotes[0].number} · {contact.quotes[0].status}</Link><p className="mt-1 text-xs text-muted-foreground">{formatZAR(payableTotalCents(contact.quotes[0]))}</p></div>}
+      {contact.quotes.length > 0 && <div className="mt-4 border-t border-border pt-3"><p className="text-xs text-muted-foreground">Latest quote</p><TabLink tab="documents" className="mt-1 block text-left text-sm hover:text-primary">Q-{contact.quotes[0].number} · {contact.quotes[0].status}</TabLink><p className="mt-1 text-xs text-muted-foreground">{formatZAR(payableTotalCents(contact.quotes[0]))}</p></div>}
     </section>
     <details className="rounded-xl border border-border bg-card p-4"><summary className="cursor-pointer text-sm font-medium">Secure links</summary><div className="mt-3"><SecureLinksPanel contactId={contact.id} /></div></details>
   </>;
@@ -338,7 +338,7 @@ export default async function ContactDetailPage({
       <div>
         <div className="min-w-0">
           <Tabs
-            key={tab ?? "comms"}
+            // Not keyed on ?tab: a key change rebuilds every panel and loses what is being typed (TabLink switches in place).
             initialKey={tab ?? "comms"}
             overflowKeys={["research", "referrals", "privacy"]}
             tabs={[

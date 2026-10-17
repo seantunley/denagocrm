@@ -1,7 +1,22 @@
 "use client";
 
-import { useId, useState, type ReactNode } from "react";
+import { useEffect, useId, useState, type ReactNode } from "react";
 import { cn } from "@/lib/utils";
+
+const OPEN_TAB_EVENT = "crm:open-tab";
+
+/**
+ * A link to another section of the same page that switches tab IN PLACE. A
+ * `?tab=` link reloads the page's tabs, and every panel's half-typed note or
+ * message went with it; this keeps them, as the tabs promise.
+ */
+export function TabLink({ tab, className, children }: { tab: string; className?: string; children: ReactNode }) {
+  return (
+    <button type="button" className={className} onClick={() => window.dispatchEvent(new CustomEvent<string>(OPEN_TAB_EVENT, { detail: tab }))}>
+      {children}
+    </button>
+  );
+}
 
 export type TabDef = {
   key: string;
@@ -36,6 +51,18 @@ export default function Tabs({ tabs, initialKey, overflowKeys = [] }: { tabs: Ta
     setActive(key);
     setOpened((prev) => (prev.includes(key) ? prev : [...prev, key]));
   };
+  const keys = tabs.map((t) => t.key).join("|");
+  useEffect(() => {
+    const onOpen = (event: Event) => {
+      const key = (event as CustomEvent<string>).detail;
+      if (!keys.split("|").includes(key)) return;
+      setActive(key);
+      setOpened((prev) => (prev.includes(key) ? prev : [...prev, key]));
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    };
+    window.addEventListener(OPEN_TAB_EVENT, onOpen);
+    return () => window.removeEventListener(OPEN_TAB_EVENT, onOpen);
+  }, [keys]);
 
   return (
     <div>

@@ -1,6 +1,6 @@
 import { Check, Pin, PinOff, Mail, MessageSquare, Phone, StickyNote, CalendarDays, History } from "lucide-react";
 import CustomerHistory from "@/components/CustomerHistory";
-import { customerHistoryDay } from "@/lib/customerHistoryFilters";
+import { auditEntryType, customerHistoryDay } from "@/lib/customerHistoryFilters";
 import ConfirmDelete from "@/components/ConfirmDelete";
 import { storedFileSrc } from "@/lib/storedFileSrc";
 import { completeActivity } from "@/app/actions/activities";
@@ -248,7 +248,7 @@ export default async function LeadTimeline({
     })),
     ...audit.map((entry): Item => ({
       id: `a-${entry.id}`,
-      type: "audit",
+      type: auditEntryType(entry.action),
       icon: icons[entry.action.split(".")[0]] ?? "•",
       title: entry.summary,
       who: entry.userName,
@@ -349,7 +349,7 @@ export default async function LeadTimeline({
       ) : null;
 
     if (workspace) {
-      const Icon = item.type === "email" ? Mail : item.type === "call" ? Phone : item.type === "note" ? StickyNote : item.type === "activity" ? CalendarDays : item.type === "audit" ? History : MessageSquare;
+      const Icon = item.type === "email" ? Mail : item.type === "call" ? Phone : item.type === "note" ? StickyNote : item.type === "activity" ? CalendarDays : item.type?.startsWith("audit") ? History : MessageSquare;
       return (
         <li key={item.id} className={inPinnedShelf ? "min-w-0 border-l-2 border-amber-400/50 pl-3" : "group min-w-0 border-b border-border/60 py-4 last:border-0"}>
           <div className="flex items-start gap-3">
