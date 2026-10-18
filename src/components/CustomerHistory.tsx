@@ -46,12 +46,22 @@ export default function CustomerHistory({ entries, pinned, composer, context, su
         </section>
       </div>
       {/* On a narrow screen the next action and open deals come FIRST, not below the whole history. */}
+      {/* What the team pinned is what everyone must see first (Sean, 2026-10-18): at the TOP of the column, amber, when
+          there is any. With nothing pinned the empty card waits at the bottom instead of taking the top spot. */}
       <aside className="order-first min-w-0 space-y-4 xl:order-none" aria-label={`${subject} context`}>
+        {pinned.length > 0 && (
+          <section className="rounded-xl border border-amber-400/50 bg-amber-400/[0.07] p-4 shadow-sm shadow-amber-950/20" aria-label="Pinned for the team">
+            <h2 className="mb-3 flex items-center gap-2 text-sm font-semibold text-amber-100"><Pin className="size-4 fill-amber-400/30 text-amber-400" aria-hidden="true" />Pinned for the team <span className="rounded-full bg-amber-400/20 px-1.5 text-xs text-amber-200">{pinned.length}</span></h2>
+            <ol className="space-y-3">{pinned}</ol>
+          </section>
+        )}
         {context}
-        <section className="rounded-xl border border-border bg-card p-4">
-          <h2 className="mb-3 flex items-center gap-2 text-sm font-semibold"><Pin className="size-4 text-amber-400" aria-hidden="true" />Pinned for the team <span className="text-xs text-muted-foreground">{pinned.length}</span></h2>
-          {pinned.length ? <ol className="space-y-3">{pinned}</ol> : <p className="text-xs leading-5 text-muted-foreground">Pin a useful note or activity from the history to keep it here.</p>}
-        </section>
+        {pinned.length === 0 && (
+          <section className="rounded-xl border border-border bg-card p-4" aria-label="Pinned for the team">
+            <h2 className="mb-3 flex items-center gap-2 text-sm font-semibold"><Pin className="size-4 text-amber-400" aria-hidden="true" />Pinned for the team <span className="text-xs text-muted-foreground">0</span></h2>
+            <p className="text-xs leading-5 text-muted-foreground">Pin a useful note or activity from the history to keep it here.</p>
+          </section>
+        )}
       </aside>
     </div>
   );
