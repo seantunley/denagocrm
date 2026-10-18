@@ -53,7 +53,8 @@ import { webLookup } from "./crmAssistantWeb";
 import { assistantWebAllowed } from "./assistantUser";
 import { MAX_IMAGES_PER_QUESTION } from "./assistantImage";
 import { applyLearn, loadLearned, loadPlaybook, markNotesUsed, saveDecision, visibleTo } from "./assistantMemoryStore";
-import { ACTION_INSTRUCTIONS, CHOICE_INSTRUCTIONS, matchQuoteRow, quoteAddText, quoteBuildText, quoteChangeText, settledAnswer, type ActionCard, type ProposedAction, type QuoteBuildLine, type QuoteChange } from "./assistantActions";
+import { checkBacksOn, setCheckBacks, type CheckBack } from "./proactiveFollowUp";
+import { ACTION_INSTRUCTIONS, CHECK_BACK_RULE, CHOICE_INSTRUCTIONS, matchQuoteRow, quoteAddText, quoteBuildText, quoteChangeText, settledAnswer, type ActionCard, type ProposedAction, type QuoteBuildLine, type QuoteChange } from "./assistantActions";
 import { knowledgeProducts, resolveCatalogueProduct } from "./catalogueLookup";
 import { describeSchedule, nextRun, scheduleInput } from "./assistantSchedule";
 import { describeWatch, watchInput } from "./assistantWatchRules";
@@ -1900,6 +1901,9 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
   // Confirm button, or keep it as a card for the CRM ("saved").
   // Never a scheduled run or a watch — nobody is there to confirm anything.
   const proposes = source === "chat" || (source === "whatsapp" && (opts.proposeTasks === true || opts.proposeTasks === "saved"));
+  // Proactive DAX, part 3: in a conversation (never a scheduled run) DAX may set itself a check-back — only while
+  // the person has proactive DAX on. It needs no Confirm, so it does not depend on `proposes`.
+  const checksBack = source !== "schedule" && (await checkBacksOn(user.id).catch(() => false));
   const started = Date.now();
   const timings = opts.timings ?? {};
   let lap = started;
@@ -2111,6 +2115,7 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
       STATE_INSTRUCTIONS,
       LEARN_INSTRUCTIONS,
       proposes ? ACTION_INSTRUCTIONS : "",
+      checksBack ? CHECK_BACK_RULE : "",
       source === "schedule" ? "" : CHOICE_INSTRUCTIONS,
       channelRule(source, proposes, opts.proposeTasks),
       learned,
@@ -2163,7 +2168,10 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
   // must not vouch for itself this turn.
   const flagged = unsupportedFigures(resolved.plain, [question, ...history.map((t) => t.question), ...observations.map((o) => o.output.data)]);
   const note = flagged.length ? `\n\n${unsupportedNote(flagged)}` : "";
-  const proposals = reply.actions;
+  // A check-back is not a task to confirm: it is taken out here and saved below (setCheckBacks), so it never
+  // becomes a card and never counts as a task that "came to nothing".
+  const checkBacks = reply.actions.filter((p): p is CheckBack => p.type === "check_back");
+  const proposals = reply.actions.filter((p) => p.type !== "check_back");
   // A scheduled run learns nothing: it reads customer text daily with nobody
   // watching, so an injected "remember this" would be written with no one there.
   const learn = source === "schedule" ? null : reply.learn;
@@ -2178,10 +2186,17 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
   // the person is told about tasks comes from the cards that EXIST: where the
   // words and the cards disagree, the words are replaced (not added to), here,
   // for everywhere the answer is shown or kept (assistantActions.settledAnswer).
-  const settled = proposes ? settledAnswer(resolved.plain, actions, problems, Math.max(0, reply.attempted - actions.length - problems.length)) : null;
+  const settled = proposes ? settledAnswer(resolved.plain, actions, problems, Math.max(0, reply.attempted - checkBacks.length - actions.length - problems.length)) : null;
+  // What the person is told about a check-back comes from what was SAVED (or why not) — added by the CRM.
+  const checkBackLine = checksBack && checkBacks.length
+    ? await setCheckBacks(user, checkBacks).catch(async (error: unknown) => {
+        await logError("crm-assistant", "check-back write failed", error instanceof Error ? error.name : "unknown");
+        return "\n\n(I couldn't set myself a reminder to check back.)";
+      })
+    : "";
   // A replaced answer carries none of the original's figures or citations, so neither its note nor its links.
-  const cited = settled ?? resolved.cited + note;
-  const answer = settled ?? resolved.plain + note;
+  const cited = (settled ?? resolved.cited + note) + checkBackLine;
+  const answer = (settled ?? resolved.plain + note) + checkBackLine;
   const choices = source === "schedule" ? [] : reply.choices;
   const learnedCount = learn
     ? await applyLearn(user.id, learn).catch(async (error: unknown) => {
@@ -2256,6 +2271,8 @@ async function resolveActions(
   const staff = await listActingTenantStaff();
   const cards: ActionCard[] = [];
   for (const [index, p] of proposals.entries()) {
+    // Never a card: askCrm takes check-backs out before this and saves them itself (proactiveFollowUp).
+    if (p.type === "check_back") continue;
     if (p.type === "schedule") {
       // No lead to check: it is saved for whoever presses Confirm, and runs as
       // them with their permissions at the time. Only the timing is checked

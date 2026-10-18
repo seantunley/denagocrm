@@ -14,8 +14,16 @@ import {
   proactivePush,
   proactiveText,
   responsiblePerson,
+  BRIEF_DEFAULT,
+  BRIEF_TIMES,
+  briefDueKey,
+  briefQuestion,
+  checkBackTiming,
+  johannesburgDateKey,
+  parseBriefAt,
 } from "../src/lib/proactiveRules";
 import { PROACTIVE_SOURCES } from "../src/lib/assistantWhatsAppRules";
+import { CHECK_BACK_RULE, parseActionList } from "../src/lib/assistantActions";
 
 /*
  * Proactive DAX, part 1 (Sean, 2026-10-18: "I want DAX to function like OpenClaw and Hermes, proactive";
@@ -107,6 +115,101 @@ test("each customer event raises it, and never at the cost of what the customer 
   // Waiting customers only in working hours; one alert per message burst.
   assert.match(core, /if \(isQuietHour\(now\)\) return stats;/);
   assert.match(core, /recordKey: `\$\{c\.id\}:\$\{c\.lastInboundAt\?\.toISOString\(\) \?\? ""\}`/);
+});
+
+/* ---------- Part 2: the morning brief ---------- */
+
+test("the brief's time: a half hour from 06:00 to 10:00, 07:30 unless chosen, or off", () => {
+  assert.deepEqual(BRIEF_TIMES, ["06:00", "06:30", "07:00", "07:30", "08:00", "08:30", "09:00", "09:30", "10:00"]);
+  assert.equal(parseBriefAt(null), BRIEF_DEFAULT);
+  assert.equal(BRIEF_DEFAULT, "07:30");
+  assert.equal(parseBriefAt("09:00"), "09:00");
+  assert.equal(parseBriefAt("off"), null);
+  assert.equal(parseBriefAt("03:00"), BRIEF_DEFAULT, "a time never offered is the default, not obeyed");
+});
+
+test("due on a weekday from its time until 11:00; never at the weekend", () => {
+  // 2026-10-19 is a Monday.
+  assert.equal(briefDueKey(sa("2026-10-19T07:29:00"), "07:30"), null);
+  assert.equal(briefDueKey(sa("2026-10-19T07:30:00"), "07:30"), "2026-10-19");
+  assert.equal(briefDueKey(sa("2026-10-19T10:59:00"), "07:30"), "2026-10-19", "a missed tick still writes it in the morning");
+  assert.equal(briefDueKey(sa("2026-10-19T11:00:00"), "07:30"), null);
+  assert.equal(briefDueKey(sa("2026-10-18T08:00:00"), "07:30"), null, "Sunday");
+  assert.equal(briefDueKey(sa("2026-10-17T08:00:00"), "07:30"), null, "Saturday");
+  assert.equal(johannesburgDateKey(sa("2026-10-19T00:30:00")), "2026-10-19");
+});
+
+test("the brief folds in what was held overnight — the words, not the links", () => {
+  const q = briefQuestion(sa("2026-10-19T07:30:00"), ["👀 Thabo just opened quote Q-1032.\nhttps://crm/x", "✅ Anna signed Q-1040.\nhttps://crm/y"]);
+  assert.match(q, /Monday, 19 October/);
+  assert.match(q, /Since last night: 👀 Thabo just opened quote Q-1032\. · ✅ Anna signed Q-1040\./);
+  assert.doesNotMatch(q, /https:/);
+  assert.match(q, /three things that matter most/);
+  assert.doesNotMatch(briefQuestion(sa("2026-10-19T07:30:00"), []), /Since last night/);
+});
+
+test("the brief: once a day, as the person, folding in held alerts, labelled as the brief", () => {
+  const brief = read("src/lib/proactiveBrief.ts");
+  // The claim: one row per person per day, unique — two workers never both write it.
+  assert.match(brief, /create\(\{ data: \{ tenantId, userId, kind: BRIEF_KIND, recordKey: dayKey, text: "", deliveredAt: now \}/);
+  assert.match(brief, /if \(\(error as \{ code\?: string \}\)\.code === "P2002"\) return null;/);
+  // As them, inside their hourly ask limit, unattended (no questions back, nothing learned).
+  assert.match(brief, /const user = await assistantUserFor\(userId\);\s*if \(!user \|\| !\(await assistantAskAllowed\(user\.id\)\)\) return false;/);
+  assert.match(brief, /askCrm\(user, briefQuestion\(now, held\.map\(\(alert\) => alert\.text\)\), null, \{ source: "schedule" \}\)/);
+  assert.match(brief, /data: \{ source: BRIEF_SOURCE, question: BRIEF_QUESTION \}/);
+  assert.match(brief, /id: \{ in: held\.map\(\(alert\) => alert\.id\) \}, deliveredAt: null \},\s*data: \{ deliveredAt: new Date\(\), turnId: result\.turnId \}/);
+  // Held alerts wait for a brief still to come today; otherwise they go on their own.
+  assert.match(read("src/lib/proactive.ts"), /if \(waitForBrief\.get\(userId\)\) continue;/);
+  assert.match(read("src/app/api/cron/assistant/route.ts"), /await runMorningBriefs\(tenantId, budget\)/);
+  assert.ok((PROACTIVE_SOURCES as readonly string[]).includes("brief"));
+  assert.match(read("src/app/actions/assistantSettings.ts"), /export async function setMyBriefTime[\s\S]{0,400}if \(at !== "off" && !BRIEF_TIMES\.includes\(at\)\) refuse\(/);
+});
+
+/* ---------- Part 3: DAX checks back ---------- */
+
+test("a check-back: at least an hour away, within 30 days, on the half hour", () => {
+  const now = sa("2026-10-19T10:00:00");
+  assert.deepEqual(checkBackTiming("2026-10-19T10:30", now), { refused: "the time has to be between an hour and 30 days from now" });
+  const thursday = checkBackTiming("2026-10-22T09:10", now);
+  assert.ok(!("refused" in thursday));
+  if (!("refused" in thursday)) {
+    assert.equal(thursday.timeOfDay, "09:00", "snapped to the half hour the runner wakes on");
+    assert.equal(thursday.at.toISOString(), sa("2026-10-22T09:00:00").toISOString());
+  }
+  assert.ok("refused" in checkBackTiming("2026-12-01T09:00", now), "more than 30 days ahead");
+  assert.ok("refused" in checkBackTiming("2026-10-18T09:00", now), "in the past");
+});
+
+test("DAX may propose one, offered only while proactive DAX is on, never as a card", () => {
+  const parsed = parseActionList([{ type: "check_back", question: "Has Anna Jacobs signed quote Q-1032?", when: "2026-10-22T09:00", reason: "she said Thursday" }]);
+  assert.equal(parsed.length, 1);
+  assert.equal(parseActionList([{ type: "check_back", question: "x", when: "Thursday" }]).length, 0, "a vague time is not one");
+  assert.match(CHECK_BACK_RULE, /It needs no Confirm/);
+  assert.match(CHECK_BACK_RULE, /Do NOT mention it in your answer — the CRM adds a line/);
+  const core = read("src/lib/crmAssistant.ts");
+  assert.match(core, /const checksBack = source !== "schedule" && \(await checkBacksOn\(user\.id\)\.catch\(\(\) => false\)\);/);
+  assert.match(core, /checksBack \? CHECK_BACK_RULE : ""/);
+  // Taken out before the cards and never counted as a task that came to nothing.
+  assert.match(core, /const proposals = reply\.actions\.filter\(\(p\) => p\.type !== "check_back"\);/);
+  assert.match(core, /reply\.attempted - checkBacks\.length - actions\.length - problems\.length/);
+  // What the person is told comes from what was SAVED.
+  assert.match(core, /const answer = \(settled \?\? resolved\.plain \+ note\) \+ checkBackLine;/);
+});
+
+test("saved as the person's one-off question marked set by DAX, with its own cap; runs only while it's on", () => {
+  const follow = read("src/lib/proactiveFollowUp.ts");
+  assert.match(follow, /count\(\{ where: \{ userId: user\.id, active: true, setBy: "dax" \} \}\)\) >= MAX_DAX_FOLLOW_UPS\) return null;/);
+  assert.match(follow, /cadence: "once",[\s\S]{0,200}setBy: "dax",/);
+  assert.match(follow, /return `\\n\\n🔁 I'll check back \$\{formatDateTime\(timing\.at\)\}/);
+  // The person's own ten are not used up by DAX's.
+  assert.match(read("src/lib/assistantScheduleRun.ts"), /count\(\{ where: \{ userId, active: true, setBy: "person" \} \}\)\) >= MAX_ACTIVE_SCHEDULES\) return null;/);
+  const run = read("src/lib/assistantScheduleRun.ts");
+  assert.match(run, /if \(daxSet && !\(await switchedOn\(tenantId, schedule\.userId\)\.catch\(\(\) => false\)\)\) \{/);
+  assert.match(run, /data: \{ source: FOLLOW_UP_SOURCE \}/);
+  assert.ok((PROACTIVE_SOURCES as readonly string[]).includes("followup"));
+  assert.match(read("src/app/(app)/assistant/page.tsx"), /s\.setBy === "dax" && <p[^>]*>🔁 Set by \{profile\.name\}/);
+  const sql = read("prisma/migrations/20261018130000_assistant_schedule_set_by/migration.sql");
+  assert.match(sql, /ADD COLUMN IF NOT EXISTS "setBy" TEXT NOT NULL DEFAULT 'person';/);
 });
 
 test("it is on the automations page, reaching staff only", () => {

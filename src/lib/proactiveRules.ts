@@ -11,6 +11,8 @@
  * person's OWN switch — both default OFF. Nothing here ever reaches a customer.
  */
 
+import { nextRun, snapToHalfHour } from "./assistantSchedule";
+
 /**
  * The same quiet hours as customer messaging (communicationPolicy.ts — 20:00 to 08:00 Johannesburg), kept here
  * so these rules stay free of the database. South Africa has no daylight saving: UTC+2 all year.
@@ -127,6 +129,84 @@ export function johannesburgDayStart(now: Date): Date {
 function clip(text: string, max: number): string {
   const flat = text.replace(/\s+/g, " ").trim();
   return flat.length > max ? `${flat.slice(0, max - 1)}…` : flat;
+}
+
+/*
+ * PART 2 — THE MORNING BRIEF. Each workday at the person's chosen time DAX writes "your day": what is on, what
+ * their customers did since yesterday (including alerts held overnight, folded in rather than sent one by one), and
+ * the three things that matter most. One model call per person per workday.
+ */
+/** Each person's brief time, "HH:MM" Johannesburg, or "off". Unset = the default. */
+export const briefPersonKey = (userId: string) => `ASSISTANT_BRIEF_AT:${userId}`;
+export const BRIEF_DEFAULT = "07:30";
+/** The times offered: the half hours from 06:00 to 10:00 — when the half-hourly job wakes. */
+export const BRIEF_TIMES = Array.from({ length: 9 }, (_, i) => `${String(6 + Math.floor(i / 2)).padStart(2, "0")}:${i % 2 ? "30" : "00"}`);
+/** A brief not written by this hour is not a MORNING brief any more: skipped for the day. */
+export const BRIEF_LATEST_HOUR = 11;
+/** Held kind, one row per person per day: the claim that makes the brief happen once. */
+export const BRIEF_KIND = "morning_brief";
+export const BRIEF_SOURCE = "brief";
+export const BRIEF_QUESTION = "Your morning brief";
+/** Part 3: the answer to a check-back DAX set itself (lib/proactiveFollowUp.ts), as the conversation labels it. */
+export const FOLLOW_UP_SOURCE = "followup";
+const CHECK_BACK_MIN_AHEAD_MS = 60 * 60 * 1000;
+const CHECK_BACK_MAX_AHEAD_MS = 30 * 24 * 60 * 60 * 1000;
+
+/**
+ * When a check-back asked for at `when` ("YYYY-MM-DDTHH:MM", SA time) would really run — snapped to the half hour
+ * the runner wakes on — or why it can't: at least an hour away and within 30 days.
+ */
+export function checkBackTiming(when: string, now: Date): { onDate: string; timeOfDay: string; at: Date } | { refused: string } {
+  const [onDate, time] = when.split("T");
+  const timeOfDay = snapToHalfHour(time ?? "");
+  const at = nextRun({ cadence: "once", onDate, timeOfDay }, now);
+  const ahead = at ? at.getTime() - now.getTime() : -1;
+  if (!at || ahead < CHECK_BACK_MIN_AHEAD_MS || ahead > CHECK_BACK_MAX_AHEAD_MS) {
+    return { refused: "the time has to be between an hour and 30 days from now" };
+  }
+  return { onDate, timeOfDay, at };
+}
+
+/** The stored time, or the default; null when the person switched the brief off; anything unknown = the default. */
+export function parseBriefAt(stored: string | null | undefined): string | null {
+  if (stored === "off") return null;
+  return stored && BRIEF_TIMES.includes(stored) ? stored : BRIEF_DEFAULT;
+}
+
+/** Johannesburg's date as "YYYY-MM-DD" — the brief's key for the day. */
+export function johannesburgDateKey(now: Date): string {
+  return new Date(now.getTime() + SA_OFFSET_MS).toISOString().slice(0, 10);
+}
+
+/** Today's key when a brief at `at` is due now (a weekday, at or after its time, before BRIEF_LATEST_HOUR); else null. */
+export function briefDueKey(now: Date, at: string): string | null {
+  const sa = new Date(now.getTime() + SA_OFFSET_MS);
+  const day = sa.getUTCDay();
+  if (day === 0 || day === 6) return null;
+  const [h, m] = at.split(":").map(Number);
+  const minutes = sa.getUTCHours() * 60 + sa.getUTCMinutes();
+  if (minutes < h * 60 + m || sa.getUTCHours() >= BRIEF_LATEST_HOUR) return null;
+  return johannesburgDateKey(now);
+}
+
+/**
+ * What DAX is asked. Alerts held overnight are given as facts (their words, without the links) so the brief
+ * leads with them instead of them arriving one by one at 08:00.
+ */
+export function briefQuestion(now: Date, heldOvernight: readonly string[]): string {
+  const day = new Intl.DateTimeFormat("en-ZA", { weekday: "long", day: "numeric", month: "long", timeZone: "Africa/Johannesburg" }).format(now);
+  const overnight = heldOvernight
+    .map((text) => text.split("\n")[0].trim())
+    .filter(Boolean)
+    .slice(0, 12);
+  return [
+    `My morning brief for today, ${day}. Short, in this order:`,
+    "1. My day — my meetings, tasks and deliveries today (use the daily brief).",
+    "2. What my customers did since yesterday — quotes opened or signed, messages still waiting for an answer.",
+    ...(overnight.length ? [`   Since last night: ${overnight.join(" · ")}`] : []),
+    "3. The three things that matter most today, each with one line on why.",
+    "Only what is mine. No greeting, no sign-off.",
+  ].join("\n");
 }
 
 /** Whose alert it is: the deal's owner, else the customer's owner, else whoever made it. Never a guess beyond that. */

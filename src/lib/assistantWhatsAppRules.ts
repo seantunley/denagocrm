@@ -193,8 +193,9 @@ export function confirmMessages(card: { title: string; text?: unknown; question?
  */
 
 /** The kinds of answer nobody was waiting on a screen for. */
-// "proactive": customer-activity alerts (lib/proactive.ts) — the red dot, WhatsApp and seen-marking like the rest.
-export const PROACTIVE_SOURCES = ["schedule", "watch", "handoff", "quote_pdf", "proactive"] as const;
+// "proactive": customer-activity alerts (lib/proactive.ts); "brief": the morning brief (lib/proactiveBrief.ts);
+// "followup": DAX checking back (lib/proactiveFollowUp.ts) — the red dot, WhatsApp and seen-marking like the rest.
+export const PROACTIVE_SOURCES = ["schedule", "watch", "handoff", "quote_pdf", "proactive", "brief", "followup"] as const;
 /**
  * A draft quote the assistant built for this person, with its PDF. It rides the
  * same delivery as a briefing — claimed, sent whole, retried by the half-hourly

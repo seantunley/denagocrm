@@ -1150,6 +1150,11 @@ model AssistantSchedule {
   timeOfDay String
   /// "YYYY-MM-DD"; once only.
   onDate    String?
+  /// "person" (they set it up, with Confirm) | "dax" (DAX set itself a check-back
+  /// from a conversation — proactive DAX part 3, lib/proactiveFollowUp.ts).
+  setBy     String    @default("person")
+  /// Why DAX set it, shown on the Ask page.
+  reason    String?
   /// Null once a one-off has run or the schedule is switched off.
   nextRunAt DateTime?
   lastRunAt DateTime?

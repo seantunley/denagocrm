@@ -155,7 +155,8 @@ test("Confirm saves it for the SIGNED-IN person only, timed on the server, cappe
   const runner = code("src/lib/assistantScheduleRun.ts");
   const slot = runner.slice(runner.indexOf("export async function withScheduleSlot"), runner.indexOf("export async function runDueAssistantSchedules"));
   assert.match(slot, /pg_advisory_xact_lock\(hashtext\(\$\{`assistant-schedules:\$\{userId\}`\}\)::bigint\)/);
-  assert.match(slot, /tx\.assistantSchedule\.count\(\{ where: \{ userId, active: true \} \}\)\) >= MAX_ACTIVE_SCHEDULES\) return null;/);
+  // The person's own ten; check-backs DAX set itself have their own cap (proactiveFollowUp.ts).
+  assert.match(slot, /tx\.assistantSchedule\.count\(\{ where: \{ userId, active: true, setBy: "person" \} \}\)\) >= MAX_ACTIVE_SCHEDULES\) return null;/);
 });
 
 test("the runner works in ONE real workspace, named on every read and write", () => {
@@ -310,7 +311,7 @@ test("the cron is registered on the shared beat and runs per workspace", () => {
   assert.match(route, /if \(!isAuthorizedCron\(req\)\) return/);
   assert.match(route, /warmUpForCron\("assistant"/);
   assert.match(route, /export const maxDuration = 300;/);
-  assert.match(route, /runCronPerTenant\(async \(_tenantId, budget\) => \{\s*if \(budget\.shouldStop\(SCHEDULE_RUN_RESERVE_MS\)\)[^\n]*\n\s*return runDueAssistantSchedules\(budget\);/);
+  assert.match(route, /runCronPerTenant\(async \(tenantId, budget\) => \{\s*if \(budget\.shouldStop\(SCHEDULE_RUN_RESERVE_MS\)\)[^\n]*\n[\s\S]{0,600}?\n\s*return runDueAssistantSchedules\(budget\);/);
   assert.match(route, /concurrency: 1,/);
   const crons = (JSON.parse(readFileSync(new URL("../vercel.json", import.meta.url), "utf8")) as { crons: { path: string; schedule: string }[] }).crons;
   assert.deepEqual(crons.find((c) => c.path === "/api/cron/assistant"), { path: "/api/cron/assistant", schedule: "*/30 * * * *" });

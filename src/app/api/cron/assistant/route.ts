@@ -8,6 +8,7 @@ import { runAssistantWatches } from "@/lib/assistantWatch";
 import { prunePendingActions } from "@/lib/assistantWhatsAppConfirm";
 import { sweepWaitingUpdates } from "@/lib/assistantWhatsApp";
 import { sweepProactive } from "@/lib/proactive";
+import { runMorningBriefs } from "@/lib/proactiveBrief";
 
 /**
  * Scheduled assistant questions ("every Monday at 7, which deals went quiet?")
@@ -83,9 +84,16 @@ export async function GET(req: NextRequest) {
     return [];
   });
 
-  const runs = await runCronPerTenant(async (_tenantId, budget) => {
+  const runs = await runCronPerTenant(async (tenantId, budget) => {
     // A workspace reached with too little left for one run is left for the next tick.
     if (budget.shouldStop(SCHEDULE_RUN_RESERVE_MS)) return { ran: 0, skipped: "insufficient-budget" as const };
+    // Morning briefs first (proactive DAX, part 2): a few, side by side, at the time each person chose. They hold
+    // the alerts kept overnight, so they go before anything else in the morning. Off unless switched on.
+    if (tenantId) {
+      await runMorningBriefs(tenantId, budget).catch((error: unknown) =>
+        logError("assistant-schedule", "morning briefs failed", error instanceof Error ? error.name : "unknown", { tenantId }),
+      );
+    }
     return runDueAssistantSchedules(budget);
   }, {
     maxRuntimeMs: routeBudget.remainingMs - (Date.now() - startedAt),

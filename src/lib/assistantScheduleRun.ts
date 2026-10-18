@@ -12,6 +12,8 @@ import { getSetting } from "./settings";
 import { ASSISTANT_PROFILE_KEY, parseProfile } from "./assistantSoul";
 import type { CronSliceContext } from "./tenantCron";
 import { PROACTIVE_SOURCES } from "./assistantWhatsAppRules";
+import { switchedOn } from "./proactive";
+import { FOLLOW_UP_SOURCE } from "./proactiveRules";
 
 /**
  * Budget to keep in hand before STARTING a scheduled question. askCrm's worst
@@ -47,7 +49,8 @@ type Tx = Parameters<Parameters<typeof prisma.$transaction>[0]>[0];
 export async function withScheduleSlot<T>(userId: string, write: (tx: Tx) => Promise<T>): Promise<T | null> {
   return prisma.$transaction(async (tx) => {
     await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`assistant-schedules:${userId}`})::bigint)`;
-    if ((await tx.assistantSchedule.count({ where: { userId, active: true } })) >= MAX_ACTIVE_SCHEDULES) return null;
+    // The person's OWN schedules: check-backs DAX set itself have their own cap (proactiveFollowUp.ts).
+    if ((await tx.assistantSchedule.count({ where: { userId, active: true, setBy: "person" } })) >= MAX_ACTIVE_SCHEDULES) return null;
     return write(tx);
   });
 }
@@ -96,7 +99,7 @@ export async function runDueAssistantSchedules(budget: CronSliceContext): Promis
     where: { tenantId, active: true, nextRunAt: { lte: new Date() } },
     orderBy: { nextRunAt: "asc" },
     take: DUE_BATCH,
-    select: { id: true, tenantId: true, userId: true, question: true, cadence: true, weekday: true, timeOfDay: true, onDate: true, nextRunAt: true },
+    select: { id: true, tenantId: true, userId: true, question: true, cadence: true, weekday: true, timeOfDay: true, onDate: true, nextRunAt: true, setBy: true },
   });
   let ran = 0;
   const perPerson = new Map<string, number>();
@@ -135,6 +138,14 @@ export async function runDueAssistantSchedules(budget: CronSliceContext): Promis
       continue;
     }
 
+    // A check-back DAX set itself (proactive DAX, part 3) runs only while the person still has proactive DAX on.
+    // Switched off since: it is switched off too, quietly — they asked for DAX to stop coming to them.
+    const daxSet = schedule.setBy === "dax";
+    if (daxSet && !(await switchedOn(tenantId, schedule.userId).catch(() => false))) {
+      await prisma.assistantSchedule.updateMany({ where: { id: schedule.id, tenantId, active: true, nextRunAt: schedule.nextRunAt }, data: { active: false, nextRunAt: null } });
+      continue;
+    }
+
     // Then the claim: one conditional update, so overlapping ticks never run it twice.
     const now = new Date();
     const next = nextRun(schedule, now);
@@ -160,6 +171,10 @@ export async function runDueAssistantSchedules(budget: CronSliceContext): Promis
     // else — a failure, a skip, or an answer whose save failed — gets a short
     // note saved here instead, so the person sees why.
     const briefing = result.ok && result.saved;
+    // DAX checking back on something it said it would: say so in the conversation, not "Scheduled".
+    if (briefing && daxSet && result.ok && result.turnId) {
+      await prisma.assistantTurn.updateMany({ where: { id: result.turnId, tenantId, userId: user.id }, data: { source: FOLLOW_UP_SOURCE } }).catch(() => {});
+    }
     let delivered = briefing;
     if (!briefing) {
       const note = result.ok ? SCHEDULE_UNSAVED_NOTE : allowed ? scheduleFailureNote(result.error) : SCHEDULE_SKIPPED_NOTE;
@@ -181,7 +196,7 @@ export async function runDueAssistantSchedules(budget: CronSliceContext): Promis
       await sendPushToAll(
         {
           title: name,
-          body: briefing ? "Your scheduled briefing is ready." : "A scheduled question couldn't run — open to see why.",
+          body: briefing ? (daxSet ? "I checked back on something for you." : "Your scheduled briefing is ready.") : "A scheduled question couldn't run — open to see why.",
           url: "/assistant",
         },
         "assistant",

@@ -11,6 +11,11 @@ import { contactName } from "./format";
 import type { CronSliceContext } from "./tenantCron";
 import {
   ASSISTANT_PROACTIVE_KEY,
+  BRIEF_KIND,
+  briefDueKey,
+  briefPersonKey,
+  johannesburgDateKey,
+  parseBriefAt,
   PROACTIVE_QUESTION,
   PROACTIVE_SOURCE,
   WAITING_AFTER_MS,
@@ -123,13 +128,14 @@ async function finishAfterResponse(work: Promise<unknown>): Promise<void> {
   }
 }
 
-async function setting(tenantId: string, key: string): Promise<string | null> {
+/** A workspace setting read with the workspace named explicitly (these run from public requests and the cron). */
+export async function setting(tenantId: string, key: string): Promise<string | null> {
   const row = await basePrisma.appSetting.findUnique({ where: { tenantId_key: { tenantId, key } }, select: { value: true } });
   return row?.value ?? null;
 }
 
 /** Both switches: the owner's for the workspace, then the person's own. */
-async function switchedOn(tenantId: string, userId: string): Promise<boolean> {
+export async function switchedOn(tenantId: string, userId: string): Promise<boolean> {
   if (!proactiveOn(await setting(tenantId, ASSISTANT_PROACTIVE_KEY))) return false;
   return proactiveOn(await setting(tenantId, proactivePersonKey(userId)));
 }
@@ -179,6 +185,14 @@ async function deliver(tenantId: string, alertId: string): Promise<boolean> {
   return true;
 }
 
+/** A morning brief is due for this person today and has not been written yet (it holds their overnight alerts). */
+async function briefStillToCome(tenantId: string, userId: string, now: Date): Promise<boolean> {
+  const at = parseBriefAt(await setting(tenantId, briefPersonKey(userId)));
+  if (!at || !briefDueKey(now, "00:00")) return false; // off, a weekend, or past the brief's hour
+  const done = await basePrisma.assistantProactiveAlert.count({ where: { tenantId, userId, kind: BRIEF_KIND, recordKey: johannesburgDateKey(now) } });
+  return done === 0;
+}
+
 /**
  * The half-hourly part (the assistant cron): alerts held for the morning that are now due, and customers who wrote
  * and have waited past WAITING_AFTER_MS with no answer from anyone. Stops between alerts when the budget says so.
@@ -189,13 +203,18 @@ export async function sweepProactive(tenantId: string, budget: Pick<CronSliceCon
   const now = new Date();
 
   const due = await basePrisma.assistantProactiveAlert.findMany({
-    where: { tenantId, deliveredAt: null, deliverAt: { lte: now } },
+    where: { tenantId, deliveredAt: null, deliverAt: { lte: now }, kind: { not: BRIEF_KIND } },
     orderBy: { deliverAt: "asc" },
     take: 50,
-    select: { id: true },
+    select: { id: true, userId: true },
   });
-  for (const { id } of due) {
+  const waitForBrief = new Map<string, boolean>();
+  for (const { id, userId } of due) {
     if (budget.shouldStop(10_000)) return stats;
+    // Held overnight for someone whose morning brief is still to come today: it goes IN the brief (part 2), not
+    // on its own. If the brief is off, already written, skipped or past its hour, it goes now.
+    if (!waitForBrief.has(userId)) waitForBrief.set(userId, await briefStillToCome(tenantId, userId, now).catch(() => false));
+    if (waitForBrief.get(userId)) continue;
     if (await deliver(tenantId, id).catch(() => false)) stats.delivered += 1;
   }
 

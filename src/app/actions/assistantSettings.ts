@@ -16,7 +16,7 @@ import {
   parseProfile,
 } from "@/lib/assistantSoul";
 import { ASSISTANT_VOICE_REPLIES_KEY, voiceRepliesSwitchOn } from "@/lib/assistantVoiceRules";
-import { ASSISTANT_PROACTIVE_KEY, proactiveOn, proactivePersonKey } from "@/lib/proactiveRules";
+import { ASSISTANT_PROACTIVE_KEY, BRIEF_DEFAULT, BRIEF_TIMES, briefPersonKey, proactiveOn, proactivePersonKey } from "@/lib/proactiveRules";
 import { requireAnyPermission } from "@/lib/permissions";
 import { ASSISTANT_PERMISSIONS } from "@/lib/assistantUser";
 import { saveAssistantWhatsApp } from "@/app/actions/assistantWhatsApp";
@@ -230,6 +230,28 @@ export async function setMyProactive(on: boolean) {
         revalidatePath("/assistant");
       }
       return { success: on === true ? "On — DAX will come to you when a customer acts" : "Off" };
+    }),
+  );
+}
+
+/** The caller's OWN morning-brief time (proactive DAX, part 2): one of BRIEF_TIMES, or "off". Theirs alone. */
+export async function setMyBriefTime(value: string) {
+  return asActionResult(() =>
+    withActingStaffScope(async () => {
+      const user = await requireAnyPermission(...ASSISTANT_PERMISSIONS);
+      const at = String(value ?? "");
+      if (at !== "off" && !BRIEF_TIMES.includes(at)) refuse("Choose one of the times offered.");
+      const key = briefPersonKey(user.id);
+      if (at !== ((await getSetting(key)) ?? BRIEF_DEFAULT)) {
+        await putSetting(key, at);
+        await logAudit({
+          action: "assistant.brief_time",
+          summary: at === "off" ? "Turned off their morning brief" : `Set their morning brief for ${at} on weekdays`,
+          user,
+        });
+        revalidatePath("/assistant");
+      }
+      return { success: at === "off" ? "Morning brief off" : `Morning brief at ${at} on weekdays` };
     }),
   );
 }

@@ -27,7 +27,9 @@ const scheduledLabel = (turn: Turn) =>
     : turn.source === "watch" ? <p className="text-[11px] font-medium text-muted-foreground">👀 Something you&apos;re watching</p>
       : turn.source === "handoff" ? <p className="text-[11px] font-medium text-muted-foreground">🙋 The chatbot handed a conversation to a person</p>
         : turn.source === "proactive" ? <p className="text-[11px] font-medium text-muted-foreground">⚡ A customer just did something</p>
-          : null;
+          : turn.source === "brief" ? <p className="text-[11px] font-medium text-muted-foreground">☀️ Your morning brief</p>
+            : turn.source === "followup" ? <p className="text-[11px] font-medium text-muted-foreground">🔁 Checking back, as I said I would</p>
+              : null;
 
 /**
  * The answer, with its evidence: each [[n]] the server numbered becomes a small

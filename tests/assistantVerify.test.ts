@@ -53,7 +53,7 @@ test("every answer goes through the check, and the note is part of what's saved 
   assert.doesNotMatch(call, /conversation|\.answer|\.state/, "nothing DAX wrote is evidence");
   // The note is still part of both — unless the whole answer was replaced because it spoke of a task that was
   // never set up (settledAnswer): that text holds none of the original's figures.
-  assert.match(src, /const cited = settled \?\? resolved\.cited \+ note;\s*const answer = settled \?\? resolved\.plain \+ note;/);
+  assert.match(src, /const cited = \(settled \?\? resolved\.cited \+ note\) \+ checkBackLine;\s*const answer = \(settled \?\? resolved\.plain \+ note\) \+ checkBackLine;/);
   const plan = readFileSync(new URL("../src/lib/crmAssistantPlan.ts", import.meta.url), "utf8");
   assert.match(plan, /with \\"My read:\\"/);
   assert.match(plan, /with \\"Not in the CRM:\\"/);

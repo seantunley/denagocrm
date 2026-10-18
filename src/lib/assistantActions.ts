@@ -176,6 +176,9 @@ export const proposedAction = z.discriminatedUnion("type", [
   // "Tell me when…" — checked by fixed rules every half hour; it only ever
   // notifies the person who confirmed it (assistantWatch).
   z.object({ type: z.literal("watch"), ...watchFields, reason }).strict(),
+  // Proactive DAX, part 3: a check DAX sets ITSELF — no card, no Confirm (it only ever tells the same person);
+  // taken out before the cards are made and saved by proactiveFollowUp.setCheckBacks.
+  z.object({ type: z.literal("check_back"), question: text.max(300), when: z.string().trim().regex(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/), reason }).strict(),
 ]);
 export type ProposedAction = z.infer<typeof proposedAction>;
 
@@ -225,6 +228,20 @@ export const QUOTE_PDF_RULE =
   "- quote_pdf: SEND THEM a quote's PDF, when they ask for it (\"send me the PDF of Q-1030\", \"can I have that quote as a PDF\"). \"quote\" is its number. " +
   "It goes to THEIR OWN linked WhatsApp, as the quote stands now — draft or not. It is never sent to the customer and changes nothing on the quote: " +
   "if they want it sent to the customer, that is their own step in the CRM. Never say you cannot send a quote's PDF.";
+
+/**
+ * CHECKING BACK (proactive DAX, part 3 — Sean, 2026-10-18: "Yes, it checks back"). Offered only when the person
+ * has proactive DAX on. Unlike every other task it needs no Confirm: it only ever reports back to them.
+ */
+export const CHECK_BACK_RULE = [
+  "CHECKING BACK. When something is now waiting on a customer or on time — a quote just sent, a customer who said they'd decide by Friday, a test drive to follow up — and the person would clearly want to know how it turned out, you may set yourself a check, in the actions list:",
+  '{"type":"check_back","question":"Has Anna Jacobs signed quote Q-1032? If not, what would be a good next step?","when":"YYYY-MM-DDTHH:MM","reason":"she said she would decide by Thursday"}',
+  "- It needs no Confirm: on the day you look it up again and tell them either way. It never contacts the customer.",
+  "- The question runs later with no conversation, so it must stand alone: name the customer and the quote or deal, never \"her\" or \"that one\".",
+  "- when: South African time, on the hour or half past, at least an hour from now and within 30 days — the day it would actually matter.",
+  "- At most ONE per answer, and only when it clearly helps. Not for something they asked you to remind them to DO (that is a follow_up), and not when they are already watching it.",
+  "- Do NOT mention it in your answer — the CRM adds a line saying what was set.",
+].join("\n");
 
 export const ACTION_INSTRUCTIONS = [
   "TASKS. You can't change anything yourself, but you can PROPOSE up to 4 tasks for the person to confirm with one click. Propose when they ask you to do something (\"remind me…\", \"give it to Donovan\", \"draft a message…\", \"book Anna a test drive\"), or offer one when you recommend a concrete next step.",

@@ -28,7 +28,7 @@ import { assistantWhatsAppOn } from "@/lib/assistantWhatsApp";
 import { linkRefusalText, maskWaId } from "@/lib/assistantWhatsAppRules";
 import AssistantWhatsAppCard from "@/components/AssistantWhatsAppCard";
 import AssistantProactiveCard from "@/components/AssistantProactiveCard";
-import { ASSISTANT_PROACTIVE_KEY, proactiveOn, proactivePersonKey } from "@/lib/proactiveRules";
+import { ASSISTANT_PROACTIVE_KEY, BRIEF_DEFAULT, briefPersonKey, parseBriefAt, proactiveOn, proactivePersonKey } from "@/lib/proactiveRules";
 
 export const dynamic = "force-dynamic";
 export const metadata = { title: "Ask the CRM" };
@@ -66,7 +66,7 @@ export default async function AssistantPage() {
     prisma.assistantSchedule.findMany({
       where: { userId: user.id },
       orderBy: { createdAt: "asc" },
-      select: { id: true, question: true, cadence: true, weekday: true, timeOfDay: true, onDate: true, nextRunAt: true, active: true },
+      select: { id: true, question: true, cadence: true, weekday: true, timeOfDay: true, onDate: true, nextRunAt: true, active: true, setBy: true, reason: true },
     }),
     whatsappCard(user.id),
     // This person's own watches only — every one of them, running or not.
@@ -87,9 +87,10 @@ export default async function AssistantPage() {
     markScheduledTurnsSeen(user.id),
   ]);
   // Proactive DAX: the owner's switch for the workspace, and this person's own (lib/proactive.ts).
-  const [proactiveWorkspace, proactiveMe] = await Promise.all([
+  const [proactiveWorkspace, proactiveMe, briefAt] = await Promise.all([
     getSetting(ASSISTANT_PROACTIVE_KEY).then(proactiveOn).catch(() => false),
     getSetting(proactivePersonKey(user.id)).then(proactiveOn).catch(() => false),
+    getSetting(briefPersonKey(user.id)).then((stored) => parseBriefAt(stored) ?? "off").catch(() => BRIEF_DEFAULT),
   ]);
   // What was stored is a card the assistant proposed; anything that is not shaped like one is left out, not rendered.
   const savedCards = saved.flatMap((row) => {
@@ -141,6 +142,8 @@ export default async function AssistantPage() {
               <li key={s.id} className="flex items-start justify-between gap-3 py-2">
                 <div className="min-w-0">
                   <p className="font-medium">{describeSchedule(s)}</p>
+                  {/* Set by DAX itself from a conversation (proactive DAX, part 3) — said so, with why, and cancellable here. */}
+                  {s.setBy === "dax" && <p className="text-xs font-medium text-primary">🔁 Set by {profile.name}{s.reason ? ` — ${s.reason}` : ""}</p>}
                   <p className="text-muted-foreground">{s.question}</p>
                   <p className="text-xs text-muted-foreground">
                     {s.active && s.nextRunAt
@@ -214,7 +217,7 @@ export default async function AssistantPage() {
           </ul>
         )}
       </section>
-      <AssistantProactiveCard name={profile.name} workspaceOn={proactiveWorkspace} on={proactiveMe} />
+      <AssistantProactiveCard name={profile.name} workspaceOn={proactiveWorkspace} on={proactiveMe} briefAt={briefAt} />
       {whatsapp &&<AssistantWhatsAppCard name={profile.name} linked={whatsapp.linked} refused={whatsapp.refused} updates={whatsapp.updates} />}
       <details className="card p-4 text-sm">
         <summary className="cursor-pointer font-medium">
