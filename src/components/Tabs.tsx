@@ -39,7 +39,7 @@ export type TabDef = {
   lazy?: boolean;
 };
 
-export default function Tabs({ tabs, initialKey, overflowKeys = [] }: { tabs: TabDef[]; initialKey?: string; overflowKeys?: string[] }) {
+export default function Tabs({ tabs, initialKey, overflowKeys = [], overflowLabel = "More customer sections" }: { tabs: TabDef[]; initialKey?: string; overflowKeys?: string[]; overflowLabel?: string }) {
   const id = useId();
   const overflow = tabs.filter((tab) => overflowKeys.includes(tab.key));
   const first =
@@ -96,7 +96,7 @@ export default function Tabs({ tabs, initialKey, overflowKeys = [] }: { tabs: Ta
             )}
           </button>
         ))}
-        {overflow.length > 0 && <select aria-label="More customer sections" value={overflowKeys.includes(active ?? "") ? active : ""} onChange={(event) => event.target.value && select(event.target.value)} className={cn("min-h-10 max-w-40 shrink-0 rounded-lg bg-card px-2 text-[13px] font-medium focus-visible:ring-2 focus-visible:ring-primary", overflowKeys.includes(active ?? "") ? "text-primary" : "text-muted-foreground")}>
+        {overflow.length > 0 && <select aria-label={overflowLabel} value={overflowKeys.includes(active ?? "") ? active : ""} onChange={(event) => event.target.value && select(event.target.value)} className={cn("min-h-10 max-w-40 shrink-0 rounded-lg bg-card px-2 text-[13px] font-medium focus-visible:ring-2 focus-visible:ring-primary", overflowKeys.includes(active ?? "") ? "text-primary" : "text-muted-foreground")}>
           <option value="" disabled>More</option>
           {overflow.map((tab) => <option key={tab.key} value={tab.key}>{tab.label}{tab.count ? ` (${tab.count})` : ""}</option>)}
         </select>}

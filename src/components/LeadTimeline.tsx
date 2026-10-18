@@ -136,7 +136,8 @@ export default async function LeadTimeline({
   deals = [],
   workspace,
 }: {
-  workspace?: { composer: React.ReactNode; context: React.ReactNode };
+  /** `replyable`: the email composer is on the page for this viewer, so emails offer Reply / Reply all / Forward. */
+  workspace?: { composer: React.ReactNode; context: React.ReactNode; replyable?: boolean };
   /** The customer's open deals, on a customer's page (lib/customerTimeline.dealChoice). */
   deals?: readonly DealOption[];
   leadId?: string;
@@ -387,7 +388,7 @@ export default async function LeadTimeline({
               </a>}
               {item.seen ? <p className="mt-2 text-xs text-emerald-400" title={item.type === "email" ? SEEN_HINT : undefined}>{item.seen}</p> : item.deliveredAt ? <p className="mt-2 text-xs text-emerald-400">Delivered · {formatDateTime(item.deliveredAt)}</p> : null}
               {item.changed && item.changed.length > 0 && <details className="mt-2 text-xs"><summary className="cursor-pointer text-muted-foreground">{item.changed.length} field changes</summary><dl className="mt-2 space-y-2">{item.changed.map((change) => <div key={change.field}><dt className="font-medium">{fieldLabel(change.field)}</dt><dd className="break-words text-muted-foreground [overflow-wrap:anywhere]"><span className="line-through">{auditValue(change.before)}</span> → {auditValue(change.after)}</dd></div>)}</dl></details>}
-              {!inPinnedShelf && item.email && <EmailReplyButtons email={item.email} />}
+              {!inPinnedShelf && item.email && workspace.replyable && <EmailReplyButtons email={item.email} />}
               <div className="mt-2 flex flex-wrap items-center gap-2">
                 {pinButton}
                 {!inPinnedShelf && item.communicationId && <ConfirmDelete action={deleteCommunication.bind(null, item.communicationId, revalidate)} title="Delete this timeline entry?" description="This cannot be undone. The deletion is recorded in the customer history." trigger="Delete entry" triggerClass="rounded-md px-2 py-2 text-xs text-muted-foreground hover:text-red-400 focus-visible:ring-2 focus-visible:ring-primary" />}
@@ -538,6 +539,7 @@ export default async function LeadTimeline({
     // Pins are shortcuts in the sidebar; the complete, chronological history remains filterable.
     const chronological = [...items].sort((a, b) => b.when.getTime() - a.when.getTime());
     return <CustomerHistory
+      subject={leadId ? "Deal" : "Customer"}
       composer={workspace.composer}
       context={workspace.context}
       pinned={pinnedItems.map((item) => renderItem(item, true))}

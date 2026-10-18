@@ -89,10 +89,11 @@ test("only a plain Message-ID reaches the In-Reply-To header", () => {
 
 test("the buttons are where the emails are: the deal's Communications tab and the customer's history", () => {
   const read = (rel: string) => readFileSync(new URL(`../${rel}`, import.meta.url), "utf8");
-  assert.match(read("src/app/(app)/leads/[id]/page.tsx"), /<CommsTimeline[^>]*?replyable/);
-  // The customer page's history is LeadTimeline in its workspace view (#891), beside the composer.
-  assert.match(read("src/app/(app)/contacts/[id]/page.tsx"), /<LeadTimeline\s+workspace=\{\{ context, composer: <CustomerComposer email=\{<EmailComposer/);
+  // Both pages' history is LeadTimeline in its workspace view (#891, #894), beside the composer — and the buttons
+  // show only for someone the email composer is there for (review of #894).
+  assert.match(read("src/app/(app)/leads/[id]/page.tsx"), /<LeadTimeline[\s\S]*?workspace=\{\{ context, replyable: canWriteRecord, composer:[\s\S]*?<EmailComposer key=\{lead\.id\} compactTrigger/);
+  assert.match(read("src/app/(app)/contacts/[id]/page.tsx"), /<LeadTimeline[\s\S]*?workspace=\{\{ context, replyable: canWriteRecord, composer: <CustomerComposer email=\{canWriteRecord && <EmailComposer/);
   const timeline = read("src/components/LeadTimeline.tsx");
   assert.match(timeline, /email: communication\.type === "email"/);
-  assert.match(timeline, /\{!inPinnedShelf && item\.email && <EmailReplyButtons email=\{item\.email\} \/>\}/);
+  assert.match(timeline, /\{!inPinnedShelf && item\.email && workspace\.replyable && <EmailReplyButtons email=\{item\.email\} \/>\}/);
 });

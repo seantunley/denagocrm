@@ -4,15 +4,16 @@ import DealField from "@/components/DealField";
 import PasteImageInput from "@/components/PasteImageInput";
 import type { DealOption } from "@/lib/customerTimeline";
 
-export default function CustomerLogForm({ contactId, deals, revalidate, mode }: {
-  contactId: string; deals: readonly DealOption[]; revalidate: string; mode: "note" | "call";
+export default function CustomerLogForm({ contactId, leadId, deals = [], revalidate, mode }: {
+  contactId?: string; leadId?: string; deals?: readonly DealOption[]; revalidate: string; mode: "note" | "call";
 }) {
-  const prefix = `customer-${mode}`;
+  const prefix = `${leadId ? "deal" : "customer"}-${leadId ?? contactId}-${mode}`;
   return (
     <SaveForm action={addCommunication} success={mode === "note" ? "Internal note saved" : "Communication logged"} className="space-y-3">
-      <input type="hidden" name="contactId" value={contactId} />
+      {contactId && <input type="hidden" name="contactId" value={contactId} />}
+      {leadId && <input type="hidden" name="leadId" value={leadId} />}
       <input type="hidden" name="revalidate" value={revalidate} />
-      {deals.length > 0 && <DealField deals={deals} id={`${prefix}-deal`} />}
+      {!leadId && deals.length > 0 && <DealField deals={deals} id={`${prefix}-deal`} />}
       {mode === "note" ? <><input type="hidden" name="type" value="note" /><input type="hidden" name="direction" value="" /></> : (
         <>
           <p className="text-xs text-muted-foreground">Record a conversation that already happened. This does not send a message.</p>
@@ -29,7 +30,7 @@ export default function CustomerLogForm({ contactId, deals, revalidate, mode }: 
       )}
       <div>
         <label htmlFor={`${prefix}-body`} className="label">{mode === "note" ? "Internal note · visible to your team" : "Conversation details"}</label>
-        <textarea id={`${prefix}-body`} name="body" className="input" rows={3} placeholder={mode === "note" ? "What should your team know about this customer?" : "What was discussed?"} />
+        <textarea id={`${prefix}-body`} name="body" className="input" rows={3} placeholder={mode === "note" ? `What should your team know about this ${leadId ? "deal" : "customer"}?` : "What was discussed?"} />
       </div>
       <PasteImageInput />
       <div className="flex flex-wrap items-end justify-between gap-3">

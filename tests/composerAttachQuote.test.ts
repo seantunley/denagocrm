@@ -143,6 +143,6 @@ test("the composer shows what is attached, posts it, and warns that a draft will
   // The quote's file name is in the list the send check and the secure-link option read.
   assert.match(composer, /\.\.\.pickedQuotes\.map\(\(q\) => \(\{ name: q\.fileName, sizeBytes: 0 \}\)\)/);
   for (const page of ["src/app/(app)/leads/[id]/page.tsx", "src/app/(app)/contacts/[id]/page.tsx"]) {
-    assert.match(shipped(page), /quotes=\{composerQuotes\((lead|contact)\.quotes, canCancelQuotes, \((company \?\? \()?await getCompanyProfile\(\)\)+\.name\)\}/, page);
+    assert.match(shipped(page), /quotes=\{composerQuotes\((visibleQuotes|contact\.quotes), canCancelQuotes, \((company \?\? \()?await getCompanyProfile\(\)\)+\.name\)\}/, page);
   }
 });

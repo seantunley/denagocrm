@@ -8,8 +8,8 @@ import { CUSTOMER_HISTORY_PAGE, customerHistoryFilters, matchesCustomerHistoryFi
 export type CustomerHistoryEntry = { id: string; type: string; day: string; content: ReactNode };
 
 /** Only filter metadata crosses this boundary; entries and their actions are rendered on the server. */
-export default function CustomerHistory({ entries, pinned, composer, context }: {
-  entries: CustomerHistoryEntry[]; pinned: ReactNode[]; composer: ReactNode; context: ReactNode;
+export default function CustomerHistory({ entries, pinned, composer, context, subject = "Customer" }: {
+  entries: CustomerHistoryEntry[]; pinned: ReactNode[]; composer: ReactNode; context: ReactNode; subject?: "Customer" | "Deal";
 }) {
   const [filter, setFilter] = useState<CustomerHistoryFilter>("all");
   // The latest first, a page at a time: a long-standing customer's whole history in one go was a page tens of
@@ -22,9 +22,9 @@ export default function CustomerHistory({ entries, pinned, composer, context }: 
     <div className="grid items-start gap-5 xl:grid-cols-[minmax(0,1fr)_320px]">
       <div className="min-w-0 space-y-5">
         {composer}
-        <section id="live-timeline" className="scroll-mt-24 rounded-xl border border-border bg-card" aria-label="Customer history">
-          <div className="flex items-center gap-2 px-4 pt-4"><History className="size-4 text-muted-foreground" aria-hidden="true" /><h2 className="font-semibold">Customer history</h2><span className="text-xs text-muted-foreground">{matching.length}</span></div>
-          <div className="flex flex-wrap gap-1 border-b border-border p-3" role="group" aria-label="Filter customer history">
+        <section id="live-timeline" className="scroll-mt-24 rounded-xl border border-border bg-card" aria-label={`${subject} history`}>
+          <div className="flex items-center gap-2 px-4 pt-4"><History className="size-4 text-muted-foreground" aria-hidden="true" /><h2 className="font-semibold">{subject} history</h2><span className="text-xs text-muted-foreground">{matching.length}</span></div>
+          <div className="flex flex-wrap gap-1 border-b border-border p-3" role="group" aria-label={`Filter ${subject.toLowerCase()} history`}>
             {customerHistoryFilters.map(({ key, label }) => <button key={key} type="button" aria-pressed={filter === key} onClick={() => { setFilter(key); setShown(CUSTOMER_HISTORY_PAGE); }} className={cn("min-h-9 rounded-md px-3 text-xs font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary", filter === key ? "bg-primary/10 text-primary" : "text-muted-foreground hover:bg-muted hover:text-foreground")}>{label}</button>)}
           </div>
           <p className="sr-only" role="status">{visible.length} of {matching.length} entries shown</p>
@@ -46,7 +46,7 @@ export default function CustomerHistory({ entries, pinned, composer, context }: 
         </section>
       </div>
       {/* On a narrow screen the next action and open deals come FIRST, not below the whole history. */}
-      <aside className="order-first min-w-0 space-y-4 xl:order-none" aria-label="Customer context">
+      <aside className="order-first min-w-0 space-y-4 xl:order-none" aria-label={`${subject} context`}>
         {context}
         <section className="rounded-xl border border-border bg-card p-4">
           <h2 className="mb-3 flex items-center gap-2 text-sm font-semibold"><Pin className="size-4 text-amber-400" aria-hidden="true" />Pinned for the team <span className="text-xs text-muted-foreground">{pinned.length}</span></h2>
