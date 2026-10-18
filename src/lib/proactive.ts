@@ -57,22 +57,17 @@ export type ProactiveTarget = {
   contactId?: string | null;
 };
 
-/** How long the event's own request waits for the alert before carrying on; the rest finishes after the response. */
-const NOTIFY_WAIT_MS = 2_500;
-
 /**
  * Tell the person responsible. Never rejects and never holds the customer up: this hangs off a customer's own
- * request (opening a quote, signing, booking), so it gets a short wait and then the platform finishes it.
+ * request (opening a quote, signing, booking), so the work is handed to the platform to finish after the response.
+ * Only where there is no request to outlive (a script, a test) is it awaited here.
  */
 export async function notifyCustomerActivity(tenantId: string | null | undefined, event: ProactiveEvent, target: ProactiveTarget): Promise<void> {
   if (!tenantId) return;
   const work = runInTenantScope({ tenantId, system: false }, () => raise(tenantId, event, target)).catch((error: unknown) =>
     logError("dax-proactive", `raising a ${event.kind} alert failed`, error instanceof Error ? error.name : "unknown").catch(() => {}),
   );
-  await finishAfterResponse(work);
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  await Promise.race([work, new Promise((resolve) => { timer = setTimeout(resolve, NOTIFY_WAIT_MS); })]);
-  clearTimeout(timer);
+  if (!(await finishAfterResponse(work))) await work;
 }
 
 /**
@@ -118,13 +113,14 @@ export async function notifyQuoteActivity(
   );
 }
 
-/** Keep the request alive until `work` settles; outside a request (a script, a test) there is nothing to keep. */
-async function finishAfterResponse(work: Promise<unknown>): Promise<void> {
+/** Keep the request alive until `work` settles. False outside a request (a script, a test): nothing to keep alive. */
+async function finishAfterResponse(work: Promise<unknown>): Promise<boolean> {
   try {
     const { after } = await import("next/server");
     after(() => work);
+    return true;
   } catch {
-    // No request to outlive.
+    return false;
   }
 }
 
@@ -150,7 +146,7 @@ async function raise(tenantId: string, event: ProactiveEvent, target: ProactiveT
   if (target.leadId ? !(await canAccessLead(user, target.leadId)) : target.contactId ? !(await canAccessContact(user, target.contactId)) : true) return false;
 
   const now = new Date();
-  const today = await basePrisma.assistantProactiveAlert.count({ where: { tenantId, userId, createdAt: { gte: johannesburgDayStart(now) } } });
+  const today = await basePrisma.assistantProactiveAlert.count({ where: { tenantId, userId, kind: { not: BRIEF_KIND }, createdAt: { gte: johannesburgDayStart(now) } } });
   const deliverAt = proactiveDeliverAt(now, today);
   const text = proactiveText(event, await tenantOrigin(tenantId).catch(() => ""));
   const alert = await basePrisma.assistantProactiveAlert
@@ -166,20 +162,30 @@ async function raise(tenantId: string, event: ProactiveEvent, target: ProactiveT
 }
 
 /**
- * Turn one alert into a message. Claimed first (deliveredAt set only if still empty), so two workers never both
- * send it; the switches are read again, so an alert held overnight respects a switch turned off since.
+ * Turn one alert into a message. The claim (deliveredAt set only if still empty), the message and the link between
+ * them are ONE transaction: if the message can't be written the claim rolls back and the next sweep tries again,
+ * and a second worker waits on the row and then finds it taken — never lost, never twice. The switches are read
+ * again first, so an alert held overnight respects a switch turned off since (it is then dropped, not sent later).
+ * The phone notification and WhatsApp follow once it is saved; WhatsApp retries on its own (the sweep).
  */
 async function deliver(tenantId: string, alertId: string): Promise<boolean> {
-  const alert = await basePrisma.assistantProactiveAlert.findFirst({ where: { id: alertId, tenantId }, select: { userId: true, kind: true, text: true } });
+  const alert = await basePrisma.assistantProactiveAlert.findFirst({ where: { id: alertId, tenantId, deliveredAt: null }, select: { userId: true, kind: true, text: true } });
   if (!alert) return false;
-  const claimed = await basePrisma.assistantProactiveAlert.updateMany({ where: { id: alertId, tenantId, deliveredAt: null }, data: { deliveredAt: new Date() } });
-  if (claimed.count !== 1) return false;
-  if (!(await switchedOn(tenantId, alert.userId))) return false;
-  const turn = await basePrisma.assistantTurn.create({
-    data: { tenantId, userId: alert.userId, question: PROACTIVE_QUESTION, answer: alert.text, source: PROACTIVE_SOURCE },
-    select: { id: true },
+  if (!(await switchedOn(tenantId, alert.userId))) {
+    await basePrisma.assistantProactiveAlert.updateMany({ where: { id: alertId, tenantId, deliveredAt: null }, data: { deliveredAt: new Date() } });
+    return false;
+  }
+  const sent = await basePrisma.$transaction(async (tx) => {
+    const claimed = await tx.assistantProactiveAlert.updateMany({ where: { id: alertId, tenantId, deliveredAt: null }, data: { deliveredAt: new Date() } });
+    if (claimed.count !== 1) return false;
+    const turn = await tx.assistantTurn.create({
+      data: { tenantId, userId: alert.userId, question: PROACTIVE_QUESTION, answer: alert.text, source: PROACTIVE_SOURCE },
+      select: { id: true },
+    });
+    await tx.assistantProactiveAlert.updateMany({ where: { id: alertId, tenantId }, data: { turnId: turn.id } });
+    return true;
   });
-  await basePrisma.assistantProactiveAlert.updateMany({ where: { id: alertId, tenantId }, data: { turnId: turn.id } });
+  if (!sent) return false;
   await sendPushToAll({ title: "DAX", body: proactivePush(alert.kind as ProactiveEvent["kind"]), url: "/assistant" }, "assistant", { tenantId, userId: alert.userId }).catch(() => {});
   await sendUpdatesToLinkedPhone(tenantId, alert.userId).catch(() => {});
   return true;
@@ -189,7 +195,8 @@ async function deliver(tenantId: string, alertId: string): Promise<boolean> {
 async function briefStillToCome(tenantId: string, userId: string, now: Date): Promise<boolean> {
   const at = parseBriefAt(await setting(tenantId, briefPersonKey(userId)));
   if (!at || !briefDueKey(now, "00:00")) return false; // off, a weekend, or past the brief's hour
-  const done = await basePrisma.assistantProactiveAlert.count({ where: { tenantId, userId, kind: BRIEF_KIND, recordKey: johannesburgDateKey(now) } });
+  // Done = delivered. One still being written, or failed and waiting for a retry, is still to come.
+  const done = await basePrisma.assistantProactiveAlert.count({ where: { tenantId, userId, kind: BRIEF_KIND, recordKey: johannesburgDateKey(now), deliveredAt: { not: null } } });
   return done === 0;
 }
 

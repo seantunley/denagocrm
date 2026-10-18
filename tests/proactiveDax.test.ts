@@ -15,6 +15,7 @@ import {
   proactiveText,
   responsiblePerson,
   BRIEF_DEFAULT,
+  BRIEF_LEASE_MS,
   BRIEF_TIMES,
   briefDueKey,
   briefQuestion,
@@ -109,12 +110,28 @@ test("each customer event raises it, and never at the cost of what the customer 
   assert.match(read("src/app/api/bookings/route.ts"), /kind: "service_booked"[\s\S]{0,200}recordKey: outcome\.activityId/);
   assert.match(read("src/app/api/cron/assistant/route.ts"), /await sweepProactive\(tenantId, budget\)/);
   const core = read("src/lib/proactive.ts");
-  // A short wait, then the platform finishes it; a failure is logged by name only.
-  assert.match(core, /const NOTIFY_WAIT_MS = 2_500;/);
+  // No wait on the customer's request: the platform finishes it after the response (review of #896); awaited only
+  // where there is no request. A failure is logged by name only.
+  assert.doesNotMatch(core, /Promise\.race|NOTIFY_WAIT_MS/);
+  assert.match(core, /if \(!\(await finishAfterResponse\(work\)\)\) await work;/);
+  assert.match(core, /after\(\(\) => work\);\s*return true;\s*\} catch \{\s*return false;/);
   assert.match(core, /logError\("dax-proactive", `raising a \$\{event\.kind\} alert failed`, error instanceof Error \? error\.name : "unknown"\)/);
   // Waiting customers only in working hours; one alert per message burst.
   assert.match(core, /if \(isQuietHour\(now\)\) return stats;/);
   assert.match(core, /recordKey: `\$\{c\.id\}:\$\{c\.lastInboundAt\?\.toISOString\(\) \?\? ""\}`/);
+});
+
+test("an alert is never lost: the claim, the message and the link are one transaction (review of #896)", () => {
+  const core = read("src/lib/proactive.ts");
+  const deliver = core.slice(core.indexOf("async function deliver("), core.indexOf("async function briefStillToCome("));
+  // If the message can't be written the claim rolls back, so the sweep (deliveredAt: null) tries it again.
+  assert.match(
+    deliver,
+    /basePrisma\.\$transaction\(async \(tx\) => \{\s*const claimed = await tx\.assistantProactiveAlert\.updateMany\(\{ where: \{ id: alertId, tenantId, deliveredAt: null \}, data: \{ deliveredAt: new Date\(\) \} \}\);\s*if \(claimed\.count !== 1\) return false;\s*const turn = await tx\.assistantTurn\.create\([\s\S]{0,250}await tx\.assistantProactiveAlert\.updateMany\(\{ where: \{ id: alertId, tenantId \}, data: \{ turnId: turn\.id \} \}\);/,
+  );
+  assert.doesNotMatch(deliver, /basePrisma\.assistantTurn\.create/, "the message is never written outside the claim's transaction");
+  // The phone and WhatsApp only once it is saved.
+  assert.ok(deliver.indexOf("if (!sent) return false;") < deliver.indexOf("sendPushToAll("));
 });
 
 /* ---------- Part 2: the morning brief ---------- */
@@ -150,14 +167,23 @@ test("the brief folds in what was held overnight — the words, not the links", 
 
 test("the brief: once a day, as the person, folding in held alerts, labelled as the brief", () => {
   const brief = read("src/lib/proactiveBrief.ts");
-  // The claim: one row per person per day, unique — two workers never both write it.
-  assert.match(brief, /create\(\{ data: \{ tenantId, userId, kind: BRIEF_KIND, recordKey: dayKey, text: "", deliveredAt: now \}/);
+  // The claim: one row per person per day, unique. BEING WRITTEN is a lease, WRITTEN is deliveredAt (review of #896):
+  // a failed try gives the lease back and the next tick retries; a dead worker's lease runs out — after the route's life.
+  assert.match(brief, /create\(\{ data: \{ tenantId, userId, kind: BRIEF_KIND, recordKey: dayKey, text: "", claimedAt: now \}/);
   assert.match(brief, /if \(\(error as \{ code\?: string \}\)\.code === "P2002"\) return null;/);
+  assert.match(brief, /tenantId, userId, kind: BRIEF_KIND, recordKey: dayKey, deliveredAt: null,\s*OR: \[\{ claimedAt: null \}, \{ claimedAt: \{ lt: new Date\(now\.getTime\(\) - BRIEF_LEASE_MS\) \} \}\],/);
+  assert.match(brief, /if \(!written\) \{\s*await basePrisma\.assistantProactiveAlert\s*\.updateMany\(\{ where: \{ id: claimId, tenantId, deliveredAt: null, claimedAt: now \}, data: \{ claimedAt: null \} \}\)/);
+  const routeLife = Number(/export const maxDuration = (\d+);/.exec(read("src/app/api/cron/assistant/route.ts"))?.[1]);
+  assert.ok(BRIEF_LEASE_MS > routeLife * 1000, "a lease only runs out once its worker is certainly gone");
+  // Done in one step: labelled, the day marked written, the held alerts marked delivered in it.
+  assert.match(brief, /data: \{ text: BRIEF_QUESTION, turnId, deliveredAt: new Date\(\), claimedAt: null \}/);
+  // Only a WRITTEN brief stops the held alerts waiting for it.
+  assert.match(read("src/lib/proactive.ts"), /kind: BRIEF_KIND, recordKey: johannesburgDateKey\(now\), deliveredAt: \{ not: null \} \}/);
   // As them, inside their hourly ask limit, unattended (no questions back, nothing learned).
   assert.match(brief, /const user = await assistantUserFor\(userId\);\s*if \(!user \|\| !\(await assistantAskAllowed\(user\.id\)\)\) return false;/);
   assert.match(brief, /askCrm\(user, briefQuestion\(now, held\.map\(\(alert\) => alert\.text\)\), null, \{ source: "schedule" \}\)/);
   assert.match(brief, /data: \{ source: BRIEF_SOURCE, question: BRIEF_QUESTION \}/);
-  assert.match(brief, /id: \{ in: held\.map\(\(alert\) => alert\.id\) \}, deliveredAt: null \},\s*data: \{ deliveredAt: new Date\(\), turnId: result\.turnId \}/);
+  assert.match(brief, /id: \{ in: held\.map\(\(alert\) => alert\.id\) \}, deliveredAt: null \},\s*data: \{ deliveredAt: new Date\(\), turnId \}/);
   // Held alerts wait for a brief still to come today; otherwise they go on their own.
   assert.match(read("src/lib/proactive.ts"), /if \(waitForBrief\.get\(userId\)\) continue;/);
   assert.match(read("src/app/api/cron/assistant/route.ts"), /await runMorningBriefs\(tenantId, budget\)/);

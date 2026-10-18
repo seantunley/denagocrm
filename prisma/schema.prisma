@@ -1053,6 +1053,8 @@ model AssistantProactiveAlert {
   text        String
   deliverAt   DateTime?
   deliveredAt DateTime?
+  /// Morning briefs only: the lease of the worker writing it now (null = nobody). Done = deliveredAt.
+  claimedAt   DateTime?
   turnId      String?
   createdAt   DateTime  @default(now())
 

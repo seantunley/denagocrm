@@ -10,6 +10,7 @@ import type { CronSliceContext } from "./tenantCron";
 import {
   ASSISTANT_PROACTIVE_KEY,
   BRIEF_KIND,
+  BRIEF_LEASE_MS,
   BRIEF_QUESTION,
   BRIEF_SOURCE,
   briefDueKey,
@@ -28,14 +29,43 @@ import {
  * does (unattended: no questions back, nothing learned), as that person with their own access and the same hourly
  * ask limit, and lands like one: in Ask DAX (labelled as the morning brief), a phone notification, their WhatsApp.
  *
- * ONCE A DAY: an AssistantProactiveAlert row (kind morning_brief, the day as its key) is the claim — unique, so two
- * workers never both write it. Not written by 11:00 — skipped for the day, and the held alerts go on their own.
+ * ONCE A DAY, RETRIED UNTIL IT IS: one AssistantProactiveAlert row per person per day (kind morning_brief, the day as
+ * its key, unique). BEING WRITTEN is a lease (claimedAt); WRITTEN is deliveredAt. A brief that fails — the model down,
+ * a timeout, the hourly limit — gives its lease back and the next half-hourly tick tries again; a worker that died
+ * leaves a lease that runs out. Not written by 11:00 — skipped for the day, and the held alerts go on their own.
  */
 
 /** Briefs written side by side per workspace per tick: enough for a team at the same hour, inside the route's budget. */
 const BRIEFS_PER_TICK = 3;
 /** Room a brief needs to finish: research and the answer, inside the route's limit. */
 export const BRIEF_RESERVE_MS = 200_000;
+
+/**
+ * Take today's brief for this person: make the day's row, or take it back when nobody holds it (a failed try) or the
+ * holder's lease ran out. Null when it is written already or someone is writing it now.
+ */
+async function claimBrief(tenantId: string, userId: string, dayKey: string, now: Date): Promise<string | null> {
+  const made = await basePrisma.assistantProactiveAlert
+    .create({ data: { tenantId, userId, kind: BRIEF_KIND, recordKey: dayKey, text: "", claimedAt: now }, select: { id: true } })
+    .catch((error: unknown) => {
+      if ((error as { code?: string }).code === "P2002") return null;
+      throw error;
+    });
+  if (made) return made.id;
+  const retaken = await basePrisma.assistantProactiveAlert.updateMany({
+    where: {
+      tenantId, userId, kind: BRIEF_KIND, recordKey: dayKey, deliveredAt: null,
+      OR: [{ claimedAt: null }, { claimedAt: { lt: new Date(now.getTime() - BRIEF_LEASE_MS) } }],
+    },
+    data: { claimedAt: now },
+  });
+  if (retaken.count !== 1) return null;
+  const row = await basePrisma.assistantProactiveAlert.findFirst({
+    where: { tenantId, userId, kind: BRIEF_KIND, recordKey: dayKey, deliveredAt: null, claimedAt: now },
+    select: { id: true },
+  });
+  return row?.id ?? null;
+}
 
 export async function runMorningBriefs(tenantId: string, budget: Pick<CronSliceContext, "shouldStop">): Promise<{ written: number }> {
   if (!proactiveOn(await setting(tenantId, ASSISTANT_PROACTIVE_KEY))) return { written: 0 };
@@ -57,22 +87,23 @@ export async function runMorningBriefs(tenantId: string, budget: Pick<CronSliceC
   const claimed: { userId: string; claimId: string }[] = [];
   for (const { userId, dayKey } of due) {
     if (claimed.length >= BRIEFS_PER_TICK) break;
-    // The claim: one row per person per day. Already there = written (or being written) today.
-    const row = await basePrisma.assistantProactiveAlert
-      .create({ data: { tenantId, userId, kind: BRIEF_KIND, recordKey: dayKey, text: "", deliveredAt: now }, select: { id: true } })
-      .catch((error: unknown) => {
-        if ((error as { code?: string }).code === "P2002") return null;
-        throw error;
-      });
-    if (row) claimed.push({ userId, claimId: row.id });
+    const claimId = await claimBrief(tenantId, userId, dayKey, now);
+    if (claimId) claimed.push({ userId, claimId });
   }
   const results = await Promise.all(
-    claimed.map(({ userId, claimId }) =>
-      writeBrief(tenantId, userId, claimId, now, budget).catch(async (error: unknown) => {
+    claimed.map(async ({ userId, claimId }) => {
+      const written = await writeBrief(tenantId, userId, claimId, now, budget).catch(async (error: unknown) => {
         await logError("assistant-schedule", "morning brief failed", error instanceof Error ? error.name : "unknown", { tenantId });
         return false;
-      }),
-    ),
+      });
+      // Not written: give the lease back, so the next tick tries again (until 11:00).
+      if (!written) {
+        await basePrisma.assistantProactiveAlert
+          .updateMany({ where: { id: claimId, tenantId, deliveredAt: null, claimedAt: now }, data: { claimedAt: null } })
+          .catch(() => {});
+      }
+      return written;
+    }),
   );
   return { written: results.filter(Boolean).length };
 }
@@ -89,16 +120,21 @@ async function writeBrief(tenantId: string, userId: string, claimId: string, now
     select: { id: true, text: true },
   });
   const result = await askCrm(user, briefQuestion(now, held.map((alert) => alert.text)), null, { source: "schedule" });
-  if (!result.ok || !result.turnId) return false; // the held alerts stay held: the sweep sends them on their own
-  // It is the morning brief, not a scheduled question: say so in the conversation.
-  await basePrisma.assistantTurn.updateMany({ where: { id: result.turnId, tenantId, userId }, data: { source: BRIEF_SOURCE, question: BRIEF_QUESTION } });
-  await basePrisma.assistantProactiveAlert.updateMany({ where: { id: claimId, tenantId }, data: { text: BRIEF_QUESTION, turnId: result.turnId } });
-  if (held.length) {
-    await basePrisma.assistantProactiveAlert.updateMany({
-      where: { tenantId, userId, id: { in: held.map((alert) => alert.id) }, deliveredAt: null },
-      data: { deliveredAt: new Date(), turnId: result.turnId },
-    });
-  }
+  if (!result.ok || !result.turnId) return false; // retried next tick; past 11:00 the held alerts go on their own
+  const turnId = result.turnId;
+  // Done, in one step: labelled as the brief (not a scheduled question), the day marked written, and the held
+  // alerts marked as delivered in it.
+  // ponytail: the answer is saved by askCrm before this; if this one step fails the brief is written again next tick.
+  await basePrisma.$transaction(async (tx) => {
+    await tx.assistantTurn.updateMany({ where: { id: turnId, tenantId, userId }, data: { source: BRIEF_SOURCE, question: BRIEF_QUESTION } });
+    await tx.assistantProactiveAlert.updateMany({ where: { id: claimId, tenantId }, data: { text: BRIEF_QUESTION, turnId, deliveredAt: new Date(), claimedAt: null } });
+    if (held.length) {
+      await tx.assistantProactiveAlert.updateMany({
+        where: { tenantId, userId, id: { in: held.map((alert) => alert.id) }, deliveredAt: null },
+        data: { deliveredAt: new Date(), turnId },
+      });
+    }
+  });
   await sendPushToAll({ title: "DAX", body: "Your morning brief is ready.", url: "/assistant" }, "assistant", { tenantId, userId }).catch(() => {});
   await sendUpdatesToLinkedPhone(tenantId, userId, { shouldStop: budget.shouldStop }).catch(() => {});
   return true;

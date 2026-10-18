@@ -147,6 +147,11 @@ export const BRIEF_LATEST_HOUR = 11;
 export const BRIEF_KIND = "morning_brief";
 export const BRIEF_SOURCE = "brief";
 export const BRIEF_QUESTION = "Your morning brief";
+/**
+ * How long a claim on a brief holds before another worker may take it. Longer than the cron route can live
+ * (maxDuration), so a lease only runs out once its worker is certainly gone — two briefs are never written side by side.
+ */
+export const BRIEF_LEASE_MS = 10 * 60 * 1000;
 /** Part 3: the answer to a check-back DAX set itself (lib/proactiveFollowUp.ts), as the conversation labels it. */
 export const FOLLOW_UP_SOURCE = "followup";
 const CHECK_BACK_MIN_AHEAD_MS = 60 * 60 * 1000;
