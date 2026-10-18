@@ -89,7 +89,7 @@ test("only a plain Message-ID reaches the In-Reply-To header", () => {
 
 test("the buttons are where the emails are: the deal's Communications tab and the customer's history", () => {
   const read = (rel: string) => readFileSync(new URL(`../${rel}`, import.meta.url), "utf8");
-  assert.match(read("src/app/(app)/leads/[id]/page.tsx"), /<CommsTimeline[^>]*?replyable/);
+  assert.match(read("src/app/(app)/leads/[id]/page.tsx"), /<LeadTimeline\s+workspace=\{\{ context, composer:[\s\S]*?<EmailComposer key=\{lead\.id\} compactTrigger/);
   // The customer page's history is LeadTimeline in its workspace view (#891), beside the composer.
   assert.match(read("src/app/(app)/contacts/[id]/page.tsx"), /<LeadTimeline\s+workspace=\{\{ context, composer: <CustomerComposer email=\{<EmailComposer/);
   const timeline = read("src/components/LeadTimeline.tsx");

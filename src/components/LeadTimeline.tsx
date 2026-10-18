@@ -538,6 +538,7 @@ export default async function LeadTimeline({
     // Pins are shortcuts in the sidebar; the complete, chronological history remains filterable.
     const chronological = [...items].sort((a, b) => b.when.getTime() - a.when.getTime());
     return <CustomerHistory
+      subject={leadId ? "Deal" : "Customer"}
       composer={workspace.composer}
       context={workspace.context}
       pinned={pinnedItems.map((item) => renderItem(item, true))}

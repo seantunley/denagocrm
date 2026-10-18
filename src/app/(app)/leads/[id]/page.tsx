@@ -11,7 +11,10 @@ import {
 } from "@/app/actions/leads";
 import LeadForm from "@/components/LeadForm";
 import { createQuoteFromLead } from "@/app/actions/quotes";
-import CommsTimeline from "@/components/CommsTimeline";
+import CustomerComposer from "@/components/CustomerComposer";
+import CustomerLogForm from "@/components/CustomerLogForm";
+import LeadWorkspaceContext from "@/components/LeadWorkspaceContext";
+import { Popover, PopoverTrigger, PopoverContent } from "@/components/ui/popover";
 import { dealTimelineWhere } from "@/lib/customerTimeline";
 import SecureLinksPanel from "@/components/SecureLinksPanel";
 import ActivityPanel from "@/components/ActivityPanel";
@@ -30,7 +33,7 @@ import { hasPermission } from "@/lib/permissions";
 import CustomFieldsCard from "@/components/custom-fields/CustomFieldsCard";
 import MarkLeadViewed from "@/components/MarkLeadViewed";
 import WhatsAppPanel from "@/components/WhatsAppPanel";
-import Tabs from "@/components/Tabs";
+import Tabs, { TabLink } from "@/components/Tabs";
 import ModalTrigger from "@/components/Modal";
 import ResearchTabPanel from "@/components/ResearchTabPanel";
 import { isAiConfigured, isResearchConfigured } from "@/lib/ai";
@@ -52,7 +55,7 @@ import { StatusPill } from "@/components/visual-system";
 import { LeadScoreBadge } from "@/components/LeadScoreBadge";
 import { scoreLeads } from "@/lib/leadScoreLoader";
 import { leadAttribution, isAdClick } from "@/lib/attribution";
-import { Car, FileText } from "lucide-react";
+import { Car, FileText, Mail, Phone, MoreHorizontal } from "lucide-react";
 import ContactPicker from "@/components/ContactPicker";
 
 const RESEARCH_SUBJECT = "🔎 AI research";
@@ -194,6 +197,25 @@ export default async function LeadDetailPage({
   const printableQuoteIds = await getAccessibleQuoteIds(user);
   const canPrintQuote = (quoteId: string) => printableQuoteIds === null || printableQuoteIds.includes(quoteId);
 
+  const visibleQuotes = lead.quotes.filter((quote) => canPrintQuote(quote.id));
+  const latestQuote = visibleQuotes.find((quote) => !quote.supersededAt);
+  const readableContact = lead.contact && (accessibleContactIds === null || accessibleContactIds.includes(lead.contact.id)) ? lead.contact : null;
+  const customerEmail = lead.email || readableContact?.email || "";
+  const customerPhone = lead.phone || readableContact?.whatsapp || readableContact?.phone || null;
+  const nextActivity = activities.find((activity) => activity.status === "planned") ?? null;
+  const [canCreateQuote, canMarkWon, canMarkLost, canReopen, canDeleteLead, canLinkContact, canWriteCustomer] = await Promise.all([
+    hasPermission(user, "quotes.create"), hasPermission(user, "leads.mark_won"), hasPermission(user, "leads.mark_lost"),
+    hasPermission(user, "leads.reopen"), hasPermission(user, "leads.delete"), hasPermission(user, "leads.link_contact"), hasPermission(user, "contacts.edit"),
+  ]);
+  const context = <LeadWorkspaceContext
+    nextActivity={nextActivity} canSchedule={canBookTestDrive}
+    customer={{ name: readableContact ? contactName(readableContact) : lead.name, href: readableContact ? `/contacts/${readableContact.id}` : undefined }}
+    product={lead.product?.name} color={lead.color} quantity={lead.quantity} valueCents={lead.valueCents}
+    stage={lead.status === "open" ? lead.stage.name : lead.status} owner={lead.assignedTo?.name}
+    latestQuote={latestQuote ? { number: latestQuote.number, status: latestQuote.status, totalCents: payableTotalCents(latestQuote) } : null}
+    secureLinks={<SecureLinksPanel leadId={lead.id} />}
+  />;
+
   return (
     <>
       <MarkLeadViewed leadId={lead.id} viewed={alreadyViewed} />
@@ -211,20 +233,18 @@ export default async function LeadDetailPage({
             </Link>
           )}
         </>}
-        description={`${lead.name} · ${lead.source}`}
-        meta={`Added ${formatDate(lead.createdAt)}${lead.assignedTo ? ` · Owner: ${lead.assignedTo.name}` : " · Unassigned"}`}
-        facts={[
-          { label: "Estimated value", value: lead.valueCents ? formatZAR(lead.valueCents) : "Not set" },
-          { label: "Product", value: lead.product?.name || "Not selected" },
-          { label: "Activities", value: activities.filter((activity) => activity.status === "planned").length },
-          { label: "Quotes", value: lead.quotes.length },
-        ]}
+        description={<div className="flex flex-wrap items-center gap-x-4 gap-y-1">
+          {readableContact ? <Link href={`/contacts/${readableContact.id}`} className="font-medium hover:text-primary">{contactName(readableContact)}</Link> : <span>{lead.name}</span>}
+          {customerEmail && <a href={`mailto:${customerEmail}`} className="inline-flex min-w-0 items-center gap-1.5 break-all hover:text-primary"><Mail className="size-3.5 shrink-0" />{customerEmail}</a>}
+          {customerPhone && <a href={`tel:${customerPhone}`} className="inline-flex items-center gap-1.5 hover:text-primary"><Phone className="size-3.5" />{customerPhone}</a>}
+        </div>}
+        meta={<div className="flex flex-wrap gap-x-3 gap-y-1"><span>Owner: {lead.assignedTo?.name ?? "Unassigned"}</span><span>Added {formatDate(lead.createdAt)} · {lead.source}</span></div>}
         actions={<>
           {lead.status === "open" && (
             <>
-              <SaveForm success="Quote created" resetOnSuccess={false} action={createQuoteFromLead.bind(null, lead.id)}>
+              {canCreateQuote && <SaveForm success="Quote created" resetOnSuccess={false} action={createQuoteFromLead.bind(null, lead.id)}>
                 <SaveButton className="btn-primary"><FileText className="size-4" />Create quote</SaveButton>
-              </SaveForm>
+              </SaveForm>}
               {/* Gap audit #24: book from the lead itself; the form opens with the
                   lead (and its customer, when linked) already chosen. */}
               {automotiveOn && canBookTestDrive && (
@@ -235,11 +255,17 @@ export default async function LeadDetailPage({
                   Book test drive
                 </Link>
               )}
-              <MarkWonButton leadId={lead.id} leadName={lead.name} />
+              {canMarkWon && <MarkWonButton leadId={lead.id} leadName={lead.name} />}
+
+            </>
+          )}
+          <Popover><PopoverTrigger asChild><button type="button" className="btn-secondary" aria-label="More deal actions"><MoreHorizontal className="size-4" />More</button></PopoverTrigger><PopoverContent align="end" className="flex w-56 flex-col gap-2 p-2">
+            <TabLink tab="details" className="btn-secondary">View deal details</TabLink>
+            {lead.status === "open" && canMarkLost && (
               <ModalTrigger
                 label="Mark lost"
                 title={`Why was “${lead.title}” lost?`}
-                buttonClass="btn-danger"
+                buttonClass="btn-secondary text-red-400"
               >
                 <SaveForm success="Marked lost" resetOnSuccess={false} action={markLost.bind(null, lead.id)} className="card space-y-4">
                   <div>
@@ -255,9 +281,8 @@ export default async function LeadDetailPage({
                   <SaveButton className="btn-danger">Mark lost</SaveButton>
                 </SaveForm>
               </ModalTrigger>
-            </>
-          )}
-          {lead.status !== "open" && (
+            )}
+          {lead.status !== "open" && canReopen && (
             <SaveForm success="Lead reopened" resetOnSuccess={false} action={reopenLead.bind(null, lead.id)}>
               <SaveButton className="btn-secondary">Reopen</SaveButton>
             </SaveForm>
@@ -283,18 +308,20 @@ export default async function LeadDetailPage({
               <Car className="size-4" />Indemnity
             </Link>
           )}
-          <ConfirmDelete
+          {canDeleteLead && <ConfirmDelete
+            triggerClass="btn-secondary text-red-400"
             action={deleteLead.bind(null, lead.id)}
             title={`Delete lead “${lead.title}”?`}
             description="The lead moves to the Trash and can be restored for 60 days."
-          />
+          />}
+          </PopoverContent></Popover>
         </>}
       >
 
       {automotiveOn && lead.status === "won" && (
         <div className="card bg-emerald-500/10 border-emerald-500/30 flex items-center justify-between gap-4 flex-wrap">
           <p className="text-sm text-emerald-300">
-            🎉 Deal won{lead.contact ? ` — customer: ${contactName(lead.contact)}` : ""}.
+            🎉 Deal won{readableContact ? ` — customer: ${contactName(readableContact)}` : ""}.
             Register the vehicle to start tracking services.
           </p>
           <Link
@@ -308,11 +335,52 @@ export default async function LeadDetailPage({
         </div>
       )}
 
-      <div className="grid lg:grid-cols-3 gap-6">
-        <div className="lg:col-span-2 min-w-0">
+      <div className="min-w-0">
           <Tabs
-            initialKey={tab}
+            initialKey={tab ?? (edit === "1" ? "details" : "comms")}
+            overflowKeys={["customer", "research"]}
+            overflowLabel="More deal sections"
             tabs={[
+              {
+                key: "comms",
+                label: "Communications",
+                count: comms.length,
+                content: (
+        <LeadTimeline
+          workspace={{ context, composer: canEditLead || canWriteCustomer ? <CustomerComposer
+                email={<EmailComposer key={lead.id} compactTrigger
+                      defaultTo={customerEmail}
+                      templates={renderedTemplates}
+                      smtpConfigured={smtpConfigured}
+                      leadId={lead.id}
+                      revalidate={path}
+                      libraryDocs={libraryDocs}
+                      quotes={composerQuotes(visibleQuotes, canCancelQuotes, (await getCompanyProfile()).name)}
+                      aiConfigured={aiOn}
+                      defaultReplyTo={replyToDefault}
+                    />}
+                whatsapp={<WhatsAppPanel composerOnly phone={customerPhone} leadId={lead.id} configured={waConfigured} revalidate={path} messages={[]} />}
+                note={<CustomerLogForm mode="note" leadId={lead.id} revalidate={path} />}
+                call={<CustomerLogForm mode="call" leadId={lead.id} revalidate={path} />}
+              /> : null }}
+          leadId={lead.id}
+          revalidate={path}
+          audit={audit}
+          auditDetail={await auditDetailFor(audit)}
+          communications={comms}
+          activities={activities}
+          creationNote={
+            lead.notes
+              ? {
+                  text: lead.notes,
+                  when: lead.createdAt,
+                  who: lead.createdBy?.name ?? `via ${lead.source}`,
+                }
+              : null
+          }
+        />
+                ),
+              },
               {
                 key: "details",
                 label: "Details",
@@ -430,7 +498,7 @@ export default async function LeadDetailPage({
                 content: (
                   <div className="card max-w-xl">
                     <h2 className="font-semibold mb-3">Customer</h2>
-                    {!lead.contact && (
+                    {!lead.contact && canLinkContact && (
                       // The one-click path for a new customer. Before this, creating a
                       // customer from a lead was only on the leads LIST, so from the lead
                       // itself the only option was linking someone who already existed.
@@ -442,15 +510,15 @@ export default async function LeadDetailPage({
                         <AddToContactsButton leadId={lead.id} label="Create customer from this lead" />
                       </div>
                     )}
-                    {lead.contact && (
+                    {readableContact && (
                       <Link
-                        href={`/contacts/${lead.contact.id}`}
+                        href={`/contacts/${readableContact!.id}`}
                         className="text-sm font-medium text-orange-400 hover:underline block mb-3"
                       >
-                        {contactName(lead.contact)} →
+                        {contactName(readableContact!)} →
                       </Link>
                     )}
-                    <SaveForm success="Linked to contact" resetOnSuccess={false} action={linkLeadToContact.bind(null, lead.id)} className="space-y-2">
+                    {canLinkContact && <SaveForm success="Linked to contact" resetOnSuccess={false} action={linkLeadToContact.bind(null, lead.id)} className="space-y-2">
                       <label className="label">
                         {lead.contact ? "Change linked customer" : "Link to customer"}
                       </label>
@@ -461,7 +529,7 @@ export default async function LeadDetailPage({
                         required
                       />
                       <SaveButton className="btn-secondary btn-sm w-full">Save customer link</SaveButton>
-                    </SaveForm>
+                    </SaveForm>}
                   </div>
                 ),
               },
@@ -486,25 +554,25 @@ export default async function LeadDetailPage({
               {
                 key: "quotes",
                 label: "Quotes",
-                count: lead.quotes.length,
+                count: visibleQuotes.length,
                 content: (
                   <div className="card">
                     <div className="flex items-center justify-between mb-3">
                       <h2 className="font-semibold">Quotes</h2>
-                      {lead.status === "open" && (
+                      {lead.status === "open" && canCreateQuote && (
                         <SaveForm success="Quote created" resetOnSuccess={false} action={createQuoteFromLead.bind(null, lead.id)}>
                           <SaveButton className="btn-secondary btn-sm">+ Create quote</SaveButton>
                         </SaveForm>
                       )}
                     </div>
-                    {lead.quotes.length === 0 ? (
+                    {visibleQuotes.length === 0 ? (
                       <p className="text-sm text-slate-400">No quotes yet.</p>
                     ) : (
                       <ul className="space-y-2">
-                        {lead.quotes.map((q) => {
+                        {visibleQuotes.map((q) => {
                           const total = payableTotalCents(q);
                           return (
-                            <li key={q.id} className="flex items-center gap-2 text-sm">
+                            <li key={q.id} className="flex flex-wrap items-center gap-2 border-b border-border py-3 text-sm last:border-0">
                               <Link href={`/quotes/${q.id}`} className="text-orange-400 hover:underline font-medium">
                                 Q-{q.number}
                               </Link>
@@ -544,51 +612,6 @@ export default async function LeadDetailPage({
                 ),
               },
               {
-                key: "comms",
-                label: "Communications",
-                count: comms.length,
-                content: (
-                  <>
-                    <EmailComposer key={lead.id}
-                      defaultTo={lead.email ?? ""}
-                      templates={renderedTemplates}
-                      smtpConfigured={smtpConfigured}
-                      leadId={lead.id}
-                      revalidate={path}
-                      libraryDocs={libraryDocs}
-                      quotes={composerQuotes(lead.quotes, canCancelQuotes, (await getCompanyProfile()).name)}
-                      aiConfigured={aiOn}
-                      defaultReplyTo={replyToDefault}
-                    />
-                    <WhatsAppPanel
-                      phone={lead.phone ?? lead.contact?.whatsapp ?? lead.contact?.phone ?? null}
-                      leadId={lead.id}
-                      contactId={lead.contactId ?? undefined}
-                      configured={waConfigured}
-                      revalidate={path}
-                      messages={comms
-                        .filter((c) => c.type === "whatsapp")
-                        .slice()
-                        .reverse()
-                        .map((c) => ({
-                          id: c.id,
-                          direction: c.direction,
-                          body: c.body,
-                          occurredAt: c.occurredAt.toISOString(),
-                          userName: c.user.name,
-                        }))}
-                    />
-                    <SecureLinksPanel leadId={lead.id} />
-                    <CommsTimeline
-                      communications={comms}
-                      leadId={lead.id}
-                      revalidate={path}
-                      replyable
-                    />
-                  </>
-                ),
-              },
-              {
                 key: "research",
                 label: "Research",
                 count: lead.researchNotes.length,
@@ -603,25 +626,6 @@ export default async function LeadDetailPage({
               },
             ]}
           />
-        </div>
-
-        <LeadTimeline
-          leadId={lead.id}
-          revalidate={path}
-          audit={audit}
-          auditDetail={await auditDetailFor(audit)}
-          communications={comms}
-          activities={activities}
-          creationNote={
-            lead.notes
-              ? {
-                  text: lead.notes,
-                  when: lead.createdAt,
-                  who: lead.createdBy?.name ?? `via ${lead.source}`,
-                }
-              : null
-          }
-        />
       </div>
       </EntityDetailShell>
     </>
