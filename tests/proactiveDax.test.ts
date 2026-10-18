@@ -98,7 +98,7 @@ test("never twice: unique per person, kind and record; claimed before it is sent
   assert.match(sql, /CREATE POLICY "AssistantProactiveAlert_tenant_isolation"/);
   const core = read("src/lib/proactive.ts");
   assert.match(core, /if \(\(error as \{ code\?: string \}\)\.code === "P2002"\) return null;/, "an event already told is silent");
-  assert.match(core, /updateMany\(\{ where: \{ id: alertId, tenantId, deliveredAt: null \}, data: \{ deliveredAt: new Date\(\) \} \}\);\s*if \(claimed\.count !== 1\) return false;/);
+  assert.match(core, /updateMany\(\{ where: \{ id: alertId, tenantId, deliveredAt: null \}, data: \{ deliveredAt: now \} \}\);\s*if \(claimed\.count !== 1\) return false;/);
   // And it rides the existing delivery: the red dot, seen-marking and WhatsApp include it.
   assert.ok((PROACTIVE_SOURCES as readonly string[]).includes("proactive"));
 });
@@ -128,7 +128,7 @@ test("an alert is never lost: the claim, the message and the link are one transa
   // If the message can't be written the claim rolls back, so the sweep (deliveredAt: null) tries it again.
   assert.match(
     deliver,
-    /basePrisma\.\$transaction\(async \(tx\) => \{\s*const claimed = await tx\.assistantProactiveAlert\.updateMany\(\{ where: \{ id: alertId, tenantId, deliveredAt: null \}, data: \{ deliveredAt: new Date\(\) \} \}\);\s*if \(claimed\.count !== 1\) return false;\s*const turn = await tx\.assistantTurn\.create\([\s\S]{0,250}await tx\.assistantProactiveAlert\.updateMany\(\{ where: \{ id: alertId, tenantId \}, data: \{ turnId: turn\.id \} \}\);/,
+    /basePrisma\.\$transaction\(async \(tx\) => \{[\s\S]{0,500}?const claimed = await tx\.assistantProactiveAlert\.updateMany\(\{ where: \{ id: alertId, tenantId, deliveredAt: null \}, data: \{ deliveredAt: now \} \}\);\s*if \(claimed\.count !== 1\) return false;\s*const turn = await tx\.assistantTurn\.create\([\s\S]{0,250}await tx\.assistantProactiveAlert\.updateMany\(\{ where: \{ id: alertId, tenantId \}, data: \{ turnId: turn\.id \} \}\);/,
   );
   assert.doesNotMatch(deliver, /basePrisma\.assistantTurn\.create/, "the message is never written outside the claim's transaction");
   // The phone and WhatsApp only once it is saved.
@@ -152,6 +152,23 @@ test("a held alert is checked again before it is sent: a person who left, a cust
   assert.ok(brief.indexOf("const held = waiting.filter") < brief.indexOf("askCrm("));
   // An alert meant to go at once whose send failed (no deliverAt) is retried by the sweep, not lost.
   assert.match(core, /deliveredAt: null, kind: \{ not: BRIEF_KIND \}, OR: \[\{ deliverAt: null \}, \{ deliverAt: \{ lte: now \} \}\]/);
+});
+
+test("quiet hours and the daily ceiling are decided when SENDING, for every alert, under a per-person lock (third review of #896)", () => {
+  const core = read("src/lib/proactive.ts");
+  const deliver = core.slice(core.indexOf("async function deliver("), core.indexOf("export async function dropAlerts("));
+  // Inside the transaction: lock the person, count what was actually SENT today, then hold or send.
+  assert.match(
+    deliver,
+    /\$transaction\(async \(tx\) => \{\s*await tx\.\$executeRaw`SELECT pg_advisory_xact_lock\(hashtext\(\$\{`dax-proactive:\$\{alert\.userId\}`\}\)::bigint\)`;\s*const now = new Date\(\);\s*const holdUntil = proactiveDeliverAt\(now, await notifiedToday\(tx, tenantId, alert\.userId, now\)\);\s*if \(holdUntil\) \{\s*await tx\.assistantProactiveAlert\.updateMany\(\{ where: \{ id: alertId, tenantId, deliveredAt: null \}, data: \{ deliverAt: holdUntil \} \}\);\s*return false;\s*\}/,
+  );
+  assert.ok(deliver.indexOf("proactiveDeliverAt(") < deliver.indexOf("tx.assistantTurn.create("), "decided before any message is written");
+  // "Sent today" = the alert messages written today — not alerts raised, not those folded into a brief.
+  assert.match(core, /db\.assistantTurn\.count\(\{ where: \{ tenantId, userId, source: PROACTIVE_SOURCE, createdAt: \{ gte: johannesburgDayStart\(now\) \} \} \}\)/);
+  // The rule itself: at night, or at the ceiling → the morning; a retry at 20:00 is night like any other.
+  assert.equal(proactiveDeliverAt(sa("2026-10-19T20:00:00"), 0)?.toISOString(), sa("2026-10-20T08:00:00").toISOString());
+  assert.equal(proactiveDeliverAt(sa("2026-10-19T10:00:00"), DAILY_ALERT_CEILING)?.toISOString(), sa("2026-10-20T08:00:00").toISOString());
+  assert.equal(proactiveDeliverAt(sa("2026-10-19T10:00:00"), DAILY_ALERT_CEILING - 1), null);
 });
 
 test("a 07:30 brief takes in the alerts held until 08:00 (second review of #896)", () => {

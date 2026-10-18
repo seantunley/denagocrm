@@ -9,6 +9,7 @@ import { sendUpdatesToLinkedPhone } from "./assistantWhatsApp";
 import { canAccessContact, canAccessLead } from "./permissions";
 import { contactName } from "./format";
 import type { CronSliceContext } from "./tenantCron";
+import type { Prisma } from "@prisma/client";
 import {
   ASSISTANT_PROACTIVE_KEY,
   BRIEF_KIND,
@@ -157,8 +158,8 @@ async function raise(tenantId: string, event: ProactiveEvent, target: ProactiveT
   if (!(await mayBeTold(userId, target))) return false;
 
   const now = new Date();
-  const today = await basePrisma.assistantProactiveAlert.count({ where: { tenantId, userId, kind: { not: BRIEF_KIND }, createdAt: { gte: johannesburgDayStart(now) } } });
-  const deliverAt = proactiveDeliverAt(now, today);
+  // A first guess, to hold it at once when it plainly must wait; deliver() decides for certain, under the lock.
+  const deliverAt = proactiveDeliverAt(now, await notifiedToday(basePrisma, tenantId, userId, now));
   const text = proactiveText(event, await tenantOrigin(tenantId).catch(() => ""));
   const alert = await basePrisma.assistantProactiveAlert
     .create({
@@ -181,6 +182,9 @@ async function raise(tenantId: string, event: ProactiveEvent, target: ProactiveT
  * and a second worker waits on the row and then finds it taken — never lost, never twice. The switches AND the
  * person's access to the record are checked again first: an alert held overnight respects a switch turned off, a
  * person who has left, or a customer who is no longer theirs since — it is then dropped, never sent later.
+ * QUIET HOURS AND THE DAILY CEILING ARE DECIDED HERE, at the moment of sending, for every alert — a retry, one
+ * released from last night — under a per-person lock, so two workers can't both pass the count: at night, or once
+ * DAILY_ALERT_CEILING have actually been sent today, it is held for the morning instead (third review of #896).
  * The phone notification and WhatsApp follow once it is saved; WhatsApp retries on its own (the sweep).
  */
 async function deliver(tenantId: string, alertId: string): Promise<boolean> {
@@ -194,7 +198,14 @@ async function deliver(tenantId: string, alertId: string): Promise<boolean> {
     return false;
   }
   const sent = await basePrisma.$transaction(async (tx) => {
-    const claimed = await tx.assistantProactiveAlert.updateMany({ where: { id: alertId, tenantId, deliveredAt: null }, data: { deliveredAt: new Date() } });
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`dax-proactive:${alert.userId}`})::bigint)`;
+    const now = new Date();
+    const holdUntil = proactiveDeliverAt(now, await notifiedToday(tx, tenantId, alert.userId, now));
+    if (holdUntil) {
+      await tx.assistantProactiveAlert.updateMany({ where: { id: alertId, tenantId, deliveredAt: null }, data: { deliverAt: holdUntil } });
+      return false;
+    }
+    const claimed = await tx.assistantProactiveAlert.updateMany({ where: { id: alertId, tenantId, deliveredAt: null }, data: { deliveredAt: now } });
     if (claimed.count !== 1) return false;
     const turn = await tx.assistantTurn.create({
       data: { tenantId, userId: alert.userId, question: PROACTIVE_QUESTION, answer: alert.text, source: PROACTIVE_SOURCE },
@@ -207,6 +218,14 @@ async function deliver(tenantId: string, alertId: string): Promise<boolean> {
   await sendPushToAll({ title: "DAX", body: proactivePush(alert.kind as ProactiveEvent["kind"]), url: "/assistant" }, "assistant", { tenantId, userId: alert.userId }).catch(() => {});
   await sendUpdatesToLinkedPhone(tenantId, alert.userId).catch(() => {});
   return true;
+}
+
+/**
+ * Alerts actually SENT to this person today (Johannesburg): one message each. Not alerts raised — some are dropped
+ * or held — and not those folded into a morning brief, which arrive as one message.
+ */
+async function notifiedToday(db: Pick<Prisma.TransactionClient, "assistantTurn">, tenantId: string, userId: string, now: Date): Promise<number> {
+  return db.assistantTurn.count({ where: { tenantId, userId, source: PROACTIVE_SOURCE, createdAt: { gte: johannesburgDayStart(now) } } });
 }
 
 /** Settled without a message: closed (deliveredAt) with no turn, so nothing ever sends it. */
