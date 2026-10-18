@@ -21,6 +21,7 @@ import { isCustomerSigner } from "./signing/quoteMirror";
 import { firstCustomerView, memoCustomer } from "./signing/customerView";
 import { accessibleTestDriveWhere } from "./testDriveAccess";
 import { contactActivityWhere, contactCommunicationWhere, latestContactAt } from "./customerContact";
+import { firstStageOrders, stageContactAt } from "./stageContact";
 import {
   canAccessContact,
   canAccessConversation,
@@ -219,7 +220,7 @@ async function findLeads(user: User, raw: z.infer<typeof leadArgs>): Promise<Too
       select: {
         id: true, title: true, name: true, status: true, valueCents: true, source: true,
         createdAt: true, stageEnteredAt: true, contactId: true,
-        stage: { select: { name: true } },
+        stage: { select: { name: true, order: true, pipelineId: true } },
         product: { select: { name: true } },
         assignedTo: { select: { name: true } },
         // Real contact only (customerContact.ts): not internal notes, to-dos or blocked time.
@@ -251,11 +252,13 @@ async function findLeads(user: User, raw: z.infer<typeof leadArgs>): Promise<Too
   for (const at of [...contactComms.map((r) => [r.contactId, r._max.occurredAt] as const), ...contactDone.map((r) => [r.contactId, r._max.doneAt] as const)]) {
     if (at[0] && at[1]) customerTouch.set(at[0], Math.max(customerTouch.get(at[0]) ?? 0, at[1].getTime()));
   }
+  // Moved past the first stage = contacted, as of that move (stageContact.ts).
+  const firstOrders = await firstStageOrders(leads);
   const withTouch = leads.map((lead) => {
     const own = latestContactAt(lead.communications, lead.activities);
     const viaCustomer = lead.contactId ? customerTouch.get(lead.contactId) : undefined;
-    const lastContact = viaCustomer && (!own || viaCustomer > own.getTime()) ? new Date(viaCustomer) : own;
-    return { lead, lastContact };
+    const touched = Math.max(own?.getTime() ?? 0, viaCustomer ?? 0, stageContactAt(lead, firstOrders)?.getTime() ?? 0);
+    return { lead, lastContact: touched ? new Date(touched) : null };
   });
   const cutoff = args.noContactDays ? Date.now() - args.noContactDays * DAY : null;
   const filtered = cutoff === null

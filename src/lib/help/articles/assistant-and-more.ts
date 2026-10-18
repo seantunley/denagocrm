@@ -400,6 +400,10 @@ export const assistantAndMoreArticles: HelpArticle[] = [
       ] },
       { type: "h", text: "What counts as contact" },
       { type: "p", text: "Contact means a real touch with the customer: a message, call or email in either direction, or a completed activity. A note your team wrote for itself does not count, and neither does simply editing the lead. This stops a neglected deal from looking freshly worked." },
+      { type: "list", items: [
+        "**Moving the lead on counts.** Once a lead is past the first stage of its pipeline (for example in Contacted or later), it counts as contacted from the day it entered its current stage.",
+        "**A note can record contact.** The note box asks **What was this?** Leave it on **Internal note** for something only your team needs to know. If you are writing up a phone call, a WhatsApp or a visit, choose that instead and it counts as contact.",
+      ] },
       { type: "callout", tone: "info", text: "Scores are worked out fresh every time you look, from the records as they are at that moment. They are not stored, so there is nothing to refresh, and nobody can edit a score by hand." },
       { type: "callout", tone: "tip", text: "Won, lost and closed deals have no score. To bring a score down, deal with its reasons: reply to the customer, complete the overdue follow-up, or plan the next step." },
     ],
