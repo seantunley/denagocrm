@@ -8,6 +8,8 @@ import { resolveSignRecipientTenant } from "@/lib/tokenTenant";
 import { throttlePublic } from "@/lib/publicThrottle";
 import { SIGNING_READ_POLICY } from "@/lib/rateLimit";
 import { ownedWriteTenantId } from "@/lib/tenantWrite";
+import { isCustomerSigner } from "@/lib/signing/quoteMirror";
+import { REVISIT_ALERT_AT } from "@/lib/proactiveRules";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -41,7 +43,7 @@ export async function POST(req: Request, ctx: { params: Promise<{ token: string 
 async function handle(token: string, body: Body): Promise<Response> {
   const recipient = await prisma.signatureRecipient.findUnique({
     where: { token: hashSignToken(token) },
-    select: { id: true, tokenRevokedAt: true, request: { select: { id: true, tenantId: true, status: true, deletedAt: true, expiresAt: true } } },
+    select: { id: true, role: true, email: true, tokenRevokedAt: true, request: { select: { id: true, tenantId: true, status: true, deletedAt: true, expiresAt: true, quoteId: true } } },
   });
   if (!recipient) return Response.json({ ok: false }, { status: 404 });
   const request = recipient.request;
@@ -60,6 +62,11 @@ async function handle(token: string, body: Body): Promise<Response> {
       data: { tenantId, requestId: request.id, recipientId: recipient.id },
       select: { id: true },
     });
+    // The customer is back at a QUOTE for the REVISIT_ALERT_AT-th time: worth a call (proactive DAX). Once — at
+    // exactly that sitting — and only for the customer, never staff previewing their own link.
+    if (request.quoteId && sittings + 1 === REVISIT_ALERT_AT && (await isCustomerSigner(recipient, tenantId))) {
+      await (await import("@/lib/proactive")).notifyQuoteActivity(tenantId, request.quoteId, "quote_revisited");
+    }
     return Response.json({ ok: true, viewId: view.id });
   }
 

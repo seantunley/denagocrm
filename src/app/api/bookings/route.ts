@@ -265,6 +265,21 @@ export async function POST(req: NextRequest) {
       body: `${contact ? contactName(contact) : b.name} — ${formatDate(dt)} at ${b.time} · call to confirm`,
       url: "/workshop-calendar",
     }, "booking").catch(() => {});
+    // The person responsible, on their own channels (proactive DAX): the customer's owner if we know them, else
+    // whoever the booking was given to. One alert per booking; never the customer's business to wait for.
+    if (outcome.contactId) {
+      await (await import("@/lib/proactive")).notifyCustomerActivity(
+        contact?.tenantId ?? stampTid,
+        {
+          kind: "service_booked",
+          customer: contact ? contactName(contact) : b.name,
+          url: `/contacts/${outcome.contactId}`,
+          detail: `${formatDate(dt)} at ${b.time}`,
+          recordKey: outcome.activityId,
+        },
+        { customerOwnerId: contact?.ownerId, fallbackId: firstUser.id, contactId: outcome.contactId },
+      );
+    }
 
     return NextResponse.json(
       { ok: true, activityId: outcome.activityId },

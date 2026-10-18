@@ -7,6 +7,8 @@ import { runDueAssistantSchedules, SCHEDULE_RUN_RESERVE_MS } from "@/lib/assista
 import { runAssistantWatches } from "@/lib/assistantWatch";
 import { prunePendingActions } from "@/lib/assistantWhatsAppConfirm";
 import { sweepWaitingUpdates } from "@/lib/assistantWhatsApp";
+import { sweepProactive } from "@/lib/proactive";
+import { runMorningBriefs } from "@/lib/proactiveBrief";
 
 /**
  * Scheduled assistant questions ("every Monday at 7, which deals went quiet?")
@@ -58,6 +60,14 @@ export async function GET(req: NextRequest) {
         await logError("assistant-schedule", "watch run failed", error instanceof Error ? error.name : "unknown", { tenantId });
         return { checked: 0, fired: 0 };
       });
+      // Proactive DAX: alerts held overnight that are now due, and customers who
+      // wrote and have waited with no answer (lib/proactive.ts). Before the sweep
+      // below, so anything it raises is retried by it too. Off unless switched on.
+      if (tenantId) {
+        await sweepProactive(tenantId, budget).catch((error: unknown) =>
+          logError("assistant-schedule", "proactive sweep failed", error instanceof Error ? error.name : "unknown", { tenantId }),
+        );
+      }
       // Briefings and alerts still waiting to reach a linked phone (WhatsApp was
       // unreachable, a nudge failed) are tried again here — otherwise they would
       // wait for the person's next message, and a one-off could go stale unsent.
@@ -74,9 +84,16 @@ export async function GET(req: NextRequest) {
     return [];
   });
 
-  const runs = await runCronPerTenant(async (_tenantId, budget) => {
+  const runs = await runCronPerTenant(async (tenantId, budget) => {
     // A workspace reached with too little left for one run is left for the next tick.
     if (budget.shouldStop(SCHEDULE_RUN_RESERVE_MS)) return { ran: 0, skipped: "insufficient-budget" as const };
+    // Morning briefs first (proactive DAX, part 2): a few, side by side, at the time each person chose. They hold
+    // the alerts kept overnight, so they go before anything else in the morning. Off unless switched on.
+    if (tenantId) {
+      await runMorningBriefs(tenantId, budget).catch((error: unknown) =>
+        logError("assistant-schedule", "morning briefs failed", error instanceof Error ? error.name : "unknown", { tenantId }),
+      );
+    }
     return runDueAssistantSchedules(budget);
   }, {
     maxRuntimeMs: routeBudget.remainingMs - (Date.now() - startedAt),

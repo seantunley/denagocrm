@@ -111,6 +111,9 @@ export async function mergeContacts(keepId: string, otherIdsCsv: string, formDat
         await move(tx.secureFileLink, "contactId", "secure file links");
         // A draft, or an email scheduled to go later, follows the customer it is for.
         await move(tx.emailDraft, "contactId", "email drafts and scheduled emails");
+        // A DAX alert held overnight about this customer: its access is checked again against the record that
+        // survives when it is sent — left on the deleted duplicate it would be dropped instead.
+        await move(tx.assistantProactiveAlert, "contactId", "held DAX alerts");
 
         // Referral has two contact links. Move both, then drop any self-referral
         // the merge created (referrer === referred → a customer referring itself,

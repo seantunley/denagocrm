@@ -3,7 +3,8 @@ import { requireTenantOwner } from "@/lib/auth";
 import { getSetting } from "@/lib/settings";
 import { isModuleEnabled } from "@/lib/modules/enabled";
 import { ASSISTANT_PROFILE_KEY, DEFAULT_SOUL, LOCKED_RULES, TONES, WORKSPACE_INSTRUCTIONS_CHARS, parseProfile, type Tone } from "@/lib/assistantSoul";
-import { saveAssistantProfile, saveAssistantWhatsAppCard } from "@/app/actions/assistantSettings";
+import { saveAssistantProactive, saveAssistantProfile, saveAssistantWhatsAppCard } from "@/app/actions/assistantSettings";
+import { ASSISTANT_PROACTIVE_KEY, proactiveOn } from "@/lib/proactiveRules";
 import { ASSISTANT_VOICE_REPLIES_KEY, voiceRepliesSwitchOn } from "@/lib/assistantVoiceRules";
 import { SettingsWorkspace } from "@/components/settings-workspace";
 import { SETTINGS_NAV_GROUPS } from "@/lib/settings-navigation";
@@ -69,6 +70,7 @@ const FEEDBACK_REASON_LABELS: Record<string, string> = {
 export default async function AssistantSettingsPage() {
   await requireTenantOwner();
   if (!(await isModuleEnabled("automation"))) notFound();
+  const proactiveWorkspace = proactiveOn(await getSetting(ASSISTANT_PROACTIVE_KEY).catch(() => null));
   const [profile, notes, staff, tidiedAt, tidySummary, whatsappOn, phones, ratings, speed, voiceOn, confirmOn, updateTemplate, handoffOn, handoffTo] = await Promise.all([
     getSetting(ASSISTANT_PROFILE_KEY).then(parseProfile),
     prisma.assistantNote.findMany({ orderBy: [{ status: "desc" }, { createdAt: "desc" }] }),
@@ -207,6 +209,25 @@ export default async function AssistantSettingsPage() {
           )}
         </div>
       </section>
+
+      <SaveForm action={saveAssistantProactive} resetOnSuccess={false} className="card mt-6 max-w-2xl space-y-3 p-5">
+        <h2 className="text-base font-semibold">{profile.name} comes to people</h2>
+        <label className="flex cursor-pointer items-start gap-2 text-sm">
+          <input type="checkbox" name="proactive" defaultChecked={proactiveWorkspace} className="mt-1 accent-primary" />
+          <span>
+            <span className="block font-medium">Let {profile.name} tell staff about customer activity as it happens</span>
+            <span className="block text-xs text-muted-foreground">
+              When a customer opens a quote, comes back to it a third time, signs it, books a service, or writes and has
+              waited 15 minutes with no answer, {profile.name} tells the person responsible for them — the deal&apos;s owner,
+              else the customer&apos;s — in Ask DAX, as a phone notification that names nobody, and on the WhatsApp they
+              linked. Each person must also switch it on for themselves on the Ask page. Nothing between 20:00 and 08:00
+              (held until morning), at most 12 a day each, only about records that person may open. It never contacts the
+              customer, and uses no AI credit.
+            </span>
+          </span>
+        </label>
+        <SaveButton className="btn-primary btn-sm">Save</SaveButton>
+      </SaveForm>
 
       <SaveForm action={saveAssistantWhatsAppCard} resetOnSuccess={false} className="card mt-6 max-w-2xl space-y-3 p-5">
         <h2 className="text-base font-semibold">{profile.name} on WhatsApp</h2>

@@ -16,6 +16,9 @@ import {
   parseProfile,
 } from "@/lib/assistantSoul";
 import { ASSISTANT_VOICE_REPLIES_KEY, voiceRepliesSwitchOn } from "@/lib/assistantVoiceRules";
+import { ASSISTANT_PROACTIVE_KEY, BRIEF_DEFAULT, BRIEF_TIMES, briefPersonKey, proactiveOn, proactivePersonKey } from "@/lib/proactiveRules";
+import { requireAnyPermission } from "@/lib/permissions";
+import { ASSISTANT_PERMISSIONS } from "@/lib/assistantUser";
 import { saveAssistantWhatsApp } from "@/app/actions/assistantWhatsApp";
 import { ASSISTANT_WHATSAPP_CONFIRM_KEY, ASSISTANT_WHATSAPP_HANDOFF_KEY, ASSISTANT_WHATSAPP_HANDOFF_TO_KEY, ASSISTANT_WHATSAPP_TEMPLATE_KEY, formatUpdateTemplate, handoffRecipient, parseUpdateTemplate, whatsappConfirmOn, whatsappHandoffOn } from "@/lib/assistantWhatsAppRules";
 
@@ -177,6 +180,78 @@ export async function saveAssistantWhatsAppCard(formData: FormData) {
         revalidatePath("/settings/assistant");
       }
       return { success: `${whatsapp.success ?? "Saved"}${on ? " · voice replies on" : ""}${confirm ? " · confirming on WhatsApp on" : ""}` };
+    }),
+  );
+}
+
+/**
+ * PROACTIVE DAX for the workspace (lib/proactive.ts). Default OFF; owner only; audited when it changes. Each person
+ * must also switch it on for themselves on the Ask page — this only allows it.
+ */
+export async function saveAssistantProactive(formData: FormData) {
+  return asActionResult(() =>
+    withActingStaffScope(async () => {
+      const user = await requireTenantOwner();
+      const on = formData.get("proactive") === "on";
+      if (on !== proactiveOn(await getSetting(ASSISTANT_PROACTIVE_KEY))) {
+        await putSetting(ASSISTANT_PROACTIVE_KEY, on ? "on" : "off");
+        await logAudit({
+          action: on ? "assistant.proactive_enabled" : "assistant.proactive_disabled",
+          summary: on
+            ? "Let the assistant tell staff about customer activity as it happens (each person switches it on for themselves)"
+            : "Turned off the assistant telling staff about customer activity",
+          user,
+        });
+        revalidatePath("/settings/assistant");
+        revalidatePath("/assistant");
+      }
+      return { success: on ? "On — each person can now switch it on on the Ask page" : "Off" };
+    }),
+  );
+}
+
+/**
+ * The caller's OWN proactive switch ("Let DAX come to me"). Theirs alone — the setting is named by their own id,
+ * never by anything sent from the page. Allowed only while the owner has it on for the workspace.
+ */
+export async function setMyProactive(on: boolean) {
+  return asActionResult(() =>
+    withActingStaffScope(async () => {
+      const user = await requireAnyPermission(...ASSISTANT_PERMISSIONS);
+      if (on === true && !proactiveOn(await getSetting(ASSISTANT_PROACTIVE_KEY))) refuse("An owner hasn't switched this on for the workspace yet.");
+      const key = proactivePersonKey(user.id);
+      if ((on === true) !== proactiveOn(await getSetting(key))) {
+        await putSetting(key, on === true ? "on" : "off");
+        await logAudit({
+          action: on === true ? "assistant.proactive_me_on" : "assistant.proactive_me_off",
+          summary: on === true ? "Asked the assistant to tell them about customer activity as it happens" : "Turned off the assistant telling them about customer activity",
+          user,
+        });
+        revalidatePath("/assistant");
+      }
+      return { success: on === true ? "On — DAX will come to you when a customer acts" : "Off" };
+    }),
+  );
+}
+
+/** The caller's OWN morning-brief time (proactive DAX, part 2): one of BRIEF_TIMES, or "off". Theirs alone. */
+export async function setMyBriefTime(value: string) {
+  return asActionResult(() =>
+    withActingStaffScope(async () => {
+      const user = await requireAnyPermission(...ASSISTANT_PERMISSIONS);
+      const at = String(value ?? "");
+      if (at !== "off" && !BRIEF_TIMES.includes(at)) refuse("Choose one of the times offered.");
+      const key = briefPersonKey(user.id);
+      if (at !== ((await getSetting(key)) ?? BRIEF_DEFAULT)) {
+        await putSetting(key, at);
+        await logAudit({
+          action: "assistant.brief_time",
+          summary: at === "off" ? "Turned off their morning brief" : `Set their morning brief for ${at} on weekdays`,
+          user,
+        });
+        revalidatePath("/assistant");
+      }
+      return { success: at === "off" ? "Morning brief off" : `Morning brief at ${at} on weekdays` };
     }),
   );
 }
