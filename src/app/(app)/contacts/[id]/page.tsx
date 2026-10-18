@@ -31,7 +31,7 @@ import { redeemReferral } from "@/app/actions/referrals";
 import { isWhatsAppConfigured } from "@/lib/whatsapp";
 import { formatDateTime } from "@/lib/format";
 import { requireUser } from "@/lib/auth";
-import { getAccessibleLeadIds, getAccessibleQuoteIds, hasPermission } from "@/lib/permissions";
+import { CUSTOMER_RECORD_WRITE_PERMISSIONS, getAccessibleLeadIds, getAccessibleQuoteIds, hasAnyPermission, hasPermission } from "@/lib/permissions";
 import { customerHistoryWhere, viewableDealIds } from "@/lib/customerHistory";
 import { contactHealth } from "@/lib/healthData";
 import { healthLabels } from "@/lib/health";
@@ -77,7 +77,11 @@ export default async function ContactDetailPage({
     hasPermission(user, "jobcards.manage"),
   ]);
   const canCreateQuote = canDuplicateQuotes;
-  const [canEditContact, canDeleteContact] = await Promise.all([hasPermission(user, "contacts.edit"), hasPermission(user, "contacts.delete")]);
+  const [canEditContact, canDeleteContact, canWriteRecord, canReplyWhatsApp] = await Promise.all([
+    hasPermission(user, "contacts.edit"), hasPermission(user, "contacts.delete"),
+    // What sendEmailAction and addCommunication require, and what sendWhatsAppMessage requires (review of #894).
+    hasAnyPermission(user, ...CUSTOMER_RECORD_WRITE_PERMISSIONS), hasPermission(user, "inbox.reply"),
+  ]);
   // THE QUOTES THIS VIEWER MAY OPEN — not every quote on the customer. Opening a customer is not permission to
   // read their quotations: the sidebar's latest quote (number, status, value), the Documents tab and the email
   // composer's quote buttons all read `contact.quotes`, so it is narrowed here, once (review of #891).
@@ -353,7 +357,8 @@ export default async function ContactDetailPage({
                 count: comms.length,
                 content: (
         <LeadTimeline
-          workspace={{ context, composer: <CustomerComposer email={<EmailComposer key={contact.id} compactTrigger
+          // Each channel only for someone the server lets use it (review of #894): a view-only member saw them all.
+          workspace={{ context, replyable: canWriteRecord, composer: <CustomerComposer email={canWriteRecord && <EmailComposer key={contact.id} compactTrigger
                       defaultTo={contact.email ?? ""}
                       templates={renderedTemplates}
                       smtpConfigured={smtpConfigured}
@@ -364,7 +369,7 @@ export default async function ContactDetailPage({
                       quotes={composerQuotes(contact.quotes, canCancelQuotes, (company ?? (await getCompanyProfile())).name)}
                       aiConfigured={aiOn}
                       defaultReplyTo={replyToDefault}
-                    />} whatsapp={<WhatsAppPanel composerOnly phone={contact.whatsapp ?? contact.phone} contactId={contact.id} deals={openDeals} configured={waConfigured} revalidate={path} messages={[]} />} note={<CustomerLogForm mode="note" contactId={contact.id} deals={openDeals} revalidate={path} />} call={<CustomerLogForm mode="call" contactId={contact.id} deals={openDeals} revalidate={path} />} /> }}
+                    />} whatsapp={canReplyWhatsApp && <WhatsAppPanel composerOnly phone={contact.whatsapp ?? contact.phone} contactId={contact.id} deals={openDeals} configured={waConfigured} revalidate={path} messages={[]} />} note={canWriteRecord && <CustomerLogForm mode="note" contactId={contact.id} deals={openDeals} revalidate={path} />} call={canWriteRecord && <CustomerLogForm mode="call" contactId={contact.id} deals={openDeals} revalidate={path} />} /> }}
           contactId={contact.id}
           revalidate={path}
           audit={history}

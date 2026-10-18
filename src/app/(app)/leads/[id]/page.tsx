@@ -29,7 +29,7 @@ import ConfirmDelete from "@/components/ConfirmDelete";
 import AddToContactsButton from "@/components/AddToContactsButton";
 import MarkWonButton from "@/components/MarkWonDialog";
 import QuoteRowActions from "@/components/quotes/QuoteRowActions";
-import { hasPermission } from "@/lib/permissions";
+import { CUSTOMER_RECORD_WRITE_PERMISSIONS, hasAnyPermission, hasPermission } from "@/lib/permissions";
 import CustomFieldsCard from "@/components/custom-fields/CustomFieldsCard";
 import MarkLeadViewed from "@/components/MarkLeadViewed";
 import WhatsAppPanel from "@/components/WhatsAppPanel";
@@ -203,9 +203,11 @@ export default async function LeadDetailPage({
   const customerEmail = lead.email || readableContact?.email || "";
   const customerPhone = lead.phone || readableContact?.whatsapp || readableContact?.phone || null;
   const nextActivity = activities.find((activity) => activity.status === "planned") ?? null;
-  const [canCreateQuote, canMarkWon, canMarkLost, canReopen, canDeleteLead, canLinkContact, canWriteCustomer] = await Promise.all([
+  const [canCreateQuote, canMarkWon, canMarkLost, canReopen, canDeleteLead, canLinkContact, canWriteRecord, canReplyWhatsApp] = await Promise.all([
     hasPermission(user, "quotes.create"), hasPermission(user, "leads.mark_won"), hasPermission(user, "leads.mark_lost"),
-    hasPermission(user, "leads.reopen"), hasPermission(user, "leads.delete"), hasPermission(user, "leads.link_contact"), hasPermission(user, "contacts.edit"),
+    hasPermission(user, "leads.reopen"), hasPermission(user, "leads.delete"), hasPermission(user, "leads.link_contact"),
+    // What sendEmailAction and addCommunication require, and what sendWhatsAppMessage requires.
+    hasAnyPermission(user, ...CUSTOMER_RECORD_WRITE_PERMISSIONS), hasPermission(user, "inbox.reply"),
   ]);
   const context = <LeadWorkspaceContext
     nextActivity={nextActivity} canSchedule={canBookTestDrive}
@@ -346,8 +348,10 @@ export default async function LeadDetailPage({
                 count: comms.length,
                 content: (
         <LeadTimeline
-          workspace={{ context, composer: canEditLead || canWriteCustomer ? <CustomerComposer
-                email={<EmailComposer key={lead.id} compactTrigger
+          // Each channel only for someone the server lets use it: email, notes and calls need contacts.edit or
+          // leads.edit (CUSTOMER_RECORD_WRITE_PERMISSIONS); WhatsApp needs inbox.reply (review of #894).
+          workspace={{ context, replyable: canWriteRecord, composer: <CustomerComposer
+                email={canWriteRecord && <EmailComposer key={lead.id} compactTrigger
                       defaultTo={customerEmail}
                       templates={renderedTemplates}
                       smtpConfigured={smtpConfigured}
@@ -358,10 +362,10 @@ export default async function LeadDetailPage({
                       aiConfigured={aiOn}
                       defaultReplyTo={replyToDefault}
                     />}
-                whatsapp={<WhatsAppPanel composerOnly phone={customerPhone} leadId={lead.id} configured={waConfigured} revalidate={path} messages={[]} />}
-                note={<CustomerLogForm mode="note" leadId={lead.id} revalidate={path} />}
-                call={<CustomerLogForm mode="call" leadId={lead.id} revalidate={path} />}
-              /> : null }}
+                whatsapp={canReplyWhatsApp && <WhatsAppPanel composerOnly phone={customerPhone} leadId={lead.id} configured={waConfigured} revalidate={path} messages={[]} />}
+                note={canWriteRecord && <CustomerLogForm mode="note" leadId={lead.id} revalidate={path} />}
+                call={canWriteRecord && <CustomerLogForm mode="call" leadId={lead.id} revalidate={path} />}
+              /> }}
           leadId={lead.id}
           revalidate={path}
           audit={audit}
