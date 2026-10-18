@@ -11,6 +11,26 @@ import {
   snapToHalfHour,
   type ScheduleTiming,
 } from "../src/lib/assistantSchedule";
+import { AI_BUSY, AI_FAILED, AI_NOT_CONNECTED, aiFailureForPeople } from "../src/lib/codexErrors";
+
+test("what a person is told when the AI service fails: plain, no provider name, never 'returned' with nothing (Sean, 2026-10-18)", () => {
+  // A 429 from the provider is "busy or over its usage limit"; anything else is "didn't respond".
+  assert.equal(aiFailureForPeople({ error: "ChatGPT is unavailable or over its usage limit (429).", transient: true }), AI_BUSY);
+  assert.equal(aiFailureForPeople({ error: "ChatGPT refused the request (400)." }), AI_FAILED);
+  for (const text of [AI_BUSY, AI_FAILED, AI_NOT_CONNECTED]) assert.doesNotMatch(text, /ChatGPT|OpenAI|GPT|Claude|Anthropic/);
+  const core = readFileSync("src/lib/crmAssistant.ts", "utf8");
+  // The answer step failed with NOTHING found: a failure (so a brief or scheduled question is retried), not an
+  // empty "here's what the CRM returned".
+  assert.match(core, /if \(!rows\.length\) return \{ ok: false, error: aiFailureForPeople\(answerReply\) \};/);
+  assert.doesNotMatch(core, /Here's what the CRM returned/);
+  assert.match(core, /if \(!observations\.length\) return \{ ok: false, error: aiFailureForPeople\(reply\) \};/);
+  // Nothing DAX says to a person names the provider.
+  for (const name of ["DEGRADED_NOTE", "DEGRADED_ERROR", "NO_WRITE_UP_NOTE"]) {
+    const line = new RegExp(`export const ${name} = "([^"]+)";`).exec(core);
+    assert.ok(line, name);
+    assert.doesNotMatch(line[1], /ChatGPT/, name);
+  }
+});
 import { splitActions } from "../src/lib/assistantActions";
 
 const code = (rel: string) =>
@@ -116,10 +136,12 @@ test("it reads plainly", () => {
 });
 
 test("a run that couldn't happen says why in general terms — never ChatGPT's own error", () => {
-  assert.match(scheduleFailureNote("Connect ChatGPT first: Settings → Integrations → ChatGPT."), /ChatGPT isn't connected/);
-  const other = scheduleFailureNote("ChatGPT didn't answer: upstream 502 at https://internal/abc");
+  assert.match(scheduleFailureNote(AI_NOT_CONNECTED), /isn't connected to an AI service/);
+  const other = scheduleFailureNote("upstream 502 at https://internal/abc");
   assert.match(other, /couldn't run this scheduled question/);
   assert.doesNotMatch(other, /502|internal/);
+  // Never the provider's name: the model can change (Sean, 2026-10-18).
+  assert.doesNotMatch(scheduleFailureNote(AI_NOT_CONNECTED) + other, /ChatGPT/);
 });
 
 test("the assistant can propose a schedule — no lead, nothing extra", () => {

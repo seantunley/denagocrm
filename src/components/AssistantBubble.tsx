@@ -100,8 +100,8 @@ export default function AssistantBubble({ unseen = 0 }: { unseen?: number }) {
               <p className="p-4 text-sm text-muted-foreground">The assistant isn&apos;t available right now.</p>
             ) : !data.connected ? (
               <p className="p-4 text-sm text-muted-foreground">
-                It runs on your workspace&apos;s ChatGPT connection, which isn&apos;t set up yet.{" "}
-                <Link href="/settings/integrations" className="text-primary underline">Connect ChatGPT</Link>.
+                It runs on your workspace&apos;s AI connection, which isn&apos;t set up yet.{" "}
+                <Link href="/settings/integrations" className="text-primary underline">Connect an AI service</Link>.
               </p>
             ) : (
               <AssistantChat
