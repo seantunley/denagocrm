@@ -106,9 +106,10 @@ export default function ActivityPanel({
           <input type="datetime-local" name="dueDate" className="input" required />
         </div>
         <div>
-          <label className="label">Ends</label>
+          {/* The hint is in the label, not a line under the field: the row lines its fields up by their bottom
+              edge (items-end), and an extra line pushed Ends above Due (Sean, 2026-10-18). */}
+          <label className="label">Ends <span className="font-normal text-slate-500">· blank = 1 hour</span></label>
           <input type="datetime-local" name="endDate" className="input" />
-          <p className="mt-1 text-[11px] text-slate-500">Blank = 1 hour</p>
         </div>
         <div className="col-span-2 md:col-span-2">
           <label className="label">Assign to</label>
