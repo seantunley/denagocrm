@@ -26,6 +26,7 @@ import {
   CalendarClock,
   CalendarPlus,
   Car,
+  ChevronDown,
   ChevronLeft,
   ChevronRight,
   CircleAlert,
@@ -185,6 +186,9 @@ function SourceIcon({ source }: { source: string }) {
 
 function LeadCard({ lead, dragging, actions, staleAfterDays = null }: { lead: KanbanLead; dragging?: boolean; actions?: ReactNode; staleAfterDays?: number | null }) {
   const opportunity = lead.title !== lead.name && lead.title !== lead.productName ? lead.title : null;
+  // Collapsed by default (Sean, 2026-10-18): the name row only; the chevron opens the rest.
+  const [open, setOpen] = useState(false);
+  const hasValue = lead.valueCents > 0 || (lead.quantity ?? 1) > 1;
 
   return (
     <div
@@ -235,17 +239,34 @@ function LeadCard({ lead, dragging, actions, staleAfterDays = null }: { lead: Ka
             <SourceIcon source={lead.source} />
           </span>
           {actions}
+          {!dragging && (
+            <button
+              type="button"
+              onPointerDown={(event) => event.stopPropagation()}
+              onKeyDown={(event) => event.stopPropagation()}
+              onClick={() => setOpen((value) => !value)}
+              aria-expanded={open}
+              aria-label={open ? `Hide details for ${lead.name}` : `Show details for ${lead.name}`}
+              title={open ? "Hide details" : "Show details"}
+              className="rounded p-0.5 text-muted-foreground transition-colors hover:bg-white/5 hover:text-foreground"
+            >
+              <ChevronDown className={cn("size-4 transition-transform", open && "rotate-180")} />
+            </button>
+          )}
         </div>
       </div>
 
+      {open && (
+      <>
+      {(hasValue || lead.assignee) && (
       <div className="mt-3 flex items-end justify-between gap-3 border-t border-border/70 pt-3">
         <div className="min-w-0">
+          {hasValue && (
+          <>
           <p className="text-[9px] font-semibold uppercase tracking-[0.13em] text-muted-foreground/70">Deal value</p>
           <div className="mt-1 flex items-center gap-1.5">
-            {lead.valueCents > 0 ? (
+            {lead.valueCents > 0 && (
               <span className="text-sm font-semibold tabular-nums text-foreground">{formatZAR(lead.valueCents)}</span>
-            ) : (
-              <span className="text-xs text-muted-foreground/50">Not estimated</span>
             )}
             {(lead.quantity ?? 1) > 1 && (
               <span
@@ -256,6 +277,8 @@ function LeadCard({ lead, dragging, actions, staleAfterDays = null }: { lead: Ka
               </span>
             )}
           </div>
+          </>
+          )}
         </div>
         {lead.assignee && (
           <div className="flex shrink-0 items-center gap-1.5" title={`Assigned to ${lead.assignee}`}>
@@ -268,9 +291,10 @@ function LeadCard({ lead, dragging, actions, staleAfterDays = null }: { lead: Ka
           </div>
         )}
       </div>
+      )}
 
+      {lead.nextStep && (
       <div className="mt-3 rounded-lg border border-border/70 bg-background/30 px-2.5 py-2">
-        {lead.nextStep ? (
           <div className="flex items-start gap-2">
             <CalendarClock
               className={cn("mt-0.5 size-3.5 shrink-0", lead.nextStep.overdue ? "text-red-300" : "text-primary")}
@@ -287,13 +311,8 @@ function LeadCard({ lead, dragging, actions, staleAfterDays = null }: { lead: Ka
               </p>
             </div>
           </div>
-        ) : (
-          <div className="flex items-center gap-2 text-[10px] text-amber-300">
-            <CircleAlert className="size-3.5" />
-            No next step scheduled
-          </div>
-        )}
       </div>
+      )}
 
       {lead.signing && (
         <div className="mt-2 flex items-center gap-1.5 rounded-lg border border-amber-500/15 bg-amber-500/[0.07] px-2.5 py-2 text-[10px] font-medium text-amber-300">
@@ -339,6 +358,8 @@ function LeadCard({ lead, dragging, actions, staleAfterDays = null }: { lead: Ka
           Open <ArrowUpRight className="size-3" />
         </Link>
       </div>
+      </>
+      )}
     </div>
   );
 }

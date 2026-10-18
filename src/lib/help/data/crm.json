@@ -9,11 +9,12 @@
     "body": [
       {"type": "p", "text": "The **Leads** page is a Kanban board. Each column is a pipeline stage, and each card is an open sales opportunity. The header shows how many leads are open and the total value sitting in your pipeline."},
       {"type": "h", "text": "Reading a lead card"},
+      {"type": "p", "text": "Cards start **collapsed**: just the customer's name, the product and the icons. Click the **⌄** arrow on a card to show the rest, and again to hide it."},
       {"type": "list", "items": [
         "**Customer name** and, below it, the product and colour and the opportunity title",
-        "**Deal value** in Rand, with a **×N** badge when the quantity is more than one",
+        "**Deal value** in Rand, with a **×N** badge when the quantity is more than one (only once a value is set)",
         "**Assignee** avatar showing who owns the lead",
-        "**Next step** — the soonest planned activity, or an amber \"No next step scheduled\" warning",
+        "**Next step** — the soonest planned activity, when one is scheduled",
         "A **New** pill on leads you have not opened yet (created in the last 3 days)",
         "An amber \"N days in stage\" flag once a card has sat in one stage for 7 days or more",
         "A **test drive** chip (with weather for the day) and a **signing** chip when a quote has been sent for signature"
