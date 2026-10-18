@@ -172,6 +172,14 @@ export function checkBackTiming(when: string, now: Date): { onDate: string; time
   return { onDate, timeOfDay, at };
 }
 
+/**
+ * The brief takes in every alert held for release up to 08:00 this morning — those raised overnight (held to 08:00)
+ * and those past yesterday's ceiling — even when the brief is written before then (07:30 by default).
+ */
+export function briefHoldsUntil(now: Date): Date {
+  return nextMorning(johannesburgDayStart(now));
+}
+
 /** The stored time, or the default; null when the person switched the brief off; anything unknown = the default. */
 export function parseBriefAt(stored: string | null | undefined): string | null {
   if (stored === "off") return null;

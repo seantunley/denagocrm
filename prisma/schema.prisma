@@ -1055,6 +1055,9 @@ model AssistantProactiveAlert {
   deliveredAt DateTime?
   /// Morning briefs only: the lease of the worker writing it now (null = nobody). Done = deliveredAt.
   claimedAt   DateTime?
+  /// The deal or customer it is about: access is checked again when it is sent, not only when it was raised.
+  leadId      String?
+  contactId   String?
   turnId      String?
   createdAt   DateTime  @default(now())
 

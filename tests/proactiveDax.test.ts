@@ -18,6 +18,7 @@ import {
   BRIEF_LEASE_MS,
   BRIEF_TIMES,
   briefDueKey,
+  briefHoldsUntil,
   briefQuestion,
   checkBackTiming,
   johannesburgDateKey,
@@ -79,7 +80,7 @@ test("both switches default OFF: the owner's for the workspace and each person's
   assert.match(core, /if \(!proactiveOn\(await setting\(tenantId, ASSISTANT_PROACTIVE_KEY\)\)\) return false;\s*return proactiveOn\(await setting\(tenantId, proactivePersonKey\(userId\)\)\);/);
   // Only about a record that person may open, as themselves.
   assert.match(core, /const user = await assistantUserFor\(userId\);/);
-  assert.match(core, /canAccessLead\(user, target\.leadId\)[\s\S]{0,80}canAccessContact\(user, target\.contactId\)/);
+  assert.match(core, /canAccessLead\(user, record\.leadId\)[\s\S]{0,80}canAccessContact\(user, record\.contactId\)/);
   // The owner's switch is owner-only and audited; a person's switch names only themselves.
   const actions = read("src/app/actions/assistantSettings.ts");
   assert.match(actions, /export async function saveAssistantProactive[\s\S]{0,200}requireTenantOwner\(\)/);
@@ -132,6 +133,41 @@ test("an alert is never lost: the claim, the message and the link are one transa
   assert.doesNotMatch(deliver, /basePrisma\.assistantTurn\.create/, "the message is never written outside the claim's transaction");
   // The phone and WhatsApp only once it is saved.
   assert.ok(deliver.indexOf("if (!sent) return false;") < deliver.indexOf("sendPushToAll("));
+});
+
+test("a held alert is checked again before it is sent: a person who left, a customer no longer theirs (second review of #896)", () => {
+  const core = read("src/lib/proactive.ts");
+  // It keeps which record it is about…
+  assert.match(core, /leadId: target\.leadId \?\? null, contactId: target\.contactId \?\? null/);
+  // …and the SAME check as when it was raised — membership (assistantUserFor) and access to the deal, else the customer.
+  assert.match(core, /export async function mayBeTold\(userId: string, record[^)]*\): Promise<boolean> \{\s*const user = await assistantUserFor\(userId\);\s*if \(!user\) return false;\s*if \(record\.leadId\) return canAccessLead\(user, record\.leadId\);\s*if \(record\.contactId\) return canAccessContact\(user, record\.contactId\);/);
+  assert.match(core, /if \(!\(await mayBeTold\(userId, target\)\)\) return false;/, "when raised");
+  const deliver = core.slice(core.indexOf("async function deliver("), core.indexOf("export async function dropAlerts("));
+  assert.match(deliver, /select: \{ userId: true, kind: true, text: true, leadId: true, contactId: true \}/);
+  assert.match(deliver, /if \(!\(await switchedOn\(tenantId, alert\.userId\)\) \|\| !\(await mayBeTold\(alert\.userId, alert\)\)\) \{\s*await dropAlerts\(tenantId, \[alertId\]\);\s*return false;/, "when sent");
+  assert.ok(deliver.indexOf("mayBeTold(") < deliver.indexOf("$transaction("), "checked before any message is written");
+  // In the brief too: an alert they may no longer see is dropped, and its words never reach the question.
+  const brief = read("src/lib/proactiveBrief.ts");
+  assert.match(brief, /const allowed = await Promise\.all\(waiting\.map\(\(alert\) => mayBeTold\(userId, alert\)\)\);\s*await dropAlerts\(tenantId, waiting\.filter\(\(_, i\) => !allowed\[i\]\)\.map\(\(alert\) => alert\.id\)\);\s*const held = waiting\.filter\(\(_, i\) => allowed\[i\]\);/);
+  assert.ok(brief.indexOf("const held = waiting.filter") < brief.indexOf("askCrm("));
+  // An alert meant to go at once whose send failed (no deliverAt) is retried by the sweep, not lost.
+  assert.match(core, /deliveredAt: null, kind: \{ not: BRIEF_KIND \}, OR: \[\{ deliverAt: null \}, \{ deliverAt: \{ lte: now \} \}\]/);
+});
+
+test("a 07:30 brief takes in the alerts held until 08:00 (second review of #896)", () => {
+  // A customer opened a quote at 23:10 last night: held until 08:00.
+  const heldUntil = proactiveDeliverAt(sa("2026-10-18T23:10:00"), 0);
+  assert.equal(heldUntil?.toISOString(), sa("2026-10-19T08:00:00").toISOString());
+  // Past yesterday's ceiling at 15:00: also held until 08:00 today.
+  assert.equal(proactiveDeliverAt(sa("2026-10-18T15:00:00"), DAILY_ALERT_CEILING)?.toISOString(), sa("2026-10-19T08:00:00").toISOString());
+  // The default brief, at 07:30, takes in everything held until 08:00 — not only what has come due by 07:30.
+  const briefAt = sa("2026-10-19T07:30:00");
+  assert.equal(briefDueKey(briefAt, BRIEF_DEFAULT), "2026-10-19");
+  assert.ok(heldUntil && heldUntil.getTime() <= briefHoldsUntil(briefAt).getTime());
+  assert.ok(heldUntil && heldUntil.getTime() > briefAt.getTime(), "the case the review found: due after the brief is written");
+  // …but not tomorrow's: an alert raised at 20:30 tonight is for tomorrow's brief.
+  assert.ok(proactiveDeliverAt(sa("2026-10-19T20:30:00"), 0)!.getTime() > briefHoldsUntil(sa("2026-10-19T10:59:00")).getTime());
+  assert.match(read("src/lib/proactiveBrief.ts"), /OR: \[\{ deliverAt: null \}, \{ deliverAt: \{ lte: briefHoldsUntil\(now\) \} \}\]/);
 });
 
 /* ---------- Part 2: the morning brief ---------- */

@@ -136,21 +136,35 @@ export async function switchedOn(tenantId: string, userId: string): Promise<bool
   return proactiveOn(await setting(tenantId, proactivePersonKey(userId)));
 }
 
+/**
+ * May this person be told about this record NOW: still a member of the workspace with the assistant, and still able
+ * to open the deal (or, without one, the customer) — as themselves, with their own access. Asked when an alert is
+ * raised AND again when it is sent or folded into a brief: overnight someone may have left, or the customer may have
+ * gone to someone else. A permissions blip throws (assistantUserFor), so the alert waits rather than being dropped.
+ */
+export async function mayBeTold(userId: string, record: { leadId?: string | null; contactId?: string | null }): Promise<boolean> {
+  const user = await assistantUserFor(userId);
+  if (!user) return false;
+  if (record.leadId) return canAccessLead(user, record.leadId);
+  if (record.contactId) return canAccessContact(user, record.contactId);
+  return true;
+}
+
 /** True when a NEW alert was made (now or held); false when off, not theirs, or already told. */
 async function raise(tenantId: string, event: ProactiveEvent, target: ProactiveTarget): Promise<boolean> {
   const userId = responsiblePerson(target);
   if (!userId || !(await switchedOn(tenantId, userId))) return false;
-  // Still a member of this workspace, and still allowed to open the record — as themselves, with their own access.
-  const user = await assistantUserFor(userId);
-  if (!user) return false;
-  if (target.leadId ? !(await canAccessLead(user, target.leadId)) : target.contactId ? !(await canAccessContact(user, target.contactId)) : true) return false;
+  if (!(await mayBeTold(userId, target))) return false;
 
   const now = new Date();
   const today = await basePrisma.assistantProactiveAlert.count({ where: { tenantId, userId, kind: { not: BRIEF_KIND }, createdAt: { gte: johannesburgDayStart(now) } } });
   const deliverAt = proactiveDeliverAt(now, today);
   const text = proactiveText(event, await tenantOrigin(tenantId).catch(() => ""));
   const alert = await basePrisma.assistantProactiveAlert
-    .create({ data: { tenantId, userId, kind: event.kind, recordKey: event.recordKey, text, deliverAt }, select: { id: true } })
+    .create({
+      data: { tenantId, userId, kind: event.kind, recordKey: event.recordKey, text, deliverAt, leadId: target.leadId ?? null, contactId: target.contactId ?? null },
+      select: { id: true },
+    })
     .catch((error: unknown) => {
       // The unique key: this person was already told about this — say nothing again.
       if ((error as { code?: string }).code === "P2002") return null;
@@ -164,15 +178,19 @@ async function raise(tenantId: string, event: ProactiveEvent, target: ProactiveT
 /**
  * Turn one alert into a message. The claim (deliveredAt set only if still empty), the message and the link between
  * them are ONE transaction: if the message can't be written the claim rolls back and the next sweep tries again,
- * and a second worker waits on the row and then finds it taken — never lost, never twice. The switches are read
- * again first, so an alert held overnight respects a switch turned off since (it is then dropped, not sent later).
+ * and a second worker waits on the row and then finds it taken — never lost, never twice. The switches AND the
+ * person's access to the record are checked again first: an alert held overnight respects a switch turned off, a
+ * person who has left, or a customer who is no longer theirs since — it is then dropped, never sent later.
  * The phone notification and WhatsApp follow once it is saved; WhatsApp retries on its own (the sweep).
  */
 async function deliver(tenantId: string, alertId: string): Promise<boolean> {
-  const alert = await basePrisma.assistantProactiveAlert.findFirst({ where: { id: alertId, tenantId, deliveredAt: null }, select: { userId: true, kind: true, text: true } });
+  const alert = await basePrisma.assistantProactiveAlert.findFirst({
+    where: { id: alertId, tenantId, deliveredAt: null },
+    select: { userId: true, kind: true, text: true, leadId: true, contactId: true },
+  });
   if (!alert) return false;
-  if (!(await switchedOn(tenantId, alert.userId))) {
-    await basePrisma.assistantProactiveAlert.updateMany({ where: { id: alertId, tenantId, deliveredAt: null }, data: { deliveredAt: new Date() } });
+  if (!(await switchedOn(tenantId, alert.userId)) || !(await mayBeTold(alert.userId, alert))) {
+    await dropAlerts(tenantId, [alertId]);
     return false;
   }
   const sent = await basePrisma.$transaction(async (tx) => {
@@ -189,6 +207,12 @@ async function deliver(tenantId: string, alertId: string): Promise<boolean> {
   await sendPushToAll({ title: "DAX", body: proactivePush(alert.kind as ProactiveEvent["kind"]), url: "/assistant" }, "assistant", { tenantId, userId: alert.userId }).catch(() => {});
   await sendUpdatesToLinkedPhone(tenantId, alert.userId).catch(() => {});
   return true;
+}
+
+/** Settled without a message: closed (deliveredAt) with no turn, so nothing ever sends it. */
+export async function dropAlerts(tenantId: string, ids: string[]): Promise<void> {
+  if (!ids.length) return;
+  await basePrisma.assistantProactiveAlert.updateMany({ where: { id: { in: ids }, tenantId, deliveredAt: null }, data: { deliveredAt: new Date() } });
 }
 
 /** A morning brief is due for this person today and has not been written yet (it holds their overnight alerts). */
@@ -210,7 +234,8 @@ export async function sweepProactive(tenantId: string, budget: Pick<CronSliceCon
   const now = new Date();
 
   const due = await basePrisma.assistantProactiveAlert.findMany({
-    where: { tenantId, deliveredAt: null, deliverAt: { lte: now }, kind: { not: BRIEF_KIND } },
+    // Held ones now due — and ones meant to go at once (no deliverAt) whose send failed: retried here, not lost.
+    where: { tenantId, deliveredAt: null, kind: { not: BRIEF_KIND }, OR: [{ deliverAt: null }, { deliverAt: { lte: now } }] },
     orderBy: { deliverAt: "asc" },
     take: 50,
     select: { id: true, userId: true },

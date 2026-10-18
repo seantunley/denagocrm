@@ -5,7 +5,7 @@ import { sendPushToAll } from "./push";
 import { askCrm } from "./crmAssistant";
 import { assistantAskAllowed, assistantUserFor } from "./assistantUser";
 import { sendUpdatesToLinkedPhone } from "./assistantWhatsApp";
-import { setting, switchedOn } from "./proactive";
+import { dropAlerts, mayBeTold, setting, switchedOn } from "./proactive";
 import type { CronSliceContext } from "./tenantCron";
 import {
   ASSISTANT_PROACTIVE_KEY,
@@ -14,6 +14,7 @@ import {
   BRIEF_QUESTION,
   BRIEF_SOURCE,
   briefDueKey,
+  briefHoldsUntil,
   briefPersonKey,
   briefQuestion,
   parseBriefAt,
@@ -112,13 +113,18 @@ async function writeBrief(tenantId: string, userId: string, claimId: string, now
   if (!(await switchedOn(tenantId, userId))) return false;
   const user = await assistantUserFor(userId);
   if (!user || !(await assistantAskAllowed(user.id))) return false;
-  // What was held overnight for them — folded into the brief instead of arriving one by one.
-  const held = await basePrisma.assistantProactiveAlert.findMany({
-    where: { tenantId, userId, deliveredAt: null, deliverAt: { lte: now }, kind: { not: BRIEF_KIND } },
+  // What was held overnight for them — folded into the brief instead of arriving one by one. Held for 08:00 counts
+  // even when the brief is written earlier (07:30 by default). Each is checked again first: an alert about a
+  // customer they may no longer open is dropped, and its words never reach the brief.
+  const waiting = await basePrisma.assistantProactiveAlert.findMany({
+    where: { tenantId, userId, deliveredAt: null, kind: { not: BRIEF_KIND }, OR: [{ deliverAt: null }, { deliverAt: { lte: briefHoldsUntil(now) } }] },
     orderBy: { createdAt: "asc" },
     take: 20,
-    select: { id: true, text: true },
+    select: { id: true, text: true, leadId: true, contactId: true },
   });
+  const allowed = await Promise.all(waiting.map((alert) => mayBeTold(userId, alert)));
+  await dropAlerts(tenantId, waiting.filter((_, i) => !allowed[i]).map((alert) => alert.id));
+  const held = waiting.filter((_, i) => allowed[i]);
   const result = await askCrm(user, briefQuestion(now, held.map((alert) => alert.text)), null, { source: "schedule" });
   if (!result.ok || !result.turnId) return false; // retried next tick; past 11:00 the held alerts go on their own
   const turnId = result.turnId;
