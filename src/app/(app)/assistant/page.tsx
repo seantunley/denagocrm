@@ -27,6 +27,8 @@ import { isWhatsAppConfigured } from "@/lib/whatsapp";
 import { assistantWhatsAppOn } from "@/lib/assistantWhatsApp";
 import { linkRefusalText, maskWaId } from "@/lib/assistantWhatsAppRules";
 import AssistantWhatsAppCard from "@/components/AssistantWhatsAppCard";
+import AssistantProactiveCard from "@/components/AssistantProactiveCard";
+import { ASSISTANT_PROACTIVE_KEY, proactiveOn, proactivePersonKey } from "@/lib/proactiveRules";
 
 export const dynamic = "force-dynamic";
 export const metadata = { title: "Ask the CRM" };
@@ -83,6 +85,11 @@ export default async function AssistantPage() {
     }),
     // Being on this page is seeing them: the bubble's unread dot goes.
     markScheduledTurnsSeen(user.id),
+  ]);
+  // Proactive DAX: the owner's switch for the workspace, and this person's own (lib/proactive.ts).
+  const [proactiveWorkspace, proactiveMe] = await Promise.all([
+    getSetting(ASSISTANT_PROACTIVE_KEY).then(proactiveOn).catch(() => false),
+    getSetting(proactivePersonKey(user.id)).then(proactiveOn).catch(() => false),
   ]);
   // What was stored is a card the assistant proposed; anything that is not shaped like one is left out, not rendered.
   const savedCards = saved.flatMap((row) => {
@@ -207,6 +214,7 @@ export default async function AssistantPage() {
           </ul>
         )}
       </section>
+      <AssistantProactiveCard name={profile.name} workspaceOn={proactiveWorkspace} on={proactiveMe} />
       {whatsapp &&<AssistantWhatsAppCard name={profile.name} linked={whatsapp.linked} refused={whatsapp.refused} updates={whatsapp.updates} />}
       <details className="card p-4 text-sm">
         <summary className="cursor-pointer font-medium">

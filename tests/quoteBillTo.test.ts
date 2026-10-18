@@ -248,14 +248,18 @@ function quoteRenderers(): string[] {
 }
 
 /**
- * The one place that legitimately still names the PERSON.
+ * The places that legitimately still name the PERSON.
  *
  * `contactLabel` on the editor record means "the contact", not "the customer" —
  * the editor shows the account separately as `fleetLabel` and prints them as
  * "Kloof Lodge · attn Thandi Mokoena". Resolving it through quoteBillTo would
  * make both halves say the same thing.
+ *
+ * A proactive DAX alert (lib/proactive.ts) says who ACTED — "Thandi Mokoena just
+ * opened Q-1032" — to staff, never on a document: the person who opened or
+ * signed it, not the account it is billed to.
  */
-const NAMES_THE_PERSON_ON_PURPOSE = ["src/lib/quoteEditorRecord.ts"];
+const NAMES_THE_PERSON_ON_PURPOSE = ["src/lib/quoteEditorRecord.ts", "src/lib/proactive.ts"];
 
 test("nothing computes a quote's customer for itself any more", () => {
   const offenders = quoteRenderers().filter((rel) => {

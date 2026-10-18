@@ -283,6 +283,15 @@ export const AUTOMATIONS: Automation[] = [
     managedAt: { label: "Settings → Assistant", href: "/settings/assistant" },
   },
   {
+    key: "dax-proactive",
+    label: "DAX comes to you: customer activity",
+    does: "The moment a customer opens a quote, comes back to it a third time, signs it, books a service, or writes and waits 15 minutes with no answer, tells the person responsible for them — in Ask DAX, as a phone notification that names nobody, and on the WhatsApp they linked. Only when an owner switches it on AND each person switches it on for themselves (both off to start). Never between 20:00 and 08:00 — held until morning — and at most 12 a day each. The customer is not contacted by it.",
+    reaches: "staff",
+    channels: ["push", "whatsapp"],
+    when: "When a customer acts, and every 30 minutes for unanswered messages and held alerts",
+    managedAt: { label: "Settings → Assistant", href: "/settings/assistant" },
+  },
+  {
     key: "lead-research",
     label: "Lead research and DAX tidy-up",
     does: "Researches new leads with ChatGPT for the lead page, and once a day tidies what DAX has learned.",

@@ -1040,6 +1040,27 @@ model Activity {
 
 /// A second (third…) staff member at an activity. Activity has one assignee —
 /// the owner, whose task list it is on — and a meeting often has more people.
+/// Proactive DAX (lib/proactive.ts): one alert to one person about one customer
+/// event. Unique per person, kind and record, so the same event never alerts
+/// twice. `deliverAt` set = held (quiet hours, the day's ceiling) until then;
+/// `deliveredAt` = it became an AssistantTurn (`turnId`) and went out.
+model AssistantProactiveAlert {
+  id          String    @id @default(cuid())
+  tenantId    String
+  userId      String
+  kind        String
+  recordKey   String
+  text        String
+  deliverAt   DateTime?
+  deliveredAt DateTime?
+  turnId      String?
+  createdAt   DateTime  @default(now())
+
+  @@unique([tenantId, userId, kind, recordKey])
+  @@index([deliveredAt, deliverAt])
+  @@index([tenantId, userId, createdAt])
+}
+
 /// One question and answer in "Ask the CRM". Private to the asker, kept 30 days
 /// (the maintenance sweep deletes older rows) so the assistant can follow a
 /// conversation across visits.

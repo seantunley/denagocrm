@@ -116,6 +116,9 @@ export async function mirrorQuoteViewed({ tenantId, quoteId, requestId }: Mirror
     });
     // The FIRST time, which is the only time viewedAt is written: once per quote.
     if (firstView) await tellJourneys(tenantId, quoteId, (quote) => emitQuoteJourneyEvent("quote_opened", quote, "opened"));
+    // …and the person responsible hears it now, if they asked to (proactive DAX). Never at the signing's cost.
+    // (Loaded when needed: the assistant's delivery code is not the signing page's to carry.)
+    if (firstView) await (await import("@/lib/proactive")).notifyQuoteActivity(tenantId, quoteId, "quote_opened");
   } catch (error) {
     await logError("signing", "couldn't mark the quote viewed", error instanceof Error ? error.name : "unknown");
   }

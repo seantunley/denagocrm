@@ -229,7 +229,7 @@ test("THE PDF IS QUEUED WITH THE QUOTE — delivered wherever Confirm was presse
 
   // It is an update like a briefing: the sweep retries it, and the bubble shows it.
   const rules = code("src/lib/assistantWhatsAppRules.ts");
-  assert.match(rules, /export const PROACTIVE_SOURCES = \["schedule", "watch", "handoff", "quote_pdf"\] as const;/);
+  assert.match(rules, /export const PROACTIVE_SOURCES = \["schedule", "watch", "handoff", "quote_pdf", "proactive"\] as const;/);
   const schema = code("prisma/schema.prisma");
   const turnModel = schema.slice(schema.indexOf("model AssistantTurn {"));
   assert.match(turnModel.slice(0, turnModel.indexOf("\n}")), /^\s*quoteId String\?\s*$/m);

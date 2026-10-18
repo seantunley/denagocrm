@@ -140,6 +140,10 @@ async function afterQuoteSigned(req: CompletedReq, failures: string[]): Promise<
     { title: "Quote signed 🎉", body: `Q-${quote.number} — ${name} · ${formatZAR(Math.round(total))}`, url: `/quotes/${quote.id}` },
     "quote_signed"
   ).catch(() => {});
+  // The person responsible, on their own channels (proactive DAX). A quote is signed once: one alert.
+  await effect("dax_proactive", failures, async () =>
+    (await import("@/lib/proactive")).notifyQuoteActivity(quote.tenantId, quote.id, "quote_signed"),
+  );
 }
 
 async function afterJobCardSigned(req: CompletedReq, failures: string[]): Promise<void> {

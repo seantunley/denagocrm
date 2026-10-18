@@ -1387,7 +1387,7 @@ test("the rules: the window, the template name, and what is sent", () => {
   assert.equal(outsideReplyWindow("Outside the 24-hour reply window — the customer must message you first"), true);
   assert.equal(outsideReplyWindow("(#131047) Re-engagement message"), true);
   assert.equal(outsideReplyWindow("WhatsApp send failed"), false);
-  assert.deepEqual([...PROACTIVE_SOURCES], ["schedule", "watch", "handoff", "quote_pdf"]);
+  assert.deepEqual([...PROACTIVE_SOURCES], ["schedule", "watch", "handoff", "quote_pdf", "proactive"]);
 });
 
 test("wired where it must be: after a saved briefing, after a saved alert, on the template's button — and each switch is the right person's", () => {
