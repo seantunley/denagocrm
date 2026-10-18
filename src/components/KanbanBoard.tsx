@@ -188,7 +188,8 @@ function LeadCard({ lead, dragging, actions, staleAfterDays = null }: { lead: Ka
   const opportunity = lead.title !== lead.name && lead.title !== lead.productName ? lead.title : null;
   // Collapsed by default (Sean, 2026-10-18): the name row only; the chevron opens the rest.
   const [open, setOpen] = useState(false);
-  const hasValue = lead.valueCents > 0 || (lead.quantity ?? 1) > 1;
+  const hasAmount = lead.valueCents > 0;
+  const manyUnits = (lead.quantity ?? 1) > 1;
 
   return (
     <div
@@ -240,15 +241,19 @@ function LeadCard({ lead, dragging, actions, staleAfterDays = null }: { lead: Ka
           </span>
           {actions}
           {!dragging && (
+            // The board drags on mousedown / touchstart (MouseSensor, TouchSensor), so the toggle swallows those — and
+            // pointer and key events — or moving the mouse or a long press on it would pick the card up.
             <button
               type="button"
               onPointerDown={(event) => event.stopPropagation()}
+              onMouseDown={(event) => event.stopPropagation()}
+              onTouchStart={(event) => event.stopPropagation()}
               onKeyDown={(event) => event.stopPropagation()}
               onClick={() => setOpen((value) => !value)}
               aria-expanded={open}
               aria-label={open ? `Hide details for ${lead.name}` : `Show details for ${lead.name}`}
               title={open ? "Hide details" : "Show details"}
-              className="rounded p-0.5 text-muted-foreground transition-colors hover:bg-white/5 hover:text-foreground"
+              className="-my-1.5 -mr-1.5 inline-flex size-8 cursor-pointer items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-white/5 hover:text-foreground"
             >
               <ChevronDown className={cn("size-4 transition-transform", open && "rotate-180")} />
             </button>
@@ -258,17 +263,17 @@ function LeadCard({ lead, dragging, actions, staleAfterDays = null }: { lead: Ka
 
       {open && (
       <>
-      {(hasValue || lead.assignee) && (
+      {(hasAmount || manyUnits || lead.assignee) && (
       <div className="mt-3 flex items-end justify-between gap-3 border-t border-border/70 pt-3">
         <div className="min-w-0">
-          {hasValue && (
-          <>
-          <p className="text-[9px] font-semibold uppercase tracking-[0.13em] text-muted-foreground/70">Deal value</p>
-          <div className="mt-1 flex items-center gap-1.5">
-            {lead.valueCents > 0 && (
+          {/* The heading only over an amount; a quantity with no amount is its badge alone. */}
+          {hasAmount && <p className="text-[9px] font-semibold uppercase tracking-[0.13em] text-muted-foreground/70">Deal value</p>}
+          {(hasAmount || manyUnits) && (
+          <div className={cn("flex items-center gap-1.5", hasAmount && "mt-1")}>
+            {hasAmount && (
               <span className="text-sm font-semibold tabular-nums text-foreground">{formatZAR(lead.valueCents)}</span>
             )}
-            {(lead.quantity ?? 1) > 1 && (
+            {manyUnits && (
               <span
                 className="rounded bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-bold leading-none text-amber-300 ring-1 ring-amber-500/30"
                 title={`${lead.quantity} units — bigger deal`}
@@ -277,7 +282,6 @@ function LeadCard({ lead, dragging, actions, staleAfterDays = null }: { lead: Ka
               </span>
             )}
           </div>
-          </>
           )}
         </div>
         {lead.assignee && (
