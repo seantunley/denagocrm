@@ -10,6 +10,10 @@ test("the deal opens its shared workspace and preserves edit/activity deep links
   // Every section is its own tab — Customer and Research are not hidden behind "More" (Sean, 2026-10-18).
   assert.doesNotMatch(page, /overflowKeys=/);
   for (const key of ["comms", "details", "activities", "quotes", "customer", "research"]) assert.ok(page.includes(`key: "${key}"`), key);
+  // …and on the customer page too: the "More" dropdown is gone from the shared Tabs altogether, so no page can bring it back.
+  assert.doesNotMatch(read("src/app/(app)/contacts/[id]/page.tsx"), /overflowKeys=/);
+  const tabs = read("src/components/Tabs.tsx");
+  assert.doesNotMatch(tabs, /overflowKeys|<select|>More</);
   assert.equal((page.match(/<LeadTimeline/g) ?? []).length, 1);
   assert.doesNotMatch(page, /<CommsTimeline/);
   assert.match(page, /<WhatsAppPanel composerOnly[^>]*leadId=\{lead\.id\}/);
