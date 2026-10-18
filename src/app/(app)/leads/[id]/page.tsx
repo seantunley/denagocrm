@@ -337,9 +337,8 @@ export default async function LeadDetailPage({
 
       <div className="min-w-0">
           <Tabs
+            // Every section is a tab in its own right — none hidden behind a "More" list (Sean, 2026-10-18).
             initialKey={tab ?? (edit === "1" ? "details" : "comms")}
-            overflowKeys={["customer", "research"]}
-            overflowLabel="More deal sections"
             tabs={[
               {
                 key: "comms",

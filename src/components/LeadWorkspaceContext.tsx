@@ -28,7 +28,7 @@ export default function LeadWorkspaceContext({ nextActivity, canSchedule, custom
     </section>
     <section className="rounded-xl border border-border bg-card p-4">
       <h2 className="mb-3 text-sm font-semibold">Deal at a glance</h2>
-      <p className="text-lg font-semibold tabular-nums">{valueCents === null ? "Value not set" : formatZAR(valueCents)}</p>
+      <p className="text-lg font-semibold tabular-nums">{/* 0 is how an unset value is stored: "R 0,00" beside a R 249 900 quote misreads the deal. */}{valueCents ? formatZAR(valueCents) : "Value not set"}</p>
       <p className="mt-1 break-words text-sm">{product || "Product not selected"}{color ? ` · ${color}` : ""}{quantity > 1 ? ` · ${quantity} units` : ""}</p>
       <dl className="mt-4 space-y-2 text-xs">
         <div className="flex justify-between gap-3"><dt className="text-muted-foreground">Stage</dt><dd className="text-right">{stage}</dd></div>

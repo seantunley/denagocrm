@@ -7,6 +7,9 @@ const page = read("src/app/(app)/leads/[id]/page.tsx");
 test("the deal opens its shared workspace and preserves edit/activity deep links", () => {
   assert.match(page, /initialKey=\{tab \?\? \(edit === "1" \? "details" : "comms"\)\}/);
   assert.match(page, /startOpen=\{tab === "activities" && schedule === "1"\}/);
+  // Every section is its own tab — Customer and Research are not hidden behind "More" (Sean, 2026-10-18).
+  assert.doesNotMatch(page, /overflowKeys=/);
+  for (const key of ["comms", "details", "activities", "quotes", "customer", "research"]) assert.ok(page.includes(`key: "${key}"`), key);
   assert.equal((page.match(/<LeadTimeline/g) ?? []).length, 1);
   assert.doesNotMatch(page, /<CommsTimeline/);
   assert.match(page, /<WhatsAppPanel composerOnly[^>]*leadId=\{lead\.id\}/);

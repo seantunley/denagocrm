@@ -12,7 +12,10 @@ const page = readFileSync("src/app/(app)/leads/[id]/page.tsx", "utf8");
 const actions = readFileSync("src/app/actions/leads.ts", "utf8");
 
 test("a lead with no customer offers 'Create customer from this lead' on its own page", () => {
-  assert.match(page, /\{!lead\.contact && \(/);
+  // Offered to those who may do it (#894): the action itself requires leads.link_contact.
+  assert.match(page, /\{!lead\.contact && canLinkContact && \(/);
+  assert.match(page, /hasPermission\(user, "leads\.link_contact"\)/);
+  assert.match(actions, /export async function convertLeadToContact[\s\S]{0,200}requireLeadAccess\(leadId, "leads\.link_contact"\)/);
   assert.match(page, /<AddToContactsButton leadId=\{lead\.id\} label="Create customer from this lead" \/>/);
 });
 
