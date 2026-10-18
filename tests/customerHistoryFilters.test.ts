@@ -22,6 +22,11 @@ test("the history shows a page at a time, and the context comes first on a narro
   assert.match(history, /const visible = matching\.slice\(0, shown\);/);
   assert.match(history, /Show older \(\{older\} more\)/);
   assert.match(history, /<aside className="order-first min-w-0 space-y-4 xl:order-none"/);
+  // What the team pinned comes FIRST in the column, highlighted; an empty card waits below the context (Sean, 2026-10-18).
+  const aside = history.slice(history.indexOf("<aside"), history.indexOf("</aside>"));
+  assert.ok(aside.indexOf("{pinned.length > 0 && (") < aside.indexOf("{context}"), "pins before the context");
+  assert.ok(aside.indexOf("{pinned.length === 0 && (") > aside.indexOf("{context}"), "the empty card after it");
+  assert.match(aside, /border-amber-400\/50 bg-amber-400\/\[0\.07\]/);
 });
 
 test("a link to another section switches tab in place, so nothing being typed is lost", () => {
