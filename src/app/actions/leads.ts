@@ -1708,10 +1708,14 @@ export async function reopenLead(leadId: string) {
     const user = await requireLeadAccess(leadId, "leads.reopen");
     const before = await prisma.lead.findUniqueOrThrow({ where: { id: leadId } });
     if (!["won", "lost"].includes(before.status)) refuse("Use Reactivate in Nurture to choose a stage and next action; open leads do not need reopening.");
-    const lead = await prisma.lead.update({
-      where: { id: leadId, status: before.status, updatedAt: before.updatedAt },
+    // Guarded like the other transitions: a lead changed since the page loaded is refused in words, not with the
+    // error page (a guarded `update` throws when nothing matches; `updateMany` reports it).
+    const changed = await prisma.lead.updateMany({
+      where: { id: leadId, tenantId: before.tenantId, status: before.status, deletedAt: null, updatedAt: before.updatedAt },
       data: { ...clearedNurture, status: "open", lostReason: null },
     });
+    if (changed.count !== 1) refuse("This lead changed. Refresh before reopening it.");
+    const lead = await prisma.lead.findUniqueOrThrow({ where: { id: leadId } });
     await logAuditStrict({
       action: "lead.reopened",
       summary: `Reopened lead “${lead.title}”`,

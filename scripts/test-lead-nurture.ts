@@ -87,6 +87,15 @@ async function main() {
         ok(await asA(() => markLost(lead.id, form({ lostReason: "No longer interested" }))));
         assert.equal((await read()).status, "lost");
         assert.equal(await basePrisma.activity.count({ where: { leadId: lead.id, status: "planned" } }), 0);
+        // Review of #902: the trigger's "open" branch is for a lead BECOMING open — reopened or reactivated — not for
+        // every stage update. A deal the rep chose to OMIT from the forecast keeps that when its stage is touched.
+        ok(await asA(() => reopenLead(lead.id)));
+        const forecastOf = async () => (await basePrisma.$queryRaw<Array<{ forecastCategory: string; probability: number }>>`SELECT "forecastCategory", probability FROM "Lead" WHERE id = ${lead.id}`)[0];
+        assert.equal((await forecastOf()).forecastCategory, "pipeline", "a lost deal reopened is back in the forecast");
+        await basePrisma.$executeRaw`UPDATE "Lead" SET "forecastCategory" = 'omitted', probability = 33 WHERE id = ${lead.id}`;
+        // Naming the column fires the trigger (UPDATE OF "stageId"), as a drag to another stage does.
+        await basePrisma.$executeRaw`UPDATE "Lead" SET "stageId" = "stageId" WHERE id = ${lead.id}`;
+        assert.deepEqual(Object.values(await forecastOf()), ["omitted", 33], "a rep's own omitted/probability survives a stage move");
         console.log(`PASS nurture lifecycle, concurrency, forecast, quote acceptance and workspace isolation (${enforcing ? "enforced" : "dormant"})`);
       } finally {
         await teardown(fixture);
