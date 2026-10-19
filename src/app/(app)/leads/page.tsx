@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { Prisma } from "@prisma/client";
-import { Plus, List, Trophy, Download } from "lucide-react";
+import { Plus, List, Trophy, Download, Sprout } from "lucide-react";
 import { prisma } from "@/lib/db";
 import {
   getAccessibleContactIds,
@@ -362,6 +362,7 @@ export default async function LeadsPage({
     (total, stage) => total + stage.leads.reduce((stageTotal, lead) => stageTotal + lead.valueCents, 0),
     0,
   );
+  const nurtureCount = await prisma.lead.count({ where: { status: "nurture", deletedAt: null, ...(accessibleLeadIds ? { id: { in: accessibleLeadIds } } : {}) } });
 
   return (
     <div className="space-y-5">
@@ -373,6 +374,9 @@ export default async function LeadsPage({
           pipelines={pipelines.map((p) => ({ id: p.id, name: p.name, isDefault: p.isDefault }))}
           activeId={activePipeline?.id ?? null}
         />
+        <Button asChild variant="ghost" size="sm">
+          <Link href="/leads/nurture"><Sprout className="size-4" />Nurture{nurtureCount > 0 ? ` (${nurtureCount})` : ""}</Link>
+        </Button>
         <Button asChild variant="ghost" size="sm">
           <Link href="/leads/closed">
             <Trophy className="size-4" />

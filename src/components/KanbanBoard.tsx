@@ -38,6 +38,7 @@ import {
   MoreHorizontal,
   PenLine,
   Search,
+  Sprout,
   Trophy,
   UserPlus,
   UserRound,
@@ -59,6 +60,7 @@ import {
   searchLinkableContacts,
 } from "@/app/actions/leads";
 import { MarkWonDialog } from "@/components/MarkWonDialog";
+import NurtureForm from "@/components/NurtureForm";
 import { formatZAR } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
@@ -376,6 +378,7 @@ type LeadActionHandlers = {
   testDrive: () => void;
   won: () => void;
   lost: () => void;
+  nurture: () => void;
   copyLink: () => void;
   addToContacts: () => void;
 };
@@ -470,6 +473,9 @@ function LeadMenuItems({
         <Car /> {lead.testDrive ? "Reschedule test drive" : "Book test drive"}
       </Item>
       <Separator />
+      <Item disabled={!permissions.canChangeStage || !permissions.canManageActivities} onSelect={actions.nurture}>
+        <Sprout /> Move to nurture
+      </Item>
       <Item disabled={!permissions.canMarkWon} onSelect={actions.won}>
         <Trophy /> Mark won
       </Item>
@@ -755,6 +761,7 @@ export default function KanbanBoard({
     stageName: string;
   } | null>(null);
   const [pendingOutcome, setPendingOutcome] = useState<{ lead: KanbanLead; mode: "won" | "lost" } | null>(null);
+  const [pendingNurture, setPendingNurture] = useState<KanbanLead | null>(null);
   const [query, setQuery] = useState("");
   const [owner, setOwner] = useState<string>(OWNER_ANY);
   const [attentionOnly, setAttentionOnly] = useState(false);
@@ -1189,6 +1196,7 @@ export default function KanbanBoard({
       },
       won: () => setPendingOutcome({ lead, mode: "won" }),
       lost: () => setPendingOutcome({ lead, mode: "lost" }),
+      nurture: () => setPendingNurture(lead),
       copyLink: () => {
         void navigator.clipboard
           .writeText(`${window.location.origin}/leads/${lead.id}`)
@@ -1430,6 +1438,12 @@ export default function KanbanBoard({
           onCancel={() => setPendingOutcome(null)}
           onConfirm={confirmLost}
         />
+        <Dialog open={!!pendingNurture} onOpenChange={(open) => !open && setPendingNurture(null)}>
+          <ResponsiveDialogContent className="sm:max-w-lg">
+            <DialogHeader><DialogTitle>Future interest · {pendingNurture?.name}</DialogTitle><DialogDescription>Keep a promising opportunity for the right time.</DialogDescription></DialogHeader>
+            {pendingNurture && <NurtureForm key={pendingNurture.id} leadId={pendingNurture.id} users={users} ownerId={pendingNurture.assignedToId} canAssign={permissions.canAssign} onSaved={() => { removeLead(pendingNurture.id); setPendingNurture(null); }} />}
+          </ResponsiveDialogContent>
+        </Dialog>
         {/* Winning asks WHICH quote was accepted — that is what sends the deal
             to Deliveries — so it has its own dialog, shared with the lead page. */}
         <MarkWonDialog

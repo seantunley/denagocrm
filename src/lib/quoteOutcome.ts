@@ -9,6 +9,7 @@ import { logError } from "./errorLog";
 import { issueInvoiceNumberInTx, nextQuoteNumber } from "./numbering";
 import { payableTotalCents } from "./pricing";
 import { formatZAR } from "./format";
+import { clearedNurture } from "./leadNurture";
 
 /**
  * WHAT HAPPENS TO A QUOTE WHEN THE DEAL IS DECIDED — one definition.
@@ -50,9 +51,18 @@ export const WINNABLE_QUOTE_STATUSES = ["draft", "sent", "declined"];
  */
 export async function winLeadInTx(tx: LeadWinTx, leadId: string, tenantId: string, valueCents?: number): Promise<boolean> {
   await tx.$executeRaw`SELECT id FROM "Lead" WHERE id = ${leadId} AND "tenantId" = ${tenantId} FOR UPDATE`;
+  // A genuine acceptance can arrive while the salesperson has parked the lead.
+  // Retire only its nurture review task; delivery/other commitments stay live.
+  await tx.$executeRaw`
+    UPDATE "Activity" a SET "status" = 'cancelled'
+    FROM "Lead" l WHERE l.id = ${leadId} AND l."tenantId" = ${tenantId}
+      AND l.status = 'nurture' AND l."deletedAt" IS NULL
+      AND a.id = l."nurtureActivityId" AND a."leadId" = l.id
+      AND a."tenantId" = ${tenantId} AND a.status = 'planned'
+  `;
   const won = await tx.lead.updateMany({
-    where: { id: leadId, tenantId, deletedAt: null, status: "open" },
-    data: { status: "won", ...(valueCents !== undefined ? { valueCents } : {}) },
+    where: { id: leadId, tenantId, deletedAt: null, status: { in: ["open", "nurture"] } },
+    data: { ...clearedNurture, status: "won", ...(valueCents !== undefined ? { valueCents } : {}) },
   });
   return won.count === 1;
 }

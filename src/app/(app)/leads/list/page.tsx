@@ -254,7 +254,7 @@ function LeadFilterFields({ params, status, source, pipelineId, stageId, pipelin
 }) {
   return (
     <>
-      <label className="space-y-1"><span className="label">Status</span><select name="status" className="input w-32" defaultValue={status}><option value="">Any</option><option value="open">Open</option><option value="won">Won</option><option value="lost">Lost</option></select></label>
+      <label className="space-y-1"><span className="label">Status</span><select name="status" className="input w-32" defaultValue={status}><option value="">Any</option><option value="open">Open</option><option value="nurture">Nurture</option><option value="won">Won</option><option value="lost">Lost</option></select></label>
       <label className="space-y-1"><span className="label">Source</span><select name="source" className="input w-36" defaultValue={source}><option value="">Any</option><option value="facebook">Facebook</option><option value="instagram">Instagram</option><option value="website">Website</option><option value="whatsapp">WhatsApp</option><option value="referral">Referral</option><option value="manual">Manual</option><option value="walk-in">Walk-in</option></select></label>
       <label className="space-y-1"><span className="label">Pipeline</span><select name="pipeline" className="input w-44" defaultValue={pipelineId}><option value="">Any</option>{pipelines.map((pipeline) => <option key={pipeline.id} value={pipeline.id}>{pipeline.name}</option>)}</select></label>
       <label className="space-y-1"><span className="label">Stage</span><select name="stageId" className="input w-40" defaultValue={stageId}><option value="">Any</option>{stages.map((stage) => <option key={stage.id} value={stage.id}>{stage.name}</option>)}</select></label>
