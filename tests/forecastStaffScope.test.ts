@@ -594,7 +594,8 @@ test("getLeadPipeline is off the dormant filter, and its callers refuse a null",
   // `moveLeadWithNewQuote` (the quote remedy). The number is the ratchet; the
   // equality below is the actual rule, and it is what proves each new caller
   // guards its null rather than falling through.
-  assert.equal(calls.length, 5, "a new caller of getLeadPipeline needs a null guard too");
+  // 5 → 6 with nurture reactivation, which also validates its source workspace.
+  assert.equal(calls.length, 6, "a new caller of getLeadPipeline needs a null guard too");
   assert.equal(guarded.length, calls.length,
     "a null now means 'not this workspace's lead' — every caller must refuse, not fall through");
   // A null must not silently satisfy the permission it feeds.

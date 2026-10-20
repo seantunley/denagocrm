@@ -32,6 +32,7 @@ test("promoted actions retain permission checks and destructive confirmations", 
   for (const permission of ["quotes.create", "leads.mark_won", "leads.mark_lost", "leads.reopen", "leads.delete", "leads.link_contact"]) assert.ok(page.includes(`hasPermission(user, "${permission}")`));
   assert.match(page, /canDeleteLead && <ConfirmDelete/);
   assert.match(page, /canMarkWon && <MarkWonButton/);
-  assert.match(page, /lead\.status === "open" && canMarkLost/);
+  assert.match(page, /\["open", "nurture"\]\.includes\(lead\.status\) && canMarkLost/);
+  assert.match(page, /\["won", "lost"\]\.includes\(lead\.status\) && canReopen/);
   assert.match(page, /name="lostReason"[\s\S]*?required/);
 });

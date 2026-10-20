@@ -463,6 +463,7 @@ const CUSTOMER_RECORD_WRITERS = [
   "src/app/actions/communications.ts",
   "src/app/actions/fulfilment.ts",
   "src/app/actions/leads.ts",
+  "src/app/actions/nurture.ts",
   "src/app/actions/messenger.ts",
   "src/app/actions/portal.ts",
   "src/app/actions/staffAvailability.ts",

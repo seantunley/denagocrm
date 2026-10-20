@@ -259,6 +259,9 @@ jobs:
       - name: Verify governance invariants
         run: npm run verify:governance
 
+      - name: Nurture lifecycle and workspace isolation
+        run: npx tsx --tsconfig tsconfig.harness.json scripts/test-lead-nurture.ts
+
       - name: Run security integration tests
         run: npm run test:security
 

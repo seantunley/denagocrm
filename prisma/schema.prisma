@@ -905,7 +905,13 @@ model Lead {
   notes      String?
   quantity   Int     @default(1) // number of carts wanted (drives the value)
   valueCents Int     @default(0)
-  status     String  @default("open") // open | won | lost
+  status     String  @default("open") // open | nurture | won | lost
+  nurtureSince      DateTime?
+  nurtureReason     String?
+  nurtureInterest   String? // searchable interest, including products not in the catalogue yet
+  nurtureTrigger    String?
+  nurtureReviewAt   DateTime?
+  nurtureActivityId String? // review task owned by this nurture episode; other commitments stay intact
   /// WHEN the deal closed — immutable lifecycle dates, not `updatedAt`.
   ///
   /// Both columns have existed since 52_pipelines_forecasting_rbac_audit, which

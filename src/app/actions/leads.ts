@@ -43,10 +43,12 @@ import {
   requireQuoteAccess,
 } from "@/lib/permissions";
 import { type PipelineStageAction } from "@/lib/pipelineStageActions";
+import { clearedNurture, reviewDate } from "@/lib/leadNurture";
 import {
   getDefaultPipeline,
   getLeadPipeline,
   getPipelineStage,
+  listActiveSalesPipelines,
   listPipelineStages,
   type PipelineStageRow,
 } from "@/lib/pipelines";
@@ -1680,28 +1682,21 @@ export async function markLost(leadId: string, formData: FormData) {
     const reason = String(formData.get("lostReason") ?? "").trim();
     if (!reason) throw new ActionRefusal("A lost reason is required");
     const before = await prisma.lead.findUniqueOrThrow({ where: { id: leadId } });
-    const lead = await prisma.lead.update({
-      where: { id: leadId },
-      // `lostAt` was never written by anything, while reports/page.tsx filters
-      // lost leads on it — so the lost-leads report could only ever come back
-      // empty. Set here, where the transition actually happens.
-      data: { status: "lost", lostReason: reason, lostAt: new Date() },
-    });
-    // The lead leaves the board; its planned work has to leave the agenda with
-    // it, or it keeps asking to be done from a lead nobody can see.
-    const cancelled = await cancelPlannedActivitiesForLostLead(leadId);
+    if (!["open", "nurture"].includes(before.status)) refuse("This lead is already closed. Reopen it before changing its outcome.");
+    await prisma.$transaction(async (tx) => {
+      const changed = await tx.lead.updateMany({
+        where: { id: leadId, tenantId: before.tenantId, status: before.status, deletedAt: null, updatedAt: before.updatedAt },
+        data: { ...clearedNurture, status: "lost", lostReason: reason, lostAt: new Date() },
+      });
+      if (changed.count !== 1) refuse("This lead changed. Refresh before closing it.");
+      const cancelled = await cancelPlannedActivitiesForLostLead(leadId, tx, before.tenantId);
+      await logAuditStrict({
+        action: "lead.lost", summary: `Marked lead “${before.title}” as lost — ${reason} (${cancelled} planned activities cancelled)`,
+        leadId, contactId: before.contactId, user, before, after: { status: "lost", lostReason: reason },
+      }, tx);
+    }, GOVERNANCE_TX);
     await emitLeadJourneyEvent("lead_lost", leadId);
-    await logAuditStrict({
-      action: "lead.lost",
-      summary:
-        `Marked lead “${lead.title}” as lost — ${reason}` +
-        (cancelled > 0 ? ` (${cancelled} planned ${cancelled === 1 ? "activity" : "activities"} cancelled)` : ""),
-      leadId,
-      contactId: lead.contactId,
-      user,
-      before,
-      after: lead,
-    });
+    revalidatePath("/leads/nurture");
     revalidatePath("/leads");
     revalidatePath("/forecast");
     revalidatePath(`/leads/${leadId}`);
@@ -1712,10 +1707,15 @@ export async function reopenLead(leadId: string) {
   return asActionResult(async () => {
     const user = await requireLeadAccess(leadId, "leads.reopen");
     const before = await prisma.lead.findUniqueOrThrow({ where: { id: leadId } });
-    const lead = await prisma.lead.update({
-      where: { id: leadId },
-      data: { status: "open", lostReason: null },
+    if (!["won", "lost"].includes(before.status)) refuse("Use Reactivate in Nurture to choose a stage and next action; open leads do not need reopening.");
+    // Guarded like the other transitions: a lead changed since the page loaded is refused in words, not with the
+    // error page (a guarded `update` throws when nothing matches; `updateMany` reports it).
+    const changed = await prisma.lead.updateMany({
+      where: { id: leadId, tenantId: before.tenantId, status: before.status, deletedAt: null, updatedAt: before.updatedAt },
+      data: { ...clearedNurture, status: "open", lostReason: null },
     });
+    if (changed.count !== 1) refuse("This lead changed. Refresh before reopening it.");
+    const lead = await prisma.lead.findUniqueOrThrow({ where: { id: leadId } });
     await logAuditStrict({
       action: "lead.reopened",
       summary: `Reopened lead “${lead.title}”`,
@@ -1728,6 +1728,52 @@ export async function reopenLead(leadId: string) {
     revalidatePath("/leads");
     revalidatePath("/forecast");
     revalidatePath(`/leads/${leadId}`);
+  });
+}
+
+/** Reactivation is an explicit, audited transition with the same stage rules as the board. */
+export async function reactivateNurturedLead(leadId: string, form: FormData) {
+  return asActionResult(async () => {
+    const user = await requireLeadAccess(leadId, "leads.change_stage");
+    if (!(await hasPermission(user, "activities.manage"))) refuse("You need activity permission to schedule the next action.");
+    const tenantId = await actingTenantId();
+    const before = await prisma.lead.findFirst({ where: { id: leadId, tenantId, status: "nurture", deletedAt: null } });
+    if (!before) refuse("This lead is no longer in nurture. Refresh the page.");
+    const summary = String(form.get("summary") ?? "").trim();
+    const dueDate = reviewDate(String(form.get("dueDate") ?? ""));
+    if (summary.length < 3 || summary.length > 300 || !dueDate) refuse("Enter a next action (3–300 characters) and a date today or later.");
+    const owner = await resolveAssignableUser(before.assignedToId, "salesperson");
+    if (!owner) refuse("Assign a responsible salesperson in the nurture details first.");
+    const target = await validateOpenStage(String(form.get("stageId") ?? ""));
+    if (!(await listActiveSalesPipelines()).some((p) => p.id === target.pipelineId)) refuse("Choose a stage in an active pipeline.");
+    const scope = await getLeadPipeline(leadId);
+    if (!scope) refuse("Lead not found.");
+    if (scope.pipelineId !== target.pipelineId && !(await hasPermission(user, "leads.change_pipeline"))) refuse("You cannot move leads between pipelines.");
+    const gate = await gateStageMove({ leadId, user, currentScope: scope, targetStage: target });
+    if ("error" in gate) refuse(gate.error);
+    // No silent override. Choose an eligible stage, or complete the missing requirements first.
+    if (!gate.verdict.allowed || gate.verdict.requiresReason || gate.remedy) refuse(refusalSentence(gate.verdict, target.name));
+    const position = await nextPosition(target.id);
+    await prisma.$transaction(async (tx) => {
+      const changed = await tx.lead.updateMany({
+        where: { id: leadId, tenantId, status: "nurture", deletedAt: null, updatedAt: before.updatedAt },
+        data: { ...clearedNurture, status: "open", stageId: target.id, stageEnteredAt: new Date(), position },
+      });
+      if (changed.count !== 1) refuse("This lead changed. Refresh before reactivating it.");
+      if (before.nurtureActivityId) await tx.activity.updateMany({
+        where: { id: before.nurtureActivityId, tenantId, leadId, status: "planned" }, data: { status: "cancelled" },
+      });
+      await tx.activity.create({ data: { tenantId, leadId, type: "todo", summary, dueDate, assignedToId: owner.id, createdById: user.id } });
+      await logAuditStrict({
+        action: "lead.reactivated", summary: `Reactivated “${before.title}” in ${target.name} — ${summary}`,
+        leadId, contactId: before.contactId, user,
+        before: { status: "nurture", stageId: before.stageId, interest: before.nurtureInterest, trigger: before.nurtureTrigger },
+        after: { status: "open", stageId: target.id, summary, dueDate },
+        metadata: { stageWarnings: gate.verdict.unmet.map(describeUnmet) },
+      }, tx);
+    }, GOVERNANCE_TX);
+    for (const path of ["/leads", "/leads/nurture", "/leads/list", "/forecast", "/", `/leads/${leadId}`]) revalidatePath(path);
+    return { success: "Lead reactivated with its next action scheduled.", redirectTo: `/leads?pipeline=${encodeURIComponent(target.pipelineId)}` };
   });
 }
 

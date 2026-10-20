@@ -10,6 +10,8 @@ import {
   updateLead,
 } from "@/app/actions/leads";
 import LeadForm from "@/components/LeadForm";
+import NurtureForm from "@/components/NurtureForm";
+import { nurtureReasonLabel } from "@/lib/leadNurture";
 import { createQuoteFromLead } from "@/app/actions/quotes";
 import CustomerComposer from "@/components/CustomerComposer";
 import CustomerLogForm from "@/components/CustomerLogForm";
@@ -209,6 +211,7 @@ export default async function LeadDetailPage({
     // What sendEmailAction and addCommunication require, and what sendWhatsAppMessage requires.
     hasAnyPermission(user, ...CUSTOMER_RECORD_WRITE_PERMISSIONS), hasPermission(user, "inbox.reply"),
   ]);
+  const [canChangeStage, canAssign] = await Promise.all([hasPermission(user, "leads.change_stage"), hasPermission(user, "leads.assign")]);
   const context = <LeadWorkspaceContext
     nextActivity={nextActivity} canSchedule={canBookTestDrive}
     customer={{ name: readableContact ? contactName(readableContact) : lead.name, href: readableContact ? `/contacts/${readableContact.id}` : undefined }}
@@ -263,7 +266,9 @@ export default async function LeadDetailPage({
           )}
           <Popover><PopoverTrigger asChild><button type="button" className="btn-secondary" aria-label="More deal actions"><MoreHorizontal className="size-4" />More</button></PopoverTrigger><PopoverContent align="end" className="flex w-56 flex-col gap-2 p-2">
             <TabLink tab="details" className="btn-secondary">View deal details</TabLink>
-            {lead.status === "open" && canMarkLost && (
+            {lead.status === "open" && canChangeStage && canBookTestDrive && <ModalTrigger label="Move to nurture" title={`Future interest · ${lead.name}`} buttonClass="btn-secondary"><NurtureForm leadId={lead.id} users={users.map((u) => ({ id: u.id, name: u.name }))} ownerId={lead.assignedToId} canAssign={canAssign} /></ModalTrigger>}
+            {lead.status === "nurture" && <Link href="/leads/nurture" className="btn-secondary">Review / reactivate</Link>}
+            {["open", "nurture"].includes(lead.status) && canMarkLost && (
               <ModalTrigger
                 label="Mark lost"
                 title={`Why was “${lead.title}” lost?`}
@@ -284,7 +289,7 @@ export default async function LeadDetailPage({
                 </SaveForm>
               </ModalTrigger>
             )}
-          {lead.status !== "open" && canReopen && (
+          {["won", "lost"].includes(lead.status) && canReopen && (
             <SaveForm success="Lead reopened" resetOnSuccess={false} action={reopenLead.bind(null, lead.id)}>
               <SaveButton className="btn-secondary">Reopen</SaveButton>
             </SaveForm>
@@ -320,6 +325,12 @@ export default async function LeadDetailPage({
         </>}
       >
 
+      {lead.status === "nurture" && <div className="rounded-xl border border-emerald-500/25 bg-emerald-500/5 p-4 text-sm">
+        <p className="font-semibold">In nurture · {lead.nurtureInterest}</p>
+        <p className="mt-1 text-muted-foreground">{nurtureReasonLabel(lead.nurtureReason)} · Review {formatDate(lead.nurtureReviewAt)}</p>
+        <p className="mt-2">{lead.nurtureTrigger}</p>
+        <Link href="/leads/nurture" className="mt-2 inline-block text-primary hover:underline">Review or reactivate this opportunity →</Link>
+      </div>}
       {automotiveOn && lead.status === "won" && (
         <div className="card bg-emerald-500/10 border-emerald-500/30 flex items-center justify-between gap-4 flex-wrap">
           <p className="text-sm text-emerald-300">

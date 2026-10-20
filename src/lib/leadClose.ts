@@ -1,4 +1,5 @@
 import { prisma } from "@/lib/db";
+import type { Prisma } from "@prisma/client";
 
 /**
  * Cancel the planned work on a lead that has just been closed.
@@ -25,9 +26,13 @@ import { prisma } from "@/lib/db";
  * than tidy up dead ones. If won should sweep too, that is a product decision,
  * not a symmetry to assume.
  */
-export async function cancelPlannedActivitiesForLostLead(leadId: string): Promise<number> {
-  const { count } = await prisma.activity.updateMany({
-    where: { leadId, status: "planned" },
+export async function cancelPlannedActivitiesForLostLead(
+  leadId: string,
+  client: { activity: { updateMany(args: { where: Prisma.ActivityWhereInput; data: Prisma.ActivityUpdateManyMutationInput }): PromiseLike<{ count: number }> } } = prisma,
+  tenantId?: string | null,
+): Promise<number> {
+  const { count } = await client.activity.updateMany({
+    where: { leadId, status: "planned", ...(tenantId !== undefined ? { tenantId } : {}) },
     data: { status: "cancelled" },
   });
   return count;
