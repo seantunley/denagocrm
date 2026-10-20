@@ -16,6 +16,20 @@ export const INTERNAL_COMMUNICATION_TYPES = ["note"] as const;
 /** Completed activities that aren't contact with the customer. */
 export const NON_CONTACT_ACTIVITY_TYPES = ["todo"] as const;
 
+/**
+ * "What was this?" on the note box (Sean, 2026-10-18): a note that records a call, a WhatsApp or a visit IS contact,
+ * so it is saved as that type and counts; "Internal note" stays a note and doesn't. The default is the note.
+ */
+export const NOTE_KINDS = [
+  { value: "note", label: "Internal note (not contact)" },
+  { value: "call", label: "Phone call" },
+  { value: "whatsapp", label: "WhatsApp" },
+  { value: "meeting", label: "In person" },
+] as const;
+
+/** Every type a person may LOG by hand — the note box and "Log a call" together. Anything else is refused. */
+export const LOGGABLE_COMMUNICATION_TYPES = ["note", "call", "email", "whatsapp", "meeting"] as const;
+
 /** Prisma filter: communications that are real contact. */
 export const contactCommunicationWhere = { type: { notIn: [...INTERNAL_COMMUNICATION_TYPES] } };
 
