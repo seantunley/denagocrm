@@ -18,7 +18,7 @@ import { formatDateTime } from "@/lib/format";
 import { runSpeed } from "@/lib/assistantRun";
 import { unlinkWhatsAppFor } from "@/app/actions/assistantWhatsApp";
 import ConfirmActionDialog from "@/components/ConfirmActionDialog";
-import { ASSISTANT_WHATSAPP_CONFIRM_KEY, ASSISTANT_WHATSAPP_HANDOFF_KEY, ASSISTANT_WHATSAPP_HANDOFF_TO_KEY, ASSISTANT_WHATSAPP_KEY, ASSISTANT_WHATSAPP_TEMPLATE_KEY, handoffRecipient, maskWaId, parseUpdateTemplate, whatsappConfirmOn, whatsappHandoffOn, whatsappSwitchOn } from "@/lib/assistantWhatsAppRules";
+import { ASSISTANT_WHATSAPP_CONFIRM_KEY, ASSISTANT_WHATSAPP_CONTENT_TEMPLATE_KEY, ASSISTANT_WHATSAPP_HANDOFF_KEY, ASSISTANT_WHATSAPP_HANDOFF_TO_KEY, ASSISTANT_WHATSAPP_KEY, ASSISTANT_WHATSAPP_TEMPLATE_KEY, handoffRecipient, maskWaId, parseUpdateTemplate, whatsappConfirmOn, whatsappHandoffOn, whatsappSwitchOn } from "@/lib/assistantWhatsAppRules";
 import { actingOwnerTenantId } from "@/lib/actingScope";
 
 /** Who has a WhatsApp linked — masked — so the owner can see it, even for someone who has since lost access. */
@@ -71,7 +71,7 @@ export default async function AssistantSettingsPage() {
   await requireTenantOwner();
   if (!(await isModuleEnabled("automation"))) notFound();
   const proactiveWorkspace = proactiveOn(await getSetting(ASSISTANT_PROACTIVE_KEY).catch(() => null));
-  const [profile, notes, staff, tidiedAt, tidySummary, whatsappOn, phones, ratings, speed, voiceOn, confirmOn, updateTemplate, handoffOn, handoffTo] = await Promise.all([
+  const [profile, notes, staff, tidiedAt, tidySummary, whatsappOn, phones, ratings, speed, voiceOn, confirmOn, updateTemplate, handoffOn, handoffTo, contentTemplate] = await Promise.all([
     getSetting(ASSISTANT_PROFILE_KEY).then(parseProfile),
     prisma.assistantNote.findMany({ orderBy: [{ status: "desc" }, { createdAt: "desc" }] }),
     listActingTenantStaff(),
@@ -88,6 +88,7 @@ export default async function AssistantSettingsPage() {
     getSetting(ASSISTANT_WHATSAPP_TEMPLATE_KEY).then(parseUpdateTemplate),
     getSetting(ASSISTANT_WHATSAPP_HANDOFF_KEY).then(whatsappHandoffOn),
     getSetting(ASSISTANT_WHATSAPP_HANDOFF_TO_KEY).then(handoffRecipient),
+    getSetting(ASSISTANT_WHATSAPP_CONTENT_TEMPLATE_KEY).then(parseUpdateTemplate),
   ]);
   const rated = (rating: string) => ratings.filter((r) => r.feedback === rating).reduce((n, r) => n + r._count._all, 0);
   const wrongBecause = ratings.filter((r) => r.feedback === "down" && r.feedbackReason);
@@ -333,6 +334,24 @@ export default async function AssistantSettingsPage() {
             <label className="w-28 text-xs text-muted-foreground">
               Language code
               <input name="updateTemplateLanguage" defaultValue={updateTemplate?.language ?? "en"} placeholder="en" className="input mt-1 w-full font-mono" autoComplete="off" />
+            </label>
+          </div>
+          <span className="block pt-2 text-xs text-muted-foreground">
+            <span className="font-medium text-foreground">Content template (recommended).</span> So that a reminder,
+            an alert or a morning brief arrives readable without a tap, create a second template in WhatsApp Manager
+            with one variable for the update itself — category Utility, for example: &ldquo;Update from your CRM
+            assistant: {"{{1}}"} — reply to continue here.&rdquo; Once approved, enter its name here. Outside the 24
+            hours each update then goes inside it (as one paragraph, cut at about 900 characters — the whole of it is
+            always on the Ask page). Until it is approved, or if WhatsApp refuses it, the template above goes instead.
+          </span>
+          <div className="flex flex-wrap gap-3">
+            <label className="min-w-0 flex-1 text-xs text-muted-foreground">
+              Content template name
+              <input name="contentTemplate" defaultValue={contentTemplate?.name ?? ""} placeholder="assistant_update_text" className="input mt-1 w-full font-mono" autoComplete="off" />
+            </label>
+            <label className="w-28 text-xs text-muted-foreground">
+              Language code
+              <input name="contentTemplateLanguage" defaultValue={contentTemplate?.language ?? "en"} placeholder="en" className="input mt-1 w-full font-mono" autoComplete="off" />
             </label>
           </div>
         </div>

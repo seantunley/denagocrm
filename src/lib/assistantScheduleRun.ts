@@ -11,7 +11,7 @@ import { sendPushToAll } from "./push";
 import { getSetting } from "./settings";
 import { ASSISTANT_PROFILE_KEY, parseProfile } from "./assistantSoul";
 import type { CronSliceContext } from "./tenantCron";
-import { PROACTIVE_SOURCES } from "./assistantWhatsAppRules";
+import { PROACTIVE_SOURCES, isReminder } from "./assistantWhatsAppRules";
 import { switchedOn } from "./proactive";
 import { FOLLOW_UP_SOURCE } from "./proactiveRules";
 
@@ -193,10 +193,17 @@ export async function runDueAssistantSchedules(budget: CronSliceContext): Promis
     // nothing could be saved (it would open onto an empty thread).
     if (delivered) {
       const name = parseProfile(await getSetting(ASSISTANT_PROFILE_KEY).catch(() => null)).name;
+      const reminder = isReminder(schedule.question);
       await sendPushToAll(
         {
           title: name,
-          body: briefing ? (daxSet ? "I checked back on something for you." : "Your scheduled briefing is ready.") : "A scheduled question couldn't run — open to see why.",
+          // A reminder says it IS one (Sean, 2026-10-20: Donovan's reminder read "Your scheduled briefing is ready"
+          // and went unread) — but, like every push here, names nothing: a lock screen is not private.
+          body: !briefing
+            ? "A scheduled question couldn't run — open to see why."
+            : daxSet ? "I checked back on something for you."
+            : reminder ? "⏰ You have a reminder — tap to read it."
+            : "Your scheduled briefing is ready.",
           url: "/assistant",
         },
         "assistant",
