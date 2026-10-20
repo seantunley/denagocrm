@@ -1231,6 +1231,10 @@ model AssistantPhoneLink {
   /// When the template last FAILED to go for a passing reason (WhatsApp could not
   /// be reached). It is tried again, but not before a pause.
   nudgeFailedAt DateTime?
+  /// When Meta last REFUSED the content template (the one that carries the update
+  /// itself — not approved yet, wrong name). It is not tried again for a day; the
+  /// nudge goes instead. A passing failure (WhatsApp unreachable) does not set it.
+  contentTemplateRefusedAt DateTime?
   /// When this phone last wrote to the business number as verified staff. WhatsApp
   /// accepts a free message only within 24 hours of it — and usually ACCEPTS a
   /// late one and fails it afterwards, so the answer is not asked of Meta.

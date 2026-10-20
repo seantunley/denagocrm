@@ -342,6 +342,31 @@ export function parseUpdateTemplate(raw: string | null | undefined): { name: str
 export const formatUpdateTemplate = (name: string, language: string) => `${name.trim()}|${language.trim() || "en"}`;
 
 /**
+ * The owner's second template (Sean, 2026-10-20 — Donovan's reminder ran on time but sat behind "your update is
+ * ready, tap to read it", and was never read): one with a slot ({{1}}) for the update ITSELF. With it set, outside
+ * the 24 hours each reminder, alert and brief arrives readable, no tap needed; without it, the nudge above as before.
+ * Same shape as the nudge's setting ("name|language").
+ */
+export const ASSISTANT_WHATSAPP_CONTENT_TEMPLATE_KEY = "ASSISTANT_WHATSAPP_CONTENT_TEMPLATE";
+/** Room for the update inside the template: Meta allows 1,024 characters of body, less the template's own words. */
+export const CONTENT_TEMPLATE_CHARS = 900;
+export const CONTENT_TEMPLATE_MORE = "… (the rest is on your Ask page)";
+/**
+ * An update as a template's {{1}}. Meta refuses a parameter with a line break, a tab or more than four spaces in a
+ * row, so lines are joined with " · "; and it is cut, on a word, to fit.
+ */
+export function templateParam(text: string, max = CONTENT_TEMPLATE_CHARS): string {
+  const flat = text
+    .split(/\n+/)
+    .map((line) => line.replace(/\s+/g, " ").trim())
+    .filter(Boolean)
+    .join(" · ");
+  if (flat.length <= max) return flat;
+  const room = flat.slice(0, max - CONTENT_TEMPLATE_MORE.length);
+  return `${room.slice(0, room.lastIndexOf(" ") > 0 ? room.lastIndexOf(" ") : room.length).replace(/[\s·,;:]+$/, "")}${CONTENT_TEMPLATE_MORE}`;
+}
+
+/**
  * May a free message be sent now? Only within 24 hours of the person's last
  * message — less a margin, so one sent at 23:59 is not failed at 24:01. WE keep
  * that time: Meta usually accepts a late message and fails it afterwards, by
@@ -356,12 +381,25 @@ export const outsideReplyWindow = (error: string | null | undefined): boolean =>
 
 /** An update as it is sent: what it is, then all of it. */
 export function updateText(turn: { source: string; question: string; answer: string }): string {
+  // A customer alert (proactive DAX) is its own words — its "question" is only a label.
+  if (turn.source === "proactive") return turn.answer.trim();
   const heading =
     turn.source === "watch" ? `👀 You asked me to watch: ${turn.question.trim()}`
     : turn.source === "handoff" ? `🙋 ${turn.question.trim()}`
     : turn.source === QUOTE_PDF_SOURCE ? `🧾 ${turn.question.trim()}`
+    : turn.source === "brief" ? "☀️ Your morning brief"
+    : turn.source === "followup" ? `🔁 Checking back: ${turn.question.trim()}`
+    : isReminder(turn.question) ? `⏰ Reminder: ${reminderWords(turn.question)}`
     : `⏰ Scheduled: ${turn.question.trim()}`;
   return `${heading}\n\n${turn.answer.trim()}`;
+}
+
+/** A scheduled question that is really a reminder: "Remind me to …" — the person's own words. */
+export const isReminder = (question: string) => /^\s*(please\s+)?remind\s+me\b/i.test(question);
+/** "Remind me to call Anna about the Rover" → "Call Anna about the Rover". */
+export function reminderWords(question: string): string {
+  const rest = question.trim().replace(/^(please\s+)?remind\s+me\s+(to\s+|about\s+|that\s+)?/i, "").trim();
+  return rest ? rest.charAt(0).toUpperCase() + rest.slice(1) : question.trim();
 }
 
 /** A linked number as it is shown back: the last three digits only. */

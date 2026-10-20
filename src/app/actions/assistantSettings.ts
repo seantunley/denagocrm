@@ -20,7 +20,7 @@ import { ASSISTANT_PROACTIVE_KEY, BRIEF_DEFAULT, BRIEF_TIMES, briefPersonKey, pr
 import { requireAnyPermission } from "@/lib/permissions";
 import { ASSISTANT_PERMISSIONS } from "@/lib/assistantUser";
 import { saveAssistantWhatsApp } from "@/app/actions/assistantWhatsApp";
-import { ASSISTANT_WHATSAPP_CONFIRM_KEY, ASSISTANT_WHATSAPP_HANDOFF_KEY, ASSISTANT_WHATSAPP_HANDOFF_TO_KEY, ASSISTANT_WHATSAPP_TEMPLATE_KEY, formatUpdateTemplate, handoffRecipient, parseUpdateTemplate, whatsappConfirmOn, whatsappHandoffOn } from "@/lib/assistantWhatsAppRules";
+import { ASSISTANT_WHATSAPP_CONFIRM_KEY, ASSISTANT_WHATSAPP_CONTENT_TEMPLATE_KEY, ASSISTANT_WHATSAPP_HANDOFF_KEY, ASSISTANT_WHATSAPP_HANDOFF_TO_KEY, ASSISTANT_WHATSAPP_TEMPLATE_KEY, formatUpdateTemplate, handoffRecipient, parseUpdateTemplate, whatsappConfirmOn, whatsappHandoffOn } from "@/lib/assistantWhatsAppRules";
 
 /**
  * The workspace's assistant: its name, tone, workspace instructions and soul.
@@ -81,7 +81,13 @@ async function checkWhatsAppCard(formData: FormData) {
   if (templateName && !template) {
     refuse("The template name must be exactly as it is in WhatsApp Manager: lower-case letters, numbers and underscores only. Nothing was changed.");
   }
-  return { wanted, template };
+  // The second template: the one that carries the update itself in {{1}}.
+  const contentName = String(formData.get("contentTemplate") ?? "").trim();
+  const contentTemplate = contentName ? parseUpdateTemplate(formatUpdateTemplate(contentName, String(formData.get("contentTemplateLanguage") ?? ""))) : null;
+  if (contentName && !contentTemplate) {
+    refuse("The content template's name must be exactly as it is in WhatsApp Manager: lower-case letters, numbers and underscores only. Nothing was changed.");
+  }
+  return { wanted, template, contentTemplate };
 }
 
 /**
@@ -112,7 +118,7 @@ export async function saveAssistantWhatsAppCard(formData: FormData) {
     withActingStaffScope(async () => {
       const user = await requireTenantOwner();
       // Checked again here, at the moment of saving: the same answers, re-read.
-      const { wanted, template } = await checkWhatsAppCard(formData);
+      const { wanted, template, contentTemplate } = await checkWhatsAppCard(formData);
 
       const on =formData.get("voiceReplies") === "on";
       if (on !== voiceRepliesSwitchOn(await getSetting(ASSISTANT_VOICE_REPLIES_KEY))) {
@@ -175,6 +181,19 @@ export async function saveAssistantWhatsAppCard(formData: FormData) {
           summary: template
             ? `Set the WhatsApp template the assistant uses to say an update is waiting: ${template.name} (${template.language})`
             : "Removed the WhatsApp template the assistant uses to say an update is waiting",
+          user,
+        });
+        revalidatePath("/settings/assistant");
+      }
+      // The content template (validated above): carries the update itself outside the 24 hours.
+      const storedContent = contentTemplate ? formatUpdateTemplate(contentTemplate.name, contentTemplate.language) : "";
+      if (storedContent !== ((await getSetting(ASSISTANT_WHATSAPP_CONTENT_TEMPLATE_KEY)) ?? "")) {
+        await putSetting(ASSISTANT_WHATSAPP_CONTENT_TEMPLATE_KEY, storedContent);
+        await logAudit({
+          action: contentTemplate ? "assistant.whatsapp_content_template_set" : "assistant.whatsapp_content_template_cleared",
+          summary: contentTemplate
+            ? `Set the WhatsApp template that carries the assistant's updates themselves: ${contentTemplate.name} (${contentTemplate.language})`
+            : "Removed the WhatsApp template that carries the assistant's updates themselves",
           user,
         });
         revalidatePath("/settings/assistant");
