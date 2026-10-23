@@ -42,6 +42,7 @@ import { researchGate } from "./assistantResearchGate";
 import { matchDecisions, parseDecision } from "./assistantDecisions";
 import { CITE_RULE, REPLY_FORMAT, STATE_INSTRUCTIONS, citableLinks, resolveCitations, splitReply, type Evidence } from "./assistantReply";
 import { unsupportedFigures, unsupportedNote } from "./assistantVerify";
+import { closestColour, nameIsClose, nameStems } from "./nearMatch";
 import { salesStats } from "./crmAssistantStats";
 import { briefForAssistant, loadDaxBrief } from "./daxBrief";
 import { breakerOpen, withRetry } from "./assistantBreaker";
@@ -614,6 +615,45 @@ export async function customersNamed(user: User, needle: string, ownId?: string 
 }
 
 /**
+ * Deals and customers this person may see whose name is a close spelling of `needle` (nearMatch.ts): looked up by
+ * the first three letters of each word, then kept only if the whole name is near. Ids are given so DAX can use one
+ * once the person confirms it.
+ */
+async function nearlyNamed(user: User, needle: string, visibleLeads: { id?: { in: string[] } }) {
+  const stems = nameStems(needle);
+  if (!stems.length) return [];
+  const contactIds = await getAccessibleContactIds(user);
+  const [leads, contacts] = await Promise.all([
+    prisma.lead.findMany({
+      where: { deletedAt: null, ...visibleLeads, OR: stems.flatMap((stem) => [{ name: fuzzy(stem) }, { title: fuzzy(stem) }]) },
+      orderBy: { updatedAt: "desc" },
+      take: 50,
+      select: { id: true, name: true, title: true, status: true },
+    }),
+    contactIds !== null && contactIds.length === 0
+      ? Promise.resolve([])
+      : prisma.contact.findMany({
+          where: {
+            deletedAt: null,
+            ...(contactIds === null ? {} : { id: { in: contactIds } }),
+            OR: stems.flatMap((stem) => [{ firstName: fuzzy(stem) }, { lastName: fuzzy(stem) }, { company: fuzzy(stem) }]),
+          },
+          orderBy: { updatedAt: "desc" },
+          take: 50,
+          select: { id: true, firstName: true, lastName: true, company: true },
+        }),
+  ]);
+  const deals = leads
+    .filter((l) => nameIsClose(needle, l.name) || nameIsClose(needle, l.title))
+    .map((l) => ({ kind: "deal" as const, leadId: l.id, name: l.name, status: l.status }));
+  const people = contacts
+    .map((c) => ({ c, name: [c.firstName, c.lastName].filter(Boolean).join(" ") || c.company || "" }))
+    .filter(({ c, name }) => nameIsClose(needle, name) || (c.company ? nameIsClose(needle, c.company) : false))
+    .map(({ c, name }) => ({ kind: "customer" as const, contactId: c.id, name }));
+  return [...deals, ...people].slice(0, 5);
+}
+
+/**
  * One lead in depth — what a colleague would read before saying "here's what
  * I'd do": the deal, every recent message both ways, its quotes (opened?
  * signed?), its activities and any research. Phone numbers and emails are left
@@ -665,7 +705,22 @@ export async function leadBrief(user: User, raw: z.infer<typeof leadBriefArgs>):
     // someone whose lead was deleted, the owner's own test record). Saying only
     // "no lead matches" read as "no such person", and left nothing to hang a note on.
     const customers = await customersFor();
-    if (customers.length === 0) return { truncated: false, rows: [], data: [{ note: `No lead or customer you can see matches "${needle}".` }] };
+    if (customers.length === 0) {
+      // NOTHING by that exact name — but maybe by a close spelling (Sean, 2026-10-23: a voice note's "Werner
+      // Killian" was the CRM's "Werner Kilian", and DAX said there was no such customer). Offered as a question.
+      const close = looksLikeId ? [] : await nearlyNamed(user, needle, visible);
+      if (close.length) {
+        return {
+          truncated: false,
+          rows: [],
+          data: [{
+            note: `Nothing is named exactly "${needle}", but ${close.length === 1 ? "this is" : "these are"} close — most likely the same person, misspelt (a voice note often is). Do NOT say there is no such customer, and do not act on the guess: ask "Did you mean ${close[0].name}?" (offer it as a choice). Once they say yes, use lead_brief with its id.`,
+            closeMatches: close,
+          }],
+        };
+      }
+      return { truncated: false, rows: [], data: [{ note: `No lead or customer you can see matches "${needle}".` }] };
+    }
     return customersOnly(customers, `No lead you can see matches "${needle}".`);
   }
   // Several match ("Lisa"): read the likeliest — an open lead, the most recently
@@ -2422,7 +2477,12 @@ async function resolveActions(
         // A colour the PRODUCT comes in, spelled as the catalogue spells it — anything else is no change at all.
         const colours = line.product?.colors.map((colour) => colour.name) ?? [];
         const offered = wanted.colour ? colours.find((colour) => colour.toLowerCase() === wanted.colour!.toLowerCase()) : undefined;
-        if (wanted.colour && !offered) { problem = `"${wanted.colour}" is not a colour the ${line.description} comes in${colours.length ? ` (${colours.join(", ")})` : ""}.`; break; }
+        if (wanted.colour && !offered) {
+          // The nearest it DOES come in, as a question ("Dove gray" → Gray?) — not a dead end (Sean, 2026-10-23).
+          const near = closestColour(wanted.colour, colours);
+          problem = `"${wanted.colour}" is not a colour the ${line.description} comes in${colours.length ? ` (${colours.join(", ")})` : ""}.${near ? ` Did you mean ${near}?` : ""}`;
+          break;
+        }
         const colour = offered && offered !== was.colour ? offered : undefined;
         if (wanted.remove) changes.push({ row: "line", id: line.id, was, remove: true });
         else if (qty !== undefined || discountPct !== undefined || colour !== undefined) {
