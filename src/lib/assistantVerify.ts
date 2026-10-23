@@ -32,10 +32,40 @@ function readNumber(text: string): { value: number; unit: number } | null {
   return { value, unit: decimal ? 10 ** -decimal[1].length : 1 };
 }
 
-/** Every number in the results — values, numbers inside formatted strings, and each list's column totals. */
+const UNITS: Record<string, number> = {
+  zero: 0, one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10, eleven: 11, twelve: 12,
+  thirteen: 13, fourteen: 14, fifteen: 15, sixteen: 16, seventeen: 17, eighteen: 18, nineteen: 19,
+  twenty: 20, thirty: 30, forty: 40, fifty: 50, sixty: 60, seventy: 70, eighty: 80, ninety: 90,
+};
+const WORD_SCALES: Record<string, number> = { thousand: 1e3, million: 1e6, billion: 1e9 };
+/**
+ * Amounts written in WORDS — "six thousand five hundred rand" is R6 500 (Sean, 2026-10-23: a voice note gave the
+ * Hermanus fee that way, and DAX flagged the very number he had said). Each run of number words is one amount;
+ * "and" and hyphens may sit inside a run ("two hundred and thirty-five thousand").
+ */
+export function wordAmounts(text: string): number[] {
+  const out: number[] = [];
+  let total = 0, current = 0, inRun = false;
+  const finish = () => { if (inRun) out.push(total + current); total = 0; current = 0; inRun = false; };
+  for (const raw of text.toLowerCase().split(/[\s,-]+/)) {
+    const word = raw.replace(/[^a-z]/g, "");
+    if (word in UNITS) { current += UNITS[word]; inRun = true; }
+    else if (word === "hundred" && inRun) current *= 100;
+    else if (word in WORD_SCALES && inRun) { total += (current || 1) * WORD_SCALES[word]; current = 0; }
+    else if (word === "and" && inRun) continue;
+    else finish();
+  }
+  finish();
+  return out;
+}
+
+/** Every number in the results — values, numbers inside formatted strings (in digits or in words), and each list's column totals. */
 function knownNumbers(data: unknown, into: number[] = []): number[] {
   if (typeof data === "number") into.push(data);
-  else if (typeof data === "string") for (const m of data.match(NUMBER) ?? []) { const n = readNumber(m); if (n) into.push(n.value); }
+  else if (typeof data === "string") {
+    for (const m of data.match(NUMBER) ?? []) { const n = readNumber(m); if (n) into.push(n.value); }
+    into.push(...wordAmounts(data));
+  }
   else if (Array.isArray(data)) {
     data.forEach((item) => knownNumbers(item, into));
     // "Your three open quotes come to R 412 000": a sum of one field across a list.

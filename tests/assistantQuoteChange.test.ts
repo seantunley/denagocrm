@@ -91,7 +91,8 @@ test("a card only for a draft they may edit and open, for rows that are on it, w
   assert.match(branch, /if \(problem\) \{ problems\.push\(problem\); continue; \}/);
   assert.ok(branch.indexOf("if (problem) { problems.push(problem); continue; }") < branch.indexOf("cards.push({"));
   assert.match(branch, /colours\.find\(\(colour\) => colour\.toLowerCase\(\) === wanted\.colour!\.toLowerCase\(\)\)/);
-  assert.match(branch, /if \(wanted\.colour && !offered\) \{ problem = `"\$\{wanted\.colour\}" is not a colour the \$\{line\.description\} comes in/);
+  // …with the nearest it does come in, as a question (2026-10-23).
+  assert.match(branch, /if \(wanted\.colour && !offered\) \{\s*(\/\/[^\n]*\s*)*const near = closestColour\(wanted\.colour, colours\);\s*problem = `"\$\{wanted\.colour\}" is not a colour the \$\{line\.description\} comes in/);
   // ALREADY AS ASKED is said, not dropped (2026-10-13: "change the Rover to White" — it already was).
   assert.match(branch, /problem = `On \$\{ref\} the \$\{line\.description\} is already /);
   assert.match(branch, /problem = `On \$\{ref\} the fee "\$\{fee\.label\}" \(\$\{formatZAR\(fee\.amountCents\)\}\) is already as you asked/);
