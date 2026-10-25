@@ -111,6 +111,12 @@ export const proposedAction = z.discriminatedUnion("type", [
         colour: text.max(60).optional(),
       }).strict(),
     ).min(1).max(QUOTE_BUILD_MAX_LINES),
+    // A fee said with the request ("delivery to Hermanus, R6 500") goes on the SAME draft — one Confirm, not a
+    // second quote_add that needs the number of a quote not created yet (Sean, 2026-10-24). The amount is the
+    // person's, as on quote_add; the card shows it before anything is saved.
+    fees: z.array(
+      z.object({ label: text.max(120), amount: z.number().positive().max(QUOTE_ADD_MAX_FEE_RANDS), delivery: z.boolean().optional() }).strict(),
+    ).max(QUOTE_ADD_MAX_FEES).optional(),
     reason,
   }).strict(),
   // ADD to a quote that is still a DRAFT (Sean, 2026-10-12: "Please add R5000
@@ -196,7 +202,9 @@ export const QUOTE_BUILD_RULE =
   "Products come ONLY from the catalogue. ALWAYS look the catalogue up with knowledge BEFORE you answer anything about a quote — never say you cannot verify a product without having looked. Name each line's product by its productId from those results (or, failing that, \"product\" with its name exactly as the catalogue lists it). If what they named is not in the catalogue, say so and list what is. " +
   "A COLOUR the product does not come in is not a dead end: ask with the nearest one it does (\"Dove gray\" → \"It comes in Gray — is that the one?\"), and carry on with everything else meanwhile. " +
   "A CUSTOMER NOT FOUND by the exact name may be a misspelling (a voice note often is): when lead_brief gives closeMatches, ask \"Did you mean …?\" — never say there is no such customer. " +
-  "The price is always the catalogue's: never put a price in the task, and if they want a different price, a once-off product line or a deposit, tell them that part is done on the quote in the CRM after it is created. A fee (delivery, licensing, admin) is added afterwards with quote_add. " +
+  "The price is always the catalogue's: never put a price in the task, and if they want a different price, a once-off product line or a deposit, tell them that part is done on the quote in the CRM after it is created. A FEE SAID WITH THE REQUEST (delivery, licensing, admin — \"delivery to Hermanus is R6 500\") goes IN the same quote_build as \"fees\" ([{\"label\":\"Delivery — Hermanus\",\"amount\":6500,\"delivery\":true}]), so ONE Confirm makes the whole quote; quote_add is only for a fee added to a draft that already exists. " +
+  "A DEAL WITH NO CUSTOMER RECORD can still be quoted: give its leadId — Confirm creates the customer from the deal first, and the card says so. " +
+  "When the person has said yes to everything you asked, PROPOSE the quote_build in that same answer — do not ask them to confirm in words again; the Confirm button is the confirmation. " +
   `At most ${QUOTE_BUILD_MAX_LINES} lines. One quote per task. ` +
   "Confirming creates a DRAFT quote for that customer (on the deal, when one was named); the PDF comes back to THEM on their linked WhatsApp. " +
   "THE PDF IS DELIVERED FOR YOU, as its own document message, moments after they press Confirm, and again after a quote_add — you do not attach it yourself. So never say a PDF cannot be sent or attached on WhatsApp. If they ask where it is: it follows the confirmation, it is retried automatically for a day if WhatsApp was unavailable, and the quote is in the CRM meanwhile. To send one again, or the PDF of any quote they can open, propose quote_pdf. " +
@@ -248,7 +256,7 @@ export const CHECK_BACK_RULE = [
 export const ACTION_INSTRUCTIONS = [
   "TASKS. You can't change anything yourself, but you can PROPOSE up to 4 tasks for the person to confirm with one click. Propose when they ask you to do something (\"remind me…\", \"give it to Donovan\", \"draft a message…\", \"book Anna a test drive\"), or offer one when you recommend a concrete next step.",
   'Put them under "actions" in the reply block:',
-  '"actions":[{"type":"follow_up","leadId":"<id>","when":"YYYY-MM-DDTHH:MM","activity":"call|whatsapp|email|meeting|todo","summary":"...","reason":"why this helps"},{"type":"note","leadId":"<id>","text":"...","pin":false},{"type":"customer_note","contactId":"<id>","text":"...","pin":false},{"type":"assign","leadId":"<id>","to":"<person>"},{"type":"stage","leadId":"<id>","stage":"<stage>"},{"type":"draft_message","leadId":"<id>","channel":"whatsapp|email","subject":"<email only>","body":"..."},{"type":"meeting","leadId":"<id>","when":"YYYY-MM-DDTHH:MM","minutes":60,"with":["<colleague>"],"summary":"..."},{"type":"test_drive","leadId":"<id>","when":"YYYY-MM-DDTHH:MM","minutes":60,"vehicle":"<demo vehicle name>"},{"type":"reschedule","activityId":"<id>","when":"YYYY-MM-DDTHH:MM"},{"type":"cancel_activity","activityId":"<id>"},{"type":"lost","leadId":"<id>","reason":"..."},{"type":"quote","leadId":"<id>"},{"type":"quote_build","contactId":"<the contactId of a CUSTOMER — a quote for the customer, on no deal>","lines":[{"productId":"<id>","qty":1,"discountPct":0,"colour":"<optional>"}]},{"type":"quote_build","leadId":"<the leadId of a DEAL — a quote for that deal; give no contactId>","lines":[{"productId":"<id>","qty":1}]},{"type":"quote_add","quote":"Q-1030","fees":[{"label":"Delivery fee","amount":5000,"delivery":true}],"lines":[{"productId":"<id>","qty":1}]},{"type":"quote_change","quote":"Q-1030","fees":[{"fee":"Delivery Fee","label":"Delivery Fee - Hermanus"}],"lines":[{"line":"<product on the quote>","qty":3}]},{"type":"quote_pdf","quote":"Q-1030"},{"type":"schedule","question":"...","cadence":"once|daily|weekdays|weekly","weekday":1,"timeOfDay":"HH:MM","onDate":"YYYY-MM-DD"},{"type":"watch","kind":"quote_viewed|quote_unsigned|lead_quiet|test_drive_no_follow_up|delivery_deposit_due","quoteId":"Q-1042","leadId":"<id>","product":"<product>","thresholdHours":48,"thresholdDays":3}]',
+  '"actions":[{"type":"follow_up","leadId":"<id>","when":"YYYY-MM-DDTHH:MM","activity":"call|whatsapp|email|meeting|todo","summary":"...","reason":"why this helps"},{"type":"note","leadId":"<id>","text":"...","pin":false},{"type":"customer_note","contactId":"<id>","text":"...","pin":false},{"type":"assign","leadId":"<id>","to":"<person>"},{"type":"stage","leadId":"<id>","stage":"<stage>"},{"type":"draft_message","leadId":"<id>","channel":"whatsapp|email","subject":"<email only>","body":"..."},{"type":"meeting","leadId":"<id>","when":"YYYY-MM-DDTHH:MM","minutes":60,"with":["<colleague>"],"summary":"..."},{"type":"test_drive","leadId":"<id>","when":"YYYY-MM-DDTHH:MM","minutes":60,"vehicle":"<demo vehicle name>"},{"type":"reschedule","activityId":"<id>","when":"YYYY-MM-DDTHH:MM"},{"type":"cancel_activity","activityId":"<id>"},{"type":"lost","leadId":"<id>","reason":"..."},{"type":"quote","leadId":"<id>"},{"type":"quote_build","contactId":"<the contactId of a CUSTOMER — a quote for the customer, on no deal>","lines":[{"productId":"<id>","qty":1,"discountPct":0,"colour":"<optional>"}]},{"type":"quote_build","leadId":"<the leadId of a DEAL — a quote for that deal; give no contactId>","lines":[{"productId":"<id>","qty":1,"colour":"<as the catalogue lists it>"}],"fees":[{"label":"Delivery — Hermanus","amount":6500,"delivery":true}]},{"type":"quote_add","quote":"Q-1030","fees":[{"label":"Delivery fee","amount":5000,"delivery":true}],"lines":[{"productId":"<id>","qty":1}]},{"type":"quote_change","quote":"Q-1030","fees":[{"fee":"Delivery Fee","label":"Delivery Fee - Hermanus"}],"lines":[{"line":"<product on the quote>","qty":3}]},{"type":"quote_pdf","quote":"Q-1030"},{"type":"schedule","question":"...","cadence":"once|daily|weekdays|weekly","weekday":1,"timeOfDay":"HH:MM","onDate":"YYYY-MM-DD"},{"type":"watch","kind":"quote_viewed|quote_unsigned|lead_quiet|test_drive_no_follow_up|delivery_deposit_due","quoteId":"Q-1042","leadId":"<id>","product":"<product>","thresholdHours":48,"thresholdDays":3}]',
   "- Add a short \"reason\" (under 160 characters) on any proposal when you know why it helps — the card shows it so the person sees the point before confirming. Skip it when the title already says everything.",
   "- watch: when they say \"tell me when / let me know if\" something happens — quote_viewed (quoteId: the customer opens that quote), quote_unsigned (viewed but not signed after thresholdHours; one quoteId or all theirs), lead_quiet (no customer contact for thresholdDays; one leadId, or every open lead for a product), test_drive_no_follow_up (a test drive done thresholdHours ago with nothing planned next), delivery_deposit_due (delivery within thresholdHours and no deposit). Only the fields that kind uses. It only ever tells THEM — it never contacts a customer. Offer one yourself when it would help (\"I can tell you when Anna opens it\").",
   "- schedule: a question for you to answer on your own LATER or REPEATEDLY (\"every Monday at 7 tell me which deals went quiet\", \"Friday at 9, has Anna signed?\"). weekday (0 = Sunday … 6 = Saturday) only with weekly; onDate only with once. Schedules run on the hour or half past, so timeOfDay is always HH:00 or HH:30 — if they ask for 07:10, propose 07:00 and say it runs on the half hour. It runs later with no conversation, so the question must stand alone — name the customer or thing (\"Has Anna Jacobs signed her quote?\"), never \"her\" or \"that deal\". No leadId. A plain reminder to do something with a lead (\"remind me to call Anna Friday\") is a follow_up, not a schedule.",
@@ -440,11 +448,17 @@ export function matchCatalogueProduct<P extends { id: string; name: string }>(
  * deposit are worked out by the quote itself once it exists, and a figure
  * computed here could disagree with the document.
  */
-export function quoteBuildText(lines: readonly QuoteBuildLine[], money: (cents: number) => string): string {
+export function quoteBuildText(
+  lines: readonly QuoteBuildLine[],
+  money: (cents: number) => string,
+  extra: { fees?: readonly QuoteAddFee[]; newCustomer?: string } = {},
+): string {
   return [
     ...lines.map((line) =>
       `${line.qty} × ${line.description}${line.colour ? ` (${line.colour})` : ""} — ${money(line.unitPriceCents)} each${line.discountPct > 0 ? `, less ${line.discountPct}%` : ""}`,
     ),
+    ...(extra.fees ?? []).map((fee) => `${fee.delivery ? "Delivery" : "Fee"}: ${fee.label} — ${money(fee.amountCents)}`),
+    ...(extra.newCustomer ? [`${extra.newCustomer} becomes a customer record too (from the deal's details) — the deal has none yet.`] : []),
     "Catalogue prices. Created as a DRAFT — it is not sent to the customer.",
   ].join("\n");
 }
@@ -528,7 +542,8 @@ export type ActionCard =
   // `lines` carries the catalogue price each was SHOWN at, so a price that changed since is caught at Confirm.
   // leadId null: a quote for the customer directly, on no deal — leadLabel is then the customer's name.
   // `confirmKey`: this card is carried out once, however often Confirm reaches the server (CONFIRM_KEY).
-  | { id: string; kind: "quote_build"; leadId: string | null; leadLabel: string; title: string; reason?: string; contactId: string; lines: QuoteBuildLine[]; text: string; confirmKey: string }
+  // contactId null + createCustomer: the deal has no customer yet — Confirm makes one from its details first.
+  | { id: string; kind: "quote_build"; leadId: string | null; leadLabel: string; title: string; reason?: string; contactId: string | null; createCustomer?: true; lines: QuoteBuildLine[]; fees?: QuoteAddFee[]; text: string; confirmKey: string }
   // An addition to a DRAFT quote: `fees` at the amount the person said, `lines` at the catalogue price each was shown at.
   | { id: string; kind: "quote_add"; leadId: string | null; leadLabel: string; title: string; reason?: string; quoteId: string; quoteNumber: number; contactId: string; lines: QuoteBuildLine[]; fees: QuoteAddFee[]; text: string; confirmKey: string }
   // Changes to rows already on a DRAFT quote, each with the row as it was shown (`was`).

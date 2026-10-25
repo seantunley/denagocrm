@@ -19,13 +19,13 @@ const QUOTE_PDF_SEND_WAIT_MS = 4_000;
 import { prisma } from "@/lib/db";
 import { cancelActivity, rescheduleActivity, scheduleActivity, scheduleFollowUp } from "@/app/actions/activities";
 import { addCommunication } from "@/app/actions/communications";
-import { assignLead, markLost, moveLead } from "@/app/actions/leads";
+import { assignLead, convertLeadToContact, markLost, moveLead } from "@/app/actions/leads";
 import { createQuoteFromLead, saveQuoteDraft } from "@/app/actions/quotes";
 import { createTestDriveBooking } from "@/app/actions/testDrives";
 import { createStaffAvailability } from "@/app/actions/staffAvailability";
 import { sendWhatsAppMessage } from "@/app/actions/whatsapp";
 import { sendEmailAction } from "@/app/actions/emails";
-import { canAccessLead, canAccessQuote, hasPermission } from "@/lib/permissions";
+import { canAccessContact, canAccessLead, canAccessQuote, hasPermission } from "@/lib/permissions";
 import { createWatchForUser } from "@/lib/assistantWatch";
 import { assistantVoiceRepliesOn } from "@/lib/assistantVoice";
 import { ASSISTANT_PERMISSIONS } from "@/lib/assistantUser";
@@ -33,6 +33,7 @@ import { MAX_ACTIVE_SCHEDULES, describeSchedule, nextRun, scheduleInput } from "
 import { markScheduledTurnsSeen, withScheduleSlot } from "@/lib/assistantScheduleRun";
 import { ownedWriteTenantId } from "@/lib/tenantWrite";
 import { logAudit } from "@/lib/audit";
+import { logError } from "@/lib/errorLog";
 import { revalidatePath } from "next/cache";
 
 /**
@@ -278,16 +279,20 @@ export async function runAssistantAction(
         // FOR A CUSTOMER — on one of their deals, or on none. With a deal, it must
         // still be there and still be this customer's. With none, the customer must
         // still be there; saveQuoteDraft then checks this person may quote them.
-        if (card.leadId) {
-          const lead = await prisma.lead.findUnique({ where: { id: card.leadId }, select: { contactId: true } });
-          if (!lead) return untouched("That lead is no longer there.");
-          if (!lead.contactId || lead.contactId !== card.contactId) return untouched(STALE_CARD);
-        } else {
-          const customer = await prisma.contact.findFirst({ where: { id: String(card.contactId ?? ""), deletedAt: null }, select: { id: true } });
-          if (!customer) return untouched("That customer is no longer there.");
-        }
         const lines = Array.isArray(card.lines) ? card.lines : [];
         if (lines.length === 0 || lines.length > QUOTE_BUILD_MAX_LINES) return untouched("That quote isn't valid — ask again.");
+        // Fees said with the request, on the same draft (2026-10-24) — checked as quote_add checks them.
+        const buildFees = Array.isArray(card.fees) ? card.fees : [];
+        if (buildFees.length > QUOTE_ADD_MAX_FEES || buildFees.some((fee) => !Number.isInteger(fee.amountCents) || fee.amountCents <= 0 || fee.amountCents > QUOTE_ADD_MAX_FEE_RANDS * 100 || !String(fee.label ?? "").trim())) {
+          return untouched("That quote isn't valid — ask again.");
+        }
+        // Asked here as a yes/no first: saveQuoteDraft's own check REDIRECTS, which a Confirm tapped on WhatsApp has
+        // nowhere to follow — it showed as "no permission" and the card was spent (quote_add asks the same way).
+        // Before anything is written — a customer record included.
+        if (!(await hasPermission(user, "quotes.create"))) return untouched("Your role can't create quotes.");
+        if (card.contactId && !(await canAccessContact(user, card.contactId))) return untouched("You can't create a quote for this customer — ask whoever looks after them.");
+        // The catalogue as it stands now — checked BEFORE the customer record may be made below, so "nothing was
+        // changed" stays true of every refusal before the save.
         const products = await prisma.product.findMany({
           where: { id: { in: [...new Set(lines.map((line) => String(line.productId)))] }, active: true, deletedAt: null },
           select: { id: true, name: true, basePriceCents: true },
@@ -296,10 +301,40 @@ export async function runAssistantAction(
         if (lines.some((line) => byId.get(line.productId)?.basePriceCents !== line.unitPriceCents)) {
           return untouched("The catalogue changed since DAX suggested this — ask again to see today's prices.");
         }
+        let quoteContactId = card.contactId;
+        let customerFromDeal: string | null = null;
+        if (card.leadId) {
+          const lead = await prisma.lead.findUnique({ where: { id: card.leadId }, select: { contactId: true } });
+          if (!lead) return untouched("That lead is no longer there.");
+          // The card said the deal had no customer and one would be made. Linked meanwhile = that one.
+          if (card.createCustomer && !card.contactId) {
+            if (lead.contactId) quoteContactId = lead.contactId;
+            else customerFromDeal = card.leadId;
+          } else if (!lead.contactId || lead.contactId !== card.contactId) return untouched(STALE_CARD);
+        } else {
+          const customer = await prisma.contact.findFirst({ where: { id: String(card.contactId ?? ""), deletedAt: null }, select: { id: true } });
+          if (!customer) return untouched("That customer is no longer there.");
+        }
+        // EVERY CHECK IS ABOVE: from here on things are written. The customer record first, from the deal's details,
+        // by "Add to contacts" itself (its permission, identity rules and audit). Not "unchanged" if it fails: making
+        // the record writes more than one row, so a failure is reported as it is.
+        if (customerFromDeal) {
+          const made = await convertLeadToContact(customerFromDeal);
+          if (!made.ok || !made.contactId) {
+            // Its refusals are written for people ("Several customers match this email…"); anything else is a
+            // technical error, which is logged by name and never shown on the card.
+            const readable = made.error && /^[^\n]{1,200}$/.test(made.error) && !/prisma|invocation|column|ECONN|timeout/i.test(made.error);
+            if (!readable) await logError("assistant", "making a customer for a quote failed").catch(() => {});
+            return { ok: false, error: readable ? `I couldn't make the customer record: ${made.error}` : "I couldn't make the customer record — add them as a customer on the deal in the CRM, then ask again." };
+          }
+          quoteContactId = made.contactId;
+        }
+        if (!quoteContactId) return { ok: false, error: STALE_CARD };
         const defaults = await quoteFromLeadDefaults();
         const saved = await saveQuoteDraft({
-          contactId: card.contactId,
+          contactId: quoteContactId,
           leadId: card.leadId ?? null,
+          ...(buildFees.length ? { fees: buildFees.map((fee) => ({ label: String(fee.label).trim(), kind: fee.delivery ? "delivery" as const : "fee" as const, amountCents: fee.amountCents })) } : {}),
           validUntil: editorDefaults(defaults).validUntil,
           terms: defaults.terms,
           intent: "draft",
@@ -320,6 +355,8 @@ export async function runAssistantAction(
             };
           }),
         });
+        // A Confirm that reached the server twice: the first made the quote; this one did nothing.
+        if (!saved.ok && saved.repeated) return { ok: true, success: "Already created — nothing was made twice. It has NOT been sent to the customer." };
         // saveQuoteDraft validates before it writes (a colour the product does not come in, say).
         if (!saved.ok) return { ok: false, error: saved.error };
         // On the deal's record when there is one; otherwise on the customer's.
@@ -327,7 +364,7 @@ export async function runAssistantAction(
           action: "assistant.action_confirmed",
           summary: `Confirmed the assistant's proposal: create draft quote Q-${saved.quote.number}`,
           user,
-          ...(card.leadId ? { leadId: card.leadId } : { contactId: card.contactId }),
+          ...(card.leadId ? { leadId: card.leadId } : { contactId: quoteContactId }),
         });
         // THE QUOTE EXISTS. Everything below is about telling the person, and none
         // of it may undo that or report it as failed.

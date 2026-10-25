@@ -36,6 +36,19 @@ export function nameIsClose(asked: string, name: string): boolean {
 /** The first three letters of each word of three or more: what a database search can match a misspelling on. */
 export const nameStems = (asked: string) => [...new Set(nameWords(asked).filter((w) => w.length >= 3).map((w) => w.slice(0, 3)))];
 
+/** British and American spellings of the same colour are the same colour. */
+const sameSpelling = (word: string) => (word === "grey" ? "gray" : word === "colour" ? "color" : word);
+
+/**
+ * The catalogue's own spelling of the colour asked for, when it IS that colour — the same words, case and
+ * grey/gray aside ("grey" → "Gray", "matte black" → "Matte Black"). Null when it is a different colour (even a
+ * near one: "Dove gray" is a question, not an answer — closestColour).
+ */
+export function catalogueColour(asked: string, colours: readonly string[]): string | null {
+  const want = nameWords(asked).map(sameSpelling).join(" ");
+  return want ? colours.find((c) => nameWords(c).map(sameSpelling).join(" ") === want) ?? null : null;
+}
+
 /**
  * The catalogue colour someone most likely meant: one of its words in what they said ("Dove gray" → "Gray"), else a
  * close spelling ("Verdent" → "Verdant"). Null when nothing is near, or when two are equally near.

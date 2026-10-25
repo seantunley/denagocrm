@@ -35,7 +35,8 @@ test("the switch is off unless it says exactly on", () => {
   for (const raw of [null, undefined, "", "off", "true", "ON", "1"]) assert.equal(whatsappConfirmOn(raw), false, String(raw));
   assert.equal(whatsappConfirmOn("on"), true);
   assert.equal(ASSISTANT_WHATSAPP_CONFIRM_KEY, "ASSISTANT_WHATSAPP_CONFIRM");
-  assert.equal(PENDING_ACTION_TTL_MS, 15 * 60 * 1000);
+  // An hour since 2026-10-24 (was 15 minutes: too short between voice notes).
+  assert.equal(PENDING_ACTION_TTL_MS, 60 * 60 * 1000);
 });
 
 test("only internal changes can be confirmed from a phone — nothing that reaches a customer", () => {
@@ -63,7 +64,7 @@ test("a Confirm button names its pending row and nothing else; the prompt says w
   }
   const prompt = confirmMessages({ title: "Add a pinned note to Anna's lead", text: "Wants white.", reason: "She asked twice." })!;
   assert.deepEqual(prompt.before, [], "it all fits the button message");
-  assert.match(prompt.body, /^Add a pinned note to Anna's lead\n\nWants white\.\n\nShe asked twice\.\n\nTap Confirm within 15 minutes/);
+  assert.match(prompt.body, /^Add a pinned note to Anna's lead\n\nWants white\.\n\nShe asked twice\.\n\nTap Confirm within 60 minutes/);
   assert.match(prompt.body, /Nothing changes until you do\./);
   // A scheduled question and a meeting's detail are shown too — they are what is being agreed to.
   assert.match(confirmMessages({ title: "Every Monday at 07:00", question: "Which deals went quiet?" })!.body, /Which deals went quiet\?/);
@@ -86,7 +87,7 @@ test("WHAT CONFIRM WRITES IS EXACTLY WHAT WAS SHOWN: a long note is never cut to
     assert.ok(sent.includes(squash(text)), `${length}: the whole note text was shown`);
     assert.ok(sent.includes(squash("She asked twice.")), `${length}: and the reason`);
     if (messages.before.length) {
-      assert.match(messages.body, /^Add a note to Anna's lead\n\nThe full text is in the message above — read it first\. Tap Confirm within 15 minutes/);
+      assert.match(messages.body, /^Add a note to Anna's lead\n\nThe full text is in the message above — read it first\. Tap Confirm within 60 minutes/);
       assert.ok(!messages.body.includes("Sentence number"), "the button message does not carry a partial copy that could be mistaken for the whole");
     }
   }
@@ -327,7 +328,7 @@ test("a tap runs the task ONCE, as the person it was offered to, and says so", a
 test("nothing runs: switch off, expired, someone else's, another workspace's, an unknown id, a kind that is not confirmable", async () => {
   const cases: [string, () => string, RegExp][] = [
     ["the owner's switch off", () => { state.on = false; return pendingRow().id; }, /switched off for this workspace/],
-    ["expired", () => pendingRow({ expiresAt: new Date(Date.now() - 1000) }).id, /has expired — a task can be confirmed for 15 minutes/],
+    ["expired", () => pendingRow({ expiresAt: new Date(Date.now() - 1000) }).id, /has expired — a task can be confirmed for 60 minutes/],
     // Somebody else's, another workspace's and a made-up id all read the same: nothing is revealed about a task that is not yours.
     ["offered to someone else", () => pendingRow({ userId: "u2" }).id, /^That one can't be confirmed — ask me again/],
     ["another workspace's", () => pendingRow({ tenantId: "t2" }).id, /^That one can't be confirmed — ask me again/],
@@ -430,7 +431,11 @@ test("A PINNED NOTE WHOSE PIN FAILS IS NOT WRITTEN TWICE: the note was saved, so
   // (And five are quote_add's: nothing to add, an invalid fee, quote gone or not theirs, no longer a draft, catalogue changed.)
   // (And two are quote_pdf's: quote gone or not theirs, no linked phone — each before its one write.)
   // (And one more of quote_add's: a card with no confirm key.)
-  assert.equal((run.match(/return untouched\(/g) ?? []).length, 27);
+  // (2026-10-24, three more of quote_build's — invalid fees, no quote permission, a customer they can't open — each
+  // before the customer record or the quote is written: the catalogue check now runs before the record is made.)
+  assert.equal((run.match(/return untouched\(/g) ?? []).length, 30);
+  const buildCase = run.slice(run.indexOf('case "quote_build": {'), run.indexOf('case "quote_pdf": {'));
+  assert.ok(buildCase.indexOf("The catalogue changed since DAX suggested this") < buildCase.indexOf("convertLeadToContact("), "every check before the customer record is made");
   const quotePdfCase = run.slice(run.indexOf('case "quote_pdf": {'), run.indexOf('case "quote_change": {'));
   // (And four are quote_change's: no key, nothing to change, quote gone or not theirs, no longer a draft — each before the save.)
   const quoteChange = run.slice(run.indexOf('case "quote_change": {'), run.indexOf('case "quote_add": {'));
@@ -442,7 +447,10 @@ test("A PINNED NOTE WHOSE PIN FAILS IS NOT WRITTEN TWICE: the note was saved, so
   assert.equal((quoteAdd.slice(0, quoteAdd.indexOf("await saveQuoteDraft(")).match(/return untouched\(/g) ?? []).length, 6);
   assert.equal((quoteAdd.slice(quoteAdd.indexOf("await saveQuoteDraft("), quoteAdd.indexOf("default:")).match(/untouched\(/g) ?? []).length, 0);
   const quoteBuild = run.slice(run.indexOf('case "quote_build": {'), run.indexOf('case "quote_pdf": {'));
-  assert.equal((quoteBuild.slice(0, quoteBuild.indexOf("await saveQuoteDraft(")).match(/return untouched\(/g) ?? []).length, 5);
+  // 2026-10-24: eight — the five above, plus invalid fees, no quote permission and a customer they can't open, all
+  // before the customer record a deal without one gets (convertLeadToContact, a write: nothing after it is "untouched").
+  assert.equal((quoteBuild.slice(0, quoteBuild.indexOf("await saveQuoteDraft(")).match(/return untouched\(/g) ?? []).length, 8);
+  assert.equal((quoteBuild.slice(quoteBuild.indexOf("convertLeadToContact(")).match(/untouched\(/g) ?? []).length, 0);
   assert.equal((quoteBuild.slice(quoteBuild.indexOf("await saveQuoteDraft(")).match(/untouched\(/g) ?? []).length, 0);
   // …and never on an error handed back by the action a card delegates to.
   for (const delegated of run.match(/if \((?:!result\.ok|result\??\.error|!saved(?:\.ok)?)\) (?:\{\s*)?return [^\n]*/g) ?? []) {
@@ -451,7 +459,7 @@ test("A PINNED NOTE WHOSE PIN FAILS IS NOT WRITTEN TWICE: the note was saved, so
   assert.ok((run.match(/if \((?:!result\.ok|result\??\.error)\) return \{ ok: false/g) ?? []).length >= 10, "every delegate's error is returned unproven");
   // Every `untouched` return precedes the call that could write, within its own case.
   for (const block of run.split(/\n      case "/).slice(1)) {
-    const firstWrite = block.search(/await (scheduleFollowUp|addCommunication|assignLead|moveLead|scheduleActivity|createTestDriveBooking|rescheduleActivity|cancelActivity|markLost|createQuoteFromLead|createWatchForUser|withScheduleSlot)\(/);
+    const firstWrite = block.search(/await (scheduleFollowUp|addCommunication|assignLead|moveLead|scheduleActivity|createTestDriveBooking|rescheduleActivity|cancelActivity|markLost|createQuoteFromLead|createWatchForUser|withScheduleSlot|convertLeadToContact)\(/);
     const lastUntouched = block.lastIndexOf("return untouched(");
     if (lastUntouched > -1 && firstWrite > -1) assert.ok(lastUntouched < firstWrite, block.slice(0, 30));
   }
