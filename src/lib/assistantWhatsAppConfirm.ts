@@ -240,9 +240,10 @@ export async function confirmFromWhatsApp(tenantId: string, user: PermissionUser
     // back FROM the action is not that proof: adding a pinned note saves the
     // note, then pins it, and a failed pin returns an error with the note
     // already saved. Releasing on any error let a second tap write it twice.
-    if (result.unchanged === true) {
+    // `resumable` is the other proof: part WAS written (a quote's new customer record) and the retry finds it.
+    if (result.unchanged === true || result.resumable === true) {
       await settle({ confirmedAt: null });
-      return say(waId, `Not done: ${result.error ?? "it couldn't be completed."}\n\nNothing was changed. You can tap Confirm again until it expires.`);
+      return say(waId, `Not done: ${result.error ?? "it couldn't be completed."}\n\n${result.unchanged === true ? "Nothing was changed. " : ""}You can tap Confirm again (or reply yes) until it expires.`);
     }
     await settle({ failedAt: new Date() });
     return say(waId, `That didn't complete: ${result.error ?? "it couldn't be completed."}\n\nPart of it may have been saved, so I won't try it again from here. Check the record in the CRM, then ask me again if it's still needed.`);

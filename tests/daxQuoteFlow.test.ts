@@ -25,8 +25,15 @@ test("the colour as the catalogue spells it: 'grey' is Gray; 'Dove gray' is a qu
   assert.equal(catalogueColour("GRAY", roverXl), "Gray");
   assert.equal(catalogueColour("matte black", roverXl), "Matte Black");
   assert.equal(catalogueColour("Dove gray", roverXl), null);
-  assert.match(build, /const colour = !line\.colour \? undefined : offered\.length \? catalogueColour\(line\.colour, offered\) \?\? undefined : line\.colour;/);
+  assert.match(build, /const colour = line\.colour \? catalogueColour\(line\.colour, offered\) \?\? undefined : undefined;/);
   assert.match(build, /if \(colourProblem\) \{ problems\.push\(colourProblem\); continue; \}/);
+});
+
+test("review of #905: a product with NO colours set — asked, not offered as a card that Confirm would refuse", () => {
+  // No colours: catalogueColour finds nothing, so a colour asked for is a question, never passed through.
+  assert.equal(catalogueColour("grey", []), null);
+  assert.match(build, /if \(line\.colour && !colour\) \{/);
+  assert.match(build, /: `The \$\{product\.name\} has no colours set in the catalogue, so the quote can't say "\$\{line\.colour\}"\. Shall I leave the colour off\?`;/);
 });
 
 test("a quote can carry the fee said with it — one Confirm, not a second quote_add needing a number", () => {
@@ -65,7 +72,7 @@ test("Confirm: checked first (no redirect on a phone), before anything is writte
   assert.match(run, /if \(!\(await hasPermission\(user, "quotes\.create"\)\)\) return untouched\("Your role can't create quotes\."\);/);
   assert.match(run, /if \(card\.contactId && !\(await canAccessContact\(user, card\.contactId\)\)\) return untouched\(/);
   assert.ok(run.indexOf('hasPermission(user, "quotes.create")') < run.indexOf("convertLeadToContact("), "before the customer record is made");
-  assert.match(run, /if \(!saved\.ok && saved\.repeated\) return \{ ok: true, success: "Already created/);
+  assert.match(run, /if \(!saved\.ok && "repeated" in saved && saved\.repeated\) return \{ ok: true, success: "Already created/);
 });
 
 test("on WhatsApp: a typed 'yes' is the tap when ONE Confirm is waiting; '2' is the second option; an hour to confirm", () => {

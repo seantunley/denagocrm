@@ -2598,10 +2598,14 @@ async function resolveActions(
       const lines: QuoteBuildLine[] = p.lines.map((line, at) => {
         const product = matched[at]!;
         const offered = product.colors.map((colour) => colour.name);
-        const colour = !line.colour ? undefined : offered.length ? catalogueColour(line.colour, offered) ?? undefined : line.colour;
-        if (line.colour && offered.length && !colour) {
+        const colour = line.colour ? catalogueColour(line.colour, offered) ?? undefined : undefined;
+        if (line.colour && !colour) {
+          // A product with NO colours set: the save refuses any colour on it, so a card naming one would fail on
+          // Confirm (review of #905). Asked instead, before anything is offered.
           const near = closestColour(line.colour, offered);
-          colourProblem ||= `"${line.colour}" is not a colour the ${product.name} comes in (${offered.join(", ")}).${near ? ` Did you mean ${near}?` : ""}`;
+          colourProblem ||= offered.length
+            ? `"${line.colour}" is not a colour the ${product.name} comes in (${offered.join(", ")}).${near ? ` Did you mean ${near}?` : ""}`
+            : `The ${product.name} has no colours set in the catalogue, so the quote can't say "${line.colour}". Shall I leave the colour off?`;
         }
         return {
           productId: product.id, description: product.name, qty: line.qty, unitPriceCents: product.basePriceCents,

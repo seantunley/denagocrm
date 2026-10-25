@@ -56,6 +56,16 @@ import { revalidatePath } from "next/cache";
  * only "not completed", not "nothing happened".
  */
 const untouched = (error: string) => ({ ok: false as const, error, unchanged: true as const });
+/**
+ * Part of it WAS written, and confirming the same card again is still safe —
+ * because the retry finds what was written and does not write it twice. One use
+ * (review of #905, 2026-10-25): a quote for a deal with no customer made the
+ * customer record, then the quote was refused. The retry finds the deal now
+ * linked to that customer (no second record), and the card's confirm key makes
+ * at most one quote. The callers release the claim on this as on `unchanged`,
+ * but say what was done.
+ */
+const resumable = (error: string) => ({ ok: false as const, error, resumable: true as const });
 
 export async function runAssistantAction(
   card: ActionCard,
@@ -67,7 +77,7 @@ export async function runAssistantAction(
    */
   via: "crm" | "whatsapp" = "crm",
   /** `quote`: the draft a quote_build created. */
-): Promise<{ ok: boolean; error?: string; success?: string; href?: string; unchanged?: boolean; quote?: { id: string; number: number } }> {
+): Promise<{ ok: boolean; error?: string; success?: string; href?: string; unchanged?: boolean; resumable?: boolean; quote?: { id: string; number: number } }> {
   return withActingStaffScope(async () => {
     const user = await requireAnyPermission(...ASSISTANT_PERMISSIONS);
     if (!(await isModuleEnabled("automation"))) {
@@ -295,12 +305,19 @@ export async function runAssistantAction(
         // changed" stays true of every refusal before the save.
         const products = await prisma.product.findMany({
           where: { id: { in: [...new Set(lines.map((line) => String(line.productId)))] }, active: true, deletedAt: null },
-          select: { id: true, name: true, basePriceCents: true },
+          select: { id: true, name: true, basePriceCents: true, colors: { select: { name: true } } },
         });
         const byId = new Map(products.map((product) => [product.id, product]));
         if (lines.some((line) => byId.get(line.productId)?.basePriceCents !== line.unitPriceCents)) {
           return untouched("The catalogue changed since DAX suggested this — ask again to see today's prices.");
         }
+        // The colour as saveQuoteDraft will check it (configured for the product, any case) — here, so a colour the
+        // catalogue no longer has stops the Confirm BEFORE a customer record is made, not after.
+        const notOffered = (line: (typeof lines)[number]) => {
+          const asked = String(line.colour ?? "").trim().toLocaleLowerCase();
+          return asked !== "" && !byId.get(line.productId)!.colors.some((colour) => colour.name.toLocaleLowerCase() === asked);
+        };
+        if (lines.some(notOffered)) return untouched("That colour isn't in the catalogue for this product any more — ask again.");
         let quoteContactId = card.contactId;
         let customerFromDeal: string | null = null;
         if (card.leadId) {
@@ -331,6 +348,12 @@ export async function runAssistantAction(
         }
         if (!quoteContactId) return { ok: false, error: STALE_CARD };
         const defaults = await quoteFromLeadDefaults();
+        // THE CUSTOMER WAS MADE BY THIS CONFIRM and the quote then wasn't: the record stays (it is the deal's customer,
+        // linked), and the card is offered again rather than spent. Safe because a new quote's save writes in ONE
+        // transaction after every refusal, and the confirm key it spends there makes a second save create nothing new.
+        const keyed = CONFIRM_KEY.test(String(card.confirmKey ?? ""));
+        const retryAfterCustomer = (why: string) =>
+          resumable(`${why} The customer record was made and linked to the deal, but the quote wasn't saved. Confirm again to retry — the same customer is used, and nothing is made twice.`);
         const saved = await saveQuoteDraft({
           contactId: quoteContactId,
           leadId: card.leadId ?? null,
@@ -346,7 +369,7 @@ export async function runAssistantAction(
           // ONE CONFIRM, ONE QUOTE: the card's key is spent in the transaction that
           // creates the quote, so a Confirm pressed again after a lost answer creates
           // no second quote. (A card proposed before keys existed has none, and runs as it did.)
-          ...(CONFIRM_KEY.test(String(card.confirmKey ?? "")) ? { confirmKey: card.confirmKey } : {}),
+          ...(keyed ? { confirmKey: card.confirmKey } : {}),
           items: lines.map((line) => {
             const product = byId.get(line.productId)!;
             return {
@@ -354,11 +377,18 @@ export async function runAssistantAction(
               discountPct: line.discountPct, ...(line.colour ? { colorPreference: line.colour } : {}),
             };
           }),
+        }).catch(async (error: unknown) => {
+          // Thrown (a database timeout, say) after the customer was made: with the key, a retry is still at most once.
+          // A guard's redirect, or no customer made here, is thrown on as before.
+          const redirect = typeof error === "object" && error !== null && String((error as { digest?: unknown }).digest ?? "").startsWith("NEXT_");
+          if (!customerFromDeal || !keyed || redirect) throw error;
+          await logError("assistant", "saving a quote after making its customer failed", error instanceof Error ? error.name : "unknown").catch(() => {});
+          return { ok: false as const, error: "The quote couldn't be saved just now.", thrown: true as const };
         });
         // A Confirm that reached the server twice: the first made the quote; this one did nothing.
-        if (!saved.ok && saved.repeated) return { ok: true, success: "Already created — nothing was made twice. It has NOT been sent to the customer." };
+        if (!saved.ok && "repeated" in saved && saved.repeated) return { ok: true, success: "Already created — nothing was made twice. It has NOT been sent to the customer." };
         // saveQuoteDraft validates before it writes (a colour the product does not come in, say).
-        if (!saved.ok) return { ok: false, error: saved.error };
+        if (!saved.ok) return customerFromDeal && keyed ? retryAfterCustomer(saved.error) : { ok: false, error: saved.error };
         // On the deal's record when there is one; otherwise on the customer's.
         await logAudit({
           action: "assistant.action_confirmed",
@@ -657,13 +687,14 @@ export async function confirmSavedAssistantCard(savedId: string): Promise<{ ok: 
     try {
       const result = await runAssistantAction(card);
       if (result.ok) await settle({ completedAt: new Date() });
-      else if (result.unchanged === true) await settle({ confirmedAt: null });
+      // `resumable`: part was written, and confirming again finds it rather than writing it twice.
+      else if (result.unchanged === true || result.resumable === true) await settle({ confirmedAt: null });
       else await settle({ failedAt: new Date() });
       // The page is NOT refreshed here. The card on screen shows what happened —
       // done, with its link, or why it failed — and a refresh would remove it
       // (it is no longer waiting) before the person had read that. It is gone
       // the next time the page loads.
-      return result.ok || result.unchanged === true
+      return result.ok || result.unchanged === true || result.resumable === true
         ? result
         : { ok: false, error: `${result.error ?? "That didn't work."} It won't be tried again from this card, because I can't be sure nothing was changed — check the record, then ask again if it's still needed.` };
     } catch (error) {
