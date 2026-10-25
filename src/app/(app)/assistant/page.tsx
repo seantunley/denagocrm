@@ -124,8 +124,8 @@ export default async function AssistantPage() {
         <AssistantChat name={profile.name} history={history.map(({ question, answer, source }) => ({ question, answer, source }))} listen={listen} />
       ) : (
         <p className="card p-5 text-sm text-muted-foreground">
-          This runs on your workspace&apos;s ChatGPT connection, which isn&apos;t set up yet.{" "}
-          <Link href="/settings/integrations" className="text-primary underline">Connect ChatGPT</Link> to start asking.
+          This runs on your workspace&apos;s AI connection, which isn&apos;t set up yet.{" "}
+          <Link href="/settings/integrations" className="text-primary underline">Connect an AI service</Link> to start asking.
         </p>
       )}
       </div>

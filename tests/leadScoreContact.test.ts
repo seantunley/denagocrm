@@ -14,7 +14,8 @@ type Where = Record<string, unknown>;
 
 /** `links`: which customer each lead belongs to (Lead.contactId). */
 type QuoteRow = { leadId: string | null; contactId: string | null; deletedAt: Date | null; emailedAt: Date | null; viewedAt: Date | null; signedAt: Date | null };
-const state = { comms: [] as Comm[], acts: [] as Act[], links: [] as { id: string; contactId: string | null }[], quotes: [] as QuoteRow[] };
+type StageRow = { pipelineId: string; order: number; isClosed: boolean };
+const state = { comms: [] as Comm[], acts: [] as Act[], links: [] as { id: string; contactId: string | null }[], quotes: [] as QuoteRow[], stages: [] as StageRow[] };
 /** Every `where` the loader sent to quote.findMany — what the database was actually asked for. */
 const quoteQueries: Where[] = [];
 const day = (n: number) => new Date(Date.UTC(2026, 9, n, 9));
@@ -52,6 +53,16 @@ const fakePrisma = {
   lead: { findMany: async (args: { where: Where }) => state.links.filter((link) => passes(link as Record<string, unknown>, args.where)) },
   communication: { groupBy: async (args: { by?: string[]; where: Where; _max: Record<string, true> }) => groupBy(state.comms, args) },
   activity: { groupBy: async (args: { by?: string[]; where: Where; _max?: Record<string, true>; _min?: Record<string, true> }) => groupBy(state.acts, args) },
+  pipelineStage: {
+    // groupBy pipelineId, _min order, where { pipelineId: { in }, isClosed: false } — as stageContact.ts asks.
+    groupBy: async (args: { where: Where }) => {
+      const min = new Map<string, number>();
+      for (const s of state.stages.filter((row) => passes(row as unknown as Record<string, unknown>, args.where))) {
+        min.set(s.pipelineId, Math.min(min.get(s.pipelineId) ?? Infinity, s.order));
+      }
+      return [...min].map(([pipelineId, order]) => ({ pipelineId, _min: { order } }));
+    },
+  },
   quote: {
     groupBy: async () => [],
     findMany: async (args: { where: Where }) => {
@@ -66,7 +77,9 @@ const loader = Module as unknown as { _load: Loader };
 const realLoad = loader._load;
 loader._load = function (this: unknown, request: string, parent, isMain) {
   if (request === "server-only") return {};
-  if ((parent?.filename ?? "").replace(/\\/g, "/").endsWith("src/lib/leadScoreLoader.ts")) {
+  const from = (parent?.filename ?? "").replace(/\\/g, "/");
+  if (from.endsWith("src/lib/stageContact.ts") && request === "./db") return { prisma: fakePrisma };
+  if (from.endsWith("src/lib/leadScoreLoader.ts")) {
     if (request === "./db") return { prisma: fakePrisma };
     if (request === "./permissions") return { getAccessibleLeadIds: async () => null };
   }
@@ -76,7 +89,14 @@ loader._load = function (this: unknown, request: string, parent, isMain) {
 const require_ = createRequire(import.meta.url);
 const { scoreLeads } = require_("../src/lib/leadScoreLoader.ts") as typeof import("../src/lib/leadScoreLoader");
 
-const LEAD = { id: "lead1", valueCents: 25_000_000, status: "open", createdAt: day(1), stageEnteredAt: day(1), stage: { name: "Quoted", isClosed: false, staleAfterDays: null } };
+// In its pipeline's FIRST stage, so the stage says nothing about contact unless a test moves it on.
+const LEAD = { id: "lead1", valueCents: 25_000_000, status: "open", createdAt: day(1), stageEnteredAt: day(1), stage: { name: "Quoted", isClosed: false, staleAfterDays: null, order: 0, pipelineId: "p1" } };
+const PIPELINE: StageRow[] = [
+  { pipelineId: "p1", order: 0, isClosed: false }, // New
+  { pipelineId: "p1", order: 1, isClosed: false }, // Contacted
+  { pipelineId: "p1", order: 2, isClosed: false }, // Quoted
+  { pipelineId: "p1", order: 9, isClosed: true }, // Won
+];
 const score = async () => (await scoreLeads([LEAD], day(11))).get("lead1")!;
 const waiting = (s: { reasons: string[] }) => s.reasons.some((r) => /waiting on our reply/.test(r));
 
@@ -85,6 +105,31 @@ beforeEach(() => {
   state.acts = [];
   state.links = [];
   state.quotes = [];
+  state.stages = PIPELINE;
+});
+
+test("MOVED PAST THE FIRST STAGE IS CONTACT (Sean, 2026-10-18: a lead in Contacted, with only a pinned note, said 'Never contacted')", async () => {
+  // What production held: one pinned note and nothing else.
+  state.comms = [{ leadId: "lead1", type: "note", direction: null, occurredAt: day(2) }];
+  const contacted = { ...LEAD, stageEnteredAt: day(4), stage: { ...LEAD.stage, name: "Contacted", order: 1 } };
+  const s = (await scoreLeads([contacted], day(11))).get("lead1")!;
+  assert.equal(uncontacted(s), false, JSON.stringify(s.reasons));
+  // Dated to the move: entered Contacted on the 4th → seven days by the 11th.
+  assert.ok(s.reasons.includes("No contact for 7 days"), JSON.stringify(s.reasons));
+  // Still in the first stage with only the note: "Never contacted" is still the truth.
+  assert.ok(uncontacted(await score()));
+  // "First" is the pipeline's own lowest open stage, not order 0: a pipeline starting at 5.
+  state.stages = [{ pipelineId: "p2", order: 5, isClosed: false }, { pipelineId: "p2", order: 6, isClosed: false }];
+  const firstOfP2 = { ...LEAD, stage: { ...LEAD.stage, order: 5, pipelineId: "p2" } };
+  assert.ok(uncontacted((await scoreLeads([firstOfP2], day(11))).get("lead1")!), "the first stage of ITS pipeline");
+  assert.equal(uncontacted((await scoreLeads([{ ...firstOfP2, stage: { ...firstOfP2.stage, order: 6 } }], day(11))).get("lead1")!), false);
+});
+
+test("a note box entry saved as a phone call (no direction) is contact (Sean, 2026-10-18: 'What was this?')", async () => {
+  state.comms = [{ leadId: "lead1", type: "call", direction: null, occurredAt: day(10) }];
+  const s = await score();
+  assert.equal(uncontacted(s), false, JSON.stringify(s.reasons));
+  assert.equal(waiting(s), false, "a call we logged is not the customer writing to us");
 });
 
 const quoteRow = (over: Partial<QuoteRow>): QuoteRow => ({ leadId: null, contactId: null, deletedAt: null, emailedAt: null, viewedAt: null, signedAt: null, ...over });

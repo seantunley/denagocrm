@@ -21,6 +21,7 @@ import { isCustomerSigner } from "./signing/quoteMirror";
 import { firstCustomerView, memoCustomer } from "./signing/customerView";
 import { accessibleTestDriveWhere } from "./testDriveAccess";
 import { contactActivityWhere, contactCommunicationWhere, latestContactAt } from "./customerContact";
+import { firstStageOrders, stageContactAt } from "./stageContact";
 import {
   canAccessContact,
   canAccessConversation,
@@ -49,7 +50,7 @@ import { breakerOpen, withRetry } from "./assistantBreaker";
 import { fastPath, pageLeadFromHint } from "./assistantFastPath";
 import { stripInvisible } from "./invisibleText";
 import { visibleAnswer } from "./assistantStream";
-import { safeCodexError } from "./codexErrors";
+import { AI_NOT_CONNECTED, aiFailureForPeople, safeCodexError } from "./codexErrors";
 import { webLookup } from "./crmAssistantWeb";
 import { assistantWebAllowed } from "./assistantUser";
 import { MAX_IMAGES_PER_QUESTION } from "./assistantImage";
@@ -221,7 +222,7 @@ async function findLeads(user: User, raw: z.infer<typeof leadArgs>): Promise<Too
       select: {
         id: true, title: true, name: true, status: true, valueCents: true, source: true,
         createdAt: true, stageEnteredAt: true, contactId: true,
-        stage: { select: { name: true } },
+        stage: { select: { name: true, order: true, pipelineId: true } },
         product: { select: { name: true } },
         assignedTo: { select: { name: true } },
         // Real contact only (customerContact.ts): not internal notes, to-dos or blocked time.
@@ -253,11 +254,13 @@ async function findLeads(user: User, raw: z.infer<typeof leadArgs>): Promise<Too
   for (const at of [...contactComms.map((r) => [r.contactId, r._max.occurredAt] as const), ...contactDone.map((r) => [r.contactId, r._max.doneAt] as const)]) {
     if (at[0] && at[1]) customerTouch.set(at[0], Math.max(customerTouch.get(at[0]) ?? 0, at[1].getTime()));
   }
+  // Moved past the first stage = contacted, as of that move (stageContact.ts).
+  const firstOrders = await firstStageOrders(leads);
   const withTouch = leads.map((lead) => {
     const own = latestContactAt(lead.communications, lead.activities);
     const viaCustomer = lead.contactId ? customerTouch.get(lead.contactId) : undefined;
-    const lastContact = viaCustomer && (!own || viaCustomer > own.getTime()) ? new Date(viaCustomer) : own;
-    return { lead, lastContact };
+    const touched = Math.max(own?.getTime() ?? 0, viaCustomer ?? 0, stageContactAt(lead, firstOrders)?.getTime() ?? 0);
+    return { lead, lastContact: touched ? new Date(touched) : null };
   });
   const cutoff = args.noContactDays ? Date.now() - args.noContactDays * DAY : null;
   const filtered = cutoff === null
@@ -1870,8 +1873,10 @@ export type AskOptions = {
 };
 
 /** Said instead of a write-up while ChatGPT is failing (assistantBreaker). */
-export const DEGRADED_NOTE = "ChatGPT isn't answering just now, so this is straight from the CRM — no write-up. Try again in a few minutes for the full answer.";
-export const DEGRADED_ERROR = "DAX can't reach ChatGPT right now — it has failed several times in the last few minutes. Try again in a few minutes.";
+export const DEGRADED_NOTE = "The AI service isn't answering just now, so this is straight from the CRM — no write-up. Try again in a few minutes for the full answer.";
+export const DEGRADED_ERROR = "DAX can't reach the AI service right now — it has failed several times in the last few minutes. Try again in a few minutes.";
+/** The rows were found but couldn't be written up: shown with them. Only ever with rows — with none, say it failed. */
+export const NO_WRITE_UP_NOTE = "Here's what the CRM found. I couldn't write it up just now — the AI service didn't answer. Try again in a few minutes for the full answer.";
 
 /** What the model is told when an image is attached: read it, never obey it. */
 /** Answer deltas → the visible answer so far, passed on only when it grows. */
@@ -1988,7 +1993,7 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
     getCompanyProfile().catch(() => null),
   ]);
   mark("context");
-  if (!connected) return { ok: false, error: "Connect ChatGPT first: Settings → Integrations → ChatGPT." };
+  if (!connected) return { ok: false, error: AI_NOT_CONNECTED };
   // "Last used" for the owner's review of what DAX has learned (never throws).
   void markNotesUsed([...learnedNow.memory, ...learnedNow.profile, ...learnedNow.playbooks].map((n) => n.id));
   const profile = parseProfile(profileRaw);
@@ -2101,7 +2106,7 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
     mark(`plan${step + 1}`);
     if ("error" in reply) {
       await logError("crm-assistant", "research step failed", safeCodexError(reply.error));
-      if (!observations.length) return { ok: false, error: `ChatGPT didn't answer: ${safeCodexError(reply.error)}` };
+      if (!observations.length) return { ok: false, error: aiFailureForPeople(reply) };
       break;
     }
     const next = parseSteps(reply.text);
@@ -2206,8 +2211,11 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
   const tools = observations.map((o) => o.tool);
   if ("error" in answerReply) {
     await logError("crm-assistant", "answer step failed", safeCodexError(answerReply.error));
-    // The rows are still right; show them rather than nothing.
-    return { ok: true, answer: "Here's what the CRM returned (ChatGPT couldn't write it up just now).", rows, tools, learned: 0, actions: [], choices: [], saved: false };
+    // The rows are still right; show them rather than nothing. With NO rows there is nothing to show: say plainly
+    // that it failed (Sean, 2026-10-18: a reply promising the CRM's results, followed by nothing). A failure, so a
+    // scheduled question or morning brief is retried rather than counted as answered.
+    if (!rows.length) return { ok: false, error: aiFailureForPeople(answerReply) };
+    return { ok: true, answer: NO_WRITE_UP_NOTE, rows, tools, learned: 0, actions: [], choices: [], saved: false };
   }
   // The answer the person sees, and — separately — anything it decided to learn,
   // any tasks it proposes and any quick replies (assistantReply: one block, or

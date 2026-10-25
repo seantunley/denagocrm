@@ -18,6 +18,7 @@ import {
 } from "./permissions";
 import { accessibleTestDriveWhere } from "./testDriveAccess";
 import { contactActivityWhere, contactCommunicationWhere, latestContactAt } from "./customerContact";
+import { firstStageOrders, stageContactAt } from "./stageContact";
 import { isModuleEnabled } from "./modules/enabled";
 import { contactName } from "./format";
 import { ownedWriteTenantId } from "./tenantWrite";
@@ -240,14 +241,20 @@ async function checkLeadQuiet(user: PermissionUser, tenantId: string, w: Watch, 
       id: true,
       title: true,
       name: true,
+      stageEnteredAt: true,
+      stage: { select: { order: true, pipelineId: true } },
       // Real contact only (customerContact.ts) — the same rule as DAX's "gone quiet".
       communications: { where: contactCommunicationWhere, orderBy: { occurredAt: "desc" }, take: 1, select: { type: true, occurredAt: true } },
       activities: { where: contactActivityWhere, orderBy: { doneAt: "desc" }, take: 1, select: { type: true, doneAt: true, availabilityBlock: true } },
     },
   });
   const hits: Hit[] = [];
+  // Moved past the first stage = contacted, as of that move (stageContact.ts).
+  const firstOrders = await firstStageOrders(leads);
   for (const lead of leads) {
-    const last = latestContactAt(lead.communications, lead.activities);
+    const own = latestContactAt(lead.communications, lead.activities);
+    const moved = stageContactAt(lead, firstOrders);
+    const last = own && moved ? (own > moved ? own : moved) : own ?? moved;
     if (last && last >= cutoff) continue;
     const detail = last ? `last contact ${Math.floor((now.getTime() - last.getTime()) / DAY)} days ago` : "never contacted";
     hits.push({ id: lead.id, ref: lead.title, customer: lead.name, detail });
