@@ -7,6 +7,7 @@ import { johannesburgDateKey } from "./activityDay";
 import { isModuleEnabled } from "./modules/enabled";
 import { accessibleTestDriveWhere } from "./testDriveAccess";
 import { contactActivityWhere, contactCommunicationWhere } from "./customerContact";
+import { firstStageOrders, stageContactAt } from "./stageContact";
 import { getAccessibleLeadIds, getAccessibleQuoteIds, hasAnyPermission, type PermissionUser } from "./permissions";
 
 /**
@@ -147,7 +148,7 @@ export async function salesStats(user: PermissionUser, raw: z.infer<typeof stats
       select: {
         id: true, valueCents: true, stageEnteredAt: true, assignedToId: true,
         assignedTo: { select: { name: true } },
-        stage: { select: { name: true, order: true, staleAfterDays: true } },
+        stage: { select: { name: true, order: true, staleAfterDays: true, pipelineId: true } },
       },
     }),
   ]);
@@ -191,6 +192,12 @@ export async function salesStats(user: PermissionUser, raw: z.infer<typeof stats
   const touched = new Map<string, number>();
   for (const r of lastTouch) if (r.leadId && r._max.occurredAt) touched.set(r.leadId, r._max.occurredAt.getTime());
   for (const r of doneTouch) if (r.leadId && r._max.doneAt) touched.set(r.leadId, Math.max(touched.get(r.leadId) ?? 0, r._max.doneAt.getTime()));
+  // Moved past the first stage = contacted, as of that move (stageContact.ts).
+  const firstOrders = await firstStageOrders(open);
+  for (const l of open) {
+    const moved = stageContactAt(l, firstOrders);
+    if (moved) touched.set(l.id, Math.max(touched.get(l.id) ?? 0, moved.getTime()));
+  }
   const quietBefore = today - 7 * DAY;
 
   const people = new Map<string, { name: string; open: number; value: number; withNextStep: number; overdue: number; quiet7: number }>();

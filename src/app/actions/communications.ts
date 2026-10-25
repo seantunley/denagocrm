@@ -23,6 +23,7 @@ import {
 import { isSocialChannel } from "@/lib/socialChannels";
 import { withActingStaffScope } from "@/lib/actingScope";
 import { asActionResult, refuse } from "@/lib/actionResult";
+import { LOGGABLE_COMMUNICATION_TYPES } from "@/lib/customerContact";
 import { requiredReason } from "@/lib/deleteReason";
 
 async function assertCommunicationAccess(
@@ -63,6 +64,10 @@ export async function addCommunication(formData: FormData) {
     if (chosen && !(file as File).type.startsWith("image/")) refuse("Only images can be attached to a note.");
     const hasFile = Boolean(chosen);
     if (!body && !hasFile) refuse("Write a note or attach an image.");
+    // The type now decides whether this counts as contact with the customer (customerContact.ts), so only the kinds
+    // a person can log by hand are accepted — a direct call could otherwise file any string.
+    const type = str("type") ?? "note";
+    if (!(LOGGABLE_COMMUNICATION_TYPES as readonly string[]).includes(type)) refuse("Choose what kind of entry this is.");
 
     // Access-check the client-supplied links BEFORE writing: without this a user
     // could attach a communication to any contact/lead id they cannot otherwise
@@ -107,7 +112,7 @@ export async function addCommunication(formData: FormData) {
     const occurredAtRaw = str("occurredAt");
     const communication = await prisma.communication.create({
       data: {
-        type: str("type") ?? "note",
+        type,
         direction: str("direction"),
         subject: str("subject"),
         body: body || "🖼 Image",

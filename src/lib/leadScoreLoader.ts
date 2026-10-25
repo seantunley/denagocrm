@@ -4,6 +4,7 @@ import { prisma } from "./db";
 import { getAccessibleLeadIds, type PermissionUser } from "./permissions";
 import { scoreLead, type LeadScore } from "./leadScore";
 import { contactActivityWhere, contactCommunicationWhere } from "./customerContact";
+import { firstStageOrders, stageContactAt } from "./stageContact";
 
 /**
  * Lead score — the IMPURE half: gathers the signals `scoreLead` reads.
@@ -38,7 +39,7 @@ export type ScorableLead = {
   status: string;
   createdAt: Date;
   stageEnteredAt: Date;
-  stage: { name: string; isClosed: boolean; staleAfterDays: number | null };
+  stage: { name: string; isClosed: boolean; staleAfterDays: number | null; order: number; pipelineId: string };
 };
 
 const latest = (a: Date | null | undefined, b: Date | null | undefined) =>
@@ -137,6 +138,8 @@ export async function scoreLeads(leads: ScorableLead[], now: Date = new Date()):
   const nextPlanned = byLead(planned, (row) => row._min.dueDate);
   const quoteViewed = byLead(viewed, (row) => row._max.viewedAt);
   const quoteOutstanding = new Set(outstanding.map((row) => row.leadId));
+  // Moved past the first stage = contacted, as of that move (stageContact.ts).
+  const firstOrders = await firstStageOrders(leads);
 
   for (const lead of leads) {
     const next = nextPlanned.get(lead.id) ?? null;
@@ -152,8 +155,11 @@ export async function scoreLeads(leads: ScorableLead[], now: Date = new Date()):
           daysInStage: Math.floor((now.getTime() - lead.stageEnteredAt.getTime()) / DAY_MS),
           staleAfterDays: lead.stage.staleAfterDays,
           lastContactAt: latest(
-            latest(latest(lastComm.get(lead.id), lastDone.get(lead.id)), latest(customerComm.get(customer), customerActivity.get(customer))),
-            latest(quoteTouch.get(lead.id), customerQuoteTouch.get(customer)),
+            latest(
+              latest(latest(lastComm.get(lead.id), lastDone.get(lead.id)), latest(customerComm.get(customer), customerActivity.get(customer))),
+              latest(quoteTouch.get(lead.id), customerQuoteTouch.get(customer)),
+            ),
+            stageContactAt(lead, firstOrders),
           ),
           lastInboundAt: latest(lastInbound.get(lead.id), customerWrote.get(customer)),
           quoteViewedAt: quoteViewed.get(lead.id) ?? null,
@@ -211,7 +217,7 @@ export async function loadTodayLeads(
       status: true,
       createdAt: true,
       stageEnteredAt: true,
-      stage: { select: { name: true, isClosed: true, staleAfterDays: true } },
+      stage: { select: { name: true, isClosed: true, staleAfterDays: true, order: true, pipelineId: true } },
       assignedTo: { select: { name: true } },
     },
     orderBy: { updatedAt: "desc" },
