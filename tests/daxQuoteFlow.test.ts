@@ -75,6 +75,62 @@ test("Confirm: checked first (no redirect on a phone), before anything is writte
   assert.match(run, /if \(!saved\.ok && "repeated" in saved && saved\.repeated\) return \{ ok: true, success: "Already created/);
 });
 
+/*
+ * DAX CAN SEE EVERYTHING A QUOTE IT PROPOSES NEEDS (Sean, 2026-10-25: "You assured me it had access to EVERYTHING it
+ * needed to make quotes" — it could not see colours: the save took a colour, the lookup never showed one). Every field
+ * a quote_build may carry is listed here with where its value comes from. A field added to the proposal without a
+ * place here fails this test, and so does a lookup that stops showing what a field needs.
+ */
+test("DAX sees every value a quote it proposes needs, and proposes nothing the save would refuse", () => {
+  const actions = read("src/lib/assistantActions.ts");
+  const proposal = actions.slice(actions.indexOf('type: z.literal("quote_build"),'), actions.indexOf('type: z.literal("quote_add")'));
+  const fields = (indent: number) => [...proposal.matchAll(new RegExp(`^ {${indent}}(\\w+)[:,]`, "gm"))].map((m) => m[1]);
+  const feeFields = [...(/fees: z\.array\(\s*z\.object\(\{([^}]*)\}\)/.exec(proposal)?.[1] ?? "").matchAll(/(\w+):/g)].map((m) => m[1]);
+  // Where each value comes from. "said" = the person says it (DAX asks if it isn't said).
+  const SOURCE: Record<string, string> = {
+    type: "fixed", leadId: "deal lookup", contactId: "customer lookup", lines: "list", fees: "list", reason: "DAX's own words",
+    productId: "catalogue lookup", product: "catalogue lookup", colour: "catalogue lookup", qty: "said", discountPct: "said",
+    label: "said", amount: "said", delivery: "said",
+  };
+  // (Not vacuous: the top-level fields and a line's are both found.)
+  assert.deepEqual(fields(4), ["leadId", "contactId", "lines", "fees", "reason"]);
+  assert.deepEqual(fields(8), ["productId", "product", "qty", "discountPct", "colour"]);
+  assert.deepEqual(feeFields, ["label", "amount", "delivery"]);
+  for (const field of [...fields(4), ...fields(8), ...feeFields]) assert.ok(SOURCE[field], `quote_build field "${field}" has no source DAX can see — add the lookup, then list it here`);
+
+  // The catalogue lookup shows each catalogue-sourced value…
+  const lookup = read("src/lib/catalogueLookup.ts");
+  const fieldsShown = lookup.slice(lookup.indexOf("const KNOWLEDGE_FIELDS = {"), lookup.indexOf("} as const;", lookup.indexOf("const KNOWLEDGE_FIELDS = {")));
+  for (const column of ["id: true", "name: true", "basePriceCents: true", "colors: { select: { name: true }"]) assert.ok(fieldsShown.includes(column), `the knowledge lookup selects ${column}`);
+  for (const shown of ["productId: p.id,", "product: p.name,", "price: formatZAR(p.basePriceCents),", "colours: p.colors.map((colour) => colour.name),"]) assert.ok(core.includes(shown), `…and hands DAX ${shown}`);
+  // …to anyone who may create a quote; the deal and customer lookups hand over the ids a card names.
+  assert.match(core, /const seesProducts = await hasAnyPermission\(user, [^)]*"quotes\.create"\);/);
+  assert.match(core, /kind: "deal" as const, leadId: l\.id,/);
+  assert.match(core, /kind: "customer" as const, contactId: c\.id,/);
+  // Stock (what's on the floor, in which colour) is its own lookup.
+  assert.match(core, /colour: u\.color, location: u\.location,/);
+
+  // The proposal's limits sit INSIDE the save's: nothing DAX may propose is refused for size by saveQuoteDraft.
+  const quotes = read("src/app/actions/quotes.ts");
+  assert.match(proposal, /qty: z\.number\(\)\.int\(\)\.min\(1\)\.max\(500\)/);
+  assert.match(quotes, /qty: z\.number\(\)\.finite\(\)\.positive\(\)\.max\(100_000\)/);
+  assert.match(proposal, /colour: text\.max\(60\)/);
+  assert.match(quotes, /colorPreference: z\.string\(\)\.trim\(\)\.max\(100\)/);
+  assert.match(proposal, /label: text\.max\(120\)/);
+  assert.match(quotes, /label: z\.string\(\)\.trim\(\)\.min\(1\)\.max\(120\),/);
+  assert.match(proposal, /\.max\(QUOTE_ADD_MAX_FEES\)/);
+  assert.match(quotes, /\.max\(20\)\.optional\(\),/);
+  assert.match(actions, /export const QUOTE_ADD_MAX_FEES = 5;/);
+  assert.match(actions, /export const QUOTE_BUILD_MAX_LINES = 10;/);
+  assert.match(quotes, /\.max\(100, "A quote can contain at most 100 lines\."\)/);
+  // And the save's content refusals are each met before a card is offered (the resolver) and again at Confirm,
+  // before the customer record: the product on sale, the colour configured for it.
+  assert.match(quotes, /return \{ ok: false, error: "A product on this quote is no longer available\." \}/);
+  assert.match(quotes, /is not configured for this product\.` \}/);
+  assert.ok(run.indexOf("The catalogue changed since DAX suggested this") < run.indexOf("convertLeadToContact("));
+  assert.ok(run.indexOf("if (lines.some(notOffered)) return untouched(") < run.indexOf("convertLeadToContact("));
+});
+
 test("on WhatsApp: a typed 'yes' is the tap when ONE Confirm is waiting; '2' is the second option; an hour to confirm", () => {
   for (const yes of ["Yes", "yes please", "Confirm", "ja", "ok", "Go ahead!", "👍"]) assert.ok(typedYes(yes), yes);
   for (const no of ["Yes, but make it white", "no", "yesterday", "2"]) assert.ok(!typedYes(no), no);
