@@ -411,18 +411,32 @@ test("review of #905: the customer record was made, then the quote failed — th
   assert.doesNotMatch(said, /Nothing was changed/, "something WAS changed, and it says so");
   assert.equal(quote.confirmedAt, null, "released");
   assert.equal(quote.failedAt, null, "not spent");
+  // Second review of #905: it fails AGAIN on the retry (the customer already there) — still offered, not spent.
+  state.outcome = { ok: false, error: "The quote couldn't be saved just now. The deal's customer record is in place, but the quote wasn't saved. Confirm again to retry — the same customer is used, and nothing is made twice.", resumable: true };
+  await confirmFromWhatsApp("t1", me, PHONE, quote.id);
+  assert.match(state.sent.at(-1)?.text ?? "", /^Not done: The quote couldn't be saved just now\.[\s\S]*You can tap Confirm again \(or reply yes\) until it expires\.$/);
+  assert.equal(quote.confirmedAt, null, "released a second time");
+  assert.equal(quote.failedAt, null, "still not spent");
   state.outcome = { ok: true, success: "Draft quote Q-2029 created — R241 500,00. It has NOT been sent to the customer." };
   await confirmFromWhatsApp("t1", me, PHONE, quote.id);
-  assert.equal(state.ran.length, ranBefore + 2, "the same card ran again");
+  assert.equal(state.ran.length, ranBefore + 3, "the same card ran again, and again");
   assert.notEqual(quote.completedAt, null, "…and is done");
 
   // The action: `resumable` only after this Confirm made the customer, and only with a confirm key (at most one quote).
   const action = code("src/app/actions/assistant.ts");
   const build = action.slice(action.indexOf('case "quote_build": {'), action.indexOf('case "quote_pdf": {'));
   assert.match(action, /const resumable = \(error: string\) => \(\{ ok: false as const, error, resumable: true as const \}\);/);
-  assert.match(build, /if \(!saved\.ok\) return customerFromDeal && keyed \? retryAfterCustomer\(saved\.error\) : \{ ok: false, error: saved\.error \};/);
-  assert.match(build, /if \(!customerFromDeal \|\| !keyed \|\| redirect\) throw error;/, "a throw after the customer is offered again too; any other throw as before");
-  assert.ok(build.indexOf("retryAfterCustomer(") > build.indexOf("convertLeadToContact("));
+  // Second review: on the CARD (it makes its customer, it has a key) — not on whether THIS attempt made the customer,
+  // which the retry after a first failure never does: a second failure spent the card.
+  assert.match(build, /const resumes = card\.createCustomer === true && !card\.contactId && keyed;/);
+  assert.match(build, /if \(!saved\.ok\) return resumes \? retryAfterCustomer\(saved\.error\) : \{ ok: false, error: saved\.error \};/);
+  assert.match(build, /if \(!resumes \|\| redirect\) throw error;/, "a throw from the save is offered again too; any other throw as before");
+  assert.ok(build.indexOf("retryAfterCustomer(saved.error)") > build.indexOf("convertLeadToContact("));
+  // …and the settings the quote needs are read BEFORE the customer is made: a failed read there now spends a card
+  // that has written nothing, instead of leaving a customer without a quote.
+  assert.ok(build.indexOf("await quoteFromLeadDefaults()") > -1 && build.indexOf("await quoteFromLeadDefaults()") < build.indexOf("convertLeadToContact("));
+  const afterCustomer = build.slice(build.indexOf("convertLeadToContact("), build.indexOf("await saveQuoteDraft("));
+  assert.doesNotMatch(afterCustomer.replace(/^\s*\/\/.*$/gm, ""), /await (?!logError)/, "between the customer record and the protected save, nothing else is awaited");
   assert.equal(action.match(/resumable\(/g)?.length, 1, "made in one place: quote_build's retry after the customer");
   // A colour the catalogue no longer has stops Confirm BEFORE the customer record is made.
   assert.ok(build.indexOf("if (lines.some(notOffered)) return untouched(") < build.indexOf("convertLeadToContact("));

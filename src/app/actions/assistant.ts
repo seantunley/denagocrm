@@ -332,6 +332,17 @@ export async function runAssistantAction(
           const customer = await prisma.contact.findFirst({ where: { id: String(card.contactId ?? ""), deletedAt: null }, select: { id: true } });
           if (!customer) return untouched("That customer is no longer there.");
         }
+        // The quote's defaults are READ before anything is written (second review of #905): a settings read that
+        // failed between the customer record and the save spent the card with the customer standing alone.
+        const defaults = await quoteFromLeadDefaults();
+        // A CARD THAT MAKES ITS CUSTOMER can always be confirmed again after the save fails — on this attempt or a
+        // later one (second review of #905: a second failure, on the attempt that found the customer already made,
+        // spent the card). Safe because the retry finds the deal linked (no second record), a new quote's save writes
+        // in ONE transaction after every refusal, and the confirm key it spends there makes a second save create nothing.
+        const keyed = CONFIRM_KEY.test(String(card.confirmKey ?? ""));
+        const resumes = card.createCustomer === true && !card.contactId && keyed;
+        const retryAfterCustomer = (why: string) =>
+          resumable(`${why} The deal's customer record is in place, but the quote wasn't saved. Confirm again to retry — the same customer is used, and nothing is made twice.`);
         // EVERY CHECK IS ABOVE: from here on things are written. The customer record first, from the deal's details,
         // by "Add to contacts" itself (its permission, identity rules and audit). Not "unchanged" if it fails: making
         // the record writes more than one row, so a failure is reported as it is.
@@ -347,13 +358,6 @@ export async function runAssistantAction(
           quoteContactId = made.contactId;
         }
         if (!quoteContactId) return { ok: false, error: STALE_CARD };
-        const defaults = await quoteFromLeadDefaults();
-        // THE CUSTOMER WAS MADE BY THIS CONFIRM and the quote then wasn't: the record stays (it is the deal's customer,
-        // linked), and the card is offered again rather than spent. Safe because a new quote's save writes in ONE
-        // transaction after every refusal, and the confirm key it spends there makes a second save create nothing new.
-        const keyed = CONFIRM_KEY.test(String(card.confirmKey ?? ""));
-        const retryAfterCustomer = (why: string) =>
-          resumable(`${why} The customer record was made and linked to the deal, but the quote wasn't saved. Confirm again to retry — the same customer is used, and nothing is made twice.`);
         const saved = await saveQuoteDraft({
           contactId: quoteContactId,
           leadId: card.leadId ?? null,
@@ -381,14 +385,14 @@ export async function runAssistantAction(
           // Thrown (a database timeout, say) after the customer was made: with the key, a retry is still at most once.
           // A guard's redirect, or no customer made here, is thrown on as before.
           const redirect = typeof error === "object" && error !== null && String((error as { digest?: unknown }).digest ?? "").startsWith("NEXT_");
-          if (!customerFromDeal || !keyed || redirect) throw error;
+          if (!resumes || redirect) throw error;
           await logError("assistant", "saving a quote after making its customer failed", error instanceof Error ? error.name : "unknown").catch(() => {});
           return { ok: false as const, error: "The quote couldn't be saved just now.", thrown: true as const };
         });
         // A Confirm that reached the server twice: the first made the quote; this one did nothing.
         if (!saved.ok && "repeated" in saved && saved.repeated) return { ok: true, success: "Already created — nothing was made twice. It has NOT been sent to the customer." };
         // saveQuoteDraft validates before it writes (a colour the product does not come in, say).
-        if (!saved.ok) return customerFromDeal && keyed ? retryAfterCustomer(saved.error) : { ok: false, error: saved.error };
+        if (!saved.ok) return resumes ? retryAfterCustomer(saved.error) : { ok: false, error: saved.error };
         // On the deal's record when there is one; otherwise on the customer's.
         await logAudit({
           action: "assistant.action_confirmed",
