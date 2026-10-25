@@ -1694,7 +1694,7 @@ test("confirmed on WhatsApp: what the task queued is sent straight after the con
   assert.equal(state.documents.length, 1, "the PDF follows the confirm");
   assert.equal((state.documents[0] as unknown[])[0], STAFF);
   const lib = code("src/lib/assistantWhatsApp.ts");
-  assert.match(lib, /await confirmFromWhatsApp\(tenantId, user, waId, pendingId\);[\s\S]{0,700}await sendUpdatesToLinkedPhone\(tenantId, user\.id, \{ windowOpen: true \}\);\s*return true;/);
+  assert.match(lib, /await confirmFromWhatsApp\(tenantId, user, waId, pendingId\);[\s\S]{0,700}const delivered = await sendUpdatesToLinkedPhone\(tenantId, user\.id, \{ windowOpen: true \}\);[\s\S]{0,500}return true;/);
 });
 
 test("it knows about WhatsApp — and the pinned claims stay true", async () => {

@@ -43,7 +43,7 @@ import { researchGate } from "./assistantResearchGate";
 import { matchDecisions, parseDecision } from "./assistantDecisions";
 import { CITE_RULE, REPLY_FORMAT, STATE_INSTRUCTIONS, citableLinks, resolveCitations, splitReply, type Evidence } from "./assistantReply";
 import { unsupportedFigures, unsupportedNote } from "./assistantVerify";
-import { closestColour, nameIsClose, nameStems } from "./nearMatch";
+import { catalogueColour, closestColour, nameIsClose, nameStems } from "./nearMatch";
 import { salesStats } from "./crmAssistantStats";
 import { briefForAssistant, loadDaxBrief } from "./daxBrief";
 import { breakerOpen, withRetry } from "./assistantBreaker";
@@ -966,6 +966,8 @@ async function knowledge(user: User, raw: z.infer<typeof knowledgeArgs>): Promis
         product: p.name,
         category: p.category,
         price: formatZAR(p.basePriceCents),
+        // The colours it comes in, as a quote line names them. None listed = no colour to choose.
+        colours: p.colors.map((colour) => colour.name),
         tagline: p.showcaseTagline,
         description: clip(p.description, 300),
         specs: p.showcaseSpecs ? clip(JSON.stringify(p.showcaseSpecs), 400) : null,
@@ -1934,7 +1936,7 @@ export const CHANNEL_RULES: Record<AskSource, string> = {
  * until it is tapped. A message to a customer stays out of it.
  */
 export const WHATSAPP_CONFIRM_RULE =
-  "The person is asking on WhatsApp from their phone. Keep it short and scannable, plain text, no links to rows. You CAN set up tasks here: each one you propose is sent to them with a Confirm button and happens only when they tap it — so say what you have set up for them to confirm, never that it is done. A message to a customer, a test drive, marking a deal lost and starting a quote are the exceptions: they are never done from WhatsApp. Propose them as usual and each is saved as a card on their Ask page in the CRM, where they confirm or send it — say it is saved there for them, never that it was sent or done. For a message to a customer, also put the draft in your answer so they can read it now.";
+  "The person is asking on WhatsApp from their phone. Keep it short and scannable, plain text, no links to rows. You CAN set up tasks here: each one you propose is sent to them with a Confirm button and happens only when they tap it — so say what you have set up for them to confirm, never that it is done. Building a draft quote with its lines and fees (quote_build) IS done here, with its Confirm button. A message to a customer, a test drive, marking a deal lost and opening an empty quote in the editor (quote) are the exceptions: they are never done from WhatsApp. Propose them as usual and each is saved as a card on their Ask page in the CRM, where they confirm or send it — say it is saved there for them, never that it was sent or done. For a message to a customer, also put the draft in your answer so they can read it now.";
 
 /**
  * WhatsApp, when confirming there is NOT allowed (the default). Nothing can be
@@ -2551,10 +2553,14 @@ async function resolveActions(
       // (contactId) — an existing customer wanting another quote is existing
       // business, not a new lead. Only for someone who may create quotes, on a
       // record they may open; saveQuoteDraft checks all of it again at Confirm.
-      if (!(await hasPermission(user, "quotes.create"))) continue;
+      //
+      // EVERY WAY OUT SAYS WHY (Sean, 2026-10-24: "Yes" to a quote for Werner Kilian got "a task could not be set
+      // up" — the deal had no customer linked, and the quote was dropped without a word).
+      if (!(await hasPermission(user, "quotes.create"))) { problems.push("Your role can't create quotes."); continue; }
       let forDeal: { id: string; label: string } | null = null;
       let customerId: string | null = null;
       let customerName = "";
+      let createCustomer = false;
       // WHICH RECORD THE ID NAMES. A deal's id belongs in leadId and a customer's
       // in contactId, and the instructions say so twice — but an id put in the
       // wrong one of the two used to drop the quote without a word. So an id
@@ -2567,39 +2573,62 @@ async function resolveActions(
         contactId = null;
       }
       if (dealId) {
-        if (!(await canAccessLead(user, dealId))) continue;
+        if (!(await canAccessLead(user, dealId))) { problems.push("I can't open that deal for you, so I can't quote on it."); continue; }
         const deal = await prisma.lead.findUnique({ where: { id: dealId }, select: { name: true, title: true, contactId: true } });
-        // A deal with no customer linked cannot be quoted: a quote belongs to a customer.
-        if (!deal?.contactId) continue;
+        if (!deal) { problems.push("That deal is no longer there."); continue; }
         forDeal = { id: dealId, label: `${deal.name} — ${deal.title}` };
-        customerId = deal.contactId;
         customerName = deal.name;
+        if (deal.contactId) customerId = deal.contactId;
+        // A DEAL WITH NO CUSTOMER YET: a quote belongs to a customer, so Confirm makes one from the deal's details
+        // first — the same identity rules as "Add to contacts" (convertLeadToContact), and only for someone allowed
+        // to do that, as booking a test drive does (moveLeadToTestDrive). The card says so before anything happens.
+        else if (await hasPermission(user, "leads.link_contact")) createCustomer = true;
+        else { problems.push(`${deal.name}'s deal has no customer record yet, and your role can't create one — add them as a customer on the deal in the CRM, then ask again.`); continue; }
       } else if (contactId) {
-        if (!(await canAccessContact(user, contactId))) continue;
+        if (!(await canAccessContact(user, contactId))) { problems.push("I can't open that customer for you, so I can't quote them."); continue; }
         const contact = await prisma.contact.findFirst({ where: { id: contactId, deletedAt: null }, select: { firstName: true, lastName: true } });
-        if (!contact) continue;
+        if (!contact) { problems.push("That customer is no longer there."); continue; }
         customerId = contactId;
         customerName = [contact.firstName, contact.lastName].filter(Boolean).join(" ");
       }
-      if (!customerId) continue;
+      if (!customerId && !createCustomer) { problems.push("The quote didn't say which customer or deal it is for — look them up first."); continue; }
       // CATALOGUE PRODUCTS ON SALE ONLY, read through the workspace's own client —
       // another workspace's product reads as missing. A line names its product by
       // id, or by name: a name that is not exactly one product proposes nothing.
       // Looked up in the database across the WHOLE catalogue (resolveCatalogueProduct)
       // — not inside a first page of it. The PRICE is the catalogue's, never the model's.
       const matched = await Promise.all(p.lines.map((line) => resolveCatalogueProduct(line)));
-      if (matched.some((product) => !product)) continue;
+      const unknown = p.lines.filter((_, at) => !matched[at]).map((line) => line.product ?? line.productId ?? "a product");
+      if (unknown.length) { problems.push(`Not one product in the catalogue: ${unknown.map((name) => `"${name}"`).join(", ")} — name it as the catalogue does.`); continue; }
+      // THE COLOUR, as the catalogue spells it ("grey" → "Gray"): saveQuoteDraft refuses any other spelling at
+      // Confirm. A colour it does not come in is a question with the nearest one, not a dead end.
+      let colourProblem = "";
       const lines: QuoteBuildLine[] = p.lines.map((line, at) => {
         const product = matched[at]!;
+        const offered = product.colors.map((colour) => colour.name);
+        const colour = line.colour ? catalogueColour(line.colour, offered) ?? undefined : undefined;
+        if (line.colour && !colour) {
+          // A product with NO colours set: the save refuses any colour on it, so a card naming one would fail on
+          // Confirm (review of #905). Asked instead, before anything is offered.
+          const near = closestColour(line.colour, offered);
+          colourProblem ||= offered.length
+            ? `"${line.colour}" is not a colour the ${product.name} comes in (${offered.join(", ")}).${near ? ` Did you mean ${near}?` : ""}`
+            : `The ${product.name} has no colours set in the catalogue, so the quote can't say "${line.colour}". Shall I leave the colour off?`;
+        }
         return {
           productId: product.id, description: product.name, qty: line.qty, unitPriceCents: product.basePriceCents,
-          discountPct: line.discountPct ?? 0, ...(line.colour ? { colour: line.colour } : {}),
+          discountPct: line.discountPct ?? 0, ...(colour ? { colour } : {}),
         };
       });
+      if (colourProblem) { problems.push(colourProblem); continue; }
+      const fees = (p.fees ?? []).map((fee) => ({ label: fee.label, amountCents: Math.round(fee.amount * 100), delivery: fee.delivery === true }));
       cards.push({
         id: `a${index}-${forDeal?.id ?? customerId}`, kind: "quote_build", leadId: forDeal?.id ?? null,
         leadLabel: forDeal?.label ?? customerName, contactId: customerId, lines,
-        title: `Create a draft quote for ${customerName}`, text: quoteBuildText(lines, (cents) => formatZAR(cents)),
+        ...(fees.length ? { fees } : {}),
+        ...(createCustomer ? { createCustomer: true as const } : {}),
+        title: `Create a draft quote for ${customerName}`,
+        text: quoteBuildText(lines, (cents) => formatZAR(cents), { fees, ...(createCustomer ? { newCustomer: customerName } : {}) }),
         confirmKey: `qk_${randomBytes(16).toString("hex")}`,
         ...(p.reason ? { reason: p.reason } : {}),
       });

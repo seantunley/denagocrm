@@ -19,13 +19,13 @@ const QUOTE_PDF_SEND_WAIT_MS = 4_000;
 import { prisma } from "@/lib/db";
 import { cancelActivity, rescheduleActivity, scheduleActivity, scheduleFollowUp } from "@/app/actions/activities";
 import { addCommunication } from "@/app/actions/communications";
-import { assignLead, markLost, moveLead } from "@/app/actions/leads";
+import { assignLead, convertLeadToContact, markLost, moveLead } from "@/app/actions/leads";
 import { createQuoteFromLead, saveQuoteDraft } from "@/app/actions/quotes";
 import { createTestDriveBooking } from "@/app/actions/testDrives";
 import { createStaffAvailability } from "@/app/actions/staffAvailability";
 import { sendWhatsAppMessage } from "@/app/actions/whatsapp";
 import { sendEmailAction } from "@/app/actions/emails";
-import { canAccessLead, canAccessQuote, hasPermission } from "@/lib/permissions";
+import { canAccessContact, canAccessLead, canAccessQuote, hasPermission } from "@/lib/permissions";
 import { createWatchForUser } from "@/lib/assistantWatch";
 import { assistantVoiceRepliesOn } from "@/lib/assistantVoice";
 import { ASSISTANT_PERMISSIONS } from "@/lib/assistantUser";
@@ -33,6 +33,7 @@ import { MAX_ACTIVE_SCHEDULES, describeSchedule, nextRun, scheduleInput } from "
 import { markScheduledTurnsSeen, withScheduleSlot } from "@/lib/assistantScheduleRun";
 import { ownedWriteTenantId } from "@/lib/tenantWrite";
 import { logAudit } from "@/lib/audit";
+import { logError } from "@/lib/errorLog";
 import { revalidatePath } from "next/cache";
 
 /**
@@ -55,6 +56,16 @@ import { revalidatePath } from "next/cache";
  * only "not completed", not "nothing happened".
  */
 const untouched = (error: string) => ({ ok: false as const, error, unchanged: true as const });
+/**
+ * Part of it WAS written, and confirming the same card again is still safe —
+ * because the retry finds what was written and does not write it twice. One use
+ * (review of #905, 2026-10-25): a quote for a deal with no customer made the
+ * customer record, then the quote was refused. The retry finds the deal now
+ * linked to that customer (no second record), and the card's confirm key makes
+ * at most one quote. The callers release the claim on this as on `unchanged`,
+ * but say what was done.
+ */
+const resumable = (error: string) => ({ ok: false as const, error, resumable: true as const });
 
 export async function runAssistantAction(
   card: ActionCard,
@@ -66,7 +77,7 @@ export async function runAssistantAction(
    */
   via: "crm" | "whatsapp" = "crm",
   /** `quote`: the draft a quote_build created. */
-): Promise<{ ok: boolean; error?: string; success?: string; href?: string; unchanged?: boolean; quote?: { id: string; number: number } }> {
+): Promise<{ ok: boolean; error?: string; success?: string; href?: string; unchanged?: boolean; resumable?: boolean; quote?: { id: string; number: number } }> {
   return withActingStaffScope(async () => {
     const user = await requireAnyPermission(...ASSISTANT_PERMISSIONS);
     if (!(await isModuleEnabled("automation"))) {
@@ -278,28 +289,79 @@ export async function runAssistantAction(
         // FOR A CUSTOMER — on one of their deals, or on none. With a deal, it must
         // still be there and still be this customer's. With none, the customer must
         // still be there; saveQuoteDraft then checks this person may quote them.
-        if (card.leadId) {
-          const lead = await prisma.lead.findUnique({ where: { id: card.leadId }, select: { contactId: true } });
-          if (!lead) return untouched("That lead is no longer there.");
-          if (!lead.contactId || lead.contactId !== card.contactId) return untouched(STALE_CARD);
-        } else {
-          const customer = await prisma.contact.findFirst({ where: { id: String(card.contactId ?? ""), deletedAt: null }, select: { id: true } });
-          if (!customer) return untouched("That customer is no longer there.");
-        }
         const lines = Array.isArray(card.lines) ? card.lines : [];
         if (lines.length === 0 || lines.length > QUOTE_BUILD_MAX_LINES) return untouched("That quote isn't valid — ask again.");
+        // Fees said with the request, on the same draft (2026-10-24) — checked as quote_add checks them.
+        const buildFees = Array.isArray(card.fees) ? card.fees : [];
+        if (buildFees.length > QUOTE_ADD_MAX_FEES || buildFees.some((fee) => !Number.isInteger(fee.amountCents) || fee.amountCents <= 0 || fee.amountCents > QUOTE_ADD_MAX_FEE_RANDS * 100 || !String(fee.label ?? "").trim())) {
+          return untouched("That quote isn't valid — ask again.");
+        }
+        // Asked here as a yes/no first: saveQuoteDraft's own check REDIRECTS, which a Confirm tapped on WhatsApp has
+        // nowhere to follow — it showed as "no permission" and the card was spent (quote_add asks the same way).
+        // Before anything is written — a customer record included.
+        if (!(await hasPermission(user, "quotes.create"))) return untouched("Your role can't create quotes.");
+        if (card.contactId && !(await canAccessContact(user, card.contactId))) return untouched("You can't create a quote for this customer — ask whoever looks after them.");
+        // The catalogue as it stands now — checked BEFORE the customer record may be made below, so "nothing was
+        // changed" stays true of every refusal before the save.
         const products = await prisma.product.findMany({
           where: { id: { in: [...new Set(lines.map((line) => String(line.productId)))] }, active: true, deletedAt: null },
-          select: { id: true, name: true, basePriceCents: true },
+          select: { id: true, name: true, basePriceCents: true, colors: { select: { name: true } } },
         });
         const byId = new Map(products.map((product) => [product.id, product]));
         if (lines.some((line) => byId.get(line.productId)?.basePriceCents !== line.unitPriceCents)) {
           return untouched("The catalogue changed since DAX suggested this — ask again to see today's prices.");
         }
+        // The colour as saveQuoteDraft will check it (configured for the product, any case) — here, so a colour the
+        // catalogue no longer has stops the Confirm BEFORE a customer record is made, not after.
+        const notOffered = (line: (typeof lines)[number]) => {
+          const asked = String(line.colour ?? "").trim().toLocaleLowerCase();
+          return asked !== "" && !byId.get(line.productId)!.colors.some((colour) => colour.name.toLocaleLowerCase() === asked);
+        };
+        if (lines.some(notOffered)) return untouched("That colour isn't in the catalogue for this product any more — ask again.");
+        let quoteContactId = card.contactId;
+        let customerFromDeal: string | null = null;
+        if (card.leadId) {
+          const lead = await prisma.lead.findUnique({ where: { id: card.leadId }, select: { contactId: true } });
+          if (!lead) return untouched("That lead is no longer there.");
+          // The card said the deal had no customer and one would be made. Linked meanwhile = that one.
+          if (card.createCustomer && !card.contactId) {
+            if (lead.contactId) quoteContactId = lead.contactId;
+            else customerFromDeal = card.leadId;
+          } else if (!lead.contactId || lead.contactId !== card.contactId) return untouched(STALE_CARD);
+        } else {
+          const customer = await prisma.contact.findFirst({ where: { id: String(card.contactId ?? ""), deletedAt: null }, select: { id: true } });
+          if (!customer) return untouched("That customer is no longer there.");
+        }
+        // The quote's defaults are READ before anything is written (second review of #905): a settings read that
+        // failed between the customer record and the save spent the card with the customer standing alone.
         const defaults = await quoteFromLeadDefaults();
+        // A CARD THAT MAKES ITS CUSTOMER can always be confirmed again after the save fails — on this attempt or a
+        // later one (second review of #905: a second failure, on the attempt that found the customer already made,
+        // spent the card). Safe because the retry finds the deal linked (no second record), a new quote's save writes
+        // in ONE transaction after every refusal, and the confirm key it spends there makes a second save create nothing.
+        const keyed = CONFIRM_KEY.test(String(card.confirmKey ?? ""));
+        const resumes = card.createCustomer === true && !card.contactId && keyed;
+        const retryAfterCustomer = (why: string) =>
+          resumable(`${why} The deal's customer record is in place, but the quote wasn't saved. Confirm again to retry — the same customer is used, and nothing is made twice.`);
+        // EVERY CHECK IS ABOVE: from here on things are written. The customer record first, from the deal's details,
+        // by "Add to contacts" itself (its permission, identity rules and audit). Not "unchanged" if it fails: making
+        // the record writes more than one row, so a failure is reported as it is.
+        if (customerFromDeal) {
+          const made = await convertLeadToContact(customerFromDeal);
+          if (!made.ok || !made.contactId) {
+            // Its refusals are written for people ("Several customers match this email…"); anything else is a
+            // technical error, which is logged by name and never shown on the card.
+            const readable = made.error && /^[^\n]{1,200}$/.test(made.error) && !/prisma|invocation|column|ECONN|timeout/i.test(made.error);
+            if (!readable) await logError("assistant", "making a customer for a quote failed").catch(() => {});
+            return { ok: false, error: readable ? `I couldn't make the customer record: ${made.error}` : "I couldn't make the customer record — add them as a customer on the deal in the CRM, then ask again." };
+          }
+          quoteContactId = made.contactId;
+        }
+        if (!quoteContactId) return { ok: false, error: STALE_CARD };
         const saved = await saveQuoteDraft({
-          contactId: card.contactId,
+          contactId: quoteContactId,
           leadId: card.leadId ?? null,
+          ...(buildFees.length ? { fees: buildFees.map((fee) => ({ label: String(fee.label).trim(), kind: fee.delivery ? "delivery" as const : "fee" as const, amountCents: fee.amountCents })) } : {}),
           validUntil: editorDefaults(defaults).validUntil,
           terms: defaults.terms,
           intent: "draft",
@@ -311,7 +373,7 @@ export async function runAssistantAction(
           // ONE CONFIRM, ONE QUOTE: the card's key is spent in the transaction that
           // creates the quote, so a Confirm pressed again after a lost answer creates
           // no second quote. (A card proposed before keys existed has none, and runs as it did.)
-          ...(CONFIRM_KEY.test(String(card.confirmKey ?? "")) ? { confirmKey: card.confirmKey } : {}),
+          ...(keyed ? { confirmKey: card.confirmKey } : {}),
           items: lines.map((line) => {
             const product = byId.get(line.productId)!;
             return {
@@ -319,15 +381,24 @@ export async function runAssistantAction(
               discountPct: line.discountPct, ...(line.colour ? { colorPreference: line.colour } : {}),
             };
           }),
+        }).catch(async (error: unknown) => {
+          // Thrown (a database timeout, say) after the customer was made: with the key, a retry is still at most once.
+          // A guard's redirect, or no customer made here, is thrown on as before.
+          const redirect = typeof error === "object" && error !== null && String((error as { digest?: unknown }).digest ?? "").startsWith("NEXT_");
+          if (!resumes || redirect) throw error;
+          await logError("assistant", "saving a quote after making its customer failed", error instanceof Error ? error.name : "unknown").catch(() => {});
+          return { ok: false as const, error: "The quote couldn't be saved just now.", thrown: true as const };
         });
+        // A Confirm that reached the server twice: the first made the quote; this one did nothing.
+        if (!saved.ok && "repeated" in saved && saved.repeated) return { ok: true, success: "Already created — nothing was made twice. It has NOT been sent to the customer." };
         // saveQuoteDraft validates before it writes (a colour the product does not come in, say).
-        if (!saved.ok) return { ok: false, error: saved.error };
+        if (!saved.ok) return resumes ? retryAfterCustomer(saved.error) : { ok: false, error: saved.error };
         // On the deal's record when there is one; otherwise on the customer's.
         await logAudit({
           action: "assistant.action_confirmed",
           summary: `Confirmed the assistant's proposal: create draft quote Q-${saved.quote.number}`,
           user,
-          ...(card.leadId ? { leadId: card.leadId } : { contactId: card.contactId }),
+          ...(card.leadId ? { leadId: card.leadId } : { contactId: quoteContactId }),
         });
         // THE QUOTE EXISTS. Everything below is about telling the person, and none
         // of it may undo that or report it as failed.
@@ -620,13 +691,14 @@ export async function confirmSavedAssistantCard(savedId: string): Promise<{ ok: 
     try {
       const result = await runAssistantAction(card);
       if (result.ok) await settle({ completedAt: new Date() });
-      else if (result.unchanged === true) await settle({ confirmedAt: null });
+      // `resumable`: part was written, and confirming again finds it rather than writing it twice.
+      else if (result.unchanged === true || result.resumable === true) await settle({ confirmedAt: null });
       else await settle({ failedAt: new Date() });
       // The page is NOT refreshed here. The card on screen shows what happened —
       // done, with its link, or why it failed — and a refresh would remove it
       // (it is no longer waiting) before the person had read that. It is gone
       // the next time the page loads.
-      return result.ok || result.unchanged === true
+      return result.ok || result.unchanged === true || result.resumable === true
         ? result
         : { ok: false, error: `${result.error ?? "That didn't work."} It won't be tried again from this card, because I can't be sure nothing was changed — check the record, then ask again if it's still needed.` };
     } catch (error) {

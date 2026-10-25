@@ -35,7 +35,8 @@ test("the switch is off unless it says exactly on", () => {
   for (const raw of [null, undefined, "", "off", "true", "ON", "1"]) assert.equal(whatsappConfirmOn(raw), false, String(raw));
   assert.equal(whatsappConfirmOn("on"), true);
   assert.equal(ASSISTANT_WHATSAPP_CONFIRM_KEY, "ASSISTANT_WHATSAPP_CONFIRM");
-  assert.equal(PENDING_ACTION_TTL_MS, 15 * 60 * 1000);
+  // An hour since 2026-10-24 (was 15 minutes: too short between voice notes).
+  assert.equal(PENDING_ACTION_TTL_MS, 60 * 60 * 1000);
 });
 
 test("only internal changes can be confirmed from a phone — nothing that reaches a customer", () => {
@@ -63,7 +64,7 @@ test("a Confirm button names its pending row and nothing else; the prompt says w
   }
   const prompt = confirmMessages({ title: "Add a pinned note to Anna's lead", text: "Wants white.", reason: "She asked twice." })!;
   assert.deepEqual(prompt.before, [], "it all fits the button message");
-  assert.match(prompt.body, /^Add a pinned note to Anna's lead\n\nWants white\.\n\nShe asked twice\.\n\nTap Confirm within 15 minutes/);
+  assert.match(prompt.body, /^Add a pinned note to Anna's lead\n\nWants white\.\n\nShe asked twice\.\n\nTap Confirm within 60 minutes/);
   assert.match(prompt.body, /Nothing changes until you do\./);
   // A scheduled question and a meeting's detail are shown too — they are what is being agreed to.
   assert.match(confirmMessages({ title: "Every Monday at 07:00", question: "Which deals went quiet?" })!.body, /Which deals went quiet\?/);
@@ -86,7 +87,7 @@ test("WHAT CONFIRM WRITES IS EXACTLY WHAT WAS SHOWN: a long note is never cut to
     assert.ok(sent.includes(squash(text)), `${length}: the whole note text was shown`);
     assert.ok(sent.includes(squash("She asked twice.")), `${length}: and the reason`);
     if (messages.before.length) {
-      assert.match(messages.body, /^Add a note to Anna's lead\n\nThe full text is in the message above — read it first\. Tap Confirm within 15 minutes/);
+      assert.match(messages.body, /^Add a note to Anna's lead\n\nThe full text is in the message above — read it first\. Tap Confirm within 60 minutes/);
       assert.ok(!messages.body.includes("Sentence number"), "the button message does not carry a partial copy that could be mistaken for the whole");
     }
   }
@@ -117,7 +118,7 @@ const state = {
   ran: [] as { asUserId: string; card: Record<string, unknown> }[],
   audits: [] as { action: string; summary: string; leadId?: string }[],
   errors: [] as string[],
-  outcome: { ok: true, success: "Note added" } as { ok: boolean; success?: string; error?: string; unchanged?: boolean; quote?: { id: string; number: number } } | "refuse" | "throw",
+  outcome: { ok: true, success: "Note added" } as { ok: boolean; success?: string; error?: string; unchanged?: boolean; resumable?: boolean; quote?: { id: string; number: number } } | "refuse" | "throw",
   failTextContaining: "",
   /** Where each run said Confirm was pressed. */
   via: [] as (string | undefined)[],
@@ -327,7 +328,7 @@ test("a tap runs the task ONCE, as the person it was offered to, and says so", a
 test("nothing runs: switch off, expired, someone else's, another workspace's, an unknown id, a kind that is not confirmable", async () => {
   const cases: [string, () => string, RegExp][] = [
     ["the owner's switch off", () => { state.on = false; return pendingRow().id; }, /switched off for this workspace/],
-    ["expired", () => pendingRow({ expiresAt: new Date(Date.now() - 1000) }).id, /has expired — a task can be confirmed for 15 minutes/],
+    ["expired", () => pendingRow({ expiresAt: new Date(Date.now() - 1000) }).id, /has expired — a task can be confirmed for 60 minutes/],
     // Somebody else's, another workspace's and a made-up id all read the same: nothing is revealed about a task that is not yours.
     ["offered to someone else", () => pendingRow({ userId: "u2" }).id, /^That one can't be confirmed — ask me again/],
     ["another workspace's", () => pendingRow({ tenantId: "t2" }).id, /^That one can't be confirmed — ask me again/],
@@ -356,7 +357,7 @@ test("after a claim: 'nothing changed' can be tried again; 'don't know how far i
   state.outcome = { ok: false, error: "This changed since DAX suggested it — ask again to see where it stands now.", unchanged: true };
   const retry = pendingRow();
   await confirmFromWhatsApp("t1", me, PHONE, retry.id);
-  assert.match(state.sent.at(-1)?.text ?? "", /^Not done: This changed since DAX suggested it[\s\S]*\n\nNothing was changed\. You can tap Confirm again until it expires\./);
+  assert.match(state.sent.at(-1)?.text ?? "", /^Not done: This changed since DAX suggested it[\s\S]*\n\nNothing was changed\. You can tap Confirm again \(or reply yes\) until it expires\./);
   assert.equal(retry.confirmedAt, null, "released");
   assert.equal(retry.completedAt, null);
   assert.equal(retry.failedAt, null);
@@ -398,6 +399,52 @@ test("after a claim: 'nothing changed' can be tried again; 'don't know how far i
   assert.equal(state.audits.filter((a) => a.action === "assistant.whatsapp_confirmed").length, 1, "one confirmation recorded: the one that happened");
 });
 
+test("review of #905: the customer record was made, then the quote failed — the card is offered again, never spent", async () => {
+  // runAssistantAction's answer when Confirm made the deal's customer and saveQuoteDraft then refused (or threw).
+  state.outcome = { ok: false, error: "“Blue” is not configured for this product. The customer record was made and linked to the deal, but the quote wasn't saved. Confirm again to retry — the same customer is used, and nothing is made twice.", resumable: true };
+  const quote = pendingRow();
+  const ranBefore = state.ran.length;
+  await confirmFromWhatsApp("t1", me, PHONE, quote.id);
+  const said = state.sent.at(-1)?.text ?? "";
+  assert.match(said, /^Not done: “Blue” is not configured[\s\S]*The customer record was made and linked to the deal, but the quote wasn't saved\./);
+  assert.match(said, /\n\nYou can tap Confirm again \(or reply yes\) until it expires\.$/);
+  assert.doesNotMatch(said, /Nothing was changed/, "something WAS changed, and it says so");
+  assert.equal(quote.confirmedAt, null, "released");
+  assert.equal(quote.failedAt, null, "not spent");
+  // Second review of #905: it fails AGAIN on the retry (the customer already there) — still offered, not spent.
+  state.outcome = { ok: false, error: "The quote couldn't be saved just now. The deal's customer record is in place, but the quote wasn't saved. Confirm again to retry — the same customer is used, and nothing is made twice.", resumable: true };
+  await confirmFromWhatsApp("t1", me, PHONE, quote.id);
+  assert.match(state.sent.at(-1)?.text ?? "", /^Not done: The quote couldn't be saved just now\.[\s\S]*You can tap Confirm again \(or reply yes\) until it expires\.$/);
+  assert.equal(quote.confirmedAt, null, "released a second time");
+  assert.equal(quote.failedAt, null, "still not spent");
+  state.outcome = { ok: true, success: "Draft quote Q-2029 created — R241 500,00. It has NOT been sent to the customer." };
+  await confirmFromWhatsApp("t1", me, PHONE, quote.id);
+  assert.equal(state.ran.length, ranBefore + 3, "the same card ran again, and again");
+  assert.notEqual(quote.completedAt, null, "…and is done");
+
+  // The action: `resumable` only after this Confirm made the customer, and only with a confirm key (at most one quote).
+  const action = code("src/app/actions/assistant.ts");
+  const build = action.slice(action.indexOf('case "quote_build": {'), action.indexOf('case "quote_pdf": {'));
+  assert.match(action, /const resumable = \(error: string\) => \(\{ ok: false as const, error, resumable: true as const \}\);/);
+  // Second review: on the CARD (it makes its customer, it has a key) — not on whether THIS attempt made the customer,
+  // which the retry after a first failure never does: a second failure spent the card.
+  assert.match(build, /const resumes = card\.createCustomer === true && !card\.contactId && keyed;/);
+  assert.match(build, /if \(!saved\.ok\) return resumes \? retryAfterCustomer\(saved\.error\) : \{ ok: false, error: saved\.error \};/);
+  assert.match(build, /if \(!resumes \|\| redirect\) throw error;/, "a throw from the save is offered again too; any other throw as before");
+  assert.ok(build.indexOf("retryAfterCustomer(saved.error)") > build.indexOf("convertLeadToContact("));
+  // …and the settings the quote needs are read BEFORE the customer is made: a failed read there now spends a card
+  // that has written nothing, instead of leaving a customer without a quote.
+  assert.ok(build.indexOf("await quoteFromLeadDefaults()") > -1 && build.indexOf("await quoteFromLeadDefaults()") < build.indexOf("convertLeadToContact("));
+  const afterCustomer = build.slice(build.indexOf("convertLeadToContact("), build.indexOf("await saveQuoteDraft("));
+  assert.doesNotMatch(afterCustomer.replace(/^\s*\/\/.*$/gm, ""), /await (?!logError)/, "between the customer record and the protected save, nothing else is awaited");
+  assert.equal(action.match(/resumable\(/g)?.length, 1, "made in one place: quote_build's retry after the customer");
+  // A colour the catalogue no longer has stops Confirm BEFORE the customer record is made.
+  assert.ok(build.indexOf("if (lines.some(notOffered)) return untouched(") < build.indexOf("convertLeadToContact("));
+  // The CRM card's own Confirm and its saved-card door release on it too.
+  assert.match(action, /else if \(result\.unchanged === true \|\| result\.resumable === true\) await settle\(\{ confirmedAt: null \}\);/);
+  assert.match(code("src/components/AssistantActionCard.tsx"), /!\("resumable" in result && result\.resumable === true\)/);
+});
+
 test("A PINNED NOTE WHOSE PIN FAILS IS NOT WRITTEN TWICE: the note was saved, so the same Confirm cannot run again", async () => {
   // What addCommunication does when the pin fails after the note is created: the note is in
   // the database, and an error comes back. Simulated here at that boundary — the real thing
@@ -430,7 +477,12 @@ test("A PINNED NOTE WHOSE PIN FAILS IS NOT WRITTEN TWICE: the note was saved, so
   // (And five are quote_add's: nothing to add, an invalid fee, quote gone or not theirs, no longer a draft, catalogue changed.)
   // (And two are quote_pdf's: quote gone or not theirs, no linked phone — each before its one write.)
   // (And one more of quote_add's: a card with no confirm key.)
-  assert.equal((run.match(/return untouched\(/g) ?? []).length, 27);
+  // (2026-10-24, three more of quote_build's — invalid fees, no quote permission, a customer they can't open — each
+  // before the customer record or the quote is written: the catalogue check now runs before the record is made.)
+  // (2026-10-25, review of #905: one more of quote_build's — a colour the catalogue no longer has, before the customer.)
+  assert.equal((run.match(/return untouched\(/g) ?? []).length, 31);
+  const buildCase = run.slice(run.indexOf('case "quote_build": {'), run.indexOf('case "quote_pdf": {'));
+  assert.ok(buildCase.indexOf("The catalogue changed since DAX suggested this") < buildCase.indexOf("convertLeadToContact("), "every check before the customer record is made");
   const quotePdfCase = run.slice(run.indexOf('case "quote_pdf": {'), run.indexOf('case "quote_change": {'));
   // (And four are quote_change's: no key, nothing to change, quote gone or not theirs, no longer a draft — each before the save.)
   const quoteChange = run.slice(run.indexOf('case "quote_change": {'), run.indexOf('case "quote_add": {'));
@@ -442,7 +494,10 @@ test("A PINNED NOTE WHOSE PIN FAILS IS NOT WRITTEN TWICE: the note was saved, so
   assert.equal((quoteAdd.slice(0, quoteAdd.indexOf("await saveQuoteDraft(")).match(/return untouched\(/g) ?? []).length, 6);
   assert.equal((quoteAdd.slice(quoteAdd.indexOf("await saveQuoteDraft("), quoteAdd.indexOf("default:")).match(/untouched\(/g) ?? []).length, 0);
   const quoteBuild = run.slice(run.indexOf('case "quote_build": {'), run.indexOf('case "quote_pdf": {'));
-  assert.equal((quoteBuild.slice(0, quoteBuild.indexOf("await saveQuoteDraft(")).match(/return untouched\(/g) ?? []).length, 5);
+  // 2026-10-24: eight — the five above, plus invalid fees, no quote permission and a customer they can't open, all
+  // before the customer record a deal without one gets (convertLeadToContact, a write: nothing after it is "untouched").
+  assert.equal((quoteBuild.slice(0, quoteBuild.indexOf("await saveQuoteDraft(")).match(/return untouched\(/g) ?? []).length, 9);
+  assert.equal((quoteBuild.slice(quoteBuild.indexOf("convertLeadToContact(")).match(/untouched\(/g) ?? []).length, 0);
   assert.equal((quoteBuild.slice(quoteBuild.indexOf("await saveQuoteDraft(")).match(/untouched\(/g) ?? []).length, 0);
   // …and never on an error handed back by the action a card delegates to.
   for (const delegated of run.match(/if \((?:!result\.ok|result\??\.error|!saved(?:\.ok)?)\) (?:\{\s*)?return [^\n]*/g) ?? []) {
@@ -451,13 +506,13 @@ test("A PINNED NOTE WHOSE PIN FAILS IS NOT WRITTEN TWICE: the note was saved, so
   assert.ok((run.match(/if \((?:!result\.ok|result\??\.error)\) return \{ ok: false/g) ?? []).length >= 10, "every delegate's error is returned unproven");
   // Every `untouched` return precedes the call that could write, within its own case.
   for (const block of run.split(/\n      case "/).slice(1)) {
-    const firstWrite = block.search(/await (scheduleFollowUp|addCommunication|assignLead|moveLead|scheduleActivity|createTestDriveBooking|rescheduleActivity|cancelActivity|markLost|createQuoteFromLead|createWatchForUser|withScheduleSlot)\(/);
+    const firstWrite = block.search(/await (scheduleFollowUp|addCommunication|assignLead|moveLead|scheduleActivity|createTestDriveBooking|rescheduleActivity|cancelActivity|markLost|createQuoteFromLead|createWatchForUser|withScheduleSlot|convertLeadToContact)\(/);
     const lastUntouched = block.lastIndexOf("return untouched(");
     if (lastUntouched > -1 && firstWrite > -1) assert.ok(lastUntouched < firstWrite, block.slice(0, 30));
   }
   // And the caller releases on that proof alone.
   const lib = code("src/lib/assistantWhatsAppConfirm.ts");
-  assert.match(lib, /if \(result\.unchanged === true\) \{\s*await settle\(\{ confirmedAt: null \}\);/);
+  assert.match(lib, /if \(result\.unchanged === true \|\| result\.resumable === true\) \{\s*await settle\(\{ confirmedAt: null \}\);/);
   assert.equal((lib.match(/settle\(\{ confirmedAt: null \}\)/g) ?? []).length, 1, "one way to release a claim, and it needs the proof");
 });
 
@@ -702,7 +757,7 @@ test("confirming a saved card in the CRM: the stored card, the person's own, at 
   assert.doesNotMatch(confirm, /savedId\.|JSON\.parse|formData/);
   // Done, proven-unchanged (released) and unknown (failed, never retried) are three different endings, each guarded on this claim.
   assert.match(confirm, /where: \{ id, userId: user\.id, forCrm: true, confirmedAt: now, completedAt: null, failedAt: null \}, data \}\)/);
-  assert.match(confirm, /if \(result\.ok\) await settle\(\{ completedAt: new Date\(\) \}\);\s*else if \(result\.unchanged === true\) await settle\(\{ confirmedAt: null \}\);\s*else await settle\(\{ failedAt: new Date\(\) \}\);/);
+  assert.match(confirm, /if \(result\.ok\) await settle\(\{ completedAt: new Date\(\) \}\);\s*(?:\/\/[^\n]*\n\s*)?else if \(result\.unchanged === true \|\| result\.resumable === true\) await settle\(\{ confirmedAt: null \}\);\s*else await settle\(\{ failedAt: new Date\(\) \}\);/);
   assert.match(confirm, /catch \(error\) \{\s*await settle\(\{ failedAt: new Date\(\) \}\);\s*throw error;/);
   // A drafted customer message has its own Send, where the wording is read first.
   assert.match(confirm, /card\.kind === "draft_message"\) \{\s*await settle\(\{ failedAt: new Date\(\) \}\);/);
@@ -732,7 +787,7 @@ test("the Ask page shows a person only their own waiting saved cards, and the ca
   assert.doesNotMatch(savedActions.replace(/\/\/.*$/gm, ""), /revalidatePath\(/);
   const card = code("src/components/AssistantActionCard.tsx");
   // A saved card that was tried and may have got part-way loses its Confirm button: it will not run again.
-  assert.match(card, /else if \(savedId && !\("unreached" in result\) && !\("unchanged" in result && result\.unchanged === true\)\) \{[\s\S]*?setState\("failed"\);/);
+  assert.match(card, /else if \(savedId && !\("unreached" in result\) && !\("unchanged" in result && result\.unchanged === true\) && !\("resumable" in result && result\.resumable === true\)\) \{[\s\S]*?setState\("failed"\);/);
   assert.match(card, /await \(savedId \? confirmSavedAssistantCard\(savedId\) : runAssistantAction\(card\)\)/);
   // Dismissing a saved card removes it for good; a sent draft is marked done; and a saved draft keeps ONE send id across reloads.
   assert.match(card, /if \(savedId\) void settleSavedAssistantCard\(savedId, "dismissed"\)/);

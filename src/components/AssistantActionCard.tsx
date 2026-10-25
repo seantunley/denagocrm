@@ -51,7 +51,7 @@ export default function AssistantActionCard({
       if (result.ok) {
         setState("done");
         if ("href" in result && result.href) setHref(result.href);
-      } else if (savedId && !("unreached" in result) && !("unchanged" in result && result.unchanged === true)) {
+      } else if (savedId && !("unreached" in result) && !("unchanged" in result && result.unchanged === true) && !("resumable" in result && result.resumable === true)) {
         // The server tried it and cannot say nothing changed, or it is no longer
         // waiting: either way this card will not run again, so it offers nothing
         // more. (Not reaching the server, or being told nothing changed, leaves

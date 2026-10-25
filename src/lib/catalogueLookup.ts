@@ -17,8 +17,8 @@ import { ciExactIdFilter } from "./ciExact";
  */
 
 const ON_SALE = { active: true, deletedAt: null };
-const QUOTE_FIELDS = { id: true, name: true, basePriceCents: true } as const;
-export type QuoteProduct = { id: string; name: string; basePriceCents: number };
+const QUOTE_FIELDS = { id: true, name: true, basePriceCents: true, colors: { select: { name: true } } } as const;
+export type QuoteProduct = { id: string; name: string; basePriceCents: number; colors: { name: string }[] };
 
 /**
  * The one product a quote line means, or null.
@@ -51,7 +51,12 @@ export async function resolveCatalogueProduct(line: { productId?: string; produc
 /** How many products the knowledge lookup shows at once. A whole small catalogue; otherwise the ones that match. */
 export const KNOWLEDGE_WHOLE_CATALOGUE = 15;
 export const KNOWLEDGE_MATCHES = 40;
-const KNOWLEDGE_FIELDS = { id: true, name: true, category: true, basePriceCents: true, description: true, showcaseTagline: true, showcaseSpecs: true } as const;
+// The colours too (Sean, 2026-10-24: asked for a Rover XL in grey, DAX said "the catalogue doesn't list available
+// colours" — it didn't, to DAX: they were never selected — and the quote stalled on it).
+const KNOWLEDGE_FIELDS = {
+  id: true, name: true, category: true, basePriceCents: true, description: true, showcaseTagline: true, showcaseSpecs: true,
+  colors: { select: { name: true }, orderBy: { name: "asc" } },
+} as const;
 
 /**
  * Products for the knowledge lookup: all of a small catalogue, or — from a

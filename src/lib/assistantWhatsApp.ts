@@ -47,6 +47,8 @@ import {
   maskWaId,
   outsideReplyWindow,
   parseConfirmId,
+  expandNumberedReply,
+  typedYes,
   parseLinkCode,
   parseUpdateTemplate,
   planWhatsAppReply,
@@ -228,7 +230,18 @@ export async function handleStaffWhatsApp(from: string, input: StaffWhatsAppInpu
   // A tapped Confirm button on a task proposed here earlier. Reached only now —
   // every check above has passed for THIS message — and it is not a question:
   // nothing is asked, and it does not count against the ask limit.
-  const pendingId = "text" in input ? parseConfirmId(input.choiceId) : null;
+  let pendingId = "text" in input ? parseConfirmId(input.choiceId) : null;
+  // A TYPED "yes" is that tap, when exactly ONE Confirm button is waiting for them, still live (Sean, 2026-10-24:
+  // he typed "Yes" and DAX, which cannot see the card, answered "there is nothing to confirm"). Two or more: it
+  // goes to DAX as before, which asks which one.
+  if (!pendingId && "text" in input && !input.choiceId && typedYes(input.text)) {
+    const live = await basePrisma.assistantPendingAction.findMany({
+      where: { tenantId, userId: user.id, forCrm: false, confirmedAt: null, completedAt: null, failedAt: null, expiresAt: { gt: new Date() } },
+      select: { id: true },
+      take: 2,
+    });
+    if (live.length === 1) pendingId = live[0].id;
+  }
   if (pendingId) {
     await confirmFromWhatsApp(tenantId, user, waId, pendingId);
     // WHAT THE CONFIRMED TASK QUEUED FOR THEM. A quote the assistant built leaves
@@ -237,7 +250,11 @@ export async function handleStaffWhatsApp(from: string, input: StaffWhatsAppInpu
     // a briefing: if this webhook ends first, or WhatsApp refuses, the half-hourly
     // sweep or their next message sends it — and tapping Confirm again cannot make
     // a second quote. Nothing queued: this sends nothing.
-    await sendUpdatesToLinkedPhone(tenantId, user.id, { windowOpen: true });
+    const delivered = await sendUpdatesToLinkedPhone(tenantId, user.id, { windowOpen: true });
+    // Not gone yet (the PDF would not render this minute, WhatsApp was busy): said, not silent — it is retried.
+    if (delivered === "failed" || delivered === "more") {
+      await sendPlan(waId, { texts: ["The PDF is on its way — it didn't go just now, so I'll keep trying. The quote is in the CRM meanwhile."], buttons: null });
+    }
     return true;
   }
 
@@ -296,7 +313,16 @@ export async function handleStaffWhatsApp(from: string, input: StaffWhatsAppInpu
     images = [jpegDataUrl(cleaned)];
     question = input.caption.trim() || IMAGE_QUESTION;
   }
-  const q = String(question ?? "").trim().slice(0, QUESTION_CHARS);
+  let q = String(question ?? "").trim().slice(0, QUESTION_CHARS);
+  // "2" = the second numbered option in DAX's last answer here, in its words.
+  if (/^\s*\d{1,2}\s*[.)]?\s*$/.test(q)) {
+    const last = await basePrisma.assistantTurn.findFirst({
+      where: { tenantId, userId: user.id, source: "whatsapp", createdAt: { gt: new Date(Date.now() - 60 * 60 * 1000) } },
+      orderBy: { createdAt: "desc" },
+      select: { answer: true },
+    });
+    q = expandNumberedReply(q, last?.answer);
+  }
   if (!q) {
     await sendPlan(waId, { texts: ["Ask me anything about your leads, quotes or calendar."], buttons: null });
     return true;

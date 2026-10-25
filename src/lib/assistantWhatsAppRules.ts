@@ -106,7 +106,24 @@ export const ASSISTANT_WHATSAPP_CONFIRM_KEY = "ASSISTANT_WHATSAPP_CONFIRM";
 export const whatsappConfirmOn = (raw: string | null | undefined): boolean => raw === "on";
 
 /** How long a proposed task can still be confirmed. After that: ask again. */
-export const PENDING_ACTION_TTL_MS = 15 * 60 * 1000;
+// An hour (was 15 minutes, Sean 2026-10-24): long enough to finish a call, or a few voice notes back and forth.
+export const PENDING_ACTION_TTL_MS = 60 * 60 * 1000;
+
+/** A typed yes: "Yes", "yes please", "Confirm", "ja", "go ahead", "👍" — and nothing else in the message. */
+export const typedYes = (text: string) =>
+  /^\s*(yes( please)?|yep|yeah|ja|y|ok(ay)?|confirm|confirmed|go ahead|do it|correct|👍)\s*[.!]*\s*$/iu.test(text);
+
+/**
+ * "2" as the second of the numbered options in DAX's last answer ("1. Yes, Werner Kilian — leave colour open /
+ * 2. Yes, Werner Kilian — check gray first"): the option's words, so DAX reads what was chosen (Sean, 2026-10-24:
+ * he replied "2" and DAX asked what he meant). Anything else, or a number with no such option, is unchanged.
+ */
+export function expandNumberedReply(question: string, lastAnswer: string | null | undefined): string {
+  const n = /^\s*(\d{1,2})\s*[.)]?\s*$/.exec(question)?.[1];
+  if (!n || !lastAnswer) return question;
+  const option = new RegExp(`^\\s*${n}[.)]\\s+(.+)$`, "m").exec(lastAnswer)?.[1]?.trim();
+  return option ? `${option} (option ${n})` : question;
+}
 /**
  * How long a task proposed on WhatsApp but done in the CRM waits as a card on
  * the Ask page. A day, not fifteen minutes: the person is on their phone now
