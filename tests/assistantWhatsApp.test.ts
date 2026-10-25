@@ -55,6 +55,7 @@ type Link = {
   sessionVersion?: number | null;
   refusedReason?: string | null;
   updatesOnWhatsApp?: boolean; nudgedAt?: Date | null; nudgeFailedAt?: Date | null; lastInboundAt?: Date | null;
+  contentTemplateRefusedAt?: Date | null;
 };
 /** An answer in a person's history. Only schedule and watch ones are ever sent to a phone. */
 type Turn = { id: string; tenantId: string; userId: string; source: string; question: string; answer: string; createdAt: Date; whatsappSentAt: Date | null; whatsappClaimedAt: Date | null; whatsappPartsSent: number; quoteId?: string | null };
@@ -94,6 +95,10 @@ const state = {
   /** The owner's template setting, as stored. */
   template: null as string | null,
   templatesSent: [] as { to: string; name: string; language: string }[],
+  /** The owner's content template setting, what it carried, and Meta refusing it. */
+  contentTemplate: null as string | null,
+  contentSent: [] as { to: string; name: string; language: string; bodyText: string }[],
+  contentTemplateFails: null as string | null,
   /** Meta refusing a text for the 24-hour rule although our clock said it was open. */
   metaRefuses: false,
   /** Texts fail once this many have gone (null = never). */
@@ -179,7 +184,7 @@ loaderKey._load = function (this: unknown, request: string, parent, isMain) {
   if (fromLib(parent)) {
     switch (request) {
       case "./db": return { basePrisma: fakeDb };
-      case "./settings": return { getSetting: async (key: string) => (key === "ASSISTANT_WHATSAPP" ? state.switch : key === "ASSISTANT_WHATSAPP_TEMPLATE" ? state.template : null) };
+      case "./settings": return { getSetting: async (key: string) => (key === "ASSISTANT_WHATSAPP" ? state.switch : key === "ASSISTANT_WHATSAPP_TEMPLATE" ? state.template : key === "ASSISTANT_WHATSAPP_CONTENT_TEMPLATE" ? state.contentTemplate : null) };
       case "./tenantScope": return { currentTenantScope: () => state.scope };
       case "./whatsapp": return {
         waDigits: (p: string) => { const d = p.replace(/\D/g, ""); return d.startsWith("0") ? "27" + d.slice(1) : d; },
@@ -193,8 +198,14 @@ loaderKey._load = function (this: unknown, request: string, parent, isMain) {
           state.onSend?.();
           return { ok: true };
         },
-        sendWhatsAppTemplate: async (to: string, name: string, language: string) => {
+        sendWhatsAppTemplate: async (to: string, name: string, language: string, bodyText?: string) => {
           state.templateTries++;
+          if (bodyText !== undefined) {
+            // The content template: its own failure switch, and what it carried.
+            if (state.contentTemplateFails) return { ok: false, error: state.contentTemplateFails };
+            state.contentSent.push({ to, name, language, bodyText });
+            return { ok: true };
+          }
           if (state.templateFails === "throws") throw new Error("socket hang up");
           if (state.templateFails) return { ok: false, error: state.templateFails };
           state.templatesSent.push({ to, name, language });
@@ -311,7 +322,7 @@ function verified(userId: string, waId: string, tenantId = "t1"): Link {
 const HOUR = 3_600_000;
 /** A scheduled briefing (or watch alert) saved to u1's history `hoursAgo` hours ago, not yet on their phone. */
 function waitingTurn(id: string, hoursAgo = 0, source = "schedule", userId = "u1"): Turn {
-  const row: Turn = { id, tenantId: "t1", userId, source, question: `Question ${id}`, answer: `Answer ${id}`, createdAt: new Date(Date.now() - hoursAgo * HOUR), whatsappSentAt: null, whatsappClaimedAt: null, whatsappPartsSent: 0 };
+  const row: Turn = { id, tenantId: "t1", userId, source, question: `Question ${id}`, answer: `Answer ${id}`, createdAt: new Date(Date.now() - hoursAgo * HOUR), whatsappSentAt: null, whatsappClaimedAt: null, whatsappPartsSent: 0, quoteId: null };
   state.turns.push(row);
   return row;
 }
@@ -350,6 +361,9 @@ beforeEach(() => {
   state.textFailsFrom = null;
   state.templateFails = null;
   state.templateTries = 0;
+  state.contentTemplate = null;
+  state.contentSent = [];
+  state.contentTemplateFails = null;
   state.quotes = [];
   state.documents = [];
   state.rendered = [];
@@ -1045,6 +1059,70 @@ test("outside the 24 hours NOTHING of the CRM is sent: the template goes instead
   assert.equal(state.templatesSent.length, 1);
 });
 
+/* ---------- The content template (Sean, 2026-10-20: Donovan's reminder sat behind "tap to read it") ---------- */
+
+test("outside the 24 hours, with a content template, the update ITSELF goes — readable, no tap — and is done", async () => {
+  state.template = "assistant_update_ready|en";
+  state.contentTemplate = "assistant_update_text|en";
+  const link = verified("u1", STAFF);
+  link.lastInboundAt = new Date(Date.now() - 6 * 24 * HOUR);
+  const reminder = waitingTurn("r1");
+  reminder.question = "Remind me to contact Aquila Game Reserve about the Rover";
+  reminder.answer = "📞 Contact Aquila Game Reserve today.\n\nMy read: ask how they run excursions.";
+  assert.equal(await sendUpdatesToLinkedPhone("t1", "u1"), "sent");
+  assert.deepEqual(state.contentSent, [{
+    to: STAFF, name: "assistant_update_text", language: "en",
+    bodyText: "⏰ Reminder: Contact Aquila Game Reserve about the Rover · 📞 Contact Aquila Game Reserve today. · My read: ask how they run excursions.",
+  }]);
+  assert.ok(reminder.whatsappSentAt, "done — it is not sent again when they next write");
+  assert.equal(state.templatesSent.length, 0, "no 'tap to read it' nudge: there is nothing left behind one");
+  assert.equal(state.sent.length, 0, "never a free text outside the 24 hours");
+});
+
+test("what a template cannot carry (a quote's PDF) still gets the nudge; the rest has gone readable", async () => {
+  state.template = "assistant_update_ready|en";
+  state.contentTemplate = "assistant_update_text|en";
+  verified("u1", STAFF).lastInboundAt = new Date(Date.now() - 30 * HOUR);
+  const words = waitingTurn("words");
+  const pdf = waitingTurn("pdf", 0, "quote_pdf");
+  pdf.quoteId = "q1";
+  assert.equal(await sendUpdatesToLinkedPhone("t1", "u1"), "nudged");
+  assert.equal(state.contentSent.length, 1);
+  assert.ok(words.whatsappSentAt);
+  assert.equal(pdf.whatsappSentAt, null, "the PDF waits for their tap");
+  assert.equal(state.templatesSent.length, 1);
+});
+
+test("Meta refusing the content template (not approved yet): the nudge goes instead, and it isn't retried for a day", async () => {
+  state.template = "assistant_update_ready|en";
+  state.contentTemplate = "assistant_update_text|en";
+  state.contentTemplateFails = "WhatsApp API error 404: (#132001) Template name does not exist in the translation";
+  const link = verified("u1", STAFF);
+  link.lastInboundAt = new Date(Date.now() - 30 * HOUR);
+  const brief = waitingTurn("brief");
+  assert.equal(await sendUpdatesToLinkedPhone("t1", "u1"), "nudged");
+  assert.equal(brief.whatsappSentAt, null, "nothing lost: it waits behind the nudge");
+  assert.equal(brief.whatsappClaimedAt, null, "and its claim is given back");
+  assert.ok(link.contentTemplateRefusedAt);
+  assert.ok(state.errors.some((e) => /content template refused/.test(e)));
+  // The next tick: not tried again today.
+  const tries = state.templateTries;
+  state.contentTemplateFails = null;
+  link.nudgedAt = null;
+  assert.equal(await sendUpdatesToLinkedPhone("t1", "u1"), "nudged");
+  assert.equal(state.contentSent.length, 0, "a refused template is not repeated within the day");
+  assert.equal(state.templateTries, tries + 1, "only the nudge");
+});
+
+test("without a content template set, the old way exactly: the nudge, and it all waits", async () => {
+  state.template = "assistant_update_ready|en";
+  verified("u1", STAFF).lastInboundAt = new Date(Date.now() - 30 * HOUR);
+  const brief = waitingTurn("brief");
+  assert.equal(await sendUpdatesToLinkedPhone("t1", "u1"), "nudged");
+  assert.equal(state.contentSent.length, 0);
+  assert.equal(brief.whatsappSentAt, null);
+});
+
 test("a link that has never written in is outside the 24 hours; with no template set it simply waits", async () => {
   verified("u1", STAFF);
   const brief = waitingTurn("brief");
@@ -1406,9 +1484,13 @@ test("wired where it must be: after a saved briefing, after a saved alert, on th
   assert.ok(handler.indexOf("const user = await assistantUserFor(link.userId);") < handler.indexOf("lastInboundAt: new Date()"));
   assert.match(handler, /where: \{ id: link\.id, tenantId, waId \}, data: \{ lastInboundAt: new Date\(\), nudgedAt: null, nudgeFailedAt: null \}/);
   assert.match(lib, /if \(caughtUp === "failed" \|\| caughtUp === "not_safe"\) await sendPlan\(waId, \{ texts: \["I couldn't send your update here just now\./, "a failed delivery is not reported as 'nothing waiting'");
-  // The template carries no variables: nothing of the CRM's is in it.
+  // The NUDGE template carries no variables: nothing of the CRM's is in it. Only the owner's separate content
+  // template (2026-10-20) carries the update, and only when its text is passed.
   const wa = code("src/lib/whatsapp.ts");
-  assert.match(wa, /type: "template", template: \{ name, language: \{ code: languageCode \} \} \}\)/);
+  assert.match(wa, /const components = bodyText \? \[\{ type: "body", parameters: \[\{ type: "text", text: bodyText \}\] \}\] : undefined;/);
+  assert.match(wa, /template: \{ name, language: \{ code: languageCode \}, \.\.\.\(components \? \{ components \} : \{\}\) \}/);
+  const nudge = lib.slice(lib.indexOf("async function nudgeWithTemplate("), lib.indexOf("export async function sweepWaitingUpdates"));
+  assert.match(nudge, /sendWhatsAppTemplate\(link\.waId, template\.name, template\.language\)\.catch/, "the nudge passes no text");
   // Each person's own switch names only their own row; the template is the owner's, and audited.
   const actions = code("src/app/actions/assistantWhatsApp.ts");
   const mine = actions.slice(actions.indexOf("export async function setMyWhatsAppUpdates"), actions.indexOf("export async function unlinkMyWhatsApp"));

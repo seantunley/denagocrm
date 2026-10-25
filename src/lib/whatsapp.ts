@@ -351,10 +351,12 @@ export async function showWhatsAppTyping(messageId: string | null | undefined): 
  * No variables: the templates this CRM uses carry none, so there is nothing of
  * ours in a message Meta has not seen.
  */
-export async function sendWhatsAppTemplate(toDigits: string, name: string, languageCode: string): Promise<WhatsAppSendResult> {
+export async function sendWhatsAppTemplate(toDigits: string, name: string, languageCode: string, bodyText?: string): Promise<WhatsAppSendResult> {
   const creds = await waCredentials();
   if (!creds) return { ok: false, error: "WhatsApp is not configured (Settings → Integrations)." };
-  return postWhatsAppMessage(creds, { to: toDigits, type: "template", template: { name, language: { code: languageCode } } });
+  // bodyText fills the template's {{1}} (a template made with one variable in its body).
+  const components = bodyText ? [{ type: "body", parameters: [{ type: "text", text: bodyText }] }] : undefined;
+  return postWhatsAppMessage(creds, { to: toDigits, type: "template", template: { name, language: { code: languageCode }, ...(components ? { components } : {}) } });
 }
 
 /** Sends an image by URL (e.g. a brochure) on WhatsApp. */

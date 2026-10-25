@@ -25,8 +25,10 @@ import { logError } from "./errorLog";
 import { rateLimitKey, registerRateLimitAttempt } from "./rateLimit";
 import { readUserSecurityStateStrict } from "./userSecurity";
 import {
+  ASSISTANT_WHATSAPP_CONTENT_TEMPLATE_KEY,
   ASSISTANT_WHATSAPP_KEY,
   ASSISTANT_WHATSAPP_TEMPLATE_KEY,
+  templateParam,
   LINK_GUESS_POLICY,
   LINK_GUESS_WORKSPACE_POLICY,
   NUDGE_EVERY_MS,
@@ -531,7 +533,7 @@ export async function sendUpdatesToLinkedPhone(
     if (!(await assistantWhatsAppOn())) return "not_wanted";
     const link = await basePrisma.assistantPhoneLink.findFirst({
       where: { tenantId, userId, verifiedAt: { not: null } },
-      select: { id: true, waId: true, sessionVersion: true, nudgedAt: true, nudgeFailedAt: true, lastInboundAt: true, updatesOnWhatsApp: true },
+      select: { id: true, waId: true, sessionVersion: true, nudgedAt: true, nudgeFailedAt: true, contentTemplateRefusedAt: true, lastInboundAt: true, updatesOnWhatsApp: true },
     });
     if (!link?.waId) return "not_wanted";
     // "Send my updates to this phone" switched off: briefings, alerts and handoffs
@@ -540,11 +542,13 @@ export async function sendUpdatesToLinkedPhone(
     const sources: string[] = link.updatesOnWhatsApp ? [...PROACTIVE_SOURCES] : [QUOTE_PDF_SOURCE];
     // WAITING: not finished, and not being sent by somebody else right now. A
     // claim that has outlived UPDATE_CLAIM_MS belongs to a run that stopped.
-    const waiting = () =>
+    // textOnly: what a template can carry — not a quote's PDF.
+    const waiting = (textOnly = false) =>
       basePrisma.assistantTurn.findMany({
         where: {
           tenantId, userId, source: { in: sources }, whatsappSentAt: null, createdAt: { gt: new Date(Date.now() - UPDATE_WAIT_MS) },
           OR: [{ whatsappClaimedAt: null }, { whatsappClaimedAt: { lt: new Date(Date.now() - UPDATE_CLAIM_MS) } }],
+          ...(textOnly ? { quoteId: null } : {}),
         },
         orderBy: { createdAt: "asc" },
         take: UPDATE_BATCH,
@@ -558,7 +562,14 @@ export async function sendUpdatesToLinkedPhone(
     const customer = await matchByPhone(link.waId);
     if (customer.contactId || customer.leadId || customer.ambiguous) return "not_safe";
 
-    if (!opts.windowOpen && !replyWindowOpen(link.lastInboundAt)) return await nudgeWithTemplate(tenantId, link, outOfTime);
+    if (!opts.windowOpen && !replyWindowOpen(link.lastInboundAt)) {
+      // THE UPDATE ITSELF, in the content template, when the owner has set one (Sean, 2026-10-20). Anything it
+      // cannot carry (a quote's PDF), or everything if Meta refuses it, still gets the nudge: tap and it all arrives.
+      const content = await sendInContentTemplate(tenantId, userId, link, () => waiting(true), outOfTime);
+      if (content === "more") return "more";
+      if (content === "all" && (await waiting()).length === 0) return "sent";
+      return await nudgeWithTemplate(tenantId, link, outOfTime);
+    }
 
     // ALL OF IT, a batch at a time until none is left — "tap and everything that
     // was waiting arrives" is the promise. Every pass either finishes updates
@@ -716,6 +727,54 @@ async function sendQuotePdfToStaff(tenantId: string, userId: string, waId: strin
   return null;
 }
 const OUT_OF_TIME = Symbol("out of time");
+
+/**
+ * Outside the 24 hours, each waiting update ITSELF in the owner's content template ({{1}} = the update, flattened
+ * and cut to fit; the whole of it stays in the CRM). "all": none of what a template can carry is left; "more": out
+ * of time or at UPDATE_MAX, the rest next run; "none": no template set, refused by Meta (then not tried again for a
+ * day), or a passing failure — the nudge covers what is waiting.
+ *
+ * Claimed like sendOneUpdate, so a cron tick and the person's own message never both send one; marked sent only
+ * once WhatsApp has taken it.
+ */
+async function sendInContentTemplate(
+  tenantId: string,
+  userId: string,
+  link: { id: string; waId: string | null; contentTemplateRefusedAt: Date | null },
+  waitingText: () => Promise<{ id: string; source: string; question: string; answer: string }[]>,
+  outOfTime: () => boolean,
+): Promise<"all" | "more" | "none"> {
+  const template = parseUpdateTemplate(await getSetting(ASSISTANT_WHATSAPP_CONTENT_TEMPLATE_KEY).catch(() => null));
+  if (!template || !link.waId) return "none";
+  if (link.contentTemplateRefusedAt && Date.now() - link.contentTemplateRefusedAt.getTime() < NUDGE_EVERY_MS) return "none";
+  let done = 0;
+  for (let batch = await waitingText(); batch.length > 0; batch = await waitingText()) {
+    for (const turn of batch) {
+      if (done >= UPDATE_MAX || outOfTime()) return "more";
+      const mine = new Date();
+      const claimed = await basePrisma.assistantTurn.updateMany({
+        where: { id: turn.id, tenantId, userId, whatsappSentAt: null, OR: [{ whatsappClaimedAt: null }, { whatsappClaimedAt: { lt: new Date(Date.now() - UPDATE_CLAIM_MS) } }] },
+        data: { whatsappClaimedAt: mine },
+      });
+      if (claimed.count !== 1) continue; // another sender has it
+      const sent = await sendWhatsAppTemplate(link.waId, template.name, template.language, templateParam(updateText(turn))).catch(() => ({ ok: false, error: "Could not reach WhatsApp" }));
+      if (!sent.ok) {
+        await basePrisma.assistantTurn.updateMany({ where: { id: turn.id, tenantId, userId, whatsappClaimedAt: mine }, data: { whatsappClaimedAt: null } });
+        if (!nudgeFailureMayPass(sent.error)) {
+          // Not approved yet, wrong name, wrong variables: not again for a day — repeating a refused template costs
+          // the number its standing. The owner fixes the setting; meanwhile the nudge still goes.
+          await basePrisma.assistantPhoneLink.updateMany({ where: { id: link.id, tenantId }, data: { contentTemplateRefusedAt: new Date() } });
+          await logError("assistant-whatsapp", "content template refused by WhatsApp, not retried today").catch(() => {});
+        }
+        return "none";
+      }
+      await basePrisma.assistantTurn.updateMany({ where: { id: turn.id, tenantId, userId, whatsappClaimedAt: mine }, data: { whatsappSentAt: new Date(), whatsappClaimedAt: null } });
+      done++;
+    }
+  }
+  if (link.contentTemplateRefusedAt) await basePrisma.assistantPhoneLink.updateMany({ where: { id: link.id, tenantId }, data: { contentTemplateRefusedAt: null } });
+  return "all";
+}
 
 /**
  * The template: it says only that something is waiting, and carries nothing of
