@@ -349,7 +349,6 @@ export default async function ContactDetailPage({
           <Tabs
             // Not keyed on ?tab: a key change rebuilds every panel and loses what is being typed (TabLink switches in place).
             initialKey={tab ?? "comms"}
-            overflowKeys={["research", "referrals", "privacy"]}
             tabs={[
               {
                 key: "comms",

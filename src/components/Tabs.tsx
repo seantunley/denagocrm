@@ -39,9 +39,10 @@ export type TabDef = {
   lazy?: boolean;
 };
 
-export default function Tabs({ tabs, initialKey, overflowKeys = [], overflowLabel = "More customer sections" }: { tabs: TabDef[]; initialKey?: string; overflowKeys?: string[]; overflowLabel?: string }) {
+// Every section is its own tab — no "More" dropdown (Sean, 2026-10-18, on both the deal and the customer page).
+// A long row scrolls sideways instead.
+export default function Tabs({ tabs, initialKey }: { tabs: TabDef[]; initialKey?: string }) {
   const id = useId();
-  const overflow = tabs.filter((tab) => overflowKeys.includes(tab.key));
   const first =
     initialKey && tabs.some((t) => t.key === initialKey) ? initialKey : tabs[0]?.key;
   const [active, setActive] = useState(first);
@@ -67,7 +68,7 @@ export default function Tabs({ tabs, initialKey, overflowKeys = [], overflowLabe
   return (
     <div>
       <div role="group" aria-label="Record sections" className="mb-5 flex w-fit max-w-full gap-1 overflow-x-auto overflow-y-hidden rounded-xl border border-border bg-card/70 p-1 shadow-sm [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-        {tabs.filter((tab) => !overflowKeys.includes(tab.key)).map((t) => (
+        {tabs.map((t) => (
           <button
             key={t.key}
             type="button"
@@ -96,10 +97,6 @@ export default function Tabs({ tabs, initialKey, overflowKeys = [], overflowLabe
             )}
           </button>
         ))}
-        {overflow.length > 0 && <select aria-label={overflowLabel} value={overflowKeys.includes(active ?? "") ? active : ""} onChange={(event) => event.target.value && select(event.target.value)} className={cn("min-h-10 max-w-40 shrink-0 rounded-lg bg-card px-2 text-[13px] font-medium focus-visible:ring-2 focus-visible:ring-primary", overflowKeys.includes(active ?? "") ? "text-primary" : "text-muted-foreground")}>
-          <option value="" disabled>More</option>
-          {overflow.map((tab) => <option key={tab.key} value={tab.key}>{tab.label}{tab.count ? ` (${tab.count})` : ""}</option>)}
-        </select>}
       </div>
       {/* Panels stay mounted so in-progress form input survives tab switches */}
       {tabs.map((t) => (
