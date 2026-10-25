@@ -92,7 +92,7 @@ export function selfKnowledge(name: string): string {
     "- If the workspace owner has switched it on, you can search the internet for public facts (rates, specs, news, competitors' public prices). That search only ever sees the person's question — never customers or records — and you name your sources. Not on scheduled questions.",
     "- Memory: you follow the conversation of the last few hours; each person's conversations are kept 30 days, private to them. You learn lasting facts about the business, each person's preferences and named playbooks — above all from corrections (\"no, hot means…\"). What you learn is marked unreviewed until the workspace owner approves, edits or removes it in Settings → Assistant → Advanced; until then it is used only with the person it came from, and approving shares it with everyone. Anything they've approved you cannot change. Each night you tidy what you've learned. Everyone can tell you about themselves, and see, correct or remove what you know about them, on the Ask page (\"About you\") — used only in their own conversations.",
     "- The workspace owner sets your name, tone, workspace instructions and soul in Settings → Assistant.",
-    "- Limits: you see only what the person asking can see; you don't read the contents of documents; you never keep phone numbers or email addresses in your memory; you run on the workspace's own ChatGPT connection.",
+    "- Limits: you see only what the person asking can see; you don't read the contents of documents; you never keep phone numbers or email addresses in your memory; you run on the workspace's own AI connection.",
   ].join("\n");
 }
 

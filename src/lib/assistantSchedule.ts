@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { AI_NOT_CONNECTED } from "./codexErrors";
 
 /**
  * Scheduled requests — a question DAX answers on its own at a set time ("every
@@ -157,8 +158,8 @@ export const SCHEDULE_SKIPPED_NOTE =
  * technical reason from ChatGPT, and that isn't for the thread.
  */
 export function scheduleFailureNote(error: string): string {
-  if (/connect chatgpt/i.test(error)) {
-    return "I couldn't run this scheduled question: ChatGPT isn't connected for this workspace (Settings → Integrations → ChatGPT).";
+  if (error === AI_NOT_CONNECTED) {
+    return "I couldn't run this scheduled question: DAX isn't connected to an AI service for this workspace (Settings → Integrations).";
   }
-  return "I couldn't run this scheduled question just now — ChatGPT didn't give me an answer. You can ask it yourself now.";
+  return "I couldn't run this scheduled question just now — the AI service didn't give me an answer. You can ask it yourself now.";
 }
