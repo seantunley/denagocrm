@@ -413,12 +413,17 @@ const BOUNCE_NOTIFY_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 /**
  * Tell the sender of each bounced email they haven't been told about yet — only
  * them. The email row is its own outbox (review of #907): `bounceNotifiedAt` is
- * set only AFTER the push call returns, so a push that throws, or a process that
- * dies between the bounce and the alert, leaves it owed, and every mailbox sync
- * tries again. A second failed address on the same email clears it, so that one
- * is told too. Marked only if no address was added meanwhile. Exported for end-to-end checks.
+ * set only once a push service has ACCEPTED the alert for at least one of their
+ * devices. Every other outcome leaves it owed and every mailbox sync tries again,
+ * for BOUNCE_NOTIFY_WINDOW_MS: a push that throws or that every device refused,
+ * a process that died between the bounce and the alert — and also no device
+ * registered, push not set up, or the alert switched off, which sendPushToAll
+ * reports the same way (0). Those are never recorded as told; a phone added
+ * within the window still gets it. A second failed address on the same email
+ * clears it, so that one is told too. Marked only if no address was added
+ * meanwhile. `push` is a parameter for the end-to-end check (scripts/test-email-bounces.ts).
  */
-export async function notifyBounces(onlyId?: string): Promise<void> {
+export async function notifyBounces(onlyId?: string, push: typeof sendPushToAll = sendPushToAll): Promise<void> {
   const owed = await prisma.communication.findMany({
     where: {
       ...(onlyId ? { id: onlyId } : {}),
@@ -428,10 +433,12 @@ export async function notifyBounces(onlyId?: string): Promise<void> {
       bounceNotifiedAt: null,
     },
     select: { id: true, userId: true, contactId: true, leadId: true, bounceReason: true },
+    // Newest first: an alert that can never be delivered (no device) must not crowd out a fresh one.
+    orderBy: { bouncedAt: "desc" },
     take: 25,
   });
   for (const email of owed) {
-    await sendPushToAll(
+    const accepted = await push(
       {
         title: "⚠️ Email not delivered",
         body: (email.bounceReason ?? "").split("\n").filter(Boolean).join("; ").slice(0, 100),
@@ -440,6 +447,7 @@ export async function notifyBounces(onlyId?: string): Promise<void> {
       "email_bounced",
       { userId: email.userId }, // whoever sent it, and nobody else
     );
+    if (accepted < 1) continue; // nobody was reached — still owed
     await prisma.communication.updateMany({
       where: { id: email.id, bounceNotifiedAt: null, bounceReason: email.bounceReason },
       data: { bounceNotifiedAt: new Date() },

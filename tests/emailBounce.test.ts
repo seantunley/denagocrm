@@ -145,7 +145,11 @@ test("wiring: the mailbox sync reads bounces before tickets or replies, and ever
   assert.match(sync, /"email_bounced",\s*\{ userId: email\.userId \}/);
   assert.equal(sync.match(/"email_bounced"/g)?.length, 1);
   // The alert is owed until the push call returns, and every sync retries what is owed.
-  assert.match(sync, /await sendPushToAll\([\s\S]*?\);\s*await prisma\.communication\.updateMany\(\{\s*where: \{ id: email\.id, bounceNotifiedAt: null, bounceReason: email\.bounceReason \},\s*data: \{ bounceNotifiedAt: new Date\(\) \}/);
+  // …and "told" means a push service ACCEPTED it: 0 accepted (refused, no device, push off) stays owed.
+  assert.match(sync, /const accepted = await push\([\s\S]*?\);\s*if \(accepted < 1\) continue;[^\n]*\s*await prisma\.communication\.updateMany\(\{\s*where: \{ id: email\.id, bounceNotifiedAt: null, bounceReason: email\.bounceReason \},\s*data: \{ bounceNotifiedAt: new Date\(\) \}/);
+  // The real-database scenarios run in CI.
+  assert.match(code("package.json"), /"test:email-bounces": "tsx --tsconfig tsconfig\.harness\.json scripts\/test-email-bounces\.ts"/);
+  assert.match(code(".github/workflows/security-rbac-ci.yml"), /run: npm run test:email-bounces/);
   assert.match(sync, /await notifyBounces\(\)\.catch\(.*\);\s*await client\.connect\(\);/);
   // Never "their latest email": only the email's own Message-ID marks one.
   assert.doesNotMatch(sync, /BOUNCE_LOOKBACK|occurredAt: \{ gte/);
