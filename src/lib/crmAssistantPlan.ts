@@ -130,6 +130,8 @@ export const statsArgs = z
 
 /** One lead in depth: who, what, every recent message, quote and activity. */
 export const leadBriefArgs = z.object({ lead: z.string().trim().min(1).max(120) }).strict();
+/** WHY something happened on one record: its history with the cause of each event (assistantWhy). */
+export const whyArgs = z.object({ record: z.string().trim().min(1).max(120) }).strict();
 /** What the business knows: products, prices, approved answers, competitors. */
 export const knowledgeArgs = z.object({ topic: z.string().trim().min(1).max(200) }).strict();
 /**
@@ -155,6 +157,7 @@ export const assistantStep = z.discriminatedUnion("tool", [
   z.object({ tool: z.literal("find_quotes"), args: quoteArgs.default({}) }),
   z.object({ tool: z.literal("find_activities"), args: activityArgs }),
   z.object({ tool: z.literal("lead_brief"), args: leadBriefArgs }),
+  z.object({ tool: z.literal("why"), args: whyArgs }),
   z.object({ tool: z.literal("knowledge"), args: knowledgeArgs }),
   z.object({ tool: z.literal("recall"), args: recallArgs }),
   z.object({ tool: z.literal("playbook"), args: playbookArgs }),
@@ -207,6 +210,7 @@ export function planInstructions(ctx: PlanContext): string {
     '- documents: {"customer":"<customer name, lead title or id>" (required)} — what is on file for one customer (titles, tags, dates — not contents).',
     '- find_activities: {"when":"overdue|today|today_and_overdue|this_week|upcoming|past" (required),"from":"YYYY-MM-DD","to":"YYYY-MM-DD","type":"<type>","assignedTo":"<person — theirs, or a meeting they attend>","search":"<words in the activity>","limit":<1-25>} — the calendar: calls, meetings, to-dos, test drives, events, and blocked time (personal items: leave, an appointment, admin time). "What is in my calendar / diary this week" → this_week with assignedTo: today and the next six days, blocked time included — say which dates that covers. "What does X have to do today / what\'s on their plate" → today_and_overdue (what\'s late still has to be done). "When is the next golf day / launch / service" → upcoming with search — events live here, not in knowledge. What HAPPENED ("what golf days did we have last month", "what was on 22 September") → "past" with from/to (one day: from = to) — past results include what was done, each marked planned or done.',
     '- lead_brief: {"lead":"<customer name, lead title or id>" (required)} — one lead in depth: details, recent messages both ways, quotes (viewed? signed?), activities, research. Use it for "what should I do with X", "where are we with X", or to look closer at a lead found earlier.',
+    '- why: {"record":"<customer name, lead title, quote number (Q-1031) or id — the page\'s record id works too>" (required)} — WHY something happened on one record: its history, each event with its CAUSE as recorded (the person who did it, the journey and step, the chatbot and its handoff reason, lead routing, the customer\'s own action — or "not recorded"): stage moves and who made them, who it was assigned to and by what, why it was marked lost, why a customer got a message (or why a journey did not enrol them / stopped), why the bot handed a chat over. Use it for every "why did…" / "how come…" / "who moved / sent / assigned…" question about a record; it usually answers on its own ("then":"answer").',
     '- knowledge: {"topic":"<what to look up>" (required)} — the business\'s own knowledge: products and prices (each with its productId), approved answers (finance, warranty, policies…), company details, competitor intelligence. ALWAYS run this when the person asks for a quote or names a product to quote — a quote can only be built from products found here.',
     '- recall: {"query":"<words>" (required),"alternatives":["<other wordings>"],"lead":"<customer name, lead title or id>"} — this person\'s own earlier conversations with you (last 30 days). In alternatives, give up to 6 other wordings someone might have used for the same thing ("fleet" → "corporate order", "bulk"). When the question is about a customer, name them in lead.',
     '- playbook: {"name":"<playbook name>" (required)} — one of your learned playbooks in full, when the question uses its term or procedure ("hot leads" → the hot-lead playbook) — load it BEFORE searching so you search the right way. When your playbooks are already written out in full below, never load one: follow it and search straight away.',
@@ -311,6 +315,7 @@ const LOOKUP_STATUS: Record<string, string> = {
   documents: "Checking documents",
   sales_stats: "Working out the numbers",
   daily_brief: "Going through what needs attention",
+  why: "Going through the record's history",
   find_activities: "Checking activities",
   knowledge: "Checking what the business knows",
   recall: "Going back over earlier conversations",
