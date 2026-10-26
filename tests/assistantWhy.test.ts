@@ -45,6 +45,9 @@ test("a sent email carries the open/bounce facts, and the journey marker is not 
   assert.equal(e.when, "2026-10-12 10:05");
   assert.equal(e.text, "Hi Anna");
   assert.equal(e.emailOpen, "opened");
+  // A bot reply on a thread with nobody linked carries the number it went to — stripped.
+  const [unlinked] = sendEvents([{ ...send, type: "whatsapp", subject: "🤖 Assistant → handoff", body: "Let me get the team\n\n[to +27825550199]" }], STAND_IN);
+  assert.equal(unlinked.text, "Let me get the team");
   const [bounced] = sendEvents([{ ...send, messageId: "<m@x>", bouncedAt: at, bounceReason: "mailbox full" }], STAND_IN);
   assert.deepEqual(bounced.notDelivered, { at: at.toISOString(), reason: "mailbox full" });
 });
@@ -140,7 +143,7 @@ test("ONLY WHAT THEY MAY OPEN: every way in goes through the page guards", () =>
   assert.match(code, /openableLead = async[^\n]*seesLeads\(u\)\)\s*&&\s*\(await canAccessLead\(u, id\)\)/);
   assert.match(code, /openableContact = async[^\n]*seesContacts\(u\)\)\s*&&\s*\(await canAccessContact\(u, id\)\)/);
   assert.match(code, /q && \(await canAccessQuote\(user, q\.id\)\)/);
-  assert.match(code, /seesInbox\(user\)\)\s*&&\s*\(await canAccessConversation\(user, needle\)\)/);
+  assert.match(code, /unlinkedComments \|\| \(await canAccessConversation\(user, needle\)\)/);
   // A lead's customer joins its timeline only when that customer may be opened, as on the lead page.
   assert.match(code, /target\.contactId \?\? \(await openableContact\(user, lead\?\.contactId\)\)/);
   // By name: only the leads / customers their lists show.
@@ -158,8 +161,24 @@ test("ONLY WHAT THEY MAY OPEN: every way in goes through the page guards", () =>
   assert.match(code, /botFlow\.findMany\(\{ where: \{ tenantId: conversation\.tenantId/);
 });
 
+test("AN INBOX THREAD WITH NOBODY LINKED: explained from its own messages, behind the inbox's own rules", () => {
+  // The inbox's own rules: inbox permission, the acting workspace, then canAccessConversation —
+  // or, for a post's comment thread (nobody linked), the comments screen's rule (commentInbox.ts).
+  assert.match(code, /if \(ID\.test\(needle\) && \(await seesInbox\(user\)\)\) \{\s*const c = await prisma\.conversation\.findFirst\(\{ where: \{ id: needle, \.\.\.activeTenantPredicate\(/);
+  assert.match(code, /const unlinkedComments = c\?\.channel === "comment" && !c\.leadId && !c\.contactId;/);
+  assert.match(code, /if \(c && \(unlinkedComments \|\| \(await canAccessConversation\(user, needle\)\)\)\)/);
+  assert.match(code, /!target\.leadId && !target\.contactId && !target\.quoteId && !target\.conversationId/);
+  // Its messages are the thread's own — no wider.
+  assert.match(code, /: target\.conversationId \? \{ conversationId: target\.conversationId \} : null;/);
+  // No customer and no quote: no quote or journey reads that would match anything else.
+  assert.match(code, /if \(\(target\.quoteId \|\| leadId \|\| contactId\) && \(await seesQuotes\(user\)\)\)/);
+  assert.match(code, /if \(subjects\.length && \(await isModuleEnabled\("marketing"\)\)\)/);
+  // The bot's session can't be matched without a customer — said, not guessed.
+  assert.match(code, /if \(!identity\) return \{ channel: conversation\.channel, nowHeldBy: "not recorded/);
+});
+
 test("MODULES: journeys only with Marketing on (and journeys.manage); the bot only with Automation on (and inbox access)", () => {
-  assert.match(code, /if \(await isModuleEnabled\("marketing"\)\) \{\s*if \(await hasPermission\(user, "journeys\.manage"\)\)/);
+  assert.match(code, /if \(subjects\.length && \(await isModuleEnabled\("marketing"\)\)\) \{\s*if \(await hasPermission\(user, "journeys\.manage"\)\)/);
   assert.match(code, /if \(\(await isModuleEnabled\("automation"\)\) && \(await seesInbox\(user\)\)\)/);
   // Nothing reads journeys or the bot outside those blocks.
   const journeyReads = code.match(/prisma\.journey\w*\./g) ?? [];

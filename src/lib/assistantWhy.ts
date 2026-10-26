@@ -74,6 +74,7 @@ export function auditEvents(rows: AuditRow[], detail: Record<string, AuditDetail
 
 /** The marker the journey engine writes at the top of every email/SMS it sends (journeyStepExecutor). */
 const JOURNEY_MARK = /^\[Journey: ([^\]\n]{1,120})\]/;
+const TO_NUMBER = /\s*\[to \+?\d+\]\s*$/;
 
 export type SendRow = {
   occurredAt: Date; direction: string | null; type: string; subject: string | null; body: string; user: Who;
@@ -101,7 +102,8 @@ export function sendCause(c: SendRow, standInId: string | null): string {
 
 export function sendEvents(rows: SendRow[], standInId: string | null): WhyEvent[] {
   return rows.map((c) => {
-    const body = (c.body ?? "").replace(JOURNEY_MARK, "").trim();
+    // The bot appends the customer's number to a reply on a thread with nobody linked (bot.ts logOutbound) — never to the model.
+    const body = (c.body ?? "").replace(JOURNEY_MARK, "").replace(TO_NUMBER, "").trim();
     return {
       when: stamp(c.occurredAt),
       at: c.occurredAt.getTime(),

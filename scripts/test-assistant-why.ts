@@ -55,12 +55,15 @@ async function main() {
   guardEnvironment();
   const fixture = await seedTwoTenants(`why${SFX}`);
   const { a, b } = fixture;
-  const ids = { lostStage: cid(), contact: cid(), lead: cid(), leadB: cid(), conversation: cid(), run: cid(), step: cid(), event: cid(), session: cid() };
+  const ids = { lostStage: cid(), contact: cid(), lead: cid(), leadB: cid(), conversation: cid(), thread: cid(), dmThread: cid(), run: cid(), step: cid(), event: cid(), session: cid() };
   const user = (name: string): PermissionUser => ({ id: crypto.randomUUID(), name, email: `${name.toLowerCase().replace(/\W/g, "")}.${SFX}@harness.invalid`, role: "member" });
   const repOwn = user("Rep Own");
   const repOther = user("Rep Other");
   const managerA: PermissionUser = { id: a.memberUserId, name: "Harness A member", email: "", role: "member" };
   const managerB: PermissionUser = { id: b.memberUserId, name: "Harness B member", email: "", role: "member" };
+  // The inbox shows a thread with nobody linked only to someone unrestricted (canAccessConversation).
+  const ownerA: PermissionUser = { id: a.ownerUserId, name: "Harness A owner", email: "", role: "owner" };
+  const ownerB: PermissionUser = { id: b.ownerUserId, name: "Harness B owner", email: "", role: "owner" };
   const ROLE = crypto.randomUUID();
   const anna = `Anna Why${SFX}`;
   const t = (minutes: number) => new Date(Date.UTC(2026, 9, 20, 8, minutes));
@@ -110,6 +113,17 @@ async function main() {
   await basePrisma.$executeRaw`
     INSERT INTO "BotSession" ("id","tenantId","channel","key","vars","status","ownership","updatedAt","expiresAt")
     VALUES (${ids.session}, ${a.tenantId}, 'whatsapp', '27825550101', ${JSON.stringify({ __handoff_reason: "asked about finance" })}, 'paused', 'ai_handoff', now(), now() + interval '1 day')`;
+  // Inbox threads in A with NO customer or deal linked. A post's comment thread
+  // (the inbox shows it to anyone with inbox access in the workspace), and a DM
+  // thread the bot answered (listed in no inbox — canAccessConversation refuses
+  // every unlinked thread).
+  await basePrisma.$executeRaw`INSERT INTO "Conversation" ("id","tenantId","channel","externalRef","updatedAt") VALUES (${ids.thread}, ${a.tenantId}, 'comment', ${`facebook:post-${SFX}`}, now())`;
+  await basePrisma.$executeRaw`INSERT INTO "Conversation" ("id","tenantId","channel","updatedAt") VALUES (${ids.dmThread}, ${a.tenantId}, 'whatsapp', now())`;
+  await basePrisma.$executeRaw`
+    INSERT INTO "Communication" ("id","tenantId","type","direction","subject","body","conversationId","userId","occurredAt") VALUES
+      (${cid()}, ${a.tenantId}, 'comment', 'inbound', NULL, ${`Do you deliver to Paarl? ${SFX}`}, ${ids.thread}, ${a.ownerUserId}, ${t(30)}),
+      (${cid()}, ${a.tenantId}, 'comment', 'outbound', NULL, 'Yes — sent you a DM', ${ids.thread}, ${a.memberUserId}, ${t(31)}),
+      (${cid()}, ${a.tenantId}, 'whatsapp', 'outbound', '🤖 Assistant → handoff', ${"Let me get the team\n\n[to +27825550199]"}, ${ids.dmThread}, ${a.ownerUserId}, ${t(32)})`;
   // B's own deal, with its own history.
   await basePrisma.$executeRaw`
     INSERT INTO "Lead" ("id","tenantId","title","name","status","stageId","pipelineId","assignedToId","createdById","updatedAt")
@@ -164,6 +178,20 @@ async function main() {
     check("Marketing off: no journey runs, no enrolment decisions, no journey note", !what(noMarketing, /journey "|Enrolled/) && !noMarketing.notes, JSON.stringify(noMarketing.notes));
     await setModules("inbox,marketing,automotive,workshop,reports");
 
+    console.log("\nAn inbox thread with no customer or deal linked");
+    const thread = await ask(a.tenantId, managerA, ids.thread);
+    check("someone with inbox access gets the comment thread's history", thread.events?.length === 2, JSON.stringify(thread));
+    check("…the customer's comment, as theirs", /^the customer/.test(what(thread, /Received comment/)?.cause ?? ""));
+    check("…and the reply, under the account it was sent from", /Harness A member/.test(what(thread, /Sent comment/)?.cause ?? ""), JSON.stringify(what(thread, /Sent comment/)));
+    check("only the thread's own messages — nothing of Anna's deal", !what(thread, /Moved|Sent email|whatsapp/), JSON.stringify(thread.events?.map((e) => e.what)));
+    check("the owner too", (await ask(a.tenantId, ownerA, ids.thread)).events?.length === 2);
+    check("no inbox access: nothing", !!(await ask(a.tenantId, repOwn, ids.thread)).note);
+    check("the other workspace's owner: nothing", !!(await ask(b.tenantId, ownerB, ids.thread)).note);
+    check("…nor its member", !!(await ask(b.tenantId, managerB, ids.thread)).note);
+    // The inbox lists a DM thread only by its customer or deal, so with neither it is nobody's to read.
+    const dm = await ask(a.tenantId, ownerA, ids.dmThread);
+    check("a DM thread with nobody linked is listed in no inbox — refused, even to the owner", !!dm.note && !JSON.stringify(dm).includes("27825550199"), JSON.stringify(dm));
+
     console.log("\nThe other workspace");
     check("B cannot read A's deal by id", !!(await ask(b.tenantId, managerB, ids.lead)).note);
     check("…nor by name", !!(await ask(b.tenantId, managerB, anna)).note);
@@ -178,7 +206,8 @@ async function main() {
     __setTenantEnforcingForTests(null);
     await basePrisma.$executeRaw`DELETE FROM "BotSession" WHERE "id" = ${ids.session}`.catch(() => 0);
     await basePrisma.$executeRaw`DELETE FROM "JourneyEvent" WHERE "id" = ${ids.event}`.catch(() => 0);
-    await basePrisma.$executeRaw`DELETE FROM "Conversation" WHERE "id" = ${ids.conversation}`.catch(() => 0);
+    await basePrisma.$executeRaw`DELETE FROM "Communication" WHERE "conversationId" IN (${ids.thread}, ${ids.dmThread})`.catch(() => 0);
+    await basePrisma.$executeRaw`DELETE FROM "Conversation" WHERE "id" IN (${ids.conversation}, ${ids.thread}, ${ids.dmThread})`.catch(() => 0);
     await basePrisma.$executeRaw`DELETE FROM "Communication" WHERE "leadId" IN (${ids.lead}, ${ids.leadB})`.catch(() => 0);
     await basePrisma.$executeRaw`DELETE FROM "UserRole" WHERE "roleId" = ${ROLE}`.catch(() => 0);
     await teardown(fixture);

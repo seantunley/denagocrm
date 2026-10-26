@@ -6,6 +6,7 @@ import { customerTimelineWhere, dealTimelineWhere } from "./customerTimeline";
 import { botIdentityForConversation } from "./botConversationControl";
 import { handoffContext } from "./botHandoff";
 import { isModuleEnabled } from "./modules/enabled";
+import { activeTenantPredicate } from "./tenantPredicate";
 import { listActingTenantStaff, resolveTenantActor } from "./tenantActor";
 import { WHO_LEGEND } from "./assistantWho";
 import { OPENED_LEGEND } from "./emailOpenTracking";
@@ -84,9 +85,16 @@ async function resolve(user: PermissionUser, needle: string): Promise<Target | n
         return { ...none, quoteId: q.id, leadId: await openableLead(user, q.leadId), contactId: await openableContact(user, q.contactId) };
       }
     }
-    if (ID.test(needle) && (await seesInbox(user)) && (await canAccessConversation(user, needle))) {
-      const c = await prisma.conversation.findUnique({ where: { id: needle }, select: { leadId: true, contactId: true } });
-      if (c) return { ...none, conversationId: needle, leadId: await openableLead(user, c.leadId), contactId: await openableContact(user, c.contactId) };
+    if (ID.test(needle) && (await seesInbox(user))) {
+      const c = await prisma.conversation.findFirst({ where: { id: needle, ...activeTenantPredicate("why: conversation") }, select: { channel: true, leadId: true, contactId: true } });
+      // The inbox's own rules for who may open a thread: a customer's or a deal's
+      // through canAccessConversation; a post's comment thread, which has nobody
+      // linked, to anyone with inbox access in the workspace (commentInbox.ts).
+      // A DM thread with nobody linked is listed in no inbox, so it is refused.
+      const unlinkedComments = c?.channel === "comment" && !c.leadId && !c.contactId;
+      if (c && (unlinkedComments || (await canAccessConversation(user, needle)))) {
+        return { ...none, conversationId: needle, leadId: await openableLead(user, c.leadId), contactId: await openableContact(user, c.contactId) };
+      }
     }
     return null;
   }
@@ -121,7 +129,9 @@ async function resolve(user: PermissionUser, needle: string): Promise<Target | n
 
 export async function whyLookup(user: PermissionUser, needle: string): Promise<Output> {
   const target = await resolve(user, needle);
-  if (!target || (!target.leadId && !target.contactId && !target.quoteId)) {
+  // A conversation on its own is enough: an inbox thread can have no customer or
+  // deal linked, and the resolver has already checked inbox access to it.
+  if (!target || (!target.leadId && !target.contactId && !target.quoteId && !target.conversationId)) {
     return note(`No lead, customer, quote or conversation you can open matches "${needle}".`);
   }
   const { leadId } = target;
@@ -140,7 +150,12 @@ export async function whyLookup(user: PermissionUser, needle: string): Promise<O
     ? viewableDealIds((await prisma.lead.findMany({ where: { contactId }, select: { id: true } })).map((l) => l.id), await getAccessibleLeadIds(user))
     : [];
   const auditWhere = leadId ? { leadId } : contactId ? customerHistoryWhere(contactId, dealIds) : null;
-  const sendWhere = leadId ? dealTimelineWhere({ id: leadId, contactId }) : contactId ? customerTimelineWhere(contactId, dealIds) : null;
+  const sendWhere = leadId
+    ? dealTimelineWhere({ id: leadId, contactId })
+    : contactId
+      ? customerTimelineWhere(contactId, dealIds)
+      // No customer or deal: the thread's own messages (resolve() checked inbox access to it).
+      : target.conversationId ? { conversationId: target.conversationId } : null;
 
   const [audit, sends, stages, staff, standIn] = await Promise.all([
     auditWhere ? prisma.auditLog.findMany({ where: auditWhere, orderBy: { createdAt: "desc" }, take: 60, select: { id: true, action: true, summary: true, userId: true, userName: true, createdAt: true, leadId: true, contactId: true } }) : [],
@@ -167,7 +182,7 @@ export async function whyLookup(user: PermissionUser, needle: string): Promise<O
   const notes: string[] = [];
 
   // Quotes: the customer's actions and the automatic reminder, as the quote records them.
-  if (await seesQuotes(user)) {
+  if ((target.quoteId || leadId || contactId) && (await seesQuotes(user))) {
     const ids = await getAccessibleQuoteIds(user);
     const owner = target.quoteId ? { id: target.quoteId } : leadId ? { leadId } : { contactId: contactId! };
     const quotes = await prisma.quote.findMany({
@@ -187,7 +202,7 @@ export async function whyLookup(user: PermissionUser, needle: string): Promise<O
     ...(contactId ? [{ contactId }] : []),
   ];
   // Journeys — Marketing, and the people who may open the journey activity trace.
-  if (await isModuleEnabled("marketing")) {
+  if (subjects.length && (await isModuleEnabled("marketing"))) {
     if (await hasPermission(user, "journeys.manage")) {
       const [runs, decided] = await Promise.all([
         prisma.journeyRun.findMany({
@@ -224,8 +239,8 @@ export async function whyLookup(user: PermissionUser, needle: string): Promise<O
   }
 
   const { events: timeline, truncated } = whyTimeline(events);
-  const link = leadId ? `/leads/${leadId}` : contactId ? `/contacts/${contactId}` : `/quotes/${target.quoteId}`;
-  const label = lead ? `${lead.name} — ${lead.title}` : contact ? [contact.firstName, contact.lastName].filter(Boolean).join(" ") : "Quote";
+  const link = leadId ? `/leads/${leadId}` : contactId ? `/contacts/${contactId}` : target.quoteId ? `/quotes/${target.quoteId}` : `/inbox?conversation=${target.conversationId}`;
+  const label = lead ? `${lead.name} — ${lead.title}` : contact ? [contact.firstName, contact.lastName].filter(Boolean).join(" ") : target.quoteId ? "Quote" : "Inbox conversation (nobody linked)";
   return {
     truncated,
     rows: [{ label, detail: "History and causes", href: link }],
@@ -259,7 +274,10 @@ async function botFacts(user: PermissionUser, conversationId: string, events: Wh
     botIdentityForConversation(conversationId),
   ]);
   // No workspace on the thread: it has no bot session in any (inboxCollaboration's rule).
-  if (!conversation?.tenantId || !identity) return null;
+  if (!conversation?.tenantId) return null;
+  // The bot's session is keyed by the customer's number/handle, which lives on the
+  // linked customer — a thread with none can't be matched (the inbox can't either).
+  if (!identity) return { channel: conversation.channel, nowHeldBy: "not recorded — no customer is linked, so the chatbot's session can't be matched; the bot's own messages in the thread still say what it did" };
   const where = { tenantId: conversation.tenantId, channel: identity.channel };
   const [session, flow] = await Promise.all([
     prisma.botSession.findFirst({ where: { ...where, key: identity.key }, select: { status: true, ownership: true, vars: true, updatedAt: true, expiresAt: true } }),
