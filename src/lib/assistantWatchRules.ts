@@ -120,8 +120,8 @@ export function describeWatch(w: WatchSpec, names: { quote?: string | null; cust
       return `Tell me when ${customer ?? "the customer"} opens ${quote}`;
     case "quote_unsigned":
       return w.quoteId
-        ? `Tell me if ${quote}${customer ? ` (${customer})` : ""} is opened but not signed within ${span(hours)}`
-        : `Tell me when any quote I can see is opened but not signed within ${span(hours)}`;
+        ? `Tell me if ${quote}${customer ? ` (${customer})` : ""} is opened but not signed within ${span(hours)}, or its email bounces`
+        : `Tell me when any quote I can see is opened but not signed within ${span(hours)}, or its email bounces`;
     case "lead_quiet":
       return w.leadId
         ? `Tell me if ${names.lead ? safeName(names.lead) : "this lead"} goes ${days} days without contact`
@@ -185,8 +185,11 @@ export function safeName(name: string): string {
 export const WATCH_GONE_NOTE =
   "I've stopped this watch: the record it was watching is gone, or you can no longer open it. It's paused on the Ask page — delete it or ask me for a new one.";
 
-/** One record in a note: "Q-1042" + "Anna Jacobs", with an optional detail. */
-export type WatchHit = { ref: string; customer?: string | null; detail?: string | null };
+/** One record in a note: "Q-1042" + "Anna Jacobs", with an optional detail. `bounced`: its email never arrived. */
+export type WatchHit = { ref: string; customer?: string | null; detail?: string | null; bounced?: boolean };
+
+/** Bounced quotes get their own heading — "still unsigned" is the wrong news when the customer never got it. */
+const BOUNCED_HEADING = "📭 Quote email bounced — they never got it, so reach them another way:";
 
 const HEADINGS: Record<Exclude<WatchKind, "quote_viewed">, (w: WatchSpec) => string> = {
   quote_unsigned: (w) => `✍️ Opened but not signed after ${span(w.thresholdHours ?? 48)}:`,
@@ -204,6 +207,7 @@ export function watchNotification(w: WatchSpec, hits: readonly WatchHit[]): stri
     return `👀 ${h?.customer ? safeName(h.customer) : "The customer"} opened ${h?.ref ?? "the quote"}.`;
   }
   const heading = HEADINGS[w.kind as Exclude<WatchKind, "quote_viewed">]?.(w) ?? "Something you're watching happened:";
-  const more = hits.length > MAX_LISTED ? [`…and ${hits.length - MAX_LISTED} more.`] : [];
-  return [heading, ...hits.slice(0, MAX_LISTED).map(line), ...more].join("\n");
+  const section = (title: string, list: readonly WatchHit[]) =>
+    list.length ? [title, ...list.slice(0, MAX_LISTED).map(line), ...(list.length > MAX_LISTED ? [`…and ${list.length - MAX_LISTED} more.`] : [])] : [];
+  return [...section(heading, hits.filter((h) => !h.bounced)), ...section(BOUNCED_HEADING, hits.filter((h) => h.bounced))].join("\n");
 }

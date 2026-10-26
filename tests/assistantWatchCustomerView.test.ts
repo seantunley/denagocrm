@@ -23,6 +23,8 @@ const state = {
   members: [] as { tenantId: string; userId: string }[],
   requests: [] as { tenantId: string; quoteId: string; status: string; recipients: Recipient[] }[],
   memberLookups: [] as Record<string, unknown>[],
+  /** q1's quote email bounced (lib/quoteEmailStatus.ts, faked below). */
+  bounced: false,
 };
 
 const QUOTE = { id: "q1", number: 1042, viewedAt: null, lead: { name: "Anna Jacobs" }, contact: null };
@@ -47,6 +49,8 @@ const fakePrisma = {
     findFirst: async () => QUOTE,
     // The unsigned check's quote read: q1 qualifies only when the hub says it was opened in time.
     findMany: async ({ where }: { where: { AND?: { OR: { id?: { in: string[] } }[] }[] } }) => {
+      // The bounce check's read of every open quote has no AND: q1 is open and unsigned.
+      if (!where.AND) return [{ ...QUOTE, contactId: "c1", leadId: null, createdAt: ago(100) }];
       const hubIds = where.AND?.[0]?.OR.find((x) => x.id)?.id?.in ?? [];
       return hubIds.includes("q1") ? [QUOTE] : [];
     },
@@ -86,6 +90,10 @@ loader._load = function (this: unknown, request: string, parent, isMain) {
       case "./customerContact": return { contactActivityWhere: {}, contactCommunicationWhere: {}, latestContactAt: () => null };
       case "./modules/enabled": return { isModuleEnabled: async () => true };
       case "./tenantWrite": return { ownedWriteTenantId: () => T_A };
+      case "./quoteEmailStatus": return {
+        quoteSends: async (quotes: { id: string }[]) =>
+          new Map(state.bounced ? quotes.filter((q) => q.id === "q1").map((q) => [q.id, { status: "bounced", bounced: true }]) : []),
+      };
     }
   }
   if (from(parent, "src/lib/signing/quoteMirror.ts")) {
@@ -121,6 +129,7 @@ beforeEach(() => {
   state.members = [{ tenantId: T_A, userId: "u_don" }];
   state.requests = [];
   state.memberLookups = [];
+  state.bounced = false;
 });
 
 test("1. a staff countersigner opens it, the customer hasn't → neither watch fires", async () => {
@@ -154,5 +163,19 @@ test("3. the customer's email is a CRM user in ANOTHER workspace → still this 
 test("4. an approver or a viewer opening it never counts", async () => {
   request({ role: "approver", email: "boss@client.com", viewedAt: ago(70) }, { role: "viewer", email: "cc@client.com", viewedAt: ago(70) }, customer(null));
   assert.deepEqual(await viewed(), []);
+  assert.deepEqual(await unsigned(), []);
+});
+
+test("5. its email bounced → told at once, as a bounce (never opened, so never 'opened but unsigned')", async () => {
+  request(customer(null));
+  state.bounced = true;
+  const hits = await unsigned();
+  assert.deepEqual(hits, [{ id: "q1:bounced", ref: "Q-1042", customer: "Anna Jacobs", detail: undefined, bounced: true }]);
+  // Also opened 50h ago: still ONE hit, and it is the bounce — not "still unsigned".
+  state.requests = [];
+  request(customer(ago(50)));
+  assert.deepEqual((await unsigned() as { id: string }[]).map((h) => h.id), ["q1:bounced"]);
+  // Signed in the hub since: nothing to tell.
+  state.requests.push({ tenantId: T_A, quoteId: "q1", status: "completed", recipients: [] });
   assert.deepEqual(await unsigned(), []);
 });

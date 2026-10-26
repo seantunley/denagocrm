@@ -34,8 +34,9 @@ test("a figure DAX invented last turn can't vouch for itself this turn (#789 rev
   // As crmAssistant builds the evidence: this question, earlier QUESTIONS, the lookups.
   const evidence = ["And Ben's?", ...earlier.map((t) => t.question), quotes];
   assert.deepEqual(unsupportedFigures("Ben's is R 88 500,50; Anna's Q-1099 is R 421 000.", evidence), ["R 421 000", "Q-1099"]);
-  // The reviewed bug: with DAX's earlier answer as evidence, both would slip through.
-  assert.deepEqual(unsupportedFigures("Anna's Q-1099 is R 421 000.", [...evidence, earlier[0].answer]), []);
+  // The reviewed bug: with DAX's earlier answer as evidence, the made-up quote number slips through. The amount is
+  // still caught since the record-bound check (Phase 2): the sentence is about Anna's quote, and it isn't on it.
+  assert.deepEqual(unsupportedFigures("Anna's Q-1099 is R 421 000.", [...evidence, earlier[0].answer]), ["R 421 000 (not on Q-1022)"]);
   // What the person themselves said earlier is still trusted.
   assert.deepEqual(unsupportedFigures("Under your R60 000 limit: Ben's.", ["And Ben's?", "Anything under R60 000?", quotes]), []);
 });
@@ -48,9 +49,11 @@ test("the note names what to check, and is said once", () => {
 test("every answer goes through the check, and the note is part of what's saved and shown", () => {
   const src = readFileSync(new URL("../src/lib/crmAssistant.ts", import.meta.url), "utf8");
   // The person's words count as evidence; DAX's earlier answers never do (#789 review).
-  assert.match(src, /const flagged = unsupportedFigures\(resolved\.plain, \[question, \.\.\.history\.map\(\(t\) => t\.question\), \.\.\.observations\.map\(\(o\) => o\.output\.data\)\]\);/);
+  // Checked with its citations (reply.answer), so a sentence citing a quote is checked against that quote.
+  assert.match(src, /const flagged = unsupportedFigures\(reply\.answer, \[question, \.\.\.history\.map\(\(t\) => t\.question\), \.\.\.observations\.map\(\(o\) => o\.output\.data\)\]\);/);
   const call = src.slice(src.indexOf("const flagged = unsupportedFigures("), src.indexOf("\n", src.indexOf("const flagged = unsupportedFigures(")));
-  assert.doesNotMatch(call, /conversation|\.answer|\.state/, "nothing DAX wrote is evidence");
+  // The evidence list (from "[question") — the answer being checked is the first argument, not evidence.
+  assert.doesNotMatch(call.slice(call.indexOf("[question")), /conversation|\.answer|\.state/, "nothing DAX wrote is evidence");
   // The note is still part of both — unless the whole answer was replaced because it spoke of a task that was
   // never set up (settledAnswer): that text holds none of the original's figures.
   assert.match(src, /const cited = \(settled \?\? resolved\.cited \+ note\) \+ checkBackLine;\s*const answer = \(settled \?\? resolved\.plain \+ note\) \+ checkBackLine;/);

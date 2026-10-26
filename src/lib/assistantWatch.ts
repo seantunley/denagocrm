@@ -24,6 +24,7 @@ import { contactName } from "./format";
 import { ownedWriteTenantId } from "./tenantWrite";
 import { firstCustomerView, memoCustomer } from "./signing/customerView";
 import { isCustomerSigner } from "./signing/quoteMirror";
+import { quoteSends } from "./quoteEmailStatus";
 import {
   MAX_ACTIVE_WATCHES,
   ONE_SHOT_KINDS,
@@ -205,14 +206,34 @@ export async function checkQuoteUnsigned(user: PermissionUser, tenantId: string,
     take: CANDIDATES,
     select: QUOTE_SELECT,
   });
-  if (!quotes.length) return [];
+  // …and any unsigned quote whose EMAIL BOUNCED (DAX roadmap, Phase 2). It will never be opened, so this
+  // watch would wait forever — or call a quote "still unsigned" that the customer never received. Told at
+  // once, as a bounce: reach them another way.
+  const open = await prisma.quote.findMany({
+    where: {
+      tenantId, deletedAt: null, supersededAt: null, signedAt: null, declinedAt: null,
+      status: { in: ["draft", "sent"] },
+      ...(ids === null ? {} : { id: { in: ids } }),
+    },
+    orderBy: { createdAt: "desc" },
+    take: CANDIDATES,
+    select: { ...QUOTE_SELECT, contactId: true, leadId: true, createdAt: true },
+  });
+  const sends = await quoteSends(open);
+  const bounced = new Set(open.filter((q) => sends.get(q.id)?.bounced).map((q) => q.id));
+  const candidates = [...new Map<string, QuoteRow>([...quotes, ...open.filter((q) => bounced.has(q.id))].map((q) => [q.id, q])).values()];
+  if (!candidates.length) return [];
   // Signed or declined in the hub: the quote's own signedAt/declinedAt can stay empty.
   const settled = await prisma.signatureRequest.findMany({
-    where: { tenantId, deletedAt: null, quoteId: { in: quotes.map((q) => q.id) }, status: { in: ["completed", "declined", "rejected"] } },
+    where: { tenantId, deletedAt: null, quoteId: { in: candidates.map((q) => q.id) }, status: { in: ["completed", "declined", "rejected"] } },
     select: { quoteId: true },
   });
   const done = new Set(settled.map((r) => r.quoteId));
-  return quotes.filter((q) => !done.has(q.id)).map((q) => quoteHit(q));
+  return candidates.filter((q) => !done.has(q.id)).map((q) =>
+    bounced.has(q.id)
+      // Its own id in `fired`: a bounce after an "opened, unsigned" note is still news.
+      ? { ...quoteHit(q), id: `${q.id}:bounced`, bounced: true }
+      : quoteHit(q));
 }
 
 async function checkLeadQuiet(user: PermissionUser, tenantId: string, w: Watch, now: Date): Promise<Check> {

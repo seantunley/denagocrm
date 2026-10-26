@@ -17,6 +17,7 @@
  *
  * Pure, so the ordering rules are testable without a webhook.
  */
+import { johannesburgDateKey } from "./activityDay";
 
 /** How far a message has got. Ordered: seen implies delivered. */
 export type ReceiptLevel = "delivered" | "seen";
@@ -180,3 +181,15 @@ export function receiptLabel(
 
 /** Channels that send delivery events at all. */
 export const RECEIPT_CHANNELS = new Set(["messenger", "instagram", "whatsapp"]);
+
+/**
+ * The same receipt for DAX (roadmap Phase 2: it never read `deliveredAt`): how far an outbound WhatsApp /
+ * Messenger / Instagram message got, as the platform reported it. Nothing for email — an email is never
+ * "delivered" or "read" (emailOpenTracking.emailSendStatus) — or for a channel that reports nothing.
+ */
+export function receiptFact(m: { type: string; direction: string | null; deliveredAt?: Date | null; seenAt?: Date | null }): { receipt?: string } {
+  if (m.direction !== "outbound" || !RECEIPT_CHANNELS.has(m.type)) return {};
+  if (m.seenAt) return { receipt: `seen ${johannesburgDateKey(m.seenAt)}` };
+  if (m.deliveredAt) return { receipt: `delivered to their phone ${johannesburgDateKey(m.deliveredAt)}; no seen receipt (they may have them off)` };
+  return { receipt: "no delivery receipt yet" };
+}

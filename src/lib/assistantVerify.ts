@@ -10,8 +10,9 @@
  * plainly it isn't in the records. Lines DAX labelled as its own judgement
  * ("My read:") are opinion by definition and aren't checked.
  *
- * ponytail: amounts and quote numbers only — dates, counts and names vary too
- * much in wording to match without false alarms. Add one when 👎 "Wrong facts"
+ * ponytail: amounts and quote numbers everywhere; dates only as a quote's
+ * delivery date (below) — other dates, counts and names vary too much in
+ * wording to match without false alarms. Add one when 👎 "Wrong facts"
  * feedback shows that kind of mistake getting through.
  */
 
@@ -89,25 +90,152 @@ function quoteNumbers(data: unknown, into = new Set<string>()): Set<string> {
   return into;
 }
 
+/* ── Checked against THE RECORD the sentence is about (DAX roadmap, Phase 2) ──
+ *
+ * "This figure is somewhere in the lookups" let a mix-up through: Ben's R 88 500
+ * written as Anna's quote, or delivery "R5 000" taken from an old message when
+ * the quote itself says R6 500. So a sentence that names a quote — its number,
+ * its [[/quotes/…]] link, or "<customer>'s quote" — is checked against THAT
+ * quote only: price → its lines, fees and total; "deposit paid" → its deposit;
+ * a delivery date → its delivery date. "In stock" → the named unit's status.
+ * And an email is never "delivered" or "read" — the CRM can't know either.
+ *
+ * Not bound (checked as before, against everything): a sentence reporting what
+ * someone SAID ("he wrote R5 000"), or proposing a change ("I'll set delivery
+ * to R6 500") — those figures are not the record's, by design.
+ *
+ * ponytail: a sentence naming two quotes is checked against both together, so
+ * a figure swapped between them passes. Bind per clause when that shows up.
+ */
+
+/** What one quote holds, merged across every lookup that returned it (keyed by its link). */
+type QuoteRecord = { quote: string; customers: Set<string>; numbers: number[]; total: number | null; paid: boolean; delivery: Set<string> };
+type StockRecord = { link: string; unit: string; product: string; status: string };
+
+/** Customer words inside a quote's row — never the quote's own facts. */
+const TALK_KEYS = new Set(["messages", "notes", "note", "research", "text", "reason", "changeRequested", "activities", "otherMatches", "customerRecordsNote", "matched"]);
+const MONTHS = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"];
+const DATE = /\b(\d{4})-(\d{2})-(\d{2})\b|\b(\d{1,2})(?:st|nd|rd|th)?\s+(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?(?![a-z])|\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+(\d{1,2})(?:st|nd|rd|th)?\b/gi;
+/** Each date in `text` as "MM-DD" (year left out: answers rarely write it), with how it was written. */
+function datesIn(text: string): { key: string; written: string }[] {
+  return [...text.matchAll(DATE)].map((m) => {
+    const [month, day] = m[1] ? [Number(m[2]), Number(m[3])] : m[4] ? [MONTHS.indexOf(m[5].toLowerCase()) + 1, Number(m[4])] : [MONTHS.indexOf(m[6].toLowerCase()) + 1, Number(m[7])];
+    return { key: `${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`, written: m[0].trim().replace(/\.$/, "") };
+  });
+}
+const stringsIn = (v: unknown): string[] =>
+  typeof v === "string" ? [v] : Array.isArray(v) ? v.flatMap(stringsIn) : v && typeof v === "object" ? Object.values(v).flatMap(stringsIn) : [];
+const withoutTalk = (o: Record<string, unknown>) => Object.fromEntries(Object.entries(o).filter(([k]) => !TALK_KEYS.has(k)));
+const amount = (v: unknown) => (typeof v === "string" && /^\s*R/.test(v) ? readNumber(v.replace(/^\s*R\s*/, ""))?.value ?? null : null);
+
+/** Every quote and stock unit in the lookups, with the customer each quote sits under. */
+function recordsIn(sources: unknown[]) {
+  const quotes = new Map<string, QuoteRecord>();
+  const stock: StockRecord[] = [];
+  const walk = (v: unknown, customer: string | null) => {
+    if (Array.isArray(v)) return v.forEach((x) => walk(x, customer));
+    if (!v || typeof v !== "object") return;
+    const o = v as Record<string, unknown>;
+    // A quote row names its customer; one inside a lead brief or a customer record sits under theirs.
+    const who = typeof o.customer === "string" ? o.customer : typeof o.name === "string" ? o.name : customer;
+    const link = typeof o.link === "string" ? o.link : "";
+    if (link.startsWith("/quotes/") && typeof o.quote === "string") {
+      const own = withoutTalk(o);
+      const r = quotes.get(link) ?? { quote: o.quote.replace(/^Q-?/i, ""), customers: new Set<string>(), numbers: [], total: null, paid: false, delivery: new Set<string>() };
+      if (who) r.customers.add(who);
+      r.numbers.push(...knownNumbers(own));
+      r.total ??= amount(o.total);
+      if (typeof o.deposit === "string" && /^paid\b/i.test(o.deposit)) r.paid = true;
+      for (const key of ["deliveryDate", "delivered", "delivery"]) for (const d of datesIn(stringsIn(o[key]).join(" "))) r.delivery.add(d.key);
+      quotes.set(link, r);
+    }
+    if (link.startsWith("/stock/") && typeof o.status === "string") {
+      stock.push({ link, unit: String(o.unit ?? ""), product: String(o.product ?? ""), status: o.status.toLowerCase() });
+    }
+    for (const [k, x] of Object.entries(o)) if (!TALK_KEYS.has(k) && x && typeof x === "object") walk(x, who);
+  };
+  walk(sources, null);
+  return { quotes: [...quotes.entries()].map(([link, r]) => ({ link, ...r })), stock };
+}
+
+/** Someone's words being reported — not a claim about the record. */
+const REPORTED = /\b(said|says|wrote|writes|asked|asks|mentioned|messaged|message|promised|told|tells|offered|budget|limit|wanted|wants|hoped|hopes|expects?|expected|claimed|according)\b/i;
+/** A change being proposed — its figures are the new values, not the record's. */
+const PROPOSAL = /\b(I'll|I will|I'd|I would|I've (?:drafted|prepared|set|added|changed|made|updated)|draft(?:ed)?|propos(?:e|ed|al)|shall I|should I|want me|confirm|change(?: it| the| that)? to|update(?: it| the)? to|set (?:it|the|delivery|the delivery) to|new quote|would|could|instead)\b/i;
+const NEGATED = /n't\b|\b(not|no|never|none|unpaid|outstanding|awaiting|still|yet|until|once|before|if|out of)\b/i;
+const word = (name: string) => new RegExp(`(?<![\\p{L}\\p{N}])${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![\\p{L}\\p{N}])`, "iu");
+/** "Anna Jacobs" is named by "Anna Jacobs" or "Anna" (a first name of 3+ letters). */
+function names(text: string, customers: Set<string>): boolean {
+  for (const c of customers) {
+    const full = c.trim();
+    if (!full || /^(no|a) customer$/i.test(full)) continue;
+    const first = full.split(/\s+/)[0];
+    if (word(full).test(text) || (first.length >= 3 && word(first).test(text))) return true;
+  }
+  return false;
+}
+
+/** "the email was delivered" / "she read your email" — the CRM can only know accepted, bounced or opened. */
+const EMAIL_CLAIM = /\be-?mail\w*\b[^.,;:!?]{0,40}?\b(delivered|read|received)\b|\b(read|received)\b[^.,;:!?]{0,25}?\be-?mail/i;
+
 /**
  * The amounts and quote numbers in `answer` that nothing in `sources` (the
- * lookups' data, the question, the earlier conversation) supports, as written.
+ * lookups' data, the question, the earlier conversation) supports, as written —
+ * and, where a sentence names a record, the facts that record doesn't hold.
+ * `answer` may still carry its [[/link]] citations: they say which record a sentence cites.
  */
 export function unsupportedFigures(answer: string, sources: unknown[]): string[] {
-  const checked = answer.split("\n").filter((line) => !/^\s*[-•]?\s*My read:/i.test(line)).join("\n");
   const numbers = knownNumbers(sources);
   const quotes = quoteNumbers(sources);
+  const records = recordsIn(sources);
+  const near = (pool: number[], value: number, slack: number) => pool.some((n) => Math.abs(n - value) <= slack);
   const flagged: string[] = [];
-  for (const m of checked.matchAll(MONEY)) {
-    const read = readNumber(m[1]);
-    if (!read) continue;
-    const scale = m[2] ? SCALE[m[2].toLowerCase()] : 1;
-    const value = read.value * scale;
-    // Rounded as written ("R1.2m" is anything from 1.15m to 1.25m), or within 1%.
-    const slack = Math.max((read.unit * scale) / 2, value * 0.01, 0.5);
-    if (!numbers.some((n) => Math.abs(n - value) <= slack)) flagged.push(m[0].trim());
+  const sentences = answer
+    .split("\n")
+    .filter((line) => !/^\s*[-•]?\s*My read:/i.test(line))
+    .flatMap((line) => line.split(/(?<=[.!?;])\s+/));
+  for (const sentence of sentences) {
+    const cites = new Set([...sentence.matchAll(/\[\[\s*(\/[^\]\s]{1,200})\s*\]\]/g)].map((m) => m[1]));
+    const text = sentence.replace(/\[\[[^\]]*\]\]/g, "");
+    const named = new Set([...text.matchAll(QUOTE)].map((m) => m[1]));
+    const aboutQuote = named.size > 0 || [...cites].some((c) => c.startsWith("/quotes/")) || /\bquot(e|es|ed|ation)\b/i.test(text);
+    const free = REPORTED.test(text) || PROPOSAL.test(text);
+    const bound = free || !aboutQuote ? [] : records.quotes.filter((r) => cites.has(r.link) || named.has(r.quote) || names(text, r.customers));
+    const boundNumbers = [...bound.flatMap((r) => r.numbers), bound.reduce((sum, r) => sum + (r.total ?? 0), 0)];
+    const on = bound.map((r) => `Q-${r.quote}`).join("/");
+
+    for (const m of text.matchAll(MONEY)) {
+      const read = readNumber(m[1]);
+      if (!read) continue;
+      const scale = m[2] ? SCALE[m[2].toLowerCase()] : 1;
+      const value = read.value * scale;
+      // Rounded as written ("R1.2m" is anything from 1.15m to 1.25m), or within 1%.
+      const slack = Math.max((read.unit * scale) / 2, value * 0.01, 0.5);
+      if (!near(numbers, value, slack)) flagged.push(m[0].trim());
+      // In the records, but not on the quote this sentence is about: a mix-up.
+      else if (bound.length && !near(boundNumbers, value, slack)) flagged.push(`${m[0].trim()} (not on ${on})`);
+    }
+    for (const m of text.matchAll(QUOTE)) if (!quotes.has(m[1])) flagged.push(`Q-${m[1]}`);
+    if (free) continue;
+
+    if (bound.length && /\bdeposit\b/i.test(text) && /\bpaid\b/i.test(text) && !NEGATED.test(text) && !bound.some((r) => r.paid)) {
+      flagged.push(`deposit paid (not on ${on})`);
+    }
+    // Dates written after "deliver…": "signed 3 Oct, delivery not booked" names no delivery date.
+    const deliverAt = text.search(/\bdeliver/i);
+    const dates = deliverAt < 0 ? [] : datesIn(text.slice(deliverAt));
+    if (bound.length && dates.length && !dates.some((d) => bound.some((r) => r.delivery.has(d.key)))) {
+      flagged.push(`delivery ${dates[0].written} (not on ${on})`);
+    }
+    if (/\b(in stock|available)\b/i.test(text) && !NEGATED.test(text)) {
+      const units = records.stock.filter((u) => cites.has(u.link) || (u.unit && word(u.unit).test(text)) || (u.product.length >= 3 && word(u.product).test(text)));
+      if (units.length && !units.some((u) => u.status === "available")) flagged.push(`in stock (${units[0].product || units[0].unit} is ${units[0].status})`);
+    }
+    const email = EMAIL_CLAIM.exec(text);
+    if (email && !/n't\b|\b(not|never|no|bounced|undelivered|refused)\b/i.test(text)) {
+      flagged.push(`email "${(email[1] ?? email[2]).toLowerCase()}" (the CRM can only tell accepted, bounced or opened)`);
+    }
   }
-  for (const m of checked.matchAll(QUOTE)) if (!quotes.has(m[1])) flagged.push(`Q-${m[1]}`);
   return [...new Set(flagged)];
 }
 

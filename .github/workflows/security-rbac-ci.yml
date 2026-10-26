@@ -581,6 +581,14 @@ jobs:
       - name: Assistant -- finds the right customer for the right person
         run: npm run test:assistant-customers
 
+      # DAX's send facts (roadmap Phase 2): a quote whose email bounced reads as
+      # bounced in find_quotes and a lead's quotes, the quote_unsigned watch says
+      # "reach them another way", WhatsApp receipts reach the lead brief, and the
+      # record-bound checker flags an old message's figure stated as the quote's.
+      # The model is never called; nothing is sent.
+      - name: Assistant -- a bounced quote email is never just "sent"
+        run: npm run test:dax-send-facts
+
       # A scheduled briefing going to a linked phone: what is waiting, claimed
       # before it is sent and released when it could not be, the template nudge
       # claimed once. No WhatsApp connection here, so nothing is ever sent.

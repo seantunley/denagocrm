@@ -58,7 +58,7 @@ test("only 'tell me when she opens it' is one-shot", () => {
 test("describeWatch reads as a sentence, with names when known", () => {
   assert.equal(describeWatch({ kind: "quote_viewed", quoteId: "q1" }, { quote: "Q-1042", customer: "Anna Jacobs" }), "Tell me when Anna Jacobs opens Q-1042");
   assert.equal(describeWatch({ kind: "quote_viewed", quoteId: "q1" }), "Tell me when the customer opens the quote");
-  assert.equal(describeWatch({ kind: "quote_unsigned", thresholdHours: 48 }), "Tell me when any quote I can see is opened but not signed within 2 days");
+  assert.equal(describeWatch({ kind: "quote_unsigned", thresholdHours: 48 }), "Tell me when any quote I can see is opened but not signed within 2 days, or its email bounces");
   assert.equal(describeWatch({ kind: "lead_quiet", leadId: "l1", thresholdDays: 5 }, { lead: "Anna Jacobs" }), "Tell me if Anna Jacobs goes 5 days without contact");
   assert.equal(describeWatch({ kind: "lead_quiet", product: "Club Car" }), "Tell me when any open Club Car lead I can see goes 7 days without contact");
   assert.equal(describeWatch({ kind: "test_drive_no_follow_up", thresholdHours: 24 }), "Tell me when a test drive finished over 24 hours ago has no follow-up planned");
