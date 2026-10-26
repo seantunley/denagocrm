@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { JOB_CARD_RULE, parseActionList } from "../src/lib/assistantActions";
 import { WHATSAPP_CONFIRMABLE, splitForWhatsApp_cards } from "../src/lib/assistantWhatsAppRules";
 import { PRIORITY_VALUES } from "../src/lib/workshop-constants";
@@ -42,8 +42,10 @@ test("the rule: the vehicle from the lookup, ASK WHICH when there are several, a
   assert.match(JOB_CARD_RULE, /vehicleId is the vehicleId of the customer's vehicle from the vehicles lookup \(kind customer\) — never invent one/);
   assert.match(JOB_CARD_RULE, /MORE THAN ONE VEHICLE[\s\S]*ASK WHICH[\s\S]*CHOICES[\s\S]*propose nothing until they say; never guess/);
   assert.match(JOB_CARD_RULE, /the customer is not contacted/);
-  // The vehicles lookup hands the model the id it needs.
-  assert.match(code("src/lib/crmAssistant.ts"), /vehicle: v\.model, vehicleId: v\.id, link: `\/vehicles\/\$\{v\.id\}`/);
+  // The vehicles lookup hands the model the id it needs — written in crmAssistant.ts, or in workshopContext.ts
+  // (customerVehicles) once the workshop-context PR (#913) moves the lookup there.
+  const lookup = ["src/lib/crmAssistant.ts", "src/lib/workshopContext.ts"].filter((rel) => existsSync(new URL(`../${rel}`, import.meta.url))).map(code).join("\n");
+  assert.match(lookup, /vehicle: v\.model, vehicleId: v\.id, link: `\/vehicles\/\$\{v\.id\}`/);
   // Only a workspace with Automotive is told it can open one, and only when tasks may be proposed.
   assert.match(code("src/lib/crmAssistant.ts"), /const jobCards = proposes && modules\.has\("automotive"\) \? JOB_CARD_RULE : "";/);
   assert.match(code("src/lib/crmAssistant.ts"), /CHOICE_INSTRUCTIONS,\s*jobCards,\s*channelRule\(/);
