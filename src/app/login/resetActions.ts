@@ -14,11 +14,11 @@ import {
   LOGIN_POLICY,
   OTP_SEND_POLICY,
   OTP_VERIFY_POLICY,
-  checkRateLimit,
   clearRateLimit,
   getRequestIp,
   rateLimitKey,
   registerRateLimitAttempt,
+  reserveRateLimitAttempt,
 } from "@/lib/rateLimit";
 
 /**
@@ -106,7 +106,8 @@ export async function resetPasswordWithCode(_prev: ResetState | undefined, formD
 
   const ip = await getRequestIp();
   const attemptKey = rateLimitKey("staff-reset-verify", `${email}:${ip}`);
-  if (!(await checkRateLimit(attemptKey)).allowed) {
+  // Counted before the code is checked (see login()); a right code clears it below.
+  if (!(await reserveRateLimitAttempt(attemptKey, OTP_VERIFY_POLICY)).allowed) {
     return { sent: true, email, error: "Too many incorrect codes. Request a new code in a few minutes." };
   }
 
@@ -135,7 +136,6 @@ export async function resetPasswordWithCode(_prev: ResetState | undefined, formD
   const usable = Boolean(user && security && !security.disabledAt && reserved);
 
   if (!usable || !matches) {
-    await registerRateLimitAttempt(attemptKey, OTP_VERIFY_POLICY);
     return { sent: true, email, error: "That code isn't right or has expired. Check the email, or request a new code." };
   }
 

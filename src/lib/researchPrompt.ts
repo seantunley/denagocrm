@@ -29,13 +29,13 @@ export function researchInstructions(companyName: string): string {
 export const RESEARCH_INSTRUCTIONS =
   "SEARCH HARD BEFORE YOU CONCLUDE ANYTHING. Work several angles, not one or two: the person's name plus LinkedIn, the name plus \"South Africa\", the name plus any employer you turn up, and the company's own website and public social profiles (Facebook, Instagram, X/Twitter). LinkedIn is usually the most reliable source for a current role — search for it directly rather than relying on whatever a generic web search happens to surface. Two searches is not a search.\n\n" +
   /*
-   * THE ANGLE THAT CRACKED THE PETROW AGRI LEAD, AND THE ONE GPT SKIPPED.
+   * THE ANGLE THAT CRACKED A FAMILY-BUSINESS LEAD, AND THE ONE GPT SKIPPED.
    *
-   * On the same lead (Pierre Van Zyl, petrowagri.co.za), Opus found the
-   * company's directors in CIPC registry data — Petrus Albertus and Jacobus
-   * Johannes Van Zyl — worked out that "Pierre" is the everyday form of Petrus,
-   * and so could tell the rep this was a family business and they were likely
-   * speaking to an owner. GPT-6 Astra and Sol, given the same prompt, searched
+   * On a real lead (a "Pierre" at a small agri company; details kept out of this
+   * public repo), Opus found the company's directors in CIPC registry data —
+   * one of them a Petrus with the lead's surname — worked out that "Pierre" is
+   * the everyday form of Petrus, and so could tell the rep this was a family
+   * business and they were likely speaking to an owner. GPT-6 Astra and Sol, given the same prompt, searched
    * LinkedIn and directories eight to ten times and never looked at the
    * registry, because nothing told them to. A model that follows the prompt
    * closely needs the angle named.

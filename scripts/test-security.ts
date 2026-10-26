@@ -6,7 +6,9 @@ import {
   checkRateLimit,
   clearRateLimit,
   rateLimitKey,
+  refundRateLimitAttempt,
   registerRateLimitAttempt,
+  reserveRateLimitAttempt,
 } from "../src/lib/rateLimit";
 import {
   bumpUserSessionVersion,
@@ -50,6 +52,29 @@ async function main() {
     assert.equal((await checkRateLimit(limiterKey)).allowed, false, "blocked state must persist in PostgreSQL");
     await clearRateLimit(limiterKey);
     assert.equal((await checkRateLimit(limiterKey)).allowed, true, "clearing a limiter must restore access");
+
+    // A BURST cannot beat the limit (security audit 2026-10-25). Guesses are
+    // counted before they are checked, under the key's lock, so of 25 sent at
+    // once exactly LOGIN_POLICY.limit get through to be checked.
+    const burstKey = rateLimitKey("security-burst", suffix);
+    const burst = await Promise.all(Array.from({ length: 25 }, () => reserveRateLimitAttempt(burstKey, LOGIN_POLICY)));
+    assert.equal(burst.filter((r) => r.allowed).length, LOGIN_POLICY.limit, "a burst gets exactly `limit` guesses checked");
+    assert.equal((await checkRateLimit(burstKey)).allowed, false, "and leaves the key blocked");
+    await clearRateLimit(burstKey);
+
+    // A RIGHT guess gives its count back, so the limit still means `limit` WRONG guesses.
+    const refundKey = rateLimitKey("security-refund", suffix);
+    for (let wrong = 1; wrong < LOGIN_POLICY.limit; wrong++) {
+      assert.equal((await reserveRateLimitAttempt(refundKey, LOGIN_POLICY)).allowed, true);
+    }
+    // The next guess reaches the limit (and sets the block) — but it is right.
+    assert.equal((await reserveRateLimitAttempt(refundKey, LOGIN_POLICY)).allowed, true);
+    await refundRateLimitAttempt(refundKey, LOGIN_POLICY);
+    assert.equal((await checkRateLimit(refundKey)).allowed, true, "a right guess must not leave the key blocked");
+    // One more wrong guess is still allowed (that is wrong guess number `limit`), then the key blocks.
+    assert.equal((await reserveRateLimitAttempt(refundKey, LOGIN_POLICY)).allowed, true);
+    assert.equal((await reserveRateLimitAttempt(refundKey, LOGIN_POLICY)).allowed, false, "wrong guesses past the limit are refused");
+    await clearRateLimit(refundKey);
 
     const initial = await getUserSecurityState(userId);
     assert.equal(initial?.sessionVersion, 0);

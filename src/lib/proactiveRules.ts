@@ -218,6 +218,7 @@ export function briefQuestion(now: Date, heldOvernight: readonly string[]): stri
     "2. What my customers did since yesterday — quotes opened or signed, messages still waiting for an answer.",
     ...(overnight.length ? [`   Since last night: ${overnight.join(" · ")}`] : []),
     "3. The three things that matter most today, each with one line on why.",
+    "If the daily brief has a workshop section, add a short Workshop part after 2 — overdue services, stuck job cards, warranties running out — a line each, at most three of each. No workshop section, no Workshop part.",
     "Only what is mine. No greeting, no sign-off.",
   ].join("\n");
 }

@@ -18,8 +18,9 @@ const src = (rel: string) => readFileSync(path.join(root, rel), "utf8");
  * shared by both providers, so these tests read the exact strings a model gets.
  */
 
-const personal = researchLeadMessage("Arshaad Mohammed", "arshaad@gmail.com");
-const corporate = researchLeadMessage("Pierre Van Zyl", "pierre@petrowagri.co.za");
+// Made-up people and a reserved .example domain — real leads don't belong in a public repo.
+const personal = researchLeadMessage("Thabo Nkosi", "thabo.nkosi.example@gmail.com");
+const corporate = researchLeadMessage("Pierre Fourie", "pierre@karooagri.example");
 
 test("NO PART OF THE RESEARCH PROMPT OFFERS GIVING UP AS THE SAFE ANSWER", () => {
   /*
@@ -37,12 +38,12 @@ test("THE PERSONAL-EMAIL LINE POINTS AT THE NAME-MATCH RULE INSTEAD", () => {
   assert.match(personal, /report the best-evidenced name matches as your instructions describe/);
   assert.match(RESEARCH_INSTRUCTIONS, /WHEN SEVERAL PEOPLE SHARE THE NAME, REPORT THE BEST-EVIDENCED ONE/);
 
-  assert.match(corporate, /Company domain to research: petrowagri\.co\.za/);
+  assert.match(corporate, /Company domain to research: karooagri\.example/);
   assert.equal(corporateDomain("x@gmail.com"), null);
-  assert.equal(corporateDomain("x@PetrowAgri.co.za"), "petrowagri.co.za");
+  assert.equal(corporateDomain("x@KarooAgri.co.za"), "karooagri.co.za");
 });
 
-test("THE PROMPT NAMES THE REGISTRY ANGLE THAT CRACKED THE PETROW LEAD", () => {
+test("THE PROMPT NAMES THE REGISTRY ANGLE THAT CRACKED THE FAMILY-BUSINESS LEAD", () => {
   /*
    * Opus found the company's directors in CIPC registry data and worked out
    * "Pierre" was Petrus; GPT searched LinkedIn and directories ten times and
@@ -56,19 +57,19 @@ test("THE PROMPT NAMES THE REGISTRY ANGLE THAT CRACKED THE PETROW LEAD", () => {
 });
 
 test("INLINE CITATIONS ARE STRIPPED FROM A CHATGPT BRIEFING", () => {
-  // Verbatim shape from GPT-6 Astra on the Petrow lead, which ignored the
-  // prompt's no-links instruction.
+  // The shape GPT-6 Astra produced on a real lead, which ignored the prompt's
+  // no-links instruction — names and links swapped for made-up ones.
   const astra =
-    "Company: Petrow Agri is a fertiliser distributor in Brackenfell, Cape Town. Kompass lists 20–49 employees. " +
-    "([bg.kompass.com](https://bg.kompass.com/c/petrow-agri-pty-ltd/zan763193/?utm_source=openai)) " +
-    "InteliGro lists PetrowAgri as a partner. ([inteligro.co.za](https://www.inteligro.co.za/partners/petrowagri/?utm_source=openai))\n" +
+    "Company: Karoo Agri is a fertiliser distributor in Cape Town. Kompass lists 20–49 employees. " +
+    "([bg.kompass.com](https://bg.kompass.com/c/karoo-agri-pty-ltd/zan000000/?utm_source=openai)) " +
+    "A supplier lists KarooAgri as a partner. ([supplier.example](https://www.supplier.example/partners/karooagri/?utm_source=openai))\n" +
     "Role: See [LinkedIn](https://za.linkedin.com/in/x?utm_source=openai) for more, or https://example.com/page.";
 
   const clean = stripInlineCitations(astra);
   assert.ok(!/https?:\/\//.test(clean), "no URL survives");
   assert.ok(!/\]\(|\(\[/.test(clean), "no markdown link syntax survives");
   assert.ok(!/utm_source/.test(clean));
-  assert.match(clean, /Kompass lists 20–49 employees\. InteliGro lists PetrowAgri as a partner\./, "the prose around them is intact");
+  assert.match(clean, /Kompass lists 20–49 employees\. A supplier lists KarooAgri as a partner\./, "the prose around them is intact");
   assert.match(clean, /Role: See LinkedIn for more, or\./, "a bare markdown link keeps its text");
   assert.equal(clean.split("\n").length, 2, "each label is still one line — a stray break would shred the card");
 

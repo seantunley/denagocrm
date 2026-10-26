@@ -30,7 +30,6 @@ import {
   canAccessVehicle,
   getAccessibleContactIds,
   getAccessibleDocumentIds,
-  getAccessibleVehicleIds,
   getAccessibleLeadIds,
   getAccessibleQuoteIds,
   hasAnyPermission,
@@ -46,6 +45,7 @@ import { unsupportedFigures, unsupportedNote } from "./assistantVerify";
 import { catalogueColour, closestColour, nameIsClose, nameStems } from "./nearMatch";
 import { salesStats } from "./crmAssistantStats";
 import { briefForAssistant, loadDaxBrief } from "./daxBrief";
+import { customerVehicles, workshopOverview } from "./workshopContext";
 import { breakerOpen, withRetry } from "./assistantBreaker";
 import { fastPath, pageLeadFromHint } from "./assistantFastPath";
 import { stripInvisible } from "./invisibleText";
@@ -1340,30 +1340,14 @@ async function vehicles(user: User, raw: z.infer<typeof vehicleArgs>): Promise<T
     };
   }
 
+  // The workshop at a glance, and customers' vehicles with their workshop picture
+  // (workshopContext: job cards and warranty claims behind their own grants).
+  if (args.kind === "workshop") {
+    const overview = await workshopOverview(user, { take: args.limit ?? 8, stuckDays: args.stuckDays ?? 5 });
+    return overview ? { truncated: false, rows: overview.rows, data: [overview.data] } : refused("the workshop");
+  }
   if (!(await hasAnyPermission(user, "vehicles.view_all", "vehicles.view_owned"))) return refused("customer vehicles");
-  const ids = await getAccessibleVehicleIds(user);
-  const owned = await prisma.vehicle.findMany({
-    where: {
-      deletedAt: null,
-      ...(ids === null ? {} : { id: { in: ids } }),
-      ...(args.search
-        ? { OR: [{ model: fuzzy(args.search) }, { regNumber: fuzzy(args.search) }, { contact: { OR: [{ firstName: fuzzy(args.search) }, { lastName: fuzzy(args.search) }] } }] }
-        : {}),
-    },
-    orderBy: { createdAt: "desc" },
-    take: take + 1,
-    select: { id: true, model: true, regNumber: true, color: true, purchaseDate: true, warrantyMonths: true, contact: { select: { firstName: true, lastName: true } } },
-  });
-  const page = owned.slice(0, take);
-  return {
-    truncated: owned.length > take,
-    data: page.map((v) => ({
-      vehicle: v.model, vehicleId: v.id, link: `/vehicles/${v.id}`, reg: v.regNumber, colour: v.color, owner: nameOfContact(v.contact),
-      bought: v.purchaseDate ? dateKey(v.purchaseDate) : null,
-      warrantyUntil: v.purchaseDate && v.warrantyMonths ? dateKey(new Date(v.purchaseDate.getTime() + v.warrantyMonths * 30.44 * DAY)) : null,
-    })),
-    rows: page.map((v) => ({ label: `${v.model} — ${nameOfContact(v.contact)}`, detail: v.regNumber ?? "no reg", href: `/vehicles/${v.id}` })),
-  };
+  return customerVehicles(user, { search: args.search, limit: take });
 }
 
 /**
@@ -1495,12 +1479,21 @@ async function internet(user: User, question: string): Promise<ToolOutput> {
  * rules from the person's own lists; DAX only reads it and explains.
  */
 async function dailyBrief(user: User): Promise<ToolOutput> {
-  if (!(await hasAnyPermission(user, "leads.view_all", "leads.view_owned"))) return refused("leads");
-  const brief = await loadDaxBrief(user);
+  // Plus a short workshop section for people who see vehicles or job cards
+  // (Automotive on): overdue services, job cards gone still, warranties ending.
+  const [sales, workshop] = await Promise.all([
+    hasAnyPermission(user, "leads.view_all", "leads.view_owned"),
+    isModuleEnabled("automotive").then((on) => (on ? workshopOverview(user, { take: 3, stuckDays: 5, brief: true }) : null)),
+  ]);
+  if (!sales && !workshop) return refused("leads");
+  const brief = sales ? await loadDaxBrief(user) : null;
   return {
     truncated: false,
-    data: [briefForAssistant(brief)],
-    rows: brief.items.slice(0, 8).map((item) => ({ label: item.title, detail: item.detail ?? "", href: item.href })),
+    data: [{ ...(brief ? briefForAssistant(brief) : {}), ...(workshop ? { workshop: workshop.data } : {}) }],
+    rows: [
+      ...(brief?.items.slice(0, 8).map((item) => ({ label: item.title, detail: item.detail ?? "", href: item.href })) ?? []),
+      ...(workshop?.rows ?? []),
+    ],
   };
 }
 
@@ -1755,9 +1748,9 @@ export async function pageContext(user: User, page: string | null | undefined): 
       }
       case "vehicle": {
         if (!(await canAccessVehicle(user, target.id))) return "";
-        const v = await prisma.vehicle.findUnique({ where: { id: target.id }, select: { model: true, contactId: true } });
+        const v = await prisma.vehicle.findUnique({ where: { id: target.id }, select: { model: true, regNumber: true, contactId: true } });
         if (!v) return "";
-        return `The person is looking at a customer's vehicle (${v.model}) — "the owner", "the customer" mean its owner (${brief(null, v.contactId)}).`;
+        return `The person is looking at a customer's vehicle (${v.model}) — "the owner", "the customer" mean its owner (${brief(null, v.contactId)}); for its service, battery, warranty or job cards use vehicles kind customer with search "${v.regNumber ?? v.model}".`;
       }
       case "stock": {
         if (!(await hasAnyPermission(user, "stock.view", "stock.manage"))) return "";

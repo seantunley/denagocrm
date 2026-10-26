@@ -18,11 +18,12 @@ import {
   LOGIN_POLICY,
   OTP_SEND_POLICY,
   OTP_VERIFY_POLICY,
-  checkRateLimit,
   clearRateLimit,
   getRequestIp,
   rateLimitKey,
+  refundRateLimitAttempt,
   registerRateLimitAttempt,
+  reserveRateLimitAttempt,
 } from "@/lib/rateLimit";
 
 /**
@@ -109,11 +110,19 @@ export async function login(
   const ip = await getRequestIp();
   const accountKey = rateLimitKey("staff-login-account", email);
   const ipKey = rateLimitKey("staff-login-ip", ip);
-  const [accountState, ipState] = await Promise.all([
-    checkRateLimit(accountKey),
-    checkRateLimit(ipKey),
+  // COUNTED BEFORE THE PASSWORD IS CHECKED (security audit 2026-10-25). Checking
+  // first and counting failures afterwards let a burst of guesses all pass the
+  // check before any was counted. A right password gives its count back below.
+  const [accountTry, ipTry] = await Promise.all([
+    reserveRateLimitAttempt(accountKey, LOGIN_POLICY),
+    reserveRateLimitAttempt(ipKey, LOGIN_POLICY),
   ]);
-  if (!accountState.allowed || !ipState.allowed) {
+  if (!accountTry.allowed || !ipTry.allowed) {
+    // Refused without a guess being checked: give back the side that did count.
+    await Promise.all([
+      accountTry.allowed ? refundRateLimitAttempt(accountKey, LOGIN_POLICY) : null,
+      ipTry.allowed ? refundRateLimitAttempt(ipKey, LOGIN_POLICY) : null,
+    ]);
     return { error: "Too many failed attempts. Try again later." };
   }
 
@@ -173,17 +182,15 @@ export async function login(
      * glossed: an `UPDATE` touching zero rows still skips the heap write and
      * the WAL record, so the two are very close rather than provably equal.
      * The remaining difference is a fraction of one round trip, against an
-     * endpoint rate-limited per account AND per IP.
+     * endpoint rate-limited per account AND per IP. (The guess was already
+     * counted on both keys above.)
      */
-    await Promise.all([
-      registerRateLimitAttempt(accountKey, LOGIN_POLICY),
-      registerRateLimitAttempt(ipKey, LOGIN_POLICY),
-      recordFailedLogin(user?.id ?? NO_SUCH_USER_ID),
-    ]);
+    await recordFailedLogin(user?.id ?? NO_SUCH_USER_ID);
     return { error: "Invalid email or password." };
   }
 
-  await clearRateLimit(accountKey);
+  // Right password: the account starts clean, as before; the IP gets back the one guess it spent.
+  await Promise.all([clearRateLimit(accountKey), refundRateLimitAttempt(ipKey, LOGIN_POLICY)]);
   const hasTotp = Boolean(user.totpEnabledAt && user.totpSecret);
   if (hasTotp || user.emailOtpEnabled) {
     await issuePending(user.id, pwa);
@@ -244,7 +251,8 @@ export async function verifySecondFactor(
   // Rate-limit the second factor too — the 6-digit code must not be brute-forceable.
   const ip = await getRequestIp();
   const attemptKey = rateLimitKey("staff-2fa", `${uid}:${ip}`);
-  if (!(await checkRateLimit(attemptKey)).allowed) {
+  // Counted before the code is checked — see login() above. A right code clears it below.
+  if (!(await reserveRateLimitAttempt(attemptKey, OTP_VERIFY_POLICY)).allowed) {
     return { error: "Too many incorrect codes. Try again later." };
   }
 
@@ -292,10 +300,7 @@ export async function verifySecondFactor(
   }
 
   if (!ok) {
-    await Promise.all([
-      registerRateLimitAttempt(attemptKey, OTP_VERIFY_POLICY),
-      recordFailedLogin(user.id),
-    ]);
+    await recordFailedLogin(user.id); // the guess was counted before it was checked
     return { error: "That code isn't right. Try again, or use a backup code." };
   }
 

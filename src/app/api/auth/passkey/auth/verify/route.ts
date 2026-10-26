@@ -6,11 +6,10 @@ import { logAudit } from "@/lib/audit";
 import { rpConfig, readChallenge, clearChallenge } from "@/lib/webauthn";
 import {
   PASSKEY_POLICY,
-  checkRateLimit,
   clearRateLimit,
   getRequestIp,
   rateLimitKey,
-  registerRateLimitAttempt,
+  reserveRateLimitAttempt,
 } from "@/lib/rateLimit";
 
 /**
@@ -25,23 +24,24 @@ export async function POST(req: NextRequest) {
   const ip = await getRequestIp();
   const ipKey = rateLimitKey("passkey-auth-verify-ip", ip);
 
-  // Checked BEFORE any work — the point is to stop doing the work.
-  if (!(await checkRateLimit(ipKey)).allowed) {
+  // Counted BEFORE any work — the point is to stop doing the work, and a burst
+  // must not all pass a check that counts nothing (security audit 2026-10-25).
+  // A successful sign-in clears it below.
+  if (!(await reserveRateLimitAttempt(ipKey, PASSKEY_POLICY)).allowed) {
     return NextResponse.json({ error: "Too many attempts. Try again later." }, { status: 429 });
   }
 
   /**
    * One exit for every rejection, so a new early-return can't be added later
-   * that skips the accounting — which is exactly how this route came to have
-   * none. Records the attempt and leaves a trail; the audit write is
-   * best-effort by construction inside logAudit.
+   * that skips the trail — which is exactly how this route came to have none.
+   * The attempt was already counted above; this leaves the trail. The audit
+   * write is best-effort by construction inside logAudit.
    */
   const fail = async (
     message: string,
     status: number,
     actor?: { id: string; name: string } | null,
   ) => {
-    await registerRateLimitAttempt(ipKey, PASSKEY_POLICY);
     await logAudit({
       action: "passkey.login_failed",
       summary: `Failed passkey sign-in attempt: ${message}`,
