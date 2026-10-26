@@ -78,7 +78,7 @@ test("every new lookup goes through the page's own visibility rule and module", 
 
 test("it can answer questions about itself — truthfully, from a fixed brief", async () => {
   const { selfKnowledge } = await import("../src/lib/assistantSoul");
-  const about = selfKnowledge("DAX");
+  const about = selfKnowledge("DAX", new Set(["core", "automation", "automotive", "commerce"]));
   assert.match(about, /^ABOUT YOU \(DAX\)/);
   assert.match(about, /say you're not sure rather than guess/);
   // The claims that must stay true: it only proposes, and it never sends.
@@ -89,7 +89,8 @@ test("it can answer questions about itself — truthfully, from a fixed brief", 
   assert.match(about, /until then it is used only with the person it came from/);
   // …and it is actually given to the answer step, after the soul.
   const lib = code("src/lib/crmAssistant.ts");
-  assert.match(lib, /instructions: \[\s*soul,\s*selfKnowledge\(profile\.name\),\s*ANSWER_RULES,/);
+  assert.match(lib, /instructions: \[\s*soul,\s*selfKnowledge\(profile\.name, modules\),\s*ANSWER_RULES,/);
+  assert.match(lib, /getCompanyProfile\(\)\.catch\(\(\) => null\),\s*getEnabledModuleIds\(\),/);
   // What it has learned comes after the fixed rules — it changes, so it can't sit in the cached prefix.
   assert.match(lib, /channelRule\(source, proposes, opts\.proposeTasks\),\s*learned,\s*images\.length \? IMAGE_RULE : "",/);
   // Questions about itself need no lookup.
@@ -99,6 +100,22 @@ test("it can answer questions about itself — truthfully, from a fixed brief", 
   for (const kind of ["follow_up", "note", "assign", "stage", "draft_message", "schedule"]) assert.ok(actions.includes(`z.literal("${kind}")`), kind);
   // Scheduling: confirmed first, managed on the Ask page.
   assert.match(about, /on a SCHEDULE[\s\S]*set up only when the person presses Confirm[\s\S]*on the Ask page/);
+  assert.match(about, /test drive/);
+  assert.match(about, /stock unit/);
+});
+
+test("it only describes modules the workspace has switched on", async () => {
+  const { selfKnowledge } = await import("../src/lib/assistantSoul");
+  const off = selfKnowledge("DAX", new Set(["core", "automation"]));
+  assert.doesNotMatch(off, /test drive|vehicle|deliver|stock/i);
+  // The core claims are still there.
+  assert.match(off, /start a draft quote/);
+  assert.match(off, /a lead with no contact for N days/);
+  assert.match(off, /you never send anything to a customer/);
+  // Stock on, Automotive off: stock yes, vehicles no.
+  const stockOnly = selfKnowledge("DAX", new Set(["core", "automation", "commerce"]));
+  assert.match(stockOnly, /stock unit/);
+  assert.doesNotMatch(stockOnly, /test drive|vehicle/i);
 });
 
 test("a digital assistant that uses emojis sparingly, whatever the soul says", () => {

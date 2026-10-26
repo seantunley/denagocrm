@@ -299,6 +299,6 @@ test("the owner's switch: owner only, audited, default off — and DAX knows abo
   assert.match(page, /<SaveForm action=\{saveAssistantWhatsAppCard\}/);
   assert.match(page, /name="voiceReplies"/);
   const { selfKnowledge } = await import("../src/lib/assistantSoul");
-  assert.match(selfKnowledge("DAX"), /voice note to you on WhatsApp gets a short spoken answer back as well as the full text/);
-  assert.match(selfKnowledge("DAX"), /Listen button/);
+  assert.match(selfKnowledge("DAX", new Set()), /voice note to you on WhatsApp gets a short spoken answer back as well as the full text/);
+  assert.match(selfKnowledge("DAX", new Set()), /Listen button/);
 });
