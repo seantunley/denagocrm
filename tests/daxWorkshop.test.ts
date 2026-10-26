@@ -41,8 +41,8 @@ test("a customer's cart: service due, recent services, battery and warranty — 
       { checkedAt: daysAgo(5), stateOfHealth: 55 },
       { checkedAt: daysAgo(185), stateOfHealth: 85 },
     ],
-    jobCards: [{ id: "j1", number: 42, status: "approval", description: "Brakes squeal", openedAt: daysAgo(9), updatedAt: daysAgo(7) }],
-    warrantyClaims: [{ id: "w1", status: "open", description: "Battery capacity", claimedAt: daysAgo(2) }],
+    jobCards: { total: 1, list: [{ id: "j1", number: 42, status: "approval", description: "Brakes squeal", openedAt: daysAgo(9), updatedAt: daysAgo(7) }] },
+    warrantyClaims: { total: 1, list: [{ id: "w1", status: "open", description: "Battery capacity", claimedAt: daysAgo(2) }] },
   });
   const full = vehicleWorkshop(v, NOW, true) as Record<string, unknown>;
   assert.equal(full.service, "Overdue");
@@ -52,15 +52,51 @@ test("a customer's cart: service due, recent services, battery and warranty — 
   assert.equal(full.batteryWarrantyClaimCandidate, true, "≤70% inside the warranty");
   assert.equal(full.warranty, "In warranty");
   assert.deepEqual((full.lastServices as unknown[]).length, 2);
-  assert.deepEqual((full.openJobCards as { jobCard: string; stage: string; daysSinceUpdate: number }[])[0], {
+  assert.equal(full.openJobCards, 1);
+  assert.deepEqual((full.jobCardList as { jobCard: string; stage: string; daysSinceUpdate: number }[])[0], {
     jobCard: "#42", link: "/jobcards/j1", stage: "Approval", about: "Brakes squeal", opened: "2026-10-17", lastUpdate: "2026-10-19", daysSinceUpdate: 7,
   });
-  assert.equal((full.openWarrantyClaims as { link: string }[])[0].link, "/warranty/w1");
+  assert.equal(full.jobCardListNote, undefined, "the whole list — no note");
+  assert.equal(full.openWarrantyClaims, 1);
+  assert.equal((full.warrantyClaimList as { link: string }[])[0].link, "/warranty/w1");
 
   // A long list stays small: verdicts and counts only.
   const compact = vehicleWorkshop(v, NOW, false) as Record<string, unknown>;
   assert.equal(compact.openJobCards, 1);
   assert.equal(compact.lastServices, undefined);
+  assert.equal(compact.jobCardList, undefined);
+});
+
+test("counts are the true totals, not the capped list's length — and a capped list says so", () => {
+  const job = (n: number) => ({ id: `j${n}`, number: n, status: "repair", description: "d", openedAt: daysAgo(n), updatedAt: daysAgo(n) });
+  const claim = (n: number) => ({ id: `w${n}`, status: "open", description: "c", claimedAt: daysAgo(n) });
+  const v = cart({
+    jobCards: { total: 7, list: [1, 2, 3, 4, 5].map(job) },
+    warrantyClaims: { total: 6, list: [1, 2, 3, 4, 5].map(claim) },
+  });
+  const full = vehicleWorkshop(v, NOW, true) as Record<string, unknown>;
+  assert.equal(full.openJobCards, 7);
+  assert.equal((full.jobCardList as unknown[]).length, 5);
+  assert.equal(full.jobCardListNote, "the newest 5 of 7");
+  assert.equal(full.openWarrantyClaims, 6);
+  assert.equal(full.warrantyClaimListNote, "the newest 5 of 6");
+  const compact = vehicleWorkshop(v, NOW, false) as Record<string, unknown>;
+  assert.equal(compact.openJobCards, 7);
+  assert.equal(compact.openWarrantyClaims, 6);
+  // The loader feeds `total` from a filtered _count with the SAME filter as the capped list.
+  const ctx = code("src/lib/workshopContext.ts");
+  assert.match(ctx, /jobCards: \{\s*where: openJobs,\s*orderBy: \{ openedAt: "desc" \},\s*take: LIST_CAP,/);
+  assert.match(ctx, /warrantyClaims: \{\s*where: openClaims,\s*orderBy: \{ claimedAt: "desc" \},\s*take: LIST_CAP,/);
+  assert.match(ctx, /_count: \{ select: \{ jobCards: \{ where: openJobs \}, warrantyClaims: \{ where: openClaims \} \} \}/);
+  assert.match(ctx, /jobCards: access\.jobs === false \? undefined : \{ total: v\._count\.jobCards, list: v\.jobCards \}/);
+  assert.match(ctx, /warrantyClaims: access\.claims \? \{ total: v\._count\.warrantyClaims, list: v\.warrantyClaims \} : undefined/);
+  // Workshop overview totals: every accessible vehicle and every stuck job card is loaded, so `total` is the full count.
+  assert.match(ctx, /total: stuck\.length,\s*top: stuck\.slice\(0, opts\.take\)/);
+  assert.doesNotMatch(ctx.slice(ctx.indexOf("export async function workshopOverview")), /take: (?!number|1\b|6\b)/, "no hidden cap under the overview's totals");
+});
+
+test("each customer vehicle carries its id, for a proposed job card (PR #911)", () => {
+  assert.match(code("src/lib/workshopContext.ts"), /vehicle: v\.model, vehicleId: v\.id, link: `\/vehicles\/\$\{v\.id\}`/);
 });
 
 test("job cards and claims they may not see are left out, not reported as none", () => {
@@ -110,10 +146,10 @@ test("workshop lookups go through the pages' own visibility rules", () => {
   assert.match(ctx, /hasAnyPermission\(user, "jobcards\.view_all", "jobcards\.view_owned"\)/);
   assert.match(ctx, /jobs: jobs \? await getAccessibleJobCardIds\(user\) : \(false as const\)/);
   assert.match(ctx, /hasAnyPermission\(user, \.\.\.WARRANTY_READ\)/);
-  assert.match(ctx, /const jobScope = access\.jobs === false \? NOTHING : inScope\(access\.jobs\);/);
-  assert.match(ctx, /where: \{ \.\.\.\(access\.claims \? \{\} : NOTHING\), status: \{ in: OPEN_CLAIM_STATUSES \} \}/);
-  assert.match(ctx, /jobCards: access\.jobs === false \? undefined : v\.jobCards/);
-  assert.match(ctx, /warrantyClaims: access\.claims \? v\.warrantyClaims : undefined/);
+  assert.match(ctx, /const openJobs = \{ \.\.\.\(access\.jobs === false \? NOTHING : inScope\(access\.jobs\)\), deletedAt: null, status: \{ notIn: CLOSED_JOB_STATUSES \} \};/);
+  assert.match(ctx, /const openClaims = \{ \.\.\.\(access\.claims \? \{\} : NOTHING\), status: \{ in: OPEN_CLAIM_STATUSES \} \};/);
+  assert.match(ctx, /jobCards: access\.jobs === false \? undefined : \{/);
+  assert.match(ctx, /warrantyClaims: access\.claims \? \{[^}]*\} : undefined/);
   assert.match(ctx, /where: \{ deletedAt: null, \.\.\.inScope\(access\.vehicles\), \.\.\.\(words\.length/);
   // The tenant-scoped client only.
   assert.doesNotMatch(ctx, /basePrisma/);

@@ -41,10 +41,10 @@ export type WorkshopVehicle = {
   mileageLogs: { km: number; recordedAt: Date }[];
   /** Newest first. */
   batteryChecks: { checkedAt: Date; stateOfHealth: number | null }[];
-  /** Undefined: this person may not see job cards — say nothing about them. */
-  jobCards?: OpenJob[];
+  /** Undefined: this person may not see job cards — say nothing about them. `total` is the true count; `list` may be capped. */
+  jobCards?: { total: number; list: OpenJob[] };
   /** Undefined: this person may not see warranty claims. */
-  warrantyClaims?: OpenClaim[];
+  warrantyClaims?: { total: number; list: OpenClaim[] };
 };
 
 export function jobFacts(j: OpenJob, now: Date) {
@@ -85,9 +85,14 @@ export function vehicleWorkshop(v: WorkshopVehicle, now: Date, full: boolean) {
     battery: battery.latestSoh == null ? battery.headline : `${battery.headline} (${battery.latestSoh}% state of health)`,
     warranty: warrantyLabels[warranty.status],
     warrantyUntil: day(warranty.expiryDate),
-    ...(v.jobCards ? { openJobCards: v.jobCards.length } : {}),
-    ...(v.warrantyClaims ? { openWarrantyClaims: v.warrantyClaims.length } : {}),
+    ...(v.jobCards ? { openJobCards: v.jobCards.total } : {}),
+    ...(v.warrantyClaims ? { openWarrantyClaims: v.warrantyClaims.total } : {}),
   };
+  /** A capped list says so: "the newest 5 of 7". */
+  const listed = <T>(group: { total: number; list: T[] }, items: object[], key: string) => ({
+    [key]: items,
+    ...(group.total > group.list.length ? { [`${key}Note`]: `the newest ${group.list.length} of ${group.total}` } : {}),
+  });
   if (!full) return compact;
   return {
     ...compact,
@@ -96,9 +101,13 @@ export function vehicleWorkshop(v: WorkshopVehicle, now: Date, full: boolean) {
     ...(battery.degradationPerMonth != null ? { batteryHealthLostPerMonthPct: battery.degradationPerMonth } : {}),
     ...(battery.projectedMonthsToWarning != null ? { monthsUntilBatteryWarning: battery.projectedMonthsToWarning } : {}),
     ...(battery.warrantyEligible ? { batteryWarrantyClaimCandidate: true } : {}),
-    ...(v.jobCards ? { openJobCards: v.jobCards.map((j) => jobFacts(j, now)) } : {}),
+    ...(v.jobCards ? listed(v.jobCards, v.jobCards.list.map((j) => jobFacts(j, now)), "jobCardList") : {}),
     ...(v.warrantyClaims
-      ? { openWarrantyClaims: v.warrantyClaims.map((c) => ({ link: `/warranty/${c.id}`, status: c.status, about: clip(c.description, 80), claimed: day(c.claimedAt) })) }
+      ? listed(
+          v.warrantyClaims,
+          v.warrantyClaims.list.map((c) => ({ link: `/warranty/${c.id}`, status: c.status, about: clip(c.description, 80), claimed: day(c.claimedAt) })),
+          "warrantyClaimList",
+        )
       : {}),
   };
 }

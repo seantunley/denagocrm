@@ -28,6 +28,8 @@ const fuzzy = (needle: string) => ({ contains: needle, mode: "insensitive" as co
 const inScope = (ids: string[] | null) => (ids === null ? {} : { id: { in: ids } });
 /** Matches nothing: a relation this person may not see is still selected (one result type), but always empty. */
 const NOTHING = { id: { in: [] as string[] } };
+/** Open job cards / claims listed per vehicle; the counts beside them are the true totals. */
+const LIST_CAP = 5;
 
 type Row = { label: string; detail: string; href: string };
 
@@ -69,7 +71,9 @@ export async function customerVehicles(user: PermissionUser, args: { search?: st
       { fleet: { OR: [{ name: fuzzy(w) }, ...place(w)] } },
     ],
   });
-  const jobScope = access.jobs === false ? NOTHING : inScope(access.jobs);
+  // One filter each for the list AND its count, so the count is the true total, not the capped list's length.
+  const openJobs = { ...(access.jobs === false ? NOTHING : inScope(access.jobs)), deletedAt: null, status: { notIn: CLOSED_JOB_STATUSES } };
+  const openClaims = { ...(access.claims ? {} : NOTHING), status: { in: OPEN_CLAIM_STATUSES } };
   const found = await prisma.vehicle.findMany({
     where: { deletedAt: null, ...inScope(access.vehicles), ...(words.length ? { AND: words.map(matches) } : {}) },
     orderBy: { createdAt: "desc" },
@@ -83,17 +87,18 @@ export async function customerVehicles(user: PermissionUser, args: { search?: st
       mileageLogs: { orderBy: { recordedAt: "desc" }, take: 1, select: { km: true, recordedAt: true } },
       batteryChecks: { orderBy: { checkedAt: "desc" }, take: 6, select: { checkedAt: true, stateOfHealth: true } },
       jobCards: {
-        where: { ...jobScope, deletedAt: null, status: { notIn: CLOSED_JOB_STATUSES } },
+        where: openJobs,
         orderBy: { openedAt: "desc" },
-        take: 5,
+        take: LIST_CAP,
         select: { id: true, number: true, status: true, description: true, openedAt: true, updatedAt: true },
       },
       warrantyClaims: {
-        where: { ...(access.claims ? {} : NOTHING), status: { in: OPEN_CLAIM_STATUSES } },
+        where: openClaims,
         orderBy: { claimedAt: "desc" },
-        take: 5,
+        take: LIST_CAP,
         select: { id: true, status: true, description: true, claimedAt: true },
       },
+      _count: { select: { jobCards: { where: openJobs }, warrantyClaims: { where: openClaims } } },
     },
   });
   const page = found.slice(0, take);
@@ -101,15 +106,16 @@ export async function customerVehicles(user: PermissionUser, args: { search?: st
   return {
     truncated: found.length > take,
     data: page.map((v) => ({
-      vehicle: v.model, link: `/vehicles/${v.id}`, reg: v.regNumber, colour: v.color,
+      // vehicleId: what a proposed job card (assistantActions job_card) names the vehicle by.
+      vehicle: v.model, vehicleId: v.id, link: `/vehicles/${v.id}`, reg: v.regNumber, colour: v.color,
       owner: contactName(v.contact), suburb: v.contact.suburb, fleet: v.fleet?.name ?? null,
       bought: v.purchaseDate ? johannesburgDateKey(v.purchaseDate) : null,
       ...vehicleWorkshop(
         {
           ...v,
           // Not theirs to see → undefined, so DAX says nothing rather than "none".
-          jobCards: access.jobs === false ? undefined : v.jobCards,
-          warrantyClaims: access.claims ? v.warrantyClaims : undefined,
+          jobCards: access.jobs === false ? undefined : { total: v._count.jobCards, list: v.jobCards },
+          warrantyClaims: access.claims ? { total: v._count.warrantyClaims, list: v.warrantyClaims } : undefined,
         },
         now,
         full,
