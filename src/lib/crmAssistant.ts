@@ -44,6 +44,7 @@ import { CITE_RULE, REPLY_FORMAT, STATE_INSTRUCTIONS, citableLinks, resolveCitat
 import { unsupportedFigures, unsupportedNote } from "./assistantVerify";
 import { catalogueColour, closestColour, nameIsClose, nameStems } from "./nearMatch";
 import { salesStats } from "./crmAssistantStats";
+import { whyLookup } from "./assistantWhyLookup";
 import { briefForAssistant, loadDaxBrief } from "./daxBrief";
 import { customerVehicles, workshopOverview } from "./workshopContext";
 import { breakerOpen, withRetry } from "./assistantBreaker";
@@ -1553,6 +1554,7 @@ async function runTool(user: User, step: ToolStep): Promise<ToolOutput> {
     case "find_quotes": return findQuotes(user, step.args);
     case "find_activities": return findActivities(user, step.args);
     case "lead_brief": return leadBrief(user, step.args);
+    case "why": return whyLookup(user, step.args.record);
     case "knowledge": return knowledge(user, step.args);
     case "recall": return recall(user, step.args);
     case "playbook": return playbook(user, step.args);
