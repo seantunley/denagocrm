@@ -65,7 +65,9 @@ test("every new lookup goes through the page's own visibility rule and module", 
   const vehicles = fn("vehicles");
   assert.match(vehicles, /isModuleEnabled\("commerce"\)[\s\S]*hasAnyPermission\(user, "stock\.view", "stock\.manage"\)/);
   assert.match(vehicles, /isModuleEnabled\("automotive"\)/);
-  assert.match(vehicles, /getAccessibleVehicleIds\(user\)/);
+  // Customer vehicles moved to workshopContext (their workshop picture); the rule is the same.
+  assert.match(vehicles, /hasAnyPermission\(user, "vehicles\.view_all", "vehicles\.view_owned"\)\)\) return refused\("customer vehicles"\);\s*return customerVehicles\(/);
+  assert.match(code("src/lib/workshopContext.ts"), /getAccessibleVehicleIds\(user\)/);
   const deliveries = fn("deliveries");
   assert.match(deliveries, /hasAnyPermission\(user, "deliveries\.view", "deliveries\.manage"\)/);
   assert.match(deliveries, /getAccessibleQuoteIds\(user\)/);
@@ -107,7 +109,7 @@ test("it can answer questions about itself — truthfully, from a fixed brief", 
 test("it only describes modules the workspace has switched on", async () => {
   const { selfKnowledge } = await import("../src/lib/assistantSoul");
   const off = selfKnowledge("DAX", new Set(["core", "automation"]));
-  assert.doesNotMatch(off, /test drive|vehicle|deliver|stock/i);
+  assert.doesNotMatch(off, /test drive|vehicle|deliver|stock|workshop|job card|warrant|battery/i);
   // The core claims are still there.
   assert.match(off, /start a draft quote/);
   assert.match(off, /a lead with no contact for N days/);
