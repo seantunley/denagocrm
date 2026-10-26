@@ -108,6 +108,32 @@ export const deliveryArgs = z
 /** What's on file for one customer — titles and dates, never the contents. */
 export const documentArgs = z.object({ customer: z.string().trim().min(1).max(120) }).strict();
 
+/**
+ * Evidence (crmAssistantEvidence): everything said to and from ONE customer,
+ * searched by words; one message in full; the text of one PDF on file.
+ */
+export const messageSearchArgs = z
+  .object({
+    customer: z.string().trim().min(1).max(120),
+    /** Any of these words, matched by stem and close spelling — not by meaning. */
+    words: z.string().trim().min(1).max(200).optional(),
+    channel: z.string().trim().regex(/^[a-z_]{2,20}$/i).optional(),
+    direction: z.enum(["inbound", "outbound"]).optional(),
+    from: isoDay.optional(),
+    to: isoDay.optional(),
+    limit: z.number().int().min(1).max(20).optional(),
+  })
+  .strict();
+export const openMessageArgs = z.object({ id: z.string().trim().regex(/^[\w-]{1,64}$/), thread: z.boolean().optional() }).strict();
+export const readDocumentArgs = z
+  .object({
+    /** A document id (from documents) or words in its file name. */
+    document: z.string().trim().min(1).max(160),
+    customer: z.string().trim().min(1).max(120).optional(),
+    fromPage: z.number().int().min(1).max(5000).optional(),
+  })
+  .strict();
+
 export const activityArgs = z
   .object({
     when: z.enum(["overdue", "today", "today_and_overdue", "this_week", "upcoming", "past"]),
@@ -168,6 +194,9 @@ export const assistantStep = z.discriminatedUnion("tool", [
   z.object({ tool: z.literal("vehicles"), args: vehicleArgs }),
   z.object({ tool: z.literal("deliveries"), args: deliveryArgs.default({}) }),
   z.object({ tool: z.literal("documents"), args: documentArgs }),
+  z.object({ tool: z.literal("search_messages"), args: messageSearchArgs }),
+  z.object({ tool: z.literal("open_message"), args: openMessageArgs }),
+  z.object({ tool: z.literal("read_document"), args: readDocumentArgs }),
   z.object({ tool: z.literal("sales_stats"), args: statsArgs.default({}) }),
   z.object({ tool: z.literal("daily_brief"), args: z.object({}).strict().default({}) }),
   // No arguments, deliberately: the research step can ask FOR a web search but
@@ -209,7 +238,10 @@ export function planInstructions(ctx: PlanContext): string {
     '- schedule: {"person":"<person>","from":"YYYY-MM-DD","days":<1-14>} — who is busy when (meetings, blocked time, test drives with their demo vehicle). Check it BEFORE suggesting a meeting or test-drive time; never suggest a slot that clashes.',
     '- vehicles: {"kind":"demo|stock|customer|workshop" (required),"search":"<model, reg, stock no. or customer>","status":"<status>","stuckDays":<days, workshop only>,"limit":<1-25>} — demo vehicles and their upcoming bookings, stock units (available/reserved/sold), or a customer\'s own vehicles. kind customer also gives each vehicle\'s workshop picture — service due or overdue, the last services, battery health, warranty, open job cards and warranty claims — so use it for "service history / battery / warranty / job card of X\'s cart"; search every distinctive word at once, it matches model, reg, owner, company, suburb or estate/fleet ("Nomad XL Constantia"). kind workshop is the whole workshop: services overdue and due soon, job cards with no movement for stuckDays (default 5), warranties ending within 30 days, batteries to replace — for "what\'s overdue in the workshop", "which job cards are stuck".',
     '- deliveries: {"stage":"to_invoice|awaiting_deposit|to_schedule|scheduled|overdue|delivered_recently","limit":<1-25>} — signed deals on their way to the customer: invoicing, deposit, delivery date. With NO stage it returns every stage at once, each deal labelled — use that for "what\'s waiting / in progress"; ask for one stage only when that is all the question wants.',
-    '- documents: {"customer":"<customer name, lead title or id>" (required)} — what is on file for one customer (titles, tags, dates — not contents).',
+    '- documents: {"customer":"<customer name, lead title or id>" (required)} — what is on file for one customer (titles, tags, dates and each documentId — not contents; read_document reads one).',
+    '- search_messages: {"customer":"<customer name, lead title or id>" (required),"words":"<words to find — add the other ways it may have been written: delivery deliver transport>","channel":"email|whatsapp|call|meeting|note|…","direction":"inbound|outbound","from":"YYYY-MM-DD","to":"YYYY-MM-DD","limit":<1-20>} — EVERY message to and from one customer (all their deals this person can open), not only the latest few lead_brief shows: each match with its date, channel, who, an excerpt and its id. Words match by stem and close spelling, not by meaning. Use it for "what did we promise / tell them about X", "did they ever say Y", "when did they first ask about Z". To check an old message against today\'s record, run it beside find_quotes or lead_brief in the same round.',
+    '- open_message: {"id":"<id from search_messages>" (required),"thread":true} — one message in full (up to ~8 000 characters), with whether an email bounced or an open was detected, or whether WhatsApp/Messenger reported it reached their phone; "thread":true adds the rest of that conversation. Use it when an excerpt is not enough to be sure what was said.',
+    '- read_document: {"document":"<documentId from documents, or words of its file name>" (required),"customer":"<customer name>","fromPage":<page>} — the TEXT of one PDF on file (a quote, a contract, a signed copy, an invoice), with page numbers, up to 20 pages at a time; ask again with fromPage for later pages. A scanned PDF has no text and cannot be read.',
     '- find_activities: {"when":"overdue|today|today_and_overdue|this_week|upcoming|past" (required),"from":"YYYY-MM-DD","to":"YYYY-MM-DD","type":"<type>","assignedTo":"<person — theirs, or a meeting they attend>","search":"<words in the activity>","limit":<1-25>} — the calendar: calls, meetings, to-dos, test drives, events, and blocked time (personal items: leave, an appointment, admin time). "What is in my calendar / diary this week" → this_week with assignedTo: today and the next six days, blocked time included — say which dates that covers. "What does X have to do today / what\'s on their plate" → today_and_overdue (what\'s late still has to be done). "When is the next golf day / launch / service" → upcoming with search — events live here, not in knowledge. What HAPPENED ("what golf days did we have last month", "what was on 22 September") → "past" with from/to (one day: from = to) — past results include what was done, each marked planned or done.',
     '- lead_brief: {"lead":"<customer name, lead title or id>" (required)} — one lead in depth: details, recent messages both ways, quotes (viewed? signed?), activities, research. Use it for "what should I do with X", "where are we with X", or to look closer at a lead found earlier.',
     '- why: {"record":"<customer name, lead title, quote number (Q-1031) or id — the page\'s record id works too>" (required)} — WHY something happened on one record: its history, each event with its CAUSE as recorded (the person who did it, the journey and step, the chatbot and its handoff reason, lead routing, the customer\'s own action — or "not recorded"): stage moves and who made them, who it was assigned to and by what, why it was marked lost, why a customer got a message (or why a journey did not enrol them / stopped), why the bot handed a chat over. Use it for every "why did…" / "how come…" / "who moved / sent / assigned…" question about a record; it usually answers on its own ("then":"answer").',
@@ -315,6 +347,9 @@ const LOOKUP_STATUS: Record<string, string> = {
   vehicles: "Checking vehicles",
   deliveries: "Checking deliveries",
   documents: "Checking documents",
+  search_messages: "Searching their messages",
+  open_message: "Reading a message",
+  read_document: "Reading a document",
   sales_stats: "Working out the numbers",
   daily_brief: "Going through what needs attention",
   why: "Going through the record's history",
