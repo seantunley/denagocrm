@@ -15,12 +15,13 @@ import type { ConversationState } from "./assistantReply";
 
 export const MAX_STEPS = 3;
 /**
- * Complex / multi-hop questions ("why is this stuck and what should I do",
- * "compare X and Y and tell me who to help") get a larger research budget so
- * the plan step can look, see the result, and look closer before answering.
+ * An investigation ("why is this stuck and what should I do", "compare X and Y
+ * and tell me who to help") gets a larger research budget so the plan step can
+ * look, see the result, and look closer before answering (assistantDepth).
  * Simple questions stay on the short path.
  */
-export const MAX_STEPS_COMPLEX = 6;
+export const MAX_STEPS_COMPLEX = 8;
+export const MAX_LOOKUPS_INVESTIGATE = 10;
 /**
  * Lookups that don't depend on each other run side by side in one step (Hermes'
  * parallel tool calls): "compare Donovan's and Kristina's pipelines" is two
@@ -263,6 +264,7 @@ export function planInstructions(ctx: PlanContext): string {
     'Shape: {"tool":"find_leads","args":{...}} or {"tool":"done"}',
     'Add "then":"answer" when these lookups are all the question needs (most questions) — the answer is written straight after them, saving a round: {"tool":"lead_brief","args":{"lead":"Anna"},"then":"answer"}. Leave "then" out when you must see the results before choosing the next lookup (especially "why is this stuck", comparisons, or "what should I do" questions). On those, look, read what came back, then decide the next lookup.',
     `When you need several lookups that don't depend on each other's results (two people's pipelines, a customer's brief AND the calendar), ask for them together — up to ${MAX_PARALLEL} at once: {"lookups":[{"tool":"find_leads","args":{"assignedTo":"Donovan"}},{"tool":"find_leads","args":{"assignedTo":"Kristina"}}]}. Add "then":"answer" only if those results will fully answer the question. For a comparison that asks who needs help, or a "why is this stuck" question, leave "then" out so you can read the results and look closer (lead_brief on the worst, sales_stats, etc.). If one needs another's result (find the stalled deals, THEN read the worst one), ask for the first only.`,
+    LEDGER_RULE,
     // ── From here on it varies (by day, person, workspace): keep it LAST. ──
     `Today is ${ctx.today} (South Africa). The person asking is ${ctx.userName}; "me"/"my"/"I" means them.`,
     `Stages: ${ctx.stages.join(", ") || "(none)"}.`,
@@ -271,6 +273,14 @@ export function planInstructions(ctx: PlanContext): string {
     ctx.learned ? `\n${ctx.learned}` : "",
   ].filter(Boolean).join("\n");
 }
+
+/**
+ * Adaptive thinking (assistantDepth): every research reply carries a short
+ * ledger. Only "more" and "depth" are read; the words are the model's working.
+ * A simple question's ledger is two fields, so quick questions stay quick.
+ */
+export const LEDGER_RULE =
+  'Every reply also carries a short ledger, a few words per field: "ledger":{"need":"<what the answer must establish>","have":"<what the lookups so far show>","unsure":"<what is still unclear>","more":<true if another lookup AFTER these could still change the answer, false if not>,"depth":"quick|investigate"}. depth "quick": a plain question one or two lookups answer. depth "investigate": a real investigation — why something happened, what to do about a deal, a comparison, a pattern across many records — where the first results raise the next question; you then get more rounds, so look closer before answering. Say "more":false as soon as another lookup would not change the answer, and stop there. For a simple question these lookups fully answer, the ledger is just {"more":false,"depth":"quick"}: {"tool":"find_leads","args":{"assignedTo":"Donovan"},"then":"answer","ledger":{"more":false,"depth":"quick"}}.';
 
 /**
  * The model's reply → a validated step, or null. Tolerates a code fence or a
@@ -302,9 +312,11 @@ export function parseSteps(text: string): AssistantStep[] | null {
   if (!raw) return null;
   const batch = z.object({ lookups: z.array(z.unknown()).min(1).max(12) }).safeParse(raw);
   if (!batch.success) {
-    // "then" is the step's instruction to the loop, not part of the lookup.
-    const { then: _then, ...lookup } = raw as Record<string, unknown>;
+    // "then" and the ledger are the step's notes to the loop, not part of the lookup.
+    const { then: _then, ledger: _ledger, depth: _depth, ...lookup } = raw as Record<string, unknown>;
     void _then;
+    void _ledger;
+    void _depth;
     const single = assistantStep.safeParse(lookup);
     return single.success ? [single.data] : null;
   }
@@ -318,7 +330,7 @@ export function parseSteps(text: string): AssistantStep[] | null {
 }
 
 /** The reply's JSON object (a code fence or a stray sentence around it tolerated), or null. */
-function stepObject(text: string): Record<string, unknown> | null {
+export function stepObject(text: string): Record<string, unknown> | null {
   const start = text.indexOf("{");
   const end = text.lastIndexOf("}");
   if (start === -1 || end <= start) return null;

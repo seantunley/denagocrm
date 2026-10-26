@@ -41,6 +41,7 @@ import {
 import { ASSISTANT_PROFILE_KEY, parseProfile, selfKnowledge, soulText } from "./assistantSoul";
 import { LEARN_INSTRUCTIONS, memoryPrompt, methodInstructions } from "./assistantMemory";
 import { researchGate } from "./assistantResearchGate";
+import { DEPTH_BUDGETS, HARD_DEADLINE_MS, MIN_CALL_MS, deepen, parseLedger, researchLeftMs, roundFits, startingDepth, type Depth } from "./assistantDepth";
 import { matchDecisions, parseDecision } from "./assistantDecisions";
 import { CITE_RULE, REPLY_FORMAT, STATE_INSTRUCTIONS, citableLinks, resolveCitations, splitReply, type Evidence } from "./assistantReply";
 import { unsupportedFigures, unsupportedNote } from "./assistantVerify";
@@ -68,10 +69,6 @@ import { describeSchedule, nextRun, scheduleInput } from "./assistantSchedule";
 import { describeWatch, watchInput } from "./assistantWatchRules";
 import {
   ANSWER_RULES,
-  MAX_LOOKUPS,
-  MAX_STEPS,
-  MAX_STEPS_COMPLEX,
-  isComplexQuestion,
   activityArgs,
   conversationBlock,
   knowledgeArgs,
@@ -100,7 +97,7 @@ import {
  * "Ask the CRM" — a sales colleague that answers from the workspace's own
  * records and knowledge, on the ChatGPT account the workspace connected.
  *
- * Per question: up to MAX_STEPS research steps (ChatGPT picks read-only tools +
+ * Per question: research steps up to its depth's budget (assistantDepth; ChatGPT picks read-only tools +
  * filters each time — several side by side when they're independent — validated
  * by crmAssistantPlan, and sees what came back),
  * then an ANSWER step in the workspace's own voice (assistantSoul). Every tool
@@ -1894,7 +1891,8 @@ export type AskOptions = {
   onPhase?: (phase: "planning" | "researching" | "answering") => void;
   /**
    * Filled in with milliseconds per phase (context, plan1, lookups1, …,
-   * answerFirstText, answer, total) — numbers only, never what was asked —
+   * answerFirstText, answer, total) — plus two flags, depth (1 = investigated)
+   * and moreLookupsHelp (0/1) — numbers only, never what was asked —
    * so the slow part can be found rather than guessed (assistantRun.runSpeed).
    */
   timings?: Record<string, number>;
@@ -2056,22 +2054,17 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
   const cacheKey = `dax:${ownedWriteTenantId()}:${user.id}`;
   const breakerKey = ownedWriteTenantId();
 
-  // Research: look, see, look closer. Complex questions get a larger step budget
-  // so the plan can re-plan after seeing results; ordinary questions stay short.
-  const complex = isComplexQuestion(question);
-  const maxSteps = complex ? MAX_STEPS_COMPLEX : MAX_STEPS;
-  // Leave room for the answer step and overhead inside the 300s route limit.
-  // Complex research stops early rather than risking a timeout with no answer.
-  const RESEARCH_BUDGET_MS = complex ? 180_000 : 90_000;
-  // Hard ceiling under the route's 300s, so a slow plan + retry + answer still finishes.
-  const HARD_DEADLINE_MS = 280_000;
-  const ANSWER_RESERVE_MS = 70_000;
-  const MIN_CALL_MS = 5_000;
+  // Research: look, see, look closer — as hard as the question's DEPTH says
+  // (assistantDepth). Quick questions keep today's short budget; an
+  // investigation gets more rounds and lookups and thinks harder, inside the
+  // same hard deadline. Set once research is known to run (below); the research
+  // step's ledger can only deepen it.
+  let depth: Depth = "quick";
+  const budget = () => DEPTH_BUDGETS[depth];
   const PLAN_MAX_MS = 45_000;
-  const ANSWER_MAX_MS = 60_000;
   const elapsed = () => Date.now() - started;
   // Time left for research after reserving the answer step.
-  const researchLeft = () => Math.min(RESEARCH_BUDGET_MS, HARD_DEADLINE_MS - ANSWER_RESERVE_MS) - elapsed();
+  const researchLeft = () => researchLeftMs(depth, elapsed());
   const observations: Observation[] = [];
   const progress = (status: string) => {
     try {
@@ -2118,7 +2111,7 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
       if (timeoutMs < MIN_CALL_MS) {
         return Promise.resolve({ error: "research budget spent" });
       }
-      return codexRespond({ instructions, prompt: planPrompt(step, insist), images, reasoningEffort: complex ? "medium" : "low", timeoutMs, cacheKey, preferModel: PLAN_MODEL });
+      return codexRespond({ instructions, prompt: planPrompt(step, insist), images, reasoningEffort: budget().planEffort, timeoutMs, cacheKey, preferModel: PLAN_MODEL });
     });
   const planPrompt = (step: number, insist: boolean) =>
     [
@@ -2127,16 +2120,23 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
       whereTheyAre,
       `Question: ${question}`,
       observations.length ? resultsBlock("Lookups so far:", observations.map(observationText).join("\n\n")) : "",
-      `Rounds left: ${maxSteps - step}. Lookups left: ${MAX_LOOKUPS - observations.length}.`,
+      `Rounds left: ${budget().maxSteps - step}. Lookups left: ${budget().maxLookups - observations.length}.`,
       insist ? PLAN_INSIST : "",
     ].filter(Boolean).join("\n\n");
   // Small talk ("thanks", 👍, "who are you?") skips research — it would only say
   // done — and so does a fast-path question, whose lookup is already known.
   const research = !(isSmallTalk(question) && !images.length) && !fast;
   if (fast) await runLookups(fast, 1);
-  for (let step = 0; research && step < maxSteps && observations.length < MAX_LOOKUPS; step++) {
-    // Stop researching if the budget (or the answer reserve) is spent.
-    if (researchLeft() < MIN_CALL_MS) break;
+  // The keyword detector is the floor; the fast path and small talk stay quick, so they answer exactly as before.
+  depth = startingDepth(question, research);
+  // The slowest round so far: another starts only if one that long still fits before the answer's reserve.
+  let slowestRound = 0;
+  // The research step's last word on whether another lookup would change the answer (null: it never said).
+  let moreHelps: boolean | null = null;
+  for (let step = 0; research && step < budget().maxSteps && observations.length < budget().maxLookups; step++) {
+    // Stop researching if the budget (or the answer reserve) can't fit another round.
+    if (!roundFits(researchLeft(), slowestRound)) break;
+    const roundStarted = Date.now();
     phase("planning");
     let reply = await plan(step, false);
     // Models sometimes answer in prose instead of choosing. Before anything has
@@ -2160,6 +2160,11 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
       await logError("crm-assistant", "research step returned no usable tool call");
       break;
     }
+    // Its ledger can deepen the question (never make it shallower), and can say no further lookup would help.
+    const ledger = parseLedger(reply.text);
+    depth = deepen(depth, ledger);
+    if (ledger?.more != null) moreHelps = ledger.more;
+    const enough = planSaysAnswerNext(reply.text) || ledger?.more === false;
     // Only lookups not already run (in this batch or before), within the total cap.
     const seen = new Set(observations.map((o) => `${o.tool} ${JSON.stringify(o.args)}`));
     const fresh: ToolStep[] = [];
@@ -2172,22 +2177,27 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
       seen.add(key);
       fresh.push(s);
     }
-    const batch = fresh.slice(0, MAX_LOOKUPS - observations.length);
+    const batch = fresh.slice(0, budget().maxLookups - observations.length);
     if (!batch.length) break;
     await runLookups(batch, step + 1);
+    slowestRound = Math.max(slowestRound, Date.now() - roundStarted);
     const lastEmpty = observations.slice(-batch.length).every((o) => !o.output.rows.length && !o.output.data.length);
     const gate = researchGate({
       question,
       tools: observations.map((o) => o.tool),
       lastRoundEmpty: lastEmpty,
-      planSaysAnswer: planSaysAnswerNext(reply.text),
+      planSaysAnswer: enough,
       stepsUsed: step + 1,
-      maxSteps,
+      maxSteps: budget().maxSteps,
     });
     // Deterministic: continue even if the plan said answer, when required evidence is missing.
     if (gate === "continue") continue;
-    if (gate === "answer" || planSaysAnswerNext(reply.text)) break;
+    if (gate === "answer" || enough) break;
   }
+  // For the owner's speed view (assistantRun.runSpeed): numbers only — 1 = investigated, 0 = quick; and, when the
+  // research step said, whether it still thought another lookup would change the answer when it stopped.
+  timings.depth = depth === "investigate" ? 1 : 0;
+  if (moreHelps !== null) timings.moreLookupsHelp = moreHelps ? 1 : 0;
 
   if (observations.length) progress("Writing it up…");
   phase("answering");
@@ -2243,12 +2253,13 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
         : "No lookup was needed for this question.",
     ].filter(Boolean).join("\n\n"),
     images,
-    // Low: measured on the 25-question eval (2026-10-05) — the reasoning is done
-    // by the lookups; the answer step writes up what they found.
-    reasoningEffort: "low",
+    // Quick: low — measured on the 25-question eval (2026-10-05), the reasoning
+    // is done by the lookups and the answer writes up what they found. An
+    // investigation thinks longer over what it found: medium (assistantDepth).
+    reasoningEffort: budget().answerEffort,
     // Cap the answer by remaining time under the hard deadline so a slow
     // research phase cannot push the whole request past the route limit.
-    timeoutMs: Math.min(ANSWER_MAX_MS, Math.max(MIN_CALL_MS, HARD_DEADLINE_MS - elapsed())),
+    timeoutMs: Math.min(budget().answerMaxMs, Math.max(MIN_CALL_MS, HARD_DEADLINE_MS - elapsed())),
     cacheKey,
     onText: onAnswerText ? streamVisible(onAnswerText) : undefined,
   }));
