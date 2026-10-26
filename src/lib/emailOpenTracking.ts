@@ -59,6 +59,8 @@ export type EmailOpenFact = {
   openedAt?: string;
   openedTimes?: number;
   provenance: "sent_by_crm" | "recorded_only";
+  /** The customer's mail server refused it (lib/emailBounce.ts) — they never received it. */
+  notDelivered?: { at: string; reason: string | null };
 };
 export function openedFact(c: {
   type: string;
@@ -67,13 +69,16 @@ export function openedFact(c: {
   messageId?: string | null;
   seenAt?: Date | null;
   openCount?: number;
+  bouncedAt?: Date | null;
+  bounceReason?: string | null;
 }): EmailOpenFact | Record<string, never> {
   if (c.direction !== "outbound" || c.type !== "email") return {};
   const provenance = c.openToken || c.messageId ? "sent_by_crm" : "recorded_only";
+  const bounced = c.bouncedAt ? { notDelivered: { at: c.bouncedAt.toISOString(), reason: c.bounceReason ?? null } } : {};
   if (c.seenAt) {
-    return { emailOpen: "opened", openedAt: c.seenAt.toISOString(), ...(c.openCount && c.openCount > 1 ? { openedTimes: c.openCount } : {}), provenance };
+    return { emailOpen: "opened", openedAt: c.seenAt.toISOString(), ...(c.openCount && c.openCount > 1 ? { openedTimes: c.openCount } : {}), provenance, ...bounced };
   }
-  return { emailOpen: c.openToken ? "no_open_detected" : "not_tracked", provenance };
+  return { emailOpen: c.openToken ? "no_open_detected" : "not_tracked", provenance, ...bounced };
 }
 
 export const OPENED_LEGEND =
@@ -81,7 +86,8 @@ export const OPENED_LEGEND =
   "\"opened\": tracking detected an open at `openedAt` (the mail app loaded it; Apple Mail can do that unread) — say it was opened, not that it was read. " +
   "\"no_open_detected\": tracking was on and no open is recorded — the recipient may still have read it (mail apps that block images report nothing); say no open has been detected, never that it is unread or unopened for certain. " +
   "\"not_tracked\": the CRM cannot tell whether it was opened. " +
-  "`provenance` — \"sent_by_crm\": the mail server accepted it from the CRM. \"recorded_only\": an email is logged on the timeline, which alone does not establish that it was sent — say it is recorded, not that it went out.";
+  "`provenance` — \"sent_by_crm\": the mail server accepted it from the CRM. \"recorded_only\": an email is logged on the timeline, which alone does not establish that it was sent — say it is recorded, not that it went out. " +
+  "`notDelivered`: the customer's mail server refused this email at `at` (its reason in `reason`) — say plainly it was NOT delivered and they never received it, and suggest reaching them another way.";
 
 export const SEEN_HINT ="The customer's mail app loaded this email. Apple Mail can do this on its own, so treat it as a strong hint, not proof.";
 

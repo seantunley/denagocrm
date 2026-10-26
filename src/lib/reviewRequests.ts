@@ -82,6 +82,7 @@ export async function sendReviewRequest(
         type: "email",
         direction: "outbound",
         subject: `${REVIEW_MARKER} (${occasion})`,
+        messageId: res.messageId ?? null, // so a bounce notice can find it
         body: `Automatic Google review request sent after ${
           occasion === "delivery" ? `delivery of ${refText}` : refText
         }.`,

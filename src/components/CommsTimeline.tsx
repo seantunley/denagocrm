@@ -7,6 +7,7 @@ import PasteImageInput from "@/components/PasteImageInput";
 import DealField from "@/components/DealField";
 import type { DealOption } from "@/lib/customerTimeline";
 import { SEEN_HINT, seenLabel } from "@/lib/emailOpenTracking";
+import { BOUNCE_HINT, bouncedLabel } from "@/lib/emailBounce";
 import EmailReplyButtons from "@/components/EmailReplyButtons";
 
 /* eslint-disable @next/next/no-img-element */
@@ -41,6 +42,9 @@ type Comm = {
   openCount?: number;
   /** The customer clicked the signature banner in this sent email. */
   bannerClickedAt?: Date | null;
+  /** The receiving server refused this sent email (lib/emailBounce.ts). */
+  bouncedAt?: Date | null;
+  bounceReason?: string | null;
   user: { name: string };
   /**
    * Which customer this entry belongs to. Only set where the timeline shows an
@@ -163,6 +167,11 @@ export default function CommsTimeline({
                     {formatDateTime(c.occurredAt)} — {c.user.name}
                     {c.ownerLabel ? ` · ${c.ownerLabel}` : ""}
                   </span>
+                  {bouncedLabel(c) && (
+                    <span className="badge bg-red-500/15 text-red-300" title={BOUNCE_HINT}>
+                      {bouncedLabel(c)}
+                    </span>
+                  )}
                   {seenLabel(c) && (
                     <span className="badge bg-emerald-500/15 text-emerald-300" title={c.type === "email" ? SEEN_HINT : undefined}>
                       {seenLabel(c)}

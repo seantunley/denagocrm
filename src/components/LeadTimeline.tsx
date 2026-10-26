@@ -18,6 +18,7 @@ import {
 } from "@/app/actions/timelinePins";
 import { formatDateTime } from "@/lib/format";
 import { SEEN_HINT, seenLabel } from "@/lib/emailOpenTracking";
+import { BOUNCE_HINT, bouncedLabel } from "@/lib/emailBounce";
 import { SaveForm, SaveButton } from "@/components/SaveForm";
 import { isFutureDay } from "@/lib/activityDay";
 import {
@@ -82,6 +83,8 @@ type Item = {
   when: Date;
   /** "👁 Opened …" on an outbound message the customer opened (lib/emailOpenTracking.ts). */
   seen?: string | null;
+  /** "⚠ Not delivered …" on a sent email the receiving server refused (lib/emailBounce.ts). */
+  bounced?: string | null;
   pending?: boolean;
   activityId?: string;
   activityStatus?: string;
@@ -168,6 +171,8 @@ export default async function LeadTimeline({
     seenAt?: Date | null;
     openCount?: number;
     bannerClickedAt?: Date | null;
+    bouncedAt?: Date | null;
+    bounceReason?: string | null;
     user: { name: string };
   }[];
   activities?: {
@@ -279,6 +284,7 @@ export default async function LeadTimeline({
       who: communication.user.name,
       when: communication.occurredAt,
       seen: seenLabel(communication),
+      bounced: bouncedLabel(communication),
       email: communication.type === "email"
         ? { id: communication.id, subject: communication.subject, body: communication.body, occurredAt: communication.occurredAt.toISOString(), direction: communication.direction, staffName: communication.user.name, cc: communication.cc ?? null }
         : undefined,
@@ -386,6 +392,7 @@ export default async function LeadTimeline({
                 )}
                 Open attachment in new tab
               </a>}
+              {item.bounced && <p className="mt-2 text-xs font-medium text-red-400" title={BOUNCE_HINT}>{item.bounced}</p>}
               {item.seen ? <p className="mt-2 text-xs text-emerald-400" title={item.type === "email" ? SEEN_HINT : undefined}>{item.seen}</p> : item.deliveredAt ? <p className="mt-2 text-xs text-emerald-400">Delivered · {formatDateTime(item.deliveredAt)}</p> : null}
               {item.changed && item.changed.length > 0 && <details className="mt-2 text-xs"><summary className="cursor-pointer text-muted-foreground">{item.changed.length} field changes</summary><dl className="mt-2 space-y-2">{item.changed.map((change) => <div key={change.field}><dt className="font-medium">{fieldLabel(change.field)}</dt><dd className="break-words text-muted-foreground [overflow-wrap:anywhere]"><span className="line-through">{auditValue(change.before)}</span> → {auditValue(change.after)}</dd></div>)}</dl></details>}
               {!inPinnedShelf && item.email && workspace.replyable && <EmailReplyButtons email={item.email} />}

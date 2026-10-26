@@ -328,6 +328,11 @@ jobs:
         # the restricted role. The harness tsconfig, because it also drives a
         # real caller (reordering a pipeline's stages) that reaches next/headers.
         run: npm run test:scoped-transactions
+      - name: Bounced email -- marked on the right email, noted once, alert owed until a push is accepted
+        # A delivery-failure notice through the mailbox sync's own handler (PR #907):
+        # mixed reports, concurrent notices, a history write that fails, and an
+        # alert that reaches nobody staying owed until a retry is accepted.
+        run: npm run test:email-bounces
 
       - name: Run two-tenant end-to-end CRM isolation suite
         # Ordinary CRM flows run as two different tenants through the REAL scoped

@@ -758,6 +758,8 @@ export async function leadBrief(user: User, raw: z.infer<typeof leadBriefArgs>):
         occurredAt: true, direction: true, type: true, subject: true, body: true, user: { select: { id: true, name: true } },
         // Whether an email we sent was opened (lib/emailOpenTracking.ts).
         openToken: true, messageId: true, seenAt: true, openCount: true,
+        // …and whether the customer's mail server refused it (lib/emailBounce.ts).
+        bouncedAt: true, bounceReason: true,
       },
     }),
     prisma.activity.findMany({
