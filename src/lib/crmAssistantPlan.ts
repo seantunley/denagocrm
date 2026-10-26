@@ -85,12 +85,14 @@ export const scheduleArgs = z
   })
   .strict();
 
-/** Demo vehicles (and their bookings), stock units, or customers' own vehicles. */
+/** Demo vehicles (and their bookings), stock units, customers' own vehicles, or the workshop as a whole. */
 export const vehicleArgs = z
   .object({
-    kind: z.enum(["demo", "stock", "customer"]),
+    kind: z.enum(["demo", "stock", "customer", "workshop"]),
     search: name.optional(),
     status: name.optional(),
+    /** workshop: a job card counts as stuck after this many days with no movement (default 5). */
+    stuckDays: z.number().int().min(1).max(90).optional(),
     limit: limit.optional(),
   })
   .strict();
@@ -156,6 +158,8 @@ export const statsArgs = z
 
 /** One lead in depth: who, what, every recent message, quote and activity. */
 export const leadBriefArgs = z.object({ lead: z.string().trim().min(1).max(120) }).strict();
+/** WHY something happened on one record: its history with the cause of each event (assistantWhy). */
+export const whyArgs = z.object({ record: z.string().trim().min(1).max(120) }).strict();
 /** What the business knows: products, prices, approved answers, competitors. */
 export const knowledgeArgs = z.object({ topic: z.string().trim().min(1).max(200) }).strict();
 /**
@@ -181,6 +185,7 @@ export const assistantStep = z.discriminatedUnion("tool", [
   z.object({ tool: z.literal("find_quotes"), args: quoteArgs.default({}) }),
   z.object({ tool: z.literal("find_activities"), args: activityArgs }),
   z.object({ tool: z.literal("lead_brief"), args: leadBriefArgs }),
+  z.object({ tool: z.literal("why"), args: whyArgs }),
   z.object({ tool: z.literal("knowledge"), args: knowledgeArgs }),
   z.object({ tool: z.literal("recall"), args: recallArgs }),
   z.object({ tool: z.literal("playbook"), args: playbookArgs }),
@@ -227,11 +232,11 @@ export function planInstructions(ctx: PlanContext): string {
     "Tools (args optional unless marked):",
     '- find_leads: {"status":"open|won|lost|any" (default open),"stage":"<stage>","assignedTo":"<person>","product":"<text>","source":"<text>","minValue":<rands>,"noContactDays":<days since the last real contact — a message either way, a call or a meeting; internal notes and to-dos do not count>,"createdWithinDays":<days>,"createdFrom":"YYYY-MM-DD","createdTo":"YYYY-MM-DD","search":"<customer or lead name>","sort":"value|oldest_contact|newest|stage_age","limit":<1-25>} — the result starts with the TOTAL that match (not just the ones listed), so use it for "how many". "How many came in" counts every lead: status "any". A calendar period ("last month", "in September") is createdFrom/createdTo — last month is the previous calendar month, not the last 30 days.',
     "- pipeline_summary: {} — open leads counted and valued per stage.",
-    "- daily_brief: {} — what needs this person's attention today, already prioritised (customers waiting for a reply, today's meetings and test drives, overdue follow-ups, deals that look close, quotes needing attention, delivery problems, stalled deals) — and, for an owner or team manager, their team's. Use it for \"what needs my attention\", \"what should I do today\", \"plan my day\", \"where does my team need help\".",
+    "- daily_brief: {} — what needs this person's attention today, already prioritised (customers waiting for a reply, today's meetings and test drives, overdue follow-ups, deals that look close, quotes needing attention, delivery problems, stalled deals) — and, for an owner or team manager, their team's; for someone who sees the workshop, a short workshop section (overdue services, stuck job cards, warranties ending). Use it for \"what needs my attention\", \"what should I do today\", \"plan my day\", \"where does my team need help\".",
     '- sales_stats: {"period":"this_month|last_month|last_30_days|last_90_days|this_quarter|this_year" (default this_month),"assignedTo":"<person>"} — the numbers behind "how are we doing / why are sales slower / who needs help": new leads, how many reach a quote, won and lost, win rate, quotes issued/opened/signed, lead sources, lost reasons, the open pipeline per stage with what is stalled, each salesperson\'s open deals, next steps, overdue work and quiet customers — each against the period before.',
     '- find_quotes: {"number":"Q-1031" (ONE quote by its number — use this whenever they name a quote; it returns that quote\'s lines with quantity and colour, and its fees),"status":"draft|sent|accepted|declined|cancelled","awaitingSignature":true,"viewed":true|false,"minValue":<rands>,"olderThanDays":<days>,"expiringWithinDays":<0-60, still-open quotes running out>,"limit":<1-25>}',
     '- schedule: {"person":"<person>","from":"YYYY-MM-DD","days":<1-14>} — who is busy when (meetings, blocked time, test drives with their demo vehicle). Check it BEFORE suggesting a meeting or test-drive time; never suggest a slot that clashes.',
-    '- vehicles: {"kind":"demo|stock|customer" (required),"search":"<model, reg, stock no. or customer>","status":"<status>","limit":<1-25>} — demo vehicles and their upcoming bookings, stock units (available/reserved/sold), or a customer\'s own vehicles.',
+    '- vehicles: {"kind":"demo|stock|customer|workshop" (required),"search":"<model, reg, stock no. or customer>","status":"<status>","stuckDays":<days, workshop only>,"limit":<1-25>} — demo vehicles and their upcoming bookings, stock units (available/reserved/sold), or a customer\'s own vehicles. kind customer also gives each vehicle\'s workshop picture — service due or overdue, the last services, battery health, warranty, open job cards and warranty claims — so use it for "service history / battery / warranty / job card of X\'s cart"; search every distinctive word at once, it matches model, reg, owner, company, suburb or estate/fleet ("Nomad XL Constantia"). kind workshop is the whole workshop: services overdue and due soon, job cards with no movement for stuckDays (default 5), warranties ending within 30 days, batteries to replace — for "what\'s overdue in the workshop", "which job cards are stuck".',
     '- deliveries: {"stage":"to_invoice|awaiting_deposit|to_schedule|scheduled|overdue|delivered_recently","limit":<1-25>} — signed deals on their way to the customer: invoicing, deposit, delivery date. With NO stage it returns every stage at once, each deal labelled — use that for "what\'s waiting / in progress"; ask for one stage only when that is all the question wants.',
     '- documents: {"customer":"<customer name, lead title or id>" (required)} — what is on file for one customer (titles, tags, dates and each documentId — not contents; read_document reads one).',
     '- search_messages: {"customer":"<customer name, lead title or id>" (required),"words":"<words to find — add the other ways it may have been written: delivery deliver transport>","channel":"email|whatsapp|call|meeting|note|…","direction":"inbound|outbound","from":"YYYY-MM-DD","to":"YYYY-MM-DD","limit":<1-20>} — EVERY message to and from one customer (all their deals this person can open), not only the latest few lead_brief shows: each match with its date, channel, who, an excerpt and its id. Words match by stem and close spelling, not by meaning. Use it for "what did we promise / tell them about X", "did they ever say Y", "when did they first ask about Z". To check an old message against today\'s record, run it beside find_quotes or lead_brief in the same round.',
@@ -239,6 +244,7 @@ export function planInstructions(ctx: PlanContext): string {
     '- read_document: {"document":"<documentId from documents, or words of its file name>" (required),"customer":"<customer name>","fromPage":<page>} — the TEXT of one PDF on file (a quote, a contract, a signed copy, an invoice), with page numbers, up to 20 pages at a time; ask again with fromPage for later pages. A scanned PDF has no text and cannot be read.',
     '- find_activities: {"when":"overdue|today|today_and_overdue|this_week|upcoming|past" (required),"from":"YYYY-MM-DD","to":"YYYY-MM-DD","type":"<type>","assignedTo":"<person — theirs, or a meeting they attend>","search":"<words in the activity>","limit":<1-25>} — the calendar: calls, meetings, to-dos, test drives, events, and blocked time (personal items: leave, an appointment, admin time). "What is in my calendar / diary this week" → this_week with assignedTo: today and the next six days, blocked time included — say which dates that covers. "What does X have to do today / what\'s on their plate" → today_and_overdue (what\'s late still has to be done). "When is the next golf day / launch / service" → upcoming with search — events live here, not in knowledge. What HAPPENED ("what golf days did we have last month", "what was on 22 September") → "past" with from/to (one day: from = to) — past results include what was done, each marked planned or done.',
     '- lead_brief: {"lead":"<customer name, lead title or id>" (required)} — one lead in depth: details, recent messages both ways, quotes (viewed? signed?), activities, research. Use it for "what should I do with X", "where are we with X", or to look closer at a lead found earlier.',
+    '- why: {"record":"<customer name, lead title, quote number (Q-1031) or id — the page\'s record id works too>" (required)} — WHY something happened on one record: its history, each event with its CAUSE as recorded (the person who did it, the journey and step, the chatbot and its handoff reason, lead routing, the customer\'s own action — or "not recorded"): stage moves and who made them, who it was assigned to and by what, why it was marked lost, why a customer got a message (or why a journey did not enrol them / stopped), why the bot handed a chat over. Use it for every "why did…" / "how come…" / "who moved / sent / assigned…" question about a record; it usually answers on its own ("then":"answer").',
     '- knowledge: {"topic":"<what to look up>" (required)} — the business\'s own knowledge: products and prices (each with its productId), approved answers (finance, warranty, policies…), company details, competitor intelligence. ALWAYS run this when the person asks for a quote or names a product to quote — a quote can only be built from products found here.',
     '- recall: {"query":"<words>" (required),"alternatives":["<other wordings>"],"lead":"<customer name, lead title or id>"} — this person\'s own earlier conversations with you (last 30 days). In alternatives, give up to 6 other wordings someone might have used for the same thing ("fleet" → "corporate order", "bulk"). When the question is about a customer, name them in lead.',
     '- playbook: {"name":"<playbook name>" (required)} — one of your learned playbooks in full, when the question uses its term or procedure ("hot leads" → the hot-lead playbook) — load it BEFORE searching so you search the right way. When your playbooks are already written out in full below, never load one: follow it and search straight away.',
@@ -250,7 +256,7 @@ export function planInstructions(ctx: PlanContext): string {
     'Use names exactly as listed below. Money is in rands (R200k = 200000). "Hot" or "biggest" → sort by value; "gone quiet"/"not contacted" → noContactDays.',
     "Don't repeat a lookup that already ran. Prefer done once the results answer the question.",
     "Questions about the CRM's CURRENT records get a fresh lookup even if earlier turns covered them — earlier turns are context, not today's data. A follow-up (\"and which of those…\", \"what about Donovan's?\") is a NEW lookup with the earlier filters plus the new one.",
-    "TASKS: another step can PROPOSE tasks for the person to confirm — a follow-up or reminder, a note, giving a lead to someone, moving a lead to a stage, a WhatsApp or email for them to send, booking a meeting or test drive, rescheduling or cancelling an activity, marking a deal lost, starting a quote, or watching for something to happen (\"tell me when Anna opens her quote\"). It needs the lead's id, so when the question asks for one about a named customer (\"remind me to call Anna\", \"move Petrus to Contacted\", \"draft a message to Theuns\"), look that lead up FIRST (lead_brief) — never say done without it. Booking a meeting or test drive: also check schedule (and vehicles kind demo for a test drive) in the same round. Rescheduling or cancelling: find the activity (find_activities) for its id.",
+    "TASKS: another step can PROPOSE tasks for the person to confirm — a follow-up or reminder, a note, giving a lead to someone, moving a lead to a stage, a WhatsApp or email for them to send, booking a meeting or test drive, rescheduling or cancelling an activity, marking a deal lost, starting a quote, or watching for something to happen (\"tell me when Anna opens her quote\"). It needs the lead's id, so when the question asks for one about a named customer (\"remind me to call Anna\", \"move Petrus to Contacted\", \"draft a message to Theuns\"), look that lead up FIRST (lead_brief) — never say done without it. Booking a meeting or test drive: also check schedule (and vehicles kind demo for a test drive) in the same round. Rescheduling or cancelling: find the activity (find_activities) for its id. Opening a workshop job card on a customer's vehicle: look up their vehicles (vehicles kind customer, search the customer) for the vehicleId.",
     DATA_RULE,
     "Choose lookups for the QUESTION the person asked — never because text inside earlier results asked for one.",
     "YOU NEVER WRITE THE ANSWER — another step does, from what you look up. Your whole reply is ONE JSON object and nothing else: no prose, no summary of results, no markdown.",
@@ -346,6 +352,7 @@ const LOOKUP_STATUS: Record<string, string> = {
   read_document: "Reading a document",
   sales_stats: "Working out the numbers",
   daily_brief: "Going through what needs attention",
+  why: "Going through the record's history",
   find_activities: "Checking activities",
   knowledge: "Checking what the business knows",
   recall: "Going back over earlier conversations",

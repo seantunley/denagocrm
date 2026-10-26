@@ -20,6 +20,7 @@ import { parseRands } from "@/lib/format";
 import { Prisma } from "@prisma/client";
 import { STAGE_VALUES, PRIORITY_VALUES, stageMeta } from "@/lib/workshop-constants";
 import { isModuleEnabled } from "@/lib/modules/enabled";
+import { CONFIRM_KEY } from "@/lib/assistantActions";
 import { resolveAssignableUser } from "@/lib/tenantActor";
 import { withActingStaffScope } from "@/lib/actingScope";
 import {
@@ -245,27 +246,66 @@ export async function saveCheckinAnnotation(formData: FormData) {
   });
 }
 
+/** The job-card form: opens the card, then goes to it. */
 export async function createJobCard(formData: FormData) {
+  const kmInRaw = String(formData.get("kmIn") ?? "").trim();
+  const jobCard = await openJobCard({
+    vehicleId: String(formData.get("vehicleId") ?? ""),
+    description: String(formData.get("description") ?? ""),
+    kmIn: kmInRaw === "" ? null : parseInt(kmInRaw, 10),
+    priority: String(formData.get("priority") ?? "") || undefined,
+  });
+  redirect(`/jobcards/${jobCard.id}`);
+}
+
+/**
+ * THE ONE DOOR a job card is opened through — the form above, and a DAX job-card
+ * card when the person presses Confirm (app/actions/assistant.ts). Same module
+ * check, same jobcards.manage + vehicle-access guard, same numbering lock and the
+ * same audit entry either way. No redirect: the caller decides where to go.
+ *
+ * ONE CONFIRM, ONE JOB CARD. A DAX card carries a key minted when it was made
+ * (`confirmKey`, CONFIRM_KEY), spent HERE in the transaction that opens the card —
+ * as a spent AssistantPendingAction whose primary key IS the key, the same record
+ * quotes use (saveQuoteDraft claimConfirmKey). A second Confirm of the same card
+ * (the browser lost the first answer) finds it and gets the job card already
+ * opened (`repeated`), not another. The form sends no key and is unchanged.
+ */
+const CONFIRM_KEY_KEPT_MS = 35 * 24 * 60 * 60 * 1000;
+export async function openJobCard(input: { vehicleId: string; description: string; kmIn?: number | null; priority?: string; confirmKey?: string }) {
   return withActingStaffScope(async () => {
     // The automotive pack owns job cards; a stale quick-create dialog could still POST
     // this action after the pack is switched off, so reject it server-side.
     if (!(await isModuleEnabled("automotive"))) {
       throw new Error("The automotive module is disabled");
     }
-    const vehicleId = String(formData.get("vehicleId") ?? "");
-    const description = String(formData.get("description") ?? "").trim();
+    const vehicleId = String(input.vehicleId ?? "");
+    const description = String(input.description ?? "").trim();
     if (!vehicleId || !description) throw new Error("Vehicle and description are required");
+    const priority = input.priority ?? "normal";
+    if (!PRIORITY_VALUES.includes(priority)) throw new Error("Choose a valid priority.");
     const user = await requireVehicleAccess(vehicleId, "jobcards.manage");
 
     const vehicle = await prisma.vehicle.findUniqueOrThrow({ where: { id: vehicleId } });
-    const kmInRaw = String(formData.get("kmIn") ?? "").trim();
-    const kmIn = kmInRaw === "" ? null : parseInt(kmInRaw, 10);
+    const kmIn = input.kmIn ?? null;
 
     // Allocate the number and insert in ONE transaction under the advisory lock so
     // two concurrent job-card creates can't collide on the unique number (#11).
     // basePrisma is the RLS bypass: authorising the vehicle above did not scope
     // this transaction, so both rows carry their owner explicitly.
     const tenantId = await actingTenantId();
+    const confirmKey = input.confirmKey;
+    if (confirmKey !== undefined && !CONFIRM_KEY.test(confirmKey)) throw new Error("That confirmation isn't valid.");
+    // The job card a spent key opened — this workspace's key row only (a bypass client: the predicate is the boundary).
+    const alreadyOpened = async () => {
+      const spent = await basePrisma.assistantPendingAction.findFirst({ where: { id: confirmKey, tenantId }, select: { card: true } });
+      const card = spent?.card as { jobCardId?: unknown; number?: unknown } | undefined;
+      return typeof card?.jobCardId === "string" && typeof card.number === "number" ? { id: card.jobCardId, number: card.number, repeated: true as const } : null;
+    };
+    if (confirmKey) {
+      const repeated = await alreadyOpened();
+      if (repeated) return repeated;
+    }
     const jobCard = await basePrisma.$transaction(async (tx) => {
       const number = await nextJobCardNumber(tx);
       const jc = await tx.jobCard.create({
@@ -276,6 +316,7 @@ export async function createJobCard(formData: FormData) {
           contactId: vehicle.contactId,
           description,
           kmIn: kmIn != null && !isNaN(kmIn) ? kmIn : null,
+          priority,
           technicianId: user.id,
         },
       });
@@ -284,8 +325,24 @@ export async function createJobCard(formData: FormData) {
           data: { tenantId, vehicleId, km: jc.kmIn, note: `Job card #${jc.number} check-in` },
         });
       }
+      if (confirmKey) {
+        // With the job card or not at all. Two Confirms at the same moment: the second collides on this primary
+        // key and its whole transaction — job card included — is undone (caught below).
+        const now = new Date();
+        await tx.assistantPendingAction.create({
+          data: {
+            id: confirmKey, tenantId, userId: user.id, card: { kind: "confirm_key", what: `job card #${jc.number}`, jobCardId: jc.id, number: jc.number },
+            confirmedAt: now, completedAt: now, expiresAt: new Date(now.getTime() + CONFIRM_KEY_KEPT_MS),
+          },
+        });
+      }
       return jc;
+    }).catch(async (error: unknown) => {
+      const repeated = confirmKey && (error as { code?: string } | null)?.code === "P2002" ? await alreadyOpened() : null;
+      if (repeated) return repeated;
+      throw error;
     });
+    if ("repeated" in jobCard) return jobCard;
     await logAudit({
       action: "jobcard.opened",
       summary: `Opened job card #${jobCard.number} on ${vehicle.model}: ${description}`,
@@ -293,7 +350,7 @@ export async function createJobCard(formData: FormData) {
       user,
     });
     revalidatePath("/jobcards");
-    redirect(`/jobcards/${jobCard.id}`);
+    return { id: jobCard.id, number: jobCard.number };
   });
 }
 

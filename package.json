@@ -63,6 +63,7 @@
     "test:assistant-customers": "tsx --tsconfig tsconfig.scripts.json scripts/test-assistant-customers.ts",
     "test:assistant-evidence": "tsx --tsconfig tsconfig.scripts.json scripts/test-assistant-evidence.ts",
     "eval:evidence": "tsx --tsconfig tsconfig.scripts.json evals/runEvidenceEval.ts",
+    "test:assistant-why": "tsx --tsconfig tsconfig.harness.json scripts/test-assistant-why.ts",
     "test:assistant-updates-whatsapp": "tsx --tsconfig tsconfig.scripts.json scripts/test-assistant-updates-whatsapp.ts",
     "test:phone-match": "tsx --tsconfig tsconfig.scripts.json scripts/test-phone-match.ts",
     "test:in-person-signing": "tsx --tsconfig tsconfig.scripts.json scripts/test-in-person-signing.ts",

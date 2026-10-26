@@ -7,7 +7,7 @@ import { watchFields, type WatchInput } from "./assistantWatchRules";
  * card and presses Confirm (or Send), and only then does the matching existing
  * server action run (scheduleFollowUp, scheduleActivity, createTestDriveBooking,
  * rescheduleActivity, cancelActivity, addCommunication, assignLead, moveLead,
- * markLost, createQuoteFromLead, and the lead page's own message box), with
+ * markLost, createQuoteFromLead, openJobCard, and the lead page's own message box), with
  * that person's own permissions, the stage gates, the clash checks and the
  * audit log, exactly as if they had done it by hand. A scheduled question is
  * saved for the signed-in person only, and later runs as them.
@@ -66,6 +66,16 @@ export const proposedAction = z.discriminatedUnion("type", [
     reason,
   }).strict(),
   z.object({ type: z.literal("test_drive"), leadId, when: atTime, minutes: minutes.optional(), vehicle: text.max(80), reason }).strict(),
+  // A workshop job card on a CUSTOMER'S OWN vehicle (Automotive) — opened at Confirm by the job-card form's own
+  // action (openJobCard). The vehicle by its id from the vehicles lookup: never guessed between several.
+  z.object({
+    type: z.literal("job_card"),
+    vehicleId: leadId,
+    description: text.max(500),
+    priority: z.enum(["low", "normal", "high", "urgent"]).optional(),
+    kmIn: z.number().int().min(0).max(1_000_000).optional(),
+    reason,
+  }).strict(),
   // A personal calendar item: time blocked on the person's OWN calendar, tied to
   // no lead or customer. `when` with a time blocks `minutes` from then (an hour
   // if not given); a date alone blocks the whole day, through `until` if given.
@@ -252,6 +262,17 @@ export const CHECK_BACK_RULE = [
   "- At most ONE per answer, and only when it clearly helps. Not for something they asked you to remind them to DO (that is a follow_up), and not when they are already watching it.",
   "- Do NOT mention it in your answer — the CRM adds a line saying what was set.",
 ].join("\n");
+
+/**
+ * Opening a workshop job card (Automotive only — given to the answer step only when that module is on).
+ * There is no booking-date field on a job card, so a day they name goes in the description.
+ */
+export const JOB_CARD_RULE =
+  '- job_card: OPEN A WORKSHOP JOB CARD on a customer\'s own vehicle, when they ask ("book Anna\'s Nomad in for a service next Tuesday, brakes squeaking"). {"type":"job_card","vehicleId":"<id>","description":"...","priority":"low|normal|high|urgent","kmIn":12345}. ' +
+  "vehicleId is the vehicleId of the customer's vehicle from the vehicles lookup (kind customer) — never invent one. " +
+  "IF THE CUSTOMER HAS MORE THAN ONE VEHICLE and what they said does not single one out (model, reg), ASK WHICH — with CHOICES naming each by model and reg — and propose nothing until they say; never guess. If they have none on record, say so: the vehicle is added in the CRM first. " +
+  "description: the work in their words. The job card has no booking date: a day they name goes in the description (\"Booked in for Tue 3 Nov — brakes squeaking\"). priority only when they say it is urgent or can wait (default normal); kmIn only when they give the odometer reading. " +
+  "Confirming opens the job card in the workshop and nothing else — the customer is not contacted.";
 
 export const ACTION_INSTRUCTIONS = [
   "TASKS. You can't change anything yourself, but you can PROPOSE up to 4 tasks for the person to confirm with one click. Propose when they ask you to do something (\"remind me…\", \"give it to Donovan\", \"draft a message…\", \"book Anna a test drive\"), or offer one when you recommend a concrete next step.",
@@ -536,6 +557,8 @@ export type ActionCard =
   | (LeadCard & { kind: "draft_message"; channel: "whatsapp" | "email"; subject?: string; body: string; to: string | null })
   | (LeadCard & { kind: "meeting"; start: string; end: string; summary: string; attendeeIds: string[]; detail: string })
   | (LeadCard & { kind: "test_drive"; contactId: string; demoVehicleId: string; branch: string; start: string; end: string; detail: string })
+  // leadId null and leadLabel the vehicle's owner. contactId is the owner the card SHOWED: Confirm refuses if it changed.
+  | { id: string; kind: "job_card"; leadId: null; leadLabel: string; title: string; vehicleId: string; contactId: string; description: string; priority: "low" | "normal" | "high" | "urgent"; kmIn?: number; detail: string; reason?: string; confirmKey: string }
   | (LeadCard & { kind: "lost"; reason: string })
   | (LeadCard & { kind: "quote" })
   // `text` is the whole quote as the person reads it before confirming (lines, catalogue prices, discounts).

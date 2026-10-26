@@ -589,6 +589,13 @@ jobs:
       - name: Assistant -- evidence lookups see only what the person may see
         run: npm run test:assistant-evidence
 
+      # "Why did this happen?": a record's history with the cause of each event,
+      # to the people who may open the record — journeys only with Marketing on
+      # and journeys.manage, the chatbot only with Automation on and inbox
+      # access, and never another workspace's rows. Writes nothing.
+      - name: Assistant -- explains why, only from records the asker may see
+        run: npm run test:assistant-why
+
       # A scheduled briefing going to a linked phone: what is waiting, claimed
       # before it is sent and released when it could not be, the template nudge
       # claimed once. No WhatsApp connection here, so nothing is ever sent.
