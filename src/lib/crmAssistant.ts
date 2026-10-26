@@ -52,6 +52,7 @@ import { stripInvisible } from "./invisibleText";
 import { visibleAnswer } from "./assistantStream";
 import { AI_NOT_CONNECTED, aiFailureForPeople, safeCodexError } from "./codexErrors";
 import { webLookup } from "./crmAssistantWeb";
+import { openMessage, readDocument, searchMessages } from "./crmAssistantEvidence";
 import { assistantWebAllowed } from "./assistantUser";
 import { MAX_IMAGES_PER_QUESTION } from "./assistantImage";
 import { applyLearn, loadLearned, loadPlaybook, markNotesUsed, saveDecision, visibleTo } from "./assistantMemoryStore";
@@ -116,6 +117,12 @@ const HISTORY_DAYS = 30;
 const CANDIDATES = 500;
 /** What one tool's results may cost in a prompt. */
 const OBSERVATION_CHARS = 7000;
+/**
+ * The evidence lookups carry up to EVIDENCE_CHARS of customer or document text
+ * (capped by the tools themselves, so the cut lands between messages or pages,
+ * not mid-JSON) — this is the ceiling with their dates, ids and facts around it.
+ */
+const OBSERVATION_BUDGET: Partial<Record<string, number>> = { search_messages: 12_000, open_message: 11_000, read_document: 11_000 };
 
 export type AssistantRow = { label: string; detail: string; href: string };
 export type AssistantResult =
@@ -1459,11 +1466,12 @@ async function documents(user: User, raw: z.infer<typeof documentArgs>): Promise
     },
     orderBy: { createdAt: "desc" },
     take: 30,
-    select: { fileName: true, tag: true, mimeType: true, createdAt: true },
+    select: { id: true, fileName: true, tag: true, mimeType: true, createdAt: true },
   });
   return {
     truncated: docs.length === 30,
-    data: [{ customer: contactName(contact), link: `/contacts/${contact.id}`, documents: docs.map((d) => ({ file: d.fileName, tag: d.tag, added: dateKey(d.createdAt) })) }],
+    // documentId: what read_document reads a PDF by.
+    data: [{ customer: contactName(contact), link: `/contacts/${contact.id}`, documents: docs.map((d) => ({ documentId: d.id, file: d.fileName, tag: d.tag, added: dateKey(d.createdAt) })) }],
     rows: [{ label: `${contactName(contact)} — documents`, detail: `${docs.length} on file`, href: `/contacts/${contact.id}` }],
   };
 }
@@ -1568,6 +1576,9 @@ async function runTool(user: User, step: ToolStep): Promise<ToolOutput> {
     case "vehicles": return vehicles(user, step.args);
     case "deliveries": return deliveries(user, step.args);
     case "documents": return documents(user, step.args);
+    case "search_messages": return searchMessages(user, step.args);
+    case "open_message": return openMessage(user, step.args);
+    case "read_document": return readDocument(user, step.args);
     case "sales_stats": return salesStats(user, statsArgs.parse(step.args));
     case "daily_brief": return dailyBrief(user);
     // Handled by internet() with the person's own question — never from here.
@@ -1819,7 +1830,8 @@ function observationText(o: Observation): string {
   // ＂ and ＼ would otherwise become real quotes after stringify and forge
   // sibling fields ("status":"won", fake approved answers) inside the results.
   const body = JSON.stringify({ truncated: o.output.truncated, results: cleanDeep(o.output.data) });
-  return `${o.tool} ${JSON.stringify(cleanDeep(o.args ?? {}))} →\n${body.length > OBSERVATION_CHARS ? `${body.slice(0, OBSERVATION_CHARS)}…(cut)` : body}`;
+  const budget = OBSERVATION_BUDGET[o.tool] ?? OBSERVATION_CHARS;
+  return `${o.tool} ${JSON.stringify(cleanDeep(o.args ?? {}))} →\n${body.length > budget ? `${body.slice(0, budget)}…(cut)` : body}`;
 }
 
 /** Every string in a value — object KEYS as well as values — cleaned, before it is serialised. */
@@ -1864,6 +1876,11 @@ export type AskOptions = {
   onAnswerText?: (visibleSoFar: string) => void;
   /** What it is doing while it researches ("Checking leads…"), for the person watching. */
   onProgress?: (status: string) => void;
+  /**
+   * Each lookup's results as they come back — for the eval runner (evals/runEvidenceEval.ts), which scores
+   * whether the evidence was REACHED from the data, not from the answer's wording. In-process only; never logged.
+   */
+  onLookup?: (tool: string, data: unknown[]) => void;
   /** Each phase as it starts — the run record (assistantRun) keeps it for a reconnect. */
   onPhase?: (phase: "planning" | "researching" | "answering") => void;
   /**
@@ -2055,6 +2072,7 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
       ),
     );
     batch.forEach((s, i) => observations.push({ tool: s.tool, args: "args" in s ? s.args : {}, output: outputs[i] }));
+    batch.forEach((s, i) => opts.onLookup?.(s.tool, outputs[i].data));
     mark(`lookups${round}`);
   };
   // A question plain enough to need no research step (assistantFastPath): its
