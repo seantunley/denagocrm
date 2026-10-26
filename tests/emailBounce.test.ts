@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { readFileSync } from "node:fs";
 import { simpleParser } from "mailparser";
-import { bounceLines, bouncedLabel, newBounceLines, readBounce } from "../src/lib/emailBounce";
+import { bounceLines, bouncedLabel, newBounceLines, readBounce, tidyReason } from "../src/lib/emailBounce";
 import { openedFact } from "../src/lib/emailOpenTracking";
 
 const code = (path: string) => readFileSync(path, "utf8");
@@ -11,7 +11,7 @@ const parse = (raw: string | Buffer) => simpleParser(raw);
 test("the MWEB spam refusal is read: who, why, and which email (2026-10-12)", async () => {
   const bounce = readBounce(await parse(readFileSync("tests/fixtures/bounce-exim-dsn.eml")));
   assert.ok(bounce);
-  assert.deepEqual(bounce.failures, [{ address: "erikjvr@mweb.co.za", reason: "550 High probability of spam" }]);
+  assert.deepEqual(bounce.failures, [{ address: "erikjvr@mweb.co.za", reason: "High probability of spam (550)" }]);
   // The original's own header — never a "Message-ID:" line in its body, nor the notice's own id.
   assert.deepEqual(bounce.originalMessageIds, ["<a1b2c3d4-e5f6-7890@denagocpt.co.za>"]);
 });
@@ -39,7 +39,7 @@ test("a plain-text Exim bounce (no delivery report) is read too", async () => {
   ].join("\r\n");
   const bounce = readBounce(await parse(raw));
   assert.ok(bounce);
-  assert.deepEqual(bounce.failures, [{ address: "someone@example.com", reason: "550 5.1.1 User unknown" }]);
+  assert.deepEqual(bounce.failures, [{ address: "someone@example.com", reason: "User unknown (550 5.1.1)" }]);
   assert.deepEqual(bounce.originalMessageIds, ["<plain-1@denagocpt.co.za>"]);
 });
 
@@ -74,8 +74,8 @@ test("a mixed report keeps only the recipients that FAILED, each with its own re
   const bounce = readBounce(await parse(raw));
   assert.ok(bounce);
   assert.deepEqual(bounce.failures, [
-    { address: "cc@example.com", reason: "550 5.1.1 No such mailbox here" },
-    { address: "full@example.com", reason: "552 Mailbox full" },
+    { address: "cc@example.com", reason: "No such mailbox here (550 5.1.1)" },
+    { address: "full@example.com", reason: "Mailbox full (552)" },
   ]);
   // A report with no failure at all — delivered and delayed only — is no bounce.
   const noneFailed = raw.replace(/^X-Failed-Recipients: .*\r?\n/m, "").replace(/Action: failed/g, "Action: delivered");
@@ -114,15 +114,36 @@ test("an email to several people records only the address that failed, once each
   assert.deepEqual(newBounceLines(recorded, bounceLines({ ...cc, failures: [{ address: "to@example.com", reason: "550 User unknown" }] })), ["to@example.com: 550 User unknown"]);
   // The badge names who it failed for, not just that something failed.
   const label = bouncedLabel({ direction: "outbound", bouncedAt: new Date(), bounceReason: `${recorded}\nto@example.com: 550 User unknown` }) ?? "";
-  assert.match(label, /cc@example\.com: 550 User unknown; to@example\.com: 550 User unknown$/);
+  assert.match(label, /cc@example\.com: User unknown \(550\); to@example\.com: User unknown \(550\)$/);
   // No address in the notice: the reason alone, filed once.
   assert.deepEqual(bounceLines({ failures: [{ address: null, reason: "550 Rejected" }], originalMessageIds: ["<m@d>"] }), ["550 Rejected"]);
   assert.deepEqual(newBounceLines("550 Rejected", ["550 Rejected"]), []);
 });
 
+test("the server's reason reads as words, its code once at the end (2026-10-26)", () => {
+  // Gmail's real reply from the live test: the code on every line, a help link, a tracking id.
+  const gmail =
+    "550-5.1.1 The email account that you tried to reach does not exist. Please try 550-5.1.1 double-checking the recipient's email address for typos or " +
+    "550-5.1.1 unnecessary spaces. For more information, go to 550 5.1.1  https://support.google.com/mail/?p=NoSuchUser ffacd0b85a97d-48e3ecdc0c9si13115348f8f.76 - gsmtp";
+  const tidy = "The email account that you tried to reach does not exist. Please try double-checking the recipient's email address for typos or unnecessary spaces. (550 5.1.1)";
+  assert.equal(tidyReason(gmail), tidy);
+  assert.equal(tidyReason(`smtp; ${gmail}`), tidy);
+  assert.equal(tidyReason("550 High probability of spam"), "High probability of spam (550)");
+  assert.equal(tidyReason("550-Mailbox unavailable 550-try later"), "Mailbox unavailable try later (550)");
+  // A number in the words is not the reply's code.
+  assert.equal(tidyReason("421 Try again in 550 seconds"), "Try again in 550 seconds (421)");
+  assert.equal(tidyReason("550 5.1.1 Please wait 550 seconds"), "Please wait 550 seconds (550 5.1.1)");
+  // No code: left as it is. Already tidy: unchanged — so rows stored before this read the same.
+  assert.equal(tidyReason("The receiving mail server refused it."), "The receiving mail server refused it.");
+  for (const s of [tidy, "High probability of spam (550)"]) assert.equal(tidyReason(s), s);
+  // The badge tidies a reason stored raw (the live test's rows were).
+  const label = bouncedLabel({ direction: "outbound", bouncedAt: new Date(), bounceReason: `a@b.co: ${gmail.slice(0, 300)}` }) ?? "";
+  assert.match(label, /— a@b\.co: The email account that you tried to reach does not exist\. .+ unnecessary spaces\. \(550 5\.1\.1\)$/);
+});
+
 test("the timeline says it plainly, and only for a sent email that bounced", () => {
   const at = new Date("2026-10-12T10:00:05Z");
-  assert.match(bouncedLabel({ direction: "outbound", bouncedAt: at, bounceReason: "550 High probability of spam" }) ?? "", /^⚠ Not delivered · .+ — 550 High probability of spam$/);
+  assert.match(bouncedLabel({ direction: "outbound", bouncedAt: at, bounceReason: "550 High probability of spam" }) ?? "", /^⚠ Not delivered · .+ — High probability of spam \(550\)$/);
   assert.equal(bouncedLabel({ direction: "outbound", bouncedAt: null }), null);
   assert.equal(bouncedLabel({ direction: "inbound", bouncedAt: at }), null);
 });
