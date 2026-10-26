@@ -27,6 +27,7 @@ import { sendWhatsAppMessage } from "@/app/actions/whatsapp";
 import { sendEmailAction } from "@/app/actions/emails";
 import { canAccessContact, canAccessLead, canAccessQuote, hasPermission } from "@/lib/permissions";
 import { createWatchForUser } from "@/lib/assistantWatch";
+import { recordTaskProgress } from "@/lib/assistantTask";
 import { assistantVoiceRepliesOn } from "@/lib/assistantVoice";
 import { ASSISTANT_PERMISSIONS } from "@/lib/assistantUser";
 import { MAX_ACTIVE_SCHEDULES, describeSchedule, nextRun, scheduleInput } from "@/lib/assistantSchedule";
@@ -400,6 +401,8 @@ export async function runAssistantAction(
           user,
           ...(card.leadId ? { leadId: card.leadId } : { contactId: quoteContactId }),
         });
+        // ON ITS JOB SHEET: the quote's id as the CRM just made it — the only way a sheet ever gets one. Never throws.
+        await recordTaskProgress(user.id, card.taskId, { quoteId: saved.quote.id, done: `Draft quote Q-${saved.quote.number} created` });
         // THE QUOTE EXISTS. Everything below is about telling the person, and none
         // of it may undo that or report it as failed.
         //
@@ -489,6 +492,7 @@ export async function runAssistantAction(
           user,
           ...(quote.leadId ? { leadId: quote.leadId } : { contactId: quote.contactId }),
         });
+        await recordTaskProgress(user.id, card.taskId, { done: `Q-${saved.quote.number} changed` });
         const after = await prisma.quote.findUnique({ where: { id: quote.id }, include: { items: true, fees: true } }).catch(() => null);
         const total = after ? formatZAR(Math.round(payableTotalCents(after))) : null;
         await sendQueuedPdfNow();
@@ -553,6 +557,7 @@ export async function runAssistantAction(
           user,
           ...(quote.leadId ? { leadId: quote.leadId } : { contactId: quote.contactId }),
         });
+        await recordTaskProgress(user.id, card.taskId, { done: `Added to Q-${saved.quote.number}` });
         const after = await prisma.quote.findUnique({ where: { id: quote.id }, include: { items: true, fees: true } }).catch(() => null);
         const total = after ? formatZAR(Math.round(payableTotalCents(after))) : null;
         await sendQueuedPdfNow();

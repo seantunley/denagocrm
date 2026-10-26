@@ -58,6 +58,8 @@ import { applyLearn, loadLearned, loadPlaybook, markNotesUsed, saveDecision, vis
 import { checkBacksOn, setCheckBacks, type CheckBack } from "./proactiveFollowUp";
 import { ACTION_INSTRUCTIONS, CHECK_BACK_RULE, CHOICE_INSTRUCTIONS, matchQuoteRow, quoteAddText, quoteBuildText, quoteChangeText, settledAnswer, type ActionCard, type ProposedAction, type QuoteBuildLine, type QuoteChange } from "./assistantActions";
 import { knowledgeProducts, resolveCatalogueProduct } from "./catalogueLookup";
+import { TASK_INSTRUCTIONS, keepIds, taskBlock, type TaskView } from "./assistantTaskRules";
+import { applyTaskUpdate, openTasks, type TaskSheet, type TaskWrite } from "./assistantTask";
 import { describeSchedule, nextRun, scheduleInput } from "./assistantSchedule";
 import { describeWatch, watchInput } from "./assistantWatchRules";
 import {
@@ -1107,10 +1109,10 @@ async function recallLeadRefs(user: User, needle: string): Promise<string[]> {
  * the data as returned (like citableLinks): record links, and the leadId /
  * quoteId / contactId a row carries. Only what the person's own lookups saw.
  */
-export function turnRefs(data: unknown): string[] {
+export function turnRefs(data: unknown, cap = RECALL_REFS): string[] {
   const refs = new Set<string>();
   const walk = (value: unknown) => {
-    if (refs.size >= RECALL_REFS) return;
+    if (refs.size >= cap) return;
     if (Array.isArray(value)) {
       for (const item of value) walk(item);
     } else if (value && typeof value === "object") {
@@ -1125,7 +1127,7 @@ export function turnRefs(data: unknown): string[] {
     }
   };
   walk(data);
-  return [...refs].slice(0, RECALL_REFS);
+  return [...refs].slice(0, cap);
 }
 
 const RECALL_STOP = new Set(["the", "and", "what", "did", "about", "with", "for", "was", "were", "that", "this", "have", "has", "had", "who", "when", "how", "why", "our", "you", "your", "say", "said", "tell", "told", "last", "week", "decide", "decided"]);
@@ -1968,6 +1970,9 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
   // Proactive DAX, part 3: in a conversation (never a scheduled run) DAX may set itself a check-back — only while
   // the person has proactive DAX on. It needs no Confirm, so it does not depend on `proposes`.
   const checksBack = source !== "schedule" && (await checkBacksOn(user.id).catch(() => false));
+  // Job sheets (assistantTask): read and written only where the person is talking — the CRM and WhatsApp, the same
+  // sheets in both. Never a scheduled run: nobody is there, and customer text it reads must not write to a sheet.
+  const tasksOn = source === "chat" || source === "whatsapp";
   const started = Date.now();
   const timings = opts.timings ?? {};
   let lap = started;
@@ -1984,7 +1989,7 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
     }
   };
   // The connection check rides with the context reads — one round trip, not two.
-  const [connected, whereTheyAre, context, history, learnedNow, person, profileRaw, company, modules] = await Promise.all([
+  const [connected, whereTheyAre, context, history, learnedNow, person, profileRaw, company, modules, tasks] = await Promise.all([
     isCodexConnected(),
     pageContext(user, page),
     planContext(user),
@@ -1994,6 +1999,13 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
     getSetting(ASSISTANT_PROFILE_KEY),
     getCompanyProfile().catch(() => null),
     getEnabledModuleIds(),
+    // The person's open job sheets (up to 3, last 14 days) — whatever the 3-hour conversation window says.
+    tasksOn
+      ? openTasks(user).catch(async (error: unknown): Promise<TaskView[]> => {
+          await logError("crm-assistant", "job sheets read failed", error instanceof Error ? error.name : "unknown");
+          return [];
+        })
+      : ([] as TaskView[]),
   ]);
   mark("context");
   if (!connected) return { ok: false, error: AI_NOT_CONNECTED };
@@ -2007,6 +2019,8 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
   // Earlier answers can quote customer text, so the earlier turns are fenced as
   // data too — an instruction quoted in one answer doesn't come back as one.
   const conversation = history.length ? resultsBlock("Earlier turns (context only):", stripInvisible(conversationBlock(history))) : "";
+  // Open job sheets lead the conversation — fenced as data too: they carry what the model wrote from customer text.
+  const jobSheets = tasks.length ? resultsBlock("Open job sheets (context only):", stripInvisible(taskBlock(tasks))) : "";
   // The business first (what it knows), then the person (who they are, what it knows about them).
   const learned = stripInvisible([memoryPrompt(learnedNow), person].filter(Boolean).join("\n\n"));
   const instructions = [stripInvisible(planInstructions({ ...context, learned, web: webOn })), images.length ? IMAGE_RULE : ""]
@@ -2083,6 +2097,7 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
     });
   const planPrompt = (step: number, insist: boolean) =>
     [
+      jobSheets,
       conversation,
       whereTheyAre,
       `Question: ${question}`,
@@ -2178,6 +2193,7 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
       source === "chat" ? CITE_RULE : "",
       REPLY_FORMAT,
       STATE_INSTRUCTIONS,
+      tasksOn ? TASK_INSTRUCTIONS : "",
       LEARN_INSTRUCTIONS,
       proposes ? ACTION_INSTRUCTIONS : "",
       checksBack ? CHECK_BACK_RULE : "",
@@ -2191,6 +2207,7 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
       // In the prompt, not the instructions: it changes every minute, and the
       // instructions are the cached prefix. Without it "tomorrow at 10" had no date.
       `Now: ${nowInSouthAfrica()}.`,
+      jobSheets,
       conversation,
       `Question: ${question}`,
       observations.length
@@ -2243,12 +2260,32 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
   // A scheduled run learns nothing: it reads customer text daily with nobody
   // watching, so an injected "remember this" would be written with no one there.
   const learn = source === "schedule" ? null : reply.learn;
+  // THE JOB SHEET, written BEFORE the cards: a quote card on it is filled from the sheet, not re-typed (assistantTask).
+  // A customer or deal id is kept only if this turn's own lookups returned it (keepIds); a sheet changed elsewhere
+  // since this question read it is left alone, and the person is told.
+  const taskWrite: TaskWrite | null = tasksOn && reply.task
+    ? await applyTaskUpdate(user, keepIds(reply.task, new Set(turnRefs(observations.map((o) => o.output.data), Infinity))), tasks).catch(async (error: unknown) => {
+        await logError("crm-assistant", "job sheet write failed", error instanceof Error ? error.name : "unknown");
+        return null;
+      })
+    : null;
   // Where nothing can confirm it, a stray ACTIONS line is removed from the answer and dropped.
   const problems: string[] = [];
-  const actions = !proposes ? [] : await resolveActions(user, proposals, problems).catch(async (error: unknown) => {
+  const actions = !proposes ? [] : await resolveActions(user, proposals, problems, taskWrite?.ok ? taskWrite.sheet : null).catch(async (error: unknown) => {
     await logError("crm-assistant", "task proposals failed", error instanceof Error ? error.name : "unknown");
     return [];
   });
+  // A quote card made WITHOUT the answer writing its sheet still belongs to the ONE open sheet for that customer (or
+  // that quote), so Confirm records the quote there and the sheet never builds a second. Two candidates: neither.
+  for (const card of actions) {
+    if ((card.kind !== "quote_build" && card.kind !== "quote_add" && card.kind !== "quote_change") || card.taskId) continue;
+    const match = tasks.filter((t) =>
+      card.kind === "quote_build"
+        ? !t.quoteId && ((card.leadId && t.leadId === card.leadId) || (!card.leadId && card.contactId && t.contactId === card.contactId))
+        : t.quoteId === card.quoteId,
+    );
+    if (match.length === 1) card.taskId = match[0].id;
+  }
   // THE ANSWER WAS WRITTEN BEFORE ANY TASK WAS CHECKED, and says "I've set that up"
   // of every task it tried to propose — or of one it never proposed at all. What
   // the person is told about tasks comes from the cards that EXIST: where the
@@ -2262,9 +2299,15 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
         return "\n\n(I couldn't set myself a reminder to check back.)";
       })
     : "";
+  // Every reply that touched a sheet names it (so a message attached to the wrong one is seen at once) — added by the CRM.
+  const taskLine = !taskWrite
+    ? ""
+    : taskWrite.ok
+      ? `\n\n📋 Job sheet: ${taskWrite.title}${taskWrite.created ? " (new)" : taskWrite.status === "open" ? "" : ` (${taskWrite.status})`} — on your Ask page.`
+      : `\n\n(Your job sheet “${taskWrite.title}” changed somewhere else while I was answering, so I left it as it is now — ask again to update it.)`;
   // A replaced answer carries none of the original's figures or citations, so neither its note nor its links.
-  const cited = (settled ?? resolved.cited + note) + checkBackLine;
-  const answer = (settled ?? resolved.plain + note) + checkBackLine;
+  const cited = (settled ?? resolved.cited + note) + checkBackLine + taskLine;
+  const answer = (settled ?? resolved.plain + note) + checkBackLine + taskLine;
   const choices = source === "schedule" ? [] : reply.choices;
   const learnedCount = learn
     ? await applyLearn(user.id, learn).catch(async (error: unknown) => {
@@ -2305,6 +2348,7 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
         // answer looked at — what the next question and recall read back.
         ...(reply.state ? { state: reply.state, tags: reply.state.tags ?? [] } : {}),
         refs: turnRefs(observations.map((o) => o.output.data)),
+        ...(taskWrite?.ok ? { taskId: taskWrite.id } : {}),
       },
       select: { id: true },
     })
@@ -2329,12 +2373,15 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
  * pipeline); anything that doesn't resolve is dropped, not guessed. Nothing runs
  * here — the card's Confirm calls the existing action, which checks it all again.
  */
-async function resolveActions(
+export async function resolveActions(
   user: User,
   proposals: ProposedAction[],
   /** Filled with why a proposal became no card, where the task can say (see notSetUpNote). The caller counts the rest. */
   problems: string[] = [],
+  /** The job sheet this answer wrote (assistantTask): quote cards are filled from it, and carry its id so Confirm records the result there. */
+  sheet: TaskSheet | null = null,
 ): Promise<ActionCard[]> {
+  const quoteSheet = sheet?.kind === "quote" ? sheet : null;
   if (!proposals.length) return [];
   const staff = await listActingTenantStaff();
   const cards: ActionCard[] = [];
@@ -2447,9 +2494,12 @@ async function resolveActions(
       // Every way out of here without a card says WHY (problems): the answer has
       // already told the person it was set up, and they are owed the correction.
       if (!(await hasPermission(user, "quotes.edit"))) { problems.push("Your role can't edit quotes."); continue; }
-      const number = /^Q-?(\d+)$/i.exec(p.quote)?.[1];
+      // No number given: the job sheet's own quote (its id came from the CRM when the quote was made).
+      const quoteRef = p.quote ?? quoteSheet?.quoteId;
+      if (!quoteRef) { problems.push("Which quote should change? Give me its number (Q-…)."); continue; }
+      const number = /^Q-?(\d+)$/i.exec(quoteRef)?.[1];
       const quote = await prisma.quote.findFirst({
-        where: { deletedAt: null, ...(number ? { number: Number(number) } : { id: p.quote }) },
+        where: { deletedAt: null, ...(number ? { number: Number(number) } : { id: quoteRef }) },
         select: {
           id: true, number: true, status: true, contactId: true, leadId: true, contact: { select: { firstName: true, lastName: true } },
           items: { select: { id: true, description: true, qty: true, discountPct: true, colorPreference: true, product: { select: { colors: { select: { name: true } } } } } },
@@ -2457,7 +2507,7 @@ async function resolveActions(
         },
       });
       // Not there and not theirs read the same: saying which would confirm the quote exists.
-      if (!quote || !(await canAccessQuote(user, quote.id))) { problems.push(`I can't find quote ${p.quote} among the ones you can open.`); continue; }
+      if (!quote || !(await canAccessQuote(user, quote.id))) { problems.push(`I can't find ${p.quote ? `quote ${p.quote}` : "this job sheet's quote"} among the ones you can open.`); continue; }
       const ref = `Q-${quote.number}`;
       if (quote.status !== "draft" || !quote.contactId) { problems.push(`${ref} is not a draft with a customer on it, so it can't be changed from here — open it in the CRM.`); continue; }
       const changes: QuoteChange[] = [];
@@ -2513,6 +2563,7 @@ async function resolveActions(
         quoteId: quote.id, quoteNumber: quote.number, contactId: quote.contactId, changes,
         title: `Change draft quote Q-${quote.number}`, text: quoteChangeText(changes, (cents) => formatZAR(cents)),
         confirmKey: `qk_${randomBytes(16).toString("hex")}`,
+        ...(quoteSheet?.quoteId === quote.id ? { taskId: quoteSheet.id } : {}),
         ...(p.reason ? { reason: p.reason } : {}),
       });
       continue;
@@ -2522,12 +2573,14 @@ async function resolveActions(
       // own client by its number; saveQuoteDraft checks all of it again at Confirm
       // (and refuses one out for signature).
       if (!(await hasPermission(user, "quotes.edit"))) { problems.push("Your role can't edit quotes."); continue; }
-      const number = /^Q-?(\d+)$/i.exec(p.quote)?.[1];
+      const quoteRef = p.quote ?? quoteSheet?.quoteId;
+      if (!quoteRef) { problems.push("Which quote should I add to? Give me its number (Q-…)."); continue; }
+      const number = /^Q-?(\d+)$/i.exec(quoteRef)?.[1];
       const quote = await prisma.quote.findFirst({
-        where: { deletedAt: null, ...(number ? { number: Number(number) } : { id: p.quote }) },
+        where: { deletedAt: null, ...(number ? { number: Number(number) } : { id: quoteRef }) },
         select: { id: true, number: true, status: true, contactId: true, leadId: true, contact: { select: { firstName: true, lastName: true } } },
       });
-      if (!quote || !(await canAccessQuote(user, quote.id))) { problems.push(`I can't find quote ${p.quote} among the ones you can open.`); continue; }
+      if (!quote || !(await canAccessQuote(user, quote.id))) { problems.push(`I can't find ${p.quote ? `quote ${p.quote}` : "this job sheet's quote"} among the ones you can open.`); continue; }
       if (quote.status !== "draft" || !quote.contactId) { problems.push(`Q-${quote.number} is not a draft with a customer on it, so it can't be added to from here — open it in the CRM.`); continue; }
       const fees = (p.fees ?? []).map((fee) => ({ label: fee.label, amountCents: Math.round(fee.amount * 100), delivery: fee.delivery === true }));
       const matched = await Promise.all((p.lines ?? []).map((line) => resolveCatalogueProduct(line)));
@@ -2547,6 +2600,7 @@ async function resolveActions(
         quoteId: quote.id, quoteNumber: quote.number, contactId: quote.contactId, lines, fees,
         title: `Add to draft quote Q-${quote.number}`, text: quoteAddText(lines, fees, (cents) => formatZAR(cents)),
         confirmKey: `qk_${randomBytes(16).toString("hex")}`,
+        ...(quoteSheet?.quoteId === quote.id ? { taskId: quoteSheet.id } : {}),
         ...(p.reason ? { reason: p.reason } : {}),
       });
       continue;
@@ -2560,6 +2614,16 @@ async function resolveActions(
       // EVERY WAY OUT SAYS WHY (Sean, 2026-10-24: "Yes" to a quote for Werner Kilian got "a task could not be set
       // up" — the deal had no customer linked, and the quote was dropped without a word).
       if (!(await hasPermission(user, "quotes.create"))) { problems.push("Your role can't create quotes."); continue; }
+      // ONE SHEET, ONE QUOTE: a sheet that already has its quote is changed (quote_change), never quoted twice.
+      if (quoteSheet?.quoteId) { problems.push("This job sheet already has its quote — I'll change that one rather than make a second. Tell me what should be different."); continue; }
+      // FROM THE SHEET, NOT RE-TYPED: its customer or deal (ids the CRM returned) and its lines and fees win over the
+      // proposal's own; a proposal on no sheet carries its own, as before.
+      const sheetHasCustomer = Boolean(quoteSheet && (quoteSheet.leadId || quoteSheet.contactId));
+      const askedLines = quoteSheet?.details.lines?.length
+        ? quoteSheet.details.lines.map((line) => ({ productId: line.productId, product: line.product || undefined, qty: line.qty, discountPct: line.discountPct, colour: line.colour }))
+        : p.lines ?? [];
+      const askedFees = quoteSheet?.details.fees?.length ? quoteSheet.details.fees : p.fees ?? [];
+      if (!askedLines.length) { problems.push("Which products go on the quote, and how many of each?"); continue; }
       let forDeal: { id: string; label: string } | null = null;
       let customerId: string | null = null;
       let customerName = "";
@@ -2569,8 +2633,8 @@ async function resolveActions(
       // wrong one of the two used to drop the quote without a word. So an id
       // given as a customer that is no customer here is read as a deal. It is
       // only ever looked up as what it IS, with that record's own access check.
-      let dealId = p.leadId ?? null;
-      let contactId = dealId ? null : p.contactId ?? null;
+      let dealId = (sheetHasCustomer ? quoteSheet!.leadId : p.leadId) ?? null;
+      let contactId = dealId ? null : (sheetHasCustomer ? quoteSheet!.contactId : p.contactId) ?? null;
       if (contactId && !(await prisma.contact.findFirst({ where: { id: contactId }, select: { id: true } }))) {
         dealId = contactId;
         contactId = null;
@@ -2600,13 +2664,13 @@ async function resolveActions(
       // id, or by name: a name that is not exactly one product proposes nothing.
       // Looked up in the database across the WHOLE catalogue (resolveCatalogueProduct)
       // — not inside a first page of it. The PRICE is the catalogue's, never the model's.
-      const matched = await Promise.all(p.lines.map((line) => resolveCatalogueProduct(line)));
-      const unknown = p.lines.filter((_, at) => !matched[at]).map((line) => line.product ?? line.productId ?? "a product");
+      const matched = await Promise.all(askedLines.map((line) => resolveCatalogueProduct(line)));
+      const unknown = askedLines.filter((_, at) => !matched[at]).map((line) => line.product ?? line.productId ?? "a product");
       if (unknown.length) { problems.push(`Not one product in the catalogue: ${unknown.map((name) => `"${name}"`).join(", ")} — name it as the catalogue does.`); continue; }
       // THE COLOUR, as the catalogue spells it ("grey" → "Gray"): saveQuoteDraft refuses any other spelling at
       // Confirm. A colour it does not come in is a question with the nearest one, not a dead end.
       let colourProblem = "";
-      const lines: QuoteBuildLine[] = p.lines.map((line, at) => {
+      const lines: QuoteBuildLine[] = askedLines.map((line, at) => {
         const product = matched[at]!;
         const offered = product.colors.map((colour) => colour.name);
         const colour = line.colour ? catalogueColour(line.colour, offered) ?? undefined : undefined;
@@ -2624,8 +2688,9 @@ async function resolveActions(
         };
       });
       if (colourProblem) { problems.push(colourProblem); continue; }
-      const fees = (p.fees ?? []).map((fee) => ({ label: fee.label, amountCents: Math.round(fee.amount * 100), delivery: fee.delivery === true }));
+      const fees = askedFees.map((fee) => ({ label: fee.label, amountCents: Math.round(fee.amount * 100), delivery: fee.delivery === true }));
       cards.push({
+        ...(quoteSheet ? { taskId: quoteSheet.id } : {}),
         id: `a${index}-${forDeal?.id ?? customerId}`, kind: "quote_build", leadId: forDeal?.id ?? null,
         leadLabel: forDeal?.label ?? customerName, contactId: customerId, lines,
         ...(fees.length ? { fees } : {}),

@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
   RESEARCH_SCENARIOS,
+  TASK_SCENARIOS,
+  scoreTaskScenario,
   formatReport,
   meanScore,
   scoreTrace,
@@ -102,4 +104,38 @@ test("meanScore and report are stable", () => {
   assert.ok(mean >= 70, formatReport(scores));
   const report = formatReport(scores);
   assert.match(report, /DAX research quality:/);
+});
+
+/* ── Phase 1 multi-turn scenarios: work first ─────────────────────────────── */
+
+const greyToWhite = TASK_SCENARIOS.find((s) => s.id === "grey-to-white")!;
+const done = {
+  quotes: [{ customer: "Anna Jacobs", lines: [{ product: "Denago Rover XL", qty: 1, colour: "White" }], fees: [{ label: "Delivery — Hermanus", amount: 6500 }] }],
+  openSheets: 1,
+  answers: ["Rover XL in grey with delivery R6 500 to Hermanus — shall I set it up?", "White it is.", "Set up for you to confirm."],
+};
+
+test("the four Phase 1 scenarios exist: grey→white, add a line, continue across channels after 24h, two similar names", () => {
+  assert.deepEqual(TASK_SCENARIOS.map((s) => s.id).sort(), ["add-a-line", "continue-across-channels-24h", "grey-to-white", "two-similar-names"]);
+  const later = TASK_SCENARIOS.find((s) => s.id === "continue-across-channels-24h")!;
+  assert.ok(later.turns.some((t) => t.channel === "whatsapp" && (t.afterHours ?? 0) >= 24), "a day later, on the other channel");
+});
+
+test("the work done right scores 100", () => {
+  assert.equal(scoreTaskScenario(greyToWhite, done).score, 100);
+});
+
+test("a fluent answer with the work NOT done scores zero", () => {
+  assert.equal(scoreTaskScenario(greyToWhite, { ...done, quotes: [] }).score, 0, "no quote in the CRM");
+  assert.equal(scoreTaskScenario(greyToWhite, { ...done, quotes: [{ ...done.quotes[0], lines: [{ product: "Denago Rover XL", qty: 1, colour: "Gray" }] }] }).score, 0, "still grey");
+  assert.equal(scoreTaskScenario(greyToWhite, { ...done, quotes: [done.quotes[0], done.quotes[0]] }).score, 0, "made twice");
+  assert.equal(scoreTaskScenario(greyToWhite, { ...done, quotes: [{ ...done.quotes[0], fees: [] }] }).score, 0, "the fee fell off");
+});
+
+test("with the work done, extra questions cost points; the wrong customer is no work at all", () => {
+  const chatty = scoreTaskScenario(greyToWhite, { ...done, answers: ["Which colour?", "Which delivery address?", "Shall I?"] });
+  assert.ok(chatty.score > 0 && chatty.score < 100, String(chatty.score));
+  const similar = TASK_SCENARIOS.find((s) => s.id === "two-similar-names")!;
+  const guessed = scoreTaskScenario(similar, { quotes: [{ customer: "Anna Jacobs", lines: [{ product: "Denago Rover XL", qty: 1, colour: "White" }], fees: [] }], openSheets: 1, answers: ["Done."] });
+  assert.equal(guessed.score, 0, "quoting the other, similarly named customer is not the work");
 });

@@ -87,7 +87,9 @@ test("only a draft the person may edit and open becomes a card", () => {
   const assistant = code("src/lib/crmAssistant.ts");
   const branch = assistant.slice(assistant.indexOf('if (p.type === "quote_add")'), assistant.indexOf('if (p.type === "quote_build")'));
   assert.match(branch, /if \(!\(await hasPermission\(user, "quotes\.edit"\)\)\) \{ problems\.push\("Your role can't edit quotes\."\); continue; \}/);
-  assert.match(branch, /if \(!quote \|\| !\(await canAccessQuote\(user, quote\.id\)\)\) \{ problems\.push\(`I can't find quote \$\{p\.quote\} among the ones you can open\.`\); continue; \}/);
+  // The quote named, or — with no number — the job sheet's own quote (an id the CRM gave it); either way access-checked.
+  assert.match(branch, /const quoteRef = p\.quote \?\? quoteSheet\?\.quoteId;/);
+  assert.match(branch, /if \(!quote \|\| !\(await canAccessQuote\(user, quote\.id\)\)\) \{ problems\.push\(`I can't find \$\{p\.quote \? `quote \$\{p\.quote\}` : "this job sheet's quote"\} among the ones you can open\.`\); continue; \}/);
   assert.match(branch, /if \(quote\.status !== "draft" \|\| !quote\.contactId\) \{ problems\.push\(/);
   // Read through the workspace's own client — never the bypass one.
   assert.match(branch, /await prisma\.quote\.findFirst\(/);

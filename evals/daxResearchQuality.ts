@@ -235,3 +235,152 @@ export function formatReport(scores: Score[]): string {
   }
   return lines.join("\n");
 }
+
+/* ── Multi-turn task scenarios (roadmap §4; Phase 1 — job sheets) ────────────
+ *
+ * A scenario is a scripted conversation run against a SEEDED LOCAL database
+ * (scripts/eval-dax-tasks.ts — never the hosted dev DB) and scored on what the
+ * DATABASE shows afterwards, not on how the answer reads: a fluent "done!" with
+ * no quote in the CRM scores ZERO. Then unnecessary questions, recovery (the
+ * right customer, nothing made twice) and time.
+ *
+ * The seed every scenario assumes: products "Denago Rover XL" (White, Gray) and
+ * "Golf Caddie"; customers "Anna Jacobs" and "Anna Jacobsen" (the plan's
+ * similar-names case: two customers with nearly the same name, both the asker's).
+ * Fictional names only — never a real customer's in this public repository.
+ */
+
+export type TaskTurn = {
+  /** Where it is asked: the CRM chat or WhatsApp — the same job sheets in both. */
+  channel: "chat" | "whatsapp";
+  ask: string;
+  /** Hours since the previous turn — the runner moves the earlier turns and sheets back by this much. */
+  afterHours?: number;
+  /** Press Confirm on every quote card this answer offered (as the person would). */
+  confirm?: boolean;
+};
+
+export type ExpectedLine = { product: string; qty: number; colour?: string };
+
+export type TaskScenario = {
+  id: string;
+  turns: TaskTurn[];
+  expect: {
+    /** Draft quotes the person ends up with from this conversation (made twice = a failure). */
+    quotes: number;
+    /** For that quote: the customer's name, and exactly these lines (and fees, in rands). */
+    customer?: string;
+    lines?: ExpectedLine[];
+    fees?: { label: string; amount: number }[];
+    /** Open job sheets afterwards. */
+    openSheets?: number;
+    /** Questions DAX may ask across the whole conversation before it is "unnecessary". */
+    maxQuestions?: number;
+    /** It must ask (e.g. which of two similarly named customers) before it does anything. */
+    mustAsk?: RegExp;
+  };
+  note?: string;
+};
+
+/** What the database and the answers showed after the scripted conversation. */
+export type TaskOutcome = {
+  quotes: { customer: string; lines: ExpectedLine[]; fees: { label: string; amount: number }[] }[];
+  openSheets: number;
+  answers: string[];
+  /** Milliseconds per turn. */
+  latencyMs?: number[];
+};
+
+export const TASK_SCENARIOS: TaskScenario[] = [
+  {
+    id: "grey-to-white",
+    turns: [
+      { channel: "chat", ask: "Quote Anna Jacobs for a Rover XL in grey, delivery to Hermanus R6500" },
+      { channel: "chat", ask: "Actually make it white" },
+      { channel: "chat", ask: "Yes, go ahead", confirm: true },
+    ],
+    expect: {
+      quotes: 1, customer: "Anna Jacobs",
+      lines: [{ product: "Denago Rover XL", qty: 1, colour: "White" }],
+      fees: [{ label: "Hermanus", amount: 6500 }],
+      openSheets: 1, maxQuestions: 1,
+    },
+    note: "The correction changes one line of the sheet; the quote is built from the sheet — white, with the delivery fee still on it.",
+  },
+  {
+    id: "add-a-line",
+    turns: [
+      { channel: "chat", ask: "Quote Anna Jacobs for a Rover XL in white", confirm: true },
+      { channel: "chat", ask: "Add a golf caddie to that quote", confirm: true },
+    ],
+    expect: {
+      quotes: 1, customer: "Anna Jacobs",
+      lines: [{ product: "Denago Rover XL", qty: 1, colour: "White" }, { product: "Golf Caddie", qty: 1 }],
+      maxQuestions: 1,
+    },
+    note: "After the quote exists, an addition is a quote_add on the sheet's quote — never a second quote.",
+  },
+  {
+    id: "continue-across-channels-24h",
+    turns: [
+      { channel: "chat", ask: "Start a quote for Anna Jacobs: Rover XL, white. I'll confirm the delivery fee tomorrow." },
+      { channel: "whatsapp", ask: "Continue that quote — delivery is R6500 to Hermanus. Go ahead.", afterHours: 24, confirm: true },
+    ],
+    expect: {
+      quotes: 1, customer: "Anna Jacobs",
+      lines: [{ product: "Denago Rover XL", qty: 1, colour: "White" }],
+      fees: [{ label: "Hermanus", amount: 6500 }],
+      maxQuestions: 1,
+    },
+    note: "A day later, on WhatsApp: past the 3-hour conversation window, so only the job sheet carries it.",
+  },
+  {
+    id: "two-similar-names",
+    turns: [
+      // A voice note's spelling that is close to BOTH customers.
+      { channel: "chat", ask: "Quote Anna Jacobson for a Rover XL in white" },
+      { channel: "chat", ask: "Anna Jacobsen", confirm: true },
+    ],
+    expect: {
+      quotes: 1, customer: "Anna Jacobsen",
+      lines: [{ product: "Denago Rover XL", qty: 1, colour: "White" }],
+      mustAsk: /anna jacobs\b[\s\S]*anna jacobsen|anna jacobsen[\s\S]*anna jacobs\b/i,
+      maxQuestions: 1,
+    },
+    note: "Two customers with nearly the same name: ask which, then quote the one chosen — never guess.",
+  },
+];
+
+const questionsIn = (answer: string) => answer.split("\n").filter((line) => line.trim().endsWith("?")).length;
+
+/**
+ * Score one scripted conversation. WORK FIRST: when the database does not hold
+ * exactly the quote(s) expected — the right customer, lines and fees, nothing
+ * made twice — the score is 0, however good the answers read.
+ */
+export function scoreTaskScenario(scenario: TaskScenario, outcome: TaskOutcome): Score {
+  const e = scenario.expect;
+  const checks: CheckResult[] = [];
+  const quote = outcome.quotes[0];
+  const sameLines = (got: ExpectedLine[], want: ExpectedLine[]) =>
+    got.length === want.length &&
+    want.every((w) => got.some((g) => g.product.toLowerCase().includes(w.product.toLowerCase()) && g.qty === w.qty && (!w.colour || g.colour?.toLowerCase() === w.colour.toLowerCase())));
+  const work: CheckResult[] = [
+    { name: "work-quotes", ok: outcome.quotes.length === e.quotes, detail: `quotes=${outcome.quotes.length}, want ${e.quotes}` },
+    ...(e.customer ? [{ name: "work-customer", ok: quote?.customer === e.customer, detail: `got ${quote?.customer ?? "none"}` }] : []),
+    ...(e.lines ? [{ name: "work-lines", ok: Boolean(quote) && sameLines(quote.lines, e.lines), detail: JSON.stringify(quote?.lines ?? []) }] : []),
+    ...(e.fees ? [{ name: "work-fees", ok: Boolean(quote) && e.fees.every((f) => quote.fees.some((g) => g.label.toLowerCase().includes(f.label.toLowerCase()) && g.amount === f.amount)), detail: JSON.stringify(quote?.fees ?? []) }] : []),
+  ];
+  checks.push(...work);
+  if (e.openSheets !== undefined) checks.push({ name: "open-sheets", ok: outcome.openSheets === e.openSheets, detail: `open=${outcome.openSheets}` });
+  const asked = outcome.answers.reduce((n, a) => n + questionsIn(a), 0);
+  if (e.maxQuestions !== undefined) checks.push({ name: "unnecessary-questions", ok: asked <= e.maxQuestions, detail: `asked ${asked}, max ${e.maxQuestions}` });
+  if (e.mustAsk) checks.push({ name: "asked-first", ok: e.mustAsk.test(outcome.answers[0] ?? ""), detail: "the first answer must ask which one" });
+  if (outcome.latencyMs?.length) {
+    const slowest = Math.max(...outcome.latencyMs);
+    checks.push({ name: "time", ok: slowest <= 90_000, detail: `slowest turn ${Math.round(slowest / 1000)}s` });
+  }
+  const passed = checks.filter((c) => c.ok).length;
+  const score = work.every((c) => c.ok) ? Math.round((passed / checks.length) * 100) : 0;
+  return { scenarioId: scenario.id, score, checks };
+}
