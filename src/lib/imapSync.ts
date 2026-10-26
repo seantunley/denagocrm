@@ -12,8 +12,8 @@ import { sendEmail } from "./email";
 import { contactName } from "./format";
 import { normalizeHtml } from "./competitors";
 import { logError } from "./errorLog";
-import { logAudit } from "./audit";
-import { readBounce, type Bounce } from "./emailBounce";
+import { logAudit, logAuditStrict } from "./audit";
+import { bounceLines, newBounceLines, readBounce, type Bounce } from "./emailBounce";
 
 // The transaction client handed to prisma.$transaction — derived from our
 // EXTENDED client (soft-delete filtering), which differs from the plain
@@ -311,75 +311,100 @@ async function fileTimelineEmail(parsed: ParsedMail, fromEmail: string, transpor
   return true;
 }
 
-const BOUNCE_LOOKBACK_MS = 3 * 24 * 60 * 60 * 1000;
+/** The customer a failed address belongs to: a contact first, else an open lead. */
+async function bounceCustomer(addresses: string[]): Promise<{ contactId: string | null; leadId: string | null } | null> {
+  for (const address of addresses) {
+    const contactId = (await ciExactIds("contactEmail", address))[0];
+    if (contactId) return { contactId, leadId: null };
+    const lead = await prisma.lead.findFirst({ where: await ciExactIdFilter("leadEmail", address), orderBy: { createdAt: "asc" }, select: { id: true, contactId: true } });
+    if (lead) return { contactId: lead.contactId, leadId: lead.id };
+  }
+  return null;
+}
 
 /**
- * A delivery-failure notice for an email the CRM sent (lib/emailBounce.ts):
- * stamp that email on the timeline as not delivered, note it on the customer's
- * history, and tell whoever sent it. Matched by the failed email's own
- * Message-ID; only when the notice doesn't carry one, the latest email to a
- * failed address in the days before the notice. No email found → the bounce is
- * still noted on that customer's history.
+ * A delivery-failure notice for an email the CRM sent (lib/emailBounce.ts).
+ *
+ * The email is identified ONLY by its own Message-ID, carried in the copy of it
+ * inside the notice. A timeline entry doesn't keep who an email went to, and a
+ * customer can have several addresses, so "their latest email" could be one
+ * that arrived fine (review of #907). When it is identified: the address that
+ * failed is added to that email's not-delivered note and to the customer's
+ * history IN ONE TRANSACTION — a history write that fails undoes the stamp, so
+ * the sync's retry files it again, alert and all — and then the person who sent
+ * it is told, and nobody else.
+ *
+ * When it isn't (no copy inside, or an email the timeline doesn't hold, such as
+ * a help-desk reply), the failure is noted on the customer's history only, with
+ * no email marked and no alert: there is nobody it is positively about.
+ *
  * Returns true when newly filed; a notice already filed changes nothing.
  */
 async function fileBounce(bounce: Bounce, parsed: ParsedMail): Promise<boolean> {
   const when = parsed.date ?? new Date();
-  const select = { id: true, subject: true, contactId: true, leadId: true, userId: true } as const;
-  const outboundEmail = { type: "email", direction: "outbound" } as const;
+  const lines = bounceLines(bounce);
+  const to = bounce.recipients.join(", ") || "a recipient";
 
-  let sent = bounce.originalMessageIds.length
-    ? await prisma.communication.findFirst({ where: { ...outboundEmail, messageId: { in: bounce.originalMessageIds } }, orderBy: { occurredAt: "desc" }, select })
+  const sent = bounce.originalMessageIds.length
+    ? await prisma.communication.findFirst({
+        where: { type: "email", direction: "outbound", messageId: { in: bounce.originalMessageIds } },
+        orderBy: { occurredAt: "desc" },
+        select: { id: true, subject: true, contactId: true, leadId: true, userId: true, bouncedAt: true, bounceReason: true },
+      })
     : null;
-  let customer: { contactId: string | null; leadId: string | null } | null = null;
-  for (const address of bounce.recipients) {
-    if (sent) break;
-    const contactIds = await ciExactIds("contactEmail", address);
-    const leadIds = (await prisma.lead.findMany({ where: await ciExactIdFilter("leadEmail", address), select: { id: true } })).map((l) => l.id);
-    if (!contactIds.length && !leadIds.length) continue;
-    customer ??= { contactId: contactIds[0] ?? null, leadId: contactIds.length ? null : leadIds[0] ?? null };
-    // The notice named the email and it isn't a timeline email (a help-desk reply, say): never guess another one.
-    if (bounce.originalMessageIds.length) continue;
-    sent = await prisma.communication.findFirst({
-      where: {
-        ...outboundEmail,
-        occurredAt: { gte: new Date(when.getTime() - BOUNCE_LOOKBACK_MS), lte: when },
-        OR: [{ contactId: { in: contactIds } }, { leadId: { in: leadIds } }],
-      },
-      orderBy: { occurredAt: "desc" },
-      select,
+
+  if (!sent) {
+    const customer = await bounceCustomer(bounce.recipients);
+    if (!customer) return false; // not one of ours — leave it in the mailbox
+    // ponytail: this note isn't deduplicated; a notice is re-read only when an earlier message in the same sync failed.
+    await logAudit({
+      action: "email.bounced",
+      summary: `An email to ${to} was not delivered — ${bounce.reason}`.slice(0, 500),
+      contactId: customer.contactId,
+      leadId: customer.leadId,
+      userName: "System",
     });
+    return true;
   }
 
-  const to = bounce.recipients.join(", ") || "the customer";
-  if (sent) {
-    // Only the first notice stamps it — a re-read mailbox or a second notice for the same email changes nothing.
-    const { count } = await prisma.communication.updateMany({
-      where: { id: sent.id, bouncedAt: null },
-      data: { bouncedAt: when, bounceReason: bounce.reason },
+  // Only the addresses this email doesn't already record: a re-read mailbox, or a
+  // second notice about the same address, changes nothing.
+  const added = newBounceLines(sent.bounceReason, lines);
+  if (!added.length) return false;
+  const failedTo = bounce.recipients.length ? added.map((line) => line.split(": ")[0]).join(", ") : "a recipient";
+  const filed = await prisma.$transaction(async (tx) => {
+    // Compare-and-set on what was read, so two overlapping runs can't both file it.
+    const { count } = await tx.communication.updateMany({
+      where: { id: sent.id, bounceReason: sent.bounceReason },
+      data: {
+        bouncedAt: sent.bouncedAt ?? when,
+        bounceReason: [...(sent.bounceReason ? [sent.bounceReason] : []), ...added].join("\n"),
+      },
     });
     if (!count) return false;
-    customer = { contactId: sent.contactId, leadId: sent.leadId };
-  }
-  if (!customer) return false; // not one of ours — leave it in the mailbox
-
-  const what = sent?.subject ? `Email "${sent.subject}"` : "An email";
-  // ponytail: the no-match note isn't deduplicated; a notice is re-read only when an earlier message in the same sync failed.
-  await logAudit({
-    action: "email.bounced",
-    summary: `${what} to ${to} was not delivered — ${bounce.reason}`.slice(0, 500),
-    contactId: customer.contactId,
-    leadId: customer.leadId,
-    userName: "System",
+    await logAuditStrict(
+      {
+        action: "email.bounced",
+        summary: `${sent.subject ? `Email "${sent.subject}"` : "An email"} to ${failedTo} was not delivered — ${bounce.reason}`.slice(0, 500),
+        contactId: sent.contactId,
+        leadId: sent.leadId,
+        userName: "System",
+      },
+      tx,
+    );
+    return true;
   });
+  if (!filed) return false;
+
+  // ponytail: best-effort like every push here; the timeline mark and history note are the durable record.
   await sendPushToAll(
     {
       title: "⚠️ Email not delivered",
-      body: `${to}: ${bounce.reason}`.slice(0, 100),
-      url: customer.contactId ? `/contacts/${customer.contactId}` : `/leads/${customer.leadId}`,
+      body: `${failedTo}: ${bounce.reason}`.slice(0, 100),
+      url: sent.contactId ? `/contacts/${sent.contactId}` : `/leads/${sent.leadId}`,
     },
     "email_bounced",
-    // To whoever sent it; a notice with no matching email goes to everyone who gets these.
-    sent ? { userId: sent.userId } : {},
+    { userId: sent.userId }, // whoever sent it, and nobody else
   ).catch(() => {});
   return true;
 }

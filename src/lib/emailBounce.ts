@@ -97,10 +97,29 @@ export function readBounce(parsed: ParsedMail): Bounce | null {
   return { recipients: [...recipients], reason, originalMessageIds };
 }
 
+/**
+ * What an email keeps in `Communication.bounceReason`: one line per failed
+ * address ("erik@x.co.za: 550 …"), so an email to several people says exactly
+ * which of them it failed for. Just the reason when the notice names no address.
+ */
+export function bounceLines(b: Bounce): string[] {
+  return b.recipients.length ? b.recipients.map((r) => `${r}: ${b.reason}`) : [b.reason];
+}
+
+/** Which line a failure is: its address, or the whole line when it has none. */
+const lineKey = (line: string) => line.match(/^([^\s:]+@[^\s:]+): /)?.[1] ?? line;
+
+/** The lines a notice adds to what an email already records. None = this failure is already filed. */
+export function newBounceLines(recorded: string | null | undefined, lines: string[]): string[] {
+  const have = new Set((recorded ?? "").split("\n").filter(Boolean).map(lineKey));
+  return lines.filter((line) => !have.has(lineKey(line)));
+}
+
 /** The timeline badge for an email that bounced, or null. One wording for every timeline. */
 export function bouncedLabel(c: { direction: string | null; bouncedAt?: Date | null; bounceReason?: string | null }): string | null {
   if (c.direction !== "outbound" || !c.bouncedAt) return null;
-  return `⚠ Not delivered · ${formatDateTime(c.bouncedAt)}${c.bounceReason ? ` — ${c.bounceReason}` : ""}`;
+  const reason = (c.bounceReason ?? "").split("\n").filter(Boolean).join("; ");
+  return `⚠ Not delivered · ${formatDateTime(c.bouncedAt)}${reason ? ` — ${reason}` : ""}`;
 }
 
 export const BOUNCE_HINT =

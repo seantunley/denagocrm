@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { readFileSync } from "node:fs";
 import { simpleParser } from "mailparser";
-import { bouncedLabel, readBounce } from "../src/lib/emailBounce";
+import { bounceLines, bouncedLabel, newBounceLines, readBounce } from "../src/lib/emailBounce";
 import { openedFact } from "../src/lib/emailOpenTracking";
 
 const code = (path: string) => readFileSync(path, "utf8");
@@ -66,6 +66,23 @@ test("an ordinary customer email is never read as a bounce, whatever its subject
   assert.equal(readBounce(await parse(raw)), null);
 });
 
+test("an email to several people records only the address that failed, once each", () => {
+  const cc = { recipients: ["cc@example.com"], reason: "550 User unknown", originalMessageIds: ["<m@d>"] };
+  const first = bounceLines(cc);
+  assert.deepEqual(first, ["cc@example.com: 550 User unknown"]);
+  const recorded = first.join("\n");
+  // The same address again — even worded differently — adds nothing.
+  assert.deepEqual(newBounceLines(recorded, bounceLines({ ...cc, reason: "550 5.1.1 No such user" })), []);
+  // The other recipient failing later is added.
+  assert.deepEqual(newBounceLines(recorded, bounceLines({ ...cc, recipients: ["to@example.com"] })), ["to@example.com: 550 User unknown"]);
+  // The badge names who it failed for, not just that something failed.
+  const label = bouncedLabel({ direction: "outbound", bouncedAt: new Date(), bounceReason: `${recorded}\nto@example.com: 550 User unknown` }) ?? "";
+  assert.match(label, /cc@example\.com: 550 User unknown; to@example\.com: 550 User unknown$/);
+  // No address in the notice: the reason alone, filed once.
+  assert.deepEqual(bounceLines({ recipients: [], reason: "550 Rejected", originalMessageIds: ["<m@d>"] }), ["550 Rejected"]);
+  assert.deepEqual(newBounceLines("550 Rejected", ["550 Rejected"]), []);
+});
+
 test("the timeline says it plainly, and only for a sent email that bounced", () => {
   const at = new Date("2026-10-12T10:00:05Z");
   assert.match(bouncedLabel({ direction: "outbound", bouncedAt: at, bounceReason: "550 High probability of spam" }) ?? "", /^⚠ Not delivered · .+ — 550 High probability of spam$/);
@@ -83,10 +100,13 @@ test("DAX is told an email was not delivered", () => {
 test("wiring: the mailbox sync reads bounces before tickets or replies, and every timeline shows them", () => {
   const sync = code("src/lib/imapSync.ts");
   assert.match(sync, /const bounce = readBounce\(parsed\);\s*if \(bounce\) return fileBounce\(bounce, parsed\);\s*[\s\S]*const mailbox = await matchSupportMailbox\(parsed\);/);
-  // Stamped once, only while not already stamped.
-  assert.match(sync, /where: \{ id: sent\.id, bouncedAt: null \}/);
-  // Told to whoever sent it.
-  assert.match(sync, /"email_bounced",\s*[\s\S]{0,120}sent \? \{ userId: sent\.userId \} : \{\}/);
+  // The stamp and the history note commit together (review of #907): a failed note undoes the stamp, so the retry files it again.
+  assert.match(sync, /prisma\.\$transaction\(async \(tx\) => \{[\s\S]*?where: \{ id: sent\.id, bounceReason: sent\.bounceReason \}[\s\S]*?await logAuditStrict\([\s\S]*?tx,\s*\);/);
+  // Told to whoever sent it — and an unmatched notice never broadcasts.
+  assert.match(sync, /"email_bounced",\s*\{ userId: sent\.userId \}/);
+  assert.equal(sync.match(/"email_bounced"/g)?.length, 1);
+  // Never "their latest email": only the email's own Message-ID marks one.
+  assert.doesNotMatch(sync, /BOUNCE_LOOKBACK|occurredAt: \{ gte/);
   assert.match(code("src/lib/push.ts"), /id: "email_bounced"/);
   assert.match(code("src/components/LeadTimeline.tsx"), /bounced: bouncedLabel\(communication\)/);
   assert.match(code("src/components/CommsTimeline.tsx"), /bouncedLabel\(c\)/);
