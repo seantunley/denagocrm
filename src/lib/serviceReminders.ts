@@ -174,6 +174,7 @@ export async function sendServiceDueReminder(vehicleId: string, tenantId: string
         direction: "outbound",
         subject,
         body: `[Service reminder]\n\n${text}`,
+        messageId: result.messageId ?? null, // so a bounce notice can find it
         contactId: vehicle.contactId,
         userId: firstUser.id,
         tenantId: await customerRecordTenantId({ contactId: vehicle.contactId }),

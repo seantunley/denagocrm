@@ -329,6 +329,8 @@ export async function loadFleetRollup(
           occurredAt: true,
           seenAt: true,
           openCount: true,
+          bouncedAt: true,
+          bounceReason: true,
           user: { select: { name: true } },
         },
         orderBy: { occurredAt: "desc" },

@@ -1626,6 +1626,10 @@ model Communication {
   /// when this is empty or older than CLICK_DEDUPE_MINUTES, decided in one
   /// statement, so a link scanner fetching twice is one click.
   bannerLastClickAt DateTime?
+  /// A sent email the receiving server refused: when its failure notice reached
+  /// the CRM's mailbox, and the server's reason (lib/emailBounce.ts).
+  bouncedAt      DateTime?
+  bounceReason   String?
   archivedAt     DateTime? // when the thread carrying this message was archived out of the inbox (NULL = active)
 
   // Multi-tenancy (Phase B — additive/inert): owning tenant. See Contact.tenantId.

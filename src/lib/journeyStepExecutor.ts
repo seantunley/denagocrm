@@ -193,7 +193,9 @@ async function recordCommunication(
   subject: string | null,
   body: string,
   userId: string,
-  journeyName: string
+  journeyName: string,
+  /** The sent email's Message-ID, so a bounce notice can find it (lib/emailBounce.ts). */
+  messageId?: string,
 ) {
   const { leadId, contactId } = ids(context);
   await prisma.communication.create({
@@ -201,6 +203,7 @@ async function recordCommunication(
       type,
       direction: "outbound",
       subject,
+      messageId: messageId ?? null,
       body: `[Journey: ${journeyName}]\n\n${body}`,
       leadId,
       contactId,
@@ -302,7 +305,7 @@ export async function executeJourneyStep(args: {
       const result = await sendEmail({ to, subject, text, html: html ?? undefined });
       if (!result.ok) throw new Error(result.error ?? "Email send failed");
       const userId = await fallbackUserId(context, stringConfig(step, "userId"));
-      await recordCommunication(context, "email", subject, text || "HTML email", userId, journeyName);
+      await recordCommunication(context, "email", subject, text || "HTML email", userId, journeyName, result.messageId);
       return { status: "completed", note: `Email sent to ${to}` };
     }
 

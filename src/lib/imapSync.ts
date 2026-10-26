@@ -12,6 +12,8 @@ import { sendEmail } from "./email";
 import { contactName } from "./format";
 import { normalizeHtml } from "./competitors";
 import { logError } from "./errorLog";
+import { logAudit } from "./audit";
+import { readBounce, type Bounce } from "./emailBounce";
 
 // The transaction client handed to prisma.$transaction — derived from our
 // EXTENDED client (soft-delete filtering), which differs from the plain
@@ -309,11 +311,88 @@ async function fileTimelineEmail(parsed: ParsedMail, fromEmail: string, transpor
   return true;
 }
 
-/** Route one parsed message. Throws on real errors (so the sync retries it). */
-async function handleParsedMessage(parsed: ParsedMail, ourAddress: string, transportKey: string): Promise<boolean> {
+const BOUNCE_LOOKBACK_MS = 3 * 24 * 60 * 60 * 1000;
+
+/**
+ * A delivery-failure notice for an email the CRM sent (lib/emailBounce.ts):
+ * stamp that email on the timeline as not delivered, note it on the customer's
+ * history, and tell whoever sent it. Matched by the failed email's own
+ * Message-ID; only when the notice doesn't carry one, the latest email to a
+ * failed address in the days before the notice. No email found → the bounce is
+ * still noted on that customer's history.
+ * Returns true when newly filed; a notice already filed changes nothing.
+ */
+async function fileBounce(bounce: Bounce, parsed: ParsedMail): Promise<boolean> {
+  const when = parsed.date ?? new Date();
+  const select = { id: true, subject: true, contactId: true, leadId: true, userId: true } as const;
+  const outboundEmail = { type: "email", direction: "outbound" } as const;
+
+  let sent = bounce.originalMessageIds.length
+    ? await prisma.communication.findFirst({ where: { ...outboundEmail, messageId: { in: bounce.originalMessageIds } }, orderBy: { occurredAt: "desc" }, select })
+    : null;
+  let customer: { contactId: string | null; leadId: string | null } | null = null;
+  for (const address of bounce.recipients) {
+    if (sent) break;
+    const contactIds = await ciExactIds("contactEmail", address);
+    const leadIds = (await prisma.lead.findMany({ where: await ciExactIdFilter("leadEmail", address), select: { id: true } })).map((l) => l.id);
+    if (!contactIds.length && !leadIds.length) continue;
+    customer ??= { contactId: contactIds[0] ?? null, leadId: contactIds.length ? null : leadIds[0] ?? null };
+    // The notice named the email and it isn't a timeline email (a help-desk reply, say): never guess another one.
+    if (bounce.originalMessageIds.length) continue;
+    sent = await prisma.communication.findFirst({
+      where: {
+        ...outboundEmail,
+        occurredAt: { gte: new Date(when.getTime() - BOUNCE_LOOKBACK_MS), lte: when },
+        OR: [{ contactId: { in: contactIds } }, { leadId: { in: leadIds } }],
+      },
+      orderBy: { occurredAt: "desc" },
+      select,
+    });
+  }
+
+  const to = bounce.recipients.join(", ") || "the customer";
+  if (sent) {
+    // Only the first notice stamps it — a re-read mailbox or a second notice for the same email changes nothing.
+    const { count } = await prisma.communication.updateMany({
+      where: { id: sent.id, bouncedAt: null },
+      data: { bouncedAt: when, bounceReason: bounce.reason },
+    });
+    if (!count) return false;
+    customer = { contactId: sent.contactId, leadId: sent.leadId };
+  }
+  if (!customer) return false; // not one of ours — leave it in the mailbox
+
+  const what = sent?.subject ? `Email "${sent.subject}"` : "An email";
+  // ponytail: the no-match note isn't deduplicated; a notice is re-read only when an earlier message in the same sync failed.
+  await logAudit({
+    action: "email.bounced",
+    summary: `${what} to ${to} was not delivered — ${bounce.reason}`.slice(0, 500),
+    contactId: customer.contactId,
+    leadId: customer.leadId,
+    userName: "System",
+  });
+  await sendPushToAll(
+    {
+      title: "⚠️ Email not delivered",
+      body: `${to}: ${bounce.reason}`.slice(0, 100),
+      url: customer.contactId ? `/contacts/${customer.contactId}` : `/leads/${customer.leadId}`,
+    },
+    "email_bounced",
+    // To whoever sent it; a notice with no matching email goes to everyone who gets these.
+    sent ? { userId: sent.userId } : {},
+  ).catch(() => {});
+  return true;
+}
+
+/** Route one parsed message. Throws on real errors (so the sync retries it). Exported for end-to-end checks. */
+export async function handleParsedMessage(parsed: ParsedMail, ourAddress: string, transportKey: string): Promise<boolean> {
   const fromEmail = parsed.from?.value?.[0]?.address?.toLowerCase();
   if (!fromEmail) return false;
   if (fromEmail === ourAddress) return false; // our own sent mail
+
+  // A mail server telling us an email we sent never arrived. Never a ticket or a customer reply.
+  const bounce = readBounce(parsed);
+  if (bounce) return fileBounce(bounce, parsed);
 
   // Help desk: mail addressed to a support mailbox becomes a ticket (create or
   // thread), incl. mail from brand-new senders. Everything else files onto the

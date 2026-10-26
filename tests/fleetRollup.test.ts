@@ -107,6 +107,8 @@ function recordsFor(contactId: string, tenantId: string, tag: string) {
       occurredAt: day(2),
       seenAt: null,
       openCount: 0,
+      bouncedAt: null,
+      bounceReason: null,
       user: { name: "Staff" },
     },
     researchNote: {
