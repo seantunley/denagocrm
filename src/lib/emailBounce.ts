@@ -15,11 +15,16 @@ import { formatDateTime } from "./format";
  * Only a FAILURE counts. A "still trying" warning (Action: delayed) is not a
  * bounce and is ignored.
  */
+/** One address that FAILED, with the receiving server's own words for it ("550 High probability of spam"). */
+export type BounceFailure = { address: string | null; reason: string };
+
 export type Bounce = {
-  /** Addresses the server says failed, lower-cased. May be empty when only the Message-ID is known. */
-  recipients: string[];
-  /** The receiving server's words, e.g. "550 High probability of spam". */
-  reason: string;
+  /**
+   * Only the recipients whose delivery failed — a report can also list ones that
+   * were delivered or are still being tried, and those are left out (review of
+   * #907). `address` is null when the notice names nobody.
+   */
+  failures: BounceFailure[];
   /** Message-IDs (with <>) of the email that bounced, from its copy inside the notice. */
   originalMessageIds: string[];
 };
@@ -66,24 +71,41 @@ function originalHeaderBlocks(parsed: ParsedMail): string[] {
   return blocks;
 }
 
-/** A delivery-status notice → what failed and why; null when it isn't one, or is only a delay. */
+/** A `Name: value` line in one delivery-status block. */
+const field = (block: string, name: string) => block.match(new RegExp(`^${name}:\\s*(.+)$`, "im"))?.[1]?.trim();
+
+/** The address in a Final-Recipient / Original-Recipient value ("rfc822; a@b.c"). */
+const addressIn = (value: string | undefined) => value?.match(/^(?:[\w-]+;\s*)?<?([^\s<>;]+@[^\s<>;]+?)>?$/)?.[1]?.toLowerCase() ?? null;
+
+const cleanReason = (value: string | null | undefined) =>
+  value ? value.replace(/^smtp;\s*/i, "").replace(/\s+/g, " ").trim().slice(0, MAX_REASON) || null : null;
+
+/** A delivery-status notice → what failed and why; null when it isn't one, or reports no failure. */
 export function readBounce(parsed: ParsedMail): Bounce | null {
   if (!looksLikeBounce(parsed)) return null;
-  const text = unfold(parsed.text ?? "");
-
-  const actions = [...text.matchAll(/^Action:\s*(\w+)/gim)].map((m) => m[1].toLowerCase());
-  // A DSN that reports actions but no failure is a "still trying" or "delivered" notice.
-  if (actions.length && !actions.includes("failed")) return null;
-  if (!actions.length && /\b(delay(ed)?|warning|will (continue|keep) trying|not yet been delivered)\b/i.test(parsed.subject ?? "")) return null;
-
-  const recipients = new Set<string>();
-  for (const addr of header(parsed, "x-failed-recipients").split(",")) if (addr.trim()) recipients.add(addr.trim().toLowerCase());
-  for (const m of text.matchAll(/^(?:Final|Original)-Recipient:\s*rfc822;\s*<?([^\s<>;]+@[^\s<>;]+)>?/gim)) recipients.add(m[1].toLowerCase());
-
-  const diagnostic = text.match(/^Diagnostic-Code:\s*(?:smtp;\s*)?(.+)$/im)?.[1];
+  const raw = parsed.text ?? "";
   // Read before unfolding: Exim indents the server's reply under the address, which unfolding would join.
-  const smtpLine = (parsed.text ?? "").match(/^\s*([45]\d\d[ -].+)$/m)?.[1];
-  const reason = (diagnostic ?? smtpLine ?? FALLBACK_REASON).trim().replace(/\s+/g, " ").slice(0, MAX_REASON);
+  const fallback = cleanReason(raw.match(/^\s*([45]\d\d[ -].+)$/m)?.[1]) ?? FALLBACK_REASON;
+
+  const failures = new Map<string | null, string>();
+  // A delivery-status report: one block per recipient, each with its OWN Action.
+  // Split on blank lines BEFORE unfolding, which would join a whitespace-only line onto its neighbour.
+  const blocks = raw.split(/\r?\n[ \t]*\r?\n/).map(unfold).filter((block) => /^Action:/im.test(block));
+  if (blocks.length) {
+    for (const block of blocks) {
+      if (field(block, "Action")?.split(/\s/)[0]?.toLowerCase() !== "failed") continue; // delivered, delayed, relayed…
+      const address = addressIn(field(block, "Final-Recipient")) ?? addressIn(field(block, "Original-Recipient"));
+      if (!failures.has(address)) failures.set(address, cleanReason(field(block, "Diagnostic-Code")) ?? fallback);
+    }
+    if (!failures.size) return null; // a "still trying" or "delivered" report
+  } else {
+    // No report: Exim's plain bounce lists exactly the failed addresses in a header.
+    if (/\b(delay(ed)?|warning|will (continue|keep) trying|not yet been delivered)\b/i.test(parsed.subject ?? "")) return null;
+    for (const address of header(parsed, "x-failed-recipients").split(",")) {
+      const a = address.trim().toLowerCase();
+      if (a && !failures.has(a)) failures.set(a, fallback);
+    }
+  }
 
   const originalMessageIds = [
     ...new Set(
@@ -93,8 +115,9 @@ export function readBounce(parsed: ParsedMail): Bounce | null {
     ),
   ];
 
-  if (!recipients.size && !originalMessageIds.length) return null; // nothing to tie it to
-  return { recipients: [...recipients], reason, originalMessageIds };
+  if (!originalMessageIds.length && ![...failures.keys()].some(Boolean)) return null; // nothing to tie it to
+  if (!failures.size) failures.set(null, fallback); // the email is known, the address isn't
+  return { failures: [...failures].map(([address, reason]) => ({ address, reason })), originalMessageIds };
 }
 
 /**
@@ -103,8 +126,11 @@ export function readBounce(parsed: ParsedMail): Bounce | null {
  * which of them it failed for. Just the reason when the notice names no address.
  */
 export function bounceLines(b: Bounce): string[] {
-  return b.recipients.length ? b.recipients.map((r) => `${r}: ${b.reason}`) : [b.reason];
+  return b.failures.map((f) => (f.address ? `${f.address}: ${f.reason}` : f.reason));
 }
+
+/** The failed addresses a notice names. */
+export const failedAddresses = (b: Bounce) => b.failures.flatMap((f) => (f.address ? [f.address] : []));
 
 /** Which line a failure is: its address, or the whole line when it has none. */
 const lineKey = (line: string) => line.match(/^([^\s:]+@[^\s:]+): /)?.[1] ?? line;

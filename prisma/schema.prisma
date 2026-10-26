@@ -1630,6 +1630,9 @@ model Communication {
   /// the CRM's mailbox, and the server's reason (lib/emailBounce.ts).
   bouncedAt      DateTime?
   bounceReason   String?
+  /// When the sender was last told about this bounce. Null while an alert is owed:
+  /// every mailbox sync retries it (lib/imapSync.ts notifyBounces).
+  bounceNotifiedAt DateTime?
   archivedAt     DateTime? // when the thread carrying this message was archived out of the inbox (NULL = active)
 
   // Multi-tenancy (Phase B — additive/inert): owning tenant. See Contact.tenantId.

@@ -13,7 +13,7 @@ import { contactName } from "./format";
 import { normalizeHtml } from "./competitors";
 import { logError } from "./errorLog";
 import { logAudit, logAuditStrict } from "./audit";
-import { bounceLines, newBounceLines, readBounce, type Bounce } from "./emailBounce";
+import { bounceLines, failedAddresses, newBounceLines, readBounce, type Bounce } from "./emailBounce";
 
 // The transaction client handed to prisma.$transaction — derived from our
 // EXTENDED client (soft-delete filtering), which differs from the plain
@@ -343,23 +343,22 @@ async function bounceCustomer(addresses: string[]): Promise<{ contactId: string 
 async function fileBounce(bounce: Bounce, parsed: ParsedMail): Promise<boolean> {
   const when = parsed.date ?? new Date();
   const lines = bounceLines(bounce);
-  const to = bounce.recipients.join(", ") || "a recipient";
 
   const sent = bounce.originalMessageIds.length
     ? await prisma.communication.findFirst({
         where: { type: "email", direction: "outbound", messageId: { in: bounce.originalMessageIds } },
         orderBy: { occurredAt: "desc" },
-        select: { id: true, subject: true, contactId: true, leadId: true, userId: true, bouncedAt: true, bounceReason: true },
+        select: { id: true, subject: true, contactId: true, leadId: true },
       })
     : null;
 
   if (!sent) {
-    const customer = await bounceCustomer(bounce.recipients);
+    const customer = await bounceCustomer(failedAddresses(bounce));
     if (!customer) return false; // not one of ours — leave it in the mailbox
     // ponytail: this note isn't deduplicated; a notice is re-read only when an earlier message in the same sync failed.
     await logAudit({
       action: "email.bounced",
-      summary: `An email to ${to} was not delivered — ${bounce.reason}`.slice(0, 500),
+      summary: `An email was not delivered — ${lines.join("; ")}`.slice(0, 500),
       contactId: customer.contactId,
       leadId: customer.leadId,
       userName: "System",
@@ -367,46 +366,85 @@ async function fileBounce(bounce: Bounce, parsed: ParsedMail): Promise<boolean> 
     return true;
   }
 
-  // Only the addresses this email doesn't already record: a re-read mailbox, or a
-  // second notice about the same address, changes nothing.
-  const added = newBounceLines(sent.bounceReason, lines);
-  if (!added.length) return false;
-  const failedTo = bounce.recipients.length ? added.map((line) => line.split(": ")[0]).join(", ") : "a recipient";
-  const filed = await prisma.$transaction(async (tx) => {
-    // Compare-and-set on what was read, so two overlapping runs can't both file it.
-    const { count } = await tx.communication.updateMany({
-      where: { id: sent.id, bounceReason: sent.bounceReason },
-      data: {
-        bouncedAt: sent.bouncedAt ?? when,
-        bounceReason: [...(sent.bounceReason ? [sent.bounceReason] : []), ...added].join("\n"),
-      },
+  // Compare-and-set on the email's note as read. Losing to a concurrent run that
+  // filed ANOTHER address for the same email re-reads and tries again, so neither
+  // failure is dropped (review of #907); losing every time throws, and the sync retries the notice.
+  for (let attempt = 0; attempt < BOUNCE_CAS_ATTEMPTS; attempt++) {
+    const current = await prisma.communication.findUnique({ where: { id: sent.id }, select: { bouncedAt: true, bounceReason: true } });
+    if (!current) return false;
+    // Only the addresses this email doesn't already record: a re-read mailbox, or a
+    // second notice about the same address, changes nothing.
+    const added = newBounceLines(current.bounceReason, lines);
+    if (!added.length) return false;
+    const filed = await prisma.$transaction(async (tx) => {
+      const { count } = await tx.communication.updateMany({
+        where: { id: sent.id, bounceReason: current.bounceReason },
+        data: {
+          bouncedAt: current.bouncedAt ?? when,
+          bounceReason: [...(current.bounceReason ? [current.bounceReason] : []), ...added].join("\n"),
+          // Owed to the sender again: notifyBounces tells them, and keeps trying until it has.
+          bounceNotifiedAt: null,
+        },
+      });
+      if (!count) return false;
+      await logAuditStrict(
+        {
+          action: "email.bounced",
+          summary: `${sent.subject ? `Email "${sent.subject}"` : "An email"} was not delivered — ${added.join("; ")}`.slice(0, 500),
+          contactId: sent.contactId,
+          leadId: sent.leadId,
+          userName: "System",
+        },
+        tx,
+      );
+      return true;
     });
-    if (!count) return false;
-    await logAuditStrict(
-      {
-        action: "email.bounced",
-        summary: `${sent.subject ? `Email "${sent.subject}"` : "An email"} to ${failedTo} was not delivered — ${bounce.reason}`.slice(0, 500),
-        contactId: sent.contactId,
-        leadId: sent.leadId,
-        userName: "System",
-      },
-      tx,
-    );
-    return true;
-  });
-  if (!filed) return false;
+    if (filed) {
+      await notifyBounces(sent.id).catch((e) => logError("imap-sync", e)); // a failure here is retried by the next sync
+      return true;
+    }
+  }
+  throw new Error("Bounce notice lost every compare-and-set to concurrent runs — retried next sync");
+}
 
-  // ponytail: best-effort like every push here; the timeline mark and history note are the durable record.
-  await sendPushToAll(
-    {
-      title: "⚠️ Email not delivered",
-      body: `${failedTo}: ${bounce.reason}`.slice(0, 100),
-      url: sent.contactId ? `/contacts/${sent.contactId}` : `/leads/${sent.leadId}`,
+const BOUNCE_CAS_ATTEMPTS = 3;
+const BOUNCE_NOTIFY_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+
+/**
+ * Tell the sender of each bounced email they haven't been told about yet — only
+ * them. The email row is its own outbox (review of #907): `bounceNotifiedAt` is
+ * set only AFTER the push call returns, so a push that throws, or a process that
+ * dies between the bounce and the alert, leaves it owed, and every mailbox sync
+ * tries again. A second failed address on the same email clears it, so that one
+ * is told too. Marked only if no address was added meanwhile. Exported for end-to-end checks.
+ */
+export async function notifyBounces(onlyId?: string): Promise<void> {
+  const owed = await prisma.communication.findMany({
+    where: {
+      ...(onlyId ? { id: onlyId } : {}),
+      type: "email",
+      direction: "outbound",
+      bouncedAt: { gte: new Date(Date.now() - BOUNCE_NOTIFY_WINDOW_MS) },
+      bounceNotifiedAt: null,
     },
-    "email_bounced",
-    { userId: sent.userId }, // whoever sent it, and nobody else
-  ).catch(() => {});
-  return true;
+    select: { id: true, userId: true, contactId: true, leadId: true, bounceReason: true },
+    take: 25,
+  });
+  for (const email of owed) {
+    await sendPushToAll(
+      {
+        title: "⚠️ Email not delivered",
+        body: (email.bounceReason ?? "").split("\n").filter(Boolean).join("; ").slice(0, 100),
+        url: email.contactId ? `/contacts/${email.contactId}` : `/leads/${email.leadId}`,
+      },
+      "email_bounced",
+      { userId: email.userId }, // whoever sent it, and nobody else
+    );
+    await prisma.communication.updateMany({
+      where: { id: email.id, bounceNotifiedAt: null, bounceReason: email.bounceReason },
+      data: { bounceNotifiedAt: new Date() },
+    });
+  }
 }
 
 /** Route one parsed message. Throws on real errors (so the sync retries it). Exported for end-to-end checks. */
@@ -506,6 +544,8 @@ export async function syncInboundEmail(): Promise<number> {
 
   let filed = 0;
   try {
+    // Bounce alerts still owed from an earlier run (a push that failed, a run that died) — first, and never in the way of the mail.
+    await notifyBounces().catch((e) => logError("imap-sync", e));
     await client.connect();
     const lock = await client.getMailboxLock("INBOX");
     try {

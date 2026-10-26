@@ -6,3 +6,5 @@
 
 ALTER TABLE "Communication" ADD COLUMN IF NOT EXISTS "bouncedAt" TIMESTAMP(3);
 ALTER TABLE "Communication" ADD COLUMN IF NOT EXISTS "bounceReason" TEXT;
+-- When the sender was told. Null while an alert is owed, so a failed push is retried.
+ALTER TABLE "Communication" ADD COLUMN IF NOT EXISTS "bounceNotifiedAt" TIMESTAMP(3);
