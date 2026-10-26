@@ -1,5 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { formatDateTime } from "./format";
+import { johannesburgDateKey } from "./activityDay";
 
 /**
  * Email open tracking (Sean, 2026-10-07: "I want open tracking on emails").
@@ -54,6 +55,14 @@ export function seenLabel(c: { type: string; direction: string | null; seenAt?: 
  *                    (An email the composer sent with tracking switched off stores
  *                    neither either, so it reads as this — the cautious answer.)
  */
+/**
+ * The server's words without the address: a stored reason is "<address>: <reason>" per failed recipient
+ * (lib/emailBounce.ts), and a customer's email address has no business in the model's prompt.
+ */
+export function bounceReasonOnly(stored: string | null | undefined): string | null {
+  return (stored ?? "").split("\n").map((r) => r.replace(/^\S+@\S+:\s*/, "").trim()).filter(Boolean)[0] ?? null;
+}
+
 export type EmailOpenFact = {
   emailOpen: "opened" | "no_open_detected" | "not_tracked";
   openedAt?: string;
@@ -74,11 +83,35 @@ export function openedFact(c: {
 }): EmailOpenFact | Record<string, never> {
   if (c.direction !== "outbound" || c.type !== "email") return {};
   const provenance = c.openToken || c.messageId ? "sent_by_crm" : "recorded_only";
-  const bounced = c.bouncedAt ? { notDelivered: { at: c.bouncedAt.toISOString(), reason: c.bounceReason ?? null } } : {};
+  const bounced = c.bouncedAt ? { notDelivered: { at: c.bouncedAt.toISOString(), reason: bounceReasonOnly(c.bounceReason) } } : {};
   if (c.seenAt) {
     return { emailOpen: "opened", openedAt: c.seenAt.toISOString(), ...(c.openCount && c.openCount > 1 ? { openedTimes: c.openCount } : {}), provenance, ...bounced };
   }
   return { emailOpen: c.openToken ? "no_open_detected" : "not_tracked", provenance, ...bounced };
+}
+
+/**
+ * One sent email, in the ONLY words the CRM can stand behind (DAX roadmap, Phase 2): accepted by our mail
+ * server / bounced / open detected / no open detected / can't tell. Never "delivered" or "read": a mail server
+ * accepting it says nothing about the inbox, and an open is the mail app loading images. Used wherever a lookup
+ * talks about a send (find_quotes, a lead's quotes, the quote_unsigned watch). No address leaves here: a bounce
+ * reason is stored as "<address>: <reason>", and only the reason is kept.
+ */
+export function emailSendStatus(c: {
+  occurredAt: Date;
+  openToken?: string | null;
+  messageId?: string | null;
+  seenAt?: Date | null;
+  bouncedAt?: Date | null;
+  bounceReason?: string | null;
+}): string {
+  if (c.bouncedAt) {
+    const reason = bounceReasonOnly(c.bounceReason);
+    return `bounced ${johannesburgDateKey(c.bouncedAt)} — their mail server refused it${reason ? ` (${reason.slice(0, 120)})` : ""}, so they never got it; reach them another way`;
+  }
+  if (!c.openToken && !c.messageId) return `recorded on the timeline ${johannesburgDateKey(c.occurredAt)} — can't tell whether it was sent`;
+  const opened = c.seenAt ? `open detected ${johannesburgDateKey(c.seenAt)}` : c.openToken ? "no open detected" : "can't tell whether it was opened";
+  return `accepted by our mail server ${johannesburgDateKey(c.occurredAt)}; ${opened}`;
 }
 
 export const OPENED_LEGEND =

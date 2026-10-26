@@ -11,6 +11,8 @@ import { johannesburgDateKey } from "./activityDay";
 import { listActingTenantStaff, resolveTenantActor } from "./tenantActor";
 import { WHO_LEGEND, messageAuthor, whoLogged } from "./assistantWho";
 import { OPENED_LEGEND, openedFact } from "./emailOpenTracking";
+import { quoteSends } from "./quoteEmailStatus";
+import { receiptFact } from "./deliveryReceipts";
 import { getAccessibleActivityIds } from "./activityAccess";
 import { getSetting } from "./settings";
 import { getCompanyProfile } from "./companyProfile";
@@ -339,7 +341,7 @@ async function pipelineSummary(user: User): Promise<ToolOutput> {
   };
 }
 
-async function findQuotes(user: User, raw: z.infer<typeof quoteArgs>): Promise<ToolOutput> {
+export async function findQuotes(user: User, raw: z.infer<typeof quoteArgs>): Promise<ToolOutput> {
   if (!(await hasAnyPermission(user, "quotes.view_all", "quotes.view_owned"))) return refused("quotes");
   const args = quoteArgs.parse(raw);
   const ids = await getAccessibleQuoteIds(user);
@@ -392,7 +394,7 @@ async function findQuotes(user: User, raw: z.infer<typeof quoteArgs>): Promise<T
     take: CANDIDATES,
     select: {
       id: true, number: true, status: true, createdAt: true, viewedAt: true, signedAt: true, validUntil: true,
-      taxInclusive: true, depositType: true, depositValue: true, items: true, fees: true,
+      taxInclusive: true, depositType: true, depositValue: true, items: true, fees: true, contactId: true, leadId: true,
       lead: { select: { id: true, name: true, title: true } },
       contact: { select: { firstName: true, lastName: true } },
     },
@@ -404,6 +406,8 @@ async function findQuotes(user: User, raw: z.infer<typeof quoteArgs>): Promise<T
   const take = args.limit ?? 10;
   const page = priced.slice(0, take);
   const signing = await signingFor(page.map(({ quote }) => quote.id));
+  // "Sent" is only what our side did: whether the email that carried it bounced (quoteEmailStatus.ts).
+  const sends = await quoteSends(page.map(({ quote }) => quote));
   const customer = (q: (typeof quotes)[number]) =>
     q.contact ? contactName(q.contact) : q.lead?.name ?? "no customer";
   return {
@@ -417,12 +421,13 @@ async function findQuotes(user: User, raw: z.infer<typeof quoteArgs>): Promise<T
       ...quoteContents(quote),
       created: dateKey(quote.createdAt),
       ...quoteFacts(quote, signing.get(quote.id)),
+      ...(sends.has(quote.id) ? { sendStatus: sends.get(quote.id)!.status } : {}),
       viewedByCustomer: viewedByCustomer(quote, signing.get(quote.id)),
       validUntil: quote.validUntil ? dateKey(quote.validUntil) : null,
     })),
     rows: page.map(({ quote, total }) => ({
       label: `Q-${quote.number} — ${customer(quote)}`,
-      detail: `${quoteFacts(quote, signing.get(quote.id)).status} · ${formatZAR(total)} · viewed ${viewedByCustomer(quote, signing.get(quote.id))}`,
+      detail: `${quoteFacts(quote, signing.get(quote.id)).status}${sends.get(quote.id)?.bounced ? " · email bounced" : ""} · ${formatZAR(total)} · viewed ${viewedByCustomer(quote, signing.get(quote.id))}`,
       href: `/quotes/${quote.id}`,
     })),
   };
@@ -608,8 +613,9 @@ export async function customersNamed(user: User, needle: string, ownId?: string 
     where: { contactId: { in: found.map((c) => c.id) }, deletedAt: null, supersededAt: null, ...(quoteIds === null ? {} : { id: { in: quoteIds } }) },
     orderBy: { createdAt: "desc" },
     take: 40,
-    select: { id: true, number: true, status: true, contactId: true, leadId: true, taxInclusive: true, depositType: true, depositValue: true, items: true, fees: true },
+    select: { id: true, number: true, status: true, contactId: true, leadId: true, createdAt: true, taxInclusive: true, depositType: true, depositValue: true, items: true, fees: true },
   });
+  const sends = await quoteSends(quotes);
   return found.map((c) => ({
     contactId: c.id,
     name: [c.firstName, c.lastName].filter(Boolean).join(" "),
@@ -620,6 +626,7 @@ export async function customersNamed(user: User, needle: string, ownId?: string 
       quote: `Q-${q.number}`,
       link: `/quotes/${q.id}`,
       status: q.status,
+      ...(sends.has(q.id) ? { sendStatus: sends.get(q.id)!.status } : {}),
       onADeal: q.leadId != null,
       total: formatZAR(payableTotalCents(q)),
       ...quoteContents(q),
@@ -770,6 +777,8 @@ export async function leadBrief(user: User, raw: z.infer<typeof leadBriefArgs>):
         openToken: true, messageId: true, seenAt: true, openCount: true,
         // …and whether the customer's mail server refused it (lib/emailBounce.ts).
         bouncedAt: true, bounceReason: true,
+        // WhatsApp / Messenger: how far it got on their phone (lib/deliveryReceipts.ts).
+        deliveredAt: true,
       },
     }),
     prisma.activity.findMany({
@@ -852,6 +861,7 @@ export async function leadBrief(user: User, raw: z.infer<typeof leadBriefArgs>):
           channel: c.type,
           text: clip([c.subject, c.body].filter(Boolean).join(" — "), 300),
           ...openedFact(c),
+          ...receiptFact(c),
         };
       }),
       activities: activities.map((a) => {
@@ -896,14 +906,16 @@ async function quotesForLead(user: User, leadId: string) {
       id: true, number: true, status: true, createdAt: true, validUntil: true, viewedAt: true, signedAt: true, declinedAt: true,
       declineReason: true, changeRequestNote: true,
       invoicedAt: true, depositPaidAt: true, deliveryScheduledFor: true, deliveredAt: true,
-      taxInclusive: true, depositType: true, depositValue: true, items: true, fees: true,
+      taxInclusive: true, depositType: true, depositValue: true, items: true, fees: true, contactId: true, leadId: true,
     },
   });
   const signing = await signingFor(quotes.map((q) => q.id));
+  const sends = await quoteSends(quotes);
   return quotes.map((q) => ({
     quote: `Q-${q.number}`,
     link: `/quotes/${q.id}`,
     ...quoteFacts(q, signing.get(q.id)),
+    ...(sends.has(q.id) ? { sendStatus: sends.get(q.id)!.status } : {}),
     total: formatZAR(payableTotalCents(q)),
     ...quoteContents(q),
     created: dateKey(q.createdAt),
@@ -2266,8 +2278,9 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
   // don't hold gets a visible line under the answer — everywhere it's shown.
   // Evidence is the lookups and what the PERSON said, now and earlier — never
   // DAX's own earlier answers or working memory: a figure it made up last turn
-  // must not vouch for itself this turn.
-  const flagged = unsupportedFigures(resolved.plain, [question, ...history.map((t) => t.question), ...observations.map((o) => o.output.data)]);
+  // must not vouch for itself this turn. Checked WITH its [[/link]] citations:
+  // a sentence citing a quote is checked against that quote (Phase 2).
+  const flagged = unsupportedFigures(reply.answer, [question, ...history.map((t) => t.question), ...observations.map((o) => o.output.data)]);
   const note = flagged.length ? `\n\n${unsupportedNote(flagged)}` : "";
   // A check-back is not a task to confirm: it is taken out here and saved below (setCheckBacks), so it never
   // becomes a card and never counts as a task that "came to nothing".
