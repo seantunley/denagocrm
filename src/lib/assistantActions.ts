@@ -558,7 +558,7 @@ export type ActionCard =
   | (LeadCard & { kind: "meeting"; start: string; end: string; summary: string; attendeeIds: string[]; detail: string })
   | (LeadCard & { kind: "test_drive"; contactId: string; demoVehicleId: string; branch: string; start: string; end: string; detail: string })
   // leadId null and leadLabel the vehicle's owner. contactId is the owner the card SHOWED: Confirm refuses if it changed.
-  | { id: string; kind: "job_card"; leadId: null; leadLabel: string; title: string; vehicleId: string; contactId: string; description: string; priority: "low" | "normal" | "high" | "urgent"; kmIn?: number; detail: string; reason?: string }
+  | { id: string; kind: "job_card"; leadId: null; leadLabel: string; title: string; vehicleId: string; contactId: string; description: string; priority: "low" | "normal" | "high" | "urgent"; kmIn?: number; detail: string; reason?: string; confirmKey: string }
   | (LeadCard & { kind: "lost"; reason: string })
   | (LeadCard & { kind: "quote" })
   // `text` is the whole quote as the person reads it before confirming (lines, catalogue prices, discounts).

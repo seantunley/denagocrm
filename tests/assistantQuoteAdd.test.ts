@@ -147,9 +147,10 @@ test("ONE CONFIRM, ONE CHANGE: the card's key is spent in the transaction that m
   assert.ok(CONFIRM_KEY.test("qk_0123456789abcdef0123456789abcdef"));
   for (const bad of ["", "qk_short", "cmabcdefghijklmnopqrstuv", "qk_0123456789abcdef0123456789abcdeg", "qk_0123456789abcdef0123456789abcdef0"]) assert.ok(!CONFIRM_KEY.test(bad), bad);
 
-  // Minted on the server when the card is made — for every card that changes a quote (build, add, change).
+  // Minted on the server when the card is made — for every card that changes a quote (build, add, change),
+  // and since 2026-10-26 for a job card (openJobCard spends it the same way; assistantJobCardOnce.test.ts).
   const assistant = code("src/lib/crmAssistant.ts");
-  assert.equal((assistant.match(/confirmKey: `qk_\$\{randomBytes\(16\)\.toString\("hex"\)\}`,/g) ?? []).length, 3);
+  assert.equal((assistant.match(/confirmKey: `qk_\$\{randomBytes\(16\)\.toString\("hex"\)\}`,/g) ?? []).length, 4);
 
   const quotes = code("src/app/actions/quotes.ts");
   assert.match(quotes, /confirmKey: z\.string\(\)\.regex\(CONFIRM_KEY\)\.optional\(\),/);

@@ -76,7 +76,10 @@ test("Confirm opens it through the job-card form's own door, after yes/no checks
   // A vehicle that changed hands since the card was shown is not what was confirmed.
   assert.match(run, /if \(vehicle\.contactId !== card\.contactId\) return untouched\(STALE_CARD\);/);
   assert.ok(run.indexOf("untouched(STALE_CARD)") < run.indexOf("await openJobCard("), "every refusal comes before anything is written");
-  assert.match(run, /const opened = await openJobCard\(\{ vehicleId, description, kmIn, priority: card\.priority \}\);/);
+  // ONE CONFIRM, ONE JOB CARD (review of #911): the card's key goes to the door, and a repeat gets the same card back.
+  assert.match(run, /case "job_card": \{\s*if \(!CONFIRM_KEY\.test\(String\(card\.confirmKey \?\? ""\)\)\) return untouched\(STALE_CARD\);/);
+  assert.match(run, /const opened = await openJobCard\(\{ vehicleId, description, kmIn, priority: card\.priority, confirmKey: card\.confirmKey \}\);\s*if \("repeated" in opened\) return \{ ok: true, success: `Already opened as job card #\$\{opened\.number\} — nothing was opened twice\.`, href: `\/jobcards\/\$\{opened\.id\}` \};/);
+  assert.match(code("src/lib/crmAssistant.ts"), /"Opened in the workshop only — the customer is not contacted\."\]\.join\("\\n"\),\s*confirmKey: `qk_\$\{randomBytes\(16\)\.toString\("hex"\)\}`,/);
   assert.match(run, /action: "assistant\.action_confirmed"/);
   assert.match(run, /href: `\/jobcards\/\$\{opened\.id\}`/);
   assert.doesNotMatch(run, /prisma\.jobCard|basePrisma|send|whatsapp|email/i, "no raw job-card write, and nothing sent");
@@ -90,6 +93,11 @@ test("Confirm opens it through the job-card form's own door, after yes/no checks
   assert.match(door, /const number = await nextJobCardNumber\(tx\);/);
   assert.match(door, /action: "jobcard\.opened"/);
   assert.doesNotMatch(door, /redirect\(/, "the door returns; the form redirects");
+  // The key is spent IN the transaction that opens the card, in this workspace (behaviour: assistantJobCardOnce.test.ts).
+  const tx = door.slice(door.indexOf("basePrisma.$transaction"));
+  assert.ok(tx.indexOf("tx.jobCard.create(") < tx.indexOf("tx.assistantPendingAction.create("), "key spent with the job card");
+  assert.match(tx, /id: confirmKey, tenantId, userId: user\.id, card: \{ kind: "confirm_key"/);
+  assert.match(door, /where: \{ id: confirmKey, tenantId \}/);
   // The form still goes through it, and still lands on the new card.
   const form = jobcards.slice(jobcards.indexOf("export async function createJobCard"), jobcards.indexOf("export async function openJobCard"));
   assert.match(form, /const jobCard = await openJobCard\(\{[\s\S]*\}\);\s*redirect\(`\/jobcards\/\$\{jobCard\.id\}`\);/);

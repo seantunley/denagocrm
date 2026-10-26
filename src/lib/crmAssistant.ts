@@ -2426,6 +2426,8 @@ async function resolveActions(
         title: `Open a job card: ${what} — ${owner}`, description: p.description, priority,
         ...(p.kmIn != null ? { kmIn: p.kmIn } : {}),
         detail: [`Work: ${p.description}`, `Priority: ${priority}`, ...(p.kmIn != null ? [`Km in: ${p.kmIn}`] : []), "Opened in the workshop only — the customer is not contacted."].join("\n"),
+        // One Confirm, one job card: spent by openJobCard in the transaction that opens it.
+        confirmKey: `qk_${randomBytes(16).toString("hex")}`,
         ...(p.reason ? { reason: p.reason } : {}),
       });
       continue;
