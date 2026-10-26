@@ -56,7 +56,7 @@ import { assistantWebAllowed } from "./assistantUser";
 import { MAX_IMAGES_PER_QUESTION } from "./assistantImage";
 import { applyLearn, loadLearned, loadPlaybook, markNotesUsed, saveDecision, visibleTo } from "./assistantMemoryStore";
 import { checkBacksOn, setCheckBacks, type CheckBack } from "./proactiveFollowUp";
-import { ACTION_INSTRUCTIONS, CHECK_BACK_RULE, CHOICE_INSTRUCTIONS, matchQuoteRow, quoteAddText, quoteBuildText, quoteChangeText, settledAnswer, type ActionCard, type ProposedAction, type QuoteBuildLine, type QuoteChange } from "./assistantActions";
+import { ACTION_INSTRUCTIONS, CHECK_BACK_RULE, CHOICE_INSTRUCTIONS, JOB_CARD_RULE, matchQuoteRow, quoteAddText, quoteBuildText, quoteChangeText, settledAnswer, type ActionCard, type ProposedAction, type QuoteBuildLine, type QuoteChange } from "./assistantActions";
 import { knowledgeProducts, resolveCatalogueProduct } from "./catalogueLookup";
 import { describeSchedule, nextRun, scheduleInput } from "./assistantSchedule";
 import { describeWatch, watchInput } from "./assistantWatchRules";
@@ -1358,7 +1358,7 @@ async function vehicles(user: User, raw: z.infer<typeof vehicleArgs>): Promise<T
   return {
     truncated: owned.length > take,
     data: page.map((v) => ({
-      vehicle: v.model, link: `/vehicles/${v.id}`, reg: v.regNumber, colour: v.color, owner: nameOfContact(v.contact),
+      vehicle: v.model, vehicleId: v.id, link: `/vehicles/${v.id}`, reg: v.regNumber, colour: v.color, owner: nameOfContact(v.contact),
       bought: v.purchaseDate ? dateKey(v.purchaseDate) : null,
       warrantyUntil: v.purchaseDate && v.warrantyMonths ? dateKey(new Date(v.purchaseDate.getTime() + v.warrantyMonths * 30.44 * DAY)) : null,
     })),
@@ -2164,6 +2164,8 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
     : undefined;
   // Answer, in the workspace's own voice.
   const soul = stripInvisible(soulText(profile, company?.name ?? "", user.name || "a colleague"));
+  // Job cards are Automotive's: a workspace without it is never told it can open one.
+  const jobCards = proposes && modules.has("automotive") ? JOB_CARD_RULE : "";
   // Retried once on a passing fault; a retry starts the visible text afresh
   // (a new streamVisible), so the person never sees two half-answers joined.
   const answerReply = await withRetry(breakerKey, () => codexRespond({
@@ -2182,6 +2184,7 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
       proposes ? ACTION_INSTRUCTIONS : "",
       checksBack ? CHECK_BACK_RULE : "",
       source === "schedule" ? "" : CHOICE_INSTRUCTIONS,
+      jobCards,
       channelRule(source, proposes, opts.proposeTasks),
       learned,
       images.length ? IMAGE_RULE : "",
@@ -2404,6 +2407,27 @@ async function resolveActions(
         if (Number.isNaN(at.getTime()) || at.getTime() < Date.now() - 60 * 60 * 1000) continue;
         cards.push({ id: `a${index}-${p.activityId}`, kind: "reschedule", activityId: p.activityId, leadId: activity.leadId, leadLabel, when: target, fromDue: activity.dueDate.toISOString(), title: `Move “${activity.summary}” to ${when(at)}`, ...(p.reason ? { reason: p.reason } : {}) });
       }
+      continue;
+    }
+    if (p.type === "job_card") {
+      // AUTOMOTIVE ON, someone who may open job cards, on a vehicle THEY can open in THIS workspace
+      // (canAccessVehicle checks the row's tenant first). openJobCard checks all of it again at Confirm.
+      if (!(await isModuleEnabled("automotive"))) { problems.push("Job cards are part of the Automotive module, which is off for this workspace."); continue; }
+      if (!(await hasPermission(user, "jobcards.manage"))) { problems.push("Your role can't open job cards."); continue; }
+      const vehicle = (await canAccessVehicle(user, p.vehicleId))
+        ? await prisma.vehicle.findFirst({ where: { id: p.vehicleId, deletedAt: null }, select: { model: true, regNumber: true, contactId: true, contact: { select: { firstName: true, lastName: true } } } })
+        : null;
+      if (!vehicle) { problems.push("I can't find that vehicle among the ones you can open — look the customer's vehicles up and ask again."); continue; }
+      const owner = nameOfContact(vehicle.contact) ?? "the customer";
+      const priority = p.priority ?? "normal";
+      const what = `${vehicle.model}${vehicle.regNumber ? ` (${vehicle.regNumber})` : ""}`;
+      cards.push({
+        id: `a${index}-${p.vehicleId}`, kind: "job_card", leadId: null, leadLabel: owner, vehicleId: p.vehicleId, contactId: vehicle.contactId,
+        title: `Open a job card: ${what} — ${owner}`, description: p.description, priority,
+        ...(p.kmIn != null ? { kmIn: p.kmIn } : {}),
+        detail: [`Work: ${p.description}`, `Priority: ${priority}`, ...(p.kmIn != null ? [`Km in: ${p.kmIn}`] : []), "Opened in the workshop only — the customer is not contacted."].join("\n"),
+        ...(p.reason ? { reason: p.reason } : {}),
+      });
       continue;
     }
     if (p.type === "customer_note") {

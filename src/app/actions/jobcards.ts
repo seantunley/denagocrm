@@ -245,21 +245,40 @@ export async function saveCheckinAnnotation(formData: FormData) {
   });
 }
 
+/** The job-card form: opens the card, then goes to it. */
 export async function createJobCard(formData: FormData) {
+  const kmInRaw = String(formData.get("kmIn") ?? "").trim();
+  const jobCard = await openJobCard({
+    vehicleId: String(formData.get("vehicleId") ?? ""),
+    description: String(formData.get("description") ?? ""),
+    kmIn: kmInRaw === "" ? null : parseInt(kmInRaw, 10),
+    priority: String(formData.get("priority") ?? "") || undefined,
+  });
+  redirect(`/jobcards/${jobCard.id}`);
+}
+
+/**
+ * THE ONE DOOR a job card is opened through — the form above, and a DAX job-card
+ * card when the person presses Confirm (app/actions/assistant.ts). Same module
+ * check, same jobcards.manage + vehicle-access guard, same numbering lock and the
+ * same audit entry either way. No redirect: the caller decides where to go.
+ */
+export async function openJobCard(input: { vehicleId: string; description: string; kmIn?: number | null; priority?: string }) {
   return withActingStaffScope(async () => {
     // The automotive pack owns job cards; a stale quick-create dialog could still POST
     // this action after the pack is switched off, so reject it server-side.
     if (!(await isModuleEnabled("automotive"))) {
       throw new Error("The automotive module is disabled");
     }
-    const vehicleId = String(formData.get("vehicleId") ?? "");
-    const description = String(formData.get("description") ?? "").trim();
+    const vehicleId = String(input.vehicleId ?? "");
+    const description = String(input.description ?? "").trim();
     if (!vehicleId || !description) throw new Error("Vehicle and description are required");
+    const priority = input.priority ?? "normal";
+    if (!PRIORITY_VALUES.includes(priority)) throw new Error("Choose a valid priority.");
     const user = await requireVehicleAccess(vehicleId, "jobcards.manage");
 
     const vehicle = await prisma.vehicle.findUniqueOrThrow({ where: { id: vehicleId } });
-    const kmInRaw = String(formData.get("kmIn") ?? "").trim();
-    const kmIn = kmInRaw === "" ? null : parseInt(kmInRaw, 10);
+    const kmIn = input.kmIn ?? null;
 
     // Allocate the number and insert in ONE transaction under the advisory lock so
     // two concurrent job-card creates can't collide on the unique number (#11).
@@ -276,6 +295,7 @@ export async function createJobCard(formData: FormData) {
           contactId: vehicle.contactId,
           description,
           kmIn: kmIn != null && !isNaN(kmIn) ? kmIn : null,
+          priority,
           technicianId: user.id,
         },
       });
@@ -293,7 +313,7 @@ export async function createJobCard(formData: FormData) {
       user,
     });
     revalidatePath("/jobcards");
-    redirect(`/jobcards/${jobCard.id}`);
+    return { id: jobCard.id, number: jobCard.number };
   });
 }
 
