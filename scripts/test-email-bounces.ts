@@ -23,7 +23,7 @@ const fixture = readFileSync("tests/fixtures/bounce-exim-dsn.eml", "utf8");
 
 /** The MWEB notice, re-addressed: to `to`, about `messageId` (no copy of the original when omitted). */
 function notice(opts: { to: string; messageId?: string; delayed?: boolean; deliveredToo?: string }) {
-  let raw = fixture.replaceAll("erikjvr@mweb.co.za", opts.to).replace(/^Date: .*$/m, `Date: ${new Date().toUTCString()}`);
+  let raw = fixture.replaceAll("customer@isp.example", opts.to).replace(/^Date: .*$/m, `Date: ${new Date().toUTCString()}`);
   raw = opts.messageId
     ? raw.replace("<a1b2c3d4-e5f6-7890@denagocpt.co.za>", opts.messageId)
     : raw.replace(/--1760263205-eximdsn-123456\r?\nContent-type: message\/rfc822[\s\S]*?(?=--1760263205-eximdsn-123456--)/, "");

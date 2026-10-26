@@ -11,11 +11,11 @@ import { decryptValue } from "@/lib/settings";
 import { logAuditStrict } from "@/lib/audit";
 import {
   LOGIN_POLICY,
-  checkRateLimit,
   clearRateLimit,
   getRequestIp,
   rateLimitKey,
-  registerRateLimitAttempt,
+  refundRateLimitAttempt,
+  reserveRateLimitAttempt,
 } from "@/lib/rateLimit";
 
 export type PlatformLoginState = {
@@ -44,11 +44,17 @@ export async function platformLogin(
   const ip = await getRequestIp();
   const accountKey = rateLimitKey("platform-login-account", email);
   const ipKey = rateLimitKey("platform-login-ip", ip);
-  const [accountState, ipState] = await Promise.all([
-    checkRateLimit(accountKey),
-    checkRateLimit(ipKey),
+  // Counted BEFORE the password is checked, so a burst of guesses can't all pass
+  // a check that counts nothing (security audit 2026-10-25; see the staff login).
+  const [accountTry, ipTry] = await Promise.all([
+    reserveRateLimitAttempt(accountKey, LOGIN_POLICY),
+    reserveRateLimitAttempt(ipKey, LOGIN_POLICY),
   ]);
-  if (!accountState.allowed || !ipState.allowed) {
+  if (!accountTry.allowed || !ipTry.allowed) {
+    await Promise.all([
+      accountTry.allowed ? refundRateLimitAttempt(accountKey, LOGIN_POLICY) : null,
+      ipTry.allowed ? refundRateLimitAttempt(ipKey, LOGIN_POLICY) : null,
+    ]);
     return { error: "Too many failed attempts. Try again later." };
   }
 
@@ -62,17 +68,15 @@ export async function platformLogin(
   const passwordOk = Boolean(admin && !admin.disabledAt && passwordMatches);
 
   if (!passwordOk) {
-    await Promise.all([
-      registerRateLimitAttempt(accountKey, LOGIN_POLICY),
-      registerRateLimitAttempt(ipKey, LOGIN_POLICY),
-    ]);
+    // Already counted on both keys above.
     // One message for every failure mode (unknown email, wrong password,
     // disabled account) — a distinct "account disabled" reply would confirm the
     // address exists.
     return { error: "Invalid email or password." };
   }
 
-  await clearRateLimit(accountKey);
+  // Right password: the account starts clean; the IP gets back the guess it spent.
+  await Promise.all([clearRateLimit(accountKey), refundRateLimitAttempt(ipKey, LOGIN_POLICY)]);
 
   // THE SECOND FACTOR. A correct password stops here when one is enrolled — no
   // session cookie is issued, `lastLoginAt` is not stamped, and nothing is
@@ -134,7 +138,8 @@ export async function platformVerifyTotp(
   // network allows, which is not a second factor.
   const ip = await getRequestIp();
   const attemptKey = rateLimitKey("platform-2fa", `${adminId}:${ip}`);
-  if (!(await checkRateLimit(attemptKey)).allowed) {
+  // Counted before the code is checked; a right code clears it below.
+  if (!(await reserveRateLimitAttempt(attemptKey, LOGIN_POLICY)).allowed) {
     return { error: "Too many incorrect codes. Try again later.", need2fa: true };
   }
 
@@ -196,7 +201,6 @@ export async function platformVerifyTotp(
   }
 
   if (!ok) {
-    await registerRateLimitAttempt(attemptKey, LOGIN_POLICY);
     return { error: "That code isn't right. Try again, or use a backup code.", need2fa: true };
   }
 

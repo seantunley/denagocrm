@@ -245,31 +245,102 @@ export async function getRequestIp(): Promise<string> {
   }
 }
 
+/**
+ * Is this key blocked right now? A LOOK, never a gate for a guess.
+ *
+ * It used to be the gate: read here, verify the password or code, and count the
+ * failure only afterwards. A burst of guesses sent at once all read "not
+ * blocked" before any of them was counted, so the limit bounded nothing
+ * (security audit 2026-10-25). Guesses now go through reserveRateLimitAttempt,
+ * which counts first under the key's lock.
+ *
+ * It also no longer answers "allowed" when the database errors. That fallback
+ * existed for the rollout of migration 47, long since applied, and since then it
+ * only switched the limiter off on database errors — which is what a flood of
+ * requests produces. An error now propagates: no answer is not a yes.
+ */
 export async function checkRateLimit(key: string): Promise<RateLimitResult> {
   const now = new Date();
-  try {
-    const rows = await basePrisma.$queryRaw<RateLimitRow[]>`
+  const rows = await basePrisma.$queryRaw<RateLimitRow[]>`
+    SELECT "count", "windowStartedAt", "blockedUntil"
+    FROM "SecurityRateLimit"
+    WHERE "key" = ${key}
+    LIMIT 1
+  `;
+  const row = rows[0];
+  if (!row?.blockedUntil || row.blockedUntil <= now) {
+    return { allowed: true, remaining: Number.MAX_SAFE_INTEGER, retryAfterSeconds: 0 };
+  }
+  return { allowed: false, remaining: 0, retryAfterSeconds: retryAfter(row.blockedUntil, now) };
+}
+
+/**
+ * Count a guess BEFORE checking it (a password, a sign-in code, a passkey).
+ *
+ * Allowed unless the key is already blocked. The count happens under the key's
+ * advisory lock, so of any number of guesses sent at once only `policy.limit`
+ * are ever allowed through to be checked; the one that reaches the limit sets
+ * the block for the rest. A guess that turns out RIGHT gives its count back
+ * with refundRateLimitAttempt (or clearRateLimit, where success should wipe the
+ * slate), so the limit still means "N wrong guesses", as before.
+ */
+export async function reserveRateLimitAttempt(key: string, policy: RateLimitPolicy): Promise<RateLimitResult> {
+  const counted = await countAttempt(key, policy);
+  if (counted.wasBlocked) {
+    return { allowed: false, remaining: 0, retryAfterSeconds: retryAfter(counted.blockedUntil, counted.now) };
+  }
+  return { allowed: true, remaining: Math.max(0, policy.limit - counted.count), retryAfterSeconds: 0 };
+}
+
+/**
+ * Give back one reserved guess that turned out right. If that guess was the one
+ * that reached the limit, the block it set is lifted too: the key has seen one
+ * fewer wrong guess than the limit, which is exactly the state the old
+ * count-on-failure limiter would have left.
+ */
+export async function refundRateLimitAttempt(key: string, policy: RateLimitPolicy): Promise<void> {
+  const now = new Date();
+  await basePrisma.$transaction(async (tx) => {
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${key})::bigint)`;
+    const rows = await tx.$queryRaw<RateLimitRow[]>`
       SELECT "count", "windowStartedAt", "blockedUntil"
       FROM "SecurityRateLimit"
       WHERE "key" = ${key}
-      LIMIT 1
+      FOR UPDATE
     `;
     const row = rows[0];
-    if (!row?.blockedUntil || row.blockedUntil <= now) {
-      return { allowed: true, remaining: Number.MAX_SAFE_INTEGER, retryAfterSeconds: 0 };
-    }
-    return { allowed: false, remaining: 0, retryAfterSeconds: retryAfter(row.blockedUntil, now) };
-  } catch {
-    // Authentication must remain available while migration 47 is rolling out.
-    // Once the table exists, all limiter mutations are persistent and atomic.
-    return { allowed: true, remaining: Number.MAX_SAFE_INTEGER, retryAfterSeconds: 0 };
-  }
+    if (!row || row.count <= 0) return;
+    const count = row.count - 1;
+    const blockedUntil = count < policy.limit ? null : row.blockedUntil;
+    await tx.$executeRaw`
+      UPDATE "SecurityRateLimit"
+      SET "count" = ${count}, "blockedUntil" = ${blockedUntil}, "updatedAt" = ${now}
+      WHERE "key" = ${key}
+    `;
+  });
 }
 
+/** Count one attempt after the fact (a send, a request) — refused once the key is blocked. */
 export async function registerRateLimitAttempt(
   key: string,
   policy: RateLimitPolicy
 ): Promise<RateLimitResult> {
+  const counted = await countAttempt(key, policy);
+  if (counted.wasBlocked) {
+    return { allowed: false, remaining: 0, retryAfterSeconds: retryAfter(counted.blockedUntil, counted.now) };
+  }
+  return {
+    allowed: counted.count < policy.limit,
+    remaining: Math.max(0, policy.limit - counted.count),
+    retryAfterSeconds: retryAfter(counted.blockedUntil, counted.now),
+  };
+}
+
+/** The shared count: one attempt on `key`, atomically, unless the key is already blocked. */
+async function countAttempt(
+  key: string,
+  policy: RateLimitPolicy,
+): Promise<{ wasBlocked: boolean; count: number; blockedUntil: Date | null; now: Date }> {
   const now = new Date();
   return basePrisma.$transaction(async (tx) => {
     // Serialize per key with an advisory lock. FOR UPDATE only locks EXISTING
@@ -286,7 +357,7 @@ export async function registerRateLimitAttempt(
     `;
     const row = rows[0];
     if (row?.blockedUntil && row.blockedUntil > now) {
-      return { allowed: false, remaining: 0, retryAfterSeconds: retryAfter(row.blockedUntil, now) };
+      return { wasBlocked: true, count: row.count, blockedUntil: row.blockedUntil, now };
     }
 
     const expired = !row || now.getTime() - row.windowStartedAt.getTime() >= policy.windowMs;
@@ -304,11 +375,7 @@ export async function registerRateLimitAttempt(
         "updatedAt" = EXCLUDED."updatedAt"
     `;
 
-    return {
-      allowed: count < policy.limit,
-      remaining: Math.max(0, policy.limit - count),
-      retryAfterSeconds: retryAfter(blockedUntil, now),
-    };
+    return { wasBlocked: false, count, blockedUntil, now };
   });
 }
 

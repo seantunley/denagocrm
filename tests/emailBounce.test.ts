@@ -11,7 +11,7 @@ const parse = (raw: string | Buffer) => simpleParser(raw);
 test("the MWEB spam refusal is read: who, why, and which email (2026-10-12)", async () => {
   const bounce = readBounce(await parse(readFileSync("tests/fixtures/bounce-exim-dsn.eml")));
   assert.ok(bounce);
-  assert.deepEqual(bounce.failures, [{ address: "erikjvr@mweb.co.za", reason: "High probability of spam (550)" }]);
+  assert.deepEqual(bounce.failures, [{ address: "customer@isp.example", reason: "High probability of spam (550)" }]);
   // The original's own header — never a "Message-ID:" line in its body, nor the notice's own id.
   assert.deepEqual(bounce.originalMessageIds, ["<a1b2c3d4-e5f6-7890@denagocpt.co.za>"]);
 });
@@ -92,7 +92,7 @@ test("a 'still trying' warning is not a bounce", async () => {
 
 test("an ordinary customer email is never read as a bounce, whatever its subject", async () => {
   const raw = [
-    "From: Erik <erikjvr@mweb.co.za>",
+    "From: A Customer <customer@isp.example>",
     "To: crm@denagocpt.co.za",
     "Subject: Mail delivery failed? I never got the quote",
     "Message-ID: <x@mweb.co.za>",
