@@ -17,7 +17,7 @@ import {
   briefPersonKey,
   johannesburgDateKey,
   parseBriefAt,
-  PROACTIVE_QUESTION,
+  proactiveQuestion,
   PROACTIVE_SOURCE,
   WAITING_AFTER_MS,
   WAITING_LOOKBACK_MS,
@@ -187,7 +187,7 @@ async function raise(tenantId: string, event: ProactiveEvent, target: ProactiveT
  * DAILY_ALERT_CEILING have actually been sent today, it is held for the morning instead (third review of #896).
  * The phone notification and WhatsApp follow once it is saved; WhatsApp retries on its own (the sweep).
  */
-async function deliver(tenantId: string, alertId: string): Promise<boolean> {
+export async function deliver(tenantId: string, alertId: string): Promise<boolean> {
   const alert = await basePrisma.assistantProactiveAlert.findFirst({
     where: { id: alertId, tenantId, deliveredAt: null },
     select: { userId: true, kind: true, text: true, leadId: true, contactId: true },
@@ -208,7 +208,7 @@ async function deliver(tenantId: string, alertId: string): Promise<boolean> {
     const claimed = await tx.assistantProactiveAlert.updateMany({ where: { id: alertId, tenantId, deliveredAt: null }, data: { deliveredAt: now } });
     if (claimed.count !== 1) return false;
     const turn = await tx.assistantTurn.create({
-      data: { tenantId, userId: alert.userId, question: PROACTIVE_QUESTION, answer: alert.text, source: PROACTIVE_SOURCE },
+      data: { tenantId, userId: alert.userId, question: proactiveQuestion(alert.kind), answer: alert.text, source: PROACTIVE_SOURCE },
       select: { id: true },
     });
     await tx.assistantProactiveAlert.updateMany({ where: { id: alertId, tenantId }, data: { turnId: turn.id } });

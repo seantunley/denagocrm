@@ -236,6 +236,75 @@ export function formatReport(scores: Score[]): string {
   return lines.join("\n");
 }
 
+/* ── Goal scenarios (roadmap Phase 4b — delivery goals) ──────────────────────
+ *
+ * A goal is followed by the assistant cron with plain code, so a scenario is a
+ * delivery moving step by step on a SEEDED LOCAL database
+ * (scripts/test-assistant-goals.ts, `npm run test:assistant-goals`), scored on
+ * what the database shows afterwards. WORK FIRST: a goal that is not finished,
+ * leaves its own reminders running, still has updates waiting to go out, touched
+ * somebody else's reminders, or contacted the customer scores ZERO.
+ */
+
+export type GoalScenario = {
+  id: string;
+  /** What changes in the CRM between cron passes, in order. */
+  steps: string[];
+  expect: {
+    status: "done" | "closed";
+    /** Alert keys (without the goal's id), each matched in this order; none may repeat. */
+    alerts: RegExp[];
+  };
+  note?: string;
+};
+
+export type GoalOutcome = {
+  status: string;
+  /** The goal's alert keys as raised, in order. */
+  alerts: string[];
+  /** The goal's own watches and DAX check-backs still switched on. */
+  ownRemindersOn: number;
+  /** Reminders that are NOT the goal's (another person's, the person's own schedules, unrelated ones) that changed. */
+  othersChanged: number;
+  /** The goal's alerts still waiting to be sent after it finished. */
+  pendingAlerts: number;
+  /** Messages, emails or anything else that reached the customer. */
+  customerMessages: number;
+};
+
+export const GOAL_SCENARIOS: GoalScenario[] = [
+  {
+    id: "delivery-completes-and-stops-reminders",
+    steps: ["deposit paid", "invoice issued", "cart allocated and PDI passed", "delivery booked", "delivered"],
+    expect: { status: "done", alerts: [/^next:documents:/, /^next:prep:/, /^next:booking:/, /^next:delivered:/, /^done$/] },
+    note: "Each step is news once, naming the next blocker; delivered closes the goal and switches off its own watches and check-backs in the same transaction — and nothing else.",
+  },
+];
+
+export function scoreGoalScenario(scenario: GoalScenario, outcome: GoalOutcome): Score {
+  const e = scenario.expect;
+  const work: CheckResult[] = [
+    { name: "work-status", ok: outcome.status === e.status, detail: `status=${outcome.status}, want ${e.status}` },
+    { name: "work-reminders-off", ok: outcome.ownRemindersOn === 0, detail: `${outcome.ownRemindersOn} of its own still on` },
+    { name: "work-others-untouched", ok: outcome.othersChanged === 0, detail: `${outcome.othersChanged} changed` },
+    { name: "work-nothing-pending", ok: outcome.pendingAlerts === 0, detail: `${outcome.pendingAlerts} still waiting` },
+    { name: "work-customer-never-contacted", ok: outcome.customerMessages === 0, detail: `${outcome.customerMessages} sent` },
+  ];
+  let from = 0;
+  const inOrder = e.alerts.every((re) => {
+    const at = outcome.alerts.findIndex((k, i) => i >= from && re.test(k));
+    from = at + 1;
+    return at >= 0;
+  });
+  const checks: CheckResult[] = [
+    ...work,
+    { name: "alerts-in-order", ok: inOrder, detail: outcome.alerts.join(", ") },
+    { name: "never-twice", ok: new Set(outcome.alerts).size === outcome.alerts.length, detail: outcome.alerts.join(", ") },
+  ];
+  const passed = checks.filter((c) => c.ok).length;
+  return { scenarioId: scenario.id, score: work.every((c) => c.ok) ? Math.round((passed / checks.length) * 100) : 0, checks };
+}
+
 /* ── Multi-turn task scenarios (roadmap §4; Phase 1 — job sheets) ────────────
  *
  * A scenario is a scripted conversation run against a SEEDED LOCAL database

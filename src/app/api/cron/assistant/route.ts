@@ -5,6 +5,7 @@ import { warmUpForCron } from "@/lib/cronPreflight";
 import { runCronPerTenant } from "@/lib/tenantCron";
 import { runDueAssistantSchedules, SCHEDULE_RUN_RESERVE_MS } from "@/lib/assistantScheduleRun";
 import { runAssistantWatches } from "@/lib/assistantWatch";
+import { runDeliveryGoals } from "@/lib/assistantGoals";
 import { prunePendingActions } from "@/lib/assistantWhatsAppConfirm";
 import { sweepWaitingUpdates } from "@/lib/assistantWhatsApp";
 import { sweepProactive } from "@/lib/proactive";
@@ -60,6 +61,13 @@ export async function GET(req: NextRequest) {
         await logError("assistant-schedule", "watch run failed", error instanceof Error ? error.name : "unknown", { tenantId });
         return { checked: 0, fired: 0 };
       });
+      // Delivery goals (lib/assistantGoals.ts): plain checks, like watches. Before the
+      // proactive sweep, which retries any goal alert that could not go at once.
+      if (tenantId) {
+        await runDeliveryGoals(tenantId, budget).catch((error: unknown) =>
+          logError("assistant-schedule", "goal run failed", error instanceof Error ? error.name : "unknown", { tenantId }),
+        );
+      }
       // Proactive DAX: alerts held overnight that are now due, and customers who
       // wrote and have waited with no answer (lib/proactive.ts). Before the sweep
       // below, so anything it raises is retried by it too. Off unless switched on.

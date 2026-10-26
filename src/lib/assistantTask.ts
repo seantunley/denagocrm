@@ -87,7 +87,8 @@ const SELECT = {
 /** The person's open sheets with activity in the last 14 days, newest first — what each question starts from. */
 export async function openTasks(user: User, take = TASK_PROMPT_MAX, now = new Date()): Promise<TaskView[]> {
   const rows = await prisma.assistantTask.findMany({
-    where: { tenantId: ownedWriteTenantId(), userId: user.id, status: "open", updatedAt: { gte: staleBefore(now) } },
+    // Delivery goals are the cron's, not the conversation's (assistantGoals.ts): never in front of a question.
+    where: { tenantId: ownedWriteTenantId(), userId: user.id, kind: { not: "delivery_goal" }, status: "open", updatedAt: { gte: staleBefore(now) } },
     orderBy: { updatedAt: "desc" },
     take,
     select: SELECT,
@@ -102,7 +103,8 @@ export async function openTasks(user: User, take = TASK_PROMPT_MAX, now = new Da
  */
 export async function tasksForAskPage(userId: string, now = new Date()) {
   const rows = await prisma.assistantTask.findMany({
-    where: { tenantId: ownedWriteTenantId(), userId, updatedAt: { gte: new Date(now.getTime() - 30 * DAY) } },
+    // Delivery goals have their own section (and don't close themselves after 14 days).
+    where: { tenantId: ownedWriteTenantId(), userId, kind: { not: "delivery_goal" }, updatedAt: { gte: new Date(now.getTime() - 30 * DAY) } },
     orderBy: { updatedAt: "desc" },
     take: 50,
     select: { id: true, title: true, status: true, quoteId: true, nextAction: true, updatedAt: true, closedAt: true },
