@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { learnBlock, scanEntry, splitLearn, type LearnBlock } from "./assistantMemory";
 import { MAX_ACTIONS, parseActionList, parseChoiceList, splitActions, splitChoices, type ProposedAction } from "./assistantActions";
+import { parseTaskUpdate, type TaskUpdate } from "./assistantTaskRules";
 
 /**
  * DAX's reply, as one contract: the answer the person reads, then (only when
@@ -79,7 +80,8 @@ export function parseState(raw: unknown): ConversationState | null {
 }
 
 /** `attempted`: how many tasks the reply tried to propose — `actions` holds only the well-formed ones. */
-export type ParsedReply = { answer: string; learn: LearnBlock | null; actions: ProposedAction[]; attempted: number; choices: string[]; state: ConversationState | null };
+/** `task`: what it wrote about a job sheet (assistantTaskRules) — the caller keeps only CRM ids and applies it. */
+export type ParsedReply = { answer: string; learn: LearnBlock | null; actions: ProposedAction[]; attempted: number; choices: string[]; state: ConversationState | null; task: TaskUpdate | null };
 
 /** The reply → the answer and its validated block (or the legacy trailer lines). */
 export function splitReply(reply: string): ParsedReply {
@@ -102,6 +104,7 @@ export function splitReply(reply: string): ParsedReply {
     attempted: Math.max(tried, before.attempted),
     choices: choices.length ? choices : before.choices,
     state: block && "state" in block ? parseState(block.state) : null,
+    task: block && "task" in block ? parseTaskUpdate(block.task) : null,
   };
 }
 
@@ -109,7 +112,7 @@ function legacy(reply: string): ParsedReply {
   const learnSplit = splitLearn(reply);
   const choiceSplit = splitChoices(learnSplit.answer);
   const { answer, actions } = splitActions(choiceSplit.answer);
-  return { answer, learn: learnSplit.learn, actions, attempted: actions.length, choices: choiceSplit.choices, state: null };
+  return { answer, learn: learnSplit.learn, actions, attempted: actions.length, choices: choiceSplit.choices, state: null, task: null };
 }
 
 /** The block's JSON object (a code fence around it tolerated), or null. */

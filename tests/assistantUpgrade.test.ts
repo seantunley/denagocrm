@@ -99,9 +99,13 @@ test("only links the lookups returned become chips; made-up ones disappear", () 
 
 test("every record a lookup lists carries a link to cite", () => {
   const lib = code("src/lib/crmAssistant.ts");
-  for (const link of ["link: `/leads/${lead.id}`", "link: `/quotes/${quote.id}`", "link: href(a)", "link: `/quotes/${q.id}`", "link: `/stock/${u.id}`", "link: `/vehicles/${v.id}`", "link: `/contacts/${contact.id}`"]) {
+  for (const link of ["link: `/leads/${lead.id}`", "link: `/quotes/${quote.id}`", "link: href(a)", "link: `/quotes/${q.id}`", "link: `/stock/${u.id}`", "link: `/contacts/${contact.id}`"]) {
     assert.ok(lib.includes(link), link);
   }
+  // Customer vehicles and the workshop (workshopContext / workshopRules) link their records too.
+  assert.ok(code("src/lib/workshopContext.ts").includes("link: `/vehicles/${v.id}`"));
+  const workshop = code("src/lib/workshopRules.ts");
+  for (const link of ["link: `/vehicles/${v.id}`", "link: `/jobcards/${j.id}`", "link: `/warranty/${c.id}`"]) assert.ok(workshop.includes(link), link);
   assert.match(code("src/lib/daxBriefRules.ts"), /link: item\.href/);
   // The chips come only from this answer's own lookups, and only in chat.
   assert.match(lib, /for \(const o of observations\) citableLinks\(o\.output\.data, citable\);/);

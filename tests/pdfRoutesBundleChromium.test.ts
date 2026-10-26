@@ -33,7 +33,8 @@ test("the routes that began rendering a quote PDF on 2026-10-12 are bundled with
   for (const route of ["/quotes/abc", "/jobcards/abc", "/document-studio", "/signatures/abc", "/api/signing/abc", "/api/sign/abc"]) {
     assert.ok(covered(route), route);
   }
-  assert.match(config, /serverExternalPackages: \["@sparticuz\/chromium", "puppeteer-core"\]/);
+  // The PDF engine stays external (other packages may follow it — unpdf, for DAX reading PDFs).
+  assert.match(config, /serverExternalPackages: \["@sparticuz\/chromium", "puppeteer-core"(, "[\w@/.-]+")*\]/);
 });
 
 const files = (dir: string, match: RegExp): string[] =>

@@ -334,6 +334,12 @@ jobs:
         # alert that reaches nobody staying owed until a retry is accepted.
         run: npm run test:email-bounces
 
+      - name: DAX job sheets -- locked writes, ids re-checked, the sheet fills the quote card, RLS
+        # Roadmap Phase 1: a sheet written and corrected through the scoped client with enforcement on;
+        # WhatsApp and the CRM writing at once (one wins, the other is told); another person's or workspace's
+        # sheet never reached, and the policy refusing it under a NOBYPASSRLS role; one sheet, one quote.
+        run: npm run test:assistant-task
+
       - name: Run two-tenant end-to-end CRM isolation suite
         # Ordinary CRM flows run as two different tenants through the REAL scoped
         # client under the restricted role -- the regression guard for real-flow
@@ -588,6 +594,21 @@ jobs:
       # The model is never called; nothing is sent.
       - name: Assistant -- a bounced quote email is never just "sent"
         run: npm run test:dax-send-facts
+
+      # DAX's evidence lookups: searching a customer's messages, opening one,
+      # reading a PDF's text. Who sees what (a colleague's deal on the same
+      # customer, another workspace's customer of the same name, a file by its
+      # id), the caps, a scan refused as a scan, and an email over 1 MB still
+      # filed with the new full-text index in place. Real PDFs; no model call.
+      - name: Assistant -- evidence lookups see only what the person may see
+        run: npm run test:assistant-evidence
+
+      # "Why did this happen?": a record's history with the cause of each event,
+      # to the people who may open the record — journeys only with Marketing on
+      # and journeys.manage, the chatbot only with Automation on and inbox
+      # access, and never another workspace's rows. Writes nothing.
+      - name: Assistant -- explains why, only from records the asker may see
+        run: npm run test:assistant-why
 
       # A scheduled briefing going to a linked phone: what is waiting, claimed
       # before it is sent and released when it could not be, the template nudge

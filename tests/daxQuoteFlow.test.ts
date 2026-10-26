@@ -72,7 +72,8 @@ test("Confirm: checked first (no redirect on a phone), before anything is writte
   assert.match(run, /if \(!\(await hasPermission\(user, "quotes\.create"\)\)\) return untouched\("Your role can't create quotes\."\);/);
   assert.match(run, /if \(card\.contactId && !\(await canAccessContact\(user, card\.contactId\)\)\) return untouched\(/);
   assert.ok(run.indexOf('hasPermission(user, "quotes.create")') < run.indexOf("convertLeadToContact("), "before the customer record is made");
-  assert.match(run, /if \(!saved\.ok && "repeated" in saved && saved\.repeated\) return \{ ok: true, success: "Already created/);
+  // A repeat — the same card's key, or a job sheet that already has its quote (review of #918) — is reported as done.
+  assert.match(run, /if \(!saved\.ok && "repeated" in saved && saved\.repeated\) \{\s*return saved\.quote\s*\? \{ ok: true, success: `This job sheet already has its quote[\s\S]{0,200}: \{ ok: true, success: "Already created/);
 });
 
 /*

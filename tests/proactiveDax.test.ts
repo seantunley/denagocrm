@@ -272,7 +272,7 @@ test("DAX may propose one, offered only while proactive DAX is on, never as a ca
   assert.match(core, /const proposals = reply\.actions\.filter\(\(p\) => p\.type !== "check_back"\);/);
   assert.match(core, /reply\.attempted - checkBacks\.length - actions\.length - problems\.length/);
   // What the person is told comes from what was SAVED.
-  assert.match(core, /const answer = \(settled \?\? resolved\.plain \+ note\) \+ checkBackLine;/);
+  assert.match(core, /const answer = \(settled \?\? resolved\.plain \+ note\) \+ checkBackLine \+ taskLine;/);
 });
 
 test("saved as the person's one-off question marked set by DAX, with its own cap; runs only while it's on", () => {

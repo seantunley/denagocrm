@@ -25,8 +25,10 @@ import { createTestDriveBooking } from "@/app/actions/testDrives";
 import { createStaffAvailability } from "@/app/actions/staffAvailability";
 import { sendWhatsAppMessage } from "@/app/actions/whatsapp";
 import { sendEmailAction } from "@/app/actions/emails";
-import { canAccessContact, canAccessLead, canAccessQuote, hasPermission } from "@/lib/permissions";
+import { openJobCard } from "@/app/actions/jobcards";
+import { canAccessContact, canAccessLead, canAccessQuote, canAccessVehicle, hasPermission } from "@/lib/permissions";
 import { createWatchForUser } from "@/lib/assistantWatch";
+import { recordTaskProgress } from "@/lib/assistantTask";
 import { assistantVoiceRepliesOn } from "@/lib/assistantVoice";
 import { ASSISTANT_PERMISSIONS } from "@/lib/assistantUser";
 import { MAX_ACTIVE_SCHEDULES, describeSchedule, nextRun, scheduleInput } from "@/lib/assistantSchedule";
@@ -229,6 +231,30 @@ export async function runAssistantAction(
         await confirmed("book a test drive", card.leadId);
         return { ok: true, success: result.success ?? "Test drive booked" };
       }
+      case "job_card": {
+        // THE JOB-CARD FORM'S OWN DOOR (openJobCard): the module check, jobcards.manage, access to THIS vehicle in
+        // THIS workspace, the numbering lock and the audit entry are all its. Asked here first as yes/no, because
+        // its guard REDIRECTS, which a saved card confirmed from the Ask page has nowhere to follow. Nobody is contacted.
+        // ONE CONFIRM, ONE JOB CARD: the card's key is spent where the job card is opened, so a Confirm pressed
+        // again after a lost answer gets the same job card back. A card without one is from before keys: ask again.
+        if (!CONFIRM_KEY.test(String(card.confirmKey ?? ""))) return untouched(STALE_CARD);
+        const vehicleId = String(card.vehicleId ?? "");
+        const description = String(card.description ?? "").trim().slice(0, 500);
+        const kmIn = card.kmIn == null ? null : Number(card.kmIn);
+        if (!description ||!["low", "normal", "high", "urgent"].includes(String(card.priority)) || (kmIn !== null && (!Number.isInteger(kmIn) || kmIn < 0))) {
+          return untouched("That job card isn't valid — ask again.");
+        }
+        if (!(await isModuleEnabled("automotive"))) return untouched("Job cards are part of the Automotive module, which is off for this workspace.");
+        if (!(await hasPermission(user, "jobcards.manage")) || !(await canAccessVehicle(user, vehicleId))) return untouched("You can't open a job card on that vehicle.");
+        const vehicle = await prisma.vehicle.findFirst({ where: { id: vehicleId, deletedAt: null }, select: { contactId: true } });
+        if (!vehicle) return untouched("That vehicle is no longer there.");
+        // The owner the card showed: a vehicle that has changed hands since is not what was confirmed.
+        if (vehicle.contactId !== card.contactId) return untouched(STALE_CARD);
+        const opened = await openJobCard({ vehicleId, description, kmIn, priority: card.priority, confirmKey: card.confirmKey });
+        if ("repeated" in opened) return { ok: true, success: `Already opened as job card #${opened.number} — nothing was opened twice.`, href: `/jobcards/${opened.id}` };
+        await logAudit({ action: "assistant.action_confirmed", summary: `Confirmed the assistant's proposal: open job card #${opened.number}`, user, contactId: vehicle.contactId });
+        return { ok: true, success: `Job card #${opened.number} opened. The customer has not been contacted.`, href: `/jobcards/${opened.id}` };
+      }
       case "block_time": {
         // A personal calendar item. No assignee is passed, so it is the
         // signed-in person's OWN calendar — the card cannot name anybody else's.
@@ -374,6 +400,9 @@ export async function runAssistantAction(
           // creates the quote, so a Confirm pressed again after a lost answer creates
           // no second quote. (A card proposed before keys existed has none, and runs as it did.)
           ...(keyed ? { confirmKey: card.confirmKey } : {}),
+          // ONE JOB SHEET, ONE QUOTE: the sheet is locked and linked in the save's own transaction (saveQuoteDraft) —
+          // a second card for the same sheet, with its own key, gets the sheet's quote back instead of a new one.
+          ...(card.taskId ? { assistantTaskId: card.taskId } : {}),
           items: lines.map((line) => {
             const product = byId.get(line.productId)!;
             return {
@@ -390,7 +419,11 @@ export async function runAssistantAction(
           return { ok: false as const, error: "The quote couldn't be saved just now.", thrown: true as const };
         });
         // A Confirm that reached the server twice: the first made the quote; this one did nothing.
-        if (!saved.ok && "repeated" in saved && saved.repeated) return { ok: true, success: "Already created — nothing was made twice. It has NOT been sent to the customer." };
+        if (!saved.ok && "repeated" in saved && saved.repeated) {
+          return saved.quote
+            ? { ok: true, success: `This job sheet already has its quote, Q-${saved.quote.number} — nothing was made twice. It has NOT been sent to the customer.`, href: `/quotes?edit=${saved.quote.id}`, quote: saved.quote }
+            : { ok: true, success: "Already created — nothing was made twice. It has NOT been sent to the customer." };
+        }
         // saveQuoteDraft validates before it writes (a colour the product does not come in, say).
         if (!saved.ok) return resumes ? retryAfterCustomer(saved.error) : { ok: false, error: saved.error };
         // On the deal's record when there is one; otherwise on the customer's.
@@ -489,6 +522,7 @@ export async function runAssistantAction(
           user,
           ...(quote.leadId ? { leadId: quote.leadId } : { contactId: quote.contactId }),
         });
+        await recordTaskProgress(user.id, card.taskId, { done: `Q-${saved.quote.number} changed` });
         const after = await prisma.quote.findUnique({ where: { id: quote.id }, include: { items: true, fees: true } }).catch(() => null);
         const total = after ? formatZAR(Math.round(payableTotalCents(after))) : null;
         await sendQueuedPdfNow();
@@ -553,6 +587,7 @@ export async function runAssistantAction(
           user,
           ...(quote.leadId ? { leadId: quote.leadId } : { contactId: quote.contactId }),
         });
+        await recordTaskProgress(user.id, card.taskId, { done: `Added to Q-${saved.quote.number}` });
         const after = await prisma.quote.findUnique({ where: { id: quote.id }, include: { items: true, fees: true } }).catch(() => null);
         const total = after ? formatZAR(Math.round(payableTotalCents(after))) : null;
         await sendQueuedPdfNow();
