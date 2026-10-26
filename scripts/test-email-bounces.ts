@@ -67,7 +67,7 @@ const ok = (label: string) => console.log(`  ✓ ${++checks}. ${label}`);
     const a = await sentEmail("exact");
     assert.equal(await handleParsedMessage(await notice({ to: a.email, messageId: a.mid }), OURS, "bounce:1"), true);
     let ra = await row(a.comm.id);
-    assert.equal(ra.bounceReason, `${a.email}: 550 High probability of spam`);
+    assert.equal(ra.bounceReason, `${a.email}: High probability of spam (550)`);
     assert.ok(ra.bouncedAt);
     assert.equal(await notes(a.contact.id), 1);
     ok("an identified email is marked not delivered and noted on the customer's history");
@@ -88,7 +88,7 @@ const ok = (label: string) => console.log(`  ✓ ${++checks}. ${label}`);
     const b = await sentEmail("mixed");
     const cc = `cc-${run}@example.invalid`;
     assert.equal(await handleParsedMessage(await notice({ to: cc, messageId: b.mid, deliveredToo: b.email }), OURS, "bounce:2"), true);
-    assert.equal((await row(b.comm.id)).bounceReason, `${cc}: 550 High probability of spam`);
+    assert.equal((await row(b.comm.id)).bounceReason, `${cc}: High probability of spam (550)`);
     ok("a mixed report names only the recipient that failed");
 
     // 3. Two notices about different addresses of one email, at the same moment: both kept.
@@ -99,7 +99,7 @@ const ok = (label: string) => console.log(`  ✓ ${++checks}. ${label}`);
       handleParsedMessage(await notice({ to: other, messageId: c.mid }), OURS, "bounce:3b"),
     ]);
     assert.deepEqual(both, [true, true]);
-    assert.deepEqual((await row(c.comm.id)).bounceReason!.split("\n").sort(), [`${c.email}: 550 High probability of spam`, `${other}: 550 High probability of spam`].sort());
+    assert.deepEqual((await row(c.comm.id)).bounceReason!.split("\n").sort(), [`${c.email}: High probability of spam (550)`, `${other}: High probability of spam (550)`].sort());
     assert.equal(await notes(c.contact.id), 2);
     ok("concurrent notices for one email both land");
 

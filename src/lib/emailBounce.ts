@@ -77,8 +77,40 @@ const field = (block: string, name: string) => block.match(new RegExp(`^${name}:
 /** The address in a Final-Recipient / Original-Recipient value ("rfc822; a@b.c"). */
 const addressIn = (value: string | undefined) => value?.match(/^(?:[\w-]+;\s*)?<?([^\s<>;]+@[^\s<>;]+?)>?$/)?.[1]?.toLowerCase() ?? null;
 
+const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+/**
+ * A mail server's refusal in plain words, with its codes once at the end (Sean,
+ * 2026-10-26). Servers reply over several lines with the code repeated on each
+ * ("550-5.1.1 The email account … 550-5.1.1 double-checking …"), and Google adds
+ * a help link and a tracking id:
+ *   "The email account that you tried to reach does not exist. Please try
+ *    double-checking the recipient's email address for typos or unnecessary spaces. (550 5.1.1)"
+ * Only the reply's OWN code is taken out, so a number in the words survives.
+ * Idempotent: a reason already tidied comes back unchanged, so old rows can be shown through it.
+ */
+export function tidyReason(raw: string): string {
+  let text = raw.replace(/^smtp;\s*/i, "").replace(/\s+/g, " ").trim();
+  const lead = text.match(/^([245]\d\d)(?:[ -]+(\d\.\d{1,3}\.\d{1,3}))?(?=[\s-]|$)/);
+  if (!lead) return text;
+  const [, basic, enhanced] = lead;
+  // A repeated code is the full "550-5.1.1" / "550 5.1.1", or a bare "550-" continuation —
+  // never "550 " on its own mid-text, which is a number in the words.
+  const repeated = enhanced ? `${basic}[ -]+${escapeRe(enhanced)}|${basic}-` : `${basic}-`;
+  text = text
+    .replace(new RegExp(`^${basic}[ -]+(?:${enhanced ? escapeRe(enhanced) : "(?!)"}\\s*)?`), "")
+    .replace(new RegExp(`(^|\\s)(?:${repeated})\\s*`, "g"), "$1")
+    .replace(/\s*(?:For more information,? (?:go to|see|visit)\s*)?https?:\/\/\S+/gi, "")
+    .replace(/\s*-\s*gsmtp\s*$/i, "")
+    .replace(/\s+[a-z0-9]{8,}-[a-z0-9.]{10,}\s*$/i, "") // Google's per-message tracking id
+    .replace(/\s+/g, " ")
+    .trim();
+  const code = enhanced ? `${basic} ${enhanced}` : basic;
+  return text ? `${text} (${code})` : code;
+}
+
 const cleanReason = (value: string | null | undefined) =>
-  value ? value.replace(/^smtp;\s*/i, "").replace(/\s+/g, " ").trim().slice(0, MAX_REASON) || null : null;
+  value ? tidyReason(value).slice(0, MAX_REASON) || null : null;
 
 /** A delivery-status notice → what failed and why; null when it isn't one, or reports no failure. */
 export function readBounce(parsed: ParsedMail): Bounce | null {
@@ -144,7 +176,15 @@ export function newBounceLines(recorded: string | null | undefined, lines: strin
 /** The timeline badge for an email that bounced, or null. One wording for every timeline. */
 export function bouncedLabel(c: { direction: string | null; bouncedAt?: Date | null; bounceReason?: string | null }): string | null {
   if (c.direction !== "outbound" || !c.bouncedAt) return null;
-  const reason = (c.bounceReason ?? "").split("\n").filter(Boolean).join("; ");
+  // Tidied again on the way out, so a reason stored before tidyReason existed reads the same.
+  const reason = (c.bounceReason ?? "")
+    .split("\n")
+    .filter(Boolean)
+    .map((line) => {
+      const m = line.match(/^([^\s:]+@[^\s:]+): (.*)$/);
+      return m ? `${m[1]}: ${tidyReason(m[2])}` : tidyReason(line);
+    })
+    .join("; ");
   return `⚠ Not delivered · ${formatDateTime(c.bouncedAt)}${reason ? ` — ${reason}` : ""}`;
 }
 
