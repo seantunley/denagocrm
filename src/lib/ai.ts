@@ -317,7 +317,7 @@ export async function aiResearch(
       // cost it is on the API.
       // HIGH REASONING, LONG ANSWERS, ON THE BEST MODEL. On a flat-rate plan
       // there is no per-call cost to economise on, and the defaults showed:
-      // the first ChatGPT briefing on the Petrow Agri lead was two thin
+      // the first ChatGPT briefing on the family-business lead was two thin
       // sentences a label beside an Opus note that named the directors. Sol at
       // high effort, with the registry angle in the prompt, found them too —
       // at 50 to 80 seconds a call, which is why the timeout is generous and
