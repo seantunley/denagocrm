@@ -47,7 +47,7 @@ test("a plain-text Exim bounce (no delivery report) is read too", async () => {
 
 test("a 'still trying' warning is not a bounce", async () => {
   const raw = readFileSync("tests/fixtures/bounce-exim-dsn.eml", "utf8")
-    .replace("X-Failed-Recipients: erikjvr@mweb.co.za\n", "")
+    .replace(/^X-Failed-Recipients: .*\r?\n/m, "")
     .replace("Action: failed", "Action: delayed")
     .replace("Status: 5.0.0", "Status: 4.4.7");
   assert.equal(readBounce(await parse(raw)), null);
