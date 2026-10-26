@@ -326,7 +326,7 @@ export async function openMessage(user: User, raw: z.infer<typeof openMessageArg
   if (!message || !(await messageVisible(user, message, leadIds))) return note("No message with that id that you can see.");
   const standIn = (await resolveTenantActor().catch(() => null))?.id ?? null;
 
-  let others: (typeof message)[] = [];
+  const others: (typeof message)[] = [];
   if (thread && message.conversationId) {
     const around = await prisma.communication.findMany({
       where: { tenantId, conversationId: message.conversationId, id: { not: message.id } },
