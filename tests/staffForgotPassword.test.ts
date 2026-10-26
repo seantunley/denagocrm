@@ -89,11 +89,11 @@ const stubs: Record<string, unknown> = {
     LOGIN_POLICY: {},
     OTP_SEND_POLICY: {},
     OTP_VERIFY_POLICY: {},
-    checkRateLimit: async () => ({ allowed: true }),
     clearRateLimit: async () => {},
     getRequestIp: async () => "1.2.3.4",
     rateLimitKey: (a: string, b: string) => `${a}:${b}`,
     registerRateLimitAttempt: async () => ({ allowed: true }),
+    reserveRateLimitAttempt: async () => ({ allowed: true }),
   },
 };
 const loader = Module as unknown as { _load: (r: string, p: unknown, m: boolean) => unknown };

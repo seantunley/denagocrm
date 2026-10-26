@@ -50,18 +50,21 @@ test("BOTH HALVES OF THE PASSKEY CEREMONY ARE RATE LIMITED", () => {
     const code = stripComments(src(file));
     assert.match(code, /PASSKEY_POLICY/, `${file} must use the passkey policy`);
     assert.match(code, /getRequestIp\s*\(/, `${file} must key the limit on the caller`);
-    assert.match(code, /registerRateLimitAttempt\s*\(/, `${file} must record attempts`);
+    assert.match(code, /(registerRateLimitAttempt|reserveRateLimitAttempt)\s*\(/, `${file} must record attempts`);
   }
 });
 
 test("VERIFY REFUSES BEFORE IT DOES THE WORK — the limit gates, it does not merely count", () => {
   const code = stripComments(src(AUTH_VERIFY));
-  assert.match(code, /checkRateLimit\s*\(/, "must consult the limit");
+  // Counted AND gated in one locked step (security audit 2026-10-25): a read-only
+  // check before the work let a burst all pass before any attempt was counted.
+  assert.match(code, /reserveRateLimitAttempt\s*\(/, "must count-and-gate in one step");
+  assert.doesNotMatch(code, /checkRateLimit\s*\(/, "no check-then-count race");
   assert.match(code, /status:\s*429/, "must refuse with 429 when blocked");
   // The gate has to precede the database lookup, or the throttle bounds nothing
   // that costs anything.
   assert.ok(
-    code.indexOf("checkRateLimit") < code.indexOf("prisma.passkey.findUnique"),
+    code.indexOf("reserveRateLimitAttempt") < code.indexOf("prisma.passkey.findUnique"),
     "the rate-limit gate must run BEFORE the passkey lookup",
   );
 });
