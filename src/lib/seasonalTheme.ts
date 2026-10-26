@@ -50,4 +50,43 @@ body::before {
 @media print {
   body::before { display: none; }
 }
+
+/* Decorations (components/HalloweenDecor.tsx): above the header (z 40), under
+   every dialog and the Ask bubble (z 50); never in the way of a click. */
+.hw-decor { position: fixed; inset: 0; pointer-events: none; z-index: 45; overflow: hidden; }
+.hw-decor * { pointer-events: none; }
+.hw-web { position: absolute; top: 0; color: oklch(0.92 0.03 300 / 52%); filter: drop-shadow(0 0 2px oklch(0.92 0.03 300 / 35%)); }
+.hw-web-left { left: 0; }
+.hw-web-right { right: 0; transform: scaleX(-1); }
+.hw-spider { position: absolute; top: 0; right: 118px; filter: drop-shadow(0 0 6px oklch(0.75 0.15 300 / 60%)); display: flex; flex-direction: column; align-items: center;
+  animation: hw-bob 6s ease-in-out infinite; transform-origin: top center; }
+.hw-thread { width: 1px; height: 90px; background: oklch(0.92 0.03 300 / 60%); }
+.hw-pumpkins { position: absolute; bottom: 14px; left: 18px; display: flex; align-items: flex-end; gap: 4px; }
+@media (min-width: 1024px) { .hw-pumpkins { left: calc(240px + 18px); } }
+@media (max-width: 767px) { .hw-pumpkins { display: none; } .hw-web { width: 110px; height: 110px; } .hw-spider { right: 64px; } }
+.hw-pumpkin { filter: drop-shadow(0 0 10px oklch(0.75 0.18 60 / 55%)); }
+.hw-face { animation: hw-flicker 3.2s ease-in-out infinite; }
+.hw-pumpkin-small .hw-face { animation-delay: 1.1s; }
+.hw-pumpkin-mid .hw-face { animation-delay: 2.3s; }
+.hw-ghost { position: absolute; left: -60px; opacity: 0; filter: drop-shadow(0 0 8px oklch(0.95 0 0 / 50%)); }
+.hw-ghost-1 { top: 18%; animation: hw-drift 46s linear infinite 4s; }
+.hw-ghost-2 { top: 34%; animation: hw-drift 58s linear infinite 27s; }
+@keyframes hw-bob { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(26px); } }
+@keyframes hw-flicker { 0%, 100% { opacity: 1; } 42% { opacity: 0.75; } 47% { opacity: 1; } 71% { opacity: 0.85; } }
+@keyframes hw-drift {
+  0% { transform: translate(0, 0); opacity: 0; }
+  4% { opacity: 0.5; }
+  25% { transform: translate(28vw, -14px); }
+  50% { transform: translate(55vw, 10px); }
+  75% { transform: translate(82vw, -12px); }
+  92% { opacity: 0.5; }
+  100% { transform: translate(calc(100vw + 120px), 0); opacity: 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .hw-spider, .hw-face { animation: none; }
+  .hw-ghost { animation: none; opacity: 0.22; }
+  .hw-ghost-1 { left: auto; right: 22%; }
+  .hw-ghost-2 { display: none; }
+}
+@media print { .hw-decor { display: none; } }
 `;

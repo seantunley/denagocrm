@@ -19,6 +19,7 @@ import AssistantBubble from "@/components/AssistantBubble";
 import { prisma } from "@/lib/db";
 import { PROACTIVE_SOURCES } from "@/lib/assistantWhatsAppRules";
 import { HALLOWEEN_CSS, halloweenOn } from "@/lib/seasonalTheme";
+import HalloweenDecor from "@/components/HalloweenDecor";
 
 /**
  * Tab title and icon from the SESSION's workspace. The root layout can only go
@@ -120,7 +121,12 @@ export default async function AppLayout({
     <>
       {style && <style>{style}</style>}
       {/* Halloween until 1 November (lib/seasonalTheme.ts) — after the brand style, so it wins. */}
-      {halloweenOn(activeTenantId) && <style>{HALLOWEEN_CSS}</style>}
+      {halloweenOn(activeTenantId) && (
+        <>
+          <style>{HALLOWEEN_CSS}</style>
+          <HalloweenDecor />
+        </>
+      )}
       {/* The app's right-click menu. Mounted once here rather than per page: it
           listens on `document` and stands aside wherever RecordContextMenu, a
           flow canvas or a text input has already claimed the click. */}
