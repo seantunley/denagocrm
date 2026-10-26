@@ -29,6 +29,7 @@
     "test:email-bounces": "tsx --tsconfig tsconfig.harness.json scripts/test-email-bounces.ts",
     "test:dax-send-facts": "tsx --tsconfig tsconfig.harness.json scripts/test-dax-send-facts.ts",
     "test:assistant-task": "tsx --tsconfig tsconfig.harness.json scripts/test-assistant-task.ts",
+    "test:assistant-plans": "tsx --tsconfig tsconfig.harness.json scripts/test-assistant-plans.ts",
     "eval:dax-tasks": "tsx --tsconfig tsconfig.harness.json scripts/eval-dax-tasks.ts",
     "test:signing-upgrade": "tsx --tsconfig tsconfig.scripts.json scripts/test-signing-upgrade.ts",
     "test:tenant-guard": "tsx --tsconfig tsconfig.scripts.json scripts/test-tenant-guard.ts",

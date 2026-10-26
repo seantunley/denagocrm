@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { scheduleFields, type Cadence } from "./assistantSchedule";
 import { watchFields, type WatchInput } from "./assistantWatchRules";
+import type { PlanView } from "./assistantPlanRules";
 
 /**
  * Tasks the assistant can PROPOSE — never perform. It drafts; the person sees a
@@ -582,4 +583,6 @@ export type ActionCard =
   | { id: string; kind: "reschedule"; activityId: string; title: string; when: string; leadId: string | null; leadLabel: string; fromDue: string; reason?: string }
   | { id: string; kind: "cancel_activity"; activityId: string; title: string; leadId: string | null; leadLabel: string; fromDue: string; reason?: string }
   | { id: string; kind: "schedule"; title: string; question: string; cadence: Cadence; weekday?: number; timeOfDay: string; onDate?: string; reason?: string }
-  | { id: string; kind: "watch"; title: string; watch: WatchInput; reason?: string };
+  | { id: string; kind: "watch"; title: string; watch: WatchInput; reason?: string }
+  // A multi-step plan (assistantPlan): its steps live on the server, and Confirm runs them by the plan's id only.
+  | { id: string; kind: "plan"; title: string; leadId: null; leadLabel: string; plan: PlanView; reason?: string };

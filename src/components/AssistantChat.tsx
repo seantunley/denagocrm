@@ -15,6 +15,7 @@ import type { AssistantRow } from "@/lib/crmAssistant";
 import { audioForm, useVoiceRecorder } from "@/components/useVoiceRecorder";
 import type { ActionCard } from "@/lib/assistantActions";
 import AssistantActionCard from "@/components/AssistantActionCard";
+import AssistantPlanCard from "@/components/AssistantPlanCard";
 
 type Turn = {
   question: string; answer?: string; cited?: string; evidence?: Evidence[]; turnId?: string;
@@ -295,7 +296,7 @@ export default function AssistantChat({
         <div className="space-y-2">
           <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Ready for you to confirm</p>
           {turn.actions.map((card) => (
-            <AssistantActionCard key={card.id} card={card} />
+            card.kind === "plan" ? <AssistantPlanCard key={card.id} plan={card.plan} /> : <AssistantActionCard key={card.id} card={card} />
           ))}
         </div>
       )}

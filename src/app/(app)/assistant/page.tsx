@@ -13,6 +13,8 @@ import { isExpired } from "@/lib/assistantMemory";
 import { assistantVoiceRepliesOn } from "@/lib/assistantVoice";
 import AssistantChat from "@/components/AssistantChat";
 import SavedAssistantCards from "@/components/SavedAssistantCards";
+import AssistantPlans from "@/components/AssistantPlans";
+import { plansForAskPage } from "@/lib/assistantPlan";
 import type { ActionCard } from "@/lib/assistantActions";
 import ConfirmActionDialog from "@/components/ConfirmActionDialog";
 import { deleteAssistantNote, saveMyAssistantNote } from "@/app/actions/assistantNotes";
@@ -93,6 +95,8 @@ export default async function AssistantPage() {
   ]);
   const openSheets = tasks.filter((t) => t.status === "open");
   const pastSheets = tasks.filter((t) => t.status !== "open");
+  // Multi-step plans: the person's own, from the last 30 days (assistantPlan).
+  const plans = await plansForAskPage(user.id);
   // Proactive DAX: the owner's switch for the workspace, and this person's own (lib/proactive.ts).
   const [proactiveWorkspace, proactiveMe, briefAt] = await Promise.all([
     getSetting(ASSISTANT_PROACTIVE_KEY).then(proactiveOn).catch(() => false),
@@ -127,6 +131,7 @@ export default async function AssistantPage() {
       {/* What is waiting on you comes first, above the conversation. Always rendered: it holds the
           list this visit started with, and shows nothing when that was empty. */}
       <SavedAssistantCards name={profile.name} cards={savedCards} />
+      <AssistantPlans plans={plans} />
       {connected ? (
         <AssistantChat name={profile.name} history={history.map(({ question, answer, source }) => ({ question, answer, source }))} listen={listen} />
       ) : (

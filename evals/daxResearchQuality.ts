@@ -384,3 +384,109 @@ export function scoreTaskScenario(scenario: TaskScenario, outcome: TaskOutcome):
   const score = work.every((c) => c.ok) ? Math.round((passed / checks.length) * 100) : 0;
   return { scenarioId: scenario.id, score, checks };
 }
+
+/* ── Multi-step plan scenarios (roadmap Phase 3) ──────────────────────────────
+ *
+ * Run like the task scenarios — a scripted conversation against a SEEDED LOCAL
+ * database — and scored the same way: on what the DATABASE shows afterwards. A
+ * plan whose steps did not happen scores ZERO however well its answer reads, and
+ * so does one that contacted a customer without a Send click. They need a live
+ * model, so CI scores only recorded outcomes (tests/assistantPlan.test.ts); the
+ * plan runner's own guarantees are proven without a model by
+ * scripts/test-assistant-plans.ts.
+ *
+ * `fault` is what the runner does to the world part-way, as the scenario needs:
+ *  - "interrupt-after-1": the request dies after step 1 has run (before the plan hears), then Confirm is pressed twice at once;
+ *  - "no-activity-permission": the asker's role cannot schedule activities (a follow-up step is refused at Confirm);
+ *  - "withdraw-product-after-propose": the quoted product is taken off sale between the plan card and Confirm.
+ */
+
+export type PlanTurn = TaskTurn & { /** Press Confirm on the plan card (and Retry once if it paused). */ confirmPlan?: boolean; retry?: boolean };
+
+export type PlanScenario = {
+  id: string;
+  turns: PlanTurn[];
+  fault?: "interrupt-after-1" | "no-activity-permission" | "withdraw-product-after-propose";
+  expect: {
+    /** Draft quotes made (twice = a failure). */
+    quotes: number;
+    /** Follow-up activities scheduled (twice = a failure). */
+    followUps: number;
+    /** The plan as it ends: finished, or paused at this step. */
+    plan: "done" | { pausedAt: number };
+    /** A customer message drafted in the same request: offered as its own Send card, never sent by the plan. */
+    sendCard?: boolean;
+    /** Said in the last answer or the plan card when the plan stopped — what did NOT happen. */
+    mustSay?: RegExp;
+  };
+  note?: string;
+};
+
+export type PlanOutcome = {
+  quotes: number;
+  followUps: number;
+  /** Customer messages that actually went out (WhatsApp/email to a customer). Must be 0 — nobody pressed Send. */
+  customerSends: number;
+  plan: { status: string; pausedAt?: number } | null;
+  sendCards: number;
+  /** The answers, then the plan card's summary and step messages after the last Confirm/Retry. */
+  answers: string[];
+};
+
+export const PLAN_SCENARIOS: PlanScenario[] = [
+  {
+    id: "werner-whole-plan",
+    turns: [{ channel: "chat", ask: "Quote Anna Jacobs for a Rover XL in white, send me the PDF, draft her an email about it and remind me to call her Friday at 10", confirmPlan: true }],
+    expect: { quotes: 1, followUps: 1, plan: "done", sendCard: true },
+    note: "One plan card, one Confirm: the quote, the PDF (with the quote — not twice), the reminder. The email stays its own Send card and is NOT sent.",
+  },
+  {
+    id: "interrupted-then-confirm-twice",
+    turns: [{ channel: "chat", ask: "Quote Anna Jacobs for a Rover XL in white and remind me to call her Friday at 10", confirmPlan: true, retry: true }],
+    fault: "interrupt-after-1",
+    expect: { quotes: 1, followUps: 1, plan: "done" },
+    note: "The quote ran, the request died before the plan heard; Confirm pressed twice at once afterwards. One quote, one reminder.",
+  },
+  {
+    id: "no-permission-for-one-step",
+    turns: [{ channel: "chat", ask: "Quote Anna Jacobs for a Rover XL in white and remind me to call her Friday at 10", confirmPlan: true }],
+    fault: "no-activity-permission",
+    expect: { quotes: 1, followUps: 0, plan: { pausedAt: 2 }, mustSay: /step 2/i },
+    note: "Step 1 ran; step 2 is refused by the activity action's own permission check. The plan stops there and says so — it does not report success.",
+  },
+  {
+    id: "stock-unavailable-mid-plan",
+    turns: [{ channel: "chat", ask: "Remind me to call Anna Jacobs Friday at 10, then quote her a Rover XL in white", confirmPlan: true }],
+    fault: "withdraw-product-after-propose",
+    expect: { quotes: 0, followUps: 1, plan: { pausedAt: 2 }, mustSay: /catalogue changed|no longer|not on sale/i },
+    note: "The reminder ran; the quote step finds the product gone and is refused before anything is written. Nothing is made at an old price.",
+  },
+];
+
+/**
+ * Score one plan conversation. WORK FIRST: the quotes and follow-ups the
+ * database holds, how the plan ended, and NO customer contact without a Send —
+ * if any of that is wrong the score is 0, however good the answers read
+ * ("the work wasn't done but the answer sounds fine" must fail).
+ */
+export function scorePlanScenario(scenario: PlanScenario, outcome: PlanOutcome): Score {
+  const e = scenario.expect;
+  const planOk = e.plan === "done"
+    ? outcome.plan?.status === "done"
+    : outcome.plan?.status === "paused" && outcome.plan.pausedAt === e.plan.pausedAt;
+  const work: CheckResult[] = [
+    { name: "work-quotes", ok: outcome.quotes === e.quotes, detail: `quotes=${outcome.quotes}, want ${e.quotes}` },
+    { name: "work-follow-ups", ok: outcome.followUps === e.followUps, detail: `follow-ups=${outcome.followUps}, want ${e.followUps}` },
+    { name: "work-plan", ok: planOk, detail: `plan=${JSON.stringify(outcome.plan)}, want ${JSON.stringify(e.plan)}` },
+    { name: "no-customer-contact", ok: outcome.customerSends === 0, detail: `sent=${outcome.customerSends} with no Send click` },
+  ];
+  const checks: CheckResult[] = [...work];
+  if (e.sendCard) checks.push({ name: "send-card", ok: outcome.sendCards >= 1, detail: `send cards=${outcome.sendCards}` });
+  const said = outcome.answers.join("\n");
+  if (e.mustSay) checks.push({ name: "says-what-stopped", ok: e.mustSay.test(said), detail: "must say which step did not run" });
+  // A plan that did not finish must never be reported as finished.
+  if (e.plan !== "done") checks.push({ name: "no-false-done", ok: !/\b(all done|everything (is|was) done|every step ran)\b/i.test(said), detail: "claimed it was all done" });
+  const passed = checks.filter((c) => c.ok).length;
+  const score = work.every((c) => c.ok) ? Math.round((passed / checks.length) * 100) : 0;
+  return { scenarioId: scenario.id, score, checks };
+}

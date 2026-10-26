@@ -340,6 +340,13 @@ jobs:
         # sheet never reached, and the policy refusing it under a NOBYPASSRLS role; one sheet, one quote.
         run: npm run test:assistant-task
 
+      - name: DAX multi-step plans -- one Confirm, each step at most once, stops and resumes honestly
+        # Roadmap Phase 3: a plan proposed from real cards (the customer email left out as its own Send card);
+        # one Confirm runs each step through its card's own action; Confirm twice at once, and a request that
+        # died part-way, make one quote and one reminder; a step refused for permission or a product taken off
+        # sale stops the plan and Retry carries on; somebody else's, another workspace's, expired or closed: nothing.
+        run: npm run test:assistant-plans
+
       - name: Run two-tenant end-to-end CRM isolation suite
         # Ordinary CRM flows run as two different tenants through the REAL scoped
         # client under the restricted role -- the regression guard for real-flow
