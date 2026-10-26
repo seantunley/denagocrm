@@ -80,7 +80,9 @@ test("a card only for a draft they may edit and open, for rows that are on it, w
   const branch = assistant.slice(assistant.indexOf('if (p.type === "quote_change")'), assistant.indexOf('if (p.type === "quote_add")'));
   assert.match(branch, /if \(!\(await hasPermission\(user, "quotes\.edit"\)\)\) \{ problems\.push\("Your role can't edit quotes\."\); continue; \}/);
   // Not there and not theirs are told the same way: no card, and no hint that the quote exists.
-  assert.match(branch, /if \(!quote \|\| !\(await canAccessQuote\(user, quote\.id\)\)\) \{ problems\.push\(`I can't find quote \$\{p\.quote\} among the ones you can open\.`\); continue; \}/);
+  // The quote named, or — with no number — the job sheet's own quote (an id the CRM gave it); either way access-checked.
+  assert.match(branch, /const quoteRef = p\.quote \?\? quoteSheet\?\.quoteId;/);
+  assert.match(branch, /if \(!quote \|\| !\(await canAccessQuote\(user, quote\.id\)\)\) \{ problems\.push\(`I can't find \$\{p\.quote \? `quote \$\{p\.quote\}` : "this job sheet's quote"\} among the ones you can open\.`\); continue; \}/);
   assert.match(branch, /if \(quote\.status !== "draft" \|\| !quote\.contactId\) \{ problems\.push\(/);
   assert.ok(branch.indexOf("canAccessQuote(user, quote.id)") < branch.indexOf("const ref = `Q-${quote.number}`;"), "nothing about the quote is said before access is checked");
   assert.match(branch, /await prisma\.quote\.findFirst\(/);
@@ -173,12 +175,13 @@ test("THE ANSWER IS REPLACED when it speaks of a task that was not set up — ne
   // Wired: decided from the cards that came out and the reasons the tasks gave; it REPLACES the answer that is
   // shown AND saved — only where tasks can be proposed at all — and a replaced answer carries no citations.
   const assistant = code("src/lib/crmAssistant.ts");
-  assert.match(assistant, /const actions = !proposes \? \[\] : await resolveActions\(user, proposals, problems\)\.catch\(/);
+  assert.match(assistant, /const actions = !proposes \? \[\] : await resolveActions\(user, proposals, problems, taskWrite\?\.ok \? taskWrite\.sheet : null\)\.catch\(/);
   // A check-back DAX set itself (proactive DAX part 3) is a task that WAS set up, so it isn't counted as one that came to nothing.
   assert.match(assistant, /const settled = proposes \? settledAnswer\(resolved\.plain, actions, problems, Math\.max\(0, reply\.attempted - checkBacks\.length - actions\.length - problems\.length\)\) : null;/);
-  assert.match(assistant, /const cited = \(settled \?\? resolved\.cited \+ note\) \+ checkBackLine;\s*const answer = \(settled \?\? resolved\.plain \+ note\) \+ checkBackLine;/);
+  // The job sheet's line (Phase 1) is the CRM's own, added after — like the check-back line.
+  assert.match(assistant, /const cited = \(settled \?\? resolved\.cited \+ note\) \+ checkBackLine \+ taskLine;\s*const answer = \(settled \?\? resolved\.plain \+ note\) \+ checkBackLine \+ taskLine;/);
   assert.match(assistant, /\.\.\.\(source === "chat" && evidence\.length && !settled \? \{ cited, evidence \} : \{\}\),/);
-  const answerAt = assistant.indexOf("const answer = (settled ?? resolved.plain + note) + checkBackLine;");
+  const answerAt = assistant.indexOf("const answer = (settled ?? resolved.plain + note) + checkBackLine + taskLine;");
   assert.ok(answerAt > 0 && answerAt < assistant.indexOf("tools: observations.map((o) => ({ tool: o.tool, args: o.args })) as object,"), "before the turn is saved, so the kept answer is the true one");
 });
 

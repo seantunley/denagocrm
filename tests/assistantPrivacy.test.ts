@@ -133,7 +133,9 @@ test("customer-authored text reaches the model stripped and fenced as data", asy
   assert.match(lib, /if \(typeof value === "string"\) return stripInvisible\(value\);/, "every string in every observation is stripped");
   assert.match(lib, /const question = stripInvisible\(asked\);/);
   assert.match(lib, /const conversation = history\.length \? resultsBlock\("Earlier turns \(context only\):", stripInvisible\(conversationBlock\(history\)\)\) : "";/, "earlier turns are fenced too");
-  assert.equal((lib.match(/resultsBlock\(/g) ?? []).length, 3, "both steps fence their results, and the earlier turns");
+  // Job sheets (Phase 1) carry what the model wrote from customer text: fenced too.
+  assert.match(lib, /const jobSheets = tasks\.length \? resultsBlock\("Open job sheets \(context only\):", stripInvisible\(taskBlock\(tasks\)\)\) : "";/, "open job sheets are fenced too");
+  assert.equal((lib.match(/resultsBlock\(/g) ?? []).length, 4, "both steps fence their results, the earlier turns and the open job sheets");
 });
 
 test("a scheduled run learns nothing; the provider's error text never reaches the person", async () => {

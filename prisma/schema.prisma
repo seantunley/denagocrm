@@ -1113,10 +1113,48 @@ model AssistantTurn {
   refs       String[]  @default([])
   /// state.tags, as a column: cheap overlap matching in recall.
   tags       String[]  @default([])
+  /// The job sheet (AssistantTask) this answer started or updated, if any.
+  taskId     String?
   createdAt  DateTime  @default(now())
 
   @@index([tenantId, userId, createdAt])
   @@index([createdAt])
+}
+
+/// A job sheet DAX keeps for one piece of work ("quote for Anna: Rover XL,
+/// white, delivery R6 500, quote not made yet") — so a correction changes one
+/// line of it and "continue that quote" tomorrow, on WhatsApp or in the CRM,
+/// picks up the same sheet (assistantTask.ts). Private to the person. Record ids
+/// on it come from the CRM (lookups / a confirmed card), never the model, and
+/// are re-checked against the person's access every time it is read. Closes
+/// itself after 14 days without activity; deleted 30 days after the last.
+model AssistantTask {
+  id         String    @id @default(cuid())
+  tenantId   String
+  userId     String
+  /// quote (the only kind so far)
+  kind       String
+  title      String
+  /// open | done | closed
+  status     String    @default("open")
+  contactId  String?
+  leadId     String?
+  /// Set only from a confirmed quote_build's result.
+  quoteId    String?
+  /// { lines, fees, confirmed, missing } (assistantTaskRules.TaskDetails)
+  details    Json
+  /// { done, outstanding }
+  steps      Json
+  nextAction String?
+  /// Bumped on every write: an answer that read an older version does not overwrite a newer one.
+  version    Int       @default(0)
+  createdAt  DateTime  @default(now())
+  /// Last ACTIVITY (set by hand, not @updatedAt): closing it on its own does not count as activity.
+  updatedAt  DateTime  @default(now())
+  closedAt   DateTime?
+
+  @@index([tenantId, userId, status, updatedAt])
+  @@index([updatedAt])
 }
 
 /// One question asked in chat, from the moment it arrives until it is answered

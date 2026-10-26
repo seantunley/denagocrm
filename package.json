@@ -27,6 +27,8 @@
     "test:integrity": "tsx --tsconfig tsconfig.scripts.json scripts/test-integrity.ts",
     "test:scoped-transactions": "tsx --tsconfig tsconfig.harness.json scripts/test-scoped-transactions.ts",
     "test:email-bounces": "tsx --tsconfig tsconfig.harness.json scripts/test-email-bounces.ts",
+    "test:assistant-task": "tsx --tsconfig tsconfig.harness.json scripts/test-assistant-task.ts",
+    "eval:dax-tasks": "tsx --tsconfig tsconfig.harness.json scripts/eval-dax-tasks.ts",
     "test:signing-upgrade": "tsx --tsconfig tsconfig.scripts.json scripts/test-signing-upgrade.ts",
     "test:tenant-guard": "tsx --tsconfig tsconfig.scripts.json scripts/test-tenant-guard.ts",
     "test:rls-restricted": "tsx --tsconfig tsconfig.scripts.json scripts/test-rls-restricted.ts",

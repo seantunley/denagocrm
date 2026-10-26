@@ -120,7 +120,8 @@ export const proposedAction = z.discriminatedUnion("type", [
         discountPct: z.number().min(0).max(100).optional(),
         colour: text.max(60).optional(),
       }).strict(),
-    ).min(1).max(QUOTE_BUILD_MAX_LINES),
+    // Left out for a quote on a job sheet: the CRM fills the lines from the sheet (assistantTaskRules).
+    ).min(1).max(QUOTE_BUILD_MAX_LINES).optional(),
     // A fee said with the request ("delivery to Hermanus, R6 500") goes on the SAME draft — one Confirm, not a
     // second quote_add that needs the number of a quote not created yet (Sean, 2026-10-24). The amount is the
     // person's, as on quote_add; the card shows it before anything is saved.
@@ -137,7 +138,8 @@ export const proposedAction = z.discriminatedUnion("type", [
   // It only adds: nothing already on the quote is changed or removed.
   z.object({
     type: z.literal("quote_add"),
-    quote: text.max(40),
+    // Left out on a job sheet that has its quote: the CRM uses the sheet's.
+    quote: text.max(40).optional(),
     fees: z.array(
       z.object({ label: text.max(120), amount: z.number().positive().max(QUOTE_ADD_MAX_FEE_RANDS), delivery: z.boolean().optional() }).strict(),
     ).max(QUOTE_ADD_MAX_FEES).optional(),
@@ -159,7 +161,8 @@ export const proposedAction = z.discriminatedUnion("type", [
   // A product line's PRICE is not changeable here: that stays the catalogue's.
   z.object({
     type: z.literal("quote_change"),
-    quote: text.max(40),
+    // Left out on a job sheet that has its quote: the CRM uses the sheet's.
+    quote: text.max(40).optional(),
     fees: z.array(
       z.object({
         // Left out when the quote has only one fee: there is nothing to tell apart.
@@ -566,11 +569,12 @@ export type ActionCard =
   // leadId null: a quote for the customer directly, on no deal — leadLabel is then the customer's name.
   // `confirmKey`: this card is carried out once, however often Confirm reaches the server (CONFIRM_KEY).
   // contactId null + createCustomer: the deal has no customer yet — Confirm makes one from its details first.
-  | { id: string; kind: "quote_build"; leadId: string | null; leadLabel: string; title: string; reason?: string; contactId: string | null; createCustomer?: true; lines: QuoteBuildLine[]; fees?: QuoteAddFee[]; text: string; confirmKey: string }
+  // `taskId`: the job sheet it came from (assistantTask) — Confirm records the result there. Untrusted like the rest of the card.
+  | { id: string; kind: "quote_build"; leadId: string | null; leadLabel: string; title: string; reason?: string; contactId: string | null; createCustomer?: true; lines: QuoteBuildLine[]; fees?: QuoteAddFee[]; text: string; confirmKey: string; taskId?: string }
   // An addition to a DRAFT quote: `fees` at the amount the person said, `lines` at the catalogue price each was shown at.
-  | { id: string; kind: "quote_add"; leadId: string | null; leadLabel: string; title: string; reason?: string; quoteId: string; quoteNumber: number; contactId: string; lines: QuoteBuildLine[]; fees: QuoteAddFee[]; text: string; confirmKey: string }
+  | { id: string; kind: "quote_add"; leadId: string | null; leadLabel: string; title: string; reason?: string; quoteId: string; quoteNumber: number; contactId: string; lines: QuoteBuildLine[]; fees: QuoteAddFee[]; text: string; confirmKey: string; taskId?: string }
   // Changes to rows already on a DRAFT quote, each with the row as it was shown (`was`).
-  | { id: string; kind: "quote_change"; leadId: string | null; leadLabel: string; title: string; reason?: string; quoteId: string; quoteNumber: number; contactId: string; changes: QuoteChange[]; text: string; confirmKey: string }
+  | { id: string; kind: "quote_change"; leadId: string | null; leadLabel: string; title: string; reason?: string; quoteId: string; quoteNumber: number; contactId: string; changes: QuoteChange[]; text: string; confirmKey: string; taskId?: string }
   // A quote's PDF to the confirmer's own linked WhatsApp — the card names a quote, never a recipient.
   | { id: string; kind: "quote_pdf"; leadId: string | null; leadLabel: string; title: string; reason?: string; quoteId: string; quoteNumber: number }
   // The person's own calendar, never somebody else's: nothing on the card says whose it is, so it can only be the confirmer's.

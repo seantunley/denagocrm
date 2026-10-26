@@ -19,6 +19,9 @@ import { deleteAssistantNote, saveMyAssistantNote } from "@/app/actions/assistan
 import { deleteAssistantSchedule, setAssistantScheduleActive } from "@/app/actions/assistantSchedules";
 import EditScheduleDialog from "@/components/EditScheduleDialog";
 import { deleteAssistantWatch, setAssistantWatchActive } from "@/app/actions/assistantWatches";
+import { setAssistantTaskOpen } from "@/app/actions/assistantTasks";
+import { tasksForAskPage } from "@/lib/assistantTask";
+import { TASK_STALE_DAYS } from "@/lib/assistantTaskRules";
 import { ONE_SHOT_KINDS, type WatchKind } from "@/lib/assistantWatchRules";
 import { SaveForm, SaveButton } from "@/components/SaveForm";
 import { basePrisma, prisma } from "@/lib/db";
@@ -56,7 +59,7 @@ export default async function AssistantPage() {
     "activities.view", "activities.manage",
   );
   if (!(await isModuleEnabled("automation"))) notFound();
-  const [listen, connected, profile, history, aboutMe, schedules, whatsapp, watches, saved] = await Promise.all([
+  const [listen, connected, profile, history, aboutMe, schedules, whatsapp, watches, saved, tasks] = await Promise.all([
     assistantVoiceRepliesOn().catch(() => false),
     isCodexConnected(),
     getSetting(ASSISTANT_PROFILE_KEY).then(parseProfile),
@@ -83,9 +86,13 @@ export default async function AssistantPage() {
       take: 20,
       select: { id: true, card: true, createdAt: true },
     }),
+    // This person's own job sheets: open ones, and those finished or closed in the last 30 days.
+    tasksForAskPage(user.id),
     // Being on this page is seeing them: the bubble's unread dot goes.
     markScheduledTurnsSeen(user.id),
   ]);
+  const openSheets = tasks.filter((t) => t.status === "open");
+  const pastSheets = tasks.filter((t) => t.status !== "open");
   // Proactive DAX: the owner's switch for the workspace, and this person's own (lib/proactive.ts).
   const [proactiveWorkspace, proactiveMe, briefAt] = await Promise.all([
     getSetting(ASSISTANT_PROACTIVE_KEY).then(proactiveOn).catch(() => false),
@@ -130,6 +137,63 @@ export default async function AssistantPage() {
       )}
       </div>
       <aside className="min-w-0 space-y-6">
+      {/* Everything DAX holds is shown and closable here (nothing hidden): the job sheets it keeps for work in progress. */}
+      <section className="card space-y-3 p-4 text-sm">
+        <h2 className="font-medium">📋 Job sheets</h2>
+        <p className="text-muted-foreground">
+          When you put a quote together with {profile.name}, it keeps a job sheet — customer, products, fees, what&apos;s still missing — so &ldquo;continue that quote&rdquo; works tomorrow, here or on WhatsApp. A sheet closes itself after {TASK_STALE_DAYS} days without activity.
+        </p>
+        {openSheets.length > 0 && (
+          <ul className="divide-y divide-border/50">
+            {openSheets.map((t) => (
+              <li key={t.id} className="flex items-start justify-between gap-3 py-2">
+                <div className="min-w-0">
+                  <p className="font-medium">{t.title}</p>
+                  {t.nextAction && <p className="text-muted-foreground">Next: {t.nextAction}</p>}
+                  <p className="text-xs text-muted-foreground">
+                    Last worked on {saWhen(t.updatedAt)}
+                    {t.quoteId && (
+                      <>
+                        {" · "}
+                        <Link href={`/quotes?edit=${t.quoteId}`} className="text-primary underline">Open the quote</Link>
+                      </>
+                    )}
+                  </p>
+                </div>
+                <ConfirmActionDialog
+                  trigger={<button type="button" className="shrink-0 text-xs text-muted-foreground hover:text-foreground">Close</button>}
+                  title="Close this job sheet?"
+                  description={`${profile.name} stops bringing it up. Nothing in the CRM changes — any quote stays as it is — and you can reopen it here for 30 days.`}
+                  confirmLabel="Close"
+                  onConfirm={setAssistantTaskOpen.bind(null, t.id, false)}
+                />
+              </li>
+            ))}
+          </ul>
+        )}
+        {pastSheets.length > 0 && (
+          <details>
+            <summary className="cursor-pointer text-xs text-muted-foreground">Finished or closed ({pastSheets.length})</summary>
+            <ul className="mt-2 divide-y divide-border/50">
+              {pastSheets.map((t) => (
+                <li key={t.id} className="flex items-start justify-between gap-3 py-2">
+                  <div className="min-w-0">
+                    <p>{t.title}</p>
+                    <p className="text-xs text-muted-foreground">{t.status === "done" ? "Done" : "Closed"} · last worked on {saWhen(t.updatedAt)}</p>
+                  </div>
+                  <ConfirmActionDialog
+                    trigger={<button type="button" className="shrink-0 text-xs text-muted-foreground hover:text-foreground">Reopen</button>}
+                    title="Reopen this job sheet?"
+                    description={`${profile.name} picks it up again in your conversations, here and on WhatsApp.`}
+                    confirmLabel="Reopen"
+                    onConfirm={setAssistantTaskOpen.bind(null, t.id, true)}
+                  />
+                </li>
+              ))}
+            </ul>
+          </details>
+        )}
+      </section>
       <section className="card space-y-3 p-4 text-sm">
         <h2 className="font-medium">⏰ Scheduled</h2>
         {schedules.length === 0 ? (

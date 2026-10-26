@@ -142,7 +142,8 @@ test("the card is built from the CATALOGUE as the workspace has it, for someone 
   assert.match(build, /if \(!\(await hasPermission\(user, "quotes\.create"\)\)\) \{ problems\.push\("Your role can't create quotes\."\); continue; \}/);
   // The workspace's own client, products on sale only; a line that matches no ONE product drops the whole card.
   // (Looked up across the whole catalogue — tests/catalogueLookup.test.ts.)
-  assert.match(build, /const matched = await Promise\.all\(p\.lines\.map\(\(line\) => resolveCatalogueProduct\(line\)\)\);\s*const unknown = [^\n]+\n\s*if \(unknown\.length\) \{ problems\.push\(`Not one product in the catalogue:/);
+  // The lines are the job sheet's when there is one (Phase 1), else the proposal's — the catalogue decides either way.
+  assert.match(build, /const matched = await Promise\.all\(askedLines\.map\(\(line\) => resolveCatalogueProduct\(line\)\)\);\s*const unknown = [^\n]+\n\s*if \(unknown\.length\) \{ problems\.push\(`Not one product in the catalogue:/);
   assert.match(code("src/lib/catalogueLookup.ts"), /const ON_SALE = \{ active: true, deletedAt: null \};/);
   // The price on the card is the product's, not anything from the proposal.
   assert.match(build, /unitPriceCents: product\.basePriceCents/);

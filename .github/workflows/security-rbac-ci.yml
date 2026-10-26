@@ -334,6 +334,12 @@ jobs:
         # alert that reaches nobody staying owed until a retry is accepted.
         run: npm run test:email-bounces
 
+      - name: DAX job sheets -- locked writes, ids re-checked, the sheet fills the quote card, RLS
+        # Roadmap Phase 1: a sheet written and corrected through the scoped client with enforcement on;
+        # WhatsApp and the CRM writing at once (one wins, the other is told); another person's or workspace's
+        # sheet never reached, and the policy refusing it under a NOBYPASSRLS role; one sheet, one quote.
+        run: npm run test:assistant-task
+
       - name: Run two-tenant end-to-end CRM isolation suite
         # Ordinary CRM flows run as two different tenants through the REAL scoped
         # client under the restricted role -- the regression guard for real-flow

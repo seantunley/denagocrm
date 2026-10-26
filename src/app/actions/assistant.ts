@@ -28,6 +28,7 @@ import { sendEmailAction } from "@/app/actions/emails";
 import { openJobCard } from "@/app/actions/jobcards";
 import { canAccessContact, canAccessLead, canAccessQuote, canAccessVehicle, hasPermission } from "@/lib/permissions";
 import { createWatchForUser } from "@/lib/assistantWatch";
+import { recordTaskProgress } from "@/lib/assistantTask";
 import { assistantVoiceRepliesOn } from "@/lib/assistantVoice";
 import { ASSISTANT_PERMISSIONS } from "@/lib/assistantUser";
 import { MAX_ACTIVE_SCHEDULES, describeSchedule, nextRun, scheduleInput } from "@/lib/assistantSchedule";
@@ -399,6 +400,9 @@ export async function runAssistantAction(
           // creates the quote, so a Confirm pressed again after a lost answer creates
           // no second quote. (A card proposed before keys existed has none, and runs as it did.)
           ...(keyed ? { confirmKey: card.confirmKey } : {}),
+          // ONE JOB SHEET, ONE QUOTE: the sheet is locked and linked in the save's own transaction (saveQuoteDraft) —
+          // a second card for the same sheet, with its own key, gets the sheet's quote back instead of a new one.
+          ...(card.taskId ? { assistantTaskId: card.taskId } : {}),
           items: lines.map((line) => {
             const product = byId.get(line.productId)!;
             return {
@@ -415,7 +419,11 @@ export async function runAssistantAction(
           return { ok: false as const, error: "The quote couldn't be saved just now.", thrown: true as const };
         });
         // A Confirm that reached the server twice: the first made the quote; this one did nothing.
-        if (!saved.ok && "repeated" in saved && saved.repeated) return { ok: true, success: "Already created — nothing was made twice. It has NOT been sent to the customer." };
+        if (!saved.ok && "repeated" in saved && saved.repeated) {
+          return saved.quote
+            ? { ok: true, success: `This job sheet already has its quote, Q-${saved.quote.number} — nothing was made twice. It has NOT been sent to the customer.`, href: `/quotes?edit=${saved.quote.id}`, quote: saved.quote }
+            : { ok: true, success: "Already created — nothing was made twice. It has NOT been sent to the customer." };
+        }
         // saveQuoteDraft validates before it writes (a colour the product does not come in, say).
         if (!saved.ok) return resumes ? retryAfterCustomer(saved.error) : { ok: false, error: saved.error };
         // On the deal's record when there is one; otherwise on the customer's.
@@ -514,6 +522,7 @@ export async function runAssistantAction(
           user,
           ...(quote.leadId ? { leadId: quote.leadId } : { contactId: quote.contactId }),
         });
+        await recordTaskProgress(user.id, card.taskId, { done: `Q-${saved.quote.number} changed` });
         const after = await prisma.quote.findUnique({ where: { id: quote.id }, include: { items: true, fees: true } }).catch(() => null);
         const total = after ? formatZAR(Math.round(payableTotalCents(after))) : null;
         await sendQueuedPdfNow();
@@ -578,6 +587,7 @@ export async function runAssistantAction(
           user,
           ...(quote.leadId ? { leadId: quote.leadId } : { contactId: quote.contactId }),
         });
+        await recordTaskProgress(user.id, card.taskId, { done: `Added to Q-${saved.quote.number}` });
         const after = await prisma.quote.findUnique({ where: { id: quote.id }, include: { items: true, fees: true } }).catch(() => null);
         const total = after ? formatZAR(Math.round(payableTotalCents(after))) : null;
         await sendQueuedPdfNow();

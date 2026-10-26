@@ -131,7 +131,8 @@ test("the knowledge lookup shows a product from anywhere in a large catalogue", 
 test("both readers use it — neither keeps a first-N page of the catalogue", () => {
   const lib = readFileSync("src/lib/crmAssistant.ts", "utf8");
   assert.match(lib, /seesProducts \? knowledgeProducts\(words\) : Promise\.resolve\(\[\]\),/);
-  assert.match(lib, /const matched = await Promise\.all\(p\.lines\.map\(\(line\) => resolveCatalogueProduct\(line\)\)\);/);
+  // quote_build's lines: the job sheet's (Phase 1), or the proposal's own — resolved the same way.
+  assert.match(lib, /const matched = await Promise\.all\(askedLines\.map\(\(line\) => resolveCatalogueProduct\(line\)\)\);/);
   assert.doesNotMatch(lib, /prisma\.product\.findMany\(\{\s*where: \{ active: true, deletedAt: null \},\s*orderBy: \{ name: "asc" \},\s*take: (60|200),/);
   // One rule for what a name means: the lookup hands its candidates to matchCatalogueProduct.
   const lookup = readFileSync("src/lib/catalogueLookup.ts", "utf8");
