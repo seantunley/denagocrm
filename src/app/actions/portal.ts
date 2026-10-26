@@ -21,11 +21,11 @@ import { contactName } from "@/lib/format";
 import {
   OTP_SEND_POLICY,
   OTP_VERIFY_POLICY,
-  checkRateLimit,
   clearRateLimit,
   getRequestIp,
   rateLimitKey,
   registerRateLimitAttempt,
+  reserveRateLimitAttempt,
 } from "@/lib/rateLimit";
 
 export type PortalAuthState = { ok?: boolean; sent?: boolean; error?: string };
@@ -289,7 +289,8 @@ async function completePortalOtp(email: string, code: string): Promise<PortalAut
   const ip = await getRequestIp();
   const otpKey = await portalOtpKey(email);
   const verifyKey = rateLimitKey("portal-otp-verify", `${otpKey}:${ip}`);
-  if (!(await checkRateLimit(verifyKey)).allowed) {
+  // Counted before the code is checked (security audit 2026-10-25); a right code clears it below.
+  if (!(await reserveRateLimitAttempt(verifyKey, OTP_VERIFY_POLICY)).allowed) {
     return { error: "Too many incorrect codes. Request a new code later." };
   }
 
@@ -308,7 +309,6 @@ async function completePortalOtp(email: string, code: string): Promise<PortalAut
   });
   if (gate.count !== 1) return { error: "That code has expired — request a new one." };
   if (!(await bcrypt.compare(code, challenge.codeHash))) {
-    await registerRateLimitAttempt(verifyKey, OTP_VERIFY_POLICY);
     return { error: "That code isn't right — check and try again." };
   }
 
