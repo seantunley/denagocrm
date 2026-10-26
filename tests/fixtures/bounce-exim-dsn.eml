@@ -3,7 +3,7 @@ Envelope-to: crm@denagocpt.co.za
 Received: from mailnull by bayek.aserv.co.za with local (Exim 4.98)
 	id 1t2abc-000XyZ-1a
 	for crm@denagocpt.co.za; Mon, 12 Oct 2026 12:00:05 +0200
-X-Failed-Recipients: erikjvr@mweb.co.za
+X-Failed-Recipients: customer@isp.example
 Auto-Submitted: auto-replied
 From: Mail Delivery System <Mailer-Daemon@bayek.aserv.co.za>
 To: crm@denagocpt.co.za
@@ -21,7 +21,7 @@ This message was created automatically by mail delivery software.
 A message that you sent could not be delivered to one or more of its
 recipients. This is a permanent error. The following address(es) failed:
 
-  erikjvr@mweb.co.za
+  customer@isp.example
     host mx.spamexperts.com [196.192.175.69]
     SMTP error from remote mail server after end of data:
     550 High probability of spam
@@ -32,7 +32,7 @@ Content-type: message/delivery-status
 Reporting-MTA: dns; bayek.aserv.co.za
 
 Action: failed
-Final-Recipient: rfc822;erikjvr@mweb.co.za
+Final-Recipient: rfc822;customer@isp.example
 Status: 5.0.0
 Remote-MTA: dns; mx.spamexperts.com
 Diagnostic-Code: smtp; 550 High probability of spam
@@ -42,14 +42,14 @@ Content-type: message/rfc822
 
 Return-path: <crm@denagocpt.co.za>
 From: "Sean Tunley - Denago Cape Town" <crm@denagocpt.co.za>
-To: erikjvr@mweb.co.za
+To: customer@isp.example
 Subject: Your quote Q-1029
 Message-ID: <a1b2c3d4-e5f6-7890@denagocpt.co.za>
 Date: Mon, 12 Oct 2026 10:00:01 +0000
 MIME-Version: 1.0
 Content-Type: text/plain; charset=utf-8
 
-Hi Erik, please find your quote attached.
+Hi there, please find your quote attached.
 Message-ID: <not-this-one@example.com>
 
 --1760263205-eximdsn-123456--
