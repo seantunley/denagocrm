@@ -35,7 +35,9 @@ export default async function AssistantGoalsCard({ userId, name }: { userId: str
             <li key={g.id} className="flex items-start justify-between gap-3 py-2">
               <div className="min-w-0">
                 <p className="font-medium">{g.title}</p>
-                <p className="text-muted-foreground">{g.paused ? "Off — not checking" : g.nextAction}</p>
+                <p className="text-muted-foreground">
+                  {g.paused ? "Off — not checking" : g.proactiveOff ? "Paused — proactive DAX is off for you; switch it on and it picks up where the delivery is now" : g.nextAction}
+                </p>
                 {g.quoteId && <Link href={`/deals/${g.quoteId}`} className="text-xs text-primary underline">Open the deal</Link>}
               </div>
               <div className="flex shrink-0 gap-3">

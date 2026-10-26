@@ -213,5 +213,7 @@ test("RLS ships with the table, and the sheets are on the Ask page with Close", 
   assert.match(page, /setAssistantTaskOpen\.bind\(null, t\.id, false\)/, "Close");
   assert.match(page, /setAssistantTaskOpen\.bind\(null, t\.id, true\)/, "Reopen");
   const cron = src("src/app/api/cron/automations/route.ts");
-  assert.match(cron, /assistantTask\s*\n?\s*\.updateMany\(\{ where: \{ status: "open", updatedAt: \{ lt: new Date\(Date\.now\(\) - TASK_STALE_DAYS/);
+  // The 14-day close lives in pruneAssistantTasks (it leaves delivery goals alone); the real-DB test runs it.
+  assert.match(cron, /await pruneAssistantTasks\(\)/);
+  assert.match(src("src/lib/assistantGoals.ts"), /status: "open", updatedAt: \{ lt: daysAgo\(TASK_STALE_DAYS\) \}/);
 });

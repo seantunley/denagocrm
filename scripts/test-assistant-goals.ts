@@ -24,7 +24,8 @@ import { DEFAULT_TENANT_ID } from "../src/lib/tenant";
 import { runInTenantScope } from "../src/lib/tenantScope";
 import { __setTenantEnforcingForTests } from "../src/lib/tenantEnforcement";
 import type { PermissionUser } from "../src/lib/permissions";
-import { closeGoal, goalsForAskPage, runDeliveryGoals, setGoalPaused, startDeliveryGoal } from "../src/lib/assistantGoals";
+import { closeGoal, goalsForAskPage, pruneAssistantTasks, runDeliveryGoals, setGoalPaused, startDeliveryGoal } from "../src/lib/assistantGoals";
+import { withSystemScope } from "../src/lib/tenantScopeEntry";
 import { openTasks, tasksForAskPage } from "../src/lib/assistantTask";
 import { ASSISTANT_PROACTIVE_KEY, proactivePersonKey } from "../src/lib/proactiveRules";
 import { GOAL_SCENARIOS, scoreGoalScenario, formatReport } from "../evals/daxResearchQuality";
@@ -53,9 +54,9 @@ const STAGE = id("stage");
 const PRODUCT = id("product");
 const C = { anna: id("c-anna"), ben: id("c-ben"), notHis: id("c-nothis"), others: id("c-others") };
 const L = { anna: id("l-anna"), ben: id("l-ben") };
-const Q = { anna: id("q-anna"), ben: id("q-ben"), draft: id("q-draft"), lapsed: id("q-lapsed"), others: id("q-others"), modular: id("q-mod") };
+const Q = { anna: id("q-anna"), ben: id("q-ben"), draft: id("q-draft"), lapsed: id("q-lapsed"), others: id("q-others"), modular: id("q-mod"), quiet: id("q-quiet"), aged: id("q-aged") };
 const NO = 900_000_000 + Math.floor(Math.random() * 90_000_000);
-const NUM = { anna: NO, ben: NO + 1, draft: NO + 2, lapsed: NO + 3, others: NO + 4, modular: NO + 5 };
+const NUM = { anna: NO, ben: NO + 1, draft: NO + 2, lapsed: NO + 3, others: NO + 4, modular: NO + 5, quiet: NO + 6, aged: NO + 7 };
 const UNIT = { anna: id("u-anna"), modular: id("u-mod") };
 const scoped = <R>(fn: () => Promise<R>, tenantId = T) => runInTenantScope({ tenantId, system: false }, fn);
 const budget = { shouldStop: () => false };
@@ -109,6 +110,8 @@ async function seed() {
   await quote(Q.lapsed, NUM.lapsed, C.notHis, rep.id);
   await quote(Q.others, NUM.others, C.others, other.id);
   await quote(Q.modular, NUM.modular, C.anna, rep.id);
+  await quote(Q.quiet, NUM.quiet, C.anna, rep.id);
+  await quote(Q.aged, NUM.aged, C.anna, rep.id);
   // Both switches on for both people — proactive DAX's, which goals ride (default OFF).
   for (const key of settingKeys) await setSetting(key, "on");
 }
@@ -386,6 +389,53 @@ async function main() {
     await tick();
     check("module back on: it picks up where it was", (await alertsOf(modGoal)).some((a) => a.key.startsWith("next:documents:")));
     check("Close: closed by the person", await scoped(() => closeGoal(rep.id, modGoal)) && (await goal(modGoal))?.nextAction === "Closed by you");
+  }
+
+  console.log("\nProactive DAX switched off: the goal is paused, and nothing happens that nobody hears about (review of #922)");
+  {
+    const started = await scoped(() => startDeliveryGoal(rep, `Q-${NUM.quiet}`));
+    const quietGoal = started.ok ? started.id : "";
+    const qw = id("w-quiet");
+    await basePrisma.assistantWatch.create({ data: { id: qw, tenantId: T, userId: rep.id, kind: "quote_unsigned", quoteId: Q.quiet, thresholdHours: 48, label: "w" } });
+    await atSaHour(10, () => tick());
+    await setSetting(proactivePersonKey(rep.id), "off");
+    await quoteUpdate(Q.quiet, { depositPaidAt: new Date(), invoicedAt: new Date(), deliveryScheduledFor: new Date(), deliveredAt: new Date() });
+    await unfresh(quietGoal);
+    const v = (await goal(quietGoal))?.version;
+    const offPass = await atSaHour(10, () => tick());
+    const row = await goal(quietGoal);
+    check("switched off, then delivered: the pass leaves it exactly as it was — open, not advanced, no alert, its watch still on",
+      offPass.paused >= 1 && row?.status === "open" && row.version === v && (await alertsOf(quietGoal)).length === 0 && (await basePrisma.assistantWatch.findUnique({ where: { id: qw } }))?.active === true,
+      JSON.stringify(offPass));
+    check("…and the Ask page shows it paused because proactive DAX is off", (await scoped(() => goalsForAskPage(rep.id))).find((g) => g.id === quietGoal)?.proactiveOff === true);
+    await setSetting(proactivePersonKey(rep.id), "on");
+    await atSaHour(10, () => tick());
+    const after = await goal(quietGoal);
+    const alerts = await alertsOf(quietGoal);
+    check("switched back on: the next pass tells where it stands — ONE done alert, sent — finishes it and switches its reminders off",
+      alerts.length === 1 && alerts[0].key === "done" && alerts[0].turnId !== null && after?.status === "done" && (await basePrisma.assistantWatch.findUnique({ where: { id: qw } }))?.active === false,
+      JSON.stringify(alerts.map((a) => a.key)));
+    check("…and the page no longer says paused", (await scoped(() => goalsForAskPage(rep.id))).find((g) => g.id === quietGoal)?.proactiveOff === false);
+  }
+
+  console.log("\nRetention: the nightly maintenance (pruneAssistantTasks, as the automations cron runs it)");
+  {
+    const daysAgo = (d: number) => new Date(Date.now() - d * 86_400_000);
+    const open15 = await scoped(() => startDeliveryGoal(rep, `Q-${NUM.aged}`));
+    const g15 = open15.ok ? open15.id : "";
+    await basePrisma.assistantTask.update({ where: { id: g15 }, data: { updatedAt: daysAgo(15), createdAt: daysAgo(15) } });
+    const mk = (what: string, data: Record<string, unknown>) =>
+      basePrisma.assistantTask.create({ data: { id: id(what), tenantId: T, userId: rep.id, title: what, details: {}, steps: {}, kind: "delivery_goal", ...data }, select: { id: true } });
+    const g31 = (await mk("g31", { status: "open", quoteId: Q.aged, updatedAt: daysAgo(31), createdAt: daysAgo(31) })).id;
+    const done31 = (await mk("done31", { status: "done", updatedAt: daysAgo(40), closedAt: daysAgo(31) })).id;
+    const done10 = (await mk("done10", { status: "closed", updatedAt: daysAgo(40), closedAt: daysAgo(10) })).id;
+    const sheet15 = (await mk("sheet15", { kind: "quote", status: "open", updatedAt: daysAgo(15) })).id;
+    const sheet31 = (await mk("sheet31", { kind: "quote", status: "closed", updatedAt: daysAgo(31), closedAt: daysAgo(17) })).id;
+    const swept = await withSystemScope(() => pruneAssistantTasks());
+    const exists = async (tid: string) => (await basePrisma.assistantTask.findUnique({ where: { id: tid }, select: { status: true } }))?.status ?? null;
+    check("open goals 15 and 31 days quiet survive, still open", (await exists(g15)) === "open" && (await exists(g31)) === "open", JSON.stringify(swept));
+    check("a goal finished over 30 days ago is removed; one finished 10 days ago stays (measured from when it finished)", (await exists(done31)) === null && (await exists(done10)) === "closed");
+    check("job sheets keep their rule: 15 days quiet → closed, 31 → removed", (await exists(sheet15)) === "closed" && (await exists(sheet31)) === null);
   }
 
   console.log("\nNever the customer");

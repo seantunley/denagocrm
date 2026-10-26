@@ -1,5 +1,6 @@
 import "server-only";
-import { prisma } from "./db";
+import { basePrisma, prisma } from "./db";
+import { TASK_STALE_DAYS } from "./assistantTaskRules";
 import { logError } from "./errorLog";
 import { logAudit } from "./audit";
 import { assistantUserFor } from "./assistantUser";
@@ -40,7 +41,9 @@ import type { CronSliceContext } from "./tenantCron";
  *
  * NOT CLOSED BY THE 14-DAY RULE: a job sheet closes itself after 14 quiet days; a delivery goal stays live until
  * the cart is delivered, the deal is lost, or the person closes it — a delivery waiting three weeks for stock is
- * exactly what it should keep watching. Goals are kept out of the job-sheet list and the prompt (assistantTask.ts)
+ * exactly what it should keep watching. The retention sweep (pruneAssistantTasks) never touches an open goal.
+ *
+ * PAUSED WHILE PROACTIVE DAX IS OFF for its person: not checked at all, so nothing happens that nobody hears about. Goals are kept out of the job-sheet list and the prompt (assistantTask.ts)
  * and shown in their own Ask-page section, with Off and Close.
  */
 
@@ -145,13 +148,16 @@ export async function startDeliveryGoal(user: PermissionUser, quoteRef: string, 
 
 /** The person's goals on the Ask page: every open one (however old — they don't close themselves), and those finished in the last 30 days. */
 export async function goalsForAskPage(userId: string, now = new Date()) {
+  const tenantId = ownedWriteTenantId();
   const rows = await prisma.assistantTask.findMany({
-    where: { tenantId: ownedWriteTenantId(), userId, kind: GOAL_KIND, OR: [{ status: "open" }, { updatedAt: { gte: new Date(now.getTime() - 30 * DAY) } }] },
+    where: { tenantId, userId, kind: GOAL_KIND, OR: [{ status: "open" }, { updatedAt: { gte: new Date(now.getTime() - 30 * DAY) } }] },
     orderBy: { updatedAt: "desc" },
     take: 50,
     select: { id: true, title: true, status: true, quoteId: true, nextAction: true, details: true, updatedAt: true },
   });
-  return rows.map(({ details, ...row }) => ({ ...row, paused: readGoalState(details, now).paused === true }));
+  // Open goals wait (paused) while proactive DAX is off for them — said so on the page, not hidden.
+  const proactiveOff = !(await switchedOn(tenantId, userId));
+  return rows.map(({ details, ...row }) => ({ ...row, paused: readGoalState(details, now).paused === true, proactiveOff: proactiveOff && row.status === "open" }));
 }
 
 /** Undelivered alerts this goal raised (held overnight, past the ceiling, or waiting for a retry) → settled, never sent. */
@@ -226,14 +232,45 @@ async function switchOffReminders(tx: Tx, tenantId: string, userId: string, quot
   return { watches: watches.count, checkBacks: ids.length };
 }
 
-export type GoalRun = { checked: number; alerted: number; finished: number; stopped: number };
+/**
+ * The nightly retention for DAX's AssistantTask rows (the automations cron's maintenance; review of #922).
+ * JOB SHEETS: an open one quiet for TASK_STALE_DAYS closes itself (still on the Ask page, reopenable), and every one
+ * goes 30 days after its last activity (closing is not activity). DELIVERY GOALS: an OPEN goal is never closed or
+ * deleted here — however long the delivery waits; one finished (done, lost, stopped, closed) goes 30 days after it
+ * finished. Platform-wide, so the caller runs it in the system scope.
+ */
+export async function pruneAssistantTasks(now = new Date()): Promise<{ closed: number; deleted: number }> {
+  const daysAgo = (days: number) => new Date(now.getTime() - days * DAY);
+  const stats = { closed: 0, deleted: 0 };
+  // Workspace by workspace, each named in the call (the tenant-access ratchet): a handful of cheap queries a night.
+  for (const { id: tenantId } of await basePrisma.tenant.findMany({ select: { id: true } })) {
+    const closed = await basePrisma.assistantTask.updateMany({
+      where: { tenantId, kind: { not: GOAL_KIND }, status: "open", updatedAt: { lt: daysAgo(TASK_STALE_DAYS) } },
+      data: { status: "closed", closedAt: now },
+    });
+    const sheetsGone = await basePrisma.assistantTask.deleteMany({ where: { tenantId, kind: { not: GOAL_KIND }, updatedAt: { lt: daysAgo(30) } } });
+    const goalsGone = await basePrisma.assistantTask.deleteMany({
+      where: {
+        tenantId,
+        kind: GOAL_KIND,
+        status: { not: "open" },
+        OR: [{ closedAt: { lt: daysAgo(30) } }, { closedAt: null, updatedAt: { lt: daysAgo(30) } }],
+      },
+    });
+    stats.closed += closed.count;
+    stats.deleted += sheetsGone.count + goalsGone.count;
+  }
+  return stats;
+}
+
+export type GoalRun = { checked: number; alerted: number; finished: number; stopped: number; paused: number };
 
 /**
  * The assistant cron's goal pass, in the workspace whose scope it has entered (runCronPerTenant). Plain queries.
  * Module off: nothing is checked and nothing changes — the goals wait, as they were, until it is back on.
  */
 export async function runDeliveryGoals(tenantId: string, budget: Pick<CronSliceContext, "shouldStop">, now = new Date()): Promise<GoalRun> {
-  const stats: GoalRun = { checked: 0, alerted: 0, finished: 0, stopped: 0 };
+  const stats: GoalRun = { checked: 0, alerted: 0, finished: 0, stopped: 0, paused: 0 };
   const scope = currentTenantScope();
   if (!scope || scope.system || !scope.tenantId || scope.tenantId !== tenantId) return stats;
   if (!(await isModuleEnabled("automotive"))) return stats;
@@ -252,6 +289,13 @@ export async function runDeliveryGoals(tenantId: string, budget: Pick<CronSliceC
     if (goal.tenantId !== tenantId) continue;
     const before = readGoalState(goal.details, now);
     if (before.paused || fresh(before)) continue;
+    // PAUSED while the person's proactive DAX is off (or the owner's): untouched — nothing advanced, nothing
+    // finished, no reminder switched off — so the first pass after it is back on tells them where it stands now
+    // (review of #922: events were consumed with nobody told). Read per goal, so a switch-off mid-run counts.
+    if (!(await switchedOn(tenantId, goal.userId))) {
+      stats.paused++;
+      continue;
+    }
 
     // WHO they are, now. A failure to read it changes nothing — tried again next tick.
     let user: PermissionUser | null;
@@ -279,8 +323,7 @@ export async function runDeliveryGoals(tenantId: string, budget: Pick<CronSliceC
       const about = quote.leadId && (await canAccessLead(user!, quote.leadId))
         ? { leadId: quote.leadId, contactId: null }
         : quote.contactId && (await canAccessContact(user!, quote.contactId)) ? { leadId: null, contactId: quote.contactId } : { leadId: null, contactId: null };
-      const alertsOn = await switchedOn(tenantId, goal.userId);
-      origin ??= await tenantOrigin(tenantId).catch(() => "");
+      origin ??=await tenantOrigin(tenantId).catch(() => "");
 
       const result = await prisma.$transaction(async (tx) => {
         const row = await lockGoal(tx, tenantId, goal.userId, goal.id);
@@ -294,7 +337,7 @@ export async function runDeliveryGoals(tenantId: string, budget: Pick<CronSliceC
         // News replaces anything still waiting to be sent: a held "waiting on the deposit" is stale once it's paid.
         if (ev.alerts.length || finished) await dropPendingAlerts(tx, tenantId, goal.userId, row.id, now);
         const keys: string[] = [];
-        if (alertsOn && ev.alerts.length) {
+        if (ev.alerts.length) {
           const deliverAt = isQuietHour(now) ? nextMorning(now) : null;
           const data = ev.alerts.map((a) => {
             const line = finished ? `${a.text}${remindersOffText(off.watches, off.checkBacks)}` : a.text;
