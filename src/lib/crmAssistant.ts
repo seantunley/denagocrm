@@ -30,7 +30,6 @@ import {
   canAccessVehicle,
   getAccessibleContactIds,
   getAccessibleDocumentIds,
-  getAccessibleVehicleIds,
   getAccessibleLeadIds,
   getAccessibleQuoteIds,
   hasAnyPermission,
@@ -45,18 +44,21 @@ import { CITE_RULE, REPLY_FORMAT, STATE_INSTRUCTIONS, citableLinks, resolveCitat
 import { unsupportedFigures, unsupportedNote } from "./assistantVerify";
 import { catalogueColour, closestColour, nameIsClose, nameStems } from "./nearMatch";
 import { salesStats } from "./crmAssistantStats";
+import { whyLookup } from "./assistantWhyLookup";
 import { briefForAssistant, loadDaxBrief } from "./daxBrief";
+import { customerVehicles, workshopOverview } from "./workshopContext";
 import { breakerOpen, withRetry } from "./assistantBreaker";
 import { fastPath, pageLeadFromHint } from "./assistantFastPath";
 import { stripInvisible } from "./invisibleText";
 import { visibleAnswer } from "./assistantStream";
 import { AI_NOT_CONNECTED, aiFailureForPeople, safeCodexError } from "./codexErrors";
 import { webLookup } from "./crmAssistantWeb";
+import { openMessage, readDocument, searchMessages } from "./crmAssistantEvidence";
 import { assistantWebAllowed } from "./assistantUser";
 import { MAX_IMAGES_PER_QUESTION } from "./assistantImage";
 import { applyLearn, loadLearned, loadPlaybook, markNotesUsed, saveDecision, visibleTo } from "./assistantMemoryStore";
 import { checkBacksOn, setCheckBacks, type CheckBack } from "./proactiveFollowUp";
-import { ACTION_INSTRUCTIONS, CHECK_BACK_RULE, CHOICE_INSTRUCTIONS, matchQuoteRow, quoteAddText, quoteBuildText, quoteChangeText, settledAnswer, type ActionCard, type ProposedAction, type QuoteBuildLine, type QuoteChange } from "./assistantActions";
+import { ACTION_INSTRUCTIONS, CHECK_BACK_RULE, CHOICE_INSTRUCTIONS, JOB_CARD_RULE, matchQuoteRow, quoteAddText, quoteBuildText, quoteChangeText, settledAnswer, type ActionCard, type ProposedAction, type QuoteBuildLine, type QuoteChange } from "./assistantActions";
 import { knowledgeProducts, resolveCatalogueProduct } from "./catalogueLookup";
 import { TASK_INSTRUCTIONS, keepIds, taskBlock, type TaskView } from "./assistantTaskRules";
 import { applyTaskUpdate, openTasks, type TaskSheet, type TaskWrite } from "./assistantTask";
@@ -118,6 +120,12 @@ const HISTORY_DAYS = 30;
 const CANDIDATES = 500;
 /** What one tool's results may cost in a prompt. */
 const OBSERVATION_CHARS = 7000;
+/**
+ * The evidence lookups carry up to EVIDENCE_CHARS of customer or document text
+ * (capped by the tools themselves, so the cut lands between messages or pages,
+ * not mid-JSON) — this is the ceiling with their dates, ids and facts around it.
+ */
+const OBSERVATION_BUDGET: Partial<Record<string, number>> = { search_messages: 12_000, open_message: 11_000, read_document: 11_000 };
 
 export type AssistantRow = { label: string; detail: string; href: string };
 export type AssistantResult =
@@ -1342,30 +1350,14 @@ async function vehicles(user: User, raw: z.infer<typeof vehicleArgs>): Promise<T
     };
   }
 
+  // The workshop at a glance, and customers' vehicles with their workshop picture
+  // (workshopContext: job cards and warranty claims behind their own grants).
+  if (args.kind === "workshop") {
+    const overview = await workshopOverview(user, { take: args.limit ?? 8, stuckDays: args.stuckDays ?? 5 });
+    return overview ? { truncated: false, rows: overview.rows, data: [overview.data] } : refused("the workshop");
+  }
   if (!(await hasAnyPermission(user, "vehicles.view_all", "vehicles.view_owned"))) return refused("customer vehicles");
-  const ids = await getAccessibleVehicleIds(user);
-  const owned = await prisma.vehicle.findMany({
-    where: {
-      deletedAt: null,
-      ...(ids === null ? {} : { id: { in: ids } }),
-      ...(args.search
-        ? { OR: [{ model: fuzzy(args.search) }, { regNumber: fuzzy(args.search) }, { contact: { OR: [{ firstName: fuzzy(args.search) }, { lastName: fuzzy(args.search) }] } }] }
-        : {}),
-    },
-    orderBy: { createdAt: "desc" },
-    take: take + 1,
-    select: { id: true, model: true, regNumber: true, color: true, purchaseDate: true, warrantyMonths: true, contact: { select: { firstName: true, lastName: true } } },
-  });
-  const page = owned.slice(0, take);
-  return {
-    truncated: owned.length > take,
-    data: page.map((v) => ({
-      vehicle: v.model, link: `/vehicles/${v.id}`, reg: v.regNumber, colour: v.color, owner: nameOfContact(v.contact),
-      bought: v.purchaseDate ? dateKey(v.purchaseDate) : null,
-      warrantyUntil: v.purchaseDate && v.warrantyMonths ? dateKey(new Date(v.purchaseDate.getTime() + v.warrantyMonths * 30.44 * DAY)) : null,
-    })),
-    rows: page.map((v) => ({ label: `${v.model} — ${nameOfContact(v.contact)}`, detail: v.regNumber ?? "no reg", href: `/vehicles/${v.id}` })),
-  };
+  return customerVehicles(user, { search: args.search, limit: take });
 }
 
 /**
@@ -1461,11 +1453,12 @@ async function documents(user: User, raw: z.infer<typeof documentArgs>): Promise
     },
     orderBy: { createdAt: "desc" },
     take: 30,
-    select: { fileName: true, tag: true, mimeType: true, createdAt: true },
+    select: { id: true, fileName: true, tag: true, mimeType: true, createdAt: true },
   });
   return {
     truncated: docs.length === 30,
-    data: [{ customer: contactName(contact), link: `/contacts/${contact.id}`, documents: docs.map((d) => ({ file: d.fileName, tag: d.tag, added: dateKey(d.createdAt) })) }],
+    // documentId: what read_document reads a PDF by.
+    data: [{ customer: contactName(contact), link: `/contacts/${contact.id}`, documents: docs.map((d) => ({ documentId: d.id, file: d.fileName, tag: d.tag, added: dateKey(d.createdAt) })) }],
     rows: [{ label: `${contactName(contact)} — documents`, detail: `${docs.length} on file`, href: `/contacts/${contact.id}` }],
   };
 }
@@ -1497,12 +1490,21 @@ async function internet(user: User, question: string): Promise<ToolOutput> {
  * rules from the person's own lists; DAX only reads it and explains.
  */
 async function dailyBrief(user: User): Promise<ToolOutput> {
-  if (!(await hasAnyPermission(user, "leads.view_all", "leads.view_owned"))) return refused("leads");
-  const brief = await loadDaxBrief(user);
+  // Plus a short workshop section for people who see vehicles or job cards
+  // (Automotive on): overdue services, job cards gone still, warranties ending.
+  const [sales, workshop] = await Promise.all([
+    hasAnyPermission(user, "leads.view_all", "leads.view_owned"),
+    isModuleEnabled("automotive").then((on) => (on ? workshopOverview(user, { take: 3, stuckDays: 5, brief: true }) : null)),
+  ]);
+  if (!sales && !workshop) return refused("leads");
+  const brief = sales ? await loadDaxBrief(user) : null;
   return {
     truncated: false,
-    data: [briefForAssistant(brief)],
-    rows: brief.items.slice(0, 8).map((item) => ({ label: item.title, detail: item.detail ?? "", href: item.href })),
+    data: [{ ...(brief ? briefForAssistant(brief) : {}), ...(workshop ? { workshop: workshop.data } : {}) }],
+    rows: [
+      ...(brief?.items.slice(0, 8).map((item) => ({ label: item.title, detail: item.detail ?? "", href: item.href })) ?? []),
+      ...(workshop?.rows ?? []),
+    ],
   };
 }
 
@@ -1562,6 +1564,7 @@ async function runTool(user: User, step: ToolStep): Promise<ToolOutput> {
     case "find_quotes": return findQuotes(user, step.args);
     case "find_activities": return findActivities(user, step.args);
     case "lead_brief": return leadBrief(user, step.args);
+    case "why": return whyLookup(user, step.args.record);
     case "knowledge": return knowledge(user, step.args);
     case "recall": return recall(user, step.args);
     case "playbook": return playbook(user, step.args);
@@ -1570,6 +1573,9 @@ async function runTool(user: User, step: ToolStep): Promise<ToolOutput> {
     case "vehicles": return vehicles(user, step.args);
     case "deliveries": return deliveries(user, step.args);
     case "documents": return documents(user, step.args);
+    case "search_messages": return searchMessages(user, step.args);
+    case "open_message": return openMessage(user, step.args);
+    case "read_document": return readDocument(user, step.args);
     case "sales_stats": return salesStats(user, statsArgs.parse(step.args));
     case "daily_brief": return dailyBrief(user);
     // Handled by internet() with the person's own question — never from here.
@@ -1757,9 +1763,9 @@ export async function pageContext(user: User, page: string | null | undefined): 
       }
       case "vehicle": {
         if (!(await canAccessVehicle(user, target.id))) return "";
-        const v = await prisma.vehicle.findUnique({ where: { id: target.id }, select: { model: true, contactId: true } });
+        const v = await prisma.vehicle.findUnique({ where: { id: target.id }, select: { model: true, regNumber: true, contactId: true } });
         if (!v) return "";
-        return `The person is looking at a customer's vehicle (${v.model}) — "the owner", "the customer" mean its owner (${brief(null, v.contactId)}).`;
+        return `The person is looking at a customer's vehicle (${v.model}) — "the owner", "the customer" mean its owner (${brief(null, v.contactId)}); for its service, battery, warranty or job cards use vehicles kind customer with search "${v.regNumber ?? v.model}".`;
       }
       case "stock": {
         if (!(await hasAnyPermission(user, "stock.view", "stock.manage"))) return "";
@@ -1821,7 +1827,8 @@ function observationText(o: Observation): string {
   // ＂ and ＼ would otherwise become real quotes after stringify and forge
   // sibling fields ("status":"won", fake approved answers) inside the results.
   const body = JSON.stringify({ truncated: o.output.truncated, results: cleanDeep(o.output.data) });
-  return `${o.tool} ${JSON.stringify(cleanDeep(o.args ?? {}))} →\n${body.length > OBSERVATION_CHARS ? `${body.slice(0, OBSERVATION_CHARS)}…(cut)` : body}`;
+  const budget = OBSERVATION_BUDGET[o.tool] ?? OBSERVATION_CHARS;
+  return `${o.tool} ${JSON.stringify(cleanDeep(o.args ?? {}))} →\n${body.length > budget ? `${body.slice(0, budget)}…(cut)` : body}`;
 }
 
 /** Every string in a value — object KEYS as well as values — cleaned, before it is serialised. */
@@ -1866,6 +1873,11 @@ export type AskOptions = {
   onAnswerText?: (visibleSoFar: string) => void;
   /** What it is doing while it researches ("Checking leads…"), for the person watching. */
   onProgress?: (status: string) => void;
+  /**
+   * Each lookup's results as they come back — for the eval runner (evals/runEvidenceEval.ts), which scores
+   * whether the evidence was REACHED from the data, not from the answer's wording. In-process only; never logged.
+   */
+  onLookup?: (tool: string, data: unknown[]) => void;
   /** Each phase as it starts — the run record (assistantRun) keeps it for a reconnect. */
   onPhase?: (phase: "planning" | "researching" | "answering") => void;
   /**
@@ -2069,6 +2081,7 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
       ),
     );
     batch.forEach((s, i) => observations.push({ tool: s.tool, args: "args" in s ? s.args : {}, output: outputs[i] }));
+    batch.forEach((s, i) => opts.onLookup?.(s.tool, outputs[i].data));
     mark(`lookups${round}`);
   };
   // A question plain enough to need no research step (assistantFastPath): its
@@ -2179,6 +2192,8 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
     : undefined;
   // Answer, in the workspace's own voice.
   const soul = stripInvisible(soulText(profile, company?.name ?? "", user.name || "a colleague"));
+  // Job cards are Automotive's: a workspace without it is never told it can open one.
+  const jobCards = proposes && modules.has("automotive") ? JOB_CARD_RULE : "";
   // Retried once on a passing fault; a retry starts the visible text afresh
   // (a new streamVisible), so the person never sees two half-answers joined.
   const answerReply = await withRetry(breakerKey, () => codexRespond({
@@ -2198,6 +2213,7 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
       proposes ? ACTION_INSTRUCTIONS : "",
       checksBack ? CHECK_BACK_RULE : "",
       source === "schedule" ? "" : CHOICE_INSTRUCTIONS,
+      jobCards,
       channelRule(source, proposes, opts.proposeTasks),
       learned,
       images.length ? IMAGE_RULE : "",
@@ -2451,6 +2467,29 @@ export async function resolveActions(
         if (Number.isNaN(at.getTime()) || at.getTime() < Date.now() - 60 * 60 * 1000) continue;
         cards.push({ id: `a${index}-${p.activityId}`, kind: "reschedule", activityId: p.activityId, leadId: activity.leadId, leadLabel, when: target, fromDue: activity.dueDate.toISOString(), title: `Move “${activity.summary}” to ${when(at)}`, ...(p.reason ? { reason: p.reason } : {}) });
       }
+      continue;
+    }
+    if (p.type === "job_card") {
+      // AUTOMOTIVE ON, someone who may open job cards, on a vehicle THEY can open in THIS workspace
+      // (canAccessVehicle checks the row's tenant first). openJobCard checks all of it again at Confirm.
+      if (!(await isModuleEnabled("automotive"))) { problems.push("Job cards are part of the Automotive module, which is off for this workspace."); continue; }
+      if (!(await hasPermission(user, "jobcards.manage"))) { problems.push("Your role can't open job cards."); continue; }
+      const vehicle = (await canAccessVehicle(user, p.vehicleId))
+        ? await prisma.vehicle.findFirst({ where: { id: p.vehicleId, deletedAt: null }, select: { model: true, regNumber: true, contactId: true, contact: { select: { firstName: true, lastName: true } } } })
+        : null;
+      if (!vehicle) { problems.push("I can't find that vehicle among the ones you can open — look the customer's vehicles up and ask again."); continue; }
+      const owner = nameOfContact(vehicle.contact) ?? "the customer";
+      const priority = p.priority ?? "normal";
+      const what = `${vehicle.model}${vehicle.regNumber ? ` (${vehicle.regNumber})` : ""}`;
+      cards.push({
+        id: `a${index}-${p.vehicleId}`, kind: "job_card", leadId: null, leadLabel: owner, vehicleId: p.vehicleId, contactId: vehicle.contactId,
+        title: `Open a job card: ${what} — ${owner}`, description: p.description, priority,
+        ...(p.kmIn != null ? { kmIn: p.kmIn } : {}),
+        detail: [`Work: ${p.description}`, `Priority: ${priority}`, ...(p.kmIn != null ? [`Km in: ${p.kmIn}`] : []), "Opened in the workshop only — the customer is not contacted."].join("\n"),
+        // One Confirm, one job card: spent by openJobCard in the transaction that opens it.
+        confirmKey: `qk_${randomBytes(16).toString("hex")}`,
+        ...(p.reason ? { reason: p.reason } : {}),
+      });
       continue;
     }
     if (p.type === "customer_note") {

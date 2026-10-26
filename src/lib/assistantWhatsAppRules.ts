@@ -139,6 +139,7 @@ export const CRM_CARD_TTL_MS = 24 * 60 * 60 * 1000;
  *  - draft_message — a message to a customer. It is read, edited and sent by the
  *    person, on the record, never from a chat with the assistant;
  *  - test_drive — books a customer onto a vehicle;
+ *  - job_card — opens workshop work on a customer's vehicle (2026-10-26: CRM-only until Sean decides otherwise);
  *  - lost, quote — closing a deal and starting a quote deserve the screen.
  * A kind not named here is not confirmable: a new kind is CRM-only until someone
  * decides otherwise.

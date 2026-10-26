@@ -20,7 +20,9 @@ const nextConfig: NextConfig = {
    * Flagged by an OWASP ZAP scan, 2026-09-01.
    */
   poweredByHeader: false,
-  serverExternalPackages: ["@sparticuz/chromium", "puppeteer-core"],
+  // unpdf (DAX reading a PDF's text) ships PDF.js as one 1.6 MB module it imports on demand: loaded from
+  // node_modules at runtime rather than bundled into every server chunk that reaches the assistant.
+  serverExternalPackages: ["@sparticuz/chromium", "puppeteer-core", "unpdf"],
   // A Server Action request body is capped at 1 MB by default, and the photo
   // upload actions accept twelve files of up to 4 MB each. Nothing declared a
   // limit, so the framework rejected an ordinary phone photo before
