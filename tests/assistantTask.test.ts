@@ -174,10 +174,23 @@ test("resolveActions: one sheet, one quote; the sheet's lines and customer win; 
   assert.equal((lib.match(/\.\.\.\(quoteSheet\?\.quoteId === quote\.id \? \{ taskId: quoteSheet\.id \} : \{\}\)/g) ?? []).length, 2, "quote_add and quote_change");
 });
 
-test("Confirm records the result: the quote id only from what the CRM just created", () => {
+test("ONE SHEET, ONE QUOTE: the quote and the sheet's link are made in the save's own transaction (review of #918)", () => {
   const actions = src("src/app/actions/assistant.ts");
-  assert.match(actions, /recordTaskProgress\(user\.id, card\.taskId, \{ quoteId: saved\.quote\.id, done: `Draft quote Q-\$\{saved\.quote\.number\} created` \}\)/);
-  assert.equal((actions.match(/recordTaskProgress\(/g) ?? []).length, 3);
+  assert.match(actions, /\.\.\.\(card\.taskId \? \{ assistantTaskId: card\.taskId \} : \{\}\),/, "quote_build hands its sheet to the save");
+  assert.doesNotMatch(actions, /recordTaskProgress\([^)]*quoteId/, "no quote id is ever set after the fact");
+  assert.equal((actions.match(/recordTaskProgress\(/g) ?? []).length, 2, "step notes for quote_add and quote_change only");
+  const quotes = src("src/app/actions/quotes.ts");
+  const fresh = quotes.slice(quotes.indexOf("ONE DAX JOB SHEET, ONE QUOTE"), quotes.indexOf("return { quote: created,"));
+  // Locked first, in the transaction; a sheet with a live quote returns it and makes nothing.
+  assert.match(fresh, /SELECT "quoteId", "steps" FROM "AssistantTask"\s*WHERE "id" = \$\{data\.assistantTaskId\} AND "tenantId" = \$\{actingTenant\} AND "userId" = \$\{user\.id\} FOR UPDATE`/);
+  assert.match(fresh, /if \(has\) return \{ sheetQuote: has \};/);
+  assert.ok(fresh.indexOf("FOR UPDATE") < fresh.indexOf('claimConfirmKey(tx, "a new quote")'), "the sheet is checked before the key is spent");
+  assert.ok(fresh.indexOf("tx.quote.create(") < fresh.indexOf("tx.assistantTask.updateMany("), "linked after the quote exists, in the same transaction");
+  // The link is never caught: it fails, the quote is not made either.
+  assert.match(fresh, /if \(linked\.count !== 1\) throw new Error\("the job sheet could not be linked to its quote"\);/);
+  assert.doesNotMatch(fresh, /\.catch\(/);
+  const lib = src("src/lib/assistantTask.ts");
+  assert.doesNotMatch(lib.slice(lib.indexOf("export async function recordTaskProgress")), /quoteId:/, "a step note never sets the quote");
 });
 
 test("every write locks the sheet's row inside one callback transaction, keyed on workspace and person", () => {

@@ -1,6 +1,7 @@
 import "server-only";
 import { prisma } from "./db";
 import { formatZAR } from "./format";
+import { logError } from "./errorLog";
 import { ownedWriteTenantId } from "./tenantWrite";
 import { canAccessContact, canAccessLead, canAccessQuote, type PermissionUser } from "./permissions";
 import {
@@ -169,26 +170,26 @@ export async function applyTaskUpdate(user: User, update: TaskUpdate, loaded: re
 }
 
 /**
- * A card that came from a sheet was CONFIRMED: record it on the sheet. The
- * quote id is the one the CRM just created (never the model's), set only if the
- * sheet has none — one sheet, one quote. `taskId` came back from the browser
- * with the card, so it is only ever looked up as the confirmer's own sheet.
- * Never throws: the quote is saved whatever happens here.
+ * A quote_add / quote_change card from a sheet was CONFIRMED: note the step on
+ * the sheet. A note only — the quote change is already saved, so a failure here
+ * is logged (by name) and never undoes it. The sheet's QUOTE ID is never set
+ * here: it is written only by saveQuoteDraft, in the transaction that creates
+ * the quote (one sheet, one quote — review of #918). `taskId` came back from the
+ * browser with the card, so it is only ever looked up as the confirmer's own sheet.
  */
-export async function recordTaskProgress(userId: string, taskId: unknown, progress: { quoteId?: string; done: string }, now = new Date()): Promise<void> {
+export async function recordTaskProgress(userId: string, taskId: unknown, progress: { done: string }, now = new Date()): Promise<void> {
   if (typeof taskId !== "string" || !/^[\w-]{10,64}$/.test(taskId)) return;
   const tenantId = ownedWriteTenantId();
   await prisma.$transaction(async (tx) => {
     const locked = await tx.$queryRaw<{ id: string }[]>`
       SELECT "id" FROM "AssistantTask" WHERE "id" = ${taskId} AND "tenantId" = ${tenantId} AND "userId" = ${userId} FOR UPDATE`;
     if (!locked.length) return;
-    const row = await tx.assistantTask.findFirst({ where: { id: taskId, tenantId, userId }, select: { quoteId: true, steps: true, status: true } });
+    const row = await tx.assistantTask.findFirst({ where: { id: taskId, tenantId, userId }, select: { steps: true, status: true } });
     if (!row) return;
     const steps = readSteps(row.steps);
     await tx.assistantTask.updateMany({
       where: { id: taskId, tenantId, userId },
       data: {
-        ...(progress.quoteId && !row.quoteId ? { quoteId: progress.quoteId } : {}),
         steps: { done: [...new Set([...steps.done, progress.done])].slice(-12), outstanding: steps.outstanding } as object,
         // Working on it again is activity: a sheet closed on its own while its card waited comes back.
         ...(row.status === "closed" ? { status: "open", closedAt: null } : {}),
@@ -196,7 +197,9 @@ export async function recordTaskProgress(userId: string, taskId: unknown, progre
         updatedAt: now,
       },
     });
-  }).catch(() => {});
+  }).catch(async (error: unknown) => {
+    await logError("assistant-task", "job sheet step note failed", error instanceof Error ? error.name : "unknown").catch(() => {});
+  });
 }
 
 /** Close or reopen the person's OWN sheet (the Ask page). False when it is not theirs, or not there. */

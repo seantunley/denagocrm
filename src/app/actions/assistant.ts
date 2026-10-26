@@ -375,6 +375,9 @@ export async function runAssistantAction(
           // creates the quote, so a Confirm pressed again after a lost answer creates
           // no second quote. (A card proposed before keys existed has none, and runs as it did.)
           ...(keyed ? { confirmKey: card.confirmKey } : {}),
+          // ONE JOB SHEET, ONE QUOTE: the sheet is locked and linked in the save's own transaction (saveQuoteDraft) —
+          // a second card for the same sheet, with its own key, gets the sheet's quote back instead of a new one.
+          ...(card.taskId ? { assistantTaskId: card.taskId } : {}),
           items: lines.map((line) => {
             const product = byId.get(line.productId)!;
             return {
@@ -391,7 +394,11 @@ export async function runAssistantAction(
           return { ok: false as const, error: "The quote couldn't be saved just now.", thrown: true as const };
         });
         // A Confirm that reached the server twice: the first made the quote; this one did nothing.
-        if (!saved.ok && "repeated" in saved && saved.repeated) return { ok: true, success: "Already created — nothing was made twice. It has NOT been sent to the customer." };
+        if (!saved.ok && "repeated" in saved && saved.repeated) {
+          return saved.quote
+            ? { ok: true, success: `This job sheet already has its quote, Q-${saved.quote.number} — nothing was made twice. It has NOT been sent to the customer.`, href: `/quotes?edit=${saved.quote.id}`, quote: saved.quote }
+            : { ok: true, success: "Already created — nothing was made twice. It has NOT been sent to the customer." };
+        }
         // saveQuoteDraft validates before it writes (a colour the product does not come in, say).
         if (!saved.ok) return resumes ? retryAfterCustomer(saved.error) : { ok: false, error: saved.error };
         // On the deal's record when there is one; otherwise on the customer's.
@@ -401,8 +408,6 @@ export async function runAssistantAction(
           user,
           ...(card.leadId ? { leadId: card.leadId } : { contactId: quoteContactId }),
         });
-        // ON ITS JOB SHEET: the quote's id as the CRM just made it — the only way a sheet ever gets one. Never throws.
-        await recordTaskProgress(user.id, card.taskId, { quoteId: saved.quote.id, done: `Draft quote Q-${saved.quote.number} created` });
         // THE QUOTE EXISTS. Everything below is about telling the person, and none
         // of it may undo that or report it as failed.
         //

@@ -9,6 +9,7 @@ import { prisma, basePrisma } from "@/lib/db";
 import { payableTotalCents } from "@/lib/pricing";
 import { QUOTE_PDF_SOURCE } from "@/lib/assistantWhatsAppRules";
 import { CONFIRM_KEY } from "@/lib/assistantActions";
+import { readSteps } from "@/lib/assistantTaskRules";
 import { tenantOrigin } from "@/lib/tenantOrigin";
 import { logAudit, GOVERNANCE_TX } from "@/lib/audit";
 import { CLOSED_REQUEST_STATUSES } from "@/lib/signing/status";
@@ -122,11 +123,18 @@ const quoteDraftSchema = z.object({
   ])).min(1).max(20).optional(),
   /** The key of the assistant card being confirmed: a card is carried out once (see claimConfirmKey). */
   confirmKey: z.string().regex(CONFIRM_KEY).optional(),
+  /**
+   * New quotes only: the DAX job sheet (AssistantTask) this quote is for — the saver's OWN sheet. One sheet, one
+   * quote: the sheet is locked in the same transaction as the quote, and linked to it there (see below).
+   */
+  assistantTaskId: z.string().regex(/^[\w-]{10,64}$/).optional(),
 });
 
 /** How long a spent confirm key is kept: longer than a card stays in the Ask history (30 days). */
 const CONFIRM_KEY_KEPT_MS = 35 * 24 * 60 * 60 * 1000;
 const REPEATED = "repeated" as const;
+/** The DAX job sheet named is not the saver's own (or is gone): nothing is made. */
+const SHEET_GONE = "sheet_gone" as const;
 /** A row a change names no longer reads the way the card showed it. */
 const STALE = "stale" as const;
 type PricedItem = Parameters<typeof payableTotalCents>[0]["items"][number];
@@ -145,7 +153,8 @@ export type QuoteDraftResult =
       };
     }
   /** `repeated`: this exact assistant card was already carried out — nothing was changed this time. */
-  | { ok: false; error: string; repeated?: true };
+  /** `quote` with `repeated`: the DAX job sheet already has this quote, so no second one was made. */
+  | { ok: false; error: string; repeated?: true; quote?: { id: string; number: number } };
 
 /** Creates a draft quote from a lead, pre-filled with its product line. */
 async function createQuoteFromLeadRecord(leadId: string) {
@@ -759,6 +768,26 @@ export async function saveQuoteDraft(input: QuoteDraftInput): Promise<QuoteDraft
       return finish(itemRows, feeRows, cpqQuoteData);
     }
 
+    /*
+     * ONE DAX JOB SHEET, ONE QUOTE (review of #918). Two cards for the same sheet carry two different confirm keys,
+     * so the key alone cannot stop a second quote. The sheet's row is locked HERE, in the transaction that makes the
+     * quote: a sheet that already has a live quote gets no second one (that quote is returned, as the key returns
+     * a repeat); otherwise the quote is made and the sheet linked to it in this same transaction — both or neither.
+     * The saver's own sheet in the workspace they act in, or nothing (a bypass transaction: the predicate is the boundary).
+     */
+    let sheet: { quoteId: string | null; steps: unknown } | null = null;
+    if (data.assistantTaskId) {
+      const locked = await tx.$queryRaw<{ quoteId: string | null; steps: unknown }[]>`
+        SELECT "quoteId", "steps" FROM "AssistantTask"
+        WHERE "id" = ${data.assistantTaskId} AND "tenantId" = ${actingTenant} AND "userId" = ${user.id} FOR UPDATE`;
+      if (!locked.length) return SHEET_GONE;
+      sheet = locked[0];
+      if (sheet.quoteId) {
+        const has = await tx.quote.findFirst({ where: { id: sheet.quoteId, tenantId: actingTenant, deletedAt: null }, select: { id: true, number: true } });
+        // Its quote was deleted since: the sheet may have a new one (it replaces the dead link below).
+        if (has) return { sheetQuote: has };
+      }
+    }
     // A Confirm that already created its quote creates no second one.
     if (!(await claimConfirmKey(tx, "a new quote"))) return REPEATED;
     const number = await nextQuoteNumber(tx); // advisory-locked allocation (#11)
@@ -805,6 +834,20 @@ export async function saveQuoteDraft(input: QuoteDraftInput): Promise<QuoteDraft
         },
       });
     }
+    // THE SHEET'S LINK, in this transaction and never caught: if it cannot be written, the quote is not made either.
+    if (data.assistantTaskId && sheet) {
+      const steps = readSteps(sheet.steps);
+      const linked = await tx.assistantTask.updateMany({
+        where: { id: data.assistantTaskId, tenantId: actingTenant, userId: user.id, quoteId: sheet.quoteId },
+        data: {
+          quoteId: created.id,
+          steps: { done: [...new Set([...steps.done, `Draft quote Q-${number} created`])].slice(-12), outstanding: steps.outstanding },
+          // Working on it again is activity: a sheet that closed on its own while its card waited comes back.
+          status: "open", closedAt: null, version: { increment: 1 }, updatedAt: new Date(),
+        },
+      });
+      if (linked.count !== 1) throw new Error("the job sheet could not be linked to its quote");
+    }
     return { quote: created, itemRows: itemRows as PricedItem[], feeRows: feeRows as PricedFee[], cpq: cpqQuoteData };
   }).catch((error: unknown) => {
     // Two Confirms of the same card at the same moment: the second one's key
@@ -818,6 +861,12 @@ export async function saveQuoteDraft(input: QuoteDraftInput): Promise<QuoteDraft
   }
   if (result === REPEATED) {
     return { ok: false, error: "That was already confirmed — open the quote to see it. Nothing was added twice.", repeated: true };
+  }
+  if (result === SHEET_GONE) {
+    return { ok: false, error: "That job sheet is no longer there, so nothing was made — ask DAX again." };
+  }
+  if (result && "sheetQuote" in result) {
+    return { ok: false, error: `This job sheet already has its quote, Q-${result.sheetQuote.number} — nothing was made twice.`, repeated: true, quote: result.sheetQuote };
   }
   if (!result) {
     return {
