@@ -35,6 +35,15 @@ export const RETRY_SAFE_KINDS: ReadonlySet<string> = new Set(["quote_build", "qu
 
 /** A claim older than this with no outcome was interrupted (the request died part-way). */
 export const STEP_STALE_MS = 10 * 60 * 1000;
+/**
+ * THE one rule for "interrupted", used by the runner (on the claim row's time) and by what the person sees (on the
+ * step's copy of it): a claim with no outcome for STEP_STALE_MS. No time at all reads as interrupted too, so a step
+ * can never be stuck showing "running" with nothing to press.
+ */
+export function claimInterrupted(claimedAt: Date | string | null | undefined, now: Date): boolean {
+  const at = claimedAt ? new Date(claimedAt).getTime() : NaN;
+  return !Number.isFinite(at) || now.getTime() - at >= STEP_STALE_MS;
+}
 
 export type PlanStepStatus = "waiting" | "running" | "done" | "refused" | "failed";
 export type PlanStep = {
@@ -46,6 +55,8 @@ export type PlanStep = {
   /** This step works on the quote that step `fromStep` made (the quote number from quote_build feeds quote_pdf). */
   fromStep?: number;
   status: PlanStepStatus;
+  /** When it was claimed (ISO) — the same moment as its claim row's confirmedAt. */
+  claimedAt?: string;
   message?: string;
   href?: string;
   quote?: { id: string; number: number };
@@ -53,7 +64,7 @@ export type PlanStep = {
 /** Stored on the plan's AssistantTask row, in `details.plan`. */
 export type PlanState = { v: 1; expiresAt: string; steps: PlanStep[]; sends: string[] };
 
-export type PlanStatus = "waiting" | "running" | "paused" | "done" | "expired" | "closed";
+export type PlanStatus = "waiting" | "running" | "interrupted" | "paused" | "done" | "expired" | "closed";
 /** What the person sees: on the card in the chat, and on the Ask page. */
 export type PlanView = {
   taskId: string;
@@ -154,12 +165,21 @@ export function stepStatusFor(outcome: { ok: boolean; unchanged?: boolean; resum
   return outcome.unchanged || outcome.resumable ? "refused" : "failed";
 }
 
+const NOT_RETRYABLE = " It can't be retried from here, because I can't be sure nothing was changed — check it, then Close this plan and ask again.";
+
 /** The plan as the person reads it. `taskStatus` is the AssistantTask row's own. */
 export function planView(task: { id: string; title: string; status: string; quoteId: string | null }, plan: PlanState, now = new Date()): PlanView {
-  const steps = plan.steps.map(({ n, title, status, message, href }) => ({ n, title, status, ...(message ? { message } : {}), ...(href ? { href } : {}) }));
+  // A step claimed and never heard from again is INTERRUPTED (claimInterrupted — the runner's own rule): shown as
+  // stopped, with Retry where it is safe, never as "running" forever with nothing to press.
+  const cut = plan.steps.find((s) => s.status === "running" && claimInterrupted(s.claimedAt, now));
+  const steps = plan.steps.map(({ n, title, status, message, href }, i) => {
+    const interrupted = plan.steps[i] === cut;
+    const shown = interrupted ? "It was interrupted part-way." : message;
+    return { n, title, status: interrupted ? ("failed" as const) : status, ...(shown ? { message: shown } : {}), ...(href ? { href } : {}) };
+  });
   const next = nextStep(plan);
   const stopped = plan.steps.find((s) => s.status === "failed" || s.status === "refused");
-  const running = plan.steps.some((s) => s.status === "running");
+  const running = !cut && plan.steps.some((s) => s.status === "running");
   const ran = plan.steps.filter((s) => s.status === "done").length;
   const expired = new Date(plan.expiresAt).getTime() <= now.getTime();
   let status: PlanStatus;
@@ -176,17 +196,22 @@ export function planView(task: { id: string; title: string; status: string; quot
   } else if (expired) {
     status = "expired";
     summary = `Expired — ${ran} of ${plan.steps.length} steps ran; the rest won't. Ask again if you still want them.`;
+  } else if (cut) {
+    status = "interrupted";
+    summary = `Interrupted at step ${cut.n} (${cut.title}) — it stopped part-way.${RETRY_SAFE_KINDS.has(cut.card.kind) ? " Retry carries on from there; nothing is made twice." : NOT_RETRYABLE}`;
   } else if (stopped) {
     status = "paused";
-    summary = `Paused at step ${stopped.n} — ${stopped.message ?? "it didn't work."}${stopped.status === "failed" && !RETRY_SAFE_KINDS.has(stopped.card.kind) ? " It can't be retried from here, because I can't be sure nothing was changed — check it, then Close this plan and ask again." : ""}`;
+    summary = `Paused at step ${stopped.n} — ${stopped.message ?? "it didn't work."}${stopped.status === "failed" && !RETRY_SAFE_KINDS.has(stopped.card.kind) ? NOT_RETRYABLE : ""}`;
   } else {
     status = "waiting";
     summary = ran ? `Paused before step ${next.n}.` : "Waiting for your Confirm — nothing has run yet.";
   }
-  const retryBlocked = stopped?.status === "failed" && !RETRY_SAFE_KINDS.has(stopped.card.kind);
+  // Failed (or interrupted) part-way, in a step whose action carries no confirm key: never run again from here.
+  const unsafe = cut ?? (stopped?.status === "failed" ? stopped : undefined);
+  const retryBlocked = Boolean(unsafe && !RETRY_SAFE_KINDS.has(unsafe.card.kind));
   return {
     taskId: task.id, title: task.title, status, summary, steps, sends: plan.sends, quoteId: task.quoteId,
-    canRun: (status === "waiting" || status === "paused") && !retryBlocked,
+    canRun: (status === "waiting" || status === "paused" || status === "interrupted") && !retryBlocked,
   };
 }
 
@@ -203,6 +228,7 @@ export const PLAN_INSTRUCTIONS = [
   '- "dependsOn": the number (1 = the first step) of an earlier step whose result this one uses. A quote_pdf of the quote the plan builds leaves "quote" out and gives "dependsOn" with the quote_build\'s number.',
   "- One Confirm runs the steps in order. It stops at the first step that fails or is refused and shows what ran; Retry carries on from there and never makes a second quote.",
   "- A message to the customer (draft_message) is NEVER run by the plan: put it in its place among the steps and it becomes its own card with a Send button that they press themselves.",
+  '- Nothing may "dependsOn" a draft_message: the plan would run it before the message is sent. Something that should happen only after the message goes out is asked for after they have sent it — say so.',
   '- Use a plan only for 2 or more things the person asked for together; a single task goes in "actions". Never put the same task in both.',
   "- Say you've set up a plan for them to confirm — never that any of it is done.",
 ].join("\n");

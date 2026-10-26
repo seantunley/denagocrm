@@ -8,8 +8,8 @@ import type { ActionCard, ProposedAction } from "./assistantActions";
 import {
   RETRY_SAFE_KINDS,
   SEND_KINDS,
-  STEP_STALE_MS,
   cardForStep,
+  claimInterrupted,
   nextStep,
   pdfAlreadySent,
   planStepLists,
@@ -41,7 +41,7 @@ import {
  *  - a step refused before it wrote anything (`unchanged`) has its claim removed
  *    and runs again on Retry; one that failed part-way runs again only when its
  *    own action carries a confirm key (RETRY_SAFE_KINDS) — a quote is never made twice;
- *  - a claim with no outcome after STEP_STALE_MS was interrupted, and is treated
+ *  - a claim with no outcome for ten minutes was interrupted (claimInterrupted — the same rule the Ask page shows), and is treated
  *    as failed part-way.
  * Claim rows are never offered anywhere: they are created already confirmed (the
  * Ask page and WhatsApp only read unconfirmed rows), and a released claim is
@@ -94,10 +94,18 @@ export async function proposePlan(
   const internal: { card: ActionCard; fromStep?: number }[] = [];
   const sends: ActionCard[] = [];
   const position = new Map<number, number>(); // original step → its number in the plan
+  // Steps that wait on a message to the customer, directly or through another step. Confirm would run them BEFORE
+  // the message is sent (it goes out only on its own Send) — so they are not in the plan; asked for after it is sent.
+  const afterSend = new Set<number>();
   steps.forEach((s, i) => {
     const source = s.dependsOn !== undefined ? s.dependsOn - 1 : null;
+    if (source !== null && (SEND_KINDS.has(steps[source].action.type) || afterSend.has(source))) {
+      afterSend.add(i);
+      stepProblems.push(`Step ${i + 1} was left out: it depends on the message to the customer, which goes out only when you press its Send — ask me for it after you've sent the message.`);
+      return;
+    }
     // What it depends on did not make it into the plan: nor does this.
-    if (source !== null && !position.has(source) && !(cardFor.has(source) && SEND_KINDS.has(cardFor.get(source)!.kind))) {
+    if (source !== null && !position.has(source)) {
       if (cardFor.has(i) || deferred(i)) stepProblems.push(`Step ${i + 1} was left out: the step it depends on (${source + 1}) could not be set up.`);
       return;
     }
@@ -179,7 +187,7 @@ async function claimNext(user: User, taskId: string, now: Date): Promise<Claim> 
       return { skipped: true };
     }
     if (claim && !claim.failedAt) {
-      if (claim.confirmedAt && now.getTime() - claim.confirmedAt.getTime() < STEP_STALE_MS) return { stop: `Step ${step.n} is already running — give it a moment.` };
+      if (!claimInterrupted(claim.confirmedAt, now)) return { stop: `Step ${step.n} is already running — give it a moment.` };
       // Claimed long ago with no outcome: interrupted part-way. Treated as failed part-way.
       await tx.assistantPendingAction.updateMany({ where: { id: step.key, tenantId, userId: user.id, completedAt: null, failedAt: null }, data: { failedAt: now } });
       step.status = "failed";
@@ -211,6 +219,7 @@ async function claimNext(user: User, taskId: string, now: Date): Promise<Claim> 
       data: { id: step.key, tenantId, userId: user.id, card: { kind: "plan_step", taskId, n: step.n }, confirmedAt: now, expiresAt: new Date(plan.expiresAt) },
     });
     step.status = "running";
+    step.claimedAt = now.toISOString();
     delete step.message;
     await write({ nextAction: `Step ${step.n}: ${step.title}` });
     return { claimed: { step, card, claimedAt: now } };

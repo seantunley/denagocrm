@@ -179,7 +179,15 @@ async function main() {
     check("one internal step left is no plan — just its card", !lone.plan && lone.cards.length === 1 && lone.problems.some((p) => /Q-999999/.test(p)), JSON.stringify(lone));
     const orphan = await propose(rep, [{ type: "quote_build", contactId: id("nobody"), lines: [{ productId: P.rover, qty: 1 }] }, { type: "quote_pdf", dependsOn: 1 }, followStep, { type: "note", leadId: L.anna, text: "n" }]);
     check("a step whose source could not be set up is left out with it", orphan.plan?.plan.steps.length === 2 && orphan.problems.some((p) => /depends on \(1\)/.test(p)), JSON.stringify(orphan.problems));
-    for (const t of [gated.taskId, orphan.taskId]) if (t) await basePrisma.assistantTask.delete({ where: { id: t } });
+    // A step that waits on the customer message (directly, or through another step) would run on Confirm before
+    // anything was sent: it is not in the plan, and the person is told to ask after sending (review of #923).
+    const afterEmail = await propose(rep, [quoteStep, emailStep, { ...followStep, dependsOn: 2 }, { type: "note", leadId: L.anna, text: "after the follow-up", dependsOn: 3 }, { type: "note", leadId: L.anna, text: "independent" }]);
+    const titles = afterEmail.plan?.plan.steps.map((s) => s.title) ?? [];
+    check("a step depending on the customer message — and one depending on THAT — is left out of the plan",
+      titles.length === 2 && !titles.some((t) => /Call Anna/.test(t)) && afterEmail.problems.filter((p) => /after you've sent the message/.test(p)).length === 2,
+      JSON.stringify({ titles, problems: afterEmail.problems }));
+    check("…the message is still its own Send card", afterEmail.cards.filter((c) => c.kind === "draft_message").length === 1 && afterEmail.plan?.plan.sends.length === 1);
+    for (const t of [gated.taskId, orphan.taskId, afterEmail.taskId]) if (t) await basePrisma.assistantTask.delete({ where: { id: t } });
   }
 
   console.log("\nIsolation: somebody else's plan, another workspace");
@@ -233,11 +241,15 @@ async function main() {
     }));
     const p = (await stored(cut))!;
     const s1 = p.plan.steps[0];
-    await basePrisma.assistantPendingAction.update({ where: { id: s1.key }, data: { completedAt: null, failedAt: null, confirmedAt: new Date(Date.now() - 11 * 60_000) } });
+    const stale = new Date(Date.now() - 11 * 60_000);
+    await basePrisma.assistantPendingAction.update({ where: { id: s1.key }, data: { completedAt: null, failedAt: null, confirmedAt: stale } });
     s1.status = "running";
+    s1.claimedAt = stale.toISOString();
     delete s1.message;
     await basePrisma.assistantTask.update({ where: { id: cut }, data: { details: p as object } });
     check("the quote was made before the interruption", (await counts()).quotes === before.quotes + 1);
+    const shown = (await scoped(() => plansForAskPage(rep.id))).find((v) => v.taskId === cut);
+    check("the Ask page shows it INTERRUPTED at step 1, with Retry — not 'running' forever", shown?.status === "interrupted" && shown.canRun && /^Interrupted at step 1/.test(shown.summary), JSON.stringify(shown));
     // A claim that is still fresh is a step still running: nothing else touches it.
     await basePrisma.assistantPendingAction.update({ where: { id: s1.key }, data: { confirmedAt: new Date() } });
     const busy = await asRep(() => continuePlan(rep, cut, real()));

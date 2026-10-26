@@ -21,7 +21,7 @@ export default function AssistantPlanCard({ plan }: { plan: PlanView }) {
   const [message, setMessage] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
   const started = view.steps.some((s) => s.status !== "waiting");
-  const open = view.status === "waiting" || view.status === "paused" || view.status === "running";
+  const open = view.status === "waiting" || view.status === "paused" || view.status === "running" || view.status === "interrupted";
 
   const run = () =>
     startTransition(async () => {

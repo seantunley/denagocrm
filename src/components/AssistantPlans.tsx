@@ -8,7 +8,7 @@ import type { PlanView } from "@/lib/assistantPlanRules";
  */
 export default function AssistantPlans({ plans }: { plans: PlanView[] }) {
   if (!plans.length) return null;
-  const active = plans.filter((p) => p.status === "waiting" || p.status === "paused" || p.status === "running");
+  const active = plans.filter((p) => p.status === "waiting" || p.status === "paused" || p.status === "running" || p.status === "interrupted");
   const past = plans.filter((p) => !active.includes(p));
   return (
     <section className="card space-y-3 p-4 text-sm">

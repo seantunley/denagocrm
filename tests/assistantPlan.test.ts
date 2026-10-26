@@ -8,7 +8,9 @@ import {
   PLAN_MAX_STEPS,
   RETRY_SAFE_KINDS,
   SEND_KINDS,
+  STEP_STALE_MS,
   cardForStep,
+  claimInterrupted,
   parsePlan,
   pdfAlreadySent,
   planView,
@@ -121,6 +123,32 @@ test("the plan reads as what ran and what didn't: waiting, paused at a step, don
   const closed = planView({ ...task, status: "closed" }, state([step(1, build), step(2, note)]));
   assert.equal(closed.status, "closed");
   assert.equal(closed.canRun, false);
+});
+
+test("interrupted: ONE rule (claimInterrupted) — under 10 minutes it is running, older it is interrupted with Retry", () => {
+  const now = new Date("2026-10-26T12:00:00Z");
+  const ago = (ms: number) => new Date(now.getTime() - ms).toISOString();
+  assert.equal(claimInterrupted(ago(STEP_STALE_MS - 1000), now), false);
+  assert.equal(claimInterrupted(ago(STEP_STALE_MS), now), true);
+  assert.equal(claimInterrupted(new Date(now.getTime() - STEP_STALE_MS - 1), now), true, "the runner passes the claim row's Date");
+  assert.equal(claimInterrupted(undefined, now), true, "no time: never stuck as running");
+  const fresh = planView(task, state([step(1, build, { status: "running", claimedAt: ago(60_000) }), step(2, note)]), now);
+  assert.equal(fresh.status, "running");
+  assert.equal(fresh.canRun, false);
+  const cut = planView(task, state([step(1, build, { status: "running", claimedAt: ago(STEP_STALE_MS + 60_000) }), step(2, note)], new Date(now.getTime() + 3_600_000).toISOString()), now);
+  assert.equal(cut.status, "interrupted");
+  assert.ok(cut.canRun, "a quote step carries its own key: Retry is offered");
+  assert.match(cut.summary, /^Interrupted at step 1 /);
+  assert.equal(cut.steps[0].status, "failed");
+  assert.match(cut.steps[0].message ?? "", /interrupted part-way/);
+  const noted = planView(task, state([step(1, build, { status: "done" }), step(2, note, { status: "running", claimedAt: ago(STEP_STALE_MS + 1) })], new Date(now.getTime() + 3_600_000).toISOString()), now);
+  assert.equal(noted.status, "interrupted");
+  assert.equal(noted.canRun, false, "a note interrupted part-way is never run again — Close, check, ask again");
+  assert.match(noted.summary, /can't be retried/);
+  // The card reads the same view: an interrupted plan is still open (Retry/Close), not finished.
+  assert.match(src("src/components/AssistantPlanCard.tsx"), /view\.status === "interrupted"/);
+  assert.match(src("src/lib/assistantPlan.ts"), /if \(!claimInterrupted\(claim\.confirmedAt, now\)\) return \{ stop:/);
+  assert.doesNotMatch(src("src/lib/assistantPlan.ts"), /STEP_STALE_MS/, "the 10-minute rule lives in one place");
 });
 
 test("an answer that says a plan was set up when none exists is replaced", () => {
