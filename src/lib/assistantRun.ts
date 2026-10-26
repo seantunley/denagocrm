@@ -128,14 +128,28 @@ export function runRecorder(id: string, tenantId: string, userId: string) {
  * The owner's speed view: median milliseconds per phase over the last week of
  * runs in this workspace. Numbers only — never what was asked.
  */
-export async function runSpeed(days = 7): Promise<{ runs: number; medians: Record<string, number> }> {
+export async function runSpeed(days = 7): Promise<{ runs: number; medians: Record<string, number>; byDepth: Record<"quick" | "investigate", Record<string, number>> }> {
   const rows = await prisma.assistantRun.findMany({
     where: { tenantId: inheritedTenantId(), status: "completed", createdAt: { gte: new Date(Date.now() - days * 86_400_000) } },
     orderBy: { createdAt: "desc" },
     take: 500,
     select: { timings: true },
   });
-  return { runs: rows.length, medians: medianTimings(rows.map((r) => r.timings)) };
+  const list = rows.map((r) => r.timings);
+  return { runs: rows.length, medians: medianTimings(list), byDepth: mediansByDepth(list) };
+}
+
+/**
+ * Pure: the medians for quick questions and for investigations apart (adaptive
+ * thinking, assistantDepth) — so "no slower on quick questions" can be checked.
+ * Runs from before depth was recorded count in neither.
+ */
+export function mediansByDepth(list: unknown[]): Record<"quick" | "investigate", Record<string, number>> {
+  const depthOf = (t: unknown) => (t && typeof t === "object" ? (t as Record<string, unknown>).depth : undefined);
+  return {
+    quick: medianTimings(list.filter((t) => depthOf(t) === 0)),
+    investigate: medianTimings(list.filter((t) => depthOf(t) === 1)),
+  };
 }
 
 /** Pure: the median of each phase present, over a list of timing objects. */
