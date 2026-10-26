@@ -1699,7 +1699,7 @@ test("confirmed on WhatsApp: what the task queued is sent straight after the con
 
 test("it knows about WhatsApp — and the pinned claims stay true", async () => {
   const { selfKnowledge } = await import("../src/lib/assistantSoul");
-  const about = selfKnowledge("DAX");
+  const about = selfKnowledge("DAX", new Set());
   assert.match(about, /link their own WhatsApp/);
   assert.match(about, /one-time code/);
   assert.match(about, /reaches them with a Confirm button only if the owner has allowed confirming on WhatsApp\./);

@@ -15,7 +15,7 @@ import { getAccessibleActivityIds } from "./activityAccess";
 import { getSetting } from "./settings";
 import { getCompanyProfile } from "./companyProfile";
 import { searchBotKnowledge } from "./botKnowledge";
-import { isModuleEnabled } from "./modules/enabled";
+import { getEnabledModuleIds, isModuleEnabled } from "./modules/enabled";
 import { ownedWriteTenantId } from "./tenantWrite";
 import { isCustomerSigner } from "./signing/quoteMirror";
 import { firstCustomerView, memoCustomer } from "./signing/customerView";
@@ -1982,7 +1982,7 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
     }
   };
   // The connection check rides with the context reads — one round trip, not two.
-  const [connected, whereTheyAre, context, history, learnedNow, person, profileRaw, company] = await Promise.all([
+  const [connected, whereTheyAre, context, history, learnedNow, person, profileRaw, company, modules] = await Promise.all([
     isCodexConnected(),
     pageContext(user, page),
     planContext(user),
@@ -1991,6 +1991,7 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
     personContext(user).catch(() => ""),
     getSetting(ASSISTANT_PROFILE_KEY),
     getCompanyProfile().catch(() => null),
+    getEnabledModuleIds(),
   ]);
   mark("context");
   if (!connected) return { ok: false, error: AI_NOT_CONNECTED };
@@ -2170,7 +2171,7 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
     // changes whenever it learns, so it follows the fixed rules.
     instructions: [
       soul,
-      selfKnowledge(profile.name),
+      selfKnowledge(profile.name, modules),
       ANSWER_RULES,
       source === "chat" ? CITE_RULE : "",
       REPLY_FORMAT,
