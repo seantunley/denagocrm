@@ -2,6 +2,7 @@ import { z } from "zod";
 import { learnBlock, scanEntry, splitLearn, type LearnBlock } from "./assistantMemory";
 import { MAX_ACTIONS, parseActionList, parseChoiceList, splitActions, splitChoices, type ProposedAction } from "./assistantActions";
 import { parseTaskUpdate, type TaskUpdate } from "./assistantTaskRules";
+import { parsePlan, type PlanProposal } from "./assistantPlanRules";
 
 /**
  * DAX's reply, as one contract: the answer the person reads, then (only when
@@ -81,7 +82,8 @@ export function parseState(raw: unknown): ConversationState | null {
 
 /** `attempted`: how many tasks the reply tried to propose — `actions` holds only the well-formed ones. */
 /** `task`: what it wrote about a job sheet (assistantTaskRules) — the caller keeps only CRM ids and applies it. */
-export type ParsedReply = { answer: string; learn: LearnBlock | null; actions: ProposedAction[]; attempted: number; choices: string[]; state: ConversationState | null; task: TaskUpdate | null };
+/** `plan`: a multi-step plan (assistantPlanRules) — its steps are tasks like `actions`, run by one Confirm. */
+export type ParsedReply = { answer: string; learn: LearnBlock | null; actions: ProposedAction[]; attempted: number; choices: string[]; state: ConversationState | null; task: TaskUpdate | null; plan: PlanProposal | null };
 
 /** The reply → the answer and its validated block (or the legacy trailer lines). */
 export function splitReply(reply: string): ParsedReply {
@@ -105,6 +107,7 @@ export function splitReply(reply: string): ParsedReply {
     choices: choices.length ? choices : before.choices,
     state: block && "state" in block ? parseState(block.state) : null,
     task: block && "task" in block ? parseTaskUpdate(block.task) : null,
+    plan: block && "plan" in block ? parsePlan(block.plan) : null,
   };
 }
 
@@ -112,7 +115,7 @@ function legacy(reply: string): ParsedReply {
   const learnSplit = splitLearn(reply);
   const choiceSplit = splitChoices(learnSplit.answer);
   const { answer, actions } = splitActions(choiceSplit.answer);
-  return { answer, learn: learnSplit.learn, actions, attempted: actions.length, choices: choiceSplit.choices, state: null, task: null };
+  return { answer, learn: learnSplit.learn, actions, attempted: actions.length, choices: choiceSplit.choices, state: null, task: null, plan: null };
 }
 
 /** The block's JSON object (a code fence around it tolerated), or null. */

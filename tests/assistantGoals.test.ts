@@ -130,7 +130,7 @@ test("wiring: the cron runs goals before the proactive sweep; job sheets and the
   const route = readFileSync("src/app/api/cron/assistant/route.ts", "utf8");
   assert.ok(route.indexOf("runDeliveryGoals(tenantId, budget)") > 0 && route.indexOf("runDeliveryGoals(tenantId, budget)") < route.indexOf("sweepProactive(tenantId, budget)"));
   const tasks = readFileSync("src/lib/assistantTask.ts", "utf8");
-  assert.equal(tasks.match(/kind: \{ not: "delivery_goal" \}/g)?.length, 2, "openTasks and tasksForAskPage");
+  assert.equal(tasks.match(/kind: \{ notIn: \[[^\]]*"delivery_goal"[^\]]*\] \}/g)?.length, 2, "openTasks and tasksForAskPage");
   const goals = readFileSync("src/lib/assistantGoals.ts", "utf8");
   assert.doesNotMatch(goals, /\$transaction\(\[/, "callback transactions only");
   assert.doesNotMatch(goals, /communication\.create|sendWhatsApp|sendEmail/, "never contacts the customer");

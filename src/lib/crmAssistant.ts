@@ -61,10 +61,12 @@ import { assistantWebAllowed } from "./assistantUser";
 import { MAX_IMAGES_PER_QUESTION } from "./assistantImage";
 import { applyLearn, loadLearned, loadPlaybook, markNotesUsed, saveDecision, visibleTo } from "./assistantMemoryStore";
 import { checkBacksOn, setCheckBacks, type CheckBack } from "./proactiveFollowUp";
-import { ACTION_INSTRUCTIONS, CHECK_BACK_RULE, CHOICE_INSTRUCTIONS, JOB_CARD_RULE, matchQuoteRow, quoteAddText, quoteBuildText, quoteChangeText, settledAnswer, type ActionCard, type ProposedAction, type QuoteBuildLine, type QuoteChange } from "./assistantActions";
+import { ACTION_INSTRUCTIONS, CHECK_BACK_RULE, CHOICE_INSTRUCTIONS, JOB_CARD_RULE, MAX_ACTIONS, matchQuoteRow, quoteAddText, quoteBuildText, quoteChangeText, settledAnswer, type ActionCard, type ProposedAction, type QuoteBuildLine, type QuoteChange } from "./assistantActions";
 import { knowledgeProducts, resolveCatalogueProduct } from "./catalogueLookup";
 import { TASK_INSTRUCTIONS, keepIds, taskBlock, type TaskView } from "./assistantTaskRules";
 import { applyTaskUpdate, openTasks, type TaskSheet, type TaskWrite } from "./assistantTask";
+import { PLAN_INSTRUCTIONS } from "./assistantPlanRules";
+import { proposePlan } from "./assistantPlan";
 import { describeSchedule, nextRun, scheduleInput } from "./assistantSchedule";
 import { describeWatch, watchInput } from "./assistantWatchRules";
 import {
@@ -2231,6 +2233,8 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
       REPLY_FORMAT,
       STATE_INSTRUCTIONS,
       tasksOn ? TASK_INSTRUCTIONS : "",
+      // Plans are confirmed on their card in the CRM chat (assistantPlan); nowhere else is offered one.
+      proposes && source === "chat" ? PLAN_INSTRUCTIONS : "",
       LEARN_INSTRUCTIONS,
       proposes ? ACTION_INSTRUCTIONS : "",
       checksBack ? CHECK_BACK_RULE : "",
@@ -2296,7 +2300,10 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
   // A check-back is not a task to confirm: it is taken out here and saved below (setCheckBacks), so it never
   // becomes a card and never counts as a task that "came to nothing".
   const checkBacks = reply.actions.filter((p): p is CheckBack => p.type === "check_back");
+  // A plan is run from its card in the CRM chat. Proposed anywhere else, its independent steps are offered one by one, as before.
   const proposals = reply.actions.filter((p) => p.type !== "check_back");
+  const multiStep = proposes ? reply.plan : null;
+  if (multiStep && source !== "chat") proposals.push(...multiStep.steps.filter((s) => !s.dependsOn).map((s) => s.action).slice(0, Math.max(0, MAX_ACTIONS - proposals.length)));
   // A scheduled run learns nothing: it reads customer text daily with nobody
   // watching, so an injected "remember this" would be written with no one there.
   const learn = source === "schedule" ? null : reply.learn;
@@ -2325,6 +2332,21 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
         : t.quoteId === card.quoteId,
     );
     if (match.length === 1) card.taskId = match[0].id;
+  }
+  // A MULTI-STEP PLAN (assistantPlan): each step checked exactly as a loose card is, kept on the server, run by one
+  // Confirm. A message to the customer in it comes back as its own Send card — never run by the plan.
+  if (multiStep && source === "chat") {
+    const planProblems: string[] = [];
+    const planCards = await proposePlan(user, multiStep, planProblems, (steps, stepProblems) => resolveActions(user, steps, stepProblems, taskWrite?.ok ? taskWrite.sheet : null)).catch(async (error: unknown) => {
+      await logError("crm-assistant", "plan proposal failed", error instanceof Error ? error.name : "unknown");
+      planProblems.push("The plan could not be set up — nothing was saved. Ask again.");
+      return [] as ActionCard[];
+    });
+    // The plan's own steps that came to nothing already say why (planProblems), so it counts as attempted exactly
+    // what it produced: the count of LOOSE tasks that came to nothing, below, is unchanged by it.
+    reply.attempted += planCards.length + planProblems.length;
+    actions.push(...planCards);
+    problems.push(...planProblems);
   }
   // THE ANSWER WAS WRITTEN BEFORE ANY TASK WAS CHECKED, and says "I've set that up"
   // of every task it tried to propose — or of one it never proposed at all. What
