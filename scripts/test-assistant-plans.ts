@@ -262,6 +262,40 @@ async function main() {
     check("…the plan finishes, holding the quote it made the first time", view?.status === "done" && Boolean(view.quoteId));
   }
 
+  console.log("\nA stalled worker finishing AFTER a Retry took its step over cannot overwrite the Retry (review of #923)");
+  {
+    const before = await counts();
+    const { taskId: raced } = await propose(rep, [quoteStep, followStep]);
+    // The original worker claims step 1, makes the quote, then stalls before it settles.
+    let reached!: () => void;
+    let release!: () => void;
+    const atGate = new Promise<void>((r) => { reached = r; });
+    const gate = new Promise<void>((r) => { release = r; });
+    const late = asRep(() => continuePlan(rep, raced, async (card) => {
+      const result = await runAssistantAction(card);
+      reached();
+      await gate;
+      return result;
+    }));
+    await atGate;
+    // Eleven minutes on, the claim looks interrupted: a Retry re-claims step 1 and settles it (the quote it finds
+    // is the same one — its confirm key), then runs step 2.
+    const later = () => new Date(Date.now() + 11 * 60_000);
+    const retry = await asRep(() => continuePlan(rep, raced, real(), later));
+    const afterRetry = (await stored(raced))!.plan.steps[0];
+    check("the Retry took the step over and finished the plan", retry.plan?.status === "done" && /nothing was made twice/.test(afterRetry.message ?? ""), JSON.stringify({ msg: retry.message, step: afterRetry.message }));
+    // Now the stalled worker finishes and tries to settle with its own (old) claim.
+    release();
+    const lateResult = await late;
+    const final = (await stored(raced))!.plan;
+    check("the late worker's claim matches nothing: its result is discarded and it goes no further", /taken over by a newer Retry/.test(lateResult.message), lateResult.message);
+    check("the plan still shows the Retry's result for step 1, not the late worker's", final.steps[0].message === afterRetry.message && final.steps[0].claimedAt === afterRetry.claimedAt && final.steps.every((s) => s.status === "done"), JSON.stringify(final.steps.map((s) => [s.status, s.message])));
+    const after = await counts();
+    check("…and there is ONE quote and ONE reminder", after.quotes === before.quotes + 1 && after.followUps === before.followUps + 1, JSON.stringify({ before, after }));
+    const claim = await basePrisma.assistantPendingAction.findUnique({ where: { id: final.steps[0].key } });
+    check("the step's claim is the Retry's, completed", Boolean(claim?.completedAt) && claim!.confirmedAt!.toISOString() === afterRetry.claimedAt);
+  }
+
   console.log("\nAn interrupted step with no confirm key is never run again");
   {
     const before = await counts();

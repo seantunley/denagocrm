@@ -188,8 +188,10 @@ async function claimNext(user: User, taskId: string, now: Date): Promise<Claim> 
     }
     if (claim && !claim.failedAt) {
       if (!claimInterrupted(claim.confirmedAt, now)) return { stop: `Step ${step.n} is already running — give it a moment.` };
-      // Claimed long ago with no outcome: interrupted part-way. Treated as failed part-way.
-      await tx.assistantPendingAction.updateMany({ where: { id: step.key, tenantId, userId: user.id, completedAt: null, failedAt: null }, data: { failedAt: now } });
+      // Claimed long ago with no outcome: interrupted part-way. Treated as failed part-way — only the claim we READ
+      // (its own confirmedAt): if it changed meanwhile, nothing here is assumed about it.
+      const marked = await tx.assistantPendingAction.updateMany({ where: { id: step.key, tenantId, userId: user.id, confirmedAt: claim.confirmedAt, completedAt: null, failedAt: null }, data: { failedAt: now } });
+      if (marked.count !== 1) return { stop: `Step ${step.n} changed while I looked at it — press Retry again.` };
       step.status = "failed";
       step.message = "It was interrupted part-way.";
     }
@@ -199,7 +201,8 @@ async function claimNext(user: User, taskId: string, now: Date): Promise<Claim> 
         return { stop: `Step ${step.n} (${step.title}) failed part-way, so it isn't run again — check it, then close this plan and ask again.` };
       }
       // Safe to run again: its own action spends a confirm key, so a second run does nothing twice.
-      await tx.assistantPendingAction.deleteMany({ where: { id: step.key, tenantId, userId: user.id } });
+      // Only a claim that is FAILED — never a live one somebody else holds.
+      await tx.assistantPendingAction.deleteMany({ where: { id: step.key, tenantId, userId: user.id, failedAt: { not: null } } });
     }
     if (pdfAlreadySent(plan, step)) {
       const quote = plan.steps[step.fromStep! - 1].quote;
@@ -226,24 +229,32 @@ async function claimNext(user: User, taskId: string, now: Date): Promise<Claim> 
   });
 }
 
-/** Under the plan's lock: what the step did, on its claim row and on the plan. */
-async function settle(user: User, taskId: string, claimed: Claimed, outcome: StepOutcome, now: Date): Promise<void> {
+/**
+ * Under the plan's lock: what the step did, on its claim row and on the plan.
+ * False when the claim is no longer ours — a Retry took the step over after it
+ * looked interrupted (review of #923): this late result is then discarded and
+ * the plan left exactly as the Retry wrote it.
+ */
+async function settle(user: User, taskId: string, claimed: Claimed, outcome: StepOutcome, now: Date): Promise<boolean> {
   const tenantId = ownedWriteTenantId();
   const status = stepStatusFor(outcome);
-  await prisma.$transaction(async (tx) => {
+  return prisma.$transaction(async (tx) => {
     // The plan's lock first, as claimNext takes it — the same order everywhere, so two can never deadlock.
     const locked = (await lock(tx, tenantId, user.id, taskId)).length > 0;
     // Guarded on THIS claim, so nothing a later attempt did is undone by this one finishing.
     const mine = { id: claimed.step.key, tenantId, userId: user.id, confirmedAt: claimed.claimedAt, completedAt: null, failedAt: null };
-    if (status === "done") await tx.assistantPendingAction.updateMany({ where: mine, data: { completedAt: now } });
-    else if (status === "failed") await tx.assistantPendingAction.updateMany({ where: mine, data: { failedAt: now } });
-    // Refused before anything was written: the claim goes, so Retry can claim the step again.
-    else await tx.assistantPendingAction.deleteMany({ where: mine });
-    if (!locked) return;
+    const settled =
+      status === "done" ? await tx.assistantPendingAction.updateMany({ where: mine, data: { completedAt: now } })
+      : status === "failed" ? await tx.assistantPendingAction.updateMany({ where: mine, data: { failedAt: now } })
+      // Refused before anything was written: the claim goes, so Retry can claim the step again.
+      : await tx.assistantPendingAction.deleteMany({ where: mine });
+    // OURS OR NOTHING: no claim row matched, so somebody else owns this step now. Their result stands.
+    if (settled.count !== 1) return false;
+    if (!locked) return true;
     const row = await tx.assistantTask.findFirst({ where: { id: taskId, tenantId, userId: user.id, kind: PLAN_KIND }, select: SELECT });
     const plan = row ? readPlan(row.details) : null;
     const step = plan?.steps.find((s) => s.n === claimed.step.n);
-    if (!row || !plan || !step) return;
+    if (!row || !plan || !step) return true;
     step.status = status;
     step.message = (outcome.ok ? outcome.success : outcome.error) ?? (outcome.ok ? "Done." : "It didn't work.");
     if (outcome.href) step.href = outcome.href;
@@ -257,6 +268,7 @@ async function settle(user: User, taskId: string, claimed: Claimed, outcome: Ste
         ...(finished ? { status: "done", closedAt: now, nextAction: null } : status === "done" ? {} : { nextAction: `Paused at step ${step.n} — Retry or Close` }),
       },
     });
+    return true;
   });
 }
 
@@ -287,7 +299,12 @@ export async function continuePlan(user: User, taskId: string, run: RunStep, clo
       if (!isRefusal(error)) await logError("assistant-plan", "a plan step threw", error instanceof Error ? error.name : "unknown").catch(() => {});
       outcome = isRefusal(error) ? { ok: false, unchanged: true, error: "You don't have permission for this step." } : { ok: false, error: "It stopped with an error part-way." };
     }
-    await settle(user, String(taskId), claim.claimed, outcome, clock());
+    // Taken over by a Retry while this one was stalled: its result is discarded, and this run goes no further.
+    if (!(await settle(user, String(taskId), claim.claimed, outcome, clock()))) {
+      message = `Step ${claim.claimed.step.n} was taken over by a newer Retry while this one was stalled — its result stands, nothing was overwritten.`;
+      ran = 0; // what this run did was not recorded: it must not report "every step ran"
+      break;
+    }
     if (!outcome.ok) {
       message = `Stopped at step ${claim.claimed.step.n} (${claim.claimed.step.title}): ${outcome.error ?? "it didn't work."}`;
       break;
