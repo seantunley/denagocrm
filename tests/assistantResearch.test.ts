@@ -47,12 +47,13 @@ test("independent lookups come as one batch; a bad one is dropped, not the batch
 
 test("the loop runs a batch side by side, skips repeats, and stops at the total cap", () => {
   const lib = code("src/lib/crmAssistant.ts");
-  const loop = lib.slice(lib.indexOf("const complex = isComplexQuestion"), lib.indexOf("const [profileRaw, company]"));
+  const loop = lib.slice(lib.indexOf("let depth: Depth"), lib.indexOf("const [profileRaw, company]"));
   assert.ok(loop.length > 200);
-  assert.match(loop, /step < maxSteps && observations\.length < MAX_LOOKUPS/);
+  // The caps are the question's depth's (assistantDepth: quick keeps MAX_STEPS / MAX_LOOKUPS).
+  assert.match(loop, /step < budget\(\)\.maxSteps && observations\.length < budget\(\)\.maxLookups/);
   assert.match(loop, /const next = parseSteps\(reply\.text\)/);
   assert.match(loop, /if \(seen\.has\(key\)\) continue;/, "a lookup already run isn't run again");
-  assert.match(loop, /fresh\.slice\(0, MAX_LOOKUPS - observations\.length\)/);
+  assert.match(loop, /fresh\.slice\(0, budget\(\)\.maxLookups - observations\.length\)/);
   assert.match(loop, /await Promise\.all\(\s*batch\.map/);
   assert.match(loop, /runTool\(user, s\)\)\.catch\(/, "one failed lookup doesn't sink the batch");
   assert.ok(MAX_LOOKUPS >= MAX_PARALLEL);
@@ -143,10 +144,10 @@ test("complex questions get a larger research budget; simple ones do not", async
 
 test("research loop stops on the time budget before the step limit", () => {
   const lib = code("src/lib/crmAssistant.ts");
-  const loop = lib.slice(lib.indexOf("const complex = isComplexQuestion"), lib.indexOf("const [profileRaw, company]"));
-  assert.match(loop, /RESEARCH_BUDGET_MS/);
-  assert.match(loop, /researchLeft\(\) < MIN_CALL_MS/);
-  assert.match(loop, /complex \? 180_000 : 90_000/);
+  const loop = lib.slice(lib.indexOf("let depth: Depth"), lib.indexOf("timings.answer = Date.now() - answerStarted"));
+  // The budget is the question's depth's (assistantDepth), against the clock — not just a count.
+  assert.match(loop, /const researchLeft = \(\) => researchLeftMs\(depth, elapsed\(\)\)/);
+  assert.match(loop, /if \(!roundFits\(researchLeft\(\), slowestRound\)\) break;/);
   // Each plan call is capped by remaining research time, not a fixed 45s.
   assert.match(loop, /Math\.min\(PLAN_MAX_MS, Math\.max\(0, researchLeft\(\)\)\)/);
   // Answer is capped by remaining time under the hard deadline.

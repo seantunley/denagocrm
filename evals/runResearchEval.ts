@@ -47,7 +47,7 @@ function main() {
 if (import.meta.url === `file://${process.argv[1]}`) main();
 
 
-export type AskFn = (question: string) => Promise<{ tools: string[]; steps: number; answer: string; latencyMs?: number; tokens?: number }>;
+export type AskFn = (question: string) => Promise<{ tools: string[]; steps: number; answer: string; latencyMs?: number; tokens?: number; depth?: "quick" | "investigate" }>;
 
 /**
  * Run the scenarios against a live ask function (askCrm in a script, or a
@@ -67,6 +67,7 @@ export async function runLive(ask: AskFn) {
       answer: result.answer,
       latencyMs: result.latencyMs ?? Date.now() - started,
       ...(result.tokens !== undefined ? { tokens: result.tokens } : {}),
+      ...(result.depth ? { depth: result.depth } : {}),
     });
   }
   return scoreRecorded(records);
@@ -89,6 +90,7 @@ export async function capture(ask: AskFn, outPath: string): Promise<void> {
       answer: result.answer,
       latencyMs: result.latencyMs ?? Date.now() - started,
       ...(result.tokens !== undefined ? { tokens: result.tokens } : {}),
+      ...(result.depth ? { depth: result.depth } : {}),
     });
   }
   writeFileSync(outPath, JSON.stringify(records, null, 2));
