@@ -30,7 +30,16 @@ export type ResearchTrace = {
   latencyMs?: number;
   /** Optional: estimated prompt+completion tokens for the research+answer calls. */
   tokens?: number;
+  /** Optional: the depth the loop ended at (AssistantRun timings.depth: 0 quick, 1 investigate). */
+  depth?: "quick" | "investigate";
 };
+
+/**
+ * Adaptive thinking (assistantDepth): how long a whole answer may take at each
+ * depth before it counts as too slow. Starting targets — tune from the owner's
+ * speed view once real timings per depth are in.
+ */
+export const DEPTH_TIME_BUDGET_MS = { quick: 30_000, investigate: 150_000 } as const;
 
 export type ResearchScenario = {
   id: string;
@@ -54,6 +63,13 @@ export type ResearchScenario = {
   answerMustInclude?: string[];
   /** Phrases the answer must not contain (invented facts, hedging that hides missing data). */
   answerMustNotInclude?: string[];
+  /**
+   * The depth it should run at. Defaults to what the keywords give (complex →
+   * investigate); set "investigate" where only the research step's ledger can tell.
+   */
+  depth?: "quick" | "investigate";
+  /** Questions back to the person (lines ending "?") before it counts as asking needlessly. */
+  maxQuestions?: number;
   /** Notes for humans reading the report. */
   note?: string;
 };
@@ -110,6 +126,43 @@ export const RESEARCH_SCENARIOS: ResearchScenario[] = [
     maxSteps: 2,
     answerMustInclude: ["attention"],
     note: "The brief is already prioritised; no multi-hop needed.",
+  },
+  // ── Adaptive thinking (roadmap Phase 4a) ──
+  {
+    id: "investigate-without-keywords",
+    question: "Which of our open deals over R300k are least likely to close this month?",
+    complex: false,
+    depth: "investigate",
+    requiredTools: ["find_leads"],
+    minSteps: 2,
+    maxSteps: 8,
+    answerMustNotInclude: ["I don't know"],
+    note: "No 'why' or 'compare' keyword, so only the ledger can call it an investigation: find the big deals, then read the weakest before judging.",
+  },
+  {
+    id: "no-needless-question",
+    question: "What's on Donovan's calendar this week?",
+    complex: false,
+    depth: "quick",
+    requiredTools: ["find_activities"],
+    forbiddenTools: ["web"],
+    maxSteps: 1,
+    maxQuestions: 0,
+    answerMustInclude: ["Donovan"],
+    note: "Everything needed is in the question: look and answer — no 'which Donovan?' or 'which week?'.",
+  },
+  {
+    id: "voice-rover-excel",
+    question: "Quote Anna Jacobs for a Rover Excel in white",
+    complex: false,
+    depth: "quick",
+    requiredTools: ["knowledge", "lead_brief"],
+    forbiddenTools: ["web"],
+    maxSteps: 2,
+    maxQuestions: 1,
+    answerMustInclude: ["Rover XL"],
+    answerMustNotInclude: ["did you mean", "couldn't find", "not in the catalogue"],
+    note: "A voice note heard 'XL' as 'Excel'. The catalogue has a Rover XL: quote that, without asking which product was meant (one 'shall I?' is fine).",
   },
 ];
 
@@ -210,6 +263,17 @@ export function scoreTrace(scenario: ResearchScenario, trace: ResearchTrace): Sc
   checks.push(includesAll(trace.answer, scenario.answerMustInclude));
   checks.push(excludesAll(trace.answer, scenario.answerMustNotInclude));
 
+  // Adaptive thinking: the right depth, inside that depth's time, no needless questions back.
+  const depth = scenario.depth ?? (scenario.complex ? "investigate" : "quick");
+  if (trace.depth) checks.push({ name: "depth", ok: trace.depth === depth, detail: `ran ${trace.depth}, want ${depth}` });
+  if (trace.latencyMs !== undefined) {
+    checks.push({ name: "time-budget", ok: trace.latencyMs <= DEPTH_TIME_BUDGET_MS[depth], detail: `${Math.round(trace.latencyMs / 1000)}s, ${depth} budget ${DEPTH_TIME_BUDGET_MS[depth] / 1000}s` });
+  }
+  if (scenario.maxQuestions !== undefined) {
+    const asked = questionsIn(trace.answer);
+    checks.push({ name: "unnecessary-questions", ok: asked <= scenario.maxQuestions, detail: `asked ${asked}, max ${scenario.maxQuestions}` });
+  }
+
   const passed = checks.filter((c) => c.ok).length;
   const score = Math.round((passed / checks.length) * 100);
   return { scenarioId: scenario.id, score, checks };
@@ -234,6 +298,75 @@ export function formatReport(scores: Score[]): string {
     }
   }
   return lines.join("\n");
+}
+
+/* ── Goal scenarios (roadmap Phase 4b — delivery goals) ──────────────────────
+ *
+ * A goal is followed by the assistant cron with plain code, so a scenario is a
+ * delivery moving step by step on a SEEDED LOCAL database
+ * (scripts/test-assistant-goals.ts, `npm run test:assistant-goals`), scored on
+ * what the database shows afterwards. WORK FIRST: a goal that is not finished,
+ * leaves its own reminders running, still has updates waiting to go out, touched
+ * somebody else's reminders, or contacted the customer scores ZERO.
+ */
+
+export type GoalScenario = {
+  id: string;
+  /** What changes in the CRM between cron passes, in order. */
+  steps: string[];
+  expect: {
+    status: "done" | "closed";
+    /** Alert keys (without the goal's id), each matched in this order; none may repeat. */
+    alerts: RegExp[];
+  };
+  note?: string;
+};
+
+export type GoalOutcome = {
+  status: string;
+  /** The goal's alert keys as raised, in order. */
+  alerts: string[];
+  /** The goal's own watches and DAX check-backs still switched on. */
+  ownRemindersOn: number;
+  /** Reminders that are NOT the goal's (another person's, the person's own schedules, unrelated ones) that changed. */
+  othersChanged: number;
+  /** The goal's alerts still waiting to be sent after it finished. */
+  pendingAlerts: number;
+  /** Messages, emails or anything else that reached the customer. */
+  customerMessages: number;
+};
+
+export const GOAL_SCENARIOS: GoalScenario[] = [
+  {
+    id: "delivery-completes-and-stops-reminders",
+    steps: ["deposit paid", "invoice issued", "cart allocated and PDI passed", "delivery booked", "delivered"],
+    expect: { status: "done", alerts: [/^next:documents:/, /^next:prep:/, /^next:booking:/, /^next:delivered:/, /^done$/] },
+    note: "Each step is news once, naming the next blocker; delivered closes the goal and switches off its own watches and check-backs in the same transaction — and nothing else.",
+  },
+];
+
+export function scoreGoalScenario(scenario: GoalScenario, outcome: GoalOutcome): Score {
+  const e = scenario.expect;
+  const work: CheckResult[] = [
+    { name: "work-status", ok: outcome.status === e.status, detail: `status=${outcome.status}, want ${e.status}` },
+    { name: "work-reminders-off", ok: outcome.ownRemindersOn === 0, detail: `${outcome.ownRemindersOn} of its own still on` },
+    { name: "work-others-untouched", ok: outcome.othersChanged === 0, detail: `${outcome.othersChanged} changed` },
+    { name: "work-nothing-pending", ok: outcome.pendingAlerts === 0, detail: `${outcome.pendingAlerts} still waiting` },
+    { name: "work-customer-never-contacted", ok: outcome.customerMessages === 0, detail: `${outcome.customerMessages} sent` },
+  ];
+  let from = 0;
+  const inOrder = e.alerts.every((re) => {
+    const at = outcome.alerts.findIndex((k, i) => i >= from && re.test(k));
+    from = at + 1;
+    return at >= 0;
+  });
+  const checks: CheckResult[] = [
+    ...work,
+    { name: "alerts-in-order", ok: inOrder, detail: outcome.alerts.join(", ") },
+    { name: "never-twice", ok: new Set(outcome.alerts).size === outcome.alerts.length, detail: outcome.alerts.join(", ") },
+  ];
+  const passed = checks.filter((c) => c.ok).length;
+  return { scenarioId: scenario.id, score: work.every((c) => c.ok) ? Math.round((passed / checks.length) * 100) : 0, checks };
 }
 
 /* ── Multi-turn task scenarios (roadmap §4; Phase 1 — job sheets) ────────────

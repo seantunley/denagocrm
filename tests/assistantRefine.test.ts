@@ -49,10 +49,12 @@ test("the research step is told it never writes the answer, that tasks need the 
   assert.match(prompt, /With NO stage it returns every stage at once/, "deliveries in one lookup, not five");
 });
 
-test("quick-reply buttons must tell the options apart; the answer step runs at low effort", () => {
+test("quick-reply buttons must tell the options apart; the answer step runs at its depth's effort (low when quick)", async () => {
   assert.match(code("src/lib/assistantActions.ts"), /never \\"The first one\\"/);
   const lib = code("src/lib/crmAssistant.ts");
   const answer = lib.slice(lib.indexOf("const answerReply = await withRetry(breakerKey, () => codexRespond("));
-  assert.match(answer.slice(0, 2500), /reasoningEffort: "low",/);
+  assert.match(answer.slice(0, 2500), /reasoningEffort: budget\(\)\.answerEffort,/);
+  const { DEPTH_BUDGETS } = await import("../src/lib/assistantDepth");
+  assert.equal(DEPTH_BUDGETS.quick.answerEffort, "low");
 });
 

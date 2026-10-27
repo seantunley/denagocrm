@@ -87,8 +87,8 @@ const SELECT = {
 /** The person's open sheets with activity in the last 14 days, newest first — what each question starts from. */
 export async function openTasks(user: User, take = TASK_PROMPT_MAX, now = new Date()): Promise<TaskView[]> {
   const rows = await prisma.assistantTask.findMany({
-    // Not plans: those are run from their own card, never written by the answer step (assistantPlan).
-    where: { tenantId: ownedWriteTenantId(), userId: user.id, status: "open", kind: { not: "plan" }, updatedAt: { gte: staleBefore(now) } },
+    // Not delivery goals (the cron's, assistantGoals.ts) nor plans (run from their own card, assistantPlan).
+    where: { tenantId: ownedWriteTenantId(), userId: user.id, kind: { notIn: ["delivery_goal", "plan"] }, status: "open", updatedAt: { gte: staleBefore(now) } },
     orderBy: { updatedAt: "desc" },
     take,
     select: SELECT,
@@ -103,8 +103,8 @@ export async function openTasks(user: User, take = TASK_PROMPT_MAX, now = new Da
  */
 export async function tasksForAskPage(userId: string, now = new Date()) {
   const rows = await prisma.assistantTask.findMany({
-    // Plans have their own list on the Ask page (assistantPlan.plansForAskPage).
-    where: { tenantId: ownedWriteTenantId(), userId, kind: { not: "plan" }, updatedAt: { gte: new Date(now.getTime() - 30 * DAY) } },
+    // Delivery goals and plans have their own sections on the Ask page.
+    where: { tenantId: ownedWriteTenantId(), userId, kind: { notIn: ["delivery_goal", "plan"] }, updatedAt: { gte: new Date(now.getTime() - 30 * DAY) } },
     orderBy: { updatedAt: "desc" },
     take: 50,
     select: { id: true, title: true, status: true, quoteId: true, nextAction: true, updatedAt: true, closedAt: true },

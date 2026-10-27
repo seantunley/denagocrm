@@ -4,6 +4,7 @@ import { readFileSync } from "node:fs";
 import { researchGate } from "../src/lib/assistantResearchGate";
 import { formatDecision, matchDecisions, parseDecision } from "../src/lib/assistantDecisions";
 import { costSummary, runLive, scoreRecorded } from "../evals/runResearchEval";
+import { RESEARCH_SCENARIOS } from "../evals/daxResearchQuality";
 
 test("gate continues when a why-question has no lead_brief yet", () => {
   const d = researchGate({
@@ -75,7 +76,7 @@ test("live runner scores answers from an ask function", async () => {
     steps: 2,
     answer: question,
   }));
-  assert.equal(scores.length, 5);
+  assert.equal(scores.length, RESEARCH_SCENARIOS.length);
   assert.ok(scores.every((s) => s.score >= 0));
 });
 

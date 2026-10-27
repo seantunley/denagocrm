@@ -33,6 +33,7 @@ import { assistantWhatsAppOn } from "@/lib/assistantWhatsApp";
 import { linkRefusalText, maskWaId } from "@/lib/assistantWhatsAppRules";
 import AssistantWhatsAppCard from "@/components/AssistantWhatsAppCard";
 import AssistantProactiveCard from "@/components/AssistantProactiveCard";
+import AssistantGoalsCard from "@/components/AssistantGoalsCard";
 import { ASSISTANT_PROACTIVE_KEY, BRIEF_DEFAULT, briefPersonKey, parseBriefAt, proactiveOn, proactivePersonKey } from "@/lib/proactiveRules";
 
 export const dynamic = "force-dynamic";
@@ -286,6 +287,7 @@ export default async function AssistantPage() {
           </ul>
         )}
       </section>
+      <AssistantGoalsCard userId={user.id} name={profile.name} />
       <AssistantProactiveCard name={profile.name} workspaceOn={proactiveWorkspace} on={proactiveMe} briefAt={briefAt} />
       {whatsapp &&<AssistantWhatsAppCard name={profile.name} linked={whatsapp.linked} refused={whatsapp.refused} updates={whatsapp.updates} />}
       <details className="card p-4 text-sm">

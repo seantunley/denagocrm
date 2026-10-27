@@ -174,7 +174,7 @@ test("wiring: plans only in the CRM chat; elsewhere their steps are loose cards;
   // what they produced, so the loose tasks' came-to-nothing count is unchanged.
   assert.match(ask, /reply\.attempted \+= planCards\.length \+ planProblems\.length;\s*actions\.push\(\.\.\.planCards\);\s*problems\.push\(\.\.\.planProblems\);/);
   const tasks = src("src/lib/assistantTask.ts");
-  assert.equal((tasks.match(/kind: \{ not: "plan" \}/g) ?? []).length, 2, "plans never reach the answer step's job sheets, nor the job-sheet list");
+  assert.equal((tasks.match(/kind: \{ notIn: \[[^\]]*"plan"[^\]]*\] \}/g) ?? []).length, 2, "plans never reach the answer step's job sheets, nor the job-sheet list");
   const action = src("src/app/actions/assistantPlans.ts");
   assert.match(action, /withActingStaffScope/);
   assert.match(action, /continuePlan\(user, String\(taskId \?\? ""\), \(card\) => runAssistantAction\(card\)\)/);

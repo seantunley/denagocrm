@@ -82,7 +82,7 @@ export default async function AssistantSettingsPage() {
     // 👍/👎 over the last 30 days — counts and reasons only. The conversations
     // stay private to each person; the owner sees how DAX is doing, not what was asked.
     ratingsSince(30),
-    runSpeed(7).catch(() => ({ runs: 0, medians: {} as Record<string, number> })),
+    runSpeed(7).catch(() => ({ runs: 0, medians: {} as Record<string, number>, byDepth: { quick: {}, investigate: {} } as Record<"quick" | "investigate", Record<string, number>> })),
     getSetting(ASSISTANT_VOICE_REPLIES_KEY).then(voiceRepliesSwitchOn),
     getSetting(ASSISTANT_WHATSAPP_CONFIRM_KEY).then(whatsappConfirmOn),
     getSetting(ASSISTANT_WHATSAPP_TEMPLATE_KEY).then(parseUpdateTemplate),
@@ -207,6 +207,15 @@ export default async function AssistantSettingsPage() {
                 </li>
               ))}
             </ul>
+          )}
+          {/* Adaptive thinking: quick questions and investigations timed apart, so a slower quick answer shows. */}
+          {(["quick", "investigate"] as const).some((d) => speed.byDepth[d].total !== undefined) && (
+            <p className="mt-1 text-xs text-muted-foreground">
+              Whole answer — quick questions:{" "}
+              <span className="tabular-nums">{speed.byDepth.quick.total !== undefined ? `${(speed.byDepth.quick.total / 1000).toFixed(1)} s` : "—"}</span>
+              {" · "}investigations:{" "}
+              <span className="tabular-nums">{speed.byDepth.investigate.total !== undefined ? `${(speed.byDepth.investigate.total / 1000).toFixed(1)} s` : "—"}</span>
+            </p>
           )}
         </div>
       </section>
