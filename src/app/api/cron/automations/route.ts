@@ -20,7 +20,7 @@ import { runRepairsDetectors } from "@/lib/repairsDetectors";
 import { runAiHealthIfDue, runBackupWatchdog } from "@/lib/systemHealth";
 import { reconcileAllTenantChannels } from "@/lib/channelRegistration";
 import { basePrisma } from "@/lib/db";
-import { TASK_STALE_DAYS } from "@/lib/assistantTaskRules";
+import { pruneAssistantTasks } from "@/lib/assistantGoals";
 import { expireReservations } from "@/lib/stockPlatform";
 import { resolveTenantActor } from "@/lib/tenantActor";
 import { runCronPerTenant, type CronRun, type CronSliceContext } from "@/lib/tenantCron";
@@ -173,12 +173,8 @@ async function runGlobalMaintenance() {
       .catch(() => {});
     // DAX's job sheets close themselves after 14 days without activity (Sean, 2026-10-26) — still on the Ask page,
     // reopenable — and go with the conversation history 30 days after the last activity (closing is not activity).
-    await basePrisma.assistantTask
-      .updateMany({ where: { status: "open", updatedAt: { lt: new Date(Date.now() - TASK_STALE_DAYS * 24 * 60 * 60 * 1000) } }, data: { status: "closed", closedAt: new Date() } })
-      .catch(() => {});
-    await basePrisma.assistantTask
-      .deleteMany({ where: { updatedAt: { lt: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000) } } })
-      .catch(() => {});
+    // Delivery goals: an open one is never closed or deleted here; a finished one goes 30 days after it finished.
+    await pruneAssistantTasks().catch(() => {});
     // A run is the live copy of one question while it is answered (the turn
     // above is the record) and its phase timings for the owner's speed view —
     // a week of those is enough; the reconnect itself needs minutes.

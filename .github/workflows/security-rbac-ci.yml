@@ -340,6 +340,12 @@ jobs:
         # sheet never reached, and the policy refusing it under a NOBYPASSRLS role; one sheet, one quote.
         run: npm run test:assistant-task
 
+      - name: DAX delivery goals -- followed to done, own reminders off in one locked transaction, never twice
+        # Roadmap Phase 4b: a goal advancing step by step to done and switching off its own watches and
+        # check-backs (and nothing else) in one transaction on the goal's row lock; deal lost; two cron passes
+        # at once; another person's or workspace's goal never touched; access lost; the Automotive module off.
+        run: npm run test:assistant-goals
+
       - name: Run two-tenant end-to-end CRM isolation suite
         # Ordinary CRM flows run as two different tenants through the REAL scoped
         # client under the restricted role -- the regression guard for real-flow
