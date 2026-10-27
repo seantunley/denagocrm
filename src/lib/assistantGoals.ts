@@ -51,8 +51,13 @@ const DAY = 86_400_000;
 /** A goal checked this recently is skipped: the cron beats every 30 minutes, so this is once per tick. */
 const RECHECK_AFTER_MS = 20 * 60 * 1000;
 const GOAL_CHECK_RESERVE_MS = 15_000;
-/** ponytail: 100 open goals per workspace per tick, least recently worked on first; page through when a workspace follows more. */
-const GOAL_BATCH = 100;
+/**
+ * Open goals looked at per workspace per tick, least recently looked at first. For a GOAL, updatedAt means "last
+ * looked at by the cron" (every check, and every skip, moves it on), so the queue rotates: with more goals than
+ * this, the rest go next tick, and none is starved (review of #922). Nothing else reads a goal's updatedAt as
+ * activity — job-sheet code leaves goals out, the Ask page lists every open goal, and pruning goes by closedAt.
+ */
+export const GOAL_BATCH = 100;
 /** Per person — each can alert. */
 export const MAX_OPEN_GOALS = 20;
 
@@ -283,17 +288,26 @@ export async function runDeliveryGoals(tenantId: string, budget: Pick<CronSliceC
   });
   let origin: string | null = null;
   const fresh = (s: GoalState) => Boolean(s.checkedAt) && now.getTime() - Date.parse(s.checkedAt!) < RECHECK_AFTER_MS;
+  // A goal skipped this tick (Off, proactive DAX off, a failure) goes to the back of the queue, so a run of them
+  // can't hold the front for ever. Only the queue position moves — not its state, not its version.
+  const toBack = (goalId: string) =>
+    prisma.assistantTask.updateMany({ where: { id: goalId, tenantId, kind: GOAL_KIND, status: "open" }, data: { updatedAt: now } }).catch(() => {});
 
   for (const goal of goals) {
     if (budget.shouldStop(GOAL_CHECK_RESERVE_MS)) break;
     if (goal.tenantId !== tenantId) continue;
     const before = readGoalState(goal.details, now);
-    if (before.paused || fresh(before)) continue;
+    if (fresh(before)) continue;
+    if (before.paused) {
+      await toBack(goal.id);
+      continue;
+    }
     // PAUSED while the person's proactive DAX is off (or the owner's): untouched — nothing advanced, nothing
     // finished, no reminder switched off — so the first pass after it is back on tells them where it stands now
     // (review of #922: events were consumed with nobody told). Read per goal, so a switch-off mid-run counts.
     if (!(await switchedOn(tenantId, goal.userId))) {
       stats.paused++;
+      await toBack(goal.id);
       continue;
     }
 
@@ -303,6 +317,7 @@ export async function runDeliveryGoals(tenantId: string, budget: Pick<CronSliceC
       user = await assistantUserFor(goal.userId);
     } catch (error) {
       await logError("assistant-goal", "couldn't check the person for a goal", error instanceof Error ? error.name : "unknown");
+      await toBack(goal.id);
       continue;
     }
     try {
@@ -351,7 +366,6 @@ export async function runDeliveryGoals(tenantId: string, budget: Pick<CronSliceC
           // The unique (person, kind, record) key: a pass that somehow got here twice still makes each alert once.
           await tx.assistantProactiveAlert.createMany({ data, skipDuplicates: true });
         }
-        const progressed = ev.alerts.length > 0 || finished;
         await tx.assistantTask.updateMany({
           where: { id: row.id, tenantId, userId: goal.userId, status: "open" },
           data: {
@@ -359,8 +373,8 @@ export async function runDeliveryGoals(tenantId: string, budget: Pick<CronSliceC
             steps: { done: ev.done, outstanding: ev.outstanding },
             nextAction: finished ? `${ev.next}${remindersOffText(off.watches, off.checkBacks)}` : ev.next,
             version: { increment: 1 },
-            // Progress is activity; a check that found nothing new is not.
-            ...(progressed ? { updatedAt: now } : {}),
+            // Looked at: to the back of the queue (GOAL_BATCH).
+            updatedAt: now,
             ...(finished ? { status: ev.outcome === "done" ? "done" : "closed", closedAt: now } : {}),
           },
         });
@@ -387,6 +401,7 @@ export async function runDeliveryGoals(tenantId: string, budget: Pick<CronSliceC
       for (const id of result.toSend) await deliver(tenantId, id).catch((error: unknown) => logError("assistant-goal", "goal alert delivery failed", error instanceof Error ? error.name : "unknown"));
     } catch (error) {
       await logError("assistant-goal", "goal check failed", error instanceof Error ? error.name : "unknown");
+      await toBack(goal.id);
     }
   }
   return stats;

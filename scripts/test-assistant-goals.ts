@@ -24,7 +24,7 @@ import { DEFAULT_TENANT_ID } from "../src/lib/tenant";
 import { runInTenantScope } from "../src/lib/tenantScope";
 import { __setTenantEnforcingForTests } from "../src/lib/tenantEnforcement";
 import type { PermissionUser } from "../src/lib/permissions";
-import { closeGoal, goalsForAskPage, pruneAssistantTasks, runDeliveryGoals, setGoalPaused, startDeliveryGoal } from "../src/lib/assistantGoals";
+import { GOAL_BATCH, closeGoal, goalsForAskPage, pruneAssistantTasks, runDeliveryGoals, setGoalPaused, startDeliveryGoal } from "../src/lib/assistantGoals";
 import { withSystemScope } from "../src/lib/tenantScopeEntry";
 import { openTasks, tasksForAskPage } from "../src/lib/assistantTask";
 import { ASSISTANT_PROACTIVE_KEY, proactivePersonKey } from "../src/lib/proactiveRules";
@@ -436,6 +436,34 @@ async function main() {
     check("open goals 15 and 31 days quiet survive, still open", (await exists(g15)) === "open" && (await exists(g31)) === "open", JSON.stringify(swept));
     check("a goal finished over 30 days ago is removed; one finished 10 days ago stays (measured from when it finished)", (await exists(done31)) === null && (await exists(done10)) === "closed");
     check("job sheets keep their rule: 15 days quiet → closed, 31 → removed", (await exists(sheet15)) === "closed" && (await exists(sheet31)) === null);
+  }
+
+  console.log(`\nMore open goals than one pass takes (${GOAL_BATCH}): every one is checked in turn, the newest too (review of #922)`);
+  {
+    const n = GOAL_BATCH + 5;
+    const base = Date.now();
+    const bulk = Array.from({ length: n }, (_, i) => id(`bulk-${String(i).padStart(3, "0")}`));
+    // Unchanged deliveries (waiting on the deposit, as they were set up): a check finds nothing new on any of them.
+    await basePrisma.assistantTask.createMany({
+      data: bulk.map((gid, i) => ({
+        id: gid, tenantId: T, userId: rep.id, kind: "delivery_goal", title: "bulk", status: "open", quoteId: Q.aged,
+        details: { blocker: "deposit", since: new Date(base).toISOString(), told: [] }, steps: {},
+        // Oldest first; the last is the newest goal.
+        updatedAt: new Date(base - (n - i) * 60_000), createdAt: new Date(base - (n - i) * 60_000),
+      })),
+    });
+    const checked = async () =>
+      (await basePrisma.assistantTask.findMany({ where: { id: { in: bulk } }, select: { details: true } })).filter((r) => Boolean((r.details as { checkedAt?: string }).checkedAt)).length;
+    const alertsBefore = await basePrisma.assistantProactiveAlert.count({ where: { userId: rep.id } });
+    const first = await Promise.all([tick(), tick()]);
+    const afterFirst = await checked();
+    const second = await tick();
+    const newest = await goal(bulk[n - 1]);
+    check(`two passes at once take one batch between them (${afterFirst} of ${n} checked), the next pass the rest`,
+      afterFirst >= GOAL_BATCH - 5 && afterFirst < n && (await checked()) === n, JSON.stringify({ first, second, afterFirst }));
+    check("…including the newest goal", Boolean((newest?.details as { checkedAt?: string }).checkedAt));
+    check("…and nothing new on any of them means no alert at all", (await basePrisma.assistantProactiveAlert.count({ where: { userId: rep.id } })) === alertsBefore);
+    await basePrisma.assistantTask.deleteMany({ where: { id: { in: bulk } } });
   }
 
   console.log("\nNever the customer");
