@@ -1,6 +1,8 @@
 import "server-only";
 import { prisma } from "@/lib/db";
 import { getActiveTenantId } from "@/lib/auth";
+import { actingTenantId } from "@/lib/actingTenant";
+import { layoutScopeFor, layoutScopeWhere, type LayoutScope } from "@/lib/docbuilder/layoutScope";
 import { isModuleEnabled } from "@/lib/modules/enabled";
 import { docKeyEnabled } from "@/lib/docModuleAccess";
 import { readTemplateDocument } from "@/lib/doceditor/legacy";
@@ -91,17 +93,37 @@ export async function ensureBuilderSeeded(): Promise<void> {
 }
 
 /**
+ * The ACTING workspace's layout scope (./layoutScope.ts) — the boundary a
+ * document that prints a bank account puts in its layout lookups. The workspace
+ * is the one `actingTenantId()` resolves, the same rule the records being
+ * printed are read by, so the design and the figures can never come from two
+ * different workspaces; it refuses (TenantScopeError) when the request has
+ * none. `Tenant` is a global model, and two ids answer the only question asked
+ * of it: is this workspace the only one?
+ */
+export async function actingLayoutScope(): Promise<LayoutScope> {
+  const tenantId = await actingTenantId();
+  const workspaces = await prisma.tenant.findMany({ select: { id: true }, orderBy: { id: "asc" }, take: 2 });
+  return layoutScopeFor({ tenantId, workspaceIds: workspaces.map((workspace) => workspace.id) });
+}
+
+/**
  * Resolve the builder template that should drive an operational document. The
  * explicit default wins, with the most recently updated valid row as fallback.
+ *
+ * With a `scope`, only that workspace's layouts are candidates
+ * (./layoutScope.ts) — the invoice and sales agreement pass one, because they
+ * print a bank account. Without one, a type resolves as it always has.
  */
 export async function defaultBuilderTemplateId(
   key: string,
+  scope?: LayoutScope,
 ): Promise<string | null> {
   try {
     if (!(await docKeyEnabled(key))) return null;
     await ensureBuilderSeeded();
     const rows = await prisma.docBuilderTemplate.findMany({
-      where: { key, deletedAt: null },
+      where: { key, deletedAt: null, ...(scope ? layoutScopeWhere(scope) : {}) },
       orderBy: [{ isDefault: "desc" }, { updatedAt: "desc" }],
       select: { id: true, data: true },
     });

@@ -64,8 +64,9 @@ test("?tpl= (old-template preview) and ?legacy=1 (builder fallback) stay on the 
 test("each print page gates on its OWN key, and the gate requires a published version", () => {
   for (const key of ["invoice", "agreement"]) {
     const src = read(`src/app/(print)/quotes/[id]/${key}/page.tsx`);
+    // …the workspace's own template (docbuilder/layoutScope.ts; tests/invoiceTemplateWorkspace.test.ts).
     assert.ok(
-      src.includes(`builderDocRedirect(id, "${key}", search, () => publishedBuilderTemplateFor("${key}"))`),
+      src.includes(`builderDocRedirect(id, "${key}", search, () => publishedBuilderTemplateFor("${key}", scope))`),
       `${key} page must gate on the ${key} template`,
     );
     assert.match(src, /if \(builderHref\) redirect\(builderHref\)/);

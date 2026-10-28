@@ -1,6 +1,7 @@
 import { notFound, redirect } from "next/navigation";
 import { builderDocRedirect } from "@/lib/docbuilder/quoteDocs";
 import { publishedBuilderTemplateFor } from "@/lib/docbuilder/published";
+import { actingLayoutScope } from "@/lib/docbuilder/store";
 import { prisma } from "@/lib/db";
 import { requireQuoteReadAccess } from "@/lib/permissions";
 import PrintActions from "@/components/PrintActions";
@@ -23,9 +24,13 @@ export default async function AgreementPrintPage({
   await requireQuoteReadAccess(id);
   const search = await searchParams;
   const tplId = search.tpl;
+  // The layout and the template's clauses are this workspace's own
+  // (docbuilder/layoutScope.ts), in the switch below and on this page alike —
+  // the same rule as the invoice, whose builder route this shares.
+  const scope = await actingLayoutScope();
   // Once the sales agreement layout is PUBLISHED in the document editor, it
   // prints from there; until then, this page prints exactly as it always has.
-  const builderHref = await builderDocRedirect(id, "agreement", search, () => publishedBuilderTemplateFor("agreement"));
+  const builderHref = await builderDocRedirect(id, "agreement", search, () => publishedBuilderTemplateFor("agreement", scope));
   if (builderHref) redirect(builderHref);
   const quote = await prisma.quote.findUnique({
     where: { id },
@@ -36,7 +41,7 @@ export default async function AgreementPrintPage({
   // platform-set tenant brand when the tenant has not filled in its own profile.
   const company = await getCompanyProfile();
   const regional = await getRegionalSettings();
-  const tpl = await getDocTemplate("agreement", tplId);
+  const tpl = await getDocTemplate("agreement", tplId, scope);
   // Fees and delivery are part of what the customer pays; the subtotal is not.
   // The rows the customer can see must add up to the price they are agreeing
   // to — in either tax mode. See documentTotals().

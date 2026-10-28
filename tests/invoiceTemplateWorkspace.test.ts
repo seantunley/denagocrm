@@ -1,0 +1,59 @@
+import assert from "node:assert/strict";
+import { test } from "node:test";
+import { readFileSync } from "node:fs";
+
+/*
+ * Found in the review of #925: the invoice, the sales agreement and the old
+ * statement page chose their layout and their old form-editor template with no
+ * workspace in the query, so with tenant enforcement off one workspace's
+ * document could print another's design and bank account. Each now resolves the
+ * acting workspace's scope (docbuilder/layoutScope.ts) after its access gate and
+ * hands the same scope to every lookup. What those lookups then read is proved
+ * against a real database by scripts/test-invoice-workspace.ts; this pins where
+ * the scope is taken and that no lookup is left without it.
+ */
+
+const read = (path: string) => readFileSync(path, "utf8");
+
+test("the invoice and agreement pages: the scope after the gate, in the switch and on the old page alike", () => {
+  for (const key of ["invoice", "agreement"] as const) {
+    const page = read(`src/app/(print)/quotes/[id]/${key}/page.tsx`);
+    const gate = page.indexOf("await requireQuoteReadAccess(id);");
+    const scope = page.indexOf("const scope = await actingLayoutScope();");
+    assert.ok(gate > 0 && scope > gate, `${key}: the scope is taken after the access gate`);
+    assert.match(page, new RegExp(`builderDocRedirect\\(id, "${key}", search, \\(\\) => publishedBuilderTemplateFor\\("${key}", scope\\)\\)`));
+    assert.match(page, new RegExp(`getDocTemplate\\("${key}", tplId, scope\\)`));
+    assert.doesNotMatch(page, new RegExp(`publishedBuilderTemplateFor\\("${key}"\\)|getDocTemplate\\("${key}"(, tplId)?\\)`), `${key}: no unscoped lookup left`);
+  }
+});
+
+test("the published layout, rendered: the layout and its banking text from one scope", () => {
+  const print = read("src/lib/quoteBuilderDocPrint.ts");
+  assert.match(print, /const scope = await actingLayoutScope\(\);\s*const template = await publishedBuilderTemplateFor\(opts\.key, scope\);/);
+  assert.match(print, /getDocTemplate\(opts\.key, undefined, scope\)/);
+  assert.doesNotMatch(print, /getDocTemplate\(opts\.key\)/);
+});
+
+test("the old statement pages: the invoice template's bank details are the workspace's own, after the gates", () => {
+  for (const [kind, gate] of [
+    ["contacts", 'await requireAnyPermission("quotes.view_all", "quotes.view_owned");'],
+    ["fleets", 'await requireAnyPermission("quotes.view_all", "quotes.view_owned");'],
+  ] as const) {
+    const page = read(`src/app/(print)/${kind}/[id]/statement/page.tsx`);
+    assert.ok(page.indexOf(gate) > 0 && page.indexOf("const scope = await actingLayoutScope();") > page.indexOf(gate), `${kind}: after the gates`);
+    assert.match(page, /getDocTemplate\("invoice", undefined, scope\)/);
+    assert.doesNotMatch(page, /getDocTemplate\("invoice"\)/);
+  }
+});
+
+test("the old template store: a scoped default, and a ?tpl= id only inside the scope", () => {
+  const store = read("src/lib/docTemplateStore.ts");
+  assert.match(store, /export async function getDocTemplate\(key: DocKey, templateId\?: string, scope\?: LayoutScope\)/);
+  assert.match(store, /loadDocTemplate\(key, templateId, scope\)/);
+  assert.match(store, /if \(rec && rec\.docType === key && \(!scope \|\| layoutRowVisible\(rec\.tenantId, scope\)\)\) \{/);
+  assert.match(store, /where: \{ docType: key, isDefault: true, deletedAt: null, \.\.\.\(scope \? layoutScopeWhere\(scope\) : \{\}\) \}/);
+  // The builder's default, scoped the same way, and the scope's one resolver.
+  const builder = read("src/lib/docbuilder/store.ts");
+  assert.match(builder, /where: \{ key, deletedAt: null, \.\.\.\(scope \? layoutScopeWhere\(scope\) : \{\}\) \}/);
+  assert.match(builder, /export async function actingLayoutScope\(\): Promise<LayoutScope> \{\s*const tenantId = await actingTenantId\(\);/);
+});

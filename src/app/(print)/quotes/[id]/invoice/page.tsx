@@ -1,6 +1,7 @@
 import { notFound, redirect } from "next/navigation";
 import { builderDocRedirect } from "@/lib/docbuilder/quoteDocs";
 import { publishedBuilderTemplateFor } from "@/lib/docbuilder/published";
+import { actingLayoutScope } from "@/lib/docbuilder/store";
 import { prisma } from "@/lib/db";
 import { requireQuoteReadAccess } from "@/lib/permissions";
 import PrintActions from "@/components/PrintActions";
@@ -24,9 +25,13 @@ export default async function InvoicePrintPage({
   await requireQuoteReadAccess(id);
   const search = await searchParams;
   const tplId = search.tpl;
+  // The layout and the template's bank details are this workspace's own
+  // (docbuilder/layoutScope.ts), in the switch below and on this page alike, so
+  // the two never disagree about which invoice is published.
+  const scope = await actingLayoutScope();
   // Once the invoice layout is PUBLISHED in the document editor, it prints from
   // there; until then, this page prints exactly as it always has.
-  const builderHref = await builderDocRedirect(id, "invoice", search, () => publishedBuilderTemplateFor("invoice"));
+  const builderHref = await builderDocRedirect(id, "invoice", search, () => publishedBuilderTemplateFor("invoice", scope));
   if (builderHref) redirect(builderHref);
   const quote = await prisma.quote.findUnique({
     where: { id },
@@ -37,7 +42,7 @@ export default async function InvoicePrintPage({
   // platform-set tenant brand when the tenant has not filled in its own profile.
   const company = await getCompanyProfile();
   const regional = await getRegionalSettings();
-  const tpl = await getDocTemplate("invoice", tplId);
+  const tpl = await getDocTemplate("invoice", tplId, scope);
   // Fees and delivery are part of what the customer pays; the subtotal is not.
   const totals = documentTotals(quote);
   // An INVOICE is the document where getting this wrong matters most: it names
