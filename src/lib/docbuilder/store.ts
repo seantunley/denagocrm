@@ -2,7 +2,7 @@ import "server-only";
 import { prisma } from "@/lib/db";
 import { getActiveTenantId } from "@/lib/auth";
 import { actingTenantId } from "@/lib/actingTenant";
-import { layoutScopeFor, layoutScopeWhere, type LayoutScope } from "@/lib/docbuilder/layoutScope";
+import { layoutRowVisible, layoutScopeFor, layoutScopeWhere, type LayoutScope } from "@/lib/docbuilder/layoutScope";
 import { isModuleEnabled } from "@/lib/modules/enabled";
 import { docKeyEnabled } from "@/lib/docModuleAccess";
 import { readTemplateDocument } from "@/lib/doceditor/legacy";
@@ -176,10 +176,14 @@ export async function getBuilderTemplate(id: string) {
  * only: the editor opens this and its save stores it; Publish stores it too
  * (publishBuilderVersion). Until the owner publishes, the live document keeps
  * printing the old text, as it always has.
+ *
+ * With a `scope`, the old text is that workspace's own (./layoutScope.ts) — a
+ * bank account must be; without one it is read as it always has. The editor
+ * and Publish come through ownLayoutWithLegacyText, which passes one.
  */
-export async function withLegacyTextInlined<T extends { key: string; data: unknown }>(template: T): Promise<T> {
+export async function withLegacyTextInlined<T extends { key: string; data: unknown }>(template: T, scope?: LayoutScope): Promise<T> {
   if ((template.key !== "invoice" && template.key !== "agreement") || !hasLegacyTokens(template.key, template.data)) return template;
-  const old = await getDocTemplateText(template.key);
+  const old = await getDocTemplateText(template.key, scope);
   const sectionOn = (section: string) => old.sections[section] !== false;
   const legacy: LegacyText =
     template.key === "invoice"
@@ -193,6 +197,22 @@ export async function withLegacyTextInlined<T extends { key: string; data: unkno
           clauses: { text: old.bodyText ?? "", on: sectionOn("clauses") },
         };
   return { ...template, data: inlineLegacyText(template.key, template.data, legacy) };
+}
+
+/**
+ * An invoice or agreement layout as the editor opens it and Publish stores it:
+ * with the old form editor's text written in — the ACTING workspace's text —
+ * and only when the layout is the acting workspace's own (./layoutScope.ts).
+ * Null for one outside it. Both arrive with an id from the browser, which names
+ * no workspace while enforcement is off; writing this workspace's bank details
+ * into another's layout would print them on that workspace's invoices, and the
+ * editor autosaves what it opened. Every other type passes through untouched.
+ */
+export async function ownLayoutWithLegacyText<T extends { key: string; data: unknown; tenantId: string | null }>(template: T): Promise<T | null> {
+  if (template.key !== "invoice" && template.key !== "agreement") return template;
+  const scope = await actingLayoutScope();
+  if (!layoutRowVisible(template.tenantId, scope)) return null;
+  return withLegacyTextInlined(template, scope);
 }
 
 /**

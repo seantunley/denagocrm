@@ -57,3 +57,17 @@ test("the old template store: a scoped default, and a ?tpl= id only inside the s
   assert.match(builder, /where: \{ key, deletedAt: null, \.\.\.\(scope \? layoutScopeWhere\(scope\) : \{\}\) \}/);
   assert.match(builder, /export async function actingLayoutScope\(\): Promise<LayoutScope> \{\s*const tenantId = await actingTenantId\(\);/);
 });
+
+test("opening and publishing write in the old text only into this workspace's own invoice or agreement (review of #926)", () => {
+  const builder = read("src/lib/docbuilder/store.ts");
+  const own = builder.slice(builder.indexOf("export async function ownLayoutWithLegacyText"));
+  assert.match(own, /if \(template\.key !== "invoice" && template\.key !== "agreement"\) return template;\s*const scope = await actingLayoutScope\(\);\s*if \(!layoutRowVisible\(template\.tenantId, scope\)\) return null;\s*return withLegacyTextInlined\(template, scope\);/);
+  assert.match(builder, /const old = await getDocTemplateText\(template\.key, scope\);/);
+  assert.match(read("src/lib/docTemplateStore.ts"), /export async function getDocTemplateText\(key: DocKey, scope\?: LayoutScope\)[^]*?return loadDocTemplate\(key, undefined, scope\);/);
+  // The editor's open and Publish are the two places the text is written in; neither calls the unscoped form.
+  const editor = read("src/app/doc-editor/[id]/page.tsx");
+  assert.match(editor, /getBuilderTemplate\(id\)\.then\(\(t\) => \(t \? ownLayoutWithLegacyText\(t\) : null\)\)/);
+  const actions = read("src/app/actions/docbuilder.ts");
+  assert.match(actions, /const tpl = await ownLayoutWithLegacyText\(found\);\s*if \(!tpl\) return \{ ok: false \};/);
+  for (const source of [editor, actions]) assert.doesNotMatch(source, /withLegacyTextInlined\(/);
+});

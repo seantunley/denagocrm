@@ -8,7 +8,7 @@ import { hasPermission, requirePermission, requireAnyPermission } from "@/lib/pe
 import { canEditLayout } from "@/lib/docbuilder/layoutAccess";
 import { logAudit } from "@/lib/audit";
 // getBuilderTemplate, not a raw findUnique: it is where the module check lives.
-import { getBuilderTemplate, listBuilderVersions, withLegacyTextInlined } from "@/lib/docbuilder/store";
+import { getBuilderTemplate, listBuilderVersions, ownLayoutWithLegacyText } from "@/lib/docbuilder/store";
 import { STANDARD_TEMPLATE_KEYS, standardTemplateFor, type StandardDocKey } from "@/lib/doceditor/standardTemplates";
 import { defaultEmailBody, defaultEmailFrame, EMAIL_FRAME_KEY, emailKindOf } from "@/lib/doceditor/emailDefaults";
 import { withActingStaffScope } from "@/lib/actingScope";
@@ -71,8 +71,11 @@ export async function publishBuilderVersion(id: string, label?: string): Promise
     if (!(await canEditLayout(user, found.key))) return { ok: false };
     // An invoice/agreement still reading bank details or clauses from the old
     // form editor is published with that text written in, and its draft keeps
-    // it — from here on it is edited only in this editor.
-    const tpl = await withLegacyTextInlined(found);
+    // it — from here on it is edited only in this editor. The text is this
+    // workspace's, and only an invoice/agreement of its own is published
+    // (ownLayoutWithLegacyText): the id came from the browser.
+    const tpl = await ownLayoutWithLegacyText(found);
+    if (!tpl) return { ok: false };
     const last = await prisma.docBuilderVersion.findFirst({
       where: { templateId: id }, orderBy: { version: "desc" }, select: { version: true },
     });

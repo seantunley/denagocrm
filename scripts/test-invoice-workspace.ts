@@ -29,6 +29,7 @@ import { actingLayoutScope } from "../src/lib/docbuilder/store";
 import { publishedBuilderTemplateFor } from "../src/lib/docbuilder/published";
 import { getDocTemplate } from "../src/lib/docTemplateStore";
 import { renderQuoteBuilderDocHtml } from "../src/lib/quoteBuilderDocPrint";
+import { publishBuilderVersion } from "../src/app/actions/docbuilder";
 import { seedTwoTenants, teardown } from "./harness/seed";
 import { actAsStaff } from "./harness/actAs";
 
@@ -159,6 +160,38 @@ async function main() {
       check("?tpl= with B's template id, from A, never prints B's", !previewText.includes(bank.b.legacy) && previewText.includes(bank.a.legacy), foreignBanking(previewText, "a").join(", "));
       const ownPreview = await memberOfA(async () => getDocTemplate("invoice", aRecord, await actingLayoutScope()));
       check("…while A previews its own by id", JSON.stringify(ownPreview).includes(bank.a.legacy));
+
+      // ── publishing: the real action writes the old text into the layout ──
+      // Review of #926: Publish wrote in the old form editor's default with no
+      // workspace, so B's layout could be published with A's bank details — and
+      // then printed, correctly scoped, as B's. Unpublished drafts that still read
+      // {{invoice.bankingDetails}}, not defaults, so the print checks above stand.
+      const draft = async (tenantId: string, party: Party) => {
+        const row = await basePrisma.docBuilderTemplate.create({
+          data: { tenantId, key: "invoice", name: `${party} draft ${SFX} ${enforcing ? "on" : "off"}`, data: invoiceLayout(party) as object, isDefault: false, updatedAt: at(-60) },
+          select: { id: true },
+        });
+        templates.push(row.id);
+        return row.id;
+      };
+      const publishedText = async (id: string) => {
+        const row = await basePrisma.docBuilderTemplate.findUniqueOrThrow({ where: { id }, select: { publishedVersion: true } });
+        if (row.publishedVersion == null) return null;
+        const version = await basePrisma.docBuilderVersion.findUniqueOrThrow({ where: { templateId_version: { templateId: id, version: row.publishedVersion } }, select: { data: true } });
+        return JSON.stringify(version.data);
+      };
+      const aDraft = await draft(a.tenantId, "a");
+      const bDraft = await draft(b.tenantId, "b");
+      const aPublish = await memberOfA(() => publishBuilderVersion(aDraft)).catch((error: unknown) => ({ ok: false, error: String(error) }));
+      const aSnapshot = (await publishedText(aDraft)) ?? "";
+      check("A publishing its own invoice writes in A's bank details", aPublish.ok === true && aSnapshot.includes(bank.a.legacy), JSON.stringify(aPublish));
+      check("…and nobody else's", foreignBanking(aSnapshot, "a").length === 0 && !aSnapshot.includes("invoice.bankingDetails"), foreignBanking(aSnapshot, "a").join(", "));
+      const bPublish = await memberOfB(() => publishBuilderVersion(bDraft)).catch((error: unknown) => ({ ok: false, error: String(error) }));
+      const bSnapshot = (await publishedText(bDraft)) ?? "";
+      check("B publishing its own invoice writes in B's bank details, not A's", bPublish.ok === true && bSnapshot.includes(bank.b.legacy) && foreignBanking(bSnapshot, "b").length === 0, JSON.stringify(bPublish) + foreignBanking(bSnapshot, "b").join(", "));
+      const aOther = await draft(a.tenantId, "a");
+      const hijack = await memberOfB(() => publishBuilderVersion(aOther)).catch((error: unknown) => ({ ok: false, error: String(error) }));
+      check("B publishing A's invoice by its id is refused, and nothing is published", hijack.ok === false && (await publishedText(aOther)) === null, JSON.stringify(hijack));
 
       // ── a layout with no workspace ───────────────────────────────────────
       const scopeOfA = await memberOfA(() => actingLayoutScope());

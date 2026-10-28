@@ -74,9 +74,14 @@ export async function getDocTemplate(key: DocKey, templateId?: string, scope?: L
 /**
  * The default template's text as the owner wrote it — {{company.name}} still a
  * placeholder, not filled in — for moving it into the document editor's layout.
+ *
+ * With a `scope`, only that workspace's default counts (docbuilder/layoutScope.ts):
+ * the text written in is a bank account, so it must be the acting workspace's
+ * own, named in the query, with tenant enforcement off as well as on. Without
+ * one it is read as it always has been.
  */
-export async function getDocTemplateText(key: DocKey): Promise<DocTemplate> {
-  return loadDocTemplate(key);
+export async function getDocTemplateText(key: DocKey, scope?: LayoutScope): Promise<DocTemplate> {
+  return loadDocTemplate(key, undefined, scope);
 }
 
 async function loadDocTemplate(key: DocKey, templateId?: string, scope?: LayoutScope): Promise<DocTemplate> {
