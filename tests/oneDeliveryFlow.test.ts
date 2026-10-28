@@ -518,7 +518,16 @@ test("deposit amounts are stored in cents and every change is audited", () => {
     assert.match(body, /assertDepositFits\(ledger, amountCents, formatZAR\);/);
     assert.ok(body.indexOf("assertDepositFits(ledger") < body.indexOf("tx.quote.updateMany("), "check, then write");
   }
-  assert.ok(paid.indexOf("assertDepositFits(before") < paid.indexOf("attachStageDocument("), "refused before the proof is filed");
+  // The proof is filed WITH the deposit or not at all (review of #924): staged
+  // first, its Document row created inside the same locked transaction that
+  // checks the balance and records the deposit, the staged file cleaned up on a
+  // refusal — the delivery-evidence pattern (stagedEvidence.ts).
+  assert.doesNotMatch(paid, /attachStageDocument\(|prisma\.document\.create\(/, "never filed outside the deposit's transaction");
+  assert.match(paid, /await withStagedEvidence\(/);
+  assert.match(paid, /isUnreferenced: \(storedName\) => signedPdfIsSafeToDelete\(storedName, quote\.tenantId\),/);
+  assert.match(paid, /remove: deleteFile,/);
+  assert.ok(paid.indexOf("assertDepositFits(ledger") < paid.indexOf("tx.document.create("), "balance checked under the lock, then the proof filed");
+  assert.ok(paid.indexOf("tx.document.create(") < paid.indexOf("tx.quote.updateMany("), "proof and deposit in one transaction");
 
   const reservation = fn(stock, "recordReservationDeposit");
   assert.match(reservation, /requirePermission\("stock\.manage"\)/);

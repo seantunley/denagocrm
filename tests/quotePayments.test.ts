@@ -67,7 +67,7 @@ test("ONE balance: every change to deposit or payments locks the quote and re-re
   const fulfilment = read("src/app/actions/fulfilment.ts");
   for (const [name, next] of [["markDepositPaid", "correctDepositAmount"], ["correctDepositAmount", "replaceInvoice"]]) {
     const body = fulfilment.slice(fulfilment.indexOf(`export async function ${name}`), fulfilment.indexOf(`export async function ${next}`));
-    assert.match(body, /await prisma\.\$transaction\(async \(tx\) => \{\s*const ledger = await lockQuoteLedger\(tx, quoteId, tenantId\);/, `${name} locks`);
+    assert.match(body, /prisma\.\$transaction\(async \(tx\) => \{\s*const ledger = await lockQuoteLedger\(tx, quoteId, tenantId\);/, `${name} locks`);
     assert.match(body, /assertDepositFits\(ledger, amountCents, formatZAR\);/, `${name} checks the combined balance`);
   }
 });
