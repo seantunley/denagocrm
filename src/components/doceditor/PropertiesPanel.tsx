@@ -3,11 +3,11 @@
 import { useEditor } from "@/lib/doceditor/store";
 import { getBlock } from "@/lib/doceditor/ops";
 import { newPricingLine } from "@/lib/doceditor/factory";
-import type { DocumentBlock, OverlayField, Recipient, PricingBlock, ImageBlock, DividerBlock, SpacerBlock, ConditionalBlock, TextBlock, BannerBlock, InfoCardBlock, TotalBandBlock, TermsBlock, FooterBlock, LineItemsBlock, LineItemColumn, EmailButtonBlock, EmailFactsBlock, EmailFooterBlock, EmailHeaderBlock, EmailSignatureBlock } from "@/lib/doceditor/model";
+import type { DocumentBlock, OverlayField, Recipient, PricingBlock, ImageBlock, DividerBlock, SpacerBlock, ConditionalBlock, TextBlock, BannerBlock, InfoCardBlock, TotalBandBlock, TermsBlock, FooterBlock, LineItemsBlock, LineItemColumn, StatementLinesBlock, StatementLineColumn, EmailButtonBlock, EmailFactsBlock, EmailFooterBlock, EmailHeaderBlock, EmailSignatureBlock } from "@/lib/doceditor/model";
 import { cssColor } from "@/lib/doceditor/css";
 import { activePreset, recolour, STYLE_PRESETS } from "@/lib/doceditor/docStyles";
 import type { DocStyle } from "@/lib/doceditor/model";
-import { lineItemColKeys } from "@/lib/doceditor/model";
+import { lineItemColKeys, statementLineColKeys } from "@/lib/doceditor/model";
 import { recipientLabel } from "@/lib/signing/templateRecipients";
 import { ConditionField } from "@/lib/docbuilder/ConditionField";
 import { validateExpression } from "@/lib/docbuilder/expr";
@@ -271,6 +271,7 @@ const FRAME_PARTS = new Set<string>(["emailHeader", "emailBody", "emailSignature
 const EMAIL_BLOCK_NAMES: Record<string, string> = {
   emailHeader: "Header", emailBody: "Message slot", emailSignature: "Signature", emailFooter: "Footer", emailButton: "Button", emailFacts: "Key figures",
   detailsGrid: "Details grid", paymentSchedule: "Payment schedule", comparison: "Comparison table", callout: "Callout", gallery: "Photo gallery", qr: "QR code",
+  statementLines: "Statement lines",
 };
 
 /**
@@ -347,6 +348,7 @@ function BlockProps({ block, floating }: { block: DocumentBlock; floating: boole
       {block.type === "terms" && <TermsProps block={block} />}
       {block.type === "footer" && <FooterProps block={block} />}
       {block.type === "lineItems" && <LineItemsProps block={block} />}
+      {block.type === "statementLines" && <StatementLinesProps block={block} />}
       {(block.type === "showcaseHeader" || block.type === "infoStrip" || block.type === "vehicleShowcase" || block.type === "totalsBox" || block.type === "acceptance" || block.type === "footerBand") && <ShowcaseProps block={block} />}
       {(block.type === "detailsGrid" || block.type === "paymentSchedule" || block.type === "comparison" || block.type === "callout" || block.type === "gallery" || block.type === "qr") && <ContentBlockProps block={block} />}
       {block.type === "emailButton" && <EmailButtonProps block={block} />}
@@ -857,6 +859,71 @@ function LineItemsProps({ block }: { block: LineItemsBlock }) {
             onClick={() => setCols([...block.columns, { key: "vat", header: "VAT", align: "right", showIf: "" }])}>＋ Add column (VAT, discount, etc.)</button>
         </div>
         <p className="mt-2 text-[11px] text-slate-400">Columns fill from the linked quote / job card. Add a “Show if” condition to make any column appear only when it applies — hiding a column never affects the others’ maths.</p>
+      </Section>
+    </>
+  );
+}
+
+const STATEMENT_COL_LABEL: Record<StatementLineColumn["key"], string> = {
+  date: "Date",
+  reference: "Reference (invoice number)",
+  description: "Description",
+  charges: "Charges (invoiced)",
+  payments: "Payments (deposits and payments)",
+  balance: "Running balance",
+};
+
+/** A statement's transactions table: the same controls as line items, over the statement's columns. */
+function StatementLinesProps({ block }: { block: StatementLinesBlock }) {
+  const updateBlock = useEditor((s) => s.updateBlock);
+  const setCols = (columns: StatementLineColumn[]) => updateBlock(block.id, { columns });
+  const move = (i: number, dir: -1 | 1) => {
+    const j = i + dir; if (j < 0 || j >= block.columns.length) return;
+    const c = [...block.columns]; [c[i], c[j]] = [c[j], c[i]]; setCols(c);
+  };
+  const missing = statementLineColKeys.filter((key) => !block.columns.some((c) => c.key === key));
+  return (
+    <>
+      <Section title="Header colours">
+        <div className="grid grid-cols-2 gap-2">
+          <div><label className={lbl}>Background</label><input type="color" value={block.headerBg} onChange={(e) => updateBlock(block.id, { headerBg: e.target.value })} className="h-8 w-full rounded border border-slate-300" /></div>
+          <div><label className={lbl}>Text</label><input type="color" value={block.headerColor} onChange={(e) => updateBlock(block.id, { headerColor: e.target.value })} className="h-8 w-full rounded border border-slate-300" /></div>
+        </div>
+      </Section>
+      {!block.look || block.look === "standard" ? (
+        <Section title="Table style"><TableStyleControls value={block.tableStyle} onChange={(tableStyle) => updateBlock(block.id, { tableStyle })} /></Section>
+      ) : null}
+      <Section title="Columns">
+        <div className="space-y-2">
+          {block.columns.map((c, i) => (
+            <div key={i} className="rounded-md border border-slate-200 p-2">
+              <div className="mb-1 flex items-center gap-1">
+                <select className={inp} value={c.key} onChange={(e) => setCols(block.columns.map((x, j) => (j === i ? { ...x, key: e.target.value as StatementLineColumn["key"] } : x)))}>
+                  {statementLineColKeys.map((k) => <option key={k} value={k}>{STATEMENT_COL_LABEL[k]}</option>)}
+                </select>
+                <button type="button" className="px-1 text-slate-400 hover:text-slate-700" title="Move up" onClick={() => move(i, -1)}>▲</button>
+                <button type="button" className="px-1 text-slate-400 hover:text-slate-700" title="Move down" onClick={() => move(i, 1)}>▼</button>
+                <button type="button" className="px-1 text-red-500" title="Remove" onClick={() => setCols(block.columns.filter((_, j) => j !== i))}>✕</button>
+              </div>
+              <div className="flex gap-1">
+                <input className={inp} value={c.header} placeholder="Column heading" onChange={(e) => setCols(block.columns.map((x, j) => (j === i ? { ...x, header: e.target.value } : x)))} />
+                <select className="rounded border border-slate-300 px-1 text-xs" value={c.align} onChange={(e) => setCols(block.columns.map((x, j) => (j === i ? { ...x, align: e.target.value as "left" | "right" } : x)))}>
+                  <option value="left">Left</option><option value="right">Right</option>
+                </select>
+                <input
+                  type="number" min={5} max={90} step={1} className="w-16 rounded border border-slate-300 px-1 text-xs" title="Width, as a percent of the table. Empty = the standard share." aria-label={`Width of column ${i + 1}, percent`} placeholder="auto"
+                  value={c.widthPct ?? ""}
+                  onChange={(e) => setCols(block.columns.map((x, j) => { if (j !== i) return x; const { widthPct: _w, ...rest } = x; void _w; const n = Number(e.target.value); return e.target.value && n > 0 ? { ...rest, widthPct: Math.min(90, n) } : rest; }))}
+                />
+              </div>
+            </div>
+          ))}
+          {missing.length > 0 && (
+            <button type="button" className="w-full rounded-md border border-dashed border-slate-300 py-1.5 text-sm text-slate-500 hover:border-orange-300 hover:text-orange-600"
+              onClick={() => setCols([...block.columns, { key: missing[0], header: STATEMENT_COL_LABEL[missing[0]].split(" (")[0], align: ["charges", "payments", "balance"].includes(missing[0]) ? "right" : "left" }])}>＋ Add a column back ({STATEMENT_COL_LABEL[missing[0]]})</button>
+          )}
+        </div>
+        <p className="mt-2 text-[11px] text-slate-400">Rows fill from the customer&apos;s account when the statement is printed: each invoice, then the deposit and payments against it, with the running balance.</p>
       </Section>
     </>
   );

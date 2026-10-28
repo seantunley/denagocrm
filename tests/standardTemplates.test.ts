@@ -11,6 +11,7 @@ test("all operational templates use the current document model", () => {
   assert.deepEqual(STANDARD_TEMPLATE_KEYS, [
     "quote",
     "invoice",
+    "statement",
     "agreement",
     "indemnity",
     "delivery",

@@ -27,6 +27,7 @@ const BRANDED: { type: BlockType; label: string; icon: string }[] = [
   { type: "banner", label: "Brand banner", icon: "▬" },
   { type: "infoCard", label: "Info card", icon: "🪪" },
   { type: "lineItems", label: "Line items (bound)", icon: "≣" },
+  { type: "statementLines", label: "Statement lines (bound)", icon: "☰" },
   { type: "totalBand", label: "Total band", icon: "∑" },
   { type: "terms", label: "Terms", icon: "§" },
   { type: "handoverChecklist", label: "Handover checklist (bound)", icon: "☑" },

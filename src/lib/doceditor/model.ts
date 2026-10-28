@@ -265,6 +265,38 @@ export const lineItemsBlockSchema = z.object({
   tableStyle: tableStyleSchema,
 });
 export type LineItemColumn = z.infer<typeof lineItemColumnSchema>;
+/**
+ * A customer statement's transactions — Date · Reference · Description · Charges ·
+ * Payments · Balance — filled from the account when it prints (lib/statementDoc.ts
+ * statementRows). The statement layout's counterpart of `lineItems`, drawn in the
+ * same looks so a statement made from the invoice matches it.
+ */
+export const statementLineColKeys = ["date", "reference", "description", "charges", "payments", "balance"] as const;
+export const statementLineColumnSchema = z.object({
+  key: z.enum(statementLineColKeys),
+  header: z.string(),
+  align: z.enum(["left", "right"]).default("left"),
+  /** A fixed share of the table's width, in percent. Unset = sized by its content. */
+  widthPct: z.number().optional(),
+});
+export type StatementLineColumn = z.infer<typeof statementLineColumnSchema>;
+export const DEFAULT_STATEMENT_COLUMNS: StatementLineColumn[] = [
+  { key: "date", header: "Date", align: "left" },
+  { key: "reference", header: "Reference", align: "left" },
+  { key: "description", header: "Description", align: "left" },
+  { key: "charges", header: "Charges", align: "right" },
+  { key: "payments", header: "Payments", align: "right" },
+  { key: "balance", header: "Balance", align: "right" },
+];
+export const statementLinesBlockSchema = z.object({
+  ...base, type: z.literal("statementLines"),
+  look: blockLook,
+  headerBg: colorField("#020617"),
+  headerColor: colorField("#ffffff"),
+  columns: z.array(statementLineColumnSchema).default(DEFAULT_STATEMENT_COLUMNS),
+  /** Standard look only, as for line items. */
+  tableStyle: tableStyleSchema,
+});
 export const totalBandBlockSchema = z.object({
   ...base, type: z.literal("totalBand"),
   label: z.string().default("TOTAL INCL. VAT"),
@@ -517,7 +549,7 @@ export const conditionalBlockSchema = z.object({
 export const blockSchema: z.ZodType<DocumentBlock> = z.lazy(() => z.discriminatedUnion("type", [
   textBlockSchema, headingBlockSchema, imageBlockSchema, dividerBlockSchema, spacerBlockSchema,
   pageBreakBlockSchema, pricingBlockSchema, tableBlockSchema,
-  bannerBlockSchema, infoCardBlockSchema, lineItemsBlockSchema, totalBandBlockSchema, termsBlockSchema, footerBlockSchema,
+  bannerBlockSchema, infoCardBlockSchema, lineItemsBlockSchema, statementLinesBlockSchema, totalBandBlockSchema, termsBlockSchema, footerBlockSchema,
   conditionalBlockSchema, handoverChecklistBlockSchema,
   showcaseHeaderBlockSchema, infoStripBlockSchema, vehicleShowcaseBlockSchema, totalsBoxBlockSchema, acceptanceBlockSchema, footerBandBlockSchema,
   detailsGridBlockSchema, paymentScheduleBlockSchema, comparisonBlockSchema, calloutBlockSchema, galleryBlockSchema, qrBlockSchema,
@@ -535,6 +567,7 @@ export type TableBlock = z.infer<typeof tableBlockSchema>;
 export type BannerBlock = z.infer<typeof bannerBlockSchema>;
 export type InfoCardBlock = z.infer<typeof infoCardBlockSchema>;
 export type LineItemsBlock = z.infer<typeof lineItemsBlockSchema>;
+export type StatementLinesBlock = z.infer<typeof statementLinesBlockSchema>;
 export type TotalBandBlock = z.infer<typeof totalBandBlockSchema>;
 export type TermsBlock = z.infer<typeof termsBlockSchema>;
 export type FooterBlock = z.infer<typeof footerBlockSchema>;
@@ -570,7 +603,7 @@ export type ConditionalBlock = {
 export type DocumentBlock =
   | TextBlock | HeadingBlock | ImageBlock | DividerBlock | SpacerBlock
   | PageBreakBlock | PricingBlock | TableBlock
-  | BannerBlock | InfoCardBlock | LineItemsBlock | TotalBandBlock | TermsBlock | FooterBlock
+  | BannerBlock | InfoCardBlock | LineItemsBlock | StatementLinesBlock | TotalBandBlock | TermsBlock | FooterBlock
   | ConditionalBlock | HandoverChecklistBlock | ShowcaseBlock | ContentBlock | EmailBlock;
 export type BlockType = DocumentBlock["type"];
 

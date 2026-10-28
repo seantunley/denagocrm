@@ -10,7 +10,10 @@ import {
   STANDARD_TEMPLATE_KEYS,
   STANDARD_TEMPLATE_NAMES,
   standardTemplateFor,
+  type StandardDocKey,
 } from "@/lib/doceditor/standardTemplates";
+import { statementLayoutFromInvoice } from "@/lib/doceditor/statementLayout";
+import type { DocumentModel } from "@/lib/doceditor/model";
 
 /**
  * Ensure a valid system builder template exists for every operational document
@@ -81,13 +84,53 @@ export async function ensureBuilderSeeded(): Promise<void> {
           isDefault: becomeDefault,
           // The workspace's own standard: no vehicle card or EV disclaimer on a
           // non-automotive workspace's quotes.
-          data: standardTemplateFor(key, { automotive: await isModuleEnabled("automotive") }) as object,
+          data: (await seedLayout(key)) as object,
         },
       });
     } catch (error) {
       console.error(`Could not seed builder template "${key}"`, error);
     }
   }
+}
+
+/**
+ * A document type's first layout. The statement starts as the workspace's own
+ * PUBLISHED invoice, converted — its header, banking details, payment terms and
+ * footer — and every other type as its standard.
+ */
+async function seedLayout(key: StandardDocKey): Promise<DocumentModel> {
+  if (key === "statement") {
+    const fromInvoice = await statementLayoutFromPublishedInvoice();
+    if (fromInvoice) return fromInvoice;
+  }
+  return standardTemplateFor(key, { automotive: await isModuleEnabled("automotive") });
+}
+
+/**
+ * The workspace's PUBLISHED invoice layout, converted into a statement
+ * (doceditor/statementLayout.ts), or null when no invoice has been published.
+ *
+ * The invoice is the one that prints — the first readable row, default first,
+ * as defaultBuilderTemplateId picks it — read directly rather than through
+ * defaultBuilderTemplateId, because that seeds and seeding calls this. Text an
+ * older invoice still reads from the old form editor (bank details, payment
+ * terms) is written in first, as Publish does: a converted statement would
+ * otherwise drop the banking section with the invoice-only field it hangs on.
+ */
+export async function statementLayoutFromPublishedInvoice(): Promise<DocumentModel | null> {
+  if (!(await docKeyEnabled("invoice"))) return null;
+  const rows = await prisma.docBuilderTemplate.findMany({
+    where: { key: "invoice", deletedAt: null },
+    orderBy: [{ isDefault: "desc" }, { updatedAt: "desc" }],
+    select: { id: true, data: true, publishedVersion: true },
+  });
+  const invoice = rows.find((row) => readTemplateDocument(row.data).status === "ok");
+  if (!invoice || invoice.publishedVersion == null) return null;
+  const live = await getLiveBuilderTemplate(invoice.id);
+  if (!live) return null;
+  const inlined = await withLegacyTextInlined({ key: "invoice", data: live.data });
+  const read = readTemplateDocument(inlined.data, live.name);
+  return read.status === "ok" ? statementLayoutFromInvoice(read.doc) : null;
 }
 
 /**

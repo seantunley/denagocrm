@@ -14,10 +14,10 @@ test("automotive documents only for a workspace with the automotive module", () 
     assert.equal(docKeyAvailable(key, without), false, key);
     assert.equal(docKeyAvailable(key, new Set(["automotive"])), true, key);
   }
-  for (const key of ["quote", "invoice", "agreement", "proposal", "custom"]) {
+  for (const key of ["quote", "invoice", "statement", "agreement", "proposal", "custom"]) {
     assert.equal(docKeyAvailable(key, without), true, key);
   }
-  assert.deepEqual(docGroupsForModules(without).map((g) => [g.name, g.keys]), [["Sales", ["quote", "invoice", "agreement"]]]);
+  assert.deepEqual(docGroupsForModules(without).map((g) => [g.name, g.keys]), [["Sales", ["quote", "invoice", "statement", "agreement"]]]);
   assert.equal(docGroupsForModules(new Set(["automotive"])).length, 3);
 });
 

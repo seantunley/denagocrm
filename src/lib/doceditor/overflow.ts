@@ -1,15 +1,21 @@
 import type { DocumentModel, DocumentPage } from "./model";
 
-/** Bound line-item rows in a render context — what the overflow groups are sized against. */
-export function boundRowCount(ctx: { items?: unknown[]; bound?: boolean } | null | undefined): number {
-  return ctx?.bound ? ctx.items?.length ?? 0 : 0;
+type RowCtx = { items?: unknown[]; statementRows?: unknown[]; bound?: boolean } | null | undefined;
+
+/**
+ * Bound table rows in a render context — what the overflow groups are sized
+ * against: the line items, or a statement's transactions (whichever the
+ * document is printing; a context only ever carries one of them).
+ */
+export function boundRowCount(ctx: RowCtx): number {
+  return ctx?.bound ? Math.max(ctx.items?.length ?? 0, ctx.statementRows?.length ?? 0) : 0;
 }
 
 /**
  * The row count a render lays the document out for: the one frozen into a
  * signing snapshot at send time when there is one, else the live record's.
  */
-export function layoutRowsFor(doc: DocumentModel, ctx: { items?: unknown[]; bound?: boolean } | null | undefined): number {
+export function layoutRowsFor(doc: DocumentModel, ctx: RowCtx): number {
   return doc.layoutRows ?? boundRowCount(ctx);
 }
 

@@ -225,7 +225,10 @@ export default async function DocumentStudioPage({
                         </p>
                         {!live && layout && (
                           <p className="mt-1 text-xs leading-5 text-amber-600">
-                            Still printing its previous layout. Open it, check it, and press Publish to switch.
+                            {key === "statement"
+                              // statementDocPrint.ts: until it is published, a statement is the published invoice, converted.
+                              ? "Until you publish it, statements print from your published invoice — same design and banking details. Edit and publish it to make it its own."
+                              : "Still printing its previous layout. Open it, check it, and press Publish to switch."}
                           </p>
                         )}
                       </div>

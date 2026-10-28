@@ -94,7 +94,7 @@ export function BlockView({ block, active }: { block: DocumentBlock; active: boo
   // In an email, text reads as the email will — its type, sizes and colours, sample details filled in.
   if (email && !active && (block.type === "text" || block.type === "heading")) return <EmailBlockView block={block} />;
   // Shared blocks drawn in the showcase (or classic) style render its HTML, as the PDF does.
-  if ((block.type === "infoCard" || block.type === "lineItems" || block.type === "terms") && (block.look === "showcase" || block.look === "classic")) {
+  if ((block.type === "infoCard" || block.type === "lineItems" || block.type === "statementLines" || block.type === "terms") && (block.look === "showcase" || block.look === "classic")) {
     return <ShowcaseBlockView block={block} />;
   }
   switch (block.type) {
@@ -142,6 +142,8 @@ export function BlockView({ block, active }: { block: DocumentBlock; active: boo
       return <PrintedBlock block={block} hint={block.bound ? "🔗 Lines fill from the linked record when the document is generated" : undefined} />;
     case "lineItems":
       return <PrintedBlock block={block} hint={`🔗 Fills from the linked quote / job card${block.columns.some((c) => c.showIf?.trim()) ? " · some columns show only when their condition is met" : ""}`} />;
+    case "statementLines":
+      return <PrintedBlock block={block} hint="🔗 Fills from the customer's account when the statement prints" />;
     case "divider": case "banner": case "infoCard": case "totalBand": case "terms": case "footer": case "handoverChecklist":
       return <PrintedBlock block={block} />;
     // Details grid, payment schedule, comparison, callout, gallery, QR code: drawn by the print renderer; edited in the panel.

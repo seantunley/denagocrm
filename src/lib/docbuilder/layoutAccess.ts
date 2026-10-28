@@ -16,6 +16,8 @@ import { isTenantOwner } from "@/lib/auth";
  */
 export const FORM_EDITOR_KEYS: ReadonlySet<string> = new Set([
   "invoice",
+  // Edited by whoever edits the invoice it is made from.
+  "statement",
   "agreement",
   "delivery",
   "indemnity",

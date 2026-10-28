@@ -11,8 +11,7 @@ import { blockBoxCss, boxCssText, columnNeedsStretch } from "./blockBox";
 import { imageFrame, imageFrameCss } from "./imageFrame";
 import type {
   DocumentModel, DocumentBlock, DocumentColumn, DocumentRow, DocumentPage,
-  PricingBlock, PricingLine, TableBlock, OverlayField, DocStyle,
-} from "./model";
+  PricingBlock, PricingLine, TableBlock, OverlayField, DocStyle, StatementLineColumn } from "./model";
 import { pageMargin, pageSizeOf } from "./model";
 import { plateToHtmlBody } from "@/lib/docbuilder/plateSerialize";
 import { evaluateCondition } from "@/lib/docbuilder/expr";
@@ -28,10 +27,13 @@ import { contentBlockHtml } from "./contentBlocks";
 import { runningCss, runningSheetHtml } from "./pageFurniture";
 import { DEFAULT_REGIONAL, formatZAR, regionalFrom, type Regional } from "@/lib/format";
 import type { TableRow } from "@/lib/docbuilder/blocks";
+import type { StatementRow } from "@/lib/statementDoc";
 
 export type RenderCtx = {
   tokens: Record<string, string>;
   items: LineItemRow[];
+  /** A customer statement's transactions, formatted (lib/statementDoc.ts) — what a "statementLines" block prints. */
+  statementRows?: StatementRow[];
   vars: Record<string, unknown>;
   /** The workspace's currency/locale/time zone, for amounts and dates computed
    *  after binding (derived line-item columns, bound pricing, delivery/service
@@ -254,6 +256,18 @@ function blockHtml(block: DocumentBlock, ctx: RenderCtx, style: DocStyle, logoDa
         : `<tr><td colspan="${cols.length}" style="padding:7px 9px;color:#94a3b8">Line items appear here when linked to a record</td></tr>`;
       return `<table style="width:100%;border-collapse:collapse;margin:6px 0"><thead${theadAttr(look)}>${head}</thead><tbody>${body}</tbody></table>`;
     }
+    case "statementLines": {
+      if (block.look === "showcase" || block.look === "classic") return showcaseLookHtml(block, ctx);
+      const rows = ctx?.statementRows ?? [];
+      const cols = block.columns;
+      const look = tableLook(block.tableStyle, [7, 9]);
+      const width = (c: (typeof cols)[number]) => `;width:${statementColumnWidth(c)}%`;
+      const head = `<tr>${cols.map((c) => `<th style="text-align:${c.align};background:${cssColor(block.headerBg, "#020617")};color:${cssColor(block.headerColor, "#ffffff")};padding:${look.pad};font-size:8pt;letter-spacing:.5px;text-transform:uppercase${width(c)}">${esc(c.header)}</th>`).join("")}</tr>`;
+      const body = rows.length
+        ? rows.map((r, i) => `<tr style="${look.tr}background:${look.rowBg(i)}">${cols.map((c) => `<td style="text-align:${c.align};padding:${look.pad};${look.cellRule}">${esc(statementCell(c.key, r))}</td>`).join("")}</tr>`).join("")
+        : `<tr><td colspan="${cols.length}" style="padding:7px 9px;color:#94a3b8">${STATEMENT_PLACEHOLDER}</td></tr>`;
+      return `<table style="width:100%;border-collapse:collapse;margin:6px 0"><thead${theadAttr(look)}>${head}</thead><tbody>${body}</tbody></table>`;
+    }
     case "totalBand": {
       // The amount must never wrap. It is the one number on the page a reader
       // looks for, and a six-figure total breaking across two lines inside a
@@ -334,8 +348,38 @@ export function blockPreviewHtml(block: DocumentBlock, style: DocStyle, env: { c
 export function previewContext(env: { company: Record<string, string>; logo?: string }): NonNullable<RenderCtx> {
   const tokens = Object.fromEntries(Object.entries(env.company).map(([key, value]) => [`company.${key}`, value]));
   const sample: LineItemRow = { cells: [{ value: "Sample item" }, { value: "1" }, { value: money(1150) }, { value: money(1150) }], qty: 1, unitPrice: 1150, lineTotal: 1150 };
-  return { tokens, items: [sample], vars: {}, bound: false, logo: env.logo };
+  // A statement's sample: an invoice, then the deposit against it.
+  const statementRows: StatementRow[] = [
+    { kind: "invoice", date: "01 Oct 2026", reference: "INV-000101", description: "Invoice INV-000101 (quote Q-1001)", charges: money(1150), payments: "", balance: money(1150) },
+    { kind: "deposit", date: "05 Oct 2026", reference: "INV-000101", description: "Deposit received — INV-000101", charges: "", payments: money(250), balance: money(900) },
+  ];
+  return { tokens, items: [sample], statementRows, vars: {}, bound: false, logo: env.logo };
 }
+
+/** One cell of a statement table. */
+export function statementCell(key: StatementLineColumn["key"], row: StatementRow): string {
+  switch (key) {
+    case "date": return row.date;
+    case "reference": return row.reference;
+    case "description": return row.description;
+    case "charges": return row.charges;
+    case "payments": return row.payments;
+    case "balance": return row.balance;
+    default: return "";
+  }
+}
+
+/**
+ * A statement column's share of the table: its own width when set, else the
+ * description takes what the dates, references and the three amounts leave.
+ */
+export function statementColumnWidth(column: Pick<StatementLineColumn, "key" | "widthPct">): number {
+  if (column.widthPct) return Math.max(1, Math.min(100, Number(column.widthPct) || 0));
+  // Room for "01 Sept 2026" and "INV-000123" on one line at print size; the three amounts 14% each.
+  return column.key === "description" ? 29 : column.key === "date" ? 15 : column.key === "reference" ? 14 : 14;
+}
+
+export const STATEMENT_PLACEHOLDER = "Statement lines appear here when it is printed for a customer";
 
 /**
  * Per-block box + type: width and placement within its column (PandaDoc-style

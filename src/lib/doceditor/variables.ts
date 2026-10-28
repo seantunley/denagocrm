@@ -1,8 +1,9 @@
 /**
  * The rich-text "＋ variable" picker. Every key here must be filled by a
  * renderer: company.* by companyTokens(), user.name / date.today by
- * documentGlobalTokens(), the rest by the quote and job-card contexts in
- * docbuilder/merge.ts (tests/docEditorMergeFields.test.ts holds that). A key a
+ * documentGlobalTokens(), statement.* by statementDocTokens() (lib/statementDoc.ts),
+ * the rest by the quote and job-card contexts in docbuilder/merge.ts
+ * (tests/docEditorMergeFields.test.ts holds that). A key a
  * given record cannot fill — lead.* on a job card — renders as the
  * unresolved-variable pill, like any other unfilled variable.
  */
@@ -12,5 +13,7 @@ export const VARIABLES: { group: string; fields: string[] }[] = [
   { group: "Lead (quotes)", fields: ["lead.name", "lead.title", "lead.source", "lead.product", "lead.value"] },
   { group: "Quotation", fields: ["quote.number", "quote.date", "quote.validUntil", "quote.validDays", "quote.subtotal", "quote.vat", "quote.vatRate", "quote.total", "vehicle", "preparedBy"] },
   { group: "Job card", fields: ["jobcard.number", "jobcard.status", "jobcard.total", "vehicle.reg", "technician"] },
+  // Filled by statementDocTokens (lib/statementDoc.ts) when a statement prints.
+  { group: "Statement", fields: ["statement.date", "statement.accountName", "statement.accountLines", "statement.reference", "statement.invoiced", "statement.paid", "statement.balance", "statement.balanceLabel"] },
   { group: "Document", fields: ["user.name", "date.today"] },
 ];

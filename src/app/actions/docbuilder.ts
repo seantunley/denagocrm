@@ -8,7 +8,7 @@ import { hasPermission, requirePermission, requireAnyPermission } from "@/lib/pe
 import { canEditLayout } from "@/lib/docbuilder/layoutAccess";
 import { logAudit } from "@/lib/audit";
 // getBuilderTemplate, not a raw findUnique: it is where the module check lives.
-import { getBuilderTemplate, listBuilderVersions, withLegacyTextInlined } from "@/lib/docbuilder/store";
+import { getBuilderTemplate, listBuilderVersions, statementLayoutFromPublishedInvoice, withLegacyTextInlined } from "@/lib/docbuilder/store";
 import { STANDARD_TEMPLATE_KEYS, standardTemplateFor, type StandardDocKey } from "@/lib/doceditor/standardTemplates";
 import { defaultEmailBody, defaultEmailFrame, EMAIL_FRAME_KEY, emailKindOf } from "@/lib/doceditor/emailDefaults";
 import { withActingStaffScope } from "@/lib/actingScope";
@@ -140,11 +140,13 @@ export async function resetBuilderTemplateToStandard(id: string): Promise<{ ok: 
     if (!isEmail && !(STANDARD_TEMPLATE_KEYS as string[]).includes(tpl.key)) {
       return { ok: false, error: "There is no standard layout for this kind of document." };
     }
+    // A statement's standard is the workspace's own published invoice, converted.
+    const fromInvoice = tpl.key === "statement" ? await statementLayoutFromPublishedInvoice() : null;
     const standard = emailKind
       ? defaultEmailBody(emailKind)
       : isEmail
         ? defaultEmailFrame()
-        : standardTemplateFor(tpl.key as StandardDocKey, { automotive: await isModuleEnabled("automotive") });
+        : fromInvoice ?? standardTemplateFor(tpl.key as StandardDocKey, { automotive: await isModuleEnabled("automotive") });
     await prisma.$transaction(async (tx) => {
       const last = await tx.docBuilderVersion.findFirst({
         where: { templateId: id }, orderBy: { version: "desc" }, select: { version: true },
