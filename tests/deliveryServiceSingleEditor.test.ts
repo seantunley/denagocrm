@@ -14,7 +14,9 @@ const PNG = "data:image/png;base64,iVBORw0KGgo=";
 
 test("the published gate: only a default template with publishedVersion counts", () => {
   const code = src("src/lib/docbuilder/published.ts");
-  assert.match(code, /defaultBuilderTemplateId\(key\)/);
+  // The scope is optional: only the statement passes one (docbuilder/layoutScope.ts).
+  assert.match(code, /defaultBuilderTemplateId\(key, scope\)/);
+  assert.match(code, /export async function publishedBuilderTemplateFor\(key: string, scope\?: LayoutScope\)/);
   assert.match(code, /template && template\.publishedVersion != null \? template : null/);
 });
 

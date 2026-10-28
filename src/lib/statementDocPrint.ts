@@ -1,6 +1,6 @@
 import "server-only";
 import { publishedBuilderTemplateFor } from "@/lib/docbuilder/published";
-import { statementLayoutFromPublishedInvoice } from "@/lib/docbuilder/store";
+import { actingLayoutScope, statementLayoutFromPublishedInvoice } from "@/lib/docbuilder/store";
 import { readTemplateDocument } from "@/lib/doceditor/legacy";
 import type { DocumentModel } from "@/lib/doceditor/model";
 import { renderDocumentHtml } from "@/lib/doceditor/serialize";
@@ -21,6 +21,10 @@ import type { PermissionUser } from "@/lib/permissions";
  *      (doceditor/statementLayout.ts) — approved content, and always the
  *      invoice as it is today, banking details included;
  *   3. otherwise nothing, and the caller prints the old fixed page.
+ * Each one the ACTING workspace's own (docbuilder/layoutScope.ts), named in the
+ * query: what prints here is a bank account to pay into, so another
+ * workspace's layout — or one with no workspace, once there is more than one —
+ * is never a candidate, with tenant enforcement off as well as on.
  *
  * The figures come from the same loader as before (accountStatementLoader.ts):
  * the workspace named on every query, a partial statement refused, trashed
@@ -28,12 +32,13 @@ import type { PermissionUser } from "@/lib/permissions";
  */
 
 export async function statementPrintLayout(): Promise<DocumentModel | null> {
-  const own = await publishedBuilderTemplateFor("statement");
+  const scope = await actingLayoutScope();
+  const own = await publishedBuilderTemplateFor("statement", scope);
   if (own) {
     const read = readTemplateDocument(own.data, own.name);
     if (read.status === "ok") return read.doc;
   }
-  return statementLayoutFromPublishedInvoice();
+  return statementLayoutFromPublishedInvoice(scope);
 }
 
 export type StatementDocResult =

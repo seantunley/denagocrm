@@ -21,8 +21,15 @@
  *                 single quote to read it from.
  *
  * Everything else — the banking card, payment terms, the thank-you line, the
- * footer, images, page furniture — is carried over untouched. Signing fields are
- * dropped: a statement is not signed.
+ * footer, images, page furniture — is carried over untouched.
+ *
+ * Nothing to sign survives: a statement is not signed. Its signing fields and
+ * recipients go, and so does every block a customer signs — the acceptance card
+ * (name, signature and date lines, which print blank) and the handover checklist
+ * (with its customer signature) — wherever the invoice has one: in a row, inside
+ * a conditional, placed freely on the page, on a continuation page, in the
+ * header or footer. What existed only to hold one goes with it: a conditional, a
+ * row or an overflow group left with nothing else (review of #925).
  *
  * Pure: a document in, a document out. The caller saves it.
  */
@@ -117,15 +124,34 @@ export function statementBlock(block: DocumentBlock): DocumentBlock {
     case "totalBand":
       return { ...block, label: "{{statement.balanceLabel}}", amount: "{{statement.balance}}" };
     case "conditional":
-      return { ...block, when: rewriteStatementTokens(block.when), blocks: block.blocks.map(statementBlock) };
+      return { ...block, when: rewriteStatementTokens(block.when), blocks: statementBlocks(block.blocks) };
     default:
       return rewriteStrings(block);
   }
 }
 
+/** Blocks a customer signs. A statement is not signed, so none of them survives the conversion. */
+const SIGNING_BLOCKS: ReadonlySet<DocumentBlock["type"]> = new Set(["acceptance", "handoverChecklist"]);
+
+/**
+ * A list of blocks as the statement wants it: each one converted, every signing
+ * block dropped — inside conditionals too — and a conditional that held nothing
+ * but signing blocks dropped with them. One the owner left empty stays as it was.
+ */
+export function statementBlocks(blocks: DocumentBlock[]): DocumentBlock[] {
+  return blocks.flatMap((block): DocumentBlock[] => {
+    if (SIGNING_BLOCKS.has(block.type)) return [];
+    const converted = statementBlock(block);
+    const emptied = block.type === "conditional" && converted.type === "conditional" && block.blocks.length > 0 && converted.blocks.length === 0;
+    return emptied ? [] : [converted];
+  });
+}
+
 /** The published invoice, converted into a statement's first layout. */
 export function statementLayoutFromInvoice(invoice: DocumentModel): DocumentModel {
-  const floats = <T extends { block: DocumentBlock }>(list: T[]) => list.map((float) => ({ ...float, block: statementBlock(float.block) }));
+  /** Placed blocks, converted — a signing card, or a conditional left empty, taken off the page. */
+  const floats = <T extends { block: DocumentBlock }>(list: T[]) =>
+    list.flatMap((float) => statementBlocks([float.block]).map((block) => ({ ...float, block })));
   return {
     ...invoice,
     title: "Statement",
@@ -133,21 +159,38 @@ export function statementLayoutFromInvoice(invoice: DocumentModel): DocumentMode
     recipients: [],
     layoutRows: undefined,
     running: invoice.running ? rewriteStrings(invoice.running) : invoice.running,
-    header: invoice.header.map(statementBlock),
-    footer: invoice.footer.map(statementBlock),
-    pages: invoice.pages.map((page) => ({
-      ...page,
-      overlayFields: [],
-      rows: page.rows.map((row) => ({
-        ...row,
-        columns: row.columns.map((column) => ({ ...column, blocks: column.blocks.map(statementBlock) })),
-      })),
-      floatingBlocks: floats(page.floatingBlocks),
-      overflowGroups: page.overflowGroups?.map((group) => ({
-        ...group,
-        fieldIds: [],
-        nextPageFloats: group.nextPageFloats ? floats(group.nextPageFloats) : group.nextPageFloats,
-      })),
-    })),
+    header: statementBlocks(invoice.header),
+    footer: statementBlocks(invoice.footer),
+    pages: invoice.pages.map((page) => {
+      const floatingBlocks = floats(page.floatingBlocks);
+      const kept = new Set(floatingBlocks.map((float) => float.id));
+      const removed = new Set(page.floatingBlocks.filter((float) => !kept.has(float.id)).map((float) => float.id));
+      return {
+        ...page,
+        overlayFields: [],
+        // A row that held only something to sign goes with it rather than leave
+        // its gap; a row the owner left empty stays.
+        rows: page.rows.flatMap((row) => {
+          const columns = row.columns.map((column) => ({ ...column, blocks: statementBlocks(column.blocks) }));
+          const emptied = row.columns.some((column) => column.blocks.length > 0) && columns.every((column) => column.blocks.length === 0);
+          return emptied ? [] : [{ ...row, columns }];
+        }),
+        floatingBlocks,
+        // An overflow group moves its floats and fields to a continuation page.
+        // The fields are gone, and so are the floats removed above; a group left
+        // with nothing to move is dropped — kept, a long statement would still
+        // get a continuation page carrying only the group's header and footer.
+        overflowGroups: page.overflowGroups?.flatMap((group) => {
+          const floatIds = group.floatIds.filter((id) => !removed.has(id));
+          if ((group.floatIds.length > 0 || group.fieldIds.length > 0) && floatIds.length === 0) return [];
+          return [{
+            ...group,
+            floatIds,
+            fieldIds: [],
+            nextPageFloats: group.nextPageFloats ? floats(group.nextPageFloats) : group.nextPageFloats,
+          }];
+        }),
+      };
+    }),
   };
 }

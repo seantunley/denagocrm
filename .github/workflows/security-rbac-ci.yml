@@ -376,6 +376,16 @@ jobs:
       - name: Isolation -- a signing workflow is its own workspace's, with enforcement off
         run: npm run test:signflow-workspace
 
+      # Review of #925, the same door for a document that prints a bank account.
+      # A statement's layout is the workspace's published Statement, or its
+      # published invoice converted, with the bank text an older invoice reads from
+      # the old form editor -- and none of those lookups named a workspace, so with
+      # enforcement off one workspace's statement could print another's banking.
+      # Two workspaces with different layouts and banking, plus an invoice with no
+      # workspace that an unscoped pick would take first; off, then on.
+      - name: Isolation -- a statement prints its own workspace's layout and banking, with enforcement off
+        run: npm run test:statement-workspace
+
       # THE 2026-08-12 LOCKOUT, AS A TEST.
       #
       # Every tenant test above establishes scope by calling runInTenantScope

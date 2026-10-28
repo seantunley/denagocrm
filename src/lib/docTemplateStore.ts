@@ -7,6 +7,7 @@ import { DOC_DEFS, defaultTemplate, mergeTemplate, withCompanyDetails, type DocK
 import { getCompanyProfile } from "./companyProfile";
 import { docKeyEnabled } from "./docModuleAccess";
 import { isModuleEnabled } from "./modules/enabled";
+import { layoutScopeWhere, type LayoutScope } from "./docbuilder/layoutScope";
 
 /** First run per type: seed a "Standard" template (from legacy settings if any). */
 export async function ensureSeeded(): Promise<void> {
@@ -66,18 +67,23 @@ export async function getDocTemplate(key: DocKey, templateId?: string): Promise<
 /**
  * The default template's text as the owner wrote it — {{company.name}} still a
  * placeholder, not filled in — for moving it into the document editor's layout.
+ *
+ * With a `scope`, only that workspace's default counts (docbuilder/layoutScope.ts):
+ * a customer statement writes this text in as its bank details, so it must be
+ * the acting workspace's own, named in the query, with tenant enforcement off as
+ * well as on. Without one it is read as it always has been.
  */
-export async function getDocTemplateText(key: DocKey): Promise<DocTemplate> {
-  return loadDocTemplate(key);
+export async function getDocTemplateText(key: DocKey, scope?: LayoutScope): Promise<DocTemplate> {
+  return loadDocTemplate(key, undefined, scope);
 }
 
-async function loadDocTemplate(key: DocKey, templateId?: string): Promise<DocTemplate> {
+async function loadDocTemplate(key: DocKey, templateId?: string, scope?: LayoutScope): Promise<DocTemplate> {
   if (templateId) {
     const rec = await prisma.docTemplateRecord.findUnique({ where: { id: templateId } });
     if (rec && rec.docType === key) return withPrintableLogo(mergeTemplate(key, rec.config), rec.tenantId);
   }
   const def = await prisma.docTemplateRecord.findFirst({
-    where: { docType: key, isDefault: true, deletedAt: null },
+    where: { docType: key, isDefault: true, deletedAt: null, ...(scope ? layoutScopeWhere(scope) : {}) },
   });
   if (def) return withPrintableLogo(mergeTemplate(key, def.config), def.tenantId);
   const legacy = await getSetting(`DOC_TEMPLATE_${key}`);

@@ -1,6 +1,9 @@
 import "server-only";
 import { prisma } from "@/lib/db";
 import { getActiveTenantId } from "@/lib/auth";
+import { actingTenantId } from "@/lib/actingTenant";
+import { TenantScopeError } from "@/lib/tenantGuard";
+import { layoutScopeFor, layoutScopeWhere, type LayoutScope } from "@/lib/docbuilder/layoutScope";
 import { isModuleEnabled } from "@/lib/modules/enabled";
 import { docKeyEnabled } from "@/lib/docModuleAccess";
 import { readTemplateDocument } from "@/lib/doceditor/legacy";
@@ -64,6 +67,11 @@ export async function ensureBuilderSeeded(): Promise<void> {
         continue;
       }
 
+      // Made before anything changes, so a statement that has to wait for a
+      // workspace (seedLayout) leaves the rows exactly as they were.
+      const seed = await seedLayout(key);
+      if (!seed) continue;
+
       const invalidSystem = parsed.filter(
         (row) => row.createdById === null && !row.valid,
       );
@@ -82,9 +90,8 @@ export async function ensureBuilderSeeded(): Promise<void> {
           name: STANDARD_TEMPLATE_NAMES[key],
           key,
           isDefault: becomeDefault,
-          // The workspace's own standard: no vehicle card or EV disclaimer on a
-          // non-automotive workspace's quotes.
-          data: (await seedLayout(key)) as object,
+          ...(seed.tenantId ? { tenantId: seed.tenantId } : {}),
+          data: seed.doc as object,
         },
       });
     } catch (error) {
@@ -94,33 +101,68 @@ export async function ensureBuilderSeeded(): Promise<void> {
 }
 
 /**
- * A document type's first layout. The statement starts as the workspace's own
- * PUBLISHED invoice, converted — its header, banking details, payment terms and
- * footer — and every other type as its standard.
+ * A document type's first layout, and the workspace it is stamped with (null:
+ * none, as every seeded standard always has been). Null instead of a seed when
+ * the statement has to wait.
+ *
+ * The statement starts as the ACTING workspace's own published invoice,
+ * converted — its header, banking details, payment terms and footer — and is
+ * stamped as that workspace's: its content is that workspace's bank account, and
+ * an unowned row is nobody's to print once a second workspace exists
+ * (./layoutScope.ts). Whose invoice to copy only a request with a workspace can
+ * say; with none (a background render) the statement is left for one that has,
+ * rather than copied from anybody's. Every other type, and a workspace with no
+ * published invoice, gets its standard.
  */
-async function seedLayout(key: StandardDocKey): Promise<DocumentModel> {
+async function seedLayout(key: StandardDocKey): Promise<{ doc: DocumentModel; tenantId: string | null } | null> {
   if (key === "statement") {
-    const fromInvoice = await statementLayoutFromPublishedInvoice();
-    if (fromInvoice) return fromInvoice;
+    const scope = await actingLayoutScope().catch((error: unknown) => {
+      if (error instanceof TenantScopeError) return null;
+      throw error;
+    });
+    if (!scope) return null;
+    const fromInvoice = await statementLayoutFromPublishedInvoice(scope);
+    if (fromInvoice) return { doc: fromInvoice, tenantId: scope.tenantId };
   }
-  return standardTemplateFor(key, { automotive: await isModuleEnabled("automotive") });
+  // The workspace's own standard: no vehicle card or EV disclaimer on a
+  // non-automotive workspace's quotes.
+  return { doc: standardTemplateFor(key, { automotive: await isModuleEnabled("automotive") }), tenantId: null };
+}
+
+/**
+ * The ACTING workspace's layout scope (./layoutScope.ts) — the boundary every
+ * statement layout lookup puts in its query. The workspace is the one
+ * `actingTenantId()` resolves, the same rule the statement's figures use
+ * (accountStatementLoader.ts), so the design and the figures can never come from
+ * two different workspaces; it refuses (TenantScopeError) when the request has
+ * none. `Tenant` is a global model, and two ids answer the only question asked
+ * of it: is this workspace the only one?
+ */
+export async function actingLayoutScope(): Promise<LayoutScope> {
+  const tenantId = await actingTenantId();
+  const workspaces = await prisma.tenant.findMany({ select: { id: true }, orderBy: { id: "asc" }, take: 2 });
+  return layoutScopeFor({ tenantId, workspaceIds: workspaces.map((workspace) => workspace.id) });
 }
 
 /**
  * The workspace's PUBLISHED invoice layout, converted into a statement
- * (doceditor/statementLayout.ts), or null when no invoice has been published.
+ * (doceditor/statementLayout.ts), or null when it has published none.
  *
- * The invoice is the one that prints — the first readable row, default first,
- * as defaultBuilderTemplateId picks it — read directly rather than through
- * defaultBuilderTemplateId, because that seeds and seeding calls this. Text an
- * older invoice still reads from the old form editor (bank details, payment
- * terms) is written in first, as Publish does: a converted statement would
- * otherwise drop the banking section with the invoice-only field it hangs on.
+ * Only the invoices inside `scope` are candidates — the acting workspace's, plus
+ * the ones with no workspace only while it is the only workspace — named in the
+ * query, so it holds with tenant enforcement off as well as on: the statement
+ * prints this invoice's BANK ACCOUNT. Among them, the invoice is the one that
+ * prints — the first readable row, default first, as defaultBuilderTemplateId
+ * picks it — read directly rather than through defaultBuilderTemplateId, because
+ * that seeds and seeding calls this. Text an older invoice still reads from the
+ * old form editor (bank details, payment terms) is written in first, as Publish
+ * does, from the same scope: a converted statement would otherwise drop the
+ * banking section with the invoice-only field it hangs on.
  */
-export async function statementLayoutFromPublishedInvoice(): Promise<DocumentModel | null> {
+export async function statementLayoutFromPublishedInvoice(scope: LayoutScope): Promise<DocumentModel | null> {
   if (!(await docKeyEnabled("invoice"))) return null;
   const rows = await prisma.docBuilderTemplate.findMany({
-    where: { key: "invoice", deletedAt: null },
+    where: { key: "invoice", deletedAt: null, ...layoutScopeWhere(scope) },
     orderBy: [{ isDefault: "desc" }, { updatedAt: "desc" }],
     select: { id: true, data: true, publishedVersion: true },
   });
@@ -128,7 +170,7 @@ export async function statementLayoutFromPublishedInvoice(): Promise<DocumentMod
   if (!invoice || invoice.publishedVersion == null) return null;
   const live = await getLiveBuilderTemplate(invoice.id);
   if (!live) return null;
-  const inlined = await withLegacyTextInlined({ key: "invoice", data: live.data });
+  const inlined = await withLegacyTextInlined({ key: "invoice", data: live.data }, scope);
   const read = readTemplateDocument(inlined.data, live.name);
   return read.status === "ok" ? statementLayoutFromInvoice(read.doc) : null;
 }
@@ -136,15 +178,20 @@ export async function statementLayoutFromPublishedInvoice(): Promise<DocumentMod
 /**
  * Resolve the builder template that should drive an operational document. The
  * explicit default wins, with the most recently updated valid row as fallback.
+ *
+ * With a `scope`, only that workspace's layouts are candidates
+ * (./layoutScope.ts) — the statement passes one, because it prints a bank
+ * account. Without one, a type resolves as it always has.
  */
 export async function defaultBuilderTemplateId(
   key: string,
+  scope?: LayoutScope,
 ): Promise<string | null> {
   try {
     if (!(await docKeyEnabled(key))) return null;
     await ensureBuilderSeeded();
     const rows = await prisma.docBuilderTemplate.findMany({
-      where: { key, deletedAt: null },
+      where: { key, deletedAt: null, ...(scope ? layoutScopeWhere(scope) : {}) },
       orderBy: [{ isDefault: "desc" }, { updatedAt: "desc" }],
       select: { id: true, data: true },
     });
@@ -197,10 +244,13 @@ export async function getBuilderTemplate(id: string) {
  * only: the editor opens this and its save stores it; Publish stores it too
  * (publishBuilderVersion). Until the owner publishes, the live document keeps
  * printing the old text, as it always has.
+ *
+ * With a `scope`, the old text is that workspace's own (./layoutScope.ts) — a
+ * statement's bank details must be; without one it is read as it always has.
  */
-export async function withLegacyTextInlined<T extends { key: string; data: unknown }>(template: T): Promise<T> {
+export async function withLegacyTextInlined<T extends { key: string; data: unknown }>(template: T, scope?: LayoutScope): Promise<T> {
   if ((template.key !== "invoice" && template.key !== "agreement") || !hasLegacyTokens(template.key, template.data)) return template;
-  const old = await getDocTemplateText(template.key);
+  const old = await getDocTemplateText(template.key, scope);
   const sectionOn = (section: string) => old.sections[section] !== false;
   const legacy: LegacyText =
     template.key === "invoice"

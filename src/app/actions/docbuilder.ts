@@ -8,7 +8,8 @@ import { hasPermission, requirePermission, requireAnyPermission } from "@/lib/pe
 import { canEditLayout } from "@/lib/docbuilder/layoutAccess";
 import { logAudit } from "@/lib/audit";
 // getBuilderTemplate, not a raw findUnique: it is where the module check lives.
-import { getBuilderTemplate, listBuilderVersions, statementLayoutFromPublishedInvoice, withLegacyTextInlined } from "@/lib/docbuilder/store";
+import { actingLayoutScope, getBuilderTemplate, listBuilderVersions, statementLayoutFromPublishedInvoice, withLegacyTextInlined } from "@/lib/docbuilder/store";
+import { layoutRowVisible } from "@/lib/docbuilder/layoutScope";
 import { STANDARD_TEMPLATE_KEYS, standardTemplateFor, type StandardDocKey } from "@/lib/doceditor/standardTemplates";
 import { defaultEmailBody, defaultEmailFrame, EMAIL_FRAME_KEY, emailKindOf } from "@/lib/doceditor/emailDefaults";
 import { withActingStaffScope } from "@/lib/actingScope";
@@ -140,8 +141,14 @@ export async function resetBuilderTemplateToStandard(id: string): Promise<{ ok: 
     if (!isEmail && !(STANDARD_TEMPLATE_KEYS as string[]).includes(tpl.key)) {
       return { ok: false, error: "There is no standard layout for this kind of document." };
     }
-    // A statement's standard is the workspace's own published invoice, converted.
-    const fromInvoice = tpl.key === "statement" ? await statementLayoutFromPublishedInvoice() : null;
+    // A statement's standard is the workspace's own published invoice, converted —
+    // written only into a statement of its own (docbuilder/layoutScope.ts). This
+    // row was found by the id the browser sent, which names no workspace while
+    // enforcement is off; writing this workspace's banking into another's
+    // statement would print it on that workspace's customers' statements. Any
+    // other row gets the plain standard, which carries nobody's bank account.
+    const scope = tpl.key === "statement" ? await actingLayoutScope() : null;
+    const fromInvoice = scope && layoutRowVisible(tpl.tenantId, scope) ? await statementLayoutFromPublishedInvoice(scope) : null;
     const standard = emailKind
       ? defaultEmailBody(emailKind)
       : isEmail

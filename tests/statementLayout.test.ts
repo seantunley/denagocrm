@@ -198,16 +198,137 @@ test("the statement table is a real editor block: made, previewed with sample ro
 
 test("Statement is a document type: a Sales layout seeded from the published invoice, and printed from it", () => {
   const store = read("src/lib/docbuilder/store.ts");
-  assert.match(store, /if \(key === "statement"\) \{\s*const fromInvoice = await statementLayoutFromPublishedInvoice\(\);/);
-  // The invoice is read directly (defaultBuilderTemplateId seeds — and seeding calls this) and its old text written in first.
+  // Seeded from the ACTING workspace's invoice and stamped as that workspace's;
+  // with no workspace to act for, left for a request that has one — and decided
+  // before any row is touched.
+  assert.match(store, /if \(key === "statement"\) \{\s*const scope = await actingLayoutScope\(\)\.catch\(/);
+  assert.match(store, /if \(!scope\) return null;\s*const fromInvoice = await statementLayoutFromPublishedInvoice\(scope\);\s*if \(fromInvoice\) return \{ doc: fromInvoice, tenantId: scope\.tenantId \};/);
+  assert.ok(store.indexOf("const seed = await seedLayout(key);\n      if (!seed) continue;") < store.indexOf("const invalidSystem = parsed.filter("), "seeded before anything changes");
+  assert.match(store, /\.\.\.\(seed\.tenantId \? \{ tenantId: seed\.tenantId \} : \{\}\),/);
+  // The invoice is read directly (defaultBuilderTemplateId seeds — and seeding calls this), from the workspace's
+  // own (review of #925), and its old text written in first — from the same workspace's old form editor.
   const helper = store.slice(store.indexOf("export async function statementLayoutFromPublishedInvoice"));
   assert.doesNotMatch(helper.slice(0, helper.indexOf("\n}\n")), /defaultBuilderTemplateId|publishedBuilderTemplateFor|ensureBuilderSeeded/);
+  assert.match(helper, /where: \{ key: "invoice", deletedAt: null, \.\.\.layoutScopeWhere\(scope\) \}/);
   assert.match(helper, /if \(!invoice \|\| invoice\.publishedVersion == null\) return null;/);
-  assert.match(helper, /await withLegacyTextInlined\(\{ key: "invoice", data: live\.data \}\)/);
+  assert.match(helper, /await withLegacyTextInlined\(\{ key: "invoice", data: live\.data \}, scope\)/);
+  assert.match(store, /const old = await getDocTemplateText\(template\.key, scope\);/);
+  assert.match(read("src/lib/docTemplateStore.ts"), /where: \{ docType: key, isDefault: true, deletedAt: null, \.\.\.\(scope \? layoutScopeWhere\(scope\) : \{\}\) \}/);
 
   const print = read("src/lib/statementDocPrint.ts");
-  assert.match(print, /const own = await publishedBuilderTemplateFor\("statement"\);/);
-  assert.match(print, /return statementLayoutFromPublishedInvoice\(\);/);
+  assert.match(print, /const scope = await actingLayoutScope\(\);\s*const own = await publishedBuilderTemplateFor\("statement", scope\);/);
+  assert.match(print, /return statementLayoutFromPublishedInvoice\(scope\);/);
+  // Reset to standard writes the workspace's banking only into a statement of its own.
+  assert.match(
+    read("src/app/actions/docbuilder.ts"),
+    /const fromInvoice = scope && layoutRowVisible\(tpl\.tenantId, scope\) \? await statementLayoutFromPublishedInvoice\(scope\) : null;/,
+  );
+});
+
+// Review of #925: an invoice layout with an acceptance card carried it into the
+// statement, which then printed blank name, signature and date lines.
+const signingBlock = (type: "acceptance" | "handoverChecklist") => newBlock(type);
+const keptText = () => {
+  const block = newBlock("callout");
+  if (block.type === "callout") block.title = "Kept note";
+  return block;
+};
+const wrapped = (blocks: DocumentBlock[], when = "statement.balance") => {
+  const block = newBlock("conditional");
+  if (block.type === "conditional") {
+    block.when = when;
+    block.blocks = blocks;
+  }
+  return block;
+};
+const rowOf = (id: string, ...columns: DocumentBlock[][]) => ({
+  id,
+  settings: { gap: 16, keepTogether: false, keepWithNext: false },
+  columns: columns.map((blocks, i) => ({ id: `${id}-c${i}`, widthPercent: 100 / columns.length, blocks })),
+});
+const floatOf = (id: string, block: DocumentBlock, y = 600) => ({ id, x: 48, y, width: 280, block });
+
+const signedInvoice = (() => {
+  const doc: DocumentModel = JSON.parse(JSON.stringify(invoice));
+  const page = doc.pages[0];
+  page.rows.push(
+    rowOf("only-acceptance", [signingBlock("acceptance")]),
+    rowOf("mixed", [keptText(), wrapped([signingBlock("acceptance"), keptText()])], [signingBlock("handoverChecklist")]),
+    rowOf("only-wrapped-acceptance", [wrapped([signingBlock("acceptance")])]),
+    rowOf("owners-empty-row", []),
+    rowOf("owners-empty-conditional", [wrapped([])]),
+  );
+  page.floatingBlocks.push(
+    floatOf("float-acceptance", signingBlock("acceptance")),
+    floatOf("float-wrapped-acceptance", wrapped([signingBlock("acceptance")])),
+    floatOf("float-kept", keptText(), 700),
+  );
+  page.overlayFields.push({
+    id: "sig", kind: "signature", anchor: { mode: "page", blockId: null, x: 60, y: 640 }, width: 200, height: 40, recipientId: null, required: true, label: "", options: [],
+  });
+  page.overflowGroups = [
+    ...(page.overflowGroups ?? []),
+    // Only something to sign: nothing would be left to move.
+    { maxItems: 3, floatIds: ["float-acceptance", "float-wrapped-acceptance"], fieldIds: ["sig"], nextPageFloats: [floatOf("next-acceptance", signingBlock("acceptance"), 100)] },
+    // Signing and kept content together: the kept content still moves.
+    { maxItems: 3, floatIds: ["float-acceptance", "float-kept"], fieldIds: ["sig"], nextPageFloats: [floatOf("next-acceptance-2", signingBlock("acceptance"), 100), floatOf("next-kept", keptText(), 140)] },
+    // Signing fields alone: nothing to move once the fields are gone.
+    { maxItems: 3, floatIds: [], fieldIds: ["sig"] },
+  ];
+  doc.header.push(signingBlock("acceptance"));
+  doc.footer.push(wrapped([signingBlock("handoverChecklist")]));
+  return doc;
+})();
+const signedStatement = statementLayoutFromInvoice(signedInvoice);
+
+test("nothing to sign survives: acceptance cards and handover signatures dropped, nested, placed or in the furniture", () => {
+  assert.ok(byType(signedInvoice, "acceptance").length >= 6 && byType(signedInvoice, "handoverChecklist").length === 2, "the invoice really had them");
+  assert.deepEqual(byType(signedStatement, "acceptance"), []);
+  assert.deepEqual(byType(signedStatement, "handoverChecklist"), []);
+  const page = signedStatement.pages[0];
+  assert.deepEqual(page.overlayFields, []);
+  assert.deepEqual(signedStatement.recipients, []);
+
+  // What existed only to hold one goes with it; what the owner left empty, and everything else, stays.
+  const rowIds = page.rows.map((row) => row.id);
+  assert.ok(!rowIds.includes("only-acceptance") && !rowIds.includes("only-wrapped-acceptance"), rowIds.join(", "));
+  assert.ok(rowIds.includes("owners-empty-row") && rowIds.includes("owners-empty-conditional"));
+  assert.equal(page.rows.length, invoice.pages[0].rows.length + 3);
+  const mixed = page.rows.find((row) => row.id === "mixed");
+  assert.deepEqual(mixed?.columns.map((column) => column.blocks.map((block) => block.type)), [["callout", "conditional"], []]);
+  const kept = mixed?.columns[0].blocks[1];
+  assert.ok(kept?.type === "conditional" && kept.blocks.length === 1 && kept.blocks[0].type === "callout", "the conditional keeps its other content");
+  assert.ok(byType(signedStatement, "conditional").some((block) => block.blocks.length === 0), "the owner's own empty conditional is left as it was");
+
+  // Placed blocks and the overflow groups that move them.
+  const floats = page.floatingBlocks.map((float) => float.id);
+  assert.ok(!floats.includes("float-acceptance") && !floats.includes("float-wrapped-acceptance") && floats.includes("float-kept"));
+  const groups = page.overflowGroups ?? [];
+  const added = groups.slice(groups.length - 1);
+  assert.equal(groups.length, (invoice.pages[0].overflowGroups ?? []).length + 1, "the two groups left with nothing to move are gone");
+  assert.deepEqual(added.map((group) => [group.floatIds, group.fieldIds]), [[["float-kept"], []]]);
+  assert.deepEqual(added[0].nextPageFloats?.map((float) => float.id), ["next-kept"]);
+  for (const group of groups) {
+    assert.deepEqual(group.fieldIds, []);
+    assert.ok(group.floatIds.every((id) => floats.includes(id) || !signedInvoice.pages[0].floatingBlocks.some((float) => float.id === id)), "no group names a float the conversion removed");
+  }
+});
+
+test("printed: the converted statement has no signature, name or date lines to fill in", () => {
+  const statement = buildAccountStatement([quote()], []);
+  const { tokens, vars } = statementDocTokens(statement, billTo, day("2026-10-28"));
+  const ctx = { tokens: { ...company, ...tokens }, items: [], statementRows: statementRows(statement), vars, bound: true };
+  const before = plain(renderDocumentHtml(signedInvoice, ctx));
+  assert.match(before, /ACCEPTANCE OF QUOTATION/, "the invoice printed the card");
+  const html = plain(renderDocumentHtml(signedStatement, ctx));
+  assert.doesNotMatch(html, /ACCEPTANCE OF QUOTATION|Customer Name|>Signature|Customer signature/);
+  assert.ok(html.includes("Kept note") && html.includes("BANKING DETAILS"), "the rest is printed as it was");
+  // A long statement moves the kept content, and adds no page carrying only a header and footer.
+  const many = Array.from({ length: 6 }, (_, i) => quote({ id: `q${i}`, number: 200 + i, invoiceNumber: 600 + i }));
+  const longStatement = buildAccountStatement(many, []);
+  const long = plain(renderDocumentHtml(signedStatement, { ...ctx, statementRows: statementRows(longStatement) }));
+  assert.doesNotMatch(long, /ACCEPTANCE OF QUOTATION|Customer Name|>Signature/);
+  assert.ok(long.includes("Kept note"));
 });
 
 test("statement routes: the page's gates, the workspace bound, and the old page kept as the fallback", () => {
