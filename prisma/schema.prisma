@@ -1576,6 +1576,31 @@ model QuoteFee {
   @@index([tenantId])
 }
 
+/// Money received against an invoice AFTER the deposit — part-payments, the
+/// final balance, a finance payout — recorded on the deal page. The deposit stays
+/// on Quote.depositPaidCents (deliveries board); the customer statement adds the
+/// two (lib/accountStatement.ts). A wrong entry is VOIDED, never deleted, so a
+/// statement already sent can always be explained. The composite
+/// (tenantId, quoteId) → Quote(tenantId, id) key lives in the migration's SQL.
+model QuotePayment {
+  id            String    @id @default(cuid())
+  tenantId      String
+  quoteId       String
+  amountCents   Int
+  receivedAt    DateTime
+  method        String // eft | card | cash | finance | other (PAYMENT_METHODS)
+  reference     String?
+  note          String?
+  createdById   String?
+  createdByName String
+  voidedAt      DateTime?
+  voidedByName  String?
+  voidReason    String?
+  createdAt     DateTime  @default(now())
+
+  @@index([tenantId, quoteId, receivedAt])
+}
+
 model ServiceReminderLog {
   id        String   @id @default(cuid())
   tenantId String? // Multi-tenancy (Phase B — additive/inert): owning tenant.

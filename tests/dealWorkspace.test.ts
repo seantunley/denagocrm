@@ -24,9 +24,13 @@ test("deal jacket composes existing records instead of adding a second deal mode
   assert.match(page, /prisma\.signatureRequest\.findMany/);
   assert.match(page, /Deal timeline/);
   assert.match(page, /Ready to deliver\?/);
-  // No invented payment data: the ledger is named as not existing yet.
-  assert.match(page, /Financial ledger not yet available\./);
+  // No invented payment data: money shown is the deposit recorded on the
+  // deliveries board plus real QuotePayment rows from the quote's OWN workspace
+  // (customer statements, 2026-10-28) — and no other payment-like model.
+  assert.match(page, /prisma\.quotePayment\.findMany\(\{ where: \{ quoteId: quote\.id, tenantId: quote\.tenantId \}/);
+  assert.match(page, /<DealPayments quote=\{quote\} payments=\{payments\}/);
   assert.doesNotMatch(page, /prisma\.(payment|receipt|ledger)/i);
+  assert.doesNotMatch(page, /Financial ledger not yet available/, "the ledger exists now; the notice would be false");
 });
 
 test("the customer is the quote's addressee — the fleet account when it is billed to one", () => {
