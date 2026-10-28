@@ -1596,8 +1596,12 @@ model QuotePayment {
   voidedAt      DateTime?
   voidedByName  String?
   voidReason    String?
+  /// One per payment FORM: a resubmission of the same form returns the payment
+  /// it already recorded instead of writing a second (review of #924).
+  idempotencyKey String?
   createdAt     DateTime  @default(now())
 
+  @@unique([tenantId, idempotencyKey])
   @@index([tenantId, quoteId, receivedAt])
 }
 

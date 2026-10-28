@@ -508,7 +508,17 @@ test("deposit amounts are stored in cents and every change is audited", () => {
   const corrected = fn(fulfilment, "correctDepositAmount");
   assert.match(corrected, /action: "fulfilment\.deposit_amount_corrected"/);
   assert.match(corrected, /changed from \$\{[\s\S]*?\} to \$\{formatZAR\(amountCents\)\}/);
-  assert.match(fulfilment, /const cents = parseRands\(raw\);/);
+  // Read strictly: "1 000,50" is R1 000,50, never R100 050 (review of #924).
+  assert.match(fulfilment, /const parsed = parseMoneyInput\(raw\);/);
+  assert.doesNotMatch(fulfilment, /parseRands\(/);
+  // The deposit and the deal's payments are one balance: both deposit actions
+  // check it under the quote-row lock before writing (quoteLedger.ts).
+  for (const body of [paid, corrected]) {
+    assert.match(body, /const ledger = await lockQuoteLedger\(tx, quoteId, tenantId\);/);
+    assert.match(body, /assertDepositFits\(ledger, amountCents, formatZAR\);/);
+    assert.ok(body.indexOf("assertDepositFits(ledger") < body.indexOf("tx.quote.updateMany("), "check, then write");
+  }
+  assert.ok(paid.indexOf("assertDepositFits(before") < paid.indexOf("attachStageDocument("), "refused before the proof is filed");
 
   const reservation = fn(stock, "recordReservationDeposit");
   assert.match(reservation, /requirePermission\("stock\.manage"\)/);

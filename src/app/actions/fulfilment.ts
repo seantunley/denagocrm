@@ -11,7 +11,9 @@ import { logAudit } from "@/lib/audit";
 import { assertOwnedBlob, deleteFile, deleteOwnedBlob, saveFile } from "@/lib/storage";
 import { logError } from "@/lib/errorLog";
 import { checkUploadPayload, MAX_PHOTOS } from "@/lib/photoBudget";
-import { contactName, formatZAR, parseRands } from "@/lib/format";
+import { contactName, formatZAR } from "@/lib/format";
+import { parseMoneyInput } from "@/lib/moneyInput";
+import { assertDepositFits, lockQuoteLedger } from "@/lib/quoteLedger";
 import { loadBillToFleet, quoteBillTo } from "@/lib/quoteBillTo";
 import { isModuleEnabled, requireModuleEnabled } from "@/lib/modules/enabled";
 import { deliverQuote, QUOTE_GONE, type DeliveryEvidence } from "@/lib/quoteDelivery";
@@ -78,13 +80,17 @@ function pickFile(formData: FormData): File | null {
   return file && typeof file === "object" && (file as File).size > 0 ? (file as File) : null;
 }
 
-/** A required rand amount, stored as integer cents like every other amount. */
+/**
+ * A required rand amount, stored as integer cents like every other amount — read
+ * STRICTLY (moneyInput.ts): "1 000,50" is R1 000,50, never R100 050, and an
+ * amount whose meaning would have to be guessed is refused (review of #924).
+ */
 function depositCents(formData: FormData): number {
   const raw = String(formData.get("amount") ?? "").trim();
   if (!raw) refuse("Enter the deposit amount received.");
-  const cents = parseRands(raw);
-  if (cents < 0) refuse("The deposit amount cannot be negative.");
-  return cents;
+  const parsed = parseMoneyInput(raw);
+  if (!parsed.ok) refuse(parsed.error);
+  return parsed.cents;
 }
 
 export async function markInvoiced(quoteId: string, formData: FormData) {
@@ -133,10 +139,23 @@ export async function markDepositPaid(quoteId: string, formData: FormData) {
     const file = pickFile(formData);
     if (!file) refuse("Choose a file to upload.");
     if (file.size > MAX_FILE) refuse("That file is larger than 4 MB.");
+    // The deposit and the payments recorded on the deal are ONE balance
+    // (quoteLedger.ts): with R80 000 already paid on a R100 000 invoice, a R30 000
+    // deposit would take it past paid. Checked before the proof of payment is
+    // filed, so a refusal leaves nothing behind — and again under the lock.
+    const before = await prisma.$transaction((tx) => lockQuoteLedger(tx, quoteId, tenantId));
+    if (!before) refuse(QUOTE_GONE);
+    assertDepositFits(before, amountCents, formatZAR);
     await attachStageDocument(quoteId, quote.contactId, "pop", `Proof of payment — Q-${quote.number}${file.name ? ` — ${file.name}` : ".pdf"}`, file, user.id, quote.tenantId);
-    const updated = await prisma.quote.updateMany({
-      where: { id: quoteId, tenantId },
-      data: { depositPaidAt: new Date(), depositPaidCents: amountCents },
+    const updated = await prisma.$transaction(async (tx) => {
+      const ledger = await lockQuoteLedger(tx, quoteId, tenantId);
+      if (!ledger) refuse(QUOTE_GONE);
+      if (ledger.quote.depositPaidAt) refuse("The deposit is already recorded.");
+      assertDepositFits(ledger, amountCents, formatZAR);
+      return tx.quote.updateMany({
+        where: { id: quoteId, tenantId },
+        data: { depositPaidAt: new Date(), depositPaidCents: amountCents },
+      });
     });
     if (updated.count !== 1) refuse(QUOTE_GONE);
     await logAudit({
@@ -162,9 +181,17 @@ export async function correctDepositAmount(quoteId: string, formData: FormData) 
     if (!quote.depositPaidAt) refuse("Record the deposit before correcting its amount.");
     const amountCents = depositCents(formData);
     if (amountCents === quote.depositPaidCents) return { success: "That is already the recorded amount" };
-    const updated = await prisma.quote.updateMany({
-      where: { id: quoteId, tenantId },
-      data: { depositPaidCents: amountCents },
+    // Correcting the deposit UP can take the invoice past paid just as recording
+    // it can, so it goes through the same locked check (quoteLedger.ts).
+    const updated = await prisma.$transaction(async (tx) => {
+      const ledger = await lockQuoteLedger(tx, quoteId, tenantId);
+      if (!ledger) refuse(QUOTE_GONE);
+      if (!ledger.quote.depositPaidAt) refuse("Record the deposit before correcting its amount.");
+      assertDepositFits(ledger, amountCents, formatZAR);
+      return tx.quote.updateMany({
+        where: { id: quoteId, tenantId },
+        data: { depositPaidCents: amountCents },
+      });
     });
     if (updated.count !== 1) refuse(QUOTE_GONE);
     await logAudit({

@@ -1,26 +1,24 @@
 "use server";
 
+import { Prisma } from "@prisma/client";
 import { revalidatePath } from "next/cache";
 import { asActionResult, refuse } from "@/lib/actionResult";
 import { actingTenantId } from "@/lib/actingTenant";
 import { prisma } from "@/lib/db";
 import { requireQuoteAccess } from "@/lib/permissions";
 import { GOVERNANCE_TX, logAuditStrict } from "@/lib/audit";
-import { formatZAR, parseRands } from "@/lib/format";
+import { formatZAR } from "@/lib/format";
+import { parseMoneyInput } from "@/lib/moneyInput";
 import { getRegionalSettings } from "@/lib/settings";
-import { QUOTE_GONE } from "@/lib/quoteDelivery";
-import {
-  isPaymentMethod,
-  isStatementInvoice,
-  outstandingCents,
-  paymentMethodLabel,
-  statementInvoiceLabel,
-} from "@/lib/accountStatement";
+import { isPaymentMethod, paymentMethodLabel, statementInvoiceLabel } from "@/lib/accountStatement";
+import { recordPaymentInTx, voidPaymentInTx } from "@/lib/quoteLedger";
 
 /*
  * Payments received against an invoice after its deposit (customer statements,
  * 2026-10-28). The deposit itself is still recorded on the deliveries board
  * (fulfilment.ts); these are the part-payments and final balance that follow.
+ * Both go through lib/quoteLedger.ts, under one quote-row lock, so neither can
+ * take an invoice past paid.
  *
  * Same grant as recording the deposit — "deliveries.manage" — so the people who
  * take the deposit take the rest of the money. NOT gated on the automotive
@@ -56,70 +54,63 @@ function refreshPaths(quoteId: string) {
 
 /**
  * Record money received against an accepted quote's invoice. Refuses more than
- * is still owing — a slipped zero must not put an account into credit — with the
- * quote locked so two people recording at once cannot both pass that check.
+ * is still owing after the deposit and earlier payments; a resubmitted form
+ * returns the payment it already recorded rather than recording it twice.
  */
 export async function recordQuotePayment(quoteId: string, formData: FormData) {
   return asActionResult(async () => {
     const user = await requireQuoteAccess(quoteId, "deliveries.manage");
     const tenantId = await actingTenantId();
     const regional = await getRegionalSettings();
+    const money = (cents: number) => formatZAR(cents, regional);
 
-    const rawAmount = String(formData.get("amount") ?? "").trim();
-    if (!rawAmount) refuse("Enter the amount received.");
-    const amountCents = parseRands(rawAmount);
+    const amount = parseMoneyInput(String(formData.get("amount") ?? ""));
+    if (!amount.ok) refuse(amount.error);
+    const amountCents = amount.cents;
     if (amountCents <= 0) refuse("The amount must be more than zero.");
     const method = String(formData.get("method") ?? "");
     if (!isPaymentMethod(method)) refuse("Choose how the payment was made.");
     const receivedAt = receivedDate(formData.get("receivedAt"), regional.timeZone);
     const reference = text(formData, "reference", MAX_REFERENCE);
     const note = text(formData, "note", MAX_NOTE);
+    const idempotencyKey = String(formData.get("idempotencyKey") ?? "");
 
-    await prisma.$transaction(async (tx) => {
-      await tx.$executeRaw`SELECT id FROM "Quote" WHERE id = ${quoteId} AND "tenantId" = ${tenantId} FOR UPDATE`;
-      const quote = await tx.quote.findFirst({
-        where: { id: quoteId, tenantId },
-        include: { items: true, fees: true },
-      });
-      if (!quote) refuse(QUOTE_GONE);
-      if (!isStatementInvoice(quote)) refuse("Payments can only be recorded against an accepted quote.");
-      const existing = await tx.quotePayment.findMany({ where: { quoteId, tenantId } });
-      const owing = outstandingCents(quote, existing);
-      if (owing <= 0) refuse("Nothing is owing on this invoice.");
-      if (amountCents > owing) refuse(`That is more than the ${formatZAR(owing, regional)} still owing on this invoice.`);
-
-      const payment = await tx.quotePayment.create({
-        data: {
-          // The QUOTE's workspace, verbatim — the payment is the invoice's, not the clerk's.
-          tenantId: quote.tenantId ?? tenantId,
-          quoteId,
-          amountCents,
-          receivedAt,
-          method,
-          reference,
-          note,
-          createdById: user.id,
-          createdByName: user.name,
-        },
-      });
-      const label = statementInvoiceLabel(quote);
-      await logAuditStrict(
-        {
-          action: "payment.recorded",
-          summary: `${label} payment of ${formatZAR(amountCents, regional)} received (${paymentMethodLabel(method)}${reference ? ` · ${reference}` : ""}) — ${formatZAR(owing - amountCents, regional)} still owing`,
-          contactId: quote.contactId,
-          leadId: quote.leadId,
-          user,
-          entityType: "QuotePayment",
-          entityId: payment.id,
-          after: { quoteId, amountCents, receivedAt: receivedAt.toISOString(), method, reference, owingBeforeCents: owing },
-        },
-        tx,
-      );
-    }, GOVERNANCE_TX);
+    let duplicate = false;
+    try {
+      await prisma.$transaction(async (tx) => {
+        const result = await recordPaymentInTx(
+          tx,
+          { quoteId, tenantId, amountCents, receivedAt, method, reference, note, idempotencyKey, createdById: user.id, createdByName: user.name },
+          money,
+        );
+        // A resubmission records nothing new, so it audits nothing new either.
+        duplicate = result.kind === "duplicate";
+        if (result.kind === "recorded") {
+          const { ledger, payment } = result;
+          await logAuditStrict(
+            {
+              action: "payment.recorded",
+              summary: `${statementInvoiceLabel(ledger.quote)} payment of ${money(amountCents)} received (${paymentMethodLabel(method)}${reference ? ` · ${reference}` : ""}) — ${money(ledger.owingCents - amountCents)} still owing`,
+              contactId: ledger.quote.contactId,
+              leadId: ledger.quote.leadId,
+              user,
+              entityType: "QuotePayment",
+              entityId: payment.id,
+              after: { quoteId, amountCents, receivedAt: receivedAt.toISOString(), method, reference, owingBeforeCents: ledger.owingCents },
+            },
+            tx,
+          );
+        }
+      }, GOVERNANCE_TX);
+    } catch (error) {
+      // The unique (tenantId, idempotencyKey) index: the same form, committed by
+      // a request that ran at the same instant. It is recorded — once.
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") duplicate = true;
+      else throw error;
+    }
 
     refreshPaths(quoteId);
-    return { success: "Payment recorded" };
+    return { success: duplicate ? "That payment was already recorded" : "Payment recorded" };
   });
 }
 
@@ -133,22 +124,13 @@ export async function voidQuotePayment(quoteId: string, paymentId: string, formD
     if (!reason || reason.length < 3) refuse("Say why this payment is being voided.");
 
     await prisma.$transaction(async (tx) => {
-      const payment = await tx.quotePayment.findFirst({ where: { id: paymentId, quoteId, tenantId } });
-      if (!payment) refuse("That payment is no longer available.");
-      if (payment.voidedAt) refuse("That payment has already been voided.");
-      const quote = await tx.quote.findFirst({ where: { id: quoteId, tenantId }, select: { number: true, invoiceNumber: true, contactId: true, leadId: true } });
-      if (!quote) refuse(QUOTE_GONE);
-      const voided = await tx.quotePayment.updateMany({
-        where: { id: paymentId, quoteId, tenantId, voidedAt: null },
-        data: { voidedAt: new Date(), voidedByName: user.name, voidReason: reason },
-      });
-      if (voided.count !== 1) refuse("That payment changed while you were editing. Refresh and try again.");
+      const { payment, ledger } = await voidPaymentInTx(tx, { quoteId, tenantId, paymentId, reason, voidedByName: user.name });
       await logAuditStrict(
         {
           action: "payment.voided",
-          summary: `${statementInvoiceLabel(quote)} payment of ${formatZAR(payment.amountCents, regional)} voided — ${reason}`,
-          contactId: quote.contactId,
-          leadId: quote.leadId,
+          summary: `${statementInvoiceLabel(ledger.quote)} payment of ${formatZAR(payment.amountCents, regional)} voided — ${reason}`,
+          contactId: ledger.quote.contactId,
+          leadId: ledger.quote.leadId,
           user,
           entityType: "QuotePayment",
           entityId: payment.id,

@@ -1,6 +1,13 @@
 import "server-only";
 import { actingTenantId } from "./actingTenant";
-import { buildAccountStatement, isStatementInvoice, type AccountStatement, type StatementQuote } from "./accountStatement";
+import {
+  buildAccountStatement,
+  isStatementInvoice,
+  receivedCents,
+  type AccountStatement,
+  type StatementPayment,
+  type StatementQuote,
+} from "./accountStatement";
 import { prisma } from "./db";
 import { getAccessibleQuoteIds, hasPermission, type PermissionUser } from "./permissions";
 import { loadBillToFleet, loadBillToFleets, quoteBillTo, type QuoteBillTo } from "./quoteBillTo";
@@ -23,6 +30,14 @@ import { loadBillToFleet, loadBillToFleets, quoteBillTo, type QuoteBillTo } from
  * A PARTIAL STATEMENT IS REFUSED, NOT PRINTED. A viewer who may open this
  * customer but not every one of its invoices gets `kind: "partial"` — a
  * statement missing an invoice states the wrong balance, and is worse than none.
+ *
+ * TRASHED QUOTES ARE READ ON PURPOSE, ONLY TO WARN. The scoped client hides
+ * trash, so money recorded on a quote that was later trashed would simply vanish
+ * from the statement with nobody told. They are read with an explicit
+ * `deletedAt: { not: null }` and never billed — and a trashed quote is nobody's
+ * to read but a workspace-wide quote viewer's (it is in no one's owned list), so
+ * for everyone else its number and amounts never reach the warnings (review of
+ * #924): they are told only that trashed money exists and who can look at it.
  */
 
 export type LoadedStatement =
@@ -39,11 +54,40 @@ export type LoadedStatement =
 
 const QUOTE_INCLUDE = { items: true, fees: true } as const;
 
-async function viewerSeesEveryQuote(user: PermissionUser, quotes: { id: string; deletedAt: Date | null }[]): Promise<boolean> {
-  if (await hasPermission(user, "quotes.view_all")) return true;
+type StatementAccess = { trashDetails: boolean };
+
+/**
+ * What this viewer may see of these quotes: null when they cannot see every
+ * live one (no statement at all); otherwise whether trashed quotes' details may
+ * appear — only with workspace-wide quote access.
+ */
+async function statementAccess(user: PermissionUser, quotes: { id: string; deletedAt: Date | null }[]): Promise<StatementAccess | null> {
+  if (await hasPermission(user, "quotes.view_all")) return { trashDetails: true };
   const allowed = new Set(await getAccessibleQuoteIds(user));
-  // A trashed quote is in nobody's list; it only ever contributes a staff warning.
-  return quotes.filter((quote) => !quote.deletedAt).every((quote) => allowed.has(quote.id));
+  if (!quotes.filter((quote) => !quote.deletedAt).every((quote) => allowed.has(quote.id))) return null;
+  return { trashDetails: false };
+}
+
+/** The statement as this viewer may see it — trashed quotes reduced to a bare notice unless they may read them. */
+function statementFor(
+  live: StatementQuote[],
+  trashed: StatementQuote[],
+  payments: StatementPayment[],
+  access: StatementAccess,
+  fmt: (cents: number) => string,
+): AccountStatement {
+  if (access.trashDetails) return buildAccountStatement([...live, ...trashed], payments, fmt);
+  const liveIds = new Set(live.map((quote) => quote.id));
+  const trashedWithMoney = trashed.filter(
+    (quote) => receivedCents(quote, payments.filter((payment) => payment.quoteId === quote.id)) > 0,
+  ).length;
+  const statement = buildAccountStatement(live, payments.filter((payment) => liveIds.has(payment.quoteId)), fmt);
+  if (trashedWithMoney) {
+    statement.warnings.push(
+      `${trashedWithMoney === 1 ? "A quote" : `${trashedWithMoney} quotes`} in the trash for this account ${trashedWithMoney === 1 ? "has" : "have"} money recorded as received, which is not on this statement. Ask someone who can see all quotes to check before it is sent.`,
+    );
+  }
+  return statement;
 }
 
 async function paymentsFor(tenantId: string, quotes: StatementQuote[]) {
@@ -64,9 +108,13 @@ export async function loadContactStatement(
   if (!contact) return { kind: "missing" };
 
   const quotes = await prisma.quote.findMany({ where: { contactId, tenantId }, include: QUOTE_INCLUDE });
-  const fleets = await loadBillToFleets(prisma, quotes.map((quote) => quote.fleetId));
-  const own = quotes.filter((quote) => !quote.fleetId || !fleets.has(quote.fleetId));
-  if (!(await viewerSeesEveryQuote(user, own))) return { kind: "partial" };
+  const trash = await prisma.quote.findMany({ where: { contactId, tenantId, deletedAt: { not: null } }, include: QUOTE_INCLUDE });
+  const fleets = await loadBillToFleets(prisma, [...quotes, ...trash].map((quote) => quote.fleetId));
+  const billedHere = (quote: { fleetId: string | null }) => !quote.fleetId || !fleets.has(quote.fleetId);
+  const own = quotes.filter(billedHere);
+  const ownTrash = trash.filter(billedHere);
+  const access = await statementAccess(user, own);
+  if (!access) return { kind: "partial" };
 
   const elsewhere = new Map<string, { fleetId: string; fleetName: string; count: number }>();
   for (const quote of quotes) {
@@ -82,7 +130,7 @@ export async function loadContactStatement(
     kind: "ok",
     accountName: billTo.name,
     billTo,
-    statement: buildAccountStatement(own, await paymentsFor(tenantId, own), fmt),
+    statement: statementFor(own, ownTrash, await paymentsFor(tenantId, [...own, ...ownTrash]), access, fmt),
     billedElsewhere: [...elsewhere.values()],
   };
 }
@@ -102,14 +150,16 @@ export async function loadFleetStatement(
     : null;
 
   const quotes = await prisma.quote.findMany({ where: { fleetId, tenantId }, include: QUOTE_INCLUDE });
-  if (!(await viewerSeesEveryQuote(user, quotes))) return { kind: "partial" };
+  const trash = await prisma.quote.findMany({ where: { fleetId, tenantId, deletedAt: { not: null } }, include: QUOTE_INCLUDE });
+  const access = await statementAccess(user, quotes);
+  if (!access) return { kind: "partial" };
 
   const billTo = quoteBillTo({ contact: manager, fleetId }, fleet);
   return {
     kind: "ok",
     accountName: fleet.name,
     billTo,
-    statement: buildAccountStatement(quotes, await paymentsFor(tenantId, quotes), fmt),
+    statement: statementFor(quotes, trash, await paymentsFor(tenantId, [...quotes, ...trash]), access, fmt),
     billedElsewhere: [],
   };
 }

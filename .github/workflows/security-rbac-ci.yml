@@ -353,6 +353,13 @@ jobs:
         # sale stops the plan and Retry carries on; somebody else's, another workspace's, expired or closed: nothing.
         run: npm run test:assistant-plans
 
+      - name: Customer statements -- deposit and payments one balance, SA amounts, a form recorded once, trashed figures withheld
+        # Review of #924, against the real actions with enforcement on: payments then a deposit (or a deposit
+        # corrected up) never past paid; "1000,50" is R1 000,50 and "1.000,50" refused; the same payment form
+        # twice -- in turn or at once -- recorded once; racing for the last of the balance, one wins; a voided
+        # payment kept but not counted; a trashed quote's figures only for all-quote access; no cross-workspace FK.
+        run: npm run test:quote-payments
+
       - name: Run two-tenant end-to-end CRM isolation suite
         # Ordinary CRM flows run as two different tenants through the REAL scoped
         # client under the restricted role -- the regression guard for real-flow

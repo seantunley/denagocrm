@@ -45,6 +45,10 @@ export default function DealPayments({
   const paid = receivedCents(quote, payments);
   const owing = total - paid;
   const depositWithoutAmount = Boolean(quote.depositPaidAt) && quote.depositPaidCents == null;
+  // One key per rendered form: submitting the same form twice (a retry after a
+  // dropped connection, a double click) records the payment once. A successful
+  // save re-renders the page, so the next payment gets a fresh key.
+  const formKey = crypto.randomUUID();
 
   return (
     <Surface className="p-5">
@@ -115,6 +119,7 @@ export default function DealPayments({
         {canRecord && owing > 0 && (
           <ModalTrigger label="Record payment" title="Record a payment" buttonClass="btn-primary btn-sm">
             <SaveForm success="Payment recorded" action={recordQuotePayment.bind(null, quote.id)} className="space-y-3">
+              <input type="hidden" name="idempotencyKey" value={formKey} />
               {!quote.depositPaidAt && (
                 <p className="rounded-lg border border-border bg-muted/30 p-2.5 text-xs text-muted-foreground">
                   Taking the deposit? Record it with “Deposit paid” on the deliveries board instead, so delivery readiness updates too.
@@ -124,7 +129,7 @@ export default function DealPayments({
               <div className="grid gap-3 sm:grid-cols-2">
                 <div>
                   <label className="label" htmlFor="payment-amount">Amount received (R)</label>
-                  <input id="payment-amount" name="amount" inputMode="decimal" required className="input" placeholder="0.00" />
+                  <input id="payment-amount" name="amount" inputMode="decimal" required className="input" placeholder="e.g. 1 000,50" />
                 </div>
                 <div>
                   <label className="label" htmlFor="payment-date">Date received</label>
