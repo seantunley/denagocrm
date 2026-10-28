@@ -1486,6 +1486,21 @@
       ]
     }
   },
+  "QuotePayment.QuotePayment_tenantId_quoteId_fkey": {
+    "table": "QuotePayment",
+    "constraint": "QuotePayment_tenantId_quoteId_fkey",
+    "columns": [
+      "tenantId",
+      "quoteId"
+    ],
+    "references": {
+      "table": "Quote",
+      "columns": [
+        "tenantId",
+        "id"
+      ]
+    }
+  },
   "Referral.Referral_tenantId_contactId_fkey": {
     "table": "Referral",
     "constraint": "Referral_tenantId_contactId_fkey",

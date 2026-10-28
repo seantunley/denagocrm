@@ -508,7 +508,26 @@ test("deposit amounts are stored in cents and every change is audited", () => {
   const corrected = fn(fulfilment, "correctDepositAmount");
   assert.match(corrected, /action: "fulfilment\.deposit_amount_corrected"/);
   assert.match(corrected, /changed from \$\{[\s\S]*?\} to \$\{formatZAR\(amountCents\)\}/);
-  assert.match(fulfilment, /const cents = parseRands\(raw\);/);
+  // Read strictly: "1 000,50" is R1 000,50, never R100 050 (review of #924).
+  assert.match(fulfilment, /const parsed = parseMoneyInput\(raw\);/);
+  assert.doesNotMatch(fulfilment, /parseRands\(/);
+  // The deposit and the deal's payments are one balance: both deposit actions
+  // check it under the quote-row lock before writing (quoteLedger.ts).
+  for (const body of [paid, corrected]) {
+    assert.match(body, /const ledger = await lockQuoteLedger\(tx, quoteId, tenantId\);/);
+    assert.match(body, /assertDepositFits\(ledger, amountCents, formatZAR\);/);
+    assert.ok(body.indexOf("assertDepositFits(ledger") < body.indexOf("tx.quote.updateMany("), "check, then write");
+  }
+  // The proof is filed WITH the deposit or not at all (review of #924): staged
+  // first, its Document row created inside the same locked transaction that
+  // checks the balance and records the deposit, the staged file cleaned up on a
+  // refusal — the delivery-evidence pattern (stagedEvidence.ts).
+  assert.doesNotMatch(paid, /attachStageDocument\(|prisma\.document\.create\(/, "never filed outside the deposit's transaction");
+  assert.match(paid, /await withStagedEvidence\(/);
+  assert.match(paid, /isUnreferenced: \(storedName\) => signedPdfIsSafeToDelete\(storedName, quote\.tenantId\),/);
+  assert.match(paid, /remove: deleteFile,/);
+  assert.ok(paid.indexOf("assertDepositFits(ledger") < paid.indexOf("tx.document.create("), "balance checked under the lock, then the proof filed");
+  assert.ok(paid.indexOf("tx.document.create(") < paid.indexOf("tx.quote.updateMany("), "proof and deposit in one transaction");
 
   const reservation = fn(stock, "recordReservationDeposit");
   assert.match(reservation, /requirePermission\("stock\.manage"\)/);

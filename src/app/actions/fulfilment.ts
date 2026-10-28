@@ -11,7 +11,11 @@ import { logAudit } from "@/lib/audit";
 import { assertOwnedBlob, deleteFile, deleteOwnedBlob, saveFile } from "@/lib/storage";
 import { logError } from "@/lib/errorLog";
 import { checkUploadPayload, MAX_PHOTOS } from "@/lib/photoBudget";
-import { contactName, formatZAR, parseRands } from "@/lib/format";
+import { contactName, formatZAR } from "@/lib/format";
+import { parseMoneyInput } from "@/lib/moneyInput";
+import { assertDepositFits, lockQuoteLedger } from "@/lib/quoteLedger";
+import { withStagedEvidence } from "@/lib/stagedEvidence";
+import { signedPdfIsSafeToDelete } from "@/lib/signing/blobReferences";
 import { loadBillToFleet, quoteBillTo } from "@/lib/quoteBillTo";
 import { isModuleEnabled, requireModuleEnabled } from "@/lib/modules/enabled";
 import { deliverQuote, QUOTE_GONE, type DeliveryEvidence } from "@/lib/quoteDelivery";
@@ -78,13 +82,17 @@ function pickFile(formData: FormData): File | null {
   return file && typeof file === "object" && (file as File).size > 0 ? (file as File) : null;
 }
 
-/** A required rand amount, stored as integer cents like every other amount. */
+/**
+ * A required rand amount, stored as integer cents like every other amount — read
+ * STRICTLY (moneyInput.ts): "1 000,50" is R1 000,50, never R100 050, and an
+ * amount whose meaning would have to be guessed is refused (review of #924).
+ */
 function depositCents(formData: FormData): number {
   const raw = String(formData.get("amount") ?? "").trim();
   if (!raw) refuse("Enter the deposit amount received.");
-  const cents = parseRands(raw);
-  if (cents < 0) refuse("The deposit amount cannot be negative.");
-  return cents;
+  const parsed = parseMoneyInput(raw);
+  if (!parsed.ok) refuse(parsed.error);
+  return parsed.cents;
 }
 
 export async function markInvoiced(quoteId: string, formData: FormData) {
@@ -133,12 +141,65 @@ export async function markDepositPaid(quoteId: string, formData: FormData) {
     const file = pickFile(formData);
     if (!file) refuse("Choose a file to upload.");
     if (file.size > MAX_FILE) refuse("That file is larger than 4 MB.");
-    await attachStageDocument(quoteId, quote.contactId, "pop", `Proof of payment — Q-${quote.number}${file.name ? ` — ${file.name}` : ".pdf"}`, file, user.id, quote.tenantId);
-    const updated = await prisma.quote.updateMany({
-      where: { id: quoteId, tenantId },
-      data: { depositPaidAt: new Date(), depositPaidCents: amountCents },
-    });
-    if (updated.count !== 1) refuse(QUOTE_GONE);
+    const buffer = Buffer.from(await file.arrayBuffer());
+    const mimeType = file.type || "application/pdf";
+    const fileName = `Proof of payment — Q-${quote.number}${file.name ? ` — ${file.name}` : ".pdf"}`;
+    // THE PROOF IS FILED WITH THE DEPOSIT, OR NOT AT ALL (review of #924).
+    //
+    // The deposit and the payments recorded on the deal are ONE balance
+    // (quoteLedger.ts): with R80 000 already paid on a R100 000 invoice, a R30 000
+    // deposit would take it past paid — and that can change at any moment before
+    // the quote is locked. A blob cannot join a transaction, so the proof is
+    // STAGED first under a fresh key nothing names; its Document row is created
+    // INSIDE the locked transaction that checks the balance and records the
+    // deposit. Refused — a payment landed meanwhile, someone else recorded the
+    // deposit first — and the row never exists, and the staged file is deleted
+    // once a fresh query proves nothing names it (stagedEvidence.ts, the
+    // delivery-evidence pattern). Nothing is uploaded or filed outside this.
+    await withStagedEvidence(
+      {
+        save: (bytes, originalName, type) => saveFile(bytes, originalName, type, quote.tenantId),
+        isUnreferenced: (storedName) => signedPdfIsSafeToDelete(storedName, quote.tenantId),
+        remove: deleteFile,
+        // Counts and the quote number only — never a key, file name or customer.
+        onRetained: ({ retained, deleteFailed }) =>
+          logError(
+            "deposit-proof-cleanup",
+            new Error(`Deposit refused or unconfirmed: ${retained} proof file(s) kept (referenced, or not provably unreferenced), ${deleteFailed} unreferenced file(s) could not be deleted`),
+            `quote=Q-${quote.number}`,
+            { tenantId: quote.tenantId, alert: false },
+          ),
+      },
+      (stage) => stage({ buffer, originalName: file.name || "proof-of-payment.pdf", mimeType, fileName, tag: "pop" }),
+      (_proof, documents) =>
+        prisma.$transaction(async (tx) => {
+          const ledger = await lockQuoteLedger(tx, quoteId, tenantId);
+          if (!ledger) refuse(QUOTE_GONE);
+          if (ledger.quote.depositPaidAt) refuse("The deposit is already recorded.");
+          assertDepositFits(ledger, amountCents, formatZAR);
+          for (const document of documents) {
+            // The QUOTE's owner, verbatim — this paperwork is the quote's, not the clerk's.
+            await tx.document.create({
+              data: {
+                tenantId: quote.tenantId,
+                fileName: document.fileName,
+                storedName: document.storedName,
+                mimeType: document.mimeType,
+                sizeBytes: document.sizeBytes,
+                contactId: quote.contactId,
+                quoteId,
+                tag: document.tag,
+                uploadedById: user.id,
+              },
+            });
+          }
+          const updated = await tx.quote.updateMany({
+            where: { id: quoteId, tenantId },
+            data: { depositPaidAt: new Date(), depositPaidCents: amountCents },
+          });
+          if (updated.count !== 1) refuse(QUOTE_GONE);
+        }),
+    );
     await logAudit({
       action: "fulfilment.deposit_paid",
       summary: `Q-${quote.number} deposit of ${formatZAR(amountCents)} received — proof of payment filed`,
@@ -162,9 +223,17 @@ export async function correctDepositAmount(quoteId: string, formData: FormData) 
     if (!quote.depositPaidAt) refuse("Record the deposit before correcting its amount.");
     const amountCents = depositCents(formData);
     if (amountCents === quote.depositPaidCents) return { success: "That is already the recorded amount" };
-    const updated = await prisma.quote.updateMany({
-      where: { id: quoteId, tenantId },
-      data: { depositPaidCents: amountCents },
+    // Correcting the deposit UP can take the invoice past paid just as recording
+    // it can, so it goes through the same locked check (quoteLedger.ts).
+    const updated = await prisma.$transaction(async (tx) => {
+      const ledger = await lockQuoteLedger(tx, quoteId, tenantId);
+      if (!ledger) refuse(QUOTE_GONE);
+      if (!ledger.quote.depositPaidAt) refuse("Record the deposit before correcting its amount.");
+      assertDepositFits(ledger, amountCents, formatZAR);
+      return tx.quote.updateMany({
+        where: { id: quoteId, tenantId },
+        data: { depositPaidCents: amountCents },
+      });
     });
     if (updated.count !== 1) refuse(QUOTE_GONE);
     await logAudit({

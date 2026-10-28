@@ -51,12 +51,14 @@ export default async function FleetDetailPage({ params }: { params: Promise<{ id
   // Offering the button to everyone reproduces the exact defect an open PR is
   // fixing elsewhere in this app — a link rendered on one permission, leading
   // somewhere guarded by another, whose only outcome is a bounce.
-  const [marketingOn, canCreateContacts, canCreateQuotes] = await Promise.all([
+  const [marketingOn, canCreateContacts, canCreateQuotes, canViewStatement] = await Promise.all([
     isModuleEnabled("marketing"),
     hasAnyPermission(user, "contacts.create"),
     // Same reasoning as canCreateContacts: reaching this page needs fleets.view,
     // raising a quote needs quotes.create, and they are different grants.
     hasAnyPermission(user, "quotes.create"),
+    // The statement route's gate: this fleet screen's own rule, plus quotes at all.
+    hasAnyPermission(user, "quotes.view_all", "quotes.view_owned"),
   ]);
 
   // EVERY query on this page names the tenant. The db.ts guard scopes nothing
@@ -555,6 +557,12 @@ export default async function FleetDetailPage({ params }: { params: Promise<{ id
                     the nav/guard disagreement this codebase has been removing
                     everywhere else.
                   */}
+                  <div className="flex shrink-0 items-center gap-2">
+                  {canViewStatement && (
+                    <Link href={`/fleets/${fleet.id}/statement`} target="_blank" rel="noreferrer" className="btn-secondary btn-sm shrink-0">
+                      Account statement
+                    </Link>
+                  )}
                   {canCreateQuotes && quoteRecipient && (
                     // SaveForm, not a bare <form>: createQuoteForFleet returns its
                     // refusals as VALUES rather than throwing, because Next replaces
@@ -568,6 +576,7 @@ export default async function FleetDetailPage({ params }: { params: Promise<{ id
                       <SaveButton className="btn-secondary btn-sm shrink-0">+ Quote</SaveButton>
                     </SaveForm>
                   )}
+                  </div>
                 </div>
                 {quotes.length === 0 ? (
                   <p className="px-4 pb-5 text-sm text-slate-400">

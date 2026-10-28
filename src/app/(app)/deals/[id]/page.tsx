@@ -22,10 +22,13 @@ import {
   Wrench,
 } from "lucide-react";
 import { prisma } from "@/lib/db";
-import { canAccessLead, hasAnyPermission, requireQuoteReadAccess, requireRoute } from "@/lib/permissions";
+import { canAccessContact, canAccessLead, hasAnyPermission, requireQuoteReadAccess, requireRoute } from "@/lib/permissions";
 import { formatDate, formatDateTime, formatZAR } from "@/lib/format";
 import { loadBillToFleet, quoteBillTo } from "@/lib/quoteBillTo";
 import { payableTotalCents } from "@/lib/pricing";
+import { isStatementInvoice } from "@/lib/accountStatement";
+import { getRegionalSettings } from "@/lib/settings";
+import DealPayments from "@/components/deals/DealPayments";
 import { primaryVehicleLine, showcaseImageRefFor } from "@/lib/docbuilder/vehicleShowcase";
 import { storedFileSrc } from "@/lib/storedFileSrc";
 import { EntityDetailShell } from "@/components/entity-detail-shell";
@@ -159,6 +162,27 @@ export default async function DealWorkspacePage({ params }: { params: Promise<{ 
   // every quote document states it (quoteBillTo) — not the manager's own name.
   const billTo = quoteBillTo(quote, await loadBillToFleet(prisma, quote.fleetId));
   const customer = billTo.name || "Unlinked customer";
+
+  // MONEY RECEIVED — real QuotePayment rows in the quote's own workspace, plus
+  // the deposit recorded on the deliveries board. Only an accepted quote is an
+  // invoice, so only it has payments.
+  const invoice = isStatementInvoice(quote);
+  const payments =
+    invoice && quote.tenantId
+      ? await prisma.quotePayment.findMany({ where: { quoteId: quote.id, tenantId: quote.tenantId }, orderBy: { receivedAt: "asc" } })
+      : [];
+  const canRecordPayments = invoice && (await hasAnyPermission(user, "deliveries.manage"));
+  // The statement this invoice appears on — the fleet's when billed to one — and
+  // only as a link the viewer can actually open (the page re-checks both).
+  const statementHref = !invoice
+    ? null
+    : billTo.isFleet && quote.fleetId
+      ? (await hasAnyPermission(user, "fleets.view", "fleets.manage")) ? `/fleets/${quote.fleetId}/statement` : null
+      : quote.contactId && (await canAccessContact(user, quote.contactId))
+        ? `/contacts/${quote.contactId}/statement`
+        : null;
+  const { timeZone } = await getRegionalSettings();
+  const today = new Intl.DateTimeFormat("en-CA", { timeZone, year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
   // The lead's own content — its conversations, activities and source — is shown
   // only to someone who may open that lead. Seeing a quote does not grant its lead.
   const lead =
@@ -343,6 +367,10 @@ export default async function DealWorkspacePage({ params }: { params: Promise<{ 
               </div>
             </Surface>
 
+            {invoice && (
+              <DealPayments quote={quote} payments={payments} canRecord={canRecordPayments} statementHref={statementHref} today={today} />
+            )}
+
             <Surface className="p-5">
               <div className="flex items-center justify-between gap-3">
                 <div>
@@ -464,11 +492,6 @@ export default async function DealWorkspacePage({ params }: { params: Promise<{ 
               </div>
             </Surface>
 
-            {!quote.invoicedAt && (
-              <div className="rounded-xl border border-amber-400/20 bg-amber-400/5 p-4 text-xs leading-5 text-amber-100/80">
-                <strong className="text-amber-200">Financial ledger not yet available.</strong> This deal view shows quote value, deposit terms and fulfilment markers only; balances and payments remain part of the upcoming Deal Financials module.
-              </div>
-            )}
           </aside>
         </div>
       </div>

@@ -77,10 +77,12 @@ export default async function ContactDetailPage({
     hasPermission(user, "jobcards.manage"),
   ]);
   const canCreateQuote = canDuplicateQuotes;
-  const [canEditContact, canDeleteContact, canWriteRecord, canReplyWhatsApp] = await Promise.all([
+  const [canEditContact, canDeleteContact, canWriteRecord, canReplyWhatsApp, canViewStatement] = await Promise.all([
     hasPermission(user, "contacts.edit"), hasPermission(user, "contacts.delete"),
     // What sendEmailAction and addCommunication require, and what sendWhatsAppMessage requires (review of #894).
     hasAnyPermission(user, ...CUSTOMER_RECORD_WRITE_PERMISSIONS), hasPermission(user, "inbox.reply"),
+    // The statement route's own gate: this customer (already proven) and quotes at all.
+    hasAnyPermission(user, "quotes.view_all", "quotes.view_owned"),
   ]);
   // THE QUOTES THIS VIEWER MAY OPEN — not every quote on the customer. Opening a customer is not permission to
   // read their quotations: the sidebar's latest quote (number, status, value), the Documents tab and the email
@@ -333,6 +335,9 @@ export default async function ContactDetailPage({
           )}
           {canEditContact && <Link href={`/contacts/${contact.id}/edit`} className="btn-secondary">
             Edit customer
+          </Link>}
+          {canViewStatement && <Link href={`/contacts/${contact.id}/statement`} target="_blank" rel="noreferrer" className="btn-secondary">
+            Account statement
           </Link>}
           {canDeleteContact && <ConfirmDelete
             triggerClass="btn-secondary text-red-400"
