@@ -25,11 +25,20 @@ import { __setTenantEnforcingForTests } from "../src/lib/tenantEnforcement";
 import { newBlock } from "../src/lib/doceditor/factory";
 import type { DocumentModel } from "../src/lib/doceditor/model";
 import { standardTemplateFor } from "../src/lib/doceditor/standardTemplates";
-import { actingLayoutScope } from "../src/lib/docbuilder/store";
+import { actingLayoutScope, defaultBuilderTemplateId, getBuilderTemplate, listBuilderTemplates } from "../src/lib/docbuilder/store";
+import { WORKSPACE_LAYOUT_KEYS } from "../src/lib/docbuilder/layoutScope";
 import { publishedBuilderTemplateFor } from "../src/lib/docbuilder/published";
 import { getDocTemplate } from "../src/lib/docTemplateStore";
 import { renderQuoteBuilderDocHtml } from "../src/lib/quoteBuilderDocPrint";
-import { publishBuilderVersion } from "../src/app/actions/docbuilder";
+import {
+  deleteBuilderTemplate,
+  publishBuilderVersion,
+  renameBuilderTemplate,
+  resetBuilderTemplateToStandard,
+  restoreBuilderVersion,
+  setDefaultBuilderTemplate,
+} from "../src/app/actions/docbuilder";
+import { saveDocEditor } from "../src/app/actions/doceditor";
 import { seedTwoTenants, teardown } from "./harness/seed";
 import { actAsStaff } from "./harness/actAs";
 
@@ -46,6 +55,15 @@ function check(name: string, ok: boolean, detail = "") {
     console.log(`  FAIL ${name}${detail ? ` — ${detail}` : ""}`);
   }
 }
+
+/** What an action did, as a value: a refusal can be a result, a thrown redirect or a thrown error — the row is the verdict. */
+const settled = <T>(work: Promise<T>) => work.then((value) => ({ value, threw: null as unknown }), (error: unknown) => ({ value: null, threw: String(error) }));
+
+const form = (entries: Record<string, string>) => {
+  const data = new FormData();
+  for (const [key, value] of Object.entries(entries)) data.set(key, value);
+  return data;
+};
 
 function guardEnvironment() {
   if (process.env.NODE_ENV !== "test") throw new Error("Refusing to run outside NODE_ENV=test");
@@ -193,12 +211,41 @@ async function main() {
       const hijack = await memberOfB(() => publishBuilderVersion(aOther)).catch((error: unknown) => ({ ok: false, error: String(error) }));
       check("B publishing A's invoice by its id is refused, and nothing is published", hijack.ok === false && (await publishedText(aOther)) === null, JSON.stringify(hijack));
 
+      // ── A's invoice layout is A's alone: B cannot open, list or change it ──
+      // Second review of #926: every editing action took the id the browser
+      // sent, and set-default unset every workspace's default.
+      const stateOf = (id: string) =>
+        basePrisma.docBuilderTemplate.findUniqueOrThrow({
+          where: { id },
+          select: { name: true, data: true, isDefault: true, status: true, publishedVersion: true, deletedAt: true, updatedAt: true },
+        });
+      const before = JSON.stringify(await stateOf(aInvoice));
+      check("B cannot open A's invoice layout by its id (the door every editor action uses)", (await memberOfB(() => getBuilderTemplate(aInvoice))) === null);
+      check("…while A can", (await memberOfA(() => getBuilderTemplate(aInvoice)))?.id === aInvoice);
+      const listedForB = await memberOfB(() => listBuilderTemplates());
+      check("Document Studio's list shows B no invoice or agreement layout of A's", !listedForB.some((row) => WORKSPACE_LAYOUT_KEYS.has(row.key) && row.tenantId === a.tenantId));
+      check("…and shows A its own", (await memberOfA(() => listBuilderTemplates())).some((row) => row.id === aInvoice));
+      const aVersion = await basePrisma.docBuilderVersion.findFirstOrThrow({ where: { templateId: aInvoice }, select: { id: true } });
+      const attempts = {
+        save: await settled(memberOfB(() => saveDocEditor(aInvoice, invoiceLayout("b")))),
+        reset: await settled(memberOfB(() => resetBuilderTemplateToStandard(aInvoice))),
+        restore: await settled(memberOfB(() => restoreBuilderVersion(aInvoice, aVersion.id))),
+        rename: await settled(memberOfB(() => renameBuilderTemplate(aInvoice, form({ name: `Renamed by B ${SFX}` })))),
+        setDefault: await settled(memberOfB(() => setDefaultBuilderTemplate(aInvoice))),
+        remove: await settled(memberOfB(() => deleteBuilderTemplate(aInvoice))),
+      };
+      check("B saving, resetting, restoring, renaming, defaulting or deleting A's invoice changes nothing", JSON.stringify(await stateOf(aInvoice)) === before, JSON.stringify(attempts).slice(0, 300));
+      await settled(memberOfB(() => setDefaultBuilderTemplate(bInvoice)));
+      check("B making its own invoice the default leaves A's default as it was", JSON.stringify(await stateOf(aInvoice)) === before);
+
       // ── a layout with no workspace ───────────────────────────────────────
       const scopeOfA = await memberOfA(() => actingLayoutScope());
       check("with more than one workspace, a layout with no workspace is nobody's", scopeOfA.tenantId === a.tenantId && scopeOfA.includeUnowned === false, JSON.stringify(scopeOfA));
-      // The one-workspace branch, through the same query. With enforcement on, the
-      // guard adds its own strict `tenantId`, so rows with no workspace stay out.
-      const sole = await memberOfA(async () => (await publishedBuilderTemplateFor("invoice", { tenantId: a.tenantId, includeUnowned: true }))?.id ?? null);
+      // The one-workspace branch, through the same query (defaultBuilderTemplateId:
+      // the door re-resolves the real scope, and this database has many
+      // workspaces). With enforcement on, the guard adds its own strict
+      // `tenantId`, so rows with no workspace stay out.
+      const sole = await memberOfA(() => defaultBuilderTemplateId("invoice", { tenantId: a.tenantId, includeUnowned: true }));
       if (enforcing) {
         check("in a one-workspace deployment, under enforcement, the guard still keeps rows with no workspace out", sole === aInvoice, `got ${sole}`);
       } else {

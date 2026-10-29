@@ -34,6 +34,14 @@
  * is `actingLayoutScope()` in ./store.ts.
  */
 
+/**
+ * The layout types that are their workspace's OWN — the ones that print its
+ * bank account and clauses. Each is opened, listed, changed, defaulted and
+ * seeded only inside the acting workspace's scope (getBuilderTemplate and
+ * ensureBuilderSeeded in ./store.ts); every other type behaves as it always has.
+ */
+export const WORKSPACE_LAYOUT_KEYS: ReadonlySet<string> = new Set(["invoice", "agreement"]);
+
 /** The resolved read boundary for one request's layouts. */
 export type LayoutScope = {
   /** The acting workspace. */

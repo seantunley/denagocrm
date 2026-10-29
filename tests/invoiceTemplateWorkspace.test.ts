@@ -71,3 +71,23 @@ test("opening and publishing write in the old text only into this workspace's ow
   assert.match(actions, /const tpl = await ownLayoutWithLegacyText\(found\);\s*if \(!tpl\) return \{ ok: false \};/);
   for (const source of [editor, actions]) assert.doesNotMatch(source, /withLegacyTextInlined\(/);
 });
+
+test("an invoice or agreement layout is its workspace's own: the door, the list, the default, new layouts, seeding (second review of #926)", () => {
+  assert.match(read("src/lib/docbuilder/layoutScope.ts"), /export const WORKSPACE_LAYOUT_KEYS: ReadonlySet<string> = new Set\(\["invoice", "agreement"\]\);/);
+  const builder = read("src/lib/docbuilder/store.ts");
+  // The one door every by-id read and builder action goes through.
+  const door = builder.slice(builder.indexOf("export async function getBuilderTemplate"));
+  assert.match(door, /if \(WORKSPACE_LAYOUT_KEYS\.has\(record\.key\)\) \{\s*const scope = await actingLayoutScope\(\)\.catch\(\(\) => null\);\s*if \(!scope \|\| !layoutRowVisible\(record\.tenantId, scope\)\) return null;\s*\}\s*return record;/);
+  assert.match(builder, /!WORKSPACE_LAYOUT_KEYS\.has\(row\.key\) \|\| \(scope !== null && layoutRowVisible\(row\.tenantId, scope\)\)/);
+  // Seeded once per workspace, every query inside it, stamped as its own.
+  assert.match(builder, /const workspaceScope = WORKSPACE_LAYOUT_KEYS\.has\(key\) \? await workspaceSeedScope\(\) : undefined;\s*if \(workspaceScope === null\) continue;\s*const owned = workspaceScope \? layoutScopeWhere\(workspaceScope\) : \{\};/);
+  assert.match(builder, /where: \{ key, deletedAt: null, \.\.\.owned \}/);
+  assert.equal((builder.match(/where: \{ key, createdById: null, deletedAt: null, \.\.\.owned \}/g) ?? []).length, 2);
+  assert.match(builder, /\.\.\.\(workspaceScope \? \{ tenantId: workspaceScope\.tenantId \} : \{\}\),/);
+  // Set-default unsets only this workspace's; a new or imported layout is stamped as its maker's.
+  assert.match(read("src/app/actions/docbuilder.ts"), /const owned = WORKSPACE_LAYOUT_KEYS\.has\(tpl\.key\) \? layoutScopeWhere\(await actingLayoutScope\(\)\) : \{\};\s*await prisma\.\$transaction\(async \(tx\) => \{\s*await tx\.docBuilderTemplate\.updateMany\(\{ where: \{ key: tpl\.key, \.\.\.owned \}/);
+  const editorActions = read("src/app/actions/doceditor.ts");
+  assert.match(editorActions, /return WORKSPACE_LAYOUT_KEYS\.has\(key\) \? \{ tenantId: \(await actingLayoutScope\(\)\)\.tenantId \} : \{\};/);
+  assert.equal((editorActions.match(/\.\.\.\(await newLayoutOwner\(key\)\)/g) ?? []).length, 2, "create and import");
+  assert.match(read("src/app/(app)/document-studio/page.tsx"), /if \(WORKSPACE_LAYOUT_KEYS\.has\(row\.key\) && \(scope === null \|\| !layoutRowVisible\(row\.tenantId, scope\)\)\) continue;/);
+});
