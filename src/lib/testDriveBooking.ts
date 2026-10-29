@@ -70,22 +70,33 @@ export async function createBookedTestDrive(tx: Tx, input: NewTestDrive) {
       },
     });
   }
-  return tx.testDriveBooking.create({
-    data: {
-      tenantId: input.bookingTenantId,
-      reference: newTestDriveReference(),
-      status: "booked",
-      leadId: input.leadId,
-      contactId: input.contactId,
-      branch: input.branch,
-      demoVehicleId: input.demoVehicleId,
-      productId: input.productId,
-      salespersonId: input.salespersonId,
-      accompanyingSalespersonId: input.accompanyingSalespersonId,
-      activityId,
-      scheduledStart: input.scheduledStart,
-      expectedReturnAt: input.expectedReturnAt,
-    },
+  /*
+   * THE ACTIVITY'S TRIGGER HAS ALREADY MADE A BOOKING FOR IT. "Activity_sync_test_drive_booking"
+   * (migration 20260724130000, for the older calendar and board flows) inserts a TestDriveBooking for every
+   * test-drive activity with a customer — so a plain create here was a second booking for the same activity,
+   * refused by the unique activityId, and every booking failed ("The operation did not complete cleanly"). Found
+   * by DAX's calendar test (scripts/test-dax-calendar.ts), 2026-10-29: no test had ever booked through this door.
+   * This booking is the module's, with what the trigger cannot know (the demo vehicle, the model, both
+   * salespeople, the return time), so it takes that row over; with no trigger row it is created.
+   */
+  const booking = {
+    reference: newTestDriveReference(),
+    status: "booked",
+    leadId: input.leadId,
+    contactId: input.contactId,
+    branch: input.branch,
+    demoVehicleId: input.demoVehicleId,
+    productId: input.productId,
+    salespersonId: input.salespersonId,
+    accompanyingSalespersonId: input.accompanyingSalespersonId,
+    scheduledStart: input.scheduledStart,
+    expectedReturnAt: input.expectedReturnAt,
+  };
+  // The workspace from the session, on both branches — the trigger's row took the activity's.
+  return tx.testDriveBooking.upsert({
+    where: { activityId },
+    create: { ...booking, tenantId: input.bookingTenantId, activityId },
+    update: { ...booking, tenantId: input.bookingTenantId },
   });
 }
 
