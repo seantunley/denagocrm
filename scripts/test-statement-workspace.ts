@@ -27,8 +27,15 @@ import { newBlock } from "../src/lib/doceditor/factory";
 import type { DocumentModel } from "../src/lib/doceditor/model";
 import { standardTemplateFor } from "../src/lib/doceditor/standardTemplates";
 import { statementPrintLayout } from "../src/lib/statementDocPrint";
-import { actingLayoutScope, statementLayoutFromPublishedInvoice } from "../src/lib/docbuilder/store";
-import { resetBuilderTemplateToStandard } from "../src/app/actions/docbuilder";
+import { actingLayoutScope, ensureBuilderSeeded, getBuilderTemplate, listBuilderTemplates, statementLayoutFromPublishedInvoice } from "../src/lib/docbuilder/store";
+import {
+  deleteBuilderTemplate,
+  publishBuilderVersion,
+  renameBuilderTemplate,
+  resetBuilderTemplateToStandard,
+  setDefaultBuilderTemplate,
+} from "../src/app/actions/docbuilder";
+import { saveDocEditor } from "../src/app/actions/doceditor";
 import { seedTwoTenants, teardown } from "./harness/seed";
 import { actAsStaff } from "./harness/actAs";
 
@@ -45,6 +52,15 @@ function check(name: string, ok: boolean, detail = "") {
     console.log(`  FAIL ${name}${detail ? ` — ${detail}` : ""}`);
   }
 }
+
+/** What an action did, as a value: a refusal can be a result, a thrown redirect or a thrown error — the row is the verdict. */
+const settled = <T>(work: Promise<T>) => work.then((value) => ({ value, threw: null as unknown }), (error: unknown) => ({ value: null, threw: String(error) }));
+
+const form = (entries: Record<string, string>) => {
+  const data = new FormData();
+  for (const [key, value] of Object.entries(entries)) data.set(key, value);
+  return data;
+};
 
 function guardEnvironment() {
   if (process.env.NODE_ENV !== "test") throw new Error("Refusing to run outside NODE_ENV=test");
@@ -131,6 +147,22 @@ async function main() {
     await formEditorText(a.tenantId, "a");
     await publish(b.tenantId, "invoice", `B invoice ${SFX}`, invoiceLayout("b"), at(59));
     await formEditorText(b.tenantId, "b");
+
+    // ── seeding: one Statement per workspace, from its own invoice ─────────
+    // Review of #925: one workspace's valid Statement stopped every other one
+    // being seeded. Seeded as each workspace in turn, enforcement off.
+    await actAsStaff(a, () => ensureBuilderSeeded());
+    await actAsStaff(b, () => ensureBuilderSeeded());
+    const seeded = await basePrisma.docBuilderTemplate.findMany({
+      where: { key: "statement", deletedAt: null, tenantId: { in: [a.tenantId, b.tenantId] } },
+      select: { id: true, tenantId: true, data: true },
+    });
+    const seedOf = (tenantId: string) => seeded.filter((row) => row.tenantId === tenantId);
+    const seedText = (tenantId: string) => JSON.stringify(seedOf(tenantId)[0]?.data ?? null);
+    check("A is seeded a Statement of its own, from A's invoice", seedOf(a.tenantId).length === 1 && seedText(a.tenantId).includes(bank.a.typed) && foreignBanking(seedText(a.tenantId), "a").length === 0, `${seedOf(a.tenantId).length} rows`);
+    check("…and B one of its own, from B's — A's did not stop it", seedOf(b.tenantId).length === 1 && seedText(b.tenantId).includes(bank.b.typed) && foreignBanking(seedText(b.tenantId), "b").length === 0, `${seedOf(b.tenantId).length} rows`);
+    const aSeeded = seedOf(a.tenantId)[0]?.id ?? "";
+
     const bStatementDoc = statementLayout();
     const bStatement = await publish(b.tenantId, "statement", `B statement ${SFX}`, bStatementDoc, at(60));
     const blankStatement = standardTemplateFor("statement");
@@ -144,6 +176,30 @@ async function main() {
       const memberOfA = <T>(work: () => Promise<T>) => actAsStaff(a, work, { enforcing });
       const memberOfB = <T>(work: () => Promise<T>) => actAsStaff(b, work, { enforcing });
       const ownerOfA = <T>(work: () => Promise<T>) => actAsStaff(a, work, { asOwner: true, enforcing });
+
+      // ── A's Statement is A's alone: B cannot list, open or change it ─────
+      const stateOf = (id: string) =>
+        basePrisma.docBuilderTemplate.findUniqueOrThrow({
+          where: { id },
+          select: { name: true, data: true, isDefault: true, status: true, publishedVersion: true, deletedAt: true, updatedAt: true },
+        });
+      const before = JSON.stringify(await stateOf(aSeeded));
+      check("B cannot open A's Statement by its id (the door the editor, previews, exports and actions use)", (await memberOfB(() => getBuilderTemplate(aSeeded))) === null);
+      check("…while A can", (await memberOfA(() => getBuilderTemplate(aSeeded)))?.id === aSeeded);
+      const listedForB = await memberOfB(() => listBuilderTemplates());
+      check("Document Studio's list shows B no Statement of A's", !listedForB.some((row) => row.key === "statement" && row.tenantId === a.tenantId));
+      check("…and shows A its own", (await memberOfA(() => listBuilderTemplates())).some((row) => row.id === aSeeded));
+      const attempts = {
+        save: await settled(memberOfB(() => saveDocEditor(aSeeded, statementLayout()))),
+        publish: await settled(memberOfB(() => publishBuilderVersion(aSeeded))),
+        reset: await settled(memberOfB(() => resetBuilderTemplateToStandard(aSeeded))),
+        rename: await settled(memberOfB(() => renameBuilderTemplate(aSeeded, form({ name: `Renamed by B ${SFX}` })))),
+        setDefault: await settled(memberOfB(() => setDefaultBuilderTemplate(aSeeded))),
+        remove: await settled(memberOfB(() => deleteBuilderTemplate(aSeeded))),
+      };
+      check("B saving, publishing, resetting, renaming, defaulting or deleting A's Statement changes nothing", JSON.stringify(await stateOf(aSeeded)) === before, JSON.stringify(attempts).slice(0, 300));
+      await settled(memberOfB(() => setDefaultBuilderTemplate(bStatement)));
+      check("B making its own Statement the default leaves A's default as it was", JSON.stringify(await stateOf(aSeeded)) === before);
 
       // ── what prints on A's statement ─────────────────────────────────────
       const forA = JSON.stringify(await memberOfA(() => statementPrintLayout()));

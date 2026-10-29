@@ -62,10 +62,13 @@ export function DocEditor({
   records,
   initialPublishState = "never",
   hasStandardLayout = false,
+  standardLabel,
   mode = "template",
   wordingSettings,
   email,
 }: {
+  /** What "Reset draft" restores, in the button's words (a Statement's is the published invoice). */
+  standardLabel?: string;
   /**
    * A customer EMAIL (template key `email:…`): `frame` for the shared frame,
    * else one message. Shows a Subject line, previews as the email, and hides
@@ -450,7 +453,7 @@ export function DocEditor({
           id={id}
           onPublished={() => setPublishState("live")}
           hasStandardLayout={hasStandardLayout}
-          standard={email ? (email.frame ? "standard frame" : "standard wording") : undefined}
+          standard={email ? (email.frame ? "standard frame" : "standard wording") : standardLabel}
           save={async () => {
             const current = useEditor.getState().doc;
             if (current) {

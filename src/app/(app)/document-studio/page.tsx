@@ -13,7 +13,8 @@ import { prisma } from "@/lib/db";
 import { DOC_DEFS, docGroupsForModules, docKeyAvailable, type DocKey } from "@/lib/docTemplates";
 import { getEnabledModuleIds } from "@/lib/modules/enabled";
 import { ensureSeeded } from "@/lib/docTemplateStore";
-import { ensureBuilderSeeded } from "@/lib/docbuilder/store";
+import { actingLayoutScope, ensureBuilderSeeded } from "@/lib/docbuilder/store";
+import { layoutRowVisible } from "@/lib/docbuilder/layoutScope";
 import { FORM_EDITOR_KEYS } from "@/lib/docbuilder/layoutAccess";
 import { contactName, formatDate } from "@/lib/format";
 import {
@@ -129,7 +130,7 @@ export default async function DocumentStudioPage({
     prisma.docBuilderTemplate.findMany({
       where: { key: { in: keys }, deletedAt: null },
       orderBy: [{ isDefault: "desc" }, { updatedAt: "desc" }],
-      select: { id: true, key: true, publishedVersion: true },
+      select: { id: true, key: true, publishedVersion: true, tenantId: true },
     }),
     // Doc-editor templates a custom document can be made from.
     prisma.docBuilderTemplate.findMany({
@@ -139,9 +140,15 @@ export default async function DocumentStudioPage({
     }),
     canCreateDocument ? loadPickers(user) : null,
   ]);
-  // Ordered default-first, so the first row per document is its layout.
+  // Ordered default-first, so the first row per document is its layout. A
+  // Statement is this workspace's own (docbuilder/layoutScope.ts) — another's is
+  // not offered, as the editor would not open it.
+  const scope = layoutRows.some((row) => row.key === "statement") ? await actingLayoutScope().catch(() => null) : null;
   const layoutByKey = new Map<string, (typeof layoutRows)[number]>();
-  for (const row of layoutRows) if (!layoutByKey.has(row.key)) layoutByKey.set(row.key, row);
+  for (const row of layoutRows) {
+    if (row.key === "statement" && (scope === null || !layoutRowVisible(row.tenantId, scope))) continue;
+    if (!layoutByKey.has(row.key)) layoutByKey.set(row.key, row);
+  }
 
   const input =
     "h-9 rounded-md border border-input bg-card px-3 text-sm text-foreground outline-none focus:border-ring focus:ring-2 focus:ring-ring/20";

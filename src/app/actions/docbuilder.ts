@@ -9,7 +9,7 @@ import { canEditLayout } from "@/lib/docbuilder/layoutAccess";
 import { logAudit } from "@/lib/audit";
 // getBuilderTemplate, not a raw findUnique: it is where the module check lives.
 import { actingLayoutScope, getBuilderTemplate, listBuilderVersions, statementLayoutFromPublishedInvoice, withLegacyTextInlined } from "@/lib/docbuilder/store";
-import { layoutRowVisible } from "@/lib/docbuilder/layoutScope";
+import { layoutRowVisible, layoutScopeWhere } from "@/lib/docbuilder/layoutScope";
 import { STANDARD_TEMPLATE_KEYS, standardTemplateFor, type StandardDocKey } from "@/lib/doceditor/standardTemplates";
 import { defaultEmailBody, defaultEmailFrame, EMAIL_FRAME_KEY, emailKindOf } from "@/lib/doceditor/emailDefaults";
 import { withActingStaffScope } from "@/lib/actingScope";
@@ -54,8 +54,11 @@ export async function setDefaultBuilderTemplate(id: string) {
     const user = await requirePermission("docbuilder.manage");
     const tpl = await getBuilderTemplate(id);
     if (!tpl || tpl.deletedAt) refuse("That template no longer exists.");
+    // Statements are each workspace's own (docbuilder/layoutScope.ts): making one
+    // the default unsets only this workspace's, never another's.
+    const owned = tpl.key === "statement" ? layoutScopeWhere(await actingLayoutScope()) : {};
     await prisma.$transaction(async (tx) => {
-      await tx.docBuilderTemplate.updateMany({ where: { key: tpl.key }, data: { isDefault: false } });
+      await tx.docBuilderTemplate.updateMany({ where: { key: tpl.key, ...owned }, data: { isDefault: false } });
       await tx.docBuilderTemplate.update({ where: { id }, data: { isDefault: true } });
     });
     await logAudit({ action: "docbuilder.default", summary: `Set “${tpl.name}” as default ${tpl.key}`, entityType: "DocBuilderTemplate", entityId: id, user });

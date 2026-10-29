@@ -223,6 +223,10 @@ export default async function DocEditorPage({
         records={records}
         initialPublishState={publishState}
         hasStandardLayout={(STANDARD_TEMPLATE_KEYS as string[]).includes(template.key)}
+        // A Statement's reset rebuilds it from the workspace's invoice as published
+        // now (resetBuilderTemplateToStandard) — the way to bring a statement made
+        // before the invoice was published up to date (review of #925).
+        standardLabel={template.key === "statement" ? "published invoice" : undefined}
         wordingSettings={wordingSettings}
       />
     </DocEditorEnvProvider>
