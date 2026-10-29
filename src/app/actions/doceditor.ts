@@ -12,8 +12,19 @@ import { documentSchema } from "@/lib/doceditor/model";
 import { blankDocument, standardQuoteTemplate } from "@/lib/doceditor/factory";
 import { portableDocumentSchema, externalImageCount } from "@/lib/doceditor/portable";
 import { generateDocEditorPdf } from "@/lib/doceditor/generate";
-import { getBuilderTemplate } from "@/lib/docbuilder/store";
+import { actingLayoutScope, getBuilderTemplate } from "@/lib/docbuilder/store";
+import { WORKSPACE_LAYOUT_KEYS } from "@/lib/docbuilder/layoutScope";
 import { docKeyEnabled } from "@/lib/docModuleAccess";
+
+/**
+ * The workspace a NEW layout of `key` is stamped with. An invoice or agreement
+ * layout is its workspace's own (docbuilder/layoutScope.ts) — unstamped, it would
+ * be nobody's, and its maker could not open it once a second workspace exists.
+ * Every other type is created as it always has been.
+ */
+async function newLayoutOwner(key: string): Promise<{ tenantId?: string }> {
+  return WORKSPACE_LAYOUT_KEYS.has(key) ? { tenantId: (await actingLayoutScope()).tenantId } : {};
+}
 import {
   parseBuilderRecord,
   recordMatchesTemplate,
@@ -99,6 +110,7 @@ export async function createDocEditorTemplate(formData: FormData) {
         key,
         data: blankDocument(name) as object,
         createdById: user.id,
+        ...(await newLayoutOwner(key)),
       },
     });
     await logAudit({
@@ -138,7 +150,7 @@ export async function importDocEditorTemplate(
       return { ok: false, error: "That kind of document isn't available in this workspace." };
     }
     const created = await prisma.docBuilderTemplate.create({
-      data: { name, key, data: document as object, createdById: user.id },
+      data: { name, key, data: document as object, createdById: user.id, ...(await newLayoutOwner(key)) },
     });
     await logAudit({
       action: "doceditor.import",

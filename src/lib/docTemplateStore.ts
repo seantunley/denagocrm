@@ -7,6 +7,7 @@ import { DOC_DEFS, defaultTemplate, mergeTemplate, withCompanyDetails, type DocK
 import { getCompanyProfile } from "./companyProfile";
 import { docKeyEnabled } from "./docModuleAccess";
 import { isModuleEnabled } from "./modules/enabled";
+import { layoutRowVisible, layoutScopeWhere, type LayoutScope } from "./docbuilder/layoutScope";
 
 /** First run per type: seed a "Standard" template (from legacy settings if any). */
 export async function ensureSeeded(): Promise<void> {
@@ -54,30 +55,45 @@ export async function getTemplateRecord(id: string) {
 /**
  * The template a generated document should use: an explicit record (preview
  * via ?tpl=), else the type's default record, else built-in defaults.
+ *
+ * With a `scope`, both are that workspace's own (docbuilder/layoutScope.ts),
+ * named in the query, with tenant enforcement off as well as on: the invoice
+ * and the statement print this template's bank details, so another workspace's
+ * default — or a record of theirs named by `?tpl=` — must never be the one
+ * read. A `?tpl=` id outside the scope is ignored, as one of another document
+ * type always has been. Without a scope it is read as it always has.
  */
-export async function getDocTemplate(key: DocKey, templateId?: string): Promise<DocTemplate> {
+export async function getDocTemplate(key: DocKey, templateId?: string, scope?: LayoutScope): Promise<DocTemplate> {
   // Every print of a typed document comes through here: refuse rather than
   // render a module-only document in a workspace without the module.
   if (!(await docKeyEnabled(key))) throw new Error(`The ${DOC_DEFS[key].label} isn't available in this workspace.`);
-  const [tpl, company] = await Promise.all([loadDocTemplate(key, templateId), getCompanyProfile()]);
+  const [tpl, company] = await Promise.all([loadDocTemplate(key, templateId, scope), getCompanyProfile()]);
   return withCompanyDetails(tpl, company);
 }
 
 /**
  * The default template's text as the owner wrote it — {{company.name}} still a
  * placeholder, not filled in — for moving it into the document editor's layout.
+ *
+ * With a `scope`, only that workspace's default counts (docbuilder/layoutScope.ts):
+ * the text written in is a bank account, so it must be the acting workspace's
+ * own, named in the query, with tenant enforcement off as well as on. Without
+ * one it is read as it always has been.
  */
-export async function getDocTemplateText(key: DocKey): Promise<DocTemplate> {
-  return loadDocTemplate(key);
+export async function getDocTemplateText(key: DocKey, scope?: LayoutScope): Promise<DocTemplate> {
+  return loadDocTemplate(key, undefined, scope);
 }
 
-async function loadDocTemplate(key: DocKey, templateId?: string): Promise<DocTemplate> {
+async function loadDocTemplate(key: DocKey, templateId?: string, scope?: LayoutScope): Promise<DocTemplate> {
   if (templateId) {
     const rec = await prisma.docTemplateRecord.findUnique({ where: { id: templateId } });
-    if (rec && rec.docType === key) return withPrintableLogo(mergeTemplate(key, rec.config), rec.tenantId);
+    // The id came from the browser; with a scope, only this workspace's record prints.
+    if (rec && rec.docType === key && (!scope || layoutRowVisible(rec.tenantId, scope))) {
+      return withPrintableLogo(mergeTemplate(key, rec.config), rec.tenantId);
+    }
   }
   const def = await prisma.docTemplateRecord.findFirst({
-    where: { docType: key, isDefault: true, deletedAt: null },
+    where: { docType: key, isDefault: true, deletedAt: null, ...(scope ? layoutScopeWhere(scope) : {}) },
   });
   if (def) return withPrintableLogo(mergeTemplate(key, def.config), def.tenantId);
   const legacy = await getSetting(`DOC_TEMPLATE_${key}`);

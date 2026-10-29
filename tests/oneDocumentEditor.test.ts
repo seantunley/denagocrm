@@ -79,9 +79,10 @@ test("Document Studio opens the one editor for every document, and the old form 
   assert.doesNotMatch(old, /updateDocTemplate|<form|SaveForm/);
   // The editor opens an old invoice/agreement with its text written in (no
   // write on GET); Publish stores it, in the draft and the published version.
-  assert.match(code("src/app/doc-editor/[id]/page.tsx"), /getBuilderTemplate\(id\)\.then\(\(t\) => \(t \? withLegacyTextInlined\(t\) : null\)\)/);
+  // Both through ownLayoutWithLegacyText: this workspace's text, into its own layout.
+  assert.match(code("src/app/doc-editor/[id]/page.tsx"), /getBuilderTemplate\(id\)\.then\(\(t\) => \(t \? ownLayoutWithLegacyText\(t\) : null\)\)/);
   const publish = code("src/app/actions/docbuilder.ts");
-  assert.match(publish, /const tpl = await withLegacyTextInlined\(found\);/);
+  assert.match(publish, /const tpl = await ownLayoutWithLegacyText\(found\);/);
   assert.match(publish, /data: \{ templateId: id, version, data: tpl\.data as object/);
   assert.match(publish, /\.\.\.\(tpl\.data !== found\.data \? \{ data: tpl\.data as object \} : \{\}\)/);
   assert.doesNotMatch(code("src/lib/docbuilder/store.ts").slice(code("src/lib/docbuilder/store.ts").indexOf("export async function withLegacyTextInlined")).split("\n}\n")[0], /\.update\(|\.create\(/, "opening writes nothing");
