@@ -69,6 +69,7 @@
     "test:meta-echo": "tsx --tsconfig tsconfig.scripts.json scripts/test-meta-echo-dedupe.ts",
     "test:inbound-screening": "tsx --tsconfig tsconfig.scripts.json scripts/test-inbound-screening.ts",
     "test:assistant-customers": "tsx --tsconfig tsconfig.scripts.json scripts/test-assistant-customers.ts",
+    "test:dax-calendar": "tsx --tsconfig tsconfig.harness.json scripts/test-dax-calendar.ts",
     "test:assistant-evidence": "tsx --tsconfig tsconfig.scripts.json scripts/test-assistant-evidence.ts",
     "eval:evidence": "tsx --tsconfig tsconfig.scripts.json evals/runEvidenceEval.ts",
     "test:assistant-why": "tsx --tsconfig tsconfig.harness.json scripts/test-assistant-why.ts",
