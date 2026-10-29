@@ -3,7 +3,7 @@ import { prisma } from "@/lib/db";
 import { getActiveTenantId } from "@/lib/auth";
 import { actingTenantId } from "@/lib/actingTenant";
 import { TenantScopeError } from "@/lib/tenantGuard";
-import { layoutRowVisible, layoutScopeFor, layoutScopeWhere, type LayoutScope } from "@/lib/docbuilder/layoutScope";
+import { WORKSPACE_LAYOUT_KEYS, layoutRowVisible, layoutScopeFor, layoutScopeWhere, type LayoutScope } from "@/lib/docbuilder/layoutScope";
 import { isModuleEnabled } from "@/lib/modules/enabled";
 import { docKeyEnabled } from "@/lib/docModuleAccess";
 import { readTemplateDocument } from "@/lib/doceditor/legacy";
@@ -28,14 +28,13 @@ export async function ensureBuilderSeeded(): Promise<void> {
     // No job card / indemnity / … templates minted for a workspace without the module.
     if (!(await docKeyEnabled(key))) continue;
     try {
-      // A Statement is its workspace's own (./layoutScope.ts; review of #925):
-      // every query below sees only the acting workspace's statements, so each
-      // workspace is seeded its own, from its own invoice, and no workspace's
-      // statements are changed by another's. With no workspace to act for (a
-      // background render), the statement waits for a request that has one.
-      const statementScope = key === "statement" ? await statementSeedScope() : undefined;
-      if (statementScope === null) continue;
-      const owned = statementScope ? layoutScopeWhere(statementScope) : {};
+      // An invoice or agreement layout is its workspace's own (./layoutScope.ts):
+      // every query below sees only the acting workspace's, so each workspace is
+      // seeded its own and none is changed by another's. With no workspace to
+      // act for (a background render), it waits for a request that has one.
+      const workspaceScope = WORKSPACE_LAYOUT_KEYS.has(key) ? await workspaceSeedScope() : undefined;
+      if (workspaceScope === null) continue;
+      const owned = workspaceScope ? layoutScopeWhere(workspaceScope) : {};
       const rows = await prisma.docBuilderTemplate.findMany({
         where: { key, deletedAt: null, ...owned },
         select: {
@@ -75,8 +74,6 @@ export async function ensureBuilderSeeded(): Promise<void> {
         continue;
       }
 
-      const seed = await seedLayout(key, statementScope);
-
       const invalidSystem = parsed.filter(
         (row) => row.createdById === null && !row.valid,
       );
@@ -95,8 +92,10 @@ export async function ensureBuilderSeeded(): Promise<void> {
           name: STANDARD_TEMPLATE_NAMES[key],
           key,
           isDefault: becomeDefault,
-          ...(seed.tenantId ? { tenantId: seed.tenantId } : {}),
-          data: seed.doc as object,
+          // Stamped as the workspace's: it is seeded once per workspace, and an
+          // unowned row is nobody's once a second workspace exists.
+          ...(workspaceScope ? { tenantId: workspaceScope.tenantId } : {}),
+          data: (await seedLayout(key, workspaceScope)) as object,
         },
       });
     } catch (error) {
@@ -106,10 +105,10 @@ export async function ensureBuilderSeeded(): Promise<void> {
 }
 
 /**
- * The acting workspace's scope for seeding its Statement, or null when the
- * request has no workspace to act for — then nobody's invoice is copied.
+ * The acting workspace's scope for seeding its own layouts, or null when the
+ * request has no workspace to act for — then nothing is seeded for anybody.
  */
-async function statementSeedScope(): Promise<LayoutScope | null> {
+async function workspaceSeedScope(): Promise<LayoutScope | null> {
   return actingLayoutScope().catch((error: unknown) => {
     if (error instanceof TenantScopeError) return null;
     throw error;
@@ -117,34 +116,29 @@ async function statementSeedScope(): Promise<LayoutScope | null> {
 }
 
 /**
- * A document type's first layout, and the workspace it is stamped with (null:
- * none, as every seeded standard always has been).
- *
- * The statement starts as the ACTING workspace's own published invoice,
- * converted — its header, banking details, payment terms and footer — or, with
- * none published yet, as the standard (History → "Reset draft to the published
- * invoice" rebuilds it once there is one). Either way it is stamped as that
- * workspace's: statements are seeded once per workspace, and an unowned row is
- * nobody's once a second workspace exists (./layoutScope.ts). Every other type
- * gets its standard.
+ * A document type's first layout. The statement starts as the ACTING
+ * workspace's own published invoice, converted — its header, banking details,
+ * payment terms and footer — or, with none published yet, as the standard
+ * (History → "Reset draft to the published invoice" rebuilds it once there is
+ * one). Every other type gets its standard. ensureBuilderSeeded stamps the row
+ * with the workspace (`workspaceScope`), seeded once per workspace.
  */
-async function seedLayout(key: StandardDocKey, statementScope?: LayoutScope): Promise<{ doc: DocumentModel; tenantId: string | null }> {
+async function seedLayout(key: StandardDocKey, workspaceScope?: LayoutScope): Promise<DocumentModel> {
+  if (key === "statement" && workspaceScope) {
+    const fromInvoice = await statementLayoutFromPublishedInvoice(workspaceScope);
+    if (fromInvoice) return fromInvoice;
+  }
   // The workspace's own standard: no vehicle card or EV disclaimer on a
   // non-automotive workspace's quotes.
-  const standard = async () => standardTemplateFor(key, { automotive: await isModuleEnabled("automotive") });
-  if (key === "statement" && statementScope) {
-    const fromInvoice = await statementLayoutFromPublishedInvoice(statementScope);
-    return { doc: fromInvoice ?? (await standard()), tenantId: statementScope.tenantId };
-  }
-  return { doc: await standard(), tenantId: null };
+  return standardTemplateFor(key, { automotive: await isModuleEnabled("automotive") });
 }
 
 /**
- * The ACTING workspace's layout scope (./layoutScope.ts) — the boundary every
- * statement layout lookup puts in its query. The workspace is the one
- * `actingTenantId()` resolves, the same rule the statement's figures use
- * (accountStatementLoader.ts), so the design and the figures can never come from
- * two different workspaces; it refuses (TenantScopeError) when the request has
+ * The ACTING workspace's layout scope (./layoutScope.ts) — the boundary a
+ * document that prints a bank account puts in its layout lookups. The workspace
+ * is the one `actingTenantId()` resolves, the same rule the records being
+ * printed are read by, so the design and the figures can never come from two
+ * different workspaces; it refuses (TenantScopeError) when the request has
  * none. `Tenant` is a global model, and two ids answer the only question asked
  * of it: is this workspace the only one?
  */
@@ -190,8 +184,8 @@ export async function statementLayoutFromPublishedInvoice(scope: LayoutScope): P
  * explicit default wins, with the most recently updated valid row as fallback.
  *
  * With a `scope`, only that workspace's layouts are candidates
- * (./layoutScope.ts) — the statement passes one, because it prints a bank
- * account. Without one, a type resolves as it always has.
+ * (./layoutScope.ts) — the invoice and sales agreement pass one, because they
+ * print a bank account. Without one, a type resolves as it always has.
  */
 export async function defaultBuilderTemplateId(
   key: string,
@@ -222,9 +216,11 @@ export async function listBuilderTemplates() {
       orderBy: [{ key: "asc" }, { updatedAt: "desc" }],
     });
     const enabled = await Promise.all(rows.map((row) => docKeyEnabled(row.key)));
-    // Statements only for their own workspace, as the door opens them (getBuilderTemplate).
-    const scope = rows.some((row) => row.key === "statement") ? await actingLayoutScope().catch(() => null) : null;
-    return rows.filter((row, i) => enabled[i] && (row.key !== "statement" || (scope !== null && layoutRowVisible(row.tenantId, scope))));
+    // A workspace's own layout types only for that workspace, as the door opens them (getBuilderTemplate).
+    const scope = rows.some((row) => WORKSPACE_LAYOUT_KEYS.has(row.key)) ? await actingLayoutScope().catch(() => null) : null;
+    return rows.filter(
+      (row, i) => enabled[i] && (!WORKSPACE_LAYOUT_KEYS.has(row.key) || (scope !== null && layoutRowVisible(row.tenantId, scope))),
+    );
   } catch {
     return [];
   }
@@ -246,11 +242,12 @@ export async function getBuilderTemplate(id: string) {
     const active = await getActiveTenantId().catch(() => null);
     if (!active || record.tenantId !== active) return null;
   }
-  // A STATEMENT layout is its workspace's own as well (review of #925): it starts
-  // as that workspace's published invoice, banking details and all. The same
-  // door and the statement's own rule (./layoutScope.ts), failing closed — a
-  // request with no workspace has no statements.
-  if (record.key === "statement") {
+  // An INVOICE or SALES AGREEMENT layout is its workspace's own as well (review
+  // of #926): it prints that workspace's bank account and clauses. Checked here,
+  // the one door, so the editor, previews, exports, sending for signature and
+  // every builder action — save, publish, reset, restore, rename, default,
+  // delete — get it; the documents' own rule (./layoutScope.ts), failing closed.
+  if (WORKSPACE_LAYOUT_KEYS.has(record.key)) {
     const scope = await actingLayoutScope().catch(() => null);
     if (!scope || !layoutRowVisible(record.tenantId, scope)) return null;
   }
@@ -266,7 +263,8 @@ export async function getBuilderTemplate(id: string) {
  * printing the old text, as it always has.
  *
  * With a `scope`, the old text is that workspace's own (./layoutScope.ts) — a
- * statement's bank details must be; without one it is read as it always has.
+ * bank account must be; without one it is read as it always has. The editor
+ * and Publish come through ownLayoutWithLegacyText, which passes one.
  */
 export async function withLegacyTextInlined<T extends { key: string; data: unknown }>(template: T, scope?: LayoutScope): Promise<T> {
   if ((template.key !== "invoice" && template.key !== "agreement") || !hasLegacyTokens(template.key, template.data)) return template;
@@ -284,6 +282,22 @@ export async function withLegacyTextInlined<T extends { key: string; data: unkno
           clauses: { text: old.bodyText ?? "", on: sectionOn("clauses") },
         };
   return { ...template, data: inlineLegacyText(template.key, template.data, legacy) };
+}
+
+/**
+ * An invoice or agreement layout as the editor opens it and Publish stores it:
+ * with the old form editor's text written in — the ACTING workspace's text —
+ * and only when the layout is the acting workspace's own (./layoutScope.ts).
+ * Null for one outside it. Both arrive with an id from the browser, which names
+ * no workspace while enforcement is off; writing this workspace's bank details
+ * into another's layout would print them on that workspace's invoices, and the
+ * editor autosaves what it opened. Every other type passes through untouched.
+ */
+export async function ownLayoutWithLegacyText<T extends { key: string; data: unknown; tenantId: string | null }>(template: T): Promise<T | null> {
+  if (template.key !== "invoice" && template.key !== "agreement") return template;
+  const scope = await actingLayoutScope();
+  if (!layoutRowVisible(template.tenantId, scope)) return null;
+  return withLegacyTextInlined(template, scope);
 }
 
 /**

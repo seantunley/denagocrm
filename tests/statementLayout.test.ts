@@ -198,20 +198,14 @@ test("the statement table is a real editor block: made, previewed with sample ro
 
 test("Statement is a document type: a Sales layout seeded from the published invoice, and printed from it", () => {
   const store = read("src/lib/docbuilder/store.ts");
-  // One Statement per workspace (review of #925): seeding sees only the acting
-  // workspace's statements, seeds from its own invoice (or the standard, until
-  // one is published), stamps it as its own, and with no workspace waits.
-  assert.match(store, /const statementScope = key === "statement" \? await statementSeedScope\(\) : undefined;\s*if \(statementScope === null\) continue;\s*const owned = statementScope \? layoutScopeWhere\(statementScope\) : \{\};/);
-  assert.match(store, /where: \{ key, deletedAt: null, \.\.\.owned \}/);
-  assert.equal((store.match(/where: \{ key, createdById: null, deletedAt: null, \.\.\.owned \}/g) ?? []).length, 2, "both default fix-ups stay inside the workspace");
-  assert.match(store, /if \(key === "statement" && statementScope\) \{\s*const fromInvoice = await statementLayoutFromPublishedInvoice\(statementScope\);\s*return \{ doc: fromInvoice \?\? \(await standard\(\)\), tenantId: statementScope\.tenantId \};/);
-  assert.match(store, /\.\.\.\(seed\.tenantId \? \{ tenantId: seed\.tenantId \} : \{\}\),/);
-  // The door every by-id read and action uses, the list, set-default and new layouts: a Statement is its workspace's own.
-  assert.match(store, /if \(record\.key === "statement"\) \{\s*const scope = await actingLayoutScope\(\)\.catch\(\(\) => null\);\s*if \(!scope \|\| !layoutRowVisible\(record\.tenantId, scope\)\) return null;/);
-  assert.match(store, /row\.key !== "statement" \|\| \(scope !== null && layoutRowVisible\(row\.tenantId, scope\)\)/);
-  assert.match(read("src/app/actions/docbuilder.ts"), /const owned = tpl\.key === "statement" \? layoutScopeWhere\(await actingLayoutScope\(\)\) : \{\};/);
-  assert.match(read("src/app/actions/doceditor.ts"), /return key === "statement" \? \{ tenantId: \(await actingLayoutScope\(\)\)\.tenantId \} : \{\};/);
-  assert.match(read("src/app/(app)/document-studio/page.tsx"), /if \(row\.key === "statement" && \(scope === null \|\| !layoutRowVisible\(row\.tenantId, scope\)\)\) continue;/);
+  // A Statement is one of the workspace's own layout types (review of #925), so
+  // the shared rules apply to it: the door every by-id read and action uses, the
+  // list, set-default, new layouts and seeding once per workspace, stamped as its
+  // own (tests/invoiceTemplateWorkspace.test.ts pins those rules themselves).
+  assert.match(read("src/lib/docbuilder/layoutScope.ts"), /export const WORKSPACE_LAYOUT_KEYS: ReadonlySet<string> = new Set\(\["invoice", "agreement", "statement"\]\);/);
+  // …and its first layout is the workspace's own invoice, converted.
+  assert.match(store, /data: \(await seedLayout\(key, workspaceScope\)\) as object,/);
+  assert.match(store, /if \(key === "statement" && workspaceScope\) \{\s*const fromInvoice = await statementLayoutFromPublishedInvoice\(workspaceScope\);\s*if \(fromInvoice\) return fromInvoice;\s*\}/);
   // A Statement made before the invoice was published is rebuilt from it by name.
   assert.match(read("src/app/doc-editor/[id]/page.tsx"), /standardLabel=\{template\.key === "statement" \? "published invoice" : undefined\}/);
   // The invoice is read directly (defaultBuilderTemplateId seeds — and seeding calls this), from the workspace's

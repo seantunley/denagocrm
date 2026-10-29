@@ -8,8 +8,8 @@ import { hasPermission, requirePermission, requireAnyPermission } from "@/lib/pe
 import { canEditLayout } from "@/lib/docbuilder/layoutAccess";
 import { logAudit } from "@/lib/audit";
 // getBuilderTemplate, not a raw findUnique: it is where the module check lives.
-import { actingLayoutScope, getBuilderTemplate, listBuilderVersions, statementLayoutFromPublishedInvoice, withLegacyTextInlined } from "@/lib/docbuilder/store";
-import { layoutRowVisible, layoutScopeWhere } from "@/lib/docbuilder/layoutScope";
+import { actingLayoutScope, getBuilderTemplate, listBuilderVersions, ownLayoutWithLegacyText, statementLayoutFromPublishedInvoice } from "@/lib/docbuilder/store";
+import { WORKSPACE_LAYOUT_KEYS, layoutRowVisible, layoutScopeWhere } from "@/lib/docbuilder/layoutScope";
 import { STANDARD_TEMPLATE_KEYS, standardTemplateFor, type StandardDocKey } from "@/lib/doceditor/standardTemplates";
 import { defaultEmailBody, defaultEmailFrame, EMAIL_FRAME_KEY, emailKindOf } from "@/lib/doceditor/emailDefaults";
 import { withActingStaffScope } from "@/lib/actingScope";
@@ -54,9 +54,9 @@ export async function setDefaultBuilderTemplate(id: string) {
     const user = await requirePermission("docbuilder.manage");
     const tpl = await getBuilderTemplate(id);
     if (!tpl || tpl.deletedAt) refuse("That template no longer exists.");
-    // Statements are each workspace's own (docbuilder/layoutScope.ts): making one
-    // the default unsets only this workspace's, never another's.
-    const owned = tpl.key === "statement" ? layoutScopeWhere(await actingLayoutScope()) : {};
+    // Invoices and agreements are each workspace's own (docbuilder/layoutScope.ts):
+    // making one the default unsets only this workspace's, never another's.
+    const owned = WORKSPACE_LAYOUT_KEYS.has(tpl.key) ? layoutScopeWhere(await actingLayoutScope()) : {};
     await prisma.$transaction(async (tx) => {
       await tx.docBuilderTemplate.updateMany({ where: { key: tpl.key, ...owned }, data: { isDefault: false } });
       await tx.docBuilderTemplate.update({ where: { id }, data: { isDefault: true } });
@@ -75,8 +75,11 @@ export async function publishBuilderVersion(id: string, label?: string): Promise
     if (!(await canEditLayout(user, found.key))) return { ok: false };
     // An invoice/agreement still reading bank details or clauses from the old
     // form editor is published with that text written in, and its draft keeps
-    // it — from here on it is edited only in this editor.
-    const tpl = await withLegacyTextInlined(found);
+    // it — from here on it is edited only in this editor. The text is this
+    // workspace's, and only an invoice/agreement of its own is published
+    // (ownLayoutWithLegacyText): the id came from the browser.
+    const tpl = await ownLayoutWithLegacyText(found);
+    if (!tpl) return { ok: false };
     const last = await prisma.docBuilderVersion.findFirst({
       where: { templateId: id }, orderBy: { version: "desc" }, select: { version: true },
     });
@@ -145,11 +148,9 @@ export async function resetBuilderTemplateToStandard(id: string): Promise<{ ok: 
       return { ok: false, error: "There is no standard layout for this kind of document." };
     }
     // A statement's standard is the workspace's own published invoice, converted —
-    // written only into a statement of its own (docbuilder/layoutScope.ts). This
-    // row was found by the id the browser sent, which names no workspace while
-    // enforcement is off; writing this workspace's banking into another's
-    // statement would print it on that workspace's customers' statements. Any
-    // other row gets the plain standard, which carries nobody's bank account.
+    // written only into a statement of its own (docbuilder/layoutScope.ts; the
+    // door above already refuses another workspace's). Any other row gets the
+    // plain standard, which carries nobody's bank account.
     const scope = tpl.key === "statement" ? await actingLayoutScope() : null;
     const fromInvoice = scope && layoutRowVisible(tpl.tenantId, scope) ? await statementLayoutFromPublishedInvoice(scope) : null;
     const standard = emailKind

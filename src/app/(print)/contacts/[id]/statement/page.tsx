@@ -3,6 +3,7 @@ import StatementDocument from "@/components/print/StatementDocument";
 import StatementUnavailable from "@/components/print/StatementUnavailable";
 import { loadContactStatement, statementBillToLines } from "@/lib/accountStatementLoader";
 import { getCompanyProfile } from "@/lib/companyProfile";
+import { actingLayoutScope } from "@/lib/docbuilder/store";
 import { getDocTemplate } from "@/lib/docTemplateStore";
 import { formatZAR } from "@/lib/format";
 import { requireAnyPermission, requireContactReadAccess } from "@/lib/permissions";
@@ -34,7 +35,10 @@ export default async function ContactStatementPage({
   const backHref = `/contacts/${id}`;
   if (loaded.kind === "partial") return <StatementUnavailable backHref={backHref} backLabel="Back to customer" />;
 
-  const [company, template] = await Promise.all([getCompanyProfile(), getDocTemplate("invoice")]);
+  // The invoice template's bank details are this workspace's own, like the
+  // figures above (docbuilder/layoutScope.ts).
+  const scope = await actingLayoutScope();
+  const [company, template] = await Promise.all([getCompanyProfile(), getDocTemplate("invoice", undefined, scope)]);
   const note = billedElsewhereNote(loaded.billedElsewhere);
 
   return (

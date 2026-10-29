@@ -3,6 +3,7 @@ import StatementDocument from "@/components/print/StatementDocument";
 import StatementUnavailable from "@/components/print/StatementUnavailable";
 import { loadFleetStatement, statementBillToLines } from "@/lib/accountStatementLoader";
 import { getCompanyProfile } from "@/lib/companyProfile";
+import { actingLayoutScope } from "@/lib/docbuilder/store";
 import { getDocTemplate } from "@/lib/docTemplateStore";
 import { formatZAR } from "@/lib/format";
 import { requireAnyPermission, requireRoute } from "@/lib/permissions";
@@ -31,7 +32,10 @@ export default async function FleetStatementPage({
   const backHref = `/fleets/${id}`;
   if (loaded.kind === "partial") return <StatementUnavailable backHref={backHref} backLabel="Back to fleet" />;
 
-  const [company, template] = await Promise.all([getCompanyProfile(), getDocTemplate("invoice")]);
+  // The invoice template's bank details are this workspace's own, like the
+  // figures above (docbuilder/layoutScope.ts).
+  const scope = await actingLayoutScope();
+  const [company, template] = await Promise.all([getCompanyProfile(), getDocTemplate("invoice", undefined, scope)]);
   return (
     <StatementDocument
       company={company}

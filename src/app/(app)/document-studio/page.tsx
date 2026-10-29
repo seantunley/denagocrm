@@ -14,7 +14,7 @@ import { DOC_DEFS, docGroupsForModules, docKeyAvailable, type DocKey } from "@/l
 import { getEnabledModuleIds } from "@/lib/modules/enabled";
 import { ensureSeeded } from "@/lib/docTemplateStore";
 import { actingLayoutScope, ensureBuilderSeeded } from "@/lib/docbuilder/store";
-import { layoutRowVisible } from "@/lib/docbuilder/layoutScope";
+import { WORKSPACE_LAYOUT_KEYS, layoutRowVisible } from "@/lib/docbuilder/layoutScope";
 import { FORM_EDITOR_KEYS } from "@/lib/docbuilder/layoutAccess";
 import { contactName, formatDate } from "@/lib/format";
 import {
@@ -140,13 +140,13 @@ export default async function DocumentStudioPage({
     }),
     canCreateDocument ? loadPickers(user) : null,
   ]);
-  // Ordered default-first, so the first row per document is its layout. A
-  // Statement is this workspace's own (docbuilder/layoutScope.ts) — another's is
-  // not offered, as the editor would not open it.
-  const scope = layoutRows.some((row) => row.key === "statement") ? await actingLayoutScope().catch(() => null) : null;
+  // Ordered default-first, so the first row per document is its layout. An
+  // invoice or agreement layout is this workspace's own (docbuilder/layoutScope.ts)
+  // — another's is not offered, as the editor would not open it.
+  const scope = layoutRows.some((row) => WORKSPACE_LAYOUT_KEYS.has(row.key)) ? await actingLayoutScope().catch(() => null) : null;
   const layoutByKey = new Map<string, (typeof layoutRows)[number]>();
   for (const row of layoutRows) {
-    if (row.key === "statement" && (scope === null || !layoutRowVisible(row.tenantId, scope))) continue;
+    if (WORKSPACE_LAYOUT_KEYS.has(row.key) && (scope === null || !layoutRowVisible(row.tenantId, scope))) continue;
     if (!layoutByKey.has(row.key)) layoutByKey.set(row.key, row);
   }
 

@@ -4,7 +4,7 @@ import { WARRANTY_READ } from "@/lib/warrantyAccess";
 import { requireLayoutEditor } from "@/lib/docbuilder/layoutAccess";
 import { prisma } from "@/lib/db";
 import { contactName } from "@/lib/format";
-import { getBuilderTemplate, withLegacyTextInlined } from "@/lib/docbuilder/store";
+import { getBuilderTemplate, ownLayoutWithLegacyText } from "@/lib/docbuilder/store";
 import { requiredRecordKind } from "@/lib/docbuilder/recordBinding";
 import Link from "next/link";
 import { readTemplateDocument } from "@/lib/doceditor/legacy";
@@ -44,7 +44,9 @@ export default async function DocEditorPage({
   // An invoice/agreement still reading its text from the old form editor opens
   // with it written in, so bank details and clauses are edited in this editor
   // (stored by the editor's save, or by Publish — nothing is written on open).
-  const template = await getBuilderTemplate(id).then((t) => (t ? withLegacyTextInlined(t) : null));
+  // It is this workspace's text, and only an invoice/agreement of this
+  // workspace's own opens at all (ownLayoutWithLegacyText).
+  const template = await getBuilderTemplate(id).then((t) => (t ? ownLayoutWithLegacyText(t) : null));
   if (!template) notFound();
   // docbuilder.manage, or — for the seven layouts the old form editor managed —
   // document_templates.manage (layoutAccess).

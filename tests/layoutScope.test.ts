@@ -3,10 +3,10 @@ import { test } from "node:test";
 import { layoutRowVisible, layoutScopeFor, layoutScopeWhere, type LayoutScope } from "../src/lib/docbuilder/layoutScope";
 
 /*
- * Review of #925: a customer statement prints the workspace's design and bank
- * account, so its layouts are the acting workspace's own — and a layout with no
- * workspace is that workspace's only while it is the only one there is
- * (docs/TENANT-ENFORCEMENT-PREREQUISITES.md). The rule, executed.
+ * An invoice, a sales agreement and a customer statement print the workspace's
+ * design and bank account, so their layouts are the acting workspace's own —
+ * and a layout with no workspace is that workspace's only while it is the only
+ * one there is (docs/TENANT-ENFORCEMENT-PREREQUISITES.md). The rule, executed.
  */
 
 const A = "tenant_a";

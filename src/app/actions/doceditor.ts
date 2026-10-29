@@ -13,16 +13,17 @@ import { blankDocument, standardQuoteTemplate } from "@/lib/doceditor/factory";
 import { portableDocumentSchema, externalImageCount } from "@/lib/doceditor/portable";
 import { generateDocEditorPdf } from "@/lib/doceditor/generate";
 import { actingLayoutScope, getBuilderTemplate } from "@/lib/docbuilder/store";
+import { WORKSPACE_LAYOUT_KEYS } from "@/lib/docbuilder/layoutScope";
 import { docKeyEnabled } from "@/lib/docModuleAccess";
 
 /**
- * The workspace a NEW layout of `key` is stamped with. A Statement is its
- * workspace's own (docbuilder/layoutScope.ts) — unstamped, it would be nobody's,
- * and its maker could not open it once a second workspace exists. Every other
- * type is created as it always has been.
+ * The workspace a NEW layout of `key` is stamped with. An invoice or agreement
+ * layout is its workspace's own (docbuilder/layoutScope.ts) — unstamped, it would
+ * be nobody's, and its maker could not open it once a second workspace exists.
+ * Every other type is created as it always has been.
  */
 async function newLayoutOwner(key: string): Promise<{ tenantId?: string }> {
-  return key === "statement" ? { tenantId: (await actingLayoutScope()).tenantId } : {};
+  return WORKSPACE_LAYOUT_KEYS.has(key) ? { tenantId: (await actingLayoutScope()).tenantId } : {};
 }
 import {
   parseBuilderRecord,

@@ -1,13 +1,15 @@
 /**
- * WHICH WORKSPACE'S LAYOUTS A CUSTOMER STATEMENT MAY PRINT FROM (review of #925).
+ * WHICH WORKSPACE'S LAYOUTS A DOCUMENT MAY PRINT FROM, when what it prints is a
+ * bank account to pay into — an invoice, a sales agreement, a customer
+ * statement.
  *
- * A statement carries the workspace's design and its BANKING DETAILS — its
- * published Statement, or its published invoice converted, with the bank text an
- * older invoice still reads from the old form editor. So every one of those
- * lookups names the acting workspace in the query itself. The scoped client
- * would add it only while enforcement is on, and enforcement is off by default
- * and in rollback; without the workspace in the query, one business's bank
- * account could be printed on another's statement.
+ * Those documents carry the workspace's design and its BANKING DETAILS: a
+ * published layout, and the text an older one still reads from the old form
+ * editor (bank details, payment terms, clauses). So their lookups name the
+ * acting workspace in the query itself. The scoped client would add it only
+ * while enforcement is on, and enforcement is off by default and in rollback;
+ * without the workspace in the query, one business's bank account could be
+ * printed on another's documents.
  *
  * A row with NO workspace (`tenantId` NULL) is the hard part. Every layout made
  * before the July backfill (and again before 5 August) carries the founding
@@ -23,8 +25,8 @@
  *     only one there is — which keeps today's single workspace printing exactly
  *     what it prints now;
  *   - with two or more, a row with no workspace is nobody's, and is never read
- *     into anyone's statement. Never guessing an owner is the point: a bank
- *     account on the wrong business's statement is money paid to the wrong
+ *     into anyone's document. Never guessing an owner is the point: a bank
+ *     account on the wrong business's invoice is money paid to the wrong
  *     business.
  *
  * Pure (no server imports), so the rule is executed by tests rather than
@@ -32,7 +34,17 @@
  * is `actingLayoutScope()` in ./store.ts.
  */
 
-/** The resolved read boundary for one request's statement layouts. */
+/**
+ * The layout types that are their workspace's OWN — the ones that print its
+ * bank account and clauses. Each is opened, listed, changed, defaulted and
+ * seeded only inside the acting workspace's scope (getBuilderTemplate and
+ * ensureBuilderSeeded in ./store.ts); every other type behaves as it always has.
+ * The statement is one: it starts as the workspace's published invoice, banking
+ * details and all (review of #925).
+ */
+export const WORKSPACE_LAYOUT_KEYS: ReadonlySet<string> = new Set(["invoice", "agreement", "statement"]);
+
+/** The resolved read boundary for one request's layouts. */
 export type LayoutScope = {
   /** The acting workspace. */
   tenantId: string;

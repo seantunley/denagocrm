@@ -360,6 +360,14 @@ jobs:
         # payment kept but not counted; a trashed quote's figures only for all-quote access; no cross-workspace FK.
         run: npm run test:quote-payments
 
+      # With enforcement OFF, then on. The invoice, the sales agreement and the old
+      # statement page chose their layout and their old form-editor template with
+      # no workspace in the query, so one workspace's invoice could print another's
+      # bank account. Two workspaces with different layouts and banking, plus a
+      # layout and a template with no workspace that an unscoped pick takes first.
+      - name: Isolation -- an invoice prints its own workspace's layout and banking, with enforcement off
+        run: npm run test:invoice-workspace
+
       - name: Run two-tenant end-to-end CRM isolation suite
         # Ordinary CRM flows run as two different tenants through the REAL scoped
         # client under the restricted role -- the regression guard for real-flow
@@ -382,7 +390,8 @@ jobs:
       # the old form editor -- and none of those lookups named a workspace, so with
       # enforcement off one workspace's statement could print another's banking.
       # Two workspaces with different layouts and banking, plus an invoice with no
-      # workspace that an unscoped pick would take first; off, then on.
+      # workspace that an unscoped pick would take first; each seeded its own
+      # Statement, neither able to open or change the other's; off, then on.
       - name: Isolation -- a statement prints its own workspace's layout and banking, with enforcement off
         run: npm run test:statement-workspace
 

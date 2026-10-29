@@ -27,7 +27,14 @@ import { newBlock } from "../src/lib/doceditor/factory";
 import type { DocumentModel } from "../src/lib/doceditor/model";
 import { standardTemplateFor } from "../src/lib/doceditor/standardTemplates";
 import { statementPrintLayout } from "../src/lib/statementDocPrint";
-import { actingLayoutScope, ensureBuilderSeeded, getBuilderTemplate, listBuilderTemplates, statementLayoutFromPublishedInvoice } from "../src/lib/docbuilder/store";
+import {
+  actingLayoutScope,
+  defaultBuilderTemplateId,
+  ensureBuilderSeeded,
+  getBuilderTemplate,
+  listBuilderTemplates,
+  statementLayoutFromPublishedInvoice,
+} from "../src/lib/docbuilder/store";
 import {
   deleteBuilderTemplate,
   publishBuilderVersion,
@@ -143,7 +150,7 @@ async function main() {
 
   try {
     // Each workspace's own invoice and banking; B's own Statement.
-    await publish(a.tenantId, "invoice", `A invoice ${SFX}`, invoiceLayout("a"), at(58));
+    const aInvoice = await publish(a.tenantId, "invoice", `A invoice ${SFX}`, invoiceLayout("a"), at(58));
     await formEditorText(a.tenantId, "a");
     await publish(b.tenantId, "invoice", `B invoice ${SFX}`, invoiceLayout("b"), at(59));
     await formEditorText(b.tenantId, "b");
@@ -167,7 +174,7 @@ async function main() {
     const bStatement = await publish(b.tenantId, "statement", `B statement ${SFX}`, bStatementDoc, at(60));
     const blankStatement = standardTemplateFor("statement");
     // Nobody's: default and newest, so an unscoped pick takes it first.
-    await publish(null, "invoice", `Nobody's invoice ${SFX}`, invoiceLayout("nobody"), at(61));
+    const nobodysInvoice = await publish(null, "invoice", `Nobody's invoice ${SFX}`, invoiceLayout("nobody"), at(61));
     await formEditorText(null, "nobody");
 
     for (const enforcing of [false, true]) {
@@ -219,17 +226,21 @@ async function main() {
       // ── a layout with no workspace ───────────────────────────────────────
       const scopeOfA = await memberOfA(() => actingLayoutScope());
       check("with more than one workspace, a layout with no workspace is nobody's", scopeOfA.tenantId === a.tenantId && scopeOfA.includeUnowned === false, JSON.stringify(scopeOfA));
-      // The one-workspace branch, through the same query: there, rows with no
-      // workspace are that workspace's (every one provably is) — and the newest
-      // default invoice is nobody's.
-      // With enforcement on, the guard adds its own strict `tenantId` on top, so
-      // a row with no workspace stays out regardless — the stricter rule wins.
-      const sole = JSON.stringify(await memberOfA(() => statementLayoutFromPublishedInvoice({ tenantId: a.tenantId, includeUnowned: true })));
+      // The one-workspace branch: there, rows with no workspace are that
+      // workspace's (every one provably is), and the newest default invoice is
+      // nobody's. The query admits it when the scope says so...
+      const soleScope = { tenantId: a.tenantId, includeUnowned: true };
+      const soleId = await memberOfA(() => defaultBuilderTemplateId("invoice", soleScope));
+      // ...but the door (getBuilderTemplate) re-resolves the REAL scope, and this
+      // database holds many workspaces, so the conversion never reads it here. With
+      // enforcement on, the guard adds its own strict `tenantId` on top as well.
+      const sole = JSON.stringify(await memberOfA(() => statementLayoutFromPublishedInvoice(soleScope)));
       if (enforcing) {
-        check("in a one-workspace deployment, under enforcement, the guard still keeps rows with no workspace out", sole.includes(bank.a.typed) && !sole.includes(bank.nobody.typed), foreignBanking(sole, "a").join(", "));
+        check("in a one-workspace deployment, under enforcement, the guard still keeps rows with no workspace out", soleId === aInvoice, `got ${soleId}`);
       } else {
-        check("in a one-workspace deployment the query admits rows with no workspace", sole.includes(bank.nobody.typed), sole.slice(0, 120));
+        check("in a one-workspace deployment the query admits rows with no workspace", soleId === nobodysInvoice, `got ${soleId}`);
       }
+      check("…and with more than one workspace, no conversion ever reads one", !sole.includes(bank.nobody.typed), sole.slice(0, 120));
 
       // ── resetting a Statement to standard ────────────────────────────────
       // Each mode starts from the drafts as made, so a verdict is this mode's own:
