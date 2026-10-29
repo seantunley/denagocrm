@@ -42,7 +42,7 @@ const KNOWN = new Set([...VARIABLES.flatMap((g) => g.fields), "items", "total", 
  * missing a typo inside a family. What this catches is a family nothing
  * fills — {{custmer.name}}, {{price}}.
  */
-const KNOWN_PREFIX = /^(asset|company|quote|jobcard|customer|lead|vehicle|delivery|service|invoice|agreement|claim|warranty|indemnity|testdrive|signer|recipient|fleet|billto|message|email|date|user|booking|handover|checklist)\./;
+const KNOWN_PREFIX = /^(asset|company|quote|jobcard|customer|lead|vehicle|delivery|service|invoice|agreement|claim|warranty|indemnity|testdrive|signer|recipient|fleet|billto|message|email|date|user|booking|handover|checklist|statement)\./;
 const TOKEN = /\{\{\s*([a-zA-Z_][\w.]*)\s*\}\}/g;
 const FIELD_LABEL: Record<string, string> = { signature: "signature", initials: "initials", date: "date", text: "text", checkbox: "checkbox", radio: "radio", dropdown: "dropdown", attachment: "attachment", stamp: "stamp" };
 

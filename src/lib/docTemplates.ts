@@ -6,6 +6,7 @@ import { brandFooterContent, type CompanyProfile } from "./companyBrand";
 export type DocKey =
   | "quote"
   | "invoice"
+  | "statement"
   | "agreement"
   | "indemnity"
   | "delivery"
@@ -65,6 +66,18 @@ export const DOC_DEFS: Record<DocKey, DocDef> = {
     defaultBody:
       "Banking details:\nBank: (add your bank)\nAccount: (add account number)\nBranch: (add branch code)\nReference: your invoice number",
     defaultIntro: "Thank you for your business.",
+  },
+  // Its layout starts as the workspace's published invoice, converted
+  // (doceditor/statementLayout.ts) — so the banking details, payment terms and
+  // footer are the invoice's own until the statement is edited on its own.
+  statement: {
+    label: "Statement",
+    group: "Sales",
+    description: "A customer's account statement — every invoice, less deposits and payments, and the balance due.",
+    sections: [
+      { id: "banking", label: "Banking details" },
+      { id: "footer", label: "Branded footer" },
+    ],
   },
   agreement: {
     label: "Sales agreement",
@@ -150,7 +163,7 @@ export const DOC_DEFS: Record<DocKey, DocDef> = {
 };
 
 export const DOC_GROUPS: { name: DocDef["group"]; keys: DocKey[] }[] = [
-  { name: "Sales", keys: ["quote", "invoice", "agreement", "indemnity"] },
+  { name: "Sales", keys: ["quote", "invoice", "statement", "agreement", "indemnity"] },
   { name: "Fulfilment", keys: ["delivery"] },
   { name: "Workshop", keys: ["jobcard", "service-report", "warranty-claim"] },
 ];

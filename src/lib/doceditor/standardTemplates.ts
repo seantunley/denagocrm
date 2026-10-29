@@ -19,10 +19,12 @@ import { CLASSIC_FOOTER_HEIGHT, FOOTER_BAND_HEIGHT, SHOWCASE_COMPACT_HEADER_HEIG
 import { SHOWCASE_FOOTER_IMAGE, SHOWCASE_HEADER_IMAGE } from "./showcaseAssets";
 import { inlineLegacyText } from "./inlineLegacyText";
 import { DOC_DEFS } from "../docTemplates";
+import { statementLayoutFromInvoice } from "./statementLayout";
 
 export type StandardDocKey =
   | "quote"
   | "invoice"
+  | "statement"
   | "agreement"
   | "indemnity"
   | "delivery"
@@ -783,6 +785,9 @@ export type StandardTemplateOptions = { automotive?: boolean };
 const BUILDERS: Record<StandardDocKey, (options: StandardTemplateOptions) => DocumentModel> = {
   quote: (options) => standardQuoteTemplate(options),
   invoice: () => showcaseInvoiceTemplate(),
+  // The standard invoice, converted. A workspace that has PUBLISHED its own
+  // invoice gets that one converted instead (docbuilder/store.ts seeding).
+  statement: () => statementLayoutFromInvoice(showcaseInvoiceTemplate()),
   agreement: (options) => inlineLegacyText("agreement", agreementTemplate(), {
     intro: { text: DOC_DEFS.agreement.defaultIntro ?? "", on: true },
     clauses: { text: (options.automotive ? DOC_DEFS.agreement.automotiveBody : DOC_DEFS.agreement.defaultBody) ?? "", on: true },
@@ -799,6 +804,7 @@ export const STANDARD_TEMPLATE_KEYS = Object.keys(BUILDERS) as StandardDocKey[];
 export const STANDARD_TEMPLATE_NAMES: Record<StandardDocKey, string> = {
   quote: "Quotation",
   invoice: "Invoice",
+  statement: "Statement",
   agreement: "Sales agreement",
   indemnity: "Test-drive indemnity",
   delivery: "Delivery note",

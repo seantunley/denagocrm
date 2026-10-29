@@ -8,8 +8,8 @@ import { hasPermission, requirePermission, requireAnyPermission } from "@/lib/pe
 import { canEditLayout } from "@/lib/docbuilder/layoutAccess";
 import { logAudit } from "@/lib/audit";
 // getBuilderTemplate, not a raw findUnique: it is where the module check lives.
-import { actingLayoutScope, getBuilderTemplate, listBuilderVersions, ownLayoutWithLegacyText } from "@/lib/docbuilder/store";
-import { WORKSPACE_LAYOUT_KEYS, layoutScopeWhere } from "@/lib/docbuilder/layoutScope";
+import { actingLayoutScope, getBuilderTemplate, listBuilderVersions, ownLayoutWithLegacyText, statementLayoutFromPublishedInvoice } from "@/lib/docbuilder/store";
+import { WORKSPACE_LAYOUT_KEYS, layoutRowVisible, layoutScopeWhere } from "@/lib/docbuilder/layoutScope";
 import { STANDARD_TEMPLATE_KEYS, standardTemplateFor, type StandardDocKey } from "@/lib/doceditor/standardTemplates";
 import { defaultEmailBody, defaultEmailFrame, EMAIL_FRAME_KEY, emailKindOf } from "@/lib/doceditor/emailDefaults";
 import { withActingStaffScope } from "@/lib/actingScope";
@@ -147,11 +147,17 @@ export async function resetBuilderTemplateToStandard(id: string): Promise<{ ok: 
     if (!isEmail && !(STANDARD_TEMPLATE_KEYS as string[]).includes(tpl.key)) {
       return { ok: false, error: "There is no standard layout for this kind of document." };
     }
+    // A statement's standard is the workspace's own published invoice, converted —
+    // written only into a statement of its own (docbuilder/layoutScope.ts; the
+    // door above already refuses another workspace's). Any other row gets the
+    // plain standard, which carries nobody's bank account.
+    const scope = tpl.key === "statement" ? await actingLayoutScope() : null;
+    const fromInvoice = scope && layoutRowVisible(tpl.tenantId, scope) ? await statementLayoutFromPublishedInvoice(scope) : null;
     const standard = emailKind
       ? defaultEmailBody(emailKind)
       : isEmail
         ? defaultEmailFrame()
-        : standardTemplateFor(tpl.key as StandardDocKey, { automotive: await isModuleEnabled("automotive") });
+        : fromInvoice ?? standardTemplateFor(tpl.key as StandardDocKey, { automotive: await isModuleEnabled("automotive") });
     await prisma.$transaction(async (tx) => {
       const last = await tx.docBuilderVersion.findFirst({
         where: { templateId: id }, orderBy: { version: "desc" }, select: { version: true },

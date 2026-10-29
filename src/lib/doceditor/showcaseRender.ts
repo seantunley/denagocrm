@@ -12,10 +12,9 @@
  */
 import { cssColor } from "./css";
 import type {
-  AcceptanceBlock, InfoCardBlock, LineItemsBlock, ShowcaseBlock, ShowcaseIcon, TermsBlock, VehicleShowcaseBlock,
-} from "./model";
+  AcceptanceBlock, InfoCardBlock, LineItemsBlock, ShowcaseBlock, ShowcaseIcon, TermsBlock, VehicleShowcaseBlock, StatementLinesBlock } from "./model";
 import type { RenderCtx } from "./serialize";
-import { lineItemCell } from "./serialize";
+import { lineItemCell, STATEMENT_PLACEHOLDER, statementCell, statementColumnWidth } from "./serialize";
 import { evaluateCondition } from "@/lib/docbuilder/expr";
 import { SOCIAL_ICON_PATHS } from "@/lib/companyBrand";
 import { modelName, readShowcase, type VehicleShowcaseData } from "@/lib/docbuilder/vehicleShowcase";
@@ -316,6 +315,42 @@ function classicLineItemsHtml(b: LineItemsBlock, ctx: RenderCtx): string {
   return `<table style="width:100%;table-layout:fixed;border-collapse:separate;border-spacing:0;margin:8px 0 0">${colgroup}<thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>`;
 }
 
+/** A statement's transactions in the showcase look: the line-items table's dark header and ruled, striped cells. */
+function statementLinesHtml(b: StatementLinesBlock, ctx: RenderCtx): string {
+  if (b.look === "classic") return classicStatementLinesHtml(b, ctx);
+  const rows = ctx?.statementRows ?? [];
+  const cols = b.columns;
+  const border = "1px solid #e5e7eb";
+  const colgroup = `<colgroup>${cols.map((c) => `<col style="width:${statementColumnWidth(c)}%">`).join("")}</colgroup>`;
+  const head = cols.map((c, i) => {
+    const radius = i === 0 ? "border-top-left-radius:6px;" : i === cols.length - 1 ? "border-top-right-radius:6px;" : "";
+    const divider = i ? "border-left:1px solid rgba(255,255,255,.14);" : "";
+    return `<th style="text-align:${c.align};background:${cssColor(b.headerBg, INK)};color:${cssColor(b.headerColor, "#ffffff")};padding:9px 10px;font-size:7.5pt;font-weight:800;letter-spacing:.4px;text-transform:uppercase;line-height:1.25;${divider}${radius}${KEEP_BG}">${withQualifier(c.header, "font-size:6pt;font-weight:600")}</th>`;
+  }).join("");
+  const cell = (c: (typeof cols)[number], i: number, row: number, value: string) =>
+    `<td style="text-align:${c.align};padding:7px 10px;font-size:8.5pt;color:#1f2937;border-bottom:${border};border-left:${border};${i === cols.length - 1 ? `border-right:${border};` : ""}${row % 2 ? `background:#f8fafc;${KEEP_BG}` : ""}">${esc(value)}</td>`;
+  const body = rows.length
+    ? rows.map((r, ri) => `<tr>${cols.map((c, i) => cell(c, i, ri, statementCell(c.key, r))).join("")}</tr>`).join("")
+    : `<tr><td colspan="${cols.length}" style="padding:9px 12px;color:#94a3b8;font-size:9pt;border:${border};border-top:none">${STATEMENT_PLACEHOLDER}</td></tr>`;
+  return `<table style="width:100%;table-layout:fixed;border-collapse:separate;border-spacing:0;margin:8px 0 0">${colgroup}<thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>`;
+}
+
+/** The statement in the invoice's classic look: a light header row and plain ruled rows. */
+function classicStatementLinesHtml(b: StatementLinesBlock, ctx: RenderCtx): string {
+  const rows = ctx?.statementRows ?? [];
+  const cols = b.columns;
+  const rule = "1px solid #e5e7eb";
+  const colgroup = `<colgroup>${cols.map((c) => `<col style="width:${statementColumnWidth(c)}%">`).join("")}</colgroup>`;
+  const pad = (i: number) => (i === 0 ? "padding-left:16px;" : i === cols.length - 1 ? "padding-right:16px;" : "");
+  const head = cols.map((c, i) =>
+    `<th style="text-align:${c.align};background:#f3f4f6;color:${INK};padding:11px 10px;${pad(i)}font-size:7.5pt;font-weight:700;letter-spacing:1px;text-transform:uppercase;line-height:1.25;border-bottom:${rule};${KEEP_BG}">${withQualifier(c.header, "font-size:6pt;font-weight:600")}</th>`,
+  ).join("");
+  const body = rows.length
+    ? rows.map((r) => `<tr>${cols.map((c, i) => `<td style="text-align:${c.align};padding:10px;${pad(i)}font-size:9pt;color:#1f2937;border-bottom:${rule}">${esc(statementCell(c.key, r))}</td>`).join("")}</tr>`).join("")
+    : `<tr><td colspan="${cols.length}" style="padding:12px 16px;color:#94a3b8;font-size:9pt;border-bottom:${rule}">${STATEMENT_PLACEHOLDER}</td></tr>`;
+  return `<table style="width:100%;table-layout:fixed;border-collapse:separate;border-spacing:0;margin:8px 0 0">${colgroup}<thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>`;
+}
+
 function termsHtml(b: TermsBlock, ctx: RenderCtx): string {
   const dot = `<span style="width:5px;height:5px;border-radius:50%;background:${ACCENT};flex:none;margin-top:5px;${KEEP_BG}"></span>`;
   // The same height as the acceptance card beside it (at least), so the pair reads as one row.
@@ -325,10 +360,11 @@ function termsHtml(b: TermsBlock, ctx: RenderCtx): string {
   </div>`;
 }
 
-/** The showcase look of a shared block (infoCard / lineItems / terms), for serialize.ts and the canvas. */
-export function showcaseLookHtml(block: InfoCardBlock | LineItemsBlock | TermsBlock, ctx: RenderCtx): string {
+/** The showcase look of a shared block (infoCard / lineItems / statementLines / terms), for serialize.ts and the canvas. */
+export function showcaseLookHtml(block: InfoCardBlock | LineItemsBlock | StatementLinesBlock | TermsBlock, ctx: RenderCtx): string {
   if (block.type === "infoCard") return block.look === "classic" ? classicCardHtml(block, ctx) : preparedForHtml(block, ctx);
   if (block.type === "lineItems") return lineItemsHtml(block, ctx);
+  if (block.type === "statementLines") return statementLinesHtml(block, ctx);
   return termsHtml(block, ctx);
 }
 

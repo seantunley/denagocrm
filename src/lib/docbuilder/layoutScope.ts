@@ -39,8 +39,10 @@
  * bank account and clauses. Each is opened, listed, changed, defaulted and
  * seeded only inside the acting workspace's scope (getBuilderTemplate and
  * ensureBuilderSeeded in ./store.ts); every other type behaves as it always has.
+ * The statement is one: it starts as the workspace's published invoice, banking
+ * details and all (review of #925).
  */
-export const WORKSPACE_LAYOUT_KEYS: ReadonlySet<string> = new Set(["invoice", "agreement"]);
+export const WORKSPACE_LAYOUT_KEYS: ReadonlySet<string> = new Set(["invoice", "agreement", "statement"]);
 
 /** The resolved read boundary for one request's layouts. */
 export type LayoutScope = {

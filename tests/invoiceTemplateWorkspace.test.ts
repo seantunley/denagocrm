@@ -73,7 +73,8 @@ test("opening and publishing write in the old text only into this workspace's ow
 });
 
 test("an invoice or agreement layout is its workspace's own: the door, the list, the default, new layouts, seeding (second review of #926)", () => {
-  assert.match(read("src/lib/docbuilder/layoutScope.ts"), /export const WORKSPACE_LAYOUT_KEYS: ReadonlySet<string> = new Set\(\["invoice", "agreement"\]\);/);
+  // Invoices and agreements — and the statement, which starts as the invoice (#925).
+  assert.match(read("src/lib/docbuilder/layoutScope.ts"), /export const WORKSPACE_LAYOUT_KEYS: ReadonlySet<string> = new Set\(\["invoice", "agreement", "statement"\]\);/);
   const builder = read("src/lib/docbuilder/store.ts");
   // The one door every by-id read and builder action goes through.
   const door = builder.slice(builder.indexOf("export async function getBuilderTemplate"));

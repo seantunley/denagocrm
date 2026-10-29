@@ -1,6 +1,6 @@
 "use client";
 
-import type { InfoCardBlock, LineItemsBlock, ShowcaseBlock, TermsBlock } from "@/lib/doceditor/model";
+import type { InfoCardBlock, LineItemsBlock, ShowcaseBlock, StatementLinesBlock, TermsBlock } from "@/lib/doceditor/model";
 import { showcaseBlockHtml, showcaseLookHtml } from "@/lib/doceditor/showcaseRender";
 import { SHOWCASE_BAND_ASSETS } from "@/lib/doceditor/showcaseAssets";
 import { useDocEditorEnv } from "./EditorContext";
@@ -17,9 +17,9 @@ const CANVAS_CTX = { tokens: { ...SHOWCASE_BAND_ASSETS }, items: [], vars: {}, b
  * the SAME escaped, colour-sanitised HTML the PDF prints, with the workspace's
  * logo exactly as the brand banner on the canvas shows it.
  */
-export function ShowcaseBlockView({ block }: { block: ShowcaseBlock | InfoCardBlock | LineItemsBlock | TermsBlock }) {
+export function ShowcaseBlockView({ block }: { block: ShowcaseBlock | InfoCardBlock | LineItemsBlock | StatementLinesBlock | TermsBlock }) {
   const { logoSrc } = useDocEditorEnv();
-  const html = block.type === "infoCard" || block.type === "lineItems" || block.type === "terms"
+  const html = block.type === "infoCard" || block.type === "lineItems" || block.type === "statementLines" || block.type === "terms"
     ? showcaseLookHtml(block, CANVAS_CTX)
     : showcaseBlockHtml(block, CANVAS_CTX, logoSrc || undefined);
   return <div dangerouslySetInnerHTML={{ __html: html }} />;

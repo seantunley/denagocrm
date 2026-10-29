@@ -27,7 +27,8 @@ loader._load = function (this: unknown, request: string, parent, isMain) {
 const { canEditLayout, FORM_EDITOR_KEYS } = createRequire(import.meta.url)("../src/lib/docbuilder/layoutAccess.ts") as typeof import("../src/lib/docbuilder/layoutAccess");
 
 const user = { id: "u", role: "member" } as never;
-const SEVEN = ["invoice", "agreement", "delivery", "indemnity", "jobcard", "service-report", "warranty-claim"];
+// The seven the old form editor had, plus the statement — made from the invoice, edited by whoever edits it.
+const SEVEN = ["invoice", "statement", "agreement", "delivery", "indemnity", "jobcard", "service-report", "warranty-claim"];
 const code = (rel: string) => readFileSync(new URL(`../${rel}`, import.meta.url), "utf8").replace(/\r\n/g, "\n");
 
 test("document_templates.manage still edits every document the old form editor did — and nothing more", async () => {

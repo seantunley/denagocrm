@@ -91,7 +91,7 @@ test("the editor's table uses the same look, and the controls are offered where 
   const view = readFileSync("src/components/doceditor/BlockView.tsx", "utf8");
   assert.match(view, /const look = tableLook\(block\.tableStyle, \[6, 8\]\);/);
   const panel = readFileSync("src/components/doceditor/PropertiesPanel.tsx", "utf8");
-  assert.equal((panel.match(/<TableStyleControls /g) ?? []).length, 3, "plain table, line items and pricing");
+  assert.equal((panel.match(/<TableStyleControls /g) ?? []).length, 4, "plain table, line items, statement lines and pricing");
   // The showcase and classic line-items looks are drawn to fixed measurements the page's overflow depends on.
   assert.match(panel, /\{!block\.look \|\| block\.look === "standard" \? \(\s*<Section title="Table style">/);
   const controls = readFileSync("src/components/doceditor/TableStyleControls.tsx", "utf8");

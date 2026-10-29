@@ -5,6 +5,8 @@ import { VARIABLES } from "../src/lib/doceditor/variables";
 import { COMPANY_DEFAULTS, companyTokens } from "../src/lib/companyBrand";
 import { plateToHtmlBody } from "../src/lib/docbuilder/plateSerialize";
 import { DEFAULT_REGIONAL as R } from "../src/lib/format";
+import { statementDocTokens } from "../src/lib/statementDoc";
+import { buildAccountStatement } from "../src/lib/accountStatement";
 
 /**
  * The doc-editor's "＋ variable" picker offers company, customer first name,
@@ -82,6 +84,8 @@ test("every variable the picker offers is filled by some resolver", () => {
     ...Object.keys(merge.buildJobCardContext(jobCard, null, R).tokens),
     ...Object.keys(companyTokens(COMPANY_DEFAULTS)),
     ...Object.keys(merge.documentGlobalTokens("x")),
+    // A statement's own fields, filled when it prints (statementDocPrint.ts).
+    ...Object.keys(statementDocTokens(buildAccountStatement([], []), { name: "A", attention: null, phone: "", email: "", address: "", vatNumber: "", registrationNumber: "", isFleet: false }, new Date()).tokens),
   ]);
   const offered = VARIABLES.flatMap((group) => group.fields);
   const unfilled = offered.filter((key) => !filled.has(key));

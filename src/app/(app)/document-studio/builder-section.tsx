@@ -34,6 +34,7 @@ const DOC_KEYS = [
   "proposal",
   "quote",
   "invoice",
+  "statement",
   "agreement",
   "delivery",
   "indemnity",

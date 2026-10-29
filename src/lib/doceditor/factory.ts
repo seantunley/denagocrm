@@ -4,6 +4,7 @@ import type {
   OverlayField, Recipient, PricingLine,
 } from "./model";
 import { DEFAULT_REGIONAL } from "@/lib/format";
+import { DEFAULT_STATEMENT_COLUMNS } from "./model";
 import { EMAIL_FOOTER_DEFAULTS, EMAIL_HEADER_DEFAULTS, EMAIL_SIGNATURE_DEFAULTS } from "./emailDefaults";
 
 export function uid(): string {
@@ -67,6 +68,11 @@ export function newBlock(type: BlockType, preset?: string): DocumentBlock {
           { key: "unitPrice", header: "Unit price", align: "right", showIf: "" },
           { key: "total", header: "Total", align: "right", showIf: "" },
         ],
+      };
+    case "statementLines":
+      return {
+        id: uid(), type, ...emptyLayout, headerBg: "#020617", headerColor: "#ffffff",
+        columns: DEFAULT_STATEMENT_COLUMNS.map((column) => ({ ...column })),
       };
     case "totalBand":
       return { id: uid(), type, ...emptyLayout, label: "TOTAL INCL. VAT", amount: "{{quote.total}}", color: "#ea580c" };
