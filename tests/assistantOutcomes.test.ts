@@ -69,6 +69,13 @@ test("each kind of card counts in one family; anything new or unknown is Other, 
   );
 });
 
+test("a Reactivate from Nurture (#943) is read back and counted with stage decisions, judged by progress", () => {
+  assert.equal(kindFromSummary("Confirmed the assistant's proposal: bring the deal back from Nurture"), "reactivate");
+  assert.equal(familyOf("reactivate").key, "stage");
+  assert.equal(familyOf("reactivate").outcome, "progress");
+  assert.equal(familyOf("nurture").key, "stage", "parking and bringing back sit together");
+});
+
 test("an older Confirm, recorded before the kind was, is read back from its summary", () => {
   const said = (what: string) => kindFromSummary(`Confirmed the assistant's proposal: ${what}`);
   const cases: [string, string][] = [
