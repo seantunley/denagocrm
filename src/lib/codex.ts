@@ -7,6 +7,8 @@ import { logError } from "./errorLog";
 import { currentTenantScope } from "./tenantScope";
 import {
   CODEX_DEFAULT_MODEL,
+  currentSwitch,
+  type ModelSwitch,
   accountIdFromToken,
   isModelRejection,
   modelCandidates,
@@ -53,6 +55,12 @@ export const CODEX_TOKENS_KEY = "CODEX_OAUTH_TOKENS";
  */
 export const CODEX_DEVICE_KEY = "CODEX_DEVICE_LOGIN";
 export const CODEX_MODEL_KEY = "CODEX_MODEL";
+/**
+ * The last time ChatGPT refused the workspace's chosen model and another was saved in its place: { from, to, at }.
+ * Shown on the settings page while that replacement is still the model in use (Sean, 2026-11-02: a quiet swap
+ * noted only in the error log is a choice silently overridden — nothing hidden from the UI).
+ */
+export const CODEX_MODEL_SWITCH_KEY = "CODEX_MODEL_SWITCH";
 
 const DEVICE_LOGIN_TTL_MS = 15 * 60 * 1000;
 
@@ -83,11 +91,15 @@ export async function codexModel(): Promise<string> {
 export type CodexStatus =
   | { state: "disconnected" }
   | { state: "pending"; userCode: string; verificationUrl: string; expiresAt: number }
-  | { state: "connected"; accountId: string | null; model: string };
+  | { state: "connected"; accountId: string | null; model: string; switched?: ModelSwitch };
 
 export async function codexStatus(): Promise<CodexStatus> {
   const tokens = await readTokens();
-  if (tokens) return { state: "connected", accountId: tokens.accountId, model: await codexModel() };
+  if (tokens) {
+    const model = await codexModel();
+    const switched = currentSwitch(await getSetting(CODEX_MODEL_SWITCH_KEY), model);
+    return { state: "connected", accountId: tokens.accountId, model, ...(switched ? { switched } : {}) };
+  }
   const pending = await readPendingLogin();
   if (pending) {
     return {
@@ -619,6 +631,7 @@ export async function codexRespond(input: {
     // model is not the workspace's choice: never saved.)
     if (model !== preferred && model !== (configured ?? CODEX_DEFAULT_MODEL)) {
       await putSetting(CODEX_MODEL_KEY, model);
+      await putSetting(CODEX_MODEL_SWITCH_KEY, JSON.stringify({ from: configured ?? CODEX_DEFAULT_MODEL, to: model, at: new Date().toISOString() }));
       await logError(
         "codex-research",
         `Research model switched to ${model}`,

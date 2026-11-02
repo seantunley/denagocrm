@@ -16,7 +16,8 @@ import { emailSendStatus } from "./emailOpenTracking";
  * ponytail: matched by the number in the email's text — a workspace that edits the quote number out of both its
  * subject and its body isn't seen. A quoteId on Communication is the upgrade if that happens.
  */
-export type QuoteSend = { status: string; bounced: boolean };
+/** `open`: what open-tracking saw of that email — never whether it was read (emailOpenTracking.ts). */
+export type QuoteSend = { status: string; bounced: boolean; open?: "opened" | "not_detected" | "untracked" };
 
 export async function quoteSends(
   quotes: { id: string; number: number; contactId: string | null; leadId: string | null; createdAt: Date }[],
@@ -46,7 +47,7 @@ export async function quoteSends(
       ((q.contactId && e.contactId === q.contactId) || (q.leadId && e.leadId === q.leadId)) &&
       e.occurredAt >= q.createdAt &&
       (names.test(e.subject ?? "") || names.test(e.body)));
-    if (email) found.set(q.id, { status: emailSendStatus(email), bounced: email.bouncedAt !== null });
+    if (email) found.set(q.id, { status: emailSendStatus(email), bounced: email.bouncedAt !== null, open: email.seenAt ? "opened" : email.openToken ? "not_detected" : "untracked" });
   }
   return found;
 }
