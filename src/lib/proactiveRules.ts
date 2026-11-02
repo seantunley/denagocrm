@@ -12,6 +12,7 @@
  */
 
 import { nextRun, snapToHalfHour } from "./assistantSchedule";
+import { firstWorkingDayOfMonth } from "./assistantLostAlive";
 
 /**
  * The same quiet hours as customer messaging (communicationPolicy.ts — 20:00 to 08:00 Johannesburg), kept here
@@ -46,7 +47,7 @@ export const PROACTIVE_SOURCE = "proactive";
 /** What the conversation shows as the "question" of an alert. */
 export const PROACTIVE_QUESTION = "Customer activity";
 
-export const PROACTIVE_KINDS = ["quote_opened", "quote_revisited", "customer_waiting", "quote_signed", "service_booked", "delivery_goal"] as const;
+export const PROACTIVE_KINDS = ["quote_opened", "quote_revisited", "customer_waiting", "quote_signed", "service_booked", "delivery_goal", "delivery_eve"] as const;
 export type ProactiveKind = (typeof PROACTIVE_KINDS)[number];
 
 /** A customer back at the same quote this many times is worth a call. */
@@ -99,6 +100,9 @@ export function proactiveText(event: ProactiveEvent, origin: string): string {
       case "delivery_goal":
         // A delivery the person asked DAX to follow (assistantGoalRules): the words are the goal's own.
         return event.detail ?? "";
+      case "delivery_eve":
+        // Tomorrow's delivery, checked (deliveryEveRules): the words are the check's own.
+        return event.detail ?? "";
     }
   })();
   return `${line}\n${link}`;
@@ -119,11 +123,14 @@ export function proactivePush(kind: ProactiveKind): string {
       return "A new service booking";
     case "delivery_goal":
       return "An update on a delivery you're following";
+    case "delivery_eve":
+      return "A delivery tomorrow — a quick check";
   }
 }
 
 /** What the conversation shows as the "question" of an alert. */
-export const proactiveQuestion = (kind: string) => (kind === "delivery_goal" ? "A delivery you're following" : PROACTIVE_QUESTION);
+export const proactiveQuestion = (kind: string) =>
+  kind === "delivery_goal" ? "A delivery you're following" : kind === "delivery_eve" ? "Tomorrow's delivery" : PROACTIVE_QUESTION;
 
 /**
  * When an alert goes: now, or held for the morning. Between 20:00 and 08:00 (Johannesburg) it waits for 08:00 —
@@ -154,6 +161,11 @@ function clip(text: string, max: number): string {
  */
 /** Each person's brief time, "HH:MM" Johannesburg, or "off". Unset = the default. */
 export const briefPersonKey = (userId: string) => `ASSISTANT_BRIEF_AT:${userId}`;
+/** Each person's own "stuck deals on Mondays" in their morning brief (round 2 item 7): "on" | "off"; unset = off. */
+export const mondayStuckKey = (userId: string) => `ASSISTANT_MONDAY_STUCK_FOR:${userId}`;
+/** Monday in Johannesburg. */
+export const isJohannesburgMonday = (now: Date) =>
+  new Intl.DateTimeFormat("en-ZA", { timeZone: "Africa/Johannesburg", weekday: "short" }).format(now) === "Mon";
 export const BRIEF_DEFAULT = "07:30";
 /** The times offered: the half hours from 06:00 to 10:00 — when the half-hourly job wakes. */
 export const BRIEF_TIMES = Array.from({ length: 9 }, (_, i) => `${String(6 + Math.floor(i / 2)).padStart(2, "0")}:${i % 2 ? "30" : "00"}`);
@@ -222,7 +234,7 @@ export function briefDueKey(now: Date, at: string): string | null {
  * What DAX is asked. Alerts held overnight are given as facts (their words, without the links) so the brief
  * leads with them instead of them arriving one by one at 08:00.
  */
-export function briefQuestion(now: Date, heldOvernight: readonly string[]): string {
+export function briefQuestion(now: Date, heldOvernight: readonly string[], opts: { mondayStuck?: boolean } = {}): string {
   const day = new Intl.DateTimeFormat("en-ZA", { weekday: "long", day: "numeric", month: "long", timeZone: "Africa/Johannesburg" }).format(now);
   const overnight = heldOvernight
     .map((text) => text.split("\n")[0].trim())
@@ -236,6 +248,14 @@ export function briefQuestion(now: Date, heldOvernight: readonly string[]): stri
     "3. The three things that matter most today, each with one line on why.",
     "If the daily brief has a workshop section, add a short Workshop part after 2 — overdue services, stuck job cards, warranties running out — a line each, at most three of each. No workshop section, no Workshop part.",
     "If the daily brief has nurture reviews, add a short Nurture part: each parked deal with its link — why it was parked, what they wanted, the trigger, and \"review due today\" or how many days overdue — and offer to reactivate it. None, no Nurture part.",
+    // Once a month (round 2 item 4): lost deals the customer came back to — on the first working day only.
+    ...(firstWorkingDayOfMonth(now)
+      ? ["It is the first working day of the month: also run lost_alive with \"mine\":true and add a short \"Not really lost\" part — each deal with its link, when and why it was lost and what the customer did since — and offer to park it in Nurture or reopen it. None, no such part."]
+      : []),
+    // Mondays, for those who asked for it (round 2 item 7): their most-stuck deals, each with its top reason.
+    ...(opts.mondayStuck && isJohannesburgMonday(now)
+      ? ["It is Monday: run stuck_deals and add a short Stuck deals part — each deal with its link and its top reason, as stated there (for an owner or team manager, the team's as a second short list). None, no such part."]
+      : []),
     "Only what is mine. No greeting, no sign-off.",
   ].join("\n");
 }

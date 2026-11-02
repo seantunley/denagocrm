@@ -2,7 +2,7 @@
 
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { setMyBriefTime, setMyProactive } from "@/app/actions/assistantSettings";
+import { setMyBriefTime, setMyMondayStuck, setMyProactive } from "@/app/actions/assistantSettings";
 import { BRIEF_TIMES } from "@/lib/proactiveRules";
 
 /**
@@ -10,7 +10,7 @@ import { BRIEF_TIMES } from "@/lib/proactiveRules";
  * (lib/proactiveBrief.ts). Only offered while an owner has it on for the workspace; says so when they have not,
  * rather than hiding that it exists.
  */
-export default function AssistantProactiveCard({ name, workspaceOn, on, briefAt }: { name: string; workspaceOn: boolean; on: boolean; briefAt: string }) {
+export default function AssistantProactiveCard({ name, workspaceOn, on, briefAt, mondayStuck }: { name: string; workspaceOn: boolean; on: boolean; briefAt: string; mondayStuck: boolean }) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
   const [problem, setProblem] = useState("");
@@ -42,7 +42,8 @@ export default function AssistantProactiveCard({ name, workspaceOn, on, briefAt 
           <span className="block text-xs text-muted-foreground">
             When one of your customers opens a quote, comes back to it a third time, signs it, books a service, or writes
             and has waited 15 minutes with no answer, {name} tells you — here, as a phone notification, and on your linked
-            WhatsApp. Only about customers and deals that are yours. Nothing between 20:00 and 08:00: those wait for the
+            WhatsApp. The day before one of your deliveries, it checks the deposit, invoice, cart and PDI and tells you
+            what is missing. Only about customers and deals that are yours. Nothing between 20:00 and 08:00: those wait for the
             morning. At most 12 a day. {name} never contacts the customer.
           </span>
           {!workspaceOn && <span className="mt-1 block text-xs text-amber-400">An owner has not switched this on for the workspace yet (Settings → Assistant).</span>}
@@ -67,6 +68,26 @@ export default function AssistantProactiveCard({ name, workspaceOn, on, briefAt 
           <span className="mt-1 block">
             {name} writes your day: what is on, what your customers did since yesterday — anything held overnight is in it —
             and the three things that matter most. Uses one AI answer each morning.
+          </span>
+        </label>
+      )}
+      {on && briefAt !== "off" && (
+        <label className="flex cursor-pointer items-start gap-2 pl-6 text-xs text-muted-foreground">
+          <input
+            type="checkbox"
+            name="mondayStuck"
+            className="mt-0.5 accent-primary"
+            checked={mondayStuck}
+            disabled={pending}
+            onChange={(e) => {
+              const next = e.target.checked;
+              run(() => setMyMondayStuck(next));
+            }}
+          />
+          <span>
+            <span className="block font-medium text-foreground">Stuck deals on Mondays</span>
+            On Mondays the brief adds your three most-stuck deals, each with its main reason and a link — and, if you
+            manage a team, the team&apos;s. It changes nothing and contacts no one.
           </span>
         </label>
       )}

@@ -4,7 +4,8 @@ import { prisma } from "@/lib/db";
 import { requireTenantOwner } from "@/lib/auth";
 import { coloursList, priceList } from "@/lib/botAnswers";
 import { runFlow, type Flow, type FlowInput, type FlowSession, type OutMsg } from "@/lib/flow";
-import { flowScope } from "@/lib/flowScope";
+import { builderTenantId, flowScope } from "@/lib/flowScope";
+import { flowContactCard } from "@/lib/flowContactCard";
 import { withActingStaffScope } from "@/lib/actingScope";
 import { getCompanyProfile } from "@/lib/companyProfile";
 import { DEFAULT_SIMULATOR_SCENARIO, type SimulatorScenario } from "@/lib/flowSimulatorScenario";
@@ -122,6 +123,11 @@ export async function simulateFlowTurn(input: SimulatorTurnInput): Promise<Simul
           // the outcome, so a flow under test cannot hit a live API.
           trace.push(`API: ${method} ${url} (network call suppressed by simulator)`);
           return scenario.crm === "failure" ? { ok: false, status: 503, reason: "simulated API failure" } : { ok: true, status: 200, body: '{"simulated":true}' };
+        },
+        // Read-only: the real card from Settings → Company, so the owner sees what customers get.
+        contactCard: async (staffUserId) => {
+          trace.push(`Contact card: would send ${staffUserId ? "a staff member's" : "the business"} card`);
+          return flowContactCard(await builderTenantId(), staffUserId);
         },
         loadSubflow: async (flowId) => {
           trace.push(`Subflow: would run ${flowId}`);

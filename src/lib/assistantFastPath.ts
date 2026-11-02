@@ -34,6 +34,7 @@ const AWAITING = /^((which|what) )?quotes? (are )?(still )?(waiting|awaiting) (f
 // A manager's check-in. Both lookups go through the asker's own visibility, so a
 // rep asking this just gets their own numbers.
 const TEAM = /^(how( is|'s| are) (my|the) (team|sales ?people|salespeople|reps)( doing| performing)?( this (week|month))?|(who|which of my (team|people|reps)) (needs|need) (help|coaching|a push)|where does my team need help|(team|coaching) (check-?in|review|update)|coach my team)$/;
+const LOST_ALIVE = /^((which|any) (of my )?lost (deals|leads) (are |that are )?(still alive|worth (another|a second) look|(that )?came back( to life)?)|(any )?(deals|leads) (that are )?lost but not (really )?lost)$/;
 // "Since I last asked" is the catch-up's own window; a named day ("since Friday") goes the normal way, to set it.
 const CATCH_UP = /^(catch me up|bring me up to (date|speed)|(what'?s|what has|what have) changed|what did i miss|what have i missed|(is there )?anything new|what'?s new|any (news|updates))( (since|while) (i last asked|my last (question|message)|last time|i was (away|out)))?( (for|on|with) (me|my deals))?( please)?$/;
 const THIS_ONE = /^(what should i do( here| next)?( with (this|him|her|them|this one|this lead|this customer|this deal))?|where are we( with (this|him|her|them|this one|this deal))?|summari[sz]e (this|him|her|them|this lead|this customer|this deal)|(what'?s|what is) (happening|going on)( here| with (this|him|her|them|this one|this deal))|tell me about (this|him|her|them)( one| lead| customer| deal)?)$/;
@@ -56,6 +57,7 @@ export function fastPath(question: string, ctx: FastPathContext): ToolStep[] | n
   else if (PIPELINE.test(q)) steps.push({ tool: "pipeline_summary", args: {} });
   else if (AWAITING.test(q)) steps.push({ tool: "find_quotes", args: { awaitingSignature: true } });
   else if (CATCH_UP.test(q)) steps.push({ tool: "catch_up", args: {} });
+  else if (LOST_ALIVE.test(q)) steps.push({ tool: "lost_alive", args: {} });
   else if (ctx.pageLead && THIS_ONE.test(q)) steps.push({ tool: "lead_brief", args: { lead: ctx.pageLead } });
   if (!steps.length) return null;
   // Through the same schema the research step's choices go through.

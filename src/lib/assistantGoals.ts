@@ -72,7 +72,7 @@ const QUOTE_SELECT = {
 } as const;
 
 /** The deal as the CRM holds it now → the goal's facts. Null when the quote is gone or was replaced by a revision. */
-async function loadFacts(tenantId: string, quoteId: string) {
+export async function loadFacts(tenantId: string, quoteId: string) {
   const quote = await prisma.quote.findFirst({ where: { id: quoteId, tenantId }, select: QUOTE_SELECT });
   // ponytail: a revision ends the goal (the person starts one on the new quote); follow revisionOfId if that gets common.
   if (!quote || quote.deletedAt || quote.supersededAt) return null;

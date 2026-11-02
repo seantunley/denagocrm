@@ -67,6 +67,7 @@ export const assistantAndMoreArticles: HelpArticle[] = [
         "Marking a deal lost, with the reason in your words.",
         "Starting a draft quote on a lead for you to fill in.",
         "A WhatsApp or email draft to a customer.",
+        "Recording a payment from a proof of payment you send. If you don't say which quote it is for, the assistant matches it by the amount, the bank reference and the payer's name. One clear match gives the card straight away, with the reason. Several give you a choice, and none means it asks.",
         "A scheduled question or a watch — see \"Scheduled questions and watches\".",
       ] },
       { type: "h", text: "Confirming a task" },
@@ -164,6 +165,13 @@ export const assistantAndMoreArticles: HelpArticle[] = [
       { type: "h", text: "The Team section" },
       { type: "p", text: "Workspace owners, and people who manage a team, also get a **Team** section they can open. It shows one row per salesperson: how many customers are waiting on them, how many follow-ups are overdue, the value of their stalled deals and the value of their open deals. A team manager sees their own team members; an owner sees everyone." },
       { type: "callout", tone: "tip", text: "The brief only ever counts deals you are allowed to see. If the brief cannot be worked out for some reason, it is simply left off and the rest of your home screen still loads." },
+      { type: "h", text: "Lost deals that aren't really lost" },
+      { type: "p", text: "Ask DAX \"which lost deals are still alive?\" and it lists deals marked lost in the last 90 days for a went-quiet or timing reason — \"gone cold\", \"stopped responding\", \"buying next year\" — where the customer has since sent a message or opened a quote. For each, it says when and why the deal was lost and what the customer did since." },
+      { type: "list", items: [
+        "On the first working day of each month, DAX's morning brief adds this list for your own deals.",
+        "DAX offers one card per deal: **Park in Nurture** (it asks why and when to look again) or **Reopen** (the deal goes back to the stage it was in). Nothing changes until you press Confirm, and the customer is not contacted.",
+        "A deal lost because the customer bought elsewhere or found it too expensive is not listed. The reason is read from the words typed when it was marked lost.",
+      ] },
     ],
   },
   {
@@ -286,6 +294,26 @@ export const assistantAndMoreArticles: HelpArticle[] = [
         "Every night the assistant tidies what it has learned: it merges duplicates, drops what is stale and flags contradictions. Anything it changes shows as unreviewed. It never changes what you approved.",
       ] },
       { type: "callout", tone: "tip", text: "Every team member can also tell the assistant about themselves. On the Ask page, open **About you**, type a line such as \"Short answers with bullet points, please\" and press the **Tell** button. They can **Edit** or **Forget** anything listed there. It is used only in their own conversations." },
+    ],
+  },
+  {
+    slug: "chatbot-qr-codes",
+    title: "QR codes that send your brochure on WhatsApp",
+    summary: "Print a QR code that opens WhatsApp to your business; the chatbot replies straight away with your brochure, price list and contact card.",
+    category: "automation",
+    audience: "admins",
+    keywords: ["qr code", "qr", "brochure", "price list", "contact card", "scan", "whatsapp", "flyer", "show"],
+    body: [
+      { type: "p", text: "A QR code opens WhatsApp on the customer's phone with a message already typed to your business number. When they tap **Send**, the message starts the chatbot flow you chose, and that flow sends whatever its steps say — for example your brochure, your price list and your contact card. WhatsApp never lets a business message someone first, so the customer always sends the first message." },
+      { type: "h", text: "Set it up" },
+      { type: "steps", items: [
+        "In the chatbot builder, make a WhatsApp flow with a **Send a document** step for each file (brochure, price list) and a **Send contact card** step. The files come from your documents; the contact card is built from your company details, or from one staff member's.",
+        "Publish the flow.",
+        "In the chatbot area, open **Routing**. Under **QR codes (WhatsApp)**, give the code a name (for example \"Show stand\"), check the message the customer will send, choose the flow and click **Make QR code**.",
+        "Click **Download PNG**, or **Download for print (SVG)** for large prints, and put it on your flyer, stand or vehicle.",
+      ] },
+      { type: "p", text: "Each QR code shows how many new customers arrived through it. A new customer who scans it is saved with the source **QR code — <name>**." },
+      { type: "callout", tone: "tip", text: "Scan the code yourself before printing it. Deleting a QR code stops it starting the flow, so a printed copy then gets the normal chatbot reply." },
     ],
   },
   {

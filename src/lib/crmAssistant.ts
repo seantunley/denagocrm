@@ -50,8 +50,11 @@ import { unsupportedFigures, unsupportedNote } from "./assistantVerify";
 import { catalogueColour, closestColour, closestNames, nameWords } from "./nearMatch";
 import { salesStats } from "./crmAssistantStats";
 import { whyLookup } from "./assistantWhyLookup";
+import { matchPayment } from "./assistantPaymentMatch";
 import { stuckLookup } from "./assistantStuckLookup";
 import { catchUpLookup } from "./assistantCatchUpLookup";
+import { lostAliveLookup } from "./assistantLostAliveLookup";
+import { stuckDealsLookup } from "./assistantStuckDeals";
 import { briefForAssistant, loadDaxBrief } from "./daxBrief";
 import { customerVehicles, workshopOverview } from "./workshopContext";
 import { breakerOpen, withRetry } from "./assistantBreaker";
@@ -73,6 +76,8 @@ import { actingTenantId } from "./actingTenant";
 import { ACTION_INSTRUCTIONS, CHECK_BACK_RULE, CHOICE_INSTRUCTIONS, JOB_CARD_RULE, MAX_ACTIONS, newCustomerDetail, type NewCustomer, CUSTOMER_FIELDS, customerChangesText, type CustomerChange, type CustomerField, type FileTarget, matchQuoteRow, quoteAddText, quoteBuildText, quoteChangeText, settledAnswer, withoutSetUpClaims, type ActionCard, type ProposedAction, type QuoteBuildLine, type QuoteChange } from "./assistantActions";
 import { knowledgeProducts, resolveCatalogueProduct } from "./catalogueLookup";
 import { TASK_INSTRUCTIONS, keepIds, taskBlock, type TaskView } from "./assistantTaskRules";
+import { listedBlock, listedRecords, splitListed, type ListedSlot } from "./assistantListedRules";
+import { listedNow } from "./assistantListed";
 import { applyTaskUpdate, openTasks, type TaskSheet, type TaskWrite } from "./assistantTask";
 import { PLAN_INSTRUCTIONS } from "./assistantPlanRules";
 import { proposePlan } from "./assistantPlan";
@@ -1112,7 +1117,8 @@ async function recall(user: User, raw: z.infer<typeof recallArgs>): Promise<Tool
       question: t.question,
       answer: clip(t.answer, 700),
       // What that conversation had decided and left open, in its own words.
-      ...(t.state ? { workingMemory: t.state } : {}),
+      // Never its list of records (assistantListedRules): that is for the next question only, checked again then.
+      ...(splitListed(t.state).rest ? { workingMemory: splitListed(t.state).rest } : {}),
       after: short(around[i][1]),
     })),
   };
@@ -1612,8 +1618,11 @@ async function runTool(user: User, step: ToolStep): Promise<ToolOutput> {
     case "find_activities": return findActivities(user, step.args);
     case "lead_brief": return leadBrief(user, step.args);
     case "why": return whyLookup(user, step.args.record);
+    case "match_payment": return matchPayment(user, step.args);
     case "stuck": return stuckLookup(user, step.args.lead);
     case "catch_up": return catchUpLookup(user, step.args.since);
+    case "lost_alive": return lostAliveLookup(user, step.args.mine ?? false);
+    case "stuck_deals": return stuckDealsLookup(user);
     case "knowledge": return knowledge(user, step.args);
     case "recall": return recall(user, step.args);
     case "playbook": return playbook(user, step.args);
@@ -1695,7 +1704,11 @@ async function recentTurns(userId: string): Promise<PriorTurn[]> {
     // it was saved); conversationBlock leads with the latest one.
     select: { question: true, answer: true, state: true },
   });
-  return turns.reverse().map((t) => ({ ...t, state: t.state as PriorTurn["state"] }));
+  // The records each answer listed travel apart from its working memory (assistantListedRules).
+  return turns.reverse().map((t) => {
+    const { listed, rest } = splitListed(t.state);
+    return { ...t, state: rest as PriorTurn["state"], listed };
+  });
 }
 
 /**
@@ -2152,6 +2165,16 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
   const conversation = history.length ? resultsBlock("Earlier turns (context only):", stripInvisible(conversationBlock(history))) : "";
   // Open job sheets lead the conversation — fenced as data too: they carry what the model wrote from customer text.
   const jobSheets = tasks.length ? resultsBlock("Open job sheets (context only):", stripInvisible(taskBlock(tasks))) : "";
+  // "The fourth one": the latest list an answer here showed, each record checked against what this person may open
+  // NOW (assistantListed) — fenced as data: its labels are customer names.
+  const earlierList = history.findLast((t) => t.listed?.length)?.listed ?? [];
+  const slots: ListedSlot[] = earlierList.length
+    ? await listedNow(user, earlierList).catch(async (error: unknown) => {
+        await logError("crm-assistant", "listed records check failed", error instanceof Error ? error.name : "unknown");
+        return [];
+      })
+    : [];
+  const listedEarlier = slots.length ? resultsBlock("Listed earlier (context only):", stripInvisible(listedBlock(slots, question))) : "";
   // The business first (what it knows), then the person (who they are, what it knows about them).
   const learned = stripInvisible([memoryPrompt(learnedNow), person].filter(Boolean).join("\n\n"));
   const instructions = [stripInvisible(planInstructions({ ...context, learned, web: webOn })), images.length ? IMAGE_RULE : ""]
@@ -2226,6 +2249,7 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
     [
       jobSheets,
       conversation,
+      listedEarlier,
       whereTheyAre,
       `Question: ${question}`,
       carried ? CARRIED_IMAGE_RULE : "",
@@ -2365,6 +2389,7 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
       `Now: ${nowInSouthAfrica()}.`,
       jobSheets,
       conversation,
+      listedEarlier,
       `Question: ${question}`,
       // Per question, so in the prompt and not the cached instructions.
       carried ? CARRIED_IMAGE_RULE : "",
@@ -2407,6 +2432,9 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
   // the old trailer lines). Then its evidence links: kept only when they point
   // at a record this answer's own lookups returned, numbered for the chips.
   const reply = splitReply(answerReply.text);
+  // The records this answer named, in the order the person reads them — only ones its own lookups returned — kept
+  // on the turn for "the fourth one" next (assistantListedRules).
+  const shownHere = listedRecords(reply.answer, observations.map((o) => o.output.data));
   const citable = new Map<string, string>();
   for (const o of observations) citableLinks(o.output.data, citable);
   const resolved = resolveCitations(reply.answer, citable);
@@ -2537,7 +2565,9 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
         scheduleId: source === "schedule" ? opts.scheduleId ?? null : null,
         // Working memory (already cleaned by parseState) and the records this
         // answer looked at — what the next question and recall read back.
-        ...(reply.state ? { state: reply.state, tags: reply.state.tags ?? [] } : {}),
+        ...(reply.state || shownHere.length
+          ? { state: { ...reply.state, ...(shownHere.length ? { listed: shownHere } : {}) }, tags: reply.state?.tags ?? [] }
+          : {}),
         refs: turnRefs(observations.map((o) => o.output.data)),
         ...(taskWrite?.ok ? { taskId: taskWrite.id } : {}),
         // The cards it offered — kind, and the deal or customer by id — counted in Settings → Assistant (assistantOutcomes).
@@ -3230,9 +3260,9 @@ export async function resolveActions(
     const lead = await prisma.lead.findUnique({
       where: { id: p.leadId },
       select: {
-        name: true, title: true, stageId: true, assignedToId: true, stage: { select: { pipelineId: true } },
+        name: true, title: true, stageId: true, assignedToId: true, stage: { select: { pipelineId: true, name: true } },
         email: true, phone: true, contactId: true, contact: { select: { email: true, phone: true } },
-        status: true, lostReason: true,
+        status: true, lostReason: true, lostAt: true,
         nurtureReason: true, nurtureInterest: true, nurtureTrigger: true, nurtureReviewAt: true,
       },
     });
@@ -3277,6 +3307,24 @@ export async function resolveActions(
       });
     } else if (p.type === "lost") {
       cards.push({ id, kind: "lost", leadId: p.leadId, leadLabel, title: `Mark ${lead.name}'s deal as lost`, reason: p.reason });
+    } else if (p.type === "reopen") {
+      // The lead page's own Reopen at Confirm (reopenLead: leads.reopen). Checked here too, so the card is only offered when it can run.
+      if (lead.status !== "lost" || !lead.lostAt) {
+        problems.push(`${lead.name}'s deal isn't marked lost (it's ${lead.status})${lead.status === "nurture" ? " — a parked deal is reactivated from Nurture" : ""}.`);
+        continue;
+      }
+      if (!(await hasPermission(user, "leads.reopen"))) { problems.push("Your role can't reopen lost deals."); continue; }
+      cards.push({
+        id, kind: "reopen", leadId: p.leadId, leadLabel,
+        title: `Reopen ${lead.name}'s deal`,
+        lostAt: lead.lostAt.toISOString(),
+        detail: [
+          `Lost on ${johannesburgDateKey(lead.lostAt)}${lead.lostReason ? ` — “${lead.lostReason}”` : ""}`,
+          `Back to: ${lead.stage.name} (the stage it was in), open again`,
+          "Nobody is contacted.",
+        ].join("\n"),
+        ...(p.reason ? { reason: p.reason } : {}),
+      });
     } else if (p.type === "reactivate") {
       // The Nurture page's own Reactivate at Confirm (reactivateNurturedLead): leads.change_stage + activities.manage,
       // an open stage, the deal's salesperson. Checked here too, so a card is only offered when it can run; the stage

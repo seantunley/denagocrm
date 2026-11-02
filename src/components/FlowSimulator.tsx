@@ -6,6 +6,7 @@ import { simulateFlowTurn } from "@/app/actions/flowSimulator";
 import { DEFAULT_SIMULATOR_SCENARIO, type SimulatorScenario } from "@/lib/flowSimulatorScenario";
 import WhatsAppPreview, { type PreviewLine } from "@/components/WhatsAppPreview";
 import type { FlowSession, OutMsg } from "@/lib/flow";
+import { outMsgText } from "@/lib/flowMedia";
 
 type ChatLine = { id: string; role: "customer" | "bot"; text: string; time: string; msg?: OutMsg };
 type Choice = { id: string; label: string; description?: string };
@@ -74,6 +75,7 @@ export default function FlowSimulator({
     for (const message of messages) {
       if (message.type === "text") lines.push(line("bot", message.text, message));
       else if (message.type === "image") lines.push(line("bot", `🖼 ${message.caption || message.url}`, message));
+      else if (message.type === "document" || message.type === "contact") lines.push(line("bot", outMsgText(message), message));
       else {
         lines.push(line("bot", message.text, message));
         nextChoices = message.options;
