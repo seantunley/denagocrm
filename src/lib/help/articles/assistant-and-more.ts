@@ -290,6 +290,26 @@ export const assistantAndMoreArticles: HelpArticle[] = [
     ],
   },
   {
+    slug: "chatbot-qr-codes",
+    title: "QR codes that send your brochure on WhatsApp",
+    summary: "Print a QR code that opens WhatsApp to your business; the chatbot replies straight away with your brochure, price list and contact card.",
+    category: "automation",
+    audience: "admins",
+    keywords: ["qr code", "qr", "brochure", "price list", "contact card", "scan", "whatsapp", "flyer", "show"],
+    body: [
+      { type: "p", text: "A QR code opens WhatsApp on the customer's phone with a message already typed to your business number. When they tap **Send**, the message starts the chatbot flow you chose, and that flow sends whatever its steps say — for example your brochure, your price list and your contact card. WhatsApp never lets a business message someone first, so the customer always sends the first message." },
+      { type: "h", text: "Set it up" },
+      { type: "steps", items: [
+        "In the chatbot builder, make a WhatsApp flow with a **Send a document** step for each file (brochure, price list) and a **Send contact card** step. The files come from your documents; the contact card is built from your company details, or from one staff member's.",
+        "Publish the flow.",
+        "In the chatbot area, open **Routing**. Under **QR codes (WhatsApp)**, give the code a name (for example \"Show stand\"), check the message the customer will send, choose the flow and click **Make QR code**.",
+        "Click **Download PNG**, or **Download for print (SVG)** for large prints, and put it on your flyer, stand or vehicle.",
+      ] },
+      { type: "p", text: "Each QR code shows how many new customers arrived through it. A new customer who scans it is saved with the source **QR code — <name>**." },
+      { type: "callout", tone: "tip", text: "Scan the code yourself before printing it. Deleting a QR code stops it starting the flow, so a printed copy then gets the normal chatbot reply." },
+    ],
+  },
+  {
     slug: "chatbot-analytics",
     title: "Chatbot analytics: how your flows perform",
     summary: "See how many conversations each chatbot flow handled, how many finished, and where customers drop out.",

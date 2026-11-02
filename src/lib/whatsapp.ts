@@ -16,7 +16,8 @@ import {
 } from "./whatsappRendering";
 import { customerRecordTenantId } from "./customerRecordTenant";
 import { shareableFileUrl } from "./storage";
-import { resolveIntegrationBundleForTenant } from "./settings";
+import { getSetting, resolveIntegrationBundleForTenant } from "./settings";
+import { FLOW_QR_KEY, matchQrCode, parseQrCodes, qrSource } from "./flowQr";
 import { sendPushToAll } from "./push";
 import { resolveTenantActor } from "./tenantActor";
 import { inboundCommunicationKey, isDedupeKeyConflict } from "./inboundMessageKey";
@@ -26,6 +27,8 @@ import { currentTenantScope } from "./tenantScope";
 import { distinctIdentities } from "./botBookingIdentity";
 import { whatsappSendResult, whatsappTransportFailure, type WhatsAppSendResult } from "./deliveryReceipts";
 import { recordOutboundFailure, recordOutboundMessage, type OutboundRecord } from "./outboundMessageLog";
+import { whatsappContactsMessage } from "./flowMedia";
+import type { ContactCard } from "./flow";
 
 /**
  * Every outbound call is bounded. Node fetch has NO default timeout, so an
@@ -368,6 +371,24 @@ export async function sendWhatsAppImage(toDigits: string, url: string, caption?:
 }
 
 /**
+ * A chatbot flow's document, by link. The caller passes the signed, expiring
+ * relay URL minted for THIS attempt (attachmentUrlForDelivery) — never a stored
+ * or permanent one — and Meta fetches it within seconds.
+ */
+export async function sendWhatsAppDocumentLink(toDigits: string, url: string, filename: string, caption?: string): Promise<WhatsAppSendResult> {
+  const creds = await waCredentials();
+  if (!creds) return { ok: false, error: "WhatsApp is not configured." };
+  return postWhatsAppMessage(creds, { to: toDigits, type: "document", document: { link: url, filename, ...(caption ? { caption: caption.slice(0, WA_BODY_MAX) } : {}) } });
+}
+
+/** A saveable contact card (Meta `contacts` message). */
+export async function sendWhatsAppContact(toDigits: string, card: ContactCard): Promise<WhatsAppSendResult> {
+  const creds = await waCredentials();
+  if (!creds) return { ok: false, error: "WhatsApp is not configured." };
+  return postWhatsAppMessage(creds, whatsappContactsMessage(toDigits, card));
+}
+
+/**
  * Uploads a media blob to WhatsApp and returns its media ID. Meta hosts the
  * bytes (valid ~30 days) so we never publish a permanent public URL of our own —
  * the caller sends by id. Returns the id or an error.
@@ -613,13 +634,15 @@ export async function recordInboundWhatsApp(
    */
   if (!contactId && !leadId) {
     const [firstName, ...rest] = (profileName ?? "WhatsApp contact").trim().split(/\s+/);
+    // Came through a QR code (its pre-typed message): the source says which — that is the QR's count of new people.
+    const qr = matchQrCode(parseQrCodes(await getSetting(FLOW_QR_KEY).catch(() => null)), text);
     const created = await prisma.contact.create({
       data: {
         firstName: firstName || "WhatsApp contact",
         lastName: rest.join(" ") || null,
         phone: "+" + fromDigits,
         whatsapp: "+" + fromDigits,
-        source: "whatsapp",
+        source: qr ? qrSource(qr.name) : "whatsapp",
         notes: profileName ? null : "Created from an inbound WhatsApp message — name not yet available.",
       },
     });

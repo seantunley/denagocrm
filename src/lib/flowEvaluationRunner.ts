@@ -1,6 +1,7 @@
 import "server-only";
 import { runFlow, type Flow, type FlowInput, type FlowSession, type OutMsg } from "./flow";
 import { flowRuntimeVars } from "./flowSession";
+import { outMsgText } from "./flowMedia";
 import {
   isEvaluationExpectation,
   isEvaluationTurn,
@@ -29,7 +30,7 @@ export function parseEvaluationFlow(definition: string): Flow | null {
 }
 
 function outputText(messages: OutMsg[]): string {
-  return messages.map((message) => message.type === "image" ? message.caption ?? "" : message.text).filter(Boolean).join("\n");
+  return messages.map((message) => message.type === "image" ? message.caption ?? "" : message.type === "choice" ? message.text : outMsgText(message)).filter(Boolean).join("\n");
 }
 
 function pickChoice(messages: OutMsg[], label: string): string | null {
@@ -85,6 +86,7 @@ export async function evaluateFlowScenario(input: {
       startJourney: async (journeyId, vars, nodeId) => { trace.push(`Journey: node ${nodeId} would enrol in ${journeyId}`); vars.journey_started = "yes"; return { ok: true }; },
       createBooking: async (_vars, action, nodeId) => { trace.push(`CRM: node ${nodeId} would create ${action ?? "service"}`); return { ok: true }; },
       handoff: async () => { trace.push("Handoff: would pause bot and notify team"); },
+      contactCard: async (staffUserId) => { trace.push(`Contact card: would send ${staffUserId ? "a staff member's" : "the business"} card`); return { name: "Business card (evaluation fixture)", phones: ["+27 21 000 0000"] }; },
     });
     session = result.session;
     variables = result.session?.vars ?? currentSession.vars;
