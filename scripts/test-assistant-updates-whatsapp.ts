@@ -21,6 +21,7 @@ import { isWhatsAppConfigured } from "../src/lib/whatsapp";
 import { readUserSecurityStateStrict } from "../src/lib/userSecurity";
 import { sendUpdatesToLinkedPhone, sweepWaitingUpdates } from "../src/lib/assistantWhatsApp";
 import { ASSISTANT_WHATSAPP_KEY, ASSISTANT_WHATSAPP_TEMPLATE_KEY } from "../src/lib/assistantWhatsAppRules";
+import { __setQuietHoursForTests } from "../src/lib/proactiveRules";
 
 const SFX = Math.random().toString(16).slice(2, 10);
 let passed = 0;
@@ -50,6 +51,9 @@ const sentAt = async (id: string) => (await basePrisma.assistantTurn.findUniqueO
 
 async function main() {
   guardEnvironment();
+  // Daytime, whatever the clock says: CI runs at any hour, and at night the quiet hours hold messages back.
+  // The night is checked on its own below.
+  __setQuietHoursForTests(false);
   const before = await scoped(async () => ({ on: await getSetting(ASSISTANT_WHATSAPP_KEY), template: await getSetting(ASSISTANT_WHATSAPP_TEMPLATE_KEY) }));
   try {
     if (await scoped(() => isWhatsAppConfigured())) throw new Error("This database has a WhatsApp connection: refusing to run, a message could really be sent");
@@ -104,6 +108,20 @@ async function main() {
     const swept = await scoped(() => sweepWaitingUpdates(T, { shouldStop: () => false }));
     check("it runs against the real table, and sends nothing to someone who may not use the assistant", swept.people === 0 && (await sentAt(TURN.brief)) === null, JSON.stringify(swept));
 
+    console.log("\nAt night (20:00–08:00, Johannesburg)");
+    __setQuietHoursForTests(true);
+    // Both already "1 part gone" with an expired claim, so finishing needs no send (no WhatsApp connection here).
+    await basePrisma.assistantTurn.updateMany({ where: { id: { in: [TURN.brief, TURN.alert] } }, data: { whatsappSentAt: null, whatsappClaimedAt: new Date(Date.now() - 6 * 60_000), whatsappPartsSent: 1 } });
+    await basePrisma.assistantPhoneLink.update({ where: { id: LINK }, data: { lastInboundAt: new Date(), nudgedAt: null, nudgeFailedAt: null } });
+    check("a briefing the person timed still goes", (await run()) === "sent" && (await sentAt(TURN.brief)) !== null);
+    check("…a watch alert waits for the morning", (await sentAt(TURN.alert)) === null);
+    check("…unless they have just written to DAX", (await run({ windowOpen: true })) === "sent" && (await sentAt(TURN.alert)) !== null);
+    // Outside the 24 hours with a briefing waiting: by day this sends the "you have an update" template.
+    await basePrisma.assistantTurn.update({ where: { id: TURN.brief }, data: { whatsappSentAt: null, whatsappClaimedAt: null, whatsappPartsSent: 0 } });
+    await basePrisma.assistantPhoneLink.update({ where: { id: LINK }, data: { lastInboundAt: new Date(Date.now() - 30 * HOUR), nudgedAt: null, nudgeFailedAt: null } });
+    check("no 'you have an update' nudge at night — it waits, and nothing is claimed", (await run()) === "waiting" && (await link()).nudgedAt === null);
+    __setQuietHoursForTests(false);
+
     console.log("\nWho it is for");
     await basePrisma.assistantPhoneLink.update({ where: { id: LINK }, data: { updatesOnWhatsApp: false } });
     check("the person's own switch off: nothing is sent or claimed", (await run()) === "not_wanted" && (await sentAt(TURN.brief)) === null);
@@ -113,6 +131,7 @@ async function main() {
     await scoped(() => putSetting(ASSISTANT_WHATSAPP_KEY, "off"));
     check("the workspace switch off: nothing", (await run()) === "not_wanted");
   } finally {
+    __setQuietHoursForTests(null);
     await basePrisma.assistantTurn.deleteMany({ where: { id: { in: Object.values(TURN) } } });
     await basePrisma.assistantPhoneLink.deleteMany({ where: { id: LINK } });
     await basePrisma.user.deleteMany({ where: { id: USER } });
