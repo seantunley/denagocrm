@@ -53,6 +53,7 @@ import { whyLookup } from "./assistantWhyLookup";
 import { matchPayment } from "./assistantPaymentMatch";
 import { stuckLookup } from "./assistantStuckLookup";
 import { catchUpLookup } from "./assistantCatchUpLookup";
+import { stuckDealsLookup } from "./assistantStuckDeals";
 import { briefForAssistant, loadDaxBrief } from "./daxBrief";
 import { customerVehicles, workshopOverview } from "./workshopContext";
 import { breakerOpen, withRetry } from "./assistantBreaker";
@@ -1619,6 +1620,7 @@ async function runTool(user: User, step: ToolStep): Promise<ToolOutput> {
     case "match_payment": return matchPayment(user, step.args);
     case "stuck": return stuckLookup(user, step.args.lead);
     case "catch_up": return catchUpLookup(user, step.args.since);
+    case "stuck_deals": return stuckDealsLookup(user);
     case "knowledge": return knowledge(user, step.args);
     case "recall": return recall(user, step.args);
     case "playbook": return playbook(user, step.args);

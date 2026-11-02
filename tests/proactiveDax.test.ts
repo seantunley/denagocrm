@@ -234,7 +234,7 @@ test("the brief: once a day, as the person, folding in held alerts, labelled as 
   assert.match(read("src/lib/proactive.ts"), /kind: BRIEF_KIND, recordKey: johannesburgDateKey\(now\), deliveredAt: \{ not: null \} \}/);
   // As them, inside their hourly ask limit, unattended (no questions back, nothing learned).
   assert.match(brief, /const user = await assistantUserFor\(userId\);\s*if \(!user \|\| !\(await assistantAskAllowed\(user\.id\)\)\) return false;/);
-  assert.match(brief, /askCrm\(user, briefQuestion\(now, held\.map\(\(alert\) => alert\.text\)\), null, \{ source: "schedule" \}\)/);
+  assert.match(brief, /askCrm\(user, briefQuestion\(now, held\.map\(\(alert\) => alert\.text\), \{ mondayStuck \}\), null, \{ source: "schedule" \}\)/);
   assert.match(brief, /data: \{ source: BRIEF_SOURCE, question: BRIEF_QUESTION \}/);
   assert.match(brief, /id: \{ in: held\.map\(\(alert\) => alert\.id\) \}, deliveredAt: null \},\s*data: \{ deliveredAt: new Date\(\), turnId \}/);
   // Held alerts wait for a brief still to come today; otherwise they go on their own.
