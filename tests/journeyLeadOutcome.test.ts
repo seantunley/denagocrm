@@ -671,12 +671,12 @@ test("the builder offers all three and explains when each is a no-op", () => {
   // offered — asserted in section 6 above. What needs its own check is the
   // config: a mark-lost step will not save without a reason, so the field has to
   // be on screen or the author meets a rejected save with nothing to fix.
-  assert.match(builder, /step\.type === "lead_mark_lost"/, "no reason field — the step cannot be saved");
-  assert.match(builder, /setConfig\(index, "reason", e\.target\.value\)/);
-  assert.match(builder, /type === "lead_mark_lost" \? \{ reason: "" \}/, "picking the type must seed the field");
+  assert.match(builder, /case "lead_mark_lost":/, "no reason field — the step cannot be saved");
+  assert.match(builder, /set\("reason", e\.target\.value\)/);
+  assert.match(shipped("src/lib/journeyBuilderDefinition.ts"), /if \(type === "lead_mark_lost"\) return \{ reason: "" \};/, "picking the type must seed the field");
   // "Why did my step skip?" has exactly one answer and it should not need the
   // run trace to find it.
   for (const type of ["lead_mark_won", "lead_reopen"]) {
-    assert.match(builder, new RegExp(`step\\.type === "${type}"`), `${type} has no on-screen explanation`);
+    assert.match(builder, new RegExp(`case "${type}":`), `${type} has no on-screen explanation`);
   }
 });

@@ -868,22 +868,22 @@ test("save and publish use the DEEP parse; the runner uses the shallow one", () 
 /* ── 9. the builder round-trips what it cannot edit ──────────────────────── */
 
 test("the builder carries choose/repeat through instead of dropping them", () => {
-  // There is no visual editor for these yet. Silently dropping the branches on
-  // save would destroy work with no error and no undo, so the builder preserves
-  // the config verbatim and locks the type selector.
+  // Choose and Repeat are edited visually now (2026-11-02), branches and all — see
+  // tests/journeyBuilderVisual.test.ts for the round trip. What must still hold: a
+  // step's whole config is carried, so a key no editor owns is saved as it was, and
+  // one stray click on the type dropdown cannot delete a container's branches.
   const builder = shipped("src/components/JourneyBuilder.tsx");
-  // `wait_for_trigger` and `variables` joined the set for the same reason — see
-  // tests/journeyWaitVariables.test.ts. What matters here is that choose and
-  // repeat are still in it.
-  assert.match(builder, /READ_ONLY_STEP_TYPES = new Set\(\[[^\]]*"choose"[^\]]*"repeat"[^\]]*\]\)/);
   assert.match(
     builder,
-    /const carried = \{ id: step\.id, type: step\.type, continueOnError: step\.continueOnError, enabled: step\.enabled, config \};\s*if \(isReadOnlyStep\(carried\)\) return carried;/,
-    "a container's config must be carried through untouched",
+    /existing\.map\(\(step\) => \(\{ id: step\.id, type: step\.type, continueOnError: step\.continueOnError, enabled: step\.enabled, config: \{ \.\.\.step\.config \} \}\)\)/,
+    "a step's config must be carried through whole",
   );
-  assert.match(builder, /disabled=\{isReadOnlyStep\(step\)\}/, "the type selector must be locked");
-  assert.match(builder, /no visual editor for this step yet/i, "…and it must SAY so on screen");
-  assert.match(builder, /continueOnError: step\.continueOnError/);
+  assert.match(builder, /if \(CONTAINERS\.has\(step\.type\) && !window\.confirm\(/, "changing a container's type must ask first");
+  assert.match(
+    builder,
+    /const set = \(key: string, value: unknown\) => onChange\(\{ \.\.\.step, config: \{ \.\.\.config, \[key\]: value \} \}\);/,
+    "every editor changes one key and keeps the rest",
+  );
 });
 
 /* ── 10. a step that could not run yet is retried, not skipped ───────────── */
@@ -1344,14 +1344,13 @@ test("the runner RECORDS the skip before it advances", () => {
 });
 
 test("the builder offers the mute for every step type, containers included", () => {
-  // Muting a branch the form cannot visually edit is exactly when this is
-  // needed, and the alternative — deleting it — destroys the config with no
-  // undo. So the checkbox is NOT inside the `!READ_ONLY_STEP_TYPES.has(...)`
-  // guard that continueOnError sits behind.
+  // Muting a branch is exactly when this is needed, and the alternative —
+  // deleting it — destroys the config with no undo. So the checkbox is NOT
+  // inside the guard that continueOnError sits behind.
   const builder = shipped("src/components/JourneyBuilder.tsx");
   const at = builder.indexOf("Step is on");
   assert.notEqual(at, -1, "the mute checkbox is gone — was it relabelled?");
-  const guardAt = builder.indexOf('!isReadOnlyStep(step) && step.type !== "wait"');
+  const guardAt = builder.indexOf("{!NO_CONTINUE_ON_ERROR.has(step.type) && (");
   assert.notEqual(guardAt, -1, "the continueOnError guard is gone — was it changed?");
   assert.ok(at < guardAt, "the mute must sit outside the read-only guard, not behind it");
   assert.match(builder, /checked=\{step\.enabled !== false\}/, "absent must read as ON");
@@ -1576,32 +1575,19 @@ test("a `repeat while not` with no clauses is still refused", () => {
   );
 });
 
-test("the builder carries a condition group it cannot represent, instead of flattening it", () => {
-  // The editor is ONE clause under `and`, and everything it saves is rebuilt
-  // from three inputs — so anything richer authored as JSON was silently
-  // flattened to conditions[0] on the next save: every other clause, every
-  // nested group and every `not`, gone, with no error and no undo. A journey
-  // would then enrol the exact set of people it was written to exclude.
-  //
-  // `not` did not create that hole, it made it reachable.
+test("the builder edits a whole condition group, instead of flattening it", () => {
+  // The old editor was ONE clause under `and`, and everything it saved was
+  // rebuilt from three inputs — so anything richer was flattened to
+  // conditions[0]: every other clause, every nested group and every `not`,
+  // gone. It then carried such groups read-only. Since 2026-11-02 the group
+  // editor holds any group the parser accepts, and saves the group itself.
   const builder = shipped("src/components/JourneyBuilder.tsx");
-  assert.match(builder, /function complexCondition\(/, "the form must know what it cannot edit");
-  assert.match(
-    builder,
-    /if \(group\.logic != null && group\.logic !== "and"\) return true;/,
-    "a `not` or an `or` group is not representable by a single-clause editor",
-  );
-  assert.match(builder, /if \(!Array\.isArray\(list\) \|\| list\.length !== 1\) return true;/);
-  // A carried condition must not have a second false-branch stop minted for it:
-  // it already names its own falseStepId, and the orphan would fail the parse.
-  assert.match(
-    builder,
-    /\.filter\(\(step\) => step\.type === "condition" && !isReadOnlyStep\(step\)\)/,
-  );
-  // …and the single-clause editor must not be offered for one either, or the
-  // three inputs would show the first clause of a group they cannot save.
-  assert.match(builder, /step\.type === "condition" && !isReadOnlyStep\(step\) && \(/);
-  // A step with no stored group is a NEW one the form is about to build — that
-  // must stay editable, or adding a condition would be impossible.
-  assert.match(builder, /if \(!isRecord\(group\)\) return false;/);
+  assert.match(builder, /<JourneyConditionGroupEditor value=\{config\.condition\} onChange=\{\(group\) => set\("condition", group\)\} \/>/);
+  assert.doesNotMatch(builder, /config\.field|conditions\[0\]/, "nothing rebuilds a group from one clause any more");
+  const editor = shipped("src/components/JourneyConditionGroupEditor.tsx");
+  assert.match(editor, /\{ value: "not", label: "None of these" \}/, "`not` is offered, and named for what it does (NOR)");
+  // A condition naming its OWN branch targets keeps them, and gets no second
+  // generated stop (the orphan would fail the parse) — tests/journeyBuilderVisual.
+  const definition = shipped("src/lib/journeyBuilderDefinition.ts");
+  assert.match(definition, /const custom = Boolean\(config\.trueStepId \|\| config\.falseStepId\) && config\.falseStepId !== generatedStopId\(step\.id\);/);
 });

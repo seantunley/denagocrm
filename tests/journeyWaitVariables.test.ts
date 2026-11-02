@@ -1450,17 +1450,16 @@ test("the poll index exists, and is not created CONCURRENTLY", () => {
 });
 
 test("the builder cannot silently destroy either new step type", () => {
-  // Neither has a visual editor. A wait's `triggers` array and a variables
-  // step's `set` map are structured config this form has no widget for, and
-  // dropping either on save is silent damage with no error and no undo.
+  // Both have visual editors now (2026-11-02). Dropping a wait's `triggers` or a
+  // variables step's `set` on save would be silent damage, so each type gets an
+  // editor that sets ONLY its own keys, and a starting config the parser accepts
+  // (a fresh step that cannot save is a trap) — round-tripped in
+  // tests/journeyBuilderVisual.test.ts.
   const builder = shipped("src/components/JourneyBuilder.tsx");
-  const setAt = builder.indexOf("READ_ONLY_STEP_TYPES = new Set(");
-  assert.notEqual(setAt, -1, "the read-only set is gone — was it renamed?");
-  const setEnd = builder.indexOf("]);", setAt);
-  assert.ok(setEnd > setAt, "the slice ran backwards");
-  const readOnly = builder.slice(setAt, setEnd);
+  const starts = shipped("src/lib/journeyBuilderDefinition.ts");
   for (const type of ["choose", "repeat", "wait_for_trigger", "variables", "wait_for_condition"]) {
-    assert.match(readOnly, new RegExp(`"${type}"`), `${type} must be carried, not rebuilt`);
+    assert.match(builder, new RegExp(`case "${type}":`), `${type} has no editor`);
+    assert.match(starts, new RegExp(`if \\(type === "${type}"\\) return \\{`), `${type} has no starting config`);
   }
   // The label map was hoisted out of this component into journeyTypes.ts, so
   // the builder and the activity trace cannot call the same step type two
