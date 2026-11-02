@@ -74,7 +74,11 @@ const stubs: Record<string, unknown> = {
   "server-only": {},
   "next/server": { after: (cb: () => unknown) => void db.afterQueue.push(cb) },
   "@/lib/db": { basePrisma, prisma: basePrisma },
-  "@/lib/email": { sendEmail: async (m: { to: string; subject: string; text: string }) => void db.emails.push(m) },
+  // Account mail goes through accountEmail (the workspace or the platform; tests/accountEmail.test.ts).
+  "@/lib/accountEmail": {
+    sendAccountEmail: async (_userId: string, m: { to: string; subject: string; text: string }) => (db.emails.push(m), true),
+    inAccountWorkspace: async <T,>(_userId: string, fn: () => Promise<T>) => fn(),
+  },
   "@/lib/audit": { logAudit: async () => {} },
   "@/lib/errorLog": { logError: async () => {} },
   "@/lib/platformIdentity": { PLATFORM_NAME: "CRM" },

@@ -4,7 +4,7 @@ import bcrypt from "bcryptjs";
 import crypto from "crypto";
 import { after } from "next/server";
 import { basePrisma } from "@/lib/db";
-import { sendEmail } from "@/lib/email";
+import { inAccountWorkspace, sendAccountEmail } from "@/lib/accountEmail";
 import { logAudit } from "@/lib/audit";
 import { logError } from "@/lib/errorLog";
 import { PLATFORM_NAME } from "@/lib/platformIdentity";
@@ -89,12 +89,16 @@ async function issueResetCode(email: string): Promise<void> {
       data: { purpose: PURPOSE, key: user.id, codeHash, channel: "email", target: mask(user.email), expiresAt: new Date(Date.now() + CODE_TTL_MS) },
     });
   });
-  await sendEmail({
+  // As their own workspace, or the platform when it has no mail of its own (accountEmail.ts) — not the request's
+  // scope, which here is none: that is what made every reset email fail.
+  const sent = await sendAccountEmail(user.id, {
     to: user.email,
     subject: `Your ${PLATFORM_NAME} password reset code`,
     text: `Hi ${user.name},\n\nYour password reset code is ${code}. It expires in 15 minutes.\n\nIf you didn't ask to reset your password, ignore this email — your password hasn't changed.`,
   });
-  await logAudit({ action: "security.password_reset_requested", summary: "Password reset code emailed", userName: user.name });
+  await inAccountWorkspace(user.id, () =>
+    logAudit({ action: "security.password_reset_requested", summary: sent ? "Password reset code emailed" : "Password reset code could not be emailed", userName: user.name }),
+  );
 }
 
 export async function resetPasswordWithCode(_prev: ResetState | undefined, formData: FormData): Promise<ResetState> {
@@ -156,14 +160,16 @@ export async function resetPasswordWithCode(_prev: ResetState | undefined, formD
     await bumpUserSessionVersion(user!.id, tx);
   });
   await Promise.all([clearRateLimit(attemptKey), clearRateLimit(rateLimitKey("staff-reset-send", email))]);
-  await logAudit({ action: "security.password_reset_self", summary: "Password reset with an emailed code; all sessions signed out", userName: user!.name });
+  await inAccountWorkspace(user!.id, () =>
+    logAudit({ action: "security.password_reset_self", summary: "Password reset with an emailed code; all sessions signed out", userName: user!.name }),
+  );
   // Tell the owner of the inbox, in case it wasn't them.
   after(() =>
-    sendEmail({
+    sendAccountEmail(user!.id, {
       to: user!.email,
       subject: `Your ${PLATFORM_NAME} password was changed`,
       text: `Hi ${user!.name},\n\nYour password was just reset, and you've been signed out on every device.\n\nIf this wasn't you, contact your administrator straight away.`,
-    }).catch(() => {}),
+    }),
   );
   return { done: true };
 }
