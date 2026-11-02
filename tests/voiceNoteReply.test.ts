@@ -18,6 +18,9 @@ test("the action: inbox.reply, only conversations this person may open, nothing 
   assert.match(action, /requirePermission\("inbox\.reply"\)/);
   assert.match(action, /accessibleInboxWhere\(user\)/);
   assert.match(action, /where: \{ AND: \[scope, \{ conversationId, type: "whatsapp" \}\] \}/);
+  // Review of #953: only the voice note the button was shown for, and only while it is the customer's latest message.
+  assert.match(action, /const at = recent\.findIndex\(\(m\) => m\.direction === "inbound"\);/);
+  assert.match(action, /recent\[at\]\.id !== messageId\) return \{ ok: false, error: "The customer has written since that voice note/);
   assert.doesNotMatch(action, /\.(create|update|upsert|delete)\w*\(|sendWhatsApp|logAudit/);
 });
 
@@ -30,11 +33,22 @@ test("the AI call: phone numbers and emails taken out, no invented facts, nothin
   assert.doesNotMatch(fn, /logError\([^)]*transcript/);
 });
 
-test("the button: only under a WhatsApp voice note, and it fills the reply box — never sends", () => {
+test("the button: only under the customer's latest message when it is a voice note, bound to that message — never sends", () => {
   const box = code("src/components/InboxReply.tsx");
-  assert.match(box, /channel === "whatsapp" && voiceNote && conversationId/);
+  assert.match(box, /channel === "whatsapp" && voiceNoteId && conversationId/);
+  const start = box.indexOf("function putSuggestion");
+  const fn = box.slice(start, box.indexOf("return (", start));
+  assert.match(fn, /suggestVoiceNoteReply\(conversationId, voiceNoteId\)/);
+  assert.doesNotMatch(fn, /requestSubmit|waAction|formRef/);
+  const list = code("src/components/SocialThreadList.tsx");
+  assert.match(list, /const latest = thread\.messages\.find\(\(m\) => m\.direction === "inbound"\);\r?\n  return latest && voiceNoteTranscript\(latest\.body\) \? latest\.id : null;/);
+});
+
+test("review of #953: a suggestion never goes over words already in the box — it waits for 'Replace my text with it'", () => {
+  const box = code("src/components/InboxReply.tsx");
   const start = box.indexOf("function suggestForVoiceNote");
   const fn = box.slice(start, box.indexOf("return (", start));
-  assert.match(fn, /textRef\.current\.value = result\.reply/);
-  assert.doesNotMatch(fn, /requestSubmit|waAction|formRef/);
+  // Read when the answer arrives; text there → shown beside it, the box untouched.
+  assert.match(fn, /if \(textRef\.current\?\.value\.trim\(\)\) setVoiceSuggestion\(result\.reply\);\r?\n\s*else putSuggestion\(result\.reply\);/);
+  assert.match(box, /onClick=\{\(\) => putSuggestion\(voiceSuggestion\)\}>Replace my text with it</);
 });

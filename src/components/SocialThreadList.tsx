@@ -47,6 +47,12 @@ export const CHANNEL_META: Record<InboxThread["channel"], { label: string; icon:
   },
 };
 
+/** The customer's latest message (messages are newest first), when it is a transcribed voice note. */
+function latestVoiceNoteId(thread: InboxThread): string | null {
+  const latest = thread.messages.find((m) => m.direction === "inbound");
+  return latest && voiceNoteTranscript(latest.body) ? latest.id : null;
+}
+
 export default function SocialThreadList({
   list,
   empty,
@@ -210,7 +216,7 @@ export default function SocialThreadList({
                   handover context is what you want to have read before typing. */}
               {collab ? <ConversationCollab collaboration={collab} staff={staff} canAct={canCollaborate} /> : null}
 
-              {thread.archived ? <p className="mt-3 text-xs text-muted-foreground">Archived — restore this conversation to reply.</p> : <InboxReply channel={thread.channel} contactId={thread.contactId} leadId={thread.leadId} phone={thread.phone} revalidate={revalidate} conversationId={conversationId} draft={collab?.draft ?? null} viewerId={viewerId} voiceNote={Boolean(voiceNoteTranscript(thread.messages.find((m) => m.direction === "inbound")?.body))} />}
+              {thread.archived ? <p className="mt-3 text-xs text-muted-foreground">Archived — restore this conversation to reply.</p> : <InboxReply channel={thread.channel} contactId={thread.contactId} leadId={thread.leadId} phone={thread.phone} revalidate={revalidate} conversationId={conversationId} draft={collab?.draft ?? null} viewerId={viewerId} voiceNoteId={latestVoiceNoteId(thread)} />}
             </div>
           </RowModal>
         );
