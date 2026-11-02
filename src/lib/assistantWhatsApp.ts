@@ -139,6 +139,21 @@ const FILE_QUESTION = "What's in this file, and where should it be filed?";
  * claim and Meta redelivers, and the redelivery asks the same question again. They
  * never turn into `false`, because "couldn't tell" is not "customer".
  */
+/**
+ * Is this sender a staff phone LINKED to DAX in the current workspace? Cheap, and it answers nothing: the webhook
+ * asks it to acknowledge Meta at once before a DAX answer that can take minutes (handleStaffWhatsApp still makes
+ * every real check, and a no there takes the customer path as before).
+ */
+export async function isLinkedStaffPhone(from: string): Promise<boolean> {
+  const scope = currentTenantScope();
+  if (!scope || scope.system || !scope.tenantId) return false;
+  if (!(await assistantWhatsAppOn())) return false;
+  const waId = waDigits(String(from ?? ""));
+  if (!waId) return false;
+  const link = await basePrisma.assistantPhoneLink.findFirst({ where: { tenantId: scope.tenantId, waId, verifiedAt: { not: null } }, select: { id: true } });
+  return Boolean(link);
+}
+
 export async function handleStaffWhatsApp(from: string, input: StaffWhatsAppInput, messageId?: string | null): Promise<boolean> {
   // A REAL workspace scope or nothing. withChannelTenantScope binds one only
   // when the business number is mapped to a workspace; an unmapped number runs

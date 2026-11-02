@@ -1,4 +1,4 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextRequest, NextResponse, after } from "next/server";
 import { whatsappReceipt, whatsappFailure } from "@/lib/deliveryReceipts";
 import { applyProviderFailure } from "@/lib/botOutbox";
 import { applyReceipt } from "@/lib/messageReceipts";
@@ -9,7 +9,7 @@ import { transcribeVoiceDetailed } from "@/lib/transcribe";
 import { voiceLanguage } from "@/lib/voiceLanguage";
 import { saveFile } from "@/lib/storage";
 import { runWhatsAppBot } from "@/lib/flowRun";
-import { handleStaffWhatsApp } from "@/lib/assistantWhatsApp";
+import { handleStaffWhatsApp, isLinkedStaffPhone } from "@/lib/assistantWhatsApp";
 import { forwardedForDax, isForwarded, sharedContactQuestion } from "@/lib/assistantWhatsAppRules";
 import { linkScreening, screenInbound, type ScreenOutcome } from "@/lib/inboundScreening/screen";
 import { withChannelTenantScope, validateInSystemScope } from "@/lib/tenantScopeEntry";
@@ -80,7 +80,9 @@ export async function POST(req: NextRequest) {
           if (failure) await applyProviderFailure("whatsapp", failure);
         }
 
-        for (const message of value.messages ?? []) {
+        const messages: any[] = value.messages ?? [];
+        const processMessages = async () => {
+        for (const message of messages) {
           const outcome = await claimInboundBotEvent("whatsapp", String(message.id ?? ""));
           if (outcome.status === "completed") continue; // genuinely done — ack it.
           if (outcome.status === "unidentified") {
@@ -225,6 +227,23 @@ export async function POST(req: NextRequest) {
             throw await noteInboundRetry("whatsapp-webhook", "failed", `whatsapp ${String(message.id ?? "")}`);
           }
         }
+        };
+
+        // A STAFF PHONE LINKED TO DAX: Meta is answered NOW and DAX answers after (Sean, 2026-11-02). Its answer can
+        // take minutes; Meta re-sends anything not acknowledged within seconds, so every DAX question came in two or
+        // three times — each re-send logged as "leased", and a re-send after the lease could ask, and charge for, the
+        // same question twice. The batch runs in order in after(), in its own channel scope (the request's is gone by
+        // then). What this gives up is Meta's redelivery if the run dies: for a staff question to DAX, which they can
+        // simply ask again — never for a customer's message, which still runs here, inside the request, as before.
+        if (messages.length && (await isLinkedStaffPhone(String(messages[0]?.from ?? "")))) {
+          after(() =>
+            withChannelTenantScope("whatsapp", phoneNumberId, processMessages, () => undefined).catch((error) =>
+              logError("whatsapp-webhook", error, "A DAX question from a staff phone failed after Meta was acknowledged; it will not be re-sent").catch(() => {}),
+            ),
+          );
+          return;
+        }
+        await processMessages();
       }, () => reportUnmappedEndpoint("whatsapp", phoneNumberId, value?.messages?.length ?? 0));
     }
   }
