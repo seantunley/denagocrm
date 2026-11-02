@@ -69,6 +69,14 @@ test("QR link, saved list and inbound match", () => {
 test("flow documents are workspace-scoped, general files only; QR edits are owner-only", () => {
   const docs = readFileSync("src/lib/flowDocuments.ts", "utf8");
   assert.match(docs, /return \{ tenantId, deletedAt: null, contactId: null/);
+  // The Library too (Sean, 2026-11-02): this workspace's, not deleted, with a file — in the dropdown, at publish and at send.
+  assert.match(docs, /return \{ tenantId, deletedAt: null, versions: \{ some: \{\} \} \};/);
+  for (const fn of ["flowDocumentOptions", "flowDocumentIssues", "resolveFlowDocument"]) {
+    const body = docs.slice(docs.indexOf(`export async function ${fn}`));
+    assert.match(body.slice(0, body.indexOf("\nexport ", 10) > 0 ? body.indexOf("\nexport ", 10) : undefined), /libraryWhere\(tenantId\)/, `${fn} reads the Library`);
+  }
+  // At send: the library document's NEWEST version.
+  assert.match(docs, /versions: \{ orderBy: \{ version: "desc" \}, take: 1/);
   const actions = readFileSync("src/app/actions/flow.ts", "utf8");
   const add = actions.slice(actions.indexOf("export async function addFlowQr"), actions.indexOf("export async function deleteFlowQr"));
   assert.match(add, /owner/i);
