@@ -2,11 +2,20 @@
 import BrandLogo from "@/components/BrandLogo";
 
 import { useSearchParams } from "next/navigation";
-import { Suspense, useActionState, useRef, useState, useSyncExternalStore } from "react";
+import { Suspense, useActionState, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { motion, useMotionValue, useReducedMotion, useSpring, useTransform } from "framer-motion";
-import { ArrowRight, Check, Eye, EyeOff, LockKeyhole, ShieldCheck, Zap } from "lucide-react";
+import { ArrowRight, Check, Eye, EyeOff, Fingerprint, LoaderCircle, LockKeyhole, ShieldCheck, Zap } from "lucide-react";
 import { APP_VERSION } from "@/lib/version";
-import PasskeyLoginButton from "@/components/PasskeyLoginButton";
+import PasskeyLoginButton, { usePasskeySignIn } from "@/components/PasskeyLoginButton";
+import {
+  dropSignInNote,
+  forgetEmail,
+  hasPasskeyHere,
+  notePasswordSignIn,
+  platformAuthenticatorAvailable,
+  rememberedEmail,
+} from "@/lib/passkeyDevice";
+import { readCodeEntry, shouldAutoSubmit, type CodeEntry, type CodeEntryMode } from "@/lib/secondFactorEntry";
 import { login, requestEmailCode, type LoginState, verifySecondFactor } from "./actions";
 import { requestPasswordReset, resetPasswordWithCode, type ResetState } from "./resetActions";
 import type { LoginBrand } from "@/lib/loginBrand";
@@ -27,88 +36,288 @@ export default function LoginClient({ brand }: { brand: LoginBrand }) {
   );
 }
 
+/** Nothing here changes while the page is open: read once, no subscription. */
+const noSubscribe = () => () => {};
+
 function LoginInner({ brand }: { brand: LoginBrand }) {
   const isPwa = useSyncExternalStore(subscribeToDisplayMode, getDisplayModeSnapshot, () => false);
   const [showPassword, setShowPassword] = useState(false);
   const [state, formAction, pending] = useActionState<LoginState | undefined, FormData>(login, undefined);
   const [forgot, setForgot] = useState(false);
   const timedOut = useSearchParams().get("timeout") === "1";
+  const passkey = usePasskeySignIn(isPwa);
+  const emailRef = useRef<HTMLInputElement>(null);
+  const passwordRef = useRef<HTMLInputElement>(null);
+
+  // Remembered on THIS device only, and only if they ticked the box last time.
+  const storedEmail = useSyncExternalStore(noSubscribe, rememberedEmail, () => "");
+  const [typedEmail, setTypedEmail] = useState<string | null>(null);
+  const [rememberChoice, setRememberChoice] = useState<boolean | null>(null);
+  const [notYou, setNotYou] = useState(false);
+  const email = typedEmail ?? storedEmail;
+  const remember = rememberChoice ?? Boolean(storedEmail);
+
+  // React resets the form after every attempt (form.reset()). A text box comes
+  // through that unchanged, because React mirrors its value into defaultValue.
+  // A checkbox does not: React sets defaultChecked only on first render, so
+  // after a failed attempt the box could show unticked while `remember` was
+  // still true, and the next sign-in kept an email the screen said it would
+  // not. Keep the box's reset value equal to the state.
+  const rememberRef = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    if (rememberRef.current) rememberRef.current.defaultChecked = remember;
+  }, [remember]);
+
+  // WHOSE sign-in this is, as far as the device can tell: the remembered email
+  // (until "Not you?"). Not the email being typed: the form must not jump or
+  // fold under someone's fingers mid-word.
+  const account = notYou ? "" : storedEmail;
+  const [platformReader, setPlatformReader] = useState(false);
+  const [flaggedAccount, setFlaggedAccount] = useState("");
+  useEffect(() => {
+    let live = true;
+    void platformAuthenticatorAvailable().then((available) => {
+      if (live) setPlatformReader(available);
+    });
+    return () => {
+      live = false;
+    };
+  }, []);
+  useEffect(() => {
+    if (!account) return;
+    let live = true;
+    void hasPasskeyHere(account).then((yes) => {
+      if (live && yes) setFlaggedAccount(account);
+    });
+    return () => {
+      live = false;
+    };
+  }, [account]);
+  const accountUsedPasskey = Boolean(account) && flaggedAccount === account;
+
+  // Passkey first where this device has a fingerprint/face/PIN reader AND either
+  // THIS account has signed in with (or registered) a passkey here, or this is
+  // the installed app. Decided on the device only, per account: never a server
+  // question about an email, which would tell a stranger the account exists.
+  const passkeyFirst = platformReader && (accountUsedPasskey || isPwa);
+  // On a phone (any width in the installed app) the password form folds behind
+  // "Use password instead", but ONLY for an account whose passkey has worked
+  // here. A phone that merely supports passkeys may have none for this person,
+  // and then the password is the only way in.
+  const [wantsPassword, setWantsPassword] = useState(false);
+  const foldPassword = passkeyFirst && accountUsedPasskey && !wantsPassword && !state?.error;
+
+  // A remembered email means the password is the next thing to type.
+  useEffect(() => {
+    if (storedEmail) passwordRef.current?.focus();
+  }, [storedEmail]);
+
+  // After ANY failure: back to the password (the email is usually right), and
+  // forget the note that a password sign-in was on its way.
+  useEffect(() => {
+    if (!state?.error) return;
+    dropSignInNote();
+    passwordRef.current?.focus();
+  }, [state]);
 
   if (state?.need2fa) return <TwoFactorStep methods={state.methods ?? []} brand={brand} />;
   if (forgot) return <ForgotPasswordStep brand={brand} onBack={() => setForgot(false)} />;
 
+  const passkeyButton = <PasskeyLoginButton passkey={passkey} disabled={pending} />;
+  const divider = (text: string) =>
+    passkey.supported ? (
+      <div className="my-5 flex items-center gap-3 text-[11px] uppercase tracking-[0.18em] text-slate-600">
+        <span className="h-px flex-1 bg-slate-800" />
+        {text}
+        <span className="h-px flex-1 bg-slate-800" />
+      </div>
+    ) : null;
+  const linkButton =
+    "cursor-pointer rounded text-xs text-slate-500 underline-offset-4 outline-none transition hover:text-slate-200 hover:underline focus-visible:text-slate-200 focus-visible:ring-2 focus-visible:ring-primary/50 focus-visible:ring-offset-2 focus-visible:ring-offset-[#070909]";
+  const errorAction =
+    "inline-flex min-h-11 cursor-pointer items-center rounded-lg border border-red-300/20 bg-red-300/10 px-3.5 text-xs font-medium text-red-100 outline-none transition hover:bg-red-300/15 hover:text-white focus-visible:ring-2 focus-visible:ring-red-300/50";
+
   return (
     <Shell brand={brand}>
-      <div className="mb-8">
-        <p className="mb-3 text-xs font-semibold uppercase tracking-[0.22em] text-primary">Staff portal</p>
-        <h1 className="text-3xl font-semibold tracking-[-0.04em] text-white sm:text-4xl">Welcome back.</h1>
-        <p className="mt-2 text-sm leading-6 text-slate-400">{`Sign in to ${brand.displayName}.`}</p>
+      <div className="mb-6 sm:mb-8 short:mb-4">
+        <p className="mb-3 text-xs font-semibold uppercase tracking-[0.22em] text-primary short:hidden">Staff portal</p>
+        <h1 className="text-3xl font-semibold tracking-[-0.04em] text-white sm:text-4xl short:text-2xl">Welcome back.</h1>
+        <p className="mt-2 text-sm leading-6 text-slate-400 short:hidden">{`Sign in to ${brand.displayName}.`}</p>
       </div>
 
       {timedOut && (
         <div role="status" className="mb-4 flex gap-3 rounded-2xl border border-amber-300/15 bg-amber-300/8 px-4 py-3 text-sm text-amber-100">
           <ShieldCheck className="mt-0.5 size-4 shrink-0 text-amber-400" />
-          <span>Your secure session ended. Sign in again to continue.</span>
+          <div>
+            <span>Your secure session ended. Sign in again to continue.</span>
+            {passkey.supported && (
+              <button
+                type="button"
+                onClick={passkey.signIn}
+                disabled={passkey.busy || pending}
+                className="mt-1.5 flex cursor-pointer items-center gap-1.5 rounded text-xs font-medium text-amber-200 underline-offset-4 outline-none hover:underline focus-visible:ring-2 focus-visible:ring-amber-300/50 disabled:opacity-60"
+              >
+                <Fingerprint className="size-3.5" />
+                Sign in with passkey
+              </button>
+            )}
+          </div>
         </div>
       )}
 
       <div className={state?.error ? "animate-shake" : undefined}>
-        <form action={formAction} className="space-y-5">
-          <input type="hidden" name="pwa" value={isPwa ? "1" : "0"} />
-          <Field label="Work email" htmlFor="email">
-            <input
-              id="email"
-              name="email"
-              type="email"
-              autoComplete="email"
-              placeholder="you@example.com"
-              className="login-input"
-              autoFocus
-              required
-            />
-          </Field>
-          <Field label="Password" htmlFor="password">
-            <div className="relative">
+        {passkeyFirst && (
+          <>
+            {passkeyButton}
+            {foldPassword ? (
+              <>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setWantsPassword(true);
+                    requestAnimationFrame(() => (storedEmail ? passwordRef : emailRef).current?.focus());
+                  }}
+                  className={`${isPwa ? "flex" : "flex sm:hidden"} mt-3 min-h-11 w-full cursor-pointer items-center justify-center rounded-2xl text-sm font-medium text-slate-400 outline-none transition hover:text-white focus-visible:ring-2 focus-visible:ring-primary/50`}
+                >
+                  Use password instead
+                </button>
+                {!isPwa && <div className="hidden sm:block">{divider("or use your password")}</div>}
+              </>
+            ) : (
+              divider("or use your password")
+            )}
+          </>
+        )}
+        <form
+          action={formAction}
+          onSubmit={() => notePasswordSignIn(email.trim().toLowerCase(), remember)}
+          aria-busy={pending}
+          className={foldPassword ? (isPwa ? "hidden" : "max-sm:hidden") : undefined}
+        >
+          {/* Disabled while signing in, so a second tap or Enter can't send it twice. */}
+          <fieldset disabled={pending} className="space-y-5 short:space-y-3">
+            <input type="hidden" name="pwa" value={isPwa ? "1" : "0"} />
+            {/* At the TOP of the form, so a short screen with the keyboard open
+                still shows it. The SAME hints for every failure: they must not
+                say whether the account exists. */}
+            {state?.error && (
+              <div role="alert" id="login-error" className="rounded-xl border border-red-400/15 bg-red-400/8 px-3 py-2.5 text-sm text-red-300">
+                <p>{state.error}</p>
+                <p className="mt-2 flex flex-wrap gap-2">
+                  {passkey.supported && (
+                    <button type="button" onClick={passkey.signIn} className={errorAction}>
+                      Try a passkey instead
+                    </button>
+                  )}
+                  <button type="button" onClick={() => setForgot(true)} className={errorAction}>
+                    Reset password
+                  </button>
+                </p>
+              </div>
+            )}
+            <Field
+              label="Work email"
+              htmlFor="email"
+              aside={
+                storedEmail && email === storedEmail ? (
+                  <button
+                    type="button"
+                    className={`${linkButton} -my-3 -mr-2 px-2 py-3`}
+                    onClick={() => {
+                      forgetEmail();
+                      setNotYou(true);
+                      setTypedEmail("");
+                      setRememberChoice(false);
+                      emailRef.current?.focus();
+                    }}
+                  >
+                    Not you?
+                  </button>
+                ) : null
+              }
+            >
               <input
-                id="password"
-                name="password"
-                type={showPassword ? "text" : "password"}
-                autoComplete="current-password"
-                placeholder="Enter your password"
-                className="login-input pr-12"
+                ref={emailRef}
+                id="email"
+                name="email"
+                type="email"
+                inputMode="email"
+                autoComplete="username"
+                autoCapitalize="none"
+                autoCorrect="off"
+                spellCheck={false}
+                placeholder="you@example.com"
+                className="login-input"
+                value={email}
+                onChange={(event) => setTypedEmail(event.target.value)}
+                autoFocus
                 required
               />
-              <button
-                type="button"
-                onClick={() => setShowPassword((value) => !value)}
-                aria-label={showPassword ? "Hide password" : "Show password"}
-                className="absolute inset-y-0 right-0 flex w-12 items-center justify-center text-slate-500 transition hover:text-slate-200"
-              >
-                {showPassword ? <EyeOff className="size-[18px]" /> : <Eye className="size-[18px]" />}
-              </button>
-            </div>
-            <button
-              type="button"
-              onClick={() => setForgot(true)}
-              className="mt-2 cursor-pointer text-xs text-slate-500 transition hover:text-slate-200"
-            >
-              Forgot password?
+            </Field>
+            <Field label="Password" htmlFor="password">
+              <div className="relative">
+                <input
+                  ref={passwordRef}
+                  id="password"
+                  name="password"
+                  type={showPassword ? "text" : "password"}
+                  autoComplete="current-password"
+                  placeholder="Enter your password"
+                  className="login-input pr-12"
+                  aria-invalid={state?.error ? true : undefined}
+                  aria-describedby={state?.error ? "login-error" : undefined}
+                  required
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword((value) => !value)}
+                  aria-label={showPassword ? "Hide password" : "Show password"}
+                  className="absolute inset-y-0 right-0 flex w-12 items-center justify-center rounded-r-xl text-slate-500 outline-none transition hover:text-slate-200 focus-visible:text-slate-200 focus-visible:ring-2 focus-visible:ring-primary/50"
+                >
+                  {showPassword ? <EyeOff className="size-[18px]" /> : <Eye className="size-[18px]" />}
+                </button>
+              </div>
+              {/* Both at least 44px tall to the finger, with room between them. */}
+              <div className="mt-1 flex items-center justify-between gap-4">
+                <label
+                  title="Fills in your email next time on this device. You still sign in every time."
+                  className="flex min-h-11 cursor-pointer items-center gap-2 text-xs text-slate-500"
+                >
+                  <input
+                    ref={rememberRef}
+                    type="checkbox"
+                    checked={remember}
+                    onChange={(event) => setRememberChoice(event.target.checked)}
+                    className="size-3.5 accent-[var(--primary)]"
+                  />
+                  Remember my email
+                </label>
+                <button
+                  type="button"
+                  onClick={() => setForgot(true)}
+                  className={`${linkButton} -mr-2 inline-flex min-h-11 shrink-0 items-center whitespace-nowrap px-2`}
+                >
+                  Forgot password?
+                </button>
+              </div>
+            </Field>
+            <button type="submit" className="login-submit group">
+              <span>{pending ? "Signing you in…" : "Enter workspace"}</span>
+              {pending ? (
+                <LoaderCircle className="size-4 animate-spin" />
+              ) : (
+                <ArrowRight className="size-4 transition-transform group-hover:translate-x-1" />
+              )}
             </button>
-          </Field>
-          {state?.error && (
-            <p role="alert" className="rounded-xl border border-red-400/15 bg-red-400/8 px-3 py-2.5 text-sm text-red-300">
-              {state.error}
-            </p>
-          )}
-          <button type="submit" className="login-submit group" disabled={pending}>
-            <span>{pending ? "Signing you in…" : "Enter workspace"}</span>
-            <ArrowRight className="size-4 transition-transform group-hover:translate-x-1" />
-          </button>
+          </fieldset>
         </form>
 
-        <div className="mt-5">
-          <PasskeyLoginButton pwa={isPwa} />
-        </div>
+        {!passkeyFirst && (
+          <>
+            {divider("or")}
+            {passkeyButton}
+          </>
+        )}
       </div>
 
       <div className="mt-6 flex items-center justify-center gap-2 text-xs text-slate-500">
@@ -119,12 +328,15 @@ function LoginInner({ brand }: { brand: LoginBrand }) {
   );
 }
 
-function Field({ label, htmlFor, children }: { label: string; htmlFor: string; children: React.ReactNode }) {
+function Field({ label, htmlFor, aside, children }: { label: string; htmlFor: string; aside?: React.ReactNode; children: React.ReactNode }) {
   return (
     <div>
-      <label htmlFor={htmlFor} className="mb-2 block text-[13px] font-medium text-slate-300">
-        {label}
-      </label>
+      <div className="mb-2 flex items-center justify-between gap-3">
+        <label htmlFor={htmlFor} className="block text-[13px] font-medium text-slate-300">
+          {label}
+        </label>
+        {aside}
+      </div>
       {children}
     </div>
   );
@@ -208,6 +420,32 @@ function TwoFactorStep({ methods, brand }: { methods: string[]; brand: LoginBran
   const [sending, setSending] = useState(false);
   const hasTotp = methods.includes("totp");
   const hasEmail = methods.includes("email");
+  const codeRef = useRef<HTMLInputElement>(null);
+  const submitRef = useRef<HTMLButtonElement>(null);
+  // "code" (six digits, sends itself) or "backup" (never sends itself): see
+  // lib/secondFactorEntry.ts for why one box taking both burned attempts.
+  const [entry, setEntry] = useState<CodeEntry>({ mode: "code", value: "" });
+  const backup = entry.mode === "backup";
+
+  // Runs once the value is on screen, and clicks the real button, which is
+  // disabled while a check is running: it can never send twice.
+  useEffect(() => {
+    if (shouldAutoSubmit({ mode: entry.mode, value: entry.value })) submitRef.current?.click();
+  }, [entry.mode, entry.value]);
+
+  // A wrong code stays in the box, selected, so the next keystroke replaces it.
+  useEffect(() => {
+    if (!state?.error) return;
+    codeRef.current?.focus();
+    codeRef.current?.select();
+  }, [state]);
+
+  const switchTo = (mode: CodeEntryMode) => {
+    setEntry({ mode, value: "" });
+    codeRef.current?.focus();
+  };
+  const linkButton =
+    "flex min-h-11 w-full cursor-pointer items-center justify-center rounded-lg text-center text-xs text-slate-500 outline-none transition hover:text-slate-200 focus-visible:ring-2 focus-visible:ring-primary/50 disabled:cursor-wait";
 
   return (
     <Shell brand={brand}>
@@ -216,44 +454,68 @@ function TwoFactorStep({ methods, brand }: { methods: string[]; brand: LoginBran
       </div>
       <p className="mb-3 text-xs font-semibold uppercase tracking-[0.22em] text-primary">Identity check</p>
       <h1 className="text-3xl font-semibold tracking-[-0.04em] text-white">One more step.</h1>
-      <p className="mt-3 max-w-sm text-sm leading-6 text-slate-400">
-        {hasTotp ? "Enter the six-digit code from your authenticator app." : "Enter the code we sent to your email."}
+      <p aria-live="polite" className="mt-3 max-w-sm text-sm leading-6 text-slate-400">
+        {backup
+          ? "Enter one of the backup codes you saved when you set up your authenticator app. Each one works once."
+          : hasTotp
+            ? "Enter the six-digit code from your authenticator app."
+            : "Enter the code we sent to your email."}
       </p>
 
       <div className={`mt-8 ${state?.error ? "animate-shake" : ""}`}>
         <form action={formAction} className="space-y-4">
           <input
+            ref={codeRef}
             name="code"
-            inputMode="numeric"
-            autoComplete="one-time-code"
+            value={entry.value}
+            onChange={(event) => setEntry(readCodeEntry(entry.mode, event.target.value))}
+            readOnly={pending}
+            inputMode={backup ? "text" : "numeric"}
+            autoComplete={backup ? "off" : "one-time-code"}
+            autoCapitalize={backup ? "characters" : "none"}
+            autoCorrect="off"
+            spellCheck={false}
             autoFocus
             maxLength={12}
-            aria-label="Verification code"
+            aria-label={backup ? "Backup code" : "Verification code"}
+            aria-invalid={state?.error ? true : undefined}
+            aria-describedby={state?.error ? "second-factor-error" : undefined}
             className="login-input h-14 text-center font-mono text-xl tracking-[0.42em]"
-            placeholder="••••••"
+            placeholder={backup ? "XXXX-XXXX" : "••••••"}
             required
           />
-          {state?.error && <p role="alert" className="text-sm text-red-300">{state.error}</p>}
-          <button type="submit" className="login-submit" disabled={pending}>
+          {state?.error && <p role="alert" id="second-factor-error" className="text-sm text-red-300">{state.error}</p>}
+          <button ref={submitRef} type="submit" className="login-submit" disabled={pending}>
             {pending ? "Verifying…" : "Verify and continue"}
-            <ArrowRight className="size-4" />
+            {pending ? <LoaderCircle className="size-4 animate-spin" /> : <ArrowRight className="size-4" />}
           </button>
+          {/* Backup codes come with the authenticator app (actions/security.ts). */}
+          {hasTotp && !backup && (
+            <button type="button" onClick={() => switchTo("backup")} className={linkButton}>
+              Use a backup code instead
+            </button>
+          )}
+          {backup && (
+            <button type="button" onClick={() => switchTo("code")} className={linkButton}>
+              {hasTotp ? "Use your authenticator code instead" : "Use the emailed code instead"}
+            </button>
+          )}
           {hasEmail && (
             <button
               type="button"
               disabled={sending}
               onClick={async () => {
+                switchTo("code");
                 setSending(true);
                 await requestEmailCode();
                 setSent(true);
                 setSending(false);
               }}
-              className="w-full cursor-pointer py-2 text-center text-xs text-slate-500 transition hover:text-slate-200 disabled:cursor-wait"
+              className={linkButton}
             >
               {sending ? "Sending…" : sent ? "Code sent — check your inbox" : hasTotp ? "Use an email code instead" : "Resend email code"}
             </button>
           )}
-          {hasTotp && <p className="text-center text-[11px] text-slate-600">Backup codes work here too.</p>}
         </form>
       </div>
     </Shell>
@@ -261,10 +523,20 @@ function TwoFactorStep({ methods, brand }: { methods: string[]; brand: LoginBran
 }
 
 function Shell({ children, brand }: { children: React.ReactNode; brand: LoginBrand }) {
+  const isPwa = useSyncExternalStore(subscribeToDisplayMode, getDisplayModeSnapshot, () => false);
   return (
     <main className="relative min-h-[100dvh] overflow-hidden bg-[#070909] text-white lg:grid lg:grid-cols-[minmax(430px,0.82fr)_1.18fr]">
       <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_20%_0%,color-mix(in_oklab,var(--primary)_11%,transparent),transparent_32%)] lg:hidden" />
-      <section className="relative z-10 flex min-h-[100dvh] flex-col px-6 py-7 sm:px-10 lg:px-14 xl:px-20">
+      {/*
+        * Padding is "the design's value, or the notch/home indicator if that is
+        * bigger" on every side. The breakpoints only change the design's value
+        * (--pad-x / --pad-y), so the safe-area rule is written once. The
+        * installed app and short (landscape) screens get a tighter top and
+        * bottom so the submit button stays above the keyboard.
+        */}
+      <section
+        className={`relative z-10 flex min-h-[100dvh] flex-col ${isPwa ? "[--pad-y:0.75rem]" : "[--pad-y:1rem]"} [--pad-x:1.5rem] sm:[--pad-x:2.5rem] sm:[--pad-y:1.75rem] lg:[--pad-x:3.5rem] xl:[--pad-x:5rem] short:[--pad-y:0.75rem] pt-[max(var(--pad-y),env(safe-area-inset-top))] pr-[max(var(--pad-x),env(safe-area-inset-right))] pb-[max(var(--pad-y),env(safe-area-inset-bottom))] pl-[max(var(--pad-x),env(safe-area-inset-left))]`}
+      >
         <header className="flex items-center justify-between">
           {/*
             * A tenant logo is an arbitrary uploaded image with no recorded
@@ -278,15 +550,21 @@ function Shell({ children, brand }: { children: React.ReactNode; brand: LoginBra
           <BrandLogo
             logoUrl={brand.logoUrl}
             alt={brand.displayName}
-            className="h-8 w-auto object-contain sm:h-9"
+            className={isPwa ? "h-7 w-auto object-contain" : "h-8 w-auto object-contain sm:h-9"}
             wordmarkClassName="text-sm text-white sm:text-base"
           />
-          <span className="rounded-full border border-white/8 bg-white/[0.035] px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-500">Secure access</span>
+          {/* Decoration (the real security line is under the button), so not on phones or in the installed app. */}
+          <span aria-hidden="true" className={`${isPwa ? "hidden" : "hidden sm:inline-block"} rounded-full border border-white/8 bg-white/[0.035] px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-500`}>Secure access</span>
         </header>
-        <div className="my-auto w-full max-w-[420px] self-center py-14">{children}</div>
-        <footer className="flex items-center justify-between text-[10px] uppercase tracking-[0.14em] text-slate-700">
+        {/* Phones and short screens: the form sits near the top, so the keyboard
+            does not push the button off screen. sm and up: centred. */}
+        <div className="w-full max-w-[420px] self-center pb-8 pt-6 sm:my-auto sm:py-14 short:my-0 short:py-3">
+          {children}
+          <PulseStrip />
+        </div>
+        <footer className="mt-auto flex items-center justify-between text-[10px] uppercase tracking-[0.14em] text-slate-700 sm:mt-0 short:mt-auto">
           <span>{brand.displayName}</span>
-          <span>v{APP_VERSION}</span>
+          <span className="hidden sm:inline">v{APP_VERSION}</span>
         </footer>
       </section>
       <BrandScene brand={brand} />
@@ -315,6 +593,8 @@ function BrandScene({ brand }: { brand: LoginBrand }) {
         mouseX.set((event.clientX - bounds.left) / bounds.width);
         mouseY.set((event.clientY - bounds.top) / bounds.height);
       }}
+      // Pure decoration: illustrative figures, never real data (the page is public).
+      aria-hidden="true"
       className="relative hidden overflow-hidden border-l border-white/[0.06] bg-[#0c0f0e] lg:block"
     >
       <div className="absolute inset-0 opacity-35 [background-image:linear-gradient(rgba(255,255,255,.035)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,.035)_1px,transparent_1px)] [background-size:72px_72px] [mask-image:linear-gradient(to_bottom,black,transparent_88%)]" />
@@ -369,6 +649,25 @@ function BrandScene({ brand }: { brand: LoginBrand }) {
         </div>
       </div>
     </section>
+  );
+}
+
+/**
+ * Tablet portrait (md up to lg): "Today's pulse" folded down to its three
+ * numbers, where the full panel has no room. The SAME fixed illustrative
+ * figures as the big panel — this page is public, so it never shows real
+ * workspace data. Hidden on phones and from screen readers.
+ */
+function PulseStrip() {
+  return (
+    <div aria-hidden="true" className="mt-10 hidden md:block lg:hidden">
+      <p className="mb-3 text-[10px] uppercase tracking-[0.22em] text-slate-600">Today’s pulse</p>
+      <div className="grid grid-cols-3 gap-3">
+        <Metric value="14" label="Active leads" accent />
+        <Metric value="6" label="Open quotes" />
+        <Metric value="3" label="Follow-ups" />
+      </div>
+    </div>
   );
 }
 

@@ -1,5 +1,13 @@
+import type { Viewport } from "next";
 import { BrandStyle, loginBrand } from "@/lib/loginBrand";
 import LoginClient from "./LoginClient";
+
+/**
+ * Edge to edge on notched phones, so the page's env(safe-area-inset-*) padding
+ * is real (it is 0 without this). Only this route: the app's own screens were
+ * not built to sit under the notch.
+ */
+export const viewport: Viewport = { width: "device-width", initialScale: 1, viewportFit: "cover" };
 
 /**
  * Staff sign-in.
