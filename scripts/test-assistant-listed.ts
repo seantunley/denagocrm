@@ -15,7 +15,7 @@ import { basePrisma } from "../src/lib/db";
 import { runInTenantScope } from "../src/lib/tenantScope";
 import { __setTenantEnforcingForTests } from "../src/lib/tenantEnforcement";
 import { listedNow } from "../src/lib/assistantListed";
-import { listedBlock, listedRecords, referenceLine, resolveReference, splitListed } from "../src/lib/assistantListedRules";
+import { isGone, listedBlock, listedRecords, referenceLine, resolveReference, splitListed } from "../src/lib/assistantListedRules";
 import type { PermissionUser } from "../src/lib/permissions";
 import { seedTwoTenants, teardown } from "./harness/seed";
 
@@ -72,17 +72,20 @@ async function main() {
 
     console.log("\nthe salesperson, after the reassignment");
     const mine = await now(rep);
-    check("their own deal is still #1", mine[0]?.id === anna.id);
-    check("the reassigned deal is an empty #2", mine.length === 3 && mine[1] === null, JSON.stringify(mine));
-    check("another workspace's deal is never there", mine[2] === null);
+    const idAt = (slots: typeof mine, i: number) => (slots[i] && !isGone(slots[i]) ? slots[i].id : null);
+    check("their own deal is still #1", idAt(mine, 0) === anna.id);
+    check("the reassigned deal is an empty #2, still a deal, with no id", mine.length === 3 && isGone(mine[1]) && mine[1].kind === "lead" && !("id" in mine[1]), JSON.stringify(mine));
+    check("another workspace's deal is never there", isGone(mine[2]) && !("id" in mine[2]));
     const ref = resolveReference("draft a WhatsApp for the second one", mine)!;
-    check("\"the second one\" is refused, not swapped for another", ref.matches.length === 1 && ref.matches[0].slot === null && /never act on it/.test(referenceLine(ref, mine.length)));
+    check("\"the second one\" is refused, not swapped for another", ref.matches.length === 1 && isGone(ref.matches[0].slot) && /never act on it/.test(referenceLine(ref, mine.length)));
+    const firstDeal = resolveReference("the second deal", mine)!;
+    check("\"the second deal\" is still the reassigned one, never the next deal", firstDeal.matches.length === 1 && firstDeal.matches[0].place === 2 && isGone(firstDeal.matches[0].slot));
     check("the list DAX reads never names the lost deal", !listedBlock(mine, "the second one").includes(`Donovan Listed${SFX}`));
 
     console.log("\nthe owner");
     const all = await now(owner);
-    check("sees both of A's deals", all[0]?.id === anna.id && all[1]?.id === donovan.id, JSON.stringify(all));
-    check("…never B's", all[2] === null);
+    check("sees both of A's deals", idAt(all, 0) === anna.id && idAt(all, 1) === donovan.id, JSON.stringify(all));
+    check("…never B's", isGone(all[2]));
   } finally {
     __setTenantEnforcingForTests(null);
     await basePrisma.lead.deleteMany({ where: { tenantId: A, name: { endsWith: `Listed${SFX}` } } }).catch(() => 0);

@@ -18,8 +18,14 @@ import { z } from "zod";
 
 export type ListedKind = "lead" | "quote" | "contact" | "vehicle" | "jobcard";
 export type ListedRecord = { kind: ListedKind; id: string; label: string };
-/** A place on the list as it is now: the record, or null where this person can no longer open it. */
-export type ListedSlot = ListedRecord | null;
+/**
+ * A place on the list as it is now: the record, or — where this person can no longer open it — only the KIND it
+ * was (no id, no name). The kind stays so "the first quote" still counts it: a lost quote is never skipped over
+ * onto the next one (review of #947).
+ */
+export type GoneSlot = { kind: ListedKind; gone: true };
+export type ListedSlot = ListedRecord | GoneSlot;
+export const isGone = (slot: ListedSlot | undefined): slot is GoneSlot => Boolean(slot && "gone" in slot);
 
 export const MAX_LISTED = 10;
 
@@ -122,11 +128,11 @@ export function resolveReference(question: string, slots: ListedSlot[]): Referen
   const { phrase, n, noun } = hits[0];
   const places = slots.map((slot, i) => ({ place: i + 1, slot }));
   const kinds = NOUNS[noun] ?? null;
-  // The place within one kind: among the quotes, "the second quote". A place a person lost has no kind, so it
-  // counts in the full list only — a lost record never shifts the places of the ones that follow it.
+  // The place within one kind: among the quotes, "the second quote". A place a person lost keeps the kind it had,
+  // so it is still counted — a lost record never shifts "the first quote" onto the one after it.
   const nth = (of: typeof places) => (n === -1 ? of.at(-1) : of[n - 1]);
-  const ofKind = (ks: ListedKind[]) => places.filter((p) => p.slot && ks.includes(p.slot.kind));
-  const present = [...new Set(slots.flatMap((s) => (s ? [s.kind] : [])))];
+  const ofKind = (ks: ListedKind[]) => places.filter((p) => ks.includes(p.slot.kind));
+  const present = [...new Set(slots.map((s) => s.kind))];
   const candidates = kinds
     ? [nth(ofKind(kinds))]
     : present.length > 1
@@ -138,7 +144,7 @@ export function resolveReference(question: string, slots: ListedSlot[]): Referen
 
 const KIND_WORD: Record<ListedKind, string> = { lead: "deal", quote: "quote", contact: "customer", vehicle: "vehicle", jobcard: "job card" };
 const line = ({ place, slot }: { place: number; slot: ListedSlot }) =>
-  slot ? `#${place} ${KIND_WORD[slot.kind]} ${slot.label} (id ${slot.id})` : `#${place} (no longer available to this person)`;
+  isGone(slot) ? `#${place} (no longer available to this person)` : `#${place} ${KIND_WORD[slot.kind]} ${slot.label} (id ${slot.id})`;
 
 /** What DAX is told about this question's reference, if it has one. */
 export function referenceLine(ref: Reference, count: number): string {
@@ -146,7 +152,7 @@ export function referenceLine(ref: Reference, count: number): string {
   if (!matches.length) return `In the question, "${phrase}" points past the end of that list (it had ${count}). Say so and ask which one they mean.`;
   if (matches.length > 1) return `In the question, "${phrase}" could be ${matches.map(line).join(" or ")}. Ask ONE short question naming them; do not guess.`;
   const [m] = matches;
-  if (!m.slot) return `In the question, "${phrase}" is #${m.place}, which this person can no longer open (reassigned, deleted or outside their access). Tell them so; never act on it and never swap in another record.`;
+  if (isGone(m.slot)) return `In the question, "${phrase}" is #${m.place}, which this person can no longer open (reassigned, deleted or outside their access). Tell them so; never act on it and never swap in another record.`;
   return `In the question, "${phrase}" is ${line(m)}.`;
 }
 

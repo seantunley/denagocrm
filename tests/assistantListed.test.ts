@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { MAX_LISTED, listedBlock, listedRecords, referenceLine, resolveReference, splitListed, type ListedSlot } from "../src/lib/assistantListedRules";
+import { MAX_LISTED, isGone, listedBlock, listedRecords, referenceLine, resolveReference, splitListed, type ListedSlot } from "../src/lib/assistantListedRules";
 import { conversationBlock } from "../src/lib/crmAssistantPlan";
 
 // Five quotes as find_quotes returns them (newest first) — the answer lists them in ANOTHER order.
@@ -60,9 +60,10 @@ test("saved state: the list travels apart from working memory; garbage is droppe
 });
 
 const slots: ListedSlot[] = listedRecords(fiveAnswer, [quotes]);
+const idOf = (slot: ListedSlot) => (isGone(slot) ? null : slot.id);
 
 test("ordinals: plain places resolve to the record at that place", () => {
-  const at = (q: string) => resolveReference(q, slots)?.matches.map((m) => m.slot?.id);
+  const at = (q: string) => resolveReference(q, slots)?.matches.map((m) => idOf(m.slot));
   assert.deepEqual(at("draft a WhatsApp for the fourth one"), ["q1032"]);
   assert.deepEqual(at("Draft a WhatsApp for the 4th quote please"), ["q1032"]);
   assert.deepEqual(at("what about the last one?"), ["q1029"]);
@@ -95,18 +96,31 @@ test("ambiguity: 'one' over deals AND quotes may mean either — both named, ONE
   assert.deepEqual(ref.matches.map((m) => m.place), [2, 3, 4]);
   assert.match(referenceLine(ref, 4), /Ask ONE short question naming them; do not guess/);
   // A noun settles it: the second QUOTE is Donovan's.
-  assert.deepEqual(resolveReference("the second quote", mixed)!.matches.map((m) => m.slot?.id), ["q2"]);
-  assert.deepEqual(resolveReference("the first deal", mixed)!.matches.map((m) => m.slot?.id), ["L1"]);
+  assert.deepEqual(resolveReference("the second quote", mixed)!.matches.map((m) => idOf(m.slot)), ["q2"]);
+  assert.deepEqual(resolveReference("the first deal", mixed)!.matches.map((m) => idOf(m.slot)), ["L1"]);
+});
+
+test("review of #947: a first quote they lost is still the first quote — never swapped for the second", () => {
+  // DAX listed Q-100 then Q-200; Q-100 has since gone out of their reach.
+  const now: ListedSlot[] = [{ kind: "quote", gone: true }, { kind: "quote", id: "q200", label: "Q-200 · Anna Smith" }];
+  const first = resolveReference("send the first quote again", now)!;
+  assert.deepEqual(first.matches, [{ place: 1, slot: { kind: "quote", gone: true } }]);
+  assert.match(referenceLine(first, 2), /can no longer open .* never act on it and never swap in another record/);
+  assert.deepEqual(resolveReference("the second quote", now)!.matches.map((m) => idOf(m.slot)), ["q200"]);
+  // Among deals and quotes: a lost deal still counts as the first deal.
+  const mixed: ListedSlot[] = [{ kind: "lead", gone: true }, { kind: "quote", id: "q1", label: "Q-1" }, { kind: "lead", id: "L2", label: "Donovan" }];
+  assert.deepEqual(resolveReference("the first deal", mixed)!.matches.map((m) => m.place), [1]);
+  assert.deepEqual(resolveReference("the second deal", mixed)!.matches.map((m) => idOf(m.slot)), ["L2"]);
 });
 
 test("restricted rep: a record they lost since keeps its place, empty — never acted on, never renumbered", () => {
-  // listedNow (assistantListed) returned null at #4: Donovan's deal was reassigned away from this rep.
-  const now: ListedSlot[] = slots.map((s, i) => (i === 3 ? null : s));
+  // listedNow (assistantListed) emptied #4: Donovan's deal was reassigned away from this rep.
+  const now: ListedSlot[] = slots.map((s, i) => (i === 3 ? { kind: s.kind, gone: true as const } : s));
   const fourth = resolveReference("draft a WhatsApp for the fourth one", now)!;
-  assert.deepEqual(fourth.matches, [{ place: 4, slot: null }]);
+  assert.deepEqual(fourth.matches, [{ place: 4, slot: { kind: "quote", gone: true } }]);
   assert.match(referenceLine(fourth, 5), /can no longer open .* never act on it and never swap in another record/);
   // The fifth is still the fifth.
-  assert.equal(resolveReference("the fifth one", now)!.matches[0].slot?.id, "q1029");
+  assert.equal(idOf(resolveReference("the fifth one", now)!.matches[0].slot), "q1029");
   // The block never names the lost record.
   const block = listedBlock(now, "draft a WhatsApp for the fourth one");
   assert.doesNotMatch(block, /Donovan|q1032/);
