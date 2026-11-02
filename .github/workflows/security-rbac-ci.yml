@@ -368,7 +368,8 @@ jobs:
         # payment kept but not counted; a trashed quote's figures only for all-quote access; no cross-workspace FK.
         run: npm run test:quote-payments
 
-      - name: QR codes -- a QR never takes over or deletes an ordinary chatbot route
+      - name: QR codes -- a QR never takes over or deletes an ordinary chatbot route; new flows start as drafts
+        # Review of #955: in an empty workspace the QR starter and a blank flow are created as drafts, nothing published.
         # Review of #948, the real actions as the owner: a QR on an ordinary route's message is refused and that route
         # is untouched; a QR's own route is deleted with it and nothing else; an ordinary route on a QR's message is
         # refused; deleting a QR's route from the routing table removes its QR entry, freeing the name.

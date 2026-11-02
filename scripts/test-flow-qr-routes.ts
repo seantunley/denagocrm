@@ -15,7 +15,7 @@
  * SAFETY: refuses to run outside NODE_ENV=test on a *_test database, and removes what it creates.
  */
 import { basePrisma } from "../src/lib/db";
-import { addFlowQr, addFlowRoute, deleteFlowQr, deleteFlowRoute } from "../src/app/actions/flow";
+import { addFlowQr, addFlowRoute, createFlow, deleteFlowQr, deleteFlowRoute } from "../src/app/actions/flow";
 import { FLOW_QR_KEY, parseQrCodes, qrPattern } from "../src/lib/flowQr";
 import { getSetting } from "../src/lib/settings";
 import { seedTwoTenants, teardown } from "./harness/seed";
@@ -59,6 +59,22 @@ async function main() {
   const qrList = async () => parseQrCodes(await owner(() => getSetting(FLOW_QR_KEY)));
 
   try {
+    // Review of #955: in a workspace with no flows, createFlow used to publish the first one at once — so the QR
+    // starter (two files still to choose) failed after its row was written, and a blank flow went live.
+    console.log("\nnew flows in an empty workspace");
+    await basePrisma.botFlow.deleteMany({ where: { tenantId: A } }); // the harness seeds one draft; this case needs none
+    check("the workspace starts with no flows", (await basePrisma.botFlow.count({ where: { tenantId: A } })) === 0);
+    const redirected = (error: unknown) => String((error as { digest?: string } | null)?.digest ?? "").startsWith("NEXT_REDIRECT");
+    for (const [templateId, label] of [["qr_brochure", "QR starter"], ["blank", "Blank"]] as const) {
+      const made = await settled(owner(() => createFlow(form({ templateId, name: `${label} ${SFX}`, channel: "whatsapp" }))));
+      const row = await basePrisma.botFlow.findFirst({ where: { tenantId: A, name: `${label} ${SFX}` } });
+      if (row) flows.push(row.id);
+      check(`${label}: created and opened in the editor — no publish error`, Boolean(row) && (made.threw === null || redirected(made.threw)), JSON.stringify({ threw: String(made.threw), row: row?.id }));
+      const versions = row ? await basePrisma.botFlowVersion.count({ where: { tenantId: A, flowId: row.id } }) : -1;
+      check(`${label}: a draft — not live, never published`, row?.active === false && versions === 0, JSON.stringify({ active: row?.active, versions }));
+    }
+    check("nothing is published for the workspace", (await basePrisma.botFlowPublication.count({ where: { tenantId: A } })) === 0);
+
     const sales = await makeFlow("Sales");
     const brochure = await makeFlow("Brochure");
     const taken = "Hi Denago, I'd like a price";
@@ -101,6 +117,7 @@ async function main() {
     const again = await settled(owner(() => addFlowQr(form({ name: "Flyer", message: own, flowId: brochure.flowId }))));
     check("…so its name can be used again", Boolean(again.value && "success" in again.value), JSON.stringify(again));
   } finally {
+    await basePrisma.botFlowPublication.deleteMany({ where: { tenantId: A } }).catch(() => 0);
     await basePrisma.botFlowRoute.deleteMany({ where: { tenantId: A, flowId: { in: flows } } }).catch(() => 0);
     await basePrisma.botFlowVersion.deleteMany({ where: { tenantId: A, flowId: { in: flows } } }).catch(() => 0);
     await basePrisma.botFlow.deleteMany({ where: { tenantId: A, id: { in: flows } } }).catch(() => 0);

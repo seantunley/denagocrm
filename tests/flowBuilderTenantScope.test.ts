@@ -281,7 +281,9 @@ test("the seed decision and the list agree, or a new workspace never gets its ow
   // while count() saw the founding tenant's flows and refused to seed it one.
   assert.match(list, /botFlow\.count\(\{ where: scope \}\)/);
   assert.match(list, /botFlow\.findMany\(\{ where: scope/);
-  assert.match(src("src/app/actions/flow.ts"), /botFlow\.count\(\{ where: scope \}\)/);
+  // createFlow no longer counts flows (review of #955: every new flow is a draft), so it has no count to scope;
+  // any count it takes again must be the scoped one.
+  assert.doesNotMatch(src("src/app/actions/flow.ts"), /botFlow\.count\((?!\{ where: scope \}\))/);
 
   for (const page of ["[id]/page.tsx", "[id]/test/page.tsx", "[id]/blocks/page.tsx", "[id]/versions/page.tsx"]) {
     assert.match(

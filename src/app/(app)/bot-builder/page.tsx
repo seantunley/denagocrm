@@ -112,7 +112,7 @@ export default async function BotBuilderPage() {
           { label: "Drafts / changes", value: pendingDrafts, icon: Pencil },
           { label: "Channels checked", value: channels.length, icon: GitBranch },
         ]}
-        actions={<div className="flex flex-wrap gap-2"><Link href="/bot-builder/routes" className="btn-secondary btn-sm"><Route className="size-4" />Routing</Link><form action={createFlow} className="flex gap-2"><input type="hidden" name="templateId" value="general" /><input type="hidden" name="name" value="New flow" /><select name="channel" className="input h-9 w-32 text-xs" aria-label="New flow channel">{FLOW_CHANNELS.map((channel) => <option key={channel} value={channel}>{channelLabel[channel]}</option>)}</select><button className="btn-primary btn-sm"><Plus className="size-4" />Blank-ish flow</button></form></div>}
+        actions={<div className="flex flex-wrap gap-2"><Link href="/bot-builder/routes" className="btn-secondary btn-sm"><Route className="size-4" />Routing</Link><form action={createFlow} className="flex gap-2"><input type="hidden" name="templateId" value="blank" /><input type="hidden" name="name" value="New flow" /><select name="channel" className="input h-9 w-32 text-xs" aria-label="New flow channel">{FLOW_CHANNELS.map((channel) => <option key={channel} value={channel}>{channelLabel[channel]}</option>)}</select><button className="btn-primary btn-sm"><Plus className="size-4" />Blank flow</button></form></div>}
       />
 
       <Surface className="p-5">
@@ -201,7 +201,17 @@ export default async function BotBuilderPage() {
                     onConfirm={setFlowOffline.bind(null, f.id)}
                   />
                 )}
-                {!f.active && <form action={deleteFlow.bind(null, f.id)}><button className="btn-secondary btn-sm text-red-400" aria-label={`Delete ${f.name}`}><Trash2 className="size-3.5" /></button></form>}
+                {!f.active && (
+                  <ConfirmActionDialog
+                    trigger={<button type="button" className="btn-secondary btn-sm text-red-400" aria-label={`Delete ${f.name}`}><Trash2 className="size-3.5" /></button>}
+                    title={`Delete “${f.name}”?`}
+                    description="The flow and its draft are deleted for good. A flow that has ever been published is kept as history and can't be deleted."
+                    confirmLabel="Delete flow"
+                    destructive
+                    success="Flow deleted"
+                    onConfirm={deleteFlow.bind(null, f.id)}
+                  />
+                )}
               </div>
             </Surface>
           );
