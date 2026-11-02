@@ -47,7 +47,18 @@ export default async function FlowRoutesPage() {
   }));
 
   // QR codes (lib/flowQr): each is a WhatsApp keyword route with a name; its image encodes wa.me + the typed message.
-  const [business, savedQrs, company] = await Promise.all([businessWhatsApp(tenantId), getSetting(FLOW_QR_KEY), getCompanyProfile()]);
+  // A QR code only replies when the chatbot and its guided flows are on (flowRun.isFlowEnabled) — said here, not
+  // discovered by scanning one and getting nothing (Sean, 2026-11-02). And a QR's flow that is ALSO the live WhatsApp
+  // flow answers every customer once the chatbot is on — said on its card.
+  const [business, savedQrs, company, botOn, flowsOn, livePublication] = await Promise.all([
+    businessWhatsApp(tenantId),
+    getSetting(FLOW_QR_KEY),
+    getCompanyProfile(),
+    getSetting("BOT_ENABLED"),
+    getSetting("BOT_FLOW_ENABLED"),
+    prisma.botFlowPublication.findFirst({ where: { tenantId, channel: "whatsapp" }, select: { flowId: true } }),
+  ]);
+  const chatbotOff = botOn !== "true" || flowsOn !== "true";
   const businessName = company.name || "there";
   const whatsappFlows = flows.filter((flow) => flow.channel === "whatsapp" && publishedKeys.has(`whatsapp:${flow.id}`));
   const routeById = new Map(routes.map((route) => [route.id, route]));
@@ -63,7 +74,7 @@ export default async function FlowRoutesPage() {
               QRCode.toString(link, { type: "svg", margin: 1 }),
               prisma.contact.count({ where: { tenantId, source: qrSource(qr.name) } }),
             ]);
-            return { ...qr, enabled: route.enabled, flowName: flowNames.get(route.flowId) ?? "Deleted flow", png, svg: `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`, people };
+            return { ...qr, enabled: route.enabled, isLiveFlow: route.flowId === livePublication?.flowId, flowName: flowNames.get(route.flowId) ?? "Deleted flow", png, svg: `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`, people };
           }),
       )
     : [];
@@ -121,6 +132,11 @@ export default async function FlowRoutesPage() {
         <p className="mt-1 text-xs text-muted-foreground">Print one on a poster, flyer or stand. The flow it starts can send your brochure and price list (<em>Send a document</em>) and your contact card (<em>Send contact card</em>). A new customer who arrives through a QR is saved with source “QR code — its name”.</p>
         {!business ? <p className="mt-3 text-sm text-amber-300">Connect your WhatsApp number (Settings → Integrations) before making a QR code.</p> : (
           <>
+            {chatbotOff && (
+              <p role="status" className="mt-3 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm text-amber-200">
+                The chatbot is switched off, so a scanned QR code reaches your inbox but nothing replies. Switch on the <strong>Assistant</strong> and <strong>Guided flow</strong> on the <Link href="/chatbot" className="underline">Chatbot page</Link>.
+              </p>
+            )}
             {qrs.length > 0 && (
               <div className="mt-3 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
                 {qrs.map((qr) => (
@@ -130,6 +146,9 @@ export default async function FlowRoutesPage() {
                     <img src={qr.png} alt={`QR code: ${qr.name}`} className="mx-auto mt-2 size-40 rounded bg-white p-1" />
                     <p className="mt-2 text-xs text-muted-foreground">Types: <span className="text-foreground">“{qr.message}”</span></p>
                     <p className="text-xs text-muted-foreground">Starts: {qr.flowName} · <strong className="text-foreground">{qr.people}</strong> new {qr.people === 1 ? "customer" : "customers"} so far</p>
+                    {qr.isLiveFlow && (
+                      <p className="mt-1 text-xs text-amber-300">“{qr.flowName}” is also your live WhatsApp flow, so with the chatbot on it answers <strong>every</strong> customer message. To keep it for this QR code only, use <strong>Take offline</strong> on it in the Flow builder — the QR code keeps working.</p>
+                    )}
                     <div className="mt-2 flex flex-wrap gap-2">
                       <a className="btn-secondary btn-sm" href={qr.png} download={`QR ${qr.name}.png`}>Download PNG</a>
                       <a className="btn-secondary btn-sm" href={qr.svg} download={`QR ${qr.name}.svg`}>Download for print (SVG)</a>
