@@ -29,6 +29,8 @@ import {
   Sparkles,
   Upload,
   Undo2,
+  FileText,
+  Contact,
   Workflow,
   Wrench,
   X,
@@ -93,6 +95,8 @@ const TYPE_META: Record<FlowNode["type"], { icon: LucideIcon; label: string; ton
   capture: { icon: FileQuestion, label: "Ask & save", tone: "border-cyan-400/40", header: "bg-cyan-500/15 text-cyan-200", handle: "#22d3ee", description: "Ask a question and store the answer" },
   captureFile: { icon: FileUp, label: "Get a file", tone: "border-cyan-400/40", header: "bg-cyan-500/15 text-cyan-200", handle: "#22d3ee", description: "Capture an uploaded file" },
   image: { icon: ImageIcon, label: "Send image", tone: "border-violet-400/40", header: "bg-violet-500/15 text-violet-200", handle: "#a78bfa", description: "Send an image with an optional caption" },
+  document: { icon: FileText, label: "Send a document", tone: "border-violet-400/40", header: "bg-violet-500/15 text-violet-200", handle: "#a78bfa", description: "Send one of your files — a brochure, a price list" },
+  contactCard: { icon: Contact, label: "Send contact card", tone: "border-violet-400/40", header: "bg-violet-500/15 text-violet-200", handle: "#a78bfa", description: "Send your business (or a staff member's) contact card" },
   answer: { icon: Sparkles, label: "Answer", tone: "border-blue-400/40", header: "bg-blue-500/15 text-blue-200", handle: "#60a5fa", description: "Send a static or product-backed answer" },
   knowledge: { icon: Sparkles, label: "Knowledge answer", tone: "border-blue-400/40", header: "bg-blue-500/15 text-blue-200", handle: "#60a5fa", description: "Answer from approved Flowbot knowledge" },
   set: { icon: FileQuestion, label: "Set variable", tone: "border-fuchsia-400/40", header: "bg-fuchsia-500/15 text-fuchsia-200", handle: "#e879f9", description: "Set or update flow data" },
@@ -111,7 +115,7 @@ const TYPE_META: Record<FlowNode["type"], { icon: LucideIcon; label: string; ton
 };
 
 const NODE_GROUPS: { label: string; types: FlowNode["type"][] }[] = [
-  { label: "Messages", types: ["message", "image", "answer", "knowledge", "choice"] },
+  { label: "Messages", types: ["message", "image", "document", "contactCard", "answer", "knowledge", "choice"] },
   { label: "Customer input", types: ["capture", "captureFile"] },
   { label: "Logic & data", types: ["condition", "switch", "set", "delay"] },
   { label: "CRM & automation", types: ["booking", "slots", "journey", "http", "subflow"] },
@@ -123,6 +127,8 @@ function summary(n: FlowNode): string {
   if (n.type === "capture") return `“${n.text.slice(0, 40)}” → {{${n.variable}}}`;
   if (n.type === "captureFile") return `Ask for a file → {{${n.variable}}}`;
   if (n.type === "image") return n.url ? "Sends an image" : "(no image set)";
+  if (n.type === "document") return n.documentId ? `Sends ${n.fileName ?? "a document"}` : "(no file chosen)";
+  if (n.type === "contactCard") return n.staffUserId ? "Sends a staff member's contact card" : "Sends your business contact card";
   if (n.type === "answer") return n.answerSource ? `Send ${n.answerSource}` : (n.text ?? "").slice(0, 50);
   if (n.type === "slots") return n.action === "reschedule" ? "Moves an existing booking to a real open slot" : "Offers real open workshop slots";
   if (n.type === "booking") {
@@ -233,6 +239,8 @@ function blankNode(type: FlowNode["type"], id: string): FlowNode {
     case "capture": return { id, type, text: "What's your name?", variable: "name" };
     case "captureFile": return { id, type, text: "Please send a photo", variable: "photo" };
     case "image": return { id, type, url: "" };
+    case "document": return { id, type, documentId: "" };
+    case "contactCard": return { id, type };
     case "answer": return { id, type, answerSource: "pricelist" };
     case "knowledge": return { id, type, query: "", noMatchText: "I couldn't find an approved answer for that." };
     case "set": return { id, type, variable: "status", value: "new" };
@@ -251,7 +259,7 @@ function blankNode(type: FlowNode["type"], id: string): FlowNode {
   }
 }
 
-export default function FlowBuilder({ flowId, initial, journeys = [], flows = [], updatedAt, channels, businessName }: { flowId: string; initial: FlowData; journeys?: FlowJourneyOption[]; flows?: FlowOptionRef[]; updatedAt: string; channels: FlowChannel[]; businessName: string }) {
+export default function FlowBuilder({ flowId, initial, journeys = [], flows = [], updatedAt, channels, businessName, documents = [], staff = [] }: { flowId: string; initial: FlowData; journeys?: FlowJourneyOption[]; flows?: FlowOptionRef[]; updatedAt: string; channels: FlowChannel[]; businessName: string; documents?: { id: string; name: string }[]; staff?: { id: string; name: string }[] }) {
   const router = useRouter();
   const [start, setStart] = useState(initial.start);
   const [rfNodes, setRfNodes, applyNodesChange] = useNodesState<Node<RFData>>(
@@ -820,7 +828,7 @@ export default function FlowBuilder({ flowId, initial, journeys = [], flows = []
               <aside className="w-80 shrink-0 overflow-y-auto border-l border-white/[0.08] bg-[#111614] max-lg:fixed max-lg:inset-x-0 max-lg:bottom-0 max-lg:z-[81] max-lg:max-h-[78dvh] max-lg:w-auto max-lg:rounded-t-3xl max-lg:border-t max-lg:shadow-[0_-24px_70px_rgba(0,0,0,.55)]">
                 <div className="sticky top-0 z-10 flex items-center justify-between border-b border-white/[0.08] bg-[#111614]/95 px-4 py-3 backdrop-blur"><div><p className="text-sm font-semibold text-white">Inspector</p><p className="text-xs text-slate-400">Configure the selected node</p></div><button type="button" onClick={() => setInspectorOpen(false)} className="grid size-10 place-items-center rounded-lg text-slate-400 hover:bg-white/5 hover:text-white"><X className="size-4" /><span className="sr-only">Close inspector</span></button></div>
                 <div className="space-y-5 p-4 pb-[max(1rem,env(safe-area-inset-bottom))]">
-                  {!selected ? <p className="text-sm leading-6 text-slate-400">Select a node to edit it. Drag from a node&apos;s output handle to another node to create a connection.</p> : <><NodeIssues issues={selectedIssues} /><NodePanel key={selected.id} node={selected} isStart={selected.id === start} nodeOptions={nodeOptions.filter((option) => option.id !== selected.id)} variables={knownVariables} journeys={journeys} flows={flows} onChange={(next) => patch(selected.id, () => next)} onDelete={() => removeNode(selected.id)} onDuplicate={() => duplicateNode(selected.id)} onMakeStart={() => markStart(selected.id)} /></>}
+                  {!selected ? <p className="text-sm leading-6 text-slate-400">Select a node to edit it. Drag from a node&apos;s output handle to another node to create a connection.</p> : <><NodeIssues issues={selectedIssues} /><NodePanel key={selected.id} node={selected} isStart={selected.id === start} nodeOptions={nodeOptions.filter((option) => option.id !== selected.id)} variables={knownVariables} journeys={journeys} flows={flows} documents={documents} staff={staff} onChange={(next) => patch(selected.id, () => next)} onDelete={() => removeNode(selected.id)} onDuplicate={() => duplicateNode(selected.id)} onMakeStart={() => markStart(selected.id)} /></>}
                   <VariablesPanel variables={knownVariables} />
                 </div>
               </aside>
@@ -873,7 +881,7 @@ function VariablesPanel({ variables }: { variables: string[] }) {
   );
 }
 
-function NodePanel({ node, isStart, nodeOptions, variables, journeys, flows, onChange, onDelete, onDuplicate, onMakeStart }: { node: FlowNode; isStart: boolean; nodeOptions: { id: string; label: string }[]; variables: string[]; journeys: FlowJourneyOption[]; flows: FlowOptionRef[]; onChange: (n: FlowNode) => void; onDelete: () => void; onDuplicate: () => void; onMakeStart: () => void }) {
+function NodePanel({ node, isStart, nodeOptions, variables, journeys, flows, documents = [], staff = [], onChange, onDelete, onDuplicate, onMakeStart }: { node: FlowNode; isStart: boolean; nodeOptions: { id: string; label: string }[]; variables: string[]; journeys: FlowJourneyOption[]; flows: FlowOptionRef[]; documents?: { id: string; name: string }[]; staff?: { id: string; name: string }[]; onChange: (n: FlowNode) => void; onDelete: () => void; onDuplicate: () => void; onMakeStart: () => void }) {
   const meta = TYPE_META[node.type];
   const Icon = meta.icon;
   return (
@@ -906,7 +914,9 @@ function NodePanel({ node, isStart, nodeOptions, variables, journeys, flows, onC
       {node.type === "subflow" && <><div><label className="label">Published flow</label><select className="input" value={node.flowId} onChange={(e) => onChange({ ...node, flowId: e.target.value })}><option value="">Choose a reusable flow…</option>{flows.map((flow) => <option key={flow.id} value={flow.id}>{flow.name}</option>)}</select></div><p className="text-xs text-slate-500">Runs the latest PUBLISHED version of the selected flow. Synchronous only: a child that stops to wait for customer input follows the failure route instead.</p></>}
       {node.type === "choice" && <div className="space-y-2"><div><label className="label">Prompt</label><textarea className="input" rows={2} value={node.text} onChange={(e) => onChange({ ...node, text: e.target.value })} /></div><label className="label">Options</label>{node.options.map((o, i) => <div key={o.id} className="space-y-1.5 rounded-lg border border-slate-800 p-2"><div className="flex gap-1.5"><input className="input btn-sm flex-1" value={o.label} onChange={(e) => onChange({ ...node, options: node.options.map((x) => x.id === o.id ? { ...x, label: e.target.value } : x) })} /><button onClick={() => onChange({ ...node, options: node.options.filter((x) => x.id !== o.id) })} className="px-1 text-muted-foreground hover:text-red-400"><X className="size-4" /><span className="sr-only">Remove option</span></button></div><TargetPicker nodeOptions={nodeOptions} value={o.next} onPick={(v) => onChange({ ...node, options: node.options.map((x) => x.id === o.id ? { ...x, next: v } : x) })} />{i === 2 && node.options.length > 3 && <p className="text-[10px] text-amber-400">WhatsApp shows &gt;3 options as a list.</p>}</div>)}<button onClick={() => onChange({ ...node, options: [...node.options, { id: `o${Date.now().toString(36)}`, label: `Option ${node.options.length + 1}` }] })} className="btn-secondary btn-sm w-full">+ Add option</button></div>}
 
-      {(["message", "answer", "capture", "captureFile", "image", "set", "http", "knowledge", "extract", "delay", "subflow", "booking", "slots", "journey"] as FlowNode["type"][]).includes(node.type) && <div><label className="label">Then go to</label><TargetPicker nodeOptions={nodeOptions} value={(node as { next?: string }).next} onPick={(v) => onChange({ ...node, next: v } as FlowNode)} /></div>}
+      {node.type === "document" && <><div><label className="label" htmlFor={`doc-${node.id}`}>File to send</label><select id={`doc-${node.id}`} className="input" value={node.documentId} onChange={(e) => { const doc = documents.find((d) => d.id === e.target.value); onChange({ ...node, documentId: e.target.value, ...(doc ? { fileName: doc.name } : { fileName: undefined }) }); }}><option value="">Choose a file…</option>{documents.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}</select></div><div><label className="label" htmlFor={`doc-cap-${node.id}`}>Caption (optional)</label><input id={`doc-cap-${node.id}`} className="input" value={node.caption ?? ""} onChange={(e) => onChange({ ...node, caption: e.target.value || undefined })} placeholder="Here's our brochure, {{name}}" /></div><p className="text-xs text-slate-500">Your own general files only (Documents, not filed on a customer). Upload a brochure or price list under Documents first.</p></>}
+      {node.type === "contactCard" && <><div><label className="label" htmlFor={`card-${node.id}`}>Whose card</label><select id={`card-${node.id}`} className="input" value={node.staffUserId ?? ""} onChange={(e) => onChange({ ...node, staffUserId: e.target.value || undefined })}><option value="">The business (Settings → Company)</option>{staff.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}</select></div><p className="text-xs text-slate-500">On WhatsApp it arrives as a contact they can save in one tap; elsewhere as text.</p></>}
+      {(["message", "answer", "capture", "captureFile", "image", "document", "contactCard", "set", "http", "knowledge", "extract", "delay", "subflow", "booking", "slots", "journey"] as FlowNode["type"][]).includes(node.type) && <div><label className="label">Then go to</label><TargetPicker nodeOptions={nodeOptions} value={(node as { next?: string }).next} onPick={(v) => onChange({ ...node, next: v } as FlowNode)} /></div>}
       {FALLIBLE.has(node.type) && (
         <div className="space-y-2 rounded-lg border border-amber-900/40 bg-amber-950/20 p-2">
           <p className="text-[11px] text-amber-300">This action can fail. Publishing is refused if a failure would continue into a node that tells the customer it worked.</p>

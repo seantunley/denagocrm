@@ -5,7 +5,7 @@ import { isCustomerSigner } from "./signing/quoteMirror";
 import { memoCustomer } from "./signing/customerView";
 import { ownedWriteTenantId } from "./tenantWrite";
 import { stamp } from "./assistantWhy";
-import { getAccessibleLeadIds, type PermissionUser } from "./permissions";
+import { getAccessibleLeadIds, getAccessibleQuoteIds, type PermissionUser } from "./permissions";
 import { LOST_ALIVE_DAYS, LOST_ALIVE_LEGEND, aliveDeals, softLostReason, type AliveSignal } from "./assistantLostAlive";
 
 /**
@@ -22,7 +22,8 @@ const READ = 300;
 
 export async function lostAliveLookup(user: PermissionUser, mine = false): Promise<Output> {
   const since = new Date(Date.now() - LOST_ALIVE_DAYS * DAY_MS);
-  const ids = await getAccessibleLeadIds(user);
+  // Quotes are their own permission: someone who may open a deal but not its quotes learns nothing of them here.
+  const [ids, quoteIds] = await Promise.all([getAccessibleLeadIds(user), getAccessibleQuoteIds(user)]);
   const lost = ids !== null && ids.length === 0 ? [] : await prisma.lead.findMany({
     where: {
       ...(ids === null ? {} : { id: { in: ids } }),
@@ -39,8 +40,8 @@ export async function lostAliveLookup(user: PermissionUser, mine = false): Promi
   const leadIds = soft.map((l) => l.id);
   const contactIds = [...new Set(soft.flatMap((l) => (l.contactId ? [l.contactId] : [])))];
 
-  const quotes = leadIds.length
-    ? await prisma.quote.findMany({ where: { leadId: { in: leadIds }, deletedAt: null }, select: { id: true, number: true, leadId: true, viewedAt: true } })
+  const quotes = leadIds.length && quoteIds?.length !== 0
+    ? await prisma.quote.findMany({ where: { leadId: { in: leadIds }, deletedAt: null, ...(quoteIds === null ? {} : { id: { in: quoteIds } }) }, select: { id: true, number: true, leadId: true, viewedAt: true } })
     : [];
   const [messages, views] = leadIds.length
     ? await Promise.all([

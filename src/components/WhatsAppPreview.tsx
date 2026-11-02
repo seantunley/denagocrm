@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Check, ChevronDown, ImageIcon, List, Scissors } from "lucide-react";
+import { Check, ChevronDown, Contact, FileText, ImageIcon, List, Scissors } from "lucide-react";
 import type { OutMsg } from "@/lib/flow";
 import {
   renderWhatsAppChoice,
@@ -259,6 +259,22 @@ export default function WhatsAppPreview({
                   <ImageIcon className="mr-1.5 size-4" /> image
                 </span>
                 {msg.caption && <span className="whitespace-pre-wrap break-words">{msg.caption}</span>}
+              </Bubble>
+            </div>
+          );
+        }
+
+        if (msg.type === "document" || msg.type === "contact") {
+          // A file bubble / a contact bubble, as WhatsApp shows them.
+          return (
+            <div key={entry.id} className="mb-1.5">
+              <Bubble side="in" time={time}>
+                <span className="flex items-center gap-2 rounded-md px-2 py-2 text-[12px]" style={{ background: "rgba(255,255,255,0.06)" }}>
+                  {msg.type === "document" ? <FileText className="size-4 shrink-0" aria-hidden="true" /> : <Contact className="size-4 shrink-0" aria-hidden="true" />}
+                  <span className="break-words">{msg.type === "document" ? msg.fileName || "Document" : msg.card.name}</span>
+                </span>
+                {msg.type === "document" && msg.caption && <span className="mt-1 block whitespace-pre-wrap break-words">{msg.caption}</span>}
+                {msg.type === "contact" && <span className="mt-1 block text-[11px]" style={{ color: INK.meta }}>Contact card · Save contact</span>}
               </Bubble>
             </div>
           );

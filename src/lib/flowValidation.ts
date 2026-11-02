@@ -4,7 +4,7 @@ export type FlowChannel = "whatsapp" | "messenger" | "instagram" | "telegram";
 export type FlowIssue = { severity: "error" | "warning"; code: string; message: string; nodeId?: string; channel?: FlowChannel };
 
 const NODE_TYPES = new Set([
-  "message", "choice", "capture", "captureFile", "image", "answer",
+  "message", "choice", "capture", "captureFile", "image", "document", "contactCard", "answer",
   "set", "switch", "http", "knowledge", "extract", "delay", "subflow",
   "booking", "slots", "journey", "condition", "ai", "handoff", "end",
 ]);
@@ -13,7 +13,7 @@ const BUILTIN_VARS = new Set([
   "booking_identity", "booking_found", "booking_id", "booking_slot", "booking_summary", "booking_cancelled", "booking_rescheduled",
   "journey_started", "journey_reason", "journey_run_id",
 ]);
-const AUTO_TYPES = new Set<FlowNode["type"]>(["message", "image", "answer", "set", "switch", "http", "knowledge", "extract", "subflow", "booking", "journey", "condition"]);
+const AUTO_TYPES = new Set<FlowNode["type"]>(["message", "image", "document", "contactCard", "answer", "set", "switch", "http", "knowledge", "extract", "subflow", "booking", "journey", "condition"]);
 
 function issue(severity: FlowIssue["severity"], code: string, message: string, nodeId?: string, channel?: FlowChannel): FlowIssue {
   return { severity, code, message, ...(nodeId ? { nodeId } : {}), ...(channel ? { channel } : {}) };
@@ -54,7 +54,7 @@ function allText(node: FlowNode): string[] {
   if (node.type === "message" || node.type === "handoff") values.push(node.text);
   if (node.type === "choice" || node.type === "capture" || node.type === "captureFile" || node.type === "slots") values.push(node.text);
   if (node.type === "slots") values.push(node.noneText);
-  if (node.type === "image") values.push(node.caption);
+  if (node.type === "image" || node.type === "document") values.push(node.caption);
   if (node.type === "answer" || node.type === "booking" || node.type === "journey") values.push(node.text);
   if (node.type === "handoff") values.push(node.reason, node.summary);
   if (node.type === "slots") values.push(node.failureText);
@@ -242,6 +242,15 @@ export function validateFlow(flow: Flow, channels: FlowChannel[] = ["whatsapp"])
     if (node.type === "image") {
       const url = str(node.url); if (!url.trim()) issues.push(issue("error", "image.missing", "Image node has no image URL.", id));
       if (/\.private\.blob\.vercel-storage\.com/i.test(url)) issues.push(issue("error", "image.private_url", "Messaging providers cannot fetch a private Blob URL directly. Upload/provider media handling is required for this image.", id));
+    }
+    if (node.type === "document") {
+      // Which file is checked against the workspace at save and publish (flowDocumentIssues);
+      // this is the part that needs no database.
+      if (!str(node.documentId).trim()) issues.push(issue("error", "document.missing", "Send a document needs a file chosen.", id));
+      for (const channel of channels) {
+        if (channel === "instagram" || channel === "telegram") issues.push(issue("warning", "channel.document_fallback", `${channel === "instagram" ? "Instagram" : "Telegram"} can't receive files from the chatbot, so this sends the file's name with "the team will send it to you" instead.`, id, channel));
+      }
+      if (str(node.caption).length > 1024) issues.push(issue("error", "document.caption", "WhatsApp document captions must be 1,024 characters or fewer.", id));
     }
     if (node.type === "booking" && node.action && !["service", "demo", "lead", "lookup", "cancel"].includes(str(node.action))) issues.push(issue("error", "booking.action", "CRM/booking action is not supported by the runtime.", id));
     if (node.type === "booking" && node.action === "cancel" && !hasBookingLookup) issues.push(issue("warning", "booking.lookup_missing", "Cancel booking normally needs a Booking lookup node first so {{booking_id}} belongs to this customer.", id));

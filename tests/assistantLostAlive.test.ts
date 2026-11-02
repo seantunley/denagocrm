@@ -57,6 +57,9 @@ test("lost_alive is a lookup DAX can run, quickly from the plain question", () =
 test("the lookup reads only deals the person can open, and only the customer's own quote views", () => {
   const lookup = code("src/lib/assistantLostAliveLookup.ts");
   assert.match(lookup, /getAccessibleLeadIds\(user\)/);
+  // Review of #950: quotes are a separate permission — only quotes the person may open are read.
+  assert.match(lookup, /getAccessibleQuoteIds\(user\)/);
+  assert.match(lookup, /\{ id: \{ in: quoteIds \} \}/);
   assert.match(lookup, /status: "lost"/);
   assert.match(lookup, /direction: "inbound"/);
   assert.match(lookup, /isCustomerSigner/);

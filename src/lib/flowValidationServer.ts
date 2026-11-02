@@ -2,6 +2,7 @@ import { getSetting } from "./settings";
 import { prisma } from "./db";
 import { builderTenantId, journeyScope } from "./flowScope";
 import type { Flow } from "./flow";
+import { flowDocumentIssues } from "./flowDocuments";
 import { flowErrors, publishSeverity, validateFlow, type FlowChannel, type FlowIssue } from "./flowValidation";
 
 export async function enabledFlowChannels(): Promise<FlowChannel[]> {
@@ -53,6 +54,19 @@ export async function validateFlowForEnabledChannels(flow: Flow): Promise<FlowIs
     for (const node of subflowNodes) {
       if (node.type === "subflow" && node.flowId && !published.has(node.flowId)) {
         issues.push({ severity: "error", code: "subflow.unavailable", message: "The selected subflow has not been published in this workspace.", nodeId: node.id });
+      }
+    }
+  }
+
+  // Files and staff cards are this workspace's own, checked against it — never by id alone.
+  const tenantId = await builderTenantId();
+  issues.push(...(await flowDocumentIssues(flow, tenantId)).filter((item) => item.code !== "document.missing"));
+  const staffIds = [...new Set(Object.values(flow.nodes).flatMap((node) => (node.type === "contactCard" && node.staffUserId ? [node.staffUserId] : [])))];
+  if (staffIds.length) {
+    const members = new Set((await prisma.tenantMember.findMany({ where: { tenantId, userId: { in: staffIds } }, select: { userId: true } })).map((member) => member.userId));
+    for (const node of Object.values(flow.nodes)) {
+      if (node.type === "contactCard" && node.staffUserId && !members.has(node.staffUserId)) {
+        issues.push({ severity: "error", code: "contact_card.staff_unavailable", message: "The chosen staff member is no longer in this workspace — pick another or send the business card.", nodeId: node.id });
       }
     }
   }

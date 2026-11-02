@@ -24,7 +24,9 @@ import {
 import { deleteCommunicationsAndReconcile } from "./conversations";
 import { attachmentUrlForDelivery } from "./outboundMedia";
 import type { OutMsg } from "./flow";
-import { sendWhatsAppButtons, sendWhatsAppImage, sendWhatsAppList, sendWhatsAppText } from "./whatsapp";
+import { sendWhatsAppButtons, sendWhatsAppContact, sendWhatsAppDocumentLink, sendWhatsAppImage, sendWhatsAppList, sendWhatsAppText } from "./whatsapp";
+import { contactCardText, documentFallbackText, documentLabel } from "./flowMedia";
+import { resolveFlowDocument } from "./flowDocuments";
 import { sendDirectAttachment, sendDirectMessage, sendDirectQuickReplies } from "./messenger";
 import { tgSend, tgSendPhoto } from "./telegramTransport";
 import { logError } from "./errorLog";
@@ -657,12 +659,18 @@ export async function deliveryStateForMessages(
 /**
  * What an outbox row may carry.
  *
- * A superset of the flow's `OutMsg`, and deliberately a separate type rather than
- * a widened one. A staff reply can attach a voice note, a video or a PDF —
- * `sendDirectAttachment` has always accepted all four kinds — while a flow can
- * only ever produce text, an image or a choice. Adding `attachment` to `OutMsg`
- * would oblige every flow node, simulator and validator to handle a case no flow
- * can emit, to describe a capability that belongs to the queue.
+ * A superset of the flow's `OutMsg`. A staff reply can attach a voice note, a
+ * video or a PDF — `sendDirectAttachment` has always accepted all four kinds.
+ *
+ * Flows were kept to text, an image or a choice until the owner decided (QR code
+ * → brochure, price list and contact card on WhatsApp) that a flow SHOULD send
+ * documents and contact cards. Those are flow kinds now — `document` and
+ * `contact` in `OutMsg` — and every node, simulator, validator, analytics label
+ * and channel adapter handles them. A flow document is NOT a staff `attachment`:
+ * it stores the workspace Document's id, and the file is resolved, tenant-checked
+ * and given a fresh signed URL per attempt in `sendFlowDocument`, so a deleted or
+ * replaced brochure is noticed at send time and never reaches Meta as a stale
+ * ref. `attachment` stays staff-only.
  */
 export type AttachmentKind = "image" | "audio" | "video" | "file";
 export type OutboxPayload =
@@ -711,6 +719,27 @@ function asOutMsg(payload: unknown): OutboxPayload | null {
   }
   if (value.type === "text" && typeof value.text === "string") return { type: "text", text: value.text };
   if (value.type === "image" && typeof value.url === "string") return { type: "image", url: value.url, caption: typeof value.caption === "string" ? value.caption : undefined };
+  if (value.type === "document" && typeof value.documentId === "string" && value.documentId) {
+    return {
+      type: "document",
+      documentId: value.documentId,
+      ...(typeof value.fileName === "string" ? { fileName: value.fileName } : {}),
+      ...(typeof value.caption === "string" ? { caption: value.caption } : {}),
+    };
+  }
+  if (value.type === "contact" && value.card && typeof value.card === "object") {
+    const card = value.card as Record<string, unknown>;
+    if (typeof card.name !== "string" || !card.name) return null;
+    const optional = (key: string) => (typeof card[key] === "string" && card[key] ? { [key]: card[key] as string } : {});
+    return {
+      type: "contact",
+      card: {
+        name: card.name,
+        phones: Array.isArray(card.phones) ? card.phones.filter((phone): phone is string => typeof phone === "string") : [],
+        ...optional("organization"), ...optional("title"), ...optional("email"), ...optional("website"), ...optional("address"),
+      },
+    };
+  }
   if (value.type === "choice" && typeof value.text === "string" && Array.isArray(value.options)) {
     const options = value.options
       .filter((option): option is Record<string, unknown> => Boolean(option) && typeof option === "object")
@@ -777,24 +806,60 @@ async function sendProvider(row: OutboxRow): Promise<{ ok: boolean; error?: stri
     }
     return sendDirectAttachment(row.channel, row.key, { type: message.kind, url });
   }
+  if (message.type === "document") return sendFlowDocument(row, message);
+  // A contact card is a real contacts message on WhatsApp and formatted text elsewhere.
+  if (message.type === "contact" && row.channel === "whatsapp") return sendWhatsAppContact(row.key, message.card);
+  const outgoing = message.type === "contact" ? { type: "text" as const, text: contactCardText(message.card) } : message;
   if (row.channel === "whatsapp") {
-    if (message.type === "text") return sendWhatsAppText(row.key, message.text);
-    if (message.type === "image") return sendWhatsAppImage(row.key, message.url, message.caption);
-    return message.options.length <= 3
-      ? sendWhatsAppButtons(row.key, message.text, message.options.map((o) => ({ id: o.id, title: o.label })))
-      : sendWhatsAppList(row.key, message.text, "Choose", message.options.map((o) => ({ id: o.id, title: o.label, description: o.description })));
+    if (outgoing.type === "text") return sendWhatsAppText(row.key, outgoing.text);
+    if (outgoing.type === "image") return sendWhatsAppImage(row.key, outgoing.url, outgoing.caption);
+    return outgoing.options.length <= 3
+      ? sendWhatsAppButtons(row.key, outgoing.text, outgoing.options.map((o) => ({ id: o.id, title: o.label })))
+      : sendWhatsAppList(row.key, outgoing.text, "Choose", outgoing.options.map((o) => ({ id: o.id, title: o.label, description: o.description })));
   }
   if (row.channel === "messenger" || row.channel === "instagram") {
-    if (message.type === "text") return sendDirectMessage(row.channel, row.key, message.text);
-    if (message.type === "image") return sendDirectAttachment(row.channel, row.key, { type: "image", url: message.url });
-    return sendDirectQuickReplies(row.channel, row.key, message.text, message.options.map((o) => ({ title: o.label, payload: o.id })));
+    if (outgoing.type === "text") return sendDirectMessage(row.channel, row.key, outgoing.text);
+    if (outgoing.type === "image") return sendDirectAttachment(row.channel, row.key, { type: "image", url: outgoing.url });
+    return sendDirectQuickReplies(row.channel, row.key, outgoing.text, outgoing.options.map((o) => ({ title: o.label, payload: o.id })));
   }
   if (row.channel === "telegram") {
-    if (message.type === "text") return tgSend(row.key, message.text);
-    if (message.type === "image") return tgSendPhoto(row.key, message.url, message.caption);
-    return tgSend(row.key, message.text, message.options.map((o) => ({ id: o.id, label: o.label })));
+    if (outgoing.type === "text") return tgSend(row.key, outgoing.text);
+    if (outgoing.type === "image") return tgSendPhoto(row.key, outgoing.url, outgoing.caption);
+    return tgSend(row.key, outgoing.text, outgoing.options.map((o) => ({ id: o.id, label: o.label })));
   }
   return { ok: false, error: `Unsupported bot channel: ${row.channel}` };
+}
+
+/** Channels where a flow document goes as a real file. The rest get its link-free fallback text. */
+const FILE_CHANNELS = new Set(["whatsapp", "messenger"]);
+const DOCUMENT_UNAVAILABLE_TEXT = "Sorry — that document isn't available right now. The team will send it to you shortly.";
+
+/**
+ * A flow's document, resolved at SEND time: the row stores only the Document id,
+ * so the file is looked up in this conversation's workspace (never another's),
+ * must still be a general workspace file, follows newer versions, and is handed
+ * to Meta through a fresh signed relay URL minted for this attempt.
+ *
+ * A file that has gone (deleted, or no longer sendable) becomes a short honest
+ * note rather than a failure: a failed row dead-letters and stops everything
+ * queued behind it, so one missing brochure would also swallow the welcome and
+ * the contact card.
+ */
+async function sendFlowDocument(row: OutboxRow, message: Extract<OutMsg, { type: "document" }>): Promise<{ ok: boolean; error?: string; providerMessageId?: string }> {
+  const doc = await resolveFlowDocument(outboxTenantId(), message.documentId);
+  if (!doc) {
+    // Ids only — never the customer's number or the message.
+    await logError("bot-outbox", `Chatbot flow document ${message.documentId} is missing or no longer sendable; sent the "not available" note instead.`).catch(() => {});
+    return sendProvider({ ...row, payload: { type: "text", text: DOCUMENT_UNAVAILABLE_TEXT } });
+  }
+  if (!FILE_CHANNELS.has(row.channel)) return sendProvider({ ...row, payload: { type: "text", text: documentFallbackText(doc.fileName, message.caption) } });
+  const url = attachmentUrlForDelivery({ ref: doc.storedName, contentType: doc.mimeType });
+  if (!url) {
+    return { ok: false, error: "Attachments are not configured for delivery: this deployment has no public https origin Meta could fetch from" };
+  }
+  if (row.channel === "whatsapp") return sendWhatsAppDocumentLink(row.key, url, doc.fileName, message.caption);
+  // Messenger attachments carry no caption; botOutboxWrite queued it as the next text row.
+  return sendDirectAttachment("messenger", row.key, { type: "file", url });
 }
 
 const ATTACHMENT_LABEL: Record<AttachmentKind, string> = {
@@ -810,6 +875,9 @@ function timelineBody(row: OutboxRow): string | null {
   if (message.type === "attachment") return ATTACHMENT_LABEL[message.kind];
   if (message.type === "text") return message.text;
   if (message.type === "image") return message.caption ? `🖼 ${message.caption}` : "🖼 [image]";
+  // What the customer actually got: on a channel with no files, the fallback text.
+  if (message.type === "document") return FILE_CHANNELS.has(row.channel) ? documentLabel(message) : documentFallbackText(message.fileName, message.caption);
+  if (message.type === "contact") return contactCardText(message.card);
   return `${message.text}\n${message.options.map((o) => `• ${o.label}`).join("\n")}`;
 }
 
