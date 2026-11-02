@@ -67,9 +67,13 @@ test("no exact name: lead_brief offers the closest names as the choice — never
   assert.match(brief, /closeMatches: close,/);
   // Every deal and customer the person may open, ranked by the database, in this workspace — raw SQL passes no guard.
   const near = core.slice(core.indexOf("async function nearlyNamed("), core.indexOf("export async function leadBrief("));
-  assert.match(near, /const workspace = Prisma\.sql`\("tenantId" = \$\{tenantId\} OR \("tenantId" IS NULL AND \(SELECT count\(\*\) FROM "Tenant"\) = 1\)\)`;/);
   assert.match(near, /const tenantId = ownedWriteTenantId\(\);/);
-  assert.equal((near.match(/WHERE "deletedAt" IS NULL AND \$\{workspace\}/g) ?? []).length, 2, "deals and customers both");
+  // Written out in each query, not shared as a fragment: the tenant-access sweep reads the call site (tenantAccessRatchet).
+  assert.equal(
+    (near.match(/WHERE "deletedAt" IS NULL AND \("tenantId" = \$\{tenantId\} OR \("tenantId" IS NULL AND \(SELECT count\(\*\) FROM "Tenant"\) = 1\)\)/g) ?? []).length,
+    2,
+    "deals and customers both",
+  );
   assert.match(near, /AND \(\$\{leadIds === null\} OR "id" = ANY\(\$\{leadIds \?\? \[\]\}::text\[\]\)\)/);
   assert.match(near, /AND \(\$\{contactIds === null\} OR "id" = ANY\(\$\{contactIds \?\? \[\]\}::text\[\]\)\)/);
   assert.match(near, /return closestNames\(needle, \[\.\.\.deals, \.\.\.people\], \(candidate\) => candidate\.names\)/);

@@ -1,7 +1,6 @@
 import "server-only";
 import { randomBytes } from "node:crypto";
 import { z } from "zod";
-import { Prisma } from "@prisma/client";
 import { prisma } from "./db";
 import { logError } from "./errorLog";
 import { logAudit } from "./audit";
@@ -654,14 +653,14 @@ async function nearlyNamed(user: User, needle: string, leadIds: string[] | null)
   if (!nameWords(needle).length) return [];
   const contactIds = await getAccessibleContactIds(user);
   const tenantId = ownedWriteTenantId();
-  const workspace = Prisma.sql`("tenantId" = ${tenantId} OR ("tenantId" IS NULL AND (SELECT count(*) FROM "Tenant") = 1))`;
+  // The workspace predicate is written out in each query (not shared as a fragment) so the tenant-access sweep sees it.
   const [leads, contacts] = await Promise.all([
     leadIds !== null && leadIds.length === 0
       ? Promise.resolve([])
       : prisma.$queryRaw<{ id: string; name: string; title: string; status: string }[]>`
           SELECT "id", "name", "title", "status"
             FROM "Lead"
-           WHERE "deletedAt" IS NULL AND ${workspace}
+           WHERE "deletedAt" IS NULL AND ("tenantId" = ${tenantId} OR ("tenantId" IS NULL AND (SELECT count(*) FROM "Tenant") = 1))
              AND (${leadIds === null} OR "id" = ANY(${leadIds ?? []}::text[]))
            ORDER BY GREATEST(word_similarity(${needle}, "name"), similarity("name", ${needle}), word_similarity(${needle}, "title")) DESC, "updatedAt" DESC
            LIMIT ${NEAR_CANDIDATES}`,
@@ -670,7 +669,7 @@ async function nearlyNamed(user: User, needle: string, leadIds: string[] | null)
       : prisma.$queryRaw<{ id: string; firstName: string; lastName: string | null; company: string | null }[]>`
           SELECT "id", "firstName", "lastName", "company"
             FROM "Contact"
-           WHERE "deletedAt" IS NULL AND ${workspace}
+           WHERE "deletedAt" IS NULL AND ("tenantId" = ${tenantId} OR ("tenantId" IS NULL AND (SELECT count(*) FROM "Tenant") = 1))
              AND (${contactIds === null} OR "id" = ANY(${contactIds ?? []}::text[]))
            ORDER BY GREATEST(
                       word_similarity(${needle}, concat_ws(' ', "firstName", "lastName")),
