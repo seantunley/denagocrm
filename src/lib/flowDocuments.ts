@@ -16,15 +16,31 @@ export function flowDocumentWhere(tenantId: string) {
   return { tenantId, deletedAt: null, contactId: null, vehicleId: null, jobCardId: null, quoteId: null };
 }
 
-/** The builder's dropdown: current versions only, newest first. */
+/**
+ * THE LIBRARY TOO (Sean, 2026-11-02: the QR template's "File to send" was empty while Documents → Library held eight
+ * brochures and two price lists). The Library is its own store (LibraryDocument, versioned) — the same files email
+ * attaches — and it is exactly what a flow should send. A step points at the library DOCUMENT, so its newest version
+ * goes out without editing the flow. A deleted one, or one with no file, is not sendable.
+ */
+function libraryWhere(tenantId: string) {
+  return { tenantId, deletedAt: null, versions: { some: {} } };
+}
+
+/** The builder's dropdown: Library files first (name and category), then general files; current versions only. */
 export async function flowDocumentOptions(tenantId: string): Promise<{ id: string; name: string }[]> {
-  const rows = await prisma.document.findMany({
-    where: { ...flowDocumentWhere(tenantId), replacedById: null },
-    select: { id: true, fileName: true },
-    orderBy: { createdAt: "desc" },
-    take: 300,
-  });
-  return rows.map((row) => ({ id: row.id, name: row.fileName }));
+  const [library, rows] = await Promise.all([
+    prisma.libraryDocument.findMany({ where: libraryWhere(tenantId), select: { id: true, name: true, category: true }, orderBy: [{ category: "asc" }, { name: "asc" }], take: 300 }),
+    prisma.document.findMany({
+      where: { ...flowDocumentWhere(tenantId), replacedById: null },
+      select: { id: true, fileName: true },
+      orderBy: { createdAt: "desc" },
+      take: 300,
+    }),
+  ]);
+  return [
+    ...library.map((doc) => ({ id: doc.id, name: `${doc.name} — Library${doc.category ? ` · ${doc.category}` : ""}` })),
+    ...rows.map((row) => ({ id: row.id, name: row.fileName })),
+  ];
 }
 
 /** Errors for document nodes pointing at a file this workspace may not send. */
@@ -32,9 +48,14 @@ export async function flowDocumentIssues(flow: Flow, tenantId: string): Promise<
   const nodes = Object.values(flow.nodes ?? {}).filter((node) => node?.type === "document");
   // Saved drafts are untrusted JSON: only string ids reach the query.
   const ids = [...new Set(nodes.map((node) => (node.type === "document" && typeof node.documentId === "string" ? node.documentId : "")).filter(Boolean))];
-  const found = ids.length
-    ? new Set((await prisma.document.findMany({ where: { ...flowDocumentWhere(tenantId), id: { in: ids } }, select: { id: true } })).map((row) => row.id))
-    : new Set<string>();
+  const found = new Set<string>();
+  if (ids.length) {
+    const [general, library] = await Promise.all([
+      prisma.document.findMany({ where: { ...flowDocumentWhere(tenantId), id: { in: ids } }, select: { id: true } }),
+      prisma.libraryDocument.findMany({ where: { ...libraryWhere(tenantId), id: { in: ids } }, select: { id: true } }),
+    ]);
+    for (const row of [...general, ...library]) found.add(row.id);
+  }
   return nodes.flatMap((node) => {
     if (node.type !== "document") return [];
     if (!node.documentId || typeof node.documentId !== "string") return [{ severity: "error" as const, code: "document.missing", message: "Send a document needs a file chosen.", nodeId: node.id }];
@@ -48,6 +69,14 @@ export async function flowDocumentIssues(flow: Flow, tenantId: string): Promise<
  * out without editing the flow. Null when it is gone or not sendable.
  */
 export async function resolveFlowDocument(tenantId: string, documentId: string) {
+  // A Library file: its newest version, in this workspace, not deleted.
+  const library = await prisma.libraryDocument.findFirst({
+    where: { ...libraryWhere(tenantId), id: documentId },
+    select: { versions: { orderBy: { version: "desc" }, take: 1, select: { id: true, fileName: true, storedName: true, mimeType: true } } },
+  });
+  const latest = library?.versions[0];
+  if (latest) return { ...latest, replacedById: null };
+
   const select = { id: true, fileName: true, storedName: true, mimeType: true, replacedById: true } as const;
   let doc = await prisma.document.findFirst({ where: { ...flowDocumentWhere(tenantId), id: documentId }, select });
   for (let hops = 0; doc?.replacedById && hops < 10; hops++) {

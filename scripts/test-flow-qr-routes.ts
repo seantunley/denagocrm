@@ -18,6 +18,7 @@ import { basePrisma } from "../src/lib/db";
 import { addFlowQr, addFlowRoute, createFlow, deleteFlowQr, deleteFlowRoute } from "../src/app/actions/flow";
 import { FLOW_QR_KEY, parseQrCodes, qrPattern } from "../src/lib/flowQr";
 import { getSetting } from "../src/lib/settings";
+import { flowDocumentIssues, flowDocumentOptions, resolveFlowDocument } from "../src/lib/flowDocuments";
 import { seedTwoTenants, teardown } from "./harness/seed";
 import { actAsStaff } from "./harness/actAs";
 
@@ -75,6 +76,30 @@ async function main() {
     }
     check("nothing is published for the workspace", (await basePrisma.botFlowPublication.count({ where: { tenantId: A } })) === 0);
 
+    // Sean, 2026-11-02: "Send a document" offered nothing while the Library held the brochures and price lists.
+    console.log("\nthe Library's files can be sent by a flow");
+    const uploader = a.ownerUserId;
+    const libraryDoc = async (tenantId: string, name: string, versions: number, deleted = false) => {
+      const doc = await basePrisma.libraryDocument.create({ data: { tenantId, name: `${name} ${SFX}`, category: "Brochure", ...(deleted ? { deletedAt: new Date() } : {}) }, select: { id: true } });
+      for (let v = 1; v <= versions; v++) {
+        await basePrisma.libraryVersion.create({ data: { tenantId, documentId: doc.id, version: v, fileName: `${name} v${v}.pdf`, storedName: `https://example.invalid/${SFX}/${name}-v${v}.pdf`, mimeType: "application/pdf", sizeBytes: 100, uploadedById: tenantId === A ? uploader : fixture.b.ownerUserId } });
+      }
+      return doc.id;
+    };
+    const libBrochure = await libraryDoc(A, "Brochure", 2);
+    const binned = await libraryDoc(A, "Old brochure", 1, true);
+    const other = await libraryDoc(fixture.b.tenantId, "B brochure", 1);
+    const options = await owner(() => flowDocumentOptions(A));
+    check("the builder offers a Library file, with its category", options.some((o) => o.id === libBrochure && o.name === `Brochure ${SFX} — Library · Brochure`), JSON.stringify(options));
+    check("…not a deleted one, nor another workspace's", !options.some((o) => o.id === binned || o.id === other));
+    const sent = await owner(() => resolveFlowDocument(A, libBrochure));
+    check("what is sent is its NEWEST version", sent?.fileName === "Brochure v2.pdf" && sent.storedName.endsWith("Brochure-v2.pdf"), JSON.stringify(sent));
+    check("another workspace's Library file is never sent", (await owner(() => resolveFlowDocument(A, other))) === null);
+    check("a deleted one is not sent either", (await owner(() => resolveFlowDocument(A, binned))) === null);
+    const graph = { start: "d", nodes: { d: { id: "d", type: "document" as const, documentId: libBrochure }, x: { id: "x", type: "document" as const, documentId: other } } };
+    const issues = await owner(() => flowDocumentIssues(graph, A));
+    check("publishing accepts the Library file and refuses the other workspace's", issues.length === 1 && issues[0].nodeId === "x" && issues[0].code === "document.unavailable", JSON.stringify(issues));
+
     const sales = await makeFlow("Sales");
     const brochure = await makeFlow("Brochure");
     const taken = "Hi Denago, I'd like a price";
@@ -122,6 +147,8 @@ async function main() {
     await basePrisma.botFlowVersion.deleteMany({ where: { tenantId: A, flowId: { in: flows } } }).catch(() => 0);
     await basePrisma.botFlow.deleteMany({ where: { tenantId: A, id: { in: flows } } }).catch(() => 0);
     await basePrisma.appSetting.deleteMany({ where: { tenantId: A, key: FLOW_QR_KEY } }).catch(() => 0);
+    // Versions go with their document (onDelete: Cascade); before teardown, which removes the uploaders.
+    await basePrisma.libraryDocument.deleteMany({ where: { tenantId: { in: [A, fixture.b.tenantId] }, name: { endsWith: SFX } } }).catch(() => 0);
     await teardown(fixture);
   }
 
