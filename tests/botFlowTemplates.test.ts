@@ -12,7 +12,10 @@ const src = (rel: string) => readFileSync(path.join(root, rel), "utf8");
 test("every shipped starter compiles for every connected chatbot channel", () => {
   assert.ok(FLOW_TEMPLATES.length >= 4);
   for (const template of FLOW_TEMPLATES) {
-    const errors = flowErrors(validateFlow(template.definition, ["whatsapp", "messenger", "instagram", "telegram"]));
+    // A starter may leave a file for the owner to choose (the QR brochure pack, #955) — publishing waits for it.
+    // Nothing else may stop a starter publishing.
+    const errors = flowErrors(validateFlow(template.definition, ["whatsapp", "messenger", "instagram", "telegram"]))
+      .filter((issue) => issue.code !== "document.missing");
     assert.deepEqual(errors, [], `${template.id} template must publish cleanly`);
   }
 });

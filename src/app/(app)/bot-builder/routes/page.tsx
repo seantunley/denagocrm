@@ -15,6 +15,7 @@ import { PageHeader } from "@/components/page-header";
 import { SaveForm, SaveButton } from "@/components/SaveForm";
 import { ResponsiveEntityTable } from "@/components/responsive-patterns";
 import FlowRouteTester from "@/components/FlowRouteTester";
+import ConfirmActionDialog from "@/components/ConfirmActionDialog";
 
 const channelLabel: Record<string, string> = { whatsapp: "WhatsApp", messenger: "Messenger", instagram: "Instagram", telegram: "Telegram" };
 const kindLabel: Record<string, string> = { keyword: "Keyword phrase", referral: "Referral code", ad: "Ad ID" };
@@ -107,7 +108,7 @@ export default async function FlowRoutesPage() {
                 {routes.map((route) => {
                   const latest = latestVersionByFlow.get(route.flowId);
                   const drifted = Boolean(latest && latest.id !== route.publishedVersionId);
-                  return <tr key={route.id} className={route.enabled ? "" : "opacity-55"}><td className="py-3 font-mono text-xs">{route.priority}</td><td className="py-3">{channelLabel[route.channel] ?? route.channel}</td><td className="py-3">{kindLabel[route.kind] ?? route.kind}</td><td className="py-3 font-mono text-xs">{route.pattern}</td><td className="py-3"><Link href={`/bot-builder/${route.flowId}`} className="inline-flex items-center gap-1 font-medium text-primary hover:underline">{flowNames.get(route.flowId) ?? "Deleted flow"}<ExternalLink className="size-3" /></Link></td><td className="py-3">{latest ? <span className={`inline-flex items-center gap-1 text-xs ${drifted ? "text-amber-300" : "text-muted-foreground"}`}>{drifted && <AlertTriangle className="size-3.5" />}v{latest.version}{drifted ? " · route pinned older" : ""}</span> : <span className="text-xs text-red-300">Missing snapshot</span>}</td><td className="py-3"><div className="flex justify-end gap-2"><form action={setFlowRouteEnabled.bind(null, route.id, !route.enabled)}><button className="btn-secondary btn-sm">{route.enabled ? "Disable" : "Enable"}</button></form><form action={deleteFlowRoute.bind(null, route.id)}><button className="btn-secondary btn-sm text-red-300">Delete</button></form></div></td></tr>;
+                  return <tr key={route.id} className={route.enabled ? "" : "opacity-55"}><td className="py-3 font-mono text-xs">{route.priority}</td><td className="py-3">{channelLabel[route.channel] ?? route.channel}</td><td className="py-3">{kindLabel[route.kind] ?? route.kind}</td><td className="py-3 font-mono text-xs">{route.pattern}</td><td className="py-3"><Link href={`/bot-builder/${route.flowId}`} className="inline-flex items-center gap-1 font-medium text-primary hover:underline">{flowNames.get(route.flowId) ?? "Deleted flow"}<ExternalLink className="size-3" /></Link></td><td className="py-3">{latest ? <span className={`inline-flex items-center gap-1 text-xs ${drifted ? "text-amber-300" : "text-muted-foreground"}`}>{drifted && <AlertTriangle className="size-3.5" />}v{latest.version}{drifted ? " · route pinned older" : ""}</span> : <span className="text-xs text-red-300">Missing snapshot</span>}</td><td className="py-3"><div className="flex justify-end gap-2"><form action={setFlowRouteEnabled.bind(null, route.id, !route.enabled)}><button className="btn-secondary btn-sm">{route.enabled ? "Disable" : "Enable"}</button></form><ConfirmActionDialog trigger={<button type="button" className="btn-secondary btn-sm text-red-300">Delete</button>} title="Delete this route?" description="Messages it matched will go to the live flow (or the inbox) instead. If it belongs to a QR code, the QR code is deleted with it and printed copies stop starting its flow." confirmLabel="Delete route" destructive success="Route deleted" onConfirm={deleteFlowRoute.bind(null, route.id)} /></div></td></tr>;
                 })}
               </tbody>
             </table>
@@ -132,7 +133,7 @@ export default async function FlowRoutesPage() {
                     <div className="mt-2 flex flex-wrap gap-2">
                       <a className="btn-secondary btn-sm" href={qr.png} download={`QR ${qr.name}.png`}>Download PNG</a>
                       <a className="btn-secondary btn-sm" href={qr.svg} download={`QR ${qr.name}.svg`}>Download for print (SVG)</a>
-                      <form action={deleteFlowQr.bind(null, qr.routeId)}><button className="btn-secondary btn-sm text-red-300">Delete</button></form>
+                      <ConfirmActionDialog trigger={<button type="button" className="btn-secondary btn-sm text-red-300">Delete</button>} title={`Delete QR code “${qr.name}”?`} description="Printed copies stop starting its flow — a customer who scans one afterwards lands in the inbox instead. This can't be undone; a new QR code is a new image to print." confirmLabel="Delete QR code" destructive success="QR code deleted" onConfirm={deleteFlowQr.bind(null, qr.routeId)} />
                     </div>
                   </div>
                 ))}

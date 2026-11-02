@@ -28,13 +28,15 @@ export async function createFlow(formData: FormData) {
     const name = requestedName || template.name;
     const requestedChannel = String(formData.get("channel") ?? "whatsapp") as FlowChannel;
     const channel = FLOW_CHANNELS.includes(requestedChannel) ? requestedChannel : "whatsapp";
-    const count = await prisma.botFlow.count({ where: scope });
     const flow = await prisma.botFlow.create({
       data: {
         name,
         definition: JSON.stringify(template.definition),
         channel,
-        active: count === 0,
+        // Every new flow is a DRAFT, the first one too (review of #955): it goes live only through Publish, which
+        // validates it. The first flow used to be published on creation — so the QR starter, whose two files are
+        // still to be chosen, failed after its row was written, and a blank flow went straight to customers.
+        active: false,
         // Stamp the owner at creation. The db.ts guard does not while enforcement is
         // dormant, so every flow made since the 20260722146000 backfill was
         // tenantless — which is what silently broke Publish, and what forces the
@@ -42,9 +44,6 @@ export async function createFlow(formData: FormData) {
         tenantId: await builderTenantId(),
       },
     });
-    // Preserve the old "first flow is live" behaviour, but publish the exact
-    // selected template as an immutable snapshot rather than swapping in default.
-    if (count === 0) await publishFlowSnapshot(flow.id, owner.id);
     await logAudit({
       action: "bot.flow_created",
       summary: `Chatbot flow “${name}” created from ${template.name} template`,
@@ -182,9 +181,12 @@ export async function deleteFlow(id: string) {
     ]);
     // Published snapshots may still be referenced by active BotSession pins. A
     // flow that has ever been published therefore remains as immutable history.
-    if (!flow || flow.active || publishedVersion) return;
+    if (!flow) return { error: "That flow no longer exists." };
+    if (flow.active) return { error: "This is the live flow — make another flow live before deleting it." };
+    if (publishedVersion) return { error: "This flow has been published, so it is kept as history and can't be deleted." };
     await prisma.botFlow.deleteMany({ where: { id, ...scope } });
     revalidatePath("/bot-builder");
+    return { success: "Flow deleted" };
   });
 }
 
