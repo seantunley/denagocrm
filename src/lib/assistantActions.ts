@@ -32,9 +32,14 @@ export const QUOTE_ADD_MAX_FEES = 5;
 export const QUOTE_ADD_MAX_FEE_RANDS = 1_000_000;
 
 export const proposedAction = z.discriminatedUnion("type", [
+  // A CALENDAR ITEM — a call, email, WhatsApp, meeting or to-do at a time — on a deal (`leadId`), on a customer with
+  // no deal (`contactId`), or on NEITHER: the person's own ("call the supplier at 3", "remind me to order stock").
+  // Sean, 2026-10-29: "DAX requires a lead or contact to add a calendar item, that needs to change." The CRM's own
+  // calendar never required one; only DAX did. One of the two at most: a deal brings its own customer.
   z.object({
     type: z.literal("follow_up"),
-    leadId,
+    leadId: leadId.optional(),
+    contactId: leadId.optional(),
     when: at,
     activity: z.enum(["call", "whatsapp", "email", "meeting", "todo"]).default("call"),
     summary: text.max(120).optional(),
@@ -56,17 +61,33 @@ export const proposedAction = z.discriminatedUnion("type", [
     reason,
   }).strict(),
   // A meeting at a set time, with colleagues — through the calendar's own
-  // booking, so a clash with anyone's diary is refused there.
+  // booking, so a clash with anyone's diary is refused there. On a deal, on a
+  // customer with no deal, or on neither (a staff meeting), as follow_up.
   z.object({
     type: z.literal("meeting"),
-    leadId,
+    leadId: leadId.optional(),
+    contactId: leadId.optional(),
     when: atTime,
     minutes: minutes.optional(),
     with: z.array(text.max(80)).max(5).optional(),
     summary: text.max(120).optional(),
     reason,
   }).strict(),
-  z.object({ type: z.literal("test_drive"), leadId, when: atTime, minutes: minutes.optional(), vehicle: text.max(80), reason }).strict(),
+  // A TEST DRIVE with a customer — on their deal (leadId) or on them directly (contactId). In a demo vehicle from
+  // stock only when they name one (`vehicle`); otherwise the model they want (`product`, as the catalogue names it)
+  // and where (`branch`) are enough — Sean, 2026-10-29: "DAX requires a demo vehicle from stock. That is not needed."
+  // The CRM's own booking never required one.
+  z.object({
+    type: z.literal("test_drive"),
+    leadId: leadId.optional(),
+    contactId: leadId.optional(),
+    when: atTime,
+    minutes: minutes.optional(),
+    vehicle: text.max(80).optional(),
+    product: text.max(80).optional(),
+    branch: text.max(80).optional(),
+    reason,
+  }).strict(),
   // A workshop job card on a CUSTOMER'S OWN vehicle (Automotive) — opened at Confirm by the job-card form's own
   // action (openJobCard). The vehicle by its id from the vehicles lookup: never guessed between several.
   z.object({
@@ -278,14 +299,36 @@ export const JOB_CARD_RULE =
   "description: the work in their words. The job card has no booking date: a day they name goes in the description (\"Booked in for Tue 3 Nov — brakes squeaking\"). priority only when they say it is urgent or can wait (default normal); kmIn only when they give the odometer reading. " +
   "Confirming opens the job card in the workshop and nothing else — the customer is not contacted.";
 
+/**
+ * Sean, 2026-10-29: "DAX requires a lead or contact to add a calendar item, that needs to change." Asked for a
+ * meeting with Mariska — a prospect with no surname, not in the CRM — DAX found the slot, then said "the meeting card
+ * needs a lead to attach to" and told them to put it on the calendar by hand. The calendar never needed one.
+ */
+export const CALENDAR_ITEM_RULE =
+  "- CALENDAR ITEMS need no deal and no customer. follow_up (a call, email, WhatsApp, meeting or to-do at a time) and meeting go on a deal (leadId), on a customer with no deal (contactId), or on NEITHER — " +
+  "the person's own item, or one with someone not in the CRM yet: \"call the supplier at 3\", \"staff meeting Monday at 9 with Sean\", \"remind me to order stock tomorrow\", " +
+  "\"meeting with Mariska (a new prospect, no surname yet) Tuesday 11:00 to 11:45 at Atlantic Beach\" → " +
+  "{\"type\":\"meeting\",\"when\":\"2026-11-03T11:00\",\"minutes\":45,\"with\":[\"Sean\"],\"summary\":\"Meeting with Mariska — Atlantic Beach\"}. " +
+  "With neither, name who and what in the summary (it is all the calendar shows), and leave both ids out. " +
+  "NEVER say a calendar item needs a lead or a customer, never tell them to add it by hand, and never hang it on an unrelated deal or create a record to make one fit. " +
+  "block_time is only for time they are UNAVAILABLE (leave, the dentist, admin).";
+
+/** Sean, 2026-10-29: "When booking a test drive, DAX requires a demo vehicle from stock. That is not needed." */
+export const TEST_DRIVE_RULE =
+  "- TEST DRIVES need NO demo vehicle. A test drive is with a customer — on their deal (leadId) or on them directly (contactId, a customer with no deal). " +
+  "vehicle is a demo vehicle from stock, its name exactly as listed, and ONLY when they name one; otherwise leave it out and give the model they want as product (as the catalogue names it, if they say one) — the deal's own model is used when they don't. " +
+  "branch is where, in their words (\"at the Atlantic Beach showroom\"); left out, the card uses a demo vehicle's branch or where they last booked one, and asks only if there is neither. " +
+  "Never refuse, stall or ask for a demo vehicle because none was named, and never pick one they didn't ask for.";
+
 export const ACTION_INSTRUCTIONS = [
   "TASKS. You can't change anything yourself, but you can PROPOSE up to 4 tasks for the person to confirm with one click. Propose when they ask you to do something (\"remind me…\", \"give it to Donovan\", \"draft a message…\", \"book Anna a test drive\"), or offer one when you recommend a concrete next step.",
   'Put them under "actions" in the reply block:',
-  '"actions":[{"type":"follow_up","leadId":"<id>","when":"YYYY-MM-DDTHH:MM","activity":"call|whatsapp|email|meeting|todo","summary":"...","reason":"why this helps"},{"type":"note","leadId":"<id>","text":"...","pin":false},{"type":"customer_note","contactId":"<id>","text":"...","pin":false},{"type":"assign","leadId":"<id>","to":"<person>"},{"type":"stage","leadId":"<id>","stage":"<stage>"},{"type":"draft_message","leadId":"<id>","channel":"whatsapp|email","subject":"<email only>","body":"..."},{"type":"meeting","leadId":"<id>","when":"YYYY-MM-DDTHH:MM","minutes":60,"with":["<colleague>"],"summary":"..."},{"type":"test_drive","leadId":"<id>","when":"YYYY-MM-DDTHH:MM","minutes":60,"vehicle":"<demo vehicle name>"},{"type":"reschedule","activityId":"<id>","when":"YYYY-MM-DDTHH:MM"},{"type":"cancel_activity","activityId":"<id>"},{"type":"lost","leadId":"<id>","reason":"..."},{"type":"quote","leadId":"<id>"},{"type":"quote_build","contactId":"<the contactId of a CUSTOMER — a quote for the customer, on no deal>","lines":[{"productId":"<id>","qty":1,"discountPct":0,"colour":"<optional>"}]},{"type":"quote_build","leadId":"<the leadId of a DEAL — a quote for that deal; give no contactId>","lines":[{"productId":"<id>","qty":1,"colour":"<as the catalogue lists it>"}],"fees":[{"label":"Delivery — Hermanus","amount":6500,"delivery":true}]},{"type":"quote_add","quote":"Q-1030","fees":[{"label":"Delivery fee","amount":5000,"delivery":true}],"lines":[{"productId":"<id>","qty":1}]},{"type":"quote_change","quote":"Q-1030","fees":[{"fee":"Delivery Fee","label":"Delivery Fee - Hermanus"}],"lines":[{"line":"<product on the quote>","qty":3}]},{"type":"quote_pdf","quote":"Q-1030"},{"type":"schedule","question":"...","cadence":"once|daily|weekdays|weekly","weekday":1,"timeOfDay":"HH:MM","onDate":"YYYY-MM-DD"},{"type":"watch","kind":"quote_viewed|quote_unsigned|lead_quiet|test_drive_no_follow_up|delivery_deposit_due","quoteId":"Q-1042","leadId":"<id>","product":"<product>","thresholdHours":48,"thresholdDays":3}]',
+  '"actions":[{"type":"follow_up","leadId":"<id>","when":"YYYY-MM-DDTHH:MM","activity":"call|whatsapp|email|meeting|todo","summary":"...","reason":"why this helps"},{"type":"note","leadId":"<id>","text":"...","pin":false},{"type":"customer_note","contactId":"<id>","text":"...","pin":false},{"type":"assign","leadId":"<id>","to":"<person>"},{"type":"stage","leadId":"<id>","stage":"<stage>"},{"type":"draft_message","leadId":"<id>","channel":"whatsapp|email","subject":"<email only>","body":"..."},{"type":"meeting","leadId":"<id>","when":"YYYY-MM-DDTHH:MM","minutes":60,"with":["<colleague>"],"summary":"..."},{"type":"test_drive","leadId":"<id of the deal — or contactId for a customer with no deal>","when":"YYYY-MM-DDTHH:MM","minutes":60,"product":"<the model, as the catalogue names it — optional>","branch":"<where, in their words — optional>","vehicle":"<a demo vehicle from stock — ONLY if they name one>"},{"type":"reschedule","activityId":"<id>","when":"YYYY-MM-DDTHH:MM"},{"type":"cancel_activity","activityId":"<id>"},{"type":"lost","leadId":"<id>","reason":"..."},{"type":"quote","leadId":"<id>"},{"type":"quote_build","contactId":"<the contactId of a CUSTOMER — a quote for the customer, on no deal>","lines":[{"productId":"<id>","qty":1,"discountPct":0,"colour":"<optional>"}]},{"type":"quote_build","leadId":"<the leadId of a DEAL — a quote for that deal; give no contactId>","lines":[{"productId":"<id>","qty":1,"colour":"<as the catalogue lists it>"}],"fees":[{"label":"Delivery — Hermanus","amount":6500,"delivery":true}]},{"type":"quote_add","quote":"Q-1030","fees":[{"label":"Delivery fee","amount":5000,"delivery":true}],"lines":[{"productId":"<id>","qty":1}]},{"type":"quote_change","quote":"Q-1030","fees":[{"fee":"Delivery Fee","label":"Delivery Fee - Hermanus"}],"lines":[{"line":"<product on the quote>","qty":3}]},{"type":"quote_pdf","quote":"Q-1030"},{"type":"schedule","question":"...","cadence":"once|daily|weekdays|weekly","weekday":1,"timeOfDay":"HH:MM","onDate":"YYYY-MM-DD"},{"type":"watch","kind":"quote_viewed|quote_unsigned|lead_quiet|test_drive_no_follow_up|delivery_deposit_due","quoteId":"Q-1042","leadId":"<id>","product":"<product>","thresholdHours":48,"thresholdDays":3}]',
   "- Add a short \"reason\" (under 160 characters) on any proposal when you know why it helps — the card shows it so the person sees the point before confirming. Skip it when the title already says everything.",
   "- watch: when they say \"tell me when / let me know if\" something happens — quote_viewed (quoteId: the customer opens that quote), quote_unsigned (viewed but not signed after thresholdHours, or its email bounced; one quoteId or all theirs), lead_quiet (no customer contact for thresholdDays; one leadId, or every open lead for a product), test_drive_no_follow_up (a test drive done thresholdHours ago with nothing planned next), delivery_deposit_due (delivery within thresholdHours and no deposit). Only the fields that kind uses. It only ever tells THEM — it never contacts a customer. Offer one yourself when it would help (\"I can tell you when Anna opens it\").",
   "- schedule: a question for you to answer on your own LATER or REPEATEDLY (\"every Monday at 7 tell me which deals went quiet\", \"Friday at 9, has Anna signed?\"). weekday (0 = Sunday … 6 = Saturday) only with weekly; onDate only with once. Schedules run on the hour or half past, so timeOfDay is always HH:00 or HH:30 — if they ask for 07:10, propose 07:00 and say it runs on the half hour. It runs later with no conversation, so the question must stand alone — name the customer or thing (\"Has Anna Jacobs signed her quote?\"), never \"her\" or \"that deal\". No leadId. A plain reminder to do something with a lead (\"remind me to call Anna Friday\") is a follow_up, not a schedule.",
-  "- meeting / test_drive: check the calendar (schedule) and, for a test drive, the demo vehicle's bookings (vehicles kind demo) BEFORE proposing — never a slot that clashes. vehicle is the demo vehicle's name exactly as listed. reschedule / cancel_activity need an activity id from the results.",
+  "- meeting / test_drive: check the calendar (schedule) BEFORE proposing — never a slot that clashes — and, for a test drive in a demo vehicle, that vehicle's bookings (vehicles kind demo). reschedule / cancel_activity need an activity id from the results.",
+  TEST_DRIVE_RULE,
   "- lost: only when the person says the deal is lost or asks you to close it; the reason in their words. quote: starts a draft quote on the lead for them to fill in — nothing is sent.",
   QUOTE_BUILD_RULE,
   QUOTE_ADD_RULE,
@@ -294,8 +337,9 @@ export const ACTION_INSTRUCTIONS = [
   "- note goes on a lead. customer_note goes on a CUSTOMER — use it when they say \"customer\" or \"contact\", or when the person has no lead (lead_brief lists matching customers with their contactId when no lead matches). If several customers match, ask which one before proposing. pin:true only when they ask for the note to be pinned; it keeps it at the top of the timeline.",
   "- MISSING DETAILS: when a task needs something they have not told you — what to call it, the day or time, how long, why, which customer, who to give it to — ASK for exactly that in one short question, and offer choices where there are obvious ones (CHOICES). Ask for everything that is missing at once rather than one thing per message. Propose the task as soon as you have what it needs. Never invent a required detail, never guess a time, and never refuse or say it cannot be done because a detail is missing.",
   "- contactId, like leadId, must be an id that appears in the CRM results above.",
+  CALENDAR_ITEM_RULE,
   '- block_time: a PERSONAL calendar item — time blocked on the person\'s own calendar, with no lead or customer ("block tomorrow 9 to 11 for admin", "I\'m at the dentist Friday afternoon", "put me down as on leave next week"). {"type":"block_time","when":"YYYY-MM-DDTHH:MM","minutes":120,"summary":"Admin","note":"why the time is unavailable"}; a date with no time ("when":"YYYY-MM-DD", optional "until":"YYYY-MM-DD") blocks whole days. note is required — use their own words for why, and ask if they gave none. Check the calendar (schedule) first: it is refused if it clashes with something already booked. It is only ever for the person asking; you cannot block a colleague\'s calendar. Never tell them a personal item is impossible or needs a lead.',
-  "- leadId and activityId must be ids that appear in the CRM results above — never invent one. If you don't have it, look the lead up first or don't propose.",
+  "- leadId and activityId must be ids that appear in the CRM results above — never invent one. If a task is about a deal or customer whose id you don't have, look them up first; a calendar item about nobody in the CRM needs neither (CALENDAR ITEMS).",
   "- People and stages exactly as listed. Times are South African time.",
   "- draft_message: write it in the business's voice, ready to send. The person reads it, can edit it, and sends it with their own click — it never goes out on its own.",
   "- In your answer, never say you did it — say you've set it up for them to confirm.",
@@ -437,6 +481,11 @@ export function splitChoices(reply: string): { answer: string; choices: string[]
  * way (a note, being opened) doesn't make "give it to Donovan" wrong.
  */
 type LeadCard = { id: string; leadId: string; leadLabel: string; title: string; reason?: string };
+/**
+ * A calendar item's card: on a deal (leadId), on a customer with no deal (leadId null, contactId, leadLabel the
+ * customer's name), or on nobody (both null, leadLabel "Your calendar" — block_time's shape).
+ */
+type CalendarCard = Omit<LeadCard, "leadId"> & { leadId: string | null; contactId?: string | null };
 export type QuoteBuildLine = { productId: string; description: string; qty: number; unitPriceCents: number; discountPct: number; colour?: string };
 
 /**
@@ -552,15 +601,17 @@ export function quoteAddText(lines: readonly QuoteBuildLine[], fees: readonly Qu
 
 export const STALE_CARD ="This changed since DAX suggested it — ask again to see where it stands now.";
 export type ActionCard =
-  | (LeadCard & { kind: "follow_up"; when: string; activity: string; summary?: string })
+  | (CalendarCard & { kind: "follow_up"; when: string; activity: string; summary?: string })
   | (LeadCard & { kind: "note"; text: string; pin?: boolean })
   // leadId null and leadLabel the customer's name: the same shape an activity with no lead has.
   | { id: string; kind: "customer_note"; contactId: string; leadId: null; leadLabel: string; title: string; text: string; pin?: boolean; reason?: string }
   | (LeadCard & { kind: "assign"; userId: string; fromUserId: string | null })
   | (LeadCard & { kind: "stage"; stageId: string; fromStageId: string })
   | (LeadCard & { kind: "draft_message"; channel: "whatsapp" | "email"; subject?: string; body: string; to: string | null })
-  | (LeadCard & { kind: "meeting"; start: string; end: string; summary: string; attendeeIds: string[]; detail: string })
-  | (LeadCard & { kind: "test_drive"; contactId: string; demoVehicleId: string; branch: string; start: string; end: string; detail: string })
+  | (CalendarCard & { kind: "meeting"; start: string; end: string; summary: string; attendeeIds: string[]; detail: string })
+  // leadId null: booked on the customer directly. demoVehicleId null: no particular demo vehicle — productId, when
+  // given, is the model; else the booking takes the deal's.
+  | (Omit<LeadCard, "leadId"> & { kind: "test_drive"; leadId: string | null; contactId: string; demoVehicleId: string | null; productId?: string | null; branch: string; start: string; end: string; detail: string })
   // leadId null and leadLabel the vehicle's owner. contactId is the owner the card SHOWED: Confirm refuses if it changed.
   | { id: string; kind: "job_card"; leadId: null; leadLabel: string; title: string; vehicleId: string; contactId: string; description: string; priority: "low" | "normal" | "high" | "urgent"; kmIn?: number; detail: string; reason?: string; confirmKey: string }
   | (LeadCard & { kind: "lost"; reason: string })

@@ -626,6 +626,11 @@ jobs:
       - name: Assistant -- finds the right customer for the right person
         run: npm run test:assistant-customers
 
+      # DAX puts a calendar item on a deal, a customer, or nobody (a meeting with a prospect not in the CRM yet),
+      # and books a test drive with no demo vehicle -- real cards, the real Confirm, two workspaces, off then on.
+      - name: Assistant -- calendar items need no lead, test drives no demo vehicle
+        run: npm run test:dax-calendar
+
       # DAX's send facts (roadmap Phase 2): a quote whose email bounced reads as
       # bounced in find_quotes and a lead's quotes, the quote_unsigned watch says
       # "reach them another way", WhatsApp receipts reach the lead brief, and the

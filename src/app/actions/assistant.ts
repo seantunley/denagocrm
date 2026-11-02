@@ -89,6 +89,22 @@ export async function runAssistantAction(
     // the change came from the assistant's proposal, on the lead's timeline.
     const confirmed = (what: string, leadId: string) =>
       logAudit({ action: "assistant.action_confirmed", summary: `Confirmed the assistant's proposal: ${what}`, user, leadId });
+    // A calendar item may be on a deal, a customer or nobody (CALENDAR_ITEM_RULE): the entry goes where it is.
+    const confirmedOn = (what: string, on: { leadId: string | null; contactId: string | null }) =>
+      logAudit({ action: "assistant.action_confirmed", summary: `Confirmed the assistant's proposal: ${what}`, user, leadId: on.leadId, contactId: on.contactId });
+    /**
+     * What a calendar card is on, as it is NOW: its deal and that deal's customer, a customer with no deal, or nobody
+     * (the person's own item). Null when its deal has gone. The ids are the card's, untrusted like the rest of it:
+     * the calendar's own action checks access to each before it books anything (assertLinks).
+     */
+    const calendarLinks = async (c: { leadId: string | null; contactId?: string | null }) => {
+      const leadId = typeof c.leadId === "string" && c.leadId ? c.leadId : null;
+      if (leadId) {
+        const lead = await prisma.lead.findUnique({ where: { id: leadId }, select: { contactId: true } });
+        return lead ? { leadId, contactId: lead.contactId } : null;
+      }
+      return { leadId: null, contactId: typeof c.contactId === "string" && c.contactId ? c.contactId : null };
+    };
     // A quote's PDF queued for this person (saveQuoteDraft, pdfToMyWhatsApp): when
     // Confirm was pressed in the CRM, try the send now, briefly — the click does
     // not wait on WhatsApp, and whatever is not sent in that time is the sweep's.
@@ -143,18 +159,22 @@ export async function runAssistantAction(
         return { ok: true, success: "Watching — it only ever tells you. Manage it on the Ask page." };
       }
       case "follow_up": {
-        const lead = await prisma.lead.findUnique({ where: { id: card.leadId }, select: { contactId: true } });
-        if (!lead) return untouched("That lead is no longer there.");
+        // On a deal, on a customer with no deal, or on nobody — the person's own calendar (CALENDAR_ITEM_RULE).
+        const on = await calendarLinks(card);
+        if (!on) return untouched("That lead is no longer there.");
         const result = await scheduleFollowUp({
-          leadId: card.leadId,
-          contactId: lead.contactId,
+          leadId: on.leadId,
+          contactId: on.contactId,
           type: card.activity,
           when: card.when,
           summary: card.summary,
         });
         if (!result.ok) return { ok: false, error: result.error ?? "Couldn't schedule it." };
-        await confirmed(`schedule a ${card.activity}`, card.leadId);
-        return { ok: true, success: "Follow-up scheduled" };
+        await confirmedOn(`schedule a ${card.activity}`, on);
+        if (on.leadId) return { ok: true, success: "Follow-up scheduled" };
+        return on.contactId
+          ? { ok: true, success: "Follow-up scheduled", href: `/contacts/${on.contactId}` }
+          : { ok: true, success: "Added to your calendar", href: "/calendar" };
       }
       case "note": {
         const form = new FormData();
@@ -203,33 +223,38 @@ export async function runAssistantAction(
         return { ok: true, success: "Lead moved" };
       }
       case "meeting": {
-        const lead = await prisma.lead.findUnique({ where: { id: card.leadId }, select: { contactId: true } });
-        if (!lead) return untouched("That lead is no longer there.");
+        // On a deal, on a customer with no deal, or on nobody — a staff meeting, a prospect not in the CRM yet.
+        const on = await calendarLinks(card);
+        if (!on) return untouched("That lead is no longer there.");
         const form = new FormData();
         form.set("type", "meeting");
         form.set("summary", card.summary);
-        form.set("leadId", card.leadId);
-        if (lead.contactId) form.set("contactId", lead.contactId);
+        if (on.leadId) form.set("leadId", on.leadId);
+        if (on.contactId) form.set("contactId", on.contactId);
         form.set("dueDate", card.start);
         form.set("endDate", card.end);
         for (const id of card.attendeeIds) form.append("attendeeIds", id);
         const result = await scheduleActivity(form);
         if (result.error) return { ok: false, error: result.error };
-        await confirmed("book a meeting", card.leadId);
-        return { ok: true, success: "Meeting booked" };
+        await confirmedOn("book a meeting", on);
+        if (on.leadId) return { ok: true, success: "Meeting booked" };
+        return { ok: true, success: "Meeting booked", href: on.contactId ? `/contacts/${on.contactId}` : "/calendar" };
       }
       case "test_drive": {
+        // On the customer's deal or on them directly; in a demo vehicle only when one was named (TEST_DRIVE_RULE).
+        // The test-drive form's own action checks access to the customer, the deal and the demo vehicle it is given.
         const form = new FormData();
         form.set("contactId", card.contactId);
-        form.set("leadId", card.leadId);
-        form.set("demoVehicleId", card.demoVehicleId);
+        if (card.leadId) form.set("leadId", card.leadId);
+        if (card.demoVehicleId) form.set("demoVehicleId", card.demoVehicleId);
+        if (card.productId) form.set("productId", card.productId);
         form.set("branch", card.branch);
         form.set("scheduledStart", card.start);
         form.set("expectedReturnAt", card.end);
         const result = await createTestDriveBooking(form);
         if (result.error) return { ok: false, error: result.error };
-        await confirmed("book a test drive", card.leadId);
-        return { ok: true, success: result.success ?? "Test drive booked" };
+        await confirmedOn("book a test drive", { leadId: card.leadId ?? null, contactId: card.contactId });
+        return { ok: true, success: result.success ?? "Test drive booked", ...(card.leadId ? {} : { href: `/contacts/${card.contactId}` }) };
       }
       case "job_card": {
         // THE JOB-CARD FORM'S OWN DOOR (openJobCard): the module check, jobcards.manage, access to THIS vehicle in
