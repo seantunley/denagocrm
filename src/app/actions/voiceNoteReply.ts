@@ -4,7 +4,7 @@ import { prisma } from "@/lib/db";
 import { withActingStaffScope } from "@/lib/actingScope";
 import { accessibleInboxWhere, requirePermission } from "@/lib/permissions";
 import { aiVoiceNoteReply } from "@/lib/ai";
-import { voiceNoteTranscript } from "@/lib/voiceNoteReply";
+import { voiceNoteSuggestion } from "@/lib/voiceNoteReply";
 
 /**
  * "Summarise + suggest a reply" on a customer's WhatsApp voice note (round 2, item 6). The latest transcribed voice
@@ -16,21 +16,16 @@ export async function suggestVoiceNoteReply(conversationId: string, messageId: s
   return withActingStaffScope(async () => {
     const user = await requirePermission("inbox.reply");
     const scope = await accessibleInboxWhere(user);
-    const recent = await prisma.communication.findMany({
-      where: { AND: [scope, { conversationId, type: "whatsapp" }] },
-      orderBy: { occurredAt: "desc" },
-      take: 8,
-      select: { id: true, direction: true, body: true },
+    // Only the voice note the button was shown for, while it is still the customer's latest message — before the AI
+    // and again after it (voiceNoteSuggestion).
+    return voiceNoteSuggestion(messageId, {
+      recent: () => prisma.communication.findMany({
+        where: { AND: [scope, { conversationId, type: "whatsapp" }] },
+        orderBy: { occurredAt: "desc" },
+        take: 8,
+        select: { id: true, direction: true, body: true },
+      }),
+      ai: aiVoiceNoteReply,
     });
-    // The voice note the button was shown for, and only while it is still the customer's LATEST message (review of
-    // #953): an older one answered after they wrote again would be a reply to a question they have moved on from.
-    const at = recent.findIndex((m) => m.direction === "inbound");
-    if (at === -1 || recent[at].id !== messageId) return { ok: false, error: "The customer has written since that voice note — reload the conversation." };
-    if (!voiceNoteTranscript(recent[at].body)) return { ok: false, error: "There's no transcribed voice note from the customer here." };
-    const result = await aiVoiceNoteReply({
-      transcript: voiceNoteTranscript(recent[at].body)!,
-      history: recent.slice(at + 1).reverse().map((m) => ({ from: m.direction === "outbound" ? "us" : "customer", text: m.body })),
-    });
-    return "error" in result ? { ok: false, error: result.error } : { ok: true, ...result };
   });
 }
