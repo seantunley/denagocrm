@@ -58,7 +58,12 @@ export default async function FlowRoutesPage() {
     getSetting("BOT_FLOW_ENABLED"),
     prisma.botFlowPublication.findFirst({ where: { tenantId, channel: "whatsapp" }, select: { flowId: true } }),
   ]);
-  const chatbotOff = botOn !== "true" || flowsOn !== "true";
+  // Two different outcomes (review of #962): the Assistant off — nothing replies at all; the Assistant on but guided
+  // flows off — the QR's flow does not run, though the chatbot may still answer with its AI or keyword replies
+  // (runWhatsAppBot falls back to maybeAutoReply).
+  const assistantOff = botOn !== "true";
+  const guidedOff = !assistantOff && flowsOn !== "true";
+  const chatbotOff = assistantOff || guidedOff;
   const businessName = company.name || "there";
   const whatsappFlows = flows.filter((flow) => flow.channel === "whatsapp" && publishedKeys.has(`whatsapp:${flow.id}`));
   const routeById = new Map(routes.map((route) => [route.id, route]));
@@ -135,7 +140,7 @@ export default async function FlowRoutesPage() {
           <div className="flex min-w-0 flex-wrap items-center gap-2">
             <h2 id="qr-heading" className="font-semibold">QR codes (WhatsApp)</h2>
             <StatusPill tone={qrs.length ? "success" : "neutral"}>{qrs.length} {qrs.length === 1 ? "code" : "codes"}</StatusPill>
-            {business && chatbotOff ? <StatusPill tone="warning">Chatbot off</StatusPill> : null}
+            {business && chatbotOff ? <StatusPill tone="warning">{assistantOff ? "Chatbot off" : "Guided flow off"}</StatusPill> : null}
           </div>
           <ChevronDown className="size-4 shrink-0 text-muted-foreground transition-transform group-open:rotate-180" aria-hidden="true" />
         </summary>
@@ -145,7 +150,11 @@ export default async function FlowRoutesPage() {
           <>
             {chatbotOff && (
               <p role="status" className="mt-3 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm text-amber-200">
-                The chatbot is switched off, so a scanned QR code reaches your inbox but nothing replies. Switch on the <strong>Assistant</strong> and <strong>Guided flow</strong> on the <Link href="/chatbot" className="underline">Chatbot page</Link>.
+                {assistantOff ? (
+                  <>The chatbot is switched off, so a scanned QR code reaches your inbox but nothing replies. Switch on the <strong>Assistant</strong> and <strong>Guided flow</strong> on the <Link href="/chatbot" className="underline">Chatbot page</Link>.</>
+                ) : (
+                  <>Guided flows are switched off, so a scanned QR code does not run its flow — the chatbot may answer with its AI or keyword replies instead. Switch on <strong>Guided flow</strong> on the <Link href="/chatbot" className="underline">Chatbot page</Link>.</>
+                )}
               </p>
             )}
             {qrs.length > 0 && (
