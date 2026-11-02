@@ -34,6 +34,7 @@ import path from "node:path";
 import sharp from "sharp";
 import { cleanJpeg, jpegDataUrl } from "../src/lib/assistantImage";
 import { carriedUpload, holdUpload, linkUpload, photoUpload, pruneAssistantUploads, uploadImage } from "../src/lib/assistantUpload";
+import { isModuleEnabled } from "../src/lib/modules/enabled";
 
 const SFX = Math.random().toString(16).slice(2, 10);
 let passed = 0;
@@ -109,6 +110,12 @@ async function cleanup() {
   for (const note of notes) if (note.attachmentUrl && !note.attachmentUrl.includes("/")) await rm(path.join(process.cwd(), "storage", "uploads", note.attachmentUrl), { force: true });
   await basePrisma.$executeRaw`DELETE FROM "TimelinePin" WHERE "itemId" IN (SELECT "id" FROM "Communication" WHERE "userId" IN (${rep.id}, ${other.id}, ${limited.id}))`;
   await basePrisma.communication.deleteMany({ where: { userId: { in: ids } } });
+  const documents = await basePrisma.document.findMany({ where: { uploadedById: { in: ids } }, select: { id: true, storedName: true } });
+  for (const d of documents) if (!d.storedName.includes("/")) await rm(path.join(process.cwd(), "storage", "uploads", d.storedName), { force: true });
+  await basePrisma.document.deleteMany({ where: { id: { in: documents.map((d) => d.id) } } });
+  await basePrisma.quotePayment.deleteMany({ where: { quoteId: id("quote") } });
+  await basePrisma.quoteItem.deleteMany({ where: { quoteId: id("quote") } });
+  await basePrisma.quote.deleteMany({ where: { id: id("quote") } });
   await basePrisma.assistantUpload.deleteMany({ where: { userId: { in: ids } } });
   await basePrisma.assistantTurn.deleteMany({ where: { userId: { in: ids } } });
   const leads = (await basePrisma.lead.findMany({ where: { createdById: { in: ids } }, select: { id: true } })).map((l) => l.id);
@@ -284,6 +291,76 @@ async function main() {
     // The same card again: the phone is no longer what it showed.
     const again = await runAsSession(repSession, () => scoped(() => runAssistantAction(card!)));
     check("a card whose 'before' is no longer true is refused, unchanged", !again.ok && again.unchanged === true, JSON.stringify(again));
+  }
+
+  console.log("\nFiling what was sent, and recording money");
+  {
+    const otherSession = await sessionFor(other);
+    const QUOTE_NO = 900_000 + Math.floor(Math.random() * 90_000);
+    await basePrisma.quote.create({
+      data: {
+        id: id("quote"), number: QUOTE_NO, tenantId: T, status: "accepted", invoiceNumber: QUOTE_NO, invoicedAt: new Date(),
+        contactId: id("c-ben"), createdById: rep.id,
+        items: { create: [{ tenantId: T, description: "Rover XL", qty: 1, unitPriceCents: 10_000_000, taxRatePct: 15 }] },
+      },
+    });
+    const hold = (fileName: string) => scoped(() => holdUpload(T, rep.id, { fileName, mimeType: "application/pdf", data: new Uint8Array(Buffer.from(`%PDF-1.4 ${fileName}`)) }));
+    const asUpload = (uploadId: string, fileName: string) => ({ id: uploadId, fileName, mimeType: "application/pdf", image: null });
+    const cardsFor = async (proposal: Record<string, unknown>, upload: ReturnType<typeof asUpload> | null) => {
+      const problems: string[] = [];
+      const cards = await runAsSession(repSession, () => scoped(() => resolveActions(rep, [proposal as never], problems, null, upload)));
+      return { cards, problems };
+    };
+    const docs = (where: Record<string, unknown>) => basePrisma.document.count({ where: { uploadedById: { in: USERS.map((u) => u.id) }, ...where } });
+
+    // Filing a PDF on Ben.
+    const sheetId = await hold("spec-sheet.pdf");
+    const { cards: fileCards, problems } = await cardsFor({ type: "attach_file", contactId: id("c-ben") }, asUpload(sheetId, "spec-sheet.pdf"));
+    const fileCard = fileCards.find((c): c is Extract<ActionCard, { kind: "attach_file" }> => c.kind === "attach_file");
+    check("a file card names the file and the one record; nothing filed yet", fileCard?.uploadId === sheetId && /^File “spec-sheet\.pdf” on Ben Mine/.test(fileCard.title) && (await docs({ contactId: id("c-ben") })) === 0, JSON.stringify({ fileCard, problems }));
+    const twoPlaces = await cardsFor({ type: "attach_file", contactId: id("c-ben"), quote: `Q-${QUOTE_NO}` }, asUpload(sheetId, "spec-sheet.pdf"));
+    check("two records named: no card", twoPlaces.cards.length === 0 && /ONE record/.test(twoPlaces.problems.join(" ")));
+    const filed = await runAsSession(repSession, () => scoped(() => runAssistantAction(fileCard!)));
+    const doc = await basePrisma.document.findFirst({ where: { contactId: id("c-ben"), fileName: "spec-sheet.pdf" } });
+    check("Confirm files it through the documents form: on Ben, in this workspace, by the confirmer", filed.ok && doc?.tenantId === T && doc.uploadedById === rep.id && doc.mimeType === "application/pdf", JSON.stringify({ filed, doc }));
+    const again = await runAsSession(repSession, () => scoped(() => runAssistantAction(fileCard!)));
+    check("Confirm again: refused, and it is filed once", !again.ok && again.unchanged === true && (await docs({ contactId: id("c-ben"), fileName: "spec-sheet.pdf" })) === 1, JSON.stringify(again));
+    // Somebody else's held file can't be filed by naming its id on a card of theirs.
+    const repsId = await hold("private.pdf");
+    const forged = await runAsSession(otherSession, () => scoped(() => runAssistantAction({ ...fileCard!, uploadId: repsId, target: { contactId: id("c-anna") } })));
+    check("another person's held file: refused, nothing filed", !forged.ok && (await docs({ fileName: "private.pdf" })) === 0, JSON.stringify(forged));
+
+    // Money on the invoiced quote, with its proof.
+    const automotive = await scoped(() => isModuleEnabled("automotive"));
+    const popId = await hold("pop.pdf");
+    const today = new Date(Date.now() + 2 * 3_600_000).toISOString().slice(0, 10);
+    const pay = await cardsFor({ type: "record_payment", quote: `Q-${QUOTE_NO}`, amount: 25_000, method: "eft", receivedOn: today, reference: `REF${SFX}` }, asUpload(popId, "pop.pdf"));
+    const payCard = pay.cards.find((c): c is Extract<ActionCard, { kind: "record_payment" }> => c.kind === "record_payment");
+    check(`the card: ${automotive ? "the DEPOSIT (none recorded yet)" : "a payment"} of R25 000 on the quote, with its proof`, !!payCard && payCard.deposit === automotive && payCard.amountCents === 2_500_000 && payCard.uploadId === popId && /pop\.pdf/.test(payCard.detail), JSON.stringify(pay));
+    const paid = await runAsSession(repSession, () => scoped(() => runAssistantAction(payCard!)));
+    const quote = await basePrisma.quote.findUnique({ where: { id: id("quote") }, select: { depositPaidCents: true } });
+    const payments = () => basePrisma.quotePayment.count({ where: { quoteId: id("quote"), voidedAt: null } });
+    const proofs = () => docs({ quoteId: id("quote") });
+    check("Confirm records it once, with the proof filed on the quote",
+      paid.ok && (automotive ? quote?.depositPaidCents === 2_500_000 : (await payments()) === 1) && (await proofs()) === 1, JSON.stringify({ paid, quote, payments: await payments(), proofs: await proofs() }));
+    const twice = await runAsSession(repSession, () => scoped(() => runAssistantAction(payCard!)));
+    check("Confirm again: nothing recorded or filed twice", (automotive ? !twice.ok : twice.ok) && (await proofs()) === 1 && (await payments()) === (automotive ? 0 : 1), JSON.stringify(twice));
+    if (automotive) {
+      // The deposit is in: the next money is a payment on the statement — no proof needed.
+      const proof2 = await hold("pop-2.pdf");
+      const next = await cardsFor({ type: "record_payment", quote: `Q-${QUOTE_NO}`, amount: 10_000, method: "cash", receivedOn: today }, asUpload(proof2, "pop-2.pdf"));
+      const nextCard = next.cards.find((c): c is Extract<ActionCard, { kind: "record_payment" }> => c.kind === "record_payment");
+      const done = nextCard ? await runAsSession(repSession, () => scoped(() => runAssistantAction(nextCard))) : null;
+      check("after the deposit, a later payment is recorded on the statement, its proof filed on the quote", nextCard?.deposit === false && !!done?.ok && (await payments()) === 1 && (await proofs()) === 2, JSON.stringify({ next, done }));
+      const replay = nextCard ? await runAsSession(repSession, () => scoped(() => runAssistantAction(nextCard))) : null;
+      check("…and Confirm again records and files nothing more (the card's key, the proof taken once)", !!replay?.ok && (await payments()) === 1 && (await proofs()) === 2, JSON.stringify(replay));
+    }
+    const tooMuch = await cardsFor({ type: "record_payment", quote: `Q-${QUOTE_NO}`, amount: 500_000, method: "eft", receivedOn: today }, null);
+    const tooMuchCard = tooMuch.cards.find((c): c is Extract<ActionCard, { kind: "record_payment" }> => c.kind === "record_payment");
+    const refused = tooMuchCard ? await runAsSession(repSession, () => scoped(() => runAssistantAction(tooMuchCard))) : null;
+    check("more than is owing: the ledger refuses it at Confirm", !!refused && !refused.ok && /owing/.test(refused.error ?? ""), JSON.stringify(refused));
+    const future = await cardsFor({ type: "record_payment", quote: `Q-${QUOTE_NO}`, amount: 100, method: "eft", receivedOn: "2099-01-01" }, null);
+    check("a date in the future: no card", future.cards.length === 0 && /in the future/.test(future.problems.join(" ")));
   }
 }
 

@@ -86,7 +86,7 @@ test("lead card: leads.create first, a customer they may open, the catalogue's p
   assert.match(branch, /if \(match\.kind === "one" && !\(await canAccessContact\(user, match\.contactId\)\)\)/, "an existing customer they cannot open is not linked");
   assert.match(branch, /await resolveCatalogueProduct\(\{ productId: p\.productId, product: p\.product \}\)/);
   const action = code("src/app/actions/assistant.ts");
-  const run = action.slice(action.indexOf('case "create_lead": {'), action.indexOf('case "update_customer": {'));
+  const run = action.slice(action.indexOf('case "create_lead": {'), action.indexOf('case "attach_file": {'));
   assert.equal((run.match(/await [a-zA-Z.]+\(/g) ?? []).filter((call) => !/canAccessContact|createLead|confirmed/.test(call)).length, 0, "createLead is the only write");
 });
 

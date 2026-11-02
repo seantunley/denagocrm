@@ -14,6 +14,7 @@ import type { ActionCard } from "./assistantActions";
 import { confirmFromWhatsApp, confirmingOnWhatsAppOn, offerConfirmations } from "./assistantWhatsAppConfirm";
 import { ASK_LIMIT_MESSAGE, assistantAskAllowed, assistantImageAllowed, assistantUserFor, assistantVoiceReplyAllowed } from "./assistantUser";
 import { MAX_IMAGE_BYTES, cleanJpeg, jpegDataUrl } from "./assistantImage";
+import { MAX_UPLOAD_BYTES } from "./assistantUpload";
 import { canSynthesizeVoice } from "./elevenlabs";
 import { synthesiseAnswer } from "./assistantVoice";
 import { ASSISTANT_VOICE_REPLIES_KEY, voiceLanguageFor, voiceRepliesSwitchOn } from "./assistantVoiceRules";
@@ -112,10 +113,11 @@ export type StaffWhatsAppInput =
   /** templateReply: the tap on a message template's button ("Show me") — the way in, not a question. */
   | { text: string; choiceId?: string; templateReply?: boolean }
   | { voiceMediaId: string }
-  /** A photo, file or video. Only a photo can be read; the others are answered with why not. */
-  | { mediaId: string; mediaKind: "image" | "document" | "video"; caption: string };
+  /** A photo, file or video. A photo is read; a file is held to read and file (fileName as sent); a video is answered with why not. */
+  | { mediaId: string; mediaKind: "image" | "document" | "video"; caption: string; fileName?: string };
 
 const IMAGE_QUESTION = "What's in this image, and what should I do with it?";
+const FILE_QUESTION = "What's in this file, and where should it be filed?";
 
 /**
  * A message to the business number. True: it was a staff member's (or their link
@@ -303,9 +305,19 @@ export async function handleStaffWhatsApp(from: string, input: StaffWhatsAppInpu
   // known to be staff. A file or video is not read; the person is told, and the
   // message still ends here rather than being filed as a customer's.
   let images: string[] = [];
-  if ("mediaKind" in input) {
+  // A FILE (a PDF, a document): held for DAX to read and, on Confirm, to file on a record (assistantUpload) —
+  // Sean, 2026-11-02. Downloaded only here, after the number is known to be staff; size-capped.
+  let file: { fileName: string; mimeType: string; data: Uint8Array } | undefined;
+  if ("mediaKind" in input && input.mediaKind === "document") {
     const say = async (text: string) => { await sendPlan(waId, { texts: [text], buttons: null }); await typing; return true; };
-    if (input.mediaKind !== "image") return say("I can read photos and screenshots, but not files or videos yet. Send it as a photo, or type your question.");
+    const media = input.mediaId ? await fetchWhatsAppMedia(input.mediaId).catch(() => null) : null;
+    if (!media) return say("I couldn't download that file — try sending it again.");
+    if (media.buffer.length > MAX_UPLOAD_BYTES) return say(`That file is over ${MAX_UPLOAD_BYTES / (1024 * 1024)} MB — upload it in the CRM instead.`);
+    file = { fileName: (input.fileName || "file").slice(0, 200), mimeType: media.contentType || "application/octet-stream", data: new Uint8Array(media.buffer) };
+    question = input.caption.trim() || FILE_QUESTION;
+  } else if ("mediaKind" in input) {
+    const say = async (text: string) => { await sendPlan(waId, { texts: [text], buttons: null }); await typing; return true; };
+    if (input.mediaKind !== "image") return say("I can read photos, screenshots and files, but not videos yet. Send a photo, or type your question.");
     if (!(await assistantImageAllowed(user.id))) return say("That's a lot of images this hour — give it a while and try again.");
     const media = input.mediaId ? await fetchWhatsAppMedia(input.mediaId).catch(() => null) : null;
     const cleaned = media && media.contentType.startsWith("image/jpeg") && media.buffer.length <= MAX_IMAGE_BYTES ? cleanJpeg(new Uint8Array(media.buffer)) : null;
@@ -337,7 +349,7 @@ export async function handleStaffWhatsApp(from: string, input: StaffWhatsAppInpu
     // A task asked for here is never thrown away. With the owner's switch on it
     // gets a Confirm button; without it NOTHING can be changed from this phone,
     // and the task is kept as a card on the person's Ask page instead ("saved").
-    const result = await askCrm(user, q, null, { source: "whatsapp", images, proposeTasks: (await confirmingOnWhatsAppOn()) ? true : "saved" });
+    const result = await askCrm(user, q, null, { source: "whatsapp", images, ...(file ? { file } : {}), proposeTasks: (await confirmingOnWhatsAppOn()) ? true : "saved" });
     if (result.ok) proposed = result.actions;
     plan = result.ok ? planWhatsAppReply(result.answer, result.choices) : { texts: [result.error], buttons: null };
     if (result.ok) answer = result.answer;

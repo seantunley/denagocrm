@@ -77,6 +77,7 @@ const state = {
   media: null as { buffer: Buffer; contentType: string } | null,
   imageAllowed: true,
   askedImages: [] as string[][],
+  askedFiles: [] as ({ fileName: string; mimeType: string; data: Uint8Array } | null)[],
   confirmOn: false,
   proposals: [] as { kind: string; title: string }[],
   proposeTasks: [] as (boolean | "saved")[],
@@ -239,9 +240,10 @@ loaderKey._load = function (this: unknown, request: string, parent, isMain) {
       } };
       case "./transcribe": return { transcribeVoice: async () => "what is overdue today" };
       case "./crmAssistant": return {
-        askCrm: async (user: { id: string }, question: string, _page: unknown, opts: { source?: string; images?: string[]; proposeTasks?: boolean | "saved" }) => {
+        askCrm: async (user: { id: string }, question: string, _page: unknown, opts: { source?: string; images?: string[]; file?: { fileName: string; mimeType: string; data: Uint8Array }; proposeTasks?: boolean | "saved" }) => {
           state.asked.push({ userId: user.id, question, source: opts.source });
           state.askedImages.push(opts.images ?? []);
+          state.askedFiles.push(opts.file ?? null);
           state.proposeTasks.push(opts.proposeTasks ?? false);
           // As the real one: proposals come back only when the caller said what it will do with them.
           if (opts.proposeTasks && state.proposals.length) {
@@ -341,6 +343,7 @@ beforeEach(() => {
   state.media = null;
   state.imageAllowed = true;
   state.askedImages = [];
+  state.askedFiles = [];
   state.confirmOn = false;
   state.proposals = [];
   state.proposeTasks = [];
@@ -885,7 +888,8 @@ test("the route asks handleStaffWhatsApp FIRST and skips the inbox and the bot o
   const audio = branch('} else if (message.type === "audio"', "await completeInboundBotEvent(claim)");
   for (const [name, body, call] of [
     // message.id: what "typing…" is shown against while the answer is worked out.
-    ["text", text, "handleStaffWhatsApp(from, { text }, message.id)"],
+    // A forwarded message is marked as such for DAX (only on this staff path).
+    ["text", text, "handleStaffWhatsApp(from, { text: forwardedForDax(message, text) }, message.id)"],
     ["interactive", interactive, "handleStaffWhatsApp(from, { text: title, choiceId: id }, message.id)"],
     ["audio", audio, "handleStaffWhatsApp(from, { voiceMediaId: mediaId }, message.id)"],
   ] as const) {
@@ -911,8 +915,10 @@ test("the route asks handleStaffWhatsApp FIRST and skips the inbox and the bot o
   // customer inbox. Left to carry on, it was recorded as a customer message, which created a contact
   // on the staff member's own number; a number on a customer record is then unlinked from the assistant.
   const media = branch('} else if (message.type === "image"', '} else if (message.type === "audio"');
-  const asked = media.indexOf("if (await handleStaffWhatsApp(from, { mediaId: String(media?.id ?? \"\"), mediaKind: message.type, caption }, message.id)) return;");
+  const asked = media.indexOf("if (await handleStaffWhatsApp(from, {");
   assert.ok(asked > -1);
+  // The media, its caption (marked when forwarded) and a document's file name — then return on a yes.
+  assert.match(media, /if \(await handleStaffWhatsApp\(from, \{\s*mediaId: String\(media\?\.id \?\? ""\), mediaKind: message\.type, caption: forwardedForDax\(message, caption\),\s*\.\.\.\(message\.type === "document" && typeof message\.document\?\.filename === "string" \? \{ fileName: message\.document\.filename \} : \{\}\),\s*\}, message\.id\)\) return;/);
   for (const later of ['held("media"', "fetchWhatsAppMedia(", "saveFile(", "recordInboundWhatsApp(", "runWhatsAppBot("]) assert.ok(asked < media.indexOf(later), later);
 });
 
@@ -942,8 +948,9 @@ test("a photo from staff is read by the assistant; a file or video is answered, 
 
   // Not read, but ANSWERED — each returns true, so the route never files it as a customer's.
   const refusals: [string, () => void, Parameters<typeof handleStaffWhatsApp>[1], RegExp][] = [
-    ["a file", () => {}, { mediaId: "m2", mediaKind: "document", caption: "" }, /not files or videos yet/],
-    ["a video", () => {}, { mediaId: "m2", mediaKind: "video", caption: "" }, /not files or videos yet/],
+    ["a video", () => {}, { mediaId: "m2", mediaKind: "video", caption: "" }, /not videos yet/],
+    ["a file over the limit", () => { state.media = { buffer: Buffer.alloc(10 * 1024 * 1024 + 1), contentType: "application/pdf" }; }, { mediaId: "m2", mediaKind: "document", caption: "", fileName: "big.pdf" }, /over 10 MB — upload it in the CRM/],
+    ["a file with no media id", () => {}, { mediaId: "", mediaKind: "document", caption: "", fileName: "x.pdf" }, /couldn't download that file/],
     ["not a JPEG", () => { state.media = { buffer: PHOTO, contentType: "image/png" }; }, { mediaId: "m3", mediaKind: "image", caption: "" }, /couldn't read that image/],
     ["broken bytes", () => { state.media = { buffer: Buffer.from("not a picture"), contentType: "image/jpeg" }; }, { mediaId: "m3", mediaKind: "image", caption: "" }, /couldn't read that image/],
     ["no media id", () => {}, { mediaId: "", mediaKind: "image", caption: "" }, /couldn't read that image/],
@@ -960,6 +967,16 @@ test("a photo from staff is read by the assistant; a file or video is answered, 
     assert.match(state.sent[0]?.text ?? "", reply, name);
   }
 
+  // A FILE from staff (2026-11-02): held and handed to DAX with its name — to read (a PDF) and to file on Confirm.
+  state.media = { buffer: Buffer.from("%PDF-1.4 invoice"), contentType: "application/pdf" };
+  state.sent = [];
+  assert.equal(await handleStaffWhatsApp(STAFF, { mediaId: "m6", mediaKind: "document", caption: "", fileName: "invoice.pdf" }), true);
+  assert.equal(state.asked.at(-1)?.question, "What's in this file, and where should it be filed?");
+  assert.deepEqual(state.askedImages.at(-1), [], "a file is not an image");
+  assert.equal(state.askedFiles.at(-1)?.fileName, "invoice.pdf");
+  assert.equal(state.askedFiles.at(-1)?.mimeType, "application/pdf");
+  assert.equal(Buffer.from(state.askedFiles.at(-1)!.data).toString(), "%PDF-1.4 invoice");
+
   // A CUSTOMER's photo is none of this: not staff → false, and it is never downloaded here.
   state.media = { buffer: PHOTO, contentType: "image/jpeg" };
   const fetched = state.mediaFetched;
@@ -974,7 +991,7 @@ test("the staff path never writes a customer record or runs the bot", () => {
   for (const call of lib.match(/sendWhatsApp(Text|Buttons)\([^)]*\)/g) ?? []) {
     assert.doesNotMatch(call, /record/, call);
   }
-  assert.match(lib, /askCrm\(user, q, null, \{ source: "whatsapp", images, proposeTasks: \(await confirmingOnWhatsAppOn\(\)\) \? true : "saved" \}\)/);
+  assert.match(lib, /askCrm\(user, q, null, \{ source: "whatsapp", images, \.\.\.\(file \? \{ file \} : \{\}\), proposeTasks: \(await confirmingOnWhatsAppOn\(\)\) \? true : "saved" \}\)/);
   // Every lookup names the workspace the route entered for the business number.
   assert.match(lib, /const scope = currentTenantScope\(\);\s*if \(!scope \|\| scope\.system \|\| !scope\.tenantId\) return false;\s*const tenantId = scope\.tenantId;/);
   // …and it is the first thing the handler does: nothing runs before it.

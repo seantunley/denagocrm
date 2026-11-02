@@ -75,6 +75,22 @@ export async function heldUpload(tenantId: string, userId: string, id: string, n
   });
 }
 
+/**
+ * TAKE a held upload to file it — at most once. The row is removed in the same step that claims it, so a second
+ * Confirm (or two at once) finds nothing to file. Null: gone, expired, or not this person's.
+ */
+export async function claimUpload(tenantId: string, userId: string, id: string, now = new Date()): Promise<HeldUpload | null> {
+  const held = await heldUpload(tenantId, userId, id, now);
+  if (!held) return null;
+  const taken = await prisma.assistantUpload.deleteMany({ where: { id, tenantId, userId } });
+  return taken.count === 1 ? held : null;
+}
+
+/** Put a claimed upload back when filing it failed — same id, so the same card can be confirmed again. */
+export async function returnUpload(tenantId: string, userId: string, held: HeldUpload): Promise<void> {
+  await prisma.assistantUpload.create({ data: { id: held.id, tenantId, userId, fileName: held.fileName, mimeType: held.mimeType, data: new Uint8Array(held.data) } });
+}
+
 /** Delete this workspace's held uploads past KEEP_MS. Run by the assistant's cron tick. */
 export async function pruneAssistantUploads(tenantId: string, now = new Date()): Promise<number> {
   const removed = await basePrisma.assistantUpload.deleteMany({ where: { tenantId, createdAt: { lt: new Date(now.getTime() - KEEP_MS) } } });

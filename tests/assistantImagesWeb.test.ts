@@ -121,11 +121,11 @@ test("the image is checked on the server before the question is asked — and he
   for (let i = 1; i < order.length; i++) assert.ok(ask.indexOf(order[i - 1]) < ask.indexOf(order[i]), `${order[i - 1]} before ${order[i]}`);
   const lib = code("src/lib/crmAssistant.ts");
   // The history keeps only that there WAS an image (sent with this question, not carried from the last one)…
-  assert.match(lib, /question: freshImages\.length \? `📎 \$\{question\}` : question,/, "only that there WAS an image is kept");
+  assert.match(lib, /question: fresh \? `📎 \$\{question\}` : question,/, "only that there WAS an image (or a file) is kept");
   assert.doesNotMatch(lib, /images[^\n]*assistantTurn|assistantTurn[^\n]*images/);
   // …the cleaned picture itself is HELD apart from the history, for the next reply and the card that files it
   // (Sean, 2026-11-02), and the assistant cron deletes it after a day (lib/assistantUpload.ts).
-  assert.match(lib, /const fresh = freshImages\.length \? photoUpload\(freshImages\[0\]\) : null;/);
+  assert.match(lib, /const fresh = freshImages\.length \? photoUpload\(freshImages\[0\]\) : opts\.file \?\? null;/);
   assert.match(lib, /if \(saved && heldId\) \{\s*await linkUpload\(uploadTenant, user\.id, heldId, saved\)/);
   assert.match(code("src/app/api/cron/assistant/route.ts"), /await pruneAssistantUploads\(tenantId\)/);
   assert.match(lib, /images\.length \? IMAGE_RULE : ""/, "the image is data, never instructions");

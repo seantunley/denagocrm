@@ -7,6 +7,10 @@ import { assistantTurnsToday, customerClash, detailClash } from "@/lib/crmAssist
 import { createContact, updateContact } from "@/app/actions/contacts";
 import { contactFormFor } from "@/lib/contactFormFor";
 import { MAX_IMAGE_BYTES } from "@/lib/assistantImage";
+import { claimUpload, heldUpload, returnUpload } from "@/lib/assistantUpload";
+import { uploadDocument } from "@/app/actions/documents";
+import { recordQuotePayment } from "@/app/actions/quotePayments";
+import { markDepositPaid } from "@/app/actions/fulfilment";
 import { getSetting } from "@/lib/settings";
 import { isCodexConnected } from "@/lib/codex";
 import { ASSISTANT_PROFILE_KEY, parseProfile } from "@/lib/assistantSoul";
@@ -73,6 +77,7 @@ const untouched = (error: string) => ({ ok: false as const, error, unchanged: tr
 const resumable = (error: string) => ({ ok: false as const, error, resumable: true as const });
 
 const BAD_SCREENSHOT = "That screenshot can't be attached — send it to DAX again.";
+const UPLOAD_GONE = "That file is no longer held (it is kept for a day, and filed only once) — send it to DAX again.";
 /**
  * A note card's screenshot (a JPEG data: URL) → the file the note form uploads. Undefined: the card has none.
  * False: what the card carries is not a JPEG within the size DAX accepts — the card came from the browser.
@@ -106,6 +111,9 @@ export async function runAssistantAction(
     // the change came from the assistant's proposal, on the lead's timeline.
     const confirmed = (what: string, leadId: string) =>
       logAudit({ action: "assistant.action_confirmed", summary: `Confirmed the assistant's proposal: ${what}`, user, leadId });
+    // The same, for a card whose deal may be none (a quote for a customer directly).
+    const confirmedOn = (card: { leadId: string | null }, what: string) =>
+      logAudit({ action: "assistant.action_confirmed", summary: `Confirmed the assistant's proposal: ${what}`, user, ...(card.leadId ? { leadId: card.leadId } : {}) });
     // A quote's PDF queued for this person (saveQuoteDraft, pdfToMyWhatsApp): when
     // Confirm was pressed in the CRM, try the send now, briefly — the click does
     // not wait on WhatsApp, and whatever is not sent in that time is the sweep's.
@@ -247,6 +255,71 @@ export async function runAssistantAction(
         if (result?.error || !leadId) return { ok: false, error: result?.error ?? "Couldn't open the lead." };
         await confirmed("open a lead", leadId);
         return { ok: true, success: `Lead opened for ${card.leadLabel}`, href: `/leads/${leadId}` };
+      }
+      case "attach_file": {
+        // THE DOCUMENTS FORM'S OWN DOOR (uploadDocument): documents.upload, access to THE one record, the size limit,
+        // the workspace's document types, the audit entry. The file is the person's own held upload, taken once.
+        const target = (card.target ?? {}) as Record<string, unknown>;
+        const keys = (["contactId", "vehicleId", "jobCardId", "quoteId"] as const).filter((key) => typeof target[key] === "string" && target[key]);
+        if (keys.length !== 1 || typeof card.uploadId !== "string") return untouched(STALE_CARD);
+        const tenantId = ownedWriteTenantId();
+        const held = await claimUpload(tenantId, user.id, card.uploadId);
+        if (!held) return untouched(UPLOAD_GONE);
+        const form = new FormData();
+        form.set("file", new File([new Uint8Array(held.data)], held.fileName, { type: held.mimeType }));
+        form.set(keys[0], String(target[keys[0]]));
+        if (card.label) form.set("label", card.label);
+        const result = await uploadDocument(form).catch((error: unknown) => ({ error: error instanceof Error && error.message ? error.message : "Couldn't file it." }));
+        if (result?.error) {
+          // Nothing was filed (the form refuses before it stores): the file goes back, and the card can be confirmed again.
+          await returnUpload(tenantId, user.id, held).catch(() => {});
+          return { ok: false, error: result.error };
+        }
+        await logAudit({ action: "assistant.action_confirmed", summary: "Confirmed the assistant's proposal: file a document", user, ...("contactId" in target && target.contactId ? { contactId: String(target.contactId) } : {}), ...(card.leadId ? { leadId: card.leadId } : {}) });
+        return { ok: true, success: `Filed on ${card.leadLabel}` };
+      }
+      case "record_payment": {
+        // THE DELIVERIES BOARD'S OWN DOORS: the deposit through markDepositPaid (the proof filed in its locked
+        // transaction — refused if a deposit is already recorded), a later payment through recordQuotePayment (the
+        // card's key is its idempotency key: Confirm again records nothing more). Both check deliveries.manage, the
+        // quote and the balance. Nothing is sent to the customer.
+        if (!/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(String(card.confirmKey ?? ""))) return untouched(STALE_CARD);
+        if (!Number.isInteger(card.amountCents) || card.amountCents <= 0 || !/^\d{4}-\d{2}-\d{2}$/.test(String(card.receivedOn ?? ""))) return untouched(STALE_CARD);
+        const tenantId = ownedWriteTenantId();
+        const amount = (card.amountCents / 100).toFixed(2);
+        if (card.deposit) {
+          const held = card.uploadId ? await heldUpload(tenantId, user.id, card.uploadId) : null;
+          if (!held) return untouched(UPLOAD_GONE);
+          const form = new FormData();
+          form.set("amount", amount);
+          form.set("file", new File([new Uint8Array(held.data)], held.fileName, { type: held.mimeType }));
+          const result = await markDepositPaid(card.quoteId, form);
+          if (result?.error) return { ok: false, error: result.error };
+          await confirmedOn(card, "record the deposit");
+          return { ok: true, success: `Deposit of ${formatZAR(card.amountCents)} recorded on Q-${card.quoteNumber}, proof filed` };
+        }
+        const form = new FormData();
+        form.set("amount", amount);
+        form.set("method", card.method);
+        form.set("receivedAt", card.receivedOn);
+        if (card.reference) form.set("reference", card.reference);
+        form.set("idempotencyKey", card.confirmKey);
+        const result = await recordQuotePayment(card.quoteId, form);
+        if (result?.error) return { ok: false, error: result.error };
+        await confirmedOn(card, "record a payment");
+        // The proof, filed on the quote — taken once, so a second Confirm does not file it twice.
+        const held = card.uploadId ? await claimUpload(tenantId, user.id, card.uploadId) : null;
+        if (held) {
+          const proof = new FormData();
+          proof.set("quoteId", card.quoteId);
+          proof.set("file", new File([new Uint8Array(held.data)], held.fileName, { type: held.mimeType }));
+          const filed = await uploadDocument(proof).catch(() => ({ error: "failed" }));
+          if (filed?.error) {
+            await returnUpload(tenantId, user.id, held).catch(() => {});
+            return resumable(`The payment is recorded, but its proof of payment could not be filed (${filed.error}). Confirm again to file it — the payment will not be recorded twice.`);
+          }
+        }
+        return { ok: true, success: `Payment of ${formatZAR(card.amountCents)} recorded on Q-${card.quoteNumber}${held ? ", proof filed" : ""}` };
       }
       case "update_customer": {
         // THE CONTACT FORM'S OWN DOOR (updateContact): contacts.edit, access to THIS customer, the audit entry with

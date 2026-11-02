@@ -161,7 +161,21 @@ export const WHATSAPP_CONFIRMABLE: ReadonlySet<string> = new Set([
   // create_lead / update_customer (2026-11-02): a new deal, or a customer's own details — shown in full, nobody
   // contacted, through the lead and contact forms' own actions.
   "create_lead", "update_customer",
+  // attach_file / record_payment (2026-11-02): what was sent from this phone, filed on a record; money received on an
+  // invoiced quote with its proof — every figure shown, the deliveries board's own checks, nothing to the customer.
+  "attach_file", "record_payment",
 ]);
+
+/**
+ * A FORWARDED message, told to DAX as such (Sean, 2026-11-02: forward a customer's message → it goes on their
+ * timeline). WhatsApp marks it in `context.forwarded` / `frequently_forwarded`. Only the staff path uses this;
+ * a customer's own forwarded message is recorded as they sent it.
+ */
+export const FORWARDED_PREFIX = "[Forwarded message]";
+export function forwardedForDax(message: unknown, text: string): string {
+  const context = (message as { context?: { forwarded?: unknown; frequently_forwarded?: unknown } } | null)?.context;
+  return context?.forwarded === true || context?.frequently_forwarded === true ? `${FORWARDED_PREFIX} ${text}`.trim() : text;
+}
 
 /**
  * A contact shared from the phone (WhatsApp message type "contacts") → the question DAX gets, or null when
