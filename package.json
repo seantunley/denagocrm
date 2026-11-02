@@ -42,6 +42,7 @@
     "check:rls-role": "tsx --tsconfig tsconfig.scripts.json scripts/check-rls-role.ts",
     "test:tenant-e2e": "tsx --tsconfig tsconfig.scripts.json scripts/test-tenant-e2e.ts",
     "test:signflow-workspace": "tsx --tsconfig tsconfig.harness.json scripts/test-signflow-workspace.ts",
+    "test:flow-qr-routes": "tsx --tsconfig tsconfig.harness.json scripts/test-flow-qr-routes.ts",
     "test:statement-workspace": "tsx --tsconfig tsconfig.harness.json scripts/test-statement-workspace.ts",
     "test:enforced-render": "tsx --tsconfig tsconfig.scripts.json scripts/test-enforced-render.ts",
     "test:delivery-note-signing": "tsx --tsconfig tsconfig.harness.json scripts/test-delivery-note-signing.ts",

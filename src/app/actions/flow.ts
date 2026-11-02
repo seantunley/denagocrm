@@ -220,6 +220,11 @@ export async function addFlowRoute(formData: FormData) {
       orderBy: [{ version: "desc" }, { createdAt: "desc" }],
     });
     if (!published) return { error: "Publish this flow before routing traffic to it." };
+    // The other way round: an ordinary route never takes over a QR code's route (review of #948).
+    const same = await prisma.botFlowRoute.findFirst({ where: { tenantId, channel, kind, pattern }, select: { id: true } });
+    if (same && parseQrCodes(await getSetting(FLOW_QR_KEY)).some((code) => code.routeId === same.id)) {
+      return { error: "That message belongs to a QR code — change or delete it under QR codes instead." };
+    }
     await prisma.botFlowRoute.upsert({
       where: { tenantId_channel_kind_pattern: { tenantId, channel, kind, pattern } },
       update: { flowId, publishedVersionId: published.id, priority, enabled: true },
@@ -245,8 +250,18 @@ export async function addFlowQr(formData: FormData) {
     if (name.length < 2 || name.length > 60) return { error: "Give the QR code a name of 2–60 characters (e.g. Showroom poster)." };
     if (message.length < 5 || message.length > 200) return { error: "Write the message it types for the customer — 5 to 200 characters." };
     const pattern = qrPattern(message);
-    const codes = parseQrCodes(await getSetting(FLOW_QR_KEY));
+    // Only codes whose route still exists: one whose route went some other way frees its name.
+    const saved = parseQrCodes(await getSetting(FLOW_QR_KEY));
+    const live = new Set((await prisma.botFlowRoute.findMany({ where: { tenantId, id: { in: saved.map((c) => c.routeId) } }, select: { id: true } })).map((r) => r.id));
+    const codes = saved.filter((code) => live.has(code.routeId));
     if (codes.some((code) => code.name.toLowerCase() === name.toLowerCase())) return { error: "A QR code with that name already exists." };
+    // A QR code only ever makes a route of its OWN — never takes over one that is there (review of #948).
+    const taken = await prisma.botFlowRoute.findFirst({ where: { tenantId, channel: "whatsapp", kind: "keyword", pattern }, select: { id: true } });
+    if (taken) {
+      return { error: live.has(taken.id)
+        ? "Another QR code already uses that message — write a different one."
+        : "A WhatsApp keyword route already uses that message — write a different one for the QR code, or delete that route first." };
+    }
     const flow = await prisma.botFlow.findFirst({ where: { id: flowId, tenantId, channel: "whatsapp" } });
     if (!flow) return { error: "Choose a WhatsApp flow." };
     const published = await prisma.botFlowVersion.findFirst({
@@ -256,13 +271,13 @@ export async function addFlowQr(formData: FormData) {
     });
     if (!published) return { error: "Publish this flow before a QR code can start it." };
     // Priority 10: ahead of the ordinary keyword routes (100), so the QR's own message always reaches its flow.
-    const route = await prisma.botFlowRoute.upsert({
-      where: { tenantId_channel_kind_pattern: { tenantId, channel: "whatsapp", kind: "keyword", pattern } },
-      update: { flowId, publishedVersionId: published.id, priority: 10, enabled: true },
-      create: { tenantId, channel: "whatsapp", kind: "keyword", pattern, flowId, publishedVersionId: published.id, priority: 10 },
+    // create, not upsert: a route made in the meantime with the same message is refused by its unique key.
+    const route = await prisma.botFlowRoute.create({
+      data: { tenantId, channel: "whatsapp", kind: "keyword", pattern, flowId, publishedVersionId: published.id, priority: 10 },
       select: { id: true },
-    });
-    await putSetting(FLOW_QR_KEY, JSON.stringify([...codes.filter((code) => code.routeId !== route.id), { routeId: route.id, name, message }]));
+    }).catch(() => null);
+    if (!route) return { error: "A WhatsApp keyword route already uses that message — write a different one for the QR code." };
+    await putSetting(FLOW_QR_KEY, JSON.stringify([...codes, { routeId: route.id, name, message }]));
     await logAudit({ action: "bot.flow_qr_saved", summary: `QR code “${name}” → WhatsApp flow “${flow.name}”`, user: owner });
     revalidatePath("/bot-builder/routes");
     return { success: "QR code saved" };
@@ -299,7 +314,15 @@ export async function deleteFlowRoute(id: string) {
     const route = await prisma.botFlowRoute.findFirst({ where: { id, tenantId } });
     if (!route) return;
     await prisma.botFlowRoute.deleteMany({ where: { id, tenantId } });
-    await logAudit({ action: "bot.flow_route_deleted", summary: `Deleted chatbot ${route.channel} ${route.kind} route “${route.pattern}”`, user: owner });
+    // A QR code's route deleted here takes its QR code with it, so the two never disagree (review of #948).
+    const codes = parseQrCodes(await getSetting(FLOW_QR_KEY));
+    const qr = codes.find((c) => c.routeId === id);
+    if (qr) await putSetting(FLOW_QR_KEY, JSON.stringify(codes.filter((c) => c.routeId !== id)));
+    await logAudit({
+      action: "bot.flow_route_deleted",
+      summary: `Deleted chatbot ${route.channel} ${route.kind} route “${route.pattern}”${qr ? ` — QR code “${qr.name}” deleted with it; printed copies no longer start its flow` : ""}`,
+      user: owner,
+    });
     revalidatePath("/bot-builder/routes");
   });
 }
