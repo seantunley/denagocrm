@@ -120,7 +120,8 @@ test("runs are claimed by a unique key per person per workspace, and every read 
   assert.match(run, /error\.code === "P2002"/);
   assert.equal((run.match(/where: \{ tenantId_userId_clientKey: \{ tenantId, userId, clientKey \} \}/g) ?? []).length, 2, "the claim's fallback and the read");
   assert.match(run, /if \(!run \|\| run\.tenantId !== tenantId \|\| run\.userId !== userId\) return null;/);
-  assert.match(run, /prisma\.assistantRun\.updateMany\(\{ where: \{ id, tenantId, userId \}, data \}\)/);
+  assert.match(run, /prisma\.assistantRun\.updateMany\(\{ where: \{ id, tenantId, userId, status \}, data \}\)/);
+  assert.match(run, /prisma\.assistantRun\.updateMany\(\{ where: \{ tenantId, userId, clientKey, status: \{ in: STOPPABLE \} \}, data \}\)/, "Stop names the person and the workspace");
   assert.match(run, /where: \{ tenantId: inheritedTenantId\(\), status: "completed"/, "the owner's speed view is this workspace's runs");
   assert.doesNotMatch(run, /\buserId_clientKey/, "no lookup by person and key alone");
   const schema = code("prisma/schema.prisma");
