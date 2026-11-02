@@ -19,7 +19,15 @@ import { nextRun, snapToHalfHour } from "./assistantSchedule";
  */
 const SA_OFFSET_MS = 2 * 60 * 60 * 1000;
 const saHour = (at: Date) => new Date(at.getTime() + SA_OFFSET_MS).getUTCHours();
-export const isQuietHour = (at: Date) => saHour(at) >= 20 || saHour(at) < 8;
+export const isQuietHour = (at: Date) => quietOverride ?? (saHour(at) >= 20 || saHour(at) < 8);
+/**
+ * Real-database suites only: true = night, false = day, null = the real clock. Those suites run in CI at any hour,
+ * and one that ran at 07:55 failed because the quiet hours were (correctly) holding its messages back.
+ */
+let quietOverride: boolean | null = null;
+export function __setQuietHoursForTests(night: boolean | null): void {
+  quietOverride = night;
+}
 /** 08:00 Johannesburg on or after `at`. */
 export function nextMorning(at: Date): Date {
   const sa = new Date(at.getTime() + SA_OFFSET_MS);

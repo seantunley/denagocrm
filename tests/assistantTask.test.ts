@@ -157,7 +157,7 @@ test("askCrm: sheets read and written only where the person is talking, before t
   assert.match(lib, /resultsBlock\("Open job sheets \(context only\):", stripInvisible\(taskBlock\(tasks\)\)\)/, "fenced as data");
   assert.match(lib, /tasksOn \? TASK_INSTRUCTIONS : ""/);
   const write = lib.indexOf("applyTaskUpdate(user, keepIds(reply.task, new Set(turnRefs(observations.map((o) => o.output.data), Infinity))), tasks)");
-  const cards = lib.indexOf("await resolveActions(user, proposals, problems, taskWrite?.ok ? taskWrite.sheet : null)");
+  const cards = lib.indexOf("await resolveActions(user, proposals, problems, taskWrite?.ok ? taskWrite.sheet : null, cardUpload)");
   assert.ok(write > 0 && cards > write, "the sheet is written before the cards are filled from it");
   assert.match(lib, /\.\.\.\(taskWrite\?\.ok \? \{ taskId: taskWrite\.id \} : \{\}\)/, "the turn names its sheet");
   assert.match(lib, /📋 Job sheet: \$\{taskWrite\.title\}/, "every reply that touched a sheet names it");

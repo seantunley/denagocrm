@@ -353,6 +353,14 @@ jobs:
         # sale stops the plan and Retry carries on; somebody else's, another workspace's, expired or closed: nothing.
         run: npm run test:assistant-plans
 
+      - name: DAX adds to the CRM -- a new customer (duplicates refused, Confirm once) and a pinned screenshot
+        # 2026-11-02, a contact shared from a phone: the real card builder and Confirm with enforcement on; a number or
+        # email already on a customer (written another way, or one they can't open, unnamed) makes no card; Confirm
+        # creates exactly that customer, Confirm again nothing; a role without contacts.create: no card, forged card refused.
+        # A screenshot: kept for the one reply that follows (not another workspace's, deleted after an hour), pinned to
+        # the customer's timeline at Confirm through the note form's upload; a forged picture refused before any write.
+        run: npm run test:assistant-add-to-crm
+
       - name: Customer statements -- deposit and payments one balance, SA amounts, a form recorded once, trashed figures withheld
         # Review of #924, against the real actions with enforcement on: payments then a deposit (or a deposit
         # corrected up) never past paid; "1000,50" is R1 000,50 and "1.000,50" refused; the same payment form

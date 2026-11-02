@@ -3,6 +3,7 @@ import { prisma, basePrisma } from "./db";
 import { getSetting } from "./settings";
 import { isAllowedPushEndpoint } from "./pushEndpoint";
 import { currentScopeClass } from "./tenantWrite";
+import { isQuietHour } from "./proactiveRules";
 
 type PushRecipient = { id: string; userId: string; endpoint: string; p256dh: string; auth: string };
 
@@ -111,6 +112,12 @@ async function isKindDisabled(kind?: PushKind): Promise<boolean> {
  * filters the already-authorised recipient set resolved above. `userId` is the
  * same kind of narrowing — one person's own devices (a scheduled assistant
  * answer is theirs alone) — and likewise never adds anyone.
+ *
+ * QUIET HOURS (Sean, 2026-11-02, after being woken at 00:30 and 04:30): nothing
+ * pops up on a phone between 20:00 and 08:00 unless the person chose that time
+ * (`evenAtNight`: their own scheduled question or reminder, the morning brief, a
+ * test notification). It is not queued — what happened is in the CRM in the
+ * morning; a caller that needs it delivered (bounce alerts) sees 0 and retries.
  */
 export async function sendPushToAll(
   payload: {
@@ -119,9 +126,10 @@ export async function sendPushToAll(
     url?: string;
   },
   kind?: PushKind,
-  options: { tenantId?: string | null; endpoint?: string | null; userId?: string | null } = {},
+  options: { tenantId?: string | null; endpoint?: string | null; userId?: string | null; evenAtNight?: boolean } = {},
 ): Promise<number> {
   if (!ensureConfigured()) return 0;
+  if (!options.evenAtNight && isQuietHour(new Date())) return 0;
   if (await isKindDisabled(kind)) return 0;
 
   const recipients = options.tenantId

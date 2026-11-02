@@ -585,12 +585,13 @@ export async function runAssistantWatches(budget: CronSliceContext): Promise<{ c
     fired++;
 
     assistantName ??= parseProfile(await getSetting(ASSISTANT_PROFILE_KEY).catch(() => null)).name;
+    // Quiet hours: sendPushToAll keeps them (nothing at night); the note is in the CRM either way.
     await sendPushToAll(
       { title: assistantName, body: `${assistantName}: something you're watching happened.`, url: "/assistant" },
       "assistant",
       { tenantId, userId: user.id },
     ).catch((error: unknown) => logError("assistant-watch", "push failed", error instanceof Error ? error.name : "unknown"));
-    // And to the phone they linked — the same rules as a scheduled briefing.
+    // And to the phone they linked — the same rules as a scheduled briefing (held overnight there).
     const outcome = await sendUpdatesToLinkedPhone(tenantId, user.id, { shouldStop: budget.shouldStop });
     if (outcome === "failed") await logError("assistant-watch", "alert not sent to WhatsApp").catch(() => {});
     if (outcome === "not_safe") await logError("assistant-watch", "alert not sent to WhatsApp: the linked phone is no longer safe").catch(() => {});

@@ -257,7 +257,7 @@ export async function confirmFromWhatsApp(tenantId: string, user: PermissionUser
     user,
     // On the record it changed: the lead's timeline, or the customer's for a customer note.
     ...("leadId" in card && card.leadId ? { leadId: card.leadId } : {}),
-    ...(card.kind === "customer_note" ? { contactId: card.contactId } : {}),
+    ...(card.kind === "customer_note" || card.kind === "update_customer" ? { contactId: card.contactId } : {}),
     // A quote built for a customer directly (no deal) is recorded on the customer.
     ...((card.kind === "quote_build" || card.kind === "quote_add" || card.kind === "quote_change") && !card.leadId ? { contactId: card.contactId } : {}),
   });

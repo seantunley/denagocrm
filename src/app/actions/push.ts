@@ -113,7 +113,8 @@ export async function sendTestPush(
         url: destination,
       },
       kind,
-      { endpoint: targetEndpoint || undefined },
+      // The person pressed "test" — whatever the hour.
+      { endpoint: targetEndpoint || undefined, evenAtNight: true },
     );
 
     const attempted = targetEndpoint ? 1 : devices.length;

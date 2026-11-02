@@ -155,7 +155,41 @@ export const WHATSAPP_CONFIRMABLE: ReadonlySet<string> = new Set([
   // quote_pdf: sends the confirmer their own copy of a quote's PDF — to this phone, and nowhere else.
   // quote_change: changes rows on a DRAFT, shown before and after — the same kind of internal change.
   "quote_build", "quote_add", "quote_change", "quote_pdf",
+  // create_customer (Sean, 2026-11-02): a new customer record from a contact shared off the phone — every field
+  // shown first, nobody contacted, and a phone or email already on a customer is refused.
+  "create_customer",
+  // create_lead / update_customer (2026-11-02): a new deal, or a customer's own details — shown in full, nobody
+  // contacted, through the lead and contact forms' own actions.
+  "create_lead", "update_customer",
 ]);
+
+/**
+ * A contact shared from the phone (WhatsApp message type "contacts") → the question DAX gets, or null when
+ * it carries nothing usable. ONE contact (one customer per task); each field capped so the whole question
+ * always fits QUESTION_CHARS — a question cut short could cut a phone number mid-digit.
+ */
+export function sharedContactQuestion(contacts: unknown): string | null {
+  if (!Array.isArray(contacts) || contacts.length === 0) return null;
+  const clean = (value: unknown, max: number) => String(value ?? "").replace(/[\u0000-\u001f\u007f]+/g, " ").replace(/\s+/g, " ").trim().slice(0, max);
+  const c = (contacts[0] ?? {}) as { name?: Record<string, unknown>; phones?: unknown; emails?: unknown; org?: { company?: unknown } };
+  const name = clean(c.name?.formatted_name || [c.name?.first_name, c.name?.last_name].filter(Boolean).join(" "), 60);
+  const phones = (Array.isArray(c.phones) ? c.phones : []).slice(0, 3)
+    .map((p: { phone?: unknown; type?: unknown }) => ({ phone: clean(p?.phone, 20), type: clean(p?.type, 10) }))
+    .filter((p) => /\d{6}/.test(p.phone.replace(/\D/g, "")))
+    .map((p) => `${p.phone}${p.type ? ` (${p.type})` : ""}`);
+  const email = (Array.isArray(c.emails) ? c.emails : []).map((e: { email?: unknown }) => clean(e?.email, 80)).find(Boolean);
+  const company = clean(c.org?.company, 60);
+  if (phones.length === 0 && !email) return null;
+  return [
+    "I've shared a contact from my phone. Add them to the CRM as a new customer.",
+    "",
+    `Name: ${name || "(none)"}`,
+    ...(company ? [`Company: ${company}`] : []),
+    ...(phones.length ? [`Phone: ${phones.join(", ")}`] : []),
+    ...(email ? [`Email: ${email}`] : []),
+    ...(contacts.length > 1 ? ["", `(I shared ${contacts.length - 1} more — I'll send ${contacts.length === 2 ? "that one" : "those"} separately.)`] : []),
+  ].join("\n");
+}
 
 /** Proposed cards, split into those that get a Confirm button here and those that need the CRM. */
 export function splitForWhatsApp_cards<T extends { kind: string }>(cards: readonly T[]): { confirmable: T[]; crmOnly: T[] } {
@@ -222,6 +256,18 @@ export const PROACTIVE_SOURCES = ["schedule", "watch", "handoff", "quote_pdf", "
  * phone even when they have switched general updates off.
  */
 export const QUOTE_PDF_SOURCE = "quote_pdf";
+
+/**
+ * QUIET HOURS on the phone (Sean, 2026-11-02: "Why is DAX sending me messages at
+ * midnight and 4h30am and waking me up?"). Between 20:00 and 08:00 — unless the
+ * person is writing to DAX right now — only what they set for that time (a
+ * scheduled question, the morning brief) or asked for (a quote's PDF) goes to
+ * their phone. Alerts, check-backs and handoffs wait for 08:00, and the "you have
+ * an update" template is never sent at night (assistantWhatsApp.nudgeWithTemplate).
+ */
+export const NIGHT_SOURCES: readonly string[] = ["schedule", "brief", QUOTE_PDF_SOURCE];
+export const sendableSources = (sources: readonly string[], night: boolean): string[] =>
+  night ? sources.filter((s) => NIGHT_SOURCES.includes(s)) : [...sources];
 
 /**
  * The owner's switch (AppSetting): when the chatbot hands a conversation to a

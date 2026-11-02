@@ -33,6 +33,56 @@ export function nameIsClose(asked: string, name: string): boolean {
   return want.length > 0 && have.length > 0 && want.every((word) => have.some((h) => closeWord(word, h)));
 }
 
+/**
+ * How alike two words are, 0–1: one minus the edits it takes, over the longer word. A word asked for that begins the
+ * other ("jam" → "jameson") counts as nearly the same.
+ */
+export function wordCloseness(asked: string, have: string): number {
+  if (asked === have) return 1;
+  if (asked.length >= 3 && have.startsWith(asked)) return 0.9;
+  return 1 - editDistance(asked, have) / Math.max(asked.length, have.length);
+}
+
+/**
+ * How close a name is to what was asked, 0–1: each word asked for against the name's nearest word, averaged. So
+ * "Clive Jammim" is close to "Clive Jammine" (0.86), less so to "Clive James" (0.75), and not near "Clive Botha" or
+ * "Benjamin Smith". Words in the name nobody asked for (a middle name) cost nothing.
+ */
+export function nameCloseness(asked: string, name: string): number {
+  const want = nameWords(asked);
+  const have = nameWords(name);
+  if (!want.length || !have.length) return 0;
+  return want.reduce((sum, word) => sum + Math.max(...have.map((h) => wordCloseness(word, h))), 0) / want.length;
+}
+
+/** Close enough to offer as "Did you mean …?": about three letters in four right, word for word. */
+export const NEAR_NAME = 0.7;
+
+/**
+ * "Did you mean …?" (Sean, 2026-10-29: "asked for clive jammim and it failed to find the client — can we not get dax
+ * to present the closest options instead of asking for the spelling"). The candidates someone most likely meant,
+ * closest first and at most `limit`, each close enough to offer (NEAR_NAME) by the closest of its names — a
+ * customer's own name or their company's. Offered as a choice, never acted on.
+ */
+export function closestNames<T>(
+  asked: string,
+  candidates: readonly T[],
+  namesOf: (candidate: T) => readonly (string | null | undefined)[],
+  limit = 5,
+): T[] {
+  return candidates
+    .map((candidate, order) => ({
+      candidate,
+      order,
+      score: Math.max(0, ...namesOf(candidate).filter((name): name is string => Boolean(name)).map((name) => nameCloseness(asked, name))),
+    }))
+    .filter(({ score }) => score >= NEAR_NAME)
+    // Closest first; among equals, the order given (the database's: closest spelling, then most recently worked).
+    .sort((a, b) => b.score - a.score || a.order - b.order)
+    .slice(0, limit)
+    .map(({ candidate }) => candidate);
+}
+
 /** The first three letters of each word of three or more: what a database search can match a misspelling on. */
 export const nameStems = (asked: string) => [...new Set(nameWords(asked).filter((w) => w.length >= 3).map((w) => w.slice(0, 3)))];
 

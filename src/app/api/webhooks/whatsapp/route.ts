@@ -10,6 +10,7 @@ import { voiceLanguage } from "@/lib/voiceLanguage";
 import { saveFile } from "@/lib/storage";
 import { runWhatsAppBot } from "@/lib/flowRun";
 import { handleStaffWhatsApp } from "@/lib/assistantWhatsApp";
+import { sharedContactQuestion } from "@/lib/assistantWhatsAppRules";
 import { linkScreening, screenInbound, type ScreenOutcome } from "@/lib/inboundScreening/screen";
 import { withChannelTenantScope, validateInSystemScope } from "@/lib/tenantScopeEntry";
 import { reportUnmappedEndpoint } from "@/lib/channelRegistration";
@@ -185,6 +186,11 @@ export async function POST(req: NextRequest) {
                 }
                 await link(await recordInboundWhatsApp(from, profileName, `📎 ${caption || "[file]"}`, String(message.id ?? "")));
                 await runWhatsAppBot(from, { text: caption, fileUrl }, { entryContext });
+              } else if (message.type === "contacts") {
+                // A contact shared from a phone. From linked staff it asks DAX to add them as a customer (a card with
+                // Confirm — nothing is created before that). From anyone else it is left alone, as it always was.
+                const question = sharedContactQuestion(message.contacts);
+                if (question) await handleStaffWhatsApp(from, { text: question }, message.id);
               } else if (message.type === "audio" || message.type === "voice") {
                 const mediaId: string | undefined = message.audio?.id ?? message.voice?.id;
                 if (!mediaId) return;
