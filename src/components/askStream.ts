@@ -26,13 +26,17 @@ export async function askStreaming(
   form: FormData,
   onText: (visibleSoFar: string) => void,
   onStatus: (status: string) => void = () => {},
-  opts: { pause?: (ms: number) => Promise<void>; key?: string } = {},
+  /** signal: aborted once the server has STOPPED this run (stopAsking) — stop reading, never reconnect. */
+  opts: { pause?: (ms: number) => Promise<void>; key?: string; signal?: AbortSignal } = {},
 ): Promise<AssistantResult> {
   const key = opts.key ?? newRunKey();
   form.set("runKey", key);
   const pause = opts.pause ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
+  const { signal } = opts;
+  const stopped: AssistantResult = { ok: false, error: ASK_STOPPED };
 
-  const first = await readStream(() => fetch("/api/assistant/ask", { method: "POST", body: form, credentials: "same-origin" }), onText, onStatus);
+  const first = await readStream(() => fetch("/api/assistant/ask", { method: "POST", body: form, credentials: "same-origin", signal }), onText, onStatus);
+  if (signal?.aborted) return stopped;
   if (first.kind === "done") return first.result;
   // 4xx: refused before anything ran (signed out, no permission, bad form).
   if (first.kind === "refused") return { ok: false, error: "Something went wrong — try again." };
@@ -40,12 +44,30 @@ export async function askStreaming(
   // Dropped, or a gateway cut it off: the run may be going on without us. Follow it.
   for (const ms of RECONNECT_DELAYS_MS) {
     await pause(ms);
+    if (signal?.aborted) return stopped;
     onStatus("Reconnecting…");
-    const again = await readStream(() => fetch(`/api/assistant/ask?run=${encodeURIComponent(key)}`, { credentials: "same-origin" }), onText, onStatus);
+    const again = await readStream(() => fetch(`/api/assistant/ask?run=${encodeURIComponent(key)}`, { credentials: "same-origin", signal }), onText, onStatus);
+    if (signal?.aborted) return stopped;
     if (again.kind === "done") return again.result;
     if (again.kind === "refused") break;
   }
   return { ok: false, error: STREAM_DROPPED };
+}
+
+export const ASK_STOPPED = "Stopped — nothing from this answer was kept.";
+
+/**
+ * Stop the run named `key` (DELETE /api/assistant/ask?run=…). true: the server
+ * stopped it and keeps nothing from it. false: too late (it had finished) or
+ * the server couldn't be reached — its answer arrives as usual.
+ */
+export async function stopAsking(key: string): Promise<boolean> {
+  try {
+    const res = await fetch(`/api/assistant/ask?run=${encodeURIComponent(key)}`, { method: "DELETE", credentials: "same-origin" });
+    return res.ok && ((await res.json()) as { stopped?: unknown }).stopped === true;
+  } catch {
+    return false;
+  }
 }
 
 type Outcome = { kind: "done"; result: AssistantResult } | { kind: "dropped" } | { kind: "refused" };
@@ -87,7 +109,7 @@ async function readStream(
 }
 
 /** A fresh name for one question — random, so nobody can guess another person's (and reads check the asker anyway). */
-function newRunKey(): string {
+export function newRunKey(): string {
   const bytes = new Uint8Array(16);
   crypto.getRandomValues(bytes);
   return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");

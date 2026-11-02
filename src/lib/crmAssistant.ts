@@ -1930,6 +1930,12 @@ export type AskOptions = {
   /** Each phase as it starts — the run record (assistantRun) keeps it for a reconnect. */
   onPhase?: (phase: "planning" | "researching" | "answering") => void;
   /**
+   * Stop (assistantRun.stopRun): asked before each research round and before the answer whether the person still
+   * wants it — and, with `final`, once more after it is written and BEFORE anything is kept (job sheet, cards, plan,
+   * check-backs, learning, history). false: it ends there and writes nothing.
+   */
+  stillWanted?: (final: boolean) => Promise<boolean>;
+  /**
    * Filled in with milliseconds per phase (context, plan1, lookups1, …,
    * answerFirstText, answer, total) — plus two flags, depth (1 = investigated)
    * and moreLookupsHelp (0/1) — numbers only, never what was asked —
@@ -2229,7 +2235,11 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
   let slowestRound = 0;
   // The research step's last word on whether another lookup would change the answer (null: it never said).
   let moreHelps: boolean | null = null;
+  // Stopped by the person (opts.stillWanted): it ends at the next step, having written nothing.
+  const stopped = async (final = false) => (opts.stillWanted ? !(await opts.stillWanted(final)) : false);
+  const STOPPED: AssistantResult = { ok: false, error: "Stopped." };
   for (let step = 0; research && step < budget().maxSteps && observations.length < budget().maxLookups; step++) {
+    if (await stopped()) return STOPPED;
     // Stop researching if the budget (or the answer reserve) can't fit another round.
     if (!roundFits(researchLeft(), slowestRound)) break;
     const roundStarted = Date.now();
@@ -2295,6 +2305,7 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
   timings.depth = depth === "investigate" ? 1 : 0;
   if (moreHelps !== null) timings.moreLookupsHelp = moreHelps ? 1 : 0;
 
+  if (await stopped()) return STOPPED;
   if (observations.length) progress("Writing it up…");
   phase("answering");
   // When the person first sees words — the number that decides whether DAX feels fast.
@@ -2379,6 +2390,8 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
     if (!rows.length) return { ok: false, error: aiFailureForPeople(answerReply) };
     return { ok: true, answer: NO_WRITE_UP_NOTE, rows, tools, learned: 0, actions: [], choices: [], saved: false };
   }
+  // The last word: once claimed for keeping, Stop is refused; stopped before that, nothing below is written.
+  if (await stopped(true)) return STOPPED;
   // The answer the person sees, and — separately — anything it decided to learn,
   // any tasks it proposes and any quick replies (assistantReply: one block, or
   // the old trailer lines). Then its evidence links: kept only when they point
