@@ -6,6 +6,7 @@ import { runCronPerTenant } from "@/lib/tenantCron";
 import { runDueAssistantSchedules, SCHEDULE_RUN_RESERVE_MS } from "@/lib/assistantScheduleRun";
 import { runAssistantWatches } from "@/lib/assistantWatch";
 import { runDeliveryGoals } from "@/lib/assistantGoals";
+import { runDeliveryEve } from "@/lib/deliveryEve";
 import { prunePendingActions } from "@/lib/assistantWhatsAppConfirm";
 import { pruneAssistantUploads } from "@/lib/assistantUpload";
 import { sweepWaitingUpdates } from "@/lib/assistantWhatsApp";
@@ -71,6 +72,10 @@ export async function GET(req: NextRequest) {
       if (tenantId) {
         await runDeliveryGoals(tenantId, budget).catch((error: unknown) =>
           logError("assistant-schedule", "goal run failed", error instanceof Error ? error.name : "unknown", { tenantId }),
+        );
+        // Tomorrow's deliveries, checked once each (lib/deliveryEve.ts) — proactive DAX's switches, off by default.
+        await runDeliveryEve(tenantId, budget).catch((error: unknown) =>
+          logError("assistant-schedule", "delivery check failed", error instanceof Error ? error.name : "unknown", { tenantId }),
         );
       }
       // Proactive DAX: alerts held overnight that are now due, and customers who

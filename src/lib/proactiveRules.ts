@@ -46,7 +46,7 @@ export const PROACTIVE_SOURCE = "proactive";
 /** What the conversation shows as the "question" of an alert. */
 export const PROACTIVE_QUESTION = "Customer activity";
 
-export const PROACTIVE_KINDS = ["quote_opened", "quote_revisited", "customer_waiting", "quote_signed", "service_booked", "delivery_goal"] as const;
+export const PROACTIVE_KINDS = ["quote_opened", "quote_revisited", "customer_waiting", "quote_signed", "service_booked", "delivery_goal", "delivery_eve"] as const;
 export type ProactiveKind = (typeof PROACTIVE_KINDS)[number];
 
 /** A customer back at the same quote this many times is worth a call. */
@@ -99,6 +99,9 @@ export function proactiveText(event: ProactiveEvent, origin: string): string {
       case "delivery_goal":
         // A delivery the person asked DAX to follow (assistantGoalRules): the words are the goal's own.
         return event.detail ?? "";
+      case "delivery_eve":
+        // Tomorrow's delivery, checked (deliveryEveRules): the words are the check's own.
+        return event.detail ?? "";
     }
   })();
   return `${line}\n${link}`;
@@ -119,11 +122,14 @@ export function proactivePush(kind: ProactiveKind): string {
       return "A new service booking";
     case "delivery_goal":
       return "An update on a delivery you're following";
+    case "delivery_eve":
+      return "A delivery tomorrow — a quick check";
   }
 }
 
 /** What the conversation shows as the "question" of an alert. */
-export const proactiveQuestion = (kind: string) => (kind === "delivery_goal" ? "A delivery you're following" : PROACTIVE_QUESTION);
+export const proactiveQuestion = (kind: string) =>
+  kind === "delivery_goal" ? "A delivery you're following" : kind === "delivery_eve" ? "Tomorrow's delivery" : PROACTIVE_QUESTION;
 
 /**
  * When an alert goes: now, or held for the morning. Between 20:00 and 08:00 (Johannesburg) it waits for 08:00 —

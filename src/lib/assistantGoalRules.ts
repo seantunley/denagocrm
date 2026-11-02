@@ -107,7 +107,7 @@ export function blockerText(step: GoalStep, f: GoalFacts): string {
 }
 
 /** Where the person does it — the CRM's own screen. The customer side is always theirs to click, never DAX's. */
-function whatToDo(step: GoalStep): string {
+export function whatToDo(step: GoalStep): string {
   switch (step) {
     case "deposit": return "If the customer needs a nudge, message them from the deal — I won't contact them. Mark it paid on the Deliveries board once it's in.";
     case "documents": return "Issue the invoice on the Deliveries board.";

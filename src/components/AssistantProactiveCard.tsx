@@ -42,7 +42,8 @@ export default function AssistantProactiveCard({ name, workspaceOn, on, briefAt 
           <span className="block text-xs text-muted-foreground">
             When one of your customers opens a quote, comes back to it a third time, signs it, books a service, or writes
             and has waited 15 minutes with no answer, {name} tells you — here, as a phone notification, and on your linked
-            WhatsApp. Only about customers and deals that are yours. Nothing between 20:00 and 08:00: those wait for the
+            WhatsApp. The day before one of your deliveries, it checks the deposit, invoice, cart and PDI and tells you
+            what is missing. Only about customers and deals that are yours. Nothing between 20:00 and 08:00: those wait for the
             morning. At most 12 a day. {name} never contacts the customer.
           </span>
           {!workspaceOn && <span className="mt-1 block text-xs text-amber-400">An owner has not switched this on for the workspace yet (Settings → Assistant).</span>}
