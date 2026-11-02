@@ -5,6 +5,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   Bot,
+  UserCog,
   CalendarDays,
   CircleStop,
   CornerDownRight,
@@ -55,7 +56,7 @@ import {
 } from "@xyflow/react";
 import { saveFlow, resetFlow } from "@/app/actions/flow";
 import { uploadCampaignImage } from "@/app/actions/campaigns";
-import type { BookingAction, ConditionOperator, FlowHttpMethod, FlowNode, SlotAction } from "@/lib/flow";
+import type { BookingAction, ConditionOperator, CrmUpdateAction, FlowHttpMethod, FlowNode, SlotAction } from "@/lib/flow";
 import ConfirmActionDialog from "@/components/ConfirmActionDialog";
 import EmojiButton from "@/components/EmojiButton";
 import { cn } from "@/lib/utils";
@@ -114,6 +115,7 @@ const TYPE_META: Record<FlowNode["type"], { icon: LucideIcon; label: string; ton
   ai: { icon: Bot, label: "AI answer", tone: "border-orange-400/50", header: "bg-orange-500/15 text-orange-200", handle: "#fb923c", description: "Use the existing grounded AI response" },
   handoff: { icon: Hand, label: "Hand off", tone: "border-amber-400/40", header: "bg-amber-500/15 text-amber-100", handle: "#fbbf24", description: "Transfer ownership to staff" },
   goto: { icon: CornerDownRight, label: "Go to", tone: "border-slate-400/50", header: "bg-slate-500/15 text-slate-200", handle: "#94a3b8", description: "Jump to another step — e.g. back to the menu — without a wire" },
+  crm: { icon: UserCog, label: "Update the CRM", tone: "border-emerald-400/40", header: "bg-emerald-500/15 text-emerald-200", handle: "#34d399", description: "Tag the customer, set their salesperson or move their deal" },
   end: { icon: CircleStop, label: "End", tone: "border-slate-500/50", header: "bg-slate-500/15 text-slate-200", handle: "#94a3b8", description: "Finish the flow" },
 };
 
@@ -121,7 +123,7 @@ const NODE_GROUPS: { label: string; types: FlowNode["type"][] }[] = [
   { label: "Messages", types: ["message", "image", "document", "contactCard", "answer", "knowledge", "choice"] },
   { label: "Customer input", types: ["capture", "captureFile"] },
   { label: "Logic & data", types: ["condition", "switch", "set", "delay", "goto"] },
-  { label: "CRM & automation", types: ["booking", "slots", "journey", "http", "subflow"] },
+  { label: "CRM & automation", types: ["booking", "crm", "slots", "journey", "http", "subflow"] },
   { label: "AI & operations", types: ["ai", "extract", "handoff", "end"] },
 ];
 
@@ -133,6 +135,11 @@ function summary(n: FlowNode): string {
   if (n.type === "document") return n.documentId ? `Sends ${n.fileName ?? "a document"}` : "(no file chosen)";
   if (n.type === "contactCard") return n.staffUserId ? "Sends a staff member's contact card" : "Sends your business contact card";
   if (n.type === "goto") return n.target ? `↪ ${n.targetLabel || n.target}` : "(choose a step to jump to)";
+  if (n.type === "crm") {
+    if (n.action === "tag") return n.tagName ? `Tag: ${n.tagName}` : "(choose a tag)";
+    if (n.action === "assign") return n.userId ? `Salesperson: ${n.userLabel ?? "chosen"}` : "(choose a salesperson)";
+    return n.stageId ? `Deal → ${n.stageLabel ?? "stage"}` : "(choose a stage)";
+  }
   if (n.type === "answer") return n.answerSource ? `Send ${n.answerSource}` : (n.text ?? "").slice(0, 50);
   if (n.type === "slots") return n.action === "reschedule" ? "Moves an existing booking to a real open slot" : "Offers real open workshop slots";
   if (n.type === "booking") {
@@ -246,6 +253,7 @@ function blankNode(type: FlowNode["type"], id: string): FlowNode {
     case "document": return { id, type, documentId: "" };
     case "contactCard": return { id, type };
     case "goto": return { id, type, target: "" };
+    case "crm": return { id, type, action: "tag", tagName: "" };
     case "answer": return { id, type, answerSource: "pricelist" };
     case "knowledge": return { id, type, query: "", noMatchText: "I couldn't find an approved answer for that." };
     case "set": return { id, type, variable: "status", value: "new" };
@@ -264,7 +272,7 @@ function blankNode(type: FlowNode["type"], id: string): FlowNode {
   }
 }
 
-export default function FlowBuilder({ flowId, initial, journeys = [], flows = [], updatedAt, channels, businessName, documents = [], staff = [] }: { flowId: string; initial: FlowData; journeys?: FlowJourneyOption[]; flows?: FlowOptionRef[]; updatedAt: string; channels: FlowChannel[]; businessName: string; documents?: { id: string; name: string }[]; staff?: { id: string; name: string }[] }) {
+export default function FlowBuilder({ flowId, initial, journeys = [], flows = [], updatedAt, channels, businessName, documents = [], staff = [], crmTags = [], stages = [] }: { flowId: string; initial: FlowData; journeys?: FlowJourneyOption[]; flows?: FlowOptionRef[]; updatedAt: string; channels: FlowChannel[]; businessName: string; documents?: { id: string; name: string }[]; staff?: { id: string; name: string }[]; crmTags?: string[]; stages?: { id: string; name: string }[] }) {
   const router = useRouter();
   const [start, setStart] = useState(initial.start);
   const [rfNodes, setRfNodes, applyNodesChange] = useNodesState<Node<RFData>>(
@@ -844,7 +852,7 @@ export default function FlowBuilder({ flowId, initial, journeys = [], flows = []
               <aside className="w-80 shrink-0 overflow-y-auto border-l border-white/[0.08] bg-[#111614] max-lg:fixed max-lg:inset-x-0 max-lg:bottom-0 max-lg:z-[81] max-lg:max-h-[78dvh] max-lg:w-auto max-lg:rounded-t-3xl max-lg:border-t max-lg:shadow-[0_-24px_70px_rgba(0,0,0,.55)]">
                 <div className="sticky top-0 z-10 flex items-center justify-between border-b border-white/[0.08] bg-[#111614]/95 px-4 py-3 backdrop-blur"><div><p className="text-sm font-semibold text-white">Inspector</p><p className="text-xs text-slate-400">Configure the selected node</p></div><button type="button" onClick={() => setInspectorOpen(false)} className="grid size-10 place-items-center rounded-lg text-slate-400 hover:bg-white/5 hover:text-white"><X className="size-4" /><span className="sr-only">Close inspector</span></button></div>
                 <div className="space-y-5 p-4 pb-[max(1rem,env(safe-area-inset-bottom))]">
-                  {!selected ? <p className="text-sm leading-6 text-slate-400">Select a node to edit it. Drag from a node&apos;s output handle to another node to create a connection.</p> : <><NodeIssues issues={selectedIssues} /><NodePanel key={selected.id} node={selected} isStart={selected.id === start} nodeOptions={nodeOptions.filter((option) => option.id !== selected.id)} variables={knownVariables} journeys={journeys} flows={flows} documents={documents} staff={staff} onChange={(next) => patch(selected.id, () => next)} onDelete={() => removeNode(selected.id)} onDuplicate={() => duplicateNode(selected.id)} onMakeStart={() => markStart(selected.id)} /></>}
+                  {!selected ? <p className="text-sm leading-6 text-slate-400">Select a node to edit it. Drag from a node&apos;s output handle to another node to create a connection.</p> : <><NodeIssues issues={selectedIssues} /><NodePanel key={selected.id} node={selected} isStart={selected.id === start} nodeOptions={nodeOptions.filter((option) => option.id !== selected.id)} variables={knownVariables} journeys={journeys} flows={flows} documents={documents} staff={staff} crmTags={crmTags} stages={stages} onChange={(next) => patch(selected.id, () => next)} onDelete={() => removeNode(selected.id)} onDuplicate={() => duplicateNode(selected.id)} onMakeStart={() => markStart(selected.id)} /></>}
                   <VariablesPanel variables={knownVariables} />
                 </div>
               </aside>
@@ -882,7 +890,7 @@ function clearRefs(n: FlowNode, removedId: string): FlowNode {
   return Object.keys(cleared).length ? ({ ...n, ...cleared } as FlowNode) : n;
 }
 
-const FALLIBLE = new Set(["booking", "slots", "journey", "http", "knowledge", "extract", "subflow"]);
+const FALLIBLE = new Set(["booking", "slots", "journey", "http", "knowledge", "extract", "subflow", "crm"]);
 
 function TargetPicker({ value, onPick, nodeOptions }: { value?: string; onPick: (value?: string) => void; nodeOptions: { id: string; label: string }[] }) {
   return <select className="input btn-sm" value={value ?? ""} onChange={(event) => onPick(event.target.value || undefined)}><option value="">— (ends here) —</option>{nodeOptions.map((option) => <option key={option.id} value={option.id}>{option.label}</option>)}</select>;
@@ -898,7 +906,7 @@ function VariablesPanel({ variables }: { variables: string[] }) {
   );
 }
 
-function NodePanel({ node, isStart, nodeOptions, variables, journeys, flows, documents = [], staff = [], onChange, onDelete, onDuplicate, onMakeStart }: { node: FlowNode; isStart: boolean; nodeOptions: { id: string; label: string }[]; variables: string[]; journeys: FlowJourneyOption[]; flows: FlowOptionRef[]; documents?: { id: string; name: string }[]; staff?: { id: string; name: string }[]; onChange: (n: FlowNode) => void; onDelete: () => void; onDuplicate: () => void; onMakeStart: () => void }) {
+function NodePanel({ node, isStart, nodeOptions, variables, journeys, flows, documents = [], staff = [], crmTags = [], stages = [], onChange, onDelete, onDuplicate, onMakeStart }: { crmTags?: string[]; stages?: { id: string; name: string }[]; node: FlowNode; isStart: boolean; nodeOptions: { id: string; label: string }[]; variables: string[]; journeys: FlowJourneyOption[]; flows: FlowOptionRef[]; documents?: { id: string; name: string }[]; staff?: { id: string; name: string }[]; onChange: (n: FlowNode) => void; onDelete: () => void; onDuplicate: () => void; onMakeStart: () => void }) {
   const meta = TYPE_META[node.type];
   const Icon = meta.icon;
   return (
@@ -922,6 +930,14 @@ function NodePanel({ node, isStart, nodeOptions, variables, journeys, flows, doc
       {node.type === "ai" && <p className="text-xs text-slate-400">Chats conversationally, grounded in approved CRM/product facts and Approved Knowledge. Connect the amber dot to a node to control where it goes when confidence requires a handoff (otherwise it notifies the team).</p>}
       {node.type === "booking" && <><div><label className="label">Action</label><select className="input" value={node.action ?? "service"} onChange={(e) => onChange({ ...node, action: e.target.value as BookingAction })}><option value="service">Create service request</option><option value="demo">Create demo / test-drive lead</option><option value="lead">Create lead / enquiry</option><option value="lookup">Find customer&apos;s next service booking</option><option value="cancel">Cancel {"{{booking_id}}"}</option></select><p className="mt-1 text-xs text-slate-500">{node.action === "lookup" ? <>Read-only. Sets <code>{"{{booking_identity}}"}</code> (verified | unverified) and <code>{"{{booking_found}}"}</code>, <code>{"{{booking_id}}"}</code>, <code>{"{{booking_slot}}"}</code> and <code>{"{{booking_summary}}"}</code> from an existing customer record.</> : node.action === "cancel" ? <>Cancels only the future customer-owned booking in <code>{"{{booking_id}}"}</code> and retains its Activity history.</> : <>Built from captured fields (name, phone, email, service, model). For a real dated service booking use Workshop slots.</>}</p></div><div><label className="label">Message after action (optional)</label><textarea className="input" rows={3} value={node.text ?? ""} onChange={(e) => onChange({ ...node, text: e.target.value })} /></div></>}
       {node.type === "goto" && <><div><label className="label" htmlFor={`goto-${node.id}`}>Jump to</label><select id={`goto-${node.id}`} className="input" value={node.target} onChange={(e) => { const option = nodeOptions.find((o) => o.id === e.target.value); onChange({ ...node, target: e.target.value, targetLabel: option?.label }); }}><option value="">Choose a step…</option>{nodeOptions.map((option) => <option key={option.id} value={option.id}>{option.label}</option>)}</select></div><p className="text-xs text-slate-500">Jumps straight to that step and sends nothing itself — no wire across the canvas. For “↩ Back to menu”, point a menu option at a Go to placed next to it, jumping to your menu.</p></>}
+      {node.type === "crm" && <>
+        <div><label className="label" htmlFor={`crm-action-${node.id}`}>Change</label><select id={`crm-action-${node.id}`} className="input" value={node.action} onChange={(e) => onChange({ id: node.id, type: "crm", action: e.target.value as CrmUpdateAction, text: node.text, failureText: node.failureText, next: node.next, failureNext: node.failureNext })}><option value="tag">Tag the customer</option><option value="assign">Set their salesperson</option><option value="stage">Move their open deal to a stage</option></select></div>
+        {node.action === "tag" && <div><label className="label" htmlFor={`crm-tag-${node.id}`}>Tag</label><input id={`crm-tag-${node.id}`} className="input" list={`crm-tags-${node.id}`} maxLength={40} value={node.tagName ?? ""} onChange={(e) => onChange({ ...node, tagName: e.target.value })} placeholder="QR: Showroom poster" /><datalist id={`crm-tags-${node.id}`}>{crmTags.map((t) => <option key={t} value={t} />)}</datalist><p className="mt-1 text-xs text-slate-500">One of your tags, or a new one — it is created the first time.</p></div>}
+        {node.action === "assign" && <div><label className="label" htmlFor={`crm-user-${node.id}`}>Salesperson</label><select id={`crm-user-${node.id}`} className="input" value={node.userId ?? ""} onChange={(e) => onChange({ ...node, userId: e.target.value || undefined, userLabel: staff.find((s) => s.id === e.target.value)?.name })}><option value="">Choose…</option>{staff.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}</select><p className="mt-1 text-xs text-slate-500">Becomes the customer&apos;s owner, and their open deal&apos;s salesperson.</p></div>}
+        {node.action === "stage" && <div><label className="label" htmlFor={`crm-stage-${node.id}`}>Stage</label><select id={`crm-stage-${node.id}`} className="input" value={node.stageId ?? ""} onChange={(e) => onChange({ ...node, stageId: e.target.value || undefined, stageLabel: stages.find((s) => s.id === e.target.value)?.name })}><option value="">Choose…</option>{stages.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}</select><p className="mt-1 text-xs text-slate-500">Moves the customer&apos;s one open deal. No open deal, or more than one, takes the “If it fails” exit — it never guesses which.</p></div>}
+        <div><label className="label">Message after the change (optional)</label><textarea className="input" rows={2} value={node.text ?? ""} onChange={(e) => onChange({ ...node, text: e.target.value || undefined })} /></div>
+        <p className="text-xs text-slate-500">Nothing is said to the customer about it unless you write a message. Recorded in the customer&apos;s history as done by the chatbot.</p>
+      </>}
       {node.type === "journey" && <><div><label className="label">Journey</label><select className="input" value={node.journeyId} onChange={(e) => onChange({ ...node, journeyId: e.target.value })}><option value="">Select an active Journey…</option>{journeys.map((journey) => <option key={journey.id} value={journey.id}>{journey.name}</option>)}</select><p className="mt-1 text-xs text-slate-500">Enrols exactly this existing CRM customer/lead in the selected active Journey. Flow continues immediately; waits and later lifecycle actions stay in Journey. Retries reuse the same event identity.</p></div><div><label className="label">Message after enrolment (optional)</label><textarea className="input" rows={3} value={node.text ?? ""} onChange={(e) => onChange({ ...node, text: e.target.value })} /></div></>}
       {node.type === "knowledge" && <><div><label className="label">Knowledge query (optional)</label><textarea className="input" rows={3} value={node.query} onChange={(e) => onChange({ ...node, query: e.target.value })} placeholder="Leave blank to use the customer's current message" /><p className="mt-1 text-xs text-slate-500">Only approved, currently-valid Flowbot Knowledge entries can be returned.</p></div><div><label className="label">Also save answer as</label><input className="input" value={node.saveAs ?? ""} onChange={(e) => onChange({ ...node, saveAs: e.target.value.replace(/\W/g, "") || undefined })} placeholder="knowledge_answer" /></div><div><label className="label">If nothing matches, say</label><textarea className="input" rows={2} value={node.noMatchText ?? ""} onChange={(e) => onChange({ ...node, noMatchText: e.target.value || undefined })} /></div></>}
       {node.type === "set" && <><div><label className="label">Variable</label><input className="input" value={node.variable} onChange={(e) => onChange({ ...node, variable: e.target.value.replace(/\W/g, "") })} placeholder="status" /></div><div><label className="label">Value</label><textarea className="input" rows={3} value={node.value} onChange={(e) => onChange({ ...node, value: e.target.value })} placeholder="Use {{variables}} if needed" /></div></>}
@@ -934,7 +950,7 @@ function NodePanel({ node, isStart, nodeOptions, variables, journeys, flows, doc
 
       {node.type === "document" && <><div><label className="label" htmlFor={`doc-${node.id}`}>File to send</label><select id={`doc-${node.id}`} className="input" value={node.documentId} onChange={(e) => { const doc = documents.find((d) => d.id === e.target.value); onChange({ ...node, documentId: e.target.value, ...(doc ? { fileName: doc.name } : { fileName: undefined }) }); }}><option value="">{documents.length ? "Choose a file…" : "No files yet — add them under Documents → Library"}</option>{documents.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}</select></div><div><div className="flex items-center justify-between"><label className="label" htmlFor={`doc-cap-${node.id}`}>Caption (optional)</label><EmojiButton targetId={`doc-cap-${node.id}`} value={node.caption ?? ""} onChange={(caption) => onChange({ ...node, caption: caption || undefined })} /></div><input id={`doc-cap-${node.id}`} className="input" value={node.caption ?? ""} onChange={(e) => onChange({ ...node, caption: e.target.value || undefined })} placeholder="Here's our brochure, {{name}}" /></div><p className="text-xs text-slate-500">Your Library (brochures, price lists — the newest version is always sent) and general files. Files filed on a customer, vehicle, job card or quote are never offered: they are that customer&apos;s records.</p></>}
       {node.type === "contactCard" && <><div><label className="label" htmlFor={`card-${node.id}`}>Whose card</label><select id={`card-${node.id}`} className="input" value={node.staffUserId ?? ""} onChange={(e) => onChange({ ...node, staffUserId: e.target.value || undefined })}><option value="">The business (Settings → Company)</option>{staff.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}</select></div><p className="text-xs text-slate-500">On WhatsApp it arrives as a contact they can save in one tap; elsewhere as text.</p></>}
-      {(["message", "answer", "capture", "captureFile", "image", "document", "contactCard", "set", "http", "knowledge", "extract", "delay", "subflow", "booking", "slots", "journey"] as FlowNode["type"][]).includes(node.type) && <div><label className="label">Then go to</label><TargetPicker nodeOptions={nodeOptions} value={(node as { next?: string }).next} onPick={(v) => onChange({ ...node, next: v } as FlowNode)} /></div>}
+      {(["message", "answer", "capture", "captureFile", "image", "document", "contactCard", "set", "http", "knowledge", "extract", "delay", "subflow", "booking", "slots", "journey", "crm"] as FlowNode["type"][]).includes(node.type) && <div><label className="label">Then go to</label><TargetPicker nodeOptions={nodeOptions} value={(node as { next?: string }).next} onPick={(v) => onChange({ ...node, next: v } as FlowNode)} /></div>}
       {FALLIBLE.has(node.type) && (
         <div className="space-y-2 rounded-lg border border-amber-900/40 bg-amber-950/20 p-2">
           <p className="text-[11px] text-amber-300">This action can fail. Publishing is refused if a failure would continue into a node that tells the customer it worked.</p>

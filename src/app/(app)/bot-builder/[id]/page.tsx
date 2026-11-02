@@ -28,6 +28,12 @@ export default async function FlowEditorPage({ params }: { params: Promise<{ id:
     /* use default so the owner can recover/reset the draft */
   }
 
+  // "Update the CRM": this workspace's tags (pick one, or type a new one) and pipeline stages, with their pipeline.
+  const [crmTags, stages] = await Promise.all([
+    prisma.tag.findMany({ select: { name: true }, orderBy: { name: "asc" }, take: 300 }).then((rows) => rows.map((t) => t.name)),
+    prisma.pipelineStage.findMany({ select: { id: true, name: true, pipeline: { select: { name: true } } }, orderBy: [{ pipelineId: "asc" }, { order: "asc" }] })
+      .then((rows) => rows.map((s) => ({ id: s.id, name: `${s.pipeline.name} · ${s.name}` }))),
+  ]);
   const [channels, journeys, reusableFlows, company, documents, staff] = await Promise.all([
     enabledFlowChannels(),
     prisma.journey.findMany({
@@ -62,7 +68,7 @@ export default async function FlowEditorPage({ params }: { params: Promise<{ id:
       </div>
       <FlowAiDraftForm flowId={row.id} />
       <FlowNodeSystemFrame>
-        <FlowBuilder flowId={row.id} initial={flow} journeys={journeys} flows={reusableFlows} updatedAt={row.updatedAt.toISOString()} channels={channels} businessName={company.name} documents={documents} staff={staff} />
+        <FlowBuilder flowId={row.id} initial={flow} journeys={journeys} flows={reusableFlows} updatedAt={row.updatedAt.toISOString()} channels={channels} businessName={company.name} documents={documents} staff={staff} crmTags={crmTags} stages={stages} />
       </FlowNodeSystemFrame>
     </div>
   );

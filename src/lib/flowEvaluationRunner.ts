@@ -84,6 +84,7 @@ export async function evaluateFlowScenario(input: {
         return { ok: Boolean(vars.booking_id) };
       },
       startJourney: async (journeyId, vars, nodeId) => { trace.push(`Journey: node ${nodeId} would enrol in ${journeyId}`); vars.journey_started = "yes"; return { ok: true }; },
+      updateCrm: async (node) => { trace.push(`CRM: node ${node.id} would update the CRM (${node.action})`); return { ok: true }; },
       createBooking: async (_vars, action, nodeId) => { trace.push(`CRM: node ${nodeId} would create ${action ?? "service"}`); return { ok: true }; },
       handoff: async () => { trace.push("Handoff: would pause bot and notify team"); },
       contactCard: async (staffUserId) => { trace.push(`Contact card: would send ${staffUserId ? "a staff member's" : "the business"} card`); return { name: "Business card (evaluation fixture)", phones: ["+27 21 000 0000"] }; },
