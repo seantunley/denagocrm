@@ -12,6 +12,7 @@
  */
 
 import { nextRun, snapToHalfHour } from "./assistantSchedule";
+import { firstWorkingDayOfMonth } from "./assistantLostAlive";
 
 /**
  * The same quiet hours as customer messaging (communicationPolicy.ts — 20:00 to 08:00 Johannesburg), kept here
@@ -241,6 +242,10 @@ export function briefQuestion(now: Date, heldOvernight: readonly string[], opts:
     "3. The three things that matter most today, each with one line on why.",
     "If the daily brief has a workshop section, add a short Workshop part after 2 — overdue services, stuck job cards, warranties running out — a line each, at most three of each. No workshop section, no Workshop part.",
     "If the daily brief has nurture reviews, add a short Nurture part: each parked deal with its link — why it was parked, what they wanted, the trigger, and \"review due today\" or how many days overdue — and offer to reactivate it. None, no Nurture part.",
+    // Once a month (round 2 item 4): lost deals the customer came back to — on the first working day only.
+    ...(firstWorkingDayOfMonth(now)
+      ? ["It is the first working day of the month: also run lost_alive with \"mine\":true and add a short \"Not really lost\" part — each deal with its link, when and why it was lost and what the customer did since — and offer to park it in Nurture or reopen it. None, no such part."]
+      : []),
     // Mondays, for those who asked for it (round 2 item 7): their most-stuck deals, each with its top reason.
     ...(opts.mondayStuck && isJohannesburgMonday(now)
       ? ["It is Monday: run stuck_deals and add a short Stuck deals part — each deal with its link and its top reason, as stated there (for an owner or team manager, the team's as a second short list). None, no such part."]

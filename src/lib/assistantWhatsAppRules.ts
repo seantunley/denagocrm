@@ -199,6 +199,8 @@ export const WHATSAPP_CONFIRMABLE: ReadonlySet<string> = new Set([
   // reactivate (2026-11-02, round 2 item 1): brings a parked deal back — the stage and next action shown in full,
   // nobody contacted, through the Nurture page's own Reactivate.
   "reactivate",
+  // reopen (round 2 item 4): a lost deal back in the pipeline, in its own stage — the lead page's own Reopen, nobody contacted.
+  "reopen",
 ]);
 
 /**

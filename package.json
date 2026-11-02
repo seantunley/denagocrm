@@ -79,6 +79,7 @@
     "eval:follows-references": "tsx --tsconfig tsconfig.harness.json evals/runFollowsReferencesEval.ts",
     "test:assistant-why": "tsx --tsconfig tsconfig.harness.json scripts/test-assistant-why.ts",
     "test:assistant-stuck": "tsx --tsconfig tsconfig.harness.json scripts/test-assistant-stuck.ts",
+    "test:assistant-lost-alive": "tsx --tsconfig tsconfig.harness.json scripts/test-assistant-lost-alive.ts",
     "test:assistant-listed": "tsx --tsconfig tsconfig.harness.json scripts/test-assistant-listed.ts",
     "test:assistant-updates-whatsapp": "tsx --tsconfig tsconfig.scripts.json scripts/test-assistant-updates-whatsapp.ts",
     "test:phone-match": "tsx --tsconfig tsconfig.scripts.json scripts/test-phone-match.ts",

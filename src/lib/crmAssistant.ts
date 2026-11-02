@@ -53,6 +53,7 @@ import { whyLookup } from "./assistantWhyLookup";
 import { matchPayment } from "./assistantPaymentMatch";
 import { stuckLookup } from "./assistantStuckLookup";
 import { catchUpLookup } from "./assistantCatchUpLookup";
+import { lostAliveLookup } from "./assistantLostAliveLookup";
 import { stuckDealsLookup } from "./assistantStuckDeals";
 import { briefForAssistant, loadDaxBrief } from "./daxBrief";
 import { customerVehicles, workshopOverview } from "./workshopContext";
@@ -1620,6 +1621,7 @@ async function runTool(user: User, step: ToolStep): Promise<ToolOutput> {
     case "match_payment": return matchPayment(user, step.args);
     case "stuck": return stuckLookup(user, step.args.lead);
     case "catch_up": return catchUpLookup(user, step.args.since);
+    case "lost_alive": return lostAliveLookup(user, step.args.mine ?? false);
     case "stuck_deals": return stuckDealsLookup(user);
     case "knowledge": return knowledge(user, step.args);
     case "recall": return recall(user, step.args);
@@ -3258,9 +3260,9 @@ export async function resolveActions(
     const lead = await prisma.lead.findUnique({
       where: { id: p.leadId },
       select: {
-        name: true, title: true, stageId: true, assignedToId: true, stage: { select: { pipelineId: true } },
+        name: true, title: true, stageId: true, assignedToId: true, stage: { select: { pipelineId: true, name: true } },
         email: true, phone: true, contactId: true, contact: { select: { email: true, phone: true } },
-        status: true, lostReason: true,
+        status: true, lostReason: true, lostAt: true,
         nurtureReason: true, nurtureInterest: true, nurtureTrigger: true, nurtureReviewAt: true,
       },
     });
@@ -3305,6 +3307,24 @@ export async function resolveActions(
       });
     } else if (p.type === "lost") {
       cards.push({ id, kind: "lost", leadId: p.leadId, leadLabel, title: `Mark ${lead.name}'s deal as lost`, reason: p.reason });
+    } else if (p.type === "reopen") {
+      // The lead page's own Reopen at Confirm (reopenLead: leads.reopen). Checked here too, so the card is only offered when it can run.
+      if (lead.status !== "lost" || !lead.lostAt) {
+        problems.push(`${lead.name}'s deal isn't marked lost (it's ${lead.status})${lead.status === "nurture" ? " — a parked deal is reactivated from Nurture" : ""}.`);
+        continue;
+      }
+      if (!(await hasPermission(user, "leads.reopen"))) { problems.push("Your role can't reopen lost deals."); continue; }
+      cards.push({
+        id, kind: "reopen", leadId: p.leadId, leadLabel,
+        title: `Reopen ${lead.name}'s deal`,
+        lostAt: lead.lostAt.toISOString(),
+        detail: [
+          `Lost on ${johannesburgDateKey(lead.lostAt)}${lead.lostReason ? ` — “${lead.lostReason}”` : ""}`,
+          `Back to: ${lead.stage.name} (the stage it was in), open again`,
+          "Nobody is contacted.",
+        ].join("\n"),
+        ...(p.reason ? { reason: p.reason } : {}),
+      });
     } else if (p.type === "reactivate") {
       // The Nurture page's own Reactivate at Confirm (reactivateNurturedLead): leads.change_stage + activities.manage,
       // an open stage, the deal's salesperson. Checked here too, so a card is only offered when it can run; the stage

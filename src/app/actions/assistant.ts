@@ -565,6 +565,22 @@ export async function runAssistantAction(
         await confirmed("mark the deal lost", card.leadId);
         return { ok: true, success: "Marked lost" };
       }
+      case "reopen": {
+        // THE LEAD PAGE'S OWN REOPEN (reopenLead: leads.reopen, guarded, audited). Nobody is contacted.
+        if (!(await canAccessLead(user, card.leadId))) return untouched("You can't open that deal any more.");
+        const now = await prisma.lead.findFirst({ where: { id: card.leadId, deletedAt: null }, select: { status: true, lostAt: true } });
+        if (!now) return untouched("That deal is no longer there.");
+        const backIn = `${card.leadLabel} is open again`;
+        // Done already — a second Confirm finds it open.
+        if (now.status === "open") return { ok: true, success: backIn, href: `/leads/${card.leadId}` };
+        // Lost exactly as the card showed it — not lost again since, not won, not parked.
+        if (now.status !== "lost" || now.lostAt?.toISOString() !== card.lostAt) return untouched(STALE_CARD);
+        if (!(await hasPermission(user, "leads.reopen"))) return untouched("Your role can't reopen lost deals.");
+        const result = await reopenLead(card.leadId);
+        if (result?.error) return { ok: false, error: result.error };
+        await confirmed("reopen the deal", card.leadId);
+        return { ok: true, success: backIn, href: `/leads/${card.leadId}` };
+      }
       case "reactivate": {
         // THE NURTURE PAGE'S OWN REACTIVATE (reactivateNurturedLead): leads.change_stage, activities.manage, an open
         // stage in an active pipeline, the stage rules (no silent override), the deal's salesperson — and the move, the

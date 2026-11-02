@@ -165,6 +165,13 @@ export const assistantAndMoreArticles: HelpArticle[] = [
       { type: "h", text: "The Team section" },
       { type: "p", text: "Workspace owners, and people who manage a team, also get a **Team** section they can open. It shows one row per salesperson: how many customers are waiting on them, how many follow-ups are overdue, the value of their stalled deals and the value of their open deals. A team manager sees their own team members; an owner sees everyone." },
       { type: "callout", tone: "tip", text: "The brief only ever counts deals you are allowed to see. If the brief cannot be worked out for some reason, it is simply left off and the rest of your home screen still loads." },
+      { type: "h", text: "Lost deals that aren't really lost" },
+      { type: "p", text: "Ask DAX \"which lost deals are still alive?\" and it lists deals marked lost in the last 90 days for a went-quiet or timing reason — \"gone cold\", \"stopped responding\", \"buying next year\" — where the customer has since sent a message or opened a quote. For each, it says when and why the deal was lost and what the customer did since." },
+      { type: "list", items: [
+        "On the first working day of each month, DAX's morning brief adds this list for your own deals.",
+        "DAX offers one card per deal: **Park in Nurture** (it asks why and when to look again) or **Reopen** (the deal goes back to the stage it was in). Nothing changes until you press Confirm, and the customer is not contacted.",
+        "A deal lost because the customer bought elsewhere or found it too expensive is not listed. The reason is read from the words typed when it was marked lost.",
+      ] },
     ],
   },
   {
