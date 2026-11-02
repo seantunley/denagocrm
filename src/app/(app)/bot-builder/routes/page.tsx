@@ -47,7 +47,23 @@ export default async function FlowRoutesPage() {
   }));
 
   // QR codes (lib/flowQr): each is a WhatsApp keyword route with a name; its image encodes wa.me + the typed message.
-  const [business, savedQrs, company] = await Promise.all([businessWhatsApp(tenantId), getSetting(FLOW_QR_KEY), getCompanyProfile()]);
+  // A QR code only replies when the chatbot and its guided flows are on (flowRun.isFlowEnabled) — said here, not
+  // discovered by scanning one and getting nothing (Sean, 2026-11-02). And a QR's flow that is ALSO the live WhatsApp
+  // flow answers every customer once the chatbot is on — said on its card.
+  const [business, savedQrs, company, botOn, flowsOn, livePublication] = await Promise.all([
+    businessWhatsApp(tenantId),
+    getSetting(FLOW_QR_KEY),
+    getCompanyProfile(),
+    getSetting("BOT_ENABLED"),
+    getSetting("BOT_FLOW_ENABLED"),
+    prisma.botFlowPublication.findFirst({ where: { tenantId, channel: "whatsapp" }, select: { flowId: true } }),
+  ]);
+  // Two different outcomes (review of #962): the Assistant off — nothing replies at all; the Assistant on but guided
+  // flows off — the QR's flow does not run, though the chatbot may still answer with its AI or keyword replies
+  // (runWhatsAppBot falls back to maybeAutoReply).
+  const assistantOff = botOn !== "true";
+  const guidedOff = !assistantOff && flowsOn !== "true";
+  const chatbotOff = assistantOff || guidedOff;
   const businessName = company.name || "there";
   const whatsappFlows = flows.filter((flow) => flow.channel === "whatsapp" && publishedKeys.has(`whatsapp:${flow.id}`));
   const routeById = new Map(routes.map((route) => [route.id, route]));
@@ -63,7 +79,7 @@ export default async function FlowRoutesPage() {
               QRCode.toString(link, { type: "svg", margin: 1 }),
               prisma.contact.count({ where: { tenantId, source: qrSource(qr.name) } }),
             ]);
-            return { ...qr, enabled: route.enabled, flowName: flowNames.get(route.flowId) ?? "Deleted flow", png, svg: `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`, people };
+            return { ...qr, enabled: route.enabled, isLiveFlow: route.flowId === livePublication?.flowId, flowName: flowNames.get(route.flowId) ?? "Deleted flow", png, svg: `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`, people };
           }),
       )
     : [];
@@ -116,21 +132,46 @@ export default async function FlowRoutesPage() {
         )}
       </Surface>
 
-      <Surface className="p-4" aria-labelledby="qr-heading">
-        <div className="flex items-center justify-between gap-3"><h2 id="qr-heading" className="font-semibold">QR codes (WhatsApp)</h2><span className="text-xs text-muted-foreground">Scan → WhatsApp opens with your message typed → they tap Send → the flow replies at once</span></div>
-        <p className="mt-1 text-xs text-muted-foreground">Print one on a poster, flyer or stand. The flow it starts can send your brochure and price list (<em>Send a document</em>) and your contact card (<em>Send contact card</em>). A new customer who arrives through a QR is saved with source “QR code — its name”.</p>
+      <Surface className="p-0" aria-labelledby="qr-heading">
+        {/* Collapsible, as Channel routing below is (Sean, 2026-11-02: "it dominates this page"). Opens by itself when
+            there is no QR code yet, or something needs attention. */}
+        <details className="group" open={!business || qrs.length === 0 || chatbotOff || qrs.some((qr) => qr.isLiveFlow)}>
+        <summary className="flex min-h-12 cursor-pointer list-none items-center justify-between gap-3 px-4 py-3 marker:content-none">
+          <div className="flex min-w-0 flex-wrap items-center gap-2">
+            <h2 id="qr-heading" className="font-semibold">QR codes (WhatsApp)</h2>
+            <StatusPill tone={qrs.length ? "success" : "neutral"}>{qrs.length} {qrs.length === 1 ? "code" : "codes"}</StatusPill>
+            {business && chatbotOff ? <StatusPill tone="warning">{assistantOff ? "Chatbot off" : "Guided flow off"}</StatusPill> : null}
+          </div>
+          <ChevronDown className="size-4 shrink-0 text-muted-foreground transition-transform group-open:rotate-180" aria-hidden="true" />
+        </summary>
+        <div className="border-t border-border/80 px-4 pb-4 pt-3">
+        <p className="text-xs text-muted-foreground">Print one on a poster, flyer or stand. Scan → WhatsApp opens with your message typed → they tap Send → the flow replies. A new customer who arrives this way is saved with source “QR code — its name”.</p>
         {!business ? <p className="mt-3 text-sm text-amber-300">Connect your WhatsApp number (Settings → Integrations) before making a QR code.</p> : (
           <>
+            {chatbotOff && (
+              <p role="status" className="mt-3 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm text-amber-200">
+                {assistantOff ? (
+                  <>The chatbot is switched off, so a scanned QR code reaches your inbox but nothing replies. Switch on the <strong>Assistant</strong> and <strong>Guided flow</strong> on the <Link href="/chatbot" className="underline">Chatbot page</Link>.</>
+                ) : (
+                  <>Guided flows are switched off, so a scanned QR code does not run its flow — the chatbot may answer with its AI or keyword replies instead. Switch on <strong>Guided flow</strong> on the <Link href="/chatbot" className="underline">Chatbot page</Link>.</>
+                )}
+              </p>
+            )}
             {qrs.length > 0 && (
-              <div className="mt-3 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+              <div className="mt-3 divide-y divide-border/70 rounded-xl border border-border">
                 {qrs.map((qr) => (
-                  <div key={qr.routeId} className={`rounded-xl border border-border bg-card/50 p-3 ${qr.enabled ? "" : "opacity-55"}`}>
-                    <div className="flex items-start justify-between gap-2"><h3 className="font-medium">{qr.name}</h3><StatusPill tone={qr.enabled ? "success" : "neutral"}>{qr.enabled ? "On" : "Off"}</StatusPill></div>
+                  <div key={qr.routeId} className={`flex flex-wrap items-center gap-3 p-3 ${qr.enabled ? "" : "opacity-55"}`}>
                     {/* eslint-disable-next-line @next/next/no-img-element -- a generated data URL, not a remote image */}
-                    <img src={qr.png} alt={`QR code: ${qr.name}`} className="mx-auto mt-2 size-40 rounded bg-white p-1" />
-                    <p className="mt-2 text-xs text-muted-foreground">Types: <span className="text-foreground">“{qr.message}”</span></p>
-                    <p className="text-xs text-muted-foreground">Starts: {qr.flowName} · <strong className="text-foreground">{qr.people}</strong> new {qr.people === 1 ? "customer" : "customers"} so far</p>
-                    <div className="mt-2 flex flex-wrap gap-2">
+                    <img src={qr.png} alt={`QR code: ${qr.name}`} className="size-16 shrink-0 rounded bg-white p-0.5" />
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-2"><h3 className="truncate font-medium">{qr.name}</h3><StatusPill tone={qr.enabled ? "success" : "neutral"}>{qr.enabled ? "On" : "Off"}</StatusPill></div>
+                      <p className="truncate text-xs text-muted-foreground" title={qr.message}>“{qr.message}” → {qr.flowName}</p>
+                      <p className="text-xs text-muted-foreground"><strong className="text-foreground">{qr.people}</strong> new {qr.people === 1 ? "customer" : "customers"} so far</p>
+                      {qr.isLiveFlow && (
+                        <p className="mt-0.5 text-xs text-amber-300">“{qr.flowName}” is also your live WhatsApp flow, so with the chatbot on it answers <strong>every</strong> customer message. Use <strong>Take offline</strong> on it in the Flow builder — this QR code keeps working.</p>
+                      )}
+                    </div>
+                    <div className="flex shrink-0 flex-wrap gap-2">
                       <a className="btn-secondary btn-sm" href={qr.png} download={`QR ${qr.name}.png`}>Download PNG</a>
                       <a className="btn-secondary btn-sm" href={qr.svg} download={`QR ${qr.name}.svg`}>Download for print (SVG)</a>
                       <ConfirmActionDialog trigger={<button type="button" className="btn-secondary btn-sm text-red-300">Delete</button>} title={`Delete QR code “${qr.name}”?`} description="Printed copies stop starting its flow — a customer who scans one afterwards lands in the inbox instead. This can't be undone; a new QR code is a new image to print." confirmLabel="Delete QR code" destructive success="QR code deleted" onConfirm={deleteFlowQr.bind(null, qr.routeId)} />
@@ -139,6 +180,8 @@ export default async function FlowRoutesPage() {
                 ))}
               </div>
             )}
+            <details className="mt-3" open={qrs.length === 0}>
+            <summary className="btn-secondary btn-sm inline-flex cursor-pointer list-none marker:content-none">+ New QR code</summary>
             <SaveForm action={addFlowQr} success="QR code saved" className="mt-3 grid gap-3 sm:grid-cols-3">
               <div><label className="label" htmlFor="qr-name">Name</label><input id="qr-name" name="name" className="input" required minLength={2} maxLength={60} placeholder="Showroom poster" /></div>
               <div><label className="label" htmlFor="qr-message">Message it types for them</label><input id="qr-message" name="message" className="input" required minLength={5} maxLength={200} defaultValue={`Hi ${businessName}, please send me the brochure`} /></div>
@@ -146,8 +189,11 @@ export default async function FlowRoutesPage() {
               <SaveButton className="btn-primary btn-sm sm:col-span-3" disabled={!whatsappFlows.length}>Make QR code</SaveButton>
             </SaveForm>
             {!whatsappFlows.length ? <p className="mt-2 text-[11px] text-amber-300">Publish a WhatsApp flow first — e.g. one that sends your brochure, price list and contact card.</p> : null}
+            </details>
           </>
         )}
+        </div>
+        </details>
       </Surface>
 
       <section aria-labelledby="channel-routing-heading">
