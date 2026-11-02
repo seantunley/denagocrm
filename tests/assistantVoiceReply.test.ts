@@ -21,7 +21,7 @@ const code = (rel: string) =>
 
 /* ── the spoken version ────────────────────────────────────────────────── */
 
-test("spokenAnswer drops emoji, evidence markers, URLs and markdown; list items become sentences", () => {
+test("spokenAnswer drops emoji, evidence markers, URLs and markdown; list items that carry detail are a sentence each", () => {
   const answer = [
     "🔥 **Two follow-ups** are overdue [[1]]:",
     "- Anna Smith — quote viewed twice 👀 [[2]]",
@@ -29,15 +29,22 @@ test("spokenAnswer drops emoji, evidence markers, URLs and markdown; list items 
     "1. Call Cara [today](https://crm.example.com/x)",
   ].join("\n");
   const spoken = spokenAnswer(answer);
-  assert.equal(spoken, "Two follow-ups are overdue: Anna Smith — quote viewed twice. Ben Jacobs, see. Call Cara today");
+  assert.equal(spoken, "Two follow-ups are overdue: Anna Smith, quote viewed twice. Ben Jacobs, see. Call Cara today.");
   assert.doesNotMatch(spoken, /\[\[|https?:|\*|🔥|👀/u);
   assert.ok(spoken.length <= answer.length);
+  // A list of short, simple items is said as one sentence (Sean, 2026-11-02: "doesn't flow").
+  assert.equal(spokenAnswer("Overdue today:\n- Anna Smith\n- Ben Jacobs\n- Cara Pillay"), "Overdue today: Anna Smith, Ben Jacobs and Cara Pillay.");
 });
 
-test("a short plain answer is unchanged", () => {
-  for (const answer of ["You have no overdue follow-ups.", "Anna's quote is R185 000, valid until 14 October."]) {
-    assert.equal(spokenAnswer(answer), answer);
-  }
+test("a short plain answer is said as written — with amounts, quote numbers and dates in words", () => {
+  assert.equal(spokenAnswer("You have no overdue follow-ups."), "You have no overdue follow-ups.");
+  assert.equal(spokenAnswer("Anna's quote is R185 000, valid until 14 October."), "Anna's quote is a hundred and eighty-five thousand rand, valid until 14 October.");
+  assert.equal(spokenAnswer("Q-1030 is R 12 345,50 incl. VAT, due Mon 2 Nov."), "quote ten thirty is twelve thousand three hundred and forty-five rand and fifty cents including VAT, due Monday 2 November.");
+  assert.equal(spokenAnswer("Die kwotasie Q-1030 is R 185 000,00.", { afrikaans: true }), "Die kwotasie 1030 is 185000 rand.");
+  // The workspace's pronunciations, last.
+  assert.equal(spokenAnswer("Denago Rover XL is in stock.", { pronunciations: [["Denago", "Deh-NAH-go"]] }), "Deh-NAH-go Rover XL is in stock.");
+  // DAX's own spoken script, when it wrote one, is preferred to the written answer.
+  assert.equal(spokenAnswer("- Long\n- written\n- answer", { script: "Two things are overdue." }), "Two things are overdue.");
   assert.equal(spokenAnswer("✅"), "", "nothing left to say → nothing to synthesise");
 });
 
@@ -58,23 +65,25 @@ test("a long answer is cut at a sentence end, says the rest is in the chat, and 
   assert.ok(marked.length > SPOKEN_CHARS);
   assert.ok(!spokenAnswer(marked).endsWith(REST_IN_CHAT));
   // Numbers at the start of a line are words, not bullets.
-  assert.equal(spokenAnswer("3.5% above prime\n-5% on the demo unit"), "3.5% above prime. -5% on the demo unit");
+  assert.equal(spokenAnswer("3.5% above prime\n-5% on the demo unit"), "3.5 percent above prime. -5 percent on the demo unit.");
+  // On WhatsApp the text isn't sent with the voice note, so the rest is on the Ask page.
+  assert.ok(spokenAnswer(answer, { rest: "The full answer is on your Ask page in the CRM." }).endsWith("yet. The full answer is on your Ask page in the CRM."));
 });
 
 test("the voice follows the ANSWER's language; languages no model speaks get text only", () => {
   const afrikaans = "Jy het twee opvolge wat vandag agterstallig is.";
   const english = "You have two follow-ups that are overdue today.";
-  const v3 = voiceLanguage("afr")!.ttsModel;
-  assert.equal(v3, "eleven_v3");
-  assert.deepEqual(voiceLanguageFor(english), {});
-  assert.deepEqual(voiceLanguageFor(afrikaans), { ttsModel: v3 });
-  assert.deepEqual(voiceLanguageFor(afrikaans, voiceLanguage("af", 0.9)), { ttsModel: v3 });
-  // Asked in Afrikaans, answered in English → the English voice.
-  assert.deepEqual(voiceLanguageFor(english, voiceLanguage("afr", 0.9)), {});
+  // One voice, told the language — no separate Afrikaans model any more (elevenlabs.ttsModelFor picks one that speaks it).
+  assert.equal(voiceLanguage("afr")!.ttsLanguage, "af");
+  assert.deepEqual(voiceLanguageFor(english), { language: "en" });
+  assert.deepEqual(voiceLanguageFor(afrikaans), { language: "af" });
+  assert.deepEqual(voiceLanguageFor(afrikaans, voiceLanguage("af", 0.9)), { language: "af" });
+  // Asked in Afrikaans, answered in English → English.
+  assert.deepEqual(voiceLanguageFor(english, voiceLanguage("afr", 0.9)), { language: "en" });
   // A short Afrikaans answer: the heard language tips it.
-  assert.deepEqual(voiceLanguageFor("Ja, twee.", voiceLanguage("afr", 0.9)), { ttsModel: v3 });
+  assert.deepEqual(voiceLanguageFor("Ja, twee.", voiceLanguage("afr", 0.9)), { language: "af" });
   // An English answer that names "Die Hoek" is still English.
-  assert.deepEqual(voiceLanguageFor("The quote for Die Hoek Estate is waiting for a signature."), {});
+  assert.deepEqual(voiceLanguageFor("The quote for Die Hoek Estate is waiting for a signature."), { language: "en" });
   for (const code of ["zul", "xho", "sot"]) assert.equal(voiceLanguageFor("Sawubona", voiceLanguage(code, 0.9)), null, code);
 });
 
@@ -98,6 +107,10 @@ const state = {
   voiceReplyCounts: 0,
   voiceReplyCap: 30,
   errors: [] as string[],
+  choices: [] as string[],
+  script: null as string | null,
+  scripts: [] as string[],
+  askedSpoken: [] as boolean[],
 };
 
 const link = { id: "l1", tenantId: "t1", userId: "u1", waId: "27821234567", codeHash: null, codeExpiresAt: null, verifiedAt: new Date(), sessionVersion: 1 };
@@ -142,7 +155,10 @@ loaderKey._load = function (this: unknown, request: string, parent, isMain) {
         },
       };
       case "./crmAssistant": return {
-        askCrm: async () => ({ ok: true, answer: ANSWER, rows: [], tools: [], learned: 0, actions: [], choices: [] }),
+        askCrm: async (_u: unknown, _q: string, _p: unknown, opts: { spoken?: boolean }) => {
+          state.askedSpoken.push(Boolean(opts.spoken));
+          return { ok: true, answer: ANSWER, rows: [], tools: [], learned: 0, actions: [], choices: state.choices, ...(state.script ? { spoken: state.script } : {}) };
+        },
       };
       // Confirming tasks is another test's subject; here it is off and offers nothing.
       case "./assistantWhatsAppConfirm": return {
@@ -162,8 +178,9 @@ loaderKey._load = function (this: unknown, request: string, parent, isMain) {
       case "./rateLimit": return { rateLimitKey: (a: string, b: string) => `${a}:${b}`, registerRateLimitAttempt: async () => ({ allowed: true }) };
       case "./elevenlabs": return { canSynthesizeVoice: async () => state.canSynth };
       case "./assistantVoice": return {
-        synthesiseAnswer: async (answer: string) => {
+        synthesiseAnswer: async (answer: string, _heard: unknown, script?: string) => {
           state.synthesised.push(answer);
+          if (script) state.scripts.push(script);
           return state.synthResult === "ok" ? { buffer: Buffer.from("OggS"), contentType: "audio/ogg" } : "failed";
         },
       };
@@ -190,15 +207,32 @@ beforeEach(() => {
   state.voiceReplyCounts = 0;
   state.voiceReplyCap = 30;
   state.errors = [];
+  state.choices = [];
+  state.script = null;
+  state.scripts = [];
+  state.askedSpoken = [];
 });
 
-test("a voice note, switch on → the full text FIRST, then a voice note of the answer", async () => {
+test("a voice note, switch on → a voice note back INSTEAD of the text (Sean, 2026-11-02: no double response)", async () => {
   assert.equal(await handleStaffWhatsApp(STAFF, { voiceMediaId: "m1" }), true);
-  assert.deepEqual(kinds(), ["text", "audio"]);
-  assert.equal(state.sent[0].body, ANSWER, "the text is the record — always sent in full");
-  assert.equal(state.sent[1].body, "media:audio/ogg:voice-reply.ogg", "uploaded as an .ogg voice note, sent by media id");
+  assert.deepEqual(kinds(), ["audio"], "just the voice note — the full answer is kept on the Ask page");
+  assert.equal(state.sent[0].body, "media:audio/ogg:voice-reply.ogg", "uploaded as an .ogg voice note, sent by media id");
   assert.deepEqual(state.synthesised, [ANSWER]);
   assert.deepEqual(state.transcribed, ["detailed"], "the language heard decides the voice");
+  assert.deepEqual(state.askedSpoken, [true], "DAX was asked for a version to SAY");
+});
+
+test("a voice reply that offers choices → the voice note, then only the buttons", async () => {
+  state.choices = ["Call Anna", "Email Anna"];
+  await handleStaffWhatsApp(STAFF, { voiceMediaId: "m1" });
+  assert.deepEqual(kinds(), ["audio", "buttons"]);
+  assert.equal(state.sent[1].body, "Tap one, or just ask:", "the buttons, not the answer again");
+});
+
+test("DAX's spoken script, when it wrote one, is what is said", async () => {
+  state.script = "Two things are overdue — Anna and Ben.";
+  await handleStaffWhatsApp(STAFF, { voiceMediaId: "m1" });
+  assert.deepEqual(state.scripts, ["Two things are overdue — Anna and Ben."]);
 });
 
 test("a TYPED question gets text only, even with the switch on", async () => {
@@ -231,7 +265,7 @@ test("over the hourly voice cap → text only", async () => {
   state.voiceReplyCap = 1;
   await handleStaffWhatsApp(STAFF, { voiceMediaId: "m1" });
   await handleStaffWhatsApp(STAFF, { voiceMediaId: "m2" });
-  assert.deepEqual(kinds(), ["text", "audio", "text"]);
+  assert.deepEqual(kinds(), ["audio", "text"], "the second answer comes as text");
   assert.equal(state.synthesised.length, 1, "nothing sent to ElevenLabs over the cap");
 });
 
@@ -278,10 +312,13 @@ test("speakAssistantAnswer: permission, module, switch, the CALLER's own turn an
   assert.doesNotMatch(src, /assistantTurn\.(update|create|upsert)|putSetting|saveFile|put\(/);
 });
 
-test("the WhatsApp voice reply is gated on a voice note AND the switch AND the cap, and the text goes first", () => {
+test("the WhatsApp voice reply is gated on a voice note AND the switch AND the cap, and REPLACES the text only when it went", () => {
   const src = code("src/lib/assistantWhatsApp.ts");
   assert.match(src, /const voiceBack = "voiceMediaId" in input && voiceRepliesSwitchOn\(await getSetting\(ASSISTANT_VOICE_REPLIES_KEY\)\);/);
-  assert.match(src, /await sendPlan\(waId, plan\);\n\s*if \(voiceBack && answer\) await sendVoiceAnswer\(user\.id, waId, answer, heard\);/);
+  assert.match(src, /const spoke = voiceBack && answer \? await sendVoiceAnswer\(user\.id, waId, answer, heard, script\) : false;\n\s*await sendPlan\(waId, spoke \? voiceReplyExtras\(choices\) : plan\);/);
+  // "typing…" renewed while DAX works, and the timer always cleared.
+  assert.match(src, /const renew = setInterval\(\(\) => \{ typingCalls\.push\(showWhatsAppTyping\(messageId\)\); \}, TYPING_RENEW_MS\);/);
+  assert.match(src, /\} finally \{\s*clearInterval\(renew\);\s*\}/);
   const voice = src.slice(src.indexOf("async function sendVoiceAnswer"));
   assert.ok(voice.indexOf("assistantVoiceReplyAllowed(userId)") < voice.indexOf("synthesiseAnswer("));
   // The customer bot's sender, not a second one.
@@ -299,6 +336,6 @@ test("the owner's switch: owner only, audited, default off — and DAX knows abo
   assert.match(page, /<SaveForm action=\{saveAssistantWhatsAppCard\}/);
   assert.match(page, /name="voiceReplies"/);
   const { selfKnowledge } = await import("../src/lib/assistantSoul");
-  assert.match(selfKnowledge("DAX", new Set()), /voice note to you on WhatsApp gets a short spoken answer back as well as the full text/);
+  assert.match(selfKnowledge("DAX", new Set()), /voice note to you on WhatsApp gets a short spoken answer back instead of text/);
   assert.match(selfKnowledge("DAX", new Set()), /Listen button/);
 });

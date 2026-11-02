@@ -52,6 +52,9 @@ import {
   parseLinkCode,
   parseUpdateTemplate,
   planWhatsAppReply,
+  voiceReplyExtras,
+  ASK_PAGE_HAS_THE_REST,
+  TYPING_RENEW_MS,
   replyWindowOpen,
   splitForWhatsApp,
   updateText,
@@ -333,26 +336,42 @@ export async function handleStaffWhatsApp(from: string, input: StaffWhatsAppInpu
   let plan: WhatsAppReplyPlan;
   let answer: string | null = null;
   let proposed: ActionCard[] = [];
+  let choices: string[] = [];
+  let script: string | undefined;
+  // "typing…" KEPT ALIVE until the reply is on its way: Meta drops it after 25 seconds, and an answer plus its
+  // voice note can take longer (Sean, 2026-11-02: voice replies felt slow). Cleared on every way out.
+  const typingCalls: Promise<unknown>[] = [];
+  const renew = setInterval(() => { typingCalls.push(showWhatsAppTyping(messageId)); }, TYPING_RENEW_MS);
   try {
-    // A task asked for here is never thrown away. With the owner's switch on it
-    // gets a Confirm button; without it NOTHING can be changed from this phone,
-    // and the task is kept as a card on the person's Ask page instead ("saved").
-    const result = await askCrm(user, q, null, { source: "whatsapp", images, proposeTasks: (await confirmingOnWhatsAppOn()) ? true : "saved" });
-    if (result.ok) proposed = result.actions;
-    plan = result.ok ? planWhatsAppReply(result.answer, result.choices) : { texts: [result.error], buttons: null };
-    if (result.ok) answer = result.answer;
-  } catch (error) {
-    await logError("assistant-whatsapp", "answering failed", error instanceof Error ? error.name : "unknown").catch(() => {});
-    plan = { texts: ["Something went wrong answering that — try again in a minute."], buttons: null };
+    try {
+      // A task asked for here is never thrown away. With the owner's switch on it
+      // gets a Confirm button; without it NOTHING can be changed from this phone,
+      // and the task is kept as a card on the person's Ask page instead ("saved").
+      // A voice note back: DAX also writes what to SAY (assistantReply.SPOKEN_RULE).
+      const result = await askCrm(user, q, null, { source: "whatsapp", images, ...(voiceBack ? { spoken: true } : {}), proposeTasks: (await confirmingOnWhatsAppOn()) ? true : "saved" });
+      if (result.ok) proposed = result.actions;
+      plan = result.ok ? planWhatsAppReply(result.answer, result.choices) : { texts: [result.error], buttons: null };
+      if (result.ok) {
+        answer = result.answer;
+        choices = result.choices;
+        script = result.spoken;
+      }
+    } catch (error) {
+      await logError("assistant-whatsapp", "answering failed", error instanceof Error ? error.name : "unknown").catch(() => {});
+      plan = { texts: ["Something went wrong answering that — try again in a minute."], buttons: null };
+    }
+    // A VOICE NOTE IN, A VOICE NOTE BACK — INSTEAD OF THE TEXT (Sean, 2026-11-02: "stop the double response to a
+    // voicenote"). Only what the voice can't do follows it: the choice buttons. If no voice note could be made,
+    // the text goes as before — never nothing. The full answer is kept on their Ask page either way.
+    const spoke = voiceBack && answer ? await sendVoiceAnswer(user.id, waId, answer, heard, script) : false;
+    await sendPlan(waId, spoke ? voiceReplyExtras(choices) : plan);
+  } finally {
+    clearInterval(renew);
   }
-  // The full text ALWAYS goes, and first: it is the record, and it arrives while
-  // the voice is still being made. The voice note is a convenience on top.
-  await sendPlan(waId, plan);
-  if (voiceBack && answer) await sendVoiceAnswer(user.id, waId, answer, heard);
-  // After the answer (and its voice note): each task it set up, with its Confirm button.
+  // After the answer: each task it set up, with its Confirm button.
   await offerConfirmations(tenantId, user.id, waId, proposed);
   // Settled before the function ends, so the request is never left running on a serverless host.
-  await typing;
+  await Promise.all([typing, ...typingCalls]);
   return true;
 }
 
@@ -363,23 +382,30 @@ export async function handleStaffWhatsApp(from: string, input: StaffWhatsAppInpu
  * language no model speaks, the person's hourly cap, ElevenLabs or Meta failing —
  * just means no voice note: they already have the text. Logged as a reason only.
  */
-async function sendVoiceAnswer(userId: string, waId: string, answer: string, heard: VoiceLanguage | null): Promise<void> {
+/**
+ * The answer as a voice note. True: it went — and is the reply. False: it didn't (no voice set up, a language no
+ * voice speaks, the person's hourly cap, ElevenLabs or Meta failing) — the caller sends the text instead.
+ */
+async function sendVoiceAnswer(userId: string, waId: string, answer: string, heard: VoiceLanguage | null, script?: string): Promise<boolean> {
   try {
     // Checked before the cap is counted, so a text-only answer doesn't use it up.
-    if (!(await canSynthesizeVoice()) || !voiceLanguageFor(answer, heard)) return;
-    if (!(await assistantVoiceReplyAllowed(userId))) return;
-    const audio = await synthesiseAnswer(answer, heard);
-    if (typeof audio === "string") return; // ElevenLabs logs its own failure
+    if (!(await canSynthesizeVoice()) || !voiceLanguageFor(script || answer, heard)) return false;
+    if (!(await assistantVoiceReplyAllowed(userId))) return false;
+    // The text isn't sent with it: anything cut from a long answer is on the Ask page.
+    const audio = await synthesiseAnswer(answer, heard, script, ASK_PAGE_HAS_THE_REST);
+    if (typeof audio === "string") return false; // ElevenLabs logs its own failure
     // .ogg so WhatsApp shows it as a voice note (waveform), not an audio file.
     const uploaded = await uploadWhatsAppMedia(audio.buffer, audio.contentType, "voice-reply.ogg");
     if (!("id" in uploaded)) {
       await logError("assistant-whatsapp", "voice reply upload failed");
-      return;
+      return false;
     }
     const sent = await sendWhatsAppAudioId(waId, uploaded.id);
     if (!sent.ok) await logError("assistant-whatsapp", "voice reply send failed");
+    return sent.ok;
   } catch (error) {
     await logError("assistant-whatsapp", "voice reply threw", error instanceof Error ? error.name : "unknown").catch(() => {});
+    return false;
   }
 }
 

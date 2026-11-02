@@ -43,7 +43,7 @@ import { LEARN_INSTRUCTIONS, memoryPrompt, methodInstructions } from "./assistan
 import { researchGate } from "./assistantResearchGate";
 import { DEPTH_BUDGETS, HARD_DEADLINE_MS, MIN_CALL_MS, deepen, parseLedger, researchLeftMs, roundFits, startingDepth, type Depth } from "./assistantDepth";
 import { matchDecisions, parseDecision } from "./assistantDecisions";
-import { CITE_RULE, REPLY_FORMAT, STATE_INSTRUCTIONS, citableLinks, resolveCitations, splitReply, type Evidence } from "./assistantReply";
+import { CITE_RULE, REPLY_FORMAT, SPOKEN_RULE, STATE_INSTRUCTIONS, citableLinks, resolveCitations, splitReply, type Evidence } from "./assistantReply";
 import { unsupportedFigures, unsupportedNote } from "./assistantVerify";
 import { catalogueColour, closestColour, nameIsClose, nameStems } from "./nearMatch";
 import { salesStats } from "./crmAssistantStats";
@@ -138,6 +138,8 @@ export type AssistantResult =
   | {
       ok: true; answer: string; cited?: string; evidence?: Evidence[]; rows: AssistantRow[]; tools: string[];
       learned: number; actions: ActionCard[]; choices: string[]; saved: boolean; turnId?: string;
+      /** The version to SAY, when asked for one (opts.spoken) and it still matches the answer. */
+      spoken?: string;
     }
   | { ok: false; error: string };
 
@@ -1869,6 +1871,8 @@ export type AskOptions = {
   source?: AskSource;
   scheduleId?: string;
   images?: string[];
+  /** The answer will be SPOKEN (a voice note): ask the model for a version to say as well (SPOKEN_RULE). */
+  spoken?: boolean;
   /**
    * WhatsApp only (ignored for other sources): what the caller can do with a
    * proposed task. `true` — offer a Confirm button on the phone. `"saved"` —
@@ -2255,6 +2259,8 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
       observations.length
         ? resultsBlock("What the CRM returned:", observations.map(observationText).join("\n\n"))
         : "No lookup was needed for this question.",
+      // Per question (only when the answer will be spoken), so in the prompt and not the cached instructions.
+      opts.spoken ? SPOKEN_RULE : "",
     ].filter(Boolean).join("\n\n"),
     images,
     // Quick: low — measured on the 25-question eval (2026-10-05), the reasoning
@@ -2424,6 +2430,9 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
     });
   return {
     ok: true, answer, rows, tools, learned: learnedCount, actions, choices, saved: saved !== null,
+    // The script was written with the answer: when the CRM replaced the answer (tasks that weren't set up) or added
+    // a caution about its figures, it no longer matches — then the answer itself is read.
+    ...(opts.spoken && reply.spoken && settled === null && !note ? { spoken: reply.spoken } : {}),
     ...(source === "chat" && evidence.length && !settled ? { cited, evidence } : {}),
     ...(saved ? { turnId: saved } : {}),
   };
