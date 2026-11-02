@@ -898,8 +898,15 @@ test("masking, the business number and the wa.me link", () => {
   // Sean, 2026-11-02: Denago's live endpoint, registered before the "·" label — the QR codes section said
   // "connect your WhatsApp number" on a connected workspace.
   assert.deepEqual(businessNumberFromLabel("Denago EV Cape Town +27 63 336 3533"), { display: "+27 63 336 3533", digits: "27633363533" });
-  assert.deepEqual(businessNumberFromLabel("Shop 24/7 · 021 123 4567"), { display: "021 123 4567", digits: "0211234567" });
   assert.equal(businessNumberFromLabel("Scout 2 Showroom"), null, "a model number is not a phone number");
+  // Review of #961: a number in the NAME never joins the phone number — a QR code would send scans elsewhere.
+  for (const name of ["Denago Branch 2", "Denago Shop 24", "Denago 2026", "Shop 24/7 ·"]) {
+    assert.deepEqual(businessNumberFromLabel(`${name} +27 21 123 4567`), { display: "+27 21 123 4567", digits: "27211234567" }, name);
+  }
+  // No country code: not a number wa.me can open, so none — never a branch number glued to a local one.
+  for (const label of ["Denago Branch 2 021 123 4567", "Denago Shop 24 021 123 4567", "Denago 2026 021 123 4567"]) {
+    assert.equal(businessNumberFromLabel(label), null, label);
+  }
   assert.equal(waMeLink("27211234567", "123456"), "https://wa.me/27211234567?text=DAX%20123456");
   assert.equal(waMeLink(null, "123456"), "https://wa.me/?text=DAX%20123456");
   assert.equal(whatsappSwitchOn("on"), true);
