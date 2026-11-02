@@ -140,21 +140,18 @@ const FILE_QUESTION = "What's in this file, and where should it be filed?";
  * never turn into `false`, because "couldn't tell" is not "customer".
  */
 /**
- * Is this sender a staff phone LINKED to DAX in the current workspace? Cheap, and it answers nothing: the webhook
- * asks it to acknowledge Meta at once before a DAX answer that can take minutes (handleStaffWhatsApp still makes
- * every real check, and a no there takes the customer path as before).
+ * `defer`: hand the ANSWER to the webhook to run once Meta has been acknowledged (Sean, 2026-11-02: a DAX answer can
+ * take minutes, Meta re-sends anything not acknowledged in seconds, and every re-send was logged as "leased"). Only
+ * the answer: every check that decides whether this is a staff question at all — the link, the account, the number
+ * not now a customer's — still runs here, inside the request. Once they pass, nothing below returns false, so a
+ * deferred message can never turn out to be a customer's after Meta was told it was received (review of #960).
  */
-export async function isLinkedStaffPhone(from: string): Promise<boolean> {
-  const scope = currentTenantScope();
-  if (!scope || scope.system || !scope.tenantId) return false;
-  if (!(await assistantWhatsAppOn())) return false;
-  const waId = waDigits(String(from ?? ""));
-  if (!waId) return false;
-  const link = await basePrisma.assistantPhoneLink.findFirst({ where: { tenantId: scope.tenantId, waId, verifiedAt: { not: null } }, select: { id: true } });
-  return Boolean(link);
-}
-
-export async function handleStaffWhatsApp(from: string, input: StaffWhatsAppInput, messageId?: string | null): Promise<boolean> {
+export async function handleStaffWhatsApp(
+  from: string,
+  input: StaffWhatsAppInput,
+  messageId?: string | null,
+  opts: { defer?: (answer: () => Promise<void>) => void } = {},
+): Promise<boolean> {
   // A REAL workspace scope or nothing. withChannelTenantScope binds one only
   // when the business number is mapped to a workspace; an unmapped number runs
   // with no scope (dormant) or not at all (enforcing). A system scope bypasses
@@ -236,6 +233,9 @@ export async function handleStaffWhatsApp(from: string, input: StaffWhatsAppInpu
   // as anyone's, and the link stays for the owner to see.
   const user = await assistantUserFor(link.userId);
   if (!user) return false;
+
+  // EVERY CHECK HAS PASSED: this is a staff question, handled by DAX whatever follows — nothing below returns false.
+  const answer = async (): Promise<boolean> => {
 
   // THEY HAVE JUST WRITTEN, so WhatsApp's 24 hours are open: whatever the
   // assistant produced on its own and could not send (a scheduled briefing, a
@@ -482,6 +482,12 @@ export async function handleStaffWhatsApp(from: string, input: StaffWhatsAppInpu
   // Settled before the function ends, so the request is never left running on a serverless host.
   await Promise.all([typing, ...typingCalls]);
   return true;
+  };
+  if (opts.defer) {
+    opts.defer(async () => { await answer(); });
+    return true;
+  }
+  return answer();
 }
 
 /**
