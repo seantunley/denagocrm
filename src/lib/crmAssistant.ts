@@ -50,6 +50,7 @@ import { unsupportedFigures, unsupportedNote } from "./assistantVerify";
 import { catalogueColour, closestColour, closestNames, nameWords } from "./nearMatch";
 import { salesStats } from "./crmAssistantStats";
 import { whyLookup } from "./assistantWhyLookup";
+import { matchPayment } from "./assistantPaymentMatch";
 import { stuckLookup } from "./assistantStuckLookup";
 import { catchUpLookup } from "./assistantCatchUpLookup";
 import { lostAliveLookup } from "./assistantLostAliveLookup";
@@ -1613,6 +1614,7 @@ async function runTool(user: User, step: ToolStep): Promise<ToolOutput> {
     case "find_activities": return findActivities(user, step.args);
     case "lead_brief": return leadBrief(user, step.args);
     case "why": return whyLookup(user, step.args.record);
+    case "match_payment": return matchPayment(user, step.args);
     case "stuck": return stuckLookup(user, step.args.lead);
     case "catch_up": return catchUpLookup(user, step.args.since);
     case "lost_alive": return lostAliveLookup(user, step.args.mine ?? false);
