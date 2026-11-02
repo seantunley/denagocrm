@@ -303,6 +303,51 @@ async function main() {
     check("a card whose 'before' is no longer true is refused, unchanged", !again.ok && again.unchanged === true, JSON.stringify(again));
   }
 
+  console.log("\nPark a deal in Nurture (Sean, 2026-11-02: \"it's not lost, should be in Nurture\")");
+  {
+    const otherSession = await sessionFor(other);
+    const [first, second] = await basePrisma.lead.findMany({ where: { tenantId: T, contactId: id("c-ben"), createdById: rep.id, status: "open", deletedAt: null }, orderBy: { createdAt: "asc" }, take: 2 });
+    check("two of Ben's open deals to work with", !!first && !!second);
+    // Marked lost by someone, as Werner Kilian's was.
+    await basePrisma.lead.update({ where: { id: first.id }, data: { status: "lost", lostAt: new Date(), lostReason: "Gone cold" } });
+    const inAMonth = new Date(Date.now() + 2 * 3_600_000 + 30 * 86_400_000).toISOString().slice(0, 10);
+    const propose = async (who: PermissionUser, session: ActingSession, proposal: Record<string, unknown>) => {
+      const problems: string[] = [];
+      const cards = await runAsSession(session, () => scoped(() => resolveActions(who, [proposal as never], problems, null)));
+      return { problems, card: cards.find((c): c is Extract<ActionCard, { kind: "nurture" }> => c.kind === "nurture") };
+    };
+    const asked = { type: "nurture", leadId: first.id, because: "timing", interest: "Rover XL", trigger: "When his bonus comes in March", reviewOn: inAMonth };
+    // What DAX tried that day — a STAGE called Nurture — now says why instead of vanishing.
+    const asStage = await propose(rep, repSession, { type: "stage", leadId: first.id, stage: "Nurture" });
+    check("a 'stage' called Nurture: no card, and it says Nurture isn't a stage", !asStage.card && /Nurture isn't a stage/.test(asStage.problems.join(" ")), asStage.problems.join(" | "));
+    const parked = await propose(rep, repSession, asked);
+    check("a lost deal: the card says it reopens it first, and every detail", parked.card?.wasStatus === "lost" && /^Reopen Ben Mine\w*'s deal and park it in Nurture$/.test(parked.card.title)
+      && /It's marked lost now \(Gone cold\) — confirming reopens it first\./.test(parked.card.detail) && /Review on: .* — a review task for Rep/.test(parked.card.detail) && parked.card.assignedToId === rep.id, JSON.stringify(parked));
+    const events = (leadId: string) => basePrisma.auditEvent.count({ where: { entityId: leadId, eventType: { in: ["lead.reopened", "lead.nurtured", "lead.nurture_updated"] } } });
+    const done = await runAsSession(repSession, () => scoped(() => runAssistantAction(parked.card!)));
+    const row = await basePrisma.lead.findUnique({ where: { id: first.id } });
+    const review = row?.nurtureActivityId ? await basePrisma.activity.findUnique({ where: { id: row.nurtureActivityId } }) : null;
+    check("Confirm: reopened and parked — the reason, interest, follow-up and review day, with its review task",
+      done.ok && row?.status === "nurture" && row.nurtureReason === "timing" && row.nurtureInterest === "Rover XL" && row.nurtureTrigger === "When his bonus comes in March"
+        && !!row.nurtureReviewAt && review?.assignedToId === rep.id && review.tenantId === T && (await events(first.id)) === 2, JSON.stringify({ done, row, review }));
+    const again = await runAsSession(repSession, () => scoped(() => runAssistantAction(parked.card!)));
+    check("Confirm again: already in Nurture — nothing written twice", again.ok && /is in Nurture/.test(again.success ?? "") && (await events(first.id)) === 2
+      && (await basePrisma.activity.count({ where: { leadId: first.id, summary: { startsWith: "Review future interest" } } })) === 1, JSON.stringify(again));
+    // A card for an OPEN deal that is marked lost before Confirm: refused, never reopened by it.
+    const open = await propose(rep, repSession, { ...asked, leadId: second.id });
+    check("an open deal: parked without a reopen", open.card?.wasStatus === "open" && /^Park Ben Mine\w*'s deal in Nurture$/.test(open.card.title) && !/reopens/.test(open.card.detail), JSON.stringify(open));
+    await basePrisma.lead.update({ where: { id: second.id }, data: { status: "lost", lostAt: new Date(), lostReason: "Bought elsewhere" } });
+    const stale = await runAsSession(repSession, () => scoped(() => runAssistantAction(open.card!)));
+    check("…marked lost before Confirm: refused unchanged, and still lost", !stale.ok && stale.unchanged === true && (await basePrisma.lead.findUnique({ where: { id: second.id } }))?.status === "lost", JSON.stringify(stale));
+    // Somebody who can't open the deal: no card — and a card made for someone else does nothing when they confirm it.
+    const forged = await runAsSession(otherSession, () => scoped(() => runAssistantAction({ ...parked.card!, wasStatus: "lost", leadId: second.id })));
+    check("another rep's deal: refused, unchanged", !forged.ok && forged.unchanged === true && (await basePrisma.lead.findUnique({ where: { id: second.id } }))?.status === "lost", JSON.stringify(forged));
+    // A rep can't take an unassigned deal for themselves by parking it (leads.assign — the lead page's own rule).
+    await basePrisma.lead.update({ where: { id: second.id }, data: { assignedToId: null } });
+    const unassigned = await propose(rep, repSession, { ...asked, leadId: second.id });
+    check("an unassigned deal, a rep without leads.assign: no card, and it says why", !unassigned.card && /can't assign deals/.test(unassigned.problems.join(" ")), unassigned.problems.join(" | "));
+  }
+
   console.log("\nFiling what was sent, and recording money");
   {
     const otherSession = await sessionFor(other);
@@ -381,6 +426,43 @@ async function main() {
       check("after the deposit, a later payment is recorded on the statement, its proof filed on the quote", nextCard?.deposit === false && !!done?.ok && (await payments()) === 1 && (await proofs()) === 2, JSON.stringify({ next, done }));
       const replay = nextCard ? await runAsSession(repSession, () => scoped(() => runAssistantAction(nextCard))) : null;
       check("…and Confirm again records and files nothing more (the card's key, and the proof's own)", !!replay?.ok && /proof filed$/.test(replay.success ?? "") && (await payments()) === 1 && (await proofs()) === 2 && (await stillHeld(proof2)) === 1, JSON.stringify(replay));
+
+      // A DELIVERY DAY (voice-first, 2026-11-02: "delivery next Tuesday"): booked through the deliveries board, then
+      // moved — nobody contacted, never booked twice, and a day moved by someone else since is not overwritten.
+      const dayFromNow = (days: number) => new Date(Date.now() + 2 * 3_600_000 + days * 86_400_000).toISOString().slice(0, 10);
+      const deliveryCard = async (date: string) =>
+        (await cardsFor({ type: "schedule_delivery", quote: `Q-${QUOTE_NO}`, date }, null)).cards.find((c): c is Extract<ActionCard, { kind: "schedule_delivery" }> => c.kind === "schedule_delivery");
+      const deliveryOn = async () => {
+        const q = await basePrisma.quote.findUnique({ where: { id: id("quote") }, select: { deliveryScheduledFor: true } });
+        return q?.deliveryScheduledFor ? new Date(q.deliveryScheduledFor.getTime() + 2 * 3_600_000).toISOString().slice(0, 10) : null;
+      };
+      const onCalendar = () => basePrisma.activity.findMany({ where: { tenantId: T, contactId: id("c-ben"), summary: { startsWith: "🚚 Delivery" } }, select: { dueDate: true } });
+      const book = await deliveryCard(dayFromNow(7));
+      check("a delivery day: the card books it, and says nobody is contacted", book?.from === null && /^Book Q-\d+'s delivery for /.test(book.title) && /The customer is not contacted/.test(book.detail), JSON.stringify(book));
+      const booked = book ? await runAsSession(repSession, () => scoped(() => runAssistantAction(book))) : null;
+      check("Confirm books it on the deliveries board, with its workshop-calendar entry", !!booked?.ok && (await deliveryOn()) === dayFromNow(7) && (await onCalendar()).length === 1, JSON.stringify(booked));
+      const bookedAgain = book ? await runAsSession(repSession, () => scoped(() => runAssistantAction(book))) : null;
+      check("…Confirm again: already booked — no second calendar entry", !!bookedAgain?.ok && (await onCalendar()).length === 1, JSON.stringify(bookedAgain));
+      const sameDay = await cardsFor({ type: "schedule_delivery", quote: `Q-${QUOTE_NO}`, date: dayFromNow(7) }, null);
+      check("the day it is already booked for: no card, and it says so", sameDay.cards.length === 0 && /already booked/.test(sameDay.problems.join(" ")));
+      const staleMove = await deliveryCard(dayFromNow(10));
+      check("a new day: the card moves it from the day it shows", staleMove?.from === dayFromNow(7) && /^Move Q-\d+'s delivery from /.test(staleMove.title), JSON.stringify(staleMove));
+      // Someone moves it on the board before this card is confirmed: refused unchanged, their day kept.
+      await basePrisma.quote.update({ where: { id: id("quote") }, data: { deliveryScheduledFor: new Date(`${dayFromNow(9)}T00:00:00.000Z`) } });
+      const refusedMove = staleMove ? await runAsSession(repSession, () => scoped(() => runAssistantAction(staleMove))) : null;
+      check("…moved by someone else since: refused unchanged, their day kept", !!refusedMove && !refusedMove.ok && refusedMove.unchanged === true && (await deliveryOn()) === dayFromNow(9), JSON.stringify(refusedMove));
+      const move = await deliveryCard(dayFromNow(12));
+      const moved = move ? await runAsSession(repSession, () => scoped(() => runAssistantAction(move))) : null;
+      check("a fresh card moves it — the board's reschedule", !!moved?.ok && (await deliveryOn()) === dayFromNow(12), JSON.stringify(moved));
+      const past = await cardsFor({ type: "schedule_delivery", quote: `Q-${QUOTE_NO}`, date: "2020-01-01" }, null);
+      check("a day in the past: no card", past.cards.length === 0 && /in the past/.test(past.problems.join(" ")));
+      // TWO CONFIRMS AT ONCE (review of #939): one booking, one workshop entry — the board's own action claims the day
+      // only while none is booked, with its entry in the same transaction.
+      await basePrisma.quote.update({ where: { id: id("quote") }, data: { deliveryScheduledFor: null } });
+      await basePrisma.activity.deleteMany({ where: { tenantId: T, contactId: id("c-ben"), summary: { startsWith: "🚚 Delivery" } } });
+      const race = await deliveryCard(dayFromNow(14));
+      const both = race ? await Promise.all([0, 1].map(() => runAsSession(repSession, () => scoped(() => runAssistantAction(race))))) : [];
+      check("one card confirmed twice AT ONCE: one booking, one workshop entry", both.some((r) => r.ok) && (await deliveryOn()) === dayFromNow(14) && (await onCalendar()).length === 1, JSON.stringify(both));
     }
     const tooMuch = await cardsFor({ type: "record_payment", quote: `Q-${QUOTE_NO}`, amount: 500_000, method: "eft", receivedOn: today }, null);
     const tooMuchCard = tooMuch.cards.find((c): c is Extract<ActionCard, { kind: "record_payment" }> => c.kind === "record_payment");

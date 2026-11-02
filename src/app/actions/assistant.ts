@@ -11,7 +11,8 @@ import { MAX_IMAGE_BYTES } from "@/lib/assistantImage";
 import { heldUpload } from "@/lib/assistantUpload";
 import { uploadDocument } from "@/app/actions/documents";
 import { recordQuotePayment } from "@/app/actions/quotePayments";
-import { markDepositPaid } from "@/app/actions/fulfilment";
+import { markDepositPaid, rescheduleDelivery, scheduleDelivery } from "@/app/actions/fulfilment";
+import { johannesburgDateKey } from "@/lib/activityDay";
 import { getSetting } from "@/lib/settings";
 import { isCodexConnected } from "@/lib/codex";
 import { ASSISTANT_PROFILE_KEY, parseProfile } from "@/lib/assistantSoul";
@@ -27,7 +28,10 @@ const QUOTE_PDF_SEND_WAIT_MS = 4_000;
 import { prisma } from "@/lib/db";
 import { cancelActivity, rescheduleActivity, scheduleActivity, scheduleFollowUp } from "@/app/actions/activities";
 import { addCommunication } from "@/app/actions/communications";
-import { assignLead, convertLeadToContact, createLead, markLost, moveLead } from "@/app/actions/leads";
+import { assignLead, convertLeadToContact, createLead, markLost, moveLead, reopenLead } from "@/app/actions/leads";
+import { saveLeadNurture } from "@/app/actions/nurture";
+import { parseNurtureForm } from "@/lib/leadNurture";
+import { resolveAssignableUser } from "@/lib/tenantActor";
 import { createQuoteFromLead, saveQuoteDraft } from "@/app/actions/quotes";
 import { createTestDriveBooking } from "@/app/actions/testDrives";
 import { createStaffAvailability } from "@/app/actions/staffAvailability";
@@ -524,6 +528,29 @@ export async function runAssistantAction(
         if (card.leadId) await confirmed("cancel an activity", card.leadId);
         return { ok: true, success: "Cancelled" };
       }
+      case "schedule_delivery": {
+        // THE DELIVERIES BOARD'S OWN DOORS: scheduleDelivery (a first day) or rescheduleDelivery (a new one) — Automotive,
+        // deliveries.manage, the quote, the deposit, the workshop-calendar entry and the audit entry are all theirs.
+        // Nobody is contacted.
+        const day = /^\d{4}-\d{2}-\d{2}$/;
+        if (typeof card.quoteId !== "string" || !day.test(String(card.date ?? "")) || (card.from !== null && !day.test(String(card.from ?? "")))) return untouched(STALE_CARD);
+        if (!(await canAccessQuote(user, card.quoteId))) return untouched("You can't open that quote any more.");
+        const quote = await prisma.quote.findFirst({ where: { id: card.quoteId, deletedAt: null }, select: { deliveryScheduledFor: true, deliveredAt: true, depositPaidAt: true } });
+        if (!quote) return untouched("That quote is no longer there.");
+        const booked = quote.deliveryScheduledFor ? johannesburgDateKey(quote.deliveryScheduledFor) : null;
+        // Done already — a second Confirm: booked for that day. Nothing is written again.
+        if (booked === card.date) return { ok: true, success: `Q-${card.quoteNumber}'s delivery is booked for ${card.date}`, href: "/deliveries" };
+        if (quote.deliveredAt) return untouched("That delivery has already been completed.");
+        if (!quote.depositPaidAt) return untouched("The deposit on that quote isn't recorded any more — record it first.");
+        // What the card SHOWED must still be so: booked or moved by someone since, it is refused.
+        if (booked !== card.from) return untouched(STALE_CARD);
+        const form = new FormData();
+        form.set("date", card.date);
+        const result = card.from ? await rescheduleDelivery(card.quoteId, form) : await scheduleDelivery(card.quoteId, form);
+        if (result?.error) return { ok: false, error: result.error };
+        await confirmedOn(card.from ? "move the delivery" : "book the delivery", { leadId: card.leadId, contactId: null });
+        return { ok: true, success: `Q-${card.quoteNumber}'s delivery is booked for ${card.date} — on the deliveries board`, href: "/deliveries" };
+      }
       case "lost": {
         if (!(await stillAsProposed(card))) return untouched(STALE_CARD);
         const form = new FormData();
@@ -532,6 +559,57 @@ export async function runAssistantAction(
         if (result.error) return { ok: false, error: result.error };
         await confirmed("mark the deal lost", card.leadId);
         return { ok: true, success: "Marked lost" };
+      }
+      case "nurture": {
+        // THE LEAD PAGE'S OWN DOORS: reopenLead for a lost deal (leads.reopen), then saveLeadNurture — leads.change_stage,
+        // activities.manage, the salesperson rules, and the review task and audit entry in one transaction. Nobody is contacted.
+        // EVERYTHING saveLeadNurture would refuse is checked BEFORE a lost deal is reopened: reopened and then refused for
+        // a reason a retry can't change (a salesperson no longer active), it would be left open — neither lost nor parked.
+        if (!(await canAccessLead(user, card.leadId))) return untouched("You can't open that deal any more.");
+        const now = await prisma.lead.findFirst({
+          where: { id: card.leadId, deletedAt: null },
+          select: { status: true, nurtureReason: true, nurtureInterest: true, nurtureTrigger: true, nurtureReviewAt: true, assignedToId: true },
+        });
+        if (!now) return untouched("That deal is no longer there.");
+        const parkedOn = `${card.leadLabel} is in Nurture — to be looked at again on ${card.reviewOn}`;
+        // Done already — a second Confirm: parked with exactly these details. Nothing is written again.
+        if (now.status === "nurture" && now.nurtureReason === card.because && now.nurtureInterest === String(card.interest ?? "").trim().replace(/\s+/g, " ")
+          && now.nurtureTrigger === String(card.trigger ?? "").trim() && now.nurtureReviewAt && johannesburgDateKey(now.nurtureReviewAt) === card.reviewOn
+          && now.assignedToId === card.assignedToId) return { ok: true, success: parkedOn, href: `/leads/${card.leadId}` };
+        const form = new FormData();
+        form.set("reason", String(card.because ?? ""));
+        form.set("interest", String(card.interest ?? ""));
+        form.set("trigger", String(card.trigger ?? ""));
+        form.set("reviewDate", String(card.reviewOn ?? ""));
+        form.set("assignedToId", String(card.assignedToId ?? ""));
+        // The form's own rules (a review date that has since passed included), read exactly as saveLeadNurture reads them.
+        const input = parseNurtureForm(form);
+        if ("error" in input) return untouched(input.error);
+        // What the card SHOWED must still be so — except a lost deal this card already reopened (a retry after the
+        // reopen went through and the move did not). A deal marked lost after an "open" card was shown is not reopened.
+        const reopenedAlready = card.wasStatus === "lost" && now.status === "open";
+        if (now.status !== card.wasStatus && !reopenedAlready) return untouched(STALE_CARD);
+        const may = (key: Parameters<typeof hasPermission>[1]) => hasPermission(user, key);
+        if (!(await may("leads.change_stage")) || !(await may("activities.manage")) || (now.status === "lost" && !(await may("leads.reopen")))
+          || (now.assignedToId !== input.assignedToId && !(await may("leads.assign")))) return untouched("Your role can't park this deal in Nurture.");
+        if (!(await resolveAssignableUser(input.assignedToId, "salesperson").catch(() => null))) {
+          return untouched("The salesperson on that card isn't available any more — ask again, and say who should have the deal.");
+        }
+        let reopened = false;
+        if (now.status === "lost") {
+          const result = await reopenLead(card.leadId);
+          if (result?.error) return { ok: false, error: result.error };
+          reopened = true;
+        }
+        const parked = await saveLeadNurture(card.leadId, form);
+        if (parked?.error) {
+          // Reopened, not parked: the retry finds it open and only parks it — it is never reopened twice.
+          return reopened || reopenedAlready
+            ? resumable(`${card.leadLabel}'s deal was reopened, but couldn't be moved to Nurture: ${parked.error} Confirm again to finish — it won't be reopened twice.`)
+            : { ok: false, error: parked.error };
+        }
+        await confirmed("park the deal in Nurture", card.leadId);
+        return { ok: true, success: parkedOn, href: `/leads/${card.leadId}` };
       }
       case "quote": {
         const result = await createQuoteFromLead(card.leadId);

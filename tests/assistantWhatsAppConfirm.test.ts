@@ -106,7 +106,7 @@ test("WHAT CONFIRM WRITES IS EXACTLY WHAT WAS SHOWN: a long note is never cut to
 
 /* ── the confirm step, run against fakes ───────────────────────────────── */
 
-type Pending = { id: string; tenantId: string; userId: string; card: Record<string, unknown>; expiresAt: Date; confirmedAt: Date | null; completedAt: Date | null; failedAt: Date | null; forCrm: boolean };
+type Pending = { id: string; tenantId: string; userId: string; card: Record<string, unknown>; expiresAt: Date; confirmedAt: Date | null; completedAt: Date | null; failedAt: Date | null; forCrm: boolean; createdAt: Date };
 const state = {
   on: true,
   /** The database refusing to save a card for the CRM. */
@@ -141,17 +141,30 @@ const matches = (row: Pending, where: Where) =>
     if (want instanceof Date) return have instanceof Date && have.getTime() === want.getTime();
     return want === null ? have === null : have === want;
   });
+/** Prisma's orderBy on one field, as the code under test asks for it. */
+const ordered = (rows: Pending[], orderBy?: Record<string, "asc" | "desc">) => {
+  if (!orderBy) return rows;
+  const [key, dir] = Object.entries(orderBy)[0];
+  const value = (row: Pending) => (row as unknown as Record<string, unknown>)[key];
+  return [...rows].sort((a, b) => {
+    const x = value(a), y = value(b);
+    const cmp = x instanceof Date && y instanceof Date ? x.getTime() - y.getTime() : String(x).localeCompare(String(y));
+    return dir === "desc" ? -cmp : cmp;
+  });
+};
 const table = {
-  create: async ({ data }: { data: Pick<Pending, "tenantId" | "userId" | "card" | "expiresAt"> }) => {
-    const row: Pending = { id: `cmpending${String(++state.seq).padStart(17, "0")}`, confirmedAt: null, completedAt: null, failedAt: null, forCrm: false, ...data };
+  create: async ({ data }: { data: Pick<Pending, "tenantId" | "userId" | "card" | "expiresAt"> & { createdAt?: Date } }) => {
+    const row: Pending = { id: `cmpending${String(++state.seq).padStart(17, "0")}`, confirmedAt: null, completedAt: null, failedAt: null, forCrm: false, createdAt: new Date(), ...data };
     state.rows.push(row);
     return { id: row.id };
   },
   createMany: async ({ data }: { data: (Pick<Pending, "tenantId" | "userId" | "card" | "expiresAt"> & { forCrm?: boolean })[] }) => {
     if (state.saveFails) throw new Error("database unavailable");
-    for (const item of data) state.rows.push({ id: `cmpending${String(++state.seq).padStart(17, "0")}`, confirmedAt: null, completedAt: null, failedAt: null, forCrm: false, ...item });
+    for (const item of data) state.rows.push({ id: `cmpending${String(++state.seq).padStart(17, "0")}`, confirmedAt: null, completedAt: null, failedAt: null, forCrm: false, createdAt: new Date(), ...item });
     return { count: data.length };
   },
+  findMany: async ({ where, orderBy, take }: { where: Where; orderBy?: Record<string, "asc" | "desc">; take?: number }) =>
+    ordered(state.rows.filter((row) => matches(row, where)), orderBy).slice(0, take ?? Infinity),
   deleteMany: async ({ where }: { where: Where }) => {
     const before = state.rows.length;
     state.rows = state.rows.filter((row) => !matches(row, where));
@@ -162,7 +175,7 @@ const table = {
     for (const row of hit) Object.assign(row, data);
     return { count: hit.length };
   },
-  findFirst: async ({ where }: { where: Where }) => state.rows.find((row) => matches(row, where)) ?? null,
+  findFirst: async ({ where, orderBy }: { where: Where; orderBy?: Record<string, "asc" | "desc"> }) => ordered(state.rows.filter((row) => matches(row, where)), orderBy)[0] ?? null,
 };
 
 type Loader = (request: string, parent: { filename?: string } | undefined, isMain: boolean) => unknown;
@@ -215,14 +228,14 @@ loaderKey._load = function (this: unknown, request: string, parent, isMain) {
 let asUser: string | null = null;
 
 const require_ = createRequire(import.meta.url);
-const { PENDING_ACTION_RETENTION_MS, confirmFromWhatsApp, offerConfirmations, prunePendingActions } = require_("../src/lib/assistantWhatsAppConfirm.ts") as typeof import("../src/lib/assistantWhatsAppConfirm");
+const { PENDING_ACTION_RETENTION_MS, confirmAllFromWhatsApp, confirmFromWhatsApp, offerConfirmations, prunePendingActions, waitingForConfirm } = require_("../src/lib/assistantWhatsAppConfirm.ts") as typeof import("../src/lib/assistantWhatsAppConfirm");
 
 const LEAD = "cmabcdefghijklmnopqrstuv";
 const PHONE = "27821234567";
 const me = { id: "u1", name: "Sean", email: "s@x", role: "staff" } as never;
 const NOTE = { id: "a0", kind: "note", leadId: LEAD, leadLabel: "Anna — Rover", title: "Add a note to Anna's lead", text: "Wants white." };
 const pendingRow = (over: Partial<Pending> = {}): Pending => {
-  const row: Pending = { id: `cmpending${String(++state.seq).padStart(17, "0")}`, tenantId: "t1", userId: "u1", card: NOTE, expiresAt: new Date(Date.now() + 60_000), confirmedAt: null, completedAt: null, failedAt: null, forCrm: false, ...over };
+  const row: Pending = { id: `cmpending${String(++state.seq).padStart(17, "0")}`, tenantId: "t1", userId: "u1", card: NOTE, expiresAt: new Date(Date.now() + 60_000), confirmedAt: null, completedAt: null, failedAt: null, forCrm: false, createdAt: new Date(), ...over };
   state.rows.push(row);
   return row;
 };
@@ -437,9 +450,14 @@ test("review of #905: the customer record was made, then the quote failed — th
   assert.ok(build.indexOf("await quoteFromLeadDefaults()") > -1 && build.indexOf("await quoteFromLeadDefaults()") < build.indexOf("convertLeadToContact("));
   const afterCustomer = build.slice(build.indexOf("convertLeadToContact("), build.indexOf("await saveQuoteDraft("));
   assert.doesNotMatch(afterCustomer.replace(/^\s*\/\/.*$/gm, ""), /await (?!logError)/, "between the customer record and the protected save, nothing else is awaited");
-  // One place. record_payment is not one (review of #934): its key records the payment once, its proof is filed once
+  // Two places. record_payment is not one (review of #934): its key records the payment once, its proof is filed once
   // under its own key, and a proof that may not have been filed is said plainly — never offered for a blind retry.
-  assert.equal(action.match(/resumable\(/g)?.length, 1, "quote_build after the customer");
+  // nurture IS (2026-11-02): a lost deal reopened and then not parked — the retry finds it open and only parks it.
+  assert.equal(action.match(/resumable\(/g)?.length, 2, "quote_build after the customer; nurture after the reopen");
+  const nurture = action.slice(action.indexOf('case "nurture": {'), action.indexOf('case "quote": {'));
+  assert.ok(nurture.indexOf("await reopenLead(card.leadId)") < nurture.indexOf("await saveLeadNurture(card.leadId, form)"));
+  assert.match(nurture, /return reopened \|\| reopenedAlready\s*\? resumable\(/, "resumable only once the deal WAS reopened");
+  assert.match(nurture, /const reopenedAlready = card\.wasStatus === "lost" && now\.status === "open";/);
   const payment = action.slice(action.indexOf('case "record_payment": {'), action.indexOf('case "update_customer": {'));
   assert.ok(payment.indexOf('form.set("idempotencyKey", card.confirmKey)') < payment.indexOf("await recordQuotePayment("), "the payment is once-only by the card's key");
   // A colour the catalogue no longer has stops Confirm BEFORE the customer record is made.
@@ -493,7 +511,11 @@ test("A PINNED NOTE WHOSE PIN FAILS IS NOT WRITTEN TWICE: the note was saved, so
   // (2026-11-02, review of #933: one more of create_lead's — a card without its confirm key.)
   // (2026-11-02, two of attach_file's — invalid card, the file no longer held — and three of record_payment's —
   // no key, an invalid amount or date, the proof no longer held — each before its one write.)
-  assert.equal((run.match(/return untouched\(/g) ?? []).length, 53);
+  // (2026-11-02, six of schedule_delivery's — invalid card, quote not theirs, gone, delivered, deposit no longer
+  // recorded, booked or moved since — before the deliveries board's action, its one write.)
+  // (2026-11-02, six of nurture's — the deal not theirs any more, gone, the form's own rules, its status changed since,
+  // a role that can't, a salesperson no longer active — all before reopenLead, its first write.)
+  assert.equal((run.match(/return untouched\(/g) ?? []).length, 65);
   const buildCase = run.slice(run.indexOf('case "quote_build": {'), run.indexOf('case "quote_pdf": {'));
   assert.ok(buildCase.indexOf("The catalogue changed since DAX suggested this") < buildCase.indexOf("convertLeadToContact("), "every check before the customer record is made");
   const quotePdfCase = run.slice(run.indexOf('case "quote_pdf": {'), run.indexOf('case "quote_change": {'));
@@ -558,9 +580,14 @@ test("offers: a Confirm button per internal task when on; everything else SAVED 
   assert.equal(buttons.length, 2, "one pending row per confirmable task");
   assert.ok(state.rows.every((row) => row.tenantId === "t1" && row.userId === "u1" && row.confirmedAt === null));
   assert.ok(buttons.every((row) => Math.abs(row.expiresAt.getTime() - Date.now() - PENDING_ACTION_TTL_MS) < 5000));
-  const offers = state.sent.filter((s) => s.buttons);
+  const offers = state.sent.filter((s) => s.buttons?.[0].id.startsWith("daxc:"));
   assert.deepEqual(offers.map((s) => s.buttons), buttons.map((row) => [{ id: `daxc:${row.id}`, title: "Confirm" }]));
   assert.match(offers[0].text, /^Add a note to Anna's lead\n\nWants white\./);
+  // Two offered together (voice-first, 2026-11-02): ONE offer, one createdAt — and one more button for exactly those.
+  assert.ok(buttons.every((row) => row.createdAt.getTime() === buttons[0].createdAt.getTime()), "one offer, one createdAt");
+  const all = state.sent.filter((s) => s.buttons?.[0].id.startsWith("daxa:"));
+  assert.deepEqual(all.map((s) => s.buttons), [[{ id: `daxa:${buttons[0].id}`, title: "Confirm all 2" }]]);
+  assert.match(all[0].text, /^That's 2 tasks, each shown above\. Tap Confirm all to do all 2 — or reply "yes to all"\. Nothing changes until you do\.$/);
   // The customer message is kept as a card — the whole card, for a day — and no button is ever sent for it.
   assert.equal(kept.length, 1);
   assert.equal(kept[0].card.kind, "draft_message");
@@ -751,7 +778,9 @@ test("a card saved for the CRM is stamped with its workspace and person, and the
   assert.ok(lib.indexOf("const saved = await saveForCrm(tenantId, userId, elsewhere);") < lib.indexOf("I've saved"));
   // Both phone-side lookups exclude saved cards: the claim, and the "why not" that follows a failed claim.
   // (The third: removing a phone row whose button never arrived — a phone row only, never a saved card.)
-  assert.equal(lib.match(/forCrm: false/g)?.length, 3);
+  // (2026-11-02, voice-first: Confirm all's anchor, the newest offer and its rows, and what is waiting — its newest
+  // offer and its rows — phone rows only.)
+  assert.equal(lib.match(/forCrm: false/g)?.length, 8);
   assert.match(lib, /deleteMany\(\{ where: \{ id: pending\.id, tenantId, userId, forCrm: false, confirmedAt: null \} \}\)/);
   const sql = readFileSync(join(root, "prisma/migrations/20261012110000_assistant_pending_for_crm/migration.sql"), "utf8");
   assert.match(sql, /ALTER TABLE "AssistantPendingAction" ADD COLUMN IF NOT EXISTS "forCrm" BOOLEAN NOT NULL DEFAULT false;/);
@@ -806,4 +835,69 @@ test("the Ask page shows a person only their own waiting saved cards, and the ca
   assert.match(card, /if \(savedId\) void settleSavedAssistantCard\(savedId, "dismissed"\)/);
   assert.match(card, /if \(savedId\) await settleSavedAssistantCard\(savedId, "sent"\)/);
   assert.match(card, /savedId \? `dax-saved-\$\{savedId\}` : /);
+});
+
+/* ── voice-first: Confirm all, and what is waiting (Sean, 2026-11-02) ──── */
+
+test("CONFIRM ALL: exactly the tasks offered together — each claimed and run as its own Confirm, never an older offer or anyone else's", async () => {
+  const minutesAgo = (m: number) => new Date(Date.now() - m * 60_000);
+  const offeredAt = minutesAgo(1);
+  const older = pendingRow({ createdAt: minutesAgo(30) });
+  const first = pendingRow({ createdAt: offeredAt, card: { ...NOTE, title: "Add a note to Anna's lead" } });
+  const second = pendingRow({ createdAt: offeredAt, card: { ...NOTE, kind: "stage", title: "Move Anna to Quoted" } });
+  const done = pendingRow({ createdAt: offeredAt, completedAt: new Date() });
+  const theirs = pendingRow({ createdAt: offeredAt, userId: "u2" });
+  const saved = pendingRow({ createdAt: offeredAt, forCrm: true });
+
+  // The button names one row of the set; the set is every row offered with it that is still waiting.
+  await confirmAllFromWhatsApp("t1", me, PHONE, second.id);
+  assert.deepEqual(state.ran.map((run) => run.card.title), ["Add a note to Anna's lead", "Move Anna to Quoted"], "the set, in the order offered");
+  assert.ok(state.ran.every((run) => run.asUserId === "u1"), "run as the person who confirmed");
+  assert.ok(first.completedAt && second.completedAt, "each claimed and settled as its own Confirm");
+  for (const untouched of [older, theirs, saved]) assert.equal(untouched.confirmedAt, null, "never an older offer, someone else's, or a saved card");
+  assert.ok(done.completedAt, "a done one is not run again");
+  assert.equal(state.sent.filter((s) => s.text.startsWith("✅")).length, 2, "each says its own result");
+
+  // "yes to all" with no anchor: the NEWEST offer, whatever became of it (review of #939). It is done — so nothing
+  // remains, and the OLDER offer still waiting is never reached instead.
+  state.ran = [];
+  await confirmAllFromWhatsApp("t1", me, PHONE, null);
+  assert.equal(state.ran.length, 0);
+  assert.equal(older.confirmedAt, null, "an older offer is never confirmed by 'yes to all'");
+  assert.match(state.sent.at(-1)?.text ?? "", /^Nothing from that set is waiting any more/);
+  // A newer offer: "yes to all" is that one.
+  const newer = pendingRow({ createdAt: new Date() });
+  state.ran = [];
+  await confirmAllFromWhatsApp("t1", me, PHONE, null);
+  assert.equal(state.ran.length, 1);
+  assert.ok(newer.completedAt && older.confirmedAt === null);
+  // Switched off: nothing runs.
+  state.on = false;
+  state.ran = [];
+  pendingRow({ createdAt: new Date() });
+  await confirmAllFromWhatsApp("t1", me, PHONE, null);
+  assert.equal(state.ran.length, 0);
+  assert.match(state.sent.at(-1)?.text ?? "", /^Confirming on WhatsApp is switched off/);
+});
+
+test("what is waiting: how many, and the newest offer's tasks in the order offered — the person's own, live, phone rows only", async () => {
+  const offeredAt = new Date(Date.now() - 60_000);
+  pendingRow({ createdAt: new Date(Date.now() - 20 * 60_000), card: { ...NOTE, title: "Older" } });
+  const a = pendingRow({ createdAt: offeredAt, card: { ...NOTE, title: "A" } });
+  const b = pendingRow({ createdAt: offeredAt, card: { ...NOTE, title: "B" } });
+  pendingRow({ createdAt: offeredAt, userId: "u2", card: { ...NOTE, title: "Theirs" } });
+  pendingRow({ createdAt: offeredAt, forCrm: true, card: { ...NOTE, title: "Saved" } });
+  pendingRow({ createdAt: offeredAt, expiresAt: new Date(Date.now() - 1000), card: { ...NOTE, title: "Expired" } });
+  const waiting = await waitingForConfirm("t1", "u1");
+  assert.equal(waiting.total, 3);
+  assert.deepEqual(waiting.newest, [{ id: a.id, title: "A" }, { id: b.id, title: "B" }]);
+  assert.equal(waiting.only, null);
+  // The newest offer done (review of #939): nothing waits "from my last message" — the older one is only counted,
+  // and when it is the ONE task waiting, a plain yes may still confirm it.
+  a.completedAt = new Date();
+  b.completedAt = new Date();
+  const after = await waitingForConfirm("t1", "u1");
+  assert.deepEqual(after.newest, []);
+  assert.equal(after.total, 1);
+  assert.equal(after.only?.title, "Older");
 });
