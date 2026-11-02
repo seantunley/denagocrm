@@ -510,6 +510,7 @@ export const signingAndInboxArticles: HelpArticle[] = [
       ] },
       { type: "callout", tone: "warning", text: "An archived conversation cannot be replied to. Click **Unarchive** first." },
       { type: "callout", tone: "info", text: "On X conversations, **Draft with Grok** suggests a reply for you to edit, if your workspace has switched that on. Nothing is sent until you click **Send**." },
+      { type: "callout", tone: "info", text: "When a customer's latest WhatsApp message is a voice note, **🎤 Summarise + suggest a reply** shows one line on what they said and puts a suggested reply in the box. Edit it, then click **Send** — nothing goes until you do. It uses AI Assist (Settings → Integrations) only when you press it. Phone numbers and email addresses are taken out before the voice note's text is sent to the AI." },
       { type: "callout", tone: "info", text: "Sending needs the permission to reply in the inbox. People who can only view the inbox can read conversations but not answer them." },
     ],
   },

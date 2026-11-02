@@ -13,6 +13,7 @@ import ConversationCollab from "@/components/ConversationCollab";
 import { EmptyState, StatusPill } from "@/components/visual-system";
 import { RECEIPT_CHANNELS } from "@/lib/deliveryReceipts";
 import { deliveryLabel, type DeliveryState } from "@/lib/messageDelivery";
+import { voiceNoteTranscript } from "@/lib/voiceNoteReply";
 
 // Keyed on the thread's own channel type, not `string`: a channel the inbox
 // lists but this map lacks is then a compile error. It was `string`, Telegram
@@ -209,7 +210,7 @@ export default function SocialThreadList({
                   handover context is what you want to have read before typing. */}
               {collab ? <ConversationCollab collaboration={collab} staff={staff} canAct={canCollaborate} /> : null}
 
-              {thread.archived ? <p className="mt-3 text-xs text-muted-foreground">Archived — restore this conversation to reply.</p> : <InboxReply channel={thread.channel} contactId={thread.contactId} leadId={thread.leadId} phone={thread.phone} revalidate={revalidate} conversationId={conversationId} draft={collab?.draft ?? null} viewerId={viewerId} />}
+              {thread.archived ? <p className="mt-3 text-xs text-muted-foreground">Archived — restore this conversation to reply.</p> : <InboxReply channel={thread.channel} contactId={thread.contactId} leadId={thread.leadId} phone={thread.phone} revalidate={revalidate} conversationId={conversationId} draft={collab?.draft ?? null} viewerId={viewerId} voiceNote={Boolean(voiceNoteTranscript(thread.messages.find((m) => m.direction === "inbound")?.body))} />}
             </div>
           </RowModal>
         );
