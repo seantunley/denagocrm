@@ -28,9 +28,9 @@ const QUOTE_PDF_SEND_WAIT_MS = 4_000;
 import { prisma } from "@/lib/db";
 import { cancelActivity, rescheduleActivity, scheduleActivity, scheduleFollowUp } from "@/app/actions/activities";
 import { addCommunication } from "@/app/actions/communications";
-import { assignLead, convertLeadToContact, createLead, markLost, moveLead, reopenLead } from "@/app/actions/leads";
+import { assignLead, convertLeadToContact, createLead, markLost, moveLead, reactivateNurturedLead, reopenLead } from "@/app/actions/leads";
 import { saveLeadNurture } from "@/app/actions/nurture";
-import { parseNurtureForm } from "@/lib/leadNurture";
+import { parseNurtureForm, reviewDate } from "@/lib/leadNurture";
 import { resolveAssignableUser } from "@/lib/tenantActor";
 import { createQuoteFromLead, saveQuoteDraft } from "@/app/actions/quotes";
 import { createTestDriveBooking } from "@/app/actions/testDrives";
@@ -47,6 +47,7 @@ import { MAX_ACTIVE_SCHEDULES, describeSchedule, nextRun, scheduleInput } from "
 import { markScheduledTurnsSeen, withScheduleSlot } from "@/lib/assistantScheduleRun";
 import { ownedWriteTenantId } from "@/lib/tenantWrite";
 import { logAudit } from "@/lib/audit";
+import { cardRecords } from "@/lib/assistantOutcomeRules";
 import { logError } from "@/lib/errorLog";
 import { revalidatePath } from "next/cache";
 
@@ -159,11 +160,14 @@ export async function runAssistantAction(
     }
     // The action it hands to writes its own audit entry; this one records that
     // the change came from the assistant's proposal, on the lead's timeline.
+    // Every such entry carries the card's kind and the records it is on (ids) in
+    // `metadata` — the audit stream only, never the timeline — for Settings →
+    // Assistant (assistantOutcomes), which counts it only for those who may open them.
     const confirmed = (what: string, leadId: string) =>
-      logAudit({ action: "assistant.action_confirmed", summary: `Confirmed the assistant's proposal: ${what}`, user, leadId });
+      logAudit({ action: "assistant.action_confirmed", summary: `Confirmed the assistant's proposal: ${what}`, user, leadId, metadata: { kind: card.kind, ...cardRecords(card) } });
     // A calendar item may be on a deal, a customer or nobody (CALENDAR_ITEM_RULE): the entry goes where it is.
     const confirmedOn = (what: string, on: { leadId: string | null; contactId: string | null }) =>
-      logAudit({ action: "assistant.action_confirmed", summary: `Confirmed the assistant's proposal: ${what}`, user, leadId: on.leadId, contactId: on.contactId });
+      logAudit({ action: "assistant.action_confirmed", summary: `Confirmed the assistant's proposal: ${what}`, user, leadId: on.leadId, contactId: on.contactId, metadata: { kind: card.kind, ...cardRecords(card) } });
     /**
      * What a calendar card is on, as it is NOW: its deal and that deal's customer, a customer with no deal, or nobody
      * (the person's own item). Null when its deal has gone. The ids are the card's, untrusted like the rest of it:
@@ -284,6 +288,7 @@ export async function runAssistantAction(
           summary: `Confirmed the assistant's proposal: add a note${card.pin === true ? " (pinned)" : ""}`,
           user,
           contactId: card.contactId,
+          metadata: { kind: card.kind, ...cardRecords(card) },
         });
         return { ok: true, success: card.pin === true ? "Note added and pinned" : "Note added", href: `/contacts/${card.contactId}` };
       }
@@ -303,7 +308,7 @@ export async function runAssistantAction(
         const result = await createContact(form);
         const contactId = /^\/contacts\/([^/?#]+)$/.exec(result?.redirectTo ?? "")?.[1];
         if (result?.error || !contactId) return { ok: false, error: result?.error ?? "Couldn't add the customer." };
-        await logAudit({ action: "assistant.action_confirmed", summary: "Confirmed the assistant's proposal: add a new customer", user, contactId });
+        await logAudit({ action: "assistant.action_confirmed", summary: "Confirmed the assistant's proposal: add a new customer", user, contactId, metadata: { kind: card.kind, ...cardRecords(card) } });
         return { ok: true, success: `${card.leadLabel} added as a customer`, href: `/contacts/${contactId}` };
       }
       case "create_lead": {
@@ -359,7 +364,7 @@ export async function runAssistantAction(
         if (filed === "busy") return { ok: false, error: "That file is still being filed, or the last try was cut off — check the record's documents in a moment, and send it to DAX again if it's missing." };
         if (filed === "already") return { ok: true, success: `Already filed on ${card.leadLabel}` };
         if (filed !== "filed") return { ok: false, error: filed.error };
-        await logAudit({ action: "assistant.action_confirmed", summary: "Confirmed the assistant's proposal: file a document", user, ...("contactId" in target && target.contactId ? { contactId: String(target.contactId) } : {}), ...(card.leadId ? { leadId: card.leadId } : {}) });
+        await logAudit({ action: "assistant.action_confirmed", summary: "Confirmed the assistant's proposal: file a document", user, ...("contactId" in target && target.contactId ? { contactId: String(target.contactId) } : {}), ...(card.leadId ? { leadId: card.leadId } : {}), metadata: { kind: card.kind, ...cardRecords(card) } });
         return { ok: true, success: `Filed on ${card.leadLabel}` };
       }
       case "record_payment": {
@@ -418,7 +423,7 @@ export async function runAssistantAction(
         if (clash) return untouched(clash);
         const result = await updateContact(card.contactId, contactFormFor(current, Object.fromEntries(valid.map((c) => [c.field, c.now.trim()]))));
         if (result?.error) return { ok: false, error: result.error };
-        await logAudit({ action: "assistant.action_confirmed", summary: "Confirmed the assistant's proposal: update the customer's details", user, contactId: card.contactId });
+        await logAudit({ action: "assistant.action_confirmed", summary: "Confirmed the assistant's proposal: update the customer's details", user, contactId: card.contactId, metadata: { kind: card.kind, ...cardRecords(card) } });
         return { ok: true, success: `${card.leadLabel}'s details updated`, href: `/contacts/${card.contactId}` };
       }
       case "assign": {
@@ -490,7 +495,7 @@ export async function runAssistantAction(
         if (vehicle.contactId !== card.contactId) return untouched(STALE_CARD);
         const opened = await openJobCard({ vehicleId, description, kmIn, priority: card.priority, confirmKey: card.confirmKey });
         if ("repeated" in opened) return { ok: true, success: `Already opened as job card #${opened.number} — nothing was opened twice.`, href: `/jobcards/${opened.id}` };
-        await logAudit({ action: "assistant.action_confirmed", summary: `Confirmed the assistant's proposal: open job card #${opened.number}`, user, contactId: vehicle.contactId });
+        await logAudit({ action: "assistant.action_confirmed", summary: `Confirmed the assistant's proposal: open job card #${opened.number}`, user, contactId: vehicle.contactId, metadata: { kind: card.kind, ...cardRecords(card) } });
         return { ok: true, success: `Job card #${opened.number} opened. The customer has not been contacted.`, href: `/jobcards/${opened.id}` };
       }
       case "block_time": {
@@ -511,7 +516,7 @@ export async function runAssistantAction(
         }
         const result = await createStaffAvailability(form);
         if (result.error) return { ok: false, error: result.error };
-        await logAudit({ action: "assistant.action_confirmed", summary: "Confirmed the assistant's proposal: block time on their own calendar", user });
+        await logAudit({ action: "assistant.action_confirmed", summary: "Confirmed the assistant's proposal: block time on their own calendar", user, metadata: { kind: card.kind, ...cardRecords(card) } });
         return { ok: true, success: "Time blocked on your calendar", href: "/calendar" };
       }
       case "reschedule": {
@@ -559,6 +564,46 @@ export async function runAssistantAction(
         if (result.error) return { ok: false, error: result.error };
         await confirmed("mark the deal lost", card.leadId);
         return { ok: true, success: "Marked lost" };
+      }
+      case "reactivate": {
+        // THE NURTURE PAGE'S OWN REACTIVATE (reactivateNurturedLead): leads.change_stage, activities.manage, an open
+        // stage in an active pipeline, the stage rules (no silent override), the deal's salesperson — and the move, the
+        // review task closed, the next action and its audit entry in ONE transaction. Nobody is contacted. Access and
+        // permissions are asked here first as yes/no: its guard REDIRECTS, which a Confirm on WhatsApp can't follow.
+        if (!(await canAccessLead(user, card.leadId))) return untouched("You can't open that deal any more.");
+        if (!(await hasPermission(user, "leads.change_stage")) || !(await hasPermission(user, "activities.manage"))) {
+          return untouched("Your role can't bring deals back from Nurture.");
+        }
+        const now = await prisma.lead.findFirst({
+          where: { id: card.leadId, deletedAt: null },
+          select: { status: true, stageId: true, nurtureReviewAt: true, assignedToId: true },
+        });
+        if (!now) return untouched("That deal is no longer there.");
+        const next = String(card.next ?? "").trim();
+        const backIn = `${card.leadLabel} is back in the pipeline — next: ${next} (${card.on})`;
+        // Done already — a second Confirm: open in this stage, with this next action on this day, set by this person.
+        if (now.status === "open" && now.stageId === card.stageId) {
+          const set = await prisma.activity.findFirst({
+            where: { leadId: card.leadId, type: "todo", summary: next, createdById: user.id },
+            orderBy: { createdAt: "desc" },
+            select: { dueDate: true },
+          });
+          if (set && johannesburgDateKey(set.dueDate) === card.on) return { ok: true, success: backIn, href: `/leads/${card.leadId}` };
+        }
+        if (now.status !== "nurture") return untouched(`${card.leadLabel} is no longer in Nurture — nothing was changed. Ask again to see where it stands.`);
+        // What the card SHOWED must still be so: the stage it was parked in, its review day, its salesperson.
+        if (now.stageId !== card.fromStageId || (now.nurtureReviewAt?.toISOString() ?? null) !== (card.reviewAt ?? null) || now.assignedToId !== card.assignedToId) {
+          return untouched(STALE_CARD);
+        }
+        if (next.length < 3 || next.length > 300 || !reviewDate(String(card.on ?? ""))) return untouched("That next action's day has passed, or it isn't valid — ask again.");
+        const form = new FormData();
+        form.set("stageId", String(card.stageId ?? ""));
+        form.set("summary", next);
+        form.set("dueDate", String(card.on));
+        const result = await reactivateNurturedLead(card.leadId, form);
+        if (result?.error) return { ok: false, error: result.error };
+        await confirmed("bring the deal back from Nurture", card.leadId);
+        return { ok: true, success: backIn, href: `/leads/${card.leadId}` };
       }
       case "nurture": {
         // THE LEAD PAGE'S OWN DOORS: reopenLead for a lost deal (leads.reopen), then saveLeadNurture — leads.change_stage,
@@ -744,6 +789,7 @@ export async function runAssistantAction(
           summary: `Confirmed the assistant's proposal: create draft quote Q-${saved.quote.number}`,
           user,
           ...(card.leadId ? { leadId: card.leadId } : { contactId: quoteContactId }),
+          metadata: { kind: card.kind, ...cardRecords(card), quoteId: saved.quote.id },
         });
         // THE QUOTE EXISTS. Everything below is about telling the person, and none
         // of it may undo that or report it as failed.
@@ -798,6 +844,7 @@ export async function runAssistantAction(
           summary: `Confirmed the assistant's proposal: send me the PDF of quote Q-${quote.number}`,
           user,
           ...(quote.leadId ? { leadId: quote.leadId } : quote.contactId ? { contactId: quote.contactId } : {}),
+          metadata: { kind: card.kind, ...cardRecords(card) },
         });
         await sendQueuedPdfNow();
         return { ok: true, success: `The PDF of Q-${quote.number} is on its way to your WhatsApp. It has NOT been sent to the customer.`, href: `/quotes?edit=${quote.id}` };
@@ -833,6 +880,7 @@ export async function runAssistantAction(
           summary: `Confirmed the assistant's proposal: change draft quote Q-${saved.quote.number}`,
           user,
           ...(quote.leadId ? { leadId: quote.leadId } : { contactId: quote.contactId }),
+          metadata: { kind: card.kind, ...cardRecords(card) },
         });
         await recordTaskProgress(user.id, card.taskId, { done: `Q-${saved.quote.number} changed` });
         const after = await prisma.quote.findUnique({ where: { id: quote.id }, include: { items: true, fees: true } }).catch(() => null);
@@ -898,6 +946,7 @@ export async function runAssistantAction(
           summary: `Confirmed the assistant's proposal: add to draft quote Q-${saved.quote.number}`,
           user,
           ...(quote.leadId ? { leadId: quote.leadId } : { contactId: quote.contactId }),
+          metadata: { kind: card.kind, ...cardRecords(card) },
         });
         await recordTaskProgress(user.id, card.taskId, { done: `Added to Q-${saved.quote.number}` });
         const after = await prisma.quote.findUnique({ where: { id: quote.id }, include: { items: true, fees: true } }).catch(() => null);

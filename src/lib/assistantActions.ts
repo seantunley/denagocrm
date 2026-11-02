@@ -201,6 +201,16 @@ export const proposedAction = z.discriminatedUnion("type", [
     to: text.max(80).optional(),
     reason,
   }).strict(),
+  // BRING A PARKED DEAL BACK (2026-11-02, round 2 item 1): through the Nurture page's own Reactivate — the stage it
+  // goes back to, and the next action with its day (a to-do for the deal's salesperson; the time goes in its words).
+  z.object({
+    type: z.literal("reactivate"),
+    leadId,
+    stage: text.max(80),
+    next: z.string().trim().min(3).max(300),
+    on: z.string().trim().regex(/^\d{4}-\d{2}-\d{2}$/),
+    reason,
+  }).strict(),
   z.object({ type: z.literal("quote"), leadId, reason }).strict(),
   // A draft quote WITH its lines. Catalogue products only: the price is the
   // catalogue's, read again when the card is built and again when it is
@@ -307,6 +317,10 @@ export const proposedAction = z.discriminatedUnion("type", [
   // Proactive DAX, part 3: a check DAX sets ITSELF — no card, no Confirm (it only ever tells the same person);
   // taken out before the cards are made and saved by proactiveFollowUp.setCheckBacks.
   z.object({ type: z.literal("check_back"), question: text.max(300), when: z.string().trim().regex(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/), reason }).strict(),
+  // TAKE BACK a task still waiting for Confirm on WhatsApp, by its number in the list DAX was given (Sean, 2026-11-02,
+  // voice-first: "drop the follow-up", "make the delivery Wednesday" = drop it and propose the corrected one). Never a
+  // card and never a CRM change — the waiting offer is withdrawn (askCrm hands the numbers back to the WhatsApp side).
+  z.object({ type: z.literal("drop_waiting"), task: z.number().int().min(1).max(12) }).strict(),
 ]);
 export type ProposedAction = z.infer<typeof proposedAction>;
 
@@ -438,7 +452,11 @@ export const NURTURE_RULE =
   "- A DEAL'S STATUS is open (being worked), nurture (PARKED for a later follow-up — NOT lost: it has a reason, what they want, when to follow up and a review date), won or lost. Nurture is a status, never a stage: never propose a stage called Nurture.\n" +
   "- nurture: park a deal for later when they say so (\"he's not lost, put him in nurture\", \"Anna's buying in March — park her till then\"): leadId; because — product (waiting for a suitable product), timing (buying later), budget (budget not ready), customer (the customer asked for a pause) or other; " +
   "interest (what they want, in a few words — a product, even one not in the catalogue yet); trigger (when or what to follow up on, in their words); reviewOn (YYYY-MM-DD, the day to look at it again); to (a salesperson, only when they name one — else the deal's own, or the person asking). " +
-  "A LOST deal can be parked: the card reopens it first, and says so. A won deal can't. ASK for what is missing, all at once (MISSING DETAILS) — usually why and the review date — offering the obvious choices.";
+  "A LOST deal can be parked: the card reopens it first, and says so. A won deal can't. ASK for what is missing, all at once (MISSING DETAILS) — usually why and the review date — offering the obvious choices.\n" +
+  "- reactivate: bring a PARKED (nurture) deal back into the pipeline — offer it when its review is due or overdue (the daily brief's nurture reviews), or when they say the customer is ready (\"Werner's bonus came through — bring him back\"): leadId; stage (the stage it goes back to, as its pipeline names it — never Nurture); " +
+  "next (the next action, in a few words — a time of day goes in these words: \"Call Werner at 10:00 about the Rover XL\"); on (YYYY-MM-DD, the day of that next action, today or later). Its review task is closed and the next action becomes a to-do for the deal's salesperson. Nobody is contacted. " +
+  "Missing the stage or the next step? ASK in ONE question, offering the obvious choices (\"Back to Contacted, and call him Thursday?\"). An open deal needs no reactivate; a lost one is reopened, not reactivated. " +
+  "{\"type\":\"reactivate\",\"leadId\":\"<id>\",\"stage\":\"Contacted\",\"next\":\"Call Werner at 10:00 about the Rover XL\",\"on\":\"YYYY-MM-DD\"}";
 
 /** Sean, 2026-10-29: "When booking a test drive, DAX requires a demo vehicle from stock. That is not needed." */
 export const TEST_DRIVE_RULE =
@@ -822,6 +840,9 @@ export type ActionCard =
   // A deal PARKED for later. `wasStatus` is the status the card SHOWED: a lost deal is reopened first; Confirm refuses
   // if it has changed since (a deal made lost after the card was shown is not reopened by it).
   | (LeadCard & { kind: "nurture"; wasStatus: "open" | "nurture" | "lost"; because: "product" | "timing" | "budget" | "customer" | "other"; interest: string; trigger: string; reviewOn: string; assignedToId: string; detail: string })
+  // A PARKED deal brought back (reactivateNurturedLead). What the card SHOWED — still parked, in fromStageId, with this
+  // review day and this salesperson — must still be so at Confirm; stageId / next / on are what Confirm does.
+  | (LeadCard & { kind: "reactivate"; stageId: string; next: string; on: string; fromStageId: string; reviewAt: string | null; assignedToId: string; detail: string })
   | (LeadCard & { kind: "quote" })
   // `text` is the whole quote as the person reads it before confirming (lines, catalogue prices, discounts).
   // `lines` carries the catalogue price each was SHOWN at, so a price that changed since is caught at Confirm.

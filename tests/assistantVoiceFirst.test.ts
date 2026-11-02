@@ -8,6 +8,7 @@ import {
   WHATSAPP_CONFIRMABLE,
   asTypedReply,
   confirmAllButtonId,
+  confirmAllOfferedAt,
   isForwarded,
   parseConfirmAllId,
   parseConfirmId,
@@ -39,8 +40,14 @@ test("yes TO ALL — the last set, said or typed — and nothing looser", () => 
 
 test("the Confirm all button names one row of the set; its id never passes for a single Confirm", () => {
   const id = "cmpendingpendingpendingpe";
-  assert.equal(confirmAllButtonId(id), `daxa:${id}`);
+  // The button names a row AND the moment of its offer (review of #945).
+  const at = new Date("2026-11-02T12:00:00.123Z");
+  assert.equal(confirmAllButtonId(id, at), `daxa:${id}.${at.getTime()}`);
+  assert.equal(parseConfirmAllId(`daxa:${id}.${at.getTime()}`), `${id}.${at.getTime()}`);
+  assert.equal(confirmAllOfferedAt(`${id}.${at.getTime()}`)?.getTime(), at.getTime());
+  // A button sent before offers were stamped still parses — and names no moment, so it confirms nothing.
   assert.equal(parseConfirmAllId(`daxa:${id}`), id);
+  assert.equal(confirmAllOfferedAt(id), null);
   assert.equal(parseConfirmId(`daxa:${id}`), null);
   assert.equal(parseConfirmAllId(`daxc:${id}`), null);
   for (const bad of ["daxa:", "daxa:x", "daxa:cmpending; drop", null, undefined]) assert.equal(parseConfirmAllId(bad), null, String(bad));
