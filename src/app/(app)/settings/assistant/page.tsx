@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import { notFound } from "next/navigation";
 import { requireTenantOwner } from "@/lib/auth";
 import { getSetting } from "@/lib/settings";
@@ -14,8 +15,12 @@ import { listActingTenantStaff } from "@/lib/tenantActor";
 import AssistantLearnedReview, { type LearnedNote } from "@/components/AssistantLearnedReview";
 import { TIDY_LAST_KEY, TIDY_SUMMARY_KEY } from "@/lib/assistantTidy";
 import { isExpired } from "@/lib/assistantMemory";
-import { formatDateTime } from "@/lib/format";
+import { formatDate, formatDateTime } from "@/lib/format";
 import { runSpeed } from "@/lib/assistantRun";
+import { assistantOutcomes } from "@/lib/assistantOutcomes";
+import { OUTCOME_LABELS, describeTally, percent } from "@/lib/assistantOutcomeRules";
+import { ResponsiveEntityTable } from "@/components/responsive-patterns";
+import { logError } from "@/lib/errorLog";
 import { unlinkWhatsAppFor } from "@/app/actions/assistantWhatsApp";
 import ConfirmActionDialog from "@/components/ConfirmActionDialog";
 import { ASSISTANT_WHATSAPP_CONFIRM_KEY, ASSISTANT_WHATSAPP_CONTENT_TEMPLATE_KEY, ASSISTANT_WHATSAPP_HANDOFF_KEY, ASSISTANT_WHATSAPP_HANDOFF_TO_KEY, ASSISTANT_WHATSAPP_KEY, ASSISTANT_WHATSAPP_TEMPLATE_KEY, handoffRecipient, maskWaId, parseUpdateTemplate, whatsappConfirmOn, whatsappHandoffOn, whatsappSwitchOn } from "@/lib/assistantWhatsAppRules";
@@ -33,6 +38,9 @@ async function linkedPhones() {
 }
 
 export const dynamic = "force-dynamic";
+
+/** The ratings and the suggestions are both counted over this many days. */
+const PERIOD_DAYS = 30;
 
 const TONE_LABELS: Record<Tone, string> = {
   warm: "Warm",
@@ -67,8 +75,44 @@ const FEEDBACK_REASON_LABELS: Record<string, string> = {
   other: "Other",
 };
 
+/** A table of "How its suggestions worked out": a row per kind of suggestion, or per person; a labelled list on phones. */
+function OutcomeTable({ first, last, rows }: {
+  first: string;
+  last: string;
+  rows: { key: string; label: string; suggested: number; confirmed: number; after: ReactNode }[];
+}) {
+  return (
+    <ResponsiveEntityTable className="rounded-none border-0 bg-transparent">
+      <table className="table-base">
+        <thead>
+          <tr>
+            <th scope="col">{first}</th>
+            <th scope="col" className="text-right">Suggested</th>
+            <th scope="col" className="text-right">Confirmed</th>
+            <th scope="col">{last}</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row) => (
+            <tr key={row.key}>
+              <td data-primary className="font-medium">{row.label}</td>
+              <td data-label="Suggested" className="text-right tabular-nums">{row.suggested}</td>
+              <td data-label="Confirmed" className="whitespace-nowrap text-right tabular-nums">
+                {row.confirmed}
+                {/* No rate when more were confirmed than offered here (a card offered before the window, or a plan's steps). */}
+                {row.suggested > 0 && row.confirmed <= row.suggested ? ` (${percent(row.confirmed, row.suggested)})` : ""}
+              </td>
+              <td data-label={last} className="text-xs tabular-nums">{row.after}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </ResponsiveEntityTable>
+  );
+}
+
 export default async function AssistantSettingsPage() {
-  await requireTenantOwner();
+  const viewer = await requireTenantOwner();
   if (!(await isModuleEnabled("automation"))) notFound();
   const proactiveWorkspace = proactiveOn(await getSetting(ASSISTANT_PROACTIVE_KEY).catch(() => null));
   const [profile, notes, staff, tidiedAt, tidySummary, whatsappOn, phones, ratings, speed, voiceOn, confirmOn, updateTemplate, handoffOn, handoffTo, contentTemplate] = await Promise.all([
@@ -81,7 +125,7 @@ export default async function AssistantSettingsPage() {
     linkedPhones(),
     // 👍/👎 over the last 30 days — counts and reasons only. The conversations
     // stay private to each person; the owner sees how DAX is doing, not what was asked.
-    ratingsSince(30),
+    ratingsSince(PERIOD_DAYS),
     runSpeed(7).catch(() => ({ runs: 0, medians: {} as Record<string, number>, byDepth: { quick: {}, investigate: {} } as Record<"quick" | "investigate", Record<string, number>> })),
     getSetting(ASSISTANT_VOICE_REPLIES_KEY).then(voiceRepliesSwitchOn),
     getSetting(ASSISTANT_WHATSAPP_CONFIRM_KEY).then(whatsappConfirmOn),
@@ -90,6 +134,14 @@ export default async function AssistantSettingsPage() {
     getSetting(ASSISTANT_WHATSAPP_HANDOFF_TO_KEY).then(handoffRecipient),
     getSetting(ASSISTANT_WHATSAPP_CONTENT_TEMPLATE_KEY).then(parseUpdateTemplate),
   ]);
+  // What DAX suggested and what happened after (assistantOutcomes): the same period, counting only what this owner
+  // may open. A failure costs this one section, never the page.
+  const outcomes = await actingOwnerTenantId()
+    .then((tenantId) => assistantOutcomes(tenantId, viewer, new Set(staff.map((s) => s.id)), { days: PERIOD_DAYS }))
+    .catch(async (error: unknown) => {
+      await logError("assistant-outcomes", "counting suggestions failed", error instanceof Error ? error.name : "unknown").catch(() => {});
+      return "failed" as const;
+    });
   const rated = (rating: string) => ratings.filter((r) => r.feedback === rating).reduce((n, r) => n + r._count._all, 0);
   const wrongBecause = ratings.filter((r) => r.feedback === "down" && r.feedbackReason);
   const nameOf = new Map(staff.map((s) => [s.id, s.name]));
@@ -174,7 +226,7 @@ export default async function AssistantSettingsPage() {
       <section className="card mt-6 max-w-2xl space-y-2 p-5">
         <h2 className="text-base font-semibold">How {profile.name} is doing</h2>
         <p className="text-xs text-muted-foreground">
-          What your team marked under {profile.name}&apos;s answers in the last 30 days. Only the totals — each person&apos;s
+          What your team marked under {profile.name}&apos;s answers in the last {PERIOD_DAYS} days. Only the totals — each person&apos;s
           conversations stay private to them.
         </p>
         {rated("up") + rated("down") === 0 ? (
@@ -218,6 +270,60 @@ export default async function AssistantSettingsPage() {
             </p>
           )}
         </div>
+      </section>
+
+      {/* What DAX suggested, what was confirmed, and what happened after — numbers only (assistantOutcomes). */}
+      <section className="card mt-6 max-w-3xl space-y-3 p-5">
+        <h2 className="text-base font-semibold">How {profile.name}&apos;s suggestions worked out</h2>
+        <p className="text-xs text-muted-foreground">
+          The cards {profile.name} offered your team
+          {outcomes && outcomes !== "failed" ? ` from ${formatDate(outcomes.since)} to today` : ` in the last ${PERIOD_DAYS} days`}, how many
+          were confirmed, and what happened after. Numbers only, from records you can open — no customer is named.{" "}
+          <span className="font-medium text-foreground">What happened after — not proof that {profile.name} caused it.</span>
+        </p>
+        {outcomes === "failed" ? (
+          <p className="text-sm text-muted-foreground">Couldn&apos;t work these out just now — try again later.</p>
+        ) : !outcomes || !outcomes.families.some((f) => f.suggested || f.confirmed) ? (
+          <p className="text-sm text-muted-foreground">Nothing to show yet — {profile.name} keeps count from this update on.</p>
+        ) : (
+          <>
+            <OutcomeTable
+              first="Suggestion"
+              last="What happened after"
+              rows={outcomes.families.filter((f) => f.suggested || f.confirmed).map((f) => ({
+                key: f.key,
+                label: f.label,
+                suggested: f.suggested,
+                confirmed: f.confirmed,
+                after: f.outcome ? (
+                  <>
+                    <span className="text-muted-foreground">{OUTCOME_LABELS[f.outcome]}:</span> {describeTally(f.after)}
+                  </>
+                ) : (
+                  <span className="text-muted-foreground">Counted only</span>
+                ),
+              }))}
+            />
+            {outcomes.people.length > 0 && (
+              <OutcomeTable
+                first="Person"
+                last={OUTCOME_LABELS.reply}
+                rows={outcomes.people.map((p) => ({
+                  key: p.userId ?? "former",
+                  label: p.userId ? nameOf.get(p.userId) ?? "" : "Former team members",
+                  suggested: p.suggested,
+                  confirmed: p.confirmed,
+                  after: describeTally(p.replied),
+                }))}
+              />
+            )}
+            <p className="text-[11px] text-muted-foreground">
+              A drafted message counts as confirmed when it was sent from its card. Replies are judged once 3 days have
+              passed, quotes and deal moves once 14 have — anything newer shows as too recent to tell. A plan of several
+              steps is one suggestion under Other; each step it runs counts as confirmed under its own kind.
+            </p>
+          </>
+        )}
       </section>
 
       <SaveForm action={saveAssistantProactive} resetOnSuccess={false} className="card mt-6 max-w-2xl space-y-3 p-5">

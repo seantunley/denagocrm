@@ -119,7 +119,7 @@ test("a note can go on a CUSTOMER with no lead, and be pinned — proposed, chec
   assert.doesNotMatch(run, /form\.set\("leadId"/);
   assert.match(run, /if \(card\.pin === true\) form\.set\("pin", "on"\);/);
   assert.match(run, /const result = await addCommunication\(form\);\s*if \(result\?\.error\) return \{ ok: false, error: result\.error \};/);
-  assert.match(run, /contactId: card\.contactId,\s*\}\);/, "the confirmation is audited on the customer");
+  assert.match(run, /contactId: card\.contactId,\s*metadata: \{ kind: card\.kind \},\s*\}\);/, "the confirmation is audited on the customer");
   const save = code("src/app/actions/communications.ts");
   assert.match(save, /if \(contactId && !\(await canAccessContact\(user, contactId\)\)\)\s*refuse\(/);
   assert.match(save, /if \(formData\.get\("pin"\) === "on"\) \{\s*await toggleTimelinePin\("communication", communication\.id, user\.id\);/);
