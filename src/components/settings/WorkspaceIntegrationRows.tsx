@@ -7,6 +7,7 @@ import { saveSetting, regenerateSetting } from "@/app/actions/settings";
 import { connectTelegram, disconnectTelegram } from "@/app/actions/bot";
 import { getSetting } from "@/lib/settings";
 import { codexStatus, type CodexStatus } from "@/lib/codex";
+import { modelChoices } from "@/lib/codexProtocol";
 import VoicePicker from "@/components/settings/VoicePicker";
 import { DEFAULT_TTS_MODEL, TTS_MODELS, VOICE_SPEEDS, elevenLabsVoices, modelTakesSpeed } from "@/lib/elevenlabs";
 import { STT_CUSTOMER_NAMES_KEY, TTS_MODEL_KEY, VOICE_SPEED_KEY } from "@/lib/voiceSettings";
@@ -230,7 +231,7 @@ export default async function WorkspaceIntegrationRows({ xAccountId }: { xAccoun
       </Row>
 
       <Row
-        title="ChatGPT subscription (research)"
+        title="ChatGPT subscription (DAX and research)"
         status={
           chatGpt.state === "connected" ? (
             <span className="badge bg-emerald-500/15 text-emerald-300">Connected</span>
@@ -240,9 +241,8 @@ export default async function WorkspaceIntegrationRows({ xAccountId }: { xAccoun
         }
       >
         <p className="text-xs text-muted-foreground mb-4">
-          Run 🔎 lead research on your ChatGPT Plus or Pro plan instead of paying per token. Sign in once with your
-          ChatGPT account. While connected, research — the button and automatic research — uses ChatGPT only. The
-          ✨ message check and the WhatsApp bot still use the Anthropic key.
+          DAX&apos;s answers and 🔎 lead research run on your ChatGPT Plus or Pro plan instead of paying per token. Sign
+          in once with your ChatGPT account. The ✨ message check and the WhatsApp customer bot still use the Anthropic key.
         </p>
         <div className="space-y-3">
           <ChatGptConnect initial={chatGpt} />
@@ -250,11 +250,22 @@ export default async function WorkspaceIntegrationRows({ xAccountId }: { xAccoun
             <SaveForm resetOnSuccess={false} action={saveSetting} className="flex gap-2 items-end">
               <input type="hidden" name="key" value="CODEX_MODEL" />
               <div className="flex-1">
-                <label className="label">Model</label>
-                <input name="value" className="input font-mono" defaultValue={chatGpt.model} />
+                <label className="label" htmlFor="codex-model">DAX and research model</label>
+                <select id="codex-model" name="value" className="input font-mono" defaultValue={chatGpt.model}>
+                  {modelChoices(chatGpt.model).map((choice) => (
+                    <option key={choice.id} value={choice.id}>{choice.label}</option>
+                  ))}
+                </select>
               </div>
               <SaveButton className="btn-secondary btn-sm">Save</SaveButton>
             </SaveForm>
+          )}
+          {chatGpt.state === "connected" && chatGpt.switched && (
+            <p className="text-xs text-amber-300" role="status">
+              ChatGPT refused <span className="font-mono">{chatGpt.switched.from}</span> on{" "}
+              {new Date(chatGpt.switched.at).toLocaleDateString("en-ZA", { day: "numeric", month: "short", year: "numeric" })}, so DAX switched
+              to <span className="font-mono">{chatGpt.switched.to}</span> to keep working. Choose another model above if you prefer.
+            </p>
           )}
         </div>
       </Row>

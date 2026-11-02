@@ -55,6 +55,28 @@ export const CODEX_RETIRED_MODELS: Readonly<Record<string, string>> = {
   "gpt-5.5": "2026-10-14",
 };
 
+/**
+ * The choices offered in Settings (Sean, 2026-11-02: "why can't I change the model?" — a free-text box, against the
+ * dropdowns-not-free-text rule): the current lineup, the recommended one first. A saved model that isn't listed
+ * (chosen before, or switched to) is shown too, so the page never misreports what is in use.
+ */
+export function modelChoices(current: string, now = new Date()): { id: string; label: string }[] {
+  const ids = [...new Set([CODEX_DEFAULT_MODEL, ...CODEX_MODEL_FALLBACKS, current])].filter((id) => id && (id === current || !isRetiredModel(id, now)));
+  return ids.map((id) => ({ id, label: `${id}${id === CODEX_DEFAULT_MODEL ? " (recommended)" : ""}${isRetiredModel(id, now) ? " — retired" : ""}` }));
+}
+
+export type ModelSwitch = { from: string; to: string; at: string };
+
+/** The recorded swap — only while its replacement is still the model in use (choosing another ends it). */
+export function currentSwitch(raw: string | null | undefined, model: string): ModelSwitch | undefined {
+  try {
+    const s = JSON.parse(raw ?? "") as Partial<ModelSwitch>;
+    return typeof s.from === "string" && typeof s.to === "string" && typeof s.at === "string" && s.to === model ? { from: s.from, to: s.to, at: s.at } : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export function isRetiredModel(model: string, now = new Date()): boolean {
   const date = CODEX_RETIRED_MODELS[model.trim().toLowerCase()];
   return Boolean(date) && now.toISOString().slice(0, 10) >= date;
