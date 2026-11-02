@@ -28,8 +28,8 @@ const COMPARE = /\b(compare|versus|vs\.?|difference between)\b/i;
  * run, keep going (unless we are out of steps).
  */
 function missingRequired(question: string, tools: string[]): string | null {
-  if (WHY_OR_STUCK.test(question) && !tools.includes("lead_brief") && !tools.includes("sales_stats")) {
-    return "why/stuck needs lead_brief or sales_stats";
+  if (WHY_OR_STUCK.test(question) && !tools.includes("lead_brief") && !tools.includes("sales_stats") && !tools.includes("stuck")) {
+    return "why/stuck needs lead_brief, sales_stats or stuck";
   }
   if (COMPARE.test(question)) {
     const pipelineLookups = tools.filter((t) => t === "find_leads" || t === "sales_stats").length;
