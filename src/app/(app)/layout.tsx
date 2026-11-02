@@ -120,7 +120,7 @@ export default async function AppLayout({
   return (
     <>
       {style && <style>{style}</style>}
-      {/* Halloween until 1 November (lib/seasonalTheme.ts) — after the brand style, so it wins. */}
+      {/* Halloween, 25–31 October every year (lib/seasonalTheme.ts) — after the brand style, so it wins. */}
       {halloweenOn(activeTenantId) && (
         <>
           <style>{HALLOWEEN_CSS}</style>
