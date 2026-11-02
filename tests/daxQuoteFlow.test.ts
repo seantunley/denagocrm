@@ -136,7 +136,10 @@ test("on WhatsApp: a typed 'yes' is the tap when ONE Confirm is waiting; '2' is 
   for (const yes of ["Yes", "yes please", "Confirm", "ja", "ok", "Go ahead!", "👍"]) assert.ok(typedYes(yes), yes);
   for (const no of ["Yes, but make it white", "no", "yesterday", "2"]) assert.ok(!typedYes(no), no);
   const wa = read("src/lib/assistantWhatsApp.ts");
-  assert.match(wa, /if \(!pendingId && "text" in input && !input\.choiceId && typedYes\(input\.text\)\) \{[\s\S]{0,400}take: 2,[\s\S]{0,80}if \(live\.length === 1\) pendingId = live\[0\]\.id;/);
+  // The yes, typed or said (voice-first, 2026-11-02): ONE waiting → that one; several → listed, never guessed.
+  assert.match(wa, /if \("text" in input && !input\.choiceId && \(await answerYes\(input\.text\)\)\) \{/);
+  assert.match(wa, /if \(waiting\.only\) \{\s*await confirmFromWhatsApp\(tenantId, user, waId, waiting\.only\.id\);/);
+  assert.match(wa, /so I won't guess which you mean/);
   const asked = "Did you mean Werner Kilian?\n\n1. Yes, Werner Kilian — leave colour open\n2. Yes, Werner Kilian — check gray first";
   assert.equal(expandNumberedReply("2", asked), "Yes, Werner Kilian — check gray first (option 2)");
   assert.equal(expandNumberedReply("3", asked), "3", "no such option: unchanged");

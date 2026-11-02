@@ -45,12 +45,16 @@ test("every fulfilment quote mutation carries the tenant on the destructive stat
     ["markInvoiced", "markDepositPaid"],
     ["markDepositPaid", "correctDepositAmount"],
     ["correctDepositAmount", "replaceInvoice"],
-    ["scheduleDelivery", "rescheduleDelivery"],
   ] as const) {
     const fn = slice(name, next);
     assert.match(fn, /quote\.updateMany\(\{\s*where: \{ id: quoteId, tenantId \}/, `${name} must tenant-bind its quote update`);
     assert.match(fn, /if \(updated\.count !== 1\) refuse\(QUOTE_GONE\);/, `${name} must refuse a zero-row tenant-bound update`);
   }
+  // scheduleDelivery (review of #939): tenant-bound AND booked once — the day is claimed only while none is booked,
+  // and its workshop entry is made in the same transaction, so two at once make one booking and one entry.
+  const schedule = slice("scheduleDelivery", "rescheduleDelivery");
+  assert.match(schedule, /await prisma\.\$transaction\(async \(tx\) => \{\s*const updated = await tx\.quote\.updateMany\(\{\s*where: \{ id: quoteId, tenantId, deliveryScheduledFor: null, deliveredAt: null \}/);
+  assert.match(schedule, /if \(updated\.count !== 1\) refuse\("Delivery is already scheduled\."\);\s*await tx\.activity\.create\(/);
   assert.match(slice("rescheduleDelivery", "registerDeliveryPhotos"), /quote\.updateMany\(\{\s*where: \{ id: quoteId, tenantId, deliveredAt: null/);
   // `deletedAt: null` is written out because the delivery's transaction is
   // basePrisma's — a real one, where no scoped client adds it (oneDeliveryFlow.test.ts).

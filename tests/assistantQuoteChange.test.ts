@@ -131,8 +131,22 @@ test("THE ANSWER IS REPLACED when it speaks of a task that was not set up — ne
   assert.equal(replaced, `I couldn't set that up — there is nothing to confirm, and nothing was saved or changed.\n• ${WHY}`);
   assert.doesNotMatch(replaced ?? "", /I’ve set up|I've set up|for you to confirm on your Ask page/);
 
-  // It came to nothing without a reason (a malformed task): still replaced, and it says so.
-  assert.match(settledAnswer(SAID, [], [], 1) ?? "", /^I couldn't set that up[^\n]*\n• A task could not be set up\. Ask again with the exact details/);
+  // It came to nothing without a reason (a malformed task): still replaced, and it says so — in words that fit any
+  // task (it used to talk of a quote's number and fee whatever the task was: Sean, 2026-11-02, moving a deal to Nurture).
+  const unexplained = settledAnswer(SAID, [], [], 1) ?? "";
+  assert.match(unexplained, /^I couldn't set that up[^\n]*\n• A task couldn't be set up from what I wrote\. Tell me exactly what you want done/);
+  assert.doesNotMatch(unexplained, /quote|fee/);
+
+  // THE REST OF THE ANSWER IS KEPT (Sean, 2026-11-02: "Full history, but it's not lost — should be in Nurture" got
+  // only "I couldn't set that up"; the history he asked for was thrown away with the task). Only what spoke of a
+  // task waiting goes — so "I've set that up" and "NOT set up" are still never both there.
+  const { withoutSetUpClaims } = await import("../src/lib/assistantActions");
+  const WERNER = "Werner Kilian's deal was marked lost on 29 Oct by Donovan (Gone cold).\nHis last message was on 12 Oct.\n\nI've set up moving him to Nurture for you to confirm. Tap Confirm to do it.";
+  assert.equal(withoutSetUpClaims(WERNER), "Werner Kilian's deal was marked lost on 29 Oct by Donovan (Gone cold).\nHis last message was on 12 Oct.");
+  assert.equal(withoutSetUpClaims(SAID), "You mean Q-1030 for Test Customer, not Chevaan’s deal. The quote is still a draft; nothing has gone to the customer.");
+  assert.equal(withoutSetUpClaims("I've set both up for you to confirm."), "", "nothing left: the status stands alone");
+  assert.equal(withoutSetUpClaims("I can confirm the price is R185 000."), "I can confirm the price is R185 000.", "confirming a fact is not a task");
+  assert.equal(withoutSetUpClaims("- Anna: quote sent.\n- Ben: it's on your Ask page to confirm.\n- Clive: no reply."), "- Anna: quote sent.\n- Clive: no reply.");
 
   // NO TASK AT ALL, yet the words claim one (the case an appended note never reached).
   assert.match(settledAnswer(SAID, [], [], 0) ?? "", /^I haven't set anything up — there is nothing to confirm, and nothing was saved or changed\./);
@@ -178,10 +192,12 @@ test("THE ANSWER IS REPLACED when it speaks of a task that was not set up — ne
   assert.match(assistant, /const actions = !proposes \? \[\] : await resolveActions\(user, proposals, problems, taskWrite\?\.ok \? taskWrite\.sheet : null, cardUpload\)\.catch\(/);
   // A check-back DAX set itself (proactive DAX part 3) is a task that WAS set up, so it isn't counted as one that came to nothing.
   assert.match(assistant, /const settled = proposes \? settledAnswer\(resolved\.plain, actions, problems, Math\.max\(0, reply\.attempted - checkBacks\.length - actions\.length - problems\.length\)\) : null;/);
-  // The job sheet's line (Phase 1) is the CRM's own, added after — like the check-back line.
-  assert.match(assistant, /const cited = \(settled \?\? resolved\.cited \+ note\) \+ checkBackLine \+ taskLine;\s*const answer = \(settled \?\? resolved\.plain \+ note\) \+ checkBackLine \+ taskLine;/);
+  // The job sheet's line (Phase 1) is the CRM's own, added after — like the check-back line. A settled answer keeps
+  // the rest of what was written, with its figure check, and the task status follows it.
+  assert.match(assistant, /const kept = settled === null \? "" : withoutSetUpClaims\(resolved\.plain\);\s*const settledText = settled === null \? null : kept \? `\$\{kept\}\$\{note\}\\n\\n\$\{settled\}` : settled;/);
+  assert.match(assistant, /const cited = \(settledText \?\? resolved\.cited \+ note\) \+ checkBackLine \+ taskLine;\s*const answer = \(settledText \?\? resolved\.plain \+ note\) \+ checkBackLine \+ taskLine;/);
   assert.match(assistant, /\.\.\.\(source === "chat" && evidence\.length && !settled \? \{ cited, evidence \} : \{\}\),/);
-  const answerAt = assistant.indexOf("const answer = (settled ?? resolved.plain + note) + checkBackLine + taskLine;");
+  const answerAt = assistant.indexOf("const answer = (settledText ?? resolved.plain + note) + checkBackLine + taskLine;");
   assert.ok(answerAt > 0 && answerAt < assistant.indexOf("tools: observations.map((o) => ({ tool: o.tool, args: o.args })) as object,"), "before the turn is saved, so the kept answer is the true one");
 });
 

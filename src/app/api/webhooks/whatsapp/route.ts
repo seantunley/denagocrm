@@ -10,7 +10,7 @@ import { voiceLanguage } from "@/lib/voiceLanguage";
 import { saveFile } from "@/lib/storage";
 import { runWhatsAppBot } from "@/lib/flowRun";
 import { handleStaffWhatsApp } from "@/lib/assistantWhatsApp";
-import { forwardedForDax, sharedContactQuestion } from "@/lib/assistantWhatsAppRules";
+import { forwardedForDax, isForwarded, sharedContactQuestion } from "@/lib/assistantWhatsAppRules";
 import { linkScreening, screenInbound, type ScreenOutcome } from "@/lib/inboundScreening/screen";
 import { withChannelTenantScope, validateInSystemScope } from "@/lib/tenantScopeEntry";
 import { reportUnmappedEndpoint } from "@/lib/channelRegistration";
@@ -200,7 +200,8 @@ export async function POST(req: NextRequest) {
                 if (!mediaId) return;
                 // Handed the media ID, not the audio: the voice note is fetched and
                 // transcribed there only once the number is known to be staff.
-                if (await handleStaffWhatsApp(from, { voiceMediaId: mediaId }, message.id)) return;
+                // Forwarded: a customer's voice note passed on by staff — told to DAX as theirs, never as a question.
+                if (await handleStaffWhatsApp(from, { voiceMediaId: mediaId, ...(isForwarded(message) ? { forwarded: true } : {}) }, message.id)) return;
                 // Before the download and the (paid) transcription. A voice note has
                 // no readable text yet, so only a sender block can hold it here —
                 // unheard audio is never judged to be spam.
