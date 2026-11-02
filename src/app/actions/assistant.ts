@@ -11,7 +11,8 @@ import { MAX_IMAGE_BYTES } from "@/lib/assistantImage";
 import { heldUpload } from "@/lib/assistantUpload";
 import { uploadDocument } from "@/app/actions/documents";
 import { recordQuotePayment } from "@/app/actions/quotePayments";
-import { markDepositPaid } from "@/app/actions/fulfilment";
+import { markDepositPaid, rescheduleDelivery, scheduleDelivery } from "@/app/actions/fulfilment";
+import { johannesburgDateKey } from "@/lib/activityDay";
 import { getSetting } from "@/lib/settings";
 import { isCodexConnected } from "@/lib/codex";
 import { ASSISTANT_PROFILE_KEY, parseProfile } from "@/lib/assistantSoul";
@@ -31,7 +32,6 @@ import { assignLead, convertLeadToContact, createLead, markLost, moveLead, react
 import { saveLeadNurture } from "@/app/actions/nurture";
 import { parseNurtureForm, reviewDate } from "@/lib/leadNurture";
 import { resolveAssignableUser } from "@/lib/tenantActor";
-import { johannesburgDateKey } from "@/lib/activityDay";
 import { createQuoteFromLead, saveQuoteDraft } from "@/app/actions/quotes";
 import { createTestDriveBooking } from "@/app/actions/testDrives";
 import { createStaffAvailability } from "@/app/actions/staffAvailability";
@@ -527,6 +527,29 @@ export async function runAssistantAction(
         if (result.error) return { ok: false, error: result.error };
         if (card.leadId) await confirmed("cancel an activity", card.leadId);
         return { ok: true, success: "Cancelled" };
+      }
+      case "schedule_delivery": {
+        // THE DELIVERIES BOARD'S OWN DOORS: scheduleDelivery (a first day) or rescheduleDelivery (a new one) — Automotive,
+        // deliveries.manage, the quote, the deposit, the workshop-calendar entry and the audit entry are all theirs.
+        // Nobody is contacted.
+        const day = /^\d{4}-\d{2}-\d{2}$/;
+        if (typeof card.quoteId !== "string" || !day.test(String(card.date ?? "")) || (card.from !== null && !day.test(String(card.from ?? "")))) return untouched(STALE_CARD);
+        if (!(await canAccessQuote(user, card.quoteId))) return untouched("You can't open that quote any more.");
+        const quote = await prisma.quote.findFirst({ where: { id: card.quoteId, deletedAt: null }, select: { deliveryScheduledFor: true, deliveredAt: true, depositPaidAt: true } });
+        if (!quote) return untouched("That quote is no longer there.");
+        const booked = quote.deliveryScheduledFor ? johannesburgDateKey(quote.deliveryScheduledFor) : null;
+        // Done already — a second Confirm: booked for that day. Nothing is written again.
+        if (booked === card.date) return { ok: true, success: `Q-${card.quoteNumber}'s delivery is booked for ${card.date}`, href: "/deliveries" };
+        if (quote.deliveredAt) return untouched("That delivery has already been completed.");
+        if (!quote.depositPaidAt) return untouched("The deposit on that quote isn't recorded any more — record it first.");
+        // What the card SHOWED must still be so: booked or moved by someone since, it is refused.
+        if (booked !== card.from) return untouched(STALE_CARD);
+        const form = new FormData();
+        form.set("date", card.date);
+        const result = card.from ? await rescheduleDelivery(card.quoteId, form) : await scheduleDelivery(card.quoteId, form);
+        if (result?.error) return { ok: false, error: result.error };
+        await confirmedOn(card.from ? "move the delivery" : "book the delivery", { leadId: card.leadId, contactId: null });
+        return { ok: true, success: `Q-${card.quoteNumber}'s delivery is booked for ${card.date} — on the deliveries board`, href: "/deliveries" };
       }
       case "lost": {
         if (!(await stillAsProposed(card))) return untouched(STALE_CARD);

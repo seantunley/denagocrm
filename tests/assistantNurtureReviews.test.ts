@@ -92,7 +92,7 @@ test("the reactivate proposal: a stage, the next action and its day", () => {
   assert.match(NURTURE_RULE, /or when they say the customer is ready/);
   assert.match(NURTURE_RULE, /Missing the stage or the next step\? ASK in ONE question/);
   assert.ok(WHATSAPP_CONFIRMABLE.has("reactivate"));
-  assert.match(code("src/components/AssistantActionCard.tsx"), /card\.kind === "nurture" \|\| card\.kind === "reactivate"\) && <p/);
+  assert.match(code("src/components/AssistantActionCard.tsx"), /card\.kind === "reactivate"\) && <p/);
   assert.match(code("src/lib/assistantSoul.ts"), /bring a parked deal back into the pipeline when its review day comes/);
 });
 

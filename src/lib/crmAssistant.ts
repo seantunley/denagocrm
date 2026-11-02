@@ -50,6 +50,8 @@ import { unsupportedFigures, unsupportedNote } from "./assistantVerify";
 import { catalogueColour, closestColour, closestNames, nameWords } from "./nearMatch";
 import { salesStats } from "./crmAssistantStats";
 import { whyLookup } from "./assistantWhyLookup";
+import { stuckLookup } from "./assistantStuckLookup";
+import { catchUpLookup } from "./assistantCatchUpLookup";
 import { briefForAssistant, loadDaxBrief } from "./daxBrief";
 import { customerVehicles, workshopOverview } from "./workshopContext";
 import { breakerOpen, withRetry } from "./assistantBreaker";
@@ -1606,6 +1608,8 @@ async function runTool(user: User, step: ToolStep): Promise<ToolOutput> {
     case "find_activities": return findActivities(user, step.args);
     case "lead_brief": return leadBrief(user, step.args);
     case "why": return whyLookup(user, step.args.record);
+    case "stuck": return stuckLookup(user, step.args.lead);
+    case "catch_up": return catchUpLookup(user, step.args.since);
     case "knowledge": return knowledge(user, step.args);
     case "recall": return recall(user, step.args);
     case "playbook": return playbook(user, step.args);
@@ -2627,6 +2631,34 @@ export async function resolveActions(
       }
       continue;
     }
+    if (p.type === "schedule_delivery") {
+      // The deliveries board's own scheduleDelivery / rescheduleDelivery check Automotive, deliveries.manage, the quote
+      // and its deposit again at Confirm. Nobody is contacted. Checked here too, so a card is only offered when it can run.
+      if (!(await isModuleEnabled("automotive"))) { problems.push("Deliveries are part of the Automotive module, which is switched off."); continue; }
+      if (!(await hasPermission(user, "deliveries.manage"))) { problems.push("Your role can't schedule deliveries."); continue; }
+      const number = /^Q-?(\d+)$/i.exec(p.quote)?.[1];
+      const quote = number
+        ? await prisma.quote.findFirst({
+            where: { deletedAt: null, number: Number(number) },
+            select: { id: true, number: true, leadId: true, depositPaidAt: true, deliveryScheduledFor: true, deliveredAt: true, contact: { select: { firstName: true, lastName: true } } },
+          })
+        : null;
+      if (!quote || !(await canAccessQuote(user, quote.id))) { problems.push(`I can't find quote ${p.quote} among the ones you can open.`); continue; }
+      if (quote.deliveredAt) { problems.push(`Q-${quote.number} has already been delivered.`); continue; }
+      if (!quote.depositPaidAt) { problems.push(`Q-${quote.number}'s deposit isn't recorded yet — a delivery is booked once it is.`); continue; }
+      if (p.date < johannesburgDateKey(new Date())) { problems.push(`${p.date} is in the past — which day is the delivery?`); continue; }
+      const from = quote.deliveryScheduledFor ? johannesburgDateKey(quote.deliveryScheduledFor) : null;
+      if (from === p.date) { problems.push(`Q-${quote.number}'s delivery is already booked for ${deliveryDay(p.date)}.`); continue; }
+      const who = [quote.contact?.firstName, quote.contact?.lastName].filter(Boolean).join(" ") || `Q-${quote.number}`;
+      cards.push({
+        id: `a${index}-${quote.id}-delivery`, kind: "schedule_delivery", leadId: quote.leadId, leadLabel: who,
+        title: from ? `Move Q-${quote.number}'s delivery from ${deliveryDay(from)} to ${deliveryDay(p.date)}` : `Book Q-${quote.number}'s delivery for ${deliveryDay(p.date)}`,
+        quoteId: quote.id, quoteNumber: quote.number, date: p.date, from,
+        detail: [`Delivery for ${who}: ${deliveryDay(p.date)}${from ? ` (booked now for ${deliveryDay(from)})` : ""}`, "On the deliveries board and the workshop calendar. The customer is not contacted."].join("\n"),
+        ...(p.reason ? { reason: p.reason } : {}),
+      });
+      continue;
+    }
     if (p.type === "create_customer") {
       // createContact checks contacts.create again at Confirm, and customerClash runs again there.
       if (!(await hasPermission(user, "contacts.create"))) { problems.push("Your role can't add customers."); continue; }
@@ -3288,6 +3320,11 @@ export async function resolveActions(
     }
   }
   return cards;
+}
+
+/** "2026-11-10" → "Tue 10 Nov 2026": a delivery day as the card says it. */
+function deliveryDay(day: string): string {
+  return new Date(`${day}T12:00:00+02:00`).toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short", year: "numeric", timeZone: "Africa/Johannesburg" }).replace(/,/g, "");
 }
 
 /** "2026-10-07T14:30" — a moment as South African wall-clock time, the form the actions take. */

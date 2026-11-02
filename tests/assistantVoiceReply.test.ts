@@ -314,7 +314,8 @@ test("speakAssistantAnswer: permission, module, switch, the CALLER's own turn an
 
 test("the WhatsApp voice reply is gated on a voice note AND the switch AND the cap, and REPLACES the text only when it went", () => {
   const src = code("src/lib/assistantWhatsApp.ts");
-  assert.match(src, /const voiceBack = "voiceMediaId" in input && voiceRepliesSwitchOn\(await getSetting\(ASSISTANT_VOICE_REPLIES_KEY\)\);/);
+  // A forwarded voice note (a customer's) is answered in text (voice-first, 2026-11-02).
+  assert.match(src, /const voiceBack = "voiceMediaId" in input && !forwardedVoice && voiceRepliesSwitchOn\(await getSetting\(ASSISTANT_VOICE_REPLIES_KEY\)\);/);
   assert.match(src, /const spoke = voiceBack && answer \? await sendVoiceAnswer\(user\.id, waId, answer, heard, script\) : false;\n\s*await sendPlan\(waId, spoke \? voiceReplyExtras\(choices\) : plan\);/);
   // "typing…" renewed while DAX works, and the timer always cleared.
   assert.match(src, /const renew = setInterval\(\(\) => \{ typingCalls\.push\(showWhatsAppTyping\(messageId\)\); \}, TYPING_RENEW_MS\);/);
