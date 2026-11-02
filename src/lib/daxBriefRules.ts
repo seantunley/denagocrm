@@ -70,6 +70,8 @@ export type DaxBrief = {
   team?: TeamRow[];
   /** Every parked deal of theirs whose review day has come, most overdue first — the item names one, DAX reads all. */
   nurtureReviews?: NurtureReviewRow[];
+  /** Set only when MORE are due than nurtureReviews lists: the total, so nothing drops out of sight. */
+  nurtureReviewsTotal?: number;
 };
 
 /** A deal parked in Nurture (Lead.status "nurture") whose review day has come. The loader reads only those due by today. */
@@ -139,6 +141,8 @@ export type BriefInput = {
   team?: TeamRow[];
   /** Parked deals whose review day is today or has passed. */
   nurtureReviews?: NurtureReview[];
+  /** How many are due in all — more than nurtureReviews when the loader read only the most overdue (review of #943). */
+  nurtureReviewsTotal?: number;
 };
 
 /** Enough to read at a glance; the rest is one click away on /today. */
@@ -293,6 +297,8 @@ export function buildBrief(input: BriefInput): DaxBrief {
     })
     .sort((a, b) => b.daysPastReview - a.daysPastReview);
   const overdueReviews = reviews.filter((r) => r.overdue).length;
+  // All that are due, not only those read in full: "and N more" is said, never dropped (review of #943).
+  const reviewsTotal = Math.max(reviews.length, input.nurtureReviewsTotal ?? 0);
   const reviewRows: Row[] = reviews.map((r) => ({ leadId: r.leadId, name: r.name, detail: nurtureReviewLine(r), href: r.href, valueCents: 0 }));
 
   const todayStart = new Date(`${johannesburgDateKey(now)}T00:00:00+02:00`);
@@ -306,7 +312,7 @@ export function buildBrief(input: BriefInput): DaxBrief {
     agendaItem(input, now),
     group("overdue", "orange", "🟠", overdue, (n) => plural(n, "overdue follow-up", "overdue follow-ups"), "/leads/attention"),
     group("nurture_review", "orange", "🌱", reviewRows,
-      (n) => `${plural(n, "Nurture review due", "Nurture reviews due")}${overdueReviews ? ` (${overdueReviews} overdue)` : ""}`, "/leads/nurture?due=1", false),
+      () => `${plural(reviewsTotal, "Nurture review due", "Nurture reviews due")}${overdueReviews ? ` (${overdueReviews}${reviewsTotal > reviews.length ? "+" : ""} overdue)` : ""}`, "/leads/nurture?due=1", false),
     group("hot", "green", "🔥", hot, (n) => (n === 1 ? "1 deal looks close" : `${n} deals look close`), "/today"),
     group("quote_expiring", "orange", "🟠", expiring, (n) => plural(n, "quote expiring", "quotes expiring"), "/leads/attention"),
     group("quote_viewed", "info", "👀", viewed, (n) => plural(n, "quote opened but not signed", "quotes opened but not signed"), "/quotes"),
@@ -340,7 +346,7 @@ export function buildBrief(input: BriefInput): DaxBrief {
     items: groups.slice(0, MAX_BRIEF_ITEMS),
     attentionValueCents: [...attentionLeads.values()].reduce((sum, v) => sum + v, 0),
     ...(input.team ? { team: input.team } : {}),
-    ...(reviews.length ? { nurtureReviews: reviews } : {}),
+    ...(reviews.length ? { nurtureReviews: reviews, ...(reviewsTotal > reviews.length ? { nurtureReviewsTotal: reviewsTotal } : {}) } : {}),
   };
 }
 
@@ -485,6 +491,16 @@ export function briefForAssistant(brief: DaxBrief) {
             ...(r.overdue ? { flag: "overdue review" } : {}),
             link: r.href,
           })),
+        }
+      : {}),
+    // More due than DAX is shown (review of #943): it is told how many, so it says so — never as if these were all.
+    ...((brief.nurtureReviewsTotal ?? brief.nurtureReviews?.length ?? 0) > Math.min(10, brief.nurtureReviews?.length ?? 0)
+      ? {
+          moreNurtureReviews: {
+            count: (brief.nurtureReviewsTotal ?? brief.nurtureReviews?.length ?? 0) - Math.min(10, brief.nurtureReviews?.length ?? 0),
+            note: "More Nurture reviews are due than are listed here — say how many more, and point to the Nurture page.",
+            link: "/leads/nurture?due=1",
+          },
         }
       : {}),
   };

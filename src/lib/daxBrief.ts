@@ -143,26 +143,36 @@ async function openDeliveries(user: PermissionUser, quoteIds: string[] | null) {
  * Parked deals (Nurture) whose review day is today or has passed — the review that brings them back. Read through
  * the leads list's own scope (getAccessibleLeadIds, as the Nurture page reads it), narrowed to theirs or nobody's.
  */
-async function dueNurtureReviews(user: PermissionUser, dayEnd: Date): Promise<NurtureReview[]> {
+async function dueNurtureReviews(user: PermissionUser, dayEnd: Date): Promise<{ reviews: NurtureReview[]; total: number }> {
   const ids = await getAccessibleLeadIds(user);
-  if (ids !== null && ids.length === 0) return [];
-  const rows = await prisma.lead.findMany({
-    where: {
-      ...(ids === null ? {} : { id: { in: ids } }),
-      status: "nurture",
-      deletedAt: null,
-      nurtureReviewAt: { lt: dayEnd },
-      OR: [{ assignedToId: user.id }, { assignedToId: null }],
-    },
-    orderBy: { nurtureReviewAt: "asc" },
-    take: 25,
-    select: { id: true, name: true, assignedToId: true, nurtureReason: true, nurtureInterest: true, nurtureTrigger: true, nurtureReviewAt: true },
-  });
-  return rows.map((r) => ({
-    id: r.id, name: r.name, ownerId: r.assignedToId, why: nurtureReasonLabel(r.nurtureReason),
-    interest: r.nurtureInterest, trigger: r.nurtureTrigger, reviewAt: r.nurtureReviewAt!,
-  }));
+  if (ids !== null && ids.length === 0) return { reviews: [], total: 0 };
+  const where = {
+    ...(ids === null ? {} : { id: { in: ids } }),
+    status: "nurture",
+    deletedAt: null,
+    nurtureReviewAt: { lt: dayEnd },
+    OR: [{ assignedToId: user.id }, { assignedToId: null }],
+  };
+  // The most overdue NURTURE_REVIEWS_LOADED are read in full; the rest are COUNTED, so the brief says "and N more"
+  // instead of letting overdue reviews drop out of sight (review of #943).
+  const [rows, total] = await Promise.all([
+    prisma.lead.findMany({
+      where,
+      orderBy: { nurtureReviewAt: "asc" },
+      take: NURTURE_REVIEWS_LOADED,
+      select: { id: true, name: true, assignedToId: true, nurtureReason: true, nurtureInterest: true, nurtureTrigger: true, nurtureReviewAt: true },
+    }),
+    prisma.lead.count({ where }),
+  ]);
+  return {
+    reviews: rows.map((r) => ({
+      id: r.id, name: r.name, ownerId: r.assignedToId, why: nurtureReasonLabel(r.nurtureReason),
+      interest: r.nurtureInterest, trigger: r.nurtureTrigger, reviewAt: r.nurtureReviewAt!,
+    })),
+    total,
+  };
 }
+const NURTURE_REVIEWS_LOADED = 25;
 
 /**
  * Who this person oversees: `null` = everyone (an owner), a set = the members of
@@ -238,6 +248,7 @@ export const loadDaxBrief = cache(async (user: PermissionUser, now: Date = new D
     viewedQuotes: viewed,
     deliveries,
     team,
-    nurtureReviews,
+    nurtureReviews: nurtureReviews.reviews,
+    nurtureReviewsTotal: nurtureReviews.total,
   });
 });

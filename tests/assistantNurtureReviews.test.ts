@@ -127,3 +127,23 @@ test("Confirm: done already writes nothing; every refusal before reactivateNurtu
   assert.match(run, /now\.stageId !== card\.fromStageId \|\| \(now\.nurtureReviewAt\?\.toISOString\(\) \?\? null\) !== \(card\.reviewAt \?\? null\) \|\| now\.assignedToId !== card\.assignedToId/);
   assert.match(run, /await confirmed\("bring the deal back from Nurture", card\.leadId\);/);
 });
+
+test("MORE DUE THAN READ (review of #943): the count is the total, and DAX is told how many more — none drop out of sight", () => {
+  // The loader reads the 25 most overdue and counts the rest: here 25 read, 40 due.
+  const read = Array.from({ length: 25 }, (_, i) => review(`d${i}`, "2026-10-01"));
+  const brief = buildBrief({ ...input(read), nurtureReviewsTotal: 40 });
+  const item = brief.items.find((i) => i.key === "nurture_review");
+  assert.equal(item?.title, "40 Nurture reviews due (25+ overdue)");
+  assert.equal(brief.nurtureReviewsTotal, 40);
+  const forDax = briefForAssistant(brief) as { nurtureReviews?: unknown[]; moreNurtureReviews?: { count: number; link: string } };
+  assert.equal(forDax.nurtureReviews?.length, 10);
+  assert.deepEqual([forDax.moreNurtureReviews?.count, forDax.moreNurtureReviews?.link], [30, "/leads/nurture?due=1"]);
+  // All read: no "more", and no total carried.
+  const few = buildBrief({ ...input([review("a", "2026-11-05")]), nurtureReviewsTotal: 1 });
+  assert.equal(few.nurtureReviewsTotal, undefined);
+  assert.equal((briefForAssistant(few) as { moreNurtureReviews?: unknown }).moreNurtureReviews, undefined);
+  // Wired: the loader counts with the same filter it reads with.
+  const loader = code("src/lib/daxBrief.ts");
+  assert.match(loader, /prisma\.lead\.findMany\(\{\s*where,[\s\S]*?take: NURTURE_REVIEWS_LOADED,[\s\S]*?prisma\.lead\.count\(\{ where \}\)/);
+  assert.match(loader, /nurtureReviews: nurtureReviews\.reviews,\s*nurtureReviewsTotal: nurtureReviews\.total,/);
+});
