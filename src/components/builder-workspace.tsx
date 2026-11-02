@@ -16,8 +16,11 @@ export function BuilderWorkspaceShell({
       data-slot="builder-workspace"
       className={cn(
         "flex min-h-[42rem] flex-col overflow-hidden rounded-2xl border border-border bg-[#0d1110] text-slate-100 shadow-[0_24px_80px_rgba(0,0,0,.28)]",
-        fullscreen && "fixed inset-0 z-[70] h-dvh min-h-0 rounded-none",
         className,
+        // AFTER the page's own sizing, so it wins (Sean, 2026-11-02: "the full screen function in the flow builder does
+        // not work"): the flow builder passes `min-h-[720px] md:h-[calc(100dvh-8rem)]`, which, merged last, overrode
+        // h-dvh / min-h-0 on every desktop screen. The md: forms are named so they replace the page's md: ones.
+        fullscreen && "fixed inset-0 z-[70] h-dvh min-h-0 md:h-dvh md:min-h-0 rounded-none border-0",
       )}
     >
       {children}

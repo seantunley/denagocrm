@@ -477,6 +477,17 @@ export default function FlowBuilder({ flowId, initial, journeys = [], flows = []
   }, [redo, undo]);
 
   const [fullscreen, setFullscreen] = useState(false);
+  // Esc leaves full screen — unless a dialog is open, whose own Esc closes it first. The page behind stops scrolling.
+  useEffect(() => {
+    if (!fullscreen) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && !document.querySelector('[role="dialog"], [role="alertdialog"]')) setFullscreen(false);
+    };
+    const overflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    window.addEventListener("keydown", onKey);
+    return () => { window.removeEventListener("keydown", onKey); document.body.style.overflow = overflow; };
+  }, [fullscreen]);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [paletteQuery, setPaletteQuery] = useState("");
   const [inspectorOpen, setInspectorOpen] = useState(false);
