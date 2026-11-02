@@ -54,6 +54,7 @@ import { matchPayment } from "./assistantPaymentMatch";
 import { stuckLookup } from "./assistantStuckLookup";
 import { catchUpLookup } from "./assistantCatchUpLookup";
 import { stuckDealsLookup } from "./assistantStuckDeals";
+import { countQuoted, quoteLineWhere } from "./quotedProducts";
 import { briefForAssistant, loadDaxBrief } from "./daxBrief";
 import { customerVehicles, workshopOverview } from "./workshopContext";
 import { breakerOpen, withRetry } from "./assistantBreaker";
@@ -407,6 +408,7 @@ export async function findQuotes(user: User, raw: z.infer<typeof quoteArgs>): Pr
             validUntil: { gte: new Date(Date.now() - DAY), lte: new Date(Date.now() + args.expiringWithinDays * DAY) },
           }
         : {}),
+      ...(args.product || args.colour ? { items: { some: quoteLineWhere(args.product, args.colour) } } : {}),
     },
     orderBy: args.expiringWithinDays !== undefined ? { validUntil: "asc" } : { createdAt: "desc" },
     take: CANDIDATES,
@@ -428,9 +430,20 @@ export async function findQuotes(user: User, raw: z.infer<typeof quoteArgs>): Pr
   const sends = await quoteSends(page.map(({ quote }) => quote));
   const customer = (q: (typeof quotes)[number]) =>
     q.contact ? contactName(q.contact) : q.lead?.name ?? "no customer";
+  // "How many white Rover XLs?" — counted over every matching quote, not the page (quotedProducts.ts).
+  const matching = args.product || args.colour
+    ? {
+        ...countQuoted(priced.map(({ quote }) => quote), args.product, args.colour),
+        exact: quotes.length < CANDIDATES,
+        note: quotes.length < CANDIDATES
+          ? "Exact: every matching quote this person may open, superseded revisions left out — not only those listed."
+          : `At least: more than ${CANDIDATES} quotes matched.`,
+      }
+    : null;
   return {
-    truncated: priced.length > take || quotes.length === CANDIDATES,
-    data: page.map(({ quote, total }) => ({
+    // With an exact count, a shorter list is not a cut-off answer: "matching" says how many there are.
+    truncated: matching ? !matching.exact : priced.length > take || quotes.length === CANDIDATES,
+    data: [...(matching ? [{ matching }] : []), ...page.map(({ quote, total }) => ({
       quote: `Q-${quote.number}`,
       link: `/quotes/${quote.id}`,
       leadId: quote.lead?.id ?? null,
@@ -442,7 +455,7 @@ export async function findQuotes(user: User, raw: z.infer<typeof quoteArgs>): Pr
       ...(sends.has(quote.id) ? { sendStatus: sends.get(quote.id)!.status } : {}),
       viewedByCustomer: viewedByCustomer(quote, signing.get(quote.id)),
       validUntil: quote.validUntil ? dateKey(quote.validUntil) : null,
-    })),
+    }))],
     rows: page.map(({ quote, total }) => ({
       label: `Q-${quote.number} — ${customer(quote)}`,
       detail: `${quoteFacts(quote, signing.get(quote.id)).status}${sends.get(quote.id)?.bounced ? " · email bounced" : ""} · ${formatZAR(total)} · viewed ${viewedByCustomer(quote, signing.get(quote.id))}`,
