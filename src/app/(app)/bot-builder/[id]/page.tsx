@@ -12,6 +12,9 @@ import { builderTenantId, flowScope, journeyScope } from "@/lib/flowScope";
 import { flowDocumentOptions } from "@/lib/flowDocuments";
 import { listActingTenantStaff } from "@/lib/tenantActor";
 import { getCompanyProfile } from "@/lib/companyProfile";
+import { getBotFlowVersionAnalytics } from "@/lib/botFlowAnalytics";
+
+const STEP_NUMBERS_DAYS = 30;
 
 export default async function FlowEditorPage({ params }: { params: Promise<{ id: string }> }) {
   await requireRoute("/bot-builder");
@@ -28,6 +31,13 @@ export default async function FlowEditorPage({ params }: { params: Promise<{ id:
     /* use default so the owner can recover/reset the draft */
   }
 
+  // LIVE NUMBERS ON EACH STEP (Node-RED's node status; Sean, 2026-11-02): the last 30 days, across every published
+  // version of this flow, from the same per-step analytics the Bot analytics page reads. Nothing published: none.
+  const versionIds = (await prisma.botFlowVersion.findMany({ where: { flowId: id, tenantId: await builderTenantId() }, select: { id: true } })).map((v) => v.id);
+  const stepNumbers = Object.fromEntries(
+    (await getBotFlowVersionAnalytics(versionIds, { occurredFrom: new Date(Date.now() - STEP_NUMBERS_DAYS * 86_400_000) })).nodes
+      .map((n) => [n.nodeId, { reached: n.reached, interacted: n.interacted }]),
+  );
   const [channels, journeys, reusableFlows, company, documents, staff] = await Promise.all([
     enabledFlowChannels(),
     prisma.journey.findMany({
@@ -62,7 +72,7 @@ export default async function FlowEditorPage({ params }: { params: Promise<{ id:
       </div>
       <FlowAiDraftForm flowId={row.id} />
       <FlowNodeSystemFrame>
-        <FlowBuilder flowId={row.id} initial={flow} journeys={journeys} flows={reusableFlows} updatedAt={row.updatedAt.toISOString()} channels={channels} businessName={company.name} documents={documents} staff={staff} />
+        <FlowBuilder flowId={row.id} initial={flow} journeys={journeys} flows={reusableFlows} updatedAt={row.updatedAt.toISOString()} channels={channels} businessName={company.name} documents={documents} staff={staff} stepNumbers={stepNumbers} stepNumbersDays={STEP_NUMBERS_DAYS} />
       </FlowNodeSystemFrame>
     </div>
   );

@@ -1,9 +1,10 @@
 "use client";
 
 import "@xyflow/react/dist/style.css";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
+  BarChart3,
   Bot,
   CalendarDays,
   CircleStop,
@@ -58,6 +59,7 @@ import { uploadCampaignImage } from "@/app/actions/campaigns";
 import type { BookingAction, ConditionOperator, FlowHttpMethod, FlowNode, SlotAction } from "@/lib/flow";
 import ConfirmActionDialog from "@/components/ConfirmActionDialog";
 import EmojiButton from "@/components/EmojiButton";
+import { stepNumbersLine, type StepNumbers } from "@/lib/flowStepNumbers";
 import { cn } from "@/lib/utils";
 import { BuilderSaveStatus, BuilderWorkspaceBar, BuilderWorkspaceShell } from "@/components/builder-workspace";
 import FlowLintPanel from "@/components/FlowLintPanel";
@@ -67,6 +69,8 @@ import { validateFlow, type FlowChannel, type FlowIssue } from "@/lib/flowValida
 type Pos = { x: number; y: number };
 type FlowData = { start: string; nodes: Record<string, FlowNode>; positions?: Record<string, Pos> };
 type RFData = { flow: FlowNode; isStart: boolean; issues?: FlowIssue[] };
+/** The numbers on each step's card (lib/flowStepNumbers); null while switched off. */
+const StepNumbersContext = createContext<StepNumbers | null>(null);
 type EditorSnapshot = { start: string; nodes: Node<RFData>[] };
 export type FlowJourneyOption = { id: string; name: string };
 export type FlowOptionRef = { id: string; name: string };
@@ -162,6 +166,7 @@ function NodeCard({ data }: NodeProps) {
   const n = d.flow;
   const meta = TYPE_META[n.type];
   const Icon = meta.icon;
+  const numbers = stepNumbersLine(n.type, useContext(StepNumbersContext)?.[n.id]);
   const errors = d.issues?.filter((issue) => issue.severity === "error").length ?? 0;
   const warnings = (d.issues?.length ?? 0) - errors;
   return (
@@ -177,6 +182,7 @@ function NodeCard({ data }: NodeProps) {
         {d.isStart && <span className="ml-auto rounded bg-orange-600 px-1.5 text-[10px]">START</span>}
       </div>
       <div className="min-h-8 whitespace-pre-wrap px-3 py-2 text-xs leading-5 text-slate-300">{summary(n) || "…"}</div>
+      {numbers && <div className="border-t border-slate-800 px-3 py-1 text-[10px] font-medium text-emerald-300/90" title="Last 30 days">{numbers}</div>}
 
       {n.type === "choice" ? (
         <div className="pb-1">
@@ -264,7 +270,8 @@ function blankNode(type: FlowNode["type"], id: string): FlowNode {
   }
 }
 
-export default function FlowBuilder({ flowId, initial, journeys = [], flows = [], updatedAt, channels, businessName, documents = [], staff = [] }: { flowId: string; initial: FlowData; journeys?: FlowJourneyOption[]; flows?: FlowOptionRef[]; updatedAt: string; channels: FlowChannel[]; businessName: string; documents?: { id: string; name: string }[]; staff?: { id: string; name: string }[] }) {
+export default function FlowBuilder({ flowId, initial, journeys = [], flows = [], updatedAt, channels, businessName, documents = [], staff = [], stepNumbers = {}, stepNumbersDays = 30 }: { flowId: string; initial: FlowData; journeys?: FlowJourneyOption[]; flows?: FlowOptionRef[]; updatedAt: string; channels: FlowChannel[]; businessName: string; documents?: { id: string; name: string }[]; staff?: { id: string; name: string }[]; stepNumbers?: StepNumbers; stepNumbersDays?: number }) {
+  const [showNumbers, setShowNumbers] = useState(true);
   const router = useRouter();
   const [start, setStart] = useState(initial.start);
   const [rfNodes, setRfNodes, applyNodesChange] = useNodesState<Node<RFData>>(
@@ -732,6 +739,11 @@ export default function FlowBuilder({ flowId, initial, journeys = [], flows = []
             toast.success("Flow reset");
             router.refresh();
           }} trigger={<button type="button" className="btn-secondary btn-sm"><RotateCcwIcon />Reset</button>} />
+          {Object.keys(stepNumbers).length > 0 && (
+            <button type="button" onClick={() => setShowNumbers((value) => !value)} aria-pressed={showNumbers} className={cn("btn-secondary btn-sm", showNumbers && "ring-1 ring-emerald-400/50")} title={`How many customers reached each step — last ${stepNumbersDays} days`}>
+              <BarChart3 className="size-4" /><span className="hidden sm:inline">Numbers</span>
+            </button>
+          )}
           <button type="button" onClick={() => setFullscreen((value) => !value)} className="btn-secondary btn-sm" title={fullscreen ? "Exit full screen" : "Full screen"}>
             {fullscreen ? <Minimize2 className="size-4" /> : <Maximize2 className="size-4" />}<span className="hidden sm:inline">{fullscreen ? "Exit" : "Full screen"}</span>
           </button>
@@ -780,6 +792,7 @@ export default function FlowBuilder({ flowId, initial, journeys = [], flows = []
 
             <main className="min-w-0 flex-1 bg-[#0b0f0e] p-2 sm:p-3">
               <div className="relative h-full min-h-[32rem] overflow-hidden rounded-xl border border-white/[0.08] bg-[#0f1412]" onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = "copy"; }} onDrop={onCanvasDrop}>
+                <StepNumbersContext.Provider value={showNumbers ? stepNumbers : null}>
                 <ReactFlow
                   deleteKeyCode={null}
                   nodes={displayNodes}
@@ -827,6 +840,7 @@ export default function FlowBuilder({ flowId, initial, journeys = [], flows = []
                     </div>
                   </Panel>
                 </ReactFlow>
+                </StepNumbersContext.Provider>
                 {rfNodes.length === 0 && (
                   <div className="pointer-events-none absolute inset-0 grid place-items-center p-6">
                     <div className="pointer-events-auto max-w-sm rounded-2xl border border-dashed border-white/15 bg-[#111614]/95 p-6 text-center shadow-2xl">
