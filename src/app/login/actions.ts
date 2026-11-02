@@ -12,7 +12,7 @@ import { logError } from "@/lib/errorLog";
 import { verifyTotp } from "@/lib/totp";
 import { matchBackupCode } from "@/lib/backupCodes";
 import { decryptValue } from "@/lib/settings";
-import { sendEmail } from "@/lib/email";
+import { sendAccountEmail } from "@/lib/accountEmail";
 import { logAudit } from "@/lib/audit";
 import {
   LOGIN_POLICY,
@@ -223,11 +223,13 @@ async function sendLoginEmailCode(userId: string): Promise<boolean> {
       loginOtpExpires: new Date(Date.now() + 10 * 60 * 1000),
     },
   });
-  await sendEmail({
+  // Not signed in yet, so no request scope: sent as their workspace or the platform (accountEmail.ts). It used to
+  // fail on that missing scope and the failure was swallowed — anyone signing in by email code was locked out.
+  await sendAccountEmail(user.id, {
     to: user.email,
     subject: "Your sign-in code",
     text: `Your sign-in code is ${code}. It expires in 10 minutes. If this wasn't you, change your password.`,
-  }).catch(() => {});
+  });
   return true;
 }
 
