@@ -55,8 +55,9 @@ async function main() {
     for (const u of [rep, other]) {
       await basePrisma.$executeRaw`INSERT INTO "UserRole" ("id","userId","roleId","tenantId") VALUES (${crypto.randomUUID()}, ${u.id}, ${ROLE}, ${A})`;
     }
+    // No createdById: view_owned also covers deals a person CREATED, so a creator never loses one by reassignment.
     const lead = (name: string) =>
-      basePrisma.lead.create({ data: { tenantId: A, stageId: a.rows.stageId, status: "open", valueCents: 18_000_000, name, title: "Rover XL", assignedToId: rep.id, createdById: rep.id }, select: { id: true } });
+      basePrisma.lead.create({ data: { tenantId: A, stageId: a.rows.stageId, status: "open", valueCents: 18_000_000, name, title: "Rover XL", assignedToId: rep.id }, select: { id: true } });
     const anna = await lead(`Anna Listed${SFX}`);
     const donovan = await lead(`Donovan Listed${SFX}`);
 
