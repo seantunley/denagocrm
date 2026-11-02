@@ -2,16 +2,33 @@ import "server-only";
 import { Prisma } from "@prisma/client";
 import { prisma } from "./db";
 import { contactCommunicationWhere } from "./customerContact";
-import { getAccessibleContactIds, getAccessibleLeadIds, hasPermission, type PermissionUser } from "./permissions";
-import { CONFIRM_EVENTS, confirmedKind, forwardMoves, readProposed, summarizeOutcomes, type Confirmation } from "./assistantOutcomeRules";
+import {
+  getAccessibleContactIds, getAccessibleJobCardIds, getAccessibleLeadIds, getAccessibleQuoteIds, getAccessibleVehicleIds, hasPermission,
+  type PermissionKey, type PermissionUser,
+} from "./permissions";
+import { CONFIRM_EVENTS, confirmedKind, forwardMoves, readProposed, summarizeOutcomes, type Confirmation, type Visible } from "./assistantOutcomeRules";
 
 const DAY_MS = 86_400_000;
 
-/** What the viewer may open; null = everything (their role sees every deal, or every customer). */
-async function visibleTo(viewer: PermissionUser) {
-  const [allDeals, allCustomers] = await Promise.all([hasPermission(viewer, "leads.view_all"), hasPermission(viewer, "contacts.view_all")]);
-  const [leads, contacts] = await Promise.all([allDeals ? null : getAccessibleLeadIds(viewer), allCustomers ? null : getAccessibleContactIds(viewer)]);
-  return { leads: leads && new Set(leads), contacts: contacts && new Set(contacts) };
+/**
+ * What the viewer may open, through the CRM's own access helpers — each kind of record a card can name. A slot is null
+ * when their role sees all of that kind; the whole answer is null when they see everything.
+ */
+async function visibleTo(viewer: PermissionUser): Promise<Visible> {
+  const slot = async (all: PermissionKey, ids: (user: PermissionUser) => Promise<string[] | null>) => {
+    if (await hasPermission(viewer, all)) return null;
+    const list = await ids(viewer);
+    return list && new Set(list);
+  };
+  const [leadId, contactId, quoteId, vehicleId, jobCardId] = await Promise.all([
+    slot("leads.view_all", getAccessibleLeadIds),
+    slot("contacts.view_all", getAccessibleContactIds),
+    slot("quotes.view_all", getAccessibleQuoteIds),
+    slot("vehicles.view_all", getAccessibleVehicleIds),
+    slot("jobcards.view_all", getAccessibleJobCardIds),
+  ]);
+  const visible = { leadId, contactId, quoteId, vehicleId, jobCardId };
+  return Object.values(visible).every((s) => s === null) ? null : visible;
 }
 
 /**

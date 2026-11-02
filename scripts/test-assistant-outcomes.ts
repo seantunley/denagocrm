@@ -32,6 +32,7 @@ import { moveLead } from "../src/app/actions/leads";
 import { isTenantOwner } from "../src/lib/auth";
 import { listActingTenantStaff } from "../src/lib/tenantActor";
 import { assistantOutcomes } from "../src/lib/assistantOutcomes";
+import { proposedCards } from "../src/lib/assistantOutcomeRules";
 import { signFreshSession } from "../src/lib/session";
 import { runAsSession, type ActingSession } from "./harness/actingSession";
 
@@ -73,6 +74,8 @@ const S = { one: id("s1"), two: id("s2"), three: id("s3"), t2: id("s-t2") };
 const C = { anna: id("c-anna"), ben: id("c-ben"), carl: id("c-carl"), dee: id("c-dee"), fay: id("c-fay"), gus: id("c-gus"), hal: id("c-hal"), ivy: id("c-ivy"), jo: id("c-jo"), own2: id("c-own2"), rep2: id("c-rep2") };
 const L = { anna: id("l-anna"), ben: id("l-ben"), stage: id("l-stage"), stage2: id("l-stage2"), win: id("l-win"), quote: id("l-quote"), hal: id("l-hal"), meet: id("l-meet"), own2: id("l-own2"), rep2: id("l-rep2") };
 const QUOTE = id("quote");
+// Workspace 2: a customer-only quote (no deal) on the owner's own customer, and one on their colleague's.
+const Q2 = { own: id("q2-own"), theirs: id("q2-theirs") };
 const inT = <R>(fn: () => Promise<R>) => runInTenantScope({ tenantId: T, system: false }, fn);
 const inT2 = <R>(fn: () => Promise<R>) => runInTenantScope({ tenantId: T2, system: false }, fn);
 
@@ -95,7 +98,7 @@ async function seed() {
   // Workspace 2's role: each person sees only their own deals and customers.
   await basePrisma.$executeRaw`INSERT INTO "Role" ("id", "tenantId", "name", "description", "system", "createdAt", "updatedAt")
     VALUES (${ROLE2}, ${T2}, ${`Own deals ${SFX}`}, 'test', false, now(), now())`;
-  for (const key of ["leads.view_owned", "contacts.view_owned"]) {
+  for (const key of ["leads.view_owned", "contacts.view_owned", "quotes.view_owned"]) {
     await basePrisma.$executeRaw`INSERT INTO "RolePermission" ("roleId", "permissionKey", "tenantId") VALUES (${ROLE2}, ${key}, ${T2})`;
   }
   await basePrisma.$executeRaw`INSERT INTO "UserRole" ("id", "userId", "roleId", "tenantId") VALUES
@@ -134,8 +137,13 @@ async function seed() {
     { kind: "customer_note", contactId: C.carl }, { kind: "assign", leadId: L.win }, { kind: "quote_build", leadId: L.quote },
     { kind: "quote_pdf", contactId: C.hal }, { kind: "meeting", leadId: L.meet },
   ]);
-  await turn(T2, t2owner, [{ kind: "note", leadId: L.own2 }]);
-  await turn(T2, t2rep, [{ kind: "note", leadId: L.rep2 }, { kind: "block_time" }]);
+  for (const [quoteId, contactId, owner] of [[Q2.own, C.own2, t2owner], [Q2.theirs, C.rep2, t2rep]] as const) {
+    await basePrisma.quote.create({ data: { id: quoteId, number: 700_000 + Math.floor(Math.random() * 99_000), tenantId: T2, status: "sent", contactId, createdById: owner.id } });
+  }
+  // A quote PDF card on a quote with no deal, recorded exactly as askCrm records it.
+  const pdfCard = (quoteId: string) => proposedCards([{ id: `a0-${quoteId}`, kind: "quote_pdf", leadId: null, leadLabel: "x", title: "PDF", quoteId, quoteNumber: 1 } as ActionCard]);
+  await turn(T2, t2owner, [{ kind: "note", leadId: L.own2 }, ...pdfCard(Q2.own)]);
+  await turn(T2, t2rep, [{ kind: "note", leadId: L.rep2 }, { kind: "block_time" }, ...pdfCard(Q2.theirs)]);
 }
 
 /** A Confirm's audit event as runAssistantAction writes it now (or, without `kind`, as it did before), at the window's start. */
@@ -155,7 +163,7 @@ async function cleanup() {
   const leads = Object.values(L);
   const contacts = Object.values(C);
   await basePrisma.communication.deleteMany({ where: { OR: [{ contactId: { in: contacts } }, { leadId: { in: leads } }, { userId: { in: users } }] } });
-  await basePrisma.quote.deleteMany({ where: { id: QUOTE } });
+  await basePrisma.quote.deleteMany({ where: { id: { in: [QUOTE, Q2.own, Q2.theirs] } } });
   await basePrisma.activity.deleteMany({ where: { leadId: { in: leads } } });
   await basePrisma.auditLog.deleteMany({ where: { OR: [{ contactId: { in: contacts } }, { leadId: { in: leads } }, { userId: { in: users } }] } });
   await basePrisma.assistantTurn.deleteMany({ where: { userId: { in: users } } });
@@ -240,6 +248,7 @@ async function main() {
     await confirmEvent(T2, t2owner, "add a note", { leadId: L.own2 }, "note");
     await confirmEvent(T2, t2rep, "add a note", { leadId: L.rep2 }, "note");
     await confirmEvent(T2, t2rep, "block time on their own calendar", {}, "block_time");
+    await confirmEvent(T2, t2rep, "send me the PDF of quote Q-7", { contactId: C.rep2 }, "quote_pdf"); // a quote on no deal: on its customer
     await basePrisma.communication.createMany({ data: [{ tenantId: T2, contactId: C.rep2, userId: t2rep.id, type: "whatsapp", direction: "inbound", body: "Thanks", occurredAt: at(1) }] });
   }
 
@@ -279,16 +288,18 @@ async function main() {
     check("…their colleague cannot", !(await runAsSession(t2repSession, () => inT2(() => isTenantOwner()))));
     check("…nor can a rep in the first workspace", !(await runAsSession(repSession, () => inT(() => isTenantOwner()))));
     const mine = await outcomes(ownerSession, t2owner, T2, at(15));
-    check("counted only on their own deal (and cards on no record)", same(families(mine), {
+    // The colleague's customer-only quote — a card naming only that quote — is not counted for them (review of #940).
+    check("counted only on their own deal and quote (and cards on no record)", same(families(mine), {
       follow_ups: [0, 0, 0, 0, 0], messages: [0, 0, 0, 0, 0], notes: [1, 1, 0, 1, 0], stage: [0, 0, 0, 0, 0],
-      quotes: [0, 0, 0, 0, 0], meetings: [0, 0, 0, 0, 0], other: [1, 1, 0, 0, 0],
+      quotes: [1, 0, 0, 0, 0], meetings: [0, 0, 0, 0, 0], other: [1, 1, 0, 0, 0],
     }), JSON.stringify(families(mine)));
     const byId = (rows: ReturnType<typeof people>) => [...rows].sort((a, b) => String(a[0]).localeCompare(String(b[0])));
     check("…per person likewise: their colleague's note is not counted, their calendar block is",
-      same(byId(people(mine)), byId([[t2owner.id, 1, 1, 0, 1, 0], [t2rep.id, 1, 1, 0, 0, 0]])), JSON.stringify(people(mine)));
+      same(byId(people(mine)), byId([[t2owner.id, 2, 1, 0, 1, 0], [t2rep.id, 1, 1, 0, 0, 0]])), JSON.stringify(people(mine)));
     const all = await outcomes(bossInT2, boss2, T2, at(15));
     check("someone who sees every deal there gets both", same(families(all).notes, [2, 2, 1, 2, 0]) && same(families(all).other, [1, 1, 0, 0, 0]), JSON.stringify(families(all)));
-    check("…and nothing of the first workspace", !JSON.stringify(all).includes(rep.id) && !JSON.stringify(all).includes(rep2.id) && families(all).quotes[1] === 0);
+    check("…the colleague's customer-only quote included: both suggestions, and its Confirm", same(families(all).quotes, [2, 1, 0, 1, 0]), JSON.stringify(families(all).quotes));
+    check("…and nothing of the first workspace", !JSON.stringify(all).includes(rep.id) && !JSON.stringify(all).includes(rep2.id) && families(all).stage[0] === 0);
   }
 
   console.log("\nWhat is kept of an offered card");

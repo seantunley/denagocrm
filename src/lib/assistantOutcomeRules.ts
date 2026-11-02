@@ -28,7 +28,8 @@ export const FAMILIES: readonly { key: string; label: string; kinds: readonly Ki
   { key: "follow_ups", label: "Follow-ups & reminders", kinds: ["follow_up", "reschedule"], outcome: "reply" },
   { key: "messages", label: "Messages drafted", kinds: ["draft_message"], outcome: "reply" },
   { key: "notes", label: "Notes", kinds: ["note", "customer_note"], outcome: "reply" },
-  { key: "stage", label: "Stage & assignment", kinds: ["stage", "assign"], outcome: "progress" },
+  // Parking a deal in Nurture (#938) is a stage decision: what counts after it is the deal moving on, or being won.
+  { key: "stage", label: "Stage & assignment", kinds: ["stage", "assign", "nurture"], outcome: "progress" },
   { key: "quotes", label: "Quotes", kinds: ["quote", "quote_build", "quote_add", "quote_change", "quote_pdf"], outcome: "quote" },
   { key: "meetings", label: "Meetings & test drives", kinds: ["meeting", "test_drive"], outcome: "reply" },
   { key: "other", label: "Other", kinds: [], outcome: null },
@@ -64,6 +65,8 @@ const SUMMARY_KINDS: [RegExp, Kind][] = [
   [/^reschedule an activity$/, "reschedule"],
   [/^cancel an activity$/, "cancel_activity"],
   [/^mark the deal lost$/, "lost"],
+  [/^park the deal in Nurture$/, "nurture"],
+  [/^(book|move) the delivery$/, "schedule_delivery"],
   [/^start a quote$/, "quote"],
   [/^create draft quote /, "quote_build"],
   [/^send me the PDF of quote /, "quote_pdf"],
@@ -87,21 +90,57 @@ export function confirmedKind(event: { eventType: string; summary: string; metad
   return typeof stamped === "string" ? stamped : kindFromSummary(event.summary);
 }
 
-/** What is kept of each card DAX offered (AssistantTurn.proposed): its kind, and the deal or customer it was on — ids, never names. */
-export type Proposed = { kind: string; leadId?: string; contactId?: string };
+/** The records a card can be about. A viewer must be able to open every one a card names for it to be counted for them. */
+const RECORD_KEYS = ["leadId", "contactId", "quoteId", "vehicleId", "jobCardId"] as const;
+type RecordKey = (typeof RECORD_KEYS)[number];
+type Records = Partial<Record<RecordKey, string | null>>;
+
+/** What is kept of each card DAX offered (AssistantTurn.proposed): its kind, and every record it is on — ids, never names. */
+export type Proposed = { kind: string } & Partial<Record<RecordKey, string>>;
 
 export function proposedCards(cards: readonly ActionCard[]): Proposed[] {
-  return cards.map((card) => ({
-    kind: card.kind,
-    ...("leadId" in card && card.leadId ? { leadId: card.leadId } : {}),
-    ...("contactId" in card && card.contactId ? { contactId: card.contactId } : {}),
-  }));
+  return cards.map((card) => {
+    // Where each kind keeps its records: on the card, in a file's target, a watch's input, or a new lead's customer.
+    const c = card as unknown as Record<string, unknown>;
+    const nested = [c, c.target, c.watch, c.lead].filter((v): v is Record<string, unknown> => Boolean(v) && typeof v === "object");
+    const records: Partial<Record<RecordKey, string>> = {};
+    for (const key of RECORD_KEYS) {
+      const id = nested.map((o) => o[key]).find((v): v is string => typeof v === "string" && v !== "");
+      if (id) records[key] = id;
+    }
+    return { kind: card.kind, ...records };
+  });
 }
 
 export function readProposed(value: unknown): Proposed[] {
   return Array.isArray(value)
     ? value.filter((p): p is Proposed => Boolean(p) && typeof p === "object" && typeof (p as Proposed).kind === "string")
     : [];
+}
+
+/**
+ * What a viewer may open, per kind of record (null in a slot: all of them). The whole value null: they see everything.
+ * Built by assistantOutcomes from the CRM's own access helpers.
+ */
+export type Visible = Record<RecordKey, ReadonlySet<string> | null> | null;
+
+/**
+ * The only kinds counted for a restricted viewer when they name NO record, because they are about no customer:
+ * someone's own calendar (block_time; a follow-up or meeting on nobody), a scheduled question, and a customer or lead
+ * that does not exist yet. Anything else with no record it can be checked against — a quote PDF, a payment, a file, a
+ * delivery, a plan, a watch, an older entry nobody can read — is NOT counted for them: fail closed.
+ */
+export const RECORDLESS_KINDS: ReadonlySet<string> = new Set(["block_time", "follow_up", "meeting", "schedule", "create_customer", "create_lead"]);
+
+/** May this card, or Confirm, be counted for this viewer? Every record it names must be one they may open. */
+export function mayCount(r: Records & { kind: string | null }, visible: Visible): boolean {
+  if (!visible) return true;
+  const named = RECORD_KEYS.filter((key) => r[key]);
+  if (named.length === 0) return r.kind !== null && RECORDLESS_KINDS.has(r.kind);
+  return named.every((key) => {
+    const allowed = visible[key];
+    return !allowed || allowed.has(r[key]!);
+  });
 }
 
 /** Something that happened on a deal and/or a customer. */
@@ -152,14 +191,12 @@ export function summarizeOutcomes(input: {
   proposals: readonly (Proposed & { userId: string })[];
   confirmations: readonly Confirmation[];
   happened: Record<Outcome, readonly Happening[]>;
-  /** What the viewer may open (null: everything). A card on no record — someone's own calendar — always counts. */
-  visible: { leads: ReadonlySet<string> | null; contacts: ReadonlySet<string> | null };
+  /** What the viewer may open (mayCount). */
+  visible: Visible;
   /** The workspace's people: anyone else is counted as no longer in the team. */
   staffIds: ReadonlySet<string>;
 }): { families: FamilyRow[]; people: PersonRow[] } {
-  const { leads, contacts } = input.visible;
-  const mayOpen = (r: { leadId?: string | null; contactId?: string | null }) =>
-    r.leadId ? !leads || leads.has(r.leadId) : r.contactId ? !contacts || contacts.has(r.contactId) : true;
+  const mayOpen = (r: Records & { kind: string | null }) => mayCount(r, input.visible);
   const families: FamilyRow[] = FAMILIES.map((f) => ({ key: f.key, label: f.label, outcome: f.outcome, suggested: 0, confirmed: 0, after: empty() }));
   const rowOf = (kind: string | null) => families[FAMILIES.indexOf(familyOf(kind))];
   const people = new Map<string | null, PersonRow>();

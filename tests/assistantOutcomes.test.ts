@@ -11,13 +11,16 @@ import {
   familyOf,
   forwardMoves,
   kindFromSummary,
+  mayCount,
   percent,
+  RECORDLESS_KINDS,
   proposedCards,
   readProposed,
   summarizeOutcomes,
   type Confirmation,
   type Happening,
   type Outcome,
+  type Visible,
 } from "../src/lib/assistantOutcomeRules";
 
 /**
@@ -32,7 +35,7 @@ const DAY = 86_400_000;
 const T0 = new Date("2026-10-01T09:00:00Z");
 const at = (days: number) => new Date(T0.getTime() + days * DAY);
 const NOW = at(30);
-const everything = { leads: null, contacts: null };
+const everything = null;
 const nothing: Record<Outcome, Happening[]> = { reply: [], quote: [], progress: [] };
 const confirm = (kind: string | null, on: { leadId?: string; contactId?: string }, userId = "u1", when = T0): Confirmation => ({
   kind, userId, at: when, leadId: on.leadId ?? null, contactId: on.contactId ?? null,
@@ -44,12 +47,12 @@ test("each kind of card counts in one family; anything new or unknown is Other, 
     follow_up: "follow_ups", reschedule: "follow_ups",
     draft_message: "messages",
     note: "notes", customer_note: "notes",
-    stage: "stage", assign: "stage",
+    stage: "stage", assign: "stage", nurture: "stage",
     quote: "quotes", quote_build: "quotes", quote_add: "quotes", quote_change: "quotes", quote_pdf: "quotes",
     meeting: "meetings", test_drive: "meetings",
     create_customer: "other", create_lead: "other", update_customer: "other", attach_file: "other", record_payment: "other",
     job_card: "other", block_time: "other", cancel_activity: "other", lost: "other", schedule: "other", watch: "other", plan: "other",
-    delivery: "other",
+    schedule_delivery: "other", delivery: "other",
   };
   for (const [kind, family] of Object.entries(expect)) assert.equal(familyOf(kind).key, family, kind);
   assert.equal(familyOf(null).key, "other");
@@ -76,22 +79,55 @@ test("an older Confirm, recorded before the kind was, is read back from its summ
     ["reschedule an activity", "reschedule"], ["cancel an activity", "cancel_activity"], ["mark the deal lost", "lost"],
     ["start a quote", "quote"], ["create draft quote Q-1029", "quote_build"], ["send me the PDF of quote Q-1029", "quote_pdf"],
     ["change draft quote Q-1029", "quote_change"], ["add to draft quote Q-1029", "quote_add"],
+    ["park the deal in Nurture", "nurture"], ["book the delivery", "schedule_delivery"], ["move the delivery", "schedule_delivery"],
   ];
   for (const [what, kind] of cases) assert.equal(said(what), kind, what);
   assert.equal(said("do something new"), null, "an unknown wording is Other");
   assert.equal(kindFromSummary("Sent a WhatsApp the assistant drafted, after reviewing it"), null);
 });
 
-test("every wording runAssistantAction writes today is one the summary reading knows", () => {
+/**
+ * The first argument of a call starting at `from` (just after its "("): up to the comma at depth 0, stepping over
+ * strings and templates whole — so `card.from ? "move the delivery" : "book the delivery"` is one argument.
+ */
+function firstArgument(source: string, from: number): string {
+  let depth = 0;
+  for (let i = from; i < source.length; i++) {
+    const ch = source[i];
+    if (ch === '"' || ch === "`") i = source.indexOf(ch, i + 1);
+    else if ("([{".includes(ch)) depth++;
+    else if (")]}".includes(ch)) {
+      if (depth === 0) return source.slice(from, i);
+      depth--;
+    } else if (ch === "," && depth === 0) return source.slice(from, i);
+  }
+  throw new Error("unterminated call");
+}
+/** Every wording an argument can produce: each string literal in it, with a template's ${…} as a placeholder. */
+function wordingsIn(argument: string): string[] {
+  const templates = [...argument.matchAll(/`([^`]*)`/g)].map((m) => m[1].replace(/\$\{[^}]*\}/g, " X"));
+  const plain = [...argument.replace(/`[^`]*`/g, "").matchAll(/"([^"]*)"/g)].map((m) => m[1]);
+  return [...templates, ...plain];
+}
+
+test("every wording runAssistantAction writes today — derived from every confirmed(…) call — is one the summary reading knows", () => {
   const source = read("src/app/actions/assistant.ts");
-  const fill = (template: string) => template.replace(/\$\{[^}]*\}/g, " X");
-  const wordings = [
-    ...[...source.matchAll(/confirmed(?:On)?\(\s*(?:"([^"]+)"|`([^`]+)`)/g)].map((m) => fill(m[1] ?? m[2])),
-    // Not the two helpers' own `${what}`: their wordings are the confirmed(…) calls above.
-    ...[...source.matchAll(/summary: [`"]Confirmed the assistant's proposal: ([^`"]+)[`"]/g)].filter((m) => !m[1].startsWith("${")).map((m) => fill(m[1])),
-  ];
-  assert.ok(wordings.length >= 20, `found ${wordings.length}`);
-  for (const what of wordings) assert.notEqual(kindFromSummary(`Confirmed the assistant's proposal: ${what}`), null, what);
+  const calls = [...source.matchAll(/\bconfirmed(?:On)?\(/g)].map((m) => firstArgument(source, m.index! + m[0].length));
+  assert.ok(calls.length >= 15, `found ${calls.length} calls`);
+  assert.ok(calls.some((a) => a.includes("park the deal in Nurture")) && calls.some((a) => a.includes("move the delivery") && a.includes("book the delivery")));
+  for (const argument of calls) {
+    const wordings = wordingsIn(argument);
+    // A wording built from a variable alone could never be read back from an older entry — say so here, not later.
+    assert.ok(wordings.length > 0, `a confirmed(…) call with no literal wording: ${argument}`);
+    for (const what of wordings) assert.notEqual(kindFromSummary(`Confirmed the assistant's proposal: ${what}`), null, what);
+  }
+  // The direct entries; not the two helpers' own `${what}` (their wordings are the calls above).
+  const direct = [...source.matchAll(/summary: [`"]Confirmed the assistant's proposal: ([^`"]+)[`"]/g)].filter((m) => !m[1].startsWith("${"));
+  assert.ok(direct.length >= 10, `found ${direct.length}`);
+  for (const m of direct) {
+    const what = m[1].replace(/\$\{[^}]*\}/g, " X");
+    assert.notEqual(kindFromSummary(`Confirmed the assistant's proposal: ${what}`), null, what);
+  }
 });
 
 test("a Confirm's kind: the stamped one first, else the summary; a Send, a schedule and a watch by their event", () => {
@@ -105,18 +141,31 @@ test("a Confirm's kind: the stamped one first, else the summary; a Send, a sched
   assert.equal(confirmedKind(event("assistant.watch_created", null, "Set up an assistant watch (quote opened)")), "watch");
 });
 
-test("what is kept of an offered card: its kind and the deal or customer by id — never a name or its text", () => {
+test("what is kept of an offered card: its kind and every record it is on, by id — never a name or its text", () => {
   const cards = [
     { id: "a0-l1", kind: "note", leadId: "l1", leadLabel: "Clive Jammine", title: "Add a note", text: "Wants black" },
     { id: "a1-c1", kind: "customer_note", contactId: "c1", leadId: null, leadLabel: "Anna", title: "Note on Anna", text: "x" },
     { id: "a2-own", kind: "follow_up", leadId: null, contactId: null, leadLabel: "Your calendar", title: "Call back", when: "2026-11-03T09:00", activity: "call" },
     { id: "a3-schedule", kind: "schedule", title: "Every Monday", question: "How are my deals?", cadence: "weekly", timeOfDay: "07:30" },
+    // The records that live off the card's top level, or are not a deal or customer.
+    { id: "a4-q", kind: "quote_pdf", leadId: null, leadLabel: "Anna", title: "PDF", quoteId: "q1", quoteNumber: 1 },
+    { id: "a5-f", kind: "attach_file", leadId: null, leadLabel: "Rover", title: "File", uploadId: "u", fileName: "x.pdf", target: { vehicleId: "v1" }, label: null, detail: "", confirmKey: "k" },
+    { id: "a6-w", kind: "watch", title: "Tell me", watch: { kind: "quote_opened", quoteId: "q2" } },
+    { id: "a7-l", kind: "create_lead", leadId: null, leadLabel: "Ben", title: "Lead", lead: { contactId: "c2", name: "Ben" }, detail: "", confirmKey: "k" },
+    { id: "a8-d", kind: "schedule_delivery", leadId: "l3", leadLabel: "Cara", title: "Deliver", quoteId: "q3", quoteNumber: 3, date: "2026-11-10", from: null, detail: "" },
+    { id: "a9-p", kind: "plan", leadId: null, leadLabel: "2 steps", title: "Plan", plan: { taskId: "t", steps: [] } },
   ] as unknown as ActionCard[];
   assert.deepEqual(proposedCards(cards), [
     { kind: "note", leadId: "l1" },
     { kind: "customer_note", contactId: "c1" },
     { kind: "follow_up" },
     { kind: "schedule" },
+    { kind: "quote_pdf", quoteId: "q1" },
+    { kind: "attach_file", vehicleId: "v1" },
+    { kind: "watch", quoteId: "q2" },
+    { kind: "create_lead", contactId: "c2" },
+    { kind: "schedule_delivery", leadId: "l3", quoteId: "q3" },
+    { kind: "plan" },
   ]);
   assert.deepEqual(readProposed([{ kind: "note", leadId: "l1" }, null, 3, { leadId: "x" }, "note"]), [{ kind: "note", leadId: "l1" }]);
   assert.deepEqual(readProposed(null), []);
@@ -222,35 +271,63 @@ test("the window: exactly 3 days still counts, a moment more does not; the same 
   assert.deepEqual(row(recent, "quotes").after, { happened: 0, judged: 0, pending: 1 });
 });
 
-test("an owner who may open only some deals and customers is counted only those — and cards on no record", () => {
+test("an owner who may open only some records is counted only cards whose EVERY record they may open — fail closed", () => {
+  const restricted: Visible = {
+    leadId: new Set(["mine"]), contactId: new Set(["my-customer"]), quoteId: new Set(["my-quote"]), vehicleId: new Set(), jobCardId: new Set(),
+  };
   const result = summarizeOutcomes({
     now: NOW,
     staffIds: new Set(["u1", "u2"]),
-    visible: { leads: new Set(["mine"]), contacts: new Set(["my-customer"]) },
+    visible: restricted,
     proposals: [
       { kind: "note", leadId: "mine", userId: "u1" },
       { kind: "note", leadId: "theirs", userId: "u2" },
       { kind: "customer_note", contactId: "my-customer", userId: "u1" },
       { kind: "customer_note", contactId: "their-customer", userId: "u2" },
-      // On a deal they may open, with a customer they may not: the deal decides.
+      // On a deal they may open, with a customer they may not: not counted — every record must be theirs to open.
       { kind: "follow_up", leadId: "mine", contactId: "their-customer", userId: "u1" },
+      { kind: "follow_up", userId: "u1" }, // on nobody: their own calendar
       { kind: "block_time", userId: "u2" },
+      { kind: "quote_pdf", quoteId: "their-quote", userId: "u1" }, // a customer-only quote they can't open
+      { kind: "quote_pdf", quoteId: "my-quote", userId: "u1" },
+      { kind: "attach_file", vehicleId: "v1", userId: "u2" },
+      { kind: "record_payment", userId: "u2" }, // a record-linked kind with no record to check: never counted for them
+      { kind: "plan", userId: "u1" },
     ],
     confirmations: [
       confirm("note", { leadId: "mine", contactId: "my-customer" }),
       confirm("note", { leadId: "theirs", contactId: "their-customer" }, "u2"),
       confirm("customer_note", { contactId: "their-customer" }, "u2"),
       confirm("block_time", {}, "u2"),
+      confirm("quote_pdf", {}), // a quote on no deal or customer: no record to check
+      confirm("record_payment", {}, "u2"),
+      confirm(null, {}, "u2"), // an older entry nobody can read
     ],
     happened: { ...nothing, reply: [{ at: at(1), leadId: "theirs", contactId: "their-customer" }] },
   });
   assert.deepEqual(result.families.map((f) => [f.key, f.suggested, f.confirmed]).filter(([, s, c]) => s || c), [
     ["follow_ups", 1, 0],
     ["notes", 2, 1],
+    ["quotes", 1, 0],
     ["other", 1, 1],
   ]);
   assert.deepEqual(row(result, "notes").after, { happened: 0, judged: 1, pending: 0 }, "the reply on a deal they can't open is not counted");
-  assert.deepEqual(result.people.map((p) => [p.userId, p.suggested, p.confirmed]), [["u1", 3, 1], ["u2", 1, 1]]);
+  assert.deepEqual(result.people.map((p) => [p.userId, p.suggested, p.confirmed]), [["u1", 4, 1], ["u2", 1, 1]]);
+});
+
+test("who may be counted: everything for someone who sees everything; for anyone else, only the allow-listed kinds without a record", () => {
+  assert.equal(mayCount({ kind: "plan" }, null), true);
+  assert.equal(mayCount({ kind: null }, null), true);
+  const sees = (slot: Partial<Visible & object>): Visible => ({ leadId: null, contactId: null, quoteId: null, vehicleId: null, jobCardId: null, ...slot });
+  const noQuotes = sees({ quoteId: new Set() });
+  assert.equal(mayCount({ kind: "quote_pdf", quoteId: "q" }, noQuotes), false);
+  assert.equal(mayCount({ kind: "note", leadId: "l" }, noQuotes), true, "a slot they see all of passes");
+  for (const kind of ["block_time", "follow_up", "meeting", "schedule", "create_customer", "create_lead"]) assert.equal(mayCount({ kind }, noQuotes), true, kind);
+  for (const kind of ["quote_pdf", "quote_change", "quote_add", "record_payment", "schedule_delivery", "attach_file", "job_card", "watch", "plan", "note"]) {
+    assert.equal(mayCount({ kind }, noQuotes), false, kind);
+  }
+  assert.equal(mayCount({ kind: null }, noQuotes), false);
+  assert.deepEqual([...RECORDLESS_KINDS].sort(), ["block_time", "create_customer", "create_lead", "follow_up", "meeting", "schedule"]);
 });
 
 test("the numbers as the page writes them", () => {
