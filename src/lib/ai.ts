@@ -76,6 +76,57 @@ export async function aiCheckDraft(input: {
 }
 
 /**
+ * A customer's voice note in the inbox (round 2, item 6): one line on what they said, and a reply staff can edit
+ * and send themselves. Run only when someone presses the button — nothing is sent, nothing is saved. The transcript
+ * and recent messages go to the AI with phone numbers and email addresses taken out; nothing is logged but the status.
+ */
+export async function aiVoiceNoteReply(input: {
+  transcript: string;
+  history: { from: "customer" | "us"; text: string }[];
+}): Promise<{ summary: string; reply: string } | { error: string }> {
+  const apiKey = await getSetting("ANTHROPIC_API_KEY");
+  if (!apiKey) return { error: "AI Assist is not configured (Settings → Integrations)." };
+  const company = (await getCompanyProfile().catch(() => null))?.name?.trim() || "a South African business";
+  const redact = (value: string) => value
+    .replace(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi, "[email]")
+    .replace(/(?:\+?\d[\d\s().-]{7,}\d)/g, "[phone]")
+    .slice(0, 2_000);
+  try {
+    const res = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      signal: AbortSignal.timeout(20000),
+      headers: { "Content-Type": "application/json", "x-api-key": apiKey, "anthropic-version": "2023-06-01" },
+      body: JSON.stringify({
+        model: "claude-haiku-4-5",
+        max_tokens: 500,
+        system:
+          `You help staff at ${company} answer a customer's WhatsApp voice note. Respond with STRICT JSON: ` +
+          '{"summary": "<one short line: what the customer said or wants>", "reply": "<a short, friendly WhatsApp reply in the customer\'s language>"}. ' +
+          "Never invent facts, prices, stock, dates or commitments: where an answer needs one, say the team will confirm. No greeting line on its own, no sign-off.",
+        messages: [{
+          role: "user",
+          content: `Recent messages (oldest first):\n${input.history.map((m) => `${m.from === "us" ? "Us" : "Customer"}: ${redact(m.text)}`).join("\n") || "(none)"}\n\nThe voice note, transcribed:\n"""\n${redact(input.transcript)}\n"""`,
+        }],
+      }),
+    });
+    if (!res.ok) {
+      await logError("ai-voice-note", `Anthropic API ${res.status}`);
+      return { error: `AI could not read it (${res.status}).` };
+    }
+    const json = await res.json();
+    void recordAiUsage(json.usage);
+    const content: string = json.content?.[0]?.text ?? "{}";
+    const parsed = JSON.parse(content.match(/\{[\s\S]*\}/)?.[0] ?? "{}");
+    const summary = String(parsed.summary ?? "").trim().slice(0, 300);
+    const reply = String(parsed.reply ?? "").trim().slice(0, 2_000);
+    return summary && reply ? { summary, reply } : { error: "AI could not read it — try again." };
+  } catch (err) {
+    await logError("ai-voice-note", err instanceof Error ? err.name : "unknown");
+    return { error: "AI could not read it — logged in the System Log." };
+  }
+}
+
+/**
  * HubSpot-style enrichment: given a name + email, Claude searches the web and
  * returns a short synopsis of the company (from the domain) and, where
  * findable, the person. Uses the bigger model + web search — pennies per

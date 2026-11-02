@@ -573,10 +573,16 @@ export function maskWaId(waId: string | null | undefined): string {
  * "the business WhatsApp number" and the link opens WhatsApp without one.
  */
 export function businessNumberFromLabel(label: string | null | undefined): { display: string; digits: string } | null {
+  // The INTERNATIONAL number ("+…") at the end of the label or of a "·" part. An endpoint registered before
+  // whatsappLabelFrom has no "·": Denago's reads "Denago EV Cape Town +27 63 336 3533", and requiring the separator
+  // hid the QR codes, the number on the flow's contact card and the link on DAX's phone page (Sean, 2026-11-02).
+  // It starts at the "+", so a branch, shop or year in the name never joins it (review of #961: "Branch 2 021 …"
+  // would have sent QR scans to 20211234567). Meta's display_phone_number is always "+…", and wa.me needs the
+  // country code anyway — a number without one is not used.
   for (const part of String(label ?? "").split("·").reverse()) {
-    const display = part.trim();
-    const digits = display.replace(/\D/g, "");
-    if (/^\+?[\d\s()-]+$/.test(display) && digits.length >= 8 && digits.length <= 15) return { display, digits };
+    const display = /(\+\d[\d\s()-]*\d)\s*$/.exec(part.trim())?.[1].trim();
+    const digits = display?.replace(/\D/g, "") ?? "";
+    if (display && digits.length >= 8 && digits.length <= 15) return { display, digits };
   }
   return null;
 }
