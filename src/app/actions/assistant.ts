@@ -27,9 +27,9 @@ const QUOTE_PDF_SEND_WAIT_MS = 4_000;
 import { prisma } from "@/lib/db";
 import { cancelActivity, rescheduleActivity, scheduleActivity, scheduleFollowUp } from "@/app/actions/activities";
 import { addCommunication } from "@/app/actions/communications";
-import { assignLead, convertLeadToContact, createLead, markLost, moveLead, reopenLead } from "@/app/actions/leads";
+import { assignLead, convertLeadToContact, createLead, markLost, moveLead, reactivateNurturedLead, reopenLead } from "@/app/actions/leads";
 import { saveLeadNurture } from "@/app/actions/nurture";
-import { parseNurtureForm } from "@/lib/leadNurture";
+import { parseNurtureForm, reviewDate } from "@/lib/leadNurture";
 import { resolveAssignableUser } from "@/lib/tenantActor";
 import { johannesburgDateKey } from "@/lib/activityDay";
 import { createQuoteFromLead, saveQuoteDraft } from "@/app/actions/quotes";
@@ -536,6 +536,46 @@ export async function runAssistantAction(
         if (result.error) return { ok: false, error: result.error };
         await confirmed("mark the deal lost", card.leadId);
         return { ok: true, success: "Marked lost" };
+      }
+      case "reactivate": {
+        // THE NURTURE PAGE'S OWN REACTIVATE (reactivateNurturedLead): leads.change_stage, activities.manage, an open
+        // stage in an active pipeline, the stage rules (no silent override), the deal's salesperson — and the move, the
+        // review task closed, the next action and its audit entry in ONE transaction. Nobody is contacted. Access and
+        // permissions are asked here first as yes/no: its guard REDIRECTS, which a Confirm on WhatsApp can't follow.
+        if (!(await canAccessLead(user, card.leadId))) return untouched("You can't open that deal any more.");
+        if (!(await hasPermission(user, "leads.change_stage")) || !(await hasPermission(user, "activities.manage"))) {
+          return untouched("Your role can't bring deals back from Nurture.");
+        }
+        const now = await prisma.lead.findFirst({
+          where: { id: card.leadId, deletedAt: null },
+          select: { status: true, stageId: true, nurtureReviewAt: true, assignedToId: true },
+        });
+        if (!now) return untouched("That deal is no longer there.");
+        const next = String(card.next ?? "").trim();
+        const backIn = `${card.leadLabel} is back in the pipeline — next: ${next} (${card.on})`;
+        // Done already — a second Confirm: open in this stage, with this next action on this day, set by this person.
+        if (now.status === "open" && now.stageId === card.stageId) {
+          const set = await prisma.activity.findFirst({
+            where: { leadId: card.leadId, type: "todo", summary: next, createdById: user.id },
+            orderBy: { createdAt: "desc" },
+            select: { dueDate: true },
+          });
+          if (set && johannesburgDateKey(set.dueDate) === card.on) return { ok: true, success: backIn, href: `/leads/${card.leadId}` };
+        }
+        if (now.status !== "nurture") return untouched(`${card.leadLabel} is no longer in Nurture — nothing was changed. Ask again to see where it stands.`);
+        // What the card SHOWED must still be so: the stage it was parked in, its review day, its salesperson.
+        if (now.stageId !== card.fromStageId || (now.nurtureReviewAt?.toISOString() ?? null) !== (card.reviewAt ?? null) || now.assignedToId !== card.assignedToId) {
+          return untouched(STALE_CARD);
+        }
+        if (next.length < 3 || next.length > 300 || !reviewDate(String(card.on ?? ""))) return untouched("That next action's day has passed, or it isn't valid — ask again.");
+        const form = new FormData();
+        form.set("stageId", String(card.stageId ?? ""));
+        form.set("summary", next);
+        form.set("dueDate", String(card.on));
+        const result = await reactivateNurturedLead(card.leadId, form);
+        if (result?.error) return { ok: false, error: result.error };
+        await confirmed("bring the deal back from Nurture", card.leadId);
+        return { ok: true, success: backIn, href: `/leads/${card.leadId}` };
       }
       case "nurture": {
         // THE LEAD PAGE'S OWN DOORS: reopenLead for a lost deal (leads.reopen), then saveLeadNurture — leads.change_stage,

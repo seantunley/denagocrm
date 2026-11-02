@@ -15,7 +15,8 @@ import { isModuleEnabled } from "./modules/enabled";
 import { johannesburgDateKey } from "./activityDay";
 import { contactName } from "./format";
 import { listActingTenantStaff } from "./tenantActor";
-import { buildBrief, buildTeamRows, type BriefLead, type DaxBrief, type TeamRow } from "./daxBriefRules";
+import { nurtureReasonLabel } from "./leadNurture";
+import { buildBrief, buildTeamRows, type BriefLead, type DaxBrief, type NurtureReview, type TeamRow } from "./daxBriefRules";
 
 export {
   buildBrief,
@@ -139,6 +140,31 @@ async function openDeliveries(user: PermissionUser, quoteIds: string[] | null) {
 }
 
 /**
+ * Parked deals (Nurture) whose review day is today or has passed — the review that brings them back. Read through
+ * the leads list's own scope (getAccessibleLeadIds, as the Nurture page reads it), narrowed to theirs or nobody's.
+ */
+async function dueNurtureReviews(user: PermissionUser, dayEnd: Date): Promise<NurtureReview[]> {
+  const ids = await getAccessibleLeadIds(user);
+  if (ids !== null && ids.length === 0) return [];
+  const rows = await prisma.lead.findMany({
+    where: {
+      ...(ids === null ? {} : { id: { in: ids } }),
+      status: "nurture",
+      deletedAt: null,
+      nurtureReviewAt: { lt: dayEnd },
+      OR: [{ assignedToId: user.id }, { assignedToId: null }],
+    },
+    orderBy: { nurtureReviewAt: "asc" },
+    take: 25,
+    select: { id: true, name: true, assignedToId: true, nurtureReason: true, nurtureInterest: true, nurtureTrigger: true, nurtureReviewAt: true },
+  });
+  return rows.map((r) => ({
+    id: r.id, name: r.name, ownerId: r.assignedToId, why: nurtureReasonLabel(r.nurtureReason),
+    interest: r.nurtureInterest, trigger: r.nurtureTrigger, reviewAt: r.nurtureReviewAt!,
+  }));
+}
+
+/**
  * Who this person oversees: `null` = everyone (an owner), a set = the members of
  * the active teams they manage, `undefined` = nobody, so no team view at all.
  */
@@ -194,10 +220,11 @@ export const loadDaxBrief = cache(async (user: PermissionUser, now: Date = new D
     myAgenda(user, dayStart, dayEnd),
     getAccessibleQuoteIds(user),
   ]);
-  const [viewed, deliveries, team] = await Promise.all([
+  const [viewed, deliveries, team, nurtureReviews] = await Promise.all([
     viewedQuotes(user, quoteIds),
     openDeliveries(user, quoteIds),
     teamView(user, attention.leads),
+    dueNurtureReviews(user, dayEnd),
   ]);
 
   return buildBrief({
@@ -211,5 +238,6 @@ export const loadDaxBrief = cache(async (user: PermissionUser, now: Date = new D
     viewedQuotes: viewed,
     deliveries,
     team,
+    nurtureReviews,
   });
 });

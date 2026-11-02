@@ -500,7 +500,9 @@ test("A PINNED NOTE WHOSE PIN FAILS IS NOT WRITTEN TWICE: the note was saved, so
   // no key, an invalid amount or date, the proof no longer held — each before its one write.)
   // (2026-11-02, six of nurture's — the deal not theirs any more, gone, the form's own rules, its status changed since,
   // a role that can't, a salesperson no longer active — all before reopenLead, its first write.)
-  assert.equal((run.match(/return untouched\(/g) ?? []).length, 59);
+  // (2026-11-02, six of reactivate's — the deal not theirs any more, a role that can't, gone, no longer in Nurture,
+  // changed since, a next action invalid or past — all before reactivateNurturedLead, its one write.)
+  assert.equal((run.match(/return untouched\(/g) ?? []).length, 65);
   const buildCase = run.slice(run.indexOf('case "quote_build": {'), run.indexOf('case "quote_pdf": {'));
   assert.ok(buildCase.indexOf("The catalogue changed since DAX suggested this") < buildCase.indexOf("convertLeadToContact("), "every check before the customer record is made");
   const quotePdfCase = run.slice(run.indexOf('case "quote_pdf": {'), run.indexOf('case "quote_change": {'));

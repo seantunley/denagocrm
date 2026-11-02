@@ -131,7 +131,7 @@ export default function AssistantActionCard({
       {/* A new customer or deal, or changed details: every field Confirm will save. */}
       {(card.kind === "create_customer" || card.kind === "create_lead" || card.kind === "update_customer") && <p className="mt-1 whitespace-pre-line text-xs text-muted-foreground">{card.detail}</p>}
       {/* A file to file, or money to record (with its proof): all of it, before Confirm. */}
-      {(card.kind === "attach_file" || card.kind === "record_payment" || card.kind === "nurture") && <p className="mt-1 whitespace-pre-line text-xs text-muted-foreground">{card.detail}</p>}
+      {(card.kind === "attach_file" || card.kind === "record_payment" || card.kind === "nurture" || card.kind === "reactivate") && <p className="mt-1 whitespace-pre-line text-xs text-muted-foreground">{card.detail}</p>}
       {card.kind === "lost" && <p className="mt-2 text-xs text-muted-foreground">Reason: {card.reason}</p>}
       {draft && (
         <div className="mt-2 space-y-1.5">

@@ -68,6 +68,33 @@ export type DaxBrief = {
   items: BriefItem[];
   attentionValueCents: number;
   team?: TeamRow[];
+  /** Every parked deal of theirs whose review day has come, most overdue first — the item names one, DAX reads all. */
+  nurtureReviews?: NurtureReviewRow[];
+};
+
+/** A deal parked in Nurture (Lead.status "nurture") whose review day has come. The loader reads only those due by today. */
+export type NurtureReview = {
+  id: string;
+  name: string;
+  ownerId: string | null;
+  /** The reason, as the Nurture form labels it (nurtureReasonLabel). */
+  why: string;
+  interest: string | null;
+  trigger: string | null;
+  reviewAt: Date;
+};
+
+export type NurtureReviewRow = {
+  leadId: string;
+  name: string;
+  why: string;
+  interest: string | null;
+  trigger: string | null;
+  reviewOn: string;
+  /** 0 = due today. More = the review day passed and nobody acted: it stays listed, flagged overdue. */
+  daysPastReview: number;
+  overdue: boolean;
+  href: string;
 };
 
 /** The Attention Centre's lead, narrowed to what the brief reads. `AttentionLead` fits it. */
@@ -110,6 +137,8 @@ export type BriefInput = {
   /** Accepted, undelivered quotes. Empty when deliveries are off or not theirs to see. */
   deliveries: DeliveryQuote[];
   team?: TeamRow[];
+  /** Parked deals whose review day is today or has passed. */
+  nurtureReviews?: NurtureReview[];
 };
 
 /** Enough to read at a glance; the rest is one click away on /today. */
@@ -251,6 +280,21 @@ export function buildBrief(input: BriefInput): DaxBrief {
       valueCents: 0,
     }));
 
+  // Parked deals whose review day has come — the same "mine" — most overdue first. One whose day passed with nobody
+  // acting stays here, flagged, until it is reactivated, re-parked with a new date, or closed.
+  const reviews: NurtureReviewRow[] = (input.nurtureReviews ?? [])
+    .filter((r) => r.ownerId === userId || r.ownerId === null)
+    .map((r) => {
+      const daysPastReview = Math.max(0, calendarDaysAgo(r.reviewAt, now));
+      return {
+        leadId: r.id, name: r.name, why: r.why, interest: r.interest, trigger: r.trigger,
+        reviewOn: johannesburgDateKey(r.reviewAt), daysPastReview, overdue: daysPastReview > 0, href: `/leads/${r.id}`,
+      };
+    })
+    .sort((a, b) => b.daysPastReview - a.daysPastReview);
+  const overdueReviews = reviews.filter((r) => r.overdue).length;
+  const reviewRows: Row[] = reviews.map((r) => ({ leadId: r.leadId, name: r.name, detail: nurtureReviewLine(r), href: r.href, valueCents: 0 }));
+
   const todayStart = new Date(`${johannesburgDateKey(now)}T00:00:00+02:00`);
   const deliveryRows = (stage: string): Row[] =>
     input.deliveries
@@ -261,6 +305,8 @@ export function buildBrief(input: BriefInput): DaxBrief {
     group("waiting", "red", "🔴", waiting, (n) => plural(n, "customer waiting for a reply", "customers waiting for a reply"), "/inbox", false),
     agendaItem(input, now),
     group("overdue", "orange", "🟠", overdue, (n) => plural(n, "overdue follow-up", "overdue follow-ups"), "/leads/attention"),
+    group("nurture_review", "orange", "🌱", reviewRows,
+      (n) => `${plural(n, "Nurture review due", "Nurture reviews due")}${overdueReviews ? ` (${overdueReviews} overdue)` : ""}`, "/leads/nurture?due=1", false),
     group("hot", "green", "🔥", hot, (n) => (n === 1 ? "1 deal looks close" : `${n} deals look close`), "/today"),
     group("quote_expiring", "orange", "🟠", expiring, (n) => plural(n, "quote expiring", "quotes expiring"), "/leads/attention"),
     group("quote_viewed", "info", "👀", viewed, (n) => plural(n, "quote opened but not signed", "quotes opened but not signed"), "/quotes"),
@@ -294,7 +340,19 @@ export function buildBrief(input: BriefInput): DaxBrief {
     items: groups.slice(0, MAX_BRIEF_ITEMS),
     attentionValueCents: [...attentionLeads.values()].reduce((sum, v) => sum + v, 0),
     ...(input.team ? { team: input.team } : {}),
+    ...(reviews.length ? { nurtureReviews: reviews } : {}),
   };
+}
+
+/** "Buying later · wants Rover XL · “When his bonus comes in March” · review 3 days overdue" — one parked deal. */
+export function nurtureReviewLine(r: Pick<NurtureReviewRow, "why" | "interest" | "trigger" | "daysPastReview">): string {
+  const trigger = r.trigger?.trim().replace(/\s+/g, " ");
+  return [
+    r.why,
+    r.interest ? `wants ${r.interest}` : null,
+    trigger ? `“${trigger.length > 100 ? `${trigger.slice(0, 99)}…` : trigger}”` : null,
+    r.daysPastReview > 0 ? `review ${plural(r.daysPastReview, "day", "days")} overdue` : "review due today",
+  ].filter(Boolean).join(" · ");
 }
 
 /**
@@ -409,6 +467,23 @@ export function briefForAssistant(brief: DaxBrief) {
             overdue: r.overdue,
             stalledValueCents: r.stalledValueCents,
             pipelineValueCents: r.pipelineValueCents,
+          })),
+        }
+      : {}),
+    // Each parked deal whose review day has come — why, what they want, the trigger, how overdue — so DAX can name
+    // them all and offer the reactivate card (NURTURE_RULE). Free text from the Nurture form: redacted like the rest.
+    ...(brief.nurtureReviews?.length
+      ? {
+          nurtureReviews: brief.nurtureReviews.slice(0, 10).map((r) => ({
+            leadId: r.leadId,
+            deal: clean(r.name),
+            parkedBecause: clean(r.why),
+            ...(r.interest ? { wants: clean(r.interest) } : {}),
+            ...(r.trigger ? { followUpWhen: clean(r.trigger) } : {}),
+            reviewOn: r.reviewOn,
+            daysPastReview: r.daysPastReview,
+            ...(r.overdue ? { flag: "overdue review" } : {}),
+            link: r.href,
           })),
         }
       : {}),

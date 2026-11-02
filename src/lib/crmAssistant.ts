@@ -3171,6 +3171,7 @@ export async function resolveActions(
         name: true, title: true, stageId: true, assignedToId: true, stage: { select: { pipelineId: true } },
         email: true, phone: true, contactId: true, contact: { select: { email: true, phone: true } },
         status: true, lostReason: true,
+        nurtureReason: true, nurtureInterest: true, nurtureTrigger: true, nurtureReviewAt: true,
       },
     });
     if (!lead) continue;
@@ -3214,6 +3215,43 @@ export async function resolveActions(
       });
     } else if (p.type === "lost") {
       cards.push({ id, kind: "lost", leadId: p.leadId, leadLabel, title: `Mark ${lead.name}'s deal as lost`, reason: p.reason });
+    } else if (p.type === "reactivate") {
+      // The Nurture page's own Reactivate at Confirm (reactivateNurturedLead): leads.change_stage + activities.manage,
+      // an open stage, the deal's salesperson. Checked here too, so a card is only offered when it can run; the stage
+      // rules are its own, at Confirm (no silent override).
+      if (lead.status !== "nurture") {
+        problems.push(`${lead.name}'s deal isn't parked in Nurture (it's ${lead.status})${lead.status === "lost" ? " — a lost deal is reopened, not reactivated" : ""}.`);
+        continue;
+      }
+      if (!(await hasPermission(user, "leads.change_stage")) || !(await hasPermission(user, "activities.manage"))) { problems.push("Your role can't bring deals back from Nurture."); continue; }
+      if (!reviewDate(p.on)) { problems.push(`${p.on} isn't today or later — which day is the next action for ${lead.name}?`); continue; }
+      const owner = staff.find((s) => s.id === lead.assignedToId);
+      if (!owner) { problems.push(`${lead.name}'s deal has no active salesperson — set one in its Nurture details first.`); continue; }
+      const wantedStage = p.stage.trim().toLowerCase();
+      const stage = (await prisma.pipelineStage.findMany({
+        where: { pipelineId: lead.stage.pipelineId, isClosed: false },
+        select: { id: true, name: true },
+      })).find((s) => s.name.toLowerCase() === wantedStage);
+      if (!stage) {
+        problems.push(/^nurtur/.test(wantedStage)
+          ? `Nurture isn't a stage — which stage should ${lead.name}'s deal go back to?`
+          : `${lead.name}'s pipeline has no open stage called "${p.stage}".`);
+        continue;
+      }
+      const day = new Intl.DateTimeFormat("en-ZA", { weekday: "long", day: "numeric", month: "long", timeZone: "Africa/Johannesburg" }).format(new Date(`${p.on}T09:00:00+02:00`));
+      cards.push({
+        id, kind: "reactivate", leadId: p.leadId, leadLabel,
+        title: `Reactivate ${lead.name}'s deal — back to ${stage.name}`,
+        stageId: stage.id, next: p.next, on: p.on,
+        fromStageId: lead.stageId, reviewAt: lead.nurtureReviewAt?.toISOString() ?? null, assignedToId: owner.id,
+        detail: [
+          `Back to: ${stage.name}`,
+          `Next action: ${p.next} — ${day}, a to-do for ${owner.name}`,
+          `Parked because: ${nurtureReasonLabel(lead.nurtureReason)}${lead.nurtureInterest ? ` · wanted ${lead.nurtureInterest}` : ""}${lead.nurtureTrigger ? ` · “${lead.nurtureTrigger}”` : ""}`,
+          "Its Nurture review task is closed. The stage's rules still apply. Nobody is contacted.",
+        ].join("\n"),
+        ...(p.reason ? { reason: p.reason } : {}),
+      });
     } else if (p.type === "nurture") {
       // The lead page's own doors at Confirm — Reopen (a lost deal: leads.reopen) and Move to Nurture
       // (leads.change_stage + activities.manage; leads.assign for another salesperson). Checked here too, so a card

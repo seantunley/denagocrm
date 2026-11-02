@@ -167,6 +167,9 @@ export const WHATSAPP_CONFIRMABLE: ReadonlySet<string> = new Set([
   // nurture (Sean, 2026-11-02, asked on WhatsApp: "it's not lost, should be in Nurture"): parks a deal for later —
   // reopening a lost one first — every detail shown, nobody contacted, through the lead page's own actions.
   "nurture",
+  // reactivate (2026-11-02, round 2 item 1): brings a parked deal back — the stage and next action shown in full,
+  // nobody contacted, through the Nurture page's own Reactivate.
+  "reactivate",
 ]);
 
 /**
