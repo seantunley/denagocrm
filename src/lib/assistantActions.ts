@@ -317,6 +317,10 @@ export const proposedAction = z.discriminatedUnion("type", [
   // Proactive DAX, part 3: a check DAX sets ITSELF — no card, no Confirm (it only ever tells the same person);
   // taken out before the cards are made and saved by proactiveFollowUp.setCheckBacks.
   z.object({ type: z.literal("check_back"), question: text.max(300), when: z.string().trim().regex(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/), reason }).strict(),
+  // TAKE BACK a task still waiting for Confirm on WhatsApp, by its number in the list DAX was given (Sean, 2026-11-02,
+  // voice-first: "drop the follow-up", "make the delivery Wednesday" = drop it and propose the corrected one). Never a
+  // card and never a CRM change — the waiting offer is withdrawn (askCrm hands the numbers back to the WhatsApp side).
+  z.object({ type: z.literal("drop_waiting"), task: z.number().int().min(1).max(12) }).strict(),
 ]);
 export type ProposedAction = z.infer<typeof proposedAction>;
 
