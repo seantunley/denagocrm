@@ -67,6 +67,7 @@ export const assistantAndMoreArticles: HelpArticle[] = [
         "Marking a deal lost, with the reason in your words.",
         "Starting a draft quote on a lead for you to fill in.",
         "A WhatsApp or email draft to a customer.",
+        "Recording a payment from a proof of payment you send. If you don't say which quote it is for, the assistant matches it by the amount, the bank reference and the payer's name. One clear match gives the card straight away, with the reason. Several give you a choice, and none means it asks.",
         "A scheduled question or a watch — see \"Scheduled questions and watches\".",
       ] },
       { type: "h", text: "Confirming a task" },

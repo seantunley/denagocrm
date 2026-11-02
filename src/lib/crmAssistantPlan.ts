@@ -161,6 +161,15 @@ export const statsArgs = z
 export const leadBriefArgs = z.object({ lead: z.string().trim().min(1).max(120) }).strict();
 /** WHY something happened on one record: its history with the cause of each event (assistantWhy). */
 export const whyArgs = z.object({ record: z.string().trim().min(1).max(120) }).strict();
+/** A proof of payment with no quote named: which invoiced quote with money owing it is for (assistantPaymentMatch). */
+export const matchPaymentArgs = z
+  .object({
+    amount: rands.positive(),
+    reference: z.string().trim().min(1).max(120).optional(),
+    paidOn: isoDay.optional(),
+    payer: z.string().trim().min(1).max(120).optional(),
+  })
+  .strict();
 /** Why ONE deal is stuck: ranked, dated, linked reasons (assistantStuck). */
 export const stuckArgs = z.object({ lead: z.string().trim().min(1).max(120) }).strict();
 /** What changed on the asker's own deals since their last question (assistantCatchUp); `since` replaces that. */
@@ -191,6 +200,7 @@ export const assistantStep = z.discriminatedUnion("tool", [
   z.object({ tool: z.literal("find_activities"), args: activityArgs }),
   z.object({ tool: z.literal("lead_brief"), args: leadBriefArgs }),
   z.object({ tool: z.literal("why"), args: whyArgs }),
+  z.object({ tool: z.literal("match_payment"), args: matchPaymentArgs }),
   z.object({ tool: z.literal("stuck"), args: stuckArgs }),
   z.object({ tool: z.literal("catch_up"), args: catchUpArgs.default({}) }),
   z.object({ tool: z.literal("knowledge"), args: knowledgeArgs }),
@@ -245,6 +255,7 @@ export function planInstructions(ctx: PlanContext): string {
     '- schedule: {"person":"<person>","from":"YYYY-MM-DD","days":<1-14>} — who is busy when (meetings, blocked time, test drives with their demo vehicle). Check it BEFORE suggesting a meeting or test-drive time; never suggest a slot that clashes.',
     '- vehicles: {"kind":"demo|stock|customer|workshop" (required),"search":"<model, reg, stock no. or customer>","status":"<status>","stuckDays":<days, workshop only>,"limit":<1-25>} — demo vehicles and their upcoming bookings, stock units (available/reserved/sold), or a customer\'s own vehicles. kind customer also gives each vehicle\'s workshop picture — service due or overdue, the last services, battery health, warranty, open job cards and warranty claims — so use it for "service history / battery / warranty / job card of X\'s cart"; search every distinctive word at once, it matches model, reg, owner, company, suburb or estate/fleet ("Nomad XL Constantia"). kind workshop is the whole workshop: services overdue and due soon, job cards with no movement for stuckDays (default 5), warranties ending within 30 days, batteries to replace — for "what\'s overdue in the workshop", "which job cards are stuck".',
     '- deliveries: {"stage":"to_invoice|awaiting_deposit|to_schedule|scheduled|overdue|delivered_recently","limit":<1-25>} — signed deals on their way to the customer: invoicing, deposit, delivery date. With NO stage it returns every stage at once, each deal labelled — use that for "what\'s waiting / in progress"; ask for one stage only when that is all the question wants.',
+    '- match_payment: {"amount":<rands> (required),"reference":"<bank reference on the slip>","paidOn":"YYYY-MM-DD","payer":"<payer name on the slip>"} — a PROOF OF PAYMENT with no quote named: the invoiced quotes with money owing it may be for, ranked, each with why (the amount is the deposit due or the balance owing, the reference names it, the payer is the customer), and a verdict: one clear match, several, or none. Read the amount, reference, date and payer from the slip.',
     '- documents: {"customer":"<customer name, lead title or id>" (required)} — what is on file for one customer (titles, tags, dates and each documentId — not contents; read_document reads one).',
     '- search_messages: {"customer":"<customer name, lead title or id>" (required),"words":"<words to find — add the other ways it may have been written: delivery deliver transport>","channel":"email|whatsapp|call|meeting|note|…","direction":"inbound|outbound","from":"YYYY-MM-DD","to":"YYYY-MM-DD","limit":<1-20>} — EVERY message to and from one customer (all their deals this person can open), not only the latest few lead_brief shows: each match with its date, channel, who, an excerpt and its id. Words match by stem and close spelling, not by meaning. Use it for "what did we promise / tell them about X", "did they ever say Y", "when did they first ask about Z". To check an old message against today\'s record, run it beside find_quotes or lead_brief in the same round.',
     '- open_message: {"id":"<id from search_messages>" (required),"thread":true} — one message in full (up to ~8 000 characters), with whether an email bounced or an open was detected, or whether WhatsApp/Messenger reported it reached their phone; "thread":true adds the rest of that conversation. Use it when an excerpt is not enough to be sure what was said.',
@@ -366,6 +377,7 @@ const LOOKUP_STATUS: Record<string, string> = {
   schedule: "Checking the calendar",
   vehicles: "Checking vehicles",
   deliveries: "Checking deliveries",
+  match_payment: "Matching the payment to an invoice",
   documents: "Checking documents",
   search_messages: "Searching their messages",
   open_message: "Reading a message",
