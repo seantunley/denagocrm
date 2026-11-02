@@ -24,6 +24,7 @@ import { canAccessQuote, hasPermission } from "./permissions";
 import { logError } from "./errorLog";
 import { rateLimitKey, registerRateLimitAttempt } from "./rateLimit";
 import { readUserSecurityStateStrict } from "./userSecurity";
+import { isQuietHour } from "./proactiveRules";
 import {
   ASSISTANT_WHATSAPP_CONTENT_TEMPLATE_KEY,
   ASSISTANT_WHATSAPP_KEY,
@@ -39,6 +40,7 @@ import {
   nudgeFailureMayPass,
   PROACTIVE_SOURCES,
   QUOTE_PDF_SOURCE,
+  sendableSources,
   QUESTION_CHARS,
   UPDATE_BATCH,
   UPDATE_WAIT_MS,
@@ -565,7 +567,9 @@ export async function sendUpdatesToLinkedPhone(
     // "Send my updates to this phone" switched off: briefings, alerts and handoffs
     // stay in the CRM. A quote PDF is not one of those — the person asked for it —
     // so it alone still goes.
-    const sources: string[] = link.updatesOnWhatsApp ? [...PROACTIVE_SOURCES] : [QUOTE_PDF_SOURCE];
+    // QUIET HOURS, unless they are writing to DAX right now: only what they timed or asked for (sendableSources).
+    const night = !opts.windowOpen && isQuietHour(new Date());
+    const sources = sendableSources(link.updatesOnWhatsApp ? PROACTIVE_SOURCES : [QUOTE_PDF_SOURCE], night);
     // WAITING: not finished, and not being sent by somebody else right now. A
     // claim that has outlived UPDATE_CLAIM_MS belongs to a run that stopped.
     // textOnly: what a template can carry — not a quote's PDF.
@@ -821,6 +825,9 @@ async function nudgeWithTemplate(
   // with no time left for one it is not started — nothing is claimed, and the
   // next tick sends it.
   if (outOfTime()) return "waiting";
+  // Never at night: an unasked-for "you have an update" is what woke Sean at 00:30 and 04:30 (20-hour spacing
+  // walked it four hours earlier each day). It waits for the first tick after 08:00.
+  if (isQuietHour(new Date())) return "waiting";
   const template = parseUpdateTemplate(await getSetting(ASSISTANT_WHATSAPP_TEMPLATE_KEY).catch(() => null));
   if (!template || !link.waId) return "waiting";
   if (link.nudgedAt && Date.now() - link.nudgedAt.getTime() < NUDGE_EVERY_MS) return "waiting";
