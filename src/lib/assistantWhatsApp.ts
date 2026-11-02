@@ -825,9 +825,10 @@ async function nudgeWithTemplate(
   // with no time left for one it is not started — nothing is claimed, and the
   // next tick sends it.
   if (outOfTime()) return "waiting";
-  // Never at night: an unasked-for "you have an update" is what woke Sean at 00:30 and 04:30 (20-hour spacing
-  // walked it four hours earlier each day). It waits for the first tick after 08:00.
-  if (isQuietHour(new Date())) return "waiting";
+  // AT NIGHT ONLY FOR WHAT THEY TIMED. An unasked-for "you have an update" is what woke Sean at 00:30 and 04:30
+  // (20-hour spacing walked it four hours earlier each day) — but the caller already leaves everything except
+  // timed or asked-for updates out at night (sendableSources), so this is only reached at night for one of those:
+  // a 07:30 morning brief, outside WhatsApp's 24 hours, still gets its nudge at 07:30 (review of #929, 2026-11-02).
   const template = parseUpdateTemplate(await getSetting(ASSISTANT_WHATSAPP_TEMPLATE_KEY).catch(() => null));
   if (!template || !link.waId) return "waiting";
   if (link.nudgedAt && Date.now() - link.nudgedAt.getTime() < NUDGE_EVERY_MS) return "waiting";

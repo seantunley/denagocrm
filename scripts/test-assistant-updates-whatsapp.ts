@@ -116,10 +116,15 @@ async function main() {
     check("a briefing the person timed still goes", (await run()) === "sent" && (await sentAt(TURN.brief)) !== null);
     check("…a watch alert waits for the morning", (await sentAt(TURN.alert)) === null);
     check("…unless they have just written to DAX", (await run({ windowOpen: true })) === "sent" && (await sentAt(TURN.alert)) !== null);
-    // Outside the 24 hours with a briefing waiting: by day this sends the "you have an update" template.
-    await basePrisma.assistantTurn.update({ where: { id: TURN.brief }, data: { whatsappSentAt: null, whatsappClaimedAt: null, whatsappPartsSent: 0 } });
+    // Outside the 24 hours. Only an ALERT waiting: by day it would send the "you have an update" template.
+    await basePrisma.assistantTurn.update({ where: { id: TURN.alert }, data: { whatsappSentAt: null, whatsappClaimedAt: null, whatsappPartsSent: 0 } });
     await basePrisma.assistantPhoneLink.update({ where: { id: LINK }, data: { lastInboundAt: new Date(Date.now() - 30 * HOUR), nudgedAt: null, nudgeFailedAt: null } });
-    check("no 'you have an update' nudge at night — it waits, and nothing is claimed", (await run()) === "waiting" && (await link()).nudgedAt === null);
+    check("an alert at night sends no 'you have an update' nudge — nothing is claimed", (await run()) === "nothing" && (await link()).nudgedAt === null);
+    // A briefing they TIMED (07:30) waiting too: its nudge goes at its time (review of #929). No WhatsApp connection
+    // here, so the template is refused — after it was claimed, exactly as by day.
+    await basePrisma.assistantTurn.update({ where: { id: TURN.brief }, data: { whatsappSentAt: null, whatsappClaimedAt: null, whatsappPartsSent: 0 } });
+    check("a timed briefing at night still gets its nudge (claimed, then sent)", (await run()) === "failed" && (await link()).nudgedAt !== null);
+    await basePrisma.assistantTurn.update({ where: { id: TURN.alert }, data: { whatsappSentAt: new Date() } });
     __setQuietHoursForTests(false);
 
     console.log("\nWho it is for");

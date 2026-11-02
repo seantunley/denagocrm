@@ -1508,18 +1508,29 @@ test("wired where it must be: after a saved briefing, after a saved alert, on th
 
 /* ── quiet hours: nothing unasked-for at night (Sean, 2026-11-02: woken at 00:30 and 04:30) ── */
 
-test("at night the 'you have an update' template is never sent — the first tick after 08:00 sends it", async () => {
+test("at night an alert never sends the 'you have an update' template — the first tick after 08:00 does", async () => {
   state.template = "assistant_update_ready|en";
   const link = verified("u1", STAFF);
   link.lastInboundAt = new Date(Date.now() - 30 * HOUR);
-  waitingTurn("brief");
+  waitingTurn("alert", 0, "watch");
   state.night = true;
-  assert.equal(await sendUpdatesToLinkedPhone("t1", "u1"), "waiting");
+  assert.equal(await sendUpdatesToLinkedPhone("t1", "u1"), "nothing", "at night an alert isn't even looked at");
   assert.equal(state.templatesSent.length, 0);
   assert.equal(link.nudgedAt, null, "nothing claimed, so the morning is free to send it");
   state.night = false;
   assert.equal(await sendUpdatesToLinkedPhone("t1", "u1"), "nudged");
   assert.equal(state.templatesSent.length, 1);
+});
+
+test("a brief they TIMED for 07:30 still gets its nudge at 07:30, outside the 24 hours (review of #929)", async () => {
+  state.template = "assistant_update_ready|en";
+  const link = verified("u1", STAFF);
+  link.lastInboundAt = new Date(Date.now() - 30 * HOUR);
+  waitingTurn("brief", 0, "brief");
+  state.night = true;
+  assert.equal(await sendUpdatesToLinkedPhone("t1", "u1"), "nudged");
+  assert.equal(state.templatesSent.length, 1);
+  assert.ok(link.nudgedAt, "claimed before it was sent, as by day");
 });
 
 test("at night only what they timed or asked for goes; alerts, check-backs and handoffs wait for the morning", async () => {
