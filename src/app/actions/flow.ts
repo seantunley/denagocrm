@@ -175,14 +175,17 @@ export async function deleteFlow(id: string) {
   return withActingStaffScope(async () => {
     await requireTenantOwner();
     const scope = await flowScope();
-    const [flow, publishedVersion] = await Promise.all([
+    const [flow, publishedVersion, routes] = await Promise.all([
       prisma.botFlow.findFirst({ where: { id, ...scope } }),
       prisma.botFlowVersion.findFirst({ where: { flowId: id }, select: { id: true } }),
+      prisma.botFlowRoute.count({ where: { flowId: id, tenantId: await builderTenantId() } }),
     ]);
     // Published snapshots may still be referenced by active BotSession pins. A
     // flow that has ever been published therefore remains as immutable history.
     if (!flow) return { error: "That flow no longer exists." };
     if (flow.active) return { error: "This is the live flow — make another flow live before deleting it." };
+    // In use by a QR code or a route (Sean, 2026-11-02: "Delete must be stopped if in use") — said by name first.
+    if (routes) return { error: "A QR code or route starts this flow — delete that first (Flow builder → Routing)." };
     if (publishedVersion) return { error: "This flow has been published, so it is kept as history and can't be deleted." };
     await prisma.botFlow.deleteMany({ where: { id, ...scope } });
     revalidatePath("/bot-builder");
