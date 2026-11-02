@@ -82,8 +82,8 @@ export type PlanView = {
 
 /* ── The model's proposal ─────────────────────────────────────────────────── */
 
-/** A step is any task but a check-back (DAX's own reminder, never confirmed). */
-type StepAction = Exclude<ProposedAction, { type: "check_back" }>;
+/** A step is any task but a check-back (DAX's own reminder, never confirmed) or taking back a waiting task (WhatsApp's own). */
+type StepAction = Exclude<ProposedAction, { type: "check_back" } | { type: "drop_waiting" }>;
 export type PlanProposal = { title: string; steps: { action: StepAction; dependsOn?: number }[]; dropped: number };
 
 /** Stands in for a quote that an earlier step of the plan will make. */
@@ -107,7 +107,7 @@ export function parsePlan(raw: unknown): PlanProposal | null {
     const action = proposedAction.safeParse(rest);
     const dep = typeof dependsOn === "number" && Number.isInteger(dependsOn) && dependsOn >= 1 && dependsOn <= at ? dependsOn : undefined;
     const depKept = dep === undefined || kept.some((s) => s.from === dep);
-    if (!action.success || action.data.type === "check_back" || (dependsOn !== undefined && dep === undefined) || !depKept) {
+    if (!action.success || action.data.type === "check_back" || action.data.type === "drop_waiting" || (dependsOn !== undefined && dep === undefined) || !depKept) {
       dropped++;
       return;
     }

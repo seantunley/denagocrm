@@ -7,7 +7,7 @@ import { askAsPerson } from "@/lib/assistantAsk";
 import { logError } from "@/lib/errorLog";
 import type { AskStreamEvent } from "@/lib/assistantStream";
 import { isSameOrigin } from "@/lib/sameOrigin";
-import { RUN_KEY, claimRun, readRun, runRecorder } from "@/lib/assistantRun";
+import { RUN_KEY, RUN_STOPPED, claimRun, readRun, runRecorder, stopRun } from "@/lib/assistantRun";
 import { inheritedTenantId } from "@/lib/tenantWrite";
 import type { AssistantResult } from "@/lib/crmAssistant";
 
@@ -140,14 +140,16 @@ export async function POST(req: NextRequest) {
             recorder?.phase("researching", status);
           },
           onPhase: (phase) => recorder?.phase(phase),
+          // Stop (DELETE below): askCrm ends at its next step and keeps nothing.
+          stillWanted: recorder?.stillWanted,
           timings,
         },
       ).catch(async (error: unknown): Promise<AssistantResult> => {
         await logError("crm-assistant", "streamed ask failed", error instanceof Error ? error.name : "unknown");
         return { ok: false, error: "Something went wrong — try again." };
       });
-      await recorder?.finish(result, timings);
-      send({ t: "done", r: result });
+      const stopped = await recorder?.finish(result, timings);
+      send({ t: "done", r: stopped ? RUN_STOPPED : result });
     });
   });
 }
@@ -163,5 +165,28 @@ export async function GET(req: NextRequest) {
     const userId = asker.user.id;
     const tenantId = inheritedTenantId();
     return ndjson((send) => follow(tenantId, userId, key, send));
+  });
+}
+
+/**
+ * Stop: end the person's OWN run named by ?run=<key>, in this workspace — the
+ * same checks as asking, and stopRun names the person and the workspace on the
+ * row. {stopped: true}: nothing from it will be kept. {stopped: false}: too
+ * late, it had finished — its answer arrives as usual.
+ */
+export async function DELETE(req: NextRequest) {
+  if (!isSameOrigin(req.headers)) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  return withActingStaffScope(async () => {
+    const asker = await signedInAsker();
+    if ("refused" in asker) return asker.refused;
+    const key = req.nextUrl.searchParams.get("run") ?? "";
+    if (!RUN_KEY.test(key)) return NextResponse.json({ error: "Bad request" }, { status: 400 });
+    const tenantId = inheritedTenantId();
+    const outcome = await stopRun(tenantId, asker.user.id, key).catch(async (error: unknown) => {
+      await logError("assistant-run", "couldn't stop the run", error instanceof Error ? error.name : "unknown");
+      return null;
+    });
+    if (!outcome) return NextResponse.json({ error: "Unavailable" }, { status: 503 });
+    return NextResponse.json({ stopped: outcome === "stopped" }, { headers: { "Cache-Control": "no-store" } });
   });
 }

@@ -151,7 +151,24 @@ test("a full stream returns its answer; a refusal says try again", async () => {
     net.restore();
   }
   const client = code("src/components/askStream.ts");
-  assert.match(client, /fetch\("\/api\/assistant\/ask", \{ method: "POST", body: form, credentials: "same-origin" \}\)/);
+  assert.match(client, /fetch\("\/api\/assistant\/ask", \{ method: "POST", body: form, credentials: "same-origin", signal \}\)/);
+});
+
+test("a stopped ask stops reading at once and never reconnects", async () => {
+  const { askStreaming, ASK_STOPPED } = await import("../src/components/askStream");
+  const stopper = new AbortController();
+  // Stopped mid-research: the stream breaks because it was aborted — that is not a dropped connection.
+  const net = fakeFetch(() => {
+    stopper.abort();
+    return streamOf(['{"t":"status","v":"Checking leads…"}\n'], "break");
+  });
+  try {
+    const result = await askStreaming(new FormData(), () => {}, () => {}, { pause: async () => {}, key: "run_test_key_2", signal: stopper.signal });
+    assert.deepEqual(result, { ok: false, error: ASK_STOPPED });
+    assert.deepEqual(net.calls, ["/api/assistant/ask"], "no reconnect to a stopped run");
+  } finally {
+    net.restore();
+  }
 });
 
 /* ── Prompt cache: a stable key per person, and a frozen prefix ─────────── */

@@ -235,6 +235,7 @@ export function briefQuestion(now: Date, heldOvernight: readonly string[]): stri
     ...(overnight.length ? [`   Since last night: ${overnight.join(" · ")}`] : []),
     "3. The three things that matter most today, each with one line on why.",
     "If the daily brief has a workshop section, add a short Workshop part after 2 — overdue services, stuck job cards, warranties running out — a line each, at most three of each. No workshop section, no Workshop part.",
+    "If the daily brief has nurture reviews, add a short Nurture part: each parked deal with its link — why it was parked, what they wanted, the trigger, and \"review due today\" or how many days overdue — and offer to reactivate it. None, no Nurture part.",
     "Only what is mine. No greeting, no sign-off.",
   ].join("\n");
 }
