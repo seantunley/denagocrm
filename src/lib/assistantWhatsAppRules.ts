@@ -272,6 +272,18 @@ export const PROACTIVE_SOURCES = ["schedule", "watch", "handoff", "quote_pdf", "
 export const QUOTE_PDF_SOURCE = "quote_pdf";
 
 /**
+ * QUIET HOURS on the phone (Sean, 2026-11-02: "Why is DAX sending me messages at
+ * midnight and 4h30am and waking me up?"). Between 20:00 and 08:00 — unless the
+ * person is writing to DAX right now — only what they set for that time (a
+ * scheduled question, the morning brief) or asked for (a quote's PDF) goes to
+ * their phone. Alerts, check-backs and handoffs wait for 08:00, and the "you have
+ * an update" template is never sent at night (assistantWhatsApp.nudgeWithTemplate).
+ */
+export const NIGHT_SOURCES: readonly string[] = ["schedule", "brief", QUOTE_PDF_SOURCE];
+export const sendableSources = (sources: readonly string[], night: boolean): string[] =>
+  night ? sources.filter((s) => NIGHT_SOURCES.includes(s)) : [...sources];
+
+/**
  * The owner's switch (AppSetting): when the chatbot hands a conversation to a
  * person, also tell staff on their linked WhatsApp. Default OFF — it exists and
  * can be seen in Settings → Assistant before it does anything. It only ever

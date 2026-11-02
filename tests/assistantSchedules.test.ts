@@ -193,7 +193,7 @@ test("the runner works in ONE real workspace, named on every read and write", ()
   assert.match(loop, /where: \{ id: schedule\.id, tenantId, active: true, nextRunAt: schedule\.nextRunAt \},\s*data: \{ active: false, nextRunAt: null \}/, "so does the switch-off");
   assert.match(loop, /data: \{\s*tenantId,\s*userId: user\.id,/, "the fallback turn is stamped from the scope");
   assert.doesNotMatch(loop, /ownedWriteTenantId|budget\.tenantId/, "the tenant comes from the checked scope only");
-  assert.match(loop, /"assistant",\s*\{ tenantId, userId: user\.id \}/, "the push names the tenant and the one person");
+  assert.match(loop, /"assistant",\s*\{ tenantId, userId: user\.id, evenAtNight: !daxSet \}/, "the push names the tenant and the one person");
 });
 
 test("the runner checks the person, THEN claims the run, then runs it as them", () => {
@@ -218,7 +218,7 @@ test("the runner checks the person, THEN claims the run, then runs it as them", 
   assert.match(loop, /source: "schedule", scheduleId: schedule\.id/);
   // The push goes to them alone, and carries no answer.
   const push = loop.slice(loop.indexOf("sendPushToAll("));
-  assert.match(push, /"assistant",\s*\{ tenantId, userId: user\.id \}/);
+  assert.match(push, /"assistant",\s*\{ tenantId, userId: user\.id, evenAtNight: !daxSet \}/);
   assert.doesNotMatch(push.slice(0, push.indexOf('"assistant"')), /result\.answer|schedule\.question/);
   // The reserve fits askCrm's worst case: three 45 s research rounds and a 60 s answer.
   assert.match(runner, /export const SCHEDULE_RUN_RESERVE_MS = 200_000;/);

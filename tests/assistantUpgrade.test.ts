@@ -146,9 +146,20 @@ test("the server resolves every new card itself and re-checks access", () => {
   assert.match(resolve, /where: \{ id: p\.activityId, status: "planned" \}/);
   // Everything else: the lead first.
   assert.match(resolve, /if \(!\(await canAccessLead\(user, p\.leadId\)\)\) continue;/);
-  // A test drive only with the vehicle module on, and a real demo vehicle with a branch.
-  assert.match(resolve, /if \(!lead\.contactId \|\| !\(await isModuleEnabled\("automotive"\)\)\) continue;/);
-  assert.match(resolve, /if \(!demo\?\.branch\) continue;/);
+  // A calendar item on a deal or a customer: access to whichever it is on. On neither, it is the person's own.
+  const calendar = resolve.slice(resolve.indexOf('if (p.type === "follow_up" || p.type === "meeting") {'), resolve.indexOf('if (p.type === "test_drive") {'));
+  assert.match(calendar, /if \(p\.leadId\) \{\s*if \(!\(await canAccessLead\(user, p\.leadId\)\)\) continue;/);
+  assert.match(calendar, /\} else if \(p\.contactId\) \{\s*if \(!\(await canAccessContact\(user, p\.contactId\)\)\) \{ problems\.push\(/);
+  assert.match(calendar, /let leadLabel = "Your calendar";/);
+  // A test drive only with the vehicle module on, for a customer they can open (on a deal, or directly) — and a
+  // demo vehicle only when one is named, then one in stock (Sean, 2026-10-29: "that is not needed").
+  const drive = resolve.slice(resolve.indexOf('if (p.type === "test_drive") {'));
+  assert.match(drive, /if \(!\(await isModuleEnabled\("automotive"\)\)\) continue;/);
+  assert.match(drive, /if \(!lead\.contactId\) \{ problems\.push\(/);
+  assert.match(drive, /if \(!\(await canAccessContact\(user, p\.contactId\)\)\) \{ problems\.push\(/);
+  assert.match(drive, /if \(p\.vehicle\) \{[\s\S]*?if \(!demo\) \{ problems\.push\(/);
+  assert.match(drive, /if \(!branch\) \{ problems\.push\("Which branch or location is the test drive at\?"\); continue; \}/);
+  assert.doesNotMatch(drive.slice(0, drive.indexOf("cards.push")), /if \(!demo\?\.branch\) continue;/, "no longer dropped for want of a demo vehicle");
 });
 
 test("saLocal writes South African wall-clock time", () => {

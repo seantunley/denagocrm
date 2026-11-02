@@ -6,6 +6,7 @@ import { isModuleEnabled } from "@/lib/modules/enabled";
 import { assistantTurnsToday, customerClash, detailClash } from "@/lib/crmAssistant";
 import { createContact, updateContact } from "@/app/actions/contacts";
 import { contactFormFor } from "@/lib/contactFormFor";
+import { completeConfirmKey, reserveConfirmKey } from "@/lib/assistantConfirmKey";
 import { MAX_IMAGE_BYTES } from "@/lib/assistantImage";
 import { claimUpload, heldUpload, returnUpload } from "@/lib/assistantUpload";
 import { uploadDocument } from "@/app/actions/documents";
@@ -78,6 +79,7 @@ const resumable = (error: string) => ({ ok: false as const, error, resumable: tr
 
 const BAD_SCREENSHOT = "That screenshot can't be attached — send it to DAX again.";
 const UPLOAD_GONE = "That file is no longer held (it is kept for a day, and filed only once) — send it to DAX again.";
+const LEAD_UNSURE = "That one didn't complete, and it may have got part-way — so it won't be tried again. Check the customer in the CRM, then ask me again if the lead is still needed.";
 /**
  * A note card's screenshot (a JPEG data: URL) → the file the note form uploads. Undefined: the card has none.
  * False: what the card carries is not a JPEG within the size DAX accepts — the card came from the browser.
@@ -111,9 +113,22 @@ export async function runAssistantAction(
     // the change came from the assistant's proposal, on the lead's timeline.
     const confirmed = (what: string, leadId: string) =>
       logAudit({ action: "assistant.action_confirmed", summary: `Confirmed the assistant's proposal: ${what}`, user, leadId });
-    // The same, for a card whose deal may be none (a quote for a customer directly).
-    const confirmedOn = (card: { leadId: string | null }, what: string) =>
-      logAudit({ action: "assistant.action_confirmed", summary: `Confirmed the assistant's proposal: ${what}`, user, ...(card.leadId ? { leadId: card.leadId } : {}) });
+    // A calendar item may be on a deal, a customer or nobody (CALENDAR_ITEM_RULE): the entry goes where it is.
+    const confirmedOn = (what: string, on: { leadId: string | null; contactId: string | null }) =>
+      logAudit({ action: "assistant.action_confirmed", summary: `Confirmed the assistant's proposal: ${what}`, user, leadId: on.leadId, contactId: on.contactId });
+    /**
+     * What a calendar card is on, as it is NOW: its deal and that deal's customer, a customer with no deal, or nobody
+     * (the person's own item). Null when its deal has gone. The ids are the card's, untrusted like the rest of it:
+     * the calendar's own action checks access to each before it books anything (assertLinks).
+     */
+    const calendarLinks = async (c: { leadId: string | null; contactId?: string | null }) => {
+      const leadId = typeof c.leadId === "string" && c.leadId ? c.leadId : null;
+      if (leadId) {
+        const lead = await prisma.lead.findUnique({ where: { id: leadId }, select: { contactId: true } });
+        return lead ? { leadId, contactId: lead.contactId } : null;
+      }
+      return { leadId: null, contactId: typeof c.contactId === "string" && c.contactId ? c.contactId : null };
+    };
     // A quote's PDF queued for this person (saveQuoteDraft, pdfToMyWhatsApp): when
     // Confirm was pressed in the CRM, try the send now, briefly — the click does
     // not wait on WhatsApp, and whatever is not sent in that time is the sweep's.
@@ -168,18 +183,22 @@ export async function runAssistantAction(
         return { ok: true, success: "Watching — it only ever tells you. Manage it on the Ask page." };
       }
       case "follow_up": {
-        const lead = await prisma.lead.findUnique({ where: { id: card.leadId }, select: { contactId: true } });
-        if (!lead) return untouched("That lead is no longer there.");
+        // On a deal, on a customer with no deal, or on nobody — the person's own calendar (CALENDAR_ITEM_RULE).
+        const on = await calendarLinks(card);
+        if (!on) return untouched("That lead is no longer there.");
         const result = await scheduleFollowUp({
-          leadId: card.leadId,
-          contactId: lead.contactId,
+          leadId: on.leadId,
+          contactId: on.contactId,
           type: card.activity,
           when: card.when,
           summary: card.summary,
         });
         if (!result.ok) return { ok: false, error: result.error ?? "Couldn't schedule it." };
-        await confirmed(`schedule a ${card.activity}`, card.leadId);
-        return { ok: true, success: "Follow-up scheduled" };
+        await confirmedOn(`schedule a ${card.activity}`, on);
+        if (on.leadId) return { ok: true, success: "Follow-up scheduled" };
+        return on.contactId
+          ? { ok: true, success: "Follow-up scheduled", href: `/contacts/${on.contactId}` }
+          : { ok: true, success: "Added to your calendar", href: "/calendar" };
       }
       case "note": {
         const shot = screenshotFile(card.image);
@@ -243,16 +262,40 @@ export async function runAssistantAction(
         // THE LEAD FORM'S OWN DOOR (createLead): leads.create, linking or creating the customer by phone/email,
         // the first open stage, the assignee, the audit entry and the lead_created automations are all its.
         const l = card.lead;
+        if (!CONFIRM_KEY.test(String(card.confirmKey ?? ""))) return untouched(STALE_CARD);
         if (!l?.name?.trim() || (!l.contactId && !l.phone && !l.email)) return untouched(STALE_CARD);
         if (l.contactId && !(await canAccessContact(user, l.contactId))) return untouched("You can't open that customer any more.");
+        // ONE CONFIRM, ONE LEAD (review of #933): createLead has no key of its own, so the card's is reserved first
+        // (assistantConfirmKey). A second Confirm gets the lead the first made; two at once, one lead.
+        const tenantId = ownedWriteTenantId();
+        const reserved = await reserveConfirmKey(tenantId, user.id, card.confirmKey, "a new lead");
+        if (reserved.state === "done") {
+          const made = typeof reserved.result.leadId === "string" ? reserved.result.leadId : null;
+          return made
+            ? { ok: true, success: `That lead is already open for ${card.leadLabel}`, href: `/leads/${made}` }
+            : { ok: false, error: LEAD_UNSURE };
+        }
+        if (reserved.state === "busy") return { ok: false, error: "That lead is being opened right now — check the CRM in a moment." };
         const form = new FormData();
         form.set("name", l.name);
         for (const [key, value] of [["contactId", l.contactId], ["phone", l.phone], ["email", l.email], ["productId", l.productId], ["notes", l.notes]] as const) {
           if (value) form.set(key, value);
         }
-        const result = await createLead(form);
+        // Retry only on proof that nothing was written: an error from createLead may come after the lead (or its new
+        // customer) was saved, so the key is spent as "didn't complete" — the same card never runs it again.
+        let result: Awaited<ReturnType<typeof createLead>>;
+        try {
+          result = await createLead(form);
+        } catch (error) {
+          await completeConfirmKey(tenantId, card.confirmKey, "a new lead", { failed: "true" }).catch(() => {});
+          throw error;
+        }
         const leadId = /^\/leads\/([^/?#]+)$/.exec(result?.redirectTo ?? "")?.[1];
-        if (result?.error || !leadId) return { ok: false, error: result?.error ?? "Couldn't open the lead." };
+        if (result?.error || !leadId) {
+          await completeConfirmKey(tenantId, card.confirmKey, "a new lead", { failed: "true" }).catch(() => {});
+          return { ok: false, error: result?.error ?? "Couldn't open the lead." };
+        }
+        await completeConfirmKey(tenantId, card.confirmKey, "a new lead", { leadId });
         await confirmed("open a lead", leadId);
         return { ok: true, success: `Lead opened for ${card.leadLabel}`, href: `/leads/${leadId}` };
       }
@@ -295,7 +338,7 @@ export async function runAssistantAction(
           form.set("file", new File([new Uint8Array(held.data)], held.fileName, { type: held.mimeType }));
           const result = await markDepositPaid(card.quoteId, form);
           if (result?.error) return { ok: false, error: result.error };
-          await confirmedOn(card, "record the deposit");
+          await confirmedOn("record the deposit", { leadId: card.leadId, contactId: null });
           return { ok: true, success: `Deposit of ${formatZAR(card.amountCents)} recorded on Q-${card.quoteNumber}, proof filed` };
         }
         const form = new FormData();
@@ -306,7 +349,7 @@ export async function runAssistantAction(
         form.set("idempotencyKey", card.confirmKey);
         const result = await recordQuotePayment(card.quoteId, form);
         if (result?.error) return { ok: false, error: result.error };
-        await confirmedOn(card, "record a payment");
+        await confirmedOn("record a payment", { leadId: card.leadId, contactId: null });
         // The proof, filed on the quote — taken once, so a second Confirm does not file it twice.
         const held = card.uploadId ? await claimUpload(tenantId, user.id, card.uploadId) : null;
         if (held) {
@@ -353,33 +396,38 @@ export async function runAssistantAction(
         return { ok: true, success: "Lead moved" };
       }
       case "meeting": {
-        const lead = await prisma.lead.findUnique({ where: { id: card.leadId }, select: { contactId: true } });
-        if (!lead) return untouched("That lead is no longer there.");
+        // On a deal, on a customer with no deal, or on nobody — a staff meeting, a prospect not in the CRM yet.
+        const on = await calendarLinks(card);
+        if (!on) return untouched("That lead is no longer there.");
         const form = new FormData();
         form.set("type", "meeting");
         form.set("summary", card.summary);
-        form.set("leadId", card.leadId);
-        if (lead.contactId) form.set("contactId", lead.contactId);
+        if (on.leadId) form.set("leadId", on.leadId);
+        if (on.contactId) form.set("contactId", on.contactId);
         form.set("dueDate", card.start);
         form.set("endDate", card.end);
         for (const id of card.attendeeIds) form.append("attendeeIds", id);
         const result = await scheduleActivity(form);
         if (result.error) return { ok: false, error: result.error };
-        await confirmed("book a meeting", card.leadId);
-        return { ok: true, success: "Meeting booked" };
+        await confirmedOn("book a meeting", on);
+        if (on.leadId) return { ok: true, success: "Meeting booked" };
+        return { ok: true, success: "Meeting booked", href: on.contactId ? `/contacts/${on.contactId}` : "/calendar" };
       }
       case "test_drive": {
+        // On the customer's deal or on them directly; in a demo vehicle only when one was named (TEST_DRIVE_RULE).
+        // The test-drive form's own action checks access to the customer, the deal and the demo vehicle it is given.
         const form = new FormData();
         form.set("contactId", card.contactId);
-        form.set("leadId", card.leadId);
-        form.set("demoVehicleId", card.demoVehicleId);
+        if (card.leadId) form.set("leadId", card.leadId);
+        if (card.demoVehicleId) form.set("demoVehicleId", card.demoVehicleId);
+        if (card.productId) form.set("productId", card.productId);
         form.set("branch", card.branch);
         form.set("scheduledStart", card.start);
         form.set("expectedReturnAt", card.end);
         const result = await createTestDriveBooking(form);
         if (result.error) return { ok: false, error: result.error };
-        await confirmed("book a test drive", card.leadId);
-        return { ok: true, success: result.success ?? "Test drive booked" };
+        await confirmedOn("book a test drive", { leadId: card.leadId ?? null, contactId: card.contactId });
+        return { ok: true, success: result.success ?? "Test drive booked", ...(card.leadId ? {} : { href: `/contacts/${card.contactId}` }) };
       }
       case "job_card": {
         // THE JOB-CARD FORM'S OWN DOOR (openJobCard): the module check, jobcards.manage, access to THIS vehicle in

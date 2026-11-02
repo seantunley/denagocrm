@@ -189,6 +189,15 @@ test("All pipelines is a summary, never a mixed draggable board", () => {
   assert.doesNotMatch(summary, /useDraggable|useDroppable|DndContext/, "a summary must not be draggable");
 });
 
+test("the card's pin counts the customer's pinned notes that sit on no lead, as the lead page does", () => {
+  const page = src("src/app/(app)/leads/page.tsx");
+  // e.g. a note DAX pinned on the customer: it shows on the lead page, so the card must pin too.
+  assert.match(page, /OR \(c\."leadId" IS NULL AND c\."contactId" IN \(\$\{Prisma\.join\(pinContactIds\)\}\)\)/);
+  // Only customers this person may open — the same gate as the lead page's timeline.
+  assert.match(page, /accessibleContactIds === null \|\| accessibleContactIds\.includes\(id\)/);
+  assert.match(page, /pinnedCustomerNotes\.get\(lead\.contactId\)/);
+});
+
 test("cards are ordered by the position the server persists", () => {
   const page = src("src/app/(app)/leads/page.tsx");
   assert.match(page, /orderBy: \[\{ position: "asc" \}, \{ createdAt: "desc" \}\]/);

@@ -20,8 +20,11 @@ test("both doors book through the one helper", () => {
 
 test("the helper creates a real booking (status booked, reference, linked activity)", () => {
   const lib = src("src/lib/testDriveBooking.ts");
-  assert.match(lib, /tx\.testDriveBooking\.create\(\{[\s\S]*?status: "booked",[\s\S]*?activityId,/);
-  assert.match(lib, /reference: newTestDriveReference\(\)/);
+  assert.match(lib, /const booking = \{\s*reference: newTestDriveReference\(\),\s*status: "booked",/);
+  // The activity's own trigger (Activity_sync_test_drive_booking) has already made a row for it: the module's booking
+  // takes that row over rather than a second insert the unique activityId refused (2026-10-29).
+  assert.match(lib, /return tx\.testDriveBooking\.upsert\(\{\s*where: \{ activityId \},\s*create: \{ \.\.\.booking, tenantId: input\.bookingTenantId, activityId \},\s*update: \{ \.\.\.booking, tenantId: input\.bookingTenantId \},\s*\}\);/);
+  assert.doesNotMatch(lib, /tx\.testDriveBooking\.create\(/);
 });
 
 test("a reschedule from the board moves the upcoming booking, not a second one", () => {

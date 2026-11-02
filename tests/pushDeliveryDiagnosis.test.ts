@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 
@@ -44,6 +44,20 @@ test("the count is measured before sending, so 'nobody' and 'failed' stay distin
   const sent = sendTest.indexOf("sendPushToAll(");
   assert.ok(resolved >= 0 && sent >= 0);
   assert.ok(resolved < sent);
+});
+
+test("quiet hours: no push between 20:00 and 08:00 unless the person chose that time (Sean, 2026-11-02)", () => {
+  const code = shipped("src/lib/push.ts");
+  const send = code.slice(code.indexOf("export async function sendPushToAll("));
+  assert.match(send, /if \(!options\.evenAtNight && isQuietHour\(new Date\(\)\)\) return 0;/);
+  assert.ok(send.indexOf("isQuietHour(") < send.indexOf("pushRecipientsFor"), "decided before anyone is looked up");
+  // Only times the person chose ring at night: the test button, the morning brief, their own scheduled question.
+  const exempt = (readdirSync(path.join(root, "src"), { recursive: true }) as string[])
+    .filter((f) => /\.tsx?$/.test(f) && shipped(`src/${f}`).includes("evenAtNight"))
+    .map((f) => f.replace(/\\/g, "/"))
+    .sort();
+  assert.deepEqual(exempt, ["app/actions/push.ts", "lib/assistantScheduleRun.ts", "lib/proactiveBrief.ts", "lib/push.ts"]);
+  assert.match(shipped("src/lib/assistantScheduleRun.ts"), /evenAtNight: !daxSet/, "DAX's own check-back keeps quiet hours");
 });
 
 test("the fire-and-forget senders keep the cheap single count", () => {
@@ -97,7 +111,7 @@ test("the Messages test targets the exact subscription of the phone being tested
   const serverTest = action.slice(action.indexOf("export async function sendTestPush("));
   assert.match(serverTest, /const targetEndpoint = options\.endpoint\?\.trim\(\)/);
   assert.match(serverTest, /devices\.some\(\(device\) => device\.endpoint === targetEndpoint\)/);
-  assert.match(serverTest, /\{ endpoint: targetEndpoint \|\| undefined \}/);
+  assert.match(serverTest, /\{ endpoint: targetEndpoint \|\| undefined, evenAtNight: true \}/);
 
   const sender = lib.slice(lib.indexOf("export async function sendPushToAll("));
   assert.match(sender, /endpoint\?: string \| null/);

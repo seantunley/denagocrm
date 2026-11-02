@@ -219,9 +219,11 @@ async function main() {
     // The card from the real builder: pinned, with THE picture in hand.
     const problems: string[] = [];
     const cards = await runAsSession(repSession, () => scoped(() =>
-      resolveActions(rep, [{ type: "customer_note", contactId: id("c-ben"), text: "Screenshot: Ben's trade-in photo", pin: true, attachImage: true }], problems, null, { id: heldId, fileName: "photo.jpg", mimeType: "image/jpeg", image: shot })));
+      resolveActions(rep, [{ type: "customer_note", contactId: id("c-ben"), text: "Screenshot: Ben's trade-in photo", pin: true, attachImage: true }], problems, null, { id: heldId, fileName: "photo.jpg", mimeType: "image/jpeg", image: shot, sentAt: new Date() })));
     const card = cards.find((c): c is Extract<ActionCard, { kind: "customer_note" }> => c.kind === "customer_note");
     check("the card carries the picture and says it pins the screenshot", card?.image === shot && /^Pin the screenshot to Ben/.test(card.title), JSON.stringify({ title: card?.title, problems }));
+    // On WhatsApp the card can't show the picture: it says WHICH one (review of #933).
+    check("…and says which screenshot: the time it was sent", /^Attaches the screenshot you sent at \d{2}:\d{2}\.$/.test(card?.detail ?? ""), card?.detail ?? "");
     const none: string[] = [];
     await runAsSession(repSession, () => scoped(() => resolveActions(rep, [{ type: "customer_note", contactId: id("c-ben"), text: "x", attachImage: true }], none, null, null)));
     check("no picture in hand: no card, and it says to send it again", /send the screenshot again/.test(none.join(" ")));
@@ -261,6 +263,13 @@ async function main() {
     const done = await runAsSession(repSession, () => scoped(() => runAssistantAction(forBen.card!)));
     const row = done.href ? await basePrisma.lead.findUnique({ where: { id: done.href.split("/").pop()! } }) : null;
     check("Confirm opens it through the lead form: Ben's, the product, given to the person asking, in this workspace", done.ok && row?.contactId === id("c-ben") && row.productId === PRODUCT && row.assignedToId === rep.id && row.tenantId === T && row.status === "open", JSON.stringify({ done, row }));
+    // ONE CONFIRM, ONE LEAD (review of #933): the same card again, and a fresh card confirmed twice at once.
+    const bensLeads = () => basePrisma.lead.count({ where: { contactId: id("c-ben"), createdById: rep.id, deletedAt: null } });
+    const again = await runAsSession(repSession, () => scoped(() => runAssistantAction(forBen.card!)));
+    check("the same card again: the same lead back, no second one", again.ok && again.href === done.href && (await bensLeads()) === 1, JSON.stringify(again));
+    const fresh = await lead({ contactId: id("c-ben"), notes: "Second enquiry" });
+    const both = await Promise.all([0, 1].map(() => runAsSession(repSession, () => scoped(() => runAssistantAction(fresh.card!)))));
+    check("one card confirmed twice AT ONCE: exactly one more lead", (await bensLeads()) === 2 && both.filter((r) => r.ok).length >= 1, JSON.stringify(both));
     // Someone new whose number is already on a customer (written another way): the lead links to them.
     const janeDigits = JANE_PHONE.replace(/\D/g, "");
     const forJane = await lead({ firstName: "Jane", lastName: `New${SFX}`, phone: `0${janeDigits.slice(2)}` });
@@ -305,7 +314,7 @@ async function main() {
       },
     });
     const hold = (fileName: string) => scoped(() => holdUpload(T, rep.id, { fileName, mimeType: "application/pdf", data: new Uint8Array(Buffer.from(`%PDF-1.4 ${fileName}`)) }));
-    const asUpload = (uploadId: string, fileName: string) => ({ id: uploadId, fileName, mimeType: "application/pdf", image: null });
+    const asUpload = (uploadId: string, fileName: string) => ({ id: uploadId, fileName, mimeType: "application/pdf", image: null, sentAt: new Date() });
     const cardsFor = async (proposal: Record<string, unknown>, upload: ReturnType<typeof asUpload> | null) => {
       const problems: string[] = [];
       const cards = await runAsSession(repSession, () => scoped(() => resolveActions(rep, [proposal as never], problems, null, upload)));

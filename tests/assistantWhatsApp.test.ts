@@ -123,6 +123,8 @@ const state = {
   documentFails: false,
   noPdf: false as false | "no_document" | "failed",
   onConfirm: null as (() => void) | null,
+  /** Quiet hours (20:00–08:00 SAST). Off by default so no test depends on the time of day it runs at. */
+  night: false,
 };
 const ASK_LIMIT = 60;
 
@@ -185,6 +187,7 @@ loaderKey._load = function (this: unknown, request: string, parent, isMain) {
   if (fromLib(parent)) {
     switch (request) {
       case "./db": return { basePrisma: fakeDb };
+      case "./proactiveRules": return { isQuietHour: () => state.night };
       case "./settings": return { getSetting: async (key: string) => (key === "ASSISTANT_WHATSAPP" ? state.switch : key === "ASSISTANT_WHATSAPP_TEMPLATE" ? state.template : key === "ASSISTANT_WHATSAPP_CONTENT_TEMPLATE" ? state.contentTemplate : null) };
       case "./tenantScope": return { currentTenantScope: () => state.scope };
       case "./whatsapp": return {
@@ -374,6 +377,7 @@ beforeEach(() => {
   state.noPdf = false;
   state.onConfirm = null;
   state.onSend = null;
+  state.night = false;
 });
 
 /* ── the gate, behaviourally ───────────────────────────────────────────── */
@@ -1518,6 +1522,55 @@ test("wired where it must be: after a saved briefing, after a saved alert, on th
   const card = settings.slice(settings.indexOf("export async function saveAssistantWhatsAppCard"));
   assert.match(card, /const user = await requireTenantOwner\(\);[\s\S]*putSetting\(ASSISTANT_WHATSAPP_TEMPLATE_KEY, stored\);\s*await logAudit\(/);
 });
+
+/* ── quiet hours: nothing unasked-for at night (Sean, 2026-11-02: woken at 00:30 and 04:30) ── */
+
+test("at night an alert never sends the 'you have an update' template — the first tick after 08:00 does", async () => {
+  state.template = "assistant_update_ready|en";
+  const link = verified("u1", STAFF);
+  link.lastInboundAt = new Date(Date.now() - 30 * HOUR);
+  waitingTurn("alert", 0, "watch");
+  state.night = true;
+  assert.equal(await sendUpdatesToLinkedPhone("t1", "u1"), "nothing", "at night an alert isn't even looked at");
+  assert.equal(state.templatesSent.length, 0);
+  assert.equal(link.nudgedAt, null, "nothing claimed, so the morning is free to send it");
+  state.night = false;
+  assert.equal(await sendUpdatesToLinkedPhone("t1", "u1"), "nudged");
+  assert.equal(state.templatesSent.length, 1);
+});
+
+test("a brief they TIMED for 07:30 still gets its nudge at 07:30, outside the 24 hours (review of #929)", async () => {
+  state.template = "assistant_update_ready|en";
+  const link = verified("u1", STAFF);
+  link.lastInboundAt = new Date(Date.now() - 30 * HOUR);
+  waitingTurn("brief", 0, "brief");
+  state.night = true;
+  assert.equal(await sendUpdatesToLinkedPhone("t1", "u1"), "nudged");
+  assert.equal(state.templatesSent.length, 1);
+  assert.ok(link.nudgedAt, "claimed before it was sent, as by day");
+});
+
+test("at night only what they timed or asked for goes; alerts, check-backs and handoffs wait for the morning", async () => {
+  verified("u1", STAFF).lastInboundAt = new Date(Date.now() - 3 * HOUR);
+  const timed = [waitingTurn("sched"), waitingTurn("brief", 0, "brief")];
+  const held = ["watch", "proactive", "followup", "handoff"].map((s) => waitingTurn(s, 0, s));
+  state.night = true;
+  assert.equal(await sendUpdatesToLinkedPhone("t1", "u1"), "sent");
+  assert.ok(timed.every((t) => t.whatsappSentAt), "the scheduled question and the brief, at the time they set");
+  assert.ok(held.every((t) => t.whatsappSentAt === null), "nothing else");
+  state.night = false;
+  assert.equal(await sendUpdatesToLinkedPhone("t1", "u1"), "sent");
+  assert.ok(held.every((t) => t.whatsappSentAt), "all of it in the morning");
+});
+
+test("at night, while they are writing to DAX, everything waiting still goes", async () => {
+  verified("u1", STAFF).lastInboundAt = new Date();
+  const alert = waitingTurn("alert", 0, "watch");
+  state.night = true;
+  assert.equal(await sendUpdatesToLinkedPhone("t1", "u1", { windowOpen: true }), "sent");
+  assert.ok(alert.whatsappSentAt);
+});
+
 
 /* ── a quote the assistant built: its PDF, to the person who asked ─────── */
 

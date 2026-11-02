@@ -25,7 +25,7 @@ export const KEEP_MS = 25 * 60 * 60 * 1000;
 /** The biggest file DAX holds. Bigger: the person is told to upload it in the CRM. */
 export const MAX_UPLOAD_BYTES = 10 * 1024 * 1024;
 
-export type HeldUpload = { id: string; fileName: string; mimeType: string; data: Uint8Array };
+export type HeldUpload = { id: string; fileName: string; mimeType: string; data: Uint8Array; createdAt: Date };
 
 const DATA_URL = /^data:image\/jpeg;base64,([A-Za-z0-9+/=]+)$/;
 
@@ -64,14 +64,14 @@ export async function carriedUpload(tenantId: string, userId: string, source: st
     select: { id: true, createdAt: true },
   });
   if (!last || now.getTime() - last.createdAt.getTime() > CARRY_MS) return null;
-  return prisma.assistantUpload.findFirst({ where: { tenantId, userId, turnId: last.id }, select: { id: true, fileName: true, mimeType: true, data: true } });
+  return prisma.assistantUpload.findFirst({ where: { tenantId, userId, turnId: last.id }, select: { id: true, fileName: true, mimeType: true, data: true, createdAt: true } });
 }
 
 /** One held upload, by id — THIS person's, in this workspace, still kept. What Confirm files. */
 export async function heldUpload(tenantId: string, userId: string, id: string, now = new Date()): Promise<HeldUpload | null> {
   return prisma.assistantUpload.findFirst({
     where: { id, tenantId, userId, createdAt: { gt: new Date(now.getTime() - KEEP_MS) } },
-    select: { id: true, fileName: true, mimeType: true, data: true },
+    select: { id: true, fileName: true, mimeType: true, data: true, createdAt: true },
   });
 }
 
