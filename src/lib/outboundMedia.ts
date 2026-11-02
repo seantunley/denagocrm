@@ -34,7 +34,13 @@ import crypto from "crypto";
 
 const DEFAULT_TTL_MS = 60 * 60 * 1000; // Meta fetches within seconds; an hour is slack, not a window.
 
-/** A public blob is already fetchable; a private one is not. */
+/**
+ * Only a URL OUTSIDE our storage (one someone pasted) is handed to the provider as it is. EVERY Vercel Blob address
+ * goes through the relay, the "public" store included (Sean, 2026-11-02): nothing should be served from public
+ * storage, and a file moved to the private store keeps its old public address on its record — that address is gone
+ * (404), so WhatsApp could not fetch the brochure. The relay reads private-first (storage.openStoredFile).
+ * A suffix check rather than an `includes`, so a lookalike host cannot pass by embedding the string.
+ */
 export function isPubliclyFetchable(ref: string): boolean {
   let url: URL;
   try {
@@ -43,9 +49,7 @@ export function isPubliclyFetchable(ref: string): boolean {
     return false; // a bare filename is not a URL
   }
   if (url.protocol !== "https:") return false;
-  // The private store is a DIFFERENT host, and it is a suffix check rather than
-  // an `includes` so a lookalike host cannot pass by embedding the string.
-  if (url.hostname.endsWith(".private.blob.vercel-storage.com")) return false;
+  if (url.hostname.endsWith(".blob.vercel-storage.com")) return false;
   return true;
 }
 

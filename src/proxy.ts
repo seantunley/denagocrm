@@ -17,6 +17,10 @@ const PUBLIC_PATHS = [
   // where there is no session yet. Bounded hard at the route — see its header.
   "/api/csp-report",
   "/api/webhooks",
+  // The media relay WhatsApp/Meta fetch an attachment from (lib/outboundMedia.ts). Anonymous by design — Meta
+  // presents no credentials; each URL is its own signed, expiring token. Behind the sign-in gate Meta got a 401, and
+  // no private file (a brochure, a price list, a staff attachment) ever reached a customer (Sean, 2026-11-02).
+  "/api/outbound-media",
   "/api/intake",
   "/api/cron",
   "/api/bookings",

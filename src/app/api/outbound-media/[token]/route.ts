@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { readFile } from "@/lib/storage";
+import { openStoredFile } from "@/lib/storage";
 import { verifyOutboundMediaToken } from "@/lib/outboundMedia";
 
 /**
@@ -36,11 +36,12 @@ export async function GET(
   if (!claim) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
   try {
-    const buffer = await readFile(claim.ref);
-    return new NextResponse(new Uint8Array(buffer), {
+    // STREAMED, as /api/files and the Library's downloads are: a buffered response over 4.5 MB fails on Vercel, and
+    // a brochure or price list is easily bigger. Private store first (a moved file's old public address is gone).
+    const { stream } = await openStoredFile(claim.ref);
+    return new NextResponse(stream, {
       headers: {
         "Content-Type": claim.contentType,
-        "Content-Length": String(buffer.length),
         "Content-Disposition": "attachment",
         "X-Content-Type-Options": "nosniff",
         "Cache-Control": "private, no-store",

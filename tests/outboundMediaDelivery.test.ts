@@ -37,14 +37,15 @@ const stripComments = (code: string) =>
 const SECRET = "test-secret-value";
 const ORIGIN = "https://crm.example.com";
 
-test("only a genuinely public reference is queued unchanged", () => {
-  assert.equal(isPubliclyFetchable("https://abc123.public.blob.vercel-storage.com/uploads/x.png"), true);
-
-  // The private store is a different host and needs a token.
+test("only a URL outside our storage is queued unchanged — every Blob address, 'public' too, is relayed", () => {
+  // Sean, 2026-11-02: a brochure moved to the private store kept its old public address (404), so WhatsApp could
+  // not fetch it — and nothing should be served from public storage anyway.
+  assert.equal(isPubliclyFetchable("https://abc123.public.blob.vercel-storage.com/uploads/x.png"), false);
   assert.equal(isPubliclyFetchable("https://abc.private.blob.vercel-storage.com/uploads/x.png"), false);
+  assert.equal(isPubliclyFetchable("https://images.example.com/x.png"), true, "a pasted outside URL");
   // A suffix check, so a lookalike host cannot pass by embedding the string.
   assert.equal(isPubliclyFetchable("https://evil.com/.private.blob.vercel-storage.com/x"), true);
-  assert.equal(isPubliclyFetchable("https://x.private.blob.vercel-storage.com.evil.com/x"), true);
+  assert.equal(isPubliclyFetchable("https://x.public.blob.vercel-storage.com.evil.com/x"), true);
 
   // A bare filename — the self-hosted case — is not a URL.
   assert.equal(isPubliclyFetchable("9f3c1a2b-photo.png"), false);
@@ -53,13 +54,13 @@ test("only a genuinely public reference is queued unchanged", () => {
   assert.equal(isPubliclyFetchable("http://example.com/x.png"), false);
 });
 
-test("a public blob URL is passed through untouched", () => {
-  const blob = "https://abc123.public.blob.vercel-storage.com/uploads/x.png";
-  assert.equal(outboundMediaUrl(blob, "image/png", { secret: SECRET, origin: ORIGIN }), blob);
+test("an outside URL is passed through untouched", () => {
+  const outside = "https://images.example.com/x.png";
+  assert.equal(outboundMediaUrl(outside, "image/png", { secret: SECRET, origin: ORIGIN }), outside);
 });
 
-test("a private or local reference becomes a signed URL on our own public origin", () => {
-  for (const ref of ["https://abc.private.blob.vercel-storage.com/uploads/x.png", "9f3c1a2b-photo.png"]) {
+test("a stored file — private, 'public' or local — becomes a signed URL on our own public origin", () => {
+  for (const ref of ["https://abc.private.blob.vercel-storage.com/uploads/x.png", "https://abc.public.blob.vercel-storage.com/library/x.pdf", "9f3c1a2b-photo.png"]) {
     const url = outboundMediaUrl(ref, "image/png", { secret: SECRET, origin: ORIGIN });
     assert.ok(url, `${ref} must be rewritten, not queued as-is`);
     assert.ok(url!.startsWith(`${ORIGIN}/api/outbound-media/`), url!);
@@ -143,6 +144,15 @@ test("the token carries its own authority and expires", () => {
   assert.equal(verifyOutboundMediaToken(signOutboundMediaToken("file.png", "image/png", Date.now() - 1, SECRET), SECRET), null);
   assert.equal(verifyOutboundMediaToken("not-a-token", SECRET), null);
   assert.equal(verifyOutboundMediaToken("", SECRET), null);
+});
+
+test("the relay is reachable without signing in — Meta presents no credentials — and streams", () => {
+  // Behind the sign-in gate Meta got a 401 and no stored file reached a customer (Sean, 2026-11-02).
+  const proxy = src("src/proxy.ts");
+  assert.match(proxy.slice(proxy.indexOf("const PUBLIC_PATHS"), proxy.indexOf("];", proxy.indexOf("const PUBLIC_PATHS"))), /"\/api\/outbound-media",/);
+  // Streamed: a buffered response over 4.5 MB fails on Vercel.
+  const route = stripComments(src("src/app/api/outbound-media/[token]/route.ts"));
+  assert.match(route, /const \{ stream \} = await openStoredFile\(claim\.ref\);\s*return new NextResponse\(stream,/);
 });
 
 test("the route serves only what it signed, and never as something executable", () => {
@@ -245,8 +255,9 @@ test("a deployment that cannot serve media refuses at accept time AND at deliver
   assert.equal(canServeOutboundMedia(local, { secret: SECRET, origin: null }), false);
   assert.equal(canServeOutboundMedia(local, { secret: null, origin: ORIGIN }), false);
   assert.equal(canServeOutboundMedia(local, { secret: SECRET, origin: ORIGIN }), true);
-  // A public blob needs no relay at all, so it is always servable.
-  assert.equal(canServeOutboundMedia("https://abc.public.blob.vercel-storage.com/x.png", { secret: null, origin: null }), true);
+  // A stored file always needs the relay now — public store included; an outside URL needs none.
+  assert.equal(canServeOutboundMedia("https://abc.public.blob.vercel-storage.com/x.png", { secret: null, origin: null }), false);
+  assert.equal(canServeOutboundMedia("https://images.example.com/x.png", { secret: null, origin: null }), true);
 
   // And the worker's own refusal, for the case where config changed after accept.
   const payload = { type: "attachment" as const, kind: "file" as const, ref: local };
