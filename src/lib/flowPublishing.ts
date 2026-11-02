@@ -72,8 +72,13 @@ export async function resolveFlowSnapshot(
     const flow = parseFlow(routed.definition);
     if (flow) return { flow, versionId: routed.id, flowId: routed.flowId };
   }
+  const own = await prisma.botFlowPublication.findFirst({ where: { tenantId, channel } });
+  // THIS CHANNEL'S OWN FLOW WAS TAKEN OFFLINE (review of #956): it has been published on this channel before and
+  // nothing is published here now. Messenger must then answer nobody — not fall back to WhatsApp's flow below, which
+  // is for a channel that never had a flow of its own.
+  if (!own && channel !== "whatsapp" && (await everPublishedOn(tenantId, [channel]))) return null;
   const publication =
-    (await prisma.botFlowPublication.findFirst({ where: { tenantId, channel } })) ??
+    own ??
     (channel === "whatsapp"
       ? null
       : await prisma.botFlowPublication.findFirst({ where: { tenantId, channel: "whatsapp" } }));
@@ -102,13 +107,14 @@ export async function resolveFlowSnapshot(
   // published before and nothing is published now — only "Take offline" removes a publication — so the built-in
   // default must not quietly take its place: no flow answers. Routes (QR codes, keywords) were resolved above and
   // still do; a conversation already in a flow keeps its pinned version until it ends. Publishing again restores it.
-  const everPublished = await prisma.botFlowVersion.findFirst({
-    where: { tenantId, channel: { in: channel === "whatsapp" ? ["whatsapp"] : [channel, "whatsapp"] } },
-    select: { id: true },
-  });
-  if (everPublished) return null;
+  if (await everPublishedOn(tenantId, channel === "whatsapp" ? ["whatsapp"] : [channel, "whatsapp"])) return null;
 
   return { flow: DEFAULT_FLOW, versionId: null, flowId: null };
+}
+
+/** Has a flow ever been published on these channels in this workspace? Versions are history and stay. */
+async function everPublishedOn(tenantId: string, channels: string[]): Promise<boolean> {
+  return Boolean(await prisma.botFlowVersion.findFirst({ where: { tenantId, channel: { in: channels } }, select: { id: true } }));
 }
 
 /**
@@ -120,8 +126,12 @@ export async function takeFlowOffline(flowId: string): Promise<boolean> {
   const tenantId = await builderTenantId();
   const flow = await prisma.botFlow.findFirst({ where: { id: flowId, ...flowTenantWhere(tenantId) }, select: { id: true, channel: true, active: true } });
   if (!flow?.active) return false;
-  await prisma.botFlow.updateMany({ where: { id: flow.id, ...flowTenantWhere(tenantId) }, data: { active: false } });
-  await prisma.botFlowPublication.deleteMany({ where: { tenantId, channel: flow.channel, flowId: flow.id } });
+  // One transaction (review of #956): never a flow marked off whose publication still answers, or the reverse.
+  // withTenantWrite for its transaction only, as publishFlowSnapshot uses it — the tenant is builderTenantId() above.
+  await withTenantWrite(async (tx) => {
+    await tx.botFlow.updateMany({ where: { id: flow.id, ...flowTenantWhere(tenantId) }, data: { active: false } });
+    await tx.botFlowPublication.deleteMany({ where: { tenantId, channel: flow.channel, flowId: flow.id } });
+  });
   return true;
 }
 

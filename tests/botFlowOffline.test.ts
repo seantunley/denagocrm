@@ -8,12 +8,15 @@ test("Sean, 2026-11-02 — a live flow can be taken offline: unpublished, and th
   const publishing = code("src/lib/flowPublishing.ts");
   const resolver = publishing.slice(publishing.indexOf("export async function resolveFlowSnapshot"), publishing.indexOf("export async function takeFlowOffline"));
   // Published before, nothing published now → null, checked just before the built-in default.
-  assert.match(resolver, /if \(everPublished\) return null;\s*return \{ flow: DEFAULT_FLOW/);
+  assert.match(resolver, /if \(await everPublishedOn\(tenantId, [^)]*\)\) return null;\s*return \{ flow: DEFAULT_FLOW/);
+  // Review of #956: a channel whose OWN flow was taken offline answers nobody BEFORE the fallback to WhatsApp's flow.
+  const ownOff = resolver.indexOf('if (!own && channel !== "whatsapp" && (await everPublishedOn(tenantId, [channel]))) return null;');
+  assert.ok(ownOff > 0 && ownOff < resolver.indexOf('channel: "whatsapp" } })'), "checked before the WhatsApp fallback");
   // Routes are resolved first, so a QR code still answers.
-  assert.ok(resolver.indexOf("resolveRoutedFlowVersion") < resolver.indexOf("everPublished"));
+  assert.ok(resolver.indexOf("resolveRoutedFlowVersion") < ownOff);
   const offline = publishing.slice(publishing.indexOf("export async function takeFlowOffline"));
-  // Marked inactive BEFORE the publication goes, so the legacy fallback can never pick up the unpublished draft.
-  assert.ok(offline.indexOf("data: { active: false }") < offline.indexOf("botFlowPublication.deleteMany"));
+  // One transaction (review of #956), inactive first, so the legacy fallback can never pick up the unpublished draft.
+  assert.match(offline, /await withTenantWrite\(async \(tx\) => \{\s*await tx\.botFlow\.updateMany\([^;]*data: \{ active: false \} \}\);\s*await tx\.botFlowPublication\.deleteMany/);
   assert.match(offline, /flowTenantWhere\(tenantId\)/);
 });
 

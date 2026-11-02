@@ -46,8 +46,8 @@ async function main() {
   const B = b.tenantId;
   const ownerA = <T>(work: () => Promise<T>) => actAsStaff(a, work, { asOwner: true });
   const ownerB = <T>(work: () => Promise<T>) => actAsStaff(b, work, { asOwner: true });
-  const resolve = (tenantId: string, text?: string, pinned?: string | null) =>
-    runInTenantScope({ tenantId, system: false }, () => resolveFlowSnapshot("whatsapp", pinned ?? null, text ? { text } : null));
+  const resolve = (tenantId: string, text?: string, pinned?: string | null, channel = "whatsapp") =>
+    runInTenantScope({ tenantId, system: false }, () => resolveFlowSnapshot(channel, pinned ?? null, text ? { text } : null));
   const QR = `Hi, please send the brochure ${SFX}`;
 
   try {
@@ -79,6 +79,20 @@ async function main() {
     console.log("\npublished again");
     await ownerA(() => publishFlowSnapshot(main.id));
     check("it answers again", (await resolve(A))?.flowId === main.id);
+
+    // Review of #956: with Messenger AND WhatsApp published, taking only Messenger offline must silence Messenger —
+    // not hand it WhatsApp's flow, which is the fallback for a channel that never had a flow of its own.
+    console.log("\ntwo channels published, one taken offline");
+    const dm = await basePrisma.botFlow.create({ data: { tenantId: A, name: `Messenger ${SFX}`, channel: "messenger", definition: graph("Messenger flow") }, select: { id: true } });
+    await ownerA(() => publishFlowSnapshot(dm.id));
+    check("Messenger answers with its own flow", (await resolve(A, undefined, null, "messenger"))?.flowId === dm.id);
+    check("Messenger taken offline", (await ownerA(() => takeFlowOffline(dm.id))) === true);
+    const dmOff = await resolve(A, undefined, null, "messenger");
+    check("…Messenger answers nobody — not WhatsApp's flow, not the default", dmOff === null, JSON.stringify(dmOff));
+    check("…WhatsApp still answers with its own", (await resolve(A))?.flowId === main.id);
+    check("…its flow is not live and its publication gone, in one go", (await basePrisma.botFlow.findUnique({ where: { id: dm.id }, select: { active: true } }))?.active === false && (await basePrisma.botFlowPublication.count({ where: { tenantId: A, channel: "messenger" } })) === 0);
+    // A channel that never had a flow of its own still gets WhatsApp's, as before.
+    check("Instagram, never published, still falls back to WhatsApp's flow", (await resolve(A, undefined, null, "instagram"))?.flowId === main.id);
   } finally {
     for (const tenantId of [A, B]) {
       await basePrisma.botFlowPublication.deleteMany({ where: { tenantId } }).catch(() => 0);
