@@ -265,10 +265,18 @@ export function parseConfirmId(choiceId: string | null | undefined): string | nu
   return match ? match[1] : null;
 }
 /** "Confirm all": names ONE pending row of the set — the set is every row offered with it (same createdAt). */
-export const confirmAllButtonId = (pendingId: string) => `daxa:${pendingId}`;
+// …and the MOMENT that offer was made (review of #945): a set regrouped later (a correction carries the rest into a
+// new offer) has a new moment, so an older button can never confirm a task added after it was sent.
+export const confirmAllButtonId = (pendingId: string, offeredAt: Date) => `daxa:${pendingId}.${offeredAt.getTime()}`;
+/** The button's token ("<row>.<ms>", or "<row>" from a button sent before offers were stamped), or null. */
 export function parseConfirmAllId(choiceId: string | null | undefined): string | null {
-  const match = /^daxa:(c[a-z0-9]{20,40})$/.exec(String(choiceId ?? ""));
+  const match = /^daxa:(c[a-z0-9]{20,40}(?:\.\d{10,16})?)$/.exec(String(choiceId ?? ""));
   return match ? match[1] : null;
+}
+/** A token → the offer's moment; null for an unstamped (older) button, which confirms nothing. */
+export function confirmAllOfferedAt(token: string): Date | null {
+  const ms = /\.(\d{10,16})$/.exec(token)?.[1];
+  return ms ? new Date(Number(ms)) : null;
 }
 
 /**

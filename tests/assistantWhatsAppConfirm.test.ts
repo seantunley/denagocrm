@@ -11,6 +11,7 @@ import {
   WHATSAPP_CONFIRMABLE,
   confirmButtonId,
   confirmMessages,
+  parseConfirmAllId,
   parseConfirmId,
   splitForWhatsApp_cards,
   whatsappConfirmOn,
@@ -595,7 +596,7 @@ test("offers: a Confirm button per internal task when on; everything else SAVED 
   // Two offered together (voice-first, 2026-11-02): ONE offer, one createdAt — and one more button for exactly those.
   assert.ok(buttons.every((row) => row.createdAt.getTime() === buttons[0].createdAt.getTime()), "one offer, one createdAt");
   const all = state.sent.filter((s) => s.buttons?.[0].id.startsWith("daxa:"));
-  assert.deepEqual(all.map((s) => s.buttons), [[{ id: `daxa:${buttons[0].id}`, title: "✅ Confirm all 2" }]]);
+  assert.deepEqual(all.map((s) => s.buttons), [[{ id: `daxa:${buttons[0].id}.${buttons[0].createdAt.getTime()}`, title: "✅ Confirm all 2" }]]);
   assert.equal(all[0].text, "👆 *That's 2 tasks*, each shown above. Tap Confirm all to do all 2.");
   assert.equal(all[0].frame?.footer, `Or reply "yes to all" · nothing changes till you do`);
   // The customer message is kept as a card — the whole card, for a day — and no button is ever sent for it.
@@ -791,7 +792,8 @@ test("a card saved for the CRM is stamped with its workspace and person, and the
   // (2026-11-02, voice-first: Confirm all's anchor, the newest offer and its rows, and what is waiting — its newest
   // offer and its rows — phone rows only.)
   // (2026-11-02, round 2: withdrawing a waiting task — its read and its delete — and carrying the rest of a set.)
-  assert.equal(lib.match(/forCrm: false/g)?.length, 11);
+  // (Review of #945: Confirm all no longer reads its set's moment back from a row — the button carries it — so one fewer.)
+  assert.equal(lib.match(/forCrm: false/g)?.length, 10);
   assert.match(lib, /deleteMany\(\{ where: \{ id: pending\.id, tenantId, userId, forCrm: false, confirmedAt: null \} \}\)/);
   const sql = readFileSync(join(root, "prisma/migrations/20261012110000_assistant_pending_for_crm/migration.sql"), "utf8");
   assert.match(sql, /ALTER TABLE "AssistantPendingAction" ADD COLUMN IF NOT EXISTS "forCrm" BOOLEAN NOT NULL DEFAULT false;/);
@@ -861,7 +863,7 @@ test("CONFIRM ALL: exactly the tasks offered together — each claimed and run a
   const saved = pendingRow({ createdAt: offeredAt, forCrm: true });
 
   // The button names one row of the set; the set is every row offered with it that is still waiting.
-  await confirmAllFromWhatsApp("t1", me, PHONE, second.id);
+  await confirmAllFromWhatsApp("t1", me, PHONE, `${second.id}.${offeredAt.getTime()}`);
   assert.deepEqual(state.ran.map((run) => run.card.title), ["Add a note to Anna's lead", "Move Anna to Quoted"], "the set, in the order offered");
   assert.ok(state.ran.every((run) => run.asUserId === "u1"), "run as the person who confirmed");
   assert.ok(first.completedAt && second.completedAt, "each claimed and settled as its own Confirm");
@@ -948,4 +950,36 @@ test("a corrected set stays ONE set: the replacement is offered and the rest joi
   await confirmAllFromWhatsApp("t1", me, PHONE, null);
   assert.deepEqual(state.ran.map((run) => run.card.title).sort(), ["Change the Rover to Black on Q-1030", "Follow up with Clive Friday", "Move Clive to Quoted"]);
   assert.equal(older.confirmedAt, null);
+});
+
+test("AN OLD 'Confirm all' NEVER CONFIRMS A TASK ADDED AFTER IT (review of #945): its moment is its own, not the regrouped set's", async () => {
+  // First offer: A and B, with a Confirm all button for that moment.
+  await offerConfirmations("t1", "u1", PHONE, [
+    { ...NOTE, id: "a0", title: "A — note" },
+    { ...NOTE, id: "a1", kind: "stage", title: "B — move to Quoted", text: undefined },
+  ] as never[]);
+  const oldButton = state.sent.filter((s) => s.buttons?.[0].id.startsWith("daxa:")).at(-1)!.buttons![0].id;
+  const [a, b] = state.rows;
+  // A is corrected: A withdrawn, its replacement C offered, and B carried into C's offer (a new moment).
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  state.rows = state.rows.filter((row) => row.id !== a.id);
+  await offerConfirmations("t1", "u1", PHONE, [{ ...NOTE, id: "a2", title: "C — corrected note" }] as never[], [b.id]);
+  const c = state.rows.find((row) => row.card.title === "C — corrected note")!;
+  // The OLD button is tapped: it confirms nothing — not C, which did not exist when it was sent.
+  state.ran = [];
+  const token = parseConfirmAllId(oldButton)!;
+  await confirmAllFromWhatsApp("t1", me, PHONE, token);
+  assert.equal(state.ran.length, 0, "the old button authorises nothing added after it");
+  assert.equal(c.confirmedAt, null);
+  assert.match(state.sent.at(-1)?.text ?? "", /^Nothing from that set is waiting any more — each was done, changed or has expired\. Use the newest Confirm all/);
+  // The NEW button does the corrected set.
+  const newToken = parseConfirmAllId(state.sent.filter((s) => s.buttons?.[0].id.startsWith("daxa:")).at(-1)!.buttons![0].id)!;
+  await confirmAllFromWhatsApp("t1", me, PHONE, newToken);
+  assert.deepEqual(state.ran.map((run) => run.card.title).sort(), ["B — move to Quoted", "C — corrected note"]);
+  // A button from before offers were stamped confirms nothing, and says so.
+  state.ran = [];
+  pendingRow({});
+  await confirmAllFromWhatsApp("t1", me, PHONE, "cmpendingpendingpendingpe");
+  assert.equal(state.ran.length, 0);
+  assert.match(state.sent.at(-1)?.text ?? "", /^That Confirm all button is out of date/);
 });
