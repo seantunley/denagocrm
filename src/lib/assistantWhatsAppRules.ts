@@ -196,6 +196,9 @@ export const WHATSAPP_CONFIRMABLE: ReadonlySet<string> = new Set([
   // nurture (Sean, 2026-11-02, asked on WhatsApp: "it's not lost, should be in Nurture"): parks a deal for later —
   // reopening a lost one first — every detail shown, nobody contacted, through the lead page's own actions.
   "nurture",
+  // reactivate (2026-11-02, round 2 item 1): brings a parked deal back — the stage and next action shown in full,
+  // nobody contacted, through the Nurture page's own Reactivate.
+  "reactivate",
   // reopen (round 2 item 4): a lost deal back in the pipeline, in its own stage — the lead page's own Reopen, nobody contacted.
   "reopen",
 ]);
@@ -267,10 +270,18 @@ export function parseConfirmId(choiceId: string | null | undefined): string | nu
   return match ? match[1] : null;
 }
 /** "Confirm all": names ONE pending row of the set — the set is every row offered with it (same createdAt). */
-export const confirmAllButtonId = (pendingId: string) => `daxa:${pendingId}`;
+// …and the MOMENT that offer was made (review of #945): a set regrouped later (a correction carries the rest into a
+// new offer) has a new moment, so an older button can never confirm a task added after it was sent.
+export const confirmAllButtonId = (pendingId: string, offeredAt: Date) => `daxa:${pendingId}.${offeredAt.getTime()}`;
+/** The button's token ("<row>.<ms>", or "<row>" from a button sent before offers were stamped), or null. */
 export function parseConfirmAllId(choiceId: string | null | undefined): string | null {
-  const match = /^daxa:(c[a-z0-9]{20,40})$/.exec(String(choiceId ?? ""));
+  const match = /^daxa:(c[a-z0-9]{20,40}(?:\.\d{10,16})?)$/.exec(String(choiceId ?? ""));
   return match ? match[1] : null;
+}
+/** A token → the offer's moment; null for an unstamped (older) button, which confirms nothing. */
+export function confirmAllOfferedAt(token: string): Date | null {
+  const ms = /\.(\d{10,16})$/.exec(token)?.[1];
+  return ms ? new Date(Number(ms)) : null;
 }
 
 /**
@@ -289,17 +300,34 @@ export function parseConfirmAllId(choiceId: string | null | undefined): string |
  * Every field of a card that the person would otherwise be agreeing to unseen
  * is listed here: a note's text, a scheduled question, a meeting's detail.
  */
-export function confirmMessages(card: { title: string; text?: unknown; question?: unknown; detail?: unknown; reason?: unknown }): { before: string[]; body: string } | null {
-  const shown = [card.title, card.text, card.question, card.detail, card.reason]
-    .filter((part): part is string => typeof part === "string" && part.trim().length > 0)
-    .map((part) => part.trim());
-  const footer = `Tap Confirm within ${PENDING_ACTION_TTL_MS / 60_000} minutes and I'll do it. Nothing changes until you do.`;
-  const whole = [...shown, footer].join("\n\n");
-  if (whole.length <= WA_BODY_MAX) return { before: [], body: whole };
+export function confirmMessages(card: { kind?: unknown; title: string; text?: unknown; question?: unknown; detail?: unknown; reason?: unknown }): { before: string[]; body: string; footer: string } | null {
+  const plain = (part: unknown): part is string => typeof part === "string" && part.trim().length > 0;
+  // Livelier than plain text (Sean, 2026-11-02: "more colourful, like Telegram"): WhatsApp can't colour a button,
+  // but a task gets its own emoji and a bold title, its why gets 💡, and the reminder sits in the grey footer.
+  const title = `${cardEmoji(card.kind)} ${whatsappBold(card.title)}`;
+  const shown = [title, ...[card.text, card.question, card.detail].filter(plain).map((part) => part.trim()), ...(plain(card.reason) ? [`💡 ${card.reason.trim()}`] : [])];
+  const whole = shown.join("\n\n");
+  if (whole.length <= WA_BODY_MAX) return { before: [], body: whole, footer: CONFIRM_FOOTER };
   const before = splitForWhatsApp(shown.join("\n\n"));
-  const body = `${card.title.trim()}\n\nThe full text is in the message${before.length === 1 ? "" : "s"} above — read ${before.length === 1 ? "it" : "them"} first. ${footer}`;
-  return body.length <= WA_BODY_MAX ? { before, body } : null;
+  const body = `${title}\n\nThe full text is in the message${before.length === 1 ? "" : "s"} above — read ${before.length === 1 ? "it" : "them"} first.`;
+  return body.length <= WA_BODY_MAX ? { before, body, footer: CONFIRM_FOOTER } : null;
 }
+
+/** The button's label — ✅ for a little colour (a WhatsApp button itself can't be coloured). */
+export const CONFIRM_TITLE = "✅ Confirm";
+/** The grey line under a task: when it can be confirmed, and that nothing happens before. (≤ 60 characters.) */
+export const CONFIRM_FOOTER = `Confirm within ${PENDING_ACTION_TTL_MS / 60_000} min · nothing changes till you do`;
+/** WhatsApp bold is *…*: a title's own asterisks would break it, so they go. */
+export const whatsappBold = (text: string) => `*${text.replace(/\*/g, "").trim()}*`;
+/** Each kind of task its own emoji, so a list of them reads at a glance. */
+const CARD_EMOJI: Record<string, string> = {
+  note: "📝", customer_note: "📝", follow_up: "📅", meeting: "🤝", test_drive: "🚗", block_time: "🗓️",
+  reschedule: "🔁", cancel_activity: "✖️", assign: "👤", stage: "➡️", lost: "❌", nurture: "🌱",
+  quote: "🧾", quote_build: "🧾", quote_add: "🧾", quote_change: "🧾", quote_pdf: "📄", schedule: "⏰", watch: "👀",
+  create_customer: "🆕", create_lead: "🆕", update_customer: "✏️", attach_file: "📎", record_payment: "💰",
+  schedule_delivery: "🚚", job_card: "🔧", plan: "📋",
+};
+export const cardEmoji = (kind: unknown) => CARD_EMOJI[String(kind)] ?? "✳️";
 
 /*
  * ── WHAT THE ASSISTANT SENDS ON ITS OWN ─────────────────────────────────────

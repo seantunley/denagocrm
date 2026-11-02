@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState, useTransition } from "react";
+import { useEffect, useReducer, useRef, useState } from "react";
 import Link from "next/link";
 import { ArrowUpRight, Loader2, Mic, Paperclip, Smile, Square, ThumbsDown, ThumbsUp, Volume2, X } from "lucide-react";
 import { rateAssistantAnswer } from "@/app/actions/assistant";
@@ -8,7 +8,8 @@ import { speakAssistantAnswer } from "@/app/actions/assistantVoice";
 import type { Evidence } from "@/lib/assistantReply";
 import { DaxIcon } from "@/components/DaxIcon";
 import { shrinkToJpeg } from "@/components/shrinkImage";
-import { askStreaming } from "@/components/askStream";
+import { ASK_STOPPED, askStreaming, newRunKey, stopAsking } from "@/components/askStream";
+import { chatQueue, emptyChatQueue, type ChatItem } from "@/components/chatQueue";
 import { IMAGE_MAX_SIDE, MAX_IMAGE_BYTES } from "@/lib/assistantImage";
 import { transcribeQuestion } from "@/app/actions/voice";
 import type { AssistantRow } from "@/lib/crmAssistant";
@@ -20,6 +21,8 @@ import AssistantPlanCard from "@/components/AssistantPlanCard";
 type Turn = {
   question: string; answer?: string; cited?: string; evidence?: Evidence[]; turnId?: string;
   error?: string; rows: AssistantRow[]; learned?: number; actions?: ActionCard[]; choices?: string[]; source?: string;
+  /** Stopped by the person: shown here as stopped, with nothing from it — never a card. Not in the saved history. */
+  stopped?: boolean;
 };
 
 /** A scheduled answer or a fired watch arrived on its own — say so, or it reads as something you asked just now. */
@@ -38,6 +41,7 @@ const scheduledLabel = (turn: Turn) =>
  * ones its own lookups returned — ever reach here.
  */
 function AnswerText({ turn }: { turn: Turn }) {
+  if (turn.stopped) return <p className="text-sm text-muted-foreground">⏹ {ASK_STOPPED}</p>;
   if (!turn.cited || !turn.evidence?.length) return <p className="whitespace-pre-line text-sm leading-relaxed">{turn.answer}</p>;
   const parts = turn.cited.split(/\[\[(\d+)\]\]/);
   return (
@@ -164,7 +168,14 @@ export default function AssistantChat({
 }) {
   const [question, setQuestion] = useState("");
   const [turns, setTurns] = useState<Turn[]>(() => history.map((t) => ({ ...t, rows: [] })));
-  const [pending, startTransition] = useTransition();
+  // One answer at a time; anything asked meanwhile waits its turn, and can be edited or removed (chatQueue).
+  const [chat, dispatch] = useReducer(chatQueue<Blob>, undefined, emptyChatQueue<Blob>);
+  const pending = chat.running !== null;
+  // Said out loud to a screen reader, and shown: queued, stopped, too late to stop.
+  const [notice, setNotice] = useState<string | null>(null);
+  // The question being answered: its run key (what Stop names) and the switch that stops reading it.
+  const flight = useRef<{ key: string; stopper: AbortController; item: ChatItem<Blob> } | null>(null);
+  const started = useRef(new Set<number>());
   const [hearing, setHearing] = useState(false);
   const [voiceError, setVoiceError] = useState<string | null>(null);
   const [emojiOpen, setEmojiOpen] = useState(false);
@@ -210,39 +221,99 @@ export default function AssistantChat({
     });
   };
 
+  // Asking while an answer is still coming QUEUES it: it goes, on its own, when that one is done.
   const ask = (text: string) => {
     const q = text.trim();
-    if ((!q && !image) || pending) return;
-    const sent = image;
+    if (!q && !image) return;
+    setNotice(pending ? `Queued — it goes as soon as ${name} is done.` : null);
+    dispatch({ type: "ask", text: q, image: image?.blob ?? null });
     setQuestion("");
     clearImage();
+  };
+
+  const run = async (item: ChatItem<Blob>) => {
+    const q = item.text;
+    const sent = item.image;
     const shown = sent ? `📎 ${q || "Image"}` : q;
     setLive({ question: shown, text: "" });
-    startTransition(async () => {
-      // Streamed: the answer appears as it is written. Asked exactly once — a
-      // dropped stream is never re-asked another way (askStream).
-      const form = new FormData();
-      form.set("question", q);
-      // The query too (?conversation=…, ?edit=…): on the inbox and the quote
-      // editor, that is what says which record "this" is.
-      if (page) form.set("page", `${page}${typeof window === "undefined" ? "" : window.location.search}`);
-      if (sent) form.set("image", new File([sent.blob], "image.jpg", { type: "image/jpeg" }));
-      const result = await askStreaming(
-        form,
-        (text) => setLive({ question: shown, text }),
-        (status) => setLive((prev) => ({ question: shown, text: prev?.text ?? "", status })),
-      );
-      setLive(null);
-      setTurns((prev) => [
-        result.ok
+    // Streamed: the answer appears as it is written. Asked exactly once — a
+    // dropped stream is never re-asked another way (askStream).
+    const form = new FormData();
+    form.set("question", q);
+    // The query too (?conversation=…, ?edit=…): on the inbox and the quote
+    // editor, that is what says which record "this" is.
+    if (page) form.set("page", `${page}${typeof window === "undefined" ? "" : window.location.search}`);
+    if (sent) form.set("image", new File([sent], "image.jpg", { type: "image/jpeg" }));
+    const key = newRunKey();
+    const stopper = new AbortController();
+    flight.current = { key, stopper, item };
+    const result = await askStreaming(
+      form,
+      (text) => setLive({ question: shown, text }),
+      (status) => setLive((prev) => ({ question: shown, text: prev?.text ?? "", status })),
+      { key, signal: stopper.signal },
+    );
+    flight.current = null;
+    setLive(null);
+    // Stopped: kept on screen as stopped, with nothing from it (the server kept nothing either) — never a card.
+    const stopped = stopper.signal.aborted;
+    setTurns((prev) => [
+      stopped
+        ? { question: shown, stopped: true, rows: [] }
+        : result.ok
           ? {
               question: shown, answer: result.answer, cited: result.cited, evidence: result.evidence, turnId: result.turnId,
               rows: result.rows, learned: result.learned, actions: result.actions, choices: result.choices,
             }
           : { question: shown, error: result.error, rows: [] },
-        ...prev,
-      ]);
-    });
+      ...prev,
+    ]);
+    dispatch({ type: "finished", id: item.id });
+  };
+
+  // The next question goes as soon as there is one and nothing is being answered — once each.
+  useEffect(() => {
+    const item = chat.running;
+    if (!item || started.current.has(item.id)) return;
+    started.current.add(item.id);
+    void run(item);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- once per question
+  }, [chat.running]);
+
+  // STOP AND CORRECT. The server decides: stopped (nothing from it is kept, and the next queued question goes) or
+  // too late (it had finished — its answer arrives as usual). Stopped with nothing queued or typed, the question
+  // comes back into the box to be put right.
+  const stop = async () => {
+    const current = flight.current;
+    if (!current || chat.stopping) return;
+    dispatch({ type: "stopping" });
+    if (!(await stopAsking(current.key))) {
+      dispatch({ type: "stopRefused" });
+      setNotice(`Too late to stop — ${name} had already finished.`);
+      return;
+    }
+    current.stopper.abort();
+    const putBack = chat.queue.length === 0 && !question.trim() && !image;
+    if (putBack) {
+      setQuestion(current.item.text);
+      if (current.item.image) setImage({ blob: current.item.image, preview: URL.createObjectURL(current.item.image) });
+      input.current?.focus();
+    }
+    setNotice(putBack ? "Stopped. Your question is back in the box — fix it and send." : "Stopped — nothing from that answer was kept.");
+  };
+
+  // A queued question taken back into the box to edit (anything already typed stays, before it).
+  const editQueued = (item: ChatItem<Blob>) => {
+    dispatch({ type: "remove", id: item.id });
+    setQuestion((prev) => (prev.trim() ? `${prev.trim()} ${item.text}` : item.text));
+    if (item.image) {
+      const preview = URL.createObjectURL(item.image);
+      setImage((old) => {
+        if (old) URL.revokeObjectURL(old.preview);
+        return { blob: item.image!, preview };
+      });
+    }
+    input.current?.focus();
   };
 
   // Asked once when opened for it (the brief's "Ask DAX for a plan"). Keys are
@@ -273,7 +344,21 @@ export default function AssistantChat({
   const end = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
     if (compact) end.current?.scrollIntoView({ block: "end" });
-  }, [compact, turns.length, pending, live?.text]);
+  }, [compact, turns.length, pending, live?.text, chat.queue.length]);
+
+  const stopButton = (
+    <button
+      type="button"
+      onClick={() => void stop()}
+      disabled={chat.stopping}
+      className="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-full border border-border bg-card px-3 text-xs font-medium text-muted-foreground hover:border-destructive hover:text-destructive disabled:opacity-60"
+      aria-label={`Stop ${name}'s answer`}
+      title="Stop — nothing from this answer is kept"
+    >
+      {chat.stopping ? <Loader2 className="size-3.5 animate-spin" /> : <Square className="size-3.5" />}
+      {chat.stopping ? "Stopping…" : "Stop"}
+    </button>
+  );
 
   const details = (turn: Turn) => (
     <>
@@ -338,7 +423,7 @@ export default function AssistantChat({
         <input
           ref={input}
           className="h-10 min-w-0 flex-1 bg-transparent px-2 text-sm outline-none"
-          placeholder={compact ? `Message ${name}…` : `Ask ${name} — e.g. "What should I do with Anna?"`}
+          placeholder={pending ? `Type your next message — it goes when ${name} is done` : compact ? `Message ${name}…` : `Ask ${name} — e.g. "What should I do with Anna?"`}
           value={question}
           onChange={(event) => setQuestion(event.target.value)}
           // A pasted screenshot is attached, not typed.
@@ -351,7 +436,7 @@ export default function AssistantChat({
           }}
           maxLength={500}
           aria-label="Ask the CRM"
-          disabled={pending || voice.recording || hearing}
+          disabled={voice.recording || hearing}
         />
         <input
           ref={picker}
@@ -366,7 +451,7 @@ export default function AssistantChat({
         <button
           type="button"
           onClick={() => picker.current?.click()}
-          disabled={pending || voice.recording || hearing}
+          disabled={voice.recording || hearing}
           className={`grid size-10 shrink-0 place-items-center rounded-md border ${image ? "border-primary text-primary" : "border-border text-muted-foreground hover:text-foreground"}`}
           aria-label="Attach a photo or screenshot"
           title="Attach a photo or screenshot"
@@ -377,7 +462,7 @@ export default function AssistantChat({
           <button
             type="button"
             onClick={() => setEmojiOpen((open) => !open)}
-            disabled={pending || voice.recording || hearing}
+            disabled={voice.recording || hearing}
             className="grid size-10 shrink-0 place-items-center rounded-md border border-border text-muted-foreground hover:text-foreground"
             aria-label="Add an emoji"
             aria-expanded={emojiOpen}
@@ -405,7 +490,7 @@ export default function AssistantChat({
           <button
             type="button"
             onClick={voice.recording ? voice.stop : voice.start}
-            disabled={pending || hearing}
+            disabled={hearing}
             className={`grid size-10 shrink-0 place-items-center rounded-md border ${voice.recording ? "border-destructive text-destructive" : "border-border text-muted-foreground hover:text-foreground"}`}
             aria-label={voice.recording ? "Stop and ask" : "Ask by voice"}
             title={voice.recording ? "Stop and ask" : "Ask by voice"}
@@ -413,10 +498,27 @@ export default function AssistantChat({
             {hearing ? <Loader2 className="size-4 animate-spin" /> : voice.recording ? <Square className="size-4" /> : <Mic className="size-4" />}
           </button>
         )}
-        <button type="submit" className="btn-primary h-10 px-4 text-sm" disabled={pending || (!question.trim() && !image)}>
-          {pending ? <Loader2 className="size-4 animate-spin" /> : compact ? "Send" : "Ask"}
+        <button type="submit" className="btn-primary h-10 px-4 text-sm" disabled={!question.trim() && !image} title={pending ? `Goes as soon as ${name} is done` : undefined}>
+          {pending ? "Queue" : compact ? "Send" : "Ask"}
         </button>
       </form>
+      {chat.queue.length > 0 && (
+        <ol className="space-y-1" aria-label="Waiting to send">
+          {chat.queue.map((item) => (
+            <li key={item.id} className="flex items-center gap-2 rounded-lg border border-dashed border-border bg-card px-3 py-1 text-sm">
+              <span className="shrink-0 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Queued</span>
+              <span className="min-w-0 flex-1 truncate">{item.image ? `📎 ${item.text || "Image"}` : item.text}</span>
+              <button type="button" onClick={() => editQueued(item)} className="h-9 shrink-0 rounded-md px-2 text-xs font-medium text-primary hover:bg-muted" aria-label={`Edit queued message: ${item.text || "image"}`}>
+                Edit
+              </button>
+              <button type="button" onClick={() => dispatch({ type: "remove", id: item.id })} className="grid size-9 shrink-0 place-items-center rounded-md text-muted-foreground hover:text-destructive" aria-label={`Remove queued message: ${item.text || "image"}`}>
+                <X className="size-4" />
+              </button>
+            </li>
+          ))}
+        </ol>
+      )}
+      <p aria-live="polite" className={notice ? "text-xs text-muted-foreground" : "sr-only"}>{notice}</p>
       {image && (
         <div className="flex items-center gap-2 text-xs text-muted-foreground">
           {/* eslint-disable-next-line @next/next/no-img-element -- a local blob preview, never a remote image */}
@@ -465,12 +567,13 @@ export default function AssistantChat({
             <p className="ml-auto max-w-[85%] whitespace-pre-line rounded-2xl rounded-br-sm bg-primary px-3 py-2 text-sm text-primary-foreground">
               {live.question}
             </p>
-            <div className="max-w-[92%] rounded-2xl rounded-bl-sm bg-muted/50 px-3 py-2">
+            <div className="max-w-[92%] space-y-2 rounded-2xl rounded-bl-sm bg-muted/50 px-3 py-2">
               {live.text ? (
                 <p className="whitespace-pre-line text-sm leading-relaxed">{live.text}</p>
               ) : (
                 <p className="animate-pulse text-sm text-muted-foreground">{live.status ?? `${name} is looking into it…`}</p>
               )}
+              {stopButton}
             </div>
           </div>
         )}
@@ -502,7 +605,10 @@ export default function AssistantChat({
 
       {pending && (
         <div className="card space-y-3 p-5">
-          {live && <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{live.question}</p>}
+          <div className="flex items-start gap-3">
+            <p className="min-w-0 flex-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground">{live?.question}</p>
+            {stopButton}
+          </div>
           {live?.text ? (
             <p className="whitespace-pre-line text-sm leading-relaxed">{live.text}</p>
           ) : (

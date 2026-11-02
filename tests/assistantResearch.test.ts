@@ -110,7 +110,7 @@ test("tasks are proposed only where someone can confirm them; a scheduled run as
   assert.match(lib, /const choices = source === "schedule" \? \[\] : reply\.choices;/);
   assert.match(lib, /source,\s*scheduleId: source === "schedule" \? opts\.scheduleId \?\? null : null,/);
   // The browser can't pick a source: the chat passes only the checked image(s).
-  assert.match(code("src/lib/assistantAsk.ts"), /const page = typeof input\.page === "string" \? input\.page\.slice\(0, 200\) : null;\s*return askCrm\(user, q, page, \{ images, onAnswerText: live\.onAnswerText, onProgress: live\.onProgress, onPhase: live\.onPhase, timings: live\.timings \}\);/);
+  assert.match(code("src/lib/assistantAsk.ts"), /const page = typeof input\.page === "string" \? input\.page\.slice\(0, 200\) : null;\s*return askCrm\(user, q, page, \{ images, onAnswerText: live\.onAnswerText, onProgress: live\.onProgress, onPhase: live\.onPhase, timings: live\.timings, stillWanted: live\.stillWanted \}\);/);
 });
 
 test("running for someone without a session re-checks membership, permission and module", () => {

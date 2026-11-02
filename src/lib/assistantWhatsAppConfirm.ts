@@ -13,9 +13,12 @@ import {
   CRM_CARD_TTL_MS,
   PENDING_ACTION_TTL_MS,
   WHATSAPP_CONFIRMABLE,
+  CONFIRM_TITLE,
   confirmAllButtonId,
+  confirmAllOfferedAt,
   confirmButtonId,
   confirmMessages,
+  whatsappBold,
   splitForWhatsApp_cards,
   whatsappConfirmOn,
 } from "./assistantWhatsAppRules";
@@ -51,7 +54,17 @@ export async function confirmingOnWhatsAppOn(): Promise<boolean> {
  * one line saying it needs the CRM, so a proposal is never silently dropped.
  * A failure here costs the offer, never the answer (already sent).
  */
-export async function offerConfirmations(tenantId: string, userId: string, waId: string, cards: readonly ActionCard[]): Promise<void> {
+export async function offerConfirmations(
+  tenantId: string,
+  userId: string,
+  waId: string,
+  cards: readonly ActionCard[],
+  /**
+   * Tasks still waiting that JOIN this offer (voice-first: one of a set was corrected — its replacement is offered
+   * here, and the rest of the set comes with it, so "Confirm all" / "yes to all" still means the whole set).
+   */
+  carry: readonly string[] = [],
+): Promise<void> {
   if (cards.length === 0) return;
   try {
     const on = await confirmingOnWhatsAppOn();
@@ -63,7 +76,8 @@ export async function offerConfirmations(tenantId: string, userId: string, waId:
     // older offer still waiting (confirmAllFromWhatsApp).
     const offeredAt = new Date();
     const offered: string[] = [];
-    for (const card of on ? confirmable : []) {
+    const offering = on ? confirmable : [];
+    for (const [at, card] of offering.entries()) {
       // What will be shown, in full. Null: it cannot be shown whole, so it gets no button.
       const messages = confirmMessages(card);
       if (!messages) { elsewhere.push(card); continue; }
@@ -83,7 +97,9 @@ export async function offerConfirmations(tenantId: string, userId: string, waId:
         data: { tenantId, userId, card: card as object, createdAt: offeredAt, expiresAt: new Date(Date.now() + PENDING_ACTION_TTL_MS) },
         select: { id: true },
       });
-      const sent = await sendWhatsAppButtons(waId, messages.body, [{ id: confirmButtonId(pending.id), title: "Confirm" }]);
+      // WhatsApp's own header and grey footer (2026-11-02, "more colourful"): which of the set, and the reminder.
+      const frame = { ...(offering.length > 1 ? { header: `📋 Task ${at + 1} of ${offering.length}` } : {}), footer: messages.footer };
+      const sent = await sendWhatsAppButtons(waId, messages.body, [{ id: confirmButtonId(pending.id), title: CONFIRM_TITLE }], frame);
       if (!sent.ok) {
         await logError("assistant-whatsapp", "confirm offer send failed");
         // NO BUTTON ARRIVED, so this row can never be confirmed from the phone —
@@ -101,9 +117,19 @@ export async function offerConfirmations(tenantId: string, userId: string, waId:
     // ONE TAP FOR ALL (Sean, 2026-11-02, voice-first: a debrief gives several tasks at once, and the person may be
     // driving). Each is shown above with its own Confirm; this confirms exactly those. A failed send costs nothing —
     // the single buttons, and "yes to all", still work.
-    if (offered.length >= 2) {
-      const body = `That's ${offered.length} tasks, each shown above. Tap Confirm all to do all ${offered.length} — or reply "yes to all". Nothing changes until you do.`;
-      const all = await sendWhatsAppButtons(waId, body, [{ id: confirmAllButtonId(offered[0]), title: `Confirm all ${offered.length}` }]);
+    // The rest of a corrected set joins this offer: still waiting, this person's, phone rows only.
+    const carried = offered.length && carry.length
+      ? (await basePrisma.assistantPendingAction.updateMany({
+          where: { id: { in: [...carry] }, tenantId, userId, forCrm: false, confirmedAt: null, completedAt: null, failedAt: null, expiresAt: { gt: new Date() } },
+          data: { createdAt: offeredAt },
+        })).count
+      : 0;
+    const inSet = offered.length + carried;
+    if (inSet >= 2) {
+      const body = carried
+        ? `👆 ${whatsappBold(`That's ${inSet} tasks now`)} — the changed one above, and ${carried === 1 ? "the one" : `the ${carried}`} you already had. Tap Confirm all to do all ${inSet}.`
+        : `👆 ${whatsappBold(`That's ${inSet} tasks`)}, each shown above. Tap Confirm all to do all ${inSet}.`;
+      const all = await sendWhatsAppButtons(waId, body, [{ id: confirmAllButtonId(offered[0], offeredAt), title: `${CONFIRM_TITLE} all ${inSet}` }], { footer: `Or reply "yes to all" · nothing changes till you do` });
       if (!all.ok) await logError("assistant-whatsapp", "confirm-all offer send failed");
     }
     if (elsewhere.length > 0) {
@@ -283,26 +309,33 @@ export async function confirmFromWhatsApp(tenantId: string, user: PermissionUser
 
 /**
  * CONFIRM ALL — the button, or "yes to all" typed or said (Sean, 2026-11-02: voice-first). Every task offered
- * TOGETHER with `anchorId` (one offer shares one createdAt), or with the newest offer when there is no anchor; each
- * one still waiting is confirmed exactly as its own Confirm would be — claimed once, run as this person, its own ✅
- * or reason. Never an older offer, never a card saved for the CRM, never anyone else's.
+ * offered at the MOMENT the button names (its token: `confirmAllButtonId`), or the newest offer when there is no
+ * button ("yes to all"); each one still waiting is confirmed exactly as its own Confirm would be — claimed once, run as
+ * this person, its own ✅ or reason. Never an older offer, never a card saved for the CRM, never anyone else's — and
+ * (review of #945) never a task added AFTER the button was sent: the moment is the button's own, not read back from a
+ * row whose set may have been regrouped since by a correction.
  */
-export async function confirmAllFromWhatsApp(tenantId: string, user: PermissionUser, waId: string, anchorId: string | null): Promise<void> {
+export async function confirmAllFromWhatsApp(tenantId: string, user: PermissionUser, waId: string, anchorToken: string | null): Promise<void> {
   if (!(await confirmingOnWhatsAppOn())) return say(waId, "Confirming on WhatsApp is switched off for this workspace — ask me in the CRM and confirm on the card.");
   const now = new Date();
-  // No anchor ("yes to all"): the NEWEST offer, whatever became of it — never the newest one still waiting, which
-  // after the last set was done would be an older offer (review of #939). Done or expired: nothing remains.
-  const anchor = anchorId
-    ? await basePrisma.assistantPendingAction.findFirst({ where: { id: anchorId, tenantId, userId: user.id, forCrm: false }, select: { createdAt: true } })
-    : await basePrisma.assistantPendingAction.findFirst({ where: { tenantId, userId: user.id, forCrm: false }, orderBy: { createdAt: "desc" }, select: { createdAt: true } });
-  const rows = anchor
+  let offeredAt: Date | null;
+  if (anchorToken) {
+    offeredAt = confirmAllOfferedAt(anchorToken);
+    // A button sent before offers were stamped: its set can't be known for certain, so it confirms nothing.
+    if (!offeredAt) return say(waId, "That Confirm all button is out of date — tap Confirm on each task, or say \"yes to all\".");
+  } else {
+    // "Yes to all": the NEWEST offer, whatever became of it — never the newest one still waiting, which after the
+    // last set was done would be an older offer (review of #939). Done or expired: nothing remains.
+    offeredAt = (await basePrisma.assistantPendingAction.findFirst({ where: { tenantId, userId: user.id, forCrm: false }, orderBy: { createdAt: "desc" }, select: { createdAt: true } }))?.createdAt ?? null;
+  }
+  const rows = offeredAt
     ? await basePrisma.assistantPendingAction.findMany({
-        where: { tenantId, userId: user.id, forCrm: false, createdAt: anchor.createdAt, confirmedAt: null, completedAt: null, failedAt: null, expiresAt: { gt: now } },
+        where: { tenantId, userId: user.id, forCrm: false, createdAt: offeredAt, confirmedAt: null, completedAt: null, failedAt: null, expiresAt: { gt: now } },
         orderBy: { id: "asc" },
         select: { id: true },
       })
     : [];
-  if (rows.length === 0) return say(waId, "Nothing from that set is waiting any more — each was done, or has expired. Ask me again if you still want something.");
+  if (rows.length === 0) return say(waId, "Nothing from that set is waiting any more — each was done, changed or has expired. Use the newest Confirm all, or say \"yes to all\".");
   // One that throws (the database, for a moment) does not stop the rest — and is said, not skipped silently.
   for (const row of rows) {
     await confirmFromWhatsApp(tenantId, user, waId, row.id).catch(async (error: unknown) => {
@@ -316,7 +349,13 @@ export async function confirmAllFromWhatsApp(tenantId: string, user: PermissionU
  * What waits for this person's Confirm here: how many in all, and those still waiting from the NEWEST offer (in the
  * order offered) — empty when the newest offer is all done, even if an older one still waits (review of #939).
  */
-export async function waitingForConfirm(tenantId: string, userId: string): Promise<{ total: number; newest: { id: string; title: string }[]; only: { id: string; title: string } | null }> {
+export async function waitingForConfirm(tenantId: string, userId: string): Promise<{
+  total: number;
+  newest: { id: string; title: string }[];
+  only: { id: string; title: string } | null;
+  /** Every task waiting, oldest first, with what its card shows — numbered to DAX so a correction can name one. */
+  all: { id: string; title: string; detail?: string }[];
+}> {
   const latest = await basePrisma.assistantPendingAction.findFirst({ where: { tenantId, userId, forCrm: false }, orderBy: { createdAt: "desc" }, select: { createdAt: true } });
   const rows = await basePrisma.assistantPendingAction.findMany({
     where: { tenantId, userId, forCrm: false, confirmedAt: null, completedAt: null, failedAt: null, expiresAt: { gt: new Date() } },
@@ -330,6 +369,35 @@ export async function waitingForConfirm(tenantId: string, userId: string): Promi
     .filter((row) => row.createdAt.getTime() === newestAt)
     .sort((a, b) => (a.id < b.id ? -1 : 1))
     .map(shown);
+  const all = [...rows]
+    .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime() || (a.id < b.id ? -1 : 1))
+    .map((row) => {
+      const card = (row.card ?? {}) as { detail?: unknown; text?: unknown };
+      const detail = typeof card.detail === "string" ? card.detail : typeof card.text === "string" ? card.text : "";
+      return { ...shown(row), ...(detail ? { detail: detail.slice(0, 300) } : {}) };
+    });
   // The ONE task waiting, wherever it was offered: what a plain "yes" confirms (Sean, 2026-10-24).
-  return { total: rows.length, newest, only: rows.length === 1 ? shown(rows[0]) : null };
+  return { total: rows.length, newest, only: rows.length === 1 ? shown(rows[0]) : null, all };
+}
+
+/**
+ * WITHDRAW waiting tasks (voice-first, 2026-11-02: "drop the follow-up", or the old version of one just corrected):
+ * this person's own, still waiting, phone rows only — never one already claimed, done or failed, never a saved card.
+ * Nothing in the CRM changes: only the offer goes. Returns the titles withdrawn.
+ */
+export async function withdrawWaiting(tenantId: string, userId: string, ids: readonly string[]): Promise<string[]> {
+  if (!ids.length) return [];
+  const rows = await basePrisma.assistantPendingAction.findMany({
+    where: { id: { in: [...ids] }, tenantId, userId, forCrm: false, confirmedAt: null, completedAt: null, failedAt: null },
+    select: { id: true, card: true },
+  });
+  // One at a time, each conditional: one confirmed meanwhile is not withdrawn — and not reported as withdrawn.
+  const withdrawn: string[] = [];
+  for (const row of rows) {
+    const gone = await basePrisma.assistantPendingAction.deleteMany({
+      where: { id: row.id, tenantId, userId, forCrm: false, confirmedAt: null, completedAt: null, failedAt: null },
+    });
+    if (gone.count === 1) withdrawn.push(String((row.card as { title?: unknown } | null)?.title ?? "a task"));
+  }
+  return withdrawn;
 }

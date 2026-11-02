@@ -141,6 +141,7 @@ export const assistantAndMoreArticles: HelpArticle[] = [
         "**Customers waiting for a reply.** The customer who has waited longest is named.",
         "**Today.** Meetings, test drives and other tasks still ahead of you today.",
         "**Overdue follow-ups.**",
+        "**Nurture reviews due** — deals parked in Nurture whose review day has come, with why each was parked, what the customer wanted and when to follow up. One whose review day has passed stays on the list, marked overdue, until somebody acts on it. Ask DAX to bring it back and it prepares a **Reactivate** card showing the stage and the next action. Nothing changes until you press Confirm, and the customer is not contacted.",
         "**Deals that look close** — the customer opened the quote recently, or replied and you answered.",
         "**Quotes expiring.**",
         "**Quotes opened but not signed.**",
@@ -150,7 +151,7 @@ export const assistantAndMoreArticles: HelpArticle[] = [
       { type: "list", items: [
         "At most seven lines are shown. Each line gives a count and names one example — usually the highest-value deal in that group.",
         "Click a line to go straight to the record when there is only one, or to the list that holds them all when there are several.",
-        "The number in the headline counts only the urgent groups: waiting customers, overdue follow-ups, expiring quotes and overdue deliveries. A meeting or a warm deal is good news, not a problem.",
+        "The number in the headline counts only the urgent groups: waiting customers, overdue follow-ups, Nurture reviews due, expiring quotes and overdue deliveries. A meeting or a warm deal is good news, not a problem.",
         "**Pipeline needing attention** adds up the value of the deals behind those problems, each deal counted once.",
         "The brief covers deals assigned to you, plus unassigned deals that nobody else will pick up.",
         "If nothing needs you, it says \"Nothing urgent, a clean slate.\"",
@@ -163,6 +164,13 @@ export const assistantAndMoreArticles: HelpArticle[] = [
       { type: "h", text: "The Team section" },
       { type: "p", text: "Workspace owners, and people who manage a team, also get a **Team** section they can open. It shows one row per salesperson: how many customers are waiting on them, how many follow-ups are overdue, the value of their stalled deals and the value of their open deals. A team manager sees their own team members; an owner sees everyone." },
       { type: "callout", tone: "tip", text: "The brief only ever counts deals you are allowed to see. If the brief cannot be worked out for some reason, it is simply left off and the rest of your home screen still loads." },
+      { type: "h", text: "Lost deals that aren't really lost" },
+      { type: "p", text: "Ask DAX \"which lost deals are still alive?\" and it lists deals marked lost in the last 90 days for a went-quiet or timing reason — \"gone cold\", \"stopped responding\", \"buying next year\" — where the customer has since sent a message or opened a quote. For each, it says when and why the deal was lost and what the customer did since." },
+      { type: "list", items: [
+        "On the first working day of each month, DAX's morning brief adds this list for your own deals.",
+        "DAX offers one card per deal: **Park in Nurture** (it asks why and when to look again) or **Reopen** (the deal goes back to the stage it was in). Nothing changes until you press Confirm, and the customer is not contacted.",
+        "A deal lost because the customer bought elsewhere or found it too expensive is not listed. The reason is read from the words typed when it was marked lost.",
+      ] },
     ],
   },
   {

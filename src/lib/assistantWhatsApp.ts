@@ -11,7 +11,7 @@ import { getCompanyProfile } from "./companyProfile";
 import { transcribeVoice, transcribeVoiceDetailed } from "./transcribe";
 import { askCrm } from "./crmAssistant";
 import type { ActionCard } from "./assistantActions";
-import { confirmAllFromWhatsApp, confirmFromWhatsApp, confirmingOnWhatsAppOn, offerConfirmations, waitingForConfirm } from "./assistantWhatsAppConfirm";
+import { confirmAllFromWhatsApp, confirmFromWhatsApp, confirmingOnWhatsAppOn, offerConfirmations, waitingForConfirm, withdrawWaiting } from "./assistantWhatsAppConfirm";
 import { ASK_LIMIT_MESSAGE, assistantAskAllowed, assistantImageAllowed, assistantUserFor, assistantVoiceConfirmAllowed, assistantVoiceReplyAllowed } from "./assistantUser";
 import { MAX_IMAGE_BYTES, cleanJpeg, jpegDataUrl } from "./assistantImage";
 import { MAX_UPLOAD_BYTES } from "./assistantUpload";
@@ -407,6 +407,19 @@ export async function handleStaffWhatsApp(from: string, input: StaffWhatsAppInpu
   let script: string | undefined;
   // "typing…" KEPT ALIVE until the reply is on its way: Meta drops it after 25 seconds, and an answer plus its
   // voice note can take longer (Sean, 2026-11-02: voice replies felt slow). Cleared on every way out.
+  // CHANGE A WAITING TASK BY VOICE (Sean, 2026-11-02): DAX is shown what waits for their Confirm, numbered, so "make
+  // the delivery Wednesday" replaces that card and "drop the follow-up" withdraws it. Never for something FORWARDED:
+  // a customer's words can't withdraw the person's tasks. Read BEFORE the typing timer starts, and a failed read is
+  // "nothing waiting" — it must never stop the answer, or leave the timer running (it hung a test run in CI).
+  let waitingNow: Awaited<ReturnType<typeof waitingForConfirm>>["all"] = [];
+  if (!forwarded) {
+    try {
+      waitingNow = (await waitingForConfirm(tenantId, user.id)).all;
+    } catch (error) {
+      await logError("assistant-whatsapp", "reading waiting tasks failed", error instanceof Error ? error.name : "unknown").catch(() => {});
+    }
+  }
+  let dropWaiting: number[] = [];
   const typingCalls: Promise<unknown>[] = [];
   const renew = setInterval(() => { typingCalls.push(showWhatsAppTyping(messageId)); }, TYPING_RENEW_MS);
   try {
@@ -415,8 +428,13 @@ export async function handleStaffWhatsApp(from: string, input: StaffWhatsAppInpu
       // gets a Confirm button; without it NOTHING can be changed from this phone,
       // and the task is kept as a card on the person's Ask page instead ("saved").
       // A voice note back: DAX also writes what to SAY (assistantReply.SPOKEN_RULE).
-      const result = await askCrm(user, q, null, { source: "whatsapp", images, ...(file ? { file } : {}), ...(voiceBack ? { spoken: true } : {}), proposeTasks: (await confirmingOnWhatsAppOn()) ? true : "saved" });
+      const result = await askCrm(user, q, null, {
+        source: "whatsapp", images, ...(file ? { file } : {}), ...(voiceBack ? { spoken: true } : {}),
+        ...(waitingNow.length ? { waiting: waitingNow.map(({ title, detail }) => ({ title, ...(detail ? { detail } : {}) })) } : {}),
+        proposeTasks: (await confirmingOnWhatsAppOn()) ? true : "saved",
+      });
       if (result.ok) proposed = result.actions;
+      if (result.ok) dropWaiting = result.dropWaiting ?? [];
       plan = result.ok ? planWhatsAppReply(result.answer, result.choices) : { texts: [result.error], buttons: null };
       if (result.ok) {
         answer = result.answer;
@@ -435,8 +453,17 @@ export async function handleStaffWhatsApp(from: string, input: StaffWhatsAppInpu
   } finally {
     clearInterval(renew);
   }
+  // A waiting task taken back (or the old version of one just corrected): withdrawn, and said — nothing in the CRM
+  // changes. The rest of what was waiting joins any replacement's offer, so "yes to all" still means the whole set.
+  const withdrawnIds = dropWaiting.map((n) => waitingNow[n - 1]?.id).filter((id): id is string => Boolean(id));
+  const withdrawn = !withdrawnIds.length ? [] : await withdrawWaiting(tenantId, user.id, withdrawnIds).catch(async (error: unknown) => {
+    await logError("assistant-whatsapp", "withdrawing a waiting task failed", error instanceof Error ? error.name : "unknown").catch(() => {});
+    return [] as string[];
+  });
+  if (withdrawn.length) await sendPlan(waId, { texts: [`↩️ *Withdrawn* — nothing was changed:\n${withdrawn.map((title) => `• ${title}`).join("\n")}`], buttons: null });
+  const carry = withdrawn.length ? waitingNow.map((task) => task.id).filter((id) => !withdrawnIds.includes(id)) : [];
   // After the answer: each task it set up, with its Confirm button.
-  await offerConfirmations(tenantId, user.id, waId, proposed);
+  await offerConfirmations(tenantId, user.id, waId, proposed, carry);
   // Settled before the function ends, so the request is never left running on a serverless host.
   await Promise.all([typing, ...typingCalls]);
   return true;
