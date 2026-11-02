@@ -188,6 +188,8 @@ export const proposedAction = z.discriminatedUnion("type", [
   z.object({ type: z.literal("reschedule"), activityId, when: at, reason }).strict(),
   z.object({ type: z.literal("cancel_activity"), activityId, reason }).strict(),
   z.object({ type: z.literal("lost"), leadId, reason: text.max(300) }).strict(),
+  // REOPEN a lost deal (round 2 item 4, "lost deals that aren't really lost"): the lead page's own Reopen.
+  z.object({ type: z.literal("reopen"), leadId, reason }).strict(),
   // PARK a deal for later — it is NOT lost (Sean, 2026-11-02: "it's not lost, should be in Nurture"). Through the
   // lead page's own Reopen (when it is lost) and Move to Nurture: why it is parked, what they want, when to follow up,
   // the day to review it, and (only when named) the salesperson.
@@ -438,7 +440,9 @@ export const NURTURE_RULE =
   "- A DEAL'S STATUS is open (being worked), nurture (PARKED for a later follow-up — NOT lost: it has a reason, what they want, when to follow up and a review date), won or lost. Nurture is a status, never a stage: never propose a stage called Nurture.\n" +
   "- nurture: park a deal for later when they say so (\"he's not lost, put him in nurture\", \"Anna's buying in March — park her till then\"): leadId; because — product (waiting for a suitable product), timing (buying later), budget (budget not ready), customer (the customer asked for a pause) or other; " +
   "interest (what they want, in a few words — a product, even one not in the catalogue yet); trigger (when or what to follow up on, in their words); reviewOn (YYYY-MM-DD, the day to look at it again); to (a salesperson, only when they name one — else the deal's own, or the person asking). " +
-  "A LOST deal can be parked: the card reopens it first, and says so. A won deal can't. ASK for what is missing, all at once (MISSING DETAILS) — usually why and the review date — offering the obvious choices.";
+  "A LOST deal can be parked: the card reopens it first, and says so. A won deal can't. ASK for what is missing, all at once (MISSING DETAILS) — usually why and the review date — offering the obvious choices.\n" +
+  "- reopen: bring a LOST deal straight back into the pipeline, in the stage it was lost from, when they say so (\"reopen Werner's deal\", or from a lost_alive result): leadId. Nobody is contacted. " +
+  "To park it for later instead, use nurture. {\"type\":\"reopen\",\"leadId\":\"<id>\"}";
 
 /** Sean, 2026-10-29: "When booking a test drive, DAX requires a demo vehicle from stock. That is not needed." */
 export const TEST_DRIVE_RULE =
@@ -819,6 +823,8 @@ export type ActionCard =
   // leadId null and leadLabel the vehicle's owner. contactId is the owner the card SHOWED: Confirm refuses if it changed.
   | { id: string; kind: "job_card"; leadId: null; leadLabel: string; title: string; vehicleId: string; contactId: string; description: string; priority: "low" | "normal" | "high" | "urgent"; kmIn?: number; detail: string; reason?: string; confirmKey: string }
   | (LeadCard & { kind: "lost"; reason: string })
+  // A lost deal reopened. `lostAt` is when the card SHOWED it lost: lost again since (or reopened) and Confirm refuses.
+  | (LeadCard & { kind: "reopen"; lostAt: string; detail: string })
   // A deal PARKED for later. `wasStatus` is the status the card SHOWED: a lost deal is reopened first; Confirm refuses
   // if it has changed since (a deal made lost after the card was shown is not reopened by it).
   | (LeadCard & { kind: "nurture"; wasStatus: "open" | "nurture" | "lost"; because: "product" | "timing" | "budget" | "customer" | "other"; interest: string; trigger: string; reviewOn: string; assignedToId: string; detail: string })

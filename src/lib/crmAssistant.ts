@@ -52,6 +52,7 @@ import { salesStats } from "./crmAssistantStats";
 import { whyLookup } from "./assistantWhyLookup";
 import { stuckLookup } from "./assistantStuckLookup";
 import { catchUpLookup } from "./assistantCatchUpLookup";
+import { lostAliveLookup } from "./assistantLostAliveLookup";
 import { briefForAssistant, loadDaxBrief } from "./daxBrief";
 import { customerVehicles, workshopOverview } from "./workshopContext";
 import { breakerOpen, withRetry } from "./assistantBreaker";
@@ -1610,6 +1611,7 @@ async function runTool(user: User, step: ToolStep): Promise<ToolOutput> {
     case "why": return whyLookup(user, step.args.record);
     case "stuck": return stuckLookup(user, step.args.lead);
     case "catch_up": return catchUpLookup(user, step.args.since);
+    case "lost_alive": return lostAliveLookup(user, step.args.mine ?? false);
     case "knowledge": return knowledge(user, step.args);
     case "recall": return recall(user, step.args);
     case "playbook": return playbook(user, step.args);
@@ -3200,9 +3202,9 @@ export async function resolveActions(
     const lead = await prisma.lead.findUnique({
       where: { id: p.leadId },
       select: {
-        name: true, title: true, stageId: true, assignedToId: true, stage: { select: { pipelineId: true } },
+        name: true, title: true, stageId: true, assignedToId: true, stage: { select: { pipelineId: true, name: true } },
         email: true, phone: true, contactId: true, contact: { select: { email: true, phone: true } },
-        status: true, lostReason: true,
+        status: true, lostReason: true, lostAt: true,
       },
     });
     if (!lead) continue;
@@ -3246,6 +3248,24 @@ export async function resolveActions(
       });
     } else if (p.type === "lost") {
       cards.push({ id, kind: "lost", leadId: p.leadId, leadLabel, title: `Mark ${lead.name}'s deal as lost`, reason: p.reason });
+    } else if (p.type === "reopen") {
+      // The lead page's own Reopen at Confirm (reopenLead: leads.reopen). Checked here too, so the card is only offered when it can run.
+      if (lead.status !== "lost" || !lead.lostAt) {
+        problems.push(`${lead.name}'s deal isn't marked lost (it's ${lead.status})${lead.status === "nurture" ? " — a parked deal is reactivated from Nurture" : ""}.`);
+        continue;
+      }
+      if (!(await hasPermission(user, "leads.reopen"))) { problems.push("Your role can't reopen lost deals."); continue; }
+      cards.push({
+        id, kind: "reopen", leadId: p.leadId, leadLabel,
+        title: `Reopen ${lead.name}'s deal`,
+        lostAt: lead.lostAt.toISOString(),
+        detail: [
+          `Lost on ${johannesburgDateKey(lead.lostAt)}${lead.lostReason ? ` — “${lead.lostReason}”` : ""}`,
+          `Back to: ${lead.stage.name} (the stage it was in), open again`,
+          "Nobody is contacted.",
+        ].join("\n"),
+        ...(p.reason ? { reason: p.reason } : {}),
+      });
     } else if (p.type === "nurture") {
       // The lead page's own doors at Confirm — Reopen (a lost deal: leads.reopen) and Move to Nurture
       // (leads.change_stage + activities.manage; leads.assign for another salesperson). Checked here too, so a card

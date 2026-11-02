@@ -165,6 +165,8 @@ export const whyArgs = z.object({ record: z.string().trim().min(1).max(120) }).s
 export const stuckArgs = z.object({ lead: z.string().trim().min(1).max(120) }).strict();
 /** What changed on the asker's own deals since their last question (assistantCatchUp); `since` replaces that. */
 export const catchUpArgs = z.object({ since: isoDay.optional() }).strict();
+/** Lost deals that came back to life: `mine` narrows to theirs or nobody's (the morning brief's). */
+export const lostAliveArgs = z.object({ mine: z.boolean().optional() }).strict();
 /** What the business knows: products, prices, approved answers, competitors. */
 export const knowledgeArgs = z.object({ topic: z.string().trim().min(1).max(200) }).strict();
 /**
@@ -193,6 +195,7 @@ export const assistantStep = z.discriminatedUnion("tool", [
   z.object({ tool: z.literal("why"), args: whyArgs }),
   z.object({ tool: z.literal("stuck"), args: stuckArgs }),
   z.object({ tool: z.literal("catch_up"), args: catchUpArgs.default({}) }),
+  z.object({ tool: z.literal("lost_alive"), args: lostAliveArgs.default({}) }),
   z.object({ tool: z.literal("knowledge"), args: knowledgeArgs }),
   z.object({ tool: z.literal("recall"), args: recallArgs }),
   z.object({ tool: z.literal("playbook"), args: playbookArgs }),
@@ -254,6 +257,7 @@ export function planInstructions(ctx: PlanContext): string {
     '- why: {"record":"<customer name, lead title, quote number (Q-1031) or id — the page\'s record id works too>" (required)} — WHY something happened on one record: its history, each event with its CAUSE as recorded (the person who did it, the journey and step, the chatbot and its handoff reason, lead routing, the customer\'s own action — or "not recorded"): stage moves and who made them, who it was assigned to and by what, why it was marked lost, why a customer got a message (or why a journey did not enrol them / stopped), why the bot handed a chat over. Use it for every "why did…" / "how come…" / "who moved / sent / assigned…" question about a record; it usually answers on its own ("then":"answer").',
     '- stuck: {"lead":"<customer name, lead title or id>" (required)} — why ONE deal is stuck, with evidence: its blockers RANKED, each with its date and a link to the record it comes from (the customer waiting on us, an overdue follow-up, the quote unopened / declined / expiring, the deposit, time in the stage against its limit, no next step, the customer gone quiet), plus the facts behind them. Run it for every "why is X stuck / stalled / not moving / gone quiet / not closing"; it usually answers on its own ("then":"answer"). For "which of my deals are stuck", find them first (find_leads sort stage_age), then stuck on the worst.',
     '- catch_up: {"since":"YYYY-MM-DD" (only when they name a day)} — what changed on THEIR OWN deals since their last question to you (at most 7 days back): new customer messages, quotes opened / opened again / signed, stage moves by someone else, new leads for them, and their overdue and due-today tasks. Run it for "catch me up", "what\'s changed", "what did I miss", "anything new (since…)"; it answers on its own ("then":"answer").',
+    '- lost_alive: {"mine":true (only their own deals and unassigned ones)} — deals marked LOST in the last 90 days for a went-quiet or timing reason ("gone cold", "stopped responding", "buying later") where the customer has since messaged or opened a quote: each with when and why it was lost and what the customer did since. Run it for "which lost deals are still alive", "any lost deals worth another look", "lost but not really lost"; it answers on its own ("then":"answer"), offering a nurture or reopen card for each.',
     '- knowledge: {"topic":"<what to look up>" (required)} — the business\'s own knowledge: products and prices (each with its productId), approved answers (finance, warranty, policies…), company details, competitor intelligence. ALWAYS run this when the person asks for a quote or names a product to quote — a quote can only be built from products found here.',
     '- recall: {"query":"<words>" (required),"alternatives":["<other wordings>"],"lead":"<customer name, lead title or id>"} — this person\'s own earlier conversations with you (last 30 days). In alternatives, give up to 6 other wordings someone might have used for the same thing ("fleet" → "corporate order", "bulk"). When the question is about a customer, name them in lead.',
     '- playbook: {"name":"<playbook name>" (required)} — one of your learned playbooks in full, when the question uses its term or procedure ("hot leads" → the hot-lead playbook) — load it BEFORE searching so you search the right way. When your playbooks are already written out in full below, never load one: follow it and search straight away.',
@@ -375,6 +379,7 @@ const LOOKUP_STATUS: Record<string, string> = {
   why: "Going through the record's history",
   stuck: "Working out what's holding it up",
   catch_up: "Catching you up",
+  lost_alive: "Checking lost deals for signs of life",
   find_activities: "Checking activities",
   knowledge: "Checking what the business knows",
   recall: "Going back over earlier conversations",
