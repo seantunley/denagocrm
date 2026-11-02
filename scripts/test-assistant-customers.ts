@@ -45,7 +45,12 @@ const customersOnly: PermissionUser = { id: id("conly"), name: "Customers Only",
 const ROLE = id("role");
 const STAND_IN = id("standin");
 const STAGE = id("stage");
-const C = { noLead: id("c-nolead"), othersSameName: id("c-other"), withLead: id("c-withlead"), twinA: id("c-twin-a"), twinB: id("c-twin-b"), deleted: id("c-deleted"), conly: id("c-conly"), leadNamedDifferently: id("c-diffname") };
+const C = { noLead: id("c-nolead"), othersSameName: id("c-other"), withLead: id("c-withlead"), twinA: id("c-twin-a"), twinB: id("c-twin-b"), deleted: id("c-deleted"), conly: id("c-conly"), leadNamedDifferently: id("c-diffname"), clive: id("c-clive"), cliveOthers: id("c-clive-other") };
+/**
+ * Sixty newer look-alikes of the misspelt customer ("Clive Jam" + two letters): more than the fifty most recently
+ * changed names the old close-spelling search ever looked at, all sharing its first three letters.
+ */
+const LOOK_ALIKES = Array.from({ length: 60 }, (_, i) => ({ id: id(`c-alike-${i}`), lastName: `Jam${String.fromCharCode(97 + Math.floor(i / 26))}${String.fromCharCode(97 + (i % 26))}` }));
 const L = { withLead: id("l-withlead"), diffName: id("l-diffname") };
 const A = { block: id("a-block"), call: id("a-call"), lateBlock: id("a-lateblock"), longLeave: id("a-longleave") };
 /** Quotes for the "a customer's quotes" checks: numbers well clear of real ones, three in a row. */
@@ -88,8 +93,14 @@ async function seed() {
       contact(C.twinB, "Twin", `Same${SFX}`, rep.id, { city: "Worcester" }),
       contact(C.conly, "Solo", `Cust${SFX}`, customersOnly.id),
       contact(C.leadNamedDifferently, "Maria", `Other${SFX}`, rep.id),
+      // "clive jammim" (Sean, 2026-10-29): the rep's own long-standing customer, and a colleague's of the same name.
+      contact(C.clive, "Clive", "Jammine", rep.id),
+      contact(C.cliveOthers, "Clive", "Jammine", outsider.id),
+      ...LOOK_ALIKES.map((alike) => contact(alike.id, "Clive", alike.lastName, rep.id)),
     ],
   });
+  // Long-standing: changed well before every look-alike.
+  await basePrisma.$executeRaw`UPDATE "Contact" SET "updatedAt" = '2025-01-01T00:00:00Z' WHERE "id" = ${C.clive}`;
   await basePrisma.lead.createMany({
     data: [
       { id: L.withLead, tenantId: T, title: "Rover XL", name: `Yan Deal${SFX}`, stageId: STAGE, contactId: C.withLead, assignedToId: rep.id, createdById: rep.id },
@@ -123,7 +134,7 @@ async function cleanup() {
   await basePrisma.quoteFee.deleteMany({ where: { quoteId: { in: Object.values(Q) } } });
   await basePrisma.quote.deleteMany({ where: { id: { in: Object.values(Q) } } });
   await basePrisma.lead.deleteMany({ where: { id: { in: Object.values(L) } } });
-  await basePrisma.contact.deleteMany({ where: { id: { in: Object.values(C) } } });
+  await basePrisma.contact.deleteMany({ where: { id: { in: [...Object.values(C), ...LOOK_ALIKES.map((alike) => alike.id)] } } });
   await basePrisma.$executeRaw`DELETE FROM "PipelineStage" WHERE "id" = ${STAGE}`;
   await basePrisma.$executeRaw`DELETE FROM "UserRole" WHERE "userId" IN (${rep.id}, ${outsider.id}, ${customersOnly.id})`;
   await basePrisma.$executeRaw`DELETE FROM "RolePermission" WHERE "roleId" = ${ROLE}`;
@@ -165,6 +176,21 @@ async function main() {
     check("both are listed", idsOf(b.customers ?? []).join() === [C.twinA, C.twinB].sort().join(), JSON.stringify(b.customers));
     check("…with something to tell them apart", new Set((b.customers ?? []).map((c) => c.city)).size === 2);
     check("…and the assistant is told to ask which one", /ask which one first/.test(b.note ?? ""));
+  }
+
+  console.log("\nA misspelt name: the closest customers are offered, not 'spell it' (Sean, 2026-10-29)");
+  {
+    type Near = Brief & { closeMatches?: { kind: string; contactId?: string; name: string }[] };
+    const b = (await brief(rep, "clive jammim")) as Near;
+    const offered = (b.closeMatches ?? []).map((match) => match.contactId);
+    check("an older customer behind sixty newer look-alikes is found by a misspelling, closest first", offered[0] === C.clive, JSON.stringify(b.closeMatches?.slice(0, 3)));
+    check("…offered as the choice, never 'spell it'", /Did you mean Clive Jammine, or /.test(b.note ?? "") && /do NOT ask them to spell it/.test(b.note ?? ""), b.note);
+    check("…at most five", offered.length > 1 && offered.length <= 5, String(offered.length));
+    check("a colleague's customer of that very name is never offered", !offered.includes(C.cliveOthers));
+    const klive = (await brief(rep, "Klive Jammine")) as Near;
+    check("a wrong first letter — which the old search could never match — still finds them", klive.closeMatches?.[0]?.contactId === C.clive, JSON.stringify(klive.closeMatches));
+    const nowhere = (await brief(rep, "Zola Mthembu")) as Near;
+    check("a name nowhere near anyone is still 'no match', not a wild guess", !nowhere.closeMatches?.length && /No lead or customer you can see matches/.test(nowhere.note ?? ""), JSON.stringify(nowhere));
   }
 
   console.log("\nA person who may open customers but not leads");

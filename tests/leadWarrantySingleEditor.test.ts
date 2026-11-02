@@ -10,7 +10,8 @@ import { standardTemplateFor } from "../src/lib/doceditor/standardTemplates";
 import { renderDocumentHtml } from "../src/lib/doceditor/serialize";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const src = (rel: string) => readFileSync(path.join(root, rel), "utf8");
+// LF on every machine: a Windows checkout (core.autocrlf) has CRLF, which the line-shaped matches below miss.
+const src = (rel: string) => readFileSync(path.join(root, rel), "utf8").replace(/\r\n/g, "\n");
 
 /**
  * The server modules are `server-only` and reach Prisma (a live client against

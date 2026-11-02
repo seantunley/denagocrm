@@ -20,7 +20,8 @@ import type { QuoteBillTo } from "../src/lib/quoteBillTo";
  * footer, with the invoice's own parts swapped for the statement's.
  */
 
-const read = (path: string) => readFileSync(path, "utf8");
+// LF on every machine: a Windows checkout (core.autocrlf) has CRLF, and "\n}\n" below would never match.
+const read = (path: string) => readFileSync(path, "utf8").replace(/\r\n/g, "\n");
 const allBlocks = (doc: DocumentModel): DocumentBlock[] => {
   const out: DocumentBlock[] = [];
   const walk = (block: DocumentBlock) => {

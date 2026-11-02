@@ -45,7 +45,7 @@ import { DEPTH_BUDGETS, HARD_DEADLINE_MS, MIN_CALL_MS, deepen, parseLedger, rese
 import { matchDecisions, parseDecision } from "./assistantDecisions";
 import { CITE_RULE, REPLY_FORMAT, STATE_INSTRUCTIONS, citableLinks, resolveCitations, splitReply, type Evidence } from "./assistantReply";
 import { unsupportedFigures, unsupportedNote } from "./assistantVerify";
-import { catalogueColour, closestColour, nameIsClose, nameStems } from "./nearMatch";
+import { catalogueColour, closestColour, closestNames, nameWords } from "./nearMatch";
 import { salesStats } from "./crmAssistantStats";
 import { whyLookup } from "./assistantWhyLookup";
 import { briefForAssistant, loadDaxBrief } from "./daxBrief";
@@ -636,43 +636,57 @@ export async function customersNamed(user: User, needle: string, ownId?: string 
   }));
 }
 
+/** How many of the closest spellings the database hands nearMatch to rank. */
+const NEAR_CANDIDATES = 40;
+
 /**
- * Deals and customers this person may see whose name is a close spelling of `needle` (nearMatch.ts): looked up by
- * the first three letters of each word, then kept only if the whole name is near. Ids are given so DAX can use one
- * once the person confirms it.
+ * Deals and customers this person may see whose name is a close spelling of `needle`, closest first (at most five),
+ * with ids so DAX can use one once the person picks it.
+ *
+ * The database ranks EVERY deal and customer this person may open by close spelling (pg_trgm, installed by
+ * 20261007092000) and nearMatch.closestNames keeps the ones close enough to offer. It used to look only at names
+ * sharing the first three letters of a word asked for, and only the fifty most recently changed, keeping a match
+ * only one letter out: "Clive Jammim" never reached an older "Clive Jammine" (Sean, 2026-10-29).
+ *
+ * Raw SQL passes no guard, so both boundaries are in the query: this person's deals and customers (the same id
+ * lists as everywhere else), in this workspace — DAX's own rule (ownedWriteTenantId, as its other searches), plus
+ * rows with no workspace only while it is the only workspace (docs/TENANT-ENFORCEMENT-PREREQUISITES.md).
  */
-async function nearlyNamed(user: User, needle: string, visibleLeads: { id?: { in: string[] } }) {
-  const stems = nameStems(needle);
-  if (!stems.length) return [];
+async function nearlyNamed(user: User, needle: string, leadIds: string[] | null) {
+  if (!nameWords(needle).length) return [];
   const contactIds = await getAccessibleContactIds(user);
+  const tenantId = ownedWriteTenantId();
+  // The workspace predicate is written out in each query (not shared as a fragment) so the tenant-access sweep sees it.
   const [leads, contacts] = await Promise.all([
-    prisma.lead.findMany({
-      where: { deletedAt: null, ...visibleLeads, OR: stems.flatMap((stem) => [{ name: fuzzy(stem) }, { title: fuzzy(stem) }]) },
-      orderBy: { updatedAt: "desc" },
-      take: 50,
-      select: { id: true, name: true, title: true, status: true },
-    }),
+    leadIds !== null && leadIds.length === 0
+      ? Promise.resolve([])
+      : prisma.$queryRaw<{ id: string; name: string; title: string; status: string }[]>`
+          SELECT "id", "name", "title", "status"
+            FROM "Lead"
+           WHERE "deletedAt" IS NULL AND ("tenantId" = ${tenantId} OR ("tenantId" IS NULL AND (SELECT count(*) FROM "Tenant") = 1))
+             AND (${leadIds === null} OR "id" = ANY(${leadIds ?? []}::text[]))
+           ORDER BY GREATEST(word_similarity(${needle}, "name"), similarity("name", ${needle}), word_similarity(${needle}, "title")) DESC, "updatedAt" DESC
+           LIMIT ${NEAR_CANDIDATES}`,
     contactIds !== null && contactIds.length === 0
       ? Promise.resolve([])
-      : prisma.contact.findMany({
-          where: {
-            deletedAt: null,
-            ...(contactIds === null ? {} : { id: { in: contactIds } }),
-            OR: stems.flatMap((stem) => [{ firstName: fuzzy(stem) }, { lastName: fuzzy(stem) }, { company: fuzzy(stem) }]),
-          },
-          orderBy: { updatedAt: "desc" },
-          take: 50,
-          select: { id: true, firstName: true, lastName: true, company: true },
-        }),
+      : prisma.$queryRaw<{ id: string; firstName: string; lastName: string | null; company: string | null }[]>`
+          SELECT "id", "firstName", "lastName", "company"
+            FROM "Contact"
+           WHERE "deletedAt" IS NULL AND ("tenantId" = ${tenantId} OR ("tenantId" IS NULL AND (SELECT count(*) FROM "Tenant") = 1))
+             AND (${contactIds === null} OR "id" = ANY(${contactIds ?? []}::text[]))
+           ORDER BY GREATEST(
+                      word_similarity(${needle}, concat_ws(' ', "firstName", "lastName")),
+                      similarity(concat_ws(' ', "firstName", "lastName"), ${needle}),
+                      word_similarity(${needle}, coalesce("company", ''))
+                    ) DESC, "updatedAt" DESC
+           LIMIT ${NEAR_CANDIDATES}`,
   ]);
-  const deals = leads
-    .filter((l) => nameIsClose(needle, l.name) || nameIsClose(needle, l.title))
-    .map((l) => ({ kind: "deal" as const, leadId: l.id, name: l.name, status: l.status }));
-  const people = contacts
-    .map((c) => ({ c, name: [c.firstName, c.lastName].filter(Boolean).join(" ") || c.company || "" }))
-    .filter(({ c, name }) => nameIsClose(needle, name) || (c.company ? nameIsClose(needle, c.company) : false))
-    .map(({ c, name }) => ({ kind: "customer" as const, contactId: c.id, name }));
-  return [...deals, ...people].slice(0, 5);
+  const deals = leads.map((l) => ({ match: { kind: "deal" as const, leadId: l.id, name: l.name, status: l.status }, names: [l.name, l.title] }));
+  const people = contacts.map((c) => {
+    const person = [c.firstName, c.lastName].filter(Boolean).join(" ");
+    return { match: { kind: "customer" as const, contactId: c.id, name: person || c.company || "" }, names: [person, c.company] };
+  });
+  return closestNames(needle, [...deals, ...people], (candidate) => candidate.names).map((candidate) => candidate.match);
 }
 
 /**
@@ -729,14 +743,16 @@ export async function leadBrief(user: User, raw: z.infer<typeof leadBriefArgs>):
     const customers = await customersFor();
     if (customers.length === 0) {
       // NOTHING by that exact name — but maybe by a close spelling (Sean, 2026-10-23: a voice note's "Werner
-      // Killian" was the CRM's "Werner Kilian", and DAX said there was no such customer). Offered as a question.
-      const close = looksLikeId ? [] : await nearlyNamed(user, needle, visible);
+      // Killian" was the CRM's "Werner Kilian", and DAX said there was no such customer). Offered as a choice —
+      // the closest few, not a request to spell it again (Sean, 2026-10-29: "clive jammim").
+      const close = looksLikeId ? [] : await nearlyNamed(user, needle, ids);
       if (close.length) {
+        const offer = close.slice(0, 3).map((match) => match.name).join(", or ");
         return {
           truncated: false,
           rows: [],
           data: [{
-            note: `Nothing is named exactly "${needle}", but ${close.length === 1 ? "this is" : "these are"} close — most likely the same person, misspelt (a voice note often is). Do NOT say there is no such customer, and do not act on the guess: ask "Did you mean ${close[0].name}?" (offer it as a choice). Once they say yes, use lead_brief with its id.`,
+            note: `Nothing is named exactly "${needle}", but ${close.length === 1 ? "this name is close" : `these ${close.length} names are close, closest first`} — most likely the same person, misspelt (a voice note often is). Do NOT say there is no such customer, do NOT ask them to spell it or type it again, and do not act on a guess: offer ${close.length === 1 ? "it" : "them"} as a choice — "Did you mean ${offer}?" — and once they pick one, use lead_brief with its id.`,
             closeMatches: close,
           }],
         };
@@ -2924,6 +2940,115 @@ export async function resolveActions(
       });
       continue;
     }
+    if (p.type === "follow_up" || p.type === "meeting") {
+      // A CALENDAR ITEM (CALENDAR_ITEM_RULE): on a deal, on a customer with no deal, or on NOBODY — the person's own,
+      // or one with someone not in the CRM yet (Sean, 2026-10-29: a meeting with "Mariska", no surname, refused for
+      // "needs a lead"). Confirm makes it through the calendar's own action, which checks access to whatever it is on.
+      let leadId: string | null = null;
+      let contactId: string | null = null;
+      let leadLabel = "Your calendar";
+      let who: string | null = null;
+      if (p.leadId) {
+        if (!(await canAccessLead(user, p.leadId))) continue;
+        const lead = await prisma.lead.findUnique({ where: { id: p.leadId }, select: { name: true, title: true } });
+        if (!lead) continue;
+        leadId = p.leadId;
+        leadLabel = `${lead.name} — ${lead.title}`;
+        who = lead.name;
+      } else if (p.contactId) {
+        if (!(await canAccessContact(user, p.contactId))) { problems.push("I can't open that customer for you, so the item can't go on them."); continue; }
+        const contact = await prisma.contact.findFirst({ where: { id: p.contactId, deletedAt: null }, select: { firstName: true, lastName: true, company: true } });
+        if (!contact) continue;
+        contactId = p.contactId;
+        who = [contact.firstName, contact.lastName].filter(Boolean).join(" ") || contact.company || "the customer";
+        leadLabel = who;
+      }
+      const id = `a${index}-${leadId ?? contactId ?? "own"}`;
+      const on = { leadId, ...(contactId ? { contactId } : {}), leadLabel };
+      if (p.type === "follow_up") {
+        const when = p.when.includes("T") ? p.when : `${p.when}T09:00`;
+        const at = new Date(`${when}:00+02:00`);
+        if (Number.isNaN(at.getTime()) || at.getTime() < Date.now() - 60 * 60 * 1000) continue;
+        const label = at.toLocaleString("en-ZA", { timeZone: "Africa/Johannesburg", weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
+        const what = p.summary ?? `Follow-up ${p.activity}`;
+        cards.push({ id, kind: "follow_up", ...on, title: `${what}${who ? ` with ${who}` : ""} — ${label}`, when, activity: p.activity, summary: p.summary, ...(p.reason ? { reason: p.reason } : {}) });
+      } else {
+        const start = new Date(`${p.when}:00+02:00`);
+        if (Number.isNaN(start.getTime()) || start.getTime() < Date.now()) continue;
+        const end = new Date(start.getTime() + (p.minutes ?? 60) * 60_000);
+        const people = (p.with ?? [])
+          .map((name) => {
+            const wanted = name.trim().toLowerCase();
+            return staff.find((s) => s.name.toLowerCase() === wanted) ?? staff.find((s) => s.name.toLowerCase().startsWith(wanted));
+          })
+          .filter((s): s is (typeof staff)[number] => Boolean(s) && s!.id !== user.id);
+        const summary = p.summary ?? (who ? `Meeting with ${who}` : "Meeting");
+        cards.push({
+          id, kind: "meeting", ...on, title: `${summary} — ${when(start)}`,
+          start: p.when, end: saLocal(end), summary, attendeeIds: [...new Set(people.map((s) => s.id))],
+          detail: `${p.minutes ?? 60} min${people.length ? ` · with ${people.map((s) => s.name).join(", ")}` : ""}`,
+          ...(p.reason ? { reason: p.reason } : {}),
+        });
+      }
+      continue;
+    }
+    if (p.type === "test_drive") {
+      // A TEST DRIVE (TEST_DRIVE_RULE) with a customer — on their deal, or on them directly. In a demo vehicle from
+      // stock ONLY when one is named: the CRM's booking never needed one (Sean, 2026-10-29), and this used to drop
+      // the card whenever none was named, or the one named had no branch.
+      if (!(await isModuleEnabled("automotive"))) continue;
+      let leadId: string | null = null;
+      let leadLabel: string;
+      let who: string;
+      let contactId: string;
+      if (p.leadId) {
+        if (!(await canAccessLead(user, p.leadId))) continue;
+        const lead = await prisma.lead.findUnique({ where: { id: p.leadId }, select: { name: true, title: true, contactId: true } });
+        if (!lead) continue;
+        if (!lead.contactId) { problems.push(`${lead.name}'s deal has no customer record yet, so a test drive can't be booked on it.`); continue; }
+        leadId = p.leadId;
+        leadLabel = `${lead.name} — ${lead.title}`;
+        who = lead.name;
+        contactId = lead.contactId;
+      } else if (p.contactId) {
+        if (!(await canAccessContact(user, p.contactId))) { problems.push("I can't open that customer for you, so I can't book them a test drive."); continue; }
+        const contact = await prisma.contact.findFirst({ where: { id: p.contactId, deletedAt: null }, select: { firstName: true, lastName: true, company: true } });
+        if (!contact) continue;
+        who = [contact.firstName, contact.lastName].filter(Boolean).join(" ") || contact.company || "the customer";
+        leadLabel = who;
+        contactId = p.contactId;
+      } else {
+        problems.push("A test drive is booked for a customer — look them up first, then I can book it.");
+        continue;
+      }
+      const start = new Date(`${p.when}:00+02:00`);
+      if (Number.isNaN(start.getTime()) || start.getTime() < Date.now()) continue;
+      const end = new Date(start.getTime() + (p.minutes ?? 60) * 60_000);
+      // The demo vehicle, only when one is named — and then one that is in stock.
+      let demo: { id: string; name: string; branch: string | null } | null = null;
+      if (p.vehicle) {
+        const wanted = p.vehicle.trim().toLowerCase();
+        const demos = await prisma.demoVehicle.findMany({ where: { deletedAt: null }, select: { id: true, name: true, branch: true }, take: 100 });
+        demo = demos.find((d) => d.name.toLowerCase() === wanted) ?? demos.find((d) => d.name.toLowerCase().startsWith(wanted)) ?? null;
+        if (!demo) { problems.push(`"${p.vehicle}" is not a demo vehicle in stock — say if the test drive should be booked without one.`); continue; }
+      }
+      // The model, from the catalogue when they name one; else the booking takes the demo vehicle's or the deal's.
+      const product = p.product && !demo ? await resolveCatalogueProduct({ product: p.product }) : null;
+      // Where: as they said, else the demo vehicle's branch, else where this person last booked a test drive.
+      const branch = p.branch?.trim() || demo?.branch?.trim()
+        || (await prisma.testDriveBooking.findFirst({ where: { salespersonId: user.id, branch: { not: "" } }, orderBy: { createdAt: "desc" }, select: { branch: true } }))?.branch
+        || null;
+      if (!branch) { problems.push("Which branch or location is the test drive at?"); continue; }
+      const vehicleText = demo ? demo.name : product ? product.name : null;
+      cards.push({
+        id: `a${index}-${leadId ?? contactId}`, kind: "test_drive", leadId, leadLabel,
+        title: `Test drive for ${who} — ${when(start)}`,
+        contactId, demoVehicleId: demo?.id ?? null, ...(product ? { productId: product.id } : {}), branch, start: p.when, end: saLocal(end),
+        detail: `${vehicleText ? `${vehicleText} · ` : ""}${p.minutes ?? 60} min · ${branch}`,
+        ...(p.reason ? { reason: p.reason } : {}),
+      });
+      continue;
+    }
     if (!(await canAccessLead(user, p.leadId))) continue;
     const lead = await prisma.lead.findUnique({
       where: { id: p.leadId },
@@ -2935,13 +3060,7 @@ export async function resolveActions(
     if (!lead) continue;
     const id = `a${index}-${p.leadId}`;
     const leadLabel = `${lead.name} — ${lead.title}`;
-    if (p.type === "follow_up") {
-      const when = p.when.includes("T") ? p.when : `${p.when}T09:00`;
-      const at = new Date(`${when}:00+02:00`);
-      if (Number.isNaN(at.getTime()) || at.getTime() < Date.now() - 60 * 60 * 1000) continue;
-      const label = at.toLocaleString("en-ZA", { timeZone: "Africa/Johannesburg", weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
-      cards.push({ id, kind: "follow_up", leadId: p.leadId, leadLabel, title: `${p.summary ?? `Follow-up ${p.activity}`} with ${lead.name} — ${label}`, when, activity: p.activity, summary: p.summary, ...(p.reason ? { reason: p.reason } : {}) });
-    } else if (p.type === "note") {
+    if (p.type === "note") {
       if (p.attachImage && !image) { problems.push(NO_IMAGE_TO_ATTACH); continue; }
       cards.push({ id, kind: "note", leadId: p.leadId, leadLabel, title: noteTitle(p, `${lead.name}'s lead`), text: p.text, ...(p.pin ? { pin: true } : {}), ...(p.attachImage && image ? { image, detail: screenshotLine(upload) } : {}), ...(p.reason ? { reason: p.reason } : {}) });
     } else if (p.type === "assign") {
@@ -2967,38 +3086,6 @@ export async function resolveActions(
         id, kind: "draft_message", leadId: p.leadId, leadLabel,
         title: `${p.channel === "whatsapp" ? "WhatsApp" : "Email"} to ${lead.name}`,
         channel: p.channel, subject: p.subject, body: p.body, to,
-        ...(p.reason ? { reason: p.reason } : {}),
-      });
-    } else if (p.type === "meeting") {
-      const start = new Date(`${p.when}:00+02:00`);
-      if (Number.isNaN(start.getTime()) || start.getTime() < Date.now()) continue;
-      const end = new Date(start.getTime() + (p.minutes ?? 60) * 60_000);
-      const people = (p.with ?? [])
-        .map((name) => {
-          const wanted = name.trim().toLowerCase();
-          return staff.find((s) => s.name.toLowerCase() === wanted) ?? staff.find((s) => s.name.toLowerCase().startsWith(wanted));
-        })
-        .filter((s): s is (typeof staff)[number] => Boolean(s) && s!.id !== user.id);
-      const summary = p.summary ?? `Meeting with ${lead.name}`;
-      cards.push({
-        id, kind: "meeting", leadId: p.leadId, leadLabel, title: `${summary} — ${when(start)}`,
-        start: p.when, end: saLocal(end), summary, attendeeIds: [...new Set(people.map((s) => s.id))],
-        detail: `${p.minutes ?? 60} min${people.length ? ` · with ${people.map((s) => s.name).join(", ")}` : ""}`,
-        ...(p.reason ? { reason: p.reason } : {}),
-      });
-    } else if (p.type === "test_drive") {
-      if (!lead.contactId || !(await isModuleEnabled("automotive"))) continue;
-      const start = new Date(`${p.when}:00+02:00`);
-      if (Number.isNaN(start.getTime()) || start.getTime() < Date.now()) continue;
-      const wanted = p.vehicle.trim().toLowerCase();
-      const demos = await prisma.demoVehicle.findMany({ where: { deletedAt: null }, select: { id: true, name: true, branch: true }, take: 100 });
-      const demo = demos.find((d) => d.name.toLowerCase() === wanted) ?? demos.find((d) => d.name.toLowerCase().startsWith(wanted));
-      if (!demo?.branch) continue;
-      const end = new Date(start.getTime() + (p.minutes ?? 60) * 60_000);
-      cards.push({
-        id, kind: "test_drive", leadId: p.leadId, leadLabel, title: `Test drive for ${lead.name} — ${when(start)}`,
-        contactId: lead.contactId, demoVehicleId: demo.id, branch: demo.branch, start: p.when, end: saLocal(end),
-        detail: `${demo.name} · ${p.minutes ?? 60} min · ${demo.branch}`,
         ...(p.reason ? { reason: p.reason } : {}),
       });
     } else if (p.type === "lost") {
