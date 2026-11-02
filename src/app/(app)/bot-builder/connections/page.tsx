@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { ArrowLeft, KeyRound } from "lucide-react";
 import { requireTenantOwner } from "@/lib/auth";
+import { requireRoute } from "@/lib/permissions";
 import { getSetting } from "@/lib/settings";
 import { PageHeader } from "@/components/page-header";
 import { Surface } from "@/components/visual-system";
@@ -16,6 +17,7 @@ export const dynamic = "force-dynamic";
  * locked to one host — instead of in the flow. Owner only; values are write-only and never shown again.
  */
 export default async function FlowConnectionsPage() {
+  await requireRoute("/bot-builder");
   await requireTenantOwner();
   const connections = parseConnections(await getSetting(FLOW_CONNECTIONS_KEY));
 
