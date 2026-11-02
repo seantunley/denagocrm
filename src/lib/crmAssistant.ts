@@ -76,6 +76,7 @@ import { TASK_INSTRUCTIONS, keepIds, taskBlock, type TaskView } from "./assistan
 import { applyTaskUpdate, openTasks, type TaskSheet, type TaskWrite } from "./assistantTask";
 import { PLAN_INSTRUCTIONS } from "./assistantPlanRules";
 import { proposePlan } from "./assistantPlan";
+import { proposedCards } from "./assistantOutcomeRules";
 import { describeSchedule, nextRun, scheduleInput } from "./assistantSchedule";
 import { describeWatch, watchInput } from "./assistantWatchRules";
 import {
@@ -2513,6 +2514,8 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
         ...(reply.state ? { state: reply.state, tags: reply.state.tags ?? [] } : {}),
         refs: turnRefs(observations.map((o) => o.output.data)),
         ...(taskWrite?.ok ? { taskId: taskWrite.id } : {}),
+        // The cards it offered — kind, and the deal or customer by id — counted in Settings → Assistant (assistantOutcomes).
+        proposed: proposedCards(actions) as object,
       },
       select: { id: true },
     })
