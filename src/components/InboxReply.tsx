@@ -9,6 +9,7 @@ import { draftCollision, type DraftCollision } from "@/lib/conversationDraft";
 import AiCheckButton from "@/components/AiCheckButton";
 import { enterIntent, readEnterSends, writeEnterSends } from "@/lib/enterToSend";
 import { draftXReplyWithGrok } from "@/app/actions/x";
+import { suggestVoiceNoteReply } from "@/app/actions/voiceNoteReply";
 
 const QUICK_EMOJI = ["😀", "👍", "🙏", "🎉", "🔥", "❤️", "😂", "👌", "🚗", "⚡"];
 
@@ -26,6 +27,7 @@ export default function InboxReply({
   conversationId,
   draft,
   viewerId,
+  voiceNoteId = null,
 }: {
   channel: "whatsapp" | "messenger" | "instagram" | "x" | "telegram";
   contactId?: string | null;
@@ -48,6 +50,11 @@ export default function InboxReply({
   conversationId?: string | null;
   draft?: { ownerId: string; ownerName: string; body: string; updatedAt: Date } | null;
   viewerId?: string | null;
+  /**
+   * The id of the customer's latest message when it is a transcribed WhatsApp voice note: offer a summary and a
+   * suggested reply FOR THAT MESSAGE (the server refuses if the customer has written since — review of #953).
+   */
+  voiceNoteId?: string | null;
 }) {
   const [waState, waAction, waPending] = useActionState<WaState | undefined, FormData>(
     sendWhatsAppMessage,
@@ -67,6 +74,11 @@ export default function InboxReply({
   const [showEmoji, setShowEmoji] = useState(false);
   const [grokPending, startGrok] = useTransition();
   const [grokError, setGrokError] = useState("");
+  const [voicePending, startVoice] = useTransition();
+  const [voiceSummary, setVoiceSummary] = useState("");
+  const [voiceError, setVoiceError] = useState("");
+  // A suggestion that arrived while the box already held their own words: shown, never put over them unasked.
+  const [voiceSuggestion, setVoiceSuggestion] = useState("");
   const canAttach = channel !== "whatsapp"; // WhatsApp media send comes later
   const formRef = useRef<HTMLFormElement>(null);
   // Defaults to true and is corrected after mount. Reading localStorage during
@@ -225,6 +237,29 @@ ${el.value.slice(end)}`;
     });
   }
 
+  // A customer's voice note: one line on what they said, and a reply put in the box — never sent from here.
+  function putSuggestion(reply: string) {
+    if (!textRef.current) return;
+    textRef.current.value = reply;
+    textRef.current.focus();
+    queueDraftSave();
+    setVoiceSuggestion("");
+  }
+
+  function suggestForVoiceNote() {
+    if (!conversationId || !voiceNoteId) return;
+    setVoiceError("");
+    setVoiceSuggestion("");
+    startVoice(async () => {
+      const result = await suggestVoiceNoteReply(conversationId, voiceNoteId);
+      if (!result.ok) { setVoiceError(result.error); return; }
+      setVoiceSummary(result.summary);
+      // Read the box when the answer ARRIVES: they may have started typing while it was being written.
+      if (textRef.current?.value.trim()) setVoiceSuggestion(result.reply);
+      else putSuggestion(result.reply);
+    });
+  }
+
   return (
     <form ref={formRef} action={channel === "whatsapp" ? waAction : dmAction} className="mt-3">
       {/* The warning goes ABOVE the box, before anything is typed. Told afterwards,
@@ -266,6 +301,27 @@ ${el.value.slice(end)}`;
       <input type="hidden" name="revalidate" value={revalidate} />
       <input type="hidden" name="compositionId" value={compositionId} />
 
+      {channel === "whatsapp" && voiceNoteId && conversationId && (
+        <div className="mb-2 space-y-1">
+          <div className="flex flex-wrap items-center gap-2">
+            <button type="button" className="btn-secondary btn-sm" onClick={suggestForVoiceNote} disabled={voicePending}>
+              {voicePending ? "Listening to the voice note…" : "🎤 Summarise + suggest a reply"}
+            </button>
+            {voiceError ? <span className="text-xs text-red-400">{voiceError}</span> : null}
+          </div>
+          {voiceSummary ? <p className="text-xs text-muted-foreground"><span className="font-medium text-foreground">They said:</span> {voiceSummary}{voiceSuggestion ? "" : " — the suggested reply is in the box; edit it before you send."}</p> : null}
+          {voiceSuggestion ? (
+            <div className="rounded-lg border border-border bg-muted/40 p-2 text-xs">
+              <p className="text-muted-foreground">Suggested reply — your own text in the box is untouched:</p>
+              <p className="mt-1 whitespace-pre-wrap text-foreground">{voiceSuggestion}</p>
+              <div className="mt-2 flex gap-2">
+                <button type="button" className="btn-secondary btn-sm" onClick={() => putSuggestion(voiceSuggestion)}>Replace my text with it</button>
+                <button type="button" className="btn-secondary btn-sm" onClick={() => setVoiceSuggestion("")}>Dismiss</button>
+              </div>
+            </div>
+          ) : null}
+        </div>
+      )}
       {channel === "x" && (
         <div className="mb-2 flex items-center gap-2">
           <button type="button" className="btn-secondary btn-sm" onClick={suggestWithGrok} disabled={grokPending || missingConversation}>
