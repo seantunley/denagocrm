@@ -1115,6 +1115,10 @@ model AssistantTurn {
   tags       String[]  @default([])
   /// The job sheet (AssistantTask) this answer started or updated, if any.
   taskId     String?
+  /// The cards this answer offered — [{ kind, leadId?, contactId? }], ids only, never names
+  /// (assistantOutcomeRules.proposedCards) — counted beside what was confirmed in Settings → Assistant.
+  /// Null: not an askCrm answer, or one from before 2026-11-02.
+  proposed   Json?
   createdAt  DateTime  @default(now())
 
   @@index([tenantId, userId, createdAt])

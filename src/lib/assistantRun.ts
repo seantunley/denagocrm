@@ -32,13 +32,20 @@ export const RUN_STALE_MS = 6 * 60 * 1000;
 /** How often the answer-so-far is written while it streams: a reconnect is a moment behind, not a write per token. */
 const PARTIAL_EVERY_MS = 400;
 
-export type RunStatus = "accepted" | "planning" | "researching" | "answering" | "completed" | "failed";
+/**
+ * "saving": the answer is written and being kept — Stop is refused from here. "stopped": the person stopped it
+ * (stopRun) before that, so nothing from it was kept.
+ */
+export type RunStatus = "accepted" | "planning" | "researching" | "answering" | "saving" | "completed" | "failed" | "stopped";
 export type RunView = { status: RunStatus; statusText: string | null; partial: string | null; result: AssistantResult | null };
+/** Still working: what Stop can end, and the only states a progress write may touch (a late write never revives a stopped run). */
+const STOPPABLE: RunStatus[] = ["accepted", "planning", "researching", "answering"];
 
 export const RUN_LOST: AssistantResult = {
   ok: false,
   error: "That answer was interrupted on the server before it finished — ask again.",
 };
+export const RUN_STOPPED: AssistantResult = { ok: false, error: "Stopped — nothing from that answer was kept." };
 
 /**
  * Claim the run for this key. `created` false means it already exists — this
@@ -75,7 +82,7 @@ export function runView(
   run: { status: string; statusText: string | null; partial: string | null; result: unknown; updatedAt: Date },
   now: Date,
 ): RunView {
-  const terminal = run.status === "completed" || run.status === "failed";
+  const terminal = run.status === "completed" || run.status === "failed" || run.status === "stopped";
   if (!terminal && now.getTime() - run.updatedAt.getTime() > RUN_STALE_MS) {
     return { status: "failed", statusText: null, partial: run.partial, result: RUN_LOST };
   }
@@ -92,15 +99,33 @@ export function runView(
  * as they happen; the answer so far at most every PARTIAL_EVERY_MS. A failed
  * write is logged and dropped: the person watching the stream still gets
  * everything — only a reconnect would be a moment behind.
+ *
+ * STOP. Progress writes touch only a run still working (STOPPABLE), so a late
+ * one never brings a stopped run back. `stillWanted` is askCrm's question; its
+ * `final` call CLAIMS the run for keeping ("saving") in the same conditional
+ * write Stop uses, so exactly one of them wins: stopped first, askCrm writes
+ * nothing; claimed first, Stop is refused and the finished answer stands.
+ * `finish` never overwrites a stopped run, and says whether it was stopped.
  */
 export function runRecorder(id: string, tenantId: string, userId: string) {
   let lastPartial = 0;
   let pending: string | null = null;
-  const write = (data: Prisma.AssistantRunUpdateManyMutationInput) =>
-    prisma.assistantRun.updateMany({ where: { id, tenantId, userId }, data }).catch(async (error: unknown) => {
+  const write = (data: Prisma.AssistantRunUpdateManyMutationInput, status: Prisma.StringFilter<"AssistantRun"> = { in: STOPPABLE }) =>
+    prisma.assistantRun.updateMany({ where: { id, tenantId, userId, status }, data }).catch(async (error: unknown) => {
       await logError("assistant-run", "run write failed", error instanceof Error ? error.name : "unknown");
+      return null;
     });
   return {
+    async stillWanted(final: boolean): Promise<boolean> {
+      if (final) {
+        // Not claimed because it was stopped: keep nothing — a stopped answer must never leave a card. (A failed
+        // write — logged — keeps the answer: Stop's own write would be failing too.)
+        const claimed = await write({ status: "saving" });
+        return claimed === null || claimed.count === 1;
+      }
+      const run = await prisma.assistantRun.findFirst({ where: { id, tenantId, userId }, select: { status: true } }).catch(() => null);
+      return run?.status !== "stopped";
+    },
     phase(status: RunStatus, statusText?: string) {
       void write({ status, ...(statusText ? { statusText } : {}) });
     },
@@ -112,16 +137,42 @@ export function runRecorder(id: string, tenantId: string, userId: string) {
       pending = null;
       void write({ status: "answering", partial: text });
     },
-    async finish(result: AssistantResult, timings: Record<string, number>) {
-      await write({
+    /** true when the person had stopped it: nothing was written, and the stopped result stands. */
+    async finish(result: AssistantResult, timings: Record<string, number>): Promise<boolean> {
+      const written = await write({
         status: result.ok ? "completed" : "failed",
         partial: result.ok ? result.answer : pending,
         result: result as unknown as Prisma.InputJsonValue,
         timings,
         finishedAt: new Date(),
-      });
+      }, { not: "stopped" });
+      return written?.count === 0;
     },
   };
+}
+
+/**
+ * Stop the person's own run, in this workspace, named by its key. "stopped": it
+ * was still working (or hadn't arrived yet) and nothing from it will be kept.
+ * "finished": too late — it is done or being kept, and its answer stands.
+ *
+ * A Stop that overtakes its own question (sent before the POST arrived) records
+ * the run already stopped, so the question — when it comes — only reads it
+ * (claimRun finds it) and never runs.
+ */
+export async function stopRun(tenantId: string, userId: string, clientKey: string): Promise<"stopped" | "finished"> {
+  const data = { status: "stopped", result: RUN_STOPPED as unknown as Prisma.InputJsonValue, finishedAt: new Date() };
+  const stop = () => prisma.assistantRun.updateMany({ where: { tenantId, userId, clientKey, status: { in: STOPPABLE } }, data });
+  if ((await stop()).count) return "stopped";
+  try {
+    await prisma.assistantRun.create({ data: { tenantId, userId, clientKey, ...data }, select: { id: true } });
+    return "stopped";
+  } catch (error) {
+    if (!(error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002")) throw error;
+  }
+  // It arrived in between: stop it now if it is still working.
+  if ((await stop()).count) return "stopped";
+  return (await readRun(tenantId, userId, clientKey))?.status === "stopped" ? "stopped" : "finished";
 }
 
 /**

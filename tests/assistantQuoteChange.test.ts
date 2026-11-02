@@ -191,7 +191,7 @@ test("THE ANSWER IS REPLACED when it speaks of a task that was not set up — ne
   const assistant = code("src/lib/crmAssistant.ts");
   assert.match(assistant, /const actions = !proposes \? \[\] : await resolveActions\(user, proposals, problems, taskWrite\?\.ok \? taskWrite\.sheet : null, cardUpload\)\.catch\(/);
   // A check-back DAX set itself (proactive DAX part 3) is a task that WAS set up, so it isn't counted as one that came to nothing.
-  assert.match(assistant, /const settled = proposes \? settledAnswer\(resolved\.plain, actions, problems, Math\.max\(0, reply\.attempted - checkBacks\.length - actions\.length - problems\.length\)\) : null;/);
+  assert.match(assistant, /const settled = proposes \? settledAnswer\(resolved\.plain, actions, problems, Math\.max\(0, reply\.attempted - checkBacks\.length - drops\.length - actions\.length - problems\.length\)\) : null;/);
   // The job sheet's line (Phase 1) is the CRM's own, added after — like the check-back line. A settled answer keeps
   // the rest of what was written, with its figure check, and the task status follows it.
   assert.match(assistant, /const kept = settled === null \? "" : withoutSetUpClaims\(resolved\.plain\);\s*const settledText = settled === null \? null : kept \? `\$\{kept\}\$\{note\}\\n\\n\$\{settled\}` : settled;/);

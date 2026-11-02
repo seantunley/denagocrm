@@ -77,6 +77,7 @@ import { TASK_INSTRUCTIONS, keepIds, taskBlock, type TaskView } from "./assistan
 import { applyTaskUpdate, openTasks, type TaskSheet, type TaskWrite } from "./assistantTask";
 import { PLAN_INSTRUCTIONS } from "./assistantPlanRules";
 import { proposePlan } from "./assistantPlan";
+import { proposedCards } from "./assistantOutcomeRules";
 import { describeSchedule, nextRun, scheduleInput } from "./assistantSchedule";
 import { describeWatch, watchInput } from "./assistantWatchRules";
 import {
@@ -92,6 +93,7 @@ import {
   lookupStatus,
   isSmallTalk,
   resultsBlock,
+  waitingBlock,
   planInstructions,
   playbookArgs,
   quoteArgs,
@@ -150,6 +152,8 @@ export type AssistantResult =
       learned: number; actions: ActionCard[]; choices: string[]; saved: boolean; turnId?: string;
       /** The version to SAY, when asked for one (opts.spoken) and it still matches the answer. */
       spoken?: string;
+      /** Waiting tasks to withdraw, by their number in opts.waiting (1-based) — the caller withdraws them. */
+      dropWaiting?: number[];
     }
   | { ok: false; error: string };
 
@@ -1910,6 +1914,11 @@ export type AskOptions = {
   /** The answer will be SPOKEN (a voice note): ask the model for a version to say as well (SPOKEN_RULE). */
   spoken?: boolean;
   /**
+   * WhatsApp only: the tasks waiting for this person's Confirm there, in the order they are numbered to DAX — so a
+   * correction ("make the delivery Wednesday") or "drop the follow-up" can name one (drop_waiting).
+   */
+  waiting?: { title: string; detail?: string }[];
+  /**
    * WhatsApp only (ignored for other sources): what the caller can do with a
    * proposed task. `true` — offer a Confirm button on the phone. `"saved"` —
    * nothing can be confirmed on the phone, but the task is kept as a card on
@@ -1931,6 +1940,12 @@ export type AskOptions = {
   onLookup?: (tool: string, data: unknown[]) => void;
   /** Each phase as it starts — the run record (assistantRun) keeps it for a reconnect. */
   onPhase?: (phase: "planning" | "researching" | "answering") => void;
+  /**
+   * Stop (assistantRun.stopRun): asked before each research round and before the answer whether the person still
+   * wants it — and, with `final`, once more after it is written and BEFORE anything is kept (job sheet, cards, plan,
+   * check-backs, learning, history). false: it ends there and writes nothing.
+   */
+  stillWanted?: (final: boolean) => Promise<boolean>;
   /**
    * Filled in with milliseconds per phase (context, plan1, lookups1, …,
    * answerFirstText, answer, total) — plus two flags, depth (1 = investigated)
@@ -2231,7 +2246,11 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
   let slowestRound = 0;
   // The research step's last word on whether another lookup would change the answer (null: it never said).
   let moreHelps: boolean | null = null;
+  // Stopped by the person (opts.stillWanted): it ends at the next step, having written nothing.
+  const stopped = async (final = false) => (opts.stillWanted ? !(await opts.stillWanted(final)) : false);
+  const STOPPED: AssistantResult = { ok: false, error: "Stopped." };
   for (let step = 0; research && step < budget().maxSteps && observations.length < budget().maxLookups; step++) {
+    if (await stopped()) return STOPPED;
     // Stop researching if the budget (or the answer reserve) can't fit another round.
     if (!roundFits(researchLeft(), slowestRound)) break;
     const roundStarted = Date.now();
@@ -2297,6 +2316,7 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
   timings.depth = depth === "investigate" ? 1 : 0;
   if (moreHelps !== null) timings.moreLookupsHelp = moreHelps ? 1 : 0;
 
+  if (await stopped()) return STOPPED;
   if (observations.length) progress("Writing it up…");
   phase("answering");
   // When the person first sees words — the number that decides whether DAX feels fast.
@@ -2351,6 +2371,7 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
       // Per question, so in the prompt and not the cached instructions.
       carried ? CARRIED_IMAGE_RULE : "",
       fileBlock,
+      source === "whatsapp" && opts.waiting?.length ? waitingBlock(opts.waiting) : "",
       observations.length
         ? resultsBlock("What the CRM returned:", observations.map(observationText).join("\n\n"))
         : "No lookup was needed for this question.",
@@ -2381,6 +2402,8 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
     if (!rows.length) return { ok: false, error: aiFailureForPeople(answerReply) };
     return { ok: true, answer: NO_WRITE_UP_NOTE, rows, tools, learned: 0, actions: [], choices: [], saved: false };
   }
+  // The last word: once claimed for keeping, Stop is refused; stopped before that, nothing below is written.
+  if (await stopped(true)) return STOPPED;
   // The answer the person sees, and — separately — anything it decided to learn,
   // any tasks it proposes and any quick replies (assistantReply: one block, or
   // the old trailer lines). Then its evidence links: kept only when they point
@@ -2401,8 +2424,12 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
   // A check-back is not a task to confirm: it is taken out here and saved below (setCheckBacks), so it never
   // becomes a card and never counts as a task that "came to nothing".
   const checkBacks = reply.actions.filter((p): p is CheckBack => p.type === "check_back");
+  // A waiting task taken back (drop_waiting) is not a card either: its number goes back to the WhatsApp side, which
+  // withdraws that offer. Only a number in the list DAX was given counts; it is never a task that "came to nothing".
+  const drops = reply.actions.filter((p): p is Extract<ProposedAction, { type: "drop_waiting" }> => p.type === "drop_waiting");
+  const dropWaiting = source === "whatsapp" ? [...new Set(drops.map((p) => p.task))].filter((n) => n <= (opts.waiting?.length ?? 0)) : [];
   // A plan is run from its card in the CRM chat. Proposed anywhere else, its independent steps are offered one by one, as before.
-  const proposals = reply.actions.filter((p) => p.type !== "check_back");
+  const proposals = reply.actions.filter((p) => p.type !== "check_back" && p.type !== "drop_waiting");
   const multiStep = proposes ? reply.plan : null;
   if (multiStep && source !== "chat") proposals.push(...multiStep.steps.filter((s) => !s.dependsOn).map((s) => s.action).slice(0, Math.max(0, MAX_ACTIONS - proposals.length)));
   // A scheduled run learns nothing: it reads customer text daily with nobody
@@ -2454,7 +2481,7 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
   // the person is told about tasks comes from the cards that EXIST: where the
   // words and the cards disagree, the words are replaced (not added to), here,
   // for everywhere the answer is shown or kept (assistantActions.settledAnswer).
-  const settled = proposes ? settledAnswer(resolved.plain, actions, problems, Math.max(0, reply.attempted - checkBacks.length - actions.length - problems.length)) : null;
+  const settled = proposes ? settledAnswer(resolved.plain, actions, problems, Math.max(0, reply.attempted - checkBacks.length - drops.length - actions.length - problems.length)) : null;
   // What the person is told about a check-back comes from what was SAVED (or why not) — added by the CRM.
   const checkBackLine = checksBack && checkBacks.length
     ? await setCheckBacks(user, checkBacks).catch(async (error: unknown) => {
@@ -2515,6 +2542,8 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
         ...(reply.state ? { state: reply.state, tags: reply.state.tags ?? [] } : {}),
         refs: turnRefs(observations.map((o) => o.output.data)),
         ...(taskWrite?.ok ? { taskId: taskWrite.id } : {}),
+        // The cards it offered — kind, and the deal or customer by id — counted in Settings → Assistant (assistantOutcomes).
+        proposed: proposedCards(actions) as object,
       },
       select: { id: true },
     })
@@ -2535,6 +2564,7 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
   }
   return {
     ok: true, answer, rows, tools, learned: learnedCount, actions, choices, saved: saved !== null,
+    ...(dropWaiting.length ? { dropWaiting } : {}),
     // The script was written with the answer: when the CRM replaced the answer (tasks that weren't set up) or added
     // a caution about its figures, it no longer matches — then the answer itself is read.
     ...(opts.spoken && reply.spoken && settled === null && !note ? { spoken: reply.spoken } : {}),
@@ -2567,7 +2597,7 @@ export async function resolveActions(
   const cards: ActionCard[] = [];
   for (const [index, p] of proposals.entries()) {
     // Never a card: askCrm takes check-backs out before this and saves them itself (proactiveFollowUp).
-    if (p.type === "check_back") continue;
+    if (p.type === "check_back" || p.type === "drop_waiting") continue;
     if (p.type === "schedule") {
       // No lead to check: it is saved for whoever presses Confirm, and runs as
       // them with their permissions at the time. Only the timing is checked
@@ -3205,6 +3235,7 @@ export async function resolveActions(
         name: true, title: true, stageId: true, assignedToId: true, stage: { select: { pipelineId: true } },
         email: true, phone: true, contactId: true, contact: { select: { email: true, phone: true } },
         status: true, lostReason: true,
+        nurtureReason: true, nurtureInterest: true, nurtureTrigger: true, nurtureReviewAt: true,
       },
     });
     if (!lead) continue;
@@ -3248,6 +3279,43 @@ export async function resolveActions(
       });
     } else if (p.type === "lost") {
       cards.push({ id, kind: "lost", leadId: p.leadId, leadLabel, title: `Mark ${lead.name}'s deal as lost`, reason: p.reason });
+    } else if (p.type === "reactivate") {
+      // The Nurture page's own Reactivate at Confirm (reactivateNurturedLead): leads.change_stage + activities.manage,
+      // an open stage, the deal's salesperson. Checked here too, so a card is only offered when it can run; the stage
+      // rules are its own, at Confirm (no silent override).
+      if (lead.status !== "nurture") {
+        problems.push(`${lead.name}'s deal isn't parked in Nurture (it's ${lead.status})${lead.status === "lost" ? " — a lost deal is reopened, not reactivated" : ""}.`);
+        continue;
+      }
+      if (!(await hasPermission(user, "leads.change_stage")) || !(await hasPermission(user, "activities.manage"))) { problems.push("Your role can't bring deals back from Nurture."); continue; }
+      if (!reviewDate(p.on)) { problems.push(`${p.on} isn't today or later — which day is the next action for ${lead.name}?`); continue; }
+      const owner = staff.find((s) => s.id === lead.assignedToId);
+      if (!owner) { problems.push(`${lead.name}'s deal has no active salesperson — set one in its Nurture details first.`); continue; }
+      const wantedStage = p.stage.trim().toLowerCase();
+      const stage = (await prisma.pipelineStage.findMany({
+        where: { pipelineId: lead.stage.pipelineId, isClosed: false },
+        select: { id: true, name: true },
+      })).find((s) => s.name.toLowerCase() === wantedStage);
+      if (!stage) {
+        problems.push(/^nurtur/.test(wantedStage)
+          ? `Nurture isn't a stage — which stage should ${lead.name}'s deal go back to?`
+          : `${lead.name}'s pipeline has no open stage called "${p.stage}".`);
+        continue;
+      }
+      const day = new Intl.DateTimeFormat("en-ZA", { weekday: "long", day: "numeric", month: "long", timeZone: "Africa/Johannesburg" }).format(new Date(`${p.on}T09:00:00+02:00`));
+      cards.push({
+        id, kind: "reactivate", leadId: p.leadId, leadLabel,
+        title: `Reactivate ${lead.name}'s deal — back to ${stage.name}`,
+        stageId: stage.id, next: p.next, on: p.on,
+        fromStageId: lead.stageId, reviewAt: lead.nurtureReviewAt?.toISOString() ?? null, assignedToId: owner.id,
+        detail: [
+          `Back to: ${stage.name}`,
+          `Next action: ${p.next} — ${day}, a to-do for ${owner.name}`,
+          `Parked because: ${nurtureReasonLabel(lead.nurtureReason)}${lead.nurtureInterest ? ` · wanted ${lead.nurtureInterest}` : ""}${lead.nurtureTrigger ? ` · “${lead.nurtureTrigger}”` : ""}`,
+          "Its Nurture review task is closed. The stage's rules still apply. Nobody is contacted.",
+        ].join("\n"),
+        ...(p.reason ? { reason: p.reason } : {}),
+      });
     } else if (p.type === "nurture") {
       // The lead page's own doors at Confirm — Reopen (a lost deal: leads.reopen) and Move to Nurture
       // (leads.change_stage + activities.manage; leads.assign for another salesperson). Checked here too, so a card

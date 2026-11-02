@@ -269,8 +269,8 @@ test("DAX may propose one, offered only while proactive DAX is on, never as a ca
   assert.match(core, /const checksBack = source !== "schedule" && \(await checkBacksOn\(user\.id\)\.catch\(\(\) => false\)\);/);
   assert.match(core, /checksBack \? CHECK_BACK_RULE : ""/);
   // Taken out before the cards and never counted as a task that came to nothing.
-  assert.match(core, /const proposals = reply\.actions\.filter\(\(p\) => p\.type !== "check_back"\);/);
-  assert.match(core, /reply\.attempted - checkBacks\.length - actions\.length - problems\.length/);
+  assert.match(core, /const proposals = reply\.actions\.filter\(\(p\) => p\.type !== "check_back" && p\.type !== "drop_waiting"\);/);
+  assert.match(core, /reply\.attempted - checkBacks\.length - drops\.length - actions\.length - problems\.length/);
   // What the person is told comes from what was SAVED.
   assert.match(core, /const answer = \(settledText \?\? resolved\.plain \+ note\) \+ checkBackLine \+ taskLine;/);
 });
