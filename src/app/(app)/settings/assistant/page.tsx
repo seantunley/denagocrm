@@ -334,8 +334,9 @@ export default async function AssistantSettingsPage() {
             <span className="block font-medium">Let {profile.name} tell staff about customer activity as it happens</span>
             <span className="block text-xs text-muted-foreground">
               When a customer opens a quote, comes back to it a third time, signs it, books a service, or writes and has
-              waited 15 minutes with no answer, {profile.name} tells the person responsible for them — the deal&apos;s owner,
-              else the customer&apos;s — in Ask DAX, as a phone notification that names nobody, and on the WhatsApp they
+              waited 15 minutes with no answer — or a signed deal is booked for delivery tomorrow (a check: deposit, invoice,
+              cart and PDI) — {profile.name} tells the person responsible for them — the deal&apos;s owner, else the
+              customer&apos;s — in Ask DAX, as a phone notification that names nobody, and on the WhatsApp they
               linked. Each person must also switch it on for themselves on the Ask page. Nothing between 20:00 and 08:00
               (held until morning), at most 12 a day each, only about records that person may open. It never contacts the
               customer, and uses no AI credit.
