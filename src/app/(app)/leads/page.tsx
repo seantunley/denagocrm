@@ -191,23 +191,32 @@ export default async function LeadsPage({
 
   // Pinned timeline notes (Communication rows of type "note"). Joined in SQL so
   // this stays one query regardless of how many leads are on the board.
-  type PinnedNoteRow = { leadId: string; body: string };
+  // The same rule as the lead's own timeline (lib/customerTimeline.dealTimelineWhere):
+  // the lead's notes, plus its customer's notes that sit on NO lead — e.g. a note
+  // DAX pinned on the customer — when this person may open that customer.
+  const pinContactIds = contactIdsForPins.filter(
+    (id) => accessibleContactIds === null || accessibleContactIds.includes(id),
+  );
+  type PinnedNoteRow = { leadId: string | null; contactId: string | null; body: string };
   const pinnedNoteRows = leadIds.length
     ? await prisma.$queryRaw<PinnedNoteRow[]>(Prisma.sql`
-        SELECT c."leadId", c."body"
+        SELECT c."leadId", c."contactId", c."body"
         FROM "TimelinePin" p
         JOIN "Communication" c ON c."id" = p."itemId"
         WHERE p."kind" = 'communication'
           AND c."type" = 'note'
-          AND c."leadId" IN (${Prisma.join(leadIds)})
+          AND (
+            c."leadId" IN (${Prisma.join(leadIds)})
+            ${pinContactIds.length ? Prisma.sql`OR (c."leadId" IS NULL AND c."contactId" IN (${Prisma.join(pinContactIds)}))` : Prisma.empty}
+          )
         ORDER BY p."pinnedAt" DESC
       `)
     : [];
   const pinnedNotesByLead = new Map<string, string[]>();
+  const pinnedCustomerNotes = new Map<string, string[]>();
   for (const row of pinnedNoteRows) {
-    const list = pinnedNotesByLead.get(row.leadId) ?? [];
-    list.push(row.body);
-    pinnedNotesByLead.set(row.leadId, list);
+    const [map, key] = row.leadId ? [pinnedNotesByLead, row.leadId] : [pinnedCustomerNotes, row.contactId!];
+    map.set(key, [...(map.get(key) ?? []), row.body]);
   }
 
   // Active signing requests for these leads' quotes → a "quote sent · waiting for
@@ -311,6 +320,10 @@ export default async function LeadsPage({
             : []),
           ...(pinnedNotesByLead.get(lead.id) ?? []).map((text) => ({
             label: "Pinned note",
+            text,
+          })),
+          ...((lead.contactId && pinnedCustomerNotes.get(lead.contactId)) || []).map((text) => ({
+            label: "Pinned customer note",
             text,
           })),
         ],
