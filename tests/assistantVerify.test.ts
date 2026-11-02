@@ -54,9 +54,10 @@ test("every answer goes through the check, and the note is part of what's saved 
   const call = src.slice(src.indexOf("const flagged = unsupportedFigures("), src.indexOf("\n", src.indexOf("const flagged = unsupportedFigures(")));
   // The evidence list (from "[question") — the answer being checked is the first argument, not evidence.
   assert.doesNotMatch(call.slice(call.indexOf("[question")), /conversation|\.answer|\.state/, "nothing DAX wrote is evidence");
-  // The note is still part of both — unless the whole answer was replaced because it spoke of a task that was
-  // never set up (settledAnswer): that text holds none of the original's figures.
-  assert.match(src, /const cited = \(settled \?\? resolved\.cited \+ note\) \+ checkBackLine \+ taskLine;\s*const answer = \(settled \?\? resolved\.plain \+ note\) \+ checkBackLine \+ taskLine;/);
+  // The note is still part of both — and when what it said about a task was replaced (settledAnswer), the note stays
+  // with the rest of the answer that was kept (its figures are still there), before the task status.
+  assert.match(src, /const settledText = settled === null \? null : kept \? `\$\{kept\}\$\{note\}\\n\\n\$\{settled\}` : settled;/);
+  assert.match(src, /const cited = \(settledText \?\? resolved\.cited \+ note\) \+ checkBackLine \+ taskLine;\s*const answer = \(settledText \?\? resolved\.plain \+ note\) \+ checkBackLine \+ taskLine;/);
   const plan = readFileSync(new URL("../src/lib/crmAssistantPlan.ts", import.meta.url), "utf8");
   assert.match(plan, /with \\"My read:\\"/);
   assert.match(plan, /with \\"Not in the CRM:\\"/);

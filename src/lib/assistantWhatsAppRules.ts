@@ -164,6 +164,9 @@ export const WHATSAPP_CONFIRMABLE: ReadonlySet<string> = new Set([
   // attach_file / record_payment (2026-11-02): what was sent from this phone, filed on a record; money received on an
   // invoiced quote with its proof — every figure shown, the deliveries board's own checks, nothing to the customer.
   "attach_file", "record_payment",
+  // nurture (Sean, 2026-11-02, asked on WhatsApp: "it's not lost, should be in Nurture"): parks a deal for later —
+  // reopening a lost one first — every detail shown, nobody contacted, through the lead page's own actions.
+  "nurture",
 ]);
 
 /**
