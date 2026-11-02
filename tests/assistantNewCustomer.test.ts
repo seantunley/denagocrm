@@ -38,12 +38,12 @@ test("the card shows every field Confirm will save, and says nobody is contacted
     "Name: Jane Smith\nPhone: 082 555 1234\nCreates the customer record only — no lead, and they are not contacted.",
   );
   const ui = code("src/components/AssistantActionCard.tsx");
-  assert.match(ui, /card\.kind === "create_customer" && <p[^>]*whitespace-pre-line[^>]*>\{card\.detail\}<\/p>/);
+  assert.match(ui, /\(card\.kind === "create_customer" \|\| card\.kind === "create_lead" \|\| card\.kind === "update_customer"\) && <p[^>]*whitespace-pre-line[^>]*>\{card\.detail\}<\/p>/);
 });
 
 test("the card is made only for someone who may add customers, with a phone or email, and not a duplicate", () => {
   const lib = code("src/lib/crmAssistant.ts");
-  const branch = lib.slice(lib.indexOf('if (p.type === "create_customer")'), lib.indexOf('if (p.type === "job_card")'));
+  const branch = lib.slice(lib.indexOf('if (p.type === "create_customer")'), lib.indexOf('if (p.type === "create_lead")'));
   const permission = branch.indexOf('hasPermission(user, "contacts.create")');
   const contactable = branch.indexOf("!customer.phone && !customer.email");
   const clash = branch.indexOf("customerClash(user, customer)");
@@ -58,7 +58,7 @@ test("the card is made only for someone who may add customers, with a phone or e
 
 test("Confirm: the duplicate check again, then the contact form's own action — the only write", () => {
   const action = code("src/app/actions/assistant.ts");
-  const run = action.slice(action.indexOf('case "create_customer": {'), action.indexOf('case "assign": {'));
+  const run = action.slice(action.indexOf('case "create_customer": {'), action.indexOf('case "create_lead": {'));
   const clash = run.indexOf("await customerClash(user, c)");
   const create = run.indexOf("await createContact(form)");
   assert.ok(clash > 0 && clash < create, "a second Confirm finds the customer the first one made");

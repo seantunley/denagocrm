@@ -1157,18 +1157,20 @@ model AssistantTask {
   @@index([updatedAt])
 }
 
-/// A photo or screenshot sent to DAX, kept for ONE HOUR so the person's next
-/// message can act on it (Sean, 2026-11-02: DAX asks "pin the screenshot, or add
-/// its text?" and the answer arrives without the picture). The cleaned JPEG
-/// (assistantImage.cleanJpeg: no metadata). Read back only for the reply that
-/// directly follows its turn; deleted by the assistant's cron tick after an hour.
-model AssistantImage {
+/// A photo, screenshot or file sent to DAX, HELD — never filed on its own
+/// (Sean, 2026-11-02). Handed back for the reply that directly follows its
+/// question ("pin it to Clive"), and read by Confirm when a card files it
+/// (lib/assistantUpload.ts). A photo is the cleaned JPEG (no metadata). Deleted
+/// by the assistant's cron tick after a day.
+model AssistantUpload {
   id        String   @id @default(cuid())
   tenantId  String
   userId    String
-  /// The AssistantTurn whose question it came with.
-  turnId    String   @unique
-  jpeg      Bytes
+  /// The AssistantTurn whose question it came with; null until that is saved.
+  turnId    String?  @unique
+  fileName  String
+  mimeType  String
+  data      Bytes
   createdAt DateTime @default(now())
 
   @@index([createdAt])

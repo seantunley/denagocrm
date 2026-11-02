@@ -84,6 +84,8 @@ export default function AssistantActionCard({
   const leadLink =
     card.kind === "schedule" || card.kind === "watch" ? null
     : card.kind === "customer_note" ? `/contacts/${card.contactId}`
+    : card.kind === "update_customer" ? `/contacts/${card.contactId}`
+    : card.kind === "create_lead" && card.lead.contactId ? `/contacts/${card.lead.contactId}`
     : card.kind === "job_card" ? `/vehicles/${card.vehicleId}`
     // A quote for a customer directly (no deal): the link is to the customer.
     : (card.kind === "quote_build" || card.kind === "quote_add" || card.kind === "quote_change") && !card.leadId ? `/contacts/${card.contactId}`
@@ -126,8 +128,8 @@ export default function AssistantActionCard({
         // eslint-disable-next-line @next/next/no-img-element -- a data: URL, not a remote image
         <img src={card.image} alt="The screenshot to attach" className="mt-2 max-h-48 rounded-md border border-border" />
       )}
-      {/* A new customer: every field Confirm will save. */}
-      {card.kind === "create_customer" && <p className="mt-1 whitespace-pre-line text-xs text-muted-foreground">{card.detail}</p>}
+      {/* A new customer or deal, or changed details: every field Confirm will save. */}
+      {(card.kind === "create_customer" || card.kind === "create_lead" || card.kind === "update_customer") && <p className="mt-1 whitespace-pre-line text-xs text-muted-foreground">{card.detail}</p>}
       {card.kind === "lost" && <p className="mt-2 text-xs text-muted-foreground">Reason: {card.reason}</p>}
       {draft && (
         <div className="mt-2 space-y-1.5">

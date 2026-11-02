@@ -33,7 +33,7 @@ import { readFile, rm } from "node:fs/promises";
 import path from "node:path";
 import sharp from "sharp";
 import { cleanJpeg, jpegDataUrl } from "../src/lib/assistantImage";
-import { carriedImage, pruneAssistantImages, rememberImage } from "../src/lib/assistantImageCarry";
+import { carriedUpload, holdUpload, linkUpload, photoUpload, pruneAssistantUploads, uploadImage } from "../src/lib/assistantUpload";
 
 const SFX = Math.random().toString(16).slice(2, 10);
 let passed = 0;
@@ -65,6 +65,10 @@ const digits = String(Date.now()).slice(-7);
 const ANNA_PHONE = `082 1${digits.slice(1)}`; // the OTHER rep's customer — rep cannot open her
 const BEN_EMAIL = `ben-${SFX}@example.invalid`; // rep's own customer
 const JANE_PHONE = `+27 83 ${digits.slice(0, 3)} ${digits.slice(3)}`;
+const BEN_PHONE = `084 1${digits.slice(1)}`;
+const TAG = id("tag");
+const PRODUCT = id("product");
+const STAGE = id("stage");
 const scoped = <R>(fn: () => Promise<R>) => runInTenantScope({ tenantId: T, system: false }, fn);
 
 async function seed() {
@@ -81,7 +85,17 @@ async function seed() {
       (gen_random_uuid()::text, ${limited.id}, ${ROLE}, ${T})`;
   await basePrisma.$executeRaw`INSERT INTO "TenantMember" ("id", "tenantId", "userId") VALUES (${id("tm-rep")}, ${T}, ${rep.id}), (${id("tm-other")}, ${T}, ${other.id}), (${id("tm-limited")}, ${T}, ${limited.id})`;
   await basePrisma.contact.create({ data: { id: id("c-anna"), tenantId: T, firstName: "Anna", lastName: `Hidden${SFX}`, phone: ANNA_PHONE, ownerId: other.id, createdById: other.id } });
-  await basePrisma.contact.create({ data: { id: id("c-ben"), tenantId: T, firstName: "Ben", lastName: `Mine${SFX}`, email: BEN_EMAIL, ownerId: rep.id, createdById: rep.id } });
+  // Ben carries everything an edit must NOT wipe: notes, an owner, a marketing opt-out, a tag.
+  await basePrisma.contact.create({
+    data: { id: id("c-ben"), tenantId: T, firstName: "Ben", lastName: `Mine${SFX}`, email: BEN_EMAIL, phone: BEN_PHONE, city: "Paarl", notes: "Prefers mornings", marketingOptOut: true, source: "website", ownerId: rep.id, createdById: rep.id },
+  });
+  await basePrisma.tag.create({ data: { id: TAG, name: `VIP ${SFX}`, color: "#2563eb", tenantId: T } });
+  await basePrisma.$executeRaw`INSERT INTO "_ContactToTag" ("A", "B") VALUES (${id("c-ben")}, ${TAG})`;
+  await basePrisma.product.create({ data: { id: PRODUCT, tenantId: T, name: `DAX Rover ${SFX}`, basePriceCents: 23_500_000 } });
+  // A fresh test database's default pipeline has no stages; a new lead lands in its first open one.
+  await basePrisma.$executeRaw`
+    INSERT INTO "PipelineStage" ("id", "tenantId", "name", "order", "color", "pipelineId", "defaultProbability", "isClosed")
+    VALUES (${STAGE}, ${T}, ${`New ${SFX}`}, 900004, '#64748b', 'pipeline_default_retail', 10, false)`;
 }
 
 async function sessionFor(user: PermissionUser): Promise<ActingSession> {
@@ -95,9 +109,16 @@ async function cleanup() {
   for (const note of notes) if (note.attachmentUrl && !note.attachmentUrl.includes("/")) await rm(path.join(process.cwd(), "storage", "uploads", note.attachmentUrl), { force: true });
   await basePrisma.$executeRaw`DELETE FROM "TimelinePin" WHERE "itemId" IN (SELECT "id" FROM "Communication" WHERE "userId" IN (${rep.id}, ${other.id}, ${limited.id}))`;
   await basePrisma.communication.deleteMany({ where: { userId: { in: ids } } });
-  await basePrisma.assistantImage.deleteMany({ where: { userId: { in: ids } } });
+  await basePrisma.assistantUpload.deleteMany({ where: { userId: { in: ids } } });
   await basePrisma.assistantTurn.deleteMany({ where: { userId: { in: ids } } });
-  await basePrisma.auditLog.deleteMany({ where: { OR: [{ contactId: { in: contacts } }, { userId: { in: ids } }] } });
+  const leads = (await basePrisma.lead.findMany({ where: { createdById: { in: ids } }, select: { id: true } })).map((l) => l.id);
+  await basePrisma.activity.deleteMany({ where: { leadId: { in: leads } } });
+  await basePrisma.auditLog.deleteMany({ where: { OR: [{ contactId: { in: contacts } }, { leadId: { in: leads } }, { userId: { in: ids } }] } });
+  await basePrisma.lead.deleteMany({ where: { id: { in: leads } } });
+  await basePrisma.$executeRaw`DELETE FROM "PipelineStage" WHERE "id" = ${STAGE}`;
+  await basePrisma.$executeRaw`DELETE FROM "_ContactToTag" WHERE "B" = ${TAG}`;
+  await basePrisma.tag.deleteMany({ where: { id: TAG } });
+  await basePrisma.product.deleteMany({ where: { id: PRODUCT } });
   await basePrisma.contact.deleteMany({ where: { id: { in: contacts } } });
   await basePrisma.$executeRaw`DELETE FROM "TenantMember" WHERE "userId" IN (${rep.id}, ${other.id}, ${limited.id})`;
   await basePrisma.$executeRaw`DELETE FROM "UserRole" WHERE "userId" IN (${rep.id}, ${other.id}, ${limited.id})`;
@@ -176,15 +197,22 @@ async function main() {
       select: { id: true },
     });
     const sent = await turn(5, "📎 (a screenshot)");
-    await scoped(() => rememberImage(T, rep.id, sent.id, shot));
-    check("the reply that follows gets the same picture back", (await scoped(() => carriedImage(T, rep.id, "whatsapp"))) === shot);
-    check("…on that channel only", (await scoped(() => carriedImage(T, rep.id, "chat"))) === null);
-    check("another workspace never sees it", (await runInTenantScope({ tenantId: OTHER_TENANT, system: false }, () => carriedImage(T, rep.id, "whatsapp"))) === null);
+    const keep = async (turnId: string) => {
+      const held = await scoped(() => holdUpload(T, rep.id, photoUpload(shot)!));
+      await scoped(() => linkUpload(T, rep.id, held, turnId));
+      return held;
+    };
+    const heldId = await keep(sent.id);
+    const carried = () => scoped(() => carriedUpload(T, rep.id, "whatsapp"));
+    const back = await carried();
+    check("the reply that follows gets the same picture back", back?.id === heldId && uploadImage(back) === shot);
+    check("…on that channel only", (await scoped(() => carriedUpload(T, rep.id, "chat"))) === null);
+    check("another workspace never sees it", (await runInTenantScope({ tenantId: OTHER_TENANT, system: false }, () => carriedUpload(T, rep.id, "whatsapp"))) === null);
 
     // The card from the real builder: pinned, with THE picture in hand.
     const problems: string[] = [];
     const cards = await runAsSession(repSession, () => scoped(() =>
-      resolveActions(rep, [{ type: "customer_note", contactId: id("c-ben"), text: "Screenshot: Ben's trade-in photo", pin: true, attachImage: true }], problems, null, shot)));
+      resolveActions(rep, [{ type: "customer_note", contactId: id("c-ben"), text: "Screenshot: Ben's trade-in photo", pin: true, attachImage: true }], problems, null, { id: heldId, fileName: "photo.jpg", mimeType: "image/jpeg", image: shot })));
     const card = cards.find((c): c is Extract<ActionCard, { kind: "customer_note" }> => c.kind === "customer_note");
     check("the card carries the picture and says it pins the screenshot", card?.image === shot && /^Pin the screenshot to Ben/.test(card.title), JSON.stringify({ title: card?.title, problems }));
     const none: string[] = [];
@@ -201,16 +229,61 @@ async function main() {
 
     // Carried once: the reply that used it is not kept, so the message after that has no picture.
     await turn(2, "Pin it to Ben");
-    check("the message after the reply gets no picture", (await scoped(() => carriedImage(T, rep.id, "whatsapp"))) === null);
+    check("the message after the reply gets no picture", (await carried()) === null);
     // Too late: the next message more than 30 minutes on.
     const late = await turn(45, "📎 (another)");
-    await scoped(() => rememberImage(T, rep.id, late.id, shot));
+    await keep(late.id);
     await basePrisma.assistantTurn.deleteMany({ where: { userId: rep.id, id: { not: late.id } } });
-    check("a reply more than 30 minutes later gets no picture", (await scoped(() => carriedImage(T, rep.id, "whatsapp"))) === null);
-    // The hourly clean-up.
-    const kept = await basePrisma.assistantImage.count({ where: { userId: rep.id } });
-    const removed = await pruneAssistantImages(T, new Date(Date.now() + 2 * 60 * 60_000));
-    check("deleted after an hour", kept === 2 && removed >= 2 && (await basePrisma.assistantImage.count({ where: { userId: rep.id } })) === 0, `kept ${kept}, removed ${removed}`);
+    check("a reply more than 30 minutes later gets no picture", (await carried()) === null);
+    // The daily clean-up (a card saved on the Ask page can be confirmed for a day).
+    const kept = await basePrisma.assistantUpload.count({ where: { userId: rep.id } });
+    const early = await pruneAssistantUploads(T, new Date(Date.now() + 2 * 60 * 60_000));
+    const removed = await pruneAssistantUploads(T, new Date(Date.now() + 26 * 60 * 60_000));
+    check("kept through the day, deleted after it", kept === 2 && early === 0 && removed >= 2 && (await basePrisma.assistantUpload.count({ where: { userId: rep.id } })) === 0, `kept ${kept}, early ${early}, removed ${removed}`);
+  }
+
+  console.log("\nOpen a lead");
+  {
+    const lead = async (proposal: Record<string, unknown>) => {
+      const problems: string[] = [];
+      const cards = await runAsSession(repSession, () => scoped(() => resolveActions(rep, [{ type: "create_lead", ...proposal } as never], problems, null)));
+      return { problems, card: cards.find((c): c is Extract<ActionCard, { kind: "create_lead" }> => c.kind === "create_lead") };
+    };
+    const forBen = await lead({ contactId: id("c-ben"), product: `DAX Rover ${SFX}`, notes: "Wants white" });
+    check("for a customer they look after: the card names the customer and the catalogue product", !!forBen.card && forBen.card.lead.productId === PRODUCT && /^Open a lead for Ben Mine.* — DAX Rover/.test(forBen.card.title), JSON.stringify(forBen));
+    const done = await runAsSession(repSession, () => scoped(() => runAssistantAction(forBen.card!)));
+    const row = done.href ? await basePrisma.lead.findUnique({ where: { id: done.href.split("/").pop()! } }) : null;
+    check("Confirm opens it through the lead form: Ben's, the product, given to the person asking, in this workspace", done.ok && row?.contactId === id("c-ben") && row.productId === PRODUCT && row.assignedToId === rep.id && row.tenantId === T && row.status === "open", JSON.stringify({ done, row }));
+    // Someone new whose number is already on a customer (written another way): the lead links to them.
+    const janeDigits = JANE_PHONE.replace(/\D/g, "");
+    const forJane = await lead({ firstName: "Jane", lastName: `New${SFX}`, phone: `0${janeDigits.slice(2)}` });
+    const jane = (await janes())[0];
+    check("a 'new' person already in the CRM: the card says so and links them", forJane.card?.lead.contactId === jane?.id && /already in the CRM/.test(forJane.card?.detail ?? ""), JSON.stringify(forJane));
+    const hidden = await lead({ firstName: "Anna", phone: ANNA_PHONE });
+    check("…but never to a customer they cannot open", !hidden.card && /can't open/.test(hidden.problems.join(" ")));
+    const nothing = await lead({ contactId: id("c-ben"), product: "No such vehicle" });
+    check("a product not in the catalogue: no card, and it says why", !nothing.card && /isn't one product in the catalogue/.test(nothing.problems.join(" ")));
+  }
+
+  console.log("\nChange a customer's details");
+  {
+    const update = async (proposal: Record<string, unknown>) => {
+      const problems: string[] = [];
+      const cards = await runAsSession(repSession, () => scoped(() => resolveActions(rep, [{ type: "update_customer", contactId: id("c-ben"), ...proposal } as never], problems, null)));
+      return { problems, card: cards.find((c): c is Extract<ActionCard, { kind: "update_customer" }> => c.kind === "update_customer") };
+    };
+    const NEW_PHONE = `085 1${digits.slice(1)}`;
+    const { card } = await update({ phone: NEW_PHONE, city: "Stellenbosch", email: BEN_EMAIL });
+    check("only what really changes is on the card, each before and after", card?.changes.length === 2 && card.detail.includes(`Phone: ${BEN_PHONE} → ${NEW_PHONE}`) && card.detail.includes("City: Paarl → Stellenbosch"), JSON.stringify(card));
+    const clash = await update({ phone: ANNA_PHONE });
+    check("a number already on another customer: no card", !clash.card && /already on a customer/.test(clash.problems.join(" ")), clash.problems.join(" | "));
+    const done = await runAsSession(repSession, () => scoped(() => runAssistantAction(card!)));
+    const ben = await basePrisma.contact.findUnique({ where: { id: id("c-ben") }, include: { tags: { select: { id: true } } } });
+    check("Confirm changes exactly those", done.ok && ben?.phone === NEW_PHONE && ben.city === "Stellenbosch" && ben.email === BEN_EMAIL, JSON.stringify({ done, ben }));
+    check("…and wipes nothing else: notes, owner, marketing opt-out, tags, source", ben?.notes === "Prefers mornings" && ben.ownerId === rep.id && ben.marketingOptOut === true && ben.tags.some((t) => t.id === TAG) && ben.source === "website", JSON.stringify(ben));
+    // The same card again: the phone is no longer what it showed.
+    const again = await runAsSession(repSession, () => scoped(() => runAssistantAction(card!)));
+    check("a card whose 'before' is no longer true is refused, unchanged", !again.ok && again.unchanged === true, JSON.stringify(again));
   }
 }
 

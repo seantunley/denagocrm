@@ -62,9 +62,9 @@ import { MAX_IMAGES_PER_QUESTION } from "./assistantImage";
 import { applyLearn, loadLearned, loadPlaybook, markNotesUsed, saveDecision, visibleTo } from "./assistantMemoryStore";
 import { checkBacksOn, setCheckBacks, type CheckBack } from "./proactiveFollowUp";
 import { findExistingContact } from "./contactMatch";
-import { carriedImage, rememberImage } from "./assistantImageCarry";
+import { carriedUpload, holdUpload, linkUpload, photoUpload, uploadImage } from "./assistantUpload";
 import { actingTenantId } from "./actingTenant";
-import { ACTION_INSTRUCTIONS, CHECK_BACK_RULE, CHOICE_INSTRUCTIONS, JOB_CARD_RULE, MAX_ACTIONS, newCustomerDetail, type NewCustomer, matchQuoteRow, quoteAddText, quoteBuildText, quoteChangeText, settledAnswer, type ActionCard, type ProposedAction, type QuoteBuildLine, type QuoteChange } from "./assistantActions";
+import { ACTION_INSTRUCTIONS, CHECK_BACK_RULE, CHOICE_INSTRUCTIONS, JOB_CARD_RULE, MAX_ACTIONS, newCustomerDetail, type NewCustomer, CUSTOMER_FIELDS, customerChangesText, type CustomerChange, type CustomerField, matchQuoteRow, quoteAddText, quoteBuildText, quoteChangeText, settledAnswer, type ActionCard, type ProposedAction, type QuoteBuildLine, type QuoteChange } from "./assistantActions";
 import { knowledgeProducts, resolveCatalogueProduct } from "./catalogueLookup";
 import { TASK_INSTRUCTIONS, keepIds, taskBlock, type TaskView } from "./assistantTaskRules";
 import { applyTaskUpdate, openTasks, type TaskSheet, type TaskWrite } from "./assistantTask";
@@ -2047,14 +2047,28 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
   void markNotesUsed([...learnedNow.memory, ...learnedNow.profile, ...learnedNow.playbooks].map((n) => n.id));
   const profile = parseProfile(profileRaw);
   const freshImages = (opts.images ?? []).slice(0, MAX_IMAGES_PER_QUESTION);
-  // No photo with this question: the one from their previous question, when this is the reply to it (assistantImageCarry).
-  const carried = freshImages.length || source === "schedule"
+  // WHAT CAME WITH THIS QUESTION IS HELD before it is answered, so a card can file it and the next reply can
+  // still reach it (assistantUpload). Nothing came: the previous question's, when this is the reply to it.
+  const uploadTenant = ownedWriteTenantId();
+  const fresh = freshImages.length ? photoUpload(freshImages[0]) : null;
+  const heldId = fresh && source !== "schedule"
+    ? await holdUpload(uploadTenant, user.id, fresh).catch(async (error: unknown) => {
+        await logError("crm-assistant", "upload hold failed", error instanceof Error ? error.name : "unknown");
+        return null;
+      })
+    : null;
+  const carried = fresh || source === "schedule"
     ? null
-    : await carriedImage(ownedWriteTenantId(), user.id, source).catch(async (error: unknown) => {
-        await logError("crm-assistant", "carried image read failed", error instanceof Error ? error.name : "unknown");
+    : await carriedUpload(uploadTenant, user.id, source).catch(async (error: unknown) => {
+        await logError("crm-assistant", "carried upload read failed", error instanceof Error ? error.name : "unknown");
         return null;
       });
-  const images = freshImages.length ? freshImages : carried ? [carried] : [];
+  const carriedPhoto = carried ? uploadImage(carried) : null;
+  const images = freshImages.length ? freshImages : carriedPhoto ? [carriedPhoto] : [];
+  // What a card may attach or file: this question's upload, or the one carried — never one the model names.
+  const cardUpload: CardUpload | null = fresh
+    ? { id: heldId, fileName: fresh.fileName, mimeType: fresh.mimeType, image: freshImages[0] }
+    : carried ? { id: carried.id, fileName: carried.fileName, mimeType: carried.mimeType, image: carriedPhoto } : null;
   // The internet only when the owner switched it on, and never on a schedule
   // (nobody watching). Whether a given lookup may run is checked when it does.
   const webOn = profile.webSearch && source !== "schedule";
@@ -2339,7 +2353,7 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
     : null;
   // Where nothing can confirm it, a stray ACTIONS line is removed from the answer and dropped.
   const problems: string[] = [];
-  const actions = !proposes ? [] : await resolveActions(user, proposals, problems, taskWrite?.ok ? taskWrite.sheet : null, images[0] ?? null).catch(async (error: unknown) => {
+  const actions = !proposes ? [] : await resolveActions(user, proposals, problems, taskWrite?.ok ? taskWrite.sheet : null, cardUpload).catch(async (error: unknown) => {
     await logError("crm-assistant", "task proposals failed", error instanceof Error ? error.name : "unknown");
     return [];
   });
@@ -2358,7 +2372,7 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
   // Confirm. A message to the customer in it comes back as its own Send card — never run by the plan.
   if (multiStep && source === "chat") {
     const planProblems: string[] = [];
-    const planCards = await proposePlan(user, multiStep, planProblems, (steps, stepProblems) => resolveActions(user, steps, stepProblems, taskWrite?.ok ? taskWrite.sheet : null, images[0] ?? null)).catch(async (error: unknown) => {
+    const planCards = await proposePlan(user, multiStep, planProblems, (steps, stepProblems) => resolveActions(user, steps, stepProblems, taskWrite?.ok ? taskWrite.sheet : null, cardUpload)).catch(async (error: unknown) => {
       await logError("crm-assistant", "plan proposal failed", error instanceof Error ? error.name : "unknown");
       planProblems.push("The plan could not be set up — nothing was saved. Ask again.");
       return [] as ActionCard[];
@@ -2443,11 +2457,11 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
       await logError("crm-assistant", "history write failed", error instanceof Error ? error.name : "unknown");
       return null;
     });
-  // A photo that came WITH this question: kept an hour so their next reply can pin it or add its text
-  // (assistantImageCarry). A carried one is not kept again — it reaches one reply only. Never costs the answer.
-  if (saved && freshImages.length) {
-    await rememberImage(ownedWriteTenantId(), user.id, saved, freshImages[0]).catch(async (error: unknown) => {
-      await logError("crm-assistant", "image keep failed", error instanceof Error ? error.name : "unknown");
+  // What came WITH this question, linked to it: so the next reply can still pin it or add its text
+  // (assistantUpload). A carried one stays with the question it came with — it reaches one reply only.
+  if (saved && heldId) {
+    await linkUpload(uploadTenant, user.id, heldId, saved).catch(async (error: unknown) => {
+      await logError("crm-assistant", "upload link failed", error instanceof Error ? error.name : "unknown");
     });
   }
   return {
@@ -2463,12 +2477,6 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
  * pipeline); anything that doesn't resolve is dropped, not guessed. Nothing runs
  * here — the card's Confirm calls the existing action, which checks it all again.
  */
-/** A note card's title: what it adds, and where. */
-function noteTitle(p: { pin?: boolean; attachImage?: boolean }, where: string): string {
-  return p.attachImage ? `${p.pin ? "Pin" : "Add"} the screenshot to ${where}` : `Add a ${p.pin ? "pinned " : ""}note to ${where}`;
-}
-const NO_IMAGE_TO_ATTACH = "There's no picture I can still reach to attach — send the screenshot again, with what to do with it as its caption.";
-
 export async function resolveActions(
   user: User,
   proposals: ProposedAction[],
@@ -2476,9 +2484,11 @@ export async function resolveActions(
   problems: string[] = [],
   /** The job sheet this answer wrote (assistantTask): quote cards are filled from it, and carry its id so Confirm records the result there. */
   sheet: TaskSheet | null = null,
-  /** The photo this question brought or carried (askCrm's images[0]): what attachImage attaches — never one the model names. */
-  image: string | null = null,
+  /** What this question brought or carried (askCrm's cardUpload): what a card attaches or files — never one the model names. */
+  upload: CardUpload | null = null,
 ): Promise<ActionCard[]> {
+  // The photo a note attaches (attachImage).
+  const image = upload?.image ?? null;
   const quoteSheet = sheet?.kind === "quote" ? sheet : null;
   if (!proposals.length) return [];
   const staff = await listActingTenantStaff();
@@ -2562,6 +2572,81 @@ export async function resolveActions(
       cards.push({
         id: `a${index}-new-customer`, kind: "create_customer", leadId: null, leadLabel: name,
         title: `Add ${name} as a new customer`, customer, detail: newCustomerDetail(customer),
+        ...(p.reason ? { reason: p.reason } : {}),
+      });
+      continue;
+    }
+    if (p.type === "create_lead") {
+      // createLead checks leads.create, links or creates the customer and runs the lead automations at Confirm.
+      if (!(await hasPermission(user, "leads.create"))) { problems.push("Your role can't open leads."); continue; }
+      let contactId: string | null = null;
+      let who: string;
+      let phone: string | null;
+      let email: string | null;
+      if (p.contactId) {
+        const c = (await canAccessContact(user, p.contactId))
+          ? await prisma.contact.findFirst({ where: { id: p.contactId, deletedAt: null }, select: { firstName: true, lastName: true, company: true, isCompany: true, phone: true, whatsapp: true, email: true } })
+          : null;
+        if (!c) { problems.push("I can't find that customer among the ones you can open — look them up and ask again."); continue; }
+        contactId = p.contactId;
+        who = contactName(c);
+        phone = c.phone ?? c.whatsapp ?? null;
+        email = c.email ?? null;
+      } else {
+        if (!p.firstName || (!p.phone && !p.email)) { problems.push("A lead for someone new needs their name and a phone number or email."); continue; }
+        // The lead form links an existing customer with this number or email — said on the card, and only one this person may open.
+        const match = await findExistingContact({ tenantId: await actingTenantId(), email: p.email, phone: p.phone });
+        if (match.kind === "ambiguous") { problems.push("That number or email is on more than one customer in the CRM — say which customer the lead is for."); continue; }
+        if (match.kind === "one" && !(await canAccessContact(user, match.contactId))) { problems.push("That number or email is already on a customer you can't open — ask whoever looks after them."); continue; }
+        const existing = match.kind === "one"
+          ? await prisma.contact.findFirst({ where: { id: match.contactId, deletedAt: null }, select: { firstName: true, lastName: true, company: true, isCompany: true } })
+          : null;
+        contactId = match.kind === "one" ? match.contactId : null;
+        who = existing ? contactName(existing) : [p.firstName, p.lastName].filter(Boolean).join(" ");
+        phone = p.phone ?? null;
+        email = p.email ?? null;
+      }
+      const product = p.productId || p.product ? await resolveCatalogueProduct({ productId: p.productId, product: p.product }) : null;
+      if ((p.productId || p.product) && !product) { problems.push(`"${p.product ?? "That product"}" isn't one product in the catalogue — look it up and name it as listed.`); continue; }
+      const openDeals = contactId ? await prisma.lead.count({ where: { contactId, status: "open", deletedAt: null } }) : 0;
+      cards.push({
+        id: `a${index}-new-lead`, kind: "create_lead", leadId: null, leadLabel: who,
+        title: `Open a lead for ${who}${product ? ` — ${product.name}` : ""}`,
+        lead: { contactId, name: who, phone, email, productId: product?.id ?? null, notes: p.notes ?? null },
+        detail: [
+          contactId ? `Customer: ${who} (already in the CRM)` : `New customer: ${who} — created with the lead`,
+          ...(phone ? [`Phone: ${phone}`] : []),
+          ...(email ? [`Email: ${email}`] : []),
+          ...(product ? [`Interested in: ${product.name}`] : []),
+          ...(p.notes ? [`Notes: ${p.notes}`] : []),
+          ...(openDeals > 0 ? [`${who} already has ${openDeals} open deal${openDeals === 1 ? "" : "s"}.`] : []),
+          "Opens in the first stage, given to you. The customer is not contacted.",
+        ].join("\n"),
+        ...(p.reason ? { reason: p.reason } : {}),
+      });
+      continue;
+    }
+    if (p.type === "update_customer") {
+      // updateContact checks contacts.edit and access to THIS customer again at Confirm.
+      if (!(await hasPermission(user, "contacts.edit")) || !(await canAccessContact(user, p.contactId))) { problems.push("You can't edit that customer."); continue; }
+      const c = await prisma.contact.findFirst({
+        where: { id: p.contactId, deletedAt: null },
+        select: { firstName: true, lastName: true, company: true, isCompany: true, phone: true, whatsapp: true, email: true, address: true, suburb: true, city: true, province: true, postalCode: true },
+      });
+      if (!c) { problems.push("I can't find that customer — look them up and ask again."); continue; }
+      const changes: CustomerChange[] = [];
+      for (const field of Object.keys(CUSTOMER_FIELDS) as CustomerField[]) {
+        const now = p[field]?.trim();
+        if (!now || (c[field] ?? "").trim() === now) continue;
+        changes.push({ field, was: c[field] ?? null, now });
+      }
+      const name = contactName(c);
+      if (changes.length === 0) { problems.push(`${name}'s details already read that way — there is nothing to change.`); continue; }
+      const clash = await detailClash(user, p.contactId, changes);
+      if (clash) { problems.push(clash); continue; }
+      cards.push({
+        id: `a${index}-${p.contactId}-details`, kind: "update_customer", leadId: null, leadLabel: name, contactId: p.contactId,
+        title: `Update ${name}'s details`, changes, detail: customerChangesText(changes),
         ...(p.reason ? { reason: p.reason } : {}),
       });
       continue;
@@ -2941,6 +3026,28 @@ function dedupeRows(rows: AssistantRow[]): AssistantRow[] {
 }
 
 /**
+ * A new phone, WhatsApp or email for customer `contactId` that is already on ANOTHER customer — said, or null.
+ * Asked when the card is made and again at Confirm.
+ */
+export async function detailClash(user: PermissionUser, contactId: string, changes: readonly CustomerChange[]): Promise<string | null> {
+  for (const change of changes) {
+    const key = change.field === "email" ? { phone: null, email: change.now } : change.field === "phone" || change.field === "whatsapp" ? { phone: change.now, email: null } : null;
+    const clash = key ? await customerClash(user, key, contactId, "I haven't changed it") : null;
+    if (clash) return clash;
+  }
+  return null;
+}
+
+/** What a question brought or carried, as the card builder sees it: `id` is the held upload (null if holding it failed). */
+export type CardUpload = { id: string | null; fileName: string; mimeType: string; image: string | null };
+
+/** A note card's title: what it adds, and where. */
+function noteTitle(p: { pin?: boolean; attachImage?: boolean }, where: string): string {
+  return p.attachImage ? `${p.pin ? "Pin" : "Add"} the screenshot to ${where}` : `Add a ${p.pin ? "pinned " : ""}note to ${where}`;
+}
+const NO_IMAGE_TO_ATTACH = "There's no picture I can still reach to attach — send the screenshot again, with what to do with it as its caption.";
+
+/**
  * Is a new customer (create_customer) already in the CRM? The same rule as making
  * a customer from a lead (lib/contactMatch): the phone's digit tail against every
  * customer's phone and WhatsApp, or the email ignoring case — in THIS workspace,
@@ -2948,14 +3055,22 @@ function dedupeRows(rows: AssistantRow[]): AssistantRow[] {
  * at Confirm, so a second Confirm finds the customer the first one made.
  * The match is named only to someone who may open it.
  */
-export async function customerClash(user: PermissionUser, customer: Pick<NewCustomer, "phone" | "email">): Promise<string | null> {
+export async function customerClash(
+  user: PermissionUser,
+  customer: Pick<NewCustomer, "phone" | "email">,
+  /** The customer being edited (update_customer): not a clash with itself. */
+  except: string | null = null,
+  /** What was therefore not done, to end the sentence. */
+  notDone = "I haven't added them again",
+): Promise<string | null> {
   const match = await findExistingContact({ tenantId: await actingTenantId(), email: customer.email, phone: customer.phone });
   if (match.kind === "none") return null;
-  if (match.kind === "ambiguous") return "That number or email is already on more than one customer in the CRM, so I haven't added another.";
+  if (match.kind === "one" && match.contactId === except) return null;
+  if (match.kind === "ambiguous") return `That number or email is already on more than one customer in the CRM, so ${notDone}.`;
   const existing = (await canAccessContact(user, match.contactId))
     ? await prisma.contact.findFirst({ where: { id: match.contactId, deletedAt: null }, select: { firstName: true, lastName: true, company: true, isCompany: true } })
     : null;
   return existing
-    ? `${contactName(existing)} is already in the CRM with that number or email — I haven't added them again.`
-    : "That number or email is already on a customer in the CRM (one you can't open), so I haven't added them again.";
+    ? `${contactName(existing)} is already in the CRM with that number or email — ${notDone}.`
+    : `That number or email is already on a customer in the CRM (one you can't open), so ${notDone}.`;
 }

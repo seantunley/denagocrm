@@ -37,24 +37,27 @@ test("a screenshot with no instruction: DAX asks — pin it, or add its text —
 
 test("the reply that answers it still has the picture — that reply only, then never again", () => {
   const lib = code("src/lib/crmAssistant.ts");
-  // Carried only when this question brought none, never on a schedule.
-  assert.match(lib, /const carried = freshImages\.length \|\| source === "schedule"\s*\? null\s*: await carriedImage\(ownedWriteTenantId\(\), user\.id, source\)/);
-  assert.match(lib, /const images = freshImages\.length \? freshImages : carried \? \[carried\] : \[\];/);
-  // Only a picture that came WITH a question is kept, so a carried one reaches one reply.
-  assert.match(lib, /if \(saved && freshImages\.length\) \{\s*await rememberImage\(/);
+  // Held before it is answered; carried only when this question brought nothing, never on a schedule.
+  assert.match(lib, /const heldId = fresh && source !== "schedule"\s*\? await holdUpload\(uploadTenant, user\.id, fresh\)/);
+  assert.match(lib, /const carried = fresh \|\| source === "schedule"\s*\? null\s*: await carriedUpload\(uploadTenant, user\.id, source\)/);
+  assert.match(lib, /const images = freshImages\.length \? freshImages : carriedPhoto \? \[carriedPhoto\] : \[\];/);
+  // Only what came WITH a question is linked to it, so a carried one reaches one reply.
+  assert.match(lib, /if \(saved && heldId\) \{\s*await linkUpload\(/);
   // Told which message it came from, in the per-question prompt (not the cached instructions).
   assert.equal((lib.match(/carried \? CARRIED_IMAGE_RULE : ""/g) ?? []).length, 2, "research and answer prompts");
-  const carry = code("src/lib/assistantImageCarry.ts");
+  const carry = code("src/lib/assistantUpload.ts");
   assert.match(carry, /export const CARRY_MS = 30 \* 60 \* 1000;/);
-  assert.match(carry, /export const KEEP_MS = 60 \* 60 \* 1000;/);
+  assert.match(carry, /export const KEEP_MS = 25 \* 60 \* 60 \* 1000;/);
   // The person's LAST question on that channel, and recent — not any earlier picture.
   assert.match(carry, /where: \{ tenantId, userId, source \},\s*orderBy: \{ createdAt: "desc" \}/);
   assert.match(carry, /now\.getTime\(\) - last\.createdAt\.getTime\(\) > CARRY_MS\) return null/);
-  assert.match(carry, /assistantImage\.findFirst\(\{ where: \{ tenantId, userId, turnId: last\.id \}/);
+  assert.match(carry, /assistantUpload\.findFirst\(\{ where: \{ tenantId, userId, turnId: last\.id \}/);
+  // What Confirm files is the person's OWN held upload, in this workspace, still kept.
+  assert.match(carry, /where: \{ id, tenantId, userId, createdAt: \{ gt: new Date\(now\.getTime\(\) - KEEP_MS\) \} \}/);
   // Its own table, isolated per workspace like every DAX table.
-  const migration = raw("prisma/migrations/20261102120000_assistant_image/migration.sql");
-  assert.match(migration, /ALTER TABLE "AssistantImage" ENABLE ROW LEVEL SECURITY;/);
-  assert.match(migration, /ALTER TABLE "AssistantImage" FORCE ROW LEVEL SECURITY;/);
+  const migration = raw("prisma/migrations/20261102120000_assistant_upload/migration.sql");
+  assert.match(migration, /ALTER TABLE "AssistantUpload" ENABLE ROW LEVEL SECURITY;/);
+  assert.match(migration, /ALTER TABLE "AssistantUpload" FORCE ROW LEVEL SECURITY;/);
   assert.match(migration, /"tenantId" = current_setting\('app\.current_tenant', true\)/);
 });
 
@@ -63,7 +66,8 @@ test("the card: only with a picture in hand, and it says it is the screenshot", 
   assert.equal((lib.match(/if \(p\.attachImage && !image\) \{ problems\.push\(NO_IMAGE_TO_ATTACH\); continue; \}/g) ?? []).length, 2, "note and customer_note");
   assert.equal((lib.match(/\.\.\.\(p\.attachImage && image \? \{ image \} : \{\}\)/g) ?? []).length, 2, "the picture is resolveActions' own `image`");
   assert.match(lib, /\? `\$\{p\.pin \? "Pin" : "Add"\} the screenshot to \$\{where\}`/);
-  assert.match(lib, /resolveActions\(user, proposals, problems, taskWrite\?\.ok \? taskWrite\.sheet : null, images\[0\] \?\? null\)/);
+  assert.match(lib, /resolveActions\(user, proposals, problems, taskWrite\?\.ok \? taskWrite\.sheet : null, cardUpload\)/);
+  assert.match(lib, /const image = upload\?\.image \?\? null;/);
   const ui = code("src/components/AssistantActionCard.tsx");
   assert.match(ui, /\(card\.kind === "note" \|\| card\.kind === "customer_note"\) && card\.image && \(/);
 });

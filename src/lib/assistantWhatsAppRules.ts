@@ -158,6 +158,9 @@ export const WHATSAPP_CONFIRMABLE: ReadonlySet<string> = new Set([
   // create_customer (Sean, 2026-11-02): a new customer record from a contact shared off the phone — every field
   // shown first, nobody contacted, and a phone or email already on a customer is refused.
   "create_customer",
+  // create_lead / update_customer (2026-11-02): a new deal, or a customer's own details — shown in full, nobody
+  // contacted, through the lead and contact forms' own actions.
+  "create_lead", "update_customer",
 ]);
 
 /**

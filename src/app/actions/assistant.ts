@@ -3,13 +3,14 @@
 import { requireAnyPermission } from "@/lib/permissions";
 import { withActingStaffScope } from "@/lib/actingScope";
 import { isModuleEnabled } from "@/lib/modules/enabled";
-import { assistantTurnsToday, customerClash } from "@/lib/crmAssistant";
-import { createContact } from "@/app/actions/contacts";
+import { assistantTurnsToday, customerClash, detailClash } from "@/lib/crmAssistant";
+import { createContact, updateContact } from "@/app/actions/contacts";
+import { contactFormFor } from "@/lib/contactFormFor";
 import { MAX_IMAGE_BYTES } from "@/lib/assistantImage";
 import { getSetting } from "@/lib/settings";
 import { isCodexConnected } from "@/lib/codex";
 import { ASSISTANT_PROFILE_KEY, parseProfile } from "@/lib/assistantSoul";
-import { CONFIRM_KEY, QUOTE_ADD_MAX_FEES, QUOTE_ADD_MAX_FEE_RANDS, QUOTE_BUILD_MAX_LINES, STALE_CARD, type ActionCard } from "@/lib/assistantActions";
+import { CONFIRM_KEY, CUSTOMER_FIELDS, QUOTE_ADD_MAX_FEES, QUOTE_ADD_MAX_FEE_RANDS, QUOTE_BUILD_MAX_LINES, STALE_CARD, type ActionCard } from "@/lib/assistantActions";
 import { editorDefaults, quoteFromLeadDefaults } from "@/lib/quoteFromLead";
 import { QUOTE_PDF_SOURCE } from "@/lib/assistantWhatsAppRules";
 import { tenantOrigin } from "@/lib/tenantOrigin";
@@ -21,7 +22,7 @@ const QUOTE_PDF_SEND_WAIT_MS = 4_000;
 import { prisma } from "@/lib/db";
 import { cancelActivity, rescheduleActivity, scheduleActivity, scheduleFollowUp } from "@/app/actions/activities";
 import { addCommunication } from "@/app/actions/communications";
-import { assignLead, convertLeadToContact, markLost, moveLead } from "@/app/actions/leads";
+import { assignLead, convertLeadToContact, createLead, markLost, moveLead } from "@/app/actions/leads";
 import { createQuoteFromLead, saveQuoteDraft } from "@/app/actions/quotes";
 import { createTestDriveBooking } from "@/app/actions/testDrives";
 import { createStaffAvailability } from "@/app/actions/staffAvailability";
@@ -229,6 +230,40 @@ export async function runAssistantAction(
         if (result?.error || !contactId) return { ok: false, error: result?.error ?? "Couldn't add the customer." };
         await logAudit({ action: "assistant.action_confirmed", summary: "Confirmed the assistant's proposal: add a new customer", user, contactId });
         return { ok: true, success: `${card.leadLabel} added as a customer`, href: `/contacts/${contactId}` };
+      }
+      case "create_lead": {
+        // THE LEAD FORM'S OWN DOOR (createLead): leads.create, linking or creating the customer by phone/email,
+        // the first open stage, the assignee, the audit entry and the lead_created automations are all its.
+        const l = card.lead;
+        if (!l?.name?.trim() || (!l.contactId && !l.phone && !l.email)) return untouched(STALE_CARD);
+        if (l.contactId && !(await canAccessContact(user, l.contactId))) return untouched("You can't open that customer any more.");
+        const form = new FormData();
+        form.set("name", l.name);
+        for (const [key, value] of [["contactId", l.contactId], ["phone", l.phone], ["email", l.email], ["productId", l.productId], ["notes", l.notes]] as const) {
+          if (value) form.set(key, value);
+        }
+        const result = await createLead(form);
+        const leadId = /^\/leads\/([^/?#]+)$/.exec(result?.redirectTo ?? "")?.[1];
+        if (result?.error || !leadId) return { ok: false, error: result?.error ?? "Couldn't open the lead." };
+        await confirmed("open a lead", leadId);
+        return { ok: true, success: `Lead opened for ${card.leadLabel}`, href: `/leads/${leadId}` };
+      }
+      case "update_customer": {
+        // THE CONTACT FORM'S OWN DOOR (updateContact): contacts.edit, access to THIS customer, the audit entry with
+        // what changed. It saves every field posted, so the whole record is posted with only these changed.
+        const changes = Array.isArray(card.changes) ? card.changes : [];
+        const valid = changes.filter((c) => c && Object.hasOwn(CUSTOMER_FIELDS, c.field) && typeof c.now === "string" && c.now.trim());
+        if (valid.length === 0 || valid.length !== changes.length) return untouched(STALE_CARD);
+        const current = await prisma.contact.findFirst({ where: { id: card.contactId, deletedAt: null }, include: { tags: { select: { name: true } } } });
+        if (!current) return untouched("That customer is no longer there.");
+        // What the card SHOWED must still be what is there: otherwise this would overwrite a change made since.
+        if (valid.some((c) => (current[c.field] ?? null) !== (c.was ?? null))) return untouched(STALE_CARD);
+        const clash = await detailClash(user, card.contactId, valid);
+        if (clash) return untouched(clash);
+        const result = await updateContact(card.contactId, contactFormFor(current, Object.fromEntries(valid.map((c) => [c.field, c.now.trim()]))));
+        if (result?.error) return { ok: false, error: result.error };
+        await logAudit({ action: "assistant.action_confirmed", summary: "Confirmed the assistant's proposal: update the customer's details", user, contactId: card.contactId });
+        return { ok: true, success: `${card.leadLabel}'s details updated`, href: `/contacts/${card.contactId}` };
       }
       case "assign": {
         if (!(await stillAsProposed(card))) return untouched(STALE_CARD);

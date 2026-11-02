@@ -113,7 +113,7 @@ test("real photos (when sharp is installed locally): EXIF/GPS and trailing data 
   }
 });
 
-test("the image is checked on the server before the question is asked — and kept only an hour, apart from the history", () => {
+test("the image is checked on the server before the question is asked — and held only a day, apart from the history", () => {
   // The streaming route hands the image to askAsPerson, which checks it.
   assert.match(code("src/app/api/assistant/ask/route.ts"), /image: form\.get\("image"\)/);
   const ask = code("src/lib/assistantAsk.ts");
@@ -123,10 +123,11 @@ test("the image is checked on the server before the question is asked — and ke
   // The history keeps only that there WAS an image (sent with this question, not carried from the last one)…
   assert.match(lib, /question: freshImages\.length \? `📎 \$\{question\}` : question,/, "only that there WAS an image is kept");
   assert.doesNotMatch(lib, /images[^\n]*assistantTurn|assistantTurn[^\n]*images/);
-  // …the cleaned picture itself goes to its own table for the next reply (Sean, 2026-11-02: pin it or add its
-  // text), and the assistant cron deletes it after an hour (lib/assistantImageCarry.ts).
-  assert.match(lib, /if \(saved && freshImages\.length\) \{\s*await rememberImage\(ownedWriteTenantId\(\), user\.id, saved, freshImages\[0\]\)/);
-  assert.match(code("src/app/api/cron/assistant/route.ts"), /await pruneAssistantImages\(tenantId\)/);
+  // …the cleaned picture itself is HELD apart from the history, for the next reply and the card that files it
+  // (Sean, 2026-11-02), and the assistant cron deletes it after a day (lib/assistantUpload.ts).
+  assert.match(lib, /const fresh = freshImages\.length \? photoUpload\(freshImages\[0\]\) : null;/);
+  assert.match(lib, /if \(saved && heldId\) \{\s*await linkUpload\(uploadTenant, user\.id, heldId, saved\)/);
+  assert.match(code("src/app/api/cron/assistant/route.ts"), /await pruneAssistantUploads\(tenantId\)/);
   assert.match(lib, /images\.length \? IMAGE_RULE : ""/, "the image is data, never instructions");
   // The browser shrinks and re-encodes (dropping EXIF) before anything is sent.
   const shrink = code("src/components/shrinkImage.ts");
