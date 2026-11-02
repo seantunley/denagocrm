@@ -470,13 +470,17 @@ async function sendInteractive(toDigits: string, interactive: unknown): Promise<
 export async function sendWhatsAppButtons(
   toDigits: string,
   body: string,
-  buttons: { id: string; title: string }[]
+  buttons: { id: string; title: string }[],
+  /** WhatsApp's own small header line above the text and grey footer line below it (60 characters each). */
+  frame: { header?: string; footer?: string } = {},
 ) {
   // The limits are imported, not written out here, so the builder's preview
   // cannot disagree with what actually gets sent. Same numbers, same behaviour.
   return sendInteractive(toDigits, {
     type: "button",
+    ...(frame.header ? { header: { type: "text", text: frame.header.slice(0, 60) } } : {}),
     body: { text: body.slice(0, WA_BODY_MAX) },
+    ...(frame.footer ? { footer: { text: frame.footer.slice(0, 60) } } : {}),
     action: {
       buttons: buttons.slice(0, WA_BUTTON_MAX).map((b) => ({
         type: "reply",

@@ -86,9 +86,14 @@ const state = {
   /** "Confirm all" reached (voice-first): the row the button named, or null for "yes to all". */
   confirmedAll: [] as { anchorId: string | null }[],
   /** What the confirm step says is waiting for this person. */
-  waiting: { total: 0, newest: [] as { id: string; title: string }[], only: null as { id: string; title: string } | null },
+  waiting: { total: 0, newest: [] as { id: string; title: string }[], only: null as { id: string; title: string } | null, all: [] as { id: string; title: string; detail?: string }[] },
   /** Spoken yeses past the ask limit, counted on their own allowance. */
   voiceConfirms: 0,
+  /** What DAX was shown as waiting, what it said to drop, and what was withdrawn (round 2: change a task by voice). */
+  askedWaiting: [] as unknown[],
+  dropWaiting: [] as number[],
+  withdrawn: [] as string[][],
+  carried: [] as string[][],
   /** What a voice note is heard as. */
   transcript: "what is overdue today" as string | null,
   errors: [] as string[],
@@ -256,6 +261,8 @@ loaderKey._load = function (this: unknown, request: string, parent, isMain) {
           state.askedImages.push(opts.images ?? []);
           state.askedFiles.push(opts.file ?? null);
           state.proposeTasks.push(opts.proposeTasks ?? false);
+          state.askedWaiting.push((opts as { waiting?: unknown }).waiting ?? null);
+          if (state.dropWaiting.length) return { ok: true, answer: "Changed the delivery to Wednesday.", rows: [], tools: [], learned: 0, actions: state.proposals, choices: [], dropWaiting: state.dropWaiting };
           // As the real one: proposals come back only when the caller said what it will do with them.
           if (opts.proposeTasks && state.proposals.length) {
             return { ok: true, answer: "Set up for you to confirm.", rows: [], tools: [], learned: 0, actions: state.proposals, choices: [] };
@@ -266,7 +273,8 @@ loaderKey._load = function (this: unknown, request: string, parent, isMain) {
       // The confirm step itself is proved in assistantWhatsAppConfirm.test.ts; here, only WHEN it is reached.
       case "./assistantWhatsAppConfirm": return {
         confirmingOnWhatsAppOn: async () => state.confirmOn,
-        offerConfirmations: async (tenantId: string, userId: string, waId: string, cards: { kind: string }[]) => {
+        offerConfirmations: async (tenantId: string, userId: string, waId: string, cards: { kind: string }[], carry: string[] = []) => {
+          state.carried.push(carry);
           state.offered.push({ tenantId, userId, waId, kinds: cards.map((c) => c.kind), sentBefore: state.sent.length });
         },
         confirmFromWhatsApp: async (tenantId: string, user: { id: string }, waId: string, pendingId: string) => {
@@ -278,6 +286,7 @@ loaderKey._load = function (this: unknown, request: string, parent, isMain) {
           state.confirmedAll.push({ anchorId });
         },
         waitingForConfirm: async () => state.waiting,
+        withdrawWaiting: async (_t: string, _u: string, ids: string[]) => { state.withdrawn.push(ids); return ids.map((id) => `task ${id.slice(-1)}`); },
       };
       case "./assistantUser": return {
         assistantUserFor: async (id: string) => (state.members.has(id) ? { id, name: id, email: `${id}@x`, role: "staff" } : null),
@@ -366,9 +375,13 @@ beforeEach(() => {
   state.offered = [];
   state.confirmed = [];
   state.confirmedAll = [];
-  state.waiting = { total: 0, newest: [], only: null };
+  state.waiting = { total: 0, newest: [], only: null, all: [] };
   state.transcript = "what is overdue today";
   state.voiceConfirms = 0;
+  state.askedWaiting = [];
+  state.dropWaiting = [];
+  state.withdrawn = [];
+  state.carried = [];
   state.errors = [];
   state.audits = [];
   state.guesses = new Map();
@@ -824,7 +837,7 @@ test("questions are capped at 500 characters and by the person's ONE ask limit",
   // …unless a task is waiting (review of #939): a SPOKEN yes still confirms, as a tap or typed yes does — under its
   // own small allowance — and anything else said is still not answered.
   state.confirmOn = true;
-  state.waiting = { total: 1, newest: [], only: { id: "cmpendingpendingpendingpe", title: "Add a note" } };
+  state.waiting = { total: 1, newest: [], only: { id: "cmpendingpendingpendingpe", title: "Add a note" }, all: [] };
   state.transcript = "Yes.";
   const asked = state.asked.length;
   assert.equal(await handleStaffWhatsApp(STAFF, { voiceMediaId: "m3" }), true);
@@ -1030,7 +1043,8 @@ test("the staff path never writes a customer record or runs the bot", () => {
   for (const call of lib.match(/sendWhatsApp(Text|Buttons)\([^)]*\)/g) ?? []) {
     assert.doesNotMatch(call, /record/, call);
   }
-  assert.match(lib, /askCrm\(user, q, null, \{ source: "whatsapp", images, \.\.\.\(file \? \{ file \} : \{\}\), \.\.\.\(voiceBack \? \{ spoken: true \} : \{\}\), proposeTasks: \(await confirmingOnWhatsAppOn\(\)\) \? true : "saved" \}\)/);
+  // (Round 2, 2026-11-02: what waits for Confirm is passed too — see the change-by-voice test.)
+  assert.match(lib, /askCrm\(user, q, null, \{\s*source: "whatsapp", images, \.\.\.\(file \? \{ file \} : \{\}\), \.\.\.\(voiceBack \? \{ spoken: true \} : \{\}\),\s*\.\.\.\(waitingNow\.length \? \{ waiting: [^\n]*\n\s*proposeTasks: \(await confirmingOnWhatsAppOn\(\)\) \? true : "saved",\s*\}\)/);
   // Every lookup names the workspace the route entered for the business number.
   assert.match(lib, /const scope = currentTenantScope\(\);\s*if \(!scope \|\| scope\.system \|\| !scope\.tenantId\) return false;\s*const tenantId = scope\.tenantId;/);
   // …and it is the first thing the handler does: nothing runs before it.
@@ -1811,7 +1825,7 @@ test("confirmed on WhatsApp: what the task queued is sent straight after the con
 test("VOICE-FIRST: a spoken yes confirms the one task waiting, with no question to DAX; 'yes to all' said confirms the last set", async () => {
   verified("u1", STAFF);
   state.confirmOn = true;
-  state.waiting = { total: 1, newest: [{ id: "cmpendingpendingpendingpe", title: "Add a note to Anna's lead" }], only: { id: "cmpendingpendingpendingpe", title: "Add a note to Anna's lead" } };
+  state.waiting = { total: 1, newest: [{ id: "cmpendingpendingpendingpe", title: "Add a note to Anna's lead" }], only: { id: "cmpendingpendingpendingpe", title: "Add a note to Anna's lead" }, all: [] };
   state.transcript = "Yes, please.";
   assert.equal(await handleStaffWhatsApp(STAFF, { voiceMediaId: "m1" }), true);
   assert.deepEqual(state.confirmed.map((c) => c.pendingId), ["cmpendingpendingpendingpe"]);
@@ -1829,7 +1843,7 @@ test("VOICE-FIRST: a spoken yes confirms the one task waiting, with no question 
 test("VOICE-FIRST: a FORWARDED voice note is the customer's words — told to DAX as such, kept whole, never a yes", async () => {
   verified("u1", STAFF);
   state.confirmOn = true;
-  state.waiting = { total: 1, newest: [{ id: "cmpendingpendingpendingpe", title: "Add a note to Anna's lead" }], only: { id: "cmpendingpendingpendingpe", title: "Add a note to Anna's lead" } };
+  state.waiting = { total: 1, newest: [{ id: "cmpendingpendingpendingpe", title: "Add a note to Anna's lead" }], only: { id: "cmpendingpendingpendingpe", title: "Add a note to Anna's lead" }, all: [] };
   state.transcript = "Yes.";
   assert.equal(await handleStaffWhatsApp(STAFF, { voiceMediaId: "m1", forwarded: true }), true);
   assert.equal(state.confirmed.length, 0, "a customer's yes never confirms the person's task");
@@ -1851,7 +1865,7 @@ test("VOICE-FIRST: typed 'yes to all' and the Confirm all button confirm the set
   assert.deepEqual(state.confirmedAll, [{ anchorId: "cmpendingpendingpendingpe" }]);
   assert.equal(await handleStaffWhatsApp(STAFF, { text: "yes, do them all" }), true);
   assert.deepEqual(state.confirmedAll.at(-1), { anchorId: null });
-  state.waiting = { total: 3, newest: [{ id: "cmpendingaaaaaaaaaaaaaaaa", title: "Change the Rover to Black on Q-1030" }, { id: "cmpendingbbbbbbbbbbbbbbbb", title: "Book Q-1030's delivery for Tue 10 Nov 2026" }], only: null };
+  state.waiting = { total: 3, newest: [{ id: "cmpendingaaaaaaaaaaaaaaaa", title: "Change the Rover to Black on Q-1030" }, { id: "cmpendingbbbbbbbbbbbbbbbb", title: "Book Q-1030's delivery for Tue 10 Nov 2026" }], only: null, all: [] };
   const sentBefore = state.sent.length;
   assert.equal(await handleStaffWhatsApp(STAFF, { text: "Yes" }), true);
   assert.equal(state.confirmed.length, 0, "never a guess at which");
@@ -1859,7 +1873,7 @@ test("VOICE-FIRST: typed 'yes to all' and the Confirm all button confirm the set
   assert.match(told, /^These 2 are waiting from my last message:\n• Change the Rover to Black on Q-1030\n• Book Q-1030's delivery for Tue 10 Nov 2026\n\nSay "yes to all" to do all 2, or tap Confirm on the ones you want\./);
   assert.match(told, /\(An older one is waiting too — tap Confirm on it\.\)/);
   // Nothing waiting: a yes goes to DAX, as before.
-  state.waiting = { total: 0, newest: [], only: null };
+  state.waiting = { total: 0, newest: [], only: null, all: [] };
   await handleStaffWhatsApp(STAFF, { text: "Yes" });
   assert.equal(state.asked.at(-1)?.question, "Yes");
 });
@@ -1873,4 +1887,36 @@ test("it knows about WhatsApp — and the pinned claims stay true", async () => 
   assert.match(about, /is saved as a card on their Ask page in the CRM, kept for a day, where they press Confirm or Send/);
   assert.match(about, /A message to a customer is never sent from WhatsApp/);
   assert.match(about, /you never send anything to a customer/);
+});
+
+test("CHANGE A WAITING TASK BY VOICE: DAX sees what waits, numbered; a drop withdraws that one and the rest joins the new offer", async () => {
+  verified("u1", STAFF);
+  state.confirmOn = true;
+  const all = [
+    { id: "cmpendingaaaaaaaaaaaaaaa1", title: "Change the Rover to Black on Q-1030" },
+    { id: "cmpendingaaaaaaaaaaaaaaa2", title: "Book Q-1030's delivery for Tue 10 Nov 2026", detail: "Delivery for Clive" },
+    { id: "cmpendingaaaaaaaaaaaaaaa3", title: "Follow up with Clive Friday" },
+  ];
+  state.waiting = { total: 3, newest: all, only: null, all };
+  state.dropWaiting = [2];
+  state.proposals = [{ kind: "schedule_delivery", title: "Book Q-1030's delivery for Wed 11 Nov 2026" }];
+  state.transcript = "Make the delivery Wednesday, not Tuesday.";
+  assert.equal(await handleStaffWhatsApp(STAFF, { voiceMediaId: "m1" }), true);
+  assert.deepEqual(state.askedWaiting.at(-1), [
+    { title: "Change the Rover to Black on Q-1030" },
+    { title: "Book Q-1030's delivery for Tue 10 Nov 2026", detail: "Delivery for Clive" },
+    { title: "Follow up with Clive Friday" },
+  ]);
+  assert.deepEqual(state.withdrawn, [["cmpendingaaaaaaaaaaaaaaa2"]], "the one it named, by its number");
+  assert.ok(state.sent.some((s) => /^↩️ \*Withdrawn\* — nothing was changed:\n• /.test(s.text)));
+  assert.deepEqual(state.carried.at(-1), ["cmpendingaaaaaaaaaaaaaaa1", "cmpendingaaaaaaaaaaaaaaa3"], "the rest joins the replacement's offer");
+  assert.equal(state.confirmed.length, 0, "nothing confirmed by a correction");
+
+  // A FORWARDED voice note never sees the list — a customer's words can't withdraw the person's tasks.
+  state.askedWaiting = [];
+  state.withdrawn = [];
+  state.dropWaiting = [];
+  await handleStaffWhatsApp(STAFF, { voiceMediaId: "m2", forwarded: true });
+  assert.deepEqual(state.askedWaiting, [null]);
+  assert.deepEqual(state.withdrawn, []);
 });

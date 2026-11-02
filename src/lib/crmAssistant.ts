@@ -89,6 +89,7 @@ import {
   lookupStatus,
   isSmallTalk,
   resultsBlock,
+  waitingBlock,
   planInstructions,
   playbookArgs,
   quoteArgs,
@@ -147,6 +148,8 @@ export type AssistantResult =
       learned: number; actions: ActionCard[]; choices: string[]; saved: boolean; turnId?: string;
       /** The version to SAY, when asked for one (opts.spoken) and it still matches the answer. */
       spoken?: string;
+      /** Waiting tasks to withdraw, by their number in opts.waiting (1-based) — the caller withdraws them. */
+      dropWaiting?: number[];
     }
   | { ok: false; error: string };
 
@@ -1904,6 +1907,11 @@ export type AskOptions = {
   /** The answer will be SPOKEN (a voice note): ask the model for a version to say as well (SPOKEN_RULE). */
   spoken?: boolean;
   /**
+   * WhatsApp only: the tasks waiting for this person's Confirm there, in the order they are numbered to DAX — so a
+   * correction ("make the delivery Wednesday") or "drop the follow-up" can name one (drop_waiting).
+   */
+  waiting?: { title: string; detail?: string }[];
+  /**
    * WhatsApp only (ignored for other sources): what the caller can do with a
    * proposed task. `true` — offer a Confirm button on the phone. `"saved"` —
    * nothing can be confirmed on the phone, but the task is kept as a card on
@@ -2345,6 +2353,7 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
       // Per question, so in the prompt and not the cached instructions.
       carried ? CARRIED_IMAGE_RULE : "",
       fileBlock,
+      source === "whatsapp" && opts.waiting?.length ? waitingBlock(opts.waiting) : "",
       observations.length
         ? resultsBlock("What the CRM returned:", observations.map(observationText).join("\n\n"))
         : "No lookup was needed for this question.",
@@ -2395,8 +2404,12 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
   // A check-back is not a task to confirm: it is taken out here and saved below (setCheckBacks), so it never
   // becomes a card and never counts as a task that "came to nothing".
   const checkBacks = reply.actions.filter((p): p is CheckBack => p.type === "check_back");
+  // A waiting task taken back (drop_waiting) is not a card either: its number goes back to the WhatsApp side, which
+  // withdraws that offer. Only a number in the list DAX was given counts; it is never a task that "came to nothing".
+  const drops = reply.actions.filter((p): p is Extract<ProposedAction, { type: "drop_waiting" }> => p.type === "drop_waiting");
+  const dropWaiting = source === "whatsapp" ? [...new Set(drops.map((p) => p.task))].filter((n) => n <= (opts.waiting?.length ?? 0)) : [];
   // A plan is run from its card in the CRM chat. Proposed anywhere else, its independent steps are offered one by one, as before.
-  const proposals = reply.actions.filter((p) => p.type !== "check_back");
+  const proposals = reply.actions.filter((p) => p.type !== "check_back" && p.type !== "drop_waiting");
   const multiStep = proposes ? reply.plan : null;
   if (multiStep && source !== "chat") proposals.push(...multiStep.steps.filter((s) => !s.dependsOn).map((s) => s.action).slice(0, Math.max(0, MAX_ACTIONS - proposals.length)));
   // A scheduled run learns nothing: it reads customer text daily with nobody
@@ -2448,7 +2461,7 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
   // the person is told about tasks comes from the cards that EXIST: where the
   // words and the cards disagree, the words are replaced (not added to), here,
   // for everywhere the answer is shown or kept (assistantActions.settledAnswer).
-  const settled = proposes ? settledAnswer(resolved.plain, actions, problems, Math.max(0, reply.attempted - checkBacks.length - actions.length - problems.length)) : null;
+  const settled = proposes ? settledAnswer(resolved.plain, actions, problems, Math.max(0, reply.attempted - checkBacks.length - drops.length - actions.length - problems.length)) : null;
   // What the person is told about a check-back comes from what was SAVED (or why not) — added by the CRM.
   const checkBackLine = checksBack && checkBacks.length
     ? await setCheckBacks(user, checkBacks).catch(async (error: unknown) => {
@@ -2529,6 +2542,7 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
   }
   return {
     ok: true, answer, rows, tools, learned: learnedCount, actions, choices, saved: saved !== null,
+    ...(dropWaiting.length ? { dropWaiting } : {}),
     // The script was written with the answer: when the CRM replaced the answer (tasks that weren't set up) or added
     // a caution about its figures, it no longer matches — then the answer itself is read.
     ...(opts.spoken && reply.spoken && settled === null && !note ? { spoken: reply.spoken } : {}),
@@ -2561,7 +2575,7 @@ export async function resolveActions(
   const cards: ActionCard[] = [];
   for (const [index, p] of proposals.entries()) {
     // Never a card: askCrm takes check-backs out before this and saves them itself (proactiveFollowUp).
-    if (p.type === "check_back") continue;
+    if (p.type === "check_back" || p.type === "drop_waiting") continue;
     if (p.type === "schedule") {
       // No lead to check: it is saved for whoever presses Confirm, and runs as
       // them with their permissions at the time. Only the timing is checked
