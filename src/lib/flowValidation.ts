@@ -1,4 +1,5 @@
 import { choiceId, type Flow, type FlowNode, type FlowOption } from "./flow";
+import { secretLookingHeaders } from "./flowConnections";
 
 export type FlowChannel = "whatsapp" | "messenger" | "instagram" | "telegram";
 export type FlowIssue = { severity: "error" | "warning"; code: string; message: string; nodeId?: string; channel?: FlowChannel };
@@ -203,6 +204,9 @@ export function validateFlow(flow: Flow, channels: FlowChannel[] = ["whatsapp"])
           issues.push(issue("error", "http.headers", "API headers must be a JSON object.", id));
         }
       }
+      // A key typed into the step is readable by anyone who edits flows and kept in every version (review 2026-11-02).
+      const secrets = secretLookingHeaders(node.headers);
+      if (secrets.length) issues.push(issue("warning", "http.secret_header", `“${secrets.join("”, “")}” looks like a key. Anyone who can edit flows can read it here, and it's kept in every published version — put it in a Connection (Flows → Connections) and choose that connection instead.`, id));
     }
     if (node.type === "extract") {
       if (!node.instruction.trim()) issues.push(issue("error", "extract.instruction", "AI extract needs an instruction.", id));

@@ -11,6 +11,7 @@ import { recordAiUsage } from "./systemHealth";
 import { runtimeFlowTenantId } from "./flowScope";
 import { renderKnowledgeForPrompt, searchBotKnowledge } from "./botKnowledge";
 import type { ExtractOutcome, Flow, FlowCtx, HttpOutcome, KnowledgeOutcome } from "./flow";
+import { connectionHeaders } from "./flowConnectionsServer";
 
 const MAX_HTTP_RESPONSE_BYTES = 50_000;
 const MAX_HTTP_BODY_BYTES = 20_000;
@@ -185,6 +186,13 @@ async function httpRequest(input: Parameters<NonNullable<FlowCtx["httpRequest"]>
   try {
     const url = await safeHttpsUrl(input.url);
     const headers = requestHeaders(input.headers);
+    // A connection's secret headers, decrypted only now and only for its own host (lib/flowConnections) — they win
+    // over the step's own headers, and never leave this request.
+    if (input.connectionId) {
+      const connection = await connectionHeaders(input.connectionId, url.toString());
+      if (!connection.ok) return { ok: false, reason: connection.reason };
+      for (const [name, value] of connection.headers) if (!BLOCKED_HEADERS.has(name.toLowerCase())) headers.set(name, value);
+    }
     const body = input.method === "GET" || input.method === "DELETE" ? undefined : input.body ?? "";
     if (body && new TextEncoder().encode(body).byteLength > MAX_HTTP_BODY_BYTES) return { ok: false, reason: "API request body exceeds the 20 KB Flowbot limit" };
     if (body && !headers.has("content-type")) headers.set("content-type", "application/json");
