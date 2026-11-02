@@ -52,7 +52,12 @@ export type FlowNode =
   | { id: string; type: "subflow"; flowId: string; failureText?: string; next?: string; failureNext?: string }
   | { id: string; type: "booking"; text?: string; failureText?: string; action?: BookingAction; next?: string; failureNext?: string; unavailableNext?: string }
   | { id: string; type: "slots"; text: string; noneText?: string; failureText?: string; action?: SlotAction; next?: string; failureNext?: string; unavailableNext?: string }
-  | { id: string; type: "journey"; journeyId: string; text?: string; failureText?: string; next?: string; failureNext?: string; unavailableNext?: string }
+  /**
+   * A follow-up (Node-RED review 2026-11-02, Sean's item 5): `after` makes the Journey's first step due that much later,
+   * and `handOver` names saved answers the Journey receives as its variables ({{var_name}}, vars.name). The Journey
+   * runner does the waiting — the flow engine still schedules nothing (tests/botFlowJourneyBridge).
+   */
+  | { id: string; type: "journey"; journeyId: string; after?: { amount: number; unit: "minutes" | "hours" | "days" }; handOver?: string[]; text?: string; failureText?: string; next?: string; failureNext?: string; unavailableNext?: string }
   | { id: string; type: "condition"; condition: FlowCondition; trueNext?: string; falseNext?: string }
   | { id: string; type: "ai"; handoffNext?: string }
   | { id: string; type: "handoff"; text?: string; reason?: string; summary?: string }
@@ -64,6 +69,20 @@ export type FlowNode =
   | { id: string; type: "end" };
 
 export type Flow = { start: string; nodes: Record<string, FlowNode> };
+
+/** When a Start Journey step's Journey begins, and the saved answers it is handed. */
+export type JourneyFollowUp = { delayMinutes: number; handOver: Record<string, string> };
+/** The same ceiling as a Journey's own waits (JOURNEY_LIMITS.waitDays). */
+export const JOURNEY_FOLLOW_UP_MAX_DAYS = 30;
+const UNIT_MINUTES = { minutes: 1, hours: 60, days: 1440 } as const;
+
+export function journeyFollowUp(node: Extract<FlowNode, { type: "journey" }>, vars: Record<string, string>): JourneyFollowUp {
+  const minutes = node.after ? Math.max(0, Math.round(Number(node.after.amount) || 0)) * (UNIT_MINUTES[node.after.unit] ?? 1) : 0;
+  return {
+    delayMinutes: Math.min(minutes, JOURNEY_FOLLOW_UP_MAX_DAYS * 1440),
+    handOver: Object.fromEntries((node.handOver ?? []).filter((name) => vars[name]).map((name) => [name, vars[name]])),
+  };
+}
 /** A saveable contact card — WhatsApp sends it as a real contact; other channels as text. */
 export type ContactCard = { name: string; organization?: string; title?: string; phones: string[]; email?: string; website?: string; address?: string };
 export type OutMsg =
@@ -90,7 +109,7 @@ export type FlowCtx = {
   dynamicAnswer: (source: "pricelist" | "colours") => Promise<string>;
   createBooking: (vars: Record<string, string>, action: BookingCreateAction | undefined, nodeId: string) => Promise<ActionOutcome>;
   manageBooking?: (action: BookingManageAction, vars: Record<string, string>, nodeId: string) => Promise<ActionOutcome>;
-  startJourney?: (journeyId: string, vars: Record<string, string>, nodeId: string) => Promise<{ ok: boolean; reason?: string }>;
+  startJourney?: (journeyId: string, vars: Record<string, string>, nodeId: string, followUp?: JourneyFollowUp) => Promise<{ ok: boolean; reason?: string }>;
   handoff: (vars: Record<string, string>, context?: FlowHandoffContext) => Promise<void>;
   availableSlots?: () => Promise<{ id: string; label: string }[]>;
   bookSlot?: (slotId: string, vars: Record<string, string>, nodeId: string) => Promise<{ ok: boolean; label?: string }>;
@@ -493,7 +512,7 @@ export async function runFlow(flow: Flow, session: FlowSession, input: FlowInput
       }
       nodeId = actionOutcome(node, outcome, vars, messages);
     } else if (node.type === "journey") {
-      const outcome = ctx.startJourney ? await ctx.startJourney(node.journeyId, vars, node.id) : { ok: false, reason: "Journey action unavailable" };
+      const outcome = ctx.startJourney ? await ctx.startJourney(node.journeyId, vars, node.id, journeyFollowUp(node, vars)) : { ok: false, reason: "Journey action unavailable" };
       ctx.recordAction?.(node.id, "journey_start", outcome.ok);
       if (!vars.journey_started) vars.journey_started = outcome.ok ? "yes" : "no";
       if (outcome.reason && !vars.journey_reason) vars.journey_reason = outcome.reason;

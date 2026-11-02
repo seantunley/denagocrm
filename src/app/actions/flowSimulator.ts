@@ -99,8 +99,9 @@ export async function simulateFlowTurn(input: SimulatorTurnInput): Promise<Simul
           vars.booking_cancelled = ok ? "yes" : "no";
           return { ok };
         },
-        startJourney: async (journeyId, vars, nodeId) => {
-          trace.push(`Journey: node ${nodeId} would enrol this customer in ${journeyId}`);
+        startJourney: async (journeyId, vars, nodeId, followUp) => {
+          const handed = Object.keys(followUp?.handOver ?? {});
+          trace.push(`Journey: node ${nodeId} would enrol this customer in ${journeyId}${followUp?.delayMinutes ? `, first step due in ${followUp.delayMinutes} min` : ""}${handed.length ? `, handing over ${handed.join(", ")}` : ""}`);
           const ok = scenario.journey === "success";
           vars.journey_started = ok ? "yes" : "no";
           vars.journey_reason = ok ? "simulated enrolment" : "simulated Journey refusal";

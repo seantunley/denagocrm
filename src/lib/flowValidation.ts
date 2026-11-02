@@ -1,4 +1,5 @@
-import { choiceId, type Flow, type FlowNode, type FlowOption } from "./flow";
+import { choiceId, JOURNEY_FOLLOW_UP_MAX_DAYS, type Flow, type FlowNode, type FlowOption } from "./flow";
+import { VARIABLE_NAME } from "./journeyTypes";
 
 export type FlowChannel = "whatsapp" | "messenger" | "instagram" | "telegram";
 export type FlowIssue = { severity: "error" | "warning"; code: string; message: string; nodeId?: string; channel?: FlowChannel };
@@ -260,6 +261,13 @@ export function validateFlow(flow: Flow, channels: FlowChannel[] = ["whatsapp"])
     if (node.type === "slots" && node.action && !["book", "reschedule"].includes(str(node.action))) issues.push(issue("error", "slots.action", "Slot action must book a new appointment or reschedule an existing booking.", id));
     if (node.type === "slots" && node.action === "reschedule" && !hasBookingLookup) issues.push(issue("warning", "booking.lookup_missing", "Reschedule normally needs a Booking lookup node first so the existing customer-owned booking is known.", id));
     if (node.type === "journey" && !str(node.journeyId).trim()) issues.push(issue("error", "journey.missing", "Start Journey needs a Journey selected.", id));
+    if (node.type === "journey" && node.after) {
+      const minutes = Number(node.after.amount) * ({ minutes: 1, hours: 60, days: 1440 }[node.after.unit] ?? NaN);
+      if (!(minutes >= 0 && minutes <= JOURNEY_FOLLOW_UP_MAX_DAYS * 1440)) issues.push(issue("error", "journey.after_range", `A follow-up can start at most ${JOURNEY_FOLLOW_UP_MAX_DAYS} days later.`, id));
+    }
+    for (const name of node.type === "journey" ? node.handOver ?? [] : []) {
+      if (!VARIABLE_NAME.test(name)) issues.push(issue("warning", "journey.hand_over_name", `“${name}” can't be handed to a Journey — a name must start with a letter and use only letters, numbers and _.`, id));
+    }
     if (node.type === "goto" && !str(node.target).trim()) issues.push(issue("error", "goto.missing", "Go to needs a step to jump to.", id));
     if (node.type === "goto" && str(node.target) === id) issues.push(issue("error", "goto.self", "Go to can't jump to itself.", id));
 

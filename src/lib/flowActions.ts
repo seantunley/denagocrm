@@ -21,7 +21,7 @@ import { flowContactCard } from "./flowContactCard";
 import { runtimeFlowTenantId } from "./flowScope";
 
 type Match = { contactId: string | null; leadId: string | null };
-import type { ActionOutcome } from "./flow";
+import type { ActionOutcome, JourneyFollowUp } from "./flow";
 
 export async function availableSlots(max = 6): Promise<{ id: string; label: string }[]> {
   const out: { id: string; label: string }[] = [];
@@ -172,7 +172,7 @@ export function crmActions(source: string, match: Match) {
       if (!vars.booking_id) { vars.booking_cancelled = "no"; return { ok: false }; }
       return cancelBotBooking(vars.booking_id, match, vars);
     },
-    startJourney: async (journeyId: string, vars: Record<string, string>, nodeId: string): Promise<{ ok: boolean; reason?: string }> => {
+    startJourney: async (journeyId: string, vars: Record<string, string>, nodeId: string, followUp?: JourneyFollowUp): Promise<{ ok: boolean; reason?: string }> => {
       const entity = await existingJourneyEntity(vars, match);
       const eventKey = botActionKey(nodeId, `journey:${journeyId}`);
       if (!entity || !eventKey) {
@@ -185,7 +185,10 @@ export function crmActions(source: string, match: Match) {
         entityType: entity.entityType,
         entityId: entity.entityId,
         eventKey,
-        payload: { channel: source },
+        // The conversation it came from: the channel and the step, never what was said (that is the handOver list).
+        payload: { channel: source, flowNodeId: nodeId },
+        delayMinutes: followUp?.delayMinutes,
+        handOver: followUp?.handOver,
       });
       vars.journey_started = result.ok ? "yes" : "no";
       vars.journey_reason = result.reason;
