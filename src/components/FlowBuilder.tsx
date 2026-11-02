@@ -659,8 +659,8 @@ export default function FlowBuilder({ flowId, initial, journeys = [], flows = []
   const displayNodes = useMemo(() => rfNodes.map((node) => {
     const issues = issuesByNode.get(node.id);
     if (!issues && node.id !== selectedId && !replayPath) return node;
-    const data = { ...node.data, ...(issues ? { issues } : {}), ...(replayPath ? { replay: replayPath.visits.get(node.id) ?? [] } : {}) };
-    return { ...node, selected: node.id === selectedId, data };
+    const shown = { ...node, selected: node.id === selectedId, data: issues ? { ...node.data, issues } : node.data };
+    return replayPath ? { ...shown, data: { ...shown.data, replay: replayPath.visits.get(node.id) ?? [] } } : shown;
   }), [issuesByNode, replayPath, rfNodes, selectedId]);
   const selectedIssues = selectedId ? issuesByNode.get(selectedId) ?? [] : [];
 
