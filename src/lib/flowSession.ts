@@ -5,6 +5,7 @@
  */
 import type { BotMsg } from "./botAi";
 import { runFlow, type Flow, type FlowCtx, type FlowInput, type OutMsg } from "./flow";
+import { outMsgText } from "./flowMedia";
 import { resolveFlowSnapshot } from "./flowPublishing";
 import { withBotConversationWrite } from "./botTenant";
 import { type TenantWriteTx } from "./tenantWrite";
@@ -64,10 +65,7 @@ function storedState(state: SessionState, endedAt?: string | null): string {
 }
 
 function recordBotMsgs(state: SessionState, messages: OutMsg[]) {
-  for (const m of messages) {
-    const text = m.type === "text" ? m.text : m.type === "image" ? m.caption || "[image]" : `${m.text}\n${m.options.map((o) => `• ${o.label}`).join("\n")}`;
-    state.msgs.push({ role: "assistant", content: text });
-  }
+  for (const m of messages) state.msgs.push({ role: "assistant", content: outMsgText(m) });
 }
 
 export type ChannelResult = { messages: OutMsg[]; done: boolean; suppressed?: boolean };

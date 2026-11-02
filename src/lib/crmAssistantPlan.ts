@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { ConversationState } from "./assistantReply";
+import type { ListedRecord } from "./assistantListedRules";
 
 /**
  * The CRM assistant's PLAN step — pure, so it can be tested without ChatGPT.
@@ -161,6 +162,15 @@ export const statsArgs = z
 export const leadBriefArgs = z.object({ lead: z.string().trim().min(1).max(120) }).strict();
 /** WHY something happened on one record: its history with the cause of each event (assistantWhy). */
 export const whyArgs = z.object({ record: z.string().trim().min(1).max(120) }).strict();
+/** A proof of payment with no quote named: which invoiced quote with money owing it is for (assistantPaymentMatch). */
+export const matchPaymentArgs = z
+  .object({
+    amount: rands.positive(),
+    reference: z.string().trim().min(1).max(120).optional(),
+    paidOn: isoDay.optional(),
+    payer: z.string().trim().min(1).max(120).optional(),
+  })
+  .strict();
 /** Why ONE deal is stuck: ranked, dated, linked reasons (assistantStuck). */
 export const stuckArgs = z.object({ lead: z.string().trim().min(1).max(120) }).strict();
 /** What changed on the asker's own deals since their last question (assistantCatchUp); `since` replaces that. */
@@ -191,8 +201,10 @@ export const assistantStep = z.discriminatedUnion("tool", [
   z.object({ tool: z.literal("find_activities"), args: activityArgs }),
   z.object({ tool: z.literal("lead_brief"), args: leadBriefArgs }),
   z.object({ tool: z.literal("why"), args: whyArgs }),
+  z.object({ tool: z.literal("match_payment"), args: matchPaymentArgs }),
   z.object({ tool: z.literal("stuck"), args: stuckArgs }),
   z.object({ tool: z.literal("catch_up"), args: catchUpArgs.default({}) }),
+  z.object({ tool: z.literal("stuck_deals"), args: z.object({}).strict().default({}) }),
   z.object({ tool: z.literal("knowledge"), args: knowledgeArgs }),
   z.object({ tool: z.literal("recall"), args: recallArgs }),
   z.object({ tool: z.literal("playbook"), args: playbookArgs }),
@@ -245,6 +257,7 @@ export function planInstructions(ctx: PlanContext): string {
     '- schedule: {"person":"<person>","from":"YYYY-MM-DD","days":<1-14>} — who is busy when (meetings, blocked time, test drives with their demo vehicle). Check it BEFORE suggesting a meeting or test-drive time; never suggest a slot that clashes.',
     '- vehicles: {"kind":"demo|stock|customer|workshop" (required),"search":"<model, reg, stock no. or customer>","status":"<status>","stuckDays":<days, workshop only>,"limit":<1-25>} — demo vehicles and their upcoming bookings, stock units (available/reserved/sold), or a customer\'s own vehicles. kind customer also gives each vehicle\'s workshop picture — service due or overdue, the last services, battery health, warranty, open job cards and warranty claims — so use it for "service history / battery / warranty / job card of X\'s cart"; search every distinctive word at once, it matches model, reg, owner, company, suburb or estate/fleet ("Nomad XL Constantia"). kind workshop is the whole workshop: services overdue and due soon, job cards with no movement for stuckDays (default 5), warranties ending within 30 days, batteries to replace — for "what\'s overdue in the workshop", "which job cards are stuck".',
     '- deliveries: {"stage":"to_invoice|awaiting_deposit|to_schedule|scheduled|overdue|delivered_recently","limit":<1-25>} — signed deals on their way to the customer: invoicing, deposit, delivery date. With NO stage it returns every stage at once, each deal labelled — use that for "what\'s waiting / in progress"; ask for one stage only when that is all the question wants.',
+    '- match_payment: {"amount":<rands> (required),"reference":"<bank reference on the slip>","paidOn":"YYYY-MM-DD","payer":"<payer name on the slip>"} — a PROOF OF PAYMENT with no quote named: the invoiced quotes with money owing it may be for, ranked, each with why (the amount is the deposit due or the balance owing, the reference names it, the payer is the customer), and a verdict: one clear match, several, or none. Read the amount, reference, date and payer from the slip.',
     '- documents: {"customer":"<customer name, lead title or id>" (required)} — what is on file for one customer (titles, tags, dates and each documentId — not contents; read_document reads one).',
     '- search_messages: {"customer":"<customer name, lead title or id>" (required),"words":"<words to find — add the other ways it may have been written: delivery deliver transport>","channel":"email|whatsapp|call|meeting|note|…","direction":"inbound|outbound","from":"YYYY-MM-DD","to":"YYYY-MM-DD","limit":<1-20>} — EVERY message to and from one customer (all their deals this person can open), not only the latest few lead_brief shows: each match with its date, channel, who, an excerpt and its id. Words match by stem and close spelling, not by meaning. Use it for "what did we promise / tell them about X", "did they ever say Y", "when did they first ask about Z". To check an old message against today\'s record, run it beside find_quotes or lead_brief in the same round.',
     '- open_message: {"id":"<id from search_messages>" (required),"thread":true} — one message in full (up to ~8 000 characters), with whether an email bounced or an open was detected, or whether WhatsApp/Messenger reported it reached their phone; "thread":true adds the rest of that conversation. Use it when an excerpt is not enough to be sure what was said.',
@@ -252,8 +265,9 @@ export function planInstructions(ctx: PlanContext): string {
     '- find_activities: {"when":"overdue|today|today_and_overdue|this_week|upcoming|past" (required),"from":"YYYY-MM-DD","to":"YYYY-MM-DD","type":"<type>","assignedTo":"<person — theirs, or a meeting they attend>","search":"<words in the activity>","limit":<1-25>} — the calendar: calls, meetings, to-dos, test drives, events, and blocked time (personal items: leave, an appointment, admin time). "What is in my calendar / diary this week" → this_week with assignedTo: today and the next six days, blocked time included — say which dates that covers. "What does X have to do today / what\'s on their plate" → today_and_overdue (what\'s late still has to be done). "When is the next golf day / launch / service" → upcoming with search — events live here, not in knowledge. What HAPPENED ("what golf days did we have last month", "what was on 22 September") → "past" with from/to (one day: from = to) — past results include what was done, each marked planned or done.',
     '- lead_brief: {"lead":"<customer name, lead title or id>" (required)} — one lead in depth: details, recent messages both ways, quotes (viewed? signed?), activities, research. Use it for "what should I do with X", "where are we with X", or to look closer at a lead found earlier.',
     '- why: {"record":"<customer name, lead title, quote number (Q-1031) or id — the page\'s record id works too>" (required)} — WHY something happened on one record: its history, each event with its CAUSE as recorded (the person who did it, the journey and step, the chatbot and its handoff reason, lead routing, the customer\'s own action — or "not recorded"): stage moves and who made them, who it was assigned to and by what, why it was marked lost, why a customer got a message (or why a journey did not enrol them / stopped), why the bot handed a chat over. Use it for every "why did…" / "how come…" / "who moved / sent / assigned…" question about a record; it usually answers on its own ("then":"answer").',
-    '- stuck: {"lead":"<customer name, lead title or id>" (required)} — why ONE deal is stuck, with evidence: its blockers RANKED, each with its date and a link to the record it comes from (the customer waiting on us, an overdue follow-up, the quote unopened / declined / expiring, the deposit, time in the stage against its limit, no next step, the customer gone quiet), plus the facts behind them. Run it for every "why is X stuck / stalled / not moving / gone quiet / not closing"; it usually answers on its own ("then":"answer"). For "which of my deals are stuck", find them first (find_leads sort stage_age), then stuck on the worst.',
+    '- stuck: {"lead":"<customer name, lead title or id>" (required)} — why ONE deal is stuck, with evidence: its blockers RANKED, each with its date and a link to the record it comes from (the customer waiting on us, an overdue follow-up, the quote unopened / declined / expiring, the deposit, time in the stage against its limit, no next step, the customer gone quiet), plus the facts behind them. Run it for every "why is X stuck / stalled / not moving / gone quiet / not closing"; it usually answers on its own ("then":"answer"). For "which of my deals are stuck", use stuck_deals.',
     '- catch_up: {"since":"YYYY-MM-DD" (only when they name a day)} — what changed on THEIR OWN deals since their last question to you (at most 7 days back): new customer messages, quotes opened / opened again / signed, stage moves by someone else, new leads for them, and their overdue and due-today tasks. Run it for "catch me up", "what\'s changed", "what did I miss", "anything new (since…)"; it answers on its own ("then":"answer").',
+    '- stuck_deals: {} — THEIR most-stuck open deals (the three furthest past their stage\'s time limit), each with its top reason from the stuck check and its link — and, for someone who sees a team\'s deals, the team\'s worst five. Run it for "which of my deals are stuck", "my stuck deals", and the Monday brief; it answers on its own ("then":"answer").',
     '- knowledge: {"topic":"<what to look up>" (required)} — the business\'s own knowledge: products and prices (each with its productId), approved answers (finance, warranty, policies…), company details, competitor intelligence. ALWAYS run this when the person asks for a quote or names a product to quote — a quote can only be built from products found here.',
     '- recall: {"query":"<words>" (required),"alternatives":["<other wordings>"],"lead":"<customer name, lead title or id>"} — this person\'s own earlier conversations with you (last 30 days). In alternatives, give up to 6 other wordings someone might have used for the same thing ("fleet" → "corporate order", "bulk"). When the question is about a customer, name them in lead.',
     '- playbook: {"name":"<playbook name>" (required)} — one of your learned playbooks in full, when the question uses its term or procedure ("hot leads" → the hot-lead playbook) — load it BEFORE searching so you search the right way. When your playbooks are already written out in full below, never load one: follow it and search straight away.',
@@ -366,6 +380,7 @@ const LOOKUP_STATUS: Record<string, string> = {
   schedule: "Checking the calendar",
   vehicles: "Checking vehicles",
   deliveries: "Checking deliveries",
+  match_payment: "Matching the payment to an invoice",
   documents: "Checking documents",
   search_messages: "Searching their messages",
   open_message: "Reading a message",
@@ -375,6 +390,7 @@ const LOOKUP_STATUS: Record<string, string> = {
   why: "Going through the record's history",
   stuck: "Working out what's holding it up",
   catch_up: "Catching you up",
+  stuck_deals: "Finding your most-stuck deals",
   find_activities: "Checking activities",
   knowledge: "Checking what the business knows",
   recall: "Going back over earlier conversations",
@@ -440,7 +456,7 @@ export function isComplexQuestion(question: string): boolean {
  * A turn of earlier conversation, for follow-ups ("and which of those are
  * Donovan's?"). `state` is the working memory the answer wrote (assistantReply).
  */
-export type PriorTurn = { question: string; answer: string; state?: ConversationState | null };
+export type PriorTurn = { question: string; answer: string; state?: ConversationState | null; listed?: ListedRecord[] };
 
 /**
  * Earlier turns, newest last, trimmed so they inform without drowning the prompt.

@@ -17,6 +17,7 @@ import {
   briefHoldsUntil,
   briefPersonKey,
   briefQuestion,
+  mondayStuckKey,
   parseBriefAt,
   proactiveOn,
 } from "./proactiveRules";
@@ -125,7 +126,8 @@ async function writeBrief(tenantId: string, userId: string, claimId: string, now
   const allowed = await Promise.all(waiting.map((alert) => mayBeTold(userId, alert)));
   await dropAlerts(tenantId, waiting.filter((_, i) => !allowed[i]).map((alert) => alert.id));
   const held = waiting.filter((_, i) => allowed[i]);
-  const result = await askCrm(user, briefQuestion(now, held.map((alert) => alert.text)), null, { source: "schedule" });
+  const mondayStuck = proactiveOn(await setting(tenantId, mondayStuckKey(userId)));
+  const result = await askCrm(user, briefQuestion(now, held.map((alert) => alert.text), { mondayStuck }), null, { source: "schedule" });
   if (!result.ok || !result.turnId) return false; // retried next tick; past 11:00 the held alerts go on their own
   const turnId = result.turnId;
   // Done, in one step: labelled as the brief (not a scheduled question), the day marked written, and the held

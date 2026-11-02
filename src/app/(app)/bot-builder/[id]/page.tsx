@@ -8,7 +8,9 @@ import { enabledFlowChannels } from "@/lib/flowValidationServer";
 import FlowBuilder from "@/components/FlowBuilder";
 import FlowAiDraftForm from "@/components/FlowAiDraftForm";
 import FlowNodeSystemFrame from "@/components/FlowNodeSystemFrame";
-import { flowScope, journeyScope } from "@/lib/flowScope";
+import { builderTenantId, flowScope, journeyScope } from "@/lib/flowScope";
+import { flowDocumentOptions } from "@/lib/flowDocuments";
+import { listActingTenantStaff } from "@/lib/tenantActor";
 import { getCompanyProfile } from "@/lib/companyProfile";
 
 export default async function FlowEditorPage({ params }: { params: Promise<{ id: string }> }) {
@@ -26,7 +28,7 @@ export default async function FlowEditorPage({ params }: { params: Promise<{ id:
     /* use default so the owner can recover/reset the draft */
   }
 
-  const [channels, journeys, reusableFlows, company] = await Promise.all([
+  const [channels, journeys, reusableFlows, company, documents, staff] = await Promise.all([
     enabledFlowChannels(),
     prisma.journey.findMany({
       where: { status: "active", ...(await journeyScope()) },
@@ -38,6 +40,10 @@ export default async function FlowEditorPage({ params }: { params: Promise<{ id:
     // subflow.unavailable, which is a better conversation than an empty list.
     prisma.botFlow.findMany({ where: { ...scope, id: { not: id } }, select: { id: true, name: true }, orderBy: { name: "asc" } }),
     getCompanyProfile(),
+    // "Send a document": this workspace's own general files only (flowDocuments — the same rule as save and send).
+    builderTenantId().then((tenantId) => flowDocumentOptions(tenantId)),
+    // "Send contact card": the business's card, or one of this workspace's staff.
+    listActingTenantStaff().then((rows) => rows.map((s) => ({ id: s.id, name: s.name }))),
   ]);
   return (
     <div className="space-y-4">
@@ -56,7 +62,7 @@ export default async function FlowEditorPage({ params }: { params: Promise<{ id:
       </div>
       <FlowAiDraftForm flowId={row.id} />
       <FlowNodeSystemFrame>
-        <FlowBuilder flowId={row.id} initial={flow} journeys={journeys} flows={reusableFlows} updatedAt={row.updatedAt.toISOString()} channels={channels} businessName={company.name} />
+        <FlowBuilder flowId={row.id} initial={flow} journeys={journeys} flows={reusableFlows} updatedAt={row.updatedAt.toISOString()} channels={channels} businessName={company.name} documents={documents} staff={staff} />
       </FlowNodeSystemFrame>
     </div>
   );

@@ -16,7 +16,7 @@ import {
   parseProfile,
 } from "@/lib/assistantSoul";
 import { ASSISTANT_VOICE_REPLIES_KEY, voiceRepliesSwitchOn } from "@/lib/assistantVoiceRules";
-import { ASSISTANT_PROACTIVE_KEY, BRIEF_DEFAULT, BRIEF_TIMES, briefPersonKey, proactiveOn, proactivePersonKey } from "@/lib/proactiveRules";
+import { ASSISTANT_PROACTIVE_KEY, BRIEF_DEFAULT, BRIEF_TIMES, briefPersonKey, mondayStuckKey, proactiveOn, proactivePersonKey } from "@/lib/proactiveRules";
 import { requireAnyPermission } from "@/lib/permissions";
 import { ASSISTANT_PERMISSIONS } from "@/lib/assistantUser";
 import { saveAssistantWhatsApp } from "@/app/actions/assistantWhatsApp";
@@ -249,6 +249,26 @@ export async function setMyProactive(on: boolean) {
         revalidatePath("/assistant");
       }
       return { success: on === true ? "On — DAX will come to you when a customer acts" : "Off" };
+    }),
+  );
+}
+
+/** The caller's OWN "stuck deals on Mondays" in their morning brief (round 2 item 7). Theirs alone; off until switched on. */
+export async function setMyMondayStuck(on: boolean) {
+  return asActionResult(() =>
+    withActingStaffScope(async () => {
+      const user = await requireAnyPermission(...ASSISTANT_PERMISSIONS);
+      const key = mondayStuckKey(user.id);
+      if ((on === true) !== proactiveOn(await getSetting(key))) {
+        await putSetting(key, on === true ? "on" : "off");
+        await logAudit({
+          action: on === true ? "assistant.monday_stuck_on" : "assistant.monday_stuck_off",
+          summary: on === true ? "Asked for their most-stuck deals in the Monday morning brief" : "Turned off stuck deals in the Monday morning brief",
+          user,
+        });
+        revalidatePath("/assistant");
+      }
+      return { success: on === true ? "Stuck deals on Mondays — on" : "Off" };
     }),
   );
 }

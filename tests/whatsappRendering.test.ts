@@ -132,7 +132,8 @@ test("the buttons/list threshold matches the one the outbox actually applies", (
   // botOutbox.ts decides the shape when sending. If that rule and this one ever
   // disagree, the preview shows an interface the customer never gets.
   const outbox = src("src/lib/botOutbox.ts");
-  assert.match(outbox, /message\.options\.length <= 3/);
+  // `outgoing` is the message after a contact card on a text-only channel became text.
+  assert.match(outbox, /outgoing\.options\.length <= 3/);
   assert.equal(WA_BUTTON_MAX, 3, "renderWhatsAppChoice must switch at the same count");
 });
 
