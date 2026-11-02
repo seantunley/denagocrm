@@ -352,6 +352,14 @@ export const assistantAndMoreArticles: HelpArticle[] = [
       ] },
       { type: "callout", tone: "info", text: "Analytics records what happened at each step, not what was said. Conversation text is not stored here — read the conversation itself in the inbox." },
       { type: "callout", tone: "tip", text: "If the page says **No flows to analyse**, create and publish a chatbot flow first." },
+      { type: "h", text: "Replay one conversation" },
+      { type: "p", text: "To see why the bot said something to one customer, open the flow in the flow builder and press **Replay**. Pick a WhatsApp conversation from the last 30 days. The flow runs again on the version that conversation used, with the customer's own messages. The steps it passed light up on the canvas, numbered in order, and the panel shows each message and the values saved at each step. Click a step to jump to it." },
+      { type: "list", items: [
+        "Nothing is sent and nothing in the CRM changes.",
+        "AI, knowledge and API steps are not asked again. They show a placeholder.",
+        "A booking or Journey step counts as done only if it worked in the real conversation.",
+        "Only workspace owners can replay. Facebook, Instagram and Telegram conversations are listed but cannot be replayed yet.",
+      ] },
     ],
   },
 

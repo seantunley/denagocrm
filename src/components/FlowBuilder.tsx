@@ -14,6 +14,7 @@ import {
   FlaskConical,
   GitBranch,
   Hand,
+  History,
   ImageIcon,
   Maximize2,
   MessageSquare,
@@ -62,11 +63,14 @@ import { cn } from "@/lib/utils";
 import { BuilderSaveStatus, BuilderWorkspaceBar, BuilderWorkspaceShell } from "@/components/builder-workspace";
 import FlowLintPanel from "@/components/FlowLintPanel";
 import FlowSimulator from "@/components/FlowSimulator";
+import FlowReplayPanel from "@/components/FlowReplayPanel";
+import type { ReplayStep } from "@/lib/flowReplayRun";
 import { validateFlow, type FlowChannel, type FlowIssue } from "@/lib/flowValidation";
 
 type Pos = { x: number; y: number };
 type FlowData = { start: string; nodes: Record<string, FlowNode>; positions?: Record<string, Pos> };
-type RFData = { flow: FlowNode; isStart: boolean; issues?: FlowIssue[] };
+/** `replay`: while a conversation is replayed, the step numbers it passed this node at (empty = not on its path). */
+type RFData = { flow: FlowNode; isStart: boolean; issues?: FlowIssue[]; replay?: number[] };
 type EditorSnapshot = { start: string; nodes: Node<RFData>[] };
 export type FlowJourneyOption = { id: string; name: string };
 export type FlowOptionRef = { id: string; name: string };
@@ -168,7 +172,9 @@ function NodeCard({ data }: NodeProps) {
     <div className={cn(
       "relative w-60 rounded-xl border bg-slate-950/95 text-slate-100 shadow-xl transition-[box-shadow,border-color,transform] duration-150",
       errors ? "border-red-400/80 ring-2 ring-red-400/20" : warnings ? "border-amber-400/70 ring-2 ring-amber-400/15" : d.isStart ? "border-orange-400/70 ring-2 ring-orange-400/15" : meta.tone,
+      d.replay && (d.replay.length ? "ring-2 ring-orange-400/60" : "opacity-30"),
     )}>
+      {d.replay && d.replay.length > 0 && <span className="absolute -left-2 -top-2 z-10 rounded-full border border-slate-950 bg-orange-500 px-1.5 py-0.5 text-[10px] font-bold text-white" title="Replay step numbers">{d.replay.length > 3 ? `${d.replay.slice(0, 3).join(", ")}…` : d.replay.join(", ")}</span>}
       {(errors > 0 || warnings > 0) && <span className={cn("absolute -right-2 -top-2 z-10 grid min-w-6 place-items-center rounded-full border border-slate-950 px-1.5 py-0.5 text-[10px] font-bold text-white", errors ? "bg-red-500" : "bg-amber-500")}>{errors || warnings}<span className="sr-only">{errors ? "errors" : "warnings"}</span></span>}
       <Handle type="target" position={Position.Left} id="in" className="!size-3 !border-2 !border-slate-950 transition-transform hover:!scale-125" style={{ background: "#64748b" }} />
       <div className={cn("flex items-center gap-1.5 rounded-t-[11px] px-3 py-2 text-xs font-semibold", meta.header)}>
@@ -498,6 +504,19 @@ export default function FlowBuilder({ flowId, initial, journeys = [], flows = []
   const focusCanvasNode = useRef<(nodeId: string) => void>(() => {});
   const flowInstance = useRef<ReactFlowInstance<Node<RFData>, Edge> | null>(null);
   const [testing, setTesting] = useState(false);
+  const [replayOpen, setReplayOpen] = useState(false);
+  const [replaySteps, setReplaySteps] = useState<ReplayStep[] | null>(null);
+  // The path a replayed conversation took: each step's numbers, and each wire it crossed.
+  const replayPath = useMemo(() => {
+    if (!replaySteps) return null;
+    const visits = new Map<string, number[]>();
+    const wires = new Set<string>();
+    replaySteps.forEach((s, i) => {
+      visits.set(s.nodeId, [...(visits.get(s.nodeId) ?? []), s.order]);
+      if (i) wires.add(`${replaySteps[i - 1].nodeId}>${s.nodeId}`);
+    });
+    return { visits, wires };
+  }, [replaySteps]);
 
   const patch = useCallback((id: string, updater: (n: FlowNode) => FlowNode) => {
     remember(`node:${id}`);
@@ -528,6 +547,12 @@ export default function FlowBuilder({ flowId, initial, journeys = [], flows = []
           style: { stroke: "#475569", strokeWidth: connectedToSelection ? 2.2 : 1.4, opacity: connectedToSelection ? 1 : 0.32 },
           ...look,
         });
+        if (replayPath) {
+          const taken = replayPath.wires.has(`${n.id}>${target}`);
+          const edge = out[out.length - 1];
+          edge.animated = taken;
+          edge.style = { ...edge.style, ...(taken ? { stroke: "#fb923c", strokeWidth: 3, opacity: 1 } : { opacity: 0.15 }) };
+        }
       };
       if (n.type === "choice") n.options.forEach((o) => add(`opt:${o.id}`, o.next, { label: o.label.slice(0, 24), labelStyle: { fill: "#cbd5e1", fontSize: 10 }, labelBgStyle: { fill: "#0f172a" } }));
       else if (n.type === "condition") {
@@ -543,7 +568,7 @@ export default function FlowBuilder({ flowId, initial, journeys = [], flows = []
       add("unavailable", routed.unavailableNext, { label: "none available", style: { stroke: "#94a3b8", strokeDasharray: "5 4" }, labelStyle: { fill: "#cbd5e1", fontSize: 10 }, labelBgStyle: { fill: "#0f172a" } });
     }
     return out;
-  }, [rfNodes, selectedId]);
+  }, [replayPath, rfNodes, selectedId]);
 
   const onConnect = useCallback((c: Connection) => {
     if (!c.source || !c.target || !c.sourceHandle) return;
@@ -633,9 +658,10 @@ export default function FlowBuilder({ flowId, initial, journeys = [], flows = []
   }, [liveIssues]);
   const displayNodes = useMemo(() => rfNodes.map((node) => {
     const issues = issuesByNode.get(node.id);
-    if (!issues && node.id !== selectedId) return node;
-    return { ...node, selected: node.id === selectedId, data: issues ? { ...node.data, issues } : node.data };
-  }), [issuesByNode, rfNodes, selectedId]);
+    if (!issues && node.id !== selectedId && !replayPath) return node;
+    const data = { ...node.data, ...(issues ? { issues } : {}), ...(replayPath ? { replay: replayPath.visits.get(node.id) ?? [] } : {}) };
+    return { ...node, selected: node.id === selectedId, data };
+  }), [issuesByNode, replayPath, rfNodes, selectedId]);
   const selectedIssues = selectedId ? issuesByNode.get(selectedId) ?? [] : [];
 
   const focusIssue = useCallback((issue: FlowIssue) => {
@@ -719,6 +745,7 @@ export default function FlowBuilder({ flowId, initial, journeys = [], flows = []
             <button type="button" onClick={redo} disabled={!historyDepth.redo} className="grid size-8 place-items-center rounded-md text-slate-300 hover:bg-white/7 disabled:cursor-not-allowed disabled:opacity-35" title="Redo (Ctrl+Shift+Z)"><Redo2 className="size-4" /><span className="sr-only">Redo</span></button>
           </div>
           <button type="button" onClick={() => setTesting((value) => !value)} className={cn("btn-secondary btn-sm", testing && "border-orange-400/40 text-orange-200")}><FlaskConical className="size-4" />{testing ? "Back to canvas" : "Test current canvas"}</button>
+          <button type="button" onClick={() => { setTesting(false); setReplayOpen((value) => !value); if (replayOpen) setReplaySteps(null); }} className={cn("btn-secondary btn-sm", replayOpen && "border-orange-400/40 text-orange-200")} title="Replay a real conversation on this flow"><History className="size-4" />Replay</button>
           <button type="button" onClick={onSave} className="btn-primary btn-sm"><Save className="size-4" />Save</button>
           <ConfirmActionDialog destructive title="Reset this flow?" description="Every node, connection and unsaved change will be replaced with the default flow." confirmLabel="Reset flow" onConfirm={async () => {
             const res = await resetFlow(flowId, savedAt.current);
@@ -848,6 +875,15 @@ export default function FlowBuilder({ flowId, initial, journeys = [], flows = []
                   <VariablesPanel variables={knownVariables} />
                 </div>
               </aside>
+            )}
+            {replayOpen && (
+              <FlowReplayPanel
+                flowId={flowId}
+                nodeLabel={(nodeId) => { const n = rfNodes.find((x) => x.id === nodeId)?.data.flow; return n ? `${TYPE_META[n.type].label}${summary(n) ? ` — ${summary(n).slice(0, 40)}` : ""}` : null; }}
+                onSteps={setReplaySteps}
+                onFocus={(nodeId) => focusCanvasNode.current(nodeId)}
+                onClose={() => { setReplayOpen(false); setReplaySteps(null); }}
+              />
             )}
           </div>
         )}
