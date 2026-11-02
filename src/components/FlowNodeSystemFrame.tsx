@@ -5,6 +5,7 @@ import { useState } from "react";
 import {
   Bot,
   CalendarDays,
+  CornerDownRight,
   ChevronDown,
   ChevronUp,
   CircleStop,
@@ -56,6 +57,7 @@ const groups: Array<{
       { label: "Switch", detail: "Route one variable across several exact-value cases.", icon: GitBranch },
       { label: "Set variable", detail: "Set or update flow data deterministically.", icon: Database },
       { label: "Wait", detail: "Hold quietly; the flow resumes with the customer's next message after the time passes.", icon: CalendarDays },
+      { label: "Go to", detail: "Jump to another step — e.g. back to the menu — without a wire.", icon: CornerDownRight },
     ],
   },
   {
