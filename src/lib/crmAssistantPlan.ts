@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { ConversationState } from "./assistantReply";
+import type { ListedRecord } from "./assistantListedRules";
 
 /**
  * The CRM assistant's PLAN step — pure, so it can be tested without ChatGPT.
@@ -440,7 +441,7 @@ export function isComplexQuestion(question: string): boolean {
  * A turn of earlier conversation, for follow-ups ("and which of those are
  * Donovan's?"). `state` is the working memory the answer wrote (assistantReply).
  */
-export type PriorTurn = { question: string; answer: string; state?: ConversationState | null };
+export type PriorTurn = { question: string; answer: string; state?: ConversationState | null; listed?: ListedRecord[] };
 
 /**
  * Earlier turns, newest last, trimmed so they inform without drowning the prompt.
