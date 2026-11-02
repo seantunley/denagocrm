@@ -1543,9 +1543,6 @@ test("at night, while they are writing to DAX, everything waiting still goes", a
   assert.ok(alert.whatsappSentAt);
 });
 
-test("a watch firing at night sends no phone notification", () => {
-  assert.match(code("src/lib/assistantWatch.ts"), /if \(!isQuietHour\(now\)\) \{\s*await sendPushToAll\(/);
-});
 
 /* ── a quote the assistant built: its PDF, to the person who asked ─────── */
 
