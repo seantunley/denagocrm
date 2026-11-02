@@ -152,8 +152,9 @@ test("ONE CONFIRM, ONE CHANGE: the card's key is spent in the transaction that m
   // Minted on the server when the card is made — for every card that changes a quote (build, add, change),
   // and since 2026-10-26 for a job card (openJobCard spends it the same way; assistantJobCardOnce.test.ts).
   const assistant = code("src/lib/crmAssistant.ts");
-  // And since 2026-11-02 (review of #933) for a new lead — reserved and spent at Confirm by lib/assistantConfirmKey.ts.
-  assert.equal((assistant.match(/confirmKey: `qk_\$\{randomBytes\(16\)\.toString\("hex"\)\}`,/g) ?? []).length, 5);
+  // And since 2026-11-02 (review of #933) for a new lead — reserved and spent at Confirm by lib/assistantConfirmKey.ts —
+  // and (review of #934) for filing a sent file, the same way.
+  assert.equal((assistant.match(/confirmKey: `qk_\$\{randomBytes\(16\)\.toString\("hex"\)\}`,/g) ?? []).length, 6);
 
   const quotes = code("src/app/actions/quotes.ts");
   assert.match(quotes, /confirmKey: z\.string\(\)\.regex\(CONFIRM_KEY\)\.optional\(\),/);

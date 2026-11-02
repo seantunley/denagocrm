@@ -737,7 +737,7 @@ export type ActionCard =
   // A new deal: for `lead.contactId`, or for a new person by name and number/email (the lead form links or creates the customer).
   | { id: string; kind: "create_lead"; leadId: null; leadLabel: string; title: string; lead: NewLead; detail: string; confirmKey: string; reason?: string }
   // A file the person sent (held: `uploadId`, theirs only), filed on ONE record through the documents form's upload.
-  | { id: string; kind: "attach_file"; leadId: string | null; leadLabel: string; title: string; uploadId: string; fileName: string; target: FileTarget; label: string | null; detail: string; reason?: string }
+  | { id: string; kind: "attach_file"; leadId: string | null; leadLabel: string; title: string; uploadId: string; fileName: string; target: FileTarget; label: string | null; detail: string; confirmKey: string; reason?: string }
   // Money received on an invoiced quote: `deposit` (with its proof, required) or a later payment (proof filed if sent).
   // `confirmKey` is the payment's idempotency key: a second Confirm records nothing more.
   | { id: string; kind: "record_payment"; leadId: string | null; leadLabel: string; title: string; quoteId: string; quoteNumber: number; deposit: boolean; amountCents: number; method: "eft" | "card" | "cash" | "finance"; receivedOn: string; reference: string | null; uploadId: string | null; fileName: string | null; detail: string; confirmKey: string; reason?: string }

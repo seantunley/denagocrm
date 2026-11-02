@@ -6,9 +6,9 @@ import { isModuleEnabled } from "@/lib/modules/enabled";
 import { assistantTurnsToday, customerClash, detailClash } from "@/lib/crmAssistant";
 import { createContact, updateContact } from "@/app/actions/contacts";
 import { contactFormFor } from "@/lib/contactFormFor";
-import { completeConfirmKey, reserveConfirmKey } from "@/lib/assistantConfirmKey";
+import { completeConfirmKey, releaseConfirmKey, reserveConfirmKey } from "@/lib/assistantConfirmKey";
 import { MAX_IMAGE_BYTES } from "@/lib/assistantImage";
-import { claimUpload, heldUpload, returnUpload } from "@/lib/assistantUpload";
+import { heldUpload } from "@/lib/assistantUpload";
 import { uploadDocument } from "@/app/actions/documents";
 import { recordQuotePayment } from "@/app/actions/quotePayments";
 import { markDepositPaid } from "@/app/actions/fulfilment";
@@ -78,7 +78,51 @@ const untouched = (error: string) => ({ ok: false as const, error, unchanged: tr
 const resumable = (error: string) => ({ ok: false as const, error, resumable: true as const });
 
 const BAD_SCREENSHOT = "That screenshot can't be attached — send it to DAX again.";
-const UPLOAD_GONE = "That file is no longer held (it is kept for a day, and filed only once) — send it to DAX again.";
+const UPLOAD_GONE = "That file is no longer held (it is kept for a day) — send it to DAX again.";
+const FILE_UNSURE = "That didn't complete, and the file may have been filed anyway — so it won't be tried again. Check the record's documents, and send the file to DAX again if it's missing.";
+
+/**
+ * FILE A HELD UPLOAD ONCE (review of #934), through the documents form's own door (uploadDocument). Two rules:
+ *  - THE HELD FILE IS NEVER THROWN AWAY TO CLAIM IT. The first version deleted it, then filed it: a request that died
+ *    in between lost the file. It stays held (deleted after a day by the assistant cron, like any upload).
+ *  - A FILING THAT MAY HAVE GOT PART-WAY IS NEVER REPEATED. The card's key is reserved first (assistantConfirmKey):
+ *    "done" means filed already; any error spends it as "didn't complete", because uploadDocument can fail AFTER it
+ *    saved the document (its audit and refresh come after the row) — so the same card never files twice.
+ * "gone": the upload is no longer held (nothing was reserved — the key is released).
+ */
+async function fileHeldUpload(
+  userId: string,
+  key: string,
+  uploadId: string,
+  fields: Record<string, string>,
+  what: string,
+): Promise<"filed" | "already" | "busy" | "gone" | { error: string }> {
+  const tenantId = ownedWriteTenantId();
+  const reserved = await reserveConfirmKey(tenantId, userId, key, what);
+  if (reserved.state === "done") return reserved.result.failed ? { error: FILE_UNSURE } : "already";
+  if (reserved.state === "busy") return "busy";
+  const held = await heldUpload(tenantId, userId, uploadId);
+  if (!held) {
+    await releaseConfirmKey(tenantId, key).catch(() => {});
+    return "gone";
+  }
+  const form = new FormData();
+  form.set("file", new File([new Uint8Array(held.data)], held.fileName, { type: held.mimeType }));
+  for (const [name, value] of Object.entries(fields)) form.set(name, value);
+  let result: Awaited<ReturnType<typeof uploadDocument>>;
+  try {
+    result = await uploadDocument(form);
+  } catch (error) {
+    await completeConfirmKey(tenantId, key, what, { failed: "true" }).catch(() => {});
+    throw error;
+  }
+  if (result?.error) {
+    await completeConfirmKey(tenantId, key, what, { failed: "true" }).catch(() => {});
+    return { error: `${result.error} ${FILE_UNSURE}` };
+  }
+  await completeConfirmKey(tenantId, key, what, { filed: "true" });
+  return "filed";
+}
 const LEAD_UNSURE = "That one didn't complete, and it may have got part-way — so it won't be tried again. Check the customer in the CRM, then ask me again if the lead is still needed.";
 /**
  * A note card's screenshot (a JPEG data: URL) → the file the note form uploads. Undefined: the card has none.
@@ -301,23 +345,16 @@ export async function runAssistantAction(
       }
       case "attach_file": {
         // THE DOCUMENTS FORM'S OWN DOOR (uploadDocument): documents.upload, access to THE one record, the size limit,
-        // the workspace's document types, the audit entry. The file is the person's own held upload, taken once.
+        // the workspace's document types, the audit entry. The file is the person's own held upload, filed once.
         const target = (card.target ?? {}) as Record<string, unknown>;
         const keys = (["contactId", "vehicleId", "jobCardId", "quoteId"] as const).filter((key) => typeof target[key] === "string" && target[key]);
-        if (keys.length !== 1 || typeof card.uploadId !== "string") return untouched(STALE_CARD);
-        const tenantId = ownedWriteTenantId();
-        const held = await claimUpload(tenantId, user.id, card.uploadId);
-        if (!held) return untouched(UPLOAD_GONE);
-        const form = new FormData();
-        form.set("file", new File([new Uint8Array(held.data)], held.fileName, { type: held.mimeType }));
-        form.set(keys[0], String(target[keys[0]]));
-        if (card.label) form.set("label", card.label);
-        const result = await uploadDocument(form).catch((error: unknown) => ({ error: error instanceof Error && error.message ? error.message : "Couldn't file it." }));
-        if (result?.error) {
-          // Nothing was filed (the form refuses before it stores): the file goes back, and the card can be confirmed again.
-          await returnUpload(tenantId, user.id, held).catch(() => {});
-          return { ok: false, error: result.error };
-        }
+        if (keys.length !== 1 || typeof card.uploadId !== "string" || !CONFIRM_KEY.test(String(card.confirmKey ?? ""))) return untouched(STALE_CARD);
+        // Filed ONCE, and the held file is never thrown away to do it (fileHeldUpload — review of #934).
+        const filed = await fileHeldUpload(user.id, card.confirmKey, card.uploadId, { [keys[0]]: String(target[keys[0]]), ...(card.label ? { label: card.label } : {}) }, "file a document");
+        if (filed === "gone") return untouched(UPLOAD_GONE);
+        if (filed === "busy") return { ok: false, error: "That file is still being filed, or the last try was cut off — check the record's documents in a moment, and send it to DAX again if it's missing." };
+        if (filed === "already") return { ok: true, success: `Already filed on ${card.leadLabel}` };
+        if (filed !== "filed") return { ok: false, error: filed.error };
         await logAudit({ action: "assistant.action_confirmed", summary: "Confirmed the assistant's proposal: file a document", user, ...("contactId" in target && target.contactId ? { contactId: String(target.contactId) } : {}), ...(card.leadId ? { leadId: card.leadId } : {}) });
         return { ok: true, success: `Filed on ${card.leadLabel}` };
       }
@@ -350,19 +387,18 @@ export async function runAssistantAction(
         const result = await recordQuotePayment(card.quoteId, form);
         if (result?.error) return { ok: false, error: result.error };
         await confirmedOn("record a payment", { leadId: card.leadId, contactId: null });
-        // The proof, filed on the quote — taken once, so a second Confirm does not file it twice.
-        const held = card.uploadId ? await claimUpload(tenantId, user.id, card.uploadId) : null;
-        if (held) {
-          const proof = new FormData();
-          proof.set("quoteId", card.quoteId);
-          proof.set("file", new File([new Uint8Array(held.data)], held.fileName, { type: held.mimeType }));
-          const filed = await uploadDocument(proof).catch(() => ({ error: "failed" }));
-          if (filed?.error) {
-            await returnUpload(tenantId, user.id, held).catch(() => {});
-            return resumable(`The payment is recorded, but its proof of payment could not be filed (${filed.error}). Confirm again to file it — the payment will not be recorded twice.`);
-          }
-        }
-        return { ok: true, success: `Payment of ${formatZAR(card.amountCents)} recorded on Q-${card.quoteNumber}${held ? ", proof filed" : ""}` };
+        const paid = `Payment of ${formatZAR(card.amountCents)} recorded on Q-${card.quoteNumber}`;
+        if (!card.uploadId) return { ok: true, success: paid };
+        // The proof, filed on the quote ONCE (its own key, derived from the payment's): a second Confirm records no
+        // second payment (the ledger's key) and files no second proof. If it may not have been filed, the payment is
+        // still recorded — said plainly, never retried blind.
+        // A throw here must not hide that the payment IS recorded: it reads as "may not have been filed".
+        const filed = await fileHeldUpload(user.id, `${card.confirmKey}-proof`, card.uploadId, { quoteId: card.quoteId }, "file the proof of payment").catch(() => ({ error: "" }));
+        if (filed === "filed" || filed === "already") return { ok: true, success: `${paid}, proof filed` };
+        return {
+          ok: true,
+          success: `${paid}. The proof of payment ${filed === "gone" ? "is no longer held" : filed === "busy" ? "is still being filed (or the last try was cut off)" : "may not have been filed"} — check the quote's documents, and send it to DAX again if it's missing.`,
+        };
       }
       case "update_customer": {
         // THE CONTACT FORM'S OWN DOOR (updateContact): contacts.edit, access to THIS customer, the audit entry with

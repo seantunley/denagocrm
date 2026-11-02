@@ -30,6 +30,7 @@ import { runAssistantAction } from "../src/app/actions/assistant";
 import { signFreshSession } from "../src/lib/session";
 import { runAsSession, type ActingSession } from "./harness/actingSession";
 import { readFile, rm } from "node:fs/promises";
+import { randomBytes } from "node:crypto";
 import path from "node:path";
 import sharp from "sharp";
 import { cleanJpeg, jpegDataUrl } from "../src/lib/assistantImage";
@@ -332,12 +333,29 @@ async function main() {
     const filed = await runAsSession(repSession, () => scoped(() => runAssistantAction(fileCard!)));
     const doc = await basePrisma.document.findFirst({ where: { contactId: id("c-ben"), fileName: "spec-sheet.pdf" } });
     check("Confirm files it through the documents form: on Ben, in this workspace, by the confirmer", filed.ok && doc?.tenantId === T && doc.uploadedById === rep.id && doc.mimeType === "application/pdf", JSON.stringify({ filed, doc }));
+    // FILED ONCE, THE FILE NEVER LOST (review of #934): the held file stays held through all of this.
+    const stillHeld = (uploadId: string) => basePrisma.assistantUpload.count({ where: { id: uploadId } });
+    const newKey = () => `qk_${randomBytes(16).toString("hex")}`;
     const again = await runAsSession(repSession, () => scoped(() => runAssistantAction(fileCard!)));
-    check("Confirm again: refused, and it is filed once", !again.ok && again.unchanged === true && (await docs({ contactId: id("c-ben"), fileName: "spec-sheet.pdf" })) === 1, JSON.stringify(again));
+    check("Confirm again: 'already filed', and it is filed once", again.ok && /^Already filed on Ben Mine/.test(again.success ?? "") && (await docs({ contactId: id("c-ben"), fileName: "spec-sheet.pdf" })) === 1, JSON.stringify(again));
+    check("…and the file it filed is still held (only the day-old prune removes it)", (await stillHeld(sheetId)) === 1);
+    const raceId = await hold("race.pdf");
+    const raceCard = { ...fileCard!, uploadId: raceId, fileName: "race.pdf", confirmKey: newKey() };
+    const raced = await Promise.all([0, 1].map(() => runAsSession(repSession, () => scoped(() => runAssistantAction(raceCard)))));
+    check("one card confirmed twice AT ONCE: filed once", raced.some((r) => r.ok) && (await docs({ fileName: "race.pdf" })) === 1 && (await stillHeld(raceId)) === 1, JSON.stringify(raced));
+    // The documents form refuses (a type that isn't on the list): not done — and never tried again by the same card,
+    // since a refusal can come after the document was saved. The file is still held, to send again.
+    const badId = await hold("bad-type.pdf");
+    const badCard = { ...fileCard!, uploadId: badId, fileName: "bad-type.pdf", label: "No such type", confirmKey: newKey() };
+    const bad = await runAsSession(repSession, () => scoped(() => runAssistantAction(badCard)));
+    const badAgain = await runAsSession(repSession, () => scoped(() => runAssistantAction(badCard)));
+    check("the form refuses: not filed, the same card never runs it again, the file still held",
+      !bad.ok && !badAgain.ok && /may have been filed anyway/.test(badAgain.error ?? "") && (await docs({ fileName: "bad-type.pdf" })) === 0 && (await stillHeld(badId)) === 1,
+      JSON.stringify({ bad, badAgain }));
     // Somebody else's held file can't be filed by naming its id on a card of theirs.
     const repsId = await hold("private.pdf");
-    const forged = await runAsSession(otherSession, () => scoped(() => runAssistantAction({ ...fileCard!, uploadId: repsId, target: { contactId: id("c-anna") } })));
-    check("another person's held file: refused, nothing filed", !forged.ok && (await docs({ fileName: "private.pdf" })) === 0, JSON.stringify(forged));
+    const forged = await runAsSession(otherSession, () => scoped(() => runAssistantAction({ ...fileCard!, uploadId: repsId, target: { contactId: id("c-anna") }, confirmKey: newKey() })));
+    check("another person's held file: refused, nothing filed", !forged.ok && forged.unchanged === true && (await docs({ fileName: "private.pdf" })) === 0, JSON.stringify(forged));
 
     // Money on the invoiced quote, with its proof.
     const automotive = await scoped(() => isModuleEnabled("automotive"));
@@ -362,7 +380,7 @@ async function main() {
       const done = nextCard ? await runAsSession(repSession, () => scoped(() => runAssistantAction(nextCard))) : null;
       check("after the deposit, a later payment is recorded on the statement, its proof filed on the quote", nextCard?.deposit === false && !!done?.ok && (await payments()) === 1 && (await proofs()) === 2, JSON.stringify({ next, done }));
       const replay = nextCard ? await runAsSession(repSession, () => scoped(() => runAssistantAction(nextCard))) : null;
-      check("…and Confirm again records and files nothing more (the card's key, the proof taken once)", !!replay?.ok && (await payments()) === 1 && (await proofs()) === 2, JSON.stringify(replay));
+      check("…and Confirm again records and files nothing more (the card's key, and the proof's own)", !!replay?.ok && /proof filed$/.test(replay.success ?? "") && (await payments()) === 1 && (await proofs()) === 2 && (await stillHeld(proof2)) === 1, JSON.stringify(replay));
     }
     const tooMuch = await cardsFor({ type: "record_payment", quote: `Q-${QUOTE_NO}`, amount: 500_000, method: "eft", receivedOn: today }, null);
     const tooMuchCard = tooMuch.cards.find((c): c is Extract<ActionCard, { kind: "record_payment" }> => c.kind === "record_payment");

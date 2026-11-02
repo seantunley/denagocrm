@@ -437,12 +437,11 @@ test("review of #905: the customer record was made, then the quote failed — th
   assert.ok(build.indexOf("await quoteFromLeadDefaults()") > -1 && build.indexOf("await quoteFromLeadDefaults()") < build.indexOf("convertLeadToContact("));
   const afterCustomer = build.slice(build.indexOf("convertLeadToContact("), build.indexOf("await saveQuoteDraft("));
   assert.doesNotMatch(afterCustomer.replace(/^\s*\/\/.*$/gm, ""), /await (?!logError)/, "between the customer record and the protected save, nothing else is awaited");
-  // Two places (2026-11-02): quote_build's retry after the customer, and record_payment's after the payment — its
-  // idempotency key records nothing twice, and the proof (taken once, returned on failure) is filed on the retry.
-  assert.equal(action.match(/resumable\(/g)?.length, 2, "quote_build after the customer; record_payment after the payment");
+  // One place. record_payment is not one (review of #934): its key records the payment once, its proof is filed once
+  // under its own key, and a proof that may not have been filed is said plainly — never offered for a blind retry.
+  assert.equal(action.match(/resumable\(/g)?.length, 1, "quote_build after the customer");
   const payment = action.slice(action.indexOf('case "record_payment": {'), action.indexOf('case "update_customer": {'));
   assert.ok(payment.indexOf('form.set("idempotencyKey", card.confirmKey)') < payment.indexOf("await recordQuotePayment("), "the payment is once-only by the card's key");
-  assert.ok(payment.indexOf("await returnUpload(") < payment.indexOf("return resumable("), "the proof goes back before the retry is offered");
   // A colour the catalogue no longer has stops Confirm BEFORE the customer record is made.
   assert.ok(build.indexOf("if (lines.some(notOffered)) return untouched(") < build.indexOf("convertLeadToContact("));
   // The CRM card's own Confirm and its saved-card door release on it too.

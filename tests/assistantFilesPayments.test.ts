@@ -68,13 +68,25 @@ test("file card: the person's own held upload, documents.upload, ONE record they
   for (const check of ["canAccessContact(user, p.contactId)", "canAccessLead(user, p.leadId)", "canAccessVehicle(user, p.vehicleId)", "canAccessJobCard(user, p.jobCardId)", "canAccessQuote(user, q.id)"]) {
     assert.ok(target.includes(check), check);
   }
-  // Confirm: TAKEN once (a second Confirm finds nothing), put back if the form refuses, through uploadDocument.
+  assert.match(branch, /confirmKey: `qk_\$\{randomBytes\(16\)\.toString\("hex"\)\}`/);
+  // Confirm (review of #934): filed ONCE under the card's key, through uploadDocument — and the held file is never
+  // deleted to do it (the first version deleted it first: a request that died in between lost the file).
   const action = code("src/app/actions/assistant.ts");
   const run = action.slice(action.indexOf('case "attach_file": {'), action.indexOf('case "record_payment": {'));
-  assert.ok(run.indexOf("await claimUpload(tenantId, user.id, card.uploadId)") < run.indexOf("await uploadDocument(form)"));
-  assert.ok(run.indexOf("await uploadDocument(form)") < run.indexOf("await returnUpload("));
+  assert.match(run, /!CONFIRM_KEY\.test\(String\(card\.confirmKey \?\? ""\)\)\) return untouched\(STALE_CARD\);/);
+  assert.match(run, /await fileHeldUpload\(user\.id, card\.confirmKey, card\.uploadId, /);
+  const filer = action.slice(action.indexOf("async function fileHeldUpload("), action.indexOf("const LEAD_UNSURE"));
+  const steps = ["await reserveConfirmKey(tenantId, userId, key, what)", "await heldUpload(tenantId, userId, uploadId)", "result = await uploadDocument(form)", 'await completeConfirmKey(tenantId, key, what, { filed: "true" })'];
+  for (let i = 1; i < steps.length; i++) assert.ok(filer.indexOf(steps[i - 1]) > -1 && filer.indexOf(steps[i - 1]) < filer.indexOf(steps[i]), steps[i]);
+  // Any error once reserved spends the key as "didn't complete" (a throw and a refusal): uploadDocument can fail
+  // after it saved the document, so the same card never files twice. Only "no longer held" releases it.
+  assert.equal(filer.match(/completeConfirmKey\(tenantId, key, what, \{ failed: "true" \}\)/g)?.length, 2);
+  assert.ok(filer.indexOf("await releaseConfirmKey(tenantId, key)") < filer.indexOf('return "gone"'));
+  assert.match(filer, /if \(reserved\.state === "done"\) return reserved\.result\.failed \? \{ error: FILE_UNSURE \} : "already";/);
+  // Nothing deletes a held file but the day-old prune.
   const upload = code("src/lib/assistantUpload.ts");
-  assert.match(upload, /const taken = await prisma\.assistantUpload\.deleteMany\(\{ where: \{ id, tenantId, userId \} \}\);\s*return taken\.count === 1 \? held : null;/);
+  assert.equal(upload.match(/deleteMany\(/g)?.length, 1);
+  assert.match(upload, /basePrisma\.assistantUpload\.deleteMany\(\{ where: \{ tenantId, createdAt: \{ lt: new Date\(now\.getTime\(\) - KEEP_MS\) \} \} \}\)/);
 });
 
 test("payment card: deliveries.manage, an invoiced quote they may open, the deposit needs its proof, never a future day", () => {
@@ -93,4 +105,9 @@ test("payment card: deliveries.manage, an invoiced quote they may open, the depo
   assert.match(run, /const result = await markDepositPaid\(card\.quoteId, form\);/);
   assert.match(run, /const result = await recordQuotePayment\(card\.quoteId, form\);/);
   assert.ok(run.indexOf('form.set("idempotencyKey", card.confirmKey)') < run.indexOf("await recordQuotePayment("));
+  // Its proof: filed after the payment, once, under its own key; a proof that may not have been filed never hides
+  // that the payment IS recorded (ok, said plainly) — and nothing here is offered for a blind retry.
+  assert.ok(run.indexOf("await recordQuotePayment(") < run.indexOf("await fileHeldUpload(user.id, `${card.confirmKey}-proof`, card.uploadId, { quoteId: card.quoteId }"));
+  assert.match(run, /"file the proof of payment"\)\.catch\(\(\) => \(\{ error: "" \}\)\);/);
+  assert.doesNotMatch(run, /resumable\(/);
 });

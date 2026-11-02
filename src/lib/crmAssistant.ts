@@ -2698,6 +2698,8 @@ export async function resolveActions(
         title: `File “${upload.fileName}” on ${found.where}${label ? ` as ${label}` : ""}`,
         uploadId: upload.id, fileName: upload.fileName, target: found.target, label,
         detail: [`File: ${upload.fileName}`, `Goes on: ${found.where}${label ? `, as ${label}` : ""}`, "Kept in its documents. Nobody is sent anything."].join("\n"),
+        // One Confirm files it once (fileHeldUpload reserves this key), however often the card is pressed.
+        confirmKey: `qk_${randomBytes(16).toString("hex")}`,
         ...(p.reason ? { reason: p.reason } : {}),
       });
       continue;
