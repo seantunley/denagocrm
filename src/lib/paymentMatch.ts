@@ -40,17 +40,23 @@ function words(text: string | null | undefined): string[] {
   return (text ?? "").toLowerCase().split(/[^a-zÀ-ɏ]+/).filter((w) => w.length >= 3 && !NOISE.has(w));
 }
 
-/** The numbers a reference names: "INV-001030" → invoice 1030; "Q1030" → quote 1030; a bare "1030" → either. */
+/**
+ * A quote or invoice number WRITTEN AS ONE: "Q-1030", "Q1030", "quote 1030", "INV-001030", "invoice no 1030" — or a
+ * bare number that is the whole reference ("1030"). Never any other digits on the line (review of #942): a date
+ * ("Payment 2026-11-02", "02/11/2026"), a bank's own transaction number, an amount, a phone or account number.
+ */
+const LABELLED = /\b(quote|invoice|inv|q)(?:\s*(?:no\.?|nr\.?|number))?[\s#:.-]*(\d{1,9})(?![\d,]|[-/.]\d)/gi;
+const WHOLE = /^\s*#?\s*(\d{1,7})\s*$/;
+
 function referenceNames(reference: string): { quote: Set<number>; invoice: Set<number> } {
   const quote = new Set<number>();
   const invoice = new Set<number>();
-  for (const m of reference.matchAll(/(inv|q)?[\s#:-]*(\d+)/gi)) {
+  for (const m of reference.matchAll(LABELLED)) {
     const n = Number(m[2]);
-    if (!n) continue;
-    const prefix = m[1]?.toLowerCase();
-    if (prefix !== "inv") quote.add(n);
-    if (prefix !== "q") invoice.add(n);
+    if (n) (m[1].toLowerCase().startsWith("q") ? quote : invoice).add(n);
   }
+  const whole = Number(WHOLE.exec(reference)?.[1] ?? 0);
+  if (whole) { quote.add(whole); invoice.add(whole); }
   return { quote, invoice };
 }
 
