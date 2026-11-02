@@ -878,7 +878,7 @@ test("the builder carries choose/repeat through instead of dropping them", () =>
     /existing\.map\(\(step\) => \(\{ id: step\.id, type: step\.type, continueOnError: step\.continueOnError, enabled: step\.enabled, config: \{ \.\.\.step\.config \} \}\)\)/,
     "a step's config must be carried through whole",
   );
-  assert.match(builder, /if \(CONTAINERS\.has\(step\.type\) && !window\.confirm\(/, "changing a container's type must ask first");
+  assert.match(builder, /onChange=\{\(e\) => \(CONTAINERS\.has\(step\.type\) \? setRetype\(/, "changing a container's type must ask first");
   assert.match(
     builder,
     /const set = \(key: string, value: unknown\) => onChange\(\{ \.\.\.step, config: \{ \.\.\.config, \[key\]: value \} \}\);/,

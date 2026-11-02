@@ -11,6 +11,7 @@ import { BuilderSaveStatus, BuilderWorkspaceBar, BuilderWorkspaceShell } from "@
 import { JOURNEY_RUN_MODES, RUN_MODE_LEGACY_NOTE } from "@/lib/journeyRunModes";
 import { builderDefinition, emptyGroup, generatedStopId, initialConfig, isRecord, newWaitStep, type BuilderStep } from "@/lib/journeyBuilderDefinition";
 import JourneyConditionGroupEditor from "@/components/JourneyConditionGroupEditor";
+import ConfirmActionDialog from "@/components/ConfirmActionDialog";
 
 export type JourneyOption = { id: string; name: string };
 
@@ -347,6 +348,9 @@ export default function JourneyBuilder({
  */
 function StepList({ steps, onChange, depth, lists }: { steps: BuilderStep[]; onChange: (steps: BuilderStep[]) => void; depth: number; lists: Lists }) {
   const put = (index: number, step: BuilderStep) => onChange(steps.map((s, i) => (i === index ? step : s)));
+  // A container's config IS its branches — a stray pick in the type list would delete them with no undo, so ask first.
+  const [retype, setRetype] = useState<{ index: number; type: string } | null>(null);
+  const changeType = (index: number, type: string) => put(index, { ...steps[index], type, config: initialConfig(type) });
   const move = (index: number, direction: -1 | 1) => {
     const target = index + direction;
     if (target < 0 || target >= steps.length) return;
@@ -366,11 +370,7 @@ function StepList({ steps, onChange, depth, lists }: { steps: BuilderStep[]; onC
               className="input flex-1"
               aria-label="Step type"
               value={step.type}
-              onChange={(e) => {
-                // A container's config IS its branches — a stray click would delete them with no undo.
-                if (CONTAINERS.has(step.type) && !window.confirm("Change this step's type? Its branches and their steps are removed.")) return;
-                put(index, { ...step, type: e.target.value, config: initialConfig(e.target.value) });
-              }}
+              onChange={(e) => (CONTAINERS.has(step.type) ? setRetype({ index, type: e.target.value }) : changeType(index, e.target.value))}
             >
               {Object.entries(stepLabels)
                 // Containers nest; the parser stops at its depth limit (JOURNEY_LIMITS.depth, counted from 1).
@@ -401,6 +401,15 @@ function StepList({ steps, onChange, depth, lists }: { steps: BuilderStep[]; onC
         </div>
       ))}
       <button type="button" className="btn-secondary btn-sm" onClick={() => onChange([...steps, newWaitStep()])}>+ Add step{depth ? " here" : ""}</button>
+      <ConfirmActionDialog
+        destructive
+        open={retype !== null}
+        onOpenChange={(open) => { if (!open) setRetype(null); }}
+        title="Change this step's type?"
+        description="Its branches and every step inside them are removed."
+        confirmLabel="Change type"
+        onConfirm={() => { if (retype) changeType(retype.index, retype.type); setRetype(null); }}
+      />
     </div>
   );
 }
