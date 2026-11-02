@@ -3,6 +3,7 @@ import Link from "next/link";
 import { CheckCircle2, Copy, GitBranch, Layers3, Pencil, Plus, PowerOff, Radio, Route, Trash2 } from "lucide-react";
 import { prisma } from "@/lib/db";
 import { getSetting, putSetting } from "@/lib/settings";
+import { FLOW_QR_KEY, parseQrCodes } from "@/lib/flowQr";
 import { DEFAULT_FLOW, type Flow } from "@/lib/flow";
 import { FLOW_TEMPLATES } from "@/lib/flowTemplates";
 import { flowErrors, flowWarnings, validateFlow } from "@/lib/flowValidation";
@@ -66,15 +67,25 @@ export default async function BotBuilderPage() {
 
   const publicationMeta = await getFlowPublicationMeta();
   const liveVersionIds = [...publicationMeta.values()].map((publication) => publication.versionId);
-  const [flows, channels, publishedVersions, routes] = await Promise.all([
+  const [flows, channels, publishedVersions, routes, savedQrs, everPublished] = await Promise.all([
     prisma.botFlow.findMany({ where: scope, orderBy: [{ active: "desc" }, { updatedAt: "desc" }] }),
     enabledFlowChannels(),
     prisma.botFlowVersion.findMany({
       where: { tenantId, id: { in: liveVersionIds } },
       select: { id: true, flowId: true, version: true, definition: true },
     }),
-    prisma.botFlowRoute.findMany({ where: { tenantId }, select: { flowId: true, enabled: true } }),
+    prisma.botFlowRoute.findMany({ where: { tenantId }, select: { id: true, flowId: true, enabled: true } }),
+    getSetting(FLOW_QR_KEY),
+    prisma.botFlowVersion.groupBy({ by: ["flowId"], where: { tenantId }, _max: { version: true } }),
   ]);
+  // Which QR codes start each flow — shown on its card whether or not it is the live flow (Sean, 2026-11-02).
+  const qrNameByRoute = new Map(parseQrCodes(savedQrs).map((qr) => [qr.routeId, qr.name]));
+  const qrsByFlow = new Map<string, string[]>();
+  for (const route of routes) {
+    const name = qrNameByRoute.get(route.id);
+    if (name) qrsByFlow.set(route.flowId, [...(qrsByFlow.get(route.flowId) ?? []), name]);
+  }
+  const lastPublished = new Map(everPublished.map((row) => [row.flowId, row._max.version]));
 
   const versionById = new Map(publishedVersions.map((version) => [version.id, version]));
   const routesByFlow = new Map<string, { total: number; enabled: number }>();
@@ -147,6 +158,10 @@ export default async function BotBuilderPage() {
           const check = validation.get(f.id)!;
           const blocked = check.errors.length > 0;
           const routeInfo = routesByFlow.get(f.id) ?? { total: 0, enabled: 0 };
+          const qrNames = qrsByFlow.get(f.id) ?? [];
+          const lastVersion = lastPublished.get(f.id) ?? null;
+          // Why it can't be deleted, if it can't: in use first, then history (the delete action's own order).
+          const keep = routeInfo.total > 0 ? (qrNames.length ? `Used by QR code “${qrNames[0]}” — delete the QR code first (Routing)` : "A route starts this flow — delete the route first (Routing)") : lastVersion ? "Published before, so kept as history" : null;
           const draftNodes = check.parsed ? Object.keys(check.parsed.nodes).length : 0;
           const liveNodes = nodeCount(live?.definition);
           const readyChecks = [
@@ -161,12 +176,13 @@ export default async function BotBuilderPage() {
                 <form action={renameFlow.bind(null, f.id)} className="flex-1 min-w-0"><input name="name" defaultValue={f.name} className="bg-transparent font-semibold text-foreground w-full outline-none focus:bg-muted rounded px-1 -mx-1" /></form>
                 <div className="flex items-center gap-1.5 flex-wrap justify-end">
                   {f.active && <StatusPill tone="success">Live</StatusPill>}
+                  {qrNames.length > 0 && <StatusPill tone="info">{qrNames.length === 1 ? `QR code: ${qrNames[0]}` : `${qrNames.length} QR codes`}</StatusPill>}
                   <StatusPill tone="neutral">{channelLabel[f.channel] ?? f.channel}</StatusPill>
                   {pending && <StatusPill tone="warning">Draft changed</StatusPill>}
                   {blocked && <StatusPill tone="danger">{check.errors.length} error{check.errors.length === 1 ? "" : "s"}</StatusPill>}
                 </div>
               </div>
-              <p className="mt-2 text-xs text-muted-foreground">Draft updated {f.updatedAt.toLocaleDateString("en-ZA")}{publication ? ` · published ${publication.publishedAt.toLocaleDateString("en-ZA")}` : " · not versioned yet"}</p>
+              <p className="mt-2 text-xs text-muted-foreground">Draft updated {f.updatedAt.toLocaleDateString("en-ZA")}{publication ? ` · published ${publication.publishedAt.toLocaleDateString("en-ZA")}` : lastVersion ? ` · offline — last published v${lastVersion}` : " · not versioned yet"}{!f.active && routeInfo.enabled > 0 ? ` · runs only from its ${qrNames.length ? "QR code" : "route"}` : ""}</p>
               {(blocked || check.warnings.length > 0) && <p className={`mt-2 text-xs ${blocked ? "text-red-300" : "text-amber-300"}`}>{blocked ? check.errors[0].message : `${check.warnings.length} warning${check.warnings.length === 1 ? "" : "s"} — review before publishing.`}</p>}
 
               <div className="mt-4 rounded-xl border border-border/80 bg-muted/20 p-3">
@@ -201,7 +217,10 @@ export default async function BotBuilderPage() {
                     onConfirm={setFlowOffline.bind(null, f.id)}
                   />
                 )}
-                {!f.active && (
+                {!f.active && keep && (
+                  <span className="btn-secondary btn-sm cursor-not-allowed opacity-50" title={keep} aria-label={`Can't delete ${f.name}: ${keep}`}><Trash2 className="size-3.5" /></span>
+                )}
+                {!f.active && !keep && (
                   <ConfirmActionDialog
                     trigger={<button type="button" className="btn-secondary btn-sm text-red-400" aria-label={`Delete ${f.name}`}><Trash2 className="size-3.5" /></button>}
                     title={`Delete “${f.name}”?`}
