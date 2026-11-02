@@ -47,7 +47,12 @@ test("a missing pinned version fails closed instead of falling through to the cu
 test("published flows cannot be deleted while immutable versions may still be session-pinned", () => {
   const actions = src("src/app/actions/flow.ts");
   assert.match(actions, /prisma\.botFlowVersion\.findFirst\(\{ where: \{ flowId: id \}/);
-  assert.match(actions, /if \(!flow \|\| flow\.active \|\| publishedVersion\) return/);
+  // Each refusal now says why (#955), before the delete.
+  const fn = actions.slice(actions.indexOf("export async function deleteFlow("), actions.indexOf("export async function duplicateFlow"));
+  for (const guard of [/if \(!flow\) return \{ error:/, /if \(flow\.active\) return \{ error:/, /if \(publishedVersion\) return \{ error:/]) {
+    assert.match(fn, guard);
+    assert.ok(fn.search(guard) < fn.indexOf("botFlow.deleteMany"), `${guard} must come before the delete`);
+  }
 });
 
 test("shared channel sessions persist and resolve a pinned flow version", () => {
