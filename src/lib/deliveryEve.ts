@@ -7,7 +7,7 @@ import { tenantOrigin } from "./tenantOrigin";
 import { loadFacts } from "./assistantGoals";
 import { notifyCustomerActivity, setting } from "./proactive";
 import { ASSISTANT_PROACTIVE_KEY, isQuietHour, proactiveOn } from "./proactiveRules";
-import { deliveryEveText, tomorrowWindow } from "./deliveryEveRules";
+import { deliveryEveKey, deliveryEveText, tomorrowWindow } from "./deliveryEveRules";
 import type { CronSliceContext } from "./tenantCron";
 
 /**
@@ -49,8 +49,8 @@ export async function runDeliveryEve(tenantId: string, budget: Pick<CronSliceCon
         customer,
         url: `/deals/${q.id}`,
         detail: deliveryEveText(loaded.facts, customer, origin),
-        // Once per booked day: rebooked, it is a new check.
-        recordKey: `${q.id}:${loaded.facts.deliveryScheduledFor.toISOString()}`,
+        // Once per booked day (not time): rebooked to another day, it is a new check.
+        recordKey: deliveryEveKey(q.id, loaded.facts.deliveryScheduledFor),
       },
       { dealOwnerId: q.lead?.assignedToId, customerOwnerId: q.contact?.ownerId, fallbackId: q.createdById, leadId: q.leadId, contactId: q.leadId ? null : q.contactId },
     );

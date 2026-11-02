@@ -1,7 +1,21 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
-import { deliveryEveText, tomorrowWindow } from "../src/lib/deliveryEveRules";
+import { deliveryEveKey, deliveryEveText, tomorrowWindow } from "../src/lib/deliveryEveRules";
+
+test("review of #951: one check per booked DAY in Johannesburg — a time moved that day is not a second alert", () => {
+  const at = (iso: string) => deliveryEveKey("q1", new Date(iso));
+  // 09:00 → 14:30 the same day: the same key, so no second alert.
+  assert.equal(at("2026-11-04T09:00:00+02:00"), at("2026-11-04T14:30:00+02:00"));
+  // Late evening in Johannesburg is still that day, though it is another day in UTC.
+  assert.equal(at("2026-11-04T23:30:00+02:00"), at("2026-11-04T07:00:00+02:00"));
+  assert.equal(at("2026-11-04T23:30:00+02:00"), "q1:2026-11-04");
+  // Rebooked to another day: a new check.
+  assert.notEqual(at("2026-11-04T09:00:00+02:00"), at("2026-11-05T09:00:00+02:00"));
+  assert.notEqual(at("2026-11-04T00:30:00+02:00"), at("2026-11-03T23:30:00+02:00"));
+  // Another deal on the same day is its own check.
+  assert.notEqual(deliveryEveKey("q2", new Date("2026-11-04T09:00:00+02:00")), at("2026-11-04T09:00:00+02:00"));
+});
 import { PROACTIVE_KINDS, proactivePush, proactiveQuestion, proactiveText } from "../src/lib/proactiveRules";
 import type { GoalFacts } from "../src/lib/assistantGoalRules";
 
@@ -53,7 +67,7 @@ test("the run: proactive DAX's switches, the workspace's own scope, quiet hours,
   assert.match(run, /status: "accepted", deletedAt: null, supersededAt: null, deliveredAt: null, deliveryScheduledFor: tomorrow/);
   // Through notifyCustomerActivity → raise: the person's own switch, their access to the deal, the unique key.
   assert.match(run, /notifyCustomerActivity\(/);
-  assert.match(run, /recordKey: `\$\{q\.id\}:\$\{loaded\.facts\.deliveryScheduledFor\.toISOString\(\)\}`/);
+  assert.match(run, /recordKey: deliveryEveKey\(q\.id, loaded\.facts\.deliveryScheduledFor\)/);
   assert.doesNotMatch(run, /sendWhatsApp|sendEmail|sendSms/, "never the customer");
   assert.match(code("src/app/api/cron/assistant/route.ts"), /await runDeliveryEve\(tenantId, budget\)/);
 });

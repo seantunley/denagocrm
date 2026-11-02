@@ -1,5 +1,6 @@
 import { STEP_DONE, stepDone, whatToDo, type GoalFacts, type GoalStep } from "./assistantGoalRules";
 import { johannesburgDayStart } from "./proactiveRules";
+import { johannesburgDateKey } from "./activityDay";
 
 /**
  * THE DAY BEFORE A DELIVERY (round 2, item 5). The salesperson on a signed deal booked for tomorrow gets one check:
@@ -12,6 +13,12 @@ const CHECKED: readonly GoalStep[] = ["deposit", "documents", "prep"];
 const DAY = 86_400_000;
 
 /** Tomorrow in Johannesburg, as [start, end). */
+/**
+ * Once per booked DAY in Johannesburg (review of #951): the time moved within the day is the same delivery, already
+ * checked; rebooked to another day, it is checked again for that day.
+ */
+export const deliveryEveKey = (quoteId: string, scheduled: Date) => `${quoteId}:${johannesburgDateKey(scheduled)}`;
+
 export function tomorrowWindow(now: Date): { gte: Date; lt: Date } {
   const start = new Date(johannesburgDayStart(now).getTime() + DAY);
   return { gte: start, lt: new Date(start.getTime() + DAY) };
