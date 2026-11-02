@@ -11,8 +11,8 @@ import { getCompanyProfile } from "./companyProfile";
 import { transcribeVoice, transcribeVoiceDetailed } from "./transcribe";
 import { askCrm } from "./crmAssistant";
 import type { ActionCard } from "./assistantActions";
-import { confirmFromWhatsApp, confirmingOnWhatsAppOn, offerConfirmations } from "./assistantWhatsAppConfirm";
-import { ASK_LIMIT_MESSAGE, assistantAskAllowed, assistantImageAllowed, assistantUserFor, assistantVoiceReplyAllowed } from "./assistantUser";
+import { confirmAllFromWhatsApp, confirmFromWhatsApp, confirmingOnWhatsAppOn, offerConfirmations, waitingForConfirm } from "./assistantWhatsAppConfirm";
+import { ASK_LIMIT_MESSAGE, assistantAskAllowed, assistantImageAllowed, assistantUserFor, assistantVoiceConfirmAllowed, assistantVoiceReplyAllowed } from "./assistantUser";
 import { MAX_IMAGE_BYTES, cleanJpeg, jpegDataUrl } from "./assistantImage";
 import { MAX_UPLOAD_BYTES } from "./assistantUpload";
 import { canSynthesizeVoice } from "./elevenlabs";
@@ -50,8 +50,13 @@ import {
   maskWaId,
   outsideReplyWindow,
   parseConfirmId,
+  parseConfirmAllId,
   expandNumberedReply,
-  typedYes,
+  saidYes,
+  saidYesToAll,
+  FORWARDED_CHARS,
+  FORWARDED_PREFIX,
+  FORWARDED_VOICE_PREFIX,
   parseLinkCode,
   parseUpdateTemplate,
   planWhatsAppReply,
@@ -117,7 +122,8 @@ export type StaffWhatsAppInput =
   /** choiceId: the id of a tapped button, when the text is a button's title. */
   /** templateReply: the tap on a message template's button ("Show me") — the way in, not a question. */
   | { text: string; choiceId?: string; templateReply?: boolean }
-  | { voiceMediaId: string }
+  /** forwarded: WhatsApp marked it forwarded — a customer's voice note, passed on (FORWARDED_VOICE_PREFIX). */
+  | { voiceMediaId: string; forwarded?: boolean }
   /** A photo, file or video. A photo is read; a file is held to read and file (fileName as sent); a video is answered with why not. */
   | { mediaId: string; mediaKind: "image" | "document" | "video"; caption: string; fileName?: string };
 
@@ -234,34 +240,63 @@ export async function handleStaffWhatsApp(from: string, input: StaffWhatsAppInpu
     return true;
   }
 
-  // A tapped Confirm button on a task proposed here earlier. Reached only now —
-  // every check above has passed for THIS message — and it is not a question:
-  // nothing is asked, and it does not count against the ask limit.
-  let pendingId = "text" in input ? parseConfirmId(input.choiceId) : null;
-  // A TYPED "yes" is that tap, when exactly ONE Confirm button is waiting for them, still live (Sean, 2026-10-24:
-  // he typed "Yes" and DAX, which cannot see the card, answered "there is nothing to confirm"). Two or more: it
-  // goes to DAX as before, which asks which one.
-  if (!pendingId && "text" in input && !input.choiceId && typedYes(input.text)) {
-    const live = await basePrisma.assistantPendingAction.findMany({
-      where: { tenantId, userId: user.id, forCrm: false, confirmedAt: null, completedAt: null, failedAt: null, expiresAt: { gt: new Date() } },
-      select: { id: true },
-      take: 2,
-    });
-    if (live.length === 1) pendingId = live[0].id;
-  }
-  if (pendingId) {
-    await confirmFromWhatsApp(tenantId, user, waId, pendingId);
-    // WHAT THE CONFIRMED TASK QUEUED FOR THEM. A quote the assistant built leaves
-    // its PDF as an update for this person (source "quote_pdf"); it goes now,
-    // after the "done" reply above, while WhatsApp will take it. Same delivery as
-    // a briefing: if this webhook ends first, or WhatsApp refuses, the half-hourly
-    // sweep or their next message sends it — and tapping Confirm again cannot make
-    // a second quote. Nothing queued: this sends nothing.
+  // WHAT A CONFIRMED TASK QUEUED FOR THEM. A quote the assistant built leaves
+  // its PDF as an update for this person (source "quote_pdf"); it goes now,
+  // after the "done" reply, while WhatsApp will take it. Same delivery as
+  // a briefing: if this webhook ends first, or WhatsApp refuses, the half-hourly
+  // sweep or their next message sends it — and tapping Confirm again cannot make
+  // a second quote. Nothing queued: this sends nothing.
+  const afterConfirm = async (): Promise<true> => {
     const delivered = await sendUpdatesToLinkedPhone(tenantId, user.id, { windowOpen: true });
     // Not gone yet (the PDF would not render this minute, WhatsApp was busy): said, not silent — it is retried.
     if (delivered === "failed" || delivered === "more") {
       await sendPlan(waId, { texts: ["The PDF is on its way — it didn't go just now, so I'll keep trying. The quote is in the CRM meanwhile."], buttons: null });
     }
+    return true;
+  };
+  /**
+   * YES — typed, or SAID in a voice note (Sean, 2026-11-02: voice-first, for staff driving or on site). One task
+   * waiting: that one (Sean, 2026-10-24: he typed "Yes" and DAX, which cannot see the card, answered "there is nothing
+   * to confirm"). "Yes to all": every task of the newest offer. "Yes" with several waiting: they are listed and the
+   * choice is theirs — never a guess at which. False: not a yes, or nothing waiting — DAX answers it as before.
+   */
+  const answerYes = async (said: string): Promise<boolean> => {
+    if (saidYesToAll(said)) {
+      await confirmAllFromWhatsApp(tenantId, user, waId, null);
+      return afterConfirm();
+    }
+    if (!saidYes(said)) return false;
+    const waiting = await waitingForConfirm(tenantId, user.id);
+    if (waiting.total === 0) return false;
+    if (waiting.only) {
+      await confirmFromWhatsApp(tenantId, user, waId, waiting.only.id);
+      return afterConfirm();
+    }
+    const n = waiting.newest.length;
+    const older = waiting.total - n;
+    await sendPlan(waId, {
+      texts: [n >= 2
+        ? `These ${n} are waiting from my last message:\n${waiting.newest.map((task) => `• ${task.title}`).join("\n")}\n\nSay "yes to all" to do all ${n}, or tap Confirm on the ones you want.${older ? `\n\n(${older === 1 ? "An older one is" : `${older} older ones are`} waiting too — tap Confirm on ${older === 1 ? "it" : "those"}.)` : ""}`
+        : `${waiting.total} tasks are waiting, so I won't guess which you mean — tap Confirm on the one you want.${n === 1 ? ` The newest: ${waiting.newest[0].title}` : ""}`],
+      buttons: null,
+    });
+    return true;
+  };
+
+  // A tapped Confirm (or Confirm all) button on tasks proposed here earlier. Reached only now —
+  // every check above has passed for THIS message — and it is not a question:
+  // nothing is asked, and it does not count against the ask limit.
+  const allId = "text" in input ? parseConfirmAllId(input.choiceId) : null;
+  if (allId) {
+    await confirmAllFromWhatsApp(tenantId, user, waId, allId);
+    return afterConfirm();
+  }
+  const pendingId = "text" in input ? parseConfirmId(input.choiceId) : null;
+  if (pendingId) {
+    await confirmFromWhatsApp(tenantId, user, waId, pendingId);
+    return afterConfirm();
+  }
+  if ("text" in input && !input.choiceId && (await answerYes(input.text))) {
     return true;
   }
 
@@ -269,6 +304,13 @@ export async function handleStaffWhatsApp(from: string, input: StaffWhatsAppInpu
   // not a second allowance. Counted before a voice note is fetched or
   // transcribed, so the cap bounds that work too.
   if (!(await assistantAskAllowed(user.id))) {
+    // A SPOKEN yes still works past the limit, as a tap or a typed yes does (review of #939) — only a voice note that
+    // isn't forwarded, only while a task waits, under its own small allowance. Anything but a yes is not answered.
+    if ("voiceMediaId" in input && input.forwarded !== true && (await waitingForConfirm(tenantId, user.id)).total > 0 && (await assistantVoiceConfirmAllowed(user.id))) {
+      const media = await fetchWhatsAppMedia(input.voiceMediaId).catch(() => null);
+      const said = media ? await transcribeVoice(media.buffer, media.contentType).catch(() => null) : null;
+      if (said && (await answerYes(said))) return true;
+    }
     await sendPlan(waId, { texts: [ASK_LIMIT_MESSAGE], buttons: null });
     return true;
   }
@@ -282,9 +324,12 @@ export async function handleStaffWhatsApp(from: string, input: StaffWhatsAppInpu
   const typing = showWhatsAppTyping(messageId);
 
   let question = "text" in input ? input.text : null;
+  // A FORWARDED voice note is a customer's words (Sean, 2026-11-02): never the person's own question, never a "yes"
+  // to a waiting task — and answered in text, since its summary and suggested reply are to read and copy.
+  const forwardedVoice = "voiceMediaId" in input && input.forwarded === true;
   // A voice note in gets a voice note back — only when the owner switched voice
   // replies on (they cost ElevenLabs credits). A typed question is answered in text.
-  const voiceBack = "voiceMediaId" in input && voiceRepliesSwitchOn(await getSetting(ASSISTANT_VOICE_REPLIES_KEY));
+  const voiceBack = "voiceMediaId" in input && !forwardedVoice && voiceRepliesSwitchOn(await getSetting(ASSISTANT_VOICE_REPLIES_KEY));
   let heard: VoiceLanguage | null = null;
   if ("voiceMediaId" in input) {
     // Only now — after the number is known to be staff — is the voice note
@@ -301,6 +346,12 @@ export async function handleStaffWhatsApp(from: string, input: StaffWhatsAppInpu
     }
     if (!question) {
       await sendPlan(waId, { texts: ["I couldn't make out that voice note — try again, or type it."], buttons: null });
+      return true;
+    }
+    if (forwardedVoice) question = `${FORWARDED_VOICE_PREFIX} ${question}`;
+    // A SPOKEN yes is a typed yes — the driver's Confirm: no question to DAX, no voice note back.
+    else if (await answerYes(question)) {
+      await typing;
       return true;
     }
   }
@@ -330,7 +381,9 @@ export async function handleStaffWhatsApp(from: string, input: StaffWhatsAppInpu
     images = [jpegDataUrl(cleaned)];
     question = input.caption.trim() || IMAGE_QUESTION;
   }
-  let q = String(question ?? "").trim().slice(0, QUESTION_CHARS);
+  // What was FORWARDED — a customer's message or voice note — is kept whole (FORWARDED_CHARS); a question is capped.
+  const forwarded = forwardedVoice || String(question ?? "").startsWith(FORWARDED_PREFIX);
+  let q = String(question ?? "").trim().slice(0, forwarded ? FORWARDED_CHARS : QUESTION_CHARS);
   // "2" = the second numbered option in DAX's last answer here, in its words.
   if (/^\s*\d{1,2}\s*[.)]?\s*$/.test(q)) {
     const last = await basePrisma.assistantTurn.findFirst({
