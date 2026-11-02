@@ -40,8 +40,9 @@ export function flowRuntimeVars(channel: string, now = new Date()): Record<strin
   };
 }
 
-export async function getActiveFlowFor(channel: string): Promise<Flow> {
-  return (await resolveFlowSnapshot(channel)).flow;
+/** null when the channel's flow was taken offline. */
+export async function getActiveFlowFor(channel: string): Promise<Flow | null> {
+  return (await resolveFlowSnapshot(channel))?.flow ?? null;
 }
 
 type LoadedSession = SessionState & { status: string; ownership: BotOwnership };
@@ -134,6 +135,8 @@ export async function advanceFlow(
   if (input.text.trim()) state.msgs.push({ role: "user", content: input.text });
 
   const snapshot = await resolveFlowSnapshot(channel, restart ? null : state.flowVersionId, { text: input.text, ...entryContext });
+  // This channel's flow was taken offline: no reply, as when a person owns the conversation — it waits in the inbox.
+  if (!snapshot) return { messages: [], done: true, suppressed: true };
   state.flowVersionId = snapshot.versionId;
   const actions: ActionObservation[] = [];
   const ctx = makeCtx(state);

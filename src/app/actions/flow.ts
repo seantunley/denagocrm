@@ -8,7 +8,7 @@ import { logAudit } from "@/lib/audit";
 import { DEFAULT_FLOW, type Flow } from "@/lib/flow";
 import { flowDocumentIssues } from "@/lib/flowDocuments";
 import { flowTemplate } from "@/lib/flowTemplates";
-import { publishFlowSnapshot } from "@/lib/flowPublishing";
+import { publishFlowSnapshot, takeFlowOffline } from "@/lib/flowPublishing";
 import { FlowPublishValidationError } from "@/lib/flowValidationServer";
 import { flowErrors, type FlowIssue } from "@/lib/flowValidation";
 import { builderTenantId, flowScope } from "@/lib/flowScope";
@@ -187,6 +187,27 @@ export async function deleteFlow(id: string) {
     await prisma.botFlow.deleteMany({ where: { id, ...scope } });
     revalidatePath("/bot-builder");
     return { success: "Flow deleted" };
+  });
+}
+
+/**
+ * "Take offline" on the live flow (Sean, 2026-11-02). New conversations on its channel then get no chatbot reply and
+ * wait in the inbox; QR codes and keyword routes still start their flows. Publishing it (or another) puts one back.
+ */
+export async function setFlowOffline(id: string) {
+  return withActingStaffScope(async () => {
+    const owner = await requireTenantOwner();
+    const scope = await flowScope();
+    const flow = await prisma.botFlow.findFirst({ where: { id, ...scope }, select: { name: true, channel: true } });
+    if (!flow) return { error: "That flow no longer exists." };
+    if (!(await takeFlowOffline(id))) return { error: "This flow isn't live, so there is nothing to take offline." };
+    await logAudit({
+      action: "bot.flow_offline",
+      summary: `Chatbot flow “${flow.name}” taken offline — no flow answers new ${flow.channel} conversations until one is published`,
+      user: owner,
+    });
+    revalidatePath("/bot-builder");
+    return { success: "Flow taken offline" };
   });
 }
 
