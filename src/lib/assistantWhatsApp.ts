@@ -12,7 +12,7 @@ import { transcribeVoice, transcribeVoiceDetailed } from "./transcribe";
 import { askCrm } from "./crmAssistant";
 import type { ActionCard } from "./assistantActions";
 import { confirmAllFromWhatsApp, confirmFromWhatsApp, confirmingOnWhatsAppOn, offerConfirmations, waitingForConfirm } from "./assistantWhatsAppConfirm";
-import { ASK_LIMIT_MESSAGE, assistantAskAllowed, assistantImageAllowed, assistantUserFor, assistantVoiceReplyAllowed } from "./assistantUser";
+import { ASK_LIMIT_MESSAGE, assistantAskAllowed, assistantImageAllowed, assistantUserFor, assistantVoiceConfirmAllowed, assistantVoiceReplyAllowed } from "./assistantUser";
 import { MAX_IMAGE_BYTES, cleanJpeg, jpegDataUrl } from "./assistantImage";
 import { MAX_UPLOAD_BYTES } from "./assistantUpload";
 import { canSynthesizeVoice } from "./elevenlabs";
@@ -268,8 +268,8 @@ export async function handleStaffWhatsApp(from: string, input: StaffWhatsAppInpu
     if (!saidYes(said)) return false;
     const waiting = await waitingForConfirm(tenantId, user.id);
     if (waiting.total === 0) return false;
-    if (waiting.total === 1) {
-      await confirmFromWhatsApp(tenantId, user, waId, waiting.newest[0].id);
+    if (waiting.only) {
+      await confirmFromWhatsApp(tenantId, user, waId, waiting.only.id);
       return afterConfirm();
     }
     const n = waiting.newest.length;
@@ -277,7 +277,7 @@ export async function handleStaffWhatsApp(from: string, input: StaffWhatsAppInpu
     await sendPlan(waId, {
       texts: [n >= 2
         ? `These ${n} are waiting from my last message:\n${waiting.newest.map((task) => `• ${task.title}`).join("\n")}\n\nSay "yes to all" to do all ${n}, or tap Confirm on the ones you want.${older ? `\n\n(${older === 1 ? "An older one is" : `${older} older ones are`} waiting too — tap Confirm on ${older === 1 ? "it" : "those"}.)` : ""}`
-        : `${waiting.total} tasks are waiting, so I won't guess which you mean — tap Confirm on the one you want. The newest: ${waiting.newest[0].title}`],
+        : `${waiting.total} tasks are waiting, so I won't guess which you mean — tap Confirm on the one you want.${n === 1 ? ` The newest: ${waiting.newest[0].title}` : ""}`],
       buttons: null,
     });
     return true;
@@ -304,6 +304,13 @@ export async function handleStaffWhatsApp(from: string, input: StaffWhatsAppInpu
   // not a second allowance. Counted before a voice note is fetched or
   // transcribed, so the cap bounds that work too.
   if (!(await assistantAskAllowed(user.id))) {
+    // A SPOKEN yes still works past the limit, as a tap or a typed yes does (review of #939) — only a voice note that
+    // isn't forwarded, only while a task waits, under its own small allowance. Anything but a yes is not answered.
+    if ("voiceMediaId" in input && input.forwarded !== true && (await waitingForConfirm(tenantId, user.id)).total > 0 && (await assistantVoiceConfirmAllowed(user.id))) {
+      const media = await fetchWhatsAppMedia(input.voiceMediaId).catch(() => null);
+      const said = media ? await transcribeVoice(media.buffer, media.contentType).catch(() => null) : null;
+      if (said && (await answerYes(said))) return true;
+    }
     await sendPlan(waId, { texts: [ASK_LIMIT_MESSAGE], buttons: null });
     return true;
   }

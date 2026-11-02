@@ -411,6 +411,13 @@ async function main() {
       check("a fresh card moves it — the board's reschedule", !!moved?.ok && (await deliveryOn()) === dayFromNow(12), JSON.stringify(moved));
       const past = await cardsFor({ type: "schedule_delivery", quote: `Q-${QUOTE_NO}`, date: "2020-01-01" }, null);
       check("a day in the past: no card", past.cards.length === 0 && /in the past/.test(past.problems.join(" ")));
+      // TWO CONFIRMS AT ONCE (review of #939): one booking, one workshop entry — the board's own action claims the day
+      // only while none is booked, with its entry in the same transaction.
+      await basePrisma.quote.update({ where: { id: id("quote") }, data: { deliveryScheduledFor: null } });
+      await basePrisma.activity.deleteMany({ where: { tenantId: T, contactId: id("c-ben"), summary: { startsWith: "🚚 Delivery" } } });
+      const race = await deliveryCard(dayFromNow(14));
+      const both = race ? await Promise.all([0, 1].map(() => runAsSession(repSession, () => scoped(() => runAssistantAction(race))))) : [];
+      check("one card confirmed twice AT ONCE: one booking, one workshop entry", both.some((r) => r.ok) && (await deliveryOn()) === dayFromNow(14) && (await onCalendar()).length === 1, JSON.stringify(both));
     }
     const tooMuch = await cardsFor({ type: "record_payment", quote: `Q-${QUOTE_NO}`, amount: 500_000, method: "eft", receivedOn: today }, null);
     const tooMuchCard = tooMuch.cards.find((c): c is Extract<ActionCard, { kind: "record_payment" }> => c.kind === "record_payment");

@@ -138,7 +138,7 @@ test("on WhatsApp: a typed 'yes' is the tap when ONE Confirm is waiting; '2' is 
   const wa = read("src/lib/assistantWhatsApp.ts");
   // The yes, typed or said (voice-first, 2026-11-02): ONE waiting → that one; several → listed, never guessed.
   assert.match(wa, /if \("text" in input && !input\.choiceId && \(await answerYes\(input\.text\)\)\) \{/);
-  assert.match(wa, /if \(waiting\.total === 1\) \{\s*await confirmFromWhatsApp\(tenantId, user, waId, waiting\.newest\[0\]\.id\);/);
+  assert.match(wa, /if \(waiting\.only\) \{\s*await confirmFromWhatsApp\(tenantId, user, waId, waiting\.only\.id\);/);
   assert.match(wa, /so I won't guess which you mean/);
   const asked = "Did you mean Werner Kilian?\n\n1. Yes, Werner Kilian — leave colour open\n2. Yes, Werner Kilian — check gray first";
   assert.equal(expandNumberedReply("2", asked), "Yes, Werner Kilian — check gray first (option 2)");

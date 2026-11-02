@@ -290,13 +290,11 @@ export async function confirmFromWhatsApp(tenantId: string, user: PermissionUser
 export async function confirmAllFromWhatsApp(tenantId: string, user: PermissionUser, waId: string, anchorId: string | null): Promise<void> {
   if (!(await confirmingOnWhatsAppOn())) return say(waId, "Confirming on WhatsApp is switched off for this workspace — ask me in the CRM and confirm on the card.");
   const now = new Date();
+  // No anchor ("yes to all"): the NEWEST offer, whatever became of it — never the newest one still waiting, which
+  // after the last set was done would be an older offer (review of #939). Done or expired: nothing remains.
   const anchor = anchorId
     ? await basePrisma.assistantPendingAction.findFirst({ where: { id: anchorId, tenantId, userId: user.id, forCrm: false }, select: { createdAt: true } })
-    : await basePrisma.assistantPendingAction.findFirst({
-        where: { tenantId, userId: user.id, forCrm: false, confirmedAt: null, completedAt: null, failedAt: null, expiresAt: { gt: now } },
-        orderBy: { createdAt: "desc" },
-        select: { createdAt: true },
-      });
+    : await basePrisma.assistantPendingAction.findFirst({ where: { tenantId, userId: user.id, forCrm: false }, orderBy: { createdAt: "desc" }, select: { createdAt: true } });
   const rows = anchor
     ? await basePrisma.assistantPendingAction.findMany({
         where: { tenantId, userId: user.id, forCrm: false, createdAt: anchor.createdAt, confirmedAt: null, completedAt: null, failedAt: null, expiresAt: { gt: now } },
@@ -314,18 +312,24 @@ export async function confirmAllFromWhatsApp(tenantId: string, user: PermissionU
   }
 }
 
-/** What waits for this person's Confirm here: how many in all, and the newest offer's tasks (in the order offered). */
-export async function waitingForConfirm(tenantId: string, userId: string): Promise<{ total: number; newest: { id: string; title: string }[] }> {
+/**
+ * What waits for this person's Confirm here: how many in all, and those still waiting from the NEWEST offer (in the
+ * order offered) — empty when the newest offer is all done, even if an older one still waits (review of #939).
+ */
+export async function waitingForConfirm(tenantId: string, userId: string): Promise<{ total: number; newest: { id: string; title: string }[]; only: { id: string; title: string } | null }> {
+  const latest = await basePrisma.assistantPendingAction.findFirst({ where: { tenantId, userId, forCrm: false }, orderBy: { createdAt: "desc" }, select: { createdAt: true } });
   const rows = await basePrisma.assistantPendingAction.findMany({
     where: { tenantId, userId, forCrm: false, confirmedAt: null, completedAt: null, failedAt: null, expiresAt: { gt: new Date() } },
     orderBy: { createdAt: "desc" },
     take: 12,
     select: { id: true, createdAt: true, card: true },
   });
-  const newestAt = rows[0]?.createdAt.getTime();
+  const newestAt = latest?.createdAt.getTime();
+  const shown = (row: (typeof rows)[number]) => ({ id: row.id, title: String((row.card as { title?: unknown } | null)?.title ?? "a task") });
   const newest = rows
     .filter((row) => row.createdAt.getTime() === newestAt)
     .sort((a, b) => (a.id < b.id ? -1 : 1))
-    .map((row) => ({ id: row.id, title: String((row.card as { title?: unknown } | null)?.title ?? "a task") }));
-  return { total: rows.length, newest };
+    .map(shown);
+  // The ONE task waiting, wherever it was offered: what a plain "yes" confirms (Sean, 2026-10-24).
+  return { total: rows.length, newest, only: rows.length === 1 ? shown(rows[0]) : null };
 }

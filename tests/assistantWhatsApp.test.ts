@@ -86,7 +86,9 @@ const state = {
   /** "Confirm all" reached (voice-first): the row the button named, or null for "yes to all". */
   confirmedAll: [] as { anchorId: string | null }[],
   /** What the confirm step says is waiting for this person. */
-  waiting: { total: 0, newest: [] as { id: string; title: string }[] },
+  waiting: { total: 0, newest: [] as { id: string; title: string }[], only: null as { id: string; title: string } | null },
+  /** Spoken yeses past the ask limit, counted on their own allowance. */
+  voiceConfirms: 0,
   /** What a voice note is heard as. */
   transcript: "what is overdue today" as string | null,
   errors: [] as string[],
@@ -287,6 +289,7 @@ loaderKey._load = function (this: unknown, request: string, parent, isMain) {
         },
         ASK_LIMIT_MESSAGE: "You've asked a lot in the last hour — give it a few minutes and try again.",
         assistantImageAllowed: async () => state.imageAllowed,
+        assistantVoiceConfirmAllowed: async () => { state.voiceConfirms++; return true; },
       };
       case "./userSecurity": return {
         // Strict: a failed read throws (no version-0 fallback).
@@ -363,8 +366,9 @@ beforeEach(() => {
   state.offered = [];
   state.confirmed = [];
   state.confirmedAll = [];
-  state.waiting = { total: 0, newest: [] };
+  state.waiting = { total: 0, newest: [], only: null };
   state.transcript = "what is overdue today";
+  state.voiceConfirms = 0;
   state.errors = [];
   state.audits = [];
   state.guesses = new Map();
@@ -817,9 +821,23 @@ test("questions are capped at 500 characters and by the person's ONE ask limit",
   const fetched = state.mediaFetched;
   assert.equal(await handleStaffWhatsApp(STAFF, { voiceMediaId: "m2" }), true);
   assert.equal(state.mediaFetched, fetched);
+  // …unless a task is waiting (review of #939): a SPOKEN yes still confirms, as a tap or typed yes does — under its
+  // own small allowance — and anything else said is still not answered.
+  state.confirmOn = true;
+  state.waiting = { total: 1, newest: [], only: { id: "cmpendingpendingpendingpe", title: "Add a note" } };
+  state.transcript = "Yes.";
+  const asked = state.asked.length;
+  assert.equal(await handleStaffWhatsApp(STAFF, { voiceMediaId: "m3" }), true);
+  assert.deepEqual(state.confirmed.map((c) => c.pendingId), ["cmpendingpendingpendingpe"]);
+  state.transcript = "And what about Anna?";
+  assert.equal(await handleStaffWhatsApp(STAFF, { voiceMediaId: "m4" }), true);
+  assert.match(state.sent.at(-1)!.text, /You've asked a lot in the last hour/);
+  assert.equal(state.asked.length, asked, "no question answered past the limit");
+  assert.equal(state.voiceConfirms, 2, "each counted on its own allowance");
   // It is the shared per-person limit, not a WhatsApp-only counter.
   const lib = code("src/lib/assistantWhatsApp.ts");
-  assert.match(lib, /if \(!\(await assistantAskAllowed\(user\.id\)\)\) \{\s*await sendPlan\(waId, \{ texts: \[ASK_LIMIT_MESSAGE\]/);
+  assert.match(lib, /if \(!\(await assistantAskAllowed\(user\.id\)\)\) \{\s*if \("voiceMediaId" in input && input\.forwarded !== true && \(await waitingForConfirm\(tenantId, user\.id\)\)\.total > 0 && \(await assistantVoiceConfirmAllowed\(user\.id\)\)\) \{/);
+  assert.match(lib, /if \(said && \(await answerYes\(said\)\)\) return true;\s*\}\s*await sendPlan\(waId, \{ texts: \[ASK_LIMIT_MESSAGE\]/);
   assert.doesNotMatch(lib, /assistant-wa-ask/);
 });
 
@@ -1785,7 +1803,7 @@ test("confirmed on WhatsApp: what the task queued is sent straight after the con
   assert.match(lib, /const afterConfirm = async \(\): Promise<true> => \{\s*const delivered = await sendUpdatesToLinkedPhone\(tenantId, user\.id, \{ windowOpen: true \}\);[\s\S]{0,500}return true;\s*\};/);
   assert.match(lib, /await confirmFromWhatsApp\(tenantId, user, waId, pendingId\);\s*return afterConfirm\(\);/);
   assert.match(lib, /await confirmAllFromWhatsApp\(tenantId, user, waId, allId\);\s*return afterConfirm\(\);/);
-  assert.match(lib, /await confirmFromWhatsApp\(tenantId, user, waId, waiting\.newest\[0\]\.id\);\s*return afterConfirm\(\);/);
+  assert.match(lib, /await confirmFromWhatsApp\(tenantId, user, waId, waiting\.only\.id\);\s*return afterConfirm\(\);/);
 });
 
 /* ── voice-first (Sean, 2026-11-02): for staff who are driving or on site ─ */
@@ -1793,7 +1811,7 @@ test("confirmed on WhatsApp: what the task queued is sent straight after the con
 test("VOICE-FIRST: a spoken yes confirms the one task waiting, with no question to DAX; 'yes to all' said confirms the last set", async () => {
   verified("u1", STAFF);
   state.confirmOn = true;
-  state.waiting = { total: 1, newest: [{ id: "cmpendingpendingpendingpe", title: "Add a note to Anna's lead" }] };
+  state.waiting = { total: 1, newest: [{ id: "cmpendingpendingpendingpe", title: "Add a note to Anna's lead" }], only: { id: "cmpendingpendingpendingpe", title: "Add a note to Anna's lead" } };
   state.transcript = "Yes, please.";
   assert.equal(await handleStaffWhatsApp(STAFF, { voiceMediaId: "m1" }), true);
   assert.deepEqual(state.confirmed.map((c) => c.pendingId), ["cmpendingpendingpendingpe"]);
@@ -1811,7 +1829,7 @@ test("VOICE-FIRST: a spoken yes confirms the one task waiting, with no question 
 test("VOICE-FIRST: a FORWARDED voice note is the customer's words — told to DAX as such, kept whole, never a yes", async () => {
   verified("u1", STAFF);
   state.confirmOn = true;
-  state.waiting = { total: 1, newest: [{ id: "cmpendingpendingpendingpe", title: "Add a note to Anna's lead" }] };
+  state.waiting = { total: 1, newest: [{ id: "cmpendingpendingpendingpe", title: "Add a note to Anna's lead" }], only: { id: "cmpendingpendingpendingpe", title: "Add a note to Anna's lead" } };
   state.transcript = "Yes.";
   assert.equal(await handleStaffWhatsApp(STAFF, { voiceMediaId: "m1", forwarded: true }), true);
   assert.equal(state.confirmed.length, 0, "a customer's yes never confirms the person's task");
@@ -1833,7 +1851,7 @@ test("VOICE-FIRST: typed 'yes to all' and the Confirm all button confirm the set
   assert.deepEqual(state.confirmedAll, [{ anchorId: "cmpendingpendingpendingpe" }]);
   assert.equal(await handleStaffWhatsApp(STAFF, { text: "yes, do them all" }), true);
   assert.deepEqual(state.confirmedAll.at(-1), { anchorId: null });
-  state.waiting = { total: 3, newest: [{ id: "cmpendingaaaaaaaaaaaaaaaa", title: "Change the Rover to Black on Q-1030" }, { id: "cmpendingbbbbbbbbbbbbbbbb", title: "Book Q-1030's delivery for Tue 10 Nov 2026" }] };
+  state.waiting = { total: 3, newest: [{ id: "cmpendingaaaaaaaaaaaaaaaa", title: "Change the Rover to Black on Q-1030" }, { id: "cmpendingbbbbbbbbbbbbbbbb", title: "Book Q-1030's delivery for Tue 10 Nov 2026" }], only: null };
   const sentBefore = state.sent.length;
   assert.equal(await handleStaffWhatsApp(STAFF, { text: "Yes" }), true);
   assert.equal(state.confirmed.length, 0, "never a guess at which");
@@ -1841,7 +1859,7 @@ test("VOICE-FIRST: typed 'yes to all' and the Confirm all button confirm the set
   assert.match(told, /^These 2 are waiting from my last message:\n• Change the Rover to Black on Q-1030\n• Book Q-1030's delivery for Tue 10 Nov 2026\n\nSay "yes to all" to do all 2, or tap Confirm on the ones you want\./);
   assert.match(told, /\(An older one is waiting too — tap Confirm on it\.\)/);
   // Nothing waiting: a yes goes to DAX, as before.
-  state.waiting = { total: 0, newest: [] };
+  state.waiting = { total: 0, newest: [], only: null };
   await handleStaffWhatsApp(STAFF, { text: "Yes" });
   assert.equal(state.asked.at(-1)?.question, "Yes");
 });

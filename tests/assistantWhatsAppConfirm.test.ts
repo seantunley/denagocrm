@@ -771,8 +771,9 @@ test("a card saved for the CRM is stamped with its workspace and person, and the
   assert.ok(lib.indexOf("const saved = await saveForCrm(tenantId, userId, elsewhere);") < lib.indexOf("I've saved"));
   // Both phone-side lookups exclude saved cards: the claim, and the "why not" that follows a failed claim.
   // (The third: removing a phone row whose button never arrived — a phone row only, never a saved card.)
-  // (2026-11-02, voice-first: Confirm all's anchor, the newest offer and its rows, and what is waiting — phone rows only.)
-  assert.equal(lib.match(/forCrm: false/g)?.length, 7);
+  // (2026-11-02, voice-first: Confirm all's anchor, the newest offer and its rows, and what is waiting — its newest
+  // offer and its rows — phone rows only.)
+  assert.equal(lib.match(/forCrm: false/g)?.length, 8);
   assert.match(lib, /deleteMany\(\{ where: \{ id: pending\.id, tenantId, userId, forCrm: false, confirmedAt: null \} \}\)/);
   const sql = readFileSync(join(root, "prisma/migrations/20261012110000_assistant_pending_for_crm/migration.sql"), "utf8");
   assert.match(sql, /ALTER TABLE "AssistantPendingAction" ADD COLUMN IF NOT EXISTS "forCrm" BOOLEAN NOT NULL DEFAULT false;/);
@@ -850,18 +851,22 @@ test("CONFIRM ALL: exactly the tasks offered together — each claimed and run a
   assert.ok(done.completedAt, "a done one is not run again");
   assert.equal(state.sent.filter((s) => s.text.startsWith("✅")).length, 2, "each says its own result");
 
-  // "yes to all" with no anchor: the NEWEST offer still waiting — here only the older one is left.
-  state.ran = [];
-  await confirmAllFromWhatsApp("t1", me, PHONE, null);
-  assert.deepEqual(state.ran.map((run) => run.card.title), [NOTE.title]);
-  assert.ok(older.completedAt);
-  // Nothing left: said, not silent.
+  // "yes to all" with no anchor: the NEWEST offer, whatever became of it (review of #939). It is done — so nothing
+  // remains, and the OLDER offer still waiting is never reached instead.
   state.ran = [];
   await confirmAllFromWhatsApp("t1", me, PHONE, null);
   assert.equal(state.ran.length, 0);
+  assert.equal(older.confirmedAt, null, "an older offer is never confirmed by 'yes to all'");
   assert.match(state.sent.at(-1)?.text ?? "", /^Nothing from that set is waiting any more/);
+  // A newer offer: "yes to all" is that one.
+  const newer = pendingRow({ createdAt: new Date() });
+  state.ran = [];
+  await confirmAllFromWhatsApp("t1", me, PHONE, null);
+  assert.equal(state.ran.length, 1);
+  assert.ok(newer.completedAt && older.confirmedAt === null);
   // Switched off: nothing runs.
   state.on = false;
+  state.ran = [];
   pendingRow({ createdAt: new Date() });
   await confirmAllFromWhatsApp("t1", me, PHONE, null);
   assert.equal(state.ran.length, 0);
@@ -879,4 +884,13 @@ test("what is waiting: how many, and the newest offer's tasks in the order offer
   const waiting = await waitingForConfirm("t1", "u1");
   assert.equal(waiting.total, 3);
   assert.deepEqual(waiting.newest, [{ id: a.id, title: "A" }, { id: b.id, title: "B" }]);
+  assert.equal(waiting.only, null);
+  // The newest offer done (review of #939): nothing waits "from my last message" — the older one is only counted,
+  // and when it is the ONE task waiting, a plain yes may still confirm it.
+  a.completedAt = new Date();
+  b.completedAt = new Date();
+  const after = await waitingForConfirm("t1", "u1");
+  assert.deepEqual(after.newest, []);
+  assert.equal(after.total, 1);
+  assert.equal(after.only?.title, "Older");
 });
