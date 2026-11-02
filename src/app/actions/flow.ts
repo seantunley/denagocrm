@@ -182,9 +182,12 @@ export async function deleteFlow(id: string) {
     ]);
     // Published snapshots may still be referenced by active BotSession pins. A
     // flow that has ever been published therefore remains as immutable history.
-    if (!flow || flow.active || publishedVersion) return;
+    if (!flow) return { error: "That flow no longer exists." };
+    if (flow.active) return { error: "This is the live flow — make another flow live before deleting it." };
+    if (publishedVersion) return { error: "This flow has been published, so it is kept as history and can't be deleted." };
     await prisma.botFlow.deleteMany({ where: { id, ...scope } });
     revalidatePath("/bot-builder");
+    return { success: "Flow deleted" };
   });
 }
 

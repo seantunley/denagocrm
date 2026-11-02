@@ -1,6 +1,6 @@
 import { DEFAULT_FLOW, type Flow } from "./flow";
 
-export type FlowTemplateId = "general" | "sales" | "service" | "lead_capture" | "booking_management";
+export type FlowTemplateId = "blank" | "general" | "sales" | "service" | "lead_capture" | "booking_management" | "qr_brochure";
 export type FlowTemplate = {
   id: FlowTemplateId;
   name: string;
@@ -118,7 +118,55 @@ const BOOKING_MANAGEMENT_FLOW: Flow = {
   },
 };
 
+/** "New flow" starts here (Sean, 2026-11-02: "why does a new flow start with all those nodes and not blank?"). */
+const BLANK_FLOW: Flow = {
+  start: "welcome",
+  nodes: {
+    welcome: { id: "welcome", type: "message", text: "{{greeting}}", next: "end" },
+    end: { id: "end", type: "end" },
+  },
+};
+
+/**
+ * For a QR code on a poster or flyer (Chatbot → Routes → QR codes): the customer scans, taps Send, and gets the
+ * brochure, the price list and the business's contact card at once, then is asked whether someone should contact
+ * them. The two files are left for the owner to choose — publishing is blocked until they are.
+ */
+const QR_BROCHURE_FLOW: Flow = {
+  start: "welcome",
+  nodes: {
+    welcome: { id: "welcome", type: "message", text: "{{greeting}} Thanks for scanning — here is our brochure and price list.", next: "brochure" },
+    brochure: { id: "brochure", type: "document", documentId: "", caption: "Our brochure", next: "pricelist" },
+    pricelist: { id: "pricelist", type: "document", documentId: "", caption: "Our price list", next: "card" },
+    card: { id: "card", type: "contactCard", next: "followUp" },
+    followUp: {
+      id: "followUp",
+      type: "choice",
+      text: "Would you like one of the team to contact you?",
+      options: [
+        { id: "yes", label: "Yes, please", next: "handoff" },
+        { id: "no", label: "No, thanks", next: "bye" },
+      ],
+    },
+    handoff: { id: "handoff", type: "handoff", text: "Great — one of the team will be in touch shortly.", reason: "QR code: asked to be contacted" },
+    bye: { id: "bye", type: "message", text: "No problem — message us here any time.", next: "end" },
+    end: { id: "end", type: "end" },
+  },
+};
+
 export const FLOW_TEMPLATES: FlowTemplate[] = [
+  {
+    id: "blank",
+    name: "Blank",
+    description: "A greeting and nothing else — build your own from there.",
+    definition: BLANK_FLOW,
+  },
+  {
+    id: "qr_brochure",
+    name: "QR code: brochure pack",
+    description: "For a QR code on a poster or flyer: sends your brochure, price list and contact card, then offers a call back. Choose the two files, publish, then make the QR code under Routing.",
+    definition: QR_BROCHURE_FLOW,
+  },
   {
     id: "general",
     name: "General assistant",
@@ -152,5 +200,5 @@ export const FLOW_TEMPLATES: FlowTemplate[] = [
 ];
 
 export function flowTemplate(id: string | null | undefined): FlowTemplate {
-  return FLOW_TEMPLATES.find((template) => template.id === id) ?? FLOW_TEMPLATES[0];
+  return FLOW_TEMPLATES.find((template) => template.id === id) ?? FLOW_TEMPLATES.find((template) => template.id === "general")!;
 }
