@@ -15,6 +15,7 @@ import { currentTenantScope } from "@/lib/tenantScope";
 import AppShell from "@/components/AppShell";
 import AppContextMenu from "@/components/AppContextMenu";
 import SessionKeeper from "@/components/SessionKeeper";
+import AddPasskeyPrompt from "@/components/AddPasskeyPrompt";
 import AssistantBubble from "@/components/AssistantBubble";
 import { prisma } from "@/lib/db";
 import { PROACTIVE_SOURCES } from "@/lib/assistantWhatsAppRules";
@@ -132,6 +133,7 @@ export default async function AppLayout({
           flow canvas or a text input has already claimed the click. */}
       <AppContextMenu />
       <SessionKeeper />
+      <AddPasskeyPrompt />
       {/* Resolved here, in the SERVER layout, for the same reason `brand` is:
           getSetting reads the tenant from the request scope, which a client
           component has no access to. */}

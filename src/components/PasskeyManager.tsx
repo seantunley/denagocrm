@@ -2,9 +2,9 @@
 
 import { useState, useSyncExternalStore, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { startRegistration } from "@simplewebauthn/browser";
 import { Fingerprint, Plus, Trash2, KeyRound } from "lucide-react";
 import { removePasskey } from "@/app/actions/passkeys";
+import { defaultPasskeyNickname, registerPasskey } from "@/lib/passkeyDevice";
 import ConfirmActionDialog from "@/components/ConfirmActionDialog";
 import { TextPromptDialog } from "@/components/TextPromptDialog";
 
@@ -43,19 +43,7 @@ export default function PasskeyManager({ passkeys }: { passkeys: PasskeyRow[] })
     setError(null);
     setBusy(true);
     try {
-      const optRes = await fetch("/api/auth/passkey/register/options", { method: "POST" });
-      if (!optRes.ok) throw new Error("Could not start enrolment.");
-      const options = await optRes.json();
-
-      const attestation = await startRegistration({ optionsJSON: options });
-
-      const verifyRes = await fetch("/api/auth/passkey/register/verify", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ response: attestation, nickname }),
-      });
-      const data = await verifyRes.json();
-      if (!verifyRes.ok) throw new Error(data.error ?? "Enrolment failed.");
+      await registerPasskey(nickname);
       router.refresh();
     } catch (e) {
       // User cancelling the browser prompt throws — treat that as a no-op.
@@ -111,7 +99,7 @@ export default function PasskeyManager({ passkeys }: { passkeys: PasskeyRow[] })
           title="Name this passkey"
           description="Use a name that helps you recognise the phone, tablet or computer later."
           label="Device name"
-          defaultValue={/iPhone|iPad|Android/.test(navigator.userAgent) ? "Phone" : "This device"}
+          defaultValue={defaultPasskeyNickname()}
           submitLabel="Continue"
           onSubmit={enrol}
           trigger={<button type="button" disabled={busy} className="btn-primary btn-sm inline-flex items-center gap-1.5">

@@ -1,6 +1,10 @@
 @import "tailwindcss";
 @import "tw-animate-css";
 
+/* A phone on its side (or any very short window): the login page drops its
+   vertical padding so the submit button stays above the keyboard. */
+@custom-variant short (@media (max-height: 520px));
+
 /* ─────────────────────────────────────────────────────────────────────────
    Design tokens — Linear-style dark, Denago orange accent.
    New (shadcn/Radix) components consume these via @theme mappings below.
