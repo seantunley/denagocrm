@@ -66,7 +66,8 @@ test("the card: only with a picture in hand, and it says it is the screenshot", 
   assert.equal((lib.match(/if \(p\.attachImage && !image\) \{ problems\.push\(NO_IMAGE_TO_ATTACH\); continue; \}/g) ?? []).length, 2, "note and customer_note");
   assert.equal((lib.match(/\.\.\.\(p\.attachImage && image \? \{ image, detail: screenshotLine\(upload\) \} : \{\}\)/g) ?? []).length, 2, "the picture is resolveActions' own `image`, and the card says which");
   // On WhatsApp the confirm message lists `detail` (confirmMessages) — the picture itself can't be shown there.
-  assert.match(code("src/lib/assistantWhatsAppRules.ts"), /const shown = \[card\.title, card\.text, card\.question, card\.detail, card\.reason\]/);
+  // The card's detail (which screenshot) is shown on WhatsApp before Confirm — with its title, text and reason.
+  assert.match(code("src/lib/assistantWhatsAppRules.ts"), /const shown = \[title, \.\.\.\[card\.text, card\.question, card\.detail\]\.filter\(plain\)/);
   assert.match(lib, /\? `\$\{p\.pin \? "Pin" : "Add"\} the screenshot to \$\{where\}`/);
   assert.match(lib, /resolveActions\(user, proposals, problems, taskWrite\?\.ok \? taskWrite\.sheet : null, cardUpload\)/);
   assert.match(lib, /const image = upload\?\.image \?\? null;/);
