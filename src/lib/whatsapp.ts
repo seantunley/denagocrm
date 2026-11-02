@@ -378,7 +378,7 @@ export async function sendWhatsAppImage(toDigits: string, url: string, caption?:
 export async function sendWhatsAppDocumentLink(toDigits: string, url: string, filename: string, caption?: string): Promise<WhatsAppSendResult> {
   const creds = await waCredentials();
   if (!creds) return { ok: false, error: "WhatsApp is not configured." };
-  return postWhatsAppMessage(creds, { to: toDigits, type: "document", document: { link: url, filename, ...(caption ? { caption: caption.slice(0, 1024) } : {}) } });
+  return postWhatsAppMessage(creds, { to: toDigits, type: "document", document: { link: url, filename, ...(caption ? { caption: caption.slice(0, WA_BODY_MAX) } : {}) } });
 }
 
 /** A saveable contact card (Meta `contacts` message). */
