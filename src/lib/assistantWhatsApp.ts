@@ -407,13 +407,21 @@ export async function handleStaffWhatsApp(from: string, input: StaffWhatsAppInpu
   let script: string | undefined;
   // "typing…" KEPT ALIVE until the reply is on its way: Meta drops it after 25 seconds, and an answer plus its
   // voice note can take longer (Sean, 2026-11-02: voice replies felt slow). Cleared on every way out.
-  const typingCalls: Promise<unknown>[] = [];
-  const renew = setInterval(() => { typingCalls.push(showWhatsAppTyping(messageId)); }, TYPING_RENEW_MS);
   // CHANGE A WAITING TASK BY VOICE (Sean, 2026-11-02): DAX is shown what waits for their Confirm, numbered, so "make
   // the delivery Wednesday" replaces that card and "drop the follow-up" withdraws it. Never for something FORWARDED:
-  // a customer's words can't withdraw the person's tasks.
-  const waitingNow = forwarded ? [] : (await waitingForConfirm(tenantId, user.id)).all;
+  // a customer's words can't withdraw the person's tasks. Read BEFORE the typing timer starts, and a failed read is
+  // "nothing waiting" — it must never stop the answer, or leave the timer running (it hung a test run in CI).
+  let waitingNow: Awaited<ReturnType<typeof waitingForConfirm>>["all"] = [];
+  if (!forwarded) {
+    try {
+      waitingNow = (await waitingForConfirm(tenantId, user.id)).all;
+    } catch (error) {
+      await logError("assistant-whatsapp", "reading waiting tasks failed", error instanceof Error ? error.name : "unknown").catch(() => {});
+    }
+  }
   let dropWaiting: number[] = [];
+  const typingCalls: Promise<unknown>[] = [];
+  const renew = setInterval(() => { typingCalls.push(showWhatsAppTyping(messageId)); }, TYPING_RENEW_MS);
   try {
     try {
       // A task asked for here is never thrown away. With the owner's switch on it

@@ -45,7 +45,9 @@ test("askCrm: the waiting list only on WhatsApp; drops handed back by number, wi
 
 test("WhatsApp: the list for the person's own words only — never a forwarded one; withdrawn said; the rest joins the new offer", () => {
   const wa = code("src/lib/assistantWhatsApp.ts");
-  assert.match(wa, /const waitingNow = forwarded \? \[\] : \(await waitingForConfirm\(tenantId, user\.id\)\)\.all;/);
+  assert.match(wa, /if \(!forwarded\) \{\s*try \{\s*waitingNow = \(await waitingForConfirm\(tenantId, user\.id\)\)\.all;/);
+  // Read before the typing timer starts: a failed read can never leave the timer running (it hung a CI run).
+  assert.ok(wa.indexOf("waitingNow = (await waitingForConfirm(") < wa.indexOf("const renew = setInterval("));
   assert.match(wa, /const withdrawnIds = dropWaiting\.map\(\(n\) => waitingNow\[n - 1\]\?\.id\)/);
   assert.match(wa, /↩️ \*Withdrawn\* — nothing was changed:/);
   assert.match(wa, /const carry = withdrawn\.length \? waitingNow\.map\(\(task\) => task\.id\)\.filter\(\(id\) => !withdrawnIds\.includes\(id\)\) : \[\];/);
