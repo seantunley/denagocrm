@@ -27,6 +27,13 @@ test("the QR brochure pack: brochure, price list, contact card, a call-back offe
   assert.deepEqual(validateFlow(chosen).filter((issue) => issue.severity === "error"), []);
 });
 
+test("review of #955: every new flow is a draft — the first one too; only Publish puts it live", () => {
+  const action = code("src/app/actions/flow.ts");
+  const fn = action.slice(action.indexOf("export async function createFlow"), action.indexOf("export async function saveFlow"));
+  assert.match(fn, /active: false,/);
+  assert.doesNotMatch(fn, /publishFlowSnapshot|count === 0/);
+});
+
 test("every delete in the bot builder asks first — a flow, a route, a QR code", () => {
   const page = code("src/app/(app)/bot-builder/page.tsx");
   assert.doesNotMatch(page, /<form action=\{deleteFlow\./);
