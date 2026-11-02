@@ -4,7 +4,7 @@ import { useState, useSyncExternalStore } from "react";
 import { useRouter } from "next/navigation";
 import { startAuthentication } from "@simplewebauthn/browser";
 import { Fingerprint } from "lucide-react";
-import { dropPasswordSignIn, markPasskeyOnThisDevice } from "@/lib/passkeyDevice";
+import { notePasskeySignIn } from "@/lib/passkeyDevice";
 
 /** Passkey support never changes while the page is open: nothing to subscribe to. */
 const noSubscribe = () => () => {};
@@ -41,9 +41,9 @@ export function usePasskeySignIn(pwa: boolean) {
       });
       const data = await verifyRes.json();
       if (!verifyRes.ok) throw new Error(data.error ?? "Passkey sign-in failed.");
-      // This device really does hold a passkey: show it first next time.
-      markPasskeyOnThisDevice();
-      dropPasswordSignIn();
+      // This page cannot tell WHO just signed in; the app can, and flags that
+      // account's passkey on this device when it loads (AddPasskeyPrompt).
+      notePasskeySignIn();
       router.replace("/");
       router.refresh();
     } catch (e) {

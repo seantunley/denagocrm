@@ -133,7 +133,8 @@ export default async function AppLayout({
           flow canvas or a text input has already claimed the click. */}
       <AppContextMenu />
       <SessionKeeper />
-      <AddPasskeyPrompt />
+      {/* Their own email, so passkey flags on this device are per account. */}
+      <AddPasskeyPrompt email={user.email} />
       {/* Resolved here, in the SERVER layout, for the same reason `brand` is:
           getSetting reads the tenant from the request scope, which a client
           component has no access to. */}

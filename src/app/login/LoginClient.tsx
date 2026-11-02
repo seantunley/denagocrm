@@ -8,13 +8,14 @@ import { ArrowRight, Check, Eye, EyeOff, Fingerprint, LoaderCircle, LockKeyhole,
 import { APP_VERSION } from "@/lib/version";
 import PasskeyLoginButton, { usePasskeySignIn } from "@/components/PasskeyLoginButton";
 import {
-  dropPasswordSignIn,
+  dropSignInNote,
   forgetEmail,
+  hasPasskeyHere,
   notePasswordSignIn,
-  passkeyOnThisDevice,
   platformAuthenticatorAvailable,
   rememberedEmail,
 } from "@/lib/passkeyDevice";
+import { readCodeEntry, shouldAutoSubmit, type CodeEntry, type CodeEntryMode } from "@/lib/secondFactorEntry";
 import { login, requestEmailCode, type LoginState, verifySecondFactor } from "./actions";
 import { requestPasswordReset, resetPasswordWithCode, type ResetState } from "./resetActions";
 import type { LoginBrand } from "@/lib/loginBrand";
@@ -52,15 +53,27 @@ function LoginInner({ brand }: { brand: LoginBrand }) {
   const storedEmail = useSyncExternalStore(noSubscribe, rememberedEmail, () => "");
   const [typedEmail, setTypedEmail] = useState<string | null>(null);
   const [rememberChoice, setRememberChoice] = useState<boolean | null>(null);
+  const [notYou, setNotYou] = useState(false);
   const email = typedEmail ?? storedEmail;
   const remember = rememberChoice ?? Boolean(storedEmail);
 
-  // Passkey first where this device has a fingerprint/face/PIN reader AND either
-  // has signed in with (or registered) a passkey before, or is the installed app.
-  // Decided on the device only. Never asks the server: "does this email have a
-  // passkey?" would tell a stranger the account exists.
-  const usedPasskeyHere = useSyncExternalStore(noSubscribe, passkeyOnThisDevice, () => false);
+  // React resets the form after every attempt (form.reset()). A text box comes
+  // through that unchanged, because React mirrors its value into defaultValue.
+  // A checkbox does not: React sets defaultChecked only on first render, so
+  // after a failed attempt the box could show unticked while `remember` was
+  // still true, and the next sign-in kept an email the screen said it would
+  // not. Keep the box's reset value equal to the state.
+  const rememberRef = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    if (rememberRef.current) rememberRef.current.defaultChecked = remember;
+  }, [remember]);
+
+  // WHOSE sign-in this is, as far as the device can tell: the remembered email
+  // (until "Not you?"). Not the email being typed: the form must not jump or
+  // fold under someone's fingers mid-word.
+  const account = notYou ? "" : storedEmail;
   const [platformReader, setPlatformReader] = useState(false);
+  const [flaggedAccount, setFlaggedAccount] = useState("");
   useEffect(() => {
     let live = true;
     void platformAuthenticatorAvailable().then((available) => {
@@ -70,13 +83,29 @@ function LoginInner({ brand }: { brand: LoginBrand }) {
       live = false;
     };
   }, []);
-  const passkeyFirst = platformReader && (usedPasskeyHere || isPwa);
+  useEffect(() => {
+    if (!account) return;
+    let live = true;
+    void hasPasskeyHere(account).then((yes) => {
+      if (live && yes) setFlaggedAccount(account);
+    });
+    return () => {
+      live = false;
+    };
+  }, [account]);
+  const accountUsedPasskey = Boolean(account) && flaggedAccount === account;
+
+  // Passkey first where this device has a fingerprint/face/PIN reader AND either
+  // THIS account has signed in with (or registered) a passkey here, or this is
+  // the installed app. Decided on the device only, per account: never a server
+  // question about an email, which would tell a stranger the account exists.
+  const passkeyFirst = platformReader && (accountUsedPasskey || isPwa);
   // On a phone (any width in the installed app) the password form folds behind
-  // "Use password instead" — but ONLY where a passkey has worked here before.
-  // A phone that merely supports passkeys may have none, and then the password
-  // is the only way in.
+  // "Use password instead", but ONLY for an account whose passkey has worked
+  // here. A phone that merely supports passkeys may have none for this person,
+  // and then the password is the only way in.
   const [wantsPassword, setWantsPassword] = useState(false);
-  const foldPassword = passkeyFirst && usedPasskeyHere && !wantsPassword && !state?.error;
+  const foldPassword = passkeyFirst && accountUsedPasskey && !wantsPassword && !state?.error;
 
   // A remembered email means the password is the next thing to type.
   useEffect(() => {
@@ -87,7 +116,7 @@ function LoginInner({ brand }: { brand: LoginBrand }) {
   // forget the note that a password sign-in was on its way.
   useEffect(() => {
     if (!state?.error) return;
-    dropPasswordSignIn();
+    dropSignInNote();
     passwordRef.current?.focus();
   }, [state]);
 
@@ -196,6 +225,7 @@ function LoginInner({ brand }: { brand: LoginBrand }) {
                     className={`${linkButton} -my-3 -mr-2 px-2 py-3`}
                     onClick={() => {
                       forgetEmail();
+                      setNotYou(true);
                       setTypedEmail("");
                       setRememberChoice(false);
                       emailRef.current?.focus();
@@ -254,6 +284,7 @@ function LoginInner({ brand }: { brand: LoginBrand }) {
                   className="flex min-h-11 cursor-pointer items-center gap-2 text-xs text-slate-500"
                 >
                   <input
+                    ref={rememberRef}
                     type="checkbox"
                     checked={remember}
                     onChange={(event) => setRememberChoice(event.target.checked)}
@@ -389,8 +420,32 @@ function TwoFactorStep({ methods, brand }: { methods: string[]; brand: LoginBran
   const [sending, setSending] = useState(false);
   const hasTotp = methods.includes("totp");
   const hasEmail = methods.includes("email");
+  const codeRef = useRef<HTMLInputElement>(null);
   const submitRef = useRef<HTMLButtonElement>(null);
-  const autoSubmit = useRef<number | undefined>(undefined);
+  // "code" (six digits, sends itself) or "backup" (never sends itself): see
+  // lib/secondFactorEntry.ts for why one box taking both burned attempts.
+  const [entry, setEntry] = useState<CodeEntry>({ mode: "code", value: "" });
+  const backup = entry.mode === "backup";
+
+  // Runs once the value is on screen, and clicks the real button, which is
+  // disabled while a check is running: it can never send twice.
+  useEffect(() => {
+    if (shouldAutoSubmit({ mode: entry.mode, value: entry.value })) submitRef.current?.click();
+  }, [entry.mode, entry.value]);
+
+  // A wrong code stays in the box, selected, so the next keystroke replaces it.
+  useEffect(() => {
+    if (!state?.error) return;
+    codeRef.current?.focus();
+    codeRef.current?.select();
+  }, [state]);
+
+  const switchTo = (mode: CodeEntryMode) => {
+    setEntry({ mode, value: "" });
+    codeRef.current?.focus();
+  };
+  const linkButton =
+    "flex min-h-11 w-full cursor-pointer items-center justify-center rounded-lg text-center text-xs text-slate-500 outline-none transition hover:text-slate-200 focus-visible:ring-2 focus-visible:ring-primary/50 disabled:cursor-wait";
 
   return (
     <Shell brand={brand}>
@@ -399,55 +454,68 @@ function TwoFactorStep({ methods, brand }: { methods: string[]; brand: LoginBran
       </div>
       <p className="mb-3 text-xs font-semibold uppercase tracking-[0.22em] text-primary">Identity check</p>
       <h1 className="text-3xl font-semibold tracking-[-0.04em] text-white">One more step.</h1>
-      <p className="mt-3 max-w-sm text-sm leading-6 text-slate-400">
-        {hasTotp ? "Enter the six-digit code from your authenticator app." : "Enter the code we sent to your email."}
+      <p aria-live="polite" className="mt-3 max-w-sm text-sm leading-6 text-slate-400">
+        {backup
+          ? "Enter one of the backup codes you saved when you set up your authenticator app. Each one works once."
+          : hasTotp
+            ? "Enter the six-digit code from your authenticator app."
+            : "Enter the code we sent to your email."}
       </p>
 
       <div className={`mt-8 ${state?.error ? "animate-shake" : ""}`}>
-        <form action={formAction} onSubmit={() => window.clearTimeout(autoSubmit.current)} className="space-y-4">
+        <form action={formAction} className="space-y-4">
           <input
+            ref={codeRef}
             name="code"
-            inputMode="numeric"
-            autoComplete="one-time-code"
+            value={entry.value}
+            onChange={(event) => setEntry(readCodeEntry(entry.mode, event.target.value))}
+            readOnly={pending}
+            inputMode={backup ? "text" : "numeric"}
+            autoComplete={backup ? "off" : "one-time-code"}
+            autoCapitalize={backup ? "characters" : "none"}
+            autoCorrect="off"
+            spellCheck={false}
             autoFocus
             maxLength={12}
-            aria-label="Verification code"
+            aria-label={backup ? "Backup code" : "Verification code"}
+            aria-invalid={state?.error ? true : undefined}
+            aria-describedby={state?.error ? "second-factor-error" : undefined}
             className="login-input h-14 text-center font-mono text-xl tracking-[0.42em]"
-            placeholder="••••••"
+            placeholder={backup ? "XXXX-XXXX" : "••••••"}
             required
-            onChange={(event) => {
-              // Six digits sends itself. After a short pause, not at once: a
-              // backup code (8 hex characters) typed without its hyphen can
-              // start with six digits, and an early send would spend one of the
-              // limited attempts on half a code. Clicking the (disabled while
-              // pending) button means it can never send twice.
-              window.clearTimeout(autoSubmit.current);
-              if (/^\d{6}$/.test(event.target.value.trim())) {
-                autoSubmit.current = window.setTimeout(() => submitRef.current?.click(), 600);
-              }
-            }}
           />
-          {state?.error && <p role="alert" className="text-sm text-red-300">{state.error}</p>}
+          {state?.error && <p role="alert" id="second-factor-error" className="text-sm text-red-300">{state.error}</p>}
           <button ref={submitRef} type="submit" className="login-submit" disabled={pending}>
             {pending ? "Verifying…" : "Verify and continue"}
             {pending ? <LoaderCircle className="size-4 animate-spin" /> : <ArrowRight className="size-4" />}
           </button>
+          {/* Backup codes come with the authenticator app (actions/security.ts). */}
+          {hasTotp && !backup && (
+            <button type="button" onClick={() => switchTo("backup")} className={linkButton}>
+              Use a backup code instead
+            </button>
+          )}
+          {backup && (
+            <button type="button" onClick={() => switchTo("code")} className={linkButton}>
+              {hasTotp ? "Use your authenticator code instead" : "Use the emailed code instead"}
+            </button>
+          )}
           {hasEmail && (
             <button
               type="button"
               disabled={sending}
               onClick={async () => {
+                switchTo("code");
                 setSending(true);
                 await requestEmailCode();
                 setSent(true);
                 setSending(false);
               }}
-              className="w-full cursor-pointer py-2 text-center text-xs text-slate-500 transition hover:text-slate-200 disabled:cursor-wait"
+              className={linkButton}
             >
               {sending ? "Sending…" : sent ? "Code sent — check your inbox" : hasTotp ? "Use an email code instead" : "Resend email code"}
             </button>
           )}
-          {hasTotp && <p className="text-center text-[11px] text-slate-600">Backup codes work here too.</p>}
         </form>
       </div>
     </Shell>

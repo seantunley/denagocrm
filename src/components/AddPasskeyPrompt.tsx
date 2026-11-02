@@ -4,38 +4,44 @@ import { useEffect, useState } from "react";
 import { Fingerprint, X } from "lucide-react";
 import {
   defaultPasskeyNickname,
-  dontAskForPasskey,
-  passkeyOnThisDevice,
+  hasPasskeyHere,
+  markPasskeyHere,
   platformAuthenticatorAvailable,
+  promptSilencedFor,
   registerPasskey,
-  settlePasswordSignIn,
-  stopAskingForPasskey,
+  settleSignIn,
+  silencePromptFor,
 } from "@/lib/passkeyDevice";
 
 /**
  * "Add a passkey for next time?" — offered once, right after a PASSWORD
- * sign-in, on a device with a fingerprint/face/PIN reader that has no passkey
- * of theirs yet. A corner card, never a modal: the person came in to work.
+ * sign-in, on a device with a fingerprint/face/PIN reader where THIS account
+ * has no passkey yet. A corner card, never a modal: the person came in to work.
  *
- * Reaching this (signed-in) layout is also what proves the password sign-in
- * worked, so this is where "remember my email" is finally written or cleared.
+ * Reaching this (signed-in) layout is also what proves the sign-in worked, and
+ * this is the first place that knows WHOSE it was (`email`, from the session).
+ * So this is where "remember my email" is finally written or cleared, and where
+ * a passkey sign-in is recorded against the account that made it.
  */
-export default function AddPasskeyPrompt() {
+export default function AddPasskeyPrompt({ email }: { email: string }) {
   const [show, setShow] = useState(false);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
 
+  // The note is one-shot, so there is deliberately no "cancelled" guard: under
+  // React's dev double-run the first run consumes the note and must still be
+  // the one that shows the card. (A real unmount makes setShow a no-op.)
   useEffect(() => {
-    if (!settlePasswordSignIn()) return;
-    if (passkeyOnThisDevice() || dontAskForPasskey()) return;
-    let live = true;
-    void platformAuthenticatorAvailable().then((available) => {
-      if (live && available) setShow(true);
-    });
-    return () => {
-      live = false;
-    };
-  }, []);
+    const how = settleSignIn();
+    if (how === "passkey") void markPasskeyHere(email);
+    if (how !== "password") return;
+    void (async () => {
+      // All per account: one person's passkey or "don't ask" on a shared
+      // computer says nothing about the next person's.
+      if ((await hasPasskeyHere(email)) || (await promptSilencedFor(email))) return;
+      if (await platformAuthenticatorAvailable()) setShow(true);
+    })();
+  }, [email]);
 
   if (!show) return null;
 
@@ -92,7 +98,7 @@ export default function AddPasskeyPrompt() {
           <button
             type="button"
             onClick={() => {
-              stopAskingForPasskey();
+              void silencePromptFor(email);
               setShow(false);
             }}
             className="rounded px-1 text-xs text-slate-500 outline-none transition hover:text-slate-200 focus-visible:ring-2 focus-visible:ring-primary/40"
