@@ -241,6 +241,15 @@ export function stageFacts(stage: { name: string; staleAfterDays: number | null 
   };
 }
 
+/**
+ * How far past its stage's time limit a deal is, in days (negative = within it) — "most stuck" for stuck_deals.
+ * A stage with no limit counts its days against 14.
+ */
+export function overLimit(enteredAt: Date, staleAfterDays: number | null, now: Date): number {
+  const days = Math.floor((now.getTime() - enteredAt.getTime()) / 86_400_000);
+  return days - (staleAfterDays && staleAfterDays > 0 ? staleAfterDays : 14);
+}
+
 /** The last word each way, and who is waiting on whom. */
 export function conversationFacts(lastIn: { at: Date; channel: string } | null, lastOut: { at: Date; channel: string } | null, lastContactAt: Date | null, now: Date) {
   const who = waitingOn(lastIn, lastOut);

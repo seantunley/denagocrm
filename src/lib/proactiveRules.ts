@@ -154,6 +154,11 @@ function clip(text: string, max: number): string {
  */
 /** Each person's brief time, "HH:MM" Johannesburg, or "off". Unset = the default. */
 export const briefPersonKey = (userId: string) => `ASSISTANT_BRIEF_AT:${userId}`;
+/** Each person's own "stuck deals on Mondays" in their morning brief (round 2 item 7): "on" | "off"; unset = off. */
+export const mondayStuckKey = (userId: string) => `ASSISTANT_MONDAY_STUCK_FOR:${userId}`;
+/** Monday in Johannesburg. */
+export const isJohannesburgMonday = (now: Date) =>
+  new Intl.DateTimeFormat("en-ZA", { timeZone: "Africa/Johannesburg", weekday: "short" }).format(now) === "Mon";
 export const BRIEF_DEFAULT = "07:30";
 /** The times offered: the half hours from 06:00 to 10:00 — when the half-hourly job wakes. */
 export const BRIEF_TIMES = Array.from({ length: 9 }, (_, i) => `${String(6 + Math.floor(i / 2)).padStart(2, "0")}:${i % 2 ? "30" : "00"}`);
@@ -222,7 +227,7 @@ export function briefDueKey(now: Date, at: string): string | null {
  * What DAX is asked. Alerts held overnight are given as facts (their words, without the links) so the brief
  * leads with them instead of them arriving one by one at 08:00.
  */
-export function briefQuestion(now: Date, heldOvernight: readonly string[]): string {
+export function briefQuestion(now: Date, heldOvernight: readonly string[], opts: { mondayStuck?: boolean } = {}): string {
   const day = new Intl.DateTimeFormat("en-ZA", { weekday: "long", day: "numeric", month: "long", timeZone: "Africa/Johannesburg" }).format(now);
   const overnight = heldOvernight
     .map((text) => text.split("\n")[0].trim())
@@ -236,6 +241,10 @@ export function briefQuestion(now: Date, heldOvernight: readonly string[]): stri
     "3. The three things that matter most today, each with one line on why.",
     "If the daily brief has a workshop section, add a short Workshop part after 2 — overdue services, stuck job cards, warranties running out — a line each, at most three of each. No workshop section, no Workshop part.",
     "If the daily brief has nurture reviews, add a short Nurture part: each parked deal with its link — why it was parked, what they wanted, the trigger, and \"review due today\" or how many days overdue — and offer to reactivate it. None, no Nurture part.",
+    // Mondays, for those who asked for it (round 2 item 7): their most-stuck deals, each with its top reason.
+    ...(opts.mondayStuck && isJohannesburgMonday(now)
+      ? ["It is Monday: run stuck_deals and add a short Stuck deals part — each deal with its link and its top reason, as stated there (for an owner or team manager, the team's as a second short list). None, no such part."]
+      : []),
     "Only what is mine. No greeting, no sign-off.",
   ].join("\n");
 }
