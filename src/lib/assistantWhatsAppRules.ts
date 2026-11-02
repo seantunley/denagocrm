@@ -114,6 +114,32 @@ export const typedYes = (text: string) =>
   /^\s*(yes( please)?|yep|yeah|ja|y|ok(ay)?|confirm|confirmed|go ahead|do it|correct|👍)\s*[.!]*\s*$/iu.test(text);
 
 /**
+ * A reply as words only: punctuation a transcript (or a thumb) adds — "Yes, please." — taken out, so a spoken
+ * yes is judged exactly like a typed one (Sean, 2026-11-02: voice-first, for staff driving or on site).
+ */
+export const asTypedReply = (text: string) => text.normalize("NFKC").replace(/[,.!?…;:]+/g, " ").replace(/\s+/g, " ").trim();
+
+/**
+ * YES — typed or spoken: a typed yes, or a short run of yes-words ("Yeah, go ahead.", "Yes please, do it.") and
+ * NOTHING else. Thanks is not a yes: "okay, thanks" acknowledges an answer, and must never confirm a task with it.
+ * "Yes, but make it white" is not a yes either — it goes to DAX as the change it is.
+ */
+export function saidYes(text: string): boolean {
+  const words = asTypedReply(text);
+  if (typedYes(words)) return true;
+  return /^(?:(?:yes|yep|yeah|ja|ok(?:ay)?|sure|confirmed?|go ahead|do it|correct|please)\s*){1,4}$/iu.test(words) && !/^(?:please\s*)+$/iu.test(words);
+}
+
+/**
+ * YES TO ALL — "yes to all", "all of them", "confirm them all", "do all three", "ja almal" — and nothing else: every
+ * task in the LAST set DAX offered, each still shown on its own above (a debrief gives several at once).
+ */
+export function saidYesToAll(text: string): boolean {
+  const all = "(?:all(?: of them)?(?: (?:three|four|3|4))?|them all|almal)";
+  return new RegExp(`^(?:(?:yes|yeah|yep|ja|ok(?:ay)?|sure) ){0,2}(?:(?:to|do|confirm|doen) )?${all}(?: please)?$`, "iu").test(asTypedReply(text));
+}
+
+/**
  * "2" as the second of the numbered options in DAX's last answer ("1. Yes, Werner Kilian — leave colour open /
  * 2. Yes, Werner Kilian — check gray first"): the option's words, so DAX reads what was chosen (Sean, 2026-10-24:
  * he replied "2" and DAX asked what he meant). Anything else, or a number with no such option, is unchanged.
@@ -164,6 +190,9 @@ export const WHATSAPP_CONFIRMABLE: ReadonlySet<string> = new Set([
   // attach_file / record_payment (2026-11-02): what was sent from this phone, filed on a record; money received on an
   // invoiced quote with its proof — every figure shown, the deliveries board's own checks, nothing to the customer.
   "attach_file", "record_payment",
+  // schedule_delivery (Sean, 2026-11-02, voice-first): a signed deal's delivery date booked or moved on the deliveries
+  // board — the board's own actions, the day shown first, nobody contacted.
+  "schedule_delivery",
 ]);
 
 /**
@@ -172,10 +201,22 @@ export const WHATSAPP_CONFIRMABLE: ReadonlySet<string> = new Set([
  * a customer's own forwarded message is recorded as they sent it.
  */
 export const FORWARDED_PREFIX = "[Forwarded message]";
-export function forwardedForDax(message: unknown, text: string): string {
+/** Did WhatsApp mark this message forwarded? */
+export function isForwarded(message: unknown): boolean {
   const context = (message as { context?: { forwarded?: unknown; frequently_forwarded?: unknown } } | null)?.context;
-  return context?.forwarded === true || context?.frequently_forwarded === true ? `${FORWARDED_PREFIX} ${text}`.trim() : text;
+  return context?.forwarded === true || context?.frequently_forwarded === true;
 }
+export function forwardedForDax(message: unknown, text: string): string {
+  return isForwarded(message) ? `${FORWARDED_PREFIX} ${text}`.trim() : text;
+}
+/**
+ * A customer's VOICE NOTE, forwarded (Sean, 2026-11-02): transcribed and told to DAX as THEIR words — never the
+ * person's own question, never a "yes" to a waiting task. Answered in text: the summary and suggested reply are to
+ * read and copy.
+ */
+export const FORWARDED_VOICE_PREFIX = "[Forwarded voice note]";
+/** Room for what was forwarded: a customer's message or voice note is kept whole, not cut at QUESTION_CHARS. */
+export const FORWARDED_CHARS = 4000;
 
 /**
  * A contact shared from the phone (WhatsApp message type "contacts") → the question DAX gets, or null when
@@ -218,6 +259,12 @@ export const confirmButtonId = (pendingId: string) => `daxc:${pendingId}`;
 /** A tapped button's id → the pending row it names, or null when it is not a Confirm button of ours. */
 export function parseConfirmId(choiceId: string | null | undefined): string | null {
   const match = /^daxc:(c[a-z0-9]{20,40})$/.exec(String(choiceId ?? ""));
+  return match ? match[1] : null;
+}
+/** "Confirm all": names ONE pending row of the set — the set is every row offered with it (same createdAt). */
+export const confirmAllButtonId = (pendingId: string) => `daxa:${pendingId}`;
+export function parseConfirmAllId(choiceId: string | null | undefined): string | null {
+  const match = /^daxa:(c[a-z0-9]{20,40})$/.exec(String(choiceId ?? ""));
   return match ? match[1] : null;
 }
 

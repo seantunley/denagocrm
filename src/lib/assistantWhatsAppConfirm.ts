@@ -13,6 +13,7 @@ import {
   CRM_CARD_TTL_MS,
   PENDING_ACTION_TTL_MS,
   WHATSAPP_CONFIRMABLE,
+  confirmAllButtonId,
   confirmButtonId,
   confirmMessages,
   splitForWhatsApp_cards,
@@ -58,6 +59,10 @@ export async function offerConfirmations(tenantId: string, userId: string, waId:
     const elsewhere = on ? [...crmOnly] : [...cards];
     // Could have been confirmed here, but its Confirm button did not arrive.
     const unbuttoned = new Set<ActionCard>();
+    // ONE OFFER, ONE createdAt: "Confirm all" / "yes to all" means exactly the tasks offered together — never an
+    // older offer still waiting (confirmAllFromWhatsApp).
+    const offeredAt = new Date();
+    const offered: string[] = [];
     for (const card of on ? confirmable : []) {
       // What will be shown, in full. Null: it cannot be shown whole, so it gets no button.
       const messages = confirmMessages(card);
@@ -75,7 +80,7 @@ export async function offerConfirmations(tenantId: string, userId: string, waId:
         continue;
       }
       const pending = await basePrisma.assistantPendingAction.create({
-        data: { tenantId, userId, card: card as object, expiresAt: new Date(Date.now() + PENDING_ACTION_TTL_MS) },
+        data: { tenantId, userId, card: card as object, createdAt: offeredAt, expiresAt: new Date(Date.now() + PENDING_ACTION_TTL_MS) },
         select: { id: true },
       });
       const sent = await sendWhatsAppButtons(waId, messages.body, [{ id: confirmButtonId(pending.id), title: "Confirm" }]);
@@ -91,6 +96,15 @@ export async function offerConfirmations(tenantId: string, userId: string, waId:
         unbuttoned.add(card);
         elsewhere.push(card);
       }
+      if (sent.ok) offered.push(pending.id);
+    }
+    // ONE TAP FOR ALL (Sean, 2026-11-02, voice-first: a debrief gives several tasks at once, and the person may be
+    // driving). Each is shown above with its own Confirm; this confirms exactly those. A failed send costs nothing —
+    // the single buttons, and "yes to all", still work.
+    if (offered.length >= 2) {
+      const body = `That's ${offered.length} tasks, each shown above. Tap Confirm all to do all ${offered.length} — or reply "yes to all". Nothing changes until you do.`;
+      const all = await sendWhatsAppButtons(waId, body, [{ id: confirmAllButtonId(offered[0]), title: `Confirm all ${offered.length}` }]);
+      if (!all.ok) await logError("assistant-whatsapp", "confirm-all offer send failed");
     }
     if (elsewhere.length > 0) {
       // KEPT, not only named. These are done in the CRM — but the person has
@@ -265,4 +279,53 @@ export async function confirmFromWhatsApp(tenantId: string, user: PermissionUser
   // A quote it built: runAssistantAction has queued the PDF as an update for this
   // person, and the caller (handleStaffWhatsApp) sends what is waiting once this
   // returns. Nothing is sent to anyone from here beyond the line above.
+}
+
+/**
+ * CONFIRM ALL — the button, or "yes to all" typed or said (Sean, 2026-11-02: voice-first). Every task offered
+ * TOGETHER with `anchorId` (one offer shares one createdAt), or with the newest offer when there is no anchor; each
+ * one still waiting is confirmed exactly as its own Confirm would be — claimed once, run as this person, its own ✅
+ * or reason. Never an older offer, never a card saved for the CRM, never anyone else's.
+ */
+export async function confirmAllFromWhatsApp(tenantId: string, user: PermissionUser, waId: string, anchorId: string | null): Promise<void> {
+  if (!(await confirmingOnWhatsAppOn())) return say(waId, "Confirming on WhatsApp is switched off for this workspace — ask me in the CRM and confirm on the card.");
+  const now = new Date();
+  const anchor = anchorId
+    ? await basePrisma.assistantPendingAction.findFirst({ where: { id: anchorId, tenantId, userId: user.id, forCrm: false }, select: { createdAt: true } })
+    : await basePrisma.assistantPendingAction.findFirst({
+        where: { tenantId, userId: user.id, forCrm: false, confirmedAt: null, completedAt: null, failedAt: null, expiresAt: { gt: now } },
+        orderBy: { createdAt: "desc" },
+        select: { createdAt: true },
+      });
+  const rows = anchor
+    ? await basePrisma.assistantPendingAction.findMany({
+        where: { tenantId, userId: user.id, forCrm: false, createdAt: anchor.createdAt, confirmedAt: null, completedAt: null, failedAt: null, expiresAt: { gt: now } },
+        orderBy: { id: "asc" },
+        select: { id: true },
+      })
+    : [];
+  if (rows.length === 0) return say(waId, "Nothing from that set is waiting any more — each was done, or has expired. Ask me again if you still want something.");
+  // One that throws (the database, for a moment) does not stop the rest — and is said, not skipped silently.
+  for (const row of rows) {
+    await confirmFromWhatsApp(tenantId, user, waId, row.id).catch(async (error: unknown) => {
+      await logError("assistant-whatsapp", "confirm-all step threw", error instanceof Error ? error.name : "unknown").catch(() => {});
+      await say(waId, "One of these couldn't be checked just now — look at it in the CRM, or tap its own Confirm again.");
+    });
+  }
+}
+
+/** What waits for this person's Confirm here: how many in all, and the newest offer's tasks (in the order offered). */
+export async function waitingForConfirm(tenantId: string, userId: string): Promise<{ total: number; newest: { id: string; title: string }[] }> {
+  const rows = await basePrisma.assistantPendingAction.findMany({
+    where: { tenantId, userId, forCrm: false, confirmedAt: null, completedAt: null, failedAt: null, expiresAt: { gt: new Date() } },
+    orderBy: { createdAt: "desc" },
+    take: 12,
+    select: { id: true, createdAt: true, card: true },
+  });
+  const newestAt = rows[0]?.createdAt.getTime();
+  const newest = rows
+    .filter((row) => row.createdAt.getTime() === newestAt)
+    .sort((a, b) => (a.id < b.id ? -1 : 1))
+    .map((row) => ({ id: row.id, title: String((row.card as { title?: unknown } | null)?.title ?? "a task") }));
+  return { total: rows.length, newest };
 }
