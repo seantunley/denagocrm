@@ -170,6 +170,10 @@ export const matchPaymentArgs = z
     payer: z.string().trim().min(1).max(120).optional(),
   })
   .strict();
+/** Why ONE deal is stuck: ranked, dated, linked reasons (assistantStuck). */
+export const stuckArgs = z.object({ lead: z.string().trim().min(1).max(120) }).strict();
+/** What changed on the asker's own deals since their last question (assistantCatchUp); `since` replaces that. */
+export const catchUpArgs = z.object({ since: isoDay.optional() }).strict();
 /** What the business knows: products, prices, approved answers, competitors. */
 export const knowledgeArgs = z.object({ topic: z.string().trim().min(1).max(200) }).strict();
 /**
@@ -197,6 +201,8 @@ export const assistantStep = z.discriminatedUnion("tool", [
   z.object({ tool: z.literal("lead_brief"), args: leadBriefArgs }),
   z.object({ tool: z.literal("why"), args: whyArgs }),
   z.object({ tool: z.literal("match_payment"), args: matchPaymentArgs }),
+  z.object({ tool: z.literal("stuck"), args: stuckArgs }),
+  z.object({ tool: z.literal("catch_up"), args: catchUpArgs.default({}) }),
   z.object({ tool: z.literal("knowledge"), args: knowledgeArgs }),
   z.object({ tool: z.literal("recall"), args: recallArgs }),
   z.object({ tool: z.literal("playbook"), args: playbookArgs }),
@@ -257,6 +263,8 @@ export function planInstructions(ctx: PlanContext): string {
     '- find_activities: {"when":"overdue|today|today_and_overdue|this_week|upcoming|past" (required),"from":"YYYY-MM-DD","to":"YYYY-MM-DD","type":"<type>","assignedTo":"<person — theirs, or a meeting they attend>","search":"<words in the activity>","limit":<1-25>} — the calendar: calls, meetings, to-dos, test drives, events, and blocked time (personal items: leave, an appointment, admin time). "What is in my calendar / diary this week" → this_week with assignedTo: today and the next six days, blocked time included — say which dates that covers. "What does X have to do today / what\'s on their plate" → today_and_overdue (what\'s late still has to be done). "When is the next golf day / launch / service" → upcoming with search — events live here, not in knowledge. What HAPPENED ("what golf days did we have last month", "what was on 22 September") → "past" with from/to (one day: from = to) — past results include what was done, each marked planned or done.',
     '- lead_brief: {"lead":"<customer name, lead title or id>" (required)} — one lead in depth: details, recent messages both ways, quotes (viewed? signed?), activities, research. Use it for "what should I do with X", "where are we with X", or to look closer at a lead found earlier.',
     '- why: {"record":"<customer name, lead title, quote number (Q-1031) or id — the page\'s record id works too>" (required)} — WHY something happened on one record: its history, each event with its CAUSE as recorded (the person who did it, the journey and step, the chatbot and its handoff reason, lead routing, the customer\'s own action — or "not recorded"): stage moves and who made them, who it was assigned to and by what, why it was marked lost, why a customer got a message (or why a journey did not enrol them / stopped), why the bot handed a chat over. Use it for every "why did…" / "how come…" / "who moved / sent / assigned…" question about a record; it usually answers on its own ("then":"answer").',
+    '- stuck: {"lead":"<customer name, lead title or id>" (required)} — why ONE deal is stuck, with evidence: its blockers RANKED, each with its date and a link to the record it comes from (the customer waiting on us, an overdue follow-up, the quote unopened / declined / expiring, the deposit, time in the stage against its limit, no next step, the customer gone quiet), plus the facts behind them. Run it for every "why is X stuck / stalled / not moving / gone quiet / not closing"; it usually answers on its own ("then":"answer"). For "which of my deals are stuck", find them first (find_leads sort stage_age), then stuck on the worst.',
+    '- catch_up: {"since":"YYYY-MM-DD" (only when they name a day)} — what changed on THEIR OWN deals since their last question to you (at most 7 days back): new customer messages, quotes opened / opened again / signed, stage moves by someone else, new leads for them, and their overdue and due-today tasks. Run it for "catch me up", "what\'s changed", "what did I miss", "anything new (since…)"; it answers on its own ("then":"answer").',
     '- knowledge: {"topic":"<what to look up>" (required)} — the business\'s own knowledge: products and prices (each with its productId), approved answers (finance, warranty, policies…), company details, competitor intelligence. ALWAYS run this when the person asks for a quote or names a product to quote — a quote can only be built from products found here.',
     '- recall: {"query":"<words>" (required),"alternatives":["<other wordings>"],"lead":"<customer name, lead title or id>"} — this person\'s own earlier conversations with you (last 30 days). In alternatives, give up to 6 other wordings someone might have used for the same thing ("fleet" → "corporate order", "bulk"). When the question is about a customer, name them in lead.',
     '- playbook: {"name":"<playbook name>" (required)} — one of your learned playbooks in full, when the question uses its term or procedure ("hot leads" → the hot-lead playbook) — load it BEFORE searching so you search the right way. When your playbooks are already written out in full below, never load one: follow it and search straight away.',
@@ -377,6 +385,8 @@ const LOOKUP_STATUS: Record<string, string> = {
   sales_stats: "Working out the numbers",
   daily_brief: "Going through what needs attention",
   why: "Going through the record's history",
+  stuck: "Working out what's holding it up",
+  catch_up: "Catching you up",
   find_activities: "Checking activities",
   knowledge: "Checking what the business knows",
   recall: "Going back over earlier conversations",
@@ -503,6 +513,7 @@ export const ANSWER_RULES = [
   "Answer from the CRM results below and the business knowledge in them. Never add records, figures, names or dates that aren't there.",
   "Make it clear how sure each part is. Facts straight from the results need no label (cite them). Start a line that is your own judgement — a likely reason, a guess, a recommendation — with \"My read:\". Start a line about something the question needs that the results don't hold with \"Not in the CRM:\" and say what's missing. A figure you worked out yourself (a sum, an average) says so: \"about R 412 000 in total, adding up the three quotes\".",
   "If results were capped (truncated: true), say these are the top results, not all of them — but a TOTAL in the results is the real count: give it. If there are no results, say so plainly.",
+  "Why a deal is stuck (a stuck result): give its ranked reasons in their order, each with its date and link — they are the ONLY reasons you may state as fact; anything else you suspect is \"My read:\". Catching someone up (a catch_up result): say \"since <when>\", give only what is listed, and if nothing changed say so plainly.",
   "Answer what was asked, then stop. No disclaimers about what the CRM might not show (\"I can't tell whether he has other work…\") unless it changes what they should do. If the results answer the question indirectly, give that answer: a quote still in draft hasn't been sent, so it hasn't been opened.",
   "When several records matched a name and the results picked one, say which one you mean in a few words, and name the others only if it could have been them.",
   "Asked about a team (\"how's my team doing\", \"who needs help\") with per-salesperson figures in the results: coach, person by person, those who need it most first — what is slipping for them, with their figures, then one concrete next step for the manager as \"My read:\". One line for what's going well. Nobody the results don't list.",

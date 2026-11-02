@@ -322,24 +322,29 @@ export async function scheduleDelivery(quoteId: string, formData: FormData) {
     }
     const model = quote.lead?.product?.name ?? quote.items[0]?.description ?? "cart";
     const who = quoteBillTo(quote, await loadBillToFleet(prisma, quote.fleetId)).name;
-    const updated = await prisma.quote.updateMany({
-      where: { id: quoteId, tenantId },
-      data: { deliveryScheduledFor: when },
-    });
-    if (updated.count !== 1) refuse(QUOTE_GONE);
-    await prisma.activity.create({
-      data: {
-        type: "todo",
-        category: "workshop",
-        summary: `🚚 Delivery — ${model} to ${who}`,
-        note: `Fulfilment of quote Q-${quote.number}.`,
-        dueDate: when,
-        assignedToId: user.id,
-        createdById: user.id,
-        contactId: quote.contactId,
-        leadId: quote.leadId,
-        tenantId: await customerRecordTenantId({ contactId: quote.contactId, leadId: quote.leadId }),
-      },
+    const activityTenantId = await customerRecordTenantId({ contactId: quote.contactId, leadId: quote.leadId });
+    // BOOKED ONCE (review of #939): the day is claimed only while none is booked, and its workshop-calendar entry is
+    // made in the same transaction — two Schedules at once (two clicks, two DAX Confirms) make one booking, one entry.
+    await prisma.$transaction(async (tx) => {
+      const updated = await tx.quote.updateMany({
+        where: { id: quoteId, tenantId, deliveryScheduledFor: null, deliveredAt: null },
+        data: { deliveryScheduledFor: when },
+      });
+      if (updated.count !== 1) refuse("Delivery is already scheduled.");
+      await tx.activity.create({
+        data: {
+          type: "todo",
+          category: "workshop",
+          summary: `🚚 Delivery — ${model} to ${who}`,
+          note: `Fulfilment of quote Q-${quote.number}.`,
+          dueDate: when,
+          assignedToId: user.id,
+          createdById: user.id,
+          contactId: quote.contactId,
+          leadId: quote.leadId,
+          tenantId: activityTenantId,
+        },
+      });
     });
     await logAudit({
       action: "fulfilment.delivery_scheduled",

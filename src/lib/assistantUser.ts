@@ -60,6 +60,14 @@ const WEB_POLICY: RateLimitPolicy = { limit: 20, windowMs: 60 * 60 * 1000, block
 export async function assistantVoiceAllowed(userId: string): Promise<boolean> {
   return allowedUnder(rateLimitKey("assistant-voice", userId), "assistant-voice", userId, VOICE_POLICY);
 }
+/**
+ * A SPOKEN yes past the ask limit (review of #939): a tap or a typed yes needs no ask, so a driver's spoken one
+ * shouldn't either. Its own small allowance bounds the transcription it costs — it answers nothing else.
+ */
+const VOICE_CONFIRM_POLICY: RateLimitPolicy = { limit: 20, windowMs: 60 * 60 * 1000, blockMs: 30 * 60 * 1000 };
+export async function assistantVoiceConfirmAllowed(userId: string): Promise<boolean> {
+  return allowedUnder(rateLimitKey("assistant-voice-confirm", userId), "assistant-voice-confirm", userId, VOICE_CONFIRM_POLICY);
+}
 export async function assistantImageAllowed(userId: string): Promise<boolean> {
   return allowedUnder(rateLimitKey("assistant-image", userId), "assistant-image", userId, IMAGE_POLICY);
 }

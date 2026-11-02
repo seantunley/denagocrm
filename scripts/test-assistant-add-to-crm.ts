@@ -426,6 +426,43 @@ async function main() {
       check("after the deposit, a later payment is recorded on the statement, its proof filed on the quote", nextCard?.deposit === false && !!done?.ok && (await payments()) === 1 && (await proofs()) === 2, JSON.stringify({ next, done }));
       const replay = nextCard ? await runAsSession(repSession, () => scoped(() => runAssistantAction(nextCard))) : null;
       check("…and Confirm again records and files nothing more (the card's key, and the proof's own)", !!replay?.ok && /proof filed$/.test(replay.success ?? "") && (await payments()) === 1 && (await proofs()) === 2 && (await stillHeld(proof2)) === 1, JSON.stringify(replay));
+
+      // A DELIVERY DAY (voice-first, 2026-11-02: "delivery next Tuesday"): booked through the deliveries board, then
+      // moved — nobody contacted, never booked twice, and a day moved by someone else since is not overwritten.
+      const dayFromNow = (days: number) => new Date(Date.now() + 2 * 3_600_000 + days * 86_400_000).toISOString().slice(0, 10);
+      const deliveryCard = async (date: string) =>
+        (await cardsFor({ type: "schedule_delivery", quote: `Q-${QUOTE_NO}`, date }, null)).cards.find((c): c is Extract<ActionCard, { kind: "schedule_delivery" }> => c.kind === "schedule_delivery");
+      const deliveryOn = async () => {
+        const q = await basePrisma.quote.findUnique({ where: { id: id("quote") }, select: { deliveryScheduledFor: true } });
+        return q?.deliveryScheduledFor ? new Date(q.deliveryScheduledFor.getTime() + 2 * 3_600_000).toISOString().slice(0, 10) : null;
+      };
+      const onCalendar = () => basePrisma.activity.findMany({ where: { tenantId: T, contactId: id("c-ben"), summary: { startsWith: "🚚 Delivery" } }, select: { dueDate: true } });
+      const book = await deliveryCard(dayFromNow(7));
+      check("a delivery day: the card books it, and says nobody is contacted", book?.from === null && /^Book Q-\d+'s delivery for /.test(book.title) && /The customer is not contacted/.test(book.detail), JSON.stringify(book));
+      const booked = book ? await runAsSession(repSession, () => scoped(() => runAssistantAction(book))) : null;
+      check("Confirm books it on the deliveries board, with its workshop-calendar entry", !!booked?.ok && (await deliveryOn()) === dayFromNow(7) && (await onCalendar()).length === 1, JSON.stringify(booked));
+      const bookedAgain = book ? await runAsSession(repSession, () => scoped(() => runAssistantAction(book))) : null;
+      check("…Confirm again: already booked — no second calendar entry", !!bookedAgain?.ok && (await onCalendar()).length === 1, JSON.stringify(bookedAgain));
+      const sameDay = await cardsFor({ type: "schedule_delivery", quote: `Q-${QUOTE_NO}`, date: dayFromNow(7) }, null);
+      check("the day it is already booked for: no card, and it says so", sameDay.cards.length === 0 && /already booked/.test(sameDay.problems.join(" ")));
+      const staleMove = await deliveryCard(dayFromNow(10));
+      check("a new day: the card moves it from the day it shows", staleMove?.from === dayFromNow(7) && /^Move Q-\d+'s delivery from /.test(staleMove.title), JSON.stringify(staleMove));
+      // Someone moves it on the board before this card is confirmed: refused unchanged, their day kept.
+      await basePrisma.quote.update({ where: { id: id("quote") }, data: { deliveryScheduledFor: new Date(`${dayFromNow(9)}T00:00:00.000Z`) } });
+      const refusedMove = staleMove ? await runAsSession(repSession, () => scoped(() => runAssistantAction(staleMove))) : null;
+      check("…moved by someone else since: refused unchanged, their day kept", !!refusedMove && !refusedMove.ok && refusedMove.unchanged === true && (await deliveryOn()) === dayFromNow(9), JSON.stringify(refusedMove));
+      const move = await deliveryCard(dayFromNow(12));
+      const moved = move ? await runAsSession(repSession, () => scoped(() => runAssistantAction(move))) : null;
+      check("a fresh card moves it — the board's reschedule", !!moved?.ok && (await deliveryOn()) === dayFromNow(12), JSON.stringify(moved));
+      const past = await cardsFor({ type: "schedule_delivery", quote: `Q-${QUOTE_NO}`, date: "2020-01-01" }, null);
+      check("a day in the past: no card", past.cards.length === 0 && /in the past/.test(past.problems.join(" ")));
+      // TWO CONFIRMS AT ONCE (review of #939): one booking, one workshop entry — the board's own action claims the day
+      // only while none is booked, with its entry in the same transaction.
+      await basePrisma.quote.update({ where: { id: id("quote") }, data: { deliveryScheduledFor: null } });
+      await basePrisma.activity.deleteMany({ where: { tenantId: T, contactId: id("c-ben"), summary: { startsWith: "🚚 Delivery" } } });
+      const race = await deliveryCard(dayFromNow(14));
+      const both = race ? await Promise.all([0, 1].map(() => runAsSession(repSession, () => scoped(() => runAssistantAction(race))))) : [];
+      check("one card confirmed twice AT ONCE: one booking, one workshop entry", both.some((r) => r.ok) && (await deliveryOn()) === dayFromNow(14) && (await onCalendar()).length === 1, JSON.stringify(both));
     }
     const tooMuch = await cardsFor({ type: "record_payment", quote: `Q-${QUOTE_NO}`, amount: 500_000, method: "eft", receivedOn: today }, null);
     const tooMuchCard = tooMuch.cards.find((c): c is Extract<ActionCard, { kind: "record_payment" }> => c.kind === "record_payment");
