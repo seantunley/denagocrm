@@ -49,7 +49,12 @@ export type FlowNode =
   | { id: string; type: "knowledge"; query: string; saveAs?: string; noMatchText?: string; next?: string; failureNext?: string }
   | { id: string; type: "extract"; instruction: string; sourceVariable?: string; fields: string[]; failureText?: string; next?: string; failureNext?: string }
   | { id: string; type: "delay"; seconds: number; next?: string }
-  | { id: string; type: "subflow"; flowId: string; failureText?: string; next?: string; failureNext?: string }
+  /**
+   * `versionId` / `version`: the subflow version PINNED when the parent was published (pinSubflows) — so publishing a
+   * shared subflow later never changes a parent that is already live (review, 2026-11-02). Absent in a draft, and in
+   * versions published before pinning existed: those run the subflow's newest version, as they always did.
+   */
+  | { id: string; type: "subflow"; flowId: string; versionId?: string; version?: number; failureText?: string; next?: string; failureNext?: string }
   | { id: string; type: "booking"; text?: string; failureText?: string; action?: BookingAction; next?: string; failureNext?: string; unavailableNext?: string }
   | { id: string; type: "slots"; text: string; noneText?: string; failureText?: string; action?: SlotAction; next?: string; failureNext?: string; unavailableNext?: string }
   | { id: string; type: "journey"; journeyId: string; text?: string; failureText?: string; next?: string; failureNext?: string; unavailableNext?: string }
@@ -99,7 +104,8 @@ export type FlowCtx = {
   knowledgeAnswer?: (query: string, vars: Record<string, string>, nodeId: string) => Promise<KnowledgeOutcome>;
   extractData?: (input: { text: string; instruction: string; fields: string[]; vars: Record<string, string>; nodeId: string }) => Promise<ExtractOutcome>;
   httpRequest?: (input: { method: FlowHttpMethod; url: string; headers?: string; body?: string; vars: Record<string, string>; nodeId: string }) => Promise<HttpOutcome>;
-  loadSubflow?: (flowId: string) => Promise<Flow | null>;
+  /** The subflow to run: exactly `versionId` when the step is pinned, else the subflow's newest published version. */
+  loadSubflow?: (flowId: string, versionId?: string) => Promise<Flow | null>;
   /** The card a Send-contact-card node sends; null when this workspace cannot build one. */
   contactCard?: (staffUserId: string | undefined) => Promise<ContactCard | null>;
   /** Internal: a synchronous subflow works on the caller-supplied vars object. */
@@ -187,7 +193,7 @@ function startDelay(node: Extract<FlowNode, { type: "delay" }>, vars: Record<str
 async function runSubflowNode(node: Extract<FlowNode, { type: "subflow" }>, vars: Record<string, string>, input: FlowInput, ctx: FlowCtx): Promise<{ outcome: ActionOutcome; messages: OutMsg[]; handedOff?: boolean }> {
   if (!ctx.loadSubflow) return { outcome: { ok: false, reason: "Subflow execution is unavailable" }, messages: [] };
   if ((ctx.subflowDepth ?? 0) >= 4) return { outcome: { ok: false, reason: "Subflow nesting limit reached" }, messages: [] };
-  const childFlow = await ctx.loadSubflow(node.flowId);
+  const childFlow = await ctx.loadSubflow(node.flowId, node.versionId);
   if (!childFlow) return { outcome: { ok: false, reason: "Published subflow not found" }, messages: [] };
   // The child works on a COPY. Its writes reach the parent only after it ran to
   // completion — a child that failed or paused half-way must not leave half its
@@ -198,6 +204,20 @@ async function runSubflowNode(node: Extract<FlowNode, { type: "subflow" }>, vars
   if (child.session) return { outcome: { ok: false, reason: "Subflow paused for customer input; use only synchronous subflows here" }, messages: child.messages };
   Object.assign(vars, childVars);
   return { outcome: { ok: true }, messages: child.messages };
+}
+
+/**
+ * PIN EVERY SUBFLOW STEP to the subflow's newest published version — what a publish stores in the new version, so a
+ * live flow keeps running the subflow it was tested against until it is published again. A subflow with no published
+ * version is left as it is (publish validation refuses it anyway). Pure: `latest` maps flowId → its newest version.
+ */
+export function pinSubflows<T extends Flow>(flow: T, latest: ReadonlyMap<string, { id: string; version: number }>): T {
+  const nodes: Record<string, FlowNode> = {};
+  for (const [id, node] of Object.entries(flow.nodes)) {
+    const pin = node.type === "subflow" ? latest.get(node.flowId) : undefined;
+    nodes[id] = node.type === "subflow" && pin ? { ...node, versionId: pin.id, version: pin.version } : node;
+  }
+  return { ...flow, nodes };
 }
 
 export function evaluateCondition(condition: FlowCondition, vars: Record<string, string>): boolean {

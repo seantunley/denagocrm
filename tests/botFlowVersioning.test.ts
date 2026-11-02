@@ -30,7 +30,8 @@ test("publishing snapshots the draft and switches live state in one tenant trans
   assert.match(code, /const tenantId = await builderTenantId\(\);/);
   assert.match(code, /withTenantWrite\(async \(tx\) =>/);
   assert.match(code, /tx\.botFlowVersion\.create/);
-  assert.match(code, /definition: flow\.definition/);
+  // The draft as it is — with its subflow steps pinned to their newest published versions (flowSubflowPinning.test.ts).
+  assert.match(code, /definition: latest\.size \? JSON\.stringify\(pinSubflows\(JSON\.parse\(flow\.definition\) as Flow, latest\)\) : flow\.definition/);
   assert.match(code, /tx\.botFlowPublication\.upsert/);
   assert.match(code, /tenantId_channel: \{ tenantId, channel: flow\.channel \}/);
 });

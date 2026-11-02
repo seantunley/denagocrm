@@ -1,5 +1,5 @@
 import { prisma } from "./db";
-import { DEFAULT_FLOW, type Flow } from "./flow";
+import { DEFAULT_FLOW, pinSubflows, type Flow } from "./flow";
 import { withTenantWrite } from "./tenantWrite";
 import { flowErrors } from "./flowValidation";
 import { flowTenantWhere } from "./flowTenantScope";
@@ -189,13 +189,21 @@ export async function publishFlowSnapshot(
       _max: { version: true },
     });
     const version = (max._max.version ?? 0) + 1;
+    // PIN EVERY SUBFLOW to its newest published version, in the version only (the draft keeps tracking the latest):
+    // a shared subflow published later must not change this flow while it is live (review, 2026-11-02).
+    const subflowIds = [...new Set(Object.values(parsed.nodes).flatMap((n) => (n.type === "subflow" && n.flowId ? [n.flowId] : [])))];
+    const latest = new Map<string, { id: string; version: number }>();
+    if (subflowIds.length) {
+      const rows = await tx.botFlowVersion.findMany({ where: { tenantId, flowId: { in: subflowIds } }, orderBy: { version: "desc" }, select: { id: true, flowId: true, version: true } });
+      for (const row of rows) if (!latest.has(row.flowId)) latest.set(row.flowId, { id: row.id, version: row.version });
+    }
     const snapshot = await tx.botFlowVersion.create({
       data: {
         tenantId,
         flowId,
         channel: flow.channel,
         version,
-        definition: flow.definition,
+        definition: latest.size ? JSON.stringify(pinSubflows(JSON.parse(flow.definition) as Flow, latest)) : flow.definition,
         createdById: actorId ?? null,
       },
     });
