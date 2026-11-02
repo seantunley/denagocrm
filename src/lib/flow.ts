@@ -34,6 +34,14 @@ export type FlowNode =
   | { id: string; type: "capture"; text: string; variable: string; format?: CaptureFormat; next?: string }
   | { id: string; type: "captureFile"; text: string; variable: string; next?: string }
   | { id: string; type: "image"; url: string; caption?: string; next?: string }
+  /**
+   * A file the WORKSPACE owns (a general Documents upload — never one filed on a
+   * customer). `fileName` is a display label copied when it was picked; what is
+   * sent is resolved again, tenant-checked, at delivery. See botOutbox.sendProvider.
+   */
+  | { id: string; type: "document"; documentId: string; fileName?: string; caption?: string; next?: string }
+  /** The business's contact card, or one staff member's, built from the CRM at run time. */
+  | { id: string; type: "contactCard"; staffUserId?: string; next?: string }
   | { id: string; type: "answer"; text?: string; answerSource?: "pricelist" | "colours"; next?: string }
   | { id: string; type: "set"; variable: string; value: string; next?: string }
   | { id: string; type: "switch"; variable: string; cases: FlowSwitchCase[]; defaultNext?: string }
@@ -51,9 +59,13 @@ export type FlowNode =
   | { id: string; type: "end" };
 
 export type Flow = { start: string; nodes: Record<string, FlowNode> };
+/** A saveable contact card — WhatsApp sends it as a real contact; other channels as text. */
+export type ContactCard = { name: string; organization?: string; title?: string; phones: string[]; email?: string; website?: string; address?: string };
 export type OutMsg =
   | { type: "text"; text: string }
   | { type: "image"; url: string; caption?: string }
+  | { type: "document"; documentId: string; fileName?: string; caption?: string }
+  | { type: "contact"; card: ContactCard }
   | { type: "choice"; text: string; options: { id: string; label: string; description?: string }[] };
 export type FlowSession = { nodeId: string | null; vars: Record<string, string> };
 export type FlowInput = { text: string; choiceId?: string; fileUrl?: string };
@@ -83,6 +95,8 @@ export type FlowCtx = {
   extractData?: (input: { text: string; instruction: string; fields: string[]; vars: Record<string, string>; nodeId: string }) => Promise<ExtractOutcome>;
   httpRequest?: (input: { method: FlowHttpMethod; url: string; headers?: string; body?: string; vars: Record<string, string>; nodeId: string }) => Promise<HttpOutcome>;
   loadSubflow?: (flowId: string) => Promise<Flow | null>;
+  /** The card a Send-contact-card node sends; null when this workspace cannot build one. */
+  contactCard?: (staffUserId: string | undefined) => Promise<ContactCard | null>;
   /** Internal: a synchronous subflow works on the caller-supplied vars object. */
   mutateVars?: boolean;
   /** Internal recursion guard for nested subflows. */
@@ -383,6 +397,16 @@ export async function runFlow(flow: Flow, session: FlowSession, input: FlowInput
       messages.push({ type: "text", text: interpolate(node.text, vars) }); nodeId = node.next ?? null;
     } else if (node.type === "image") {
       messages.push({ type: "image", url: node.url, caption: node.caption ? interpolate(node.caption, vars) : undefined }); nodeId = node.next ?? null;
+    } else if (node.type === "document") {
+      if (node.documentId) messages.push({ type: "document", documentId: node.documentId, ...(node.fileName ? { fileName: node.fileName } : {}), ...(node.caption ? { caption: interpolate(node.caption, vars) } : {}) });
+      nodeId = node.next ?? null;
+    } else if (node.type === "contactCard") {
+      // No card (nothing configured, or the staff member left) sends nothing and
+      // carries on: the rest of the welcome still goes, and analytics records why.
+      const card = ctx.contactCard ? await ctx.contactCard(node.staffUserId || undefined) : null;
+      ctx.recordAction?.(node.id, "contact_card", Boolean(card));
+      if (card) messages.push({ type: "contact", card });
+      nodeId = node.next ?? null;
     } else if (node.type === "captureFile") {
       messages.push({ type: "text", text: interpolate(node.text, vars) }); return { messages, session: { nodeId: node.id, vars }, handedOff: false };
     } else if (node.type === "answer") {

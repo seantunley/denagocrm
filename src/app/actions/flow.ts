@@ -5,7 +5,8 @@ import { redirect } from "next/navigation";
 import { prisma } from "@/lib/db";
 import { requireTenantOwner } from "@/lib/auth";
 import { logAudit } from "@/lib/audit";
-import { DEFAULT_FLOW } from "@/lib/flow";
+import { DEFAULT_FLOW, type Flow } from "@/lib/flow";
+import { flowDocumentIssues } from "@/lib/flowDocuments";
 import { flowTemplate } from "@/lib/flowTemplates";
 import { publishFlowSnapshot } from "@/lib/flowPublishing";
 import { FlowPublishValidationError } from "@/lib/flowValidationServer";
@@ -69,6 +70,11 @@ export async function saveFlow(
     }
     const f = parsed as { start?: string; nodes?: Record<string, unknown> };
     if (!f.start || !f.nodes || !f.nodes[f.start]) return { error: "Flow needs a valid start node." };
+    // A Send-a-document step may only name this workspace's own general files —
+    // refused here at save, again at publish, and again when it is sent.
+    if ((await flowDocumentIssues(parsed as Flow, await builderTenantId())).some((issue) => issue.code === "document.unavailable")) {
+      return { error: "A “Send a document” step points at a file this workspace can't send. Choose one of your own documents." };
+    }
 
     const expected = new Date(expectedUpdatedAt);
     // No unfenced path. An optional stamp meant the server still allowed a caller to

@@ -17,6 +17,8 @@ import { cancelBotBooking, lookupBotBooking, rescheduleBotBooking } from "./botB
 import { matchByPhone, waDigits } from "./whatsapp";
 import { enrollEntityInJourney } from "./journeyDirectEnrollment";
 import { flowRuntimeTools } from "./flowRuntimeTools";
+import { flowContactCard } from "./flowContactCard";
+import { runtimeFlowTenantId } from "./flowScope";
 
 type Match = { contactId: string | null; leadId: string | null };
 import type { ActionOutcome } from "./flow";
@@ -146,6 +148,8 @@ export function crmActions(source: string, match: Match) {
     // half lives in flowRuntimeTools so the simulator can supply non-networking
     // stand-ins for exactly the same FlowCtx surface.
     ...flowRuntimeTools(),
+    // The conversation's own workspace (the channel scope), the same one the flow came from.
+    contactCard: (staffUserId: string | undefined) => flowContactCard(runtimeFlowTenantId(), staffUserId),
     availableSlots: () => availableSlots(),
     bookSlot: async (slotId: string, vars: Record<string, string>, nodeId: string): Promise<{ ok: boolean; label?: string }> => {
       const [date, time] = slotId.split("_");

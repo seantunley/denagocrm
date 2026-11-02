@@ -90,6 +90,8 @@ function nodeLabel(node: FlowNode | undefined, nodeId: string): string {
   if (node.type === "journey") return `Journey: ${node.journeyId}`;
   if (node.type === "condition") return `Condition: ${node.condition.variable} ${node.condition.operator}`;
   if (node.type === "image") return node.caption?.trim().slice(0, 70) || "Image";
+  if (node.type === "document") return `Document: ${node.fileName || "file"}`.slice(0, 70);
+  if (node.type === "contactCard") return node.staffUserId ? "Contact card (staff member)" : "Contact card";
   if (node.type === "ai") return "AI conversation";
   return "End";
 }

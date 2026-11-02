@@ -26,6 +26,8 @@ import { currentTenantScope } from "./tenantScope";
 import { distinctIdentities } from "./botBookingIdentity";
 import { whatsappSendResult, whatsappTransportFailure, type WhatsAppSendResult } from "./deliveryReceipts";
 import { recordOutboundFailure, recordOutboundMessage, type OutboundRecord } from "./outboundMessageLog";
+import { whatsappContactsMessage } from "./flowMedia";
+import type { ContactCard } from "./flow";
 
 /**
  * Every outbound call is bounded. Node fetch has NO default timeout, so an
@@ -365,6 +367,24 @@ export async function sendWhatsAppImage(toDigits: string, url: string, caption?:
   if (!creds) return { ok: false, error: "WhatsApp is not configured." };
   // WhatsApp downloads the image itself: a private file gets a short-lived signed link.
   return postWhatsAppMessage(creds, { to: toDigits, type: "image", image: { link: await shareableFileUrl(url), ...(caption ? { caption } : {}) } });
+}
+
+/**
+ * A chatbot flow's document, by link. The caller passes the signed, expiring
+ * relay URL minted for THIS attempt (attachmentUrlForDelivery) — never a stored
+ * or permanent one — and Meta fetches it within seconds.
+ */
+export async function sendWhatsAppDocumentLink(toDigits: string, url: string, filename: string, caption?: string): Promise<WhatsAppSendResult> {
+  const creds = await waCredentials();
+  if (!creds) return { ok: false, error: "WhatsApp is not configured." };
+  return postWhatsAppMessage(creds, { to: toDigits, type: "document", document: { link: url, filename, ...(caption ? { caption: caption.slice(0, 1024) } : {}) } });
+}
+
+/** A saveable contact card (Meta `contacts` message). */
+export async function sendWhatsAppContact(toDigits: string, card: ContactCard): Promise<WhatsAppSendResult> {
+  const creds = await waCredentials();
+  if (!creds) return { ok: false, error: "WhatsApp is not configured." };
+  return postWhatsAppMessage(creds, whatsappContactsMessage(toDigits, card));
 }
 
 /**

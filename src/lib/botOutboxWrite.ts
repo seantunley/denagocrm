@@ -20,6 +20,11 @@ function storedMessages(channel: string, messages: OutMsg[]): OutMsg[] {
     if ((channel === "messenger" || channel === "instagram") && message.type === "image" && message.caption) {
       out.push({ type: "image", url: message.url });
       out.push({ type: "text", text: message.caption });
+    } else if (channel === "messenger" && message.type === "document" && message.caption) {
+      // Messenger file attachments carry no caption. Instagram has no file
+      // message at all, so its fallback text keeps the caption instead.
+      out.push({ ...message, caption: undefined });
+      out.push({ type: "text", text: message.caption });
     } else out.push(message);
   }
   return out;
