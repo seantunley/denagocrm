@@ -14,7 +14,8 @@ loader._load = function (this: unknown, request: string, parent: unknown, isMain
   if (request === "server-only") return {};
   return realLoad.call(this, request, parent, isMain);
 } as Loader;
-const { DEFAULT_TTS_MODEL, MAX_KEYTERMS, TTS_MODELS, sttKeyterms, ttsModelFor } = createRequire(import.meta.url)("../src/lib/elevenlabs.ts") as typeof import("../src/lib/elevenlabs");
+const { DEFAULT_TTS_MODEL, FALLBACK_TTS_MODEL, MAX_KEYTERMS, TTS_MODELS, isOggVoiceNote, modelTakesSpeed, sttKeyterms, ttsModelFor, ttsRequest } =
+  createRequire(import.meta.url)("../src/lib/elevenlabs.ts") as typeof import("../src/lib/elevenlabs");
 
 /**
  * DAX's voice (Sean, 2026-11-02: "the voicenotes don't flow… the text to speech sounds very mechanical"; "do all
@@ -53,22 +54,45 @@ test("pronunciations: the owner's list, whole words only, applied to everything 
   assert.equal(speakableText("Denago's Rover XL, not DenagoX.", { pronunciations: say }), "Deh-NAH-go's Rover extra large, not DenagoX.");
 });
 
-test("the voice model: v4 Turbo by default, the owner's choice otherwise — and Afrikaans always gets one that speaks it", () => {
-  assert.equal(DEFAULT_TTS_MODEL, "eleven_v4_turbo");
+test("the voice model: Eleven v4 by default (Sean: 'Change to ElevenLabs V4'), the owner's choice otherwise — Afrikaans always gets one that speaks it", () => {
+  assert.equal(DEFAULT_TTS_MODEL, "eleven_v4");
+  assert.equal(FALLBACK_TTS_MODEL, "eleven_v3");
   assert.ok(!TTS_MODELS.some((m) => m.id === "eleven_turbo_v2_5"), "the deprecated old default is not offered");
-  assert.equal(ttsModelFor(null, "en"), "eleven_v4_turbo");
-  assert.equal(ttsModelFor("eleven_turbo_v2_5", "en"), "eleven_v4_turbo", "a saved deprecated model is replaced");
+  assert.ok(!TTS_MODELS.some((m) => m.id === "eleven_v4_turbo"), "v4 Turbo runs only on the dialogue WebSocket — not offered (review of #935)");
+  assert.equal(ttsModelFor(null, "en"), "eleven_v4");
+  assert.equal(ttsModelFor("eleven_turbo_v2_5", "en"), "eleven_v4", "a saved deprecated model is replaced");
   assert.equal(ttsModelFor("eleven_flash_v2_5", "en"), "eleven_flash_v2_5");
-  assert.equal(ttsModelFor("eleven_flash_v2_5", "af"), "eleven_v4_turbo", "Flash can't speak Afrikaans");
-  assert.equal(ttsModelFor("eleven_v4", "af"), "eleven_v4");
+  assert.equal(ttsModelFor("eleven_flash_v2_5", "af"), "eleven_v4", "Flash can't speak Afrikaans");
+  assert.equal(ttsModelFor("eleven_v3", "af"), "eleven_v3");
 });
 
-test("the request: voice settings, the language, a fixed seed — and a fallback model when the chosen one is refused", () => {
+test("each model is asked on ITS endpoint with only the settings it takes (review of #935)", () => {
+  // v4: the Text to Dialogue API — one input with our voice; stability and similarity only (no style, no speed).
+  const v4 = ttsRequest("eleven_v4", "voice123", "Hello.", "af", 1.1);
+  assert.equal(v4.url, "https://api.elevenlabs.io/v1/text-to-dialogue?output_format=opus_48000_64");
+  assert.deepEqual(v4.body, { inputs: [{ text: "Hello.", voice_id: "voice123" }], model_id: "eleven_v4", language_code: "af", seed: 20261102, settings: { stability: 0.5, similarity: 0.75 } });
+  // v3: Text to Speech, stability only (no Speed, Similarity or Speaker Boost on v3).
+  const v3 = ttsRequest("eleven_v3", "voice123", "Hello.", "en", 1.1);
+  assert.equal(v3.url, "https://api.elevenlabs.io/v1/text-to-speech/voice123?output_format=opus_48000_64");
+  assert.deepEqual(v3.body, { text: "Hello.", model_id: "eleven_v3", language_code: "en", seed: 20261102, voice_settings: { stability: 0.5 } });
+  // The v2 models: everything, with the owner's speed — and no language on Multilingual v2, which doesn't take it.
+  assert.deepEqual(ttsRequest("eleven_flash_v2_5", "v", "Hi.", "en", 1.05).body, {
+    text: "Hi.", model_id: "eleven_flash_v2_5", language_code: "en", seed: 20261102,
+    voice_settings: { stability: 0.45, similarity_boost: 0.8, style: 0.15, use_speaker_boost: true, speed: 1.05 },
+  });
+  assert.ok(!("language_code" in ttsRequest("eleven_multilingual_v2", "v", "Hi.", "en", 1).body));
+  // Speed is offered in Settings only for a model that takes it.
+  assert.deepEqual(TTS_MODELS.filter((m) => modelTakesSpeed(m.id)).map((m) => m.id), ["eleven_multilingual_v2", "eleven_flash_v2_5"]);
+});
+
+test("only an OGG/Opus file counts as a voice note — anything else, or a refused model, falls back to v3", () => {
+  assert.equal(isOggVoiceNote(new Uint8Array([0x4f, 0x67, 0x67, 0x53, 0x00, 0x02])), true);
+  assert.equal(isOggVoiceNote(new Uint8Array([0x49, 0x44, 0x33, 0x04, 0x00])), false, "an MP3 is not a WhatsApp voice note");
+  assert.equal(isOggVoiceNote(new Uint8Array([])), false);
   const lib = code("src/lib/elevenlabs.ts");
-  assert.match(lib, /body: JSON\.stringify\(\{ text: clean, model_id: modelId, language_code: language, seed: VOICE_SEED, voice_settings: \{ \.\.\.VOICE_SETTINGS, speed \} \}\)/);
-  assert.match(lib, /const VOICE_SETTINGS = \{ stability: 0\.45, similarity_boost: 0\.8, style: 0\.15, use_speaker_boost: true \} as const;/);
-  assert.match(lib, /if \(!res\.ok && \[400, 404, 422\]\.includes\(res\.status\) && model !== FALLBACK_TTS_MODEL\[language\]\)/);
-  assert.match(lib, /\?output_format=opus_48000_64/, "still WhatsApp's own voice-note format");
+  assert.match(lib, /return isOggVoiceNote\(buffer\) \? \{ buffer \} : \{ status: res\.status, detail: `not an OGG voice note/);
+  assert.match(lib, /if \("status" in result && model !== FALLBACK_TTS_MODEL && \(result\.status === 200 \|\| \[400, 403, 404, 422\]\.includes\(result\.status\)\)\)/, "a refused KEY (401) is not retried");
+  assert.match(lib, /result = await speak\(FALLBACK_TTS_MODEL\);/);
 });
 
 test("transcription: names to expect (feature 1) and no 'um's (feature 4)", () => {
@@ -114,5 +138,8 @@ test("Settings: pick a voice by ear (owner only), the model, the speed, pronunci
   const rows = code("src/components/settings/WorkspaceIntegrationRows.tsx");
   assert.match(rows, /<VoicePicker voices=\{voices\} current=\{setting\("ELEVENLABS_VOICE_ID"\)\} \/>/);
   for (const key of ["TTS_MODEL_KEY", "VOICE_SPEED_KEY", "PRONUNCIATIONS_KEY", "STT_CUSTOMER_NAMES_KEY"]) assert.match(rows, new RegExp(`name="key" value=\\{${key}\\}`), key);
+  // The speed control only for a model that takes it; otherwise it says why (review of #935).
+  assert.match(rows, /\{modelTakesSpeed\(TTS_MODELS\.some\(\(m\) => m\.id === setting\(TTS_MODEL_KEY\)\) \? setting\(TTS_MODEL_KEY\) : DEFAULT_TTS_MODEL\) \? \(/);
+  assert.match(rows, /Speaking speed isn&apos;t adjustable with Eleven v4 or v3/);
   assert.match(rows, /defaultChecked=\{setting\(STT_CUSTOMER_NAMES_KEY\) === "on"\}/, "off unless switched on");
 });

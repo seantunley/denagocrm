@@ -8,7 +8,7 @@ import { connectTelegram, disconnectTelegram } from "@/app/actions/bot";
 import { getSetting } from "@/lib/settings";
 import { codexStatus, type CodexStatus } from "@/lib/codex";
 import VoicePicker from "@/components/settings/VoicePicker";
-import { DEFAULT_TTS_MODEL, TTS_MODELS, VOICE_SPEEDS, elevenLabsVoices } from "@/lib/elevenlabs";
+import { DEFAULT_TTS_MODEL, TTS_MODELS, VOICE_SPEEDS, elevenLabsVoices, modelTakesSpeed } from "@/lib/elevenlabs";
 import { STT_CUSTOMER_NAMES_KEY, TTS_MODEL_KEY, VOICE_SPEED_KEY } from "@/lib/voiceSettings";
 import { PRONUNCIATIONS_KEY } from "@/lib/spokenText";
 
@@ -298,16 +298,24 @@ export default async function WorkspaceIntegrationRows({ xAccountId }: { xAccoun
               </div>
               <SaveButton className="btn-secondary btn-sm">Save</SaveButton>
             </SaveForm>
-            <SaveForm resetOnSuccess={false} action={saveSetting} className="flex gap-2 items-end">
-              <input type="hidden" name="key" value={VOICE_SPEED_KEY} />
-              <div className="flex-1">
-                <label className="label">Speaking speed</label>
-                <select name="value" className="input" defaultValue={(VOICE_SPEEDS as readonly string[]).includes(setting(VOICE_SPEED_KEY)) ? setting(VOICE_SPEED_KEY) : "1"}>
-                  {VOICE_SPEEDS.map((s) => <option key={s} value={s}>{s === "1" ? "Normal" : Number(s) < 1 ? `Slower (${s})` : `Faster (${s})`}</option>)}
-                </select>
-              </div>
-              <SaveButton className="btn-secondary btn-sm">Save</SaveButton>
-            </SaveForm>
+            {/* Only a model that takes it shows it (v4 and v3 have no speed control — ElevenLabs' docs; review of #935). */}
+            {modelTakesSpeed(TTS_MODELS.some((m) => m.id === setting(TTS_MODEL_KEY)) ? setting(TTS_MODEL_KEY) : DEFAULT_TTS_MODEL) ? (
+              <SaveForm resetOnSuccess={false} action={saveSetting} className="flex gap-2 items-end">
+                <input type="hidden" name="key" value={VOICE_SPEED_KEY} />
+                <div className="flex-1">
+                  <label className="label">Speaking speed</label>
+                  <select name="value" className="input" defaultValue={(VOICE_SPEEDS as readonly string[]).includes(setting(VOICE_SPEED_KEY)) ? setting(VOICE_SPEED_KEY) : "1"}>
+                    {VOICE_SPEEDS.map((s) => <option key={s} value={s}>{s === "1" ? "Normal" : Number(s) < 1 ? `Slower (${s})` : `Faster (${s})`}</option>)}
+                  </select>
+                </div>
+                <SaveButton className="btn-secondary btn-sm">Save</SaveButton>
+              </SaveForm>
+            ) : (
+              <p className="text-xs text-muted-foreground self-end">
+                Speaking speed isn&apos;t adjustable with Eleven v4 or v3 — they pace themselves. Choose Multilingual v2 or
+                Flash v2.5 to set a speed.
+              </p>
+            )}
           </div>
           <SaveForm resetOnSuccess={false} action={saveSetting} className="space-y-2">
             <input type="hidden" name="key" value={PRONUNCIATIONS_KEY} />
