@@ -41,12 +41,15 @@ function parseFlow(definition: string): Flow | null {
   return null;
 }
 
-/** Resolve the immutable graph a conversation should execute. */
+/**
+ * Resolve the immutable graph a conversation should execute — or null when the channel's flow was TAKEN OFFLINE
+ * (see below): then nothing answers a new conversation and the message waits in the inbox for a person.
+ */
 export async function resolveFlowSnapshot(
   channel: string,
   pinnedVersionId?: string | null,
   entry?: FlowEntryContext | null,
-): Promise<FlowSnapshot> {
+): Promise<FlowSnapshot | null> {
   if (pinnedVersionId) {
     const pinned = await prisma.botFlowVersion.findFirst({ where: { id: pinnedVersionId, tenantId: runtimeFlowTenantId() } });
     const flow = pinned ? parseFlow(pinned.definition) : null;
@@ -95,7 +98,31 @@ export async function resolveFlowSnapshot(
     if (flow) return { flow, versionId: null, flowId: legacy.id };
   }
 
+  // TAKEN OFFLINE (Sean, 2026-11-02: "there is no way to take a flow from live to off"). This channel has been
+  // published before and nothing is published now — only "Take offline" removes a publication — so the built-in
+  // default must not quietly take its place: no flow answers. Routes (QR codes, keywords) were resolved above and
+  // still do; a conversation already in a flow keeps its pinned version until it ends. Publishing again restores it.
+  const everPublished = await prisma.botFlowVersion.findFirst({
+    where: { tenantId, channel: { in: channel === "whatsapp" ? ["whatsapp"] : [channel, "whatsapp"] } },
+    select: { id: true },
+  });
+  if (everPublished) return null;
+
   return { flow: DEFAULT_FLOW, versionId: null, flowId: null };
+}
+
+/**
+ * Take a channel's live flow off the air (the bot builder's "Take offline"). The flow stops being the live one —
+ * marked inactive FIRST, so the legacy fallback can never pick up its unpublished draft — then its publication is
+ * removed. Its versions stay as history; Publish puts it back. Returns false when it was not the live flow.
+ */
+export async function takeFlowOffline(flowId: string): Promise<boolean> {
+  const tenantId = await builderTenantId();
+  const flow = await prisma.botFlow.findFirst({ where: { id: flowId, ...flowTenantWhere(tenantId) }, select: { id: true, channel: true, active: true } });
+  if (!flow?.active) return false;
+  await prisma.botFlow.updateMany({ where: { id: flow.id, ...flowTenantWhere(tenantId) }, data: { active: false } });
+  await prisma.botFlowPublication.deleteMany({ where: { tenantId, channel: flow.channel, flowId: flow.id } });
+  return true;
 }
 
 /**

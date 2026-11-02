@@ -1,6 +1,6 @@
 import { requireRoute } from "@/lib/permissions";
 import Link from "next/link";
-import { CheckCircle2, Copy, GitBranch, Layers3, Pencil, Plus, Radio, Route, Trash2 } from "lucide-react";
+import { CheckCircle2, Copy, GitBranch, Layers3, Pencil, Plus, PowerOff, Radio, Route, Trash2 } from "lucide-react";
 import { prisma } from "@/lib/db";
 import { getSetting, putSetting } from "@/lib/settings";
 import { DEFAULT_FLOW, type Flow } from "@/lib/flow";
@@ -8,7 +8,8 @@ import { FLOW_TEMPLATES } from "@/lib/flowTemplates";
 import { flowErrors, flowWarnings, validateFlow } from "@/lib/flowValidation";
 import { enabledFlowChannels } from "@/lib/flowValidationServer";
 import { getFlowPublicationMeta, publishFlowSnapshot } from "@/lib/flowPublishing";
-import { createFlow, duplicateFlow, deleteFlow, renameFlow } from "@/app/actions/flow";
+import { createFlow, duplicateFlow, deleteFlow, renameFlow, setFlowOffline } from "@/app/actions/flow";
+import ConfirmActionDialog from "@/components/ConfirmActionDialog";
 import PublishFlowButton from "@/components/PublishFlowButton";
 import { WorkspaceHero } from "@/components/workspace-hero";
 import { EmptyState, StatusPill, Surface } from "@/components/visual-system";
@@ -189,6 +190,17 @@ export default async function BotBuilderPage() {
                 {(!f.active || pending) && !blocked && <PublishFlowButton flowId={f.id} label="Review & publish" channel={channelLabel[f.channel] ?? f.channel} routeCount={routeInfo.total} warnings={check.warnings.length} draftNodes={draftNodes} liveNodes={liveNodes} liveVersion={live?.version ?? null} />}
                 {(!f.active || pending) && blocked && <span className="btn-secondary btn-sm cursor-not-allowed opacity-50" title="Fix publish errors first">Publish blocked</span>}
                 <form action={duplicateFlow.bind(null, f.id)}><button className="btn-secondary btn-sm"><Copy className="size-3.5" />Duplicate</button></form>
+                {f.active && (
+                  <ConfirmActionDialog
+                    trigger={<button type="button" className="btn-secondary btn-sm"><PowerOff className="size-3.5" />Take offline</button>}
+                    title={`Take “${f.name}” offline?`}
+                    description={`The chatbot stops answering new ${channelLabel[f.channel] ?? f.channel} conversations — messages wait in the inbox for your team. QR codes and keyword routes keep working, and anyone already part-way through this flow finishes it. Publish it again to put it back.`}
+                    confirmLabel="Take offline"
+                    destructive
+                    success="Flow taken offline"
+                    onConfirm={setFlowOffline.bind(null, f.id)}
+                  />
+                )}
                 {!f.active && <form action={deleteFlow.bind(null, f.id)}><button className="btn-secondary btn-sm text-red-400" aria-label={`Delete ${f.name}`}><Trash2 className="size-3.5" /></button></form>}
               </div>
             </Surface>

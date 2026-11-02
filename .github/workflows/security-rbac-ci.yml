@@ -374,6 +374,11 @@ jobs:
         # refused; deleting a QR's route from the routing table removes its QR entry, freeing the name.
         run: npm run test:flow-qr-routes
 
+      - name: Chatbot -- a live flow taken offline answers nobody, while QR codes and routes still do
+        # Sean, 2026-11-02: offline means no reply (not the built-in default); routes and in-progress conversations
+        # still run; another workspace can't take it offline and is untouched; publishing again restores it.
+        run: npm run test:flow-offline
+
       - name: DAX lost deals still alive -- quotes only for those who may open them
         # Review of #950, with enforcement on: a salesperson who may open a deal but not its quotes gets no quote
         # number or quote view from lost_alive; one with quote access, and the owner, do; the other workspace nothing.

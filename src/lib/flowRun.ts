@@ -126,6 +126,8 @@ export async function runWhatsAppFlow(digits: string, input: FlowInput, entryCon
   if (!actor) { console.error("[bot] refusing to reply on whatsapp: no tenant actor, so the reply could not be recorded"); return true; }
 
   const snapshot = await resolveFlowSnapshot("whatsapp", restart ? null : existing?.flowVersionId ?? null, { text: input.text, ...entryContext });
+  // The WhatsApp flow was taken offline: no reply — the message waits in the inbox for a person.
+  if (!snapshot) return true;
   const actions: ActionObservation[] = [];
   const result = await runFlow(snapshot.flow, session, input, buildCtx(digits, match, actions));
 
