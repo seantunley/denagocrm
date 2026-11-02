@@ -6,7 +6,7 @@ import {
   getAccessibleContactIds, getAccessibleJobCardIds, getAccessibleLeadIds, getAccessibleQuoteIds, getAccessibleVehicleIds, hasPermission,
   type PermissionKey, type PermissionUser,
 } from "./permissions";
-import { CONFIRM_EVENTS, confirmedKind, forwardMoves, readProposed, summarizeOutcomes, type Confirmation, type Visible } from "./assistantOutcomeRules";
+import { CONFIRM_EVENTS, cardRecords, confirmedKind, forwardMoves, readProposed, summarizeOutcomes, type Confirmation, type Visible } from "./assistantOutcomeRules";
 
 const DAY_MS = 86_400_000;
 
@@ -80,7 +80,15 @@ export async function assistantOutcomes(
     leadId: r.leadId,
     contactId: r.contactId ?? (r.leadId ? customerOf.get(r.leadId) ?? null : null),
   });
-  const confirmations: Confirmation[] = events.map((e) => ({ ...withCustomer(on(e)), at: e.createdAt, userId: e.actorUserId, kind: confirmedKind(e) }));
+  // The records a Confirm's card was on beyond its deal or customer (cardRecords, kept in the entry's metadata): checked
+  // against the viewer like a suggestion's. An entry from before they were kept has none — mayCount decides (fail closed).
+  const beyond = (metadata: unknown) => {
+    const kept = cardRecords(metadata);
+    return { quoteId: kept.quoteId ?? null, vehicleId: kept.vehicleId ?? null, jobCardId: kept.jobCardId ?? null };
+  };
+  const confirmations: Confirmation[] = events.map((e) => ({
+    ...withCustomer(on(e)), ...beyond(e.metadata), at: e.createdAt, userId: e.actorUserId, kind: confirmedKind(e),
+  }));
   const dealIds = [...new Set(confirmations.flatMap((c) => c.leadId ?? []))];
   const customerIds = [...new Set(confirmations.flatMap((c) => c.contactId ?? []))];
   const onThem = [{ leadId: { in: dealIds } }, { contactId: { in: customerIds } }];

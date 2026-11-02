@@ -98,18 +98,23 @@ type Records = Partial<Record<RecordKey, string | null>>;
 /** What is kept of each card DAX offered (AssistantTurn.proposed): its kind, and every record it is on — ids, never names. */
 export type Proposed = { kind: string } & Partial<Record<RecordKey, string>>;
 
+/**
+ * Every record a card is on, by id — where each kind keeps them: on the card, in a file's target, a watch's input, or a
+ * new lead's customer. Kept with what DAX offered (proposedCards) AND with each Confirm's audit entry (runAssistantAction).
+ */
+export function cardRecords(card: unknown): Partial<Record<RecordKey, string>> {
+  const c = (card && typeof card === "object" ? card : {}) as Record<string, unknown>;
+  const nested = [c, c.target, c.watch, c.lead].filter((v): v is Record<string, unknown> => Boolean(v) && typeof v === "object");
+  const records: Partial<Record<RecordKey, string>> = {};
+  for (const key of RECORD_KEYS) {
+    const id = nested.map((o) => o[key]).find((v): v is string => typeof v === "string" && v !== "");
+    if (id) records[key] = id;
+  }
+  return records;
+}
+
 export function proposedCards(cards: readonly ActionCard[]): Proposed[] {
-  return cards.map((card) => {
-    // Where each kind keeps its records: on the card, in a file's target, a watch's input, or a new lead's customer.
-    const c = card as unknown as Record<string, unknown>;
-    const nested = [c, c.target, c.watch, c.lead].filter((v): v is Record<string, unknown> => Boolean(v) && typeof v === "object");
-    const records: Partial<Record<RecordKey, string>> = {};
-    for (const key of RECORD_KEYS) {
-      const id = nested.map((o) => o[key]).find((v): v is string => typeof v === "string" && v !== "");
-      if (id) records[key] = id;
-    }
-    return { kind: card.kind, ...records };
-  });
+  return cards.map((card) => ({ kind: card.kind, ...cardRecords(card) }));
 }
 
 export function readProposed(value: unknown): Proposed[] {
@@ -132,9 +137,22 @@ export type Visible = Record<RecordKey, ReadonlySet<string> | null> | null;
  */
 export const RECORDLESS_KINDS: ReadonlySet<string> = new Set(["block_time", "follow_up", "meeting", "schedule", "create_customer", "create_lead"]);
 
+/**
+ * Kinds whose own record is not a deal or customer: unless that record is named — a Confirm from before records were
+ * kept with it, say — the deal or customer is NOT the whole story, and it is not counted for a restricted viewer.
+ * (A built or started quote is not here: it is made FOR that deal or customer; a new Confirm names it anyway.)
+ */
+const OWN_RECORD: Readonly<Record<string, readonly RecordKey[]>> = {
+  quote_add: ["quoteId"], quote_change: ["quoteId"], quote_pdf: ["quoteId"], record_payment: ["quoteId"], schedule_delivery: ["quoteId"],
+  job_card: ["vehicleId"],
+  attach_file: ["quoteId", "vehicleId", "jobCardId", "contactId"],
+};
+
 /** May this card, or Confirm, be counted for this viewer? Every record it names must be one they may open. */
 export function mayCount(r: Records & { kind: string | null }, visible: Visible): boolean {
   if (!visible) return true;
+  const own = r.kind ? OWN_RECORD[r.kind] : undefined;
+  if (own && !own.some((key) => r[key])) return false;
   const named = RECORD_KEYS.filter((key) => r[key]);
   if (named.length === 0) return r.kind !== null && RECORDLESS_KINDS.has(r.kind);
   return named.every((key) => {
@@ -145,8 +163,8 @@ export function mayCount(r: Records & { kind: string | null }, visible: Visible)
 
 /** Something that happened on a deal and/or a customer. */
 export type Happening = { at: Date; leadId: string | null; contactId: string | null };
-/** One Confirm: who, which kind, when, and the deal and/or customer it was on (a deal's customer filled in). */
-export type Confirmation = Happening & { userId: string | null; kind: string | null };
+/** One Confirm: who, which kind, when, the deal and/or customer it was on (a deal's customer filled in), and any other record. */
+export type Confirmation = Happening & { userId: string | null; kind: string | null } & Records;
 
 /** moveLead's lead.stage_changed audit events (before/after { stageId }) → the moves to a later stage. */
 export function forwardMoves(

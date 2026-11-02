@@ -20,7 +20,7 @@ test("what the assistant changes is in the audit trail", () => {
     assert.match(run, new RegExp(`if \\(!?result[^)]*\\)[^\\n]*return \\{ ok: false[^\\n]*\\n\\s*await confirmed(?:On)?\\(\`?"?${what}`), what);
   }
   // …and which kind of card it was, for Settings → Assistant (assistantOutcomes).
-  assert.match(run, /const confirmedOn = \(what: string, on: \{ leadId: string \| null; contactId: string \| null \}\) =>\s*logAudit\(\{ action: "assistant\.action_confirmed", summary: `Confirmed the assistant's proposal: \$\{what\}`, user, leadId: on\.leadId, contactId: on\.contactId, metadata: \{ kind: card\.kind \} \}\);/);
+  assert.match(run, /const confirmedOn = \(what: string, on: \{ leadId: string \| null; contactId: string \| null \}\) =>\s*logAudit\(\{ action: "assistant\.action_confirmed", summary: `Confirmed the assistant's proposal: \$\{what\}`, user, leadId: on\.leadId, contactId: on\.contactId, metadata: \{ kind: card\.kind, \.\.\.cardRecords\(card\) \} \}\);/);
   assert.match(code("src/lib/assistantScheduleRun.ts"), /action: "assistant\.schedule_switched_off"/);
   const wa = code("src/lib/assistantWhatsApp.ts");
   assert.match(wa, /the code was issued before this account's sign-ins were reset/);

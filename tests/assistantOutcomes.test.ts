@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import type { ActionCard } from "../src/lib/assistantActions";
 import {
   FAMILIES,
+  cardRecords,
   confirmedKind,
   describeTally,
   familyOf,
@@ -315,6 +316,25 @@ test("an owner who may open only some records is counted only cards whose EVERY 
   assert.deepEqual(result.people.map((p) => [p.userId, p.suggested, p.confirmed]), [["u1", 4, 1], ["u2", 1, 1]]);
 });
 
+test("a Confirm on a customer-only quote: not counted for a viewer who can open the customer but not the quote (review of #940)", () => {
+  const sees = (quotes: ReadonlySet<string> | null): Visible => ({ leadId: null, contactId: new Set(["anna"]), quoteId: quotes, vehicleId: null, jobCardId: null });
+  const run = (visible: Visible, confirmations: Confirmation[]) =>
+    row(summarizeOutcomes({ now: NOW, staffIds: new Set(["u1"]), visible, proposals: [], confirmations, happened: nothing }), "quotes").confirmed;
+  const onQuote = { ...confirm("quote_pdf", { contactId: "anna" }), quoteId: "q-anna" };
+  assert.equal(run(sees(new Set()), [onQuote]), 0, "the customer is theirs, the quote is not");
+  assert.equal(run(sees(new Set(["q-anna"])), [onQuote]), 1, "…and with the quote theirs too, it counts");
+  assert.equal(run(null, [onQuote]), 1, "the full owner counts it");
+  // From before a Confirm kept its quote: the customer is not the whole story — not counted for them; counted for the owner.
+  const older = confirm("quote_pdf", { contactId: "anna" });
+  assert.equal(run(sees(new Set(["q-anna"])), [older]), 0);
+  assert.equal(run(null, [older]), 1);
+  // A built quote is made FOR the customer: an older one without its quote id still counts on the customer.
+  assert.equal(run(sees(new Set()), [confirm("quote_build", { contactId: "anna" })]), 1);
+  // What a Confirm keeps: the records on its card, read back from the entry's metadata the same way.
+  assert.deepEqual(cardRecords({ kind: "quote_pdf", quoteId: "q-anna", leadId: null }), { quoteId: "q-anna" });
+  assert.deepEqual(cardRecords({ kind: "attach_file", target: { jobCardId: "j1" } }), { jobCardId: "j1" });
+});
+
 test("who may be counted: everything for someone who sees everything; for anyone else, only the allow-listed kinds without a record", () => {
   assert.equal(mayCount({ kind: "plan" }, null), true);
   assert.equal(mayCount({ kind: null }, null), true);
@@ -346,7 +366,9 @@ test("every Confirm of a card records the card's kind — in the audit stream's 
   const entries = source.split("logAudit(").slice(1).map((chunk) => chunk.slice(0, chunk.search(/\);\n/)));
   const confirms = entries.filter((entry) => entry.includes('"assistant.action_confirmed"'));
   assert.equal(confirms.length, 12, "the confirm entries counted here");
-  for (const entry of confirms) assert.match(entry, /metadata: \{ kind: card\.kind \}/, entry);
+  // The kind, and every record the card is on — so a Confirm is counted only for those who may open them.
+  for (const entry of confirms) assert.match(entry, /metadata: \{ kind: card\.kind, \.\.\.cardRecords\(card\)/, entry);
+  assert.match(source, /metadata: \{ kind: card\.kind, \.\.\.cardRecords\(card\), quoteId: saved\.quote\.id \}/, "a built quote names the quote it made");
   assert.doesNotMatch(source, /summary: `[^`]*\$\{card\.kind\}/, "the kind never goes into a summary — that is the customer's timeline");
 });
 
