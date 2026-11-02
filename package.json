@@ -31,6 +31,7 @@
     "test:assistant-task": "tsx --tsconfig tsconfig.harness.json scripts/test-assistant-task.ts",
     "test:assistant-goals": "tsx --tsconfig tsconfig.harness.json scripts/test-assistant-goals.ts",
     "test:assistant-plans": "tsx --tsconfig tsconfig.harness.json scripts/test-assistant-plans.ts",
+    "test:assistant-add-to-crm": "tsx --tsconfig tsconfig.harness.json scripts/test-assistant-add-to-crm.ts",
     "test:quote-payments": "tsx --tsconfig tsconfig.harness.json scripts/test-quote-payments.ts",
     "test:invoice-workspace": "tsx --tsconfig tsconfig.harness.json scripts/test-invoice-workspace.ts",
     "eval:dax-tasks": "tsx --tsconfig tsconfig.harness.json scripts/eval-dax-tasks.ts",

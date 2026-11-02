@@ -113,15 +113,20 @@ test("real photos (when sharp is installed locally): EXIF/GPS and trailing data 
   }
 });
 
-test("the image is checked on the server before the question is asked — and never stored", () => {
+test("the image is checked on the server before the question is asked — and kept only an hour, apart from the history", () => {
   // The streaming route hands the image to askAsPerson, which checks it.
   assert.match(code("src/app/api/assistant/ask/route.ts"), /image: form\.get\("image"\)/);
   const ask = code("src/lib/assistantAsk.ts");
   const order = ['isModuleEnabled("automation")', "assistantAskAllowed(user.id)", "assistantImageAllowed(user.id)", 'file.type !== "image/jpeg"', "cleanJpeg(", "return askCrm("];
   for (let i = 1; i < order.length; i++) assert.ok(ask.indexOf(order[i - 1]) < ask.indexOf(order[i]), `${order[i - 1]} before ${order[i]}`);
   const lib = code("src/lib/crmAssistant.ts");
-  assert.match(lib, /question: images\.length \? `📎 \$\{question\}` : question,/, "only that there WAS an image is kept");
+  // The history keeps only that there WAS an image (sent with this question, not carried from the last one)…
+  assert.match(lib, /question: freshImages\.length \? `📎 \$\{question\}` : question,/, "only that there WAS an image is kept");
   assert.doesNotMatch(lib, /images[^\n]*assistantTurn|assistantTurn[^\n]*images/);
+  // …the cleaned picture itself goes to its own table for the next reply (Sean, 2026-11-02: pin it or add its
+  // text), and the assistant cron deletes it after an hour (lib/assistantImageCarry.ts).
+  assert.match(lib, /if \(saved && freshImages\.length\) \{\s*await rememberImage\(ownedWriteTenantId\(\), user\.id, saved, freshImages\[0\]\)/);
+  assert.match(code("src/app/api/cron/assistant/route.ts"), /await pruneAssistantImages\(tenantId\)/);
   assert.match(lib, /images\.length \? IMAGE_RULE : ""/, "the image is data, never instructions");
   // The browser shrinks and re-encodes (dropping EXIF) before anything is sent.
   const shrink = code("src/components/shrinkImage.ts");

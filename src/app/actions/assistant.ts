@@ -3,7 +3,9 @@
 import { requireAnyPermission } from "@/lib/permissions";
 import { withActingStaffScope } from "@/lib/actingScope";
 import { isModuleEnabled } from "@/lib/modules/enabled";
-import { assistantTurnsToday } from "@/lib/crmAssistant";
+import { assistantTurnsToday, customerClash } from "@/lib/crmAssistant";
+import { createContact } from "@/app/actions/contacts";
+import { MAX_IMAGE_BYTES } from "@/lib/assistantImage";
 import { getSetting } from "@/lib/settings";
 import { isCodexConnected } from "@/lib/codex";
 import { ASSISTANT_PROFILE_KEY, parseProfile } from "@/lib/assistantSoul";
@@ -68,6 +70,20 @@ const untouched = (error: string) => ({ ok: false as const, error, unchanged: tr
  * but say what was done.
  */
 const resumable = (error: string) => ({ ok: false as const, error, resumable: true as const });
+
+const BAD_SCREENSHOT = "That screenshot can't be attached — send it to DAX again.";
+/**
+ * A note card's screenshot (a JPEG data: URL) → the file the note form uploads. Undefined: the card has none.
+ * False: what the card carries is not a JPEG within the size DAX accepts — the card came from the browser.
+ */
+function screenshotFile(image: unknown): File | undefined | false {
+  if (image == null) return undefined;
+  const base64 = /^data:image\/jpeg;base64,([A-Za-z0-9+/=]+)$/.exec(String(image))?.[1];
+  if (!base64) return false;
+  const bytes = Buffer.from(base64, "base64");
+  if (bytes.length === 0 || bytes.length > MAX_IMAGE_BYTES || bytes[0] !== 0xff || bytes[1] !== 0xd8) return false;
+  return new File([bytes], "screenshot.jpg", { type: "image/jpeg" });
+}
 
 export async function runAssistantAction(
   card: ActionCard,
@@ -157,10 +173,14 @@ export async function runAssistantAction(
         return { ok: true, success: "Follow-up scheduled" };
       }
       case "note": {
+        const shot = screenshotFile(card.image);
+        if (shot === false) return untouched(BAD_SCREENSHOT);
         const form = new FormData();
         form.set("leadId", card.leadId);
         form.set("body", card.text);
         form.set("type", "note");
+        // The note form's own image upload: it checks the type and size, and files it with the note's customer record.
+        if (shot) form.set("image", shot);
         // addCommunication's own pin: the same switch the note box has.
         if (card.pin === true) form.set("pin", "on");
         form.set("revalidate", `/leads/${card.leadId}`);
@@ -172,10 +192,13 @@ export async function runAssistantAction(
       case "customer_note": {
         // On the customer, not a deal. addCommunication checks that this person
         // may write to customer records and can open THIS customer.
+        const shot = screenshotFile(card.image);
+        if (shot === false) return untouched(BAD_SCREENSHOT);
         const form = new FormData();
         form.set("contactId", card.contactId);
         form.set("body", card.text);
         form.set("type", "note");
+        if (shot) form.set("image", shot);
         if (card.pin === true) form.set("pin", "on");
         form.set("revalidate", `/contacts/${card.contactId}`);
         const result = await addCommunication(form);
@@ -187,6 +210,25 @@ export async function runAssistantAction(
           contactId: card.contactId,
         });
         return { ok: true, success: card.pin === true ? "Note added and pinned" : "Note added", href: `/contacts/${card.contactId}` };
+      }
+      case "create_customer": {
+        // THE CONTACT FORM'S OWN DOOR (createContact): contacts.create, the workspace stamp and the audit entry are
+        // its. The duplicate check runs again first, so a second Confirm finds the customer the first one made.
+        const c = card.customer;
+        if (!c?.firstName?.trim() || (!c.phone && !c.email)) return untouched(STALE_CARD);
+        const clash = await customerClash(user, c);
+        if (clash) return untouched(clash);
+        const form = new FormData();
+        form.set("contactKind", "individual");
+        form.set("firstName", c.firstName);
+        for (const [key, value] of [["lastName", c.lastName], ["company", c.company], ["phone", c.phone], ["email", c.email]] as const) {
+          if (value) form.set(key, value);
+        }
+        const result = await createContact(form);
+        const contactId = /^\/contacts\/([^/?#]+)$/.exec(result?.redirectTo ?? "")?.[1];
+        if (result?.error || !contactId) return { ok: false, error: result?.error ?? "Couldn't add the customer." };
+        await logAudit({ action: "assistant.action_confirmed", summary: "Confirmed the assistant's proposal: add a new customer", user, contactId });
+        return { ok: true, success: `${card.leadLabel} added as a customer`, href: `/contacts/${contactId}` };
       }
       case "assign": {
         if (!(await stillAsProposed(card))) return untouched(STALE_CARD);

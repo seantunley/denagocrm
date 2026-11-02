@@ -482,7 +482,9 @@ test("A PINNED NOTE WHOSE PIN FAILS IS NOT WRITTEN TWICE: the note was saved, so
   // (2026-10-25, review of #905: one more of quote_build's — a colour the catalogue no longer has, before the customer.)
   // (2026-10-26, six of job_card's — no confirm key, invalid card, Automotive off, no permission or vehicle access,
   // vehicle gone, owner changed — each before openJobCard, its one write.)
-  assert.equal((run.match(/return untouched\(/g) ?? []).length, 37);
+  // (2026-11-02, two of create_customer's — an invalid card, already a customer — each before createContact, its one write.)
+  // (2026-11-02, one each for note and customer_note — a screenshot that is not a JPEG we accept — before addCommunication.)
+  assert.equal((run.match(/return untouched\(/g) ?? []).length, 41);
   const buildCase = run.slice(run.indexOf('case "quote_build": {'), run.indexOf('case "quote_pdf": {'));
   assert.ok(buildCase.indexOf("The catalogue changed since DAX suggested this") < buildCase.indexOf("convertLeadToContact("), "every check before the customer record is made");
   const quotePdfCase = run.slice(run.indexOf('case "quote_pdf": {'), run.indexOf('case "quote_change": {'));

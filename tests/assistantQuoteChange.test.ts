@@ -175,7 +175,7 @@ test("THE ANSWER IS REPLACED when it speaks of a task that was not set up — ne
   // Wired: decided from the cards that came out and the reasons the tasks gave; it REPLACES the answer that is
   // shown AND saved — only where tasks can be proposed at all — and a replaced answer carries no citations.
   const assistant = code("src/lib/crmAssistant.ts");
-  assert.match(assistant, /const actions = !proposes \? \[\] : await resolveActions\(user, proposals, problems, taskWrite\?\.ok \? taskWrite\.sheet : null\)\.catch\(/);
+  assert.match(assistant, /const actions = !proposes \? \[\] : await resolveActions\(user, proposals, problems, taskWrite\?\.ok \? taskWrite\.sheet : null, images\[0\] \?\? null\)\.catch\(/);
   // A check-back DAX set itself (proactive DAX part 3) is a task that WAS set up, so it isn't counted as one that came to nothing.
   assert.match(assistant, /const settled = proposes \? settledAnswer\(resolved\.plain, actions, problems, Math\.max\(0, reply\.attempted - checkBacks\.length - actions\.length - problems\.length\)\) : null;/);
   // The job sheet's line (Phase 1) is the CRM's own, added after — like the check-back line.

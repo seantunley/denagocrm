@@ -41,10 +41,23 @@ export const proposedAction = z.discriminatedUnion("type", [
     reason,
   }).strict(),
   // pin: keeps the note at the top of the timeline — only when the person asks for it pinned.
-  z.object({ type: z.literal("note"), leadId, text: text.max(2000), pin: z.boolean().optional(), reason }).strict(),
+  // attachImage: the photo or screenshot sent WITH THIS question goes on the note (Sean, 2026-11-02: "DAX must be able
+  // to pin screenshots to leads or contacts"). The card builder takes it from the question, never from the model.
+  z.object({ type: z.literal("note"), leadId, text: text.max(2000), pin: z.boolean().optional(), attachImage: z.boolean().optional(), reason }).strict(),
   // A note on a CUSTOMER rather than a deal — the only place a note can go for
   // someone who has no lead.
-  z.object({ type: z.literal("customer_note"), contactId: leadId, text: text.max(2000), pin: z.boolean().optional(), reason }).strict(),
+  z.object({ type: z.literal("customer_note"), contactId: leadId, text: text.max(2000), pin: z.boolean().optional(), attachImage: z.boolean().optional(), reason }).strict(),
+  // A NEW customer record (Sean, 2026-11-02: from a contact shared off his phone, or typed). A phone or an
+  // email is required — the card builder refuses neither — so the duplicate check has something to match on.
+  z.object({
+    type: z.literal("create_customer"),
+    firstName: text.max(80),
+    lastName: text.max(80).optional(),
+    company: text.max(120).optional(),
+    phone: z.string().trim().regex(/^\+?[\d\s()-]{9,20}$/).optional(),
+    email: z.string().trim().email().max(160).optional(),
+    reason,
+  }).strict(),
   z.object({ type: z.literal("assign"), leadId, to: text.max(80), reason }).strict(),
   z.object({ type: z.literal("stage"), leadId, stage: text.max(80), reason }).strict(),
   z.object({
@@ -278,10 +291,17 @@ export const JOB_CARD_RULE =
   "description: the work in their words. The job card has no booking date: a day they name goes in the description (\"Booked in for Tue 3 Nov — brakes squeaking\"). priority only when they say it is urgent or can wait (default normal); kmIn only when they give the odometer reading. " +
   "Confirming opens the job card in the workshop and nothing else — the customer is not contacted.";
 
+/** A new customer record (Sean, 2026-11-02: "is there a way to create a CRM contact from a phone contact?"). */
+export const CREATE_CUSTOMER_RULE =
+  "- create_customer: ADD A NEW CUSTOMER to the CRM, when they ask (\"add Jane Smith, 082 555 1234\") or share a contact from their phone (it arrives as \"I've shared a contact from my phone\" with its details). " +
+  "Copy the name, number, email and company EXACTLY as given — never reformat or guess a digit. One phone: the mobile when there are several. It needs a phone or an email; if they gave neither, ask for one. " +
+  "Look the name up first (lead_brief): if they are clearly already a customer, say so instead of proposing — the CRM also refuses a phone or email that is already on a customer. " +
+  "One customer per task. Confirming creates the customer record only: no lead is opened and the customer is not contacted.";
+
 export const ACTION_INSTRUCTIONS = [
   "TASKS. You can't change anything yourself, but you can PROPOSE up to 4 tasks for the person to confirm with one click. Propose when they ask you to do something (\"remind me…\", \"give it to Donovan\", \"draft a message…\", \"book Anna a test drive\"), or offer one when you recommend a concrete next step.",
   'Put them under "actions" in the reply block:',
-  '"actions":[{"type":"follow_up","leadId":"<id>","when":"YYYY-MM-DDTHH:MM","activity":"call|whatsapp|email|meeting|todo","summary":"...","reason":"why this helps"},{"type":"note","leadId":"<id>","text":"...","pin":false},{"type":"customer_note","contactId":"<id>","text":"...","pin":false},{"type":"assign","leadId":"<id>","to":"<person>"},{"type":"stage","leadId":"<id>","stage":"<stage>"},{"type":"draft_message","leadId":"<id>","channel":"whatsapp|email","subject":"<email only>","body":"..."},{"type":"meeting","leadId":"<id>","when":"YYYY-MM-DDTHH:MM","minutes":60,"with":["<colleague>"],"summary":"..."},{"type":"test_drive","leadId":"<id>","when":"YYYY-MM-DDTHH:MM","minutes":60,"vehicle":"<demo vehicle name>"},{"type":"reschedule","activityId":"<id>","when":"YYYY-MM-DDTHH:MM"},{"type":"cancel_activity","activityId":"<id>"},{"type":"lost","leadId":"<id>","reason":"..."},{"type":"quote","leadId":"<id>"},{"type":"quote_build","contactId":"<the contactId of a CUSTOMER — a quote for the customer, on no deal>","lines":[{"productId":"<id>","qty":1,"discountPct":0,"colour":"<optional>"}]},{"type":"quote_build","leadId":"<the leadId of a DEAL — a quote for that deal; give no contactId>","lines":[{"productId":"<id>","qty":1,"colour":"<as the catalogue lists it>"}],"fees":[{"label":"Delivery — Hermanus","amount":6500,"delivery":true}]},{"type":"quote_add","quote":"Q-1030","fees":[{"label":"Delivery fee","amount":5000,"delivery":true}],"lines":[{"productId":"<id>","qty":1}]},{"type":"quote_change","quote":"Q-1030","fees":[{"fee":"Delivery Fee","label":"Delivery Fee - Hermanus"}],"lines":[{"line":"<product on the quote>","qty":3}]},{"type":"quote_pdf","quote":"Q-1030"},{"type":"schedule","question":"...","cadence":"once|daily|weekdays|weekly","weekday":1,"timeOfDay":"HH:MM","onDate":"YYYY-MM-DD"},{"type":"watch","kind":"quote_viewed|quote_unsigned|lead_quiet|test_drive_no_follow_up|delivery_deposit_due","quoteId":"Q-1042","leadId":"<id>","product":"<product>","thresholdHours":48,"thresholdDays":3}]',
+  '"actions":[{"type":"follow_up","leadId":"<id>","when":"YYYY-MM-DDTHH:MM","activity":"call|whatsapp|email|meeting|todo","summary":"...","reason":"why this helps"},{"type":"note","leadId":"<id>","text":"...","pin":false},{"type":"customer_note","contactId":"<id>","text":"...","pin":false},{"type":"create_customer","firstName":"...","lastName":"...","phone":"+27...","email":"...","company":"..."},{"type":"assign","leadId":"<id>","to":"<person>"},{"type":"stage","leadId":"<id>","stage":"<stage>"},{"type":"draft_message","leadId":"<id>","channel":"whatsapp|email","subject":"<email only>","body":"..."},{"type":"meeting","leadId":"<id>","when":"YYYY-MM-DDTHH:MM","minutes":60,"with":["<colleague>"],"summary":"..."},{"type":"test_drive","leadId":"<id>","when":"YYYY-MM-DDTHH:MM","minutes":60,"vehicle":"<demo vehicle name>"},{"type":"reschedule","activityId":"<id>","when":"YYYY-MM-DDTHH:MM"},{"type":"cancel_activity","activityId":"<id>"},{"type":"lost","leadId":"<id>","reason":"..."},{"type":"quote","leadId":"<id>"},{"type":"quote_build","contactId":"<the contactId of a CUSTOMER — a quote for the customer, on no deal>","lines":[{"productId":"<id>","qty":1,"discountPct":0,"colour":"<optional>"}]},{"type":"quote_build","leadId":"<the leadId of a DEAL — a quote for that deal; give no contactId>","lines":[{"productId":"<id>","qty":1,"colour":"<as the catalogue lists it>"}],"fees":[{"label":"Delivery — Hermanus","amount":6500,"delivery":true}]},{"type":"quote_add","quote":"Q-1030","fees":[{"label":"Delivery fee","amount":5000,"delivery":true}],"lines":[{"productId":"<id>","qty":1}]},{"type":"quote_change","quote":"Q-1030","fees":[{"fee":"Delivery Fee","label":"Delivery Fee - Hermanus"}],"lines":[{"line":"<product on the quote>","qty":3}]},{"type":"quote_pdf","quote":"Q-1030"},{"type":"schedule","question":"...","cadence":"once|daily|weekdays|weekly","weekday":1,"timeOfDay":"HH:MM","onDate":"YYYY-MM-DD"},{"type":"watch","kind":"quote_viewed|quote_unsigned|lead_quiet|test_drive_no_follow_up|delivery_deposit_due","quoteId":"Q-1042","leadId":"<id>","product":"<product>","thresholdHours":48,"thresholdDays":3}]',
   "- Add a short \"reason\" (under 160 characters) on any proposal when you know why it helps — the card shows it so the person sees the point before confirming. Skip it when the title already says everything.",
   "- watch: when they say \"tell me when / let me know if\" something happens — quote_viewed (quoteId: the customer opens that quote), quote_unsigned (viewed but not signed after thresholdHours, or its email bounced; one quoteId or all theirs), lead_quiet (no customer contact for thresholdDays; one leadId, or every open lead for a product), test_drive_no_follow_up (a test drive done thresholdHours ago with nothing planned next), delivery_deposit_due (delivery within thresholdHours and no deposit). Only the fields that kind uses. It only ever tells THEM — it never contacts a customer. Offer one yourself when it would help (\"I can tell you when Anna opens it\").",
   "- schedule: a question for you to answer on your own LATER or REPEATEDLY (\"every Monday at 7 tell me which deals went quiet\", \"Friday at 9, has Anna signed?\"). weekday (0 = Sunday … 6 = Saturday) only with weekly; onDate only with once. Schedules run on the hour or half past, so timeOfDay is always HH:00 or HH:30 — if they ask for 07:10, propose 07:00 and say it runs on the half hour. It runs later with no conversation, so the question must stand alone — name the customer or thing (\"Has Anna Jacobs signed her quote?\"), never \"her\" or \"that deal\". No leadId. A plain reminder to do something with a lead (\"remind me to call Anna Friday\") is a follow_up, not a schedule.",
@@ -291,7 +311,9 @@ export const ACTION_INSTRUCTIONS = [
   QUOTE_ADD_RULE,
   QUOTE_CHANGE_RULE,
   QUOTE_PDF_RULE,
-  "- note goes on a lead. customer_note goes on a CUSTOMER — use it when they say \"customer\" or \"contact\", or when the person has no lead (lead_brief lists matching customers with their contactId when no lead matches). If several customers match, ask which one before proposing. pin:true only when they ask for the note to be pinned; it keeps it at the top of the timeline.",
+  "- note goes on a lead. customer_note goes on a CUSTOMER — use it when they say \"customer\" or \"contact\", or when the person has no lead (lead_brief lists matching customers with their contactId when no lead matches). If several customers match, ask which one before proposing. pin:true only when they ask for the note to be pinned; it keeps it at the top of the timeline. " +
+    "attachImage:true puts the photo or screenshot on the note — the one sent with this message, or with the message just before when this is the reply about it — only when they ask to save, attach or pin it. With no image in front of you there is nothing to attach: ask them to send it again, with the instruction as its caption.",
+  CREATE_CUSTOMER_RULE,
   "- MISSING DETAILS: when a task needs something they have not told you — what to call it, the day or time, how long, why, which customer, who to give it to — ASK for exactly that in one short question, and offer choices where there are obvious ones (CHOICES). Ask for everything that is missing at once rather than one thing per message. Propose the task as soon as you have what it needs. Never invent a required detail, never guess a time, and never refuse or say it cannot be done because a detail is missing.",
   "- contactId, like leadId, must be an id that appears in the CRM results above.",
   '- block_time: a PERSONAL calendar item — time blocked on the person\'s own calendar, with no lead or customer ("block tomorrow 9 to 11 for admin", "I\'m at the dentist Friday afternoon", "put me down as on leave next week"). {"type":"block_time","when":"YYYY-MM-DDTHH:MM","minutes":120,"summary":"Admin","note":"why the time is unavailable"}; a date with no time ("when":"YYYY-MM-DD", optional "until":"YYYY-MM-DD") blocks whole days. note is required — use their own words for why, and ask if they gave none. Check the calendar (schedule) first: it is refused if it clashes with something already booked. It is only ever for the person asking; you cannot block a colleague\'s calendar. Never tell them a personal item is impossible or needs a lead.',
@@ -551,11 +573,26 @@ export function quoteAddText(lines: readonly QuoteBuildLine[], fees: readonly Qu
 }
 
 export const STALE_CARD ="This changed since DAX suggested it — ask again to see where it stands now.";
+
+export type NewCustomer = { firstName: string; lastName: string | null; company: string | null; phone: string | null; email: string | null };
+/** What a create_customer card will save, line by line, as the person reads it before confirming. */
+export function newCustomerDetail(customer: NewCustomer): string {
+  return [
+    `Name: ${[customer.firstName, customer.lastName].filter(Boolean).join(" ")}`,
+    ...(customer.company ? [`Company: ${customer.company}`] : []),
+    ...(customer.phone ? [`Phone: ${customer.phone}`] : []),
+    ...(customer.email ? [`Email: ${customer.email}`] : []),
+    "Creates the customer record only — no lead, and they are not contacted.",
+  ].join("\n");
+}
 export type ActionCard =
   | (LeadCard & { kind: "follow_up"; when: string; activity: string; summary?: string })
-  | (LeadCard & { kind: "note"; text: string; pin?: boolean })
+  // `image`: the photo sent with the question, as a cleaned JPEG data: URL — shown on the card, uploaded at Confirm by the note form's own action.
+  | (LeadCard & { kind: "note"; text: string; pin?: boolean; image?: string })
   // leadId null and leadLabel the customer's name: the same shape an activity with no lead has.
-  | { id: string; kind: "customer_note"; contactId: string; leadId: null; leadLabel: string; title: string; text: string; pin?: boolean; reason?: string }
+  | { id: string; kind: "customer_note"; contactId: string; leadId: null; leadLabel: string; title: string; text: string; pin?: boolean; image?: string; reason?: string }
+  // A new customer record: `detail` is every field as the person reads it before confirming. Confirm checks for a duplicate again.
+  | { id: string; kind: "create_customer"; leadId: null; leadLabel: string; title: string; customer: NewCustomer; detail: string; reason?: string }
   | (LeadCard & { kind: "assign"; userId: string; fromUserId: string | null })
   | (LeadCard & { kind: "stage"; stageId: string; fromStageId: string })
   | (LeadCard & { kind: "draft_message"; channel: "whatsapp" | "email"; subject?: string; body: string; to: string | null })

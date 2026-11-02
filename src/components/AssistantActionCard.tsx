@@ -121,6 +121,13 @@ export default function AssistantActionCard({
       {(card.kind === "quote_build" || card.kind === "quote_add" || card.kind === "quote_change") && <p className="mt-2 whitespace-pre-line text-xs text-muted-foreground">{card.text}</p>}
       {card.kind === "schedule" && <p className="mt-2 whitespace-pre-line text-xs">&ldquo;{card.question}&rdquo;</p>}
       {(card.kind === "job_card" || card.kind === "meeting" || card.kind === "test_drive" || card.kind === "block_time") && <p className="mt-1 whitespace-pre-line text-xs text-muted-foreground">{card.detail}</p>}
+      {/* The screenshot Confirm will attach to the note — seen before it is saved. */}
+      {(card.kind === "note" || card.kind === "customer_note") && card.image && (
+        // eslint-disable-next-line @next/next/no-img-element -- a data: URL, not a remote image
+        <img src={card.image} alt="The screenshot to attach" className="mt-2 max-h-48 rounded-md border border-border" />
+      )}
+      {/* A new customer: every field Confirm will save. */}
+      {card.kind === "create_customer" && <p className="mt-1 whitespace-pre-line text-xs text-muted-foreground">{card.detail}</p>}
       {card.kind === "lost" && <p className="mt-2 text-xs text-muted-foreground">Reason: {card.reason}</p>}
       {draft && (
         <div className="mt-2 space-y-1.5">
