@@ -5,6 +5,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   Bot,
+  SquareDashed,
+  StickyNote,
   CalendarDays,
   CircleStop,
   CornerDownRight,
@@ -43,6 +45,7 @@ import {
   Background,
   Controls,
   Handle,
+  NodeResizer,
   Panel,
   Position,
   useNodesState,
@@ -55,7 +58,7 @@ import {
 } from "@xyflow/react";
 import { saveFlow, resetFlow } from "@/app/actions/flow";
 import { uploadCampaignImage } from "@/app/actions/campaigns";
-import type { BookingAction, ConditionOperator, FlowHttpMethod, FlowNode, SlotAction } from "@/lib/flow";
+import { isAnnotation, type AnnotationColor, type BookingAction, type ConditionOperator, type FlowHttpMethod, type FlowNode, type SlotAction } from "@/lib/flow";
 import ConfirmActionDialog from "@/components/ConfirmActionDialog";
 import EmojiButton from "@/components/EmojiButton";
 import { cn } from "@/lib/utils";
@@ -114,6 +117,8 @@ const TYPE_META: Record<FlowNode["type"], { icon: LucideIcon; label: string; ton
   ai: { icon: Bot, label: "AI answer", tone: "border-orange-400/50", header: "bg-orange-500/15 text-orange-200", handle: "#fb923c", description: "Use the existing grounded AI response" },
   handoff: { icon: Hand, label: "Hand off", tone: "border-amber-400/40", header: "bg-amber-500/15 text-amber-100", handle: "#fbbf24", description: "Transfer ownership to staff" },
   goto: { icon: CornerDownRight, label: "Go to", tone: "border-slate-400/50", header: "bg-slate-500/15 text-slate-200", handle: "#94a3b8", description: "Jump to another step — e.g. back to the menu — without a wire" },
+  note: { icon: StickyNote, label: "Note", tone: "border-yellow-400/40", header: "bg-yellow-500/15 text-yellow-100", handle: "#facc15", description: "A sticky note for the team — never sent" },
+  group: { icon: SquareDashed, label: "Group", tone: "border-sky-400/40", header: "bg-sky-500/15 text-sky-100", handle: "#38bdf8", description: "A coloured box to frame a section — never sent" },
   end: { icon: CircleStop, label: "End", tone: "border-slate-500/50", header: "bg-slate-500/15 text-slate-200", handle: "#94a3b8", description: "Finish the flow" },
 };
 
@@ -123,6 +128,7 @@ const NODE_GROUPS: { label: string; types: FlowNode["type"][] }[] = [
   { label: "Logic & data", types: ["condition", "switch", "set", "delay", "goto"] },
   { label: "CRM & automation", types: ["booking", "slots", "journey", "http", "subflow"] },
   { label: "AI & operations", types: ["ai", "extract", "handoff", "end"] },
+  { label: "Canvas — team only", types: ["note", "group"] },
 ];
 
 function summary(n: FlowNode): string {
@@ -133,6 +139,8 @@ function summary(n: FlowNode): string {
   if (n.type === "document") return n.documentId ? `Sends ${n.fileName ?? "a document"}` : "(no file chosen)";
   if (n.type === "contactCard") return n.staffUserId ? "Sends a staff member's contact card" : "Sends your business contact card";
   if (n.type === "goto") return n.target ? `↪ ${n.targetLabel || n.target}` : "(choose a step to jump to)";
+  if (n.type === "note") return n.text.slice(0, 60);
+  if (n.type === "group") return n.label;
   if (n.type === "answer") return n.answerSource ? `Send ${n.answerSource}` : (n.text ?? "").slice(0, 50);
   if (n.type === "slots") return n.action === "reschedule" ? "Moves an existing booking to a real open slot" : "Offers real open workshop slots";
   if (n.type === "booking") {
@@ -157,9 +165,44 @@ function summary(n: FlowNode): string {
   return "";
 }
 
-function NodeCard({ data }: NodeProps) {
+/**
+ * Notes and groups (Node-RED's comment node and groups; Sean, 2026-11-02): canvas only. A group sits BEHIND the steps
+ * (zIndex -1) at its saved size; nothing can be wired to either.
+ */
+const ANNOTATION_COLORS: Record<AnnotationColor, { box: string; text: string }> = {
+  yellow: { box: "border-yellow-400/50 bg-yellow-400/10", text: "text-yellow-100" },
+  blue: { box: "border-sky-400/50 bg-sky-400/[0.07]", text: "text-sky-100" },
+  green: { box: "border-emerald-400/50 bg-emerald-400/[0.07]", text: "text-emerald-100" },
+  purple: { box: "border-fuchsia-400/50 bg-fuchsia-400/[0.07]", text: "text-fuchsia-100" },
+  red: { box: "border-red-400/50 bg-red-400/[0.07]", text: "text-red-100" },
+  slate: { box: "border-slate-400/50 bg-slate-400/[0.07]", text: "text-slate-100" },
+};
+function toRfNode(n: FlowNode, position: Pos, isStart: boolean): Node<RFData> {
+  const base = { id: n.id, type: "flowNode", position, data: { flow: n, isStart } };
+  return n.type === "group" ? { ...base, zIndex: -1, style: { width: n.width ?? 520, height: n.height ?? 320 } } : base;
+}
+
+function NodeCard({ data, selected }: NodeProps) {
   const d = data as unknown as RFData;
   const n = d.flow;
+  if (n.type === "note") {
+    const color = ANNOTATION_COLORS[n.color ?? "yellow"];
+    return (
+      <div className={cn("w-56 rounded-lg border px-3 py-2 text-xs leading-5 shadow-lg", color.box, color.text, selected && "ring-2 ring-white/30")}>
+        <div className="mb-1 flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wide opacity-70"><StickyNote className="size-3" />Note</div>
+        <p className="whitespace-pre-wrap">{n.text || "…"}</p>
+      </div>
+    );
+  }
+  if (n.type === "group") {
+    const color = ANNOTATION_COLORS[n.color ?? "blue"];
+    return (
+      <div className={cn("h-full w-full rounded-2xl border-2 border-dashed", color.box, selected && "ring-2 ring-white/25")}>
+        <NodeResizer isVisible={selected} minWidth={200} minHeight={120} lineClassName="!border-white/30" handleClassName="!size-2.5 !rounded-sm !border-slate-950 !bg-white/70" />
+        <div className={cn("px-3 py-2 text-sm font-semibold", color.text)}>{n.label || "Section"}</div>
+      </div>
+    );
+  }
   const meta = TYPE_META[n.type];
   const Icon = meta.icon;
   const errors = d.issues?.filter((issue) => issue.severity === "error").length ?? 0;
@@ -246,6 +289,8 @@ function blankNode(type: FlowNode["type"], id: string): FlowNode {
     case "document": return { id, type, documentId: "" };
     case "contactCard": return { id, type };
     case "goto": return { id, type, target: "" };
+    case "note": return { id, type, text: "A note for the team", color: "yellow" };
+    case "group": return { id, type, label: "Section", color: "blue", width: 520, height: 320 };
     case "answer": return { id, type, answerSource: "pricelist" };
     case "knowledge": return { id, type, query: "", noMatchText: "I couldn't find an approved answer for that." };
     case "set": return { id, type, variable: "status", value: "new" };
@@ -268,12 +313,7 @@ export default function FlowBuilder({ flowId, initial, journeys = [], flows = []
   const router = useRouter();
   const [start, setStart] = useState(initial.start);
   const [rfNodes, setRfNodes, applyNodesChange] = useNodesState<Node<RFData>>(
-    Object.values(initial.nodes).map((n, i) => ({
-      id: n.id,
-      type: "flowNode",
-      position: initial.positions?.[n.id] ?? { x: (i % 4) * 300 + 40, y: Math.floor(i / 4) * 220 + 40 },
-      data: { flow: n, isStart: n.id === initial.start },
-    }))
+    Object.values(initial.nodes).map((n, i) => toRfNode(n, initial.positions?.[n.id] ?? { x: (i % 4) * 300 + 40, y: Math.floor(i / 4) * 220 + 40 }, n.id === initial.start))
   );
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [status, setStatus] = useState("Saved");
@@ -405,12 +445,7 @@ export default function FlowBuilder({ flowId, initial, journeys = [], flows = []
       if (stored.baseUpdatedAt !== updatedAt || !stored.definition) return;
       const parsed = JSON.parse(stored.definition) as FlowData;
       if (!parsed.start || !parsed.nodes?.[parsed.start]) return;
-      const restoredNodes = Object.values(parsed.nodes).map((node, index) => ({
-        id: node.id,
-        type: "flowNode",
-        position: parsed.positions?.[node.id] ?? { x: (index % 4) * 300 + 40, y: Math.floor(index / 4) * 220 + 40 },
-        data: { flow: node, isStart: node.id === parsed.start },
-      } satisfies Node<RFData>));
+      const restoredNodes = Object.values(parsed.nodes).map((node, index) => toRfNode(node, parsed.positions?.[node.id] ?? { x: (index % 4) * 300 + 40, y: Math.floor(index / 4) * 220 + 40 }, node.id === parsed.start));
       const timer = window.setTimeout(() => {
         if (recovered.current) return;
         recovered.current = true;
@@ -508,7 +543,16 @@ export default function FlowBuilder({ flowId, initial, journeys = [], flows = []
   const onNodesChange = useCallback((changes: NodeChange<Node<RFData>>[]) => {
     applyNodesChange(changes);
     if (changes.some((change) => change.type === "position" && !change.dragging)) markDirty();
-  }, [applyNodesChange, markDirty]);
+    // A group resized (its NodeResizer): the new size is saved on the group itself.
+    for (const change of changes) {
+      if (change.type !== "dimensions" || change.resizing !== false || !change.dimensions) continue;
+      const { width, height } = change.dimensions;
+      setRfNodes((ns) => ns.map((rn) => (rn.id === change.id && rn.data.flow.type === "group"
+        ? { ...rn, style: { ...rn.style, width, height }, data: { ...rn.data, flow: { ...rn.data.flow, width: Math.round(width), height: Math.round(height) } } }
+        : rn)));
+      markDirty();
+    }
+  }, [applyNodesChange, markDirty, setRfNodes]);
 
   const edges: Edge[] = useMemo(() => {
     const out: Edge[] = [];
@@ -574,7 +618,7 @@ export default function FlowBuilder({ flowId, initial, journeys = [], flows = []
     remember(`add:${type}`, true);
     const id = newId(type);
     const fallbackPosition = { x: 120 + Math.random() * 200, y: 120 + Math.random() * 200 };
-    setRfNodes((ns) => [...ns, { id, type: "flowNode", position: position ?? fallbackPosition, data: { flow: blankNode(type, id), isStart: false } }]);
+    setRfNodes((ns) => [...ns, toRfNode(blankNode(type, id), position ?? fallbackPosition, false)]);
     setSelectedId(id);
     markDirty();
     setInspectorOpen(true);
@@ -644,7 +688,8 @@ export default function FlowBuilder({ flowId, initial, journeys = [], flows = []
     setInspectorOpen(true);
     window.setTimeout(() => focusCanvasNode.current(issue.nodeId!), 0);
   }, [rfNodes]);
-  const nodeOptions = rfNodes.map((n) => ({ id: n.id, label: `${TYPE_META[n.data.flow.type].label}: ${summary(n.data.flow).slice(0, 24) || n.data.flow.type}` }));
+  // Steps only: a note or group can't be a step's next one.
+  const nodeOptions = rfNodes.filter((n) => !isAnnotation(n.data.flow)).map((n) => ({ id: n.id, label: `${TYPE_META[n.data.flow.type].label}: ${summary(n.data.flow).slice(0, 24) || n.data.flow.type}` }));
   const knownVariables = useMemo(() => {
     const vars = new Set(BUILTIN_VARIABLES);
     for (const rn of rfNodes) {
@@ -884,6 +929,20 @@ function clearRefs(n: FlowNode, removedId: string): FlowNode {
 
 const FALLIBLE = new Set(["booking", "slots", "journey", "http", "knowledge", "extract", "subflow"]);
 
+function AnnotationColorPicker({ value, onChange }: { value: AnnotationColor; onChange: (color: AnnotationColor) => void }) {
+  return (
+    <div>
+      <p className="label">Colour</p>
+      <div className="flex gap-1.5">
+        {(Object.keys(ANNOTATION_COLORS) as AnnotationColor[]).map((color) => (
+          <button key={color} type="button" onClick={() => onChange(color)} aria-label={color} aria-pressed={value === color}
+            className={cn("size-7 rounded-md border-2", ANNOTATION_COLORS[color].box, value === color ? "ring-2 ring-white/60" : "")} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function TargetPicker({ value, onPick, nodeOptions }: { value?: string; onPick: (value?: string) => void; nodeOptions: { id: string; label: string }[] }) {
   return <select className="input btn-sm" value={value ?? ""} onChange={(event) => onPick(event.target.value || undefined)}><option value="">— (ends here) —</option>{nodeOptions.map((option) => <option key={option.id} value={option.id}>{option.label}</option>)}</select>;
 }
@@ -907,7 +966,7 @@ function NodePanel({ node, isStart, nodeOptions, variables, journeys, flows, doc
         <span className="flex items-center gap-2 text-sm font-semibold"><Icon className="size-4 text-primary" />{meta.label}</span>
         <div className="flex items-center gap-1">
           <button type="button" onClick={onDuplicate} className="grid size-9 place-items-center rounded-lg text-slate-400 hover:bg-white/5 hover:text-white" title="Duplicate node"><Copy className="size-4" /><span className="sr-only">Duplicate node</span></button>
-          {!isStart && <button type="button" onClick={onMakeStart} className="min-h-9 rounded-lg px-2 text-xs text-orange-400 hover:bg-orange-500/10">Set start</button>}
+          {!isStart && !isAnnotation(node) && <button type="button" onClick={onMakeStart} className="min-h-9 rounded-lg px-2 text-xs text-orange-400 hover:bg-orange-500/10">Set start</button>}
         </div>
       </div>
 
@@ -922,6 +981,8 @@ function NodePanel({ node, isStart, nodeOptions, variables, journeys, flows, doc
       {node.type === "ai" && <p className="text-xs text-slate-400">Chats conversationally, grounded in approved CRM/product facts and Approved Knowledge. Connect the amber dot to a node to control where it goes when confidence requires a handoff (otherwise it notifies the team).</p>}
       {node.type === "booking" && <><div><label className="label">Action</label><select className="input" value={node.action ?? "service"} onChange={(e) => onChange({ ...node, action: e.target.value as BookingAction })}><option value="service">Create service request</option><option value="demo">Create demo / test-drive lead</option><option value="lead">Create lead / enquiry</option><option value="lookup">Find customer&apos;s next service booking</option><option value="cancel">Cancel {"{{booking_id}}"}</option></select><p className="mt-1 text-xs text-slate-500">{node.action === "lookup" ? <>Read-only. Sets <code>{"{{booking_identity}}"}</code> (verified | unverified) and <code>{"{{booking_found}}"}</code>, <code>{"{{booking_id}}"}</code>, <code>{"{{booking_slot}}"}</code> and <code>{"{{booking_summary}}"}</code> from an existing customer record.</> : node.action === "cancel" ? <>Cancels only the future customer-owned booking in <code>{"{{booking_id}}"}</code> and retains its Activity history.</> : <>Built from captured fields (name, phone, email, service, model). For a real dated service booking use Workshop slots.</>}</p></div><div><label className="label">Message after action (optional)</label><textarea className="input" rows={3} value={node.text ?? ""} onChange={(e) => onChange({ ...node, text: e.target.value })} /></div></>}
       {node.type === "goto" && <><div><label className="label" htmlFor={`goto-${node.id}`}>Jump to</label><select id={`goto-${node.id}`} className="input" value={node.target} onChange={(e) => { const option = nodeOptions.find((o) => o.id === e.target.value); onChange({ ...node, target: e.target.value, targetLabel: option?.label }); }}><option value="">Choose a step…</option>{nodeOptions.map((option) => <option key={option.id} value={option.id}>{option.label}</option>)}</select></div><p className="text-xs text-slate-500">Jumps straight to that step and sends nothing itself — no wire across the canvas. For “↩ Back to menu”, point a menu option at a Go to placed next to it, jumping to your menu.</p></>}
+      {node.type === "note" && <><div><label className="label" htmlFor={`note-${node.id}`}>Note</label><textarea id={`note-${node.id}`} className="input" rows={5} value={node.text} onChange={(e) => onChange({ ...node, text: e.target.value })} placeholder="Brochure section — update each quarter" /></div><AnnotationColorPicker value={node.color ?? "yellow"} onChange={(color) => onChange({ ...node, color })} /><p className="text-xs text-slate-500">For the team only — never sent to a customer.</p></>}
+      {node.type === "group" && <><div><label className="label" htmlFor={`group-${node.id}`}>Title</label><input id={`group-${node.id}`} className="input" value={node.label} maxLength={60} onChange={(e) => onChange({ ...node, label: e.target.value })} placeholder="Welcome" /></div><AnnotationColorPicker value={node.color ?? "blue"} onChange={(color) => onChange({ ...node, color })} /><p className="text-xs text-slate-500">A box behind the steps to frame a section. Drag its corners to resize it; moving it doesn&apos;t move the steps inside.</p></>}
       {node.type === "journey" && <><div><label className="label">Journey</label><select className="input" value={node.journeyId} onChange={(e) => onChange({ ...node, journeyId: e.target.value })}><option value="">Select an active Journey…</option>{journeys.map((journey) => <option key={journey.id} value={journey.id}>{journey.name}</option>)}</select><p className="mt-1 text-xs text-slate-500">Enrols exactly this existing CRM customer/lead in the selected active Journey. Flow continues immediately; waits and later lifecycle actions stay in Journey. Retries reuse the same event identity.</p></div><div><label className="label">Message after enrolment (optional)</label><textarea className="input" rows={3} value={node.text ?? ""} onChange={(e) => onChange({ ...node, text: e.target.value })} /></div></>}
       {node.type === "knowledge" && <><div><label className="label">Knowledge query (optional)</label><textarea className="input" rows={3} value={node.query} onChange={(e) => onChange({ ...node, query: e.target.value })} placeholder="Leave blank to use the customer's current message" /><p className="mt-1 text-xs text-slate-500">Only approved, currently-valid Flowbot Knowledge entries can be returned.</p></div><div><label className="label">Also save answer as</label><input className="input" value={node.saveAs ?? ""} onChange={(e) => onChange({ ...node, saveAs: e.target.value.replace(/\W/g, "") || undefined })} placeholder="knowledge_answer" /></div><div><label className="label">If nothing matches, say</label><textarea className="input" rows={2} value={node.noMatchText ?? ""} onChange={(e) => onChange({ ...node, noMatchText: e.target.value || undefined })} /></div></>}
       {node.type === "set" && <><div><label className="label">Variable</label><input className="input" value={node.variable} onChange={(e) => onChange({ ...node, variable: e.target.value.replace(/\W/g, "") })} placeholder="status" /></div><div><label className="label">Value</label><textarea className="input" rows={3} value={node.value} onChange={(e) => onChange({ ...node, value: e.target.value })} placeholder="Use {{variables}} if needed" /></div></>}
