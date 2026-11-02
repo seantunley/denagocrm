@@ -2067,8 +2067,8 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
   const images = freshImages.length ? freshImages : carriedPhoto ? [carriedPhoto] : [];
   // What a card may attach or file: this question's upload, or the one carried — never one the model names.
   const cardUpload: CardUpload | null = fresh
-    ? { id: heldId, fileName: fresh.fileName, mimeType: fresh.mimeType, image: freshImages[0] }
-    : carried ? { id: carried.id, fileName: carried.fileName, mimeType: carried.mimeType, image: carriedPhoto } : null;
+    ? { id: heldId, fileName: fresh.fileName, mimeType: fresh.mimeType, image: freshImages[0], sentAt: new Date() }
+    : carried ? { id: carried.id, fileName: carried.fileName, mimeType: carried.mimeType, image: carriedPhoto, sentAt: carried.createdAt } : null;
   // The internet only when the owner switched it on, and never on a schedule
   // (nobody watching). Whether a given lookup may run is checked when it does.
   const webOn = profile.webSearch && source !== "schedule";
@@ -2685,7 +2685,7 @@ export async function resolveActions(
       cards.push({
         id: `a${index}-${p.contactId}`, kind: "customer_note", contactId: p.contactId, leadId: null, leadLabel: name,
         title: noteTitle(p, `${name}'s customer record`), text: p.text,
-        ...(p.pin ? { pin: true } : {}), ...(p.attachImage && image ? { image } : {}), ...(p.reason ? { reason: p.reason } : {}),
+        ...(p.pin ? { pin: true } : {}), ...(p.attachImage && image ? { image, detail: screenshotLine(upload) } : {}), ...(p.reason ? { reason: p.reason } : {}),
       });
       continue;
     }
@@ -2943,7 +2943,7 @@ export async function resolveActions(
       cards.push({ id, kind: "follow_up", leadId: p.leadId, leadLabel, title: `${p.summary ?? `Follow-up ${p.activity}`} with ${lead.name} — ${label}`, when, activity: p.activity, summary: p.summary, ...(p.reason ? { reason: p.reason } : {}) });
     } else if (p.type === "note") {
       if (p.attachImage && !image) { problems.push(NO_IMAGE_TO_ATTACH); continue; }
-      cards.push({ id, kind: "note", leadId: p.leadId, leadLabel, title: noteTitle(p, `${lead.name}'s lead`), text: p.text, ...(p.pin ? { pin: true } : {}), ...(p.attachImage && image ? { image } : {}), ...(p.reason ? { reason: p.reason } : {}) });
+      cards.push({ id, kind: "note", leadId: p.leadId, leadLabel, title: noteTitle(p, `${lead.name}'s lead`), text: p.text, ...(p.pin ? { pin: true } : {}), ...(p.attachImage && image ? { image, detail: screenshotLine(upload) } : {}), ...(p.reason ? { reason: p.reason } : {}) });
     } else if (p.type === "assign") {
       const wanted = p.to.trim().toLowerCase();
       const person = staff.find((s) => s.name.toLowerCase() === wanted) ?? staff.find((s) => s.name.toLowerCase().startsWith(wanted));
@@ -3039,7 +3039,18 @@ export async function detailClash(user: PermissionUser, contactId: string, chang
 }
 
 /** What a question brought or carried, as the card builder sees it: `id` is the held upload (null if holding it failed). */
-export type CardUpload = { id: string | null; fileName: string; mimeType: string; image: string | null };
+export type CardUpload = { id: string | null; fileName: string; mimeType: string; image: string | null; sentAt: Date };
+
+/**
+ * WHICH screenshot a note card attaches, in words — on WhatsApp the card can't show the picture, and the person may
+ * have sent several (review of #933). "Attaches the screenshot you sent at 14:32." (Johannesburg time.)
+ */
+export function screenshotLine(upload: { sentAt: Date } | null): string {
+  const at = upload?.sentAt ?? new Date();
+  const time = new Intl.DateTimeFormat("en-ZA", { timeZone: "Africa/Johannesburg", hour: "2-digit", minute: "2-digit", hour12: false }).format(at);
+  const day = johannesburgDateKey(at) === johannesburgDateKey(new Date()) ? "" : ` on ${new Intl.DateTimeFormat("en-ZA", { timeZone: "Africa/Johannesburg", day: "numeric", month: "short" }).format(at)}`;
+  return `Attaches the screenshot you sent at ${time}${day}.`;
+}
 
 /** A note card's title: what it adds, and where. */
 function noteTitle(p: { pin?: boolean; attachImage?: boolean }, where: string): string {

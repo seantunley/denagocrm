@@ -212,9 +212,11 @@ async function main() {
     // The card from the real builder: pinned, with THE picture in hand.
     const problems: string[] = [];
     const cards = await runAsSession(repSession, () => scoped(() =>
-      resolveActions(rep, [{ type: "customer_note", contactId: id("c-ben"), text: "Screenshot: Ben's trade-in photo", pin: true, attachImage: true }], problems, null, { id: heldId, fileName: "photo.jpg", mimeType: "image/jpeg", image: shot })));
+      resolveActions(rep, [{ type: "customer_note", contactId: id("c-ben"), text: "Screenshot: Ben's trade-in photo", pin: true, attachImage: true }], problems, null, { id: heldId, fileName: "photo.jpg", mimeType: "image/jpeg", image: shot, sentAt: new Date() })));
     const card = cards.find((c): c is Extract<ActionCard, { kind: "customer_note" }> => c.kind === "customer_note");
     check("the card carries the picture and says it pins the screenshot", card?.image === shot && /^Pin the screenshot to Ben/.test(card.title), JSON.stringify({ title: card?.title, problems }));
+    // On WhatsApp the card can't show the picture: it says WHICH one (review of #933).
+    check("…and says which screenshot: the time it was sent", /^Attaches the screenshot you sent at \d{2}:\d{2}\.$/.test(card?.detail ?? ""), card?.detail ?? "");
     const none: string[] = [];
     await runAsSession(repSession, () => scoped(() => resolveActions(rep, [{ type: "customer_note", contactId: id("c-ben"), text: "x", attachImage: true }], none, null, null)));
     check("no picture in hand: no card, and it says to send it again", /send the screenshot again/.test(none.join(" ")));

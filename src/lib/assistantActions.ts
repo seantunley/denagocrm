@@ -642,9 +642,9 @@ export function newCustomerDetail(customer: NewCustomer): string {
 export type ActionCard =
   | (LeadCard & { kind: "follow_up"; when: string; activity: string; summary?: string })
   // `image`: the photo sent with the question, as a cleaned JPEG data: URL — shown on the card, uploaded at Confirm by the note form's own action.
-  | (LeadCard & { kind: "note"; text: string; pin?: boolean; image?: string })
+  | (LeadCard & { kind: "note"; text: string; pin?: boolean; image?: string; detail?: string })
   // leadId null and leadLabel the customer's name: the same shape an activity with no lead has.
-  | { id: string; kind: "customer_note"; contactId: string; leadId: null; leadLabel: string; title: string; text: string; pin?: boolean; image?: string; reason?: string }
+  | { id: string; kind: "customer_note"; contactId: string; leadId: null; leadLabel: string; title: string; text: string; pin?: boolean; image?: string; detail?: string; reason?: string }
   // A new customer record: `detail` is every field as the person reads it before confirming. Confirm checks for a duplicate again.
   | { id: string; kind: "create_customer"; leadId: null; leadLabel: string; title: string; customer: NewCustomer; detail: string; reason?: string }
   // A new deal: for `lead.contactId`, or for a new person by name and number/email (the lead form links or creates the customer).
