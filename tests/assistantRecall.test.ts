@@ -213,7 +213,9 @@ test("every recall query names the asker AND the tenant; customer lookups go thr
 test("each saved turn carries its working memory and record links", () => {
   const lib = code("src/lib/crmAssistant.ts");
   const save = lib.slice(lib.indexOf("prisma.assistantTurn\n    .create("), lib.indexOf("select: { id: true }", lib.indexOf("prisma.assistantTurn\n    .create(")));
-  assert.match(save, /state: reply\.state, tags: reply\.state\.tags/);
+  // Working memory, plus the records the answer listed in order (assistantListedRules) — the server's, never the model's.
+  assert.match(save, /state: \{ \.\.\.reply\.state, \.\.\.\(shownHere\.length \? \{ listed: shownHere \} : \{\}\) \}, tags: reply\.state\?\.tags/);
+  assert.match(lib, /const shownHere = listedRecords\(reply\.answer, observations\.map\(\(o\) => o\.output\.data\)\)/);
   assert.match(save, /refs: turnRefs\(observations\.map\(\(o\) => o\.output\.data\)\)/);
   // The conversation reads it back.
   const recent = lib.slice(lib.indexOf("async function recentTurns("), lib.indexOf("async function recentTurns(") + 600);

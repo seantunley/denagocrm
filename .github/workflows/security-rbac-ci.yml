@@ -662,6 +662,12 @@ jobs:
       - name: Assistant -- explains why, only from records the asker may see
         run: npm run test:assistant-why
 
+      # "Draft a WhatsApp for the fourth one": a list DAX showed earlier is checked again before the next
+      # question reads it. A deal reassigned away from a salesperson since is an empty place (never named,
+      # never acted on, never swapped); another workspace's never appears. Writes nothing.
+      - name: Assistant -- "the fourth one" is re-checked against what the person may open now
+        run: npm run test:assistant-listed
+
       # A scheduled briefing going to a linked phone: what is waiting, claimed
       # before it is sent and released when it could not be, the template nudge
       # claimed once. No WhatsApp connection here, so nothing is ever sent.
