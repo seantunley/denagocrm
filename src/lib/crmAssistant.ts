@@ -54,7 +54,7 @@ import { matchPayment } from "./assistantPaymentMatch";
 import { stuckLookup } from "./assistantStuckLookup";
 import { catchUpLookup } from "./assistantCatchUpLookup";
 import { stuckDealsLookup } from "./assistantStuckDeals";
-import { countQuoted, quoteLineWhere } from "./quotedProducts";
+import { countQuoted, modelsNamed, quoteLineWhere } from "./quotedProducts";
 import { briefForAssistant, loadDaxBrief } from "./daxBrief";
 import { customerVehicles, workshopOverview } from "./workshopContext";
 import { breakerOpen, withRetry } from "./assistantBreaker";
@@ -380,6 +380,10 @@ export async function findQuotes(user: User, raw: z.infer<typeof quoteArgs>): Pr
   // including one a revision has replaced, which is still the quote they named.
   // The access filter below applies to it like any other.
   const wantedNumber = args.number === undefined ? null : Number(String(args.number).replace(/^Q-?/i, ""));
+  // The catalogue models the words name (quotedProducts.modelsNamed) — "Rover XL" is not "Rover XL 6".
+  const models = args.product
+    ? modelsNamed(await prisma.product.findMany({ where: { deletedAt: null }, select: { id: true, name: true } }), args.product)
+    : null;
   const quotes = await prisma.quote.findMany({
     where: {
       deletedAt: null,
@@ -408,7 +412,7 @@ export async function findQuotes(user: User, raw: z.infer<typeof quoteArgs>): Pr
             validUntil: { gte: new Date(Date.now() - DAY), lte: new Date(Date.now() + args.expiringWithinDays * DAY) },
           }
         : {}),
-      ...(args.product || args.colour ? { items: { some: quoteLineWhere(args.product, args.colour) } } : {}),
+      ...(args.product || args.colour ? { items: { some: quoteLineWhere(models?.map((m) => m.id) ?? null, args.colour) } } : {}),
     },
     orderBy: args.expiringWithinDays !== undefined ? { validUntil: "asc" } : { createdAt: "desc" },
     take: CANDIDATES,
@@ -433,11 +437,12 @@ export async function findQuotes(user: User, raw: z.infer<typeof quoteArgs>): Pr
   // "How many white Rover XLs?" — counted over every matching quote, not the page (quotedProducts.ts).
   const matching = args.product || args.colour
     ? {
-        ...countQuoted(priced.map(({ quote }) => quote), args.product, args.colour),
+        models: models ? models.map((m) => m.name) : "any vehicle",
+        ...countQuoted(priced.map(({ quote }) => quote), models, args.colour),
         exact: quotes.length < CANDIDATES,
-        note: quotes.length < CANDIDATES
-          ? "Exact: every matching quote this person may open, superseded revisions left out — not only those listed."
-          : `At least: more than ${CANDIDATES} quotes matched.`,
+        note: models?.length === 0
+          ? `No product in the catalogue is called "${args.product}".`
+          : `${quotes.length < CANDIDATES ? "Exact: every matching quote this person may open, superseded revisions left out — not only those listed." : `At least: more than ${CANDIDATES} quotes matched.`} Vehicles only: lines linked to a catalogue product. Free-text lines (often accessories, e.g. "Rain Cover Rover XL") are not counted.`,
       }
     : null;
   return {
