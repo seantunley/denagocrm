@@ -714,7 +714,10 @@ test("'typing…' shows while DAX works it out — for staff only, before the an
   const handler = lib.slice(lib.indexOf("export async function handleStaffWhatsApp"), lib.indexOf("async function sendVoiceAnswer"));
   assert.ok(handler.indexOf("assistantAskAllowed(user.id)") < handler.indexOf("showWhatsAppTyping(messageId)"));
   assert.ok(handler.indexOf("showWhatsAppTyping(messageId)") < handler.indexOf("await askCrm("));
-  assert.equal(lib.match(/showWhatsAppTyping\(/g)?.length, 1);
+  // Two calls: the first, and its renewal every TYPING_RENEW_MS while DAX works (Meta drops it after 25 s) — both
+  // inside the staff path, the renewal after the first.
+  assert.equal(lib.match(/showWhatsAppTyping\(/g)?.length, 2);
+  assert.ok(handler.indexOf("showWhatsAppTyping(messageId)") < handler.indexOf("setInterval("));
   const wa = code("src/lib/whatsapp.ts");
   const typing = wa.slice(wa.indexOf("export async function showWhatsAppTyping"), wa.indexOf("export async function sendWhatsAppImage"));
   assert.match(typing, /status: "read", message_id: messageId, typing_indicator: \{ type: "text" \}/);
@@ -978,7 +981,7 @@ test("the staff path never writes a customer record or runs the bot", () => {
   for (const call of lib.match(/sendWhatsApp(Text|Buttons)\([^)]*\)/g) ?? []) {
     assert.doesNotMatch(call, /record/, call);
   }
-  assert.match(lib, /askCrm\(user, q, null, \{ source: "whatsapp", images, proposeTasks: \(await confirmingOnWhatsAppOn\(\)\) \? true : "saved" \}\)/);
+  assert.match(lib, /askCrm\(user, q, null, \{ source: "whatsapp", images, \.\.\.\(voiceBack \? \{ spoken: true \} : \{\}\), proposeTasks: \(await confirmingOnWhatsAppOn\(\)\) \? true : "saved" \}\)/);
   // Every lookup names the workspace the route entered for the business number.
   assert.match(lib, /const scope = currentTenantScope\(\);\s*if \(!scope \|\| scope\.system \|\| !scope\.tenantId\) return false;\s*const tenantId = scope\.tenantId;/);
   // …and it is the first thing the handler does: nothing runs before it.

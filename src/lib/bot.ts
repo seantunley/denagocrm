@@ -6,6 +6,8 @@ import { notifyHandoff } from "./handoffNotify";
 import { resolveTenantActor } from "./tenantActor";
 import { isBotAiEnabled, generateBotReply, type BotMsg } from "./botAi";
 import { elevenLabsTTS, canSynthesizeVoice } from "./elevenlabs";
+import { PRONUNCIATIONS_KEY, parsePronunciations, speakableText } from "./spokenText";
+import { SPOKEN_CHARS } from "./assistantVoiceRules";
 import type { VoiceLanguage } from "./voiceLanguage";
 
 export type BotRule = { id: string; keywords: string; reply: string };
@@ -60,8 +62,11 @@ async function voiceRepliesEnabled(): Promise<boolean> {
  * gets a reply. `viaVoice` reports what was ACTUALLY sent so the caller logs the
  * real channel (a text fallback must not be recorded as a voice reply).
  */
-async function sendVoiceReply(fromDigits: string, text: string, ttsModel?: string): Promise<{ ok: boolean; viaVoice: boolean; providerMessageId?: string }> {
-  const audio = await elevenLabsTTS(text, { model: ttsModel });
+async function sendVoiceReply(fromDigits: string, text: string, language: "en" | "af" = "en"): Promise<{ ok: boolean; viaVoice: boolean; providerMessageId?: string }> {
+  // Said, not read out (Sean, 2026-11-02): amounts, dates and lists in words, the workspace's pronunciations. A
+  // reply too long to say whole goes as TEXT — a customer is never left with half an answer.
+  const spoken = speakableText(text, { afrikaans: language === "af", pronunciations: parsePronunciations(await getSetting(PRONUNCIATIONS_KEY).catch(() => null)) });
+  const audio = spoken && spoken.length <= SPOKEN_CHARS ? await elevenLabsTTS(spoken, { language }) : null;
   if (audio) {
     // .ogg so WhatsApp treats it as a voice note (PTT waveform), not an audio file.
     const uploaded = await uploadWhatsAppMedia(audio.buffer, audio.contentType, "voice-reply.ogg").catch(() => null);
@@ -192,7 +197,7 @@ export async function maybeAutoReply(
       let sentVoice = false;
       let sent: { ok: boolean; providerMessageId?: string };
       if (voiceReply) {
-        const r = await sendVoiceReply(fromDigits, ai.reply, replyLanguage?.ttsModel);
+        const r = await sendVoiceReply(fromDigits, ai.reply, replyLanguage?.ttsLanguage ?? "en");
         sent = r;
         sentVoice = r.viaVoice;
       } else {

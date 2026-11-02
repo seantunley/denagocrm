@@ -83,7 +83,22 @@ export function parseState(raw: unknown): ConversationState | null {
 /** `attempted`: how many tasks the reply tried to propose — `actions` holds only the well-formed ones. */
 /** `task`: what it wrote about a job sheet (assistantTaskRules) — the caller keeps only CRM ids and applies it. */
 /** `plan`: a multi-step plan (assistantPlanRules) — its steps are tasks like `actions`, run by one Confirm. */
-export type ParsedReply = { answer: string; learn: LearnBlock | null; actions: ProposedAction[]; attempted: number; choices: string[]; state: ConversationState | null; task: TaskUpdate | null; plan: PlanProposal | null };
+/** `spoken`: the version to SAY, written by the model when the answer goes out as a voice note (SPOKEN_RULE). */
+export type ParsedReply = { answer: string; learn: LearnBlock | null; actions: ProposedAction[]; attempted: number; choices: string[]; state: ConversationState | null; task: TaskUpdate | null; plan: PlanProposal | null; spoken: string | null };
+
+/** How long a spoken script may be — about a minute of speech; the voice note itself is cut shorter (SPOKEN_CHARS). */
+export const SPOKEN_SCRIPT_CHARS = 900;
+/**
+ * The answer is going out as a VOICE NOTE (Sean, 2026-11-02: "the voicenotes don't flow… sounds very mechanical").
+ * A written answer read aloud is lists, symbols and figures; this asks for what a person would SAY.
+ */
+export const SPOKEN_RULE = [
+  'VOICE NOTE. This answer will be SPOKEN to the person as a WhatsApp voice note, instead of sent as text. In the block, add a "spoken" key: what to SAY.',
+  "- 2 to 5 short, natural sentences, the main point first — as you'd say it on the phone to a colleague. No lists, headings, links, emoji or symbols.",
+  '- Numbers as a person says them: "a hundred and eighty-five thousand rand", "quote ten thirty", "Monday the second of November".',
+  "- Same language as your answer. If you set something up for them to confirm, or are asking them to choose, say so in a few words.",
+  "- If the answer has detail that won't fit, give the gist and say the full answer is on their Ask page in the CRM.",
+].join("\n");
 
 /** The reply → the answer and its validated block (or the legacy trailer lines). */
 export function splitReply(reply: string): ParsedReply {
@@ -108,6 +123,7 @@ export function splitReply(reply: string): ParsedReply {
     state: block && "state" in block ? parseState(block.state) : null,
     task: block && "task" in block ? parseTaskUpdate(block.task) : null,
     plan: block && "plan" in block ? parsePlan(block.plan) : null,
+    spoken: block && typeof block.spoken === "string" && block.spoken.trim() ? block.spoken.trim().slice(0, SPOKEN_SCRIPT_CHARS) : null,
   };
 }
 
@@ -115,7 +131,7 @@ function legacy(reply: string): ParsedReply {
   const learnSplit = splitLearn(reply);
   const choiceSplit = splitChoices(learnSplit.answer);
   const { answer, actions } = splitActions(choiceSplit.answer);
-  return { answer, learn: learnSplit.learn, actions, attempted: actions.length, choices: choiceSplit.choices, state: null, task: null, plan: null };
+  return { answer, learn: learnSplit.learn, actions, attempted: actions.length, choices: choiceSplit.choices, state: null, task: null, plan: null, spoken: null };
 }
 
 /** The block's JSON object (a code fence around it tolerated), or null. */

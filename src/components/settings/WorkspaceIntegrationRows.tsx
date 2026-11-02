@@ -7,6 +7,10 @@ import { saveSetting, regenerateSetting } from "@/app/actions/settings";
 import { connectTelegram, disconnectTelegram } from "@/app/actions/bot";
 import { getSetting } from "@/lib/settings";
 import { codexStatus, type CodexStatus } from "@/lib/codex";
+import VoicePicker from "@/components/settings/VoicePicker";
+import { DEFAULT_TTS_MODEL, TTS_MODELS, VOICE_SPEEDS, elevenLabsVoices, modelTakesSpeed } from "@/lib/elevenlabs";
+import { STT_CUSTOMER_NAMES_KEY, TTS_MODEL_KEY, VOICE_SPEED_KEY } from "@/lib/voiceSettings";
+import { PRONUNCIATIONS_KEY } from "@/lib/spokenText";
 
 /** The workspace settings these rows read. Never per-tenant-credential keys — those are the page's own forms. */
 const KEYS = [
@@ -19,6 +23,10 @@ const KEYS = [
   "AI_AUTO_RESEARCH",
   "ELEVENLABS_API_KEY",
   "ELEVENLABS_VOICE_ID",
+  "ELEVENLABS_TTS_MODEL",
+  "ELEVENLABS_VOICE_SPEED",
+  "ELEVENLABS_PRONUNCIATIONS",
+  "ELEVENLABS_STT_CUSTOMER_NAMES",
   "WHATSAPP_VOICE_REPLIES",
   "INTAKE_API_KEY",
 ] as const;
@@ -40,6 +48,8 @@ export default async function WorkspaceIntegrationRows({ xAccountId }: { xAccoun
   const setting = (key: (typeof KEYS)[number]) => values.get(key) ?? "";
   // A read that fails must not take the page down with it.
   const chatGpt: CodexStatus = await codexStatus().catch((): CodexStatus => ({ state: "disconnected" }));
+  // The voices in the ElevenLabs account, for the picker; null (a typed ID instead) when there is no key or it fails.
+  const voices = setting("ELEVENLABS_API_KEY") ? await elevenLabsVoices().catch(() => null) : null;
 
   return (
     <>
@@ -276,13 +286,54 @@ export default async function WorkspaceIntegrationRows({ xAccountId }: { xAccoun
             <SaveButton className="btn-primary">Save</SaveButton>
             {setting("ELEVENLABS_API_KEY") ? <ClearSecret settingKey="ELEVENLABS_API_KEY" label="ElevenLabs API key" /> : null}
           </SaveForm>
-          <SaveForm resetOnSuccess={false} action={saveSetting} className="flex gap-2 items-end">
-            <input type="hidden" name="key" value="ELEVENLABS_VOICE_ID" />
-            <div className="flex-1">
-              <label className="label">Voice ID</label>
-              <input name="value" className="input" defaultValue={setting("ELEVENLABS_VOICE_ID")} placeholder="e.g. 21m00Tcm4TlvDq8ikWAM" />
-            </div>
-            <SaveButton className="btn-primary">Save</SaveButton>
+          <VoicePicker voices={voices} current={setting("ELEVENLABS_VOICE_ID")} />
+          <div className="grid gap-3 sm:grid-cols-2">
+            <SaveForm resetOnSuccess={false} action={saveSetting} className="flex gap-2 items-end">
+              <input type="hidden" name="key" value={TTS_MODEL_KEY} />
+              <div className="flex-1">
+                <label className="label">Voice model</label>
+                <select name="value" className="input" defaultValue={TTS_MODELS.some((m) => m.id === setting(TTS_MODEL_KEY)) ? setting(TTS_MODEL_KEY) : DEFAULT_TTS_MODEL}>
+                  {TTS_MODELS.map((m) => <option key={m.id} value={m.id}>{m.label}</option>)}
+                </select>
+              </div>
+              <SaveButton className="btn-secondary btn-sm">Save</SaveButton>
+            </SaveForm>
+            {/* Only a model that takes it shows it (v4 and v3 have no speed control — ElevenLabs' docs; review of #935). */}
+            {modelTakesSpeed(TTS_MODELS.some((m) => m.id === setting(TTS_MODEL_KEY)) ? setting(TTS_MODEL_KEY) : DEFAULT_TTS_MODEL) ? (
+              <SaveForm resetOnSuccess={false} action={saveSetting} className="flex gap-2 items-end">
+                <input type="hidden" name="key" value={VOICE_SPEED_KEY} />
+                <div className="flex-1">
+                  <label className="label">Speaking speed</label>
+                  <select name="value" className="input" defaultValue={(VOICE_SPEEDS as readonly string[]).includes(setting(VOICE_SPEED_KEY)) ? setting(VOICE_SPEED_KEY) : "1"}>
+                    {VOICE_SPEEDS.map((s) => <option key={s} value={s}>{s === "1" ? "Normal" : Number(s) < 1 ? `Slower (${s})` : `Faster (${s})`}</option>)}
+                  </select>
+                </div>
+                <SaveButton className="btn-secondary btn-sm">Save</SaveButton>
+              </SaveForm>
+            ) : (
+              <p className="text-xs text-muted-foreground self-end">
+                Speaking speed isn&apos;t adjustable with Eleven v4 or v3 — they pace themselves. Choose Multilingual v2 or
+                Flash v2.5 to set a speed.
+              </p>
+            )}
+          </div>
+          <SaveForm resetOnSuccess={false} action={saveSetting} className="space-y-2">
+            <input type="hidden" name="key" value={PRONUNCIATIONS_KEY} />
+            <label className="label">How to say names (one per line: word = how to say it)</label>
+            <textarea name="value" rows={4} className="input font-mono text-xs" defaultValue={setting(PRONUNCIATIONS_KEY)} placeholder={"Denago = Deh-NAH-go\nTokai = Toh-KAI"} />
+            <p className="text-xs text-muted-foreground">Used whenever DAX or the chatbot speaks, and to help transcribe voice notes with these words spelt right.</p>
+            <SaveButton className="btn-secondary btn-sm">Save</SaveButton>
+          </SaveForm>
+          <SaveForm resetOnSuccess={false} action={saveSetting} className="flex items-start gap-2">
+            <input type="hidden" name="key" value={STT_CUSTOMER_NAMES_KEY} />
+            <label className="flex items-start gap-2 text-sm text-muted-foreground cursor-pointer">
+              <input type="checkbox" name="value" value="on" defaultChecked={setting(STT_CUSTOMER_NAMES_KEY) === "on"} className="h-4 w-4 mt-0.5" />
+              <span>
+                Help transcription spell your customers&apos; names — sends the names of customers with open deals to
+                ElevenLabs with each voice note. Product, staff and business names are always sent. (Off by default.)
+              </span>
+            </label>
+            <SaveButton className="btn-secondary btn-sm">Save</SaveButton>
           </SaveForm>
           <SaveForm resetOnSuccess={false} action={saveSetting} className="flex items-center gap-2">
             <input type="hidden" name="key" value="WHATSAPP_VOICE_REPLIES" />
