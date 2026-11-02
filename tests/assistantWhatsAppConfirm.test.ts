@@ -437,7 +437,11 @@ test("review of #905: the customer record was made, then the quote failed — th
   assert.ok(build.indexOf("await quoteFromLeadDefaults()") > -1 && build.indexOf("await quoteFromLeadDefaults()") < build.indexOf("convertLeadToContact("));
   const afterCustomer = build.slice(build.indexOf("convertLeadToContact("), build.indexOf("await saveQuoteDraft("));
   assert.doesNotMatch(afterCustomer.replace(/^\s*\/\/.*$/gm, ""), /await (?!logError)/, "between the customer record and the protected save, nothing else is awaited");
-  assert.equal(action.match(/resumable\(/g)?.length, 1, "made in one place: quote_build's retry after the customer");
+  // One place. record_payment is not one (review of #934): its key records the payment once, its proof is filed once
+  // under its own key, and a proof that may not have been filed is said plainly — never offered for a blind retry.
+  assert.equal(action.match(/resumable\(/g)?.length, 1, "quote_build after the customer");
+  const payment = action.slice(action.indexOf('case "record_payment": {'), action.indexOf('case "update_customer": {'));
+  assert.ok(payment.indexOf('form.set("idempotencyKey", card.confirmKey)') < payment.indexOf("await recordQuotePayment("), "the payment is once-only by the card's key");
   // A colour the catalogue no longer has stops Confirm BEFORE the customer record is made.
   assert.ok(build.indexOf("if (lines.some(notOffered)) return untouched(") < build.indexOf("convertLeadToContact("));
   // The CRM card's own Confirm and its saved-card door release on it too.
@@ -487,7 +491,9 @@ test("A PINNED NOTE WHOSE PIN FAILS IS NOT WRITTEN TWICE: the note was saved, so
   // (2026-11-02, two of create_lead's — invalid card, customer no longer theirs — before createLead; four of
   // update_customer's — invalid card, customer gone, a field changed since, a clash — before updateContact.)
   // (2026-11-02, review of #933: one more of create_lead's — a card without its confirm key.)
-  assert.equal((run.match(/return untouched\(/g) ?? []).length, 48);
+  // (2026-11-02, two of attach_file's — invalid card, the file no longer held — and three of record_payment's —
+  // no key, an invalid amount or date, the proof no longer held — each before its one write.)
+  assert.equal((run.match(/return untouched\(/g) ?? []).length, 53);
   const buildCase = run.slice(run.indexOf('case "quote_build": {'), run.indexOf('case "quote_pdf": {'));
   assert.ok(buildCase.indexOf("The catalogue changed since DAX suggested this") < buildCase.indexOf("convertLeadToContact("), "every check before the customer record is made");
   const quotePdfCase = run.slice(run.indexOf('case "quote_pdf": {'), run.indexOf('case "quote_change": {'));

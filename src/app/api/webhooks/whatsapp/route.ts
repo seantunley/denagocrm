@@ -10,7 +10,7 @@ import { voiceLanguage } from "@/lib/voiceLanguage";
 import { saveFile } from "@/lib/storage";
 import { runWhatsAppBot } from "@/lib/flowRun";
 import { handleStaffWhatsApp } from "@/lib/assistantWhatsApp";
-import { sharedContactQuestion } from "@/lib/assistantWhatsAppRules";
+import { forwardedForDax, sharedContactQuestion } from "@/lib/assistantWhatsAppRules";
 import { linkScreening, screenInbound, type ScreenOutcome } from "@/lib/inboundScreening/screen";
 import { withChannelTenantScope, validateInSystemScope } from "@/lib/tenantScopeEntry";
 import { reportUnmappedEndpoint } from "@/lib/channelRegistration";
@@ -133,7 +133,8 @@ export async function POST(req: NextRequest) {
 
               if (message.type === "text") {
                 const text = message.text?.body ?? "";
-                if (await handleStaffWhatsApp(from, { text }, message.id)) return;
+                // Forwarded: DAX is told it is someone else's message (only on the staff path; a customer's is recorded as sent).
+                if (await handleStaffWhatsApp(from, { text: forwardedForDax(message, text) }, message.id)) return;
                 if (await held("text", text, text)) return;
                 await link(await recordInboundWhatsApp(from, profileName, text, String(message.id ?? "")));
                 await runWhatsAppBot(from, { text }, { entryContext });
@@ -162,7 +163,10 @@ export async function POST(req: NextRequest) {
                 // below: recording it would create a customer contact on the staff
                 // member's own number, and a number on a customer record is unlinked
                 // from the assistant on its next message.
-                if (await handleStaffWhatsApp(from, { mediaId: String(media?.id ?? ""), mediaKind: message.type, caption }, message.id)) return;
+                if (await handleStaffWhatsApp(from, {
+                  mediaId: String(media?.id ?? ""), mediaKind: message.type, caption: forwardedForDax(message, caption),
+                  ...(message.type === "document" && typeof message.document?.filename === "string" ? { fileName: message.document.filename } : {}),
+                }, message.id)) return;
                 // Before the download: a quarantined sender's file is never fetched or stored.
                 if (await held("media", caption, `📎 ${caption || "[file]"}`)) return;
                 let fileUrl: string | undefined;
