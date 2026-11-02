@@ -69,7 +69,7 @@ export async function stuckLookup(user: PermissionUser, needle: string): Promise
     select: {
       id: true, title: true, name: true, status: true, valueCents: true, notes: true, createdAt: true,
       stageId: true, stageEnteredAt: true, contactId: true, wonAt: true, lostAt: true, lostReason: true,
-      nurtureSince: true, nurtureReason: true, nurtureReviewAt: true, attentionDispositions: true,
+      nurtureSince: true, nurtureReason: true, nurtureInterest: true, nurtureReviewAt: true, attentionDispositions: true,
       stage: { select: { name: true, staleAfterDays: true } },
       assignedTo: { select: { name: true } },
     },
@@ -209,7 +209,7 @@ export async function stuckLookup(user: PermissionUser, needle: string): Promise
     leadId: lead.id,
     status: lead.status,
     createdAt: lead.createdAt,
-    parked: lead.status === "nurture" ? { since: lead.nurtureSince, reason: lead.nurtureReason, reviewAt: lead.nurtureReviewAt } : null,
+    parked: lead.status === "nurture" ? { since: lead.nurtureSince, reason: lead.nurtureReason, interest: lead.nurtureInterest, reviewAt: lead.nurtureReviewAt } : null,
     signals,
     setAside: setAsideNotes(lead.attentionDispositions, now),
     quote: stuckQuote,

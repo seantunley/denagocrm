@@ -116,9 +116,10 @@ test("QUIET: the customer's silence after the Today queue's NO_CONTACT_DAYS — 
 });
 
 test("PARKED: a deal put in nurture says so first, with the reason given and when it is reviewed", () => {
-  const reasons = stuckReasons({ ...base, status: "nurture", parked: { since: ago(14), reason: "Waiting for his bonus in December", reviewAt: new Date("2026-12-01T08:00:00Z") }, lastContactAt: ago(14) });
+  const reasons = stuckReasons({ ...base, status: "nurture", parked: { since: ago(14), reason: "timing", interest: "Rover XL after his December bonus", reviewAt: new Date("2026-12-01T08:00:00Z") }, lastContactAt: ago(14) });
   assert.equal(reasons[0].kind, "parked");
-  assert.equal(reasons[0].why, 'Parked in nurture on 2026-10-19: "Waiting for his bonus in December" — review due 2026-12-01');
+  assert.equal(reasons[0].why, 'Parked in nurture on 2026-10-19: "Buying later" (interest: Rover XL after his December bonus) — review due 2026-12-01', "the reason's label, never its code");
+  assert.ok(!reasons.some((r) => r.kind === "customer_quiet"), "a parked deal is quiet on purpose");
 });
 
 test("SET ASIDE: read with the Attention Centre's own parser — a snooze that has run out is not one", () => {
@@ -294,6 +295,8 @@ test("CATCH-UP is the person's own: their own questions, their own deals as the 
   assert.match(catchUp, /const filedOnMine = \{ OR: \[\{ leadId: \{ in: mineLeadIds \} \}, \{ leadId: null, contactId: \{ in: mineContactIds \} \}\] \};/);
   // Quotes: inside the access list, and only theirs.
   assert.match(catchUp, /\.\.\.\(quoteIds === null \? \{\} : \{ id: \{ in: quoteIds \} \}\),\s*AND: \[/);
+  // Parking, reactivating and a delivery booked or moved are news too (#938, #939).
+  for (const action of ["lead.nurtured", "lead.reactivated", "fulfilment.delivery_scheduled", "fulfilment.delivery_rescheduled"]) assert.ok(catchUp.includes(`"${action}"`), action);
   // Moves made by someone else (a person or the CRM) — never their own.
   assert.match(catchUp, /OR: \[\{ userId: null \}, \{ userId: \{ not: user\.id \} \}\]/);
   // Opened again: the customer, never a colleague.

@@ -4,6 +4,7 @@ import { deliveryStage } from "./daxBriefRules";
 import { NEW_LEAD_DAYS, NO_CONTACT_DAYS, agoPhrase, calendarDaysAgo } from "./leadScore";
 import { johannesburgDateKey } from "./activityDay";
 import { stamp } from "./assistantWhy";
+import { nurtureReasonLabel } from "./leadNurture";
 
 /**
  * "Why is this deal stuck?" — the PURE half. assistantStuckLookup.ts reads the rows the person may see and hands
@@ -90,7 +91,8 @@ export type StuckInput = {
   /** open | nurture | won (a lost deal is closed, not stuck — the lookup says so instead). */
   status: string;
   createdAt: Date;
-  parked?: { since: Date | null; reason: string | null; reviewAt: Date | null } | null;
+  /** Nurture: `reason` is the stored code (leadNurture.NURTURE_REASONS), `interest` what they may still want. */
+  parked?: { since: Date | null; reason: string | null; interest?: string | null; reviewAt: Date | null } | null;
   /** The deal's attention signals (open deals only — the Attention Centre lists nothing else). */
   signals: Pick<AttentionSignal, "kind" | "key" | "detail" | "since" | "actionHref">[];
   /** Signal key → how it was set aside, while that is in force (setAsideNotes). */
@@ -150,7 +152,7 @@ export function stuckReasons(input: StuckInput): StuckReason[] {
     const p = input.parked;
     reasons.push({
       kind: "parked",
-      why: `Parked in nurture${p?.since ? ` on ${day(p.since)}` : ""}${quoted(p?.reason)}${p?.reviewAt ? ` — review due ${day(p.reviewAt)}` : ""}`,
+      why: `Parked in nurture${p?.since ? ` on ${day(p.since)}` : ""}${p?.reason ? quoted(nurtureReasonLabel(p.reason)) : ""}${p?.interest?.trim() ? ` (interest: ${clip(p.interest.trim(), 100)})` : ""}${p?.reviewAt ? ` — review due ${day(p.reviewAt)}` : ""}`,
       date: p?.since ?? null,
       link: lead,
     });
@@ -192,8 +194,8 @@ export function stuckReasons(input: StuckInput): StuckReason[] {
   }
 
   // Quiet is the CUSTOMER's silence — never when they wrote last and are waiting on us (the Today queue's rule too).
-  // A won deal's customer going quiet holds nothing up.
-  if (input.status !== "won" && waitingOn(input.lastIn, input.lastOut) !== "us") {
+  // Only on an open deal: a won one's customer going quiet holds nothing up, and a parked one is quiet on purpose.
+  if (input.status === "open" && waitingOn(input.lastIn, input.lastOut) !== "us") {
     if (input.lastContactAt) {
       const days = calendarDaysAgo(input.lastContactAt, now);
       if (days >= NO_CONTACT_DAYS) {

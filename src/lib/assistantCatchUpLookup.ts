@@ -22,8 +22,11 @@ import { CATCH_UP_LEGEND, catchUpSince, messagesByCustomer, newestFirst, quoteNe
 
 type Output = { rows: { label: string; detail: string; href: string }[]; data: unknown[]; truncated: boolean };
 
-/** What someone ELSE did to a deal that matters to its owner. */
-const DEAL_MOVES = ["lead.stage_changed", "lead.won", "lead.lost", "lead.reopened", "lead.assigned"];
+/** What someone ELSE did to a deal that matters to its owner — its stage, its outcome, parking it, its delivery date. */
+const DEAL_MOVES = [
+  "lead.stage_changed", "lead.won", "lead.lost", "lead.reopened", "lead.assigned", "lead.nurtured", "lead.reactivated",
+  "fulfilment.delivery_scheduled", "fulfilment.delivery_rescheduled",
+];
 const DAY_MS = 86_400_000;
 const clip = (s: string | null | undefined, n: number) => (s ? (s.length > n ? `${s.slice(0, n)}…` : s) : null);
 /** At most this many inbound messages are read (newest first); more and the result says it was cut. */

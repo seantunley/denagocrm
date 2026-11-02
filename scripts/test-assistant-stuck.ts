@@ -131,6 +131,12 @@ async function main() {
   const hanaRequest = await basePrisma.signatureRequest.create({ data: { tenantId: A, title: `Q-${qh.number}`, status: "sent", sentAt: ago(4 * DAY), quoteId: qh.id }, select: { id: true } });
   await basePrisma.signatureRecipient.create({ data: { tenantId: A, requestId: hanaRequest.id, name: "Hana", email: `hana.${SFX}@customer.invalid`, role: "signer", status: "sent", token: digest() } });
 
+  // ── Nia: rep's deal a colleague parked in Nurture yesterday ─────────────────
+  const niaLead = await basePrisma.lead.create({ data: {
+    tenantId: A, stageId, status: "nurture", name: name("Nia"), title: "Rover XL", assignedToId: repOwn.id, createdById: repOwn.id, createdAt: ago(40 * DAY),
+    nurtureSince: ago(20 * HOUR), nurtureReason: "timing", nurtureInterest: "Rover XL after his December bonus", nurtureReviewAt: new Date(T0 + 20 * DAY),
+  }, select: { id: true } });
+
   // ── Lara: rep's LOST deal ──────────────────────────────────────────────────
   await lead({ name: name("Lara"), title: "Rover S", status: "lost", lostReason: "Bought a used cart", assignedToId: repOwn.id, createdById: repOwn.id });
 
@@ -175,6 +181,8 @@ async function main() {
     { tenantId: A, action: "lead.won", summary: `Lead “Nomad” won ${SFX}`, leadId: danLead.id, userId: null, userName: "System", createdAt: ago(10 * HOUR) },
     { tenantId: A, action: "lead.assigned", summary: `Auto-assigned to Rep Own by lead routing ${SFX}`, leadId: eveLead.id, userId: null, userName: "System", createdAt: ago(4 * HOUR) },
     { tenantId: A, action: "lead.assigned", summary: `Assigned lead “Fleet order” to Rep Own ${SFX}`, leadId: gusLead.id, userId: a.memberUserId, userName: "Harness A member", createdAt: ago(8 * HOUR) },
+    { tenantId: A, action: "lead.nurtured", summary: `Moved to nurture: “Rover XL” — Buying later ${SFX}`, leadId: niaLead.id, userId: a.memberUserId, userName: "Harness A member", createdAt: ago(20 * HOUR) },
+    { tenantId: A, action: "fulfilment.delivery_rescheduled", summary: `Q-${qb.number} delivery moved ${SFX}`, leadId: benLead.id, userId: a.memberUserId, userName: "Harness A member", createdAt: ago(9 * HOUR) },
   ] });
 
   // ── The rep's questions to DAX: the last real one 26 hours ago; a scheduled run since must not count ──
@@ -230,6 +238,10 @@ async function main() {
     check("…and by the customer's id (the bubble on her page)", (await stuck(A, repOwn, anna.id)).reasons?.length === 5);
     const ben = await stuck(A, repOwn, benLead.id);
     check("a WON deal held up after signing: invoiced, deposit not in (the deliveries board's rule)", ben.deal?.status === "won" && ben.reasons?.length === 1 && ben.reasons[0].kind === "after_signing" && ben.reasons[0].why === `Q-${qb.number} was invoiced on ${johannesburgDateKey(ago(10 * DAY))} and the deposit hasn't been marked paid`, JSON.stringify(ben.reasons));
+    const nia = await stuck(A, repOwn, niaLead.id);
+    check("a deal parked in Nurture says so first — the reason's label, the interest, the review date — and is not 'gone quiet'",
+      nia.reasons?.[0]?.kind === "parked" && nia.reasons[0].why === `Parked in nurture on ${johannesburgDateKey(ago(20 * HOUR))}: "Buying later" (interest: Rover XL after his December bonus) — review due ${johannesburgDateKey(new Date(T0 + 20 * DAY))}` && !nia.reasons.some((r) => r.kind === "customer_quiet"),
+      JSON.stringify(nia.reasons));
     check("a LOST deal is closed, not stuck — with the reason given", /lost[\s\S]*"Bought a used cart"[\s\S]*closed, not stuck/.test((await stuck(A, repOwn, name("Lara"))).note ?? ""));
     check("the owner sees the same reasons", JSON.stringify((await stuck(A, ownerA, annaLead.id)).reasons?.map((r) => r.kind)) === JSON.stringify(kinds));
 
@@ -257,6 +269,8 @@ async function main() {
     check("the stage move someone else made, and who", moved?.by === "person: Harness A member", JSON.stringify(moved));
     check("the win the CRM recorded, as automatic", has(new RegExp(`won ${SFX}`))?.by === "automatic: System");
     check("never their own move", !has(new RegExp(`My own move ${SFX}`)));
+    check("a colleague parking their deal in Nurture", has(new RegExp(`Moved to nurture: “Rover XL” — Buying later ${SFX}`))?.by === "person: Harness A member");
+    check("a colleague moving their delivery", has(new RegExp(`Q-${qb.number} delivery moved ${SFX}`))?.by === "person: Harness A member");
     check("the new lead given to them, once (not again as its routing)", whats.filter((w) => w.includes(name("Eve"))).length === 1 && !!has(new RegExp(`^New lead for you: ${name("Eve")} — Rover S$`)) && !has(new RegExp(`Auto-assigned to Rep Own by lead routing ${SFX}`)), JSON.stringify(whats));
     check("a lead they made themselves is not news", !whats.some((w) => w.includes(name("Self"))));
     check("an older deal reassigned to them", has(new RegExp(`Assigned lead “Fleet order” to Rep Own ${SFX}`))?.by === "person: Harness A member");
