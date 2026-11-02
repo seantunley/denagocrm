@@ -39,7 +39,7 @@ const isoDay = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
 export const leadArgs = z
   .object({
     /** "any" counts every lead whatever happened to it ("how many came in"). */
-    status: z.enum(["open", "won", "lost", "any"]).optional(),
+    status: z.enum(["open", "nurture", "won", "lost", "any"]).optional(),
     stage: name.optional(),
     assignedTo: name.optional(),
     product: name.optional(),
@@ -231,7 +231,7 @@ export function planInstructions(ctx: PlanContext): string {
     // learned — comes last, so it never breaks the cached part before it.
     "You are the research step of a sales CRM assistant. Decide the ONE next lookup that best helps answer the question, or say done. Output JSON only — no prose, no code fence.",
     "Tools (args optional unless marked):",
-    '- find_leads: {"status":"open|won|lost|any" (default open),"stage":"<stage>","assignedTo":"<person>","product":"<text>","source":"<text>","minValue":<rands>,"noContactDays":<days since the last real contact — a message either way, a call or a meeting; internal notes and to-dos do not count>,"createdWithinDays":<days>,"createdFrom":"YYYY-MM-DD","createdTo":"YYYY-MM-DD","search":"<customer or lead name>","sort":"value|oldest_contact|newest|stage_age","limit":<1-25>} — the result starts with the TOTAL that match (not just the ones listed), so use it for "how many". "How many came in" counts every lead: status "any". A calendar period ("last month", "in September") is createdFrom/createdTo — last month is the previous calendar month, not the last 30 days.',
+    '- find_leads: {"status":"open|nurture|won|lost|any" (default open; nurture = parked for a later follow-up, NOT lost),"stage":"<stage>","assignedTo":"<person>","product":"<text>","source":"<text>","minValue":<rands>,"noContactDays":<days since the last real contact — a message either way, a call or a meeting; internal notes and to-dos do not count>,"createdWithinDays":<days>,"createdFrom":"YYYY-MM-DD","createdTo":"YYYY-MM-DD","search":"<customer or lead name>","sort":"value|oldest_contact|newest|stage_age","limit":<1-25>} — the result starts with the TOTAL that match (not just the ones listed), so use it for "how many". "How many came in" counts every lead: status "any". A calendar period ("last month", "in September") is createdFrom/createdTo — last month is the previous calendar month, not the last 30 days.',
     "- pipeline_summary: {} — open leads counted and valued per stage.",
     "- daily_brief: {} — what needs this person's attention today, already prioritised (customers waiting for a reply, today's meetings and test drives, overdue follow-ups, deals that look close, quotes needing attention, delivery problems, stalled deals) — and, for an owner or team manager, their team's; for someone who sees the workshop, a short workshop section (overdue services, stuck job cards, warranties ending). Use it for \"what needs my attention\", \"what should I do today\", \"plan my day\", \"where does my team need help\".",
     '- sales_stats: {"period":"this_month|last_month|last_30_days|last_90_days|this_quarter|this_year" (default this_month),"assignedTo":"<person>"} — the numbers behind "how are we doing / why are sales slower / who needs help": new leads, how many reach a quote, won and lost, win rate, quotes issued/opened/signed, lead sources, lost reasons, the open pipeline per stage with what is stalled, each salesperson\'s open deals, next steps, overdue work and quiet customers — each against the period before.',
