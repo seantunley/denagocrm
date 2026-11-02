@@ -120,7 +120,7 @@ function LoginInner({ brand }: { brand: LoginBrand }) {
     passwordRef.current?.focus();
   }, [state]);
 
-  if (state?.need2fa) return <TwoFactorStep methods={state.methods ?? []} brand={brand} />;
+  if (state?.need2fa) return <TwoFactorStep methods={state.methods ?? []} brand={brand} notice={state.notice} />;
   if (forgot) return <ForgotPasswordStep brand={brand} onBack={() => setForgot(false)} />;
 
   const passkeyButton = <PasskeyLoginButton passkey={passkey} disabled={pending} />;
@@ -414,10 +414,12 @@ function ForgotPasswordStep({ brand, onBack }: { brand: LoginBrand; onBack: () =
   );
 }
 
-function TwoFactorStep({ methods, brand }: { methods: string[]; brand: LoginBrand }) {
+function TwoFactorStep({ methods, brand, notice }: { methods: string[]; brand: LoginBrand; notice?: string }) {
   const [state, formAction, pending] = useActionState<{ error?: string } | undefined, FormData>(verifySecondFactor, undefined);
   const [sent, setSent] = useState(false);
   const [sending, setSending] = useState(false);
+  // The emailed code did not go (review of #959): said, never "Code sent — check your inbox".
+  const [emailError, setEmailError] = useState(notice ?? "");
   const hasTotp = methods.includes("totp");
   const hasEmail = methods.includes("email");
   const codeRef = useRef<HTMLInputElement>(null);
@@ -507,8 +509,9 @@ function TwoFactorStep({ methods, brand }: { methods: string[]; brand: LoginBran
               onClick={async () => {
                 switchTo("code");
                 setSending(true);
-                await requestEmailCode();
-                setSent(true);
+                const result = await requestEmailCode().catch(() => ({ error: "We couldn't email your code just now. Try again in a few minutes." }));
+                setEmailError(result.error ?? "");
+                setSent(!result.error);
                 setSending(false);
               }}
               className={linkButton}
@@ -516,6 +519,7 @@ function TwoFactorStep({ methods, brand }: { methods: string[]; brand: LoginBran
               {sending ? "Sending…" : sent ? "Code sent — check your inbox" : hasTotp ? "Use an email code instead" : "Resend email code"}
             </button>
           )}
+          {hasEmail && emailError ? <p role="alert" className="text-sm text-red-300">{emailError}</p> : null}
         </form>
       </div>
     </Shell>

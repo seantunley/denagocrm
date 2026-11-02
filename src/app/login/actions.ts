@@ -96,7 +96,7 @@ async function readPending(): Promise<{ uid: string; pwa: boolean } | null> {
   }
 }
 
-export type LoginState = { error?: string; need2fa?: boolean; methods?: string[] };
+export type LoginState = { error?: string; need2fa?: boolean; methods?: string[]; /** The emailed code could not be sent. */ notice?: string };
 
 export async function login(
   _prev: LoginState | undefined,
@@ -197,8 +197,9 @@ export async function login(
     const methods: string[] = [];
     if (hasTotp) methods.push("totp");
     if (user.emailOtpEnabled) methods.push("email");
-    if (!hasTotp && user.emailOtpEnabled) await sendLoginEmailCode(user.id);
-    return { need2fa: true, methods };
+    // Email is their only second step: if the code didn't go, they are told so on the code screen, not left waiting.
+    const emailed = !hasTotp && user.emailOtpEnabled ? await sendLoginEmailCode(user.id) : null;
+    return { need2fa: true, methods, ...(emailed === "failed" ? { notice: EMAIL_CODE_FAILED } : {}) };
   }
 
   await recordSuccessfulLogin(user.id);
@@ -206,14 +207,18 @@ export async function login(
   redirect("/");
 }
 
-async function sendLoginEmailCode(userId: string): Promise<boolean> {
+/** Whether the emailed sign-in code actually went — the person is told the truth (review of #959). */
+export type EmailCodeSend = "sent" | "too_soon" | "failed";
+const EMAIL_CODE_FAILED = "We couldn't email your code just now. Try again in a few minutes — or use your authenticator app or a backup code if you have one.";
+
+async function sendLoginEmailCode(userId: string): Promise<EmailCodeSend> {
   const user = await basePrisma.user.findUnique({ where: { id: userId } });
   const security = user ? await getUserSecurityState(user.id) : null;
-  if (!user?.email || !security || security.disabledAt) return false;
+  if (!user?.email || !security || security.disabledAt) return "failed";
 
   const key = rateLimitKey("staff-email-otp-send", userId);
   const result = await registerRateLimitAttempt(key, OTP_SEND_POLICY);
-  if (!result.allowed) return false;
+  if (!result.allowed) return "too_soon";
 
   const code = crypto.randomInt(100000, 1000000).toString();
   await basePrisma.user.update({
@@ -225,21 +230,20 @@ async function sendLoginEmailCode(userId: string): Promise<boolean> {
   });
   // Not signed in yet, so no request scope: sent as their workspace or the platform (accountEmail.ts). It used to
   // fail on that missing scope and the failure was swallowed — anyone signing in by email code was locked out.
-  await sendAccountEmail(user.id, {
+  const delivered = await sendAccountEmail(user.id, {
     to: user.email,
     subject: "Your sign-in code",
     text: `Your sign-in code is ${code}. It expires in 10 minutes. If this wasn't you, change your password.`,
   });
-  return true;
+  return delivered ? "sent" : "failed";
 }
 
 export async function requestEmailCode(): Promise<{ ok?: boolean; error?: string }> {
   const pending = await readPending();
   if (!pending) return { error: "Session expired — please sign in again." };
   const sent = await sendLoginEmailCode(pending.uid);
-  return sent
-    ? { ok: true }
-    : { error: "A code was sent recently. Wait a few minutes before requesting another." };
+  if (sent === "sent") return { ok: true };
+  return { error: sent === "too_soon" ? "A code was sent recently. Wait a few minutes before requesting another." : EMAIL_CODE_FAILED };
 }
 
 export async function verifySecondFactor(
