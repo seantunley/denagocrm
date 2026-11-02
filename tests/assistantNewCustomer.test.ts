@@ -110,6 +110,6 @@ test("the webhook: a shared contact goes to DAX only from linked staff — never
   const route = code("src/app/api/webhooks/whatsapp/route.ts");
   const branch = route.slice(route.indexOf('message.type === "contacts"'), route.indexOf('message.type === "audio"'));
   assert.match(branch, /const question = sharedContactQuestion\(message\.contacts\);/);
-  assert.match(branch, /if \(question\) await handleStaffWhatsApp\(from, \{ text: question \}, message\.id\);/);
+  assert.match(branch, /if \(question\) await handleStaffWhatsApp\(from, \{ text: question \}, message\.id, \{ defer \}\);/);
   assert.doesNotMatch(branch, /recordInboundWhatsApp|runWhatsAppBot/);
 });

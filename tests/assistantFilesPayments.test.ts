@@ -42,7 +42,7 @@ test("a forwarded WhatsApp message is told to DAX as one — and only that flag 
   for (const plain of [{}, { context: {} }, { context: { forwarded: "yes" } }, null]) assert.equal(forwardedForDax(plain, "hello"), "hello");
   // Only on the staff path: a customer's own message is recorded as they sent it.
   const route = code("src/app/api/webhooks/whatsapp/route.ts");
-  assert.match(route, /handleStaffWhatsApp\(from, \{ text: forwardedForDax\(message, text\) \}, message\.id\)/);
+  assert.match(route, /handleStaffWhatsApp\(from, \{ text: forwardedForDax\(message, text\) \}, message\.id, \{ defer \}\)/);
   assert.match(route, /recordInboundWhatsApp\(from, profileName, text, /);
 });
 

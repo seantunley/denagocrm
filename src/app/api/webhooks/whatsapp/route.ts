@@ -1,4 +1,4 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextRequest, NextResponse, after } from "next/server";
 import { whatsappReceipt, whatsappFailure } from "@/lib/deliveryReceipts";
 import { applyProviderFailure } from "@/lib/botOutbox";
 import { applyReceipt } from "@/lib/messageReceipts";
@@ -80,6 +80,17 @@ export async function POST(req: NextRequest) {
           if (failure) await applyProviderFailure("whatsapp", failure);
         }
 
+        // DAX ANSWERS RUN AFTER META IS ACKNOWLEDGED (Sean, 2026-11-02). A staff question's answer can take minutes;
+        // Meta re-sends anything not acknowledged in seconds, so each one came in two or three times ("leased"), and
+        // a re-send after the lease could ask — and charge for — the same question twice. handleStaffWhatsApp makes
+        // every check HERE, per message, and hands over only the answer of one that passed them all (review of
+        // #960): a customer's message — including one in the same batch — is still processed inside this request,
+        // with Meta's redelivery behind it. The answers run in order, in their own channel scope (this one is gone by
+        // then). What a deferred answer gives up is Meta's re-send if it dies — for a staff question to DAX, which
+        // they can ask again; it is logged.
+        const answersLater: Array<() => Promise<void>> = [];
+        const defer = (answer: () => Promise<void>) => void answersLater.push(answer);
+        try {
         for (const message of value.messages ?? []) {
           const outcome = await claimInboundBotEvent("whatsapp", String(message.id ?? ""));
           if (outcome.status === "completed") continue; // genuinely done — ack it.
@@ -134,7 +145,7 @@ export async function POST(req: NextRequest) {
               if (message.type === "text") {
                 const text = message.text?.body ?? "";
                 // Forwarded: DAX is told it is someone else's message (only on the staff path; a customer's is recorded as sent).
-                if (await handleStaffWhatsApp(from, { text: forwardedForDax(message, text) }, message.id)) return;
+                if (await handleStaffWhatsApp(from, { text: forwardedForDax(message, text) }, message.id, { defer })) return;
                 if (await held("text", text, text)) return;
                 await link(await recordInboundWhatsApp(from, profileName, text, String(message.id ?? "")));
                 await runWhatsAppBot(from, { text }, { entryContext });
@@ -145,7 +156,7 @@ export async function POST(req: NextRequest) {
                 const title: string = btn?.title ?? list?.title ?? "";
                 if (!id) return;
                 // A tapped quick reply: its title is the staff member's next question.
-                if (await handleStaffWhatsApp(from, { text: title, choiceId: id }, message.id)) return;
+                if (await handleStaffWhatsApp(from, { text: title, choiceId: id }, message.id, { defer })) return;
                 if (await held("choice", title, `👆 ${title}`, true)) return;
                 await link(await recordInboundWhatsApp(from, profileName, `👆 ${title}`, String(message.id ?? "")));
                 await runWhatsAppBot(from, { text: title, choiceId: id }, { entryContext });
@@ -154,7 +165,7 @@ export async function POST(req: NextRequest) {
                 // from a tapped reply button. Only the assistant's "you have an
                 // update" template has one today: from linked staff it delivers what
                 // was waiting. From anyone else it is left alone, as it always was.
-                await handleStaffWhatsApp(from, { text: String(message.button?.text ?? ""), templateReply: true }, message.id);
+                await handleStaffWhatsApp(from, { text: String(message.button?.text ?? ""), templateReply: true }, message.id, { defer });
               } else if (message.type === "image" || message.type === "document" || message.type === "video") {
                 const media = message.image ?? message.document ?? message.video;
                 const caption: string = media?.caption ?? "";
@@ -166,7 +177,7 @@ export async function POST(req: NextRequest) {
                 if (await handleStaffWhatsApp(from, {
                   mediaId: String(media?.id ?? ""), mediaKind: message.type, caption: forwardedForDax(message, caption),
                   ...(message.type === "document" && typeof message.document?.filename === "string" ? { fileName: message.document.filename } : {}),
-                }, message.id)) return;
+                }, message.id, { defer })) return;
                 // Before the download: a quarantined sender's file is never fetched or stored.
                 if (await held("media", caption, `📎 ${caption || "[file]"}`)) return;
                 let fileUrl: string | undefined;
@@ -194,14 +205,14 @@ export async function POST(req: NextRequest) {
                 // A contact shared from a phone. From linked staff it asks DAX to add them as a customer (a card with
                 // Confirm — nothing is created before that). From anyone else it is left alone, as it always was.
                 const question = sharedContactQuestion(message.contacts);
-                if (question) await handleStaffWhatsApp(from, { text: question }, message.id);
+                if (question) await handleStaffWhatsApp(from, { text: question }, message.id, { defer });
               } else if (message.type === "audio" || message.type === "voice") {
                 const mediaId: string | undefined = message.audio?.id ?? message.voice?.id;
                 if (!mediaId) return;
                 // Handed the media ID, not the audio: the voice note is fetched and
                 // transcribed there only once the number is known to be staff.
                 // Forwarded: a customer's voice note passed on by staff — told to DAX as theirs, never as a question.
-                if (await handleStaffWhatsApp(from, { voiceMediaId: mediaId, ...(isForwarded(message) ? { forwarded: true } : {}) }, message.id)) return;
+                if (await handleStaffWhatsApp(from, { voiceMediaId: mediaId, ...(isForwarded(message) ? { forwarded: true } : {}) }, message.id, { defer })) return;
                 // Before the download and the (paid) transcription. A voice note has
                 // no readable text yet, so only a sender block can hold it here —
                 // unheard audio is never judged to be spam.
@@ -223,6 +234,18 @@ export async function POST(req: NextRequest) {
             // Already logged, with its claim released. Rethrowing the raw error
             // made the outer boundary log the same failure a second time.
             throw await noteInboundRetry("whatsapp-webhook", "failed", `whatsapp ${String(message.id ?? "")}`);
+          }
+        }
+        } finally {
+          // Even when a later message failed: these were checked and their events completed — they are answered.
+          if (answersLater.length) {
+            after(() =>
+              withChannelTenantScope("whatsapp", phoneNumberId, async () => {
+                for (const answer of answersLater) {
+                  await answer().catch((error) => logError("whatsapp-webhook", error, "A DAX answer failed after Meta was acknowledged; ask again").catch(() => {}));
+                }
+              }, () => undefined),
+            );
           }
         }
       }, () => reportUnmappedEndpoint("whatsapp", phoneNumberId, value?.messages?.length ?? 0));

@@ -820,7 +820,7 @@ test("a task asked for on WhatsApp is never thrown away: saved for the CRM by de
     assert.ok(handler.indexOf(before) > -1 && handler.indexOf(before) < at, before);
   }
   assert.ok(at < handler.indexOf("assistantAskAllowed(user.id)"));
-  assert.match(code("src/app/api/webhooks/whatsapp/route.ts"), /handleStaffWhatsApp\(from, \{ text: title, choiceId: id \}, message\.id\)/);
+  assert.match(code("src/app/api/webhooks/whatsapp/route.ts"), /handleStaffWhatsApp\(from, \{ text: title, choiceId: id \}, message\.id, \{ defer \}\)/);
 });
 
 test("questions are capped at 500 characters and by the person's ONE ask limit", async () => {
@@ -952,10 +952,10 @@ test("the route asks handleStaffWhatsApp FIRST and skips the inbox and the bot o
   for (const [name, body, call] of [
     // message.id: what "typing…" is shown against while the answer is worked out.
     // A forwarded message is marked as such for DAX (only on this staff path).
-    ["text", text, "handleStaffWhatsApp(from, { text: forwardedForDax(message, text) }, message.id)"],
-    ["interactive", interactive, "handleStaffWhatsApp(from, { text: title, choiceId: id }, message.id)"],
+    ["text", text, "handleStaffWhatsApp(from, { text: forwardedForDax(message, text) }, message.id, { defer })"],
+    ["interactive", interactive, "handleStaffWhatsApp(from, { text: title, choiceId: id }, message.id, { defer })"],
     // A forwarded voice note is marked too (voice-first, 2026-11-02): the customer's words, never a question or a yes.
-    ["audio", audio, "handleStaffWhatsApp(from, { voiceMediaId: mediaId, ...(isForwarded(message) ? { forwarded: true } : {}) }, message.id)"],
+    ["audio", audio, "handleStaffWhatsApp(from, { voiceMediaId: mediaId, ...(isForwarded(message) ? { forwarded: true } : {}) }, message.id, { defer })"],
   ] as const) {
     const at = body.indexOf(`if (await ${call}) return;`);
     assert.ok(at > -1, `${name}: must ask and return on a yes`);
@@ -982,7 +982,7 @@ test("the route asks handleStaffWhatsApp FIRST and skips the inbox and the bot o
   const asked = media.indexOf("if (await handleStaffWhatsApp(from, {");
   assert.ok(asked > -1);
   // The media, its caption (marked when forwarded) and a document's file name — then return on a yes.
-  assert.match(media, /if \(await handleStaffWhatsApp\(from, \{\s*mediaId: String\(media\?\.id \?\? ""\), mediaKind: message\.type, caption: forwardedForDax\(message, caption\),\s*\.\.\.\(message\.type === "document" && typeof message\.document\?\.filename === "string" \? \{ fileName: message\.document\.filename \} : \{\}\),\s*\}, message\.id\)\) return;/);
+  assert.match(media, /if \(await handleStaffWhatsApp\(from, \{\s*mediaId: String\(media\?\.id \?\? ""\), mediaKind: message\.type, caption: forwardedForDax\(message, caption\),\s*\.\.\.\(message\.type === "document" && typeof message\.document\?\.filename === "string" \? \{ fileName: message\.document\.filename \} : \{\}\),\s*\}, message\.id, \{ defer \}\)\) return;/);
   for (const later of ['held("media"', "fetchWhatsAppMedia(", "saveFile(", "recordInboundWhatsApp(", "runWhatsAppBot("]) assert.ok(asked < media.indexOf(later), later);
 });
 
@@ -1559,7 +1559,7 @@ test("wired where it must be: after a saved briefing, after a saved alert, on th
   // A failure is logged as a fixed line (assistantSchedules/assistantWatch tests forbid anything else in it).
   for (const src of [run, watch]) assert.match(src, /if \(outcome === "failed"\) await logError\("assistant-(schedule|watch)", "(briefing|alert) not sent to WhatsApp"\)/);
   const route = code("src/app/api/webhooks/whatsapp/route.ts");
-  assert.match(route, /\} else if \(message\.type === "button"\) \{[\s\S]*?await handleStaffWhatsApp\(from, \{ text: String\(message\.button\?\.text \?\? ""\), templateReply: true \}, message\.id\);\s*\} else if/);
+  assert.match(route, /\} else if \(message\.type === "button"\) \{[\s\S]*?await handleStaffWhatsApp\(from, \{ text: String\(message\.button\?\.text \?\? ""\), templateReply: true \}, message\.id, \{ defer \}\);\s*\} else if/);
   // The window opens only after every check on the incoming message has passed.
   const lib = code("src/lib/assistantWhatsApp.ts");
   const handler = lib.slice(lib.indexOf("export async function handleStaffWhatsApp"), lib.indexOf("// A tapped Confirm button"));
@@ -1931,4 +1931,47 @@ test("CHANGE A WAITING TASK BY VOICE: DAX sees what waits, numbered; a drop with
   await handleStaffWhatsApp(STAFF, { voiceMediaId: "m2", forwarded: true });
   assert.deepEqual(state.askedWaiting, [null]);
   assert.deepEqual(state.withdrawn, []);
+});
+
+test("review of #960: with defer, every check runs in the request; only a passing staff question's ANSWER waits", async () => {
+  const later: Array<() => Promise<void>> = [];
+  const defer = (answer: () => Promise<void>) => void later.push(answer);
+  verified("u1", STAFF);
+
+  // Verified staff: handled at once (Meta can be told), nothing answered yet — the answer is handed over.
+  assert.equal(await handleStaffWhatsApp(STAFF, { text: "pipeline?" }, "wamid.1", { defer }), true);
+  assert.equal(state.asked.length, 0, "not answered inside the request");
+  assert.equal(later.length, 1);
+  await later[0]();
+  assert.equal(state.asked.length, 1, "answered when the webhook runs it");
+
+  // An INVALIDATED link — the number is now on a customer record: false in the request, nothing handed over, so the
+  // route takes the customer path inside the request, with Meta's redelivery behind it.
+  later.length = 0;
+  state.customers.add(STAFF);
+  assert.equal(await handleStaffWhatsApp(STAFF, { text: "pipeline?" }, "wamid.2", { defer }), false);
+  assert.equal(later.length, 0);
+  state.customers.clear();
+
+  // The person is no longer a member: the same.
+  verified("u1", STAFF);
+  state.members.delete("u1");
+  assert.equal(await handleStaffWhatsApp(STAFF, { text: "pipeline?" }, "wamid.3", { defer }), false);
+  assert.equal(later.length, 0);
+
+  // A customer: false, nothing handed over.
+  assert.equal(await handleStaffWhatsApp(CUSTOMER, { text: "Hi" }, "wamid.4", { defer }), false);
+  assert.equal(later.length, 0);
+  assert.equal(state.asked.length, 1, "no other answer was ever produced");
+});
+
+test("review of #960: the webhook asks per MESSAGE — a customer's message in the same batch still runs in the request", () => {
+  const route = code("src/app/api/webhooks/whatsapp/route.ts");
+  // Every staff call passes the collector; nothing decides by the batch's first sender any more.
+  assert.equal(route.match(/handleStaffWhatsApp\([\s\S]*?\}, message\.id, \{ defer \}\)/g)?.length, 6);
+  assert.doesNotMatch(route, /isLinkedStaffPhone|messages\[0\]/);
+  // The answers run after the response, in order, in their own channel scope — even when a later message failed.
+  assert.match(route, /\} finally \{[\s\S]*?if \(answersLater\.length\) \{\s*after\(\(\) =>\s*withChannelTenantScope\("whatsapp", phoneNumberId, async \(\) => \{\s*for \(const answer of answersLater\)/);
+  // The customer path is unchanged: claimed, completed or retried inside the request.
+  for (const step of ["claimInboundBotEvent(", "completeInboundBotEvent(claim)", "retryInboundBotEvent(claim, error)", "recordInboundWhatsApp(", "runWhatsAppBot("]) assert.ok(route.includes(step), step);
 });

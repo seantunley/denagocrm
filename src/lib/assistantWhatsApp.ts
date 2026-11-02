@@ -139,7 +139,19 @@ const FILE_QUESTION = "What's in this file, and where should it be filed?";
  * claim and Meta redelivers, and the redelivery asks the same question again. They
  * never turn into `false`, because "couldn't tell" is not "customer".
  */
-export async function handleStaffWhatsApp(from: string, input: StaffWhatsAppInput, messageId?: string | null): Promise<boolean> {
+/**
+ * `defer`: hand the ANSWER to the webhook to run once Meta has been acknowledged (Sean, 2026-11-02: a DAX answer can
+ * take minutes, Meta re-sends anything not acknowledged in seconds, and every re-send was logged as "leased"). Only
+ * the answer: every check that decides whether this is a staff question at all — the link, the account, the number
+ * not now a customer's — still runs here, inside the request. Once they pass, nothing below returns false, so a
+ * deferred message can never turn out to be a customer's after Meta was told it was received (review of #960).
+ */
+export async function handleStaffWhatsApp(
+  from: string,
+  input: StaffWhatsAppInput,
+  messageId?: string | null,
+  opts: { defer?: (answer: () => Promise<void>) => void } = {},
+): Promise<boolean> {
   // A REAL workspace scope or nothing. withChannelTenantScope binds one only
   // when the business number is mapped to a workspace; an unmapped number runs
   // with no scope (dormant) or not at all (enforcing). A system scope bypasses
@@ -221,6 +233,9 @@ export async function handleStaffWhatsApp(from: string, input: StaffWhatsAppInpu
   // as anyone's, and the link stays for the owner to see.
   const user = await assistantUserFor(link.userId);
   if (!user) return false;
+
+  // EVERY CHECK HAS PASSED: this is a staff question, handled by DAX whatever follows — nothing below returns false.
+  const answer = async (): Promise<boolean> => {
 
   // THEY HAVE JUST WRITTEN, so WhatsApp's 24 hours are open: whatever the
   // assistant produced on its own and could not send (a scheduled briefing, a
@@ -467,6 +482,12 @@ export async function handleStaffWhatsApp(from: string, input: StaffWhatsAppInpu
   // Settled before the function ends, so the request is never left running on a serverless host.
   await Promise.all([typing, ...typingCalls]);
   return true;
+  };
+  if (opts.defer) {
+    opts.defer(async () => { await answer(); });
+    return true;
+  }
+  return answer();
 }
 
 /**
