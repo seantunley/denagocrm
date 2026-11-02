@@ -1157,6 +1157,25 @@ model AssistantTask {
   @@index([updatedAt])
 }
 
+/// A photo, screenshot or file sent to DAX, HELD — never filed on its own
+/// (Sean, 2026-11-02). Handed back for the reply that directly follows its
+/// question ("pin it to Clive"), and read by Confirm when a card files it
+/// (lib/assistantUpload.ts). A photo is the cleaned JPEG (no metadata). Deleted
+/// by the assistant's cron tick after a day.
+model AssistantUpload {
+  id        String   @id @default(cuid())
+  tenantId  String
+  userId    String
+  /// The AssistantTurn whose question it came with; null until that is saved.
+  turnId    String?  @unique
+  fileName  String
+  mimeType  String
+  data      Bytes
+  createdAt DateTime @default(now())
+
+  @@index([createdAt])
+}
+
 /// One question asked in chat, from the moment it arrives until it is answered
 /// (assistantRun.ts). The browser names it (clientKey) so a dropped connection
 /// re-reads THIS run instead of asking again; it runs exactly once. Holds the

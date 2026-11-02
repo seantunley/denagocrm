@@ -3,11 +3,15 @@
 import { requireAnyPermission } from "@/lib/permissions";
 import { withActingStaffScope } from "@/lib/actingScope";
 import { isModuleEnabled } from "@/lib/modules/enabled";
-import { assistantTurnsToday } from "@/lib/crmAssistant";
+import { assistantTurnsToday, customerClash, detailClash } from "@/lib/crmAssistant";
+import { createContact, updateContact } from "@/app/actions/contacts";
+import { contactFormFor } from "@/lib/contactFormFor";
+import { completeConfirmKey, reserveConfirmKey } from "@/lib/assistantConfirmKey";
+import { MAX_IMAGE_BYTES } from "@/lib/assistantImage";
 import { getSetting } from "@/lib/settings";
 import { isCodexConnected } from "@/lib/codex";
 import { ASSISTANT_PROFILE_KEY, parseProfile } from "@/lib/assistantSoul";
-import { CONFIRM_KEY, QUOTE_ADD_MAX_FEES, QUOTE_ADD_MAX_FEE_RANDS, QUOTE_BUILD_MAX_LINES, STALE_CARD, type ActionCard } from "@/lib/assistantActions";
+import { CONFIRM_KEY, CUSTOMER_FIELDS, QUOTE_ADD_MAX_FEES, QUOTE_ADD_MAX_FEE_RANDS, QUOTE_BUILD_MAX_LINES, STALE_CARD, type ActionCard } from "@/lib/assistantActions";
 import { editorDefaults, quoteFromLeadDefaults } from "@/lib/quoteFromLead";
 import { QUOTE_PDF_SOURCE } from "@/lib/assistantWhatsAppRules";
 import { tenantOrigin } from "@/lib/tenantOrigin";
@@ -19,7 +23,7 @@ const QUOTE_PDF_SEND_WAIT_MS = 4_000;
 import { prisma } from "@/lib/db";
 import { cancelActivity, rescheduleActivity, scheduleActivity, scheduleFollowUp } from "@/app/actions/activities";
 import { addCommunication } from "@/app/actions/communications";
-import { assignLead, convertLeadToContact, markLost, moveLead } from "@/app/actions/leads";
+import { assignLead, convertLeadToContact, createLead, markLost, moveLead } from "@/app/actions/leads";
 import { createQuoteFromLead, saveQuoteDraft } from "@/app/actions/quotes";
 import { createTestDriveBooking } from "@/app/actions/testDrives";
 import { createStaffAvailability } from "@/app/actions/staffAvailability";
@@ -68,6 +72,21 @@ const untouched = (error: string) => ({ ok: false as const, error, unchanged: tr
  * but say what was done.
  */
 const resumable = (error: string) => ({ ok: false as const, error, resumable: true as const });
+
+const BAD_SCREENSHOT = "That screenshot can't be attached — send it to DAX again.";
+const LEAD_UNSURE = "That one didn't complete, and it may have got part-way — so it won't be tried again. Check the customer in the CRM, then ask me again if the lead is still needed.";
+/**
+ * A note card's screenshot (a JPEG data: URL) → the file the note form uploads. Undefined: the card has none.
+ * False: what the card carries is not a JPEG within the size DAX accepts — the card came from the browser.
+ */
+function screenshotFile(image: unknown): File | undefined | false {
+  if (image == null) return undefined;
+  const base64 = /^data:image\/jpeg;base64,([A-Za-z0-9+/=]+)$/.exec(String(image))?.[1];
+  if (!base64) return false;
+  const bytes = Buffer.from(base64, "base64");
+  if (bytes.length === 0 || bytes.length > MAX_IMAGE_BYTES || bytes[0] !== 0xff || bytes[1] !== 0xd8) return false;
+  return new File([bytes], "screenshot.jpg", { type: "image/jpeg" });
+}
 
 export async function runAssistantAction(
   card: ActionCard,
@@ -177,10 +196,14 @@ export async function runAssistantAction(
           : { ok: true, success: "Added to your calendar", href: "/calendar" };
       }
       case "note": {
+        const shot = screenshotFile(card.image);
+        if (shot === false) return untouched(BAD_SCREENSHOT);
         const form = new FormData();
         form.set("leadId", card.leadId);
         form.set("body", card.text);
         form.set("type", "note");
+        // The note form's own image upload: it checks the type and size, and files it with the note's customer record.
+        if (shot) form.set("image", shot);
         // addCommunication's own pin: the same switch the note box has.
         if (card.pin === true) form.set("pin", "on");
         form.set("revalidate", `/leads/${card.leadId}`);
@@ -192,10 +215,13 @@ export async function runAssistantAction(
       case "customer_note": {
         // On the customer, not a deal. addCommunication checks that this person
         // may write to customer records and can open THIS customer.
+        const shot = screenshotFile(card.image);
+        if (shot === false) return untouched(BAD_SCREENSHOT);
         const form = new FormData();
         form.set("contactId", card.contactId);
         form.set("body", card.text);
         form.set("type", "note");
+        if (shot) form.set("image", shot);
         if (card.pin === true) form.set("pin", "on");
         form.set("revalidate", `/contacts/${card.contactId}`);
         const result = await addCommunication(form);
@@ -207,6 +233,83 @@ export async function runAssistantAction(
           contactId: card.contactId,
         });
         return { ok: true, success: card.pin === true ? "Note added and pinned" : "Note added", href: `/contacts/${card.contactId}` };
+      }
+      case "create_customer": {
+        // THE CONTACT FORM'S OWN DOOR (createContact): contacts.create, the workspace stamp and the audit entry are
+        // its. The duplicate check runs again first, so a second Confirm finds the customer the first one made.
+        const c = card.customer;
+        if (!c?.firstName?.trim() || (!c.phone && !c.email)) return untouched(STALE_CARD);
+        const clash = await customerClash(user, c);
+        if (clash) return untouched(clash);
+        const form = new FormData();
+        form.set("contactKind", "individual");
+        form.set("firstName", c.firstName);
+        for (const [key, value] of [["lastName", c.lastName], ["company", c.company], ["phone", c.phone], ["email", c.email]] as const) {
+          if (value) form.set(key, value);
+        }
+        const result = await createContact(form);
+        const contactId = /^\/contacts\/([^/?#]+)$/.exec(result?.redirectTo ?? "")?.[1];
+        if (result?.error || !contactId) return { ok: false, error: result?.error ?? "Couldn't add the customer." };
+        await logAudit({ action: "assistant.action_confirmed", summary: "Confirmed the assistant's proposal: add a new customer", user, contactId });
+        return { ok: true, success: `${card.leadLabel} added as a customer`, href: `/contacts/${contactId}` };
+      }
+      case "create_lead": {
+        // THE LEAD FORM'S OWN DOOR (createLead): leads.create, linking or creating the customer by phone/email,
+        // the first open stage, the assignee, the audit entry and the lead_created automations are all its.
+        const l = card.lead;
+        if (!CONFIRM_KEY.test(String(card.confirmKey ?? ""))) return untouched(STALE_CARD);
+        if (!l?.name?.trim() || (!l.contactId && !l.phone && !l.email)) return untouched(STALE_CARD);
+        if (l.contactId && !(await canAccessContact(user, l.contactId))) return untouched("You can't open that customer any more.");
+        // ONE CONFIRM, ONE LEAD (review of #933): createLead has no key of its own, so the card's is reserved first
+        // (assistantConfirmKey). A second Confirm gets the lead the first made; two at once, one lead.
+        const tenantId = ownedWriteTenantId();
+        const reserved = await reserveConfirmKey(tenantId, user.id, card.confirmKey, "a new lead");
+        if (reserved.state === "done") {
+          const made = typeof reserved.result.leadId === "string" ? reserved.result.leadId : null;
+          return made
+            ? { ok: true, success: `That lead is already open for ${card.leadLabel}`, href: `/leads/${made}` }
+            : { ok: false, error: LEAD_UNSURE };
+        }
+        if (reserved.state === "busy") return { ok: false, error: "That lead is being opened right now — check the CRM in a moment." };
+        const form = new FormData();
+        form.set("name", l.name);
+        for (const [key, value] of [["contactId", l.contactId], ["phone", l.phone], ["email", l.email], ["productId", l.productId], ["notes", l.notes]] as const) {
+          if (value) form.set(key, value);
+        }
+        // Retry only on proof that nothing was written: an error from createLead may come after the lead (or its new
+        // customer) was saved, so the key is spent as "didn't complete" — the same card never runs it again.
+        let result: Awaited<ReturnType<typeof createLead>>;
+        try {
+          result = await createLead(form);
+        } catch (error) {
+          await completeConfirmKey(tenantId, card.confirmKey, "a new lead", { failed: "true" }).catch(() => {});
+          throw error;
+        }
+        const leadId = /^\/leads\/([^/?#]+)$/.exec(result?.redirectTo ?? "")?.[1];
+        if (result?.error || !leadId) {
+          await completeConfirmKey(tenantId, card.confirmKey, "a new lead", { failed: "true" }).catch(() => {});
+          return { ok: false, error: result?.error ?? "Couldn't open the lead." };
+        }
+        await completeConfirmKey(tenantId, card.confirmKey, "a new lead", { leadId });
+        await confirmed("open a lead", leadId);
+        return { ok: true, success: `Lead opened for ${card.leadLabel}`, href: `/leads/${leadId}` };
+      }
+      case "update_customer": {
+        // THE CONTACT FORM'S OWN DOOR (updateContact): contacts.edit, access to THIS customer, the audit entry with
+        // what changed. It saves every field posted, so the whole record is posted with only these changed.
+        const changes = Array.isArray(card.changes) ? card.changes : [];
+        const valid = changes.filter((c) => c && Object.hasOwn(CUSTOMER_FIELDS, c.field) && typeof c.now === "string" && c.now.trim());
+        if (valid.length === 0 || valid.length !== changes.length) return untouched(STALE_CARD);
+        const current = await prisma.contact.findFirst({ where: { id: card.contactId, deletedAt: null }, include: { tags: { select: { name: true } } } });
+        if (!current) return untouched("That customer is no longer there.");
+        // What the card SHOWED must still be what is there: otherwise this would overwrite a change made since.
+        if (valid.some((c) => (current[c.field] ?? null) !== (c.was ?? null))) return untouched(STALE_CARD);
+        const clash = await detailClash(user, card.contactId, valid);
+        if (clash) return untouched(clash);
+        const result = await updateContact(card.contactId, contactFormFor(current, Object.fromEntries(valid.map((c) => [c.field, c.now.trim()]))));
+        if (result?.error) return { ok: false, error: result.error };
+        await logAudit({ action: "assistant.action_confirmed", summary: "Confirmed the assistant's proposal: update the customer's details", user, contactId: card.contactId });
+        return { ok: true, success: `${card.leadLabel}'s details updated`, href: `/contacts/${card.contactId}` };
       }
       case "assign": {
         if (!(await stillAsProposed(card))) return untouched(STALE_CARD);

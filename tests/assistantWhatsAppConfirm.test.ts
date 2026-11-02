@@ -52,7 +52,7 @@ test("only internal changes can be confirmed from a phone — nothing that reach
   const run = code("src/app/actions/assistant.ts");
   for (const kind of WHATSAPP_CONFIRMABLE) assert.match(run, new RegExp(`case "${kind}": \\{`), kind);
   // …and a customer note is audited on the CUSTOMER it changed.
-  assert.match(code("src/lib/assistantWhatsAppConfirm.ts"), /\.\.\.\(card\.kind === "customer_note" \? \{ contactId: card\.contactId \} : \{\}\),/);
+  assert.match(code("src/lib/assistantWhatsAppConfirm.ts"), /\.\.\.\(card\.kind === "customer_note" \|\| card\.kind === "update_customer" \? \{ contactId: card\.contactId \} : \{\}\),/);
 });
 
 test("a Confirm button names its pending row and nothing else; the prompt says what will happen", () => {
@@ -482,7 +482,12 @@ test("A PINNED NOTE WHOSE PIN FAILS IS NOT WRITTEN TWICE: the note was saved, so
   // (2026-10-25, review of #905: one more of quote_build's — a colour the catalogue no longer has, before the customer.)
   // (2026-10-26, six of job_card's — no confirm key, invalid card, Automotive off, no permission or vehicle access,
   // vehicle gone, owner changed — each before openJobCard, its one write.)
-  assert.equal((run.match(/return untouched\(/g) ?? []).length, 37);
+  // (2026-11-02, two of create_customer's — an invalid card, already a customer — each before createContact, its one write.)
+  // (2026-11-02, one each for note and customer_note — a screenshot that is not a JPEG we accept — before addCommunication.)
+  // (2026-11-02, two of create_lead's — invalid card, customer no longer theirs — before createLead; four of
+  // update_customer's — invalid card, customer gone, a field changed since, a clash — before updateContact.)
+  // (2026-11-02, review of #933: one more of create_lead's — a card without its confirm key.)
+  assert.equal((run.match(/return untouched\(/g) ?? []).length, 48);
   const buildCase = run.slice(run.indexOf('case "quote_build": {'), run.indexOf('case "quote_pdf": {'));
   assert.ok(buildCase.indexOf("The catalogue changed since DAX suggested this") < buildCase.indexOf("convertLeadToContact("), "every check before the customer record is made");
   const quotePdfCase = run.slice(run.indexOf('case "quote_pdf": {'), run.indexOf('case "quote_change": {'));

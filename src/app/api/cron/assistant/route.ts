@@ -7,6 +7,7 @@ import { runDueAssistantSchedules, SCHEDULE_RUN_RESERVE_MS } from "@/lib/assista
 import { runAssistantWatches } from "@/lib/assistantWatch";
 import { runDeliveryGoals } from "@/lib/assistantGoals";
 import { prunePendingActions } from "@/lib/assistantWhatsAppConfirm";
+import { pruneAssistantUploads } from "@/lib/assistantUpload";
 import { sweepWaitingUpdates } from "@/lib/assistantWhatsApp";
 import { sweepProactive } from "@/lib/proactive";
 import { runMorningBriefs } from "@/lib/proactiveBrief";
@@ -55,6 +56,10 @@ export async function GET(req: NextRequest) {
       if (tenantId) {
         await prunePendingActions(tenantId).catch((error: unknown) =>
           logError("assistant-schedule", "pending task clean-up failed", error instanceof Error ? error.name : "unknown", { tenantId }),
+        );
+        // Photos and files sent to DAX are held a day, for the reply that follows and the card that files them (lib/assistantUpload.ts).
+        await pruneAssistantUploads(tenantId).catch((error: unknown) =>
+          logError("assistant-schedule", "upload clean-up failed", error instanceof Error ? error.name : "unknown", { tenantId }),
         );
       }
       const watched = await runAssistantWatches(budget).catch(async (error: unknown) => {

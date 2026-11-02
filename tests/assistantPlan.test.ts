@@ -169,7 +169,7 @@ test("wiring: plans only in the CRM chat; elsewhere their steps are loose cards;
   const ask = src("src/lib/crmAssistant.ts");
   assert.match(ask, /proposes && source === "chat" \? PLAN_INSTRUCTIONS/);
   assert.match(ask, /if \(multiStep && source !== "chat"\) proposals\.push\(\.\.\.multiStep\.steps\.filter\(\(s\) => !s\.dependsOn\)/);
-  assert.match(ask, /proposePlan\(user, multiStep, planProblems, \(steps, stepProblems\) => resolveActions\(user, steps, stepProblems, taskWrite\?\.ok \? taskWrite\.sheet : null\)\)/);
+  assert.match(ask, /proposePlan\(user, multiStep, planProblems, \(steps, stepProblems\) => resolveActions\(user, steps, stepProblems, taskWrite\?\.ok \? taskWrite\.sheet : null, cardUpload\)\)/);
   // The plan card and its problems join the loose ones the answer is settled against — counted as attempted exactly
   // what they produced, so the loose tasks' came-to-nothing count is unchanged.
   assert.match(ask, /reply\.attempted \+= planCards\.length \+ planProblems\.length;\s*actions\.push\(\.\.\.planCards\);\s*problems\.push\(\.\.\.planProblems\);/);
