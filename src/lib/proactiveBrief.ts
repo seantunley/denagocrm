@@ -141,7 +141,8 @@ async function writeBrief(tenantId: string, userId: string, claimId: string, now
       });
     }
   });
-  await sendPushToAll({ title: "DAX", body: "Your morning brief is ready.", url: "/assistant" }, "assistant", { tenantId, userId }).catch(() => {});
+  // At the time the person set for it (07:30 by default — inside quiet hours, on purpose).
+  await sendPushToAll({ title: "DAX", body: "Your morning brief is ready.", url: "/assistant" }, "assistant", { tenantId, userId, evenAtNight: true }).catch(() => {});
   await sendUpdatesToLinkedPhone(tenantId, userId, { shouldStop: budget.shouldStop }).catch(() => {});
   return true;
 }

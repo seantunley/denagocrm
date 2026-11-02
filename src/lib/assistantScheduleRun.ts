@@ -207,7 +207,8 @@ export async function runDueAssistantSchedules(budget: CronSliceContext): Promis
           url: "/assistant",
         },
         "assistant",
-        { tenantId, userId: user.id },
+        // The person's own question or reminder rings at the time they set; DAX's own check-back keeps quiet hours.
+        { tenantId, userId: user.id, evenAtNight: !daxSet },
       ).catch((error: unknown) => logError("assistant-schedule", "push failed", error instanceof Error ? error.name : "unknown"));
     }
     // And to the phone they linked, when they have one and want it there. What
