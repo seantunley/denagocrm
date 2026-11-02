@@ -12,6 +12,7 @@ import { enqueueBotMessagesTx } from "./botOutboxWrite";
 import type { DmPlatform } from "./messenger";
 import type { FlowEntryContext } from "./flowRouting";
 import { getCompanyProfile } from "./companyProfile";
+import { chatbotOpenNow } from "./chatbotHours";
 
 async function dmBotEnabled(): Promise<boolean> {
   return (await getSetting("BOT_ENABLED")) === "true" && (await getSetting("BOT_DM_ENABLED")) === "true";
@@ -35,6 +36,7 @@ export async function runDmFlow(platform: DmPlatform, senderId: string, text: st
     (state) => ({
       dynamicAnswer: (source) => source === "colours" ? coloursList() : priceList(),
       routeChoice: ({ prompt, text: freeText, options }) => routeBotChoice({ prompt, text: freeText, options }),
+      openNow: (holidaysClosed) => chatbotOpenNow(holidaysClosed),
       aiReply: async (vars) => (await generateBotReply({ history: state.msgs, customerName: vars.name ?? null, isCustomer: false })) ?? { reply: "Let me get one of our team to help — I'll pass this on now 👍", handoff: true, confidence: "low", intent: "unknown", handoffReason: "AI unavailable" },
       handoff: async (vars, context) => { await notifyHandoff({ channel: platform === "instagram" ? "Instagram" : "Messenger", body: handoffBody(context), url: "/inbox", customer: { contactId: contact?.id ?? null, leadId: null }, answers: vars, chat: () => state.msgs }); },
       ...crmActions(platform, { contactId: contact?.id ?? null, leadId: null }),

@@ -20,6 +20,7 @@ import { decideInboundAct, HUMAN_RESPONSIBILITY_HOURS, type BotOwnership } from 
 import type { FlowEntryContext } from "./flowRouting";
 import type { VoiceLanguage } from "./voiceLanguage";
 import { getCompanyProfile } from "./companyProfile";
+import { chatbotOpenNow } from "./chatbotHours";
 
 export const FLOW_MARKER = "🤖 Flow";
 const FLOW_VERSION_VAR = "__flow_version";
@@ -75,6 +76,7 @@ function buildCtx(digits: string, match: { contactId: string | null; leadId: str
     dynamicAnswer: (source) => source === "colours" ? coloursList() : priceList(),
     routeChoice: ({ prompt, text, options }) => routeBotChoice({ prompt, text, options }),
     recordAction: (nodeId, action, ok) => actions.push({ nodeId, action, ok }),
+    openNow: (holidaysClosed) => chatbotOpenNow(holidaysClosed),
     aiReply: async () => {
       let name: string | null = null; let isCustomer = false;
       if (match.contactId) { const c = await prisma.contact.findUnique({ where: { id: match.contactId } }); name = c?.firstName ?? null; isCustomer = true; }

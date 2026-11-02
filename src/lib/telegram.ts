@@ -11,6 +11,7 @@ import { getCompanyProfile } from "./companyProfile";
 import { prisma } from "./db";
 import { currentTenantScope } from "./tenantScope";
 import { resolveTenantActor } from "./tenantActor";
+import { chatbotOpenNow } from "./chatbotHours";
 
 export { tgSend, tgSendPhoto, tgAnswerCallback, setTelegramWebhook, deleteTelegramWebhook } from "./telegramTransport";
 
@@ -43,6 +44,7 @@ export async function runTelegramFlow(chatId: number | string, text: string, cal
     (state) => ({
       dynamicAnswer: (s) => s === "colours" ? coloursList() : priceList(),
       routeChoice: ({ prompt, text: freeText, options }) => routeBotChoice({ prompt, text: freeText, options }),
+      openNow: (holidaysClosed) => chatbotOpenNow(holidaysClosed),
       aiReply: async (vars) => (await generateBotReply({ history: state.msgs, customerName: vars.name ?? null, isCustomer: false })) ?? { reply: "Let me get a team member to help 👍", handoff: true, confidence: "low", intent: "unknown", handoffReason: "AI unavailable" },
       handoff: async (vars, context) => { await notifyHandoff({ channel: "Telegram", body: handoffBody(context), url: "/inbox", customer: { contactId: contact?.id ?? null, leadId: null }, answers: vars, chat: () => state.msgs }); },
       ...crmActions("telegram", { contactId: contact?.id ?? null, leadId: null }),

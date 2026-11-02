@@ -1,6 +1,7 @@
 import { prisma } from "./db";
 import { customerRecordTenantId } from "./customerRecordTenant";
 import { getSetting } from "./settings";
+import { chatbotOpenNow } from "./chatbotHours";
 import { sendWhatsAppText, uploadWhatsAppMedia, sendWhatsAppAudioId, matchByPhone } from "./whatsapp";
 import { notifyHandoff } from "./handoffNotify";
 import { resolveTenantActor } from "./tenantActor";
@@ -23,24 +24,9 @@ export async function getBotRules(): Promise<BotRule[]> {
   }
 }
 
-/** South Africa has no DST — a fixed +2 offset is safe. */
-function saNow(): Date {
-  return new Date(Date.now() + 2 * 60 * 60 * 1000);
-}
-
+/** The one office-hours rule (lib/openingHours.ts), as before: no public-holiday check for the old auto-reply. */
 async function withinOfficeHours(): Promise<boolean> {
-  const hours = (await getSetting("BOT_HOURS")) || "08:00-17:00";
-  const days = (await getSetting("BOT_DAYS")) || "1,2,3,4,5";
-  const now = saNow();
-  const day = now.getUTCDay() === 0 ? 7 : now.getUTCDay();
-  if (!days.split(",").includes(String(day))) return false;
-  const [start, end] = hours.split("-");
-  const minutes = now.getUTCHours() * 60 + now.getUTCMinutes();
-  const toMin = (t: string) => {
-    const [h, m] = t.trim().split(":").map(Number);
-    return (h || 0) * 60 + (m || 0);
-  };
-  return minutes >= toMin(start ?? "08:00") && minutes < toMin(end ?? "17:00");
+  return chatbotOpenNow(false);
 }
 
 const AUTO_MARKER = "🤖 Auto-reply";

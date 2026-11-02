@@ -9,6 +9,7 @@ import { flowContactCard } from "@/lib/flowContactCard";
 import { withActingStaffScope } from "@/lib/actingScope";
 import { getCompanyProfile } from "@/lib/companyProfile";
 import { DEFAULT_SIMULATOR_SCENARIO, type SimulatorScenario } from "@/lib/flowSimulatorScenario";
+import { chatbotOpenNow } from "@/lib/chatbotHours";
 
 export type SimulatorTurnInput = {
   flowId: string;
@@ -49,6 +50,7 @@ export async function simulateFlowTurn(input: SimulatorTurnInput): Promise<Simul
     try {
       const result = await runFlow(flow, session, turn, {
         dynamicAnswer: async (source) => source === "colours" ? coloursList() : priceList(),
+        openNow: (holidaysClosed) => chatbotOpenNow(holidaysClosed),
         aiReply: async () => {
           if (scenario.ai === "timeout") {
             trace.push("AI: simulated provider timeout");
