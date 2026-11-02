@@ -61,8 +61,3 @@ export function outMsgText(message: OutMsg): string {
   if (message.type === "contact") return contactCardText(message.card);
   return `${message.text}\n${message.options.map((o) => `• ${o.label}`).join("\n")}`;
 }
-
-/** The link a QR code opens: WhatsApp, to the business number, with the message already typed. */
-export function qrWhatsAppLink(businessDigits: string, message: string): string {
-  return `https://wa.me/${businessDigits.replace(/\D/g, "")}?text=${encodeURIComponent(message)}`;
-}

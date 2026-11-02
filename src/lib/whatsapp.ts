@@ -16,7 +16,8 @@ import {
 } from "./whatsappRendering";
 import { customerRecordTenantId } from "./customerRecordTenant";
 import { shareableFileUrl } from "./storage";
-import { resolveIntegrationBundleForTenant } from "./settings";
+import { getSetting, resolveIntegrationBundleForTenant } from "./settings";
+import { FLOW_QR_KEY, matchQrCode, parseQrCodes, qrSource } from "./flowQr";
 import { sendPushToAll } from "./push";
 import { resolveTenantActor } from "./tenantActor";
 import { inboundCommunicationKey, isDedupeKeyConflict } from "./inboundMessageKey";
@@ -629,13 +630,15 @@ export async function recordInboundWhatsApp(
    */
   if (!contactId && !leadId) {
     const [firstName, ...rest] = (profileName ?? "WhatsApp contact").trim().split(/\s+/);
+    // Came through a QR code (its pre-typed message): the source says which — that is the QR's count of new people.
+    const qr = matchQrCode(parseQrCodes(await getSetting(FLOW_QR_KEY).catch(() => null)), text);
     const created = await prisma.contact.create({
       data: {
         firstName: firstName || "WhatsApp contact",
         lastName: rest.join(" ") || null,
         phone: "+" + fromDigits,
         whatsapp: "+" + fromDigits,
-        source: "whatsapp",
+        source: qr ? qrSource(qr.name) : "whatsapp",
         notes: profileName ? null : "Created from an inbound WhatsApp message — name not yet available.",
       },
     });

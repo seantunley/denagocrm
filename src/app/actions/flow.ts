@@ -14,6 +14,8 @@ import { flowErrors, type FlowIssue } from "@/lib/flowValidation";
 import { builderTenantId, flowScope } from "@/lib/flowScope";
 import { withActingStaffScope } from "@/lib/actingScope";
 import { FLOW_CHANNELS, FLOW_ROUTE_KINDS, normalizeRoutePattern, type FlowRouteKind } from "@/lib/flowRouting";
+import { FLOW_QR_KEY, parseQrCodes, qrPattern } from "@/lib/flowQr";
+import { getSetting, putSetting } from "@/lib/settings";
 import type { FlowChannel } from "@/lib/flowValidation";
 
 /** Create a new draft from one of the shipped, compiler-checked templates. */
@@ -226,6 +228,58 @@ export async function addFlowRoute(formData: FormData) {
     await logAudit({ action: "bot.flow_route_saved", summary: `Chatbot ${channel} ${kind} route “${pattern}” → “${flow.name}”`, user: owner });
     revalidatePath("/bot-builder/routes");
     return { success: "Route saved" };
+  });
+}
+
+/**
+ * A QR CODE that starts a WhatsApp flow (lib/flowQr): a named WhatsApp keyword route on the QR's pre-typed message,
+ * plus its name and message in the workspace's settings. Owner only, like every route; the flow must be published.
+ */
+export async function addFlowQr(formData: FormData) {
+  return withActingStaffScope(async () => {
+    const owner = await requireTenantOwner();
+    const tenantId = await builderTenantId();
+    const name = String(formData.get("name") ?? "").replace(/\s+/g, " ").trim();
+    const message = String(formData.get("message") ?? "").replace(/\s+/g, " ").trim();
+    const flowId = String(formData.get("flowId") ?? "");
+    if (name.length < 2 || name.length > 60) return { error: "Give the QR code a name of 2–60 characters (e.g. Showroom poster)." };
+    if (message.length < 5 || message.length > 200) return { error: "Write the message it types for the customer — 5 to 200 characters." };
+    const pattern = qrPattern(message);
+    const codes = parseQrCodes(await getSetting(FLOW_QR_KEY));
+    if (codes.some((code) => code.name.toLowerCase() === name.toLowerCase())) return { error: "A QR code with that name already exists." };
+    const flow = await prisma.botFlow.findFirst({ where: { id: flowId, tenantId, channel: "whatsapp" } });
+    if (!flow) return { error: "Choose a WhatsApp flow." };
+    const published = await prisma.botFlowVersion.findFirst({
+      where: { tenantId, flowId, channel: "whatsapp" },
+      select: { id: true },
+      orderBy: [{ version: "desc" }, { createdAt: "desc" }],
+    });
+    if (!published) return { error: "Publish this flow before a QR code can start it." };
+    // Priority 10: ahead of the ordinary keyword routes (100), so the QR's own message always reaches its flow.
+    const route = await prisma.botFlowRoute.upsert({
+      where: { tenantId_channel_kind_pattern: { tenantId, channel: "whatsapp", kind: "keyword", pattern } },
+      update: { flowId, publishedVersionId: published.id, priority: 10, enabled: true },
+      create: { tenantId, channel: "whatsapp", kind: "keyword", pattern, flowId, publishedVersionId: published.id, priority: 10 },
+      select: { id: true },
+    });
+    await putSetting(FLOW_QR_KEY, JSON.stringify([...codes.filter((code) => code.routeId !== route.id), { routeId: route.id, name, message }]));
+    await logAudit({ action: "bot.flow_qr_saved", summary: `QR code “${name}” → WhatsApp flow “${flow.name}”`, user: owner });
+    revalidatePath("/bot-builder/routes");
+    return { success: "QR code saved" };
+  });
+}
+
+export async function deleteFlowQr(routeId: string) {
+  return withActingStaffScope(async () => {
+    const owner = await requireTenantOwner();
+    const tenantId = await builderTenantId();
+    const codes = parseQrCodes(await getSetting(FLOW_QR_KEY));
+    const code = codes.find((c) => c.routeId === routeId);
+    if (!code) return;
+    await prisma.botFlowRoute.deleteMany({ where: { id: routeId, tenantId } });
+    await putSetting(FLOW_QR_KEY, JSON.stringify(codes.filter((c) => c.routeId !== routeId)));
+    await logAudit({ action: "bot.flow_qr_deleted", summary: `QR code “${code.name}” deleted — printed copies no longer start its flow`, user: owner });
+    revalidatePath("/bot-builder/routes");
   });
 }
 
