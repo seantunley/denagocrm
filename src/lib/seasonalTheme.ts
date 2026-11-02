@@ -4,16 +4,22 @@
  *
  * Denago Cape Town's workspace only — another business on the platform keeps its
  * own look — and only the staff app: the customer portal, signing pages, PDFs and
- * emails are untouched. It ends by itself at midnight on 31 October,
- * Johannesburg time: the layout asks on every request, so nothing needs
- * switching off or deploying. Delete this file and its one use in
- * app/(app)/layout.tsx afterwards.
+ * emails are untouched.
+ *
+ * EVERY YEAR (Sean, 2026-11-02: "make sure the halloween theme turns on again
+ * next year"): on from 25 October to midnight on 31 October, Johannesburg time.
+ * The layout asks on every request, so it comes and goes by itself — nothing to
+ * switch or deploy.
  */
 export const HALLOWEEN_TENANT_ID = "tenant_denago_cpt";
-export const HALLOWEEN_ENDS = new Date("2026-11-01T00:00:00+02:00");
+/** The first day of October it shows; it runs to the end of the 31st. */
+export const HALLOWEEN_FROM_DAY = 25;
 
 export function halloweenOn(tenantId: string | null | undefined, now = new Date()): boolean {
-  return tenantId === HALLOWEEN_TENANT_ID && now < HALLOWEEN_ENDS;
+  if (tenantId !== HALLOWEEN_TENANT_ID) return false;
+  // Johannesburg is UTC+2 all year (no daylight saving).
+  const sa = new Date(now.getTime() + 2 * 60 * 60 * 1000);
+  return sa.getUTCMonth() === 9 && sa.getUTCDate() >= HALLOWEEN_FROM_DAY;
 }
 
 /** The app's colour tokens, retinted: purple-black surfaces, pumpkin accent, purple hover. Rendered after the brand style, so it wins. */
