@@ -87,7 +87,16 @@ test("lead card: leads.create first, a customer they may open, the catalogue's p
   assert.match(branch, /await resolveCatalogueProduct\(\{ productId: p\.productId, product: p\.product \}\)/);
   const action = code("src/app/actions/assistant.ts");
   const run = action.slice(action.indexOf('case "create_lead": {'), action.indexOf('case "update_customer": {'));
-  assert.equal((run.match(/await [a-zA-Z.]+\(/g) ?? []).filter((call) => !/canAccessContact|createLead|confirmed/.test(call)).length, 0, "createLead is the only write");
+  assert.equal((run.match(/await [a-zA-Z.]+\(/g) ?? []).filter((call) => !/canAccessContact|createLead|confirmed|reserveConfirmKey|completeConfirmKey/.test(call)).length, 0, "createLead is the only write");
+  // ONE CONFIRM, ONE LEAD (review of #933): the card's key is reserved BEFORE createLead, and spent after — "done"
+  // with the lead it made, or "didn't complete" on any error (retry only on proof that nothing was written).
+  assert.ok(run.indexOf("await reserveConfirmKey(tenantId, user.id, card.confirmKey, \"a new lead\")") < run.indexOf("await createLead(form)"));
+  assert.match(run, /if \(reserved\.state === "done"\) \{/);
+  assert.match(run, /await completeConfirmKey\(tenantId, card\.confirmKey, "a new lead", \{ leadId \}\);/);
+  assert.equal((run.match(/completeConfirmKey\(tenantId, card\.confirmKey, "a new lead", \{ failed: "true" \}\)/g) ?? []).length, 2, "a throw and an error both");
+  const key = code("src/lib/assistantConfirmKey.ts");
+  assert.match(key, /if \(!\(error instanceof Prisma\.PrismaClientKnownRequestError && error\.code === "P2002"\)\) throw error;/, "the primary key decides between two at once");
+  assert.match(key, /where: \{ id: key, tenantId \}/);
 });
 
 test("update card: contacts.edit and access first; Confirm refuses a field changed since, then updateContact", () => {

@@ -256,6 +256,13 @@ async function main() {
     const done = await runAsSession(repSession, () => scoped(() => runAssistantAction(forBen.card!)));
     const row = done.href ? await basePrisma.lead.findUnique({ where: { id: done.href.split("/").pop()! } }) : null;
     check("Confirm opens it through the lead form: Ben's, the product, given to the person asking, in this workspace", done.ok && row?.contactId === id("c-ben") && row.productId === PRODUCT && row.assignedToId === rep.id && row.tenantId === T && row.status === "open", JSON.stringify({ done, row }));
+    // ONE CONFIRM, ONE LEAD (review of #933): the same card again, and a fresh card confirmed twice at once.
+    const bensLeads = () => basePrisma.lead.count({ where: { contactId: id("c-ben"), createdById: rep.id, deletedAt: null } });
+    const again = await runAsSession(repSession, () => scoped(() => runAssistantAction(forBen.card!)));
+    check("the same card again: the same lead back, no second one", again.ok && again.href === done.href && (await bensLeads()) === 1, JSON.stringify(again));
+    const fresh = await lead({ contactId: id("c-ben"), notes: "Second enquiry" });
+    const both = await Promise.all([0, 1].map(() => runAsSession(repSession, () => scoped(() => runAssistantAction(fresh.card!)))));
+    check("one card confirmed twice AT ONCE: exactly one more lead", (await bensLeads()) === 2 && both.filter((r) => r.ok).length >= 1, JSON.stringify(both));
     // Someone new whose number is already on a customer (written another way): the lead links to them.
     const janeDigits = JANE_PHONE.replace(/\D/g, "");
     const forJane = await lead({ firstName: "Jane", lastName: `New${SFX}`, phone: `0${janeDigits.slice(2)}` });

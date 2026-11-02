@@ -6,6 +6,7 @@ import { isModuleEnabled } from "@/lib/modules/enabled";
 import { assistantTurnsToday, customerClash, detailClash } from "@/lib/crmAssistant";
 import { createContact, updateContact } from "@/app/actions/contacts";
 import { contactFormFor } from "@/lib/contactFormFor";
+import { completeConfirmKey, reserveConfirmKey } from "@/lib/assistantConfirmKey";
 import { MAX_IMAGE_BYTES } from "@/lib/assistantImage";
 import { getSetting } from "@/lib/settings";
 import { isCodexConnected } from "@/lib/codex";
@@ -73,6 +74,7 @@ const untouched = (error: string) => ({ ok: false as const, error, unchanged: tr
 const resumable = (error: string) => ({ ok: false as const, error, resumable: true as const });
 
 const BAD_SCREENSHOT = "That screenshot can't be attached — send it to DAX again.";
+const LEAD_UNSURE = "That one didn't complete, and it may have got part-way — so it won't be tried again. Check the customer in the CRM, then ask me again if the lead is still needed.";
 /**
  * A note card's screenshot (a JPEG data: URL) → the file the note form uploads. Undefined: the card has none.
  * False: what the card carries is not a JPEG within the size DAX accepts — the card came from the browser.
@@ -255,16 +257,40 @@ export async function runAssistantAction(
         // THE LEAD FORM'S OWN DOOR (createLead): leads.create, linking or creating the customer by phone/email,
         // the first open stage, the assignee, the audit entry and the lead_created automations are all its.
         const l = card.lead;
+        if (!CONFIRM_KEY.test(String(card.confirmKey ?? ""))) return untouched(STALE_CARD);
         if (!l?.name?.trim() || (!l.contactId && !l.phone && !l.email)) return untouched(STALE_CARD);
         if (l.contactId && !(await canAccessContact(user, l.contactId))) return untouched("You can't open that customer any more.");
+        // ONE CONFIRM, ONE LEAD (review of #933): createLead has no key of its own, so the card's is reserved first
+        // (assistantConfirmKey). A second Confirm gets the lead the first made; two at once, one lead.
+        const tenantId = ownedWriteTenantId();
+        const reserved = await reserveConfirmKey(tenantId, user.id, card.confirmKey, "a new lead");
+        if (reserved.state === "done") {
+          const made = typeof reserved.result.leadId === "string" ? reserved.result.leadId : null;
+          return made
+            ? { ok: true, success: `That lead is already open for ${card.leadLabel}`, href: `/leads/${made}` }
+            : { ok: false, error: LEAD_UNSURE };
+        }
+        if (reserved.state === "busy") return { ok: false, error: "That lead is being opened right now — check the CRM in a moment." };
         const form = new FormData();
         form.set("name", l.name);
         for (const [key, value] of [["contactId", l.contactId], ["phone", l.phone], ["email", l.email], ["productId", l.productId], ["notes", l.notes]] as const) {
           if (value) form.set(key, value);
         }
-        const result = await createLead(form);
+        // Retry only on proof that nothing was written: an error from createLead may come after the lead (or its new
+        // customer) was saved, so the key is spent as "didn't complete" — the same card never runs it again.
+        let result: Awaited<ReturnType<typeof createLead>>;
+        try {
+          result = await createLead(form);
+        } catch (error) {
+          await completeConfirmKey(tenantId, card.confirmKey, "a new lead", { failed: "true" }).catch(() => {});
+          throw error;
+        }
         const leadId = /^\/leads\/([^/?#]+)$/.exec(result?.redirectTo ?? "")?.[1];
-        if (result?.error || !leadId) return { ok: false, error: result?.error ?? "Couldn't open the lead." };
+        if (result?.error || !leadId) {
+          await completeConfirmKey(tenantId, card.confirmKey, "a new lead", { failed: "true" }).catch(() => {});
+          return { ok: false, error: result?.error ?? "Couldn't open the lead." };
+        }
+        await completeConfirmKey(tenantId, card.confirmKey, "a new lead", { leadId });
         await confirmed("open a lead", leadId);
         return { ok: true, success: `Lead opened for ${card.leadLabel}`, href: `/leads/${leadId}` };
       }

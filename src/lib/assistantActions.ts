@@ -697,7 +697,7 @@ export type ActionCard =
   // A new customer record: `detail` is every field as the person reads it before confirming. Confirm checks for a duplicate again.
   | { id: string; kind: "create_customer"; leadId: null; leadLabel: string; title: string; customer: NewCustomer; detail: string; reason?: string }
   // A new deal: for `lead.contactId`, or for a new person by name and number/email (the lead form links or creates the customer).
-  | { id: string; kind: "create_lead"; leadId: null; leadLabel: string; title: string; lead: NewLead; detail: string; reason?: string }
+  | { id: string; kind: "create_lead"; leadId: null; leadLabel: string; title: string; lead: NewLead; detail: string; confirmKey: string; reason?: string }
   // A customer's details, each change with the value the card SHOWED (`was`): Confirm refuses if any has changed since.
   | { id: string; kind: "update_customer"; leadId: null; leadLabel: string; title: string; contactId: string; changes: CustomerChange[]; detail: string; reason?: string }
   | (LeadCard & { kind: "assign"; userId: string; fromUserId: string | null })

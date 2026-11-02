@@ -2638,6 +2638,8 @@ export async function resolveActions(
           ...(openDeals > 0 ? [`${who} already has ${openDeals} open deal${openDeals === 1 ? "" : "s"}.`] : []),
           "Opens in the first stage, given to you. The customer is not contacted.",
         ].join("\n"),
+        // One Confirm, one lead: reserved and spent at Confirm (assistantConfirmKey).
+        confirmKey: `qk_${randomBytes(16).toString("hex")}`,
         ...(p.reason ? { reason: p.reason } : {}),
       });
       continue;
