@@ -56,6 +56,11 @@ export type FlowNode =
   | { id: string; type: "condition"; condition: FlowCondition; trueNext?: string; falseNext?: string }
   | { id: string; type: "ai"; handoffNext?: string }
   | { id: string; type: "handoff"; text?: string; reason?: string; summary?: string }
+  /**
+   * Jump to another step without a wire (Node-RED's link nodes; Sean, 2026-11-02) — "↩ Back to menu" from anywhere
+   * without wires across the canvas. Sends nothing itself. `targetLabel` is a display copy, like a document's fileName.
+   */
+  | { id: string; type: "goto"; target: string; targetLabel?: string }
   | { id: string; type: "end" };
 
 export type Flow = { start: string; nodes: Record<string, FlowNode> };
@@ -504,6 +509,8 @@ export async function runFlow(flow: Flow, session: FlowSession, input: FlowInput
       messages.push({ type: "choice", text: interpolate(node.text, vars), options: node.options.map((o) => ({ id: choiceId(node.id, o.id), label: o.label, description: o.description })) }); return { messages, session: { nodeId: node.id, vars }, handedOff: false };
     } else if (node.type === "capture") {
       messages.push({ type: "text", text: interpolate(node.text, vars) }); return { messages, session: { nodeId: node.id, vars }, handedOff: false };
+    } else if (node.type === "goto") {
+      nodeId = node.target || null;
     } else if (node.type === "condition") {
       nodeId = evaluateCondition(node.condition, vars) ? node.trueNext ?? null : node.falseNext ?? null;
     } else if (node.type === "ai") {

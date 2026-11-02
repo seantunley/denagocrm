@@ -7,6 +7,7 @@ import {
   Bot,
   CalendarDays,
   CircleStop,
+  CornerDownRight,
   Copy,
   FileQuestion,
   FileUp,
@@ -111,13 +112,14 @@ const TYPE_META: Record<FlowNode["type"], { icon: LucideIcon; label: string; ton
   condition: { icon: GitBranch, label: "Condition", tone: "border-fuchsia-400/40", header: "bg-fuchsia-500/15 text-fuchsia-200", handle: "#e879f9", description: "Branch on a deterministic rule" },
   ai: { icon: Bot, label: "AI answer", tone: "border-orange-400/50", header: "bg-orange-500/15 text-orange-200", handle: "#fb923c", description: "Use the existing grounded AI response" },
   handoff: { icon: Hand, label: "Hand off", tone: "border-amber-400/40", header: "bg-amber-500/15 text-amber-100", handle: "#fbbf24", description: "Transfer ownership to staff" },
+  goto: { icon: CornerDownRight, label: "Go to", tone: "border-slate-400/50", header: "bg-slate-500/15 text-slate-200", handle: "#94a3b8", description: "Jump to another step — e.g. back to the menu — without a wire" },
   end: { icon: CircleStop, label: "End", tone: "border-slate-500/50", header: "bg-slate-500/15 text-slate-200", handle: "#94a3b8", description: "Finish the flow" },
 };
 
 const NODE_GROUPS: { label: string; types: FlowNode["type"][] }[] = [
   { label: "Messages", types: ["message", "image", "document", "contactCard", "answer", "knowledge", "choice"] },
   { label: "Customer input", types: ["capture", "captureFile"] },
-  { label: "Logic & data", types: ["condition", "switch", "set", "delay"] },
+  { label: "Logic & data", types: ["condition", "switch", "set", "delay", "goto"] },
   { label: "CRM & automation", types: ["booking", "slots", "journey", "http", "subflow"] },
   { label: "AI & operations", types: ["ai", "extract", "handoff", "end"] },
 ];
@@ -129,6 +131,7 @@ function summary(n: FlowNode): string {
   if (n.type === "image") return n.url ? "Sends an image" : "(no image set)";
   if (n.type === "document") return n.documentId ? `Sends ${n.fileName ?? "a document"}` : "(no file chosen)";
   if (n.type === "contactCard") return n.staffUserId ? "Sends a staff member's contact card" : "Sends your business contact card";
+  if (n.type === "goto") return n.target ? `↪ ${n.targetLabel || n.target}` : "(choose a step to jump to)";
   if (n.type === "answer") return n.answerSource ? `Send ${n.answerSource}` : (n.text ?? "").slice(0, 50);
   if (n.type === "slots") return n.action === "reschedule" ? "Moves an existing booking to a real open slot" : "Offers real open workshop slots";
   if (n.type === "booking") {
@@ -220,7 +223,7 @@ function NodeCard({ data }: NodeProps) {
             </div>
           )}
         </div>
-      ) : n.type === "handoff" || n.type === "end" ? null : (
+      ) : n.type === "handoff" || n.type === "end" || n.type === "goto" ? null : (
         <Handle type="source" position={Position.Right} id="out" className="!size-3 !border-2 !border-slate-950 transition-transform hover:!scale-125" style={{ background: meta.handle }} />
       )}
     </div>
@@ -241,6 +244,7 @@ function blankNode(type: FlowNode["type"], id: string): FlowNode {
     case "image": return { id, type, url: "" };
     case "document": return { id, type, documentId: "" };
     case "contactCard": return { id, type };
+    case "goto": return { id, type, target: "" };
     case "answer": return { id, type, answerSource: "pricelist" };
     case "knowledge": return { id, type, query: "", noMatchText: "I couldn't find an approved answer for that." };
     case "set": return { id, type, variable: "status", value: "new" };
@@ -857,6 +861,7 @@ function clearRefs(n: FlowNode, removedId: string): FlowNode {
   if (n.type === "condition") return { ...n, trueNext: n.trueNext === removedId ? undefined : n.trueNext, falseNext: n.falseNext === removedId ? undefined : n.falseNext };
   if (n.type === "switch") return { ...n, cases: n.cases.map((item) => (item.next === removedId ? { ...item, next: undefined } : item)), defaultNext: n.defaultNext === removedId ? undefined : n.defaultNext };
   if (n.type === "ai") return n.handoffNext === removedId ? { ...n, handoffNext: undefined } : n;
+  if (n.type === "goto") return n.target === removedId ? { ...n, target: "", targetLabel: undefined } : n;
   const routed = n as { next?: string; failureNext?: string; unavailableNext?: string };
   const cleared: Record<string, undefined> = {};
   if (routed.next === removedId) cleared.next = undefined;
@@ -904,6 +909,7 @@ function NodePanel({ node, isStart, nodeOptions, variables, journeys, flows, doc
       {node.type === "condition" && <><div><label className="label">Variable</label><input className="input" list={`flow-vars-${node.id}`} value={node.condition.variable} onChange={(e) => onChange({ ...node, condition: { ...node.condition, variable: e.target.value.replace(/\W/g, "") } })} placeholder="model" /><datalist id={`flow-vars-${node.id}`}>{variables.map((variable) => <option key={variable} value={variable} />)}</datalist></div><div><label className="label">Rule</label><select className="input" value={node.condition.operator} onChange={(e) => onChange({ ...node, condition: { ...node.condition, operator: e.target.value as ConditionOperator } })}><option value="equals">Equals</option><option value="not_equals">Does not equal</option><option value="contains">Contains</option><option value="exists">Has a value</option><option value="empty">Is empty</option></select></div>{!["exists", "empty"].includes(node.condition.operator) && <div><label className="label">Value</label><input className="input" value={node.condition.value ?? ""} onChange={(e) => onChange({ ...node, condition: { ...node.condition, value: e.target.value } })} placeholder="Rover XL" /></div>}<div className="grid grid-cols-2 gap-2"><div><label className="label text-emerald-300">Yes →</label><TargetPicker nodeOptions={nodeOptions} value={node.trueNext} onPick={(v) => onChange({ ...node, trueNext: v })} /></div><div><label className="label text-red-300">No →</label><TargetPicker nodeOptions={nodeOptions} value={node.falseNext} onPick={(v) => onChange({ ...node, falseNext: v })} /></div></div><p className="text-xs text-slate-500">Conditions are deterministic and never call AI. Text comparisons are case-insensitive.</p></>}
       {node.type === "ai" && <p className="text-xs text-slate-400">Chats conversationally, grounded in approved CRM/product facts and Approved Knowledge. Connect the amber dot to a node to control where it goes when confidence requires a handoff (otherwise it notifies the team).</p>}
       {node.type === "booking" && <><div><label className="label">Action</label><select className="input" value={node.action ?? "service"} onChange={(e) => onChange({ ...node, action: e.target.value as BookingAction })}><option value="service">Create service request</option><option value="demo">Create demo / test-drive lead</option><option value="lead">Create lead / enquiry</option><option value="lookup">Find customer&apos;s next service booking</option><option value="cancel">Cancel {"{{booking_id}}"}</option></select><p className="mt-1 text-xs text-slate-500">{node.action === "lookup" ? <>Read-only. Sets <code>{"{{booking_identity}}"}</code> (verified | unverified) and <code>{"{{booking_found}}"}</code>, <code>{"{{booking_id}}"}</code>, <code>{"{{booking_slot}}"}</code> and <code>{"{{booking_summary}}"}</code> from an existing customer record.</> : node.action === "cancel" ? <>Cancels only the future customer-owned booking in <code>{"{{booking_id}}"}</code> and retains its Activity history.</> : <>Built from captured fields (name, phone, email, service, model). For a real dated service booking use Workshop slots.</>}</p></div><div><label className="label">Message after action (optional)</label><textarea className="input" rows={3} value={node.text ?? ""} onChange={(e) => onChange({ ...node, text: e.target.value })} /></div></>}
+      {node.type === "goto" && <><div><label className="label" htmlFor={`goto-${node.id}`}>Jump to</label><select id={`goto-${node.id}`} className="input" value={node.target} onChange={(e) => { const option = nodeOptions.find((o) => o.id === e.target.value); onChange({ ...node, target: e.target.value, targetLabel: option?.label }); }}><option value="">Choose a step…</option>{nodeOptions.map((option) => <option key={option.id} value={option.id}>{option.label}</option>)}</select></div><p className="text-xs text-slate-500">Jumps straight to that step and sends nothing itself — no wire across the canvas. For “↩ Back to menu”, point a menu option at a Go to placed next to it, jumping to your menu.</p></>}
       {node.type === "journey" && <><div><label className="label">Journey</label><select className="input" value={node.journeyId} onChange={(e) => onChange({ ...node, journeyId: e.target.value })}><option value="">Select an active Journey…</option>{journeys.map((journey) => <option key={journey.id} value={journey.id}>{journey.name}</option>)}</select><p className="mt-1 text-xs text-slate-500">Enrols exactly this existing CRM customer/lead in the selected active Journey. Flow continues immediately; waits and later lifecycle actions stay in Journey. Retries reuse the same event identity.</p></div><div><label className="label">Message after enrolment (optional)</label><textarea className="input" rows={3} value={node.text ?? ""} onChange={(e) => onChange({ ...node, text: e.target.value })} /></div></>}
       {node.type === "knowledge" && <><div><label className="label">Knowledge query (optional)</label><textarea className="input" rows={3} value={node.query} onChange={(e) => onChange({ ...node, query: e.target.value })} placeholder="Leave blank to use the customer's current message" /><p className="mt-1 text-xs text-slate-500">Only approved, currently-valid Flowbot Knowledge entries can be returned.</p></div><div><label className="label">Also save answer as</label><input className="input" value={node.saveAs ?? ""} onChange={(e) => onChange({ ...node, saveAs: e.target.value.replace(/\W/g, "") || undefined })} placeholder="knowledge_answer" /></div><div><label className="label">If nothing matches, say</label><textarea className="input" rows={2} value={node.noMatchText ?? ""} onChange={(e) => onChange({ ...node, noMatchText: e.target.value || undefined })} /></div></>}
       {node.type === "set" && <><div><label className="label">Variable</label><input className="input" value={node.variable} onChange={(e) => onChange({ ...node, variable: e.target.value.replace(/\W/g, "") })} placeholder="status" /></div><div><label className="label">Value</label><textarea className="input" rows={3} value={node.value} onChange={(e) => onChange({ ...node, value: e.target.value })} placeholder="Use {{variables}} if needed" /></div></>}
