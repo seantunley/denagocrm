@@ -193,6 +193,9 @@ export const WHATSAPP_CONFIRMABLE: ReadonlySet<string> = new Set([
   // schedule_delivery (Sean, 2026-11-02, voice-first): a signed deal's delivery date booked or moved on the deliveries
   // board — the board's own actions, the day shown first, nobody contacted.
   "schedule_delivery",
+  // nurture (Sean, 2026-11-02, asked on WhatsApp: "it's not lost, should be in Nurture"): parks a deal for later —
+  // reopening a lost one first — every detail shown, nobody contacted, through the lead page's own actions.
+  "nurture",
 ]);
 
 /**

@@ -8,6 +8,7 @@ import { codexRespond, isCodexConnected, type CodexResult } from "./codex";
 import { formatZAR, contactName } from "./format";
 import { payableTotalCents } from "./pricing";
 import { johannesburgDateKey } from "./activityDay";
+import { nurtureReasonLabel, reviewDate } from "./leadNurture";
 import { listActingTenantStaff, resolveTenantActor } from "./tenantActor";
 import { WHO_LEGEND, messageAuthor, whoLogged } from "./assistantWho";
 import { OPENED_LEGEND, openedFact } from "./emailOpenTracking";
@@ -67,7 +68,7 @@ import { DOCUMENT_TYPES_KEY, parseDocumentTypes } from "./documentLabels";
 import { paymentMethodLabel } from "./accountStatement";
 import { carriedUpload, holdUpload, linkUpload, photoUpload, uploadImage } from "./assistantUpload";
 import { actingTenantId } from "./actingTenant";
-import { ACTION_INSTRUCTIONS, CHECK_BACK_RULE, CHOICE_INSTRUCTIONS, JOB_CARD_RULE, MAX_ACTIONS, newCustomerDetail, type NewCustomer, CUSTOMER_FIELDS, customerChangesText, type CustomerChange, type CustomerField, type FileTarget, matchQuoteRow, quoteAddText, quoteBuildText, quoteChangeText, settledAnswer, type ActionCard, type ProposedAction, type QuoteBuildLine, type QuoteChange } from "./assistantActions";
+import { ACTION_INSTRUCTIONS, CHECK_BACK_RULE, CHOICE_INSTRUCTIONS, JOB_CARD_RULE, MAX_ACTIONS, newCustomerDetail, type NewCustomer, CUSTOMER_FIELDS, customerChangesText, type CustomerChange, type CustomerField, type FileTarget, matchQuoteRow, quoteAddText, quoteBuildText, quoteChangeText, settledAnswer, withoutSetUpClaims, type ActionCard, type ProposedAction, type QuoteBuildLine, type QuoteChange } from "./assistantActions";
 import { knowledgeProducts, resolveCatalogueProduct } from "./catalogueLookup";
 import { TASK_INSTRUCTIONS, keepIds, taskBlock, type TaskView } from "./assistantTaskRules";
 import { applyTaskUpdate, openTasks, type TaskSheet, type TaskWrite } from "./assistantTask";
@@ -777,6 +778,7 @@ export async function leadBrief(user: User, raw: z.infer<typeof leadBriefArgs>):
       id: true, title: true, name: true, status: true, valueCents: true, quantity: true, source: true,
       notes: true, research: true, researchedAt: true, createdAt: true, stageEnteredAt: true,
       wonAt: true, lostAt: true, lostReason: true,
+      nurtureSince: true, nurtureReason: true, nurtureInterest: true, nurtureTrigger: true, nurtureReviewAt: true,
       contactId: true,
       stage: { select: { name: true } },
       product: { select: { name: true } },
@@ -870,6 +872,10 @@ export async function leadBrief(user: User, raw: z.infer<typeof leadBriefArgs>):
       ...(whoLogged(lead.createdBy, standInId) ? { createdBy: whoLogged(lead.createdBy, standInId) } : {}),
       ...(lead.wonAt ? { won: dateKey(lead.wonAt) } : {}),
       ...(lead.lostAt ? { lost: dateKey(lead.lostAt), lostReason: lead.lostReason } : {}),
+      // PARKED, not lost (NURTURE_RULE): why, what they want, when to follow up, and the day it is looked at again.
+      ...(lead.status === "nurture"
+        ? { nurture: { since: lead.nurtureSince ? dateKey(lead.nurtureSince) : null, why: nurtureReasonLabel(lead.nurtureReason), interest: lead.nurtureInterest, followUpWhen: lead.nurtureTrigger, reviewOn: lead.nurtureReviewAt ? dateKey(lead.nurtureReviewAt) : null } }
+        : {}),
       notes: clip(lead.notes, 800),
       research: lead.research ? { when: dateKey(lead.researchedAt), summary: clip(lead.research, 1500) } : null,
       who: WHO_LEGEND,
@@ -2456,9 +2462,12 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
     : taskWrite.ok
       ? `\n\n📋 Job sheet: ${taskWrite.title}${taskWrite.created ? " (new)" : taskWrite.status === "open" ? "" : ` (${taskWrite.status})`} — on your Ask page.`
       : `\n\n(Your job sheet “${taskWrite.title}” changed somewhere else while I was answering, so I left it as it is now — ask again to update it.)`;
-  // A replaced answer carries none of the original's figures or citations, so neither its note nor its links.
-  const cited = (settled ?? resolved.cited + note) + checkBackLine + taskLine;
-  const answer = (settled ?? resolved.plain + note) + checkBackLine + taskLine;
+  // What it said about tasks is replaced; the REST of the answer is kept (withoutSetUpClaims), with its figure check,
+  // and the task status follows it. Shown plain — a settled answer carries no citation links.
+  const kept = settled === null ? "" : withoutSetUpClaims(resolved.plain);
+  const settledText = settled === null ? null : kept ? `${kept}${note}\n\n${settled}` : settled;
+  const cited = (settledText ?? resolved.cited + note) + checkBackLine + taskLine;
+  const answer = (settledText ?? resolved.plain + note) + checkBackLine + taskLine;
   const choices = source === "schedule" ? [] : reply.choices;
   const learnedCount = learn
     ? await applyLearn(user.id, learn).catch(async (error: unknown) => {
@@ -3189,6 +3198,7 @@ export async function resolveActions(
       select: {
         name: true, title: true, stageId: true, assignedToId: true, stage: { select: { pipelineId: true } },
         email: true, phone: true, contactId: true, contact: { select: { email: true, phone: true } },
+        status: true, lostReason: true,
       },
     });
     if (!lead) continue;
@@ -3200,7 +3210,7 @@ export async function resolveActions(
     } else if (p.type === "assign") {
       const wanted = p.to.trim().toLowerCase();
       const person = staff.find((s) => s.name.toLowerCase() === wanted) ?? staff.find((s) => s.name.toLowerCase().startsWith(wanted));
-      if (!person) continue;
+      if (!person) { problems.push(`I can't find "${p.to}" among the people who can take a deal.`); continue; }
       cards.push({ id, kind: "assign", leadId: p.leadId, leadLabel, title: `Give ${lead.name}'s lead to ${person.name}`, userId: person.id, fromUserId: lead.assignedToId, ...(p.reason ? { reason: p.reason } : {}) });
     } else if (p.type === "stage") {
       // Compared in code, exactly: a pipeline has a handful of stages, and an
@@ -3210,7 +3220,15 @@ export async function resolveActions(
         where: { pipelineId: lead.stage.pipelineId },
         select: { id: true, name: true },
       })).find((s) => s.name.toLowerCase() === wantedStage);
-      if (!stage || stage.id === lead.stageId) continue;
+      // Said, not dropped: a silent drop told the person only "a task could not be set up" (Sean, 2026-11-02 — a
+      // "stage" called Nurture, which is a status: the nurture task).
+      if (!stage) {
+        problems.push(/^nurtur/i.test(wantedStage)
+          ? `Nurture isn't a stage — it's how a deal is parked for later. Ask me to put ${lead.name}'s deal in Nurture, and say why and when to look at it again.`
+          : `${lead.name}'s pipeline has no stage called "${p.stage}".`);
+        continue;
+      }
+      if (stage.id === lead.stageId) { problems.push(`${lead.name}'s deal is already in ${stage.name}.`); continue; }
       cards.push({ id, kind: "stage", leadId: p.leadId, leadLabel, title: `Move ${lead.name}'s lead to ${stage.name}`, stageId: stage.id, fromStageId: lead.stageId, ...(p.reason ? { reason: p.reason } : {}) });
     } else if (p.type === "draft_message") {
       // Where it would go, shown on the card before anyone presses Send — the
@@ -3224,6 +3242,37 @@ export async function resolveActions(
       });
     } else if (p.type === "lost") {
       cards.push({ id, kind: "lost", leadId: p.leadId, leadLabel, title: `Mark ${lead.name}'s deal as lost`, reason: p.reason });
+    } else if (p.type === "nurture") {
+      // The lead page's own doors at Confirm — Reopen (a lost deal: leads.reopen) and Move to Nurture
+      // (leads.change_stage + activities.manage; leads.assign for another salesperson). Checked here too, so a card
+      // is only offered when it can run.
+      const wasStatus = lead.status;
+      if (wasStatus !== "open" && wasStatus !== "nurture" && wasStatus !== "lost") { problems.push(`${lead.name}'s deal is ${wasStatus} — it can't be parked in Nurture.`); continue; }
+      if (!(await hasPermission(user, "leads.change_stage")) || !(await hasPermission(user, "activities.manage"))) { problems.push("Your role can't move deals to Nurture."); continue; }
+      if (wasStatus === "lost" && !(await hasPermission(user, "leads.reopen"))) { problems.push(`${lead.name}'s deal is marked lost, and your role can't reopen deals.`); continue; }
+      if (!reviewDate(p.reviewOn)) { problems.push(`${p.reviewOn} isn't today or later — which day should ${lead.name}'s deal be looked at again?`); continue; }
+      const wanted = p.to?.trim().toLowerCase();
+      const named = wanted ? staff.find((s) => s.name.toLowerCase() === wanted) ?? staff.find((s) => s.name.toLowerCase().startsWith(wanted)) : null;
+      if (wanted && !named) { problems.push(`I can't find "${p.to}" among the people who can take a deal.`); continue; }
+      const ownerId = named?.id ?? lead.assignedToId ?? user.id;
+      const owner = staff.find((s) => s.id === ownerId);
+      if (!owner) { problems.push(`${lead.name}'s deal is with someone who isn't active any more — say who should have it.`); continue; }
+      if (ownerId !== lead.assignedToId && !(await hasPermission(user, "leads.assign"))) { problems.push(`That gives ${lead.name}'s deal to ${owner.name}, and your role can't assign deals — ask someone who can.`); continue; }
+      const ownerName = owner.name;
+      cards.push({
+        id, kind: "nurture", leadId: p.leadId, leadLabel,
+        title: wasStatus === "lost" ? `Reopen ${lead.name}'s deal and park it in Nurture` : wasStatus === "nurture" ? `Update ${lead.name}'s Nurture details` : `Park ${lead.name}'s deal in Nurture`,
+        wasStatus, because: p.because, interest: p.interest, trigger: p.trigger, reviewOn: p.reviewOn, assignedToId: ownerId,
+        detail: [
+          `Why: ${nurtureReasonLabel(p.because)}`,
+          `Interested in: ${p.interest}`,
+          `Follow up when: ${p.trigger}`,
+          `Review on: ${p.reviewOn} — a review task for ${ownerName}`,
+          ...(wasStatus === "lost" ? [`It's marked lost now${lead.lostReason ? ` (${lead.lostReason})` : ""} — confirming reopens it first.`] : []),
+          "Nobody is contacted.",
+        ].join("\n"),
+        ...(p.reason ? { reason: p.reason } : {}),
+      });
     } else if (p.type === "quote") {
       cards.push({ id, kind: "quote", leadId: p.leadId, leadLabel, title: `Start a quote for ${lead.name}`, ...(p.reason ? { reason: p.reason } : {}) });
     }

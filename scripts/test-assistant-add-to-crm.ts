@@ -303,6 +303,51 @@ async function main() {
     check("a card whose 'before' is no longer true is refused, unchanged", !again.ok && again.unchanged === true, JSON.stringify(again));
   }
 
+  console.log("\nPark a deal in Nurture (Sean, 2026-11-02: \"it's not lost, should be in Nurture\")");
+  {
+    const otherSession = await sessionFor(other);
+    const [first, second] = await basePrisma.lead.findMany({ where: { tenantId: T, contactId: id("c-ben"), createdById: rep.id, status: "open", deletedAt: null }, orderBy: { createdAt: "asc" }, take: 2 });
+    check("two of Ben's open deals to work with", !!first && !!second);
+    // Marked lost by someone, as Werner Kilian's was.
+    await basePrisma.lead.update({ where: { id: first.id }, data: { status: "lost", lostAt: new Date(), lostReason: "Gone cold" } });
+    const inAMonth = new Date(Date.now() + 2 * 3_600_000 + 30 * 86_400_000).toISOString().slice(0, 10);
+    const propose = async (who: PermissionUser, session: ActingSession, proposal: Record<string, unknown>) => {
+      const problems: string[] = [];
+      const cards = await runAsSession(session, () => scoped(() => resolveActions(who, [proposal as never], problems, null)));
+      return { problems, card: cards.find((c): c is Extract<ActionCard, { kind: "nurture" }> => c.kind === "nurture") };
+    };
+    const asked = { type: "nurture", leadId: first.id, because: "timing", interest: "Rover XL", trigger: "When his bonus comes in March", reviewOn: inAMonth };
+    // What DAX tried that day — a STAGE called Nurture — now says why instead of vanishing.
+    const asStage = await propose(rep, repSession, { type: "stage", leadId: first.id, stage: "Nurture" });
+    check("a 'stage' called Nurture: no card, and it says Nurture isn't a stage", !asStage.card && /Nurture isn't a stage/.test(asStage.problems.join(" ")), asStage.problems.join(" | "));
+    const parked = await propose(rep, repSession, asked);
+    check("a lost deal: the card says it reopens it first, and every detail", parked.card?.wasStatus === "lost" && /^Reopen Ben Mine\w*'s deal and park it in Nurture$/.test(parked.card.title)
+      && /It's marked lost now \(Gone cold\) — confirming reopens it first\./.test(parked.card.detail) && /Review on: .* — a review task for Rep/.test(parked.card.detail) && parked.card.assignedToId === rep.id, JSON.stringify(parked));
+    const events = (leadId: string) => basePrisma.auditEvent.count({ where: { entityId: leadId, eventType: { in: ["lead.reopened", "lead.nurtured", "lead.nurture_updated"] } } });
+    const done = await runAsSession(repSession, () => scoped(() => runAssistantAction(parked.card!)));
+    const row = await basePrisma.lead.findUnique({ where: { id: first.id } });
+    const review = row?.nurtureActivityId ? await basePrisma.activity.findUnique({ where: { id: row.nurtureActivityId } }) : null;
+    check("Confirm: reopened and parked — the reason, interest, follow-up and review day, with its review task",
+      done.ok && row?.status === "nurture" && row.nurtureReason === "timing" && row.nurtureInterest === "Rover XL" && row.nurtureTrigger === "When his bonus comes in March"
+        && !!row.nurtureReviewAt && review?.assignedToId === rep.id && review.tenantId === T && (await events(first.id)) === 2, JSON.stringify({ done, row, review }));
+    const again = await runAsSession(repSession, () => scoped(() => runAssistantAction(parked.card!)));
+    check("Confirm again: already in Nurture — nothing written twice", again.ok && /is in Nurture/.test(again.success ?? "") && (await events(first.id)) === 2
+      && (await basePrisma.activity.count({ where: { leadId: first.id, summary: { startsWith: "Review future interest" } } })) === 1, JSON.stringify(again));
+    // A card for an OPEN deal that is marked lost before Confirm: refused, never reopened by it.
+    const open = await propose(rep, repSession, { ...asked, leadId: second.id });
+    check("an open deal: parked without a reopen", open.card?.wasStatus === "open" && /^Park Ben Mine\w*'s deal in Nurture$/.test(open.card.title) && !/reopens/.test(open.card.detail), JSON.stringify(open));
+    await basePrisma.lead.update({ where: { id: second.id }, data: { status: "lost", lostAt: new Date(), lostReason: "Bought elsewhere" } });
+    const stale = await runAsSession(repSession, () => scoped(() => runAssistantAction(open.card!)));
+    check("…marked lost before Confirm: refused unchanged, and still lost", !stale.ok && stale.unchanged === true && (await basePrisma.lead.findUnique({ where: { id: second.id } }))?.status === "lost", JSON.stringify(stale));
+    // Somebody who can't open the deal: no card — and a card made for someone else does nothing when they confirm it.
+    const forged = await runAsSession(otherSession, () => scoped(() => runAssistantAction({ ...parked.card!, wasStatus: "lost", leadId: second.id })));
+    check("another rep's deal: refused, unchanged", !forged.ok && forged.unchanged === true && (await basePrisma.lead.findUnique({ where: { id: second.id } }))?.status === "lost", JSON.stringify(forged));
+    // A rep can't take an unassigned deal for themselves by parking it (leads.assign — the lead page's own rule).
+    await basePrisma.lead.update({ where: { id: second.id }, data: { assignedToId: null } });
+    const unassigned = await propose(rep, repSession, { ...asked, leadId: second.id });
+    check("an unassigned deal, a rep without leads.assign: no card, and it says why", !unassigned.card && /can't assign deals/.test(unassigned.problems.join(" ")), unassigned.problems.join(" | "));
+  }
+
   console.log("\nFiling what was sent, and recording money");
   {
     const otherSession = await sessionFor(other);
