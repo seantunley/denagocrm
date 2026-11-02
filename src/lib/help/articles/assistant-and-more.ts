@@ -34,6 +34,8 @@ export const assistantAndMoreArticles: HelpArticle[] = [
         "Stock, demo vehicles, customers' vehicles and deliveries.",
         "Your products, prices, approved answers and competitor research.",
         "Sales numbers such as new leads, win rate and stalled deals.",
+        "Why one deal is stuck: ask \"Why is Anna's deal stuck?\" and it lists what is holding it up, most important first, each with its date and a link to the record.",
+        "A catch-up: ask \"Catch me up\" and it lists what changed on your deals (and unassigned ones you can see) since you last asked it anything, up to a week back — new customer messages, quotes opened or signed, stage moves by someone else, new leads — and your tasks due today or overdue.",
       ] },
       { type: "callout", tone: "info", text: "The assistant answers with **your own access**. It can only see what you can already see in your own lists, so two people asking the same question may get different answers. It never shows you a record you could not open yourself." },
       { type: "h", text: "What it cannot do" },
