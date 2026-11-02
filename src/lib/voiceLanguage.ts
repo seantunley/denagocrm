@@ -3,11 +3,12 @@
  * voice in that language.
  *
  * ElevenLabs Scribe transcribes Afrikaans well and Zulu/Xhosa moderately, and
- * reports the language it heard. Speaking back is narrower (docs, 2026-10): only
- * Eleven v3 speaks Afrikaans, and no model speaks Zulu, Xhosa or the other South
- * African languages. So: Afrikaans → reply in Afrikaans, voiced with v3; the
- * unvoiceable ones → reply in that language, as TEXT; English and everything
- * else → unchanged.
+ * reports the language it heard. Speaking back is narrower (models page,
+ * 2026-11-02): Eleven v4 / v4 Turbo / v3 speak Afrikaans, and no model speaks
+ * Zulu, Xhosa or the other South African languages. So: Afrikaans → reply in
+ * Afrikaans, voiced in Afrikaans by the same voice (elevenLabsTTS picks a model
+ * that speaks it); the unvoiceable ones → reply in that language, as TEXT;
+ * English and everything else → unchanged.
  */
 
 export type VoiceLanguage = {
@@ -16,12 +17,12 @@ export type VoiceLanguage = {
   name: string;
   /** Can a voice reply be synthesised in this language at all? */
   speakable: boolean;
-  /** TTS model to use instead of the workspace default, when one is needed. */
-  ttsModel?: string;
+  /** The language the voice speaks it in (ElevenLabs' language_code), when it can. */
+  ttsLanguage?: "af";
 };
 
 /** Afrikaans is the one South African language a model can voice. */
-const AFRIKAANS: VoiceLanguage = { code: "afr", name: "Afrikaans", speakable: true, ttsModel: "eleven_v3" };
+const AFRIKAANS: VoiceLanguage = { code: "afr", name: "Afrikaans", speakable: true, ttsLanguage: "af" };
 
 /** Transcribed, but no TTS model speaks them: reply as text in the same language. */
 const TEXT_ONLY: Record<string, string> = {

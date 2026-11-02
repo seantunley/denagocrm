@@ -58,3 +58,6 @@ data-export.json
 backups/
 .poll-fb2.mjs
 .claude/worktrees/
+
+# ElevenLabs voice check clips (npm run voice:check)
+/voice-check/

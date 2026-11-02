@@ -3,6 +3,7 @@ import { getSetting } from "./settings";
 import { canSynthesizeVoice, elevenLabsTTS } from "./elevenlabs";
 import type { VoiceLanguage } from "./voiceLanguage";
 import { ASSISTANT_VOICE_REPLIES_KEY, spokenAnswer, voiceLanguageFor, voiceRepliesSwitchOn } from "./assistantVoiceRules";
+import { PRONUNCIATIONS_KEY, parsePronunciations } from "./spokenText";
 
 /*
  * DAX speaking its answer — the ElevenLabs half. Used by the WhatsApp reply
@@ -17,14 +18,21 @@ export async function assistantVoiceRepliesOn(): Promise<boolean> {
 
 export type SpokenAudio = { buffer: Buffer; contentType: string };
 
+/** The workspace's pronunciations ("Denago = Deh-NAH-go"), applied to everything spoken. */
+export async function workspacePronunciations(): Promise<[string, string][]> {
+  return parsePronunciations(await getSetting(PRONUNCIATIONS_KEY).catch(() => null));
+}
+
 /**
  * The spoken version of `answer` as OGG/Opus, or why not: "unspeakable" when
  * no model speaks its language (text only, not a failure), "failed" when
- * ElevenLabs gave nothing (it logs its own reason).
+ * ElevenLabs gave nothing (it logs its own reason). `script`: the version DAX
+ * wrote to be said (askCrm's `spoken`), when there is one.
  */
-export async function synthesiseAnswer(answer: string, heard?: VoiceLanguage | null): Promise<SpokenAudio | "unspeakable" | "failed"> {
-  const voice = voiceLanguageFor(answer, heard);
-  const spoken = spokenAnswer(answer);
-  if (!voice || !spoken) return "unspeakable";
-  return (await elevenLabsTTS(spoken, { model: voice.ttsModel })) ?? "failed";
+export async function synthesiseAnswer(answer: string, heard?: VoiceLanguage | null, script?: string | null, rest?: string): Promise<SpokenAudio | "unspeakable" | "failed"> {
+  const voice = voiceLanguageFor(script || answer, heard);
+  if (!voice) return "unspeakable";
+  const spoken = spokenAnswer(answer, { script, afrikaans: voice.language === "af", pronunciations: await workspacePronunciations(), ...(rest ? { rest } : {}) });
+  if (!spoken) return "unspeakable";
+  return (await elevenLabsTTS(spoken, { language: voice.language })) ?? "failed";
 }

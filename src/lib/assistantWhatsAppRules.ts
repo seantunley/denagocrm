@@ -544,6 +544,22 @@ export type WhatsAppReplyPlan = {
  * Short answers ride as the buttons' own body (one message); a button body is
  * capped at 1024, so a longer answer goes as text first, then the buttons.
  */
+/**
+ * What follows a VOICE NOTE reply (Sean, 2026-11-02: "stop the double response to a voicenote"): not the text —
+ * only what a voice can't do, the choice buttons (or, when they don't fit as buttons, the numbered list, so "2"
+ * still works). Nothing to choose: nothing.
+ */
+export function voiceReplyExtras(choices: readonly string[] = []): WhatsAppReplyPlan {
+  const options = [...new Set(choices.map((c) => c.trim()).filter(Boolean))];
+  if (!options.length) return { texts: [], buttons: null };
+  if (options.length <= WA_BUTTON_MAX && options.every((o) => o.length <= WA_BUTTON_TITLE_MAX)) return { texts: [], buttons: { body: "Tap one, or just ask:", titles: options } };
+  return { texts: [options.map((o, i) => `${i + 1}. ${o}`).join("\n")], buttons: null };
+}
+/** Said at the end of a voice note that had to be cut: the text isn't sent with it, so where the rest is. */
+export const ASK_PAGE_HAS_THE_REST = "The full answer is on your Ask page in the CRM.";
+/** How often "typing…" is re-sent while DAX works — Meta drops it after 25 seconds. */
+export const TYPING_RENEW_MS = 20_000;
+
 export function planWhatsAppReply(answer: string, choices: readonly string[] = []): WhatsAppReplyPlan {
   const text = answer.trim() || "I couldn't put an answer together just now — try asking again.";
   const options = [...new Set(choices.map((c) => c.trim()).filter(Boolean))];

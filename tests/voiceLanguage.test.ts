@@ -8,7 +8,7 @@ const code = (rel: string) =>
 
 test("Afrikaans is answered in Afrikaans, voiced with the one model that speaks it", () => {
   for (const raw of ["afr", "af", "AFR"]) {
-    assert.deepEqual(voiceLanguage(raw, 0.97), { code: "afr", name: "Afrikaans", speakable: true, ttsModel: "eleven_v3" }, raw);
+    assert.deepEqual(voiceLanguage(raw, 0.97), { code: "afr", name: "Afrikaans", speakable: true, ttsLanguage: "af" }, raw);
   }
 });
 
@@ -53,7 +53,7 @@ test("the language reaches the reply, the voice model and the handoff rule", () 
   assert.match(bot, /const voiceReply = voiceOn && \(replyLanguage\?\.speakable \?\? true\);/);
   // Unspeakable language with voice ON is a normal turn, not a forced handoff.
   assert.match(bot, /const handoff = ai\.handoff \|\| \(Boolean\(opts\.voiceNote\) && !voiceOn\);/);
-  assert.match(bot, /sendVoiceReply\(fromDigits, ai\.reply, replyLanguage\?\.ttsModel\)/);
+  assert.match(bot, /sendVoiceReply\(fromDigits, ai\.reply, replyLanguage\?\.ttsLanguage \?\? "en"\)/);
   // Existing callers keep the plain-text contract.
   assert.match(code("src/lib/transcribe.ts"), /export async function transcribeVoice\(\s*buffer: Buffer,\s*contentType = "audio\/ogg"\s*\): Promise<string \| null>/);
 });

@@ -23,7 +23,7 @@ export async function transcribeVoiceDetailed(
   buffer: Buffer,
   contentType = "audio/ogg"
 ): Promise<Transcript | null> {
-  const viaEleven = await elevenLabsSTTDetailed(buffer, contentType);
+  const viaEleven = await elevenLabsSTTDetailed(buffer, contentType, { keyterms: await keyterms() });
   if (viaEleven) return viaEleven;
   const text = await whisperTranscribe(buffer, contentType);
   return text ? { text, languageCode: null, languageProbability: null } : null;
@@ -34,10 +34,15 @@ export async function transcribeVoiceDetailed(
  * refused the KEY — so the person is told to fix the key, not their microphone.
  */
 export async function transcribeVoiceChecked(buffer: Buffer, contentType: string): Promise<{ text: string } | SttRefusal | null> {
-  const viaEleven = await elevenLabsSTTChecked(buffer, contentType);
+  const viaEleven = await elevenLabsSTTChecked(buffer, contentType, { keyterms: await keyterms() });
   if (viaEleven && "text" in viaEleven) return { text: viaEleven.text };
   const text = await whisperTranscribe(buffer, contentType);
   return text ? { text } : viaEleven;
+}
+
+/** The names to expect in this workspace (voiceKeyterms) — none if they can't be read: transcription still runs. */
+async function keyterms(): Promise<string[]> {
+  return import("./voiceKeyterms").then((m) => m.voiceKeyterms()).catch(() => []);
 }
 
 async function whisperTranscribe(buffer: Buffer, contentType: string): Promise<string | null> {
