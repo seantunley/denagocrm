@@ -20,9 +20,11 @@ const ok = (label: string) => console.log(`  ✓ ${++checks}. ${label}`);
 
   const user = await basePrisma.user.findFirstOrThrow({ where: { tenantId: { not: null } }, select: { id: true, tenantId: true } });
   const tenantId = user.tenantId!;
-  const stages = await basePrisma.pipelineStage.findMany({ where: { tenantId }, select: { id: true }, take: 2, orderBy: { id: "asc" } });
-  assert.equal(stages.length, 2, "the seeded workspace has two pipeline stages");
-  const [from, to] = stages;
+  // Its own pipeline and two stages: the CI workspace has none of its own to borrow.
+  const pipeline = await basePrisma.salesPipeline.create({ data: { name: `Flow CRM ${run}`, tenantId }, select: { id: true } });
+  const stage = (name: string, order: number) => basePrisma.pipelineStage.create({ data: { name: `${name} ${run}`, order, pipelineId: pipeline.id, tenantId }, select: { id: true } });
+  const from = await stage("New", 1);
+  const to = await stage("Quoted", 2);
 
   const contact = (tag: string) => basePrisma.contact.create({ data: { tenantId, firstName: "Flow", lastName: `${tag}-${run}` }, select: { id: true } });
   const deal = (contactId: string | null, tag: string) =>
