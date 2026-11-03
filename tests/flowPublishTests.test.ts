@@ -12,8 +12,7 @@ const stubs: Record<string, unknown> = {
   "./db": {
     prisma: {
       botFlowEvaluation: {
-        count: async () => saved.length,
-        findMany: async ({ take }: { take: number }) => saved.slice(0, take),
+        findMany: async ({ take }: { take?: number }) => saved.slice(0, take ?? saved.length),
       },
     },
   },
@@ -25,7 +24,7 @@ loader._load = function (this: unknown, request: string, parent: unknown, isMain
   return realLoad.call(this, request, parent, isMain);
 };
 const require = createRequire(import.meta.url);
-const { publishTestIssues, PUBLISH_TEST_LIMIT } = require("../src/lib/flowPublishTests") as typeof import("../src/lib/flowPublishTests");
+const { publishTestIssues } = require("../src/lib/flowPublishTests") as typeof import("../src/lib/flowPublishTests");
 
 const flow: Flow = {
   start: "menu",
@@ -59,11 +58,14 @@ test("a failing or broken saved test is a publish error that names it", async ()
   assert.match(issues[1].message, /“Old menu” fails on this draft: Saved choice “Book a service” was not offered/);
 });
 
-test("more saved tests than one request can run: the rest are named as not run, not silently skipped", async () => {
-  saved = Array.from({ length: PUBLISH_TEST_LIMIT + 3 }, (_, i) => test_(`Case ${i}`, "Prices", "completed"));
+test("every saved test runs: the 25th failing still blocks the publish (PR #977 review)", async () => {
+  saved = Array.from({ length: 24 }, (_, i) => test_(`Case ${i}`, "Prices", "completed"));
+  saved.push(test_("Case 25", "Prices", "completed", "R1"));
   const issues = await publishTestIssues("t", "f", flow, "whatsapp");
-  assert.deepEqual(issues.map((i) => [i.severity, i.code]), [["warning", "test.not_all_run"]]);
-  assert.match(issues[0].message, /first 20 of 23/);
+  assert.deepEqual(issues.map((i) => [i.severity, i.code]), [["error", "test.failed"]]);
+  assert.match(issues[0].message, /“Case 25”/);
+  const runner = readFileSync("src/lib/flowPublishTests.ts", "utf8");
+  assert.doesNotMatch(runner, /take:/, "no cap on the cases a publish runs");
 });
 
 test("the tests run on the exact definition that is then published", () => {
