@@ -204,9 +204,10 @@ export function validateFlow(flow: Flow, channels: FlowChannel[] = ["whatsapp"])
           issues.push(issue("error", "http.headers", "API headers must be a JSON object.", id));
         }
       }
-      // A key typed into the step is readable by anyone who edits flows and kept in every version (review 2026-11-02).
+      // A key typed into the step is readable by anyone who edits flows and kept in every version, so it is
+      // refused: here (blocks publish) and in saveFlow (never stored in a draft). PR #973 review.
       const secrets = secretLookingHeaders(node.headers);
-      if (secrets.length) issues.push(issue("warning", "http.secret_header", `“${secrets.join("”, “")}” looks like a key. Anyone who can edit flows can read it here, and it's kept in every published version — put it in a Connection (Flows → Connections) and choose that connection instead.`, id));
+      if (secrets.length) issues.push(issue("error", "http.secret_header", `“${secrets.join("”, “")}” looks like a key, and keys can't be kept in a flow (anyone who edits flows could read it, and every published version would keep it). Put it in a Connection (Flows → Connections) and choose that connection instead.`, id));
     }
     if (node.type === "extract") {
       if (!node.instruction.trim()) issues.push(issue("error", "extract.instruction", "AI extract needs an instruction.", id));

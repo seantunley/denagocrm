@@ -26,12 +26,19 @@ test("the saved list drops anything malformed", () => {
   assert.deepEqual(parseConnections("not json"), []);
 });
 
-test("a key typed into a step's headers is warned about; ordinary headers are not", () => {
+test("a key typed into a step's headers is refused (publish and draft save); ordinary headers are not", () => {
   assert.deepEqual(secretLookingHeaders('{"Authorization":"Bearer x","Accept":"application/json"}'), ["Authorization"]);
   assert.deepEqual(secretLookingHeaders('{"x-api-key":"k"}'), ["x-api-key"]);
   assert.deepEqual(secretLookingHeaders('{"Accept":"application/json"}'), []);
   const flow: Flow = { start: "h", nodes: { h: { id: "h", type: "http", method: "GET", url: "https://api.sage.com/x", headers: '{"Authorization":"Bearer k"}', next: "e", failureNext: "e" }, e: { id: "e", type: "end" } } };
-  assert.ok(validateFlow(flow).some((i) => i.code === "http.secret_header" && i.severity === "warning"));
+  assert.ok(validateFlow(flow).some((i) => i.code === "http.secret_header" && i.severity === "error"));
+  const ok: Flow = { start: "h", nodes: { h: { id: "h", type: "http", method: "GET", url: "https://api.sage.com/x", headers: '{"Accept":"application/json"}', next: "e", failureNext: "e" }, e: { id: "e", type: "end" } } };
+  assert.ok(!validateFlow(ok).some((i) => i.code === "http.secret_header"));
+  // Never stored, not even as a draft.
+  const save = readFileSync("src/app/actions/flow.ts", "utf8");
+  const saveFlow = save.slice(save.indexOf("export async function saveFlow"), save.indexOf("export async function resetFlow"));
+  assert.match(saveFlow, /secretLookingHeaders\(/);
+  assert.ok(saveFlow.indexOf("secretLookingHeaders(") < saveFlow.indexOf("tx.botFlow.updateMany"), "refused before the write");
 });
 
 test("send time: decrypted only then, only for the connection's host, never shown on a page or written to the audit", () => {
