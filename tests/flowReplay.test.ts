@@ -76,6 +76,21 @@ test("a step whose result the replay can't know is marked assumed, and the path 
   assert.equal(checkReplay({ waits: ["ask", "ask", null], ended: "finished" }, ["ask"], "finished").matches, true, "a re-asked question is one wait");
 });
 
+test("a subflow's steps are not lit up on a parent step with the same id", async () => {
+  const parent: Flow = {
+    start: "sub",
+    nodes: {
+      sub: { id: "sub", type: "subflow", flowId: "child", next: "done" },
+      msg: { id: "msg", type: "message", text: "Parent's own message", next: "done" },
+      done: { id: "done", type: "end" },
+    },
+  };
+  const child: Flow = { start: "msg", nodes: { msg: { id: "msg", type: "message", text: "From the subflow", next: "fin" }, fin: { id: "fin", type: "end" } } };
+  const run = await replayMessages(parent, ["hi"], { vars: {}, recordedByTurn: new Map(), loadSubflow: async () => child });
+  assert.deepEqual(run.turns[0].bot, ["From the subflow"]);
+  assert.deepEqual(run.steps.map((s) => s.nodeId), ["sub", "done"]);
+});
+
 test("messages after the conversation ended are not replayed", async () => {
   const run = await replayMessages(flow, ["hi", "👆 Prices", "thanks!"], { vars: {}, recordedByTurn: new Map() });
   assert.equal(run.turns.length, 2);
