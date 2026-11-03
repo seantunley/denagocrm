@@ -186,15 +186,19 @@ async function updateCrmFromFlow(node: Extract<FlowNode, { type: "crm" }>, match
   return { ok: true };
 }
 
-/** The customer's open deals: the matched one if it is open, else theirs by contact. */
+/**
+ * ALL the customer's open deals, so "exactly one" really means one. A matched
+ * open lead alone is not enough: its customer may have others, and the stage
+ * move must refuse then rather than guess. A lead with no customer is its own list.
+ */
 async function openDeals(match: Match, tenantId: string): Promise<{ id: string; title: string; stageId: string }[]> {
   const select = { id: true, title: true, stageId: true } as const;
-  if (match.leadId) {
-    const lead = await prisma.lead.findFirst({ where: { id: match.leadId, tenantId, status: "open", deletedAt: null }, select });
-    if (lead) return [lead];
-  }
-  if (!match.contactId) return [];
-  return prisma.lead.findMany({ where: { contactId: match.contactId, tenantId, status: "open", deletedAt: null }, select, take: 3 });
+  const lead = match.leadId
+    ? await prisma.lead.findFirst({ where: { id: match.leadId, tenantId, status: "open", deletedAt: null }, select: { ...select, contactId: true } })
+    : null;
+  const contactId = lead?.contactId ?? match.contactId;
+  if (!contactId) return lead ? [{ id: lead.id, title: lead.title, stageId: lead.stageId }] : [];
+  return prisma.lead.findMany({ where: { contactId, tenantId, status: "open", deletedAt: null }, select, take: 3 });
 }
 async function openDeal(match: Match, tenantId: string) {
   const deals = await openDeals(match, tenantId);
