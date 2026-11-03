@@ -333,6 +333,10 @@ jobs:
         # mixed reports, concurrent notices, a history write that fails, and an
         # alert that reaches nobody staying owed until a retry is accepted.
         run: npm run test:email-bounces
+      - name: Journeys -- a delayed start survives waiting behind another run
+        # PR #976 review: releasing a blocked run reset nextRunAt to now, so a chatbot
+        # follow-up "in 2 days" started the moment the run ahead of it closed.
+        run: npm run test:journey-delayed-release
 
       - name: DAX job sheets -- locked writes, ids re-checked, the sheet fills the quote card, RLS
         # Roadmap Phase 1: a sheet written and corrected through the scoped client with enforcement on;

@@ -217,6 +217,7 @@ test("releasing queued runs hands back ONE per person, not the whole queue", () 
     "re-check open runs inside the lock — an enrolment can land between the read and the write",
   );
   assert.match(release, /orderBy: \{ createdAt: "asc" \}/, "a queue drains in the order it formed");
+  assert.match(release, /nextRunAt: releasedStartAt\(run\.nextRunAt, new Date\(\)\)/, "a delayed start is kept, not reset to now");
 });
 
 /* ── a duplicate must not abort the transaction ──────────────────────────── */

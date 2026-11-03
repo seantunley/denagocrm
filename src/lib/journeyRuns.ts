@@ -185,12 +185,17 @@ const CLOSED_RUN_STATUSES = ["completed", "failed", "cancelled"];
  * predecessor has been PURGED is released too — a dangling id must not strand
  * it behind something that no longer exists.
  */
+/** When a released run may start: now, or its own scheduled start if that is later. */
+export function releasedStartAt(scheduled: Date | null, now: Date): Date {
+  return scheduled && scheduled > now ? scheduled : now;
+}
+
 export async function releaseBlockedJourneyRuns(): Promise<number> {
   const blocked = await prisma.journeyRun.findMany({
     where: { status: "blocked" },
     // Oldest first, so a queue that has built up drains in the order it formed.
     orderBy: { createdAt: "asc" },
-    select: { id: true, journeyId: true, entityType: true, entityId: true, blockedByRunId: true },
+    select: { id: true, journeyId: true, entityType: true, entityId: true, blockedByRunId: true, nextRunAt: true },
     take: 200,
   });
   if (blocked.length === 0) return 0;
@@ -236,7 +241,9 @@ export async function releaseBlockedJourneyRuns(): Promise<number> {
       if (openNow > 0) return { count: 0 };
       return tx.journeyRun.updateMany({
         where: { ...tenant, id: run.id, status: "blocked" },
-        data: { status: "queued", nextRunAt: new Date(), blockedByRunId: null },
+        // Never earlier than it was scheduled: a chatbot follow-up "in 2 days" that
+        // waited behind another run still starts in 2 days (PR #976 review).
+        data: { status: "queued", nextRunAt: releasedStartAt(run.nextRunAt, new Date()), blockedByRunId: null },
       });
     });
     if (count > 0) releasedFor.add(lane);
