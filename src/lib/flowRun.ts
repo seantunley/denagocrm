@@ -131,8 +131,8 @@ export async function runWhatsAppFlow(digits: string, input: FlowInput, entryCon
   const actions: ActionObservation[] = [];
   const ctx = buildCtx(digits, match, actions);
   const entered: string[] = [];
-  // This flow's own steps only — a subflow's steps belong to the subflow (PR #970 review).
-  ctx.onStep = (nodeId) => { if (snapshot.flow.nodes[nodeId]) entered.push(nodeId); };
+  // This flow's own steps only: the engine does not report a subflow's steps here (runSubflowNode).
+  ctx.onStep = (nodeId) => { entered.push(nodeId); };
   const result = await runFlow(snapshot.flow, session, input, ctx);
 
   // RUNTIME — {@link botTenant}.`withBotConversationWrite`. `runWhatsAppFlow` is

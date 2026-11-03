@@ -146,8 +146,8 @@ export async function advanceFlow(
     actions.push({ nodeId, action, ok });
   };
   const entered: string[] = [];
-  // This flow's own steps only — a subflow's steps belong to the subflow (PR #970 review).
-  ctx.onStep = (nodeId) => { if (snapshot.flow.nodes[nodeId]) entered.push(nodeId); };
+  // This flow's own steps only: the engine does not report a subflow's steps here (runSubflowNode).
+  ctx.onStep = (nodeId) => { entered.push(nodeId); };
   const result = await runFlow(snapshot.flow, { nodeId: state.nodeId, vars: state.vars }, input, ctx);
   recordBotMsgs(state, result.messages);
 

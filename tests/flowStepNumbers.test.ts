@@ -39,11 +39,37 @@ test("automatic steps are counted too: the engine reports every step it runs, an
 
   for (const rel of ["src/lib/flowRun.ts", "src/lib/flowSession.ts"]) {
     const code = readFileSync(rel, "utf8");
-    assert.match(code, /ctx\.onStep = \(nodeId\) => \{ if \(snapshot\.flow\.nodes\[nodeId\]\) entered\.push\(nodeId\); \};/, rel);
+    assert.match(code, /ctx\.onStep = \(nodeId\) => \{ entered\.push\(nodeId\); \};/, rel);
     assert.match(code, /eventType: "node_entered"/, rel);
   }
   const page = readFileSync("src/app/(app)/bot-builder/[id]/page.tsx", "utf8");
   assert.match(page, /reached: Math\.max\(n\.entered, n\.reached\)/);
+});
+
+test("a subflow's steps are not credited to a parent step with the same id (PR #970 second review)", async () => {
+  const { runFlow } = await import("../src/lib/flow");
+  // Parent and child both have a step called "msg".
+  const parent = {
+    start: "sub",
+    nodes: {
+      sub: { id: "sub", type: "subflow" as const, flowId: "child", next: "done" },
+      msg: { id: "msg", type: "message" as const, text: "Parent's own message — never reached here", next: "done" },
+      done: { id: "done", type: "end" as const },
+    },
+  };
+  const child = { start: "msg", nodes: { msg: { id: "msg", type: "message" as const, text: "From the subflow", next: "fin" }, fin: { id: "fin", type: "end" as const } } };
+  const seen: string[] = [];
+  const ctx = {
+    handoff: async () => {},
+    aiReply: async () => ({ reply: "", handoff: false }),
+    dynamicAnswer: async () => "",
+    createBooking: async () => ({ ok: true }),
+    loadSubflow: async () => child,
+    onStep: (id: string) => { seen.push(id); },
+  } as unknown as import("../src/lib/flow").FlowCtx;
+  const result = await runFlow(parent, { nodeId: null, vars: {} }, { text: "hi" }, ctx);
+  assert.deepEqual(result.messages.map((m) => (m.type === "text" ? m.text : "")), ["From the subflow"], "the subflow really ran");
+  assert.deepEqual(seen, ["sub", "done"], "only the parent's own steps; the child's \"msg\" is not counted as the parent's");
 });
 
 test("the numbers come from the flow's own published versions, last 30 days, and can be switched off", () => {

@@ -195,7 +195,8 @@ async function runSubflowNode(node: Extract<FlowNode, { type: "subflow" }>, vars
   // completion — a child that failed or paused half-way must not leave half its
   // variables behind in the parent's session.
   const childVars = { ...vars };
-  const child = await runFlow(childFlow, { nodeId: null, vars: childVars }, input, { ...ctx, mutateVars: true, subflowDepth: (ctx.subflowDepth ?? 0) + 1 });
+  // No onStep: the child's step ids are ITS ids, and a parent step with the same id must not be credited with them.
+  const child = await runFlow(childFlow, { nodeId: null, vars: childVars }, input, { ...ctx, onStep: undefined, mutateVars: true, subflowDepth: (ctx.subflowDepth ?? 0) + 1 });
   if (child.handedOff) return { outcome: { ok: true }, messages: child.messages, handedOff: true };
   if (child.session) return { outcome: { ok: false, reason: "Subflow paused for customer input; use only synchronous subflows here" }, messages: child.messages };
   Object.assign(vars, childVars);
