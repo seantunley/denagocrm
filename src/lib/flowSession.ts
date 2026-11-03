@@ -145,6 +145,9 @@ export async function advanceFlow(
     originalRecordAction?.(nodeId, action, ok);
     actions.push({ nodeId, action, ok });
   };
+  const entered: string[] = [];
+  // This flow's own steps only — a subflow's steps belong to the subflow (PR #970 review).
+  ctx.onStep = (nodeId) => { if (snapshot.flow.nodes[nodeId]) entered.push(nodeId); };
   const result = await runFlow(snapshot.flow, { nodeId: state.nodeId, vars: state.vars }, input, ctx);
   recordBotMsgs(state, result.messages);
 
@@ -173,6 +176,7 @@ export async function advanceFlow(
 
     const oneShot = (!existing || restart) && !result.session && !result.handedOff;
     const events = analyticsEvents({ channel, key, flowVersionId: snapshot.versionId, actions, oneShot });
+    if (snapshot.versionId) for (const nodeId of entered) events.push({ channel, conversationKey: key, flowVersionId: snapshot.versionId, nodeId, eventType: "node_entered" });
     if (events.length) await recordBotFlowEventsTx(tx, tenantId, events);
 
     if (result.session) {

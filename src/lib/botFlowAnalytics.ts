@@ -7,6 +7,8 @@ import { logError } from "./errorLog";
 
 export type BotFlowEventType =
   | "flow_started"
+  /** The engine ran this step — every kind, automatic ones included (the builder's per-step numbers). */
+  | "node_entered"
   | "node_waiting"
   | "choice_selected"
   | "capture_submitted"
@@ -27,7 +29,10 @@ export type BotFlowEventInput = {
 
 export type BotFlowNodeAnalytics = {
   nodeId: string;
+  /** Times the step WAITED for the customer (input steps only). */
   reached: number;
+  /** Times the engine ran the step, any kind (recorded since PR #970; older rows have none). */
+  entered: number;
   interacted: number;
   crmActions: number;
   handoffs: number;
@@ -65,12 +70,13 @@ export async function recordBotFlowEventsTx(
   tenantId: string,
   events: BotFlowEventInput[],
 ): Promise<void> {
-  for (const event of events) {
-    if (!event.channel || !event.conversationKey) continue;
-    await tx.$executeRawUnsafe(
-      `INSERT INTO "BotFlowEvent"
-        ("id", "tenantId", "channel", "conversationKey", "flowVersionId", "nodeId", "eventType", "metadata", "occurredAt")
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, CURRENT_TIMESTAMP)`,
+  // One statement for the whole turn: it runs inside the turn's locked transaction, and a turn now records
+  // every step it ran (node_entered), so one round trip per event would hold that lock for each of them.
+  const rows = events.filter((event) => event.channel && event.conversationKey);
+  if (!rows.length) return;
+  const params: unknown[] = [];
+  const values = rows.map((event) => {
+    params.push(
       crypto.randomUUID(),
       tenantId,
       event.channel.slice(0, 40),
@@ -80,7 +86,15 @@ export async function recordBotFlowEventsTx(
       event.eventType,
       safeMetadata(event.metadata),
     );
-  }
+    const p = params.length - 8;
+    return `($${p + 1}, $${p + 2}, $${p + 3}, $${p + 4}, $${p + 5}, $${p + 6}, $${p + 7}, $${p + 8}::jsonb, CURRENT_TIMESTAMP)`;
+  });
+  await tx.$executeRawUnsafe(
+    `INSERT INTO "BotFlowEvent"
+      ("id", "tenantId", "channel", "conversationKey", "flowVersionId", "nodeId", "eventType", "metadata", "occurredAt")
+     VALUES ${values.join(", ")}`,
+    ...params,
+  );
 }
 
 /**
@@ -110,6 +124,7 @@ type SummaryRow = {
 type NodeRow = {
   nodeId: string | null;
   reached: bigint | number;
+  entered: bigint | number;
   interacted: bigint | number;
   crmActions: bigint | number;
   handoffs: bigint | number;
@@ -153,6 +168,7 @@ export async function getBotFlowVersionAnalytics(
     SELECT
       "nodeId",
       COUNT(*) FILTER (WHERE "eventType" = 'node_waiting') AS "reached",
+      COUNT(*) FILTER (WHERE "eventType" = 'node_entered') AS "entered",
       COUNT(*) FILTER (WHERE "eventType" IN ('choice_selected', 'capture_submitted', 'slot_selected')) AS "interacted",
       COUNT(*) FILTER (WHERE "eventType" = 'crm_action') AS "crmActions",
       COUNT(*) FILTER (WHERE "eventType" = 'flow_handoff') AS "handoffs",
@@ -175,6 +191,7 @@ export async function getBotFlowVersionAnalytics(
     nodes: nodeRows.flatMap((row) => row.nodeId ? [{
       nodeId: row.nodeId,
       reached: n(row.reached),
+      entered: n(row.entered),
       interacted: n(row.interacted),
       crmActions: n(row.crmActions),
       handoffs: n(row.handoffs),

@@ -12,6 +12,40 @@ test("a step shows how many reached it; a question also shows answered and dropp
   assert.equal(stepNumbersLine("message", undefined), null);
 });
 
+test("automatic steps are counted too: the engine reports every step it runs, and both runners record it (PR #970 review)", async () => {
+  const { runFlow } = await import("../src/lib/flow");
+  const seen: string[] = [];
+  const flow = {
+    start: "hi",
+    nodes: {
+      hi: { id: "hi", type: "message" as const, text: "Hello", next: "ask" },
+      ask: { id: "ask", type: "choice" as const, text: "Pick", options: [{ id: "a", label: "A", next: "bye" }] },
+      bye: { id: "bye", type: "message" as const, text: "Bye", next: "end" },
+      end: { id: "end", type: "end" as const },
+    },
+  };
+  const ctx = {
+    handoff: async () => {},
+    aiReply: async () => ({ reply: "", handoff: false }),
+    dynamicAnswer: async () => "",
+    createBooking: async () => ({ ok: true }),
+    onStep: (id: string) => { seen.push(id); },
+  } as unknown as import("../src/lib/flow").FlowCtx;
+  const first = await runFlow(flow, { nodeId: null, vars: {} }, { text: "hi" }, ctx);
+  assert.deepEqual(seen, ["hi", "ask"], "the message is counted, then the question it waits on");
+  seen.length = 0;
+  await runFlow(flow, first.session!, { text: "A", choiceId: "ask|a" }, ctx);
+  assert.deepEqual(seen, ["bye", "end"], "the answered question is not counted twice");
+
+  for (const rel of ["src/lib/flowRun.ts", "src/lib/flowSession.ts"]) {
+    const code = readFileSync(rel, "utf8");
+    assert.match(code, /ctx\.onStep = \(nodeId\) => \{ if \(snapshot\.flow\.nodes\[nodeId\]\) entered\.push\(nodeId\); \};/, rel);
+    assert.match(code, /eventType: "node_entered"/, rel);
+  }
+  const page = readFileSync("src/app/(app)/bot-builder/[id]/page.tsx", "utf8");
+  assert.match(page, /reached: Math\.max\(n\.entered, n\.reached\)/);
+});
+
 test("the numbers come from the flow's own published versions, last 30 days, and can be switched off", () => {
   const page = readFileSync("src/app/(app)/bot-builder/[id]/page.tsx", "utf8");
   assert.match(page, /botFlowVersion\.findMany\(\{ where: \{ flowId: id, tenantId: await builderTenantId\(\) \}/);

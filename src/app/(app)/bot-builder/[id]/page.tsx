@@ -36,7 +36,9 @@ export default async function FlowEditorPage({ params }: { params: Promise<{ id:
   const versionIds = (await prisma.botFlowVersion.findMany({ where: { flowId: id, tenantId: await builderTenantId() }, select: { id: true } })).map((v) => v.id);
   const stepNumbers = Object.fromEntries(
     (await getBotFlowVersionAnalytics(versionIds, { occurredFrom: new Date(Date.now() - STEP_NUMBERS_DAYS * 86_400_000) })).nodes
-      .map((n) => [n.nodeId, { reached: n.reached, interacted: n.interacted }]),
+      // `entered` counts every step the engine ran (automatic ones too); `reached` (waits) covers question steps in
+      // days recorded before `entered` existed. A step that waits is entered once per wait, so the larger is right.
+      .map((n) => [n.nodeId, { reached: Math.max(n.entered, n.reached), interacted: n.interacted }]),
   );
   const [channels, journeys, reusableFlows, company, documents, staff] = await Promise.all([
     enabledFlowChannels(),

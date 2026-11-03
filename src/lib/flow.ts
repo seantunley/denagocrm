@@ -102,6 +102,8 @@ export type FlowCtx = {
   loadSubflow?: (flowId: string) => Promise<Flow | null>;
   /** The card a Send-contact-card node sends; null when this workspace cannot build one. */
   contactCard?: (staffUserId: string | undefined) => Promise<ContactCard | null>;
+  /** Each step as the engine enters it, with the stored values at that moment (the conversation replay; read-only). */
+  onStep?: (nodeId: string, vars: Readonly<Record<string, string>>) => void;
   /** Internal: a synchronous subflow works on the caller-supplied vars object. */
   mutateVars?: boolean;
   /** Internal recursion guard for nested subflows. */
@@ -398,6 +400,7 @@ export async function runFlow(flow: Flow, session: FlowSession, input: FlowInput
     const node = flow.nodes[nodeId];
     if (!node) break;
     lastNodeId = node.id;
+    ctx.onStep?.(node.id, vars);
     if (node.type === "message") {
       messages.push({ type: "text", text: interpolate(node.text, vars) }); nodeId = node.next ?? null;
     } else if (node.type === "image") {
