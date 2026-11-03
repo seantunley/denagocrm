@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import type { Flow } from "../src/lib/flow";
-import { replayInput, replayMessages } from "../src/lib/flowReplayRun";
+import { checkReplay, replayInput, replayMessages } from "../src/lib/flowReplayRun";
 
 // Review 2026-11-02 (Sean's item 3): "why did the bot say that?" — replay a real conversation on the version it ran on.
 const flow: Flow = {
@@ -32,7 +32,7 @@ test("a logged tap, voice note or file becomes what the webhook gave the engine"
 });
 
 test("the path, step numbers and stored values — and an action takes the branch the real one did", async () => {
-  const run = await replayMessages(flow, ["hi", "👆 Book a service app", "Thandi"], { vars: { greeting: "Hi there 👋" }, recorded: new Set() });
+  const run = await replayMessages(flow, ["hi", "👆 Book a service app", "Thandi"], { vars: { greeting: "Hi there 👋" }, recordedByTurn: new Map() });
   assert.deepEqual(run.steps.map((s) => s.nodeId), ["hi", "menu", "name", "book", "team"]);
   assert.deepEqual(run.steps.map((s) => s.order), [1, 2, 3, 4, 5]);
   assert.deepEqual(run.steps.find((s) => s.nodeId === "book")?.changed, { name: "Thandi" });
@@ -40,14 +40,44 @@ test("the path, step numbers and stored values — and an action takes the branc
   assert.deepEqual(run.turns.map((t) => t.customer), ["hi", "Book a service app", "Thandi"]);
   assert.deepEqual(run.turns[2].bot, ["Couldn't book.", "Passing you to the team."]);
 
-  const booked = await replayMessages(flow, ["hi", "👆 Book a service app", "Thandi"], { vars: {}, recorded: new Set(["book"]) });
+  const booked = await replayMessages(flow, ["hi", "👆 Book a service app", "Thandi"], { vars: {}, recordedByTurn: new Map([[3, new Set(["book"])]]) });
   assert.deepEqual(booked.steps.map((s) => s.nodeId).slice(-2), ["book", "end"]);
   assert.equal(booked.ended, "finished");
   assert.equal(booked.finalVars.name, "Thandi");
 });
 
+test("an action recorded in a DIFFERENT turn does not make this one succeed (PR #974 review)", async () => {
+  // A booking that worked on the customer's 2nd message says nothing about the attempt on their 3rd.
+  const run = await replayMessages(flow, ["hi", "👆 Book a service app", "Thandi"], { vars: {}, recordedByTurn: new Map([[2, new Set(["book"])]]) });
+  assert.equal(run.ended, "handed off");
+});
+
+test("a step whose result the replay can't know is marked assumed, and the path is checked against the record", async () => {
+  const api: Flow = {
+    start: "call",
+    nodes: {
+      call: { id: "call", type: "http", method: "GET", url: "https://api.example.com/x", next: "ask", failureNext: "team" },
+      ask: { id: "ask", type: "capture", text: "Your name?", variable: "name", next: "end" },
+      team: { id: "team", type: "handoff", text: "Passing you on." },
+      end: { id: "end", type: "end" },
+    },
+  };
+  const run = await replayMessages(api, ["hi", "Thandi"], { vars: {}, recordedByTurn: new Map() });
+  assert.equal(run.steps.find((s) => s.nodeId === "call")?.assumed, "the API's reply");
+  assert.equal(run.steps.find((s) => s.nodeId === "ask")?.assumed, undefined);
+  assert.deepEqual(run.waits, ["ask", null]);
+
+  assert.equal(checkReplay(run, ["ask"], "finished").matches, true, "same waits, same ending");
+  // The real API call failed and the customer was handed over: the replay must say it differs, not show its guess as fact.
+  const real = checkReplay(run, [], "handed off");
+  assert.equal(real.matches, false);
+  assert.match(real.text, /reconstruction/);
+  assert.equal(checkReplay(run, ["menu"], null).matches, false, "waited somewhere else");
+  assert.equal(checkReplay({ waits: ["ask", "ask", null], ended: "finished" }, ["ask"], "finished").matches, true, "a re-asked question is one wait");
+});
+
 test("messages after the conversation ended are not replayed", async () => {
-  const run = await replayMessages(flow, ["hi", "👆 Prices", "thanks!"], { vars: {}, recorded: new Set() });
+  const run = await replayMessages(flow, ["hi", "👆 Prices", "thanks!"], { vars: {}, recordedByTurn: new Map() });
   assert.equal(run.turns.length, 2);
   assert.equal(run.ended, "finished");
 });

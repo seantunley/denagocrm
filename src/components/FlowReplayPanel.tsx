@@ -68,6 +68,7 @@ export default function FlowReplayPanel({ flowId, nodeLabel, onSteps, onFocus, o
               <p className="flex items-center gap-1.5 text-sm font-semibold text-white"><History className="size-4" />{result.steps.length} steps · {result.ended}</p>
               <button type="button" onClick={() => { setResult(null); setPicked(null); onSteps(null); }} className="text-xs text-orange-300 hover:underline">Clear</button>
             </div>
+            <p className={cn("rounded-lg border px-3 py-2 text-xs leading-5", result.check.matches ? "border-emerald-400/30 bg-emerald-500/10 text-emerald-100" : "border-amber-400/40 bg-amber-500/10 text-amber-100")}>{result.check.text}</p>
             {result.notes.map((note) => <p key={note} className="text-[11px] leading-4 text-slate-500">{note}</p>)}
             {result.turns.map((t) => (
               <div key={t.turn} className="space-y-1.5 rounded-lg border border-white/10 p-2.5">
@@ -76,6 +77,7 @@ export default function FlowReplayPanel({ flowId, nodeLabel, onSteps, onFocus, o
                   <button key={s.order} type="button" onClick={() => onFocus(s.nodeId)} className="block w-full rounded-md px-2 py-1 text-left text-xs text-slate-300 hover:bg-white/5">
                     <span className="mr-1.5 inline-grid min-w-5 place-items-center rounded-full bg-orange-500 px-1 text-[10px] font-bold text-white">{s.order}</span>
                     {nodeLabel(s.nodeId) ?? <span className="text-slate-500">a step no longer on this draft</span>}
+                    {s.assumed && <span className="ml-1 block pl-6 text-[10px] text-amber-300">assumed — the replay can&apos;t know {s.assumed}</span>}
                     {Object.entries(s.changed).map(([k, v]) => <span key={k} className="ml-1 block pl-6 font-mono text-[10px] text-sky-300">{k} = {v.slice(0, 80)}</span>)}
                   </button>
                 ))}

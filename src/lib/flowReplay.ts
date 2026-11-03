@@ -4,7 +4,7 @@ import type { Flow } from "./flow";
 import { matchByPhone } from "./whatsapp";
 import { greetingVars, flowRuntimeVars } from "./flowSession";
 import { getCompanyProfile } from "./companyProfile";
-import { replayMessages, type ReplayRun } from "./flowReplayRun";
+import { checkReplay, replayMessages, type ReplayRun } from "./flowReplayRun";
 
 /**
  * REPLAY A REAL CONVERSATION (Node-RED review 2026-11-02, Sean's item 3): "why did the bot say that?".
@@ -17,7 +17,7 @@ import { replayMessages, type ReplayRun } from "./flowReplayRun";
  */
 
 export type ReplayConversation = { eventId: string; channel: string; who: string; startedAt: string; version: number; outcome: string };
-export type ReplayResult = ({ ok: true; version: number; notes: string[] } & ReplayRun) | { ok: false; error: string };
+export type ReplayResult = ({ ok: true; version: number; notes: string[]; check: { matches: boolean; text: string } } & ReplayRun) | { ok: false; error: string };
 
 const DAY = 86_400_000;
 /** Only the last digits of a number or handle reach the page. */
@@ -78,13 +78,26 @@ export async function replayConversation(tenantId: string, flowId: string, event
     select: { body: true, occurredAt: true },
   });
   const after = rows.findIndex((r) => r.occurredAt > start.occurredAt);
-  const bodies = rows.slice(Math.max(0, (after === -1 ? rows.length : after) - 1)).map((r) => r.body ?? "");
+  const messages = rows.slice(Math.max(0, (after === -1 ? rows.length : after) - 1));
+  const bodies = messages.map((r) => r.body ?? "");
   if (!bodies.length) return { ok: false, error: "No messages from the customer in that conversation." };
 
-  const recorded = new Set(
-    (await prisma.botFlowEvent.findMany({ where: { ...key, eventType: "crm_action", occurredAt: { gte: start.occurredAt, lt: to } }, select: { nodeId: true } }))
-      .flatMap((e) => (e.nodeId ? [e.nodeId] : [])),
-  );
+  const events = await prisma.botFlowEvent.findMany({
+    where: { ...key, eventType: { in: ["crm_action", "node_waiting", "flow_handoff", "flow_completed"] }, occurredAt: { gte: start.occurredAt, lt: to } },
+    orderBy: { occurredAt: "asc" },
+    select: { eventType: true, nodeId: true, occurredAt: true },
+  });
+  // Each recorded success belongs to the turn of the last customer message before it (PR #974 review: a step that
+  // failed once and worked later must fail and then work in the replay too, not work both times).
+  const recordedByTurn = new Map<number, Set<string>>();
+  for (const e of events) {
+    if (e.eventType !== "crm_action" || !e.nodeId) continue;
+    const turn = Math.max(1, messages.filter((m) => m.occurredAt <= e.occurredAt).length);
+    recordedByTurn.set(turn, (recordedByTurn.get(turn) ?? new Set()).add(e.nodeId));
+  }
+  const recordedWaits = events.filter((e) => e.eventType === "node_waiting" && e.nodeId).map((e) => e.nodeId!);
+  const end = events.find((e) => e.eventType === "flow_handoff" || e.eventType === "flow_completed");
+  const recordedEnd = !end ? null : end.eventType === "flow_handoff" ? "handed off" as const : "finished" as const;
   const contact = await prisma.contact.findUnique({ where: { id: match.contactId }, select: { firstName: true } });
   const vars = { ...flowRuntimeVars("whatsapp", start.occurredAt), ...greetingVars(contact?.firstName ?? null, (await getCompanyProfile()).name) };
   const loadSubflow = async (childId: string, versionId?: string) => {
@@ -93,14 +106,15 @@ export async function replayConversation(tenantId: string, flowId: string, event
       : await prisma.botFlowVersion.findFirst({ where: { tenantId, flowId: childId, createdAt: { lte: start.occurredAt } }, orderBy: { version: "desc" }, select: { definition: true } });
     try { return row ? (JSON.parse(row.definition) as Flow) : null; } catch { return null; }
   };
-  const run = await replayMessages(flow, bodies, { vars, recorded, loadSubflow });
+  const run = await replayMessages(flow, bodies, { vars, recordedByTurn, loadSubflow });
   return {
     ok: true,
     version: version.version,
     ...run,
+    check: checkReplay(run, recordedWaits, recordedEnd),
     notes: [
-      `Replayed on v${version.version} — the version this conversation ran on — with the customer's real messages. Nothing was sent or changed.`,
-      "AI, knowledge and API steps are not re-run (shown as placeholders). Bookings and Journeys count as done only where the real conversation recorded them.",
+      `A re-run, not a recording: v${version.version} — the version this conversation ran on — fed the customer's real messages. Nothing was sent or changed.`,
+      "AI, knowledge, API and booking-slot steps are not re-run; a step marked “assumed” depended on one, so what follows it is a guess. Bookings and Journeys count as done only where the real conversation recorded them, in the same turn.",
     ],
   };
 }
