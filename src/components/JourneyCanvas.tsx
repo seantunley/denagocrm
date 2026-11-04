@@ -1,11 +1,15 @@
 "use client";
 
 import "@xyflow/react/dist/style.css";
-import { useCallback, useMemo, useState, type ReactNode } from "react";
-import { ArrowDown, ArrowUp, CircleStop, Plus, Trash2, Workflow } from "lucide-react";
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
+import { ArrowDown, ArrowUp, CircleStop, Plus, Trash2, Workflow, X } from "lucide-react";
 import { toast } from "sonner";
 import {
   ReactFlow,
+  ReactFlowProvider,
+  useNodesInitialized,
+  useNodesState,
+  useReactFlow,
   Background,
   Controls,
   Handle,
@@ -125,18 +129,39 @@ const EDGE_LOOK: Record<CanvasEdge["kind"], { stroke: string; dash?: string; tex
   loop: { stroke: "#2dd4bf", dash: "4 4", text: "#5eead4" },
 };
 
-export default function JourneyCanvas({
-  steps,
-  onChange,
-  renderEditor,
-}: {
+type CanvasProps = {
   steps: BuilderStep[];
   onChange: (steps: BuilderStep[]) => void;
   /** The list view's own step editors, for the selected step. */
   renderEditor: (step: BuilderStep, depth: number, onStepChange: (step: BuilderStep) => void) => ReactNode;
-}) {
+};
+
+export default function JourneyCanvas(props: CanvasProps) {
+  return <ReactFlowProvider><Canvas {...props} /></ReactFlowProvider>;
+}
+
+function Canvas({ steps, onChange, renderEditor }: CanvasProps) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const graph = useMemo(() => journeyGraph(steps), [steps]);
+
+  // FIT WHEN THE CARDS CAN BE SEEN (Sean, 2026-11-04: "can't add nodes or anything"). The editor sits in a closed
+  // <details>, where cards cannot be measured, so the one-off `fitView` on mount framed nothing and left them as a
+  // speck at minimum zoom — and a step added later landed off-screen. Fit each time the cards become measured (the
+  // section opened) and whenever a step is added or removed — between 55% (still readable; a longer journey pans,
+  // as the chatbot canvas does) and 100%. With a step picked, that card is centred in the part of the canvas the
+  // editor panel (about 400px, on the right) leaves free, so a new step is never hidden behind its own editor.
+  const { fitView, getNode, getZoom, setCenter } = useReactFlow();
+  const measured = useNodesInitialized();
+  const cardCount = graph.nodes.length;
+  const show = useCallback((id: string | null) => {
+    const node = id ? getNode(id) : undefined;
+    if (!node?.measured?.width) { void fitView({ padding: 0.2, minZoom: 0.55, maxZoom: 1, duration: 200 }); return; }
+    const zoom = Math.min(Math.max(getZoom(), 0.55), 1);
+    void setCenter(node.position.x + node.measured.width / 2 + 200 / zoom, node.position.y + (node.measured.height ?? 0) / 2, { zoom, duration: 200 });
+  }, [fitView, getNode, getZoom, setCenter]);
+  useEffect(() => {
+    if (measured) show(selectedId);
+  }, [measured, cardCount, selectedId, show]);
 
   const nodes: Node[] = useMemo(() => graph.nodes.map((n) => ({
     id: n.id,
@@ -145,6 +170,16 @@ export default function JourneyCanvas({
     selected: n.id === selectedId,
     data: n.kind === "step" ? { step: n.step, handles: n.handles } : n.kind === "stop" ? { label: n.label } : {},
   })), [graph, selectedId]);
+  // The canvas must KEEP the sizes React Flow measures (its onNodesChange): without them it believes no card was ever
+  // measured — "fit" frames nothing, the minimap is empty, and useNodesInitialized never turns true. A card redrawn
+  // from the steps keeps the size it was measured at until it is measured again.
+  const [rfNodes, setRfNodes, onNodesChange] = useNodesState<Node>(nodes);
+  useEffect(() => {
+    setRfNodes((prev) => nodes.map((n) => {
+      const old = prev.find((p) => p.id === n.id);
+      return old?.measured ? { ...n, measured: old.measured } : n;
+    }));
+  }, [nodes, setRfNodes]);
 
   const edges: Edge[] = useMemo(() => graph.edges.map((e) => {
     const look = EDGE_LOOK[e.kind];
@@ -183,10 +218,11 @@ export default function JourneyCanvas({
   };
 
   return (
-    <div className="flex flex-col gap-3 lg:flex-row">
-      <div className="relative h-[640px] min-w-0 flex-1 overflow-hidden rounded-xl border border-slate-800 bg-[#0d1110]">
+    <div className="w-full min-w-0">
+      <div className="relative h-[640px] w-full min-w-0 overflow-hidden rounded-xl border border-slate-800 bg-[#0d1110]">
         <ReactFlow
-          nodes={nodes}
+          nodes={rfNodes}
+          onNodesChange={onNodesChange}
           edges={edges}
           nodeTypes={nodeTypes}
           nodesDraggable={false}
@@ -196,7 +232,6 @@ export default function JourneyCanvas({
           onConnect={connect}
           onReconnect={(_, c) => connect(c)}
           isValidConnection={(c) => c.sourceHandle !== "no" && c.source !== c.target && c.target !== START_NODE && !c.target.startsWith("__stop:")}
-          fitView
           minZoom={0.2}
           maxZoom={1.8}
           proOptions={{ hideAttribution: true }}
@@ -215,20 +250,30 @@ export default function JourneyCanvas({
             }
           />
           <MiniMap pannable zoomable className="!bg-[#111614]" maskColor="rgba(0,0,0,.55)" nodeColor="#334155" />
-          <Panel position="top-right" className="!m-3 hidden sm:block">
-            <div className="rounded-lg border border-white/10 bg-[#111614]/90 px-2.5 py-1.5 text-[11px] text-slate-400 shadow-lg backdrop-blur">
-              Click a step to edit · drag a wire to a step to move it there
-            </div>
+          <Panel position="top-left" className="!m-3">
+            <button type="button" className="btn-secondary btn-sm" onClick={() => add(steps.length)}><Plus className="size-3.5" />Add a step at the end</button>
           </Panel>
+          {!at && (
+            <Panel position="top-right" className="!m-3 hidden max-w-sm sm:block">
+              <div className="rounded-lg border border-white/10 bg-[#111614]/90 px-2.5 py-1.5 text-[11px] leading-4 text-slate-400 shadow-lg backdrop-blur">
+                Click a step to edit it. Steps run left to right; a Choose runs one branch, a Repeat runs its loop. To move a
+                step, drag a wire from an output onto it.
+              </div>
+            </Panel>
+          )}
         </ReactFlow>
-      </div>
 
-      <aside className="max-h-[640px] shrink-0 overflow-y-auto rounded-xl border border-slate-800 bg-[#111614] p-4 lg:w-96">
-        {at ? (
+        {/* The step editor slides over the canvas's right edge only while a step is picked, so the canvas keeps the
+            page's full width (Sean, 2026-11-04: a fixed side panel left four steps too small to read). */}
+        {at && (
+          <aside className="absolute inset-y-3 right-3 z-10 w-96 max-w-[calc(100%-1.5rem)] overflow-y-auto rounded-xl border border-slate-700 bg-[#111614]/95 p-4 shadow-2xl backdrop-blur">
           <div key={at.step.id} className="space-y-4">
-            <div>
-              <p className="text-sm font-semibold text-white">{labels[at.step.type] ?? at.step.type}</p>
-              <p className="text-xs text-slate-500">Step {at.step.id}</p>
+            <div className="flex items-start justify-between gap-2">
+              <div>
+                <p className="text-sm font-semibold text-white">{labels[at.step.type] ?? at.step.type}</p>
+                <p className="text-xs text-slate-500">Step {at.step.id}</p>
+              </div>
+              <button type="button" aria-label="Close the step editor" className="rounded-md p-1 text-slate-400 hover:bg-white/10 hover:text-white" onClick={() => setSelectedId(null)}><X className="size-4" /></button>
             </div>
             {renderEditor(at.step, at.depth, (next) => onChange(updateStep(steps, at.step.id, next)))}
             <div className="grid grid-cols-2 gap-2 border-t border-slate-800 pt-4">
@@ -247,15 +292,9 @@ export default function JourneyCanvas({
               </button>
             </div>
           </div>
-        ) : (
-          <div className="space-y-3 text-sm leading-6 text-slate-400">
-            <p className="font-semibold text-white">Edit on the canvas</p>
-            <p>Click a step to edit it here. Steps run left to right; a Choose runs one of its branches and a Repeat runs its loop, then the journey carries on.</p>
-            <p>To move a step, drag from a step&apos;s output (or a branch&apos;s handle) onto it — it moves to right after that output.</p>
-            <button type="button" className="btn-secondary btn-sm" onClick={() => add(steps.length)}><Plus className="size-3.5" />Add a step at the end</button>
-          </div>
+          </aside>
         )}
-      </aside>
+      </div>
     </div>
   );
 }
