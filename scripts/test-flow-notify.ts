@@ -47,6 +47,9 @@ const ok = (label: string) => console.log(`  ✓ ${++checks}. ${label}`);
   assert.equal(await basePrisma.assistantTurn.count({ where: { source: "flow_notify" } }), before);
   ok("someone outside the workspace is not told");
 
+  // Leave nothing waiting: later steps sweep this workspace's undelivered updates and count who they reach.
+  await basePrisma.assistantTurn.updateMany({ where: { source: "flow_notify", answer: { contains: text } }, data: { whatsappSentAt: new Date() } });
+
   console.log(`\n${checks} checks passed`);
   await basePrisma.$disconnect();
 })().catch((e) => { console.error(e); process.exit(1); });
