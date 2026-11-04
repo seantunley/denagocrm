@@ -337,6 +337,10 @@ jobs:
         # PR #976 review: releasing a blocked run reset nextRunAt to now, so a chatbot
         # follow-up "in 2 days" started the moment the run ahead of it closed.
         run: npm run test:journey-delayed-release
+      - name: Chatbot -- "move the deal" refuses when the customer has more than one open deal
+        # PR #971 review: a matched open lead used to be taken alone, so a customer
+        # with two open deals had one of them moved. Real leads, real stages.
+        run: npm run test:flow-crm-deals
 
       - name: DAX job sheets -- locked writes, ids re-checked, the sheet fills the quote card, RLS
         # Roadmap Phase 1: a sheet written and corrected through the scoped client with enforcement on;

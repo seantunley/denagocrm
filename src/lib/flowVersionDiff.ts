@@ -31,6 +31,7 @@ export function nodeLabel(node: FlowNode | undefined, nodeId: string): string {
   if (node.type === "delay") return `Wait ${node.seconds}s`;
   if (node.type === "subflow") return "Run subflow";
   if (node.type === "hours") return "Opening hours";
+  if (node.type === "crm") return `Update the CRM: ${node.action === "tag" ? `tag ${node.tagName ?? ""}` : node.action === "assign" ? "salesperson" : "deal stage"}`.slice(0, 70);
   if (node.type === "note") return `Note: ${node.text}`.slice(0, 70);
   if (node.type === "group") return `Group: ${node.label}`.slice(0, 70);
   return nodeId;
