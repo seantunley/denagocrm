@@ -23,6 +23,7 @@ import {
   History,
   ImageIcon,
   Maximize2,
+  LayoutGrid,
   MessageSquare,
   Minimize2,
   MousePointer2,
@@ -71,6 +72,7 @@ import { searchFlow } from "@/lib/flowSearch";
 import { rankStepTypes } from "@/lib/flowQuickAdd";
 import { changedSince } from "@/lib/flowVersionDiff";
 import type { Flow } from "@/lib/flow";
+import { tidyPositions } from "@/lib/flowLayout";
 import { cn } from "@/lib/utils";
 import { BuilderSaveStatus, BuilderWorkspaceBar, BuilderWorkspaceShell } from "@/components/builder-workspace";
 import FlowLintPanel from "@/components/FlowLintPanel";
@@ -779,6 +781,14 @@ export default function FlowBuilder({ flowId, initial, journeys = [], flows = []
     return new Map<string, "new" | "edited">([...added.map((id) => [id, "new"] as const), ...edited.map((id) => [id, "edited"] as const)]);
   }, [publishedFlow, currentFlow]);
   const removedSinceLive = publishedFlow?.nodes ? Object.keys(publishedFlow.nodes).filter((id) => !currentFlow.nodes[id]).length : 0;
+  /** TIDY (lib/flowLayout): line the steps up in conversation order — one undoable change — then show them all. */
+  const tidyLayout = () => {
+    remember("tidy", true);
+    const positions = tidyPositions(currentFlow);
+    setRfNodes((ns) => ns.map((n) => (positions[n.id] ? { ...n, position: positions[n.id] } : n)));
+    markDirty();
+    window.setTimeout(() => void flowInstance.current?.fitView({ duration: 250, padding: 0.15 }), 0);
+  };
   const liveIssues = useMemo(() => validateFlow(currentFlow, channels, sharedNames), [channels, currentFlow, sharedNames]);
   const issuesByNode = useMemo(() => {
     const grouped = new Map<string, FlowIssue[]>();
@@ -917,6 +927,7 @@ export default function FlowBuilder({ flowId, initial, journeys = [], flows = []
               <BarChart3 className="size-4" /><span className="hidden sm:inline">Numbers</span>
             </button>
           )}
+          <button type="button" onClick={tidyLayout} disabled={testing} className="btn-secondary btn-sm" title="Line the steps up in conversation order (Undo puts them back)"><LayoutGrid className="size-4" /><span className="hidden sm:inline">Tidy</span></button>
           <button type="button" onClick={() => setFullscreen((value) => !value)} className="btn-secondary btn-sm" title={fullscreen ? "Exit full screen" : "Full screen"}>
             {fullscreen ? <Minimize2 className="size-4" /> : <Maximize2 className="size-4" />}<span className="hidden sm:inline">{fullscreen ? "Exit" : "Full screen"}</span>
           </button>
