@@ -10,6 +10,7 @@ import {
   SquareDashed,
   StickyNote,
   UserCog,
+  BellRing,
   CalendarDays,
   CircleStop,
   CornerDownRight,
@@ -131,6 +132,7 @@ const TYPE_META: Record<FlowNode["type"], { icon: LucideIcon; label: string; ton
   note: { icon: StickyNote, label: "Note", tone: "border-yellow-400/40", header: "bg-yellow-500/15 text-yellow-100", handle: "#facc15", description: "A sticky note for the team — never sent" },
   group: { icon: SquareDashed, label: "Group", tone: "border-sky-400/40", header: "bg-sky-500/15 text-sky-100", handle: "#38bdf8", description: "A coloured box to frame a section — never sent" },
   crm: { icon: UserCog, label: "Update the CRM", tone: "border-emerald-400/40", header: "bg-emerald-500/15 text-emerald-200", handle: "#34d399", description: "Tag the customer, set their salesperson or move their deal" },
+  notify: { icon: BellRing, label: "Tell someone", tone: "border-emerald-400/40", header: "bg-emerald-500/15 text-emerald-200", handle: "#34d399", description: "Alert a staff member while the bot carries on — not a handoff" },
   end: { icon: CircleStop, label: "End", tone: "border-slate-500/50", header: "bg-slate-500/15 text-slate-200", handle: "#94a3b8", description: "Finish the flow" },
 };
 
@@ -138,7 +140,7 @@ const NODE_GROUPS: { label: string; types: FlowNode["type"][] }[] = [
   { label: "Messages", types: ["message", "image", "document", "contactCard", "answer", "knowledge", "choice"] },
   { label: "Customer input", types: ["capture", "captureFile"] },
   { label: "Logic & data", types: ["condition", "hours", "switch", "set", "delay", "goto"] },
-  { label: "CRM & automation", types: ["booking", "crm", "slots", "journey", "http", "subflow"] },
+  { label: "CRM & automation", types: ["booking", "crm", "notify", "slots", "journey", "http", "subflow"] },
   { label: "AI & operations", types: ["ai", "extract", "handoff", "end"] },
   { label: "Canvas — team only", types: ["note", "group"] },
 ];
@@ -154,6 +156,7 @@ function summary(n: FlowNode): string {
   if (n.type === "goto") return n.target ? `↪ ${n.targetLabel || n.target}` : "(choose a step to jump to)";
   if (n.type === "note") return n.text.slice(0, 60);
   if (n.type === "group") return n.label;
+  if (n.type === "notify") return n.userId ? `Tell ${n.userLabel ?? "a staff member"}: ${n.text}`.slice(0, 90) : "(choose who to tell)";
   if (n.type === "crm") {
     if (n.action === "tag") return n.tagName ? `Tag: ${n.tagName}` : "(choose a tag)";
     if (n.action === "assign") return n.userId ? `Salesperson: ${n.userLabel ?? "chosen"}` : "(choose a salesperson)";
@@ -325,6 +328,7 @@ function blankNode(type: FlowNode["type"], id: string): FlowNode {
     case "note": return { id, type, text: "A note for the team", color: "yellow" };
     case "group": return { id, type, label: "Section", color: "blue", width: 520, height: 320 };
     case "crm": return { id, type, action: "tag", tagName: "" };
+    case "notify": return { id, type, text: "{{name}} just asked for the price list" };
     case "answer": return { id, type, answerSource: "pricelist" };
     case "knowledge": return { id, type, query: "", noMatchText: "I couldn't find an approved answer for that." };
     case "set": return { id, type, variable: "status", value: "new" };
@@ -1065,6 +1069,11 @@ function NodePanel({ node, isStart, nodeOptions, variables, journeys, flows, doc
       {node.type === "goto" && <><div><label className="label" htmlFor={`goto-${node.id}`}>Jump to</label><select id={`goto-${node.id}`} className="input" value={node.target} onChange={(e) => { const option = nodeOptions.find((o) => o.id === e.target.value); onChange({ ...node, target: e.target.value, targetLabel: option?.label }); }}><option value="">Choose a step…</option>{nodeOptions.map((option) => <option key={option.id} value={option.id}>{option.label}</option>)}</select></div><p className="text-xs text-slate-500">Jumps straight to that step and sends nothing itself — no wire across the canvas. For “↩ Back to menu”, point a menu option at a Go to placed next to it, jumping to your menu.</p></>}
       {node.type === "note" && <><div><label className="label" htmlFor={`note-${node.id}`}>Note</label><textarea id={`note-${node.id}`} className="input" rows={5} value={node.text} onChange={(e) => onChange({ ...node, text: e.target.value })} placeholder="Brochure section — update each quarter" /></div><AnnotationColorPicker value={node.color ?? "yellow"} onChange={(color) => onChange({ ...node, color })} /><p className="text-xs text-slate-500">For the team only — never sent to a customer.</p></>}
       {node.type === "group" && <><div><label className="label" htmlFor={`group-${node.id}`}>Title</label><input id={`group-${node.id}`} className="input" value={node.label} maxLength={60} onChange={(e) => onChange({ ...node, label: e.target.value })} placeholder="Welcome" /></div><AnnotationColorPicker value={node.color ?? "blue"} onChange={(color) => onChange({ ...node, color })} /><p className="text-xs text-slate-500">A box behind the steps to frame a section. Drag its corners to resize it; moving it doesn&apos;t move the steps inside.</p></>}
+      {node.type === "notify" && <>
+        <div><label className="label" htmlFor={`notify-user-${node.id}`}>Tell</label><select id={`notify-user-${node.id}`} className="input" value={node.userId ?? ""} onChange={(e) => onChange({ ...node, userId: e.target.value || undefined, userLabel: staff.find((s) => s.id === e.target.value)?.name })}><option value="">Choose a person…</option>{staff.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}</select></div>
+        <div><div className="flex items-center justify-between"><label className="label" htmlFor={`notify-text-${node.id}`}>What to tell them</label><EmojiButton targetId={`notify-text-${node.id}`} value={node.text} onChange={(text) => onChange({ ...node, text })} /></div><textarea id={`notify-text-${node.id}`} className="input" rows={3} maxLength={1000} value={node.text} onChange={(e) => onChange({ ...node, text: e.target.value })} placeholder="{{name}} just asked for the price list" /></div>
+        <p className="text-xs text-slate-500">Reaches them in the CRM (Ask, with a red dot), on their phone if notifications are on, and on their linked WhatsApp — with a link to the customer. The customer isn&apos;t told, and the bot carries on either way. Use {"{{name}}"}, {"{{phone}}"} or any saved answer.</p>
+      </>}
       {node.type === "crm" && <>
         <div><label className="label" htmlFor={`crm-action-${node.id}`}>Change</label><select id={`crm-action-${node.id}`} className="input" value={node.action} onChange={(e) => onChange({ id: node.id, type: "crm", action: e.target.value as CrmUpdateAction, text: node.text, failureText: node.failureText, next: node.next, failureNext: node.failureNext })}><option value="tag">Tag the customer</option><option value="assign">Set their salesperson</option><option value="stage">Move their open deal to a stage</option></select></div>
         {node.action === "tag" && <div><label className="label" htmlFor={`crm-tag-${node.id}`}>Tag</label><input id={`crm-tag-${node.id}`} className="input" list={`crm-tags-${node.id}`} maxLength={40} value={node.tagName ?? ""} onChange={(e) => onChange({ ...node, tagName: e.target.value })} placeholder="QR: Showroom poster" /><datalist id={`crm-tags-${node.id}`}>{crmTags.map((t) => <option key={t} value={t} />)}</datalist><p className="mt-1 text-xs text-slate-500">One of your tags, or a new one — it is created the first time.</p></div>}

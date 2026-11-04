@@ -341,6 +341,10 @@ jobs:
         # PR #971 review: a matched open lead used to be taken alone, so a customer
         # with two open deals had one of them moved. Real leads, real stages.
         run: npm run test:flow-crm-deals
+      - name: Chatbot -- "Tell someone" reaches the chosen person and logs only their name
+        # Round-2 flow builder: the member gets an Ask-history entry linked to the customer, the customer's record
+        # logs it without the customer's words, and someone outside the workspace is told nothing.
+        run: npm run test:flow-notify
 
       - name: DAX job sheets -- locked writes, ids re-checked, the sheet fills the quote card, RLS
         # Roadmap Phase 1: a sheet written and corrected through the scoped client with enforcement on;

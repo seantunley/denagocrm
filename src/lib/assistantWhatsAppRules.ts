@@ -341,7 +341,8 @@ export const cardEmoji = (kind: unknown) => CARD_EMOJI[String(kind)] ?? "✳️"
 /** The kinds of answer nobody was waiting on a screen for. */
 // "proactive": customer-activity alerts (lib/proactive.ts); "brief": the morning brief (lib/proactiveBrief.ts);
 // "followup": DAX checking back (lib/proactiveFollowUp.ts) — the red dot, WhatsApp and seen-marking like the rest.
-export const PROACTIVE_SOURCES = ["schedule", "watch", "handoff", "quote_pdf", "proactive", "brief", "followup"] as const;
+/** `flow_notify`: a chatbot "Tell someone" step (lib/flowNotify) — like a handoff, but the bot carries on. */
+export const PROACTIVE_SOURCES = ["schedule", "watch", "handoff", "quote_pdf", "proactive", "brief", "followup", "flow_notify"] as const;
 /**
  * A draft quote the assistant built for this person, with its PDF. It rides the
  * same delivery as a briefing — claimed, sent whole, retried by the half-hourly
