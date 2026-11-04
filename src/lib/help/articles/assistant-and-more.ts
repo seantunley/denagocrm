@@ -370,7 +370,7 @@ export const assistantAndMoreArticles: HelpArticle[] = [
     summary: "Shortcuts for building and changing a chatbot flow without breaking the live one.",
     category: "automation",
     audience: "admins",
-    keywords: ["flow builder", "chatbot flow", "switch off a step", "skip a step", "disable step", "bot builder", "find a step", "search the flow", "quick add", "add a step", "tell someone", "notify staff", "alert", "if anything fails", "fallback", "failure route", "shared values", "business phone", "variables", "changed since publish", "unpublished changes", "review and publish", "export flow", "import flow", "copy flow to another workspace", "tidy", "arrange", "layout"],
+    keywords: ["flow builder", "chatbot flow", "switch off a step", "skip a step", "disable step", "bot builder", "find a step", "search the flow", "quick add", "add a step", "tell someone", "notify staff", "alert", "if anything fails", "fallback", "failure route", "shared values", "business phone", "variables", "changed since publish", "unpublished changes", "review and publish", "export flow", "import flow", "copy flow to another workspace", "tidy", "arrange", "layout", "no reply", "nudge", "timeout", "follow up"],
     body: [
       { type: "h", text: "Switch a step off" },
       { type: "p", text: "To skip a step for a while without deleting it — say the price list while it's being updated — select it and untick **Step is on**. Customers then go straight on to the next step, as if it weren't there. The step stays on the canvas, greyed out and marked **OFF**, with everything you set up in it." },
@@ -426,6 +426,15 @@ export const assistantAndMoreArticles: HelpArticle[] = [
       { type: "h", text: "Tidy the canvas" },
       { type: "p", text: "Press **Tidy** to line the steps up: the start on the left, then each step one column to the right of the step that leads to it, in the order a customer reaches them (a menu's buttons top to bottom). Steps nothing leads to go in a last column on the right. Notes and groups stay where you put them." },
       { type: "p", text: "It only moves steps around — nothing about what the bot says or does changes. Press **Undo** to put everything back where it was." },
+      { type: "h", text: "If they don't reply" },
+      { type: "p", text: "On a menu, a question or a \"send a file\" step, choose **If they don't reply → After 30 minutes (or 1, 2, 4, 12 or 23 hours), go to…** and pick a step — a gentle nudge (\"Still there? Tap a button any time 🙂\"), or a hand-off to the team. The card gets a **No reply** outlet you can wire like any other." },
+      { type: "list", items: [
+        "WhatsApp only, and only within 24 hours of the customer's last message — WhatsApp doesn't let the bot write after that.",
+        "It's checked every 30 minutes, so it goes up to 30 minutes after the time you choose.",
+        "If the customer answers first — by typing, tapping a button or sending a voice note — their answer wins, even if the follow-up has just started: from the moment they write it does nothing more (no booking, CRM change, alert or Journey) and sends nothing. If a person has taken the conversation over, nothing happens.",
+        "Leave it on **Just wait** and nothing happens when a customer goes quiet, as before.",
+        "It can go out at any hour the customer's conversation is waiting, so for long waits consider what time of day it might land.",
+      ] },
     ],
   },
 

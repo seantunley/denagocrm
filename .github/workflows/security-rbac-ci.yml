@@ -333,6 +333,10 @@ jobs:
         # mixed reports, concurrent notices, a history write that fails, and an
         # alert that reaches nobody staying owed until a retry is accepted.
         run: npm run test:email-bounces
+      - name: Chatbot -- "if no reply" never overrides an answer or a person
+        # Round-2 flow builder: the sweep's fence reads the real BotSession row (vars is TEXT JSON) and refuses a
+        # session that was re-armed by an answer, moved on, or taken over by staff.
+        run: npm run test:flow-no-reply-fence
       - name: Journeys -- a delayed start survives waiting behind another run
         # PR #976 review: releasing a blocked run reset nextRunAt to now, so a chatbot
         # follow-up "in 2 days" started the moment the run ahead of it closed.

@@ -1,5 +1,5 @@
 import crypto from "crypto";
-import { prisma } from "./db";
+import { basePrisma, prisma } from "./db";
 import { botConversationTenantId } from "./botTenant";
 import { type TenantWriteTx } from "./tenantWrite";
 import type { BotOwnership } from "./botOwnership";
@@ -109,6 +109,120 @@ export async function upsertBotSessionTx(
  * commit between this check and the enqueue. Callers must run this BEFORE
  * queueing anything and abandon the turn when it returns false.
  */
+/**
+ * THE NO-REPLY SWEEP'S FENCE (lib/flowNoReply): the session is still the bot's, still waiting on `nodeId`, with the
+ * very deadline the sweep saw. A customer whose answer landed in between moved it on (or re-armed it), and then the
+ * sweep must do nothing — their answer wins. Read inside the turn's transaction, after botStillOwnsTx locked the row.
+ */
+export async function botSessionStillWaitingTx(
+  tx: TenantWriteTx,
+  tenantId: string,
+  channel: string,
+  key: string,
+  expected: { nodeId: string; at: string; atKey: string },
+): Promise<boolean> {
+  const rows = (await tx.$queryRawUnsafe(
+    `SELECT "ownership", "nodeId", "vars" FROM "BotSession" WHERE "tenantId" = $1 AND "channel" = $2 AND "key" = $3`,
+    tenantId,
+    channel,
+    key,
+  )) as Array<{ ownership: string; nodeId: string | null; vars: string }>;
+  const row = rows[0];
+  if (!row || row.ownership !== "bot" || row.nodeId !== expected.nodeId) return false;
+  try { return (JSON.parse(row.vars) as Record<string, string>)[expected.atKey] === expected.at; } catch { return false; }
+}
+
+/**
+ * CLAIM A TIMEOUT BEFORE ANYTHING RUNS (PR #988 review): with the row locked, the session must still be the bot's,
+ * on `nodeId`, with deadline `at` still set — or a claim of `at` abandoned for `reclaimMs` (a sweep that crashed).
+ * Then the deadline is swapped for the claim marker and this transaction commits, so a second sweep finds nothing to
+ * claim and a customer answer that arrived first has already removed the deadline. Returns whether it was claimed.
+ */
+export async function claimNoReplyTx(
+  tx: TenantWriteTx,
+  tenantId: string,
+  channel: string,
+  key: string,
+  claim: { nodeId: string; at: string; atKey: string; claimedKey: string; claimedAtKey: string; now: number; reclaimMs: number },
+): Promise<boolean> {
+  const rows = (await tx.$queryRawUnsafe(
+    `SELECT "ownership", "nodeId", "vars" FROM "BotSession" WHERE "tenantId" = $1 AND "channel" = $2 AND "key" = $3 FOR UPDATE`,
+    tenantId,
+    channel,
+    key,
+  )) as Array<{ ownership: string; nodeId: string | null; vars: string }>;
+  const row = rows[0];
+  if (!row || row.ownership !== "bot" || row.nodeId !== claim.nodeId) return false;
+  let vars: Record<string, string>;
+  try { vars = JSON.parse(row.vars) as Record<string, string>; } catch { return false; }
+  const live = vars[claim.atKey] === claim.at;
+  const abandoned = vars[claim.claimedKey] === claim.at && claim.now - Number(vars[claim.claimedAtKey] || 0) >= claim.reclaimMs;
+  if (!live && !abandoned) return false;
+  delete vars[claim.atKey];
+  vars[claim.claimedKey] = claim.at;
+  vars[claim.claimedAtKey] = String(claim.now);
+  await tx.$executeRawUnsafe(
+    `UPDATE "BotSession" SET "vars" = $4, "updatedAt" = NOW() WHERE "tenantId" = $1 AND "channel" = $2 AND "key" = $3`,
+    tenantId,
+    channel,
+    key,
+    JSON.stringify(vars),
+  );
+  return true;
+}
+
+/**
+ * ONE AT A TIME, PER CONVERSATION (PR #988 third review): a timeout action and a customer's cancel never overlap.
+ * Both run inside this transaction-scoped Postgres advisory lock on the conversation; a timeout action checks its
+ * claim and ACTS while holding it, so a customer who writes mid-action waits for that one action to finish, then
+ * cancels — and the next action finds the claim gone. The lock is the conversation's alone (other BotSession writers
+ * are not blocked) and is released when the transaction ends, even if the process dies. 60s ceiling: an action that
+ * outlasts it loses the lock (its transaction aborts) but cannot be recalled — the cap is far above any action's own.
+ */
+export const NO_REPLY_LOCK_MS = 60_000;
+export async function withNoReplyLock<T>(channel: string, key: string, fn: (tx: TenantWriteTx, tenantId: string) => Promise<T>): Promise<T> {
+  const tenantId = botConversationTenantId();
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  return (basePrisma as any).$transaction(async (tx: TenantWriteTx) => {
+    await tx.$executeRawUnsafe(`SELECT pg_advisory_xact_lock(hashtext($1))`, `noreply:${tenantId}:${channel}:${key}`);
+    return fn(tx, tenantId);
+  }, { timeout: NO_REPLY_LOCK_MS, maxWait: 10_000 });
+}
+
+/**
+ * A CUSTOMER'S MESSAGE CANCELS ANY TIMEOUT (PR #988 second review) — first thing in their turn, with the row locked:
+ * the pending deadline (so no sweep can claim it now) and an in-flight claim (so every later action of a timeout
+ * already running finds it gone and does nothing — flowNoReply fenceTimeoutEffects). `keys`: the hidden values to
+ * remove. Returns whether there was anything to cancel.
+ */
+export async function cancelNoReplyTx(
+  tx: TenantWriteTx,
+  tenantId: string,
+  channel: string,
+  key: string,
+  keys: readonly string[],
+): Promise<boolean> {
+  const rows = (await tx.$queryRawUnsafe(
+    `SELECT "vars" FROM "BotSession" WHERE "tenantId" = $1 AND "channel" = $2 AND "key" = $3 FOR UPDATE`,
+    tenantId,
+    channel,
+    key,
+  )) as Array<{ vars: string }>;
+  if (!rows[0]) return false;
+  let vars: Record<string, string>;
+  try { vars = JSON.parse(rows[0].vars) as Record<string, string>; } catch { return false; }
+  if (!keys.some((k) => k in vars)) return false;
+  for (const k of keys) delete vars[k];
+  await tx.$executeRawUnsafe(
+    `UPDATE "BotSession" SET "vars" = $4, "updatedAt" = NOW() WHERE "tenantId" = $1 AND "channel" = $2 AND "key" = $3`,
+    tenantId,
+    channel,
+    key,
+    JSON.stringify(vars),
+  );
+  return true;
+}
+
 export async function botStillOwnsTx(
   tx: TenantWriteTx,
   tenantId: string,

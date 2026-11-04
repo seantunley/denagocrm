@@ -4,6 +4,7 @@ import { logError } from "@/lib/errorLog";
 import { warmUpForCron } from "@/lib/cronPreflight";
 import { runCronPerTenant } from "@/lib/tenantCron";
 import { flushBotOutbox } from "@/lib/botOutbox";
+import { sweepNoReply } from "@/lib/flowNoReplySweep";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -25,7 +26,10 @@ export async function GET(req: NextRequest) {
   // founding tenant's queue and nobody else's.
   const runs = await runCronPerTenant(async (tenantId, budget) => {
     if (budget.shouldStop(4_000)) return { skipped: "deadline" as const };
-    return flushBotOutbox(50, budget, tenantId);
+    // "If no reply within…" (lib/flowNoReplySweep) rides THIS run rather than a faster job of its own: the cron
+    // interval is the database bill (tests/cronScheduleCost). What it queues is sent by the flush below.
+    const noReply = await sweepNoReply(budget.shouldStop);
+    return { ...(await flushBotOutbox(50, budget, tenantId)), noReplyMoved: noReply.moved };
   },
     {
       maxRuntimeMs: budget.remainingMs,
