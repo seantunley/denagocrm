@@ -14,6 +14,9 @@ import { listActingTenantStaff } from "@/lib/tenantActor";
 import { getCompanyProfile } from "@/lib/companyProfile";
 import { getSetting } from "@/lib/settings";
 import { FLOW_CONNECTIONS_KEY, parseConnections } from "@/lib/flowConnections";
+import { getBotFlowVersionAnalytics } from "@/lib/botFlowAnalytics";
+
+const STEP_NUMBERS_DAYS = 30;
 
 export default async function FlowEditorPage({ params }: { params: Promise<{ id: string }> }) {
   await requireRoute("/bot-builder");
@@ -38,6 +41,15 @@ export default async function FlowEditorPage({ params }: { params: Promise<{ id:
     prisma.pipelineStage.findMany({ select: { id: true, name: true, pipeline: { select: { name: true } } }, orderBy: [{ pipelineId: "asc" }, { order: "asc" }] })
       .then((rows) => rows.map((s) => ({ id: s.id, name: `${s.pipeline.name} · ${s.name}` }))),
   ]);
+  // LIVE NUMBERS ON EACH STEP (Node-RED's node status; Sean, 2026-11-02): the last 30 days, across every published
+  // version of this flow, from the same per-step analytics the Bot analytics page reads. Nothing published: none.
+  const versionIds = (await prisma.botFlowVersion.findMany({ where: { flowId: id, tenantId: await builderTenantId() }, select: { id: true } })).map((v) => v.id);
+  const stepNumbers = Object.fromEntries(
+    (await getBotFlowVersionAnalytics(versionIds, { occurredFrom: new Date(Date.now() - STEP_NUMBERS_DAYS * 86_400_000) })).nodes
+      // `entered` counts every step the engine ran (automatic ones too); `reached` (waits) covers question steps in
+      // days recorded before `entered` existed. A step that waits is entered once per wait, so the larger is right.
+      .map((n) => [n.nodeId, { reached: Math.max(n.entered, n.reached), interacted: n.interacted }]),
+  );
   const [channels, journeys, reusableFlows, company, documents, staff] = await Promise.all([
     enabledFlowChannels(),
     prisma.journey.findMany({
@@ -72,7 +84,7 @@ export default async function FlowEditorPage({ params }: { params: Promise<{ id:
       </div>
       <FlowAiDraftForm flowId={row.id} />
       <FlowNodeSystemFrame>
-        <FlowBuilder flowId={row.id} initial={flow} journeys={journeys} flows={reusableFlows} updatedAt={row.updatedAt.toISOString()} channels={channels} businessName={company.name} documents={documents} staff={staff} connections={connections} crmTags={crmTags} stages={stages} />
+        <FlowBuilder flowId={row.id} initial={flow} journeys={journeys} flows={reusableFlows} updatedAt={row.updatedAt.toISOString()} channels={channels} businessName={company.name} documents={documents} staff={staff} connections={connections} crmTags={crmTags} stages={stages} stepNumbers={stepNumbers} stepNumbersDays={STEP_NUMBERS_DAYS} />
       </FlowNodeSystemFrame>
     </div>
   );
