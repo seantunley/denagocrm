@@ -68,6 +68,19 @@ function sequence(steps: unknown[]): unknown[] {
   });
 }
 
+/**
+ * A saved definition → the builder's steps (list editor and canvas alike): the saved steps minus the stops the builder
+ * generated. Every step keeps ALL it carries — its name, its nested sequences, a condition's own branch targets, a type
+ * this build doesn't know — because the editors change only the keys they own and the rest is saved exactly as it was.
+ */
+export function builderSteps(definition?: { steps?: BuilderStep[] } | null): BuilderStep[] {
+  const existing = (definition?.steps ?? []).filter((step) => step.config?.systemGenerated !== true);
+  if (existing.length === 0) {
+    return [{ id: "step_1", type: "create_activity", config: { activityType: "call", dueDays: 0 } }];
+  }
+  return existing.map((step) => ({ ...step, config: { ...step.config } }));
+}
+
 export function builderDefinition(steps: BuilderStep[]) {
   const stops: BuilderStep[] = [];
   const mapped = steps.map((step, index) => {

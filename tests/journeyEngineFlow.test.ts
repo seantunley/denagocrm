@@ -873,11 +873,14 @@ test("the builder carries choose/repeat through instead of dropping them", () =>
   // step's whole config is carried, so a key no editor owns is saved as it was, and
   // one stray click on the type dropdown cannot delete a container's branches.
   const builder = shipped("src/components/JourneyBuilder.tsx");
+  // The loader moved to lib/journeyBuilderDefinition (builderSteps) when the canvas arrived, and now carries the WHOLE
+  // step, not just its config — tests/journeyCanvas.test.ts round-trips it.
   assert.match(
-    builder,
-    /existing\.map\(\(step\) => \(\{ id: step\.id, type: step\.type, continueOnError: step\.continueOnError, enabled: step\.enabled, config: \{ \.\.\.step\.config \} \}\)\)/,
-    "a step's config must be carried through whole",
+    shipped("src/lib/journeyBuilderDefinition.ts"),
+    /existing\.map\(\(step\) => \(\{ \.\.\.step, config: \{ \.\.\.step\.config \} \}\)\)/,
+    "a step must be carried through whole",
   );
+  assert.match(builder, /builderSteps\(defaults\.definition\)/, "the builder loads through builderSteps");
   assert.match(builder, /onChange=\{\(e\) => \(CONTAINERS\.has\(step\.type\) \? setRetype\(/, "changing a container's type must ask first");
   assert.match(
     builder,
@@ -1354,7 +1357,8 @@ test("the builder offers the mute for every step type, containers included", () 
   assert.notEqual(guardAt, -1, "the continueOnError guard is gone — was it changed?");
   assert.ok(at < guardAt, "the mute must sit outside the read-only guard, not behind it");
   assert.match(builder, /checked=\{step\.enabled !== false\}/, "absent must read as ON");
-  assert.match(builder, /enabled: step\.enabled/, "…and a save must not drop the flag");
+  // builderSteps carries the whole step (…step), so the flag is kept; tests/journeyCanvas.test.ts round-trips it.
+  assert.match(shipped("src/lib/journeyBuilderDefinition.ts"), /\(\{ \.\.\.step, config:/, "…and a save must not drop the flag");
 });
 
 /* ── 15. `not` in condition groups ───────────────────────────────────────── */
