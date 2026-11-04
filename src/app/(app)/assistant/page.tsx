@@ -5,6 +5,7 @@ import { requireAnyPermission } from "@/lib/permissions";
 import { isModuleEnabled } from "@/lib/modules/enabled";
 import { isCodexConnected } from "@/lib/codex";
 import { getSetting } from "@/lib/settings";
+import { isTenantOwner } from "@/lib/auth";
 import { ASSISTANT_PROFILE_KEY, parseProfile } from "@/lib/assistantSoul";
 import { assistantHistory } from "@/lib/crmAssistant";
 import { markScheduledTurnsSeen } from "@/lib/assistantScheduleRun";
@@ -34,7 +35,7 @@ import { linkRefusalText, maskWaId } from "@/lib/assistantWhatsAppRules";
 import AssistantWhatsAppCard from "@/components/AssistantWhatsAppCard";
 import AssistantProactiveCard from "@/components/AssistantProactiveCard";
 import AssistantGoalsCard from "@/components/AssistantGoalsCard";
-import { ASSISTANT_PROACTIVE_KEY, BRIEF_DEFAULT, briefPersonKey, mondayStuckKey, parseBriefAt, proactiveOn, proactivePersonKey } from "@/lib/proactiveRules";
+import { ASSISTANT_PROACTIVE_KEY, BRIEF_DEFAULT, briefPersonKey, chatbotProblemsKey, chatbotProblemsOn, mondayStuckKey, parseBriefAt, proactiveOn, proactivePersonKey } from "@/lib/proactiveRules";
 
 export const dynamic = "force-dynamic";
 export const metadata = { title: "Ask the CRM" };
@@ -99,11 +100,13 @@ export default async function AssistantPage() {
   // Multi-step plans: the person's own, from the last 30 days (assistantPlan).
   const plans = await plansForAskPage(user.id);
   // Proactive DAX: the owner's switch for the workspace, and this person's own (lib/proactive.ts).
-  const [proactiveWorkspace, proactiveMe, briefAt, mondayStuck] = await Promise.all([
+  const [proactiveWorkspace, proactiveMe, briefAt, mondayStuck, chatbotProblems] = await Promise.all([
     getSetting(ASSISTANT_PROACTIVE_KEY).then(proactiveOn).catch(() => false),
     getSetting(proactivePersonKey(user.id)).then(proactiveOn).catch(() => false),
     getSetting(briefPersonKey(user.id)).then((stored) => parseBriefAt(stored) ?? "off").catch(() => BRIEF_DEFAULT),
     getSetting(mondayStuckKey(user.id)).then(proactiveOn).catch(() => false),
+    // The owner's alone — the one person who can open the System Log it reports from.
+    isTenantOwner().then(async (owner) => (owner ? chatbotProblemsOn(await getSetting(chatbotProblemsKey(user.id))) : null)).catch(() => null),
   ]);
   // What was stored is a card the assistant proposed; anything that is not shaped like one is left out, not rendered.
   const savedCards = saved.flatMap((row) => {
@@ -289,7 +292,7 @@ export default async function AssistantPage() {
         )}
       </section>
       <AssistantGoalsCard userId={user.id} name={profile.name} />
-      <AssistantProactiveCard name={profile.name} workspaceOn={proactiveWorkspace} on={proactiveMe} briefAt={briefAt} mondayStuck={mondayStuck} />
+      <AssistantProactiveCard name={profile.name} workspaceOn={proactiveWorkspace} on={proactiveMe} briefAt={briefAt} mondayStuck={mondayStuck} chatbotProblems={chatbotProblems} />
       {whatsapp &&<AssistantWhatsAppCard name={profile.name} linked={whatsapp.linked} refused={whatsapp.refused} updates={whatsapp.updates} />}
       <details className="card p-4 text-sm">
         <summary className="cursor-pointer font-medium">

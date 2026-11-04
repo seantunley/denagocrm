@@ -2,7 +2,7 @@
 
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { setMyBriefTime, setMyMondayStuck, setMyProactive } from "@/app/actions/assistantSettings";
+import { setMyBriefTime, setMyChatbotProblems, setMyMondayStuck, setMyProactive } from "@/app/actions/assistantSettings";
 import { BRIEF_TIMES } from "@/lib/proactiveRules";
 
 /**
@@ -10,7 +10,11 @@ import { BRIEF_TIMES } from "@/lib/proactiveRules";
  * (lib/proactiveBrief.ts). Only offered while an owner has it on for the workspace; says so when they have not,
  * rather than hiding that it exists.
  */
-export default function AssistantProactiveCard({ name, workspaceOn, on, briefAt, mondayStuck }: { name: string; workspaceOn: boolean; on: boolean; briefAt: string; mondayStuck: boolean }) {
+export default function AssistantProactiveCard({ name, workspaceOn, on, briefAt, mondayStuck, chatbotProblems }: {
+  name: string; workspaceOn: boolean; on: boolean; briefAt: string; mondayStuck: boolean;
+  /** The owner's "chatbot problems" switch; null for anyone else (only the owner can open the System Log). */
+  chatbotProblems: boolean | null;
+}) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
   const [problem, setProblem] = useState("");
@@ -88,6 +92,26 @@ export default function AssistantProactiveCard({ name, workspaceOn, on, briefAt,
             <span className="block font-medium text-foreground">Stuck deals on Mondays</span>
             On Mondays the brief adds your three most-stuck deals, each with its main reason and a link — and, if you
             manage a team, the team&apos;s. It changes nothing and contacts no one.
+          </span>
+        </label>
+      )}
+      {on && briefAt !== "off" && chatbotProblems !== null && (
+        <label className="flex cursor-pointer items-start gap-2 pl-6 text-xs text-muted-foreground">
+          <input
+            type="checkbox"
+            name="chatbotProblems"
+            className="mt-0.5 accent-primary"
+            checked={chatbotProblems}
+            disabled={pending}
+            onChange={(e) => {
+              const next = e.target.checked;
+              run(() => setMyChatbotProblems(next));
+            }}
+          />
+          <span>
+            <span className="block font-medium text-foreground">Chatbot problems</span>
+            When chatbot steps failed in the last 24 hours — a booking, a CRM update, an alert — the brief says how many
+            and the commonest reasons, and points you to Settings → System Log. Nothing failed, nothing is said.
           </span>
         </label>
       )}
