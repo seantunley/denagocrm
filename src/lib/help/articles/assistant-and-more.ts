@@ -370,7 +370,7 @@ export const assistantAndMoreArticles: HelpArticle[] = [
     summary: "Shortcuts for building and changing a chatbot flow without breaking the live one.",
     category: "automation",
     audience: "admins",
-    keywords: ["flow builder", "chatbot flow", "switch off a step", "skip a step", "disable step", "bot builder", "find a step", "search the flow", "quick add", "add a step", "tell someone", "notify staff", "alert"],
+    keywords: ["flow builder", "chatbot flow", "switch off a step", "skip a step", "disable step", "bot builder", "find a step", "search the flow", "quick add", "add a step", "tell someone", "notify staff", "alert", "if anything fails", "fallback", "failure route"],
     body: [
       { type: "h", text: "Switch a step off" },
       { type: "p", text: "To skip a step for a while without deleting it — say the price list while it's being updated — select it and untick **Step is on**. Customers then go straight on to the next step, as if it weren't there. The step stays on the canvas, greyed out and marked **OFF**, with everything you set up in it." },
@@ -394,6 +394,14 @@ export const assistantAndMoreArticles: HelpArticle[] = [
         "Between 20:00 and 08:00 nothing pops up on a phone — it waits in Ask and reaches WhatsApp in the morning.",
         "It's logged on the customer's record with the person's name. The person must still be in the workspace and allowed to see customer conversations, or it isn't sent.",
         "On a phone, they can switch these off under notifications: **Chatbot alerts**.",
+      ] },
+      { type: "h", text: "One place to go if anything fails" },
+      { type: "p", text: "Steps that do something — book, call an API, update the CRM, start a Journey — can fail. Instead of wiring a failure route on every one, select one step (usually a **Hand off** to the team) and press **Use this step if anything fails**. It's marked **IF FAILS** on the canvas." },
+      { type: "list", items: [
+        "Any step that fails and has no failure route of its own goes there. A step's own failure route still comes first.",
+        "Nothing changes when steps succeed.",
+        "It's used at most once per customer message. If something on the way from it fails too, the conversation stops there rather than going round again.",
+        "Press **Stop using** on it to go back to no fallback. Deleting the step does the same.",
       ] },
     ],
   },
