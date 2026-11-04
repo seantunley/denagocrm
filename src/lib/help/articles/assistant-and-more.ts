@@ -370,7 +370,7 @@ export const assistantAndMoreArticles: HelpArticle[] = [
     summary: "Shortcuts for building and changing a chatbot flow without breaking the live one.",
     category: "automation",
     audience: "admins",
-    keywords: ["flow builder", "chatbot flow", "switch off a step", "skip a step", "disable step", "bot builder", "find a step", "search the flow", "quick add", "add a step", "tell someone", "notify staff", "alert", "if anything fails", "fallback", "failure route", "shared values", "business phone", "variables", "changed since publish", "unpublished changes", "review and publish"],
+    keywords: ["flow builder", "chatbot flow", "switch off a step", "skip a step", "disable step", "bot builder", "find a step", "search the flow", "quick add", "add a step", "tell someone", "notify staff", "alert", "if anything fails", "fallback", "failure route", "shared values", "business phone", "variables", "changed since publish", "unpublished changes", "review and publish", "export flow", "import flow", "copy flow to another workspace"],
     body: [
       { type: "h", text: "Switch a step off" },
       { type: "p", text: "To skip a step for a while without deleting it — say the price list while it's being updated — select it and untick **Step is on**. Customers then go straight on to the next step, as if it weren't there. The step stays on the canvas, greyed out and marked **OFF**, with everything you set up in it." },
@@ -415,6 +415,14 @@ export const assistantAndMoreArticles: HelpArticle[] = [
       { type: "h", text: "See what you've changed since the last publish" },
       { type: "p", text: "Customers only see a flow once you publish it. While you work, every step you've added since the last publish is labelled **NEW** and every step you've changed — its wording, its settings or where it leads — is labelled **EDITED**. A note at the bottom of the canvas sums it up, e.g. \"Since v4: 3 steps new or edited · 1 removed\". Moving steps around on the canvas doesn't count as a change." },
       { type: "p", text: "When you press **Review & publish** in the flow list, the box lists exactly what will change for customers — steps added, removed and edited (and what about them), and connections added or removed — before you confirm." },
+      { type: "h", text: "Export a flow, or copy it to another workspace" },
+      { type: "p", text: "On the flow list, **Export** on a flow downloads it as a file (its draft, with the steps where you placed them). **Import** at the top reads such a file back in as a new draft called \"… (imported)\" — it's never live until you publish it." },
+      { type: "list", items: [
+        "To copy a finished flow to another workspace, export it in one workspace and import it in the other.",
+        "A flow can point at things that belong to one workspace — a document, a Journey, a subflow, a staff member, a pipeline stage, an API connection. On import, each one that exists in this workspace is kept; each one that doesn't is cleared, and the builder lists the steps where you need to choose again.",
+        "A key typed into an API step's headers is never put in the file. Keys live in Connections, which aren't exported.",
+        "Exports and imports are recorded in the audit log.",
+      ] },
     ],
   },
 
