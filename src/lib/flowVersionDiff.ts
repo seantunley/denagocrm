@@ -133,5 +133,31 @@ export function diffFlowVersions(beforeDefinition: string, afterDefinition: stri
   };
 }
 
+/**
+ * CHANGED SINCE PUBLISH (Node-RED's "modified" dot; Sean, 2026-11-04): which steps of the draft are new, and which were
+ * edited — a setting, or one of its own connections — since the published version. For the canvas markers.
+ */
+export function changedSince(published: Flow, draft: Flow): { added: string[]; edited: string[] } {
+  const wiresFrom = (flow: Flow) => {
+    const by = new Map<string, string[]>();
+    for (const w of connections(flow)) {
+      const from = w.key.slice(0, w.key.indexOf("|"));
+      by.set(from, [...(by.get(from) ?? []), w.key]);
+    }
+    return by;
+  };
+  const before = wiresFrom(published);
+  const after = wiresFrom(draft);
+  const added: string[] = [];
+  const edited: string[] = [];
+  for (const [id, node] of Object.entries(draft.nodes)) {
+    const old = published.nodes[id];
+    if (!old) { added.push(id); continue; }
+    const rewired = JSON.stringify([...(before.get(id) ?? [])].sort()) !== JSON.stringify([...(after.get(id) ?? [])].sort());
+    if (rewired || changedFields(old, node).length > 0) edited.push(id);
+  }
+  return { added, edited };
+}
+
 export const noDifferences = (diff: FlowVersionDiff) =>
   diff.comparable && !diff.startChanged && !diff.added.length && !diff.removed.length && !diff.changed.length && !diff.connectionsAdded.length && !diff.connectionsRemoved.length;

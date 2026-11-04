@@ -364,6 +364,20 @@ export const assistantAndMoreArticles: HelpArticle[] = [
     ],
   },
 
+  {
+    slug: "chatbot-flow-builder-tips",
+    title: "Chatbot flow builder: working on a flow",
+    summary: "Shortcuts for building and changing a chatbot flow without breaking the live one.",
+    category: "automation",
+    audience: "admins",
+    keywords: ["flow builder", "chatbot flow", "changed since publish", "unpublished changes", "review and publish", "bot builder"],
+    body: [
+      { type: "h", text: "See what you've changed since the last publish" },
+      { type: "p", text: "Customers only see a flow once you publish it. While you work, every step you've added since the last publish is labelled **NEW** and every step you've changed — its wording, its settings or where it leads — is labelled **EDITED**. A note at the bottom of the canvas sums it up, e.g. \"Since v4: 3 steps new or edited · 1 removed\". Moving steps around on the canvas doesn't count as a change." },
+      { type: "p", text: "When you press **Review & publish** in the flow list, the box lists exactly what will change for customers — steps added, removed and edited (and what about them), and connections added or removed — before you confirm." },
+    ],
+  },
+
   // ── Today and lead scores ─────────────────────────────────────────────
   {
     slug: "today-who-to-contact-next",

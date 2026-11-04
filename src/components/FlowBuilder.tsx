@@ -66,6 +66,8 @@ import { isAnnotation, type AnnotationColor, type BookingAction, type ConditionO
 import ConfirmActionDialog from "@/components/ConfirmActionDialog";
 import EmojiButton from "@/components/EmojiButton";
 import { stepNumbersLine, type StepNumbers } from "@/lib/flowStepNumbers";
+import { changedSince } from "@/lib/flowVersionDiff";
+import type { Flow } from "@/lib/flow";
 import { cn } from "@/lib/utils";
 import { BuilderSaveStatus, BuilderWorkspaceBar, BuilderWorkspaceShell } from "@/components/builder-workspace";
 import FlowLintPanel from "@/components/FlowLintPanel";
@@ -80,6 +82,8 @@ type FlowData = { start: string; nodes: Record<string, FlowNode>; positions?: Re
 type RFData = { flow: FlowNode; isStart: boolean; issues?: FlowIssue[]; replay?: number[] };
 /** The numbers on each step's card (lib/flowStepNumbers); null while switched off. */
 const StepNumbersContext = createContext<StepNumbers | null>(null);
+/** Steps new or edited since the last publish (lib/flowVersionDiff changedSince) — the card's NEW / EDITED label. */
+const ChangedContext = createContext<ReadonlyMap<string, "new" | "edited">>(new Map());
 type EditorSnapshot = { start: string; nodes: Node<RFData>[] };
 export type FlowJourneyOption = { id: string; name: string };
 export type FlowOptionRef = { id: string; name: string };
@@ -205,6 +209,7 @@ function NodeCard({ data, selected }: NodeProps) {
   const n = d.flow;
   // Before the note/group early returns: a hook must run on every render, in the same order.
   const stepNumbers = useContext(StepNumbersContext);
+  const changed = useContext(ChangedContext).get(n.id);
   if (n.type === "note") {
     const color = ANNOTATION_COLORS[n.color ?? "yellow"];
     return (
@@ -240,7 +245,8 @@ function NodeCard({ data, selected }: NodeProps) {
       <div className={cn("flex items-center gap-1.5 rounded-t-[11px] px-3 py-2 text-xs font-semibold", meta.header)}>
         <Icon className="size-3.5" />
         {meta.label}
-        {d.isStart && <span className="ml-auto rounded bg-orange-600 px-1.5 text-[10px]">START</span>}
+        {changed && <span className="ml-auto rounded bg-sky-600 px-1.5 text-[10px] text-white" title={changed === "new" ? "Added since the last publish" : "Changed since the last publish"}>{changed === "new" ? "NEW" : "EDITED"}</span>}
+        {d.isStart && <span className={cn("rounded bg-orange-600 px-1.5 text-[10px]", !changed && "ml-auto")}>START</span>}
       </div>
       <div className="min-h-8 whitespace-pre-wrap px-3 py-2 text-xs leading-5 text-slate-300">{summary(n) || "…"}</div>
       {numbers && <div className="border-t border-slate-800 px-3 py-1 text-[10px] font-medium text-emerald-300/90" title="Last 30 days">{numbers}</div>}
@@ -344,7 +350,7 @@ function blankNode(type: FlowNode["type"], id: string): FlowNode {
   }
 }
 
-export default function FlowBuilder({ flowId, initial, journeys = [], flows = [], updatedAt, channels, businessName, documents = [], staff = [], connections = [], crmTags = [], stages = [], stepNumbers = {}, stepNumbersDays = 30 }: { connections?: { id: string; name: string; host: string }[]; flowId: string; initial: FlowData; journeys?: FlowJourneyOption[]; flows?: FlowOptionRef[]; updatedAt: string; channels: FlowChannel[]; businessName: string; documents?: { id: string; name: string }[]; staff?: { id: string; name: string }[]; crmTags?: string[]; stages?: { id: string; name: string }[]; stepNumbers?: StepNumbers; stepNumbersDays?: number }) {
+export default function FlowBuilder({ flowId, initial, journeys = [], flows = [], updatedAt, channels, businessName, documents = [], staff = [], connections = [], crmTags = [], stages = [], stepNumbers = {}, stepNumbersDays = 30, published }: { connections?: { id: string; name: string; host: string }[]; flowId: string; initial: FlowData; journeys?: FlowJourneyOption[]; flows?: FlowOptionRef[]; updatedAt: string; channels: FlowChannel[]; businessName: string; documents?: { id: string; name: string }[]; staff?: { id: string; name: string }[]; crmTags?: string[]; stages?: { id: string; name: string }[]; stepNumbers?: StepNumbers; stepNumbersDays?: number; published?: { version: number; definition: string } }) {
   const [showNumbers, setShowNumbers] = useState(true);
   const router = useRouter();
   const [start, setStart] = useState(initial.start);
@@ -728,6 +734,14 @@ export default function FlowBuilder({ flowId, initial, journeys = [], flows = []
 
   const selected = rfNodes.find((n) => n.id === selectedId)?.data.flow ?? null;
   const currentFlow = useMemo(() => ({ start, nodes: Object.fromEntries(rfNodes.map((node) => [node.id, node.data.flow])) }), [rfNodes, start]);
+  // CHANGED SINCE PUBLISH: compared with the last published version; nothing published, nothing marked.
+  const publishedFlow = useMemo(() => { try { return published ? (JSON.parse(published.definition) as Flow) : null; } catch { return null; } }, [published]);
+  const changedSteps = useMemo(() => {
+    if (!publishedFlow?.nodes) return new Map<string, "new" | "edited">();
+    const { added, edited } = changedSince(publishedFlow, currentFlow);
+    return new Map<string, "new" | "edited">([...added.map((id) => [id, "new"] as const), ...edited.map((id) => [id, "edited"] as const)]);
+  }, [publishedFlow, currentFlow]);
+  const removedSinceLive = publishedFlow?.nodes ? Object.keys(publishedFlow.nodes).filter((id) => !currentFlow.nodes[id]).length : 0;
   const liveIssues = useMemo(() => validateFlow(currentFlow, channels), [channels, currentFlow]);
   const issuesByNode = useMemo(() => {
     const grouped = new Map<string, FlowIssue[]>();
@@ -894,6 +908,12 @@ export default function FlowBuilder({ flowId, initial, journeys = [], flows = []
 
             <main className="min-w-0 flex-1 bg-[#0b0f0e] p-2 sm:p-3">
               <div className="relative h-full min-h-[32rem] overflow-hidden rounded-xl border border-white/[0.08] bg-[#0f1412]" onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = "copy"; }} onDrop={onCanvasDrop}>
+                {published && (changedSteps.size > 0 || removedSinceLive > 0 || publishedFlow?.start !== start) && (
+                  <div className="pointer-events-none absolute bottom-3 left-3 z-10 rounded-lg border border-sky-400/30 bg-sky-500/15 px-2.5 py-1 text-[11px] text-sky-100">
+                    Since v{published.version}: {[changedSteps.size && `${changedSteps.size} step${changedSteps.size === 1 ? "" : "s"} new or edited`, removedSinceLive && `${removedSinceLive} removed`, publishedFlow?.start !== start && "new start"].filter(Boolean).join(" · ")} — publish to make it live
+                  </div>
+                )}
+                <ChangedContext.Provider value={changedSteps}>
                 <StepNumbersContext.Provider value={showNumbers ? stepNumbers : null}>
                 <ReactFlow
                   deleteKeyCode={null}
@@ -943,6 +963,7 @@ export default function FlowBuilder({ flowId, initial, journeys = [], flows = []
                   </Panel>
                 </ReactFlow>
                 </StepNumbersContext.Provider>
+                </ChangedContext.Provider>
                 {rfNodes.length === 0 && (
                   <div className="pointer-events-none absolute inset-0 grid place-items-center p-6">
                     <div className="pointer-events-auto max-w-sm rounded-2xl border border-dashed border-white/15 bg-[#111614]/95 p-6 text-center shadow-2xl">

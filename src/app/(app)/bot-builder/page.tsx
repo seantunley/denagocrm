@@ -17,6 +17,7 @@ import { EmptyState, StatusPill, Surface } from "@/components/visual-system";
 import { builderTenantId, flowScope } from "@/lib/flowScope";
 import { DEFAULT_TENANT_ID } from "@/lib/tenant";
 import { FLOW_CHANNELS } from "@/lib/flowRouting";
+import { diffFlowVersions } from "@/lib/flowVersionDiff";
 
 const channelLabel: Record<string, string> = { whatsapp: "WhatsApp", messenger: "Messenger", instagram: "Instagram", telegram: "Telegram" };
 
@@ -203,7 +204,7 @@ export default async function BotBuilderPage() {
               <div className="my-5 flex flex-1 items-center gap-2 text-muted-foreground" aria-hidden>{[0,1,2].map((step) => <span key={step} className="flex items-center gap-2"><span className="grid size-8 place-items-center rounded-lg border border-border bg-muted/40"><GitBranch className="size-3.5" /></span>{step < 2 && <span className="h-px w-5 bg-border" />}</span>)}</div>
               <div className="flex gap-2 flex-wrap border-t border-border/70 pt-3">
                 <Link href={`/bot-builder/${f.id}`} className="btn-primary btn-sm"><Pencil className="size-3.5" />Edit draft</Link>
-                {(!f.active || pending) && !blocked && <PublishFlowButton flowId={f.id} label="Review & publish" channel={channelLabel[f.channel] ?? f.channel} routeCount={routeInfo.total} warnings={check.warnings.length} draftNodes={draftNodes} liveNodes={liveNodes} liveVersion={live?.version ?? null} />}
+                {(!f.active || pending) && !blocked && <PublishFlowButton flowId={f.id} label="Review & publish" channel={channelLabel[f.channel] ?? f.channel} routeCount={routeInfo.total} warnings={check.warnings.length} draftNodes={draftNodes} liveNodes={liveNodes} liveVersion={live?.version ?? null} changes={live ? diffFlowVersions(live.definition, f.definition) : undefined} />}
                 {(!f.active || pending) && blocked && <span className="btn-secondary btn-sm cursor-not-allowed opacity-50" title="Fix publish errors first">Publish blocked</span>}
                 <form action={duplicateFlow.bind(null, f.id)}><button className="btn-secondary btn-sm"><Copy className="size-3.5" />Duplicate</button></form>
                 {f.active && (
