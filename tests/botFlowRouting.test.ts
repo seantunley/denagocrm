@@ -100,3 +100,13 @@ test("the flow library exposes channel creation and the route workspace", () => 
   assert.match(routes, /Referral code/);
   assert.match(routes, /Ad ID/);
 });
+
+test("only the WHOLE message counts as a QR entry when restarting a handoff", async () => {
+  const { routeIsWholeMessage } = await import("../src/lib/flowRouteRule");
+  const qr = { kind: "keyword", pattern: "Hi Denago Cape Town, please send me the brochure and price lists" };
+  assert.equal(routeIsWholeMessage(qr, "Hi Denago Cape Town, please send me the brochure and price lists"), true);
+  assert.equal(routeIsWholeMessage(qr, "  hi denago cape town please send me the BROCHURE and price lists! "), true);
+  assert.equal(routeIsWholeMessage({ kind: "keyword", pattern: "brochure" }, "can you resend the brochure?"), false);
+  assert.equal(routeIsWholeMessage({ kind: "referral", pattern: "brochure" }, "brochure"), false);
+  assert.equal(routeIsWholeMessage({ kind: "keyword", pattern: "!" }, "!"), false);
+});

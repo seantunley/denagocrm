@@ -13,7 +13,7 @@ import { loadBotSession, upsertBotSessionTx, deleteBotSessionTx, botStillOwnsTx 
 import { recordBotFlowEventsTx, type BotFlowEventInput } from "./botFlowAnalytics";
 import { completeInboundBotEventTx, currentInboundBotClaim } from "./botInboundEvent";
 import { decideInboundAct, HUMAN_RESPONSIBILITY_HOURS, type BotOwnership } from "./botOwnership";
-import type { FlowEntryContext } from "./flowRouting";
+import { messageIsRouteEntry, type FlowEntryContext } from "./flowRouting";
 import { flowSharedVars } from "./flowSharedValuesServer";
 
 export type SessionState = {
@@ -126,6 +126,7 @@ export async function advanceFlow(
     ownership: existing ? existing.ownership : null,
     text: input.text,
     hasChoiceId: Boolean(input.choiceId),
+    routeEntry: existing?.ownership === "ai_handoff" && !input.choiceId && (await messageIsRouteEntry(channel, input.text)),
   });
   if (decision.act === "suppress") return { messages: [], done: true, suppressed: true };
   const restart = decision.act === "restart";
