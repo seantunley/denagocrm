@@ -1,122 +1,24 @@
 "use client";
 
-import { useMemo, useRef, useState } from "react";
+import { useMemo, useState } from "react";
 import { messageEditorHref } from "@/lib/customerMessagePlaces";
 import { createJourney } from "@/app/actions/journeys";
 import { SaveForm, SaveButton } from "@/components/SaveForm";
 import type { ActionResult } from "@/lib/actionResultTypes";
-import { JOURNEY_LIMITS, JOURNEY_STEP_LABELS, JOURNEY_TRIGGERS } from "@/lib/journeyTypes";
+import { JOURNEY_EVENT_TRIGGERS, JOURNEY_LIMITS, JOURNEY_STEP_LABELS, JOURNEY_TRIGGERS, REPEAT_MODES } from "@/lib/journeyTypes";
 import { JOURNEY_TRIGGER_LABELS, type JourneyTriggerSpec } from "@/lib/journeyTriggers";
 import { BuilderSaveStatus, BuilderWorkspaceBar, BuilderWorkspaceShell } from "@/components/builder-workspace";
 import { JOURNEY_RUN_MODES, RUN_MODE_LEGACY_NOTE } from "@/lib/journeyRunModes";
+import { builderDefinition, emptyGroup, generatedStopId, initialConfig, isRecord, newWaitStep, type BuilderStep } from "@/lib/journeyBuilderDefinition";
+import JourneyConditionGroupEditor from "@/components/JourneyConditionGroupEditor";
+import ConfirmActionDialog from "@/components/ConfirmActionDialog";
 
 export type JourneyOption = { id: string; name: string };
 
-type BuilderStep = {
-  id: string;
-  type: string;
-  /** Keep going if this step fails. Round-tripped so saving cannot drop it. */
-  continueOnError?: boolean;
-  /** Whether this step runs. Round-tripped for the same reason: a step silently
-   *  re-armed by a save is a message sent that nobody asked for. */
-  enabled?: boolean;
-  config: Record<string, unknown>;
-};
-
-/**
- * The step types with NO visual editor here — say so rather than pretend.
- *
- * They are authored as JSON today. What this builder guarantees is that opening
- * and re-saving a journey that contains one does not damage it: the step's
- * config is carried through verbatim, its type cannot be changed by a stray
- * click on the type dropdown, and the panel shows what is inside it. Silently
- * dropping the branches — which is what would happen if these types were simply
- * unknown to the builder — would destroy work with no error and no undo.
- *
- * `wait_for_trigger` and `variables` join the containers for exactly the same
- * reason. A wait's `triggers` array and a variables step's `set` map are
- * structured config this form has no widget for, and losing either on save is
- * silent: a wait with no triggers fails validation on the next publish, and a
- * variables step with an empty `set` would leave every later `{{var_…}}`
- * rendering blank with nothing on screen to explain it.
- */
-const READ_ONLY_STEP_TYPES = new Set([
-  "choose",
-  "repeat",
-  "wait_for_trigger",
-  "variables",
-  // A wait_for_condition holds a whole condition GROUP, which is more than the
-  // single-clause editor below can express — the same reason a rich `condition`
-  // step is carried rather than edited here.
-  "wait_for_condition",
-]);
-
-/**
- * A `condition` whose group this form CANNOT represent.
- *
- * The editor below is a single clause: one field, one operator, one value,
- * under `and`. Everything it saves is rebuilt from those three inputs — which
- * means anything richer that was authored as JSON was, until now, silently
- * flattened to `conditions[0]` on the next save. Every other clause, every
- * nested group, and (the reason this became urgent) every `not`, gone; no
- * error, no undo, and a journey that now enrols the exact set of people it was
- * written to exclude.
- *
- * `not` did not create that hole, it made it reachable: `not` is precisely the
- * kind of thing someone hand-authors into a condition step. So a group the form
- * cannot round-trip makes the step read-only, exactly as a container is.
- *
- * A step with NO stored group is a new one the form is about to build — that is
- * the flat field/operator/value shape, and it is editable.
- */
-function complexCondition(config: Record<string, unknown>): boolean {
-  const group = config.condition;
-  if (!isRecord(group)) return false;
-  if (group.logic != null && group.logic !== "and") return true;
-  const list = group.conditions;
-  if (!Array.isArray(list) || list.length !== 1) return true;
-  return !isRecord(list[0]) || Array.isArray((list[0] as Record<string, unknown>).conditions);
-}
-
-/** Every reason a step is carried through verbatim rather than edited here. */
-function isReadOnlyStep(step: BuilderStep): boolean {
-  if (READ_ONLY_STEP_TYPES.has(step.type)) return true;
-  return step.type === "condition" && complexCondition(step.config);
-}
-
-/** How many leaf clauses a group holds, at every depth. */
-function countClauses(group: unknown): number {
-  if (!isRecord(group) || !Array.isArray(group.conditions)) return 0;
-  return group.conditions.reduce<number>(
-    (total, entry) =>
-      total + (isRecord(entry) && Array.isArray(entry.conditions) ? countClauses(entry) : 1),
-    0,
-  );
-}
-
-/** The one-line summary shown for a step the form cannot edit. */
-function readOnlySummary(step: BuilderStep): string {
-  if (step.type === "condition") {
-    const group = isRecord(step.config.condition) ? step.config.condition : {};
-    const clauses = countClauses(group);
-    return `Condition (${String(group.logic ?? "and")}): ${clauses} clause${clauses === 1 ? "" : "s"}`;
-  }
-  if (step.type === "choose") {
-    const options = Array.isArray(step.config.options) ? step.config.options.length : 0;
-    return `${options} branch${options === 1 ? "" : "es"}${step.config.default ? " + default" : ""}`;
-  }
-  if (step.type === "repeat") return `Repeat: ${String(step.config.mode ?? "?")}`;
-  if (step.type === "wait_for_trigger") {
-    const triggers = Array.isArray(step.config.triggers) ? step.config.triggers : [];
-    return `Wait for ${triggers.join(" or ") || "?"} (timeout ${String(step.config.timeoutMinutes ?? "?")} min)`;
-  }
-  if (step.type === "wait_for_condition") {
-    const clauses = countClauses(step.config.condition);
-    return `Wait until ${clauses} condition${clauses === 1 ? "" : "s"} hold (timeout ${String(step.config.timeoutMinutes ?? "?")} min)`;
-  }
-  const names = isRecord(step.config.set) ? Object.keys(step.config.set) : [];
-  return `Sets ${names.join(", ") || "nothing"}`;
-}
+/** Containers (Choose, Repeat) hold their own step lists, nested up to the parser's depth limit. */
+const CONTAINERS = new Set(["choose", "repeat"]);
+/** Steps where "keep going if this step fails" means nothing: they wait, stop, or only steer. */
+const NO_CONTINUE_ON_ERROR = new Set(["wait", "stop", "choose", "repeat", "wait_for_trigger", "wait_for_condition", "variables"]);
 
 export type JourneyBuilderDefaults = {
   name?: string;
@@ -146,10 +48,6 @@ export type JourneyBuilderDefaults = {
 // a new step type is a compile error until it is given a name here.
 const stepLabels: Record<string, string> = JOURNEY_STEP_LABELS;
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
-
 function cleanSteps(defaults?: JourneyBuilderDefaults["definition"]): BuilderStep[] {
   const existing = (defaults?.steps ?? []).filter(
     (step) => step.config?.systemGenerated !== true
@@ -157,27 +55,12 @@ function cleanSteps(defaults?: JourneyBuilderDefaults["definition"]): BuilderSte
   if (existing.length === 0) {
     return [{ id: "step_1", type: "create_activity", config: { activityType: "call", dueDays: 0 } }];
   }
-  return existing.map((step) => {
-    const config = { ...step.config };
-    const carried = { id: step.id, type: step.type, continueOnError: step.continueOnError, enabled: step.enabled, config };
-    // A container's config holds its nested sequences, and a rich condition's
-    // holds a group this form cannot rebuild. Nothing below may touch either —
-    // carry them through byte-for-byte.
-    if (isReadOnlyStep(carried)) return carried;
-    if (step.type === "condition" && isRecord(config.condition)) {
-      const group = config.condition;
-      const first = Array.isArray(group.conditions) && isRecord(group.conditions[0])
-        ? group.conditions[0]
-        : null;
-      if (first) {
-        config.field = first.field;
-        config.operator = first.operator;
-        config.value = first.value;
-      }
-    }
-    return { id: step.id, type: step.type, continueOnError: step.continueOnError, enabled: step.enabled, config };
-  });
+  // Every step keeps its whole config: the editors below change only the keys they own, so anything else a step
+  // carries (its nested sequences, a condition's own branch targets) is saved exactly as it was.
+  return existing.map((step) => ({ id: step.id, type: step.type, continueOnError: step.continueOnError, enabled: step.enabled, config: { ...step.config } }));
 }
+
+type Lists = { stages: JourneyOption[]; users: JourneyOption[]; templates: JourneyOption[]; tags: JourneyOption[] };
 
 export default function JourneyBuilder({
   stages,
@@ -198,7 +81,6 @@ export default function JourneyBuilder({
   submitAction?: (formData: FormData) => Promise<ActionResult | void>;
   submitLabel?: string;
 }) {
-  const counter = useRef(100);
   const [triggers, setTriggers] = useState<JourneyTriggerSpec[]>(
     defaults.triggers?.length ? defaults.triggers : [{ type: "lead_created", config: {} }],
   );
@@ -234,45 +116,6 @@ export default function JourneyBuilder({
   const setTriggerId = (index: number, id: string) =>
     patchTrigger(index, { id: id.trim() ? id.trim() : undefined });
 
-  const setConfig = (index: number, key: string, value: unknown) => {
-    setSteps((current) => current.map((step, i) =>
-      i === index ? { ...step, config: { ...step.config, [key]: value } } : step
-    ));
-  };
-
-  const setType = (index: number, type: string) => {
-    const initial: Record<string, unknown> =
-      type === "wait" ? { amount: 1, unit: "days" }
-      : type === "create_activity" ? { activityType: "call", dueDays: 0 }
-      : type === "condition" ? { field: "lead.source", operator: "equals", value: "" }
-      // A mark-lost step will not SAVE without a reason (parseLeadOutcomeConfig
-      // refuses one), so the field is seeded empty and visible rather than left
-      // for the author to discover on a rejected save.
-      : type === "lead_mark_lost" ? { reason: "" }
-      : {};
-    setSteps((current) => current.map((step, i) =>
-      i === index ? { ...step, type, config: initial } : step
-    ));
-  };
-
-  const addStep = () => {
-    counter.current += 1;
-    setSteps((current) => [
-      ...current,
-      { id: `step_${counter.current}`, type: "wait", config: { amount: 1, unit: "days" } },
-    ]);
-  };
-
-  const moveStep = (index: number, direction: -1 | 1) => {
-    const target = index + direction;
-    if (target < 0 || target >= steps.length) return;
-    setSteps((current) => {
-      const next = [...current];
-      [next[index], next[target]] = [next[target], next[index]];
-      return next;
-    });
-  };
-
   const entryConditions = useMemo(() => {
     const conditions: Array<Record<string, unknown>> = [];
     if (conditionSource.trim()) {
@@ -295,48 +138,8 @@ export default function JourneyBuilder({
     return { logic: "and", conditions };
   }, [conditionSource, conditionProvince, minValueRands]);
 
-  const definition = useMemo(() => {
-    const mapped = steps.map((step, index) => {
-      const nextStepId = steps[index + 1]?.id ?? null;
-      // Spreading `step` is what preserves a container's nested sequences and
-      // every step's continueOnError. Only a condition the form can actually
-      // represent has its config rebuilt; a richer group is carried, along with
-      // its own trueStepId/falseStepId, rather than rewritten from one clause.
-      if (step.type !== "condition" || isReadOnlyStep(step)) return { ...step, nextStepId };
-      const stopId = `${step.id}_false_stop`;
-      return {
-        ...step,
-        nextStepId,
-        config: {
-          condition: {
-            logic: "and",
-            conditions: [{
-              field: step.config.field,
-              operator: step.config.operator,
-              value: step.config.value,
-            }],
-          },
-          trueStepId: nextStepId,
-          falseStepId: stopId,
-        },
-      };
-    });
-    // Only for the conditions this form generated a false-branch for. A carried
-    // condition already names its own falseStepId, and minting a second stop
-    // step for it would be an orphan the parser then rejects.
-    const generatedStops = steps
-      .filter((step) => step.type === "condition" && !isReadOnlyStep(step))
-      .map((step) => ({
-        id: `${step.id}_false_stop`,
-        type: "stop",
-        nextStepId: null,
-        config: { reason: "Condition did not match", systemGenerated: true },
-      }));
-    return {
-      startStepId: steps[0]?.id ?? null,
-      steps: [...mapped, ...generatedStops],
-    };
-  }, [steps]);
+  const definition = useMemo(() => builderDefinition(steps), [steps]);
+  const lists: Lists = { stages, users, templates, tags };
 
   return (
     // SaveForm shows the strict validation message ("two triggers share an ID")
@@ -529,210 +332,356 @@ export default function JourneyBuilder({
       </details>
 
       <div className="space-y-3">
-        <div className="flex items-center justify-between">
-          <h3 className="font-semibold">4. Journey steps</h3>
-          <button type="button" className="btn-secondary btn-sm" onClick={addStep}>+ Add step</button>
-        </div>
-        {steps.map((step, index) => (
-          <div
-            key={step.id}
-            className={`rounded-lg border border-slate-800 bg-slate-900/40 p-4 space-y-3 ${
-              step.enabled === false ? "opacity-60" : ""
-            }`}
-          >
-            <div className="flex items-center gap-2">
-              <span className="badge bg-slate-800 text-slate-300">{index + 1}</span>
-              {/* A muted step still occupies its place in the sequence, so the
-                  list has to show which one is off. Dimming alone is a hint, not
-                  a statement — the badge is the statement. */}
-              {step.enabled === false && (
-                <span className="badge bg-amber-500/15 text-amber-300">Off</span>
-              )}
-              {/* Disabled for containers: changing the type resets config, and a
-                  container's config IS its nested sequences. One stray click
-                  would delete every branch with no error and no undo. */}
-              <select
-                className="input flex-1"
-                value={step.type}
-                disabled={isReadOnlyStep(step)}
-                onChange={(e) => setType(index, e.target.value)}
-              >
-                {Object.entries(stepLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
-              </select>
-              <button type="button" className="btn-secondary btn-sm" onClick={() => moveStep(index, -1)}>↑</button>
-              <button type="button" className="btn-secondary btn-sm" onClick={() => moveStep(index, 1)}>↓</button>
-              <button type="button" className="text-red-400 text-sm" onClick={() => setSteps((current) => current.filter((_, i) => i !== index))}>Remove</button>
-            </div>
-
-            {isReadOnlyStep(step) && (
-              <div className="rounded border border-amber-500/30 bg-amber-500/[0.06] p-3 text-xs text-amber-200/90">
-                <p className="font-semibold text-amber-300">{readOnlySummary(step)}</p>
-                <p className="mt-1 leading-5">
-                  There is no visual editor for this step yet — it is authored as JSON. It is
-                  carried through this form exactly as saved, so editing the rest of the journey
-                  cannot damage it.
-                </p>
-              </div>
-            )}
-
-            {step.type === "send_email" && (
-              <div className="space-y-2">
-                <select className="input" value={String(step.config.emailTemplateId ?? "")} onChange={(e) => setConfig(index, "emailTemplateId", e.target.value)}>
-                  <option value="">Write the subject and body below</option>
-                  {templates.map((template) => <option key={template.id} value={template.id}>{template.name}</option>)}
-                </select>
-                <input className="input" placeholder="Email subject" value={String(step.config.subject ?? "")} onChange={(e) => setConfig(index, "subject", e.target.value)} />
-                <textarea className="input min-h-28" placeholder="Email body. Use {{first_name}}, {{name}}, {{model}}, {{value}}." value={String(step.config.body ?? "")} onChange={(e) => setConfig(index, "body", e.target.value)} />
-              </div>
-            )}
-            {step.type === "send_sms" && <textarea className="input" placeholder="SMS message" value={String(step.config.message ?? "")} onChange={(e) => setConfig(index, "message", e.target.value)} />}
-            {step.type === "send_push" && <input className="input" placeholder="Notification message" value={String(step.config.message ?? "")} onChange={(e) => setConfig(index, "message", e.target.value)} />}
-            {step.type === "wait" && (
-              <div className="grid grid-cols-2 gap-2">
-                <input className="input" type="number" min={1} value={String(step.config.amount ?? 1)} onChange={(e) => setConfig(index, "amount", Number(e.target.value))} />
-                <select className="input" value={String(step.config.unit ?? "days")} onChange={(e) => setConfig(index, "unit", e.target.value)}>
-                  <option value="minutes">Minutes</option><option value="hours">Hours</option><option value="days">Days</option>
-                </select>
-              </div>
-            )}
-            {step.type === "create_activity" && (
-              <div className="grid md:grid-cols-4 gap-2">
-                <select className="input" value={String(step.config.activityType ?? "call")} onChange={(e) => setConfig(index, "activityType", e.target.value)}>
-                  <option value="call">Call</option><option value="email">Email</option><option value="meeting">Meeting</option><option value="whatsapp">WhatsApp</option><option value="todo">To-do</option>
-                </select>
-                <input className="input md:col-span-2" placeholder="Activity summary" value={String(step.config.summary ?? "")} onChange={(e) => setConfig(index, "summary", e.target.value)} />
-                <input className="input" type="number" min={0} placeholder="Due days" value={String(step.config.dueDays ?? 0)} onChange={(e) => setConfig(index, "dueDays", Number(e.target.value))} />
-                <select className="input md:col-span-4" value={String(step.config.assignToId ?? "")} onChange={(e) => setConfig(index, "assignToId", e.target.value)}>
-                  <option value="">Lead/contact owner</option>
-                  {users.map((user) => <option key={user.id} value={user.id}>{user.name}</option>)}
-                </select>
-              </div>
-            )}
-            {step.type === "move_stage" && <select className="input" value={String(step.config.stageId ?? "")} onChange={(e) => setConfig(index, "stageId", e.target.value)}><option value="">Choose stage</option>{stages.map((stage) => <option key={stage.id} value={stage.id}>{stage.name}</option>)}</select>}
-            {step.type === "assign_user" && <select className="input" value={String(step.config.userId ?? "")} onChange={(e) => setConfig(index, "userId", e.target.value)}><option value="">Choose user</option>{users.map((user) => <option key={user.id} value={user.id}>{user.name}</option>)}</select>}
-            {(step.type === "add_tag" || step.type === "remove_tag") && <select className="input" value={String(step.config.tagId ?? "")} onChange={(e) => setConfig(index, "tagId", e.target.value)}><option value="">Choose tag</option>{tags.map((tag) => <option key={tag.id} value={tag.id}>{tag.name}</option>)}</select>}
-
-            {/* The lead outcome steps. Each says which statuses it acts on,
-                because "why did my step skip?" is otherwise a question only the
-                run trace can answer — and the answer is always the same one. */}
-            {step.type === "lead_mark_lost" && (
-              <div className="space-y-2">
-                <input
-                  className="input"
-                  placeholder="Lost reason (required) — e.g. Went with a competitor"
-                  maxLength={JOURNEY_LIMITS.leadOutcomeReason}
-                  value={String(step.config.reason ?? "")}
-                  onChange={(e) => setConfig(index, "reason", e.target.value)}
-                />
-                <p className="text-xs text-slate-500">
-                  Only an <strong>open</strong> lead is marked lost — one already won or lost is left
-                  exactly as it is and the step records itself as skipped. Reports group closed-lost
-                  leads by this reason, so it is required. Supports {"{{first_name}}"}, {"{{model}}"} and
-                  the other message placeholders.
-                </p>
-              </div>
-            )}
-            {step.type === "lead_mark_won" && (
-              <p className="text-xs text-slate-500">
-                Only an <strong>open</strong> lead is marked won. A lead already won is left alone and
-                the step records itself as skipped, so a journey that runs again cannot count the same
-                sale twice or pay a referral fee twice. To win a lead that was closed, put a
-                “Reopen lead” step in front of this one.
-              </p>
-            )}
-            {/* The module steps have nothing to configure here: what they send is
-                the editable template, linked, and who they reach comes from the
-                trigger. Saying which trigger is the whole of the help. */}
-            {step.type === "send_review_request" && (
-              <p className="text-xs text-slate-500">
-                Emails the customer a Google review request — the{" "}
-                <a className="underline" href={messageEditorHref("review_service")}>service</a> or{" "}
-                <a className="underline" href={messageEditorHref("review_delivery")}>delivery</a>{" "}
-                template, depending on the trigger. At most once per customer every 90 days, never to someone who
-                opted out, and only with a Google Place ID set up.
-              </p>
-            )}
-            {step.type === "send_service_reminder" && (
-              <p className="text-xs text-slate-500">
-                Emails the customer that their vehicle is due for a service, once per due date. Needs the “Vehicle is
-                due for a service” trigger. Uses the template picked under Settings → Email → Service reminders, or
-                the <a className="underline" href={messageEditorHref("service_reminder")}>Service reminder</a> template.
-              </p>
-            )}
-            {step.type === "send_signing_reminder" && (
-              <p className="text-xs text-slate-500">
-                Sends the signer one reminder with their own signing link, by email and WhatsApp (the{" "}
-                <a className="underline" href={messageEditorHref("reminder")}>signing reminder</a> templates). Needs the
-                “Document sent for signing isn&apos;t signed” trigger. Once per signer, and never once they have signed.
-              </p>
-            )}
-            {step.type === "send_survey_reminder" && (
-              <p className="text-xs text-slate-500">
-                Sends one reminder with the survey link (the{" "}
-                <a className="underline" href={messageEditorHref("survey_reminder")}>survey reminder</a> templates). Needs
-                the “Automatic survey isn&apos;t answered” trigger. Once per survey, never after it is answered.
-              </p>
-            )}
-            {step.type === "lead_reopen" && (
-              <p className="text-xs text-slate-500">
-                Puts a <strong>won or lost</strong> lead back to open and clears its lost reason. A lead
-                that is already open is left alone and the step records itself as skipped.
-              </p>
-            )}
-            {step.type === "condition" && !isReadOnlyStep(step) && (
-              <div className="grid md:grid-cols-3 gap-2">
-                <select className="input" value={String(step.config.field ?? "lead.source")} onChange={(e) => setConfig(index, "field", e.target.value)}>
-                  <option value="lead.source">Lead source</option><option value="lead.status">Lead status</option><option value="lead.valueCents">Lead value (cents)</option><option value="lead.stageId">Lead stage</option><option value="contact.province">Contact province</option><option value="contact.tags">Contact tag ID</option><option value="contact.hasVehicle">Has vehicle</option>
-                </select>
-                <select className="input" value={String(step.config.operator ?? "equals")} onChange={(e) => setConfig(index, "operator", e.target.value)}>
-                  <option value="equals">Equals</option><option value="not_equals">Does not equal</option><option value="contains">Contains</option><option value="greater_or_equal">At least</option><option value="less_or_equal">At most</option><option value="is_empty">Is empty</option><option value="is_not_empty">Is not empty</option>
-                </select>
-                <input className="input" placeholder="Value" value={String(step.config.value ?? "")} onChange={(e) => setConfig(index, "value", e.target.value)} />
-                <p className="text-xs text-slate-500 md:col-span-3">Matching contacts continue. Non-matches stop safely.</p>
-              </div>
-            )}
-            {step.type === "stop" && <input className="input" placeholder="Reason" value={String(step.config.reason ?? "")} onChange={(e) => setConfig(index, "reason", e.target.value)} />}
-
-            {/* Offered for EVERY step type including
-                the ones with no visual editor — muting a branch you cannot edit
-                here is exactly when you need this, and the alternative is
-                deleting it and losing its config, its id and its trace history.
-                A disabled step is skipped and RECORDED as skipped, so the
-                activity trace still explains the gap. */}
-            <label className="flex items-center gap-2 text-xs text-slate-400">
-              <input
-                type="checkbox"
-                checked={step.enabled !== false}
-                onChange={(e) => setSteps((current) => current.map((s, i) =>
-                  i === index ? { ...s, enabled: e.target.checked } : s
-                ))}
-              />
-              Step is on
-            </label>
-
-            {/* Per step, because only the author knows which of their steps is
-                load-bearing. One failed SMS used to fail the whole run and burn
-                one of its three attempts, so a provider outage on a courtesy
-                notification could permanently kill a journey whose remaining
-                steps were the ones that mattered. */}
-            {!isReadOnlyStep(step) && step.type !== "wait" && step.type !== "stop" && (
-              <label className="flex items-center gap-2 text-xs text-slate-400">
-                <input
-                  type="checkbox"
-                  checked={step.continueOnError === true}
-                  onChange={(e) => setSteps((current) => current.map((s, i) =>
-                    i === index ? { ...s, continueOnError: e.target.checked } : s
-                  ))}
-                />
-                Keep going if this step fails
-              </label>
-            )}
-          </div>
-        ))}
+        <h3 className="font-semibold">4. Journey steps</h3>
+        <StepList steps={steps} onChange={setSteps} depth={0} lists={lists} />
       </div>
 
         </div>
       </BuilderWorkspaceShell>
     </SaveForm>
   );
+}
+
+/**
+ * An ordered list of steps — the journey itself at depth 0, or a Choose branch / Repeat loop inside it. A nested list
+ * can't be emptied: the parser refuses an empty sequence (a cursor that points at nothing).
+ */
+function StepList({ steps, onChange, depth, lists }: { steps: BuilderStep[]; onChange: (steps: BuilderStep[]) => void; depth: number; lists: Lists }) {
+  const put = (index: number, step: BuilderStep) => onChange(steps.map((s, i) => (i === index ? step : s)));
+  // A container's config IS its branches — a stray pick in the type list would delete them with no undo, so ask first.
+  const [retype, setRetype] = useState<{ index: number; type: string } | null>(null);
+  const changeType = (index: number, type: string) => put(index, { ...steps[index], type, config: initialConfig(type) });
+  const move = (index: number, direction: -1 | 1) => {
+    const target = index + direction;
+    if (target < 0 || target >= steps.length) return;
+    const next = [...steps];
+    [next[index], next[target]] = [next[target], next[index]];
+    onChange(next);
+  };
+  return (
+    <div className={depth ? "space-y-2 border-l-2 border-slate-700/70 pl-3" : "space-y-3"}>
+      {steps.map((step, index) => (
+        <div key={step.id} className={`rounded-lg border border-slate-800 bg-slate-900/40 p-4 space-y-3 ${step.enabled === false ? "opacity-60" : ""}`}>
+          <div className="flex items-center gap-2">
+            <span className="badge bg-slate-800 text-slate-300">{index + 1}</span>
+            {/* A muted step still occupies its place in the sequence, so the list has to show which one is off. */}
+            {step.enabled === false && <span className="badge bg-amber-500/15 text-amber-300">Off</span>}
+            <select
+              className="input flex-1"
+              aria-label="Step type"
+              value={step.type}
+              onChange={(e) => (CONTAINERS.has(step.type) ? setRetype({ index, type: e.target.value }) : changeType(index, e.target.value))}
+            >
+              {Object.entries(stepLabels)
+                // Containers nest; the parser stops at its depth limit (JOURNEY_LIMITS.depth, counted from 1).
+                .filter(([value]) => !CONTAINERS.has(value) || value === step.type || depth + 1 < JOURNEY_LIMITS.depth)
+                .map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+            </select>
+            <button type="button" className="btn-secondary btn-sm" onClick={() => move(index, -1)}>↑</button>
+            <button type="button" className="btn-secondary btn-sm" onClick={() => move(index, 1)}>↓</button>
+            <button type="button" className="text-red-400 text-sm disabled:opacity-40" disabled={depth > 0 && steps.length === 1} title={depth > 0 && steps.length === 1 ? "A branch needs at least one step" : undefined} onClick={() => onChange(steps.filter((_, i) => i !== index))}>Remove</button>
+          </div>
+
+          <StepFields step={step} onChange={(next) => put(index, next)} depth={depth} lists={lists} />
+
+          {/* Offered for EVERY step type — muting a branch is exactly when you need it, and the alternative is deleting
+              it and losing its config, its id and its trace history. A disabled step is skipped and RECORDED as skipped. */}
+          <label className="flex items-center gap-2 text-xs text-slate-400">
+            <input type="checkbox" checked={step.enabled !== false} onChange={(e) => put(index, { ...step, enabled: e.target.checked })} />
+            Step is on
+          </label>
+          {/* Per step, because only the author knows which of their steps is load-bearing. One failed SMS used to fail
+              the whole run and burn one of its three attempts. */}
+          {!NO_CONTINUE_ON_ERROR.has(step.type) && (
+            <label className="flex items-center gap-2 text-xs text-slate-400">
+              <input type="checkbox" checked={step.continueOnError === true} onChange={(e) => put(index, { ...step, continueOnError: e.target.checked })} />
+              Keep going if this step fails
+            </label>
+          )}
+        </div>
+      ))}
+      <button type="button" className="btn-secondary btn-sm" onClick={() => onChange([...steps, newWaitStep()])}>+ Add step{depth ? " here" : ""}</button>
+      <ConfirmActionDialog
+        destructive
+        open={retype !== null}
+        onOpenChange={(open) => { if (!open) setRetype(null); }}
+        title="Change this step's type?"
+        description="Its branches and every step inside them are removed."
+        confirmLabel="Change type"
+        onConfirm={() => { if (retype) changeType(retype.index, retype.type); setRetype(null); }}
+      />
+    </div>
+  );
+}
+
+/** Minutes, shown as days, hours or minutes — whichever divides evenly. Capped at JOURNEY_LIMITS.waitDays. */
+function TimeoutField({ minutes, onChange }: { minutes: number; onChange: (minutes: number) => void }) {
+  const unit = minutes % 1440 === 0 ? 1440 : minutes % 60 === 0 ? 60 : 1;
+  return (
+    <div className="grid grid-cols-2 gap-2">
+      <input className="input" type="number" min={1} aria-label="Give up after" value={String(minutes / unit)} onChange={(e) => onChange(Math.max(1, Math.round(Number(e.target.value) || 1)) * unit)} />
+      <select className="input" aria-label="Unit" value={unit} onChange={(e) => onChange(Math.max(1, Math.round(minutes / unit)) * Number(e.target.value))}>
+        <option value={1}>Minutes</option><option value={60}>Hours</option><option value={1440}>Days</option>
+      </select>
+    </div>
+  );
+}
+
+function StepFields({ step, onChange, depth, lists }: { step: BuilderStep; onChange: (step: BuilderStep) => void; depth: number; lists: Lists }) {
+  const { config } = step;
+  const set = (key: string, value: unknown) => onChange({ ...step, config: { ...config, [key]: value } });
+  const timeout = Number(config.timeoutMinutes) || 1440;
+  const carryOn = (
+    <label className="flex items-center gap-2 text-xs text-slate-400">
+      <input type="checkbox" checked={config.continueOnTimeout !== false} onChange={(e) => set("continueOnTimeout", e.target.checked)} />
+      If it gives up, carry on with the next step (otherwise the journey ends)
+    </label>
+  );
+
+  switch (step.type) {
+    case "send_email":
+      return (
+        <div className="space-y-2">
+          <select className="input" value={String(config.emailTemplateId ?? "")} onChange={(e) => set("emailTemplateId", e.target.value)}>
+            <option value="">Write the subject and body below</option>
+            {lists.templates.map((template) => <option key={template.id} value={template.id}>{template.name}</option>)}
+          </select>
+          <input className="input" placeholder="Email subject" value={String(config.subject ?? "")} onChange={(e) => set("subject", e.target.value)} />
+          <textarea className="input min-h-28" placeholder="Email body. Use {{first_name}}, {{name}}, {{model}}, {{value}}." value={String(config.body ?? "")} onChange={(e) => set("body", e.target.value)} />
+        </div>
+      );
+    case "send_sms":
+      return <textarea className="input" placeholder="SMS message" value={String(config.message ?? "")} onChange={(e) => set("message", e.target.value)} />;
+    case "send_push":
+      return <input className="input" placeholder="Notification message" value={String(config.message ?? "")} onChange={(e) => set("message", e.target.value)} />;
+    case "wait":
+      return (
+        <div className="grid grid-cols-2 gap-2">
+          <input className="input" type="number" min={1} value={String(config.amount ?? 1)} onChange={(e) => set("amount", Number(e.target.value))} />
+          <select className="input" value={String(config.unit ?? "days")} onChange={(e) => set("unit", e.target.value)}>
+            <option value="minutes">Minutes</option><option value="hours">Hours</option><option value="days">Days</option>
+          </select>
+        </div>
+      );
+    case "create_activity":
+      return (
+        <div className="grid md:grid-cols-4 gap-2">
+          <select className="input" value={String(config.activityType ?? "call")} onChange={(e) => set("activityType", e.target.value)}>
+            <option value="call">Call</option><option value="email">Email</option><option value="meeting">Meeting</option><option value="whatsapp">WhatsApp</option><option value="todo">To-do</option>
+          </select>
+          <input className="input md:col-span-2" placeholder="Activity summary" value={String(config.summary ?? "")} onChange={(e) => set("summary", e.target.value)} />
+          <input className="input" type="number" min={0} placeholder="Due days" value={String(config.dueDays ?? 0)} onChange={(e) => set("dueDays", Number(e.target.value))} />
+          <select className="input md:col-span-4" value={String(config.assignToId ?? "")} onChange={(e) => set("assignToId", e.target.value)}>
+            <option value="">Lead/contact owner</option>
+            {lists.users.map((user) => <option key={user.id} value={user.id}>{user.name}</option>)}
+          </select>
+        </div>
+      );
+    case "move_stage":
+      return <select className="input" value={String(config.stageId ?? "")} onChange={(e) => set("stageId", e.target.value)}><option value="">Choose stage</option>{lists.stages.map((stage) => <option key={stage.id} value={stage.id}>{stage.name}</option>)}</select>;
+    case "assign_user":
+      return <select className="input" value={String(config.userId ?? "")} onChange={(e) => set("userId", e.target.value)}><option value="">Choose user</option>{lists.users.map((user) => <option key={user.id} value={user.id}>{user.name}</option>)}</select>;
+    case "add_tag":
+    case "remove_tag":
+      return <select className="input" value={String(config.tagId ?? "")} onChange={(e) => set("tagId", e.target.value)}><option value="">Choose tag</option>{lists.tags.map((tag) => <option key={tag.id} value={tag.id}>{tag.name}</option>)}</select>;
+
+    // The lead outcome steps. Each says which statuses it acts on, because "why did my step skip?" is otherwise a
+    // question only the run trace can answer — and the answer is always the same one.
+    case "lead_mark_lost":
+      return (
+        <div className="space-y-2">
+          <input className="input" placeholder="Lost reason (required) — e.g. Went with a competitor" maxLength={JOURNEY_LIMITS.leadOutcomeReason} value={String(config.reason ?? "")} onChange={(e) => set("reason", e.target.value)} />
+          <p className="text-xs text-slate-500">
+            Only an <strong>open</strong> lead is marked lost — one already won or lost is left
+            exactly as it is and the step records itself as skipped. Reports group closed-lost
+            leads by this reason, so it is required. Supports {"{{first_name}}"}, {"{{model}}"} and
+            the other message placeholders.
+          </p>
+        </div>
+      );
+    case "lead_mark_won":
+      return (
+        <p className="text-xs text-slate-500">
+          Only an <strong>open</strong> lead is marked won. A lead already won is left alone and
+          the step records itself as skipped, so a journey that runs again cannot count the same
+          sale twice or pay a referral fee twice. To win a lead that was closed, put a
+          “Reopen lead” step in front of this one.
+        </p>
+      );
+    // The module steps have nothing to configure here: what they send is the editable template, linked, and who they
+    // reach comes from the trigger. Saying which trigger is the whole of the help.
+    case "send_review_request":
+      return (
+        <p className="text-xs text-slate-500">
+          Emails the customer a Google review request — the{" "}
+          <a className="underline" href={messageEditorHref("review_service")}>service</a> or{" "}
+          <a className="underline" href={messageEditorHref("review_delivery")}>delivery</a>{" "}
+          template, depending on the trigger. At most once per customer every 90 days, never to someone who
+          opted out, and only with a Google Place ID set up.
+        </p>
+      );
+    case "send_service_reminder":
+      return (
+        <p className="text-xs text-slate-500">
+          Emails the customer that their vehicle is due for a service, once per due date. Needs the “Vehicle is
+          due for a service” trigger. Uses the template picked under Settings → Email → Service reminders, or
+          the <a className="underline" href={messageEditorHref("service_reminder")}>Service reminder</a> template.
+        </p>
+      );
+    case "send_signing_reminder":
+      return (
+        <p className="text-xs text-slate-500">
+          Sends the signer one reminder with their own signing link, by email and WhatsApp (the{" "}
+          <a className="underline" href={messageEditorHref("reminder")}>signing reminder</a> templates). Needs the
+          “Document sent for signing isn&apos;t signed” trigger. Once per signer, and never once they have signed.
+        </p>
+      );
+    case "send_survey_reminder":
+      return (
+        <p className="text-xs text-slate-500">
+          Sends one reminder with the survey link (the{" "}
+          <a className="underline" href={messageEditorHref("survey_reminder")}>survey reminder</a> templates). Needs
+          the “Automatic survey isn&apos;t answered” trigger. Once per survey, never after it is answered.
+        </p>
+      );
+    case "lead_reopen":
+      return (
+        <p className="text-xs text-slate-500">
+          Puts a <strong>won or lost</strong> lead back to open and clears its lost reason. A lead
+          that is already open is left alone and the step records itself as skipped.
+        </p>
+      );
+    case "stop":
+      return <input className="input" placeholder="Reason" value={String(config.reason ?? "")} onChange={(e) => set("reason", e.target.value)} />;
+
+    case "condition": {
+      // A condition authored with its own jump targets keeps them; the builder's own pattern is "carry on, or stop".
+      const ownTargets = depth === 0 && Boolean(config.trueStepId || config.falseStepId) && config.falseStepId !== generatedStopId(step.id);
+      return (
+        <div className="space-y-2">
+          <JourneyConditionGroupEditor value={config.condition} onChange={(group) => set("condition", group)} />
+          <p className="text-xs text-slate-500">
+            {ownTargets
+              ? `Matching customers go to ${String(config.trueStepId || "the next step")}; others go to ${String(config.falseStepId || "the next step")} (set when this journey was written — kept as saved).`
+              : "Matching customers carry on. Others stop here."}
+          </p>
+        </div>
+      );
+    }
+    case "wait_for_condition":
+      return (
+        <div className="space-y-2">
+          <p className="text-xs text-slate-400">Wait until:</p>
+          <JourneyConditionGroupEditor value={config.condition} onChange={(group) => set("condition", group)} />
+          <p className="text-xs text-slate-400">Give up after (at most {JOURNEY_LIMITS.waitDays} days):</p>
+          <TimeoutField minutes={timeout} onChange={(minutes) => set("timeoutMinutes", minutes)} />
+          {carryOn}
+        </div>
+      );
+    case "wait_for_trigger": {
+      const chosen = Array.isArray(config.triggers) ? config.triggers.map(String) : typeof config.triggers === "string" ? [config.triggers] : [];
+      return (
+        <div className="space-y-2">
+          <p className="text-xs text-slate-400">Wait until any of these happens (up to {JOURNEY_LIMITS.waitTriggers}):</p>
+          <div className="grid sm:grid-cols-2 gap-1">
+            {JOURNEY_EVENT_TRIGGERS.map((trigger) => (
+              <label key={trigger} className="flex items-center gap-2 text-xs text-slate-300">
+                <input
+                  type="checkbox"
+                  checked={chosen.includes(trigger)}
+                  disabled={!chosen.includes(trigger) && chosen.length >= JOURNEY_LIMITS.waitTriggers}
+                  onChange={(e) => set("triggers", e.target.checked ? [...chosen, trigger] : chosen.filter((t) => t !== trigger))}
+                />
+                {JOURNEY_TRIGGER_LABELS[trigger]}
+              </label>
+            ))}
+          </div>
+          <p className="text-xs text-slate-400">Give up after (at most {JOURNEY_LIMITS.waitDays} days):</p>
+          <TimeoutField minutes={timeout} onChange={(minutes) => set("timeoutMinutes", minutes)} />
+          {carryOn}
+        </div>
+      );
+    }
+    case "variables": {
+      const entries = Object.entries(isRecord(config.set) ? config.set : {}).map(([name, template]) => [name, String(template ?? "")] as const);
+      const save = (next: (readonly [string, string])[]) => set("set", Object.fromEntries(next));
+      return (
+        <div className="space-y-2">
+          {entries.map(([name, template], i) => (
+            <div key={i} className="grid md:grid-cols-[1fr_2fr_auto] gap-2">
+              <input className="input" aria-label="Variable name" placeholder="name (letters, numbers, _)" value={name} onChange={(e) => save(entries.map((entry, j) => (j === i ? [e.target.value.trim(), entry[1]] as const : entry)))} />
+              <input className="input" aria-label="Value" placeholder="Value — may use {{first_name}} and the other placeholders" maxLength={JOURNEY_LIMITS.variableChars} value={template} onChange={(e) => save(entries.map((entry, j) => (j === i ? [entry[0], e.target.value] as const : entry)))} />
+              <button type="button" className="text-xs text-red-400 px-2 disabled:opacity-40" disabled={entries.length === 1} onClick={() => save(entries.filter((_, j) => j !== i))}>Remove</button>
+            </div>
+          ))}
+          {entries.length < JOURNEY_LIMITS.variables && <button type="button" className="btn-secondary btn-sm" onClick={() => save([...entries, [`var${entries.length + 1}`, ""]])}>+ Variable</button>}
+          <p className="text-xs text-slate-500">Use one later as {"{{var_name}}"} in a message, or as “A journey variable” in a condition.</p>
+        </div>
+      );
+    }
+    case "choose": {
+      const options = Array.isArray(config.options) ? config.options.map((o) => (isRecord(o) ? o : {})) : [];
+      const setOption = (i: number, option: Record<string, unknown>) => set("options", options.map((o, j) => (j === i ? option : o)));
+      const fallback = Array.isArray(config.default) ? (config.default as BuilderStep[]) : null;
+      return (
+        <div className="space-y-3">
+          <p className="text-xs text-slate-400">The first branch whose conditions match runs; the rest are skipped.</p>
+          {options.map((option, i) => (
+            <div key={i} className="rounded-lg border border-slate-700/70 p-3 space-y-2">
+              <div className="flex items-center justify-between">
+                <p className="text-sm font-medium text-slate-200">Branch {i + 1}</p>
+                <button type="button" className="text-xs text-red-400 disabled:opacity-40" disabled={options.length === 1} onClick={() => set("options", options.filter((_, j) => j !== i))}>Remove branch</button>
+              </div>
+              {option.conditions == null ? (
+                <p className="text-xs text-slate-400">Everyone who gets here. <button type="button" className="text-orange-300 underline" onClick={() => setOption(i, { ...option, conditions: emptyGroup() })}>Add conditions</button></p>
+              ) : (
+                <JourneyConditionGroupEditor value={option.conditions} onChange={(group) => setOption(i, { ...option, conditions: group })} />
+              )}
+              <p className="text-xs text-slate-400">Then:</p>
+              <StepList steps={Array.isArray(option.sequence) ? (option.sequence as BuilderStep[]) : []} onChange={(seq) => setOption(i, { ...option, sequence: seq })} depth={depth + 1} lists={lists} />
+            </div>
+          ))}
+          {options.length < JOURNEY_LIMITS.chooseOptions && (
+            <button type="button" className="btn-secondary btn-sm" onClick={() => set("options", [...options, { conditions: emptyGroup(), sequence: [newWaitStep()] }])}>+ Branch</button>
+          )}
+          <label className="flex items-center gap-2 text-xs text-slate-300">
+            <input type="checkbox" checked={Boolean(fallback)} onChange={(e) => {
+              const next = { ...config };
+              if (e.target.checked) next.default = [newWaitStep()]; else delete next.default;
+              onChange({ ...step, config: next });
+            }} />
+            If no branch matches, run other steps (otherwise carry on below)
+          </label>
+          {fallback && <StepList steps={fallback} onChange={(seq) => set("default", seq)} depth={depth + 1} lists={lists} />}
+        </div>
+      );
+    }
+    case "repeat": {
+      const mode = String(config.mode ?? "count");
+      return (
+        <div className="space-y-2">
+          <select className="input" aria-label="Repeat how" value={mode} onChange={(e) => {
+            const next: Record<string, unknown> = { ...config, mode: e.target.value };
+            if ((e.target.value === "while" || e.target.value === "until") && !isRecord(next[e.target.value])) next[e.target.value] = emptyGroup();
+            if (e.target.value === "count" && !next.count) next.count = 2;
+            onChange({ ...step, config: next });
+          }}>
+            {REPEAT_MODES.map((m) => <option key={m} value={m}>{m === "count" ? "A set number of times" : m === "while" ? "While conditions match" : m === "until" ? "Until conditions match" : "Once for each item in a list"}</option>)}
+          </select>
+          {mode === "count" && <input className="input" type="number" min={1} max={JOURNEY_LIMITS.repeatIterations} aria-label="Times" value={String(config.count ?? 2)} onChange={(e) => set("count", Number(e.target.value))} />}
+          {(mode === "while" || mode === "until") && <JourneyConditionGroupEditor value={config[mode]} onChange={(group) => set(mode, group)} />}
+          {mode === "for_each" && (Array.isArray(config.items) ? (
+            <input className="input" aria-label="Items" placeholder="item one, item two" value={config.items.map(String).join(", ")} onChange={(e) => set("items", e.target.value.split(",").map((v) => v.trim()).filter(Boolean))} />
+          ) : (
+            <input className="input" aria-label="List to go through" placeholder="e.g. contact.tags" value={String(config.itemsPath ?? "")} onChange={(e) => set("itemsPath", e.target.value.trim())} />
+          ))}
+          <p className="text-xs text-slate-500">Stops after {JOURNEY_LIMITS.repeatIterations} rounds whatever happens. Inside the loop, conditions can use “Loop: round number” and “Loop: current item”.</p>
+          <p className="text-xs text-slate-400">Each round:</p>
+          <StepList steps={Array.isArray(config.sequence) ? (config.sequence as BuilderStep[]) : []} onChange={(seq) => set("sequence", seq)} depth={depth + 1} lists={lists} />
+        </div>
+      );
+    }
+    default:
+      return null;
+  }
 }

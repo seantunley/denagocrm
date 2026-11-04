@@ -165,7 +165,7 @@ export const journeysArticles: HelpArticle[] = [
         "**Condition / branch** — matching records continue; non-matches stop safely.",
         "**Stop journey** — end the run here, with a reason.",
       ] },
-      { type: "p", text: "Four more step types exist and are more powerful, but have **no visual editor yet** — **Choose (branches)**, **Repeat (loop)**, **Wait for an event** and **Set variables**. They appear in the step list with an amber panel and a short summary, and are carried through untouched when you edit the rest of the journey. See the separate guides for what each one does." },
+      { type: "p", text: "Five more step types are more powerful: **Choose (branches)**, **Repeat (loop)**, **Wait for an event**, **Wait until true** and **Set variables**. Each has its own editor in the step list. A branch or a loop holds its own list of steps, shown indented under it, and you add, move and remove those steps the same way. See the separate guides for what each one does." },
       { type: "h", text: "If a step fails" },
       { type: "p", text: "By default a failed step fails the whole run. The run is retried, but only **three times** in total, after which it stays failed." },
       { type: "p", text: "Tick **Keep going if this step fails** on any step that is a nice-to-have rather than the point of the journey — a courtesy SMS, say — and a provider outage on that one step will not kill the run. The trace records it as **Continued past error** so nothing is hidden. The tick box is offered on the sending and CRM steps and on Condition; not on Wait or Stop, where it would mean nothing." },
@@ -367,7 +367,7 @@ export const journeysArticles: HelpArticle[] = [
   {
     slug: "journeys-branches-and-loops",
     title: "Journeys: branches and loops",
-    summary: "Choose steps for real branching, Repeat steps for loops, the loop variables available inside them — and the fact that both are authored as JSON.",
+    summary: "Choose steps for real branching, Repeat steps for loops, and the loop variables available inside them.",
     category: "marketing",
     audience: "admins",
     keywords: [
@@ -390,7 +390,13 @@ export const journeysArticles: HelpArticle[] = [
     ],
     body: [
       { type: "p", text: "Two step types give a journey real control flow: **Choose (branches)** picks one path out of several, and **Repeat (loop)** runs a sequence of steps more than once." },
-      { type: "callout", tone: "warning", text: "**Neither has a visual editor yet.** Both are authored as JSON, outside the builder form. In the builder they show as an amber panel with a one-line summary and this note: \"There is no visual editor for this step yet — it is authored as JSON. It is carried through this form exactly as saved, so editing the rest of the journey cannot damage it.\" The type dropdown is locked on those steps so a stray click cannot wipe the branches. Everything else in the journey stays fully editable." },
+      { type: "list", items: [
+        "**Choose:** each branch has its conditions and, under **Then**, its own steps. The first branch whose conditions match runs. A branch with no conditions matches everyone who reaches it. Tick **If no branch matches, run other steps** to add steps for everyone else. Otherwise they carry on below the Choose step.",
+        "**Repeat:** pick how it repeats: a set number of times, while or until conditions match, or once for each item in a list. Then add the steps under **Each round**. A loop always stops after 100 rounds.",
+        "Conditions can be **All of these**, **Any of these** or **None of these**, and can hold groups inside groups.",
+        "Inside a branch or loop, a **Condition** step works as a gate: customers who don't match stop there. Use Choose when you want an \"otherwise\".",
+        "Changing a Choose or Repeat step to another type asks first, because its branches and their steps are removed.",
+      ] },
       { type: "p", text: "In practice that means asking whoever configures your workspace to set one up. This article explains what they do so you can specify what you want and read the trace afterwards." },
       { type: "h", text: "Choose: one path out of several" },
       { type: "p", text: "A Choose step holds a list of options. Each option has its own conditions and its own sequence of steps. The **first** option whose conditions match is the one that runs — the rest are not even evaluated. An optional **default** sequence runs when nothing matched." },
@@ -448,7 +454,7 @@ export const journeysArticles: HelpArticle[] = [
     body: [
       { type: "p", text: "The ordinary **Wait** step waits for a length of time. **Wait for an event** waits for something to actually happen: it parks the run until one of the events you name arrives **for that same person**." },
       { type: "p", text: "That is what lets a journey stop chasing. \"Send the quote, then wait up to seven days for it to be signed; if it is signed, carry on to the handover sequence; if it is not, send the reminder.\"" },
-      { type: "callout", tone: "warning", text: "Like branches and loops, this step has **no visual editor yet** — it is authored as JSON. The builder shows it as an amber panel summarising what it watches and how long for, and carries it through untouched while you edit the rest of the journey." },
+      { type: "p", text: "In the builder, tick the events to wait for (up to 5), set how long to wait before giving up (up to 30 days), and choose whether the journey carries on or ends when it gives up." },
       { type: "h", text: "What it can wait for" },
       { type: "p", text: "Up to **five** of the event triggers, and any one of them arriving is enough to wake the run: new lead created, lead enters a stage, lead won, lead lost, quote signed, quote declined, vehicle delivered, referral earned." },
       { type: "callout", tone: "info", text: "The swept triggers — idle lead, contact segment, purchase anniversary, win-back — **cannot** be waited for. Nothing writes an event for those; the system finds matching records by sweeping them on a schedule, so a wait on one would be a guaranteed timeout dressed up as a feature. The journey refuses to save if you try." },
@@ -489,7 +495,7 @@ export const journeysArticles: HelpArticle[] = [
     ],
     body: [
       { type: "p", text: "A **Set variables** step stores named values on the run. Later steps can drop them into message text and test them in conditions, so a journey can decide something once and reuse the answer all the way through." },
-      { type: "callout", tone: "warning", text: "This step has **no visual editor yet** — it is authored as JSON, like branches, loops and Wait for an event. The builder shows it as an amber panel listing the names it sets, and carries it through unchanged while you edit the rest of the journey." },
+      { type: "p", text: "In the builder, add a row for each variable: its name (letters, numbers and _) and its value. Up to 10 per step." },
       { type: "h", text: "How to refer to one" },
       { type: "table", headers: ["Where", "How you write it", "Example"], rows: [
         ["In a message body or subject", "**{{var_ + the name}}**", "A variable called `offer` is written **{{var_offer}}**"],
