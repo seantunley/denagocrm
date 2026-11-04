@@ -11,6 +11,30 @@ import { WorkspaceHero } from "@/components/workspace-hero";
 import { EmptyState, StatusPill, Surface } from "@/components/visual-system";
 import { builderTenantId } from "@/lib/flowScope";
 import { flowTenantWhere } from "@/lib/flowTenantScope";
+import { diffFlowVersions, noDifferences, type FlowVersionDiff } from "@/lib/flowVersionDiff";
+
+/** One diff, in words: steps added / removed / edited, and the connections that moved. */
+function DiffList({ diff, same }: { diff: FlowVersionDiff; same: string }) {
+  if (!diff.comparable) return <p className="mt-2 text-xs text-muted-foreground">One of these versions can&apos;t be read, so they can&apos;t be compared.</p>;
+  if (noDifferences(diff)) return <p className="mt-2 text-xs text-muted-foreground">{same}</p>;
+  const section = (title: string, items: string[], tone: string) =>
+    items.length > 0 && (
+      <div>
+        <p className={`text-[10px] font-semibold uppercase tracking-wide ${tone}`}>{title} ({items.length})</p>
+        <ul className="mt-1 space-y-0.5 text-xs">{items.slice(0, 40).map((item, i) => <li key={i}>{item}</li>)}{items.length > 40 && <li className="text-muted-foreground">…and {items.length - 40} more</li>}</ul>
+      </div>
+    );
+  return (
+    <div className="mt-2 grid gap-3 md:grid-cols-2">
+      {diff.startChanged && <p className="text-xs md:col-span-2">Starts at “{diff.startChanged.to}” instead of “{diff.startChanged.from}”.</p>}
+      {section("Steps added", diff.added, "text-emerald-300")}
+      {section("Steps removed", diff.removed, "text-red-300")}
+      {section("Steps edited", diff.changed.map((c) => `${c.label} — ${c.fields.join(", ")}`), "text-amber-300")}
+      {section("Connections added", diff.connectionsAdded, "text-emerald-300")}
+      {section("Connections removed", diff.connectionsRemoved, "text-red-300")}
+    </div>
+  );
+}
 
 /**
  * `createdAt`, because that is the column that exists.
@@ -67,7 +91,7 @@ export default async function FlowVersionsPage({ params }: { params: Promise<{ i
         icon={History}
         eyebrow="Published conversation history"
         title={`${flow.name} · versions`}
-        description="Inspect immutable published snapshots and restore an older one into the draft without changing what live or in-progress customer conversations are currently running."
+        description="See what changed in each published version, preview how restoring one would change your draft, and restore it without changing what live or in-progress customer conversations are running."
         stats={[
           { label: "Published versions", value: versions.length, icon: History },
           { label: "Live flow", value: flow.active ? "Yes" : "No", icon: ShieldCheck, tone: flow.active ? "success" : "default" },
@@ -98,6 +122,18 @@ export default async function FlowVersionsPage({ params }: { params: Promise<{ i
                   <input type="hidden" name="expectedUpdatedAt" value={flow.updatedAt.toISOString()} />
                   <button className="btn-secondary btn-sm"><RotateCcw className="size-3.5" />Restore to draft</button>
                 </form>
+              </div>
+              <div className="mt-3 space-y-2">
+                {versions[index + 1] && (
+                  <details className="rounded-lg border border-white/10 px-3 py-2">
+                    <summary className="cursor-pointer text-xs font-medium">What changed from version {Number(versions[index + 1].version)}</summary>
+                    <DiffList diff={diffFlowVersions(versions[index + 1].definition, version.definition)} same="Nothing changed — it was published again as it was." />
+                  </details>
+                )}
+                <details className="rounded-lg border border-white/10 px-3 py-2">
+                  <summary className="cursor-pointer text-xs font-medium">Preview restore — how your draft would change</summary>
+                  <DiffList diff={diffFlowVersions(flow.definition, version.definition)} same="Your draft already matches this version." />
+                </details>
               </div>
             </Surface>
           ))}

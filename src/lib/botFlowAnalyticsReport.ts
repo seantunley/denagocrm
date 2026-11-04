@@ -9,6 +9,7 @@ import {
   type BotAnalyticsFilters,
 } from "./botFlowAnalyticsFilters";
 import type { Flow, FlowNode } from "./flow";
+import { nodeLabel } from "./flowVersionDiff";
 
 export type FlowVersionReportMeta = { id: string; version: number; publishedAt: Date };
 export type FlowChannelAnalytics = {
@@ -81,22 +82,6 @@ type VersionPerformanceRow = {
 
 const n = (value: bigint | number | null | undefined) => Number(value ?? 0);
 
-function nodeLabel(node: FlowNode | undefined, nodeId: string): string {
-  if (!node) return nodeId;
-  if (node.type === "message" || node.type === "handoff") return node.text?.trim().slice(0, 70) || nodeId;
-  if (node.type === "choice" || node.type === "capture" || node.type === "captureFile" || node.type === "slots") return node.text.trim().slice(0, 70) || nodeId;
-  if (node.type === "answer") return node.answerSource ? `Answer: ${node.answerSource}` : node.text?.trim().slice(0, 70) || nodeId;
-  if (node.type === "booking") return `CRM action: ${node.action ?? "service"}`;
-  if (node.type === "journey") return `Journey: ${node.journeyId}`;
-  if (node.type === "condition") return `Condition: ${node.condition.variable} ${node.condition.operator}`;
-  if (node.type === "image") return node.caption?.trim().slice(0, 70) || "Image";
-  if (node.type === "document") return `Document: ${node.fileName || "file"}`.slice(0, 70);
-  if (node.type === "contactCard") return node.staffUserId ? "Contact card (staff member)" : "Contact card";
-  if (node.type === "ai") return "AI conversation";
-  if (node.type === "hours") return "Opening hours";
-  if (node.type === "goto") return `Go to: ${node.targetLabel || node.target}`.slice(0, 70);
-  return "End";
-}
 
 function isInteractive(node: FlowNode | undefined): boolean {
   return node?.type === "choice" || node?.type === "capture" || node?.type === "captureFile" || node?.type === "slots";
