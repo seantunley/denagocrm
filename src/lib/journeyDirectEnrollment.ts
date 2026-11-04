@@ -3,6 +3,11 @@ import { prisma } from "./db";
 import { enqueueJourneyRun, getActiveVersion, REFUSAL_REASONS } from "./journeyEngineShared";
 import { journeyTenantId } from "./journeyTenant";
 import type { JourneyEntityType } from "./journeyContext";
+import { JOURNEY_LIMITS } from "./journeyTypes";
+import { handedOverVars } from "./journeyVariables";
+
+const followUpLabel = (minutes: number) =>
+  minutes % 1440 === 0 ? `${minutes / 1440} day${minutes === 1440 ? "" : "s"}` : minutes % 60 === 0 ? `${minutes / 60} hour${minutes === 60 ? "" : "s"}` : `${minutes} minute${minutes === 1 ? "" : "s"}`;
 
 export type DirectJourneyEnrolment = {
   ok: boolean;
@@ -28,6 +33,9 @@ export async function enrollEntityInJourney(input: {
   entityId: string;
   eventKey: string;
   payload?: Record<string, unknown>;
+  /** A follow-up: minutes until the first step is due (capped at 30 days), and saved answers handed over as variables. */
+  delayMinutes?: number;
+  handOver?: Record<string, string>;
 }): Promise<DirectJourneyEnrolment> {
   const tenantId = journeyTenantId();
   const journey = await prisma.journey.findFirst({
@@ -44,6 +52,7 @@ export async function enrollEntityInJourney(input: {
     : await prisma.contact.findFirst({ where: { id: input.entityId, tenantId }, select: { id: true } });
   if (!owned) return { ok: false, reason: "Customer record not found in this workspace" };
 
+  const delayMinutes = Math.min(Math.max(0, Math.round(input.delayMinutes ?? 0)), JOURNEY_LIMITS.waitDays * 1440);
   const outcome = await enqueueJourneyRun({
     journey,
     version,
@@ -55,12 +64,14 @@ export async function enrollEntityInJourney(input: {
       type: "chatbot_start",
       source: "chatbot",
     },
+    ...(delayMinutes ? { startAt: new Date(Date.now() + delayMinutes * 60_000) } : {}),
+    vars: handedOverVars(input.handOver ?? {}),
   });
   if (outcome.enrolled) {
     return {
       ok: true,
       runId: outcome.runId,
-      reason: outcome.status === "blocked" ? "queued behind an existing run" : "enrolled",
+      reason: outcome.status === "blocked" ? "queued behind an existing run" : delayMinutes ? `enrolled — starts in ${followUpLabel(delayMinutes)}` : "enrolled",
     };
   }
   // A retry of the same chatbot event is business success: the run already

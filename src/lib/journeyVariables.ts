@@ -1,5 +1,5 @@
 import { AbortJourney } from "./journeyControlFlow";
-import { JOURNEY_LIMITS, type JourneyVariableAssignment } from "./journeyTypes";
+import { JOURNEY_LIMITS, VARIABLE_NAME, type JourneyVariableAssignment } from "./journeyTypes";
 import { renderTemplate } from "./template";
 
 /**
@@ -112,6 +112,23 @@ export function applyJourneyVariables(args: {
     );
   }
   return { vars, truncated };
+}
+
+/**
+ * Values a chatbot hands a Journey when it enrols someone (a Start Journey step's "hand over" list) — they become the
+ * run's starting variables. The same rules as a `variables` step: a safe name, each value capped, the whole bag under
+ * the byte limit. A value that would break a cap is LEFT OUT rather than failing the enrolment: the follow-up still
+ * starts, and a missing {{var_x}} renders blank.
+ */
+export function handedOverVars(raw: Record<string, string>): Record<string, string> {
+  let out: Record<string, string> = {};
+  for (const [name, value] of Object.entries(raw)) {
+    if (!VARIABLE_NAME.test(name) || typeof value !== "string") continue;
+    const next = { ...out, [name]: value.slice(0, JOURNEY_LIMITS.variableChars) };
+    if (Object.keys(next).length > JOURNEY_LIMITS.variables || JSON.stringify(next).length > JOURNEY_LIMITS.variableBytes) continue;
+    out = next;
+  }
+  return out;
 }
 
 /** `{{var_<name>}}` keys for renderTemplate. See template.ts for the dot rule. */

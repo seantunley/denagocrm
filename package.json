@@ -27,6 +27,7 @@
     "test:integrity": "tsx --tsconfig tsconfig.scripts.json scripts/test-integrity.ts",
     "test:scoped-transactions": "tsx --tsconfig tsconfig.harness.json scripts/test-scoped-transactions.ts",
     "test:email-bounces": "tsx --tsconfig tsconfig.harness.json scripts/test-email-bounces.ts",
+    "test:journey-delayed-release": "tsx --tsconfig tsconfig.harness.json scripts/test-journey-delayed-release.ts",
     "test:dax-send-facts": "tsx --tsconfig tsconfig.harness.json scripts/test-dax-send-facts.ts",
     "test:assistant-task": "tsx --tsconfig tsconfig.harness.json scripts/test-assistant-task.ts",
     "test:assistant-goals": "tsx --tsconfig tsconfig.harness.json scripts/test-assistant-goals.ts",

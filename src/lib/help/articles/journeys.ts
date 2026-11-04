@@ -502,6 +502,8 @@ export const journeysArticles: HelpArticle[] = [
         ["In a condition", "**vars. + the name**", "A variable called `offer` is the field **vars.offer**"],
       ] },
       { type: "callout", tone: "info", text: "Note the difference: templates need the **var_** prefix, conditions need the **vars.** prefix. Variables always live under their own name, which is what stops one ever being confused with the lead's, the contact's or the loop's own values." },
+      { type: "h", text: "Follow-ups from the chatbot" },
+      { type: "p", text: "A chatbot flow's **Start Journey** step can start a Journey as a follow-up. Set **Journey starts** to **As a follow-up, after…** and choose how long, up to 30 days. Then tick the customer's answers to hand over, such as their name or the model they asked about. Each one reaches the Journey as a variable, so a follow-up message can say {{var_model}}. The Journey does the waiting and the sending. The chatbot carries on with its next step straight away." },
       { type: "h", text: "Rules to know" },
       { type: "list", items: [
         "A name starts with a letter and then allows letters, numbers and underscores, up to 40 characters.",
