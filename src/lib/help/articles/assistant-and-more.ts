@@ -364,6 +364,24 @@ export const assistantAndMoreArticles: HelpArticle[] = [
     ],
   },
 
+  {
+    slug: "chatbot-flow-builder-tips",
+    title: "Chatbot flow builder: working on a flow",
+    summary: "Shortcuts for building and changing a chatbot flow without breaking the live one.",
+    category: "automation",
+    audience: "admins",
+    keywords: ["flow builder", "chatbot flow", "switch off a step", "skip a step", "disable step", "bot builder"],
+    body: [
+      { type: "h", text: "Switch a step off" },
+      { type: "p", text: "To skip a step for a while without deleting it — say the price list while it's being updated — select it and untick **Step is on**. Customers then go straight on to the next step, as if it weren't there. The step stays on the canvas, greyed out and marked **OFF**, with everything you set up in it." },
+      { type: "list", items: [
+        "It takes effect when you publish, like any other change. The test chat and saved tests skip it too.",
+        "Only steps with one way on can be switched off. Choices, conditions, opening hours and other steps that decide where the customer goes next can't be, because there's no single \"next\" to skip to.",
+        "If nothing comes after a switched-off step, the conversation ends there. The builder warns you about every switched-off step so none is published by accident.",
+      ] },
+    ],
+  },
+
   // ── Today and lead scores ─────────────────────────────────────────────
   {
     slug: "today-who-to-contact-next",

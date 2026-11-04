@@ -62,7 +62,7 @@ import {
 } from "@xyflow/react";
 import { saveFlow, resetFlow } from "@/app/actions/flow";
 import { uploadCampaignImage } from "@/app/actions/campaigns";
-import { isAnnotation, type AnnotationColor, type BookingAction, type ConditionOperator, type CrmUpdateAction, type FlowHttpMethod, type FlowNode, type SlotAction } from "@/lib/flow";
+import { CAN_SWITCH_OFF, isAnnotation, isSwitchedOff, type AnnotationColor, type BookingAction, type ConditionOperator, type CrmUpdateAction, type FlowHttpMethod, type FlowNode, type SlotAction } from "@/lib/flow";
 import ConfirmActionDialog from "@/components/ConfirmActionDialog";
 import EmojiButton from "@/components/EmojiButton";
 import { stepNumbersLine, type StepNumbers } from "@/lib/flowStepNumbers";
@@ -233,6 +233,7 @@ function NodeCard({ data, selected }: NodeProps) {
       "relative w-60 rounded-xl border bg-slate-950/95 text-slate-100 shadow-xl transition-[box-shadow,border-color,transform] duration-150",
       errors ? "border-red-400/80 ring-2 ring-red-400/20" : warnings ? "border-amber-400/70 ring-2 ring-amber-400/15" : d.isStart ? "border-orange-400/70 ring-2 ring-orange-400/15" : meta.tone,
       d.replay && (d.replay.length ? "ring-2 ring-orange-400/60" : "opacity-30"),
+      isSwitchedOff(n) && "border-dashed opacity-50",
     )}>
       {d.replay && d.replay.length > 0 && <span className="absolute -left-2 -top-2 z-10 rounded-full border border-slate-950 bg-orange-500 px-1.5 py-0.5 text-[10px] font-bold text-white" title="Replay step numbers">{d.replay.length > 3 ? `${d.replay.slice(0, 3).join(", ")}…` : d.replay.join(", ")}</span>}
       {(errors > 0 || warnings > 0) && <span className={cn("absolute -right-2 -top-2 z-10 grid min-w-6 place-items-center rounded-full border border-slate-950 px-1.5 py-0.5 text-[10px] font-bold text-white", errors ? "bg-red-500" : "bg-amber-500")}>{errors || warnings}<span className="sr-only">{errors ? "errors" : "warnings"}</span></span>}
@@ -240,7 +241,8 @@ function NodeCard({ data, selected }: NodeProps) {
       <div className={cn("flex items-center gap-1.5 rounded-t-[11px] px-3 py-2 text-xs font-semibold", meta.header)}>
         <Icon className="size-3.5" />
         {meta.label}
-        {d.isStart && <span className="ml-auto rounded bg-orange-600 px-1.5 text-[10px]">START</span>}
+        {isSwitchedOff(n) && <span className="ml-auto rounded bg-slate-600 px-1.5 text-[10px] text-white" title="Switched off — customers skip this step">OFF</span>}
+        {d.isStart && <span className={cn("rounded bg-orange-600 px-1.5 text-[10px]", !isSwitchedOff(n) && "ml-auto")}>START</span>}
       </div>
       <div className="min-h-8 whitespace-pre-wrap px-3 py-2 text-xs leading-5 text-slate-300">{summary(n) || "…"}</div>
       {numbers && <div className="border-t border-slate-800 px-3 py-1 text-[10px] font-medium text-emerald-300/90" title="Last 30 days">{numbers}</div>}
@@ -1050,6 +1052,12 @@ function NodePanel({ node, isStart, nodeOptions, variables, journeys, flows, doc
           {!isStart && !isAnnotation(node) && <button type="button" onClick={onMakeStart} className="min-h-9 rounded-lg px-2 text-xs text-orange-400 hover:bg-orange-500/10">Set start</button>}
         </div>
       </div>
+      {CAN_SWITCH_OFF.has(node.type) && (
+        <label className={cn("flex items-start gap-2 rounded-lg border px-3 py-2 text-sm", node.off ? "border-amber-400/40 bg-amber-500/10 text-amber-100" : "border-white/10 text-slate-300")}>
+          <input type="checkbox" className="mt-0.5 h-4 w-4" checked={!node.off} onChange={(e) => onChange({ ...node, off: e.target.checked ? undefined : true })} />
+          <span>Step is on<span className="block text-xs text-slate-400">{node.off ? "Off: customers skip this step and go straight on. Switch it back on when it's ready." : "Untick to skip it for now without deleting it — e.g. the price list while it's being updated."}</span></span>
+        </label>
+      )}
 
       {(node.type === "message" || node.type === "handoff") && <div><div className="flex items-center justify-between"><label className="label" htmlFor={`msg-${node.id}`}>Message</label><EmojiButton targetId={`msg-${node.id}`} value={node.text ?? ""} onChange={(text) => onChange({ ...node, text })} /></div><textarea id={`msg-${node.id}`} className="input" rows={4} value={node.text ?? ""} onChange={(e) => onChange({ ...node, text: e.target.value })} /></div>}
       {node.type === "handoff" && <><div><label className="label">Handoff reason</label><input className="input" value={node.reason ?? ""} onChange={(e) => onChange({ ...node, reason: e.target.value || undefined })} placeholder="Sales enquiry" /></div><div><label className="label">Staff summary</label><textarea className="input" rows={3} value={node.summary ?? ""} onChange={(e) => onChange({ ...node, summary: e.target.value || undefined })} placeholder="Include {{variables}} collected by the flow" /><p className="mt-1 text-xs text-slate-500">The live conversation lands in the Inbox; this controls why, and with what context, it is handed over.</p></div></>}
