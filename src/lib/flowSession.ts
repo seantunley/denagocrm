@@ -14,6 +14,7 @@ import { recordBotFlowEventsTx, type BotFlowEventInput } from "./botFlowAnalytic
 import { completeInboundBotEventTx, currentInboundBotClaim } from "./botInboundEvent";
 import { decideInboundAct, HUMAN_RESPONSIBILITY_HOURS, type BotOwnership } from "./botOwnership";
 import type { FlowEntryContext } from "./flowRouting";
+import { flowSharedVars } from "./flowSharedValuesServer";
 
 export type SessionState = {
   nodeId: string | null;
@@ -115,7 +116,8 @@ export async function advanceFlow(
   entryContext?: FlowEntryContext,
 ): Promise<ChannelResult> {
   const existing = await loadState(channel, key);
-  const builtins = flowRuntimeVars(channel);
+  // Shared values (Flows → Shared values) are read fresh every turn, so an edit reaches live conversations at once.
+  const builtins = { ...(await flowSharedVars()), ...flowRuntimeVars(channel) };
 
   // `status` alone could not say WHY the bot was quiet, so a customer greeting a
   // salesperson mid-conversation restarted the flow on top of them. The decision

@@ -8,6 +8,7 @@ import {
   Bot,
   BookOpen,
   KeyRound,
+  Braces,
   ChevronDown,
   FlaskConical,
   GitBranch,
@@ -37,6 +38,7 @@ const workspaceGroups: WorkspaceGroup[] = [
       { label: "Flows", href: "/bot-builder", icon: GitBranch },
       { label: "Routing", href: "/bot-builder/routes", icon: Route },
       { label: "Connections", href: "/bot-builder/connections", icon: KeyRound },
+      { label: "Shared values", href: "/bot-builder/values", icon: Braces },
       { label: "Knowledge", href: "/chatbot/knowledge", icon: BookOpen },
     ],
   },
@@ -60,7 +62,7 @@ const workspaceItems = workspaceGroups.flatMap((group) => group.items);
 function isItemActive(pathname: string, item: WorkspaceItem) {
   if (item.exact) return pathname === item.href;
   const path = item.href.split("?")[0];
-  if (path === "/bot-builder" && (pathname.startsWith("/bot-builder/routes") || pathname.startsWith("/bot-builder/connections"))) return false;
+  if (path === "/bot-builder" && (pathname.startsWith("/bot-builder/routes") || pathname.startsWith("/bot-builder/connections") || pathname.startsWith("/bot-builder/values"))) return false;
   return pathname === path || pathname.startsWith(`${path}/`);
 }
 
@@ -103,7 +105,7 @@ function DesktopGroup({ group, pathname, separated }: { group: WorkspaceGroup; p
 export default function ChatbotWorkspaceNav() {
   const pathname = usePathname();
   const [mobileOpen, setMobileOpen] = useState(false);
-  const isFlowWorkspace = pathname.startsWith("/bot-builder/") && !pathname.startsWith("/bot-builder/routes") && !pathname.startsWith("/bot-builder/connections");
+  const isFlowWorkspace = pathname.startsWith("/bot-builder/") && !pathname.startsWith("/bot-builder/routes") && !pathname.startsWith("/bot-builder/connections") && !pathname.startsWith("/bot-builder/values");
 
   if (isFlowWorkspace) return null;
 

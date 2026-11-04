@@ -3,6 +3,7 @@ import { prisma } from "./db";
 import { builderTenantId, journeyScope } from "./flowScope";
 import type { Flow } from "./flow";
 import { flowDocumentIssues } from "./flowDocuments";
+import { flowSharedVars } from "./flowSharedValuesServer";
 import { flowErrors, publishSeverity, validateFlow, type FlowChannel, type FlowIssue } from "./flowValidation";
 
 export async function enabledFlowChannels(): Promise<FlowChannel[]> {
@@ -19,7 +20,7 @@ export async function enabledFlowChannels(): Promise<FlowChannel[]> {
  * must not discover that only after reaching the node.
  */
 export async function validateFlowForEnabledChannels(flow: Flow): Promise<FlowIssue[]> {
-  const issues = validateFlow(flow, await enabledFlowChannels());
+  const issues = validateFlow(flow, await enabledFlowChannels(), Object.keys(await flowSharedVars()));
 
   // Publication is the migration boundary for the action-outcome contract; see
   // publishSeverity. Editing stays permissive, a new publication does not.

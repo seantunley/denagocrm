@@ -17,6 +17,7 @@ import { EmptyState, StatusPill, Surface } from "@/components/visual-system";
 import { builderTenantId, flowScope } from "@/lib/flowScope";
 import { DEFAULT_TENANT_ID } from "@/lib/tenant";
 import { FLOW_CHANNELS } from "@/lib/flowRouting";
+import { flowSharedVars } from "@/lib/flowSharedValuesServer";
 
 const channelLabel: Record<string, string> = { whatsapp: "WhatsApp", messenger: "Messenger", instagram: "Instagram", telegram: "Telegram" };
 
@@ -96,10 +97,11 @@ export default async function BotBuilderPage() {
     routesByFlow.set(route.flowId, current);
   }
 
+  const sharedNames = Object.keys(await flowSharedVars());
   const validation = new Map(flows.map((flow) => {
     const parsed = parseDraft(flow.definition);
     const issues = parsed
-      ? validateFlow(parsed, channels)
+      ? validateFlow(parsed, channels, sharedNames)
       : [{ severity: "error" as const, code: "graph.shape", message: "Flow definition is malformed." }];
     return [flow.id, { parsed, issues, errors: flowErrors(issues), warnings: flowWarnings(issues) }];
   }));

@@ -356,7 +356,7 @@ function blankNode(type: FlowNode["type"], id: string): FlowNode {
   }
 }
 
-export default function FlowBuilder({ flowId, initial, journeys = [], flows = [], updatedAt, channels, businessName, documents = [], staff = [], connections = [], crmTags = [], stages = [], stepNumbers = {}, stepNumbersDays = 30 }: { connections?: { id: string; name: string; host: string }[]; flowId: string; initial: FlowData; journeys?: FlowJourneyOption[]; flows?: FlowOptionRef[]; updatedAt: string; channels: FlowChannel[]; businessName: string; documents?: { id: string; name: string }[]; staff?: { id: string; name: string }[]; crmTags?: string[]; stages?: { id: string; name: string }[]; stepNumbers?: StepNumbers; stepNumbersDays?: number }) {
+export default function FlowBuilder({ flowId, initial, journeys = [], flows = [], updatedAt, channels, businessName, documents = [], staff = [], connections = [], crmTags = [], stages = [], stepNumbers = {}, stepNumbersDays = 30, sharedNames = [] }: { connections?: { id: string; name: string; host: string }[]; flowId: string; initial: FlowData; journeys?: FlowJourneyOption[]; flows?: FlowOptionRef[]; updatedAt: string; channels: FlowChannel[]; businessName: string; documents?: { id: string; name: string }[]; staff?: { id: string; name: string }[]; crmTags?: string[]; stages?: { id: string; name: string }[]; stepNumbers?: StepNumbers; stepNumbersDays?: number; sharedNames?: string[] }) {
   const [showNumbers, setShowNumbers] = useState(true);
   const router = useRouter();
   const [start, setStart] = useState(initial.start);
@@ -764,7 +764,7 @@ export default function FlowBuilder({ flowId, initial, journeys = [], flows = []
 
   const selected = rfNodes.find((n) => n.id === selectedId)?.data.flow ?? null;
   const currentFlow = useMemo(() => ({ start, nodes: Object.fromEntries(rfNodes.map((node) => [node.id, node.data.flow])), ...(onFailure ? { onFailure } : {}) }), [rfNodes, start, onFailure]);
-  const liveIssues = useMemo(() => validateFlow(currentFlow, channels), [channels, currentFlow]);
+  const liveIssues = useMemo(() => validateFlow(currentFlow, channels, sharedNames), [channels, currentFlow, sharedNames]);
   const issuesByNode = useMemo(() => {
     const grouped = new Map<string, FlowIssue[]>();
     for (const issue of liveIssues) {
@@ -790,7 +790,7 @@ export default function FlowBuilder({ flowId, initial, journeys = [], flows = []
   // Steps only: a note or group can't be a step's next one.
   const nodeOptions = rfNodes.filter((n) => !isAnnotation(n.data.flow)).map((n) => ({ id: n.id, label: `${TYPE_META[n.data.flow.type].label}: ${summary(n.data.flow).slice(0, 24) || n.data.flow.type}` }));
   const knownVariables = useMemo(() => {
-    const vars = new Set(BUILTIN_VARIABLES);
+    const vars = new Set([...BUILTIN_VARIABLES, ...sharedNames]);
     for (const rn of rfNodes) {
       const node = rn.data.flow;
       if ((node.type === "capture" || node.type === "captureFile" || node.type === "set") && node.variable) vars.add(node.variable);
@@ -798,7 +798,7 @@ export default function FlowBuilder({ flowId, initial, journeys = [], flows = []
       if (node.type === "extract") node.fields.forEach((field) => field && vars.add(field));
     }
     return [...vars].sort();
-  }, [rfNodes]);
+  }, [rfNodes, sharedNames]);
   const currentDraftDefinition = useMemo(() => JSON.stringify({
     start,
     nodes: Object.fromEntries(rfNodes.map((node) => [node.id, node.data.flow])),

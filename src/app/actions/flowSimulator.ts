@@ -10,6 +10,7 @@ import { withActingStaffScope } from "@/lib/actingScope";
 import { getCompanyProfile } from "@/lib/companyProfile";
 import { DEFAULT_SIMULATOR_SCENARIO, type SimulatorScenario } from "@/lib/flowSimulatorScenario";
 import { chatbotOpenNow } from "@/lib/chatbotHours";
+import { flowSharedVars } from "@/lib/flowSharedValuesServer";
 
 export type SimulatorTurnInput = {
   flowId: string;
@@ -43,7 +44,7 @@ export async function simulateFlowTurn(input: SimulatorTurnInput): Promise<Simul
     if (!flow) return { ok: false, error: "Flow data is malformed.", messages: [], session: null, handedOff: false, trace: [], vars: {} };
 
     const scenario = { ...DEFAULT_SIMULATOR_SCENARIO, ...input.scenario };
-    const session: FlowSession = input.session ?? { nodeId: null, vars: { greeting: `Hi there 👋 Welcome to ${(await getCompanyProfile()).name}!`, first_name: "Test", name: "Test" } };
+    const session: FlowSession = input.session ?? { nodeId: null, vars: { ...(await flowSharedVars()), greeting:`Hi there 👋 Welcome to ${(await getCompanyProfile()).name}!`, first_name: "Test", name: "Test" } };
     const trace: string[] = [`Enter: ${session.nodeId ?? flow.start}`, `Scenario: AI ${scenario.ai} · CRM ${scenario.crm} · slots ${scenario.slots}`];
     const turn: FlowInput = { text: input.text ?? "", ...(input.choiceId ? { choiceId: input.choiceId } : {}), ...(input.fileUrl ? { fileUrl: input.fileUrl } : {}) };
 
