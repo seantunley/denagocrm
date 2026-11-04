@@ -370,7 +370,7 @@ export const assistantAndMoreArticles: HelpArticle[] = [
     summary: "Shortcuts for building and changing a chatbot flow without breaking the live one.",
     category: "automation",
     audience: "admins",
-    keywords: ["flow builder", "chatbot flow", "switch off a step", "skip a step", "disable step", "bot builder"],
+    keywords: ["flow builder", "chatbot flow", "switch off a step", "skip a step", "disable step", "bot builder", "find a step", "search the flow"],
     body: [
       { type: "h", text: "Switch a step off" },
       { type: "p", text: "To skip a step for a while without deleting it — say the price list while it's being updated — select it and untick **Step is on**. Customers then go straight on to the next step, as if it weren't there. The step stays on the canvas, greyed out and marked **OFF**, with everything you set up in it." },
@@ -378,6 +378,12 @@ export const assistantAndMoreArticles: HelpArticle[] = [
         "It takes effect when you publish, like any other change. The test chat and saved tests skip it too.",
         "Only steps with one way on can be switched off. Choices, conditions, opening hours and other steps that decide where the customer goes next can't be, because there's no single \"next\" to skip to.",
         "If nothing comes after a switched-off step, the conversation ends there. The builder warns you about every switched-off step so none is published by accident.",
+      ] },
+      { type: "h", text: "Find a step" },
+      { type: "p", text: "Press **Find** (or Ctrl+F) and type a word — \"brochure\", a price, a button's text. Every step that mentions it is listed, with the words around it. Click one, or press Enter for the first, and the canvas zooms to that step and opens it. Esc closes the search." },
+      { type: "list", items: [
+        "It searches what you typed into the steps: messages, button labels, captions, file names, notes, variable names and web addresses.",
+        "It doesn't match on how steps are connected, so a step isn't found just because it leads to one that matches.",
       ] },
     ],
   },
