@@ -370,7 +370,7 @@ export const assistantAndMoreArticles: HelpArticle[] = [
     summary: "Shortcuts for building and changing a chatbot flow without breaking the live one.",
     category: "automation",
     audience: "admins",
-    keywords: ["flow builder", "chatbot flow", "switch off a step", "skip a step", "disable step", "bot builder", "find a step", "search the flow", "quick add", "add a step", "tell someone", "notify staff", "alert", "if anything fails", "fallback", "failure route", "shared values", "business phone", "variables", "changed since publish", "unpublished changes", "review and publish", "export flow", "import flow", "copy flow to another workspace"],
+    keywords: ["flow builder", "chatbot flow", "switch off a step", "skip a step", "disable step", "bot builder", "find a step", "search the flow", "quick add", "add a step", "tell someone", "notify staff", "alert", "if anything fails", "fallback", "failure route", "shared values", "business phone", "variables", "changed since publish", "unpublished changes", "review and publish", "export flow", "import flow", "copy flow to another workspace", "tidy", "arrange", "layout"],
     body: [
       { type: "h", text: "Switch a step off" },
       { type: "p", text: "To skip a step for a while without deleting it — say the price list while it's being updated — select it and untick **Step is on**. Customers then go straight on to the next step, as if it weren't there. The step stays on the canvas, greyed out and marked **OFF**, with everything you set up in it." },
@@ -423,6 +423,9 @@ export const assistantAndMoreArticles: HelpArticle[] = [
         "A key typed into an API step's headers is never put in the file. Keys live in Connections, which aren't exported.",
         "Exports and imports are recorded in the audit log.",
       ] },
+      { type: "h", text: "Tidy the canvas" },
+      { type: "p", text: "Press **Tidy** to line the steps up: the start on the left, then each step one column to the right of the step that leads to it, in the order a customer reaches them (a menu's buttons top to bottom). Steps nothing leads to go in a last column on the right. Notes and groups stay where you put them." },
+      { type: "p", text: "It only moves steps around — nothing about what the bot says or does changes. Press **Undo** to put everything back where it was." },
     ],
   },
 
