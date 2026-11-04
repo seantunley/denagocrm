@@ -128,6 +128,6 @@ test("wiring: the timeout is CLAIMED before any step runs, fenced on the claim, 
   const fence = run.lastIndexOf("botSessionStillWaitingTx(tx"); // the final fence (the first is the action fence)
   assert.ok(fence > run.indexOf("botStillOwnsTx(tx") && fence < run.indexOf("enqueueBotMessagesTx(tx"), "checked after the row is locked, before anything is queued");
   assert.match(readFileSync("src/lib/flowNoReplySweep.ts", "utf8"), /withInboundBotEvent\(\{ rowId: noReplyEventId\(tenantId, row\.key, nodeId, at\), leaseAttempt: null \}/);
-  assert.match(readFileSync("src/app/api/cron/bot-outbox/route.ts", "utf8"), /const noReply = await sweepNoReply\(budget\.shouldStop\);/);
+  assert.match(readFileSync("src/app/api/cron/bot-outbox/route.ts", "utf8"), /const noReply = await sweepNoReply\(budget\.shouldStop\)[.;]/);
   assert.ok(!readFileSync("vercel.json", "utf8").includes("bot-no-reply"), "no faster job of its own: the interval is the bill");
 });

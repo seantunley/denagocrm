@@ -4,7 +4,8 @@
  * BotSession state + transcript and delegates IO to a per-channel FlowCtx.
  */
 import type { BotMsg } from "./botAi";
-import { runFlow, type Flow, type FlowCtx, type FlowInput, type OutMsg } from "./flow";
+import { runFlow, stepFailuresToLog, type Flow, type FlowCtx, type FlowInput, type OutMsg } from "./flow";
+import { logError } from "./errorLog";
 import { outMsgText } from "./flowMedia";
 import { resolveFlowSnapshot } from "./flowPublishing";
 import { withBotConversationWrite } from "./botTenant";
@@ -78,7 +79,14 @@ export type PersistFlowMessages = (
   flowVersionId: string | null,
 ) => Promise<void>;
 
-type ActionObservation = { nodeId: string; action: string; ok: boolean };
+export type ActionObservation = { nodeId: string; action: string; ok: boolean; reason?: string; routine?: boolean };
+
+/** A turn's failed steps to Settings → System Log (see stepFailuresToLog). No customer details: the step and why. */
+export async function logFailedSteps(channel: string, flowVersionId: string | null, actions: ActionObservation[]): Promise<void> {
+  for (const a of stepFailuresToLog(actions)) {
+    await logError("chatbot-step", a.reason || "The step did not complete", `${channel} chatbot · flow version ${flowVersionId ?? "draft"} · step ${a.nodeId} (${a.action})`, { alert: false });
+  }
+}
 
 function analyticsEvents(input: {
   channel: string;
@@ -144,14 +152,15 @@ export async function advanceFlow(
   const actions: ActionObservation[] = [];
   const ctx = makeCtx(state);
   const originalRecordAction = ctx.recordAction;
-  ctx.recordAction = (nodeId, action, ok) => {
-    originalRecordAction?.(nodeId, action, ok);
-    actions.push({ nodeId, action, ok });
+  ctx.recordAction = (nodeId, action, ok, reason, routine) => {
+    originalRecordAction?.(nodeId, action, ok, reason, routine);
+    actions.push({ nodeId, action, ok, reason, routine });
   };
   const entered: string[] = [];
   // This flow's own steps only: the engine does not report a subflow's steps here (runSubflowNode).
   ctx.onStep = (nodeId) => { entered.push(nodeId); };
   const result = await runFlow(snapshot.flow, { nodeId: state.nodeId, vars: state.vars }, input, ctx);
+  await logFailedSteps(channel, snapshot.versionId, actions);
   recordBotMsgs(state, result.messages);
 
   // RUNTIME — `withBotConversationWrite`, for the reasons set out at the matching

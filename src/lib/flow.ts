@@ -24,6 +24,16 @@ export type FlowHttpMethod = "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
  * different words to the customer, so the graph routes them separately.
  */
 export type ActionOutcome = { ok: boolean; unavailable?: boolean; reason?: string };
+
+/**
+ * The failed steps staff must be able to see (runners send them to Settings → System Log): a booking, CRM update,
+ * Journey, alert, web request… that did not happen. Before this, a failed step left no record anywhere.
+ * `routine` marks a miss that is the customer's answer, not a fault — no approved FAQ matched their question, no
+ * value in what they wrote (the step's own `unavailable` outcome). A missing setup or a provider error is not routine.
+ */
+export function stepFailuresToLog<T extends { ok: boolean; routine?: boolean }>(actions: T[]): T[] {
+  return actions.filter((a) => !a.ok && !a.routine);
+}
 export type KnowledgeOutcome = ActionOutcome & { text?: string };
 export type ExtractOutcome = ActionOutcome & { values?: Record<string, string> };
 export type HttpOutcome = ActionOutcome & { status?: number; body?: string };
@@ -194,7 +204,7 @@ export type FlowCtx = {
   /** Internal recursion guard for nested subflows. */
   subflowDepth?: number;
   /** Pure observation hook; runners persist this in the analytics ledger. */
-  recordAction?: (nodeId: string, action: string, ok: boolean) => void;
+  recordAction?: (nodeId: string, action: string, ok: boolean, reason?: string, routine?: boolean) => void;
 };
 
 const FORMAT_RE: Record<string, RegExp> = {
@@ -377,12 +387,12 @@ async function runSlotSelection(node: Extract<FlowNode, { type: "slots" }>, inpu
   // The channel adapter did not supply a reservation handler, so nothing can be
   // booked. Fail closed rather than reporting success for an action that never ran.
   if (!handler) {
-    ctx.recordAction?.(node.id, slotAction, false);
+    ctx.recordAction?.(node.id, slotAction, false, "Booking is unavailable on this channel");
     if (node.failureText) messages.push({ type: "text", text: interpolate(node.failureText, vars) });
     return { nodeId: failRoute(node.failureNext, node.id, fallback) };
   }
   const res = await handler(slotId, vars, node.id);
-  ctx.recordAction?.(node.id, action, res.ok);
+  ctx.recordAction?.(node.id, action, res.ok, res.ok ? undefined : "The chosen time could not be booked");
   if (!res.ok) {
     const opts = ctx.availableSlots ? await ctx.availableSlots() : [];
     if (opts.length) {
@@ -541,7 +551,7 @@ export async function runFlow(flow: Flow, session: FlowSession, input: FlowInput
       // No card (nothing configured, or the staff member left) sends nothing and
       // carries on: the rest of the welcome still goes, and analytics records why.
       const card = ctx.contactCard ? await ctx.contactCard(node.staffUserId || undefined) : null;
-      ctx.recordAction?.(node.id, "contact_card", Boolean(card));
+      ctx.recordAction?.(node.id, "contact_card", Boolean(card), card ? undefined : "No contact card to send");
       if (card) messages.push({ type: "contact", card });
       nodeId = node.next ?? null;
     } else if (node.type === "captureFile") {
@@ -556,7 +566,7 @@ export async function runFlow(flow: Flow, session: FlowSession, input: FlowInput
     } else if (node.type === "knowledge") {
       const query = interpolate(node.query, vars).trim() || input.text.trim();
       const outcome = ctx.knowledgeAnswer ? await ctx.knowledgeAnswer(query, vars, node.id) : { ok: false, reason: "Knowledge search unavailable" };
-      ctx.recordAction?.(node.id, "knowledge_answer", outcome.ok);
+      ctx.recordAction?.(node.id, "knowledge_answer", outcome.ok, outcome.reason, outcome.unavailable);
       if (outcome.ok && outcome.text) {
         messages.push({ type: "text", text: outcome.text });
         if (node.saveAs) vars[node.saveAs] = outcome.text;
@@ -570,7 +580,7 @@ export async function runFlow(flow: Flow, session: FlowSession, input: FlowInput
     } else if (node.type === "extract") {
       const source = node.sourceVariable ? (vars[node.sourceVariable] ?? "") : input.text;
       const outcome = ctx.extractData ? await ctx.extractData({ text: source, instruction: interpolate(node.instruction, vars), fields: node.fields, vars, nodeId: node.id }) : { ok: false, reason: "AI extraction unavailable" };
-      ctx.recordAction?.(node.id, "ai_extract", outcome.ok);
+      ctx.recordAction?.(node.id, "ai_extract", outcome.ok, outcome.reason, outcome.unavailable);
       if (outcome.ok) {
         // Only the CONFIGURED fields may be written. The model is told the same
         // thing, but a vars namespace is not defended by a prompt.
@@ -582,7 +592,7 @@ export async function runFlow(flow: Flow, session: FlowSession, input: FlowInput
       }
     } else if (node.type === "http") {
       const outcome = ctx.httpRequest ? await ctx.httpRequest({ method: node.method, url: interpolate(node.url, vars), headers: node.headers ? interpolate(node.headers, vars) : undefined, ...(node.connectionId ? { connectionId: node.connectionId } : {}),body: node.body ? interpolate(node.body, vars) : undefined, vars, nodeId: node.id }) : { ok: false, reason: "API requests unavailable" };
-      ctx.recordAction?.(node.id, "http_request", outcome.ok);
+      ctx.recordAction?.(node.id, "http_request", outcome.ok, outcome.reason);
       if (outcome.ok) {
         if (node.saveAs) vars[node.saveAs] = outcome.body ?? "";
         nodeId = node.next ?? null;
@@ -597,7 +607,7 @@ export async function runFlow(flow: Flow, session: FlowSession, input: FlowInput
     } else if (node.type === "subflow") {
       const child = await runSubflowNode(node, vars, input, ctx);
       messages.push(...child.messages);
-      ctx.recordAction?.(node.id, "subflow_run", child.outcome.ok);
+      ctx.recordAction?.(node.id, "subflow_run", child.outcome.ok, child.outcome.reason);
       if (child.handedOff) return { messages, session: null, handedOff: true, endedAt: node.id };
       if (child.outcome.ok) nodeId = node.next ?? null;
       else {
@@ -618,10 +628,10 @@ export async function runFlow(flow: Flow, session: FlowSession, input: FlowInput
         // lookup that found nothing — or refused an unidentified customer — still
         // continued down the success branch and relied on later condition nodes to
         // catch it. That made the ENGINE unsafe even where the template was not.
-        ctx.recordAction?.(node.id, `booking_${node.action}`, outcome.ok);
+        ctx.recordAction?.(node.id, `booking_${node.action}`, outcome.ok, outcome.reason);
       } else {
         outcome = await ctx.createBooking(vars, node.action, node.id);
-        ctx.recordAction?.(node.id, `booking_${node.action ?? "service"}`, outcome.ok);
+        ctx.recordAction?.(node.id, `booking_${node.action ?? "service"}`, outcome.ok, outcome.reason);
       }
       nodeId = actionOutcome(node, outcome, vars, messages, takeFallback);
     } else if (node.type === "notify") {
@@ -629,15 +639,15 @@ export async function runFlow(flow: Flow, session: FlowSession, input: FlowInput
       const outcome = ctx.notifyStaff && node.userId
         ? await ctx.notifyStaff({ userId: node.userId, userLabel: node.userLabel, text: interpolate(node.text, vars), nodeId: node.id }).catch((): ActionOutcome => ({ ok: false, reason: "Could not tell them" }))
         : { ok: false, reason: node.userId ? "Notifying staff is unavailable" : "No one chosen" };
-      ctx.recordAction?.(node.id, "notify", outcome.ok);
+      ctx.recordAction?.(node.id, "notify", outcome.ok, outcome.reason);
       nodeId = node.next ?? null;
     } else if (node.type === "crm") {
       const outcome = ctx.updateCrm ? await ctx.updateCrm(node, vars) : { ok: false, reason: "CRM updates are unavailable" };
-      ctx.recordAction?.(node.id, `crm_${node.action}`, outcome.ok);
+      ctx.recordAction?.(node.id, `crm_${node.action}`, outcome.ok, outcome.reason);
       nodeId = actionOutcome(node, outcome, vars, messages, takeFallback);
     } else if (node.type === "journey") {
       const outcome = ctx.startJourney ? await ctx.startJourney(node.journeyId, vars, node.id, journeyFollowUp(node, vars)) : { ok: false, reason: "Journey action unavailable" };
-      ctx.recordAction?.(node.id, "journey_start", outcome.ok);
+      ctx.recordAction?.(node.id, "journey_start", outcome.ok, outcome.reason);
       if (!vars.journey_started) vars.journey_started = outcome.ok ? "yes" : "no";
       if (outcome.reason && !vars.journey_reason) vars.journey_reason = outcome.reason;
       nodeId = actionOutcome(node, outcome, vars, messages, takeFallback);

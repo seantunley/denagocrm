@@ -28,7 +28,11 @@ export async function GET(req: NextRequest) {
     if (budget.shouldStop(4_000)) return { skipped: "deadline" as const };
     // "If no reply within…" (lib/flowNoReplySweep) rides THIS run rather than a faster job of its own: the cron
     // interval is the database bill (tests/cronScheduleCost). What it queues is sent by the flush below.
-    const noReply = await sweepNoReply(budget.shouldStop);
+    // Logged, never fatal: a failed no-reply check must not stop the chatbot's queued messages from sending below.
+    const noReply = await sweepNoReply(budget.shouldStop).catch(async (error: unknown) => {
+      await logError("bot-no-reply", error, "the no-reply check failed; queued chatbot messages still sent", { tenantId }).catch(() => {});
+      return { moved: 0 };
+    });
     return { ...(await flushBotOutbox(50, budget, tenantId)), noReplyMoved: noReply.moved };
   },
     {

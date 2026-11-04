@@ -5,7 +5,7 @@ import { matchByPhone } from "./whatsapp";
 import { generateBotReply, routeBotChoice, type BotMsg } from "./botAi";
 import { notifyHandoff } from "./handoffNotify";
 import { maybeAutoReply } from "./bot";
-import { flowRuntimeVars, greetingVars } from "./flowSession";
+import { flowRuntimeVars, greetingVars, logFailedSteps, type ActionObservation } from "./flowSession";
 import { resolveTenantActor } from "./tenantActor";
 import { crmActions } from "./flowActions";
 import { runFlow, type FlowInput, type FlowSession, type FlowCtx, type FlowHandoffContext } from "./flow";
@@ -32,7 +32,6 @@ const HANDOFF_NODE_VAR = "__handoff_node";
 export async function isFlowEnabled(): Promise<boolean> { return (await getSetting("BOT_ENABLED")) === "true" && (await getSetting("BOT_FLOW_ENABLED")) === "true"; }
 
 type LoadedSession = { nodeId: string | null; vars: Record<string, string>; flowVersionId: string | null; status: string; ownership: BotOwnership };
-type ActionObservation = { nodeId: string; action: string; ok: boolean };
 
 async function loadSession(key: string): Promise<LoadedSession | null> {
   const row = await loadBotSession("whatsapp", key);
@@ -77,7 +76,7 @@ function buildCtx(digits: string, match: { contactId: string | null; leadId: str
   return {
     dynamicAnswer: (source) => source === "colours" ? coloursList() : priceList(),
     routeChoice: ({ prompt, text, options }) => routeBotChoice({ prompt, text, options }),
-    recordAction: (nodeId, action, ok) => actions.push({ nodeId, action, ok }),
+    recordAction: (nodeId, action, ok, reason, routine) => actions.push({ nodeId, action, ok, reason, routine }),
     openNow: (holidaysClosed) => chatbotOpenNow(holidaysClosed),
     aiReply: async () => {
       let name: string | null = null; let isCustomer = false;
@@ -176,8 +175,10 @@ export async function runWhatsAppFlow(digits: string, input: FlowInput, entryCon
           : { allowed: false as const }))
     : null;
   const result = await runFlow(snapshot.flow, session, noReply ? { text: "", timedOut: true } : input, ctx);
-  // Superseded part-way: nothing of this timeout's turn is kept — no reply queued, no session written.
+  // Superseded part-way: nothing of this timeout's turn is kept — no reply queued, no session written, and no failed
+  // step logged (its steps were refused because the customer answered, which is not a fault).
   if (fence?.superseded()) return true;
+  await logFailedSteps("whatsapp", snapshot.versionId, actions);
   // Arm (or clear) the "no reply" deadline for the question it now waits on — from the customer's last message.
   if (result.session) result.session.vars = armNoReply(snapshot.flow, result.session, Date.now(), !noReply);
 
