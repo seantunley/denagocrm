@@ -79,7 +79,7 @@ export type PersistFlowMessages = (
   flowVersionId: string | null,
 ) => Promise<void>;
 
-export type ActionObservation = { nodeId: string; action: string; ok: boolean; reason?: string };
+export type ActionObservation = { nodeId: string; action: string; ok: boolean; reason?: string; routine?: boolean };
 
 /** A turn's failed steps to Settings → System Log (see stepFailuresToLog). No customer details: the step and why. */
 export async function logFailedSteps(channel: string, flowVersionId: string | null, actions: ActionObservation[]): Promise<void> {
@@ -152,9 +152,9 @@ export async function advanceFlow(
   const actions: ActionObservation[] = [];
   const ctx = makeCtx(state);
   const originalRecordAction = ctx.recordAction;
-  ctx.recordAction = (nodeId, action, ok, reason) => {
-    originalRecordAction?.(nodeId, action, ok, reason);
-    actions.push({ nodeId, action, ok, reason });
+  ctx.recordAction = (nodeId, action, ok, reason, routine) => {
+    originalRecordAction?.(nodeId, action, ok, reason, routine);
+    actions.push({ nodeId, action, ok, reason, routine });
   };
   const entered: string[] = [];
   // This flow's own steps only: the engine does not report a subflow's steps here (runSubflowNode).

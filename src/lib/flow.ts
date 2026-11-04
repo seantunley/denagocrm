@@ -25,15 +25,14 @@ export type FlowHttpMethod = "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
  */
 export type ActionOutcome = { ok: boolean; unavailable?: boolean; reason?: string };
 
-/** Misses that are the customer's answer, not a fault: no FAQ answer for their question, no value the AI could read. */
-const ROUTINE_MISSES = new Set(["knowledge_answer", "ai_extract"]);
-
 /**
  * The failed steps staff must be able to see (runners send them to Settings → System Log): a booking, CRM update,
  * Journey, alert, web request… that did not happen. Before this, a failed step left no record anywhere.
+ * `routine` marks a miss that is the customer's answer, not a fault — no approved FAQ matched their question, no
+ * value in what they wrote (the step's own `unavailable` outcome). A missing setup or a provider error is not routine.
  */
-export function stepFailuresToLog<T extends { action: string; ok: boolean }>(actions: T[]): T[] {
-  return actions.filter((a) => !a.ok && !ROUTINE_MISSES.has(a.action));
+export function stepFailuresToLog<T extends { ok: boolean; routine?: boolean }>(actions: T[]): T[] {
+  return actions.filter((a) => !a.ok && !a.routine);
 }
 export type KnowledgeOutcome = ActionOutcome & { text?: string };
 export type ExtractOutcome = ActionOutcome & { values?: Record<string, string> };
@@ -205,7 +204,7 @@ export type FlowCtx = {
   /** Internal recursion guard for nested subflows. */
   subflowDepth?: number;
   /** Pure observation hook; runners persist this in the analytics ledger. */
-  recordAction?: (nodeId: string, action: string, ok: boolean, reason?: string) => void;
+  recordAction?: (nodeId: string, action: string, ok: boolean, reason?: string, routine?: boolean) => void;
 };
 
 const FORMAT_RE: Record<string, RegExp> = {
@@ -567,7 +566,7 @@ export async function runFlow(flow: Flow, session: FlowSession, input: FlowInput
     } else if (node.type === "knowledge") {
       const query = interpolate(node.query, vars).trim() || input.text.trim();
       const outcome = ctx.knowledgeAnswer ? await ctx.knowledgeAnswer(query, vars, node.id) : { ok: false, reason: "Knowledge search unavailable" };
-      ctx.recordAction?.(node.id, "knowledge_answer", outcome.ok, outcome.reason);
+      ctx.recordAction?.(node.id, "knowledge_answer", outcome.ok, outcome.reason, outcome.unavailable);
       if (outcome.ok && outcome.text) {
         messages.push({ type: "text", text: outcome.text });
         if (node.saveAs) vars[node.saveAs] = outcome.text;
@@ -581,7 +580,7 @@ export async function runFlow(flow: Flow, session: FlowSession, input: FlowInput
     } else if (node.type === "extract") {
       const source = node.sourceVariable ? (vars[node.sourceVariable] ?? "") : input.text;
       const outcome = ctx.extractData ? await ctx.extractData({ text: source, instruction: interpolate(node.instruction, vars), fields: node.fields, vars, nodeId: node.id }) : { ok: false, reason: "AI extraction unavailable" };
-      ctx.recordAction?.(node.id, "ai_extract", outcome.ok, outcome.reason);
+      ctx.recordAction?.(node.id, "ai_extract", outcome.ok, outcome.reason, outcome.unavailable);
       if (outcome.ok) {
         // Only the CONFIGURED fields may be written. The model is told the same
         // thing, but a vars namespace is not defended by a prompt.

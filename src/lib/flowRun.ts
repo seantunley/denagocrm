@@ -76,7 +76,7 @@ function buildCtx(digits: string, match: { contactId: string | null; leadId: str
   return {
     dynamicAnswer: (source) => source === "colours" ? coloursList() : priceList(),
     routeChoice: ({ prompt, text, options }) => routeBotChoice({ prompt, text, options }),
-    recordAction: (nodeId, action, ok, reason) => actions.push({ nodeId, action, ok, reason }),
+    recordAction: (nodeId, action, ok, reason, routine) => actions.push({ nodeId, action, ok, reason, routine }),
     openNow: (holidaysClosed) => chatbotOpenNow(holidaysClosed),
     aiReply: async () => {
       let name: string | null = null; let isCustomer = false;
@@ -175,9 +175,10 @@ export async function runWhatsAppFlow(digits: string, input: FlowInput, entryCon
           : { allowed: false as const }))
     : null;
   const result = await runFlow(snapshot.flow, session, noReply ? { text: "", timedOut: true } : input, ctx);
-  await logFailedSteps("whatsapp", snapshot.versionId, actions);
-  // Superseded part-way: nothing of this timeout's turn is kept — no reply queued, no session written.
+  // Superseded part-way: nothing of this timeout's turn is kept — no reply queued, no session written, and no failed
+  // step logged (its steps were refused because the customer answered, which is not a fault).
   if (fence?.superseded()) return true;
+  await logFailedSteps("whatsapp", snapshot.versionId, actions);
   // Arm (or clear) the "no reply" deadline for the question it now waits on — from the customer's last message.
   if (result.session) result.session.vars = armNoReply(snapshot.flow, result.session, Date.now(), !noReply);
 
