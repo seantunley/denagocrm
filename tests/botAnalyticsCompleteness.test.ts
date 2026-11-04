@@ -97,9 +97,11 @@ test("analytics report surfaces one-shot semantics, CRM actions and terminal del
 });
 
 test("Journey nodes retain a meaningful immutable analytics label", () => {
-  const report = src("src/lib/botFlowAnalyticsReport.ts");
-  assert.match(report, /node\.type === "journey"/);
-  assert.match(report, /Journey: \$\{node\.journeyId\}/);
+  // nodeLabel moved to flowVersionDiff (shared with the version diff); the report imports it.
+  assert.match(src("src/lib/botFlowAnalyticsReport.ts"), /import \{ nodeLabel \} from "\.\/flowVersionDiff";/);
+  const labels = src("src/lib/flowVersionDiff.ts");
+  assert.match(labels, /node\.type === "journey"/);
+  assert.match(labels, /Journey: \$\{node\.journeyId\}/);
 });
 
 test("final stack retains the approved simulator detail shell", () => {
