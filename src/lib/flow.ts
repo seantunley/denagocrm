@@ -45,7 +45,8 @@ export type FlowNode =
   | { id: string; type: "answer"; text?: string; answerSource?: "pricelist" | "colours"; next?: string }
   | { id: string; type: "set"; variable: string; value: string; next?: string }
   | { id: string; type: "switch"; variable: string; cases: FlowSwitchCase[]; defaultNext?: string }
-  | { id: string; type: "http"; method: FlowHttpMethod; url: string; headers?: string; body?: string; saveAs?: string; failureText?: string; next?: string; failureNext?: string }
+  /** `connectionId`: a workspace connection whose (encrypted) secret headers are added at send time — lib/flowConnections. */
+  | { id: string; type: "http"; method: FlowHttpMethod; url: string; headers?: string; connectionId?: string; connectionName?: string; body?: string; saveAs?: string; failureText?: string; next?: string; failureNext?: string }
   | { id: string; type: "knowledge"; query: string; saveAs?: string; noMatchText?: string; next?: string; failureNext?: string }
   | { id: string; type: "extract"; instruction: string; sourceVariable?: string; fields: string[]; failureText?: string; next?: string; failureNext?: string }
   | { id: string; type: "delay"; seconds: number; next?: string }
@@ -103,7 +104,7 @@ export type FlowCtx = {
   routeChoice?: (input: { prompt: string; text: string; options: FlowOption[]; vars: Record<string, string> }) => Promise<string | null>;
   knowledgeAnswer?: (query: string, vars: Record<string, string>, nodeId: string) => Promise<KnowledgeOutcome>;
   extractData?: (input: { text: string; instruction: string; fields: string[]; vars: Record<string, string>; nodeId: string }) => Promise<ExtractOutcome>;
-  httpRequest?: (input: { method: FlowHttpMethod; url: string; headers?: string; body?: string; vars: Record<string, string>; nodeId: string }) => Promise<HttpOutcome>;
+  httpRequest?: (input: { method: FlowHttpMethod; url: string; headers?: string; connectionId?: string; body?: string; vars: Record<string, string>; nodeId: string }) => Promise<HttpOutcome>;
   loadSubflow?: (flowId: string) => Promise<Flow | null>;
   /** Open now, for an Opening hours step (chatbotHours.chatbotOpenNow). Absent: treated as open. */
   openNow?: (holidaysClosed: boolean) => Promise<boolean>;
@@ -456,7 +457,7 @@ export async function runFlow(flow: Flow, session: FlowSession, input: FlowInput
         nodeId = node.failureNext ?? null;
       }
     } else if (node.type === "http") {
-      const outcome = ctx.httpRequest ? await ctx.httpRequest({ method: node.method, url: interpolate(node.url, vars), headers: node.headers ? interpolate(node.headers, vars) : undefined, body: node.body ? interpolate(node.body, vars) : undefined, vars, nodeId: node.id }) : { ok: false, reason: "API requests unavailable" };
+      const outcome = ctx.httpRequest ? await ctx.httpRequest({ method: node.method, url: interpolate(node.url, vars), headers: node.headers ? interpolate(node.headers, vars) : undefined, ...(node.connectionId ? { connectionId: node.connectionId } : {}),body: node.body ? interpolate(node.body, vars) : undefined, vars, nodeId: node.id }) : { ok: false, reason: "API requests unavailable" };
       ctx.recordAction?.(node.id, "http_request", outcome.ok);
       if (outcome.ok) {
         if (node.saveAs) vars[node.saveAs] = outcome.body ?? "";

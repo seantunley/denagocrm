@@ -12,6 +12,8 @@ import { builderTenantId, flowScope, journeyScope } from "@/lib/flowScope";
 import { flowDocumentOptions } from "@/lib/flowDocuments";
 import { listActingTenantStaff } from "@/lib/tenantActor";
 import { getCompanyProfile } from "@/lib/companyProfile";
+import { getSetting } from "@/lib/settings";
+import { FLOW_CONNECTIONS_KEY, parseConnections } from "@/lib/flowConnections";
 
 export default async function FlowEditorPage({ params }: { params: Promise<{ id: string }> }) {
   await requireRoute("/bot-builder");
@@ -28,6 +30,8 @@ export default async function FlowEditorPage({ params }: { params: Promise<{ id:
     /* use default so the owner can recover/reset the draft */
   }
 
+  // API request steps choose a connection by name; the page never sees a key (lib/flowConnections).
+  const connections = parseConnections(await getSetting(FLOW_CONNECTIONS_KEY)).map(({ id, name, host }) => ({ id, name, host }));
   const [channels, journeys, reusableFlows, company, documents, staff] = await Promise.all([
     enabledFlowChannels(),
     prisma.journey.findMany({
@@ -62,7 +66,7 @@ export default async function FlowEditorPage({ params }: { params: Promise<{ id:
       </div>
       <FlowAiDraftForm flowId={row.id} />
       <FlowNodeSystemFrame>
-        <FlowBuilder flowId={row.id} initial={flow} journeys={journeys} flows={reusableFlows} updatedAt={row.updatedAt.toISOString()} channels={channels} businessName={company.name} documents={documents} staff={staff} />
+        <FlowBuilder flowId={row.id} initial={flow} journeys={journeys} flows={reusableFlows} updatedAt={row.updatedAt.toISOString()} channels={channels} businessName={company.name} documents={documents} staff={staff} connections={connections} />
       </FlowNodeSystemFrame>
     </div>
   );

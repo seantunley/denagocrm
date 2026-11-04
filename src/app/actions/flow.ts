@@ -7,6 +7,7 @@ import { requireTenantOwner } from "@/lib/auth";
 import { logAudit } from "@/lib/audit";
 import { DEFAULT_FLOW, type Flow } from "@/lib/flow";
 import { flowDocumentIssues } from "@/lib/flowDocuments";
+import { secretLookingHeaders } from "@/lib/flowConnections";
 import { flowTemplate } from "@/lib/flowTemplates";
 import { publishFlowSnapshot, takeFlowOffline } from "@/lib/flowPublishing";
 import { FlowPublishValidationError } from "@/lib/flowValidationServer";
@@ -75,6 +76,10 @@ export async function saveFlow(
     // refused here at save, again at publish, and again when it is sent.
     if ((await flowDocumentIssues(parsed as Flow, await builderTenantId())).some((issue) => issue.code === "document.unavailable")) {
       return { error: "A “Send a document” step points at a file this workspace can't send. Choose one of your own documents." };
+    }
+    // An API key typed into a step's headers is never stored, not even in a draft.
+    if (Object.values(f.nodes).some((node) => (node as { type?: string }).type === "http" && secretLookingHeaders((node as { headers?: string }).headers).length)) {
+      return { error: "An API request step has a key in its headers. Keys can't be saved in a flow — put it in a Connection (Flows → Connections) and choose that connection instead. Your changes have not been saved." };
     }
 
     const expected = new Date(expectedUpdatedAt);

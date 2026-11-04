@@ -1,4 +1,5 @@
 import { choiceId, type Flow, type FlowNode, type FlowOption } from "./flow";
+import { secretLookingHeaders } from "./flowConnections";
 
 export type FlowChannel = "whatsapp" | "messenger" | "instagram" | "telegram";
 export type FlowIssue = { severity: "error" | "warning"; code: string; message: string; nodeId?: string; channel?: FlowChannel };
@@ -204,6 +205,10 @@ export function validateFlow(flow: Flow, channels: FlowChannel[] = ["whatsapp"])
           issues.push(issue("error", "http.headers", "API headers must be a JSON object.", id));
         }
       }
+      // A key typed into the step is readable by anyone who edits flows and kept in every version, so it is
+      // refused: here (blocks publish) and in saveFlow (never stored in a draft). PR #973 review.
+      const secrets = secretLookingHeaders(node.headers);
+      if (secrets.length) issues.push(issue("error", "http.secret_header", `“${secrets.join("”, “")}” looks like a key, and keys can't be kept in a flow (anyone who edits flows could read it, and every published version would keep it). Put it in a Connection (Flows → Connections) and choose that connection instead.`, id));
     }
     if (node.type === "extract") {
       if (!node.instruction.trim()) issues.push(issue("error", "extract.instruction", "AI extract needs an instruction.", id));
