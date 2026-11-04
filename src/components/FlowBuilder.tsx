@@ -66,6 +66,7 @@ import { isAnnotation, type AnnotationColor, type BookingAction, type ConditionO
 import ConfirmActionDialog from "@/components/ConfirmActionDialog";
 import EmojiButton from "@/components/EmojiButton";
 import { stepNumbersLine, type StepNumbers } from "@/lib/flowStepNumbers";
+import { searchFlow } from "@/lib/flowSearch";
 import { cn } from "@/lib/utils";
 import { BuilderSaveStatus, BuilderWorkspaceBar, BuilderWorkspaceShell } from "@/components/builder-workspace";
 import FlowLintPanel from "@/components/FlowLintPanel";
@@ -568,6 +569,19 @@ export default function FlowBuilder({ flowId, initial, journeys = [], flows = []
   const [inspectorOpen, setInspectorOpen] = useState(false);
   const focusCanvasNode = useRef<(nodeId: string) => void>(() => {});
   const flowInstance = useRef<ReactFlowInstance<Node<RFData>, Edge> | null>(null);
+  // FIND ON THE CANVAS (lib/flowSearch): the Find button or Ctrl+F; a result selects the step and zooms to it.
+  const [findOpen, setFindOpen] = useState(false);
+  const [findQuery, setFindQuery] = useState("");
+  const jumpTo = (nodeId: string) => { setSelectedId(nodeId); setInspectorOpen(true); window.setTimeout(() => focusCanvasNode.current(nodeId), 0); };
+  useEffect(() => {
+    const onFind = (event: KeyboardEvent) => {
+      if (!(event.ctrlKey || event.metaKey) || event.altKey || event.shiftKey || event.key.toLowerCase() !== "f") return;
+      event.preventDefault();
+      setFindOpen(true);
+    };
+    window.addEventListener("keydown", onFind);
+    return () => window.removeEventListener("keydown", onFind);
+  }, []);
   const [testing, setTesting] = useState(false);
   const [replayOpen, setReplayOpen] = useState(false);
   const [replaySteps, setReplaySteps] = useState<ReplayStep[] | null>(null);
@@ -826,6 +840,7 @@ export default function FlowBuilder({ flowId, initial, journeys = [], flows = []
             <button type="button" onClick={undo} disabled={!historyDepth.undo} className="grid size-8 place-items-center rounded-md text-slate-300 hover:bg-white/7 disabled:cursor-not-allowed disabled:opacity-35" title="Undo (Ctrl+Z)"><Undo2 className="size-4" /><span className="sr-only">Undo</span></button>
             <button type="button" onClick={redo} disabled={!historyDepth.redo} className="grid size-8 place-items-center rounded-md text-slate-300 hover:bg-white/7 disabled:cursor-not-allowed disabled:opacity-35" title="Redo (Ctrl+Shift+Z)"><Redo2 className="size-4" /><span className="sr-only">Redo</span></button>
           </div>
+          <button type="button" onClick={() => { setTesting(false); setFindOpen((value) => !value); }} className={cn("btn-secondary btn-sm", findOpen && "border-orange-400/40 text-orange-200")} title="Find a step (Ctrl+F)"><Search className="size-4" /><span className="hidden sm:inline">Find</span></button>
           <button type="button" onClick={() => setTesting((value) => !value)} className={cn("btn-secondary btn-sm", testing && "border-orange-400/40 text-orange-200")}><FlaskConical className="size-4" />{testing ? "Back to canvas" : "Test current canvas"}</button>
           <button type="button" onClick={() => { setTesting(false); setReplayOpen((value) => !value); if (replayOpen) setReplaySteps(null); }} className={cn("btn-secondary btn-sm", replayOpen && "border-orange-400/40 text-orange-200")} title="Replay a real conversation on this flow"><History className="size-4" />Replay</button>
           <button type="button" onClick={onSave} className="btn-primary btn-sm"><Save className="size-4" />Save</button>
@@ -894,6 +909,39 @@ export default function FlowBuilder({ flowId, initial, journeys = [], flows = []
 
             <main className="min-w-0 flex-1 bg-[#0b0f0e] p-2 sm:p-3">
               <div className="relative h-full min-h-[32rem] overflow-hidden rounded-xl border border-white/[0.08] bg-[#0f1412]" onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = "copy"; }} onDrop={onCanvasDrop}>
+                {findOpen && (() => {
+                  const hits = searchFlow(currentFlow.nodes, findQuery);
+                  return (
+                    <div className="absolute left-3 top-3 z-20 w-80 max-w-[calc(100%-1.5rem)] rounded-xl border border-white/10 bg-[#111614]/95 p-2 shadow-2xl backdrop-blur">
+                      <div className="flex items-center gap-2">
+                        <Search className="size-4 shrink-0 text-slate-400" />
+                        <input
+                          autoFocus
+                          className="input h-9 flex-1"
+                          aria-label="Find a step"
+                          placeholder="Find a step — e.g. brochure, price"
+                          value={findQuery}
+                          onChange={(e) => setFindQuery(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Escape") setFindOpen(false);
+                            if (e.key === "Enter" && hits[0]) jumpTo(hits[0].nodeId);
+                          }}
+                        />
+                        <button type="button" onClick={() => setFindOpen(false)} className="grid size-9 place-items-center rounded-lg text-slate-400 hover:bg-white/5 hover:text-white"><X className="size-4" /><span className="sr-only">Close find</span></button>
+                      </div>
+                      {findQuery.trim() && (
+                        <div className="mt-2 max-h-72 overflow-y-auto">
+                          {hits.length === 0 ? <p className="px-2 py-1.5 text-xs text-slate-400">No step mentions “{findQuery.trim()}”.</p> : hits.map((hit) => (
+                            <button key={hit.nodeId} type="button" onClick={() => jumpTo(hit.nodeId)} className={cn("block w-full rounded-lg px-2 py-1.5 text-left hover:bg-white/5", selectedId === hit.nodeId && "bg-orange-500/10")}>
+                              <span className="block truncate text-xs font-medium text-slate-100">{hit.label}</span>
+                              <span className="block truncate text-[11px] text-slate-400">{hit.snippet}</span>
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()}
                 <StepNumbersContext.Provider value={showNumbers ? stepNumbers : null}>
                 <ReactFlow
                   deleteKeyCode={null}

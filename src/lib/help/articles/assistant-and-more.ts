@@ -364,6 +364,23 @@ export const assistantAndMoreArticles: HelpArticle[] = [
     ],
   },
 
+  {
+    slug: "chatbot-flow-builder-tips",
+    title: "Chatbot flow builder: working on a flow",
+    summary: "Shortcuts for building and changing a chatbot flow without breaking the live one.",
+    category: "automation",
+    audience: "admins",
+    keywords: ["flow builder", "chatbot flow", "find a step", "search the flow", "bot builder"],
+    body: [
+      { type: "h", text: "Find a step" },
+      { type: "p", text: "Press **Find** (or Ctrl+F) and type a word — \"brochure\", a price, a button's text. Every step that mentions it is listed, with the words around it. Click one, or press Enter for the first, and the canvas zooms to that step and opens it. Esc closes the search." },
+      { type: "list", items: [
+        "It searches what you typed into the steps: messages, button labels, captions, file names, notes, variable names and web addresses.",
+        "It doesn't match on how steps are connected, so a step isn't found just because it leads to one that matches.",
+      ] },
+    ],
+  },
+
   // ── Today and lead scores ─────────────────────────────────────────────
   {
     slug: "today-who-to-contact-next",
