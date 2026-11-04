@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import { runFlow, type Flow, type FlowCtx } from "../src/lib/flow";
-import { armNoReply, LAST_INBOUND, NO_REPLY_AT, NO_REPLY_NODE, noReplyDue } from "../src/lib/flowNoReply";
+import { armNoReply, LAST_INBOUND, NO_REPLY_AT, NO_REPLY_CLAIMED, NO_REPLY_CLAIMED_AT, NO_REPLY_NODE, noReplyDue, noReplyDueAt, noReplyEventId } from "../src/lib/flowNoReply";
 import { validateFlow } from "../src/lib/flowValidation";
 
 // Node-RED's trigger node (Sean, 2026-11-04): "if they don't answer within 30 minutes, send a nudge".
@@ -66,12 +66,28 @@ test("validation: the wait is 30 minutes to 23 hours, and the route is a real co
   assert.ok(!validateFlow(flow).some((i) => i.code.startsWith("no_reply") || (i.code === "graph.unreachable" && i.nodeId === "nudge")), "the nudge is reachable through it");
 });
 
-test("wiring: the runner checks and fences the sweep's turn; the sweep rides the 30-minute outbox run", () => {
+test("a crashed claim is due again after 10 minutes; a fresh one isn't; an answer clears both", () => {
+  const now = Date.UTC(2026, 10, 4, 9, 0);
+  const base = { [NO_REPLY_NODE]: "menu", [LAST_INBOUND]: String(now - 60 * MIN), [NO_REPLY_CLAIMED]: "123" };
+  assert.equal(noReplyDueAt("menu", { ...base, [NO_REPLY_CLAIMED_AT]: String(now - 2 * MIN) }, now), null);
+  assert.equal(noReplyDueAt("menu", { ...base, [NO_REPLY_CLAIMED_AT]: String(now - 11 * MIN) }, now), "123", "the same deadline: the same identity");
+  const answered = armNoReply(flow, { nodeId: "ask", vars: { ...base, [NO_REPLY_CLAIMED_AT]: "1" } }, now, true);
+  assert.equal(answered[NO_REPLY_CLAIMED], undefined);
+  assert.equal(answered[NO_REPLY_CLAIMED_AT], undefined);
+  assert.equal(noReplyEventId("t", "27", "menu", "123"), "noreply:t:27:menu:123");
+});
+
+test("wiring: the timeout is CLAIMED before any step runs, fenced on the claim, and runs under its own identity", () => {
   const run = readFileSync("src/lib/flowRun.ts", "utf8");
-  assert.match(run, /if \(noReply && \(!existing \|\| existing\.ownership !== "bot" \|\| existing\.nodeId !== noReply\.nodeId \|\| existing\.vars\[NO_REPLY_AT\] !== noReply\.at\)\) return true;/);
+  const body = run.slice(run.indexOf("export async function runWhatsAppFlow"));
+  assert.ok(body.indexOf("claimNoReplyTx(") > 0 && body.indexOf("claimNoReplyTx(") < body.indexOf("await runFlow("), "claimed before the flow runs (PR #988 review)");
+  assert.match(run, /if \(!claimed\) return true;/);
+  assert.match(run, /existing\.vars\[NO_REPLY_CLAIMED\] !== noReply\.at\)\) return true;/);
   assert.match(run, /if \(result\.session\) result\.session\.vars = armNoReply\(snapshot\.flow, result\.session, Date\.now\(\), !noReply\);/);
+  assert.match(run, /botSessionStillWaitingTx\(tx, tenantId, "whatsapp", digits, \{ \.\.\.noReply, atKey: NO_REPLY_CLAIMED \}\)/);
   const fence = run.indexOf("botSessionStillWaitingTx(tx");
   assert.ok(fence > run.indexOf("botStillOwnsTx(tx") && fence < run.indexOf("enqueueBotMessagesTx(tx"), "checked after the row is locked, before anything is queued");
+  assert.match(readFileSync("src/lib/flowNoReplySweep.ts", "utf8"), /withInboundBotEvent\(\{ rowId: noReplyEventId\(tenantId, row\.key, nodeId, at\), leaseAttempt: null \}/);
   assert.match(readFileSync("src/app/api/cron/bot-outbox/route.ts", "utf8"), /const noReply = await sweepNoReply\(budget\.shouldStop\);/);
   assert.ok(!readFileSync("vercel.json", "utf8").includes("bot-no-reply"), "no faster job of its own: the interval is the bill");
 });

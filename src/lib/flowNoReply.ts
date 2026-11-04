@@ -13,6 +13,16 @@ import type { Flow, FlowNode, FlowSession, NoReply } from "./flow";
  */
 export const NO_REPLY_AT = "__noreply_at";
 export const NO_REPLY_NODE = "__noreply_node";
+/**
+ * CLAIMED (PR #988 review): the sweep takes a timeout BEFORE running anything — the deadline is swapped for this
+ * marker (= the deadline it claimed) and NO_REPLY_CLAIMED_AT (when), in one locked transaction (botSessionStore
+ * claimNoReplyTx). A customer turn clears both (armNoReply), so the sweep's final fence then drops its reply. A claim
+ * older than NO_REPLY_RECLAIM_MS that never finished (a crash) can be claimed again; the steps it runs carry the same
+ * timeout identity (noReplyEventId), so nothing is done twice.
+ */
+export const NO_REPLY_CLAIMED = "__noreply_claimed";
+export const NO_REPLY_CLAIMED_AT = "__noreply_claimed_at";
+export const NO_REPLY_RECLAIM_MS = 10 * 60_000;
 export const LAST_INBOUND = "__last_inbound_at";
 /** The sweep rides the 30-minute bot-outbox run (tests/cronScheduleCost: the interval is the bill), so a shorter wait means nothing. */
 export const NO_REPLY_MIN_MINUTES = 30;
@@ -35,6 +45,8 @@ export function armNoReply(flow: Flow, session: FlowSession, now: number, custom
   if (customerWrote) vars[LAST_INBOUND] = String(now);
   delete vars[NO_REPLY_AT];
   delete vars[NO_REPLY_NODE];
+  delete vars[NO_REPLY_CLAIMED];
+  delete vars[NO_REPLY_CLAIMED_AT];
   const rule = session.nodeId ? noReplyOf(flow.nodes[session.nodeId]) : null;
   const lastInbound = Number(vars[LAST_INBOUND] || 0);
   if (!rule || !session.nodeId || !lastInbound) return vars;
@@ -45,8 +57,19 @@ export function armNoReply(flow: Flow, session: FlowSession, now: number, custom
   return vars;
 }
 
-/** Is this stored session due a no-reply move now? */
-export function noReplyDue(nodeId: string | null, vars: Record<string, string>, now: number): boolean {
-  const at = Number(vars[NO_REPLY_AT] || 0);
-  return Boolean(nodeId) && vars[NO_REPLY_NODE] === nodeId && at > 0 && at <= now && now < Number(vars[LAST_INBOUND] || 0) + 24 * 3_600_000;
+/**
+ * The deadline this stored session is due on now, or null: a passed deadline, or a claim that never finished. Always
+ * inside 24 hours of the customer's last message.
+ */
+export function noReplyDueAt(nodeId: string | null, vars: Record<string, string>, now: number): string | null {
+  if (!nodeId || vars[NO_REPLY_NODE] !== nodeId || now >= Number(vars[LAST_INBOUND] || 0) + 24 * 3_600_000) return null;
+  const at = vars[NO_REPLY_AT];
+  if (at && Number(at) > 0 && Number(at) <= now) return at;
+  const claimed = vars[NO_REPLY_CLAIMED];
+  if (claimed && now - Number(vars[NO_REPLY_CLAIMED_AT] || 0) >= NO_REPLY_RECLAIM_MS) return claimed;
+  return null;
 }
+export const noReplyDue = (nodeId: string | null, vars: Record<string, string>, now: number) => noReplyDueAt(nodeId, vars, now) !== null;
+
+/** The timeout's own identity — the same for every attempt at the same deadline — so its steps are never done twice. */
+export const noReplyEventId = (tenantId: string, key: string, nodeId: string, at: string) => `noreply:${tenantId}:${key}:${nodeId}:${at}`;

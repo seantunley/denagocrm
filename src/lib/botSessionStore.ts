@@ -132,6 +132,45 @@ export async function botSessionStillWaitingTx(
   try { return (JSON.parse(row.vars) as Record<string, string>)[expected.atKey] === expected.at; } catch { return false; }
 }
 
+/**
+ * CLAIM A TIMEOUT BEFORE ANYTHING RUNS (PR #988 review): with the row locked, the session must still be the bot's,
+ * on `nodeId`, with deadline `at` still set — or a claim of `at` abandoned for `reclaimMs` (a sweep that crashed).
+ * Then the deadline is swapped for the claim marker and this transaction commits, so a second sweep finds nothing to
+ * claim and a customer answer that arrived first has already removed the deadline. Returns whether it was claimed.
+ */
+export async function claimNoReplyTx(
+  tx: TenantWriteTx,
+  tenantId: string,
+  channel: string,
+  key: string,
+  claim: { nodeId: string; at: string; atKey: string; claimedKey: string; claimedAtKey: string; now: number; reclaimMs: number },
+): Promise<boolean> {
+  const rows = (await tx.$queryRawUnsafe(
+    `SELECT "ownership", "nodeId", "vars" FROM "BotSession" WHERE "tenantId" = $1 AND "channel" = $2 AND "key" = $3 FOR UPDATE`,
+    tenantId,
+    channel,
+    key,
+  )) as Array<{ ownership: string; nodeId: string | null; vars: string }>;
+  const row = rows[0];
+  if (!row || row.ownership !== "bot" || row.nodeId !== claim.nodeId) return false;
+  let vars: Record<string, string>;
+  try { vars = JSON.parse(row.vars) as Record<string, string>; } catch { return false; }
+  const live = vars[claim.atKey] === claim.at;
+  const abandoned = vars[claim.claimedKey] === claim.at && claim.now - Number(vars[claim.claimedAtKey] || 0) >= claim.reclaimMs;
+  if (!live && !abandoned) return false;
+  delete vars[claim.atKey];
+  vars[claim.claimedKey] = claim.at;
+  vars[claim.claimedAtKey] = String(claim.now);
+  await tx.$executeRawUnsafe(
+    `UPDATE "BotSession" SET "vars" = $4, "updatedAt" = NOW() WHERE "tenantId" = $1 AND "channel" = $2 AND "key" = $3`,
+    tenantId,
+    channel,
+    key,
+    JSON.stringify(vars),
+  );
+  return true;
+}
+
 export async function botStillOwnsTx(
   tx: TenantWriteTx,
   tenantId: string,
