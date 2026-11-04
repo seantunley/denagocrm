@@ -19,6 +19,8 @@ import {
   ImageIcon,
   MessageSquare,
   Sparkles,
+  SquareDashed,
+  StickyNote,
   Workflow,
   Wrench,
   type LucideIcon,
@@ -81,6 +83,14 @@ const groups: Array<{
       { label: "AI extract", detail: "Extract only named structured fields from customer text.", icon: Sparkles },
       { label: "Hand off", detail: "Transfer the conversation to staff.", icon: Hand },
       { label: "End", detail: "Terminate the current flow explicitly.", icon: CircleStop },
+    ],
+  },
+  {
+    label: "Canvas — team only",
+    description: "Notes and boxes that keep a big flow readable — never sent to a customer.",
+    nodes: [
+      { label: "Note", detail: "A sticky note for the team.", icon: StickyNote },
+      { label: "Group", detail: "A coloured, resizable box framing a section.", icon: SquareDashed },
     ],
   },
 ];

@@ -1,4 +1,4 @@
-import { choiceId, type Flow, type FlowNode, type FlowOption } from "./flow";
+import { choiceId, isAnnotation, type Flow, type FlowNode, type FlowOption } from "./flow";
 import { secretLookingHeaders } from "./flowConnections";
 
 export type FlowChannel = "whatsapp" | "messenger" | "instagram" | "telegram";
@@ -7,7 +7,7 @@ export type FlowIssue = { severity: "error" | "warning"; code: string; message: 
 const NODE_TYPES = new Set([
   "message", "choice", "capture", "captureFile", "image", "document", "contactCard", "answer",
   "set", "switch", "http", "knowledge", "extract", "delay", "subflow",
-  "booking", "slots", "journey", "condition", "ai", "handoff", "hours", "goto", "end",
+  "booking", "slots", "journey", "condition", "ai", "handoff", "hours", "goto", "note", "group", "end",
 ]);
 const BUILTIN_VARS = new Set([
   "greeting", "first_name", "name", "known", "slot", "channel", "current_date", "current_time",
@@ -156,6 +156,7 @@ export function validateFlow(flow: Flow, channels: FlowChannel[] = ["whatsapp"])
   if (!flow || typeof flow !== "object" || !flow.nodes || typeof flow.nodes !== "object") return [issue("error", "graph.shape", "Flow data is malformed.")];
   const entries = Object.entries(flow.nodes);
   if (!str(flow.start) || !flow.nodes[str(flow.start)]) return [issue("error", "graph.start", "Flow needs a valid start node.")];
+  if (isAnnotation(flow.nodes[str(flow.start)])) return [issue("error", "graph.start", "A note or group can't be where the flow starts — choose a step.")];
   if (!entries.length) return [issue("error", "graph.empty", "Flow has no nodes.")];
   if (entries.length > 250) issues.push(issue("error", "graph.size", "Flow exceeds the 250-node safety limit."));
 
@@ -273,7 +274,8 @@ export function validateFlow(flow: Flow, channels: FlowChannel[] = ["whatsapp"])
   }
 
   const live = reachable(flow);
-  for (const [id] of entries) if (!live.has(id)) issues.push(issue("warning", "graph.unreachable", "Node is not reachable from the start node.", id));
+  // Notes and groups are canvas only — never reached, and never a problem for it.
+  for (const [id, node] of entries) if (!live.has(id) && !isAnnotation(node)) issues.push(issue("warning", "graph.unreachable", "Node is not reachable from the start node.", id));
   for (const cycle of automaticCycles(flow)) issues.push(issue("error", "graph.automatic_cycle", `Automatic loop detected: ${cycle.join(" → ")}. It would run until the engine guard stops it.`, cycle[0]));
 
   for (const [, rawNode] of entries) {
