@@ -82,6 +82,12 @@ export type FlowNode = (
    * or move their open deal to a stage — without a handoff. `*Label` fields are display copies. Fails (→ failureNext)
    * when there is no customer, no open deal for a stage move, or the chosen salesperson or stage is gone.
    */
+  /**
+   * TELL SOMEONE (Node-RED's notification nodes; Sean, 2026-11-04): "A customer just asked for the price list" to one
+   * chosen staff member — their phone, their Ask history and their linked WhatsApp — while the bot carries on. Not a
+   * handoff: the customer is never told, and the flow goes on along `next` whether or not it reached them.
+   */
+  | { id: string; type: "notify"; userId?: string; userLabel?: string; text: string; next?: string }
   | { id: string; type: "crm"; action: CrmUpdateAction; tagName?: string; userId?: string; userLabel?: string; stageId?: string; stageLabel?: string; text?: string; failureText?: string; next?: string; failureNext?: string }
   /**
    * CANVAS ONLY (Node-RED's comment node and groups; Sean, 2026-11-02): a sticky note, or a coloured box framing a
@@ -155,6 +161,8 @@ export type FlowCtx = {
   createBooking: (vars: Record<string, string>, action: BookingCreateAction | undefined, nodeId: string) => Promise<ActionOutcome>;
   /** An Update-the-CRM step (flowActions.updateCrm). Absent: the step fails, as an unavailable action does. */
   updateCrm?: (node: Extract<FlowNode, { type: "crm" }>, vars: Record<string, string>) => Promise<ActionOutcome>;
+  /** A Tell someone step: `text` is already filled in. Runtime: lib/flowNotify; the simulator and tests only describe it. */
+  notifyStaff?: (input: { userId: string; userLabel?: string; text: string; nodeId: string }) => Promise<ActionOutcome>;
   manageBooking?: (action: BookingManageAction, vars: Record<string, string>, nodeId: string) => Promise<ActionOutcome>;
   startJourney?: (journeyId: string, vars: Record<string, string>, nodeId: string, followUp?: JourneyFollowUp) => Promise<{ ok: boolean; reason?: string }>;
   handoff: (vars: Record<string, string>, context?: FlowHandoffContext) => Promise<void>;
@@ -581,6 +589,13 @@ export async function runFlow(flow: Flow, session: FlowSession, input: FlowInput
         ctx.recordAction?.(node.id, `booking_${node.action ?? "service"}`, outcome.ok);
       }
       nodeId = actionOutcome(node, outcome, vars, messages);
+    } else if (node.type === "notify") {
+      // Never a reason to stop: told or not, the customer carries on.
+      const outcome = ctx.notifyStaff && node.userId
+        ? await ctx.notifyStaff({ userId: node.userId, userLabel: node.userLabel, text: interpolate(node.text, vars), nodeId: node.id }).catch((): ActionOutcome => ({ ok: false, reason: "Could not tell them" }))
+        : { ok: false, reason: node.userId ? "Notifying staff is unavailable" : "No one chosen" };
+      ctx.recordAction?.(node.id, "notify", outcome.ok);
+      nodeId = node.next ?? null;
     } else if (node.type === "crm") {
       const outcome = ctx.updateCrm ? await ctx.updateCrm(node, vars) : { ok: false, reason: "CRM updates are unavailable" };
       ctx.recordAction?.(node.id, `crm_${node.action}`, outcome.ok);

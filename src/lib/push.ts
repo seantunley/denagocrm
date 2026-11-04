@@ -70,6 +70,7 @@ export const PUSH_KINDS = [
   { id: "dm", label: "Social DMs", desc: "New Messenger / Instagram message" },
   { id: "whatsapp", label: "WhatsApp messages", desc: "New inbound WhatsApp" },
   { id: "bot_handoff", label: "Bot hand-offs", desc: "The WhatsApp assistant hands a chat to a human" },
+  { id: "bot_notify", label: "Chatbot alerts", desc: "A chatbot flow's Tell someone step names you" },
   { id: "booking", label: "Service bookings", desc: "Online booking lands in the workshop diary" },
   { id: "service_request", label: "Portal service requests", desc: "A customer requests a service from the portal" },
   { id: "portal_case", label: "Support cases", desc: "A customer opens or replies to a support case in the portal" },

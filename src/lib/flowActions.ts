@@ -23,6 +23,10 @@ import { runtimeFlowTenantId } from "./flowScope";
 type Match = { contactId: string | null; leadId: string | null };
 import type { ActionOutcome, FlowNode, JourneyFollowUp } from "./flow";
 import { logAudit } from "./audit";
+import { notifyStaffFromFlow } from "./flowNotify";
+
+/** How a person reads the channel: "WhatsApp", not "whatsapp". */
+const channelLabel = (source: string) => ({ whatsapp: "WhatsApp", messenger: "Messenger", instagram: "Instagram", telegram: "Telegram" } as Record<string, string>)[source] ?? source;
 
 export async function availableSlots(max = 6): Promise<{ id: string; label: string }[]> {
   const out: { id: string; label: string }[] = [];
@@ -259,6 +263,8 @@ export function crmActions(source: string, match: Match) {
       return { ok: result.ok, reason: result.reason };
     },
     updateCrm: (node: Extract<FlowNode, { type: "crm" }>) => updateCrmFromFlow(node, match),
+    // The provider event + step: a redelivered message tells nobody twice (PR #982 review).
+    notifyStaff: (input: { userId: string; text: string; nodeId: string }) => notifyStaffFromFlow(channelLabel(source), { ...input, dedupeKey: botActionKey(input.nodeId, "notify") }, match),
     createBooking: async (vars: Record<string, string>, action: "service" | "demo" | "lead" | undefined, nodeId: string): Promise<ActionOutcome> => {
       if (action === "demo") return createDemo(source, vars, match, nodeId);
       if (action === "lead") {
