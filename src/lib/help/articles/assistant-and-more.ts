@@ -370,7 +370,7 @@ export const assistantAndMoreArticles: HelpArticle[] = [
     summary: "Shortcuts for building and changing a chatbot flow without breaking the live one.",
     category: "automation",
     audience: "admins",
-    keywords: ["flow builder", "chatbot flow", "switch off a step", "skip a step", "disable step", "bot builder", "find a step", "search the flow", "quick add", "add a step", "tell someone", "notify staff", "alert", "if anything fails", "fallback", "failure route", "shared values", "business phone", "variables"],
+    keywords: ["flow builder", "chatbot flow", "switch off a step", "skip a step", "disable step", "bot builder", "find a step", "search the flow", "quick add", "add a step", "tell someone", "notify staff", "alert", "if anything fails", "fallback", "failure route", "shared values", "business phone", "variables", "changed since publish", "unpublished changes", "review and publish"],
     body: [
       { type: "h", text: "Switch a step off" },
       { type: "p", text: "To skip a step for a while without deleting it — say the price list while it's being updated — select it and untick **Step is on**. Customers then go straight on to the next step, as if it weren't there. The step stays on the canvas, greyed out and marked **OFF**, with everything you set up in it." },
@@ -412,6 +412,9 @@ export const assistantAndMoreArticles: HelpArticle[] = [
         "Deleting one leaves a blank where messages used it.",
         "Anyone who edits flows can see the values, so never put a password or API key here — those belong in **Connections**.",
       ] },
+      { type: "h", text: "See what you've changed since the last publish" },
+      { type: "p", text: "Customers only see a flow once you publish it. While you work, every step you've added since the last publish is labelled **NEW** and every step you've changed — its wording, its settings or where it leads — is labelled **EDITED**. A note at the bottom of the canvas sums it up, e.g. \"Since v4: 3 steps new or edited · 1 removed\". Moving steps around on the canvas doesn't count as a change." },
+      { type: "p", text: "When you press **Review & publish** in the flow list, the box lists exactly what will change for customers — steps added, removed and edited (and what about them), and connections added or removed — before you confirm." },
     ],
   },
 
