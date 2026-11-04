@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import { runFlow, type Flow, type FlowCtx } from "../src/lib/flow";
-import { armNoReply, LAST_INBOUND, NO_REPLY_AT, NO_REPLY_CLAIMED, NO_REPLY_CLAIMED_AT, NO_REPLY_NODE, noReplyDue, noReplyDueAt, noReplyEventId } from "../src/lib/flowNoReply";
+import { armNoReply, fenceTimeoutEffects, LAST_INBOUND, NO_REPLY_AT, NO_REPLY_CLAIMED, NO_REPLY_CLAIMED_AT, NO_REPLY_NODE, noReplyDue, noReplyDueAt, noReplyEventId } from "../src/lib/flowNoReply";
 import { validateFlow } from "../src/lib/flowValidation";
 
 // Node-RED's trigger node (Sean, 2026-11-04): "if they don't answer within 30 minutes, send a nudge".
@@ -77,15 +77,48 @@ test("a crashed claim is due again after 10 minutes; a fresh one isn't; an answe
   assert.equal(noReplyEventId("t", "27", "menu", "123"), "noreply:t:27:menu:123");
 });
 
+test("the action fence: while claimed, actions run; once the customer cancels it mid-run, that action and every later one don't", async () => {
+  // A no-reply route with two actions; the customer's message lands between them (PR #988 second review).
+  const route: Flow = {
+    start: "q",
+    nodes: {
+      q: { id: "q", type: "capture", text: "Name?", variable: "name", next: "end", noReply: { minutes: 30, next: "book" } },
+      book: { id: "book", type: "booking", action: "lead", text: "Logged", next: "j", failureNext: "end" },
+      j: { id: "j", type: "journey", journeyId: "j1", next: "end", failureNext: "end" },
+      end: { id: "end", type: "end" },
+    },
+  };
+  const acted: string[] = [];
+  let claimed = true;
+  const live = {
+    ...ctx,
+    createBooking: async () => { acted.push("booking"); claimed = false; /* the customer writes now */ return { ok: true }; },
+    startJourney: async () => { acted.push("journey"); return { ok: true }; },
+    handoff: async () => { acted.push("handoff"); },
+  } as unknown as FlowCtx;
+  const fence = fenceTimeoutEffects(live, async () => claimed);
+  await runFlow(route, { nodeId: "q", vars: {} }, { text: "", timedOut: true }, live);
+  assert.deepEqual(acted, ["booking"], "the booking ran while claimed; the Journey after the customer wrote did not");
+  assert.equal(fence.superseded(), true, "and the runner drops the whole turn");
+  // Once superseded, nothing acts even if asked again.
+  claimed = true;
+  assert.deepEqual(await (live.startJourney!("j1", {}, "j")), { ok: false, reason: "The customer replied first" });
+  assert.equal(await live.handoff({}), undefined);
+  assert.deepEqual(acted, ["booking"]);
+});
+
 test("wiring: the timeout is CLAIMED before any step runs, fenced on the claim, and runs under its own identity", () => {
   const run = readFileSync("src/lib/flowRun.ts", "utf8");
   const body = run.slice(run.indexOf("export async function runWhatsAppFlow"));
   assert.ok(body.indexOf("claimNoReplyTx(") > 0 && body.indexOf("claimNoReplyTx(") < body.indexOf("await runFlow("), "claimed before the flow runs (PR #988 review)");
+  assert.ok(body.indexOf("cancelNoReplyTx(") > 0 && body.indexOf("cancelNoReplyTx(") < body.indexOf("await runFlow("), "a customer's message cancels any timeout before its own turn runs");
+  assert.ok(body.indexOf("fenceTimeoutEffects(ctx") < body.indexOf("await runFlow("), "a timeout's actions are fenced before it runs");
+  assert.ok(body.indexOf("if (fence?.superseded()) return true;") > body.indexOf("await runFlow(") && body.indexOf("if (fence?.superseded()) return true;") < body.indexOf("withBotConversationWrite(async (tx, tenantId) =>"), "a superseded timeout keeps nothing");
   assert.match(run, /if \(!claimed\) return true;/);
   assert.match(run, /existing\.vars\[NO_REPLY_CLAIMED\] !== noReply\.at\)\) return true;/);
   assert.match(run, /if \(result\.session\) result\.session\.vars = armNoReply\(snapshot\.flow, result\.session, Date\.now\(\), !noReply\);/);
   assert.match(run, /botSessionStillWaitingTx\(tx, tenantId, "whatsapp", digits, \{ \.\.\.noReply, atKey: NO_REPLY_CLAIMED \}\)/);
-  const fence = run.indexOf("botSessionStillWaitingTx(tx");
+  const fence = run.lastIndexOf("botSessionStillWaitingTx(tx"); // the final fence (the first is the action fence)
   assert.ok(fence > run.indexOf("botStillOwnsTx(tx") && fence < run.indexOf("enqueueBotMessagesTx(tx"), "checked after the row is locked, before anything is queued");
   assert.match(readFileSync("src/lib/flowNoReplySweep.ts", "utf8"), /withInboundBotEvent\(\{ rowId: noReplyEventId\(tenantId, row\.key, nodeId, at\), leaseAttempt: null \}/);
   assert.match(readFileSync("src/app/api/cron/bot-outbox/route.ts", "utf8"), /const noReply = await sweepNoReply\(budget\.shouldStop\);/);

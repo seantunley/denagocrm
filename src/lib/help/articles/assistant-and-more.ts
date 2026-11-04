@@ -377,7 +377,7 @@ export const assistantAndMoreArticles: HelpArticle[] = [
       { type: "list", items: [
         "WhatsApp only, and only within 24 hours of the customer's last message — WhatsApp doesn't let the bot write after that.",
         "It's checked every 30 minutes, so it goes up to 30 minutes after the time you choose.",
-        "If the customer answers first, their answer wins. If a person has taken the conversation over, nothing is sent.",
+        "If the customer answers first, their answer wins — even if the follow-up has just started: from the moment they write, it does nothing more (no booking, CRM change, alert or Journey) and sends nothing. If a person has taken the conversation over, nothing happens.",
         "Leave it on **Just wait** and nothing happens when a customer goes quiet, as before.",
         "It can go out at any hour the customer's conversation is waiting, so for long waits consider what time of day it might land.",
       ] },

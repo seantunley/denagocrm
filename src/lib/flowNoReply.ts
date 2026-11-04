@@ -1,4 +1,4 @@
-import type { Flow, FlowNode, FlowSession, NoReply } from "./flow";
+import type { Flow, FlowCtx, FlowNode, FlowSession, NoReply } from "./flow";
 
 /**
  * WAIT FOR A REPLY, ELSE… (Node-RED's trigger node; Sean, 2026-11-04): a question can say "if they don't answer within
@@ -23,6 +23,8 @@ export const NO_REPLY_NODE = "__noreply_node";
 export const NO_REPLY_CLAIMED = "__noreply_claimed";
 export const NO_REPLY_CLAIMED_AT = "__noreply_claimed_at";
 export const NO_REPLY_RECLAIM_MS = 10 * 60_000;
+/** What a customer's message cancels (a pending deadline and any claim) — botSessionStore cancelNoReplyTx. */
+export const NO_REPLY_KEYS = [NO_REPLY_AT, NO_REPLY_CLAIMED, NO_REPLY_CLAIMED_AT] as const;
 export const LAST_INBOUND = "__last_inbound_at";
 /** The sweep rides the 30-minute bot-outbox run (tests/cronScheduleCost: the interval is the bill), so a shorter wait means nothing. */
 export const NO_REPLY_MIN_MINUTES = 30;
@@ -70,6 +72,30 @@ export function noReplyDueAt(nodeId: string | null, vars: Record<string, string>
   return null;
 }
 export const noReplyDue = (nodeId: string | null, vars: Record<string, string>, now: number) => noReplyDueAt(nodeId, vars, now) !== null;
+
+/**
+ * THE ACTION FENCE (PR #988 second review): a claimed timeout runs its route, and a customer can still write while it
+ * does — their turn revokes the claim first (botSessionStore revokeNoReplyClaimTx). So during a timeout, every step
+ * that acts outside the conversation re-checks the claim right before it acts; once the claim is gone, that step and
+ * every later one do nothing, and the runner drops the whole turn. Mutates `ctx` (the timeout's own, built per turn).
+ */
+export const TIMEOUT_EFFECTS = ["createBooking", "manageBooking", "startJourney", "updateCrm", "notifyStaff", "bookSlot", "rescheduleSlot", "httpRequest", "handoff"] as const;
+export function fenceTimeoutEffects(ctx: FlowCtx, stillClaimed: () => Promise<boolean>): { superseded: () => boolean } {
+  let gone = false;
+  const effects = ctx as unknown as Record<string, unknown>;
+  for (const name of TIMEOUT_EFFECTS) {
+    const act = effects[name];
+    if (typeof act !== "function") continue;
+    effects[name] = async (...args: unknown[]) => {
+      if (gone || !(await stillClaimed())) {
+        gone = true;
+        return name === "handoff" ? undefined : { ok: false, reason: "The customer replied first" };
+      }
+      return (act as (...a: unknown[]) => unknown)(...args);
+    };
+  }
+  return { superseded: () => gone };
+}
 
 /** The timeout's own identity — the same for every attempt at the same deadline — so its steps are never done twice. */
 export const noReplyEventId = (tenantId: string, key: string, nodeId: string, at: string) => `noreply:${tenantId}:${key}:${nodeId}:${at}`;

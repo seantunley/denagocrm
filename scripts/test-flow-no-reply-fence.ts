@@ -97,6 +97,42 @@ const ok = (label: string) => console.log(`  ✓ ${++checks}. ${label}`);
   assert.equal(await runs(), 1);
   ok("the same timeout attempted again (after a crash) enrols nobody twice");
 
+  // ── 3. A reply AFTER the claim, BEFORE the action (PR #988 second review) ─────────────────────────
+  // The timeout is claimed; its route is about to start a Journey; the customer's message lands first. Their turn
+  // cancels the timeout (cancelNoReplyTx, as runWhatsAppFlow does first thing), and the timeout's action — run through
+  // the real fence and the real chatbot action — finds its claim gone and does nothing.
+  const { cancelNoReplyTx } = await import("../src/lib/botSessionStore");
+  const { fenceTimeoutEffects, NO_REPLY_KEYS } = flowNoReply;
+  const contact2 = await basePrisma.contact.create({ data: { tenantId, firstName: "NoReplyRace", lastName: `Test-${run}` }, select: { id: true } });
+  const at2 = String(run + 60 * 60_000);
+  const raceAction = async (customerWritesFirst: boolean) => {
+    await session({ [NO_REPLY_AT]: at2 });
+    const claimed = await basePrisma.$transaction((tx) => claimNoReplyTx(tx as never, tenantId, "whatsapp", key, {
+      nodeId: "menu", at: at2, atKey: NO_REPLY_AT, claimedKey: NO_REPLY_CLAIMED, claimedAtKey: NO_REPLY_CLAIMED_AT, now: Date.now(), reclaimMs: NO_REPLY_RECLAIM_MS,
+    }));
+    assert.equal(claimed, true);
+    if (customerWritesFirst) await basePrisma.$transaction((tx) => cancelNoReplyTx(tx as never, tenantId, "whatsapp", key, NO_REPLY_KEYS));
+    return runInTenantScope({ tenantId, system: false }, () =>
+      withInboundBotEvent({ rowId: noReplyEventId(tenantId, key, "menu", at2), leaseAttempt: null }, async () => {
+        const actions = crmActions("whatsapp", { contactId: contact2.id, leadId: null });
+        const fenced = fenceTimeoutEffects(actions as never, () =>
+          basePrisma.$transaction((tx) => botSessionStillWaitingTx(tx as never, tenantId, "whatsapp", key, { nodeId: "menu", at: at2, atKey: NO_REPLY_CLAIMED })));
+        const outcome = await actions.startJourney(journey.id, {}, "raceJourney");
+        return { outcome, superseded: fenced.superseded() };
+      }));
+  };
+  const runs2 = () => basePrisma.journeyRun.count({ where: { journeyId: journey.id, entityId: contact2.id } });
+  const raced = await raceAction(true);
+  assert.equal(raced.outcome.ok, false);
+  assert.equal(raced.superseded, true, "the runner then drops the whole timeout turn");
+  assert.equal(await runs2(), 0, "no Journey for a customer who wrote while the timeout was running");
+  assert.deepEqual(Object.keys(await stored()).filter((k) => k.startsWith("__noreply")), [], "and the timeout is gone, not merely skipped");
+  ok("a reply after the claim but before the action: the action does nothing, the timeout is dropped");
+  const control = await raceAction(false);
+  assert.equal(control.outcome.ok, true, control.outcome.reason);
+  assert.equal(await runs2(), 1);
+  ok("…and with no reply in between, the same fenced action does enrol (the fence isn't simply always shut)");
+
   await basePrisma.botSession.deleteMany({ where: { tenantId, channel: "whatsapp", key } });
   console.log(`\n${checks} checks passed`);
   await basePrisma.$disconnect();

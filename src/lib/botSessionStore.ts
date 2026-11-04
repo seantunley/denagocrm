@@ -171,6 +171,40 @@ export async function claimNoReplyTx(
   return true;
 }
 
+/**
+ * A CUSTOMER'S MESSAGE CANCELS ANY TIMEOUT (PR #988 second review) — first thing in their turn, with the row locked:
+ * the pending deadline (so no sweep can claim it now) and an in-flight claim (so every later action of a timeout
+ * already running finds it gone and does nothing — flowNoReply fenceTimeoutEffects). `keys`: the hidden values to
+ * remove. Returns whether there was anything to cancel.
+ */
+export async function cancelNoReplyTx(
+  tx: TenantWriteTx,
+  tenantId: string,
+  channel: string,
+  key: string,
+  keys: readonly string[],
+): Promise<boolean> {
+  const rows = (await tx.$queryRawUnsafe(
+    `SELECT "vars" FROM "BotSession" WHERE "tenantId" = $1 AND "channel" = $2 AND "key" = $3 FOR UPDATE`,
+    tenantId,
+    channel,
+    key,
+  )) as Array<{ vars: string }>;
+  if (!rows[0]) return false;
+  let vars: Record<string, string>;
+  try { vars = JSON.parse(rows[0].vars) as Record<string, string>; } catch { return false; }
+  if (!keys.some((k) => k in vars)) return false;
+  for (const k of keys) delete vars[k];
+  await tx.$executeRawUnsafe(
+    `UPDATE "BotSession" SET "vars" = $4, "updatedAt" = NOW() WHERE "tenantId" = $1 AND "channel" = $2 AND "key" = $3`,
+    tenantId,
+    channel,
+    key,
+    JSON.stringify(vars),
+  );
+  return true;
+}
+
 export async function botStillOwnsTx(
   tx: TenantWriteTx,
   tenantId: string,
