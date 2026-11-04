@@ -8,14 +8,14 @@ export type FlowIssue = { severity: "error" | "warning"; code: string; message: 
 const NODE_TYPES = new Set([
   "message", "choice", "capture", "captureFile", "image", "document", "contactCard", "answer",
   "set", "switch", "http", "knowledge", "extract", "delay", "subflow",
-  "booking", "slots", "journey", "condition", "ai", "handoff", "hours", "goto", "note", "group", "crm", "end",
+  "booking", "slots", "journey", "condition", "ai", "handoff", "hours", "goto", "note", "group", "crm", "notify", "end",
 ]);
 const BUILTIN_VARS = new Set([
   "greeting", "first_name", "name", "known", "slot", "channel", "current_date", "current_time",
   "booking_identity", "booking_found", "booking_id", "booking_slot", "booking_summary", "booking_cancelled", "booking_rescheduled",
   "journey_started", "journey_reason", "journey_run_id", "open_now",
 ]);
-const AUTO_TYPES = new Set<FlowNode["type"]>(["message", "image", "document", "contactCard", "answer", "set", "switch", "http", "knowledge", "extract", "subflow", "booking", "journey", "condition", "hours", "goto", "crm"]);
+const AUTO_TYPES = new Set<FlowNode["type"]>(["message", "image", "document", "contactCard", "answer", "set", "switch", "http", "knowledge", "extract", "subflow", "booking", "journey", "condition", "hours", "goto", "crm", "notify"]);
 
 function issue(severity: FlowIssue["severity"], code: string, message: string, nodeId?: string, channel?: FlowChannel): FlowIssue {
   return { severity, code, message, ...(nodeId ? { nodeId } : {}), ...(channel ? { channel } : {}) };
@@ -59,6 +59,7 @@ function allText(node: FlowNode): string[] {
   const values: unknown[] = [];
   if (node.type === "message" || node.type === "handoff") values.push(node.text);
   if (node.type === "crm") values.push(node.text, node.failureText, node.tagName);
+  if (node.type === "notify") values.push(node.text);
   if (node.type === "choice" || node.type === "capture" || node.type === "captureFile" || node.type === "slots") values.push(node.text);
   if (node.type === "slots") values.push(node.noneText);
   if (node.type === "image" || node.type === "document") values.push(node.caption);
@@ -288,6 +289,10 @@ export function validateFlow(flow: Flow, channels: FlowChannel[] = ["whatsapp"])
       else if (action === "tag" && !str(node.tagName).trim()) issues.push(issue("error", "crm.missing", "Choose the tag to add.", id));
       else if (action === "assign" && !str(node.userId)) issues.push(issue("error", "crm.missing", "Choose the salesperson.", id));
       else if (action === "stage" && !str(node.stageId)) issues.push(issue("error", "crm.missing", "Choose the stage.", id));
+    }
+    if (node.type === "notify") {
+      if (!str(node.userId)) issues.push(issue("error", "notify.who", "Choose who to tell.", id));
+      if (!str(node.text).trim()) issues.push(issue("error", "notify.text", "Write what to tell them — e.g. “{{name}} just asked for the price list”.", id));
     }
     if (node.type === "goto" && str(node.target) === id) issues.push(issue("error", "goto.self", "Go to can't jump to itself.", id));
 

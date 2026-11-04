@@ -111,6 +111,7 @@ export async function simulateFlowTurn(input: SimulatorTurnInput): Promise<Simul
           return { ok, reason: vars.journey_reason };
         },
         // Writes nothing: says what the step would change, and follows the scenario's CRM outcome.
+        notifyStaff: async (input) => { trace.push(`Tell: node ${input.nodeId} would tell ${input.userLabel ?? "a staff member"}: ${input.text}`); return { ok: true }; },
         updateCrm: async (node) => { trace.push(`CRM: node ${node.id} would ${node.action === "tag" ? `tag the customer “${node.tagName}”` : node.action === "assign" ? `set the salesperson to ${node.userLabel ?? node.userId}` : `move the open deal to ${node.stageLabel ?? node.stageId}`}`); return { ok: scenario.crm === "success", reason: scenario.crm === "failure" ? "simulated CRM failure" : undefined }; },
         createBooking: async (_vars, action, nodeId) => { trace.push(`CRM: node ${nodeId} would create ${action ?? "service"}`); return { ok: scenario.crm === "success", reason: scenario.crm === "failure" ? "simulated CRM refusal" : undefined }; },
         handoff: async () => { trace.push("Handoff: would pause bot and notify team"); },

@@ -370,7 +370,7 @@ export const assistantAndMoreArticles: HelpArticle[] = [
     summary: "Shortcuts for building and changing a chatbot flow without breaking the live one.",
     category: "automation",
     audience: "admins",
-    keywords: ["flow builder", "chatbot flow", "switch off a step", "skip a step", "disable step", "bot builder", "find a step", "search the flow", "quick add", "add a step"],
+    keywords: ["flow builder", "chatbot flow", "switch off a step", "skip a step", "disable step", "bot builder", "find a step", "search the flow", "quick add", "add a step", "tell someone", "notify staff", "alert"],
     body: [
       { type: "h", text: "Switch a step off" },
       { type: "p", text: "To skip a step for a while without deleting it — say the price list while it's being updated — select it and untick **Step is on**. Customers then go straight on to the next step, as if it weren't there. The step stays on the canvas, greyed out and marked **OFF**, with everything you set up in it." },
@@ -387,6 +387,14 @@ export const assistantAndMoreArticles: HelpArticle[] = [
       ] },
       { type: "h", text: "Add a step where you click" },
       { type: "p", text: "Hold Ctrl (⌘ on a Mac) and click an empty spot on the canvas. Start typing the kind of step — \"mess\" for a message, \"menu\", \"wait\" — use the arrow keys to choose, and press Enter. The step is added exactly where you clicked, ready to fill in. Esc closes the box without adding anything." },
+      { type: "h", text: "Tell someone while the bot carries on" },
+      { type: "p", text: "Add a **Tell someone** step (under CRM & automation), choose the person and write what to tell them — for example \"{{name}} just asked for the price list\". When a customer reaches the step, that person is told and the conversation simply carries on. It isn't a handoff: the customer isn't told, and the bot keeps going." },
+      { type: "list", items: [
+        "It appears in their **Ask** history with a red dot and a link to the customer, on their phone if they've switched notifications on, and on their linked WhatsApp if they use DAX there.",
+        "Between 20:00 and 08:00 nothing pops up on a phone — it waits in Ask and reaches WhatsApp in the morning.",
+        "It's logged on the customer's record with the person's name. The person must still be in the workspace and allowed to see customer conversations, or it isn't sent.",
+        "On a phone, they can switch these off under notifications: **Chatbot alerts**.",
+      ] },
     ],
   },
 

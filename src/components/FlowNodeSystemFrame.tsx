@@ -5,6 +5,7 @@ import { useState } from "react";
 import {
   Bot,
   UserCog,
+  BellRing,
   CalendarDays,
   Clock,
   CornerDownRight,
@@ -71,6 +72,7 @@ const groups: Array<{
     nodes: [
       { label: "CRM / booking action", detail: "Run the existing CRM booking action and expose outcomes.", icon: Wrench },
       { label: "Update the CRM", detail: "Tag the customer, set their salesperson or move their open deal — no handoff.", icon: UserCog },
+      { label: "Tell someone", detail: "Alert one staff member — Ask, phone and linked WhatsApp — while the bot carries on.", icon: BellRing },
       { label: "Workshop slots", detail: "Offer available workshop slots and explicit fallbacks.", icon: CalendarDays },
       { label: "Start Journey", detail: "Enrol the customer in an existing Journey.", icon: Workflow },
       { label: "API request", detail: "Call a protected HTTPS endpoint and store the response.", icon: Workflow },
