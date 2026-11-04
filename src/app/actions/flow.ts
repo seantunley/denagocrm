@@ -18,6 +18,7 @@ import { FLOW_CHANNELS, FLOW_ROUTE_KINDS, normalizeRoutePattern, type FlowRouteK
 import { FLOW_QR_KEY, parseQrCodes, qrPattern } from "@/lib/flowQr";
 import { getSetting, putSetting } from "@/lib/settings";
 import type { FlowChannel } from "@/lib/flowValidation";
+import { logError } from "@/lib/errorLog";
 
 /** Create a new draft from one of the shipped, compiler-checked templates. */
 export async function createFlow(formData: FormData) {
@@ -306,7 +307,13 @@ export async function addFlowQr(formData: FormData) {
     const route = await prisma.botFlowRoute.create({
       data: { tenantId, channel: "whatsapp", kind: "keyword", pattern, flowId, publishedVersionId: published.id, priority: 10 },
       select: { id: true },
-    }).catch(() => null);
+    }).catch(async (error: unknown) => {
+      // Only the unique key means "already used"; anything else is a real failure, said and logged as one.
+      if ((error as { code?: string }).code === "P2002") return null;
+      await logError("bot.flow_qr", error, "saving a QR code's route failed");
+      return "failed" as const;
+    });
+    if (route === "failed") return { error: "The QR code couldn't be saved just now — try again." };
     if (!route) return { error: "A WhatsApp keyword route already uses that message — write a different one for the QR code." };
     await putSetting(FLOW_QR_KEY, JSON.stringify([...codes, { routeId: route.id, name, message }]));
     await logAudit({ action: "bot.flow_qr_saved", summary: `QR code “${name}” → WhatsApp flow “${flow.name}”`, user: owner });
