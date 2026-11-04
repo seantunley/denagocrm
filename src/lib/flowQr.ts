@@ -33,6 +33,22 @@ export function qrLink(businessDigits: string, message: string): string {
 /** The source a NEW customer is given when they arrive through this QR — so the count per QR is a count of people. */
 export const qrSource = (name: string) => `QR code — ${name.trim()}`.slice(0, 120);
 
+/** What the customers a QR brought in went on to do (lib/flowQrOutcomes). `wonCents` null = not shown to this viewer. */
+export type QrOutcomes = { people: number; quotes: number; won: number; wonCents: number | null };
+
+/**
+ * QR → SALE, in one line (Sean, 2026-11-04): "Showroom Poster → 3 quotes → 1 sale". The sale's value is shown only to
+ * someone who may see sales figures (`wonCents` is null otherwise). `money` formats cents (lib/format.formatZAR).
+ */
+export function qrOutcomeLine(o: QrOutcomes, money: (cents: number) => string): string {
+  const n = (count: number, one: string, many: string) => `${count} ${count === 1 ? one : many}`;
+  return [
+    n(o.people, "new customer", "new customers"),
+    n(o.quotes, "quote sent", "quotes sent"),
+    `${n(o.won, "sale", "sales")}${o.won && o.wonCents !== null ? ` (${money(o.wonCents)})` : ""}`,
+  ].join(" → ");
+}
+
 /** The route pattern for a QR's message — exactly what addFlowRoute would store. */
 export const qrPattern = (message: string) => normalizeRoutePattern(message);
 
