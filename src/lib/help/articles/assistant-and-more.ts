@@ -364,6 +364,20 @@ export const assistantAndMoreArticles: HelpArticle[] = [
     ],
   },
 
+  {
+    slug: "chatbot-flow-builder-tips",
+    title: "Chatbot flow builder: working on a flow",
+    summary: "Shortcuts for building and changing a chatbot flow without breaking the live one.",
+    category: "automation",
+    audience: "admins",
+    keywords: ["flow builder", "chatbot flow", "tidy", "arrange", "layout", "bot builder"],
+    body: [
+      { type: "h", text: "Tidy the canvas" },
+      { type: "p", text: "Press **Tidy** to line the steps up: the start on the left, then each step one column to the right of the step that leads to it, in the order a customer reaches them (a menu's buttons top to bottom). Steps nothing leads to go in a last column on the right. Notes and groups stay where you put them." },
+      { type: "p", text: "It only moves steps around — nothing about what the bot says or does changes. Press **Undo** to put everything back where it was." },
+    ],
+  },
+
   // ── Today and lead scores ─────────────────────────────────────────────
   {
     slug: "today-who-to-contact-next",
