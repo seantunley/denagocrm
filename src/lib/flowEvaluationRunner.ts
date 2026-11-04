@@ -48,6 +48,8 @@ export async function evaluateFlowScenario(input: {
   channel?: string;
   turns: unknown;
   expectation: unknown;
+  /** The workspace's shared values (Flows → Shared values), so a test sees the text customers will. */
+  sharedVars?: Record<string, string>;
 }): Promise<FlowEvaluationResult> {
   const turns = Array.isArray(input.turns) && input.turns.length <= 12 && input.turns.every(isEvaluationTurn)
     ? input.turns as FlowEvaluationTurn[]
@@ -58,7 +60,7 @@ export async function evaluateFlowScenario(input: {
   if (!turns?.length || !expectation) throw new Error("Evaluation data is malformed.");
 
   const fixedNow = new Date("2030-01-15T07:00:00.000Z");
-  let session: FlowSession | null = { nodeId: null, vars: { greeting: "Hi there 👋", first_name: "Test", name: "Test", ...flowRuntimeVars(input.channel ?? "whatsapp", fixedNow) } };
+  let session: FlowSession | null = { nodeId: null, vars: { ...input.sharedVars, greeting: "Hi there 👋", first_name: "Test", name: "Test", ...flowRuntimeVars(input.channel ?? "whatsapp", fixedNow) } };
   let handedOff = false;
   let variables: Record<string, string> = session.vars;
   let lastMessages: OutMsg[] = [];

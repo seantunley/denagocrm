@@ -155,7 +155,9 @@ export function flowVariables(flow: Flow): string[] {
   return [...vars].sort();
 }
 
-export function validateFlow(flow: Flow, channels: FlowChannel[] = ["whatsapp"]): FlowIssue[] {
+/** `sharedNames`: the workspace's shared values (lib/flowSharedValues) — known everywhere, and read-only to a flow. */
+export function validateFlow(flow: Flow, channels: FlowChannel[] = ["whatsapp"], sharedNames: readonly string[] = []): FlowIssue[] {
+  const shared = new Set(sharedNames);
   const issues: FlowIssue[] = [];
   if (!flow || typeof flow !== "object" || !flow.nodes || typeof flow.nodes !== "object") return [issue("error", "graph.shape", "Flow data is malformed.")];
   const entries = Object.entries(flow.nodes);
@@ -169,7 +171,7 @@ export function validateFlow(flow: Flow, channels: FlowChannel[] = ["whatsapp"])
     else if (isAnnotation(fallback)) issues.push(issue("error", "flow.fallback_missing", "A note or group can't be the “If anything fails” step — choose a step.", str(flow.onFailure)));
   }
 
-  const captured = new Set(BUILTIN_VARS);
+  const captured = new Set([...BUILTIN_VARS, ...shared]);
   const hasBookingLookup = entries.some(([, node]) => node?.type === "booking" && node.action === "lookup");
   for (const [key, rawNode] of entries) {
     if (!rawNode || typeof rawNode !== "object") { issues.push(issue("error", "node.shape", `Node “${key}” is malformed.`, key)); continue; }
@@ -186,6 +188,8 @@ export function validateFlow(flow: Flow, channels: FlowChannel[] = ["whatsapp"])
     if (producedVariables(node).length || node.type === "capture" || node.type === "captureFile" || node.type === "set") {
       for (const variable of producedVariables(node)) {
         if (!/^\w+$/.test(variable)) issues.push(issue("error", "variable.invalid", "Captured variable names must contain only letters, numbers or underscores.", id));
+        // Read-only: the shared value is put back every turn, so an answer saved over it would vanish.
+        else if (shared.has(variable)) issues.push(issue("error", "variable.shared", `{{${variable}}} is a shared value (Flows → Shared values) — save this under another name.`, id));
         else { if (captured.has(variable) && !BUILTIN_VARS.has(variable)) issues.push(issue("warning", "variable.reused", `Variable {{${variable}}} is captured more than once.`, id)); captured.add(variable); }
       }
       // A writing node whose variable is EMPTY writes nowhere at all.

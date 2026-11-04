@@ -11,7 +11,7 @@ test("the editor validates the current graph rather than only the saved server d
   const builder = src("src/components/FlowBuilder.tsx");
   assert.match(builder, /const currentFlow = useMemo/);
   assert.match(builder, /Object\.fromEntries\(rfNodes\.map/);
-  assert.match(builder, /validateFlow\(currentFlow, channels\)/);
+  assert.match(builder, /validateFlow\(currentFlow, channels, sharedNames\)/);
   assert.match(builder, /<FlowLintPanel issues=\{liveIssues\}/);
   assert.match(src("src/app/(app)/bot-builder/[id]/page.tsx"), /channels=\{channels\}/);
 });
