@@ -67,7 +67,17 @@ export type FlowNode =
    * without wires across the canvas. Sends nothing itself. `targetLabel` is a display copy, like a document's fileName.
    */
   | { id: string; type: "goto"; target: string; targetLabel?: string }
+  /**
+   * CANVAS ONLY (Node-RED's comment node and groups; Sean, 2026-11-02): a sticky note, or a coloured box framing a
+   * section. Never wired, never run, never sent to anyone.
+   */
+  | { id: string; type: "note"; text: string; color?: AnnotationColor }
+  | { id: string; type: "group"; label: string; color?: AnnotationColor; width?: number; height?: number }
   | { id: string; type: "end" };
+
+export type AnnotationColor = "yellow" | "blue" | "green" | "purple" | "red" | "slate";
+/** A note or a group: on the canvas for the team, outside the conversation. */
+export const isAnnotation = (node: { type: string } | undefined): boolean => node?.type === "note" || node?.type === "group";
 
 export type Flow = { start: string; nodes: Record<string, FlowNode> };
 /** A saveable contact card — WhatsApp sends it as a real contact; other channels as text. */
@@ -527,6 +537,9 @@ export async function runFlow(flow: Flow, session: FlowSession, input: FlowInput
       nodeId = open ? node.openNext ?? null : node.closedNext ?? null;
     } else if (node.type === "goto") {
       nodeId = node.target || null;
+    } else if (node.type === "note" || node.type === "group") {
+      // Unreachable — nothing can be wired to them — but a conversation that somehow lands here simply ends.
+      nodeId = null;
     } else if (node.type === "condition") {
       nodeId = evaluateCondition(node.condition, vars) ? node.trueNext ?? null : node.falseNext ?? null;
     } else if (node.type === "ai") {

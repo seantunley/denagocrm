@@ -22,7 +22,7 @@ test("node system groups every existing node label without taxonomy drift", () =
   // The guide's group headings. "CRM & automation" arrived with the advanced
   // nodes; every heading must be listed here, because the scrape below cannot
   // tell a group's label from a node's and filters headings out by name.
-  const GUIDE_GROUPS = ["Messages", "Customer input", "Logic & data", "CRM & automation", "AI & operations"];
+  const GUIDE_GROUPS = ["Messages", "Customer input", "Logic & data", "CRM & automation", "AI & operations", "Canvas — team only"];
   for (const group of GUIDE_GROUPS) assert.match(frame, new RegExp(group.replace("&", "\\&")));
 
   const guideLabels = quotedLabels(frame, "const groups", "const routeLegend").filter((label) => !GUIDE_GROUPS.includes(label));
