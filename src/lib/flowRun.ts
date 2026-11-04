@@ -131,7 +131,11 @@ export async function runWhatsAppFlow(digits: string, input: FlowInput, entryCon
   // The WhatsApp flow was taken offline: no reply — the message waits in the inbox for a person.
   if (!snapshot) return true;
   const actions: ActionObservation[] = [];
-  const result = await runFlow(snapshot.flow, session, input, buildCtx(digits, match, actions));
+  const ctx = buildCtx(digits, match, actions);
+  const entered: string[] = [];
+  // This flow's own steps only: the engine does not report a subflow's steps here (runSubflowNode).
+  ctx.onStep = (nodeId) => { entered.push(nodeId); };
+  const result = await runFlow(snapshot.flow, session, input, ctx);
 
   // RUNTIME — {@link botTenant}.`withBotConversationWrite`. `runWhatsAppFlow` is
   // entered from the WhatsApp webhook answering a customer, inside the channel scope
@@ -161,6 +165,7 @@ export async function runWhatsAppFlow(digits: string, input: FlowInput, entryCon
     await enqueueBotMessagesTx(tx, tenantId, { channel: "whatsapp", key: digits, messages: result.messages, flowVersionId: snapshot.versionId, contactId: match.contactId, leadId: match.leadId, actorId: actor.id });
 
     const events = actionEvents(digits, snapshot.versionId, actions);
+    if (snapshot.versionId) for (const nodeId of entered) events.push({ channel: "whatsapp", conversationKey: digits, flowVersionId: snapshot.versionId, nodeId, eventType: "node_entered" });
     const oneShot = (!existing || restart) && !result.session && !result.handedOff && Boolean(snapshot.versionId);
     if (oneShot) {
       events.push(
