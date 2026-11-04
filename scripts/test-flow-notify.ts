@@ -47,8 +47,23 @@ const ok = (label: string) => console.log(`  ✓ ${++checks}. ${label}`);
   assert.equal(await basePrisma.assistantTurn.count({ where: { source: "flow_notify" } }), before);
   ok("someone outside the workspace is not told");
 
+  // 4. The same inbound message delivered twice (WhatsApp redelivers): one alert, not two (PR #982 review).
+  const { withInboundBotEvent } = await import("../src/lib/botInboundEvent");
+  const { crmActions } = await import("../src/lib/flowActions");
+  const again = `Redelivered ${run}`;
+  const deliver = () =>
+    runInTenantScope({ tenantId, system: false }, () =>
+      withInboundBotEvent({ rowId: `test-event-${run}`, leaseAttempt: null }, () =>
+        crmActions("whatsapp", { contactId: contact.id, leadId: null }).notifyStaff({ userId: member.userId, text: again, nodeId: "tell" })));
+  assert.equal((await deliver()).ok, true);
+  assert.equal((await deliver()).ok, true, "the retry is a success — it was already done");
+  assert.equal(await basePrisma.assistantTurn.count({ where: { source: "flow_notify", answer: { contains: again } } }), 1);
+  const alerts = await basePrisma.auditLog.count({ where: { contactId: contact.id, action: "chatbot.notify" } });
+  assert.equal(alerts, 2, "logged once for this event (plus once for check 1)");
+  ok("the same message delivered twice tells the person once — no second Ask entry, push or WhatsApp update");
+
   // Leave nothing waiting: later steps sweep this workspace's undelivered updates and count who they reach.
-  await basePrisma.assistantTurn.updateMany({ where: { source: "flow_notify", answer: { contains: text } }, data: { whatsappSentAt: new Date() } });
+  await basePrisma.assistantTurn.updateMany({ where: { source: "flow_notify", OR: [{ answer: { contains: text } }, { answer: { contains: again } }] }, data: { whatsappSentAt: new Date() } });
 
   console.log(`\n${checks} checks passed`);
   await basePrisma.$disconnect();

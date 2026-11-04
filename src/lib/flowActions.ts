@@ -263,7 +263,8 @@ export function crmActions(source: string, match: Match) {
       return { ok: result.ok, reason: result.reason };
     },
     updateCrm: (node: Extract<FlowNode, { type: "crm" }>) => updateCrmFromFlow(node, match),
-    notifyStaff: (input: { userId: string; text: string }) => notifyStaffFromFlow(channelLabel(source), input, match),
+    // The provider event + step: a redelivered message tells nobody twice (PR #982 review).
+    notifyStaff: (input: { userId: string; text: string; nodeId: string }) => notifyStaffFromFlow(channelLabel(source), { ...input, dedupeKey: botActionKey(input.nodeId, "notify") }, match),
     createBooking: async (vars: Record<string, string>, action: "service" | "demo" | "lead" | undefined, nodeId: string): Promise<ActionOutcome> => {
       if (action === "demo") return createDemo(source, vars, match, nodeId);
       if (action === "lead") {

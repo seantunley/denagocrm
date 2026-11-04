@@ -1,4 +1,5 @@
 import "server-only";
+import crypto from "crypto";
 import { basePrisma } from "./db";
 import { logAudit } from "./audit";
 import { sendPushToAll } from "./push";
@@ -22,9 +23,17 @@ import type { ActionOutcome } from "./flow";
  * The text can name the customer, so the person must still be in this workspace and allowed to see customer
  * conversations. Logged on the customer's record — the staff member's name only, never the text.
  */
+/**
+ * ONCE PER EVENT (PR #982 review): `dedupeKey` is the inbound provider event + the step (flowActions botActionKey).
+ * The alert's AssistantTurn id is derived from it, so the table's primary key refuses a second one: a redelivered
+ * WhatsApp message, or a turn retried after the alert was written, finds it already there and sends nothing again —
+ * no second Ask entry, push or linked-WhatsApp update. Without a key (no provider event) it is simply sent.
+ */
+export const notifyTurnId = (dedupeKey: string) => `fn_${crypto.createHash("sha256").update(dedupeKey).digest("hex").slice(0, 32)}`;
+
 export async function notifyStaffFromFlow(
   channel: string,
-  input: { userId: string; text: string },
+  input: { userId: string; text: string; dedupeKey?: string | null },
   customer: { contactId: string | null; leadId: string | null },
 ): Promise<ActionOutcome> {
   const tenantId = runtimeFlowTenantId();
@@ -36,9 +45,15 @@ export async function notifyStaffFromFlow(
   const text = input.text.trim().slice(0, 1000) || "The chatbot has something for you.";
   const path = customer.contactId ? `/contacts/${customer.contactId}` : customer.leadId ? `/leads/${customer.leadId}` : "/inbox";
   const origin = await tenantOrigin(tenantId).catch(() => "");
-  await basePrisma.assistantTurn.create({
-    data: { tenantId, userId: user.id, question: `From the chatbot (${channel})`, answer: `${text}\n\n${origin}${path}`, source: "flow_notify" },
-  });
+  try {
+    await basePrisma.assistantTurn.create({
+      data: { ...(input.dedupeKey ? { id: notifyTurnId(input.dedupeKey) } : {}), tenantId, userId: user.id, question: `From the chatbot (${channel})`, answer: `${text}\n\n${origin}${path}`, source: "flow_notify" },
+    });
+  } catch (error) {
+    // Already told for this event and step: done, and nothing is sent twice.
+    if ((error as { code?: string }).code === "P2002") return { ok: true };
+    throw error;
+  }
   await sendPushToAll({ title: `Chatbot (${channel})`, body: text, url: path }, "bot_notify", { tenantId, userId: user.id }).catch(() => 0);
   await logAudit({
     action: "chatbot.notify",
