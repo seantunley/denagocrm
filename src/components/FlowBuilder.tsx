@@ -66,6 +66,7 @@ import { isAnnotation, type AnnotationColor, type BookingAction, type ConditionO
 import ConfirmActionDialog from "@/components/ConfirmActionDialog";
 import EmojiButton from "@/components/EmojiButton";
 import { stepNumbersLine, type StepNumbers } from "@/lib/flowStepNumbers";
+import { rankStepTypes } from "@/lib/flowQuickAdd";
 import { cn } from "@/lib/utils";
 import { BuilderSaveStatus, BuilderWorkspaceBar, BuilderWorkspaceShell } from "@/components/builder-workspace";
 import FlowLintPanel from "@/components/FlowLintPanel";
@@ -786,6 +787,25 @@ export default function FlowBuilder({ flowId, initial, journeys = [], flows = []
     event.dataTransfer.effectAllowed = "copy";
   }, []);
 
+  // QUICK ADD (lib/flowQuickAdd): Ctrl/⌘+click empty canvas, type, Enter — the step lands where you clicked.
+  const canvasBox = useRef<HTMLDivElement>(null);
+  const [quickAdd, setQuickAdd] = useState<{ x: number; y: number; at: Pos; query: string; active: number } | null>(null);
+  const quickAddOptions = useMemo(
+    () => rankStepTypes(quickAdd?.query ?? "", NODE_GROUPS.flatMap((group) => group.types).map((type) => ({ type, label: TYPE_META[type].label, description: TYPE_META[type].description }))),
+    [quickAdd?.query],
+  );
+  const openQuickAdd = (event: React.MouseEvent) => {
+    const box = canvasBox.current?.getBoundingClientRect();
+    if (!box || !flowInstance.current) return;
+    const at = flowInstance.current.screenToFlowPosition({ x: event.clientX, y: event.clientY }, { snapToGrid: true });
+    setQuickAdd({ x: Math.min(event.clientX - box.left, box.width - 272), y: Math.min(event.clientY - box.top, box.height - 300), at, query: "", active: 0 });
+  };
+  const quickAddPick = (type: FlowNode["type"]) => {
+    if (!quickAdd) return;
+    addNode(type, quickAdd.at);
+    setQuickAdd(null);
+  };
+
   const onCanvasDrop = useCallback((event: React.DragEvent<HTMLDivElement>) => {
     event.preventDefault();
     const type = event.dataTransfer.getData("application/x-flowbot-node") as FlowNode["type"];
@@ -893,7 +913,37 @@ export default function FlowBuilder({ flowId, initial, journeys = [], flows = []
             )}
 
             <main className="min-w-0 flex-1 bg-[#0b0f0e] p-2 sm:p-3">
-              <div className="relative h-full min-h-[32rem] overflow-hidden rounded-xl border border-white/[0.08] bg-[#0f1412]" onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = "copy"; }} onDrop={onCanvasDrop}>
+              <div ref={canvasBox} className="relative h-full min-h-[32rem] overflow-hidden rounded-xl border border-white/[0.08] bg-[#0f1412]" onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = "copy"; }} onDrop={onCanvasDrop}>
+                {quickAdd && (
+                  <div className="absolute z-20 w-64 rounded-xl border border-white/10 bg-[#111614]/95 p-2 shadow-2xl backdrop-blur" style={{ left: Math.max(8, quickAdd.x), top: Math.max(8, quickAdd.y) }}>
+                    <input
+                      autoFocus
+                      className="input h-9 w-full"
+                      aria-label="Add a step here"
+                      placeholder="Add a step — e.g. message"
+                      value={quickAdd.query}
+                      onChange={(e) => setQuickAdd({ ...quickAdd, query: e.target.value, active: 0 })}
+                      onBlur={() => window.setTimeout(() => setQuickAdd(null), 150)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Escape") setQuickAdd(null);
+                        else if (e.key === "ArrowDown") { e.preventDefault(); setQuickAdd({ ...quickAdd, active: Math.min(quickAdd.active + 1, quickAddOptions.length - 1) }); }
+                        else if (e.key === "ArrowUp") { e.preventDefault(); setQuickAdd({ ...quickAdd, active: Math.max(quickAdd.active - 1, 0) }); }
+                        else if (e.key === "Enter" && quickAddOptions[quickAdd.active]) { e.preventDefault(); quickAddPick(quickAddOptions[quickAdd.active].type); }
+                      }}
+                    />
+                    <div className="mt-1.5 grid gap-0.5" role="listbox" aria-label="Step types">
+                      {quickAddOptions.length === 0 ? <p className="px-2 py-1.5 text-xs text-slate-400">No step called that.</p> : quickAddOptions.map((option, index) => {
+                        const OptionIcon = TYPE_META[option.type].icon;
+                        return (
+                          <button key={option.type} type="button" role="option" aria-selected={index === quickAdd.active} onMouseDown={(e) => { e.preventDefault(); quickAddPick(option.type); }}
+                            className={cn("flex items-center gap-2 rounded-lg px-2 py-1.5 text-left text-xs text-slate-200 hover:bg-white/5", index === quickAdd.active && "bg-orange-500/15 text-orange-100")}>
+                            <OptionIcon className="size-3.5 shrink-0" />{option.label}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
                 <StepNumbersContext.Provider value={showNumbers ? stepNumbers : null}>
                 <ReactFlow
                   deleteKeyCode={null}
@@ -909,7 +959,7 @@ export default function FlowBuilder({ flowId, initial, journeys = [], flows = []
                   onNodeClick={(_, node) => { setSelectedId(node.id); setInspectorOpen(true); }}
                   onNodeContextMenu={(event, node) => { event.preventDefault(); setSelectedId(node.id); setInspectorOpen(true); }}
                   onConnect={onConnect}
-                  onPaneClick={() => setSelectedId(null)}
+                  onPaneClick={(event) => { setSelectedId(null); if (event.ctrlKey || event.metaKey) openQuickAdd(event); }}
                   fitView
                   snapToGrid
                   snapGrid={[GRID_SIZE, GRID_SIZE]}

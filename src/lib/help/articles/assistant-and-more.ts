@@ -364,6 +364,19 @@ export const assistantAndMoreArticles: HelpArticle[] = [
     ],
   },
 
+  {
+    slug: "chatbot-flow-builder-tips",
+    title: "Chatbot flow builder: working on a flow",
+    summary: "Shortcuts for building and changing a chatbot flow without breaking the live one.",
+    category: "automation",
+    audience: "admins",
+    keywords: ["flow builder", "chatbot flow", "quick add", "add a step", "bot builder"],
+    body: [
+      { type: "h", text: "Add a step where you click" },
+      { type: "p", text: "Hold Ctrl (⌘ on a Mac) and click an empty spot on the canvas. Start typing the kind of step — \"mess\" for a message, \"menu\", \"wait\" — use the arrow keys to choose, and press Enter. The step is added exactly where you clicked, ready to fill in. Esc closes the box without adding anything." },
+    ],
+  },
+
   // ── Today and lead scores ─────────────────────────────────────────────
   {
     slug: "today-who-to-contact-next",
