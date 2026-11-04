@@ -364,6 +364,25 @@ export const assistantAndMoreArticles: HelpArticle[] = [
     ],
   },
 
+  {
+    slug: "chatbot-flow-builder-tips",
+    title: "Chatbot flow builder: working on a flow",
+    summary: "Shortcuts for building and changing a chatbot flow without breaking the live one.",
+    category: "automation",
+    audience: "admins",
+    keywords: ["flow builder", "chatbot flow", "if anything fails", "fallback", "failure route", "bot builder"],
+    body: [
+      { type: "h", text: "One place to go if anything fails" },
+      { type: "p", text: "Steps that do something — book, call an API, update the CRM, start a Journey — can fail. Instead of wiring a failure route on every one, select one step (usually a **Hand off** to the team) and press **Use this step if anything fails**. It's marked **IF FAILS** on the canvas." },
+      { type: "list", items: [
+        "Any step that fails and has no failure route of its own goes there. A step's own failure route still comes first.",
+        "Nothing changes when steps succeed.",
+        "If that step itself fails, the conversation simply stops — it never loops back on itself.",
+        "Press **Stop using** on it to go back to no fallback. Deleting the step does the same.",
+      ] },
+    ],
+  },
+
   // ── Today and lead scores ─────────────────────────────────────────────
   {
     slug: "today-who-to-contact-next",

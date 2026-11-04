@@ -97,7 +97,11 @@ export const isAnnotation = (node: { type: string } | undefined): boolean => nod
 
 export type CrmUpdateAction = "tag" | "assign" | "stage";
 
-export type Flow = { start: string; nodes: Record<string, FlowNode> };
+/**
+ * `onFailure`: the "If anything fails" step — where a step that fails goes when it has no failure route of its own,
+ * e.g. a hand-off to a person (Node-RED's catch node; Sean, 2026-11-04). See failRoute.
+ */
+export type Flow = { start: string; nodes: Record<string, FlowNode>; onFailure?: string };
 
 /** When a Start Journey step's Journey begins, and the saved answers it is handed. */
 export type JourneyFollowUp = { delayMinutes: number; handOver: Record<string, string> };
@@ -319,7 +323,7 @@ async function semanticChoice(node: Extract<FlowNode, { type: "choice" }>, input
   return optionId ? node.options.find((o) => o.id === optionId)?.next ?? null : null;
 }
 
-async function runSlotSelection(node: Extract<FlowNode, { type: "slots" }>, input: FlowInput, vars: Record<string, string>, ctx: FlowCtx, messages: OutMsg[]) {
+async function runSlotSelection(node: Extract<FlowNode, { type: "slots" }>, input: FlowInput, vars: Record<string, string>, ctx: FlowCtx, messages: OutMsg[], onFailure?: string) {
   const slotAction = node.action === "reschedule" ? "booking_reschedule" : "slot_booking";
 
   // `next` is reachable ONLY after a reservation actually succeeded.
@@ -333,7 +337,7 @@ async function runSlotSelection(node: Extract<FlowNode, { type: "slots" }>, inpu
     const opts = ctx.availableSlots ? await ctx.availableSlots() : [];
     if (!opts.length) {
       messages.push({ type: "text", text: node.noneText || "We don't have open slots online right now — leave your details and the team will call you to book. 📞" });
-      return { nodeId: node.unavailableNext ?? node.failureNext ?? null };
+      return { nodeId: failRoute(node.unavailableNext ?? node.failureNext, node.id, onFailure) };
     }
     messages.push({ type: "choice", text: interpolate(node.text, vars), options: opts.map((o) => ({ id: choiceId(node.id, o.id), label: o.label })) });
     return { nodeId: node.id, wait: { messages, session: { nodeId: node.id, vars }, handedOff: false } as FlowResult };
@@ -347,7 +351,7 @@ async function runSlotSelection(node: Extract<FlowNode, { type: "slots" }>, inpu
   if (!handler) {
     ctx.recordAction?.(node.id, slotAction, false);
     if (node.failureText) messages.push({ type: "text", text: interpolate(node.failureText, vars) });
-    return { nodeId: node.failureNext ?? null };
+    return { nodeId: failRoute(node.failureNext, node.id, onFailure) };
   }
   const res = await handler(slotId, vars, node.id);
   ctx.recordAction?.(node.id, action, res.ok);
@@ -361,7 +365,7 @@ async function runSlotSelection(node: Extract<FlowNode, { type: "slots" }>, inpu
     // sent the customer the success text — "You're booked" — for a slot that was
     // taken between showing the menu and their tap.
     if (node.failureText) messages.push({ type: "text", text: interpolate(node.failureText, vars) });
-    return { nodeId: node.failureNext ?? null };
+    return { nodeId: failRoute(node.failureNext, node.id, onFailure) };
   } else if (res.label) {
     vars.slot = res.label;
     if (node.action === "reschedule") vars.booking_slot = res.label;
@@ -383,10 +387,11 @@ async function runSlotSelection(node: Extract<FlowNode, { type: "slots" }>, inpu
  * still advances, but it stays silent rather than claiming success.
  */
 function actionOutcome(
-  node: { text?: string; failureText?: string; next?: string; failureNext?: string; unavailableNext?: string },
+  node: { id: string; text?: string; failureText?: string; next?: string; failureNext?: string; unavailableNext?: string },
   outcome: ActionOutcome,
   vars: Record<string, string>,
   messages: OutMsg[],
+  onFailure?: string,
 ): string | null {
   if (outcome.ok) {
     if (node.text) messages.push({ type: "text", text: interpolate(node.text, vars) });
@@ -399,7 +404,16 @@ function actionOutcome(
   // nothing is recoverable, claiming success is not. The publish compiler refuses
   // a new graph that leaves this undefined.
   const route = outcome.unavailable ? node.unavailableNext ?? node.failureNext : node.failureNext;
-  return route ?? null;
+  return failRoute(route, node.id, onFailure);
+}
+
+/**
+ * A failed step's own failure route; without one, the flow's "If anything fails" step (Node-RED's catch node; Sean,
+ * 2026-11-04) — never the fallback step itself, so a failing fallback cannot loop on itself; without either, the
+ * turn ends. Never `next`: see actionOutcome.
+ */
+function failRoute(route: string | undefined, nodeId: string, onFailure: string | undefined): string | null {
+  return route ?? (onFailure && onFailure !== nodeId ? onFailure : null);
 }
 
 export async function runFlow(flow: Flow, session: FlowSession, input: FlowInput, ctx: FlowCtx): Promise<FlowResult> {
@@ -449,7 +463,7 @@ export async function runFlow(flow: Flow, session: FlowSession, input: FlowInput
         nodeId = cur.next ?? null;
       }
     } else if (cur?.type === "slots") {
-      const selected = await runSlotSelection(cur, input, vars, ctx, messages);
+      const selected = await runSlotSelection(cur, input, vars, ctx, messages, flow.onFailure);
       if (selected.wait) return selected.wait;
       nodeId = selected.nodeId;
     } else if (cur?.type === "ai") {
@@ -504,7 +518,7 @@ export async function runFlow(flow: Flow, session: FlowSession, input: FlowInput
         // No approved knowledge matched. Like every fallible action, "it did not
         // work" must not continue into text written for the case where it did.
         if (node.noMatchText) messages.push({ type: "text", text: interpolate(node.noMatchText, vars) });
-        nodeId = node.failureNext ?? null;
+        nodeId = failRoute(node.failureNext, node.id, flow.onFailure);
       }
     } else if (node.type === "extract") {
       const source = node.sourceVariable ? (vars[node.sourceVariable] ?? "") : input.text;
@@ -517,7 +531,7 @@ export async function runFlow(flow: Flow, session: FlowSession, input: FlowInput
         nodeId = node.next ?? null;
       } else {
         if (node.failureText) messages.push({ type: "text", text: interpolate(node.failureText, vars) });
-        nodeId = node.failureNext ?? null;
+        nodeId = failRoute(node.failureNext, node.id, flow.onFailure);
       }
     } else if (node.type === "http") {
       const outcome = ctx.httpRequest ? await ctx.httpRequest({ method: node.method, url: interpolate(node.url, vars), headers: node.headers ? interpolate(node.headers, vars) : undefined, ...(node.connectionId ? { connectionId: node.connectionId } : {}),body: node.body ? interpolate(node.body, vars) : undefined, vars, nodeId: node.id }) : { ok: false, reason: "API requests unavailable" };
@@ -527,7 +541,7 @@ export async function runFlow(flow: Flow, session: FlowSession, input: FlowInput
         nodeId = node.next ?? null;
       } else {
         if (node.failureText) messages.push({ type: "text", text: interpolate(node.failureText, vars) });
-        nodeId = node.failureNext ?? null;
+        nodeId = failRoute(node.failureNext, node.id, flow.onFailure);
       }
     } else if (node.type === "delay") {
       const wait = startDelay(node, vars);
@@ -541,7 +555,7 @@ export async function runFlow(flow: Flow, session: FlowSession, input: FlowInput
       if (child.outcome.ok) nodeId = node.next ?? null;
       else {
         if (node.failureText) messages.push({ type: "text", text: interpolate(node.failureText, vars) });
-        nodeId = node.failureNext ?? null;
+        nodeId = failRoute(node.failureNext, node.id, flow.onFailure);
       }
     } else if (node.type === "booking") {
       // An action that FAILED must not fall through to the success text. The
@@ -562,23 +576,23 @@ export async function runFlow(flow: Flow, session: FlowSession, input: FlowInput
         outcome = await ctx.createBooking(vars, node.action, node.id);
         ctx.recordAction?.(node.id, `booking_${node.action ?? "service"}`, outcome.ok);
       }
-      nodeId = actionOutcome(node, outcome, vars, messages);
+      nodeId = actionOutcome(node, outcome, vars, messages, flow.onFailure);
     } else if (node.type === "crm") {
       const outcome = ctx.updateCrm ? await ctx.updateCrm(node, vars) : { ok: false, reason: "CRM updates are unavailable" };
       ctx.recordAction?.(node.id, `crm_${node.action}`, outcome.ok);
-      nodeId = actionOutcome(node, outcome, vars, messages);
+      nodeId = actionOutcome(node, outcome, vars, messages, flow.onFailure);
     } else if (node.type === "journey") {
       const outcome = ctx.startJourney ? await ctx.startJourney(node.journeyId, vars, node.id, journeyFollowUp(node, vars)) : { ok: false, reason: "Journey action unavailable" };
       ctx.recordAction?.(node.id, "journey_start", outcome.ok);
       if (!vars.journey_started) vars.journey_started = outcome.ok ? "yes" : "no";
       if (outcome.reason && !vars.journey_reason) vars.journey_reason = outcome.reason;
-      nodeId = actionOutcome(node, outcome, vars, messages);
+      nodeId = actionOutcome(node, outcome, vars, messages, flow.onFailure);
     } else if (node.type === "slots") {
       const opts = ctx.availableSlots ? await ctx.availableSlots() : [];
       // No slots is NOT the success path. It used to fall through to `next`, whose
       // shipped text is "You're booked, {{name}}!" — after a turn in which nothing
       // was booked at all.
-      if (!opts.length) { messages.push({ type: "text", text: node.noneText || "We don't have open slots online right now — leave your details and the team will call you to book. 📞" }); nodeId = node.unavailableNext ?? node.failureNext ?? null; }
+      if (!opts.length) { messages.push({ type: "text", text: node.noneText || "We don't have open slots online right now — leave your details and the team will call you to book. 📞" }); nodeId = failRoute(node.unavailableNext ?? node.failureNext, node.id, flow.onFailure); }
       else { messages.push({ type: "choice", text: interpolate(node.text, vars), options: opts.map((o) => ({ id: choiceId(node.id, o.id), label: o.label })) }); return { messages, session: { nodeId: node.id, vars }, handedOff: false }; }
     } else if (node.type === "choice") {
       messages.push({ type: "choice", text: interpolate(node.text, vars), options: node.options.map((o) => ({ id: choiceId(node.id, o.id), label: o.label, description: o.description })) }); return { messages, session: { nodeId: node.id, vars }, handedOff: false };

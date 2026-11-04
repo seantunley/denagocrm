@@ -76,7 +76,8 @@ const referencedVars = (text: string) => [...text.matchAll(/\{\{\s*(\w+)\s*\}\}/
 
 function reachable(flow: Flow): Set<string> {
   const seen = new Set<string>();
-  const stack = [flow.start];
+  // The "If anything fails" step is reached by failing, not by a wire.
+  const stack = [flow.start, ...(str(flow.onFailure) ? [str(flow.onFailure)] : [])];
   while (stack.length) {
     const id = stack.pop()!;
     if (seen.has(id)) continue;
@@ -161,6 +162,11 @@ export function validateFlow(flow: Flow, channels: FlowChannel[] = ["whatsapp"])
   if (isAnnotation(flow.nodes[str(flow.start)])) return [issue("error", "graph.start", "A note or group can't be where the flow starts — choose a step.")];
   if (!entries.length) return [issue("error", "graph.empty", "Flow has no nodes.")];
   if (entries.length > 250) issues.push(issue("error", "graph.size", "Flow exceeds the 250-node safety limit."));
+  if (flow.onFailure !== undefined) {
+    const fallback = flow.nodes[str(flow.onFailure)];
+    if (!fallback) issues.push(issue("error", "flow.fallback_missing", "The “If anything fails” step no longer exists — choose another, or stop using one."));
+    else if (isAnnotation(fallback)) issues.push(issue("error", "flow.fallback_missing", "A note or group can't be the “If anything fails” step — choose a step.", str(flow.onFailure)));
+  }
 
   const captured = new Set(BUILTIN_VARS);
   const hasBookingLookup = entries.some(([, node]) => node?.type === "booking" && node.action === "lookup");
@@ -304,7 +310,9 @@ export function validateFlow(flow: Flow, channels: FlowChannel[] = ["whatsapp"])
     // cancelled" for a cancellation that did not happen. Either give the node a
     // failure route, or say nothing on failure — but do not inherit the success
     // text by default.
-    if (CAN_FAIL.has(node.type) && !str((node as { failureNext?: unknown }).failureNext)) {
+    // A flow-wide "If anything fails" step catches it — except for that step itself (lib/flow failRoute).
+    const caught = Boolean(str(flow.onFailure)) && str(flow.onFailure) !== str(node.id);
+    if (CAN_FAIL.has(node.type) && !str((node as { failureNext?: unknown }).failureNext) && !caught) {
       const onwards = str((node as { next?: unknown }).next);
       const announces = onwards ? allText(flow.nodes[onwards] ?? ({} as FlowNode)).join(" ") : "";
       if (onwards && announces.trim()) {

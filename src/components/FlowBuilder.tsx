@@ -75,12 +75,14 @@ import type { ReplayStep } from "@/lib/flowReplayRun";
 import { validateFlow, type FlowChannel, type FlowIssue } from "@/lib/flowValidation";
 
 type Pos = { x: number; y: number };
-type FlowData = { start: string; nodes: Record<string, FlowNode>; positions?: Record<string, Pos> };
+type FlowData = { start: string; nodes: Record<string, FlowNode>; positions?: Record<string, Pos>; onFailure?: string };
 /** `replay`: while a conversation is replayed, the step numbers it passed this node at (empty = not on its path). */
 type RFData = { flow: FlowNode; isStart: boolean; issues?: FlowIssue[]; replay?: number[] };
 /** The numbers on each step's card (lib/flowStepNumbers); null while switched off. */
 const StepNumbersContext = createContext<StepNumbers | null>(null);
-type EditorSnapshot = { start: string; nodes: Node<RFData>[] };
+type EditorSnapshot = { start: string; nodes: Node<RFData>[]; onFailure?: string };
+/** The flow's "If anything fails" step (lib/flow failRoute), for the IF FAILS badge on its card. */
+const FallbackContext = createContext<string | undefined>(undefined);
 export type FlowJourneyOption = { id: string; name: string };
 export type FlowOptionRef = { id: string; name: string };
 
@@ -205,6 +207,7 @@ function NodeCard({ data, selected }: NodeProps) {
   const n = d.flow;
   // Before the note/group early returns: a hook must run on every render, in the same order.
   const stepNumbers = useContext(StepNumbersContext);
+  const fallbackId = useContext(FallbackContext);
   if (n.type === "note") {
     const color = ANNOTATION_COLORS[n.color ?? "yellow"];
     return (
@@ -240,7 +243,8 @@ function NodeCard({ data, selected }: NodeProps) {
       <div className={cn("flex items-center gap-1.5 rounded-t-[11px] px-3 py-2 text-xs font-semibold", meta.header)}>
         <Icon className="size-3.5" />
         {meta.label}
-        {d.isStart && <span className="ml-auto rounded bg-orange-600 px-1.5 text-[10px]">START</span>}
+        {fallbackId === n.id && <span className="ml-auto rounded bg-rose-600 px-1.5 text-[10px] text-white" title="Where the flow goes if anything fails">IF FAILS</span>}
+        {d.isStart && <span className={cn("rounded bg-orange-600 px-1.5 text-[10px]", fallbackId !== n.id && "ml-auto")}>START</span>}
       </div>
       <div className="min-h-8 whitespace-pre-wrap px-3 py-2 text-xs leading-5 text-slate-300">{summary(n) || "…"}</div>
       {numbers && <div className="border-t border-slate-800 px-3 py-1 text-[10px] font-medium text-emerald-300/90" title="Last 30 days">{numbers}</div>}
@@ -356,7 +360,8 @@ export default function FlowBuilder({ flowId, initial, journeys = [], flows = []
   const [saveNonce, setSaveNonce] = useState(0);
   const [pendingDestination, setPendingDestination] = useState<string | null>(null);
   const savedAt = useRef<string>(updatedAt);
-  const current = useRef<EditorSnapshot>({ start: initial.start, nodes: [] });
+  const [onFailure, setOnFailure] = useState(initial.onFailure);
+  const current = useRef<EditorSnapshot>({ start: initial.start, nodes: [], onFailure: initial.onFailure });
   const history = useRef<{ past: EditorSnapshot[]; future: EditorSnapshot[] }>({ past: [], future: [] });
   const historyGroup = useRef<{ key: string; at: number } | null>(null);
   const [historyDepth, setHistoryDepth] = useState({ undo: 0, redo: 0 });
@@ -368,8 +373,8 @@ export default function FlowBuilder({ flowId, initial, journeys = [], flows = []
   const blockedByConflict = useRef(false);
 
   useEffect(() => {
-    current.current = { start, nodes: rfNodes };
-  }, [rfNodes, start]);
+    current.current = { start, nodes: rfNodes, onFailure };
+  }, [rfNodes, start, onFailure]);
 
   const updateHistoryDepth = useCallback(() => {
     setHistoryDepth({ undo: history.current.past.length, redo: history.current.future.length });
@@ -396,6 +401,7 @@ export default function FlowBuilder({ flowId, initial, journeys = [], flows = []
     const restored = cloneSnapshot(snapshot);
     current.current = restored;
     setStart(restored.start);
+    setOnFailure(restored.onFailure);
     setRfNodes(restored.nodes);
     setSelectedId(null);
     historyGroup.current = null;
@@ -425,7 +431,7 @@ export default function FlowBuilder({ flowId, initial, journeys = [], flows = []
       nodes[rn.id] = rn.data.flow;
       positions[rn.id] = rn.position;
     }
-    return JSON.stringify({ start: current.current.start, nodes, positions });
+    return JSON.stringify({ start: current.current.start, nodes, positions, ...(current.current.onFailure ? { onFailure: current.current.onFailure } : {}) });
   }, []);
 
   const persistDraft = useCallback(async (manual = false) => {
@@ -489,8 +495,9 @@ export default function FlowBuilder({ flowId, initial, journeys = [], flows = []
         history.current.future = [];
         updateHistoryDepth();
         setStart(parsed.start);
+        setOnFailure(parsed.onFailure);
         setRfNodes(restoredNodes);
-        current.current = { start: parsed.start, nodes: restoredNodes };
+        current.current = { start: parsed.start, nodes: restoredNodes, onFailure: parsed.onFailure };
         dirtyVersion.current += 1;
         setStatus("Recovered unsaved changes");
         toast.info("Recovered unsaved flow changes from this browser");
@@ -693,6 +700,7 @@ export default function FlowBuilder({ flowId, initial, journeys = [], flows = []
       const nextStart = current.current.nodes.find((node) => node.id !== id)?.id ?? "";
       setStart(nextStart);
     }
+    if (onFailure === id) setOnFailure(undefined);
     if (selectedId === id) setSelectedId(null);
     markDirty();
   }
@@ -701,6 +709,13 @@ export default function FlowBuilder({ flowId, initial, journeys = [], flows = []
     remember(`start:${id}`, true);
     setStart(id);
     setRfNodes((ns) => ns.map((n) => ({ ...n, data: { ...n.data, isStart: n.id === id } })));
+    markDirty();
+  }
+
+  /** Make this the "If anything fails" step, or stop using it (undoable, like Set start). */
+  function markFallback(id: string | undefined) {
+    remember(`fallback:${id ?? "none"}`, true);
+    setOnFailure(id);
     markDirty();
   }
 
@@ -727,7 +742,7 @@ export default function FlowBuilder({ flowId, initial, journeys = [], flows = []
   }
 
   const selected = rfNodes.find((n) => n.id === selectedId)?.data.flow ?? null;
-  const currentFlow = useMemo(() => ({ start, nodes: Object.fromEntries(rfNodes.map((node) => [node.id, node.data.flow])) }), [rfNodes, start]);
+  const currentFlow = useMemo(() => ({ start, nodes: Object.fromEntries(rfNodes.map((node) => [node.id, node.data.flow])), ...(onFailure ? { onFailure } : {}) }), [rfNodes, start, onFailure]);
   const liveIssues = useMemo(() => validateFlow(currentFlow, channels), [channels, currentFlow]);
   const issuesByNode = useMemo(() => {
     const grouped = new Map<string, FlowIssue[]>();
@@ -894,6 +909,7 @@ export default function FlowBuilder({ flowId, initial, journeys = [], flows = []
 
             <main className="min-w-0 flex-1 bg-[#0b0f0e] p-2 sm:p-3">
               <div className="relative h-full min-h-[32rem] overflow-hidden rounded-xl border border-white/[0.08] bg-[#0f1412]" onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = "copy"; }} onDrop={onCanvasDrop}>
+                <FallbackContext.Provider value={onFailure}>
                 <StepNumbersContext.Provider value={showNumbers ? stepNumbers : null}>
                 <ReactFlow
                   deleteKeyCode={null}
@@ -943,6 +959,7 @@ export default function FlowBuilder({ flowId, initial, journeys = [], flows = []
                   </Panel>
                 </ReactFlow>
                 </StepNumbersContext.Provider>
+                </FallbackContext.Provider>
                 {rfNodes.length === 0 && (
                   <div className="pointer-events-none absolute inset-0 grid place-items-center p-6">
                     <div className="pointer-events-auto max-w-sm rounded-2xl border border-dashed border-white/15 bg-[#111614]/95 p-6 text-center shadow-2xl">
@@ -960,7 +977,7 @@ export default function FlowBuilder({ flowId, initial, journeys = [], flows = []
               <aside className="w-80 shrink-0 overflow-y-auto border-l border-white/[0.08] bg-[#111614] max-lg:fixed max-lg:inset-x-0 max-lg:bottom-0 max-lg:z-[81] max-lg:max-h-[78dvh] max-lg:w-auto max-lg:rounded-t-3xl max-lg:border-t max-lg:shadow-[0_-24px_70px_rgba(0,0,0,.55)]">
                 <div className="sticky top-0 z-10 flex items-center justify-between border-b border-white/[0.08] bg-[#111614]/95 px-4 py-3 backdrop-blur"><div><p className="text-sm font-semibold text-white">Inspector</p><p className="text-xs text-slate-400">Configure the selected node</p></div><button type="button" onClick={() => setInspectorOpen(false)} className="grid size-10 place-items-center rounded-lg text-slate-400 hover:bg-white/5 hover:text-white"><X className="size-4" /><span className="sr-only">Close inspector</span></button></div>
                 <div className="space-y-5 p-4 pb-[max(1rem,env(safe-area-inset-bottom))]">
-                  {!selected ? <p className="text-sm leading-6 text-slate-400">Select a node to edit it. Drag from a node&apos;s output handle to another node to create a connection.</p> : <><NodeIssues issues={selectedIssues} /><NodePanel key={selected.id} node={selected} isStart={selected.id === start} nodeOptions={nodeOptions.filter((option) => option.id !== selected.id)} variables={knownVariables} journeys={journeys} flows={flows} documents={documents} staff={staff} connections={connections} crmTags={crmTags} stages={stages} onChange={(next) => patch(selected.id, () => next)} onDelete={() => removeNode(selected.id)} onDuplicate={() => duplicateNode(selected.id)} onMakeStart={() => markStart(selected.id)} /></>}
+                  {!selected ? <p className="text-sm leading-6 text-slate-400">Select a node to edit it. Drag from a node&apos;s output handle to another node to create a connection.</p> : <><NodeIssues issues={selectedIssues} /><NodePanel key={selected.id} node={selected} isStart={selected.id === start} nodeOptions={nodeOptions.filter((option) => option.id !== selected.id)} variables={knownVariables} journeys={journeys} flows={flows} documents={documents} staff={staff} connections={connections} crmTags={crmTags} stages={stages} onChange={(next) => patch(selected.id, () => next)} onDelete={() => removeNode(selected.id)} onDuplicate={() => duplicateNode(selected.id)} onMakeStart={() => markStart(selected.id)} isFallback={onFailure === selected.id} onMakeFallback={(on) => markFallback(on ? selected.id : undefined)} /></>}
                   <VariablesPanel variables={knownVariables} />
                 </div>
               </aside>
@@ -1038,7 +1055,7 @@ function VariablesPanel({ variables }: { variables: string[] }) {
   );
 }
 
-function NodePanel({ node, isStart, nodeOptions, variables, journeys, flows, documents = [], staff = [], connections = [], crmTags = [], stages = [], onChange, onDelete, onDuplicate, onMakeStart }: { connections?: { id: string; name: string; host: string }[]; crmTags?: string[]; stages?: { id: string; name: string }[]; node: FlowNode; isStart: boolean; nodeOptions: { id: string; label: string }[]; variables: string[]; journeys: FlowJourneyOption[]; flows: FlowOptionRef[]; documents?: { id: string; name: string }[]; staff?: { id: string; name: string }[]; onChange: (n: FlowNode) => void; onDelete: () => void; onDuplicate: () => void; onMakeStart: () => void }) {
+function NodePanel({ node, isStart, nodeOptions, variables, journeys, flows, documents = [], staff = [], connections = [], crmTags = [], stages = [], onChange, onDelete, onDuplicate, onMakeStart, isFallback = false, onMakeFallback }: { isFallback?: boolean; onMakeFallback?: (on: boolean) => void; connections?: { id: string; name: string; host: string }[]; crmTags?: string[]; stages?: { id: string; name: string }[]; node: FlowNode; isStart: boolean; nodeOptions: { id: string; label: string }[]; variables: string[]; journeys: FlowJourneyOption[]; flows: FlowOptionRef[]; documents?: { id: string; name: string }[]; staff?: { id: string; name: string }[]; onChange: (n: FlowNode) => void; onDelete: () => void; onDuplicate: () => void; onMakeStart: () => void }) {
   const meta = TYPE_META[node.type];
   const Icon = meta.icon;
   return (
@@ -1050,6 +1067,18 @@ function NodePanel({ node, isStart, nodeOptions, variables, journeys, flows, doc
           {!isStart && !isAnnotation(node) && <button type="button" onClick={onMakeStart} className="min-h-9 rounded-lg px-2 text-xs text-orange-400 hover:bg-orange-500/10">Set start</button>}
         </div>
       </div>
+      {!isAnnotation(node) && onMakeFallback && (
+        isFallback ? (
+          <div className="flex items-center justify-between gap-2 rounded-lg border border-rose-400/30 bg-rose-500/10 px-3 py-2 text-xs text-rose-100">
+            <span>This is where the flow goes <strong>if anything fails</strong> — any step that fails without its own failure route comes here.</span>
+            <button type="button" onClick={() => onMakeFallback(false)} className="shrink-0 rounded-md px-2 py-1 text-rose-200 hover:bg-rose-500/15">Stop using</button>
+          </div>
+        ) : (
+          <button type="button" onClick={() => onMakeFallback(true)} className="min-h-9 w-full rounded-lg border border-dashed border-white/10 px-3 text-left text-xs text-slate-400 hover:bg-white/5 hover:text-slate-200" title="Any step that fails without its own failure route comes here — e.g. a hand-off to the team">
+            Use this step if anything fails
+          </button>
+        )
+      )}
 
       {(node.type === "message" || node.type === "handoff") && <div><div className="flex items-center justify-between"><label className="label" htmlFor={`msg-${node.id}`}>Message</label><EmojiButton targetId={`msg-${node.id}`} value={node.text ?? ""} onChange={(text) => onChange({ ...node, text })} /></div><textarea id={`msg-${node.id}`} className="input" rows={4} value={node.text ?? ""} onChange={(e) => onChange({ ...node, text: e.target.value })} /></div>}
       {node.type === "handoff" && <><div><label className="label">Handoff reason</label><input className="input" value={node.reason ?? ""} onChange={(e) => onChange({ ...node, reason: e.target.value || undefined })} placeholder="Sales enquiry" /></div><div><label className="label">Staff summary</label><textarea className="input" rows={3} value={node.summary ?? ""} onChange={(e) => onChange({ ...node, summary: e.target.value || undefined })} placeholder="Include {{variables}} collected by the flow" /><p className="mt-1 text-xs text-slate-500">The live conversation lands in the Inbox; this controls why, and with what context, it is handed over.</p></div></>}
