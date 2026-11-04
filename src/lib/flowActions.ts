@@ -5,7 +5,7 @@
  */
 import crypto from "crypto";
 import { addDays, format } from "date-fns";
-import { prisma } from "./db";
+import { basePrisma, prisma } from "./db";
 import { customerRecordTenantId } from "./customerRecordTenant";
 import { getDayAvailability, reserveSlot } from "./bookingSlots";
 import { createIntakeLead } from "./leadIntake";
@@ -21,7 +21,8 @@ import { flowContactCard } from "./flowContactCard";
 import { runtimeFlowTenantId } from "./flowScope";
 
 type Match = { contactId: string | null; leadId: string | null };
-import type { ActionOutcome, JourneyFollowUp } from "./flow";
+import type { ActionOutcome, FlowNode, JourneyFollowUp } from "./flow";
+import { logAudit } from "./audit";
 
 export async function availableSlots(max = 6): Promise<{ id: string; label: string }[]> {
   const out: { id: string; label: string }[] = [];
@@ -142,6 +143,68 @@ async function createDemo(source: string, vars: Record<string, string>, match: M
   return { ok: true };
 }
 
+/**
+ * UPDATE THE CRM from a flow step (Sean, 2026-11-02): tag the customer, set their salesperson, or move their open
+ * deal to a stage. In the conversation's own workspace (the channel scope), each audited as the chatbot. A stage move
+ * needs exactly ONE open deal — with several, it fails rather than guess which (single-customer-timeline rule).
+ */
+async function updateCrmFromFlow(node: Extract<FlowNode, { type: "crm" }>, match: Match): Promise<ActionOutcome> {
+  const tenantId = runtimeFlowTenantId();
+  const audit = (summary: string, ids: { contactId?: string | null; leadId?: string | null }, action = "chatbot.crm_update") =>
+    logAudit({ action, summary, userName: "Chatbot", actorType: "system", source: "chatbot", ...ids }).catch(() => {});
+  if (!match.contactId && !match.leadId) return { ok: false, reason: "No customer record for this conversation yet" };
+
+  if (node.action === "tag") {
+    const name = (node.tagName ?? "").replace(/\s+/g, " ").trim().slice(0, 40);
+    if (!name || !match.contactId) return { ok: false, reason: !name ? "No tag chosen" : "No customer record to tag" };
+    const tag = await prisma.tag.upsert({ where: { tenantId_name: { tenantId, name } }, create: { tenantId, name }, update: {}, select: { id: true } });
+    await prisma.contact.update({ where: { id: match.contactId }, data: { tags: { connect: { id: tag.id } } } });
+    await audit(`Tagged “${name}” by the chatbot`, { contactId: match.contactId });
+    return { ok: true };
+  }
+
+  if (node.action === "assign") {
+    const member = node.userId ? await basePrisma.tenantMember.findFirst({ where: { tenantId, userId: node.userId }, select: { userId: true } }) : null;
+    if (!member) return { ok: false, reason: "That salesperson is no longer in this workspace" };
+    if (match.contactId) await prisma.contact.updateMany({ where: { id: match.contactId, tenantId }, data: { ownerId: member.userId } });
+    const deal = await openDeal(match, tenantId);
+    if (deal) await prisma.lead.updateMany({ where: { id: deal.id, tenantId }, data: { assignedToId: member.userId } });
+    await audit(`Set to ${node.userLabel ?? "a salesperson"} by the chatbot`, { contactId: match.contactId, leadId: deal?.id ?? null });
+    return { ok: true };
+  }
+
+  // Move the open deal to a stage.
+  const stage = node.stageId ? await prisma.pipelineStage.findFirst({ where: { id: node.stageId, tenantId }, select: { id: true, name: true } }) : null;
+  if (!stage) return { ok: false, reason: "That stage no longer exists" };
+  const deals = await openDeals(match, tenantId);
+  if (deals.length !== 1) return { ok: false, reason: deals.length ? "The customer has more than one open deal" : "The customer has no open deal" };
+  const [deal] = deals;
+  if (deal.stageId !== stage.id) {
+    await prisma.lead.updateMany({ where: { id: deal.id, tenantId }, data: { stageId: stage.id, stageEnteredAt: new Date() } });
+    await audit(`Moved “${deal.title}” to ${stage.name} (chatbot)`, { contactId: match.contactId, leadId: deal.id }, "lead.stage_changed");
+  }
+  return { ok: true };
+}
+
+/**
+ * ALL the customer's open deals, so "exactly one" really means one. A matched
+ * open lead alone is not enough: its customer may have others, and the stage
+ * move must refuse then rather than guess. A lead with no customer is its own list.
+ */
+async function openDeals(match: Match, tenantId: string): Promise<{ id: string; title: string; stageId: string }[]> {
+  const select = { id: true, title: true, stageId: true } as const;
+  const lead = match.leadId
+    ? await prisma.lead.findFirst({ where: { id: match.leadId, tenantId, status: "open", deletedAt: null }, select: { ...select, contactId: true } })
+    : null;
+  const contactId = lead?.contactId ?? match.contactId;
+  if (!contactId) return lead ? [{ id: lead.id, title: lead.title, stageId: lead.stageId }] : [];
+  return prisma.lead.findMany({ where: { contactId, tenantId, status: "open", deletedAt: null }, select, take: 3 });
+}
+async function openDeal(match: Match, tenantId: string) {
+  const deals = await openDeals(match, tenantId);
+  return deals.length === 1 ? deals[0] : null;
+}
+
 export function crmActions(source: string, match: Match) {
   return {
     // Knowledge, AI-extract, outbound HTTPS and subflow loading — the runtime
@@ -195,6 +258,7 @@ export function crmActions(source: string, match: Match) {
       if (result.runId) vars.journey_run_id = result.runId;
       return { ok: result.ok, reason: result.reason };
     },
+    updateCrm: (node: Extract<FlowNode, { type: "crm" }>) => updateCrmFromFlow(node, match),
     createBooking: async (vars: Record<string, string>, action: "service" | "demo" | "lead" | undefined, nodeId: string): Promise<ActionOutcome> => {
       if (action === "demo") return createDemo(source, vars, match, nodeId);
       if (action === "lead") {

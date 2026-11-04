@@ -8,14 +8,14 @@ export type FlowIssue = { severity: "error" | "warning"; code: string; message: 
 const NODE_TYPES = new Set([
   "message", "choice", "capture", "captureFile", "image", "document", "contactCard", "answer",
   "set", "switch", "http", "knowledge", "extract", "delay", "subflow",
-  "booking", "slots", "journey", "condition", "ai", "handoff", "hours", "goto", "note", "group", "end",
+  "booking", "slots", "journey", "condition", "ai", "handoff", "hours", "goto", "note", "group", "crm", "end",
 ]);
 const BUILTIN_VARS = new Set([
   "greeting", "first_name", "name", "known", "slot", "channel", "current_date", "current_time",
   "booking_identity", "booking_found", "booking_id", "booking_slot", "booking_summary", "booking_cancelled", "booking_rescheduled",
   "journey_started", "journey_reason", "journey_run_id", "open_now",
 ]);
-const AUTO_TYPES = new Set<FlowNode["type"]>(["message", "image", "document", "contactCard", "answer", "set", "switch", "http", "knowledge", "extract", "subflow", "booking", "journey", "condition", "hours", "goto"]);
+const AUTO_TYPES = new Set<FlowNode["type"]>(["message", "image", "document", "contactCard", "answer", "set", "switch", "http", "knowledge", "extract", "subflow", "booking", "journey", "condition", "hours", "goto", "crm"]);
 
 function issue(severity: FlowIssue["severity"], code: string, message: string, nodeId?: string, channel?: FlowChannel): FlowIssue {
   return { severity, code, message, ...(nodeId ? { nodeId } : {}), ...(channel ? { channel } : {}) };
@@ -54,10 +54,11 @@ function refs(node: FlowNode): string[] {
 }
 
 /** Nodes that perform a customer-visible side effect which can legitimately fail. */
-const CAN_FAIL = new Set(["booking", "slots", "journey", "http", "knowledge", "extract", "subflow"]);
+const CAN_FAIL = new Set(["booking", "slots", "journey", "http", "knowledge", "extract", "subflow", "crm"]);
 function allText(node: FlowNode): string[] {
   const values: unknown[] = [];
   if (node.type === "message" || node.type === "handoff") values.push(node.text);
+  if (node.type === "crm") values.push(node.text, node.failureText, node.tagName);
   if (node.type === "choice" || node.type === "capture" || node.type === "captureFile" || node.type === "slots") values.push(node.text);
   if (node.type === "slots") values.push(node.noneText);
   if (node.type === "image" || node.type === "document") values.push(node.caption);
@@ -276,6 +277,13 @@ export function validateFlow(flow: Flow, channels: FlowChannel[] = ["whatsapp"])
       if (!VARIABLE_NAME.test(name)) issues.push(issue("warning", "journey.hand_over_name", `“${name}” can't be handed to a Journey — a name must start with a letter and use only letters, numbers and _.`, id));
     }
     if (node.type === "goto" && !str(node.target).trim()) issues.push(issue("error", "goto.missing", "Go to needs a step to jump to.", id));
+    if (node.type === "crm") {
+      const action = str(node.action);
+      if (!["tag", "assign", "stage"].includes(action)) issues.push(issue("error", "crm.action", "Update the CRM needs an action: tag, salesperson or stage.", id));
+      else if (action === "tag" && !str(node.tagName).trim()) issues.push(issue("error", "crm.missing", "Choose the tag to add.", id));
+      else if (action === "assign" && !str(node.userId)) issues.push(issue("error", "crm.missing", "Choose the salesperson.", id));
+      else if (action === "stage" && !str(node.stageId)) issues.push(issue("error", "crm.missing", "Choose the stage.", id));
+    }
     if (node.type === "goto" && str(node.target) === id) issues.push(issue("error", "goto.self", "Go to can't jump to itself.", id));
 
     for (const target of refs(node)) if (!flow.nodes[target]) issues.push(issue("error", "graph.missing_target", `Connection points to missing node “${target}”.`, id));
