@@ -47,6 +47,8 @@ export default async function FlowEditorPage({ params }: { params: Promise<{ id:
   // LIVE NUMBERS ON EACH STEP (Node-RED's node status; Sean, 2026-11-02): the last 30 days, across every published
   // version of this flow, from the same per-step analytics the Bot analytics page reads. Nothing published: none.
   const versionIds = (await prisma.botFlowVersion.findMany({ where: { flowId: id, tenantId: await builderTenantId() }, select: { id: true } })).map((v) => v.id);
+  // CHANGED SINCE PUBLISH: the last published version, so the canvas can mark what this draft has changed since.
+  const published = await prisma.botFlowVersion.findFirst({ where: { flowId: id, tenantId: await builderTenantId() }, orderBy: { version: "desc" }, select: { version: true, definition: true } });
   const stepNumbers = Object.fromEntries(
     (await getBotFlowVersionAnalytics(versionIds, { occurredFrom: new Date(Date.now() - STEP_NUMBERS_DAYS * 86_400_000) })).nodes
       // `entered` counts every step the engine ran (automatic ones too); `reached` (waits) covers question steps in
@@ -87,7 +89,7 @@ export default async function FlowEditorPage({ params }: { params: Promise<{ id:
       </div>
       <FlowAiDraftForm flowId={row.id} />
       <FlowNodeSystemFrame>
-        <FlowBuilder flowId={row.id} initial={flow} journeys={journeys} flows={reusableFlows} updatedAt={row.updatedAt.toISOString()} channels={channels} businessName={company.name} documents={documents} staff={staff} connections={connections} crmTags={crmTags} stages={stages} stepNumbers={stepNumbers} stepNumbersDays={STEP_NUMBERS_DAYS} sharedNames={sharedNames} />
+        <FlowBuilder flowId={row.id} initial={flow} journeys={journeys} flows={reusableFlows} updatedAt={row.updatedAt.toISOString()} channels={channels} businessName={company.name} documents={documents} staff={staff} connections={connections} crmTags={crmTags} stages={stages} stepNumbers={stepNumbers} stepNumbersDays={STEP_NUMBERS_DAYS} sharedNames={sharedNames} published={published ?? undefined} />
       </FlowNodeSystemFrame>
     </div>
   );

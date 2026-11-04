@@ -5,6 +5,8 @@ import { useRouter } from "next/navigation";
 import { AlertTriangle, CheckCircle2, GitBranch, Radio, Route } from "lucide-react";
 import { toast } from "sonner";
 import { setActiveFlow } from "@/app/actions/flow";
+import FlowDiffList from "@/components/FlowDiffList";
+import type { FlowVersionDiff } from "@/lib/flowVersionDiff";
 import {
   Dialog,
   DialogClose,
@@ -24,7 +26,10 @@ export default function PublishFlowButton({
   draftNodes,
   liveNodes,
   liveVersion,
+  changes,
 }: {
+  /** What this publish changes, from the live version (lib/flowVersionDiff) — absent when nothing is live yet. */
+  changes?: FlowVersionDiff;
   flowId: string;
   label: string;
   channel?: string;
@@ -93,6 +98,13 @@ export default function PublishFlowButton({
             <p className="mt-1 text-sm font-semibold">{liveVersion ? `v${liveVersion}` : "Not published"}{liveNodes != null ? ` · ${liveNodes} nodes` : ""}</p>
           </div>
         </div>
+
+        {changes && (
+          <div className="max-h-64 overflow-y-auto rounded-xl border border-border bg-muted/15 p-3">
+            <p className="text-xs font-semibold">What changes from v{liveVersion}</p>
+            <FlowDiffList diff={changes} same="Nothing — this draft is the same as the live version." />
+          </div>
+        )}
 
         {nodeDelta !== null && nodeDelta !== 0 && (
           <p className="rounded-lg border border-border bg-muted/20 px-3 py-2 text-xs text-muted-foreground">
