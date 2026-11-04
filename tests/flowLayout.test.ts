@@ -33,6 +33,24 @@ test("steps nothing leads to go in a last column; notes and groups are left wher
   assert.equal(p.note, undefined);
 });
 
+test("the 'If anything fails' step and 'no reply' routes are laid out as reachable, not parked at the end", () => {
+  const f = {
+    start: "ask",
+    onFailure: "team",
+    nodes: {
+      ask: { id: "ask", type: "capture", text: "Name?", variable: "name", next: "thanks", noReply: { minutes: 30, next: "nudge" } },
+      thanks: { id: "thanks", type: "message", text: "Thanks" },
+      nudge: { id: "nudge", type: "message", text: "Still there?" },
+      team: { id: "team", type: "handoff", text: "Passing you on" },
+      bye: { id: "bye", type: "message", text: "Nothing leads here" },
+    },
+  } as unknown as Flow;
+  const p = tidyPositions(f, { x: 0, y: 0 });
+  assert.deepEqual(p.nudge, { x: TIDY_COLUMN, y: TIDY_ROW }, "the no-reply route sits beside the answered one");
+  assert.deepEqual(p.team, { x: 0, y: TIDY_ROW }, "the fallback starts its own row under the start");
+  assert.deepEqual(p.bye, { x: 2 * TIDY_COLUMN, y: 0 }, "only what truly nothing leads to goes last");
+});
+
 test("the builder's Tidy button is one undoable change, then shows the whole flow", () => {
   const builder = readFileSync("src/components/FlowBuilder.tsx", "utf8");
   assert.match(builder, /remember\("tidy", true\);/);

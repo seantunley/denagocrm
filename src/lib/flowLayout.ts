@@ -16,6 +16,8 @@ export function nextSteps(node: FlowNode): string[] {
   if (node.type === "switch") out.push(...node.cases.map((c) => c.next));
   if (node.type === "goto") out.push(node.target);
   out.push(n.next, n.trueNext, n.falseNext, n.openNext, n.closedNext, n.defaultNext, n.handoffNext, n.unavailableNext, n.failureNext);
+  // A question's "If they don't reply" route (#988) is a way on like any other.
+  out.push((n.noReply as { next?: unknown } | undefined)?.next);
   return [...new Set(out.filter((id): id is string => typeof id === "string" && id !== ""))];
 }
 
@@ -24,16 +26,28 @@ export function tidyPositions(flow: Flow, origin = { x: 40, y: 40 }): Record<str
   const order: string[] = [];
   const queue = flow.nodes[flow.start] ? [flow.start] : [];
   if (queue.length) column.set(flow.start, 0);
+  // The "If anything fails" step (#983) is reached by failing, not by a wire: it starts its own row of columns,
+  // after the start's, rather than being parked with the steps nothing leads to.
+  const fallback = (flow as { onFailure?: string }).onFailure;
+  const fallbackRoot = fallback && flow.nodes[fallback] && fallback !== flow.start ? fallback : null;
   // Breadth-first: a step sits one column right of the FIRST step that reaches it, so loops back to the menu
   // don't drag the menu to the right.
-  while (queue.length) {
-    const id = queue.shift()!;
-    order.push(id);
-    for (const next of nextSteps(flow.nodes[id])) {
-      if (column.has(next) || !flow.nodes[next] || isAnnotation(flow.nodes[next])) continue;
-      column.set(next, column.get(id)! + 1);
-      queue.push(next);
+  const walk = () => {
+    while (queue.length) {
+      const id = queue.shift()!;
+      order.push(id);
+      for (const next of nextSteps(flow.nodes[id])) {
+        if (column.has(next) || !flow.nodes[next] || isAnnotation(flow.nodes[next])) continue;
+        column.set(next, column.get(id)! + 1);
+        queue.push(next);
+      }
     }
+  };
+  walk();
+  if (fallbackRoot && !column.has(fallbackRoot)) {
+    column.set(fallbackRoot, 0);
+    queue.push(fallbackRoot);
+    walk();
   }
   const lastColumn = Math.max(-1, ...column.values()) + 1;
   for (const [id, node] of Object.entries(flow.nodes)) {
