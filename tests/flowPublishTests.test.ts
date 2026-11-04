@@ -70,7 +70,7 @@ test("every saved test runs: the 25th failing still blocks the publish (PR #977 
 
 test("the tests run on the exact definition that is then published", () => {
   const publishing = readFileSync("src/lib/flowPublishing.ts", "utf8");
-  const testsAt = publishing.indexOf("const tests = await publishTestIssues(tenantId, flowId, parsed, draft.channel);");
+  const testsAt = publishing.indexOf("const tests = await publishTestIssues(tenantId, flowId, parsed, draft.channel, await flowSharedVars());");
   const txAt = publishing.indexOf("return withTenantWrite(async (tx) => {");
   assert.ok(testsAt > 0 && txAt > testsAt, "tests run before the publishing transaction");
   assert.match(publishing, /if \(flowErrors\(tests\)\.length\) throw new FlowPublishValidationError\(\[\.\.\.issues, \.\.\.tests\]\);/);

@@ -9,6 +9,7 @@ import { builderTenantId } from "@/lib/flowScope";
 import { withActingStaffScope } from "@/lib/actingScope";
 import { parseEvaluationExpectation, parseEvaluationTurns } from "@/lib/flowEvaluationContract";
 import { evaluateFlowScenario, parseEvaluationFlow } from "@/lib/flowEvaluationRunner";
+import { flowSharedVars } from "@/lib/flowSharedValuesServer";
 
 type VersionDefinitionRow = { id: string; definition: string };
 
@@ -93,7 +94,7 @@ async function runEvaluation(tenantId: string, evaluationId: string) {
   }
 
   try {
-    const result = await evaluateFlowScenario({ flow: parsed, channel: flow.channel, turns: evaluation.turns, expectation: evaluation.expectation });
+    const result = await evaluateFlowScenario({ flow: parsed, channel: flow.channel, turns: evaluation.turns, expectation: evaluation.expectation, sharedVars: await flowSharedVars() });
     await prisma.botFlowEvaluation.updateMany({
       where: { id: evaluation.id, tenantId },
       data: { lastStatus: result.passed ? "passed" : "failed", lastRunAt: new Date(), lastResult: result },

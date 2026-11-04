@@ -14,6 +14,7 @@ import { listActingTenantStaff } from "@/lib/tenantActor";
 import { getCompanyProfile } from "@/lib/companyProfile";
 import { getSetting } from "@/lib/settings";
 import { FLOW_CONNECTIONS_KEY, parseConnections } from "@/lib/flowConnections";
+import { flowSharedVars } from "@/lib/flowSharedValuesServer";
 import { getBotFlowVersionAnalytics } from "@/lib/botFlowAnalytics";
 
 const STEP_NUMBERS_DAYS = 30;
@@ -35,6 +36,8 @@ export default async function FlowEditorPage({ params }: { params: Promise<{ id:
 
   // API request steps choose a connection by name; the page never sees a key (lib/flowConnections).
   const connections = parseConnections(await getSetting(FLOW_CONNECTIONS_KEY)).map(({ id, name, host }) => ({ id, name, host }));
+  // Shared values: known to the builder's checks and offered in its {{…}} hints.
+  const sharedNames = Object.keys(await flowSharedVars());
   // "Update the CRM": this workspace's tags (pick one, or type a new one) and pipeline stages, with their pipeline.
   const [crmTags, stages] = await Promise.all([
     prisma.tag.findMany({ select: { name: true }, orderBy: { name: "asc" }, take: 300 }).then((rows) => rows.map((t) => t.name)),
@@ -84,7 +87,7 @@ export default async function FlowEditorPage({ params }: { params: Promise<{ id:
       </div>
       <FlowAiDraftForm flowId={row.id} />
       <FlowNodeSystemFrame>
-        <FlowBuilder flowId={row.id} initial={flow} journeys={journeys} flows={reusableFlows} updatedAt={row.updatedAt.toISOString()} channels={channels} businessName={company.name} documents={documents} staff={staff} connections={connections} crmTags={crmTags} stages={stages} stepNumbers={stepNumbers} stepNumbersDays={STEP_NUMBERS_DAYS} />
+        <FlowBuilder flowId={row.id} initial={flow} journeys={journeys} flows={reusableFlows} updatedAt={row.updatedAt.toISOString()} channels={channels} businessName={company.name} documents={documents} staff={staff} connections={connections} crmTags={crmTags} stages={stages} stepNumbers={stepNumbers} stepNumbersDays={STEP_NUMBERS_DAYS} sharedNames={sharedNames} />
       </FlowNodeSystemFrame>
     </div>
   );

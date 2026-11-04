@@ -364,6 +364,26 @@ export const assistantAndMoreArticles: HelpArticle[] = [
     ],
   },
 
+  {
+    slug: "chatbot-flow-builder-tips",
+    title: "Chatbot flow builder: working on a flow",
+    summary: "Shortcuts for building and changing a chatbot flow without breaking the live one.",
+    category: "automation",
+    audience: "admins",
+    keywords: ["flow builder", "chatbot flow", "shared values", "business phone", "variables", "bot builder"],
+    body: [
+      { type: "h", text: "Shared values: set once, use everywhere" },
+      { type: "p", text: "Under **Chatbot → Shared values**, add things your messages repeat — `business_phone`, `opening_hours`, `website`. Then write `{{business_phone}}` in any message of any flow. Change the value on that page and every flow uses the new one from the next message, without publishing again." },
+      { type: "list", items: [
+        "Names use lowercase letters, numbers and _. Names the chatbot fills in itself, such as name, phone and greeting, can't be used.",
+        "A flow can't save a customer's answer under a shared value's name — the builder says so.",
+        "The test chat and saved tests use your shared values too.",
+        "Deleting one leaves a blank where messages used it.",
+        "Anyone who edits flows can see the values, so never put a password or API key here — those belong in **Connections**.",
+      ] },
+    ],
+  },
+
   // ── Today and lead scores ─────────────────────────────────────────────
   {
     slug: "today-who-to-contact-next",

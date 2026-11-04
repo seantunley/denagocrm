@@ -20,6 +20,7 @@ import { decideInboundAct, HUMAN_RESPONSIBILITY_HOURS, type BotOwnership } from 
 import type { FlowEntryContext } from "./flowRouting";
 import type { VoiceLanguage } from "./voiceLanguage";
 import { getCompanyProfile } from "./companyProfile";
+import { flowSharedVars } from "./flowSharedValuesServer";
 import { chatbotOpenNow } from "./chatbotHours";
 
 export const FLOW_MARKER = "🤖 Flow";
@@ -121,7 +122,8 @@ export async function runWhatsAppFlow(digits: string, input: FlowInput, entryCon
     const contact = match.contactId ? await prisma.contact.findUnique({ where: { id: match.contactId } }) : null;
     seed = greetingVars(contact?.firstName ?? null, (await getCompanyProfile()).name);
   }
-  const builtins = flowRuntimeVars("whatsapp");
+  // Shared values (Flows → Shared values) are read fresh every turn, so an edit reaches live conversations at once.
+  const builtins = { ...(await flowSharedVars()), ...flowRuntimeVars("whatsapp") };
   const session: FlowSession = !existing || restart ? { nodeId: null, vars: { ...builtins, ...seed } } : { nodeId: existing.nodeId, vars: { ...existing.vars, ...builtins } };
 
   const actor = await resolveTenantActor();

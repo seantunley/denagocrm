@@ -5,6 +5,7 @@ import { matchByPhone } from "./whatsapp";
 import { greetingVars, flowRuntimeVars } from "./flowSession";
 import { getCompanyProfile } from "./companyProfile";
 import { checkReplay, replayMessages, type ReplayRun } from "./flowReplayRun";
+import { flowSharedVars } from "./flowSharedValuesServer";
 
 /**
  * REPLAY A REAL CONVERSATION (Node-RED review 2026-11-02, Sean's item 3): "why did the bot say that?".
@@ -99,7 +100,8 @@ export async function replayConversation(tenantId: string, flowId: string, event
   const end = events.find((e) => e.eventType === "flow_handoff" || e.eventType === "flow_completed");
   const recordedEnd = !end ? null : end.eventType === "flow_handoff" ? "handed off" as const : "finished" as const;
   const contact = await prisma.contact.findUnique({ where: { id: match.contactId }, select: { firstName: true } });
-  const vars = { ...flowRuntimeVars("whatsapp", start.occurredAt), ...greetingVars(contact?.firstName ?? null, (await getCompanyProfile()).name) };
+  // Shared values as they are NOW (their past values are not kept) — a reworded value replays with its new words.
+  const vars = { ...(await flowSharedVars()), ...flowRuntimeVars("whatsapp", start.occurredAt), ...greetingVars(contact?.firstName ?? null, (await getCompanyProfile()).name) };
   const loadSubflow = async (childId: string, versionId?: string) => {
     const row = versionId
       ? await prisma.botFlowVersion.findFirst({ where: { id: versionId, tenantId, flowId: childId }, select: { definition: true } })
