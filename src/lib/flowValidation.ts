@@ -1,4 +1,4 @@
-import { choiceId, isAnnotation, JOURNEY_FOLLOW_UP_MAX_DAYS, type Flow, type FlowNode, type FlowOption } from "./flow";
+import { CAN_SWITCH_OFF, choiceId, isAnnotation, JOURNEY_FOLLOW_UP_MAX_DAYS, type Flow, type FlowNode, type FlowOption } from "./flow";
 import { secretLookingHeaders } from "./flowConnections";
 import { VARIABLE_NAME } from "./journeyTypes";
 
@@ -170,6 +170,11 @@ export function validateFlow(flow: Flow, channels: FlowChannel[] = ["whatsapp"])
     if (!id || !NODE_TYPES.has(type)) { issues.push(issue("error", "node.shape", `Node “${key}” has an unsupported or malformed type.`, key)); continue; }
     const node = rawNode as FlowNode;
     if (id !== key) issues.push(issue("error", "node.id_mismatch", `Node key “${key}” does not match its id “${id}”.`, key));
+    // Switched off: said out loud, so nobody publishes it by accident. A branching step can't be off at all.
+    if (runtimeNode.off === true) {
+      if (!CAN_SWITCH_OFF.has(type)) issues.push(issue("error", "step.off_unsupported", "This kind of step can't be switched off — it decides where the customer goes next.", id));
+      else issues.push(issue("warning", "step.off", `Switched off — customers skip it${"next" in node && node.next ? " and go straight on to the next step" : ", and since nothing follows it the conversation ends here"}.`, id));
+    }
 
     if (producedVariables(node).length || node.type === "capture" || node.type === "captureFile" || node.type === "set") {
       for (const variable of producedVariables(node)) {

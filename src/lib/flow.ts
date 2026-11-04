@@ -28,7 +28,7 @@ export type KnowledgeOutcome = ActionOutcome & { text?: string };
 export type ExtractOutcome = ActionOutcome & { values?: Record<string, string> };
 export type HttpOutcome = ActionOutcome & { status?: number; body?: string };
 
-export type FlowNode =
+export type FlowNode = (
   | { id: string; type: "message"; text: string; next?: string }
   | { id: string; type: "choice"; text: string; options: FlowOption[] }
   | { id: string; type: "capture"; text: string; variable: string; format?: CaptureFormat; next?: string }
@@ -89,7 +89,23 @@ export type FlowNode =
    */
   | { id: string; type: "note"; text: string; color?: AnnotationColor }
   | { id: string; type: "group"; label: string; color?: AnnotationColor; width?: number; height?: number }
-  | { id: string; type: "end" };
+  | { id: string; type: "end" }
+) & {
+  /**
+   * SWITCHED OFF (Node-RED's disable node; Sean, 2026-11-04): the engine skips the step and carries on along its
+   * `next`, as if it were not there — e.g. the price list while it is being updated. Only for steps with one onward
+   * route ({@link CAN_SWITCH_OFF}); a branching step has no single "carry on".
+   */
+  off?: boolean;
+};
+
+/** Steps that can be switched off: each has exactly one way on (`next`), which a skipped step follows. */
+export const CAN_SWITCH_OFF: ReadonlySet<string> = new Set([
+  "message", "capture", "captureFile", "image", "document", "contactCard", "answer", "set",
+  "http", "knowledge", "extract", "delay", "subflow", "booking", "journey", "crm",
+]);
+/** Switched off, and allowed to be — the engine then skips it. */
+export const isSwitchedOff = (node: FlowNode): boolean => node.off === true && CAN_SWITCH_OFF.has(node.type);
 
 export type AnnotationColor = "yellow" | "blue" | "green" | "purple" | "red" | "slate";
 /** A note or a group: on the canvas for the team, outside the conversation. */
@@ -467,6 +483,8 @@ export async function runFlow(flow: Flow, session: FlowSession, input: FlowInput
   while (nodeId && guard++ < 75) {
     const node = flow.nodes[nodeId];
     if (!node) break;
+    // Switched off: not run, not counted, nothing said — straight on along its one route.
+    if (isSwitchedOff(node)) { nodeId = "next" in node ? node.next ?? null : null; continue; }
     lastNodeId = node.id;
     ctx.onStep?.(node.id, vars);
     if (node.type === "message") {
