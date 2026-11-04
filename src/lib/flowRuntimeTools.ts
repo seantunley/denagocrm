@@ -213,9 +213,16 @@ async function httpRequest(input: Parameters<NonNullable<FlowCtx["httpRequest"]>
   }
 }
 
-async function loadSubflow(flowId: string): Promise<Flow | null> {
+/**
+ * The subflow a "Run subflow" step runs: the version PINNED when its parent was published (flow.pinSubflows), so a
+ * later publish of the shared subflow can't change a live parent. Unpinned — a parent published before pinning —
+ * the newest version, as before. Always this workspace's, and always a version of that same flow.
+ */
+async function loadSubflow(flowId: string, versionId?: string): Promise<Flow | null> {
   const tenantId = runtimeFlowTenantId();
-  const version = await prisma.botFlowVersion.findFirst({ where: { tenantId, flowId }, orderBy: { version: "desc" }, select: { definition: true } });
+  const version = versionId
+    ? await prisma.botFlowVersion.findFirst({ where: { id: versionId, tenantId, flowId }, select: { definition: true } })
+    : await prisma.botFlowVersion.findFirst({ where: { tenantId, flowId }, orderBy: { version: "desc" }, select: { definition: true } });
   return version ? parsePublishedFlow(version.definition) : null;
 }
 
