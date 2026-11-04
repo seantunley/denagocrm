@@ -5,6 +5,7 @@ import { useState } from "react";
 import {
   Bot,
   CalendarDays,
+  Clock,
   CornerDownRight,
   ChevronDown,
   ChevronUp,
@@ -54,6 +55,7 @@ const groups: Array<{
     description: "Make branching and state changes readable on the canvas.",
     nodes: [
       { label: "Condition", detail: "Route Yes/No using an existing condition.", icon: GitBranch },
+      { label: "Opening hours", detail: "Route Open/Closed by your office hours and public holidays.", icon: Clock },
       { label: "Switch", detail: "Route one variable across several exact-value cases.", icon: GitBranch },
       { label: "Set variable", detail: "Set or update flow data deterministically.", icon: Database },
       { label: "Wait", detail: "Hold quietly; the flow resumes with the customer's next message after the time passes.", icon: CalendarDays },

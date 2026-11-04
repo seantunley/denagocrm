@@ -93,6 +93,7 @@ function nodeLabel(node: FlowNode | undefined, nodeId: string): string {
   if (node.type === "document") return `Document: ${node.fileName || "file"}`.slice(0, 70);
   if (node.type === "contactCard") return node.staffUserId ? "Contact card (staff member)" : "Contact card";
   if (node.type === "ai") return "AI conversation";
+  if (node.type === "hours") return "Opening hours";
   if (node.type === "goto") return `Go to: ${node.targetLabel || node.target}`.slice(0, 70);
   return "End";
 }

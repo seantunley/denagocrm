@@ -57,6 +57,11 @@ export type FlowNode =
   | { id: string; type: "ai"; handoffNext?: string }
   | { id: string; type: "handoff"; text?: string; reason?: string; summary?: string }
   /**
+   * Open or closed (Node-RED's time-range switch; Sean, 2026-11-02): the chatbot's office hours from the Chatbot page,
+   * and South African public holidays as closed unless `holidaysClosed` is false.
+   */
+  | { id: string; type: "hours"; holidaysClosed?: boolean; openNext?: string; closedNext?: string }
+  /**
    * Jump to another step without a wire (Node-RED's link nodes; Sean, 2026-11-02) — "↩ Back to menu" from anywhere
    * without wires across the canvas. Sends nothing itself. `targetLabel` is a display copy, like a document's fileName.
    */
@@ -100,6 +105,8 @@ export type FlowCtx = {
   extractData?: (input: { text: string; instruction: string; fields: string[]; vars: Record<string, string>; nodeId: string }) => Promise<ExtractOutcome>;
   httpRequest?: (input: { method: FlowHttpMethod; url: string; headers?: string; body?: string; vars: Record<string, string>; nodeId: string }) => Promise<HttpOutcome>;
   loadSubflow?: (flowId: string) => Promise<Flow | null>;
+  /** Open now, for an Opening hours step (chatbotHours.chatbotOpenNow). Absent: treated as open. */
+  openNow?: (holidaysClosed: boolean) => Promise<boolean>;
   /** The card a Send-contact-card node sends; null when this workspace cannot build one. */
   contactCard?: (staffUserId: string | undefined) => Promise<ContactCard | null>;
   /** Internal: a synchronous subflow works on the caller-supplied vars object. */
@@ -509,6 +516,10 @@ export async function runFlow(flow: Flow, session: FlowSession, input: FlowInput
       messages.push({ type: "choice", text: interpolate(node.text, vars), options: node.options.map((o) => ({ id: choiceId(node.id, o.id), label: o.label, description: o.description })) }); return { messages, session: { nodeId: node.id, vars }, handedOff: false };
     } else if (node.type === "capture") {
       messages.push({ type: "text", text: interpolate(node.text, vars) }); return { messages, session: { nodeId: node.id, vars }, handedOff: false };
+    } else if (node.type === "hours") {
+      const open = ctx.openNow ? await ctx.openNow(node.holidaysClosed !== false) : true;
+      vars.open_now = open ? "yes" : "no";
+      nodeId = open ? node.openNext ?? null : node.closedNext ?? null;
     } else if (node.type === "goto") {
       nodeId = node.target || null;
     } else if (node.type === "condition") {

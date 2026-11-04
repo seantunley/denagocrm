@@ -53,6 +53,7 @@ export const SETTINGS_NAV_GROUPS: SettingsNavGroup[] = [
       // viewer would be redirected away from.
       { key: "checklists", label: "Checklists", href: "/settings/checklists", permission: "document_templates.manage", keywords: ["checklist", "checklists", "handover", "inspection", "photos", "capture", "steps", "delivery", "check-in", "condition report"] },
       { key: "clock-weather", label: "Clock & weather", href: "/settings/clock-weather", keywords: ["clock", "time", "weather", "cities", "timezone", "city", "temperature"] },
+      { key: "public-holidays", label: "Public holidays", href: "/settings/public-holidays", keywords: ["holidays", "public holidays", "closed", "closed days", "shutdown", "country", "opening hours", "office hours"] },
     ],
   },
   {

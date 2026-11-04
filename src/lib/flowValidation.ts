@@ -6,14 +6,14 @@ export type FlowIssue = { severity: "error" | "warning"; code: string; message: 
 const NODE_TYPES = new Set([
   "message", "choice", "capture", "captureFile", "image", "document", "contactCard", "answer",
   "set", "switch", "http", "knowledge", "extract", "delay", "subflow",
-  "booking", "slots", "journey", "condition", "ai", "handoff", "goto", "end",
+  "booking", "slots", "journey", "condition", "ai", "handoff", "hours", "goto", "end",
 ]);
 const BUILTIN_VARS = new Set([
   "greeting", "first_name", "name", "known", "slot", "channel", "current_date", "current_time",
   "booking_identity", "booking_found", "booking_id", "booking_slot", "booking_summary", "booking_cancelled", "booking_rescheduled",
-  "journey_started", "journey_reason", "journey_run_id",
+  "journey_started", "journey_reason", "journey_run_id", "open_now",
 ]);
-const AUTO_TYPES = new Set<FlowNode["type"]>(["message", "image", "document", "contactCard", "answer", "set", "switch", "http", "knowledge", "extract", "subflow", "booking", "journey", "condition", "goto"]);
+const AUTO_TYPES = new Set<FlowNode["type"]>(["message", "image", "document", "contactCard", "answer", "set", "switch", "http", "knowledge", "extract", "subflow", "booking", "journey", "condition", "hours", "goto"]);
 
 function issue(severity: FlowIssue["severity"], code: string, message: string, nodeId?: string, channel?: FlowChannel): FlowIssue {
   return { severity, code, message, ...(nodeId ? { nodeId } : {}), ...(channel ? { channel } : {}) };
@@ -37,6 +37,7 @@ function refs(node: FlowNode): string[] {
   if (node.type === "switch") return [...node.cases.map((item) => item.next), node.defaultNext].filter((value): value is string => Boolean(str(value)));
   if (node.type === "ai") return str(node.handoffNext) ? [str(node.handoffNext)] : [];
   if (node.type === "handoff" || node.type === "end") return [];
+  if (node.type === "hours") return [node.openNext, node.closedNext].filter((value): value is string => Boolean(str(value)));
   // A Go to's jump is an edge like any other: its target must exist, reachability runs through it, and a Go to
   // loop with no customer input in it is caught as an automatic cycle (it is in AUTO_TYPES).
   if (node.type === "goto") return str(node.target) ? [str(node.target)] : [];
