@@ -6,6 +6,7 @@ import { flowTenantWhere } from "./flowTenantScope";
 import { builderTenantId, runtimeFlowTenantId } from "./flowScope";
 import { FlowPublishValidationError, validateFlowForEnabledChannels } from "./flowValidationServer";
 import { resolveRoutedFlowVersion, type FlowEntryContext } from "./flowRouting";
+import { publishTestIssues } from "./flowPublishTests";
 
 export type FlowSnapshot = {
   flow: Flow;
@@ -160,6 +161,10 @@ export async function publishFlowSnapshot(
   }
   const issues = await validateFlowForEnabledChannels(parsed);
   if (flowErrors(issues).length) throw new FlowPublishValidationError(issues);
+  // The saved tests, on THIS definition — the transaction below refuses if the draft changed since, so what is
+  // published is exactly what was tested.
+  const tests = await publishTestIssues(tenantId, flowId, parsed, draft.channel);
+  if (flowErrors(tests).length) throw new FlowPublishValidationError([...issues, ...tests]);
 
   // USER-ORIGINATED, AND ALREADY CORRECT — nothing to convert. `withTenantWrite` is
   // used here for its TRANSACTION only: the callback deliberately does not bind the

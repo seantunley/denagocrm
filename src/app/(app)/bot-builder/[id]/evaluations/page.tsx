@@ -48,7 +48,7 @@ export default async function FlowEvaluationsPage({ params }: { params: Promise<
       eyebrow="Regression testing"
       title={<span className="flex items-center gap-2"><ListChecks className="size-5 text-primary" />Evaluate {flow.name}</span>}
       status={flow.active ? <StatusPill tone="success">Live flow</StatusPill> : undefined}
-      description="Replay saved customer paths against the current draft or an immutable published version, with provider sends and CRM effects simulated."
+      description="Replay saved customer paths against the current draft or an immutable published version, with provider sends and CRM effects simulated. Every saved test also runs on the draft each time you publish — if one fails, the flow is not published."
       actions={evaluations.length ? (
         <SaveForm action={runAllFlowEvaluations.bind(null, id)} success="Evaluation suite finished">
           <SaveButton className="btn-primary btn-sm" pendingLabel={`Running ${evaluations.length} cases…`}><Play className="size-4" />Run all</SaveButton>
@@ -85,7 +85,7 @@ export default async function FlowEvaluationsPage({ params }: { params: Promise<
         </Surface>
 
         {evaluations.length === 0 ? (
-          <EmptyState icon={FlaskConical} title="No saved evaluations" description="Save your highest-value customer paths, then run the suite before publishing a flow change." />
+          <EmptyState icon={FlaskConical} title="No saved evaluations" description="Save your highest-value customer paths. Each one then runs automatically whenever this flow is published, and a failing one stops the publish." />
         ) : (
           <div className="space-y-5">
             <EvaluationGroup title="Failed" description="Expected and actual results differ. Fix these first." icon={XCircle} tone="text-red-300" evaluations={failed} versions={versions} />
