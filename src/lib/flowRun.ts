@@ -18,7 +18,7 @@ import { armNoReply, fenceTimeoutEffects, NO_REPLY_AT, NO_REPLY_CLAIMED, NO_REPL
 import { recordBotFlowEventsTx, type BotFlowEventInput } from "./botFlowAnalytics";
 import { completeInboundBotEventTx, currentInboundBotClaim } from "./botInboundEvent";
 import { decideInboundAct, HUMAN_RESPONSIBILITY_HOURS, type BotOwnership } from "./botOwnership";
-import type { FlowEntryContext } from "./flowRouting";
+import { messageIsRouteEntry, type FlowEntryContext } from "./flowRouting";
 import type { VoiceLanguage } from "./voiceLanguage";
 import { getCompanyProfile } from "./companyProfile";
 import { flowSharedVars } from "./flowSharedValuesServer";
@@ -142,6 +142,7 @@ export async function runWhatsAppFlow(digits: string, input: FlowInput, entryCon
     ownership: existing ? existing.ownership : null,
     text: input.text,
     hasChoiceId: Boolean(input.choiceId),
+    routeEntry: existing?.ownership === "ai_handoff" && !input.choiceId && (await messageIsRouteEntry("whatsapp", input.text)),
   });
   if (decision.act === "suppress") return true;
   const restart = decision.act === "restart";
@@ -249,6 +250,7 @@ export async function runWhatsAppBot(digits: string, input: FlowInput, opts: { v
       text: input.text,
       // A voice note is not a typed control command, so it can never be a resume.
       hasChoiceId: Boolean(input.choiceId) || Boolean(opts.voiceNote),
+      routeEntry: owned.ownership === "ai_handoff" && !input.choiceId && !opts.voiceNote && (await messageIsRouteEntry("whatsapp", input.text)),
     });
     if (gate.act === "suppress") return;
   }

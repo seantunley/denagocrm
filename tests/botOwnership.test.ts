@@ -130,3 +130,14 @@ test("the flow editor renders one AI draft panel, not two", () => {
   const renders = page.match(/<FlowAiDraftForm\b/g) ?? [];
   assert.equal(renders.length, 1, `expected exactly one AI draft panel, found ${renders.length}`);
 });
+
+test("a scanned QR code restarts a bot handoff, never a person's conversation", () => {
+  // 3 Nov 2026: a handed-off customer scanned the showroom poster; the exact pre-filled message waited in the inbox
+  // instead of starting the brochure flow.
+  const entry = (ownership: Parameters<typeof decideInboundAct>[0]["ownership"], hasChoiceId = false) =>
+    decideInboundAct({ ownership, text: "Hi Denago Cape Town, please send me the brochure and price lists", hasChoiceId, routeEntry: true }).act;
+  assert.equal(entry("ai_handoff"), "restart");
+  assert.equal(entry("human"), "suppress", "a person who took the conversation keeps it");
+  assert.equal(entry("ai_handoff", true), "suppress", "a tapped button is still never a restart");
+  assert.equal(act("ai_handoff", "please send me the brochure"), "suppress", "an ordinary message still waits for the person");
+});

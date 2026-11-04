@@ -73,8 +73,10 @@ export function decideInboundAct(input: {
   text: string;
   /** A tapped button is never a text command. */
   hasChoiceId: boolean;
+  /** The whole message is a QR/keyword entry phrase (flowRouting.messageIsRouteEntry). */
+  routeEntry?: boolean;
 }): InboundAct {
-  const { ownership, text, hasChoiceId } = input;
+  const { ownership, text, hasChoiceId, routeEntry } = input;
   if (!ownership) return { act: "restart" };
 
   // A person is holding this conversation. Nothing the customer types takes it
@@ -90,7 +92,9 @@ export function decideInboundAct(input: {
 
   if (ownership === "ai_handoff") {
     if (hasChoiceId) return { act: "suppress" };
-    return RESUME_COMMAND.test(text) ? { act: "restart" } : { act: "suppress" };
+    // A scanned QR code (its exact pre-filled message) asks for that flow again — the customer is starting over, not
+    // talking to the person they were handed to. A person who TOOK the conversation (`human`) is never overridden.
+    return RESUME_COMMAND.test(text) || routeEntry ? { act: "restart" } : { act: "suppress" };
   }
 
   // ownership === "bot"

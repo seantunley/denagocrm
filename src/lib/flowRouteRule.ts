@@ -33,3 +33,15 @@ export function routeMatches(route: MatchableFlowRoute, entry: FlowEntryContext)
   if (route.kind === "ad") return normalizeInboundRouteValue(entry.adId ?? "") === pattern;
   return false;
 }
+
+/**
+ * The WHOLE message is a keyword route's phrase — what a QR scan sends. Stricter than routeMatches (which finds the
+ * phrase anywhere): it is used to restart a conversation waiting for a person, so "can you resend the brochure?" must
+ * not count, but the poster's exact pre-filled message must.
+ */
+export function routeIsWholeMessage(route: MatchableFlowRoute, text: string): boolean {
+  if (route.kind !== "keyword") return false;
+  const words = (value: string) => normalizeInboundRouteValue(value).replace(/[^a-z0-9]+/g, " ").trim();
+  const phrase = words(route.pattern);
+  return phrase.length >= 2 && words(text) === phrase;
+}
