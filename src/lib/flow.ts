@@ -30,9 +30,10 @@ export type HttpOutcome = ActionOutcome & { status?: number; body?: string };
 
 export type FlowNode = (
   | { id: string; type: "message"; text: string; next?: string }
-  | { id: string; type: "choice"; text: string; options: FlowOption[] }
-  | { id: string; type: "capture"; text: string; variable: string; format?: CaptureFormat; next?: string }
-  | { id: string; type: "captureFile"; text: string; variable: string; next?: string }
+  /** `noReply`: if the customer doesn't answer within `minutes`, carry on at `next` (lib/flowNoReply; WhatsApp). */
+  | { id: string; type: "choice"; text: string; options: FlowOption[]; noReply?: NoReply }
+  | { id: string; type: "capture"; text: string; variable: string; format?: CaptureFormat; next?: string; noReply?: NoReply }
+  | { id: string; type: "captureFile"; text: string; variable: string; next?: string; noReply?: NoReply }
   | { id: string; type: "image"; url: string; caption?: string; next?: string }
   /**
    * A file the WORKSPACE owns (a general Documents upload — never one filed on a
@@ -147,7 +148,10 @@ export type OutMsg =
   | { type: "contact"; card: ContactCard }
   | { type: "choice"; text: string; options: { id: string; label: string; description?: string }[] };
 export type FlowSession = { nodeId: string | null; vars: Record<string, string> };
-export type FlowInput = { text: string; choiceId?: string; fileUrl?: string };
+/** WAIT FOR A REPLY, ELSE… (Node-RED's trigger node; Sean, 2026-11-04). */
+export type NoReply = { minutes: number; next?: string };
+/** `timedOut`: no customer message — the no-reply sweep moving a conversation whose question went unanswered. */
+export type FlowInput = { text: string; choiceId?: string; fileUrl?: string; timedOut?: boolean };
 
 export type FlowAiReply = {
   reply: string;
@@ -461,7 +465,13 @@ export async function runFlow(flow: Flow, session: FlowSession, input: FlowInput
 
   if (session.nodeId) {
     const cur = flow.nodes[session.nodeId];
-    if (cur?.type === "choice") {
+    if (input.timedOut) {
+      // Nobody answered: the question's "no reply" route — and if it has none (any more), stay exactly where we are,
+      // saying nothing. Never the answered path: a silence is not an answer.
+      const route = cur && (cur.type === "choice" || cur.type === "capture" || cur.type === "captureFile") ? cur.noReply?.next : undefined;
+      if (!route || !flow.nodes[route]) return { messages, session: { nodeId: session.nodeId, vars }, handedOff: false };
+      nodeId = route;
+    } else if (cur?.type === "choice") {
       nodeId = matchChoice(cur, input);
       if (!nodeId) nodeId = await semanticChoice(cur, input, vars, ctx);
       if (!nodeId) {

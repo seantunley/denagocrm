@@ -273,6 +273,14 @@ function NodeCard({ data, selected }: NodeProps) {
               <Handle type="source" position={Position.Right} id={`opt:${o.id}`} className="!size-3 !border-2 !border-slate-950 transition-transform hover:!scale-125" style={{ background: meta.handle }} />
             </div>
           ))}
+          {n.noReply && <NoReplyHandle minutes={n.noReply.minutes} />}
+        </div>
+      ) : (n.type === "capture" || n.type === "captureFile") && n.noReply ? (
+        <div className="pb-1">
+          <div className="relative border-t border-slate-800 px-3 py-1 text-[11px] text-emerald-300">Answered
+            <Handle type="source" position={Position.Right} id="out" className="!size-3 !border-2 !border-slate-950 transition-transform hover:!scale-125" style={{ background: meta.handle }} />
+          </div>
+          <NoReplyHandle minutes={n.noReply.minutes} />
         </div>
       ) : n.type === "condition" ? (
         <div className="pb-1">
@@ -323,6 +331,15 @@ function NodeCard({ data, selected }: NodeProps) {
       ) : n.type === "handoff" || n.type === "end" || n.type === "goto" ? null : (
         <Handle type="source" position={Position.Right} id="out" className="!size-3 !border-2 !border-slate-950 transition-transform hover:!scale-125" style={{ background: meta.handle }} />
       )}
+    </div>
+  );
+}
+
+/** The "no reply" outlet on a question's card (lib/flowNoReply). */
+function NoReplyHandle({ minutes }: { minutes: number }) {
+  return (
+    <div className="relative border-t border-slate-800 px-3 py-1 text-[11px] text-violet-300">No reply ({minutes >= 60 ? `${Math.round(minutes / 60)} h` : `${minutes} min`})
+      <Handle type="source" position={Position.Right} id="noreply" className="!size-3 !border-2 !border-slate-950 transition-transform hover:!scale-125" style={{ background: "#a78bfa" }} />
     </div>
   );
 }
@@ -665,6 +682,7 @@ export default function FlowBuilder({ flowId, initial, journeys = [], flows = []
           edge.style = { ...edge.style, ...(taken ? { stroke: "#fb923c", strokeWidth: 3, opacity: 1 } : { opacity: 0.15 }) };
         }
       };
+      if ((n.type === "choice" || n.type === "capture" || n.type === "captureFile") && n.noReply) add("noreply", n.noReply.next, { label: "no reply", style: { stroke: "#a78bfa", strokeDasharray: "4 4" }, labelStyle: { fill: "#c4b5fd", fontSize: 10 }, labelBgStyle: { fill: "#0f172a" } });
       if (n.type === "choice") n.options.forEach((o) => add(`opt:${o.id}`, o.next, { label: o.label.slice(0, 24), labelStyle: { fill: "#cbd5e1", fontSize: 10 }, labelBgStyle: { fill: "#0f172a" } }));
       else if (n.type === "condition") {
         add("true", n.trueNext, { label: "Yes", style: { stroke: "#34d399" }, labelStyle: { fill: "#86efac", fontSize: 10 }, labelBgStyle: { fill: "#0f172a" } });
@@ -687,6 +705,7 @@ export default function FlowBuilder({ flowId, initial, journeys = [], flows = []
   const onConnect = useCallback((c: Connection) => {
     if (!c.source || !c.target || !c.sourceHandle) return;
     patch(c.source, (n) => {
+      if (c.sourceHandle === "noreply" && (n.type === "choice" || n.type === "capture" || n.type === "captureFile")) return { ...n, noReply: { minutes: n.noReply?.minutes ?? 30, next: c.target! } };
       if (n.type === "choice" && c.sourceHandle!.startsWith("opt:")) {
         const oid = c.sourceHandle!.slice(4);
         return { ...n, options: n.options.map((o) => (o.id === oid ? { ...o, next: c.target! } : o)) };
@@ -1148,6 +1167,7 @@ function NodeIssues({ issues }: { issues: FlowIssue[] }) {
 function RotateCcwIcon() { return <RotateCcw className="size-4" />; }
 
 function clearRefs(n: FlowNode, removedId: string): FlowNode {
+  if ((n.type === "choice" || n.type === "capture" || n.type === "captureFile") && n.noReply?.next === removedId) n = { ...n, noReply: { minutes: n.noReply.minutes } };
   if (n.type === "choice") return { ...n, options: n.options.map((o) => (o.next === removedId ? { ...o, next: undefined } : o)) };
   if (n.type === "condition") return { ...n, trueNext: n.trueNext === removedId ? undefined : n.trueNext, falseNext: n.falseNext === removedId ? undefined : n.falseNext };
   if (n.type === "switch") return { ...n, cases: n.cases.map((item) => (item.next === removedId ? { ...item, next: undefined } : item)), defaultNext: n.defaultNext === removedId ? undefined : n.defaultNext };
@@ -1174,6 +1194,22 @@ function AnnotationColorPicker({ value, onChange }: { value: AnnotationColor; on
             className={cn("size-7 rounded-md border-2", ANNOTATION_COLORS[color].box, value === color ? "ring-2 ring-white/60" : "")} />
         ))}
       </div>
+    </div>
+  );
+}
+
+/** "If they don't reply within…" on a question (lib/flowNoReply) — WhatsApp, inside its 24-hour window. */
+const NO_REPLY_CHOICES: [number, string][] = [[30, "30 minutes"], [60, "1 hour"], [120, "2 hours"], [240, "4 hours"], [720, "12 hours"], [1380, "23 hours"]];
+function NoReplyField({ node, nodeOptions, onChange }: { node: Extract<FlowNode, { type: "choice" | "capture" | "captureFile" }>; nodeOptions: { id: string; label: string }[]; onChange: (n: FlowNode) => void }) {
+  return (
+    <div className="space-y-2 rounded-lg border border-white/10 p-3">
+      <label className="label" htmlFor={`noreply-${node.id}`}>If they don&apos;t reply</label>
+      <select id={`noreply-${node.id}`} className="input" value={node.noReply ? String(node.noReply.minutes) : ""} onChange={(e) => onChange({ ...node, noReply: e.target.value ? { minutes: Number(e.target.value), next: node.noReply?.next } : undefined } as FlowNode)}>
+        <option value="">Just wait</option>
+        {NO_REPLY_CHOICES.map(([minutes, label]) => <option key={minutes} value={minutes}>After {label}, go to…</option>)}
+      </select>
+      {node.noReply && <TargetPicker nodeOptions={nodeOptions} value={node.noReply.next} onPick={(next) => onChange({ ...node, noReply: { minutes: node.noReply!.minutes, next } } as FlowNode)} />}
+      <p className="text-xs text-slate-500">WhatsApp only. E.g. a gentle nudge, or straight to the team. It goes up to 30 minutes after the time you pick, and only within 24 hours of the customer&apos;s last message. If they answer first, their answer wins.</p>
     </div>
   );
 }
@@ -1258,7 +1294,8 @@ function NodePanel({ node, isStart, nodeOptions, variables, journeys, flows, doc
       {node.type === "extract" && <><div><label className="label">What to extract</label><textarea className="input" rows={3} value={node.instruction} onChange={(e) => onChange({ ...node, instruction: e.target.value })} /></div><div><label className="label">Source variable (optional)</label><input className="input" list={`flow-vars-${node.id}`} value={node.sourceVariable ?? ""} onChange={(e) => onChange({ ...node, sourceVariable: e.target.value.replace(/\W/g, "") || undefined })} placeholder="Blank = current customer message" /><datalist id={`flow-vars-${node.id}`}>{variables.map((variable) => <option key={variable} value={variable} />)}</datalist></div><div><label className="label">Output fields</label><input className="input" value={node.fields.join(", ")} onChange={(e) => onChange({ ...node, fields: e.target.value.split(",").map((v) => v.trim().replace(/\W/g, "")).filter(Boolean).slice(0, 12) })} placeholder="name, city, vehicle_interest" /></div><p className="text-xs text-slate-500">The model may only return these named fields and is instructed never to invent missing values.</p></>}
       {node.type === "delay" && <><div><label className="label">Wait (seconds)</label><input className="input" type="number" min={1} max={604800} value={node.seconds} onChange={(e) => onChange({ ...node, seconds: Number(e.target.value) })} /></div><p className="text-xs text-slate-500">A QUIET HOLD, not a scheduled follow-up: the bot stays silent, and the flow resumes with the customer&apos;s next message after the time has passed. Nothing is sent when the timer expires — for a timed follow-up, use a Journey. Maximum: 7 days.</p></>}
       {node.type === "subflow" && <><div><label className="label">Published flow</label><select className="input" value={node.flowId} onChange={(e) => onChange({ ...node, flowId: e.target.value })}><option value="">Choose a reusable flow…</option>{flows.map((flow) => <option key={flow.id} value={flow.id}>{flow.name}</option>)}</select></div><p className="text-xs text-slate-500">When you publish this flow, it locks in the subflow&apos;s newest published version — publishing the subflow again later doesn&apos;t change this flow until you publish this one again. Synchronous only: a child that stops to wait for customer input follows the failure route instead.</p></>}
-      {node.type === "choice" && <div className="space-y-2"><div><div className="flex items-center justify-between"><label className="label" htmlFor={`prompt-${node.id}`}>Prompt</label><EmojiButton targetId={`prompt-${node.id}`} value={node.text} onChange={(text) => onChange({ ...node, text })} /></div><textarea id={`prompt-${node.id}`} className="input" rows={2} value={node.text} onChange={(e) => onChange({ ...node, text: e.target.value })} /></div><label className="label">Options</label>{node.options.map((o, i) => <div key={o.id} className="space-y-1.5 rounded-lg border border-slate-800 p-2"><div className="flex gap-1.5"><input className="input btn-sm flex-1" value={o.label} onChange={(e) => onChange({ ...node, options: node.options.map((x) => x.id === o.id ? { ...x, label: e.target.value } : x) })} /><button onClick={() => onChange({ ...node, options: node.options.filter((x) => x.id !== o.id) })} className="px-1 text-muted-foreground hover:text-red-400"><X className="size-4" /><span className="sr-only">Remove option</span></button></div><TargetPicker nodeOptions={nodeOptions} value={o.next} onPick={(v) => onChange({ ...node, options: node.options.map((x) => x.id === o.id ? { ...x, next: v } : x) })} />{i === 2 && node.options.length > 3 && <p className="text-[10px] text-amber-400">WhatsApp shows &gt;3 options as a list.</p>}</div>)}<button onClick={() => onChange({ ...node, options: [...node.options, { id: `o${Date.now().toString(36)}`, label: `Option ${node.options.length + 1}` }] })} className="btn-secondary btn-sm w-full">+ Add option</button></div>}
+      {(node.type === "choice" || node.type === "capture" || node.type === "captureFile") && <NoReplyField node={node} nodeOptions={nodeOptions} onChange={onChange} />}
+      {node.type === "choice" &&<div className="space-y-2"><div><div className="flex items-center justify-between"><label className="label" htmlFor={`prompt-${node.id}`}>Prompt</label><EmojiButton targetId={`prompt-${node.id}`} value={node.text} onChange={(text) => onChange({ ...node, text })} /></div><textarea id={`prompt-${node.id}`} className="input" rows={2} value={node.text} onChange={(e) => onChange({ ...node, text: e.target.value })} /></div><label className="label">Options</label>{node.options.map((o, i) => <div key={o.id} className="space-y-1.5 rounded-lg border border-slate-800 p-2"><div className="flex gap-1.5"><input className="input btn-sm flex-1" value={o.label} onChange={(e) => onChange({ ...node, options: node.options.map((x) => x.id === o.id ? { ...x, label: e.target.value } : x) })} /><button onClick={() => onChange({ ...node, options: node.options.filter((x) => x.id !== o.id) })} className="px-1 text-muted-foreground hover:text-red-400"><X className="size-4" /><span className="sr-only">Remove option</span></button></div><TargetPicker nodeOptions={nodeOptions} value={o.next} onPick={(v) => onChange({ ...node, options: node.options.map((x) => x.id === o.id ? { ...x, next: v } : x) })} />{i === 2 && node.options.length > 3 && <p className="text-[10px] text-amber-400">WhatsApp shows &gt;3 options as a list.</p>}</div>)}<button onClick={() => onChange({ ...node, options: [...node.options, { id: `o${Date.now().toString(36)}`, label: `Option ${node.options.length + 1}` }] })} className="btn-secondary btn-sm w-full">+ Add option</button></div>}
 
       {node.type === "document" && <><div><label className="label" htmlFor={`doc-${node.id}`}>File to send</label><select id={`doc-${node.id}`} className="input" value={node.documentId} onChange={(e) => { const doc = documents.find((d) => d.id === e.target.value); onChange({ ...node, documentId: e.target.value, ...(doc ? { fileName: doc.name } : { fileName: undefined }) }); }}><option value="">{documents.length ? "Choose a file…" : "No files yet — add them under Documents → Library"}</option>{documents.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}</select></div><div><div className="flex items-center justify-between"><label className="label" htmlFor={`doc-cap-${node.id}`}>Caption (optional)</label><EmojiButton targetId={`doc-cap-${node.id}`} value={node.caption ?? ""} onChange={(caption) => onChange({ ...node, caption: caption || undefined })} /></div><input id={`doc-cap-${node.id}`} className="input" value={node.caption ?? ""} onChange={(e) => onChange({ ...node, caption: e.target.value || undefined })} placeholder="Here's our brochure, {{name}}" /></div><p className="text-xs text-slate-500">Your Library (brochures, price lists — the newest version is always sent) and general files. Files filed on a customer, vehicle, job card or quote are never offered: they are that customer&apos;s records.</p></>}
       {node.type === "contactCard" && <><div><label className="label" htmlFor={`card-${node.id}`}>Whose card</label><select id={`card-${node.id}`} className="input" value={node.staffUserId ?? ""} onChange={(e) => onChange({ ...node, staffUserId: e.target.value || undefined })}><option value="">The business (Settings → Company)</option>{staff.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}</select></div><p className="text-xs text-slate-500">On WhatsApp it arrives as a contact they can save in one tap; elsewhere as text.</p></>}

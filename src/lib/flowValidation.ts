@@ -1,6 +1,7 @@
 import { CAN_SWITCH_OFF, choiceId, isAnnotation, JOURNEY_FOLLOW_UP_MAX_DAYS, type Flow, type FlowNode, type FlowOption } from "./flow";
 import { secretLookingHeaders } from "./flowConnections";
 import { VARIABLE_NAME } from "./journeyTypes";
+import { NO_REPLY_MAX_MINUTES, NO_REPLY_MIN_MINUTES } from "./flowNoReply";
 
 export type FlowChannel = "whatsapp" | "messenger" | "instagram" | "telegram";
 export type FlowIssue = { severity: "error" | "warning"; code: string; message: string; nodeId?: string; channel?: FlowChannel };
@@ -34,7 +35,9 @@ function optionsOf(node: unknown): FlowOption[] {
 }
 
 function refs(node: FlowNode): string[] {
-  if (node.type === "choice") return optionsOf(node).flatMap((option) => option.next ? [option.next] : []);
+  // A question's "no reply" route is an edge like any other (lib/flowNoReply).
+  const noReply = str((node as { noReply?: { next?: unknown } }).noReply?.next);
+  if (node.type === "choice") return [...optionsOf(node).flatMap((option) => option.next ? [option.next] : []), ...(noReply ? [noReply] : [])];
   if (node.type === "condition") return [node.trueNext, node.falseNext].filter((value): value is string => Boolean(str(value)));
   if (node.type === "switch") return [...node.cases.map((item) => item.next), node.defaultNext].filter((value): value is string => Boolean(str(value)));
   if (node.type === "ai") return str(node.handoffNext) ? [str(node.handoffNext)] : [];
@@ -50,7 +53,7 @@ function refs(node: FlowNode): string[] {
   const next = str((node as { next?: unknown }).next);
   const failure = str((node as { failureNext?: unknown }).failureNext);
   const unavailable = str((node as { unavailableNext?: unknown }).unavailableNext);
-  return [next, failure, unavailable].filter(Boolean);
+  return [next, failure, unavailable, noReply].filter(Boolean);
 }
 
 /** Nodes that perform a customer-visible side effect which can legitimately fail. */
@@ -293,6 +296,11 @@ export function validateFlow(flow: Flow, channels: FlowChannel[] = ["whatsapp"],
       if (!VARIABLE_NAME.test(name)) issues.push(issue("warning", "journey.hand_over_name", `“${name}” can't be handed to a Journey — a name must start with a letter and use only letters, numbers and _.`, id));
     }
     if (node.type === "goto" && !str(node.target).trim()) issues.push(issue("error", "goto.missing", "Go to needs a step to jump to.", id));
+    if ((node.type === "choice" || node.type === "capture" || node.type === "captureFile") && node.noReply) {
+      const minutes = Number(node.noReply.minutes);
+      if (!(minutes >= NO_REPLY_MIN_MINUTES && minutes <= NO_REPLY_MAX_MINUTES)) issues.push(issue("error", "no_reply.minutes", `“If no reply” must wait between ${NO_REPLY_MIN_MINUTES} minutes and ${NO_REPLY_MAX_MINUTES / 60} hours — WhatsApp only lets the bot write within 24 hours of the customer's last message.`, id));
+      if (!str(node.noReply.next)) issues.push(issue("warning", "no_reply.route", "Choose where to go if they don't reply — until then nothing happens when they go quiet.", id));
+    }
     if (node.type === "crm") {
       const action = str(node.action);
       if (!["tag", "assign", "stage"].includes(action)) issues.push(issue("error", "crm.action", "Update the CRM needs an action: tag, salesperson or stage.", id));

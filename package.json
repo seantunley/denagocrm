@@ -27,6 +27,7 @@
     "test:integrity": "tsx --tsconfig tsconfig.scripts.json scripts/test-integrity.ts",
     "test:scoped-transactions": "tsx --tsconfig tsconfig.harness.json scripts/test-scoped-transactions.ts",
     "test:email-bounces": "tsx --tsconfig tsconfig.harness.json scripts/test-email-bounces.ts",
+    "test:flow-no-reply-fence": "tsx --tsconfig tsconfig.harness.json scripts/test-flow-no-reply-fence.ts",
     "test:journey-delayed-release": "tsx --tsconfig tsconfig.harness.json scripts/test-journey-delayed-release.ts",
     "test:flow-crm-deals": "tsx --tsconfig tsconfig.harness.json scripts/test-flow-crm-deals.ts",
     "test:flow-notify": "tsx --tsconfig tsconfig.harness.json scripts/test-flow-notify.ts",
