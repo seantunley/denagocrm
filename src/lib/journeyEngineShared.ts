@@ -3,6 +3,7 @@ import { Prisma } from "@prisma/client";
 import { prisma } from "./db";
 import { evaluateConditions, parseConditionGroup, parseJourneyDefinition } from "./journeyTypes";
 import { loadJourneyContext, type JourneyEntityType } from "./journeyContext";
+import { withJourneyVars } from "./journeyVariables";
 import {
   arbitrateEnrolment,
   parseRunMode,
@@ -66,9 +67,14 @@ export async function enqueueJourneyRun(args: {
   entityId: string;
   eventKey: string;
   payload: Record<string, unknown>;
+  /** When the first step is due (a chatbot follow-up). Absent = now. The runner picks a run up only once it is due. */
+  startAt?: Date;
+  /** Starting variables (`context.vars`) — already sanitised by handedOverVars. */
+  vars?: Record<string, string>;
 }): Promise<EnrolmentResult> {
-  const context = await loadJourneyContext(args.entityType, args.entityId, args.payload);
-  if (!context) return { enrolled: false, refusal: "entity_missing" };
+  const loaded = await loadJourneyContext(args.entityType, args.entityId, args.payload);
+  if (!loaded) return { enrolled: false, refusal: "entity_missing" };
+  const context = withJourneyVars(loaded, args.vars ?? {});
   const conditions = parseConditionGroup(args.version.entryConditions);
   if (!evaluateConditions(conditions, context)) return { enrolled: false, refusal: "entry_conditions" };
   const definition = parseJourneyDefinition(args.version.definition);
@@ -145,6 +151,7 @@ export async function enqueueJourneyRun(args: {
           currentStepId: definition.startStepId,
           context: context as Prisma.InputJsonValue,
           idempotencyKey,
+          ...(args.startAt ? { nextRunAt: args.startAt } : {}),
           // "queued" holds the new run until the open one finishes. Parked as
           // `blocked` rather than given a future nextRunAt: a guessed delay either
           // starts it while the first is still going, or leaves it idle long after
