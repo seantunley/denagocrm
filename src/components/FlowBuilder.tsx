@@ -203,6 +203,8 @@ function toRfNode(n: FlowNode, position: Pos, isStart: boolean): Node<RFData> {
 function NodeCard({ data, selected }: NodeProps) {
   const d = data as unknown as RFData;
   const n = d.flow;
+  // Before the note/group early returns: a hook must run on every render, in the same order.
+  const stepNumbers = useContext(StepNumbersContext);
   if (n.type === "note") {
     const color = ANNOTATION_COLORS[n.color ?? "yellow"];
     return (
@@ -223,7 +225,7 @@ function NodeCard({ data, selected }: NodeProps) {
   }
   const meta = TYPE_META[n.type];
   const Icon = meta.icon;
-  const numbers = stepNumbersLine(n.type, useContext(StepNumbersContext)?.[n.id]);
+  const numbers = stepNumbersLine(n.type, stepNumbers?.[n.id]);
   const errors = d.issues?.filter((issue) => issue.severity === "error").length ?? 0;
   const warnings = (d.issues?.length ?? 0) - errors;
   return (
