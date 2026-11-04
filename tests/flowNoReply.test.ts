@@ -96,7 +96,7 @@ test("the action fence: while claimed, actions run; once the customer cancels it
     startJourney: async () => { acted.push("journey"); return { ok: true }; },
     handoff: async () => { acted.push("handoff"); },
   } as unknown as FlowCtx;
-  const fence = fenceTimeoutEffects(live, async () => claimed);
+  const fence = fenceTimeoutEffects(live, async (act) => (claimed ? { allowed: true as const, value: await act() } : { allowed: false as const }));
   await runFlow(route, { nodeId: "q", vars: {} }, { text: "", timedOut: true }, live);
   assert.deepEqual(acted, ["booking"], "the booking ran while claimed; the Journey after the customer wrote did not");
   assert.equal(fence.superseded(), true, "and the runner drops the whole turn");
@@ -111,7 +111,14 @@ test("wiring: the timeout is CLAIMED before any step runs, fenced on the claim, 
   const run = readFileSync("src/lib/flowRun.ts", "utf8");
   const body = run.slice(run.indexOf("export async function runWhatsAppFlow"));
   assert.ok(body.indexOf("claimNoReplyTx(") > 0 && body.indexOf("claimNoReplyTx(") < body.indexOf("await runFlow("), "claimed before the flow runs (PR #988 review)");
-  assert.ok(body.indexOf("cancelNoReplyTx(") > 0 && body.indexOf("cancelNoReplyTx(") < body.indexOf("await runFlow("), "a customer's message cancels any timeout before its own turn runs");
+  assert.ok(body.indexOf("cancelPendingNoReply(") > 0 && body.indexOf("cancelPendingNoReply(") < body.indexOf("await runFlow("), "a customer's message cancels any timeout before its own turn runs");
+  // Every inbound message — a voice note too — cancels in the common entry, before it branches (third review).
+  const bot = run.slice(run.indexOf("export async function runWhatsAppBot"));
+  assert.ok(bot.indexOf("cancelPendingNoReply(digits, owned.vars)") > 0 && bot.indexOf("cancelPendingNoReply(digits, owned.vars)") < bot.indexOf("if (opts.voiceNote)"), "before the voice-note branch");
+  // The cancel and each timeout action take the same per-conversation lock, so they never overlap.
+  const cancel = run.slice(run.indexOf("async function cancelPendingNoReply"), run.indexOf("export type NoReplyTurn"));
+  assert.match(cancel, /withNoReplyLock\("whatsapp", digits, \(tx, tenantId\) => cancelNoReplyTx\(/);
+  assert.match(body, /fenceTimeoutEffects\(ctx, \(act\) => withNoReplyLock\("whatsapp", digits,/);
   assert.ok(body.indexOf("fenceTimeoutEffects(ctx") < body.indexOf("await runFlow("), "a timeout's actions are fenced before it runs");
   assert.ok(body.indexOf("if (fence?.superseded()) return true;") > body.indexOf("await runFlow(") && body.indexOf("if (fence?.superseded()) return true;") < body.indexOf("withBotConversationWrite(async (tx, tenantId) =>"), "a superseded timeout keeps nothing");
   assert.match(run, /if \(!claimed\) return true;/);

@@ -101,22 +101,30 @@ const ok = (label: string) => console.log(`  ✓ ${++checks}. ${label}`);
   // The timeout is claimed; its route is about to start a Journey; the customer's message lands first. Their turn
   // cancels the timeout (cancelNoReplyTx, as runWhatsAppFlow does first thing), and the timeout's action — run through
   // the real fence and the real chatbot action — finds its claim gone and does nothing.
-  const { cancelNoReplyTx } = await import("../src/lib/botSessionStore");
+  const { cancelNoReplyTx, withNoReplyLock } = await import("../src/lib/botSessionStore");
   const { fenceTimeoutEffects, NO_REPLY_KEYS } = flowNoReply;
+  const scoped = <T>(fn: () => Promise<T>) => runInTenantScope({ tenantId, system: false }, fn);
+  // The guard exactly as runWhatsAppFlow builds it: check the claim and act under the conversation's lock.
+  const guardFor = (claimedAt: string) => <T>(act: () => Promise<T>) =>
+    withNoReplyLock("whatsapp", key, async (tx, tid) =>
+      (await botSessionStillWaitingTx(tx, tid, "whatsapp", key, { nodeId: "menu", at: claimedAt, atKey: NO_REPLY_CLAIMED }))
+        ? { allowed: true as const, value: await act() }
+        : { allowed: false as const });
+  // The customer's cancel exactly as runWhatsAppBot does it: under the same lock.
+  const customerWrites = () => scoped(() => withNoReplyLock("whatsapp", key, (tx, tid) => cancelNoReplyTx(tx, tid, "whatsapp", key, NO_REPLY_KEYS)));
+  const claimAt = (claimedAt: string) => basePrisma.$transaction((tx) => claimNoReplyTx(tx as never, tenantId, "whatsapp", key, {
+    nodeId: "menu", at: claimedAt, atKey: NO_REPLY_AT, claimedKey: NO_REPLY_CLAIMED, claimedAtKey: NO_REPLY_CLAIMED_AT, now: Date.now(), reclaimMs: NO_REPLY_RECLAIM_MS,
+  }));
   const contact2 = await basePrisma.contact.create({ data: { tenantId, firstName: "NoReplyRace", lastName: `Test-${run}` }, select: { id: true } });
   const at2 = String(run + 60 * 60_000);
   const raceAction = async (customerWritesFirst: boolean) => {
     await session({ [NO_REPLY_AT]: at2 });
-    const claimed = await basePrisma.$transaction((tx) => claimNoReplyTx(tx as never, tenantId, "whatsapp", key, {
-      nodeId: "menu", at: at2, atKey: NO_REPLY_AT, claimedKey: NO_REPLY_CLAIMED, claimedAtKey: NO_REPLY_CLAIMED_AT, now: Date.now(), reclaimMs: NO_REPLY_RECLAIM_MS,
-    }));
-    assert.equal(claimed, true);
-    if (customerWritesFirst) await basePrisma.$transaction((tx) => cancelNoReplyTx(tx as never, tenantId, "whatsapp", key, NO_REPLY_KEYS));
-    return runInTenantScope({ tenantId, system: false }, () =>
+    assert.equal(await claimAt(at2), true);
+    if (customerWritesFirst) await customerWrites();
+    return scoped(() =>
       withInboundBotEvent({ rowId: noReplyEventId(tenantId, key, "menu", at2), leaseAttempt: null }, async () => {
         const actions = crmActions("whatsapp", { contactId: contact2.id, leadId: null });
-        const fenced = fenceTimeoutEffects(actions as never, () =>
-          basePrisma.$transaction((tx) => botSessionStillWaitingTx(tx as never, tenantId, "whatsapp", key, { nodeId: "menu", at: at2, atKey: NO_REPLY_CLAIMED })));
+        const fenced = fenceTimeoutEffects(actions as never, guardFor(at2));
         const outcome = await actions.startJourney(journey.id, {}, "raceJourney");
         return { outcome, superseded: fenced.superseded() };
       }));
@@ -132,6 +140,37 @@ const ok = (label: string) => console.log(`  ✓ ${++checks}. ${label}`);
   assert.equal(control.outcome.ok, true, control.outcome.reason);
   assert.equal(await runs2(), 1);
   ok("…and with no reply in between, the same fenced action does enrol (the fence isn't simply always shut)");
+
+  // ── 4. A reply DURING an action (PR #988 third review) ───────────────────────────────────────
+  // The timeout's first action is mid-flight (holding the conversation's lock) when the customer writes. Their cancel
+  // must WAIT for that action to finish — never overlap it — and then the timeout's next action must do nothing.
+  const at3 = String(run + 90 * 60_000);
+  await session({ [NO_REPLY_AT]: at3 });
+  assert.equal(await claimAt(at3), true);
+  const events: string[] = [];
+  let release!: () => void;
+  const finishAction = new Promise<void>((resolve) => { release = resolve; });
+  let markStarted!: () => void;
+  const actionStarted = new Promise<void>((resolve) => { markStarted = resolve; });
+  const effects = {
+    createBooking: async () => { events.push("action started"); markStarted(); await finishAction; events.push("action finished"); return { ok: true }; },
+    startJourney: async () => { events.push("second action ran"); return { ok: true }; },
+  };
+  const fenced = fenceTimeoutEffects(effects as never, guardFor(at3));
+  const inFlight = scoped(() => effects.createBooking());
+  await actionStarted;
+  const cancel = customerWrites().then(() => { events.push("customer's cancel done"); });
+  await new Promise((resolve) => setTimeout(resolve, 1500));
+  assert.deepEqual(events, ["action started"], "the cancel waits while the action is in flight — they never overlap");
+  release();
+  await inFlight;
+  await cancel;
+  assert.deepEqual(events, ["action started", "action finished", "customer's cancel done"]);
+  const second = await scoped(() => effects.startJourney());
+  assert.deepEqual(second, { ok: false, reason: "The customer replied first" });
+  assert.ok(!events.includes("second action ran"));
+  assert.equal(fenced.superseded(), true, "and the runner drops the rest of the timeout's turn");
+  ok("a reply DURING an action waits for that action, then cancels; nothing after it runs");
 
   await basePrisma.botSession.deleteMany({ where: { tenantId, channel: "whatsapp", key } });
   console.log(`\n${checks} checks passed`);

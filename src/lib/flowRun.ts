@@ -13,7 +13,7 @@ import { resolveFlowSnapshot } from "./flowPublishing";
 import { flushBotOutboxConversation } from "./botOutbox";
 import { enqueueBotMessagesTx } from "./botOutboxWrite";
 import { withBotConversationWrite } from "./botTenant";
-import { loadBotSession, upsertBotSessionTx, deleteBotSessionTx, botStillOwnsTx, botSessionStillWaitingTx, cancelNoReplyTx, claimNoReplyTx } from "./botSessionStore";
+import { loadBotSession, upsertBotSessionTx, deleteBotSessionTx, botStillOwnsTx, botSessionStillWaitingTx, cancelNoReplyTx, claimNoReplyTx, withNoReplyLock } from "./botSessionStore";
 import { armNoReply, fenceTimeoutEffects, NO_REPLY_AT, NO_REPLY_CLAIMED, NO_REPLY_CLAIMED_AT, NO_REPLY_KEYS, NO_REPLY_RECLAIM_MS } from "./flowNoReply";
 import { recordBotFlowEventsTx, type BotFlowEventInput } from "./botFlowAnalytics";
 import { completeInboundBotEventTx, currentInboundBotClaim } from "./botInboundEvent";
@@ -102,6 +102,18 @@ function actionEvents(digits: string, flowVersionId: string | null, actions: Act
   return actions.filter((a) => a.ok).map((a) => ({ channel: "whatsapp", conversationKey: digits, flowVersionId, nodeId: a.nodeId, eventType: "crm_action", metadata: { action: a.action } }));
 }
 
+/**
+ * THE CUSTOMER WROTE: cancel any no-reply timeout — a pending deadline can no longer be claimed, and a timeout already
+ * running is refused its next action. Under the conversation's lock (withNoReplyLock), so if a timeout action is
+ * mid-flight this waits for it to finish, then cancels: the two never overlap. `vars`: the session as loaded (also
+ * cleared here). Only touches the database when there is something to cancel.
+ */
+async function cancelPendingNoReply(digits: string, vars: Record<string, string>): Promise<void> {
+  if (!NO_REPLY_KEYS.some((k) => k in vars)) return;
+  await withNoReplyLock("whatsapp", digits, (tx, tenantId) => cancelNoReplyTx(tx, tenantId, "whatsapp", digits, NO_REPLY_KEYS));
+  for (const k of NO_REPLY_KEYS) delete vars[k];
+}
+
 /** The no-reply sweep's turn (lib/flowNoReply): the question and deadline it found overdue. No customer message. */
 export type NoReplyTurn = { nodeId: string; at: string };
 
@@ -118,12 +130,8 @@ export async function runWhatsAppFlow(digits: string, input: FlowInput, entryCon
   }
   const match = await matchByPhone(digits);
   const existing = await loadSession(digits);
-  // THE CUSTOMER WROTE: cancel any timeout before anything else — a pending deadline can no longer be claimed, and a
-  // timeout already running finds its claim gone before its next action (fenceTimeoutEffects). Their answer wins.
-  if (!noReply && existing && NO_REPLY_KEYS.some((k) => k in existing.vars)) {
-    await withBotConversationWrite((tx, tenantId) => cancelNoReplyTx(tx, tenantId, "whatsapp", digits, NO_REPLY_KEYS));
-    for (const k of NO_REPLY_KEYS) delete existing.vars[k];
-  }
+  // A customer's turn: runWhatsAppBot has cancelled any timeout already; this covers a direct call too.
+  if (!noReply && existing) await cancelPendingNoReply(digits, existing.vars);
   // Only the conversation this sweep just claimed, still the bot's.
   if (noReply && (!existing || existing.ownership !== "bot" || existing.nodeId !== noReply.nodeId || existing.vars[NO_REPLY_CLAIMED] !== noReply.at)) return true;
   // Same rule as DM/Telegram, from the same module — but `status === "paused"`
@@ -159,7 +167,10 @@ export async function runWhatsAppFlow(digits: string, input: FlowInput, entryCon
   ctx.onStep = (nodeId) => { entered.push(nodeId); };
   // A timeout's every outside action first re-checks its claim; a customer who wrote meanwhile cancelled it.
   const fence = noReply
-    ? fenceTimeoutEffects(ctx, () => withBotConversationWrite((tx, tenantId) => botSessionStillWaitingTx(tx, tenantId, "whatsapp", digits, { ...noReply, atKey: NO_REPLY_CLAIMED })))
+    ? fenceTimeoutEffects(ctx, (act) => withNoReplyLock("whatsapp", digits, async (tx, tenantId) =>
+        (await botSessionStillWaitingTx(tx, tenantId, "whatsapp", digits, { ...noReply, atKey: NO_REPLY_CLAIMED }))
+          ? { allowed: true as const, value: await act() }
+          : { allowed: false as const }))
     : null;
   const result = await runFlow(snapshot.flow, session, noReply ? { text: "", timedOut: true } : input, ctx);
   // Superseded part-way: nothing of this timeout's turn is kept — no reply queued, no session written.
@@ -227,6 +238,9 @@ export async function runWhatsAppBot(digits: string, input: FlowInput, opts: { v
   // it answered over the salesperson — the exact thing conversation ownership
   // exists to prevent, entered through a door the ownership check did not cover.
   const owned = await loadSession(digits);
+  // THE CUSTOMER WROTE — text, a tap, a voice note, anything: cancel any no-reply timeout first, before this branches
+  // into the flow, a voice reply or the AI (PR #988 third review: a voice note went round the cancel).
+  if (owned) await cancelPendingNoReply(digits, owned.vars);
   if (owned) {
     const gate = decideInboundAct({
       ownership: owned.ownership,

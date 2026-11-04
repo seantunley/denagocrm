@@ -74,24 +74,28 @@ export function noReplyDueAt(nodeId: string | null, vars: Record<string, string>
 export const noReplyDue = (nodeId: string | null, vars: Record<string, string>, now: number) => noReplyDueAt(nodeId, vars, now) !== null;
 
 /**
- * THE ACTION FENCE (PR #988 second review): a claimed timeout runs its route, and a customer can still write while it
- * does — their turn revokes the claim first (botSessionStore revokeNoReplyClaimTx). So during a timeout, every step
- * that acts outside the conversation re-checks the claim right before it acts; once the claim is gone, that step and
- * every later one do nothing, and the runner drops the whole turn. Mutates `ctx` (the timeout's own, built per turn).
+ * THE ACTION FENCE (PR #988 reviews 2–3): a claimed timeout runs its route, and a customer can still write while it
+ * does. Every step that acts outside the conversation runs through `guard`, which checks the claim and performs the
+ * action AS ONE — under the conversation's lock (botSessionStore withNoReplyLock), the same lock a customer's cancel
+ * takes. So a reply can't land between the check and the action: it either comes first (the claim is gone, the
+ * action does nothing) or waits for that action to finish and then cancels (the next action does nothing). Once one
+ * is refused, every later one is too and the runner drops the whole turn. Mutates `ctx` (built per turn).
  */
 export const TIMEOUT_EFFECTS = ["createBooking", "manageBooking", "startJourney", "updateCrm", "notifyStaff", "bookSlot", "rescheduleSlot", "httpRequest", "handoff"] as const;
-export function fenceTimeoutEffects(ctx: FlowCtx, stillClaimed: () => Promise<boolean>): { superseded: () => boolean } {
+/** Check the claim and, only if it holds, act — atomically with respect to a customer's cancel. */
+export type TimeoutGuard = <T>(act: () => Promise<T>) => Promise<{ allowed: true; value: T } | { allowed: false }>;
+export function fenceTimeoutEffects(ctx: FlowCtx, guard: TimeoutGuard): { superseded: () => boolean } {
   let gone = false;
   const effects = ctx as unknown as Record<string, unknown>;
   for (const name of TIMEOUT_EFFECTS) {
     const act = effects[name];
     if (typeof act !== "function") continue;
+    const refused = () => (name === "handoff" ? undefined : { ok: false, reason: "The customer replied first" });
     effects[name] = async (...args: unknown[]) => {
-      if (gone || !(await stillClaimed())) {
-        gone = true;
-        return name === "handoff" ? undefined : { ok: false, reason: "The customer replied first" };
-      }
-      return (act as (...a: unknown[]) => unknown)(...args);
+      if (gone) return refused();
+      const outcome = await guard(async () => (act as (...a: unknown[]) => unknown)(...args));
+      if (!outcome.allowed) { gone = true; return refused(); }
+      return outcome.value;
     };
   }
   return { superseded: () => gone };

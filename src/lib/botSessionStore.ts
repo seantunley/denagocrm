@@ -1,5 +1,5 @@
 import crypto from "crypto";
-import { prisma } from "./db";
+import { basePrisma, prisma } from "./db";
 import { botConversationTenantId } from "./botTenant";
 import { type TenantWriteTx } from "./tenantWrite";
 import type { BotOwnership } from "./botOwnership";
@@ -169,6 +169,24 @@ export async function claimNoReplyTx(
     JSON.stringify(vars),
   );
   return true;
+}
+
+/**
+ * ONE AT A TIME, PER CONVERSATION (PR #988 third review): a timeout action and a customer's cancel never overlap.
+ * Both run inside this transaction-scoped Postgres advisory lock on the conversation; a timeout action checks its
+ * claim and ACTS while holding it, so a customer who writes mid-action waits for that one action to finish, then
+ * cancels — and the next action finds the claim gone. The lock is the conversation's alone (other BotSession writers
+ * are not blocked) and is released when the transaction ends, even if the process dies. 60s ceiling: an action that
+ * outlasts it loses the lock (its transaction aborts) but cannot be recalled — the cap is far above any action's own.
+ */
+export const NO_REPLY_LOCK_MS = 60_000;
+export async function withNoReplyLock<T>(channel: string, key: string, fn: (tx: TenantWriteTx, tenantId: string) => Promise<T>): Promise<T> {
+  const tenantId = botConversationTenantId();
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  return (basePrisma as any).$transaction(async (tx: TenantWriteTx) => {
+    await tx.$executeRawUnsafe(`SELECT pg_advisory_xact_lock(hashtext($1))`, `noreply:${tenantId}:${channel}:${key}`);
+    return fn(tx, tenantId);
+  }, { timeout: NO_REPLY_LOCK_MS, maxWait: 10_000 });
 }
 
 /**
