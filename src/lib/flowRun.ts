@@ -13,7 +13,8 @@ import { resolveFlowSnapshot } from "./flowPublishing";
 import { flushBotOutboxConversation } from "./botOutbox";
 import { enqueueBotMessagesTx } from "./botOutboxWrite";
 import { withBotConversationWrite } from "./botTenant";
-import { loadBotSession, upsertBotSessionTx, deleteBotSessionTx, botStillOwnsTx } from "./botSessionStore";
+import { loadBotSession, upsertBotSessionTx, deleteBotSessionTx, botStillOwnsTx, botSessionStillWaitingTx } from "./botSessionStore";
+import { armNoReply, NO_REPLY_AT } from "./flowNoReply";
 import { recordBotFlowEventsTx, type BotFlowEventInput } from "./botFlowAnalytics";
 import { completeInboundBotEventTx, currentInboundBotClaim } from "./botInboundEvent";
 import { decideInboundAct, HUMAN_RESPONSIBILITY_HOURS, type BotOwnership } from "./botOwnership";
@@ -101,14 +102,19 @@ function actionEvents(digits: string, flowVersionId: string | null, actions: Act
   return actions.filter((a) => a.ok).map((a) => ({ channel: "whatsapp", conversationKey: digits, flowVersionId, nodeId: a.nodeId, eventType: "crm_action", metadata: { action: a.action } }));
 }
 
-export async function runWhatsAppFlow(digits: string, input: FlowInput, entryContext?: FlowEntryContext): Promise<boolean> {
+/** The no-reply sweep's turn (lib/flowNoReply): the question and deadline it found overdue. No customer message. */
+export type NoReplyTurn = { nodeId: string; at: string };
+
+export async function runWhatsAppFlow(digits: string, input: FlowInput, entryContext?: FlowEntryContext, noReply?: NoReplyTurn): Promise<boolean> {
   const match = await matchByPhone(digits);
   const existing = await loadSession(digits);
+  // Only a conversation still unanswered on that same question and deadline, and still the bot's.
+  if (noReply && (!existing || existing.ownership !== "bot" || existing.nodeId !== noReply.nodeId || existing.vars[NO_REPLY_AT] !== noReply.at)) return true;
   // Same rule as DM/Telegram, from the same module — but `status === "paused"`
   // could not tell a bot handoff from a staff takeover, so on WhatsApp too a
   // customer saying "hi" to the salesperson helping them restarted the flow on
   // top of that person. Ownership decides now.
-  const decision = decideInboundAct({
+  const decision = noReply ? { act: "resume" as const } : decideInboundAct({
     ownership: existing ? existing.ownership : null,
     text: input.text,
     hasChoiceId: Boolean(input.choiceId),
@@ -135,7 +141,9 @@ export async function runWhatsAppFlow(digits: string, input: FlowInput, entryCon
   const entered: string[] = [];
   // This flow's own steps only: the engine does not report a subflow's steps here (runSubflowNode).
   ctx.onStep = (nodeId) => { entered.push(nodeId); };
-  const result = await runFlow(snapshot.flow, session, input, ctx);
+  const result = await runFlow(snapshot.flow, session, noReply ? { text: "", timedOut: true } : input, ctx);
+  // Arm (or clear) the "no reply" deadline for the question it now waits on — from the customer's last message.
+  if (result.session) result.session.vars = armNoReply(snapshot.flow, result.session, Date.now(), !noReply);
 
   // RUNTIME — {@link botTenant}.`withBotConversationWrite`. `runWhatsAppFlow` is
   // entered from the WhatsApp webhook answering a customer, inside the channel scope
@@ -156,6 +164,8 @@ export async function runWhatsAppFlow(digits: string, input: FlowInput, entryCon
     // person. FOR UPDATE holds the row for the rest of this transaction, so a
     // takeover cannot slip in between the check and the enqueue.
     if (!(await botStillOwnsTx(tx, tenantId, "whatsapp", digits))) return;
+    // The customer answered while the sweep was working: their answer wins, the sweep's turn is dropped.
+    if (noReply && !(await botSessionStillWaitingTx(tx, tenantId, "whatsapp", digits, { ...noReply, atKey: NO_REPLY_AT }))) return;
     // Acknowledge the provider event in the SAME transaction as the graph move.
     // Completing it afterwards left a window where the session and outbox committed,
     // the process died, and the redelivery then replayed the old message against an

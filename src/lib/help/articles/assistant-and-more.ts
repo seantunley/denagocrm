@@ -364,6 +364,26 @@ export const assistantAndMoreArticles: HelpArticle[] = [
     ],
   },
 
+  {
+    slug: "chatbot-flow-builder-tips",
+    title: "Chatbot flow builder: working on a flow",
+    summary: "Shortcuts for building and changing a chatbot flow without breaking the live one.",
+    category: "automation",
+    audience: "admins",
+    keywords: ["flow builder", "chatbot flow", "no reply", "nudge", "timeout", "follow up", "bot builder"],
+    body: [
+      { type: "h", text: "If they don't reply" },
+      { type: "p", text: "On a menu, a question or a \"send a file\" step, choose **If they don't reply → After 30 minutes (or 1, 2, 4, 12 or 23 hours), go to…** and pick a step — a gentle nudge (\"Still there? Tap a button any time 🙂\"), or a hand-off to the team. The card gets a **No reply** outlet you can wire like any other." },
+      { type: "list", items: [
+        "WhatsApp only, and only within 24 hours of the customer's last message — WhatsApp doesn't let the bot write after that.",
+        "It's checked every 30 minutes, so it goes up to 30 minutes after the time you choose.",
+        "If the customer answers first, their answer wins. If a person has taken the conversation over, nothing is sent.",
+        "Leave it on **Just wait** and nothing happens when a customer goes quiet, as before.",
+        "It can go out at any hour the customer's conversation is waiting, so for long waits consider what time of day it might land.",
+      ] },
+    ],
+  },
+
   // ── Today and lead scores ─────────────────────────────────────────────
   {
     slug: "today-who-to-contact-next",

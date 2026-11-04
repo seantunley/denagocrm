@@ -109,6 +109,29 @@ export async function upsertBotSessionTx(
  * commit between this check and the enqueue. Callers must run this BEFORE
  * queueing anything and abandon the turn when it returns false.
  */
+/**
+ * THE NO-REPLY SWEEP'S FENCE (lib/flowNoReply): the session is still the bot's, still waiting on `nodeId`, with the
+ * very deadline the sweep saw. A customer whose answer landed in between moved it on (or re-armed it), and then the
+ * sweep must do nothing — their answer wins. Read inside the turn's transaction, after botStillOwnsTx locked the row.
+ */
+export async function botSessionStillWaitingTx(
+  tx: TenantWriteTx,
+  tenantId: string,
+  channel: string,
+  key: string,
+  expected: { nodeId: string; at: string; atKey: string },
+): Promise<boolean> {
+  const rows = (await tx.$queryRawUnsafe(
+    `SELECT "ownership", "nodeId", "vars" FROM "BotSession" WHERE "tenantId" = $1 AND "channel" = $2 AND "key" = $3`,
+    tenantId,
+    channel,
+    key,
+  )) as Array<{ ownership: string; nodeId: string | null; vars: string }>;
+  const row = rows[0];
+  if (!row || row.ownership !== "bot" || row.nodeId !== expected.nodeId) return false;
+  try { return (JSON.parse(row.vars) as Record<string, string>)[expected.atKey] === expected.at; } catch { return false; }
+}
+
 export async function botStillOwnsTx(
   tx: TenantWriteTx,
   tenantId: string,
