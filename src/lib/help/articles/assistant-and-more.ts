@@ -364,6 +364,25 @@ export const assistantAndMoreArticles: HelpArticle[] = [
     ],
   },
 
+  {
+    slug: "chatbot-flow-builder-tips",
+    title: "Chatbot flow builder: working on a flow",
+    summary: "Shortcuts for building and changing a chatbot flow without breaking the live one.",
+    category: "automation",
+    audience: "admins",
+    keywords: ["flow builder", "chatbot flow", "export flow", "import flow", "copy flow to another workspace", "bot builder"],
+    body: [
+      { type: "h", text: "Export a flow, or copy it to another workspace" },
+      { type: "p", text: "On the flow list, **Export** on a flow downloads it as a file (its draft, with the steps where you placed them). **Import** at the top reads such a file back in as a new draft called \"… (imported)\" — it's never live until you publish it." },
+      { type: "list", items: [
+        "To copy a finished flow to another workspace, export it in one workspace and import it in the other.",
+        "A flow can point at things that belong to one workspace — a document, a Journey, a subflow, a staff member, a pipeline stage, an API connection. On import, each one that exists in this workspace is kept; each one that doesn't is cleared, and the builder lists the steps where you need to choose again.",
+        "A key typed into an API step's headers is never put in the file. Keys live in Connections, which aren't exported.",
+        "Exports and imports are recorded in the audit log.",
+      ] },
+    ],
+  },
+
   // ── Today and lead scores ─────────────────────────────────────────────
   {
     slug: "today-who-to-contact-next",
