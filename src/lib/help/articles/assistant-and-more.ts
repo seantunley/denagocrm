@@ -377,7 +377,7 @@ export const assistantAndMoreArticles: HelpArticle[] = [
       { type: "list", items: [
         "Any step that fails and has no failure route of its own goes there. A step's own failure route still comes first.",
         "Nothing changes when steps succeed.",
-        "If that step itself fails, the conversation simply stops — it never loops back on itself.",
+        "It's used at most once per customer message. If something on the way from it fails too, the conversation stops there rather than going round again.",
         "Press **Stop using** on it to go back to no fallback. Deleting the step does the same.",
       ] },
     ],

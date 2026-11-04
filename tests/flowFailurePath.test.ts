@@ -49,6 +49,26 @@ test("the fallback step failing does not loop back to itself", async () => {
   assert.equal(result.session, null);
 });
 
+test("the fallback is one-shot per turn: a failure on its own path ends the turn instead of looping (PR #983 review)", async () => {
+  // API A fails → fallback message → API B fails → (would be) fallback message again → API B …
+  const calls: string[] = [];
+  const looping: Flow = {
+    start: "a",
+    nodes: {
+      a: { id: "a", type: "http", method: "GET", url: "https://a.example.com", next: "done" },
+      fb: { id: "fb", type: "message", text: "Sorry, something went wrong.", next: "b" },
+      b: { id: "b", type: "http", method: "GET", url: "https://b.example.com", next: "done" },
+      done: { id: "done", type: "end" },
+    },
+    onFailure: "fb",
+  };
+  const failing = { ...ctx(false), httpRequest: async (input: { url: string }) => { calls.push(input.url); return { ok: false, status: 503, reason: "down" }; } } as unknown as FlowCtx;
+  const result = await runFlow(looping, { nodeId: null, vars: {} }, { text: "hi" }, failing);
+  assert.deepEqual(said(result), ["Sorry, something went wrong."], "the fallback's message once, not until the step guard");
+  assert.deepEqual(calls, ["https://a.example.com", "https://b.example.com"], "each API called once");
+  assert.equal(result.session, null, "and the turn ends");
+});
+
 test("validation: the fallback satisfies the publish check, is reachable, and must be a real step", () => {
   const noFallback = publishSeverity(validateFlow(flow()));
   assert.ok(noFallback.some((i) => i.code === "action.no_failure_branch" && i.nodeId === "book" && i.severity === "error"), "without it, publishing is refused as before");
