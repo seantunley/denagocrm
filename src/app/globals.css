@@ -306,6 +306,12 @@
 .denago-workspace {
   isolation: isolate;
 }
+/* A builder in full screen (BuilderWorkspaceShell) must cover the app's own header and sidebar. Isolated, the page
+   kept its z-[70] below them: the toolbar sat under the header and the sidebar over the canvas (2026-11-04, the
+   chatbot builder and the Journey canvas alike). */
+.denago-workspace:has([data-slot="builder-workspace"][data-fullscreen]) {
+  isolation: auto;
+}
 .denago-workspace h1 {
   font-size: 1.5rem;
   font-weight: 600;

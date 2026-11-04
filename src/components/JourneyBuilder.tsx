@@ -343,6 +343,7 @@ export default function JourneyBuilder({
           <JourneyCanvas
             steps={steps}
             onChange={setSteps}
+            saveButton={<SaveButton className="btn-primary btn-sm">{submitLabel}</SaveButton>}
             renderEditor={(step, depth, onStepChange) => (
               <div className="space-y-3">
                 <StepTypeSelect step={step} depth={depth} onChange={onStepChange} />

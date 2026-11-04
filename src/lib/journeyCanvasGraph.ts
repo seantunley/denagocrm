@@ -10,8 +10,8 @@
  *    Reconnecting a wire's end is the same move. Nothing else can be expressed, because nothing else can be saved.
  *  - a condition's "No" wire is drawn (to its stop, or to the target it was written with) but is not an edit point.
  */
-import { JOURNEY_LIMITS } from "./journeyTypes";
-import { generatedStopId, isRecord, type BuilderStep } from "./journeyBuilderDefinition";
+import { JOURNEY_LIMITS, JOURNEY_STEP_LABELS, type JourneyStepType } from "./journeyTypes";
+import { generatedStopId, initialConfig, isRecord, type BuilderStep } from "./journeyBuilderDefinition";
 
 /** Where a list of steps lives: the journey itself (null), or one slot of a Choose/Repeat. */
 export type ListRef = { parentId: string; slot: string } | null;
@@ -259,4 +259,80 @@ export function stepSummary(step: BuilderStep): string {
     case "repeat": return c.mode === "count" ? `${c.count ?? 2} times` : c.mode === "for_each" ? "For each item" : `${c.mode ?? ""} conditions match`;
     default: return "";
   }
+}
+
+/* ── the Nodes palette, Find, Undo ───────────────────────────────────────── */
+
+/** The palette's groups. Every step type is in exactly one (tests/journeyCanvas.test.ts). */
+export const JOURNEY_PALETTE = [
+  { group: "messages", label: "Messages", types: ["send_email", "send_sms", "send_push", "send_review_request", "send_service_reminder", "send_signing_reminder", "send_survey_reminder"] },
+  { group: "crm", label: "CRM", types: ["create_activity", "move_stage", "assign_user", "lead_mark_won", "lead_mark_lost", "lead_reopen", "add_tag", "remove_tag"] },
+  { group: "timing", label: "Timing", types: ["wait", "wait_for_trigger", "wait_for_condition"] },
+  { group: "logic", label: "Logic", types: ["condition", "choose", "repeat", "variables", "stop"] },
+] as const satisfies readonly { group: string; label: string; types: readonly JourneyStepType[] }[];
+
+export type PaletteGroup = (typeof JOURNEY_PALETTE)[number]["group"];
+
+/** Which palette group a type belongs to; undefined for a type this build doesn't know. */
+export function paletteGroup(type: string): PaletteGroup | undefined {
+  return JOURNEY_PALETTE.find((g) => (g.types as readonly string[]).includes(type))?.group;
+}
+
+/**
+ * A new step of `type`, seeded exactly as the list view seeds one (initialConfig), placed at `at` — or at the end of
+ * the journey. A Choose or Repeat is refused where the list view wouldn't offer one: too deep to nest.
+ */
+export function addNewStep(steps: BuilderStep[], type: string, id: string, at: { list: ListRef; index: number } | null): BuilderStep[] | string {
+  const place = at ?? { list: null, index: steps.length };
+  const depth = place.list ? (locate(steps, place.list.parentId)?.depth ?? 0) + 1 : 0;
+  if ((type === "choose" || type === "repeat") && depth + 1 >= JOURNEY_LIMITS.depth) {
+    return `Steps can only nest ${JOURNEY_LIMITS.depth - 1} levels deep`;
+  }
+  return insertStep(steps, place.list, place.index, { id, type, config: initialConfig(type) });
+}
+
+/** Every step at every depth, in running order. */
+function everyStep(steps: BuilderStep[]): BuilderStep[] {
+  return steps.filter(isRecord).flatMap((step) => [step, ...slotsOf(step).flatMap((s) => everyStep(s.steps))]);
+}
+
+/** The text an author typed into a step — not the steps nested inside it, which are found on their own. */
+function words(value: unknown, out: string[] = []): string[] {
+  if (typeof value === "string" || typeof value === "number") out.push(String(value));
+  else if (Array.isArray(value)) value.forEach((v) => words(v, out));
+  else if (isRecord(value)) for (const [key, v] of Object.entries(value)) if (key !== "sequence" && key !== "default") words(v, out);
+  return out;
+}
+
+/** Find on the canvas: steps whose name, type or own text mentions the query. */
+export function findSteps(steps: BuilderStep[], query: string): { id: string; label: string; snippet: string }[] {
+  const q = query.trim().toLowerCase();
+  if (!q) return [];
+  const labels: Record<string, string> = JOURNEY_STEP_LABELS;
+  return everyStep(steps).flatMap((step) => {
+    const label = labels[step.type] ?? step.type;
+    const text = words(step.config);
+    const name = (step as { name?: unknown }).name;
+    const hay = [label, step.type, step.id, typeof name === "string" ? name : "", ...text];
+    if (!hay.some((h) => h.toLowerCase().includes(q))) return [];
+    return [{ id: step.id, label, snippet: (text.find((t) => t.toLowerCase().includes(q)) ?? stepSummary(step)).slice(0, 80) }];
+  });
+}
+
+/** Undo history over snapshots of the steps (FlowBuilder keeps 50). */
+export type History<T> = { past: T[]; future: T[] };
+export const HISTORY_LIMIT = 50;
+
+export function recordHistory<T>(history: History<T>, current: T): History<T> {
+  return { past: [...history.past, current].slice(-HISTORY_LIMIT), future: [] };
+}
+
+export function undoHistory<T>(history: History<T>, current: T): { history: History<T>; value: T } | null {
+  if (!history.past.length) return null;
+  return { history: { past: history.past.slice(0, -1), future: [...history.future, current] }, value: history.past.at(-1)! };
+}
+
+export function redoHistory<T>(history: History<T>, current: T): { history: History<T>; value: T } | null {
+  if (!history.future.length) return null;
+  return { history: { past: [...history.past, current], future: history.future.slice(0, -1) }, value: history.future.at(-1)! };
 }

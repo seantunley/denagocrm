@@ -1,8 +1,25 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { parseJourneyDefinition } from "../src/lib/journeyTypes";
-import { builderDefinition, builderSteps, type BuilderStep } from "../src/lib/journeyBuilderDefinition";
-import { START_NODE, connectSteps, insertStep, journeyGraph, locate, moveStep, removeStep, updateStep } from "../src/lib/journeyCanvasGraph";
+import { JOURNEY_STEP_TYPES, parseJourneyDefinition } from "../src/lib/journeyTypes";
+import { builderDefinition, builderSteps, initialConfig, type BuilderStep } from "../src/lib/journeyBuilderDefinition";
+import {
+  JOURNEY_PALETTE,
+  START_NODE,
+  addNewStep,
+  connectSteps,
+  findSteps,
+  insertStep,
+  insertionPoint,
+  journeyGraph,
+  locate,
+  moveStep,
+  recordHistory,
+  redoHistory,
+  removeStep,
+  undoHistory,
+  updateStep,
+  type History,
+} from "../src/lib/journeyCanvasGraph";
 
 // The Journey canvas (Sean, 2026-11-04) edits the builder's own step list and saves through builderDefinition. The
 // promise it has to keep: opening a journey and saving it unchanged gives back the SAME definition, whatever it holds.
@@ -137,4 +154,66 @@ test("a move the journey model can't save is refused with a reason", () => {
   const box = step("box", "repeat", { mode: "count", count: 2, sequence: [wait("x")] });
   assert.match(String(moveStep([...deep, box], "box", { parentId: "r0", slot: "sequence" }, 0)), /nest/);
   assert.ok(Array.isArray(moveStep([...deep, box], "box", { parentId: "r1", slot: "sequence" }, 0)));
+});
+
+test("the Nodes palette offers every step type exactly once", () => {
+  const offered = JOURNEY_PALETTE.flatMap((group) => [...group.types]);
+  assert.deepEqual([...offered].sort(), [...JOURNEY_STEP_TYPES].sort());
+  assert.equal(new Set(offered).size, offered.length);
+});
+
+test("a palette step is seeded like the list view's, lands after the picked step (or at the end), and saves", () => {
+  let steps = nested();
+  // Nothing picked: the end of the journey.
+  steps = addNewStep(steps, "send_sms", "new_end", null) as BuilderStep[];
+  assert.equal(steps.at(-1)!.id, "new_end");
+  assert.deepEqual(steps.at(-1)!.config, initialConfig("send_sms"));
+  // After a step inside a branch — what a click does with "a1" picked, and a drop on "a1" or its out-wire.
+  steps = addNewStep(steps, "choose", "new_choose", insertionPoint(steps, "a1", "out")) as BuilderStep[];
+  assert.deepEqual(locate(steps, "new_choose")!.list, { parentId: "pick", slot: "option:0" });
+  assert.equal(locate(steps, "new_choose")!.index, 1);
+  // Dropped on a branch wire: first in that branch.
+  steps = addNewStep(steps, "wait", "new_first", insertionPoint(steps, "pick", "default")) as BuilderStep[];
+  assert.equal(locate(steps, "new_first")!.index, 0);
+  // Dropped on the start: first in the journey.
+  steps = addNewStep(steps, "variables", "new_start", insertionPoint(steps, START_NODE, "out")) as BuilderStep[];
+  assert.equal(steps[0].id, "new_start");
+
+  const saved = builderDefinition(steps.map((s) => (s.id === "new_end" ? { ...s, config: { message: "Hi" } } : s)));
+  assert.doesNotThrow(() => parseJourneyDefinition(saved));
+
+  // Too deep for another container: refused, as the list view's type picker would not offer one there.
+  let deep: BuilderStep[] = [wait("leaf")];
+  for (let i = 0; i < 4; i += 1) deep = [step(`r${i}`, "repeat", { mode: "count", count: 2, sequence: deep })];
+  assert.match(String(addNewStep(deep, "repeat", "x", insertionPoint(deep, "leaf", "out"))), /nest/);
+  assert.ok(Array.isArray(addNewStep(deep, "wait", "x", insertionPoint(deep, "leaf", "out"))));
+});
+
+test("Find matches a step's label, type, name and its own text — nested steps included", () => {
+  const steps = nested();
+  assert.deepEqual(findSteps(steps, "first_name").map((h) => h.id), ["sms"]);
+  assert.deepEqual(findSteps(steps, "remember").map((h) => h.id), ["vars"], "by the step's name");
+  assert.deepEqual(findSteps(steps, "repeat").map((h) => h.id), ["loop", "inner"], "by label/type, in running order; inner's own text says repeat.index");
+  assert.ok(findSteps(steps, "Stop journey").some((h) => h.id === "end"));
+  assert.deepEqual(findSteps(steps, "  "), []);
+  // A container is found by its own words, not by everything inside it.
+  assert.equal(findSteps(steps, "Hi {{first").some((h) => h.id === "pick"), false);
+});
+
+test("undo and redo walk the snapshots back and forth, and a new edit clears redo", () => {
+  let history: History<string> = { past: [], future: [] };
+  history = recordHistory(history, "a");
+  history = recordHistory(history, "b");
+  const back = undoHistory(history, "c")!;
+  assert.equal(back.value, "b");
+  const back2 = undoHistory(back.history, back.value)!;
+  assert.equal(back2.value, "a");
+  assert.equal(undoHistory(back2.history, back2.value), null);
+  const forward = redoHistory(back2.history, back2.value)!;
+  assert.equal(forward.value, "b");
+  assert.equal(recordHistory(forward.history, "x").future.length, 0);
+  let long: History<number> = { past: [], future: [] };
+  for (let i = 0; i < 80; i += 1) long = recordHistory(long, i);
+  assert.equal(long.past.length, 50);
+  assert.equal(long.past[0], 30);
 });
