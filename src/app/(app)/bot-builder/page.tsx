@@ -12,6 +12,7 @@ import { getFlowPublicationMeta, publishFlowSnapshot } from "@/lib/flowPublishin
 import { createFlow, duplicateFlow, deleteFlow, renameFlow, setFlowOffline } from "@/app/actions/flow";
 import ConfirmActionDialog from "@/components/ConfirmActionDialog";
 import PublishFlowButton from "@/components/PublishFlowButton";
+import { ExportFlowButton, ImportFlowButton } from "@/components/FlowTransferButtons";
 import { WorkspaceHero } from "@/components/workspace-hero";
 import { EmptyState, StatusPill, Surface } from "@/components/visual-system";
 import { builderTenantId, flowScope } from "@/lib/flowScope";
@@ -126,7 +127,7 @@ export default async function BotBuilderPage() {
           { label: "Drafts / changes", value: pendingDrafts, icon: Pencil },
           { label: "Channels checked", value: channels.length, icon: GitBranch },
         ]}
-        actions={<div className="flex flex-wrap gap-2"><Link href="/bot-builder/routes" className="btn-secondary btn-sm"><Route className="size-4" />Routing</Link><form action={createFlow} className="flex gap-2"><input type="hidden" name="templateId" value="blank" /><input type="hidden" name="name" value="New flow" /><select name="channel" className="input h-9 w-32 text-xs" aria-label="New flow channel">{FLOW_CHANNELS.map((channel) => <option key={channel} value={channel}>{channelLabel[channel]}</option>)}</select><button className="btn-primary btn-sm"><Plus className="size-4" />Blank flow</button></form></div>}
+        actions={<div className="flex flex-wrap gap-2"><Link href="/bot-builder/routes" className="btn-secondary btn-sm"><Route className="size-4" />Routing</Link><ImportFlowButton /><form action={createFlow} className="flex gap-2"><input type="hidden" name="templateId" value="blank" /><input type="hidden" name="name" value="New flow" /><select name="channel" className="input h-9 w-32 text-xs" aria-label="New flow channel">{FLOW_CHANNELS.map((channel) => <option key={channel} value={channel}>{channelLabel[channel]}</option>)}</select><button className="btn-primary btn-sm"><Plus className="size-4" />Blank flow</button></form></div>}
       />
 
       <Surface className="p-5">
@@ -209,6 +210,7 @@ export default async function BotBuilderPage() {
                 {(!f.active || pending) && !blocked && <PublishFlowButton flowId={f.id} label="Review & publish" channel={channelLabel[f.channel] ?? f.channel} routeCount={routeInfo.total} warnings={check.warnings.length} draftNodes={draftNodes} liveNodes={liveNodes} liveVersion={live?.version ?? null} changes={live ? diffFlowVersions(live.definition, f.definition) : undefined} />}
                 {(!f.active || pending) && blocked && <span className="btn-secondary btn-sm cursor-not-allowed opacity-50" title="Fix publish errors first">Publish blocked</span>}
                 <form action={duplicateFlow.bind(null, f.id)}><button className="btn-secondary btn-sm"><Copy className="size-3.5" />Duplicate</button></form>
+                <ExportFlowButton flowId={f.id} />
                 {f.active && (
                   <ConfirmActionDialog
                     trigger={<button type="button" className="btn-secondary btn-sm"><PowerOff className="size-3.5" />Take offline</button>}
