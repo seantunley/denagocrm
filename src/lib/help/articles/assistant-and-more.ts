@@ -370,7 +370,7 @@ export const assistantAndMoreArticles: HelpArticle[] = [
     summary: "Shortcuts for building and changing a chatbot flow without breaking the live one.",
     category: "automation",
     audience: "admins",
-    keywords: ["flow builder", "chatbot flow", "switch off a step", "skip a step", "disable step", "bot builder", "find a step", "search the flow"],
+    keywords: ["flow builder", "chatbot flow", "switch off a step", "skip a step", "disable step", "bot builder", "find a step", "search the flow", "quick add", "add a step"],
     body: [
       { type: "h", text: "Switch a step off" },
       { type: "p", text: "To skip a step for a while without deleting it — say the price list while it's being updated — select it and untick **Step is on**. Customers then go straight on to the next step, as if it weren't there. The step stays on the canvas, greyed out and marked **OFF**, with everything you set up in it." },
@@ -385,6 +385,8 @@ export const assistantAndMoreArticles: HelpArticle[] = [
         "It searches what you typed into the steps: messages, button labels, captions, file names, notes, variable names and web addresses.",
         "It doesn't match on how steps are connected, so a step isn't found just because it leads to one that matches.",
       ] },
+      { type: "h", text: "Add a step where you click" },
+      { type: "p", text: "Hold Ctrl (⌘ on a Mac) and click an empty spot on the canvas. Start typing the kind of step — \"mess\" for a message, \"menu\", \"wait\" — use the arrow keys to choose, and press Enter. The step is added exactly where you clicked, ready to fill in. Esc closes the box without adding anything." },
     ],
   },
 
