@@ -67,6 +67,7 @@ export const ROUTE_RULES = [
   // the link, so a visible link can no longer lead to a redirect.
   { prefix: "/health", anyOf: ["contacts.view_all", "contacts.view_owned"] },
   { prefix: "/birthdays", anyOf: ["contacts.view_all", "contacts.view_owned"] },
+  { prefix: "/data-quality", anyOf: ["contacts.view_all", "contacts.view_owned"] },
   // Fleet screens; fleets.* is what every fleet server action already requires.
   { prefix: "/fleets", anyOf: ["fleets.view", "fleets.manage"] },
   // Survey admin (distinct from the public /s response pages).

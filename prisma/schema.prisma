@@ -3805,3 +3805,21 @@ model ChannelIdentity {
   @@unique([channel, externalId]) // one endpoint belongs to exactly one tenant
   @@index([tenantId])
 }
+
+/// One day's data quality for a workspace (lib/dataQuality.ts): the scores and each check's count, so the Data Quality
+/// Centre can show whether things are getting better. Written the first time someone who sees the whole workspace
+/// opens the page that day.
+model DataQualitySnapshot {
+  id           String   @id @default(cuid())
+  tenantId     String
+  /// "2026-11-05", South African day.
+  day          String
+  score        Int
+  contactScore Int
+  dealScore    Int
+  /// { "contact.no_owner": 12, "deal.no_value": 3, "duplicates": 2, … }
+  counts       Json
+  createdAt    DateTime @default(now())
+
+  @@unique([tenantId, day])
+}
