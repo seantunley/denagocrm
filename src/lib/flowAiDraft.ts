@@ -99,7 +99,7 @@ ${instruction}`;
       return null;
     }
     const json = await res.json();
-    void recordAiUsage(json.usage, json.model);
+    await recordAiUsage(json.usage, json.model);
     const parsed = strictJsonObject(String(json.content?.[0]?.text ?? ""));
     if (!parsed?.start || !parsed?.nodes || typeof parsed.nodes !== "object") {
       await logError("bot-flow-ai-draft", "Generated flow was outside the required graph contract").catch(() => {});

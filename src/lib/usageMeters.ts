@@ -24,6 +24,11 @@ export function usageMonth(at: Date = new Date()): string {
   return `${get("year")}-${get("month")}`;
 }
 
+/** True once a "2026-11" month is over in Johannesburg — before then its usage is still being counted. */
+export function monthHasEnded(period: string, now: Date = new Date()): boolean {
+  return period < usageMonth(now);
+}
+
 /** US$ per million tokens [input, output]. Cache writes cost 1.25× input, cache reads 0.1×. */
 // ponytail: hand-kept price list (Anthropic list prices, 2026-11); add a row when the app starts using a new model.
 // An unknown model is priced as Opus (the last row).

@@ -162,7 +162,7 @@ async function aiClassifyChange(input: {
         return null;
       }
       const json = await res.json();
-      void recordAiUsage(json.usage, json.model);
+      await recordAiUsage(json.usage, json.model);
       content = json.content?.[0]?.text ?? "{}";
     }
     const jsonText = content.match(/\{[\s\S]*\}/)?.[0] ?? "{}";
@@ -456,7 +456,7 @@ async function callWithWebSearch(opts: {
       return { error: `AI request failed (${res.status}).` };
     }
     const json = await res.json();
-    void recordAiUsage(json.usage, json.model);
+    await recordAiUsage(json.usage, json.model);
     const blocks: Array<Record<string, unknown>> = Array.isArray(json.content) ? json.content : [];
     const text = blocks
       .filter((b) => b.type === "text")

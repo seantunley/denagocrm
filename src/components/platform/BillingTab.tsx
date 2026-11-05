@@ -18,11 +18,12 @@ const BILLABLE = METER_IDS.filter((id) => METERS[id].billable);
 const units = (n: number) => n.toLocaleString("en-ZA", { maximumFractionDigits: 2 });
 const rands = (c: number | undefined) => (c === undefined ? "" : String(c / 100));
 
-/** The last three months, newest first: "2026-11", "2026-10", "2026-09". */
-function recentMonths(): string[] {
+/** Months counted back from this one, newest first: [0, 1, 2] → "2026-11", "2026-10", "2026-09". */
+function monthsBack(backs: number[]): string[] {
   const now = new Date();
-  return [0, 1, 2].map((back) => usageMonth(new Date(now.getFullYear(), now.getMonth() - back, 15)));
+  return backs.map((back) => usageMonth(new Date(now.getFullYear(), now.getMonth() - back, 15)));
 }
+const recentMonths = () => monthsBack([0, 1, 2]);
 
 /** Platform console → a workspace → Billing: its plan, what it used, and its invoices. */
 export default async function BillingTab({ tenantId }: { tenantId: string }) {
@@ -140,10 +141,13 @@ export default async function BillingTab({ tenantId }: { tenantId: string }) {
           <label className="block text-sm">
             Month
             <select name="period" className="input mt-1" defaultValue={lastMonth}>
-              {recentMonths().map((m) => <option key={m} value={m}>{m}</option>)}
+              {monthsBack([1, 2, 3]).map((m) => <option key={m} value={m}>{m}</option>)}
             </select>
           </label>
           <SaveButton pendingLabel="Creating…" className="btn-secondary btn-sm">Create invoice</SaveButton>
+          <p className="w-full text-xs text-muted-foreground">
+            A month can be invoiced once it has ended ({thisMonth} is still being counted).
+          </p>
         </SaveForm>
         {invoices.length === 0 ? (
           <p className="text-sm text-muted-foreground">No invoices yet.</p>

@@ -7,7 +7,7 @@ import { requirePlatformAdminAction } from "@/lib/platformAuth";
 import { logAuditStrict } from "@/lib/audit";
 import { DEFAULT_TENANT_ID } from "@/lib/tenant";
 import { usageFor } from "@/lib/usage";
-import { METER_IDS, METERS, invoiceLines, invoiceNumber, invoiceTotals, planAmounts, type PlanAmounts } from "@/lib/usageMeters";
+import { METER_IDS, METERS, invoiceLines, invoiceNumber, invoiceTotals, monthHasEnded, planAmounts, type PlanAmounts } from "@/lib/usageMeters";
 import { INVOICE_FROM_KEY, INVOICE_VAT_KEY, invoiceSettings } from "@/lib/platformInvoiceSettings";
 
 const tenantPath = (tenantId: string) => `/platform/tenants/${tenantId}`;
@@ -115,6 +115,8 @@ export async function createTenantInvoiceAction(tenantId: string, formData: Form
     const actor = await requirePlatformAdminAction();
     const period = text(formData, "period");
     if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(period)) throw new ActionRefusal("Choose the month to invoice.");
+    // Usage is still being counted until the month ends, and a month gets one live invoice — so only ended months.
+    if (!monthHasEnded(period)) throw new ActionRefusal(`${period} hasn't ended yet. Invoice it once it has, so all its usage is on the invoice.`);
     const settings = await invoiceSettings();
     if (!settings.fromText) throw new ActionRefusal("Fill in “Invoice from” first — it's printed on every invoice.");
     const usage = await usageFor(tenantId, period);

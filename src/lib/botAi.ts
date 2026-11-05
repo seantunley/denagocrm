@@ -149,7 +149,7 @@ Rules:
       return null;
     }
     const json = await res.json();
-    void recordAiUsage(json.usage, json.model);
+    await recordAiUsage(json.usage, json.model);
     const parsed = strictJsonObject(String(json.content?.[0]?.text ?? ""));
     if (!parsed || parsed.confidence !== "high" || typeof parsed.optionId !== "string") return null;
     return input.options.some((option) => option.id === parsed.optionId) ? parsed.optionId : null;
@@ -265,7 +265,7 @@ ${input.voiceNote ? "- This arrived as a transcribed voice note. Reply naturally
       return null;
     }
     const json = await res.json();
-    void recordAiUsage(json.usage, json.model);
+    await recordAiUsage(json.usage, json.model);
     const parsed = parseBotDecision(String(json.content?.[0]?.text ?? ""));
     if (!parsed) {
       await logError("bot-ai", "Assistant returned a response outside the decision contract").catch(() => {});

@@ -64,7 +64,7 @@ export async function aiCheckDraft(input: {
       return { error: `AI check failed (${res.status}).` };
     }
     const json = await res.json();
-    void recordAiUsage(json.usage, json.model);
+    await recordAiUsage(json.usage, json.model);
     const content: string = json.content?.[0]?.text ?? "{}";
     const match = content.match(/\{[\s\S]*\}/);
     const parsed = JSON.parse(match ? match[0] : "{}");
@@ -114,7 +114,7 @@ export async function aiVoiceNoteReply(input: {
       return { error: `AI could not read it (${res.status}).` };
     }
     const json = await res.json();
-    void recordAiUsage(json.usage, json.model);
+    await recordAiUsage(json.usage, json.model);
     const content: string = json.content?.[0]?.text ?? "{}";
     const parsed = JSON.parse(content.match(/\{[\s\S]*\}/)?.[0] ?? "{}");
     const summary = String(parsed.summary ?? "").trim().slice(0, 300);
@@ -404,7 +404,7 @@ export async function aiResearch(
           : { error: `Research failed (${res.status}).` };
       }
       const json = await res.json();
-      void recordAiUsage(json.usage, json.model);
+      await recordAiUsage(json.usage, json.model);
       stopReason = json.stop_reason ?? null;
 
       // JOINED WITH "", NOT "\n" — THE BLOCKS ARE ONE SENTENCE, NOT ONE LINE EACH.

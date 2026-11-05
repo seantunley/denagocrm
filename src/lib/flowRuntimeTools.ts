@@ -167,7 +167,7 @@ async function extractData(input: Parameters<NonNullable<FlowCtx["extractData"]>
       return { ok: false, reason: `AI extraction provider returned ${res.status}` };
     }
     const json = await res.json();
-    void recordAiUsage(json.usage, json.model);
+    await recordAiUsage(json.usage, json.model);
     const parsed = strictObject(String(json.content?.[0]?.text ?? ""));
     if (!parsed) return { ok: false, reason: "AI extraction returned invalid structured data" };
     const values: Record<string, string> = {};

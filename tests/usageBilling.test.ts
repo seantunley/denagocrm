@@ -1,7 +1,19 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { readFileSync } from "node:fs";
-import { aiCostMicros, invoiceLines, invoiceNumber, invoiceTotals, planAmounts, usageMonth } from "../src/lib/usageMeters";
+import { aiCostMicros, invoiceLines, invoiceNumber, invoiceTotals, monthHasEnded, planAmounts, usageMonth } from "../src/lib/usageMeters";
+
+test("only an ended month can be invoiced (review of #1002: later usage had nowhere to go)", () => {
+  const now = new Date("2026-11-05T10:00:00Z");
+  assert.equal(monthHasEnded("2026-11", now), false, "this month is still counting");
+  assert.equal(monthHasEnded("2026-12", now), false);
+  assert.equal(monthHasEnded("2026-10", now), true);
+  assert.equal(monthHasEnded("2025-12", now), true);
+  assert.equal(monthHasEnded("2026-11", new Date("2026-11-30T22:30:00Z")), true, "00:30 on 1 Dec in SA");
+  const action = readFileSync("src/app/actions/platformBilling.ts", "utf8");
+  assert.ok(action.indexOf("if (!monthHasEnded(period))") < action.indexOf("usageFor(tenantId, period)"), "refused before anything is read");
+  assert.match(readFileSync("src/components/platform/BillingTab.tsx", "utf8"), /monthsBack\(\[1, 2, 3\]\)\.map/);
+});
 
 test("AI cost follows the model's price, with cache and web search", () => {
   assert.equal(aiCostMicros({ input_tokens: 1_000_000, output_tokens: 0 }, "claude-haiku-4-5"), 1_000_000, "$1 per million Haiku input");

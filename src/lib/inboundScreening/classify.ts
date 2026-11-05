@@ -74,7 +74,7 @@ export async function classifyInbound(input: ClassifyInput, policy: ScreeningPol
     });
     if (!res.ok) return { ok: false, failure: "http_error", latencyMs: took() };
     const json = await res.json();
-    void recordAiUsage(json.usage, json.model);
+    await recordAiUsage(json.usage, json.model);
     const verdict = parseAiVerdict(String(json.content?.[0]?.text ?? ""));
     if (!verdict) return { ok: false, failure: "invalid_answer", latencyMs: took() };
     return { ok: true, verdict, inputTokens: json.usage?.input_tokens ?? null, outputTokens: json.usage?.output_tokens ?? null, latencyMs: took() };
