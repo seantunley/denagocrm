@@ -1,7 +1,7 @@
 "use server";
 
 import { prisma } from "@/lib/db";
-import { requirePermission } from "@/lib/permissions";
+import { canAccessLead, requirePermission } from "@/lib/permissions";
 import { withActingStaffScope } from "@/lib/actingScope";
 import { journeyScope } from "@/lib/flowScope";
 import { loadJourneyContext, journeyTemplateVars, type JourneyContext } from "@/lib/journeyContext";
@@ -16,7 +16,7 @@ export type DryRunActionResult = { ok: true; result: DryRunResult; version: numb
  */
 export async function dryRunJourneyAction(journeyId: string, leadId: string | null, scenario: DryRunScenario): Promise<DryRunActionResult> {
   return withActingStaffScope(async () => {
-    await requirePermission("journeys.manage");
+    const user = await requirePermission("journeys.manage");
     const journey = await prisma.journey.findFirst({
       where: { id: journeyId, ...(await journeyScope()) },
       select: { tenantId: true, activeVersion: true, versions: { orderBy: { version: "desc" }, select: { version: true, state: true, definition: true } } },
@@ -27,9 +27,10 @@ export async function dryRunJourneyAction(journeyId: string, leadId: string | nu
 
     let context: Record<string, unknown> = { event: { manual: true, dryRun: true }, lead: null, contact: null };
     if (leadId) {
-      // The lead must be this journey's own workspace's — checked at the door, not inferred.
+      // The lead must be this journey's own workspace's AND one this person may open (the same rule as the
+      // page's lead picker, getAccessibleLeadIds) — checked at the door, since a crafted request skips the picker.
       const lead = await prisma.lead.findFirst({ where: { id: leadId }, select: { id: true, tenantId: true } });
-      if (!lead || lead.tenantId !== journey.tenantId) return { ok: false as const, error: "Lead not found." };
+      if (!lead || lead.tenantId !== journey.tenantId || !(await canAccessLead(user, lead.id))) return { ok: false as const, error: "Lead not found." };
       context = (await loadJourneyContext("lead", lead.id, { manual: true, dryRun: true })) ?? context;
     }
     try {

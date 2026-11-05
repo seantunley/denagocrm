@@ -89,5 +89,8 @@ test("the dry run cannot reach anything that sends or writes", () => {
   }
   const action = readFileSync("src/app/actions/journeyDryRun.ts", "utf8");
   assert.doesNotMatch(action, /\.(create|createMany|update|updateMany|upsert|delete|deleteMany)\(|emitJourneyEvent|processJourney|executeJourneyStep|logAudit/, "the dry-run action must not write");
-  assert.match(action, /requirePermission\("journeys\.manage"\)/);
+  assert.match(action, /const user = await requirePermission\("journeys\.manage"\)/);
+  // Review of #998: a crafted request skips the page's lead picker, so the lead is authorised here too.
+  assert.match(action, /lead\.tenantId !== journey\.tenantId \|\| !\(await canAccessLead\(user, lead\.id\)\)\) return \{ ok: false as const, error: "Lead not found\." \}/);
+  assert.ok(action.indexOf("canAccessLead(") < action.indexOf("loadJourneyContext("), "authorised before its data is loaded");
 });
