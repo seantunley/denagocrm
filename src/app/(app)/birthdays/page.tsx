@@ -2,7 +2,7 @@ import Link from "next/link";
 import { Cake, MessageCircle, Phone } from "lucide-react";
 import { requireRoute } from "@/lib/permissions";
 import { birthdaysOn } from "@/lib/birthdaysServer";
-import { birthdayKeys, formatBirthday, nextDays, saDate, turningAge, type MonthDay } from "@/lib/birthdays";
+import { formatBirthday, nextDays, saDate, turningAge } from "@/lib/birthdays";
 import { contactName } from "@/lib/format";
 import { PageHeader } from "@/components/page-header";
 import { EmptyState } from "@/components/visual-system";
@@ -20,21 +20,16 @@ export default async function BirthdaysPage() {
   const week = nextDays(7, 1);
   // The rest of this month, after the coming week.
   const restOfMonth = nextDays(31, 8).filter((d) => d.month === today.month && d.year === today.year);
+  // Each list comes back in day order (December before January across New Year), with its true total.
   const [todays, coming, later] = await Promise.all([
-    birthdaysOn(user, birthdayKeys(nextDays(1))),
-    birthdaysOn(user, birthdayKeys(week)),
-    birthdaysOn(user, birthdayKeys(restOfMonth)),
+    birthdaysOn(user, nextDays(1)),
+    birthdaysOn(user, week),
+    birthdaysOn(user, restOfMonth),
   ]);
-  // Ordered as the days come, not by calendar month (a week can run into next month or next year).
-  const order = (days: readonly { month: number; day: number }[]) => {
-    const at = new Map(birthdayKeys(days.map((d) => ({ ...d, year: today.year }))).map((k: MonthDay, i) => [`${k.month}-${k.day}`, i]));
-    return <T extends { birthMonth: number | null; birthDay: number | null }>(rows: T[]) =>
-      [...rows].sort((a, b) => (at.get(`${a.birthMonth}-${a.birthDay}`) ?? 99) - (at.get(`${b.birthMonth}-${b.birthDay}`) ?? 99));
-  };
 
-  const section = (title: string, rows: Awaited<ReturnType<typeof birthdaysOn>>, empty: string) => (
+  const section = (title: string, { rows, total }: Awaited<ReturnType<typeof birthdaysOn>>, empty: string) => (
     <div className="card space-y-3 p-4">
-      <h2 className="font-semibold">{title} <span className="font-normal text-muted-foreground">({rows.length})</span></h2>
+      <h2 className="font-semibold">{title} <span className="font-normal text-muted-foreground">({total})</span></h2>
       {rows.length === 0 ? (
         <p className="text-sm text-muted-foreground">{empty}</p>
       ) : (
@@ -56,10 +51,13 @@ export default async function BirthdaysPage() {
           })}
         </ul>
       )}
+      {total > rows.length && (
+        <p className="text-xs text-muted-foreground">Showing the first {rows.length} of {total}, in date order. Search a customer by name to find one not shown.</p>
+      )}
     </div>
   );
 
-  const none = todays.length + coming.length + later.length === 0;
+  const none = todays.total + coming.total + later.total === 0;
   return (
     <div className="space-y-5">
       <PageHeader
@@ -70,9 +68,9 @@ export default async function BirthdaysPage() {
         <EmptyState icon={Cake} title="No birthdays coming up this month" description="Add birthdays on your customers' forms (Edit → Birthday) and they'll show here, and on the cake in the top bar on the day." />
       ) : (
         <>
-          {section("Today", order(nextDays(1))(todays), "No customer birthdays today.")}
-          {section("Next 7 days", order(week)(coming), "None in the coming week.")}
-          {section("Later this month", order(restOfMonth)(later), "No more this month.")}
+          {section("Today", todays, "No customer birthdays today.")}
+          {section("Next 7 days", coming, "None in the coming week.")}
+          {section("Later this month", later, "No more this month.")}
         </>
       )}
     </div>

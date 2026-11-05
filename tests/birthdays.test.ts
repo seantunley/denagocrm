@@ -38,13 +38,27 @@ test("how a birthday reads", () => {
 
 test("only customers the person may open, and other forms never wipe a saved birthday", () => {
   const server = read("src/lib/birthdaysServer.ts");
-  assert.match(server, /hasAnyPermission\(user, "contacts\.view_all", "contacts\.view_owned"\)/);
-  assert.match(server, /const ids = await getAccessibleContactIds\(user\);\s*if \(ids !== null && ids\.length === 0\) return \[\];/, "an empty list is nobody");
-  assert.match(server, /\.\.\.\(ids === null \? \{\} : \{ id: \{ in: ids \} \}\)/);
+  const filter = server.slice(server.indexOf("async function contactFilter"), server.indexOf("const onDays"));
+  assert.match(filter, /if \(!\(await hasAnyPermission\(user, "contacts\.view_all", "contacts\.view_owned"\)\)\) return null;/);
+  // Review of #1008: seeing all customers is a plain filter (the scoped client keeps the workspace) — no id list.
+  assert.match(filter, /if \(await hasPermission\(user, "contacts\.view_all"\)\) return \{\};\s*const ids = await getAccessibleContactIds\(user\);/);
+  assert.match(filter, /return ids\.length \? \{ id: \{ in: ids \} \} : null;/, "an empty list is nobody");
   const actions = read("src/app/actions/contacts.ts");
   assert.match(actions, /if \(!formData\.has\("birthMonth"\)\) return \{\};/, "DAX's customer cards and contactFormFor send no birthday: leave it");
   assert.match(actions, /if \(!parsed\.ok\) refuse\(parsed\.error\);/);
   assert.match(read("src/lib/routeAccess.ts"), /\{ prefix: "\/birthdays", anyOf: \["contacts\.view_all", "contacts\.view_owned"\] \}/);
+});
+
+test("the top bar counts in the database; lists are complete, in day order, and say when they're cut short (review of #1008)", () => {
+  const server = read("src/lib/birthdaysServer.ts");
+  const count = server.slice(server.indexOf("export const todaysBirthdayCount"));
+  assert.match(count, /return prisma\.contact\.count\(\{ where: \{ \.\.\.filter, \.\.\.onDays\(birthdayKeys\(nextDays\(1\)\)\) \} \}\);/);
+  assert.doesNotMatch(count, /findMany|birthdaysOn/, "nothing listed to count");
+  const list = server.slice(server.indexOf("export async function birthdaysOn"), server.indexOf("export const todaysBirthdayCount"));
+  assert.match(list, /const total = await prisma\.contact\.count\(/, "the true total, whatever is shown");
+  assert.match(list, /for \(const day of days\) \{[\s\S]*?onDays\(birthdayKeys\(\[day\]\)\)/, "one day at a time, in the order the days come");
+  assert.doesNotMatch(list, /take: 500/);
+  assert.match(read("src/app/(app)/birthdays/page.tsx"), /\{total > rows\.length && \(/, "a cut-short list says so");
 });
 
 test("nothing is sent to a customer from the birthdays page", () => {
