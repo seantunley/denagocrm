@@ -10,6 +10,7 @@ import { canAccessLead, type PermissionUser } from "./permissions";
 import { loadAttentionList } from "./attention/load";
 import { resolveActions } from "./crmAssistant";
 import { runAssistantAction, sendAssistantDraft } from "@/app/actions/assistant";
+import { replaceTriageRun } from "./triageStore";
 import {
   REPLACED_RUN,
   claimCard,
@@ -96,14 +97,10 @@ export async function prepareTriage(user: PermissionUser): Promise<{ ok: true; i
     });
   }
   const details: TriageDetails = { items, preparedAt: new Date().toISOString() };
-  // One current run: an older open one is closed (it stays readable in the Ask page's history).
-  await basePrisma.assistantTask.updateMany({ where: { tenantId, userId: user.id, kind: TRIAGE_KIND, status: "open" }, data: { status: "closed", closedAt: new Date() } });
-  const task = await basePrisma.assistantTask.create({
-    data: { tenantId, userId: user.id, kind: TRIAGE_KIND, title: `Triage · ${items.length} deal${items.length === 1 ? "" : "s"}`, details: details as never, steps: {} },
-    select: { id: true },
-  });
+  // One current run: the older one closed and this one made in ONE step, one preparation at a time (triageStore.ts).
+  const id = await replaceTriageRun(tenantId, user.id, `Triage · ${items.length} deal${items.length === 1 ? "" : "s"}`, details);
   await logAudit({ action: "assistant.triage_prepared", summary: `DAX prepared a triage of ${items.length} deals`, user });
-  return { ok: true, id: task.id, deals: items.length };
+  return { ok: true, id, deals: items.length };
 }
 
 /**

@@ -96,6 +96,20 @@ test("every card runs through the ordinary Confirm path, claimed under the row l
   assert.match(lib, /if \(await canAccessLead\(user, item\.leadId\)\) visible\.push\(item\);/);
 });
 
+test("preparing replaces the run in one locked step, so two tabs can't leave two open runs (review of #1007)", () => {
+  const store = read("src/lib/triageStore.ts");
+  const tx = store.slice(store.indexOf("basePrisma.$transaction"));
+  const lock = tx.indexOf("pg_advisory_xact_lock(hashtext(${`triage:${tenantId}:${userId}`}))");
+  const close = tx.indexOf("tx.assistantTask.updateMany");
+  const create = tx.indexOf("tx.assistantTask.create");
+  assert.ok(lock > 0 && lock < close && close < create, "lock, then close, then create — all on the one transaction");
+  const lib = read("src/lib/assistantTriage.ts");
+  assert.match(lib, /const id = await replaceTriageRun\(tenantId, user\.id, /);
+  assert.doesNotMatch(lib, /basePrisma\.assistantTask\.(create|updateMany)\(/, "no second, unlocked way to make or close a run");
+  // The real-Postgres proof runs in CI's integration lane.
+  assert.match(read(".github/workflows/security-rbac-ci.yml"), /scripts\/test-triage-prepare\.ts/);
+});
+
 test("triage runs stay out of DAX's job sheets and prompts", () => {
   const tasks = read("src/lib/assistantTask.ts");
   assert.equal((tasks.match(/kind: \{ notIn: \["delivery_goal", "plan", "triage"\] \}/g) ?? []).length, 2);
