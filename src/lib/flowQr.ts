@@ -49,6 +49,25 @@ export function qrOutcomeLine(o: QrOutcomes, money: (cents: number) => string): 
   ].join(" → ");
 }
 
+/**
+ * Quotes sent, counted per FAMILY (an original and its revisions, which may chain): a family counts once if any
+ * version of it was sent or accepted — so a declined original with a sent revision is one quote sent, not zero.
+ * A version whose parent isn't in `rows` (deleted) heads its own family.
+ */
+export function sentQuoteFamilies(rows: readonly { id: string; revisionOfId: string | null; status: string }[]): number {
+  const parent = new Map(rows.map((q) => [q.id, q.revisionOfId]));
+  const rootOf = (id: string) => {
+    // ponytail: 50 hops caps a pathological chain, as lib/quoteVersions does.
+    for (let hop = 0; hop < 50; hop++) {
+      const up = parent.get(id);
+      if (!up || !parent.has(up)) return id;
+      id = up;
+    }
+    return id;
+  };
+  return new Set(rows.filter((q) => q.status === "sent" || q.status === "accepted").map((q) => rootOf(q.id))).size;
+}
+
 /** The route pattern for a QR's message — exactly what addFlowRoute would store. */
 export const qrPattern = (message: string) => normalizeRoutePattern(message);
 
