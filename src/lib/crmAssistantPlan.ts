@@ -182,6 +182,14 @@ export const catchUpArgs = z.object({ since: isoDay.optional() }).strict();
 export const lostAliveArgs = z.object({ mine: z.boolean().optional() }).strict();
 /** What the business knows: products, prices, approved answers, competitors. */
 export const knowledgeArgs = z.object({ topic: z.string().trim().min(1).max(200) }).strict();
+/** The one search (lib/crmSearch.ts) across everything the asker may open, when no customer is named. */
+export const SEARCH_EVERYTHING_KINDS = ["contact", "lead", "quote", "vehicle", "jobcard", "case", "message", "activity", "document", "product", "knowledge"] as const;
+export const searchEverythingArgs = z
+  .object({
+    words: z.string().trim().min(2).max(200),
+    kinds: z.array(z.enum(SEARCH_EVERYTHING_KINDS)).min(1).max(SEARCH_EVERYTHING_KINDS.length).optional(),
+  })
+  .strict();
 /**
  * The asker's own earlier conversations (30 days). `alternatives` are the other
  * words the same thing may have been said in ("fleet" / "corporate order"), and
@@ -220,6 +228,7 @@ export const assistantStep = z.discriminatedUnion("tool", [
   z.object({ tool: z.literal("deliveries"), args: deliveryArgs.default({}) }),
   z.object({ tool: z.literal("documents"), args: documentArgs }),
   z.object({ tool: z.literal("search_messages"), args: messageSearchArgs }),
+  z.object({ tool: z.literal("search_everything"), args: searchEverythingArgs }),
   z.object({ tool: z.literal("open_message"), args: openMessageArgs }),
   z.object({ tool: z.literal("read_document"), args: readDocumentArgs }),
   z.object({ tool: z.literal("sales_stats"), args: statsArgs.default({}) }),
@@ -266,6 +275,7 @@ export function planInstructions(ctx: PlanContext): string {
     '- match_payment: {"amount":<rands> (required),"reference":"<bank reference on the slip>","paidOn":"YYYY-MM-DD","payer":"<payer name on the slip>"} — a PROOF OF PAYMENT with no quote named: the invoiced quotes with money owing it may be for, ranked, each with why (the amount is the deposit due or the balance owing, the reference names it, the payer is the customer), and a verdict: one clear match, several, or none. Read the amount, reference, date and payer from the slip.',
     '- documents: {"customer":"<customer name, lead title or id>" (required)} — what is on file for one customer (titles, tags, dates and each documentId — not contents; read_document reads one).',
     '- search_messages: {"customer":"<customer name, lead title or id>" (required),"words":"<words to find — add the other ways it may have been written: delivery deliver transport>","channel":"email|whatsapp|call|meeting|note|…","direction":"inbound|outbound","from":"YYYY-MM-DD","to":"YYYY-MM-DD","limit":<1-20>} — EVERY message to and from one customer (all their deals this person can open), not only the latest few lead_brief shows: each match with its date, channel, who, an excerpt and its id. Words match by stem and close spelling, not by meaning. Use it for "what did we promise / tell them about X", "did they ever say Y", "when did they first ask about Z". To check an old message against today\'s record, run it beside find_quotes or lead_brief in the same round.',
+    '- search_everything: {"words":"<words to find>" (required),"kinds":["message","activity","case","document","knowledge","contact","lead","quote","vehicle","jobcard","product"]} — search ACROSS the whole CRM (everything the person may open) when NO customer is named: "who asked about financing", "which customers mentioned the 2-seater", "where did we talk about the warranty claim", "find anything about Acme". Messages and notes match by word stem, records by their fields; leave kinds out to search everything. Words, not meaning — try other wordings before saying nothing was found. When a customer IS named, use search_messages instead.',
     '- open_message: {"id":"<id from search_messages>" (required),"thread":true} — one message in full (up to ~8 000 characters), with whether an email bounced or an open was detected, or whether WhatsApp/Messenger reported it reached their phone; "thread":true adds the rest of that conversation. Use it when an excerpt is not enough to be sure what was said.',
     '- read_document: {"document":"<documentId from documents, or words of its file name>" (required),"customer":"<customer name>","fromPage":<page>} — the TEXT of one PDF on file (a quote, a contract, a signed copy, an invoice), with page numbers, up to 20 pages at a time; ask again with fromPage for later pages. A scanned PDF has no text and cannot be read.',
     '- find_activities: {"when":"overdue|today|today_and_overdue|this_week|upcoming|past" (required),"from":"YYYY-MM-DD","to":"YYYY-MM-DD","type":"<type>","assignedTo":"<person — theirs, or a meeting they attend>","search":"<words in the activity>","limit":<1-25>} — the calendar: calls, meetings, to-dos, test drives, events, and blocked time (personal items: leave, an appointment, admin time). "What is in my calendar / diary this week" → this_week with assignedTo: today and the next six days, blocked time included — say which dates that covers. "What does X have to do today / what\'s on their plate" → today_and_overdue (what\'s late still has to be done). "When is the next golf day / launch / service" → upcoming with search — events live here, not in knowledge. What HAPPENED ("what golf days did we have last month", "what was on 22 September") → "past" with from/to (one day: from = to) — past results include what was done, each marked planned or done.',
@@ -390,6 +400,7 @@ const LOOKUP_STATUS: Record<string, string> = {
   match_payment: "Matching the payment to an invoice",
   documents: "Checking documents",
   search_messages: "Searching their messages",
+  search_everything: "Searching the CRM",
   open_message: "Reading a message",
   read_document: "Reading a document",
   sales_stats: "Working out the numbers",
