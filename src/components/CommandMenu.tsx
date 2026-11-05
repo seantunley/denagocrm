@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import {
   Car,
   FileText,
+  MessageSquare,
   Plus,
   Search,
   Settings,
@@ -166,13 +167,14 @@ export default function CommandMenu({
     router.push(href);
   }
 
-  const RECORD_ICON = {
+  const RECORD_ICON: Partial<Record<SearchHit["type"], typeof Search>> = {
     contact: UserRound,
     lead: Search,
     quote: FileText,
     vehicle: Car,
     jobcard: Wrench,
-  } as const;
+    message: MessageSquare,
+  };
 
   const searchable = term.trim().length >= MIN_SEARCH_TERM;
   // DERIVED, not cleared in an effect: a term too short to search shows nothing,
@@ -204,7 +206,7 @@ export default function CommandMenu({
         {grouped.map((group) => (
           <CommandGroup key={group.type} heading={group.heading}>
             {group.rows.map((hit) => {
-              const Icon = RECORD_ICON[hit.type];
+              const Icon = RECORD_ICON[hit.type] ?? Search;
               return (
                 <CommandItem
                   key={`${hit.type}-${hit.id}`}
@@ -217,7 +219,10 @@ export default function CommandMenu({
                   onSelect={() => go(hit.href)}
                 >
                   <Icon className="size-4 text-muted-foreground" />
-                  <span className="flex-1 truncate">{hit.label}</span>
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate">{hit.label}</span>
+                    {hit.snippet && <span className="block truncate text-xs text-muted-foreground">{hit.snippet}</span>}
+                  </span>
                   <span className="truncate text-xs text-muted-foreground">{hit.sublabel}</span>
                 </CommandItem>
               );
@@ -235,7 +240,7 @@ export default function CommandMenu({
               <span className="flex-1">
                 Search everything for “{term.trim()}”
               </span>
-              <span className="text-xs text-muted-foreground">documents, products, custom fields</span>
+              <span className="text-xs text-muted-foreground">cases, activities, documents, answers</span>
             </CommandItem>
           </CommandGroup>
         )}

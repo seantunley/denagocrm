@@ -14,7 +14,9 @@
  * constant is the real reason.
  */
 
-export type SearchHitType = "contact" | "lead" | "quote" | "vehicle" | "jobcard";
+export type SearchHitType =
+  | "contact" | "lead" | "quote" | "vehicle" | "jobcard"
+  | "case" | "message" | "activity" | "document" | "product" | "knowledge";
 
 export type SearchHit = {
   id: string;
@@ -23,6 +25,10 @@ export type SearchHit = {
   label: string;
   sublabel: string;
   href: string;
+  /** The words around the match, for a message, note, activity or knowledge answer. */
+  snippet?: string;
+  /** A file: opens in a new tab. */
+  newTab?: boolean;
 };
 
 /**
@@ -43,4 +49,15 @@ export const SEARCH_GROUPS: ReadonlyArray<{ type: SearchHitType; heading: string
   { type: "quote", heading: "Quotes" },
   { type: "vehicle", heading: "Vehicles" },
   { type: "jobcard", heading: "Job cards" },
+  { type: "message", heading: "Messages & notes" },
+];
+
+/** Every kind /search lists, in order. */
+export const ALL_SEARCH_GROUPS: ReadonlyArray<{ type: SearchHitType; heading: string }> = [
+  ...SEARCH_GROUPS,
+  { type: "case", heading: "Customer cases" },
+  { type: "activity", heading: "Activities" },
+  { type: "document", heading: "Documents" },
+  { type: "product", heading: "Products" },
+  { type: "knowledge", heading: "Approved answers (chatbot knowledge)" },
 ];

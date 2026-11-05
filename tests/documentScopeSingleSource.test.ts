@@ -48,7 +48,8 @@ const HOME = "src/lib/permissions.ts";
 /** Surfaces that hand a document (or its bytes) to a reader. */
 const READ_SURFACES = [
   "src/app/(app)/documents/page.tsx",
-  "src/app/(app)/search/page.tsx",
+  // The search page, the search menu and DAX all search through this one module (2026-11-05).
+  "src/lib/crmSearch.ts",
   "src/app/api/files/[id]/route.ts",
 ];
 
