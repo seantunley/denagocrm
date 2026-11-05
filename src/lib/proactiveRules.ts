@@ -172,12 +172,9 @@ export const mondayStuckKey = (userId: string) => `ASSISTANT_MONDAY_STUCK_FOR:${
 export const chatbotProblemsKey = (userId: string) => `ASSISTANT_CHATBOT_PROBLEMS_FOR:${userId}`;
 export const chatbotProblemsOn = (value: string | null | undefined) => value !== "off";
 /** The fact the brief is given: how many failed, the commonest reasons, where to look. Null when none failed. */
-export function chatbotProblemsFact(failures: readonly { message: string }[]): string | null {
-  if (!failures.length) return null;
-  const counts = new Map<string, number>();
-  for (const { message } of failures) counts.set(message, (counts.get(message) ?? 0) + 1);
-  const top = [...counts].sort((a, b) => b[1] - a[1]).slice(0, 3).map(([message, n]) => `“${message.slice(0, 120)}” (×${n})`);
-  const total = failures.length;
+export function chatbotProblemsFact(total: number, commonest: readonly { message: string; n: number }[]): string | null {
+  if (!total) return null;
+  const top = commonest.slice(0, 3).map(({ message, n }) => `“${message.slice(0, 120)}” (×${n})`);
   return `The chatbot had ${total} failed step${total === 1 ? "" : "s"} in the last 24 hours — most often ${top.join(", ")}. The details are in Settings → System Log.`;
 }
 /** Monday in Johannesburg. */

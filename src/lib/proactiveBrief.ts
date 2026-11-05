@@ -122,12 +122,13 @@ async function chatbotProblemsFor(tenantId: string, user: { id: string; role?: s
   const owner = user.role === "owner"
     || (await basePrisma.tenant.findUnique({ where: { id: tenantId }, select: { ownerUserId: true } }))?.ownerUserId === user.id;
   if (!owner || !chatbotProblemsOn(await setting(tenantId, chatbotProblemsKey(user.id)))) return null;
-  const failures = await basePrisma.errorLog.findMany({
-    where: { tenantId, scope: "chatbot-step", createdAt: { gte: new Date(now.getTime() - 24 * 3600_000) } },
-    select: { message: true },
-    take: 500,
-  });
-  return chatbotProblemsFact(failures);
+  const where = { tenantId, scope: "chatbot-step", createdAt: { gte: new Date(now.getTime() - 24 * 3600_000) } };
+  // An exact total, and the commonest reasons counted in the database — right however big the outage.
+  const [total, commonest] = await Promise.all([
+    basePrisma.errorLog.count({ where }),
+    basePrisma.errorLog.groupBy({ by: ["message"], where, _count: { message: true }, orderBy: { _count: { message: "desc" } }, take: 3 }),
+  ]);
+  return chatbotProblemsFact(total, commonest.map((row) => ({ message: row.message, n: row._count.message })));
 }
 
 async function writeBrief(tenantId: string, userId: string, claimId: string, now: Date, budget: Pick<CronSliceContext, "shouldStop">): Promise<boolean> {
