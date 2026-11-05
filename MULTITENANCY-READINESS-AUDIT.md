@@ -1,3 +1,5 @@
+> **⚠️ SUPERSEDED — historical record only (July 2026).** "Enforcement is still OFF … hard-coded `false`" below is no longer true: `TENANT_ENFORCEMENT=enforce` in production since 2026-08-12 (re-checked 2026-11-05), RLS load-bearing since 2026-09-01, and production has had two workspaces since 2026-10-02. It is a toggle: re-verify before relying on it. Current state: `NEXT-STEPS.md` banner.
+
 # Multi-Tenancy Readiness Audit
 
 **Date:** 2026-07-27

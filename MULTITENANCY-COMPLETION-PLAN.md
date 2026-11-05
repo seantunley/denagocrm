@@ -1,3 +1,5 @@
+> **⚠️ SUPERSEDED — historical record only (July 2026). This plan was carried out.** Tenant enforcement is LIVE: `TENANT_ENFORCEMENT=enforce` in production since 2026-08-12 (re-checked 2026-11-05), and RLS is load-bearing since 2026-09-01 (production connects as `crm_app`, NOBYPASSRLS). `tenantEnforcing()` reads the env var — it is no longer hard-coded `false`. It is a toggle: re-verify before relying on it. Current state: `NEXT-STEPS.md` banner.
+
 # Multi-Tenancy Completion Plan
 
 **Date:** 2026-07-26

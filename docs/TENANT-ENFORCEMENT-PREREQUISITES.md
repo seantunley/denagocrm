@@ -1,3 +1,5 @@
+> **⚠️ SUPERSEDED — both events this was written for have happened.** Tenant enforcement is LIVE (`TENANT_ENFORCEMENT=enforce` in production since 2026-08-12, re-checked 2026-11-05; RLS load-bearing since 2026-09-01), and production has had a second workspace since 2026-10-02 — so switching enforcement off is no longer a safe rollback. Kept for its reasoning. It is a toggle: re-verify before relying on it.
+
 # Before isolation is enforced, and before a second tenant
 
 Written 2026-08-07, after the signing migration took production's deploys down
