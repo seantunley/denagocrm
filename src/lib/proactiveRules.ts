@@ -163,6 +163,20 @@ function clip(text: string, max: number): string {
 export const briefPersonKey = (userId: string) => `ASSISTANT_BRIEF_AT:${userId}`;
 /** Each person's own "stuck deals on Mondays" in their morning brief (round 2 item 7): "on" | "off"; unset = off. */
 export const mondayStuckKey = (userId: string) => `ASSISTANT_MONDAY_STUCK_FOR:${userId}`;
+
+/**
+ * CHATBOT PROBLEMS IN THE BRIEF (Sean, 2026-11-04): a workspace owner's brief says when chatbot steps failed in the
+ * last 24 hours (the `chatbot-step` System Log entries, PR #995). On until the owner switches it off — it is their
+ * own brief, it contacts no one, and a failure nobody reads is the silence it exists to end.
+ */
+export const chatbotProblemsKey = (userId: string) => `ASSISTANT_CHATBOT_PROBLEMS_FOR:${userId}`;
+export const chatbotProblemsOn = (value: string | null | undefined) => value !== "off";
+/** The fact the brief is given: how many failed, the commonest reasons, where to look. Null when none failed. */
+export function chatbotProblemsFact(total: number, commonest: readonly { message: string; n: number }[]): string | null {
+  if (!total) return null;
+  const top = commonest.slice(0, 3).map(({ message, n }) => `“${message.slice(0, 120)}” (×${n})`);
+  return `The chatbot had ${total} failed step${total === 1 ? "" : "s"} in the last 24 hours — most often ${top.join(", ")}. The details are in Settings → System Log.`;
+}
 /** Monday in Johannesburg. */
 export const isJohannesburgMonday = (now: Date) =>
   new Intl.DateTimeFormat("en-ZA", { timeZone: "Africa/Johannesburg", weekday: "short" }).format(now) === "Mon";
@@ -234,7 +248,7 @@ export function briefDueKey(now: Date, at: string): string | null {
  * What DAX is asked. Alerts held overnight are given as facts (their words, without the links) so the brief
  * leads with them instead of them arriving one by one at 08:00.
  */
-export function briefQuestion(now: Date, heldOvernight: readonly string[], opts: { mondayStuck?: boolean } = {}): string {
+export function briefQuestion(now: Date, heldOvernight: readonly string[], opts: { mondayStuck?: boolean; chatbotProblems?: string | null } = {}): string {
   const day = new Intl.DateTimeFormat("en-ZA", { weekday: "long", day: "numeric", month: "long", timeZone: "Africa/Johannesburg" }).format(now);
   const overnight = heldOvernight
     .map((text) => text.split("\n")[0].trim())
@@ -256,6 +270,8 @@ export function briefQuestion(now: Date, heldOvernight: readonly string[], opts:
     ...(opts.mondayStuck && isJohannesburgMonday(now)
       ? ["It is Monday: run stuck_deals and add a short Stuck deals part — each deal with its link and its top reason, as stated there (for an owner or team manager, the team's as a second short list). None, no such part."]
       : []),
+    // Owners only, from the System Log — given as a fact, so the brief states it rather than looks for it.
+    ...(opts.chatbotProblems ? [`Add a one-line Chatbot part at the end, stating exactly this: ${opts.chatbotProblems}`] : []),
     "Only what is mine. No greeting, no sign-off.",
   ].join("\n");
 }

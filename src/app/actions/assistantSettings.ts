@@ -16,7 +16,7 @@ import {
   parseProfile,
 } from "@/lib/assistantSoul";
 import { ASSISTANT_VOICE_REPLIES_KEY, voiceRepliesSwitchOn } from "@/lib/assistantVoiceRules";
-import { ASSISTANT_PROACTIVE_KEY, BRIEF_DEFAULT, BRIEF_TIMES, briefPersonKey, mondayStuckKey, proactiveOn, proactivePersonKey } from "@/lib/proactiveRules";
+import { ASSISTANT_PROACTIVE_KEY, BRIEF_DEFAULT, BRIEF_TIMES, briefPersonKey, chatbotProblemsKey, chatbotProblemsOn, mondayStuckKey, proactiveOn, proactivePersonKey } from "@/lib/proactiveRules";
 import { requireAnyPermission } from "@/lib/permissions";
 import { ASSISTANT_PERMISSIONS } from "@/lib/assistantUser";
 import { saveAssistantWhatsApp } from "@/app/actions/assistantWhatsApp";
@@ -269,6 +269,26 @@ export async function setMyMondayStuck(on: boolean) {
         revalidatePath("/assistant");
       }
       return { success: on === true ? "Stuck deals on Mondays — on" : "Off" };
+    }),
+  );
+}
+
+/** The caller's OWN "chatbot problems" line in their morning brief. Owners only see it; on until switched off. */
+export async function setMyChatbotProblems(on: boolean) {
+  return asActionResult(() =>
+    withActingStaffScope(async () => {
+      const user = await requireAnyPermission(...ASSISTANT_PERMISSIONS);
+      const key = chatbotProblemsKey(user.id);
+      if ((on === true) !== chatbotProblemsOn(await getSetting(key))) {
+        await putSetting(key, on === true ? "on" : "off");
+        await logAudit({
+          action: on === true ? "assistant.chatbot_problems_on" : "assistant.chatbot_problems_off",
+          summary: on === true ? "Asked for chatbot problems in the morning brief" : "Turned off chatbot problems in the morning brief",
+          user,
+        });
+        revalidatePath("/assistant");
+      }
+      return { success: on === true ? "Chatbot problems in the brief — on" : "Off" };
     }),
   );
 }
