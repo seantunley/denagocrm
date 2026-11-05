@@ -177,7 +177,8 @@ export default async function JobCardDetailPage({
   const [servicePackages, siblingJobs] = await Promise.all([
     prisma.servicePackage.findMany({ where: { active: true }, orderBy: { name: "asc" } }),
     prisma.jobCard.findMany({
-      where: { vehicleId: jobCard.vehicleId, id: { not: jobCard.id }, deletedAt: null },
+      // Earlier jobs on the same vehicle; for a job with no vehicle, the customer's other jobs with no vehicle.
+      where: { ...(jobCard.vehicleId ? { vehicleId: jobCard.vehicleId } : { vehicleId: null, contactId: jobCard.contactId }), id: { not: jobCard.id }, deletedAt: null },
       orderBy: { openedAt: "desc" },
       take: 20,
       select: { id: true, number: true, description: true },
@@ -227,7 +228,7 @@ export default async function JobCardDetailPage({
             {jobCard.priority !== "normal" && <StatusPill tone={pm.tone}>{pm.label} priority</StatusPill>}
           </div>
           <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-2 text-sm text-muted-foreground">
-            <Link href={`/vehicles/${jobCard.vehicleId}`} className="inline-flex items-center gap-1.5 hover:text-primary"><CarFront className="size-4" />{jobCard.vehicle.model}</Link>
+            {jobCard.vehicle && <Link href={`/vehicles/${jobCard.vehicle.id}`} className="inline-flex items-center gap-1.5 hover:text-primary"><CarFront className="size-4" />{jobCard.vehicle.model}</Link>}
             <Link href={`/contacts/${jobCard.contactId}`} className="inline-flex items-center gap-1.5 hover:text-primary"><UserRound className="size-4" />{contactName(jobCard.contact)}</Link>
             <span className="inline-flex items-center gap-1.5"><CalendarDays className="size-4" />Opened {formatDate(jobCard.openedAt)}</span>
             {jobCard.bay && <span className="inline-flex items-center gap-1.5"><span className="inline-block size-2 rounded-full" style={{ backgroundColor: jobCard.bay.color }} />{jobCard.bay.name}</span>}
@@ -284,7 +285,7 @@ export default async function JobCardDetailPage({
       </Surface>
 
       <KpiGrid>
-        <MetricCard icon={Gauge} label="Arrival mileage" value={jobCard.kmIn != null ? jobCard.kmIn.toLocaleString() : "—"} detail={jobCard.kmIn != null ? "kilometres" : "Not captured"} />
+        <MetricCard icon={Gauge} label="Arrival mileage" value={jobCard.kmIn != null ? jobCard.kmIn.toLocaleString() : "—"} detail={!jobCard.vehicleId ? "No vehicle" : jobCard.kmIn != null ? "kilometres" : "Not captured"} />
         <MetricCard icon={Package} label="Parts" value={formatZAR(Math.round(partsTotal))} detail={`${partLines} line items`} />
         <MetricCard icon={Clock3} label="Labour" value={formatZAR(Math.round(labourTotal))} detail={`${actualHours} h logged`} />
         <MetricCard icon={ClipboardCheck} label="Job total" value={formatZAR(Math.round(grandTotal))} detail="Customer-facing total" accent />
@@ -307,10 +308,12 @@ export default async function JobCardDetailPage({
                           <label className="label" htmlFor="edit-job-description">Work requested</label>
                           <textarea id="edit-job-description" name="description" className="input" rows={5} defaultValue={jobCard.description} required />
                         </div>
-                        <div>
-                          <label className="label" htmlFor="edit-job-km">Arrival mileage (km)</label>
-                          <input id="edit-job-km" type="number" min={0} name="kmIn" className="input" defaultValue={jobCard.kmIn ?? ""} />
-                        </div>
+                        {jobCard.vehicleId && (
+                          <div>
+                            <label className="label" htmlFor="edit-job-km">Arrival mileage (km)</label>
+                            <input id="edit-job-km" type="number" min={0} name="kmIn" className="input" defaultValue={jobCard.kmIn ?? ""} />
+                          </div>
+                        )}
                         <SaveButton className="btn-primary">Save changes</SaveButton>
                       </SaveForm>
                     </ModalTrigger>
@@ -791,23 +794,28 @@ export default async function JobCardDetailPage({
             <div className="card border-emerald-500/30">
               <h2 className="font-semibold mb-1">Complete job card</h2>
               <p className="text-xs text-slate-400 mb-4">
-                Completing writes a service record on the vehicle. Next-due values default to the
-                vehicle&apos;s service intervals if left blank.
+                {jobCard.vehicleId
+                  ? "Completing writes a service record on the vehicle. Next-due values default to the vehicle's service intervals if left blank."
+                  : "This job has no vehicle, so completing it marks it done without a service record."}
               </p>
               <SaveForm success="Job card completed" resetOnSuccess={false} action={completeJobCard.bind(null, jobCard.id)} className="space-y-3">
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-                  <div>
-                    <label className="label">Mileage (km)</label>
-                    <input type="number" name="km" className="input" defaultValue={jobCard.kmIn ?? ""} />
-                  </div>
-                  <div>
-                    <label className="label">Next due (km)</label>
-                    <input type="number" name="nextDueKm" className="input" placeholder="auto" />
-                  </div>
-                  <div>
-                    <label className="label">Next due (date)</label>
-                    <input type="date" name="nextDueDate" className="input" />
-                  </div>
+                  {jobCard.vehicleId && (
+                    <>
+                      <div>
+                        <label className="label">Mileage (km)</label>
+                        <input type="number" name="km" className="input" defaultValue={jobCard.kmIn ?? ""} />
+                      </div>
+                      <div>
+                        <label className="label">Next due (km)</label>
+                        <input type="number" name="nextDueKm" className="input" placeholder="auto" />
+                      </div>
+                      <div>
+                        <label className="label">Next due (date)</label>
+                        <input type="date" name="nextDueDate" className="input" />
+                      </div>
+                    </>
+                  )}
                   <div className="col-span-2 md:col-span-4">
                     <label className="label">Service summary</label>
                     <input name="summary" className="input" placeholder={jobCard.description} />

@@ -124,14 +124,18 @@ export default async function JobCardPrintPage({
           </div>
           <div>
             <p className="text-xs font-bold uppercase tracking-wide text-slate-500 mb-1.5">
-              Vehicle
+              {jobCard.vehicle ? "Vehicle" : "Job"}
             </p>
-            <p className="font-semibold">
-              {jobCard.vehicle.model}
-              {jobCard.vehicle.color ? ` — ${jobCard.vehicle.color}` : ""}
-            </p>
-            {jobCard.vehicle.vin && <p>VIN / Serial: {jobCard.vehicle.vin}</p>}
-            {jobCard.vehicle.regNumber && <p>Reg: {jobCard.vehicle.regNumber}</p>}
+            {jobCard.vehicle && (
+              <>
+                <p className="font-semibold">
+                  {jobCard.vehicle.model}
+                  {jobCard.vehicle.color ? ` — ${jobCard.vehicle.color}` : ""}
+                </p>
+                {jobCard.vehicle.vin && <p>VIN / Serial: {jobCard.vehicle.vin}</p>}
+                {jobCard.vehicle.regNumber && <p>Reg: {jobCard.vehicle.regNumber}</p>}
+              </>
+            )}
             <p className="text-slate-600">
               Opened {formatDate(jobCard.openedAt, regional)}
               {jobCard.kmIn != null ? ` · ${jobCard.kmIn.toLocaleString()} km in` : ""}

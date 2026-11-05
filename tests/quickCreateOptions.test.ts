@@ -25,6 +25,7 @@ test("a create sheet does not load unrelated option families", () => {
   const route = source("src/app/api/quick-create/route.ts");
   assert.match(route, /kind === "quote"/);
   assert.match(route, /kind === "jobcard"/);
-  assert.match(route, /\["lead", "vehicle", "calendar"\]\.includes\(kind\)/);
+  // Job cards load customers too: a job can be for a customer with no vehicle (2026-11-05).
+  assert.match(route, /\["lead", "vehicle", "calendar", "jobcard"\]\.includes\(kind\)/);
   assert.match(route, /!kind \? quoteFromLeadDefaults\(\) : Promise\.resolve\(null\)/);
 });
