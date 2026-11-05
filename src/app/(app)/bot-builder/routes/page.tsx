@@ -1,4 +1,4 @@
-import { requireRoute } from "@/lib/permissions";
+import { hasPermission, requireRoute } from "@/lib/permissions";
 import Link from "next/link";
 import { AlertTriangle, ArrowLeft, ChevronDown, ExternalLink, GitBranch, Signpost, ToggleLeft } from "lucide-react";
 import { builderTenantId, flowScope } from "@/lib/flowScope";
@@ -6,9 +6,11 @@ import { prisma } from "@/lib/db";
 import { FLOW_CHANNELS } from "@/lib/flowRouting";
 import { addFlowQr, addFlowRoute, deleteFlowQr, deleteFlowRoute, setFlowRouteEnabled } from "@/app/actions/flow";
 import QRCode from "qrcode";
-import { FLOW_QR_KEY, parseQrCodes, qrLink, qrSource } from "@/lib/flowQr";
+import { FLOW_QR_KEY, parseQrCodes, qrLink, qrOutcomeLine, qrSource } from "@/lib/flowQr";
+import { qrOutcomes } from "@/lib/flowQrOutcomes";
+import { formatZAR } from "@/lib/format";
 import { businessWhatsApp } from "@/lib/flowContactCard";
-import { getSetting } from "@/lib/settings";
+import { getRegionalSettings, getSetting } from "@/lib/settings";
 import { getCompanyProfile } from "@/lib/companyProfile";
 import { StatusPill, Surface } from "@/components/visual-system";
 import { PageHeader } from "@/components/page-header";
@@ -21,8 +23,11 @@ const channelLabel: Record<string, string> = { whatsapp: "WhatsApp", messenger: 
 const kindLabel: Record<string, string> = { keyword: "Keyword phrase", referral: "Referral code", ad: "Ad ID" };
 
 export default async function FlowRoutesPage() {
-  await requireRoute("/bot-builder");
+  const viewer = await requireRoute("/bot-builder");
   const tenantId = await builderTenantId();
+  // QR → sale: the value of won deals only for someone who may see sales figures; everyone here sees the counts.
+  const showSalesValue = await hasPermission(viewer, "forecast.view");
+  const money = await getRegionalSettings();
   const scope = await flowScope();
   const [routes, flows, publications, versions] = await Promise.all([
     prisma.botFlowRoute.findMany({ where: { tenantId }, orderBy: [{ channel: "asc" }, { priority: "asc" }, { createdAt: "asc" }] }),
@@ -74,12 +79,13 @@ export default async function FlowRoutesPage() {
           .map(async (qr) => {
             const route = routeById.get(qr.routeId)!;
             const link = qrLink(business.digits, qr.message);
-            const [png, svg, people] = await Promise.all([
+            const [png, svg, outcomes] = await Promise.all([
               QRCode.toDataURL(link, { margin: 1, width: 600 }),
               QRCode.toString(link, { type: "svg", margin: 1 }),
-              prisma.contact.count({ where: { tenantId, source: qrSource(qr.name) } }),
+              qrOutcomes(tenantId, qrSource(qr.name), showSalesValue),
             ]);
-            return { ...qr, enabled: route.enabled, isLiveFlow: route.flowId === livePublication?.flowId, flowName: flowNames.get(route.flowId) ?? "Deleted flow", png, svg: `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`, people };
+            const outcomeLine = qrOutcomeLine(outcomes, (cents) => formatZAR(cents, money));
+            return { ...qr, enabled: route.enabled, isLiveFlow: route.flowId === livePublication?.flowId, flowName: flowNames.get(route.flowId) ?? "Deleted flow", png, svg: `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`, outcomeLine };
           }),
       )
     : [];
@@ -166,7 +172,7 @@ export default async function FlowRoutesPage() {
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center gap-2"><h3 className="truncate font-medium">{qr.name}</h3><StatusPill tone={qr.enabled ? "success" : "neutral"}>{qr.enabled ? "On" : "Off"}</StatusPill></div>
                       <p className="truncate text-xs text-muted-foreground" title={qr.message}>“{qr.message}” → {qr.flowName}</p>
-                      <p className="text-xs text-muted-foreground"><strong className="text-foreground">{qr.people}</strong> new {qr.people === 1 ? "customer" : "customers"} so far</p>
+                      <p className="text-xs text-muted-foreground" title="Customers this QR code brought in, the quotes sent to them and their deals won — so far">{qr.outcomeLine}</p>
                       {qr.isLiveFlow && (
                         <p className="mt-0.5 text-xs text-amber-300">“{qr.flowName}” is also your live WhatsApp flow, so with the chatbot on it answers <strong>every</strong> customer message. Use <strong>Take offline</strong> on it in the Flow builder — this QR code keeps working.</p>
                       )}
