@@ -17,6 +17,8 @@ import { customerTimelineWhere, type DealOption } from "@/lib/customerTimeline";
 import { composerQuotes } from "@/lib/composerQuotes";
 import { composerReplyToDefault } from "@/lib/replyToDefault";
 import LeadTimeline from "@/components/LeadTimeline";
+import WatchButton from "@/components/WatchButton";
+import { watchState } from "@/lib/collaboration";
 import { auditDetailFor } from "@/lib/auditDetailQuery";
 import ConfirmDelete from "@/components/ConfirmDelete";
 import { QuickCreateButton } from "@/components/QuickCreateButton";
@@ -289,6 +291,7 @@ export default async function ContactDetailPage({
     <details className="rounded-xl border border-border bg-card p-4"><summary className="cursor-pointer text-sm font-medium">Secure links</summary><div className="mt-3"><SecureLinksPanel contactId={contact.id} /></div></details>
   </>;
 
+  const watch = contact.tenantId ? await watchState(contact.tenantId, user.id, { type: "contact", id: contact.id }) : { watching: false, count: 0 };
 
   return (
     <EntityDetailShell
@@ -305,6 +308,7 @@ export default async function ContactDetailPage({
       </div>}
       meta={<div className="flex flex-wrap items-center gap-x-3 gap-y-1">{contact.owner ? <span>Owner: {contact.owner.name}</span> : canEditContact ? <Link href={`${path}/edit`} className="font-medium text-primary hover:underline">Assign owner</Link> : <span>No owner assigned</span>}<span>Added {formatDate(contact.createdAt)}{contact.createdBy ? ` by ${contact.createdBy.name}` : ""}</span></div>}
       actions={<>
+          <WatchButton type="contact" id={contact.id} {...watch} />
           {/* Start the next thing for THIS customer from their own page (gap audit
               #24) — each pre-filled with them, and only for staff allowed to. */}
           {canCreateQuote && (

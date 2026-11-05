@@ -46,6 +46,14 @@ export async function emitLeadJourneyEvent(
     payload?: Record<string, unknown>;
   } = {},
 ): Promise<void> {
+  // Watchers of the deal hear about a stage change, a win or a loss (lib/collaboration.ts) — whatever the Marketing
+  // module says, since this is the team's, not a journey's. Same contract: never rejects.
+  try {
+    const { onLeadEvent } = await import("./collaboration");
+    await onLeadEvent(trigger, leadId);
+  } catch {
+    /* watching is best-effort */
+  }
   try {
     // Same gate, same place as the engine it replaces: `runLeadAutomations`
     // gated the ENGINE rather than each of its ~10 callers, so with Marketing

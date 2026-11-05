@@ -10,6 +10,7 @@ import {
   setConversationBotMode,
 } from "@/app/actions/conversations";
 import { formatDateTime } from "@/lib/format";
+import MentionTextarea from "@/components/MentionTextarea";
 import type { ThreadCollaboration } from "@/lib/inboxThreads";
 
 const NOT_DELIVERED =
@@ -26,6 +27,7 @@ export default function ConversationCollab({
 }) {
   const [pending, startTransition] = useTransition();
   const [note, setNote] = useState("");
+  const [mentions, setMentions] = useState<string[]>([]);
   const [assignee, setAssignee] = useState(collaboration.assignee?.id ?? "");
   const [botMode, setBotMode] = useState<"bot" | "handoff" | "human">(collaboration.bot.mode);
 
@@ -131,22 +133,25 @@ export default function ConversationCollab({
 
         {canAct && (
           <div className="flex items-start gap-2">
-            <textarea
-              className="input min-h-9 flex-1 py-1.5 text-xs"
-              rows={2}
-              placeholder="Internal note — your team only, never sent to the customer"
-              value={note}
-              disabled={pending}
-              onChange={(event) => setNote(event.target.value)}
-            />
+            <div className="flex-1">
+              <MentionTextarea
+                className="input min-h-9 w-full py-1.5 text-xs"
+                rows={2}
+                placeholder="Internal note — your team only, never sent to the customer. Type @ to mention someone."
+                value={note}
+                staff={staff}
+                disabled={pending}
+                onChange={(text, named) => { setNote(text); setMentions(named); }}
+              />
+            </div>
             <button
               type="button"
               className="btn-secondary btn-sm shrink-0"
               disabled={pending || !note.trim()}
               onClick={() =>
                 run(async () => {
-                  const result = await addConversationNote(collaboration.conversationId, note);
-                  if (!(result && "error" in result && result.error)) setNote("");
+                  const result = await addConversationNote(collaboration.conversationId, note, mentions);
+                  if (!(result && "error" in result && result.error)) { setNote(""); setMentions([]); }
                   return result;
                 })
               }

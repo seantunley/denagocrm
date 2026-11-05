@@ -5,6 +5,7 @@ import ConfirmDelete from "@/components/ConfirmDelete";
 import { storedFileSrc } from "@/lib/storedFileSrc";
 import { completeActivity } from "@/app/actions/activities";
 import DealField from "@/components/DealField";
+import MentionTextarea from "@/components/MentionTextarea";
 import type { DealOption } from "@/lib/customerTimeline";
 import {
   addCommunication,
@@ -583,12 +584,7 @@ export default async function LeadTimeline({
         <input type="hidden" name="type" value="note" />
         <input type="hidden" name="direction" value="" />
         <input type="hidden" name="revalidate" value={revalidate} />
-        <textarea
-          name="body"
-          className="input"
-          rows={2}
-          placeholder="Add an internal note…"
-        />
+        <MentionTextarea name="body" rows={2} placeholder="Add an internal note… Type @ to mention someone." />
         <PasteImageInput />
         <label className="flex cursor-pointer items-center gap-2 text-xs text-slate-300">
           <input

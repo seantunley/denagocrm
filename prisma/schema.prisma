@@ -2141,6 +2141,7 @@ model JobCard {
   reservations    PartReservation[]
   comebackOf      JobCard?  @relation("JobCardComeback", fields: [comebackOfId], references: [id], onDelete: SetNull)
   comebacks       JobCard[] @relation("JobCardComeback")
+  teamNotes       JobCardNote[]
 
   @@index([bayId])
   @@index([comebackOfId])
