@@ -11,6 +11,8 @@ import { loadAttentionList } from "./attention/load";
 import { resolveActions } from "./crmAssistant";
 import { runAssistantAction, sendAssistantDraft } from "@/app/actions/assistant";
 import {
+  REPLACED_RUN,
+  claimCard,
   TRIAGE_INSTRUCTIONS,
   TRIAGE_KIND,
   TRIAGE_MAX,
@@ -104,14 +106,18 @@ export async function prepareTriage(user: PermissionUser): Promise<{ ok: true; i
   return { ok: true, id: task.id, deals: items.length };
 }
 
-/** Change a run under its row lock. `change` returns whether it changed anything. */
-async function mutate(tenantId: string, userId: string, taskId: string, change: (d: TriageDetails) => boolean): Promise<TriageDetails | null> {
+/**
+ * Change a run under its row lock. `change` gets the run and its status AS LOCKED (open, or closed by a newer run) and
+ * returns whether it changed anything. Claims refuse a closed run (claimCard); recording what an already-claimed card
+ * did still lands on it, so nothing that happened goes unrecorded.
+ */
+async function mutate(tenantId: string, userId: string, taskId: string, change: (d: TriageDetails, status: string) => boolean): Promise<TriageDetails | null> {
   return basePrisma.$transaction(async (tx) => {
     await tx.$queryRaw`SELECT "id" FROM "AssistantTask" WHERE "id" = ${taskId} AND "tenantId" = ${tenantId} AND "userId" = ${userId} FOR UPDATE`;
-    const row = await tx.assistantTask.findFirst({ where: { id: taskId, tenantId, userId, kind: TRIAGE_KIND }, select: { details: true } });
+    const row = await tx.assistantTask.findFirst({ where: { id: taskId, tenantId, userId, kind: TRIAGE_KIND }, select: { details: true, status: true } });
     const run = row ? readTriage(row.details) : null;
-    if (!run) return null;
-    if (change(run)) {
+    if (!row || !run) return null;
+    if (change(run, row.status)) {
       await tx.assistantTask.updateMany({ where: { id: taskId, tenantId, userId }, data: { details: run as never, version: { increment: 1 }, updatedAt: new Date() } });
     }
     return run;
@@ -150,25 +156,32 @@ export async function loadTriage(user: PermissionUser) {
  * Do the ticked cards, one after another, each through the ordinary Confirm path (runAssistantAction) with the
  * person's own permissions and its own checks. Never a message to a customer: those go from their own Send button.
  */
-export async function runTriage(user: PermissionUser, taskId: string, cardIds: readonly string[]): Promise<{ done: number; failed: number; unsure: number }> {
+export async function runTriage(
+  user: PermissionUser,
+  taskId: string,
+  cardIds: readonly string[],
+): Promise<{ ok: true; done: number; failed: number; unsure: number } | { ok: false; error: string }> {
   const tenantId = await actingTenantId();
   const wanted = new Set(cardIds);
   const counts = { done: 0, failed: 0, unsure: 0 };
-  const start = await mutate(tenantId, user.id, taskId, () => false);
-  if (!start) return counts;
+  let startStatus = "";
+  const start = await mutate(tenantId, user.id, taskId, (_d, status) => { startStatus = status; return false; });
+  if (!start) return { ok: false, error: "That triage is no longer there — refresh the page." };
+  // An older tab's run, closed when a newer one was prepared, does nothing (review of #1007).
+  if (startStatus !== "open") return { ok: false, error: REPLACED_RUN };
   for (const { item, entry } of runnable(start.items, wanted)) {
     if (!(await canAccessLead(user, item.leadId))) continue;
     const cardId = entry.card.id;
-    // Claim: only a card still waiting moves to running — a second tab finds it taken.
+    // Claim under the lock: only on the current run, only a card still waiting — a second tab finds it taken.
     let claimed = false;
-    await mutate(tenantId, user.id, taskId, (d) => {
-      const found = d.items.flatMap((i) => i.cards).find((c) => c.card.id === cardId);
-      if (!found || (found.status !== "proposed" && found.status !== "failed")) return false;
-      found.status = "running";
-      found.claimedAt = new Date().toISOString();
-      claimed = true;
-      return true;
+    let replaced = false;
+    await mutate(tenantId, user.id, taskId, (d, status) => {
+      const claim = claimCard(d, status, cardId, false, new Date());
+      claimed = claim.ok;
+      replaced = status !== "open";
+      return claim.ok;
     });
+    if (replaced) break;
     if (!claimed) continue;
     const result: { ok: boolean; unchanged?: boolean; error?: string; success?: string } = await runAssistantAction(entry.card).catch((error: unknown) => ({
       ok: false, unchanged: false, error: error instanceof Error ? error.message : "It failed.",
@@ -184,23 +197,27 @@ export async function runTriage(user: PermissionUser, taskId: string, cardIds: r
       return true;
     });
   }
-  return counts;
+  return { ok: true, ...counts };
 }
 
 /** Send one drafted message — from its own Send button, with the person's edited text — and mark it sent. */
 export async function sendTriageDraft(user: PermissionUser, taskId: string, cardId: string, body: string, subject?: string): Promise<{ ok: boolean; error?: string; success?: string }> {
   const tenantId = await actingTenantId();
-  let card: Extract<TriageItem["cards"][number]["card"], { kind: "draft_message" }> | null = null;
-  await mutate(tenantId, user.id, taskId, (d) => {
-    const found = d.items.flatMap((i) => i.cards).find((c) => c.card.id === cardId);
-    if (!found || found.card.kind !== "draft_message" || (found.status !== "proposed" && found.status !== "failed")) return false;
-    found.status = "running";
-    found.claimedAt = new Date().toISOString();
-    card = found.card;
+  let card: TriageItem["cards"][number]["card"] | null = null;
+  let refused = "That message was already sent or is no longer there — refresh the page.";
+  // Claim under the lock: only on the current run (never an older tab's), only a message still waiting.
+  await mutate(tenantId, user.id, taskId, (d, status) => {
+    const claim = claimCard(d, status, cardId, true, new Date());
+    if (!claim.ok) {
+      refused = claim.error;
+      return false;
+    }
+    card = claim.entry.card;
     return true;
   });
-  const draft = card as Extract<TriageItem["cards"][number]["card"], { kind: "draft_message" }> | null;
-  if (!draft || !draft.leadId) return { ok: false, error: "That message was already sent or is no longer there — refresh the page." };
+  const claimed = card as TriageItem["cards"][number]["card"] | null;
+  const draft = claimed?.kind === "draft_message" ? claimed : null;
+  if (!draft || !draft.leadId) return { ok: false, error: refused };
   const result: { ok: boolean; error?: string; success?: string } = await sendAssistantDraft({
     leadId: draft.leadId, channel: draft.channel, subject: subject ?? draft.subject, body,
     // The same id for the same card: a retried Send is one message.

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
-import { parseTriageReply, runnable, settleStale, statusAfter, triageOutcome, TRIAGE_STALE_MS, type TriageItem } from "../src/lib/triageRules";
+import { claimCard, parseTriageReply, REPLACED_RUN, runnable, settleStale, statusAfter, triageOutcome, TRIAGE_STALE_MS, type TriageItem } from "../src/lib/triageRules";
 
 const read = (path: string) => readFileSync(path, "utf8").replace(/\r\n/g, "\n");
 const item = (leadId: string, cards: TriageItem["cards"]): TriageItem => ({ leadId, name: leadId, opportunity: null, ownerName: null, reasons: [], why: null, cards });
@@ -61,11 +61,33 @@ test("the outcome: deals acted on, and how many customers replied since", () => 
   assert.deepEqual(triageOutcome(items, new Set(["l2", "l3"])), { acted: 2, replied: 1 });
 });
 
+test("two tabs: once a newer triage is prepared, the older tab can neither do nor send anything (review of #1007)", () => {
+  const now = new Date("2026-11-05T12:00:00Z");
+  const run = () => ({ preparedAt: now.toISOString(), items: [item("l1", [c("todo", "follow_up", "proposed"), c("msg", "draft_message", "proposed")])] });
+  // Tab A still shows run A; tab B prepared run B, which closed A.
+  const runA = run();
+  for (const [cardId, send] of [["todo", false], ["msg", true]] as const) {
+    const claim = claimCard(runA, "closed", cardId, send, now);
+    assert.deepEqual(claim, { ok: false, error: REPLACED_RUN });
+  }
+  assert.deepEqual(runA.items[0].cards.map((x) => x.status), ["proposed", "proposed"], "nothing on the old run moved");
+  // The current run works — once per card, and a message only through Send.
+  const runB = run();
+  assert.equal(claimCard(runB, "open", "todo", false, now).ok, true);
+  assert.equal(runB.items[0].cards[0].status, "running");
+  assert.equal(claimCard(runB, "open", "todo", false, now).ok, false, "the second click finds it taken");
+  assert.equal(claimCard(runB, "open", "msg", false, now).ok, false, "a batch never sends");
+  assert.equal(claimCard(runB, "open", "msg", true, now).ok, true);
+});
+
 test("every card runs through the ordinary Confirm path, claimed under the row lock", () => {
   const lib = read("src/lib/assistantTriage.ts");
   assert.match(lib, /SELECT "id" FROM "AssistantTask" WHERE "id" = \$\{taskId\} AND "tenantId" = \$\{tenantId\} AND "userId" = \$\{userId\} FOR UPDATE/);
+  // The run's status is read inside that locked transaction, and every claim goes through claimCard with it.
+  assert.match(lib, /select: \{ details: true, status: true \} \}\);[\s\S]*?if \(change\(run, row\.status\)\)/);
+  assert.equal((lib.match(/claimCard\(d, status, cardId, (true|false), new Date\(\)\)/g) ?? []).length, 2, "the batch and Send");
+  assert.match(lib, /if \(startStatus !== "open"\) return \{ ok: false, error: REPLACED_RUN \};/);
   assert.match(lib, /const result: \{[^}]*\} = await runAssistantAction\(entry\.card\)/);
-  assert.match(lib, /if \(!found \|\| \(found\.status !== "proposed" && found\.status !== "failed"\)\) return false;\s*found\.status = "running";/, "claimed only if still waiting");
   // Proposals become cards exactly as an answer's do: names to ids and access, as the person.
   assert.match(lib, /await resolveActions\(user, proposal\.actions\)/);
   // A message goes only from its own Send, through DAX's own send, once per card.

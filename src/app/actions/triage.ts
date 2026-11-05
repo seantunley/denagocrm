@@ -32,6 +32,7 @@ export async function runTriageAction(taskId: string, cardIds: string[]): Promis
     if (!cardIds.length) refuse("Tick at least one task to do.");
     const counts = await runTriage(user, taskId, cardIds.slice(0, 50));
     revalidatePath("/assistant/triage");
+    if (!counts.ok) refuse(counts.error);
     const parts = [`${counts.done} done`];
     if (counts.failed) parts.push(`${counts.failed} refused (nothing changed — see why)`);
     if (counts.unsure) parts.push(`${counts.unsure} may have got part-way — check those deals`);

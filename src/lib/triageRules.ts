@@ -98,6 +98,30 @@ export function runnable(items: readonly TriageItem[], wanted: ReadonlySet<strin
   return out;
 }
 
+export const REPLACED_RUN = "This triage was replaced by a newer one — refresh the page and work from that.";
+
+/**
+ * Claim one card to do (or, `send`, to send): only on the CURRENT run — an older tab's run, closed when a newer one was
+ * prepared, can do nothing (review of #1007) — and only a card still waiting (proposed, or refused with nothing changed).
+ * Marks it running. Called under the run's row lock with the run's status as it is there.
+ */
+export function claimCard(
+  run: TriageDetails,
+  runStatus: string,
+  cardId: string,
+  send: boolean,
+  now: Date,
+): { ok: true; entry: TriageCard } | { ok: false; error: string } {
+  if (runStatus !== "open") return { ok: false, error: REPLACED_RUN };
+  const entry = run.items.flatMap((item) => item.cards).find((c) => c.card.id === cardId);
+  if (!entry) return { ok: false, error: "That task is no longer on this triage — refresh the page." };
+  if (sendsToCustomer(entry.card) !== send) return { ok: false, error: send ? "Only a message is sent." : "A message goes only from its own Send button." };
+  if (entry.status !== "proposed" && entry.status !== "failed") return { ok: false, error: "That was already done or is under way." };
+  entry.status = "running";
+  entry.claimedAt = now.toISOString();
+  return { ok: true, entry };
+}
+
 /** How a Confirm's answer becomes the card's state: refused with nothing changed can be tried again; part-way can't. */
 export function statusAfter(result: { ok: boolean; unchanged?: boolean }): TriageCardStatus {
   if (result.ok) return "done";
