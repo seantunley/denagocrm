@@ -7,6 +7,7 @@ import { renderKnowledgeForPrompt, searchBotKnowledge } from "./botKnowledge";
 import { renderBotProductFacts } from "./botProductFacts";
 import { getCompanyProfile } from "./companyProfile";
 import { keepsEveryNumber } from "./voiceLanguage";
+import { isKnowledgeGap } from "./knowledgeGapRules";
 
 export type BotMsg = { role: "user" | "assistant"; content: string };
 export type BotFaq = { id: string; question: string; answer: string; handoff?: boolean };
@@ -270,6 +271,12 @@ ${input.voiceNote ? "- This arrived as a transcribed voice note. Reply naturally
     if (!parsed) {
       await logError("bot-ai", "Assistant returned a response outside the decision contract").catch(() => {});
       return null;
+    }
+    // Couldn't answer a knowledge question from approved knowledge: it's a gap for the owner to fill
+    // (Chatbot → Knowledge → Questions the chatbot couldn't answer). Never fails the reply.
+    if (isKnowledgeGap(parsed)) {
+      const { recordKnowledgeGap } = await import("./knowledgeGaps");
+      await recordKnowledgeGap(latestQuestion, parsed.intent).catch(() => {});
     }
 
     // Canonical pathways may be used at medium confidence because the

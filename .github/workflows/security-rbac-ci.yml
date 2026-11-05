@@ -265,6 +265,9 @@ jobs:
       - name: DAX triage — concurrent Prepare leaves one open run
         run: npx tsx --tsconfig tsconfig.harness.json scripts/test-triage-prepare.ts
 
+      - name: Knowledge gaps — concurrent asks all count, one Draft claim
+        run: npx tsx --tsconfig tsconfig.harness.json scripts/test-knowledge-gaps.ts
+
       - name: Run security integration tests
         run: npm run test:security
 
