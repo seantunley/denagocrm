@@ -7,6 +7,9 @@ import { getBotKnowledgeEntries, knowledgeIsCurrent, type BotKnowledgeStatus } f
 import { addBotKnowledge, deleteBotKnowledge, setBotKnowledgeStatus, updateBotKnowledge } from "@/app/actions/bot";
 import { StatusPill, Surface } from "@/components/visual-system";
 import { WorkspaceHero } from "@/components/workspace-hero";
+import { SaveButton, SaveForm } from "@/components/SaveForm";
+import { knowledgeGaps } from "@/lib/knowledgeGaps";
+import { dismissKnowledgeGap, draftKnowledgeFromGap } from "@/app/actions/knowledgeGaps";
 
 type Props = { searchParams: Promise<{ q?: string; status?: string; source?: string; sort?: string }> };
 
@@ -16,10 +19,11 @@ const dateValue = (value?: string) => value?.slice(0, 10) ?? "";
 export default async function BotKnowledgePage({ searchParams }: Props) {
   await requireRoute("/chatbot");
   const tenantId = await actingTenantId();
-  const [params, entries, libraryDocuments] = await Promise.all([
+  const [params, entries, libraryDocuments, gaps] = await Promise.all([
     searchParams,
     getBotKnowledgeEntries(),
     prisma.libraryDocument.findMany({ where: { tenantId }, select: { id: true, name: true }, orderBy: { updatedAt: "desc" }, take: 200 }),
+    knowledgeGaps(tenantId),
   ]);
   const q = (params.q ?? "").trim().toLocaleLowerCase("en-ZA");
   const status = ["draft", "approved", "expired"].includes(params.status ?? "") ? params.status : "all";
@@ -57,6 +61,44 @@ export default async function BotKnowledgePage({ searchParams }: Props) {
         ]}
         actions={<Link href="/chatbot/preview" className="btn-primary btn-sm">Test an AI answer</Link>}
       />
+
+      {/* What customers asked that the chatbot couldn't answer (lib/knowledgeGaps.ts): DAX drafts, the owner approves. */}
+      <Surface className="space-y-3 p-5">
+        <div>
+          <h2 className="text-sm font-semibold">Questions the chatbot couldn&apos;t answer <span className="font-normal text-muted-foreground">({gaps.filter((g) => g.status === "open").length})</span></h2>
+          <p className="mt-1 text-xs text-muted-foreground">
+            Customer questions it handed to your team because no approved knowledge covered them, most asked first. Draft an answer and DAX writes a knowledge entry from your business details and what your team replied at the time — it stays a draft below until you check and approve it.
+          </p>
+        </div>
+        {gaps.length === 0 ? (
+          <p className="text-sm text-muted-foreground">None yet — every question the chatbot was asked, it could answer or hand over for another reason.</p>
+        ) : (
+          <ul className="divide-y divide-border">
+            {gaps.map((gap) => {
+              const examples = Array.isArray(gap.examples) ? gap.examples.filter((e): e is string => typeof e === "string") : [];
+              return (
+                <li key={gap.id} className="flex flex-wrap items-start gap-3 py-3">
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm font-medium">“{gap.question}”</p>
+                    <p className="mt-0.5 text-xs text-muted-foreground">Asked {gap.count} time{gap.count === 1 ? "" : "s"} · last {gap.lastAskedAt.toISOString().slice(0, 10)}{gap.intent ? ` · ${gap.intent}` : ""}</p>
+                    {examples.length > 1 && (
+                      <details className="mt-1 text-xs text-muted-foreground"><summary className="cursor-pointer">Other wordings</summary><ul className="mt-1 list-disc pl-5">{examples.slice(1).map((e) => <li key={e}>{e}</li>)}</ul></details>
+                    )}
+                  </div>
+                  {gap.status === "drafted" ? (
+                    <Link href="/chatbot/knowledge?status=draft" className="text-xs font-medium text-primary hover:underline">Draft ready — review it below</Link>
+                  ) : (
+                    <span className="flex gap-2">
+                      <SaveForm action={draftKnowledgeFromGap.bind(null, gap.id)} resetOnSuccess={false}><SaveButton className="btn-primary btn-sm" pendingLabel="DAX is drafting…">Draft an answer</SaveButton></SaveForm>
+                      <SaveForm action={dismissKnowledgeGap.bind(null, gap.id)} resetOnSuccess={false}><SaveButton className="btn-secondary btn-sm" pendingLabel="…">Dismiss</SaveButton></SaveForm>
+                    </span>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
+        )}
+      </Surface>
 
       <Surface className="p-5">
         <div className="flex flex-wrap items-end justify-between gap-3">

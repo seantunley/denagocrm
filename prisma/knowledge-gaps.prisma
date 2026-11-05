@@ -1,0 +1,25 @@
+/// A question customers asked that the chatbot couldn't answer from approved knowledge (lib/knowledgeGaps.ts), grouped
+/// by its words. The owner drafts an answer from it (DAX writes a knowledge DRAFT) or dismisses it. Phone numbers and
+/// emails are scrubbed from the wordings kept.
+model KnowledgeGap {
+  id           String    @id @default(cuid())
+  tenantId     String
+  /// The question's significant words, sorted (knowledgeGapRules.gapKey): the same question asked differently is one gap.
+  key          String
+  /// The latest wording.
+  question     String
+  /// Up to five recent wordings, newest first.
+  examples     Json
+  count        Int       @default(1)
+  intent       String?
+  firstAskedAt DateTime  @default(now())
+  lastAskedAt  DateTime  @default(now())
+  /// open | drafted | dismissed
+  status       String    @default("open")
+  /// The knowledge draft made from it, once drafted.
+  draftEntryId String?
+  updatedAt    DateTime  @updatedAt
+
+  @@unique([tenantId, key])
+  @@index([tenantId, status, lastAskedAt])
+}
