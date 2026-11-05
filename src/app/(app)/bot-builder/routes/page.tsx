@@ -124,7 +124,8 @@ export default async function FlowRoutesPage() {
         <div className="flex items-center justify-between gap-3"><h2 className="font-semibold">Configured routes</h2><span className="text-xs text-muted-foreground">First enabled match wins</span></div>
         {routes.length === 0 ? <p className="mt-3 text-sm text-muted-foreground">No entry routes yet. Every channel currently uses its default publication.</p> : (
           <ResponsiveEntityTable className="mt-3">
-            <table className="w-full min-w-[820px] text-left text-sm">
+            {/* table-base: the cells' side padding — without it "Priority" and the last column sat on the border. */}
+            <table className="table-base min-w-[820px] text-left">
               <thead className="text-xs uppercase text-muted-foreground"><tr><th className="pb-2">Priority</th><th className="pb-2">Channel</th><th className="pb-2">Signal</th><th className="pb-2">Match</th><th className="pb-2">Published flow</th><th className="pb-2">Version</th><th className="pb-2 text-right">Actions</th></tr></thead>
               <tbody className="divide-y divide-border">
                 {routes.map((route) => {
