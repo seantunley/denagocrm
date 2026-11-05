@@ -154,15 +154,15 @@ export async function createTenantInvoiceAction(tenantId: string, formData: Form
   });
 }
 
-async function setInvoiceStatus(invoiceId: string, to: "paid" | "void"): Promise<ActionResult> {
+async function setInvoiceStatus(tenantId: string, invoiceId: string, to: "paid" | "void"): Promise<ActionResult> {
   return asActionResult(async () => {
     const actor = await requirePlatformAdminAction();
-    const invoice = await basePrisma.tenantInvoice.findUnique({ where: { id: invoiceId } });
+    const invoice = await basePrisma.tenantInvoice.findFirst({ where: { id: invoiceId, tenantId } });
     if (!invoice) throw new ActionRefusal("Invoice not found.");
     const from = to === "paid" ? ["issued"] : ["issued", "paid"];
     // Conditional on the status it had: two people pressing at once change it once.
     const { count } = await basePrisma.tenantInvoice.updateMany({
-      where: { id: invoiceId, status: { in: from } },
+      where: { id: invoiceId, tenantId, status: { in: from } },
       data: to === "paid" ? { status: "paid", paidAt: new Date() } : { status: "void", voidedAt: new Date() },
     });
     if (!count) throw new ActionRefusal(`${invoiceNumber(invoice.number)} is already ${invoice.status}.`);
@@ -180,10 +180,10 @@ async function setInvoiceStatus(invoiceId: string, to: "paid" | "void"): Promise
   });
 }
 
-export async function markTenantInvoicePaidAction(invoiceId: string): Promise<ActionResult> {
-  return setInvoiceStatus(invoiceId, "paid");
+export async function markTenantInvoicePaidAction(tenantId: string, invoiceId: string): Promise<ActionResult> {
+  return setInvoiceStatus(tenantId, invoiceId, "paid");
 }
 
-export async function voidTenantInvoiceAction(invoiceId: string): Promise<ActionResult> {
-  return setInvoiceStatus(invoiceId, "void");
+export async function voidTenantInvoiceAction(tenantId: string, invoiceId: string): Promise<ActionResult> {
+  return setInvoiceStatus(tenantId, invoiceId, "void");
 }

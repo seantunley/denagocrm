@@ -151,7 +151,7 @@ export default async function BillingTab({ tenantId }: { tenantId: string }) {
           <ul className="divide-y divide-border/50 text-sm">
             {invoices.map((invoice) => (
               <li key={invoice.id} className="flex flex-wrap items-center gap-3 py-2">
-                <Link href={`/platform/invoices/${invoice.id}`} className="font-medium text-primary hover:underline">
+                <Link href={`/platform/invoices/${tenantId}/${invoice.id}`} className="font-medium text-primary hover:underline">
                   {invoiceNumber(invoice.number)}
                 </Link>
                 <span className="text-muted-foreground">{invoice.period}</span>
@@ -162,12 +162,12 @@ export default async function BillingTab({ tenantId }: { tenantId: string }) {
                 </span>
                 <span className="ml-auto flex gap-2">
                   {invoice.status === "issued" && (
-                    <SaveForm action={markTenantInvoicePaidAction.bind(null, invoice.id)} success="Marked paid">
+                    <SaveForm action={markTenantInvoicePaidAction.bind(null, tenantId, invoice.id)} success="Marked paid">
                       <SaveButton pendingLabel="Saving…" className="btn-secondary btn-sm">Mark paid</SaveButton>
                     </SaveForm>
                   )}
                   {invoice.status !== "void" && (
-                    <SaveForm action={voidTenantInvoiceAction.bind(null, invoice.id)} success="Invoice voided">
+                    <SaveForm action={voidTenantInvoiceAction.bind(null, tenantId, invoice.id)} success="Invoice voided">
                       <SaveButton pendingLabel="Voiding…" className="btn-secondary btn-sm">Void</SaveButton>
                     </SaveForm>
                   )}
