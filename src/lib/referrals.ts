@@ -1,5 +1,6 @@
 import crypto from "crypto";
-import { prisma } from "./db";
+import { basePrisma, prisma } from "./db";
+import { referralPrefix } from "./referralPrefix";
 import { logAudit } from "./audit";
 import { sendPushToAll } from "./push";
 import { contactName } from "./format";
@@ -7,19 +8,23 @@ import { contactName } from "./format";
 // No 0/O/1/I — codes get read out over the phone
 const ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 
-function randomCode(): string {
+function randomCode(prefix: string): string {
   const bytes = crypto.randomBytes(4);
   let out = "";
   for (let i = 0; i < 4; i++) out += ALPHABET[bytes[i] % ALPHABET.length];
-  return `DGO-${out}`;
+  return `${prefix}-${out}`;
 }
 
 /** Every customer gets one permanent, unique referral code. */
 export async function ensureReferralCode(contactId: string): Promise<string> {
   const contact = await prisma.contact.findUniqueOrThrow({ where: { id: contactId } });
   if (contact.referralCode) return contact.referralCode;
+  const tenant = contact.tenantId
+    ? await basePrisma.tenant.findUnique({ where: { id: contact.tenantId }, select: { name: true } })
+    : null;
+  const prefix = referralPrefix(contact.tenantId, tenant?.name);
   for (let attempt = 0; attempt < 10; attempt++) {
-    const code = randomCode();
+    const code = randomCode(prefix);
     try {
       await prisma.contact.update({ where: { id: contactId }, data: { referralCode: code } });
       return code;
