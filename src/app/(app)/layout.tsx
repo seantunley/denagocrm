@@ -23,6 +23,7 @@ import { HALLOWEEN_CSS, halloweenOn } from "@/lib/seasonalTheme";
 import HalloweenDecor from "@/components/HalloweenDecor";
 import { unreadNotificationCount } from "@/lib/collaboration";
 import { getRecordLabels } from "@/lib/recordLabelsServer";
+import { todaysBirthdayCount } from "@/lib/birthdaysServer";
 
 /**
  * Tab title and icon from the SESSION's workspace. The root layout can only go
@@ -58,7 +59,7 @@ export default async function AppLayout({
   }
 
   const activeTenantId = await getActiveTenantId();
-  const [inboxWaiting, casesWaiting, permissions, enabledModules, brand, unreadNotices] = await Promise.all([
+  const [inboxWaiting, casesWaiting, permissions, enabledModules, brand, unreadNotices, birthdaysToday] = await Promise.all([
     awaitingReplyCount(user).catch(() => 0),
     casesAwaitingCount(user).catch(() => 0),
     getUserPermissionList(user),
@@ -71,6 +72,8 @@ export default async function AppLayout({
     brandForTenant(activeTenantId).catch(() => DEFAULT_BRAND),
     // The bell: @mentions and records this person watches (lib/collaboration.ts).
     activeTenantId ? unreadNotificationCount(activeTenantId, user.id).catch(() => 0) : 0,
+    // The cake: their customers' birthdays today. Never breaks a page.
+    todaysBirthdayCount(user).catch(() => 0),
   ]);
 
   // Single-point route block: a page belonging to a disabled module is not
@@ -156,6 +159,7 @@ export default async function AppLayout({
         inboxWaiting={inboxWaiting}
         casesWaiting={casesWaiting}
         unreadNotices={unreadNotices}
+        birthdaysToday={birthdaysToday}
         enabledModules={enabledModules ? [...enabledModules] : undefined}
         brand={{ logoUrl: brandLogoUrl(brand), displayName: brand.displayName }}
         weatherCities={weatherCities}

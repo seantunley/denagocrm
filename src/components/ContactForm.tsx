@@ -46,6 +46,7 @@ import {
 import { NO_FLEET_PICKER, type FleetPicker } from "@/lib/fleetTypes";
 import { contactKind } from "@/lib/contactKind";
 import { cn } from "@/lib/utils";
+import { MONTHS } from "@/lib/birthdays";
 
 type ContactDefaults = {
   isCompany?: boolean;
@@ -67,6 +68,9 @@ type ContactDefaults = {
   tags?: string;
   ownerId?: string | null;
   marketingOptOut?: boolean;
+  birthDay?: number | null;
+  birthMonth?: number | null;
+  birthYear?: number | null;
 };
 
 type ContactFormVariant = "compact" | "dialog" | "page";
@@ -148,6 +152,20 @@ export default function ContactForm({
             <input name="lastName" className="input" autoComplete="family-name" defaultValue={defaults.lastName ?? ""} />
           </Field>
         </ContactKindFields>
+        {/* Birthday: day and month, the year only if they shared it (lib/birthdays.ts). Shown on the Birthdays page. */}
+        <Field label="Birthday" hint="Day and month; the year is optional (it shows their age)." wide>
+          <div className="grid grid-cols-[5rem_minmax(0,1fr)_6rem] gap-2">
+            <select name="birthDay" className="input" defaultValue={defaults.birthDay ?? ""} aria-label="Birthday day">
+              <option value="">Day</option>
+              {Array.from({ length: 31 }, (_, i) => i + 1).map((d) => <option key={d} value={d}>{d}</option>)}
+            </select>
+            <select name="birthMonth" className="input" defaultValue={defaults.birthMonth ?? ""} aria-label="Birthday month">
+              <option value="">Month</option>
+              {MONTHS.map((name, i) => <option key={name} value={i + 1}>{name}</option>)}
+            </select>
+            <input name="birthYear" className="input" inputMode="numeric" maxLength={4} placeholder="Year" defaultValue={defaults.birthYear ?? ""} aria-label="Birth year (optional)" />
+          </div>
+        </Field>
       </FormSection>
 
       <FormSection

@@ -9,6 +9,7 @@ import { activeTenantPredicate } from "@/lib/tenantPredicate";
 import { logAudit } from "@/lib/audit";
 import { softDeleteRecord } from "@/lib/trash";
 import { contactName } from "@/lib/format";
+import { parseBirthday } from "@/lib/birthdays";
 import { resolveAssignableUser } from "@/lib/tenantActor";
 import {
   requirePermission,
@@ -147,7 +148,19 @@ function contactData(
     // field means the unvalidated value has no way back into the write.
     ownerId: owner?.id ?? null,
     marketingOptOut: formData.get("marketingOptOut") === "on",
+    ...birthdayFrom(formData),
   };
+}
+
+/**
+ * The birthday, ONLY when the form has the birthday fields: other doors into this action (DAX's customer cards,
+ * contactFormFor) send the form without them, and must leave a saved birthday as it is rather than clear it.
+ */
+function birthdayFrom(formData: FormData) {
+  if (!formData.has("birthMonth")) return {};
+  const parsed = parseBirthday({ day: formData.get("birthDay"), month: formData.get("birthMonth"), year: formData.get("birthYear") });
+  if (!parsed.ok) refuse(parsed.error);
+  return parsed.value;
 }
 
 const TAG_PALETTE = [
