@@ -31,6 +31,7 @@ export async function generateFlowDraftAction(
     const instruction = String(formData.get("instruction") ?? "").trim();
     if (instruction.length < 8) return { error: "Describe the change you want in a little more detail." };
     const scope = await flowScope();
+    const tenantId = await builderTenantId();
 
     // The same lists the builder's pickers offer (bot-builder/[id]/page.tsx): the AI may point only at these.
     const [row, channels, journeys, flows, staff, stages, documents, connections, tags, shared] = await Promise.all([
@@ -39,11 +40,11 @@ export async function generateFlowDraftAction(
       prisma.journey.findMany({ where: { status: "active", ...(await journeyScope()) }, select: { id: true, name: true }, orderBy: { name: "asc" } }),
       prisma.botFlow.findMany({ where: { ...scope, id: { not: flowId } }, select: { id: true, name: true }, orderBy: { name: "asc" } }),
       listActingTenantStaff().then((rows) => rows.map((s) => ({ id: s.id, name: s.name }))),
-      prisma.pipelineStage.findMany({ select: { id: true, name: true, pipeline: { select: { name: true } } }, orderBy: [{ pipelineId: "asc" }, { order: "asc" }] })
+      prisma.pipelineStage.findMany({ where: { tenantId }, select: { id: true, name: true, pipeline: { select: { name: true } } }, orderBy: [{ pipelineId: "asc" }, { order: "asc" }] })
         .then((rows) => rows.map((s) => ({ id: s.id, name: `${s.pipeline.name} · ${s.name}` }))),
-      builderTenantId().then((tenantId) => flowDocumentOptions(tenantId)),
+      flowDocumentOptions(tenantId),
       getSetting(FLOW_CONNECTIONS_KEY).then((raw) => parseConnections(raw).map(({ id, name, host }) => ({ id, name, host }))),
-      prisma.tag.findMany({ select: { name: true }, orderBy: { name: "asc" }, take: 300 }).then((rows) => rows.map((t) => t.name)),
+      prisma.tag.findMany({ where: { tenantId }, select: { name: true }, orderBy: { name: "asc" }, take: 300 }).then((rows) => rows.map((t) => t.name)),
       flowSharedVars(),
     ]);
     if (!row) return { error: "Flow not found." };
