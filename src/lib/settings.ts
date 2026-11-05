@@ -205,9 +205,12 @@ function settingsOwnerTenantId(): string {
 }
 
 export async function getSetting(key: string): Promise<string | null> {
-  const tenantId = await settingsOwnerTenantIdOrRecover();
-  // basePrisma + explicit compound key: deterministic and RLS-safe (bypass is set,
-  // and we've already pinned the exact tenantId — never an ambient/unqualified read).
+  return readSetting(await settingsOwnerTenantIdOrRecover(), key);
+}
+
+// basePrisma + explicit compound key: deterministic and RLS-safe (bypass is set,
+// and the exact tenantId is pinned — never an ambient/unqualified read).
+async function readSetting(tenantId: string, key: string): Promise<string | null> {
   const row = await basePrisma.appSetting.findUnique({
     where: { tenantId_key: { tenantId, key } },
   });
@@ -217,6 +220,40 @@ export async function getSetting(key: string): Promise<string | null> {
   } catch {
     return null;
   }
+}
+
+/**
+ * The workspace that is ACTING — whose own provider key is used and whose meter is charged — in BOTH
+ * enforcement modes. `settingsOwnerTenantIdOrRecover` answers "founding" whenever enforcement is off, which
+ * would charge every workspace's usage to Denago and hand every workspace Denago's keys. The staff scope is
+ * bound in both modes (tenantScopeEntry), so read it; only a system scope or no resolvable session falls back
+ * to the founding workspace, and under enforcement that last case still refuses as before.
+ */
+export async function settingsTenantId(): Promise<string> {
+  if (tenantEnforcing()) return settingsOwnerTenantIdOrRecover();
+  let scope = currentTenantScope();
+  if (!scope) {
+    const { recoverStaffScopeFromSession } = await import("./scopeRecovery");
+    scope = (await recoverStaffScopeFromSession()) ?? undefined;
+  }
+  return scope && !scope.system && scope.tenantId ? scope.tenantId : DEFAULT_TENANT_ID;
+}
+
+/** Keys the platform can supply to a workspace on a plan with platformAi (platform console → Billing). */
+export type ProviderKey = "ANTHROPIC_API_KEY" | "ELEVENLABS_API_KEY" | "ELEVENLABS_VOICE_ID";
+
+/**
+ * A provider key for USE (never for display): the workspace's own, or — when it has none and the platform
+ * supplies its AI and voice — the founding workspace's. The workspace's settings page reads its own rows only,
+ * so a supplied key is never shown to it. Usage is metered either way (lib/usage.ts).
+ */
+export async function getProviderKey(key: ProviderKey): Promise<string | null> {
+  const tenantId = await settingsTenantId();
+  const own = await readSetting(tenantId, key);
+  if (own || tenantId === DEFAULT_TENANT_ID) return own;
+  const tenant = await basePrisma.tenant.findUnique({ where: { id: tenantId }, select: { platformAi: true, active: true } });
+  if (!tenant?.platformAi || !tenant.active) return null;
+  return readSetting(DEFAULT_TENANT_ID, key);
 }
 
 /** Where each Regional field lives in AppSetting. */

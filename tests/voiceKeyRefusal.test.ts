@@ -17,8 +17,10 @@ const realLoad = loader._load;
 loader._load = function (this: unknown, request: string, parent, isMain) {
   const file = (parent?.filename ?? "").replace(/\\/g, "/");
   if (file.endsWith("src/lib/elevenlabs.ts")) {
-    if (request === "./settings") return { getSetting: async (key: string) => (key === "ELEVENLABS_API_KEY" ? "xi_test" : null) };
+    const key = async (key: string) => (key === "ELEVENLABS_API_KEY" ? "xi_test" : null);
+    if (request === "./settings") return { getSetting: key, getProviderKey: key };
     if (request === "./errorLog") return { logError: async () => {} };
+    if (request === "./usage") return { recordUsage: async () => {} };
   }
   return realLoad.call(this, request, parent, isMain);
 } as Loader;

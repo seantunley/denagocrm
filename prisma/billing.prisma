@@ -1,0 +1,54 @@
+/// One workspace's use of one metered thing in one month (lib/usage.ts). Bumped with a single
+/// INSERT … ON CONFLICT DO UPDATE, so two sends at the same moment never lose a count.
+/// Meters: lib/usageMeters.ts. `month` is "2026-11" (Johannesburg calendar month).
+model UsageCounter {
+  tenantId String
+  month    String
+  meter    String
+  count    BigInt @default(0)
+
+  @@id([tenantId, month, meter])
+}
+
+/// A workspace's plan terms from `month` on ("2026-11"), until a later row (platform console → Billing → Plan).
+/// Saving a plan writes this month's row, so a change covers the whole month it was made in and earlier months
+/// keep the terms they had: an invoice for October uses October's terms, whatever the plan is now.
+model TenantPlanTerms {
+  tenantId     String
+  month        String
+  planName     String?
+  monthlyCents Int?
+  included     Json
+  overage      Json
+  updatedAt    DateTime @updatedAt
+  updatedBy    String?
+
+  @@id([tenantId, month])
+}
+
+/// A monthly invoice from the platform to a workspace (platform console → Billing). Lines are frozen
+/// when it is created: the plan fee and any usage over the plan's allowances. Never deleted; voided.
+model TenantInvoice {
+  id            String    @id @default(cuid())
+  tenantId      String
+  /// INV-0001…, one sequence across all workspaces.
+  number        Int       @unique @default(autoincrement())
+  /// The month billed, "2026-11".
+  period        String
+  /// [{ label, quantity, unitCents, totalCents }]
+  lines         Json
+  subtotalCents Int
+  vatRatePct    Float
+  vatCents      Int
+  totalCents    Int
+  /// issued | paid | void
+  status        String    @default("issued")
+  /// Who it's from, as printed (copied from the console's "Invoice from" when created).
+  fromText      String
+  issuedAt      DateTime  @default(now())
+  paidAt        DateTime?
+  voidedAt      DateTime?
+  createdBy     String?
+
+  @@index([tenantId, period])
+}
