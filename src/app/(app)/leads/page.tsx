@@ -22,6 +22,8 @@ import { PageHeader } from "@/components/page-header";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { createLead } from "@/app/actions/leads";
 import { contactName, formatZAR } from "@/lib/format";
+import { midSentence } from "@/lib/recordLabels";
+import { getRecordLabels } from "@/lib/recordLabelsServer";
 
 type PlannedActivityRow = {
   leadId: string;
@@ -36,6 +38,7 @@ export default async function LeadsPage({
   searchParams: Promise<{ pipeline?: string }>;
 }) {
   const now = new Date();
+  const labels = await getRecordLabels();
   // A GUARD, not a render check. This is the leads surface, and it used to run on
   // whatever getCurrentUser() returned: any signed-in user — a workshop tech, a
   // finance clerk, someone whose leads permissions had been revoked — got the
@@ -380,7 +383,7 @@ export default async function LeadsPage({
   return (
     <div className="space-y-5">
       <PageHeader
-        title="Leads"
+        title={labels.lead.many}
         description={`${openCount} open · ${formatZAR(totalOpenValue)} in pipeline`}
       >
         <PipelineSwitcher
@@ -418,10 +421,10 @@ export default async function LeadsPage({
           label={
             <>
               <Plus className="size-4" />
-              New lead
+              New {midSentence(labels.lead.one)}
             </>
           }
-          title="New lead"
+          title={`New ${midSentence(labels.lead.one)}`}
           buttonClass={buttonVariants({ size: "sm" })}
         >
           <LeadForm
@@ -435,7 +438,7 @@ export default async function LeadsPage({
             stages={stages.map((stage) => ({ id: stage.id, name: stage.name }))}
             contacts={contacts.map((contact) => ({ id: contact.id, label: contactName(contact) }))}
             users={users.map((user) => ({ id: user.id, name: user.name }))}
-            submitLabel="Create lead"
+            submitLabel={`Create ${midSentence(labels.lead.one)}`}
             variant="dialog"
           />
         </ModalTrigger>
