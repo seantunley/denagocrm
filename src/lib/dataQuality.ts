@@ -3,7 +3,7 @@ import { basePrisma, prisma } from "./db";
 import { actingTenantId } from "./actingTenant";
 import { emailKey } from "./contactMatch";
 import { phoneTail } from "./phoneMatch";
-import { getAccessibleContactIds, getAccessibleLeadIds, type PermissionUser } from "./permissions";
+import { getAccessibleContactIds, getAccessibleLeadIds, hasPermission, type PermissionUser } from "./permissions";
 import { CONTACT_CHECKS, DEAL_CHECKS, bySource, cleanShare, failing, snapshotDay } from "./dataQualityRules";
 
 /*
@@ -19,7 +19,14 @@ const LIMIT = 20_000;
 
 export async function loadDataQuality(user: PermissionUser) {
   const tenantId = await actingTenantId();
-  const [contactIds, leadIds] = await Promise.all([getAccessibleContactIds(user), getAccessibleLeadIds(user)]);
+  // WHO SEES EVERYTHING is a question about their permissions, not about what the id helpers return — those list
+  // every id even for full access (review of #1010: the trend never switched on for owners). Seeing all of a kind:
+  // no filter (the scoped client keeps the workspace) and no id list read. Otherwise: their own records' ids.
+  const [allContacts, allLeads] = await Promise.all([hasPermission(user, "contacts.view_all"), hasPermission(user, "leads.view_all")]);
+  const [contactIds, leadIds] = await Promise.all([
+    allContacts ? null : getAccessibleContactIds(user),
+    allLeads ? null : getAccessibleLeadIds(user),
+  ]);
   const scoped = (ids: string[] | null) => (ids === null ? {} : { id: { in: ids } });
   const [contacts, deals] = await Promise.all([
     contactIds !== null && contactIds.length === 0
@@ -64,7 +71,7 @@ export async function loadDataQuality(user: PermissionUser) {
   for (const [key, rows] of Object.entries(dealProblems)) counts[`deal.${key}`] = rows.length;
 
   // The trend: the workspace's own score, so only for someone who sees all of it.
-  const wholeWorkspace = contactIds === null && leadIds === null;
+  const wholeWorkspace = allContacts && allLeads;
   let trend: { day: string; score: number }[] = [];
   if (wholeWorkspace) {
     const day = snapshotDay();

@@ -41,8 +41,9 @@ test("scores, failing lists and sources", () => {
 
 test("only what the person may open, and the trend only for someone who sees everything", () => {
   const lib = read("src/lib/dataQuality.ts");
-  assert.match(lib, /getAccessibleContactIds\(user\), getAccessibleLeadIds\(user\)/);
-  assert.match(lib, /const wholeWorkspace = contactIds === null && leadIds === null;\s*let trend[^\n]*\n\s*if \(wholeWorkspace\)/);
+  // Own records only: their ids. Whole workspace: from their PERMISSIONS (review of #1010), not from what the id helpers return.
+  assert.match(lib, /allContacts \? null : getAccessibleContactIds\(user\),\s*allLeads \? null : getAccessibleLeadIds\(user\),/);
+  assert.match(lib, /const wholeWorkspace = allContacts && allLeads;\s*let trend[^\n]*\n\s*if \(wholeWorkspace\)/);
   assert.match(lib, /dataQualitySnapshot\s*\.create\(\{ data: \{ tenantId, day,/);
   assert.match(read("src/lib/routeAccess.ts"), /\{ prefix: "\/data-quality", anyOf: \["contacts\.view_all", "contacts\.view_owned"\] \}/);
   assert.match(read("src/app/(app)/data-quality/page.tsx"), /const user = await requireRoute\("\/data-quality"\);/);
