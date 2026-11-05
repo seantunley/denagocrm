@@ -413,6 +413,17 @@ function buildClient(raw: PrismaClient) {
               /* bookkeeping is best-effort */
             }
           }
+          // A customer's reply is news to whoever watches the deal or customer (lib/collaboration.ts). Every channel
+          // files its messages through here, so this is the one place that sees them all. Never holds up or fails the
+          // message: the notifying happens after the response.
+          if (args.data?.direction === "inbound") {
+            try {
+              const { onInboundMessage } = await import("./collaboration");
+              onInboundMessage(args.data);
+            } catch {
+              /* watching is best-effort */
+            }
+          }
           return result;
         },
       },

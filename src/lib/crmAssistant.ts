@@ -65,6 +65,8 @@ import { visibleAnswer } from "./assistantStream";
 import { AI_NOT_CONNECTED, aiFailureForPeople, safeCodexError } from "./codexErrors";
 import { webLookup } from "./crmAssistantWeb";
 import { PdfUnreadable, openMessage, pdfPages, readDocument, searchMessages } from "./crmAssistantEvidence";
+import { searchCrm } from "./crmSearch";
+import type { SearchHitType } from "./recordSearch";
 import { assistantWebAllowed } from "./assistantUser";
 import { MAX_IMAGES_PER_QUESTION } from "./assistantImage";
 import { applyLearn, loadLearned, loadPlaybook, markNotesUsed, saveDecision, visibleTo } from "./assistantMemoryStore";
@@ -143,7 +145,7 @@ const OBSERVATION_CHARS = 7000;
  * (capped by the tools themselves, so the cut lands between messages or pages,
  * not mid-JSON) — this is the ceiling with their dates, ids and facts around it.
  */
-const OBSERVATION_BUDGET: Partial<Record<string, number>> = { search_messages: 12_000, open_message: 11_000, read_document: 11_000 };
+const OBSERVATION_BUDGET: Partial<Record<string, number>> = { search_messages: 12_000, search_everything: 12_000, open_message: 11_000, read_document: 11_000 };
 
 export type AssistantRow = { label: string; detail: string; href: string };
 export type AssistantResult =
@@ -1628,6 +1630,25 @@ async function recallDecision(user: User, raw: z.infer<typeof decisionArgs>): Pr
   };
 }
 
+/**
+ * search_everything: the same search as the search box (lib/crmSearch.ts), as the asker — so DAX finds exactly what
+ * they could find themselves, with a link to each source.
+ */
+async function searchEverything(user: User, args: { words: string; kinds?: readonly SearchHitType[] }): Promise<ToolOutput> {
+  const hits = await searchCrm(user, args.words, { kinds: args.kinds, perKind: 8 });
+  if (!hits.length) {
+    return { truncated: false, rows: [], data: [{ note: `Nothing they may open matches "${args.words}". Words are matched by stem, not meaning — try other wordings before saying it isn't in the CRM.` }] };
+  }
+  return {
+    truncated: hits.length >= 8 * (args.kinds?.length ?? 11),
+    data: [{
+      note: "Each hit is something the person may open, with its link. Excerpts only: open_message reads a message in full, read_document a file. An older message can be out of date.",
+      hits: hits.map((hit) => ({ kind: hit.type, id: hit.id, label: hit.label, detail: hit.sublabel, ...(hit.snippet ? { excerpt: hit.snippet } : {}), link: hit.href })),
+    }],
+    rows: hits.slice(0, 12).map((hit) => ({ label: hit.label, detail: hit.snippet ?? hit.sublabel, href: hit.href })),
+  };
+}
+
 async function runTool(user: User, step: ToolStep): Promise<ToolOutput> {
   switch (step.tool) {
     case "find_leads": return findLeads(user, step.args);
@@ -1650,6 +1671,7 @@ async function runTool(user: User, step: ToolStep): Promise<ToolOutput> {
     case "deliveries": return deliveries(user, step.args);
     case "documents": return documents(user, step.args);
     case "search_messages": return searchMessages(user, step.args);
+    case "search_everything": return searchEverything(user, step.args);
     case "open_message": return openMessage(user, step.args);
     case "read_document": return readDocument(user, step.args);
     case "sales_stats": return salesStats(user, statsArgs.parse(step.args));
