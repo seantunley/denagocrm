@@ -138,6 +138,9 @@ async function seed() {
   for (const key of [SCREENING_MODE_SETTING, SCREENING_POLICY_SETTING, "ANTHROPIC_API_KEY"]) saved[key] = await getSetting(key);
   await putSetting("ANTHROPIC_API_KEY", "test-key-not-real");
   await basePrisma.tenant.create({ data: { id: OTHER, name: `Other Dealership ${SFX}`, slug: `other-scr-${SFX}` } });
+  // Its OWN AI key: provider keys follow the acting workspace in both enforcement modes (lib/settings getProviderKey),
+  // so the other workspace no longer borrows this one's. Removed with its other settings at the end.
+  await basePrisma.appSetting.create({ data: { tenantId: OTHER, key: "ANTHROPIC_API_KEY", value: "test-key-not-real" } });
   await basePrisma.tenant.create({ data: { id: METRICS, name: `Metrics fixture ${SFX}`, slug: `metrics-scr-${SFX}` } });
   await basePrisma.user.create({ data: { id: reviewer.id, name: reviewer.name, email: `scr.${SFX}@example.test`, passwordHash: "x", role: "sales" } });
 }
