@@ -1,3 +1,5 @@
+> **⚠️ SUPERSEDED — historical record only (July 2026). Do not act on it.** Tenant enforcement is LIVE: `TENANT_ENFORCEMENT=enforce` in production since 2026-08-12 (setting last changed 2026-08-12 19:18 UTC; re-checked 2026-11-05), and Postgres RLS is load-bearing since 2026-09-01 (production connects as `crm_app`, NOBYPASSRLS). `tenantEnforcing()` is NOT hard-coded `false` — it reads the env var (`src/lib/tenantEnforcement.ts`). PRs #227, #228 and #230 were CLOSED unmerged; their work landed through later PRs. Production has two workspaces since 2026-10-02, so switching enforcement off is no longer a safe rollback. It is a toggle: re-verify before relying on it.
+
 # Next Steps — Multi-Tenancy (continue here on any machine)
 
 **Last updated:** 2026-07-27. This file is committed to git specifically so it survives a machine switch — check it out, read this, and you have full context.

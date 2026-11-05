@@ -44,6 +44,7 @@ const RECORD: ContactRecord = {
   email: "anna@example.invalid", phone: "082 111 2222", whatsapp: "082 111 2222", address: "1 Main Rd", suburb: "Gardens",
   city: "Cape Town", province: "Western Cape", postalCode: "8001", source: "website", notes: "Prefers mornings",
   ownerId: "cmowner000000000000000001", marketingOptOut: true, tags: [{ name: "VIP" }, { name: "Fleet prospect" }],
+  birthDay: 12, birthMonth: 3, birthYear: null,
 };
 
 test("the whole record is posted, with only the change on top — so nothing else is wiped", () => {
