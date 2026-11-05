@@ -29,6 +29,7 @@ import { ensureReferralCode } from "@/lib/referrals";
 import { getCompanyProfile } from "@/lib/companyProfile";
 import { redeemReferral } from "@/app/actions/referrals";
 import { isWhatsAppConfigured } from "@/lib/whatsapp";
+import { formatBirthday } from "@/lib/birthdays";
 import { formatDateTime } from "@/lib/format";
 import { requireUser } from "@/lib/auth";
 import { CUSTOMER_RECORD_WRITE_PERMISSIONS, getAccessibleLeadIds, getAccessibleQuoteIds, hasAnyPermission, hasPermission } from "@/lib/permissions";
@@ -303,7 +304,7 @@ export default async function ContactDetailPage({
         {contact.city && <span>{contact.city}</span>}
         {!contact.email && !contact.phone && !contact.city && "No contact details recorded"}
       </div>}
-      meta={<div className="flex flex-wrap items-center gap-x-3 gap-y-1">{contact.owner ? <span>Owner: {contact.owner.name}</span> : canEditContact ? <Link href={`${path}/edit`} className="font-medium text-primary hover:underline">Assign owner</Link> : <span>No owner assigned</span>}<span>Added {formatDate(contact.createdAt)}{contact.createdBy ? ` by ${contact.createdBy.name}` : ""}</span></div>}
+      meta={<div className="flex flex-wrap items-center gap-x-3 gap-y-1">{contact.owner ? <span>Owner: {contact.owner.name}</span> : canEditContact ? <Link href={`${path}/edit`} className="font-medium text-primary hover:underline">Assign owner</Link> : <span>No owner assigned</span>}<span>Added {formatDate(contact.createdAt)}{contact.createdBy ? ` by ${contact.createdBy.name}` : ""}</span>{formatBirthday(contact) && <span>🎂 {formatBirthday(contact)}</span>}</div>}
       actions={<>
           {/* Start the next thing for THIS customer from their own page (gap audit
               #24) — each pre-filled with them, and only for staff allowed to. */}

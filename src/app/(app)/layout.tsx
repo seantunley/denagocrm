@@ -22,6 +22,7 @@ import { PROACTIVE_SOURCES } from "@/lib/assistantWhatsAppRules";
 import { HALLOWEEN_CSS, halloweenOn } from "@/lib/seasonalTheme";
 import HalloweenDecor from "@/components/HalloweenDecor";
 import { getRecordLabels } from "@/lib/recordLabelsServer";
+import { todaysBirthdayCount } from "@/lib/birthdaysServer";
 
 /**
  * Tab title and icon from the SESSION's workspace. The root layout can only go
@@ -57,7 +58,7 @@ export default async function AppLayout({
   }
 
   const activeTenantId = await getActiveTenantId();
-  const [inboxWaiting, casesWaiting, permissions, enabledModules, brand] = await Promise.all([
+  const [inboxWaiting, casesWaiting, permissions, enabledModules, brand, birthdaysToday] = await Promise.all([
     awaitingReplyCount(user).catch(() => 0),
     casesAwaitingCount(user).catch(() => 0),
     getUserPermissionList(user),
@@ -68,6 +69,8 @@ export default async function AppLayout({
     // domain must still see their own brand. brandForTenant never throws; this
     // layout wraps every page in the workspace.
     brandForTenant(activeTenantId).catch(() => DEFAULT_BRAND),
+    // The cake: their customers' birthdays today. Never breaks a page.
+    todaysBirthdayCount(user).catch(() => 0),
   ]);
 
   // Single-point route block: a page belonging to a disabled module is not
@@ -152,6 +155,7 @@ export default async function AppLayout({
         }}
         inboxWaiting={inboxWaiting}
         casesWaiting={casesWaiting}
+        birthdaysToday={birthdaysToday}
         enabledModules={enabledModules ? [...enabledModules] : undefined}
         brand={{ logoUrl: brandLogoUrl(brand), displayName: brand.displayName }}
         weatherCities={weatherCities}

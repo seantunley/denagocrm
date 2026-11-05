@@ -29,6 +29,9 @@ export type ContactRecord = {
   ownerId: string | null;
   marketingOptOut: boolean;
   tags: { name: string }[];
+  birthDay: number | null;
+  birthMonth: number | null;
+  birthYear: number | null;
 };
 
 /** Posted as text, as the form posts them. */
@@ -47,6 +50,8 @@ export function contactFormFor(record: ContactRecord, changes: Partial<Record<(t
   }
   if (record.ownerId) form.set("ownerId", record.ownerId);
   if (record.marketingOptOut) form.set("marketingOptOut", "on");
+  // The birthday as it stands (blank when there is none), so a card that changes something else keeps it.
+  for (const field of ["birthDay", "birthMonth", "birthYear"] as const) form.set(field, record[field] == null ? "" : String(record[field]));
   form.set("tags", record.tags.map((tag) => tag.name).join(","));
   return form;
 }

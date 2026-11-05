@@ -496,6 +496,10 @@ model Contact {
   city          String?
   province      String?
   postalCode    String?
+  /// Birthday (lib/birthdays.ts): day and month, with the year when known (for the age). All three or none of day/month.
+  birthDay      Int?
+  birthMonth    Int?
+  birthYear     Int?
   source          String?
   notes           String?
   /// The lead whose notes were COPIED into `notes` when this contact was created
@@ -554,6 +558,7 @@ model Contact {
   consentRecords    ConsentRecord[]
 
   @@index([tenantId])
+  @@index([tenantId, birthMonth, birthDay])
   @@unique([tenantId, xUserId])
   @@unique([tenantId, telegramChatId])
   @@index([fleetId])

@@ -17,7 +17,7 @@ export const PHONE_MEDIA = "(max-width: 767px)";
 /** The sections of the app a phone keeps — each with everything under it. */
 export const PHONE_PATHS = [
   // Sales
-  "/today", "/leads", "/deals", "/contacts", "/quotes", "/calendar", "/activities", "/test-drives",
+  "/today", "/birthdays", "/leads", "/deals", "/contacts", "/quotes", "/calendar", "/activities", "/test-drives",
   "/inbox", "/comments", "/signatures",
   // Workshop
   "/jobcards", "/vehicles", "/workshop-calendar", "/service-due",

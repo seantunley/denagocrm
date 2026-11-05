@@ -3,7 +3,9 @@
 import { useState, type ReactNode } from "react";
 import BrandLogo from "@/components/BrandLogo";
 import { usePathname } from "next/navigation";
+import Link from "next/link";
 import {
+  Cake,
   Search,
 } from "lucide-react";
 import Nav from "@/components/Nav";
@@ -51,7 +53,7 @@ const ownsWorkspace = (user: ShellUser) => user.isTenantOwner ?? user.role === "
  * rather than navigation, and moving them to the top-right returns the footer's
  * height to the nav — which is what runs out of room as modules are added.
  */
-function AccountCluster({ user, isOwner, tenantId }: { user: ShellUser; isOwner: boolean; tenantId: string }) {
+function AccountCluster({ user, isOwner, tenantId, birthdaysToday = 0 }: { user: ShellUser; isOwner: boolean; tenantId: string; birthdaysToday?: number }) {
   return (
     // Held together as one object rather than three loose icons: a hairline
     // border and a barely-there fill, so it reads as a group without competing
@@ -70,6 +72,18 @@ function AccountCluster({ user, isOwner, tenantId }: { user: ShellUser; isOwner:
       >
         <Search className="size-3.5" />
       </button>
+      {/* Customers' birthdays today (lib/birthdaysServer.ts) — only on a day there are some; colour and a count, quiet. */}
+      {birthdaysToday > 0 && (
+        <Link
+          href="/birthdays"
+          aria-label={`${birthdaysToday} customer birthday${birthdaysToday === 1 ? "" : "s"} today`}
+          title="Customer birthdays today"
+          className="flex h-7 min-w-7 items-center justify-center gap-0.5 rounded-lg px-1 text-primary"
+        >
+          <Cake className="size-3.5" />
+          <span className="text-[10px] font-semibold tabular-nums">{birthdaysToday > 99 ? "99+" : birthdaysToday}</span>
+        </Link>
+      )}
       <SidebarHelpSettings isOwner={isOwner} permissions={user.permissions} compact />
       <div className="mx-0.5 h-5 w-px bg-sidebar-border/70" aria-hidden />
       <AccountMenu user={user} isOwner={isOwner} tenantId={tenantId} compact />
@@ -120,6 +134,7 @@ export default function AppShell({
   user,
   inboxWaiting = 0,
   casesWaiting = 0,
+  birthdaysToday = 0,
   enabledModules,
   brand,
   weatherCities,
@@ -131,6 +146,8 @@ export default function AppShell({
   user: ShellUser;
   inboxWaiting?: number;
   casesWaiting?: number;
+  /** Customers with a birthday today that this person may open (lib/birthdaysServer.ts), for the cake. */
+  birthdaysToday?: number;
   enabledModules?: string[];
   /** The tenant's clock/weather cities, resolved by the (app) layout. */
   weatherCities: WeatherCity[];
@@ -184,7 +201,7 @@ export default function AppShell({
           />
         </div>
         <div className="flex w-[7.5rem] shrink-0 justify-end">
-          <AccountCluster user={user} isOwner={ownsWorkspace(user)} tenantId={tenantId} />
+          <AccountCluster user={user} isOwner={ownsWorkspace(user)} tenantId={tenantId} birthdaysToday={birthdaysToday} />
         </div>
       </header>
 
@@ -196,7 +213,7 @@ export default function AppShell({
           <ClockWeather cities={weatherCities} />
         </div>
         <ConnectivityIndicator tenantId={tenantId} userId={user.id} />
-        <AccountCluster user={user} isOwner={ownsWorkspace(user)} tenantId={tenantId} />
+        <AccountCluster user={user} isOwner={ownsWorkspace(user)} tenantId={tenantId} birthdaysToday={birthdaysToday} />
       </header>
 
       {/* Mobile drawer */}

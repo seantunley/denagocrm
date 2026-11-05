@@ -35,6 +35,7 @@ import {
   Route,
   Hammer,
   Sun,
+  Cake,
   type LucideIcon,
 } from "lucide-react";
 import { isPathEnabled } from "@/lib/modules/registry";
@@ -97,6 +98,7 @@ export function buildNav(
   if (can("fleets.view", "fleets.manage")) crmLinks.push({ href: "/fleets", label: "Fleets", icon: Building2 });
   if (can("activities.view", "activities.manage")) crmLinks.push({ href: "/activities", label: "Activities", icon: ListChecks });
   if (can("contacts.view_all", "contacts.view_owned")) crmLinks.push({ href: "/health", label: "Customer Health", icon: HeartPulse });
+  if (can("contacts.view_all", "contacts.view_owned")) crmLinks.push({ href: "/birthdays", label: "Birthdays", icon: Cake, keywords: ["birthday", "birthdays", "dob"] });
   // One entry for Documents and the Library merged into it. The page opens
   // library-only access straight on the Library, the only part it can see.
   if (can("documents.view_all", "documents.view_owned", "documents.upload", "documents.manage", "document_templates.manage", "library.view", "library.manage")) {
