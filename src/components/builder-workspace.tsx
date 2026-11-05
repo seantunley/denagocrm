@@ -14,6 +14,7 @@ export function BuilderWorkspaceShell({
   return (
     <section
       data-slot="builder-workspace"
+      data-fullscreen={fullscreen || undefined}
       className={cn(
         "flex min-h-[42rem] flex-col overflow-hidden rounded-2xl border border-border bg-[#0d1110] text-slate-100 shadow-[0_24px_80px_rgba(0,0,0,.28)]",
         className,
