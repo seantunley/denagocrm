@@ -87,6 +87,8 @@ export default async function BotKnowledgePage({ searchParams }: Props) {
                   </div>
                   {gap.status === "drafted" ? (
                     <Link href="/chatbot/knowledge?status=draft" className="text-xs font-medium text-primary hover:underline">Draft ready — review it below</Link>
+                  ) : gap.status === "drafting" ? (
+                    <span className="text-xs text-muted-foreground">DAX is drafting this — refresh in a minute</span>
                   ) : (
                     <span className="flex gap-2">
                       <SaveForm action={draftKnowledgeFromGap.bind(null, gap.id)} resetOnSuccess={false}><SaveButton className="btn-primary btn-sm" pendingLabel="DAX is drafting…">Draft an answer</SaveButton></SaveForm>

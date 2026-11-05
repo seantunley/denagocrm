@@ -7,7 +7,8 @@ import { logError } from "./errorLog";
 import { getCompanyProfile } from "./companyProfile";
 import { getBotKnowledgeEntries, knowledgeIsCurrent } from "./botKnowledge";
 import { formatZAR } from "./format";
-import { DRAFT_INSTRUCTIONS, gapKey, parseDraft, scrubQuestion, withExample } from "./knowledgeGapRules";
+import { randomUUID } from "node:crypto";
+import { DRAFT_INSTRUCTIONS, GAP_EXAMPLES, gapKey, parseDraft, scrubQuestion } from "./knowledgeGapRules";
 
 /*
  * AI KNOWLEDGE IMPROVEMENT — the database half (rules: knowledgeGapRules.ts). Every read and write names the workspace.
@@ -23,17 +24,20 @@ export async function recordKnowledgeGap(question: string, intent: string): Prom
   const wording = scrubQuestion(question);
   if (!tenantId || !key || !wording) return;
   try {
-    const existing = await basePrisma.knowledgeGap.findUnique({ where: { tenantId_key: { tenantId, key } }, select: { id: true, examples: true } });
-    if (!existing) {
-      await basePrisma.knowledgeGap.create({ data: { tenantId, key, question: wording, examples: [wording], intent } });
-      return;
-    }
-    const examples = Array.isArray(existing.examples) ? existing.examples.filter((e): e is string => typeof e === "string") : [];
-    // A dismissed gap stays dismissed (the owner decided); it still counts, so a growing one is visible if they look.
-    await basePrisma.knowledgeGap.updateMany({
-      where: { id: existing.id, tenantId },
-      data: { count: { increment: 1 }, lastAskedAt: new Date(), question: wording, examples: withExample(examples, wording), intent },
-    });
+    // ONE statement (review of #1009): two customers asking the same new question at once both count — the second
+    // finds the first's row and adds to it, instead of losing to the unique key. The wording joins the newest five.
+    // A dismissed gap stays dismissed (the owner decided); it still counts.
+    await basePrisma.$executeRaw`
+      INSERT INTO "KnowledgeGap" ("id", "tenantId", "key", "question", "examples", "count", "intent", "firstAskedAt", "lastAskedAt", "status", "updatedAt")
+      VALUES (${randomUUID()}, ${tenantId}, ${key}, ${wording}, jsonb_build_array(${wording}::text), 1, ${intent}, now(), now(), 'open', now())
+      ON CONFLICT ("tenantId", "key") DO UPDATE SET
+        "count" = "KnowledgeGap"."count" + 1,
+        "lastAskedAt" = now(),
+        "updatedAt" = now(),
+        "question" = EXCLUDED."question",
+        "intent" = EXCLUDED."intent",
+        "examples" = CASE WHEN "KnowledgeGap"."examples" @> EXCLUDED."examples" THEN "KnowledgeGap"."examples"
+                          ELSE jsonb_path_query_array(EXCLUDED."examples" || "KnowledgeGap"."examples", ${`$[0 to ${GAP_EXAMPLES - 1}]`}::jsonpath) END`;
   } catch (error) {
     await logError("knowledge-gap", "recording a question the chatbot couldn't answer failed", error instanceof Error ? error.name : "unknown").catch(() => {});
   }
@@ -42,7 +46,7 @@ export async function recordKnowledgeGap(question: string, intent: string): Prom
 /** The open gaps, most asked first, and the drafted ones awaiting review. */
 export async function knowledgeGaps(tenantId: string) {
   return basePrisma.knowledgeGap.findMany({
-    where: { tenantId, status: { in: ["open", "drafted"] } },
+    where: { tenantId, status: { in: ["open", "drafting", "drafted"] } },
     orderBy: [{ status: "desc" }, { count: "desc" }, { lastAskedAt: "desc" }],
     take: 50,
   });
@@ -75,8 +79,40 @@ async function staffReplies(tenantId: string, examples: readonly string[]): Prom
  * DAX drafts a knowledge entry from a gap — from the business's own facts and what staff replied — and files it as a
  * DRAFT for the owner to check and approve, exactly as an entry typed by hand. The chatbot never sees a draft.
  */
+class ClaimLost extends Error {}
+
+/** A claim whose request died (the AI call timed out with it) is free again after this. */
+export const DRAFT_CLAIM_STALE_MS = 5 * 60 * 1000;
+
+/**
+ * Take a gap for drafting (review of #1009): ONE conditional write, so of two Draft clicks at once only one wins — the
+ * other is told it's under way. The claim carries its own token (in draftEntryId while drafting), so only this
+ * request can finish it, even if it ran so long its claim went stale and was taken over. Null: not claimed.
+ */
+export async function claimGapForDraft(tenantId: string, gapId: string, now = new Date()): Promise<string | null> {
+  const token = `claim:${randomUUID()}`;
+  const { count } = await basePrisma.knowledgeGap.updateMany({
+    where: { id: gapId, tenantId, OR: [{ status: "open" }, { status: "drafting", updatedAt: { lt: new Date(now.getTime() - DRAFT_CLAIM_STALE_MS) } }] },
+    data: { status: "drafting", draftEntryId: token },
+  });
+  return count === 1 ? token : null;
+}
+
+/** Give a claim back (drafting failed): the question is open again. Only the claim's own holder can. */
+async function releaseClaim(tenantId: string, gapId: string, token: string) {
+  await basePrisma.knowledgeGap.updateMany({ where: { id: gapId, tenantId, status: "drafting", draftEntryId: token }, data: { status: "open", draftEntryId: null } }).catch(() => {});
+}
+
 export async function draftFromGap(tenantId: string, gapId: string): Promise<{ ok: true; title: string } | { ok: false; error: string }> {
-  const gap = await basePrisma.knowledgeGap.findFirst({ where: { id: gapId, tenantId, status: "open" } });
+  const token = await claimGapForDraft(tenantId, gapId);
+  if (!token) return { ok: false, error: "That question is already being drafted, or was drafted or dismissed — refresh the page." };
+  const result = await draftClaimed(tenantId, gapId, token);
+  if (!result.ok) await releaseClaim(tenantId, gapId, token);
+  return result;
+}
+
+async function draftClaimed(tenantId: string, gapId: string, token: string): Promise<{ ok: true; title: string } | { ok: false; error: string }> {
+  const gap = await basePrisma.knowledgeGap.findFirst({ where: { id: gapId, tenantId, status: "drafting", draftEntryId: token } });
   if (!gap) return { ok: false, error: "That question was already drafted or dismissed — refresh the page." };
   const apiKey = await getProviderKey("ANTHROPIC_API_KEY");
   if (!apiKey) return { ok: false, error: "This workspace has no AI key set up (Settings → Integrations)." };
@@ -112,18 +148,28 @@ export async function draftFromGap(tenantId: string, gapId: string): Promise<{ o
     await recordAiUsage(json.usage, json.model);
     const draft = parseDraft(String(json.content?.[0]?.text ?? ""));
     if (!draft) return { ok: false, error: "DAX couldn't draft an answer for that one — write it yourself under Add knowledge draft." };
-    const entry = await basePrisma.botKnowledgeEntry.create({
-      data: {
-        tenantId,
-        title: draft.title,
-        content: draft.content,
-        status: "draft",
-        sourceType: "manual",
-        sourceLabel: `Drafted by DAX from ${gap.count} customer question${gap.count === 1 ? "" : "s"}${draft.check ? ` — check: ${draft.check}` : ""}`.slice(0, 500),
-      },
-      select: { id: true },
+    // The draft and "drafted" in ONE transaction, and only while this request still holds the claim: a claim lost
+    // meanwhile rolls the draft back, so a gap never gets two.
+    const saved = await basePrisma.$transaction(async (tx) => {
+      const entry = await tx.botKnowledgeEntry.create({
+        data: {
+          tenantId,
+          title: draft.title,
+          content: draft.content,
+          status: "draft",
+          sourceType: "manual",
+          sourceLabel: `Drafted by DAX from ${gap.count} customer question${gap.count === 1 ? "" : "s"}${draft.check ? ` — check: ${draft.check}` : ""}`.slice(0, 500),
+        },
+        select: { id: true },
+      });
+      const { count } = await tx.knowledgeGap.updateMany({ where: { id: gap.id, tenantId, status: "drafting", draftEntryId: token }, data: { status: "drafted", draftEntryId: entry.id } });
+      if (count !== 1) throw new ClaimLost();
+      return entry;
+    }).catch((error: unknown) => {
+      if (error instanceof ClaimLost) return null;
+      throw error;
     });
-    await basePrisma.knowledgeGap.updateMany({ where: { id: gap.id, tenantId, status: "open" }, data: { status: "drafted", draftEntryId: entry.id } });
+    if (!saved) return { ok: false, error: "Someone else drafted that question meanwhile — refresh the page." };
     return { ok: true, title: draft.title };
   } catch (error) {
     await logError("knowledge-gap", "drafting failed", error instanceof Error ? error.name : "unknown").catch(() => {});

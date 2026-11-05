@@ -35,12 +35,26 @@ test("a draft needs a title and an answer; anything else is no draft", () => {
 
 test("DAX's answer is filed as a DRAFT the chatbot can't use until the owner approves it", () => {
   const lib = read("src/lib/knowledgeGaps.ts");
-  assert.match(lib, /botKnowledgeEntry\.create\(\{\s*data: \{\s*tenantId,\s*title: draft\.title,\s*content: draft\.content,\s*status: "draft",/);
+  assert.match(lib, /tx\.botKnowledgeEntry\.create\(\{\s*data: \{\s*tenantId,\s*title: draft\.title,\s*content: draft\.content,\s*status: "draft",/);
   assert.doesNotMatch(lib, /status: "approved"/);
   // Only knowledge the business already has, and what staff said — never invented.
   assert.match(read("src/lib/knowledgeGapRules.ts"), /Never invent prices, dates, stock, warranty or finance terms/);
   const actions = read("src/app/actions/knowledgeGaps.ts");
   assert.equal((actions.match(/const owner = await requireTenantOwner\(\);/g) ?? []).length, 2, "owner only, like every knowledge change");
+});
+
+test("recording is one atomic statement, and only one Draft can be saved per gap (review of #1009)", () => {
+  const lib = read("src/lib/knowledgeGaps.ts");
+  const record = lib.slice(lib.indexOf("export async function recordKnowledgeGap"), lib.indexOf("export async function knowledgeGaps"));
+  assert.match(record, /INSERT INTO "KnowledgeGap"[\s\S]*ON CONFLICT \("tenantId", "key"\) DO UPDATE SET\s*"count" = "KnowledgeGap"\."count" \+ 1/);
+  assert.doesNotMatch(record, /findUnique|knowledgeGap\.create/, "no read-then-create race");
+  // Claim first (one conditional write, with a token), then draft; save the draft and "drafted" together, only for the token's holder.
+  assert.match(lib, /OR: \[\{ status: "open" \}, \{ status: "drafting", updatedAt: \{ lt: new Date\(now\.getTime\(\) - DRAFT_CLAIM_STALE_MS\) \} \}\]/);
+  assert.match(lib, /const token = await claimGapForDraft\(tenantId, gapId\);\s*if \(!token\) return/);
+  assert.match(lib, /where: \{ id: gap\.id, tenantId, status: "drafting", draftEntryId: token \}, data: \{ status: "drafted", draftEntryId: entry\.id \} \}\);\s*if \(count !== 1\) throw new ClaimLost\(\);/);
+  assert.match(lib, /if \(!result\.ok\) await releaseClaim\(tenantId, gapId, token\);/, "a failed draft frees the question");
+  // The real-Postgres proof of both runs in CI's integration lane.
+  assert.match(read(".github/workflows/security-rbac-ci.yml"), /scripts\/test-knowledge-gaps\.ts/);
 });
 
 test("the chatbot records a gap without ever failing its reply, in its own workspace", () => {
