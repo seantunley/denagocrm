@@ -10,6 +10,22 @@ model UsageCounter {
   @@id([tenantId, month, meter])
 }
 
+/// A workspace's plan terms from `month` on ("2026-11"), until a later row (platform console → Billing → Plan).
+/// Saving a plan writes this month's row, so a change covers the whole month it was made in and earlier months
+/// keep the terms they had: an invoice for October uses October's terms, whatever the plan is now.
+model TenantPlanTerms {
+  tenantId     String
+  month        String
+  planName     String?
+  monthlyCents Int?
+  included     Json
+  overage      Json
+  updatedAt    DateTime @updatedAt
+  updatedBy    String?
+
+  @@id([tenantId, month])
+}
+
 /// A monthly invoice from the platform to a workspace (platform console → Billing). Lines are frozen
 /// when it is created: the plan fee and any usage over the plan's allowances. Never deleted; voided.
 model TenantInvoice {

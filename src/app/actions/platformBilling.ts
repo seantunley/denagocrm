@@ -7,7 +7,7 @@ import { requirePlatformAdminAction } from "@/lib/platformAuth";
 import { logAuditStrict } from "@/lib/audit";
 import { DEFAULT_TENANT_ID } from "@/lib/tenant";
 import { usageFor } from "@/lib/usage";
-import { METER_IDS, METERS, invoiceLines, invoiceNumber, invoiceTotals, monthHasEnded, planAmounts, type PlanAmounts } from "@/lib/usageMeters";
+import { METER_IDS, METERS, invoiceLines, invoiceNumber, invoiceTotals, monthHasEnded, planAmounts, termsInForce, usageMonth, type PlanAmounts } from "@/lib/usageMeters";
 import { INVOICE_FROM_KEY, INVOICE_VAT_KEY, invoiceSettings } from "@/lib/platformInvoiceSettings";
 
 const tenantPath = (tenantId: string) => `/platform/tenants/${tenantId}`;
@@ -61,7 +61,13 @@ export async function setTenantPlanAction(tenantId: string, formData: FormData):
       // The founding workspace pays for its own; switching it on there would mean nothing.
       platformAi: tenantId !== DEFAULT_TENANT_ID && formData.get("platformAi") === "on",
     };
-    await basePrisma.tenant.update({ where: { id: tenantId }, data });
+    // The terms are also kept against this month, so months already past keep the prices they had (termsInForce).
+    const month = usageMonth();
+    const terms = { planName: data.planName, monthlyCents: data.planMonthlyCents, included, overage, updatedBy: actor.email };
+    await basePrisma.$transaction(async (tx) => {
+      await tx.tenant.update({ where: { id: tenantId }, data });
+      await tx.tenantPlanTerms.upsert({ where: { tenantId_month: { tenantId, month } }, create: { tenantId, month, ...terms }, update: terms });
+    });
     await logAuditStrict({
       action: "tenant.plan_changed",
       summary: `Updated the plan for “${tenant.name}”${data.platformAi !== tenant.platformAi ? (data.platformAi ? " — platform now supplies AI & voice" : " — platform no longer supplies AI & voice") : ""}`,
@@ -123,15 +129,15 @@ export async function createTenantInvoiceAction(tenantId: string, formData: Form
 
     const invoice = await basePrisma.$transaction(async (tx) => {
       await tx.$queryRaw`SELECT "id" FROM "Tenant" WHERE "id" = ${tenantId} FOR UPDATE`;
-      const tenant = await tx.tenant.findUnique({
-        where: { id: tenantId },
-        select: { name: true, planName: true, planMonthlyCents: true, planIncluded: true, planOverage: true },
-      });
+      const tenant = await tx.tenant.findUnique({ where: { id: tenantId }, select: { name: true } });
       if (!tenant) throw new ActionRefusal("Workspace not found.");
       const existing = await tx.tenantInvoice.findFirst({ where: { tenantId, period, status: { not: "void" } }, select: { number: true } });
       if (existing) throw new ActionRefusal(`${period} is already invoiced (${invoiceNumber(existing.number)}). Void it first to invoice again.`);
+      // The terms that applied in that month, not today's plan (review of #1002).
+      const terms = termsInForce(await tx.tenantPlanTerms.findMany({ where: { tenantId, month: { lte: period } } }), period);
+      if (!terms) throw new ActionRefusal(`This workspace had no plan in ${period}, so there's nothing to invoice.`);
       const lines = invoiceLines(
-        { name: tenant.planName, monthlyCents: tenant.planMonthlyCents, included: planAmounts(tenant.planIncluded), overage: planAmounts(tenant.planOverage) },
+        { name: terms.planName, monthlyCents: terms.monthlyCents, included: planAmounts(terms.included), overage: planAmounts(terms.overage) },
         usage,
         period,
       );

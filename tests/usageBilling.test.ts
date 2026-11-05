@@ -1,7 +1,27 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { readFileSync } from "node:fs";
-import { aiCostMicros, invoiceLines, invoiceNumber, invoiceTotals, monthHasEnded, planAmounts, usageMonth } from "../src/lib/usageMeters";
+import { aiCostMicros, invoiceLines, invoiceNumber, invoiceTotals, monthHasEnded, planAmounts, termsInForce, usageMonth } from "../src/lib/usageMeters";
+
+test("an old month is invoiced on the terms it had, not today's plan (review of #1002)", () => {
+  const history = [
+    { month: "2026-11", monthlyCents: 300_000 },
+    { month: "2026-08", monthlyCents: 150_000 },
+    { month: "2026-10", monthlyCents: 199_900 },
+  ];
+  assert.equal(termsInForce(history, "2026-10")?.monthlyCents, 199_900, "October keeps October's price after the November upgrade");
+  assert.equal(termsInForce(history, "2026-09")?.monthlyCents, 150_000, "a month with no change follows the last one before it");
+  assert.equal(termsInForce(history, "2026-11")?.monthlyCents, 300_000, "a mid-month change covers that whole month");
+  assert.equal(termsInForce(history, "2026-12")?.monthlyCents, 300_000);
+  assert.equal(termsInForce(history, "2026-07"), null, "no plan yet: nothing to invoice");
+
+  const action = readFileSync("src/app/actions/platformBilling.ts", "utf8");
+  const create = action.slice(action.indexOf("export async function createTenantInvoiceAction"));
+  assert.match(create, /termsInForce\(await tx\.tenantPlanTerms\.findMany\(\{ where: \{ tenantId, month: \{ lte: period \} \} \}\), period\)/);
+  assert.doesNotMatch(create, /planMonthlyCents|planIncluded|planOverage/, "the invoice never reads today's plan columns");
+  const save = action.slice(action.indexOf("export async function setTenantPlanAction"), action.indexOf("export async function setInvoiceSettingsAction"));
+  assert.match(save, /tx\.tenantPlanTerms\.upsert\(\{ where: \{ tenantId_month: \{ tenantId, month \} \}/, "saving a plan records it against this month");
+});
 
 test("only an ended month can be invoiced (review of #1002: later usage had nowhere to go)", () => {
   const now = new Date("2026-11-05T10:00:00Z");

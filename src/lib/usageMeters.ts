@@ -29,6 +29,16 @@ export function monthHasEnded(period: string, now: Date = new Date()): boolean {
   return period < usageMonth(now);
 }
 
+/**
+ * The plan terms that applied to `period`: the latest row saved in that month or before it (TenantPlanTerms). A
+ * plan saved mid-month covers that whole month; later months follow it until the next change. Null: no plan yet.
+ */
+export function termsInForce<T extends { month: string }>(history: T[], period: string): T | null {
+  let best: T | null = null;
+  for (const row of history) if (row.month <= period && (!best || row.month > best.month)) best = row;
+  return best;
+}
+
 /** US$ per million tokens [input, output]. Cache writes cost 1.25× input, cache reads 0.1×. */
 // ponytail: hand-kept price list (Anthropic list prices, 2026-11); add a row when the app starts using a new model.
 // An unknown model is priced as Opus (the last row).

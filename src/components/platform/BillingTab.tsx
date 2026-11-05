@@ -80,7 +80,8 @@ export default async function BillingTab({ tenantId }: { tenantId: string }) {
         <div>
           <h3 className="font-semibold">Plan</h3>
           <p className="mt-1 text-xs text-muted-foreground">
-            Leave the fee blank for no plan. Usage over an allowance is billed only where an overage price is set.
+            Leave the fee blank for no plan. Usage over an allowance is billed only where an overage price is set. A change
+            applies to the whole of {thisMonth} and the months after it; months already past are invoiced on the terms they had.
           </p>
         </div>
         <div className="grid gap-3 sm:grid-cols-2">
