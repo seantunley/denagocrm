@@ -56,6 +56,8 @@ export function buildNav(
   isAdmin: boolean,
   permissionList: string[] = [],
   enabledModules?: ReadonlySet<string>,
+  /** The workspace's own names for menu links, by href (navLabelOverrides in lib/recordLabels.ts). */
+  labels: Record<string, string> = {},
 ) {
   const permissions = new Set(permissionList);
   const can = (...keys: string[]) => isAdmin || keys.some((key) => permissions.has(key));
@@ -85,7 +87,7 @@ export function buildNav(
   const crmLinks: NavLink[] = [];
   if (can("activities.view", "activities.manage")) crmLinks.push({ href: "/calendar", label: "Calendar", icon: CalendarDays });
   if (can("activities.view", "activities.manage")) crmLinks.push({ href: "/test-drives", label: "Test Drives", icon: Route });
-  if (can("leads.view_all", "leads.view_owned")) crmLinks.push({ href: "/leads", label: "Leads", icon: SquareKanban });
+  if (can("leads.view_all", "leads.view_owned")) crmLinks.push({ href: "/leads", label: labels["/leads"] ?? "Leads", icon: SquareKanban, keywords: ["leads"] });
   if (can("quotes.view_all", "quotes.view_owned")) crmLinks.push({ href: "/quotes", label: "Quotes", icon: FileText });
   if (can("signing.view", "signing.manage")) crmLinks.push({ href: "/signatures", label: "Signatures", icon: PenLine });
   if (can("deliveries.view", "deliveries.manage")) crmLinks.push({ href: "/deliveries", label: "Deliveries", icon: Truck });
@@ -134,7 +136,7 @@ export function buildNav(
     workshopLinks.push({ href: "/service-due", label: "Service Due", icon: Clock4 });
   }
   if (can("warranty.view", "warranty.manage")) workshopLinks.push({ href: "/warranty", label: "Warranty", icon: ShieldCheck });
-  if (can("jobcards.view_all", "jobcards.view_owned")) workshopLinks.push({ href: "/jobcards", label: "Job Cards", icon: Wrench });
+  if (can("jobcards.view_all", "jobcards.view_owned")) workshopLinks.push({ href: "/jobcards", label: labels["/jobcards"] ?? "Job Cards", icon: Wrench, keywords: ["job cards"] });
   if (can("jobcards.view_all", "jobcards.view_owned")) workshopLinks.push({ href: "/jobcards/insights", label: "Workshop Insights", icon: TrendingUp });
   if (can("parts.view", "parts.manage")) workshopLinks.push({ href: "/parts", label: "Parts", icon: Cog });
   if (workshopLinks.length) groups.push({ key: "workshop", label: "Workshop", links: workshopLinks });

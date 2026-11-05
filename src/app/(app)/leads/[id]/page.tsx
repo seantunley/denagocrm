@@ -16,6 +16,8 @@ import { createQuoteFromLead } from "@/app/actions/quotes";
 import CustomerComposer from "@/components/CustomerComposer";
 import CustomerLogForm from "@/components/CustomerLogForm";
 import LeadWorkspaceContext from "@/components/LeadWorkspaceContext";
+import { isCustom, midSentence } from "@/lib/recordLabels";
+import { getRecordLabels } from "@/lib/recordLabelsServer";
 import { Popover, PopoverTrigger, PopoverContent } from "@/components/ui/popover";
 import { dealTimelineWhere } from "@/lib/customerTimeline";
 import SecureLinksPanel from "@/components/SecureLinksPanel";
@@ -81,6 +83,7 @@ export default async function LeadDetailPage({
   const { id } = await params;
   const { tab, schedule, edit } = await searchParams;
   const user = await requireUser();
+  const labels = await getRecordLabels();
   // The composer's Reply-To default: this person plus the mailbox IMAP reads, so
   // a customer's reply reaches both their inbox and this record's timeline. Never
   // throws — an empty string just opens the field blank.
@@ -221,6 +224,7 @@ export default async function LeadDetailPage({
     stage={lead.status === "open" ? lead.stage.name : lead.status} owner={lead.assignedTo?.name}
     latestQuote={latestQuote ? { number: latestQuote.number, status: latestQuote.status, totalCents: payableTotalCents(latestQuote) } : null}
     secureLinks={<SecureLinksPanel leadId={lead.id} />}
+    dealLabel={labels.deal.one}
   />;
 
   const watch = lead.tenantId ? await watchState(lead.tenantId, user.id, { type: "lead", id: lead.id }) : { watching: false, count: 0 };
@@ -230,8 +234,8 @@ export default async function LeadDetailPage({
       <MarkLeadViewed leadId={lead.id} viewed={alreadyViewed} />
       <EntityDetailShell
         backHref="/leads"
-        backLabel="Leads"
-        eyebrow="Sales opportunity"
+        backLabel={labels.lead.many}
+        eyebrow={isCustom(labels, "lead") ? labels.lead.one : "Sales opportunity"}
         title={lead.title}
         status={<>
           <StatusPill tone={lead.status === "won" ? "success" : lead.status === "lost" ? "danger" : "info"}>{lead.status === "open" ? lead.stage.name : lead.status}</StatusPill>
@@ -323,7 +327,7 @@ export default async function LeadDetailPage({
           {canDeleteLead && <ConfirmDelete
             triggerClass="btn-secondary text-red-400"
             action={deleteLead.bind(null, lead.id)}
-            title={`Delete lead “${lead.title}”?`}
+            title={`Delete ${midSentence(labels.lead.one)} “${lead.title}”?`}
             description="The lead moves to the Trash and can be restored for 60 days."
           />}
           </PopoverContent></Popover>
@@ -339,7 +343,7 @@ export default async function LeadDetailPage({
       {automotiveOn && lead.status === "won" && (
         <div className="card bg-emerald-500/10 border-emerald-500/30 flex items-center justify-between gap-4 flex-wrap">
           <p className="text-sm text-emerald-300">
-            🎉 Deal won{readableContact ? ` — customer: ${contactName(readableContact)}` : ""}.
+            🎉 {labels.deal.one} won{readableContact ? ` — customer: ${contactName(readableContact)}` : ""}.
             Register the vehicle to start tracking services.
           </p>
           <Link
@@ -612,7 +616,7 @@ export default async function LeadDetailPage({
                                 {q.supersededAt ? "superseded" : q.status}
                               </span>
                               {canPrintQuote(q.id) && (
-                                <Link href={`/deals/${q.id}`} className="text-xs font-medium text-primary hover:underline">Deal workspace</Link>
+                                <Link href={`/deals/${q.id}`} className="text-xs font-medium text-primary hover:underline">{labels.deal.one} workspace</Link>
                               )}
                               {!q.supersededAt && canPrintQuote(q.id) && quotePrintLinks(q).map((link) => (
                                 <a key={link.href} href={link.href} target="_blank" rel="noreferrer" className="text-xs text-orange-400 hover:underline">

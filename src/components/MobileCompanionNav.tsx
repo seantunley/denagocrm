@@ -27,6 +27,8 @@ import { openQuickCreate, type QuickCreateKind } from "@/components/QuickCreateD
 import { Sheet, SheetClose, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { isPathEnabled } from "@/lib/modules/registry";
 import { cn } from "@/lib/utils";
+import { midSentence } from "@/lib/recordLabels";
+import { useRecordLabels } from "@/components/RecordLabelsProvider";
 
 type MobileUser = { role: string; permissions: string[]; isTenantOwner?: boolean };
 
@@ -46,6 +48,7 @@ export default function MobileCompanionNav({
   onMore: () => void;
 }) {
   const [captureOpen, setCaptureOpen] = useState(false);
+  const labels = useRecordLabels();
   const granted = new Set(user.permissions);
   // The WORKSPACE's owner (AppShell's ownsWorkspace) — `role === "owner"` is the
   // platform owner, which hid owner shortcuts from every other workspace's owner.
@@ -72,7 +75,7 @@ export default function MobileCompanionNav({
   // upload action checks for itself, but it offered a view-only technician a
   // camera button that could only end in a refusal.
   const captures = [
-    { label: "New lead", detail: "Start a sales opportunity", icon: UserPlus, kind: "lead" as const, show: can("leads.create") },
+    { label: `New ${midSentence(labels.lead.one)}`, detail: "Start a sales opportunity", icon: UserPlus, kind: "lead" as const, show: can("leads.create") },
     { label: "New contact", detail: "Capture a customer", icon: UserPlus, kind: "contact" as const, show: can("contacts.create") },
     { label: "New activity", detail: "Schedule the next step", icon: CalendarPlus, kind: "calendar" as const, show: can("activities.manage") },
     { label: "New quote", detail: "Start a customer proposal", icon: FileText, kind: "quote" as const, show: can("quotes.create") },
@@ -89,10 +92,10 @@ export default function MobileCompanionNav({
   type Place = { href: string; label: string; icon: typeof ListChecks; badge?: number };
   const tasks: Place = { href: task.href, label: "Tasks", icon: ListChecks, badge: task.badge };
   const places = {
-    leads: can("leads.view_all", "leads.view_owned") && packOn("/leads") ? { href: "/leads", label: "Leads", icon: KanbanSquare } : null,
+    leads: can("leads.view_all", "leads.view_owned") && packOn("/leads") ? { href: "/leads", label: labels.lead.many, icon: KanbanSquare } : null,
     customers: can("contacts.view_all", "contacts.view_owned") && packOn("/contacts") ? { href: "/contacts", label: "Customers", icon: Users } : null,
     inbox: can("inbox.view", "inbox.reply") && packOn("/inbox") ? { href: "/inbox", label: "Inbox", icon: MessageSquare, badge: inboxWaiting } : null,
-    jobcards: can("jobcards.view_all", "jobcards.view_owned") && packOn("/jobcards") ? { href: "/jobcards", label: "Job cards", icon: Wrench } : null,
+    jobcards: can("jobcards.view_all", "jobcards.view_owned") && packOn("/jobcards") ? { href: "/jobcards", label: labels.jobcard.many, icon: Wrench } : null,
     vehicles: can("vehicles.view_all", "vehicles.view_owned") && packOn("/vehicles") ? { href: "/vehicles", label: "Vehicles", icon: Car } : null,
     deliveries: can("deliveries.view", "deliveries.manage") && packOn("/deliveries") ? { href: "/deliveries", label: "Deliveries", icon: Truck } : null,
   };

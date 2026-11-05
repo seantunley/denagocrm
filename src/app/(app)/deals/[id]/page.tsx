@@ -31,6 +31,7 @@ import { getRegionalSettings } from "@/lib/settings";
 import DealPayments from "@/components/deals/DealPayments";
 import { primaryVehicleLine, showcaseImageRefFor } from "@/lib/docbuilder/vehicleShowcase";
 import { storedFileSrc } from "@/lib/storedFileSrc";
+import { getRecordLabels } from "@/lib/recordLabelsServer";
 import { EntityDetailShell } from "@/components/entity-detail-shell";
 import { StatusPill, Surface } from "@/components/visual-system";
 
@@ -105,6 +106,7 @@ export default async function DealWorkspacePage({ params }: { params: Promise<{ 
   // The same rule the proxy applies to /deals (routeAccess.ts), then this quote itself.
   await requireRoute("/deals");
   const user = await requireQuoteReadAccess(id);
+  const labels = await getRecordLabels();
 
   const quote = await prisma.quote.findUnique({
     where: { id },
@@ -259,7 +261,7 @@ export default async function DealWorkspacePage({ params }: { params: Promise<{ 
     <EntityDetailShell
       backHref="/quotes"
       backLabel="Quotes"
-      eyebrow="Deal"
+      eyebrow={labels.deal.one}
       title={`Q-${quote.number} · ${customer}`}
       status={<StatusPill tone={statusTone(quote.status)}>{quote.status}</StatusPill>}
       description={vehicleName}
@@ -302,7 +304,7 @@ export default async function DealWorkspacePage({ params }: { params: Promise<{ 
 
             <div className="flex flex-col justify-between p-5 sm:p-6">
               <div>
-                <p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-muted-foreground">Deal value</p>
+                <p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-muted-foreground">{labels.deal.one} value</p>
                 <p className="mt-1 text-3xl font-semibold tracking-tight text-foreground">{formatZAR(total)}</p>
                 <div className="mt-5 grid grid-cols-2 gap-4 border-t border-border pt-4">
                   <Fact label="Customer" value={customer} />
@@ -313,7 +315,7 @@ export default async function DealWorkspacePage({ params }: { params: Promise<{ 
               </div>
               <div className="mt-5 flex flex-wrap gap-2">
                 {quote.contactId && <Link href={`/contacts/${quote.contactId}`} className="btn-secondary btn-sm"><UserRound className="size-4" />Customer</Link>}
-                {lead && <Link href={`/leads/${lead.id}`} className="btn-secondary btn-sm"><Activity className="size-4" />Lead</Link>}
+                {lead && <Link href={`/leads/${lead.id}`} className="btn-secondary btn-sm"><Activity className="size-4" />{labels.lead.one}</Link>}
                 {quote.status === "accepted" && <Link href="/deliveries" className="btn-secondary btn-sm"><Truck className="size-4" />Delivery board</Link>}
               </div>
             </div>
@@ -334,7 +336,7 @@ export default async function DealWorkspacePage({ params }: { params: Promise<{ 
               <div className="flex items-center justify-between gap-3">
                 <div>
                   <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">Commercials</p>
-                  <h2 className="mt-1 text-base font-semibold">Deal sheet</h2>
+                  <h2 className="mt-1 text-base font-semibold">{labels.deal.one} sheet</h2>
                 </div>
                 <CircleDollarSign className="size-5 text-muted-foreground" />
               </div>
@@ -359,7 +361,7 @@ export default async function DealWorkspacePage({ params }: { params: Promise<{ 
                 ))}
                 <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-4 py-4">
                   <div>
-                    <p className="font-semibold">Deal total</p>
+                    <p className="font-semibold">{labels.deal.one} total</p>
                     <p className="mt-0.5 text-xs text-muted-foreground">{quote.depositPaidAt ? "Deposit received" : depositAmount ? `Deposit expected · ${formatZAR(depositAmount)}` : "No deposit terms set"}</p>
                   </div>
                   <p className="text-lg font-semibold tabular-nums">{formatZAR(total)}</p>
@@ -375,7 +377,7 @@ export default async function DealWorkspacePage({ params }: { params: Promise<{ 
               <div className="flex items-center justify-between gap-3">
                 <div>
                   <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">Activity</p>
-                  <h2 className="mt-1 text-base font-semibold">Deal timeline</h2>
+                  <h2 className="mt-1 text-base font-semibold">{labels.deal.one} timeline</h2>
                 </div>
                 {lead && <Link href={`/leads/${lead.id}?tab=comms`} className="text-xs font-medium text-primary hover:underline">Full timeline</Link>}
               </div>
@@ -477,7 +479,7 @@ export default async function DealWorkspacePage({ params }: { params: Promise<{ 
             <Surface className="p-5">
               <div className="flex items-center gap-2">
                 <FileText className="size-5 text-muted-foreground" />
-                <h2 className="text-sm font-semibold">Deal file</h2>
+                <h2 className="text-sm font-semibold">{labels.deal.one} file</h2>
               </div>
               <div className="mt-3 space-y-1.5">
                 <a href={`/quotes/${quote.id}/print`} target="_blank" rel="noreferrer" className="flex items-center gap-2 rounded-lg px-2.5 py-2 text-sm hover:bg-muted/40"><FileText className="size-4 text-muted-foreground" />Quotation</a>

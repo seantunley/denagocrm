@@ -7,6 +7,8 @@ import { ChevronRight } from "lucide-react";
 import { buildNav, type NavLink } from "@/components/nav-config";
 import { cn } from "@/lib/utils";
 import { linkOnPhone } from "@/lib/phoneScope";
+import { navLabelOverrides } from "@/lib/recordLabels";
+import { useRecordLabels } from "@/components/RecordLabelsProvider";
 
 const STORAGE_KEY = "denago-nav-collapsed";
 
@@ -61,6 +63,7 @@ export default function Nav({
     isAdmin,
     permissions,
     enabledModules ? new Set(enabledModules) : undefined,
+    navLabelOverrides(useRecordLabels()),
   );
   const topLinks = phone ? built.topLinks.filter((link) => linkOnPhone(link.href)) : built.topLinks;
   const groups = phone

@@ -22,6 +22,7 @@ import { PROACTIVE_SOURCES } from "@/lib/assistantWhatsAppRules";
 import { HALLOWEEN_CSS, halloweenOn } from "@/lib/seasonalTheme";
 import HalloweenDecor from "@/components/HalloweenDecor";
 import { unreadNotificationCount } from "@/lib/collaboration";
+import { getRecordLabels } from "@/lib/recordLabelsServer";
 
 /**
  * Tab title and icon from the SESSION's workspace. The root layout can only go
@@ -159,6 +160,7 @@ export default async function AppLayout({
         brand={{ logoUrl: brandLogoUrl(brand), displayName: brand.displayName }}
         weatherCities={weatherCities}
         activityTypes={activityTypes}
+        recordLabels={await getRecordLabels()}
         tenantId={activeTenantId ?? ""}
       >
         {children}

@@ -23,6 +23,8 @@ import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import ConnectivityIndicator from "@/components/ConnectivityIndicator";
 import { ActivityTypesProvider } from "@/components/ActivityTypesProvider";
+import { RecordLabelsProvider } from "@/components/RecordLabelsProvider";
+import type { RecordLabels } from "@/lib/recordLabels";
 import { SettingsViewerProvider } from "@/components/SettingsViewer";
 import type { ActivityType } from "@/lib/activityTypes";
 
@@ -137,6 +139,7 @@ export default function AppShell({
   weatherCities,
   activityTypes,
   tenantId,
+  recordLabels,
   children,
 }: {
   user: ShellUser;
@@ -157,6 +160,8 @@ export default function AppShell({
    *  layout. Optional so every existing test render still compiles; undefined
    *  means the built-in assets, which is what an unbranded tenant gets. */
   brand?: { logoUrl: string | null; displayName: string };
+  /** What the workspace calls leads, deals and job cards, resolved by the (app) layout. Undefined = the built-in words. */
+  recordLabels?: RecordLabels;
   children: ReactNode;
 }) {
   const [mobileOpen, setMobileOpen] = useState(false);
@@ -165,6 +170,7 @@ export default function AppShell({
   return (
     <TooltipProvider delayDuration={250}>
     <ActivityTypesProvider types={activityTypes}>
+    <RecordLabelsProvider labels={recordLabels}>
     <SettingsViewerProvider isOwner={ownsWorkspace(user)} isPlatformOwner={user.role === "owner"} permissions={user.permissions} enabledModules={enabledModules}>
     <div className="min-h-screen">
       <CommandMenu isAdmin={ownsWorkspace(user)} isPlatformOwner={user.role === "owner"} permissions={user.permissions} enabledModules={enabledModules} />
@@ -246,6 +252,7 @@ export default function AppShell({
       </main>
     </div>
     </SettingsViewerProvider>
+    </RecordLabelsProvider>
     </ActivityTypesProvider>
     </TooltipProvider>
   );
