@@ -21,6 +21,7 @@ import { prisma } from "@/lib/db";
 import { PROACTIVE_SOURCES } from "@/lib/assistantWhatsAppRules";
 import { HALLOWEEN_CSS, halloweenOn } from "@/lib/seasonalTheme";
 import HalloweenDecor from "@/components/HalloweenDecor";
+import { unreadNotificationCount } from "@/lib/collaboration";
 import { getRecordLabels } from "@/lib/recordLabelsServer";
 import { todaysBirthdayCount } from "@/lib/birthdaysServer";
 
@@ -58,7 +59,7 @@ export default async function AppLayout({
   }
 
   const activeTenantId = await getActiveTenantId();
-  const [inboxWaiting, casesWaiting, permissions, enabledModules, brand, birthdaysToday] = await Promise.all([
+  const [inboxWaiting, casesWaiting, permissions, enabledModules, brand, unreadNotices, birthdaysToday] = await Promise.all([
     awaitingReplyCount(user).catch(() => 0),
     casesAwaitingCount(user).catch(() => 0),
     getUserPermissionList(user),
@@ -69,6 +70,8 @@ export default async function AppLayout({
     // domain must still see their own brand. brandForTenant never throws; this
     // layout wraps every page in the workspace.
     brandForTenant(activeTenantId).catch(() => DEFAULT_BRAND),
+    // The bell: @mentions and records this person watches (lib/collaboration.ts).
+    activeTenantId ? unreadNotificationCount(activeTenantId, user.id).catch(() => 0) : 0,
     // The cake: their customers' birthdays today. Never breaks a page.
     todaysBirthdayCount(user).catch(() => 0),
   ]);
@@ -155,6 +158,7 @@ export default async function AppLayout({
         }}
         inboxWaiting={inboxWaiting}
         casesWaiting={casesWaiting}
+        unreadNotices={unreadNotices}
         birthdaysToday={birthdaysToday}
         enabledModules={enabledModules ? [...enabledModules] : undefined}
         brand={{ logoUrl: brandLogoUrl(brand), displayName: brand.displayName }}

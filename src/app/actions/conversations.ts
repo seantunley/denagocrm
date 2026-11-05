@@ -119,7 +119,18 @@ export async function addConversationNote(
 
     const note = await prisma.conversationNote.create({
       data: { conversationId, authorId: actor.id, body: clean, mentions: named },
-      select: { id: true },
+      select: { id: true, tenantId: true },
+    });
+    // The people it names are told (they were only ever stored before). The note is saved whatever happens there.
+    const { tellAboutNote } = await import("@/lib/collaboration");
+    const told = await tellAboutNote({
+      tenantId: note.tenantId,
+      actorId: actor.id,
+      text: clean,
+      picked: named,
+      staff,
+      mentionOn: { type: "conversation", id: conversationId },
+      watchRefs: [],
     });
 
     await logAudit({
@@ -130,8 +141,7 @@ export async function addConversationNote(
       user: actor,
     });
     revalidatePath("/inbox");
-    void note;
-    return { success: "Note added" };
+    return { success: told === "Saved" ? "Note added" : told };
   });
 }
 

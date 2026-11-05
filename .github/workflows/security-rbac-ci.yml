@@ -262,6 +262,9 @@ jobs:
       - name: Nurture lifecycle and workspace isolation
         run: npx tsx --tsconfig tsconfig.harness.json scripts/test-lead-nurture.ts
 
+      - name: DAX triage — concurrent Prepare leaves one open run
+        run: npx tsx --tsconfig tsconfig.harness.json scripts/test-triage-prepare.ts
+
       - name: Run security integration tests
         run: npm run test:security
 

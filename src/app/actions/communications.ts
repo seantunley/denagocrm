@@ -134,8 +134,25 @@ export async function addCommunication(formData: FormData) {
       await toggleTimelinePin("communication", communication.id, user.id);
     }
 
+    // @mentions and the record's watchers (lib/collaboration.ts). The entry is saved whatever happens there.
+    const { tellAboutNote } = await import("@/lib/collaboration");
+    const { listActingTenantStaff } = await import("@/lib/tenantActor");
+    const picked = formData.getAll("mentions").map(String).flatMap((value) => value.split(",")).filter(Boolean);
+    const record = leadId ? { type: "lead" as const, id: leadId } : contactId ? { type: "contact" as const, id: contactId } : null;
+    const success = record
+      ? await tellAboutNote({
+          tenantId,
+          actorId: user.id,
+          text: body,
+          picked,
+          staff: picked.length ? await listActingTenantStaff() : [],
+          mentionOn: record,
+          watchRefs: [{ type: "lead", id: leadId }, { type: "contact", id: contactId }],
+        })
+      : "Saved";
+
     revalidatePath(String(formData.get("revalidate") ?? "/"));
-    return { success: "Logged" };
+    return { success: success === "Saved" ? "Logged" : success };
   });
 }
 

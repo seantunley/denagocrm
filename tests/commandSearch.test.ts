@@ -22,7 +22,8 @@ const shipped = (rel: string) =>
  * "use server" module, which node:test cannot import.
  */
 
-const action = src("src/app/actions/search.ts");
+// The palette's action is now a thin call into the one search (lib/crmSearch.ts, 2026-11-05); the rules live there.
+const action = src("src/lib/crmSearch.ts");
 const menu = src("src/components/CommandMenu.tsx");
 const menuCode = shipped("src/components/CommandMenu.tsx");
 
@@ -125,7 +126,7 @@ test("the search action binds a tenant scope", () => {
   // every read here is tenant-guarded — so without this it throws under
   // enforcement instead of returning results. Third time this has bitten: the
   // research action, the push test, and it would have been this.
-  assert.match(action, /return withActingStaffScope\(async \(\) => \{/);
+  assert.match(src("src/app/actions/search.ts"), /return withActingStaffScope\(async \(\) => \{/);
 });
 
 test("results are scoped by the shared permission helpers, not a new resolver", () => {
@@ -144,17 +145,25 @@ test("results are scoped by the shared permission helpers, not a new resolver", 
   // IMPOSSIBLE match rather than an absent filter.
   assert.match(action, /const scoped = \(ids: string\[\] \| null\) => \(ids === null \? \{\} : \{ id: \{ in: ids \} \}\)/);
   assert.match(action, /const empty = \(ids: string\[\] \| null\) => ids !== null && ids\.length === 0/);
-  const code = shipped("src/app/actions/search.ts");
+  const code = shipped("src/lib/crmSearch.ts");
   // Every entity must consult `empty` before querying, or an empty allow-list
   // silently becomes "everything".
-  assert.equal((code.match(/empty\([a-zA-Z]+Ids\)/g) ?? []).length, 5, "every type must honour the empty contract");
+  for (const ids of ["contactIds", "leadIds", "quoteIds", "vehicleIds", "jobCardIds", "caseIds", "activityIds", "documentIds"]) {
+    assert.ok(code.includes(`!empty(${ids})`), `${ids} must honour the empty contract`);
+  }
+  assert.match(code, /!\(empty\(leadIds\) && empty\(contactIds\)\)/, "messages too");
+  // The palette asks that one search, as the signed-in person.
+  assert.match(shipped("src/app/actions/search.ts"), /return searchCrm\(user, rawTerm, \{ kinds: PALETTE_KINDS, perKind: SEARCH_HITS_PER_TYPE \}\)/);
 });
 
 test("module-gated types are not searched when their pack is off", () => {
   // Surfacing a vehicle for a workspace with automotive switched off offers a
   // record they have no screen to open.
-  assert.match(shipped("src/app/actions/search.ts"), /!automotiveOn \|\| empty\(vehicleIds\)/);
-  assert.match(shipped("src/app/actions/search.ts"), /!automotiveOn \|\| empty\(jobCardIds\)/);
+  const code = shipped("src/lib/crmSearch.ts");
+  assert.match(code, /want\.has\("vehicle"\) && automotiveOn && !empty\(vehicleIds\)/);
+  assert.match(code, /want\.has\("jobcard"\) && automotiveOn && !empty\(jobCardIds\)/);
+  assert.match(code, /want\.has\("case"\) && supportOn/);
+  assert.match(code, /want\.has\("product"\) && commerceOn && canProducts/);
 });
 
 test("the mobile Search button opens this palette", () => {

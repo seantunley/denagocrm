@@ -1,0 +1,55 @@
+/// Something a staff member should know: they were @mentioned, or a record they watch changed (lib/collaboration.ts).
+/// Shown under the bell and on /notifications, and pushed to their phone. Access to the record is checked when it is
+/// made and again whenever it is shown, so losing access to a customer hides what was said about them.
+model StaffNotification {
+  id         String    @id @default(cuid())
+  tenantId   String
+  /// Who is told.
+  userId     String
+  /// mention | watch
+  kind       String
+  /// What happened, for a watch: note | stage | reply | status. Null for a mention.
+  event      String?
+  /// Who caused it (null: the customer or the system).
+  actorId    String?
+  /// lead | contact | jobcard | conversation
+  recordType String
+  recordId   String
+  title      String
+  /// The first words of the note or message, as the record shows them.
+  snippet    String?
+  href       String
+  createdAt  DateTime  @default(now())
+  readAt     DateTime?
+
+  @@index([tenantId, userId, readAt, createdAt])
+}
+
+/// A staff member following a record: they hear about its new notes, stage or status changes and customer replies.
+model RecordWatch {
+  tenantId   String
+  userId     String
+  /// lead | contact | jobcard
+  recordType String
+  recordId   String
+  createdAt  DateTime @default(now())
+
+  @@id([tenantId, userId, recordType, recordId])
+  @@index([tenantId, recordType, recordId])
+}
+
+/// A staff-only note on a job card, where the team talks about the job (and can @mention each other).
+model JobCardNote {
+  id        String   @id @default(cuid())
+  tenantId  String
+  jobCardId String
+  jobCard   JobCard  @relation(fields: [jobCardId], references: [id], onDelete: Cascade)
+  authorId  String
+  body      String
+  /// User ids named with @ (only staff of this workspace).
+  mentions  String[]
+  createdAt DateTime @default(now())
+
+  @@index([jobCardId, createdAt])
+  @@index([tenantId])
+}

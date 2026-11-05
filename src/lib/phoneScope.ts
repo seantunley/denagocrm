@@ -23,8 +23,8 @@ export const PHONE_PATHS = [
   "/jobcards", "/vehicles", "/workshop-calendar", "/service-due",
   // Help desk and deliveries
   "/cases", "/deliveries",
-  // Finding things and getting help
-  "/search", "/help",
+  // Finding things and getting help; the bell (@mentions, records you watch)
+  "/search", "/help", "/notifications",
 ] as const;
 
 /** Under a kept section, but a desktop screen all the same. */

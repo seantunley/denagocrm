@@ -7,7 +7,6 @@
   "src/app/(app)/leads/page.tsx::scoped-raw::Activity": 2,
   "src/app/(app)/leads/page.tsx::scoped-raw::TimelinePin": 1,
   "src/app/(app)/reports/page.tsx::bypass-raw::TeamMember": 1,
-  "src/app/(app)/search/page.tsx::bypass-raw::CustomerCase": 1,
   "src/app/(app)/settings/page.tsx::global-user::User": 1,
   "src/app/(app)/settings/portal-access/page.tsx::bypass-raw::PortalAccessGrant": 1,
   "src/app/(app)/settings/portal-access/page.tsx::bypass-raw::PortalProfileChangeRequest": 1,

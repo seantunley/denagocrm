@@ -91,6 +91,8 @@ export const PUSH_KINDS = [
   { id: "security", label: "Security & AI health", desc: "Monthly runbook results and AI/billing problems — route to whoever owns security" },
   { id: "backup", label: "Backup failures", desc: "The nightly backup missed its window (throttled to 1/day)" },
   { id: "activity_reminder", label: "Meeting reminders", desc: "An hour before timed meetings/test drives — tap opens Google Maps" },
+  { id: "mention", label: "Mentions", desc: "Someone @mentions you in a note — sent only to you" },
+  { id: "watch", label: "Records you watch", desc: "A note, stage change, customer reply or job status on a record you watch — sent only to you" },
   { id: "assistant", label: "Scheduled assistant answers", desc: "A question you scheduled with the assistant has been answered — sent only to you" },
 ] as const;
 

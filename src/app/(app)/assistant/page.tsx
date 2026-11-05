@@ -130,7 +130,10 @@ export default async function AssistantPage() {
       <PageHeader
         title={profile.name === "Assistant" ? "Ask the CRM" : `Ask ${profile.name}`}
         description="Your sales colleague: it reads your leads, quotes, activities and the business's own knowledge, and tells you what it means — never more than your own lists show you."
-      />
+      >
+        {/* Many deals at once: DAX prepares, you approve (lib/assistantTriage.ts). */}
+        {connected && <Link href="/assistant/triage" className="btn-secondary btn-sm">Work through who&apos;s waiting</Link>}
+      </PageHeader>
       <div className="grid items-start gap-6 2xl:grid-cols-[minmax(0,1fr)_minmax(22rem,28rem)]">
       <div className="min-w-0 space-y-6">
       {/* What is waiting on you comes first, above the conversation. Always rendered: it holds the
