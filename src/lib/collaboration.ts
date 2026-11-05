@@ -2,8 +2,10 @@ import "server-only";
 import { basePrisma } from "./db";
 import { logError } from "./errorLog";
 import { sendPushToAll } from "./push";
-import { runInTenantScope } from "./tenantScope";
-import { assistantUserFor } from "./assistantUser";
+import { currentTenantScope, runInTenantScope } from "./tenantScope";
+import { getUserPermissions, RBAC_UNAVAILABLE } from "./permissionQuery";
+import { resolveTenantMemberUser } from "./tenantActor";
+import { tenantEnforcing } from "./tenantEnforcement";
 import { contactName } from "./format";
 import {
   canAccessContact,
@@ -29,12 +31,33 @@ import {
 /*
  * @MENTIONS AND WATCHING (2026-11-05) — the database half; the rules are collaborationRules.ts.
  *
- * A person is told only about a record they may open, checked AS THEM (assistantUserFor) when the notification is
+ * A person is told only about a record they may open, checked AS THEM (staffUserFor) when the notification is
  * made, and again whenever it is shown (visibleNotifications) — losing access to a customer hides what was said about
  * them. Nothing here ever reaches a customer. Every write names the workspace explicitly (bypass client).
  */
 
 export type RecordRef = { type: RecordType; id: string };
+
+/**
+ * A member of THIS workspace, as a permission user — for deciding whether they may be told about a record. Unlike
+ * assistantUserFor it does NOT ask for DAX's permissions or the Automation & AI module (review of #1005): a mention
+ * is for any colleague who can open the record, AI or not. Whether they can is canOpenRecord's question, as them.
+ * Null outside one workspace, for someone not (or no longer) a member, or a disabled account. A permissions read
+ * that fails throws — "couldn't read" is not "may not see".
+ */
+export async function staffUserFor(userId: string): Promise<PermissionUser | null> {
+  const scope = currentTenantScope();
+  if (scope?.system) return null;
+  if (tenantEnforcing() && !scope?.tenantId) return null;
+  const member = await resolveTenantMemberUser(userId);
+  if (!member) return null;
+  const user = await basePrisma.user.findUnique({ where: { id: member.id }, select: { id: true, name: true, email: true, role: true } });
+  if (!user) return null;
+  if (user.role !== "owner" && (await getUserPermissions(user.id)).has(RBAC_UNAVAILABLE)) {
+    throw new Error("collaboration: permissions unavailable");
+  }
+  return user;
+}
 
 export async function canOpenRecord(user: PermissionUser, ref: RecordRef): Promise<boolean> {
   if (ref.type === "lead") return canAccessLead(user, ref.id);
@@ -96,7 +119,7 @@ export async function notifyPeople(notice: Notice): Promise<{ told: string[]; ca
     const href = recordHref(ref.type, ref.id);
     const snippet = snippetOf(notice.snippet);
     for (const userId of ids) {
-      const user = await assistantUserFor(userId);
+      const user = await staffUserFor(userId);
       if (!user || !(await canOpenRecord(user, ref))) {
         if (user) cannotSee.push(user.name);
         continue;
