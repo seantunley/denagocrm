@@ -13,7 +13,7 @@ const fn = (name: string) => lib.slice(lib.indexOf(`async function ${name}(`), l
 
 test("research and discovery use ChatGPT first, and never reach Anthropic when it is connected", () => {
   const call = fn("callWithWebSearch");
-  const codexBranch = call.slice(call.indexOf("if (await isCodexConnected())"), call.indexOf('const apiKey = await getSetting("ANTHROPIC_API_KEY")'));
+  const codexBranch = call.slice(call.indexOf("if (await isCodexConnected())"), call.indexOf('const apiKey = await getProviderKey("ANTHROPIC_API_KEY")'));
   assert.ok(call.indexOf("if (await isCodexConnected())") > -1 && call.indexOf("if (await isCodexConnected())") < call.indexOf("api.anthropic.com"));
   assert.match(codexBranch, /codexRespond\(\{[\s\S]*webSearch: true,/);
   assert.match(codexBranch, /if \("error" in reply\) \{[\s\S]*return \{ error: reply\.error \};/, "a ChatGPT failure is returned, not retried on Anthropic");

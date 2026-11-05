@@ -1,9 +1,11 @@
 import "server-only";
 import { list } from "@vercel/blob";
 import { activeBlobToken } from "./storage";
-import { getSetting, putSetting } from "./settings";
+import { getProviderKey, getSetting, putSetting } from "./settings";
 import { sendPushToAll } from "./push";
 import { logError } from "./errorLog";
+import { recordUsage } from "./usage";
+import { aiCostMicros, type AiUsage } from "./usageMeters";
 
 /* ── AI usage ledger (our own token counter, month by month) ─────── */
 
@@ -12,9 +14,13 @@ const monthKey = () => {
   return `AI_TOKENS_${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
 };
 
-/** Called after every Anthropic response — cheap best-effort counter. */
-export async function recordAiUsage(usage?: { input_tokens?: number; output_tokens?: number }) {
+/**
+ * Called after every Anthropic response — cheap best-effort counter. Also meters the response's cost against
+ * the workspace whose key paid for it (lib/usage.ts), priced by `model`.
+ */
+export async function recordAiUsage(usage?: AiUsage, model?: string | null) {
   if (!usage) return;
+  await recordUsage({ ai_usd_micros: aiCostMicros(usage, model), ai_calls: 1 });
   try {
     const cur = JSON.parse((await getSetting(monthKey())) ?? '{"in":0,"out":0,"calls":0}');
     cur.in += usage.input_tokens ?? 0;
@@ -56,7 +62,7 @@ export async function runAiHealthIfDue(): Promise<void> {
   const prev = await getAiHealth();
   if (prev && Date.now() - new Date(prev.at).getTime() < 55 * 60 * 1000) return; // hourly
 
-  const apiKey = await getSetting("ANTHROPIC_API_KEY");
+  const apiKey = await getProviderKey("ANTHROPIC_API_KEY");
   let next: AiHealth;
   if (!apiKey) {
     next = { status: "unconfigured", detail: "No Anthropic API key set.", at: new Date().toISOString() };

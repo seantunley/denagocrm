@@ -5,7 +5,7 @@ import { formatDateTime, formatZAR } from "@/lib/format";
 import type { ReactNode } from "react";
 
 /** The same supporting column as contacts, with the current deal's context. */
-export default function LeadWorkspaceContext({ nextActivity, canSchedule, customer, product, color, quantity, valueCents, stage, owner, latestQuote, secureLinks }: {
+export default function LeadWorkspaceContext({ nextActivity, canSchedule, customer, product, color, quantity, valueCents, stage, owner, latestQuote, secureLinks, dealLabel = "Deal" }: {
   nextActivity: { summary: string; dueDate: Date; note?: string | null; assignedTo?: { name: string } | null } | null;
   canSchedule: boolean;
   customer: { name: string; href?: string };
@@ -13,6 +13,8 @@ export default function LeadWorkspaceContext({ nextActivity, canSchedule, custom
   stage: string; owner?: string | null;
   latestQuote?: { number: number; status: string; totalCents: number } | null;
   secureLinks: ReactNode;
+  /** What the workspace calls a deal (Settings → Company profile → Names for records). */
+  dealLabel?: string;
 }) {
   const overdue = nextActivity && nextActivity.dueDate < new Date();
   return <>
@@ -27,7 +29,7 @@ export default function LeadWorkspaceContext({ nextActivity, canSchedule, custom
       {(nextActivity || canSchedule) && <TabLink tab="activities" className="mt-3 inline-flex text-xs font-medium text-primary hover:underline">{nextActivity ? "Manage activities" : "Schedule an activity"}</TabLink>}
     </section>
     <section className="rounded-xl border border-border bg-card p-4">
-      <h2 className="mb-3 text-sm font-semibold">Deal at a glance</h2>
+      <h2 className="mb-3 text-sm font-semibold">{dealLabel} at a glance</h2>
       <p className="text-lg font-semibold tabular-nums">{/* 0 is how an unset value is stored: "R 0,00" beside a R 249 900 quote misreads the deal. */}{valueCents ? formatZAR(valueCents) : "Value not set"}</p>
       <p className="mt-1 break-words text-sm">{product || "Product not selected"}{color ? ` · ${color}` : ""}{quantity > 1 ? ` · ${quantity} units` : ""}</p>
       <dl className="mt-4 space-y-2 text-xs">

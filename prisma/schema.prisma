@@ -3582,6 +3582,17 @@ model Tenant {
   /// Replaces "Authorized Denago EV Dealer" and the login page's tagline copy.
   brandTagline     String?
 
+  /// PLAN (prisma/billing.prisma, lib/usageMeters.ts). Set by a platform admin; null = no plan, nothing billed.
+  /// `planIncluded` and `planOverage` are { meter: number } in each meter's billing unit (US$ of AI, 1,000
+  /// characters of voice, one message…); overage is cents per unit over the included amount.
+  planName         String?
+  planMonthlyCents Int?
+  planIncluded     Json?
+  planOverage      Json?
+  /// The platform pays for this workspace's AI and voice: with no key of its own, it uses the founding
+  /// workspace's (lib/settings.getProviderKey). Off by default; the workspace's own key always wins.
+  platformAi       Boolean  @default(false)
+
   createdAt   DateTime @default(now())
 
   members  TenantMember[]

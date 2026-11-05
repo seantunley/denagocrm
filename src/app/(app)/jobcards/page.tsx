@@ -40,6 +40,8 @@ import {
 } from "@/lib/permissions";
 import RecordContextMenu, { type RecordContextAction } from "@/components/RecordContextMenu";
 import { SaveButton, SaveForm } from "@/components/SaveForm";
+import { jobNumberLabel, midSentence } from "@/lib/recordLabels";
+import { getRecordLabels } from "@/lib/recordLabelsServer";
 
 const FILTERS = [
   { value: "all", label: "All" },
@@ -56,6 +58,7 @@ export default async function JobCardsPage({
   searchParams: Promise<{ status?: string; q?: string; page?: string }>;
 }) {
   const user = await requireAnyPermission("jobcards.view_all", "jobcards.view_owned");
+  const labels = await getRecordLabels();
   const params = await searchParams;
   const { status: requestedStatus = "all", q = "" } = params;
   const activeStatus = FILTERS.some((filter) => filter.value === requestedStatus) ? requestedStatus : "all";
@@ -141,7 +144,7 @@ export default async function JobCardsPage({
   const loadRows = [...load.entries()].sort((a, b) => b[1] - a[1]);
 
   const newJobTrigger = canManage ? (
-    <ModalTrigger label={<><Plus className="size-4" />New job card</>} title="Open a new job card" buttonClass={buttonVariants({ size: "sm" })}>
+    <ModalTrigger label={<><Plus className="size-4" />New {midSentence(labels.jobcard.one)}</>} title={`Open a new ${midSentence(labels.jobcard.one)}`} buttonClass={buttonVariants({ size: "sm" })}>
       <JobCardForm
         vehicles={vehicles.map((vehicle) => ({
           id: vehicle.id,
@@ -157,7 +160,7 @@ export default async function JobCardsPage({
       <WorkspaceHero
         icon={Wrench}
         eyebrow="Workshop operations"
-        title="Job cards"
+        title={labels.jobcard.many}
         description="Run every workshop job from vehicle intake through technician work, customer approval and service history."
         actions={newJobTrigger}
         stats={[
@@ -219,7 +222,7 @@ export default async function JobCardsPage({
         {filteredJobs.length === 0 ? (
           <EmptyState
             icon={Wrench}
-            title={noneYet ? "No job cards yet" : "No jobs matched this view"}
+            title={noneYet ? `No ${midSentence(labels.jobcard.many)} yet` : "No jobs matched this view"}
             description={noneYet ? "Open the first workshop job when a vehicle arrives." : "Try another status or a broader search."}
             action={noneYet ? newJobTrigger : <Link href="/jobcards" className={buttonVariants({ variant: "outline", size: "sm" })}>Clear filters</Link>}
             className="m-4"
@@ -234,13 +237,13 @@ export default async function JobCardsPage({
                   return (
                     <RecordContextMenu
                       key={job.id}
-                      label={`Job #${job.number}`}
+                      label={jobNumberLabel(labels, job.number)}
                       href={`/jobcards/${job.id}`}
                       actions={jobContextActions(job.id, job.vehicleId)}
                     >
                     <MobileDataCard>
                       <MobileDataHeader
-                        title={<Link href={`/jobcards/${job.id}`} className="text-primary hover:underline">Job #{job.number}</Link>}
+                        title={<Link href={`/jobcards/${job.id}`} className="text-primary hover:underline">{jobNumberLabel(labels, job.number)}</Link>}
                         detail={job.vehicle ? `${job.vehicle.model} · ${contactName(job.contact)}` : contactName(job.contact)}
                         aside={<StatusPill tone={sm.tone}>{sm.label}</StatusPill>}
                       />
@@ -285,7 +288,7 @@ export default async function JobCardsPage({
                       return (
                         <RecordContextMenu
                           key={job.id}
-                          label={`Job #${job.number}`}
+                          label={jobNumberLabel(labels, job.number)}
                           href={`/jobcards/${job.id}`}
                           actions={jobContextActions(job.id, job.vehicleId)}
                         >

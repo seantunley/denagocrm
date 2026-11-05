@@ -1,5 +1,5 @@
 import "server-only";
-import { getSetting } from "@/lib/settings";
+import { getProviderKey } from "@/lib/settings";
 import { recordAiUsage } from "@/lib/systemHealth";
 import { REASON_CODES, parseAiVerdict, type AiVerdict, type ScreeningPolicy } from "./rules";
 
@@ -64,7 +64,7 @@ export async function classifyInbound(input: ClassifyInput, policy: ScreeningPol
   const started = Date.now();
   const took = () => Date.now() - started;
   try {
-    const apiKey = await getSetting("ANTHROPIC_API_KEY");
+    const apiKey = await getProviderKey("ANTHROPIC_API_KEY");
     if (!apiKey) return { ok: false, failure: "not_configured", latencyMs: took() };
     const res = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
@@ -74,7 +74,7 @@ export async function classifyInbound(input: ClassifyInput, policy: ScreeningPol
     });
     if (!res.ok) return { ok: false, failure: "http_error", latencyMs: took() };
     const json = await res.json();
-    void recordAiUsage(json.usage);
+    await recordAiUsage(json.usage, json.model);
     const verdict = parseAiVerdict(String(json.content?.[0]?.text ?? ""));
     if (!verdict) return { ok: false, failure: "invalid_answer", latencyMs: took() };
     return { ok: true, verdict, inputTokens: json.usage?.input_tokens ?? null, outputTokens: json.usage?.output_tokens ?? null, latencyMs: took() };

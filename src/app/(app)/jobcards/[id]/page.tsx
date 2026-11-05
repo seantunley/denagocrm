@@ -74,6 +74,8 @@ import {
 } from "@/lib/workshop-constants";
 import { getDefaultLabourRateCents, effectiveLabourRateCents, totalLoggedHours, jobProfit } from "@/lib/workshop";
 import { hasPermission } from "@/lib/permissions";
+import { jobNumberLabel, midSentence } from "@/lib/recordLabels";
+import { getRecordLabels } from "@/lib/recordLabelsServer";
 import ChecklistCard from "@/components/checklists/ChecklistCard";
 import { runsForHost, templatesForHostRecord } from "@/lib/checklists/store";
 
@@ -134,6 +136,7 @@ export default async function JobCardDetailPage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
+  const labels = await getRecordLabels();
   const [jobCard, parts, users, bays, defaultRateCents] = await Promise.all([
     prisma.jobCard.findUnique({
       where: { id },
@@ -215,12 +218,12 @@ export default async function JobCardDetailPage({
 
   return (
     <div className="space-y-6">
-      <Link href="/jobcards" className="inline-flex items-center gap-1.5 text-xs font-medium text-muted-foreground hover:text-foreground"><ArrowLeft className="size-3.5" />Back to job cards</Link>
+      <Link href="/jobcards" className="inline-flex items-center gap-1.5 text-xs font-medium text-muted-foreground hover:text-foreground"><ArrowLeft className="size-3.5" />Back to {midSentence(labels.jobcard.many)}</Link>
 
       <div className="flex flex-col gap-5 xl:flex-row xl:items-start xl:justify-between">
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-3">
-            <h1 className="text-3xl font-semibold tracking-[-0.045em]">Job #{jobCard.number}</h1>
+            <h1 className="text-3xl font-semibold tracking-[-0.045em]">{jobNumberLabel(labels, jobCard.number)}</h1>
             <StatusPill tone={sm.tone}>{sm.label}</StatusPill>
             {jobCard.priority !== "normal" && <StatusPill tone={pm.tone}>{pm.label} priority</StatusPill>}
           </div>

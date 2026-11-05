@@ -2,7 +2,7 @@ import "server-only";
 import crypto from "crypto";
 import { z } from "zod";
 import { prisma } from "./db";
-import { getSetting } from "./settings";
+import { getProviderKey, getSetting } from "./settings";
 import { logError } from "./errorLog";
 import { recordAiUsage } from "./systemHealth";
 import { safeFetchText } from "./safeFetch";
@@ -144,7 +144,7 @@ async function aiClassifyChange(input: {
       }
       content = reply.text;
     } else {
-      const apiKey = await getSetting("ANTHROPIC_API_KEY");
+      const apiKey = await getProviderKey("ANTHROPIC_API_KEY");
       if (!apiKey) return null;
       const res = await fetch("https://api.anthropic.com/v1/messages", {
         method: "POST",
@@ -162,7 +162,7 @@ async function aiClassifyChange(input: {
         return null;
       }
       const json = await res.json();
-      void recordAiUsage(json.usage);
+      await recordAiUsage(json.usage, json.model);
       content = json.content?.[0]?.text ?? "{}";
     }
     const jsonText = content.match(/\{[\s\S]*\}/)?.[0] ?? "{}";
@@ -431,7 +431,7 @@ async function callWithWebSearch(opts: {
     }
     return { text: reply.text.trim(), citations: markdownCitations(reply.text), model: await codexModel(), inlineCitations: true };
   }
-  const apiKey = await getSetting("ANTHROPIC_API_KEY");
+  const apiKey = await getProviderKey("ANTHROPIC_API_KEY");
   if (!apiKey) return { error: "AI Assist is not configured (Settings → Integrations)." };
   try {
     const res = await fetch("https://api.anthropic.com/v1/messages", {
@@ -456,7 +456,7 @@ async function callWithWebSearch(opts: {
       return { error: `AI request failed (${res.status}).` };
     }
     const json = await res.json();
-    void recordAiUsage(json.usage);
+    await recordAiUsage(json.usage, json.model);
     const blocks: Array<Record<string, unknown>> = Array.isArray(json.content) ? json.content : [];
     const text = blocks
       .filter((b) => b.type === "text")

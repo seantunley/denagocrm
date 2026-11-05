@@ -9,6 +9,7 @@ import { requireRoute, getAccessibleLeadIds } from "@/lib/permissions";
 import { formatDateTime } from "@/lib/format";
 import JourneyBuilder, { type JourneyBuilderDefaults } from "@/components/JourneyBuilder";
 import JourneyTestRun from "@/components/JourneyTestRun";
+import JourneyDryRun from "@/components/JourneyDryRun";
 import { parseRunMode } from "@/lib/journeyArbitration";
 import { JOURNEY_RUN_MODE_COPY } from "@/lib/journeyRunModes";
 import {
@@ -253,6 +254,10 @@ export default async function JourneysPage() {
                       an event one still has a sweep to run. */}
                   {journey.status === "active" && readJourneyTriggers(published?.triggers).some((spec) => isScheduledTrigger(spec.type)) && (
                     <form action={runJourneyNowAction.bind(null, journey.id)}><button className="btn-secondary btn-sm">Enroll now</button></form>
+                  )}
+                  {/* Dry run: sends nothing, so it is offered for drafts too — before anything is published. */}
+                  {journey.versions.length > 0 && (
+                    <JourneyDryRun journeyId={journey.id} journeyName={journey.name} leads={leadOptions} />
                   )}
                   {/* Offered as soon as there is something published to run.
                       Not gated on `active`: the action refuses a paused journey
