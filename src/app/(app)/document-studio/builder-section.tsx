@@ -295,7 +295,7 @@ export default async function BuilderSection({
               <optgroup label="Job cards">
                 {jobCards.map((jobCard) => (
                   <option key={jobCard.id} value={`jobcard:${jobCard.id}`}>
-                    Job #{jobCard.number} — {contactName(jobCard.contact)} — {jobCard.vehicle.model}
+                    Job #{jobCard.number} — {contactName(jobCard.contact)}{jobCard.vehicle ? ` — ${jobCard.vehicle.model}` : ""}
                   </option>
                 ))}
               </optgroup>

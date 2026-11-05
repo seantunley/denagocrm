@@ -250,7 +250,7 @@ export default function QuickCreateDialog() {
               <ContactForm action={createQuickContact} users={currentOptions.users} fleetPicker={currentOptions.fleetPicker} submitLabel="Create contact" variant="dialog" />
             )}
 
-            {kind === "jobcard" && <JobCardForm vehicles={currentOptions.vehicles} defaultVehicleId={createDefaults.vehicleId} />}
+            {kind === "jobcard" && <JobCardForm vehicles={currentOptions.vehicles} contacts={currentOptions.contacts} defaultVehicleId={createDefaults.vehicleId} />}
 
             {kind === "vehicle" && (
               <VehicleForm

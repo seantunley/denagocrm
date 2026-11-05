@@ -32,6 +32,7 @@ import ListPager from "@/components/ListPager";
 
 const TERMINAL_STAGES = STAGES.filter((stage) => stage.terminal).map((stage) => stage.value);
 import {
+  getAccessibleContactIds,
   getAccessibleJobCardIds,
   getAccessibleVehicleIds,
   hasPermission,
@@ -58,9 +59,10 @@ export default async function JobCardsPage({
   const params = await searchParams;
   const { status: requestedStatus = "all", q = "" } = params;
   const activeStatus = FILTERS.some((filter) => filter.value === requestedStatus) ? requestedStatus : "all";
-  const [jobCardIds, vehicleIds, canManage] = await Promise.all([
+  const [jobCardIds, vehicleIds, contactIds, canManage] = await Promise.all([
     getAccessibleJobCardIds(user),
     getAccessibleVehicleIds(user),
+    getAccessibleContactIds(user),
     hasPermission(user, "jobcards.manage"),
   ]);
   // Status and search run in the database over every accessible job card, not
@@ -91,7 +93,7 @@ export default async function JobCardsPage({
   };
   const total = await prisma.jobCard.count({ where });
   const { page, skip, take } = pageWindow(parsePage(params.page), total);
-  const [jobCards, active, vehicles] = await Promise.all([
+  const [jobCards, active, vehicles, contacts] = await Promise.all([
     prisma.jobCard.findMany({
       where,
       orderBy: [{ openedAt: "desc" }, { id: "desc" }],
@@ -112,6 +114,10 @@ export default async function JobCardsPage({
           orderBy: { createdAt: "desc" },
           take: 500,
         })
+      : Promise.resolve([]),
+    // For a job with no vehicle.
+    canManage
+      ? prisma.contact.findMany({ where: contactIds === null ? {} : { id: { in: contactIds } }, orderBy: { firstName: "asc" }, take: 500 })
       : Promise.resolve([]),
   ]);
 
@@ -141,6 +147,7 @@ export default async function JobCardsPage({
           id: vehicle.id,
           label: `${vehicle.model}${vehicle.regNumber ? ` · ${vehicle.regNumber}` : vehicle.vin ? ` · ${vehicle.vin}` : ""} — ${contactName(vehicle.contact)}`,
         }))}
+        contacts={contacts.map((contact) => ({ id: contact.id, label: contactName(contact) }))}
       />
     </ModalTrigger>
   ) : null;
@@ -234,7 +241,7 @@ export default async function JobCardsPage({
                     <MobileDataCard>
                       <MobileDataHeader
                         title={<Link href={`/jobcards/${job.id}`} className="text-primary hover:underline">Job #{job.number}</Link>}
-                        detail={`${job.vehicle.model} · ${contactName(job.contact)}`}
+                        detail={job.vehicle ? `${job.vehicle.model} · ${contactName(job.contact)}` : contactName(job.contact)}
                         aside={<StatusPill tone={sm.tone}>{sm.label}</StatusPill>}
                       />
                       <MobileDataFields>
@@ -261,7 +268,7 @@ export default async function JobCardsPage({
                   <thead>
                     <tr className="border-b border-border bg-muted/20 text-left text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
                       <th className="px-5 py-3 font-semibold">Job</th>
-                      <th className="px-4 py-3 font-semibold">Vehicle &amp; customer</th>
+                      <th className="px-4 py-3 font-semibold">Vehicle / customer</th>
                       <th className="px-4 py-3 font-semibold">Technician</th>
                       <th className="px-4 py-3 font-semibold">Bay</th>
                       <th className="px-4 py-3 text-right font-semibold">Estimate</th>
@@ -288,8 +295,14 @@ export default async function JobCardsPage({
                             <p className="mt-1 max-w-xs truncate text-xs text-muted-foreground">{job.description}</p>
                           </td>
                           <td className="px-4 py-4">
-                            <Link href={`/vehicles/${job.vehicleId}`} className="font-medium text-foreground hover:text-primary">{job.vehicle.model}</Link>
-                            <p className="mt-1 text-xs text-muted-foreground">{contactName(job.contact)}{job.vehicle.regNumber ? ` · ${job.vehicle.regNumber}` : ""}</p>
+                            {job.vehicle ? (
+                              <Link href={`/vehicles/${job.vehicle.id}`} className="font-medium text-foreground hover:text-primary">{job.vehicle.model}</Link>
+                            ) : (
+                              <Link href={`/contacts/${job.contactId}`} className="font-medium text-foreground hover:text-primary">{contactName(job.contact)}</Link>
+                            )}
+                            <p className="mt-1 text-xs text-muted-foreground">
+                              {job.vehicle ? `${contactName(job.contact)}${job.vehicle.regNumber ? ` · ${job.vehicle.regNumber}` : ""}` : "No vehicle"}
+                            </p>
                           </td>
                           <td className="px-4 py-4 text-muted-foreground">{job.technician?.name ?? "Unassigned"}</td>
                           <td className="px-4 py-4 text-muted-foreground">
@@ -322,9 +335,9 @@ export default async function JobCardsPage({
   );
 }
 
-function jobContextActions(jobId: string, vehicleId: string): RecordContextAction[] {
+function jobContextActions(jobId: string, vehicleId: string | null): RecordContextAction[] {
   return [
-    { label: "Open vehicle", href: `/vehicles/${vehicleId}`, icon: "car" },
+    ...(vehicleId ? [{ label: "Open vehicle", href: `/vehicles/${vehicleId}`, icon: "car" as const }] : []),
     { label: "Print job card", href: `/jobcards/${jobId}/print`, icon: "print", newTab: true },
   ];
 }

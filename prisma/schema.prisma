@@ -2124,8 +2124,9 @@ model JobCard {
   signedPdfHash   String?
   viewedAt        DateTime?
 
-  vehicleId String
-  vehicle   Vehicle @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
+  // Optional (2026-11-05): a business that isn't a vehicle workshop opens jobs for a customer alone.
+  vehicleId String?
+  vehicle   Vehicle? @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
   contactId String
   contact   Contact @relation(fields: [contactId], references: [id], onDelete: Cascade)
   technicianId String?

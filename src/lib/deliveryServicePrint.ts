@@ -263,7 +263,7 @@ export async function renderServiceReportHtml(opts: {
     completedAt: jobCard.completedAt,
     technician: sr?.performedBy?.name ?? null,
     km: sr?.km ?? null,
-    vin: jobCard.vehicle.vin,
+    vin: jobCard.vehicle?.vin ?? null,
     summary: sr?.summary ?? null,
     details: sr?.details ?? null,
     nextDueDate: sr?.nextDueDate ?? null,

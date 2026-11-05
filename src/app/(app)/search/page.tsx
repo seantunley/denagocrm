@@ -238,7 +238,7 @@ export default async function SearchPage({
       )}
       {automotiveOn && (
         <Section title="Job cards" count={jobCards.length}>
-          {jobCards.map((item) => <li key={item.id} className="py-2"><Link href={`/jobcards/${item.id}`} className="text-orange-400 hover:underline font-medium">#{item.number}</Link><span className="text-xs text-slate-400 ml-2">{item.vehicle.model} · {contactName(item.contact)} · {item.description.slice(0, 60)}</span></li>)}
+          {jobCards.map((item) => <li key={item.id} className="py-2"><Link href={`/jobcards/${item.id}`} className="text-orange-400 hover:underline font-medium">#{item.number}</Link><span className="text-xs text-slate-400 ml-2">{item.vehicle ? `${item.vehicle.model} · ` : ""}{contactName(item.contact)} · {item.description.slice(0, 60)}</span></li>)}
         </Section>
       )}
       <Section title="Quotes" count={quotes.length}>

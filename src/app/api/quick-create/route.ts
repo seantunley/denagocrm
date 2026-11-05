@@ -81,7 +81,7 @@ export async function GET(request: Request) {
     hasPermission(user, "jobcards.manage"),
     hasAnyPermission(user, "vehicles.view_all", "vehicles.view_owned"),
     hasPermission(user, "activities.manage"),
-    !kind || ["lead", "vehicle", "calendar"].includes(kind)
+    !kind || ["lead", "vehicle", "calendar", "jobcard"].includes(kind)
       ? getAccessibleContactIds(user)
       : Promise.resolve([]),
     !kind || kind === "jobcard"
@@ -106,7 +106,8 @@ export async function GET(request: Request) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
-  const needsContacts = canCreateLead || canCreateQuote || canManageVehicles || (canScheduleActivity && kind !== "availability");
+  // Job cards too: a job can be for a customer with no vehicle.
+  const needsContacts = canCreateLead || canCreateQuote || canManageVehicles || canManageJobcards || (canScheduleActivity && kind !== "availability");
   const needsProducts = canCreateLead || canCreateQuote || canManageVehicles;
   const needsUsers = canCreateLead || canCreateContact || canScheduleActivity;
   const needsVehicles = canManageJobcards;
