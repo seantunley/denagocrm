@@ -97,6 +97,7 @@ export function buildNav(
   if (can("fleets.view", "fleets.manage")) crmLinks.push({ href: "/fleets", label: "Fleets", icon: Building2 });
   if (can("activities.view", "activities.manage")) crmLinks.push({ href: "/activities", label: "Activities", icon: ListChecks });
   if (can("contacts.view_all", "contacts.view_owned")) crmLinks.push({ href: "/health", label: "Customer Health", icon: HeartPulse });
+  if (can("contacts.view_all", "contacts.view_owned")) crmLinks.push({ href: "/data-quality", label: "Data quality", icon: ShieldCheck, keywords: ["duplicates", "missing details", "data quality", "clean up"] });
   // One entry for Documents and the Library merged into it. The page opens
   // library-only access straight on the Library, the only part it can see.
   if (can("documents.view_all", "documents.view_owned", "documents.upload", "documents.manage", "document_templates.manage", "library.view", "library.manage")) {
