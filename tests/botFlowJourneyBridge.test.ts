@@ -103,7 +103,8 @@ test("AI draft generation may use only an explicit active Journey allow-list", (
   assert.match(ai, /ACTIVE JOURNEYS — the ONLY journeyId values you may use/);
   assert.match(ai, /allowedJourneyIds/);
   assert.match(ai, /journey\.ai_unapproved/);
-  assert.match(ai, /Do not invent email\/SMS\/webhook\/code\/wait nodes/);
+  assert.match(ai, /Do not invent email\/SMS\/code nodes/);
+  assert.match(ai, /Long waits, scheduled messages, drips and delayed follow-ups belong in an existing Journey/);
 });
 
 test("simulator mocks Journey enrolment and never invokes the Journey engine", () => {

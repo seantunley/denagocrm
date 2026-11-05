@@ -15,12 +15,26 @@ export type BuilderStep = {
   /** Whether this step runs. Round-tripped: a step silently re-armed by a save is a message nobody asked for. */
   enabled?: boolean;
   config: Record<string, unknown>;
+  /** As saved (builderSteps keeps it); builderDefinition re-derives it from the order. */
+  nextStepId?: string | null;
 };
 
 export const isRecord = (value: unknown): value is Record<string, unknown> =>
   Boolean(value) && typeof value === "object" && !Array.isArray(value);
 
 export const generatedStopId = (conditionId: string) => `${conditionId}_false_stop`;
+
+/**
+ * A top-level condition saved with its own jump targets, kept exactly as saved: a No that isn't the generated stop,
+ * or a Yes that isn't the step that followed it when saved (a custom Yes with the generated No stop). The builder's
+ * own condition — Yes carries on, No stops — has neither, and its Yes is re-derived on save so a reorder carries it.
+ */
+export function conditionHasOwnTargets(step: BuilderStep): boolean {
+  if (step.type !== "condition") return false;
+  const { trueStepId, falseStepId } = step.config;
+  if (!trueStepId && !falseStepId) return false;
+  return falseStepId !== generatedStopId(step.id) || (trueStepId ?? null) !== (step.nextStepId ?? null);
+}
 
 export type ConditionGroup = { logic?: string; conditions: unknown[] };
 export const emptyGroup = (): ConditionGroup => ({ logic: "and", conditions: [{ field: "lead.source", operator: "equals", value: "" }] });
@@ -68,15 +82,31 @@ function sequence(steps: unknown[]): unknown[] {
   });
 }
 
+/**
+ * A saved definition → the builder's steps (list editor and canvas alike): the saved steps minus the stops the builder
+ * generated. Every step keeps ALL it carries — its name, its nested sequences, a condition's own branch targets, a type
+ * this build doesn't know — because the editors change only the keys they own and the rest is saved exactly as it was.
+ */
+export function builderSteps(definition?: { steps?: BuilderStep[] } | null): BuilderStep[] {
+  const existing = (definition?.steps ?? []).filter((step) => step.config?.systemGenerated !== true);
+  if (existing.length === 0) {
+    return [{ id: "step_1", type: "create_activity", config: { activityType: "call", dueDays: 0 } }];
+  }
+  return existing.map((step) => ({ ...step, config: { ...step.config } }));
+}
+
 export function builderDefinition(steps: BuilderStep[]) {
   const stops: BuilderStep[] = [];
   const mapped = steps.map((step, index) => {
     const nextStepId = steps[index + 1]?.id ?? null;
     const config = withNested(step.config);
     if (step.type !== "condition") return { ...step, nextStepId, config };
-    const custom = Boolean(config.trueStepId || config.falseStepId) && config.falseStepId !== generatedStopId(step.id);
+    const custom = conditionHasOwnTargets(step);
+    // builderSteps dropped the generated stop; a custom Yes may still have the generated No, so it comes back too.
+    if (!custom || config.falseStepId === generatedStopId(step.id)) {
+      stops.push({ id: generatedStopId(step.id), type: "stop", config: { reason: "Condition did not match", systemGenerated: true } });
+    }
     if (custom) return { ...step, nextStepId, config };
-    stops.push({ id: generatedStopId(step.id), type: "stop", config: { reason: "Condition did not match", systemGenerated: true } });
     return { ...step, nextStepId, config: { ...config, trueStepId: nextStepId, falseStepId: generatedStopId(step.id) } };
   });
   return { startStepId: steps[0]?.id ?? null, steps: [...mapped, ...stops.map((stop) => ({ ...stop, nextStepId: null }))] };

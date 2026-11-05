@@ -40,10 +40,12 @@ test("applying an AI proposal cannot overwrite a human save that lands concurren
 test("generated graphs are fenced to existing deterministic node capabilities", () => {
   const code = src("src/lib/flowAiDraft.ts");
   assert.match(code, /Use only the allowed node types\/actions/);
-  // The fence has since grown to bar wait nodes and to name Journey enrolment as
-  // the one extra CRM write path, so both rules are matched around those additions.
-  assert.match(code, /Do not invent email\/SMS\/webhook\/code(\/wait)? nodes/);
-  assert.match(code, /CRM writes happen only through booking\(service\|demo\|lead\|cancel\), slots\(book\|reschedule\)(, and explicit journey enrolment)?\. booking\(lookup\) is read-only/);
+  // The fence names every CRM write path. Waits (delay) and API calls (http, saved connections only) are real steps
+  // now, so they are allowed — and fenced in lib/flowAiNodes (tests/flowAiNodes.test.ts).
+  assert.match(code, /Do not invent email\/SMS\/code nodes/);
+  assert.match(code, /CRM writes happen only through booking\(service\|demo\|lead\|cancel\), slots\(book\|reschedule\), crm\(tag\|assign\|stage\), and explicit journey enrolment\. booking\(lookup\) is read-only/);
+  assert.match(code, /An http step calls ONLY a listed connection/);
+  assert.match(code, /aiDraftIssues\(flow, previousFlow\(input\.currentDefinition\), input\.refs\)/);
   assert.match(code, /Use handoff when the requested action is unsupported/);
 });
 
@@ -68,5 +70,5 @@ test("proposal application revalidates the graph and external references", () =>
 test("the AI node contract includes every fallible outcome route", () => {
   const generator = src("src/lib/flowAiDraft.ts");
   for (const field of ["failureText", "failureNext", "unavailableNext", "booking_identity"]) assert.match(generator, new RegExp(field));
-  assert.match(generator, /Every fallible booking, slots or journey action needs an honest failure route/);
+  assert.match(generator, /Every fallible booking, slots, journey, crm, http, extract or subflow action needs an honest failure route/);
 });

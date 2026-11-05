@@ -9,8 +9,9 @@ import { JOURNEY_EVENT_TRIGGERS, JOURNEY_LIMITS, JOURNEY_STEP_LABELS, JOURNEY_TR
 import { JOURNEY_TRIGGER_LABELS, type JourneyTriggerSpec } from "@/lib/journeyTriggers";
 import { BuilderSaveStatus, BuilderWorkspaceBar, BuilderWorkspaceShell } from "@/components/builder-workspace";
 import { JOURNEY_RUN_MODES, RUN_MODE_LEGACY_NOTE } from "@/lib/journeyRunModes";
-import { builderDefinition, emptyGroup, generatedStopId, initialConfig, isRecord, newWaitStep, type BuilderStep } from "@/lib/journeyBuilderDefinition";
+import { builderDefinition, builderSteps, conditionHasOwnTargets, emptyGroup, generatedStopId, initialConfig, isRecord, newWaitStep, type BuilderStep } from "@/lib/journeyBuilderDefinition";
 import JourneyConditionGroupEditor from "@/components/JourneyConditionGroupEditor";
+import JourneyCanvas from "@/components/JourneyCanvas";
 import ConfirmActionDialog from "@/components/ConfirmActionDialog";
 
 export type JourneyOption = { id: string; name: string };
@@ -48,18 +49,6 @@ export type JourneyBuilderDefaults = {
 // a new step type is a compile error until it is given a name here.
 const stepLabels: Record<string, string> = JOURNEY_STEP_LABELS;
 
-function cleanSteps(defaults?: JourneyBuilderDefaults["definition"]): BuilderStep[] {
-  const existing = (defaults?.steps ?? []).filter(
-    (step) => step.config?.systemGenerated !== true
-  );
-  if (existing.length === 0) {
-    return [{ id: "step_1", type: "create_activity", config: { activityType: "call", dueDays: 0 } }];
-  }
-  // Every step keeps its whole config: the editors below change only the keys they own, so anything else a step
-  // carries (its nested sequences, a condition's own branch targets) is saved exactly as it was.
-  return existing.map((step) => ({ id: step.id, type: step.type, continueOnError: step.continueOnError, enabled: step.enabled, config: { ...step.config } }));
-}
-
 type Lists = { stages: JourneyOption[]; users: JourneyOption[]; templates: JourneyOption[]; tags: JourneyOption[] };
 
 export default function JourneyBuilder({
@@ -95,7 +84,9 @@ export default function JourneyBuilder({
   const [minValueRands, setMinValueRands] = useState(
     defaults.minValueRands == null ? "" : String(defaults.minValueRands)
   );
-  const [steps, setSteps] = useState<BuilderStep[]>(cleanSteps(defaults.definition));
+  const [steps, setSteps] = useState<BuilderStep[]>(() => builderSteps(defaults.definition));
+  // Both views edit the SAME steps, and saving goes through builderDefinition either way.
+  const [view, setView] = useState<"canvas" | "list">("canvas");
 
   /**
    * Edit ONE trigger in place. Everything else in the list is left untouched —
@@ -332,8 +323,39 @@ export default function JourneyBuilder({
       </details>
 
       <div className="space-y-3">
-        <h3 className="font-semibold">4. Journey steps</h3>
-        <StepList steps={steps} onChange={setSteps} depth={0} lists={lists} />
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h3 className="font-semibold">4. Journey steps</h3>
+          <div className="flex rounded-lg border border-slate-800 p-0.5 text-xs" role="group" aria-label="How to show the steps">
+            {(["canvas", "list"] as const).map((option) => (
+              <button
+                key={option}
+                type="button"
+                aria-pressed={view === option}
+                onClick={() => setView(option)}
+                className={`rounded-md px-3 py-1.5 ${view === option ? "bg-primary/15 text-orange-200" : "text-slate-400 hover:text-slate-200"}`}
+              >
+                {option === "canvas" ? "Canvas" : "List"}
+              </button>
+            ))}
+          </div>
+        </div>
+        {view === "canvas" ? (
+          <JourneyCanvas
+            steps={steps}
+            onChange={setSteps}
+            saveButton={<SaveButton className="btn-primary btn-sm">{submitLabel}</SaveButton>}
+            renderEditor={(step, depth, onStepChange) => (
+              <div className="space-y-3">
+                <StepTypeSelect step={step} depth={depth} onChange={onStepChange} />
+                {/* Nested steps are cards on the canvas, so the inspector edits this step only. */}
+                <StepFields step={step} onChange={onStepChange} depth={depth} lists={lists} hideNested />
+                <StepToggles step={step} onChange={onStepChange} />
+              </div>
+            )}
+          />
+        ) : (
+          <StepList steps={steps} onChange={setSteps} depth={0} lists={lists} />
+        )}
       </div>
 
         </div>
@@ -348,9 +370,6 @@ export default function JourneyBuilder({
  */
 function StepList({ steps, onChange, depth, lists }: { steps: BuilderStep[]; onChange: (steps: BuilderStep[]) => void; depth: number; lists: Lists }) {
   const put = (index: number, step: BuilderStep) => onChange(steps.map((s, i) => (i === index ? step : s)));
-  // A container's config IS its branches — a stray pick in the type list would delete them with no undo, so ask first.
-  const [retype, setRetype] = useState<{ index: number; type: string } | null>(null);
-  const changeType = (index: number, type: string) => put(index, { ...steps[index], type, config: initialConfig(type) });
   const move = (index: number, direction: -1 | 1) => {
     const target = index + direction;
     if (target < 0 || target >= steps.length) return;
@@ -366,41 +385,41 @@ function StepList({ steps, onChange, depth, lists }: { steps: BuilderStep[]; onC
             <span className="badge bg-slate-800 text-slate-300">{index + 1}</span>
             {/* A muted step still occupies its place in the sequence, so the list has to show which one is off. */}
             {step.enabled === false && <span className="badge bg-amber-500/15 text-amber-300">Off</span>}
-            <select
-              className="input flex-1"
-              aria-label="Step type"
-              value={step.type}
-              onChange={(e) => (CONTAINERS.has(step.type) ? setRetype({ index, type: e.target.value }) : changeType(index, e.target.value))}
-            >
-              {Object.entries(stepLabels)
-                // Containers nest; the parser stops at its depth limit (JOURNEY_LIMITS.depth, counted from 1).
-                .filter(([value]) => !CONTAINERS.has(value) || value === step.type || depth + 1 < JOURNEY_LIMITS.depth)
-                .map(([value, label]) => <option key={value} value={value}>{label}</option>)}
-            </select>
+            <StepTypeSelect step={step} depth={depth} onChange={(next) => put(index, next)} />
             <button type="button" className="btn-secondary btn-sm" onClick={() => move(index, -1)}>↑</button>
             <button type="button" className="btn-secondary btn-sm" onClick={() => move(index, 1)}>↓</button>
             <button type="button" className="text-red-400 text-sm disabled:opacity-40" disabled={depth > 0 && steps.length === 1} title={depth > 0 && steps.length === 1 ? "A branch needs at least one step" : undefined} onClick={() => onChange(steps.filter((_, i) => i !== index))}>Remove</button>
           </div>
 
           <StepFields step={step} onChange={(next) => put(index, next)} depth={depth} lists={lists} />
-
-          {/* Offered for EVERY step type — muting a branch is exactly when you need it, and the alternative is deleting
-              it and losing its config, its id and its trace history. A disabled step is skipped and RECORDED as skipped. */}
-          <label className="flex items-center gap-2 text-xs text-slate-400">
-            <input type="checkbox" checked={step.enabled !== false} onChange={(e) => put(index, { ...step, enabled: e.target.checked })} />
-            Step is on
-          </label>
-          {/* Per step, because only the author knows which of their steps is load-bearing. One failed SMS used to fail
-              the whole run and burn one of its three attempts. */}
-          {!NO_CONTINUE_ON_ERROR.has(step.type) && (
-            <label className="flex items-center gap-2 text-xs text-slate-400">
-              <input type="checkbox" checked={step.continueOnError === true} onChange={(e) => put(index, { ...step, continueOnError: e.target.checked })} />
-              Keep going if this step fails
-            </label>
-          )}
+          <StepToggles step={step} onChange={(next) => put(index, next)} />
         </div>
       ))}
       <button type="button" className="btn-secondary btn-sm" onClick={() => onChange([...steps, newWaitStep()])}>+ Add step{depth ? " here" : ""}</button>
+    </div>
+  );
+}
+
+/** A step's type. Shared by the list and the canvas inspector. */
+function StepTypeSelect({ step, depth, onChange }: { step: BuilderStep; depth: number; onChange: (step: BuilderStep) => void }) {
+  // A container's config IS its branches — a stray pick in the type list would delete them with no undo, so ask first.
+  const [retype, setRetype] = useState<string | null>(null);
+  const changeType = (type: string) => onChange({ ...step, type, config: initialConfig(type) });
+  return (
+    <>
+      <select
+        className="input flex-1"
+        aria-label="Step type"
+        value={step.type}
+        onChange={(e) => (CONTAINERS.has(step.type) ? setRetype(e.target.value) : changeType(e.target.value))}
+      >
+        {/* A type this build doesn't know is shown as itself, not as whichever option happens to be first. */}
+        {!(step.type in stepLabels) && <option value={step.type}>{step.type} (not available)</option>}
+        {Object.entries(stepLabels)
+          // Containers nest; the parser stops at its depth limit (JOURNEY_LIMITS.depth, counted from 1).
+          .filter(([value]) => !CONTAINERS.has(value) || value === step.type || depth + 1 < JOURNEY_LIMITS.depth)
+          .map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+      </select>
       <ConfirmActionDialog
         destructive
         open={retype !== null}
@@ -408,9 +427,30 @@ function StepList({ steps, onChange, depth, lists }: { steps: BuilderStep[]; onC
         title="Change this step's type?"
         description="Its branches and every step inside them are removed."
         confirmLabel="Change type"
-        onConfirm={() => { if (retype) changeType(retype.index, retype.type); setRetype(null); }}
+        onConfirm={() => { if (retype) changeType(retype); setRetype(null); }}
       />
-    </div>
+    </>
+  );
+}
+
+function StepToggles({ step, onChange }: { step: BuilderStep; onChange: (step: BuilderStep) => void }) {
+  return (
+    <>
+      {/* Offered for EVERY step type — muting a branch is exactly when you need it, and the alternative is deleting
+          it and losing its config, its id and its trace history. A disabled step is skipped and RECORDED as skipped. */}
+      <label className="flex items-center gap-2 text-xs text-slate-400">
+        <input type="checkbox" checked={step.enabled !== false} onChange={(e) => onChange({ ...step, enabled: e.target.checked })} />
+        Step is on
+      </label>
+      {/* Per step, because only the author knows which of their steps is load-bearing. One failed SMS used to fail
+          the whole run and burn one of its three attempts. */}
+      {!NO_CONTINUE_ON_ERROR.has(step.type) && (
+        <label className="flex items-center gap-2 text-xs text-slate-400">
+          <input type="checkbox" checked={step.continueOnError === true} onChange={(e) => onChange({ ...step, continueOnError: e.target.checked })} />
+          Keep going if this step fails
+        </label>
+      )}
+    </>
   );
 }
 
@@ -427,7 +467,8 @@ function TimeoutField({ minutes, onChange }: { minutes: number; onChange: (minut
   );
 }
 
-function StepFields({ step, onChange, depth, lists }: { step: BuilderStep; onChange: (step: BuilderStep) => void; depth: number; lists: Lists }) {
+/** `hideNested`: a Choose's branches and a Repeat's loop are left out — the canvas shows those steps as cards. */
+function StepFields({ step, onChange, depth, lists, hideNested = false }: { step: BuilderStep; onChange: (step: BuilderStep) => void; depth: number; lists: Lists; hideNested?: boolean }) {
   const { config } = step;
   const set = (key: string, value: unknown) => onChange({ ...step, config: { ...config, [key]: value } });
   const timeout = Number(config.timeoutMinutes) || 1440;
@@ -556,13 +597,14 @@ function StepFields({ step, onChange, depth, lists }: { step: BuilderStep; onCha
 
     case "condition": {
       // A condition authored with its own jump targets keeps them; the builder's own pattern is "carry on, or stop".
-      const ownTargets = depth === 0 && Boolean(config.trueStepId || config.falseStepId) && config.falseStepId !== generatedStopId(step.id);
+      const ownTargets = depth === 0 && conditionHasOwnTargets(step);
+      const others = config.falseStepId === generatedStopId(step.id) ? "others stop here" : `others go to ${String(config.falseStepId || "the next step")}`;
       return (
         <div className="space-y-2">
           <JourneyConditionGroupEditor value={config.condition} onChange={(group) => set("condition", group)} />
           <p className="text-xs text-slate-500">
             {ownTargets
-              ? `Matching customers go to ${String(config.trueStepId || "the next step")}; others go to ${String(config.falseStepId || "the next step")} (set when this journey was written — kept as saved).`
+              ? `Matching customers go to ${String(config.trueStepId || "the next step")}; ${others} (set when this journey was written — kept as saved).`
               : "Matching customers carry on. Others stop here."}
           </p>
         </div>
@@ -637,8 +679,10 @@ function StepFields({ step, onChange, depth, lists }: { step: BuilderStep; onCha
               ) : (
                 <JourneyConditionGroupEditor value={option.conditions} onChange={(group) => setOption(i, { ...option, conditions: group })} />
               )}
-              <p className="text-xs text-slate-400">Then:</p>
-              <StepList steps={Array.isArray(option.sequence) ? (option.sequence as BuilderStep[]) : []} onChange={(seq) => setOption(i, { ...option, sequence: seq })} depth={depth + 1} lists={lists} />
+              {!hideNested && <>
+                <p className="text-xs text-slate-400">Then:</p>
+                <StepList steps={Array.isArray(option.sequence) ? (option.sequence as BuilderStep[]) : []} onChange={(seq) => setOption(i, { ...option, sequence: seq })} depth={depth + 1} lists={lists} />
+              </>}
             </div>
           ))}
           {options.length < JOURNEY_LIMITS.chooseOptions && (
@@ -652,7 +696,7 @@ function StepFields({ step, onChange, depth, lists }: { step: BuilderStep; onCha
             }} />
             If no branch matches, run other steps (otherwise carry on below)
           </label>
-          {fallback && <StepList steps={fallback} onChange={(seq) => set("default", seq)} depth={depth + 1} lists={lists} />}
+          {fallback && !hideNested && <StepList steps={fallback} onChange={(seq) => set("default", seq)} depth={depth + 1} lists={lists} />}
         </div>
       );
     }
@@ -676,8 +720,10 @@ function StepFields({ step, onChange, depth, lists }: { step: BuilderStep; onCha
             <input className="input" aria-label="List to go through" placeholder="e.g. contact.tags" value={String(config.itemsPath ?? "")} onChange={(e) => set("itemsPath", e.target.value.trim())} />
           ))}
           <p className="text-xs text-slate-500">Stops after {JOURNEY_LIMITS.repeatIterations} rounds whatever happens. Inside the loop, conditions can use “Loop: round number” and “Loop: current item”.</p>
-          <p className="text-xs text-slate-400">Each round:</p>
-          <StepList steps={Array.isArray(config.sequence) ? (config.sequence as BuilderStep[]) : []} onChange={(seq) => set("sequence", seq)} depth={depth + 1} lists={lists} />
+          {!hideNested && <>
+            <p className="text-xs text-slate-400">Each round:</p>
+            <StepList steps={Array.isArray(config.sequence) ? (config.sequence as BuilderStep[]) : []} onChange={(seq) => set("sequence", seq)} depth={depth + 1} lists={lists} />
+          </>}
         </div>
       );
     }

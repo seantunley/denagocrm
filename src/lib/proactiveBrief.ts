@@ -17,6 +17,9 @@ import {
   briefHoldsUntil,
   briefPersonKey,
   briefQuestion,
+  chatbotProblemsFact,
+  chatbotProblemsKey,
+  chatbotProblemsOn,
   mondayStuckKey,
   parseBriefAt,
   proactiveOn,
@@ -110,6 +113,24 @@ export async function runMorningBriefs(tenantId: string, budget: Pick<CronSliceC
   return { written: results.filter(Boolean).length };
 }
 
+/**
+ * The chatbot's failed steps in the last 24 hours (PR #995's `chatbot-step` System Log entries), for the brief of the
+ * one person who can open that log — the workspace's owner (as isTenantOwner decides it, by the Tenant row) — unless
+ * they switched it off. Null otherwise, or when nothing failed.
+ */
+async function chatbotProblemsFor(tenantId: string, user: { id: string; role?: string | null }, now: Date): Promise<string | null> {
+  const owner = user.role === "owner"
+    || (await basePrisma.tenant.findUnique({ where: { id: tenantId }, select: { ownerUserId: true } }))?.ownerUserId === user.id;
+  if (!owner || !chatbotProblemsOn(await setting(tenantId, chatbotProblemsKey(user.id)))) return null;
+  const where = { tenantId, scope: "chatbot-step", createdAt: { gte: new Date(now.getTime() - 24 * 3600_000) } };
+  // An exact total, and the commonest reasons counted in the database — right however big the outage.
+  const [total, commonest] = await Promise.all([
+    basePrisma.errorLog.count({ where }),
+    basePrisma.errorLog.groupBy({ by: ["message"], where, _count: { message: true }, orderBy: { _count: { message: "desc" } }, take: 3 }),
+  ]);
+  return chatbotProblemsFact(total, commonest.map((row) => ({ message: row.message, n: row._count.message })));
+}
+
 async function writeBrief(tenantId: string, userId: string, claimId: string, now: Date, budget: Pick<CronSliceContext, "shouldStop">): Promise<boolean> {
   if (!(await switchedOn(tenantId, userId))) return false;
   const user = await assistantUserFor(userId);
@@ -127,7 +148,8 @@ async function writeBrief(tenantId: string, userId: string, claimId: string, now
   await dropAlerts(tenantId, waiting.filter((_, i) => !allowed[i]).map((alert) => alert.id));
   const held = waiting.filter((_, i) => allowed[i]);
   const mondayStuck = proactiveOn(await setting(tenantId, mondayStuckKey(userId)));
-  const result = await askCrm(user, briefQuestion(now, held.map((alert) => alert.text), { mondayStuck }), null, { source: "schedule" });
+  const chatbotProblems = await chatbotProblemsFor(tenantId, user, now);
+  const result = await askCrm(user, briefQuestion(now, held.map((alert) => alert.text), { mondayStuck, chatbotProblems }), null, { source: "schedule" });
   if (!result.ok || !result.turnId) return false; // retried next tick; past 11:00 the held alerts go on their own
   const turnId = result.turnId;
   // Done, in one step: labelled as the brief (not a scheduled question), the day marked written, and the held
