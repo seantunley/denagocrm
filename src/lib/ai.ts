@@ -1,4 +1,4 @@
-import { getSetting } from "./settings";
+import { getProviderKey, getSetting } from "./settings";
 import { prisma } from "./db";
 import { logError } from "./errorLog";
 import { recordAiUsage } from "./systemHealth";
@@ -15,7 +15,7 @@ import { getCompanyProfile } from "./companyProfile";
 import type { CronSliceContext } from "./tenantCron";
 
 export async function isAiConfigured(): Promise<boolean> {
-  return Boolean(await getSetting("ANTHROPIC_API_KEY"));
+  return Boolean(await getProviderKey("ANTHROPIC_API_KEY"));
 }
 
 /**
@@ -28,7 +28,7 @@ export async function aiCheckDraft(input: {
   customerName?: string | null;
   context?: string | null;
 }): Promise<{ issues: string[] } | { error: string }> {
-  const apiKey = await getSetting("ANTHROPIC_API_KEY");
+  const apiKey = await getProviderKey("ANTHROPIC_API_KEY");
   if (!apiKey) return { error: "AI Assist is not configured (Settings → Integrations)." };
   // Whose messages these are: the workspace's own business, not Denago's.
   const company = (await getCompanyProfile().catch(() => null))?.name?.trim() || "a South African business";
@@ -64,7 +64,7 @@ export async function aiCheckDraft(input: {
       return { error: `AI check failed (${res.status}).` };
     }
     const json = await res.json();
-    void recordAiUsage(json.usage);
+    void recordAiUsage(json.usage, json.model);
     const content: string = json.content?.[0]?.text ?? "{}";
     const match = content.match(/\{[\s\S]*\}/);
     const parsed = JSON.parse(match ? match[0] : "{}");
@@ -84,7 +84,7 @@ export async function aiVoiceNoteReply(input: {
   transcript: string;
   history: { from: "customer" | "us"; text: string }[];
 }): Promise<{ summary: string; reply: string } | { error: string }> {
-  const apiKey = await getSetting("ANTHROPIC_API_KEY");
+  const apiKey = await getProviderKey("ANTHROPIC_API_KEY");
   if (!apiKey) return { error: "AI Assist is not configured (Settings → Integrations)." };
   const company = (await getCompanyProfile().catch(() => null))?.name?.trim() || "a South African business";
   const redact = (value: string) => value
@@ -114,7 +114,7 @@ export async function aiVoiceNoteReply(input: {
       return { error: `AI could not read it (${res.status}).` };
     }
     const json = await res.json();
-    void recordAiUsage(json.usage);
+    void recordAiUsage(json.usage, json.model);
     const content: string = json.content?.[0]?.text ?? "{}";
     const parsed = JSON.parse(content.match(/\{[\s\S]*\}/)?.[0] ?? "{}");
     const summary = String(parsed.summary ?? "").trim().slice(0, 300);
@@ -280,7 +280,7 @@ export async function aiResearch(
   // connecting it is that research stops spending API credit, and a silent
   // fallback would bring the bill straight back without anyone choosing it.
   const useChatGpt = await isCodexConnected();
-  const apiKey = useChatGpt ? null : await getSetting("ANTHROPIC_API_KEY");
+  const apiKey = useChatGpt ? null : await getProviderKey("ANTHROPIC_API_KEY");
   if (!useChatGpt && !apiKey) {
     return { error: "AI Assist is not configured (Settings → Integrations)." };
   }
@@ -404,7 +404,7 @@ export async function aiResearch(
           : { error: `Research failed (${res.status}).` };
       }
       const json = await res.json();
-      void recordAiUsage(json.usage);
+      void recordAiUsage(json.usage, json.model);
       stopReason = json.stop_reason ?? null;
 
       // JOINED WITH "", NOT "\n" — THE BLOCKS ARE ONE SENTENCE, NOT ONE LINE EACH.

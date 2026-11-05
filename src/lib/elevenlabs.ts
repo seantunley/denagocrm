@@ -1,4 +1,5 @@
-import { getSetting } from "./settings";
+import { getProviderKey, getSetting } from "./settings";
+import { recordUsage } from "./usage";
 import { logError } from "./errorLog";
 import { TTS_MODEL_KEY, VOICE_SPEED_KEY } from "./voiceSettings";
 
@@ -83,7 +84,7 @@ export const isOggVoiceNote = (bytes: Uint8Array): boolean =>
 
 /** Enough config to transcribe inbound voice notes — needs only the API key. */
 export async function isElevenLabsConfigured(): Promise<boolean> {
-  return Boolean(await getSetting("ELEVENLABS_API_KEY"));
+  return Boolean(await getProviderKey("ELEVENLABS_API_KEY"));
 }
 
 /**
@@ -93,8 +94,8 @@ export async function isElevenLabsConfigured(): Promise<boolean> {
  */
 export async function canSynthesizeVoice(): Promise<boolean> {
   const [key, voiceId] = await Promise.all([
-    getSetting("ELEVENLABS_API_KEY"),
-    getSetting("ELEVENLABS_VOICE_ID"),
+    getProviderKey("ELEVENLABS_API_KEY"),
+    getProviderKey("ELEVENLABS_VOICE_ID"),
   ]);
   return Boolean(key && voiceId);
 }
@@ -147,7 +148,7 @@ export function sttKeyterms(words: readonly (string | null | undefined)[]): stri
 
 /** As elevenLabsSTTDetailed, but says when the key itself was refused. `keyterms`: names to expect (sttKeyterms). */
 export async function elevenLabsSTTChecked(buffer: Buffer, contentType = "audio/ogg", opts: { keyterms?: readonly string[] } = {}): Promise<Transcript | SttRefusal | null> {
-  const apiKey = await getSetting("ELEVENLABS_API_KEY");
+  const apiKey = await getProviderKey("ELEVENLABS_API_KEY");
   if (!apiKey) return null;
   const model = (await getSetting("ELEVENLABS_STT_MODEL")) || DEFAULT_STT_MODEL;
   // Name the file for what it is: a browser recording is webm/mp4, not ogg.
@@ -173,6 +174,7 @@ export async function elevenLabsSTTChecked(buffer: Buffer, contentType = "audio/
       if (res.status === 401) return { refused: body.includes("missing_permissions") ? "permission" : "key" };
       return null;
     }
+    await recordUsage({ transcriptions: 1 });
     const json = await res.json();
     const text = String(json?.text ?? "").trim();
     if (!text) return null;
@@ -201,8 +203,8 @@ export async function elevenLabsTTS(
   opts: { language?: "en" | "af"; voiceId?: string } = {},
 ): Promise<{ buffer: Buffer; contentType: string } | null> {
   const [apiKey, savedVoice, savedModel, savedSpeed] = await Promise.all([
-    getSetting("ELEVENLABS_API_KEY"),
-    getSetting("ELEVENLABS_VOICE_ID"),
+    getProviderKey("ELEVENLABS_API_KEY"),
+    getProviderKey("ELEVENLABS_VOICE_ID"),
     getSetting(TTS_MODEL_KEY),
     getSetting(VOICE_SPEED_KEY),
   ]);
@@ -223,6 +225,8 @@ export async function elevenLabsTTS(
       signal: AbortSignal.timeout(30000),
     });
     if (!res.ok) return { status: res.status, detail: (await res.text().catch(() => "")).slice(0, 200) };
+    // ElevenLabs bills every generation it returns, voice note or not, so each is metered.
+    await recordUsage({ voice_chars: clean.length });
     const buffer = Buffer.from(await res.arrayBuffer());
     return isOggVoiceNote(buffer) ? { buffer } : { status: res.status, detail: `not an OGG voice note (${res.headers.get("content-type") ?? "no type"}, ${buffer.length} bytes)` };
   };
@@ -254,7 +258,7 @@ export function ttsModelFor(saved: string | null | undefined, language: "en" | "
 
 /** The voices in the workspace's ElevenLabs account, for the Settings picker. Null when there is no key or the call fails. */
 export async function elevenLabsVoices(): Promise<{ id: string; name: string; accent: string | null; category: string | null }[] | null> {
-  const apiKey = await getSetting("ELEVENLABS_API_KEY");
+  const apiKey = await getProviderKey("ELEVENLABS_API_KEY");
   if (!apiKey) return null;
   try {
     const res = await fetch(`${API}/voices`, { headers: { "xi-api-key": apiKey }, signal: AbortSignal.timeout(10000) });

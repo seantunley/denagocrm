@@ -28,6 +28,7 @@ import { distinctIdentities } from "./botBookingIdentity";
 import { whatsappSendResult, whatsappTransportFailure, type WhatsAppSendResult } from "./deliveryReceipts";
 import { recordOutboundFailure, recordOutboundMessage, type OutboundRecord } from "./outboundMessageLog";
 import { whatsappContactsMessage } from "./flowMedia";
+import { recordUsage } from "./usage";
 import type { ContactCard } from "./flow";
 
 /**
@@ -314,6 +315,7 @@ async function postWhatsAppMessage(creds: WhatsAppCredentials, message: Record<s
   }
   const json = await res.json().catch(() => null);
   await noteWhatsAppOutcome(creds, res, res.ok ? null : json);
+  if (res.ok) await recordUsage({ whatsapp_sent: 1 }, creds.tenantId);
   return whatsappSendResult(res, json);
 }
 

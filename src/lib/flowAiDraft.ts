@@ -1,5 +1,5 @@
 import "server-only";
-import { getSetting } from "./settings";
+import { getProviderKey } from "./settings";
 import { logError } from "./errorLog";
 import { recordAiUsage } from "./systemHealth";
 import type { Flow } from "./flow";
@@ -26,7 +26,7 @@ export async function generateFlowDraft(input: {
   channels: FlowChannel[];
   journeys?: FlowAiJourneyOption[];
 }): Promise<GeneratedFlowDraft | null> {
-  const apiKey = await getSetting("ANTHROPIC_API_KEY");
+  const apiKey = await getProviderKey("ANTHROPIC_API_KEY");
   if (!apiKey) return null;
   const instruction = input.instruction.trim().slice(0, 3000);
   if (!instruction) return null;
@@ -99,7 +99,7 @@ ${instruction}`;
       return null;
     }
     const json = await res.json();
-    void recordAiUsage(json.usage);
+    void recordAiUsage(json.usage, json.model);
     const parsed = strictJsonObject(String(json.content?.[0]?.text ?? ""));
     if (!parsed?.start || !parsed?.nodes || typeof parsed.nodes !== "object") {
       await logError("bot-flow-ai-draft", "Generated flow was outside the required graph contract").catch(() => {});

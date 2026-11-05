@@ -1,5 +1,6 @@
 import { resolveIntegrationBundle } from "@/lib/settings";
 import { currentTenantScope } from "@/lib/tenantScope";
+import { recordUsage } from "@/lib/usage";
 import { recordOutboundFailure, recordOutboundMessage, type OutboundRecord } from "@/lib/outboundMessageLog";
 
 /**
@@ -67,6 +68,7 @@ async function sendSmsNow(to: string, body: string): Promise<{ ok: boolean; erro
     }
     // BulkSMS answers with one entry per message sent.
     const sent = (await res.json().catch(() => null)) as Array<{ id?: string }> | null;
+    await recordUsage({ sms_sent: 1 }, currentTenantScope()?.tenantId);
     return { ok: true, messageId: Array.isArray(sent) ? (sent[0]?.id ?? null) : null };
   } catch (err) {
     const { logError } = await import("./errorLog");

@@ -5,7 +5,7 @@ import { lookup as lookupCb } from "node:dns";
 import { isIP } from "node:net";
 import { Agent, fetch as undiciFetch } from "undici";
 import { prisma } from "./db";
-import { getSetting } from "./settings";
+import { getProviderKey, getSetting } from "./settings";
 import { logError } from "./errorLog";
 import { recordAiUsage } from "./systemHealth";
 import { runtimeFlowTenantId } from "./flowScope";
@@ -148,7 +148,7 @@ async function knowledgeAnswer(query: string): Promise<KnowledgeOutcome> {
 async function extractData(input: Parameters<NonNullable<FlowCtx["extractData"]>>[0]): Promise<ExtractOutcome> {
   const fields = [...new Set(input.fields.map((field) => field.trim()).filter(Boolean))].slice(0, 12);
   if (!fields.length) return { ok: false, reason: "No extraction fields were configured" };
-  const apiKey = await getSetting("ANTHROPIC_API_KEY");
+  const apiKey = await getProviderKey("ANTHROPIC_API_KEY");
   if (!apiKey) return { ok: false, reason: "AI extraction is not configured" };
   const source = input.text.trim().slice(0, MAX_EXTRACT_TEXT);
   if (!source) return { ok: false, unavailable: true, reason: "There is no text to extract from" };
@@ -167,7 +167,7 @@ async function extractData(input: Parameters<NonNullable<FlowCtx["extractData"]>
       return { ok: false, reason: `AI extraction provider returned ${res.status}` };
     }
     const json = await res.json();
-    void recordAiUsage(json.usage);
+    void recordAiUsage(json.usage, json.model);
     const parsed = strictObject(String(json.content?.[0]?.text ?? ""));
     if (!parsed) return { ok: false, reason: "AI extraction returned invalid structured data" };
     const values: Record<string, string> = {};

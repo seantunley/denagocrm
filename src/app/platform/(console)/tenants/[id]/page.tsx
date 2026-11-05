@@ -40,6 +40,7 @@ import {
 import Tabs from "@/components/Tabs";
 import { SaveForm, SaveButton } from "@/components/SaveForm";
 import UsageTab from "@/components/platform/UsageTab";
+import BillingTab from "@/components/platform/BillingTab";
 
 import ModalTrigger from "@/components/Modal";
 import {
@@ -352,6 +353,11 @@ export default async function TenantProfilePage({
             // opened, so the scan happens only when somebody asks for it.
             lazy: true,
             content: <UsageTab tenantId={id} />,
+          },
+          {
+            key: "billing",
+            label: "Billing",
+            content: <BillingTab tenantId={id} />,
           },
           {
             key: "errors",

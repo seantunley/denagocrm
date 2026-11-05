@@ -219,6 +219,38 @@ export async function getSetting(key: string): Promise<string | null> {
   }
 }
 
+/**
+ * The workspace whose settings this call reads: the usage meter (lib/usage.ts) counts a call against the
+ * workspace whose key paid for it, resolved the same way the key was.
+ */
+export async function settingsTenantId(): Promise<string> {
+  return settingsOwnerTenantIdOrRecover();
+}
+
+/** Keys the platform can supply to a workspace on a plan with platformAi (platform console → Billing). */
+export type ProviderKey = "ANTHROPIC_API_KEY" | "ELEVENLABS_API_KEY" | "ELEVENLABS_VOICE_ID";
+
+/**
+ * A provider key for USE (never for display): the workspace's own, or — when it has none and the platform
+ * supplies its AI and voice — the founding workspace's. The workspace's settings page reads its own rows only,
+ * so a supplied key is never shown to it. Usage is metered either way (lib/usage.ts).
+ */
+export async function getProviderKey(key: ProviderKey): Promise<string | null> {
+  const own = await getSetting(key);
+  if (own) return own;
+  const tenantId = await settingsOwnerTenantIdOrRecover();
+  if (tenantId === DEFAULT_TENANT_ID) return null;
+  const tenant = await basePrisma.tenant.findUnique({ where: { id: tenantId }, select: { platformAi: true, active: true } });
+  if (!tenant?.platformAi || !tenant.active) return null;
+  const row = await basePrisma.appSetting.findUnique({ where: { tenantId_key: { tenantId: DEFAULT_TENANT_ID, key } } });
+  if (!row?.value) return null;
+  try {
+    return decryptValue(row.value);
+  } catch {
+    return null;
+  }
+}
+
 /** Where each Regional field lives in AppSetting. */
 export const REGIONAL_KEYS: Record<keyof Regional, string> = {
   vatRatePct: "VAT_RATE_PCT",

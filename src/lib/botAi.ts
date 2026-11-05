@@ -1,5 +1,5 @@
 import { recordAiUsage } from "./systemHealth";
-import { getRegionalSettings, getSetting } from "./settings";
+import { getProviderKey, getRegionalSettings, getSetting } from "./settings";
 import { prisma } from "./db";
 import { logError } from "./errorLog";
 import { formatZAR } from "./format";
@@ -54,7 +54,7 @@ export async function getBotFaqs(): Promise<BotFaq[]> {
 }
 
 export async function isBotAiEnabled(): Promise<boolean> {
-  return (await getSetting("BOT_AI_ENABLED")) === "true" && Boolean(await getSetting("ANTHROPIC_API_KEY"));
+  return (await getSetting("BOT_AI_ENABLED")) === "true" && Boolean(await getProviderKey("ANTHROPIC_API_KEY"));
 }
 
 function sanitize(msgs: BotMsg[]): BotMsg[] {
@@ -116,7 +116,7 @@ export async function routeBotChoice(input: {
   options: BotChoiceOption[];
 }): Promise<string | null> {
   if (!(await isBotAiEnabled())) return null;
-  const apiKey = await getSetting("ANTHROPIC_API_KEY");
+  const apiKey = await getProviderKey("ANTHROPIC_API_KEY");
   if (!apiKey || !input.text.trim() || input.options.length < 2) return null;
 
   const optionList = input.options.map((option) => `[${option.id}] ${option.label}${option.description ? ` — ${option.description}` : ""}`).join("\n");
@@ -149,7 +149,7 @@ Rules:
       return null;
     }
     const json = await res.json();
-    void recordAiUsage(json.usage);
+    void recordAiUsage(json.usage, json.model);
     const parsed = strictJsonObject(String(json.content?.[0]?.text ?? ""));
     if (!parsed || parsed.confidence !== "high" || typeof parsed.optionId !== "string") return null;
     return input.options.some((option) => option.id === parsed.optionId) ? parsed.optionId : null;
@@ -171,7 +171,7 @@ export async function generateBotReply(input: {
   /** The language the customer's voice note was in, when it wasn't English (e.g. "Afrikaans"). */
   language?: string | null;
 }): Promise<BotReplyDecision | null> {
-  const apiKey = await getSetting("ANTHROPIC_API_KEY");
+  const apiKey = await getProviderKey("ANTHROPIC_API_KEY");
   if (!apiKey) return null;
 
   const latestQuestion = [...input.history].reverse().find((message) => message.role === "user")?.content ?? "";
@@ -265,7 +265,7 @@ ${input.voiceNote ? "- This arrived as a transcribed voice note. Reply naturally
       return null;
     }
     const json = await res.json();
-    void recordAiUsage(json.usage);
+    void recordAiUsage(json.usage, json.model);
     const parsed = parseBotDecision(String(json.content?.[0]?.text ?? ""));
     if (!parsed) {
       await logError("bot-ai", "Assistant returned a response outside the decision contract").catch(() => {});
