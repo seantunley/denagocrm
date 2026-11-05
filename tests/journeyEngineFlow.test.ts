@@ -1593,5 +1593,6 @@ test("the builder edits a whole condition group, instead of flattening it", () =
   // A condition naming its OWN branch targets keeps them, and gets no second
   // generated stop (the orphan would fail the parse) — tests/journeyBuilderVisual.
   const definition = shipped("src/lib/journeyBuilderDefinition.ts");
-  assert.match(definition, /const custom = Boolean\(config\.trueStepId \|\| config\.falseStepId\) && config\.falseStepId !== generatedStopId\(step\.id\);/);
+  // One rule for canvas, list editor and serializer (journeyCanvas.test.ts covers a custom Yes + generated No).
+  assert.match(definition, /const custom = conditionHasOwnTargets\(step\);/);
 });
