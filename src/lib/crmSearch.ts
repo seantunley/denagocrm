@@ -21,7 +21,7 @@ import {
   hasAnyPermission,
   type PermissionUser,
 } from "@/lib/permissions";
-import { MIN_SEARCH_TERM, type SearchHit, type SearchHitType } from "./recordSearch";
+import { MIN_SEARCH_TERM, messageVisible, type SearchHit, type SearchHitType } from "./recordSearch";
 
 /*
  * ONE SEARCH (2026-11-05): the search menu, the /search page and DAX's search_everything all ask this, as the person
@@ -87,12 +87,12 @@ export async function searchCrm(user: PermissionUser, rawTerm: string, options: 
   const stems = searchStems(term);
   const query = stems.join(" or ");
   const doc = Prisma.raw(COMMUNICATION_SEARCH_DOC);
-  // A message is theirs to see when they may open its deal, or (with no deal) its customer — as on the timelines.
-  const messageAccess =
-    contactIds === null && leadIds === null
-      ? Prisma.sql`("leadId" IS NOT NULL OR "contactId" IS NOT NULL)`
-      : Prisma.sql`(${leadIds === null ? Prisma.sql`"leadId" IS NOT NULL` : Prisma.sql`"leadId" = ANY(${leadIds}::text[])`}
-          OR ${contactIds === null ? Prisma.sql`"contactId" IS NOT NULL` : Prisma.sql`"contactId" = ANY(${contactIds}::text[])`})`;
+  // A message on a deal needs that DEAL (its customer is not enough — review of #1006, as DAX's own message search);
+  // only a message on no deal is decided by its customer. messageVisible below is the same rule, applied again.
+  const messageAccess = Prisma.sql`(
+      ("leadId" IS NOT NULL AND ${leadIds === null ? Prisma.sql`TRUE` : Prisma.sql`"leadId" = ANY(${leadIds}::text[])`})
+      OR ("leadId" IS NULL AND "contactId" IS NOT NULL AND ${contactIds === null ? Prisma.sql`TRUE` : Prisma.sql`"contactId" = ANY(${contactIds}::text[])`})
+    )`;
 
   type MessageRow = { id: string; occurredAt: Date; type: string; direction: string | null; subject: string | null; body: string; leadId: string | null; contactId: string | null };
   type CaseRow = { id: string; number: bigint; subject: string; status: string; contactName: string };
@@ -201,9 +201,12 @@ export async function searchCrm(user: PermissionUser, rawTerm: string, options: 
     want.has("knowledge") ? searchBotKnowledge(term, new Date(), Math.min(take, 6)).catch(() => []) : skip<never>(),
   ]);
 
+  // The same rule as the statement, once more in code: a mistake in either can't show a message on someone else's deal.
+  const shownMessages = messages.filter((m) => messageVisible(m, leadIds, contactIds));
+
   // Names for the messages' and activities' customers and deals, in two reads.
-  const leadIdsUsed = [...new Set([...messages, ...activities].map((r) => r.leadId).filter((id): id is string => Boolean(id)))];
-  const contactIdsUsed = [...new Set([...messages, ...activities].map((r) => r.contactId).filter((id): id is string => Boolean(id)))];
+  const leadIdsUsed = [...new Set([...shownMessages, ...activities].map((r) => r.leadId).filter((id): id is string => Boolean(id)))];
+  const contactIdsUsed = [...new Set([...shownMessages, ...activities].map((r) => r.contactId).filter((id): id is string => Boolean(id)))];
   const [leadNames, contactNames] = await Promise.all([
     leadIdsUsed.length ? prisma.lead.findMany({ where: { id: { in: leadIdsUsed } }, select: { id: true, title: true, name: true } }) : [],
     contactIdsUsed.length ? prisma.contact.findMany({ where: { id: { in: contactIdsUsed } }, select: { id: true, firstName: true, lastName: true, company: true, isCompany: true } }) : [],
@@ -223,7 +226,7 @@ export async function searchCrm(user: PermissionUser, rawTerm: string, options: 
     ...vehicles.map((v) => ({ type: "vehicle" as const, id: v.id, label: v.model, sublabel: [v.regNumber ?? v.vin, contactName(v.contact)].filter(Boolean).join(" · "), href: `/vehicles/${v.id}` })),
     ...jobCards.map((j) => ({ type: "jobcard" as const, id: j.id, label: `Job #${j.number}`, sublabel: [j.vehicle?.model, contactName(j.contact), j.description.slice(0, 60)].filter(Boolean).join(" · "), href: `/jobcards/${j.id}` })),
     ...cases.map((c) => ({ type: "case" as const, id: c.id, label: `C-${c.number.toString()} · ${c.subject}`, sublabel: `${c.contactName} · ${c.status.replaceAll("_", " ")}`, href: `/cases/${c.id}` })),
-    ...messages.map((m) => ({
+    ...shownMessages.map((m) => ({
       type: "message" as const, id: m.id,
       label: `${whose(m)} · ${m.type}${m.direction ? ` ${m.direction}` : ""}`,
       sublabel: day(m.occurredAt),

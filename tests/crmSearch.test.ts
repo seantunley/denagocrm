@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import { assistantStep } from "../src/lib/crmAssistantPlan";
-import { ALL_SEARCH_GROUPS, SEARCH_GROUPS } from "../src/lib/recordSearch";
+import { ALL_SEARCH_GROUPS, SEARCH_GROUPS, messageVisible } from "../src/lib/recordSearch";
 
 /*
  * ONE SEARCH (2026-11-05): the search menu, /search and DAX's search_everything all call lib/crmSearch.ts as the
@@ -23,6 +23,23 @@ test("all three surfaces ask the one search, as the person searching", () => {
 test("every raw read names the workspace — including cases, which used to match every workspace's", () => {
   assert.match(code, /FROM "CustomerCase" c[\s\S]*?WHERE c\."tenantId" = \$\{tenantId\}/);
   assert.match(code, /FROM "Communication"\s*WHERE "tenantId" = \$\{tenantId\}/);
+});
+
+test("a message on a deal needs that deal — its customer is not enough (review of #1006)", () => {
+  // They may open the customer, but the deal belongs to a colleague they can't see.
+  const onHiddenDeal = { leadId: "lead_colleague", contactId: "contact_shared" };
+  assert.equal(messageVisible(onHiddenDeal, ["lead_mine"], ["contact_shared"]), false);
+  assert.equal(messageVisible(onHiddenDeal, ["lead_colleague"], []), true, "the deal decides");
+  assert.equal(messageVisible(onHiddenDeal, null, []), true, "every deal");
+  // No deal: the customer decides.
+  assert.equal(messageVisible({ leadId: null, contactId: "contact_shared" }, [], ["contact_shared"]), true);
+  assert.equal(messageVisible({ leadId: null, contactId: "contact_other" }, null, ["contact_shared"]), false);
+  assert.equal(messageVisible({ leadId: null, contactId: null }, null, null), false, "on nothing: an unmatched inbox message");
+  // The statement says the same — the customer rule only for a message with NO deal — and the code filters again.
+  assert.match(code, /\("leadId" IS NOT NULL AND \$\{leadIds === null \? Prisma\.sql`TRUE` : Prisma\.sql`"leadId" = ANY\(\$\{leadIds\}::text\[\]\)`\}\)/);
+  assert.match(code, /OR \("leadId" IS NULL AND "contactId" IS NOT NULL AND /);
+  assert.match(code, /const shownMessages = messages\.filter\(\(m\) => messageVisible\(m, leadIds, contactIds\)\);/);
+  assert.doesNotMatch(code, /\.\.\.messages\.map/, "only the filtered messages are shown");
 });
 
 test("messages are found only on deals and customers the person may open, on the full-text index", () => {

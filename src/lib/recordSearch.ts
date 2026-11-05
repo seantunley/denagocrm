@@ -52,6 +52,21 @@ export const SEARCH_GROUPS: ReadonlyArray<{ type: SearchHitType; heading: string
   { type: "message", heading: "Messages & notes" },
 ];
 
+/**
+ * May this person see a message (lib/crmSearch.ts)? On a deal: only with access to THAT deal — its customer is not
+ * enough, since a customer's deals can belong to different people. On no deal: by its customer. Neither: no.
+ * `null` is "every one of that kind"; [] is none.
+ */
+export function messageVisible(
+  row: { leadId: string | null; contactId: string | null },
+  leadIds: readonly string[] | null,
+  contactIds: readonly string[] | null,
+): boolean {
+  if (row.leadId) return leadIds === null || leadIds.includes(row.leadId);
+  if (row.contactId) return contactIds === null || contactIds.includes(row.contactId);
+  return false;
+}
+
 /** Every kind /search lists, in order. */
 export const ALL_SEARCH_GROUPS: ReadonlyArray<{ type: SearchHitType; heading: string }> = [
   ...SEARCH_GROUPS,
