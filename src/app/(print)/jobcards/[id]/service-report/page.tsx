@@ -65,14 +65,16 @@ export default async function ServiceReportPrintPage({
             accent
             lines={[contactName(jobCard.contact), jobCard.contact.phone, jobCard.contact.email]}
           />
-          <InfoBlock
-            title="Vehicle"
-            lines={[
-              jobCard.vehicle.model,
-              jobCard.vehicle.vin ? `VIN: ${jobCard.vehicle.vin}` : null,
-              sr?.km != null ? `Odometer: ${sr.km.toLocaleString()} km` : null,
-            ]}
-          />
+          {jobCard.vehicle && (
+            <InfoBlock
+              title="Vehicle"
+              lines={[
+                jobCard.vehicle.model,
+                jobCard.vehicle.vin ? `VIN: ${jobCard.vehicle.vin}` : null,
+                sr?.km != null ? `Odometer: ${sr.km.toLocaleString()} km` : null,
+              ]}
+            />
+          )}
         </div>
 
         {sr?.summary && (

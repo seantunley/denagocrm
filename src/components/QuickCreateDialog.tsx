@@ -27,6 +27,8 @@ import { AvailabilityConflictDialog } from "@/components/AvailabilityConflictDia
 import LocationAutocomplete from "@/components/LocationAutocomplete";
 import { readPwaActivityShortcut } from "@/lib/pwaShortcuts";
 import { useActivityTypes } from "@/components/ActivityTypesProvider";
+import { useRecordLabels } from "@/components/RecordLabelsProvider";
+import { isCustom, midSentence } from "@/lib/recordLabels";
 import { pickableActivityTypes } from "@/lib/activityTypes";
 import ContactPicker from "@/components/ContactPicker";
 import { AttendeePicker } from "@/components/AttendeePicker";
@@ -78,6 +80,7 @@ export default function QuickCreateDialog() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [calendarType, setCalendarType] = useState<string>("call");
   const [availabilityAllDay, setAvailabilityAllDay] = useState(false);
+  const labels = useRecordLabels();
   const [conflictMessage, setConflictMessage] = useState<string | null>(null);
   const activityTypes = useActivityTypes();
 
@@ -218,7 +221,11 @@ export default function QuickCreateDialog() {
     <Dialog open={Boolean(kind)} onOpenChange={(open) => !open && close()}>
       <ResponsiveDialogContent className="sm:max-w-2xl">
         <DialogHeader className="text-left">
-          <DialogTitle>{kind ? TITLES[kind] : ""}</DialogTitle>
+          <DialogTitle>
+            {kind === "lead" && isCustom(labels, "lead") ? `New ${labels.lead.one}`
+              : kind === "jobcard" && isCustom(labels, "jobcard") ? `New ${midSentence(labels.jobcard.one)}`
+                : kind ? TITLES[kind] : ""}
+          </DialogTitle>
         </DialogHeader>
 
         {loadError ? (
@@ -250,7 +257,7 @@ export default function QuickCreateDialog() {
               <ContactForm action={createQuickContact} users={currentOptions.users} fleetPicker={currentOptions.fleetPicker} submitLabel="Create contact" variant="dialog" />
             )}
 
-            {kind === "jobcard" && <JobCardForm vehicles={currentOptions.vehicles} defaultVehicleId={createDefaults.vehicleId} />}
+            {kind === "jobcard" && <JobCardForm vehicles={currentOptions.vehicles} contacts={currentOptions.contacts} defaultVehicleId={createDefaults.vehicleId} />}
 
             {kind === "vehicle" && (
               <VehicleForm

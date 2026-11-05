@@ -196,7 +196,7 @@ export default async function DocEditorPage({
     })),
     ...jobCards.map((jobCard) => ({
       value: `jobcard:${jobCard.id}`,
-      label: `Job #${jobCard.number} — ${contactName(jobCard.contact)} — ${jobCard.vehicle.model}`,
+      label: `Job #${jobCard.number} — ${contactName(jobCard.contact)}${jobCard.vehicle ? ` — ${jobCard.vehicle.model}` : ""}`,
     })),
     ...leads.map((lead) => ({
       value: `lead:${lead.id}`,

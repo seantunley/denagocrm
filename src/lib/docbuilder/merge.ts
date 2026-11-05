@@ -236,10 +236,11 @@ export function buildJobCardContext(
     "jobcard.parts": formatZAR(parts, r),
     "jobcard.labour": formatZAR(labour, r),
     "jobcard.other": formatZAR(other, r),
-    vehicle: jc.vehicle.model,
-    "vehicle.vin": jc.vehicle.vin ?? "—",
-    "vehicle.reg": jc.vehicle.regNumber ?? "—",
-    "vehicle.color": jc.vehicle.color ?? "—",
+    // A job with no vehicle prints dashes, as a missing VIN already did.
+    vehicle: jc.vehicle?.model ?? "—",
+    "vehicle.vin": jc.vehicle?.vin ?? "—",
+    "vehicle.reg": jc.vehicle?.regNumber ?? "—",
+    "vehicle.color": jc.vehicle?.color ?? "—",
     technician: jc.technician?.name ?? "—",
     ...print.tokens,
   };
@@ -266,7 +267,7 @@ export function buildJobCardContext(
       ...print.vars,
     },
     customer: { name: tokens["customer.name"], email: tokens["customer.email"], phone: tokens["customer.phone"] },
-    vehicle: { model: jc.vehicle.model, vin: jc.vehicle.vin ?? "", reg: jc.vehicle.regNumber ?? "" },
+    vehicle: { model: jc.vehicle?.model ?? "", vin: jc.vehicle?.vin ?? "", reg: jc.vehicle?.regNumber ?? "" },
   };
   return { tokens, items, vars };
 }

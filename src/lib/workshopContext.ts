@@ -178,7 +178,7 @@ export async function workshopOverview(
     ? {
         noMovementForDays: opts.stuckDays,
         total: stuck.length,
-        top: stuck.slice(0, opts.take).map((j) => ({ ...jobFacts(j, now), vehicle: j.vehicle.model, reg: j.vehicle.regNumber, customer: contactName(j.contact) })),
+        top: stuck.slice(0, opts.take).map((j) => ({ ...jobFacts(j, now), vehicle: j.vehicle?.model ?? null, reg: j.vehicle?.regNumber ?? null, customer: contactName(j.contact) })),
       }
     : null;
 

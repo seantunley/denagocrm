@@ -22,7 +22,8 @@ test("deal jacket composes existing records instead of adding a second deal mode
   assert.match(page, /soldStock/);
   assert.match(page, /prisma\.document\.findMany/);
   assert.match(page, /prisma\.signatureRequest\.findMany/);
-  assert.match(page, /Deal timeline/);
+  // The workspace's own word for a deal (#1003), "Deal" by default.
+  assert.match(page, /\{labels\.deal\.one\} timeline/);
   assert.match(page, /Ready to deliver\?/);
   // No invented payment data: money shown is the deposit recorded on the
   // deliveries board plus real QuotePayment rows from the quote's OWN workspace
@@ -64,7 +65,7 @@ test("deal jacket is reachable from both quote and lead workflows", () => {
   const quotes = read("src/app/(app)/quotes/page.tsx");
   const lead = read("src/app/(app)/leads/[id]/page.tsx");
 
-  assert.match(quotes, /label: "Deal workspace", href: `\/deals\/\$\{quote\.id\}`/);
+  assert.match(quotes, /label: `\$\{dealLabel\} workspace`, href: `\/deals\/\$\{quote\.id\}`/);
   assert.equal((quotes.match(/href=\{`\/deals\/\$\{quote\.id\}`\}/g) ?? []).length, 2, "Open deal on the phone card and the desktop row");
   assert.match(lead, /href=\{`\/deals\/\$\{q\.id\}`\}/);
 });

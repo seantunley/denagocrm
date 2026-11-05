@@ -23,6 +23,8 @@ import {
   CommandSeparator,
 } from "@/components/ui/command";
 import { buildNav } from "@/components/nav-config";
+import { midSentence, navLabelOverrides } from "@/lib/recordLabels";
+import { useRecordLabels } from "@/components/RecordLabelsProvider";
 import { linkOnPhone, PHONE_MEDIA } from "@/lib/phoneScope";
 import { isPathEnabled } from "@/lib/modules/registry";
 import { settingsHref, visibleSettingsGroups } from "@/lib/settings-navigation";
@@ -71,14 +73,15 @@ export default function CommandMenu({
   const openRef = useRef(false);
   openRef.current = open;
   const enabledSet = enabledModules ? new Set(enabledModules) : undefined;
-  const { topLinks, groups } = buildNav(isAdmin, permissions, enabledSet);
+  const labels = useRecordLabels();
+  const { topLinks, groups } = buildNav(isAdmin, permissions, enabledSet, navLabelOverrides(labels));
   const granted = new Set(permissions);
   const can = (...keys: string[]) => isAdmin || keys.some((key) => granted.has(key));
   const packOn = (href: string) => !enabledSet || isPathEnabled(href, enabledSet);
   const quickActions = [
-    ...(can("leads.create") ? [{ href: "/leads/new", label: "New lead", icon: Plus }] : []),
+    ...(can("leads.create") ? [{ href: "/leads/new", label: `New ${midSentence(labels.lead.one)}`, icon: Plus }] : []),
     ...(can("contacts.create") ? [{ href: "/contacts/new", label: "New contact", icon: Plus }] : []),
-    ...(can("jobcards.manage") ? [{ href: "/jobcards/new", label: "New job card", icon: Plus }] : []),
+    ...(can("jobcards.manage") ? [{ href: "/jobcards/new", label: `New ${midSentence(labels.jobcard.one)}`, icon: Plus }] : []),
     { href: "/search", label: "Search accessible records", icon: Search },
   ].filter((action) => packOn(action.href));
   const settingsGroups = visibleSettingsGroups({ isOwner: isAdmin, isPlatformOwner, permissions }, enabledSet);

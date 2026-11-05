@@ -11,7 +11,8 @@ export type JobCardPrintSource = {
   signedAt: Date | null;
   signedByName: string | null;
   signerIp: string | null;
-  vehicle: { model: string; color: string | null; vin: string | null; regNumber: string | null };
+  /** Null for a job with no vehicle (2026-11-05). */
+  vehicle: { model: string; color: string | null; vin: string | null; regNumber: string | null } | null;
   serviceRecord?: {
     summary: string;
     details: string | null;
@@ -44,8 +45,9 @@ export function jobCardPrintFields(
   const tokens: Record<string, string> = {
     "jobcard.stage": stageMeta(jc.status).label,
     "jobcard.dates": dates,
-    "vehicle.title": `${v.model}${v.color ? ` — ${v.color}` : ""}`,
-    "vehicle.lines": [v.vin && `VIN / Serial: ${v.vin}`, v.regNumber && `Reg: ${v.regNumber}`, dates].filter(Boolean).join("\n"),
+    // With no vehicle the title is empty and the lines keep only the dates.
+    "vehicle.title": v ? `${v.model}${v.color ? ` — ${v.color}` : ""}` : "",
+    "vehicle.lines": [v?.vin && `VIN / Serial: ${v.vin}`, v?.regNumber && `Reg: ${v.regNumber}`, dates].filter(Boolean).join("\n"),
     "service.line": sr
       ? `${sr.summary}${sr.km != null ? ` · at ${sr.km.toLocaleString()} km` : ""}${sr.performedBy ? ` · Technician: ${sr.performedBy.name}` : ""}`
       : "",

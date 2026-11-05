@@ -23,7 +23,7 @@ test("the customer page starts each next step pre-filled with this customer, for
 
 test("quick create actually uses those defaults", () => {
   assert.match(quickCreate, /initialContactId=\{createDefaults\.contactId\}/, "new quote opens on the customer");
-  assert.match(quickCreate, /<JobCardForm vehicles=\{currentOptions\.vehicles\} defaultVehicleId=\{createDefaults\.vehicleId\} \/>/);
+  assert.match(quickCreate, /<JobCardForm vehicles=\{currentOptions\.vehicles\} contacts=\{currentOptions\.contacts\} defaultVehicleId=\{createDefaults\.vehicleId\} \/>/);
   assert.match(src("src/components/QuickCreateButton.tsx"), /openQuickCreate\(kind, defaults\)/);
 });
 
