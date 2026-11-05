@@ -14,6 +14,8 @@ import {
 } from "lucide-react";
 import { openQuickCreate } from "@/components/QuickCreateDialog";
 import { isPathEnabled } from "@/lib/modules/registry";
+import { midSentence } from "@/lib/recordLabels";
+import { useRecordLabels } from "@/components/RecordLabelsProvider";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -35,6 +37,7 @@ export default function QuickActions({
 }) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
+  const labels = useRecordLabels();
   const granted = new Set(permissions);
   const can = (...keys: string[]) => isAdmin || keys.some((key) => granted.has(key));
   const enabledSet = enabledModules ? new Set(enabledModules) : undefined;
@@ -79,7 +82,7 @@ export default function QuickActions({
             <DropdownMenuLabel className="text-[11px] uppercase tracking-wider text-muted-foreground">CRM</DropdownMenuLabel>
             {can("leads.create") && (
               <DropdownMenuItem onSelect={() => create("lead")}>
-                <SquareKanban className="size-4" />New lead
+                <SquareKanban className="size-4" />New {midSentence(labels.lead.one)}
               </DropdownMenuItem>
             )}
             {can("contacts.create") && (
@@ -105,7 +108,7 @@ export default function QuickActions({
             <DropdownMenuLabel className="text-[11px] uppercase tracking-wider text-muted-foreground">Workshop</DropdownMenuLabel>
             {canJobcards && (
               <DropdownMenuItem onSelect={() => create("jobcard")}>
-                <Wrench className="size-4" />New job card
+                <Wrench className="size-4" />New {midSentence(labels.jobcard.one)}
               </DropdownMenuItem>
             )}
             {canVehicles && (
