@@ -39,7 +39,7 @@ test("people are told only about records they may open, checked as them, and aga
   const lib = read("src/lib/collaboration.ts");
   const notify = lib.slice(lib.indexOf("export async function notifyPeople"), lib.indexOf("export async function tellAboutNote"));
   assert.match(notify, /filter\(\(id\) => id && id !== notice\.actorId\)/, "never about your own note");
-  assert.match(notify, /const user = await staffUserFor\(userId\);\s*if \(!user \|\| !\(await canOpenRecord\(user, ref\)\)\)/);
+  assert.match(notify, /const user = await staffUserFor\(userId\);[\s\S]{0,200}?if \(!user \|\| !\(await canOpenRecord\(user, ref\)\) \|\| \(notice\.watched && !\(await canOpenRecord\(user, notice\.watched\)\)\)\)/);
   assert.match(notify, /if \(unread\) continue;/, "a watch says each kind of change once until read");
   assert.match(lib, /export async function visibleNotifications[\s\S]*getAccessibleLeadIds\(user\)/);
   assert.match(read("src/app/(app)/notifications/page.tsx"), /visibleNotifications\(user, tenantId\)/);

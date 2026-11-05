@@ -65,4 +65,14 @@ export function pushFor(kind: "mention" | "watch", actorName: string | null): { 
     : { title: "Update on a record you watch", body: "Tap to see what changed." };
 }
 
-export const isWatchable = (type: string): type is WatchableType => (WATCHABLE as readonly string[]).includes(type);
+/**
+ * The record a watch notification is ABOUT: the deal when the event came from one (a note, reply or stage change on a
+ * deal is the deal's, even to its customer's watchers), else the first record given. Null when none is.
+ */
+export function watchOrigin<T extends { type: WatchableType; id: string | null | undefined }>(refs: readonly T[]): { type: WatchableType; id: string } | null {
+  const lead = refs.find((ref) => ref.type === "lead" && ref.id);
+  const first = lead ?? refs.find((ref) => ref.id);
+  return first?.id ? { type: first.type, id: first.id } : null;
+}
+
+export const isWatchable =(type: string): type is WatchableType => (WATCHABLE as readonly string[]).includes(type);

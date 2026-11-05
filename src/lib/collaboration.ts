@@ -22,6 +22,7 @@ import {
   pushFor,
   recordHref,
   snippetOf,
+  watchOrigin,
   watchTitle,
   type RecordType,
   type WatchEvent,
@@ -93,7 +94,10 @@ type Notice = {
   kind: "mention" | "watch";
   event?: WatchEvent;
   actorId?: string | null;
+  /** What it is about: the record the note, reply or change happened on — the DEAL when it came from one. */
   ref: RecordRef;
+  /** For a watch, the record the person watches when it isn't `ref` (a deal's customer): they must open both. */
+  watched?: RecordRef;
   /** For a watch: the new stage or status. */
   detail?: string | null;
   snippet?: string | null;
@@ -120,7 +124,8 @@ export async function notifyPeople(notice: Notice): Promise<{ told: string[]; ca
     const snippet = snippetOf(notice.snippet);
     for (const userId of ids) {
       const user = await staffUserFor(userId);
-      if (!user || !(await canOpenRecord(user, ref))) {
+      // The record it's ABOUT (a deal, when it came from one) and, for a watcher, the record they watch: both.
+      if (!user || !(await canOpenRecord(user, ref)) || (notice.watched && !(await canOpenRecord(user, notice.watched)))) {
         if (user) cannotSee.push(user.name);
         continue;
       }
@@ -186,13 +191,18 @@ export async function notifyWatchers(
   event: WatchEvent,
   options: { actorId?: string | null; detail?: string | null; snippet?: string | null } = {},
 ): Promise<void> {
+  // Everyone is told about the record it happened ON — the deal, when it came from one (review of #1005): a customer's
+  // watcher who can't open that deal hears nothing of its notes, replies or stage. The bell re-checks the same record.
+  const origin = watchOrigin(refs);
+  if (!origin) return;
   const told = new Set<string>();
   for (const ref of refs) {
     if (!ref.id) continue;
     const watchers = await basePrisma.recordWatch.findMany({ where: { tenantId, recordType: ref.type, recordId: ref.id }, select: { userId: true } });
     const fresh = watchers.map((w) => w.userId).filter((id) => !told.has(id));
     fresh.forEach((id) => told.add(id));
-    if (fresh.length) await notifyPeople({ tenantId, userIds: fresh, kind: "watch", event, ref: { type: ref.type, id: ref.id }, ...options });
+    const watched = ref.type === origin.type && ref.id === origin.id ? undefined : { type: ref.type, id: ref.id };
+    if (fresh.length) await notifyPeople({ tenantId, userIds: fresh, kind: "watch", event, ref: origin, watched, ...options });
   }
 }
 
