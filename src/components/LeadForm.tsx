@@ -85,6 +85,9 @@ export default function LeadForm({
   const [value, setValue] = useState(defaults.valueCents ? String(defaults.valueCents / 100) : "");
   const [stageId, setStageId] = useState(defaults.stageId ?? stages[0]?.id ?? "");
   const product = products.find((item) => item.id === productId);
+  // Colour is asked only of a workspace whose catalogue uses colours (a dealer's does; a service firm's doesn't),
+  // or of a lead that already has one — an absent field saves as no colour, so hiding it would wipe it.
+  const usesColours = products.some((item) => item.colors.length > 0) || Boolean(defaults.color);
   const stage = stages.find((item) => item.id === stageId);
   const isPage = variant === "page";
   const isDialog = variant === "dialog";
@@ -92,7 +95,7 @@ export default function LeadForm({
   const snapshot = useMemo(
     () => ({
       customer: name.trim() || "New prospect",
-      interest: product?.name ?? "Model undecided",
+      interest: product?.name ?? "Not decided yet",
       value: formatPreviewValue(value),
     }),
     [name, product, value],
@@ -202,12 +205,12 @@ export default function LeadForm({
 
       <FormSection
         icon={Gauge}
-        title="Vehicle interest"
-        description="Choose a model and preference; catalogue pricing keeps the opportunity value in sync."
+        title="Product interest"
+        description="Choose what they're interested in; catalogue pricing keeps the opportunity value in sync."
       >
-        <Field label="Product / model">
+        <Field label="Product">
           <select name="productId" className="input" value={productId} onChange={(event) => onProductChange(event.target.value)}>
-            <option value="">Model undecided</option>
+            <option value="">Not decided yet</option>
             {products.map((item) => (
               <option key={item.id} value={item.id}>{item.name}</option>
             ))}
@@ -224,7 +227,7 @@ export default function LeadForm({
             onChange={(event) => onQtyChange(event.target.value)}
           />
         </Field>
-        <Field label="Colour preference" wide>
+        {usesColours && <Field label="Colour preference" wide>
           {product && product.colors.length > 0 ? (
             <div className="flex flex-wrap gap-2">
               <label className="cursor-pointer rounded-xl border border-border bg-background/40 px-3 py-2 text-xs text-muted-foreground transition-colors has-[:checked]:border-primary/45 has-[:checked]:bg-primary/10 has-[:checked]:text-foreground">
@@ -250,7 +253,7 @@ export default function LeadForm({
               />
             </div>
           )}
-        </Field>
+        </Field>}
         <Field
           label={`Estimated opportunity value (R)${qty > 1 && product ? ` — ${qty} × catalogue price` : ""}`}
           hint={product?.basePriceCents ? "Changing the model or quantity updates this value; you can still override it." : "Enter the best current estimate. It can be refined later."}
@@ -323,7 +326,7 @@ export default function LeadForm({
           </select>
         </Field>
         <Field label="Referral code" hint="Only needed when another customer referred this prospect.">
-          <input name="referralCode" className="input uppercase" placeholder="DGO-XXXX" maxLength={12} />
+          <input name="referralCode" className="input uppercase" placeholder="The code on their customer record" maxLength={12} />
         </Field>
       </FormSection>
 

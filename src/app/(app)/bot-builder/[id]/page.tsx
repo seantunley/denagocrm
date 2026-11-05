@@ -39,9 +39,10 @@ export default async function FlowEditorPage({ params }: { params: Promise<{ id:
   // Shared values: known to the builder's checks and offered in its {{…}} hints.
   const sharedNames = Object.keys(await flowSharedVars());
   // "Update the CRM": this workspace's tags (pick one, or type a new one) and pipeline stages, with their pipeline.
+  const tenantId = await builderTenantId();
   const [crmTags, stages] = await Promise.all([
-    prisma.tag.findMany({ select: { name: true }, orderBy: { name: "asc" }, take: 300 }).then((rows) => rows.map((t) => t.name)),
-    prisma.pipelineStage.findMany({ select: { id: true, name: true, pipeline: { select: { name: true } } }, orderBy: [{ pipelineId: "asc" }, { order: "asc" }] })
+    prisma.tag.findMany({ where: { tenantId }, select: { name: true }, orderBy: { name: "asc" }, take: 300 }).then((rows) => rows.map((t) => t.name)),
+    prisma.pipelineStage.findMany({ where: { tenantId }, select: { id: true, name: true, pipeline: { select: { name: true } } }, orderBy: [{ pipelineId: "asc" }, { order: "asc" }] })
       .then((rows) => rows.map((s) => ({ id: s.id, name: `${s.pipeline.name} · ${s.name}` }))),
   ]);
   // LIVE NUMBERS ON EACH STEP (Node-RED's node status; Sean, 2026-11-02): the last 30 days, across every published

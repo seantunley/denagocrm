@@ -7,7 +7,12 @@ import { logAudit } from "@/lib/audit";
 import { generateFlowDraft } from "@/lib/flowAiDraft";
 import { enabledFlowChannels, validateFlowForEnabledChannels } from "@/lib/flowValidationServer";
 import { flowErrors } from "@/lib/flowValidation";
-import { flowScope, journeyScope } from "@/lib/flowScope";
+import { builderTenantId, flowScope, journeyScope } from "@/lib/flowScope";
+import { listActingTenantStaff } from "@/lib/tenantActor";
+import { flowDocumentOptions } from "@/lib/flowDocuments";
+import { FLOW_CONNECTIONS_KEY, parseConnections } from "@/lib/flowConnections";
+import { getSetting } from "@/lib/settings";
+import { flowSharedVars } from "@/lib/flowSharedValuesServer";
 import { withActingStaffScope } from "@/lib/actingScope";
 import { diffFlowDefinitions, flowDefinitionHash, signFlowProposal, verifyFlowProposal, type FlowProposalDiff } from "@/lib/flowAiProposal";
 import type { Flow } from "@/lib/flow";
@@ -26,15 +31,29 @@ export async function generateFlowDraftAction(
     const instruction = String(formData.get("instruction") ?? "").trim();
     if (instruction.length < 8) return { error: "Describe the change you want in a little more detail." };
     const scope = await flowScope();
+    const tenantId = await builderTenantId();
 
-    const [row, channels, journeys] = await Promise.all([
+    // The same lists the builder's pickers offer (bot-builder/[id]/page.tsx): the AI may point only at these.
+    const [row, channels, journeys, flows, staff, stages, documents, connections, tags, shared] = await Promise.all([
       prisma.botFlow.findFirst({ where: { id: flowId, ...scope } }),
       enabledFlowChannels(),
       prisma.journey.findMany({ where: { status: "active", ...(await journeyScope()) }, select: { id: true, name: true }, orderBy: { name: "asc" } }),
+      prisma.botFlow.findMany({ where: { ...scope, id: { not: flowId } }, select: { id: true, name: true }, orderBy: { name: "asc" } }),
+      listActingTenantStaff().then((rows) => rows.map((s) => ({ id: s.id, name: s.name }))),
+      prisma.pipelineStage.findMany({ where: { tenantId }, select: { id: true, name: true, pipeline: { select: { name: true } } }, orderBy: [{ pipelineId: "asc" }, { order: "asc" }] })
+        .then((rows) => rows.map((s) => ({ id: s.id, name: `${s.pipeline.name} · ${s.name}` }))),
+      flowDocumentOptions(tenantId),
+      getSetting(FLOW_CONNECTIONS_KEY).then((raw) => parseConnections(raw).map(({ id, name, host }) => ({ id, name, host }))),
+      prisma.tag.findMany({ where: { tenantId }, select: { name: true }, orderBy: { name: "asc" }, take: 300 }).then((rows) => rows.map((t) => t.name)),
+      flowSharedVars(),
     ]);
     if (!row) return { error: "Flow not found." };
     const originalDefinition = row.definition;
-    const generated = await generateFlowDraft({ instruction, currentDefinition: originalDefinition, channels, journeys });
+    const generated = await generateFlowDraft({
+      instruction, currentDefinition: originalDefinition, channels,
+      refs: { journeys, flows, staff, stages, documents, connections, tags },
+      sharedNames: Object.keys(shared),
+    });
     if (!generated) return { error: "The flow assistant could not produce a valid graph. Nothing was changed." };
 
     // Use the same async validator as apply/publish so generation cannot call a

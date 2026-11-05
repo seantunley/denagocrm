@@ -391,3 +391,16 @@ test("the per-workspace block key is a namespace, not a rename", () => {
   const store = src("src/lib/flowSnippets.ts");
   assert.match(store, /export const FLOW_SNIPPETS_SETTING = "BOT_FLOW_SNIPPETS";/);
 });
+
+test("the builder's and the AI designer's stage and tag lists are this workspace's only", () => {
+  // Review of #996: with enforcement off the db.ts guard adds no predicate, so an unfiltered findMany listed
+  // every workspace's pipeline stages and tags — offered in B's builder and handed to the AI as approved
+  // references. Each call names the builder tenant, which resolves to B for B (tests above).
+  for (const file of ["src/app/actions/flowAi.ts", "src/app/(app)/bot-builder/[id]/page.tsx"]) {
+    const body = code(file);
+    const calls = body.match(/prisma\.(pipelineStage|tag)\.findMany\(\{[^\n]*/g) ?? [];
+    assert.equal(calls.length, 2, `${file}: expected one stage list and one tag list`);
+    for (const call of calls) assert.match(call, /findMany\(\{ where: \{ tenantId \}/, `${file}: ${call.slice(0, 60)}`);
+    assert.match(body, /const tenantId = await builderTenantId\(\);/);
+  }
+});

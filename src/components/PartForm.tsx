@@ -78,7 +78,7 @@ export default function PartForm({
             autoCapitalize="characters"
             value={sku}
             onChange={(event) => setSku(event.target.value.toUpperCase())}
-            placeholder="DGO-BRK-001"
+            placeholder="e.g. BRK-001"
           />
         </CaptureField>
         <CaptureField label="Storage location" hint="A shelf, rack or bin reference keeps picking fast.">
