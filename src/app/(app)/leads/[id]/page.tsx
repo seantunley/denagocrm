@@ -29,6 +29,8 @@ import LeadTimeline from "@/components/LeadTimeline";
 import { auditDetailFor } from "@/lib/auditDetailQuery";
 import ConfirmDelete from "@/components/ConfirmDelete";
 import AddToContactsButton from "@/components/AddToContactsButton";
+import WatchButton from "@/components/WatchButton";
+import { watchState } from "@/lib/collaboration";
 import MarkWonButton from "@/components/MarkWonDialog";
 import QuoteRowActions from "@/components/quotes/QuoteRowActions";
 import { CUSTOMER_RECORD_WRITE_PERMISSIONS, hasAnyPermission, hasPermission } from "@/lib/permissions";
@@ -221,6 +223,8 @@ export default async function LeadDetailPage({
     secureLinks={<SecureLinksPanel leadId={lead.id} />}
   />;
 
+  const watch = lead.tenantId ? await watchState(lead.tenantId, user.id, { type: "lead", id: lead.id }) : { watching: false, count: 0 };
+
   return (
     <>
       <MarkLeadViewed leadId={lead.id} viewed={alreadyViewed} />
@@ -245,6 +249,7 @@ export default async function LeadDetailPage({
         </div>}
         meta={<div className="flex flex-wrap gap-x-3 gap-y-1"><span>Owner: {lead.assignedTo?.name ?? "Unassigned"}</span><span>Added {formatDate(lead.createdAt)} · {lead.source}</span></div>}
         actions={<>
+          <WatchButton type="lead" id={lead.id} {...watch} />
           {lead.status === "open" && (
             <>
               {canCreateQuote && <SaveForm success="Quote created" resetOnSuccess={false} action={createQuoteFromLead.bind(null, lead.id)}>

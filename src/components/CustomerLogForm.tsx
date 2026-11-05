@@ -2,6 +2,7 @@ import { addCommunication } from "@/app/actions/communications";
 import { SaveForm, SaveButton } from "@/components/SaveForm";
 import DealField from "@/components/DealField";
 import PasteImageInput from "@/components/PasteImageInput";
+import MentionTextarea from "@/components/MentionTextarea";
 import type { DealOption } from "@/lib/customerTimeline";
 import { NOTE_KINDS } from "@/lib/customerContact";
 
@@ -43,7 +44,12 @@ export default function CustomerLogForm({ contactId, leadId, deals = [], revalid
       )}
       <div>
         <label htmlFor={`${prefix}-body`} className="label">{mode === "note" ? "Internal note · visible to your team" : "Conversation details"}</label>
-        <textarea id={`${prefix}-body`} name="body" className="input" rows={3} placeholder={mode === "note" ? `What should your team know about this ${leadId ? "deal" : "customer"}?` : "What was discussed?"} />
+        {mode === "note" ? (
+          // Type @ to mention someone: they're told, if they can open this record (lib/collaboration.ts).
+          <MentionTextarea id={`${prefix}-body`} name="body" rows={3} placeholder={`What should your team know about this ${leadId ? "deal" : "customer"}? Type @ to mention someone.`} />
+        ) : (
+          <textarea id={`${prefix}-body`} name="body" className="input" rows={3} placeholder="What was discussed?" />
+        )}
       </div>
       <PasteImageInput />
       <div className="flex flex-wrap items-end justify-between gap-3">

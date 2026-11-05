@@ -3,7 +3,9 @@
 import { useState, type ReactNode } from "react";
 import BrandLogo from "@/components/BrandLogo";
 import { usePathname } from "next/navigation";
+import Link from "next/link";
 import {
+  Bell,
   Search,
 } from "lucide-react";
 import Nav from "@/components/Nav";
@@ -49,7 +51,7 @@ const ownsWorkspace = (user: ShellUser) => user.isTenantOwner ?? user.role === "
  * rather than navigation, and moving them to the top-right returns the footer's
  * height to the nav — which is what runs out of room as modules are added.
  */
-function AccountCluster({ user, isOwner, tenantId }: { user: ShellUser; isOwner: boolean; tenantId: string }) {
+function AccountCluster({ user, isOwner, tenantId, unreadNotices = 0 }: { user: ShellUser; isOwner: boolean; tenantId: string; unreadNotices?: number }) {
   return (
     // Held together as one object rather than three loose icons: a hairline
     // border and a barely-there fill, so it reads as a group without competing
@@ -68,6 +70,17 @@ function AccountCluster({ user, isOwner, tenantId }: { user: ShellUser; isOwner:
       >
         <Search className="size-3.5" />
       </button>
+      {/* The bell: @mentions and records you watch. */}
+      <Link
+        href="/notifications"
+        aria-label={unreadNotices > 0 ? `Notifications, ${unreadNotices} unread` : "Notifications"}
+        title="Mentions and records you watch"
+        className={`flex h-7 min-w-7 items-center justify-center gap-0.5 rounded-lg px-1 ${unreadNotices > 0 ? "text-primary" : "text-muted-foreground hover:text-foreground"}`}
+      >
+        {/* Unread shows as colour and a count, not a filled badge: the cluster stays a quiet group. */}
+        <Bell className="size-3.5" />
+        {unreadNotices > 0 && <span className="text-[10px] font-semibold tabular-nums">{unreadNotices > 99 ? "99+" : unreadNotices}</span>}
+      </Link>
       <SidebarHelpSettings isOwner={isOwner} permissions={user.permissions} compact />
       <div className="mx-0.5 h-5 w-px bg-sidebar-border/70" aria-hidden />
       <AccountMenu user={user} isOwner={isOwner} tenantId={tenantId} compact />
@@ -118,6 +131,7 @@ export default function AppShell({
   user,
   inboxWaiting = 0,
   casesWaiting = 0,
+  unreadNotices = 0,
   enabledModules,
   brand,
   weatherCities,
@@ -128,6 +142,8 @@ export default function AppShell({
   user: ShellUser;
   inboxWaiting?: number;
   casesWaiting?: number;
+  /** Unread @mentions and watch updates (lib/collaboration.ts), for the bell. */
+  unreadNotices?: number;
   enabledModules?: string[];
   /** The tenant's clock/weather cities, resolved by the (app) layout. */
   weatherCities: WeatherCity[];
@@ -178,7 +194,7 @@ export default function AppShell({
           />
         </div>
         <div className="flex w-[7.5rem] shrink-0 justify-end">
-          <AccountCluster user={user} isOwner={ownsWorkspace(user)} tenantId={tenantId} />
+          <AccountCluster user={user} isOwner={ownsWorkspace(user)} tenantId={tenantId} unreadNotices={unreadNotices} />
         </div>
       </header>
 
@@ -190,7 +206,7 @@ export default function AppShell({
           <ClockWeather cities={weatherCities} />
         </div>
         <ConnectivityIndicator tenantId={tenantId} userId={user.id} />
-        <AccountCluster user={user} isOwner={ownsWorkspace(user)} tenantId={tenantId} />
+        <AccountCluster user={user} isOwner={ownsWorkspace(user)} tenantId={tenantId} unreadNotices={unreadNotices} />
       </header>
 
       {/* Mobile drawer */}

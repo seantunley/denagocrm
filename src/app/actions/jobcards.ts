@@ -489,7 +489,7 @@ export async function setJobCardStatus(jobCardId: string, status: string, formDa
     const user = await requireJobCardAccess(jobCardId, "jobcards.manage");
     const allowed = new Set(STAGE_VALUES.filter((s) => s !== "collected"));
     if (!allowed.has(status)) throw new ActionRefusal("Invalid job card status");
-    const jobCard = await prisma.jobCard.findUniqueOrThrow({ where: { id: jobCardId }, select: { number: true, contactId: true, status: true } });
+    const jobCard = await prisma.jobCard.findUniqueOrThrow({ where: { id: jobCardId }, select: { number: true, contactId: true, status: true, tenantId: true } });
     // Cancelling must carry a reason (the dialog asks; the server insists).
     // Other stage moves have none.
     const reason = status === "cancelled" ? requiredReason(formData, "cancelling this job") : "";
@@ -503,6 +503,10 @@ export async function setJobCardStatus(jobCardId: string, status: string, formDa
       contactId: jobCard.contactId,
       user,
     });
+    if (jobCard.tenantId) {
+      const { notifyWatchersLater } = await import("@/lib/collaboration");
+      notifyWatchersLater(jobCard.tenantId, [{ type: "jobcard", id: jobCardId }], "status", { actorId: user.id, detail: stageMeta(status).label });
+    }
     revalidatePath("/jobcards");
     revalidatePath(`/jobcards/${jobCardId}`);
   });
@@ -720,6 +724,10 @@ export async function completeJobCard(jobCardId: string, formData: FormData) {
       contactId: jobCard.contactId,
       jobCardId: jobCard.id,
     });
+    if (jobCard.tenantId) {
+      const { notifyWatchersLater } = await import("@/lib/collaboration");
+      notifyWatchersLater(jobCard.tenantId, [{ type: "jobcard", id: jobCardId }], "status", { actorId: user.id, detail: "Completed" });
+    }
     revalidatePath("/jobcards");
     revalidatePath(`/jobcards/${jobCardId}`);
     revalidatePath(`/vehicles/${jobCard.vehicleId}`);

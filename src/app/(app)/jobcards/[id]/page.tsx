@@ -74,6 +74,10 @@ import {
 } from "@/lib/workshop-constants";
 import { getDefaultLabourRateCents, effectiveLabourRateCents, totalLoggedHours, jobProfit } from "@/lib/workshop";
 import { hasPermission } from "@/lib/permissions";
+import WatchButton from "@/components/WatchButton";
+import MentionTextarea from "@/components/MentionTextarea";
+import { watchState } from "@/lib/collaboration";
+import { addJobCardNote } from "@/app/actions/collaboration";
 import ChecklistCard from "@/components/checklists/ChecklistCard";
 import { runsForHost, templatesForHostRecord } from "@/lib/checklists/store";
 
@@ -149,6 +153,7 @@ export default async function JobCardDetailPage({
         approvals: { orderBy: { createdAt: "desc" } },
         reservations: { where: { status: "active" }, include: { part: true }, orderBy: { createdAt: "desc" } },
         documents: { where: { deletedAt: null }, include: { uploadedBy: true }, orderBy: { createdAt: "desc" } },
+        teamNotes: { orderBy: { createdAt: "desc" }, take: 100 },
       },
     }),
     prisma.part.findMany({ where: { active: true }, orderBy: { name: "asc" } }),
@@ -162,6 +167,8 @@ export default async function JobCardDetailPage({
   if (!jobCard) notFound();
   const currentUser = await requireUser();
   const canManageChecklists = await hasPermission(currentUser, "jobcards.manage");
+  const watch = jobCard.tenantId ? await watchState(jobCard.tenantId, currentUser.id, { type: "jobcard", id: jobCard.id }) : { watching: false, count: 0 };
+  const staffName = new Map(users.map((person) => [person.id, person.name]));
   const checklistTenantId = jobCard.tenantId ?? "";
   const [checkinTemplates, checkinRuns, checkoutTemplates, checkoutRuns] = canManageChecklists && checklistTenantId
     ? await Promise.all([
@@ -232,6 +239,7 @@ export default async function JobCardDetailPage({
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
+          <WatchButton type="jobcard" id={jobCard.id} {...watch} />
           <Link href={`/jobcards/${jobCard.id}/print`} className={buttonVariants({ variant: "outline", size: "sm" })}><Printer />Print</Link>
           {jobCard.status === "collected" && <Link href={`/jobcards/${jobCard.id}/service-report`} className={buttonVariants({ variant: "outline", size: "sm" })} target="_blank"><ClipboardCheck />Service report</Link>}
           {/* A template picker and a Generate button sat here, mirroring one on
@@ -861,6 +869,28 @@ export default async function JobCardDetailPage({
           </SaveForm>
         </StageSection>
       </div>
+
+      {/* Team notes — staff only, never on the customer's documents. @mentions tell the person named. */}
+      <Surface className="space-y-3 p-4">
+        <div>
+          <h2 className="text-sm font-semibold">Team notes</h2>
+          <p className="text-xs text-muted-foreground">Only your team sees these. Type @ to mention someone — they&apos;re told if they can open this job card.</p>
+        </div>
+        <SaveForm action={addJobCardNote.bind(null, jobCard.id)} className="space-y-2">
+          <MentionTextarea name="body" rows={2} placeholder="What should the team know about this job? Type @ to mention someone." />
+          <div className="flex justify-end"><SaveButton className="btn-secondary btn-sm" pendingLabel="Saving…">Add note</SaveButton></div>
+        </SaveForm>
+        {jobCard.teamNotes.length > 0 && (
+          <ul className="space-y-2">
+            {jobCard.teamNotes.map((note) => (
+              <li key={note.id} className="rounded-xl border border-border px-3 py-2">
+                <p className="whitespace-pre-wrap text-sm">{note.body}</p>
+                <p className="mt-1 text-[11px] text-muted-foreground">{staffName.get(note.authorId) ?? "Former staff member"} · {formatDateTime(note.createdAt)}</p>
+              </li>
+            ))}
+          </ul>
+        )}
+      </Surface>
 
       {/* Reference — always available, not tied to a step ──────────────────── */}
       <details className="group overflow-hidden rounded-2xl border border-border bg-card">
