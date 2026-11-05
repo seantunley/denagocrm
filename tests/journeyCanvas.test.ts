@@ -217,3 +217,27 @@ test("undo and redo walk the snapshots back and forth, and a new edit clears red
   assert.equal(long.past.length, 50);
   assert.equal(long.past[0], 30);
 });
+
+test("a condition with its own Yes and the generated No stop: drawn as saved, saved unchanged", () => {
+  // Review of #997: this pair read as an ordinary condition, so the canvas wired Yes to the next step and a save
+  // replaced the custom Yes with it (and, once kept, dropped the generated stop its No points at).
+  const saved = stored({
+    startStepId: "check",
+    steps: [
+      { id: "check", type: "condition", nextStepId: "wait1", config: { condition: group("lead.source", "web"), trueStepId: "thanks", falseStepId: "check_false_stop" } },
+      { id: "wait1", type: "wait", nextStepId: "thanks", config: { amount: 1, unit: "days" } },
+      { id: "thanks", type: "wait", nextStepId: null, config: { amount: 2, unit: "days" } },
+      { id: "check_false_stop", type: "stop", nextStepId: null, config: { reason: "Condition did not match", systemGenerated: true } },
+    ],
+  });
+  assert.deepEqual(reopenAndSave(saved), saved);
+  const { edges, nodes } = journeyGraph(builderSteps(saved));
+  const from = (handle: string) => edges.find((e) => e.source === "check" && e.sourceHandle === handle)?.target;
+  assert.equal(from("yes"), "thanks", "Yes goes where it was saved to, not the next step");
+  assert.ok(nodes.some((n) => n.id === from("no") && n.kind === "stop"), "No goes to the stop");
+  // The builder's own condition still re-derives its Yes from the order.
+  const plain = stored(builderDefinition([step("c", "condition", { condition: group("lead.source", "web") }), wait("w1"), wait("w2")]));
+  const [, w1, w2] = builderSteps(plain);
+  const reordered = builderDefinition([builderSteps(plain)[0], w2, w1]);
+  assert.equal(reordered.steps[0].config.trueStepId, "w2");
+});

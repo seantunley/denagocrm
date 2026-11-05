@@ -11,7 +11,7 @@
  *  - a condition's "No" wire is drawn (to its stop, or to the target it was written with) but is not an edit point.
  */
 import { JOURNEY_LIMITS, JOURNEY_STEP_LABELS, type JourneyStepType } from "./journeyTypes";
-import { generatedStopId, initialConfig, isRecord, type BuilderStep } from "./journeyBuilderDefinition";
+import { conditionHasOwnTargets, generatedStopId, initialConfig, isRecord, type BuilderStep } from "./journeyBuilderDefinition";
 
 /** Where a list of steps lives: the journey itself (null), or one slot of a Choose/Repeat. */
 export type ListRef = { parentId: string; slot: string } | null;
@@ -161,7 +161,7 @@ const cardHeight = (handles: number) => 104 + 26 * handles;
 
 /** A condition at the top level written with its own jump targets (journeyBuilderDefinition keeps them). */
 export function hasOwnTargets(step: BuilderStep, depth: number): boolean {
-  return depth === 0 && step.type === "condition" && Boolean(step.config.trueStepId || step.config.falseStepId) && step.config.falseStepId !== generatedStopId(step.id);
+  return depth === 0 && conditionHasOwnTargets(step);
 }
 
 export function stepHandles(step: BuilderStep): CanvasHandle[] {
@@ -195,16 +195,20 @@ export function journeyGraph(steps: BuilderStep[]): { nodes: CanvasNode[]; edges
       const next = list[index + 1];
 
       if (step.type === "condition") {
-        if (hasOwnTargets(step, depth)) {
-          const yes = String(step.config.trueStepId || next?.id || "");
-          const no = String(step.config.falseStepId || next?.id || "");
-          if (yes) edge(step.id, "yes", yes, "yes", "Yes", false);
-          if (no) edge(step.id, "no", no, "no", "No", false);
-        } else {
+        const own = hasOwnTargets(step, depth);
+        if (!own || step.config.falseStepId === generatedStopId(step.id)) {
           nodes.push({ id: stopNode(step.id), kind: "stop", x: cx + 40, y: stepBottom + 30, label: depth ? "Run stops here" : "Stop" });
           edge(step.id, "no", stopNode(step.id), "no", "No", false);
           stepBottom += 30 + 60;
-          if (next) edge(step.id, "yes", next.id, "yes", "Yes");
+        } else {
+          const no = String(step.config.falseStepId || next?.id || "");
+          if (no) edge(step.id, "no", no, "no", "No", false);
+        }
+        if (own) {
+          const yes = String(step.config.trueStepId || next?.id || "");
+          if (yes) edge(step.id, "yes", yes, "yes", "Yes", false);
+        } else if (next) {
+          edge(step.id, "yes", next.id, "yes", "Yes");
         }
       } else if (next) {
         edge(step.id, "out", next.id, "next", step.type === "choose" ? "afterwards" : step.type === "repeat" ? "when done" : undefined);

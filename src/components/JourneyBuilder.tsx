@@ -9,7 +9,7 @@ import { JOURNEY_EVENT_TRIGGERS, JOURNEY_LIMITS, JOURNEY_STEP_LABELS, JOURNEY_TR
 import { JOURNEY_TRIGGER_LABELS, type JourneyTriggerSpec } from "@/lib/journeyTriggers";
 import { BuilderSaveStatus, BuilderWorkspaceBar, BuilderWorkspaceShell } from "@/components/builder-workspace";
 import { JOURNEY_RUN_MODES, RUN_MODE_LEGACY_NOTE } from "@/lib/journeyRunModes";
-import { builderDefinition, builderSteps, emptyGroup, generatedStopId, initialConfig, isRecord, newWaitStep, type BuilderStep } from "@/lib/journeyBuilderDefinition";
+import { builderDefinition, builderSteps, conditionHasOwnTargets, emptyGroup, generatedStopId, initialConfig, isRecord, newWaitStep, type BuilderStep } from "@/lib/journeyBuilderDefinition";
 import JourneyConditionGroupEditor from "@/components/JourneyConditionGroupEditor";
 import JourneyCanvas from "@/components/JourneyCanvas";
 import ConfirmActionDialog from "@/components/ConfirmActionDialog";
@@ -597,13 +597,14 @@ function StepFields({ step, onChange, depth, lists, hideNested = false }: { step
 
     case "condition": {
       // A condition authored with its own jump targets keeps them; the builder's own pattern is "carry on, or stop".
-      const ownTargets = depth === 0 && Boolean(config.trueStepId || config.falseStepId) && config.falseStepId !== generatedStopId(step.id);
+      const ownTargets = depth === 0 && conditionHasOwnTargets(step);
+      const others = config.falseStepId === generatedStopId(step.id) ? "others stop here" : `others go to ${String(config.falseStepId || "the next step")}`;
       return (
         <div className="space-y-2">
           <JourneyConditionGroupEditor value={config.condition} onChange={(group) => set("condition", group)} />
           <p className="text-xs text-slate-500">
             {ownTargets
-              ? `Matching customers go to ${String(config.trueStepId || "the next step")}; others go to ${String(config.falseStepId || "the next step")} (set when this journey was written — kept as saved).`
+              ? `Matching customers go to ${String(config.trueStepId || "the next step")}; ${others} (set when this journey was written — kept as saved).`
               : "Matching customers carry on. Others stop here."}
           </p>
         </div>
