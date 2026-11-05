@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { CheckCircle2, CircleDollarSign, Download, FileText, Plus, Search, Send } from "lucide-react";
 import { prisma } from "@/lib/db";
+import { getRecordLabels } from "@/lib/recordLabelsServer";
 import {
   requireAnyPermission,
   getAccessibleLeadIds,
@@ -62,6 +63,7 @@ export default async function QuotesPage({
   searchParams: Promise<{ edit?: string; q?: string; status?: string; page?: string }>;
 }) {
   const user = await requireAnyPermission("quotes.view_all", "quotes.view_owned");
+  const dealLabel = (await getRecordLabels()).deal.one;
   const params = await searchParams;
   const { edit, q, status } = params;
   // RBAC scope + search + status, as one database filter. The export route
@@ -297,7 +299,7 @@ export default async function QuotesPage({
                       key={quote.id}
                       label={`Quote Q-${quote.number}`}
                       href={`/quotes/${quote.id}`}
-                      actions={quoteContextActions(quote)}
+                      actions={quoteContextActions(quote, dealLabel)}
                     >
                     <MobileDataCard>
                       <MobileDataHeader
@@ -366,7 +368,7 @@ export default async function QuotesPage({
                           key={quote.id}
                           label={`Quote Q-${quote.number}`}
                           href={`/quotes/${quote.id}`}
-                          actions={quoteContextActions(quote)}
+                          actions={quoteContextActions(quote, dealLabel)}
                         >
                         <tr tabIndex={0} className="focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary">
                           <td>
@@ -413,10 +415,10 @@ export default async function QuotesPage({
 
 // Every row here came through getAccessibleQuoteIds — the same gate the print
 // routes apply with requireQuoteReadAccess.
-function quoteContextActions(quote: { id: string; status: string }): RecordContextAction[] {
+function quoteContextActions(quote: { id: string; status: string }, dealLabel: string): RecordContextAction[] {
   return [
     { label: "Open editor", href: `/quotes?edit=${quote.id}`, icon: "edit" },
-    { label: "Deal workspace", href: `/deals/${quote.id}`, icon: "quote" },
+    { label: `${dealLabel} workspace`, href: `/deals/${quote.id}`, icon: "quote" },
     { label: "Print / PDF", href: `/quotes/${quote.id}/print`, icon: "print", newTab: true },
     ...quotePrintLinks(quote).map((link) => ({ ...link, icon: "print" as const, newTab: true })),
   ];

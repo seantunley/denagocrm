@@ -24,8 +24,11 @@ import { CONFIRM_KEY } from "@/lib/assistantActions";
 import { resolveAssignableUser } from "@/lib/tenantActor";
 import { withActingStaffScope } from "@/lib/actingScope";
 import {
+  canAccessContact,
   requireJobCardAccess,
+  requirePermission,
   requireVehicleAccess,
+  type PermissionUser,
 } from "@/lib/permissions";
 
 /**
@@ -251,6 +254,7 @@ export async function createJobCard(formData: FormData) {
   const kmInRaw = String(formData.get("kmIn") ?? "").trim();
   const jobCard = await openJobCard({
     vehicleId: String(formData.get("vehicleId") ?? ""),
+    contactId: String(formData.get("contactId") ?? ""),
     description: String(formData.get("description") ?? ""),
     kmIn: kmInRaw === "" ? null : parseInt(kmInRaw, 10),
     priority: String(formData.get("priority") ?? "") || undefined,
@@ -272,22 +276,38 @@ export async function createJobCard(formData: FormData) {
  * opened (`repeated`), not another. The form sends no key and is unchanged.
  */
 const CONFIRM_KEY_KEPT_MS = 35 * 24 * 60 * 60 * 1000;
-export async function openJobCard(input: { vehicleId: string; description: string; kmIn?: number | null; priority?: string; confirmKey?: string }) {
+export async function openJobCard(input: { vehicleId?: string | null; contactId?: string | null; description: string; kmIn?: number | null; priority?: string; confirmKey?: string }) {
   return withActingStaffScope(async () => {
     // The automotive pack owns job cards; a stale quick-create dialog could still POST
     // this action after the pack is switched off, so reject it server-side.
     if (!(await isModuleEnabled("automotive"))) {
       throw new Error("The automotive module is disabled");
     }
-    const vehicleId = String(input.vehicleId ?? "");
+    // A vehicle, or (since 2026-11-05) a customer alone — for jobs that aren't on a vehicle. With a vehicle, the
+    // customer is the vehicle's owner, as before.
+    const vehicleId = String(input.vehicleId ?? "").trim() || null;
     const description = String(input.description ?? "").trim();
-    if (!vehicleId || !description) throw new Error("Vehicle and description are required");
+    if (!description) throw new Error("Describe the job.");
+    if (!vehicleId && !String(input.contactId ?? "").trim()) throw new Error("Choose a vehicle or a customer.");
     const priority = input.priority ?? "normal";
     if (!PRIORITY_VALUES.includes(priority)) throw new Error("Choose a valid priority.");
-    const user = await requireVehicleAccess(vehicleId, "jobcards.manage");
-
-    const vehicle = await prisma.vehicle.findUniqueOrThrow({ where: { id: vehicleId } });
-    const kmIn = input.kmIn ?? null;
+    let user: PermissionUser;
+    let contactId: string;
+    let onWhat: string;
+    if (vehicleId) {
+      user = await requireVehicleAccess(vehicleId, "jobcards.manage");
+      const vehicle = await prisma.vehicle.findUniqueOrThrow({ where: { id: vehicleId } });
+      contactId = vehicle.contactId;
+      onWhat = ` on ${vehicle.model}`;
+    } else {
+      contactId = String(input.contactId).trim();
+      user = await requirePermission("jobcards.manage");
+      // canAccessContact also checks the customer is in this workspace.
+      if (!(await canAccessContact(user, contactId))) throw new Error("Customer not found.");
+      onWhat = "";
+    }
+    // Mileage is a vehicle's; a job without one has none.
+    const kmIn = vehicleId ? input.kmIn ?? null : null;
 
     // Allocate the number and insert in ONE transaction under the advisory lock so
     // two concurrent job-card creates can't collide on the unique number (#11).
@@ -313,14 +333,14 @@ export async function openJobCard(input: { vehicleId: string; description: strin
           number,
           tenantId,
           vehicleId,
-          contactId: vehicle.contactId,
+          contactId,
           description,
           kmIn: kmIn != null && !isNaN(kmIn) ? kmIn : null,
           priority,
           technicianId: user.id,
         },
       });
-      if (jc.kmIn != null) {
+      if (vehicleId && jc.kmIn != null) {
         await tx.mileageLog.create({
           data: { tenantId, vehicleId, km: jc.kmIn, note: `Job card #${jc.number} check-in` },
         });
@@ -345,8 +365,8 @@ export async function openJobCard(input: { vehicleId: string; description: strin
     if ("repeated" in jobCard) return jobCard;
     await logAudit({
       action: "jobcard.opened",
-      summary: `Opened job card #${jobCard.number} on ${vehicle.model}: ${description}`,
-      contactId: vehicle.contactId,
+      summary: `Opened job card #${jobCard.number}${onWhat}: ${description}`,
+      contactId,
       user,
     });
     revalidatePath("/jobcards");
@@ -528,6 +548,7 @@ export async function updateJobCardDetails(jobCardId: string, formData: FormData
     });
     const completed = "This job card is completed — reopen it to change its details.";
     if (before.status === "collected") refuse(completed);
+    if (!before.vehicleId && kmIn != null) refuse("This job has no vehicle, so it has no mileage.");
     if (before.description === description && before.kmIn === kmIn) return { success: "No changes" };
 
     const checkInNote = `Job card #${before.number} check-in`;
@@ -542,7 +563,7 @@ export async function updateJobCardDetails(jobCardId: string, formData: FormData
       });
       if (count === 0) refuse(completed);
       // Keep the vehicle's mileage history in step with the corrected reading.
-      if (before.kmIn !== kmIn) {
+      if (before.vehicleId && before.kmIn !== kmIn) {
         const log = await tx.mileageLog.findFirst({ where: { vehicleId: before.vehicleId, note: checkInNote } });
         if (log && kmIn != null) await tx.mileageLog.update({ where: { id: log.id }, data: { km: kmIn } });
         else if (log) await tx.mileageLog.delete({ where: { id: log.id } });
@@ -661,11 +682,13 @@ export async function completeJobCard(jobCardId: string, formData: FormData) {
 
     let nextDueKm = str("nextDueKm") != null ? parseInt(String(str("nextDueKm")), 10) : null;
     let nextDueDate = str("nextDueDate") ? new Date(String(str("nextDueDate"))) : null;
-    if (nextDueKm == null && km != null && jobCard.vehicle.serviceIntervalKm) {
-      nextDueKm = km + jobCard.vehicle.serviceIntervalKm;
+    // A job with no vehicle has no service history, mileage or next service: it is simply marked done.
+    const vehicle = jobCard.vehicle;
+    if (nextDueKm == null && km != null && vehicle?.serviceIntervalKm) {
+      nextDueKm = km + vehicle.serviceIntervalKm;
     }
-    if (nextDueDate == null && jobCard.vehicle.serviceIntervalMonths) {
-      nextDueDate = addMonths(new Date(), jobCard.vehicle.serviceIntervalMonths);
+    if (nextDueDate == null && vehicle?.serviceIntervalMonths) {
+      nextDueDate = addMonths(new Date(), vehicle.serviceIntervalMonths);
     }
 
     const completedAt = new Date();
@@ -689,20 +712,22 @@ export async function completeJobCard(jobCardId: string, formData: FormData) {
       // collected, reopened and completed again UPDATES its record: creating a
       // second one hit the unique constraint, so a reopened card could never be
       // completed again.
-      await tx.serviceRecord.upsert({
-        where: { jobCardId },
-        create: { vehicleId: jobCard.vehicleId, jobCardId, ...record },
-        update: { ...record, serviceDate: completedAt },
-      });
+      if (jobCard.vehicleId) {
+        await tx.serviceRecord.upsert({
+          where: { jobCardId },
+          create: { vehicleId: jobCard.vehicleId, jobCardId, ...record },
+          update: { ...record, serviceDate: completedAt },
+        });
+      }
     });
-    if (km != null && !isNaN(km)) {
+    if (jobCard.vehicleId && km != null && !isNaN(km)) {
       await prisma.mileageLog.create({
         data: { vehicleId: jobCard.vehicleId, km, note: `Job card #${jobCard.number} completed` },
       });
     }
     await logAudit({
       action: "jobcard.completed",
-      summary: `Completed job card #${jobCard.number} on ${jobCard.vehicle.model}: ${summary}`,
+      summary: `Completed job card #${jobCard.number}${vehicle ? ` on ${vehicle.model}` : ""}: ${summary}`,
       contactId: jobCard.contactId,
       user,
     });
@@ -712,8 +737,8 @@ export async function completeJobCard(jobCardId: string, formData: FormData) {
       occurrence: `jobcard:${jobCard.id}:${completedAt.toISOString()}`,
       payload: {
         jobCardId: jobCard.id,
-        model: jobCard.vehicle.model,
-        refText: `the service on your ${jobCard.vehicle.model} (job card #${jobCard.number})`,
+        model: vehicle?.model ?? "",
+        refText: vehicle ? `the service on your ${vehicle.model} (job card #${jobCard.number})` : `job card #${jobCard.number}`,
       },
     });
     await triggerSurvey("job_complete", {
@@ -722,7 +747,7 @@ export async function completeJobCard(jobCardId: string, formData: FormData) {
     });
     revalidatePath("/jobcards");
     revalidatePath(`/jobcards/${jobCardId}`);
-    revalidatePath(`/vehicles/${jobCard.vehicleId}`);
+    if (jobCard.vehicleId) revalidatePath(`/vehicles/${jobCard.vehicleId}`);
     revalidatePath("/vehicles");
   });
 }

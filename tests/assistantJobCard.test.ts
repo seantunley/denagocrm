@@ -90,7 +90,9 @@ test("Confirm opens it through the job-card form's own door, after yes/no checks
   const jobcards = code("src/app/actions/jobcards.ts");
   const door = jobcards.slice(jobcards.indexOf("export async function openJobCard"), jobcards.indexOf("async function claimPartStock"));
   assert.match(door, /if \(!\(await isModuleEnabled\("automotive"\)\)\)/);
-  assert.match(door, /const user = await requireVehicleAccess\(vehicleId, "jobcards\.manage"\);/);
+  assert.match(door, /user = await requireVehicleAccess\(vehicleId, "jobcards\.manage"\);/);
+  // A job with no vehicle (2026-11-05): jobcards.manage, and a customer this person may open in this workspace.
+  assert.match(door, /user = await requirePermission\("jobcards\.manage"\);\s*if \(!\(await canAccessContact\(user, contactId\)\)\) throw/);
   assert.match(door, /if \(!PRIORITY_VALUES\.includes\(priority\)\) throw/);
   assert.match(door, /const number = await nextJobCardNumber\(tx\);/);
   assert.match(door, /action: "jobcard\.opened"/);

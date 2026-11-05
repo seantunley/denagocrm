@@ -1,6 +1,9 @@
 import { requireTenantOwner } from "@/lib/auth";
 import { getCompanyProfile } from "@/lib/companyProfile";
-import { saveCompanyProfile } from "@/app/actions/company";
+import { saveCompanyProfile, saveRecordLabels } from "@/app/actions/company";
+import { SaveButton, SaveForm } from "@/components/SaveForm";
+import { DEFAULT_RECORD_LABELS, isCustom, RECORD_KINDS } from "@/lib/recordLabels";
+import { getRecordLabels } from "@/lib/recordLabelsServer";
 import { SettingsWorkspace } from "@/components/settings-workspace";
 import { SETTINGS_NAV_GROUPS } from "@/lib/settings-navigation";
 import { Button } from "@/components/ui/button";
@@ -21,7 +24,7 @@ const FIELDS: { name: string; label: string; placeholder?: string }[] = [
 
 export default async function CompanyProfilePage() {
   await requireTenantOwner();
-  const profile = await getCompanyProfile();
+  const [profile, labels] = await Promise.all([getCompanyProfile(), getRecordLabels()]);
 
   return (
     <SettingsWorkspace
@@ -51,6 +54,41 @@ export default async function CompanyProfilePage() {
           <Button type="submit">Save company profile</Button>
         </div>
       </form>
+
+      <SaveForm action={saveRecordLabels} resetOnSuccess={false} className="card mt-4 max-w-2xl space-y-4 p-5">
+        <div>
+          <h3 className="font-semibold">Names for records</h3>
+          <p className="mt-1 text-xs text-muted-foreground">
+            What your business calls these, e.g. Enquiry, Matter or Work order. Used in the menu, page titles and buttons.
+            DAX, help articles, documents and emails keep the built-in words. Leave a box blank for the built-in word.
+          </p>
+        </div>
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="border-b border-border/50 text-left text-[11px] uppercase tracking-wide text-muted-foreground">
+              <th className="py-2 font-semibold">Built in</th>
+              <th className="py-2 font-semibold">One</th>
+              <th className="py-2 font-semibold">Many</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-border/50">
+            {RECORD_KINDS.map((kind) => (
+              <tr key={kind}>
+                <td className="py-2 pr-3 text-muted-foreground">{DEFAULT_RECORD_LABELS[kind].one}</td>
+                <td className="py-2 pr-3">
+                  <input name={`${kind}_one`} maxLength={30} className="input" defaultValue={isCustom(labels, kind) ? labels[kind].one : ""} placeholder={DEFAULT_RECORD_LABELS[kind].one} aria-label={`${DEFAULT_RECORD_LABELS[kind].one}, one`} />
+                </td>
+                <td className="py-2">
+                  <input name={`${kind}_many`} maxLength={30} className="input" defaultValue={isCustom(labels, kind) ? labels[kind].many : ""} placeholder={DEFAULT_RECORD_LABELS[kind].many} aria-label={`${DEFAULT_RECORD_LABELS[kind].many}, many`} />
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        <div className="flex justify-end border-t border-border/60 pt-4">
+          <SaveButton>Save names</SaveButton>
+        </div>
+      </SaveForm>
     </SettingsWorkspace>
   );
 }
