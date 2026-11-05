@@ -16,8 +16,11 @@ model KnowledgeGap {
   lastAskedAt  DateTime  @default(now())
   /// open | drafted | dismissed
   status       String    @default("open")
-  /// The knowledge draft made from it, once drafted.
+  /// The knowledge draft made from it, once drafted (while drafting: the claim's token).
   draftEntryId String?
+  /// When the current Draft claim was taken — its own clock, so customers asking again (which touches updatedAt)
+  /// can't keep a crashed claim from expiring. Set only by a new claim; cleared when released.
+  claimedAt    DateTime?
   updatedAt    DateTime  @updatedAt
 
   @@unique([tenantId, key])

@@ -49,9 +49,14 @@ test("recording is one atomic statement, and only one Draft can be saved per gap
   assert.match(record, /INSERT INTO "KnowledgeGap"[\s\S]*ON CONFLICT \("tenantId", "key"\) DO UPDATE SET\s*"count" = "KnowledgeGap"\."count" \+ 1/);
   assert.doesNotMatch(record, /findUnique|knowledgeGap\.create/, "no read-then-create race");
   // Claim first (one conditional write, with a token), then draft; save the draft and "drafted" together, only for the token's holder.
-  assert.match(lib, /OR: \[\{ status: "open" \}, \{ status: "drafting", updatedAt: \{ lt: new Date\(now\.getTime\(\) - DRAFT_CLAIM_STALE_MS\) \} \}\]/);
+  // Stale by the claim's OWN clock — never updatedAt, which every new ask touches (second review of #1009).
+  assert.match(lib, /\{ status: "drafting", claimedAt: \{ lt: new Date\(now\.getTime\(\) - DRAFT_CLAIM_STALE_MS\) \} \}/);
+  assert.match(lib, /data: \{ status: "drafting", draftEntryId: token, claimedAt: now \}/);
+  const recorder = lib.slice(lib.indexOf("export async function recordKnowledgeGap"), lib.indexOf("export async function knowledgeGaps"));
+  assert.doesNotMatch(recorder, /claimedAt/, "asking again never touches the claim's clock");
+  assert.doesNotMatch(lib.slice(lib.indexOf("export async function claimGapForDraft")), /status: "drafting", updatedAt:/);
   assert.match(lib, /const token = await claimGapForDraft\(tenantId, gapId\);\s*if \(!token\) return/);
-  assert.match(lib, /where: \{ id: gap\.id, tenantId, status: "drafting", draftEntryId: token \}, data: \{ status: "drafted", draftEntryId: entry\.id \} \}\);\s*if \(count !== 1\) throw new ClaimLost\(\);/);
+  assert.match(lib, /where: \{ id: gap\.id, tenantId, status: "drafting", draftEntryId: token \}, data: \{ status: "drafted", draftEntryId: entry\.id, claimedAt: null \} \}\);\s*if \(count !== 1\) throw new ClaimLost\(\);/);
   assert.match(lib, /if \(!result\.ok\) await releaseClaim\(tenantId, gapId, token\);/, "a failed draft frees the question");
   // The real-Postgres proof of both runs in CI's integration lane.
   assert.match(read(".github/workflows/security-rbac-ci.yml"), /scripts\/test-knowledge-gaps\.ts/);

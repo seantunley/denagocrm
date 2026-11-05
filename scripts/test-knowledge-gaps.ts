@@ -37,8 +37,17 @@ async function main() {
     assert.equal(winners.length, 1, "exactly one Draft wins");
     assert.equal(await claimGapForDraft(b.tenantId, gaps[0].id), null, "never from another workspace");
 
+    // Customers keep asking while the claim is held (which touches updatedAt): the claim must still go stale on its OWN
+    // clock (second review of #1009 — it used updatedAt, so a busy question kept a crashed claim alive for ever).
+    await Promise.all(Array.from({ length: 3 }, () => inA(() => recordKnowledgeGap("Do you deliver to Joburg?", "service"))));
+    const held = await basePrisma.knowledgeGap.findFirstOrThrow({ where: { id: gaps[0].id, tenantId: a.tenantId }, select: { status: true, count: true, claimedAt: true } });
+    assert.equal(held.status, "drafting", "asking again doesn't disturb the claim");
+    assert.equal(held.count, 23);
+    assert.ok(held.claimedAt, "the claim's own clock is set");
+    assert.equal(await claimGapForDraft(a.tenantId, gaps[0].id), null, "not stale yet");
+
     // A claim that went stale can be taken over — then the old holder's token no longer finishes it.
-    const later = new Date(Date.now() + DRAFT_CLAIM_STALE_MS + 60_000);
+    const later = new Date(held.claimedAt!.getTime() + DRAFT_CLAIM_STALE_MS + 60_000);
     const takeover = await claimGapForDraft(a.tenantId, gaps[0].id, later);
     assert.ok(takeover && takeover !== winners[0]);
     const finishedByOld = await basePrisma.knowledgeGap.updateMany({ where: { id: gaps[0].id, tenantId: a.tenantId, status: "drafting", draftEntryId: winners[0]! }, data: { status: "drafted" } });

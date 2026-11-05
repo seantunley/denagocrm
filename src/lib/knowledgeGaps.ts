@@ -91,16 +91,18 @@ export const DRAFT_CLAIM_STALE_MS = 5 * 60 * 1000;
  */
 export async function claimGapForDraft(tenantId: string, gapId: string, now = new Date()): Promise<string | null> {
   const token = `claim:${randomUUID()}`;
+  // Stale by the CLAIM's own clock (claimedAt), not updatedAt — every new ask touches updatedAt, so a busy question
+  // would otherwise keep a crashed claim alive for ever (second review of #1009).
   const { count } = await basePrisma.knowledgeGap.updateMany({
-    where: { id: gapId, tenantId, OR: [{ status: "open" }, { status: "drafting", updatedAt: { lt: new Date(now.getTime() - DRAFT_CLAIM_STALE_MS) } }] },
-    data: { status: "drafting", draftEntryId: token },
+    where: { id: gapId, tenantId, OR: [{ status: "open" }, { status: "drafting", claimedAt: { lt: new Date(now.getTime() - DRAFT_CLAIM_STALE_MS) } }, { status: "drafting", claimedAt: null }] },
+    data: { status: "drafting", draftEntryId: token, claimedAt: now },
   });
   return count === 1 ? token : null;
 }
 
 /** Give a claim back (drafting failed): the question is open again. Only the claim's own holder can. */
 async function releaseClaim(tenantId: string, gapId: string, token: string) {
-  await basePrisma.knowledgeGap.updateMany({ where: { id: gapId, tenantId, status: "drafting", draftEntryId: token }, data: { status: "open", draftEntryId: null } }).catch(() => {});
+  await basePrisma.knowledgeGap.updateMany({ where: { id: gapId, tenantId, status: "drafting", draftEntryId: token }, data: { status: "open", draftEntryId: null, claimedAt: null } }).catch(() => {});
 }
 
 export async function draftFromGap(tenantId: string, gapId: string): Promise<{ ok: true; title: string } | { ok: false; error: string }> {
@@ -162,7 +164,7 @@ async function draftClaimed(tenantId: string, gapId: string, token: string): Pro
         },
         select: { id: true },
       });
-      const { count } = await tx.knowledgeGap.updateMany({ where: { id: gap.id, tenantId, status: "drafting", draftEntryId: token }, data: { status: "drafted", draftEntryId: entry.id } });
+      const { count } = await tx.knowledgeGap.updateMany({ where: { id: gap.id, tenantId, status: "drafting", draftEntryId: token }, data: { status: "drafted", draftEntryId: entry.id, claimedAt: null } });
       if (count !== 1) throw new ClaimLost();
       return entry;
     }).catch((error: unknown) => {

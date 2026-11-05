@@ -12,9 +12,12 @@ CREATE TABLE IF NOT EXISTS "KnowledgeGap" (
   "lastAskedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
   "status" TEXT NOT NULL DEFAULT 'open',
   "draftEntryId" TEXT,
+  "claimedAt" TIMESTAMP(3),
   "updatedAt" TIMESTAMP(3) NOT NULL,
   CONSTRAINT "KnowledgeGap_pkey" PRIMARY KEY ("id")
 );
+-- For a database that already ran an earlier copy of this migration (a preview branch).
+ALTER TABLE "KnowledgeGap" ADD COLUMN IF NOT EXISTS "claimedAt" TIMESTAMP(3);
 CREATE UNIQUE INDEX IF NOT EXISTS "KnowledgeGap_tenantId_key_key" ON "KnowledgeGap"("tenantId", "key");
 CREATE INDEX IF NOT EXISTS "KnowledgeGap_tenantId_status_lastAskedAt_idx" ON "KnowledgeGap"("tenantId", "status", "lastAskedAt");
 
