@@ -66,7 +66,9 @@ test("a new workspace's users get the workspace's own copy of the starting role"
 });
 
 test("the shell, nav and menus treat the workspace's owner as owner", () => {
-  assert.match(src("src/app/(app)/layout.tsx"), /isTenantOwner: await isTenantOwner\(\)\.catch\(\(\) => false\),/);
+  const layout = src("src/app/(app)/layout.tsx");
+  assert.match(layout, /\n\s*isTenantOwner\(\)\.catch\(\(\) => false\),\s/);
+  assert.match(layout, /isTenantOwner: isTenantOwnerFlag,/);
   const shell = src("src/components/AppShell.tsx");
   assert.match(shell, /const ownsWorkspace = \(user: ShellUser\) => user\.isTenantOwner \?\? user\.role === "owner";/);
   assert.match(shell, /<CommandMenu isAdmin=\{ownsWorkspace\(user\)\} isPlatformOwner=\{user\.role === "owner"\}/);

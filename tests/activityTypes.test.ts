@@ -214,7 +214,8 @@ test("THE LIST ENTERS THE CLIENT TREE AT THE SHELL", () => {
   // component can reach — so the layout is the only place this can be read, and
   // the provider is what every picker below it consults.
   const layout = stripComments(src("src/app/(app)/layout.tsx"));
-  assert.match(layout, /resolveActivityTypes\(await getSetting\(ACTIVITY_TYPES_KEY\)\)/);
+  assert.match(layout, /\n\s*getSetting\(ACTIVITY_TYPES_KEY\),\s/);
+  assert.match(layout, /resolveActivityTypes\(activityTypesSetting\)/);
   assert.match(layout, /activityTypes=\{activityTypes\}/);
 
   const shell = stripComments(src("src/components/AppShell.tsx"));
