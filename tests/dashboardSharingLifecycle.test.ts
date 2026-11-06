@@ -286,15 +286,17 @@ const AUTH_STUBS: Record<string, () => unknown> = {
     withSystemScope: <T,>(fn: () => Promise<T>) => fn(),
     currentTenantScope: () => null,
   }),
-  "./tenantContext": () => ({
+  "./tenantContext": () => {
     // The real shape: every ACTIVE membership, collapsed by the real
     // `soleActiveTenant`. This is what decides whether the session's `tid` claim
     // is still honoured, so the rule is executed rather than assumed.
-    resolveActingTenant: async (userId: string) =>
+    const resolveActingTenant = async (userId: string) =>
       soleActiveTenant(
         (await db.tenantMember.findMany({ where: { userId } })).map((m) => m.tenantId as string),
-      ),
-  }),
+      );
+    // Uncached here: the per-request memo is React's, and each test step is its own request.
+    return { resolveActingTenant, resolveActingTenantForRequest: resolveActingTenant };
+  },
   "./session": () => ({
     SESSION_COOKIE: "denago_session",
     DEFAULT_IDLE_MINUTES: 60,

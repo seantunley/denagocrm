@@ -1,4 +1,5 @@
 import "server-only";
+import { cache } from "react";
 import { Prisma } from "@prisma/client";
 import { basePrisma } from "@/lib/db";
 import { addTenantMembership } from "@/lib/provisioning";
@@ -23,6 +24,16 @@ export async function resolveActingTenant(
   });
   return soleActiveTenant(memberships.map((m) => m.tenantId));
 }
+
+/**
+ * {@link resolveActingTenant} once per server render, per user. The session check and
+ * every `getActiveTenantId` caller ask the same question several times per page view.
+ * React `cache()` lives for one request and is a plain pass-through in Server Actions
+ * and route handlers, where memberships are changed — so no request can see a stale
+ * answer from another. Keyed on the user, so a linked-phone actor is never confused
+ * with the session user.
+ */
+export const resolveActingTenantForRequest = cache((userId: string) => resolveActingTenant(userId));
 
 /**
  * Same resolution, but LOCKS the candidate `Tenant` + `TenantMember` rows

@@ -1,5 +1,5 @@
 import "server-only";
-import { resolveActingTenant } from "./tenantContext";
+import { resolveActingTenantForRequest } from "./tenantContext";
 import { honoredTenantClaim, decideStaffTenantScope } from "./tenant";
 import { tenantEnforcing } from "./tenantEnforcement";
 import { currentTenantScope, enterTenantScope, runInTenantScope, type TenantScope } from "./tenantScope";
@@ -60,7 +60,7 @@ export async function establishStaffTenantScope(
   // Resolve the exact same validated membership/claim pair in both modes. This is
   // the authenticated chokepoint, so unlike cron/webhook work there is a real
   // actor to ask. Background paths never call this function.
-  const sole = await resolveActingTenant(userId);
+  const sole = await resolveActingTenantForRequest(userId);
   const tenantId = honoredTenantClaim(tid, sole);
 
   if (!tenantEnforcing()) {

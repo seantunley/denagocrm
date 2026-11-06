@@ -29,7 +29,7 @@ test("the staff chokepoint resolves and binds before the dormant return", () => 
   assert.ok(start >= 0 && end > start, "staff scope function must be locatable");
   const fn = source.slice(start, end).replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
 
-  const resolveAt = fn.indexOf("await resolveActingTenant(userId)");
+  const resolveAt = fn.indexOf("await resolveActingTenantForRequest(userId)");
   const dormantAt = fn.indexOf("if (!tenantEnforcing())");
   // The bind no longer sits on one line: the scope is built, entered AND returned,
   // so the caller can re-enter it in its own execution context (see
