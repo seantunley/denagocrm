@@ -383,8 +383,8 @@ export async function createQuoteForFleet(formData: FormData) {
  * Binding an ENCLOSING frame here is the only shape that reaches it.
  */
 export async function saveQuoteDraft(input: QuoteDraftInput): Promise<QuoteDraftResult> {
-  const moneyFmt = await getRegionalSettings();
   return withActingStaffScope(async () => {
+    const moneyFmt = await getRegionalSettings();
   const parsed = quoteDraftSchema.safeParse(input);
   if (!parsed.success) {
     return { ok: false, error: parsed.error.issues[0]?.message ?? "Check the quote details." };
@@ -1119,8 +1119,8 @@ async function auditLeadReopened(
 }
 
 export async function setQuoteStatus(quoteId: string, status: string) {
-  const moneyFmt = await getRegionalSettings();
   return asActionResult(async () => {
+    const moneyFmt = await getRegionalSettings();
     const user = await requireQuoteAccess(quoteId, "quotes.change_status");
     const allowed = new Set(["draft", "sent", "accepted", "declined"]);
     if (!allowed.has(status)) throw new ActionRefusal("Invalid quote status");

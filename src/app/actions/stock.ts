@@ -446,8 +446,8 @@ export async function reserveUnit(id: string, formData: FormData) {
 }
 
 export async function recordReservationDeposit(id: string, formData: FormData) {
-  const moneyFmt = await getRegionalSettings();
   return asActionResult(async () => {
+    const moneyFmt = await getRegionalSettings();
     const user = await requirePermission("stock.manage");
     const reference = str(formData.get("reference"));
     if (!str(formData.get("amount"))) refuse("Enter the deposit amount received.");

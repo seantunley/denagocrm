@@ -153,8 +153,9 @@ export async function runAssistantAction(
   via: "crm" | "whatsapp" = "crm",
   /** `quote`: the draft a quote_build created. */
 ): Promise<{ ok: boolean; error?: string; success?: string; href?: string; unchanged?: boolean; resumable?: boolean; quote?: { id: string; number: number } }> {
-  const moneyFmt = await getRegionalSettings();
   return withActingStaffScope(async () => {
+    // Inside the scope, after nothing: a settings read is the workspace's, never before the action is bound.
+    const moneyFmt = await getRegionalSettings();
     const user = await requireAnyPermission(...ASSISTANT_PERMISSIONS);
     if (!(await isModuleEnabled("automation"))) {
       return untouched("Ask the CRM is part of the Automation & AI module, which is off for this workspace.");
