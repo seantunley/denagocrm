@@ -21,6 +21,20 @@ export async function pushRecipientsForTenant(tenantId: string): Promise<PushRec
     WHERE m."tenantId" = ${tenantId} AND t."active" = true AND u."disabledAt" IS NULL`;
 }
 
+/**
+ * A PLATFORM ALERT (the monthly security check, AI health, the backup watchdog, a system error): the active PLATFORM
+ * owners' devices, and nobody else — whatever TENANT_ENFORCEMENT is set to, the rollback included. It used to be
+ * every device in every workspace: another workspace's staff would get this one's backup and security alerts
+ * (security audit 2026-10-25, item 5). `disabledAt` lives outside the Prisma model, as in pushRecipientsForTenant.
+ */
+export async function pushRecipientsForPlatform(): Promise<PushRecipient[]> {
+  return prisma.$queryRaw<PushRecipient[]>`
+    SELECT ps."id", ps."userId", ps."endpoint", ps."p256dh", ps."auth"
+    FROM "PushSubscription" ps
+    JOIN "User" u ON u."id" = ps."userId"
+    WHERE u."role" = 'owner' AND u."disabledAt" IS NULL`;
+}
+
 export async function pushRecipientsForCurrentScope(): Promise<PushRecipient[]> {
   const s = currentScopeClass();
   if (s.mode === "closed") {
@@ -40,15 +54,8 @@ export async function pushRecipientsForCurrentScope(): Promise<PushRecipient[]> 
     if (!tenantEnforcing()) {
       return prisma.pushSubscription.findMany({ select: { id: true, userId: true, endpoint: true, p256dh: true, auth: true } });
     }
-    // A SYSTEM JOB = A PLATFORM ALERT (the monthly security check, AI health, the backup watchdog, a system error):
-    // the PLATFORM owner's devices only. It used to be every device in every workspace — another workspace's staff
-    // would get this one's backup and security alerts (security audit 2026-10-25, item 5).
-    // (`disabledAt` lives outside the Prisma model, as in pushRecipientsForTenant.)
-    return prisma.$queryRaw<PushRecipient[]>`
-      SELECT ps."id", ps."userId", ps."endpoint", ps."p256dh", ps."auth"
-      FROM "PushSubscription" ps
-      JOIN "User" u ON u."id" = ps."userId"
-      WHERE u."role" = 'owner' AND u."disabledAt" IS NULL`;
+    // A system job with no workspace and no `platform` flag: still not every workspace's phones.
+    return pushRecipientsForPlatform();
   }
   return basePrisma.$queryRaw<PushRecipient[]>`
     SELECT ps."id", ps."userId", ps."endpoint", ps."p256dh", ps."auth"
@@ -140,15 +147,18 @@ export async function sendPushToAll(
     url?: string;
   },
   kind?: PushKind,
-  options: { tenantId?: string | null; endpoint?: string | null; userId?: string | null; evenAtNight?: boolean } = {},
+  /** platform: a platform alert — the platform owners only, in every enforcement mode (pushRecipientsForPlatform). */
+  options: { tenantId?: string | null; endpoint?: string | null; userId?: string | null; evenAtNight?: boolean; platform?: boolean } = {},
 ): Promise<number> {
   if (!ensureConfigured()) return 0;
   if (!options.evenAtNight && isQuietHour(new Date())) return 0;
   if (await isKindDisabled(kind)) return 0;
 
-  const recipients = options.tenantId
-    ? await pushRecipientsForTenant(options.tenantId)
-    : await pushRecipientsForCurrentScope();
+  const recipients = options.platform
+    ? await pushRecipientsForPlatform()
+    : options.tenantId
+      ? await pushRecipientsForTenant(options.tenantId)
+      : await pushRecipientsForCurrentScope();
   const subs = (options.endpoint ? recipients.filter((sub) => sub.endpoint === options.endpoint) : recipients)
     // Absent (undefined/null) means everyone; ANY other value — even "" — is
     // one person, so a blank id narrows to nobody instead of the whole workspace.

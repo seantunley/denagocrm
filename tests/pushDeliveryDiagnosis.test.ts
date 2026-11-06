@@ -34,12 +34,22 @@ test("a push with NO workspace (a platform alert) reaches the platform owner onl
   // Security audit 2026-10-25 item 5: the security check, AI health, backup watchdog and system errors run in the
   // system scope, and went to every device in every workspace.
   const fn = shipped("src/lib/push.ts");
+  // The platform's recipients: active owners, and NOTHING about the enforcement mode — so the rollback (off or
+  // monitor) can't bring the broadcast back (review of #1015).
+  const platform = fn.slice(fn.indexOf("export async function pushRecipientsForPlatform("), fn.indexOf("export async function pushRecipientsForCurrentScope("));
+  assert.match(platform, /JOIN "User" u ON u\."id" = ps\."userId"/);
+  assert.match(platform, /WHERE u\."role" = 'owner' AND u\."disabledAt" IS NULL/);
+  assert.doesNotMatch(platform, /tenantEnforcing|currentScopeClass|findMany/);
+  // sendPushToAll takes it first when the caller says `platform`.
+  assert.match(fn, /const recipients = options\.platform\s*\? await pushRecipientsForPlatform\(\)/);
+  // A system job that forgot the flag still doesn't reach every workspace while enforcing.
   const global = fn.slice(fn.indexOf('if (s.mode === "global")'), fn.indexOf("return basePrisma.$queryRaw", fn.indexOf('if (s.mode === "global")')));
-  assert.match(global, /JOIN "User" u ON u\."id" = ps\."userId"/);
-  assert.match(global, /WHERE u\."role" = 'owner' AND u\."disabledAt" IS NULL/);
-  // Every device only while enforcement is switched off (the rollback), and nowhere else.
-  const all = global.indexOf("pushSubscription.findMany");
-  assert.ok(all > 0 && global.lastIndexOf("if (!tenantEnforcing()) {", all) > 0 && global.indexOf("}", all) < global.indexOf("$queryRaw"));
+  assert.match(global, /return pushRecipientsForPlatform\(\);/);
+  // Every platform alert says so: the security check, AI health, the backup watchdog, system errors.
+  const flagged = (rel: string) => (shipped(rel).match(/\{ platform: true \}/g) ?? []).length;
+  assert.equal(flagged("src/app/api/cron/security/route.ts"), 1);
+  assert.equal(flagged("src/lib/systemHealth.ts"), 2);
+  assert.equal(flagged("src/lib/errorLog.ts"), 1);
 });
 
 test("the four zero-send causes are still distinguishable", () => {

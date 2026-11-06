@@ -13,8 +13,8 @@ export async function GET(req: NextRequest) {
   }
 
   // The runbook sweeps every tenant's config/data — a platform-global operation
-  // → trusted system scope (guard bypass). With no workspace, the push goes to
-  // the platform owner's devices only (pushRecipientsForCurrentScope).
+  // → trusted system scope (guard bypass). The push is a platform alert: the
+  // platform owners' devices only, in every enforcement mode.
   const run = await withSystemScope(async () => {
     const result = await runSecurityChecks();
     const summary =
@@ -26,6 +26,7 @@ export async function GET(req: NextRequest) {
     await sendPushToAll(
       { title: "🛡️ Monthly security check", body: summary, url: "/settings/security" },
       "security",
+      { platform: true },
     ).catch(() => {});
     return result;
   });

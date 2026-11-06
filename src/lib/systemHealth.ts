@@ -113,7 +113,8 @@ export async function runAiHealthIfDue(): Promise<void> {
     await logError("ai-health", `AI health degraded: ${next.status} — ${next.detail}`);
     await sendPushToAll(
       { title: "⚠️ AI assistant problem", body: next.detail.slice(0, 120), url: "/settings/security" },
-      "security"
+      "security",
+      { platform: true },
     ).catch(() => {});
   }
 }
@@ -143,7 +144,8 @@ export async function runBackupWatchdog(): Promise<void> {
     await logError("backup-watchdog", msg);
     await sendPushToAll(
       { title: "🛑 Backup problem", body: msg, url: "/settings/security" },
-      "backup"
+      "backup",
+      { platform: true },
     ).catch(() => {});
   } catch (e) {
     await logError("backup-watchdog", e);
