@@ -10,6 +10,7 @@ import { GOVERNANCE_TX, logAuditStrict } from "@/lib/audit";
 import { formatZAR } from "@/lib/format";
 import { parseMoneyInput } from "@/lib/moneyInput";
 import { getRegionalSettings } from "@/lib/settings";
+import { withCurrency } from "@/lib/currencyRules";
 import { isPaymentMethod, paymentMethodLabel, statementInvoiceLabel } from "@/lib/accountStatement";
 import { recordPaymentInTx, voidPaymentInTx } from "@/lib/quoteLedger";
 
@@ -62,9 +63,11 @@ export async function recordQuotePayment(quoteId: string, formData: FormData) {
     const user = await requireQuoteAccess(quoteId, "deliveries.manage");
     const tenantId = await actingTenantId();
     const regional = await getRegionalSettings();
-    const money = (cents: number) => formatZAR(cents, regional);
+    // A payment is in its QUOTE's currency (multicurrency module; null = the base) — read and said in it.
+    const quoteMoney = withCurrency(regional, (await prisma.quote.findUnique({ where: { id: quoteId }, select: { currency: true } }))?.currency);
+    const money = (cents: number) => formatZAR(cents, quoteMoney);
 
-    const amount = parseMoneyInput(String(formData.get("amount") ?? ""));
+    const amount = parseMoneyInput(String(formData.get("amount") ?? ""), quoteMoney.currency);
     if (!amount.ok) refuse(amount.error);
     const amountCents = amount.cents;
     if (amountCents <= 0) refuse("The amount must be more than zero.");
@@ -128,7 +131,7 @@ export async function voidQuotePayment(quoteId: string, paymentId: string, formD
       await logAuditStrict(
         {
           action: "payment.voided",
-          summary: `${statementInvoiceLabel(ledger.quote)} payment of ${formatZAR(payment.amountCents, regional)} voided — ${reason}`,
+          summary: `${statementInvoiceLabel(ledger.quote)} payment of ${formatZAR(payment.amountCents, withCurrency(regional, ledger.quote.currency))} voided — ${reason}`,
           contactId: ledger.quote.contactId,
           leadId: ledger.quote.leadId,
           user,

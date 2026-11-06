@@ -116,8 +116,8 @@ test("every statement query names the workspace; partial statements and trashed 
   assert.match(loader, /if \(access\.trashDetails\) return buildAccountStatement\(\[\.\.\.live, \.\.\.trashed\], payments, fmt\);/);
   assert.match(loader, /const statement = buildAccountStatement\(live, payments\.filter\(\(payment\) => liveIds\.has\(payment\.quoteId\)\), fmt\);/);
   // Trash is read deliberately (the scoped client hides it) — only ever to warn.
-  assert.match(loader, /prisma\.quote\.findMany\(\{ where: \{ contactId, tenantId, deletedAt: \{ not: null \} \}/);
-  assert.match(loader, /prisma\.quote\.findMany\(\{ where: \{ fleetId, tenantId, deletedAt: \{ not: null \} \}/);
+  assert.match(loader, /prisma\.quote\.findMany\(\{ where: \{ contactId, tenantId, deletedAt: \{ not: null \}, \.\.\.money\.where \}/);
+  assert.match(loader, /prisma\.quote\.findMany\(\{ where: \{ fleetId, tenantId, deletedAt: \{ not: null \}, \.\.\.money\.where \}/);
   // A fleet-billed invoice is the business's debt, not the signer's.
   assert.match(loader, /const billedHere = \(quote: \{ fleetId: string \| null \}\) => !quote\.fleetId \|\| !fleets\.has\(quote\.fleetId\);/);
   assert.match(loader, /const own = quotes\.filter\(billedHere\);\s*const ownTrash = trash\.filter\(billedHere\);/);

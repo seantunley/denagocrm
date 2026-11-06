@@ -30,7 +30,8 @@ test("a new part is born owned instead of tenantless", () => {
 test("part updates and deletes carry the tenant predicate on the destructive statement", () => {
   const update = body("updatePart", "adjustPartStock");
   assert.match(update, /part\.updateMany\(\{\s*where: \{ id, tenantId, deletedAt: null \}/);
-  assert.match(update, /if \(updated\.count !== 1\) return;/);
+  // Says so now, on the form (SaveForm), instead of returning without a word.
+  assert.match(update, /if \(updated\.count !== 1\) refuse\("That part no longer exists\."\);/);
 
   const remove = body("deletePart");
   assert.match(remove, /part\.updateMany\(\{\s*where: \{ id, tenantId, deletedAt: null \}/);

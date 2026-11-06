@@ -2,13 +2,15 @@ import { prisma } from "@/lib/db";
 import { AlertTriangle, BadgeDollarSign, Boxes, PackageCheck, Plus } from "lucide-react";
 import ModalTrigger from "@/components/Modal";
 import PartForm from "@/components/PartForm";
-import { formatZAR } from "@/lib/format";
+import { SaveForm, SaveButton } from "@/components/SaveForm";
+import { currencySymbol, formatZAR, type MoneyFormat } from "@/lib/format";
 import { createPart, updatePart, adjustPartStock, deletePart } from "@/app/actions/parts";
 import { WorkspaceHero } from "@/components/workspace-hero";
 import { buttonVariants } from "@/components/ui/button";
 import { ResponsiveEntityTable } from "@/components/responsive-patterns";
+import { getRegionalSettings } from "@/lib/settings";
 
-function PartFields({ p }: { p?: { name: string; sku: string | null; priceCents: number; costCents: number; reorderAt: number | null; location: string | null; notes: string | null; stockQty?: number } }) {
+function PartFields({ p, moneyFmt }: { p?: { name: string; sku: string | null; priceCents: number; costCents: number; reorderAt: number | null; location: string | null; notes: string | null; stockQty?: number }; moneyFmt: MoneyFormat }) {
   return (
     <>
       <div className="grid grid-cols-2 gap-3">
@@ -25,11 +27,11 @@ function PartFields({ p }: { p?: { name: string; sku: string | null; priceCents:
           <input name="location" className="input" defaultValue={p?.location ?? ""} placeholder="Shelf / bin" />
         </div>
         <div>
-          <label className="label">Sell price (R)</label>
+          <label className="label">Sell price ({currencySymbol(moneyFmt)})</label>
           <input name="price" className="input" defaultValue={p ? (p.priceCents / 100).toFixed(2) : ""} />
         </div>
         <div>
-          <label className="label">Cost (R)</label>
+          <label className="label">Cost ({currencySymbol(moneyFmt)})</label>
           <input name="cost" className="input" defaultValue={p ? (p.costCents / 100).toFixed(2) : ""} />
         </div>
         {p === undefined && (
@@ -60,6 +62,7 @@ export default async function PartsPage() {
   const stockUnits = parts.reduce((total, part) => total + part.stockQty, 0);
   const retailValue = parts.reduce((total, part) => total + part.stockQty * part.priceCents, 0);
 
+  const moneyFmt = await getRegionalSettings();
   return (
     <div className="space-y-5">
       <WorkspaceHero
@@ -74,7 +77,7 @@ export default async function PartsPage() {
           { label: "Part lines", value: parts.length, detail: "Active catalogue", icon: Boxes },
           { label: "Units on hand", value: stockUnits, detail: "Across all locations", icon: PackageCheck, tone: "primary" },
           { label: "Reorder alerts", value: lowCount, detail: lowCount ? "At or below threshold" : "Inventory is healthy", icon: AlertTriangle, tone: lowCount ? "warning" : "success" },
-          { label: "Retail value", value: formatZAR(retailValue), detail: "Current on-hand value", icon: BadgeDollarSign },
+          { label: "Retail value", value: formatZAR(retailValue, moneyFmt), detail: "Current on-hand value", icon: BadgeDollarSign },
         ]}
       />
 
@@ -109,7 +112,7 @@ export default async function PartsPage() {
                     <span className={low ? "text-amber-400 font-semibold" : ""}>{p.stockQty}</span>
                     {low && <span title="At/below reorder level"> ⚠</span>}
                   </td>
-                  <td data-label="Sell" className="text-right">{formatZAR(p.priceCents)}</td>
+                  <td data-label="Sell" className="text-right">{formatZAR(p.priceCents, moneyFmt)}</td>
                   <td data-actions className="text-right">
                     <ModalTrigger label="Manage" title={p.name} buttonClass="btn-secondary btn-sm">
                       <div className="space-y-4">
@@ -123,11 +126,12 @@ export default async function PartsPage() {
                             <button className="btn-primary btn-sm">Apply</button>
                           </div>
                         </form>
-                        <form action={updatePart.bind(null, p.id)} className="card space-y-3">
+                        {/* SaveForm: a price it can't read clearly is refused on the form, not saved as 0. */}
+                        <SaveForm action={updatePart.bind(null, p.id)} success="Part saved" resetOnSuccess={false} className="card space-y-3">
                           <p className="font-semibold text-sm">Details</p>
-                          <PartFields p={p} />
-                          <button className="btn-secondary btn-sm">Save</button>
-                        </form>
+                          <PartFields p={p} moneyFmt={moneyFmt} />
+                          <SaveButton className="btn-secondary btn-sm">Save</SaveButton>
+                        </SaveForm>
                         <form action={deletePart.bind(null, p.id)}>
                           <button className="btn-danger btn-sm">Remove part</button>
                         </form>

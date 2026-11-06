@@ -1,5 +1,5 @@
 import { Check, Minus } from "lucide-react";
-import { formatDate, formatZAR, formatZARCompact } from "@/lib/format";
+import { DEFAULT_REGIONAL, formatDate, formatZAR, formatZARCompact, type MoneyFormat } from "@/lib/format";
 import { resolveField, type ScopeContext } from "@/lib/dashboard/compile";
 import type { CardMetric } from "@/lib/dashboard/config";
 import type { SourceDef, SourceField } from "@/lib/dashboard/sources";
@@ -91,8 +91,8 @@ function enumLabel(field: SourceField, value: unknown): string {
  * stat, gauge or chart headline gets the compact form, because that is one
  * number in a tight box and "R 2,27m" is what the existing tiles show.
  */
-export function money(cents: number, compact: boolean): string {
-  return compact ? formatZARCompact(cents) : formatZAR(cents);
+export function money(cents: number, compact: boolean, moneyFmt: MoneyFormat = DEFAULT_REGIONAL): string {
+  return compact ? formatZARCompact(cents, moneyFmt) : formatZAR(cents, moneyFmt);
 }
 
 /**
@@ -123,7 +123,7 @@ export function cellText(parts: unknown[], field: SourceField, ctx: RenderContex
   switch (field.type) {
     case "money": {
       const cents = asNumber(raw);
-      return cents === null ? DASH : money(cents, false);
+      return cents === null ? DASH : money(cents, false, ctx.money);
     }
     case "number": {
       const n = asNumber(raw);
@@ -201,8 +201,8 @@ export function isMoneyField(field: SourceField | null): boolean {
 }
 
 /** One metric value as a headline: compact rands, or a grouped integer. */
-export function formatMetric(value: number, asMoney: boolean): string {
-  if (asMoney) return money(Math.round(value), true);
+export function formatMetric(value: number, asMoney: boolean, moneyFmt?: MoneyFormat): string {
+  if (asMoney) return money(Math.round(value), true, moneyFmt);
   // An average is the only metric that arrives fractional, and a tile reading
   // "3.7 leads" is noise — the eye wants the magnitude, not the decimal.
   return Math.round(value).toLocaleString("en-ZA");

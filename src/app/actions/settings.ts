@@ -17,6 +17,9 @@ import {
 } from "@/lib/pipelines";
 import { stageTenantId, UNREACHABLE_STAGE_MESSAGE } from "@/lib/pipelineTenantRule";
 import { putSetting, getSetting, getRegionalSettings, REGIONAL_KEYS } from "@/lib/settings";
+import { isModuleEnabled } from "@/lib/modules/enabled";
+import { ENABLED_CURRENCIES_KEY } from "@/lib/currency";
+import { COMMON_CURRENCIES } from "@/lib/currencyRules";
 import { DOCUMENT_TYPES_KEY, parseDocumentTypes } from "@/lib/documentLabels";
 import { regionalFrom } from "@/lib/format";
 import { quoteValidDays } from "@/lib/quoteExpiry";
@@ -418,6 +421,29 @@ export async function saveRegionalSettings(formData: FormData) {
     await logAuditStrict({
       action: "settings.regional_updated",
       summary: `Tax & currency: VAT ${before.vatRatePct}% → ${parsed.vatRatePct}%, ${before.currency} → ${parsed.currency}, ${before.locale} → ${parsed.locale}, ${before.timeZone} → ${parsed.timeZone}`,
+      user,
+    });
+    revalidatePath("/settings");
+  });
+}
+
+/**
+ * The multicurrency module's extra currencies (checkboxes on Settings → Quotes). Only codes from the
+ * offered list; the base is implied and never stored. Refused when the module is off.
+ */
+export async function saveEnabledCurrencies(formData: FormData) {
+  return asActionResult(async () => {
+    const user = await requireTenantOwner();
+    if (!(await isModuleEnabled("multicurrency"))) throw new ActionRefusal("Multi-currency isn't switched on for this workspace.");
+    const { currency: base } = await getRegionalSettings();
+    const picked = formData.getAll("currencies").map((value) => String(value).trim().toUpperCase());
+    const offered = new Set<string>(COMMON_CURRENCIES);
+    const chosen = [...new Set(picked)].filter((code) => offered.has(code) && code !== base).sort();
+    const before = await getSetting(ENABLED_CURRENCIES_KEY);
+    await putSetting(ENABLED_CURRENCIES_KEY, chosen.join(","));
+    await logAuditStrict({
+      action: "settings.currencies_updated",
+      summary: `Currencies offered besides ${base}: ${before || "none"} → ${chosen.join(",") || "none"}`,
       user,
     });
     revalidatePath("/settings");

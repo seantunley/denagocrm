@@ -333,6 +333,9 @@ function runAggregate(sql: string, values: any[]): any[] {
   };
   const sumOf = (row: Row): number => {
     if (sumExpr === "0") return 0;
+    // Lead values count in the base currency only (multicurrency module): NULL currency = the base.
+    const baseOnly = /^CASE WHEN "currency" IS NULL THEN "(\w+)" ELSE 0 END$/.exec(sumExpr);
+    if (baseOnly) return row.currency == null ? Number(row[baseOnly[1]] ?? 0) : 0;
     const column = extract(sumExpr, /"(\w+)"/, `a column in the sum expression ${sumExpr}`)[1];
     return Number(row[column] ?? 0);
   };

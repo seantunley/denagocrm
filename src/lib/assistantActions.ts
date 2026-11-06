@@ -826,7 +826,7 @@ export type ActionCard =
   | { id: string; kind: "attach_file"; leadId: string | null; leadLabel: string; title: string; uploadId: string; fileName: string; target: FileTarget; label: string | null; detail: string; confirmKey: string; reason?: string }
   // Money received on an invoiced quote: `deposit` (with its proof, required) or a later payment (proof filed if sent).
   // `confirmKey` is the payment's idempotency key: a second Confirm records nothing more.
-  | { id: string; kind: "record_payment"; leadId: string | null; leadLabel: string; title: string; quoteId: string; quoteNumber: number; deposit: boolean; amountCents: number; method: "eft" | "card" | "cash" | "finance"; receivedOn: string; reference: string | null; uploadId: string | null; fileName: string | null; detail: string; confirmKey: string; reason?: string }
+  | { id: string; kind: "record_payment"; leadId: string | null; leadLabel: string; title: string; quoteId: string; quoteNumber: number; deposit: boolean; amountCents: number; currency?: string | null; method: "eft" | "card" | "cash" | "finance"; receivedOn: string; reference: string | null; uploadId: string | null; fileName: string | null; detail: string; confirmKey: string; reason?: string }
   // A signed deal's delivery day (YYYY-MM-DD): booked (`from` null), or moved from the day the card SHOWED (`from`) —
   // Confirm refuses if it has been booked or moved since.
   | { id: string; kind: "schedule_delivery"; leadId: string | null; leadLabel: string; title: string; quoteId: string; quoteNumber: number; date: string; from: string | null; detail: string; reason?: string }

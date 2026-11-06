@@ -19,6 +19,8 @@ import { signedPdfIsSafeToDelete } from "@/lib/signing/blobReferences";
 import { loadBillToFleet, quoteBillTo } from "@/lib/quoteBillTo";
 import { isModuleEnabled, requireModuleEnabled } from "@/lib/modules/enabled";
 import { deliverQuote, QUOTE_GONE, type DeliveryEvidence } from "@/lib/quoteDelivery";
+import { getRegionalSettings } from "@/lib/settings";
+import { withCurrency } from "@/lib/currencyRules";
 
 const MAX_FILE = 4 * 1024 * 1024;
 
@@ -87,10 +89,10 @@ function pickFile(formData: FormData): File | null {
  * STRICTLY (moneyInput.ts): "1 000,50" is R1 000,50, never R100 050, and an
  * amount whose meaning would have to be guessed is refused (review of #924).
  */
-function depositCents(formData: FormData): number {
+function depositCents(formData: FormData, currency: string): number {
   const raw = String(formData.get("amount") ?? "").trim();
   if (!raw) refuse("Enter the deposit amount received.");
-  const parsed = parseMoneyInput(raw);
+  const parsed = parseMoneyInput(raw, currency);
   if (!parsed.ok) refuse(parsed.error);
   return parsed.cents;
 }
@@ -130,6 +132,7 @@ export async function markInvoiced(quoteId: string, formData: FormData) {
 
 export async function markDepositPaid(quoteId: string, formData: FormData) {
   return asFulfilmentAction(async () => {
+    const moneyFmt = await getRegionalSettings();
     await requireModuleEnabled("automotive");
     const user = await requireQuoteAccess(quoteId, "deliveries.manage");
     const tenantId = await actingTenantId();
@@ -137,7 +140,9 @@ export async function markDepositPaid(quoteId: string, formData: FormData) {
     if (!quote) refuse(QUOTE_GONE);
     if (!quote.invoicedAt) refuse("Invoice this quote before recording a deposit.");
     if (quote.depositPaidAt) refuse("The deposit is already recorded.");
-    const amountCents = depositCents(formData);
+    // The deposit is in the QUOTE's currency (multicurrency module) — read and said in it.
+    const quoteFmt = withCurrency(moneyFmt, quote.currency);
+    const amountCents = depositCents(formData, quoteFmt.currency);
     const file = pickFile(formData);
     if (!file) refuse("Choose a file to upload.");
     if (file.size > MAX_FILE) refuse("That file is larger than 4 MB.");
@@ -202,7 +207,7 @@ export async function markDepositPaid(quoteId: string, formData: FormData) {
     );
     await logAudit({
       action: "fulfilment.deposit_paid",
-      summary: `Q-${quote.number} deposit of ${formatZAR(amountCents)} received — proof of payment filed`,
+      summary: `Q-${quote.number} deposit of ${formatZAR(amountCents, quoteFmt)} received — proof of payment filed`,
       contactId: quote.contactId,
       leadId: quote.leadId,
       user,
@@ -215,13 +220,15 @@ export async function markDepositPaid(quoteId: string, formData: FormData) {
 /** Correct the recorded deposit amount — a typo must not be permanent. Audited old → new. */
 export async function correctDepositAmount(quoteId: string, formData: FormData) {
   return asFulfilmentAction(async () => {
+    const moneyFmt = await getRegionalSettings();
     await requireModuleEnabled("automotive");
     const user = await requireQuoteAccess(quoteId, "deliveries.manage");
     const tenantId = await actingTenantId();
     const quote = await prisma.quote.findFirst({ where: { id: quoteId, tenantId } });
     if (!quote) refuse(QUOTE_GONE);
     if (!quote.depositPaidAt) refuse("Record the deposit before correcting its amount.");
-    const amountCents = depositCents(formData);
+    const quoteFmt = withCurrency(moneyFmt, quote.currency);
+    const amountCents = depositCents(formData, quoteFmt.currency);
     if (amountCents === quote.depositPaidCents) return { success: "That is already the recorded amount" };
     // Correcting the deposit UP can take the invoice past paid just as recording
     // it can, so it goes through the same locked check (quoteLedger.ts).
@@ -238,7 +245,7 @@ export async function correctDepositAmount(quoteId: string, formData: FormData) 
     if (updated.count !== 1) refuse(QUOTE_GONE);
     await logAudit({
       action: "fulfilment.deposit_amount_corrected",
-      summary: `Q-${quote.number} deposit amount changed from ${quote.depositPaidCents == null ? "not recorded" : formatZAR(quote.depositPaidCents)} to ${formatZAR(amountCents)}`,
+      summary: `Q-${quote.number} deposit amount changed from ${quote.depositPaidCents == null ? "not recorded" : formatZAR(quote.depositPaidCents, quoteFmt)} to ${formatZAR(amountCents, quoteFmt)}`,
       contactId: quote.contactId,
       leadId: quote.leadId,
       user,

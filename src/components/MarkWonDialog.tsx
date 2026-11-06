@@ -14,6 +14,8 @@ import {
   ResponsiveDialogContent,
 } from "@/components/ui/dialog";
 import { formatZAR } from "@/lib/format";
+import { withCurrency } from "@/lib/currencyRules";
+import { useMoneyFormat } from "@/components/MoneyFormatProvider";
 
 /**
  * "Mark won", asked properly: WHICH quote did the customer accept?
@@ -35,6 +37,7 @@ export function MarkWonForm({
   onWon?: () => void;
 }) {
   const router = useRouter();
+  const moneyFmt = useMoneyFormat();
   const [choices, setChoices] = useState<MarkWonChoices | null | "loading">("loading");
   const [picked, setPicked] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -105,7 +108,7 @@ export function MarkWonForm({
                 className="mt-0.5"
               />
               <span className="flex-1">
-                Q-{quote.number} · {formatZAR(Math.round(quote.totalCents))}
+                Q-{quote.number} · {formatZAR(Math.round(quote.totalCents), withCurrency(moneyFmt, quote.currency))}
                 <span className="block text-xs text-muted-foreground">
                   {quote.outForSignature
                     ? "Out for signature — void the signing request first, or let the customer sign it."

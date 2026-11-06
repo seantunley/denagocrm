@@ -17,7 +17,7 @@ import { prisma } from "@/lib/db";
 import { accessibleInboxWhere } from "@/lib/permissions";
 import { getAiHealth } from "@/lib/systemHealth";
 import { getLastRun } from "@/lib/securityRunbook";
-import { formatZARCompact, formatDate, formatDateTime, contactName } from "@/lib/format";
+import { formatDate, formatDateTime, contactName } from "@/lib/format";
 import { dueLabels, dueColors } from "@/lib/serviceDue";
 import {
   Stagger,
@@ -40,7 +40,7 @@ import {
   jobCardWhere,
   leadsThisMonth,
   prevLeadCount,
-  wonThisMonth,
+  wonThisMonthSplit,
   prevWonValue,
   servicesThisMonth,
   deliveriesThisMonth,
@@ -49,6 +49,8 @@ import {
   dailySeries,
   pctDelta,
 } from "./data";
+import { getRegionalSettings } from "@/lib/settings";
+import { formatTotals, inBaseCurrency, totalsByCurrency } from "@/lib/currencyRules";
 
 /**
  * The dashboard card catalogue — the executable half. ./registry.ts declares
@@ -193,10 +195,10 @@ export const DASHBOARD_CARD_IMPLS: Record<DashboardCardId, DashboardCardImpl> = 
       const showDeliveries = seesQuotes && access.modules.has("automotive");
       const { daysSoFar } = await dashboardWindow();
 
-      const [leads, prevLeads, won, prevWon, openLeads, awaitingDelivery] = await Promise.all([
+      const [leads, prevLeads, wonSplit, prevWon, openLeads, awaitingDelivery] = await Promise.all([
         seesLeads ? leadsThisMonth() : [],
         seesLeads ? prevLeadCount() : 0,
-        seesLeads ? wonThisMonth() : [],
+        seesLeads ? wonThisMonthSplit() : { base: [], others: [] },
         seesLeads ? prevWonValue() : 0,
         seesLeads ? prisma.lead.count({ where: { ...(await leadWhere()), status: "open" } }) : 0,
         showDeliveries
@@ -211,7 +213,10 @@ export const DASHBOARD_CARD_IMPLS: Record<DashboardCardId, DashboardCardImpl> = 
           : 0,
       ]);
 
+      const won = wonSplit.base;
       const wonValue = won.reduce((sum, w) => sum + w.valueCents, 0);
+      // The wins this figure leaves out (other currencies), said rather than hidden.
+      const wonOthers = wonSplit.others.length ? formatTotals(wonSplit.others, await getRegionalSettings(), true) : "";
       const stats: { stat: SparkStat; icon: React.ReactNode }[] = [];
       if (seesLeads) {
         stats.push(
@@ -232,6 +237,7 @@ export const DASHBOARD_CARD_IMPLS: Record<DashboardCardId, DashboardCardImpl> = 
               value: Math.round(wonValue / 100),
               display: "zar",
               delta: pctDelta(wonValue, prevWon),
+              ...(wonOthers ? { context: `Plus ${wonOthers} in other currencies` } : {}),
               href: "/reports",
               spark: dailySeries(won.map((w) => w.updatedAt), daysSoFar, (i) =>
                 Math.round(won[i].valueCents / 100),
@@ -300,13 +306,15 @@ export const DASHBOARD_CARD_IMPLS: Record<DashboardCardId, DashboardCardImpl> = 
   "pipeline-snapshot": card(
     async () => {
       const where = { ...(await leadWhere()), status: "open" };
-      const [rows, value] = await Promise.all([
+      const [all, moneyFmt] = await Promise.all([
         prisma.lead.findMany({
           where,
-          select: { valueCents: true, stage: { select: { id: true, name: true, color: true, order: true } } },
+          select: { valueCents: true, currency: true, stage: { select: { id: true, name: true, color: true, order: true } } },
         }),
-        prisma.lead.aggregate({ where, _sum: { valueCents: true } }),
+        getRegionalSettings(),
       ]);
+      // The bar's segments are one scale, so base currency only; the total names the rest.
+      const rows = all.filter((l) => inBaseCurrency(l, moneyFmt.currency));
       const segMap = new Map<string, PipeSeg & { order: number }>();
       for (const l of rows) {
         const cur =
@@ -318,7 +326,7 @@ export const DASHBOARD_CARD_IMPLS: Record<DashboardCardId, DashboardCardImpl> = 
       }
       return {
         segments: [...segMap.values()].sort((a, b) => a.order - b.order) as PipeSeg[],
-        totalValue: formatZARCompact(value._sum.valueCents ?? 0),
+        totalValue: formatTotals(totalsByCurrency(all, (l) => ({ cents: l.valueCents, currency: l.currency }), moneyFmt.currency), moneyFmt, true),
       };
     },
     ({ segments, totalValue }) => (
@@ -342,7 +350,8 @@ export const DASHBOARD_CARD_IMPLS: Record<DashboardCardId, DashboardCardImpl> = 
       const [targets, leads, won, deliveries, services] = await Promise.all([
         prisma.target.findMany({ where: { period } }),
         seesLeads ? leadsThisMonth() : [],
-        seesLeads ? wonThisMonth() : [],
+        // A target is one number in the base currency, so the ring counts base-currency wins.
+        seesLeads ? wonThisMonthSplit().then((split) => split.base) : [],
         automotive && seesQuotes ? deliveriesThisMonth() : 0,
         automotive && seesJobCards ? servicesThisMonth() : [],
       ]);
