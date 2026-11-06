@@ -26,6 +26,7 @@ import {
   type TriageDetails,
   type TriageItem,
 } from "./triageRules";
+import { getRegionalSettings } from "@/lib/settings";
 
 /*
  * DAX TRIAGE — the database half (rules: triageRules.ts). A run is one of the person's own AssistantTask rows (kind
@@ -54,13 +55,14 @@ export async function prepareTriage(user: PermissionUser): Promise<{ ok: true; i
     select: { leadId: true, contactId: true, type: true, direction: true, body: true, occurredAt: true },
   });
   const staff = await listActingTenantStaff();
+  const moneyFmt = await getRegionalSettings();
   const facts = deals.map((deal) => ({
     leadId: deal.id,
     customer: deal.name,
     deal: deal.opportunity,
     stage: deal.stageName,
     owner: deal.ownerName ?? "nobody",
-    value: deal.valueCents ? formatZAR(deal.valueCents) : null,
+    value: deal.valueCents ? formatZAR(deal.valueCents, moneyFmt) : null,
     reasons: deal.signals.map((s) => s.detail),
     recent: messages
       .filter((m) => m.leadId === deal.id || (!m.leadId && m.contactId && m.contactId === deal.contactId))

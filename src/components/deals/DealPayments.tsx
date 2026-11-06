@@ -12,7 +12,7 @@ import {
   type StatementPayment,
   type StatementQuote,
 } from "@/lib/accountStatement";
-import { formatDate, formatZAR } from "@/lib/format";
+import { currencySymbol, formatDate, formatZAR, type MoneyFormat } from "@/lib/format";
 
 export type DealPayment = StatementPayment & {
   note: string | null;
@@ -32,7 +32,10 @@ export default function DealPayments({
   canRecord,
   statementHref,
   today,
+  moneyFmt,
 }: {
+  /** The workspace's currency and locale (getRegionalSettings). */
+  moneyFmt: MoneyFormat;
   quote: StatementQuote;
   payments: DealPayment[];
   /** deliveries.manage — the same grant that records the deposit. */
@@ -63,14 +66,14 @@ export default function DealPayments({
       <div className="mt-4 divide-y divide-border/70 text-sm">
         <div className="flex justify-between gap-4 py-2.5">
           <span className="font-medium">Invoice total</span>
-          <span className="font-semibold tabular-nums">{formatZAR(total)}</span>
+          <span className="font-semibold tabular-nums">{formatZAR(total, moneyFmt)}</span>
         </div>
         {quote.depositPaidAt && (
           <div className="flex justify-between gap-4 py-2.5">
             <span>
               Deposit received <span className="text-xs text-muted-foreground">· {formatDate(quote.depositPaidAt)}</span>
             </span>
-            <span className="tabular-nums">{depositWithoutAmount ? "Amount not recorded" : `−${formatZAR(quote.depositPaidCents ?? 0)}`}</span>
+            <span className="tabular-nums">{depositWithoutAmount ? "Amount not recorded" : `−${formatZAR(quote.depositPaidCents ?? 0, moneyFmt)}`}</span>
           </div>
         )}
         {payments.map((payment) => (
@@ -87,12 +90,12 @@ export default function DealPayments({
               )}
             </div>
             <div className="flex shrink-0 flex-col items-end gap-1">
-              <span className={payment.voidedAt ? "tabular-nums text-muted-foreground line-through" : "tabular-nums"}>−{formatZAR(payment.amountCents)}</span>
+              <span className={payment.voidedAt ? "tabular-nums text-muted-foreground line-through" : "tabular-nums"}>−{formatZAR(payment.amountCents, moneyFmt)}</span>
               {canRecord && !payment.voidedAt && (
                 <ModalTrigger label="Void" title="Void this payment" buttonClass="text-xs text-primary hover:underline">
                   <SaveForm success="Payment voided" action={voidQuotePayment.bind(null, quote.id, payment.id)} className="space-y-3">
                     <p className="text-sm text-muted-foreground">
-                      {formatZAR(payment.amountCents)} received {formatDate(payment.receivedAt)}. It stays on the record, marked void, and stops counting toward the balance.
+                      {formatZAR(payment.amountCents, moneyFmt)} received {formatDate(payment.receivedAt)}. It stays on the record, marked void, and stops counting toward the balance.
                     </p>
                     <label className="label" htmlFor={`void-${payment.id}`}>Reason</label>
                     <input id={`void-${payment.id}`} name="reason" required minLength={3} className="input" placeholder="e.g. Captured twice" />
@@ -105,7 +108,7 @@ export default function DealPayments({
         ))}
         <div className="flex justify-between gap-4 py-3">
           <span className="font-semibold">{owing < 0 ? "In credit" : "Still owing"}</span>
-          <span className="text-lg font-semibold tabular-nums">{formatZAR(Math.abs(owing))}</span>
+          <span className="text-lg font-semibold tabular-nums">{formatZAR(Math.abs(owing), moneyFmt)}</span>
         </div>
       </div>
 
@@ -125,10 +128,10 @@ export default function DealPayments({
                   Taking the deposit? Record it with “Deposit paid” on the deliveries board instead, so delivery readiness updates too.
                 </p>
               )}
-              <p className="text-sm text-muted-foreground">{formatZAR(owing)} is still owing on this invoice.</p>
+              <p className="text-sm text-muted-foreground">{formatZAR(owing, moneyFmt)} is still owing on this invoice.</p>
               <div className="grid gap-3 sm:grid-cols-2">
                 <div>
-                  <label className="label" htmlFor="payment-amount">Amount received (R)</label>
+                  <label className="label" htmlFor="payment-amount">Amount received ({currencySymbol(moneyFmt)})</label>
                   <input id="payment-amount" name="amount" inputMode="decimal" required className="input" placeholder="e.g. 1 000,50" />
                 </div>
                 <div>

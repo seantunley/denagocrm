@@ -19,6 +19,7 @@ import { signedPdfIsSafeToDelete } from "@/lib/signing/blobReferences";
 import { loadBillToFleet, quoteBillTo } from "@/lib/quoteBillTo";
 import { isModuleEnabled, requireModuleEnabled } from "@/lib/modules/enabled";
 import { deliverQuote, QUOTE_GONE, type DeliveryEvidence } from "@/lib/quoteDelivery";
+import { getRegionalSettings } from "@/lib/settings";
 
 const MAX_FILE = 4 * 1024 * 1024;
 
@@ -129,6 +130,7 @@ export async function markInvoiced(quoteId: string, formData: FormData) {
 }
 
 export async function markDepositPaid(quoteId: string, formData: FormData) {
+  const moneyFmt = await getRegionalSettings();
   return asFulfilmentAction(async () => {
     await requireModuleEnabled("automotive");
     const user = await requireQuoteAccess(quoteId, "deliveries.manage");
@@ -202,7 +204,7 @@ export async function markDepositPaid(quoteId: string, formData: FormData) {
     );
     await logAudit({
       action: "fulfilment.deposit_paid",
-      summary: `Q-${quote.number} deposit of ${formatZAR(amountCents)} received — proof of payment filed`,
+      summary: `Q-${quote.number} deposit of ${formatZAR(amountCents, moneyFmt)} received — proof of payment filed`,
       contactId: quote.contactId,
       leadId: quote.leadId,
       user,
@@ -214,6 +216,7 @@ export async function markDepositPaid(quoteId: string, formData: FormData) {
 
 /** Correct the recorded deposit amount — a typo must not be permanent. Audited old → new. */
 export async function correctDepositAmount(quoteId: string, formData: FormData) {
+  const moneyFmt = await getRegionalSettings();
   return asFulfilmentAction(async () => {
     await requireModuleEnabled("automotive");
     const user = await requireQuoteAccess(quoteId, "deliveries.manage");
@@ -238,7 +241,7 @@ export async function correctDepositAmount(quoteId: string, formData: FormData) 
     if (updated.count !== 1) refuse(QUOTE_GONE);
     await logAudit({
       action: "fulfilment.deposit_amount_corrected",
-      summary: `Q-${quote.number} deposit amount changed from ${quote.depositPaidCents == null ? "not recorded" : formatZAR(quote.depositPaidCents)} to ${formatZAR(amountCents)}`,
+      summary: `Q-${quote.number} deposit amount changed from ${quote.depositPaidCents == null ? "not recorded" : formatZAR(quote.depositPaidCents, moneyFmt)} to ${formatZAR(amountCents, moneyFmt)}`,
       contactId: quote.contactId,
       leadId: quote.leadId,
       user,

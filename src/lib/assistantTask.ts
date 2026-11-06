@@ -16,6 +16,7 @@ import {
   type TaskUpdate,
   type TaskView,
 } from "./assistantTaskRules";
+import { getRegionalSettings } from "@/lib/settings";
 
 /*
  * DAX's JOB SHEETS — the database half (the rules are assistantTaskRules.ts).
@@ -54,6 +55,7 @@ async function view(user: User, row: {
         select: { number: true, status: true, items: { select: { description: true, qty: true, colorPreference: true, discountPct: true } }, fees: { select: { label: true, amountCents: true } } },
       })
     : null;
+  const moneyFmt = await getRegionalSettings();
   return {
     id: row.id,
     kind: row.kind as TaskKind,
@@ -68,7 +70,7 @@ async function view(user: User, row: {
           number: q.number,
           status: q.status,
           lines: q.items.map((i) => `${i.qty} × ${i.description}${i.colorPreference ? ` (${i.colorPreference})` : ""}${i.discountPct > 0 ? `, less ${i.discountPct}%` : ""}`),
-          fees: q.fees.map((f) => `${f.label} — ${formatZAR(f.amountCents)}`),
+          fees: q.fees.map((f) => `${f.label} — ${formatZAR(f.amountCents, moneyFmt)}`),
         }
       : null,
     details: readDetails(row.details),

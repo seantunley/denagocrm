@@ -52,6 +52,7 @@ import {
   MobileTaskList,
   MobileWorkspaceHeader,
 } from "@/components/mobile-workspace";
+import { getRegionalSettings } from "@/lib/settings";
 
 // "Email quote" (in the editor on this page) renders the PDF in headless Chrome
 // and sends it — the same budget the PDF routes get.
@@ -179,6 +180,7 @@ export default async function QuotesPage({
   const filtersActive = Boolean(q?.trim() || status);
   const exportQuery = new URLSearchParams({ ...(q?.trim() ? { q: q.trim() } : {}), ...(status ? { status } : {}) }).toString();
 
+  const moneyFmt = await getRegionalSettings();
   return (
     <QuoteEditorProvider
       contacts={contactOptions}
@@ -221,7 +223,7 @@ export default async function QuotesPage({
                   icon={FileText}
                   title={`Quote Q-${quote.number}`}
                   detail={quoteBillTo(quote, fleetsById.get(quote.fleetId ?? "") ?? null).name || "Unlinked quote"}
-                  meta={`${formatZAR(Math.round(payableTotalCents(quote)))} · valid ${formatDate(quote.validUntil, quoteDefaults.regional)}`}
+                  meta={`${formatZAR(Math.round(payableTotalCents(quote)), moneyFmt)} · valid ${formatDate(quote.validUntil, quoteDefaults.regional)}`}
                   aside={<StatusPill tone={quote.status === "accepted" ? "success" : quote.status === "declined" ? "danger" : quote.status === "sent" ? "info" : "neutral"}>{quote.status}</StatusPill>}
                   // Keeps the page and filters, so closing the editor lands back where you were.
                   href={pageHref("/quotes", { ...params, edit: quote.id }, page)}
@@ -243,7 +245,7 @@ export default async function QuotesPage({
             { label: "Draft", value: draftCount, detail: "Proposals being prepared", icon: FileText, tone: "primary" },
             { label: "Sent", value: sentCount, detail: "With customers for review", icon: Send, tone: sentCount > 0 ? "warning" : "default" },
             { label: "Accepted", value: acceptedCount, detail: "Current accepted quotes", icon: CheckCircle2, tone: "success" },
-            { label: "Open value", value: formatZAR(Math.round(pipelineValue)), detail: `${quoteCount} current quote${quoteCount === 1 ? "" : "s"}`, icon: CircleDollarSign },
+            { label: "Open value", value: formatZAR(Math.round(pipelineValue), moneyFmt), detail: `${quoteCount} current quote${quoteCount === 1 ? "" : "s"}`, icon: CircleDollarSign },
           ]}
           actions={
           <QuoteEditorTrigger className={buttonVariants({ size: "sm" })}>
@@ -322,7 +324,7 @@ export default async function QuotesPage({
                         }
                       />
                       <MobileDataFields>
-                        <MobileDataField label="Total">{formatZAR(Math.round(total))}</MobileDataField>
+                        <MobileDataField label="Total">{formatZAR(Math.round(total), moneyFmt)}</MobileDataField>
                         <MobileDataField label="Valid until">{formatDate(quote.validUntil, quoteDefaults.regional)}</MobileDataField>
                         <MobileDataField label="Lead">
                           {quote.lead ? <Link href={`/leads/${quote.lead.id}`} className="text-primary hover:underline">{quote.lead.title}</Link> : "—"}
@@ -382,7 +384,7 @@ export default async function QuotesPage({
                           <td className="max-w-56 truncate">
                             {quote.lead ? <Link href={`/leads/${quote.lead.id}`} className="text-orange-400 hover:underline">{quote.lead.title}</Link> : "—"}
                           </td>
-                          <td className="font-medium">{formatZAR(Math.round(total))}</td>
+                          <td className="font-medium">{formatZAR(Math.round(total), moneyFmt)}</td>
                           <td>
                             <StatusPill tone={quote.status === "accepted" ? "success" : quote.status === "declined" ? "danger" : quote.status === "sent" ? "info" : "neutral"}>
                               {quote.status}

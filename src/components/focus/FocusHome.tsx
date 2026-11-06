@@ -2,7 +2,7 @@ import Link from "next/link";
 import {
   ArrowRight, CalendarDays, CheckCircle2, CircleDollarSign, Clock4, FileSignature, Flame, SquareKanban, Sun, Target, UserPlus,
 } from "lucide-react";
-import { formatZAR, formatZARCompact } from "@/lib/format";
+import { formatZAR, formatZARCompact, type MoneyFormat } from "@/lib/format";
 import { ActivityRow } from "@/components/dashboard/sections";
 import { PipelineSnapshot, Stagger, StaggerItem, StatSparkCard } from "@/components/dashboard/widgets";
 import type { HomeFocus } from "@/lib/home/focus";
@@ -65,8 +65,8 @@ function initials(name: string): string {
 }
 
 export function FocusHome({
-  focus, mine, canSeeTeam, greeting, firstName,
-}: { focus: HomeFocus; mine: boolean; canSeeTeam: boolean; greeting: string; firstName: string }) {
+  focus, mine, canSeeTeam, greeting, firstName, moneyFmt,
+}: { focus: HomeFocus; mine: boolean; canSeeTeam: boolean; greeting: string; firstName: string; moneyFmt: MoneyFormat }) {
   const mood = MOOD[focus.mood];
   const sales = focus.numbers.find((n) => n.key === "sales");
   const [first, ...rest] = focus.queue;
@@ -155,7 +155,7 @@ export function FocusHome({
                       <div className="min-w-0 flex-1 basis-48">
                         <p className="flex flex-wrap items-baseline gap-x-2">
                           <Link href={`/leads/${first.id}`} className="truncate text-lg font-semibold text-foreground hover:underline">{first.name}</Link>
-                          {first.valueCents > 0 && <span className="text-sm font-medium tabular-nums text-foreground/80">{formatZAR(first.valueCents)}</span>}
+                          {first.valueCents > 0 && <span className="text-sm font-medium tabular-nums text-foreground/80">{formatZAR(first.valueCents, moneyFmt)}</span>}
                           <span className="text-xs text-muted-foreground">{first.stageName}{!mine && first.assignedToName ? ` · ${first.assignedToName}` : ""}</span>
                         </p>
                         {/* Why it is here. A ranked list with no reasons is a list nobody trusts. */}
@@ -180,7 +180,7 @@ export function FocusHome({
                       <div className="min-w-0 flex-1 basis-40">
                         <p className="flex flex-wrap items-baseline gap-x-2">
                           <Link href={`/leads/${lead.id}`} className="truncate text-sm font-medium text-foreground hover:underline">{lead.name}</Link>
-                          {lead.valueCents > 0 && <span className="text-xs tabular-nums text-muted-foreground">{formatZARCompact(lead.valueCents)}</span>}
+                          {lead.valueCents > 0 && <span className="text-xs tabular-nums text-muted-foreground">{formatZARCompact(lead.valueCents, moneyFmt)}</span>}
                           {!mine && lead.assignedToName && <span className="text-xs text-muted-foreground">· {lead.assignedToName}</span>}
                         </p>
                         <p className="mt-0.5 truncate text-xs text-muted-foreground"><span className="text-primary">{lead.reasons[0]}</span>{lead.reasons[1] ? ` · ${lead.reasons[1]}` : ""}</p>
@@ -239,7 +239,7 @@ export function FocusHome({
                 <h2 id="pipeline-shape" className="flex items-center gap-2 text-sm font-semibold text-foreground"><SquareKanban className="size-4 text-[var(--chart-3)]" aria-hidden />Pipeline</h2>
                 <Link href="/leads" className="text-xs font-medium text-primary hover:underline">Board</Link>
               </div>
-              <PipelineSnapshot segments={focus.stages} totalValue={formatZARCompact(focus.stages.reduce((sum, s) => sum + s.value, 0))} />
+              <PipelineSnapshot segments={focus.stages} totalValue={formatZARCompact(focus.stages.reduce((sum, s) => sum + s.value, 0), moneyFmt)} />
             </section>
           )}
         </div>

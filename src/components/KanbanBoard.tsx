@@ -62,6 +62,7 @@ import {
 import { MarkWonDialog } from "@/components/MarkWonDialog";
 import NurtureForm from "@/components/NurtureForm";
 import { formatZAR } from "@/lib/format";
+import { useMoneyFormat } from "@/components/MoneyFormatProvider";
 import { cn } from "@/lib/utils";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
@@ -187,6 +188,7 @@ function SourceIcon({ source }: { source: string }) {
 }
 
 function LeadCard({ lead, dragging, actions, staleAfterDays = null }: { lead: KanbanLead; dragging?: boolean; actions?: ReactNode; staleAfterDays?: number | null }) {
+  const moneyFmt = useMoneyFormat();
   const opportunity = lead.title !== lead.name && lead.title !== lead.productName ? lead.title : null;
   // Collapsed by default (Sean, 2026-10-18): the name row only; the chevron opens the rest.
   const [open, setOpen] = useState(false);
@@ -273,7 +275,7 @@ function LeadCard({ lead, dragging, actions, staleAfterDays = null }: { lead: Ka
           {(hasAmount || manyUnits) && (
           <div className={cn("flex items-center gap-1.5", hasAmount && "mt-1")}>
             {hasAmount && (
-              <span className="text-sm font-semibold tabular-nums text-foreground">{formatZAR(lead.valueCents)}</span>
+              <span className="text-sm font-semibold tabular-nums text-foreground">{formatZAR(lead.valueCents, moneyFmt)}</span>
             )}
             {manyUnits && (
               <span
@@ -602,6 +604,7 @@ function Column({
   getActions: (lead: KanbanLead) => LeadActionHandlers;
 }) {
   const { setNodeRef, isOver } = useDroppable({ id: stage.id });
+  const moneyFmt = useMoneyFormat();
   const total = stage.leads.reduce((sum, lead) => sum + lead.valueCents, 0);
 
   // Droppable is the WHOLE column (header + body), so the pointer-X drop detection
@@ -629,7 +632,7 @@ function Column({
             </span>
           </div>
           <span className="shrink-0 text-xs font-semibold tabular-nums text-foreground">
-            {total > 0 ? formatZAR(total) : "—"}
+            {total > 0 ? formatZAR(total, moneyFmt) : "—"}
           </span>
         </div>
         <p className="mt-1.5 text-[10px] text-muted-foreground">

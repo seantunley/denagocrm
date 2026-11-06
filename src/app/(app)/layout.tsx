@@ -2,7 +2,8 @@ import { redirect } from "next/navigation";
 import { requireUser, getActiveTenantId, isTenantOwner } from "@/lib/auth";
 import type { Metadata } from "next";
 import { brandForTenant, brandIcons, brandLogoUrl, brandStyle, DEFAULT_BRAND } from "@/lib/tenantBrand";
-import { getSetting } from "@/lib/settings";
+import { getRegionalSettings, getSetting } from "@/lib/settings";
+import { DEFAULT_REGIONAL } from "@/lib/format";
 import { WEATHER_CITIES_KEY, parseWeatherCities } from "@/lib/weatherCities";
 import { ACTIVITY_TYPES_KEY, activityTypesForModules, resolveActivityTypes } from "@/lib/activityTypes";
 import { awaitingReplyCount } from "@/lib/inboxCount";
@@ -73,6 +74,7 @@ export default async function AppLayout({
     activityTypesSetting,
     isTenantOwnerFlag,
     recordLabels,
+    regional,
   ] = await Promise.all([
     awaitingReplyCount(user).catch(() => 0),
     casesAwaitingCount(user).catch(() => 0),
@@ -102,6 +104,8 @@ export default async function AppLayout({
     // what the nav and menus mean by "owner". Never throws: false on failure.
     isTenantOwner().catch(() => false),
     getRecordLabels(),
+    // The workspace's currency and locale, for money shown in the browser (MoneyFormatProvider).
+    getRegionalSettings().catch(() => DEFAULT_REGIONAL),
   ]);
 
   // Falls back to the default when unset or unreadable.
@@ -176,6 +180,7 @@ export default async function AppLayout({
         weatherCities={weatherCities}
         activityTypes={activityTypes}
         recordLabels={recordLabels}
+        money={{ currency: regional.currency, locale: regional.locale }}
         tenantId={activeTenantId ?? ""}
       >
         {children}

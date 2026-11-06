@@ -15,19 +15,17 @@ import {
   YAxis,
   CartesianGrid,
 } from "recharts";
+import { formatZARCompact } from "@/lib/format";
+import { useMoneyFormat } from "@/components/MoneyFormatProvider";
 
 /* Shared look for every chart — dark, quiet grid, token colors. */
 const AXIS = { stroke: "transparent", tick: { fill: "var(--muted-foreground)", fontSize: 11 } };
 const GRID = { stroke: "var(--border)", vertical: false } as const;
 
-function zar(v: number) {
-  if (Math.abs(v) >= 1_000_000) return `R${(v / 1_000_000).toFixed(1)}m`;
-  if (Math.abs(v) >= 1_000) return `R${Math.round(v / 1_000)}k`;
-  return `R${v}`;
-}
-
 /* eslint-disable @typescript-eslint/no-explicit-any */
 function DarkTooltip({ active, payload, label }: any) {
+  // Chart values are whole currency units; shown compact in the workspace's currency (was a hand-built "R…").
+  const moneyFmt = useMoneyFormat();
   if (!active || !payload?.length) return null;
   return (
     <div className="rounded-lg border border-border bg-popover px-3 py-2 text-xs shadow-xl">
@@ -37,7 +35,7 @@ function DarkTooltip({ active, payload, label }: any) {
           <span className="size-2 rounded-full" style={{ background: p.color ?? p.payload?.fill }} />
           {p.name}:{" "}
           <span className="font-medium tabular-nums text-foreground">
-            {p.dataKey === "wonValue" || p.unit === "R" ? zar(p.value) : p.value}
+            {p.dataKey === "wonValue" ? formatZARCompact(Math.round(p.value * 100), moneyFmt) : p.value}
           </span>
         </p>
       ))}
@@ -82,6 +80,7 @@ export type TrendPoint = {
 };
 
 export function TrendChart({ data }: { data: TrendPoint[] }) {
+  const moneyFmt = useMoneyFormat();
   return (
     <ResponsiveContainer width="100%" height={280}>
       <ComposedChart data={data} margin={{ top: 4, right: 0, left: -8, bottom: 0 }}>
@@ -101,7 +100,7 @@ export function TrendChart({ data }: { data: TrendPoint[] }) {
           axisLine={false}
           tickLine={false}
           width={46}
-          tickFormatter={zar}
+          tickFormatter={(value: number) => formatZARCompact(Math.round(value * 100), moneyFmt)}
         />
         <Tooltip content={<DarkTooltip />} cursor={{ fill: "var(--accent)", opacity: 0.35 }} />
         <Bar
@@ -233,7 +232,7 @@ export function TeamChart({ data }: { data: TeamRow[] }) {
         <XAxis type="number" hide />
         <YAxis type="category" dataKey="name" {...AXIS} axisLine={false} tickLine={false} width={110} />
         <Tooltip content={<DarkTooltip />} cursor={{ fill: "var(--accent)", opacity: 0.35 }} />
-        <Bar dataKey="wonValue" name="Won value" unit="R" fill="var(--chart-3)" radius={[0, 4, 4, 0]} maxBarSize={22} />
+        <Bar dataKey="wonValue" name="Won value" fill="var(--chart-3)" radius={[0, 4, 4, 0]} maxBarSize={22} />
       </BarChart>
     </ResponsiveContainer>
   );

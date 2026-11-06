@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { Calculator, Crosshair, HandCoins, Layers3, SlidersHorizontal, TrendingUp, History } from "lucide-react";
 import { basePrisma } from "@/lib/db";
-import { formatDate, formatDateTime, formatZAR, formatZARCompact } from "@/lib/format";
+import { currencySymbol, formatDate, formatDateTime, formatZAR, formatZARCompact } from "@/lib/format";
 import { getAccessibleLeadScope, hasPermission, requirePermission } from "@/lib/permissions";
 import {
   listActiveSalesPipelines,
@@ -18,6 +18,7 @@ import {
 import { saveLeadForecast, snapshotForecast } from "@/app/actions/pipelines";
 import { EmptyState, SectionHeading, StatusPill, Surface } from "@/components/visual-system";
 import { WorkspaceHero } from "@/components/workspace-hero";
+import { getRegionalSettings } from "@/lib/settings";
 
 export const dynamic = "force-dynamic";
 
@@ -160,6 +161,7 @@ export default async function ForecastPage({
       )
   ).slice(0, 20);
 
+  const moneyFmt = await getRegionalSettings();
   return (
     <div className="space-y-6">
       <WorkspaceHero
@@ -168,10 +170,10 @@ export default async function ForecastPage({
         title="Sales forecast"
         description={`Pipeline confidence and expected revenue for ${range.from.toLocaleDateString("en-ZA", { month: "long", year: "numeric", timeZone: "UTC" })}.`}
         stats={[
-          { label: "Open pipeline", value: formatZARCompact(summary.openValueCents), detail: `${summary.count} opportunities` },
-          { label: "Weighted forecast", value: formatZARCompact(summary.weightedValueCents), detail: summary.openValueCents ? `${Math.round(summary.weightedValueCents / summary.openValueCents * 100)}% of open value` : "No open value", tone: "primary" },
-          { label: "Committed", value: formatZARCompact(summary.commitValueCents), detail: "Highest-confidence revenue", tone: "success" },
-          { label: "Best case", value: formatZARCompact(summary.bestCaseValueCents), detail: "Upside potential", tone: "warning" },
+          { label: "Open pipeline", value: formatZARCompact(summary.openValueCents, moneyFmt), detail: `${summary.count} opportunities` },
+          { label: "Weighted forecast", value: formatZARCompact(summary.weightedValueCents, moneyFmt), detail: summary.openValueCents ? `${Math.round(summary.weightedValueCents / summary.openValueCents * 100)}% of open value` : "No open value", tone: "primary" },
+          { label: "Committed", value: formatZARCompact(summary.commitValueCents, moneyFmt), detail: "Highest-confidence revenue", tone: "success" },
+          { label: "Best case", value: formatZARCompact(summary.bestCaseValueCents, moneyFmt), detail: "Upside potential", tone: "warning" },
         ]}
         actions={<>
           {canManagePipelines && <Link href="/settings/pipelines" className="btn-secondary">Pipelines</Link>}
@@ -271,7 +273,7 @@ export default async function ForecastPage({
           ].map(({ label, value, icon: Icon, color, detail }) => (
             <div key={label} className="rounded-xl border border-border/70 bg-muted/[0.18] p-3.5">
               <div className="flex items-center gap-2 text-xs text-muted-foreground"><span className={`size-2 rounded-full ${color}`} /><Icon className="size-3.5" />{label}</div>
-              <p className="mt-2 text-lg font-semibold tracking-[-0.03em] tabular-nums">{formatZARCompact(value)}</p>
+              <p className="mt-2 text-lg font-semibold tracking-[-0.03em] tabular-nums">{formatZARCompact(value, moneyFmt)}</p>
               <p className="mt-0.5 text-[11px] text-muted-foreground">{detail}</p>
             </div>
           ))}
@@ -304,8 +306,8 @@ export default async function ForecastPage({
                 <td>{formatDate(lead.expectedCloseDate)}</td>
                 <td><StatusPill tone={lead.forecastCategory === "commit" ? "success" : lead.forecastCategory === "best_case" ? "warning" : lead.forecastCategory === "omitted" ? "neutral" : "info"}>{lead.forecastCategory.replace("_", " ")}</StatusPill></td>
                 <td><div className="min-w-20"><span className="text-xs tabular-nums">{lead.probability}%</span><div className="mt-1 h-1 overflow-hidden rounded-full bg-muted"><div className="h-full rounded-full bg-primary" style={{ width: `${lead.probability}%` }} /></div></div></td>
-                <td className="text-right">{formatZAR(lead.valueCents)}</td>
-                <td className="text-right">{formatZAR(Math.round(lead.valueCents * lead.probability / 100))}</td>
+                <td className="text-right">{formatZAR(lead.valueCents, moneyFmt)}</td>
+                <td className="text-right">{formatZAR(Math.round(lead.valueCents * lead.probability / 100), moneyFmt)}</td>
                 <td>
                   {canManage && (
                     <details>
@@ -319,7 +321,7 @@ export default async function ForecastPage({
                           <option value="omitted">Omitted</option>
                         </select>
                         <input name="expectedCloseDate" type="date" className="input" defaultValue={lead.expectedCloseDate?.toISOString().slice(0, 10) ?? ""} />
-                        <input name="estimatedCost" className="input" placeholder="Estimated cost (R)" defaultValue={lead.estimatedCostCents != null ? lead.estimatedCostCents / 100 : ""} />
+                        <input name="estimatedCost" className="input" placeholder={`Estimated cost (${currencySymbol(moneyFmt)})`} defaultValue={lead.estimatedCostCents != null ? lead.estimatedCostCents / 100 : ""} />
                         {!canAssign ? (
                           <input type="hidden" name="teamId" value={lead.teamId ?? ""} />
                         ) : teamChoices(lead).length === 0 ? (
@@ -364,7 +366,7 @@ export default async function ForecastPage({
                     {snapshot.period} · {snapshot.pipelineName ?? "All pipelines"} · {snapshot.teamName ?? "All teams"} · {snapshot.userName ?? "All owners"}
                   </p>
                     <p className="mt-1 text-xs text-muted-foreground">
-                    Open {formatZAR(Number(snapshot.openValueCents))} · Weighted {formatZAR(Number(snapshot.weightedValueCents))} · {snapshot.opportunityCount} deals · {formatDateTime(snapshot.capturedAt)}
+                    Open {formatZAR(Number(snapshot.openValueCents), moneyFmt)} · Weighted {formatZAR(Number(snapshot.weightedValueCents), moneyFmt)} · {snapshot.opportunityCount} deals · {formatDateTime(snapshot.capturedAt)}
                   </p>
                 </div>
               </li>

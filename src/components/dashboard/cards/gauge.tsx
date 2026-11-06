@@ -28,7 +28,7 @@ import { formatMetric, isMoneyField, metricField } from "./values";
  *   before it passes the value in. So does this one. See the target note below
  *   for which side of that divide `card.target` is on.
  */
-export async function renderGauge(card: GaugeCard, _ctx: RenderContext): Promise<RenderedCard> {
+export async function renderGauge(card: GaugeCard, ctx: RenderContext): Promise<RenderedCard> {
   const source = sourceById(card.query.source);
   // Resolved through the compiler's own gate, not by looking at the field's
   // name — see `metricField`. Which unit this card compares in hangs off the
@@ -80,7 +80,7 @@ export async function renderGauge(card: GaugeCard, _ctx: RenderContext): Promise
    */
   const target = Math.max(1, asMoney ? Math.round(card.target * 100) : card.target);
 
-  const readout = `${formatMetric(value, asMoney)} of ${formatMetric(target, asMoney)}${
+  const readout = `${formatMetric(value, asMoney, ctx.money)} of ${formatMetric(target, asMoney, ctx.money)}${
     card.unit ? ` ${card.unit}` : ""
   }`;
 
