@@ -113,7 +113,11 @@ async function main() {
     // Both already "1 part gone" with an expired claim, so finishing needs no send (no WhatsApp connection here).
     await basePrisma.assistantTurn.updateMany({ where: { id: { in: [TURN.brief, TURN.alert] } }, data: { whatsappSentAt: null, whatsappClaimedAt: new Date(Date.now() - 6 * 60_000), whatsappPartsSent: 1 } });
     await basePrisma.assistantPhoneLink.update({ where: { id: LINK }, data: { lastInboundAt: new Date(), nudgedAt: null, nudgeFailedAt: null } });
-    check("a briefing the person timed still goes", (await run()) === "sent" && (await sentAt(TURN.brief)) !== null);
+    // The briefing was made an hour ago: not "at its time" any more, so it waits for 08:00 (Sean, 2026-11-06).
+    check("a timed briefing made an hour ago waits for the morning", (await run()) === "nothing" && (await sentAt(TURN.brief)) === null);
+    // Made now — the tick that ran their schedule.
+    await basePrisma.assistantTurn.update({ where: { id: TURN.brief }, data: { createdAt: new Date() } });
+    check("a briefing the person timed still goes",(await run()) === "sent" && (await sentAt(TURN.brief)) !== null);
     check("…a watch alert waits for the morning", (await sentAt(TURN.alert)) === null);
     check("…unless they have just written to DAX", (await run({ windowOpen: true })) === "sent" && (await sentAt(TURN.alert)) !== null);
     // Outside the 24 hours. Only an ALERT waiting: by day it would send the "you have an update" template.

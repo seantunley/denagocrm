@@ -363,6 +363,13 @@ export const QUOTE_PDF_SOURCE = "quote_pdf";
 export const NIGHT_SOURCES: readonly string[] = ["schedule", "brief", QUOTE_PDF_SOURCE];
 export const sendableSources = (sources: readonly string[], night: boolean): string[] =>
   night ? sources.filter((s) => NIGHT_SOURCES.includes(s)) : [...sources];
+/**
+ * …and only AT the time they set it: made in the last half hour (one tick). Yesterday's 07:30 brief, still unread,
+ * is not "what they set for now" — the half-hourly sweep nudged about it at 04:00 and then 00:00 (20-hour spacing
+ * walks it four hours earlier a night; Sean, 2026-11-06). Left-overs wait for 08:00 like everything else.
+ */
+export const NIGHT_FRESH_MS = 30 * 60 * 1000;
+export const updatesSince = (now: number, night: boolean): Date => new Date(now - (night ? NIGHT_FRESH_MS : UPDATE_WAIT_MS));
 
 /**
  * The owner's switch (AppSetting): when the chatbot hands a conversation to a

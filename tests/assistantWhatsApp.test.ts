@@ -1611,6 +1611,31 @@ test("a brief they TIMED for 07:30 still gets its nudge at 07:30, outside the 24
   assert.ok(link.nudgedAt, "claimed before it was sent, as by day");
 });
 
+test("yesterday's brief and scheduled question, still unread, never nudge at night — 08:00 does (Sean, 2026-11-06: 04:00, then 00:00)", async () => {
+  state.template = "assistant_update_ready|en";
+  const link = verified("u1", STAFF);
+  link.lastInboundAt = new Date(Date.now() - 80 * HOUR);
+  waitingTurn("brief-yesterday", 20.5, "brief");
+  waitingTurn("sched-yesterday", 20, "schedule");
+  state.night = true;
+  assert.equal(await sendUpdatesToLinkedPhone("t1", "u1"), "nothing", "left-overs are not what they set for now");
+  assert.equal(state.templatesSent.length, 0);
+  assert.equal(link.nudgedAt, null, "nothing claimed, so the morning is free to send it");
+  state.night = false;
+  assert.equal(await sendUpdatesToLinkedPhone("t1", "u1"), "nudged");
+});
+
+test("at night a timed update nudges only within half an hour of being made", async () => {
+  state.template = "assistant_update_ready|en";
+  const link = verified("u1", STAFF);
+  link.lastInboundAt = new Date(Date.now() - 30 * HOUR);
+  waitingTurn("brief-late", 0.6, "brief");
+  state.night = true;
+  assert.equal(await sendUpdatesToLinkedPhone("t1", "u1"), "nothing");
+  waitingTurn("brief-now", 0.1, "brief");
+  assert.equal(await sendUpdatesToLinkedPhone("t1", "u1"), "nudged");
+});
+
 test("at night only what they timed or asked for goes; alerts, check-backs and handoffs wait for the morning", async () => {
   verified("u1", STAFF).lastInboundAt = new Date(Date.now() - 3 * HOUR);
   const timed = [waitingTurn("sched"), waitingTurn("brief", 0, "brief")];
