@@ -66,28 +66,51 @@ export const ATTENTION_WEIGHTS: Record<AttentionSignalKind, number> = {
 };
 
 /**
- * FOLLOW-UP WITH NO REPLY (Sean, 2026-11-06: "did the follow-up get a reply?"). The deal's last message either way
- * was OURS, sent at least FOLLOWUP_REPLY_DAYS ago — the same 3 days "Customer replied within 3 days" judges DAX's
- * follow-ups by (assistantOutcomeRules) — and nothing has moved it on since (`movedOn`: the deal changing stage, a
- * call or meeting logged as done). Looked for over the last FOLLOWUP_LOOKBACK_DAYS only: longer silences are "no
+ * FOLLOW-UP WITH NO REPLY (Sean, 2026-11-06: "did the follow-up get a reply?"). Every message we have sent since
+ * the customer last answered — or since the last call or meeting, or the deal changing stage — is unanswered, and
+ * the FIRST of them is at least FOLLOWUP_REPLY_DAYS old: the same 3 days "Customer replied within 3 days" judges
+ * DAX's follow-ups by (assistantOutcomeRules). Counted from the first, so another message every two days does not
+ * reset it (review of #1014).
+ *
+ * A logged CALL or MEETING is contact, not a message waiting on an answer: it ends a run of unanswered messages,
+ * and never starts one. So is an entry with no direction (logged by hand). `movedOn`: a stage change, a call or
+ * meeting logged as an activity. Looked for over the last FOLLOWUP_LOOKBACK_DAYS only: longer silences are "no
  * contact for N days" (the Today queue) and the stage's own age.
  *
- * Unlike "no contact for N days", a message every few days does not reset it: what counts is whether they answered.
- * Returns when it was sent, or null.
+ * `timeline`: the deal's customer-facing entries, NEWEST FIRST. Null, or the unanswered run: its first message, how
+ * many, and the channel of the latest.
  */
 export const FOLLOWUP_REPLY_DAYS = 3;
 export const FOLLOWUP_LOOKBACK_DAYS = 30;
+const LIVE_CONTACT_TYPES: ReadonlySet<string> = new Set(["call", "meeting"]);
+export type FollowUpEntry = { id: string; type: string; direction: string | null; occurredAt: Date };
 export function unansweredFollowUp(
-  last: { direction: string | null; occurredAt: Date } | null,
+  timeline: readonly FollowUpEntry[],
   movedOn: readonly (Date | null | undefined)[],
   now: Date,
-): Date | null {
-  if (!last || last.direction !== "outbound") return null;
-  const sent = last.occurredAt.getTime();
-  const age = now.getTime() - sent;
+): { first: FollowUpEntry; count: number; latest: FollowUpEntry } | null {
+  const after = Math.max(0, ...movedOn.map((at) => at?.getTime() ?? 0));
+  const run: FollowUpEntry[] = [];
+  for (const entry of timeline) {
+    if (entry.occurredAt.getTime() <= after) break;
+    if (entry.direction !== "outbound" || LIVE_CONTACT_TYPES.has(entry.type)) break;
+    run.push(entry);
+  }
+  if (run.length === 0) return null;
+  const first = run[run.length - 1];
+  const age = now.getTime() - first.occurredAt.getTime();
   if (age < FOLLOWUP_REPLY_DAYS * 86_400_000 || age > FOLLOWUP_LOOKBACK_DAYS * 86_400_000) return null;
-  if (movedOn.some((at) => at && at.getTime() > sent)) return null;
-  return last.occurredAt;
+  return { first, count: run.length, latest: run[0] };
+}
+
+/**
+ * The deal's customer, for reading their messages filed on NO deal — only when the viewer may open that customer
+ * (the deal page's and the stuck lookup's rule). "all": they see every customer; "none": no customer access at all.
+ * Otherwise null, and only the deal's own rows are read (review of #1014).
+ */
+export function customerTheyMayOpen(contactId: string | null, mayOpen: ReadonlySet<string> | "all" | "none"): string | null {
+  if (!contactId || mayOpen === "none") return null;
+  return mayOpen === "all" || mayOpen.has(contactId) ? contactId : null;
 }
 
 export type AttentionSignal = {

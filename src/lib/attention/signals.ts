@@ -266,13 +266,14 @@ export async function collectAttentionSignals(input: {
   }
 
   // ── followup_unanswered ───────────────────────────────────────────────────
-  // Our last message on the deal's timeline (the deal's own rows + its customer's on no deal, as dealTimelineWhere)
-  // got no reply, and no call, meeting or stage move since (unansweredFollowUp). Two queries per batch, joined here.
+  // The messages we have sent on the deal's timeline (its own rows + its customer's on no deal, as dealTimelineWhere —
+  // the customer only when the viewer may open them: contactByLead) since the customer last answered, or since a
+  // call, meeting or stage move (unansweredFollowUp). Two queries per batch, joined here.
   const lookback = new Date(now.getTime() - FOLLOWUP_LOOKBACK_DAYS * DAY_MS);
   for (const batch of batches) {
     const contacts = [...new Set(batch.map((id) => contactByLead.get(id)).filter((id): id is string => Boolean(id)))];
     const timeline = { OR: [{ leadId: { in: batch } }, ...(contacts.length ? [{ contactId: { in: contacts }, leadId: null }] : [])] };
-    // ponytail: a month of messages for the batch, newest first, to find each deal's last one; DISTINCT ON if it grows.
+    // ponytail: a month of messages for the batch, newest first, walked per deal; a window query if it grows.
     const [messages, done] = await Promise.all([
       prisma.communication.findMany({
         where: { AND: [timeline, contactCommunicationWhere, { occurredAt: { gte: lookback, lte: now } }] },
@@ -288,18 +289,20 @@ export async function collectAttentionSignals(input: {
       const contactId = contactByLead.get(leadId) ?? null;
       const onDeal = (row: { leadId: string | null; contactId: string | null }) =>
         row.leadId === leadId || (row.leadId === null && contactId !== null && row.contactId === contactId);
-      const last = messages.find(onDeal) ?? null;
-      const sent = unansweredFollowUp(last, [stageEnteredByLead.get(leadId), ...done.filter(onDeal).map((a) => a.doneAt)], now);
-      if (!sent || !last) continue;
-      const channel = inboundChannelLabel(last.type);
+      const run = unansweredFollowUp(messages.filter(onDeal), [stageEnteredByLead.get(leadId), ...done.filter(onDeal).map((a) => a.doneAt)], now);
+      if (!run) continue;
+      const ago = agoHours(run.first.occurredAt, now);
       add(signals, leadId, {
         kind: "followup_unanswered",
-        key: attentionSignalKey("followup_unanswered", last.id),
+        // The run, by its first message: a new run after they answer is a new warning, not a snoozed one.
+        key: attentionSignalKey("followup_unanswered", run.first.id),
         category: ATTENTION_CATEGORY.followup_unanswered,
         weight: ATTENTION_WEIGHTS.followup_unanswered,
-        detail: `No reply to our ${channel} ${agoHours(sent, now)} ago`,
-        since: sent.toISOString(),
-        context: "Our last message to the customer has had no answer, and no call or meeting is logged since. Try another way to reach them.",
+        detail: run.count === 1
+          ? `No reply to our ${inboundChannelLabel(run.latest.type)} ${ago} ago`
+          : `No reply to our last ${run.count} messages — the first ${ago} ago`,
+        since: run.first.occurredAt.toISOString(),
+        context: "Our messages to the customer have had no answer, and no call or meeting is logged since. Try another way to reach them.",
         actionHref: `/leads/${leadId}`,
         actionLabel: "Try another way",
       });
