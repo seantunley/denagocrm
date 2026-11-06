@@ -218,7 +218,7 @@ test("THE PDF IS QUEUED WITH THE QUOTE — delivered wherever Confirm was presse
   assert.equal((tx.match(/if \(data\.pdfToMyWhatsApp && data\.intent === "draft"\) \{/g) ?? []).length, 2);
   assert.equal((tx.match(/assistantTurn\.create\(/g) ?? []).length, 2, "each write sits behind that test");
   // It says the number, the quote's own total, and that it was not sent.
-  assert.match(record, /I've created draft quote Q-\$\{number\} \(\$\{formatZAR\(Math\.round\(total\)\)\}\)\. It has NOT been sent to the customer/);
+  assert.match(record, /I've created draft quote Q-\$\{number\} \(\$\{formatZAR\(Math\.round\(total\), withCurrency\(moneyFmt, cpqQuoteData\.currency\)\)\}\)\. It has NOT been sent to the customer/);
   // Confirmed in the CRM: this action tries the send, briefly, and cannot be failed by it; on WhatsApp the door sends it after its reply.
   // (One helper, shared with quote_add: it does nothing unless Confirm was pressed in the CRM.)
   assert.match(run, /await sendQueuedPdfNow\(\);\s*return \{\s*ok: true,/);
@@ -228,7 +228,7 @@ test("THE PDF IS QUEUED WITH THE QUOTE — delivered wherever Confirm was presse
   assert.match(sendNow, /setTimeout\(resolve, QUOTE_PDF_SEND_WAIT_MS\)/);
   assert.match(actions, /via: "crm" \| "whatsapp" = "crm",/);
   // The total the person is told is the QUOTE's own (VAT, discounts), read back from what was saved.
-  assert.match(run, /const total = built \? formatZAR\(Math\.round\(payableTotalCents\(built\)\)\) : null;/);
+  assert.match(run, /const total = built \? formatZAR\(Math\.round\(payableTotalCents\(built\)\), moneyFmt\) : null;/);
 
   // It is an update like a briefing: the sweep retries it, and the bubble shows it.
   const rules = code("src/lib/assistantWhatsAppRules.ts");

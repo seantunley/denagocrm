@@ -53,6 +53,7 @@ import {
   requireAnyPermission,
 } from "@/lib/permissions";
 import { cn } from "@/lib/utils";
+import { getRegionalSettings } from "@/lib/settings";
 
 export const dynamic = "force-dynamic";
 
@@ -557,6 +558,7 @@ export default async function ReportsPage({
   const prevWinRate = prevClosed ? Math.round((aggregates.prevWon / prevClosed) * 100) : 0;
   const compare = `${format(prevFrom, "d MMM")} – ${format(prevTo, "d MMM")}`;
 
+  const moneyFmt = await getRegionalSettings();
   return (
     <div className="space-y-4">
       <PageHeader
@@ -569,7 +571,7 @@ export default async function ReportsPage({
       <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
         <StatCard label="New leads" value={String(aggregates.leads)} delta={pct(aggregates.leads, aggregates.prevLeads)} compare={compare} />
         <StatCard label="Deals won" value={String(aggregates.won)} delta={pct(aggregates.won, aggregates.prevWon)} compare={compare} />
-        <StatCard label="Won value" value={formatZARCompact(aggregates.wonValueCents)} delta={pct(aggregates.wonValueCents, aggregates.prevWonValueCents)} compare={compare} />
+        <StatCard label="Won value" value={formatZARCompact(aggregates.wonValueCents, moneyFmt)} delta={pct(aggregates.wonValueCents, aggregates.prevWonValueCents)} compare={compare} />
         <StatCard label="Win rate" value={`${winRate}%`} delta={prevClosed || closed ? winRate - prevWinRate : null} compare={compare} />
       </div>
 

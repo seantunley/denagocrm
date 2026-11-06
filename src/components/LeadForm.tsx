@@ -1,6 +1,9 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import { currencySymbol } from "@/lib/format";
+import { withCurrency } from "@/lib/currencyRules";
+import { useCurrencies, useMoneyFormat } from "@/components/MoneyFormatProvider";
 import { SaveForm } from "@/components/SaveForm";
 import ContactPicker, { type ContactOption } from "@/components/ContactPicker";
 import type { ActionResult } from "@/lib/actionResultTypes";
@@ -39,6 +42,8 @@ type LeadDefaults = {
   productId?: string | null;
   color?: string | null;
   valueCents?: number;
+  /** The lead's currency (multicurrency module); null/undefined = the base. */
+  currency?: string | null;
   stageId?: string;
   contactId?: string | null;
   notes?: string | null;
@@ -77,12 +82,18 @@ export default function LeadForm({
   users?: { id: string; name: string }[];
   variant?: LeadFormVariant;
 }) {
+  const moneyFmt = useMoneyFormat();
   const [name, setName] = useState(defaults.name ?? "");
   const [contactId, setContactId] = useState(defaults.contactId ?? "");
   const [productId, setProductId] = useState(defaults.productId ?? "");
   const [color, setColor] = useState(defaults.color ?? "");
   const [qty, setQty] = useState(Math.max(1, defaults.quantity ?? 1));
   const [value, setValue] = useState(defaults.valueCents ? String(defaults.valueCents / 100) : "");
+  // Multicurrency module: the lead's own currency. One option = the module is off; no picker, nothing posted.
+  const currencies = useCurrencies();
+  const [currency, setCurrency] = useState(defaults.currency || currencies[0]);
+  const inBase = currency === currencies[0];
+  const valueFmt = withCurrency(moneyFmt, currency);
   const [stageId, setStageId] = useState(defaults.stageId ?? stages[0]?.id ?? "");
   const product = products.find((item) => item.id === productId);
   // Colour is asked only of a workspace whose catalogue uses colours (a dealer's does; a service firm's doesn't),
@@ -110,7 +121,8 @@ export default function LeadForm({
     setProductId(id);
     setColor("");
     const selected = products.find((item) => item.id === id);
-    if (selected && selected.basePriceCents > 0) {
+    // The catalogue price is in the base currency: never fill it into a lead in another one.
+    if (selected && selected.basePriceCents > 0 && inBase) {
       setValue(String((selected.basePriceCents / 100) * qty));
     }
   }
@@ -118,7 +130,7 @@ export default function LeadForm({
   function onQtyChange(raw: string) {
     const next = Math.max(1, parseInt(raw, 10) || 1);
     setQty(next);
-    if (product && product.basePriceCents > 0) {
+    if (product && product.basePriceCents > 0 && inBase) {
       setValue(String((product.basePriceCents / 100) * next));
     }
   }
@@ -255,10 +267,21 @@ export default function LeadForm({
           )}
         </Field>}
         <Field
-          label={`Estimated opportunity value (R)${qty > 1 && product ? ` — ${qty} × catalogue price` : ""}`}
-          hint={product?.basePriceCents ? "Changing the model or quantity updates this value; you can still override it." : "Enter the best current estimate. It can be refined later."}
+          label={`Estimated opportunity value (${currencySymbol(valueFmt)})${qty > 1 && product && inBase ? ` — ${qty} × catalogue price` : ""}`}
+          hint={product?.basePriceCents && inBase ? "Changing the model or quantity updates this value; you can still override it." : "Enter the best current estimate. It can be refined later."}
           wide
         >
+          {currencies.length > 1 && (
+            <select
+              name="currency"
+              aria-label="Currency"
+              className="input mb-2 w-32"
+              value={currency}
+              onChange={(event) => setCurrency(event.target.value)}
+            >
+              {currencies.map((code) => <option key={code} value={code}>{code}</option>)}
+            </select>
+          )}
           <div className="relative">
             <BadgeDollarSign className="pointer-events-none absolute left-3.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
             <input

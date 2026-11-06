@@ -24,6 +24,7 @@ import { createLead } from "@/app/actions/leads";
 import { contactName, formatZAR } from "@/lib/format";
 import { midSentence } from "@/lib/recordLabels";
 import { getRecordLabels } from "@/lib/recordLabelsServer";
+import { getRegionalSettings } from "@/lib/settings";
 
 type PlannedActivityRow = {
   leadId: string;
@@ -308,6 +309,7 @@ export default async function LeadsPage({
         name: lead.name,
         contactId: lead.contactId,
         valueCents: lead.valueCents,
+        currency: lead.currency,
         quantity: lead.quantity,
         source: lead.source,
         color: lead.color,
@@ -384,11 +386,12 @@ export default async function LeadsPage({
   );
   const nurtureCount = await prisma.lead.count({ where: { status: "nurture", deletedAt: null, ...(accessibleLeadIds ? { id: { in: accessibleLeadIds } } : {}) } });
 
+  const moneyFmt = await getRegionalSettings();
   return (
     <div className="space-y-5">
       <PageHeader
         title={labels.lead.many}
-        description={`${openCount} open · ${formatZAR(totalOpenValue)} in pipeline`}
+        description={`${openCount} open · ${formatZAR(totalOpenValue, moneyFmt)} in pipeline`}
       >
         <PipelineSwitcher
           pipelines={pipelines.map((p) => ({ id: p.id, name: p.name, isDefault: p.isDefault }))}
@@ -452,7 +455,7 @@ export default async function LeadsPage({
            pipelines into one draggable surface is the defect this replaces: a
            Discovery column from Sales beside a Triage column from Service, with a
            drag between them that means nothing. */
-        <PipelineSummary pipelines={pipelineSummaries} />
+        <PipelineSummary pipelines={pipelineSummaries} moneyFmt={moneyFmt} />
       ) : (
         <KanbanBoard
           stages={boardStages}

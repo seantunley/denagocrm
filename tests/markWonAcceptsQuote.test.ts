@@ -115,6 +115,8 @@ loader._load = function (this: unknown, request, parent, isMain) {
     if (request === "./leadJourneyEvents") return { emitLeadJourneyEvent: async (t: string, id: string) => { fanout.push(`${t}:${id}`); } };
     if (request === "./surveys") return { triggerSurvey: async (t: string) => { fanout.push(`survey:${t}`); } };
     if (request === "./errorLog") return { logError: async () => {} };
+    // The audit line names the amount in the workspace's currency; the rand, as before, here.
+    if (request === "./settings") return { getRegionalSettings: async () => ({ vatRatePct: 15, currency: "ZAR", locale: "en-ZA", timeZone: "Africa/Johannesburg" }) };
     // Accepting also issues the invoice number (tests/invoiceNumbers.test.ts covers it).
     if (request === "./numbering") return { nextQuoteNumber: async () => 2001, issueInvoiceNumberInTx: async () => 1 };
   }

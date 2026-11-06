@@ -8,6 +8,7 @@ import type { TableRow } from "./blocks";
 import { jobCardPrintFields, type JobCardPrintSource } from "./jobCardFields";
 import { quoteDocTokens } from "./quoteDocs";
 import { quoteValidDaysOf } from "@/lib/quoteExpiry";
+import { withCurrency } from "@/lib/currencyRules";
 
 /** A quote loaded for any printed/rendered document. */
 export type QuoteForPrint = Prisma.QuoteGetPayload<{
@@ -66,7 +67,9 @@ export function documentGlobalTokens(
  * required for the same reason `fleet` is. The VAT figures do NOT come from it:
  * they come from the rates stored on the quote's own lines.
  */
-export function buildQuoteContext(quote: QuoteForPrint, fleet: BillToFleet | null, r: Regional): MergeContext {
+export function buildQuoteContext(quote: QuoteForPrint, fleet: BillToFleet | null, regional: Regional): MergeContext {
+  // Every amount on a quote is in the QUOTE's currency (multicurrency module; null = the base).
+  const r = withCurrency(regional, quote.currency);
   // Every document built here states a price to a customer — a signed sales
   // agreement among them — so the money comes from the canonical engine, not
   // from a local sum. Summing items alone dropped fees and delivery, and the
@@ -107,7 +110,7 @@ export function buildQuoteContext(quote: QuoteForPrint, fleet: BillToFleet | nul
     "lead.title": quote.lead?.title ?? "",
     "lead.source": quote.lead?.source ?? "",
     "lead.product": quote.lead?.product?.name ?? "",
-    "lead.value": quote.lead ? formatZAR(quote.lead.valueCents, r) : "",
+    "lead.value": quote.lead ? formatZAR(quote.lead.valueCents, withCurrency(regional, quote.lead.currency)) : "",
     "quote.number": `Q-${quote.number}`,
     "quote.date": formatDate(quote.createdAt, r),
     "quote.validUntil": quote.validUntil ? formatDate(quote.validUntil, r) : "—",

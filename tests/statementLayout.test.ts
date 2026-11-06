@@ -347,7 +347,7 @@ test("statement routes: the page's gates, the workspace bound, and the old page 
     assert.match(route, new RegExp(`if \\(result\\.kind !== "ok"\\) redirect\\(\`/${kind}/\\$\\{id\\}/statement\\?legacy=1\`\\);`));
     assert.match(route, /"Cache-Control": "private, no-store"/);
     const page = read(`src/app/(print)/${kind}/[id]/statement/page.tsx`);
-    assert.match(page, new RegExp(`if \\(!\\(await searchParams\\)\\.legacy && \\(await statementPrintLayout\\(\\)\\)\\) redirect\\(\`/${kind}/\\$\\{id\\}/statement/document\`\\);`));
+    assert.match(page, new RegExp(`if \\(!legacy && \\(await statementPrintLayout\\(\\)\\)\\) redirect\\(\`/${kind}/\\$\\{id\\}/statement/document\\$\\{asked \\? `));
     assert.ok(page.indexOf("requireAnyPermission(") < page.indexOf("statementPrintLayout()"), "gates first");
   }
 });
