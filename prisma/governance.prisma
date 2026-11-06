@@ -104,6 +104,7 @@ model RolePermission {
 
   @@id([roleId, permissionKey])
   @@index([tenantId])
+  @@index([permissionKey])
 }
 
 model UserRole {
