@@ -1,6 +1,7 @@
 "use client";
 
-import { useId, useState, type ReactNode } from "react";
+import { useEffect, useId, useRef, useState, type ReactNode } from "react";
+import { useSearchParams } from "next/navigation";
 import { MessageSquare, Phone, StickyNote } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -28,11 +29,19 @@ export default function CustomerComposer({ email, whatsapp, note, call }: {
 }) {
   const panels = { note, whatsapp, call };
   const offered = offeredModes(panels);
-  const [mode, setMode] = useState<Mode | undefined>(offered[0]);
+  // `?compose=whatsapp` — the w key on a list or the board (ListKeyboard) lands here ready to write.
+  const askedWhatsApp = useSearchParams().get("compose") === "whatsapp" && offered.includes("whatsapp");
+  const [mode, setMode] = useState<Mode | undefined>(askedWhatsApp ? "whatsapp" : offered[0]);
   const id = useId();
+  const section = useRef<HTMLElement>(null);
+  useEffect(() => {
+    if (askedWhatsApp) section.current?.scrollIntoView({ block: "center" });
+    // Once, on arrival.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   if (!email && offered.length === 0) return null;
   return (
-    <section className="overflow-hidden rounded-xl border border-border bg-card" aria-label="Contact customer or add a record">
+    <section ref={section} className="overflow-hidden rounded-xl border border-border bg-card" aria-label="Contact customer or add a record">
       <div className="flex flex-wrap items-center gap-1 border-b border-border p-2">
         {email}
         {modes.filter(({ key }) => offered.includes(key)).map(({ key, label, icon: Icon }) => (
