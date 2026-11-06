@@ -37,7 +37,9 @@ test("a push with NO workspace (a platform alert) reaches the platform owner onl
   const global = fn.slice(fn.indexOf('if (s.mode === "global")'), fn.indexOf("return basePrisma.$queryRaw", fn.indexOf('if (s.mode === "global")')));
   assert.match(global, /JOIN "User" u ON u\."id" = ps\."userId"/);
   assert.match(global, /WHERE u\."role" = 'owner' AND u\."disabledAt" IS NULL/);
-  assert.doesNotMatch(global, /pushSubscription\.findMany/, "no unfiltered read of every device");
+  // Every device only while enforcement is switched off (the rollback), and nowhere else.
+  const all = global.indexOf("pushSubscription.findMany");
+  assert.ok(all > 0 && global.lastIndexOf("if (!tenantEnforcing()) {", all) > 0 && global.indexOf("}", all) < global.indexOf("$queryRaw"));
 });
 
 test("the four zero-send causes are still distinguishable", () => {

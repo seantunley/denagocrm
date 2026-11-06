@@ -673,7 +673,15 @@ async function main() {
     });
     await runInTenantScope({ tenantId: null, system: true }, async () => {
       const ids = (await pushRecipientsForCurrentScope()).map((r) => r.id);
-      check("push: system scope broadcasts to ALL devices (A + B)", ids.includes(subAId) && ids.includes(subBId));
+      check("push: system scope reaches the platform owners' devices (A + B), never a disabled one", ids.includes(subAId) && ids.includes(subBId) && !ids.includes(subCId));
+      // A platform alert is not for a workspace's staff (security audit 2026-10-25, item 5): B as a member drops out.
+      await basePrisma.user.update({ where: { id: userBId }, data: { role: "member" } });
+      try {
+        const asMember = (await pushRecipientsForCurrentScope()).map((r) => r.id);
+        check("push: system scope does NOT reach a non-owner's device", asMember.includes(subAId) && !asMember.includes(subBId));
+      } finally {
+        await basePrisma.user.update({ where: { id: userBId }, data: { role: "owner" } });
+      }
     });
     await runInTenantScope({ tenantId: null, system: false }, async () => {
       check("push: null non-system scope → delivers to NOBODY (fail closed)", (await pushRecipientsForCurrentScope()).length === 0);

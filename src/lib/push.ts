@@ -3,6 +3,7 @@ import { prisma, basePrisma } from "./db";
 import { getSetting } from "./settings";
 import { isAllowedPushEndpoint } from "./pushEndpoint";
 import { currentScopeClass } from "./tenantWrite";
+import { tenantEnforcing } from "./tenantEnforcement";
 import { isQuietHour } from "./proactiveRules";
 
 type PushRecipient = { id: string; userId: string; endpoint: string; p256dh: string; auth: string };
@@ -35,7 +36,11 @@ export async function pushRecipientsForCurrentScope(): Promise<PushRecipient[]> 
     return [];
   }
   if (s.mode === "global") {
-    // NO WORKSPACE = A PLATFORM ALERT (the monthly security check, AI health, the backup watchdog, a system error):
+    // Enforcement switched off (the rollback): every device, exactly as before tenancy — staff keep their alerts.
+    if (!tenantEnforcing()) {
+      return prisma.pushSubscription.findMany({ select: { id: true, userId: true, endpoint: true, p256dh: true, auth: true } });
+    }
+    // A SYSTEM JOB = A PLATFORM ALERT (the monthly security check, AI health, the backup watchdog, a system error):
     // the PLATFORM owner's devices only. It used to be every device in every workspace — another workspace's staff
     // would get this one's backup and security alerts (security audit 2026-10-25, item 5).
     // (`disabledAt` lives outside the Prisma model, as in pushRecipientsForTenant.)
