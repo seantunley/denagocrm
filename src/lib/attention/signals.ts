@@ -3,7 +3,8 @@ import "server-only";
 import { prisma } from "../db";
 import { contactActivityWhere, contactCommunicationWhere } from "../customerContact";
 import {
-  ATTENTION_CATEGORY, ATTENTION_WEIGHTS, FOLLOWUP_LOOKBACK_DAYS, attentionSignalKey, unansweredFollowUp, type AttentionSignal,
+  ATTENTION_CATEGORY, ATTENTION_WEIGHTS, FOLLOWUP_LOOKBACK_DAYS, LIVE_CONTACT_TYPES, attentionSignalKey, unansweredFollowUp,
+  type AttentionSignal,
 } from "./score";
 
 /**
@@ -281,7 +282,8 @@ export async function collectAttentionSignals(input: {
         select: { id: true, leadId: true, contactId: true, type: true, direction: true, occurredAt: true },
       }),
       prisma.activity.findMany({
-        where: { AND: [timeline, contactActivityWhere, { doneAt: { gte: lookback } }] },
+        // Only a call or meeting done clears it: a WhatsApp or email activity done is us writing again (LIVE_CONTACT_TYPES).
+        where: { AND: [timeline, contactActivityWhere, { type: { in: [...LIVE_CONTACT_TYPES] } }, { doneAt: { gte: lookback } }] },
         select: { leadId: true, contactId: true, doneAt: true },
       }),
     ]);

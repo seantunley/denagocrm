@@ -82,7 +82,13 @@ export const ATTENTION_WEIGHTS: Record<AttentionSignalKind, number> = {
  */
 export const FOLLOWUP_REPLY_DAYS = 3;
 export const FOLLOWUP_LOOKBACK_DAYS = 30;
-const LIVE_CONTACT_TYPES: ReadonlySet<string> = new Set(["call", "meeting"]);
+/**
+ * Talking to them: a call or a meeting — as a timeline entry, and as a done activity (signals.ts). A WhatsApp or
+ * email activity marked done is another message from us, not an answer, so it never clears the warning (re-review
+ * of #1014).
+ */
+export const LIVE_CONTACT_TYPES = ["call", "meeting"] as const;
+const LIVE_CONTACT: ReadonlySet<string> = new Set(LIVE_CONTACT_TYPES);
 export type FollowUpEntry = { id: string; type: string; direction: string | null; occurredAt: Date };
 export function unansweredFollowUp(
   timeline: readonly FollowUpEntry[],
@@ -93,7 +99,7 @@ export function unansweredFollowUp(
   const run: FollowUpEntry[] = [];
   for (const entry of timeline) {
     if (entry.occurredAt.getTime() <= after) break;
-    if (entry.direction !== "outbound" || LIVE_CONTACT_TYPES.has(entry.type)) break;
+    if (entry.direction !== "outbound" || LIVE_CONTACT.has(entry.type)) break;
     run.push(entry);
   }
   if (run.length === 0) return null;

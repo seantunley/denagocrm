@@ -9,6 +9,7 @@ import {
   ATTENTION_CATEGORY_CAPS,
   FOLLOWUP_LOOKBACK_DAYS,
   FOLLOWUP_REPLY_DAYS,
+  LIVE_CONTACT_TYPES,
   MAX_ATTENTION_SCORE,
   MAX_SNOOZE_DAYS,
   MIN_ATTENTION_REASON,
@@ -597,6 +598,10 @@ test("the follow-up signal reads the deal's whole timeline, through the guarded 
   assert.match(block, /\{ contactId: \{ in: contacts \}, leadId: null \}/);
   assert.match(block, /contactCommunicationWhere/, "an internal note is not a message to them");
   assert.match(block, /contactActivityWhere/, "a call or meeting since clears it");
+  // …and ONLY a call or meeting: a WhatsApp or email activity marked done is us writing again (re-review of #1014).
+  assert.match(block, /prisma\.activity\.findMany\(\{\s*where: \{ AND: \[timeline, contactActivityWhere, \{ type: \{ in: \[\.\.\.LIVE_CONTACT_TYPES\] \} \}/);
+  assert.deepEqual([...LIVE_CONTACT_TYPES], ["call", "meeting"]);
+  assert.ok(!(LIVE_CONTACT_TYPES as readonly string[]).includes("whatsapp") && !(LIVE_CONTACT_TYPES as readonly string[]).includes("email"));
   assert.doesNotMatch(block, /for \(const leadId of batch\) \{[\s\S]{0,400}await /, "no query per deal");
   // Both callers hand it only a customer the person may open (the loader: test above).
   assert.match(shipped("src/lib/assistantStuckLookup.ts"), /contactByLead: new Map\(\[\[lead\.id, contactId\]\]\)/);
