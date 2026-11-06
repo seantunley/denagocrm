@@ -197,7 +197,7 @@ export default async function LeadListPage({ searchParams }: { searchParams: Pro
                       href={`/leads/${lead.id}`}
                       actions={leadListActions(lead.id, canEdit, canManageActivities)}
                     >
-                    <tr tabIndex={0} className="focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary">
+                    <tr tabIndex={0} data-nav-row="" data-nav-href={`/leads/${lead.id}`} data-nav-lead={lead.id} className="focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary">
                       <td><Link href={`/leads/${lead.id}`} className="font-medium text-primary hover:underline">{lead.name}</Link><p className="max-w-52 truncate text-xs text-muted-foreground">{lead.title}</p></td>
                       <td>{lead.status === "open" ? <span className="badge text-white" style={{ backgroundColor: lead.stage.color }}>{lead.stage.name}</span> : <StatusPill tone={lead.status === "won" ? "success" : "danger"}>{lead.status}</StatusPill>}</td>
                       <td className="text-sm capitalize text-foreground/80">{lead.source}</td>

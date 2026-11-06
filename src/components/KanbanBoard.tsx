@@ -556,6 +556,10 @@ function DraggableCard({
           ref={setNodeRef}
           {...listeners}
           {...attributes}
+          // j / k / Enter / e / w / a (ListKeyboard). Enter opens; Space picks the card up to drag.
+          data-nav-row=""
+          data-nav-href={`/leads/${lead.id}`}
+          data-nav-lead={lead.id}
           className={cn("select-none outline-none focus-visible:ring-2 focus-visible:ring-primary", isDragging && "opacity-30")}
           aria-label={`${lead.name}. Right-click or press Shift+F10 for actions.`}
         >
@@ -610,6 +614,8 @@ function Column({
     <section
       ref={setNodeRef}
       id={`pipeline-stage-${stage.id}`}
+      data-nav-stage=""
+      tabIndex={-1}
       className="flex w-[min(88vw,22rem)] shrink-0 snap-start flex-col overflow-hidden rounded-2xl border border-border bg-card/35 shadow-sm md:w-[320px]"
       aria-labelledby={`pipeline-stage-title-${stage.id}`}
     >
@@ -778,7 +784,8 @@ export default function KanbanBoard({
     // moves past the tolerance before the delay elapses) is treated as a scroll,
     // so the board/columns scroll normally instead of grabbing a card by accident.
     useSensor(TouchSensor, { activationConstraint: { delay: 220, tolerance: 8 } }),
-    useSensor(KeyboardSensor),
+    // Keyboard: Space picks a card up (and drops it); Enter is left to OPEN the card (ListKeyboard).
+    useSensor(KeyboardSensor, { keyboardCodes: { start: ["Space"], cancel: ["Escape"], end: ["Space", "Enter"] } }),
   );
 
   /**
