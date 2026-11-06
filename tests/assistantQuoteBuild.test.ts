@@ -228,7 +228,7 @@ test("THE PDF IS QUEUED WITH THE QUOTE — delivered wherever Confirm was presse
   assert.match(sendNow, /setTimeout\(resolve, QUOTE_PDF_SEND_WAIT_MS\)/);
   assert.match(actions, /via: "crm" \| "whatsapp" = "crm",/);
   // The total the person is told is the QUOTE's own (VAT, discounts), read back from what was saved.
-  assert.match(run, /const total = built \? formatZAR\(Math\.round\(payableTotalCents\(built\)\), moneyFmt\) : null;/);
+  assert.match(run, /const total = built \? formatZAR\(Math\.round\(payableTotalCents\(built\)\), withCurrency\(moneyFmt, built\.currency\)\) : null;/);
 
   // It is an update like a briefing: the sweep retries it, and the bubble shows it.
   const rules = code("src/lib/assistantWhatsAppRules.ts");
