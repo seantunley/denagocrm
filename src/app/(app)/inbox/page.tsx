@@ -1,23 +1,24 @@
 import { ExternalLink, Inbox, Star } from "lucide-react";
-import { basePrisma } from "@/lib/db";
+import { basePrisma, prisma } from "@/lib/db";
 import { activeTenantPredicate } from "@/lib/tenantPredicate";
 import { getActiveTenantId } from "@/lib/auth";
 import { notFound } from "next/navigation";
-import { accessibleInboxWhere, hasPermission, requireAnyPermission } from "@/lib/permissions";
+import { accessibleInboxWhere, getAccessibleLeadIds, hasPermission, requireAnyPermission } from "@/lib/permissions";
+import { isModuleEnabled } from "@/lib/modules/enabled";
 import { loadCommentThreads } from "@/lib/commentInbox";
 import CommentThreadList from "@/components/CommentThreadList";
 import { pageCapabilities } from "@/lib/metaCapabilities";
 import AutoRefresh from "@/components/AutoRefresh";
 import Tabs from "@/components/Tabs";
-import SocialThreadList from "@/components/SocialThreadList";
+import SocialThreadList, { type InboxDeal } from "@/components/SocialThreadList";
 import BotHandoffQueue, { type HandoffQueueItem } from "@/components/BotHandoffQueue";
 import { buildInboxThreads, threadCollaborationKey } from "@/lib/inboxThreads";
 import { loadInboxComms } from "@/lib/inboxQuery";
 import { deliveryStateForMessages } from "@/lib/botOutbox";
 import { collaborationForThreads } from "@/lib/inboxCollaboration";
 import { listActingTenantStaff } from "@/lib/tenantActor";
-import { resolveIntegrationBundle } from "@/lib/settings";
-import { formatDateTime } from "@/lib/format";
+import { getRegionalSettings, resolveIntegrationBundle } from "@/lib/settings";
+import { formatDateTime, formatZAR } from "@/lib/format";
 import { EmptyState, SectionHeading, Surface } from "@/components/visual-system";
 import { WorkspaceHero } from "@/components/workspace-hero";
 import { SaveForm, SaveButton } from "@/components/SaveForm";
@@ -81,6 +82,42 @@ export default async function InboxPage({ searchParams }: { searchParams: Promis
     // People the filter read as a supplier, partner or other business — shown apart from sales.
     businessApproachSenders(workspaceTenantId),
   ]);
+  // THE DEAL BESIDE EACH CONVERSATION (the right rail) — only deals this person may open.
+  const leadIds = [...new Set([...threadList, ...archivedList].map((thread) => thread.leadId).filter((id): id is string => Boolean(id)))];
+  const [openableLeadIds, money, canCreateQuote, automotiveOn, canManageActivities] = await Promise.all([
+    getAccessibleLeadIds(user),
+    getRegionalSettings(),
+    hasPermission(user, "quotes.create"),
+    isModuleEnabled("automotive"),
+    hasPermission(user, "activities.manage"),
+  ]);
+  const openable = openableLeadIds === null ? null : new Set(openableLeadIds);
+  const dealIds = openable === null ? leadIds : leadIds.filter((id) => openable.has(id));
+  const dealRows = dealIds.length
+    ? await prisma.lead.findMany({
+        where: { id: { in: dealIds }, deletedAt: null },
+        select: {
+          id: true, title: true, status: true, valueCents: true, contactId: true,
+          stage: { select: { name: true, color: true } },
+          activities: { where: { status: "planned", availabilityBlock: false }, orderBy: { dueDate: "asc" }, take: 1, select: { summary: true, dueDate: true } },
+        },
+      })
+    : [];
+  const deals = new Map<string, InboxDeal>(dealRows.map((deal) => [deal.id, {
+    id: deal.id,
+    title: deal.title,
+    status: deal.status,
+    stage: deal.stage,
+    value: deal.valueCents ? formatZAR(deal.valueCents, money) : null,
+    contactId: deal.contactId,
+    next: deal.activities[0] ?? null,
+  }]));
+  const listProps = {
+    canMarkSpam: canReviewSpam, delivery, collaboration, staff: collabStaff, canCollaborate, viewerId: user.id,
+    deals, canCreateQuote,
+    // Test drives are the vehicle pack's, booked by whoever may plan activities (the /test-drives gate).
+    canBookTestDrive: automotiveOn && canManageActivities,
+  };
   const businessKeys = new Set(businessRows.map((row) => `${row.channel}:${row.contactId}`));
   const businessThreads = threadList.filter((thread) => thread.contactId && businessKeys.has(`${thread.channel}:${thread.contactId}`));
   const unread = threadList.filter((thread) => thread.unread).length;
@@ -146,7 +183,7 @@ export default async function InboxPage({ searchParams }: { searchParams: Promis
         <div className="mb-3"><h2 className="text-sm font-semibold">Waiting for takeover</h2><p className="mt-1 text-xs text-muted-foreground">Reason, wait time, channel and assignment are visible without opening the conversation.</p></div>
         <BotHandoffQueue items={handoffItems} staff={collabStaff} canAct={canCollaborate} />
       </div>
-      {humanThreads.length ? <div><div className="mb-3"><h2 className="text-sm font-semibold">Human handling</h2><p className="mt-1 text-xs text-muted-foreground">These conversations are already claimed or manually paused; open one to return it to the bot when resolved.</p></div><SocialThreadList canMarkSpam={canReviewSpam} delivery={delivery} collaboration={collaboration} staff={collabStaff} canCollaborate={canCollaborate} viewerId={user.id} list={humanThreads} empty="No conversations are currently human-controlled." /></div> : null}
+      {humanThreads.length ? <div><div className="mb-3"><h2 className="text-sm font-semibold">Human handling</h2><p className="mt-1 text-xs text-muted-foreground">These conversations are already claimed or manually paused; open one to return it to the bot when resolved.</p></div><SocialThreadList {...listProps} list={humanThreads} empty="No conversations are currently human-controlled." /></div> : null}
     </div>
   );
 
@@ -256,16 +293,16 @@ export default async function InboxPage({ searchParams }: { searchParams: Promis
         initialKey={tab === "comments" ? "comments" : tab === "spam" ? "spam" : tab === "business" ? "business" : "all"}
         tabs={[
           { key: "handoffs", label: "Bot handoffs", count: handoffThreads.length + deadConversations.length, content: handoffsPanel },
-          { key: "all", label: "All", count: unread, content: <SocialThreadList canMarkSpam={canReviewSpam} delivery={delivery} collaboration={collaboration} staff={collabStaff} canCollaborate={canCollaborate} viewerId={user.id} list={threadList} empty="No conversations yet. Messages appear here as soon as a connected customer channel receives one." /> },
-          { key: "whatsapp", label: "WhatsApp", count: threadList.filter((thread) => thread.channel === "whatsapp" && thread.unread).length, content: <SocialThreadList canMarkSpam={canReviewSpam} delivery={delivery} collaboration={collaboration} staff={collabStaff} canCollaborate={canCollaborate} viewerId={user.id} list={threadList.filter((thread) => thread.channel === "whatsapp")} empty="No WhatsApp conversations yet. Connect the WhatsApp Business number in Settings → Integrations." /> },
-          { key: "messenger", label: "Messenger", count: threadList.filter((thread) => thread.channel === "messenger" && thread.unread).length, content: <SocialThreadList canMarkSpam={canReviewSpam} delivery={delivery} collaboration={collaboration} staff={collabStaff} canCollaborate={canCollaborate} viewerId={user.id} list={threadList.filter((thread) => thread.channel === "messenger")} empty="No Messenger conversations yet." /> },
-          { key: "instagram", label: "Instagram", count: threadList.filter((thread) => thread.channel === "instagram" && thread.unread).length, content: <SocialThreadList canMarkSpam={canReviewSpam} delivery={delivery} collaboration={collaboration} staff={collabStaff} canCollaborate={canCollaborate} viewerId={user.id} list={threadList.filter((thread) => thread.channel === "instagram")} empty="No Instagram DMs yet. They appear once the Instagram account and Meta messaging permissions are connected." /> },
-          { key: "x", label: "X", count: threadList.filter((thread) => thread.channel === "x" && thread.unread).length, content: <SocialThreadList canMarkSpam={canReviewSpam} delivery={delivery} collaboration={collaboration} staff={collabStaff} canCollaborate={canCollaborate} viewerId={user.id} list={threadList.filter((thread) => thread.channel === "x")} empty="No X conversations yet. Connect the tenant's X account in Settings → Integrations." /> },
-          { key: "telegram", label: "Telegram", count: threadList.filter((thread) => thread.channel === "telegram" && thread.unread).length, content: <SocialThreadList canMarkSpam={canReviewSpam} delivery={delivery} collaboration={collaboration} staff={collabStaff} canCollaborate={canCollaborate} viewerId={user.id} list={threadList.filter((thread) => thread.channel === "telegram")} empty="No Telegram conversations yet. They appear once the Telegram bot is connected in Settings → Integrations." /> },
-          { key: "business", label: "Business", count: businessThreads.filter((thread) => thread.unread).length, content: <SocialThreadList canMarkSpam={canReviewSpam} delivery={delivery} collaboration={collaboration} staff={collabStaff} canCollaborate={canCollaborate} viewerId={user.id} list={businessThreads} empty="No supplier, partnership or other business approaches. When the spam filter is on, messages it reads as a business writing to you — not a customer, and not spam — are listed here as well as under All." /> },
+          { key: "all", label: "All", count: unread, content: <SocialThreadList {...listProps} list={threadList} empty="No conversations yet. Messages appear here as soon as a connected customer channel receives one." /> },
+          { key: "whatsapp", label: "WhatsApp", count: threadList.filter((thread) => thread.channel === "whatsapp" && thread.unread).length, content: <SocialThreadList {...listProps} list={threadList.filter((thread) => thread.channel === "whatsapp")} empty="No WhatsApp conversations yet. Connect the WhatsApp Business number in Settings → Integrations." /> },
+          { key: "messenger", label: "Messenger", count: threadList.filter((thread) => thread.channel === "messenger" && thread.unread).length, content: <SocialThreadList {...listProps} list={threadList.filter((thread) => thread.channel === "messenger")} empty="No Messenger conversations yet." /> },
+          { key: "instagram", label: "Instagram", count: threadList.filter((thread) => thread.channel === "instagram" && thread.unread).length, content: <SocialThreadList {...listProps} list={threadList.filter((thread) => thread.channel === "instagram")} empty="No Instagram DMs yet. They appear once the Instagram account and Meta messaging permissions are connected." /> },
+          { key: "x", label: "X", count: threadList.filter((thread) => thread.channel === "x" && thread.unread).length, content: <SocialThreadList {...listProps} list={threadList.filter((thread) => thread.channel === "x")} empty="No X conversations yet. Connect the tenant's X account in Settings → Integrations." /> },
+          { key: "telegram", label: "Telegram", count: threadList.filter((thread) => thread.channel === "telegram" && thread.unread).length, content: <SocialThreadList {...listProps} list={threadList.filter((thread) => thread.channel === "telegram")} empty="No Telegram conversations yet. They appear once the Telegram bot is connected in Settings → Integrations." /> },
+          { key: "business", label: "Business", count: businessThreads.filter((thread) => thread.unread).length, content: <SocialThreadList {...listProps} list={businessThreads} empty="No supplier, partnership or other business approaches. When the spam filter is on, messages it reads as a business writing to you — not a customer, and not spam — are listed here as well as under All." /> },
           { key: "comments", label: "Comments", count: unreadComments, content: commentsPanel },
           { key: "reviews", label: "Google Reviews", count: reviews.length, content: reviewsPanel },
-          { key: "archived", label: "Archived", count: archivedList.length, content: <SocialThreadList canMarkSpam={canReviewSpam} delivery={delivery} collaboration={collaboration} staff={collabStaff} canCollaborate={canCollaborate} viewerId={user.id} list={archivedList} empty="Nothing archived. Archive finished or test conversations to keep the active queue focused." /> },
+          { key: "archived", label: "Archived", count: archivedList.length, content: <SocialThreadList {...listProps} list={archivedList} empty="Nothing archived. Archive finished or test conversations to keep the active queue focused." /> },
           // A count of what is HELD, shown quietly: no push, no badge elsewhere.
           { key: "spam", label: "Spam", count: heldCount, content: <SpamPanel tenantId={workspaceTenantId} canReview={canReviewSpam} isOwner={isOwner} params={params} /> },
         ]}
