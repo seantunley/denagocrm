@@ -225,6 +225,7 @@ model JourneyRun {
   @@index([leadId])
   @@index([contactId])
   @@index([tenantId])
+  @@index([journeyVersionId])
 }
 
 model JourneyStepLog {

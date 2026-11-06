@@ -98,6 +98,7 @@ model TimelinePin {
   @@unique([kind, itemId])
   @@index([pinnedAt])
   @@index([tenantId])
+  @@index([pinnedById])
 }
 
 model AppSetting {
@@ -239,6 +240,7 @@ model LibraryVersion {
 
   @@unique([documentId, version])
   @@index([tenantId])
+  @@index([uploadedById])
 }
 
 model Product {
@@ -351,6 +353,8 @@ model StockUnit {
   @@index([purchaseOrderLineId], map: "StockUnit_po_line_idx")
   @@index([tenantId])
   @@unique([tenantId, id])
+  @@index([purchaseOrderId])
+  @@index([reservedForLeadId])
 }
 
 model StockReservation {
@@ -378,6 +382,8 @@ model StockReservation {
   @@index([status, expiresAt], map: "StockReservation_expiry_idx")
   @@index([leadId, status], map: "StockReservation_lead_idx")
   @@index([tenantId])
+  @@index([quoteId])
+  @@index([reservedById])
 }
 
 model StockEvent {
@@ -426,6 +432,7 @@ model PurchaseOrderLine {
   @@index([purchaseOrderId], map: "PurchaseOrderLine_po_idx")
   @@index([tenantId])
   @@unique([tenantId, id])
+  @@index([productId])
 }
 
 model GoodsReceipt {
@@ -444,6 +451,7 @@ model GoodsReceipt {
   @@index([purchaseOrderId, receivedAt(sort: Desc)], map: "GoodsReceipt_po_idx")
   @@index([tenantId])
   @@unique([tenantId, id])
+  @@index([receivedById])
 }
 
 model GoodsReceiptLine {
@@ -460,6 +468,8 @@ model GoodsReceiptLine {
 
   @@index([goodsReceiptId], map: "GoodsReceiptLine_receipt_idx")
   @@index([tenantId])
+  @@index([purchaseOrderLineId])
+  @@index([stockUnitId])
 }
 
 model ProductColor {
@@ -469,6 +479,7 @@ model ProductColor {
   productId String
   product   Product @relation(fields: [productId], references: [id], onDelete: Cascade)
   @@index([tenantId])
+  @@index([productId])
 }
 
 model Contact {
@@ -563,6 +574,8 @@ model Contact {
   @@unique([tenantId, telegramChatId])
   @@index([fleetId])
   @@unique([tenantId, id])
+  @@index([ownerId])
+  @@index([createdById])
 }
 
 // POPIA consent ledger — an append-only history of consent given/withdrawn,
@@ -662,6 +675,7 @@ model Campaign {
   @@index([status])
   @@index([tenantId])
   @@unique([tenantId, id])
+  @@index([createdById])
 }
 
 model CampaignRecipient {
@@ -695,6 +709,7 @@ model CampaignRecipient {
   @@index([campaignId])
   @@index([status])
   @@index([tenantId])
+  @@index([contactId])
 }
 
 model Segment {
@@ -995,6 +1010,11 @@ model Lead {
   @@index([tenantId])
   @@unique([tenantId, externalId]) // a provider id is unique to the provider, not to us
   @@unique([tenantId, id])
+  @@index([stageId])
+  @@index([productId])
+  @@index([contactId])
+  @@index([assignedToId])
+  @@index([createdById])
 }
 
 model ResearchNote {
@@ -1047,6 +1067,9 @@ model Activity {
   @@index([tenantId])
   @@index([assignedToId, dueDate, status])
   @@index([availabilityBlock, dueDate, endDate])
+  @@index([leadId])
+  @@index([contactId])
+  @@index([createdById])
 }
 
 /// A second (third…) staff member at an activity. Activity has one assignee —
@@ -1559,6 +1582,10 @@ model Quote {
   @@unique([tenantId, id])
   // One invoice number per workspace: the sequence can never issue a duplicate.
   @@unique([tenantId, invoiceNumber])
+  @@index([revisionOfId])
+  @@index([leadId])
+  @@index([contactId])
+  @@index([createdById])
 }
 
 model QuoteItem {
@@ -1586,6 +1613,7 @@ model QuoteItem {
 
   @@index([productId])
   @@index([tenantId])
+  @@index([quoteId])
 }
 
 model QuoteFee {
@@ -1749,6 +1777,7 @@ model Communication {
   // aggregate and the per-thread top-N slice. Neither key had an index.
   @@index([contactId, type, occurredAt(sort: Desc)], map: "Communication_contact_thread_idx")
   @@index([leadId, type, occurredAt(sort: Desc)], map: "Communication_lead_thread_idx")
+  @@index([userId])
 }
 
 /// A shared-inbox conversation: groups related messages with a contact (or lead)
@@ -1841,6 +1870,7 @@ model ConversationNote {
 
   @@index([conversationId, createdAt])
   @@index([tenantId])
+  @@index([authorId])
 }
 
 /**
@@ -1863,6 +1893,7 @@ model ConversationDraft {
   createdAt      DateTime     @default(now())
 
   @@index([tenantId])
+  @@index([ownerId])
 }
 
 model Document {
@@ -1901,6 +1932,10 @@ model Document {
 
   @@index([tenantId])
   @@unique([tenantId, id])
+  @@index([contactId])
+  @@index([vehicleId])
+  @@index([jobCardId])
+  @@index([uploadedById])
 }
 
 model Vehicle {
@@ -1938,6 +1973,8 @@ model Vehicle {
   @@index([fleetId])
   @@index([tenantId])
   @@unique([tenantId, id])
+  @@index([contactId])
+  @@index([productId])
 }
 
 // A fleet / B2B account — an estate, golf course, resort or business that
@@ -2059,6 +2096,7 @@ model MileageLog {
   vehicleId String
   vehicle   Vehicle @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
   @@index([tenantId])
+  @@index([vehicleId])
 }
 
 model ServiceRecord {
@@ -2079,6 +2117,8 @@ model ServiceRecord {
   performedById String?
   performedBy   User?    @relation(fields: [performedById], references: [id])
   @@index([tenantId])
+  @@index([vehicleId])
+  @@index([performedById])
 }
 
 model JobCard {
@@ -2152,6 +2192,9 @@ model JobCard {
   @@index([comebackOfId])
   @@index([tenantId])
   @@unique([tenantId, id])
+  @@index([vehicleId])
+  @@index([contactId])
+  @@index([technicianId])
 }
 
 model PartReservation {
@@ -2282,6 +2325,8 @@ model JobCardItem {
   partId    String? // set when the line came from the parts catalogue (stock deducted)
   part      Part?   @relation(fields: [partId], references: [id], onDelete: SetNull)
   @@index([tenantId])
+  @@index([jobCardId])
+  @@index([partId])
 }
 
 model Part {
@@ -2356,6 +2401,7 @@ model Referral {
 
   @@index([referrerId, createdAt])
   @@index([tenantId])
+  @@index([contactId])
 }
 
 // Saved list filters ("Facebook leads over R200k this month")
@@ -2545,6 +2591,7 @@ model DocBuilderTemplate {
   @@index([key, isDefault])
   @@index([tenantId])
   @@unique([tenantId, id])
+  @@index([defaultWorkflowId])
 }
 
 /// A visual signing workflow: an ordered/branching graph of signer + condition
@@ -2881,6 +2928,7 @@ model SignatureField {
   @@index([requestId])
   @@index([tenantId])
   @@unique([tenantId, id])
+  @@index([recipientId])
 }
 
 /// One recipient's answer to a single signature field. `SignatureField.value`
@@ -2989,6 +3037,7 @@ model SignatureView {
 
   @@index([tenantId, requestId])
   @@index([recipientId, startedAt])
+  @@index([requestId])
 }
 
 // ── Email signature banners (signature marketing) ───────────────────
@@ -3052,6 +3101,7 @@ model SignatureBannerLink {
   createdAt DateTime        @default(now())
 
   @@index([tenantId, bannerId])
+  @@index([bannerId])
 }
 
 /// One click on a banner. `communicationId` is the sent email it came from,
@@ -3066,6 +3116,7 @@ model SignatureBannerClick {
 
   @@index([tenantId, bannerId, clickedAt])
   @@index([communicationId])
+  @@index([bannerId])
 }
 
 // ── Document Studio: free-form BlockNote documents ──────────────────
@@ -3133,6 +3184,7 @@ model DocInstance {
 
   @@index([status, updatedAt])
   @@index([tenantId])
+  @@index([templateId])
 }
 
 // Reusable clauses — inserted BY VALUE into documents (no dependency graph).
@@ -3453,6 +3505,7 @@ model CompetitorSnapshot {
 
   @@index([sourceId, fetchedAt])
   @@index([tenantId])
+  @@index([competitorId])
 }
 
 model CompetitorChange {
@@ -3479,6 +3532,7 @@ model CompetitorChange {
   @@index([status, createdAt])
   @@index([competitorId, createdAt])
   @@index([tenantId])
+  @@index([sourceId])
 }
 
 // AI-authored intelligence brief — the "research" layer that a strong model

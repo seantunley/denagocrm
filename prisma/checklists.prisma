@@ -155,6 +155,7 @@ model ChecklistRun {
   /// dashboard card or a stage gate asks.
   @@index([tenantId, templateId, completedAt])
   @@unique([tenantId, id])
+  @@index([templateId])
 }
 
 /// One answered step.
@@ -204,6 +205,7 @@ model ChecklistEntry {
   @@index([tenantId])
   @@unique([tenantId, id])
   @@unique([tenantId, runId, itemIdSnapshot])
+  @@index([itemId])
 }
 
 /// One photo that actually reached blob storage.
