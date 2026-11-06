@@ -8,7 +8,7 @@ import { getSetting } from "./settings";
 import { getUserPermissions, usablePermissions } from "./permissionQuery";
 import { routeGrants } from "./routeAccess";
 import { getUserSecurityState, getUserSecurityStateFresh } from "./userSecurity";
-import { resolveActingTenant } from "./tenantContext";
+import { resolveActingTenant, resolveActingTenantForRequest } from "./tenantContext";
 import { tenantObserving, tenantEnforcing, mayRetryTenantlessSession } from "./tenantEnforcement";
 import { honoredTenantClaim, resolveLoginTenant } from "./tenant";
 import { ensureFoundingMembership } from "./provisioning";
@@ -471,7 +471,7 @@ export async function getActiveTenantId(): Promise<string | null> {
   const token = store.get(SESSION_COOKIE)?.value;
   if (!token) return null;
   const session = await verifySession(token);
-  const sole = await resolveActingTenant(user.id);
+  const sole = await resolveActingTenantForRequest(user.id);
   return honoredTenantClaim(session?.tid ?? null, sole);
 }
 
