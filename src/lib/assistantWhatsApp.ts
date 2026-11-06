@@ -42,6 +42,7 @@ import {
   PROACTIVE_SOURCES,
   QUOTE_PDF_SOURCE,
   sendableSources,
+  updatesSince,
   QUESTION_CHARS,
   UPDATE_BATCH,
   UPDATE_WAIT_MS,
@@ -706,7 +707,8 @@ export async function sendUpdatesToLinkedPhone(
     // "Send my updates to this phone" switched off: briefings, alerts and handoffs
     // stay in the CRM. A quote PDF is not one of those — the person asked for it —
     // so it alone still goes.
-    // QUIET HOURS, unless they are writing to DAX right now: only what they timed or asked for (sendableSources).
+    // QUIET HOURS, unless they are writing to DAX right now: only what they timed or asked for (sendableSources),
+    // and only at the time it was made (updatesSince) — not last morning's, still unread.
     const night = !opts.windowOpen && isQuietHour(new Date());
     const sources = sendableSources(link.updatesOnWhatsApp ? PROACTIVE_SOURCES : [QUOTE_PDF_SOURCE], night);
     // WAITING: not finished, and not being sent by somebody else right now. A
@@ -715,7 +717,7 @@ export async function sendUpdatesToLinkedPhone(
     const waiting = (textOnly = false) =>
       basePrisma.assistantTurn.findMany({
         where: {
-          tenantId, userId, source: { in: sources }, whatsappSentAt: null, createdAt: { gt: new Date(Date.now() - UPDATE_WAIT_MS) },
+          tenantId, userId, source: { in: sources }, whatsappSentAt: null, createdAt: { gt: updatesSince(Date.now(), night) },
           OR: [{ whatsappClaimedAt: null }, { whatsappClaimedAt: { lt: new Date(Date.now() - UPDATE_CLAIM_MS) } }],
           ...(textOnly ? { quoteId: null } : {}),
         },
@@ -966,8 +968,9 @@ async function nudgeWithTemplate(
   if (outOfTime()) return "waiting";
   // AT NIGHT ONLY FOR WHAT THEY TIMED. An unasked-for "you have an update" is what woke Sean at 00:30 and 04:30
   // (20-hour spacing walked it four hours earlier each day) — but the caller already leaves everything except
-  // timed or asked-for updates out at night (sendableSources), so this is only reached at night for one of those:
-  // a 07:30 morning brief, outside WhatsApp's 24 hours, still gets its nudge at 07:30 (review of #929, 2026-11-02).
+  // timed or asked-for updates out at night (sendableSources), and any made more than half an hour ago (updatesSince),
+  // so this is only reached at night for one of those, at its own time: a 07:30 morning brief, outside WhatsApp's
+  // 24 hours, still gets its nudge at 07:30 (review of #929, 2026-11-02) — yesterday's never does (2026-11-06).
   const template = parseUpdateTemplate(await getSetting(ASSISTANT_WHATSAPP_TEMPLATE_KEY).catch(() => null));
   if (!template || !link.waId) return "waiting";
   if (link.nudgedAt && Date.now() - link.nudgedAt.getTime() < NUDGE_EVERY_MS) return "waiting";
