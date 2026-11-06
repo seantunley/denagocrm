@@ -20,6 +20,7 @@ import { emitQuoteJourneyEvent } from "@/lib/leadJourneyEvents";
 import { emailWithBanner, recordBannerSent } from "@/lib/signatureBannerStore";
 import { tenantOrigin } from "@/lib/tenantOrigin";
 import { getSetting, getRegionalSettings } from "@/lib/settings";
+import { withCurrency } from "@/lib/currencyRules";
 import { getCompanyProfile } from "@/lib/companyProfile";
 import { SIGNATURE_DESIGN_KEY, buildSignature, parseSignatureDesign, placeSignatureInEmail, signatureCompanyFrom, signatureText } from "@/lib/signature";
 
@@ -64,7 +65,8 @@ async function quoteVars(quote: LoadedQuote, user: PermissionUser) {
   const name = (billTo.attention || billTo.name).trim();
   // The sender's own details sign the email (My account → job title, mobile).
   const sender = await prisma.user.findUnique({ where: { id: user.id }, select: { mobile: true, jobTitle: true } });
-  const moneyFmt = await getRegionalSettings();
+  // The quote's total in ITS currency (multicurrency module; null = the base).
+  const moneyFmt = withCurrency(await getRegionalSettings(), quote.currency);
   return {
     to: billTo.email,
     vars: {

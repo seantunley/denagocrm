@@ -53,6 +53,7 @@ import {
   MobileWorkspaceHeader,
 } from "@/components/mobile-workspace";
 import { getRegionalSettings } from "@/lib/settings";
+import { withCurrency } from "@/lib/currencyRules";
 
 // "Email quote" (in the editor on this page) renders the PDF in headless Chrome
 // and sends it — the same budget the PDF routes get.

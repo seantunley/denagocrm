@@ -1571,7 +1571,8 @@ async function wonQuoteOptions(leadId: string) {
 }
 
 export type MarkWonChoices = {
-  quotes: Array<{ id: string; number: number; status: string; totalCents: number; outForSignature: boolean }>;
+  /** `currency`: the quote's (multicurrency module); null = the base. */
+  quotes: Array<{ id: string; number: number; status: string; totalCents: number; currency: string | null; outForSignature: boolean }>;
   acceptedNumbers: number[];
   /** Accepting a quote is a status change; without it only "no quote" is open. */
   canAcceptQuotes: boolean;
@@ -1602,6 +1603,7 @@ export async function markWonChoices(leadId: string): Promise<MarkWonChoices | n
         number: quote.number,
         status: quote.status,
         totalCents: payableTotalCents(quote),
+        currency: quote.currency ?? null,
         outForSignature: outForSignature.has(quote.id),
       })),
       acceptedNumbers: accepted.map((quote) => quote.number),

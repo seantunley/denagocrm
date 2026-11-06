@@ -52,6 +52,7 @@ import { EntityDetailShell } from "@/components/entity-detail-shell";
 import { StatusPill } from "@/components/visual-system";
 import { getRegionalSettings } from "@/lib/settings";
 import { getCurrencyOptions } from "@/lib/currency";
+import { withCurrency } from "@/lib/currencyRules";
 
 const RESEARCH_SUBJECT = "🔎 AI research";
 
@@ -296,9 +297,9 @@ export default async function ContactDetailPage({
       {visibleOpenDeals.length === 0 ? <p className="text-sm text-muted-foreground">No open deals.</p> : <ul className="divide-y divide-border">{visibleOpenDeals.map((deal) => <li key={deal.id} className="space-y-2 py-3 first:pt-0 last:pb-0">
         <Link href={`/leads/${deal.id}`} className="block break-words text-sm font-medium hover:text-primary">{deal.title}</Link>
         {deal.product && <p className="text-xs text-muted-foreground">{deal.product.name}</p>}
-        <div className="flex flex-wrap items-center justify-between gap-2 text-xs"><span className="rounded-md bg-muted px-2 py-1 text-muted-foreground">{deal.stage.name}</span><span>{formatZAR(deal.valueCents, moneyFmt)}</span></div>
+        <div className="flex flex-wrap items-center justify-between gap-2 text-xs"><span className="rounded-md bg-muted px-2 py-1 text-muted-foreground">{deal.stage.name}</span><span>{formatZAR(deal.valueCents, withCurrency(moneyFmt, deal.currency))}</span></div>
       </li>)}</ul>}
-      {contact.quotes.length > 0 && <div className="mt-4 border-t border-border pt-3"><p className="text-xs text-muted-foreground">Latest quote</p><TabLink tab="documents" className="mt-1 block text-left text-sm hover:text-primary">Q-{contact.quotes[0].number} · {contact.quotes[0].status}</TabLink><p className="mt-1 text-xs text-muted-foreground">{formatZAR(payableTotalCents(contact.quotes[0]), moneyFmt)}</p></div>}
+      {contact.quotes.length > 0 && <div className="mt-4 border-t border-border pt-3"><p className="text-xs text-muted-foreground">Latest quote</p><TabLink tab="documents" className="mt-1 block text-left text-sm hover:text-primary">Q-{contact.quotes[0].number} · {contact.quotes[0].status}</TabLink><p className="mt-1 text-xs text-muted-foreground">{formatZAR(payableTotalCents(contact.quotes[0]), withCurrency(moneyFmt, contact.quotes[0].currency))}</p></div>}
     </section>
     <details className="rounded-xl border border-border bg-card p-4"><summary className="cursor-pointer text-sm font-medium">Secure links</summary><div className="mt-3"><SecureLinksPanel contactId={contact.id} /></div></details>
   </>;
@@ -537,7 +538,7 @@ export default async function ContactDetailPage({
                             >
                               {l.title}
                             </Link>
-                            <span className="text-xs text-slate-400">{formatZAR(l.valueCents, moneyFmt)}</span>
+                            <span className="text-xs text-slate-400">{formatZAR(l.valueCents, withCurrency(moneyFmt, l.currency))}</span>
                             <span
                               className={`badge ${
                                 l.status === "won"

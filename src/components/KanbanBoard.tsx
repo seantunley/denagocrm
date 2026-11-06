@@ -62,6 +62,7 @@ import {
 import { MarkWonDialog } from "@/components/MarkWonDialog";
 import NurtureForm from "@/components/NurtureForm";
 import { formatZAR } from "@/lib/format";
+import { totalsByCurrency, withCurrency } from "@/lib/currencyRules";
 import { useMoneyFormat } from "@/components/MoneyFormatProvider";
 import { cn } from "@/lib/utils";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
@@ -114,6 +115,8 @@ export type KanbanLead = {
   name: string;
   contactId?: string | null;
   valueCents: number;
+  /** The currency valueCents is in (multicurrency module); null/undefined = the base. */
+  currency?: string | null;
   quantity?: number;
   source: string;
   color: string | null;
@@ -275,7 +278,7 @@ function LeadCard({ lead, dragging, actions, staleAfterDays = null }: { lead: Ka
           {(hasAmount || manyUnits) && (
           <div className={cn("flex items-center gap-1.5", hasAmount && "mt-1")}>
             {hasAmount && (
-              <span className="text-sm font-semibold tabular-nums text-foreground">{formatZAR(lead.valueCents, moneyFmt)}</span>
+              <span className="text-sm font-semibold tabular-nums text-foreground">{formatZAR(lead.valueCents, withCurrency(moneyFmt, lead.currency))}</span>
             )}
             {manyUnits && (
               <span
@@ -606,6 +609,11 @@ function Column({
   const { setNodeRef, isOver } = useDroppable({ id: stage.id });
   const moneyFmt = useMoneyFormat();
   const total = stage.leads.reduce((sum, lead) => sum + lead.valueCents, 0);
+  // Never one figure across currencies (multicurrency module): a total per currency, side by side.
+  const totals = totalsByCurrency(stage.leads, (lead) => ({ cents: lead.valueCents, currency: lead.currency }), moneyFmt.currency)
+    .filter((row) => row.cents > 0)
+    .map((row) => formatZAR(row.cents, withCurrency(moneyFmt, row.currency)))
+    .join(" · ");
 
   // Droppable is the WHOLE column (header + body), so the pointer-X drop detection
   // has the full column width/height to work with.
@@ -632,7 +640,7 @@ function Column({
             </span>
           </div>
           <span className="shrink-0 text-xs font-semibold tabular-nums text-foreground">
-            {total > 0 ? formatZAR(total, moneyFmt) : "—"}
+            {total > 0 ? totals : "—"}
           </span>
         </div>
         <p className="mt-1.5 text-[10px] text-muted-foreground">

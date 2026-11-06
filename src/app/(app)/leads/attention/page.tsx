@@ -4,6 +4,7 @@ import { hasPermission, requireAnyPermission } from "@/lib/permissions";
 import { loadAttentionList, type SetAsideLead } from "@/lib/attention/load";
 import { attentionBandLabel, type AttentionBand } from "@/lib/attention/score";
 import { formatDate, formatZAR } from "@/lib/format";
+import { withCurrency } from "@/lib/currencyRules";
 import SetAsideAttentionButton from "@/components/SetAsideAttentionButton";
 import RestoreAttentionButton from "@/components/RestoreAttentionButton";
 import { PageHeader } from "@/components/page-header";
@@ -180,7 +181,7 @@ export default async function AttentionPage({
                   <span className="text-xs text-muted-foreground">{lead.stageName}</span>
                   {lead.valueCents > 0 && (
                     <span className="text-xs tabular-nums text-muted-foreground">
-                      {formatZAR(lead.valueCents, moneyFmt)}
+                      {formatZAR(lead.valueCents, withCurrency(moneyFmt, lead.currency))}
                     </span>
                   )}
                 </div>

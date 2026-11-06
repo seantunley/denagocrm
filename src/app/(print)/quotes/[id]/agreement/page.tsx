@@ -8,6 +8,7 @@ import PrintActions from "@/components/PrintActions";
 import PrintDocShell, { ItemsTable, InfoBlock } from "@/components/print/PrintDocShell";
 import { getCompanyProfile } from "@/lib/companyProfile";
 import { getRegionalSettings } from "@/lib/settings";
+import { withCurrency } from "@/lib/currencyRules";
 import { getDocTemplate } from "@/lib/docTemplateStore";
 import { formatDate } from "@/lib/format";
 import { documentTotals, feeRows, includedLines } from "@/lib/pricing";
@@ -40,7 +41,8 @@ export default async function AgreementPrintPage({
   // The company this document is FROM. getCompanyProfile now inherits the
   // platform-set tenant brand when the tenant has not filled in its own profile.
   const company = await getCompanyProfile();
-  const regional = await getRegionalSettings();
+  // Amounts in the quote's own currency (multicurrency module); dates unaffected.
+  const regional = withCurrency(await getRegionalSettings(), quote.currency);
   const tpl = await getDocTemplate("agreement", tplId, scope);
   // Fees and delivery are part of what the customer pays; the subtotal is not.
   // The rows the customer can see must add up to the price they are agreeing
