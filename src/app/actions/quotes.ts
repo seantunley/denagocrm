@@ -461,10 +461,10 @@ export async function saveQuoteDraft(input: QuoteDraftInput): Promise<QuoteDraft
    * would be a wrong number on every board and report. Otherwise the picked one, if the workspace
    * offers it. Only drafts are saved here, so a sent quote's currency can no longer move.
    */
-  const linkedLeadId = data.id
+  const currencyLeadId = data.id
     ? (await prisma.quote.findUnique({ where: { id: data.id }, select: { leadId: true } }))?.leadId ?? null
     : data.leadId ?? null;
-  const linkedLead = linkedLeadId ? await prisma.lead.findUnique({ where: { id: linkedLeadId }, select: { currency: true } }) : null;
+  const linkedLead = currencyLeadId ? await prisma.lead.findUnique({ where: { id: currencyLeadId }, select: { currency: true } }) : null;
   const pickedCurrency = storedCurrency(data.currency, await getCurrencyOptions());
   if (!linkedLead && !pickedCurrency.ok) return { ok: false, error: pickedCurrency.error };
   const cpqQuoteData = {
@@ -648,6 +648,7 @@ export async function saveQuoteDraft(input: QuoteDraftInput): Promise<QuoteDraft
           taxInclusive: existing.taxInclusive,
           depositType: existing.depositType === "percent" || existing.depositType === "amount" ? existing.depositType : null,
           depositValue: existing.depositValue,
+          currency: existing.currency,
         });
       }
       /*
@@ -712,6 +713,7 @@ export async function saveQuoteDraft(input: QuoteDraftInput): Promise<QuoteDraft
           taxInclusive: existing.taxInclusive,
           depositType: existing.depositType === "percent" || existing.depositType === "amount" ? existing.depositType : null,
           depositValue: existing.depositValue,
+          currency: existing.currency,
         });
       }
       // CHANGING the customer is refused; FILLING IN a missing one is not. A

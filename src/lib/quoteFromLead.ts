@@ -86,6 +86,8 @@ export type QuoteSeedLead = {
   id: string;
   contactId: string | null;
   valueCents: number;
+  /** The lead's currency (multicurrency module) — the quote takes it; null = the base. */
+  currency: string | null;
   color: string | null;
   product: { id: string; name: string; basePriceCents: number } | null;
 };
@@ -114,6 +116,8 @@ export async function insertQuoteFromLead(
       tenantId,
       leadId: lead.id,
       contactId: lead.contactId,
+      // A quote on a lead is in the lead's currency (multicurrency module; null = the base).
+      currency: lead.currency ?? null,
       createdById,
       validUntil: defaults.validUntil,
       terms: defaults.terms,
@@ -128,7 +132,8 @@ export async function insertQuoteFromLead(
                 // price. `|| ` rather than `??` is deliberate and pre-existing: a
                 // lead worth 0 has not been valued, and the list price is the
                 // better starting point than zero.
-                unitPriceCents: lead.valueCents || lead.product.basePriceCents,
+                // The catalogue price is in the BASE currency: never seed it into a quote in another.
+                unitPriceCents: lead.valueCents || (lead.currency ? 0 : lead.product.basePriceCents),
                 productId: lead.product.id,
                 colorPreference: lead.color || null,
                 // Stamped, not left to the column default: the line keeps the

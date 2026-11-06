@@ -50,6 +50,7 @@ import { brandForTenant, teamSignoff } from "@/lib/tenantBrand";
 import { getActiveTenantId } from "@/lib/auth";
 import { isSmtpConfigured, renderTemplate, leadVars } from "@/lib/email";
 import { getRegionalSettings } from "@/lib/settings";
+import { withCurrency } from "@/lib/currencyRules";
 import { contactName, formatDate, formatDateTime, formatZAR } from "@/lib/format";
 import { payableTotalCents } from "@/lib/pricing";
 import { getAccessibleContactIds, getAccessibleQuoteIds } from "@/lib/permissions";
@@ -217,7 +218,9 @@ export default async function LeadDetailPage({
     hasAnyPermission(user, ...CUSTOMER_RECORD_WRITE_PERMISSIONS), hasPermission(user, "inbox.reply"),
   ]);
   const [canChangeStage, canAssign] = await Promise.all([hasPermission(user, "leads.change_stage"), hasPermission(user, "leads.assign")]);
-  const moneyFmt = await getRegionalSettings();
+  // The lead's value and its quotes are in the LEAD's currency (multicurrency module; a quote on a
+  // lead always takes it, and the lead's is fixed once quoted).
+  const moneyFmt = withCurrency(await getRegionalSettings(), lead.currency);
   const context = <LeadWorkspaceContext
     moneyFmt={moneyFmt}
     nextActivity={nextActivity} canSchedule={canBookTestDrive}
