@@ -504,12 +504,12 @@ test("replacing an invoice or proof of payment keeps the old file and is audited
 test("deposit amounts are stored in cents and every change is audited", () => {
   const paid = fn(fulfilment, "markDepositPaid");
   assert.match(paid, /data: \{ depositPaidAt: new Date\(\), depositPaidCents: amountCents \}/);
-  assert.match(paid, /deposit of \$\{formatZAR\(amountCents, moneyFmt\)\} received/);
+  assert.match(paid, /deposit of \$\{formatZAR\(amountCents, quoteFmt\)\} received/);
   const corrected = fn(fulfilment, "correctDepositAmount");
   assert.match(corrected, /action: "fulfilment\.deposit_amount_corrected"/);
-  assert.match(corrected, /changed from \$\{[\s\S]*?\} to \$\{formatZAR\(amountCents, moneyFmt\)\}/);
+  assert.match(corrected, /changed from \$\{[\s\S]*?\} to \$\{formatZAR\(amountCents, quoteFmt\)\}/);
   // Read strictly: "1 000,50" is R1 000,50, never R100 050 (review of #924).
-  assert.match(fulfilment, /const parsed = parseMoneyInput\(raw\);/);
+  assert.match(fulfilment, /const parsed = parseMoneyInput\(raw, currency\);/);
   assert.doesNotMatch(fulfilment, /parseRands\(/);
   // The deposit and the deal's payments are one balance: both deposit actions
   // check it under the quote-row lock before writing (quoteLedger.ts).
