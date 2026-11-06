@@ -103,7 +103,7 @@ function AccountCluster({ user, isOwner, tenantId, unreadNotices = 0, birthdaysT
   );
 }
 
-function SidebarInner({ user, inboxWaiting = 0, casesWaiting = 0, enabledModules, brand, phone = false }: { user: ShellUser; inboxWaiting?: number; casesWaiting?: number; enabledModules?: string[]; brand?: { logoUrl: string | null; displayName: string }; phone?: boolean }) {
+function SidebarInner({ user, inboxWaiting = 0, casesWaiting = 0, activitiesOverdue = 0, enabledModules, brand, phone = false }: { user: ShellUser; inboxWaiting?: number; casesWaiting?: number; activitiesOverdue?: number; enabledModules?: string[]; brand?: { logoUrl: string | null; displayName: string }; phone?: boolean }) {
   const isOwner = ownsWorkspace(user);
   return (
     <div className="relative flex h-full flex-col overflow-hidden bg-sidebar">
@@ -135,7 +135,7 @@ function SidebarInner({ user, inboxWaiting = 0, casesWaiting = 0, enabledModules
 
       {/* Nav */}
       <div className="relative flex-1 overflow-y-auto px-3 py-3">
-        <Nav isAdmin={isOwner} permissions={user.permissions} enabledModules={enabledModules} badges={{ "/inbox": inboxWaiting, "/cases": casesWaiting }} phone={phone} />
+        <Nav isAdmin={isOwner} permissions={user.permissions} enabledModules={enabledModules} badges={{ "/inbox": inboxWaiting, "/cases": casesWaiting, "/activities": activitiesOverdue }} phone={phone} />
       </div>
 
     </div>
@@ -146,6 +146,7 @@ export default function AppShell({
   user,
   inboxWaiting = 0,
   casesWaiting = 0,
+  activitiesOverdue = 0,
   unreadNotices = 0,
   birthdaysToday = 0,
   enabledModules,
@@ -159,6 +160,8 @@ export default function AppShell({
   user: ShellUser;
   inboxWaiting?: number;
   casesWaiting?: number;
+  /** My overdue planned activities (lib/activityAccess.ts), for the Activities badge. */
+  activitiesOverdue?: number;
   /** Unread @mentions and watch updates (lib/collaboration.ts), for the bell. */
   unreadNotices?: number;
   /** Customers with a birthday today that this person may open (lib/birthdaysServer.ts), for the cake. */
@@ -236,7 +239,7 @@ export default function AppShell({
         <SheetContent side="left" className="w-72 border-sidebar-border p-0">
           <SheetTitle className="sr-only">Navigation</SheetTitle>
           {/* The drawer is the phone's (and a small tablet's) menu: the phone app's sections only (lib/phoneScope.ts). */}
-          <SidebarInner user={user} inboxWaiting={inboxWaiting} casesWaiting={casesWaiting} enabledModules={enabledModules} brand={brand} phone />
+          <SidebarInner user={user} inboxWaiting={inboxWaiting} casesWaiting={casesWaiting} activitiesOverdue={activitiesOverdue} enabledModules={enabledModules} brand={brand} phone />
         </SheetContent>
       </Sheet>
 
@@ -251,7 +254,7 @@ export default function AppShell({
 
       {/* Desktop sidebar */}
       <aside className="fixed inset-y-0 left-0 z-40 hidden w-60 border-r border-sidebar-border lg:flex lg:flex-col">
-        <SidebarInner user={user} inboxWaiting={inboxWaiting} casesWaiting={casesWaiting} enabledModules={enabledModules} brand={brand} />
+        <SidebarInner user={user} inboxWaiting={inboxWaiting} casesWaiting={casesWaiting} activitiesOverdue={activitiesOverdue} enabledModules={enabledModules} brand={brand} />
       </aside>
 
       <main className="relative lg:pl-60">
