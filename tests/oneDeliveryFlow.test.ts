@@ -469,10 +469,10 @@ test("every correction is permissioned exactly like the stage it corrects", () =
 
 test("the corrections are where people work: desktop board AND mobile queue, one component", () => {
   const page = src("src/app/(app)/deliveries/page.tsx");
-  const uses = page.match(/\{canManage && <FulfilmentCorrections quote=\{quote\} \/>\}/g) ?? [];
+  const uses = page.match(/\{canManage && <FulfilmentCorrections quote=\{quote\} moneyFmt=\{moneyFmt\} \/>\}/g) ?? [];
   assert.equal(uses.length, 2, "rendered in both the mobile and desktop views, behind deliveries.manage");
   const mobile = page.slice(page.indexOf("<MobileOnly"), page.indexOf("<DesktopOnly"));
-  assert.match(mobile, /<FulfilmentCorrections quote=\{quote\} \/>/, "the mobile queue has them");
+  assert.match(mobile, /<FulfilmentCorrections quote=\{quote\} moneyFmt=\{moneyFmt\} \/>/, "the mobile queue has them");
   const component = page.slice(page.indexOf("function FulfilmentCorrections"));
   for (const action of ["replaceInvoice", "correctDepositAmount", "replaceProofOfPayment", "rescheduleDelivery"]) {
     assert.match(component, new RegExp(`action=\\{${action}\\.bind\\(null, quote\\.id\\)\\}`), `${action} is offered`);
@@ -481,7 +481,7 @@ test("the corrections are where people work: desktop board AND mobile queue, one
 
 test("the stock unit shows the recorded reservation deposit amount", () => {
   const page = src("src/app/(app)/stock/[id]/page.tsx");
-  assert.match(page, /Deposit recorded: \{unit\.depositReceivedCents != null \? formatZAR\(unit\.depositReceivedCents\)/);
+  assert.match(page, /Deposit recorded: \{unit\.depositReceivedCents != null \? formatZAR\(unit\.depositReceivedCents, moneyFmt\)/);
   assert.match(page, /r\."depositReceivedCents"/);
 });
 
@@ -504,10 +504,10 @@ test("replacing an invoice or proof of payment keeps the old file and is audited
 test("deposit amounts are stored in cents and every change is audited", () => {
   const paid = fn(fulfilment, "markDepositPaid");
   assert.match(paid, /data: \{ depositPaidAt: new Date\(\), depositPaidCents: amountCents \}/);
-  assert.match(paid, /deposit of \$\{formatZAR\(amountCents\)\} received/);
+  assert.match(paid, /deposit of \$\{formatZAR\(amountCents, moneyFmt\)\} received/);
   const corrected = fn(fulfilment, "correctDepositAmount");
   assert.match(corrected, /action: "fulfilment\.deposit_amount_corrected"/);
-  assert.match(corrected, /changed from \$\{[\s\S]*?\} to \$\{formatZAR\(amountCents\)\}/);
+  assert.match(corrected, /changed from \$\{[\s\S]*?\} to \$\{formatZAR\(amountCents, moneyFmt\)\}/);
   // Read strictly: "1 000,50" is R1 000,50, never R100 050 (review of #924).
   assert.match(fulfilment, /const parsed = parseMoneyInput\(raw\);/);
   assert.doesNotMatch(fulfilment, /parseRands\(/);

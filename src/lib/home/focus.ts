@@ -1,5 +1,6 @@
 import "server-only";
 import { prisma } from "@/lib/db";
+import { getRegionalSettings } from "@/lib/settings";
 import { loadTodayLeads, type TodayLead } from "@/lib/leadScoreLoader";
 import {
   dashboardViewer, dashboardWindow, grants, leadWhere, quoteWhere,
@@ -75,6 +76,7 @@ export async function loadHomeFocus({ mine }: { mine: boolean }): Promise<HomeFo
   // A deal is "worth contacting" when the ranking found a reason; the rest of the list is just the pipeline.
   const worth = today.leads.filter((lead) => lead.score > 0);
   const numbers = homeNumbers({
+    money: await getRegionalSettings(),
     seesLeads, seesActivities, seesSigning,
     wonCents: won.reduce((sum, w) => sum + w.valueCents, 0),
     prevWonCents: prevWon,

@@ -7,6 +7,7 @@ import { formatZAR } from "@/lib/format";
 import { markReferralEarned } from "@/lib/referrals";
 import { emitLeadJourneyEvent } from "@/lib/leadJourneyEvents";
 import { describeError } from "./completionFanout";
+import { getRegionalSettings } from "@/lib/settings";
 
 /**
  * Fire the EXTERNAL side-effects of a signed document once the hub has completed
@@ -117,10 +118,11 @@ async function afterQuoteSigned(req: CompletedReq, failures: string[]): Promise<
       }),
     );
   }
+  const moneyFmt = await getRegionalSettings();
   await effect("audit", failures, () =>
     logAudit({
       action: "quote.signed",
-      summary: `Quote Q-${quote.number} (${formatZAR(Math.round(total))}) signed online by ${name} via signing hub — sealed PDF filed${req.signedPdfHash ? ` (SHA-256 ${req.signedPdfHash.slice(0, 16)}…)` : ""}`,
+      summary: `Quote Q-${quote.number} (${formatZAR(Math.round(total), moneyFmt)}) signed online by ${name} via signing hub — sealed PDF filed${req.signedPdfHash ? ` (SHA-256 ${req.signedPdfHash.slice(0, 16)}…)` : ""}`,
       contactId: quote.contactId,
       leadId: quote.leadId,
       userName: name,
@@ -137,7 +139,7 @@ async function afterQuoteSigned(req: CompletedReq, failures: string[]): Promise<
   }
   // Fire-and-forget by design — see the note at the top of the file.
   await sendPushToAll(
-    { title: "Quote signed 🎉", body: `Q-${quote.number} — ${name} · ${formatZAR(Math.round(total))}`, url: `/quotes/${quote.id}` },
+    { title: "Quote signed 🎉", body: `Q-${quote.number} — ${name} · ${formatZAR(Math.round(total), moneyFmt)}`, url: `/quotes/${quote.id}` },
     "quote_signed"
   ).catch(() => {});
   // The person responsible, on their own channels (proactive DAX). A quote is signed once: one alert.

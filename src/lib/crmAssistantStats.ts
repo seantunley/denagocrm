@@ -9,6 +9,7 @@ import { accessibleTestDriveWhere } from "./testDriveAccess";
 import { contactActivityWhere, contactCommunicationWhere } from "./customerContact";
 import { firstStageOrders, stageContactAt } from "./stageContact";
 import { getAccessibleLeadIds, getAccessibleQuoteIds, hasAnyPermission, type PermissionUser } from "./permissions";
+import { getRegionalSettings } from "@/lib/settings";
 
 /**
  * Sales numbers DAX can reason from — "why are sales slower this month?" —
@@ -106,11 +107,12 @@ export async function salesStats(user: PermissionUser, raw: z.infer<typeof stats
       prisma.lead.count({ where: { ...lead, createdAt: w, quotes: { some: { deletedAt: null } } } }),
     ]);
     const closed = won._count._all + lost;
+    const moneyFmt = await getRegionalSettings();
     return {
       newLeads: created,
       reachedQuote: `${quoted} (${pct(quoted, created)} of new leads)`,
       won: won._count._all,
-      wonValue: formatZAR(won._sum.valueCents ?? 0),
+      wonValue: formatZAR(won._sum.valueCents ?? 0, moneyFmt),
       lost,
       winRate: pct(won._count._all, closed),
     };
@@ -168,14 +170,15 @@ export async function salesStats(user: PermissionUser, raw: z.infer<typeof stats
     }
     stageRows.set(l.stage.name, row);
   }
+  const moneyFmt = await getRegionalSettings();
   const stages = [...stageRows.entries()]
     .sort((a, b) => a[1].order - b[1].order)
     .map(([stage, r]) => ({
       stage,
       open: r.open,
-      value: formatZAR(r.value),
+      value: formatZAR(r.value, moneyFmt),
       averageDaysInStage: Math.round(r.days / r.open),
-      stalled: r.stalled ? `${r.stalled} (${formatZAR(r.stalledValue)}) past the stage's limit` : 0,
+      stalled: r.stalled ? `${r.stalled} (${formatZAR(r.stalledValue, moneyFmt)}) past the stage's limit` : 0,
     }));
 
   // ── Each salesperson: their open deals, and whether they're being worked ─────
@@ -218,12 +221,12 @@ export async function salesStats(user: PermissionUser, raw: z.infer<typeof stats
     .map(([id, p]) => ({
       person: p.name,
       openDeals: p.open,
-      openValue: formatZAR(p.value),
+      openValue: formatZAR(p.value, moneyFmt),
       withANextStepPlanned: pct(p.withNextStep, p.open),
       overdueTasks: p.overdue,
       noCustomerContact7Days: p.quiet7,
       wonThisPeriod: wonFor.get(id)?._count._all ?? 0,
-      wonValueThisPeriod: formatZAR(wonFor.get(id)?._sum.valueCents ?? 0),
+      wonValueThisPeriod: formatZAR(wonFor.get(id)?._sum.valueCents ?? 0, moneyFmt),
     }));
 
   // ── Test drives → sales (vehicle workspaces only) ───────────────────────────
@@ -251,7 +254,7 @@ export async function salesStats(user: PermissionUser, raw: z.infer<typeof stats
       leadSources: sources
         .sort((a, b) => b._count._all - a._count._all)
         .slice(0, 8)
-        .map((s) => ({ source: s.source, newLeads: s._count._all, wonThisPeriod: wonSource.get(s.source)?._count._all ?? 0, wonValue: formatZAR(wonSource.get(s.source)?._sum.valueCents ?? 0) })),
+        .map((s) => ({ source: s.source, newLeads: s._count._all, wonThisPeriod: wonSource.get(s.source)?._count._all ?? 0, wonValue: formatZAR(wonSource.get(s.source)?._sum.valueCents ?? 0, moneyFmt) })),
       lostReasons: lostReasons.map((r) => ({ reason: r.lostReason || "(none given)", count: r._count._all })),
       openPipelineByStage: stages,
       salespeople,

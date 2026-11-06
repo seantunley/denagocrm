@@ -14,6 +14,7 @@ import { formatZAR } from "./format";
 import { stamp } from "./assistantWhy";
 import { canAccessContact, getAccessibleLeadIds, getAccessibleQuoteIds, hasAnyPermission, type PermissionUser } from "./permissions";
 import { STUCK_LEGEND, conversationFacts, setAsideNotes, stageFacts, stuckReasons, type StuckQuote } from "./assistantStuck";
+import { getRegionalSettings } from "@/lib/settings";
 
 /**
  * The `stuck` lookup: ONE deal, and why it isn't moving — ranked reasons, each dated and linked to the record it
@@ -75,8 +76,9 @@ export async function stuckLookup(user: PermissionUser, needle: string): Promise
     },
   });
   const link = `/leads/${lead.id}`;
+  const moneyFmt = await getRegionalSettings();
   const deal = {
-    link, customer: lead.name, lead: lead.title, status: lead.status, value: formatZAR(lead.valueCents),
+    link, customer: lead.name, lead: lead.title, status: lead.status, value: formatZAR(lead.valueCents, moneyFmt),
     assignedTo: lead.assignedTo?.name ?? "unassigned", ...(lead.wonAt ? { won: day(lead.wonAt) } : {}),
   };
   const label = `${lead.name} — ${lead.title}`;
@@ -191,10 +193,10 @@ export async function stuckLookup(user: PermissionUser, needle: string): Promise
       ...(quote.status === "accepted"
         ? {
             invoiced: quote.invoicedAt ? day(quote.invoicedAt) : "no",
-            deposit: quote.depositPaidAt ? `paid ${day(quote.depositPaidAt)}${quote.depositPaidCents ? ` (${formatZAR(quote.depositPaidCents)})` : ""}` : "not marked paid",
-            ...(quote.depositType && quote.depositValue ? { depositTerms: quote.depositType === "percent" ? `${quote.depositValue}%` : formatZAR(Math.round(quote.depositValue * 100)) } : {}),
+            deposit: quote.depositPaidAt ? `paid ${day(quote.depositPaidAt)}${quote.depositPaidCents ? ` (${formatZAR(quote.depositPaidCents, moneyFmt)})` : ""}` : "not marked paid",
+            ...(quote.depositType && quote.depositValue ? { depositTerms: quote.depositType === "percent" ? `${quote.depositValue}%` : formatZAR(Math.round(quote.depositValue * 100), moneyFmt) } : {}),
             delivery: quote.deliveredAt ? `delivered ${day(quote.deliveredAt)}` : quote.deliveryScheduledFor ? `booked for ${day(quote.deliveryScheduledFor)}` : "not booked",
-            ...(financePayouts.length ? { financePayouts: financePayouts.map((p) => `${formatZAR(p.amountCents)} received ${day(p.receivedAt)}`) } : {}),
+            ...(financePayouts.length ? { financePayouts: financePayouts.map((p) => `${formatZAR(p.amountCents, moneyFmt)} received ${day(p.receivedAt)}`) } : {}),
           }
         : {}),
     };

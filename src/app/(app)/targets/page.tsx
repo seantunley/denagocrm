@@ -11,8 +11,9 @@ import {
 } from "lucide-react";
 import { isTenantOwner, requireUser } from "@/lib/auth";
 import { prisma } from "@/lib/db";
-import { formatZAR } from "@/lib/format";
+import { currencySymbol, formatZAR } from "@/lib/format";
 import { saveTargets } from "@/app/actions/targets";
+import { getRegionalSettings } from "@/lib/settings";
 import { SectionHeading, StatusPill, Surface } from "@/components/visual-system";
 import { WorkspaceHero } from "@/components/workspace-hero";
 
@@ -33,6 +34,7 @@ const METRICS: Array<{
 
 export default async function TargetsPage() {
   const user = await requireUser();
+  const moneyFmt = await getRegionalSettings();
   // The WORKSPACE's owner sets the plan (saveTargets checks requireTenantOwner).
   const isOwner = await isTenantOwner();
   const now = new Date();
@@ -95,7 +97,7 @@ export default async function TargetsPage() {
               const progress = Math.min(100, rawPercent);
               const hit = target > 0 && actual >= target;
               const remaining = Math.max(0, target - actual);
-              const formatValue = (value: number) => metric.kind === "money" ? formatZAR(value) : value.toLocaleString("en-ZA");
+              const formatValue = (value: number) => metric.kind === "money" ? formatZAR(value, moneyFmt) : value.toLocaleString("en-ZA");
               const Icon = metric.icon;
 
               return (
@@ -131,7 +133,7 @@ export default async function TargetsPage() {
             <form action={saveTargets.bind(null, period)} className="mt-5 space-y-4">
               {METRICS.map((metric) => (
                 <div key={metric.id}>
-                  <label htmlFor={`target-${metric.id}`} className="label">{metric.label} {metric.kind === "money" ? "(R)" : ""}</label>
+                  <label htmlFor={`target-${metric.id}`} className="label">{metric.label} {metric.kind === "money" ? `(${currencySymbol(moneyFmt)})` : ""}</label>
                   <input
                     id={`target-${metric.id}`}
                     name={metric.id}

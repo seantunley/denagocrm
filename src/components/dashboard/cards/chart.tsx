@@ -189,7 +189,7 @@ function Donut({
 
 /* ── the card ─────────────────────────────────────────────────────── */
 
-export async function renderChart(card: ChartCard, _ctx: RenderContext): Promise<RenderedCard> {
+export async function renderChart(card: ChartCard, ctx: RenderContext): Promise<RenderedCard> {
   const source = sourceById(card.query.source);
   // The group-by field is resolved inside `runGroupedQuery`, against the same
   // scope context the query is compiled with — a field this viewer may not group
@@ -224,7 +224,7 @@ export async function renderChart(card: ChartCard, _ctx: RenderContext): Promise
   // filtered out as non-positive or folded into "Other".
   const summed = groups.reduce((sum, g) => sum + g.value, 0);
   const asMoney = isMoneyField(metricField(source, card.metric, scope));
-  const format = (n: number) => formatMetric(n, asMoney);
+  const format = (n: number) => formatMetric(n, asMoney, ctx.money);
 
   return {
     node: (

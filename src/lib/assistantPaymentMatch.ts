@@ -9,6 +9,7 @@ import { rankPaymentMatches, type MatchReason } from "./paymentMatch";
 import type { matchPaymentArgs } from "./crmAssistantPlan";
 import { MAX_CHOICES } from "./assistantActions";
 import { getAccessibleQuoteIds, hasPermission, type PermissionUser } from "./permissions";
+import { getRegionalSettings } from "@/lib/settings";
 
 type Output = { rows: { label: string; detail: string; href: string }[]; data: unknown[]; truncated: boolean };
 
@@ -57,16 +58,17 @@ export async function matchPayment(user: PermissionUser, args: z.infer<typeof ma
   const { matches, clear } = rankPaymentMatches(candidates, { amountCents, reference: args.reference, payer: args.payer });
   // As many as can be offered as choices.
   const page = matches.slice(0, MAX_CHOICES);
+  const moneyFmt = await getRegionalSettings();
   const why = (r: MatchReason) =>
     r === "reference" ? `the reference "${args.reference}" names it`
-      : r === "deposit" ? `${formatZAR(amountCents)} is its deposit due`
-        : r === "balance" ? `${formatZAR(amountCents)} is its balance owing`
+      : r === "deposit" ? `${formatZAR(amountCents, moneyFmt)} is its deposit due`
+        : r === "balance" ? `${formatZAR(amountCents, moneyFmt)} is its balance owing`
           : "the payer's name matches the customer";
   return {
     truncated: matches.length > page.length || quotes.length === CANDIDATES,
     data: [
       {
-        amount: formatZAR(amountCents), reference: args.reference ?? null, paidOn: args.paidOn ?? null,
+        amount: formatZAR(amountCents, moneyFmt), reference: args.reference ?? null, paidOn: args.paidOn ?? null,
         verdict: clear
           ? `ONE CLEAR MATCH: Q-${clear.candidate.quoteNumber} — propose record_payment for it`
           : page.length ? "SEVERAL POSSIBLE — offer them as choices; do not pick one" : "NO MATCH among the invoiced quotes with money owing that this person can open — ask which quote",
@@ -77,14 +79,14 @@ export async function matchPayment(user: PermissionUser, args: z.infer<typeof ma
         link: `/quotes/${c.quote.id}`,
         leadId: c.quote.leadId,
         customer: c.customer,
-        owing: formatZAR(c.owingCents),
-        ...(c.depositDueCents ? { depositDue: formatZAR(c.depositDueCents) } : {}),
+        owing: formatZAR(c.owingCents, moneyFmt),
+        ...(c.depositDueCents ? { depositDue: formatZAR(c.depositDueCents, moneyFmt) } : {}),
         why: reasons.map(why),
       })),
     ],
     rows: page.map(({ candidate: c, reasons }) => ({
       label: `Q-${c.quoteNumber} — ${c.customer}`,
-      detail: `${formatZAR(c.owingCents)} owing · ${reasons.map(why).join("; ")}`,
+      detail: `${formatZAR(c.owingCents, moneyFmt)} owing · ${reasons.map(why).join("; ")}`,
       href: `/quotes/${c.quote.id}`,
     })),
   };

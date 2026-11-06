@@ -1,6 +1,8 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import { currencySymbol } from "@/lib/format";
+import { useMoneyFormat } from "@/components/MoneyFormatProvider";
 import { SaveForm } from "@/components/SaveForm";
 import ContactPicker, { type ContactOption } from "@/components/ContactPicker";
 import type { ActionResult } from "@/lib/actionResultTypes";
@@ -77,6 +79,7 @@ export default function LeadForm({
   users?: { id: string; name: string }[];
   variant?: LeadFormVariant;
 }) {
+  const moneyFmt = useMoneyFormat();
   const [name, setName] = useState(defaults.name ?? "");
   const [contactId, setContactId] = useState(defaults.contactId ?? "");
   const [productId, setProductId] = useState(defaults.productId ?? "");
@@ -255,7 +258,7 @@ export default function LeadForm({
           )}
         </Field>}
         <Field
-          label={`Estimated opportunity value (R)${qty > 1 && product ? ` — ${qty} × catalogue price` : ""}`}
+          label={`Estimated opportunity value (${currencySymbol(moneyFmt)})${qty > 1 && product ? ` — ${qty} × catalogue price` : ""}`}
           hint={product?.basePriceCents ? "Changing the model or quantity updates this value; you can still override it." : "Enter the best current estimate. It can be refined later."}
           wide
         >
