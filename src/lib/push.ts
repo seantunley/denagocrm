@@ -35,9 +35,15 @@ export async function pushRecipientsForCurrentScope(): Promise<PushRecipient[]> 
     return [];
   }
   if (s.mode === "global") {
-    return prisma.pushSubscription.findMany({
-      select: { id: true, userId: true, endpoint: true, p256dh: true, auth: true },
-    });
+    // NO WORKSPACE = A PLATFORM ALERT (the monthly security check, AI health, the backup watchdog, a system error):
+    // the PLATFORM owner's devices only. It used to be every device in every workspace — another workspace's staff
+    // would get this one's backup and security alerts (security audit 2026-10-25, item 5).
+    // (`disabledAt` lives outside the Prisma model, as in pushRecipientsForTenant.)
+    return prisma.$queryRaw<PushRecipient[]>`
+      SELECT ps."id", ps."userId", ps."endpoint", ps."p256dh", ps."auth"
+      FROM "PushSubscription" ps
+      JOIN "User" u ON u."id" = ps."userId"
+      WHERE u."role" = 'owner' AND u."disabledAt" IS NULL`;
   }
   return basePrisma.$queryRaw<PushRecipient[]>`
     SELECT ps."id", ps."userId", ps."endpoint", ps."p256dh", ps."auth"

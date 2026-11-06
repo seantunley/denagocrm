@@ -12,10 +12,9 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  // The runbook sweeps every tenant's config/data and the push notifies all
-  // admins — a platform-global operation → trusted system scope (guard bypass;
-  // push recipients resolve to everyone rather than fail closed). Dormant → a
-  // bare call, unchanged from before.
+  // The runbook sweeps every tenant's config/data — a platform-global operation
+  // → trusted system scope (guard bypass). With no workspace, the push goes to
+  // the platform owner's devices only (pushRecipientsForCurrentScope).
   const run = await withSystemScope(async () => {
     const result = await runSecurityChecks();
     const summary =

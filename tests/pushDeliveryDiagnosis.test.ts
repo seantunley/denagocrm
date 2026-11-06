@@ -30,6 +30,16 @@ test("a scopeless push is logged rather than dropped in silence", () => {
   assert.ok(closed.includes("alert: false"), "the log must not recurse through the alerting push");
 });
 
+test("a push with NO workspace (a platform alert) reaches the platform owner only, never every workspace's phones", () => {
+  // Security audit 2026-10-25 item 5: the security check, AI health, backup watchdog and system errors run in the
+  // system scope, and went to every device in every workspace.
+  const fn = shipped("src/lib/push.ts");
+  const global = fn.slice(fn.indexOf('if (s.mode === "global")'), fn.indexOf("return basePrisma.$queryRaw", fn.indexOf('if (s.mode === "global")')));
+  assert.match(global, /JOIN "User" u ON u\."id" = ps\."userId"/);
+  assert.match(global, /WHERE u\."role" = 'owner' AND u\."disabledAt" IS NULL/);
+  assert.doesNotMatch(global, /pushSubscription\.findMany/, "no unfiltered read of every device");
+});
+
 test("the four zero-send causes are still distinguishable", () => {
   const sendTest = action.slice(action.indexOf("export async function sendTestPush("));
   assert.match(sendTest, /VAPID keys are missing/);
