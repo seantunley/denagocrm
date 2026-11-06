@@ -67,6 +67,12 @@ loaderKey._load = function (this: unknown, request: string, parent, isMain) {
   // goes to the database through its own relative import, past the fake above —
   // without a database every sweep here failed on the read, not on the claim.
   if (request === "@/lib/automationSwitch") return { automationOn: async () => true };
+  // The won-effects name the amount in the workspace's currency (Phase 0b). Its real reader goes to
+  // the database too; the rest of the settings module stays real.
+  if (request === "@/lib/settings") {
+    const real = realLoad.call(this, request, parent, isMain) as Record<string, unknown>;
+    return { ...real, getRegionalSettings: async () => ({ vatRatePct: 15, currency: "ZAR", locale: "en-ZA", timeZone: "Africa/Johannesburg" }) };
+  }
   return realLoad.call(this, request, parent, isMain);
 } as Loader;
 
