@@ -8,6 +8,22 @@ type DetailFact = {
   value: ReactNode;
 };
 
+/**
+ * Header actions a phone folds away. A record's header has room for one primary
+ * button and "More" on a 390px screen; four buttons wrapped onto two rows above
+ * the content. Wrap the secondary actions in `WideActions` where they sit in the
+ * row, and the same nodes in `PhoneActions` inside the More menu: each is shown
+ * at one width only, so nothing is offered twice. Rendered as `contents`, so the
+ * buttons stay direct flex items of whichever row holds them.
+ */
+export function WideActions({ children }: { children: ReactNode }) {
+  return <div className="contents max-sm:hidden">{children}</div>;
+}
+
+export function PhoneActions({ children }: { children: ReactNode }) {
+  return <div className="contents sm:hidden">{children}</div>;
+}
+
 export function EntityDetailShell({
   backHref,
   backLabel,
