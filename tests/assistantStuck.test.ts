@@ -71,6 +71,16 @@ test("ONE RULE, ONE PLACE: the Attention Centre's signals become reasons verbati
   assert.equal(reasons[2].date, null);
 });
 
+test("A FOLLOW-UP WITH NO REPLY is the quiet reason, said once — not again as 'no contact for N days'", () => {
+  const reasons = stuckReasons({
+    ...base,
+    lastOut: { at: ago(9), channel: "whatsapp" },
+    lastContactAt: ago(9),
+    signals: [{ kind: "followup_unanswered", key: "followup_unanswered:m1", detail: "No reply to our WhatsApp 9d ago", since: ago(9).toISOString(), actionHref: "/leads/lead1" }],
+  });
+  assert.deepEqual(reasons.filter((r) => r.kind === "customer_quiet").map((r) => r.why), ["No reply to our WhatsApp 9d ago"]);
+});
+
 test("THE QUOTE: unopened only after QUOTE_UNOPENED_DAYS; a bounce, a change asked for, a decline — never a draft or a signed one", () => {
   const kinds = (q: Partial<StuckQuote>) => stuckReasons({ ...base, quote: { ...quote, ...q } }).map((r) => r.kind);
   const [unopened] = stuckReasons({ ...base, quote });

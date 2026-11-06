@@ -105,6 +105,7 @@ export async function stuckLookup(user: PermissionUser, needle: string): Promise
           stages: new Map([[lead.stageId, { staleAfterDays: lead.stage.staleAfterDays }]]),
           stageByLead: new Map([[lead.id, lead.stageId]]),
           stageEnteredByLead: new Map([[lead.id, lead.stageEnteredAt]]),
+          contactByLead: new Map([[lead.id, contactId]]),
         })
       : Promise.resolve(new Map<string, AttentionSignal[]>()),
     prisma.communication.findFirst({ where: { AND: [timeline, contactCommunicationWhere, { direction: "inbound" }] }, orderBy: { occurredAt: "desc" }, select: { occurredAt: true, type: true } }),

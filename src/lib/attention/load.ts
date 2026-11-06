@@ -154,6 +154,7 @@ export const loadAttentionList = cache(async (user: PermissionUser, now: Date = 
     stages,
     stageByLead,
     stageEnteredByLead,
+    contactByLead: new Map(leads.map((lead) => [lead.id, lead.contactId])),
   });
 
   const snoozed: SetAsideLead[] = [];

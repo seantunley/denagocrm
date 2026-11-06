@@ -7,6 +7,8 @@ import {
   ATTENTION_WEIGHTS,
   ATTENTION_CATEGORY,
   ATTENTION_CATEGORY_CAPS,
+  FOLLOWUP_LOOKBACK_DAYS,
+  FOLLOWUP_REPLY_DAYS,
   MAX_ATTENTION_SCORE,
   MAX_SNOOZE_DAYS,
   MIN_ATTENTION_REASON,
@@ -18,6 +20,7 @@ import {
   snoozeDateError,
   needsAttention,
   scoreAttention,
+  unansweredFollowUp,
   type AttentionSignal,
   type AttentionSignalKind,
 } from "../src/lib/attention/score";
@@ -530,4 +533,38 @@ test("filters cannot make a populated queue claim nothing is waiting", () => {
   assert.match(page, /result\.leads\.length === 0/, "the strong empty state uses the unfiltered queue");
   assert.match(page, /No attention items match these filters/);
   assert.match(page, /Show everyone/);
+});
+
+/* ── a follow-up with no reply (Sean, 2026-11-06) ───────────────────────── */
+
+test("our last message, 3+ days old with no reply and nothing since, is a follow-up with no reply", () => {
+  const now = new Date("2026-11-06T10:00:00Z");
+  const daysAgo = (d: number) => new Date(now.getTime() - d * 86_400_000);
+  const out = (d: number) => ({ direction: "outbound", occurredAt: daysAgo(d) });
+  assert.equal(unansweredFollowUp(out(4), [], now)?.getTime(), daysAgo(4).getTime());
+  assert.equal(unansweredFollowUp(out(2.9), [], now), null, "under 3 days: they may still answer");
+  assert.equal(unansweredFollowUp(out(FOLLOWUP_LOOKBACK_DAYS + 1), [], now), null, "a month on: 'no contact' and stage age say it");
+  assert.equal(unansweredFollowUp({ direction: "inbound", occurredAt: daysAgo(5) }, [], now), null, "they wrote last: that's unanswered_inbound");
+  assert.equal(unansweredFollowUp({ direction: null, occurredAt: daysAgo(5) }, [], now), null, "a logged meeting is not a message waiting on them");
+  assert.equal(unansweredFollowUp(null, [], now), null);
+  assert.equal(unansweredFollowUp(out(5), [daysAgo(1)], now), null, "a call logged, or the deal moved, since: it moved on");
+  assert.ok(unansweredFollowUp(out(5), [daysAgo(9), null, undefined], now), "what happened BEFORE the message doesn't count");
+  assert.equal(FOLLOWUP_REPLY_DAYS, 3, "the window DAX's follow-ups are judged by (assistantOutcomeRules: reply within 3 days)");
+  assert.equal(attentionBand(scoreAttention([signal("followup_unanswered")])), "act");
+});
+
+test("the follow-up signal reads the deal's whole timeline, through the guarded client, in batches", () => {
+  const signals = shipped("src/lib/attention/signals.ts");
+  const block = signals.slice(signals.indexOf("const lookback = "));
+  assert.ok(block.length > 0 && block.includes('kind: "followup_unanswered"'));
+  // The customer's messages on no deal count (a Messenger reply is filed on the customer only).
+  assert.match(block, /\{ contactId: \{ in: contacts \}, leadId: null \}/);
+  assert.match(block, /contactCommunicationWhere/, "an internal note is not a message to them");
+  assert.match(block, /contactActivityWhere/, "a call or meeting since clears it");
+  assert.doesNotMatch(block, /for \(const leadId of batch\) \{[\s\S]{0,400}await /, "no query per deal");
+  // Every caller hands it the deal's customer — the stuck lookup only one the person may open.
+  assert.match(shipped("src/lib/attention/load.ts"), /contactByLead: new Map\(leads\.map\(\(lead\) => \[lead\.id, lead\.contactId\]\)\)/);
+  assert.match(shipped("src/lib/assistantStuckLookup.ts"), /contactByLead: new Map\(\[\[lead\.id, contactId\]\]\)/);
+  // It can be snoozed or dismissed like the others.
+  assert.match(shipped("src/app/actions/attention.ts"), /"followup_unanswered",\n\]\);/);
 });

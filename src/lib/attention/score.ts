@@ -28,12 +28,14 @@ export type AttentionSignalKind =
   | "overdue_task"
   | "quote_expiring"
   | "no_next_step"
-  | "stage_age";
+  | "stage_age"
+  | "followup_unanswered";
 
 export type AttentionCategory = "customer" | "commitment" | "workflow";
 
 export const ATTENTION_CATEGORY: Record<AttentionSignalKind, AttentionCategory> = {
   unanswered_inbound: "customer",
+  followup_unanswered: "customer",
   overdue_task: "commitment",
   quote_expiring: "commitment",
   no_next_step: "workflow",
@@ -60,7 +62,33 @@ export const ATTENTION_WEIGHTS: Record<AttentionSignalKind, number> = {
   quote_expiring: 25, // a deadline with money on it
   no_next_step: 20, // nothing will happen unless someone acts
   stage_age: 20,
+  followup_unanswered: 20, // we wrote and heard nothing back: time to try another way
 };
+
+/**
+ * FOLLOW-UP WITH NO REPLY (Sean, 2026-11-06: "did the follow-up get a reply?"). The deal's last message either way
+ * was OURS, sent at least FOLLOWUP_REPLY_DAYS ago — the same 3 days "Customer replied within 3 days" judges DAX's
+ * follow-ups by (assistantOutcomeRules) — and nothing has moved it on since (`movedOn`: the deal changing stage, a
+ * call or meeting logged as done). Looked for over the last FOLLOWUP_LOOKBACK_DAYS only: longer silences are "no
+ * contact for N days" (the Today queue) and the stage's own age.
+ *
+ * Unlike "no contact for N days", a message every few days does not reset it: what counts is whether they answered.
+ * Returns when it was sent, or null.
+ */
+export const FOLLOWUP_REPLY_DAYS = 3;
+export const FOLLOWUP_LOOKBACK_DAYS = 30;
+export function unansweredFollowUp(
+  last: { direction: string | null; occurredAt: Date } | null,
+  movedOn: readonly (Date | null | undefined)[],
+  now: Date,
+): Date | null {
+  if (!last || last.direction !== "outbound") return null;
+  const sent = last.occurredAt.getTime();
+  const age = now.getTime() - sent;
+  if (age < FOLLOWUP_REPLY_DAYS * 86_400_000 || age > FOLLOWUP_LOOKBACK_DAYS * 86_400_000) return null;
+  if (movedOn.some((at) => at && at.getTime() > sent)) return null;
+  return last.occurredAt;
+}
 
 export type AttentionSignal = {
   kind: AttentionSignalKind;

@@ -154,6 +154,7 @@ export const TRIAGE_INSTRUCTIONS = [
   '- follow_up: a call or task for the deal\'s owner ({"type":"follow_up","when":"YYYY-MM-DDTHH:MM","activity":"call|whatsapp|email|meeting|todo","summary":"...","reason":"..."}) — when the next step is missing or overdue.',
   '- assign: give the deal to someone else ({"type":"assign","to":"<person, exactly as listed>","reason":"..."}) — only when the owner is missing or clearly can\'t act.',
   '- note: something the team should know ({"type":"note","text":"...","reason":"..."}).',
+  "When a reason says our last message got no reply, don't send another on the same channel: propose a call (follow_up with activity \"call\") or a message on a different channel.",
   "Propose nothing for a deal that needs nothing. Use only what the deal's facts say. Times are South African, in working hours.",
   'Reply with JSON only: {"deals":[{"leadId":"<id exactly as given>","why":"...","actions":[...]}]}',
 ].join("\n");

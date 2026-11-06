@@ -59,6 +59,7 @@ const FROM_SIGNAL: Record<AttentionSignal["kind"], StuckKind> = {
   quote_expiring: "quote_expiring",
   stage_age: "stage_age",
   no_next_step: "no_next_step",
+  followup_unanswered: "customer_quiet",
 };
 
 export type StuckQuote = {
@@ -195,7 +196,9 @@ export function stuckReasons(input: StuckInput): StuckReason[] {
 
   // Quiet is the CUSTOMER's silence — never when they wrote last and are waiting on us (the Today queue's rule too).
   // Only on an open deal: a won one's customer going quiet holds nothing up, and a parked one is quiet on purpose.
-  if (input.status === "open" && waitingOn(input.lastIn, input.lastOut) !== "us") {
+  // Once only: a follow-up with no reply (the attention signal) already says it, with its date.
+  const quietSaid = reasons.some((r) => r.kind === "customer_quiet");
+  if (!quietSaid && input.status === "open" && waitingOn(input.lastIn, input.lastOut) !== "us") {
     if (input.lastContactAt) {
       const days = calendarDaysAgo(input.lastContactAt, now);
       if (days >= NO_CONTACT_DAYS) {
