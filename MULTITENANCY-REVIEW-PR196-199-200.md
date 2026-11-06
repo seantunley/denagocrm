@@ -1,3 +1,5 @@
+> **Historical record (2026-07-24).** This is a review of PRs that have long since been resolved. Multi-tenancy is now live with enforcement and RLS (see README).
+
 # Multi-Tenancy Review — PRs #196, #199, #200
 
 **Date:** 2026-07-24

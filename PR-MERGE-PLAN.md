@@ -1,3 +1,5 @@
+> **⚠️ SUPERSEDED — historical record (2026-08-10).** Every PR in this plan has since merged or been closed, and the SHAs below are long stale. Do not act on it.
+
 # PR merge plan — the multi-tenancy PR wave
 
 **Status: WIP.** Everything below is either marked **VERIFIED** (I executed it) or **INFERRED** (I read it and reasoned). The dashboard-cluster semantic analysis (§5.3) is still in flight and is marked as such — do not treat that section as complete.

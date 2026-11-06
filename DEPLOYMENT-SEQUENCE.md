@@ -1,3 +1,5 @@
+> **✅ DONE — historical runbook.** This sequence was carried out. `TENANT_ENFORCEMENT=enforce` has been live in production since 2026-08-12, and row-level security has been load-bearing since 2026-09-01 ([docs/RLS-ROLE-CUTOVER.md](docs/RLS-ROLE-CUTOVER.md)). Kept for the reasoning behind the ordering.
+
 # Enforcement rollout — deployment sequence
 
 Turning on `TENANT_ENFORCEMENT=enforce` activates FORCE ROW LEVEL SECURITY as the

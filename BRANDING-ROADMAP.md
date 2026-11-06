@@ -1,3 +1,5 @@
+> **✅ BUILT — historical plan.** Per-workspace branding (display name, logo, accent colour) and custom domains are live across all five phases. Each phase has its own test file: `appShellBranding`, `customerBranding`, `emailBranding` and `printBranding`. The code is in `src/lib/tenantBrand.ts`, `portalBrand.ts` and `emailBrand.ts`. The "planned, not started" status below is from 28 Jul 2026.
+
 # Per-tenant branding — roadmap
 
 Status: **planned, not started.** Written 28 Jul 2026 after scoping against the

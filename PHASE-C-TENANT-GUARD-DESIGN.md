@@ -1,3 +1,5 @@
+> **✅ BUILT — historical design record.** The guard described here shipped and has been enforcing in production since 2026-08-12. The "DESIGN ONLY" status below is from July 2026. The implementation lives in `src/lib/db.ts`, `tenantGuard.ts` and `tenantEnforcement.ts`.
+
 # Phase C — Tenant Isolation Guard (design)
 
 **Status:** DESIGN ONLY. No prod changes. Nothing here ships until Sean says go, with a backup taken first.

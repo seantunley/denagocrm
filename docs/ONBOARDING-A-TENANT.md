@@ -12,15 +12,15 @@ A "tenant" is one customer's entire workspace: their staff, their customers, the
 
 **Tenant isolation enforcement must be switched on before a second tenant can be activated.**
 
-This is not a formality. Until `TENANT_ENFORCEMENT=enforce` is live, the platform console will refuse to activate a new tenant and tell you:
+**Status (2026-11-06): it is on in production.** `TENANT_ENFORCEMENT=enforce` since 2026-08-12, and since 2026-09-01 the app connects as the `crm_app` role, so row-level security is the database-level boundary ([docs/RLS-ROLE-CUTOVER.md](RLS-ROLE-CUTOVER.md)).
+
+The setting is a switch, though, so re-check it before promising a go-live date. If enforcement is ever off, the platform console refuses to activate a new tenant and tells you:
 
 > Tenant isolation enforcement must be enabled before activating additional tenants — activating now would expose existing data.
 
-You can still create the tenant, brand it and register its domain — all of that is inert and safe. It simply cannot be switched on. The refusal is deliberate: without enforcement there is no boundary between workspaces, so an active second tenant would be able to see the first one's records.
+You can still create the tenant, brand it and register its domain, because all of that is inert and safe. It simply cannot be switched on. The refusal is deliberate: without enforcement there is no boundary between workspaces.
 
-Turning enforcement on is a separate, carefully ordered piece of work. It has its own runbook — **`DEPLOYMENT-SEQUENCE.md`** — and it must be followed in order. Confirm enforcement is live before promising a customer a go-live date.
-
-**Related:** `docs/RLS-ROLE-CUTOVER.md` covers the database role change that makes isolation enforceable at the database level rather than only in the application. Recommended before onboarding real customers.
+Once more than one workspace is live, setting enforcement back to `off` is **not** a safe rollback. It would remove the boundary between them.
 
 ---
 
