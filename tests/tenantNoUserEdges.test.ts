@@ -253,7 +253,9 @@ test("src/lib/push.ts: sendPushToAll delivers only to the current tenant's devic
    */
   assert.match(
     code,
-    /const\s+recipients\s*=\s*options\.tenantId\s*\n?\s*\?\s*await\s+pushRecipientsForTenant\(options\.tenantId\)\s*\n?\s*:\s*await\s+pushRecipientsForCurrentScope\(\)/,
+    // Three scoped sources: a platform alert (the platform owners only — review of #1015), a named tenant, or the
+    // current scope.
+    /const\s+recipients\s*=\s*options\.platform\s*\n?\s*\?\s*await\s+pushRecipientsForPlatform\(\)\s*\n?\s*:\s*options\.tenantId\s*\n?\s*\?\s*await\s+pushRecipientsForTenant\(options\.tenantId\)\s*\n?\s*:\s*await\s+pushRecipientsForCurrentScope\(\)/,
     "sendPushToAll must build its recipient list from a scoped source",
   );
   assert.match(

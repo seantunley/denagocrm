@@ -38,7 +38,7 @@ import { claimSlotCapacity, getSlotConfig, slotInstantOrThrow } from "../src/lib
 import { NextRequest } from "next/server";
 import { POST as bookingsPOST } from "../src/app/api/bookings/route";
 import { serviceOtpKey } from "../src/lib/serviceOtp";
-import { pushRecipientsForCurrentScope } from "../src/lib/push";
+import { pushRecipientsForCurrentScope, pushRecipientsForPlatform } from "../src/lib/push";
 import { resolveChannelTenant } from "../src/lib/channelTenant";
 import { upsertChannel } from "./backfill-channel-identities";
 
@@ -673,7 +673,26 @@ async function main() {
     });
     await runInTenantScope({ tenantId: null, system: true }, async () => {
       const ids = (await pushRecipientsForCurrentScope()).map((r) => r.id);
-      check("push: system scope broadcasts to ALL devices (A + B)", ids.includes(subAId) && ids.includes(subBId));
+      check("push: system scope reaches the platform owners' devices (A + B), never a disabled one", ids.includes(subAId) && ids.includes(subBId) && !ids.includes(subCId));
+      // A platform alert is not for a workspace's staff (security audit 2026-10-25, item 5): B as a member drops out.
+      await basePrisma.user.update({ where: { id: userBId }, data: { role: "member" } });
+      try {
+        const asMember = (await pushRecipientsForCurrentScope()).map((r) => r.id);
+        check("push: system scope does NOT reach a non-owner's device", asMember.includes(subAId) && !asMember.includes(subBId));
+        // An explicit platform alert, enforcement ON: active owners only.
+        const platformOn = (await pushRecipientsForPlatform()).map((r) => r.id);
+        check("push: platform alert (enforce) → active owners only", platformOn.includes(subAId) && !platformOn.includes(subBId) && !platformOn.includes(subCId));
+        // …and with enforcement OFF or MONITOR (both "not enforcing"): exactly the same — the rollback can't widen it.
+        __setTenantEnforcingForTests(false);
+        try {
+          const platformOff = (await pushRecipientsForPlatform()).map((r) => r.id);
+          check("push: platform alert (off/monitor) → still active owners only", platformOff.includes(subAId) && !platformOff.includes(subBId) && !platformOff.includes(subCId));
+        } finally {
+          __setTenantEnforcingForTests(true);
+        }
+      } finally {
+        await basePrisma.user.update({ where: { id: userBId }, data: { role: "owner" } });
+      }
     });
     await runInTenantScope({ tenantId: null, system: false }, async () => {
       check("push: null non-system scope → delivers to NOBODY (fail closed)", (await pushRecipientsForCurrentScope()).length === 0);

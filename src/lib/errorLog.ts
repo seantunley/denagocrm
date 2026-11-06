@@ -159,7 +159,9 @@ export async function logError(
           body: `${scope}: ${message.slice(0, 90)}`,
           url: "/settings?tab=system",
         },
-        "system_error"
+        "system_error",
+        // A platform alert: the platform owners, never a workspace's staff (security audit 2026-10-25, item 5).
+        { platform: true },
       ).catch((pushError) => {
         // Never recurse through logError here: push is called from the logger.
         // The runtime console is the durable fallback when alert delivery fails.
