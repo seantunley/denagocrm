@@ -4,6 +4,7 @@ import { actingTenantId } from "./actingTenant";
 import { logAudit } from "./audit";
 import { codexRespond } from "./codex";
 import { formatZAR } from "./format";
+import { withCurrency } from "./currencyRules";
 import { johannesburgDateKey } from "./activityDay";
 import { listActingTenantStaff } from "./tenantActor";
 import { canAccessLead, type PermissionUser } from "./permissions";
@@ -62,7 +63,7 @@ export async function prepareTriage(user: PermissionUser): Promise<{ ok: true; i
     deal: deal.opportunity,
     stage: deal.stageName,
     owner: deal.ownerName ?? "nobody",
-    value: deal.valueCents ? formatZAR(deal.valueCents, moneyFmt) : null,
+    value: deal.valueCents ? formatZAR(deal.valueCents, withCurrency(moneyFmt, deal.currency)) : null,
     reasons: deal.signals.map((s) => s.detail),
     recent: messages
       .filter((m) => m.leadId === deal.id || (!m.leadId && m.contactId && m.contactId === deal.contactId))

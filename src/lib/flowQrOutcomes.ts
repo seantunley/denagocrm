@@ -16,7 +16,10 @@ export async function qrOutcomes(tenantId: string, source: string, showValue: bo
       where: { tenantId, deletedAt: null, OR: [{ contactId: { in: ids } }, { lead: { contactId: { in: ids } } }] },
       select: { id: true, revisionOfId: true, status: true },
     }),
-    prisma.lead.aggregate({ where: { tenantId, deletedAt: null, status: "won", contactId: { in: ids } }, _count: { _all: true }, _sum: { valueCents: true } }),
+    prisma.lead.groupBy({ by: ["currency"], where: { tenantId, deletedAt: null, status: "won", contactId: { in: ids } }, _count: { _all: true }, _sum: { valueCents: true } }),
   ]);
-  return { people: ids.length, quotes: sentQuoteFamilies(quoteRows), won: won._count._all, wonCents: showValue ? won._sum.valueCents ?? 0 : null };
+  // Every win counts; the value is the base currency's (NULL) — one figure can't hold two currencies.
+  const wonCount = won.reduce((sum, row) => sum + row._count._all, 0);
+  const baseCents = won.find((row) => row.currency === null)?._sum.valueCents ?? 0;
+  return { people: ids.length, quotes: sentQuoteFamilies(quoteRows), won: wonCount, wonCents: showValue ? baseCents : null };
 }

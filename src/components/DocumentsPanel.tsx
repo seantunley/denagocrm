@@ -9,6 +9,7 @@ import { SaveForm, SaveButton } from "@/components/SaveForm";
 import QuoteRowActions from "@/components/quotes/QuoteRowActions";
 import { StatusPill } from "@/components/visual-system";
 import { formatDate, formatZAR } from "@/lib/format";
+import { withCurrency } from "@/lib/currencyRules";
 import { FileText, Tag, Upload } from "lucide-react";
 
 function humanSize(bytes: number): string {
@@ -42,6 +43,8 @@ export type QuoteGroup = {
   signed: boolean;
   superseded: boolean;
   totalCents: number;
+  /** NULL = the base currency. */
+  currency: string | null;
   createdAt: Date;
   documents: Doc[];
 };
@@ -226,7 +229,7 @@ export default async function DocumentsPanel({
                 {group.signed && <StatusPill tone="success">Signed</StatusPill>}
                 {group.superseded && <StatusPill tone="neutral">Superseded</StatusPill>}
                 <span className="ml-auto text-xs tabular-nums text-muted-foreground">
-                  {formatZAR(Math.round(group.totalCents), moneyFmt)} · {formatDate(group.createdAt)}
+                  {formatZAR(Math.round(group.totalCents), withCurrency(moneyFmt, group.currency))} · {formatDate(group.createdAt)}
                 </span>
                 {quoteActions && !group.superseded && (
                   <QuoteRowActions

@@ -152,6 +152,14 @@ type MetricSpec = {
 
 const NO_DIMENSION = Prisma.sql`''`;
 const NO_MONEY = Prisma.sql`0`;
+/**
+ * A lead's value counts toward `sumCents` only in the BASE currency (NULL `currency` —
+ * the base is stored as NULL). A deal in another currency (multicurrency module) still
+ * COUNTS, but its amount isn't added: a bucket is one number and can't hold two
+ * currencies. Reports name the other currencies' totals beside the figure, read live.
+ * Every lead written before the module has NULL here, so existing buckets are unchanged.
+ */
+const LEAD_BASE_VALUE = Prisma.sql`CASE WHEN "currency" IS NULL THEN "valueCents" ELSE 0 END`;
 
 /**
  * ─── EVERY METRIC BUCKETS ON AN IMMUTABLE LIFECYCLE DATE ────────────────────
@@ -227,7 +235,7 @@ const METRICS: Record<StatisticMetric, MetricSpec> = {
     dateColumn: "createdAt",
     filter: Prisma.empty,
     dimension: Prisma.sql`"source"`,
-    sum: Prisma.sql`"valueCents"`,
+    sum: LEAD_BASE_VALUE,
   },
   /**
    * Deals won, by the date the deal was WON, broken down by assignee.
@@ -245,7 +253,7 @@ const METRICS: Record<StatisticMetric, MetricSpec> = {
     dateColumn: "wonAt",
     filter: Prisma.sql`AND "status" = 'won'`,
     dimension: Prisma.sql`COALESCE("assignedToId", '')`,
-    sum: Prisma.sql`"valueCents"`,
+    sum: LEAD_BASE_VALUE,
   },
   /** Deals lost, by the date they were lost. Exists to make the win rate a ratio. */
   deals_lost: {
@@ -253,7 +261,7 @@ const METRICS: Record<StatisticMetric, MetricSpec> = {
     dateColumn: "lostAt",
     filter: Prisma.sql`AND "status" = 'lost'`,
     dimension: NO_DIMENSION,
-    sum: Prisma.sql`"valueCents"`,
+    sum: LEAD_BASE_VALUE,
   },
   /**
    * Workshop job cards completed. `completedAt` is nullable and the aggregate's

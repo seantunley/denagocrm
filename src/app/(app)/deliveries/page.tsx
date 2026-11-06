@@ -15,6 +15,7 @@ import {
 import ModalTrigger from "@/components/Modal";
 import ProofOfDelivery from "@/components/ProofOfDelivery";
 import { currencySymbol, formatDate, formatZAR, type MoneyFormat } from "@/lib/format";
+import { withCurrency } from "@/lib/currencyRules";
 import { loadBillToFleets, quoteBillTo } from "@/lib/quoteBillTo";
 import { quotePrintLinks } from "@/lib/quotePrintLinks";
 import { quotePricing } from "@/lib/pricing";
@@ -195,8 +196,8 @@ export default async function DeliveriesPage() {
                           <div className="min-w-0"><Link href={`/quotes/${quote.id}`} className="text-sm font-semibold text-primary">Q-{quote.number} · {who}</Link><p className="mt-0.5 truncate text-xs text-muted-foreground">{model}</p></div>
                           <span className="shrink-0 rounded-full bg-muted px-2 py-1 text-[10px] font-medium text-muted-foreground">{stage?.title}</span>
                         </div>
-                        <p className="mt-2 text-[11px] text-muted-foreground">{photos} handover photo{photos === 1 ? "" : "s"}{quote.deliveryScheduledFor ? ` · ${formatDate(quote.deliveryScheduledFor)}` : ""}{quote.depositPaidCents != null ? ` · deposit ${formatZAR(quote.depositPaidCents, moneyFmt)}` : ""}</p>
-                        {canManage && <FulfilmentCorrections quote={quote} moneyFmt={moneyFmt} />}
+                        <p className="mt-2 text-[11px] text-muted-foreground">{photos} handover photo{photos === 1 ? "" : "s"}{quote.deliveryScheduledFor ? ` · ${formatDate(quote.deliveryScheduledFor)}` : ""}{quote.depositPaidCents != null ? ` · deposit ${formatZAR(quote.depositPaidCents, withCurrency(moneyFmt, quote.currency))}` : ""}</p>
+                        {canManage && <FulfilmentCorrections quote={quote} moneyFmt={withCurrency(moneyFmt, quote.currency)} />}
                         {/* Same tab on mobile, like the delivery note: keeps PWA back navigation. */}
                         <div className="mt-1.5 flex flex-wrap gap-x-3 gap-y-1">
                           {quotePrintLinks(quote).map((link) => (
@@ -382,7 +383,7 @@ export default async function DeliveriesPage() {
                         {(hasDoc(quote.id, "invoice") || hasDoc(quote.id, "pop") || photos > 0 || quote.deliveryScheduledFor) && (
                           <div className="mt-2 flex flex-wrap gap-1.5">
                             {hasDoc(quote.id, "invoice") && <span className={chip}><FileText className="size-2.5" /> Invoice</span>}
-                            {hasDoc(quote.id, "pop") && <span className={chip}><Wallet className="size-2.5" /> POP{quote.depositPaidCents != null ? ` · ${formatZAR(quote.depositPaidCents, moneyFmt)}` : ""}</span>}
+                            {hasDoc(quote.id, "pop") && <span className={chip}><Wallet className="size-2.5" /> POP{quote.depositPaidCents != null ? ` · ${formatZAR(quote.depositPaidCents, withCurrency(moneyFmt, quote.currency))}` : ""}</span>}
                             {photos > 0 && <span className={chip}>📷 {photos}</span>}
                             {quote.deliveryScheduledFor && (
                               <span className={chip}><Truck className="size-2.5" /> {formatDate(quote.deliveryScheduledFor)}</span>
@@ -390,7 +391,7 @@ export default async function DeliveriesPage() {
                           </div>
                         )}
 
-                        {canManage && <FulfilmentCorrections quote={quote} moneyFmt={moneyFmt} />}
+                        {canManage && <FulfilmentCorrections quote={quote} moneyFmt={withCurrency(moneyFmt, quote.currency)} />}
 
                         {stockByQuote.has(quote.id) && (() => {
                           const s = stockByQuote.get(quote.id)!;
@@ -423,7 +424,7 @@ export default async function DeliveriesPage() {
                         )}
                         {canManage && column.key === "deposit" && (
                           <SaveForm success="Deposit recorded" resetOnSuccess={false} action={markDepositPaid.bind(null, quote.id)} className="mt-2.5 space-y-1.5">
-                            <input name="amount" inputMode="decimal" required placeholder={`Amount received (${currencySymbol(moneyFmt)})`} aria-label={`Deposit amount received in ${moneyFmt.currency}`} className="input text-xs py-1.5" />
+                            <input name="amount" inputMode="decimal" required placeholder={`Amount received (${currencySymbol(withCurrency(moneyFmt, quote.currency))})`} aria-label={`Deposit amount received in ${withCurrency(moneyFmt, quote.currency).currency}`} className="input text-xs py-1.5" />
                             <input type="file" name="file" required accept=".pdf,image/*" className="block w-full text-xs text-muted-foreground file:btn-secondary file:btn-sm file:mr-2 file:border-0" />
                             <SaveButton className="btn-primary btn-sm w-full">Deposit paid</SaveButton>
                           </SaveForm>

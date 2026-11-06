@@ -19,6 +19,7 @@ import { saveLeadForecast, snapshotForecast } from "@/app/actions/pipelines";
 import { EmptyState, SectionHeading, StatusPill, Surface } from "@/components/visual-system";
 import { WorkspaceHero } from "@/components/workspace-hero";
 import { getRegionalSettings } from "@/lib/settings";
+import { formatTotals, withCurrency } from "@/lib/currencyRules";
 
 export const dynamic = "force-dynamic";
 
@@ -170,7 +171,7 @@ export default async function ForecastPage({
         title="Sales forecast"
         description={`Pipeline confidence and expected revenue for ${range.from.toLocaleDateString("en-ZA", { month: "long", year: "numeric", timeZone: "UTC" })}.`}
         stats={[
-          { label: "Open pipeline", value: formatZARCompact(summary.openValueCents, moneyFmt), detail: `${summary.count} opportunities` },
+          { label: "Open pipeline", value: formatZARCompact(summary.openValueCents, moneyFmt), detail: `${summary.count} opportunities${summary.otherCurrencies.length ? ` · plus ${formatTotals(summary.otherCurrencies, moneyFmt, true)} not in these figures` : ""}` },
           { label: "Weighted forecast", value: formatZARCompact(summary.weightedValueCents, moneyFmt), detail: summary.openValueCents ? `${Math.round(summary.weightedValueCents / summary.openValueCents * 100)}% of open value` : "No open value", tone: "primary" },
           { label: "Committed", value: formatZARCompact(summary.commitValueCents, moneyFmt), detail: "Highest-confidence revenue", tone: "success" },
           { label: "Best case", value: formatZARCompact(summary.bestCaseValueCents, moneyFmt), detail: "Upside potential", tone: "warning" },
@@ -306,8 +307,8 @@ export default async function ForecastPage({
                 <td>{formatDate(lead.expectedCloseDate)}</td>
                 <td><StatusPill tone={lead.forecastCategory === "commit" ? "success" : lead.forecastCategory === "best_case" ? "warning" : lead.forecastCategory === "omitted" ? "neutral" : "info"}>{lead.forecastCategory.replace("_", " ")}</StatusPill></td>
                 <td><div className="min-w-20"><span className="text-xs tabular-nums">{lead.probability}%</span><div className="mt-1 h-1 overflow-hidden rounded-full bg-muted"><div className="h-full rounded-full bg-primary" style={{ width: `${lead.probability}%` }} /></div></div></td>
-                <td className="text-right">{formatZAR(lead.valueCents, moneyFmt)}</td>
-                <td className="text-right">{formatZAR(Math.round(lead.valueCents * lead.probability / 100), moneyFmt)}</td>
+                <td className="text-right">{formatZAR(lead.valueCents, withCurrency(moneyFmt, lead.currency))}</td>
+                <td className="text-right">{formatZAR(Math.round(lead.valueCents * lead.probability / 100), withCurrency(moneyFmt, lead.currency))}</td>
                 <td>
                   {canManage && (
                     <details>

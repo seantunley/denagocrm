@@ -14,6 +14,7 @@ import { prisma } from "@/lib/db";
 import { currencySymbol, formatZAR } from "@/lib/format";
 import { saveTargets } from "@/app/actions/targets";
 import { getRegionalSettings } from "@/lib/settings";
+import { baseValueCents } from "@/lib/currencyRules";
 import { SectionHeading, StatusPill, Surface } from "@/components/visual-system";
 import { WorkspaceHero } from "@/components/workspace-hero";
 
@@ -46,7 +47,7 @@ export default async function TargetsPage() {
     prisma.lead.count({ where: { createdAt: { gte: monthStart } } }),
     prisma.lead.findMany({
       where: { status: "won", updatedAt: { gte: monthStart } },
-      select: { valueCents: true },
+      select: { valueCents: true, currency: true },
     }),
     prisma.quote.count({ where: { deliveredAt: { gte: monthStart } } }),
     prisma.serviceRecord.count({ where: { serviceDate: { gte: monthStart } } }),
@@ -55,7 +56,8 @@ export default async function TargetsPage() {
   const targetMap = new Map(targets.map((target) => [target.metric, target.value]));
   const actuals: Record<string, number> = {
     leads,
-    sales_value: wonLeads.reduce((sum, lead) => sum + lead.valueCents, 0),
+    // A target is one number in the base currency; deals in other currencies don't count toward it.
+    sales_value: wonLeads.reduce((sum, lead) => sum + baseValueCents(lead), 0),
     deliveries,
     services,
   };

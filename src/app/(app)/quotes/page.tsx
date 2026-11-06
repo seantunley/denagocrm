@@ -53,7 +53,7 @@ import {
   MobileWorkspaceHeader,
 } from "@/components/mobile-workspace";
 import { getRegionalSettings } from "@/lib/settings";
-import { withCurrency } from "@/lib/currencyRules";
+import { formatTotals, totalsByCurrency, withCurrency } from "@/lib/currencyRules";
 
 // "Email quote" (in the editor on this page) renders the PDF in headless Chrome
 // and sends it — the same budget the PDF routes get.
@@ -103,7 +103,7 @@ export default async function QuotesPage({
     prisma.quote.groupBy({ by: ["status"], where: all, _count: { _all: true } }),
     prisma.quote.findMany({
       where: { AND: [all, { status: { notIn: ["declined", "cancelled"] } }] },
-      select: { taxInclusive: true, depositType: true, depositValue: true, items: true, fees: true },
+      select: { taxInclusive: true, depositType: true, depositValue: true, items: true, fees: true, currency: true },
     }),
     prisma.contact.findMany({ orderBy: { firstName: "asc" }, take: 500 }),
     // Open leads offered as an optional link when starting a fresh quote.
@@ -177,11 +177,15 @@ export default async function QuotesPage({
   const sentCount = countOf("sent");
   const acceptedCount = countOf("accepted");
   const quoteCount = statusCounts.reduce((sum, row) => sum + row._count._all, 0);
-  const pipelineValue = openQuotes.reduce((sum, quote) => sum + payableTotalCents(quote), 0);
+  const moneyFmt = await getRegionalSettings();
+  // Per currency, base first — never one figure across currencies.
+  const pipelineValue = formatTotals(
+    totalsByCurrency(openQuotes, (quote) => ({ cents: Math.round(payableTotalCents(quote)), currency: quote.currency }), moneyFmt.currency),
+    moneyFmt,
+  );
   const filtersActive = Boolean(q?.trim() || status);
   const exportQuery = new URLSearchParams({ ...(q?.trim() ? { q: q.trim() } : {}), ...(status ? { status } : {}) }).toString();
 
-  const moneyFmt = await getRegionalSettings();
   return (
     <QuoteEditorProvider
       contacts={contactOptions}
@@ -246,7 +250,7 @@ export default async function QuotesPage({
             { label: "Draft", value: draftCount, detail: "Proposals being prepared", icon: FileText, tone: "primary" },
             { label: "Sent", value: sentCount, detail: "With customers for review", icon: Send, tone: sentCount > 0 ? "warning" : "default" },
             { label: "Accepted", value: acceptedCount, detail: "Current accepted quotes", icon: CheckCircle2, tone: "success" },
-            { label: "Open value", value: formatZAR(Math.round(pipelineValue), moneyFmt), detail: `${quoteCount} current quote${quoteCount === 1 ? "" : "s"}`, icon: CircleDollarSign },
+            { label: "Open value", value: pipelineValue, detail: `${quoteCount} current quote${quoteCount === 1 ? "" : "s"}`, icon: CircleDollarSign },
           ]}
           actions={
           <QuoteEditorTrigger className={buttonVariants({ size: "sm" })}>

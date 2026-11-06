@@ -391,6 +391,7 @@ export function QuoteEditorDialog({
   const [draft, setDraft] = useState<DraftState>(() => createDraft(record, defaults, initialContactId, products));
   // Every amount on the quote is in ITS currency (multicurrency module; "" = the base).
   const money = withCurrency(regional, draft.currency || null);
+  const currencyCode = draft.currency || regional.currency; // a primitive from state, so the totals memo can depend on it
   const rands = (cents: number) => formatZAR(cents, money);
   const currencies = useCurrencies();
   // A customer found by search (beyond the preloaded list) — for its label.
@@ -508,7 +509,7 @@ export function QuoteEditorDialog({
   const calculated = useMemo(() => {
     const lines = draft.lines.map((line) => ({
       qty: Number(line.qty.replace(",", ".")) || 0,
-      unitPriceCents: centsFromInput(line.unitPrice, money.currency) || 0,
+      unitPriceCents: centsFromInput(line.unitPrice, currencyCode) || 0,
       discountPct: Number(line.discount.replace(",", ".")) || 0,
       // The rate the SAVE will store: its own for an existing line, the
       // workspace's for a new one (see itemRowsFor).
@@ -526,14 +527,14 @@ export function QuoteEditorDialog({
       .map((fee) => ({
         label: fee.label.trim() || (fee.kind === "delivery" ? "Delivery" : "Fee"),
         kind: fee.kind,
-        amountCents: centsFromInput(fee.amount, money.currency) || 0,
+        amountCents: centsFromInput(fee.amount, currencyCode) || 0,
         taxRatePct: fee.taxRatePct ?? regional.vatRatePct,
       }))
       .filter((fee) => fee.amountCents !== 0);
     const p = quotePricing(lines, fees, {
       taxInclusive: draft.taxInclusive,
       depositType: draft.depositType || null,
-      depositValue: depositNumber(draft.depositType, draft.depositValue, money.currency),
+      depositValue: depositNumber(draft.depositType, draft.depositValue, currencyCode),
     });
     return {
       subtotal: p.netCents,
@@ -552,7 +553,7 @@ export function QuoteEditorDialog({
       // customer can't check. Same helper the printed document uses.
       feeLines: feeRows(fees),
     };
-  }, [draft.lines, draft.fees, draft.taxInclusive, draft.depositType, draft.depositValue, regional.vatRatePct, money.currency]);
+  }, [draft.lines, draft.fees, draft.taxInclusive, draft.depositType, draft.depositValue, regional.vatRatePct, currencyCode]);
 
   function updateLine(key: string, patch: Partial<DraftLine>) {
     setDraft((current) => ({
@@ -599,7 +600,8 @@ export function QuoteEditorDialog({
           ...line,
           productId: product.id,
           description: product.name,
-          unitPrice: priceInput(product.basePriceCents),
+          // The catalogue price is in the base currency: on a quote in another one the rep types it.
+          unitPrice: current.currency ? "" : priceInput(product.basePriceCents),
           colorPreference: line.productId === product.id ? line.colorPreference : "",
         };
       }),
@@ -767,6 +769,12 @@ export function QuoteEditorDialog({
       }
       if (!Number.isFinite(qty) || qty <= 0) {
         setError(`Enter a valid quantity for “${description}”.`);
+        setActiveTab("build");
+        return;
+      }
+      // Not filled from the catalogue in another currency, so a blank here was never priced.
+      if (draft.currency && line.kind === "catalogue" && !line.unitPrice.trim()) {
+        setError(`Enter the ${money.currency} price for “${description}”.`);
         setActiveTab("build");
         return;
       }

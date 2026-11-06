@@ -172,6 +172,7 @@ export default async function ContactDetailPage({
     // What the customer actually pays — fees and delivery included, which is
     // why the query above loads them.
     totalCents: payableTotalCents(quote),
+    currency: quote.currency,
     createdAt: quote.createdAt,
     documents: quoteDocuments.filter((document) => document.quoteId === quote.id),
   }));
