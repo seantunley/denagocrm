@@ -55,6 +55,7 @@ import { quoteSigningView } from "@/app/actions/recordSigning";
 import type { QuoteSigningView } from "@/lib/signing/record";
 import { feeRows, quotePricing } from "@/lib/pricing";
 import { currencySymbol, formatDate, formatDateTime, formatZAR, type Regional } from "@/lib/format";
+import { parseMoneyInput } from "@/lib/moneyInput";
 import { calendarDateInstant } from "@/lib/quoteExpiry";
 import SigningBlock from "@/components/SigningBlock";
 import QuoteEmailDialog from "@/components/quotes/QuoteEmailDialog";
@@ -228,9 +229,33 @@ function priceInput(cents: number) {
   return (cents / 100).toFixed(2);
 }
 
-function centsFromInput(value: string) {
-  const parsed = Number(value.replace(",", "."));
-  return Number.isFinite(parsed) ? Math.round(parsed * 100) : Number.NaN;
+/**
+ * A typed amount → cents, read as the rest of the app reads money (moneyInput.ts) in the
+ * workspace's currency: "4 861,00", "R 1 000.50" and "₽4 861" all work, where this used to
+ * read only a bare number. Blank is 0, as before; a leading minus stays allowed for fees.
+ * NaN means unclear — the save refuses it rather than guessing.
+ */
+function centsFromInput(value: string, currency: string) {
+  const trimmed = value.trim();
+  if (!trimmed) return 0;
+  const negative = trimmed.startsWith("-");
+  const parsed = parseMoneyInput(negative ? trimmed.slice(1) : trimmed, currency);
+  if (!parsed.ok) return Number.NaN;
+  return negative ? -parsed.cents : parsed.cents;
+}
+
+/**
+ * The deposit as the server takes it (pricing.ts): a percentage, or an amount in whole
+ * currency units. Null when blank or unclear — the save refuses unclear before it gets here.
+ */
+function depositNumber(type: string, value: string, currency: string): number | null {
+  if (!value.trim()) return null;
+  if (type === "amount") {
+    const cents = centsFromInput(value, currency);
+    return Number.isFinite(cents) ? cents / 100 : null;
+  }
+  const pct = Number(value.replace(",", "."));
+  return Number.isFinite(pct) ? pct : null;
 }
 
 function createDraft(
@@ -471,7 +496,7 @@ export function QuoteEditorDialog({
   const calculated = useMemo(() => {
     const lines = draft.lines.map((line) => ({
       qty: Number(line.qty.replace(",", ".")) || 0,
-      unitPriceCents: centsFromInput(line.unitPrice) || 0,
+      unitPriceCents: centsFromInput(line.unitPrice, regional.currency) || 0,
       discountPct: Number(line.discount.replace(",", ".")) || 0,
       // The rate the SAVE will store: its own for an existing line, the
       // workspace's for a new one (see itemRowsFor).
@@ -489,14 +514,14 @@ export function QuoteEditorDialog({
       .map((fee) => ({
         label: fee.label.trim() || (fee.kind === "delivery" ? "Delivery" : "Fee"),
         kind: fee.kind,
-        amountCents: centsFromInput(fee.amount) || 0,
+        amountCents: centsFromInput(fee.amount, regional.currency) || 0,
         taxRatePct: fee.taxRatePct ?? regional.vatRatePct,
       }))
       .filter((fee) => fee.amountCents !== 0);
     const p = quotePricing(lines, fees, {
       taxInclusive: draft.taxInclusive,
       depositType: draft.depositType || null,
-      depositValue: draft.depositValue ? Number(draft.depositValue.replace(",", ".")) : null,
+      depositValue: depositNumber(draft.depositType, draft.depositValue, regional.currency),
     });
     return {
       subtotal: p.netCents,
@@ -515,7 +540,7 @@ export function QuoteEditorDialog({
       // customer can't check. Same helper the printed document uses.
       feeLines: feeRows(fees),
     };
-  }, [draft.lines, draft.fees, draft.taxInclusive, draft.depositType, draft.depositValue, regional.vatRatePct]);
+  }, [draft.lines, draft.fees, draft.taxInclusive, draft.depositType, draft.depositValue, regional.vatRatePct, regional.currency]);
 
   function updateLine(key: string, patch: Partial<DraftLine>) {
     setDraft((current) => ({
@@ -722,7 +747,7 @@ export function QuoteEditorDialog({
       }
       const description = line.description.trim();
       const qty = Number(line.qty.replace(",", "."));
-      const unitPriceCents = centsFromInput(line.unitPrice);
+      const unitPriceCents = centsFromInput(line.unitPrice, regional.currency);
       if (!description) {
         setError("Every quote line needs a description.");
         setActiveTab("build");
@@ -757,12 +782,25 @@ export function QuoteEditorDialog({
       });
     }
 
+    // An amount it can't read clearly is refused here, as line prices are — not dropped without a word.
+    const unclearFee = draft.fees.find((fee) => !Number.isFinite(centsFromInput(fee.amount, regional.currency)));
+    if (unclearFee) {
+      setError(`Enter a clear amount for “${unclearFee.label.trim() || "the fee"}”.`);
+      setActiveTab("build");
+      return;
+    }
+    const depositValue = depositNumber(draft.depositType, draft.depositValue, regional.currency);
+    if (draft.depositValue.trim() && depositValue === null) {
+      setError("Enter a clear deposit amount.");
+      setActiveTab("build");
+      return;
+    }
     const fees = draft.fees
       .map((fee) => ({
         id: fee.id,
         label: fee.label.trim() || (fee.kind === "delivery" ? "Delivery" : "Fee"),
         kind: fee.kind,
-        amountCents: centsFromInput(fee.amount),
+        amountCents: centsFromInput(fee.amount, regional.currency),
       }))
       .filter((fee) => Number.isFinite(fee.amountCents) && fee.amountCents !== 0);
 
@@ -779,7 +817,7 @@ export function QuoteEditorDialog({
           fees,
           taxInclusive: draft.taxInclusive,
           depositType: draft.depositType || null,
-          depositValue: draft.depositValue ? Number(draft.depositValue.replace(",", ".")) : null,
+          depositValue,
         });
         if (!result.ok) {
           setError(result.error);
@@ -1212,7 +1250,7 @@ export function QuoteEditorDialog({
                               <option value="amount">Amount</option>
                             </select>
                             {draft.depositType && (
-                              <input className="input w-24 tabular-nums" inputMode="decimal" placeholder={draft.depositType === "percent" ? "%" : "R"} value={draft.depositValue} disabled={!editable} onChange={(event) => setDraft((current) => ({ ...current, depositValue: event.target.value }))} aria-label="Deposit value" />
+                              <input className="input w-24 tabular-nums" inputMode="decimal" placeholder={draft.depositType === "percent" ? "%" : regional.currency} value={draft.depositValue} disabled={!editable} onChange={(event) => setDraft((current) => ({ ...current, depositValue: event.target.value }))} aria-label="Deposit value" />
                             )}
                           </div>
                         </div>
@@ -1265,7 +1303,7 @@ export function QuoteEditorDialog({
                       <tbody>
                         {draft.lines.map((line) => {
                           const qty = Number(line.qty.replace(",", ".")) || 0;
-                          const price = centsFromInput(line.unitPrice) || 0;
+                          const price = centsFromInput(line.unitPrice, regional.currency) || 0;
                           const discount = Math.min(100, Math.max(0, Number(line.discount.replace(",", ".")) || 0));
                           const lineTotal = Math.round(qty * price * (1 - discount / 100));
                           // The customer's document drops a declined add-on
