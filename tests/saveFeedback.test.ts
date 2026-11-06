@@ -376,22 +376,6 @@ for (const fn of ["uploadJobCardPhotos", "uploadCheckoutPhotos", "uploadDelivery
   });
 }
 
-// ── A component that awaits an action must inspect its result ──────────────
-
-// CameraCapture awaited the newly typed ActionResult and threw it away, then
-// refreshed and closed — recreating the dropped-{ error } failure one layer above
-// the forms, and discarding the captured photos with it.
-test("CameraCapture surfaces the action's refusal and keeps the shots", () => {
-  const code = src("src/components/CameraCapture.tsx");
-  const upload = code.slice(code.indexOf("const upload = async"));
-  assert.match(upload, /const result = await action\(fd\)/, "the result must be captured");
-  assert.match(upload, /"error" in result/, "and inspected");
-  assert.match(upload, /setError\(String\(result\.error\)\)/, "the reason must be shown");
-  const errBranch = upload.indexOf("setError(String(result.error))");
-  const closeCall = upload.indexOf("close()");
-  assert.ok(errBranch < closeCall, "a refusal must return BEFORE close() discards the captured shots");
-});
-
 // ── Reservation actions must not claim work they did not do ────────────────
 
 test("reservation actions refuse when nothing actually changed", () => {

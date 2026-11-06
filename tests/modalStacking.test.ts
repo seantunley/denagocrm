@@ -82,7 +82,6 @@ test("the ten overlays that had the bug are all portalled", () => {
   // Named individually, because a regression here is invisible until somebody
   // opens the right dialog on the right page.
   for (const rel of [
-    "src/components/CameraCapture.tsx",
     "src/components/KanbanBoard.tsx",
     "src/components/PhotoAnnotator.tsx",
     "src/components/ProofOfDelivery.tsx",

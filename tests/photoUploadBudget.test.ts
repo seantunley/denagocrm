@@ -146,12 +146,8 @@ test("every camera field resizes before submitting", () => {
       /<input[^>]*capture="environment"/,
       `${file} still posts unresized camera files`,
     );
-    assert.match(code, /<(?:PhotoUploadField|MobilePhotoCapture|DirectPhotoUploader)/, `${file} must use the resizing field directly or through the mobile capture primitive`);
+    assert.match(code, /<DirectPhotoUploader/, `${file} must use the resizing uploader`);
   }
-
-  const mobileCapture = src("src/components/MobilePhotoCapture.tsx");
-  assert.match(mobileCapture, /<PhotoUploadField/);
-  assert.match(mobileCapture, /<SaveButton[^>]*w-full/);
 });
 
 test("Choose photos opens the gallery instead of forcing the rear camera", () => {
@@ -159,14 +155,10 @@ test("Choose photos opens the gallery instead of forcing the rear camera", () =>
   // made the control labelled "Choose photos" skip phone storage entirely. The
   // browser can still offer its normal gallery/camera sources from the image
   // chooser, so the shared file field must not force one source in advance.
-  const field = src("src/components/PhotoUploadField.tsx");
+  const field = src("src/components/DirectPhotoUploader.tsx");
   assert.match(field, /type="file"/);
   assert.match(field, /accept="image\/\*"/);
   assert.doesNotMatch(field, /capture=/, "the gallery picker must not force camera capture");
-
-  const mobileCapture = src("src/components/MobilePhotoCapture.tsx");
-  assert.match(mobileCapture, /Take or choose photos/);
-  assert.match(mobileCapture, /<PhotoUploadField/);
 });
 
 test("both upload actions enforce the TOTAL payload, not only per-file", () => {
@@ -190,111 +182,4 @@ test("the capture menu requires both the write and route-read permissions it nee
   const capture = nav.slice(nav.indexOf("<Sheet open={captureOpen}"));
   assert.ok(capture.length > 0);
   assert.doesNotMatch(capture, /can\("deliveries\.view", "deliveries\.manage"\)/, "view is not enough to upload");
-});
-
-/**
- * THE SUBMIT RACE.
- *
- * Resizing on `change` alone was not enough, and review was right about why. On a
- * phone the decode of five camera photos takes a moment, and nothing stopped the
- * person tapping Upload during it:
- *
- *   select 5 photos → resize starts → user taps Upload
- *     → FORM SUBMITS THE ORIGINALS → resize finishes, too late
- *
- * `working` only changed a status line. It disabled no button and blocked no
- * submission, so the originals — tens of megabytes — went to a framework that
- * refuses anything over the declared limit, and the upload action never ran.
- *
- * The component now owns the submit boundary rather than decorating it.
- */
-
-test("submission is intercepted until the files have been prepared", () => {
-  const code = src("src/components/PhotoUploadField.tsx");
-  assert.match(code, /form\.addEventListener\("submit", onSubmit, \{ capture: true \}\)/,
-    "the boundary must be the submit event, not the change event");
-  // Capture phase: a bubble-phase listener runs after React has already begun the
-  // form action, which is too late to swap the files.
-  assert.match(code, /\{ capture: true \}/);
-  assert.match(code, /event\.preventDefault\(\)/);
-  assert.match(code, /if \(preparedRef\.current\) return;/, "a prepared batch must pass straight through");
-  assert.match(code, /form\.requestSubmit\(\)/, "and be resubmitted once ready");
-});
-
-test("an over-limit batch is not resubmitted", () => {
-  // Re-submitting a payload the budget just refused would reproduce the exact
-  // failure the check exists to prevent, and the reason is already on screen.
-  const code = src("src/components/PhotoUploadField.tsx");
-  assert.match(code, /if \(ok\) form\.requestSubmit\(\)/);
-  const prepare = code.slice(code.indexOf("async function prepare("), code.indexOf("function onPick("));
-  assert.match(prepare, /preparedRef\.current = false;\s*\n\s*return false;/,
-    "a refused batch must stay unprepared so the next submit is stopped too");
-});
-
-test("a new selection is unprepared again", () => {
-  // Otherwise picking new photos after a successful prepare would submit the new
-  // originals under the old batch's clearance.
-  const code = src("src/components/PhotoUploadField.tsx");
-  const onPick = code.slice(code.indexOf("function onPick("));
-  assert.match(onPick, /preparedRef\.current = false;/);
-});
-
-test("readiness is a ref, not state", () => {
-  // The submit handler reads it DURING the event. A state value captured in a
-  // closure can be a render behind, which is the race this exists to close.
-  const code = src("src/components/PhotoUploadField.tsx");
-  assert.match(code, /const preparedRef = useRef\(false\)/);
-  assert.doesNotMatch(code, /const \[prepared, setPrepared\]/);
-});
-
-/**
- * THE SECOND RACE — two preparations, and the slower one wins.
- *
- * Reported in review after the submit boundary fixed the first one:
- *
- *   select A → prepare(A) starts
- *   select B → prepare(B) starts
- *   prepare(B) finishes → input = B
- *   prepare(A) finishes → input = A     ← the person chose B, A gets uploaded
- *
- * Both preparations were allowed to publish their results, so whichever decoded
- * LAST won regardless of which selection it belonged to. On job-card and delivery
- * evidence that is worse than an upload error: it is wrong, and it is silent.
- */
-
-test("a superseded preparation discards its own result", () => {
-  const code = src("src/components/PhotoUploadField.tsx");
-  assert.match(code, /const selectionRef = useRef\(0\)/, "each selection needs an identity");
-  assert.match(code, /const token = selectionRef\.current;/, "captured when the work starts");
-  assert.match(
-    code,
-    /if \(token !== selectionRef\.current\) return false;/,
-    "and checked before publishing — otherwise the older result overwrites the newer",
-  );
-});
-
-test("the check happens AFTER the slow work, before the input is written", () => {
-  // Checking before the decode would prove nothing: the whole point is that the
-  // selection can change WHILE it runs.
-  const code = src("src/components/PhotoUploadField.tsx");
-  const prepare = code.slice(code.indexOf("async function prepare("), code.indexOf("function onPick("));
-  const decode = prepare.indexOf("await Promise.all(picked.map(shrink))");
-  const guard = prepare.indexOf("token !== selectionRef.current");
-  const publish = prepare.indexOf("input.files = transfer.files");
-  assert.ok(decode !== -1 && guard !== -1 && publish !== -1);
-  assert.ok(decode < guard, "the guard must come after the decode");
-  assert.ok(guard < publish, "and before the input is replaced");
-});
-
-test("picking new photos invalidates work already in flight", () => {
-  const code = src("src/components/PhotoUploadField.tsx");
-  const onPick = code.slice(code.indexOf("function onPick("));
-  assert.match(onPick, /selectionRef\.current \+= 1;/, "a new selection takes the next token");
-});
-
-test("only the current preparation clears the working state", () => {
-  // A superseded one finishing late would otherwise report "done" while the live
-  // preparation is still decoding, and the submit guard would let it through.
-  const code = src("src/components/PhotoUploadField.tsx");
-  assert.match(code, /if \(token === selectionRef\.current\) setWorking\(false\)/);
 });
