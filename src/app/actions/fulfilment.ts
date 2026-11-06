@@ -130,8 +130,8 @@ export async function markInvoiced(quoteId: string, formData: FormData) {
 }
 
 export async function markDepositPaid(quoteId: string, formData: FormData) {
-  const moneyFmt = await getRegionalSettings();
   return asFulfilmentAction(async () => {
+    const moneyFmt = await getRegionalSettings();
     await requireModuleEnabled("automotive");
     const user = await requireQuoteAccess(quoteId, "deliveries.manage");
     const tenantId = await actingTenantId();
@@ -216,8 +216,8 @@ export async function markDepositPaid(quoteId: string, formData: FormData) {
 
 /** Correct the recorded deposit amount — a typo must not be permanent. Audited old → new. */
 export async function correctDepositAmount(quoteId: string, formData: FormData) {
-  const moneyFmt = await getRegionalSettings();
   return asFulfilmentAction(async () => {
+    const moneyFmt = await getRegionalSettings();
     await requireModuleEnabled("automotive");
     const user = await requireQuoteAccess(quoteId, "deliveries.manage");
     const tenantId = await actingTenantId();
