@@ -1,88 +1,131 @@
-# Denago CRM
+# DenagoCRM
 
-A custom CRM and EV service management system for Denago Cape Town. Built with Next.js 16, TypeScript, Prisma, and Tailwind CSS. Dark-themed, branded with the Denago Cape Town EV identity.
+A multi-workspace CRM and EV service platform. It runs Denago Cape Town's sales, workshop and customer operations at **crm.denagocpt.co.za**. Each workspace (tenant) has its own staff, customers, branding and web address, and cannot see any other workspace's data.
 
-## Features
+Built with Next.js 16 (App Router, server actions), React 19, TypeScript, Prisma 6 on PostgreSQL (Neon), Tailwind CSS 4, and Vercel (hosting, cron and Blob storage).
 
-- **Leads pipeline** — drag-and-drop kanban board with configurable stages, won/lost tracking, lead → contact conversion, and value tracking in ZAR.
-- **Products catalog** — the real Denago Cape Town range (City Cart, Scout 2/4, Nomad, Nomad XL, Rover XL, Rover XL 6, Rover XXL) with per-model colours and prices. The lead form auto-fills value and colour options from the selected model; website/Facebook intake matches models automatically.
-- **Contacts** — card or list view with tags, avatars, and full profiles: communication history, documents, vehicles, activities, and linked leads.
-- **Activities (Odoo-style chatter)** — schedule calls, emails, meetings, WhatsApps, and to-dos against any lead or contact with due dates and assignees. Overdue/today grouping on the Activities page and a "My activities" list on the dashboard; completing an activity can log an outcome note to the timeline.
-- **Email flows** — configure any SMTP mailbox in Settings, build reusable email templates with `{{placeholders}}`, and send from any lead/contact with one click. Every send is logged to the communications timeline.
-- **Journeys** — the one automation engine: *when* a lead is created / enters a stage / is won or lost / has a quote signed or declined / is delivered / earns a referral / goes idle for N days, or a contact hits a purchase anniversary or lapses → *then* email, SMS, push, schedule an activity, move the lead, assign an owner or tag the contact, with waits and branches in between. Versioned, with full run history. Events are emitted by the write paths themselves and drained by `/api/cron/journeys`. (The separate `AutomationRule` builder at `/automations` and the hardcoded lifecycle emails were retired into this — `/automations` now redirects to `/journeys`.)
-- **Communications** — log calls, emails, WhatsApp chats, meetings, and notes against any contact or lead, attributed to the team member who logged them.
-- **Documents** — upload files (ID copies, invoices, warranty forms…) to contacts, vehicles, or job cards. Stored in `storage/uploads/`, downloads require login.
-- **EV service module** —
-  - Vehicle registry per customer (model, VIN/serial, colour, purchase date, warranty).
-  - Mileage log and service history.
-  - Next-service-due engine: due by date and/or km, from explicit next-due values or the vehicle's service intervals. Dashboard shows overdue / due-soon vehicles.
-  - Workshop job cards with parts & labour line items and cost totals. Completing a job card automatically writes a service record and computes the next due service.
-- **Lead intake** —
-  - **Facebook/Instagram Lead Ads**: webhook at `/api/webhooks/meta` (verification + leadgen events, fetches lead details from the Graph API, dedupes retries, captures a stub lead if the token is missing so nothing is lost).
-  - **Website forms**: `POST /api/intake` with an `X-Api-Key` header. Accepts `name, email, phone, message, model, color, source`; matches `model` to the product catalog automatically.
-- **Team auth** — email/password logins, shared access, actions attributed per user. Manage team members, pipeline stages, and integration keys under Settings.
+> Working in this repo with an AI agent? Read [AGENTS.md](AGENTS.md) first. This Next.js version differs from older docs, and fixes for an open PR target `main`.
 
-## Getting started
+---
 
-```bash
-npm install
-npx prisma migrate dev     # creates the SQLite database and runs the seed
-npm run dev                # http://localhost:3000
-```
+## What it does
 
-### Initial owner account
+Features are grouped into modules that each workspace can switch on or off. The registry is [src/lib/modules/registry.ts](src/lib/modules/registry.ts).
 
-The seed creates the initial owner **only** from environment variables — there is no
-default password in the repository:
-
-- `INITIAL_ADMIN_EMAIL` — owner login email
-- `INITIAL_ADMIN_PASSWORD` — owner password (**≥ 14 characters**)
-- `INITIAL_ADMIN_NAME` — display name (optional)
-
-In **production** the seed refuses to run without these. On **preview** deployments it
-never creates a privileged owner. In **local dev**, if you set `INITIAL_ADMIN_EMAIL`
-without a password, a random one-time password is printed to the console (existing
-users' passwords are never overwritten).
-
-## Configuration
-
-Environment variables live in `.env`:
-
-| Variable | Purpose |
+| Module | What's in it |
 | --- | --- |
-| `DATABASE_URL` | `file:./dev.db` for local SQLite. Point at PostgreSQL in production (also change `provider` in `prisma/schema.prisma` to `postgresql` and re-run migrations). |
-| `SESSION_SECRET` | Secret for signing login session tokens. Set a long random value in production. |
+| **CRM core** (always on) | Home and Today; leads pipeline (kanban with stage rules and a "needs attention" list); contacts; activities and calendar; quotes; documents; reports, dashboards, targets and forecast; customer health; birthdays; data quality |
+| **Social inbox** | Shared WhatsApp / Messenger / Instagram inbox, the Messages phone app, an Outlook-style email composer, and IMAP inbound email on the timeline |
+| **Help desk** | Customer cases and ticketing |
+| **Marketing** | Campaigns, audiences, templates and email designer, surveys and insights, referrals, and **Journeys**, the single automation engine (triggers, waits, branches, sends) |
+| **Automation & AI** | **DAX**, the CRM assistant ("Ask the CRM" on the web, also on WhatsApp, with voice, quotes and proactive briefs); the chatbot and its knowledge base; the visual flow builder; competitor watch |
+| **Automotive / Workshop** | Vehicles and fleets, test drives with indemnity signing, job cards, parts, the workshop calendar, service-due, warranty claims, battery health, and deliveries |
+| **Stock & inventory** | Stock units, purchase orders and goods receipts |
+| **Customer portal** | Customer self-service: documents, profile and support |
 
-Integration keys (Meta verify token, Page access token, intake API key) are stored in the database and managed on the **Settings** page.
+These are available to every workspace:
+- **In-house e-signing** (signatures, signing workflows, sealed PDFs with optional trusted timestamps);
+- **Document Studio** for quote, statement and email layouts;
+- **Audit log** and **Repairs** (governance).
 
-## Connecting Facebook Lead Ads
+The **platform console** (`/platform`) handles workspaces, domains, plans, usage and billing.
 
-1. Deploy the app somewhere with a public HTTPS URL (Meta requires HTTPS).
-2. Create an app at [developers.facebook.com](https://developers.facebook.com), add the **Webhooks** product, and subscribe to the **Page** object → `leadgen` field with:
-   - Callback URL: `https://<your-domain>/api/webhooks/meta`
-   - Verify token: from the Settings page.
-3. Generate a Page Access Token with the `leads_retrieval` and `pages_manage_metadata` permissions and paste it into Settings.
-4. Use a Lead Ads form with fields named so the CRM can map them: full name, email, phone number, and optionally questions containing "model" and "colour" in their names.
+---
 
-## Website form intake
+## How it fits together
+
+- **Multi-tenancy:**
+  - It is a shared database with row-level security. Every tenant-owned row carries `tenantId`.
+  - `TENANT_ENFORCEMENT=enforce` (live since 2026-08-12) makes the app's guarded Prisma client fail closed without a workspace scope.
+  - In production the app connects as the `crm_app` role (`APP_DATABASE_URL`), which cannot bypass RLS. Any table without a policy is unreadable.
+  - Background work (crons, webhooks) runs in an explicit system or tenant scope.
+  - Background: [docs/RLS-ROLE-CUTOVER.md](docs/RLS-ROLE-CUTOVER.md) and [MULTITENANCY-SCOPING.md](MULTITENANCY-SCOPING.md).
+- **Access control:** database roles and permissions, re-checked on the server for every page, action and file route. See [docs/platform-rbac.md](docs/platform-rbac.md).
+- **Sessions:**
+  - JWT cookie, 60-minute idle timeout and a 72-hour absolute limit; opting in to the installed app gives a week.
+  - Staff can use TOTP 2FA and passkeys.
+- **Settings and credentials:** stored per workspace in the database. Secrets (SMTP, Meta, AI keys and so on) are encrypted with `SETTINGS_ENCRYPTION_KEY` and managed under **Settings**, not in env vars.
+- **Files:** Vercel Blob. Private documents go to the private store when `BLOB_PRIVATE=true`. Downloads always go through signed-in routes.
+- **Money** is stored as integer cents (ZAR).
+- **Scheduled jobs** are listed in [vercel.json](vercel.json). They call `/api/cron/*` with `Authorization: Bearer $CRON_SECRET`:
+
+  | Schedule | Jobs |
+  | --- | --- |
+  | Every 30 min | signing jobs, bot outbox, scheduled emails, journeys, automations, statistics, research, assistant |
+  | Daily | backup 02:00 UTC, photo orphans 03:00, competitor watch 05:00 |
+  | Hourly | private-storage at :20 |
+  | Monthly | security check on the 1st |
+
+---
+
+## Local development
+
+Requires **Node 22+** and **PostgreSQL 16** (what CI uses).
+
+> **Use a local, disposable Postgres.**
+> - Never point a local checkout at production.
+> - Don't point it at a hosted database that holds live integration credentials either. Code running against it can send real email, WhatsApp and SMS.
 
 ```bash
-curl -X POST https://<your-domain>/api/intake \
-  -H "Content-Type: application/json" \
-  -H "X-Api-Key: <key from Settings>" \
-  -d '{"name":"Jane Doe","email":"jane@example.com","phone":"0821234567","model":"Denago City Model 1","color":"Blue","message":"Interested in a test ride"}'
+cp .env.example .env                 # then fill in DATABASE_URL and the secrets marked required
+npm ci
+npx prisma generate
+node --env-file=.env scripts/apply-migrations.mjs   # applies migrations in numeric order (see below)
+npx prisma db seed                   # creates the first owner from INITIAL_ADMIN_* (see below)
+npm run dev -- -p 4000               # http://localhost:4000
 ```
 
-## Email + automations setup
+- **Why not `prisma migrate dev`?** Migration folders use numeric prefixes that are not zero-padded. Prisma's own runner applies them in text order, which is wrong on a fresh database. `scripts/apply-migrations.mjs` applies them in true numeric order and writes Prisma's ledger, so `prisma migrate status` still agrees. The same runner is used in CI, previews and production.
+- **First owner.** The seed creates the owner only from `INITIAL_ADMIN_EMAIL` and `INITIAL_ADMIN_PASSWORD` (at least 14 characters), plus `INITIAL_ADMIN_NAME` if set. There is no default password.
+  - **In local dev:** with an email but no password, a one-time password is printed.
+  - **Production:** the seed refuses to run without both.
+  - **Preview deployments:** it never creates a privileged owner.
+- **Integrations** (SMTP, IMAP, Meta, AI providers, ElevenLabs and others) are set up in the app under **Settings** once you're signed in.
 
-1. **Settings → Email (SMTP)**: enter your mailbox details (e.g. `sales@denagocpt.co.za`), then click "Send test email to me".
-2. **Settings → Email templates**: a starter "New enquiry welcome" template is seeded; placeholders `{{first_name}}`, `{{model}}`, `{{color}}`, `{{value}}`, `{{user_name}}` fill from the lead.
-3. **Settings → Automations**: two starter rules are seeded (call new leads within a day; nudge quiet leads after 4 days). Idle rules run when the dashboard loads. On Vercel, `vercel.json` crons invoke the routes automatically. To trigger from an external scheduler, send `Authorization: Bearer <CRON_SECRET>` (cron routes no longer accept a `?key=` query-string secret or the public intake key).
+### Tests and checks
 
-## Tech notes
+```bash
+npm run test:unit    # node:test suite in tests/ (no database needed)
+npm run typecheck
+npm run lint
+```
 
-- **Stack**: Next.js 16 (App Router, server actions), React 19, Prisma 6, SQLite (dev) / PostgreSQL (prod), Tailwind CSS 4, dnd-kit for the kanban board.
-- **Money** is stored as integer cents (ZAR).
-- **Auth**: JWT session cookie (jose, HS256, 30 days), bcrypt password hashes, route protection in `src/proxy.ts`.
-- **Uploads** are stored on disk under `storage/uploads/` with random file names; the original name and metadata live in the database. Back this folder up along with the database.
-- Run `npm run build && npm run start` for production.
+- The `npm run test:*` integration scripts (signing, tenant isolation, DAX and so on) need a **throwaway** database. Most refuse to run unless its name ends in `_test`.
+- CI runs on every PR (see [.github/workflows/](.github/workflows/)):
+  - a **fast** job: Prisma schema validation, type check, lint and unit tests;
+  - an **integration** job on Postgres 16: migrations from empty, `prisma migrate status`, migration replay-safety, the composite-FK catalogue check, then the seeded integration scripts;
+  - visual consistency and a secret scan.
+- CI does not run `next build`. Vercel's build is the build check, and it reports as a commit status rather than a check.
+
+---
+
+## Deployment
+
+- **Production deploys from `main`** on Vercel (region `fra1`). The build command is `prisma generate → node scripts/apply-migrations.mjs → next build`.
+- **Changes go through a PR to `main`.** A fix found in review targets `main`, not the feature branch (see [AGENTS.md](AGENTS.md)).
+- **After a merge, check the change is in `main`** with `git merge-base --is-ancestor <sha> origin/main`.
+- **Migrations:**
+  - They must be **additive and re-runnable**: `CREATE … IF NOT EXISTS`, and RLS policies dropped before being re-created. Tests enforce this.
+  - After a migration ships, confirm the new table, column or index exists on production. A ledger row alone is not proof.
+- **Preview deployments must never use the production database.** The build runs migrations, so a preview would migrate prod. See [docs/preview-databases.md](docs/preview-databases.md).
+- **Backups:** Neon point-in-time recovery, plus a nightly encrypted portable backup to Blob. See [docs/backup-and-recovery.md](docs/backup-and-recovery.md).
+- **New workspace:** [docs/ONBOARDING-A-TENANT.md](docs/ONBOARDING-A-TENANT.md).
+
+---
+
+## Inbound endpoints
+
+| Endpoint | Purpose |
+| --- | --- |
+| `POST /api/intake` | Website enquiry forms. Header: `X-Api-Key: <workspace intake key from Settings>`. Fields: `name, email, phone, message, model, color, source`; `model` is matched to the catalogue. |
+| `/api/webhooks/meta` | Facebook/Instagram Lead Ads and Messenger/Instagram messages. Verify token and Page token are set in Settings. |
+| `/api/webhooks/whatsapp` | WhatsApp Cloud API messages and statuses (the inbox, chatbot and DAX). |
+| `/api/webhooks/telegram`, `/api/webhooks/x` | Telegram and X channels. |
+
+Every inbound message is mapped to a workspace through its channel identity; nothing is accepted without one.
+
+---
+
+## Docs
+
+[docs/README.md](docs/README.md) indexes every document in the repo and labels each as a **current reference** or a **historical record** (designs, audits and incidents, kept for their reasoning).

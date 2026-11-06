@@ -1,3 +1,5 @@
+> **Historical record (2026-07-26).** This collision was resolved when the marketing stack merged. Kept for the reasoning.
+
 # Marketing stack (#202–#216) vs `main` — campaign-code collision & resolution
 
 **Date:** 2026-07-26

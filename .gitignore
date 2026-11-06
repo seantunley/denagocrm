@@ -54,6 +54,8 @@ prisma/dev.db-journal
 
 .vercel
 .env*
+# The documented template has no values and must be committed.
+!.env.example
 data-export.json
 backups/
 .poll-fb2.mjs

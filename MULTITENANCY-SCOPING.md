@@ -1,3 +1,10 @@
+> **Historical scoping record (July 2026). The "PAUSED" status below is stale.** Multi-tenancy was completed:
+> - tenant enforcement has been live since 2026-08-12;
+> - RLS has been load-bearing since 2026-09-01;
+> - per-workspace branding and custom domains are live.
+>
+> The README summarises the current architecture.
+
 # DenagoCRM — Multi-Tenancy Scoping (adapted to this codebase)
 
 Status: **foundation building — see the "Status — PAUSED" section at the bottom for the authoritative current state.** Derived from the pasted SaaS roadmap, adjusted for this codebase (live prod, Prisma dual-client, mature RBAC) and the decisions taken 2026-07-21: **isolation-first substrate**, and **CI is the gate** (Actions billing restored; `test:rbac`/`test:integrity` now run green).
