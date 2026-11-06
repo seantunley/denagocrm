@@ -236,7 +236,11 @@ export default async function LeadsPage({
       const requests = await prisma.signatureRequest.findMany({
         where: { quoteId: { in: quoteIds }, deletedAt: null, status: { in: ["sent", "viewed", "in_progress"] } },
         orderBy: { updatedAt: "desc" },
-        include: { recipients: { orderBy: { order: "asc" } } },
+        // Only what the card label needs: the frozen document snapshot is hundreds of KB per request.
+        select: {
+          quoteId: true,
+          recipients: { orderBy: { order: "asc" }, select: { role: true, status: true, name: true } },
+        },
       });
       for (const request of requests) {
         const leadId = request.quoteId ? quoteToLead.get(request.quoteId) : null;

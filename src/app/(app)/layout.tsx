@@ -59,7 +59,21 @@ export default async function AppLayout({
   }
 
   const activeTenantId = await getActiveTenantId();
-  const [inboxWaiting, casesWaiting, permissions, enabledModules, brand, unreadNotices, birthdaysToday] = await Promise.all([
+  // One parallel batch: every read below is independent, and this layout wraps every signed-in page.
+  const [
+    inboxWaiting,
+    casesWaiting,
+    permissions,
+    enabledModules,
+    brand,
+    unreadNotices,
+    birthdaysToday,
+    ,
+    weatherSetting,
+    activityTypesSetting,
+    isTenantOwnerFlag,
+    recordLabels,
+  ] = await Promise.all([
     awaitingReplyCount(user).catch(() => 0),
     casesAwaitingCount(user).catch(() => 0),
     getUserPermissionList(user),
@@ -74,32 +88,31 @@ export default async function AppLayout({
     activeTenantId ? unreadNotificationCount(activeTenantId, user.id).catch(() => 0) : 0,
     // The cake: their customers' birthdays today. Never breaks a page.
     todaysBirthdayCount(user).catch(() => 0),
+    // Single-point route block: a page belonging to a disabled module is not
+    // reachable by direct URL, not just hidden from the nav. Shared with the
+    // /messages PWA and (print) layouts via the routeGuard helper. Its throw
+    // rejects this batch, so nothing renders for a blocked page.
+    assertPathModuleEnabled(),
+    // The tenant's clock/weather cities and activity types. Resolved HERE, in the
+    // server layout, for the same reason `brand` is: getSetting reads the tenant
+    // from the request scope, which a client component cannot reach.
+    getSetting(WEATHER_CITIES_KEY),
+    getSetting(ACTIVITY_TYPES_KEY),
+    // The workspace's own owner (Tenant.ownerUserId) or the platform owner —
+    // what the nav and menus mean by "owner". Never throws: false on failure.
+    isTenantOwner().catch(() => false),
+    getRecordLabels(),
   ]);
 
-  // Single-point route block: a page belonging to a disabled module is not
-  // reachable by direct URL, not just hidden from the nav. Shared with the
-  // /messages PWA and (print) layouts via the routeGuard helper.
-  await assertPathModuleEnabled();
+  // Falls back to the default when unset or unreadable.
+  const weatherCities = parseWeatherCities(weatherSetting);
 
-  // The tenant's clock/weather cities. Resolved HERE, in the server layout,
-
-  // for the same reason `brand` is: getSetting reads the tenant from the
-
-  // request scope, which a client component cannot reach. Falls back to the
-
-  // default when unset or unreadable - this renders on every signed-in page
-
-  // and must not be able to break one.
-
-  const weatherCities = parseWeatherCities(await getSetting(WEATHER_CITIES_KEY));
-
-  // The workspace's activity types, resolved HERE for the same reason: the type
-  // pickers are client components scattered across the app, and none of them can
-  // reach the tenant. `resolveActivityTypes` is total — an unreadable setting
+  // The pickers are client components scattered across the app, and none of them
+  // can reach the tenant. `resolveActivityTypes` is total — an unreadable setting
   // gives the built-in seven rather than an empty picker.
   // Module-only built-ins (a test drive needs the automotive module) are hidden
   // where the module is off. If the module lookup failed, nothing is hidden.
-  const storedTypes = resolveActivityTypes(await getSetting(ACTIVITY_TYPES_KEY));
+  const storedTypes = resolveActivityTypes(activityTypesSetting);
   const activityTypes = enabledModules ? activityTypesForModules(storedTypes, enabledModules) : storedTypes;
 
 
@@ -150,9 +163,7 @@ export default async function AppLayout({
           id: user.id,
           name: user.name,
           role: user.role,
-          // The workspace's own owner (Tenant.ownerUserId) or the platform owner —
-          // what the nav and menus mean by "owner". Never throws: false on failure.
-          isTenantOwner: await isTenantOwner().catch(() => false),
+          isTenantOwner: isTenantOwnerFlag,
           permissions,
           avatarVersion: user.avatarRef ? user.avatarUpdatedAt?.toISOString() ?? "current" : null,
         }}
@@ -164,7 +175,7 @@ export default async function AppLayout({
         brand={{ logoUrl: brandLogoUrl(brand), displayName: brand.displayName }}
         weatherCities={weatherCities}
         activityTypes={activityTypes}
-        recordLabels={await getRecordLabels()}
+        recordLabels={recordLabels}
         tenantId={activeTenantId ?? ""}
       >
         {children}

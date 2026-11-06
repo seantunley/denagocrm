@@ -36,7 +36,9 @@ test("custom names reach the menu and the job number", () => {
 
 test("the shell and the main pages read the workspace's names", () => {
   const read = (path: string) => readFileSync(path, "utf8");
-  assert.match(read("src/app/(app)/layout.tsx"), /recordLabels=\{await getRecordLabels\(\)\}/);
+  const layout = read("src/app/(app)/layout.tsx");
+  assert.match(layout, /\n\s*getRecordLabels\(\),\s/);
+  assert.match(layout, /recordLabels=\{recordLabels\}/);
   assert.match(read("src/components/Nav.tsx"), /navLabelOverrides\(useRecordLabels\(\)\)/);
   assert.match(read("src/components/nav-config.ts"), /label: labels\["\/leads"\] \?\? "Leads"/);
   assert.match(read("src/app/(app)/leads/page.tsx"), /title=\{labels\.lead\.many\}/);

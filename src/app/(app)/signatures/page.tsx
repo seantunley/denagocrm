@@ -176,7 +176,8 @@ export default async function SignaturesPage({
     orderBy: { updatedAt: "desc" },
     skip: (currentPage - 1) * PAGE_SIZE,
     take: PAGE_SIZE,
-    include: { recipients: true },
+    // Only what the row draws: the frozen document snapshot is hundreds of KB per request.
+    select: { id: true, title: true, status: true, ordering: true, sentAt: true, completedAt: true, updatedAt: true, recipients: true },
   });
   // Gap audit #32: requests that look fine and aren't — everyone signed but the
   // record changed so it can't complete, or completed but a signed copy never
