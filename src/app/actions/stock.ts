@@ -20,7 +20,6 @@ import { formatZAR } from "@/lib/format";
 import { parseMoneyField } from "@/lib/moneyInput";
 import { getRegionalSettings } from "@/lib/settings";
 import { deliverQuote } from "@/lib/quoteDelivery";
-import { getRegionalSettings } from "@/lib/settings";
 
 /**
  * A money field in the workspace's currency (moneyInput.ts): blank is 0, anything unclear is

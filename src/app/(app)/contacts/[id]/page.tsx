@@ -51,6 +51,7 @@ import { isModuleEnabled } from "@/lib/modules/enabled";
 import { EntityDetailShell } from "@/components/entity-detail-shell";
 import { StatusPill } from "@/components/visual-system";
 import { getRegionalSettings } from "@/lib/settings";
+import { getCurrencyOptions } from "@/lib/currency";
 
 const RESEARCH_SUBJECT = "🔎 AI research";
 
@@ -88,6 +89,14 @@ export default async function ContactDetailPage({
     // The statement route's own gate: this customer (already proven) and quotes at all.
     hasAnyPermission(user, "quotes.view_all", "quotes.view_owned"),
   ]);
+  // Multicurrency module: the currencies this customer has quotes in, base first — a statement each.
+  const currencyOptions = await getCurrencyOptions();
+  const statementCurrencies = currencyOptions.on
+    ? [currencyOptions.base, ...[...new Set(
+        (await prisma.quote.groupBy({ by: ["currency"], where: { contactId: id, deletedAt: null, currency: { not: null } } }))
+          .map((row) => row.currency as string),
+      )].filter((code) => code !== currencyOptions.base).sort()]
+    : [currencyOptions.base];
   // THE QUOTES THIS VIEWER MAY OPEN — not every quote on the customer. Opening a customer is not permission to
   // read their quotations: the sidebar's latest quote (number, status, value), the Documents tab and the email
   // composer's quote buttons all read `contact.quotes`, so it is narrowed here, once (review of #891).
@@ -344,8 +353,14 @@ export default async function ContactDetailPage({
             Edit customer
           </Link>}
           {canViewStatement && <Link href={`/contacts/${contact.id}/statement`} target="_blank" rel="noreferrer" className="btn-secondary">
-            Account statement
+            Account statement{statementCurrencies.length > 1 ? ` (${statementCurrencies[0]})` : ""}
           </Link>}
+          {/* Multicurrency module: a statement per currency this customer has quotes in. */}
+          {canViewStatement && statementCurrencies.slice(1).map((code) => (
+            <Link key={code} href={`/contacts/${contact.id}/statement?currency=${code}`} target="_blank" rel="noreferrer" className="btn-secondary">
+              Statement ({code})
+            </Link>
+          ))}
           {canDeleteContact && <ConfirmDelete
             triggerClass="btn-secondary text-red-400"
             action={deleteContact.bind(null, contact.id)}

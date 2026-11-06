@@ -182,6 +182,8 @@ export const CONDITION_FIELDS = [
   "lead.source",
   "lead.status",
   "lead.valueCents",
+  // Multicurrency: lets a journey branch on the currency the value is in.
+  "lead.currency",
   "lead.quantity",
   "lead.stageId",
   "lead.productId",

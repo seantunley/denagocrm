@@ -4,6 +4,7 @@ import type { Metadata } from "next";
 import { brandForTenant, brandIcons, brandLogoUrl, brandStyle, DEFAULT_BRAND } from "@/lib/tenantBrand";
 import { getRegionalSettings, getSetting } from "@/lib/settings";
 import { DEFAULT_REGIONAL } from "@/lib/format";
+import { getCurrencyOptions } from "@/lib/currency";
 import { WEATHER_CITIES_KEY, parseWeatherCities } from "@/lib/weatherCities";
 import { ACTIVITY_TYPES_KEY, activityTypesForModules, resolveActivityTypes } from "@/lib/activityTypes";
 import { awaitingReplyCount } from "@/lib/inboxCount";
@@ -75,6 +76,7 @@ export default async function AppLayout({
     isTenantOwnerFlag,
     recordLabels,
     regional,
+    currencyOptions,
   ] = await Promise.all([
     awaitingReplyCount(user).catch(() => 0),
     casesAwaitingCount(user).catch(() => 0),
@@ -106,6 +108,8 @@ export default async function AppLayout({
     getRecordLabels(),
     // The workspace's currency and locale, for money shown in the browser (MoneyFormatProvider).
     getRegionalSettings().catch(() => DEFAULT_REGIONAL),
+    // The currencies a lead or quote may be in (multicurrency module; base only when it's off).
+    getCurrencyOptions().catch(() => null),
   ]);
 
   // Falls back to the default when unset or unreadable.
@@ -181,6 +185,7 @@ export default async function AppLayout({
         activityTypes={activityTypes}
         recordLabels={recordLabels}
         money={{ currency: regional.currency, locale: regional.locale }}
+        currencies={currencyOptions?.enabled}
         tenantId={activeTenantId ?? ""}
       >
         {children}
