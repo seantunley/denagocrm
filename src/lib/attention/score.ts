@@ -28,12 +28,14 @@ export type AttentionSignalKind =
   | "overdue_task"
   | "quote_expiring"
   | "no_next_step"
-  | "stage_age";
+  | "stage_age"
+  | "followup_unanswered";
 
 export type AttentionCategory = "customer" | "commitment" | "workflow";
 
 export const ATTENTION_CATEGORY: Record<AttentionSignalKind, AttentionCategory> = {
   unanswered_inbound: "customer",
+  followup_unanswered: "customer",
   overdue_task: "commitment",
   quote_expiring: "commitment",
   no_next_step: "workflow",
@@ -60,7 +62,62 @@ export const ATTENTION_WEIGHTS: Record<AttentionSignalKind, number> = {
   quote_expiring: 25, // a deadline with money on it
   no_next_step: 20, // nothing will happen unless someone acts
   stage_age: 20,
+  followup_unanswered: 20, // we wrote and heard nothing back: time to try another way
 };
+
+/**
+ * FOLLOW-UP WITH NO REPLY (Sean, 2026-11-06: "did the follow-up get a reply?"). Every message we have sent since
+ * the customer last answered — or since the last call or meeting, or the deal changing stage — is unanswered, and
+ * the FIRST of them is at least FOLLOWUP_REPLY_DAYS old: the same 3 days "Customer replied within 3 days" judges
+ * DAX's follow-ups by (assistantOutcomeRules). Counted from the first, so another message every two days does not
+ * reset it (review of #1014).
+ *
+ * A logged CALL or MEETING is contact, not a message waiting on an answer: it ends a run of unanswered messages,
+ * and never starts one. So is an entry with no direction (logged by hand). `movedOn`: a stage change, a call or
+ * meeting logged as an activity. Looked for over the last FOLLOWUP_LOOKBACK_DAYS only: longer silences are "no
+ * contact for N days" (the Today queue) and the stage's own age.
+ *
+ * `timeline`: the deal's customer-facing entries, NEWEST FIRST. Null, or the unanswered run: its first message, how
+ * many, and the channel of the latest.
+ */
+export const FOLLOWUP_REPLY_DAYS = 3;
+export const FOLLOWUP_LOOKBACK_DAYS = 30;
+/**
+ * Talking to them: a call or a meeting — as a timeline entry, and as a done activity (signals.ts). A WhatsApp or
+ * email activity marked done is another message from us, not an answer, so it never clears the warning (re-review
+ * of #1014).
+ */
+export const LIVE_CONTACT_TYPES = ["call", "meeting"] as const;
+const LIVE_CONTACT: ReadonlySet<string> = new Set(LIVE_CONTACT_TYPES);
+export type FollowUpEntry = { id: string; type: string; direction: string | null; occurredAt: Date };
+export function unansweredFollowUp(
+  timeline: readonly FollowUpEntry[],
+  movedOn: readonly (Date | null | undefined)[],
+  now: Date,
+): { first: FollowUpEntry; count: number; latest: FollowUpEntry } | null {
+  const after = Math.max(0, ...movedOn.map((at) => at?.getTime() ?? 0));
+  const run: FollowUpEntry[] = [];
+  for (const entry of timeline) {
+    if (entry.occurredAt.getTime() <= after) break;
+    if (entry.direction !== "outbound" || LIVE_CONTACT.has(entry.type)) break;
+    run.push(entry);
+  }
+  if (run.length === 0) return null;
+  const first = run[run.length - 1];
+  const age = now.getTime() - first.occurredAt.getTime();
+  if (age < FOLLOWUP_REPLY_DAYS * 86_400_000 || age > FOLLOWUP_LOOKBACK_DAYS * 86_400_000) return null;
+  return { first, count: run.length, latest: run[0] };
+}
+
+/**
+ * The deal's customer, for reading their messages filed on NO deal — only when the viewer may open that customer
+ * (the deal page's and the stuck lookup's rule). "all": they see every customer; "none": no customer access at all.
+ * Otherwise null, and only the deal's own rows are read (review of #1014).
+ */
+export function customerTheyMayOpen(contactId: string | null, mayOpen: ReadonlySet<string> | "all" | "none"): string | null {
+  if (!contactId || mayOpen === "none") return null;
+  return mayOpen === "all" || mayOpen.has(contactId) ? contactId : null;
+}
 
 export type AttentionSignal = {
   kind: AttentionSignalKind;

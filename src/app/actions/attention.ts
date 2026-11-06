@@ -10,7 +10,7 @@ import type { AttentionSignalKind } from "@/lib/attention/score";
 import { parseAttentionDispositions } from "@/lib/attention/dispositions";
 
 const SIGNAL_KINDS = new Set<AttentionSignalKind>([
-  "unanswered_inbound", "overdue_task", "quote_expiring", "no_next_step", "stage_age",
+  "unanswered_inbound", "overdue_task", "quote_expiring", "no_next_step", "stage_age", "followup_unanswered",
 ]);
 
 function validSignal(signalKey: string, kind: AttentionSignalKind): boolean {

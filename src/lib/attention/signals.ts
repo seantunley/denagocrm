@@ -1,7 +1,11 @@
 import "server-only";
 
 import { prisma } from "../db";
-import { ATTENTION_CATEGORY, ATTENTION_WEIGHTS, attentionSignalKey, type AttentionSignal } from "./score";
+import { contactActivityWhere, contactCommunicationWhere } from "../customerContact";
+import {
+  ATTENTION_CATEGORY, ATTENTION_WEIGHTS, FOLLOWUP_LOOKBACK_DAYS, LIVE_CONTACT_TYPES, attentionSignalKey, unansweredFollowUp,
+  type AttentionSignal,
+} from "./score";
 
 /**
  * The Attention Centre — the IMPURE half. Five queries, never five per lead.
@@ -92,9 +96,11 @@ export async function collectAttentionSignals(input: {
   stageByLead: Map<string, string>;
   /** When each lead entered its current stage. */
   stageEnteredByLead: Map<string, Date>;
+  /** Each lead's customer: their messages on no deal are on the deal's timeline too (dealTimelineWhere). */
+  contactByLead?: Map<string, string | null>;
 }): Promise<Map<string, AttentionSignal[]>> {
   const signals = new Map<string, AttentionSignal[]>();
-  const { leadIds, now, stages, stageByLead, stageEnteredByLead } = input;
+  const { leadIds, now, stages, stageByLead, stageEnteredByLead, contactByLead = new Map() } = input;
   if (leadIds.length === 0) return signals;
 
   const batches = chunk(leadIds, ID_CHUNK);
@@ -256,6 +262,51 @@ export async function collectAttentionSignals(input: {
         context: row.messages[0]?.body || row.subject || `Latest inbound ${row.channel} message`,
         actionHref: `/inbox?conversation=${row.id}`,
         actionLabel: "Reply now",
+      });
+    }
+  }
+
+  // ── followup_unanswered ───────────────────────────────────────────────────
+  // The messages we have sent on the deal's timeline (its own rows + its customer's on no deal, as dealTimelineWhere —
+  // the customer only when the viewer may open them: contactByLead) since the customer last answered, or since a
+  // call, meeting or stage move (unansweredFollowUp). Two queries per batch, joined here.
+  const lookback = new Date(now.getTime() - FOLLOWUP_LOOKBACK_DAYS * DAY_MS);
+  for (const batch of batches) {
+    const contacts = [...new Set(batch.map((id) => contactByLead.get(id)).filter((id): id is string => Boolean(id)))];
+    const timeline = { OR: [{ leadId: { in: batch } }, ...(contacts.length ? [{ contactId: { in: contacts }, leadId: null }] : [])] };
+    // ponytail: a month of messages for the batch, newest first, walked per deal; a window query if it grows.
+    const [messages, done] = await Promise.all([
+      prisma.communication.findMany({
+        where: { AND: [timeline, contactCommunicationWhere, { occurredAt: { gte: lookback, lte: now } }] },
+        orderBy: { occurredAt: "desc" },
+        select: { id: true, leadId: true, contactId: true, type: true, direction: true, occurredAt: true },
+      }),
+      prisma.activity.findMany({
+        // Only a call or meeting done clears it: a WhatsApp or email activity done is us writing again (LIVE_CONTACT_TYPES).
+        where: { AND: [timeline, contactActivityWhere, { type: { in: [...LIVE_CONTACT_TYPES] } }, { doneAt: { gte: lookback } }] },
+        select: { leadId: true, contactId: true, doneAt: true },
+      }),
+    ]);
+    for (const leadId of batch) {
+      const contactId = contactByLead.get(leadId) ?? null;
+      const onDeal = (row: { leadId: string | null; contactId: string | null }) =>
+        row.leadId === leadId || (row.leadId === null && contactId !== null && row.contactId === contactId);
+      const run = unansweredFollowUp(messages.filter(onDeal), [stageEnteredByLead.get(leadId), ...done.filter(onDeal).map((a) => a.doneAt)], now);
+      if (!run) continue;
+      const ago = agoHours(run.first.occurredAt, now);
+      add(signals, leadId, {
+        kind: "followup_unanswered",
+        // The run, by its first message: a new run after they answer is a new warning, not a snoozed one.
+        key: attentionSignalKey("followup_unanswered", run.first.id),
+        category: ATTENTION_CATEGORY.followup_unanswered,
+        weight: ATTENTION_WEIGHTS.followup_unanswered,
+        detail: run.count === 1
+          ? `No reply to our ${inboundChannelLabel(run.latest.type)} ${ago} ago`
+          : `No reply to our last ${run.count} messages — the first ${ago} ago`,
+        since: run.first.occurredAt.toISOString(),
+        context: "Our messages to the customer have had no answer, and no call or meeting is logged since. Try another way to reach them.",
+        actionHref: `/leads/${leadId}`,
+        actionLabel: "Try another way",
       });
     }
   }

@@ -7,6 +7,9 @@ import {
   ATTENTION_WEIGHTS,
   ATTENTION_CATEGORY,
   ATTENTION_CATEGORY_CAPS,
+  FOLLOWUP_LOOKBACK_DAYS,
+  FOLLOWUP_REPLY_DAYS,
+  LIVE_CONTACT_TYPES,
   MAX_ATTENTION_SCORE,
   MAX_SNOOZE_DAYS,
   MIN_ATTENTION_REASON,
@@ -18,6 +21,8 @@ import {
   snoozeDateError,
   needsAttention,
   scoreAttention,
+  customerTheyMayOpen,
+  unansweredFollowUp,
   type AttentionSignal,
   type AttentionSignalKind,
 } from "../src/lib/attention/score";
@@ -530,4 +535,76 @@ test("filters cannot make a populated queue claim nothing is waiting", () => {
   assert.match(page, /result\.leads\.length === 0/, "the strong empty state uses the unfiltered queue");
   assert.match(page, /No attention items match these filters/);
   assert.match(page, /Show everyone/);
+});
+
+/* ── a follow-up with no reply (Sean, 2026-11-06) ───────────────────────── */
+
+test("our messages since they last answered, the first 3+ days old with nothing since, are a follow-up with no reply", () => {
+  const now = new Date("2026-11-06T10:00:00Z");
+  const daysAgo = (d: number) => new Date(now.getTime() - d * 86_400_000);
+  const entry = (id: string, d: number, direction: string | null, type = "whatsapp") => ({ id, type, direction, occurredAt: daysAgo(d) });
+  const out = (id: string, d: number, type = "whatsapp") => entry(id, d, "outbound", type);
+  const first = (timeline: Parameters<typeof unansweredFollowUp>[0], moved: Parameters<typeof unansweredFollowUp>[1] = []) =>
+    unansweredFollowUp(timeline, moved, now)?.first.id ?? null;
+
+  assert.equal(first([out("m1", 4)]), "m1");
+  assert.equal(first([out("m1", 2.9)]), null, "under 3 days: they may still answer");
+  assert.equal(first([out("m1", FOLLOWUP_LOOKBACK_DAYS + 1)]), null, "a month on: 'no contact' and stage age say it");
+  assert.equal(first([entry("in", 5, "inbound"), out("m1", 6)]), null, "they wrote last: that's unanswered_inbound");
+  assert.equal(first([]), null);
+  assert.equal(first([out("m1", 5)], [daysAgo(1)]), null, "a call logged as done, or the deal moved, since: it moved on");
+  assert.equal(first([out("m1", 5)], [daysAgo(9), null, undefined]), "m1", "what happened BEFORE the message doesn't count");
+
+  // REPEATED follow-ups (review of #1014): another every two days never answered is still a run, timed from the first.
+  const repeated = unansweredFollowUp([out("m3", 1), out("m2", 3), out("m1", 5), entry("in", 8, "inbound")], [], now);
+  assert.equal(repeated?.first.id, "m1");
+  assert.equal(repeated?.count, 3);
+  assert.equal(repeated?.latest.id, "m3");
+  // …and the run starts after their last answer, not before it.
+  assert.equal(first([out("m2", 1), entry("in", 2, "inbound"), out("m1", 9)]), null, "they answered m1; m2 is only a day old");
+
+  // CALLS AND MEETINGS are contact, not messages waiting on an answer (review of #1014).
+  assert.equal(first([out("call", 4, "call")]), null, "a call we logged is not a message with no reply");
+  assert.equal(first([out("meet", 4, "meeting")]), null);
+  assert.equal(first([out("m2", 1), out("call", 2, "call"), out("m1", 6)]), null, "a call after m1 ends that run; m2 is a day old");
+  assert.equal(first([out("m2", 4), out("call", 5, "call"), out("m1", 9)]), "m2", "the run after the call");
+  assert.equal(first([entry("logged", 4, null)]), null, "an entry with no direction (logged by hand) is contact");
+
+  assert.equal(FOLLOWUP_REPLY_DAYS, 3, "the window DAX's follow-ups are judged by (assistantOutcomeRules: reply within 3 days)");
+  assert.equal(attentionBand(scoreAttention([signal("followup_unanswered")])), "act");
+});
+
+test("a deal's customer's own messages count only when the viewer may open that customer (review of #1014)", () => {
+  assert.equal(customerTheyMayOpen("c1", "all"), "c1");
+  assert.equal(customerTheyMayOpen("c1", new Set(["c1"])), "c1");
+  assert.equal(customerTheyMayOpen("c1", new Set(["c2"])), null, "can open the deal, not its customer: the deal's own rows only");
+  assert.equal(customerTheyMayOpen("c1", new Set()), null);
+  assert.equal(customerTheyMayOpen("c1", "none"), null, "no contacts permission at all");
+  assert.equal(customerTheyMayOpen(null, "all"), null);
+  // The loader decides it as canAccessContact does: any contacts permission, then view_all by the PERMISSION (the id
+  // helper lists every id even for view_all), else their own list.
+  const loader = shipped("src/lib/attention/load.ts");
+  assert.match(loader, /hasAnyPermission\(user, "contacts\.view_all", "contacts\.view_owned"\)\)\s*\?\s*"none"/);
+  assert.match(loader, /hasPermission\(user, "contacts\.view_all"\)\)\s*\?\s*"all"/);
+  assert.match(loader, /getAccessibleContactIds\(user\)/);
+  assert.match(loader, /contactByLead: new Map\(leads\.map\(\(lead\) => \[lead\.id, customerTheyMayOpen\(lead\.contactId, mayOpenCustomers\)\]\)\)/);
+});
+
+test("the follow-up signal reads the deal's whole timeline, through the guarded client, in batches", () => {
+  const signals = shipped("src/lib/attention/signals.ts");
+  const block = signals.slice(signals.indexOf("const lookback = "));
+  assert.ok(block.length > 0 && block.includes('kind: "followup_unanswered"'));
+  // The customer's messages on no deal count (a Messenger reply is filed on the customer only).
+  assert.match(block, /\{ contactId: \{ in: contacts \}, leadId: null \}/);
+  assert.match(block, /contactCommunicationWhere/, "an internal note is not a message to them");
+  assert.match(block, /contactActivityWhere/, "a call or meeting since clears it");
+  // …and ONLY a call or meeting: a WhatsApp or email activity marked done is us writing again (re-review of #1014).
+  assert.match(block, /prisma\.activity\.findMany\(\{\s*where: \{ AND: \[timeline, contactActivityWhere, \{ type: \{ in: \[\.\.\.LIVE_CONTACT_TYPES\] \} \}/);
+  assert.deepEqual([...LIVE_CONTACT_TYPES], ["call", "meeting"]);
+  assert.ok(!(LIVE_CONTACT_TYPES as readonly string[]).includes("whatsapp") && !(LIVE_CONTACT_TYPES as readonly string[]).includes("email"));
+  assert.doesNotMatch(block, /for \(const leadId of batch\) \{[\s\S]{0,400}await /, "no query per deal");
+  // Both callers hand it only a customer the person may open (the loader: test above).
+  assert.match(shipped("src/lib/assistantStuckLookup.ts"), /contactByLead: new Map\(\[\[lead\.id, contactId\]\]\)/);
+  // It can be snoozed or dismissed like the others.
+  assert.match(shipped("src/app/actions/attention.ts"), /"followup_unanswered",\n\]\);/);
 });

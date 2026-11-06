@@ -2,7 +2,7 @@ import "server-only";
 import { cache } from "react";
 
 import { prisma } from "../db";
-import { getAccessibleLeadIds, type PermissionUser } from "../permissions";
+import { getAccessibleContactIds, getAccessibleLeadIds, hasAnyPermission, hasPermission, type PermissionUser } from "../permissions";
 import { collectAttentionSignals, type AttentionStage } from "./signals";
 import {
   dispositionAt,
@@ -13,6 +13,7 @@ import {
 import {
   attentionBand,
   compareAttention,
+  customerTheyMayOpen,
   isDismissed,
   isSnoozed,
   needsAttention,
@@ -148,12 +149,21 @@ export const loadAttentionList = cache(async (user: PermissionUser, now: Date = 
     stageEnteredByLead.set(lead.id, lead.stageEnteredAt);
   }
 
+  // Which customers they may open, the way canAccessContact decides it: no contacts permission → none; view_all →
+  // all (decided by the permission, since the id helper lists every id even then); otherwise their own list.
+  const mayOpenCustomers: ReadonlySet<string> | "all" | "none" = !(await hasAnyPermission(user, "contacts.view_all", "contacts.view_owned"))
+    ? "none"
+    : (await hasPermission(user, "contacts.view_all"))
+      ? "all"
+      : await getAccessibleContactIds(user).then((ids) => (ids === null ? "all" : new Set(ids)));
   const signals = await collectAttentionSignals({
     leadIds: leads.map((lead) => lead.id),
     now,
     stages,
     stageByLead,
     stageEnteredByLead,
+    // A deal's customer's own messages count only when this person may open that customer (review of #1014).
+    contactByLead: new Map(leads.map((lead) => [lead.id, customerTheyMayOpen(lead.contactId, mayOpenCustomers)])),
   });
 
   const snoozed: SetAsideLead[] = [];
