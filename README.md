@@ -14,7 +14,7 @@ Features are grouped into modules that each workspace can switch on or off. The 
 
 | Module | What's in it |
 | --- | --- |
-| **CRM core** (always on) | Home and Today; leads pipeline (kanban with stage rules and a "needs attention" list); contacts; activities and calendar; quotes; documents; reports, dashboards, targets and forecast; customer health; birthdays; data quality |
+| **CRM core** (always on) | Home and Today; leads pipeline (kanban with stage rules and a "needs attention" list); contacts; activities and calendar; quotes and the deal workspace (one page per deal: quote, vehicle, stock, deposit and delivery readiness); documents; reports, dashboards, targets and forecast; customer health; birthdays; data quality |
 | **Social inbox** | Shared WhatsApp / Messenger / Instagram inbox, the Messages phone app, an Outlook-style email composer, and IMAP inbound email on the timeline |
 | **Help desk** | Customer cases and ticketing |
 | **Marketing** | Campaigns, audiences, templates and email designer, surveys and insights, referrals, and **Journeys**, the single automation engine (triggers, waits, branches, sends) |
