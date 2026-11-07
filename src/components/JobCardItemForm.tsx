@@ -1,6 +1,8 @@
 "use client";
 
 import { useState } from "react";
+import { currencySymbol } from "@/lib/format";
+import { useMoneyFormat } from "@/components/MoneyFormatProvider";
 import { Clock3, Package, Plus } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { SaveForm, SaveButton } from "@/components/SaveForm";
@@ -22,6 +24,7 @@ export default function JobCardItemForm({
   action: (formData: FormData) => Promise<ActionResult | void>;
   parts: PartOption[];
 }) {
+  const moneyFmt = useMoneyFormat();
   const [kind, setKind] = useState<"part" | "labour">("part");
   const [partId, setPartId] = useState("");
   const [description, setDescription] = useState("");
@@ -87,7 +90,7 @@ export default function JobCardItemForm({
         <div>
           <label className="label" htmlFor="job-item-price">Unit price</label>
           <div className="relative">
-            <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-xs text-muted-foreground">R</span>
+            <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-xs text-muted-foreground">{currencySymbol(moneyFmt)}</span>
             <input id="job-item-price" name="unitPrice" className="input pl-7" inputMode="decimal" value={unitPrice} onChange={(event) => setUnitPrice(event.target.value)} placeholder="0.00" />
           </div>
         </div>

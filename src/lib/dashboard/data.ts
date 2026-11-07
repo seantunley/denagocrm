@@ -3,6 +3,8 @@ import { cache } from "react";
 import { subDays, addDays, startOfDay, startOfMonth, subMonths } from "date-fns";
 import { prisma } from "@/lib/db";
 import { requireUser } from "@/lib/auth";
+import { getRegionalSettings } from "@/lib/settings";
+import { baseAndOthers, inBaseCurrency } from "@/lib/currencyRules";
 import { getEnabledModuleIds } from "@/lib/modules/enabled";
 import {
   getUserPermissionList,
@@ -167,8 +169,18 @@ export const wonThisMonth = cache(async () => {
   // updatedAt ≈ when the deal was marked won.
   return prisma.lead.findMany({
     where: { ...(await leadWhere()), status: "won", updatedAt: { gte: monthStart } },
-    select: { updatedAt: true, valueCents: true },
+    select: { updatedAt: true, valueCents: true, currency: true },
   });
+});
+
+/**
+ * This month's wins in the base currency (what a chart, ring or comparison can add up),
+ * and the other currencies' totals kept apart — never added in (multicurrency module).
+ */
+export const wonThisMonthSplit = cache(async () => {
+  const [won, { currency: base }] = await Promise.all([wonThisMonth(), getRegionalSettings()]);
+  const { others } = baseAndOthers(won, (w) => ({ cents: w.valueCents, currency: w.currency }), base);
+  return { base: won.filter((w) => inBaseCurrency(w, base)), others };
 });
 
 export const prevWonValue = cache(async () => {
@@ -179,9 +191,11 @@ export const prevWonValue = cache(async () => {
       status: "won",
       updatedAt: { gte: prevMonthStart, lt: prevSameDay },
     },
-    select: { valueCents: true },
+    select: { valueCents: true, currency: true },
   });
-  return rows.reduce((sum, row) => sum + row.valueCents, 0);
+  // A comparison figure: the base currency only, like the number it is compared with.
+  const { currency: base } = await getRegionalSettings();
+  return rows.filter((row) => inBaseCurrency(row, base)).reduce((sum, row) => sum + row.valueCents, 0);
 });
 
 /** Services completed this month — feeds the service stat AND the services ring. */

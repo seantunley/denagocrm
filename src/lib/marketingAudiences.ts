@@ -145,7 +145,8 @@ function valueFor(contact: Record<string, any>, field: string) {
   if (field === "quote_status") return (contact.quotes ?? []).map((quote: any) => quote.status);
   if (field === "customer_value") return (contact.leads ?? [])
     .filter((lead: any) => lead.status === "won")
-    .reduce((sum: number, lead: any) => sum + Number(lead.valueCents ?? 0), 0);
+    // Compared with one threshold in the base currency, so other-currency deals don't add in.
+    .reduce((sum: number, lead: any) => sum + (lead.currency ? 0 : Number(lead.valueCents ?? 0)), 0);
   return undefined;
 }
 

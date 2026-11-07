@@ -9,7 +9,9 @@ import { logError } from "./errorLog";
 import { issueInvoiceNumberInTx, nextQuoteNumber } from "./numbering";
 import { payableTotalCents } from "./pricing";
 import { formatZAR } from "./format";
+import { withCurrency } from "./currencyRules";
 import { clearedNurture } from "./leadNurture";
+import { getRegionalSettings } from "./settings";
 
 /**
  * WHAT HAPPENS TO A QUOTE WHEN THE DEAL IS DECIDED — one definition.
@@ -104,9 +106,10 @@ export async function acceptQuoteInTx(tx: Tx, quoteId: string, tenantId: string,
   // Accepted is when it becomes an invoice: it gets its own invoice number.
   await issueInvoiceNumberInTx(tx, quoteId, tenantId);
   const totalCents = Math.round(payableTotalCents(before));
+  const moneyFmt = await getRegionalSettings();
   await logAuditStrict({
     action: "quote.accepted",
-    summary: `Quote Q-${before.number} (${formatZAR(totalCents)}) accepted 🎉`,
+    summary: `Quote Q-${before.number} (${formatZAR(totalCents, withCurrency(moneyFmt, before.currency))}) accepted 🎉`,
     leadId: before.leadId,
     contactId: before.contactId,
     user: actor,
@@ -119,7 +122,7 @@ export async function acceptQuoteInTx(tx: Tx, quoteId: string, tenantId: string,
     wonLeadId = before.leadId;
     await logAuditStrict({
       action: "lead.won",
-      summary: `Lead “${before.lead?.title ?? ""}” won via accepted quote Q-${before.number} (${formatZAR(totalCents)}) 🎉`,
+      summary: `Lead “${before.lead?.title ?? ""}” won via accepted quote Q-${before.number} (${formatZAR(totalCents, withCurrency(moneyFmt, before.currency))}) 🎉`,
       leadId: before.leadId,
       contactId: before.contactId,
       user: actor,

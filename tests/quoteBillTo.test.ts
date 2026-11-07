@@ -310,7 +310,7 @@ test("the fleet is a required parameter, not an optional one a caller can forget
   // asserts the compiler was given something to enforce.
   assert.match(
     shipped("src/lib/docbuilder/merge.ts"),
-    /buildQuoteContext\(quote: QuoteForPrint, fleet: BillToFleet \| null, r: Regional\)/,
+    /buildQuoteContext\(quote: QuoteForPrint, fleet: BillToFleet \| null, regional: Regional\)/,
   );
   assert.match(shipped("src/lib/pdf/QuoteDoc.tsx"), /fleet: BillToFleet \| null;/);
 });

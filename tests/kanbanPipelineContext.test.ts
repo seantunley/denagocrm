@@ -179,7 +179,7 @@ test("the board reads one pipeline's stages, not every stage there is", () => {
 test("All pipelines is a summary, never a mixed draggable board", () => {
   const page = src("src/app/(app)/leads/page.tsx");
   assert.match(page, /allPipelines \? \(/);
-  assert.match(page, /<PipelineSummary pipelines=\{pipelineSummaries\} \/>/);
+  assert.match(page, /<PipelineSummary pipelines=\{pipelineSummaries\} moneyFmt=\{moneyFmt\} \/>/);
   // The board is rendered only for a single pipeline.
   const boardAt = page.indexOf("<KanbanBoard");
   const summaryAt = page.indexOf("<PipelineSummary");

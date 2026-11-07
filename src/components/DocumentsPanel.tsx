@@ -4,11 +4,12 @@ import ConfirmDelete from "@/components/ConfirmDelete";
 import DocumentUploadFields from "@/components/DocumentUploadFields";
 import ModalTrigger from "@/components/Modal";
 import { DOCUMENT_TYPES_KEY, isPersonLabel, parseDocumentTypes } from "@/lib/documentLabels";
-import { getSetting } from "@/lib/settings";
+import { getSetting, getRegionalSettings } from "@/lib/settings";
 import { SaveForm, SaveButton } from "@/components/SaveForm";
 import QuoteRowActions from "@/components/quotes/QuoteRowActions";
 import { StatusPill } from "@/components/visual-system";
 import { formatDate, formatZAR } from "@/lib/format";
+import { withCurrency } from "@/lib/currencyRules";
 import { FileText, Tag, Upload } from "lucide-react";
 
 function humanSize(bytes: number): string {
@@ -42,6 +43,8 @@ export type QuoteGroup = {
   signed: boolean;
   superseded: boolean;
   totalCents: number;
+  /** NULL = the base currency. */
+  currency: string | null;
   createdAt: Date;
   documents: Doc[];
 };
@@ -178,6 +181,7 @@ export default async function DocumentsPanel({
   const types = parseDocumentTypes(await getSetting(DOCUMENT_TYPES_KEY));
   // A document can be filed against a quote that is still current — not one a revision replaced.
   const fileAgainst = (quoteGroups ?? []).filter((group) => !group.superseded).map((group) => ({ id: group.id, label: `Q-${group.number} (${group.status})` }));
+  const moneyFmt = await getRegionalSettings();
   return (
     <div className="card">
       <div className="mb-4 flex items-center justify-between gap-3">
@@ -225,7 +229,7 @@ export default async function DocumentsPanel({
                 {group.signed && <StatusPill tone="success">Signed</StatusPill>}
                 {group.superseded && <StatusPill tone="neutral">Superseded</StatusPill>}
                 <span className="ml-auto text-xs tabular-nums text-muted-foreground">
-                  {formatZAR(Math.round(group.totalCents))} · {formatDate(group.createdAt)}
+                  {formatZAR(Math.round(group.totalCents), withCurrency(moneyFmt, group.currency))} · {formatDate(group.createdAt)}
                 </span>
                 {quoteActions && !group.superseded && (
                   <QuoteRowActions

@@ -28,6 +28,8 @@ export type NewLeadFields = {
   createdById?: string | null;
   quantity?: number;
   valueCents?: number;
+  /** ISO code of valueCents (multicurrency module); null = the base currency. */
+  currency?: string | null;
   externalId?: string | null;
   raw?: unknown;
   stageId?: string | null;
@@ -92,6 +94,8 @@ async function createInStage(input: NewLead, stageId: string) {
     createdById: input.createdById ?? null,
     ...(input.quantity != null ? { quantity: input.quantity } : {}),
     valueCents: input.valueCents ?? 0,
+    // Multicurrency module; null = the workspace's base currency (every inbound channel).
+    currency: input.currency ?? null,
     externalId: input.externalId ?? null,
     // Never write a tenant-owned Lead tenantless. The guard only stamps under
     // enforcement, which is still dormant, so without this a new Lead lands with a
