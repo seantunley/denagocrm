@@ -70,7 +70,7 @@ export async function overdueActivityCount(user: PermissionUser, now: Date = new
       dueDate: { lt: now },
       ...(ids === null ? {} : { id: { in: ids } }),
     },
-    select: { dueDate: true },
+    select: { dueDate: true, allDay: true },
   });
-  return rows.filter((row) => isOverdueActivity(row.dueDate, now)).length;
+  return rows.filter((row) => isOverdueActivity(row, now)).length;
 }

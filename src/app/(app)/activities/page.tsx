@@ -176,7 +176,7 @@ export default async function ActivitiesPage({
   const endOfToday = new Date(startOfToday.getTime() + 24 * 60 * 60 * 1000);
 
   // The same rule the sidebar badge counts with (lib/activityDay.ts).
-  const overdue = activities.filter((activity) => isOverdueActivity(activity.dueDate, now));
+  const overdue = activities.filter((activity) => isOverdueActivity(activity, now));
   const overdueIds = new Set(overdue.map((activity) => activity.id));
   const today = activities.filter(
     (activity) =>
