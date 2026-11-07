@@ -21,7 +21,7 @@ import {
   type FailureLedger,
   type ProviderFailure,
 } from "./providerFailure";
-import { deleteCommunicationsAndReconcile } from "./conversations";
+import { attachToConversation, bumpConversation, deleteCommunicationsAndReconcile, recomputeConversationDerivedState } from "./conversations";
 import { attachmentUrlForDelivery } from "./outboundMedia";
 import type { OutMsg } from "./flow";
 import { sendWhatsAppButtons, sendWhatsAppContact, sendWhatsAppDocumentLink, sendWhatsAppImage, sendWhatsAppList, sendWhatsAppText } from "./whatsapp";
@@ -284,6 +284,12 @@ export type StaffReplyInput = {
   parts: StaffReplyPart[];
   contactId?: string | null;
   leadId?: string | null;
+  /**
+   * The thread being answered, when the caller knows it (the DM reply box does: one customer can
+   * have several open threads on a channel). Without it the reply goes on the newest open one —
+   * the same one an inbound message on that channel is filed on.
+   */
+  conversationId?: string | null;
   actorId: string;
   /** Written in the same transaction, so an accepted reply is always accounted for. */
   audit?: { action: string; summary: string; user: { id: string; name: string } };
@@ -408,6 +414,23 @@ async function enqueueStaffReplyInWorkspace(input: StaffReplyInput): Promise<Sta
     leadId: input.leadId,
   });
 
+  // THE REPLY GOES ON THE CUSTOMER'S THREAD. The guarded client threads every
+  // `communication.create` (db.ts); this transaction is on `basePrisma`, which
+  // does not — so staff replies were filed on no conversation, the thread still
+  // said "last word: the customer", and DAX alerted that nobody had answered a
+  // customer who had been answered (2026-11-07). Chosen the same way the hook
+  // chooses, and it may restamp the tenant to the thread's, as the hook does.
+  const history: { type: string; direction: string; contactId: string | null; leadId: string | null; tenantId: string | null; conversationId?: string | null } = {
+    type: input.channel,
+    direction: "outbound",
+    contactId: input.contactId ?? null,
+    leadId: input.leadId ?? null,
+    tenantId: historyTenantId,
+    // A chosen thread is re-read and checked against this reply's customer and tenant there.
+    conversationId: input.conversationId ?? null,
+  };
+  const thread = await attachToConversation(history);
+
   try {
     // USER-ORIGINATED, and CONVERTED — with `outboxTenantId()` and the drain, not
     // ahead of them. Both callers are Server Actions behind `inbox.reply`
@@ -488,8 +511,10 @@ async function enqueueStaffReplyInWorkspace(input: StaffReplyInput): Promise<Sta
             contactId: input.contactId ?? null,
             leadId: input.leadId ?? null,
             userId: input.actorId,
-            // The customer record's tenant, NOT the queue's — see historyTenantId.
-            tenantId: historyTenantId,
+            // The customer record's tenant, NOT the queue's — see historyTenantId
+            // (or the thread's, when attachToConversation above found one).
+            tenantId: history.tenantId,
+            conversationId: history.conversationId ?? null,
           },
           select: { id: true },
         });
@@ -520,6 +545,8 @@ async function enqueueStaffReplyInWorkspace(input: StaffReplyInput): Promise<Sta
 
       return links;
     });
+    // After the commit, as the hook does: the thread's "last word" is now ours.
+    if (thread) await bumpConversation(thread.id, { direction: "outbound" }).catch(() => {});
 
     for (const link of written) {
       existing.set(link.key, {
@@ -1201,6 +1228,17 @@ async function botMayStillSpeak(row: OutboxRow): Promise<boolean> {
   });
 }
 
+/**
+ * A reply's delivery changed (now sent, or sent → failed): its thread re-derives whose turn it is,
+ * since only a delivered reply answers the customer (conversations.ts). Best-effort — the next
+ * message on the thread recomputes it anyway.
+ */
+async function rethreadDelivery(communicationId: string | null | undefined): Promise<void> {
+  if (!communicationId) return;
+  const message = await prisma.communication.findFirst({ where: { id: communicationId }, select: { conversationId: true } });
+  if (message?.conversationId) await recomputeConversationDerivedState(message.conversationId);
+}
+
 async function deliverClaimed(row: OutboxRow): Promise<"sent" | "retry" | "dead" | "cancelled"> {
   // Last gate before the provider. A claimed row is not licence to send: the
   // conversation may have changed hands since it was queued, or since it was
@@ -1238,6 +1276,7 @@ async function deliverClaimed(row: OutboxRow): Promise<"sent" | "retry" | "dead"
     await reconcileParkedFailure(row.channel, result.providerMessageId);
     await stampProviderMessageId(row, result.providerMessageId);
     await repairCommunicationLog({ ...row, status: "sent", providerMessageId: result.providerMessageId }).catch(() => {});
+    await rethreadDelivery(row.communicationId).catch(() => {});
     return "sent";
   }
   await reconcileProviderEcho(result.providerMessageId);
@@ -1246,6 +1285,7 @@ async function deliverClaimed(row: OutboxRow): Promise<"sent" | "retry" | "dead"
   await reconcileParkedFailure(row.channel, result.providerMessageId);
   await stampProviderMessageId(row, result.providerMessageId);
   await repairCommunicationLog({ ...row, status: "sent", providerMessageId: result.providerMessageId }).catch(async (error) => { await logError("bot-outbox-log", error, row.id).catch(() => {}); });
+  await rethreadDelivery(row.communicationId).catch(() => {});
   return "sent";
 }
 
@@ -1287,11 +1327,15 @@ function failureLedger(channel: string): FailureLedger {
       // an accepted message that later failed reached nobody but the timeline).
       const accepted = await prisma.botFlowOutbox.findMany({
         where: { tenantId, channel, providerMessageId: failure.providerMessageId, status: "sent" },
-        select: { id: true, origin: true },
+        select: { id: true, origin: true, communicationId: true },
       });
       for (const row of accepted) {
         const flipped = await prisma.botFlowOutbox.updateMany({ where: { id: row.id, tenantId, status: "sent" }, data });
-        if (flipped.count === 1) await notifyDeliveryFailed({ origin: row.origin, channel }, failure.failureCode, tenantId);
+        if (flipped.count === 1) {
+          await notifyDeliveryFailed({ origin: row.origin, channel }, failure.failureCode, tenantId);
+          // The customer never got it: their thread is waiting on us again.
+          await rethreadDelivery(row.communicationId).catch(() => {});
+        }
       }
       // `dead` too: a redelivered webhook re-marks its own row instead of
       // parking a record nothing will consume.

@@ -271,6 +271,8 @@ export async function sweepProactive(tenantId: string, budget: Pick<CronSliceCon
 
   // Waiting customers: only in working hours — at 08:00 the night's messages that are still unanswered come up.
   if (isQuietHour(now)) return stats;
+  // lastDirection is delivery-aware (conversations.ts): a reply queued or refused by the provider
+  // leaves it "inbound", so the customer still shows as waiting here, in the inbox and on the attention list.
   const waiting = await basePrisma.conversation.findMany({
     where: {
       tenantId,

@@ -254,6 +254,8 @@ export async function sendDmReply(
       key: recipientId,
       parts,
       contactId,
+      // The thread re-read above (this customer's, on this channel) — not the newest one of theirs.
+      conversationId,
       actorId: user.id,
       audit: {
         action: `${platform}.sent`,

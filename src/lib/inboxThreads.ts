@@ -91,13 +91,40 @@ export function buildInboxThreads(comms: CommRow[]): InboxThread[] {
       });
     }
   }
-  return [...threads.values()].sort(
-    (a, b) =>
-      Number(b.unread) - Number(a.unread) ||
-      Number(b.awaiting) - Number(a.awaiting) ||
-      b.lastAt.getTime() - a.lastAt.getTime()
-  );
+  return [...threads.values()].sort(byAttention);
 }
+
+function byAttention(a: InboxThread, b: InboxThread): number {
+  return Number(b.unread) - Number(a.unread) || Number(b.awaiting) - Number(a.awaiting) || b.lastAt.getTime() - a.lastAt.getTime();
+}
+
+/**
+ * The same rule as Conversation.lastDirection (conversations.ts): a reply the outbox has not
+ * confirmed sent — queued, retrying, dead, cancelled — never reached the customer, so their thread
+ * is still awaiting us. `status`: each message's outbox status, where it has one.
+ *
+ * The list holds only the newest few messages per thread. When every one of them is an unconfirmed
+ * reply, the answer is further back: `older` carries it (inboxQuery.olderTurns, for exactly those
+ * threads — see {@link turnUndecided}).
+ */
+export function settleAwaiting(
+  threads: InboxThread[],
+  status: (messageId: string) => string | undefined,
+  older: ReadonlyMap<string, string> = new Map(),
+): InboxThread[] {
+  for (const thread of threads) {
+    thread.awaiting = (lastTurn(thread, status)?.direction ?? older.get(thread.key)) === "inbound";
+  }
+  return threads.sort(byAttention);
+}
+
+function lastTurn(thread: InboxThread, status: (messageId: string) => string | undefined) {
+  return thread.messages.find((message) => message.direction !== "outbound" || (status(message.id) ?? "sent") === "sent");
+}
+
+/** Every message in this thread's preview is an unconfirmed reply: whose turn it is needs an older one. */
+export const turnUndecided = (thread: InboxThread, status: (messageId: string) => string | undefined) =>
+  thread.messages.length > 0 && !lastTurn(thread, status);
 
 export type ThreadIdentity = {
   contactId: string | null;
