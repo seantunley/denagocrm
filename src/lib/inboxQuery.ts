@@ -205,19 +205,30 @@ export async function olderTurns(
   threads: { key: string; contactId: string | null; leadId: string | null; channel: string }[],
 ): Promise<Map<string, string>> {
   const out = new Map<string, string>();
-  // ponytail: two queries per undecided thread; it takes 8+ unconfirmed replies in a row to get here.
+  const PAGE = 50;
+  // ponytail: pages of 50 per undecided thread; it takes 8+ unconfirmed replies in a row to get here.
   for (const thread of threads) {
     const who = thread.contactId ? { contactId: thread.contactId } : { leadId: thread.leadId };
-    const unconfirmed = await prisma.botFlowOutbox.findMany({
-      where: { ...who, channel: thread.channel, communicationId: { not: null }, status: { not: "sent" } },
-      select: { communicationId: true },
-    });
-    const last = await prisma.communication.findFirst({
-      where: { ...who, type: thread.channel, id: { notIn: unconfirmed.map((row) => row.communicationId as string) } },
-      orderBy: { occurredAt: "desc" },
-      select: { direction: true },
-    });
-    if (last?.direction) out.set(thread.key, last.direction);
+    // Walk back through the thread's messages, newest first, matching each reply to its outbox row by
+    // the message id (the outbox's own contact/lead columns aren't always set).
+    for (let skip = 0; ; skip += PAGE) {
+      const page = await prisma.communication.findMany({
+        where: { ...who, type: thread.channel },
+        orderBy: [{ occurredAt: "desc" }, { id: "desc" }],
+        skip,
+        take: PAGE,
+        select: { id: true, direction: true },
+      });
+      const unconfirmed = new Set(
+        (await prisma.botFlowOutbox.findMany({
+          where: { communicationId: { in: page.filter((m) => m.direction === "outbound").map((m) => m.id) }, status: { not: "sent" } },
+          select: { communicationId: true },
+        })).map((row) => row.communicationId),
+      );
+      const turn = page.find((m) => m.direction !== "outbound" || !unconfirmed.has(m.id));
+      if (turn?.direction) out.set(thread.key, turn.direction);
+      if (turn || page.length < PAGE) break;
+    }
   }
   return out;
 }

@@ -78,8 +78,10 @@ test("failures that did not park the conversation are listed and retried by mess
 test("an async provider failure tells staff once, not on every redelivered webhook", () => {
   const ledger = outbox.slice(outbox.indexOf("async markFailed(failure) {"), outbox.indexOf("async park(failure) {"));
   // Only the sent → dead flip notifies, row by row and conditional on `sent`.
-  assert.match(ledger, /status: "sent" \},\s*select: \{ id: true, origin: true \}/);
-  assert.match(ledger, /updateMany\(\{ where: \{ id: row\.id, tenantId, status: "sent" \}, data \}\);\s*if \(flipped\.count === 1\) await notifyDeliveryFailed\(/);
+  assert.match(ledger, /status: "sent" \},\s*select: \{ id: true, origin: true, communicationId: true \}/);
+  assert.match(ledger, /updateMany\(\{ where: \{ id: row\.id, tenantId, status: "sent" \}, data \}\);\s*if \(flipped\.count === 1\) \{\s*await notifyDeliveryFailed\(/);
+  // …and the thread goes back to "waiting on us" (only a delivered reply answers — conversations.ts).
+  assert.match(ledger, /await rethreadDelivery\(row\.communicationId\)/);
   // The re-mark of an already-dead row stays, and stays quiet.
   const remark = ledger.slice(ledger.indexOf("const marked = await"));
   assert.doesNotMatch(remark, /notifyDeliveryFailed/);
