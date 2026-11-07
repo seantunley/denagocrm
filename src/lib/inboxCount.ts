@@ -2,8 +2,8 @@ import "server-only";
 import { prisma } from "./db";
 import { accessibleInboxWhere, type PermissionUser } from "./permissions";
 import type { Prisma } from "@prisma/client";
-
-const DM_CHANNELS = ["whatsapp", "messenger", "instagram", "telegram"];
+// The inbox's own list: this copy had drifted and left out X, so unread X DMs never reached the badge.
+import { DM_CHANNELS } from "./inboxQuery";
 
 /**
  * The newest `occurredAt` of every thread matching `where`, keyed the way the

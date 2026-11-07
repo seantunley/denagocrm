@@ -30,7 +30,10 @@ type Weather = { temp: number; code: number };
 const block =
   "flex items-center gap-2 rounded-lg border border-border bg-card px-3 py-1.5 shadow-sm";
 
-/** Compact desk strip: date, then a block per city (time + weather). */
+/**
+ * One clock in the top bar (the first city, the workspace's home); hover or focus it for the date and
+ * every city's time and weather. The full strip took ~310px of the bar on every page.
+ */
 export default function ClockWeather({ cities }: { cities: WeatherCity[] }) {
   const [now, setNow] = useState<Date | null>(null);
   const [weather, setWeather] = useState<(Weather | null)[]>(() => cities.map(() => null));
@@ -65,64 +68,78 @@ export default function ClockWeather({ cities }: { cities: WeatherCity[] }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cities.map((c) => `${c.lat},${c.lon}`).sort().join("|")]);
 
+  const home = cities[0];
   return (
-    <div className="flex flex-wrap items-center gap-2">
-      {/* Date */}
-      <div className={block}>
-        <span className="text-[13px] font-medium text-muted-foreground">
+    <div className="group relative inline-flex">
+      <button type="button" className={block} aria-label="Date, clocks and weather" title={home?.name}>
+        {home && flagUrl(home.country) && (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img src={flagUrl(home.country)!} alt="" width={18} height={13} loading="lazy" className="h-3 w-auto rounded-[2px]" />
+        )}
+        <span className="text-[15px] font-semibold tabular-nums text-foreground">
           {now
-            ? now.toLocaleDateString("en-ZA", {
-                weekday: "long",
-                day: "numeric",
-                month: "long",
-                year: "numeric",
-                timeZone: "Africa/Johannesburg",
-              })
+            ? now.toLocaleTimeString("en-ZA", { hour: "2-digit", minute: "2-digit", timeZone: home?.zone ?? "Africa/Johannesburg" })
             : "…"}
         </span>
-      </div>
-
-      {/* One block per city */}
-      {cities.map((c, i) => {
-        const wx = weather[i] ? describe(weather[i]!.code) : null;
-        return (
-          <div key={c.name} className={block} title={c.name}>
-            {/* An emoji flag, not an SVG asset: those exist for two countries
-                and a tenant may pick anywhere. A missing code renders nothing,
-                which beats a broken image. */}
-            {flagUrl(c.country) && (
-              // A real SVG, served from our own origin. An emoji flag renders as
-              // the two letters on Windows, which is where most of these users are.
-              // eslint-disable-next-line @next/next/no-img-element
-              <img
-                src={flagUrl(c.country)!}
-                alt=""
-                width={18}
-                height={13}
-                loading="lazy"
-                className="h-3 w-auto rounded-[2px]"
-              />
-            )}
-            <span className="text-xs text-muted-foreground">{c.name}</span>
-            <span className="text-[15px] font-semibold tabular-nums text-foreground">
+      </button>
+      {/* pt-2 bridges the gap so moving the pointer from the clock to the panel keeps it open. */}
+      <div className="absolute left-0 top-full z-40 hidden pt-2 group-hover:block group-focus-within:block">
+        <div className="flex w-max max-w-[min(90vw,40rem)] flex-wrap items-center gap-2 rounded-xl border border-border bg-popover p-2 shadow-2xl">
+          {/* Date */}
+          <div className={block}>
+            <span className="text-[13px] font-medium text-muted-foreground">
               {now
-                ? now.toLocaleTimeString("en-ZA", {
-                    hour: "2-digit",
-                    minute: "2-digit",
-                    timeZone: c.zone,
+                ? now.toLocaleDateString("en-ZA", {
+                    weekday: "long",
+                    day: "numeric",
+                    month: "long",
+                    year: "numeric",
+                    timeZone: "Africa/Johannesburg",
                   })
                 : "…"}
             </span>
-            {wx && weather[i] && (
-              <span className="flex items-center gap-1 border-l border-border pl-2 text-xs text-muted-foreground">
-                <span className="text-sm leading-none">{wx.icon}</span>
-                <span className="font-medium text-foreground">{weather[i]!.temp}°</span>
-                {wx.label}
-              </span>
-            )}
           </div>
-        );
-      })}
+
+          {/* One block per city */}
+          {cities.map((c, i) => {
+            const wx = weather[i] ? describe(weather[i]!.code) : null;
+            return (
+              <div key={c.name} className={block} title={c.name}>
+                {flagUrl(c.country) && (
+                  // A real SVG, served from our own origin. An emoji flag renders as
+                  // the two letters on Windows, which is where most of these users are.
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img
+                    src={flagUrl(c.country)!}
+                    alt=""
+                    width={18}
+                    height={13}
+                    loading="lazy"
+                    className="h-3 w-auto rounded-[2px]"
+                  />
+                )}
+                <span className="text-xs text-muted-foreground">{c.name}</span>
+                <span className="text-[15px] font-semibold tabular-nums text-foreground">
+                  {now
+                    ? now.toLocaleTimeString("en-ZA", {
+                        hour: "2-digit",
+                        minute: "2-digit",
+                        timeZone: c.zone,
+                      })
+                    : "…"}
+                </span>
+                {wx && weather[i] && (
+                  <span className="flex items-center gap-1 border-l border-border pl-2 text-xs text-muted-foreground">
+                    <span className="text-sm leading-none">{wx.icon}</span>
+                    <span className="font-medium text-foreground">{weather[i]!.temp}°</span>
+                    {wx.label}
+                  </span>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </div>
     </div>
   );
 }
