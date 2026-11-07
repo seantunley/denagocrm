@@ -15,7 +15,7 @@ export const AI_NODE_SPECS = {
   capture: `{id,type:"capture",text,variable,format?:"text"|"email"|"phone"|"number"|"date",next?,noReply?:{minutes,next}}`,
   captureFile: `{id,type:"captureFile",text,variable,next?,noReply?:{minutes,next}}`,
   image: `{id,type:"image",url,caption?,next?}`,
-  document: `{id,type:"document",documentId:"<DOCUMENTS id>",caption?,next?} — sends one of the business's own files`,
+  document: `{id,type:"document",documentId:"<DOCUMENTS id>",moreDocuments?:[{documentId:"<DOCUMENTS id>"}],caption?,next?} — sends the business's own files, one message each`,
   contactCard: `{id,type:"contactCard",staffUserId?:"<STAFF id; omit for the business's card>",next?}`,
   answer: `{id,type:"answer",text?,answerSource?:"pricelist"|"colours",next?}`,
   set: `{id,type:"set",variable,value,next?} — value may use {{variables}}`,
@@ -94,7 +94,9 @@ export function aiDraftIssues(flow: Flow, previous: Flow | null, refs: FlowAiRef
     if (spec === undefined || spec === null) { refuse(node, "type", `The flow assistant may not create a “${node.type}” step.`); continue; }
     // Journeys: checked over EVERY step by flowAiDraft's own allow-list (journey.ai_unapproved).
     if (node.type === "subflow" && !flows.has(node.flowId)) refuse(node, "subflow", "AI draft referenced a flow that is not in this workspace.");
-    if (node.type === "document" && !documents.has(node.documentId)) refuse(node, "document", "AI draft referenced a document that is not one of the business's files.");
+    if (node.type === "document" && (!documents.has(node.documentId) || (node.moreDocuments ?? []).some((file) => !documents.has(file?.documentId ?? "")))) {
+      refuse(node, "document", "AI draft referenced a document that is not one of the business's files.");
+    }
     if (node.type === "contactCard" && node.staffUserId && !staff.has(node.staffUserId)) refuse(node, "staff", "AI draft referenced someone who is not on the staff list.");
     if (node.type === "notify" && !(node.userId && staff.has(node.userId))) refuse(node, "staff", "AI draft's alert must go to someone on the staff list.");
     if (node.type === "crm" && node.action === "assign" && !(node.userId && staff.has(node.userId))) refuse(node, "staff", "AI draft assigned a salesperson who is not on the staff list.");
@@ -114,7 +116,10 @@ export function withAiRefLabels(flow: Flow, refs: FlowAiRefs): Flow {
   for (const node of Object.values(flow.nodes ?? {})) {
     if (node?.type === "notify") node.userLabel = name(refs.staff, node.userId) ?? node.userLabel;
     if (node?.type === "crm") { node.userLabel = name(refs.staff, node.userId) ?? node.userLabel; node.stageLabel = name(refs.stages, node.stageId) ?? node.stageLabel; }
-    if (node?.type === "document") node.fileName = name(refs.documents, node.documentId) ?? node.fileName;
+    if (node?.type === "document") {
+      node.fileName = name(refs.documents, node.documentId) ?? node.fileName;
+      for (const file of node.moreDocuments ?? []) file.fileName = name(refs.documents, file.documentId) ?? file.fileName;
+    }
     if (node?.type === "http") node.connectionName = name(refs.connections, node.connectionId) ?? node.connectionName;
   }
   return flow;

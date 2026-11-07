@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
-import { runFlow, type Flow, type FlowCtx } from "../src/lib/flow";
+import { MAX_DOCUMENTS_PER_STEP, runFlow, type Flow, type FlowCtx } from "../src/lib/flow";
 import { validateFlow } from "../src/lib/flowValidation";
 import { contactCardText, documentFallbackText, whatsappContactsMessage } from "../src/lib/flowMedia";
 import { matchQrCode, parseQrCodes, qrLink, qrSource } from "../src/lib/flowQr";
@@ -35,6 +35,39 @@ test("a brochure flow sends the document then the contact card", async () => {
 test("no contact card configured: nothing sent, the flow carries on", async () => {
   const result = await runFlow(pack, { nodeId: null, vars: {} }, { text: "" }, ctx({ contactCard: async () => null }));
   assert.deepEqual(result.messages.map((m) => m.type), ["document"]);
+});
+
+test("one step, several files: one message each, in order, caption on the first only", async () => {
+  const flow: Flow = { start: "doc", nodes: {
+    doc: {
+      id: "doc", type: "document", documentId: "d1", fileName: "Price list.pdf", caption: "Hi {{name}}", next: "end",
+      moreDocuments: [{ documentId: "d2", fileName: "Brochure.pdf" }, { documentId: "" }, { documentId: "d3" }],
+    },
+    end: { id: "end", type: "end" },
+  } };
+  const result = await runFlow(flow, { nodeId: null, vars: { name: "Ann" } }, { text: "" }, ctx());
+  assert.deepEqual(result.messages, [
+    { type: "document", documentId: "d1", fileName: "Price list.pdf", caption: "Hi Ann" },
+    { type: "document", documentId: "d2", fileName: "Brochure.pdf" },
+    { type: "document", documentId: "d3" },
+  ]);
+  // …and the blank slot is an error before it is ever published.
+  assert.ok(validateFlow(flow).some((issue) => issue.code === "document.missing" && /file slot/.test(issue.message)));
+});
+
+test("one step sends at most 10 files: refused at publish, cut off at run time, capped in the builder", async () => {
+  assert.equal(MAX_DOCUMENTS_PER_STEP, 10);
+  const files = (n: number) => Array.from({ length: n }, (_, i) => ({ documentId: `d${i + 2}` }));
+  const step = (extra: number): Flow => ({ start: "doc", nodes: {
+    doc: { id: "doc", type: "document", documentId: "d1", next: "end", moreDocuments: files(extra) },
+    end: { id: "end", type: "end" },
+  } });
+  assert.ok(!validateFlow(step(9)).some((issue) => issue.code === "document.too_many"), "10 is fine");
+  assert.ok(validateFlow(step(10)).some((issue) => issue.code === "document.too_many" && issue.severity === "error"), "11 is refused");
+  const result = await runFlow(step(50), { nodeId: null, vars: {} }, { text: "" }, ctx());
+  assert.equal(result.messages.length, 10, "a flow saved before the limit still sends no more than 10");
+  const builder = readFileSync("src/components/FlowBuilder.tsx", "utf8");
+  assert.match(builder, /disabled=\{!node\.documentId \|\| more\.length \+ 1 >= MAX_DOCUMENTS_PER_STEP\}/);
 });
 
 test("a document step without a file is an error", () => {

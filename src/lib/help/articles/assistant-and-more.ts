@@ -307,7 +307,7 @@ export const assistantAndMoreArticles: HelpArticle[] = [
       { type: "p", text: "A QR code opens WhatsApp on the customer's phone with a message already typed to your business number. When they tap **Send**, the message starts the chatbot flow you chose, and that flow sends whatever its steps say — for example your brochure, your price list and your contact card. WhatsApp never lets a business message someone first, so the customer always sends the first message." },
       { type: "h", text: "Set it up" },
       { type: "steps", items: [
-        "In the chatbot builder, make a WhatsApp flow with a **Send a document** step for each file (brochure, price list) and a **Send contact card** step. The files come from your documents; the contact card is built from your company details, or from one staff member's.",
+        "In the chatbot builder, make a WhatsApp flow with a **Send a document** step — pick the brochure, then **+ Add another file** for the price list; each file arrives as its own message, in that order — and a **Send contact card** step. The files come from your documents; the contact card is built from your company details, or from one staff member's.",
         "Publish the flow.",
         "In the chatbot area, open **Routing**. Under **QR codes (WhatsApp)**, give the code a name (for example \"Show stand\"), check the message the customer will send, choose the flow and click **Make QR code**.",
         "Click **Download PNG**, or **Download for print (SVG)** for large prints, and put it on your flyer, stand or vehicle.",

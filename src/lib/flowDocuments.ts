@@ -1,5 +1,5 @@
 import { prisma } from "./db";
-import type { Flow } from "./flow";
+import { documentFiles, type Flow } from "./flow";
 import type { FlowIssue } from "./flowValidation";
 
 /**
@@ -47,7 +47,7 @@ export async function flowDocumentOptions(tenantId: string): Promise<{ id: strin
 export async function flowDocumentIssues(flow: Flow, tenantId: string): Promise<FlowIssue[]> {
   const nodes = Object.values(flow.nodes ?? {}).filter((node) => node?.type === "document");
   // Saved drafts are untrusted JSON: only string ids reach the query.
-  const ids = [...new Set(nodes.map((node) => (node.type === "document" && typeof node.documentId === "string" ? node.documentId : "")).filter(Boolean))];
+  const ids = [...new Set(nodes.flatMap((node) => (node.type === "document" ? documentFiles(node).map((file) => file.documentId) : [])))];
   const found = new Set<string>();
   if (ids.length) {
     const [general, library] = await Promise.all([
@@ -59,7 +59,10 @@ export async function flowDocumentIssues(flow: Flow, tenantId: string): Promise<
   return nodes.flatMap((node) => {
     if (node.type !== "document") return [];
     if (!node.documentId || typeof node.documentId !== "string") return [{ severity: "error" as const, code: "document.missing", message: "Send a document needs a file chosen.", nodeId: node.id }];
-    return found.has(node.documentId) ? [] : [{ severity: "error" as const, code: "document.unavailable", message: "The chosen file is not one of this workspace's documents (it was deleted, or belongs to a customer record or another workspace).", nodeId: node.id }];
+    // Every file on the step, the extra ones too.
+    return documentFiles(node).every((file) => found.has(file.documentId))
+      ? []
+      : [{ severity: "error" as const, code: "document.unavailable", message: "A chosen file is not one of this workspace's documents (it was deleted, or belongs to a customer record or another workspace).", nodeId: node.id }];
   });
 }
 

@@ -50,6 +50,20 @@ test("on import: this workspace's records are kept, another's are cleared, subfl
   assert.equal((other.flow.nodes.doc as { fileName?: string }).fileName, undefined);
 });
 
+test("on import, a step's EXTRA files are kept or cleared one by one, like the first", () => {
+  const multi: Flow = { start: "doc", nodes: {
+    doc: { id: "doc", type: "document", documentId: "doc-A", fileName: "A.pdf", moreDocuments: [{ documentId: "doc-B", fileName: "B.pdf" }, { documentId: "doc-X", fileName: "X.pdf" }] },
+  } };
+  assert.deepEqual(workspaceRefs(multi).map((r) => r.id), ["doc-A", "doc-B", "doc-X"]);
+  const some = clearForeignRefs(multi, new Set(["document:doc-A", "document:doc-B"]));
+  assert.equal(some.cleared, 1);
+  assert.deepEqual((some.flow.nodes.doc as { moreDocuments?: unknown }).moreDocuments, [{ documentId: "doc-B", fileName: "B.pdf" }]);
+  const none = clearForeignRefs(multi, new Set());
+  assert.equal(none.cleared, 3);
+  assert.equal((none.flow.nodes.doc as { moreDocuments?: unknown }).moreDocuments, undefined);
+  assert.deepEqual(workspaceRefs(none.flow), []);
+});
+
 test("owner only; checked against THIS workspace; arrives as a draft; logged", () => {
   const actions = readFileSync("src/app/actions/flowTransfer.ts", "utf8");
   assert.equal((actions.match(/await requireTenantOwner\(\);/g) ?? []).length, 2);

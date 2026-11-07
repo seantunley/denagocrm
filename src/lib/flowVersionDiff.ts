@@ -17,7 +17,10 @@ export function nodeLabel(node: FlowNode | undefined, nodeId: string): string {
   if (node.type === "journey") return `Journey: ${node.journeyId}`;
   if (node.type === "condition") return `Condition: ${node.condition.variable} ${node.condition.operator}`;
   if (node.type === "image") return node.caption?.trim().slice(0, 70) || "Image";
-  if (node.type === "document") return `Document: ${node.fileName || "file"}`.slice(0, 70);
+  if (node.type === "document") {
+    const more = Array.isArray(node.moreDocuments) ? node.moreDocuments.length : 0;
+    return `Document: ${node.fileName || "file"}${more ? ` + ${more} more` : ""}`.slice(0, 70);
+  }
   if (node.type === "contactCard") return node.staffUserId ? "Contact card (staff member)" : "Contact card";
   if (node.type === "ai") return "AI conversation";
   if (node.type === "goto") return `Go to: ${node.targetLabel || node.target}`.slice(0, 70);
@@ -67,7 +70,7 @@ const WIRING = new Set(["next", "trueNext", "falseNext", "failureNext", "unavail
 const FIELD_NAMES: Record<string, string> = {
   text: "wording", options: "choices", cases: "cases", variable: "saved as", value: "value", format: "answer format",
   url: "address", method: "method", headers: "headers", body: "request body", saveAs: "saved as", caption: "caption",
-  documentId: "file", fileName: "file", journeyId: "Journey", condition: "condition", action: "action", seconds: "wait",
+  documentId: "file", fileName: "file", moreDocuments: "files", journeyId: "Journey", condition: "condition", action: "action", seconds: "wait",
   failureText: "failure message", noneText: "none-available message", noMatchText: "no-match message", query: "question",
   instruction: "instruction", fields: "fields", flowId: "subflow", staffUserId: "contact card", reason: "handoff reason",
   summary: "handoff summary", answerSource: "answer source", type: "step type",
