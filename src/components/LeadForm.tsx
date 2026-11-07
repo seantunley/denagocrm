@@ -93,6 +93,7 @@ export default function LeadForm({
   const currencies = useCurrencies();
   const [currency, setCurrency] = useState(defaults.currency || currencies[0]);
   const inBase = currency === currencies[0];
+  const [currencyChanged, setCurrencyChanged] = useState(false);
   const valueFmt = withCurrency(moneyFmt, currency);
   const [stageId, setStageId] = useState(defaults.stageId ?? stages[0]?.id ?? "");
   const product = products.find((item) => item.id === productId);
@@ -124,6 +125,22 @@ export default function LeadForm({
     // The catalogue price is in the base currency: never fill it into a lead in another one.
     if (selected && selected.basePriceCents > 0 && inBase) {
       setValue(String((selected.basePriceCents / 100) * qty));
+    }
+  }
+
+  /**
+   * A value typed or priced in one currency is not the same number in another: R100 000 must
+   * never quietly become US$100 000. Back to the base with a product → the catalogue price
+   * again; anything else → the field empties and asks for the amount in the new currency.
+   */
+  function onCurrencyChange(code: string) {
+    if (code === currency) return;
+    setCurrency(code);
+    if (code === currencies[0] && product && product.basePriceCents > 0) {
+      setValue(String((product.basePriceCents / 100) * qty));
+    } else {
+      setValue("");
+      setCurrencyChanged(true);
     }
   }
 
@@ -277,7 +294,7 @@ export default function LeadForm({
               aria-label="Currency"
               className="input mb-2 w-32"
               value={currency}
-              onChange={(event) => setCurrency(event.target.value)}
+              onChange={(event) => onCurrencyChange(event.target.value)}
             >
               {currencies.map((code) => <option key={code} value={code}>{code}</option>)}
             </select>
@@ -289,10 +306,13 @@ export default function LeadForm({
               className="input pl-10 tabular-nums"
               inputMode="decimal"
               value={value}
-              onChange={(event) => setValue(event.target.value)}
+              onChange={(event) => { setValue(event.target.value); setCurrencyChanged(false); }}
               placeholder="0.00"
             />
           </div>
+          {currencyChanged && !value && (
+            <p role="status" className="mt-1.5 text-xs text-amber-500">Currency changed — enter the value in {currency}.</p>
+          )}
         </Field>
       </FormSection>
 
