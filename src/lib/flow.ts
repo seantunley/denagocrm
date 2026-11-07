@@ -148,8 +148,11 @@ export function documentFiles(node: Extract<FlowNode, { type: "document" }>): { 
   const more = Array.isArray(node.moreDocuments) ? node.moreDocuments : [];
   return [{ documentId: node.documentId, fileName: node.fileName }, ...more].filter(
     (file): file is { documentId: string; fileName?: string } => Boolean(file) && typeof file.documentId === "string" && file.documentId !== "",
-  );
+  ).slice(0, MAX_DOCUMENTS_PER_STEP);
 }
+
+/** One step sends at most this many files — each is its own message, and its own cost. */
+export const MAX_DOCUMENTS_PER_STEP = 10;
 
 /** When a Start Journey step's Journey begins, and the saved answers it is handed. */
 export type JourneyFollowUp = { delayMinutes: number; handOver: Record<string, string> };

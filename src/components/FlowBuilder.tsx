@@ -64,7 +64,7 @@ import {
 } from "@xyflow/react";
 import { saveFlow, resetFlow } from "@/app/actions/flow";
 import { uploadCampaignImage } from "@/app/actions/campaigns";
-import { CAN_SWITCH_OFF, isAnnotation, isSwitchedOff, type AnnotationColor, type BookingAction, type ConditionOperator, type CrmUpdateAction, type FlowHttpMethod, type FlowNode, type SlotAction } from "@/lib/flow";
+import { CAN_SWITCH_OFF, isAnnotation, MAX_DOCUMENTS_PER_STEP, isSwitchedOff, type AnnotationColor, type BookingAction, type ConditionOperator, type CrmUpdateAction, type FlowHttpMethod, type FlowNode, type SlotAction } from "@/lib/flow";
 import ConfirmActionDialog from "@/components/ConfirmActionDialog";
 import EmojiButton from "@/components/EmojiButton";
 import { stepNumbersLine, type StepNumbers } from "@/lib/flowStepNumbers";
@@ -1260,7 +1260,8 @@ function DocumentFilesField({ node, documents, onChange }: {
           <button type="button" className="btn-secondary btn-sm" onClick={() => setMore(more.filter((_, i) => i !== at))} aria-label={`Remove file ${at + 2}`}>Remove</button>
         </div>
       ))}
-      <button type="button" className="btn-secondary btn-sm" disabled={!node.documentId} onClick={() => setMore([...more, { documentId: "" }])}>+ Add another file</button>
+      <button type="button" className="btn-secondary btn-sm" disabled={!node.documentId || more.length + 1 >= MAX_DOCUMENTS_PER_STEP} onClick={() => setMore([...more, { documentId: "" }])}>+ Add another file</button>
+      {more.length + 1 >= MAX_DOCUMENTS_PER_STEP && <p className="text-xs text-slate-500">Up to {MAX_DOCUMENTS_PER_STEP} files per step.</p>}
     </div>
   );
 }
