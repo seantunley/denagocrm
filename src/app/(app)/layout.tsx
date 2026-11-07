@@ -26,6 +26,7 @@ import HalloweenDecor from "@/components/HalloweenDecor";
 import { unreadNotificationCount } from "@/lib/collaboration";
 import { getRecordLabels } from "@/lib/recordLabelsServer";
 import { todaysBirthdayCount } from "@/lib/birthdaysServer";
+import { overdueActivityCount } from "@/lib/activityAccess";
 
 /**
  * Tab title and icon from the SESSION's workspace. The root layout can only go
@@ -75,6 +76,7 @@ export default async function AppLayout({
     activityTypesSetting,
     isTenantOwnerFlag,
     recordLabels,
+    activitiesOverdue,
     regional,
     currencyOptions,
   ] = await Promise.all([
@@ -106,6 +108,8 @@ export default async function AppLayout({
     // what the nav and menus mean by "owner". Never throws: false on failure.
     isTenantOwner().catch(() => false),
     getRecordLabels(),
+    // The Activities badge: the page's "Overdue" tile for my own tasks. Never breaks a page.
+    overdueActivityCount(user).catch(() => 0),
     // The workspace's currency and locale, for money shown in the browser (MoneyFormatProvider).
     getRegionalSettings().catch(() => DEFAULT_REGIONAL),
     // The currencies a lead or quote may be in (multicurrency module; base only when it's off).
@@ -177,6 +181,7 @@ export default async function AppLayout({
         }}
         inboxWaiting={inboxWaiting}
         casesWaiting={casesWaiting}
+        activitiesOverdue={activitiesOverdue}
         unreadNotices={unreadNotices}
         birthdaysToday={birthdaysToday}
         enabledModules={enabledModules ? [...enabledModules] : undefined}
