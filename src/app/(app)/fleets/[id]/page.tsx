@@ -6,6 +6,7 @@ import { prisma } from "@/lib/db";
 import { activeTenantPredicate } from "@/lib/tenantPredicate";
 import { listActingTenantStaff } from "@/lib/tenantActor";
 import { contactName, formatDate, formatDateTime, formatZAR } from "@/lib/format";
+import { withCurrency } from "@/lib/currencyRules";
 import { computeDue, dueColors, dueLabels } from "@/lib/serviceDue";
 import { computeWarranty, warrantyColors, warrantyLabels } from "@/lib/warranty";
 import { isModuleEnabled } from "@/lib/modules/enabled";
@@ -519,7 +520,7 @@ export default async function FleetDetailPage({ params }: { params: Promise<{ id
                         <span className="text-xs text-slate-500 truncate max-w-[9rem]">
                           {labelFor(lead.contactId) ?? ""}
                         </span>
-                        <span className="text-xs text-slate-400">{formatZAR(lead.valueCents, moneyFmt)}</span>
+                        <span className="text-xs text-slate-400">{formatZAR(lead.valueCents, withCurrency(moneyFmt, lead.currency))}</span>
                         <span
                           className={`badge ${
                             lead.status === "won"
@@ -613,7 +614,7 @@ export default async function FleetDetailPage({ params }: { params: Promise<{ id
                             {quote.fleetId === fleet.id ? fleet.name : labelFor(quote.contactId) ?? "—"}
                           </td>
                           <td className="text-slate-400">{labelFor(quote.contactId) ?? "—"}</td>
-                          <td className="text-slate-400">{formatZAR(payableTotalCents(quote), moneyFmt)}</td>
+                          <td className="text-slate-400">{formatZAR(payableTotalCents(quote), withCurrency(moneyFmt, quote.currency))}</td>
                           <td>
                             <StatusPill
                               tone={

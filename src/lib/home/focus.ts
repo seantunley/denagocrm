@@ -1,10 +1,11 @@
 import "server-only";
 import { prisma } from "@/lib/db";
 import { getRegionalSettings } from "@/lib/settings";
+import { baseAndOthers, formatTotals, inBaseCurrency } from "@/lib/currencyRules";
 import { loadTodayLeads, type TodayLead } from "@/lib/leadScoreLoader";
 import {
   dashboardViewer, dashboardWindow, grants, leadWhere, quoteWhere,
-  leadsThisMonth, prevLeadCount, wonThisMonth, prevWonValue, plannedActivities, dailySeries,
+  leadsThisMonth, prevLeadCount, wonThisMonthSplit, prevWonValue, plannedActivities, dailySeries,
 } from "@/lib/dashboard/data";
 import { homeBriefLine, homeMood, homeNumbers, HOME_QUEUE_SIZE, type HomeNumber } from "./focusRules";
 
@@ -35,6 +36,8 @@ export type HomeFocus = {
   sparks: Partial<Record<HomeNumber["key"], number[]>>;
   /** Open deals by stage, in pipeline order — the one chart on the page. Empty when the viewer may not see deals. */
   stages: { name: string; color: string; count: number; value: number }[];
+  /** The stages' values are the base currency; other currencies' open value, formatted ("₽ 4.9k"). */
+  pipelineElsewhere?: string;
 };
 
 /** Signing requests still out with a customer, counted only over quotes the viewer may read. */
@@ -58,14 +61,14 @@ export async function loadHomeFocus({ mine }: { mine: boolean }): Promise<HomeFo
   const seesSigning = grants(access, "signing.view", "signing.manage") && grants(access, "quotes.view_all", "quotes.view_owned");
 
   const openWhere = seesLeads ? { ...(await leadWhere()), status: "open" } : null;
-  const [today, won, prevWon, created, prevCreated, open, target, overdueMine, agenda, waiting] = await Promise.all([
+  const [today, wonSplit, prevWon, created, prevCreated, openAll, target, overdueMine, agenda, waiting] = await Promise.all([
     seesLeads ? loadTodayLeads(user, { mine }) : { leads: [] as TodayLead[], truncated: false },
-    seesLeads ? wonThisMonth() : [],
+    seesLeads ? wonThisMonthSplit() : { base: [], others: [] },
     seesLeads ? prevWonValue() : 0,
     seesLeads ? leadsThisMonth() : [],
     seesLeads ? prevLeadCount() : 0,
     // One read gives the pipeline's total, its size and its shape by stage.
-    openWhere ? prisma.lead.findMany({ where: openWhere, select: { valueCents: true, stage: { select: { id: true, name: true, color: true, order: true } } } }) : [],
+    openWhere ? prisma.lead.findMany({ where: openWhere, select: { valueCents: true, currency: true, stage: { select: { id: true, name: true, color: true, order: true } } } }) : [],
     seesLeads ? prisma.target.findFirst({ where: { period, metric: "sales_value" }, select: { value: true } }) : null,
     // The viewer's OWN overdue work: assignedToId is the caller, so this is nobody else's whatever their permissions.
     seesActivities ? prisma.activity.count({ where: { status: "planned", availabilityBlock: false, dueDate: { lt: todayStart }, assignedToId: user.id } }) : 0,
@@ -75,24 +78,31 @@ export async function loadHomeFocus({ mine }: { mine: boolean }): Promise<HomeFo
 
   // A deal is "worth contacting" when the ranking found a reason; the rest of the list is just the pipeline.
   const worth = today.leads.filter((lead) => lead.score > 0);
+  const money = await getRegionalSettings();
+  // Figures, sparks and stage bars add up the base currency only; other currencies are named beside them.
+  const won = wonSplit.base;
+  const openSplit = baseAndOthers(openAll, (lead) => ({ cents: lead.valueCents, currency: lead.currency }), money.currency);
+  const pipelineElsewhere = openSplit.others.length ? formatTotals(openSplit.others, money, true) : undefined;
   const numbers = homeNumbers({
-    money: await getRegionalSettings(),
+    money,
     seesLeads, seesActivities, seesSigning,
     wonCents: won.reduce((sum, w) => sum + w.valueCents, 0),
+    wonElsewhere: wonSplit.others.length ? formatTotals(wonSplit.others, money, true) : undefined,
     prevWonCents: prevWon,
     salesTargetCents: target?.value ?? 0,
-    openPipelineCents: open.reduce((sum, lead) => sum + lead.valueCents, 0),
-    openDeals: open.length,
+    openPipelineCents: openSplit.baseCents,
+    pipelineElsewhere,
+    openDeals: openAll.length,
     newLeads: created.length,
     prevNewLeads: prevCreated,
     overdueMine,
     waitingSignature: waiting ?? 0,
   });
   const byStage = new Map<string, { name: string; color: string; count: number; value: number; order: number }>();
-  for (const lead of open) {
+  for (const lead of openAll) {
     const stage = byStage.get(lead.stage.id) ?? { name: lead.stage.name, color: lead.stage.color, count: 0, value: 0, order: lead.stage.order };
     stage.count += 1;
-    stage.value += lead.valueCents;
+    if (inBaseCurrency(lead, money.currency)) stage.value += lead.valueCents;
     byStage.set(lead.stage.id, stage);
   }
   return {
@@ -105,6 +115,7 @@ export async function loadHomeFocus({ mine }: { mine: boolean }): Promise<HomeFo
         }
       : {},
     stages: [...byStage.values()].sort((a, b) => a.order - b.order).map(({ order: _order, ...stage }) => { void _order; return stage; }),
+    pipelineElsewhere,
     brief: homeBriefLine({ toContact: worth.length, overdueMine, waitingSignature: waiting ?? 0, meetingsToday: agenda?.today.length ?? 0 }),
     queue: worth.slice(0, HOME_QUEUE_SIZE),
     queueMore: Math.max(0, worth.length - HOME_QUEUE_SIZE),

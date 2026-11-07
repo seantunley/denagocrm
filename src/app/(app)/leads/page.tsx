@@ -21,7 +21,8 @@ import LeadForm from "@/components/LeadForm";
 import { PageHeader } from "@/components/page-header";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { createLead } from "@/app/actions/leads";
-import { contactName, formatZAR } from "@/lib/format";
+import { contactName } from "@/lib/format";
+import { formatTotals, totalsByCurrency } from "@/lib/currencyRules";
 import { midSentence } from "@/lib/recordLabels";
 import { getRecordLabels } from "@/lib/recordLabelsServer";
 import { getRegionalSettings } from "@/lib/settings";
@@ -275,7 +276,7 @@ export default async function LeadsPage({
                   deletedAt: null,
                   ...(accessibleLeadIds ? { id: { in: accessibleLeadIds } } : {}),
                 },
-                select: { valueCents: true },
+                select: { valueCents: true, currency: true },
               })
             : [];
           return {
@@ -283,7 +284,7 @@ export default async function LeadsPage({
             name: pipeline.name,
             stageCount: stageIds.length,
             openCount: rows.length,
-            openValueCents: rows.reduce((sum, row) => sum + row.valueCents, 0),
+            openValues: totalsByCurrency(rows, (row) => ({ cents: row.valueCents, currency: row.currency }), (await getRegionalSettings()).currency),
           };
         }),
       )
@@ -380,18 +381,18 @@ export default async function LeadsPage({
   }));
 
   const openCount = boardStages.reduce((count, stage) => count + stage.leads.length, 0);
-  const totalOpenValue = boardStages.reduce(
-    (total, stage) => total + stage.leads.reduce((stageTotal, lead) => stageTotal + lead.valueCents, 0),
-    0,
-  );
   const nurtureCount = await prisma.lead.count({ where: { status: "nurture", deletedAt: null, ...(accessibleLeadIds ? { id: { in: accessibleLeadIds } } : {}) } });
 
   const moneyFmt = await getRegionalSettings();
+  const totalOpenValue = formatTotals(
+    totalsByCurrency(boardStages.flatMap((stage) => stage.leads), (lead) => ({ cents: lead.valueCents, currency: lead.currency }), moneyFmt.currency),
+    moneyFmt,
+  );
   return (
     <div className="space-y-5">
       <PageHeader
         title={labels.lead.many}
-        description={`${openCount} open · ${formatZAR(totalOpenValue, moneyFmt)} in pipeline`}
+        description={`${openCount} open · ${totalOpenValue} in pipeline`}
       >
         <PipelineSwitcher
           pipelines={pipelines.map((p) => ({ id: p.id, name: p.name, isDefault: p.isDefault }))}

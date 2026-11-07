@@ -54,6 +54,7 @@ import {
 } from "@/lib/permissions";
 import { cn } from "@/lib/utils";
 import { getRegionalSettings } from "@/lib/settings";
+import { baseValueCents, othersText } from "@/lib/currencyRules";
 
 export const dynamic = "force-dynamic";
 
@@ -354,12 +355,13 @@ async function liveAggregates(options: {
         select: {
           wonAt: true,
           valueCents: true,
+          currency: true,
           assignedTo: { select: { name: true } },
         },
       }),
       prisma.lead.findMany({
         where: { ...leadFilter, status: "won", wonAt: { gte: prevFrom, lt: prevTo } },
-        select: { valueCents: true },
+        select: { valueCents: true, currency: true },
       }),
       prisma.lead.count({
         where: { ...leadFilter, status: "lost", lostAt: { gte: from, lt: to } },
@@ -393,7 +395,7 @@ async function liveAggregates(options: {
     const name = won.assignedTo?.name ?? "Unassigned";
     const current = teamMap.get(name) ?? { name, won: 0, wonValue: 0 };
     current.won += 1;
-    current.wonValue += Math.round(won.valueCents / 100);
+    current.wonValue += Math.round(baseValueCents(won) / 100);
     teamMap.set(name, current);
   }
 
@@ -402,8 +404,8 @@ async function liveAggregates(options: {
     prevLeads: prevLeads.length,
     won: wonInRange.length,
     prevWon: prevWon.length,
-    wonValueCents: wonInRange.reduce((sum, won) => sum + won.valueCents, 0),
-    prevWonValueCents: prevWon.reduce((sum, won) => sum + won.valueCents, 0),
+    wonValueCents: wonInRange.reduce((sum, won) => sum + baseValueCents(won), 0),
+    prevWonValueCents: prevWon.reduce((sum, won) => sum + baseValueCents(won), 0),
     lost: lostInRange,
     prevLost,
     trend: spans.map((span, index) => {
@@ -412,7 +414,7 @@ async function liveAggregates(options: {
         label: span.label,
         leads: leadCounts[index],
         won: wonHere.length,
-        wonValue: Math.round(wonHere.reduce((sum, won) => sum + won.valueCents, 0) / 100),
+        wonValue: Math.round(wonHere.reduce((sum, won) => sum + baseValueCents(won), 0) / 100),
         prevLeads: prevCounts[index] ?? null,
       };
     }),
@@ -500,16 +502,23 @@ export default async function ReportsPage({
   const useBuckets =
     unrestricted && !filtered && (await statisticsReadyFor(neededMetrics, statsTenantId));
 
-  const [openLeads, products, allSources] = await Promise.all([
+  const [openLeads, products, allSources, wonElsewhere] = await Promise.all([
     prisma.lead.findMany({
       where: { ...leadFilter, status: "open" },
       select: {
         valueCents: true,
+        currency: true,
         stage: { select: { id: true, name: true, color: true, order: true } },
       },
     }),
     prisma.product.findMany({ orderBy: { name: "asc" }, select: { id: true, name: true } }),
     prisma.lead.groupBy({ by: ["source"], where: leadScope }),
+    // Wins in other currencies (multicurrency module): not in the base-currency figures, named beside them.
+    prisma.lead.groupBy({
+      by: ["currency"],
+      where: { ...leadFilter, status: "won", wonAt: { gte: from, lt: to }, currency: { not: null } },
+      _sum: { valueCents: true },
+    }),
   ]);
 
   const aggregates = useBuckets
@@ -547,7 +556,7 @@ export default async function ReportsPage({
       order: lead.stage.order,
     };
     current.count += 1;
-    current.value += Math.round(lead.valueCents / 100);
+    current.value += Math.round(baseValueCents(lead) / 100);
     stageMap.set(lead.stage.id, current);
   }
   const funnel = [...stageMap.values()].sort((a, b) => a.order - b.order);
@@ -571,7 +580,7 @@ export default async function ReportsPage({
       <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
         <StatCard label="New leads" value={String(aggregates.leads)} delta={pct(aggregates.leads, aggregates.prevLeads)} compare={compare} />
         <StatCard label="Deals won" value={String(aggregates.won)} delta={pct(aggregates.won, aggregates.prevWon)} compare={compare} />
-        <StatCard label="Won value" value={formatZARCompact(aggregates.wonValueCents, moneyFmt)} delta={pct(aggregates.wonValueCents, aggregates.prevWonValueCents)} compare={compare} />
+        <StatCard label="Won value" value={formatZARCompact(aggregates.wonValueCents, moneyFmt) + othersText(wonElsewhere.map((row) => ({ currency: row.currency!, cents: row._sum.valueCents ?? 0 })), moneyFmt, true)} delta={pct(aggregates.wonValueCents, aggregates.prevWonValueCents)} compare={compare} />
         <StatCard label="Win rate" value={`${winRate}%`} delta={prevClosed || closed ? winRate - prevWinRate : null} compare={compare} />
       </div>
 

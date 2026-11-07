@@ -469,10 +469,10 @@ test("every correction is permissioned exactly like the stage it corrects", () =
 
 test("the corrections are where people work: desktop board AND mobile queue, one component", () => {
   const page = src("src/app/(app)/deliveries/page.tsx");
-  const uses = page.match(/\{canManage && <FulfilmentCorrections quote=\{quote\} moneyFmt=\{moneyFmt\} \/>\}/g) ?? [];
+  const uses = page.match(/\{canManage && <FulfilmentCorrections quote=\{quote\} moneyFmt=\{withCurrency\(moneyFmt, quote\.currency\)\} \/>\}/g) ?? [];
   assert.equal(uses.length, 2, "rendered in both the mobile and desktop views, behind deliveries.manage");
   const mobile = page.slice(page.indexOf("<MobileOnly"), page.indexOf("<DesktopOnly"));
-  assert.match(mobile, /<FulfilmentCorrections quote=\{quote\} moneyFmt=\{moneyFmt\} \/>/, "the mobile queue has them");
+  assert.match(mobile, /<FulfilmentCorrections quote=\{quote\} moneyFmt=\{withCurrency\(moneyFmt, quote\.currency\)\} \/>/, "the mobile queue has them");
   const component = page.slice(page.indexOf("function FulfilmentCorrections"));
   for (const action of ["replaceInvoice", "correctDepositAmount", "replaceProofOfPayment", "rescheduleDelivery"]) {
     assert.match(component, new RegExp(`action=\\{${action}\\.bind\\(null, quote\\.id\\)\\}`), `${action} is offered`);

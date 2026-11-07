@@ -10,7 +10,7 @@
  * Amounts are stored in the currency they were agreed in and never converted. Totals
  * across records are shown per currency, side by side (no exchange rates).
  */
-import type { MoneyFormat } from "./format";
+import { formatZAR, formatZARCompact, type MoneyFormat } from "./format";
 
 /** Offered in Settings as checkboxes (a dropdown, not free text). The base is always included. */
 export const COMMON_CURRENCIES = [
@@ -73,4 +73,71 @@ export function totalsByCurrency<T>(
     totals.set(code, (totals.get(code) ?? 0) + cents);
   }
   return [...totals].map(([currency, cents]) => ({ currency, cents })).filter((row, index) => index === 0 || row.cents !== 0);
+}
+
+/**
+ * A total as ONE base-currency number (what charts, targets and scores need) plus the
+ * other currencies kept apart — so nothing is ever added across currencies, and
+ * `othersText` can say what the number leaves out.
+ */
+export function baseAndOthers<T>(
+  rows: readonly T[],
+  pick: (row: T) => { cents: number; currency: string | null | undefined },
+  base: string,
+): { baseCents: number; others: { currency: string; cents: number }[] } {
+  const [first, ...others] = totalsByCurrency(rows, pick, base);
+  return { baseCents: first.cents, others };
+}
+
+/** " + ₽ 4,861" per currency a base total leaves out; "" when there are none. */
+export function othersText(others: readonly { currency: string; cents: number }[], format: MoneyFormat, compact = false): string {
+  return others.length ? ` + ${formatTotals(others, format, compact)}` : "";
+}
+
+/** Per-currency totals as text, base first: "R 120,000 + ₽ 4,861". */
+export function formatTotals(totals: readonly { currency: string; cents: number }[], format: MoneyFormat, compact = false): string {
+  const fmt = compact ? formatZARCompact : formatZAR;
+  return totals.map((total) => fmt(total.cents, withCurrency(format, total.currency))).join(" + ");
+}
+
+/**
+ * A lead's value as it counts toward a single base-currency figure: the value when stored
+ * in the base (NULL — the base is never stored as a code), 0 otherwise. The SAME rule as
+ * the report buckets (statistics.ts LEAD_BASE_VALUE), so the live and bucket paths agree.
+ */
+export function baseValueCents(row: { valueCents: number; currency?: string | null }): number {
+  return row.currency ? 0 : row.valueCents;
+}
+
+/** Per-currency totals of the leads NOT in the base (a set `currency`) — what a base figure leaves out. */
+export function nonBaseTotals(rows: readonly { valueCents: number; currency?: string | null }[]): { currency: string; cents: number }[] {
+  const totals = new Map<string, number>();
+  for (const row of rows) if (row.currency) totals.set(row.currency, (totals.get(row.currency) ?? 0) + row.valueCents);
+  return [...totals].map(([currency, cents]) => ({ currency, cents }));
+}
+
+/** Is this record in the base currency? (NULL = the base.) */
+export function inBaseCurrency(record: { currency?: string | null }, base: string): boolean {
+  return !record.currency || record.currency === base;
+}
+
+type StageLead = {
+  valueCents: number;
+  currency?: string | null;
+  stage: { id: string; name: string; color: string; order: number };
+};
+
+/**
+ * Open deals per stage, in stage order. EVERY deal counts — a RUB-only pipeline still
+ * has deals — but only base-currency values are summed, since one figure can't add currencies.
+ */
+export function stageSegments(leads: readonly StageLead[], base: string) {
+  const byStage = new Map<string, { name: string; color: string; count: number; value: number; order: number }>();
+  for (const lead of leads) {
+    const seg = byStage.get(lead.stage.id) ?? { name: lead.stage.name, color: lead.stage.color, count: 0, value: 0, order: lead.stage.order };
+    seg.count += 1;
+    if (inBaseCurrency(lead, base)) seg.value += lead.valueCents;
+    byStage.set(lead.stage.id, seg);
+  }
+  return [...byStage.values()].sort((a, b) => a.order - b.order).map(({ order: _order, ...seg }) => seg);
 }

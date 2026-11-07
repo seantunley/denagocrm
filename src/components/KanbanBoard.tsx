@@ -608,7 +608,6 @@ function Column({
 }) {
   const { setNodeRef, isOver } = useDroppable({ id: stage.id });
   const moneyFmt = useMoneyFormat();
-  const total = stage.leads.reduce((sum, lead) => sum + lead.valueCents, 0);
   // Never one figure across currencies (multicurrency module): a total per currency, side by side.
   const totals = totalsByCurrency(stage.leads, (lead) => ({ cents: lead.valueCents, currency: lead.currency }), moneyFmt.currency)
     .filter((row) => row.cents > 0)
@@ -640,7 +639,7 @@ function Column({
             </span>
           </div>
           <span className="shrink-0 text-xs font-semibold tabular-nums text-foreground">
-            {total > 0 ? totals : "—"}
+            {totals || "—"}
           </span>
         </div>
         <p className="mt-1.5 text-[10px] text-muted-foreground">

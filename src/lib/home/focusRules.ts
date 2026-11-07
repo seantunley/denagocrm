@@ -47,6 +47,9 @@ export type HomeFigures = {
   /** This month's sales target in cents; 0 when none is set. */
   salesTargetCents: number;
   openPipelineCents: number;
+  /** Multicurrency: the figures above are the base currency; what they leave out, formatted ("₽ 4.9k"). */
+  wonElsewhere?: string;
+  pipelineElsewhere?: string;
   openDeals: number;
   newLeads: number;
   prevNewLeads: number;
@@ -75,14 +78,16 @@ export function homeNumbers(f: HomeFigures): HomeNumber[] {
   const out: HomeNumber[] = [];
   if (f.seesLeads) {
     const sold = { key: "sales" as const, label: "Sold this month", value: formatZARCompact(f.wonCents, moneyFmt), amount: rand(f.wonCents), display: "zar" as const };
+    const plus = (text?: string) => (text ? ` · plus ${text}` : "");
     // With a target, the question is "how far along are we?"; without one, "how does it compare?".
     if (f.salesTargetCents > 0) {
       const progress = Math.min(1, Math.max(0, f.wonCents / f.salesTargetCents));
-      out.push({ ...sold, context: `${Math.round(progress * 100)}% of ${formatZARCompact(f.salesTargetCents, moneyFmt)} target`, delta: against(f.wonCents, f.prevWonCents).delta, progress, href: "/targets" });
+      out.push({ ...sold, context: `${Math.round(progress * 100)}% of ${formatZARCompact(f.salesTargetCents, moneyFmt)} target${plus(f.wonElsewhere)}`, delta: against(f.wonCents, f.prevWonCents).delta, progress, href: "/targets" });
     } else {
-      out.push({ ...sold, ...against(f.wonCents, f.prevWonCents), href: "/leads" });
+      const compared = against(f.wonCents, f.prevWonCents);
+      out.push({ ...sold, ...compared, context: compared.context + plus(f.wonElsewhere), href: "/leads" });
     }
-    out.push({ key: "pipeline", label: "Open pipeline", value: formatZARCompact(f.openPipelineCents, moneyFmt), amount: rand(f.openPipelineCents), display: "zar", context: `across ${plural(f.openDeals, "open deal")}`, delta: null, href: "/leads" });
+    out.push({ key: "pipeline", label: "Open pipeline", value: formatZARCompact(f.openPipelineCents, moneyFmt), amount: rand(f.openPipelineCents), display: "zar", context: `across ${plural(f.openDeals, "open deal")}${plus(f.pipelineElsewhere)}`, delta: null, href: "/leads" });
     out.push({ key: "new-leads", label: "New leads this month", value: String(f.newLeads), amount: f.newLeads, display: "int", ...against(f.newLeads, f.prevNewLeads), href: "/leads" });
   }
   if (f.seesActivities) {

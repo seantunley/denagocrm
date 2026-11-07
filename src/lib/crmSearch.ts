@@ -5,6 +5,7 @@ import { actingTenantId } from "./actingTenant";
 import { isModuleEnabled } from "./modules/enabled";
 import { AUTOMOTIVE_DELIVERY_TAGS } from "./modules/registry";
 import { contactName, formatZAR } from "./format";
+import { withCurrency } from "./currencyRules";
 import { isCustomEntity, type CustomEntity } from "./customFields";
 import { getAccessibleActivityIds } from "./activityAccess";
 import { searchBotKnowledge } from "./botKnowledge";
@@ -110,7 +111,7 @@ export async function searchCrm(user: PermissionUser, rawTerm: string, options: 
     want.has("lead") && !empty(leadIds)
       ? prisma.lead.findMany({
           where: { ...scoped(leadIds), OR: [{ title: contains }, { name: contains }, { email: contains }, { phone: contains }, ...customMatch("lead")] },
-          select: { id: true, title: true, name: true, status: true, valueCents: true, stage: { select: { name: true } } },
+          select: { id: true, title: true, name: true, status: true, valueCents: true, currency: true, stage: { select: { name: true } } },
           orderBy: { updatedAt: "desc" },
           take,
         })
@@ -223,7 +224,7 @@ export async function searchCrm(user: PermissionUser, rawTerm: string, options: 
   const moneyFmt = await getRegionalSettings();
   return [
     ...contacts.map((c) => ({ type: "contact" as const, id: c.id, label: contactName(c), sublabel: [c.email, c.phone, c.city].filter(Boolean).join(" · "), href: `/contacts/${c.id}` })),
-    ...leads.map((l) => ({ type: "lead" as const, id: l.id, label: l.title, sublabel: [l.name, l.status === "open" ? l.stage?.name : l.status, l.valueCents ? formatZAR(l.valueCents, moneyFmt) : null].filter(Boolean).join(" · "), href: `/leads/${l.id}` })),
+    ...leads.map((l) => ({ type: "lead" as const, id: l.id, label: l.title, sublabel: [l.name, l.status === "open" ? l.stage?.name : l.status, l.valueCents ? formatZAR(l.valueCents, withCurrency(moneyFmt, l.currency)) : null].filter(Boolean).join(" · "), href: `/leads/${l.id}` })),
     ...quotes.map((q) => ({ type: "quote" as const, id: q.id, label: `Q-${q.number}`, sublabel: [q.contact ? contactName(q.contact) : q.lead?.name, q.status].filter(Boolean).join(" · "), href: `/quotes/${q.id}` })),
     ...vehicles.map((v) => ({ type: "vehicle" as const, id: v.id, label: v.model, sublabel: [v.regNumber ?? v.vin, contactName(v.contact)].filter(Boolean).join(" · "), href: `/vehicles/${v.id}` })),
     ...jobCards.map((j) => ({ type: "jobcard" as const, id: j.id, label: `Job #${j.number}`, sublabel: [j.vehicle?.model, contactName(j.contact), j.description.slice(0, 60)].filter(Boolean).join(" · "), href: `/jobcards/${j.id}` })),

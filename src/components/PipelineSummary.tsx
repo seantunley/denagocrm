@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { GitBranch, Layers3 } from "lucide-react";
-import { formatZAR, type MoneyFormat } from "@/lib/format";
+import type { MoneyFormat } from "@/lib/format";
+import { formatTotals, totalsByCurrency } from "@/lib/currencyRules";
 import { EmptyState, Surface } from "@/components/visual-system";
 
 export type PipelineSummaryRow = {
@@ -8,7 +9,8 @@ export type PipelineSummaryRow = {
   name: string;
   stageCount: number;
   openCount: number;
-  openValueCents: number;
+  /** Per currency, base first — never one figure across currencies. */
+  openValues: { currency: string; cents: number }[];
 };
 
 /**
@@ -35,7 +37,7 @@ export default function PipelineSummary({ pipelines, moneyFmt }: { pipelines: Pi
   }
 
   const totalOpen = pipelines.reduce((sum, p) => sum + p.openCount, 0);
-  const totalValue = pipelines.reduce((sum, p) => sum + p.openValueCents, 0);
+  const totalValue = totalsByCurrency(pipelines.flatMap((p) => p.openValues), (total) => total, moneyFmt.currency);
 
   return (
     <div className="space-y-4">
@@ -45,7 +47,7 @@ export default function PipelineSummary({ pipelines, moneyFmt }: { pipelines: Pi
             All pipelines
           </p>
           <p className="mt-1 text-sm text-muted-foreground">
-            {totalOpen} open · {formatZAR(totalValue, moneyFmt)} across {pipelines.length} pipeline
+            {totalOpen} open · {formatTotals(totalValue, moneyFmt)} across {pipelines.length} pipeline
             {pipelines.length === 1 ? "" : "s"}
           </p>
         </div>
@@ -69,7 +71,7 @@ export default function PipelineSummary({ pipelines, moneyFmt }: { pipelines: Pi
                 <p className="min-w-0 flex-1 truncate font-medium">{pipeline.name}</p>
               </div>
               <p className="mt-4 text-2xl font-semibold tracking-tight">
-                {formatZAR(pipeline.openValueCents, moneyFmt)}
+                {formatTotals(pipeline.openValues, moneyFmt)}
               </p>
               <p className="mt-1 text-xs text-muted-foreground">
                 {pipeline.openCount} open · {pipeline.stageCount} stage
