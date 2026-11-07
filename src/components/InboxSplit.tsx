@@ -51,8 +51,10 @@ export default function InboxSplit({ items, withRail = false }: { items: InboxSp
         const archive = pane.current?.querySelector<HTMLFormElement>("[data-inbox-archive] form");
         if (!archive) return;
         event.preventDefault();
+        // Exactly the Archive button: the conversation stays open until the action
+        // succeeds (it then leaves this list and the pane empties itself); a refusal
+        // shows in the pane instead of vanishing with it.
         archive.requestSubmit();
-        setSelected(null);
       }
     };
     document.addEventListener("keydown", onKey);

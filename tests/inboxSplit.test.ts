@@ -20,6 +20,10 @@ test("r replies and e archives — once a conversation is open, never while typi
   assert.match(split, /if \(event\.key === "r"\) \{\s+const reply = pane\.current\?\.querySelector<HTMLTextAreaElement>\('textarea\[name="text"\]:not\(\[disabled\]\)'\);/);
   assert.match(split, /\} else if \(event\.key === "e"\) \{\s+const archive = pane\.current\?\.querySelector<HTMLFormElement>\("\[data-inbox-archive\] form"\);/);
   assert.match(src("src/components/SocialThreadList.tsx"), /<div data-inbox-archive="">\s+<SaveForm action=\{setThreadArchived\.bind/, "e presses the same Archive the button does");
+  // …and, like the button, leaves the conversation open until the archive succeeds.
+  const archiveKey = split.slice(split.indexOf('event.key === "e"'), split.indexOf("document.addEventListener"));
+  assert.match(archiveKey, /archive\.requestSubmit\(\);/);
+  assert.doesNotMatch(archiveKey, /setSelected\(null\)/, "a failed archive must not close the conversation and hide its error");
 });
 
 test("the deal rail shows only deals the viewer may open, with stage, value, next action and the next two moves", () => {
