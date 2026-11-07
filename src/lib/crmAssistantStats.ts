@@ -2,13 +2,14 @@ import "server-only";
 import type { z } from "zod";
 import { prisma } from "./db";
 import { statsArgs } from "./crmAssistantPlan";
-import { formatZAR } from "./format";
+import { baseValueCents, formatTotals, totalsByCurrency } from "./currencyRules";
 import { johannesburgDateKey } from "./activityDay";
 import { isModuleEnabled } from "./modules/enabled";
 import { accessibleTestDriveWhere } from "./testDriveAccess";
 import { contactActivityWhere, contactCommunicationWhere } from "./customerContact";
 import { firstStageOrders, stageContactAt } from "./stageContact";
 import { getAccessibleLeadIds, getAccessibleQuoteIds, hasAnyPermission, type PermissionUser } from "./permissions";
+import { getRegionalSettings } from "@/lib/settings";
 
 /**
  * Sales numbers DAX can reason from — "why are sales slower this month?" —
@@ -100,19 +101,22 @@ export async function salesStats(user: PermissionUser, raw: z.infer<typeof stats
   const headline = async (w: Window) => {
     const [created, won, lost, quoted] = await Promise.all([
       prisma.lead.count({ where: { ...lead, createdAt: w } }),
-      prisma.lead.aggregate({ where: { ...lead, status: "won", wonAt: w }, _count: { _all: true }, _sum: { valueCents: true } }),
+      prisma.lead.groupBy({ by: ["currency"], where: { ...lead, status: "won", wonAt: w }, _count: { _all: true }, _sum: { valueCents: true } }),
       prisma.lead.count({ where: { ...lead, status: "lost", lostAt: w } }),
       // Leads that came in this period and have reached a quote (any state).
       prisma.lead.count({ where: { ...lead, createdAt: w, quotes: { some: { deletedAt: null } } } }),
     ]);
-    const closed = won._count._all + lost;
+    const wonCount = won.reduce((sum, row) => sum + row._count._all, 0);
+    const closed = wonCount + lost;
+    const moneyFmt = await getRegionalSettings();
     return {
       newLeads: created,
       reachedQuote: `${quoted} (${pct(quoted, created)} of new leads)`,
-      won: won._count._all,
-      wonValue: formatZAR(won._sum.valueCents ?? 0),
+      won: wonCount,
+      // Per currency, never added across them (multicurrency module).
+      wonValue: formatTotals(totalsByCurrency(won, (row) => ({ cents: row._sum.valueCents ?? 0, currency: row.currency }), moneyFmt.currency), moneyFmt),
       lost,
-      winRate: pct(won._count._all, closed),
+      winRate: pct(wonCount, closed),
     };
   };
 
@@ -139,14 +143,14 @@ export async function salesStats(user: PermissionUser, raw: z.infer<typeof stats
     quoteNumbers(now),
     quoteNumbers(before),
     prisma.lead.groupBy({ by: ["source"], where: { ...lead, createdAt: now }, _count: { _all: true } }),
-    prisma.lead.groupBy({ by: ["source"], where: { ...lead, status: "won", wonAt: now }, _count: { _all: true }, _sum: { valueCents: true } }),
+    prisma.lead.groupBy({ by: ["source", "currency"], where: { ...lead, status: "won", wonAt: now }, _count: { _all: true }, _sum: { valueCents: true } }),
     prisma.lead.groupBy({ by: ["lostReason"], where: { ...lead, status: "lost", lostAt: now }, _count: { _all: true }, orderBy: { _count: { lostReason: "desc" } }, take: 5 }),
     // The open pipeline as it stands — small (one workspace's open deals).
     prisma.lead.findMany({
       where: { ...lead, status: "open" },
       take: 2000,
       select: {
-        id: true, valueCents: true, stageEnteredAt: true, assignedToId: true,
+        id: true, valueCents: true, currency: true, stageEnteredAt: true, assignedToId: true,
         assignedTo: { select: { name: true } },
         stage: { select: { name: true, order: true, staleAfterDays: true, pipelineId: true } },
       },
@@ -155,16 +159,21 @@ export async function salesStats(user: PermissionUser, raw: z.infer<typeof stats
 
   // ── Where the open pipeline sits, and what is stuck ──────────────────────────
   const today = Date.now();
-  const stageRows = new Map<string, { order: number; open: number; value: number; days: number; stalled: number; stalledValue: number }>();
+  const moneyFmt = await getRegionalSettings();
+  // Every money figure here is said per currency, never added across them (multicurrency module).
+  type Amount = { cents: number; currency: string | null };
+  const say = (amounts: readonly Amount[]) => formatTotals(totalsByCurrency(amounts, (a) => a, moneyFmt.currency), moneyFmt);
+  const amountOf = (l: { valueCents: number; currency: string | null }): Amount => ({ cents: l.valueCents, currency: l.currency });
+  const stageRows = new Map<string, { order: number; open: number; value: Amount[]; days: number; stalled: number; stalledValue: Amount[] }>();
   for (const l of open) {
     const days = Math.floor((today - l.stageEnteredAt.getTime()) / DAY);
-    const row = stageRows.get(l.stage.name) ?? { order: l.stage.order, open: 0, value: 0, days: 0, stalled: 0, stalledValue: 0 };
+    const row = stageRows.get(l.stage.name) ?? { order: l.stage.order, open: 0, value: [], days: 0, stalled: 0, stalledValue: [] };
     row.open++;
-    row.value += l.valueCents;
+    row.value.push(amountOf(l));
     row.days += days;
     if (l.stage.staleAfterDays && days >= l.stage.staleAfterDays) {
       row.stalled++;
-      row.stalledValue += l.valueCents;
+      row.stalledValue.push(amountOf(l));
     }
     stageRows.set(l.stage.name, row);
   }
@@ -173,9 +182,9 @@ export async function salesStats(user: PermissionUser, raw: z.infer<typeof stats
     .map(([stage, r]) => ({
       stage,
       open: r.open,
-      value: formatZAR(r.value),
+      value: say(r.value),
       averageDaysInStage: Math.round(r.days / r.open),
-      stalled: r.stalled ? `${r.stalled} (${formatZAR(r.stalledValue)}) past the stage's limit` : 0,
+      stalled: r.stalled ? `${r.stalled} (${say(r.stalledValue)}) past the stage's limit` : 0,
     }));
 
   // ── Each salesperson: their open deals, and whether they're being worked ─────
@@ -184,7 +193,7 @@ export async function salesStats(user: PermissionUser, raw: z.infer<typeof stats
     prisma.activity.groupBy({ by: ["leadId"], where: { leadId: { in: openIds }, status: "planned" }, _count: { _all: true } }),
     prisma.activity.groupBy({ by: ["leadId"], where: { leadId: { in: openIds }, status: "planned", availabilityBlock: false, dueDate: { lt: new Date() } }, _count: { _all: true } }),
     prisma.communication.groupBy({ by: ["leadId"], where: { leadId: { in: openIds }, ...contactCommunicationWhere }, _max: { occurredAt: true } }),
-    prisma.lead.groupBy({ by: ["assignedToId"], where: { ...lead, status: "won", wonAt: now }, _count: { _all: true }, _sum: { valueCents: true } }),
+    prisma.lead.groupBy({ by: ["assignedToId", "currency"], where: { ...lead, status: "won", wonAt: now }, _count: { _all: true }, _sum: { valueCents: true } }),
   ]);
   const doneTouch = await prisma.activity.groupBy({ by: ["leadId"], where: { leadId: { in: openIds }, ...contactActivityWhere }, _max: { doneAt: true } });
   const hasNextStep = new Set(planned.map((r) => r.leadId));
@@ -200,30 +209,34 @@ export async function salesStats(user: PermissionUser, raw: z.infer<typeof stats
   }
   const quietBefore = today - 7 * DAY;
 
-  const people = new Map<string, { name: string; open: number; value: number; withNextStep: number; overdue: number; quiet7: number }>();
+  const people = new Map<string, { name: string; open: number; value: number; amounts: Amount[]; withNextStep: number; overdue: number; quiet7: number }>();
   for (const l of open) {
     const key = l.assignedToId ?? "unassigned";
-    const p = people.get(key) ?? { name: l.assignedTo?.name ?? "Unassigned", open: 0, value: 0, withNextStep: 0, overdue: 0, quiet7: 0 };
+    const p = people.get(key) ?? { name: l.assignedTo?.name ?? "Unassigned", open: 0, value: 0, amounts: [], withNextStep: 0, overdue: 0, quiet7: 0 };
     p.open++;
-    p.value += l.valueCents;
+    p.value += baseValueCents(l); // only orders the list
+    p.amounts.push(amountOf(l));
     if (hasNextStep.has(l.id)) p.withNextStep++;
     p.overdue += overdueBy.get(l.id) ?? 0;
     if ((touched.get(l.id) ?? 0) < quietBefore) p.quiet7++;
     people.set(key, p);
   }
-  const wonFor = new Map(wonByPerson.map((r) => [r.assignedToId ?? "unassigned", r]));
+  const wonFor = Map.groupBy(wonByPerson, (r) => r.assignedToId ?? "unassigned");
+  const wonCount = (rows: readonly { _count: { _all: number } }[] | undefined) => (rows ?? []).reduce((sum, r) => sum + r._count._all, 0);
+  const wonValue = (rows: readonly { _sum: { valueCents: number | null }; currency: string | null }[] | undefined) =>
+    say((rows ?? []).map((r) => ({ cents: r._sum.valueCents ?? 0, currency: r.currency })));
   const salespeople = [...people.entries()]
     .sort((a, b) => b[1].value - a[1].value)
     .slice(0, 12)
     .map(([id, p]) => ({
       person: p.name,
       openDeals: p.open,
-      openValue: formatZAR(p.value),
+      openValue: say(p.amounts),
       withANextStepPlanned: pct(p.withNextStep, p.open),
       overdueTasks: p.overdue,
       noCustomerContact7Days: p.quiet7,
-      wonThisPeriod: wonFor.get(id)?._count._all ?? 0,
-      wonValueThisPeriod: formatZAR(wonFor.get(id)?._sum.valueCents ?? 0),
+      wonThisPeriod: wonCount(wonFor.get(id)),
+      wonValueThisPeriod: wonValue(wonFor.get(id)),
     }));
 
   // ── Test drives → sales (vehicle workspaces only) ───────────────────────────
@@ -239,7 +252,7 @@ export async function salesStats(user: PermissionUser, raw: z.infer<typeof stats
     testDrives = { completed: drives.length, leadsWonSince: won };
   }
 
-  const wonSource = new Map(wonBySource.map((r) => [r.source, r]));
+  const wonSource = Map.groupBy(wonBySource, (r) => r.source);
   return {
     truncated: open.length === 2000,
     data: [{
@@ -251,7 +264,7 @@ export async function salesStats(user: PermissionUser, raw: z.infer<typeof stats
       leadSources: sources
         .sort((a, b) => b._count._all - a._count._all)
         .slice(0, 8)
-        .map((s) => ({ source: s.source, newLeads: s._count._all, wonThisPeriod: wonSource.get(s.source)?._count._all ?? 0, wonValue: formatZAR(wonSource.get(s.source)?._sum.valueCents ?? 0) })),
+        .map((s) => ({ source: s.source, newLeads: s._count._all, wonThisPeriod: wonCount(wonSource.get(s.source)), wonValue: wonValue(wonSource.get(s.source)) })),
       lostReasons: lostReasons.map((r) => ({ reason: r.lostReason || "(none given)", count: r._count._all })),
       openPipelineByStage: stages,
       salespeople,

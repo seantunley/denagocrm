@@ -103,7 +103,7 @@ test("DAX sees every value a quote it proposes needs, and proposes nothing the s
   const lookup = read("src/lib/catalogueLookup.ts");
   const fieldsShown = lookup.slice(lookup.indexOf("const KNOWLEDGE_FIELDS = {"), lookup.indexOf("} as const;", lookup.indexOf("const KNOWLEDGE_FIELDS = {")));
   for (const column of ["id: true", "name: true", "basePriceCents: true", "colors: { select: { name: true }"]) assert.ok(fieldsShown.includes(column), `the knowledge lookup selects ${column}`);
-  for (const shown of ["productId: p.id,", "product: p.name,", "price: formatZAR(p.basePriceCents),", "colours: p.colors.map((colour) => colour.name),"]) assert.ok(core.includes(shown), `…and hands DAX ${shown}`);
+  for (const shown of ["productId: p.id,", "product: p.name,", "price: formatZAR(p.basePriceCents, moneyFmt),", "colours: p.colors.map((colour) => colour.name),"]) assert.ok(core.includes(shown), `…and hands DAX ${shown}`);
   // …to anyone who may create a quote; the deal and customer lookups hand over the ids a card names.
   assert.match(core, /const seesProducts = await hasAnyPermission\(user, [^)]*"quotes\.create"\);/);
   assert.match(core, /kind: "deal" as const, leadId: l\.id,/);

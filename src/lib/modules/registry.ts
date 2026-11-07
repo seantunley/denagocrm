@@ -14,7 +14,8 @@ export type ModuleId =
   | "automation"
   | "automotive"
   | "commerce"
-  | "portal";
+  | "portal"
+  | "multicurrency";
 
 export type AppModule = {
   id: ModuleId;
@@ -82,6 +83,13 @@ export const MODULE_REGISTRY: AppModule[] = [
     label: "Customer portal",
     description: "Customer-facing self-service portal: documents, profile and support.",
     routePrefixes: ["/portal"],
+  },
+  {
+    id: "multicurrency",
+    label: "Multi-currency",
+    description: "Quote, invoice and take payment in each customer's currency; totals are shown per currency.",
+    // No pages of its own: it adds a currency to leads and quotes wherever they appear.
+    routePrefixes: [],
   },
 ];
 

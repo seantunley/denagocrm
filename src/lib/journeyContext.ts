@@ -1,5 +1,6 @@
 import { prisma } from "./db";
 import { contactName } from "./format";
+import { getRegionalSettings } from "./settings";
 import { journeyVars, variableTemplateVars } from "./journeyVariables";
 
 export type JourneyEntityType = "lead" | "contact";
@@ -91,6 +92,8 @@ export async function loadJourneyContext(
         source: lead.source,
         status: lead.status,
         valueCents: lead.valueCents,
+        // The ISO code valueCents is in (multicurrency module); the base when the lead has none.
+        currency: lead.currency ?? (await getRegionalSettings()).currency,
         quantity: lead.quantity,
         stageId: lead.stageId,
         stageName: lead.stage.name,
@@ -191,6 +194,8 @@ export function journeyTemplateVars(context: JourneyContext): Record<string, str
     years: String(event.years ?? ""),
     stage: String(lead.stageName ?? ""),
     value: String(Math.round(Number(lead.valueCents ?? 0) / 100)),
+    // {{currency}}: the ISO code {{value}} is in — "ZAR", "RUB" (multicurrency module).
+    currency: String(lead.currency ?? ""),
     company: String(contact.company ?? ""),
   };
 }

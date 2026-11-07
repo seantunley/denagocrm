@@ -34,6 +34,7 @@ import { hasPermission, requireAnyPermission } from "@/lib/permissions";
 import { listStockUnits, stockDashboard } from "@/lib/stockPlatform";
 import { getStockLabels } from "@/lib/stockLabels";
 import RecordContextMenu, { type RecordContextAction } from "@/components/RecordContextMenu";
+import { getRegionalSettings } from "@/lib/settings";
 
 const STATUS: Record<string, { label: string; tone: "neutral" | "success" | "warning" | "danger" | "info" }> = {
   incoming: { label: "Incoming", tone: "info" },
@@ -130,6 +131,7 @@ export default async function StockPage({
     { label: "On hold", value: dashboard.hold, icon: AlertTriangle, href: "/stock?status=hold" },
   ];
 
+  const moneyFmt = await getRegionalSettings();
   return (
     <div className="space-y-6">
       <WorkspaceHero
@@ -151,8 +153,8 @@ export default async function StockPage({
           </>}
         </>}
         stats={[
-          { label: "Available", value: dashboard.available, detail: formatZAR(dashboard.availableValueCents), icon: PackageCheck, tone: "success" },
-          { label: "Incoming & inspection", value: dashboard.incoming, detail: formatZAR(dashboard.incomingValueCents), icon: Truck, tone: "primary" },
+          { label: "Available", value: dashboard.available, detail: formatZAR(dashboard.availableValueCents, moneyFmt), icon: PackageCheck, tone: "success" },
+          { label: "Incoming & inspection", value: dashboard.incoming, detail: formatZAR(dashboard.incomingValueCents, moneyFmt), icon: Truck, tone: "primary" },
           { label: "Committed", value: dashboard.reserved + dashboard.allocated, detail: `${dashboard.reserved} reserved · ${dashboard.allocated} allocated`, icon: CalendarClock },
           { label: "Average stock age", value: `${dashboard.averageAgeDays}d`, detail: `${dashboard.aged60} older than 60 days`, icon: Clock3, tone: dashboard.aged60 ? "warning" : "default" },
         ]}
@@ -211,7 +213,7 @@ export default async function StockPage({
                     <td data-label="Customer / quote" className="text-sm text-muted-foreground">{unit.reservedForLeadId ? <Link href={`/leads/${unit.reservedForLeadId}`} className="text-primary hover:underline">{unit.reservedLeadName ?? "Lead"}</Link> : unit.soldQuoteId ? <Link href={`/quotes/${unit.soldQuoteId}`} className="text-primary hover:underline">Q-{unit.quoteNumber}</Link> : "—"}{unit.reservationExpiresAt && <p className="text-[11px]">Expires {unit.reservationExpiresAt.toLocaleDateString("en-ZA")}</p>}</td>
                     <td data-label="Location" className="text-sm text-muted-foreground">{unit.location ?? "—"}</td>
                     <td data-label="Age" className={`whitespace-nowrap ${unit.ageDays >= 60 ? "font-semibold text-amber-300" : "text-muted-foreground"}`}>{unit.ageDays}d</td>
-                    {canManage && <td data-label="Landed cost" className="whitespace-nowrap text-right tabular-nums">{formatZAR(unit.landedCostCents || unit.costCents)}</td>}
+                    {canManage && <td data-label="Landed cost" className="whitespace-nowrap text-right tabular-nums">{formatZAR(unit.landedCostCents || unit.costCents, moneyFmt)}</td>}
                     <td data-actions className="text-right"><Link href={`/stock/${unit.id}`} className="btn-secondary btn-sm inline-flex items-center gap-1 whitespace-nowrap">Open <ArrowRight className="size-3.5" /></Link></td>
                   </tr>
                   </RecordContextMenu>;

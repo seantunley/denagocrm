@@ -16,7 +16,15 @@ import { CLOSED_REQUEST_STATUSES } from "@/lib/signing/status";
 import { MAX_PHOTOS, MAX_PHOTO_BYTES, checkUploadPayload } from "@/lib/photoBudget";
 import { assertOwnedBlob, saveFile, deleteFile, deleteOwnedBlob } from "@/lib/storage";
 import { logError } from "@/lib/errorLog";
-import { parseRands } from "@/lib/format";
+import { parseMoneyField } from "@/lib/moneyInput";
+import { getRegionalSettings } from "@/lib/settings";
+
+/** A money field read in the workspace's currency (moneyInput.ts): blank is null, anything unclear is refused. */
+async function moneyCents(formData: FormData, field: string, label: string): Promise<number | null> {
+  const parsed = parseMoneyField(String(formData.get(field) ?? ""), (await getRegionalSettings()).currency);
+  if (!parsed.ok) refuse(`${label}: ${parsed.error}`);
+  return parsed.cents;
+}
 import { Prisma } from "@prisma/client";
 import { STAGE_VALUES, PRIORITY_VALUES, stageMeta } from "@/lib/workshop-constants";
 import { isModuleEnabled } from "@/lib/modules/enabled";
@@ -422,7 +430,7 @@ export async function addJobCardItem(jobCardId: string, formData: FormData) {
     if (!description) refuse("Give the line a description.");
     const kind = String(formData.get("kind") ?? "part");
     const partId = String(formData.get("partId") ?? "").trim() || null;
-    const unitPriceCents = parseRands(String(formData.get("unitPrice") ?? ""));
+    const unitPriceCents = (await moneyCents(formData, "unitPrice", "Unit price")) ?? 0;
     const isPart = Boolean(partId) && kind === "part";
     // Reject invalid quantities instead of silently coercing them to 1 (a negative
     // used to flow through and INCREASE stock). Parts must be WHOLE positive units;
@@ -621,7 +629,7 @@ export async function setJobCardEstimate(jobCardId: string, formData: FormData) 
     const hoursRaw = String(formData.get("estimatedHours") ?? "").trim();
     const rateRaw = String(formData.get("labourRate") ?? "").trim();
     const estimatedHours = hoursRaw === "" ? null : Math.max(0, parseFloat(hoursRaw) || 0);
-    const labourRateCents = rateRaw === "" ? null : parseRands(rateRaw);
+    const labourRateCents = rateRaw === "" ? null : await moneyCents(formData, "labourRate", "Labour rate");
     await prisma.jobCard.update({
       where: { id: jobCardId },
       data: { estimatedHours, labourRateCents },
@@ -957,7 +965,7 @@ export async function requestAdditionalWork(jobCardId: string, formData: FormDat
     const user = await requireJobCardAccess(jobCardId, "jobcards.manage");
     const description = String(formData.get("description") ?? "").trim();
     if (!description) refuse("Describe the additional work you are requesting.");
-    const amountCents = parseRands(String(formData.get("amount") ?? ""));
+    const amountCents = (await moneyCents(formData, "amount", "Amount")) ?? 0;
     const jobCard = await prisma.jobCard.findUniqueOrThrow({ where: { id: jobCardId }, select: { number: true, contactId: true } });
     await prisma.jobCardApproval.create({
       data: { jobCardId, description, amountCents, createdById: user.id },
@@ -1005,7 +1013,7 @@ export async function saveSubcontract(jobCardId: string, formData: FormData) {
     await requireJobCardAccess(jobCardId, "jobcards.manage");
     const isSubcontracted = formData.get("isSubcontracted") === "on";
     const subcontractor = String(formData.get("subcontractor") ?? "").trim() || null;
-    const subCostCents = parseRands(String(formData.get("subCost") ?? ""));
+    const subCostCents = (await moneyCents(formData, "subCost", "Subcontract cost")) ?? 0;
     await prisma.jobCard.update({ where: { id: jobCardId }, data: { isSubcontracted, subcontractor, subCostCents } });
     revalidatePath(`/jobcards/${jobCardId}`);
   });
@@ -1162,7 +1170,7 @@ export async function setJobWarranty(jobCardId: string, formData: FormData) {
   return asActionResult(async () => {
     await requireJobCardAccess(jobCardId, "jobcards.manage");
     const underWarranty = formData.get("underWarranty") === "on";
-    const warrantyRecoveredCents = parseRands(String(formData.get("warrantyRecovered") ?? ""));
+    const warrantyRecoveredCents = (await moneyCents(formData, "warrantyRecovered", "Warranty recovered")) ?? 0;
     await prisma.jobCard.update({ where: { id: jobCardId }, data: { underWarranty, warrantyRecoveredCents } });
     revalidatePath(`/jobcards/${jobCardId}`);
   });

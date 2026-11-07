@@ -12,6 +12,7 @@ import { loadHomeFocus } from "@/lib/home/focus";
 import { loadDaxBrief, type DaxBrief } from "@/lib/daxBrief";
 import { logError } from "@/lib/errorLog";
 import { DaxBriefCard } from "@/components/DaxBriefCard";
+import { getRegionalSettings } from "@/lib/settings";
 
 /**
  * The DAX brief, or nothing. Only where DAX exists (the automation module) and
@@ -102,7 +103,7 @@ export default async function HomePage({
         }))}
       />
 
-      <FocusHome focus={focus} mine={mine} canSeeTeam={canSeeTeam} greeting={greeting} firstName={firstName} />
+      <FocusHome focus={focus} mine={mine} canSeeTeam={canSeeTeam} greeting={greeting} firstName={firstName} moneyFmt={await getRegionalSettings()} />
 
       {/* Detail, on demand: DAX's fuller brief folds open; charts and custom cards are a click away. */}
       <footer className="space-y-3">
