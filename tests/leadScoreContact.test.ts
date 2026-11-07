@@ -9,7 +9,7 @@ import Module, { createRequire } from "node:module";
  */
 
 type Comm = { id?: string; leadId: string | null; contactId?: string | null; type: string; direction: string | null; occurredAt: Date };
-type OutboxRow = { communicationId: string | null; status: string; createdAt: Date };
+type OutboxRow = { communicationId: string | null; status: string; createdAt: Date; leadId?: string | null; contactId?: string | null };
 type Act = { leadId: string | null; contactId?: string | null; type: string; status: string; availabilityBlock: boolean; doneAt: Date | null; dueDate: Date };
 type Where = Record<string, unknown>;
 
@@ -23,6 +23,7 @@ const day = (n: number) => new Date(Date.UTC(2026, 9, n, 9));
 
 function passes(row: Record<string, unknown>, where: Where): boolean {
   return Object.entries(where).every(([key, cond]) => {
+    if (key === "OR") return (cond as Where[]).some((branch) => passes(row, branch));
     const value = row[key];
     if (cond && typeof cond === "object" && !(cond instanceof Date)) {
       const c = cond as { in?: unknown[]; notIn?: unknown[]; not?: unknown };
@@ -202,11 +203,14 @@ test("an undelivered WhatsApp is not contact in the SCORE either — a new lead 
     // On the lead, and on its customer with no lead.
     state.comms = [{ id: "c1", leadId, contactId: "cust1", type: "whatsapp", direction: "outbound", occurredAt: day(10) }];
     for (const status of ["pending", "retry", "dead"]) {
-      state.outbox = [{ communicationId: "c1", status, createdAt: day(1) }]; // queued long ago: still not contact
+      state.outbox = [{ communicationId: "c1", status, createdAt: day(1), leadId, contactId: "cust1" }]; // queued long ago: still not contact
       assert.ok(uncontacted(await score()), `${status} (${leadId ? "lead" : "customer"}) is not contact`);
     }
-    state.outbox = [{ communicationId: "c1", status: "sent", createdAt: day(10) }];
+    state.outbox = [{ communicationId: "c1", status: "sent", createdAt: day(10), leadId, contactId: "cust1" }];
     assert.equal(uncontacted(await score()), false, "sent is");
+    // Only these leads' and customers' outbox rows are read — never the whole workspace's history.
+    state.outbox.push({ communicationId: "c1", status: "dead", createdAt: day(1), leadId: "lead9", contactId: "cust9" });
+    assert.equal(uncontacted(await score()), false, "another customer's undelivered message isn't fetched");
   }
 });
 
@@ -271,10 +275,10 @@ test("handled today counts only a WhatsApp the outbox confirmed sent — queued,
   const touch = async () => (await scoreLeads([LEAD], today)).get("lead1")!.ourLastTouchAt;
   state.comms = [{ id: "c1", leadId: "lead1", type: "whatsapp", direction: "outbound", occurredAt: today }];
   for (const status of ["pending", "running", "retry", "dead", "cancelled"]) {
-    state.outbox = [{ communicationId: "c1", status, createdAt: today }];
+    state.outbox = [{ communicationId: "c1", status, createdAt: today, leadId: "lead1" }];
     assert.equal(await touch(), null, `${status} is not contact`);
   }
-  state.outbox = [{ communicationId: "c1", status: "sent", createdAt: today }];
+  state.outbox = [{ communicationId: "c1", status: "sent", createdAt: today, leadId: "lead1" }];
   assert.deepEqual(await touch(), today, "sent is");
   // A message with no outbox row (logged by hand, an email) stands as written.
   state.outbox = [];

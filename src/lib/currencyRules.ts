@@ -143,8 +143,8 @@ export function stageSegments(leads: readonly StageLead[], base: string) {
 }
 
 type PricedBefore = {
-  items: readonly { id: string; unitPriceCents: number }[];
-  fees: readonly { id: string; amountCents: number }[];
+  items: readonly { unitPriceCents: number }[];
+  fees: readonly { amountCents: number }[];
   depositType: string | null;
   depositValue: number | null;
 };
@@ -156,16 +156,19 @@ type PricedAfter = {
 };
 
 /**
- * A draft quote moving to another currency: the first amount still carrying its OLD number
- * (the same row, the same non-zero figure), named for the refusal — or null when everything
+ * A draft quote moving to another currency: the first amount still carrying an OLD number
+ * (any non-zero figure the quote had before), named for the refusal — or null when everything
  * was re-entered. The editor clears them on a currency change; this is the server holding it.
+ * Matched by VALUE, not row id: a caller can drop or change the ids, it can't keep the number.
+ * ponytail: a re-entered price that happens to equal an old one is refused too; the person
+ * adjusts it by a cent. Per-row tracking only if that ever bites.
  */
 export function unrepricedAmount(before: PricedBefore, after: PricedAfter): string | null {
-  const price = new Map(before.items.map((item) => [item.id, item.unitPriceCents]));
-  const item = after.items.find((row) => row.id && row.unitPriceCents !== 0 && price.get(row.id) === row.unitPriceCents);
+  const prices = new Set(before.items.map((item) => item.unitPriceCents).filter(Boolean));
+  const item = after.items.find((row) => prices.has(row.unitPriceCents));
   if (item) return `price for “${item.description}”`;
-  const amount = new Map(before.fees.map((fee) => [fee.id, fee.amountCents]));
-  const fee = after.fees.find((row) => row.id && row.amountCents !== 0 && amount.get(row.id) === row.amountCents);
+  const amounts = new Set(before.fees.map((fee) => fee.amountCents).filter(Boolean));
+  const fee = after.fees.find((row) => amounts.has(row.amountCents));
   if (fee) return `amount for “${fee.label}”`;
   if (before.depositType === "amount" && after.depositType === "amount" && before.depositValue && after.depositValue === before.depositValue) {
     return "deposit amount";

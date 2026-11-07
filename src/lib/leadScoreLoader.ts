@@ -70,9 +70,13 @@ export async function scoreLeads(leads: ScorableLead[], now: Date = new Date()):
   // contact: it must neither hide a deal from Today ("handled today") nor cost a new lead its
   // "not contacted yet" priority in the score. Messages without an outbox row (a logged call,
   // an email) stand as written. All time, not just today: the score reads "no contact for N days".
-  // ponytail: one id list per call; fine while undelivered messages number in the hundreds.
+  // Only these leads' and their customers' rows (the outbox carries the same leadId/contactId
+  // as the message it logged), so the list grows with this page, not with the workspace's history.
+  const links = await prisma.lead.findMany({ where: { id: leadId, contactId: { not: null } }, select: { id: true, contactId: true } });
+  const customerOf = new Map(links.map((link) => [link.id, link.contactId as string]));
+  const contactId = { in: [...new Set(customerOf.values())] };
   const unconfirmed = await prisma.botFlowOutbox.findMany({
-    where: { communicationId: { not: null }, status: { not: "sent" } },
+    where: { communicationId: { not: null }, status: { not: "sent" }, OR: [{ leadId }, { contactId }] },
     select: { communicationId: true },
   });
   const sentOnly = unconfirmed.length ? { id: { notIn: unconfirmed.map((row) => row.communicationId as string) } } : {};
@@ -107,10 +111,7 @@ export async function scoreLeads(leads: ScorableLead[], now: Date = new Date()):
   // `leadId` rows, a lead whose customer had been emailed that morning still
   // said "New lead — not contacted yet". The same widening the gone-quiet list
   // (leadIdle.ts) and the assistant (crmAssistant.ts) already apply. Not the
-  // customer's rows on ANOTHER lead — those are another deal's contact.
-  const links = await prisma.lead.findMany({ where: { id: leadId, contactId: { not: null } }, select: { id: true, contactId: true } });
-  const customerOf = new Map(links.map((link) => [link.id, link.contactId as string]));
-  const contactId = { in: [...new Set(customerOf.values())] };
+  // customer's rows on ANOTHER lead — those are another deal's contact. (`customerOf` is read above.)
   const [customerContact, customerInbound, customerDone, customerOutbound] = customerOf.size
     ? await Promise.all([
         prisma.communication.groupBy({ by: ["contactId"], where: { contactId, leadId: null, ...contactCommunicationWhere, ...sentOnly }, _max: { occurredAt: true } }),

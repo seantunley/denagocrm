@@ -20,8 +20,10 @@ test("server: a draft changing currency is refused while any amount keeps its ol
   assert.equal(unrepricedAmount(before, { ...repriced, items: [{ id: "i1", description: "Rover XL", unitPriceCents: 10_000_000 }] }), "price for “Rover XL”");
   assert.equal(unrepricedAmount(before, { ...repriced, fees: [{ id: "f1", label: "Delivery", amountCents: 150_000 }] }), "amount for “Delivery”");
   assert.equal(unrepricedAmount(before, { ...repriced, depositValue: 50_000 }), "deposit amount");
-  // A NEW line (no id) has no old number to keep.
-  assert.equal(unrepricedAmount(before, { ...repriced, items: [{ description: "New", unitPriceCents: 10_000_000 }] }), null);
+  // Ids are the caller's to send or drop: an old number under no id (or another row's) is still refused.
+  assert.equal(unrepricedAmount(before, { ...repriced, items: [{ description: "Rover XL", unitPriceCents: 10_000_000 }] }), "price for “Rover XL”");
+  assert.equal(unrepricedAmount(before, { ...repriced, items: [{ id: "i2", description: "Mats", unitPriceCents: 10_000_000 }] }), "price for “Mats”");
+  assert.equal(unrepricedAmount(before, { ...repriced, fees: [{ label: "Delivery", amountCents: 150_000 }] }), "amount for “Delivery”");
   const actions = readFileSync("src/app/actions/quotes.ts", "utf8");
   assert.match(actions, /if \(\(existing\.currency \?\? null\) !== cpqQuoteData\.currency\) \{\s+const stale = unrepricedAmount\(existing, \{ items: normalizedItems, fees: normalizedFees, \.\.\.cpqQuoteData \}\);\s+if \(stale\) return new Unrepriced\(/);
   assert.match(actions, /if \(result instanceof Unrepriced\) \{\s+return \{ ok: false, error: result\.message \};/);
