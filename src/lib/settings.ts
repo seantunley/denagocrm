@@ -1,4 +1,5 @@
 import crypto from "crypto";
+import { cache } from "react";
 import { basePrisma } from "./db";
 import { DEFAULT_TENANT_ID } from "./tenant";
 import { TENANT_CREDENTIAL_INTEGRATIONS } from "./tenantCredentialFields";
@@ -269,11 +270,13 @@ export const REGIONAL_KEYS: Record<keyof Regional, string> = {
  * in format.ts. Unset or invalid fields fall back to today's behaviour (15%,
  * rand, en-ZA, Johannesburg), so nothing changes until an owner edits them.
  */
-export async function getRegionalSettings(): Promise<Regional> {
+export const getRegionalSettings = cache(async (): Promise<Regional> => {
+  // Once per server render: every money and date on a page reads it (React cache is a
+  // pass-through in actions and route handlers, so a save is never answered from it).
   const fields = Object.keys(REGIONAL_KEYS) as (keyof Regional)[];
   const values = await Promise.all(fields.map((field) => getSetting(REGIONAL_KEYS[field])));
   return regionalFrom(Object.fromEntries(fields.map((field, i) => [field, values[i]])));
-}
+});
 
 /** Writes a setting, encrypting credential-class keys when a key is configured. */
 /**

@@ -1,6 +1,8 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import { currencySymbol } from "@/lib/format";
+import { useMoneyFormat } from "@/components/MoneyFormatProvider";
 import { BadgeDollarSign, Barcode, BellRing, Boxes, MapPin, Wrench } from "lucide-react";
 import {
   CaptureField,
@@ -10,6 +12,8 @@ import {
   type CaptureFormVariant,
 } from "@/components/capture-form";
 import { cn } from "@/lib/utils";
+import { SaveForm } from "@/components/SaveForm";
+import type { ActionResult } from "@/lib/actionResultTypes";
 
 function numberValue(raw: string) {
   const value = Number(raw.replace(/\s/g, "").replace(",", "."));
@@ -20,9 +24,10 @@ export default function PartForm({
   action,
   variant = "compact",
 }: {
-  action: (formData: FormData) => Promise<void>;
+  action: (formData: FormData) => Promise<ActionResult | void>;
   variant?: CaptureFormVariant;
 }) {
+  const moneyFmt = useMoneyFormat();
   const [name, setName] = useState("");
   const [sku, setSku] = useState("");
   const [location, setLocation] = useState("");
@@ -38,8 +43,10 @@ export default function PartForm({
   }, [cost, price]);
 
   return (
-    <form
+    // SaveForm, as ProductForm uses: a refused price ("4.861,00") shows on the form instead of saving 0.
+    <SaveForm
       action={action}
+      success="Part added"
       className={cn("space-y-4", variant === "compact" && "card max-w-3xl", variant === "page" && "min-w-0 space-y-5")}
     >
       {(variant === "page" || variant === "dialog") && (
@@ -100,7 +107,7 @@ export default function PartForm({
         title="Pricing"
         description="Capture both cost and selling price so workshop value and gross margin remain visible."
       >
-        <CaptureField label="Cost price (R)">
+        <CaptureField label={`Cost price (${currencySymbol(moneyFmt)})`}>
           <input
             name="cost"
             className="input tabular-nums"
@@ -110,7 +117,7 @@ export default function PartForm({
             placeholder="0.00"
           />
         </CaptureField>
-        <CaptureField label="Selling price (R)" hint={margin}>
+        <CaptureField label={`Selling price (${currencySymbol(moneyFmt)})`} hint={margin}>
           <input
             name="price"
             className="input tabular-nums"
@@ -171,6 +178,6 @@ export default function PartForm({
       </CaptureSection>
 
       <CaptureFooter label="Add part" requiredNote="A part name is required." kind="part" variant={variant} />
-    </form>
+    </SaveForm>
   );
 }

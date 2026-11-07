@@ -63,7 +63,21 @@ export function regionalFrom(raw: Partial<Record<keyof Regional, string | null |
   };
 }
 
-type MoneyFormat = Pick<Regional, "currency" | "locale">;
+/** What formatting money needs: the workspace's (or, later, the record's) currency and locale. */
+export type MoneyFormat = Pick<Regional, "currency" | "locale">;
+
+/** The currency's short mark for a field label — "R", "₽", "$" — as "(R)" was written by hand. */
+export function currencySymbol(m: MoneyFormat = DEFAULT_REGIONAL): string {
+  try {
+    return (
+      new Intl.NumberFormat(m.locale, { style: "currency", currency: m.currency, currencyDisplay: "narrowSymbol" })
+        .formatToParts(0)
+        .find((part) => part.type === "currency")?.value ?? m.currency
+    );
+  } catch {
+    return m.currency;
+  }
+}
 type DateFormat = Pick<Regional, "locale" | "timeZone">;
 
 /** Due date, with the time when one was set (midnight = date-only). */
@@ -193,9 +207,6 @@ export function contactName(c: {
   return [c.firstName, c.lastName].filter(Boolean).join(" ");
 }
 
-export function parseRands(input: string | null | undefined): number {
-  if (!input) return 0;
-  const n = parseFloat(String(input).replace(/[^\d.-]/g, ""));
-  if (isNaN(n)) return 0;
-  return Math.round(n * 100);
-}
+// parseRands() lived here: it deleted every character but digits, "." and "-", so "4 861,00" was
+// stored as 486 100 and "1.200.000" as 1.20. Money typed by a person is read by parseMoneyField /
+// parseMoneyInput (moneyInput.ts), in the workspace's currency.

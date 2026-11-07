@@ -7,6 +7,7 @@ import { LEGAL_LINE_KEY, htmlWithLegalLine, textWithLegalLine } from "./emailLeg
 import { currentTenantScope } from "./tenantScope";
 import { inlineImages, workspaceLogoLoader } from "./emailInlineLogo";
 import { DEFAULT_REGIONAL, formatZAR, type Regional } from "./format";
+import { withCurrency } from "./currencyRules";
 import { recordOutboundFailure, recordOutboundMessage, type OutboundRecord } from "./outboundMessageLog";
 
 export type SmtpConfig = {
@@ -319,6 +320,8 @@ export function leadVars(lead: {
   phone?: string | null;
   color?: string | null;
   valueCents?: number;
+  /** The lead's currency (multicurrency module); null = the workspace's base. */
+  currency?: string | null;
   product?: { name: string } | null;
   assignedTo?: { name: string } | null;
 }, teamName: string = DEFAULT_TEAM_SIGNOFF, money: Pick<Regional, "currency" | "locale"> = DEFAULT_REGIONAL): Record<string, string> {
@@ -330,7 +333,8 @@ export function leadVars(lead: {
     phone: lead.phone ?? "",
     model: lead.product?.name ?? "",
     color: lead.color ?? "",
-    value: lead.valueCents ? formatZAR(lead.valueCents, money) : "",
+    // {{value}} in the lead's own currency — journeys, email templates and flows all read it here.
+    value: lead.valueCents ? formatZAR(lead.valueCents, withCurrency(money, lead.currency)) : "",
     user_name: lead.assignedTo?.name ?? teamName,
   };
 }

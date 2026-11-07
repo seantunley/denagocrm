@@ -3,7 +3,10 @@
 import { asActionResult, ActionRefusal, refuse } from "@/lib/actionResult";
 import { revalidatePath } from "next/cache";
 import { prisma, basePrisma } from "@/lib/db";
-import { contactName, parseRands } from "@/lib/format";
+import { contactName } from "@/lib/format";
+import { parseMoneyField } from "@/lib/moneyInput";
+import { getCurrencyOptions } from "@/lib/currency";
+import { storedCurrency } from "@/lib/currencyRules";
 import { emitLeadJourneyEvent, emitTestDriveJourneyEvent } from "@/lib/leadJourneyEvents";
 import { recordReferral } from "@/lib/referrals";
 import { logAudit, logAuditStrict, GOVERNANCE_TX } from "@/lib/audit";
@@ -78,12 +81,22 @@ import {
   type StageRemedy,
 } from "@/lib/stageRemedies";
 
-function leadData(formData: FormData) {
+async function leadData(formData: FormData) {
   const str = (key: string) => {
     const value = String(formData.get(key) ?? "").trim();
     return value === "" ? null : value;
   };
+  // The lead's currency (multicurrency module). Only a form that SHOWED the picker posts it; an
+  // absent field leaves the stored currency alone rather than resetting it to the base.
+  const options = await getCurrencyOptions();
+  const picked = formData.has("currency") ? storedCurrency(str("currency"), options) : null;
+  if (picked && !picked.ok) refuse(picked.error);
+  const currency = picked?.ok ? picked.currency : undefined;
+  // Read in the lead's currency, strictly: "4 861,00" is 4 861, not 486 100 (moneyInput.ts).
+  const value = parseMoneyField(str("value"), currency ?? options.base);
+  if (!value.ok) refuse(`Deal value: ${value.error}`);
   return {
+    currency,
     name: String(formData.get("name") ?? "").trim(),
     email: str("email"),
     phone: str("phone"),
@@ -92,7 +105,7 @@ function leadData(formData: FormData) {
     color: str("color"),
     notes: str("notes"),
     quantity: Math.max(1, parseInt(String(formData.get("quantity") ?? "1"), 10) || 1),
-    valueCents: parseRands(str("value")),
+    valueCents: value.cents ?? 0,
     stageId: String(formData.get("stageId") ?? ""),
     contactId: str("contactId"),
     assignedToId: str("assignedToId"),
@@ -197,7 +210,7 @@ async function validateOpenStage(stageId: string) {
 export async function createLead(formData: FormData) {
   return asActionResult(async () => {
     const user = await requirePermission("leads.create");
-    const data = leadData(formData);
+    const data = await leadData(formData);
     if (!data.name) throw new ActionRefusal("Name is required");
     if (!data.stageId) data.stageId = await defaultOpenStageId();
     await validateOpenStage(data.stageId);
@@ -312,9 +325,15 @@ export async function createLead(formData: FormData) {
 export async function updateLead(id: string, formData: FormData) {
   return asActionResult(async () => {
     const user = await requireLeadAccess(id, "leads.edit");
-    const data = leadData(formData);
+    const data = await leadData(formData);
     if (!data.name) throw new ActionRefusal("Name is required");
     const before = await prisma.lead.findUniqueOrThrow({ where: { id } });
+    // A lead's currency is fixed once it has a quote: the quote's amounts are in that currency, and a
+    // lead in rubles with a quote in rand would make every total that pairs them wrong.
+    if (data.currency !== undefined && (data.currency ?? null) !== (before.currency ?? null)) {
+      const quoted = await prisma.quote.count({ where: { leadId: id, deletedAt: null } });
+      if (quoted > 0) throw new ActionRefusal("This lead already has a quote, so its currency can't change. Start a new quote on a new lead instead.");
+    }
     // `getLeadPipeline` is now bounded by the acting workspace, so null means "not
     // this workspace's lead" as well as "no such lead". It must REFUSE rather than
     // fall through: the check it feeds is `!(await hasPermission(…, "leads.change_pipeline"))`,
@@ -1370,6 +1389,7 @@ async function moveLeadWithNewQuoteInScope(
       title: true,
       tenantId: true,
       contactId: true,
+      currency: true,
       stageId: true,
       position: true,
       valueCents: true,
@@ -1420,6 +1440,7 @@ async function moveLeadWithNewQuoteInScope(
         id: leadId,
         contactId: before.contactId,
         valueCents: before.valueCents,
+        currency: before.currency,
         color: before.color,
         product: before.product,
       },
@@ -1550,7 +1571,8 @@ async function wonQuoteOptions(leadId: string) {
 }
 
 export type MarkWonChoices = {
-  quotes: Array<{ id: string; number: number; status: string; totalCents: number; outForSignature: boolean }>;
+  /** `currency`: the quote's (multicurrency module); null = the base. */
+  quotes: Array<{ id: string; number: number; status: string; totalCents: number; currency: string | null; outForSignature: boolean }>;
   acceptedNumbers: number[];
   /** Accepting a quote is a status change; without it only "no quote" is open. */
   canAcceptQuotes: boolean;
@@ -1581,6 +1603,7 @@ export async function markWonChoices(leadId: string): Promise<MarkWonChoices | n
         number: quote.number,
         status: quote.status,
         totalCents: payableTotalCents(quote),
+        currency: quote.currency ?? null,
         outForSignature: outForSignature.has(quote.id),
       })),
       acceptedNumbers: accepted.map((quote) => quote.number),

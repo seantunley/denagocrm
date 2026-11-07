@@ -62,6 +62,8 @@ import {
 import { MarkWonDialog } from "@/components/MarkWonDialog";
 import NurtureForm from "@/components/NurtureForm";
 import { formatZAR } from "@/lib/format";
+import { totalsByCurrency, withCurrency } from "@/lib/currencyRules";
+import { useMoneyFormat } from "@/components/MoneyFormatProvider";
 import { cn } from "@/lib/utils";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
@@ -113,6 +115,8 @@ export type KanbanLead = {
   name: string;
   contactId?: string | null;
   valueCents: number;
+  /** The currency valueCents is in (multicurrency module); null/undefined = the base. */
+  currency?: string | null;
   quantity?: number;
   source: string;
   color: string | null;
@@ -187,6 +191,7 @@ function SourceIcon({ source }: { source: string }) {
 }
 
 function LeadCard({ lead, dragging, actions, staleAfterDays = null }: { lead: KanbanLead; dragging?: boolean; actions?: ReactNode; staleAfterDays?: number | null }) {
+  const moneyFmt = useMoneyFormat();
   const opportunity = lead.title !== lead.name && lead.title !== lead.productName ? lead.title : null;
   // Collapsed by default (Sean, 2026-10-18): the name row only; the chevron opens the rest.
   const [open, setOpen] = useState(false);
@@ -273,7 +278,7 @@ function LeadCard({ lead, dragging, actions, staleAfterDays = null }: { lead: Ka
           {(hasAmount || manyUnits) && (
           <div className={cn("flex items-center gap-1.5", hasAmount && "mt-1")}>
             {hasAmount && (
-              <span className="text-sm font-semibold tabular-nums text-foreground">{formatZAR(lead.valueCents)}</span>
+              <span className="text-sm font-semibold tabular-nums text-foreground">{formatZAR(lead.valueCents, withCurrency(moneyFmt, lead.currency))}</span>
             )}
             {manyUnits && (
               <span
@@ -606,7 +611,12 @@ function Column({
   getActions: (lead: KanbanLead) => LeadActionHandlers;
 }) {
   const { setNodeRef, isOver } = useDroppable({ id: stage.id });
-  const total = stage.leads.reduce((sum, lead) => sum + lead.valueCents, 0);
+  const moneyFmt = useMoneyFormat();
+  // Never one figure across currencies (multicurrency module): a total per currency, side by side.
+  const totals = totalsByCurrency(stage.leads, (lead) => ({ cents: lead.valueCents, currency: lead.currency }), moneyFmt.currency)
+    .filter((row) => row.cents > 0)
+    .map((row) => formatZAR(row.cents, withCurrency(moneyFmt, row.currency)))
+    .join(" · ");
 
   // Droppable is the WHOLE column (header + body), so the pointer-X drop detection
   // has the full column width/height to work with.
@@ -635,7 +645,7 @@ function Column({
             </span>
           </div>
           <span className="shrink-0 text-xs font-semibold tabular-nums text-foreground">
-            {total > 0 ? formatZAR(total) : "—"}
+            {totals || "—"}
           </span>
         </div>
         <p className="mt-1.5 text-[10px] text-muted-foreground">

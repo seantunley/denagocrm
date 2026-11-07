@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { MAX_MONEY_CENTS, parseMoneyInput } from "../src/lib/moneyInput";
+import { MAX_MONEY_CENTS, parseMoneyField, parseMoneyInput } from "../src/lib/moneyInput";
 
 /*
  * Review of #924: parseRands() read "1000,50" as R100 050,00. Money received is
@@ -67,8 +67,25 @@ test("ambiguous or malformed amounts are refused, never guessed", () => {
     "1000.505", //     three decimal places
     "1000,", "1000.", ",50", ".50",
     "-500", "+500", "5e3", "abc", "", "   ", "R",
-    "1 000,50 R",
+    "1 000,50 USD", // another currency's mark is junk, not ignored
   ]) refused(raw);
+});
+
+test("the workspace's own currency mark is ignored before or after the amount", () => {
+  assert.deepEqual(parseMoneyInput("1 000,50 R"), { ok: true, cents: 100050 });
+  for (const raw of ["4 861,00", "₽4 861", "4 861 ₽", "RUB 4861", "4861,00 RUB"]) {
+    assert.deepEqual(parseMoneyInput(raw, "RUB"), { ok: true, cents: 486100 }, raw);
+  }
+  assert.deepEqual(parseMoneyInput("US$ 1 250", "USD"), { ok: true, cents: 125000 });
+  // The rand's R is not a ruble mark.
+  assert.equal(parseMoneyInput("R 100", "RUB").ok, false);
+});
+
+test("a money FIELD treats blank as none and refuses what it can't read", () => {
+  assert.deepEqual(parseMoneyField("  "), { ok: true, cents: null });
+  assert.deepEqual(parseMoneyField("4 861,00", "RUB"), { ok: true, cents: 486100 });
+  // parseRands read this as R1.20 and "4 861,00" as 486 100; both are refused or read correctly now.
+  assert.equal(parseMoneyField("1.200.000").ok, false);
 });
 
 test("refusals tell the person how to type it", () => {

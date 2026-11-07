@@ -17,6 +17,9 @@ import {
 } from "@/lib/pipelines";
 import { stageTenantId, UNREACHABLE_STAGE_MESSAGE } from "@/lib/pipelineTenantRule";
 import { putSetting, getSetting, getRegionalSettings, REGIONAL_KEYS } from "@/lib/settings";
+import { isModuleEnabled } from "@/lib/modules/enabled";
+import { ENABLED_CURRENCIES_KEY } from "@/lib/currency";
+import { COMMON_CURRENCIES } from "@/lib/currencyRules";
 import { DOCUMENT_TYPES_KEY, parseDocumentTypes } from "@/lib/documentLabels";
 import { regionalFrom } from "@/lib/format";
 import { quoteValidDays } from "@/lib/quoteExpiry";
@@ -384,6 +387,20 @@ export async function saveQuoteDefaults(formData: FormData) {
   });
 }
 
+/** Has this workspace stored any amount in its base currency? (Trashed rows count — they can come back.) */
+async function hasRecordedAmounts(): Promise<boolean> {
+  const found = await Promise.all([
+    prisma.quote.findFirst({ select: { id: true } }),
+    prisma.lead.findFirst({ where: { valueCents: { gt: 0 } }, select: { id: true } }),
+    prisma.product.findFirst({ where: { basePriceCents: { gt: 0 } }, select: { id: true } }),
+    prisma.part.findFirst({ select: { id: true } }),
+    prisma.jobCard.findFirst({ select: { id: true } }),
+    prisma.stockUnit.findFirst({ select: { id: true } }),
+    prisma.purchaseOrderLine.findFirst({ select: { id: true } }),
+  ]);
+  return found.some(Boolean);
+}
+
 /**
  * VAT rate, currency, number/date format and time zone (Settings → Quotes).
  * Refuses anything Intl can't format with rather than storing it and letting
@@ -412,12 +429,58 @@ export async function saveRegionalSettings(formData: FormData) {
     if (parsed.timeZone !== input.timeZone) throw new ActionRefusal(`“${input.timeZone}” isn't a time zone (e.g. Africa/Johannesburg).`);
 
     const before = await getRegionalSettings();
+    if (parsed.currency !== before.currency && (await hasRecordedAmounts())) {
+      // Every stored amount without its own currency IS in the base: switching the base would
+      // silently relabel R100 000 as US$100 000 on every deal, quote, part and job card.
+      throw new ActionRefusal(
+        `Amounts are already recorded in ${before.currency}, and they would all silently become ${parsed.currency}. ` +
+          `Keep ${before.currency} as the main currency and add ${parsed.currency} under Multi-currency instead.`,
+      );
+    }
     for (const key of Object.keys(REGIONAL_KEYS) as (keyof typeof REGIONAL_KEYS)[]) {
       await putSetting(REGIONAL_KEYS[key], String(parsed[key]));
     }
     await logAuditStrict({
       action: "settings.regional_updated",
       summary: `Tax & currency: VAT ${before.vatRatePct}% → ${parsed.vatRatePct}%, ${before.currency} → ${parsed.currency}, ${before.locale} → ${parsed.locale}, ${before.timeZone} → ${parsed.timeZone}`,
+      user,
+    });
+    revalidatePath("/settings");
+  });
+}
+
+/**
+ * The multicurrency module's extra currencies (checkboxes on Settings → Quotes). Only codes from the
+ * offered list; the base is implied and never stored. Refused when the module is off.
+ */
+export async function saveEnabledCurrencies(formData: FormData) {
+  return asActionResult(async () => {
+    const user = await requireTenantOwner();
+    if (!(await isModuleEnabled("multicurrency"))) throw new ActionRefusal("Multi-currency isn't switched on for this workspace.");
+    const { currency: base } = await getRegionalSettings();
+    const picked = formData.getAll("currencies").map((value) => String(value).trim().toUpperCase());
+    const offered = new Set<string>(COMMON_CURRENCIES);
+    const chosen = [...new Set(picked)].filter((code) => offered.has(code) && code !== base).sort();
+    const before = await getSetting(ENABLED_CURRENCIES_KEY);
+    // A currency still on a deal or quote stays: dropping it would make those records refuse
+    // their own currency on the next save (storedCurrency only accepts offered codes).
+    const dropped = (before ?? "").split(",").map((code) => code.trim()).filter((code) => code && !chosen.includes(code));
+    if (dropped.length) {
+      const [leads, quotes] = await Promise.all([
+        prisma.lead.groupBy({ by: ["currency"], where: { currency: { in: dropped } }, _count: { _all: true } }),
+        prisma.quote.groupBy({ by: ["currency"], where: { currency: { in: dropped } }, _count: { _all: true } }),
+      ]);
+      const inUse = [...new Set([...leads, ...quotes].map((row) => row.currency as string))].sort();
+      if (inUse.length) {
+        throw new ActionRefusal(
+          `${inUse.join(", ")} ${inUse.length === 1 ? "is" : "are"} still used by deals or quotes, so ${inUse.length === 1 ? "it stays" : "they stay"} switched on.`,
+        );
+      }
+    }
+    await putSetting(ENABLED_CURRENCIES_KEY, chosen.join(","));
+    await logAuditStrict({
+      action: "settings.currencies_updated",
+      summary: `Currencies offered besides ${base}: ${before || "none"} → ${chosen.join(",") || "none"}`,
       user,
     });
     revalidatePath("/settings");

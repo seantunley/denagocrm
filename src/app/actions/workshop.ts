@@ -5,17 +5,22 @@ import { asActionResult, ActionRefusal, refuse } from "@/lib/actionResult";
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/db";
 import { requirePermission } from "@/lib/permissions";
-import { putSetting } from "@/lib/settings";
+import { getRegionalSettings, putSetting } from "@/lib/settings";
 import { logAudit } from "@/lib/audit";
-import { parseRands } from "@/lib/format";
+import { formatZAR } from "@/lib/format";
+import { parseMoneyField } from "@/lib/moneyInput";
 import { LABOUR_RATE_SETTING } from "@/lib/workshop";
 
 export async function saveDefaultLabourRate(formData: FormData) {
   return asActionResult(async () => {
     const user = await requirePermission("workshop.manage");
-    const cents = parseRands(String(formData.get("labourRate") ?? ""));
+    // Read and shown in the workspace's currency, strictly (moneyInput.ts).
+    const regional = await getRegionalSettings();
+    const rate = parseMoneyField(String(formData.get("labourRate") ?? ""), regional.currency);
+    if (!rate.ok) refuse(`Labour rate: ${rate.error}`);
+    const cents = rate.cents ?? 0;
     await putSetting(LABOUR_RATE_SETTING, String(cents));
-    await logAudit({ action: "workshop.labour_rate", summary: `Default workshop labour rate set to R${(cents / 100).toFixed(2)}/hour`, user });
+    await logAudit({ action: "workshop.labour_rate", summary: `Default workshop labour rate set to ${formatZAR(cents, regional)}/hour`, user });
     revalidatePath("/settings/workshop");
   });
 }
@@ -98,7 +103,9 @@ export async function addPackageItem(packageId: string, formData: FormData) {
     if (!description) refuse("Give the line item a description.");
     const kind = String(formData.get("kind") ?? "part") === "labour" ? "labour" : "part";
     const qty = parseFloat(String(formData.get("qty") ?? "1")) || 1;
-    const unitPriceCents = parseRands(String(formData.get("unitPrice") ?? ""));
+    const price = parseMoneyField(String(formData.get("unitPrice") ?? ""), (await getRegionalSettings()).currency);
+    if (!price.ok) refuse(`Unit price: ${price.error}`);
+    const unitPriceCents = price.cents ?? 0;
     await prisma.servicePackageItem.create({ data: { packageId, kind, description, qty, unitPriceCents } });
     revalidatePath("/settings/workshop");
   });

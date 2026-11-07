@@ -1,6 +1,8 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import { currencySymbol } from "@/lib/format";
+import { useMoneyFormat } from "@/components/MoneyFormatProvider";
 import { messageEditorHref } from "@/lib/customerMessagePlaces";
 import { createJourney } from "@/app/actions/journeys";
 import { SaveForm, SaveButton } from "@/components/SaveForm";
@@ -70,6 +72,7 @@ export default function JourneyBuilder({
   submitAction?: (formData: FormData) => Promise<ActionResult | void>;
   submitLabel?: string;
 }) {
+  const moneyFmt = useMoneyFormat();
   const [triggers, setTriggers] = useState<JourneyTriggerSpec[]>(
     defaults.triggers?.length ? defaults.triggers : [{ type: "lead_created", config: {} }],
   );
@@ -316,7 +319,7 @@ export default function JourneyBuilder({
             <input className="input" value={conditionProvince} onChange={(e) => setConditionProvince(e.target.value)} />
           </div>
           <div>
-            <label className="label">Minimum lead value (R)</label>
+            <label className="label">Minimum lead value ({currencySymbol(moneyFmt)})</label>
             <input className="input" type="number" value={minValueRands} onChange={(e) => setMinValueRands(e.target.value)} />
           </div>
         </div>

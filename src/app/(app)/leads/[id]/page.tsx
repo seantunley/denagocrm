@@ -50,6 +50,7 @@ import { brandForTenant, teamSignoff } from "@/lib/tenantBrand";
 import { getActiveTenantId } from "@/lib/auth";
 import { isSmtpConfigured, renderTemplate, leadVars } from "@/lib/email";
 import { getRegionalSettings } from "@/lib/settings";
+import { withCurrency } from "@/lib/currencyRules";
 import { contactName, formatDate, formatDateTime, formatZAR } from "@/lib/format";
 import { payableTotalCents } from "@/lib/pricing";
 import { getAccessibleContactIds, getAccessibleQuoteIds } from "@/lib/permissions";
@@ -217,7 +218,11 @@ export default async function LeadDetailPage({
     hasAnyPermission(user, ...CUSTOMER_RECORD_WRITE_PERMISSIONS), hasPermission(user, "inbox.reply"),
   ]);
   const [canChangeStage, canAssign] = await Promise.all([hasPermission(user, "leads.change_stage"), hasPermission(user, "leads.assign")]);
+  // The lead's value and its quotes are in the LEAD's currency (multicurrency module; a quote on a
+  // lead always takes it, and the lead's is fixed once quoted).
+  const moneyFmt = withCurrency(await getRegionalSettings(), lead.currency);
   const context = <LeadWorkspaceContext
+    moneyFmt={moneyFmt}
     nextActivity={nextActivity} canSchedule={canBookTestDrive}
     customer={{ name: readableContact ? contactName(readableContact) : lead.name, href: readableContact ? `/contacts/${readableContact.id}` : undefined }}
     product={lead.product?.name} color={lead.color} quantity={lead.quantity} valueCents={lead.valueCents}
@@ -444,7 +449,7 @@ export default async function LeadDetailPage({
                           ["Product", lead.product?.name],
                           ["Colour", lead.color],
                           ["Quantity", lead.quantity > 1 ? String(lead.quantity) : null],
-                          ["Value", lead.valueCents ? formatZAR(lead.valueCents) : null],
+                          ["Value", lead.valueCents ? formatZAR(lead.valueCents, moneyFmt) : null],
                           ["Assigned to", lead.assignedTo?.name],
                           ["Source", lead.source],
                           ["Lost reason", lead.lostReason],
@@ -599,7 +604,7 @@ export default async function LeadDetailPage({
                               <Link href={`/quotes/${q.id}`} className="text-orange-400 hover:underline font-medium">
                                 Q-{q.number}
                               </Link>
-                              <span className="flex-1 text-slate-400">{formatZAR(Math.round(total))}</span>
+                              <span className="flex-1 text-slate-400">{formatZAR(Math.round(total), moneyFmt)}</span>
                               <span
                                 className={`badge ${
                                   q.supersededAt
