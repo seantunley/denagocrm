@@ -1,6 +1,22 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { readFileSync } from "node:fs";
 import { captureTargetFromPath, nextStepDue, waMeLink } from "../src/lib/captureTarget";
+
+test("a phone photo is shrunk under the upload limit before it is sent", () => {
+  const sheet = readFileSync("src/components/CaptureSheet.tsx", "utf8");
+  const limit = /const PHOTO_MAX_BYTES = (\d+) \* 1024 \* 1024;/.exec(sheet)?.[1];
+  const action = readFileSync("src/app/actions/communications.ts", "utf8");
+  assert.ok(limit && action.includes(`size > ${limit} * 1024 * 1024`), "the sheet's limit is addCommunication's");
+  assert.match(sheet, /const shrunk = await shrinkToJpeg\(file, PHOTO_MAX_SIDE, PHOTO_MAX_BYTES\);/);
+  // The prepared photo replaces the camera original in the same FormData, before the action runs.
+  assert.match(
+    sheet,
+    /const prepared = await preparePhoto\(data\.get\("image"\)\);\s+if \(typeof prepared === "string"\) \{ toast\.error\(prepared\); return; \}\s+data\.set\("image", prepared, "photo\.jpg"\);\s+\}\s+const result = await addCommunication\(data\);/,
+  );
+  // Only an original already under the limit goes as-is when the browser can't shrink it.
+  assert.match(sheet, /if \(file\.size <= PHOTO_MAX_BYTES && file\.type\.startsWith\("image\/"\)\) return file;/);
+});
 
 test("the sheet opens on the lead or customer whose page it was opened from", () => {
   assert.deepEqual(captureTargetFromPath("/leads/clx123"), { type: "lead", id: "clx123" });

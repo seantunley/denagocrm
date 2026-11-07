@@ -4,6 +4,7 @@ import { useEffect, useId, useRef, useState, useTransition, type ReactNode } fro
 import { toast } from "sonner";
 import { ArrowLeft, Camera, ExternalLink, Loader2, MessageSquare, Phone, Search, StickyNote, X } from "lucide-react";
 import { addCommunication } from "@/app/actions/communications";
+import { shrinkToJpeg } from "@/components/shrinkImage";
 import { scheduleFollowUp } from "@/app/actions/activities";
 import { loadCaptureRecord, searchCaptureRecords } from "@/app/actions/capture";
 import { ACTION_NOT_DELIVERED } from "@/components/actionError";
@@ -224,6 +225,20 @@ function TargetPicker({ target, loading, fixed, onChange }: {
   );
 }
 
+/** addCommunication refuses an image over 4 MB; a phone camera's original is often bigger. */
+const PHOTO_MAX_BYTES = 4 * 1024 * 1024;
+const PHOTO_MAX_SIDE = 2048;
+
+/** The camera's photo, shrunk to a JPEG under the upload limit — or why it can't be sent. */
+async function preparePhoto(file: FormDataEntryValue | null): Promise<Blob | string> {
+  if (!(file instanceof Blob) || file.size === 0) return "Take or choose a photo first.";
+  const shrunk = await shrinkToJpeg(file, PHOTO_MAX_SIDE, PHOTO_MAX_BYTES);
+  if (shrunk) return shrunk;
+  // A browser that can't decode it (HEIC outside Safari) can still send a small enough original.
+  if (file.size <= PHOTO_MAX_BYTES && file.type.startsWith("image/")) return file;
+  return "Couldn't prepare that photo — try again, or choose a JPG.";
+}
+
 /**
  * One form per kind, all filed through addCommunication — the record pages'
  * own action, which checks the write permission and access to the record.
@@ -261,6 +276,11 @@ function CaptureForm({ mode, target, revalidate, onSaved }: { mode: Mode; target
     }
     start(async () => {
       try {
+        if (mode === "photo") {
+          const prepared = await preparePhoto(data.get("image"));
+          if (typeof prepared === "string") { toast.error(prepared); return; }
+          data.set("image", prepared, "photo.jpg");
+        }
         const result = await addCommunication(data);
         if (result?.error) { toast.error(String(result.error)); return; }
         toast.success(String(result?.success ?? "Logged"));
