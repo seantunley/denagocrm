@@ -8,14 +8,15 @@ import Module, { createRequire } from "node:module";
  * "inbound" — is never "the customer wrote to us", and never "last contact".
  */
 
-type Comm = { leadId: string | null; contactId?: string | null; type: string; direction: string | null; occurredAt: Date };
+type Comm = { id?: string; leadId: string | null; contactId?: string | null; type: string; direction: string | null; occurredAt: Date };
+type OutboxRow = { communicationId: string | null; status: string; createdAt: Date };
 type Act = { leadId: string | null; contactId?: string | null; type: string; status: string; availabilityBlock: boolean; doneAt: Date | null; dueDate: Date };
 type Where = Record<string, unknown>;
 
 /** `links`: which customer each lead belongs to (Lead.contactId). */
 type QuoteRow = { leadId: string | null; contactId: string | null; deletedAt: Date | null; emailedAt: Date | null; viewedAt: Date | null; signedAt: Date | null };
 type StageRow = { pipelineId: string; order: number; isClosed: boolean };
-const state = { comms: [] as Comm[], acts: [] as Act[], links: [] as { id: string; contactId: string | null }[], quotes: [] as QuoteRow[], stages: [] as StageRow[] };
+const state = { comms: [] as Comm[], acts: [] as Act[], links: [] as { id: string; contactId: string | null }[], quotes: [] as QuoteRow[], stages: [] as StageRow[], outbox: [] as OutboxRow[] };
 /** Every `where` the loader sent to quote.findMany — what the database was actually asked for. */
 const quoteQueries: Where[] = [];
 const day = (n: number) => new Date(Date.UTC(2026, 9, n, 9));
@@ -51,6 +52,11 @@ function groupBy<T extends { leadId: string | null; contactId?: string | null }>
 
 const fakePrisma = {
   lead: { findMany: async (args: { where: Where }) => state.links.filter((link) => passes(link as Record<string, unknown>, args.where)) },
+  // where { communicationId: { not: null }, status: { not: "sent" }, createdAt: { gte } } — as the loader asks.
+  botFlowOutbox: {
+    findMany: async (args: { where: { createdAt: { gte: Date } } }) =>
+      state.outbox.filter((row) => row.communicationId !== null && row.status !== "sent" && row.createdAt >= args.where.createdAt.gte),
+  },
   communication: { groupBy: async (args: { by?: string[]; where: Where; _max: Record<string, true> }) => groupBy(state.comms, args) },
   activity: { groupBy: async (args: { by?: string[]; where: Where; _max?: Record<string, true>; _min?: Record<string, true> }) => groupBy(state.acts, args) },
   pipelineStage: {
@@ -103,6 +109,7 @@ const waiting = (s: { reasons: string[] }) => s.reasons.some((r) => /waiting on 
 beforeEach(() => {
   state.comms = [];
   state.acts = [];
+  state.outbox = [];
   state.links = [];
   state.quotes = [];
   state.stages = PIPELINE;
@@ -244,4 +251,19 @@ test("a note never counts as last contact either — in or out", async () => {
   assert.ok(waiting(await score()), "a note on our side is not answering them");
   state.acts = [{ leadId: "lead1", type: "todo", status: "done", availabilityBlock: false, doneAt: day(10), dueDate: day(10) }];
   assert.ok(waiting(await score()), "nor is ticking off a to-do");
+});
+
+test("handled today counts only a WhatsApp the outbox confirmed sent — queued, retrying or dead is not a touch", async () => {
+  const today = day(11);
+  const touch = async () => (await scoreLeads([LEAD], today)).get("lead1")!.ourLastTouchAt;
+  state.comms = [{ id: "c1", leadId: "lead1", type: "whatsapp", direction: "outbound", occurredAt: today }];
+  for (const status of ["pending", "running", "retry", "dead", "cancelled"]) {
+    state.outbox = [{ communicationId: "c1", status, createdAt: today }];
+    assert.equal(await touch(), null, `${status} is not contact`);
+  }
+  state.outbox = [{ communicationId: "c1", status: "sent", createdAt: today }];
+  assert.deepEqual(await touch(), today, "sent is");
+  // A message with no outbox row (logged by hand, an email) stands as written.
+  state.outbox = [];
+  assert.deepEqual(await touch(), today);
 });

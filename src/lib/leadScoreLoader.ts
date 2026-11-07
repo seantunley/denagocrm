@@ -1,8 +1,9 @@
 import "server-only";
 
 import { prisma } from "./db";
-import { getAccessibleLeadIds, type PermissionUser } from "./permissions";
+import { getAccessibleContactIds, getAccessibleLeadIds, type PermissionUser } from "./permissions";
 import { scoreLead, type LeadScore } from "./leadScore";
+import { handledToday } from "./todayAction";
 import { contactActivityWhere, contactCommunicationWhere } from "./customerContact";
 import { firstStageOrders, stageContactAt } from "./stageContact";
 
@@ -46,15 +47,36 @@ const latest = (a: Date | null | undefined, b: Date | null | undefined) =>
   !a ? b ?? null : !b ? a : a > b ? a : b;
 
 /**
+ * A score, plus the two moments Today needs to decide whether the deal was already
+ * handled today (lib/todayAction.ts handledToday).
+ */
+export type ScoredLead = LeadScore & {
+  /** The customer's last message to us, on this deal or on the customer with no deal. */
+  lastInboundAt: Date | null;
+  /** OUR last touch: a message we sent, or a call/meeting we logged. Not a quote they opened. */
+  ourLastTouchAt: Date | null;
+};
+
+/**
  * Scores a set of leads the caller has ALREADY access-checked. Does not
  * re-derive access: pass it only rows you were allowed to read.
  */
-export async function scoreLeads(leads: ScorableLead[], now: Date = new Date()): Promise<Map<string, LeadScore>> {
-  const out = new Map<string, LeadScore>();
+export async function scoreLeads(leads: ScorableLead[], now: Date = new Date()): Promise<Map<string, ScoredLead>> {
+  const out = new Map<string, ScoredLead>();
   if (leads.length === 0) return out;
   const leadId = { in: leads.map((lead) => lead.id) };
 
-  const [contact, inbound, done, planned, viewed, outstanding] = await Promise.all([
+  // A message the outbox has not confirmed sent (queued, retrying, dead, cancelled) is not a
+  // touch: "handled today" must not hide a deal whose WhatsApp never left. Messages without an
+  // outbox row (a logged call, an email) stand as written. Today is all that question reads,
+  // so two days back is plenty.
+  const unconfirmed = await prisma.botFlowOutbox.findMany({
+    where: { communicationId: { not: null }, status: { not: "sent" }, createdAt: { gte: new Date(now.getTime() - 2 * 86_400_000) } },
+    select: { communicationId: true },
+  });
+  const sentOnly = unconfirmed.length ? { id: { notIn: unconfirmed.map((row) => row.communicationId as string) } } : {};
+
+  const [contact, inbound, done, planned, viewed, outstanding, outbound] = await Promise.all([
     // Contact means the customer (customerContact.ts): a note is something WE
     // wrote down, and a ticked-off to-do or blocked-out time isn't a touch either.
     prisma.communication.groupBy({ by: ["leadId"], where: { leadId, ...contactCommunicationWhere }, _max: { occurredAt: true } }),
@@ -74,6 +96,8 @@ export async function scoreLeads(leads: ScorableLead[], now: Date = new Date()):
       where: { leadId, deletedAt: null, status: "sent", signedAt: null, supersededAt: null },
       _count: { _all: true },
     }),
+    // What WE sent — "handled today" must not count a quote the customer opened.
+    prisma.communication.groupBy({ by: ["leadId"], where: { leadId, direction: "outbound", ...contactCommunicationWhere, ...sentOnly }, _max: { occurredAt: true } }),
   ]);
 
   // THE CUSTOMER'S OWN ROWS THAT SIT ON NO LEAD count as contact with this lead
@@ -86,18 +110,20 @@ export async function scoreLeads(leads: ScorableLead[], now: Date = new Date()):
   const links = await prisma.lead.findMany({ where: { id: leadId, contactId: { not: null } }, select: { id: true, contactId: true } });
   const customerOf = new Map(links.map((link) => [link.id, link.contactId as string]));
   const contactId = { in: [...new Set(customerOf.values())] };
-  const [customerContact, customerInbound, customerDone] = customerOf.size
+  const [customerContact, customerInbound, customerDone, customerOutbound] = customerOf.size
     ? await Promise.all([
         prisma.communication.groupBy({ by: ["contactId"], where: { contactId, leadId: null, ...contactCommunicationWhere }, _max: { occurredAt: true } }),
         prisma.communication.groupBy({ by: ["contactId"], where: { contactId, leadId: null, direction: "inbound", ...contactCommunicationWhere }, _max: { occurredAt: true } }),
         prisma.activity.groupBy({ by: ["contactId"], where: { contactId, leadId: null, ...contactActivityWhere }, _max: { doneAt: true } }),
+        prisma.communication.groupBy({ by: ["contactId"], where: { contactId, leadId: null, direction: "outbound", ...contactCommunicationWhere, ...sentOnly }, _max: { occurredAt: true } }),
       ])
-    : [[], [], []];
+    : [[], [], [], []];
   const byCustomer = <T extends { contactId: string | null }>(rows: T[], pick: (row: T) => Date | null) =>
     new Map(rows.filter((row) => row.contactId).map((row) => [row.contactId as string, pick(row)]));
   const customerComm = byCustomer(customerContact, (row) => row._max.occurredAt);
   const customerWrote = byCustomer(customerInbound, (row) => row._max.occurredAt);
   const customerActivity = byCustomer(customerDone, (row) => row._max.doneAt);
+  const customerSent = byCustomer(customerOutbound, (row) => row._max.occurredAt);
 
   /*
    * QUOTES ARE PART OF THE CONTACT. A quote that has reached the customer —
@@ -138,15 +164,22 @@ export async function scoreLeads(leads: ScorableLead[], now: Date = new Date()):
   const nextPlanned = byLead(planned, (row) => row._min.dueDate);
   const quoteViewed = byLead(viewed, (row) => row._max.viewedAt);
   const quoteOutstanding = new Set(outstanding.map((row) => row.leadId));
+  const lastSent = byLead(outbound, (row) => row._max.occurredAt);
   // Moved past the first stage = contacted, as of that move (stageContact.ts).
   const firstOrders = await firstStageOrders(leads);
 
   for (const lead of leads) {
     const next = nextPlanned.get(lead.id) ?? null;
     const customer = customerOf.get(lead.id) ?? "";
-    out.set(
-      lead.id,
-      scoreLead(
+    const lastInboundAt = latest(lastInbound.get(lead.id), customerWrote.get(customer));
+    const ourLastTouchAt = latest(
+      latest(lastSent.get(lead.id), customerSent.get(customer)),
+      latest(lastDone.get(lead.id), customerActivity.get(customer)),
+    );
+    out.set(lead.id, {
+      lastInboundAt,
+      ourLastTouchAt,
+      ...scoreLead(
         {
           valueCents: lead.valueCents,
           status: lead.status,
@@ -161,7 +194,7 @@ export async function scoreLeads(leads: ScorableLead[], now: Date = new Date()):
             ),
             stageContactAt(lead, firstOrders),
           ),
-          lastInboundAt: latest(lastInbound.get(lead.id), customerWrote.get(customer)),
+          lastInboundAt,
           quoteViewedAt: quoteViewed.get(lead.id) ?? null,
           quoteSentNotSigned: quoteOutstanding.has(lead.id),
           hasOverdueActivity: next !== null && next < now,
@@ -171,7 +204,7 @@ export async function scoreLeads(leads: ScorableLead[], now: Date = new Date()):
         },
         now,
       ),
-    );
+    });
   }
   return out;
 }
@@ -187,6 +220,13 @@ export type TodayLead = {
   currency: string | null;
   stageName: string;
   assignedToName: string | null;
+  /** The deal's customer, for the WhatsApp window lookup. */
+  contactId: string | null;
+  /** What Today's composer greets them by. */
+  firstName: string;
+  /** The deal's own address/number, else its customer's — the customer's only when the viewer may open them. */
+  email: string | null;
+  phone: string | null;
 } & LeadScore;
 
 /**
@@ -222,6 +262,10 @@ export async function loadTodayLeads(
       stageEnteredAt: true,
       stage: { select: { name: true, isClosed: true, staleAfterDays: true, order: true, pipelineId: true } },
       assignedTo: { select: { name: true } },
+      email: true,
+      phone: true,
+      contactId: true,
+      contact: { select: { firstName: true, email: true, phone: true, whatsapp: true } },
     },
     orderBy: { updatedAt: "desc" },
     // One extra row tells us whether the cap cut anything off.
@@ -229,12 +273,18 @@ export async function loadTodayLeads(
   });
   const truncated = rows.length > TODAY_CANDIDATE_CAP;
   const candidates = rows.slice(0, TODAY_CANDIDATE_CAP);
-  const scores = await scoreLeads(candidates, now);
+  const [scores, accessibleContacts] = await Promise.all([scoreLeads(candidates, now), getAccessibleContactIds(user)]);
+  const mayOpen = (contactId: string | null) =>
+    contactId !== null && (accessibleContacts === null || accessibleContacts.includes(contactId));
 
   const leads: TodayLead[] = [];
   for (const row of candidates) {
-    const score = scores.get(row.id);
-    if (!score || score.score === 0) continue;
+    const scored = scores.get(row.id);
+    if (!scored || scored.score === 0) continue;
+    // Reached today and they haven't written since: done for today (todayAction.ts).
+    if (handledToday(scored.ourLastTouchAt, scored.lastInboundAt, now)) continue;
+    const { lastInboundAt: _inbound, ourLastTouchAt: _touch, ...score } = scored;
+    const customer = mayOpen(row.contactId) ? row.contact : null;
     leads.push({
       id: row.id,
       name: row.name,
@@ -243,6 +293,10 @@ export async function loadTodayLeads(
       currency: row.currency,
       stageName: row.stage.name,
       assignedToName: row.assignedTo?.name ?? null,
+      contactId: row.contactId,
+      firstName: customer?.firstName?.trim() || row.name.trim().split(/\s+/)[0] || row.name,
+      email: row.email || customer?.email || null,
+      phone: row.phone || customer?.whatsapp || customer?.phone || null,
       ...score,
     });
   }
