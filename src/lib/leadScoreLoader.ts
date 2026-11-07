@@ -66,12 +66,17 @@ export async function scoreLeads(leads: ScorableLead[], now: Date = new Date()):
   if (leads.length === 0) return out;
   const leadId = { in: leads.map((lead) => lead.id) };
 
-  // A message the outbox has not confirmed sent (queued, retrying, dead, cancelled) is not a
-  // touch: "handled today" must not hide a deal whose WhatsApp never left. Messages without an
-  // outbox row (a logged call, an email) stand as written. Today is all that question reads,
-  // so two days back is plenty.
+  // A message the outbox has not confirmed sent (queued, retrying, dead, cancelled) is not
+  // contact: it must neither hide a deal from Today ("handled today") nor cost a new lead its
+  // "not contacted yet" priority in the score. Messages without an outbox row (a logged call,
+  // an email) stand as written. All time, not just today: the score reads "no contact for N days".
+  // Only these leads' and their customers' rows (the outbox carries the same leadId/contactId
+  // as the message it logged), so the list grows with this page, not with the workspace's history.
+  const links = await prisma.lead.findMany({ where: { id: leadId, contactId: { not: null } }, select: { id: true, contactId: true } });
+  const customerOf = new Map(links.map((link) => [link.id, link.contactId as string]));
+  const contactId = { in: [...new Set(customerOf.values())] };
   const unconfirmed = await prisma.botFlowOutbox.findMany({
-    where: { communicationId: { not: null }, status: { not: "sent" }, createdAt: { gte: new Date(now.getTime() - 2 * 86_400_000) } },
+    where: { communicationId: { not: null }, status: { not: "sent" }, OR: [{ leadId }, { contactId }] },
     select: { communicationId: true },
   });
   const sentOnly = unconfirmed.length ? { id: { notIn: unconfirmed.map((row) => row.communicationId as string) } } : {};
@@ -79,7 +84,7 @@ export async function scoreLeads(leads: ScorableLead[], now: Date = new Date()):
   const [contact, inbound, done, planned, viewed, outstanding, outbound] = await Promise.all([
     // Contact means the customer (customerContact.ts): a note is something WE
     // wrote down, and a ticked-off to-do or blocked-out time isn't a touch either.
-    prisma.communication.groupBy({ by: ["leadId"], where: { leadId, ...contactCommunicationWhere }, _max: { occurredAt: true } }),
+    prisma.communication.groupBy({ by: ["leadId"], where: { leadId, ...contactCommunicationWhere, ...sentOnly }, _max: { occurredAt: true } }),
     // "The customer wrote to us" — a real inbound message, never a note filed as
     // inbound (the generic communication action accepts type "note" with any
     // direction), or a newer note would award "waiting on our reply".
@@ -106,13 +111,10 @@ export async function scoreLeads(leads: ScorableLead[], now: Date = new Date()):
   // `leadId` rows, a lead whose customer had been emailed that morning still
   // said "New lead — not contacted yet". The same widening the gone-quiet list
   // (leadIdle.ts) and the assistant (crmAssistant.ts) already apply. Not the
-  // customer's rows on ANOTHER lead — those are another deal's contact.
-  const links = await prisma.lead.findMany({ where: { id: leadId, contactId: { not: null } }, select: { id: true, contactId: true } });
-  const customerOf = new Map(links.map((link) => [link.id, link.contactId as string]));
-  const contactId = { in: [...new Set(customerOf.values())] };
+  // customer's rows on ANOTHER lead — those are another deal's contact. (`customerOf` is read above.)
   const [customerContact, customerInbound, customerDone, customerOutbound] = customerOf.size
     ? await Promise.all([
-        prisma.communication.groupBy({ by: ["contactId"], where: { contactId, leadId: null, ...contactCommunicationWhere }, _max: { occurredAt: true } }),
+        prisma.communication.groupBy({ by: ["contactId"], where: { contactId, leadId: null, ...contactCommunicationWhere, ...sentOnly }, _max: { occurredAt: true } }),
         prisma.communication.groupBy({ by: ["contactId"], where: { contactId, leadId: null, direction: "inbound", ...contactCommunicationWhere }, _max: { occurredAt: true } }),
         prisma.activity.groupBy({ by: ["contactId"], where: { contactId, leadId: null, ...contactActivityWhere }, _max: { doneAt: true } }),
         prisma.communication.groupBy({ by: ["contactId"], where: { contactId, leadId: null, direction: "outbound", ...contactCommunicationWhere, ...sentOnly }, _max: { occurredAt: true } }),

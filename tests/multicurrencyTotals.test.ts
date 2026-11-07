@@ -1,18 +1,76 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { readFileSync } from "node:fs";
-import { baseAndOthers, baseValueCents, formatTotals, nonBaseTotals, othersText, stageSegments } from "../src/lib/currencyRules";
+import { baseAndOthers, baseValueCents, editorCostCents, formatTotals, nonBaseTotals, othersText, stageSegments, unrepricedAmount } from "../src/lib/currencyRules";
+
+test("server: a draft changing currency is refused while any amount keeps its old number", () => {
+  const before = {
+    items: [{ id: "i1", unitPriceCents: 10_000_000 }, { id: "i2", unitPriceCents: 0 }],
+    fees: [{ id: "f1", amountCents: 150_000 }],
+    depositType: "amount",
+    depositValue: 50_000,
+  };
+  const repriced = {
+    items: [{ id: "i1", description: "Rover XL", unitPriceCents: 550_000 }, { id: "i2", description: "Mats", unitPriceCents: 0 }],
+    fees: [{ id: "f1", label: "Delivery", amountCents: 8_000 }],
+    depositType: "amount",
+    depositValue: 2_000,
+  };
+  assert.equal(unrepricedAmount(before, repriced), null, "everything re-entered (a free line stays 0)");
+  assert.equal(unrepricedAmount(before, { ...repriced, items: [{ id: "i1", description: "Rover XL", unitPriceCents: 10_000_000 }] }), "price for “Rover XL”");
+  assert.equal(unrepricedAmount(before, { ...repriced, fees: [{ id: "f1", label: "Delivery", amountCents: 150_000 }] }), "amount for “Delivery”");
+  assert.equal(unrepricedAmount(before, { ...repriced, depositValue: 50_000 }), "deposit amount");
+  // Ids are the caller's to send or drop: an old number under no id (or another row's) is still refused.
+  assert.equal(unrepricedAmount(before, { ...repriced, items: [{ description: "Rover XL", unitPriceCents: 10_000_000 }] }), "price for “Rover XL”");
+  assert.equal(unrepricedAmount(before, { ...repriced, items: [{ id: "i2", description: "Mats", unitPriceCents: 10_000_000 }] }), "price for “Mats”");
+  assert.equal(unrepricedAmount(before, { ...repriced, fees: [{ label: "Delivery", amountCents: 150_000 }] }), "amount for “Delivery”");
+  const actions = readFileSync("src/app/actions/quotes.ts", "utf8");
+  assert.match(actions, /const currencyMoved = \(existing\.currency \?\? null\) !== cpqQuoteData\.currency;\s+if \(currencyMoved\) \{\s+const stale = unrepricedAmount\(existing, \{ items: normalizedItems, fees: normalizedFees, \.\.\.cpqQuoteData \}\);\s+if \(stale\) return new Unrepriced\(/);
+  // …and the old cost basis does not ride along into the new currency.
+  assert.match(actions, /itemRowsFor\(normalizedItems, priorById\(existing\.items\), createDefaults\.regional\.vatRatePct, \{ keepCost: !currencyMoved \}\)/);
+  assert.match(actions, /if \(result instanceof Unrepriced\) \{\s+return \{ ok: false, error: result\.message \};/);
+});
+
+test("the editor's cost follows what was SAVED: ZAR → USD, save, back to ZAR shows no cost, as the server stores", () => {
+  // The editor's two moves, as it makes them: a currency switch, and a successful save.
+  type Line = { costCents: number; savedCostCents: number };
+  let saved = { currency: "", lines: [{ costCents: 18_000_000, savedCostCents: 18_000_000 }] as Line[] };
+  let draft = { currency: "", lines: saved.lines };
+  const switchTo = (currency: string) => {
+    draft = { currency, lines: draft.lines.map((line) => ({ ...line, costCents: editorCostCents(line, currency, saved.currency) })) };
+  };
+  const save = () => {
+    draft = { ...draft, lines: draft.lines.map((line) => ({ ...line, savedCostCents: line.costCents })) };
+    saved = { currency: draft.currency, lines: draft.lines };
+  };
+  switchTo("USD");
+  assert.equal(draft.lines[0].costCents, 0, "a rand cost is not a dollar cost");
+  switchTo("");
+  assert.equal(draft.lines[0].costCents, 18_000_000, "back before saving: the saved cost returns");
+  switchTo("USD");
+  save(); // the server stored no cost (keepCost: false)
+  switchTo("");
+  assert.equal(draft.lines[0].costCents, 0, "back AFTER saving: the cleared cost stays cleared — the server will save 0 again");
+  // …and the editor really moves both on a successful save.
+  const editor = readFileSync("src/components/quotes/QuoteEditorDialog.tsx", "utf8");
+  assert.match(editor, /const \[savedCurrency, setSavedCurrency\] = useState\(record\?\.currency \?\? ""\);/);
+  assert.match(editor, /setSavedQuote\(result\.quote\);[\s\S]{0,400}setSavedCurrency\(draft\.currency\);\s+setDraft\(\(current\) => \(\{ \.\.\.current, lines: current\.lines\.map\(\(line\) => \(\{ \.\.\.line, savedCostCents: line\.costCents \}\)\) \}\)\);/);
+});
 
 test("a quote changing currency clears its prices and won't save until each is re-entered", () => {
   const editor = readFileSync("src/components/quotes/QuoteEditorDialog.tsx", "utf8");
   const reprice = editor.slice(editor.indexOf("function repricedForCurrency"), editor.indexOf("/**", editor.indexOf("function repricedForCurrency")));
   assert.match(reprice, /const clear = \(amount: string\) => \(\/\[1-9\]\/\.test\(amount\) \? "" : amount\);/, "non-zero amounts cleared, zero kept");
-  assert.match(reprice, /lines: draft\.lines\.map\(\(line\) => \(\{ \.\.\.line, unitPrice: clear\(line\.unitPrice\) \}\)\)/);
+  // …and the cost as the save will store it: none away from the saved currency (margin hidden), back on return.
+  assert.match(reprice, /lines: draft\.lines\.map\(\(line\) => \(\{ \.\.\.line, unitPrice: clear\(line\.unitPrice\), costCents: editorCostCents\(line, currency, savedCurrency\) \}\)\)/);
+  assert.match(editor, /const costsDropped = draft\.currency !== savedCurrency && draft\.lines\.some\(\(line\) => line\.savedCostCents > 0\);/);
+  assert.match(editor, /\{costsDropped && " Saving also clears the recorded costs/);
+  assert.match(editor, /\{calculated\.hasCost && <div/, "the margin only shows with a cost basis");
   assert.match(reprice, /fees: draft\.fees\.map\(\(fee\) => \(\{ \.\.\.fee, amount: clear\(fee\.amount\) \}\)\)/);
   assert.match(reprice, /depositValue: draft\.depositType === "amount" \? clear\(draft\.depositValue\) : draft\.depositValue/);
   // Both ways a draft's currency moves: the picker, and linking a lead (saved in the lead's currency).
-  assert.match(editor, /setDraft\(\(current\) => repricedForCurrency\(current, code === currencies\[0\] \? "" : code\)\);\s+setRepricing\(true\);/);
-  assert.match(editor, /\.\.\.repricedForCurrency\(current, currency\),\s+leadId,/);
+  assert.match(editor, /setDraft\(\(current\) => repricedForCurrency\(current, code === currencies\[0\] \? "" : code, savedCurrency\)\);\s+setRepricing\(true\);/);
+  assert.match(editor, /\.\.\.repricedForCurrency\(current, currency, savedCurrency\),\s+leadId,/);
   assert.match(readFileSync("src/app/(app)/quotes/page.tsx", "utf8"), /currency: lead\.currency,/);
   // Save refuses a cleared line, fee or fixed deposit instead of taking blank as 0.
   assert.match(editor, /if \(\(\(draft\.currency && line\.kind === "catalogue"\) \|\| repricing\) && !line\.unitPrice\.trim\(\)\) \{/);

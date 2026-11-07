@@ -329,7 +329,8 @@ test("saving from the editor stops resetting the columns it never shows", () => 
   // save too, live in quoteRows.ts and are exercised behaviourally there.
   const rows = shipped("src/lib/quoteRows.ts");
   for (const field of ["kind", "costCents", "optional", "selected"]) {
-    assert.match(rows, new RegExp(`${field}: previous\\?\\.${field}`), `${field} must be carried across`);
+    // (the cost only while the currency stays the same — quoteRowInheritance.test.ts)
+    assert.match(rows, new RegExp(`${field}: (?:keepCost \\? )?previous\\?\\.${field}`), `${field} must be carried across`);
   }
   // A genuinely new line takes the WORKSPACE's rate (Settings → Quotes), not a built-in 15.
   assert.match(rows, /taxRatePct: taxRatePct \?\? previous\?\.taxRatePct \?\? vatRatePct/);

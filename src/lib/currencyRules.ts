@@ -141,3 +141,47 @@ export function stageSegments(leads: readonly StageLead[], base: string) {
   }
   return [...byStage.values()].sort((a, b) => a.order - b.order).map(({ order: _order, ...seg }) => seg);
 }
+
+/**
+ * A quote line's cost in the editor when the draft is in `currency`: the cost as last SAVED, but only
+ * in the currency it was saved in — the save drops it on a currency change (itemRowsFor keepCost), so
+ * the preview must too. `savedCurrency` and `savedCostCents` move on with every save, so a quote saved
+ * in USD (cost cleared) and switched back to ZAR in the same sitting shows no cost, as the server will.
+ */
+export function editorCostCents(line: { savedCostCents: number }, currency: string, savedCurrency: string): number {
+  return currency === savedCurrency ? line.savedCostCents : 0;
+}
+
+type PricedBefore = {
+  items: readonly { unitPriceCents: number }[];
+  fees: readonly { amountCents: number }[];
+  depositType: string | null;
+  depositValue: number | null;
+};
+type PricedAfter = {
+  items: readonly { id?: string | null; description: string; unitPriceCents: number }[];
+  fees: readonly { id?: string | null; label: string; amountCents: number }[];
+  depositType?: string | null;
+  depositValue?: number | null;
+};
+
+/**
+ * A draft quote moving to another currency: the first amount still carrying an OLD number
+ * (any non-zero figure the quote had before), named for the refusal — or null when everything
+ * was re-entered. The editor clears them on a currency change; this is the server holding it.
+ * Matched by VALUE, not row id: a caller can drop or change the ids, it can't keep the number.
+ * ponytail: a re-entered price that happens to equal an old one is refused too; the person
+ * adjusts it by a cent. Per-row tracking only if that ever bites.
+ */
+export function unrepricedAmount(before: PricedBefore, after: PricedAfter): string | null {
+  const prices = new Set(before.items.map((item) => item.unitPriceCents).filter(Boolean));
+  const item = after.items.find((row) => prices.has(row.unitPriceCents));
+  if (item) return `price for “${item.description}”`;
+  const amounts = new Set(before.fees.map((fee) => fee.amountCents).filter(Boolean));
+  const fee = after.fees.find((row) => amounts.has(row.amountCents));
+  if (fee) return `amount for “${fee.label}”`;
+  if (before.depositType === "amount" && after.depositType === "amount" && before.depositValue && after.depositValue === before.depositValue) {
+    return "deposit amount";
+  }
+  return null;
+}

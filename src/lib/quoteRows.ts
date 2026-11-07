@@ -80,7 +80,12 @@ export function priorById<T extends { id: string }>(rows: T[]): Map<string, T> {
  * `vatRatePct` is the workspace's CURRENT rate and only reaches a line that is
  * genuinely new — an existing line keeps the rate it was issued at.
  */
-export function itemRowsFor(incoming: IncomingItem[], prior: Map<string, PriorItem>, vatRatePct: number): ItemRow[] {
+/**
+ * `keepCost: false` when the quote changes currency: an R180 000 cost is not a US$180 000 one, and
+ * there is no exchange rate to convert it. The cost goes back to 0 — "no cost recorded", as on any
+ * line without one — rather than a number in the wrong currency behind the margin.
+ */
+export function itemRowsFor(incoming: IncomingItem[], prior: Map<string, PriorItem>, vatRatePct: number, { keepCost = true } = {}): ItemRow[] {
   return incoming.map(({ id, taxRatePct, ...rest }) => {
     const previous = id ? prior.get(id) : undefined;
     return {
@@ -90,7 +95,7 @@ export function itemRowsFor(incoming: IncomingItem[], prior: Map<string, PriorIt
       ...rest,
       taxRatePct: taxRatePct ?? previous?.taxRatePct ?? vatRatePct,
       kind: previous?.kind ?? "product",
-      costCents: previous?.costCents ?? 0,
+      costCents: keepCost ? previous?.costCents ?? 0 : 0,
       optional: previous?.optional ?? false,
       selected: previous?.selected ?? true,
     };

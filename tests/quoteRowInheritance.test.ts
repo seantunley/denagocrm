@@ -11,7 +11,7 @@ import {
   type IncomingItem,
   type PriorItem,
 } from "../src/lib/quoteRows";
-import { payableTotalCents } from "../src/lib/pricing";
+import { payableTotalCents, quotePricing } from "../src/lib/pricing";
 
 /** The workspace's VAT rate — only a genuinely new line takes it. */
 const VAT = 15;
@@ -49,6 +49,17 @@ const inDatabase = (over: Partial<PriorItem> = {}): PriorItem => ({
   optional: false,
   selected: true,
   ...over,
+});
+
+test("a currency change drops the old cost basis — the margin is never priced against a cost in another currency", () => {
+  // R180 000 cost, re-priced to US$12 000 (ex VAT 0 for a clean margin).
+  const [row] = itemRowsFor([asEditorSends("item-1", { unitPriceCents: 1_200_000, taxRatePct: 0 })], priorById([inDatabase()]), VAT, { keepCost: false });
+  assert.equal(row.costCents, 0);
+  const margin = quotePricing([row]);
+  assert.equal(margin.costCents, 0);
+  assert.equal(margin.marginCents, 1_200_000, "not 1 200 000 − 18 000 000 = a US$168 000 loss");
+  // Same currency: the cost still carries.
+  assert.equal(itemRowsFor([asEditorSends("item-1")], priorById([inDatabase()]), VAT)[0].costCents, 18_000_000);
 });
 
 test("the hidden columns survive a save", () => {
