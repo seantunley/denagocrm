@@ -1,4 +1,4 @@
-import type { Flow, FlowNode } from "./flow";
+import { documentFiles, type Flow, type FlowNode } from "./flow";
 import { secretLookingHeaders } from "./flowConnections";
 
 /**
@@ -26,7 +26,7 @@ export function workspaceRefs(flow: Flow): FlowRef[] {
   const add = (nodeId: string, kind: RefKind, id: unknown) => { if (typeof id === "string" && id) refs.push({ nodeId, kind, id }); };
   for (const node of Object.values(flow.nodes)) {
     const n = node as Record<string, unknown>;
-    if (node.type === "document") add(node.id, "document", node.documentId);
+    if (node.type === "document") for (const file of documentFiles(node)) add(node.id, "document", file.documentId);
     if (node.type === "journey") add(node.id, "journey", node.journeyId);
     if (node.type === "subflow") add(node.id, "subflow", node.flowId);
     if (node.type === "contactCard") add(node.id, "staff", node.staffUserId);
@@ -45,6 +45,11 @@ export function clearForeignRefs(flow: Flow, keep: ReadonlySet<string>): { flow:
   for (const [key, node] of Object.entries(flow.nodes)) {
     const n = { ...node } as Record<string, unknown>;
     if (node.type === "document" && gone("document", node.documentId)) { n.documentId = ""; delete n.fileName; }
+    if (node.type === "document" && Array.isArray(node.moreDocuments)) {
+      const kept = node.moreDocuments.filter((file) => !gone("document", file?.documentId));
+      if (kept.length) n.moreDocuments = kept;
+      else delete n.moreDocuments;
+    }
     if (node.type === "journey" && gone("journey", node.journeyId)) n.journeyId = "";
     if (node.type === "subflow") { if (gone("subflow", node.flowId)) n.flowId = ""; delete n.versionId; delete n.version; }
     if (node.type === "contactCard" && gone("staff", node.staffUserId)) delete n.staffUserId;

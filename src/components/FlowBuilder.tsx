@@ -160,7 +160,11 @@ function summary(n: FlowNode): string {
   if (n.type === "capture") return `“${n.text.slice(0, 40)}” → {{${n.variable}}}`;
   if (n.type === "captureFile") return `Ask for a file → {{${n.variable}}}`;
   if (n.type === "image") return n.url ? "Sends an image" : "(no image set)";
-  if (n.type === "document") return n.documentId ? `Sends ${n.fileName ?? "a document"}` : "(no file chosen)";
+  if (n.type === "document") {
+    if (!n.documentId) return "(no file chosen)";
+    const more = (n.moreDocuments ?? []).filter((file) => file.documentId).length;
+    return `Sends ${n.fileName ?? "a document"}${more ? ` + ${more} more file${more === 1 ? "" : "s"}` : ""}`;
+  }
   if (n.type === "contactCard") return n.staffUserId ? "Sends a staff member's contact card" : "Sends your business contact card";
   if (n.type === "hours") return n.holidaysClosed === false ? "Office hours (open on public holidays)" : "Office hours · closed on public holidays";
   if (n.type === "goto") return n.target ? `↪ ${n.targetLabel || n.target}` : "(choose a step to jump to)";
@@ -1228,6 +1232,39 @@ function VariablesPanel({ variables }: { variables: string[] }) {
   );
 }
 
+/**
+ * "Send a document": the first file, then any more — each goes as its own message, in this
+ * order (WhatsApp carries one file per message). The caption rides the first.
+ */
+function DocumentFilesField({ node, documents, onChange }: {
+  node: Extract<FlowNode, { type: "document" }>;
+  documents: { id: string; name: string }[];
+  onChange: (n: FlowNode) => void;
+}) {
+  const more = node.moreDocuments ?? [];
+  const named = (id: string) => documents.find((d) => d.id === id)?.name;
+  const setMore = (next: { documentId: string; fileName?: string }[]) => onChange({ ...node, moreDocuments: next.length ? next : undefined });
+  const options = (
+    <>
+      <option value="">{documents.length ? "Choose a file…" : "No files yet — add them under Documents → Library"}</option>
+      {documents.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
+    </>
+  );
+  return (
+    <div className="space-y-2">
+      <label className="label" htmlFor={`doc-${node.id}`}>{more.length ? "Files to send, in order" : "File to send"}</label>
+      <select id={`doc-${node.id}`} className="input" value={node.documentId} onChange={(e) => onChange({ ...node, documentId: e.target.value, fileName: named(e.target.value) })}>{options}</select>
+      {more.map((file, at) => (
+        <div key={at} className="flex items-center gap-2">
+          <select aria-label={`File ${at + 2}`} className="input" value={file.documentId} onChange={(e) => setMore(more.map((f, i) => (i === at ? { documentId: e.target.value, fileName: named(e.target.value) } : f)))}>{options}</select>
+          <button type="button" className="btn-secondary btn-sm" onClick={() => setMore(more.filter((_, i) => i !== at))} aria-label={`Remove file ${at + 2}`}>Remove</button>
+        </div>
+      ))}
+      <button type="button" className="btn-secondary btn-sm" disabled={!node.documentId} onClick={() => setMore([...more, { documentId: "" }])}>+ Add another file</button>
+    </div>
+  );
+}
+
 function NodePanel({ node, isStart, nodeOptions, variables, journeys, flows, documents = [], staff = [], connections = [], crmTags = [], stages = [], onChange, onDelete, onDuplicate, onMakeStart, isFallback = false, onMakeFallback }: { isFallback?: boolean; onMakeFallback?: (on: boolean) => void; connections?: { id: string; name: string; host: string }[]; crmTags?: string[]; stages?: { id: string; name: string }[]; node: FlowNode; isStart: boolean; nodeOptions: { id: string; label: string }[]; variables: string[]; journeys: FlowJourneyOption[]; flows: FlowOptionRef[]; documents?: { id: string; name: string }[]; staff?: { id: string; name: string }[]; onChange: (n: FlowNode) => void; onDelete: () => void; onDuplicate: () => void; onMakeStart: () => void }) {
   const meta = TYPE_META[node.type];
   const Icon = meta.icon;
@@ -1297,7 +1334,7 @@ function NodePanel({ node, isStart, nodeOptions, variables, journeys, flows, doc
       {(node.type === "choice" || node.type === "capture" || node.type === "captureFile") && <NoReplyField node={node} nodeOptions={nodeOptions} onChange={onChange} />}
       {node.type === "choice" &&<div className="space-y-2"><div><div className="flex items-center justify-between"><label className="label" htmlFor={`prompt-${node.id}`}>Prompt</label><EmojiButton targetId={`prompt-${node.id}`} value={node.text} onChange={(text) => onChange({ ...node, text })} /></div><textarea id={`prompt-${node.id}`} className="input" rows={2} value={node.text} onChange={(e) => onChange({ ...node, text: e.target.value })} /></div><label className="label">Options</label>{node.options.map((o, i) => <div key={o.id} className="space-y-1.5 rounded-lg border border-slate-800 p-2"><div className="flex gap-1.5"><input className="input btn-sm flex-1" value={o.label} onChange={(e) => onChange({ ...node, options: node.options.map((x) => x.id === o.id ? { ...x, label: e.target.value } : x) })} /><button onClick={() => onChange({ ...node, options: node.options.filter((x) => x.id !== o.id) })} className="px-1 text-muted-foreground hover:text-red-400"><X className="size-4" /><span className="sr-only">Remove option</span></button></div><TargetPicker nodeOptions={nodeOptions} value={o.next} onPick={(v) => onChange({ ...node, options: node.options.map((x) => x.id === o.id ? { ...x, next: v } : x) })} />{i === 2 && node.options.length > 3 && <p className="text-[10px] text-amber-400">WhatsApp shows &gt;3 options as a list.</p>}</div>)}<button onClick={() => onChange({ ...node, options: [...node.options, { id: `o${Date.now().toString(36)}`, label: `Option ${node.options.length + 1}` }] })} className="btn-secondary btn-sm w-full">+ Add option</button></div>}
 
-      {node.type === "document" && <><div><label className="label" htmlFor={`doc-${node.id}`}>File to send</label><select id={`doc-${node.id}`} className="input" value={node.documentId} onChange={(e) => { const doc = documents.find((d) => d.id === e.target.value); onChange({ ...node, documentId: e.target.value, ...(doc ? { fileName: doc.name } : { fileName: undefined }) }); }}><option value="">{documents.length ? "Choose a file…" : "No files yet — add them under Documents → Library"}</option>{documents.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}</select></div><div><div className="flex items-center justify-between"><label className="label" htmlFor={`doc-cap-${node.id}`}>Caption (optional)</label><EmojiButton targetId={`doc-cap-${node.id}`} value={node.caption ?? ""} onChange={(caption) => onChange({ ...node, caption: caption || undefined })} /></div><input id={`doc-cap-${node.id}`} className="input" value={node.caption ?? ""} onChange={(e) => onChange({ ...node, caption: e.target.value || undefined })} placeholder="Here's our brochure, {{name}}" /></div><p className="text-xs text-slate-500">Your Library (brochures, price lists — the newest version is always sent) and general files. Files filed on a customer, vehicle, job card or quote are never offered: they are that customer&apos;s records.</p></>}
+      {node.type === "document" && <><DocumentFilesField node={node} documents={documents} onChange={onChange} /><div><div className="flex items-center justify-between"><label className="label" htmlFor={`doc-cap-${node.id}`}>Caption (optional)</label><EmojiButton targetId={`doc-cap-${node.id}`} value={node.caption ?? ""} onChange={(caption) => onChange({ ...node, caption: caption || undefined })} /></div><input id={`doc-cap-${node.id}`} className="input" value={node.caption ?? ""} onChange={(e) => onChange({ ...node, caption: e.target.value || undefined })} placeholder="Here's our brochure, {{name}}" /></div><p className="text-xs text-slate-500">Your Library (brochures, price lists — the newest version is always sent) and general files. Files filed on a customer, vehicle, job card or quote are never offered: they are that customer&apos;s records.</p></>}
       {node.type === "contactCard" && <><div><label className="label" htmlFor={`card-${node.id}`}>Whose card</label><select id={`card-${node.id}`} className="input" value={node.staffUserId ?? ""} onChange={(e) => onChange({ ...node, staffUserId: e.target.value || undefined })}><option value="">The business (Settings → Company)</option>{staff.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}</select></div><p className="text-xs text-slate-500">On WhatsApp it arrives as a contact they can save in one tap; elsewhere as text.</p></>}
       {(["message", "answer", "capture", "captureFile", "image", "document", "contactCard", "set", "http", "knowledge", "extract", "delay", "subflow", "booking", "slots", "journey", "crm"] as FlowNode["type"][]).includes(node.type) && <div><label className="label">Then go to</label><TargetPicker nodeOptions={nodeOptions} value={(node as { next?: string }).next} onPick={(v) => onChange({ ...node, next: v } as FlowNode)} /></div>}
       {FALLIBLE.has(node.type) && (

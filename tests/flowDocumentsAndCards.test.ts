@@ -37,6 +37,24 @@ test("no contact card configured: nothing sent, the flow carries on", async () =
   assert.deepEqual(result.messages.map((m) => m.type), ["document"]);
 });
 
+test("one step, several files: one message each, in order, caption on the first only", async () => {
+  const flow: Flow = { start: "doc", nodes: {
+    doc: {
+      id: "doc", type: "document", documentId: "d1", fileName: "Price list.pdf", caption: "Hi {{name}}", next: "end",
+      moreDocuments: [{ documentId: "d2", fileName: "Brochure.pdf" }, { documentId: "" }, { documentId: "d3" }],
+    },
+    end: { id: "end", type: "end" },
+  } };
+  const result = await runFlow(flow, { nodeId: null, vars: { name: "Ann" } }, { text: "" }, ctx());
+  assert.deepEqual(result.messages, [
+    { type: "document", documentId: "d1", fileName: "Price list.pdf", caption: "Hi Ann" },
+    { type: "document", documentId: "d2", fileName: "Brochure.pdf" },
+    { type: "document", documentId: "d3" },
+  ]);
+  // …and the blank slot is an error before it is ever published.
+  assert.ok(validateFlow(flow).some((issue) => issue.code === "document.missing" && /file slot/.test(issue.message)));
+});
+
 test("a document step without a file is an error", () => {
   const flow: Flow = { start: "doc", nodes: { doc: { id: "doc", type: "document", documentId: "", next: "end" }, end: { id: "end", type: "end" } } };
   assert.ok(validateFlow(flow).some((issue) => issue.code === "document.missing" && issue.severity === "error"));

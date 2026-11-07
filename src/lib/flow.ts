@@ -50,7 +50,11 @@ export type FlowNode = (
    * customer). `fileName` is a display label copied when it was picked; what is
    * sent is resolved again, tenant-checked, at delivery. See botOutbox.sendProvider.
    */
-  | { id: string; type: "document"; documentId: string; fileName?: string; caption?: string; next?: string }
+  | {
+      id: string; type: "document"; documentId: string; fileName?: string; caption?: string; next?: string;
+      /** More files from the same step, each sent as its own message after the first (the caption rides the first). */
+      moreDocuments?: { documentId: string; fileName?: string }[];
+    }
   /** The business's contact card, or one staff member's, built from the CRM at run time. */
   | { id: string; type: "contactCard"; staffUserId?: string; next?: string }
   | { id: string; type: "answer"; text?: string; answerSource?: "pricelist" | "colours"; next?: string }
@@ -135,6 +139,17 @@ export type CrmUpdateAction = "tag" | "assign" | "stage";
  * e.g. a hand-off to a person (Node-RED's catch node; Sean, 2026-11-04). See failRoute.
  */
 export type Flow = { start: string; nodes: Record<string, FlowNode>; onFailure?: string };
+
+/**
+ * Every file a "Send a document" step sends, in order: the first, then `moreDocuments`.
+ * Saved flows are untrusted JSON, so only non-empty string ids come back.
+ */
+export function documentFiles(node: Extract<FlowNode, { type: "document" }>): { documentId: string; fileName?: string }[] {
+  const more = Array.isArray(node.moreDocuments) ? node.moreDocuments : [];
+  return [{ documentId: node.documentId, fileName: node.fileName }, ...more].filter(
+    (file): file is { documentId: string; fileName?: string } => Boolean(file) && typeof file.documentId === "string" && file.documentId !== "",
+  );
+}
 
 /** When a Start Journey step's Journey begins, and the saved answers it is handed. */
 export type JourneyFollowUp = { delayMinutes: number; handOver: Record<string, string> };
@@ -545,7 +560,13 @@ export async function runFlow(flow: Flow, session: FlowSession, input: FlowInput
     } else if (node.type === "image") {
       messages.push({ type: "image", url: node.url, caption: node.caption ? interpolate(node.caption, vars) : undefined }); nodeId = node.next ?? null;
     } else if (node.type === "document") {
-      if (node.documentId) messages.push({ type: "document", documentId: node.documentId, ...(node.fileName ? { fileName: node.fileName } : {}), ...(node.caption ? { caption: interpolate(node.caption, vars) } : {}) });
+      // One message per file, in order; the caption goes with the first.
+      documentFiles(node).forEach((file, at) => messages.push({
+        type: "document",
+        documentId: file.documentId,
+        ...(file.fileName ? { fileName: file.fileName } : {}),
+        ...(at === 0 && node.caption ? { caption: interpolate(node.caption, vars) } : {}),
+      }));
       nodeId = node.next ?? null;
     } else if (node.type === "contactCard") {
       // No card (nothing configured, or the staff member left) sends nothing and

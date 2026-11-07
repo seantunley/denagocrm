@@ -278,6 +278,9 @@ export function validateFlow(flow: Flow, channels: FlowChannel[] = ["whatsapp"],
       // Which file is checked against the workspace at save and publish (flowDocumentIssues);
       // this is the part that needs no database.
       if (!str(node.documentId).trim()) issues.push(issue("error", "document.missing", "Send a document needs a file chosen.", id));
+      if (Array.isArray(node.moreDocuments) && node.moreDocuments.some((file) => !str(file?.documentId).trim())) {
+        issues.push(issue("error", "document.missing", "A file slot on Send a document is empty — choose a file or remove it.", id));
+      }
       for (const channel of channels) {
         if (channel === "instagram" || channel === "telegram") issues.push(issue("warning", "channel.document_fallback", `${channel === "instagram" ? "Instagram" : "Telegram"} can't receive files from the chatbot, so this sends the file's name with "the team will send it to you" instead.`, id, channel));
       }
