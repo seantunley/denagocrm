@@ -29,6 +29,8 @@ export async function GET(request: Request, context: { params: Promise<{ id: str
       id,
       user,
       toolbarHtml: printToolbarHtml(`/contacts/${id}`, "Back to customer", request.headers.get("x-nonce")),
+      // A statement per currency (multicurrency module); checked against the workspace's list there.
+      currency: new URL(request.url).searchParams.get("currency"),
     });
     if (result.kind === "missing") notFound();
     if (result.kind !== "ok") redirect(`/contacts/${id}/statement?legacy=1`);

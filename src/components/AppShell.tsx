@@ -157,6 +157,7 @@ export default function AppShell({
   tenantId,
   recordLabels,
   money = DEFAULT_REGIONAL,
+  currencies,
   children,
 }: {
   user: ShellUser;
@@ -183,6 +184,8 @@ export default function AppShell({
   recordLabels?: RecordLabels;
   /** The workspace's currency and locale (Settings → Quotes), for money shown in the browser. Undefined = the rand. */
   money?: MoneyFormat;
+  /** Currencies a lead or quote may be in (multicurrency module), base first. Undefined = base only. */
+  currencies?: string[];
   children: ReactNode;
 }) {
   const [mobileOpen, setMobileOpen] = useState(false);
@@ -190,7 +193,7 @@ export default function AppShell({
 
   return (
     <TooltipProvider delayDuration={250}>
-    <MoneyFormatProvider money={money}>
+    <MoneyFormatProvider money={money} currencies={currencies}>
     <ActivityTypesProvider types={activityTypes}>
     <RecordLabelsProvider labels={recordLabels}>
     <SettingsViewerProvider isOwner={ownsWorkspace(user)} isPlatformOwner={user.role === "owner"} permissions={user.permissions} enabledModules={enabledModules}>

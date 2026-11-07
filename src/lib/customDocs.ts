@@ -9,6 +9,7 @@ import { type MergeContext } from "./mergeFields";
 import { getCompanyProfile, companyTokens } from "./companyProfile";
 import { getRegionalSettings } from "./settings";
 import { escapeHtml } from "./escapeHtml";
+import { withCurrency } from "./currencyRules";
 
 /**
  * Build the merge context for a document from its linked CRM records.
@@ -49,9 +50,9 @@ export async function buildMergeContext(links: {
       : "",
     "lead.title": lead?.title ?? "",
     "lead.product": lead?.product?.name ?? "",
-    "lead.value": lead ? formatZAR(lead.valueCents, r) : "",
+    "lead.value": lead ? formatZAR(lead.valueCents, withCurrency(r, lead.currency)) : "",
     "quote.number": quote ? `Q-${quote.number}` : "",
-    "quote.total": quoteTotal !== null ? formatZAR(quoteTotal, r) : "",
+    "quote.total": quoteTotal !== null ? formatZAR(quoteTotal, withCurrency(r, quote?.currency)) : "",
     "quote.date": quote ? formatDate(quote.createdAt, r) : "",
     "user.name": links.userName ?? "",
     "date.today": formatDate(new Date(), r),

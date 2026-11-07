@@ -10,6 +10,7 @@ import type { matchPaymentArgs } from "./crmAssistantPlan";
 import { MAX_CHOICES } from "./assistantActions";
 import { getAccessibleQuoteIds, hasPermission, type PermissionUser } from "./permissions";
 import { getRegionalSettings } from "@/lib/settings";
+import { withCurrency } from "./currencyRules";
 
 type Output = { rows: { label: string; detail: string; href: string }[]; data: unknown[]; truncated: boolean };
 
@@ -24,8 +25,15 @@ const CANDIDATES = 500;
 export async function matchPayment(user: PermissionUser, args: z.infer<typeof matchPaymentArgs>): Promise<Output> {
   if (!(await hasPermission(user, "deliveries.manage"))) return { truncated: false, rows: [], data: [{ note: "Your role can't record payments, so there is nothing to match." }] };
   const ids = await getAccessibleQuoteIds(user);
+  // SAME CURRENCY ONLY (multicurrency module): a ruble payment can't settle a rand invoice because the
+  // numbers happen to coincide. The base currency means the quotes with none set, as before the module.
+  const { currency: base } = await getRegionalSettings();
+  const paidIn = (args.currency ?? base).toUpperCase();
   const quotes = await prisma.quote.findMany({
-    where: { status: "accepted", supersededAt: null, deletedAt: null, invoicedAt: { not: null }, ...(ids === null ? {} : { id: { in: ids } }) },
+    where: {
+      status: "accepted", supersededAt: null, deletedAt: null, invoicedAt: { not: null }, ...(ids === null ? {} : { id: { in: ids } }),
+      ...(paidIn === base ? { OR: [{ currency: null }, { currency: base }] } : { currency: paidIn }),
+    },
     orderBy: { invoicedAt: "desc" },
     take: CANDIDATES,
     select: {
@@ -58,7 +66,8 @@ export async function matchPayment(user: PermissionUser, args: z.infer<typeof ma
   const { matches, clear } = rankPaymentMatches(candidates, { amountCents, reference: args.reference, payer: args.payer });
   // As many as can be offered as choices.
   const page = matches.slice(0, MAX_CHOICES);
-  const moneyFmt = await getRegionalSettings();
+  // The payment and every candidate are in `paidIn`, so they're all said in it.
+  const moneyFmt = withCurrency(await getRegionalSettings(), paidIn);
   const why = (r: MatchReason) =>
     r === "reference" ? `the reference "${args.reference}" names it`
       : r === "deposit" ? `${formatZAR(amountCents, moneyFmt)} is its deposit due`

@@ -7,6 +7,7 @@ import { pageWindow, parsePage } from "@/lib/listPaging";
 import ListPager from "@/components/ListPager";
 import { saveView, deleteView } from "@/app/actions/views";
 import { currencySymbol, formatDate, formatZAR, type MoneyFormat } from "@/lib/format";
+import { totalsByCurrency, withCurrency } from "@/lib/currencyRules";
 import { getAccessibleLeadIds, hasPermission, requireAnyPermission } from "@/lib/permissions";
 import { listActiveSalesPipelines, listPipelineStages } from "@/lib/pipelines";
 import MobileFilterDrawer from "@/components/MobileFilterDrawer";
@@ -78,7 +79,8 @@ export default async function LeadListPage({ searchParams }: { searchParams: Pro
   // and value in the footer cover the whole match rather than the newest 200.
   const [total, sum] = await Promise.all([
     prisma.lead.count({ where }),
-    prisma.lead.aggregate({ where, _sum: { valueCents: true } }),
+    // A total PER CURRENCY (multicurrency module): rubles and rand are never added together.
+    prisma.lead.groupBy({ by: ["currency"], where, _sum: { valueCents: true } }),
   ]);
   const { page, skip, take } = pageWindow(parsePage(params.page), total);
   const leads = await prisma.lead.findMany({
@@ -93,10 +95,12 @@ export default async function LeadListPage({ searchParams }: { searchParams: Pro
   // the active-filter badge.
   const filters = Object.entries(params).filter(([key, value]) => key !== "page" && value);
   const currentQuery = new URLSearchParams(Object.fromEntries(filters) as Record<string, string>).toString();
-  const totalValue = sum._sum.valueCents ?? 0;
   const activeFilterCount = filters.length;
 
   const moneyFmt = await getRegionalSettings();
+  const totalValueText = totalsByCurrency(sum, (row) => ({ cents: row._sum.valueCents ?? 0, currency: row.currency }), moneyFmt.currency)
+    .map((row) => formatZAR(row.cents, withCurrency(moneyFmt, row.currency)))
+    .join(" · ");
   const filterProps = { params, status, source, pipelineId, stageId, pipelines, stages, moneyFmt };
 
   return (
@@ -168,7 +172,7 @@ export default async function LeadListPage({ searchParams }: { searchParams: Pro
                     aside={<StatusPill tone={lead.status === "won" ? "success" : lead.status === "lost" ? "danger" : "info"}>{lead.status === "open" ? lead.stage.name : lead.status}</StatusPill>}
                   />
                   <MobileDataFields>
-                    <MobileDataField label="Value">{lead.valueCents > 0 ? formatZAR(lead.valueCents, moneyFmt) : "—"}</MobileDataField>
+                    <MobileDataField label="Value">{lead.valueCents > 0 ? formatZAR(lead.valueCents, withCurrency(moneyFmt, lead.currency)) : "—"}</MobileDataField>
                     <MobileDataField label="Source"><span className="capitalize">{lead.source}</span></MobileDataField>
                     <MobileDataField label="Assigned">{lead.assignedTo?.name ?? "Unassigned"}</MobileDataField>
                     <MobileDataField label="Created">{formatDate(lead.createdAt)}</MobileDataField>
@@ -182,7 +186,7 @@ export default async function LeadListPage({ searchParams }: { searchParams: Pro
                 </RecordContextMenu>
               ))}
               <div className="border-t border-border bg-muted/20 px-4 py-3 text-xs text-muted-foreground">
-                {total} lead{total !== 1 ? "s" : ""} · <span className="font-semibold text-foreground">{formatZAR(totalValue, moneyFmt)}</span> total
+                {total} lead{total !== 1 ? "s" : ""} · <span className="font-semibold text-foreground">{totalValueText}</span> total
               </div>
               <ListPager path="/leads/list" page={page} total={total} />
             </MobileDataList>
@@ -203,7 +207,7 @@ export default async function LeadListPage({ searchParams }: { searchParams: Pro
                       <td><Link href={`/leads/${lead.id}`} className="font-medium text-primary hover:underline">{lead.name}</Link><p className="max-w-52 truncate text-xs text-muted-foreground">{lead.title}</p></td>
                       <td>{lead.status === "open" ? <span className="badge text-white" style={{ backgroundColor: lead.stage.color }}>{lead.stage.name}</span> : <StatusPill tone={lead.status === "won" ? "success" : "danger"}>{lead.status}</StatusPill>}</td>
                       <td className="text-sm capitalize text-foreground/80">{lead.source}</td>
-                      <td className="text-right font-medium">{lead.valueCents > 0 ? formatZAR(lead.valueCents, moneyFmt) : "—"}</td>
+                      <td className="text-right font-medium">{lead.valueCents > 0 ? formatZAR(lead.valueCents, withCurrency(moneyFmt, lead.currency)) : "—"}</td>
                       <td className="text-sm text-muted-foreground">{formatDate(lead.createdAt)}</td>
                       <td className="text-sm text-muted-foreground">{lead.assignedTo?.name ?? "—"}</td>
                       <td>
@@ -216,7 +220,7 @@ export default async function LeadListPage({ searchParams }: { searchParams: Pro
                   ))}
                 </tbody>
               </table>
-              <p className="border-t border-border px-4 py-2.5 text-xs text-muted-foreground">{total} lead{total !== 1 ? "s" : ""} · total value <span className="font-semibold text-foreground">{formatZAR(totalValue, moneyFmt)}</span></p>
+              <p className="border-t border-border px-4 py-2.5 text-xs text-muted-foreground">{total} lead{total !== 1 ? "s" : ""} · total value <span className="font-semibold text-foreground">{totalValueText}</span></p>
               <ListPager path="/leads/list" page={page} total={total} className="border-t border-border" />
             </div>
           }

@@ -14,6 +14,7 @@ import {
   ResponsiveDialogContent,
 } from "@/components/ui/dialog";
 import { formatZAR } from "@/lib/format";
+import { withCurrency } from "@/lib/currencyRules";
 import { useMoneyFormat } from "@/components/MoneyFormatProvider";
 
 /**
@@ -107,7 +108,7 @@ export function MarkWonForm({
                 className="mt-0.5"
               />
               <span className="flex-1">
-                Q-{quote.number} · {formatZAR(Math.round(quote.totalCents), moneyFmt)}
+                Q-{quote.number} · {formatZAR(Math.round(quote.totalCents), withCurrency(moneyFmt, quote.currency))}
                 <span className="block text-xs text-muted-foreground">
                   {quote.outForSignature
                     ? "Out for signature — void the signing request first, or let the customer sign it."

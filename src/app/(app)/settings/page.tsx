@@ -8,6 +8,7 @@ import {
   saveQuoteDefaults,
   saveDocumentTypes,
   saveRegionalSettings,
+  saveEnabledCurrencies,
   saveWorkshopSettings,
   saveNotificationPrefs,
 } from "@/app/actions/settings";
@@ -42,6 +43,8 @@ import { saveImapSettings } from "@/app/actions/emails";
 import { clearErrorLog } from "@/app/actions/ai";
 import { basePrisma } from "@/lib/db";
 import { REGIONAL_KEYS } from "@/lib/settings";
+import { getCurrencyOptions } from "@/lib/currency";
+import { COMMON_CURRENCIES } from "@/lib/currencyRules";
 import { formatDate, formatDateTime, formatZAR, regionalFrom } from "@/lib/format";
 import { DEFAULT_QUOTE_TERMS, quoteValidDays } from "@/lib/quoteExpiry";
 import { DOCUMENT_TYPES_KEY, DOCUMENT_TYPES_MAX, parseDocumentTypes } from "@/lib/documentLabels";
@@ -158,6 +161,8 @@ export default async function SettingsPage({
   const regional = regionalFrom(
     Object.fromEntries(Object.entries(REGIONAL_KEYS).map(([field, key]) => [field, setting(key)])),
   );
+  // The multicurrency module's extra currencies (off = base only, and the form below isn't shown).
+  const currencyOptions = await getCurrencyOptions();
   // The email settings, read by EXPLICIT tenant — the same key the send path reads
   // (lib/signing/signingEmail.ts). The message editors read their own copies
   // (CustomerMessageEditors).
@@ -1050,6 +1055,27 @@ export default async function SettingsPage({
                 </div>
                 <SaveButton className="btn-primary">Save tax &amp; currency</SaveButton>
               </SaveForm>
+              {currencyOptions.on && (
+                // Multi-currency module: the other currencies a lead or quote may be in. Never converted —
+                // each amount stays in the currency it was agreed in, and totals are shown per currency.
+                <SaveForm success="Currencies saved" resetOnSuccess={false} action={saveEnabledCurrencies} className="mt-6 space-y-3 border-t border-border pt-5">
+                  <div>
+                    <p className="text-sm font-medium">Currencies you can quote in</p>
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      {regional.currency} is your base currency and always available. Tick the others your team may put on a lead or a quote.
+                    </p>
+                  </div>
+                  <div className="grid grid-cols-3 gap-2 sm:grid-cols-5">
+                    {COMMON_CURRENCIES.filter((code) => code !== regional.currency).map((code) => (
+                      <label key={code} className="flex items-center gap-2 text-sm">
+                        <input type="checkbox" name="currencies" value={code} defaultChecked={currencyOptions.enabled.includes(code)} className="accent-orange-500" />
+                        {code}
+                      </label>
+                    ))}
+                  </div>
+                  <SaveButton className="btn-secondary">Save currencies</SaveButton>
+                </SaveForm>
+              )}
             </Row>
           </div>
         </div>

@@ -8,7 +8,9 @@ import {
   type StatementPayment,
   type StatementQuote,
 } from "./accountStatement";
+import type { Prisma } from "@prisma/client";
 import { prisma } from "./db";
+import { getRegionalSettings } from "./settings";
 import { getAccessibleQuoteIds, hasPermission, type PermissionUser } from "./permissions";
 import { loadBillToFleet, loadBillToFleets, quoteBillTo, type QuoteBillTo } from "./quoteBillTo";
 
@@ -48,11 +50,33 @@ export type LoadedStatement =
       statement: AccountStatement;
       /** Invoices this person signed that are billed to a fleet account instead. */
       billedElsewhere: { fleetId: string; fleetName: string; count: number }[];
+      /** The one currency this statement is in (multicurrency module): amounts in two are never added. */
+      currency: string;
+      /** Every currency this account has quotes in, base first — a statement per currency. */
+      currencies: string[];
     }
   | { kind: "partial" }
   | { kind: "missing" };
 
 const QUOTE_INCLUDE = { items: true, fees: true } as const;
+
+/**
+ * ONE STATEMENT PER CURRENCY (multicurrency module). A balance that adds rubles to rand is
+ * wrong, so a statement covers the quotes in one currency: the base unless another is asked
+ * for. A quote with no currency is in the base, as every quote was before the module.
+ */
+async function statementCurrency(requested: string | null | undefined) {
+  const { currency: base } = await getRegionalSettings();
+  const code = requested && /^[A-Z]{3}$/.test(requested) ? requested : base;
+  const where: Prisma.QuoteWhereInput = code === base ? { OR: [{ currency: null }, { currency: base }] } : { currency: code };
+  const currenciesIn = async (account: Prisma.QuoteWhereInput) => {
+    const rows = await prisma.quote.groupBy({ by: ["currency"], where: account });
+    const found = new Set(rows.map((row) => row.currency ?? base));
+    found.add(base);
+    return [base, ...[...found].filter((c) => c !== base).sort()];
+  };
+  return { code, where, currenciesIn };
+}
 
 type StatementAccess = { trashDetails: boolean };
 
@@ -102,13 +126,16 @@ export async function loadContactStatement(
   user: PermissionUser,
   contactId: string,
   fmt: (cents: number) => string,
+  /** The statement's currency (multicurrency module); null = the workspace's base. `fmt` must be in it. */
+  requestedCurrency: string | null = null,
 ): Promise<LoadedStatement> {
   const tenantId = await actingTenantId();
   const contact = await prisma.contact.findFirst({ where: { id: contactId, tenantId, deletedAt: null } });
   if (!contact) return { kind: "missing" };
 
-  const quotes = await prisma.quote.findMany({ where: { contactId, tenantId }, include: QUOTE_INCLUDE });
-  const trash = await prisma.quote.findMany({ where: { contactId, tenantId, deletedAt: { not: null } }, include: QUOTE_INCLUDE });
+  const money = await statementCurrency(requestedCurrency);
+  const quotes = await prisma.quote.findMany({ where: { contactId, tenantId, ...money.where }, include: QUOTE_INCLUDE });
+  const trash = await prisma.quote.findMany({ where: { contactId, tenantId, deletedAt: { not: null }, ...money.where }, include: QUOTE_INCLUDE });
   const fleets = await loadBillToFleets(prisma, [...quotes, ...trash].map((quote) => quote.fleetId));
   const billedHere = (quote: { fleetId: string | null }) => !quote.fleetId || !fleets.has(quote.fleetId);
   const own = quotes.filter(billedHere);
@@ -132,6 +159,8 @@ export async function loadContactStatement(
     billTo,
     statement: statementFor(own, ownTrash, await paymentsFor(tenantId, [...own, ...ownTrash]), access, fmt),
     billedElsewhere: [...elsewhere.values()],
+    currency: money.code,
+    currencies: await money.currenciesIn({ contactId, tenantId }),
   };
 }
 
@@ -139,8 +168,11 @@ export async function loadFleetStatement(
   user: PermissionUser,
   fleetId: string,
   fmt: (cents: number) => string,
+  /** The statement's currency (multicurrency module); null = the workspace's base. `fmt` must be in it. */
+  requestedCurrency: string | null = null,
 ): Promise<LoadedStatement> {
   const tenantId = await actingTenantId();
+  const money = await statementCurrency(requestedCurrency);
   const fleet = await loadBillToFleet(prisma, fleetId);
   if (!fleet) return { kind: "missing" };
   const account = await prisma.fleet.findFirst({ where: { id: fleetId, tenantId, deletedAt: null }, select: { contactId: true } });
@@ -149,8 +181,8 @@ export async function loadFleetStatement(
     ? await prisma.contact.findFirst({ where: { id: account.contactId, tenantId, deletedAt: null } })
     : null;
 
-  const quotes = await prisma.quote.findMany({ where: { fleetId, tenantId }, include: QUOTE_INCLUDE });
-  const trash = await prisma.quote.findMany({ where: { fleetId, tenantId, deletedAt: { not: null } }, include: QUOTE_INCLUDE });
+  const quotes = await prisma.quote.findMany({ where: { fleetId, tenantId, ...money.where }, include: QUOTE_INCLUDE });
+  const trash = await prisma.quote.findMany({ where: { fleetId, tenantId, deletedAt: { not: null }, ...money.where }, include: QUOTE_INCLUDE });
   const access = await statementAccess(user, quotes);
   if (!access) return { kind: "partial" };
 
@@ -161,6 +193,8 @@ export async function loadFleetStatement(
     billTo,
     statement: statementFor(quotes, trash, await paymentsFor(tenantId, [...quotes, ...trash]), access, fmt),
     billedElsewhere: [],
+    currency: money.code,
+    currencies: await money.currenciesIn({ fleetId, tenantId }),
   };
 }
 

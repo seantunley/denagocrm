@@ -2,7 +2,8 @@
 
 import { useMemo, useState } from "react";
 import { currencySymbol } from "@/lib/format";
-import { useMoneyFormat } from "@/components/MoneyFormatProvider";
+import { withCurrency } from "@/lib/currencyRules";
+import { useCurrencies, useMoneyFormat } from "@/components/MoneyFormatProvider";
 import { SaveForm } from "@/components/SaveForm";
 import ContactPicker, { type ContactOption } from "@/components/ContactPicker";
 import type { ActionResult } from "@/lib/actionResultTypes";
@@ -41,6 +42,8 @@ type LeadDefaults = {
   productId?: string | null;
   color?: string | null;
   valueCents?: number;
+  /** The lead's currency (multicurrency module); null/undefined = the base. */
+  currency?: string | null;
   stageId?: string;
   contactId?: string | null;
   notes?: string | null;
@@ -86,6 +89,12 @@ export default function LeadForm({
   const [color, setColor] = useState(defaults.color ?? "");
   const [qty, setQty] = useState(Math.max(1, defaults.quantity ?? 1));
   const [value, setValue] = useState(defaults.valueCents ? String(defaults.valueCents / 100) : "");
+  // Multicurrency module: the lead's own currency. One option = the module is off; no picker, nothing posted.
+  const currencies = useCurrencies();
+  const [currency, setCurrency] = useState(defaults.currency || currencies[0]);
+  const inBase = currency === currencies[0];
+  const [currencyChanged, setCurrencyChanged] = useState(false);
+  const valueFmt = withCurrency(moneyFmt, currency);
   const [stageId, setStageId] = useState(defaults.stageId ?? stages[0]?.id ?? "");
   const product = products.find((item) => item.id === productId);
   // Colour is asked only of a workspace whose catalogue uses colours (a dealer's does; a service firm's doesn't),
@@ -113,15 +122,32 @@ export default function LeadForm({
     setProductId(id);
     setColor("");
     const selected = products.find((item) => item.id === id);
-    if (selected && selected.basePriceCents > 0) {
+    // The catalogue price is in the base currency: never fill it into a lead in another one.
+    if (selected && selected.basePriceCents > 0 && inBase) {
       setValue(String((selected.basePriceCents / 100) * qty));
+    }
+  }
+
+  /**
+   * A value typed or priced in one currency is not the same number in another: R100 000 must
+   * never quietly become US$100 000. Back to the base with a product → the catalogue price
+   * again; anything else → the field empties and asks for the amount in the new currency.
+   */
+  function onCurrencyChange(code: string) {
+    if (code === currency) return;
+    setCurrency(code);
+    if (code === currencies[0] && product && product.basePriceCents > 0) {
+      setValue(String((product.basePriceCents / 100) * qty));
+    } else {
+      setValue("");
+      setCurrencyChanged(true);
     }
   }
 
   function onQtyChange(raw: string) {
     const next = Math.max(1, parseInt(raw, 10) || 1);
     setQty(next);
-    if (product && product.basePriceCents > 0) {
+    if (product && product.basePriceCents > 0 && inBase) {
       setValue(String((product.basePriceCents / 100) * next));
     }
   }
@@ -258,10 +284,21 @@ export default function LeadForm({
           )}
         </Field>}
         <Field
-          label={`Estimated opportunity value (${currencySymbol(moneyFmt)})${qty > 1 && product ? ` — ${qty} × catalogue price` : ""}`}
-          hint={product?.basePriceCents ? "Changing the model or quantity updates this value; you can still override it." : "Enter the best current estimate. It can be refined later."}
+          label={`Estimated opportunity value (${currencySymbol(valueFmt)})${qty > 1 && product && inBase ? ` — ${qty} × catalogue price` : ""}`}
+          hint={product?.basePriceCents && inBase ? "Changing the model or quantity updates this value; you can still override it." : "Enter the best current estimate. It can be refined later."}
           wide
         >
+          {currencies.length > 1 && (
+            <select
+              name="currency"
+              aria-label="Currency"
+              className="input mb-2 w-32"
+              value={currency}
+              onChange={(event) => onCurrencyChange(event.target.value)}
+            >
+              {currencies.map((code) => <option key={code} value={code}>{code}</option>)}
+            </select>
+          )}
           <div className="relative">
             <BadgeDollarSign className="pointer-events-none absolute left-3.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
             <input
@@ -269,10 +306,13 @@ export default function LeadForm({
               className="input pl-10 tabular-nums"
               inputMode="decimal"
               value={value}
-              onChange={(event) => setValue(event.target.value)}
+              onChange={(event) => { setValue(event.target.value); setCurrencyChanged(false); }}
               placeholder="0.00"
             />
           </div>
+          {currencyChanged && !value && (
+            <p role="status" className="mt-1.5 text-xs text-amber-500">Currency changed — enter the value in {currency}.</p>
+          )}
         </Field>
       </FormSection>
 

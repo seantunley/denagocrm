@@ -309,6 +309,7 @@ export default async function LeadsPage({
         name: lead.name,
         contactId: lead.contactId,
         valueCents: lead.valueCents,
+        currency: lead.currency,
         quantity: lead.quantity,
         source: lead.source,
         color: lead.color,

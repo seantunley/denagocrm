@@ -28,6 +28,7 @@ import { loadBillToFleet, quoteBillTo } from "@/lib/quoteBillTo";
 import { payableTotalCents } from "@/lib/pricing";
 import { isStatementInvoice } from "@/lib/accountStatement";
 import { getRegionalSettings } from "@/lib/settings";
+import { withCurrency } from "@/lib/currencyRules";
 import DealPayments from "@/components/deals/DealPayments";
 import { primaryVehicleLine, showcaseImageRefFor } from "@/lib/docbuilder/vehicleShowcase";
 import { storedFileSrc } from "@/lib/storedFileSrc";
@@ -176,12 +177,14 @@ export default async function DealWorkspacePage({ params }: { params: Promise<{ 
   const canRecordPayments = invoice && (await hasAnyPermission(user, "deliveries.manage"));
   // The statement this invoice appears on — the fleet's when billed to one — and
   // only as a link the viewer can actually open (the page re-checks both).
+  // The statement in THIS deal's currency (multicurrency module): a statement covers one currency.
+  const statementCurrency = quote.currency ? `?currency=${encodeURIComponent(quote.currency)}` : "";
   const statementHref = !invoice
     ? null
     : billTo.isFleet && quote.fleetId
-      ? (await hasAnyPermission(user, "fleets.view", "fleets.manage")) ? `/fleets/${quote.fleetId}/statement` : null
+      ? (await hasAnyPermission(user, "fleets.view", "fleets.manage")) ? `/fleets/${quote.fleetId}/statement${statementCurrency}` : null
       : quote.contactId && (await canAccessContact(user, quote.contactId))
-        ? `/contacts/${quote.contactId}/statement`
+        ? `/contacts/${quote.contactId}/statement${statementCurrency}`
         : null;
   const { timeZone } = await getRegionalSettings();
   const today = new Intl.DateTimeFormat("en-CA", { timeZone, year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
@@ -230,7 +233,8 @@ export default async function DealWorkspacePage({ params }: { params: Promise<{ 
       amount: Math.round(item.qty * item.unitPriceCents * (1 - item.discountPct / 100)),
       kind: item.kind,
     }));
-  const moneyFmt = await getRegionalSettings();
+  // Every amount on this page is the quote's — in ITS currency (multicurrency module; null = the base).
+  const moneyFmt = withCurrency(await getRegionalSettings(), quote.currency);
   const timeline = [
     ...lead?.communications.map((message) => ({
       key: `comm-${message.id}`,
