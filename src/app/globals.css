@@ -336,6 +336,11 @@
   outline: 2px solid color-mix(in oklab, var(--primary), white 16%);
   outline-offset: 3px;
 }
+/* The row j / k landed on (ListKeyboard). Inset, so a table row's outline isn't clipped. */
+.denago-workspace [data-nav-row]:focus-visible {
+  outline: 2px solid color-mix(in oklab, var(--primary), white 16%);
+  outline-offset: -2px;
+}
 @media (prefers-reduced-motion: reduce) {
   html:focus-within { scroll-behavior: auto; }
   .denago-workspace *,

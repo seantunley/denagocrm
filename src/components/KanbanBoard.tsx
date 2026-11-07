@@ -1,7 +1,7 @@
 "use client";
 
 import { type ReactNode, useEffect, useMemo, useRef, useState, useTransition } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, unstable_rethrow } from "next/navigation";
 import Link from "next/link";
 import {
   DndContext,
@@ -30,6 +30,7 @@ import {
   ChevronLeft,
   ChevronRight,
   CircleAlert,
+  FileText,
   ListChecks,
   FilterX,
   GripVertical,
@@ -59,6 +60,7 @@ import {
   moveLeadWithNewQuote,
   searchLinkableContacts,
 } from "@/app/actions/leads";
+import { createQuoteFromLead } from "@/app/actions/quotes";
 import { MarkWonDialog } from "@/components/MarkWonDialog";
 import NurtureForm from "@/components/NurtureForm";
 import { formatZAR } from "@/lib/format";
@@ -386,6 +388,7 @@ type LeadActionHandlers = {
   nurture: () => void;
   copyLink: () => void;
   addToContacts: () => void;
+  quote: () => void;
 };
 
 type BoardPermissions = {
@@ -394,6 +397,7 @@ type BoardPermissions = {
   canManageActivities: boolean;
   canMarkWon: boolean;
   canMarkLost: boolean;
+  canCreateQuote: boolean;
 };
 
 function LeadMenuItems({
@@ -476,6 +480,10 @@ function LeadMenuItems({
       </Sub>
       <Item disabled={!permissions.canChangeStage || !testDriveStage} onSelect={actions.testDrive}>
         <Car /> {lead.testDrive ? "Reschedule test drive" : "Book test drive"}
+      </Item>
+      {/* The lead's product, quantity and value are put on the quote; it opens in the editor. */}
+      <Item disabled={!permissions.canCreateQuote} onSelect={actions.quote}>
+        <FileText /> Create quote
       </Item>
       <Separator />
       <Item disabled={!permissions.canChangeStage || !permissions.canManageActivities} onSelect={actions.nurture}>
@@ -561,6 +569,10 @@ function DraggableCard({
           ref={setNodeRef}
           {...listeners}
           {...attributes}
+          // j / k / Enter / e / w / a (ListKeyboard). Enter opens; Space picks the card up to drag.
+          data-nav-row=""
+          data-nav-href={`/leads/${lead.id}`}
+          data-nav-lead={lead.id}
           className={cn("select-none outline-none focus-visible:ring-2 focus-visible:ring-primary", isDragging && "opacity-30")}
           aria-label={`${lead.name}. Right-click or press Shift+F10 for actions.`}
         >
@@ -620,6 +632,8 @@ function Column({
     <section
       ref={setNodeRef}
       id={`pipeline-stage-${stage.id}`}
+      data-nav-stage=""
+      tabIndex={-1}
       className="flex w-[min(88vw,22rem)] shrink-0 snap-start flex-col overflow-hidden rounded-2xl border border-border bg-card/35 shadow-sm md:w-[320px]"
       aria-labelledby={`pipeline-stage-title-${stage.id}`}
     >
@@ -788,7 +802,8 @@ export default function KanbanBoard({
     // moves past the tolerance before the delay elapses) is treated as a scroll,
     // so the board/columns scroll normally instead of grabbing a card by accident.
     useSensor(TouchSensor, { activationConstraint: { delay: 220, tolerance: 8 } }),
-    useSensor(KeyboardSensor),
+    // Keyboard: Space picks a card up (and drops it); Enter is left to OPEN the card (ListKeyboard).
+    useSensor(KeyboardSensor, { keyboardCodes: { start: ["Space"], cancel: ["Escape"], end: ["Space", "Enter"] } }),
   );
 
   /**
@@ -1207,6 +1222,22 @@ export default function KanbanBoard({
       won: () => setPendingOutcome({ lead, mode: "won" }),
       lost: () => setPendingOutcome({ lead, mode: "lost" }),
       nurture: () => setPendingNurture(lead),
+      quote: () => {
+        startTransition(async () => {
+          try {
+            const result = await createQuoteFromLead(lead.id);
+            if (result?.error) {
+              toast.error(result.error);
+              return;
+            }
+            toast.success(result?.success ?? "Quote created");
+            if (result?.redirectTo) router.push(result.redirectTo);
+          } catch (error) {
+            unstable_rethrow(error);
+            toast.error("Something went wrong. Please try again.");
+          }
+        });
+      },
       copyLink: () => {
         void navigator.clipboard
           .writeText(`${window.location.origin}/leads/${lead.id}`)

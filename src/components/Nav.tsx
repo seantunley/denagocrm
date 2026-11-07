@@ -12,6 +12,13 @@ import { useRecordLabels } from "@/components/RecordLabelsProvider";
 
 const STORAGE_KEY = "denago-nav-collapsed";
 
+/** What each sidebar count means, for its tooltip. */
+const BADGE_MEANING: Record<string, string> = {
+  "/inbox": "waiting for a reply",
+  "/cases": "waiting",
+  "/activities": "overdue",
+};
+
 function NavItem({ link, active, badge }: { link: NavLink; active: boolean; badge?: number }) {
   const Icon = link.icon;
   return (
@@ -36,7 +43,7 @@ function NavItem({ link, active, badge }: { link: NavLink; active: boolean; badg
       {typeof badge === "number" && badge > 0 && (
         <span
           className="ml-auto inline-flex min-w-[18px] items-center justify-center rounded-full bg-primary px-1.5 py-px text-[10px] font-bold tabular-nums text-primary-foreground"
-          title={`${badge} waiting for a reply`}
+          title={`${badge} ${BADGE_MEANING[link.href] ?? "waiting"}`}
         >
           {badge > 99 ? "99+" : badge}
         </span>
@@ -100,6 +107,8 @@ export default function Nav({
       {groups.map((group) => {
         const groupActive = group.links.some((link) => isActive(link.href));
         const isCollapsed = collapsed[group.key] && !groupActive;
+        // A collapsed group must not hide its counts: the header carries their total.
+        const hidden = isCollapsed ? group.links.reduce((sum, link) => sum + (badges[link.href] ?? 0), 0) : 0;
         return (
           <div key={group.key} className="pt-3">
             <button
@@ -108,6 +117,11 @@ export default function Nav({
             >
               <ChevronRight className={cn("size-3 transition-transform duration-200", isCollapsed ? "" : "rotate-90")} />
               {group.label}
+              {hidden > 0 && (
+                <span className="ml-auto inline-flex min-w-[18px] items-center justify-center rounded-full bg-primary px-1.5 py-px text-[10px] font-bold normal-case tracking-normal tabular-nums text-primary-foreground" title={`${hidden} in this section`}>
+                  {hidden > 99 ? "99+" : hidden}
+                </span>
+              )}
             </button>
             {!isCollapsed && (
               <div className="space-y-0.5">

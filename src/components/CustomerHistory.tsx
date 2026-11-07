@@ -19,9 +19,15 @@ export default function CustomerHistory({ entries, pinned, composer, context, su
   const visible = matching.slice(0, shown);
   const older = matching.length - visible.length;
   return (
+    // THREE SIBLINGS, ORDERED BY WIDTH. On a phone (<640px) the composer comes first — a rep in the yard records a
+    // call before reading four cards of context, which used to sit 1,100px above it — then the context, then the
+    // history. A tablet keeps the context first. On a wide screen the context is the right-hand column, spanning both
+    // rows, and the composer sits above the history exactly as before.
     <div className="grid items-start gap-5 xl:grid-cols-[minmax(0,1fr)_320px]">
-      <div className="min-w-0 space-y-5">
+      <div className="order-1 min-w-0 sm:order-2 xl:order-none xl:col-start-1 xl:row-start-1">
         {composer}
+      </div>
+      <div className="order-3 min-w-0 xl:order-none xl:col-start-1 xl:row-start-2">
         <section id="live-timeline" className="scroll-mt-24 rounded-xl border border-border bg-card" aria-label={`${subject} history`}>
           <div className="flex items-center gap-2 px-4 pt-4"><History className="size-4 text-muted-foreground" aria-hidden="true" /><h2 className="font-semibold">{subject} history</h2><span className="text-xs text-muted-foreground">{matching.length}</span></div>
           <div className="flex flex-wrap gap-1 border-b border-border p-3" role="group" aria-label={`Filter ${subject.toLowerCase()} history`}>
@@ -45,10 +51,10 @@ export default function CustomerHistory({ entries, pinned, composer, context, su
           )}
         </section>
       </div>
-      {/* On a narrow screen the next action and open deals come FIRST, not below the whole history. */}
+      {/* On a narrow screen the next action and open deals come before the whole history — on a phone, after the composer. */}
       {/* What the team pinned is what everyone must see first (Sean, 2026-10-18): at the TOP of the column, amber, when
           there is any. With nothing pinned the empty card waits at the bottom instead of taking the top spot. */}
-      <aside className="order-first min-w-0 space-y-4 xl:order-none" aria-label={`${subject} context`}>
+      <aside className="order-2 min-w-0 space-y-4 sm:order-1 xl:order-none xl:col-start-2 xl:row-span-2 xl:row-start-1" aria-label={`${subject} context`}>
         {pinned.length > 0 && (
           <section className="rounded-xl border border-amber-400/50 bg-amber-400/[0.07] p-4 shadow-sm shadow-amber-950/20" aria-label="Pinned for the team">
             <h2 className="mb-3 flex items-center gap-2 text-sm font-semibold text-amber-100"><Pin className="size-4 fill-amber-400/30 text-amber-400" aria-hidden="true" />Pinned for the team <span className="rounded-full bg-amber-400/20 px-1.5 text-xs text-amber-200">{pinned.length}</span></h2>

@@ -79,19 +79,27 @@ export function SettingsWorkspace({
     );
   }
 
+  // The overview's cards ARE the full list, so the side list would repeat every link; the search box is
+  // what you came to use there, so it takes focus.
+  const overview = current === "overview";
+
   return (
     <div className="space-y-4">
       <PageHeader title={title} description={description}>{actions}</PageHeader>
-      <SettingsFinder groups={shown} />
-      <div className="grid items-start gap-4 lg:grid-cols-[13rem_minmax(0,1fr)]">
-        <SettingsNav groups={shown} current={current} />
+      <SettingsFinder groups={shown} autoFocus={overview} />
+      {overview ? (
         <main className="min-w-0 space-y-4">{children}</main>
-      </div>
+      ) : (
+        <div className="grid items-start gap-4 lg:grid-cols-[13rem_minmax(0,1fr)]">
+          <SettingsNav groups={shown} current={current} />
+          <main className="min-w-0 space-y-4">{children}</main>
+        </div>
+      )}
     </div>
   );
 }
 
-function SettingsFinder({ groups }: { groups: SettingsGroup[] }) {
+function SettingsFinder({ groups, autoFocus = false }: { groups: SettingsGroup[]; autoFocus?: boolean }) {
   const [query, setQuery] = useState("");
   const matches = useMemo(() => {
     const needle = query.trim().toLowerCase();
@@ -111,6 +119,7 @@ function SettingsFinder({ groups }: { groups: SettingsGroup[] }) {
         className="input pl-9 pr-24"
         placeholder="Find a setting, integration or policy…"
         aria-label="Search settings"
+        autoFocus={autoFocus}
       />
       <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 rounded-md border border-border bg-muted/40 px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Settings</span>
       {query.trim() && (

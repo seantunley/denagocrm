@@ -24,7 +24,8 @@ import {
 import { phoneRole } from "@/lib/phoneScope";
 import { openCommandMenu } from "@/components/CommandMenu";
 import { openQuickCreate, type QuickCreateKind } from "@/components/QuickCreateDialog";
-import { Sheet, SheetClose, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
+import { SheetClose } from "@/components/ui/sheet";
+import CaptureSheet from "@/components/CaptureSheet";
 import { isPathEnabled } from "@/lib/modules/registry";
 import { cn } from "@/lib/utils";
 import { midSentence } from "@/lib/recordLabels";
@@ -137,30 +138,25 @@ export default function MobileCompanionNav({
         <button type="button" onClick={onMore} className={itemClass()}><Menu className="size-[18px]" />More</button>
       </nav>
 
-      <Sheet open={captureOpen} onOpenChange={setCaptureOpen}>
-        <SheetContent side="bottom" className="max-h-[86dvh] overflow-y-auto rounded-t-2xl border-border bg-background p-0 lg:hidden">
-          <SheetHeader className="border-b border-border px-4 pb-3 pt-4 text-left">
-            <SheetTitle>Quick capture</SheetTitle>
-            <SheetDescription>Start the record now. Complete the detail on desktop when needed.</SheetDescription>
-          </SheetHeader>
-          <div className="grid gap-2 p-3 pb-[max(.75rem,env(safe-area-inset-bottom))]">
-            <p className="px-1 pt-1 text-[11px] font-medium text-muted-foreground">On-site work</p>
-            {can("activities.manage") && packOn("/test-drives") && <SheetClose asChild><Link href="/test-drives" className="flex items-center gap-3 rounded-xl border border-border bg-card p-3"><span className="grid size-9 place-items-center rounded-lg bg-amber-400/10 text-amber-300"><Route className="size-4" /></span><span><span className="block text-sm font-medium">Book test drive</span><span className="mt-0.5 block text-xs text-muted-foreground">Start a booking or check current drives</span></span></Link></SheetClose>}
-            {can("jobcards.manage") && can("jobcards.view_all", "jobcards.view_owned") && packOn("/jobcards") && <SheetClose asChild><Link href="/jobcards" className="flex items-center gap-3 rounded-xl border border-border bg-card p-3"><span className="grid size-9 place-items-center rounded-lg bg-violet-400/10 text-violet-300"><Wrench className="size-4" /></span><span><span className="block text-sm font-medium">Job card photos</span><span className="mt-0.5 block text-xs text-muted-foreground">Choose a current job and open the camera</span></span></Link></SheetClose>}
-            {can("deliveries.manage") && packOn("/deliveries") && <SheetClose asChild><Link href="/deliveries" className="flex items-center gap-3 rounded-xl border border-border bg-card p-3"><span className="grid size-9 place-items-center rounded-lg bg-emerald-400/10 text-emerald-300"><Camera className="size-4" /></span><span><span className="block text-sm font-medium">Delivery photos</span><span className="mt-0.5 block text-xs text-muted-foreground">Choose a handover and capture evidence</span></span></Link></SheetClose>}
-            {/* Documents is a desktop page — not offered on a phone (lib/phoneScope.ts). */}
-            {can("documents.upload") && packOn("/documents") && <SheetClose asChild><Link href="/documents" className="flex items-center gap-3 rounded-xl border border-border bg-card p-3 max-md:hidden"><span className="grid size-9 place-items-center rounded-lg bg-sky-400/10 text-sky-300"><FileUp className="size-4" /></span><span><span className="block text-sm font-medium">Upload document</span><span className="mt-0.5 block text-xs text-muted-foreground">Photograph, upload and file a document</span></span></Link></SheetClose>}
+      {/* The capture sheet proper (CaptureSheet): call / WhatsApp / note / photo onto a record, then the next step.
+          Its own gates are the record pages': notes, calls and photos need contacts.edit or leads.edit
+          (CUSTOMER_RECORD_WRITE_PERMISSIONS); the next step needs activities.manage. */}
+      <CaptureSheet open={captureOpen} onOpenChange={setCaptureOpen} pathname={pathname} can={{ record: can("contacts.edit", "leads.edit"), schedule: can("activities.manage") }}>
+        <p className="px-1 pt-1 text-[11px] font-medium text-muted-foreground">On-site work</p>
+        {can("activities.manage") && packOn("/test-drives") && <SheetClose asChild><Link href="/test-drives" className="flex items-center gap-3 rounded-xl border border-border bg-card p-3"><span className="grid size-9 place-items-center rounded-lg bg-amber-400/10 text-amber-300"><Route className="size-4" /></span><span><span className="block text-sm font-medium">Book test drive</span><span className="mt-0.5 block text-xs text-muted-foreground">Start a booking or check current drives</span></span></Link></SheetClose>}
+        {can("jobcards.manage") && can("jobcards.view_all", "jobcards.view_owned") && packOn("/jobcards") && <SheetClose asChild><Link href="/jobcards" className="flex items-center gap-3 rounded-xl border border-border bg-card p-3"><span className="grid size-9 place-items-center rounded-lg bg-violet-400/10 text-violet-300"><Wrench className="size-4" /></span><span><span className="block text-sm font-medium">Job card photos</span><span className="mt-0.5 block text-xs text-muted-foreground">Choose a current job and open the camera</span></span></Link></SheetClose>}
+        {can("deliveries.manage") && packOn("/deliveries") && <SheetClose asChild><Link href="/deliveries" className="flex items-center gap-3 rounded-xl border border-border bg-card p-3"><span className="grid size-9 place-items-center rounded-lg bg-emerald-400/10 text-emerald-300"><Camera className="size-4" /></span><span><span className="block text-sm font-medium">Delivery photos</span><span className="mt-0.5 block text-xs text-muted-foreground">Choose a handover and capture evidence</span></span></Link></SheetClose>}
+        {/* Documents is a desktop page — not offered on a phone (lib/phoneScope.ts). */}
+        {can("documents.upload") && packOn("/documents") && <SheetClose asChild><Link href="/documents" className="flex items-center gap-3 rounded-xl border border-border bg-card p-3 max-md:hidden"><span className="grid size-9 place-items-center rounded-lg bg-sky-400/10 text-sky-300"><FileUp className="size-4" /></span><span><span className="block text-sm font-medium">Upload document</span><span className="mt-0.5 block text-xs text-muted-foreground">Photograph, upload and file a document</span></span></Link></SheetClose>}
 
-            {captures.length > 0 && <p className="px-1 pt-2 text-[11px] font-medium text-muted-foreground">Quick records</p>}
-            {captures.map(({ label, detail, icon: Icon, kind }) => (
-              <button key={kind} type="button" onClick={() => quickCapture(kind)} className="flex items-center gap-3 rounded-xl border border-border bg-card p-3 text-left">
-                <span className="grid size-9 shrink-0 place-items-center rounded-lg bg-primary/10 text-primary"><Icon className="size-4" /></span>
-                <span><span className="block text-sm font-medium">{label}</span><span className="mt-0.5 block text-xs text-muted-foreground">{detail}</span></span>
-              </button>
-            ))}
-          </div>
-        </SheetContent>
-      </Sheet>
+        {captures.length > 0 && <p className="px-1 pt-2 text-[11px] font-medium text-muted-foreground">Quick records</p>}
+        {captures.map(({ label, detail, icon: Icon, kind }) => (
+          <button key={kind} type="button" onClick={() => quickCapture(kind)} className="flex items-center gap-3 rounded-xl border border-border bg-card p-3 text-left">
+            <span className="grid size-9 shrink-0 place-items-center rounded-lg bg-primary/10 text-primary"><Icon className="size-4" /></span>
+            <span><span className="block text-sm font-medium">{label}</span><span className="mt-0.5 block text-xs text-muted-foreground">{detail}</span></span>
+          </button>
+        ))}
+      </CaptureSheet>
     </>
   );
 }

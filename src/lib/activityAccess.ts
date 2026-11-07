@@ -1,4 +1,5 @@
-import { basePrisma } from "./db";
+import { basePrisma, prisma } from "./db";
+import { isOverdueActivity } from "./activityDay";
 import {
   getAccessibleContactIds,
   getAccessibleLeadIds,
@@ -51,4 +52,25 @@ export async function getAccessibleActivityIds(user: PermissionUser): Promise<st
     select: { id: true },
   });
   return rows.map((row) => row.id);
+}
+
+/**
+ * The sidebar's Activities badge: the page's "Overdue" tile on its default view —
+ * my planned tasks (not calendar availability blocks), access-checked the same way.
+ */
+export async function overdueActivityCount(user: PermissionUser, now: Date = new Date()): Promise<number> {
+  const ids = await getAccessibleActivityIds(user);
+  if (ids !== null && ids.length === 0) return 0;
+  const rows = await prisma.activity.findMany({
+    where: {
+      status: "planned",
+      availabilityBlock: false,
+      assignedToId: user.id,
+      // Both overdue cases are before `now`; the exact all-day rule is applied below.
+      dueDate: { lt: now },
+      ...(ids === null ? {} : { id: { in: ids } }),
+    },
+    select: { dueDate: true, allDay: true },
+  });
+  return rows.filter((row) => isOverdueActivity(row, now)).length;
 }

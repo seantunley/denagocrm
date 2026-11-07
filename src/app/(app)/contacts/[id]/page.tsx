@@ -48,7 +48,7 @@ import { contactName, formatDate, formatZAR } from "@/lib/format";
 import { payableTotalCents } from "@/lib/pricing";
 import { computeDue, dueColors, dueLabels } from "@/lib/serviceDue";
 import { isModuleEnabled } from "@/lib/modules/enabled";
-import { EntityDetailShell } from "@/components/entity-detail-shell";
+import { EntityDetailShell, PhoneActions, WideActions } from "@/components/entity-detail-shell";
 import { StatusPill } from "@/components/visual-system";
 import { getRegionalSettings } from "@/lib/settings";
 import { getCurrencyOptions } from "@/lib/currency";
@@ -306,6 +306,13 @@ export default async function ContactDetailPage({
   </>;
 
   const watch = contact.tenantId ? await watchState(contact.tenantId, user.id, { type: "contact", id: contact.id }) : { watching: false, count: 0 };
+  // The header's secondary actions: in the row from `sm` up, inside More on a phone (entity-detail-shell.tsx).
+  const watchAction = <WatchButton type="contact" id={contact.id} {...watch} />;
+  const testDriveAction = automotiveOn && canBookTestDrive && (
+    <Link href={`/test-drives?book=1&contactId=${contact.id}`} className="btn-secondary">
+      Book test drive
+    </Link>
+  );
 
   return (
     <EntityDetailShell
@@ -322,7 +329,8 @@ export default async function ContactDetailPage({
       </div>}
       meta={<div className="flex flex-wrap items-center gap-x-3 gap-y-1">{contact.owner ? <span>Owner: {contact.owner.name}</span> : canEditContact ? <Link href={`${path}/edit`} className="font-medium text-primary hover:underline">Assign owner</Link> : <span>No owner assigned</span>}<span>Added {formatDate(contact.createdAt)}{contact.createdBy ? ` by ${contact.createdBy.name}` : ""}</span>{formatBirthday(contact) && <span>🎂 {formatBirthday(contact)}</span>}</div>}
       actions={<>
-          <WatchButton type="contact" id={contact.id} {...watch} />
+          {/* On a phone only New quote and More fit on one row; Watch and Book test drive fold into More (PhoneActions below). */}
+          <WideActions>{watchAction}</WideActions>
           {/* Start the next thing for THIS customer from their own page (gap audit
               #24) — each pre-filled with them, and only for staff allowed to. */}
           {canCreateQuote && (
@@ -330,12 +338,9 @@ export default async function ContactDetailPage({
               New quote
             </QuickCreateButton>
           )}
-          {automotiveOn && canBookTestDrive && (
-            <Link href={`/test-drives?book=1&contactId=${contact.id}`} className="btn-secondary">
-              Book test drive
-            </Link>
-          )}
+          <WideActions>{testDriveAction}</WideActions>
           <Popover><PopoverTrigger asChild><button type="button" className="btn-secondary" aria-label="More customer actions"><MoreHorizontal className="size-4" />More</button></PopoverTrigger><PopoverContent align="end" className="flex w-56 flex-col gap-2 p-2">
+          <PhoneActions>{watchAction}{testDriveAction}</PhoneActions>
           {canCreateLead && (
             <QuickCreateButton kind="lead" defaults={{ contactId: contact.id, contactLabel: contactName(contact) }} className="btn-secondary">
               New lead

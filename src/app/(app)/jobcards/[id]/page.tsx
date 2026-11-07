@@ -55,7 +55,9 @@ import {
   Package,
   Clock3,
   ChevronDown,
+  MoreHorizontal,
 } from "lucide-react";
+import { Popover, PopoverTrigger, PopoverContent } from "@/components/ui/popover";
 import { StatusPill, Surface, MetricCard } from "@/components/visual-system";
 import { KpiGrid } from "@/components/responsive-patterns";
 import { buttonVariants } from "@/components/ui/button";
@@ -271,7 +273,15 @@ export default async function JobCardDetailPage({
               reasonPlaceholder="Customer cancelled, parts unavailable…"
             />
           )}
-          <ConfirmDelete action={deleteJobCard.bind(null, jobCard.id)} title={`Delete job card #${jobCard.number}?`} description="The job card moves to Trash and can be restored for 60 days." triggerClass="btn-danger btn-sm" />
+          {/* Delete is destructive, so it sits under More as a text link, not a red button beside Print. */}
+          <Popover>
+            <PopoverTrigger asChild>
+              <button type="button" className={buttonVariants({ variant: "outline", size: "sm" })} aria-label="More job card actions"><MoreHorizontal />More</button>
+            </PopoverTrigger>
+            <PopoverContent align="end" className="flex w-48 flex-col p-1.5">
+              <ConfirmDelete action={deleteJobCard.bind(null, jobCard.id)} title={`Delete job card #${jobCard.number}?`} description="The job card moves to Trash and can be restored for 60 days." triggerClass="rounded-md px-2 py-1.5 text-left text-sm text-red-400 hover:bg-muted/40 hover:underline" />
+            </PopoverContent>
+          </Popover>
         </div>
       </div>
 

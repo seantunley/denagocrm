@@ -65,6 +65,7 @@ export default async function LeadsPage({
     canManageActivities,
     canMarkWon,
     canMarkLost,
+    canCreateQuote,
   ] = await Promise.all([
     getAccessibleLeadIds(currentUser),
     getAccessibleContactIds(currentUser),
@@ -74,6 +75,7 @@ export default async function LeadsPage({
     hasPermission(currentUser, "activities.manage"),
     hasPermission(currentUser, "leads.mark_won"),
     hasPermission(currentUser, "leads.mark_lost"),
+    hasPermission(currentUser, "quotes.create"),
   ]);
   // A Kanban has ONE pipeline as its operating context. Reading every stage
   // regardless of pipeline put a Discovery column from Sales next to a Triage
@@ -462,7 +464,7 @@ export default async function LeadsPage({
           stages={boardStages}
           products={products.map((product) => ({ id: product.id, name: product.name }))}
           users={users.map((user) => ({ id: user.id, name: user.name }))}
-          permissions={{ canChangeStage, canAssign, canManageActivities, canMarkWon, canMarkLost }}
+          permissions={{ canChangeStage, canAssign, canManageActivities, canMarkWon, canMarkLost, canCreateQuote }}
           currentUserId={currentUser.id}
         />
       )}
