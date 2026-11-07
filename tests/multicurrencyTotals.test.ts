@@ -25,7 +25,9 @@ test("server: a draft changing currency is refused while any amount keeps its ol
   assert.equal(unrepricedAmount(before, { ...repriced, items: [{ id: "i2", description: "Mats", unitPriceCents: 10_000_000 }] }), "price for “Mats”");
   assert.equal(unrepricedAmount(before, { ...repriced, fees: [{ label: "Delivery", amountCents: 150_000 }] }), "amount for “Delivery”");
   const actions = readFileSync("src/app/actions/quotes.ts", "utf8");
-  assert.match(actions, /if \(\(existing\.currency \?\? null\) !== cpqQuoteData\.currency\) \{\s+const stale = unrepricedAmount\(existing, \{ items: normalizedItems, fees: normalizedFees, \.\.\.cpqQuoteData \}\);\s+if \(stale\) return new Unrepriced\(/);
+  assert.match(actions, /const currencyMoved = \(existing\.currency \?\? null\) !== cpqQuoteData\.currency;\s+if \(currencyMoved\) \{\s+const stale = unrepricedAmount\(existing, \{ items: normalizedItems, fees: normalizedFees, \.\.\.cpqQuoteData \}\);\s+if \(stale\) return new Unrepriced\(/);
+  // …and the old cost basis does not ride along into the new currency.
+  assert.match(actions, /itemRowsFor\(normalizedItems, priorById\(existing\.items\), createDefaults\.regional\.vatRatePct, \{ keepCost: !currencyMoved \}\)/);
   assert.match(actions, /if \(result instanceof Unrepriced\) \{\s+return \{ ok: false, error: result\.message \};/);
 });
 

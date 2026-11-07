@@ -737,7 +737,8 @@ export async function saveQuoteDraft(input: QuoteDraftInput): Promise<QuoteDraft
       }
       // A draft MOVING currency must come with its amounts re-entered: R100 000 is not US$100 000.
       // The editor clears them; a direct call is held to the same rule here.
-      if ((existing.currency ?? null) !== cpqQuoteData.currency) {
+      const currencyMoved = (existing.currency ?? null) !== cpqQuoteData.currency;
+      if (currencyMoved) {
         const stale = unrepricedAmount(existing, { items: normalizedItems, fees: normalizedFees, ...cpqQuoteData });
         if (stale) return new Unrepriced(`Enter the ${cpqQuoteData.currency ?? createDefaults.regional.currency} ${stale} — the quote's currency changed.`);
       }
@@ -777,7 +778,8 @@ export async function saveQuoteDraft(input: QuoteDraftInput): Promise<QuoteDraft
       }
 
       // Inherit the hidden columns by row id, and KEEP that id — see quoteRows.
-      const itemRows = itemRowsFor(normalizedItems, priorById(existing.items), createDefaults.regional.vatRatePct);
+      // …except the cost, when the currency moved (see itemRowsFor).
+      const itemRows = itemRowsFor(normalizedItems, priorById(existing.items), createDefaults.regional.vatRatePct, { keepCost: !currencyMoved });
       const feeRows = feeRowsFor(normalizedFees, priorById(existing.fees), createDefaults.regional.vatRatePct);
       // The QUOTE is the parent, so its children take ITS owner — the same
       // invariant createQuoteRevision applies to a copied quote. Stamping the
