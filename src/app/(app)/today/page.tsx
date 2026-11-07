@@ -1,6 +1,12 @@
 import Link from "next/link";
 import { Sun } from "lucide-react";
-import { CUSTOMER_RECORD_WRITE_PERMISSIONS, hasAnyPermission, hasPermission, requireAnyPermission } from "@/lib/permissions";
+import {
+  CUSTOMER_RECORD_WRITE_PERMISSIONS,
+  getAccessibleContactIds,
+  hasAnyPermission,
+  hasPermission,
+  requireAnyPermission,
+} from "@/lib/permissions";
 import { loadTodayLeads, TODAY_CANDIDATE_CAP } from "@/lib/leadScoreLoader";
 import { formatZAR } from "@/lib/format";
 import { prisma } from "@/lib/db";
@@ -44,7 +50,16 @@ export default async function TodayPage({
   const shown = leads.slice(0, SHOWN);
 
   const leadIds = shown.map((lead) => lead.id);
-  const contactIds = [...new Set(shown.map((lead) => lead.contactId).filter((id): id is string => Boolean(id)))];
+  // Only customers this viewer may open — the lead page's rule. A customer's own
+  // WhatsApps would otherwise leak their timing through whether WhatsApp is offered.
+  const openableContacts = await getAccessibleContactIds(user);
+  const contactIds = [
+    ...new Set(
+      shown
+        .map((lead) => lead.contactId)
+        .filter((id): id is string => Boolean(id) && (openableContacts === null || openableContacts.includes(id as string))),
+    ),
+  ];
   const [canWriteRecord, canWhatsApp, canSchedule, smtpConfigured, whatsappConfigured, company, quotes, waByLead, waByContact] =
     await Promise.all([
       // What addCommunication and sendEmailAction require; what sendWhatsAppMessage requires; what scheduleFollowUp requires.

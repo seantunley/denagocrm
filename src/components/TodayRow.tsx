@@ -17,7 +17,10 @@ import {
 } from "@/lib/todayAction";
 import { cn } from "@/lib/utils";
 
-const CHANNELS: { key: TodayChannel; label: string; icon: typeof Phone }[] = [
+/** sendOutcomeMessage's answer for a confirmed send (lib/messageDelivery.ts — server-only, so not imported). */
+const WHATSAPP_SENT = "Sent ✓";
+
+const CHANNELS:{ key: TodayChannel; label: string; icon: typeof Phone }[] = [
   { key: "call", label: "Log a call", icon: Phone },
   { key: "whatsapp", label: "WhatsApp", icon: MessageSquare },
   { key: "email", label: "Email", icon: Mail },
@@ -61,6 +64,7 @@ export default function TodayRow({
   const [done, setDone] = useState(false);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const [channel, setChannel] = useState<TodayChannel>(initialChannel);
   const [outcome, setOutcome] = useState<string>("reached");
   const [note, setNote] = useState("");
@@ -89,6 +93,7 @@ export default function TodayRow({
     if (!state.ok) return;
     setPending(true);
     setError(null);
+    setNotice(null);
     try {
       let result: { ok?: string; error?: string; success?: string } | undefined;
       if (channel === "call") {
@@ -119,6 +124,13 @@ export default function TodayRow({
       }
       if (!result || result.error) {
         setError(result?.error ?? "That didn't go through. Try again.");
+        return;
+      }
+      // WhatsApp answers with the message's real delivery state. Anything short of
+      // "Sent ✓" (e.g. "Queued — sending…") keeps the row: pressing again re-reads
+      // the same message by its send key — it never sends twice.
+      if (channel === "whatsapp" && result.ok !== WHATSAPP_SENT) {
+        setNotice(`${result.ok ?? "Queued — sending…"} Not confirmed yet — press Send again to check; it won't send twice.`);
         return;
       }
       const did = channel === "call" ? "Call logged" : channel === "whatsapp" ? "WhatsApp sent" : "Email sent";
@@ -236,6 +248,7 @@ export default function TodayRow({
           )}
 
           {error && <p role="alert" className="text-sm text-red-400">{error}</p>}
+          {notice && <p role="status" className="text-sm text-amber-500">{notice}</p>}
 
           {state.ok && (
             <div className="flex flex-wrap items-center justify-end gap-2">

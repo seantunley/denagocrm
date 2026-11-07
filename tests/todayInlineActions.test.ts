@@ -98,3 +98,22 @@ test("the row writes only through the existing guarded actions, and only on a cl
   assert.doesNotMatch(row, /useEffect/, "nothing runs on its own");
   assert.match(src("src/app/(app)/today/page.tsx"), /<TodayRow/);
 });
+
+test("WhatsApp's 24-hour window reads only customers the viewer may open", () => {
+  const page = src("src/app/(app)/today/page.tsx");
+  assert.match(page, /const openableContacts = await getAccessibleContactIds\(user\);/);
+  assert.match(page, /openableContacts === null \|\| openableContacts\.includes\(id as string\)/);
+  assert.match(page, /where: \{ contactId: \{ in: contactIds \}, type: "whatsapp", direction: "inbound" \}/);
+});
+
+test("a WhatsApp leaves Today only once it is confirmed sent — queued keeps the row and says so", () => {
+  const row = src("src/components/TodayRow.tsx");
+  const confirmed = /const WHATSAPP_SENT = "([^"]+)";/.exec(row)?.[1];
+  assert.ok(confirmed, "the row names the confirmed answer");
+  assert.ok(
+    src("src/lib/messageDelivery.ts").includes(`if (state.status === "sent") return { ok: "${confirmed}" };`),
+    "…and it is the delivery code's own",
+  );
+  assert.match(row, /if \(channel === "whatsapp" && result\.ok !== WHATSAPP_SENT\) \{\s+setNotice\(/);
+  assert.doesNotMatch(row.slice(row.indexOf("setNotice(`"), row.indexOf("const did =")), /setDone\(true\)/);
+});
