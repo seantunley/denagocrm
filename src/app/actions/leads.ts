@@ -3,7 +3,9 @@
 import { asActionResult, ActionRefusal, refuse } from "@/lib/actionResult";
 import { revalidatePath } from "next/cache";
 import { prisma, basePrisma } from "@/lib/db";
-import { contactName, parseRands } from "@/lib/format";
+import { contactName } from "@/lib/format";
+import { parseMoneyField } from "@/lib/moneyInput";
+import { getRegionalSettings } from "@/lib/settings";
 import { emitLeadJourneyEvent, emitTestDriveJourneyEvent } from "@/lib/leadJourneyEvents";
 import { recordReferral } from "@/lib/referrals";
 import { logAudit, logAuditStrict, GOVERNANCE_TX } from "@/lib/audit";
@@ -78,11 +80,14 @@ import {
   type StageRemedy,
 } from "@/lib/stageRemedies";
 
-function leadData(formData: FormData) {
+async function leadData(formData: FormData) {
   const str = (key: string) => {
     const value = String(formData.get(key) ?? "").trim();
     return value === "" ? null : value;
   };
+  // Read in the workspace's currency, strictly: "4 861,00" is 4 861, not 486 100 (moneyInput.ts).
+  const value = parseMoneyField(str("value"), (await getRegionalSettings()).currency);
+  if (!value.ok) refuse(`Deal value: ${value.error}`);
   return {
     name: String(formData.get("name") ?? "").trim(),
     email: str("email"),
@@ -92,7 +97,7 @@ function leadData(formData: FormData) {
     color: str("color"),
     notes: str("notes"),
     quantity: Math.max(1, parseInt(String(formData.get("quantity") ?? "1"), 10) || 1),
-    valueCents: parseRands(str("value")),
+    valueCents: value.cents ?? 0,
     stageId: String(formData.get("stageId") ?? ""),
     contactId: str("contactId"),
     assignedToId: str("assignedToId"),
@@ -197,7 +202,7 @@ async function validateOpenStage(stageId: string) {
 export async function createLead(formData: FormData) {
   return asActionResult(async () => {
     const user = await requirePermission("leads.create");
-    const data = leadData(formData);
+    const data = await leadData(formData);
     if (!data.name) throw new ActionRefusal("Name is required");
     if (!data.stageId) data.stageId = await defaultOpenStageId();
     await validateOpenStage(data.stageId);
@@ -312,7 +317,7 @@ export async function createLead(formData: FormData) {
 export async function updateLead(id: string, formData: FormData) {
   return asActionResult(async () => {
     const user = await requireLeadAccess(id, "leads.edit");
-    const data = leadData(formData);
+    const data = await leadData(formData);
     if (!data.name) throw new ActionRefusal("Name is required");
     const before = await prisma.lead.findUniqueOrThrow({ where: { id } });
     // `getLeadPipeline` is now bounded by the acting workspace, so null means "not
