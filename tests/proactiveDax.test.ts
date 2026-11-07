@@ -24,7 +24,7 @@ import {
   johannesburgDateKey,
   parseBriefAt,
 } from "../src/lib/proactiveRules";
-import { settleAwaiting } from "../src/lib/inboxThreads";
+import { settleAwaiting, turnUndecided } from "../src/lib/inboxThreads";
 import { PROACTIVE_SOURCES } from "../src/lib/assistantWhatsAppRules";
 import { CHECK_BACK_RULE, parseActionList } from "../src/lib/assistantActions";
 
@@ -309,7 +309,7 @@ test("only a delivered reply answers a waiting customer — one rule for every s
   // DAX and the attention list read that field; the inbox applies the same rule to its own list.
   assert.match(read("src/lib/proactive.ts"), /lastDirection: "inbound",/);
   assert.match(read("src/lib/attention/signals.ts"), /lastDirection: "inbound"/);
-  assert.match(read("src/app/(app)/inbox/page.tsx"), /settleAwaiting\(threadList, \(id\) => delivery\.get\(id\)\?\.status\);/);
+  assert.match(read("src/app/(app)/inbox/page.tsx"), /settleAwaiting\(threadList, outboxStatus, older\);/);
   const sent = { id: "r1", direction: "outbound", body: "", at: new Date(), attachmentUrl: null, attachmentType: null, deliveredAt: null, seenAt: null };
   const thread = (status: string | undefined) => settleAwaiting(
     [{ key: "k", name: "", href: null, channel: "whatsapp", contactId: "c", leadId: null, phone: null, awaiting: false, unread: false, archived: false, lastAt: new Date(), messages: [sent, { ...sent, id: "in", direction: "inbound" }] }],
@@ -318,6 +318,17 @@ test("only a delivered reply answers a waiting customer — one rule for every s
   for (const status of ["pending", "running", "retry", "dead", "cancelled"]) assert.equal(thread(status), true, `${status}: still waiting`);
   assert.equal(thread("sent"), false);
   assert.equal(thread(undefined), false, "no outbox row (an email, a logged call) stands as written");
+  // A preview of nothing but failed replies decides nothing — the older turn does.
+  const failedOnly = () => [{ key: "k", name: "", href: null, channel: "whatsapp" as const, contactId: "c", leadId: null, phone: null, awaiting: false, unread: false, archived: false, lastAt: new Date(), messages: [sent] }];
+  assert.equal(turnUndecided(failedOnly()[0], () => "dead"), true);
+  assert.equal(settleAwaiting(failedOnly(), () => "dead", new Map([["k", "inbound"]]))[0].awaiting, true);
+  assert.equal(settleAwaiting(failedOnly(), () => "dead", new Map([["k", "outbound"]]))[0].awaiting, false);
+  assert.match(read("src/app/(app)/inbox/page.tsx"), /olderTurns\(\[\.\.\.threadList, \.\.\.archivedList\]\.filter\(\(thread\) => turnUndecided\(thread, outboxStatus\)\)\)/);
+  // The attention list times the wait from the customer's message, not from a failed reply after it.
+  const signals = read("src/lib/attention/signals.ts");
+  assert.match(signals, /lastDirection: "inbound", lastInboundAt: \{ lt: quietBefore \}/);
+  assert.match(signals, /agoHours\(row\.lastInboundAt, now\)/);
+  assert.match(signals, /since: row\.lastInboundAt\.toISOString\(\)/);
 });
 
 test("a DM reply goes on the thread it was typed in, not the customer's newest", () => {

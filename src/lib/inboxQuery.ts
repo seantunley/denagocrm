@@ -195,3 +195,29 @@ export async function loadInboxComms(
     include: { contact: true, lead: true },
   });
 }
+
+/**
+ * Whose turn it is, for threads whose preview was ALL unconfirmed replies (inboxThreads.turnUndecided):
+ * the direction of the newest message that isn't a reply the outbox failed to confirm. Keyed by thread
+ * key. Only those threads are queried — normally none.
+ */
+export async function olderTurns(
+  threads: { key: string; contactId: string | null; leadId: string | null; channel: string }[],
+): Promise<Map<string, string>> {
+  const out = new Map<string, string>();
+  // ponytail: two queries per undecided thread; it takes 8+ unconfirmed replies in a row to get here.
+  for (const thread of threads) {
+    const who = thread.contactId ? { contactId: thread.contactId } : { leadId: thread.leadId };
+    const unconfirmed = await prisma.botFlowOutbox.findMany({
+      where: { ...who, channel: thread.channel, communicationId: { not: null }, status: { not: "sent" } },
+      select: { communicationId: true },
+    });
+    const last = await prisma.communication.findFirst({
+      where: { ...who, type: thread.channel, id: { notIn: unconfirmed.map((row) => row.communicationId as string) } },
+      orderBy: { occurredAt: "desc" },
+      select: { direction: true },
+    });
+    if (last?.direction) out.set(thread.key, last.direction);
+  }
+  return out;
+}

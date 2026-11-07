@@ -13,7 +13,9 @@
  */
 import { basePrisma } from "../src/lib/db";
 import { recomputeConversationDerivedState } from "../src/lib/conversations";
-import { buildInboxThreads, settleAwaiting } from "../src/lib/inboxThreads";
+import { buildInboxThreads, settleAwaiting, turnUndecided } from "../src/lib/inboxThreads";
+import { olderTurns } from "../src/lib/inboxQuery";
+import { runInTenantScope } from "../src/lib/tenantScope";
 import { DEFAULT_TENANT_ID } from "../src/lib/tenant";
 
 const SFX = Math.random().toString(16).slice(2, 10);
@@ -74,11 +76,15 @@ async function main() {
       orderBy: { occurredAt: "desc" },
       include: { contact: true, lead: { select: { name: true, phone: true } } },
     });
-    const status = new Map(
+    const statuses = new Map(
       (await basePrisma.botFlowOutbox.findMany({ where: { communicationId: { in: comms.map((c) => c.id) } }, select: { communicationId: true, status: true } }))
         .map((o) => [o.communicationId as string, o.status]),
     );
-    const [thread] = settleAwaiting(buildInboxThreads(comms as never), (id) => status.get(id));
+    const status = (id: string) => statuses.get(id);
+    // The inbox page's own steps: the preview (newest 8 per thread), then older turns for undecided threads.
+    const threads = buildInboxThreads(comms as never);
+    const older = await runInTenantScope({ tenantId, system: false }, () => olderTurns(threads.filter((t) => turnUndecided(t, status))));
+    const [thread] = settleAwaiting(threads, status, older);
     return { conversationWaiting: row.lastDirection === "inbound", inboxWaiting: thread?.awaiting === true };
   }
 
@@ -99,6 +105,27 @@ async function main() {
   s = await surfaces();
   check("sent then failed: waiting again — conversation", s.conversationWaiting);
   check("sent then failed: waiting again — inbox", s.inboxWaiting);
+
+  // The Attention Centre times the wait from THEIR message: a failed reply 3h later must not restart it.
+  const times = await basePrisma.conversation.findUniqueOrThrow({ where: { id: conversation.id }, select: { lastInboundAt: true, lastMessageAt: true } });
+  check("a failed reply leaves lastInboundAt at the customer's message", times.lastInboundAt?.getTime() === at(0).getTime(), String(times.lastInboundAt));
+
+  // Nine failed replies in a row push the customer's message out of the inbox's 8-message preview.
+  const more = [];
+  for (let i = 1; i <= 9; i++) {
+    const extra = await basePrisma.communication.create({
+      data: { tenantId, type: "whatsapp", direction: "outbound", body: `Retry ${i}`, contactId, userId, conversationId: conversation.id, occurredAt: at(10 + i) },
+    });
+    more.push(extra.id);
+    await basePrisma.botFlowOutbox.create({
+      data: { tenantId, channel: "whatsapp", key: `2798${SFX}`, batchId: `b_${SFX}`, sequence: i, origin: "staff", payload: { type: "text", text: `Retry ${i}` }, status: "dead", communicationId: extra.id },
+    });
+  }
+  s = await surfaces();
+  check("nine failed replies: still waiting — conversation", s.conversationWaiting);
+  check("nine failed replies: still waiting — inbox (beyond the 8-message preview)", s.inboxWaiting);
+  await basePrisma.botFlowOutbox.deleteMany({ where: { communicationId: { in: more } } });
+  await basePrisma.communication.deleteMany({ where: { id: { in: more } } });
 
   // A reply with no outbox row (logged by hand, an email) stands as written.
   await basePrisma.botFlowOutbox.delete({ where: { id: outbox.id } });

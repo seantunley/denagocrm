@@ -228,17 +228,17 @@ export async function collectAttentionSignals(input: {
   // ── unanswered_inbound ────────────────────────────────────────────────────
   // The cheapest strong signal in the schema, and the heaviest weight: somebody
   // has written to us and nobody has replied. `Conversation.lastDirection` and
-  // `lastMessageAt` are both indexed already.
+  // `lastInboundAt` say who spoke last and when THEY wrote — a failed reply moves neither (conversations.ts).
   const quietBefore = new Date(now.getTime() - UNANSWERED_INBOUND_HOURS * HOUR_MS);
   for (const batch of batches) {
     const waiting = await prisma.conversation.findMany({
-      where: { leadId: { in: batch }, lastDirection: "inbound", lastMessageAt: { lt: quietBefore } },
+      where: { leadId: { in: batch }, lastDirection: "inbound", lastInboundAt: { lt: quietBefore } },
       select: {
         id: true,
         leadId: true,
         channel: true,
         subject: true,
-        lastMessageAt: true,
+        lastInboundAt: true,
         messages: {
           where: { direction: "inbound" },
           orderBy: { occurredAt: "desc" },
@@ -246,19 +246,19 @@ export async function collectAttentionSignals(input: {
           select: { body: true },
         },
       },
-      orderBy: { lastMessageAt: "asc" },
+      orderBy: { lastInboundAt: "asc" },
     });
     const seen = new Set<string>();
     for (const row of waiting) {
-      if (!row.leadId || seen.has(row.leadId)) continue;
+      if (!row.leadId || !row.lastInboundAt || seen.has(row.leadId)) continue;
       seen.add(row.leadId);
       add(signals, row.leadId, {
         kind: "unanswered_inbound",
         key: attentionSignalKey("unanswered_inbound", row.id),
         category: ATTENTION_CATEGORY.unanswered_inbound,
         weight: ATTENTION_WEIGHTS.unanswered_inbound,
-        detail: `Customer wrote on ${inboundChannelLabel(row.channel)} ${agoHours(row.lastMessageAt, now)} ago and has had no reply`,
-        since: row.lastMessageAt.toISOString(),
+        detail: `Customer wrote on ${inboundChannelLabel(row.channel)} ${agoHours(row.lastInboundAt, now)} ago and has had no reply`,
+        since: row.lastInboundAt.toISOString(),
         context: row.messages[0]?.body || row.subject || `Latest inbound ${row.channel} message`,
         actionHref: `/inbox?conversation=${row.id}`,
         actionLabel: "Reply now",

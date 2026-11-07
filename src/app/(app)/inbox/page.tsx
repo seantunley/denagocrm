@@ -12,8 +12,8 @@ import AutoRefresh from "@/components/AutoRefresh";
 import Tabs from "@/components/Tabs";
 import SocialThreadList, { type InboxDeal } from "@/components/SocialThreadList";
 import BotHandoffQueue, { type HandoffQueueItem } from "@/components/BotHandoffQueue";
-import { buildInboxThreads, settleAwaiting, threadCollaborationKey } from "@/lib/inboxThreads";
-import { loadInboxComms } from "@/lib/inboxQuery";
+import { buildInboxThreads, settleAwaiting, threadCollaborationKey, turnUndecided } from "@/lib/inboxThreads";
+import { loadInboxComms, olderTurns } from "@/lib/inboxQuery";
 import { deliveryStateForMessages } from "@/lib/botOutbox";
 import { collaborationForThreads } from "@/lib/inboxCollaboration";
 import { listActingTenantStaff } from "@/lib/tenantActor";
@@ -67,8 +67,10 @@ export default async function InboxPage({ searchParams }: { searchParams: Promis
     ),
   );
   // A queued or failed reply leaves the customer waiting: "Reply due" agrees with DAX and the attention list.
-  settleAwaiting(threadList, (id) => delivery.get(id)?.status);
-  settleAwaiting(archivedList, (id) => delivery.get(id)?.status);
+  const outboxStatus = (id: string) => delivery.get(id)?.status;
+  const older = await olderTurns([...threadList, ...archivedList].filter((thread) => turnUndecided(thread, outboxStatus)));
+  settleAwaiting(threadList, outboxStatus, older);
+  settleAwaiting(archivedList, outboxStatus, older);
   const [collaboration, staff, canCollaborate, deadConversations] = await Promise.all([
     collaborationForThreads([...threadList, ...archivedList]),
     listActingTenantStaff(),
