@@ -55,7 +55,7 @@ import { quoteSigningView } from "@/app/actions/recordSigning";
 import type { QuoteSigningView } from "@/lib/signing/record";
 import { feeRows, quotePricing } from "@/lib/pricing";
 import { currencySymbol, formatDate, formatDateTime, formatZAR, type Regional } from "@/lib/format";
-import { withCurrency } from "@/lib/currencyRules";
+import { editorCostCents, withCurrency } from "@/lib/currencyRules";
 import { useCurrencies } from "@/components/MoneyFormatProvider";
 import { parseMoneyInput } from "@/lib/moneyInput";
 import { calendarDateInstant } from "@/lib/quoteExpiry";
@@ -252,7 +252,7 @@ function repricedForCurrency(draft: DraftState, currency: string, savedCurrency:
   return {
     ...draft,
     currency,
-    lines: draft.lines.map((line) => ({ ...line, unitPrice: clear(line.unitPrice), costCents: currency === savedCurrency ? line.savedCostCents : 0 })),
+    lines: draft.lines.map((line) => ({ ...line, unitPrice: clear(line.unitPrice), costCents: editorCostCents(line, currency, savedCurrency) })),
     fees: draft.fees.map((fee) => ({ ...fee, amount: clear(fee.amount) })),
     depositValue: draft.depositType === "amount" ? clear(draft.depositValue) : draft.depositValue,
   };
@@ -415,8 +415,9 @@ export function QuoteEditorDialog({
   const [draft, setDraft] = useState<DraftState>(() => createDraft(record, defaults, initialContactId, products));
   // Set once the currency is changed: from then on a blank price is "not yet repriced", never 0.
   const [repricing, setRepricing] = useState(false);
-  // The currency the quote is saved in ("" = the workspace's), and whether this draft leaves costs behind in it.
-  const savedCurrency = record?.currency ?? "";
+  // The currency the quote is saved in ("" = the workspace's) — moved on by each save, not just the
+  // record it opened with — and whether this draft leaves costs behind in it.
+  const [savedCurrency, setSavedCurrency] = useState(record?.currency ?? "");
   const costsDropped = draft.currency !== savedCurrency && draft.lines.some((line) => line.savedCostCents > 0);
   // Every amount on the quote is in ITS currency (multicurrency module; "" = the base).
   const money = withCurrency(regional, draft.currency || null);
@@ -888,6 +889,11 @@ export function QuoteEditorDialog({
           return;
         }
         setSavedQuote(result.quote);
+        // What the server now holds: this currency, and each line's cost as sent (0 if the currency
+        // moved — itemRowsFor keepCost). A later switch back must not bring back a cost it cleared.
+        setSavedCurrency(draft.currency);
+        setDraft((current) => ({ ...current, lines: current.lines.map((line) => ({ ...line, savedCostCents: line.costCents })) }));
+        setRepricing(false);
         setInitialSnapshot(currentSnapshot);
         setError(null);
         // The quote may have just come into existence, or its lifecycle may have

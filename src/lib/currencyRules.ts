@@ -142,6 +142,16 @@ export function stageSegments(leads: readonly StageLead[], base: string) {
   return [...byStage.values()].sort((a, b) => a.order - b.order).map(({ order: _order, ...seg }) => seg);
 }
 
+/**
+ * A quote line's cost in the editor when the draft is in `currency`: the cost as last SAVED, but only
+ * in the currency it was saved in — the save drops it on a currency change (itemRowsFor keepCost), so
+ * the preview must too. `savedCurrency` and `savedCostCents` move on with every save, so a quote saved
+ * in USD (cost cleared) and switched back to ZAR in the same sitting shows no cost, as the server will.
+ */
+export function editorCostCents(line: { savedCostCents: number }, currency: string, savedCurrency: string): number {
+  return currency === savedCurrency ? line.savedCostCents : 0;
+}
+
 type PricedBefore = {
   items: readonly { unitPriceCents: number }[];
   fees: readonly { amountCents: number }[];
