@@ -9,7 +9,8 @@ import { asActionResult, refuse } from "@/lib/actionResult";
 import { requireTenantOwner } from "@/lib/auth";
 import { logAudit } from "@/lib/audit";
 import { softDeleteRecord } from "@/lib/trash";
-import { parseRands } from "@/lib/format";
+import { parseMoneyField } from "@/lib/moneyInput";
+import { getRegionalSettings } from "@/lib/settings";
 import { Prisma } from "@prisma/client";
 import { deleteFile, saveFile } from "@/lib/storage";
 import {
@@ -21,16 +22,19 @@ import {
   uniqueColours,
 } from "@/lib/docbuilder/vehicleShowcase";
 
-function productData(formData: FormData) {
+async function productData(formData: FormData) {
   const str = (k: string) => {
     const v = String(formData.get(k) ?? "").trim();
     return v === "" ? null : v;
   };
+  // Read in the workspace's currency, strictly: "4 861,00" is 4 861, not 486 100 (moneyInput.ts).
+  const price = parseMoneyField(str("basePrice"), (await getRegionalSettings()).currency);
+  if (!price.ok) refuse(`Price: ${price.error}`);
   return {
     name: String(formData.get("name") ?? "").trim(),
     sku: str("sku"),
     category: str("category"),
-    basePriceCents: parseRands(str("basePrice")),
+    basePriceCents: price.cents ?? 0,
     description: str("description"),
     active: formData.get("active") !== null ? formData.get("active") === "on" : true,
   };
@@ -49,7 +53,7 @@ function productData(formData: FormData) {
 export async function createProduct(formData: FormData) {
   return asActionResult(async () => {
   await requireTenantOwner();
-  const data = productData(formData);
+  const data = await productData(formData);
   if (!data.name) refuse("Product name is required");
   const colors = String(formData.get("colors") ?? "")
     .split(",")
@@ -83,7 +87,7 @@ export async function createProduct(formData: FormData) {
 export async function updateProduct(id: string, formData: FormData) {
   return asActionResult(async () => {
     await requireTenantOwner();
-    const data = productData(formData);
+    const data = await productData(formData);
     if (!data.name) refuse("Product name is required");
     await prisma.product.update({ where: { id }, data });
     revalidatePath("/products");

@@ -2,6 +2,7 @@ import { prisma } from "@/lib/db";
 import { AlertTriangle, BadgeDollarSign, Boxes, PackageCheck, Plus } from "lucide-react";
 import ModalTrigger from "@/components/Modal";
 import PartForm from "@/components/PartForm";
+import { SaveForm, SaveButton } from "@/components/SaveForm";
 import { currencySymbol, formatZAR, type MoneyFormat } from "@/lib/format";
 import { createPart, updatePart, adjustPartStock, deletePart } from "@/app/actions/parts";
 import { WorkspaceHero } from "@/components/workspace-hero";
@@ -125,11 +126,12 @@ export default async function PartsPage() {
                             <button className="btn-primary btn-sm">Apply</button>
                           </div>
                         </form>
-                        <form action={updatePart.bind(null, p.id)} className="card space-y-3">
+                        {/* SaveForm: a price it can't read clearly is refused on the form, not saved as 0. */}
+                        <SaveForm action={updatePart.bind(null, p.id)} success="Part saved" resetOnSuccess={false} className="card space-y-3">
                           <p className="font-semibold text-sm">Details</p>
                           <PartFields p={p} moneyFmt={moneyFmt} />
-                          <button className="btn-secondary btn-sm">Save</button>
-                        </form>
+                          <SaveButton className="btn-secondary btn-sm">Save</SaveButton>
+                        </SaveForm>
                         <form action={deletePart.bind(null, p.id)}>
                           <button className="btn-danger btn-sm">Remove part</button>
                         </form>

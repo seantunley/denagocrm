@@ -17,13 +17,23 @@ import { getStockLabels, saveStockLabels, slugifyLabel } from "@/lib/stockLabels
 import { withActingStaffScope } from "@/lib/actingScope";
 import { actingTenantId } from "@/lib/actingTenant";
 import { formatZAR } from "@/lib/format";
-import { deliverQuote } from "@/lib/quoteDelivery";
+import { parseMoneyField } from "@/lib/moneyInput";
 import { getRegionalSettings } from "@/lib/settings";
+import { deliverQuote } from "@/lib/quoteDelivery";
 
-const rand = (value: FormDataEntryValue | null) => {
-  const parsed = Number.parseFloat(String(value ?? "0").replace(/[^0-9.-]/g, ""));
-  return Number.isFinite(parsed) ? Math.max(0, Math.round(parsed * 100)) : 0;
-};
+/**
+ * A money field in the workspace's currency (moneyInput.ts): blank is 0, anything unclear is
+ * refused with the reason. This used to delete every character but digits, "." and "-", so
+ * "4 861,00" saved 486 100 — and a purchase-order line's "4861,50" became NaN, saved as 0.
+ */
+function moneyIn(currency: string, value: unknown, label: string): number {
+  const parsed = parseMoneyField(String(value ?? ""), currency);
+  if (!parsed.ok) refuse(`${label}: ${parsed.error}`);
+  return parsed.cents ?? 0;
+}
+async function money(value: unknown, label: string): Promise<number> {
+  return moneyIn((await getRegionalSettings()).currency, value, label);
+}
 const integer = (value: FormDataEntryValue | null, fallback = 0) => {
   const parsed = Number.parseInt(String(value ?? ""), 10);
   return Number.isFinite(parsed) ? parsed : fallback;
@@ -85,20 +95,24 @@ export async function createPurchaseOrder(formData: FormData) {
     const notes = str(formData.get("notes")) || null;
     let lines: Array<{ productId: string; color?: string; qty: number; costCents: number; freightCents?: number; notes?: string }> = [];
     const encoded = str(formData.get("lines"));
+    const { currency } = await getRegionalSettings();
     if (encoded) {
+      let parsed: unknown;
       try {
-        const parsed = JSON.parse(encoded) as Array<Record<string, unknown>>;
-        lines = parsed.map((line) => ({
-          productId: String(line.productId ?? ""),
-          color: String(line.color ?? "").trim() || undefined,
-          qty: Math.max(1, Math.min(200, Number(line.qty) || 1)),
-          costCents: Math.max(0, Math.round((Number(line.cost) || 0) * 100)),
-          freightCents: Math.max(0, Math.round((Number(line.freight) || 0) * 100)),
-          notes: String(line.notes ?? "").trim() || undefined,
-        })).filter((line) => line.productId);
+        parsed = JSON.parse(encoded);
       } catch {
         throw new ActionRefusal("Purchase-order lines are invalid");
       }
+      if (!Array.isArray(parsed)) throw new ActionRefusal("Purchase-order lines are invalid");
+      // Outside the try: a cost it can't read is refused with ITS reason, not as "lines are invalid".
+      lines = (parsed as Array<Record<string, unknown>>).map((line, index) => ({
+        productId: String(line.productId ?? ""),
+        color: String(line.color ?? "").trim() || undefined,
+        qty: Math.max(1, Math.min(200, Number(line.qty) || 1)),
+        costCents: moneyIn(currency, line.cost, `Line ${index + 1} unit cost`),
+        freightCents: moneyIn(currency, line.freight, `Line ${index + 1} freight`),
+        notes: String(line.notes ?? "").trim() || undefined,
+      })).filter((line) => line.productId);
     }
     if (!lines.length) {
       const productId = str(formData.get("productId"));
@@ -107,7 +121,7 @@ export async function createPurchaseOrder(formData: FormData) {
         productId,
         color: str(formData.get("color")) || undefined,
         qty: Math.max(1, Math.min(200, integer(formData.get("qty"), 1))),
-        costCents: rand(formData.get("cost")),
+        costCents: moneyIn(currency, formData.get("cost"), "Unit cost"),
       }];
     }
 
@@ -311,7 +325,7 @@ export async function addStockUnit(formData: FormData) {
     if (!productId) refuse("Choose a product for this stock unit.");
     const serial = str(formData.get("serial")).toUpperCase() || null;
     await assertUniqueSerial(serial);
-    const costCents = rand(formData.get("cost"));
+    const costCents = await money(formData.get("cost"), "Acquisition cost");
     const { unit, stockNumber } = await withStockNumber(null, async (stockNumber) => ({
       stockNumber,
       unit: await prisma.stockUnit.create({
@@ -347,8 +361,8 @@ export async function updateStockUnit(id: string, formData: FormData) {
     const current = await activeUnit(id);
     const serial = str(formData.get("serial")).toUpperCase() || null;
     await assertUniqueSerial(serial, id);
-    const costCents = rand(formData.get("cost"));
-    const landedCostCents = rand(formData.get("landedCost")) || costCents;
+    const costCents = await money(formData.get("cost"), "Acquisition cost");
+    const landedCostCents = (await money(formData.get("landedCost"), "Landed cost")) || costCents;
     await prisma.stockUnit.update({
       where: { id },
       data: {
@@ -423,7 +437,7 @@ export async function reserveUnit(id: string, formData: FormData) {
     if (lead.productId && lead.productId !== current.productId) throw new ActionRefusal("This unit does not match the lead's selected product");
     const days = Math.max(1, Math.min(30, integer(formData.get("days"), 3)));
     const expiresAt = new Date(Date.now() + days * 86_400_000);
-    const depositRequiredCents = rand(formData.get("depositRequired"));
+    const depositRequiredCents = await money(formData.get("depositRequired"), "Deposit required");
 
     // StockReservation is the source of truth; reservedForLeadId is a cache written
     // inside the same transaction so the two can never diverge.
@@ -451,7 +465,7 @@ export async function recordReservationDeposit(id: string, formData: FormData) {
     const user = await requirePermission("stock.manage");
     const reference = str(formData.get("reference"));
     if (!str(formData.get("amount"))) refuse("Enter the deposit amount received.");
-    const amountCents = rand(formData.get("amount"));
+    const amountCents = await money(formData.get("amount"), "Deposit amount");
     const reservation = await prisma.stockReservation.findFirst({
       where: { stockUnitId: id, status: "active", depositReceivedAt: null },
       select: { id: true, leadId: true, stockUnit: { select: { stockNumber: true } } },

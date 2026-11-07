@@ -28,7 +28,8 @@ import {
 import { UNREACHABLE_STAGE_MESSAGE } from "@/lib/pipelineTenantRule";
 import { logAuditStrict } from "@/lib/audit";
 import { basePrisma } from "@/lib/db";
-import { parseRands } from "@/lib/format";
+import { parseMoneyField } from "@/lib/moneyInput";
+import { getRegionalSettings } from "@/lib/settings";
 import { parsePipelineStageAction } from "@/lib/pipelineStageActions";
 import { parseStageCriteria, parseStageGateMode } from "@/lib/stageGate";
 import { resolveActingTenantMemberUser, resolveActingTenantTeam } from "@/lib/tenantActor";
@@ -400,12 +401,14 @@ export async function saveLeadForecast(leadId: string, formData: FormData) {
   if (!["pipeline", "best_case", "commit", "omitted"].includes(forecastCategory)) {
     throw new Error("Invalid forecast category for an open lead");
   }
-  const estimatedCost = str(formData, "estimatedCost");
+  // Read in the workspace's currency, strictly (moneyInput.ts). Refused like every other bad field here.
+  const estimatedCost = parseMoneyField(str(formData, "estimatedCost"), (await getRegionalSettings()).currency);
+  if (!estimatedCost.ok) throw new Error(`Estimated cost: ${estimatedCost.error}`);
   const after = {
     probability: int(formData, "probability", 10),
     forecastCategory,
     expectedCloseDate: validDateInput(str(formData, "expectedCloseDate")),
-    estimatedCostCents: estimatedCost ? Math.max(0, parseRands(estimatedCost)) : null,
+    estimatedCostCents: estimatedCost.cents,
     teamId,
   };
   await updateLeadForecast(leadId, after);
