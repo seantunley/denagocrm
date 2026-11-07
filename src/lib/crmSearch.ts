@@ -5,6 +5,7 @@ import { actingTenantId } from "./actingTenant";
 import { isModuleEnabled } from "./modules/enabled";
 import { AUTOMOTIVE_DELIVERY_TAGS } from "./modules/registry";
 import { contactName, formatZAR } from "./format";
+import { withCurrency } from "./currencyRules";
 import { isCustomEntity, type CustomEntity } from "./customFields";
 import { getAccessibleActivityIds } from "./activityAccess";
 import { searchBotKnowledge } from "./botKnowledge";
@@ -22,6 +23,7 @@ import {
   type PermissionUser,
 } from "@/lib/permissions";
 import { MIN_SEARCH_TERM, messageVisible, type SearchHit, type SearchHitType } from "./recordSearch";
+import { getRegionalSettings } from "@/lib/settings";
 
 /*
  * ONE SEARCH (2026-11-05): the search menu, the /search page and DAX's search_everything all ask this, as the person
@@ -109,7 +111,7 @@ export async function searchCrm(user: PermissionUser, rawTerm: string, options: 
     want.has("lead") && !empty(leadIds)
       ? prisma.lead.findMany({
           where: { ...scoped(leadIds), OR: [{ title: contains }, { name: contains }, { email: contains }, { phone: contains }, ...customMatch("lead")] },
-          select: { id: true, title: true, name: true, status: true, valueCents: true, stage: { select: { name: true } } },
+          select: { id: true, title: true, name: true, status: true, valueCents: true, currency: true, stage: { select: { name: true } } },
           orderBy: { updatedAt: "desc" },
           take,
         })
@@ -219,9 +221,10 @@ export async function searchCrm(user: PermissionUser, rawTerm: string, options: 
     r.leadId ? `/leads/${r.leadId}${tab ? `?tab=${tab}` : ""}` : r.contactId ? `/contacts/${r.contactId}${tab ? `?tab=${tab}` : ""}` : "/calendar";
   const day = (d: Date) => d.toISOString().slice(0, 10);
 
+  const moneyFmt = await getRegionalSettings();
   return [
     ...contacts.map((c) => ({ type: "contact" as const, id: c.id, label: contactName(c), sublabel: [c.email, c.phone, c.city].filter(Boolean).join(" · "), href: `/contacts/${c.id}` })),
-    ...leads.map((l) => ({ type: "lead" as const, id: l.id, label: l.title, sublabel: [l.name, l.status === "open" ? l.stage?.name : l.status, l.valueCents ? formatZAR(l.valueCents) : null].filter(Boolean).join(" · "), href: `/leads/${l.id}` })),
+    ...leads.map((l) => ({ type: "lead" as const, id: l.id, label: l.title, sublabel: [l.name, l.status === "open" ? l.stage?.name : l.status, l.valueCents ? formatZAR(l.valueCents, withCurrency(moneyFmt, l.currency)) : null].filter(Boolean).join(" · "), href: `/leads/${l.id}` })),
     ...quotes.map((q) => ({ type: "quote" as const, id: q.id, label: `Q-${q.number}`, sublabel: [q.contact ? contactName(q.contact) : q.lead?.name, q.status].filter(Boolean).join(" · "), href: `/quotes/${q.id}` })),
     ...vehicles.map((v) => ({ type: "vehicle" as const, id: v.id, label: v.model, sublabel: [v.regNumber ?? v.vin, contactName(v.contact)].filter(Boolean).join(" · "), href: `/vehicles/${v.id}` })),
     ...jobCards.map((j) => ({ type: "jobcard" as const, id: j.id, label: `Job #${j.number}`, sublabel: [j.vehicle?.model, contactName(j.contact), j.description.slice(0, 60)].filter(Boolean).join(" · "), href: `/jobcards/${j.id}` })),
@@ -235,7 +238,7 @@ export async function searchCrm(user: PermissionUser, rawTerm: string, options: 
     })),
     ...activities.map((a) => ({ type: "activity" as const, id: a.id, label: a.summary, sublabel: [a.type, day(a.dueDate), a.leadId || a.contactId ? whose(a) : null].filter(Boolean).join(" · "), snippet: a.note ? snippetAround(a.note, stems, 160) : undefined, href: recordHref(a, "activities") })),
     ...documents.map((d) => ({ type: "document" as const, id: d.id, label: d.fileName, sublabel: [d.tag, d.contact ? contactName(d.contact) : d.vehicle?.model ?? "Unfiled"].filter(Boolean).join(" · "), href: `/api/files/${d.id}`, newTab: true })),
-    ...products.map((p) => ({ type: "product" as const, id: p.id, label: p.name, sublabel: formatZAR(p.basePriceCents), href: `/products/${p.id}` })),
+    ...products.map((p) => ({ type: "product" as const, id: p.id, label: p.name, sublabel: formatZAR(p.basePriceCents, moneyFmt), href: `/products/${p.id}` })),
     ...knowledge.map((k) => ({ type: "knowledge" as const, id: k.id, label: k.title, sublabel: k.sourceLabel ?? "Approved answer", snippet: snippetAround(k.content, stems, 200), href: "/chatbot/knowledge" })),
   ];
 }

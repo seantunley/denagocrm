@@ -11,8 +11,10 @@ import {
 } from "lucide-react";
 import { isTenantOwner, requireUser } from "@/lib/auth";
 import { prisma } from "@/lib/db";
-import { formatZAR } from "@/lib/format";
+import { currencySymbol, formatZAR } from "@/lib/format";
 import { saveTargets } from "@/app/actions/targets";
+import { getRegionalSettings } from "@/lib/settings";
+import { baseValueCents } from "@/lib/currencyRules";
 import { SectionHeading, StatusPill, Surface } from "@/components/visual-system";
 import { WorkspaceHero } from "@/components/workspace-hero";
 
@@ -33,6 +35,7 @@ const METRICS: Array<{
 
 export default async function TargetsPage() {
   const user = await requireUser();
+  const moneyFmt = await getRegionalSettings();
   // The WORKSPACE's owner sets the plan (saveTargets checks requireTenantOwner).
   const isOwner = await isTenantOwner();
   const now = new Date();
@@ -44,7 +47,7 @@ export default async function TargetsPage() {
     prisma.lead.count({ where: { createdAt: { gte: monthStart } } }),
     prisma.lead.findMany({
       where: { status: "won", updatedAt: { gte: monthStart } },
-      select: { valueCents: true },
+      select: { valueCents: true, currency: true },
     }),
     prisma.quote.count({ where: { deliveredAt: { gte: monthStart } } }),
     prisma.serviceRecord.count({ where: { serviceDate: { gte: monthStart } } }),
@@ -53,7 +56,8 @@ export default async function TargetsPage() {
   const targetMap = new Map(targets.map((target) => [target.metric, target.value]));
   const actuals: Record<string, number> = {
     leads,
-    sales_value: wonLeads.reduce((sum, lead) => sum + lead.valueCents, 0),
+    // A target is one number in the base currency; deals in other currencies don't count toward it.
+    sales_value: wonLeads.reduce((sum, lead) => sum + baseValueCents(lead), 0),
     deliveries,
     services,
   };
@@ -95,7 +99,7 @@ export default async function TargetsPage() {
               const progress = Math.min(100, rawPercent);
               const hit = target > 0 && actual >= target;
               const remaining = Math.max(0, target - actual);
-              const formatValue = (value: number) => metric.kind === "money" ? formatZAR(value) : value.toLocaleString("en-ZA");
+              const formatValue = (value: number) => metric.kind === "money" ? formatZAR(value, moneyFmt) : value.toLocaleString("en-ZA");
               const Icon = metric.icon;
 
               return (
@@ -131,7 +135,7 @@ export default async function TargetsPage() {
             <form action={saveTargets.bind(null, period)} className="mt-5 space-y-4">
               {METRICS.map((metric) => (
                 <div key={metric.id}>
-                  <label htmlFor={`target-${metric.id}`} className="label">{metric.label} {metric.kind === "money" ? "(R)" : ""}</label>
+                  <label htmlFor={`target-${metric.id}`} className="label">{metric.label} {metric.kind === "money" ? `(${currencySymbol(moneyFmt)})` : ""}</label>
                   <input
                     id={`target-${metric.id}`}
                     name={metric.id}

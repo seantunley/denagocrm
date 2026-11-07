@@ -18,7 +18,7 @@ import {
   Wrench,
 } from "lucide-react";
 import { prisma } from "@/lib/db";
-import { formatDateTime, formatZAR } from "@/lib/format";
+import { currencySymbol, formatDateTime, formatZAR } from "@/lib/format";
 import {
   allocateUnit,
   completePdi,
@@ -44,6 +44,7 @@ import {
   requireAnyPermission,
 } from "@/lib/permissions";
 import { stockEvents } from "@/lib/stockPlatform";
+import { getRegionalSettings } from "@/lib/settings";
 
 type Unit = {
   id: string; productId: string; productName: string; color: string | null; serial: string | null;
@@ -143,6 +144,7 @@ export default async function StockUnitPage({ params }: { params: Promise<{ id: 
     damaged: "Record the repair or disposal decision before making it available.",
   }[unit.status] ?? "Review the unit and choose the appropriate next step.";
 
+  const moneyFmt = await getRegionalSettings();
   return (
     <div className="space-y-6">
       <Link href="/stock" className="inline-flex items-center gap-2 text-sm text-muted-foreground transition-colors hover:text-foreground">
@@ -181,8 +183,8 @@ export default async function StockUnitPage({ params }: { params: Promise<{ id: 
                 <div><label className="label">Colour</label><input name="color" className="input" defaultValue={unit.color ?? ""} /></div>
                 <div><label className="label">Location</label><input name="location" className="input" defaultValue={unit.location ?? ""} placeholder="Showroom / yard / warehouse" /></div>
                 <div><label className="label">Condition</label><select name="condition" className="input" defaultValue={unit.condition}><option value="new">New</option><option value="demo">Demo</option><option value="used">Used</option><option value="damaged">Damaged</option><option value="consignment">Consignment</option></select></div>
-                <div><label className="label">Acquisition cost (R)</label><input name="cost" className="input" defaultValue={(unit.costCents / 100).toFixed(2)} /></div>
-                <div><label className="label">Landed cost (R)</label><input name="landedCost" className="input" defaultValue={((unit.landedCostCents || unit.costCents) / 100).toFixed(2)} /></div>
+                <div><label className="label">Acquisition cost ({currencySymbol(moneyFmt)})</label><input name="cost" className="input" defaultValue={(unit.costCents / 100).toFixed(2)} /></div>
+                <div><label className="label">Landed cost ({currencySymbol(moneyFmt)})</label><input name="landedCost" className="input" defaultValue={((unit.landedCostCents || unit.costCents) / 100).toFixed(2)} /></div>
                 <div><label className="label">Battery serial</label><input name="batterySerial" className="input font-mono" defaultValue={unit.batterySerial ?? ""} /></div>
                 <div><label className="label">Charger serial</label><input name="chargerSerial" className="input font-mono" defaultValue={unit.chargerSerial ?? ""} /></div>
                 <div><label className="label">Odometer / km</label><input name="odometerKm" type="number" min="0" className="input" defaultValue={unit.odometerKm ?? ""} /></div>
@@ -198,7 +200,7 @@ export default async function StockUnitPage({ params }: { params: Promise<{ id: 
 
       <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
         <MetricCard icon={Clock3} label="Stock age" value={`${unit.ageDays}d`} detail={unit.arrivedAt ? `Arrived ${unit.arrivedAt.toLocaleDateString("en-ZA")}` : "Arrival pending"} accent={unit.ageDays >= 60} />
-        <MetricCard icon={BadgeDollarSign} label="Landed cost" value={formatZAR(unit.landedCostCents || unit.costCents)} detail={unit.salePriceCents ? `Sold ${formatZAR(unit.salePriceCents)}` : "Current inventory basis"} />
+        <MetricCard icon={BadgeDollarSign} label="Landed cost" value={formatZAR(unit.landedCostCents || unit.costCents, moneyFmt)} detail={unit.salePriceCents ? `Sold ${formatZAR(unit.salePriceCents, moneyFmt)}` : "Current inventory basis"} />
         <MetricCard icon={MapPin} label="Location" value={unit.location ?? "Unassigned"} detail={unit.condition} />
         <MetricCard icon={ClipboardCheck} label="PDI" value={unit.pdiStatus.replaceAll("_", " ")} detail={unit.pdiCompletedAt ? formatDateTime(unit.pdiCompletedAt) : "Not completed"} />
       </div>
@@ -225,7 +227,7 @@ export default async function StockUnitPage({ params }: { params: Promise<{ id: 
                   <ModalTrigger label="Reserve for lead" title="Reserve this unit" buttonClass="btn-primary">
                     <SaveForm success="Unit reserved" resetOnSuccess={false} action={reserveUnit.bind(null, unit.id)} className="space-y-4">
                       <div><label className="label">Open lead *</label><select name="leadId" className="input" required defaultValue=""><option value="" disabled>Choose lead…</option>{leads.map((lead) => <option key={lead.id} value={lead.id}>{lead.title} — {lead.name}</option>)}</select></div>
-                      <div className="grid grid-cols-2 gap-3"><div><label className="label">Reservation days</label><input name="days" type="number" min="1" max="30" defaultValue="3" className="input" /></div><div><label className="label">Deposit required (R)</label><input name="depositRequired" className="input" placeholder="0.00" /></div></div>
+                      <div className="grid grid-cols-2 gap-3"><div><label className="label">Reservation days</label><input name="days" type="number" min="1" max="30" defaultValue="3" className="input" /></div><div><label className="label">Deposit required ({currencySymbol(moneyFmt)})</label><input name="depositRequired" className="input" placeholder="0.00" /></div></div>
                       <SaveButton className="btn-primary">Reserve unit</SaveButton>
                     </SaveForm>
                   </ModalTrigger>
@@ -242,14 +244,14 @@ export default async function StockUnitPage({ params }: { params: Promise<{ id: 
 
                 {unit.status === "reserved" && !unit.depositReceivedAt && (
                   <ModalTrigger label="Record deposit" title="Record reservation deposit" buttonClass="btn-secondary">
-                    <SaveForm success="Deposit recorded" resetOnSuccess={false} action={recordReservationDeposit.bind(null, unit.id)} className="space-y-4"><div className="grid grid-cols-2 gap-3"><div><label className="label">Amount received (R) *</label><input name="amount" inputMode="decimal" required className="input" defaultValue={unit.depositRequiredCents ? (unit.depositRequiredCents / 100).toFixed(2) : ""} placeholder="0.00" /></div><div><label className="label">Payment reference</label><input name="reference" className="input" /></div></div><SaveButton className="btn-primary">Confirm deposit received</SaveButton></SaveForm>
+                    <SaveForm success="Deposit recorded" resetOnSuccess={false} action={recordReservationDeposit.bind(null, unit.id)} className="space-y-4"><div className="grid grid-cols-2 gap-3"><div><label className="label">Amount received ({currencySymbol(moneyFmt)}) *</label><input name="amount" inputMode="decimal" required className="input" defaultValue={unit.depositRequiredCents ? (unit.depositRequiredCents / 100).toFixed(2) : ""} placeholder="0.00" /></div><div><label className="label">Payment reference</label><input name="reference" className="input" /></div></div><SaveButton className="btn-primary">Confirm deposit received</SaveButton></SaveForm>
                   </ModalTrigger>
                 )}
 
                 {unit.depositReceivedAt && (
                   <span className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-1.5 text-sm font-medium text-emerald-300">
                     <BadgeDollarSign className="size-4" />
-                    Deposit recorded: {unit.depositReceivedCents != null ? formatZAR(unit.depositReceivedCents) : "amount not recorded"} · {formatDateTime(unit.depositReceivedAt)}
+                    Deposit recorded: {unit.depositReceivedCents != null ? formatZAR(unit.depositReceivedCents, moneyFmt) : "amount not recorded"} · {formatDateTime(unit.depositReceivedAt)}
                   </span>
                 )}
 
@@ -306,7 +308,7 @@ export default async function StockUnitPage({ params }: { params: Promise<{ id: 
                 {unit.reservedForLeadId && <Link href={`/leads/${unit.reservedForLeadId}`} className="flex items-center gap-3 rounded-xl border border-border bg-background/30 p-3 hover:border-primary/30"><UserRoundCheck className="size-4 text-primary" /><div><p className="text-xs text-muted-foreground">Reserved lead</p><p className="font-medium">{unit.reservedLeadName}</p></div></Link>}
                 {unit.soldQuoteId && <Link href={`/quotes/${unit.soldQuoteId}`} className="flex items-center gap-3 rounded-xl border border-border bg-background/30 p-3 hover:border-primary/30"><FileCheck2 className="size-4 text-primary" /><div><p className="text-xs text-muted-foreground">Accepted quote</p><p className="font-medium">Q-{unit.quoteNumber}</p></div></Link>}
                 {unit.reservationExpiresAt && <div className="flex items-center gap-3 rounded-xl border border-border bg-background/30 p-3"><CalendarCheck className="size-4 text-amber-300" /><div><p className="text-xs text-muted-foreground">Reservation expires</p><p className="font-medium">{formatDateTime(unit.reservationExpiresAt)}</p></div></div>}
-                {((unit.depositRequiredCents ?? 0) > 0 || unit.depositReceivedAt) && <div className="flex items-center gap-3 rounded-xl border border-border bg-background/30 p-3"><BadgeDollarSign className="size-4 text-emerald-300" /><div><p className="text-xs text-muted-foreground">Deposit</p><p className="font-medium">{unit.depositReceivedAt ? `${unit.depositReceivedCents != null ? formatZAR(unit.depositReceivedCents) : "Amount not recorded"} received ${formatDateTime(unit.depositReceivedAt)}` : `${formatZAR(unit.depositRequiredCents ?? 0)} required`}</p></div></div>}
+                {((unit.depositRequiredCents ?? 0) > 0 || unit.depositReceivedAt) && <div className="flex items-center gap-3 rounded-xl border border-border bg-background/30 p-3"><BadgeDollarSign className="size-4 text-emerald-300" /><div><p className="text-xs text-muted-foreground">Deposit</p><p className="font-medium">{unit.depositReceivedAt ? `${unit.depositReceivedCents != null ? formatZAR(unit.depositReceivedCents, moneyFmt) : "Amount not recorded"} received ${formatDateTime(unit.depositReceivedAt)}` : `${formatZAR(unit.depositRequiredCents ?? 0, moneyFmt)} required`}</p></div></div>}
               </div>
             </Surface>
           )}

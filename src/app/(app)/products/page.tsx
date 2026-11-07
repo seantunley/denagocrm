@@ -17,6 +17,7 @@ import {
 } from "@/components/responsive-patterns";
 import { EmptyState, StatusPill } from "@/components/visual-system";
 import RecordContextMenu from "@/components/RecordContextMenu";
+import { getRegionalSettings } from "@/lib/settings";
 
 export default async function ProductsPage() {
   // Owner-only catalogue MANAGEMENT surface (ROUTE_GATES marks /products
@@ -33,6 +34,7 @@ export default async function ProductsPage() {
     include: { colors: true, _count: { select: { leads: true, vehicles: true } } },
   });
 
+  const moneyFmt = await getRegionalSettings();
   return (
     <div className="space-y-5">
       <PageHeader title="Product catalogue" description={`${products.filter((product) => product.active).length} active products`}>
@@ -61,7 +63,7 @@ export default async function ProductsPage() {
                     aside={<StatusPill tone={product.active ? "success" : "neutral"}>{product.active ? "Active" : "Archived"}</StatusPill>}
                   />
                   <MobileDataFields>
-                    <MobileDataField label="Base price">{product.basePriceCents ? formatZAR(product.basePriceCents) : "Not set"}</MobileDataField>
+                    <MobileDataField label="Base price">{product.basePriceCents ? formatZAR(product.basePriceCents, moneyFmt) : "Not set"}</MobileDataField>
                     <MobileDataField label="Usage">{product._count.leads} leads · {product._count.vehicles} vehicles</MobileDataField>
                     <MobileDataField label="Colours" wide>{product.colors.length ? product.colors.map((color) => color.name).join(", ") : "No choices configured"}</MobileDataField>
                   </MobileDataFields>
@@ -106,7 +108,7 @@ export default async function ProductsPage() {
                     {p.colors.length === 0 && "—"}
                   </div>
                 </td>
-                <td>{p.basePriceCents ? formatZAR(p.basePriceCents) : "—"}</td>
+                <td>{p.basePriceCents ? formatZAR(p.basePriceCents, moneyFmt) : "—"}</td>
                 <td>{p._count.leads}</td>
                 <td>{p._count.vehicles}</td>
                 <td>

@@ -5,7 +5,8 @@ import { prisma } from "./db";
 import { logError } from "./errorLog";
 import { logAudit } from "./audit";
 import { codexRespond, isCodexConnected, type CodexResult } from "./codex";
-import { formatZAR, contactName } from "./format";
+import { formatZAR, contactName, type MoneyFormat } from "./format";
+import { formatTotals, totalsByCurrency, withCurrency } from "./currencyRules";
 import { payableTotalCents } from "./pricing";
 import { johannesburgDateKey } from "./activityDay";
 import { nurtureReasonLabel, reviewDate } from "./leadNurture";
@@ -15,7 +16,7 @@ import { OPENED_LEGEND, openedFact } from "./emailOpenTracking";
 import { quoteSends } from "./quoteEmailStatus";
 import { receiptFact } from "./deliveryReceipts";
 import { getAccessibleActivityIds } from "./activityAccess";
-import { getSetting } from "./settings";
+import { getSetting, getRegionalSettings } from "./settings";
 import { getCompanyProfile } from "./companyProfile";
 import { searchBotKnowledge } from "./botKnowledge";
 import { getEnabledModuleIds, isModuleEnabled } from "./modules/enabled";
@@ -254,7 +255,7 @@ async function findLeads(user: User, raw: z.infer<typeof leadArgs>): Promise<Too
       orderBy: { createdAt: "desc" },
       take: CANDIDATES,
       select: {
-        id: true, title: true, name: true, status: true, valueCents: true, source: true,
+        id: true, title: true, name: true, status: true, valueCents: true, currency: true, source: true,
         createdAt: true, stageEnteredAt: true, contactId: true,
         stage: { select: { name: true, order: true, pipelineId: true } },
         product: { select: { name: true } },
@@ -312,6 +313,7 @@ async function findLeads(user: User, raw: z.infer<typeof leadArgs>): Promise<Too
 
   // "Gone quiet" is worked out on the newest CANDIDATES only, so past that it is a floor.
   const total = cutoff === null ? matching : leads.length === CANDIDATES ? `at least ${filtered.length}` : filtered.length;
+  const moneyFmt = await getRegionalSettings();
   return {
     truncated: sorted.length > take || leads.length === CANDIDATES,
     data: [{ total, listed: page.length }, ...page.map(({ lead, lastContact }) => ({
@@ -321,7 +323,7 @@ async function findLeads(user: User, raw: z.infer<typeof leadArgs>): Promise<Too
       customer: lead.name,
       stage: lead.stage.name,
       status: lead.status,
-      value: formatZAR(lead.valueCents),
+      value: formatZAR(lead.valueCents, withCurrency(moneyFmt, lead.currency)),
       assignedTo: lead.assignedTo?.name ?? "unassigned",
       product: lead.product?.name ?? null,
       source: lead.source,
@@ -331,7 +333,7 @@ async function findLeads(user: User, raw: z.infer<typeof leadArgs>): Promise<Too
     }))],
     rows: page.map(({ lead, lastContact }) => ({
       label: `${lead.name} — ${lead.title}`,
-      detail: `${lead.stage.name} · ${formatZAR(lead.valueCents)} · ${lead.assignedTo?.name ?? "unassigned"} · last contact ${dateKey(lastContact)}`,
+      detail: `${lead.stage.name} · ${formatZAR(lead.valueCents, withCurrency(moneyFmt, lead.currency))} · ${lead.assignedTo?.name ?? "unassigned"} · last contact ${dateKey(lastContact)}`,
       href: `/leads/${lead.id}`,
     })),
   };
@@ -340,12 +342,19 @@ async function findLeads(user: User, raw: z.infer<typeof leadArgs>): Promise<Too
 async function pipelineSummary(user: User): Promise<ToolOutput> {
   if (!(await hasAnyPermission(user, "leads.view_all", "leads.view_owned"))) return refused("leads");
   const ids = await getAccessibleLeadIds(user);
-  const groups = await prisma.lead.groupBy({
-    by: ["stageId"],
+  // By stage AND currency: a stage's value is said per currency, never added across them.
+  const rawGroups = await prisma.lead.groupBy({
+    by: ["stageId", "currency"],
     where: { deletedAt: null, status: "open", ...(ids === null ? {} : { id: { in: ids } }) },
     _count: { _all: true },
     _sum: { valueCents: true },
   });
+  const moneyFmt = await getRegionalSettings();
+  const groups = [...Map.groupBy(rawGroups, (g) => g.stageId)].map(([stageId, rows]) => ({
+    stageId,
+    count: rows.reduce((sum, row) => sum + row._count._all, 0),
+    value: formatTotals(totalsByCurrency(rows, (row) => ({ cents: row._sum.valueCents ?? 0, currency: row.currency }), moneyFmt.currency), moneyFmt),
+  }));
   const stages = await prisma.pipelineStage.findMany({
     where: { id: { in: groups.map((g) => g.stageId) } },
     select: { id: true, name: true, order: true },
@@ -354,7 +363,7 @@ async function pipelineSummary(user: User): Promise<ToolOutput> {
   const byStage = new Map(groups.map((g) => [g.stageId, g]));
   const data = stages.map((stage) => {
     const g = byStage.get(stage.id)!;
-    return { stage: stage.name, openLeads: g._count._all, value: formatZAR(g._sum.valueCents ?? 0) };
+    return { stage: stage.name, openLeads: g.count, value: g.value };
   });
   return {
     truncated: false,
@@ -421,7 +430,7 @@ export async function findQuotes(user: User, raw: z.infer<typeof quoteArgs>): Pr
     take: CANDIDATES,
     select: {
       id: true, number: true, status: true, createdAt: true, viewedAt: true, signedAt: true, validUntil: true,
-      taxInclusive: true, depositType: true, depositValue: true, items: true, fees: true, contactId: true, leadId: true,
+      taxInclusive: true, currency: true, depositType: true, depositValue: true, items: true, fees: true, contactId: true, leadId: true,
       lead: { select: { id: true, name: true, title: true } },
       contact: { select: { firstName: true, lastName: true } },
     },
@@ -448,6 +457,7 @@ export async function findQuotes(user: User, raw: z.infer<typeof quoteArgs>): Pr
           : `${quotes.length < CANDIDATES ? "Exact: every matching quote this person may open, superseded revisions left out — not only those listed." : `At least: more than ${CANDIDATES} quotes matched.`} Vehicles only: lines linked to a catalogue product. Free-text lines (often accessories, e.g. "Rain Cover Rover XL") are not counted.`,
       }
     : null;
+  const moneyFmt = await getRegionalSettings();
   return {
     // With an exact count, a shorter list is not a cut-off answer: "matching" says how many there are.
     truncated: matching ? !matching.exact : priced.length > take || quotes.length === CANDIDATES,
@@ -456,8 +466,8 @@ export async function findQuotes(user: User, raw: z.infer<typeof quoteArgs>): Pr
       link: `/quotes/${quote.id}`,
       leadId: quote.lead?.id ?? null,
       customer: customer(quote),
-      total: formatZAR(total),
-      ...quoteContents(quote),
+      total: formatZAR(total, withCurrency(moneyFmt, quote.currency)),
+      ...quoteContents(quote, withCurrency(moneyFmt, quote.currency)),
       created: dateKey(quote.createdAt),
       ...quoteFacts(quote, signing.get(quote.id)),
       ...(sends.has(quote.id) ? { sendStatus: sends.get(quote.id)!.status } : {}),
@@ -466,10 +476,18 @@ export async function findQuotes(user: User, raw: z.infer<typeof quoteArgs>): Pr
     }))],
     rows: page.map(({ quote, total }) => ({
       label: `Q-${quote.number} — ${customer(quote)}`,
-      detail: `${quoteFacts(quote, signing.get(quote.id)).status}${sends.get(quote.id)?.bounced ? " · email bounced" : ""} · ${formatZAR(total)} · viewed ${viewedByCustomer(quote, signing.get(quote.id))}`,
+      detail: `${quoteFacts(quote, signing.get(quote.id)).status}${sends.get(quote.id)?.bounced ? " · email bounced" : ""} · ${formatZAR(total, withCurrency(moneyFmt, quote.currency))} · viewed ${viewedByCustomer(quote, signing.get(quote.id))}`,
       href: `/quotes/${quote.id}`,
     })),
   };
+}
+
+/**
+ * Why DAX won't price a quote in another currency (multicurrency module): its prices come
+ * from the catalogue, which is in the base currency. The person types them in the CRM.
+ */
+function foreignCurrencyQuote(subject: string, currency: string): string {
+  return `${subject} in ${currency}, and catalogue prices are in the workspace's own currency — add the products in the CRM, where you can type the ${currency} price.`;
 }
 
 /**
@@ -485,11 +503,11 @@ export async function findQuotes(user: User, raw: z.infer<typeof quoteArgs>): Pr
 function quoteContents(quote: {
   items: { description: string; qty: number; discountPct: number; colorPreference: string | null }[];
   fees: { label: string; amountCents: number }[];
-}): { lines: string[]; fees: string[] } {
+}, moneyFmt: MoneyFormat): { lines: string[]; fees: string[] } {
   return {
     lines: quote.items.slice(0, 12).map((item) =>
       `${item.qty} × ${item.description}${item.colorPreference ? ` — colour ${item.colorPreference}` : ""}${item.discountPct > 0 ? ` — ${item.discountPct}% off` : ""}`),
-    fees: quote.fees.slice(0, 12).map((fee) => `${fee.label} — ${formatZAR(fee.amountCents)}`),
+    fees: quote.fees.slice(0, 12).map((fee) => `${fee.label} — ${formatZAR(fee.amountCents, moneyFmt)}`),
   };
 }
 
@@ -652,9 +670,10 @@ export async function customersNamed(user: User, needle: string, ownId?: string 
     where: { contactId: { in: found.map((c) => c.id) }, deletedAt: null, supersededAt: null, ...(quoteIds === null ? {} : { id: { in: quoteIds } }) },
     orderBy: { createdAt: "desc" },
     take: 40,
-    select: { id: true, number: true, status: true, contactId: true, leadId: true, createdAt: true, taxInclusive: true, depositType: true, depositValue: true, items: true, fees: true },
+    select: { id: true, number: true, status: true, contactId: true, leadId: true, createdAt: true, taxInclusive: true, currency: true, depositType: true, depositValue: true, items: true, fees: true },
   });
   const sends = await quoteSends(quotes);
+  const moneyFmt = await getRegionalSettings();
   return found.map((c) => ({
     contactId: c.id,
     name: [c.firstName, c.lastName].filter(Boolean).join(" "),
@@ -667,8 +686,8 @@ export async function customersNamed(user: User, needle: string, ownId?: string 
       status: q.status,
       ...(sends.has(q.id) ? { sendStatus: sends.get(q.id)!.status } : {}),
       onADeal: q.leadId != null,
-      total: formatZAR(payableTotalCents(q)),
-      ...quoteContents(q),
+      total: formatZAR(payableTotalCents(q), withCurrency(moneyFmt, q.currency)),
+      ...quoteContents(q, withCurrency(moneyFmt, q.currency)),
     })),
   }));
 }
@@ -806,7 +825,7 @@ export async function leadBrief(user: User, raw: z.infer<typeof leadBriefArgs>):
   const lead = await prisma.lead.findUniqueOrThrow({
     where: { id: best.id },
     select: {
-      id: true, title: true, name: true, status: true, valueCents: true, quantity: true, source: true,
+      id: true, title: true, name: true, status: true, valueCents: true, currency: true, quantity: true, source: true,
       notes: true, research: true, researchedAt: true, createdAt: true, stageEnteredAt: true,
       wonAt: true, lostAt: true, lostReason: true,
       nurtureSince: true, nurtureReason: true, nurtureInterest: true, nurtureTrigger: true, nurtureReviewAt: true,
@@ -871,6 +890,7 @@ export async function leadBrief(user: User, raw: z.infer<typeof leadBriefArgs>):
   // lead matching does not mean the deal is what they meant to write on.
   const customerRecords = await customersFor(lead.contactId);
 
+  const moneyFmt = await getRegionalSettings();
   return {
     truncated: false,
     data: [{
@@ -893,7 +913,7 @@ export async function leadBrief(user: User, raw: z.infer<typeof leadBriefArgs>):
       status: lead.status,
       stage: lead.stage.name,
       daysInStage: daysAgo(lead.stageEnteredAt),
-      value: formatZAR(lead.valueCents),
+      value: formatZAR(lead.valueCents, withCurrency(moneyFmt, lead.currency)),
       quantity: lead.quantity,
       product: lead.product?.name ?? null,
       source: lead.source,
@@ -950,7 +970,7 @@ export async function leadBrief(user: User, raw: z.infer<typeof leadBriefArgs>):
     }],
     rows: [lead, ...others].map((l) => ({
       label: `${l.name} — ${l.title}`,
-      detail: l === lead ? `${lead.stage.name} · ${formatZAR(lead.valueCents)} · ${lead.assignedTo?.name ?? "unassigned"}` : `${l.stage.name} · ${l.status}`,
+      detail: l === lead ? `${lead.stage.name} · ${formatZAR(lead.valueCents, withCurrency(moneyFmt, lead.currency))} · ${lead.assignedTo?.name ?? "unassigned"}` : `${l.stage.name} · ${l.status}`,
       href: `/leads/${l.id}`,
     })),
   };
@@ -966,18 +986,19 @@ async function quotesForLead(user: User, leadId: string) {
       id: true, number: true, status: true, createdAt: true, validUntil: true, viewedAt: true, signedAt: true, declinedAt: true,
       declineReason: true, changeRequestNote: true,
       invoicedAt: true, depositPaidAt: true, deliveryScheduledFor: true, deliveredAt: true,
-      taxInclusive: true, depositType: true, depositValue: true, items: true, fees: true, contactId: true, leadId: true,
+      taxInclusive: true, currency: true, depositType: true, depositValue: true, items: true, fees: true, contactId: true, leadId: true,
     },
   });
   const signing = await signingFor(quotes.map((q) => q.id));
   const sends = await quoteSends(quotes);
+  const moneyFmt = await getRegionalSettings();
   return quotes.map((q) => ({
     quote: `Q-${q.number}`,
     link: `/quotes/${q.id}`,
     ...quoteFacts(q, signing.get(q.id)),
     ...(sends.has(q.id) ? { sendStatus: sends.get(q.id)!.status } : {}),
-    total: formatZAR(payableTotalCents(q)),
-    ...quoteContents(q),
+    total: formatZAR(payableTotalCents(q), withCurrency(moneyFmt, q.currency)),
+    ...quoteContents(q, withCurrency(moneyFmt, q.currency)),
     created: dateKey(q.createdAt),
     validUntil: q.validUntil ? dateKey(q.validUntil) : null,
     viewedByCustomer: viewedByCustomer(q, signing.get(q.id)),
@@ -1038,6 +1059,7 @@ async function knowledge(user: User, raw: z.infer<typeof knowledgeArgs>): Promis
       }));
   }
 
+  const moneyFmt = await getRegionalSettings();
   return {
     truncated: false,
     data: [{
@@ -1049,7 +1071,7 @@ async function knowledge(user: User, raw: z.infer<typeof knowledgeArgs>): Promis
         productId: p.id,
         product: p.name,
         category: p.category,
-        price: formatZAR(p.basePriceCents),
+        price: formatZAR(p.basePriceCents, moneyFmt),
         // The colours it comes in, as a quote line names them. None listed = no colour to choose.
         colours: p.colors.map((colour) => colour.name),
         tagline: p.showcaseTagline,
@@ -1059,7 +1081,7 @@ async function knowledge(user: User, raw: z.infer<typeof knowledgeArgs>): Promis
       approvedAnswers: approved.map((k) => ({ title: k.title, answer: clip(k.content, 800) })),
       competitors,
     }],
-    rows: relevant.slice(0, 8).map((p) => ({ label: p.name, detail: formatZAR(p.basePriceCents), href: "/products" })),
+    rows: relevant.slice(0, 8).map((p) => ({ label: p.name, detail: formatZAR(p.basePriceCents, moneyFmt), href: "/products" })),
   };
 }
 
@@ -1357,6 +1379,7 @@ async function schedule(user: User, raw: z.infer<typeof scheduleArgs>): Promise<
 async function vehicles(user: User, raw: z.infer<typeof vehicleArgs>): Promise<ToolOutput> {
   const args = vehicleArgs.parse(raw);
   const take = args.limit ?? 15;
+  const moneyFmt = await getRegionalSettings();
   if (args.kind === "stock") {
     if (!(await isModuleEnabled("commerce"))) return { truncated: false, rows: [], data: [{ note: "Stock isn't switched on for this workspace." }] };
     if (!(await hasAnyPermission(user, "stock.view", "stock.manage"))) return refused("stock");
@@ -1383,7 +1406,7 @@ async function vehicles(user: User, raw: z.infer<typeof vehicleArgs>): Promise<T
         unit: u.stockNumber ?? u.id.slice(-6),
         link: `/stock/${u.id}`,
         product: u.product.name, status: u.status, label: u.label, condition: u.condition, colour: u.color, location: u.location,
-        price: u.salePriceCents != null ? formatZAR(u.salePriceCents) : null,
+        price: u.salePriceCents != null ? formatZAR(u.salePriceCents, moneyFmt) : null,
         reservedFor: u.reservedForLead?.name ?? null,
       })),
       rows: page.map((u) => ({ label: `${u.product.name}${u.stockNumber ? ` · ${u.stockNumber}` : ""}`, detail: `${u.status}${u.label ? ` · ${u.label}` : ""}`, href: `/stock/${u.id}` })),
@@ -1456,7 +1479,7 @@ async function deliveries(user: User, raw: z.infer<typeof deliveryArgs>): Promis
     take: CANDIDATES,
     select: {
       id: true, number: true, invoicedAt: true, depositPaidAt: true, depositPaidCents: true, deliveryScheduledFor: true, deliveredAt: true,
-      taxInclusive: true, depositType: true, depositValue: true, items: true, fees: true,
+      taxInclusive: true, currency: true, depositType: true, depositValue: true, items: true, fees: true,
       contact: { select: { firstName: true, lastName: true } },
       lead: { select: { id: true, name: true } },
     },
@@ -1476,6 +1499,7 @@ async function deliveries(user: User, raw: z.infer<typeof deliveryArgs>): Promis
   const take = args.limit ?? 15;
   const page = matching.slice(0, take);
   const customer = (q: (typeof quotes)[number]) => nameOfContact(q.contact) ?? q.lead?.name ?? "no customer";
+  const moneyFmt = await getRegionalSettings();
   return {
     truncated: matching.length > take || quotes.length === CANDIDATES,
     data: page.map(({ q, stage }) => ({
@@ -1484,9 +1508,9 @@ async function deliveries(user: User, raw: z.infer<typeof deliveryArgs>): Promis
       leadId: q.lead?.id ?? null,
       customer: customer(q),
       stage,
-      total: formatZAR(payableTotalCents(q)),
+      total: formatZAR(payableTotalCents(q), withCurrency(moneyFmt, q.currency)),
       invoiced: q.invoicedAt ? dateKey(q.invoicedAt) : "no",
-      deposit: q.depositPaidAt ? `paid ${dateKey(q.depositPaidAt)}${q.depositPaidCents ? ` (${formatZAR(q.depositPaidCents)})` : ""}` : "not paid",
+      deposit: q.depositPaidAt ? `paid ${dateKey(q.depositPaidAt)}${q.depositPaidCents ? ` (${formatZAR(q.depositPaidCents, withCurrency(moneyFmt, q.currency))})` : ""}` : "not paid",
       deliveryDate: q.deliveryScheduledFor ? dateKey(q.deliveryScheduledFor) : null,
       delivered: q.deliveredAt ? dateKey(q.deliveredAt) : null,
     })),
@@ -2663,6 +2687,7 @@ export async function resolveActions(
   if (!proposals.length) return [];
   const staff = await listActingTenantStaff();
   const cards: ActionCard[] = [];
+  const moneyFmt = await getRegionalSettings();
   for (const [index, p] of proposals.entries()) {
     // Never a card: askCrm takes check-backs out before this and saves them itself (proactiveFollowUp).
     if (p.type === "check_back" || p.type === "drop_waiting") continue;
@@ -2863,7 +2888,7 @@ export async function resolveActions(
       const quote = number
         ? await prisma.quote.findFirst({
             where: { deletedAt: null, number: Number(number) },
-            select: { id: true, number: true, leadId: true, invoicedAt: true, depositPaidAt: true, contact: { select: { firstName: true, lastName: true } } },
+            select: { id: true, number: true, currency: true, leadId: true, invoicedAt: true, depositPaidAt: true, contact: { select: { firstName: true, lastName: true } } },
           })
         : null;
       if (!quote || !(await canAccessQuote(user, quote.id))) { problems.push(`I can't find quote ${p.quote} among the ones you can open.`); continue; }
@@ -2876,11 +2901,11 @@ export async function resolveActions(
       const who = [quote.contact?.firstName, quote.contact?.lastName].filter(Boolean).join(" ") || `Q-${quote.number}`;
       const proof = upload?.id ? { uploadId: upload.id, fileName: upload.fileName } : { uploadId: null, fileName: null };
       cards.push({
-        id: `a${index}-${quote.id}-payment`, kind: "record_payment", leadId: quote.leadId, leadLabel: who,
-        title: `${deposit ? "Record the deposit" : "Record a payment"} of ${formatZAR(amountCents)} on Q-${quote.number}`,
+        id: `a${index}-${quote.id}-payment`, kind: "record_payment", currency: quote.currency, leadId: quote.leadId, leadLabel: who,
+        title: `${deposit ? "Record the deposit" : "Record a payment"} of ${formatZAR(amountCents, withCurrency(moneyFmt, quote.currency))} on Q-${quote.number}`,
         quoteId: quote.id, quoteNumber: quote.number, deposit, amountCents, method: p.method, receivedOn: p.receivedOn, reference: p.reference ?? null, ...proof,
         detail: [
-          `${deposit ? "Deposit" : "Payment"}: ${formatZAR(amountCents)} — ${paymentMethodLabel(p.method)}, received ${p.receivedOn}${p.reference ? `, ref ${p.reference}` : ""}`,
+          `${deposit ? "Deposit" : "Payment"}: ${formatZAR(amountCents, withCurrency(moneyFmt, quote.currency))} — ${paymentMethodLabel(p.method)}, received ${p.receivedOn}${p.reference ? `, ref ${p.reference}` : ""}`,
           proof.fileName ? `Proof of payment: ${proof.fileName} — filed on the quote with it.` : "No proof of payment attached.",
           "Check the amount and the date — they may have been read from what you sent. Nothing is sent to the customer.",
         ].join("\n"),
@@ -2986,7 +3011,7 @@ export async function resolveActions(
       const quote = await prisma.quote.findFirst({
         where: { deletedAt: null, ...(number ? { number: Number(number) } : { id: quoteRef }) },
         select: {
-          id: true, number: true, status: true, contactId: true, leadId: true, contact: { select: { firstName: true, lastName: true } },
+          id: true, number: true, status: true, currency: true, contactId: true, leadId: true, contact: { select: { firstName: true, lastName: true } },
           items: { select: { id: true, description: true, qty: true, discountPct: true, colorPreference: true, product: { select: { colors: { select: { name: true } } } } } },
           fees: { select: { id: true, label: true, amountCents: true } },
         },
@@ -3010,7 +3035,7 @@ export async function resolveActions(
         const amountCents = wanted.amount != null && Math.round(wanted.amount * 100) !== was.amountCents ? Math.round(wanted.amount * 100) : undefined;
         if (wanted.remove) changes.push({ row: "fee", id: fee.id, was, remove: true });
         else if (label !== undefined || amountCents !== undefined) changes.push({ row: "fee", id: fee.id, was, ...(label !== undefined ? { label } : {}), ...(amountCents !== undefined ? { amountCents } : {}) });
-        else { problem = `On ${ref} the fee "${fee.label}" (${formatZAR(fee.amountCents)}) is already as you asked — there is nothing to change.`; break; }
+        else { problem = `On ${ref} the fee "${fee.label}" (${formatZAR(fee.amountCents, withCurrency(moneyFmt, quote.currency))}) is already as you asked — there is nothing to change.`; break; }
       }
       for (const wanted of problem ? [] : p.lines ?? []) {
         // No name given: the only line on the quote, when there is exactly one.
@@ -3046,7 +3071,7 @@ export async function resolveActions(
         id: `a${index}-${quote.id}`, kind: "quote_change", leadId: quote.leadId,
         leadLabel: [quote.contact?.firstName, quote.contact?.lastName].filter(Boolean).join(" "),
         quoteId: quote.id, quoteNumber: quote.number, contactId: quote.contactId, changes,
-        title: `Change draft quote Q-${quote.number}`, text: quoteChangeText(changes, (cents) => formatZAR(cents)),
+        title: `Change draft quote Q-${quote.number}`, text: quoteChangeText(changes, (cents) => formatZAR(cents, withCurrency(moneyFmt, quote.currency))),
         confirmKey: `qk_${randomBytes(16).toString("hex")}`,
         ...(quoteSheet?.quoteId === quote.id ? { taskId: quoteSheet.id } : {}),
         ...(p.reason ? { reason: p.reason } : {}),
@@ -3063,10 +3088,12 @@ export async function resolveActions(
       const number = /^Q-?(\d+)$/i.exec(quoteRef)?.[1];
       const quote = await prisma.quote.findFirst({
         where: { deletedAt: null, ...(number ? { number: Number(number) } : { id: quoteRef }) },
-        select: { id: true, number: true, status: true, contactId: true, leadId: true, contact: { select: { firstName: true, lastName: true } } },
+        select: { id: true, number: true, status: true, currency: true, contactId: true, leadId: true, contact: { select: { firstName: true, lastName: true } } },
       });
       if (!quote || !(await canAccessQuote(user, quote.id))) { problems.push(`I can't find ${p.quote ? `quote ${p.quote}` : "this job sheet's quote"} among the ones you can open.`); continue; }
       if (quote.status !== "draft" || !quote.contactId) { problems.push(`Q-${quote.number} is not a draft with a customer on it, so it can't be added to from here — open it in the CRM.`); continue; }
+      // Catalogue prices are in the base currency: never put them on a quote in another one.
+      if (quote.currency) { problems.push(foreignCurrencyQuote(`Q-${quote.number} is`, quote.currency)); continue; }
       const fees = (p.fees ?? []).map((fee) => ({ label: fee.label, amountCents: Math.round(fee.amount * 100), delivery: fee.delivery === true }));
       const matched = await Promise.all((p.lines ?? []).map((line) => resolveCatalogueProduct(line)));
       const unknown = (p.lines ?? []).filter((_, at) => !matched[at]).map((line) => line.product ?? "a product");
@@ -3083,7 +3110,7 @@ export async function resolveActions(
       cards.push({
         id: `a${index}-${quote.id}`, kind: "quote_add", leadId: quote.leadId, leadLabel: customerName,
         quoteId: quote.id, quoteNumber: quote.number, contactId: quote.contactId, lines, fees,
-        title: `Add to draft quote Q-${quote.number}`, text: quoteAddText(lines, fees, (cents) => formatZAR(cents)),
+        title: `Add to draft quote Q-${quote.number}`, text: quoteAddText(lines, fees, (cents) => formatZAR(cents, moneyFmt)),
         confirmKey: `qk_${randomBytes(16).toString("hex")}`,
         ...(quoteSheet?.quoteId === quote.id ? { taskId: quoteSheet.id } : {}),
         ...(p.reason ? { reason: p.reason } : {}),
@@ -3126,8 +3153,10 @@ export async function resolveActions(
       }
       if (dealId) {
         if (!(await canAccessLead(user, dealId))) { problems.push("I can't open that deal for you, so I can't quote on it."); continue; }
-        const deal = await prisma.lead.findUnique({ where: { id: dealId }, select: { name: true, title: true, contactId: true } });
+        const deal = await prisma.lead.findUnique({ where: { id: dealId }, select: { name: true, title: true, contactId: true, currency: true } });
         if (!deal) { problems.push("That deal is no longer there."); continue; }
+        // A quote on a deal is in the deal's currency; catalogue prices are in the base one.
+        if (deal.currency) { problems.push(foreignCurrencyQuote(`${deal.name}'s deal is`, deal.currency)); continue; }
         forDeal = { id: dealId, label: `${deal.name} — ${deal.title}` };
         customerName = deal.name;
         if (deal.contactId) customerId = deal.contactId;
@@ -3181,7 +3210,7 @@ export async function resolveActions(
         ...(fees.length ? { fees } : {}),
         ...(createCustomer ? { createCustomer: true as const } : {}),
         title: `Create a draft quote for ${customerName}`,
-        text: quoteBuildText(lines, (cents) => formatZAR(cents), { fees, ...(createCustomer ? { newCustomer: customerName } : {}) }),
+        text: quoteBuildText(lines, (cents) => formatZAR(cents, moneyFmt), { fees, ...(createCustomer ? { newCustomer: customerName } : {}) }),
         confirmKey: `qk_${randomBytes(16).toString("hex")}`,
         ...(p.reason ? { reason: p.reason } : {}),
       });

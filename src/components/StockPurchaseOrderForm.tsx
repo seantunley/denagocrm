@@ -1,6 +1,8 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import { currencySymbol, formatZAR } from "@/lib/format";
+import { useMoneyFormat } from "@/components/MoneyFormatProvider";
 import { Plus, ShoppingCart, Trash2 } from "lucide-react";
 import { createPurchaseOrder } from "@/app/actions/stock";
 import { CaptureField, CaptureFooter, CaptureHero, CaptureSection } from "@/components/capture-form";
@@ -20,6 +22,7 @@ const blankLine = (): Line => ({
 });
 
 export default function StockPurchaseOrderForm({ products }: { products: Product[] }) {
+  const moneyFmt = useMoneyFormat();
   const [lines, setLines] = useState<Line[]>([blankLine()]);
   const totalUnits = lines.reduce((sum, line) => sum + Math.max(0, line.qty || 0), 0);
   const estimated = useMemo(() => lines.reduce((sum, line) => {
@@ -48,7 +51,7 @@ export default function StockPurchaseOrderForm({ products }: { products: Product
         summary={[
           { label: "Lines", value: lines.length },
           { label: "Units", value: totalUnits },
-          { label: "Estimated", value: `R ${estimated.toLocaleString("en-ZA", { minimumFractionDigits: 2 })}` },
+          { label: "Estimated", value: formatZAR(Math.round(estimated * 100), moneyFmt) },
         ]}
       />
 
@@ -97,8 +100,8 @@ export default function StockPurchaseOrderForm({ products }: { products: Product
                     )}
                   </div>
                   <div><label className="label">Quantity *</label><input className="input" type="number" min={1} max={200} value={line.qty} onChange={(event) => update(line.id, { qty: Number(event.target.value) })} required /></div>
-                  <div><label className="label">Unit cost (R)</label><input className="input" inputMode="decimal" value={line.cost} onChange={(event) => update(line.id, { cost: event.target.value })} placeholder="0.00" /></div>
-                  <div><label className="label">Freight / line (R)</label><input className="input" inputMode="decimal" value={line.freight} onChange={(event) => update(line.id, { freight: event.target.value })} placeholder="0.00" /></div>
+                  <div><label className="label">Unit cost ({currencySymbol(moneyFmt)})</label><input className="input" inputMode="decimal" value={line.cost} onChange={(event) => update(line.id, { cost: event.target.value })} placeholder="0.00" /></div>
+                  <div><label className="label">Freight / line ({currencySymbol(moneyFmt)})</label><input className="input" inputMode="decimal" value={line.freight} onChange={(event) => update(line.id, { freight: event.target.value })} placeholder="0.00" /></div>
                   <div className="md:col-span-2"><label className="label">Line notes</label><input className="input" value={line.notes} onChange={(event) => update(line.id, { notes: event.target.value })} /></div>
                 </div>
               </div>

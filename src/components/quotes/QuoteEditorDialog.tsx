@@ -54,7 +54,10 @@ import CustomFieldsForm from "@/components/custom-fields/CustomFieldsForm";
 import { quoteSigningView } from "@/app/actions/recordSigning";
 import type { QuoteSigningView } from "@/lib/signing/record";
 import { feeRows, quotePricing } from "@/lib/pricing";
-import { formatDate, formatDateTime, formatZAR, type Regional } from "@/lib/format";
+import { currencySymbol, formatDate, formatDateTime, formatZAR, type Regional } from "@/lib/format";
+import { withCurrency } from "@/lib/currencyRules";
+import { useCurrencies } from "@/components/MoneyFormatProvider";
+import { parseMoneyInput } from "@/lib/moneyInput";
 import { calendarDateInstant } from "@/lib/quoteExpiry";
 import SigningBlock from "@/components/SigningBlock";
 import QuoteEmailDialog from "@/components/quotes/QuoteEmailDialog";
@@ -81,6 +84,8 @@ export type QuoteEditorLead = {
   id: string;
   label: string;
   contactId: string | null;
+  /** NULL = the base. A quote on a lead is saved in the lead's currency. */
+  currency?: string | null;
 };
 
 export type QuoteEditorProduct = {
@@ -149,6 +154,8 @@ export type QuoteEditorRecord = {
   taxInclusive: boolean;
   depositType: string | null;
   depositValue: number | null;
+  /** Multicurrency module: every amount on the quote is in this; null = the workspace's base. */
+  currency: string | null;
   fees: Array<{ id: string; label: string; kind: string; amountCents: number; taxRatePct: number }>;
   versions: QuoteEditorVersion[];
 };
@@ -204,6 +211,8 @@ type DraftState = {
   taxInclusive: boolean;
   depositType: "" | "percent" | "amount";
   depositValue: string;
+  /** Multicurrency module: "" = the workspace's base; otherwise an ISO code it offers. */
+  currency: string;
 };
 
 type SavedQuote = {
@@ -228,9 +237,50 @@ function priceInput(cents: number) {
   return (cents / 100).toFixed(2);
 }
 
-function centsFromInput(value: string) {
-  const parsed = Number(value.replace(",", "."));
-  return Number.isFinite(parsed) ? Math.round(parsed * 100) : Number.NaN;
+/**
+ * The draft in another currency. Every typed or catalogue amount was in the OLD one, so it is
+ * cleared rather than relabelled (R100 000 is not US$100 000); save then asks for each again.
+ * Zero amounts (a free item) mean the same in any currency and stay.
+ */
+function repricedForCurrency(draft: DraftState, currency: string): DraftState {
+  if (currency === draft.currency) return draft;
+  const clear = (amount: string) => (/[1-9]/.test(amount) ? "" : amount);
+  return {
+    ...draft,
+    currency,
+    lines: draft.lines.map((line) => ({ ...line, unitPrice: clear(line.unitPrice) })),
+    fees: draft.fees.map((fee) => ({ ...fee, amount: clear(fee.amount) })),
+    depositValue: draft.depositType === "amount" ? clear(draft.depositValue) : draft.depositValue,
+  };
+}
+
+/**
+ * A typed amount → cents, read as the rest of the app reads money (moneyInput.ts) in the
+ * workspace's currency: "4 861,00", "R 1 000.50" and "₽4 861" all work, where this used to
+ * read only a bare number. Blank is 0, as before; a leading minus stays allowed for fees.
+ * NaN means unclear — the save refuses it rather than guessing.
+ */
+function centsFromInput(value: string, currency: string) {
+  const trimmed = value.trim();
+  if (!trimmed) return 0;
+  const negative = trimmed.startsWith("-");
+  const parsed = parseMoneyInput(negative ? trimmed.slice(1) : trimmed, currency);
+  if (!parsed.ok) return Number.NaN;
+  return negative ? -parsed.cents : parsed.cents;
+}
+
+/**
+ * The deposit as the server takes it (pricing.ts): a percentage, or an amount in whole
+ * currency units. Null when blank or unclear — the save refuses unclear before it gets here.
+ */
+function depositNumber(type: string, value: string, currency: string): number | null {
+  if (!value.trim()) return null;
+  if (type === "amount") {
+    const cents = centsFromInput(value, currency);
+    return Number.isFinite(cents) ? cents / 100 : null;
+  }
+  const pct = Number(value.replace(",", "."));
+  return Number.isFinite(pct) ? pct : null;
 }
 
 function createDraft(
@@ -250,6 +300,7 @@ function createDraft(
       taxInclusive: true,
       depositType: "",
       depositValue: "",
+      currency: "",
     } satisfies DraftState;
   }
   return {
@@ -268,6 +319,7 @@ function createDraft(
     taxInclusive: record.taxInclusive,
     depositType: record.depositType === "percent" || record.depositType === "amount" ? record.depositType : "",
     depositValue: record.depositValue != null ? String(record.depositValue) : "",
+    currency: record.currency ?? "",
     lines: record.items.map((item) => {
       const matchingProduct = item.productId
         ? products.find((product) => product.id === item.productId)
@@ -300,6 +352,7 @@ function draftSnapshot(draft: DraftState) {
     taxInclusive: draft.taxInclusive,
     depositType: draft.depositType,
     depositValue: draft.depositValue,
+    currency: draft.currency,
     fees: draft.fees.map(({ label, kind, amount }) => ({ label, kind, amount })),
     lines: draft.lines.map(({ kind, description, qty, unitPrice, discount, productId, colorPreference }) => ({
       kind,
@@ -354,8 +407,14 @@ export function QuoteEditorDialog({
 }) {
   const router = useRouter();
   const regional = defaults.regional;
-  const rands = (cents: number) => formatZAR(cents, regional);
   const [draft, setDraft] = useState<DraftState>(() => createDraft(record, defaults, initialContactId, products));
+  // Set once the currency is changed: from then on a blank price is "not yet repriced", never 0.
+  const [repricing, setRepricing] = useState(false);
+  // Every amount on the quote is in ITS currency (multicurrency module; "" = the base).
+  const money = withCurrency(regional, draft.currency || null);
+  const currencyCode = draft.currency || regional.currency; // a primitive from state, so the totals memo can depend on it
+  const rands = (cents: number) => formatZAR(cents, money);
+  const currencies = useCurrencies();
   // A customer found by search (beyond the preloaded list) — for its label.
   const [pickedCustomer, setPickedCustomer] = useState<ContactOption | null>(null);
   const [initialSnapshot, setInitialSnapshot] = useState(() => draftSnapshot(draft));
@@ -471,7 +530,7 @@ export function QuoteEditorDialog({
   const calculated = useMemo(() => {
     const lines = draft.lines.map((line) => ({
       qty: Number(line.qty.replace(",", ".")) || 0,
-      unitPriceCents: centsFromInput(line.unitPrice) || 0,
+      unitPriceCents: centsFromInput(line.unitPrice, currencyCode) || 0,
       discountPct: Number(line.discount.replace(",", ".")) || 0,
       // The rate the SAVE will store: its own for an existing line, the
       // workspace's for a new one (see itemRowsFor).
@@ -489,14 +548,14 @@ export function QuoteEditorDialog({
       .map((fee) => ({
         label: fee.label.trim() || (fee.kind === "delivery" ? "Delivery" : "Fee"),
         kind: fee.kind,
-        amountCents: centsFromInput(fee.amount) || 0,
+        amountCents: centsFromInput(fee.amount, currencyCode) || 0,
         taxRatePct: fee.taxRatePct ?? regional.vatRatePct,
       }))
       .filter((fee) => fee.amountCents !== 0);
     const p = quotePricing(lines, fees, {
       taxInclusive: draft.taxInclusive,
       depositType: draft.depositType || null,
-      depositValue: draft.depositValue ? Number(draft.depositValue.replace(",", ".")) : null,
+      depositValue: depositNumber(draft.depositType, draft.depositValue, currencyCode),
     });
     return {
       subtotal: p.netCents,
@@ -515,7 +574,7 @@ export function QuoteEditorDialog({
       // customer can't check. Same helper the printed document uses.
       feeLines: feeRows(fees),
     };
-  }, [draft.lines, draft.fees, draft.taxInclusive, draft.depositType, draft.depositValue, regional.vatRatePct]);
+  }, [draft.lines, draft.fees, draft.taxInclusive, draft.depositType, draft.depositValue, regional.vatRatePct, currencyCode]);
 
   function updateLine(key: string, patch: Partial<DraftLine>) {
     setDraft((current) => ({
@@ -562,7 +621,8 @@ export function QuoteEditorDialog({
           ...line,
           productId: product.id,
           description: product.name,
-          unitPrice: priceInput(product.basePriceCents),
+          // The catalogue price is in the base currency: on a quote in another one the rep types it.
+          unitPrice: current.currency ? "" : priceInput(product.basePriceCents),
           colorPreference: line.productId === product.id ? line.colorPreference : "",
         };
       }),
@@ -722,7 +782,7 @@ export function QuoteEditorDialog({
       }
       const description = line.description.trim();
       const qty = Number(line.qty.replace(",", "."));
-      const unitPriceCents = centsFromInput(line.unitPrice);
+      const unitPriceCents = centsFromInput(line.unitPrice, money.currency);
       if (!description) {
         setError("Every quote line needs a description.");
         setActiveTab("build");
@@ -730,6 +790,12 @@ export function QuoteEditorDialog({
       }
       if (!Number.isFinite(qty) || qty <= 0) {
         setError(`Enter a valid quantity for “${description}”.`);
+        setActiveTab("build");
+        return;
+      }
+      // Not filled from the catalogue in another currency, or cleared by a currency change: a blank here was never priced.
+      if (((draft.currency && line.kind === "catalogue") || repricing) && !line.unitPrice.trim()) {
+        setError(`Enter the ${money.currency} price for “${description}”.`);
         setActiveTab("build");
         return;
       }
@@ -757,12 +823,37 @@ export function QuoteEditorDialog({
       });
     }
 
+    // An amount it can't read clearly is refused here, as line prices are — not dropped without a word.
+    const unclearFee = draft.fees.find((fee) => !Number.isFinite(centsFromInput(fee.amount, money.currency)));
+    if (unclearFee) {
+      setError(`Enter a clear amount for “${unclearFee.label.trim() || "the fee"}”.`);
+      setActiveTab("build");
+      return;
+    }
+    // After a currency change a blank fee or fixed deposit was cleared, not waived.
+    const unpricedFee = repricing ? draft.fees.find((fee) => !fee.amount.trim()) : undefined;
+    if (unpricedFee) {
+      setError(`Enter the ${money.currency} amount for “${unpricedFee.label.trim() || "the fee"}”.`);
+      setActiveTab("build");
+      return;
+    }
+    if (repricing && draft.depositType === "amount" && !draft.depositValue.trim()) {
+      setError(`Enter the ${money.currency} deposit amount.`);
+      setActiveTab("build");
+      return;
+    }
+    const depositValue = depositNumber(draft.depositType, draft.depositValue, money.currency);
+    if (draft.depositValue.trim() && depositValue === null) {
+      setError("Enter a clear deposit amount.");
+      setActiveTab("build");
+      return;
+    }
     const fees = draft.fees
       .map((fee) => ({
         id: fee.id,
         label: fee.label.trim() || (fee.kind === "delivery" ? "Delivery" : "Fee"),
         kind: fee.kind,
-        amountCents: centsFromInput(fee.amount),
+        amountCents: centsFromInput(fee.amount, money.currency),
       }))
       .filter((fee) => Number.isFinite(fee.amountCents) && fee.amountCents !== 0);
 
@@ -779,7 +870,8 @@ export function QuoteEditorDialog({
           fees,
           taxInclusive: draft.taxInclusive,
           depositType: draft.depositType || null,
-          depositValue: draft.depositValue ? Number(draft.depositValue.replace(",", ".")) : null,
+          depositValue,
+          currency: draft.currency || null,
         });
         if (!result.ok) {
           setError(result.error);
@@ -1000,6 +1092,33 @@ export function QuoteEditorDialog({
                           setDraft((current) => ({ ...current, contactId }));
                         }}
                       />
+                      {/* Multicurrency module: the quote's currency. A quote on a lead is in the lead's (the
+                          server holds it to that); only a draft can change it. One currency = no picker. */}
+                      {currencies.length > 1 && (
+                        <div className="mt-4">
+                          <label className="block text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground" htmlFor="quote-currency">Currency</label>
+                          {record?.leadId || draft.leadId ? (
+                            <p className="mt-1.5 text-sm">{money.currency} <span className="text-xs text-muted-foreground">· the deal&apos;s currency</span></p>
+                          ) : (
+                            <select
+                              id="quote-currency"
+                              className="input mt-1.5 w-32"
+                              value={draft.currency || currencies[0]}
+                              disabled={!editable}
+                              onChange={(event) => {
+                                const code = event.target.value;
+                                setDraft((current) => repricedForCurrency(current, code === currencies[0] ? "" : code));
+                                setRepricing(true);
+                              }}
+                            >
+                              {currencies.map((code) => <option key={code} value={code}>{code}</option>)}
+                            </select>
+                          )}
+                          {repricing && (
+                            <p role="status" className="mt-1.5 text-xs text-amber-500">Prices cleared — enter each one in {money.currency}.</p>
+                          )}
+                        </div>
+                      )}
                       {/* Optional lead link — only when starting a fresh quote. Picking a
                           lead ties the quote to it (so it shows on the lead) and fills in
                           the customer from that lead. Existing quotes keep their own link. */}
@@ -1014,8 +1133,12 @@ export function QuoteEditorDialog({
                             onChange={(event) => {
                               const leadId = event.target.value;
                               const lead = leads.find((item) => item.id === leadId);
+                              // The server saves a lead's quote in the LEAD's currency, so the draft moves to it —
+                              // and prices typed in the old one are cleared, not relabelled.
+                              const currency = lead ? lead.currency ?? "" : draft.currency;
+                              if (currency !== draft.currency) setRepricing(true);
                               setDraft((current) => ({
-                                ...current,
+                                ...repricedForCurrency(current, currency),
                                 leadId,
                                 // Keep the customer in step with the chosen lead.
                                 contactId: lead?.contactId ?? current.contactId,
@@ -1106,7 +1229,7 @@ export function QuoteEditorDialog({
                                 <input id={`${line.key}-qty`} className="input" inputMode="decimal" value={line.qty} disabled={!editable} onChange={(event) => updateLine(line.key, { qty: event.target.value })} />
                               </div>
                               <div>
-                                <label className="label" htmlFor={`${line.key}-price`}>Unit price (R)</label>
+                                <label className="label" htmlFor={`${line.key}-price`}>Unit price ({currencySymbol(money)})</label>
                                 <input id={`${line.key}-price`} className="input" inputMode="decimal" value={line.unitPrice} disabled={!editable} onChange={(event) => updateLine(line.key, { unitPrice: event.target.value })} />
                               </div>
                               <div>
@@ -1156,7 +1279,7 @@ export function QuoteEditorDialog({
                                 <input id={`${fee.key}-label`} className="input" value={fee.label} disabled={!editable} placeholder={fee.kind === "delivery" ? "Delivery to…" : "Admin fee"} onChange={(event) => updateFee(fee.key, { label: event.target.value })} />
                               </div>
                               <div>
-                                <label className="label" htmlFor={`${fee.key}-amount`}>Amount (R)</label>
+                                <label className="label" htmlFor={`${fee.key}-amount`}>Amount ({currencySymbol(money)})</label>
                                 <input id={`${fee.key}-amount`} className="input tabular-nums" inputMode="decimal" value={fee.amount} disabled={!editable} onChange={(event) => updateFee(fee.key, { amount: event.target.value })} />
                               </div>
                               {editable && (
@@ -1212,7 +1335,7 @@ export function QuoteEditorDialog({
                               <option value="amount">Amount</option>
                             </select>
                             {draft.depositType && (
-                              <input className="input w-24 tabular-nums" inputMode="decimal" placeholder={draft.depositType === "percent" ? "%" : "R"} value={draft.depositValue} disabled={!editable} onChange={(event) => setDraft((current) => ({ ...current, depositValue: event.target.value }))} aria-label="Deposit value" />
+                              <input className="input w-24 tabular-nums" inputMode="decimal" placeholder={draft.depositType === "percent" ? "%" : money.currency} value={draft.depositValue} disabled={!editable} onChange={(event) => setDraft((current) => ({ ...current, depositValue: event.target.value }))} aria-label="Deposit value" />
                             )}
                           </div>
                         </div>
@@ -1265,7 +1388,7 @@ export function QuoteEditorDialog({
                       <tbody>
                         {draft.lines.map((line) => {
                           const qty = Number(line.qty.replace(",", ".")) || 0;
-                          const price = centsFromInput(line.unitPrice) || 0;
+                          const price = centsFromInput(line.unitPrice, money.currency) || 0;
                           const discount = Math.min(100, Math.max(0, Number(line.discount.replace(",", ".")) || 0));
                           const lineTotal = Math.round(qty * price * (1 - discount / 100));
                           // The customer's document drops a declined add-on

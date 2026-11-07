@@ -925,6 +925,8 @@ model Lead {
   notes      String?
   quantity   Int     @default(1) // number of carts wanted (drives the value)
   valueCents Int     @default(0)
+  /// ISO 4217 code of valueCents (multicurrency module). NULL = the workspace's base currency.
+  currency   String?
   status     String  @default("open") // open | nurture | won | lost
   nurtureSince      DateTime?
   nurtureReason     String?
@@ -1489,6 +1491,9 @@ model Quote {
   // @@unique([tenantId, number]) is a separate backup-first PR.
   tenantId   String?
 
+  /// ISO 4217 code of every amount on this quote — lines, fees, deposit, payments (multicurrency
+  /// module). NULL = the workspace's base currency. Fixed once the quote is no longer a draft.
+  currency     String?
   // CPQ (phase 1): tax mode + deposit terms
   taxInclusive Boolean @default(true) // unit prices already include VAT
   depositType  String? // percent | amount

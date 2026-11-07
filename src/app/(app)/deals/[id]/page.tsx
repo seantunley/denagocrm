@@ -28,6 +28,7 @@ import { loadBillToFleet, quoteBillTo } from "@/lib/quoteBillTo";
 import { payableTotalCents } from "@/lib/pricing";
 import { isStatementInvoice } from "@/lib/accountStatement";
 import { getRegionalSettings } from "@/lib/settings";
+import { withCurrency } from "@/lib/currencyRules";
 import DealPayments from "@/components/deals/DealPayments";
 import { primaryVehicleLine, showcaseImageRefFor } from "@/lib/docbuilder/vehicleShowcase";
 import { storedFileSrc } from "@/lib/storedFileSrc";
@@ -176,12 +177,14 @@ export default async function DealWorkspacePage({ params }: { params: Promise<{ 
   const canRecordPayments = invoice && (await hasAnyPermission(user, "deliveries.manage"));
   // The statement this invoice appears on — the fleet's when billed to one — and
   // only as a link the viewer can actually open (the page re-checks both).
+  // The statement in THIS deal's currency (multicurrency module): a statement covers one currency.
+  const statementCurrency = quote.currency ? `?currency=${encodeURIComponent(quote.currency)}` : "";
   const statementHref = !invoice
     ? null
     : billTo.isFleet && quote.fleetId
-      ? (await hasAnyPermission(user, "fleets.view", "fleets.manage")) ? `/fleets/${quote.fleetId}/statement` : null
+      ? (await hasAnyPermission(user, "fleets.view", "fleets.manage")) ? `/fleets/${quote.fleetId}/statement${statementCurrency}` : null
       : quote.contactId && (await canAccessContact(user, quote.contactId))
-        ? `/contacts/${quote.contactId}/statement`
+        ? `/contacts/${quote.contactId}/statement${statementCurrency}`
         : null;
   const { timeZone } = await getRegionalSettings();
   const today = new Intl.DateTimeFormat("en-CA", { timeZone, year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
@@ -230,6 +233,8 @@ export default async function DealWorkspacePage({ params }: { params: Promise<{ 
       amount: Math.round(item.qty * item.unitPriceCents * (1 - item.discountPct / 100)),
       kind: item.kind,
     }));
+  // Every amount on this page is the quote's — in ITS currency (multicurrency module; null = the base).
+  const moneyFmt = withCurrency(await getRegionalSettings(), quote.currency);
   const timeline = [
     ...lead?.communications.map((message) => ({
       key: `comm-${message.id}`,
@@ -253,7 +258,7 @@ export default async function DealWorkspacePage({ params }: { params: Promise<{ 
       detail: request.status.replaceAll("_", " "),
     })),
     ...(quote.signedAt ? [{ key: "signed", when: quote.signedAt, icon: <BadgeCheck className="size-3.5" />, title: "Quote accepted / signed", detail: quote.signedByName ?? undefined }] : []),
-    ...(quote.depositPaidAt ? [{ key: "deposit", when: quote.depositPaidAt, icon: <CircleDollarSign className="size-3.5" />, title: "Deposit marked received", detail: depositAmount ? formatZAR(depositAmount) : undefined }] : []),
+    ...(quote.depositPaidAt ? [{ key: "deposit", when: quote.depositPaidAt, icon: <CircleDollarSign className="size-3.5" />, title: "Deposit marked received", detail: depositAmount ? formatZAR(depositAmount, moneyFmt) : undefined }] : []),
     ...(quote.deliveryScheduledFor ? [{ key: "delivery-booked", when: quote.deliveryScheduledFor, icon: <CalendarClock className="size-3.5" />, title: "Delivery scheduled", detail: formatDateTime(quote.deliveryScheduledFor) }] : []),
   ].sort((a, b) => b.when.getTime() - a.when.getTime()).slice(0, 14);
 
@@ -305,11 +310,11 @@ export default async function DealWorkspacePage({ params }: { params: Promise<{ 
             <div className="flex flex-col justify-between p-5 sm:p-6">
               <div>
                 <p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-muted-foreground">{labels.deal.one} value</p>
-                <p className="mt-1 text-3xl font-semibold tracking-tight text-foreground">{formatZAR(total)}</p>
+                <p className="mt-1 text-3xl font-semibold tracking-tight text-foreground">{formatZAR(total, moneyFmt)}</p>
                 <div className="mt-5 grid grid-cols-2 gap-4 border-t border-border pt-4">
                   <Fact label="Customer" value={customer} />
                   <Fact label="Sales owner" value={quote.lead?.assignedTo?.name ?? quote.createdBy?.name ?? "Unassigned"} />
-                  <Fact label="Deposit" value={depositAmount ? formatZAR(depositAmount) : "Not set"} />
+                  <Fact label="Deposit" value={depositAmount ? formatZAR(depositAmount, moneyFmt) : "Not set"} />
                   <Fact label="Next action" value={nextActivity ? formatDateTime(nextActivity.dueDate) : "None planned"} />
                 </div>
               </div>
@@ -347,7 +352,7 @@ export default async function DealWorkspacePage({ params }: { params: Promise<{ 
                       <p className="truncate text-sm font-medium">{line.label}</p>
                       <p className="mt-0.5 text-[11px] uppercase tracking-wide text-muted-foreground">{line.kind.replaceAll("_", " ")}</p>
                     </div>
-                    <p className="text-sm font-semibold tabular-nums">{formatZAR(line.amount)}</p>
+                    <p className="text-sm font-semibold tabular-nums">{formatZAR(line.amount, moneyFmt)}</p>
                   </div>
                 ))}
                 {quote.fees.map((fee) => (
@@ -356,21 +361,21 @@ export default async function DealWorkspacePage({ params }: { params: Promise<{ 
                       <p className="text-sm font-medium">{fee.label}</p>
                       <p className="mt-0.5 text-[11px] uppercase tracking-wide text-muted-foreground">Fee</p>
                     </div>
-                    <p className="text-sm font-semibold tabular-nums">{formatZAR(fee.amountCents)}</p>
+                    <p className="text-sm font-semibold tabular-nums">{formatZAR(fee.amountCents, moneyFmt)}</p>
                   </div>
                 ))}
                 <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-4 py-4">
                   <div>
                     <p className="font-semibold">{labels.deal.one} total</p>
-                    <p className="mt-0.5 text-xs text-muted-foreground">{quote.depositPaidAt ? "Deposit received" : depositAmount ? `Deposit expected · ${formatZAR(depositAmount)}` : "No deposit terms set"}</p>
+                    <p className="mt-0.5 text-xs text-muted-foreground">{quote.depositPaidAt ? "Deposit received" : depositAmount ? `Deposit expected · ${formatZAR(depositAmount, moneyFmt)}` : "No deposit terms set"}</p>
                   </div>
-                  <p className="text-lg font-semibold tabular-nums">{formatZAR(total)}</p>
+                  <p className="text-lg font-semibold tabular-nums">{formatZAR(total, moneyFmt)}</p>
                 </div>
               </div>
             </Surface>
 
             {invoice && (
-              <DealPayments quote={quote} payments={payments} canRecord={canRecordPayments} statementHref={statementHref} today={today} />
+              <DealPayments quote={quote} payments={payments} canRecord={canRecordPayments} statementHref={statementHref} today={today} moneyFmt={moneyFmt} />
             )}
 
             <Surface className="p-5">
@@ -432,7 +437,7 @@ export default async function DealWorkspacePage({ params }: { params: Promise<{ 
               </div>
               <div className="mt-3 divide-y divide-border/60">
                 <ReadinessRow done={accepted} label="Agreement accepted" detail={quote.signedAt ? `Signed ${formatDateTime(quote.signedAt)}` : accepted ? "Marked accepted — not signed online" : "Customer acceptance outstanding"} />
-                <ReadinessRow done={Boolean(quote.depositPaidAt)} label="Deposit received" detail={quote.depositPaidAt ? formatDateTime(quote.depositPaidAt) : depositAmount ? `Waiting for ${formatZAR(depositAmount)}` : "No deposit receipt recorded"} />
+                <ReadinessRow done={Boolean(quote.depositPaidAt)} label="Deposit received" detail={quote.depositPaidAt ? formatDateTime(quote.depositPaidAt) : depositAmount ? `Waiting for ${formatZAR(depositAmount, moneyFmt)}` : "No deposit receipt recorded"} />
                 <ReadinessRow done={stockReady} label="Stock allocated" detail={stockReady ? stock.map((item) => item.stockNumber ?? item.product.name).join(", ") : "No physical unit assigned"} />
                 <ReadinessRow done={pdiReady} label="PDI complete" detail={stockReady ? (pdiReady ? "Allocated stock ready for delivery" : "Workshop preparation still outstanding") : "Requires stock allocation first"} />
                 <ReadinessRow done={deliveryBooked} label="Delivery booked" detail={deliveryBooked ? formatDateTime(quote.deliveryScheduledFor) : "No delivery date scheduled"} />

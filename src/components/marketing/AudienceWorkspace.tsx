@@ -1,6 +1,8 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import { currencySymbol } from "@/lib/format";
+import { useMoneyFormat } from "@/components/MoneyFormatProvider";
 import { useRouter } from "next/navigation";
 import {
   Archive,
@@ -449,10 +451,11 @@ function RuleEditor({ rule, fields, onChange, onRemove, canRemove }: { rule: Aud
 }
 
 function ValueEditor({ definition, operator, value, onChange }: { definition: FieldDefinition; operator: string; value: unknown; onChange: (value: unknown) => void }) {
+  const moneyFmt = useMoneyFormat();
   if (definition.kind === "boolean") return <select className="input" value={String(value ?? true)} onChange={(event) => onChange(event.target.value === "true")}><option value="true">Yes</option><option value="false">No</option></select>;
   if (definition.kind === "money") {
     const cents = Number(value ?? 0);
-    return <div className="relative"><span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-xs text-muted-foreground">R</span><input type="number" min="0" step="0.01" className="input pl-7" value={Number.isFinite(cents) ? cents / 100 : 0} onChange={(event) => onChange(Math.round(Number(event.target.value || 0) * 100))} /></div>;
+    return <div className="relative"><span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-xs text-muted-foreground">{currencySymbol(moneyFmt)}</span><input type="number" min="0" step="0.01" className="input pl-7" value={Number.isFinite(cents) ? cents / 100 : 0} onChange={(event) => onChange(Math.round(Number(event.target.value || 0) * 100))} /></div>;
   }
   if (definition.kind === "date") return <input type="date" className="input" value={String(value ?? "")} onChange={(event) => onChange(event.target.value)} />;
   if (definition.kind === "select" && operator === "in") {

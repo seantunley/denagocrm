@@ -1,5 +1,6 @@
 import { Document, Page, View, Text, StyleSheet } from "@react-pdf/renderer";
 import { formatDate, formatZAR, type Regional } from "@/lib/format";
+import { withCurrency } from "@/lib/currencyRules";
 import { documentTotals, feeRows, includedLines, lineNetCents } from "@/lib/pricing";
 import { quoteBillTo, type BillToFleet } from "@/lib/quoteBillTo";
 import type { QuoteForPrint } from "@/lib/docbuilder/merge";
@@ -139,7 +140,8 @@ export default function QuoteDoc({
 }) {
   const footer = brandFooterContent((k) => company[k]);
   const title = [company.name, company.tagline].filter(Boolean).join(" — ");
-  const money = (cents: number) => formatZAR(cents, regional);
+  // Every amount in the quote's own currency (multicurrency module; null = the base).
+  const money = (cents: number) => formatZAR(cents, withCurrency(regional, quote.currency));
   const date = (d: Date | null) => formatDate(d, regional);
   const lineNet = lineNetCents;
   // Fees and delivery are part of the quoted price — itemised as rows below as

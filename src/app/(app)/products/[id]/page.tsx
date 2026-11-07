@@ -12,7 +12,8 @@ import { SaveForm, SaveButton } from "@/components/SaveForm";
 import ProductShowcaseForm from "@/components/ProductShowcaseForm";
 import { EntityDetailShell } from "@/components/entity-detail-shell";
 import { StatusPill } from "@/components/visual-system";
-import { formatZAR } from "@/lib/format";
+import { currencySymbol, formatZAR } from "@/lib/format";
+import { getRegionalSettings } from "@/lib/settings";
 
 export default async function ProductDetailPage({
   params,
@@ -30,6 +31,7 @@ export default async function ProductDetailPage({
   });
   if (!product) notFound();
 
+  const moneyFmt = await getRegionalSettings();
   return (
     <EntityDetailShell
       backHref="/products"
@@ -39,7 +41,7 @@ export default async function ProductDetailPage({
       status={<StatusPill tone={product.active ? "success" : "neutral"}>{product.active ? "Active" : "Inactive"}</StatusPill>}
       description={product.sku ? `SKU ${product.sku}` : "No SKU recorded"}
       facts={[
-        { label: "Base price", value: formatZAR(product.basePriceCents) },
+        { label: "Base price", value: formatZAR(product.basePriceCents, moneyFmt) },
         { label: "Colours", value: product.colors.length },
         { label: "Open leads", value: product._count.leads },
         { label: "Vehicles", value: product._count.vehicles },
@@ -69,7 +71,7 @@ export default async function ProductDetailPage({
             </div>
           </div>
           <div>
-            <label className="label">Base price (R)</label>
+            <label className="label">Base price ({currencySymbol(moneyFmt)})</label>
             <input
               name="basePrice"
               className="input"

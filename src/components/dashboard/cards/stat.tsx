@@ -79,7 +79,7 @@ const PRECEDING_PERIOD: Record<PeriodId, PeriodId | null> = {
   older_90d: null,
 };
 
-export async function renderStat(card: StatCard, _ctx: RenderContext): Promise<RenderedCard> {
+export async function renderStat(card: StatCard, ctx: RenderContext): Promise<RenderedCard> {
   const source = sourceById(card.query.source);
   const asMoney = source
     ? isMoneyField(metricField(source, card.metric, await scopeContext(source)))
@@ -122,7 +122,7 @@ export async function renderStat(card: StatCard, _ctx: RenderContext): Promise<R
       </div>
       <div className="mt-1.5 flex items-baseline gap-2">
         <p className="truncate text-2xl font-semibold tabular-nums text-foreground">
-          {formatMetric(value, asMoney)}
+          {formatMetric(value, asMoney, ctx.money)}
         </p>
         {delta !== null && (
           <span

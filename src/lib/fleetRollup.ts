@@ -90,6 +90,8 @@ export type FleetLead = {
   contactId: string | null;
   title: string;
   valueCents: number;
+  /** NULL = the base currency. */
+  currency: string | null;
   status: string;
   stage: { name: string };
 };
@@ -141,6 +143,8 @@ export type FleetQuote = {
   fleetId: string | null;
   number: number;
   status: string;
+  /** NULL = the base currency. */
+  currency: string | null;
   createdAt: Date;
   signedAt: Date | null;
   items: Array<{ qty: number; unitPriceCents: number; discountPct: number; selected: boolean; optional: boolean }>;
@@ -264,6 +268,7 @@ export async function loadFleetRollup(
       fleetId: true,
       number: true,
       status: true,
+      currency: true,
       createdAt: true,
       signedAt: true,
       // Enough to price each row through the shared engine — the fleet page must
@@ -310,6 +315,7 @@ export async function loadFleetRollup(
           contactId: true,
           title: true,
           valueCents: true,
+          currency: true,
           status: true,
           stage: { select: { name: true } },
         },

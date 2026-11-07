@@ -13,7 +13,7 @@ import { uploadDocument } from "@/app/actions/documents";
 import { recordQuotePayment } from "@/app/actions/quotePayments";
 import { markDepositPaid, rescheduleDelivery, scheduleDelivery } from "@/app/actions/fulfilment";
 import { johannesburgDateKey } from "@/lib/activityDay";
-import { getSetting } from "@/lib/settings";
+import { getSetting, getRegionalSettings } from "@/lib/settings";
 import { isCodexConnected } from "@/lib/codex";
 import { ASSISTANT_PROFILE_KEY, parseProfile } from "@/lib/assistantSoul";
 import { CONFIRM_KEY, CUSTOMER_FIELDS, QUOTE_ADD_MAX_FEES, QUOTE_ADD_MAX_FEE_RANDS, QUOTE_BUILD_MAX_LINES, STALE_CARD, type ActionCard } from "@/lib/assistantActions";
@@ -22,6 +22,7 @@ import { QUOTE_PDF_SOURCE } from "@/lib/assistantWhatsAppRules";
 import { tenantOrigin } from "@/lib/tenantOrigin";
 import { payableTotalCents } from "@/lib/pricing";
 import { formatZAR } from "@/lib/format";
+import { withCurrency } from "@/lib/currencyRules";
 
 /** How long a Confirm in the CRM waits for a built quote's PDF to go to WhatsApp before leaving it to the sweep. */
 const QUOTE_PDF_SEND_WAIT_MS = 4_000;
@@ -154,6 +155,8 @@ export async function runAssistantAction(
   /** `quote`: the draft a quote_build created. */
 ): Promise<{ ok: boolean; error?: string; success?: string; href?: string; unchanged?: boolean; resumable?: boolean; quote?: { id: string; number: number } }> {
   return withActingStaffScope(async () => {
+    // Inside the scope, after nothing: a settings read is the workspace's, never before the action is bound.
+    const moneyFmt = await getRegionalSettings();
     const user = await requireAnyPermission(...ASSISTANT_PERMISSIONS);
     if (!(await isModuleEnabled("automation"))) {
       return untouched("Ask the CRM is part of the Automation & AI module, which is off for this workspace.");
@@ -385,7 +388,7 @@ export async function runAssistantAction(
           const result = await markDepositPaid(card.quoteId, form);
           if (result?.error) return { ok: false, error: result.error };
           await confirmedOn("record the deposit", { leadId: card.leadId, contactId: null });
-          return { ok: true, success: `Deposit of ${formatZAR(card.amountCents)} recorded on Q-${card.quoteNumber}, proof filed` };
+          return { ok: true, success: `Deposit of ${formatZAR(card.amountCents, withCurrency(moneyFmt, card.currency))} recorded on Q-${card.quoteNumber}, proof filed` };
         }
         const form = new FormData();
         form.set("amount", amount);
@@ -396,7 +399,7 @@ export async function runAssistantAction(
         const result = await recordQuotePayment(card.quoteId, form);
         if (result?.error) return { ok: false, error: result.error };
         await confirmedOn("record a payment", { leadId: card.leadId, contactId: null });
-        const paid = `Payment of ${formatZAR(card.amountCents)} recorded on Q-${card.quoteNumber}`;
+        const paid = `Payment of ${formatZAR(card.amountCents, withCurrency(moneyFmt, card.currency))} recorded on Q-${card.quoteNumber}`;
         if (!card.uploadId) return { ok: true, success: paid };
         // The proof, filed on the quote ONCE (its own key, derived from the payment's): a second Confirm records no
         // second payment (the ledger's key) and files no second proof. If it may not have been filed, the payment is
@@ -813,7 +816,7 @@ export async function runAssistantAction(
         // The total as the QUOTE works it out (VAT, discounts) — read back from
         // what was saved, never computed on the side.
         const built = await prisma.quote.findUnique({ where: { id: saved.quote.id }, include: { items: true, fees: true } }).catch(() => null);
-        const total = built ? formatZAR(Math.round(payableTotalCents(built))) : null;
+        const total = built ? formatZAR(Math.round(payableTotalCents(built)), withCurrency(moneyFmt, built.currency)) : null;
         // ITS PDF is already queued for them: the save wrote it with the quote, as an
         // update (source "quote_pdf", naming the quote) that the assistant's own
         // delivery sends — claimed, retried by the half-hourly sweep, to a phone it
@@ -900,7 +903,7 @@ export async function runAssistantAction(
         });
         await recordTaskProgress(user.id, card.taskId, { done: `Q-${saved.quote.number} changed` });
         const after = await prisma.quote.findUnique({ where: { id: quote.id }, include: { items: true, fees: true } }).catch(() => null);
-        const total = after ? formatZAR(Math.round(payableTotalCents(after))) : null;
+        const total = after ? formatZAR(Math.round(payableTotalCents(after)), withCurrency(moneyFmt, after.currency)) : null;
         await sendQueuedPdfNow();
         return {
           ok: true,
@@ -966,7 +969,7 @@ export async function runAssistantAction(
         });
         await recordTaskProgress(user.id, card.taskId, { done: `Added to Q-${saved.quote.number}` });
         const after = await prisma.quote.findUnique({ where: { id: quote.id }, include: { items: true, fees: true } }).catch(() => null);
-        const total = after ? formatZAR(Math.round(payableTotalCents(after))) : null;
+        const total = after ? formatZAR(Math.round(payableTotalCents(after)), withCurrency(moneyFmt, after.currency)) : null;
         await sendQueuedPdfNow();
         return {
           ok: true,

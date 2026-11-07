@@ -3,9 +3,11 @@ import { ArrowRight, Sun } from "lucide-react";
 import { requireAnyPermission } from "@/lib/permissions";
 import { loadTodayLeads, TODAY_CANDIDATE_CAP } from "@/lib/leadScoreLoader";
 import { formatZAR } from "@/lib/format";
+import { withCurrency } from "@/lib/currencyRules";
 import { PageHeader } from "@/components/page-header";
 import { EmptyState } from "@/components/visual-system";
 import { LeadScoreBadge } from "@/components/LeadScoreBadge";
+import { getRegionalSettings } from "@/lib/settings";
 
 /**
  * Today — who to contact next, best first.
@@ -32,6 +34,7 @@ export default async function TodayPage({
   const { leads, truncated } = await loadTodayLeads(user, { mine });
   const shown = leads.slice(0, SHOWN);
 
+  const moneyFmt = await getRegionalSettings();
   return (
     <div className="space-y-5">
       <PageHeader
@@ -84,7 +87,7 @@ export default async function TodayPage({
                   </Link>
                   <span className="text-xs text-muted-foreground">{lead.stageName}</span>
                   {lead.valueCents > 0 && (
-                    <span className="text-xs tabular-nums text-muted-foreground">{formatZAR(lead.valueCents)}</span>
+                    <span className="text-xs tabular-nums text-muted-foreground">{formatZAR(lead.valueCents, withCurrency(moneyFmt, lead.currency))}</span>
                   )}
                 </div>
                 {lead.opportunity && (
