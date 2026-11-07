@@ -25,7 +25,6 @@ import { Button, buttonVariants } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { EmptyState, SectionHeading, StatusPill, Surface, WorkspaceToolbar } from "@/components/visual-system";
 import { WorkspaceHero } from "@/components/workspace-hero";
-import ConfirmDelete from "@/components/ConfirmDelete";
 import { deleteQuote } from "@/app/actions/quotes";
 import {
   MobileDataCard,
@@ -339,8 +338,7 @@ export default async function QuotesPage({
                       </MobileDataFields>
                       <div className="mt-2 flex items-center justify-end gap-3">
                         <Link href={`/deals/${quote.id}`} className={`${buttonVariants({ variant: "outline", size: "sm" })} mr-auto`}>Open deal</Link>
-                        <QuoteRowActions quoteId={quote.id} number={quote.number} status={quote.status} signed={Boolean(quote.signedAt)} canCancel={canCancel} canDuplicate={canDuplicate} />
-                        <ConfirmDelete action={deleteQuote.bind(null, quote.id)} title={`Delete quote Q-${quote.number}?`} description="Moves the quote to Trash (restorable for 60 days)." trigger="Delete quote" triggerClass="text-xs text-slate-500 hover:text-red-400" disabled={!canDelete} disabledReason="Your role can't delete quotes." />
+                        <QuoteRowActions quoteId={quote.id} number={quote.number} status={quote.status} signed={Boolean(quote.signedAt)} emailed={Boolean(quote.emailedAt)} canSend={canCancel} canCancel={canCancel} canDuplicate={canDuplicate} deleteAction={deleteQuote.bind(null, quote.id)} canDelete={canDelete} />
                       </div>
                     </MobileDataCard>
                     </RecordContextMenu>
@@ -400,8 +398,7 @@ export default async function QuotesPage({
                           <td className="text-slate-400">{formatDate(quote.createdAt)}{quote.createdBy ? ` · ${quote.createdBy.name}` : ""}</td>
                           <td className="whitespace-nowrap text-right">
                             <Link href={`/deals/${quote.id}`} className={`${buttonVariants({ variant: "outline", size: "sm" })} mr-3`}>Open deal</Link>
-                            <QuoteRowActions className="mr-3" quoteId={quote.id} number={quote.number} status={quote.status} signed={Boolean(quote.signedAt)} canCancel={canCancel} canDuplicate={canDuplicate} />
-                            <ConfirmDelete action={deleteQuote.bind(null, quote.id)} title={`Delete quote Q-${quote.number}?`} description="Moves the quote to Trash (restorable for 60 days)." trigger="Delete" triggerClass="text-xs text-slate-500 hover:text-red-400" disabled={!canDelete} disabledReason="Your role can't delete quotes." />
+                            <QuoteRowActions quoteId={quote.id} number={quote.number} status={quote.status} signed={Boolean(quote.signedAt)} emailed={Boolean(quote.emailedAt)} canSend={canCancel} canCancel={canCancel} canDuplicate={canDuplicate} deleteAction={deleteQuote.bind(null, quote.id)} canDelete={canDelete} />
                           </td>
                         </tr>
                         </RecordContextMenu>

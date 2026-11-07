@@ -633,7 +633,7 @@ export default async function LeadDetailPage({
                                 </a>
                               ))}
                               {!q.supersededAt && (
-                                <QuoteRowActions quoteId={q.id} number={q.number} status={q.status} signed={Boolean(q.signedAt)} canCancel={canCancelQuotes} canDuplicate={canDuplicateQuotes} />
+                                <QuoteRowActions quoteId={q.id} number={q.number} status={q.status} signed={Boolean(q.signedAt)} emailed={Boolean(q.emailedAt)} canSend={canCancelQuotes} canCancel={canCancelQuotes} canDuplicate={canDuplicateQuotes} />
                               )}
                             </li>
                           );

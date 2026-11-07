@@ -22,8 +22,11 @@ export default function QuoteEmailDialog({
   disabledReason,
   alreadyEmailed,
   onSent,
+  compact = false,
 }: {
   quoteId: string;
+  /** A small "Send" button, for a row in a list. The dialog is the same: nothing goes until Send is clicked in it. */
+  compact?: boolean;
   disabled?: boolean;
   disabledReason?: string;
   /** This quote has been emailed before: the button then offers to email it AGAIN, not as if for the first time. */
@@ -67,8 +70,8 @@ export default function QuoteEmailDialog({
 
   return (
     <>
-      <Button type="button" variant="outline" onClick={openDialog} disabled={disabled} title={disabled ? disabledReason : undefined}>
-        <Mail />{alreadyEmailed ? "Email again" : "Email quote"}
+      <Button type="button" variant="outline" size={compact ? "sm" : "default"} onClick={openDialog} disabled={disabled} title={disabled ? disabledReason : compact && alreadyEmailed ? "Emailed before — this sends it again" : undefined}>
+        <Mail />{compact ? "Send" : alreadyEmailed ? "Email again" : "Email quote"}
       </Button>
       <Dialog open={open} onOpenChange={(next) => { if (!sending) setOpen(next); }}>
         <ResponsiveDialogContent className="z-[110] sm:max-w-xl">

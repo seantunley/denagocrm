@@ -72,19 +72,13 @@ test("the split entry point is gone, not merely bypassed", () => {
  */
 test("every doorway to deleting a quote goes through the same action and the same dialog", () => {
   // Two doorways now, not three — the record page is a redirect to the editor.
-  const surfaces = [
-    "src/app/(app)/quotes/page.tsx",
-    "src/components/quotes/QuoteEditorDialog.tsx",
-  ];
-  for (const rel of surfaces) {
-    const code = shipped(rel);
-    assert.match(code, /<ConfirmDelete/, `${rel} must use the shared confirmation, not its own`);
-    assert.match(
-      code,
-      /action=\{deleteQuote\.bind\(null, (quote|savedQuote)\.id\)\}/,
-      `${rel} must bind the shared action — the rules live inside it`,
-    );
-  }
+  // The list's is the row's More menu (QuoteRowActions), handed the bound action.
+  const editor = shipped("src/components/quotes/QuoteEditorDialog.tsx");
+  assert.match(editor, /<ConfirmDelete/, "the editor must use the shared confirmation, not its own");
+  assert.match(editor, /action=\{deleteQuote\.bind\(null, savedQuote\.id\)\}/, "the editor must bind the shared action — the rules live inside it");
+  assert.match(shipped("src/app/(app)/quotes/page.tsx"), /deleteAction=\{deleteQuote\.bind\(null, quote\.id\)\}/, "the list must bind the shared action");
+  const row = shipped("src/components/quotes/QuoteRowActions.tsx");
+  assert.match(row, /<ConfirmDelete\s+action=\{deleteAction\}/, "the row uses the shared confirmation with that action");
 });
 
 test("the reason is required of the caller, and recorded by the action", () => {
@@ -121,13 +115,14 @@ test("both doorways grey the delete out when the role can't use it", () => {
   // reason had been typed. Greying it out is a HINT: deleteQuote() still runs
   // the same check, so a client that ignores this gets refused anyway.
   for (const rel of [
-    "src/app/(app)/quotes/page.tsx",
+    "src/components/quotes/QuoteRowActions.tsx",
     "src/components/quotes/QuoteEditorDialog.tsx",
   ]) {
     const code = shipped(rel);
     assert.match(code, /disabled=\{!canDelete\}/, `${rel} must grey the control out`);
     assert.match(code, /disabledReason=/, `${rel} must say why, not just go grey`);
   }
+  assert.match(shipped("src/app/(app)/quotes/page.tsx"), /canDelete=\{canDelete\}/, "the list hands the row its permission");
   const confirm = shipped("src/components/ConfirmDelete.tsx");
   assert.match(confirm, /disabled=\{disabled\}/, "the trigger must actually be disabled, not merely faded");
   assert.match(confirm, /opacity-40/, "…and look it");
