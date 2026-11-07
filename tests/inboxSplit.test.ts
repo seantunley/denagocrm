@@ -32,6 +32,9 @@ test("the deal rail shows only deals the viewer may open, with stage, value, nex
   assert.match(page, /const dealIds = openable === null \? leadIds : leadIds\.filter\(\(id\) => openable\.has\(id\)\);/);
   assert.match(page, /activities: \{ where: \{ status: "planned", availabilityBlock: false \}, orderBy: \{ dueDate: "asc" \}, take: 1/);
   assert.match(page, /canBookTestDrive: automotiveOn && canManageActivities/, "the /test-drives gate");
+  // The deal's value in ITS currency, not the workspace's.
+  assert.match(page, /valueCents: true, currency: true,/);
+  assert.match(page, /formatZAR\(deal\.valueCents, withCurrency\(money, deal\.currency\)\)/);
   assert.match(page, /hasPermission\(user, "quotes\.create"\)/);
   const rail = src("src/components/SocialThreadList.tsx");
   assert.match(rail, /\{canCreateQuote \? <CreateQuoteButton leadId=\{deal\.id\} \/> : null\}/);

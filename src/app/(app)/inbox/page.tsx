@@ -19,6 +19,7 @@ import { collaborationForThreads } from "@/lib/inboxCollaboration";
 import { listActingTenantStaff } from "@/lib/tenantActor";
 import { getRegionalSettings, resolveIntegrationBundle } from "@/lib/settings";
 import { formatDateTime, formatZAR } from "@/lib/format";
+import { withCurrency } from "@/lib/currencyRules";
 import { EmptyState, SectionHeading, Surface } from "@/components/visual-system";
 import { WorkspaceHero } from "@/components/workspace-hero";
 import { SaveForm, SaveButton } from "@/components/SaveForm";
@@ -97,7 +98,7 @@ export default async function InboxPage({ searchParams }: { searchParams: Promis
     ? await prisma.lead.findMany({
         where: { id: { in: dealIds }, deletedAt: null },
         select: {
-          id: true, title: true, status: true, valueCents: true, contactId: true,
+          id: true, title: true, status: true, valueCents: true, currency: true, contactId: true,
           stage: { select: { name: true, color: true } },
           activities: { where: { status: "planned", availabilityBlock: false }, orderBy: { dueDate: "asc" }, take: 1, select: { summary: true, dueDate: true } },
         },
@@ -108,7 +109,8 @@ export default async function InboxPage({ searchParams }: { searchParams: Promis
     title: deal.title,
     status: deal.status,
     stage: deal.stage,
-    value: deal.valueCents ? formatZAR(deal.valueCents, money) : null,
+    // In the deal's own currency (multicurrency module; NULL = the base).
+    value: deal.valueCents ? formatZAR(deal.valueCents, withCurrency(money, deal.currency)) : null,
     contactId: deal.contactId,
     next: deal.activities[0] ?? null,
   }]));
