@@ -1,7 +1,39 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { readFileSync } from "node:fs";
-import { baseAndOthers, baseValueCents, formatTotals, nonBaseTotals, othersText } from "../src/lib/currencyRules";
+import { baseAndOthers, baseValueCents, formatTotals, nonBaseTotals, othersText, stageSegments } from "../src/lib/currencyRules";
+
+test("pipeline snapshot: every deal counts toward its stage; only base values are summed", () => {
+  const stage = (id: string, order: number) => ({ id, name: id, color: "#000", order });
+  // A pipeline holding ONLY foreign-currency deals still has deals — not "No open leads yet".
+  assert.deepEqual(
+    stageSegments(
+      [
+        { valueCents: 500_000, currency: "RUB", stage: stage("Quoted", 2) },
+        { valueCents: 100_000, currency: "USD", stage: stage("New", 1) },
+        { valueCents: 200_000, currency: "USD", stage: stage("Quoted", 2) },
+      ],
+      "ZAR",
+    ),
+    [
+      { name: "New", color: "#000", count: 1, value: 0 },
+      { name: "Quoted", color: "#000", count: 2, value: 0 },
+    ],
+  );
+  // Mixed: the base deal (NULL, or the base code itself) adds its value; the RUB one only its count.
+  assert.deepEqual(
+    stageSegments(
+      [
+        { valueCents: 300_000, currency: null, stage: stage("New", 1) },
+        { valueCents: 50_000, currency: "ZAR", stage: stage("New", 1) },
+        { valueCents: 900_000, currency: "RUB", stage: stage("New", 1) },
+      ],
+      "ZAR",
+    ),
+    [{ name: "New", color: "#000", count: 3, value: 350_000 }],
+  );
+  assert.match(src("src/lib/dashboard/cards.tsx"), /segments: stageSegments\(all, moneyFmt\.currency\)/);
+});
 import { homeNumbers } from "../src/lib/home/focusRules";
 
 const src = (rel: string) => readFileSync(rel, "utf8");

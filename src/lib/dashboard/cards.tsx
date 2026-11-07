@@ -50,7 +50,7 @@ import {
   pctDelta,
 } from "./data";
 import { getRegionalSettings } from "@/lib/settings";
-import { formatTotals, inBaseCurrency, totalsByCurrency } from "@/lib/currencyRules";
+import { formatTotals, stageSegments, totalsByCurrency } from "@/lib/currencyRules";
 
 /**
  * The dashboard card catalogue — the executable half. ./registry.ts declares
@@ -313,19 +313,9 @@ export const DASHBOARD_CARD_IMPLS: Record<DashboardCardId, DashboardCardImpl> = 
         }),
         getRegionalSettings(),
       ]);
-      // The bar's segments are one scale, so base currency only; the total names the rest.
-      const rows = all.filter((l) => inBaseCurrency(l, moneyFmt.currency));
-      const segMap = new Map<string, PipeSeg & { order: number }>();
-      for (const l of rows) {
-        const cur =
-          segMap.get(l.stage.id) ??
-          { name: l.stage.name, color: l.stage.color, count: 0, value: 0, order: l.stage.order };
-        cur.count += 1;
-        cur.value += l.valueCents;
-        segMap.set(l.stage.id, cur);
-      }
+      // Every deal counts toward its stage; only base-currency values are summed. The total names the rest.
       return {
-        segments: [...segMap.values()].sort((a, b) => a.order - b.order) as PipeSeg[],
+        segments: stageSegments(all, moneyFmt.currency) satisfies PipeSeg[],
         totalValue: formatTotals(totalsByCurrency(all, (l) => ({ cents: l.valueCents, currency: l.currency }), moneyFmt.currency), moneyFmt, true),
       };
     },

@@ -120,3 +120,24 @@ export function nonBaseTotals(rows: readonly { valueCents: number; currency?: st
 export function inBaseCurrency(record: { currency?: string | null }, base: string): boolean {
   return !record.currency || record.currency === base;
 }
+
+type StageLead = {
+  valueCents: number;
+  currency?: string | null;
+  stage: { id: string; name: string; color: string; order: number };
+};
+
+/**
+ * Open deals per stage, in stage order. EVERY deal counts — a RUB-only pipeline still
+ * has deals — but only base-currency values are summed, since one figure can't add currencies.
+ */
+export function stageSegments(leads: readonly StageLead[], base: string) {
+  const byStage = new Map<string, { name: string; color: string; count: number; value: number; order: number }>();
+  for (const lead of leads) {
+    const seg = byStage.get(lead.stage.id) ?? { name: lead.stage.name, color: lead.stage.color, count: 0, value: 0, order: lead.stage.order };
+    seg.count += 1;
+    if (inBaseCurrency(lead, base)) seg.value += lead.valueCents;
+    byStage.set(lead.stage.id, seg);
+  }
+  return [...byStage.values()].sort((a, b) => a.order - b.order).map(({ order: _order, ...seg }) => seg);
+}
