@@ -19,9 +19,10 @@ import ConfirmDelete from "@/components/ConfirmDelete";
 import ModalTrigger from "@/components/Modal";
 import { buttonVariants } from "@/components/ui/button";
 import { WorkspaceHero } from "@/components/workspace-hero";
-import { formatZAR } from "@/lib/format";
+import { currencySymbol, formatZAR } from "@/lib/format";
 import { jobCardTotals } from "@/lib/workshop-constants";
 import { EmptyState, StatusPill } from "@/components/visual-system";
+import { getRegionalSettings } from "@/lib/settings";
 
 export const dynamic = "force-dynamic";
 
@@ -88,6 +89,7 @@ export default async function WorkshopSettingsPage() {
     prisma.servicePackage.findMany({ orderBy: { name: "asc" }, include: { items: true } }),
   ]);
 
+  const moneyFmt = await getRegionalSettings();
   return (
     <div className="space-y-10">
       <WorkspaceHero
@@ -97,7 +99,7 @@ export default async function WorkshopSettingsPage() {
         description="Configure labour value, physical capacity and reusable service packages for consistent job-card operations."
         actions={<Link href="/jobcards" className="btn-secondary btn-sm"><Wrench className="size-4" /> Open job cards</Link>}
         stats={[
-          { label: "Labour rate", value: `${formatZAR(rateCents)} / h`, detail: "Default technician value", icon: Wrench, tone: "primary" },
+          { label: "Labour rate", value: `${formatZAR(rateCents, moneyFmt)} / h`, detail: "Default technician value", icon: Wrench, tone: "primary" },
           { label: "Active bays", value: bays.filter((bay) => bay.active).length, detail: `${bays.length} configured`, icon: Warehouse, tone: bays.some((bay) => bay.active) ? "success" : "warning" },
           { label: "Service packages", value: packages.filter((pkg) => pkg.active).length, detail: `${packages.length} configured`, icon: Package },
           { label: "Package items", value: packages.reduce((total, pkg) => total + pkg.items.length, 0), detail: "Parts & labour presets", icon: Boxes },
@@ -113,7 +115,7 @@ export default async function WorkshopSettingsPage() {
         <p className="text-sm text-slate-400">Used to value logged technician time. Individual job cards can override it.</p>
         <SaveForm success="Labour rate saved" resetOnSuccess={false} action={saveDefaultLabourRate} className="card flex flex-wrap items-end gap-3">
           <div className="flex-1 min-w-48">
-            <label className="label" htmlFor="labourRate">Rate per hour (R)</label>
+            <label className="label" htmlFor="labourRate">Rate per hour ({currencySymbol(moneyFmt)})</label>
             <input id="labourRate" name="labourRate" className="input tabular-nums" inputMode="decimal" defaultValue={(rateCents / 100).toFixed(2)} />
           </div>
           <SaveButton className="btn-primary">Save rate</SaveButton>
@@ -184,7 +186,7 @@ export default async function WorkshopSettingsPage() {
                       {!pkg.active && <StatusPill tone="neutral">Inactive</StatusPill>}
                     </div>
                     <div className="flex items-center gap-2 shrink-0">
-                      <span className="text-sm font-medium tabular-nums">{formatZAR(total)}</span>
+                      <span className="text-sm font-medium tabular-nums">{formatZAR(total, moneyFmt)}</span>
                       <ModalTrigger label={<><Pencil className="size-4" />Edit</>} title={`Edit ${pkg.name}`} buttonClass={buttonVariants({ size: "sm", variant: "outline" })}>
                         <PackageForm pkg={pkg} />
                       </ModalTrigger>
@@ -197,7 +199,7 @@ export default async function WorkshopSettingsPage() {
                         <div key={i.id} className="flex items-center justify-between gap-3 py-1.5">
                           <span className="min-w-0 truncate text-muted-foreground"><span className="capitalize">{i.kind}</span> · {i.qty}× {i.description}</span>
                           <span className="flex items-center gap-2 shrink-0">
-                            <span className="tabular-nums">{formatZAR(Math.round(i.qty * i.unitPriceCents))}</span>
+                            <span className="tabular-nums">{formatZAR(Math.round(i.qty * i.unitPriceCents), moneyFmt)}</span>
                             <SaveForm success="Line item removed" resetOnSuccess={false} action={deletePackageItem.bind(null, i.id)}><SaveButton className="text-xs text-slate-600 hover:text-red-500">✕</SaveButton></SaveForm>
                           </span>
                         </div>

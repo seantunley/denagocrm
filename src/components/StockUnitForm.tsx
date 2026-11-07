@@ -1,6 +1,8 @@
 "use client";
 
 import { useState } from "react";
+import { currencySymbol } from "@/lib/format";
+import { useMoneyFormat } from "@/components/MoneyFormatProvider";
 import {
   BadgeDollarSign,
   BatteryCharging,
@@ -37,6 +39,7 @@ export default function StockUnitForm({
   products: StockUnitProduct[];
   variant?: CaptureFormVariant;
 }) {
+  const moneyFmt = useMoneyFormat();
   const [productId, setProductId] = useState("");
   const [color, setColor] = useState("");
   const [serial, setSerial] = useState("");
@@ -71,7 +74,7 @@ export default function StockUnitForm({
           summary={[
             { label: "State", value: "Available" },
             { label: "Identity", value: serial.trim() || "Serial pending" },
-            { label: "Acquisition cost", value: cost.trim() ? `R ${cost}` : "Not recorded" },
+            { label: "Acquisition cost", value: cost.trim() ? `${currencySymbol(moneyFmt)} ${cost}` : "Not recorded" },
           ]}
         />
       )}
@@ -125,7 +128,7 @@ export default function StockUnitForm({
             placeholder="Serial or VIN"
           />
         </CaptureField>
-        <CaptureField label="Acquisition cost (R)">
+        <CaptureField label={`Acquisition cost (${currencySymbol(moneyFmt)})`}>
           <div className="relative">
             <BadgeDollarSign className="pointer-events-none absolute left-3.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
             <input name="cost" className="input pl-10 tabular-nums" inputMode="decimal" value={cost} onChange={(event) => setCost(event.target.value)} placeholder="0.00" />

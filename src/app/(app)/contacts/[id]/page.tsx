@@ -50,6 +50,9 @@ import { computeDue, dueColors, dueLabels } from "@/lib/serviceDue";
 import { isModuleEnabled } from "@/lib/modules/enabled";
 import { EntityDetailShell, PhoneActions, WideActions } from "@/components/entity-detail-shell";
 import { StatusPill } from "@/components/visual-system";
+import { getRegionalSettings } from "@/lib/settings";
+import { getCurrencyOptions } from "@/lib/currency";
+import { withCurrency } from "@/lib/currencyRules";
 
 const RESEARCH_SUBJECT = "🔎 AI research";
 
@@ -87,6 +90,14 @@ export default async function ContactDetailPage({
     // The statement route's own gate: this customer (already proven) and quotes at all.
     hasAnyPermission(user, "quotes.view_all", "quotes.view_owned"),
   ]);
+  // Multicurrency module: the currencies this customer has quotes in, base first — a statement each.
+  const currencyOptions = await getCurrencyOptions();
+  const statementCurrencies = currencyOptions.on
+    ? [currencyOptions.base, ...[...new Set(
+        (await prisma.quote.groupBy({ by: ["currency"], where: { contactId: id, deletedAt: null, currency: { not: null } } }))
+          .map((row) => row.currency as string),
+      )].filter((code) => code !== currencyOptions.base).sort()]
+    : [currencyOptions.base];
   // THE QUOTES THIS VIEWER MAY OPEN — not every quote on the customer. Opening a customer is not permission to
   // read their quotations: the sidebar's latest quote (number, status, value), the Documents tab and the email
   // composer's quote buttons all read `contact.quotes`, so it is narrowed here, once (review of #891).
@@ -161,6 +172,7 @@ export default async function ContactDetailPage({
     // What the customer actually pays — fees and delivery included, which is
     // why the query above loads them.
     totalCents: payableTotalCents(quote),
+    currency: quote.currency,
     createdAt: quote.createdAt,
     documents: quoteDocuments.filter((document) => document.quoteId === quote.id),
   }));
@@ -269,6 +281,7 @@ export default async function ContactDetailPage({
   const health = await contactHealth(contact.id);
   const nextActivity = activities.find((activity) => activity.status === "planned");
   const visibleOpenDeals = myDeals.filter((deal) => deal.status === "open");
+  const moneyFmt = await getRegionalSettings();
   const context = <>
     <section className="rounded-xl border border-border bg-card p-4">
       <h2 className="mb-3 flex items-center gap-2 text-sm font-semibold"><CalendarDays className="size-4 text-muted-foreground" />Next action</h2>
@@ -285,9 +298,9 @@ export default async function ContactDetailPage({
       {visibleOpenDeals.length === 0 ? <p className="text-sm text-muted-foreground">No open deals.</p> : <ul className="divide-y divide-border">{visibleOpenDeals.map((deal) => <li key={deal.id} className="space-y-2 py-3 first:pt-0 last:pb-0">
         <Link href={`/leads/${deal.id}`} className="block break-words text-sm font-medium hover:text-primary">{deal.title}</Link>
         {deal.product && <p className="text-xs text-muted-foreground">{deal.product.name}</p>}
-        <div className="flex flex-wrap items-center justify-between gap-2 text-xs"><span className="rounded-md bg-muted px-2 py-1 text-muted-foreground">{deal.stage.name}</span><span>{formatZAR(deal.valueCents)}</span></div>
+        <div className="flex flex-wrap items-center justify-between gap-2 text-xs"><span className="rounded-md bg-muted px-2 py-1 text-muted-foreground">{deal.stage.name}</span><span>{formatZAR(deal.valueCents, withCurrency(moneyFmt, deal.currency))}</span></div>
       </li>)}</ul>}
-      {contact.quotes.length > 0 && <div className="mt-4 border-t border-border pt-3"><p className="text-xs text-muted-foreground">Latest quote</p><TabLink tab="documents" className="mt-1 block text-left text-sm hover:text-primary">Q-{contact.quotes[0].number} · {contact.quotes[0].status}</TabLink><p className="mt-1 text-xs text-muted-foreground">{formatZAR(payableTotalCents(contact.quotes[0]))}</p></div>}
+      {contact.quotes.length > 0 && <div className="mt-4 border-t border-border pt-3"><p className="text-xs text-muted-foreground">Latest quote</p><TabLink tab="documents" className="mt-1 block text-left text-sm hover:text-primary">Q-{contact.quotes[0].number} · {contact.quotes[0].status}</TabLink><p className="mt-1 text-xs text-muted-foreground">{formatZAR(payableTotalCents(contact.quotes[0]), withCurrency(moneyFmt, contact.quotes[0].currency))}</p></div>}
     </section>
     <details className="rounded-xl border border-border bg-card p-4"><summary className="cursor-pointer text-sm font-medium">Secure links</summary><div className="mt-3"><SecureLinksPanel contactId={contact.id} /></div></details>
   </>;
@@ -347,8 +360,14 @@ export default async function ContactDetailPage({
             Edit customer
           </Link>}
           {canViewStatement && <Link href={`/contacts/${contact.id}/statement`} target="_blank" rel="noreferrer" className="btn-secondary">
-            Account statement
+            Account statement{statementCurrencies.length > 1 ? ` (${statementCurrencies[0]})` : ""}
           </Link>}
+          {/* Multicurrency module: a statement per currency this customer has quotes in. */}
+          {canViewStatement && statementCurrencies.slice(1).map((code) => (
+            <Link key={code} href={`/contacts/${contact.id}/statement?currency=${code}`} target="_blank" rel="noreferrer" className="btn-secondary">
+              Statement ({code})
+            </Link>
+          ))}
           {canDeleteContact && <ConfirmDelete
             triggerClass="btn-secondary text-red-400"
             action={deleteContact.bind(null, contact.id)}
@@ -525,7 +544,7 @@ export default async function ContactDetailPage({
                             >
                               {l.title}
                             </Link>
-                            <span className="text-xs text-slate-400">{formatZAR(l.valueCents)}</span>
+                            <span className="text-xs text-slate-400">{formatZAR(l.valueCents, withCurrency(moneyFmt, l.currency))}</span>
                             <span
                               className={`badge ${
                                 l.status === "won"

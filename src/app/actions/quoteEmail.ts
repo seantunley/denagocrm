@@ -19,7 +19,8 @@ import { deliverQuoteEmail, quotePdfFileName } from "@/lib/quoteEmail";
 import { emitQuoteJourneyEvent } from "@/lib/leadJourneyEvents";
 import { emailWithBanner, recordBannerSent } from "@/lib/signatureBannerStore";
 import { tenantOrigin } from "@/lib/tenantOrigin";
-import { getSetting } from "@/lib/settings";
+import { getSetting, getRegionalSettings } from "@/lib/settings";
+import { withCurrency } from "@/lib/currencyRules";
 import { getCompanyProfile } from "@/lib/companyProfile";
 import { SIGNATURE_DESIGN_KEY, buildSignature, parseSignatureDesign, placeSignatureInEmail, signatureCompanyFrom, signatureText } from "@/lib/signature";
 
@@ -64,6 +65,8 @@ async function quoteVars(quote: LoadedQuote, user: PermissionUser) {
   const name = (billTo.attention || billTo.name).trim();
   // The sender's own details sign the email (My account → job title, mobile).
   const sender = await prisma.user.findUnique({ where: { id: user.id }, select: { mobile: true, jobTitle: true } });
+  // The quote's total in ITS currency (multicurrency module; null = the base).
+  const moneyFmt = withCurrency(await getRegionalSettings(), quote.currency);
   return {
     to: billTo.email,
     vars: {
@@ -71,7 +74,7 @@ async function quoteVars(quote: LoadedQuote, user: PermissionUser) {
       first_name: name.split(/\s+/)[0] ?? "",
       document_title: `Quote Q-${quote.number}`,
       quote_number: `Q-${quote.number}`,
-      total: formatZAR(Math.round(payableTotalCents(quote))),
+      total: formatZAR(Math.round(payableTotalCents(quote)), moneyFmt),
       sender_name: user.name,
       sender_title: sender?.jobTitle ?? "",
       sender_mobile: sender?.mobile ?? "",

@@ -7,6 +7,8 @@ import { renderDocumentHtml } from "@/lib/doceditor/serialize";
 import { bindCtx, logoDataUri } from "@/lib/signing/render";
 import { getRegionalSettings } from "@/lib/settings";
 import { formatZAR } from "@/lib/format";
+import { getCurrencyOptions } from "@/lib/currency";
+import { withCurrency } from "@/lib/currencyRules";
 import { loadContactStatement, loadFleetStatement } from "@/lib/accountStatementLoader";
 import { billedElsewhereNote, statementDocTokens, statementRows, statementWarningsHtml } from "@/lib/statementDoc";
 import type { PermissionUser } from "@/lib/permissions";
@@ -53,15 +55,20 @@ export async function renderStatementDocHtml(opts: {
   id: string;
   user: PermissionUser;
   toolbarHtml?: string;
+  /** ?currency= — a statement covers one currency (multicurrency module). Absent = the base. */
+  currency?: string | null;
 }): Promise<StatementDocResult> {
   const layout = await statementPrintLayout();
   if (!layout) return { kind: "no-layout" };
 
-  const regional = await getRegionalSettings();
+  // One statement per currency (multicurrency module): the requested one when this workspace offers it.
+  const options = await getCurrencyOptions();
+  const currency = opts.currency && options.enabled.includes(opts.currency) ? opts.currency : options.base;
+  const regional = withCurrency(await getRegionalSettings(), currency);
   const fmt = (cents: number) => formatZAR(cents, regional);
   const loaded = opts.account === "contact"
-    ? await loadContactStatement(opts.user, opts.id, fmt)
-    : await loadFleetStatement(opts.user, opts.id, fmt);
+    ? await loadContactStatement(opts.user, opts.id, fmt, currency)
+    : await loadFleetStatement(opts.user, opts.id, fmt, currency);
   if (loaded.kind !== "ok") return loaded;
 
   // The workspace's company details, logo and regional settings — no record.

@@ -16,6 +16,7 @@ import { johannesburgDateKey } from "./activityDay";
 import { contactName } from "./format";
 import { listActingTenantStaff } from "./tenantActor";
 import { nurtureReasonLabel } from "./leadNurture";
+import { baseValueCents } from "./currencyRules";
 import { buildBrief, buildTeamRows, type BriefLead, type DaxBrief, type NurtureReview, type TeamRow } from "./daxBriefRules";
 
 export {
@@ -203,6 +204,7 @@ async function teamView(user: PermissionUser, leads: BriefLead[]): Promise<TeamR
         stage: { isClosed: false },
         ...(ids === null ? {} : { id: { in: ids } }),
         assignedToId: members === null ? { not: null } : { in: [...members] },
+        currency: null, // a summed figure: base currency only
       },
       _sum: { valueCents: true },
     }),
@@ -230,10 +232,13 @@ export const loadDaxBrief = cache(async (user: PermissionUser, now: Date = new D
     myAgenda(user, dayStart, dayEnd),
     getAccessibleQuoteIds(user),
   ]);
+  // The brief adds and ranks values, so it reads them in the base currency only: a deal in
+  // another currency (multicurrency module) still appears, it just carries no amount here.
+  const briefLeads = attention.leads.map((lead) => ({ ...lead, valueCents: baseValueCents(lead) }));
   const [viewed, deliveries, team, nurtureReviews] = await Promise.all([
     viewedQuotes(user, quoteIds),
     openDeliveries(user, quoteIds),
-    teamView(user, attention.leads),
+    teamView(user, briefLeads),
     dueNurtureReviews(user, dayEnd),
   ]);
 
@@ -241,8 +246,8 @@ export const loadDaxBrief = cache(async (user: PermissionUser, now: Date = new D
     now,
     userId: user.id,
     userName: user.name,
-    leads: attention.leads,
-    hot: today.leads,
+    leads: briefLeads,
+    hot: today.leads.map((lead) => ({ ...lead, valueCents: baseValueCents(lead) })),
     activities: agenda.activities,
     testDrives: agenda.testDrives,
     viewedQuotes: viewed,

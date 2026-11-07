@@ -104,6 +104,7 @@ export function buildQuoteEditorRecord(
     taxInclusive: quote.taxInclusive,
     depositType: quote.depositType,
     depositValue: quote.depositValue,
+    currency: quote.currency,
     fees: quote.fees.map((fee) => ({ id: fee.id, label: fee.label, kind: fee.kind, amountCents: fee.amountCents, taxRatePct: fee.taxRatePct })),
     versions: index
       .familyOf(quote.id)

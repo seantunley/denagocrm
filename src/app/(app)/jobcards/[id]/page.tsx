@@ -42,7 +42,7 @@ import { activeRecordRequest } from "@/lib/signing/record";
 import JobCardItemForm from "@/components/JobCardItemForm";
 import { AnnotatablePhoto, type AnnData } from "@/components/PhotoAnnotator";
 import DirectPhotoUploader from "@/components/DirectPhotoUploader";
-import { contactName, formatDate, formatDateTime, formatZAR } from "@/lib/format";
+import { contactName, currencySymbol, formatDate, formatDateTime, formatZAR } from "@/lib/format";
 import {
   ArrowLeft,
   CarFront,
@@ -82,6 +82,7 @@ import { jobNumberLabel, midSentence } from "@/lib/recordLabels";
 import { getRecordLabels } from "@/lib/recordLabelsServer";
 import ChecklistCard from "@/components/checklists/ChecklistCard";
 import { runsForHost, templatesForHostRecord } from "@/lib/checklists/store";
+import { getRegionalSettings } from "@/lib/settings";
 
 /**
  * One collapsible step in the job's flow. The current stage is expanded; done
@@ -223,6 +224,7 @@ export default async function JobCardDetailPage({
   const partLines = jobCard.items.filter((i) => i.kind === "part").length;
   const pendingApprovals = jobCard.approvals.filter((a) => a.status === "pending").length;
 
+  const moneyFmt = await getRegionalSettings();
   return (
     <div className="space-y-6">
       <Link href="/jobcards" className="inline-flex items-center gap-1.5 text-xs font-medium text-muted-foreground hover:text-foreground"><ArrowLeft className="size-3.5" />Back to {midSentence(labels.jobcard.many)}</Link>
@@ -294,9 +296,9 @@ export default async function JobCardDetailPage({
 
       <KpiGrid>
         <MetricCard icon={Gauge} label="Arrival mileage" value={jobCard.kmIn != null ? jobCard.kmIn.toLocaleString() : "—"} detail={!jobCard.vehicleId ? "No vehicle" : jobCard.kmIn != null ? "kilometres" : "Not captured"} />
-        <MetricCard icon={Package} label="Parts" value={formatZAR(Math.round(partsTotal))} detail={`${partLines} line items`} />
-        <MetricCard icon={Clock3} label="Labour" value={formatZAR(Math.round(labourTotal))} detail={`${actualHours} h logged`} />
-        <MetricCard icon={ClipboardCheck} label="Job total" value={formatZAR(Math.round(grandTotal))} detail="Customer-facing total" accent />
+        <MetricCard icon={Package} label="Parts" value={formatZAR(Math.round(partsTotal), moneyFmt)} detail={`${partLines} line items`} />
+        <MetricCard icon={Clock3} label="Labour" value={formatZAR(Math.round(labourTotal), moneyFmt)} detail={`${actualHours} h logged`} />
+        <MetricCard icon={ClipboardCheck} label="Job total" value={formatZAR(Math.round(grandTotal), moneyFmt)} detail="Customer-facing total" accent />
       </KpiGrid>
 
       {/* Guided flow — the current step is expanded, the rest collapse away ── */}
@@ -498,7 +500,7 @@ export default async function JobCardDetailPage({
                     <div className="min-w-48 flex-1">
                       <p className="font-medium">{a.description}</p>
                       <p className="text-xs text-muted-foreground">
-                        {a.amountCents ? formatZAR(a.amountCents) : "No price"}
+                        {a.amountCents ? formatZAR(a.amountCents, moneyFmt) : "No price"}
                         {a.decidedAt ? ` · ${a.decidedVia} · ${formatDate(a.decidedAt)}` : ""}
                         {a.notes ? ` · ${a.notes}` : ""}
                       </p>
@@ -530,7 +532,7 @@ export default async function JobCardDetailPage({
                   <input id="aw-desc" name="description" required className="input" placeholder="e.g. Replace worn brake pads" />
                 </div>
                 <div className="w-32">
-                  <label className="label" htmlFor="aw-amount">Est. cost (R)</label>
+                  <label className="label" htmlFor="aw-amount">Est. cost ({currencySymbol(moneyFmt)})</label>
                   <input id="aw-amount" name="amount" inputMode="decimal" className="input tabular-nums" placeholder="0.00" />
                 </div>
                 <SaveButton className="btn-primary">Request approval</SaveButton>
@@ -549,7 +551,7 @@ export default async function JobCardDetailPage({
         </StageSection>
 
         {/* 5 · Repair ────────────────────────────────────────────────────── */}
-        <StageSection n={5} label="Repair" state={stageState(4)} hint={`${partLines} parts · ${actualHours} h logged · ${formatZAR(Math.round(grandTotal))}`}>
+        <StageSection n={5} label="Repair" state={stageState(4)} hint={`${partLines} parts · ${actualHours} h logged · ${formatZAR(Math.round(grandTotal), moneyFmt)}`}>
           <div className="card">
             <h2 className="font-semibold mb-4">Parts &amp; labour</h2>
             <table className="table-base mb-4">
@@ -576,9 +578,9 @@ export default async function JobCardDetailPage({
                     <td className="capitalize">{i.kind}</td>
                     <td>{i.description}</td>
                     <td className="text-right">{i.qty}</td>
-                    <td className="text-right">{formatZAR(i.unitPriceCents)}</td>
+                    <td className="text-right">{formatZAR(i.unitPriceCents, moneyFmt)}</td>
                     <td className="text-right font-medium">
-                      {formatZAR(Math.round(i.qty * i.unitPriceCents))}
+                      {formatZAR(Math.round(i.qty * i.unitPriceCents), moneyFmt)}
                     </td>
                     <td className="text-right">
                       {!terminal && (
@@ -612,21 +614,21 @@ export default async function JobCardDetailPage({
               <dl className="text-sm space-y-1 w-56">
                 <div className="flex justify-between">
                   <dt className="text-slate-400">Parts</dt>
-                  <dd className="font-medium">{formatZAR(Math.round(partsTotal))}</dd>
+                  <dd className="font-medium">{formatZAR(Math.round(partsTotal), moneyFmt)}</dd>
                 </div>
                 <div className="flex justify-between">
                   <dt className="text-slate-400">Labour</dt>
-                  <dd className="font-medium">{formatZAR(Math.round(labourTotal))}</dd>
+                  <dd className="font-medium">{formatZAR(Math.round(labourTotal), moneyFmt)}</dd>
                 </div>
                 {otherTotal !== 0 && (
                   <div className="flex justify-between">
                     <dt className="text-slate-400">Other</dt>
-                    <dd className="font-medium">{formatZAR(Math.round(otherTotal))}</dd>
+                    <dd className="font-medium">{formatZAR(Math.round(otherTotal), moneyFmt)}</dd>
                   </div>
                 )}
                 <div className="flex justify-between border-t border-slate-800 pt-1">
                   <dt className="font-semibold">Total</dt>
-                  <dd className="font-bold">{formatZAR(Math.round(grandTotal))}</dd>
+                  <dd className="font-bold">{formatZAR(Math.round(grandTotal), moneyFmt)}</dd>
                 </div>
               </dl>
             </div>
@@ -640,7 +642,7 @@ export default async function JobCardDetailPage({
                 <p className="text-xs text-muted-foreground">
                   Estimated {jobCard.estimatedHours != null ? `${jobCard.estimatedHours} h` : "—"} · Logged{" "}
                   <span className="tabular-nums text-foreground">{actualHours} h</span> · Labour value{" "}
-                  <span className="text-foreground">{formatZAR(timeLabourCents)}</span> @ R{(rateCents / 100).toFixed(0)}/h
+                  <span className="text-foreground">{formatZAR(timeLabourCents, moneyFmt)}</span> @ R{(rateCents / 100).toFixed(0)}/h
                   {jobCard.estimatedHours != null && actualHours > jobCard.estimatedHours && (
                     <span className="ml-1 text-amber-400">· over estimate</span>
                   )}
@@ -745,7 +747,7 @@ export default async function JobCardDetailPage({
                 </label>
                 <div className="grid grid-cols-2 gap-2">
                   <input name="subcontractor" defaultValue={jobCard.subcontractor ?? ""} placeholder="Subcontractor" className="input" />
-                  <input name="subCost" inputMode="decimal" defaultValue={jobCard.subCostCents ? (jobCard.subCostCents / 100).toFixed(2) : ""} placeholder="Cost (R)" className="input tabular-nums" />
+                  <input name="subCost" inputMode="decimal" defaultValue={jobCard.subCostCents ? (jobCard.subCostCents / 100).toFixed(2) : ""} placeholder={`Cost (${currencySymbol(moneyFmt)})`} className="input tabular-nums" />
                 </div>
                 <SaveButton className="btn-secondary btn-sm">Save</SaveButton>
               </SaveForm>
@@ -864,7 +866,7 @@ export default async function JobCardDetailPage({
               Work is under warranty
             </label>
             <div>
-              <label className="label" htmlFor="warrantyRecovered">Recovered (R)</label>
+              <label className="label" htmlFor="warrantyRecovered">Recovered ({currencySymbol(moneyFmt)})</label>
               <input id="warrantyRecovered" name="warrantyRecovered" inputMode="decimal" className="input tabular-nums" defaultValue={jobCard.warrantyRecoveredCents ? (jobCard.warrantyRecoveredCents / 100).toFixed(2) : ""} placeholder="Labour + parts recovered" />
             </div>
             <SaveButton className="btn-secondary btn-sm">Save</SaveButton>
@@ -913,10 +915,10 @@ export default async function JobCardDetailPage({
           <div className="card">
             <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground mb-2">Profitability</p>
             <dl className="space-y-1 text-sm max-w-sm">
-              <div className="flex justify-between"><dt className="text-muted-foreground">Revenue</dt><dd className="font-medium tabular-nums">{formatZAR(profit.revenueCents)}</dd></div>
-              <div className="flex justify-between"><dt className="text-muted-foreground">Parts cost</dt><dd className="tabular-nums">−{formatZAR(profit.partsCostCents)}</dd></div>
-              {profit.subCostCents > 0 && <div className="flex justify-between"><dt className="text-muted-foreground">Subcontract</dt><dd className="tabular-nums">−{formatZAR(profit.subCostCents)}</dd></div>}
-              <div className="flex justify-between border-t border-border pt-1"><dt className="font-semibold">Gross profit</dt><dd className={`font-bold tabular-nums ${profit.profitCents >= 0 ? "text-emerald-400" : "text-red-400"}`}>{formatZAR(profit.profitCents)}</dd></div>
+              <div className="flex justify-between"><dt className="text-muted-foreground">Revenue</dt><dd className="font-medium tabular-nums">{formatZAR(profit.revenueCents, moneyFmt)}</dd></div>
+              <div className="flex justify-between"><dt className="text-muted-foreground">Parts cost</dt><dd className="tabular-nums">−{formatZAR(profit.partsCostCents, moneyFmt)}</dd></div>
+              {profit.subCostCents > 0 && <div className="flex justify-between"><dt className="text-muted-foreground">Subcontract</dt><dd className="tabular-nums">−{formatZAR(profit.subCostCents, moneyFmt)}</dd></div>}
+              <div className="flex justify-between border-t border-border pt-1"><dt className="font-semibold">Gross profit</dt><dd className={`font-bold tabular-nums ${profit.profitCents >= 0 ? "text-emerald-400" : "text-red-400"}`}>{formatZAR(profit.profitCents, moneyFmt)}</dd></div>
               <div className="flex justify-between"><dt className="text-muted-foreground">Margin</dt><dd className="tabular-nums">{profit.marginPct}%</dd></div>
             </dl>
           </div>
