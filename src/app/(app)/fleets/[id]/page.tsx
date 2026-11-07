@@ -6,6 +6,7 @@ import { prisma } from "@/lib/db";
 import { activeTenantPredicate } from "@/lib/tenantPredicate";
 import { listActingTenantStaff } from "@/lib/tenantActor";
 import { contactName, formatDate, formatDateTime, formatZAR } from "@/lib/format";
+import { withCurrency } from "@/lib/currencyRules";
 import { computeDue, dueColors, dueLabels } from "@/lib/serviceDue";
 import { computeWarranty, warrantyColors, warrantyLabels } from "@/lib/warranty";
 import { isModuleEnabled } from "@/lib/modules/enabled";
@@ -29,6 +30,7 @@ import DocumentsPanel from "@/components/DocumentsPanel";
 import Tabs from "@/components/Tabs";
 import { SaveForm, SaveButton } from "@/components/SaveForm";
 import ContactPicker from "@/components/ContactPicker";
+import { getRegionalSettings } from "@/lib/settings";
 
 export const dynamic = "force-dynamic";
 
@@ -143,6 +145,7 @@ export default async function FleetDetailPage({ params }: { params: Promise<{ id
   const emptyBecause = (nothingFiled: string) =>
     noMembersYet ? "Link contacts to this fleet to see their records here." : nothingFiled;
 
+  const moneyFmt = await getRegionalSettings();
   return (
     <EntityDetailShell
       backHref="/fleets"
@@ -517,7 +520,7 @@ export default async function FleetDetailPage({ params }: { params: Promise<{ id
                         <span className="text-xs text-slate-500 truncate max-w-[9rem]">
                           {labelFor(lead.contactId) ?? ""}
                         </span>
-                        <span className="text-xs text-slate-400">{formatZAR(lead.valueCents)}</span>
+                        <span className="text-xs text-slate-400">{formatZAR(lead.valueCents, withCurrency(moneyFmt, lead.currency))}</span>
                         <span
                           className={`badge ${
                             lead.status === "won"
@@ -611,7 +614,7 @@ export default async function FleetDetailPage({ params }: { params: Promise<{ id
                             {quote.fleetId === fleet.id ? fleet.name : labelFor(quote.contactId) ?? "—"}
                           </td>
                           <td className="text-slate-400">{labelFor(quote.contactId) ?? "—"}</td>
-                          <td className="text-slate-400">{formatZAR(payableTotalCents(quote))}</td>
+                          <td className="text-slate-400">{formatZAR(payableTotalCents(quote), withCurrency(moneyFmt, quote.currency))}</td>
                           <td>
                             <StatusPill
                               tone={

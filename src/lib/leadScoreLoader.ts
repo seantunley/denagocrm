@@ -216,6 +216,8 @@ export type TodayLead = {
   /** The opportunity, only when it says something the name does not. */
   opportunity: string | null;
   valueCents: number;
+  /** The currency valueCents is in (multicurrency module); null = the base. */
+  currency: string | null;
   stageName: string;
   assignedToName: string | null;
   /** The deal's customer, for the WhatsApp window lookup. */
@@ -254,6 +256,7 @@ export async function loadTodayLeads(
       name: true,
       title: true,
       valueCents: true,
+      currency: true,
       status: true,
       createdAt: true,
       stageEnteredAt: true,
@@ -287,6 +290,7 @@ export async function loadTodayLeads(
       name: row.name,
       opportunity: row.title && row.title !== row.name ? row.title : null,
       valueCents: row.valueCents,
+      currency: row.currency,
       stageName: row.stage.name,
       assignedToName: row.assignedTo?.name ?? null,
       contactId: row.contactId,

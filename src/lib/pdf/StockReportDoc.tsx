@@ -1,5 +1,5 @@
 import { Document, Page, View, Text, StyleSheet } from "@react-pdf/renderer";
-import { formatZAR } from "@/lib/format";
+import { formatZAR, type MoneyFormat } from "@/lib/format";
 import type { StockUnitRecord, StockDashboard } from "@/lib/stockPlatform";
 
 /**
@@ -101,10 +101,13 @@ export default function StockReportDoc({
   units,
   dashboard,
   meta,
+  moneyFmt,
 }: {
   units: StockUnitRecord[];
   dashboard: StockDashboard;
   meta: StockReportMeta;
+  /** The workspace's currency and locale (getRegionalSettings). */
+  moneyFmt: MoneyFormat;
 }) {
   const listedValue = units.reduce((sum, u) => sum + (u.landedCostCents || u.costCents || 0), 0);
 
@@ -150,11 +153,11 @@ export default function StockReportDoc({
         <View style={s.valueBand}>
           <View style={s.valueBox}>
             <Text style={s.valueLabel}>AVAILABLE STOCK VALUE (LANDED)</Text>
-            <Text style={s.valueAmt}>{formatZAR(dashboard.availableValueCents)}</Text>
+            <Text style={s.valueAmt}>{formatZAR(dashboard.availableValueCents, moneyFmt)}</Text>
           </View>
           <View style={s.valueBox}>
             <Text style={s.valueLabel}>INCOMING STOCK VALUE (LANDED)</Text>
-            <Text style={s.valueAmt}>{formatZAR(dashboard.incomingValueCents)}</Text>
+            <Text style={s.valueAmt}>{formatZAR(dashboard.incomingValueCents, moneyFmt)}</Text>
           </View>
           <View style={s.valueBox}>
             <Text style={s.valueLabel}>AVG AGE · AGED 60+</Text>
@@ -189,7 +192,7 @@ export default function StockReportDoc({
               <Text style={[s.cell, s.cStatus]}>{statusLabel(u.status)}</Text>
               <Text style={[s.cell, s.cLoc]}>{u.location ?? "—"}</Text>
               <Text style={[s.cell, s.cAge]}>{u.ageDays}d</Text>
-              <Text style={[s.cell, s.cCost]}>{formatZAR(u.landedCostCents || u.costCents)}</Text>
+              <Text style={[s.cell, s.cCost]}>{formatZAR(u.landedCostCents || u.costCents, moneyFmt)}</Text>
             </View>
           ))
         )}
@@ -198,7 +201,7 @@ export default function StockReportDoc({
           <View style={s.totalRow} wrap={false}>
             <View style={s.totalBand}>
               <Text style={s.totalLabel}>LISTED LANDED VALUE</Text>
-              <Text style={s.totalAmt}>{formatZAR(listedValue)}</Text>
+              <Text style={s.totalAmt}>{formatZAR(listedValue, moneyFmt)}</Text>
             </View>
           </View>
         )}

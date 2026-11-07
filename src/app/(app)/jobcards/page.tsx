@@ -42,6 +42,7 @@ import RecordContextMenu, { type RecordContextAction } from "@/components/Record
 import { SaveButton, SaveForm } from "@/components/SaveForm";
 import { jobNumberLabel, midSentence } from "@/lib/recordLabels";
 import { getRecordLabels } from "@/lib/recordLabelsServer";
+import { getRegionalSettings } from "@/lib/settings";
 
 const FILTERS = [
   { value: "all", label: "All" },
@@ -155,6 +156,7 @@ export default async function JobCardsPage({
     </ModalTrigger>
   ) : null;
 
+  const moneyFmt = await getRegionalSettings();
   return (
     <div className="space-y-6">
       <WorkspaceHero
@@ -167,7 +169,7 @@ export default async function JobCardsPage({
           { label: "Active jobs", value: counts.active, detail: `${counts.unassigned} unassigned`, icon: CircleDotDashed, tone: "primary" },
           { label: "In repair", value: counts.repair, detail: "On the workshop floor", icon: Wrench, tone: "warning" },
           { label: "Ready for collection", value: counts.ready, detail: "Awaiting customer", icon: CheckCircle2, tone: "success" },
-          { label: "Work in progress", value: formatZAR(Math.round(wipCents)), detail: "Billed value on active jobs", icon: UserRoundX },
+          { label: "Work in progress", value: formatZAR(Math.round(wipCents), moneyFmt), detail: "Billed value on active jobs", icon: UserRoundX },
         ]}
       />
 
@@ -251,7 +253,7 @@ export default async function JobCardsPage({
                         <MobileDataField label="Work requested" wide><span className="line-clamp-2 text-muted-foreground">{job.description}</span></MobileDataField>
                         <MobileDataField label="Technician">{job.technician?.name ?? "Unassigned"}</MobileDataField>
                         <MobileDataField label="Bay">{job.bay?.name ?? "—"}</MobileDataField>
-                        <MobileDataField label="Estimate">{formatZAR(Math.round(total))}</MobileDataField>
+                        <MobileDataField label="Estimate">{formatZAR(Math.round(total), moneyFmt)}</MobileDataField>
                         <MobileDataField label="Priority">{priorityMeta(job.priority).label}</MobileDataField>
                       </MobileDataFields>
                       {canManage && (
@@ -313,7 +315,7 @@ export default async function JobCardsPage({
                               <span className="inline-flex items-center gap-1.5"><span className="inline-block size-2 rounded-full" style={{ backgroundColor: job.bay.color }} />{job.bay.name}</span>
                             ) : "—"}
                           </td>
-                          <td className="px-4 py-4 text-right font-medium tabular-nums">{formatZAR(Math.round(total))}</td>
+                          <td className="px-4 py-4 text-right font-medium tabular-nums">{formatZAR(Math.round(total), moneyFmt)}</td>
                           <td className="px-4 py-4">
                             <span className="inline-flex items-center gap-1.5">
                               <StatusPill tone={sm.tone}>{sm.label}</StatusPill>

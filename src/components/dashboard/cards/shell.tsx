@@ -1,6 +1,7 @@
 import { TriangleAlert } from "lucide-react";
 import { SectionCard } from "@/components/dashboard/sections";
 import type { ConditionContext } from "@/lib/dashboard/conditions";
+import type { MoneyFormat } from "@/lib/format";
 
 /**
  * The parts every user-built card renderer shares: the panel it sits in, the
@@ -83,6 +84,8 @@ export type RenderContext = {
   userNames?: ReadonlyMap<string, string>;
   /** Container nesting depth. Callers leave this alone; ./container.tsx sets it. */
   depth?: number;
+  /** The workspace's currency and locale, read once per view (DashboardView). Undefined = the rand. */
+  money?: MoneyFormat;
 };
 
 /** A card that renders nothing at all — disabled, or hidden, or too deep. */

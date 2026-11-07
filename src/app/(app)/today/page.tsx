@@ -10,6 +10,8 @@ import {
 import { loadTodayLeads, TODAY_CANDIDATE_CAP } from "@/lib/leadScoreLoader";
 import { formatZAR } from "@/lib/format";
 import { prisma } from "@/lib/db";
+import { withCurrency } from "@/lib/currencyRules";
+import { getRegionalSettings } from "@/lib/settings";
 import { isSmtpConfigured } from "@/lib/email";
 import { isWhatsAppConfigured } from "@/lib/whatsapp";
 import { getCompanyProfile } from "@/lib/companyProfile";
@@ -60,7 +62,7 @@ export default async function TodayPage({
         .filter((id): id is string => Boolean(id) && (openableContacts === null || openableContacts.includes(id as string))),
     ),
   ];
-  const [canWriteRecord, canWhatsApp, canSchedule, smtpConfigured, whatsappConfigured, company, quotes, waByLead, waByContact] =
+  const [canWriteRecord, canWhatsApp, canSchedule, smtpConfigured, whatsappConfigured, company, quotes, waByLead, waByContact, moneyFmt] =
     await Promise.all([
       // What addCommunication and sendEmailAction require; what sendWhatsAppMessage requires; what scheduleFollowUp requires.
       hasAnyPermission(user, ...CUSTOMER_RECORD_WRITE_PERMISSIONS),
@@ -83,6 +85,7 @@ export default async function TodayPage({
       contactIds.length
         ? prisma.communication.groupBy({ by: ["contactId"], where: { contactId: { in: contactIds }, type: "whatsapp", direction: "inbound" }, _max: { occurredAt: true } })
         : [],
+      getRegionalSettings(),
     ]);
   const quoteOf = new Map<string, number>();
   for (const quote of quotes) if (quote.leadId && !quoteOf.has(quote.leadId)) quoteOf.set(quote.leadId, quote.number);
@@ -176,7 +179,7 @@ export default async function TodayPage({
                     </Link>
                     <span className="text-xs text-muted-foreground">{lead.stageName}</span>
                     {lead.valueCents > 0 && (
-                      <span className="text-xs tabular-nums text-muted-foreground">{formatZAR(lead.valueCents)}</span>
+                      <span className="text-xs tabular-nums text-muted-foreground">{formatZAR(lead.valueCents, withCurrency(moneyFmt, lead.currency))}</span>
                     )}
                   </div>
                   {lead.opportunity && (

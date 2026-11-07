@@ -60,6 +60,8 @@ export type AttentionLead = {
   /** WHAT, shown second and only when it says something the name does not. */
   opportunity: string | null;
   valueCents: number;
+  /** The currency valueCents is in (multicurrency module); null = the base. */
+  currency: string | null;
   stageId: string;
   stageName: string;
   ownerName: string | null;
@@ -125,6 +127,7 @@ export const loadAttentionList = cache(async (user: PermissionUser, now: Date = 
       name: true,
       title: true,
       valueCents: true,
+      currency: true,
       stageId: true,
       contactId: true,
       stageEnteredAt: true,
@@ -246,6 +249,7 @@ export const loadAttentionList = cache(async (user: PermissionUser, now: Date = 
       // reasons — the part being read — further down.
       opportunity: lead.title && lead.title !== lead.name ? lead.title : null,
       valueCents: lead.valueCents,
+      currency: lead.currency,
       stageId: lead.stageId,
       stageName: lead.stage?.name ?? "—",
       ownerName: lead.assignedTo?.name ?? null,

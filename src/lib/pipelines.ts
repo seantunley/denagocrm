@@ -10,6 +10,7 @@ import {
 } from "./pipelineTenantRule";
 import { currentScopeClass, writeTenantId } from "./tenantWrite";
 import type { StageCriteriaGroup, StageGateMode } from "./stageGate";
+import { nonBaseTotals } from "./currencyRules";
 
 export type SalesPipelineRow = {
   id: string;
@@ -53,6 +54,8 @@ export type ForecastLeadRow = {
   name: string;
   status: string;
   valueCents: number;
+  /** NULL = the base currency (multicurrency module). */
+  currency: string | null;
   estimatedCostCents: number | null;
   probability: number;
   forecastCategory: string;
@@ -653,7 +656,7 @@ export async function listForecastLeads(input: {
     ? await pipelineTenantFilter('l."tenantId"')
     : pipelineScopeFilter(actingTenant, 'l."tenantId"');
   return basePrisma.$queryRaw<ForecastLeadRow[]>`
-    SELECT l."id", l."title", l."name", l."status", l."valueCents", l."estimatedCostCents",
+    SELECT l."id", l."title", l."name", l."status", l."valueCents", l."currency", l."estimatedCostCents",
       l."probability", l."forecastCategory", l."expectedCloseDate", l."pipelineId", p."name" AS "pipelineName",
       l."stageId", s."name" AS "stageName", l."assignedToId", u."name" AS "assignedToName",
       l."teamId", t."name" AS "teamName", l."updatedAt"
@@ -672,11 +675,19 @@ export async function listForecastLeads(input: {
   `;
 }
 
-export function summarizeForecast(leads: ForecastLeadRow[]) {
-  const sum = (items: ForecastLeadRow[]) => items.reduce((total, lead) => total + lead.valueCents, 0);
+/**
+ * The forecast's figures are ONE currency — the base — because they are summed, weighted
+ * and snapshotted as single numbers. Deals in another currency (multicurrency module)
+ * still count as deals; their value is reported apart in `otherCurrencies`, never added.
+ */
+export function summarizeForecast(allLeads: Pick<ForecastLeadRow, "valueCents" | "currency" | "estimatedCostCents" | "probability" | "forecastCategory">[]) {
+  const leads = allLeads.filter((lead) => !lead.currency);
+  const otherCurrencies = nonBaseTotals(allLeads);
+  const sum = (items: typeof leads) => items.reduce((total, lead) => total + lead.valueCents, 0);
   const knownCost = leads.filter((lead) => lead.estimatedCostCents != null);
   return {
-    count: leads.length,
+    count: allLeads.length,
+    otherCurrencies,
     openValueCents: sum(leads),
     weightedValueCents: leads.reduce((total, lead) => total + Math.round(lead.valueCents * lead.probability / 100), 0),
     commitValueCents: sum(leads.filter((lead) => lead.forecastCategory === "commit")),

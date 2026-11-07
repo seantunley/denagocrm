@@ -22,6 +22,8 @@ import { actingTenantId } from "@/lib/actingTenant";
 import { feeRowsFor, itemRowsFor, priorById } from "@/lib/quoteRows";
 import { calendarDateInstant } from "@/lib/quoteExpiry";
 import { getRegionalSettings } from "@/lib/settings";
+import { getCurrencyOptions } from "@/lib/currency";
+import { storedCurrency, withCurrency } from "@/lib/currencyRules";
 import { emitLeadJourneyEvent } from "@/lib/leadJourneyEvents";
 import { formatZAR, contactName } from "@/lib/format";
 import { z } from "zod";
@@ -70,6 +72,8 @@ const quoteDraftSchema = z.object({
       taxRatePct: z.number().finite().min(0).max(100).optional(),
     }),
   ).max(100, "A quote can contain at most 100 lines."),
+  /** Multicurrency module: the quote's currency; null/absent = the base. A lead-linked quote takes the lead's. */
+  currency: z.string().trim().max(3).nullable().optional(),
   // CPQ
   taxInclusive: z.boolean().optional(),
   depositType: z.enum(["percent", "amount"]).nullable().optional(),
@@ -384,6 +388,7 @@ export async function createQuoteForFleet(formData: FormData) {
  */
 export async function saveQuoteDraft(input: QuoteDraftInput): Promise<QuoteDraftResult> {
   return withActingStaffScope(async () => {
+    const moneyFmt = await getRegionalSettings();
   const parsed = quoteDraftSchema.safeParse(input);
   if (!parsed.success) {
     return { ok: false, error: parsed.error.issues[0]?.message ?? "Check the quote details." };
@@ -450,10 +455,23 @@ export async function saveQuoteDraft(input: QuoteDraftInput): Promise<QuoteDraft
     amountCents: Math.round(fee.amountCents),
     taxRatePct: fee.taxRatePct == null ? null : Math.min(100, Math.max(0, fee.taxRatePct)),
   }));
+  /*
+   * THE QUOTE'S CURRENCY (multicurrency module). A quote on a lead is in the LEAD's currency, always:
+   * winning it makes the quote's total the lead's value, and a total in rubles on a lead in rand
+   * would be a wrong number on every board and report. Otherwise the picked one, if the workspace
+   * offers it. Only drafts are saved here, so a sent quote's currency can no longer move.
+   */
+  const currencyLeadId = data.id
+    ? (await prisma.quote.findUnique({ where: { id: data.id }, select: { leadId: true } }))?.leadId ?? null
+    : data.leadId ?? null;
+  const linkedLead = currencyLeadId ? await prisma.lead.findUnique({ where: { id: currencyLeadId }, select: { currency: true } }) : null;
+  const pickedCurrency = storedCurrency(data.currency, await getCurrencyOptions());
+  if (!linkedLead && !pickedCurrency.ok) return { ok: false, error: pickedCurrency.error };
   const cpqQuoteData = {
     taxInclusive: data.taxInclusive ?? true,
     depositType: data.depositType ?? null,
     depositValue: data.depositValue ?? null,
+    currency: linkedLead ? linkedLead.currency ?? null : pickedCurrency.ok ? pickedCurrency.currency : null,
   };
 
   const contact = await prisma.contact.findUnique({
@@ -586,6 +604,7 @@ export async function saveQuoteDraft(input: QuoteDraftInput): Promise<QuoteDraft
       // phone link is looked up.
       const finish = async (itemRows: PricedItem[], feeRows: PricedFee[], cpq: typeof cpqQuoteData) => {
         const rewritten = await tx.quote.findUniqueOrThrow({ where: { id: existing.id } });
+        const moneyFmt = await getRegionalSettings();
         if (data.pdfToMyWhatsApp && data.intent === "draft") {
           const total = payableTotalCents({ items: itemRows, fees: feeRows, ...cpq });
           await tx.assistantTurn.create({
@@ -595,7 +614,7 @@ export async function saveQuoteDraft(input: QuoteDraftInput): Promise<QuoteDraft
               source: QUOTE_PDF_SOURCE,
               quoteId: existing.id,
               question: `Draft quote Q-${existing.number} updated`,
-              answer: `I've updated draft quote Q-${existing.number} (now ${formatZAR(Math.round(total))}). It has NOT been sent to the customer — sending it is your step.\n${quoteOrigin}/quotes?edit=${existing.id}`,
+              answer: `I've updated draft quote Q-${existing.number} (now ${formatZAR(Math.round(total), withCurrency(moneyFmt, cpqQuoteData.currency))}). It has NOT been sent to the customer — sending it is your step.\n${quoteOrigin}/quotes?edit=${existing.id}`,
             },
           });
         }
@@ -629,6 +648,7 @@ export async function saveQuoteDraft(input: QuoteDraftInput): Promise<QuoteDraft
           taxInclusive: existing.taxInclusive,
           depositType: existing.depositType === "percent" || existing.depositType === "amount" ? existing.depositType : null,
           depositValue: existing.depositValue,
+          currency: existing.currency,
         });
       }
       /*
@@ -693,6 +713,7 @@ export async function saveQuoteDraft(input: QuoteDraftInput): Promise<QuoteDraft
           taxInclusive: existing.taxInclusive,
           depositType: existing.depositType === "percent" || existing.depositType === "amount" ? existing.depositType : null,
           depositValue: existing.depositValue,
+          currency: existing.currency,
         });
       }
       // CHANGING the customer is refused; FILLING IN a missing one is not. A
@@ -830,7 +851,7 @@ export async function saveQuoteDraft(input: QuoteDraftInput): Promise<QuoteDraft
           source: QUOTE_PDF_SOURCE,
           quoteId: created.id,
           question: `Draft quote Q-${number}`,
-          answer: `I've created draft quote Q-${number} (${formatZAR(Math.round(total))}). It has NOT been sent to the customer — sending it is your step.\n${quoteOrigin}/quotes?edit=${created.id}`,
+          answer: `I've created draft quote Q-${number} (${formatZAR(Math.round(total), withCurrency(moneyFmt, cpqQuoteData.currency))}). It has NOT been sent to the customer — sending it is your step.\n${quoteOrigin}/quotes?edit=${created.id}`,
         },
       });
     }
@@ -888,7 +909,7 @@ export async function saveQuoteDraft(input: QuoteDraftInput): Promise<QuoteDraft
     action: data.intent === "sent" ? "quote.sent" : data.id ? "quote.updated" : "quote.created",
     summary:
       data.intent === "sent"
-        ? `Quote Q-${saved.number} (${formatZAR(Math.round(total))}) marked sent to the customer`
+        ? `Quote Q-${saved.number} (${formatZAR(Math.round(total), withCurrency(moneyFmt, cpqQuoteData.currency))}) marked sent to the customer`
         : `${data.id ? "Updated" : "Created"} quote Q-${saved.number} for ${contactName(contact)}`,
     leadId: saved.leadId,
     contactId: data.contactId,
@@ -1118,6 +1139,7 @@ async function auditLeadReopened(
 
 export async function setQuoteStatus(quoteId: string, status: string) {
   return asActionResult(async () => {
+    const moneyFmt = await getRegionalSettings();
     const user = await requireQuoteAccess(quoteId, "quotes.change_status");
     const allowed = new Set(["draft", "sent", "accepted", "declined"]);
     if (!allowed.has(status)) throw new ActionRefusal("Invalid quote status");
@@ -1188,7 +1210,7 @@ export async function setQuoteStatus(quoteId: string, status: string) {
         : "moved back to draft";
     await logAudit({
       action: `quote.${status}`,
-      summary: `Quote Q-${quote.number} (${formatZAR(Math.round(total))}) ${verb}`,
+      summary: `Quote Q-${quote.number} (${formatZAR(Math.round(total), moneyFmt)}) ${verb}`,
       leadId: quote.leadId,
       contactId: quote.contactId,
       user,

@@ -11,9 +11,11 @@ import { firstCustomerView, memoCustomer } from "./signing/customerView";
 import { ownedWriteTenantId } from "./tenantWrite";
 import { johannesburgDateKey } from "./activityDay";
 import { formatZAR } from "./format";
+import { withCurrency } from "./currencyRules";
 import { stamp } from "./assistantWhy";
 import { canAccessContact, getAccessibleLeadIds, getAccessibleQuoteIds, hasAnyPermission, type PermissionUser } from "./permissions";
 import { STUCK_LEGEND, conversationFacts, setAsideNotes, stageFacts, stuckReasons, type StuckQuote } from "./assistantStuck";
+import { getRegionalSettings } from "@/lib/settings";
 
 /**
  * The `stuck` lookup: ONE deal, and why it isn't moving — ranked reasons, each dated and linked to the record it
@@ -67,7 +69,7 @@ export async function stuckLookup(user: PermissionUser, needle: string): Promise
   const lead = await prisma.lead.findUniqueOrThrow({
     where: { id: best.id },
     select: {
-      id: true, title: true, name: true, status: true, valueCents: true, notes: true, createdAt: true,
+      id: true, title: true, name: true, status: true, valueCents: true, currency: true, notes: true, createdAt: true,
       stageId: true, stageEnteredAt: true, contactId: true, wonAt: true, lostAt: true, lostReason: true,
       nurtureSince: true, nurtureReason: true, nurtureInterest: true, nurtureReviewAt: true, attentionDispositions: true,
       stage: { select: { name: true, staleAfterDays: true } },
@@ -75,8 +77,9 @@ export async function stuckLookup(user: PermissionUser, needle: string): Promise
     },
   });
   const link = `/leads/${lead.id}`;
+  const moneyFmt = await getRegionalSettings();
   const deal = {
-    link, customer: lead.name, lead: lead.title, status: lead.status, value: formatZAR(lead.valueCents),
+    link, customer: lead.name, lead: lead.title, status: lead.status, value: formatZAR(lead.valueCents, withCurrency(moneyFmt, lead.currency)),
     assignedTo: lead.assignedTo?.name ?? "unassigned", ...(lead.wonAt ? { won: day(lead.wonAt) } : {}),
   };
   const label = `${lead.name} — ${lead.title}`;
@@ -124,7 +127,7 @@ export async function stuckLookup(user: PermissionUser, needle: string): Promise
           where: { leadId: lead.id, deletedAt: null, supersededAt: null, status: { not: "cancelled" }, ...(quoteIds === null ? {} : { id: { in: quoteIds } }) },
           orderBy: { createdAt: "desc" },
           select: {
-            id: true, number: true, status: true, createdAt: true, validUntil: true, emailedAt: true, viewedAt: true, signedAt: true,
+            id: true, number: true, status: true, currency: true, createdAt: true, validUntil: true, emailedAt: true, viewedAt: true, signedAt: true,
             declinedAt: true, declineReason: true, changeRequestedAt: true, changeRequestNote: true, contactId: true, leadId: true,
             invoicedAt: true, depositPaidAt: true, depositPaidCents: true, depositType: true, depositValue: true, deliveryScheduledFor: true, deliveredAt: true,
           },
@@ -191,10 +194,10 @@ export async function stuckLookup(user: PermissionUser, needle: string): Promise
       ...(quote.status === "accepted"
         ? {
             invoiced: quote.invoicedAt ? day(quote.invoicedAt) : "no",
-            deposit: quote.depositPaidAt ? `paid ${day(quote.depositPaidAt)}${quote.depositPaidCents ? ` (${formatZAR(quote.depositPaidCents)})` : ""}` : "not marked paid",
-            ...(quote.depositType && quote.depositValue ? { depositTerms: quote.depositType === "percent" ? `${quote.depositValue}%` : formatZAR(Math.round(quote.depositValue * 100)) } : {}),
+            deposit: quote.depositPaidAt ? `paid ${day(quote.depositPaidAt)}${quote.depositPaidCents ? ` (${formatZAR(quote.depositPaidCents, withCurrency(moneyFmt, quote.currency))})` : ""}` : "not marked paid",
+            ...(quote.depositType && quote.depositValue ? { depositTerms: quote.depositType === "percent" ? `${quote.depositValue}%` : formatZAR(Math.round(quote.depositValue * 100), withCurrency(moneyFmt, quote.currency)) } : {}),
             delivery: quote.deliveredAt ? `delivered ${day(quote.deliveredAt)}` : quote.deliveryScheduledFor ? `booked for ${day(quote.deliveryScheduledFor)}` : "not booked",
-            ...(financePayouts.length ? { financePayouts: financePayouts.map((p) => `${formatZAR(p.amountCents)} received ${day(p.receivedAt)}`) } : {}),
+            ...(financePayouts.length ? { financePayouts: financePayouts.map((p) => `${formatZAR(p.amountCents, withCurrency(moneyFmt, quote.currency))} received ${day(p.receivedAt)}`) } : {}),
           }
         : {}),
     };

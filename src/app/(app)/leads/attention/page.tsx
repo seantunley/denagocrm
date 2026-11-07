@@ -4,6 +4,7 @@ import { hasPermission, requireAnyPermission } from "@/lib/permissions";
 import { loadAttentionList, type SetAsideLead } from "@/lib/attention/load";
 import { attentionBandLabel, type AttentionBand } from "@/lib/attention/score";
 import { formatDate, formatZAR } from "@/lib/format";
+import { withCurrency } from "@/lib/currencyRules";
 import SetAsideAttentionButton from "@/components/SetAsideAttentionButton";
 import RestoreAttentionButton from "@/components/RestoreAttentionButton";
 import { PageHeader } from "@/components/page-header";
@@ -11,6 +12,7 @@ import AttentionLiveRefresh from "@/components/AttentionLiveRefresh";
 import AttentionQuickAssign from "@/components/AttentionQuickAssign";
 import { listActingTenantStaff } from "@/lib/tenantActor";
 import type { AttentionCategory } from "@/lib/attention/score";
+import { getRegionalSettings } from "@/lib/settings";
 
 /**
  * The Attention Centre.
@@ -94,6 +96,7 @@ export default async function AttentionPage({
   const href = (nextOwner: string, nextCategory: string) =>
     `/leads/attention?owner=${encodeURIComponent(nextOwner)}&category=${encodeURIComponent(nextCategory)}`;
 
+  const moneyFmt = await getRegionalSettings();
   return (
     <div className="space-y-5">
       <PageHeader
@@ -178,7 +181,7 @@ export default async function AttentionPage({
                   <span className="text-xs text-muted-foreground">{lead.stageName}</span>
                   {lead.valueCents > 0 && (
                     <span className="text-xs tabular-nums text-muted-foreground">
-                      {formatZAR(lead.valueCents)}
+                      {formatZAR(lead.valueCents, withCurrency(moneyFmt, lead.currency))}
                     </span>
                   )}
                 </div>

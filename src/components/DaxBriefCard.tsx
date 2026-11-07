@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { DaxIcon } from "@/components/DaxIcon";
 import { formatZARCompact } from "@/lib/format";
+import { useMoneyFormat } from "@/components/MoneyFormatProvider";
 import type { DaxBrief } from "@/lib/daxBriefRules";
 
 /**
@@ -21,6 +22,7 @@ function askDax() {
 }
 
 export function DaxBriefCard({ brief }: { brief: DaxBrief }) {
+  const moneyFmt = useMoneyFormat();
   const empty = brief.items.length === 0 && !brief.team?.length;
   if (empty) {
     return (
@@ -39,7 +41,7 @@ export function DaxBriefCard({ brief }: { brief: DaxBrief }) {
           <p className="text-sm font-semibold text-foreground">{brief.summary}</p>
           {brief.attentionValueCents > 0 && (
             <p className="text-xs text-muted-foreground">
-              Pipeline needing attention: {formatZARCompact(brief.attentionValueCents)}
+              Pipeline needing attention: {formatZARCompact(brief.attentionValueCents, moneyFmt)}
             </p>
           )}
         </div>
@@ -72,8 +74,8 @@ export function DaxBriefCard({ brief }: { brief: DaxBrief }) {
               <li key={row.userId} className="flex flex-wrap items-baseline justify-between gap-x-3 text-xs">
                 <span className="font-medium text-foreground">{row.name}</span>
                 <span className="tabular-nums text-muted-foreground">
-                  {row.waiting} waiting · {row.overdue} overdue · {formatZARCompact(row.stalledValueCents)} stalled ·{" "}
-                  {formatZARCompact(row.pipelineValueCents)} open
+                  {row.waiting} waiting · {row.overdue} overdue · {formatZARCompact(row.stalledValueCents, moneyFmt)} stalled ·{" "}
+                  {formatZARCompact(row.pipelineValueCents, moneyFmt)} open
                 </span>
               </li>
             ))}

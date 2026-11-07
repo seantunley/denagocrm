@@ -9,6 +9,8 @@ import { rankPaymentMatches, type MatchReason } from "./paymentMatch";
 import type { matchPaymentArgs } from "./crmAssistantPlan";
 import { MAX_CHOICES } from "./assistantActions";
 import { getAccessibleQuoteIds, hasPermission, type PermissionUser } from "./permissions";
+import { getRegionalSettings } from "@/lib/settings";
+import { withCurrency } from "./currencyRules";
 
 type Output = { rows: { label: string; detail: string; href: string }[]; data: unknown[]; truncated: boolean };
 
@@ -23,8 +25,15 @@ const CANDIDATES = 500;
 export async function matchPayment(user: PermissionUser, args: z.infer<typeof matchPaymentArgs>): Promise<Output> {
   if (!(await hasPermission(user, "deliveries.manage"))) return { truncated: false, rows: [], data: [{ note: "Your role can't record payments, so there is nothing to match." }] };
   const ids = await getAccessibleQuoteIds(user);
+  // SAME CURRENCY ONLY (multicurrency module): a ruble payment can't settle a rand invoice because the
+  // numbers happen to coincide. The base currency means the quotes with none set, as before the module.
+  const { currency: base } = await getRegionalSettings();
+  const paidIn = (args.currency ?? base).toUpperCase();
   const quotes = await prisma.quote.findMany({
-    where: { status: "accepted", supersededAt: null, deletedAt: null, invoicedAt: { not: null }, ...(ids === null ? {} : { id: { in: ids } }) },
+    where: {
+      status: "accepted", supersededAt: null, deletedAt: null, invoicedAt: { not: null }, ...(ids === null ? {} : { id: { in: ids } }),
+      ...(paidIn === base ? { OR: [{ currency: null }, { currency: base }] } : { currency: paidIn }),
+    },
     orderBy: { invoicedAt: "desc" },
     take: CANDIDATES,
     select: {
@@ -57,16 +66,18 @@ export async function matchPayment(user: PermissionUser, args: z.infer<typeof ma
   const { matches, clear } = rankPaymentMatches(candidates, { amountCents, reference: args.reference, payer: args.payer });
   // As many as can be offered as choices.
   const page = matches.slice(0, MAX_CHOICES);
+  // The payment and every candidate are in `paidIn`, so they're all said in it.
+  const moneyFmt = withCurrency(await getRegionalSettings(), paidIn);
   const why = (r: MatchReason) =>
     r === "reference" ? `the reference "${args.reference}" names it`
-      : r === "deposit" ? `${formatZAR(amountCents)} is its deposit due`
-        : r === "balance" ? `${formatZAR(amountCents)} is its balance owing`
+      : r === "deposit" ? `${formatZAR(amountCents, moneyFmt)} is its deposit due`
+        : r === "balance" ? `${formatZAR(amountCents, moneyFmt)} is its balance owing`
           : "the payer's name matches the customer";
   return {
     truncated: matches.length > page.length || quotes.length === CANDIDATES,
     data: [
       {
-        amount: formatZAR(amountCents), reference: args.reference ?? null, paidOn: args.paidOn ?? null,
+        amount: formatZAR(amountCents, moneyFmt), reference: args.reference ?? null, paidOn: args.paidOn ?? null,
         verdict: clear
           ? `ONE CLEAR MATCH: Q-${clear.candidate.quoteNumber} — propose record_payment for it`
           : page.length ? "SEVERAL POSSIBLE — offer them as choices; do not pick one" : "NO MATCH among the invoiced quotes with money owing that this person can open — ask which quote",
@@ -77,14 +88,14 @@ export async function matchPayment(user: PermissionUser, args: z.infer<typeof ma
         link: `/quotes/${c.quote.id}`,
         leadId: c.quote.leadId,
         customer: c.customer,
-        owing: formatZAR(c.owingCents),
-        ...(c.depositDueCents ? { depositDue: formatZAR(c.depositDueCents) } : {}),
+        owing: formatZAR(c.owingCents, moneyFmt),
+        ...(c.depositDueCents ? { depositDue: formatZAR(c.depositDueCents, moneyFmt) } : {}),
         why: reasons.map(why),
       })),
     ],
     rows: page.map(({ candidate: c, reasons }) => ({
       label: `Q-${c.quoteNumber} — ${c.customer}`,
-      detail: `${formatZAR(c.owingCents)} owing · ${reasons.map(why).join("; ")}`,
+      detail: `${formatZAR(c.owingCents, moneyFmt)} owing · ${reasons.map(why).join("; ")}`,
       href: `/quotes/${c.quote.id}`,
     })),
   };
