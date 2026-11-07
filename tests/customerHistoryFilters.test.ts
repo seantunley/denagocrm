@@ -17,11 +17,25 @@ test("an audit line that only repeats an entry already in the history is under C
   assert.match(readFileSync("src/components/LeadTimeline.tsx", "utf8"), /type: auditEntryType\(entry\.action\),/);
 });
 
-test("the history shows a page at a time, and the context comes first on a narrow screen", () => {
+test("the history shows a page at a time; phone = composer, context, history; tablet = context first; wide = two columns", () => {
   const history = readFileSync("src/components/CustomerHistory.tsx", "utf8");
   assert.match(history, /const visible = matching\.slice\(0, shown\);/);
   assert.match(history, /Show older \(\{older\} more\)/);
-  assert.match(history, /<aside className="order-first min-w-0 space-y-4 xl:order-none"/);
+  const composer = /<div className="([^"]+)">\s+\{composer\}/.exec(history)?.[1] ?? "";
+  const timeline = /<div className="([^"]+)">\s+<section id="live-timeline"/.exec(history)?.[1] ?? "";
+  const context = /<aside className="([^"]+)"/.exec(history)?.[1] ?? "";
+  const order = (classes: string, prefix: "" | "sm:") =>
+    Number(new RegExp(`(?:^|\\s)${prefix}order-(\\d)(?:\\s|$)`).exec(classes)?.[1]);
+  const at = (prefix: "" | "sm:") => (classes: string) => order(classes, prefix) || order(classes, "");
+  // Phone: the rep records the call before reading the context.
+  assert.deepEqual([composer, context, timeline].map(at("")), [1, 2, 3]);
+  // Tablet: the context goes back on top, the composer above the history.
+  assert.deepEqual([context, composer, timeline].map(at("sm:")), [1, 2, 3]);
+  // Wide: context is the right column spanning both rows; composer above history on the left.
+  for (const classes of [composer, timeline, context]) assert.match(classes, /\bxl:order-none\b/);
+  assert.match(composer, /\bxl:col-start-1 xl:row-start-1\b/);
+  assert.match(timeline, /\bxl:col-start-1 xl:row-start-2\b/);
+  assert.match(context, /\bxl:col-start-2 xl:row-span-2 xl:row-start-1\b/);
   // What the team pinned comes FIRST in the column, highlighted; an empty card waits below the context (Sean, 2026-10-18).
   const aside = history.slice(history.indexOf("<aside"), history.indexOf("</aside>"));
   assert.ok(aside.indexOf("{pinned.length > 0 && (") < aside.indexOf("{context}"), "pins before the context");
