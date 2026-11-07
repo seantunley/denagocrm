@@ -15,14 +15,14 @@ test("shared dialog headers reserve the close button clearance zone", () => {
   );
 });
 
-test("the inbox Archive action cannot occupy the dialog close button zone", () => {
+test("the inbox conversation is a pane beside the list, not a dialog — so Archive has no close button to collide with", () => {
   const inbox = source("src/components/SocialThreadList.tsx");
+  assert.doesNotMatch(inbox, /RowModal/);
+  assert.match(inbox, /return <InboxSplit items=\{items\}/);
   const header = inbox.slice(
     inbox.indexOf('<div className="flex flex-wrap items-center gap-2 border-b'),
     inbox.indexOf('<div className="mt-4 max-h'),
   );
-
-  assert.match(header, /\bpr-12\b/);
   assert.match(header, /"Archive"/);
 });
 
