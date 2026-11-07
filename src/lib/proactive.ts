@@ -304,7 +304,7 @@ export async function sweepProactive(tenantId: string, budget: Pick<CronSliceCon
   const unconfirmed = new Set(
     replies.length
       ? (await basePrisma.botFlowOutbox.findMany({
-          where: { communicationId: { in: replies.map((r) => r.id) }, status: { not: "sent" } },
+          where: { tenantId, communicationId: { in: replies.map((r) => r.id) }, status: { not: "sent" } },
           select: { communicationId: true },
         })).map((row) => row.communicationId as string)
       : [],
