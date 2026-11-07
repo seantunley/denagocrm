@@ -35,12 +35,16 @@ test("a quote changing currency clears its prices and won't save until each is r
   const editor = readFileSync("src/components/quotes/QuoteEditorDialog.tsx", "utf8");
   const reprice = editor.slice(editor.indexOf("function repricedForCurrency"), editor.indexOf("/**", editor.indexOf("function repricedForCurrency")));
   assert.match(reprice, /const clear = \(amount: string\) => \(\/\[1-9\]\/\.test\(amount\) \? "" : amount\);/, "non-zero amounts cleared, zero kept");
-  assert.match(reprice, /lines: draft\.lines\.map\(\(line\) => \(\{ \.\.\.line, unitPrice: clear\(line\.unitPrice\) \}\)\)/);
+  // …and the cost as the save will store it: none away from the saved currency (margin hidden), back on return.
+  assert.match(reprice, /lines: draft\.lines\.map\(\(line\) => \(\{ \.\.\.line, unitPrice: clear\(line\.unitPrice\), costCents: currency === savedCurrency \? line\.savedCostCents : 0 \}\)\)/);
+  assert.match(editor, /const costsDropped = draft\.currency !== savedCurrency && draft\.lines\.some\(\(line\) => line\.savedCostCents > 0\);/);
+  assert.match(editor, /\{costsDropped && " Saving also clears the recorded costs/);
+  assert.match(editor, /\{calculated\.hasCost && <div/, "the margin only shows with a cost basis");
   assert.match(reprice, /fees: draft\.fees\.map\(\(fee\) => \(\{ \.\.\.fee, amount: clear\(fee\.amount\) \}\)\)/);
   assert.match(reprice, /depositValue: draft\.depositType === "amount" \? clear\(draft\.depositValue\) : draft\.depositValue/);
   // Both ways a draft's currency moves: the picker, and linking a lead (saved in the lead's currency).
-  assert.match(editor, /setDraft\(\(current\) => repricedForCurrency\(current, code === currencies\[0\] \? "" : code\)\);\s+setRepricing\(true\);/);
-  assert.match(editor, /\.\.\.repricedForCurrency\(current, currency\),\s+leadId,/);
+  assert.match(editor, /setDraft\(\(current\) => repricedForCurrency\(current, code === currencies\[0\] \? "" : code, savedCurrency\)\);\s+setRepricing\(true\);/);
+  assert.match(editor, /\.\.\.repricedForCurrency\(current, currency, savedCurrency\),\s+leadId,/);
   assert.match(readFileSync("src/app/(app)/quotes/page.tsx", "utf8"), /currency: lead\.currency,/);
   // Save refuses a cleared line, fee or fixed deposit instead of taking blank as 0.
   assert.match(editor, /if \(\(\(draft\.currency && line\.kind === "catalogue"\) \|\| repricing\) && !line\.unitPrice\.trim\(\)\) \{/);
