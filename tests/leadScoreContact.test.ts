@@ -52,10 +52,9 @@ function groupBy<T extends { leadId: string | null; contactId?: string | null }>
 
 const fakePrisma = {
   lead: { findMany: async (args: { where: Where }) => state.links.filter((link) => passes(link as Record<string, unknown>, args.where)) },
-  // where { communicationId: { not: null }, status: { not: "sent" }, createdAt: { gte } } — as the loader asks.
+  // where { communicationId: { not: null }, status: { not: "sent" } } — as the loader asks.
   botFlowOutbox: {
-    findMany: async (args: { where: { createdAt: { gte: Date } } }) =>
-      state.outbox.filter((row) => row.communicationId !== null && row.status !== "sent" && row.createdAt >= args.where.createdAt.gte),
+    findMany: async (args: { where: Where }) => state.outbox.filter((row) => passes(row as unknown as Record<string, unknown>, args.where)),
   },
   communication: { groupBy: async (args: { by?: string[]; where: Where; _max: Record<string, true> }) => groupBy(state.comms, args) },
   activity: { groupBy: async (args: { by?: string[]; where: Where; _max?: Record<string, true>; _min?: Record<string, true> }) => groupBy(state.acts, args) },
@@ -196,6 +195,20 @@ test("…but not another customer's quote, a quote on the customer's OTHER deal,
 });
 
 const uncontacted = (s: { reasons: string[] }) => s.reasons.some((r) => /not contacted yet|Never contacted/.test(r));
+
+test("an undelivered WhatsApp is not contact in the SCORE either — a new lead keeps 'not contacted yet'", async () => {
+  state.links = [{ id: "lead1", contactId: "cust1" }];
+  for (const leadId of ["lead1", null]) {
+    // On the lead, and on its customer with no lead.
+    state.comms = [{ id: "c1", leadId, contactId: "cust1", type: "whatsapp", direction: "outbound", occurredAt: day(10) }];
+    for (const status of ["pending", "retry", "dead"]) {
+      state.outbox = [{ communicationId: "c1", status, createdAt: day(1) }]; // queued long ago: still not contact
+      assert.ok(uncontacted(await score()), `${status} (${leadId ? "lead" : "customer"}) is not contact`);
+    }
+    state.outbox = [{ communicationId: "c1", status: "sent", createdAt: day(10) }];
+    assert.equal(uncontacted(await score()), false, "sent is");
+  }
+});
 
 test("AN EMAIL FILED ON THE CUSTOMER, WITH NO LEAD, IS CONTACT: the lead no longer says 'not contacted yet'", async () => {
   // Sean, 2026-10-12: a lead on Today read "New lead — not contacted yet" with

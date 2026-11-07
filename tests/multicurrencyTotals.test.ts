@@ -1,7 +1,31 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { readFileSync } from "node:fs";
-import { baseAndOthers, baseValueCents, formatTotals, nonBaseTotals, othersText, stageSegments } from "../src/lib/currencyRules";
+import { baseAndOthers, baseValueCents, formatTotals, nonBaseTotals, othersText, stageSegments, unrepricedAmount } from "../src/lib/currencyRules";
+
+test("server: a draft changing currency is refused while any amount keeps its old number", () => {
+  const before = {
+    items: [{ id: "i1", unitPriceCents: 10_000_000 }, { id: "i2", unitPriceCents: 0 }],
+    fees: [{ id: "f1", amountCents: 150_000 }],
+    depositType: "amount",
+    depositValue: 50_000,
+  };
+  const repriced = {
+    items: [{ id: "i1", description: "Rover XL", unitPriceCents: 550_000 }, { id: "i2", description: "Mats", unitPriceCents: 0 }],
+    fees: [{ id: "f1", label: "Delivery", amountCents: 8_000 }],
+    depositType: "amount",
+    depositValue: 2_000,
+  };
+  assert.equal(unrepricedAmount(before, repriced), null, "everything re-entered (a free line stays 0)");
+  assert.equal(unrepricedAmount(before, { ...repriced, items: [{ id: "i1", description: "Rover XL", unitPriceCents: 10_000_000 }] }), "price for “Rover XL”");
+  assert.equal(unrepricedAmount(before, { ...repriced, fees: [{ id: "f1", label: "Delivery", amountCents: 150_000 }] }), "amount for “Delivery”");
+  assert.equal(unrepricedAmount(before, { ...repriced, depositValue: 50_000 }), "deposit amount");
+  // A NEW line (no id) has no old number to keep.
+  assert.equal(unrepricedAmount(before, { ...repriced, items: [{ description: "New", unitPriceCents: 10_000_000 }] }), null);
+  const actions = readFileSync("src/app/actions/quotes.ts", "utf8");
+  assert.match(actions, /if \(\(existing\.currency \?\? null\) !== cpqQuoteData\.currency\) \{\s+const stale = unrepricedAmount\(existing, \{ items: normalizedItems, fees: normalizedFees, \.\.\.cpqQuoteData \}\);\s+if \(stale\) return new Unrepriced\(/);
+  assert.match(actions, /if \(result instanceof Unrepriced\) \{\s+return \{ ok: false, error: result\.message \};/);
+});
 
 test("a quote changing currency clears its prices and won't save until each is re-entered", () => {
   const editor = readFileSync("src/components/quotes/QuoteEditorDialog.tsx", "utf8");

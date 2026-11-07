@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import {
   COMMON_CURRENCIES,
   currencyOf,
@@ -125,9 +125,27 @@ test("changing a lead's currency never keeps the old number under the new curren
 test("the base currency can't change under recorded amounts; an in-use currency can't be switched off", () => {
   const settings = src("src/app/actions/settings.ts");
   assert.match(settings, /if \(parsed\.currency !== before\.currency && \(await hasRecordedAmounts\(\)\)\) \{\s+\/\/[^\n]*\n[^\n]*\n\s+throw new ActionRefusal\(/);
-  for (const model of ["quote", "lead", "product", "part", "jobCard", "stockUnit", "purchaseOrderLine"]) {
-    assert.match(settings, new RegExp(`prisma\\.${model}\\.findFirst\\(`), `${model} amounts block a base change`);
+  // EVERY model holding an amount in the base blocks a base change — read from the schema, so a
+  // new money column can't be forgotten. Exempt only rows that cannot exist without a checked parent,
+  // or that are derived, or are the platform's own billing.
+  const covered: Record<string, string> = {
+    QuoteItem: "Quote", QuoteFee: "Quote", QuotePayment: "Quote",
+    JobCardItem: "JobCard", JobCardApproval: "JobCard",
+    StockReservation: "StockUnit", StockEvent: "StockUnit",
+    CampaignConversion: "Campaign", CampaignRecipient: "Campaign",
+    StatisticBucket: "derived from leads/quotes", ForecastSnapshot: "derived from leads",
+    Tenant: "platform billing", TenantInvoice: "platform billing", TenantPlanTerms: "platform billing",
+  };
+  const schema = readdirSync("prisma").filter((f) => f.endsWith(".prisma")).map((f) => readFileSync(`prisma/${f}`, "utf8")).join("\n");
+  const moneyModels = new Set<string>(["Target"]); // Target.value is cents for sales_value
+  for (const block of schema.split(/\nmodel /).slice(1)) if (/\w+Cents\s/.test(block)) moneyModels.add(block.split(/\s/)[0]);
+  assert.ok(moneyModels.has("Quote") && moneyModels.has("Campaign") && moneyModels.size > 15, "the schema scan found the money models");
+  for (const model of moneyModels) {
+    if (covered[model]) continue;
+    const name = model[0].toLowerCase() + model.slice(1);
+    assert.match(settings, new RegExp(`prisma\\.${name}\\.findFirst\\(`), `${model} amounts must block a base-currency change`);
   }
+  assert.match(settings, /prisma\.target\.findFirst\(\{ where: \{ metric: "sales_value", value: \{ gt: 0 \} \}/);
   const enabled = settings.slice(settings.indexOf("export async function saveEnabledCurrencies"), settings.indexOf("export async function saveWorkshopSettings"));
   assert.match(enabled, /prisma\.lead\.groupBy\(\{ by: \["currency"\], where: \{ currency: \{ in: dropped \} \}/);
   assert.match(enabled, /prisma\.quote\.groupBy\(\{ by: \["currency"\], where: \{ currency: \{ in: dropped \} \}/);

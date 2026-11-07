@@ -23,7 +23,7 @@ import { feeRowsFor, itemRowsFor, priorById } from "@/lib/quoteRows";
 import { calendarDateInstant } from "@/lib/quoteExpiry";
 import { getRegionalSettings } from "@/lib/settings";
 import { getCurrencyOptions } from "@/lib/currency";
-import { storedCurrency, withCurrency } from "@/lib/currencyRules";
+import { storedCurrency, unrepricedAmount, withCurrency } from "@/lib/currencyRules";
 import { emitLeadJourneyEvent } from "@/lib/leadJourneyEvents";
 import { formatZAR, contactName } from "@/lib/format";
 import { z } from "zod";
@@ -386,6 +386,11 @@ export async function createQuoteForFleet(formData: FormData) {
  * the action body therefore runs with no ambient scope and the sync reader throws.
  * Binding an ENCLOSING frame here is the only shape that reaches it.
  */
+/** A draft's currency changed but an amount kept its old number (see unrepricedAmount). */
+class Unrepriced {
+  constructor(readonly message: string) {}
+}
+
 export async function saveQuoteDraft(input: QuoteDraftInput): Promise<QuoteDraftResult> {
   return withActingStaffScope(async () => {
     const moneyFmt = await getRegionalSettings();
@@ -730,6 +735,12 @@ export async function saveQuoteDraft(input: QuoteDraftInput): Promise<QuoteDraft
       if (existing.fleetId && existing.contactId !== data.contactId) {
         throw new Error("The customer on a fleet quote cannot be changed. Create a new quote instead.");
       }
+      // A draft MOVING currency must come with its amounts re-entered: R100 000 is not US$100 000.
+      // The editor clears them; a direct call is held to the same rule here.
+      if ((existing.currency ?? null) !== cpqQuoteData.currency) {
+        const stale = unrepricedAmount(existing, { items: normalizedItems, fees: normalizedFees, ...cpqQuoteData });
+        if (stale) return new Unrepriced(`Enter the ${cpqQuoteData.currency ?? createDefaults.regional.currency} ${stale} — the quote's currency changed.`);
+      }
       // #15: requireQuoteAccess only authorized the quote. Moving an existing
       // quote onto a DIFFERENT contact requires access to that destination too,
       // or a user could re-file their quote against a customer they can't access.
@@ -885,6 +896,9 @@ export async function saveQuoteDraft(input: QuoteDraftInput): Promise<QuoteDraft
   }
   if (result === SHEET_GONE) {
     return { ok: false, error: "That job sheet is no longer there, so nothing was made — ask DAX again." };
+  }
+  if (result instanceof Unrepriced) {
+    return { ok: false, error: result.message };
   }
   if (result && "sheetQuote" in result) {
     return { ok: false, error: `This job sheet already has its quote, Q-${result.sheetQuote.number} — nothing was made twice.`, repeated: true, quote: result.sheetQuote };

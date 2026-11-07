@@ -141,3 +141,34 @@ export function stageSegments(leads: readonly StageLead[], base: string) {
   }
   return [...byStage.values()].sort((a, b) => a.order - b.order).map(({ order: _order, ...seg }) => seg);
 }
+
+type PricedBefore = {
+  items: readonly { id: string; unitPriceCents: number }[];
+  fees: readonly { id: string; amountCents: number }[];
+  depositType: string | null;
+  depositValue: number | null;
+};
+type PricedAfter = {
+  items: readonly { id?: string | null; description: string; unitPriceCents: number }[];
+  fees: readonly { id?: string | null; label: string; amountCents: number }[];
+  depositType?: string | null;
+  depositValue?: number | null;
+};
+
+/**
+ * A draft quote moving to another currency: the first amount still carrying its OLD number
+ * (the same row, the same non-zero figure), named for the refusal — or null when everything
+ * was re-entered. The editor clears them on a currency change; this is the server holding it.
+ */
+export function unrepricedAmount(before: PricedBefore, after: PricedAfter): string | null {
+  const price = new Map(before.items.map((item) => [item.id, item.unitPriceCents]));
+  const item = after.items.find((row) => row.id && row.unitPriceCents !== 0 && price.get(row.id) === row.unitPriceCents);
+  if (item) return `price for “${item.description}”`;
+  const amount = new Map(before.fees.map((fee) => [fee.id, fee.amountCents]));
+  const fee = after.fees.find((row) => row.id && row.amountCents !== 0 && amount.get(row.id) === row.amountCents);
+  if (fee) return `amount for “${fee.label}”`;
+  if (before.depositType === "amount" && after.depositType === "amount" && before.depositValue && after.depositValue === before.depositValue) {
+    return "deposit amount";
+  }
+  return null;
+}
