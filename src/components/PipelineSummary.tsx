@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { GitBranch, Layers3 } from "lucide-react";
-import { formatZAR } from "@/lib/format";
+import { formatZAR, type MoneyFormat } from "@/lib/format";
 import { EmptyState, Surface } from "@/components/visual-system";
 
 export type PipelineSummaryRow = {
@@ -23,7 +23,7 @@ export type PipelineSummaryRow = {
  * So "All pipelines" answers the question that view was really being used for —
  * where is the work, across everything — and hands off to a real board to act.
  */
-export default function PipelineSummary({ pipelines }: { pipelines: PipelineSummaryRow[] }) {
+export default function PipelineSummary({ pipelines, moneyFmt }: { pipelines: PipelineSummaryRow[]; moneyFmt: MoneyFormat }) {
   if (pipelines.length === 0) {
     return (
       <EmptyState
@@ -45,7 +45,7 @@ export default function PipelineSummary({ pipelines }: { pipelines: PipelineSumm
             All pipelines
           </p>
           <p className="mt-1 text-sm text-muted-foreground">
-            {totalOpen} open · {formatZAR(totalValue)} across {pipelines.length} pipeline
+            {totalOpen} open · {formatZAR(totalValue, moneyFmt)} across {pipelines.length} pipeline
             {pipelines.length === 1 ? "" : "s"}
           </p>
         </div>
@@ -69,7 +69,7 @@ export default function PipelineSummary({ pipelines }: { pipelines: PipelineSumm
                 <p className="min-w-0 flex-1 truncate font-medium">{pipeline.name}</p>
               </div>
               <p className="mt-4 text-2xl font-semibold tracking-tight">
-                {formatZAR(pipeline.openValueCents)}
+                {formatZAR(pipeline.openValueCents, moneyFmt)}
               </p>
               <p className="mt-1 text-xs text-muted-foreground">
                 {pipeline.openCount} open · {pipeline.stageCount} stage

@@ -49,6 +49,7 @@ import {
   dailySeries,
   pctDelta,
 } from "./data";
+import { getRegionalSettings } from "@/lib/settings";
 
 /**
  * The dashboard card catalogue — the executable half. ./registry.ts declares
@@ -316,9 +317,10 @@ export const DASHBOARD_CARD_IMPLS: Record<DashboardCardId, DashboardCardImpl> = 
         cur.value += l.valueCents;
         segMap.set(l.stage.id, cur);
       }
+      const moneyFmt = await getRegionalSettings();
       return {
         segments: [...segMap.values()].sort((a, b) => a.order - b.order) as PipeSeg[],
-        totalValue: formatZARCompact(value._sum.valueCents ?? 0),
+        totalValue: formatZARCompact(value._sum.valueCents ?? 0, moneyFmt),
       };
     },
     ({ segments, totalValue }) => (

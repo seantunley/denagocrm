@@ -14,7 +14,7 @@ import {
 } from "@/app/actions/fulfilment";
 import ModalTrigger from "@/components/Modal";
 import ProofOfDelivery from "@/components/ProofOfDelivery";
-import { formatDate, formatZAR } from "@/lib/format";
+import { currencySymbol, formatDate, formatZAR, type MoneyFormat } from "@/lib/format";
 import { loadBillToFleets, quoteBillTo } from "@/lib/quoteBillTo";
 import { quotePrintLinks } from "@/lib/quotePrintLinks";
 import { quotePricing } from "@/lib/pricing";
@@ -37,6 +37,7 @@ import { deliveryHandoverReadiness, handoverRunSelection } from "@/lib/checklist
 import { runsForHost, templatesForHostRecord } from "@/lib/checklists/store";
 import { deliveryNoteState } from "@/lib/deliveryNoteSigning";
 import { deliveryNoteSigning, type DeliveryNoteSigning } from "@/components/signing/deliveryNoteSigning";
+import { getRegionalSettings } from "@/lib/settings";
 
 export const metadata = { title: "Deliveries" };
 
@@ -158,6 +159,7 @@ export default async function DeliveriesPage() {
 
   const chip = "inline-flex items-center gap-1 rounded-md border border-border bg-muted/40 px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground";
 
+  const moneyFmt = await getRegionalSettings();
   return (
     <>
       <MobileOnly className="space-y-4">
@@ -193,8 +195,8 @@ export default async function DeliveriesPage() {
                           <div className="min-w-0"><Link href={`/quotes/${quote.id}`} className="text-sm font-semibold text-primary">Q-{quote.number} · {who}</Link><p className="mt-0.5 truncate text-xs text-muted-foreground">{model}</p></div>
                           <span className="shrink-0 rounded-full bg-muted px-2 py-1 text-[10px] font-medium text-muted-foreground">{stage?.title}</span>
                         </div>
-                        <p className="mt-2 text-[11px] text-muted-foreground">{photos} handover photo{photos === 1 ? "" : "s"}{quote.deliveryScheduledFor ? ` · ${formatDate(quote.deliveryScheduledFor)}` : ""}{quote.depositPaidCents != null ? ` · deposit ${formatZAR(quote.depositPaidCents)}` : ""}</p>
-                        {canManage && <FulfilmentCorrections quote={quote} />}
+                        <p className="mt-2 text-[11px] text-muted-foreground">{photos} handover photo{photos === 1 ? "" : "s"}{quote.deliveryScheduledFor ? ` · ${formatDate(quote.deliveryScheduledFor)}` : ""}{quote.depositPaidCents != null ? ` · deposit ${formatZAR(quote.depositPaidCents, moneyFmt)}` : ""}</p>
+                        {canManage && <FulfilmentCorrections quote={quote} moneyFmt={moneyFmt} />}
                         {/* Same tab on mobile, like the delivery note: keeps PWA back navigation. */}
                         <div className="mt-1.5 flex flex-wrap gap-x-3 gap-y-1">
                           {quotePrintLinks(quote).map((link) => (
@@ -294,7 +296,7 @@ export default async function DeliveriesPage() {
         }
         actions={<Link href="/quotes" className="btn-secondary btn-sm"><FileText className="size-4" /> Open quotes</Link>}
         stats={[
-          { label: "Active handovers", value: quotes.length, detail: formatZAR(Math.round(pipelineValue)), icon: Truck },
+          { label: "Active handovers", value: quotes.length, detail: formatZAR(Math.round(pipelineValue), moneyFmt), icon: Truck },
           { label: "To invoice", value: count("invoice"), detail: "Accepted, ready to invoice", icon: FileText, tone: "primary" },
           { label: "Awaiting deposit", value: count("deposit"), detail: "Payment confirmation", icon: Wallet, tone: count("deposit") ? "warning" : "default" },
           { label: "Ready / scheduled", value: count("schedule") + count("deliver"), detail: "Handover pipeline", icon: PackageCheck, tone: "success" },
@@ -366,7 +368,7 @@ export default async function DeliveriesPage() {
                           <Link href={`/quotes/${quote.id}`} className="text-sm font-semibold text-primary hover:underline">
                             Q-{quote.number}
                           </Link>
-                          <span className="text-xs font-semibold tabular-nums text-emerald-300">{formatZAR(Math.round(total))}</span>
+                          <span className="text-xs font-semibold tabular-nums text-emerald-300">{formatZAR(Math.round(total), moneyFmt)}</span>
                         </div>
                         <p className="mt-0.5 text-sm text-foreground">
                           {quote.contact ? (
@@ -380,7 +382,7 @@ export default async function DeliveriesPage() {
                         {(hasDoc(quote.id, "invoice") || hasDoc(quote.id, "pop") || photos > 0 || quote.deliveryScheduledFor) && (
                           <div className="mt-2 flex flex-wrap gap-1.5">
                             {hasDoc(quote.id, "invoice") && <span className={chip}><FileText className="size-2.5" /> Invoice</span>}
-                            {hasDoc(quote.id, "pop") && <span className={chip}><Wallet className="size-2.5" /> POP{quote.depositPaidCents != null ? ` · ${formatZAR(quote.depositPaidCents)}` : ""}</span>}
+                            {hasDoc(quote.id, "pop") && <span className={chip}><Wallet className="size-2.5" /> POP{quote.depositPaidCents != null ? ` · ${formatZAR(quote.depositPaidCents, moneyFmt)}` : ""}</span>}
                             {photos > 0 && <span className={chip}>📷 {photos}</span>}
                             {quote.deliveryScheduledFor && (
                               <span className={chip}><Truck className="size-2.5" /> {formatDate(quote.deliveryScheduledFor)}</span>
@@ -388,7 +390,7 @@ export default async function DeliveriesPage() {
                           </div>
                         )}
 
-                        {canManage && <FulfilmentCorrections quote={quote} />}
+                        {canManage && <FulfilmentCorrections quote={quote} moneyFmt={moneyFmt} />}
 
                         {stockByQuote.has(quote.id) && (() => {
                           const s = stockByQuote.get(quote.id)!;
@@ -421,7 +423,7 @@ export default async function DeliveriesPage() {
                         )}
                         {canManage && column.key === "deposit" && (
                           <SaveForm success="Deposit recorded" resetOnSuccess={false} action={markDepositPaid.bind(null, quote.id)} className="mt-2.5 space-y-1.5">
-                            <input name="amount" inputMode="decimal" required placeholder="Amount received (R)" aria-label="Deposit amount received in rand" className="input text-xs py-1.5" />
+                            <input name="amount" inputMode="decimal" required placeholder={`Amount received (${currencySymbol(moneyFmt)})`} aria-label={`Deposit amount received in ${moneyFmt.currency}`} className="input text-xs py-1.5" />
                             <input type="file" name="file" required accept=".pdf,image/*" className="block w-full text-xs text-muted-foreground file:btn-secondary file:btn-sm file:mr-2 file:border-0" />
                             <SaveButton className="btn-primary btn-sm w-full">Deposit paid</SaveButton>
                           </SaveForm>
@@ -494,7 +496,8 @@ export default async function DeliveriesPage() {
  * the mobile queue, so the two cannot offer different fixes. Rendered only for
  * `deliveries.manage`; every action re-checks that server-side.
  */
-function FulfilmentCorrections({ quote }: {
+function FulfilmentCorrections({ quote, moneyFmt }: {
+  moneyFmt: MoneyFormat;
   quote: {
     id: string;
     number: number;
@@ -521,7 +524,7 @@ function FulfilmentCorrections({ quote }: {
         <ModalTrigger label="Correct deposit" title={`Deposit — Q-${quote.number}`} buttonClass="text-primary hover:underline">
           <div className="space-y-5">
             <SaveForm success="Deposit amount updated" resetOnSuccess={false} action={correctDepositAmount.bind(null, quote.id)} className="space-y-2">
-              <label className="label">Amount received (R)</label>
+              <label className="label">Amount received ({currencySymbol(moneyFmt)})</label>
               <input name="amount" inputMode="decimal" required className="input" defaultValue={quote.depositPaidCents != null ? (quote.depositPaidCents / 100).toFixed(2) : ""} placeholder="0.00" />
               <SaveButton className="btn-primary btn-sm">Save amount</SaveButton>
             </SaveForm>

@@ -1,6 +1,7 @@
 import { conditionsMet, isServerDecidable, type ConditionContext } from "@/lib/dashboard/conditions";
 import type { CardConfig, DashboardConfig, SectionConfig, ViewConfig } from "@/lib/dashboard/config";
 import { Suspense } from "react";
+import { getRegionalSettings } from "@/lib/settings";
 import { renderCard, type RenderContext } from "./cards";
 import { CardBoundary } from "./CardBoundary";
 import { CardSkeleton } from "./CardSkeleton";
@@ -79,7 +80,8 @@ function admittedUpFront(visibility: CardConfig["visibility"], ctx: ViewerContex
  * twenty.
  */
 export async function renderViewSlots(view: ViewConfig, ctx: ViewerContext): Promise<CardSlots> {
-  const render: RenderContext = { conditions: ctx };
+  // The workspace's currency, read once per view for every card's money (cards/values.tsx).
+  const render: RenderContext = { conditions: ctx, money: await getRegionalSettings() };
   const slots: CardSlots = {};
 
   await Promise.all(

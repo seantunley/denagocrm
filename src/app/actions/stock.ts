@@ -461,6 +461,7 @@ export async function reserveUnit(id: string, formData: FormData) {
 
 export async function recordReservationDeposit(id: string, formData: FormData) {
   return asActionResult(async () => {
+    const moneyFmt = await getRegionalSettings();
     const user = await requirePermission("stock.manage");
     const reference = str(formData.get("reference"));
     if (!str(formData.get("amount"))) refuse("Enter the deposit amount received.");
@@ -475,8 +476,8 @@ export async function recordReservationDeposit(id: string, formData: FormData) {
       data: { depositReceivedAt: new Date(), depositReceivedCents: amountCents },
     });
     if (recorded.count !== 1) throw new ActionRefusal("The deposit was just recorded by someone else. Refresh to see it.");
-    await addStockEvent({ stockUnitId: id, eventType: "reservation.deposit_received", leadId: reservation.leadId, detail: [formatZAR(amountCents), reference].filter(Boolean).join(" · "), actor: actor(user) });
-    await logAudit({ action: "stock.deposit_received", summary: `Reservation deposit of ${formatZAR(amountCents)} received on ${reservation.stockUnit.stockNumber ?? "a stock unit"}`, leadId: reservation.leadId, user });
+    await addStockEvent({ stockUnitId: id, eventType: "reservation.deposit_received", leadId: reservation.leadId, detail: [formatZAR(amountCents, moneyFmt), reference].filter(Boolean).join(" · "), actor: actor(user) });
+    await logAudit({ action: "stock.deposit_received", summary: `Reservation deposit of ${formatZAR(amountCents, moneyFmt)} received on ${reservation.stockUnit.stockNumber ?? "a stock unit"}`, leadId: reservation.leadId, user });
     refresh(id);
   });
 }

@@ -1,6 +1,8 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import { currencySymbol } from "@/lib/format";
+import { useMoneyFormat } from "@/components/MoneyFormatProvider";
 import { BadgeDollarSign, Barcode, BellRing, Boxes, MapPin, Wrench } from "lucide-react";
 import {
   CaptureField,
@@ -25,6 +27,7 @@ export default function PartForm({
   action: (formData: FormData) => Promise<ActionResult | void>;
   variant?: CaptureFormVariant;
 }) {
+  const moneyFmt = useMoneyFormat();
   const [name, setName] = useState("");
   const [sku, setSku] = useState("");
   const [location, setLocation] = useState("");
@@ -104,7 +107,7 @@ export default function PartForm({
         title="Pricing"
         description="Capture both cost and selling price so workshop value and gross margin remain visible."
       >
-        <CaptureField label="Cost price (R)">
+        <CaptureField label={`Cost price (${currencySymbol(moneyFmt)})`}>
           <input
             name="cost"
             className="input tabular-nums"
@@ -114,7 +117,7 @@ export default function PartForm({
             placeholder="0.00"
           />
         </CaptureField>
-        <CaptureField label="Selling price (R)" hint={margin}>
+        <CaptureField label={`Selling price (${currencySymbol(moneyFmt)})`} hint={margin}>
           <input
             name="price"
             className="input tabular-nums"

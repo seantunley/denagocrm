@@ -63,7 +63,21 @@ export function regionalFrom(raw: Partial<Record<keyof Regional, string | null |
   };
 }
 
-type MoneyFormat = Pick<Regional, "currency" | "locale">;
+/** What formatting money needs: the workspace's (or, later, the record's) currency and locale. */
+export type MoneyFormat = Pick<Regional, "currency" | "locale">;
+
+/** The currency's short mark for a field label — "R", "₽", "$" — as "(R)" was written by hand. */
+export function currencySymbol(m: MoneyFormat = DEFAULT_REGIONAL): string {
+  try {
+    return (
+      new Intl.NumberFormat(m.locale, { style: "currency", currency: m.currency, currencyDisplay: "narrowSymbol" })
+        .formatToParts(0)
+        .find((part) => part.type === "currency")?.value ?? m.currency
+    );
+  } catch {
+    return m.currency;
+  }
+}
 type DateFormat = Pick<Regional, "locale" | "timeZone">;
 
 /** Due date, with the time when one was set (midnight = date-only). */

@@ -24,6 +24,8 @@ import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import ConnectivityIndicator from "@/components/ConnectivityIndicator";
 import { ActivityTypesProvider } from "@/components/ActivityTypesProvider";
+import { MoneyFormatProvider } from "@/components/MoneyFormatProvider";
+import { DEFAULT_REGIONAL, type MoneyFormat } from "@/lib/format";
 import { RecordLabelsProvider } from "@/components/RecordLabelsProvider";
 import type { RecordLabels } from "@/lib/recordLabels";
 import { SettingsViewerProvider } from "@/components/SettingsViewer";
@@ -154,6 +156,7 @@ export default function AppShell({
   activityTypes,
   tenantId,
   recordLabels,
+  money = DEFAULT_REGIONAL,
   children,
 }: {
   user: ShellUser;
@@ -178,6 +181,8 @@ export default function AppShell({
   brand?: { logoUrl: string | null; displayName: string };
   /** What the workspace calls leads, deals and job cards, resolved by the (app) layout. Undefined = the built-in words. */
   recordLabels?: RecordLabels;
+  /** The workspace's currency and locale (Settings → Quotes), for money shown in the browser. Undefined = the rand. */
+  money?: MoneyFormat;
   children: ReactNode;
 }) {
   const [mobileOpen, setMobileOpen] = useState(false);
@@ -185,6 +190,7 @@ export default function AppShell({
 
   return (
     <TooltipProvider delayDuration={250}>
+    <MoneyFormatProvider money={money}>
     <ActivityTypesProvider types={activityTypes}>
     <RecordLabelsProvider labels={recordLabels}>
     <SettingsViewerProvider isOwner={ownsWorkspace(user)} isPlatformOwner={user.role === "owner"} permissions={user.permissions} enabledModules={enabledModules}>
@@ -270,6 +276,7 @@ export default function AppShell({
     </SettingsViewerProvider>
     </RecordLabelsProvider>
     </ActivityTypesProvider>
+    </MoneyFormatProvider>
     </TooltipProvider>
   );
 }

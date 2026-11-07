@@ -8,7 +8,7 @@
  * to the records behind it. A number that is not the viewer's to see is not
  * shown as a zero; it is not shown.
  */
-import { formatZARCompact } from "@/lib/format";
+import { DEFAULT_REGIONAL, formatZARCompact, type MoneyFormat } from "@/lib/format";
 
 export const MAX_HOME_NUMBERS = 5;
 /** How many deals the "do next" list shows before "see all". Past about six, a list stops being scannable. */
@@ -54,6 +54,8 @@ export type HomeFigures = {
   overdueMine: number;
   /** Signing requests out with customers that the viewer may see. */
   waitingSignature: number;
+  /** The workspace's currency and locale (getRegionalSettings). Undefined = the rand. */
+  money?: MoneyFormat;
 };
 
 const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
@@ -69,17 +71,18 @@ function against(current: number, previous: number): { context: string; directio
 
 /** The numbers for the top of the home screen, most important first, never more than MAX_HOME_NUMBERS. */
 export function homeNumbers(f: HomeFigures): HomeNumber[] {
+  const moneyFmt = f.money ?? DEFAULT_REGIONAL;
   const out: HomeNumber[] = [];
   if (f.seesLeads) {
-    const sold = { key: "sales" as const, label: "Sold this month", value: formatZARCompact(f.wonCents), amount: rand(f.wonCents), display: "zar" as const };
+    const sold = { key: "sales" as const, label: "Sold this month", value: formatZARCompact(f.wonCents, moneyFmt), amount: rand(f.wonCents), display: "zar" as const };
     // With a target, the question is "how far along are we?"; without one, "how does it compare?".
     if (f.salesTargetCents > 0) {
       const progress = Math.min(1, Math.max(0, f.wonCents / f.salesTargetCents));
-      out.push({ ...sold, context: `${Math.round(progress * 100)}% of ${formatZARCompact(f.salesTargetCents)} target`, delta: against(f.wonCents, f.prevWonCents).delta, progress, href: "/targets" });
+      out.push({ ...sold, context: `${Math.round(progress * 100)}% of ${formatZARCompact(f.salesTargetCents, moneyFmt)} target`, delta: against(f.wonCents, f.prevWonCents).delta, progress, href: "/targets" });
     } else {
       out.push({ ...sold, ...against(f.wonCents, f.prevWonCents), href: "/leads" });
     }
-    out.push({ key: "pipeline", label: "Open pipeline", value: formatZARCompact(f.openPipelineCents), amount: rand(f.openPipelineCents), display: "zar", context: `across ${plural(f.openDeals, "open deal")}`, delta: null, href: "/leads" });
+    out.push({ key: "pipeline", label: "Open pipeline", value: formatZARCompact(f.openPipelineCents, moneyFmt), amount: rand(f.openPipelineCents), display: "zar", context: `across ${plural(f.openDeals, "open deal")}`, delta: null, href: "/leads" });
     out.push({ key: "new-leads", label: "New leads this month", value: String(f.newLeads), amount: f.newLeads, display: "int", ...against(f.newLeads, f.prevNewLeads), href: "/leads" });
   }
   if (f.seesActivities) {

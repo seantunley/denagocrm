@@ -12,6 +12,7 @@ import {
 } from "@/lib/permissions";
 import { ResponsiveEntityTable } from "@/components/responsive-patterns";
 import { PageHeader } from "@/components/page-header";
+import { getRegionalSettings } from "@/lib/settings";
 
 export default async function ClosedLeadsPage({
   searchParams,
@@ -39,6 +40,7 @@ export default async function ClosedLeadsPage({
     take,
   });
 
+  const moneyFmt = await getRegionalSettings();
   return (
     <div className="space-y-5">
       <PageHeader
@@ -68,7 +70,7 @@ export default async function ClosedLeadsPage({
                 </td>
                 <td data-label="Customer">{lead.name}</td>
                 <td data-label="Product">{lead.product?.name ?? "—"}{lead.color ? ` (${lead.color})` : ""}</td>
-                <td data-label="Value">{formatZAR(lead.valueCents)}</td>
+                <td data-label="Value">{formatZAR(lead.valueCents, moneyFmt)}</td>
                 <td data-label="Status">
                   <span className={`badge ${lead.status === "won" ? "bg-emerald-500/15 text-emerald-300" : "bg-red-500/15 text-red-300"}`}>
                     {lead.status}

@@ -1,6 +1,8 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import { currencySymbol } from "@/lib/format";
+import { useMoneyFormat } from "@/components/MoneyFormatProvider";
 import { BadgeDollarSign, FileText, PackageCheck, Palette, Shapes, Tags } from "lucide-react";
 import { createProduct } from "@/app/actions/products";
 import {
@@ -24,6 +26,7 @@ function priceSummary(value: string) {
 }
 
 export default function ProductForm({ variant = "compact" }: { variant?: CaptureFormVariant }) {
+  const moneyFmt = useMoneyFormat();
   const [name, setName] = useState("");
   const [sku, setSku] = useState("");
   const [category, setCategory] = useState("");
@@ -108,9 +111,9 @@ export default function ProductForm({ variant = "compact" }: { variant?: Capture
         title="Commercial defaults"
         description="Set the starting price used when this model is selected on a quote or lead."
       >
-        <CaptureField label="Base price (R)" hint="This remains editable on individual quotes." wide>
+        <CaptureField label={`Base price (${currencySymbol(moneyFmt)})`} hint="This remains editable on individual quotes." wide>
           <div className="relative">
-            <span className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-sm font-semibold text-muted-foreground">R</span>
+            <span className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-sm font-semibold text-muted-foreground">{currencySymbol(moneyFmt)}</span>
             <input
               name="basePrice"
               className="input pl-10 tabular-nums"

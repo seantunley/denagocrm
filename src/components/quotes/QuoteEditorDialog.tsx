@@ -54,7 +54,7 @@ import CustomFieldsForm from "@/components/custom-fields/CustomFieldsForm";
 import { quoteSigningView } from "@/app/actions/recordSigning";
 import type { QuoteSigningView } from "@/lib/signing/record";
 import { feeRows, quotePricing } from "@/lib/pricing";
-import { formatDate, formatDateTime, formatZAR, type Regional } from "@/lib/format";
+import { currencySymbol, formatDate, formatDateTime, formatZAR, type Regional } from "@/lib/format";
 import { parseMoneyInput } from "@/lib/moneyInput";
 import { calendarDateInstant } from "@/lib/quoteExpiry";
 import SigningBlock from "@/components/SigningBlock";
@@ -1144,7 +1144,7 @@ export function QuoteEditorDialog({
                                 <input id={`${line.key}-qty`} className="input" inputMode="decimal" value={line.qty} disabled={!editable} onChange={(event) => updateLine(line.key, { qty: event.target.value })} />
                               </div>
                               <div>
-                                <label className="label" htmlFor={`${line.key}-price`}>Unit price (R)</label>
+                                <label className="label" htmlFor={`${line.key}-price`}>Unit price ({currencySymbol(regional)})</label>
                                 <input id={`${line.key}-price`} className="input" inputMode="decimal" value={line.unitPrice} disabled={!editable} onChange={(event) => updateLine(line.key, { unitPrice: event.target.value })} />
                               </div>
                               <div>
@@ -1194,7 +1194,7 @@ export function QuoteEditorDialog({
                                 <input id={`${fee.key}-label`} className="input" value={fee.label} disabled={!editable} placeholder={fee.kind === "delivery" ? "Delivery to…" : "Admin fee"} onChange={(event) => updateFee(fee.key, { label: event.target.value })} />
                               </div>
                               <div>
-                                <label className="label" htmlFor={`${fee.key}-amount`}>Amount (R)</label>
+                                <label className="label" htmlFor={`${fee.key}-amount`}>Amount ({currencySymbol(regional)})</label>
                                 <input id={`${fee.key}-amount`} className="input tabular-nums" inputMode="decimal" value={fee.amount} disabled={!editable} onChange={(event) => updateFee(fee.key, { amount: event.target.value })} />
                               </div>
                               {editable && (

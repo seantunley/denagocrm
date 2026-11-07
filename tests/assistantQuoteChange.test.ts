@@ -97,7 +97,7 @@ test("a card only for a draft they may edit and open, for rows that are on it, w
   assert.match(branch, /if \(wanted\.colour && !offered\) \{\s*(\/\/[^\n]*\s*)*const near = closestColour\(wanted\.colour, colours\);\s*problem = `"\$\{wanted\.colour\}" is not a colour the \$\{line\.description\} comes in/);
   // ALREADY AS ASKED is said, not dropped (2026-10-13: "change the Rover to White" — it already was).
   assert.match(branch, /problem = `On \$\{ref\} the \$\{line\.description\} is already /);
-  assert.match(branch, /problem = `On \$\{ref\} the fee "\$\{fee\.label\}" \(\$\{formatZAR\(fee\.amountCents\)\}\) is already as you asked/);
+  assert.match(branch, /problem = `On \$\{ref\} the fee "\$\{fee\.label\}" \(\$\{formatZAR\(fee\.amountCents, moneyFmt\)\}\) is already as you asked/);
   assert.match(branch, /confirmKey: `qk_\$\{randomBytes\(16\)\.toString\("hex"\)\}`,/);
 });
 
@@ -111,10 +111,10 @@ test("with ONE line on the quote, the line need not be named — and the same fo
   // DAX is SHOWN what is on a quote: its lines (with colour) and fees, as they are named there — in the quote
   // search, a lead's quotes, and a customer's quotes.
   const assistant = code("src/lib/crmAssistant.ts");
-  assert.equal((assistant.match(/\.\.\.quoteContents\((quote|q)\),/g) ?? []).length, 3);
+  assert.equal((assistant.match(/\.\.\.quoteContents\((quote|q), moneyFmt\),/g) ?? []).length, 3);
   const contents = assistant.slice(assistant.indexOf("function quoteContents("), assistant.indexOf("export async function findActivities("));
   assert.match(contents, /`\$\{item\.qty\} × \$\{item\.description\}\$\{item\.colorPreference \? ` — colour \$\{item\.colorPreference\}` : ""\}/);
-  assert.match(contents, /fees: quote\.fees\.slice\(0, 12\)\.map\(\(fee\) => `\$\{fee\.label\} — \$\{formatZAR\(fee\.amountCents\)\}`\),/);
+  assert.match(contents, /fees: quote\.fees\.slice\(0, 12\)\.map\(\(fee\) => `\$\{fee\.label\} — \$\{formatZAR\(fee\.amountCents, moneyFmt\)\}`\),/);
   // What a quote costs to make, and which lines are optional, are not among them.
   assert.doesNotMatch(contents, /costCents|unitPriceCents|optional|selected/);
 });
@@ -262,7 +262,7 @@ test("A QUOTE CAN BE LOOKED UP BY ITS NUMBER — or its lines are only seen when
   assert.match(find, /const wantedNumber = args\.number === undefined \? null : Number\(String\(args\.number\)\.replace\(\/\^Q-\?\/i, ""\)\);/);
   assert.match(find, /\.\.\.\(wantedNumber === null \? \{ supersededAt: null \} : \{ number: wantedNumber \}\),\s*\.\.\.\(ids === null \? \{\} : \{ id: \{ in: ids \} \}\),/);
   assert.match(find, /const ids = await getAccessibleQuoteIds\(user\);/);
-  assert.match(find, /\.\.\.quoteContents\(quote\),/);
+  assert.match(find, /\.\.\.quoteContents\(quote, moneyFmt\),/);
 });
 
 test("A CUSTOMER'S RECORD LISTS THEIR QUOTES — a quote on no deal was invisible (2026-10-13: DAX asked for a screenshot)", () => {
@@ -274,7 +274,7 @@ test("A CUSTOMER'S RECORD LISTS THEIR QUOTES — a quote on no deal was invisibl
   assert.match(named, /found\.length === 0 \|\| \(quoteIds !== null && quoteIds\.length === 0\) \? \[\]/, "no quote access, no quote query");
   // Each with its number and what is on it — the names quote_change matches against.
   assert.match(named, /quotes: quotes\.filter\(\(q\) => q\.contactId === c\.id\)\.slice\(0, 5\)\.map\(\(q\) => \(\{\s*quote: `Q-\$\{q\.number\}`,/);
-  assert.match(named, /\.\.\.quoteContents\(q\),/);
+  assert.match(named, /\.\.\.quoteContents\(q, moneyFmt\),/);
   // Still no phone numbers or emails on a customer.
   assert.doesNotMatch(named, /phone|email/i);
 });

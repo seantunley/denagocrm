@@ -384,6 +384,7 @@ export async function createQuoteForFleet(formData: FormData) {
  */
 export async function saveQuoteDraft(input: QuoteDraftInput): Promise<QuoteDraftResult> {
   return withActingStaffScope(async () => {
+    const moneyFmt = await getRegionalSettings();
   const parsed = quoteDraftSchema.safeParse(input);
   if (!parsed.success) {
     return { ok: false, error: parsed.error.issues[0]?.message ?? "Check the quote details." };
@@ -586,6 +587,7 @@ export async function saveQuoteDraft(input: QuoteDraftInput): Promise<QuoteDraft
       // phone link is looked up.
       const finish = async (itemRows: PricedItem[], feeRows: PricedFee[], cpq: typeof cpqQuoteData) => {
         const rewritten = await tx.quote.findUniqueOrThrow({ where: { id: existing.id } });
+        const moneyFmt = await getRegionalSettings();
         if (data.pdfToMyWhatsApp && data.intent === "draft") {
           const total = payableTotalCents({ items: itemRows, fees: feeRows, ...cpq });
           await tx.assistantTurn.create({
@@ -595,7 +597,7 @@ export async function saveQuoteDraft(input: QuoteDraftInput): Promise<QuoteDraft
               source: QUOTE_PDF_SOURCE,
               quoteId: existing.id,
               question: `Draft quote Q-${existing.number} updated`,
-              answer: `I've updated draft quote Q-${existing.number} (now ${formatZAR(Math.round(total))}). It has NOT been sent to the customer — sending it is your step.\n${quoteOrigin}/quotes?edit=${existing.id}`,
+              answer: `I've updated draft quote Q-${existing.number} (now ${formatZAR(Math.round(total), moneyFmt)}). It has NOT been sent to the customer — sending it is your step.\n${quoteOrigin}/quotes?edit=${existing.id}`,
             },
           });
         }
@@ -830,7 +832,7 @@ export async function saveQuoteDraft(input: QuoteDraftInput): Promise<QuoteDraft
           source: QUOTE_PDF_SOURCE,
           quoteId: created.id,
           question: `Draft quote Q-${number}`,
-          answer: `I've created draft quote Q-${number} (${formatZAR(Math.round(total))}). It has NOT been sent to the customer — sending it is your step.\n${quoteOrigin}/quotes?edit=${created.id}`,
+          answer: `I've created draft quote Q-${number} (${formatZAR(Math.round(total), moneyFmt)}). It has NOT been sent to the customer — sending it is your step.\n${quoteOrigin}/quotes?edit=${created.id}`,
         },
       });
     }
@@ -888,7 +890,7 @@ export async function saveQuoteDraft(input: QuoteDraftInput): Promise<QuoteDraft
     action: data.intent === "sent" ? "quote.sent" : data.id ? "quote.updated" : "quote.created",
     summary:
       data.intent === "sent"
-        ? `Quote Q-${saved.number} (${formatZAR(Math.round(total))}) marked sent to the customer`
+        ? `Quote Q-${saved.number} (${formatZAR(Math.round(total), moneyFmt)}) marked sent to the customer`
         : `${data.id ? "Updated" : "Created"} quote Q-${saved.number} for ${contactName(contact)}`,
     leadId: saved.leadId,
     contactId: data.contactId,
@@ -1118,6 +1120,7 @@ async function auditLeadReopened(
 
 export async function setQuoteStatus(quoteId: string, status: string) {
   return asActionResult(async () => {
+    const moneyFmt = await getRegionalSettings();
     const user = await requireQuoteAccess(quoteId, "quotes.change_status");
     const allowed = new Set(["draft", "sent", "accepted", "declined"]);
     if (!allowed.has(status)) throw new ActionRefusal("Invalid quote status");
@@ -1188,7 +1191,7 @@ export async function setQuoteStatus(quoteId: string, status: string) {
         : "moved back to draft";
     await logAudit({
       action: `quote.${status}`,
-      summary: `Quote Q-${quote.number} (${formatZAR(Math.round(total))}) ${verb}`,
+      summary: `Quote Q-${quote.number} (${formatZAR(Math.round(total), moneyFmt)}) ${verb}`,
       leadId: quote.leadId,
       contactId: quote.contactId,
       user,

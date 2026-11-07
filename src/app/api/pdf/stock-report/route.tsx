@@ -5,6 +5,7 @@ import { hasPermission } from "@/lib/permissions";
 import { withActingStaffScope } from "@/lib/actingScope";
 import { formatDateTime } from "@/lib/format";
 import { getCompanyProfile } from "@/lib/companyProfile";
+import { getRegionalSettings } from "@/lib/settings";
 import { listStockUnits, stockDashboard } from "@/lib/stockPlatform";
 import StockReportDoc, { type StockReportMeta } from "@/lib/pdf/StockReportDoc";
 
@@ -75,7 +76,7 @@ async function handleGet(req: Request) {
     truncated: units.length >= REPORT_LIMIT,
   };
 
-  const buf = Buffer.from(await renderToBuffer(<StockReportDoc units={units} dashboard={dashboard} meta={meta} />));
+  const buf = Buffer.from(await renderToBuffer(<StockReportDoc units={units} dashboard={dashboard} meta={meta} moneyFmt={await getRegionalSettings()} />));
 
   return new Response(new Uint8Array(buf), {
     headers: {
