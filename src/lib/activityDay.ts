@@ -37,6 +37,25 @@ export function johannesburgDateKey(date: Date): string {
   return `${value.year}-${value.month}-${value.day}`;
 }
 
+/** Midnight starting `now`'s Johannesburg day (SAST is UTC+2 all year). */
+export function johannesburgStartOfDay(now: Date = new Date()): Date {
+  return new Date(`${johannesburgDateKey(now)}T00:00:00+02:00`);
+}
+
+/**
+ * Overdue, as the Activities page and the sidebar badge both count it: an all-day
+ * task once its day has passed, a timed one once its time has. Reads the row's
+ * own `allDay` flag — guessing from the clock time would take a 02:00 SAST
+ * appointment (00:00 UTC) for an all-day task.
+ */
+export function isOverdueActivity(
+  activity: { dueDate: Date; allDay: boolean },
+  now: Date = new Date(),
+): boolean {
+  const { dueDate, allDay } = activity;
+  return allDay ? dueDate < johannesburgStartOfDay(now) : dueDate < now;
+}
+
 /** True when `dueDate` falls on a LATER Johannesburg day than `now`. */
 export function isFutureDay(dueDate: Date, now: Date = new Date()): boolean {
   return johannesburgDateKey(dueDate) > johannesburgDateKey(now);

@@ -43,7 +43,8 @@ test("the bot acts on, and logs its replies to, the same contact", () => {
 test("Telegram is a channel in the inbox, and staff can reply (text)", () => {
   assert.match(src("src/app/(app)/inbox/page.tsx"), /\{ key: "telegram", label: "Telegram",/);
   assert.match(src("src/lib/inboxQuery.ts"), /"telegram"\]/);
-  assert.match(src("src/lib/inboxCount.ts"), /"telegram"\]/);
+  // The badge counts the inbox's own channel list, so Telegram (and X) are counted wherever the inbox lists them.
+  assert.match(src("src/lib/inboxCount.ts"), /import \{ DM_CHANNELS \} from "\.\/inboxQuery";/);
   const reply = src("src/app/actions/messenger.ts");
   assert.match(reply, /: platform === "telegram" \? contact\.telegramChatId/);
   assert.match(reply, /if \(platform === "telegram" && hasFile\) \{/);

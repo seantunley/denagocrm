@@ -23,7 +23,7 @@ import {
 import { cancelActivity, completeActivity } from "@/app/actions/activities";
 import { SaveForm, SaveButton } from "@/components/SaveForm";
 import ConfirmActionDialog from "@/components/ConfirmActionDialog";
-import { isFutureDay } from "@/lib/activityDay";
+import { isFutureDay, isOverdueActivity, johannesburgStartOfDay } from "@/lib/activityDay";
 import { QuickCreateButton } from "@/components/QuickCreateButton";
 import { buttonVariants } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -100,21 +100,6 @@ const DEFAULT_ACTIVITY: ActivityMeta = {
   tone: "border-slate-400/20 bg-slate-400/10 text-slate-300",
 };
 
-function johannesburgDateKey(date: Date): string {
-  const parts = new Intl.DateTimeFormat("en-CA", {
-    timeZone: "Africa/Johannesburg",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).formatToParts(date);
-  const value = Object.fromEntries(parts.map((part) => [part.type, part.value]));
-  return `${value.year}-${value.month}-${value.day}`;
-}
-
-function isAllDayActivity(date: Date): boolean {
-  return date.getUTCHours() === 0 && date.getUTCMinutes() === 0;
-}
-
 export default async function ActivitiesPage({
   searchParams,
 }: {
@@ -187,15 +172,11 @@ export default async function ActivitiesPage({
   });
 
   const now = new Date();
-  const todayKey = johannesburgDateKey(now);
-  const startOfToday = new Date(`${todayKey}T00:00:00+02:00`);
+  const startOfToday = johannesburgStartOfDay(now);
   const endOfToday = new Date(startOfToday.getTime() + 24 * 60 * 60 * 1000);
 
-  const overdue = activities.filter((activity) =>
-    isAllDayActivity(activity.dueDate)
-      ? activity.dueDate < startOfToday
-      : activity.dueDate < now,
-  );
+  // The same rule the sidebar badge counts with (lib/activityDay.ts).
+  const overdue = activities.filter((activity) => isOverdueActivity(activity, now));
   const overdueIds = new Set(overdue.map((activity) => activity.id));
   const today = activities.filter(
     (activity) =>

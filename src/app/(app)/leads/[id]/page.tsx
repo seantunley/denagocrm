@@ -57,7 +57,7 @@ import { getAccessibleContactIds, getAccessibleQuoteIds } from "@/lib/permission
 import { quotePrintLinks } from "@/lib/quotePrintLinks";
 import { isModuleEnabled } from "@/lib/modules/enabled";
 import { UPCOMING_TEST_DRIVE_STATUSES } from "@/lib/testDriveBooking";
-import { EntityDetailShell } from "@/components/entity-detail-shell";
+import { EntityDetailShell, PhoneActions, WideActions } from "@/components/entity-detail-shell";
 import { StatusPill } from "@/components/visual-system";
 import { LeadScoreBadge } from "@/components/LeadScoreBadge";
 import { scoreLeads } from "@/lib/leadScoreLoader";
@@ -233,6 +233,23 @@ export default async function LeadDetailPage({
   />;
 
   const watch = lead.tenantId ? await watchState(lead.tenantId, user.id, { type: "lead", id: lead.id }) : { watching: false, count: 0 };
+  // The header's secondary actions: in the row from `sm` up, inside More on a phone (entity-detail-shell.tsx).
+  const watchAction = <WatchButton type="lead" id={lead.id} {...watch} />;
+  const openActions = lead.status === "open" && (
+    <>
+      {/* Gap audit #24: book from the lead itself; the form opens with the
+          lead (and its customer, when linked) already chosen. */}
+      {automotiveOn && canBookTestDrive && (
+        <Link
+          href={`/test-drives?book=1&leadId=${lead.id}${lead.contactId ? `&contactId=${lead.contactId}` : ""}`}
+          className="btn-secondary"
+        >
+          Book test drive
+        </Link>
+      )}
+      {canMarkWon && <MarkWonButton leadId={lead.id} leadName={lead.name} />}
+    </>
+  );
 
   return (
     <>
@@ -258,27 +275,14 @@ export default async function LeadDetailPage({
         </div>}
         meta={<div className="flex flex-wrap gap-x-3 gap-y-1"><span>Owner: {lead.assignedTo?.name ?? "Unassigned"}</span><span>Added {formatDate(lead.createdAt)} · {lead.source}</span></div>}
         actions={<>
-          <WatchButton type="lead" id={lead.id} {...watch} />
-          {lead.status === "open" && (
-            <>
-              {canCreateQuote && <SaveForm success="Quote created" resetOnSuccess={false} action={createQuoteFromLead.bind(null, lead.id)}>
-                <SaveButton className="btn-primary"><FileText className="size-4" />Create quote</SaveButton>
-              </SaveForm>}
-              {/* Gap audit #24: book from the lead itself; the form opens with the
-                  lead (and its customer, when linked) already chosen. */}
-              {automotiveOn && canBookTestDrive && (
-                <Link
-                  href={`/test-drives?book=1&leadId=${lead.id}${lead.contactId ? `&contactId=${lead.contactId}` : ""}`}
-                  className="btn-secondary"
-                >
-                  Book test drive
-                </Link>
-              )}
-              {canMarkWon && <MarkWonButton leadId={lead.id} leadName={lead.name} />}
-
-            </>
-          )}
+          {/* On a phone only Create quote and More fit on one row; the rest fold into More (PhoneActions below). */}
+          <WideActions>{watchAction}</WideActions>
+          {lead.status === "open" && canCreateQuote && <SaveForm success="Quote created" resetOnSuccess={false} action={createQuoteFromLead.bind(null, lead.id)}>
+            <SaveButton className="btn-primary"><FileText className="size-4" />Create quote</SaveButton>
+          </SaveForm>}
+          <WideActions>{openActions}</WideActions>
           <Popover><PopoverTrigger asChild><button type="button" className="btn-secondary" aria-label="More deal actions"><MoreHorizontal className="size-4" />More</button></PopoverTrigger><PopoverContent align="end" className="flex w-56 flex-col gap-2 p-2">
+            <PhoneActions>{watchAction}{openActions}</PhoneActions>
             <TabLink tab="details" className="btn-secondary">View deal details</TabLink>
             {lead.status === "open" && canChangeStage && canBookTestDrive && <ModalTrigger label="Move to nurture" title={`Future interest · ${lead.name}`} buttonClass="btn-secondary"><NurtureForm leadId={lead.id} users={users.map((u) => ({ id: u.id, name: u.name }))} ownerId={lead.assignedToId} canAssign={canAssign} /></ModalTrigger>}
             {lead.status === "nurture" && <Link href="/leads/nurture" className="btn-secondary">Review / reactivate</Link>}
