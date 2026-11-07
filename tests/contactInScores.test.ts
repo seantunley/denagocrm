@@ -33,7 +33,8 @@ test("customer health reads last contact through the rule — both queries", () 
 
 test("the lead score reads last contact through the same rule — messages AND activities", () => {
   const score = code("src/lib/leadScoreLoader.ts");
-  assert.match(score, /where: \{ leadId, \.\.\.contactCommunicationWhere \}/);
+  // …and only messages that were delivered (an unconfirmed WhatsApp is not contact).
+  assert.match(score, /where: \{ leadId, \.\.\.contactCommunicationWhere, \.\.\.sentOnly \}/);
   assert.match(score, /where: \{ leadId, \.\.\.contactActivityWhere \}/, "a ticked-off to-do no longer resets last contact");
   assert.doesNotMatch(score, /where: \{ leadId, status: "done" \}/);
 });
