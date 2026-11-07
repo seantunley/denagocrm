@@ -23,8 +23,8 @@ import {
   checkBackTiming,
   johannesburgDateKey,
   parseBriefAt,
-  stillWaiting,
 } from "../src/lib/proactiveRules";
+import { settleAwaiting } from "../src/lib/inboxThreads";
 import { PROACTIVE_SOURCES } from "../src/lib/assistantWhatsAppRules";
 import { CHECK_BACK_RULE, parseActionList } from "../src/lib/assistantActions";
 
@@ -297,17 +297,27 @@ test("it is on the automations page, reaching staff only", () => {
   assert.match(register, /key: "dax-proactive",[\s\S]{0,900}reaches: "staff",[\s\S]{0,300}managedAt: \{ label: "Settings → Assistant", href: "\/settings\/assistant" \}/);
 });
 
-// 2026-11-07: "no one has answered yet" — only a DELIVERED reply answers a customer.
-test("a waiting customer is answered only by a reply that was delivered", () => {
-  const wrote = new Date("2026-11-07T10:00:00Z");
-  const reply = [{ id: "r1", occurredAt: new Date("2026-11-07T10:05:00Z") }];
-  assert.equal(stillWaiting(wrote, reply, new Set()), false, "delivered (outbox sent, or no outbox row)");
-  assert.equal(stillWaiting(wrote, reply, new Set(["r1"])), true, "queued, retrying, dead or cancelled: still waiting");
-  assert.equal(stillWaiting(wrote, [{ id: "r0", occurredAt: new Date("2026-11-07T09:00:00Z") }], new Set()), true, "a reply BEFORE their message answers nothing");
-  assert.equal(stillWaiting(wrote, [...reply, { id: "r2", occurredAt: new Date("2026-11-07T10:06:00Z") }], new Set(["r1"])), false, "one delivered reply is enough");
-  const sweep = read("src/lib/proactive.ts");
-  assert.doesNotMatch(sweep.slice(sweep.indexOf("export async function sweepProactive")), /lastDirection: "inbound"/, "the thread's last word isn't proof the customer got it");
-  assert.match(sweep, /status: \{ not: "sent" \}/);
+// 2026-11-07: "no one has answered yet" — only a DELIVERED reply answers a customer, and DAX, the
+// attention list and the inbox agree (real rows: scripts/test-reply-delivery-thread.ts).
+test("only a delivered reply answers a waiting customer — one rule for every surface", () => {
+  // The conversation's last word skips a reply the outbox hasn't confirmed sent…
+  const recompute = read("src/lib/conversations.ts");
+  assert.match(recompute, /WHERE NOT EXISTS \(\s+SELECT 1 FROM "BotFlowOutbox" o\s+WHERE o\."communicationId" = m\.id AND o\.status <> 'sent'/);
+  // …and is re-derived when a reply turns sent, or sent turns failed.
+  const outbox = read("src/lib/botOutbox.ts");
+  assert.equal((outbox.match(/await rethreadDelivery\(row\.communicationId\)/g) ?? []).length, 3);
+  // DAX and the attention list read that field; the inbox applies the same rule to its own list.
+  assert.match(read("src/lib/proactive.ts"), /lastDirection: "inbound",/);
+  assert.match(read("src/lib/attention/signals.ts"), /lastDirection: "inbound"/);
+  assert.match(read("src/app/(app)/inbox/page.tsx"), /settleAwaiting\(threadList, \(id\) => delivery\.get\(id\)\?\.status\);/);
+  const sent = { id: "r1", direction: "outbound", body: "", at: new Date(), attachmentUrl: null, attachmentType: null, deliveredAt: null, seenAt: null };
+  const thread = (status: string | undefined) => settleAwaiting(
+    [{ key: "k", name: "", href: null, channel: "whatsapp", contactId: "c", leadId: null, phone: null, awaiting: false, unread: false, archived: false, lastAt: new Date(), messages: [sent, { ...sent, id: "in", direction: "inbound" }] }],
+    (id) => (id === "r1" ? status : undefined),
+  )[0].awaiting;
+  for (const status of ["pending", "running", "retry", "dead", "cancelled"]) assert.equal(thread(status), true, `${status}: still waiting`);
+  assert.equal(thread("sent"), false);
+  assert.equal(thread(undefined), false, "no outbox row (an email, a logged call) stands as written");
 });
 
 test("a DM reply goes on the thread it was typed in, not the customer's newest", () => {

@@ -443,8 +443,18 @@ const RECOMPUTE_SQL = (conversationId: string, tenantId: string | null) => Prism
            max("occurredAt") FILTER (WHERE direction = 'inbound') AS last_inbound_at
       FROM msgs
   ),
+  -- "Whose turn is it?" A reply the outbox has not confirmed sent (queued, retrying,
+  -- dead, cancelled) never reached the customer, so it doesn't end their wait — the
+  -- inbox, the attention list and DAX's alert all read lastDirection. The worker
+  -- recomputes when a reply turns sent, or sent turns failed (botOutbox).
   newest AS (
-    SELECT direction FROM msgs ORDER BY "occurredAt" DESC, id DESC LIMIT 1
+    SELECT m.direction FROM msgs m
+     WHERE NOT EXISTS (
+       SELECT 1 FROM "BotFlowOutbox" o
+        WHERE o."communicationId" = m.id AND o.status <> 'sent'
+          AND (${tenantId}::text IS NULL OR o."tenantId" = ${tenantId})
+     )
+     ORDER BY m."occurredAt" DESC, m.id DESC LIMIT 1
   ),
   first_response AS (
     -- The same rule the incremental version applied one message at a time: the

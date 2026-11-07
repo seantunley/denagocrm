@@ -12,7 +12,7 @@ import AutoRefresh from "@/components/AutoRefresh";
 import Tabs from "@/components/Tabs";
 import SocialThreadList, { type InboxDeal } from "@/components/SocialThreadList";
 import BotHandoffQueue, { type HandoffQueueItem } from "@/components/BotHandoffQueue";
-import { buildInboxThreads, threadCollaborationKey } from "@/lib/inboxThreads";
+import { buildInboxThreads, settleAwaiting, threadCollaborationKey } from "@/lib/inboxThreads";
 import { loadInboxComms } from "@/lib/inboxQuery";
 import { deliveryStateForMessages } from "@/lib/botOutbox";
 import { collaborationForThreads } from "@/lib/inboxCollaboration";
@@ -66,6 +66,9 @@ export default async function InboxPage({ searchParams }: { searchParams: Promis
       thread.messages.filter((message) => message.direction === "outbound").map((message) => message.id),
     ),
   );
+  // A queued or failed reply leaves the customer waiting: "Reply due" agrees with DAX and the attention list.
+  settleAwaiting(threadList, (id) => delivery.get(id)?.status);
+  settleAwaiting(archivedList, (id) => delivery.get(id)?.status);
   const [collaboration, staff, canCollaborate, deadConversations] = await Promise.all([
     collaborationForThreads([...threadList, ...archivedList]),
     listActingTenantStaff(),

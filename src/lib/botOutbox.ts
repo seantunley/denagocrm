@@ -21,7 +21,7 @@ import {
   type FailureLedger,
   type ProviderFailure,
 } from "./providerFailure";
-import { attachToConversation, bumpConversation, deleteCommunicationsAndReconcile } from "./conversations";
+import { attachToConversation, bumpConversation, deleteCommunicationsAndReconcile, recomputeConversationDerivedState } from "./conversations";
 import { attachmentUrlForDelivery } from "./outboundMedia";
 import type { OutMsg } from "./flow";
 import { sendWhatsAppButtons, sendWhatsAppContact, sendWhatsAppDocumentLink, sendWhatsAppImage, sendWhatsAppList, sendWhatsAppText } from "./whatsapp";
@@ -1228,6 +1228,17 @@ async function botMayStillSpeak(row: OutboxRow): Promise<boolean> {
   });
 }
 
+/**
+ * A reply's delivery changed (now sent, or sent → failed): its thread re-derives whose turn it is,
+ * since only a delivered reply answers the customer (conversations.ts). Best-effort — the next
+ * message on the thread recomputes it anyway.
+ */
+async function rethreadDelivery(communicationId: string | null | undefined): Promise<void> {
+  if (!communicationId) return;
+  const message = await prisma.communication.findFirst({ where: { id: communicationId }, select: { conversationId: true } });
+  if (message?.conversationId) await recomputeConversationDerivedState(message.conversationId);
+}
+
 async function deliverClaimed(row: OutboxRow): Promise<"sent" | "retry" | "dead" | "cancelled"> {
   // Last gate before the provider. A claimed row is not licence to send: the
   // conversation may have changed hands since it was queued, or since it was
@@ -1265,6 +1276,7 @@ async function deliverClaimed(row: OutboxRow): Promise<"sent" | "retry" | "dead"
     await reconcileParkedFailure(row.channel, result.providerMessageId);
     await stampProviderMessageId(row, result.providerMessageId);
     await repairCommunicationLog({ ...row, status: "sent", providerMessageId: result.providerMessageId }).catch(() => {});
+    await rethreadDelivery(row.communicationId).catch(() => {});
     return "sent";
   }
   await reconcileProviderEcho(result.providerMessageId);
@@ -1273,6 +1285,7 @@ async function deliverClaimed(row: OutboxRow): Promise<"sent" | "retry" | "dead"
   await reconcileParkedFailure(row.channel, result.providerMessageId);
   await stampProviderMessageId(row, result.providerMessageId);
   await repairCommunicationLog({ ...row, status: "sent", providerMessageId: result.providerMessageId }).catch(async (error) => { await logError("bot-outbox-log", error, row.id).catch(() => {}); });
+  await rethreadDelivery(row.communicationId).catch(() => {});
   return "sent";
 }
 
@@ -1314,11 +1327,15 @@ function failureLedger(channel: string): FailureLedger {
       // an accepted message that later failed reached nobody but the timeline).
       const accepted = await prisma.botFlowOutbox.findMany({
         where: { tenantId, channel, providerMessageId: failure.providerMessageId, status: "sent" },
-        select: { id: true, origin: true },
+        select: { id: true, origin: true, communicationId: true },
       });
       for (const row of accepted) {
         const flipped = await prisma.botFlowOutbox.updateMany({ where: { id: row.id, tenantId, status: "sent" }, data });
-        if (flipped.count === 1) await notifyDeliveryFailed({ origin: row.origin, channel }, failure.failureCode, tenantId);
+        if (flipped.count === 1) {
+          await notifyDeliveryFailed({ origin: row.origin, channel }, failure.failureCode, tenantId);
+          // The customer never got it: their thread is waiting on us again.
+          await rethreadDelivery(row.communicationId).catch(() => {});
+        }
       }
       // `dead` too: a redelivered webhook re-marks its own row instead of
       // parking a record nothing will consume.

@@ -91,12 +91,24 @@ export function buildInboxThreads(comms: CommRow[]): InboxThread[] {
       });
     }
   }
-  return [...threads.values()].sort(
-    (a, b) =>
-      Number(b.unread) - Number(a.unread) ||
-      Number(b.awaiting) - Number(a.awaiting) ||
-      b.lastAt.getTime() - a.lastAt.getTime()
-  );
+  return [...threads.values()].sort(byAttention);
+}
+
+function byAttention(a: InboxThread, b: InboxThread): number {
+  return Number(b.unread) - Number(a.unread) || Number(b.awaiting) - Number(a.awaiting) || b.lastAt.getTime() - a.lastAt.getTime();
+}
+
+/**
+ * The same rule as Conversation.lastDirection (conversations.ts): a reply the outbox has not
+ * confirmed sent — queued, retrying, dead, cancelled — never reached the customer, so their thread
+ * is still awaiting us. `status`: each message's outbox status, where it has one.
+ */
+export function settleAwaiting(threads: InboxThread[], status: (messageId: string) => string | undefined): InboxThread[] {
+  for (const thread of threads) {
+    const last = thread.messages.find((message) => message.direction !== "outbound" || (status(message.id) ?? "sent") === "sent");
+    thread.awaiting = last?.direction === "inbound";
+  }
+  return threads.sort(byAttention);
 }
 
 export type ThreadIdentity = {

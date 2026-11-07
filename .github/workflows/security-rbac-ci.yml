@@ -590,6 +590,12 @@ jobs:
       - name: Binding -- a DM thread resolves to its own channel's conversation
         run: npm run test:dm-binding
 
+      # Only a DELIVERED reply answers a waiting customer: a queued, retrying or
+      # failed one leaves the conversation (DAX's alert, the attention list) and the
+      # inbox's Reply due all saying "waiting". Needs real rows: the rule is SQL.
+      - name: Delivery -- a failed reply leaves the customer waiting everywhere
+        run: npm run test:reply-delivery
+
       # A schema test proves the composite key exists; only two real tenants
       # running through the sync prove the runtime uses it. The dormant-mode
       # predicate returned {} , so whoever synced a shared Google Place first
