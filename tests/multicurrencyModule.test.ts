@@ -113,6 +113,27 @@ test("a payment only matches invoices in its own currency", () => {
   assert.match(match, /\.\.\.\(paidIn === base \? \{ OR: \[\{ currency: null \}, \{ currency: base \}\] \} : \{ currency: paidIn \}\)/);
 });
 
+test("changing a lead's currency never keeps the old number under the new currency", () => {
+  const form = src("src/components/LeadForm.tsx");
+  assert.match(form, /onChange=\{\(event\) => onCurrencyChange\(event\.target\.value\)\}/);
+  const change = form.slice(form.indexOf("function onCurrencyChange"), form.indexOf("function onQtyChange"));
+  assert.match(change, /if \(code === currencies\[0\] && product && product\.basePriceCents > 0\) \{\s+setValue\(String\(\(product\.basePriceCents \/ 100\) \* qty\)\);/, "back to the base: the catalogue price");
+  assert.match(change, /\} else \{\s+setValue\(""\);/, "anything else: the amount is asked for again");
+  assert.match(form, /Currency changed — enter the value in \{currency\}\./);
+});
+
+test("the base currency can't change under recorded amounts; an in-use currency can't be switched off", () => {
+  const settings = src("src/app/actions/settings.ts");
+  assert.match(settings, /if \(parsed\.currency !== before\.currency && \(await hasRecordedAmounts\(\)\)\) \{\s+\/\/[^\n]*\n[^\n]*\n\s+throw new ActionRefusal\(/);
+  for (const model of ["quote", "lead", "product", "part", "jobCard", "stockUnit", "purchaseOrderLine"]) {
+    assert.match(settings, new RegExp(`prisma\\.${model}\\.findFirst\\(`), `${model} amounts block a base change`);
+  }
+  const enabled = settings.slice(settings.indexOf("export async function saveEnabledCurrencies"), settings.indexOf("export async function saveWorkshopSettings"));
+  assert.match(enabled, /prisma\.lead\.groupBy\(\{ by: \["currency"\], where: \{ currency: \{ in: dropped \} \}/);
+  assert.match(enabled, /prisma\.quote\.groupBy\(\{ by: \["currency"\], where: \{ currency: \{ in: dropped \} \}/);
+  assert.ok(enabled.indexOf("if (inUse.length)") < enabled.indexOf("await putSetting(ENABLED_CURRENCIES_KEY"), "refused before anything is saved");
+});
+
 test("board columns and the leads list total per currency", () => {
   assert.match(src("src/components/KanbanBoard.tsx"), /totalsByCurrency\(stage\.leads/);
   assert.match(src("src/app/(app)/leads/list/page.tsx"), /prisma\.lead\.groupBy\(\{ by: \["currency"\], where, _sum: \{ valueCents: true \} \}\)/);
