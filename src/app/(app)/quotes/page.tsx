@@ -376,7 +376,7 @@ export default async function QuotesPage({
                           href={`/quotes/${quote.id}`}
                           actions={quoteContextActions(quote, dealLabel)}
                         >
-                        <tr tabIndex={0} className="focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary">
+                        <tr tabIndex={0} data-nav-row="" data-nav-href={`/quotes/${quote.id}`} data-nav-lead={quote.leadId ?? undefined} className="focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary">
                           <td>
                             <QuoteEditorTrigger quoteId={quote.id} className="font-medium text-orange-400 hover:underline">
                               Q-{quote.number}

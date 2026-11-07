@@ -16,6 +16,7 @@ import { tenantEnforcing } from "@/lib/tenantEnforcement";
 import { currentTenantScope } from "@/lib/tenantScope";
 import AppShell from "@/components/AppShell";
 import AppContextMenu from "@/components/AppContextMenu";
+import ListKeyboard from "@/components/ListKeyboard";
 import SessionKeeper from "@/components/SessionKeeper";
 import AddPasskeyPrompt from "@/components/AddPasskeyPrompt";
 import AssistantBubble from "@/components/AssistantBubble";
@@ -164,6 +165,7 @@ export default async function AppLayout({
           listens on `document` and stands aside wherever RecordContextMenu, a
           flow canvas or a text input has already claimed the click. */}
       <AppContextMenu />
+      <ListKeyboard />
       <SessionKeeper />
       {/* Their own email, so passkey flags on this device are per account. */}
       <AddPasskeyPrompt email={user.email} />

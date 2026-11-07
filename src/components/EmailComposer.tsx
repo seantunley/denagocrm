@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import type { Editor } from "@tiptap/react";
 import { Clock, FileText, Paperclip, Receipt, Send, X, Eye, LayoutTemplate, ChevronDown, Mail } from "lucide-react";
 import { checkComposerEmail, composerBannerChoices, composerIdentity, discardEmailDraft, openEmailDraft, previewComposerEmail, saveEmailDraft, sendEmailAction, type SendEmailState } from "@/app/actions/emails";
@@ -131,6 +131,15 @@ export default function EmailComposer({ defaultTo, templates, smtpConfigured, le
     return () => window.removeEventListener(COMPOSE_REPLY_EVENT, onReply);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- freshDraft reads only props
   }, [defaultTo]);
+
+  // `?compose=email` — the e key on a list or the board (ListKeyboard) arrives with the email window open.
+  // Only the window: nothing is sent until Send is clicked in it.
+  const askedEmail = useSearchParams().get("compose") === "email";
+  useEffect(() => {
+    if (askedEmail) void openRef.current();
+    // Once, on arrival.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   /** Continue a draft from the waiting list — or take back a scheduled send to edit it. A problem to show, if any. */
   async function openDraft(id: string): Promise<string | undefined> {
