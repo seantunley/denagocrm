@@ -115,7 +115,7 @@ export default async function QuotesPage({
         ...(accessibleLeadIds ? { id: { in: accessibleLeadIds } } : {}),
       },
       orderBy: { createdAt: "desc" },
-      select: { id: true, title: true, name: true, contactId: true },
+      select: { id: true, title: true, name: true, contactId: true, currency: true },
       take: 500,
     }),
     prisma.product.findMany({
@@ -161,6 +161,7 @@ export default async function QuotesPage({
     id: lead.id,
     label: lead.label,
     contactId: lead.contactId,
+    currency: lead.currency,
   }));
   const productOptions = products.map((product) => ({
     id: product.id,

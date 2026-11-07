@@ -3,6 +3,23 @@ import { test } from "node:test";
 import { readFileSync } from "node:fs";
 import { baseAndOthers, baseValueCents, formatTotals, nonBaseTotals, othersText, stageSegments } from "../src/lib/currencyRules";
 
+test("a quote changing currency clears its prices and won't save until each is re-entered", () => {
+  const editor = readFileSync("src/components/quotes/QuoteEditorDialog.tsx", "utf8");
+  const reprice = editor.slice(editor.indexOf("function repricedForCurrency"), editor.indexOf("/**", editor.indexOf("function repricedForCurrency")));
+  assert.match(reprice, /const clear = \(amount: string\) => \(\/\[1-9\]\/\.test\(amount\) \? "" : amount\);/, "non-zero amounts cleared, zero kept");
+  assert.match(reprice, /lines: draft\.lines\.map\(\(line\) => \(\{ \.\.\.line, unitPrice: clear\(line\.unitPrice\) \}\)\)/);
+  assert.match(reprice, /fees: draft\.fees\.map\(\(fee\) => \(\{ \.\.\.fee, amount: clear\(fee\.amount\) \}\)\)/);
+  assert.match(reprice, /depositValue: draft\.depositType === "amount" \? clear\(draft\.depositValue\) : draft\.depositValue/);
+  // Both ways a draft's currency moves: the picker, and linking a lead (saved in the lead's currency).
+  assert.match(editor, /setDraft\(\(current\) => repricedForCurrency\(current, code === currencies\[0\] \? "" : code\)\);\s+setRepricing\(true\);/);
+  assert.match(editor, /\.\.\.repricedForCurrency\(current, currency\),\s+leadId,/);
+  assert.match(readFileSync("src/app/(app)/quotes/page.tsx", "utf8"), /currency: lead\.currency,/);
+  // Save refuses a cleared line, fee or fixed deposit instead of taking blank as 0.
+  assert.match(editor, /if \(\(\(draft\.currency && line\.kind === "catalogue"\) \|\| repricing\) && !line\.unitPrice\.trim\(\)\) \{/);
+  assert.match(editor, /const unpricedFee = repricing \? draft\.fees\.find\(\(fee\) => !fee\.amount\.trim\(\)\) : undefined;/);
+  assert.match(editor, /if \(repricing && draft\.depositType === "amount" && !draft\.depositValue\.trim\(\)\) \{/);
+});
+
 test("pipeline snapshot: every deal counts toward its stage; only base values are summed", () => {
   const stage = (id: string, order: number) => ({ id, name: id, color: "#000", order });
   // A pipeline holding ONLY foreign-currency deals still has deals — not "No open leads yet".
@@ -101,7 +118,7 @@ test("lists and boards total per currency", () => {
 test("a catalogue price is never put on a quote in another currency", () => {
   const editor = src("src/components/quotes/QuoteEditorDialog.tsx");
   assert.match(editor, /unitPrice: current\.currency \? "" : priceInput\(product\.basePriceCents\)/);
-  assert.match(editor, /if \(draft\.currency && line\.kind === "catalogue" && !line\.unitPrice\.trim\(\)\)/, "and a blank one isn't saved as 0");
+  assert.match(editor, /if \(\(\(draft\.currency && line\.kind === "catalogue"\) \|\| repricing\) && !line\.unitPrice\.trim\(\)\)/, "and a blank one isn't saved as 0");
   const dax = src("src/lib/crmAssistant.ts");
   assert.match(dax, /if \(quote\.currency\) \{ problems\.push\(foreignCurrencyQuote\(/);
   assert.match(dax, /if \(deal\.currency\) \{ problems\.push\(foreignCurrencyQuote\(/);

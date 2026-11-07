@@ -84,6 +84,8 @@ export type QuoteEditorLead = {
   id: string;
   label: string;
   contactId: string | null;
+  /** NULL = the base. A quote on a lead is saved in the lead's currency. */
+  currency?: string | null;
 };
 
 export type QuoteEditorProduct = {
@@ -233,6 +235,23 @@ function feeKey() {
 
 function priceInput(cents: number) {
   return (cents / 100).toFixed(2);
+}
+
+/**
+ * The draft in another currency. Every typed or catalogue amount was in the OLD one, so it is
+ * cleared rather than relabelled (R100 000 is not US$100 000); save then asks for each again.
+ * Zero amounts (a free item) mean the same in any currency and stay.
+ */
+function repricedForCurrency(draft: DraftState, currency: string): DraftState {
+  if (currency === draft.currency) return draft;
+  const clear = (amount: string) => (/[1-9]/.test(amount) ? "" : amount);
+  return {
+    ...draft,
+    currency,
+    lines: draft.lines.map((line) => ({ ...line, unitPrice: clear(line.unitPrice) })),
+    fees: draft.fees.map((fee) => ({ ...fee, amount: clear(fee.amount) })),
+    depositValue: draft.depositType === "amount" ? clear(draft.depositValue) : draft.depositValue,
+  };
 }
 
 /**
@@ -389,6 +408,8 @@ export function QuoteEditorDialog({
   const router = useRouter();
   const regional = defaults.regional;
   const [draft, setDraft] = useState<DraftState>(() => createDraft(record, defaults, initialContactId, products));
+  // Set once the currency is changed: from then on a blank price is "not yet repriced", never 0.
+  const [repricing, setRepricing] = useState(false);
   // Every amount on the quote is in ITS currency (multicurrency module; "" = the base).
   const money = withCurrency(regional, draft.currency || null);
   const currencyCode = draft.currency || regional.currency; // a primitive from state, so the totals memo can depend on it
@@ -772,8 +793,8 @@ export function QuoteEditorDialog({
         setActiveTab("build");
         return;
       }
-      // Not filled from the catalogue in another currency, so a blank here was never priced.
-      if (draft.currency && line.kind === "catalogue" && !line.unitPrice.trim()) {
+      // Not filled from the catalogue in another currency, or cleared by a currency change: a blank here was never priced.
+      if (((draft.currency && line.kind === "catalogue") || repricing) && !line.unitPrice.trim()) {
         setError(`Enter the ${money.currency} price for “${description}”.`);
         setActiveTab("build");
         return;
@@ -806,6 +827,18 @@ export function QuoteEditorDialog({
     const unclearFee = draft.fees.find((fee) => !Number.isFinite(centsFromInput(fee.amount, money.currency)));
     if (unclearFee) {
       setError(`Enter a clear amount for “${unclearFee.label.trim() || "the fee"}”.`);
+      setActiveTab("build");
+      return;
+    }
+    // After a currency change a blank fee or fixed deposit was cleared, not waived.
+    const unpricedFee = repricing ? draft.fees.find((fee) => !fee.amount.trim()) : undefined;
+    if (unpricedFee) {
+      setError(`Enter the ${money.currency} amount for “${unpricedFee.label.trim() || "the fee"}”.`);
+      setActiveTab("build");
+      return;
+    }
+    if (repricing && draft.depositType === "amount" && !draft.depositValue.trim()) {
+      setError(`Enter the ${money.currency} deposit amount.`);
       setActiveTab("build");
       return;
     }
@@ -1064,7 +1097,7 @@ export function QuoteEditorDialog({
                       {currencies.length > 1 && (
                         <div className="mt-4">
                           <label className="block text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground" htmlFor="quote-currency">Currency</label>
-                          {record?.leadId ? (
+                          {record?.leadId || draft.leadId ? (
                             <p className="mt-1.5 text-sm">{money.currency} <span className="text-xs text-muted-foreground">· the deal&apos;s currency</span></p>
                           ) : (
                             <select
@@ -1074,11 +1107,15 @@ export function QuoteEditorDialog({
                               disabled={!editable}
                               onChange={(event) => {
                                 const code = event.target.value;
-                                setDraft((current) => ({ ...current, currency: code === currencies[0] ? "" : code }));
+                                setDraft((current) => repricedForCurrency(current, code === currencies[0] ? "" : code));
+                                setRepricing(true);
                               }}
                             >
                               {currencies.map((code) => <option key={code} value={code}>{code}</option>)}
                             </select>
+                          )}
+                          {repricing && (
+                            <p role="status" className="mt-1.5 text-xs text-amber-500">Prices cleared — enter each one in {money.currency}.</p>
                           )}
                         </div>
                       )}
@@ -1096,8 +1133,12 @@ export function QuoteEditorDialog({
                             onChange={(event) => {
                               const leadId = event.target.value;
                               const lead = leads.find((item) => item.id === leadId);
+                              // The server saves a lead's quote in the LEAD's currency, so the draft moves to it —
+                              // and prices typed in the old one are cleared, not relabelled.
+                              const currency = lead ? lead.currency ?? "" : draft.currency;
+                              if (currency !== draft.currency) setRepricing(true);
                               setDraft((current) => ({
-                                ...current,
+                                ...repricedForCurrency(current, currency),
                                 leadId,
                                 // Keep the customer in step with the chosen lead.
                                 contactId: lead?.contactId ?? current.contactId,
