@@ -21,7 +21,7 @@ import {
   type FailureLedger,
   type ProviderFailure,
 } from "./providerFailure";
-import { deleteCommunicationsAndReconcile } from "./conversations";
+import { attachToConversation, bumpConversation, deleteCommunicationsAndReconcile } from "./conversations";
 import { attachmentUrlForDelivery } from "./outboundMedia";
 import type { OutMsg } from "./flow";
 import { sendWhatsAppButtons, sendWhatsAppContact, sendWhatsAppDocumentLink, sendWhatsAppImage, sendWhatsAppList, sendWhatsAppText } from "./whatsapp";
@@ -408,6 +408,21 @@ async function enqueueStaffReplyInWorkspace(input: StaffReplyInput): Promise<Sta
     leadId: input.leadId,
   });
 
+  // THE REPLY GOES ON THE CUSTOMER'S THREAD. The guarded client threads every
+  // `communication.create` (db.ts); this transaction is on `basePrisma`, which
+  // does not — so staff replies were filed on no conversation, the thread still
+  // said "last word: the customer", and DAX alerted that nobody had answered a
+  // customer who had been answered (2026-11-07). Chosen the same way the hook
+  // chooses, and it may restamp the tenant to the thread's, as the hook does.
+  const history: { type: string; direction: string; contactId: string | null; leadId: string | null; tenantId: string | null; conversationId?: string | null } = {
+    type: input.channel,
+    direction: "outbound",
+    contactId: input.contactId ?? null,
+    leadId: input.leadId ?? null,
+    tenantId: historyTenantId,
+  };
+  const thread = await attachToConversation(history);
+
   try {
     // USER-ORIGINATED, and CONVERTED — with `outboxTenantId()` and the drain, not
     // ahead of them. Both callers are Server Actions behind `inbox.reply`
@@ -488,8 +503,10 @@ async function enqueueStaffReplyInWorkspace(input: StaffReplyInput): Promise<Sta
             contactId: input.contactId ?? null,
             leadId: input.leadId ?? null,
             userId: input.actorId,
-            // The customer record's tenant, NOT the queue's — see historyTenantId.
-            tenantId: historyTenantId,
+            // The customer record's tenant, NOT the queue's — see historyTenantId
+            // (or the thread's, when attachToConversation above found one).
+            tenantId: history.tenantId,
+            conversationId: history.conversationId ?? null,
           },
           select: { id: true },
         });
@@ -520,6 +537,8 @@ async function enqueueStaffReplyInWorkspace(input: StaffReplyInput): Promise<Sta
 
       return links;
     });
+    // After the commit, as the hook does: the thread's "last word" is now ours.
+    if (thread) await bumpConversation(thread.id, { direction: "outbound" }).catch(() => {});
 
     for (const link of written) {
       existing.set(link.key, {

@@ -439,3 +439,17 @@ test("a staff reply is logged once, and never as bot output", () => {
   assert.match(repair.slice(0, 200), /if \(row\.communicationLoggedAt\) return false;/,
     "the worker must treat an already-logged row as done");
 });
+
+/**
+ * 2026-11-07: a reply sent from the CRM was filed on NO conversation — the write
+ * runs in a basePrisma transaction, which the db.ts threading hook never sees — so
+ * the thread kept "last word: the customer" and DAX alerted "no one has answered
+ * yet" hours after someone had.
+ */
+test("a staff reply is filed on the customer's thread and the thread is rolled forward", () => {
+  const fn = staffFn();
+  assert.match(fn, /const thread = await attachToConversation\(history\);/);
+  assert.match(fn, /tenantId: history\.tenantId,\s+conversationId: history\.conversationId \?\? null,/);
+  assert.match(fn, /if \(thread\) await bumpConversation\(thread\.id, \{ direction: "outbound" \}\)/);
+  assert.ok(fn.indexOf("attachToConversation(history)") < fn.indexOf("withBotConversationWrite"), "the thread is chosen before the transaction");
+});
