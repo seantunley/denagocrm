@@ -284,6 +284,12 @@ export type StaffReplyInput = {
   parts: StaffReplyPart[];
   contactId?: string | null;
   leadId?: string | null;
+  /**
+   * The thread being answered, when the caller knows it (the DM reply box does: one customer can
+   * have several open threads on a channel). Without it the reply goes on the newest open one —
+   * the same one an inbound message on that channel is filed on.
+   */
+  conversationId?: string | null;
   actorId: string;
   /** Written in the same transaction, so an accepted reply is always accounted for. */
   audit?: { action: string; summary: string; user: { id: string; name: string } };
@@ -420,6 +426,8 @@ async function enqueueStaffReplyInWorkspace(input: StaffReplyInput): Promise<Sta
     contactId: input.contactId ?? null,
     leadId: input.leadId ?? null,
     tenantId: historyTenantId,
+    // A chosen thread is re-read and checked against this reply's customer and tenant there.
+    conversationId: input.conversationId ?? null,
   };
   const thread = await attachToConversation(history);
 

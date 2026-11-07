@@ -56,6 +56,16 @@ export const REVISIT_ALERT_AT = 3;
 export const WAITING_AFTER_MS = 15 * 60 * 1000;
 /** …and no older than this: a message from last week is the inbox's business, not an alert. */
 export const WAITING_LOOKBACK_MS = 24 * 60 * 60 * 1000;
+/**
+ * Is this customer still waiting? Only a DELIVERED reply after their last message answers them: a
+ * reply the outbox has not confirmed sent (queued, retrying, dead, cancelled) never reached them.
+ * `replies`: the thread's outbound messages; `unconfirmed`: those with an outbox row not "sent"
+ * (a message with no outbox row — an email, a logged call — stands as written).
+ */
+export function stillWaiting(lastInboundAt: Date, replies: readonly { id: string; occurredAt: Date }[], unconfirmed: ReadonlySet<string>): boolean {
+  return !replies.some((reply) => reply.occurredAt >= lastInboundAt && !unconfirmed.has(reply.id));
+}
+
 /** At most this many alerts reach a person in a day; past it they wait for the morning. */
 export const DAILY_ALERT_CEILING = 12;
 

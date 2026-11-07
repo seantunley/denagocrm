@@ -23,6 +23,7 @@ import {
   checkBackTiming,
   johannesburgDateKey,
   parseBriefAt,
+  stillWaiting,
 } from "../src/lib/proactiveRules";
 import { PROACTIVE_SOURCES } from "../src/lib/assistantWhatsAppRules";
 import { CHECK_BACK_RULE, parseActionList } from "../src/lib/assistantActions";
@@ -294,4 +295,22 @@ test("saved as the person's one-off question marked set by DAX, with its own cap
 test("it is on the automations page, reaching staff only", () => {
   const register = read("src/lib/automationRegister.ts");
   assert.match(register, /key: "dax-proactive",[\s\S]{0,900}reaches: "staff",[\s\S]{0,300}managedAt: \{ label: "Settings → Assistant", href: "\/settings\/assistant" \}/);
+});
+
+// 2026-11-07: "no one has answered yet" — only a DELIVERED reply answers a customer.
+test("a waiting customer is answered only by a reply that was delivered", () => {
+  const wrote = new Date("2026-11-07T10:00:00Z");
+  const reply = [{ id: "r1", occurredAt: new Date("2026-11-07T10:05:00Z") }];
+  assert.equal(stillWaiting(wrote, reply, new Set()), false, "delivered (outbox sent, or no outbox row)");
+  assert.equal(stillWaiting(wrote, reply, new Set(["r1"])), true, "queued, retrying, dead or cancelled: still waiting");
+  assert.equal(stillWaiting(wrote, [{ id: "r0", occurredAt: new Date("2026-11-07T09:00:00Z") }], new Set()), true, "a reply BEFORE their message answers nothing");
+  assert.equal(stillWaiting(wrote, [...reply, { id: "r2", occurredAt: new Date("2026-11-07T10:06:00Z") }], new Set(["r1"])), false, "one delivered reply is enough");
+  const sweep = read("src/lib/proactive.ts");
+  assert.doesNotMatch(sweep.slice(sweep.indexOf("export async function sweepProactive")), /lastDirection: "inbound"/, "the thread's last word isn't proof the customer got it");
+  assert.match(sweep, /status: \{ not: "sent" \}/);
+});
+
+test("a DM reply goes on the thread it was typed in, not the customer's newest", () => {
+  assert.match(read("src/app/actions/messenger.ts"), /enqueueStaffReply\(\{[\s\S]{0,200}conversationId,/);
+  assert.match(read("src/lib/botOutbox.ts"), /conversationId: input\.conversationId \?\? null,\s+\};\s+const thread = await attachToConversation\(history\);/);
 });

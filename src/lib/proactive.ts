@@ -22,6 +22,7 @@ import {
   WAITING_AFTER_MS,
   WAITING_LOOKBACK_MS,
   isQuietHour,
+  stillWaiting,
   johannesburgDayStart,
   proactiveDeliverAt,
   proactiveOn,
@@ -271,16 +272,19 @@ export async function sweepProactive(tenantId: string, budget: Pick<CronSliceCon
 
   // Waiting customers: only in working hours — at 08:00 the night's messages that are still unanswered come up.
   if (isQuietHour(now)) return stats;
-  const waiting = await basePrisma.conversation.findMany({
+  // Not the thread's lastDirection: a reply queued or refused by the provider makes the thread's last
+  // word ours while the customer still has nothing. Each thread's replies are checked for delivery.
+  const lookback = new Date(now.getTime() - WAITING_LOOKBACK_MS);
+  const recent = await basePrisma.conversation.findMany({
     where: {
       tenantId,
       status: "open",
       mutedAt: null,
-      lastDirection: "inbound",
-      lastInboundAt: { lte: new Date(now.getTime() - WAITING_AFTER_MS), gte: new Date(now.getTime() - WAITING_LOOKBACK_MS) },
+      lastInboundAt: { lte: new Date(now.getTime() - WAITING_AFTER_MS), gte: lookback },
     },
     orderBy: { lastInboundAt: "asc" },
-    take: 30,
+    // ponytail: 100 threads with a customer message in the last 24h per tenant per sweep; page if a workspace outgrows it.
+    take: 100,
     select: {
       id: true,
       channel: true,
@@ -291,6 +295,23 @@ export async function sweepProactive(tenantId: string, budget: Pick<CronSliceCon
       messages: { where: { direction: "inbound" }, orderBy: { occurredAt: "desc" }, take: 1, select: { body: true } },
     },
   });
+  const replies = recent.length
+    ? await basePrisma.communication.findMany({
+        where: { tenantId, conversationId: { in: recent.map((c) => c.id) }, direction: "outbound", occurredAt: { gte: lookback } },
+        select: { id: true, conversationId: true, occurredAt: true },
+      })
+    : [];
+  const unconfirmed = new Set(
+    replies.length
+      ? (await basePrisma.botFlowOutbox.findMany({
+          where: { communicationId: { in: replies.map((r) => r.id) }, status: { not: "sent" } },
+          select: { communicationId: true },
+        })).map((row) => row.communicationId as string)
+      : [],
+  );
+  const waiting = recent
+    .filter((c) => c.lastInboundAt && stillWaiting(c.lastInboundAt, replies.filter((r) => r.conversationId === c.id), unconfirmed))
+    .slice(0, 30);
   for (const c of waiting) {
     if (budget.shouldStop(10_000)) break;
     const customer = c.contact ? contactName(c.contact) : c.lead?.name ?? "A customer";
