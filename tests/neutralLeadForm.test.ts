@@ -16,5 +16,5 @@ test("the lead form asks about a product, and colour only where the catalogue us
   assert.doesNotMatch(form, /Vehicle interest|Model undecided|DGO-XXXX/);
   assert.match(form, /title="Product interest"/);
   assert.match(form, /const usesColours = products\.some\(\(item\) => item\.colors\.length > 0\) \|\| Boolean\(defaults\.color\)/);
-  assert.match(form, /\{usesColours && <Field label="Colour preference"/);
+  assert.match(form, /const colourField = usesColours && \(\s*<Field label="Colour preference"/);
 });

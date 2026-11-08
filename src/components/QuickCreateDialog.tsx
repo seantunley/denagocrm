@@ -62,7 +62,8 @@ export function openQuickCreate(kind: QuickCreateKind, defaults?: QuickCreateDef
 
 type Options = {
   products: { id: string; name: string; basePriceCents: number; colors: string[] }[];
-  stages: { id: string; name: string }[];
+  stages: { id: string; name: string; pipelineId: string; isClosed: boolean }[];
+  defaultPipelineId: string | null;
   contacts: { id: string; label: string }[];
   users: { id: string; name: string }[];
   vehicles: { id: string; label: string }[];
@@ -242,6 +243,7 @@ export default function QuickCreateDialog() {
                 action={createQuickLead}
                 products={currentOptions.products}
                 stages={currentOptions.stages}
+                defaultPipelineId={currentOptions.defaultPipelineId}
                 contacts={currentOptions.contacts}
                 users={currentOptions.users}
                 defaults={{

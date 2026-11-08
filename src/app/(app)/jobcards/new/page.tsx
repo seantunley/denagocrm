@@ -26,7 +26,7 @@ export default async function NewJobCardPage({
 
   return (
     <div className="mx-auto max-w-3xl space-y-6">
-      <PageHeader title="New job card" description="Check in a vehicle, or open a job for a customer, and give the workshop a clear, traceable scope of work." />
+      <PageHeader title="New job card" description="Who it is for, what they asked for, how urgent it is — and the arrival mileage on a vehicle." />
       <Surface className="p-5 sm:p-6">
         <JobCardForm
           vehicles={vehicles.map((vehicle) => ({
@@ -35,6 +35,7 @@ export default async function NewJobCardPage({
           }))}
           defaultVehicleId={vehicleId}
           contacts={contacts.map((contact) => ({ id: contact.id, label: contactName(contact) }))}
+          detail="compact"
         />
       </Surface>
     </div>

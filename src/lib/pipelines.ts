@@ -277,6 +277,25 @@ export async function getDefaultPipeline(): Promise<SalesPipelineRow | null> {
   return rows[0] ?? null;
 }
 
+/**
+ * The stages a NEW lead may be created into, for every create form: only
+ * pipelines that are live (not archived or deleted), the default pipeline
+ * first, closed stages flagged so the form can disable them and never default
+ * to one. `defaultEntryStageId` (lib/createFormDetail) picks the default.
+ */
+export async function listEntryStages(): Promise<{
+  stages: { id: string; name: string; pipelineId: string; isClosed: boolean }[];
+  defaultPipelineId: string | null;
+}> {
+  const [pipelines, fallback] = await Promise.all([listActiveSalesPipelines(), getDefaultPipeline()]);
+  const ordered = [...pipelines].sort((a, b) => Number(b.id === fallback?.id) - Number(a.id === fallback?.id));
+  const perPipeline = await Promise.all(ordered.map((pipeline) => listPipelineStages(pipeline.id)));
+  return {
+    stages: perPipeline.flat().map(({ id, name, pipelineId, isClosed }) => ({ id, name, pipelineId, isClosed })),
+    defaultPipelineId: fallback?.id ?? null,
+  };
+}
+
 export async function listPipelineStages(pipelineId: string): Promise<PipelineStageRow[]> {
   const scope = tenantFilter('"tenantId"');
   return basePrisma.$queryRaw<PipelineStageRow[]>`
