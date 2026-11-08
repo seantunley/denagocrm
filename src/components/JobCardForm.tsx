@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { ArrowRight, CarFront, ClipboardList, Gauge, ShieldCheck, UserRound } from "lucide-react";
+import { ArrowRight, CarFront, Gauge, ShieldCheck, UserRound } from "lucide-react";
 import { createJobCard } from "@/app/actions/jobcards";
 import { StickyActionArea } from "@/components/responsive-patterns";
 import ContactPicker from "@/components/ContactPicker";
@@ -16,42 +16,20 @@ export default function JobCardForm({
   vehicles,
   defaultVehicleId,
   contacts = [],
-  detail = "full",
 }: {
   vehicles: { id: string; label: string }[];
   defaultVehicleId?: string;
   /** Customers for a job with no vehicle. Empty: only the vehicle choice is offered. */
   contacts?: { id: string; label: string }[];
-  /**
-   * "compact": the create page — no intake banner, a shorter description box. Nothing is folded: arrival
-   * mileage is the vehicle's odometer reading for the service history, so it is always asked on a vehicle job.
-   */
-  detail?: "full" | "compact";
 }) {
+  // Compact everywhere it opens (page, jobs list, quick create), and nothing folded: arrival mileage is
+  // the vehicle's odometer reading for the service history, so it is always asked on a vehicle job.
   const [onVehicle, setOnVehicle] = useState(true);
-  const compact = detail === "compact";
   const choice = (active: boolean) =>
     cn("rounded-lg border px-3 py-1.5 text-xs font-medium", active ? "border-primary bg-primary/10 text-primary" : "border-border text-muted-foreground hover:text-foreground");
 
   return (
-    <form action={createJobCard} className={compact ? "space-y-4" : "space-y-6"}>
-      {!compact && (
-        <div className="rounded-2xl border border-primary/20 bg-primary/[0.055] p-4">
-          <div className="flex items-start gap-3">
-            <span className="grid size-10 shrink-0 place-items-center rounded-xl border border-primary/20 bg-primary/10 text-primary">
-              <ClipboardList className="size-[18px]" />
-            </span>
-            <div>
-              <p className="font-semibold tracking-tight">{onVehicle ? "Vehicle intake" : "New job"}</p>
-              <p className="mt-1 text-xs leading-5 text-muted-foreground">
-                {onVehicle ? "Capture the customer request and arrival mileage." : "Capture what the customer asked for."} The job number and technician
-                assignment are created automatically.
-              </p>
-            </div>
-          </div>
-        </div>
-      )}
-
+    <form action={createJobCard} className="space-y-4">
       {contacts.length > 0 && (
         <div className="flex gap-2" role="group" aria-label="What the job is for">
           <button type="button" className={choice(onVehicle)} aria-pressed={onVehicle} onClick={() => setOnVehicle(true)}>
@@ -94,7 +72,7 @@ export default function JobCardForm({
         <textarea
           id="job-card-description"
           name="description"
-          className={cn("input resize-y", compact ? "min-h-24" : "min-h-32")}
+          className="input min-h-24 resize-y"
           required
           placeholder={onVehicle ? "Describe the customer concern, requested service, warning lights, noises or inspection scope…" : "Describe what the customer asked for…"}
         />
