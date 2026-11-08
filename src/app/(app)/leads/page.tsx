@@ -445,7 +445,8 @@ export default async function LeadsPage({
               basePriceCents: product.basePriceCents,
               colors: product.colors.map((color) => color.name),
             }))}
-            stages={stages.map((stage) => ({ id: stage.id, name: stage.name }))}
+            // The board's own pipeline; won/lost flagged so the form neither offers nor defaults to them.
+            stages={stages.map((stage) => ({ id: stage.id, name: stage.name, isClosed: stageMeta.get(stage.id)?.isClosed }))}
             contacts={contacts.map((contact) => ({ id: contact.id, label: contactName(contact) }))}
             users={users.map((user) => ({ id: user.id, name: user.name }))}
             submitLabel={`Create ${midSentence(labels.lead.one)}`}

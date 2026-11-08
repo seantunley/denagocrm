@@ -15,7 +15,7 @@ import { buttonVariants } from "@/components/ui/button";
 import { Surface } from "@/components/visual-system";
 import { prisma } from "@/lib/db";
 import { contactName } from "@/lib/format";
-import { getDefaultPipeline } from "@/lib/pipelines";
+import { listEntryStages } from "@/lib/pipelines";
 import { listActingTenantStaff } from "@/lib/tenantActor";
 import { requirePermission } from "@/lib/permissions";
 
@@ -27,22 +27,21 @@ const leadJourney = [
 
 export default async function NewLeadPage() {
   await requirePermission("leads.create");
-  const [products, stages, contacts, users, defaultPipeline] = await Promise.all([
+  const [products, entry, contacts, users] = await Promise.all([
     prisma.product.findMany({
       where: { active: true },
       include: { colors: true },
       orderBy: { name: "asc" },
     }),
-    prisma.pipelineStage.findMany({ orderBy: { order: "asc" } }),
+    // Live pipelines only, closed stages flagged; the form defaults to the first
+    // open stage of the default pipeline — the stage createLead falls back to.
+    listEntryStages(),
     prisma.contact.findMany({ orderBy: { firstName: "asc" }, take: 500 }),
     // The "Assigned to" dropdown: staff of THIS workspace. `User` is a global
     // model, so `prisma.user.findMany` is scoped by nothing — this list was
     // showing one workspace the names of everyone who works at all the others,
     // and offering them as the owner of a new lead.
     listActingTenantStaff(),
-    // The stage list above spans every pipeline. The form defaults to the first
-    // open stage of THIS one — the same stage createLead falls back to.
-    getDefaultPipeline(),
   ]);
 
   return (
@@ -69,8 +68,8 @@ export default async function NewLeadPage() {
             basePriceCents: product.basePriceCents,
             colors: product.colors.map((color) => color.name),
           }))}
-          stages={stages.map((stage) => ({ id: stage.id, name: stage.name, pipelineId: stage.pipelineId, isClosed: stage.isClosed }))}
-          defaultPipelineId={defaultPipeline?.id}
+          stages={entry.stages}
+          defaultPipelineId={entry.defaultPipelineId}
           contacts={contacts.map((contact) => ({ id: contact.id, label: contactName(contact) }))}
           users={users.map((user) => ({ id: user.id, name: user.name }))}
           submitLabel="Create lead"

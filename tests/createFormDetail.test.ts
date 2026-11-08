@@ -5,7 +5,6 @@ import { fileURLToPath } from "node:url";
 import path from "node:path";
 
 import {
-  CREATE_FORM_FIELDS,
   defaultEntryStageId,
   formDetailStorageKey,
   readFormDetailMode,
@@ -46,15 +45,13 @@ test("compact is the default: absent, corrupted or foreign values all land there
   storage.setItem(formDetailStorageKey("lead"), "yes please");
   assert.equal(readFormDetailMode(storage, "lead"), "compact");
   assert.equal(readFormDetailMode(null, "lead"), "compact");
-  assert.equal(readFormDetailMode(undefined, "jobcard"), "compact");
+  assert.equal(readFormDetailMode(undefined, "lead"), "compact");
 });
 
-test("the choice round-trips, per form", () => {
+test("the choice round-trips", () => {
   const storage = new FakeStorage();
   writeFormDetailMode(storage, "lead", "expanded");
   assert.equal(readFormDetailMode(storage, "lead"), "expanded");
-  // A rep who wants the long lead form has said nothing about job cards.
-  assert.equal(readFormDetailMode(storage, "jobcard"), "compact");
   writeFormDetailMode(storage, "lead", "compact");
   assert.equal(readFormDetailMode(storage, "lead"), "compact");
 });
@@ -65,38 +62,48 @@ test("a storage that throws (private window, blocked site data) neither throws n
   assert.equal(readFormDetailMode(storage, "lead"), "compact");
 });
 
-test("compact and detail groups split one contract: no field is in both, none is dropped", () => {
-  for (const [form, groups] of Object.entries(CREATE_FORM_FIELDS)) {
-    const all = [...groups.compact, ...groups.detail];
-    assert.equal(new Set(all).size, all.length, `${form}: a field is listed twice`);
-    for (const name of groups.compact) assert.ok(!groups.detail.includes(name), `${form}: ${name} is in both groups`);
+/** The JSX between two markers of the RENDERED form — what is actually shown vs folded. */
+function between(source: string, from: string, to: string): string {
+  const start = source.indexOf(from);
+  const end = source.indexOf(to, start);
+  assert.ok(start >= 0 && end > start, `markers moved: ${from} … ${to}`);
+  return source.slice(start, end);
+}
+
+test("compact lead form: the essentials are on screen, and a value that saves is never folded", () => {
+  const form = src("src/components/LeadForm.tsx");
+  const essentials = between(form, 'title="Essentials"', "<FormDetailDisclosure");
+  for (const field of ["contactField", "nameField", "phoneField", "emailField", "productField", "quantityField", "valueField"]) {
+    assert.ok(essentials.includes(`{${field}}`), `${field} must be in the compact section`);
   }
-  // Every name the action reads is somewhere on the form, and vice versa.
-  const leadAction = src("src/app/actions/leads.ts");
-  for (const name of [...CREATE_FORM_FIELDS.lead.compact, ...CREATE_FORM_FIELDS.lead.detail]) {
-    assert.ok(leadAction.includes(`"${name}"`), `createLead no longer reads ${name}`);
-  }
-  const jobcardAction = src("src/app/actions/jobcards.ts");
-  for (const name of [...CREATE_FORM_FIELDS.jobcard.compact, ...CREATE_FORM_FIELDS.jobcard.detail]) {
-    assert.ok(jobcardAction.includes(`formData.get("${name}")`), `createJobCard no longer reads ${name}`);
-  }
-  // And the forms post them under the same names.
-  const leadForm = src("src/components/LeadForm.tsx");
-  for (const name of [...CREATE_FORM_FIELDS.lead.compact, ...CREATE_FORM_FIELDS.lead.detail]) {
-    assert.ok(leadForm.includes(`name="${name}"`), `LeadForm no longer posts ${name}`);
-  }
-  const jobCardForm = src("src/components/JobCardForm.tsx");
-  for (const name of [...CREATE_FORM_FIELDS.jobcard.compact, ...CREATE_FORM_FIELDS.jobcard.detail]) {
-    assert.ok(jobCardForm.includes(`name="${name}"`), `JobCardForm no longer posts ${name}`);
+  // Picking a product fills the value; folding it would save a figure nobody saw.
+  const folded = between(form, "const detailSections = (", "return (");
+  assert.ok(!folded.includes("{valueField}"), "the value must not be in the folded section");
+  // A folded required control blocks submit with a message pointing nowhere.
+  assert.match(form, /required=\{showDetail\}/);
+  // Every name createLead reads is still posted by the form.
+  const action = src("src/app/actions/leads.ts");
+  for (const name of ["contactId", "name", "phone", "email", "productId", "quantity", "value", "stageId", "source", "assignedToId", "notes"]) {
+    assert.ok(action.includes(`"${name}"`), `createLead no longer reads ${name}`);
+    assert.ok(form.includes(`name="${name}"`), `LeadForm no longer posts ${name}`);
   }
 });
 
-test("the compact lead form is the 80% case: who, how to reach them, what, where it goes", () => {
-  assert.deepEqual(
-    [...CREATE_FORM_FIELDS.lead.compact],
-    ["contactId", "name", "phone", "email", "productId", "quantity", "source", "assignedToId"],
-  );
-  assert.deepEqual([...CREATE_FORM_FIELDS.jobcard.compact], ["vehicleId", "contactId", "description", "priority"]);
+test("job card form folds nothing: arrival mileage is always asked on a vehicle job", () => {
+  const form = src("src/components/JobCardForm.tsx");
+  assert.ok(!form.includes("FormDetailDisclosure"), "the job card form must not fold fields");
+  assert.match(form, /name="kmIn"/);
+  assert.match(src("src/app/actions/jobcards.ts"), /formData\.get\("kmIn"\)/);
+});
+
+test("every new-lead form lists live pipelines' stages with closed ones flagged", () => {
+  assert.match(src("src/app/(app)/leads/new/page.tsx"), /listEntryStages\(\)/);
+  assert.match(src("src/app/api/quick-create/route.ts"), /listEntryStages\(\)/);
+  assert.match(src("src/components/QuickCreateDialog.tsx"), /defaultPipelineId=\{currentOptions\.defaultPipelineId\}/);
+  // The board's dialog lists the board's own pipeline; it flags won/lost.
+  assert.match(src("src/app/(app)/leads/page.tsx"), /isClosed: stageMeta\.get\(stage\.id\)\?\.isClosed/);
+  const lib = src("src/lib/pipelines.ts");
+  assert.match(between(lib, "export async function listEntryStages", "export async function listPipelineStages"), /listActiveSalesPipelines\(\)/);
 });
 
 const stages: EntryStageOption[] = [
@@ -134,6 +141,6 @@ test("default stage: callers that list plain {id, name} stages still get the fir
 
 test("the create pages opt in; the edit dialog keeps the full form", () => {
   assert.ok(src("src/app/(app)/leads/new/page.tsx").includes('detail="collapsible"'));
-  assert.ok(src("src/app/(app)/jobcards/new/page.tsx").includes('detail="collapsible"'));
+  assert.ok(src("src/app/(app)/jobcards/new/page.tsx").includes('detail="compact"'));
   assert.ok(!src("src/app/(app)/leads/[id]/page.tsx").includes('detail="collapsible"'));
 });

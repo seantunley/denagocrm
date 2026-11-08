@@ -27,9 +27,23 @@ function storage(): Storage | null {
   }
 }
 
+/**
+ * Same tab: our own event. Other tabs: the browser's `storage` event, which
+ * means storage now holds a newer choice than this page's memory — so the
+ * memory is dropped and storage wins.
+ */
 function subscribe(onChange: () => void) {
+  const onStorage = (event: StorageEvent) => {
+    if (event.key !== null && !event.key.startsWith("denago.create.")) return;
+    chosen.clear();
+    onChange();
+  };
   window.addEventListener(CHANGE_EVENT, onChange);
-  return () => window.removeEventListener(CHANGE_EVENT, onChange);
+  window.addEventListener("storage", onStorage);
+  return () => {
+    window.removeEventListener(CHANGE_EVENT, onChange);
+    window.removeEventListener("storage", onStorage);
+  };
 }
 
 /**

@@ -9,6 +9,7 @@ import { listActingTenantStaff } from "@/lib/tenantActor";
 import { fleetPicker } from "@/lib/fleetDirectory";
 import { NO_FLEET_PICKER } from "@/lib/fleetTypes";
 import { withActingStaffScope } from "@/lib/actingScope";
+import { listEntryStages } from "@/lib/pipelines";
 
 /** Option lists for the Quick Actions create dialogs — one cached payload. */
 export async function GET(request: Request) {
@@ -122,8 +123,8 @@ export async function GET(request: Request) {
         })
       : Promise.resolve([]),
     canCreateLead
-      ? prisma.pipelineStage.findMany({ orderBy: { order: "asc" }, select: { id: true, name: true } })
-      : Promise.resolve([]),
+      ? listEntryStages()
+      : Promise.resolve({ stages: [], defaultPipelineId: null }),
     needsContacts
       ? prisma.contact.findMany({ where: scoped(contactIds), orderBy: { firstName: "asc" }, take: 500 })
       : Promise.resolve([]),
@@ -150,7 +151,8 @@ export async function GET(request: Request) {
       basePriceCents: p.basePriceCents,
       colors: p.colors.map((c) => c.name),
     })),
-    stages,
+    stages: stages.stages,
+    defaultPipelineId: stages.defaultPipelineId,
     contacts: contacts.map((c) => ({ id: c.id, label: contactName(c) })),
     users,
     fleetPicker: picker,

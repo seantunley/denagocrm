@@ -1,7 +1,7 @@
 /**
- * The create forms for leads and job cards open SHORT by default — the handful
- * of fields most records actually arrive with (a name and a phone number) — and
- * fold the rest behind "Add more detail". Someone who always wants the long
+ * The lead create form opens SHORT by default — the handful of fields most
+ * leads actually arrive with (a name and a phone number) — and folds the rest
+ * behind "Add more detail". Someone who always wants the long
  * form keeps it: the choice is remembered per device, which is where that habit
  * lives.
  *
@@ -12,7 +12,8 @@
 
 export type FormDetailMode = "compact" | "expanded";
 
-export type CreateFormKey = "lead" | "jobcard";
+/** Only the lead form folds. The job card's one extra field, mileage, must always be asked. */
+export type CreateFormKey = "lead";
 
 export function formDetailStorageKey(form: CreateFormKey): string {
   return `denago.create.${form}.detail`;
@@ -48,25 +49,6 @@ export function writeFormDetailMode(
   }
 }
 
-/**
- * Which FormData fields each create form shows before and after the disclosure.
- * The names are the server action's contract (`createLead`, `createJobCard`):
- * the split moves fields between two parts of ONE form, it never renames or
- * drops one, and the test pins that.
- */
-export const CREATE_FORM_FIELDS: Record<CreateFormKey, { compact: readonly string[]; detail: readonly string[] }> = {
-  lead: {
-    compact: ["contactId", "name", "phone", "email", "productId", "quantity", "source", "assignedToId"],
-    // `stageId` is posted from the folded section too: the select keeps its
-    // default value while hidden, so the compact form still names a stage.
-    detail: ["color", "currency", "value", "stageId", "referralCode", "title", "notes"],
-  },
-  jobcard: {
-    compact: ["vehicleId", "contactId", "description", "priority"],
-    detail: ["kmIn"],
-  },
-};
-
 export type EntryStageOption = {
   id: string;
   name: string;
@@ -79,13 +61,12 @@ export type EntryStageOption = {
 /**
  * The stage a new lead lands in when nobody picks one.
  *
- * The new-lead page lists every stage in the workspace, ordered by `order`
- * ACROSS pipelines — so "the first row" was whichever pipeline happened to own
- * an order-0 stage, and could be a closed one the server then refused. The
- * default is the first OPEN stage of the default pipeline, which is what
- * `createLead` itself falls back to when no stage is posted; failing that, the
- * first open stage anywhere; failing that, the first stage, so a required
- * select is never left empty.
+ * The create forms list the stages of every LIVE pipeline (`listEntryStages`)
+ * — so "the first row" could belong to another pipeline, or be a closed stage
+ * the server then refuses. The default is the first OPEN stage of the default
+ * pipeline, which is what `createLead` itself falls back to when no stage is
+ * posted; failing that, the first open stage of another live pipeline; failing
+ * that, the first stage, so a required select is never left empty.
  */
 export function defaultEntryStageId(stages: readonly EntryStageOption[], defaultPipelineId?: string | null): string {
   const open = stages.filter((stage) => !stage.isClosed);

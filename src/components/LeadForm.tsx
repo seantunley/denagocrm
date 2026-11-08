@@ -403,18 +403,16 @@ export default function LeadForm({
     </Field>
   );
 
-  // The folded sections. Same four groupings as the full form minus the
-  // essentials, which the compact section already shows.
+  // The folded sections. Same groupings as the full form minus the essentials,
+  // which the compact section already shows. The value is NOT folded: picking a
+  // product fills it, and a figure that saves must be one the rep can see.
   const detailSections = (
     <>
-      <FormSection
-        icon={Gauge}
-        title="Product interest"
-        description="Catalogue pricing keeps the opportunity value in sync with the model and quantity."
-      >
-        {colourField}
-        {valueField}
-      </FormSection>
+      {colourField && (
+        <FormSection icon={Gauge} title="Product interest" description="The colour the customer has in mind, if any.">
+          {colourField}
+        </FormSection>
+      )}
 
       <FormSection
         icon={Route}
@@ -449,7 +447,9 @@ export default function LeadForm({
         isPage && "min-w-0 space-y-5",
       )}
     >
-      {(isPage || isDialog) && showDetail && (
+      {/* Full form only: on the compact one it would mount above the fields when
+          "Add more detail" is clicked below them and push the page down. */}
+      {(isPage || isDialog) && !collapsible && (
         <CaptureHero
           icon={Sparkles}
           eyebrow="Opportunity snapshot"
@@ -476,6 +476,7 @@ export default function LeadForm({
             {emailField}
             {productField}
             {quantityField}
+            {valueField}
             {sourceField}
             {assigneeField}
           </FormSection>
@@ -483,7 +484,7 @@ export default function LeadForm({
           <FormDetailDisclosure
             expanded={expanded}
             onToggle={setExpanded}
-            hint="Value, colour, pipeline stage, referral code, deal title and notes."
+            hint={`${usesColours ? "Colour, pipeline" : "Pipeline"} stage, referral code, deal title and notes.`}
           >
             {detailSections}
           </FormDetailDisclosure>
