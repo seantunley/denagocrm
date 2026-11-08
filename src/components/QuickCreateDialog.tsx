@@ -252,6 +252,7 @@ export default function QuickCreateDialog() {
                 }}
                 submitLabel="Create lead"
                 variant="dialog"
+                detail="collapsible"
               />
             )}
 

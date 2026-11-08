@@ -35,7 +35,6 @@ export default async function NewJobCardPage({
           }))}
           defaultVehicleId={vehicleId}
           contacts={contacts.map((contact) => ({ id: contact.id, label: contactName(contact) }))}
-          detail="compact"
         />
       </Surface>
     </div>

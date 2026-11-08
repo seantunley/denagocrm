@@ -451,6 +451,7 @@ export default async function LeadsPage({
             users={users.map((user) => ({ id: user.id, name: user.name }))}
             submitLabel={`Create ${midSentence(labels.lead.one)}`}
             variant="dialog"
+            detail="collapsible"
           />
         </ModalTrigger>
       </PageHeader>

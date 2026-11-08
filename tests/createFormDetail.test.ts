@@ -139,8 +139,14 @@ test("default stage: callers that list plain {id, name} stages still get the fir
   assert.equal(defaultEntryStageId([{ id: "won", name: "Won", isClosed: true }]), "won");
 });
 
-test("the create pages opt in; the edit dialog keeps the full form", () => {
-  assert.ok(src("src/app/(app)/leads/new/page.tsx").includes('detail="collapsible"'));
-  assert.ok(src("src/app/(app)/jobcards/new/page.tsx").includes('detail="compact"'));
+test("every new-lead opener is compact (page, board dialog, quick create); the edit dialog keeps the full form", () => {
+  for (const opener of ["src/app/(app)/leads/new/page.tsx", "src/app/(app)/leads/page.tsx", "src/components/QuickCreateDialog.tsx"]) {
+    const code = src(opener);
+    const forms = code.split("<LeadForm").length - 1;
+    assert.ok(forms > 0, `${opener} no longer opens a LeadForm`);
+    assert.equal(code.split('detail="collapsible"').length - 1, forms, `${opener}: every create LeadForm is compact`);
+  }
   assert.ok(!src("src/app/(app)/leads/[id]/page.tsx").includes('detail="collapsible"'));
+  // The job card form is compact everywhere: no banner, no mode to forget.
+  assert.ok(!src("src/components/JobCardForm.tsx").includes("detail"), "JobCardForm has one layout");
 });
