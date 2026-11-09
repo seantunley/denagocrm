@@ -163,6 +163,8 @@ async function main() {
     check("not through the conversation", !!(await ask(a.tenantId, repOther, ids.conversation)).note);
 
     console.log("\nA manager — journeys with Marketing on, the bot only with Automation on");
+    // Automation OFF, said here rather than left to the seed: the seed now grants every pack (2026-11-09).
+    await setModules("inbox,marketing,automotive,workshop,reports");
     const mgr = await ask(a.tenantId, managerA, ids.lead);
     const run = what(mgr, /Enrolled in journey/);
     check("the journey run, its skipped step and why it stopped", run?.stoppedBecause === "no marketing consent" && !!run?.steps?.some((s) => /send_sms skipped — quiet hours/.test(s)), JSON.stringify(run));
