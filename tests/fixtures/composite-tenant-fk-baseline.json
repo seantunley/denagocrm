@@ -2086,6 +2086,21 @@
       ]
     }
   },
+  "SupplierInvoice.SupplierInvoice_tenantId_documentId_fkey": {
+    "table": "SupplierInvoice",
+    "constraint": "SupplierInvoice_tenantId_documentId_fkey",
+    "columns": [
+      "tenantId",
+      "documentId"
+    ],
+    "references": {
+      "table": "Document",
+      "columns": [
+        "tenantId",
+        "id"
+      ]
+    }
+  },
   "SurveyResponse.SurveyResponse_tenantId_contactId_fkey": {
     "table": "SurveyResponse",
     "constraint": "SurveyResponse_tenantId_contactId_fkey",
