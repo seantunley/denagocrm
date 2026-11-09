@@ -1,8 +1,11 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { readFileSync } from "node:fs";
+import { createReadStream, mkdtempSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { Readable } from "node:stream";
 import { ZipReader, ZipWriter, Uint8ArrayReader, Uint8ArrayWriter, BlobReader } from "@zip.js/zip.js";
-import { safeName, winAnsi, zipPasswordProblem, zipPaths, dealZipFileName } from "../src/lib/dealFileZipRules";
+import { primeStream, safeName, winAnsi, zipPasswordProblem, zipPaths, dealZipFileName } from "../src/lib/dealFileZipRules";
 import { coverSheetPdf } from "../src/lib/dealFileCover";
 
 const src = (path: string) => readFileSync(new URL(`../${path}`, import.meta.url), "utf8");
@@ -78,7 +81,84 @@ test("the route: POST, same-site, the page's own gates and loader, workspace at 
     'const problem = zipPasswordProblem(password, String(form.get("confirm") ?? ""));',
     "const zip = new ZipWriter(writable, { password, encryptionStrength: 3, zipCrypto: false, useWebWorkers: false });",
   ]);
-  assert.match(route, /action: "deal\.file_downloaded"/);
+  assert.match(route, /"deal\.file_downloaded"/);
+});
+
+/** A stored file as local storage opens it (storage.ts openStoredFile): createReadStream, made a web stream. */
+const localStream = (path: string) => Readable.toWeb(createReadStream(path)) as ReadableStream<Uint8Array>;
+
+test("a stored file deleted before it is read is caught BEFORE its ZIP entry starts (review of #1051)", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "dealzip-"));
+  const there = join(dir, "there.pdf");
+  const gone = join(dir, "gone.pdf");
+  const empty = join(dir, "empty.txt");
+  writeFileSync(there, "a deal paper");
+  writeFileSync(gone, "deleted before download");
+  writeFileSync(empty, "");
+  const goneStream = localStream(gone); // opening succeeds…
+  unlinkSync(gone); // …the file disappears…
+  await assert.rejects(primeStream(goneStream)); // …and priming is where it is found out.
+  // A file that is there comes through whole, and an empty one is not mistaken for a missing one.
+  assert.equal(await new Response(await primeStream(localStream(there))).text(), "a deal paper");
+  assert.equal(await new Response(await primeStream(localStream(empty))).text(), "");
+  rmSync(dir, { recursive: true, force: true });
+});
+
+test("a missing file is left out and the ZIP still completes — unprimed, it broke the whole archive", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "dealzip-"));
+  const there = join(dir, "there.pdf");
+  writeFileSync(there, "kept");
+  const build = async (prime: boolean) => {
+    const { readable, writable } = new TransformStream<Uint8Array, Uint8Array>();
+    const zip = new ZipWriter(writable, { password: "correct horse battery", encryptionStrength: 3, zipCrypto: false, useWebWorkers: false });
+    const bytes = new Response(readable).arrayBuffer();
+    bytes.catch(() => {}); // the unprimed run aborts the stream; its reader is not what this test is about
+    const missing: string[] = [];
+    const files = [{ path: "Q-1/gone.pdf", file: join(dir, "never-existed.pdf") }, { path: "Q-1/there.pdf", file: there }];
+    try {
+      for (const { path, file } of files) {
+        let stream = localStream(file);
+        if (prime) {
+          try {
+            stream = await primeStream(stream);
+          } catch {
+            missing.push(path);
+            continue;
+          }
+        }
+        await zip.add(path, stream);
+      }
+      await zip.close();
+    } catch {
+      await writable.abort(new Error("failed")).catch(() => {});
+      return { ok: false as const, missing };
+    }
+    return { ok: true as const, missing, raw: new Uint8Array(await bytes) };
+  };
+  const unprimed = await build(false);
+  assert.equal(unprimed.ok, false, "the old way: one missing file and there is no archive at all");
+  const primed = await build(true);
+  assert.ok(primed.ok);
+  assert.deepEqual(primed.missing, ["Q-1/gone.pdf"]);
+  const entries = await new ZipReader(new BlobReader(new Blob([primed.raw!]))).getEntries();
+  assert.deepEqual(entries.map((e) => e.filename), ["Q-1/there.pdf"]);
+  rmSync(dir, { recursive: true, force: true });
+});
+
+test("the audit says what happened: the request, then the outcome with what went in and what was left out", () => {
+  const route = src("src/app/api/deals/[id]/file-zip/route.ts");
+  const requested = route.indexOf('await audit("deal.file_download_requested"');
+  const closed = route.indexOf("await zip.close();");
+  const downloaded = route.indexOf('"deal.file_downloaded"');
+  const failed = route.indexOf('audit("deal.file_download_failed"');
+  assert.ok(requested > 0 && requested < route.indexOf("new TransformStream"), "the request is logged before streaming");
+  assert.ok(closed > 0 && downloaded > closed, "success is logged only after the archive is closed");
+  assert.ok(failed > downloaded, "a failure is logged in the catch");
+  assert.match(route, /\$\{added\} file\$\{added === 1 \? "" : "s"\} and the cover sheet/, "the count is what was ADDED, not what was planned");
+  assert.match(route, /\$\{missing\.length\} missing from storage and left out/);
+  // Every stored file is primed inside the per-file recovery, before its entry starts.
+  assert.match(route, /try \{\s*stream = await primeStream\(await open\(\)\);\s*\} catch \{\s*missing\.push\(id\);\s*return;\s*\}\s*await zip\.add\(path, stream\);/);
+  assert.match(route, /void runInTenantScope\(\{ tenantId, system: false \}, async \(\) => \{/);
 });
 
 test("a nested folder stays nested, and no level can climb out", () => {
@@ -96,7 +176,7 @@ test("handover photos: in the deal file and the ZIP, own workspace, delivery che
   assert.match(page, /handoverPhotos\.length > 0 &&/);
   assert.match(page, /storedFileSrc\(photo\.url\)/, "through the workspace-checked file route, never the raw store URL");
   const route = src("src/app/api/deals/[id]/file-zip/route.ts");
-  assert.match(route, /stream = \(await openStoredFile\(photo\.url, tenantId\)\)\.stream;/);
+  assert.match(route, /addStored\(photoPaths\[i\], photo\.id, async \(\) => \(await openStoredFile\(photo\.url, tenantId\)\)\.stream\)/);
   assert.match(route, /folder: `Q-\$\{numberOf\.get\(photo\.quoteId\) \?\? quote\.number\}\/Handover photos`/);
 });
 

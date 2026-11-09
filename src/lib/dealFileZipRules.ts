@@ -65,6 +65,32 @@ export function winAnsi(text: string): string {
     .replace(/[^\x20-\x7E\xA0-\xFF–—‘’“”•…€]/g, "?");
 }
 
+/**
+ * A stream whose first chunk has already been read — so a file that is not really there fails HERE, where the caller
+ * can leave it out and say so, not halfway through writing its ZIP entry (which would break the whole archive).
+ * A local file opened with createReadStream reports "missing" only when first read, never when opened (review of
+ * #1051). An empty file is fine. A failure after the first chunk still fails the download: that file was there.
+ */
+export async function primeStream(stream: ReadableStream<Uint8Array>): Promise<ReadableStream<Uint8Array>> {
+  const reader = stream.getReader();
+  const first = await reader.read();
+  return new ReadableStream<Uint8Array>({
+    start(controller) {
+      if (first.done) controller.close();
+      else controller.enqueue(first.value);
+    },
+    async pull(controller) {
+      if (first.done) return;
+      const next = await reader.read();
+      if (next.done) controller.close();
+      else controller.enqueue(next.value);
+    },
+    cancel(reason) {
+      return reader.cancel(reason);
+    },
+  });
+}
+
 export function humanBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;

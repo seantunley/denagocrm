@@ -1,6 +1,7 @@
 import { ZipWriter, Uint8ArrayReader } from "@zip.js/zip.js";
 import { prisma } from "@/lib/db";
 import { withActingStaffScope } from "@/lib/actingScope";
+import { runInTenantScope } from "@/lib/tenantScope";
 import { actingTenantId } from "@/lib/actingTenant";
 import { requireQuoteReadAccess, requireRoute } from "@/lib/permissions";
 import { isSameOrigin } from "@/lib/sameOrigin";
@@ -20,7 +21,7 @@ import { isPersonLabel, SYSTEM_TAG_LABELS } from "@/lib/documentLabels";
 import { logAudit } from "@/lib/audit";
 import { logError } from "@/lib/errorLog";
 import { coverSheetPdf } from "@/lib/dealFileCover";
-import { dealZipFileName, humanBytes, zipPasswordProblem, zipPaths } from "@/lib/dealFileZipRules";
+import { dealZipFileName, humanBytes, primeStream, zipPasswordProblem, zipPaths } from "@/lib/dealFileZipRules";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -122,51 +123,63 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
         notes: [...notes, ...(missing.length ? [`${missing.length} file(s) could not be read from storage and are not in this ZIP.`] : [])],
       });
 
-    await logAudit({
-      action: "deal.file_downloaded",
-      summary: `Downloaded the deal file for Q-${quote.number} as a password-protected ZIP (${quotations.length + documents.length + photos.length} files)`,
-      ...(quote.leadId ? { leadId: quote.leadId } : {}),
-      ...(quote.contactId ? { contactId: quote.contactId } : {}),
-      user,
-      entityType: "Quote",
-      entityId: quote.id,
-    });
+    // The audit trail says what HAPPENED (review of #1051): the request now, and the outcome — with what actually went
+    // in and what was left out — only once the archive is finished or has failed.
+    const audit = (action: string, summary: string) =>
+      logAudit({
+        action,
+        summary,
+        ...(quote.leadId ? { leadId: quote.leadId } : {}),
+        ...(quote.contactId ? { contactId: quote.contactId } : {}),
+        user,
+        entityType: "Quote",
+        entityId: quote.id,
+      });
+    const planned = quotations.length + documents.length + photos.length;
+    await audit("deal.file_download_requested", `Asked for the deal file for Q-${quote.number} as a password-protected ZIP (${planned} files)`);
 
     // 3. Stream: files first, then the cover sheet — written LAST so it can say truthfully what made it in.
     const { readable, writable } = new TransformStream<Uint8Array, Uint8Array>();
     const zip = new ZipWriter(writable, { password, encryptionStrength: 3, zipCrypto: false, useWebWorkers: false });
-    void (async () => {
+    // Runs on after the response has started, so it binds the deal's own workspace itself: the outcome's audit
+    // entry is filed there whatever happens to the request around it.
+    void runInTenantScope({ tenantId, system: false }, async () => {
       const missing: string[] = [];
+      let added = 0;
+      // Opened AND first chunk read before the entry is started: a file that isn't really in storage (a local file
+      // only says so when read) is left out and named on the cover sheet, instead of breaking the whole ZIP.
+      const addStored = async (path: string, id: string, open: () => Promise<ReadableStream<Uint8Array>>) => {
+        let stream: ReadableStream<Uint8Array>;
+        try {
+          stream = await primeStream(await open());
+        } catch {
+          missing.push(id);
+          return;
+        }
+        await zip.add(path, stream);
+        added++;
+      };
       try {
-        for (const [i, q] of quotations.entries()) await zip.add(quotationPaths[i], new Uint8ArrayReader(q.bytes));
-        for (const [i, doc] of documents.entries()) {
-          let stream: ReadableStream<Uint8Array>;
-          try {
-            stream = await openFileStream(doc.storedName, doc.tenantId);
-          } catch {
-            missing.push(doc.id);
-            continue;
-          }
-          await zip.add(documentPaths[i], stream);
+        for (const [i, q] of quotations.entries()) {
+          await zip.add(quotationPaths[i], new Uint8ArrayReader(q.bytes));
+          added++;
         }
-        for (const [i, photo] of photos.entries()) {
-          let stream: ReadableStream<Uint8Array>;
-          try {
-            stream = (await openStoredFile(photo.url, tenantId)).stream;
-          } catch {
-            missing.push(photo.id);
-            continue;
-          }
-          await zip.add(photoPaths[i], stream);
-        }
+        for (const [i, doc] of documents.entries()) await addStored(documentPaths[i], doc.id, () => openFileStream(doc.storedName, doc.tenantId));
+        for (const [i, photo] of photos.entries()) await addStored(photoPaths[i], photo.id, async () => (await openStoredFile(photo.url, tenantId)).stream);
         await zip.add(`00 Cover sheet - Q-${quote.number}.pdf`, new Uint8ArrayReader(await cover(missing)));
         await zip.close();
+        await audit(
+          "deal.file_downloaded",
+          `Downloaded the deal file for Q-${quote.number} as a password-protected ZIP: ${added} file${added === 1 ? "" : "s"} and the cover sheet` +
+            (missing.length ? `; ${missing.length} missing from storage and left out (named on the cover sheet)` : ""),
+        ).catch(() => {});
       } catch (error) {
         // Names only — never the password or a document's contents.
         await logError("deal-file-zip", error instanceof Error ? error.name : "error", `quote=${quote.id}`, { tenantId, alert: false }).catch(() => {});
+        await audit("deal.file_download_failed", `The deal file ZIP for Q-${quote.number} failed after ${added} of ${planned} files — the download did not complete`).catch(() => {});
         await writable.abort(error).catch(() => {});
       }
-    })();
+    });
 
     return new Response(readable, {
       headers: {
