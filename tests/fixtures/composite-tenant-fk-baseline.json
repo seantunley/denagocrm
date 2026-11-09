@@ -2236,6 +2236,51 @@
       ]
     }
   },
+  "VendorDelivery.VendorDelivery_tenantId_purchaseOrderId_fkey": {
+    "table": "VendorDelivery",
+    "constraint": "VendorDelivery_tenantId_purchaseOrderId_fkey",
+    "columns": [
+      "tenantId",
+      "purchaseOrderId"
+    ],
+    "references": {
+      "table": "PurchaseOrder",
+      "columns": [
+        "tenantId",
+        "id"
+      ]
+    }
+  },
+  "VendorDelivery.VendorDelivery_tenantId_quoteId_fkey": {
+    "table": "VendorDelivery",
+    "constraint": "VendorDelivery_tenantId_quoteId_fkey",
+    "columns": [
+      "tenantId",
+      "quoteId"
+    ],
+    "references": {
+      "table": "Quote",
+      "columns": [
+        "tenantId",
+        "id"
+      ]
+    }
+  },
+  "VendorDelivery.VendorDelivery_tenantId_vendorId_fkey": {
+    "table": "VendorDelivery",
+    "constraint": "VendorDelivery_tenantId_vendorId_fkey",
+    "columns": [
+      "tenantId",
+      "vendorId"
+    ],
+    "references": {
+      "table": "Vendor",
+      "columns": [
+        "tenantId",
+        "id"
+      ]
+    }
+  },
   "WarrantyClaim.WarrantyClaim_tenantId_contactId_fkey": {
     "table": "WarrantyClaim",
     "constraint": "WarrantyClaim_tenantId_contactId_fkey",

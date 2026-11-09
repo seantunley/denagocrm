@@ -15,6 +15,7 @@ import { vendorKindLabel } from "@/lib/vendors";
 import { SUPPLIER_DOCUMENT_TYPES } from "@/lib/dealFile";
 import { vendorPurchaseOrders } from "@/lib/dealFileData";
 import { contactName, formatDate } from "@/lib/format";
+import { deliveryStatusLabel } from "@/lib/vendorDeliveryRules";
 
 export const dynamic = "force-dynamic";
 
@@ -30,7 +31,7 @@ export default async function VendorPage({ params }: { params: Promise<{ id: str
   const vendor = await prisma.vendor.findFirst({ where: { id, tenantId, deletedAt: null } });
   if (!vendor) notFound();
 
-  const [links, documents, orders] = await Promise.all([
+  const [links, documents, orders, deliveries] = await Promise.all([
     prisma.dealVendor.findMany({ where: { tenantId, vendorId: id }, select: { leadId: true, quoteId: true } }),
     prisma.document.findMany({
       where: { tenantId, vendorId: id, deletedAt: null, replacedById: null },
@@ -38,7 +39,19 @@ export default async function VendorPage({ params }: { params: Promise<{ id: str
       orderBy: { createdAt: "desc" },
     }),
     vendorPurchaseOrders(tenantId, id),
+    prisma.vendorDelivery.findMany({
+      where: { tenantId, vendorId: id },
+      select: {
+        id: true, status: true, scheduledFor: true, toAddress: true, quoteId: true, purchaseOrderId: true,
+      },
+      orderBy: { scheduledFor: "desc" },
+      take: 50,
+    }),
   ]);
+  const deliveryQuotes = new Map(
+    (await prisma.quote.findMany({ where: { tenantId, id: { in: deliveries.flatMap((d) => (d.quoteId ? [d.quoteId] : [])) } }, select: { id: true, number: true } }))
+      .map((quote) => [quote.id, quote.number]),
+  );
 
   // Its deals: declared on the deal, or named on a document filed there. A deal is its lead (every quote on it),
   // or a quote with no lead.
@@ -143,6 +156,29 @@ export default async function VendorPage({ params }: { params: Promise<{ id: str
             )}
             <p className="mt-2 text-xs text-muted-foreground">Received on the <Link href="/stock" className="underline">Stock page</Link>.</p>
           </Surface>
+
+          {(deliveries.length > 0 || vendor.kind === "transport") && (
+            <Surface className="p-4">
+              <h2 className="font-semibold">Deliveries</h2>
+              {deliveries.length === 0 ? (
+                <p className="mt-2 text-sm text-muted-foreground">None booked yet. Book one from the <Link href="/deliveries" className="underline">Deliveries board</Link> or an open purchase order.</p>
+              ) : (
+                <ul className="mt-2 divide-y divide-border/70">
+                  {deliveries.map((delivery) => (
+                    <li key={delivery.id} className="flex flex-wrap items-center gap-3 py-2 text-sm">
+                      {delivery.quoteId && deliveryQuotes.has(delivery.quoteId) ? (
+                        <Link href={`/deals/${delivery.quoteId}`} className="font-medium text-primary hover:underline">Q-{deliveryQuotes.get(delivery.quoteId)}</Link>
+                      ) : (
+                        <span className="font-medium">{delivery.purchaseOrderId ? "Into stock" : "Deal removed"}</span>
+                      )}
+                      <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">{formatDate(delivery.scheduledFor)} · {delivery.toAddress}</span>
+                      <StatusPill tone={delivery.status === "delivered" ? "success" : delivery.status === "cancelled" ? "neutral" : "info"}>{deliveryStatusLabel(delivery.status)}</StatusPill>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </Surface>
+          )}
         </div>
 
         <Surface className="p-4">
