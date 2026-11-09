@@ -8,6 +8,8 @@ import { getSetting, getRegionalSettings } from "@/lib/settings";
 import { prisma } from "@/lib/db";
 import { actingTenantId } from "@/lib/actingTenant";
 import { isModuleEnabled } from "@/lib/modules/enabled";
+import { isSupplierInvoice } from "@/lib/supplierInvoiceRules";
+import { confirmSupplierInvoice, readSupplierInvoiceNow } from "@/app/actions/supplierInvoices";
 import { SaveForm, SaveButton } from "@/components/SaveForm";
 import QuoteRowActions from "@/components/quotes/QuoteRowActions";
 import { StatusPill } from "@/components/visual-system";
@@ -106,7 +108,64 @@ function statusTone(status: string): "neutral" | "success" | "danger" | "info" {
 }
 
 /** `vendors` null: the Suppliers module is off — no supplier is shown or offered on the row. */
-function DocRow({ doc: row, revalidate, types, vendors }: { doc: Doc; revalidate: string; types: readonly string[]; vendors: readonly { id: string; name: string }[] | null }) {
+type InvoiceRow = { invoiceNumber: string | null; invoiceDate: Date | null; dueDate: Date | null; totalCents: number | null; currency: string | null; status: string };
+/** Supplier invoice documents on the list → what was read from each (null: nothing yet). Absent: not an invoice. */
+type InvoiceMap = Map<string, InvoiceRow | null>;
+const day = (value: Date | null) => (value ? value.toISOString().slice(0, 10) : "");
+
+/**
+ * Under a supplier invoice: what was read from it, for a person to confirm or correct (lib/supplierInvoiceReader.ts).
+ * Nothing read is used until someone presses Confirm; a confirmed one shows as a line, with Edit.
+ */
+function InvoiceBox({ documentId, revalidate, invoice, money }: { documentId: string; revalidate: string; invoice: InvoiceRow | null; money: (cents: number, currency: string | null) => string }) {
+  const summary = invoice
+    ? [invoice.invoiceNumber, invoice.invoiceDate ? formatDate(invoice.invoiceDate) : null, invoice.totalCents !== null ? money(invoice.totalCents, invoice.currency) : null, invoice.dueDate ? `due ${formatDate(invoice.dueDate)}` : null].filter(Boolean).join(" · ")
+    : "";
+  const form = (
+    <SaveForm action={confirmSupplierInvoice.bind(null, documentId, revalidate)} success="Invoice confirmed" resetOnSuccess={false} className="mt-1.5 grid gap-1.5 sm:grid-cols-5">
+      <input name="invoiceNumber" defaultValue={invoice?.invoiceNumber ?? ""} placeholder="Invoice no." aria-label="Invoice number" className="input h-8 text-xs" />
+      <input name="invoiceDate" type="date" defaultValue={day(invoice?.invoiceDate ?? null)} aria-label="Invoice date" className="input h-8 text-xs" />
+      <input name="dueDate" type="date" defaultValue={day(invoice?.dueDate ?? null)} aria-label="Due date" className="input h-8 text-xs" />
+      <input name="total" defaultValue={invoice?.totalCents != null ? (invoice.totalCents / 100).toFixed(2) : ""} placeholder="Total" aria-label="Total" className="input h-8 text-xs" />
+      <div className="flex gap-1.5">
+        <input name="currency" defaultValue={invoice?.currency ?? ""} placeholder="ZAR" maxLength={3} aria-label="Currency" className="input h-8 w-16 text-xs uppercase" />
+        <SaveButton className="btn-primary btn-sm">Confirm</SaveButton>
+      </div>
+    </SaveForm>
+  );
+  if (invoice?.status === "confirmed") {
+    return (
+      <details className="text-xs text-muted-foreground">
+        <summary className="cursor-pointer"><span className="text-emerald-400">Invoice confirmed</span>{summary ? ` · ${summary}` : ""} — <span className="underline">edit</span></summary>
+        {form}
+      </details>
+    );
+  }
+  return (
+    <div className="rounded-lg border border-border/70 bg-muted/20 p-2 text-xs text-muted-foreground">
+      <div className="flex flex-wrap items-center gap-2">
+        <span>
+          {invoice?.status === "read" ? <>Read from the invoice — <strong className="text-foreground">check it and confirm</strong>{summary ? `: ${summary}` : ""}</> : invoice?.status === "unreadable" ? "Couldn't read this invoice — fill it in below." : "Not read yet."}
+        </span>
+        {invoice?.status !== "read" && (
+          <SaveForm action={readSupplierInvoiceNow.bind(null, documentId, revalidate)}>
+            <SaveButton className="text-xs font-medium text-primary hover:underline" pendingLabel="Reading…">Read invoice</SaveButton>
+          </SaveForm>
+        )}
+      </div>
+      {form}
+    </div>
+  );
+}
+
+function DocRow({ doc: row, revalidate, types, vendors, invoices, money }: {
+  doc: Doc;
+  revalidate: string;
+  types: readonly string[];
+  vendors: readonly { id: string; name: string }[] | null;
+  invoices: InvoiceMap;
+  money: (cents: number, currency: string | null) => string;
+}) {
   const doc = vendors === null ? { ...row, vendor: undefined } : row;
   // What it IS leads: a type somebody chose ("Supplier quote") is the document's
   // name on this list, with the file name beneath. A tag the CRM wrote keeps its
@@ -116,7 +175,7 @@ function DocRow({ doc: row, revalidate, types, vendors }: { doc: Doc; revalidate
   // What the deal file's search box matches (DealFileSearch).
   const search = [doc.fileName, chosen, system, doc.vendor?.name, doc.uploadedBy.name].filter(Boolean).join(" ").toLowerCase();
   return (
-    <li className="group flex items-center gap-3 py-2" data-search={search}>
+    <li className="group flex flex-wrap items-center gap-3 py-2" data-search={search}>
       <span className="grid size-8 shrink-0 place-items-center rounded-lg border border-border bg-muted/30 text-muted-foreground">
         <FileText className="size-3.5" />
       </span>
@@ -166,6 +225,11 @@ function DocRow({ doc: row, revalidate, types, vendors }: { doc: Doc; revalidate
           triggerClass="cursor-pointer text-xs text-slate-600 hover:text-red-500"
         />
       </div>
+      {invoices.has(doc.id) && (
+        <div className="basis-full pl-11">
+          <InvoiceBox documentId={doc.id} revalidate={revalidate} invoice={invoices.get(doc.id) ?? null} money={money} />
+        </div>
+      )}
     </li>
   );
 }
@@ -272,6 +336,18 @@ export default async function DocumentsPanel({
         },
       })
     : [];
+  // What each supplier invoice on this list says (read by AI, confirmed by a person) — Suppliers module only.
+  const invoiceDocIds = vendors === null
+    ? []
+    : [...documents, ...(quoteGroups ?? []).flatMap((group) => group.documents)].filter((doc) => isSupplierInvoice(doc.tag)).map((doc) => doc.id);
+  const invoiceRows = invoiceDocIds.length
+    ? await prisma.supplierInvoice.findMany({
+        where: { tenantId, documentId: { in: invoiceDocIds } },
+        select: { documentId: true, invoiceNumber: true, invoiceDate: true, dueDate: true, totalCents: true, currency: true, status: true },
+      })
+    : [];
+  const invoices: InvoiceMap = new Map(invoiceDocIds.map((id) => [id, invoiceRows.find((row) => row.documentId === id) ?? null]));
+  const invoiceMoney = (cents: number, currency: string | null) => formatZAR(cents, withCurrency(moneyFmt, currency));
   return (
     <div className="card">
       <div className="mb-4 flex items-center justify-between gap-3">
@@ -339,7 +415,7 @@ export default async function DocumentsPanel({
               ) : (
                 <ul className="mt-1 divide-y divide-slate-800">
                   {[...group.documents].sort(byLifecycle).map((doc) => (
-                    <DocRow key={doc.id} doc={doc} revalidate={revalidate} types={types} vendors={vendors} />
+                    <DocRow key={doc.id} doc={doc} revalidate={revalidate} types={types} vendors={vendors} invoices={invoices} money={invoiceMoney} />
                   ))}
                 </ul>
               )}
@@ -365,7 +441,7 @@ export default async function DocumentsPanel({
           )}
           <ul className="divide-y divide-slate-800">
             {documents.map((doc) => (
-              <DocRow key={doc.id} doc={doc} revalidate={revalidate} types={types} vendors={vendors} />
+              <DocRow key={doc.id} doc={doc} revalidate={revalidate} types={types} vendors={vendors} invoices={invoices} money={invoiceMoney} />
             ))}
           </ul>
         </>

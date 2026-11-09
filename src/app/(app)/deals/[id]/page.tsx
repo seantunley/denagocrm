@@ -40,6 +40,9 @@ import { isModuleEnabled } from "@/lib/modules/enabled";
 import { dealSignatureRequests } from "@/lib/dealFileData";
 import { vendorKindLabel } from "@/lib/vendors";
 import { addDealVendor, removeDealVendor } from "@/app/actions/vendors";
+import { recallDocumentRequest } from "@/app/actions/documentRequests";
+import DocumentRequestButton from "@/components/deals/DocumentRequestButton";
+import { documentRequestState } from "@/lib/documentRequestRules";
 import { withCurrency } from "@/lib/currencyRules";
 import DealPayments from "@/components/deals/DealPayments";
 import { primaryVehicleLine, showcaseImageRefFor } from "@/lib/docbuilder/vehicleShowcase";
@@ -65,15 +68,16 @@ function Fact({ label, value }: { label: string; value: ReactNode }) {
   );
 }
 
-function ReadinessRow({ done, label, detail }: { done: boolean; label: string; detail?: string }) {
+function ReadinessRow({ done, label, detail, action }: { done: boolean; label: string; detail?: string; action?: ReactNode }) {
   return (
     <div className="flex items-start gap-3 py-2">
       <span className={`mt-0.5 grid size-5 shrink-0 place-items-center rounded-full border ${done ? "border-emerald-400/40 bg-emerald-400/10 text-emerald-300" : "border-amber-400/40 bg-amber-400/10 text-amber-300"}`}>
         {done ? <Check className="size-3" /> : <span className="size-1.5 rounded-full bg-current" />}
       </span>
-      <div className="min-w-0">
+      <div className="min-w-0 flex-1">
         <p className="text-sm font-medium text-foreground">{label}</p>
         {detail && <p className="mt-0.5 text-xs text-muted-foreground">{detail}</p>}
+        {action}
       </div>
     </div>
   );
@@ -189,7 +193,7 @@ export default async function DealWorkspacePage({ params }: { params: Promise<{ 
           orderBy: { createdAt: "asc" },
         })
       : [],
-    suppliersOn ? prisma.vendor.findMany({ where: { tenantId, deletedAt: null }, select: { id: true, name: true }, orderBy: { name: "asc" } }) : [],
+    suppliersOn ? prisma.vendor.findMany({ where: { tenantId, deletedAt: null }, select: { id: true, name: true, email: true }, orderBy: { name: "asc" } }) : [],
   ]);
   // Module off: the supplier on a document is neither shown nor counted (undefined = this page shows no supplier).
   const documents = rawDocuments.map((doc) => ({ ...doc, vendor: suppliersOn ? doc.vendor : undefined }));
@@ -202,6 +206,22 @@ export default async function DealWorkspacePage({ params }: { params: Promise<{ 
     suppliersOn,
   );
   const checklistDone = checklist.filter((item) => item.done).length;
+  // Papers asked of suppliers through an upload link (lib/documentRequests.ts), for every quote on the deal.
+  const requests = suppliersOn
+    ? await prisma.documentRequest.findMany({
+        where: { tenantId, quoteId: { in: dealQuoteIds } },
+        select: { id: true, quoteId: true, vendorId: true, documentType: true, sentTo: true, createdAt: true, expiresAt: true, revokedAt: true, fulfilledAt: true },
+        orderBy: { createdAt: "desc" },
+      })
+    : [];
+  const requestNow = new Date();
+  /** The checklist line's supplier and paper (its key is "<vendorId>:<type>"), when it can be asked for. */
+  const askable = (item: { key: string; done: boolean }) => {
+    if (item.done || !suppliersOn || !canUpload) return null;
+    const at = item.key.indexOf(":");
+    const vendor = vendors.find((v) => v.id === item.key.slice(0, at));
+    return vendor ? { vendor, documentType: item.key.slice(at + 1) } : null;
+  };
   const quoteGroups = dealQuotes.map((dealQuote) => ({
     id: dealQuote.id,
     number: dealQuote.number,
@@ -633,9 +653,29 @@ export default async function DealWorkspacePage({ params }: { params: Promise<{ 
                 <StatusPill tone={checklistDone === checklist.length ? "success" : "warning"}>{checklistDone} of {checklist.length}</StatusPill>
               </div>
               <div className="mt-3 divide-y divide-border/60">
-                {checklist.map((item) => (
-                  <ReadinessRow key={item.key} done={item.done} label={item.label} detail={item.detail} />
-                ))}
+                {checklist.map((item) => {
+                  const ask = askable(item);
+                  const waiting = ask
+                    ? requests.find((r) => r.vendorId === ask.vendor.id && r.documentType === ask.documentType && documentRequestState(r, requestNow) === "open")
+                    : undefined;
+                  return (
+                    <ReadinessRow
+                      key={item.key}
+                      done={item.done}
+                      label={item.label}
+                      detail={waiting ? `Asked ${formatDate(waiting.createdAt)} (${waiting.sentTo}) — waiting, until ${formatDate(waiting.expiresAt)}` : item.detail}
+                      action={
+                        waiting ? (
+                          <SaveForm action={recallDocumentRequest.bind(null, waiting.quoteId, waiting.id)} success="Request withdrawn">
+                            <SaveButton className="text-[11px] font-medium text-muted-foreground hover:text-foreground hover:underline" pendingLabel="Withdrawing…">Withdraw the request</SaveButton>
+                          </SaveForm>
+                        ) : ask ? (
+                          <DocumentRequestButton quoteId={uploadQuoteId ?? quote.id} vendor={ask.vendor} documentType={ask.documentType} />
+                        ) : undefined
+                      }
+                    />
+                  );
+                })}
               </div>
               <a href="#deal-file" className="btn-secondary btn-sm mt-4 w-full"><FileText className="size-4" />Open the file</a>
             </Surface>

@@ -916,6 +916,36 @@
       ]
     }
   },
+  "DocumentRequest.DocumentRequest_tenantId_quoteId_fkey": {
+    "table": "DocumentRequest",
+    "constraint": "DocumentRequest_tenantId_quoteId_fkey",
+    "columns": [
+      "tenantId",
+      "quoteId"
+    ],
+    "references": {
+      "table": "Quote",
+      "columns": [
+        "tenantId",
+        "id"
+      ]
+    }
+  },
+  "DocumentRequest.DocumentRequest_tenantId_vendorId_fkey": {
+    "table": "DocumentRequest",
+    "constraint": "DocumentRequest_tenantId_vendorId_fkey",
+    "columns": [
+      "tenantId",
+      "vendorId"
+    ],
+    "references": {
+      "table": "Vendor",
+      "columns": [
+        "tenantId",
+        "id"
+      ]
+    }
+  },
   "Fleet.Fleet_tenantId_contactId_fkey": {
     "table": "Fleet",
     "constraint": "Fleet_tenantId_contactId_fkey",
@@ -2080,6 +2110,21 @@
     ],
     "references": {
       "table": "Quote",
+      "columns": [
+        "tenantId",
+        "id"
+      ]
+    }
+  },
+  "SupplierInvoice.SupplierInvoice_tenantId_documentId_fkey": {
+    "table": "SupplierInvoice",
+    "constraint": "SupplierInvoice_tenantId_documentId_fkey",
+    "columns": [
+      "tenantId",
+      "documentId"
+    ],
+    "references": {
+      "table": "Document",
       "columns": [
         "tenantId",
         "id"
