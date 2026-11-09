@@ -238,7 +238,8 @@ const EMITTED_EVENT_TRIGGERS = (() => {
     // lead (a job card completed, a vehicle delivered) — same gate, same contract.
     // emitQuoteJourneyEvent and emitTestDriveJourneyEvent are those same two,
     // chosen by whether the quote or booking has a lead (asserted just below).
-    for (const [, trigger] of shipped(rel).matchAll(/emit(?:Lead|Contact|Quote|TestDrive)JourneyEvent\(\s*"([a-z_]+)"/g)) {
+    // emitForLeadOrContact is the hand-over those two (and the delivery one) use; a literal trigger there is an emit.
+    for (const [, trigger] of shipped(rel).matchAll(/emit(?:(?:Lead|Contact|Quote|TestDrive)JourneyEvent|ForLeadOrContact)\(\s*"([a-z_]+)"/g)) {
       found.add(trigger);
     }
   }
@@ -326,7 +327,8 @@ test("the two lists above cover exactly the triggers the builder OFFERS", () => 
   const builder = shipped("src/components/JourneyBuilder.tsx");
   assert.match(
     builder,
-    /JOURNEY_TRIGGERS\.map\(\(type\) => \([\s\S]*?<option key=\{type\} value=\{type\}>/,
+    // Filtered only by the workspace's modules (journeyModules.ts) — still the declared list, nothing hand-written.
+    /JOURNEY_TRIGGERS\.filter\(\(type\) => !triggerBlocked\(type\) \|\| type === spec\.type\)\.map\(\(type\) => \([\s\S]*?<option key=\{type\} value=\{type\}>/,
     "the enrolment dropdown must be rendered FROM JOURNEY_TRIGGERS, not from a hand-written list beside it",
   );
   assert.match(

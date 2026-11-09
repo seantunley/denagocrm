@@ -21,6 +21,7 @@ import { isModuleEnabled, requireModuleEnabled } from "@/lib/modules/enabled";
 import { deliverQuote, QUOTE_GONE, type DeliveryEvidence } from "@/lib/quoteDelivery";
 import { getRegionalSettings } from "@/lib/settings";
 import { withCurrency } from "@/lib/currencyRules";
+import { emitDeliveryScheduledJourneyEvent } from "@/lib/leadJourneyEvents";
 
 const MAX_FILE = 4 * 1024 * 1024;
 
@@ -360,6 +361,8 @@ export async function scheduleDelivery(quoteId: string, formData: FormData) {
       leadId: quote.leadId,
       user,
     });
+    // Journeys on "Delivery is scheduled or moved" start now, with {{delivery_date}} = this day. Never rejects.
+    await emitDeliveryScheduledJourneyEvent(quote, when, false);
     revalidatePath("/deliveries");
     revalidatePath(`/quotes/${quoteId}`);
     revalidatePath("/workshop-calendar");
@@ -410,6 +413,8 @@ export async function rescheduleDelivery(quoteId: string, formData: FormData) {
       leadId: quote.leadId,
       user,
     });
+    // The same trigger, for the NEW day: the customer hears the date that now stands. Never rejects.
+    await emitDeliveryScheduledJourneyEvent(quote, when, true);
     revalidatePath("/deliveries");
     revalidatePath(`/quotes/${quoteId}`);
     revalidatePath("/workshop-calendar");

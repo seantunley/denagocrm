@@ -2,6 +2,8 @@ import { prisma } from "./db";
 import { emitJourneyEvent } from "./journeyEvents";
 import { isModuleEnabled } from "./modules/enabled";
 import type { JourneyEventTrigger } from "./journeyTypes";
+import { deliveryDateText } from "./deliveryDate";
+import { randomUUID } from "node:crypto";
 
 /**
  * The one way an application write path tells the Journey engine that something
@@ -118,6 +120,35 @@ export async function emitQuoteJourneyEvent(
   await emitForLeadOrContact(trigger, quote, {
     occurrence: `quote:${quote.id}:${occurrence}`,
     payload: { quoteId: quote.id, quoteNumber: quote.number },
+  });
+}
+
+/**
+ * A delivery was scheduled on the deliveries board, or moved to another day (Sean, 2026-11-09: "journey trigger
+ * for a delivery is scheduled and must use the variable of schedule date from the deliveries board").
+ *
+ * EACH SCHEDULING CHANGE is the occurrence (review of #1044), not the day: 14th → 16th → back to 14th is three
+ * events, and the third must reach the customer. Its `changeId` is also how a run started by an earlier change
+ * knows it has been superseded (journeyRuns.ts / staleDeliveryRunReason). The callers emit only after their
+ * conditional write claimed the change, so one change is one event. The date travels as the board stored it (a
+ * calendar day at midnight UTC) and written out, so {{delivery_date}} reads "Saturday, 14 November 2026".
+ */
+export async function emitDeliveryScheduledJourneyEvent(
+  quote: { id: string; number: number; leadId: string | null; contactId: string | null },
+  scheduledFor: Date,
+  rescheduled: boolean,
+): Promise<void> {
+  const changeId = randomUUID();
+  await emitForLeadOrContact("delivery_scheduled", quote, {
+    occurrence: `quote:${quote.id}:delivery:${changeId}`,
+    payload: {
+      quoteId: quote.id,
+      quoteNumber: quote.number,
+      changeId,
+      deliveryDate: scheduledFor.toISOString().slice(0, 10),
+      deliveryDateText: deliveryDateText(scheduledFor),
+      rescheduled,
+    },
   });
 }
 

@@ -62,6 +62,7 @@ import {
   type NodeProps,
 } from "@xyflow/react";
 import { JOURNEY_STEP_LABELS } from "@/lib/journeyTypes";
+import { useModuleBlock } from "@/components/journeyModulesContext";
 import { newStepId, type BuilderStep } from "@/lib/journeyBuilderDefinition";
 import {
   JOURNEY_PALETTE,
@@ -252,6 +253,7 @@ function Canvas({ steps, onChange, renderEditor, saveButton }: CanvasProps) {
   const [findOpen, setFindOpen] = useState(false);
   const [findQuery, setFindQuery] = useState("");
   const graph = useMemo(() => journeyGraph(steps), [steps]);
+  const stepBlocked = useModuleBlock().step;
 
   // UNDO / REDO over snapshots of the steps, as FlowBuilder does it: typing into one step's editor is one undo step
   // (edits to the same step within HISTORY_GROUP_MS group), every structural edit is its own.
@@ -403,7 +405,10 @@ function Canvas({ steps, onChange, renderEditor, saveButton }: CanvasProps) {
   const query = paletteQuery.trim().toLowerCase();
   const groups = JOURNEY_PALETTE.map((g) => ({
     ...g,
-    types: g.types.filter((type) => !query || `${labels[type]} ${STEP_META[type]?.description ?? ""} ${type}`.toLowerCase().includes(query)),
+    types: g.types
+      // Not offered when its module is off here (journeyModules.ts) — the service reminder without Automotive.
+      .filter((type) => !stepBlocked(type))
+      .filter((type) => !query || `${labels[type]} ${STEP_META[type]?.description ?? ""} ${type}`.toLowerCase().includes(query)),
   })).filter((g) => g.types.length > 0);
   const hits = findOpen ? findSteps(steps, findQuery) : [];
   const jumpTo = (id: string) => { pick(id); setFindOpen(false); };
