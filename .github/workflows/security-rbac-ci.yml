@@ -415,6 +415,12 @@ jobs:
       - name: Isolation -- an invoice prints its own workspace's layout and banking, with enforcement off
         run: npm run test:invoice-workspace
 
+      # 2026-11-09, enforcement off then on: a create that names no workspace (stock timeline events and 54 more)
+      # gets the one the work runs in; one that names a workspace keeps it; no scope guesses nothing; a
+      # staff-attributed audit entry with no session (DAX over WhatsApp) lands in its workspace.
+      - name: Isolation -- new rows get their workspace in every enforcement mode
+        run: npm run test:stamp-every-mode
+
       - name: Run two-tenant end-to-end CRM isolation suite
         # Ordinary CRM flows run as two different tenants through the REAL scoped
         # client under the restricted role -- the regression guard for real-flow

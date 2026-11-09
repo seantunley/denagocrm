@@ -242,6 +242,18 @@ export function scopeWhere(args: any, tenantId: string): any {
  * client-supplied `tenantId`. This is the core anti-forgery rule — a write's
  * tenant comes from trusted context, never the payload.
  */
+/**
+ * Give `args[key]` (a create's `data` — one row or many — or an upsert's `create`) the tenant, ONLY where it names
+ * none. A tenantId the caller set, even null, is left alone. For the not-enforcing stamp in db.ts; enforcement's
+ * stampCreate overrides instead.
+ */
+export function fillMissingTenant(args: any, key: "data" | "create", tenantId: string): any {
+  const fill = (row: any) => (row && typeof row === "object" && !("tenantId" in row) ? { ...row, tenantId } : row);
+  const value = args?.[key];
+  if (value == null) return args;
+  return { ...args, [key]: Array.isArray(value) ? value.map(fill) : fill(value) };
+}
+
 export function stampCreate(args: any, tenantId: string): any {
   const next = { ...(args ?? {}) };
   if (Array.isArray(next.data)) {
