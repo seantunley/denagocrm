@@ -5,12 +5,15 @@ import { prisma } from "@/lib/db";
 import { asActionResult, refuse, type ActionResult } from "@/lib/actionResult";
 import { requireDocumentAccess } from "@/lib/permissions";
 import { logAudit } from "@/lib/audit";
+import { isModuleEnabled } from "@/lib/modules/enabled";
 import { readSupplierInvoice } from "@/lib/supplierInvoiceReader";
 import { invoiceCents, invoiceDay, isSupplierInvoice } from "@/lib/supplierInvoiceRules";
 
 /** The supplier invoice document, in its own workspace, for someone who may open it and upload documents. */
 async function invoiceDocument(documentId: string) {
   const user = await requireDocumentAccess(documentId, "documents.upload");
+  // Reading AND confirming belong to the Suppliers module: switched off, neither can be done.
+  if (!(await isModuleEnabled("suppliers"))) refuse("Suppliers is switched off for this workspace.");
   const doc = await prisma.document.findFirst({ where: { id: documentId, deletedAt: null }, select: { id: true, tenantId: true, tag: true, fileName: true } });
   if (!doc || !doc.tenantId) refuse("That document is no longer there — refresh the page.");
   if (!isSupplierInvoice(doc.tag)) refuse("Only a document filed as a supplier invoice is read.");
@@ -40,7 +43,7 @@ export async function confirmSupplierInvoice(documentId: string, revalidate: str
     const number = String(formData.get("invoiceNumber") ?? "").trim().slice(0, 60) || null;
     const rawTotal = String(formData.get("total") ?? "").trim();
     const totalCents = rawTotal ? invoiceCents(rawTotal) : null;
-    if (rawTotal && totalCents === null) refuse("That total isn't an amount — e.g. 12500.00");
+    if (rawTotal && totalCents === null) refuse("The total must be a positive amount up to 21 474 836.47 — e.g. 12500.00");
     const date = (name: string) => {
       const raw = String(formData.get(name) ?? "").trim();
       if (!raw) return null;

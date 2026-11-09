@@ -25,17 +25,26 @@ export function invoiceDay(value: unknown): Date | null {
   return date.toISOString().slice(0, 10) === match[0] ? date : null;
 }
 
-/** "12 500.00", "R12,500.50", 12500.5 → cents; null when it isn't one positive amount below R100 million. */
+/** The largest amount the column holds: SupplierInvoice.totalCents is a Postgres INTEGER (R21 474 836.47). */
+export const MAX_INVOICE_CENTS = 2_147_483_647;
+
+const inRange = (cents: number): number | null => (cents > 0 && cents <= MAX_INVOICE_CENTS ? cents : null);
+
+/**
+ * "12 500.00", "R12,500.50", 12500.5 → cents; null unless it is one positive amount the column can hold.
+ * A minus sign or accounting brackets — a credit or adjustment — is refused, never read as a positive total.
+ */
 export function invoiceCents(value: unknown): number | null {
-  if (typeof value === "number") return Number.isFinite(value) && value > 0 && value < 100_000_000 ? Math.round(value * 100) : null;
-  const text = String(value ?? "").replace(/[^\d.,]/g, "");
+  if (typeof value === "number") return Number.isFinite(value) ? inRange(Math.round(value * 100)) : null;
+  const raw = String(value ?? "");
+  if (/[-−–(]/.test(raw)) return null;
+  const text = raw.replace(/[^\d.,]/g, "");
   if (!text) return null;
   // The last "." or "," followed by exactly two digits is the decimal point; every other separator is grouping.
   const decimal = /[.,](\d{2})$/.exec(text);
   const whole = (decimal ? text.slice(0, -3) : text).replace(/[.,]/g, "");
   if (!/^\d+$/.test(whole)) return null;
-  const cents = Number(whole) * 100 + (decimal ? Number(decimal[1]) : 0);
-  return cents > 0 && cents < 10_000_000_000 ? cents : null;
+  return inRange(Number(whole) * 100 + (decimal ? Number(decimal[1]) : 0));
 }
 
 /** What the model answered, as fields to put in front of a person. Anything doubtful is null. */

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { readFileSync } from "node:fs";
-import { invoiceCents, invoiceDay, isSupplierInvoice, nothingRead, parseInvoiceReading } from "../src/lib/supplierInvoiceRules";
+import { invoiceCents, invoiceDay, isSupplierInvoice, MAX_INVOICE_CENTS, nothingRead, parseInvoiceReading } from "../src/lib/supplierInvoiceRules";
 
 const src = (path: string) => readFileSync(new URL(`../${path}`, import.meta.url), "utf8");
 
@@ -14,10 +14,27 @@ test("amounts: grouping and decimal separators, either way round", () => {
   assert.equal(invoiceCents("12.50"), 1250);
 });
 
-test("amounts: nothing, zero, negative-looking or absurd is left blank", () => {
+test("amounts: nothing, zero, negative or absurd is left blank", () => {
   for (const bad of ["", "abc", "0", "0.00", 0, -5, Number.NaN, 100_000_000, "100000000.00", null, undefined]) {
     assert.equal(invoiceCents(bad), null, String(bad));
   }
+});
+
+test("a negative amount typed as text is refused, never turned positive (review #1048)", () => {
+  for (const bad of ["-12500.00", "R -12 500.00", "- 12500", "(12 500.00)", "R(12,500.50)", "−12500", "–12500"]) {
+    assert.equal(invoiceCents(bad), null, bad);
+  }
+});
+
+test("the ceiling is what the INTEGER column holds (review #1048)", () => {
+  assert.equal(MAX_INVOICE_CENTS, 2_147_483_647);
+  assert.equal(invoiceCents("21474836.47"), 2_147_483_647);
+  assert.equal(invoiceCents("21 474 836.48"), null);
+  assert.equal(invoiceCents(21474836.47), 2_147_483_647);
+  assert.equal(invoiceCents(21474836.48), null);
+  assert.equal(invoiceCents("50 000 000.00"), null);
+  // And the column really is INTEGER — if it ever widens, the ceiling should be revisited.
+  assert.match(src("prisma/migrations/20261110010000_supplier_invoices/migration.sql"), /"totalCents" INTEGER/);
 });
 
 test("dates: only a real calendar day", () => {
@@ -65,7 +82,9 @@ test("upload reads a supplier invoice after the response, in the document's own 
 
 test("confirming checks access to the document and audits", () => {
   const actions = src("src/app/actions/supplierInvoices.ts");
-  assert.match(actions, /requireDocumentAccess\(documentId, "documents\.upload"\)/);
+  assert.match(actions, /requireDocumentAccess\(documentId, "documents\.upload"\);\s*\/\/[^\n]*\n\s*if \(!\(await isModuleEnabled\("suppliers"\)\)\) refuse\(/, "access, then the module, before anything else");
+  // Both actions go through that one gate.
+  assert.equal((actions.match(/await invoiceDocument\(documentId\)/g) ?? []).length, 2);
   assert.match(actions, /logAudit\(\{ action: "supplier_invoice\.confirmed"/);
   assert.match(actions, /status: "confirmed"/);
 });
