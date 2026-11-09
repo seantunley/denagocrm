@@ -27,7 +27,15 @@ export type ScopeClass =
   | { mode: "closed" };
 
 export function currentScopeClass(): ScopeClass {
-  if (!tenantEnforcing()) return { mode: "global" }; // dormant — unchanged behaviour
+  if (!tenantEnforcing()) {
+    // Dormant, but the work runs in a KNOWN workspace (2026-11-09, review of #1041): write and filter as that
+    // workspace, exactly as enforcement would. Reporting "global" here made every unguarded write stamp nothing
+    // (a NULL tenantId) and ownedWriteTenantId() file it in the FOUNDING workspace — so with enforcement off, a
+    // second workspace's rows landed in Denago's. Only genuinely scope-less or system work stays global.
+    const dormantScope = currentTenantScope();
+    if (dormantScope && !dormantScope.system && dormantScope.tenantId) return { mode: "tenant", tenantId: dormantScope.tenantId };
+    return { mode: "global" };
+  }
   const scope = currentTenantScope();
   if (!scope) return { mode: "closed" }; // enforcing but no scope established → fail closed
   if (scope.system) return { mode: "global" }; // deliberate trusted system bypass

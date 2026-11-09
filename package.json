@@ -40,6 +40,7 @@
     "test:assistant-payment-match": "tsx --tsconfig tsconfig.harness.json scripts/test-assistant-payment-match.ts",
     "test:quote-payments": "tsx --tsconfig tsconfig.harness.json scripts/test-quote-payments.ts",
     "test:invoice-workspace": "tsx --tsconfig tsconfig.harness.json scripts/test-invoice-workspace.ts",
+    "test:stamp-every-mode": "tsx --tsconfig tsconfig.harness.json scripts/test-stamp-every-mode.ts",
     "test:supplier-orders": "tsx --tsconfig tsconfig.harness.json scripts/test-supplier-orders.ts",
     "eval:dax-tasks": "tsx --tsconfig tsconfig.harness.json scripts/eval-dax-tasks.ts",
     "test:signing-upgrade": "tsx --tsconfig tsconfig.scripts.json scripts/test-signing-upgrade.ts",

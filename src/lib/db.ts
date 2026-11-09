@@ -9,6 +9,7 @@ import {
   scopeMutation,
   scopeUpsert,
   hasNestedRelationWrite,
+  stampScopeTenant,
   TenantScopeError,
 } from "./tenantGuard";
 
@@ -141,7 +142,7 @@ function applyScopeArgs(model: string, operation: string, args: any): any {
  *     (see tenantEnforcement.ts and PHASE-C-TENANT-GUARD-DESIGN.md §1.3/§1.5/§5/§6).
  */
 function scopeArgs(model: string, kind: ScopeKind, args: any): any {
-  if (!tenantEnforcing()) return args;
+  if (!tenantEnforcing()) return stampWhileNotEnforcing(model, kind, args);
   if (!isTenantScopedModel(model)) return args;
   const scope = currentTenantScope();
   if (!scope) throw new TenantScopeError(`No tenant scope established for ${model}`);
@@ -161,6 +162,32 @@ function scopeArgs(model: string, kind: ScopeKind, args: any): any {
       refuseNestedRelationWrite(model, args?.update);
       return scopeUpsert(args, scope.tenantId);
   }
+}
+
+/**
+ * ENFORCEMENT OFF OR MONITORING: A NEW ROW STILL GETS ITS WORKSPACE.
+ *
+ * Above, the guard returned every write untouched unless enforcing, so any create that left `tenantId` to "the
+ * guard" was written with tenantId NULL whenever enforcement was off — the default, and the rollback mode. The
+ * 2026-08-10 audit counted 843 such rows; a 2026-11-09 scan found 55 creates still written that way (stock
+ * events, goods receipts, consent records, job-card entries…), safe in production only because enforcement is
+ * on there. A row with no workspace belongs to nobody: its own workspace can't read it back and its composite
+ * tenant keys can't check it.
+ *
+ * So a create (and an upsert's create) on a tenant-scoped model gets the tenant of the scope the work is running
+ * in — the SAME tenant enforcement would stamp — whatever the mode (stampScopeTenant):
+ *   - no tenantId or null → the scope's;
+ *   - another workspace's → REFUSED (review of #1041): work for one workspace never creates another's row;
+ *   - with no scope, or a system scope, nothing happens — there is no workspace to give, and guessing one
+ *     (the founding tenant) is the misattribution ownedWriteTenantId() exists to stop.
+ * Reads and updates are untouched: their isolation is RLS's and enforcement's job, not this one's.
+ */
+function stampWhileNotEnforcing(model: string, kind: ScopeKind, args: any): any {
+  if (kind !== "create" && kind !== "upsert") return args;
+  if (!isTenantScopedModel(model)) return args;
+  const scope = currentTenantScope();
+  if (!scope || scope.system || !scope.tenantId) return args;
+  return stampScopeTenant(args, kind === "upsert" ? "create" : "data", scope.tenantId, model);
 }
 
 function refuseNestedRelationWrite(model: string, data: unknown): void {

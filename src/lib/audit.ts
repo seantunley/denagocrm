@@ -130,10 +130,14 @@ function actorType(entry: AuditEntry, actorName: string, globalScope: boolean) {
  *   action attributed to another user cannot inherit the cookie user's tenant.
  */
 async function actingTenantId(entry: AuditEntry): Promise<string | null> {
-  if (!entry.user) {
-    const scope = currentTenantScope();
-    return scope && !scope.system && scope.tenantId ? scope.tenantId : null;
-  }
+  // THE SCOPE THE WORK RUNS IN, FIRST — for staff-attributed work too (2026-11-09). It is set by the server for
+  // the workspace being worked on, never read from a cookie, so the misattribution worry above does not apply
+  // to it. Without this, everything DAX did over WhatsApp — confirmations, quotes it made, contacts it linked —
+  // was audited with NO workspace (83 AuditEvent rows in 30 days on production): the WhatsApp webhook carries
+  // no staff cookie, so the identity check below answered null although the work ran in a known workspace.
+  const scope = currentTenantScope();
+  if (scope && !scope.system && scope.tenantId) return scope.tenantId;
+  if (!entry.user) return null;
   try {
     const { getCurrentUser, getActiveTenantId } = await import("./auth");
     const current = await getCurrentUser();
