@@ -33,6 +33,14 @@ export function bookingDay(value: unknown): Date | null {
   return date.toISOString().slice(0, 10) === match[0] ? date : null;
 }
 
+/** A purchase order's lines as the delivery company should read them: only what is still outstanding. */
+export function inboundItems(lines: { orderedQty: number; receivedQty: number; color: string | null; product: { name: string } }[]): string[] {
+  return lines
+    .map((line) => ({ ...line, outstanding: Math.max(0, line.orderedQty - line.receivedQty) }))
+    .filter((line) => line.outstanding > 0)
+    .map((line) => `${line.outstanding} × ${line.product.name}${line.color ? ` (${line.color})` : ""}`);
+}
+
 export type BookingMessageInput = {
   brand: string;
   vendorName: string;

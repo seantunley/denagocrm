@@ -12,7 +12,7 @@ import { brandForTenant, DEFAULT_BRAND } from "@/lib/tenantBrand";
 import { waMeLink } from "@/lib/captureTarget";
 import { isLineIncluded } from "@/lib/pricing";
 import { linkVendorToDeal } from "@/lib/dealVendors";
-import { bookingDay, bookingMessage, canMoveDelivery, deliveryStatusLabel } from "@/lib/vendorDeliveryRules";
+import { bookingDay, bookingMessage, canMoveDelivery, deliveryStatusLabel, inboundItems } from "@/lib/vendorDeliveryRules";
 
 const EMAIL = /^[^\s@,;<>]+@[^\s@,;<>]+\.[^\s@,;<>]+$/;
 const text = (formData: FormData, name: string, max: number) => String(formData.get(name) ?? "").trim().slice(0, max);
@@ -49,15 +49,18 @@ export async function bookVendorDelivery(target: BookingTarget, formData: FormDa
     } else {
       const order = await prisma.purchaseOrder.findFirst({
         where: { id: target.purchaseOrderId, tenantId, deletedAt: null, status: { in: ["ordered", "partially_received"] } },
-        select: { reference: true, supplier: true, lines: { select: { orderedQty: true, color: true, product: { select: { name: true } } } } },
+        select: { reference: true, supplier: true, lines: { select: { orderedQty: true, receivedQty: true, color: true, product: { select: { name: true } } } } },
       });
       if (!order) refuse("Only an open purchase order's delivery can be booked — refresh the page.");
       reference = order.reference ? `order ${order.reference}` : `${order.supplier} order`;
-      items = order.lines.map((line) => `${line.orderedQty} × ${line.product.name}${line.color ? ` (${line.color})` : ""}`);
+      // What is still to come: a partly received order's delivery carries only the outstanding units.
+      items = inboundItems(order.lines);
+      if (items.length === 0) refuse("Everything on this order has been received — nothing left to deliver.");
     }
 
+    // A delivery company only — the form lists those, and the server holds to it whatever is posted.
     const vendor = await prisma.vendor.findFirst({
-      where: { id: String(formData.get("vendorId") ?? ""), tenantId, deletedAt: null },
+      where: { id: String(formData.get("vendorId") ?? ""), tenantId, deletedAt: null, kind: "transport" },
       select: { id: true, name: true, email: true, phone: true },
     });
     if (!vendor) refuse("Choose the delivery company from the list.");
@@ -119,6 +122,8 @@ export async function setVendorDeliveryStatus(bookingId: string, status: string)
   return asActionResult(async () => {
     // Anyone who may book either kind, first; then the one this booking needs, below.
     await requireAnyPermission("deliveries.manage", "stock.manage");
+    // Switched off, bookings are frozen as they stand — none can be moved along.
+    if (!(await isModuleEnabled("suppliers"))) refuse("Suppliers aren't switched on for this workspace.");
     const tenantId = await actingTenantId();
     const booking = await prisma.vendorDelivery.findFirst({
       where: { id: bookingId, tenantId },

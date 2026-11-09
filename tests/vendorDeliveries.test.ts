@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { readFileSync } from "node:fs";
-import { bookingDay, bookingMessage, canMoveDelivery, nextDeliveryStatuses } from "../src/lib/vendorDeliveryRules";
+import { bookingDay, bookingMessage, canMoveDelivery, inboundItems, nextDeliveryStatuses } from "../src/lib/vendorDeliveryRules";
 
 const src = (path: string) => readFileSync(new URL(`../${path}`, import.meta.url), "utf8");
 
@@ -38,7 +38,6 @@ test("booking: the right permission per direction, own workspace, module, and no
   assert.match(action, /isModuleEnabled\("suppliers"\)/);
   assert.match(action, /quote\.findFirst\(\{\s*where: \{ id: target\.quoteId, tenantId,/);
   assert.match(action, /purchaseOrder\.findFirst\(\{\s*where: \{ id: target\.purchaseOrderId, tenantId,/);
-  assert.match(action, /vendor\.findFirst\(\{\s*where: \{ id: String\(formData\.get\("vendorId"\) \?\? ""\), tenantId, deletedAt: null \}/);
   assert.match(action, /if \(!sent\.ok\) \{[\s\S]*?vendorDelivery\.deleteMany\(\{ where: \{ id: booking\.id, tenantId \} \}\)/);
   assert.match(action, /linkVendorToDeal\(/, "a customer delivery puts the company on the deal, so its papers are expected");
   // Only "email" sends; "copy" and "record" never reach sendEmail.
@@ -47,6 +46,30 @@ test("booking: the right permission per direction, own workspace, module, and no
   assert.equal((action.match(/sendEmail\(/g) ?? []).length, 1, "one send, behind the email choice");
   assert.match(action, /if \(send === "record"\) return \{ success: "Booking recorded — nothing was sent" \};/);
   assert.match(action, /action: "delivery\.booked"/);
+});
+
+test("a partly received order books only what is still to come (review #1050)", () => {
+  const lines = [
+    { orderedQty: 5, receivedQty: 3, color: "White", product: { name: "Rover XL" } },
+    { orderedQty: 2, receivedQty: 2, color: null, product: { name: "Nomad" } },
+    { orderedQty: 1, receivedQty: 0, color: null, product: { name: "Trail 4" } },
+  ];
+  assert.deepEqual(inboundItems(lines), ["2 × Rover XL (White)", "1 × Trail 4"]);
+  assert.deepEqual(inboundItems([{ orderedQty: 2, receivedQty: 3, color: null, product: { name: "Over" } }]), []);
+  const action = src("src/app/actions/vendorDeliveries.ts");
+  assert.match(action, /items = inboundItems\(order\.lines\);\s*if \(items\.length === 0\) refuse\(/);
+  assert.doesNotMatch(action, /line\.orderedQty\} ×/, "never the ordered quantity");
+});
+
+test("only a delivery company can be booked, whatever is posted (review #1050)", () => {
+  const action = src("src/app/actions/vendorDeliveries.ts");
+  assert.match(action, /vendor\.findFirst\(\{\s*where: \{ id: String\(formData\.get\("vendorId"\) \?\? ""\), tenantId, deletedAt: null, kind: "transport" \}/);
+});
+
+test("status changes need the Suppliers module, checked after permission (review #1050)", () => {
+  const action = src("src/app/actions/vendorDeliveries.ts");
+  const body = action.slice(action.indexOf("export async function setVendorDeliveryStatus"));
+  assert.match(body, /await requireAnyPermission\("deliveries\.manage", "stock\.manage"\);\s*\/\/[^\n]*\n\s*if \(!\(await isModuleEnabled\("suppliers"\)\)\) refuse\(/);
 });
 
 test("status changes: own workspace, allowed step only, and only from the status that was read", () => {
