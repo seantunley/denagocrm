@@ -30,6 +30,7 @@ import {
   runJourneyNowAction,
 } from "@/app/actions/journeyRuns";
 import { builderTenantId } from "@/lib/flowScope";
+import { getEnabledModuleIds } from "@/lib/modules/enabled";
 import { withActingStaffScope } from "@/lib/actingScope";
 import { ensureReadyMadeJourneysQuietly, readyMadeJourneyIds } from "@/lib/readyMadeJourneys";
 import { PageHeader } from "@/components/page-header";
@@ -165,7 +166,8 @@ export default async function JourneysPage() {
       select: { id: true, title: true, name: true },
     }),
   ]);
-  const options = { stages, users, templates, tags, segments };
+  // The workspace's modules: the builder offers no trigger or step of a module it hasn't got (journeyModules.ts).
+  const options = { stages, users, templates, tags, segments, enabledModules: [...(await getEnabledModuleIds())] };
   // Same rule as the quote editor: `title` is the model, which repeats across
   // leads, so preferring it makes every option read the same.
   const leadOptions = leadOptionLabels(testLeads).map((lead) => ({

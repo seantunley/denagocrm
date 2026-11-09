@@ -8,6 +8,7 @@ import { getActiveVersion } from "./journeyEngineShared";
 import { journeyTenantId } from "./journeyTenant";
 import { readJourneyTriggers, triggerKeySuffix, type JourneyTriggerSpec } from "./journeyTriggers";
 import { isModuleEnabled } from "./modules/enabled";
+import { TRIGGER_MODULE } from "./journeyModules";
 import { vehiclesDueForService } from "./serviceReminders";
 import { signersAwaitingReminder } from "./signingReminders";
 import { unansweredAutomaticSurveys } from "./surveyDistributionQueue";
@@ -58,6 +59,11 @@ async function sweepTrigger(
 ) {
   const config = spec.config;
   let created = 0;
+
+  // A trigger whose module this workspace doesn't have sweeps for nobody (journeyModules.ts) — anniversaries and
+  // win-backs are read from vehicles, service due from the workshop: all Automotive's.
+  const needs = TRIGGER_MODULE[spec.type];
+  if (needs && !(await isModuleEnabled(needs))) return created;
 
   if (spec.type === "lead_idle") {
     const days = Math.max(1, Number(config.idleDays ?? 3));
@@ -197,8 +203,7 @@ async function sweepTrigger(
   // (with the tenant named in its own queries); the step that sends is the
   // module's too.
   if (spec.type === "service_due") {
-    // Automotive only, as the built-in job was: no workshop, no service schedule.
-    if (!(await isModuleEnabled("automotive"))) return created;
+    // Automotive only (TRIGGER_MODULE, checked at the top of this function), as the built-in job was.
     for (const due of await vehiclesDueForService(tenantId)) {
       if (stop.shouldStop(ENROL_RESERVE_MS)) break;
       if (await emitJourneyEvent({

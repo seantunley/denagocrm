@@ -14,6 +14,8 @@ import { JOURNEY_RUN_MODES, RUN_MODE_LEGACY_NOTE } from "@/lib/journeyRunModes";
 import { builderDefinition, builderSteps, conditionHasOwnTargets, emptyGroup, generatedStopId, initialConfig, isRecord, newWaitStep, type BuilderStep } from "@/lib/journeyBuilderDefinition";
 import JourneyConditionGroupEditor from "@/components/JourneyConditionGroupEditor";
 import JourneyCanvas from "@/components/JourneyCanvas";
+import { JourneyModulesContext, useModuleBlock } from "@/components/journeyModulesContext";
+import { missingModule, moduleLabel, TRIGGER_MODULE } from "@/lib/journeyModules";
 import ConfirmActionDialog from "@/components/ConfirmActionDialog";
 
 export type JourneyOption = { id: string; name: string };
@@ -62,7 +64,10 @@ export default function JourneyBuilder({
   defaults = {},
   submitAction,
   submitLabel = "Save journey draft",
+  enabledModules,
 }: {
+  /** The workspace's enabled modules: triggers and steps of any other module aren't offered. Omitted → all. */
+  enabledModules?: string[];
   stages: JourneyOption[];
   users: JourneyOption[];
   templates: JourneyOption[];
@@ -135,9 +140,18 @@ export default function JourneyBuilder({
   const definition = useMemo(() => builderDefinition(steps), [steps]);
   const lists: Lists = { stages, users, templates, tags };
 
+  // The workspace's modules (journeyModules.ts): a trigger or step of a module it hasn't got isn't offered. One the
+  // journey already uses stays visible with why, rather than silently becoming something else.
+  const enabled = useMemo(() => (enabledModules ? new Set(enabledModules) : null), [enabledModules]);
+  const triggerBlocked = (type: string) => {
+    const off = enabled ? missingModule(TRIGGER_MODULE[type], enabled) : null;
+    return off ? `needs ${moduleLabel(off)}` : null;
+  };
+
   return (
     // SaveForm shows the strict validation message ("two triggers share an ID")
     // instead of an error page. Not reset on success: the steps live in state.
+    <JourneyModulesContext.Provider value={enabled}>
     <SaveForm action={submitAction ?? createJourney} resetOnSuccess={false} className="space-y-5">
       <input type="hidden" name="triggers" value={JSON.stringify(triggers)} />
       <input type="hidden" name="entryConditions" value={JSON.stringify(entryConditions)} />
@@ -200,8 +214,10 @@ export default function JourneyBuilder({
                   {!(JOURNEY_TRIGGERS as readonly string[]).includes(spec.type) && (
                     <option value={spec.type}>{spec.type} (not available)</option>
                   )}
-                  {JOURNEY_TRIGGERS.map((type) => (
-                    <option key={type} value={type}>{JOURNEY_TRIGGER_LABELS[type]}</option>
+                  {JOURNEY_TRIGGERS.filter((type) => !triggerBlocked(type) || type === spec.type).map((type) => (
+                    <option key={type} value={type}>
+                      {JOURNEY_TRIGGER_LABELS[type]}{triggerBlocked(type) ? ` (${triggerBlocked(type)})` : ""}
+                    </option>
                   ))}
                 </select>
                 <input
@@ -364,6 +380,7 @@ export default function JourneyBuilder({
         </div>
       </BuilderWorkspaceShell>
     </SaveForm>
+    </JourneyModulesContext.Provider>
   );
 }
 
@@ -408,6 +425,7 @@ function StepTypeSelect({ step, depth, onChange }: { step: BuilderStep; depth: n
   // A container's config IS its branches — a stray pick in the type list would delete them with no undo, so ask first.
   const [retype, setRetype] = useState<string | null>(null);
   const changeType = (type: string) => onChange({ ...step, type, config: initialConfig(type) });
+  const blocked = useModuleBlock().step;
   return (
     <>
       <select
@@ -421,7 +439,9 @@ function StepTypeSelect({ step, depth, onChange }: { step: BuilderStep; depth: n
         {Object.entries(stepLabels)
           // Containers nest; the parser stops at its depth limit (JOURNEY_LIMITS.depth, counted from 1).
           .filter(([value]) => !CONTAINERS.has(value) || value === step.type || depth + 1 < JOURNEY_LIMITS.depth)
-          .map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+          // A step of a module this workspace hasn't got isn't offered — but one already in the journey stays, with why.
+          .filter(([value]) => !blocked(value) || value === step.type)
+          .map(([value, label]) => <option key={value} value={value}>{label}{blocked(value) ? ` (${blocked(value)})` : ""}</option>)}
       </select>
       <ConfirmActionDialog
         destructive

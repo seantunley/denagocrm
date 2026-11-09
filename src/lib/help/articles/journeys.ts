@@ -144,6 +144,7 @@ export const journeysArticles: HelpArticle[] = [
         ["Customer opens a quote sent for signing", "—"],
         ["Test drive booked / completed / missed", "—"],
       ] },
+      { type: "callout", tone: "info", text: "Triggers and steps that belong to a module this workspace doesn't have are not offered — without **Automotive / Workshop**: job cards, vehicles, test drives, deliveries, anniversaries, win-back, service due and the service reminder step. A journey already using one shows why, can't be published, and is not swept for." },
       { type: "list", items: [
         "**Delivery is scheduled or moved** fires when a delivery is booked on the Deliveries board (or by DAX), and again when it is moved to another day — so the customer is told the day that now stands. Its messages can use **{{delivery_date}}**. A run that started for the earlier day carries on with that day — a move starts a new run with the new one.",
         "**Quote sent** fires when a quote first goes to the customer, by email or as a signing invitation. Emailing a quote that was already sent does not fire it again; a quote that was declined and is sent again does.",

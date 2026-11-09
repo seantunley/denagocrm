@@ -327,7 +327,8 @@ test("the two lists above cover exactly the triggers the builder OFFERS", () => 
   const builder = shipped("src/components/JourneyBuilder.tsx");
   assert.match(
     builder,
-    /JOURNEY_TRIGGERS\.map\(\(type\) => \([\s\S]*?<option key=\{type\} value=\{type\}>/,
+    // Filtered only by the workspace's modules (journeyModules.ts) — still the declared list, nothing hand-written.
+    /JOURNEY_TRIGGERS\.filter\(\(type\) => !triggerBlocked\(type\) \|\| type === spec\.type\)\.map\(\(type\) => \([\s\S]*?<option key=\{type\} value=\{type\}>/,
     "the enrolment dropdown must be rendered FROM JOURNEY_TRIGGERS, not from a hand-written list beside it",
   );
   assert.match(

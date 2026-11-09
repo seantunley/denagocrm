@@ -10,9 +10,11 @@ import { requiredReason } from "@/lib/deleteReason";
 import { journeyScope } from "@/lib/flowScope";
 import { requirePermission } from "@/lib/permissions";
 import { logAudit } from "@/lib/audit";
-import { collectAssignedUserIds, parseConditionGroup, parseJourneyDefinition } from "@/lib/journeyTypes";
+import { collectAssignedUserIds, JOURNEY_STEP_LABELS, parseConditionGroup, parseJourneyDefinition } from "@/lib/journeyTypes";
 import { resolveAssignableUser } from "@/lib/tenantActor";
-import { parseJourneyTriggers } from "@/lib/journeyTriggers";
+import { JOURNEY_TRIGGER_LABELS, parseJourneyTriggers, readJourneyTriggers } from "@/lib/journeyTriggers";
+import { journeyModuleProblems } from "@/lib/journeyModules";
+import { getEnabledModuleIds } from "@/lib/modules/enabled";
 import { parseRunMode } from "@/lib/journeyArbitration";
 import {
   enrollJourneyNow,
@@ -351,6 +353,13 @@ export async function publishJourney(journeyId: string) {
     // what the enrolment sweep acts on, so it is the last point at which a person
     // can be told.
     await assertStepAssigneesResolve(draft.definition);
+    // A trigger or step whose module this workspace doesn't have would publish a journey that never fires — say so
+    // instead (journeyModules.ts: Automotive's job cards, vehicles, test drives and deliveries).
+    const moduleProblems = journeyModuleProblems(readJourneyTriggers(draft.triggers), draft.definition, await getEnabledModuleIds(), {
+      trigger: (type) => JOURNEY_TRIGGER_LABELS[type as keyof typeof JOURNEY_TRIGGER_LABELS] ?? type,
+      step: (type) => JOURNEY_STEP_LABELS[type as keyof typeof JOURNEY_STEP_LABELS] ?? type,
+    });
+    if (moduleProblems.length) refuse(moduleProblems.join(" "));
 
     await prisma.$transaction(async (tx) => {
       await tx.journeyVersion.updateMany({
