@@ -23,6 +23,7 @@ import { withCurrency } from "@/lib/currencyRules";
 import { EmptyState, SectionHeading, Surface } from "@/components/visual-system";
 import { WorkspaceHero } from "@/components/workspace-hero";
 import { SaveForm, SaveButton } from "@/components/SaveForm";
+import { metaRepliesRefused } from "@/lib/metaReplies";
 import { listDeadBotConversations } from "@/lib/deadBotConversations";
 import { retryDeadBotConversation, retryFailedMessage } from "@/app/actions/botDeliveries";
 import { isTenantOwner } from "@/lib/auth";
@@ -124,6 +125,7 @@ export default async function InboxPage({ searchParams }: { searchParams: Promis
     deals, canCreateQuote,
     // Test drives are the vehicle pack's, booked by whoever may plan activities (the /test-drives gate).
     canBookTestDrive: automotiveOn && canManageActivities,
+    metaRefused: await metaRepliesRefused(),
   };
   const businessKeys = new Set(businessRows.map((row) => `${row.channel}:${row.contactId}`));
   const businessThreads = threadList.filter((thread) => thread.contactId && businessKeys.has(`${thread.channel}:${thread.contactId}`));

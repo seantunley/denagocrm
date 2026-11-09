@@ -10,6 +10,10 @@ import AiCheckButton from "@/components/AiCheckButton";
 import { enterIntent, readEnterSends, writeEnterSends } from "@/lib/enterToSend";
 import { draftXReplyWithGrok } from "@/app/actions/x";
 import { suggestVoiceNoteReply } from "@/app/actions/voiceNoteReply";
+import { ExternalLink } from "lucide-react";
+
+/** Meta Business Suite's inbox — where Messenger and Instagram replies go while Meta refuses the CRM's. */
+const META_BUSINESS_INBOX = "https://business.facebook.com/latest/inbox/all";
 
 const QUICK_EMOJI = ["😀", "👍", "🙏", "🎉", "🔥", "❤️", "😂", "👌", "🚗", "⚡"];
 
@@ -28,6 +32,7 @@ export default function InboxReply({
   draft,
   viewerId,
   voiceNoteId = null,
+  metaRefused = false,
 }: {
   channel: "whatsapp" | "messenger" | "instagram" | "x" | "telegram";
   contactId?: string | null;
@@ -54,6 +59,87 @@ export default function InboxReply({
    * The id of the customer's latest message when it is a transcribed WhatsApp voice note: offer a summary and a
    * suggested reply FOR THAT MESSAGE (the server refuses if the customer has written since — review of #953).
    */
+  voiceNoteId?: string | null;
+  /**
+   * Meta is refusing this workspace's Messenger/Instagram replies (lib/metaReplies.ts). On those channels the box
+   * gives way to Meta Business Suite — and WhatsApp when there is a number — instead of a reply that can't go.
+   */
+  metaRefused?: boolean;
+}) {
+  const [sendAnyway, setSendAnyway] = useState(false);
+  const metaChannel = channel === "messenger" || channel === "instagram";
+  if (metaChannel && metaRefused && !sendAnyway) {
+    return <MetaReplyHandoff channel={channel} phone={phone} leadId={leadId} contactId={contactId} onSendAnyway={() => setSendAnyway(true)} />;
+  }
+  return (
+    <ReplyForm
+      channel={channel}
+      contactId={contactId}
+      leadId={leadId}
+      phone={phone}
+      revalidate={revalidate}
+      aiConfigured={aiConfigured}
+      conversationId={conversationId}
+      draft={draft}
+      viewerId={viewerId}
+      voiceNoteId={voiceNoteId}
+    />
+  );
+}
+
+/**
+ * Where a Messenger or Instagram reply goes while Meta refuses the CRM's: Meta Business Suite, or WhatsApp when the
+ * customer has a number. "Send from the CRM anyway" stays for the people Meta does deliver to — the app's testers.
+ */
+function MetaReplyHandoff({ channel, phone, leadId, contactId, onSendAnyway }: {
+  channel: "messenger" | "instagram";
+  phone?: string | null;
+  leadId?: string | null;
+  contactId?: string | null;
+  onSendAnyway: () => void;
+}) {
+  const platform = channel === "instagram" ? "Instagram" : "Messenger";
+  const whatsappHref = phone ? (leadId ? `/leads/${leadId}?compose=whatsapp` : contactId ? `/contacts/${contactId}?compose=whatsapp` : null) : null;
+  return (
+    <div className="mt-3 rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-xs">
+      <p className="text-amber-100">
+        Meta only lets the CRM send {platform} replies to people listed as testers on your Meta app, so reply to this
+        customer from Meta Business Suite. Their messages still arrive here.
+      </p>
+      <div className="mt-2.5 flex flex-wrap items-center gap-2">
+        <a href={META_BUSINESS_INBOX} target="_blank" rel="noreferrer" className="btn-primary btn-sm">
+          Reply in Meta Business Suite <ExternalLink className="size-3.5" />
+        </a>
+        {whatsappHref && <a href={whatsappHref} className="btn-secondary btn-sm">Message on WhatsApp instead</a>}
+        <button type="button" onClick={onSendAnyway} className="text-[11px] text-muted-foreground underline-offset-2 hover:underline">
+          Send from the CRM anyway (reaches testers only)
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function ReplyForm({
+  channel,
+  contactId,
+  leadId,
+  phone,
+  revalidate,
+  aiConfigured = false,
+  conversationId,
+  draft,
+  viewerId,
+  voiceNoteId = null,
+}: {
+  channel: "whatsapp" | "messenger" | "instagram" | "x" | "telegram";
+  contactId?: string | null;
+  leadId?: string | null;
+  phone?: string | null;
+  revalidate: string;
+  aiConfigured?: boolean;
+  conversationId?: string | null;
+  draft?: { ownerId: string; ownerName: string; body: string; updatedAt: Date } | null;
+  viewerId?: string | null;
   voiceNoteId?: string | null;
 }) {
   const [waState, waAction, waPending] = useActionState<WaState | undefined, FormData>(

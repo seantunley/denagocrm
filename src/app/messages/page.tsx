@@ -7,6 +7,7 @@ import { buildInboxThreads } from "@/lib/inboxThreads";
 import { loadInboxComms } from "@/lib/inboxQuery";
 import { conversationIdsForThreads } from "@/lib/inboxConversations";
 import { deliveryStateForMessages } from "@/lib/botOutbox";
+import { metaRepliesRefused } from "@/lib/metaReplies";
 
 export const metadata = { title: "Chats — Messages" };
 
@@ -27,6 +28,8 @@ export default async function MessagesChatsPage() {
   // its collaboration payload.
   const conversations = await conversationIdsForThreads(threads);
   const unread = threads.filter((t) => t.unread).length;
+  // Meta refusing Messenger/Instagram replies: those threads hand off to Meta Business Suite (lib/metaReplies.ts).
+  const metaRefused = await metaRepliesRefused();
 
   // Mobile must not be a lower-safety messaging path: if a reply did not reach
   // the customer, the surface most likely to be used on the road is the one that
@@ -62,6 +65,7 @@ export default async function MessagesChatsPage() {
                 empty="No conversations yet. WhatsApp chats appear once the number is connected; Messenger and Instagram DMs flow once Meta approves messaging."
                 conversations={conversations}
                 revalidate="/messages"
+                metaRefused={metaRefused}
               />
             ),
           },
@@ -76,6 +80,7 @@ export default async function MessagesChatsPage() {
                 empty="No WhatsApp conversations yet."
                 conversations={conversations}
                 revalidate="/messages"
+                metaRefused={metaRefused}
               />
             ),
           },
@@ -90,6 +95,7 @@ export default async function MessagesChatsPage() {
                 empty="No Messenger conversations yet."
                 conversations={conversations}
                 revalidate="/messages"
+                metaRefused={metaRefused}
               />
             ),
           },
@@ -104,6 +110,7 @@ export default async function MessagesChatsPage() {
                 empty="No Instagram DMs yet."
                 conversations={conversations}
                 revalidate="/messages"
+                metaRefused={metaRefused}
               />
             ),
           },
