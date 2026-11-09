@@ -48,6 +48,9 @@ test("a run from an earlier scheduling change stops before it sends (review of #
   assert.match(staleDeliveryRunReason(event, { day: "2026-11-16", latestChangeId: "c2" }) ?? "", /scheduled again \(now Monday, 16 November 2026\)/);
   // Moved away and BACK to the 14th: same day, newer change — still stops, or the customer hears it twice.
   assert.match(staleDeliveryRunReason(event, { day: "2026-11-14", latestChangeId: "c3" }) ?? "", /a newer run speaks for it/);
+  // The board has saved the 16th but the newer event isn't recorded yet: this run is still "the latest change",
+  // and must stop anyway rather than announce the 14th (review of #1044).
+  assert.match(staleDeliveryRunReason(event, { day: "2026-11-16", latestChangeId: "c1" }) ?? "", /now Monday, 16 November 2026/);
   assert.match(staleDeliveryRunReason(event, { day: null, latestChangeId: "c1" }) ?? "", /no longer scheduled/);
   assert.match(staleDeliveryRunReason(event, undefined) ?? "", /is gone/);
   assert.equal(staleDeliveryRunReason({ type: "lead_created" }, undefined), null, "other triggers are never stale here");

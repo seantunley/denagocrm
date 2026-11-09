@@ -27,6 +27,8 @@ export function staleDeliveryRunReason(
   if (event?.type !== "delivery_scheduled" || typeof event.changeId !== "string") return null;
   if (current === undefined) return "The quote this delivery was for is gone — nothing sent";
   if (current.day === null) return "The delivery is no longer scheduled — nothing sent";
-  if (current.latestChangeId === event.changeId) return null;
+  // The DAY too, not only the change (review of #1044): the board writes the new day before the new event is
+  // recorded, so for a moment this run is still "the latest change" while the quote already says another day.
+  if (current.day === event.deliveryDate && current.latestChangeId === event.changeId) return null;
   return `The delivery was scheduled again (now ${deliveryDateText(new Date(current.day))}) — a newer run speaks for it, so this one stops`;
 }
