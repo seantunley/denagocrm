@@ -16,6 +16,7 @@ import {
 import { getStockLabels, saveStockLabels, slugifyLabel } from "@/lib/stockLabels";
 import { withActingStaffScope } from "@/lib/actingScope";
 import { actingTenantId } from "@/lib/actingTenant";
+import { isModuleEnabled } from "@/lib/modules/enabled";
 import { formatZAR } from "@/lib/format";
 import { parseMoneyField } from "@/lib/moneyInput";
 import { getRegionalSettings } from "@/lib/settings";
@@ -97,12 +98,17 @@ export async function createPurchaseOrder(formData: FormData) {
     // NULL — an order the supplier's history (filtered by workspace) never shows, and that its composite
     // supplier key can't check.
     const tenantId = await actingTenantId();
-    const vendor = await prisma.vendor.findFirst({
-      where: { id: str(formData.get("vendorId")), tenantId, deletedAt: null },
-      select: { id: true, name: true },
-    });
-    if (!vendor) refuse("Choose the supplier — an owner adds suppliers in Settings → Suppliers.");
-    const supplier = vendor.name;
+    // Suppliers module off: the supplier is the name typed, and no supplier record is named.
+    let vendor: { id: string; name: string } | null = null;
+    if (await isModuleEnabled("suppliers")) {
+      vendor = await prisma.vendor.findFirst({
+        where: { id: str(formData.get("vendorId")), tenantId, deletedAt: null },
+        select: { id: true, name: true },
+      });
+      if (!vendor) refuse("Choose the supplier — an owner adds suppliers in Settings → Suppliers.");
+    }
+    const supplier = vendor?.name ?? str(formData.get("supplier"));
+    if (!supplier) refuse("Enter the supplier.");
     const reference = str(formData.get("reference")) || null;
     const expectedAt = date(formData.get("expectedAt"));
     const notes = str(formData.get("notes")) || null;
@@ -139,7 +145,7 @@ export async function createPurchaseOrder(formData: FormData) {
     }
 
     const order = await prisma.$transaction(async (tx) => {
-      const po = await tx.purchaseOrder.create({ data: { tenantId, supplier, vendorId: vendor.id, reference, expectedAt, notes } });
+      const po = await tx.purchaseOrder.create({ data: { tenantId, supplier, vendorId: vendor?.id ?? null, reference, expectedAt, notes } });
       for (const line of lines) {
         const poLine = await tx.purchaseOrderLine.create({
           data: {

@@ -59,11 +59,12 @@ export async function searchCrm(user: PermissionUser, rawTerm: string, options: 
   const empty = (ids: string[] | null) => ids !== null && ids.length === 0;
   const skip = <T,>(): Promise<T[]> => Promise.resolve([]);
 
-  const [automotiveOn, supportOn, commerceOn, contactIds, leadIds, quoteIds, vehicleIds, jobCardIds, documentIds, caseIds, activityIds, canProducts] =
+  const [automotiveOn, supportOn, commerceOn, suppliersOn, contactIds, leadIds, quoteIds, vehicleIds, jobCardIds, documentIds, caseIds, activityIds, canProducts] =
     await Promise.all([
       isModuleEnabled("automotive"),
       isModuleEnabled("support"),
       isModuleEnabled("commerce"),
+      isModuleEnabled("suppliers"),
       getAccessibleContactIds(user),
       getAccessibleLeadIds(user),
       want.has("quote") ? getAccessibleQuoteIds(user) : [],
@@ -189,7 +190,7 @@ export async function searchCrm(user: PermissionUser, rawTerm: string, options: 
           where: {
             ...scoped(documentIds),
             // The supplier's name finds its papers too ("Wrap Co invoice").
-            OR: [{ fileName: contains }, { tag: contains }, { vendor: { is: { name: contains } } }],
+            OR: [{ fileName: contains }, { tag: contains }, ...(suppliersOn ? [{ vendor: { is: { name: contains } } }] : [])],
             deletedAt: null,
             ...(automotiveOn ? {} : { NOT: { OR: [{ vehicleId: { not: null } }, { jobCardId: { not: null } }, { tag: { in: [...AUTOMOTIVE_DELIVERY_TAGS] } }] } }),
           },
@@ -247,7 +248,7 @@ export async function searchCrm(user: PermissionUser, rawTerm: string, options: 
       href: recordHref(m),
     })),
     ...activities.map((a) => ({ type: "activity" as const, id: a.id, label: a.summary, sublabel: [a.type, day(a.dueDate), a.leadId || a.contactId ? whose(a) : null].filter(Boolean).join(" · "), snippet: a.note ? snippetAround(a.note, stems, 160) : undefined, href: recordHref(a, "activities") })),
-    ...documents.map((d) => ({ type: "document" as const, id: d.id, label: d.fileName, sublabel: [d.tag, d.vendor?.name, (d.quoteId && docDeal.get(d.quoteId)) || (d.contact ? contactName(d.contact) : d.vehicle?.model ?? "Unfiled")].filter(Boolean).join(" · "), href: `/api/files/${d.id}`, newTab: true })),
+    ...documents.map((d) => ({ type: "document" as const, id: d.id, label: d.fileName, sublabel: [d.tag, suppliersOn ? d.vendor?.name : null, (d.quoteId && docDeal.get(d.quoteId)) || (d.contact ? contactName(d.contact) : d.vehicle?.model ?? "Unfiled")].filter(Boolean).join(" · "), href: `/api/files/${d.id}`, newTab: true })),
     ...products.map((p) => ({ type: "product" as const, id: p.id, label: p.name, sublabel: formatZAR(p.basePriceCents, moneyFmt), href: `/products/${p.id}` })),
     ...knowledge.map((k) => ({ type: "knowledge" as const, id: k.id, label: k.title, sublabel: k.sourceLabel ?? "Approved answer", snippet: snippetAround(k.content, stems, 200), href: "/chatbot/knowledge" })),
   ];

@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { requireTenantOwner } from "@/lib/auth";
+import { isModuleEnabled } from "@/lib/modules/enabled";
 import { prisma } from "@/lib/db";
 import { actingTenantId } from "@/lib/actingTenant";
 import { SettingsWorkspace } from "@/components/settings-workspace";
@@ -24,6 +25,7 @@ export const dynamic = "force-dynamic";
 export default async function VendorPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   await requireTenantOwner();
+  if (!(await isModuleEnabled("suppliers"))) notFound();
   const tenantId = await actingTenantId();
   const vendor = await prisma.vendor.findFirst({ where: { id, tenantId, deletedAt: null } });
   if (!vendor) notFound();

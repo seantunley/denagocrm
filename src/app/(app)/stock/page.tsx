@@ -21,6 +21,7 @@ import {
 } from "lucide-react";
 import { prisma } from "@/lib/db";
 import { actingTenantId } from "@/lib/actingTenant";
+import { isModuleEnabled } from "@/lib/modules/enabled";
 import ModalTrigger from "@/components/Modal";
 import StockUnitForm from "@/components/StockUnitForm";
 import StockPurchaseOrderForm from "@/components/StockPurchaseOrderForm";
@@ -78,10 +79,12 @@ export default async function StockPage({
   if (params.product) reportParams.set("product", params.product);
   if (params.location) reportParams.set("location", params.location);
   if (params.age) reportParams.set("age", params.age);
-  // The purchase order's supplier choice (Settings → Suppliers).
-  const vendors = canManage
-    ? await prisma.vendor.findMany({ where: { tenantId: await actingTenantId(), deletedAt: null }, select: { id: true, name: true }, orderBy: { name: "asc" } })
-    : [];
+  // The purchase order's supplier choice (Settings → Suppliers); null with the Suppliers module off → typed name.
+  const vendors = !(await isModuleEnabled("suppliers"))
+    ? null
+    : canManage
+      ? await prisma.vendor.findMany({ where: { tenantId: await actingTenantId(), deletedAt: null }, select: { id: true, name: true }, orderBy: { name: "asc" } })
+      : [];
   const reportHref = `/api/pdf/stock-report${reportParams.toString() ? `?${reportParams}` : ""}`;
 
   const [dashboard, products, units, openPos, locations, demand] = await Promise.all([

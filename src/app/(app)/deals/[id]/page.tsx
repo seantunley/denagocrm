@@ -36,6 +36,7 @@ import DealFileSearch from "@/components/deals/DealFileSearch";
 import { SaveForm, SaveButton } from "@/components/SaveForm";
 import { actingTenantId } from "@/lib/actingTenant";
 import { dealKey } from "@/lib/dealVendors";
+import { isModuleEnabled } from "@/lib/modules/enabled";
 import { dealSignatureRequests } from "@/lib/dealFileData";
 import { vendorKindLabel } from "@/lib/vendors";
 import { addDealVendor, removeDealVendor } from "@/app/actions/vendors";
@@ -163,7 +164,10 @@ export default async function DealWorkspacePage({ params }: { params: Promise<{ 
   });
   const dealQuoteIds = dealQuotes.map((dealQuote) => dealQuote.id);
   const tenantId = await actingTenantId();
-  const [documents, signatures, documentTypes, canUpload, declared, vendors] = await Promise.all([
+  // The Suppliers module (granted per workspace in the tenant platform). Off: no suppliers on the deal, none named
+  // on its documents, and the checklist asks for supplier papers by type alone.
+  const suppliersOn = await isModuleEnabled("suppliers");
+  const [rawDocuments, signatures, documentTypes, canUpload, declared, vendors] = await Promise.all([
     prisma.document.findMany({
       // The current version of each file only — an older one is kept in its history (replacedById).
       where: { quoteId: { in: dealQuoteIds }, deletedAt: null, replacedById: null },
@@ -178,19 +182,24 @@ export default async function DealWorkspacePage({ params }: { params: Promise<{ 
     getSetting(DOCUMENT_TYPES_KEY).then(parseDocumentTypes),
     hasAnyPermission(user, "documents.upload"),
     // The suppliers this deal declares (its lead's, or this quote's when it has no lead).
-    prisma.dealVendor.findMany({
-      where: { tenantId, ...dealKey(quote) },
-      select: { vendor: { select: { id: true, name: true, kind: true } } },
-      orderBy: { createdAt: "asc" },
-    }),
-    prisma.vendor.findMany({ where: { tenantId, deletedAt: null }, select: { id: true, name: true }, orderBy: { name: "asc" } }),
+    suppliersOn
+      ? prisma.dealVendor.findMany({
+          where: { tenantId, ...dealKey(quote) },
+          select: { vendor: { select: { id: true, name: true, kind: true } } },
+          orderBy: { createdAt: "asc" },
+        })
+      : [],
+    suppliersOn ? prisma.vendor.findMany({ where: { tenantId, deletedAt: null }, select: { id: true, name: true }, orderBy: { name: "asc" } }) : [],
   ]);
+  // Module off: the supplier on a document is neither shown nor counted (undefined = this page shows no supplier).
+  const documents = rawDocuments.map((doc) => ({ ...doc, vendor: suppliersOn ? doc.vendor : undefined }));
   const declaredVendors = declared.map((link) => link.vendor);
   const checklist = dealFileChecklist(
     dealQuotes,
     documents.map((doc) => ({ tag: doc.tag, vendorId: doc.vendor?.id ?? null, vendorName: doc.vendor?.name ?? null })),
     documentTypes,
     declaredVendors,
+    suppliersOn,
   );
   const checklistDone = checklist.filter((item) => item.done).length;
   const quoteGroups = dealQuotes.map((dealQuote) => ({
@@ -445,7 +454,8 @@ export default async function DealWorkspacePage({ params }: { params: Promise<{ 
                   </div>
                   <DealFileSearch targetId="deal-file" />
                 </div>
-                {/* Declared up front, so the checklist asks for each supplier's papers before any arrive. */}
+                {/* Declared up front, so the checklist asks for each supplier's papers before any arrive. Suppliers module only. */}
+                {suppliersOn && <>
                 <p className="mt-4 text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">Suppliers on this deal</p>
                 <div className="mt-2 flex flex-wrap items-center gap-2">
                   {declaredVendors.length === 0 && <span className="text-xs text-muted-foreground">None yet — add the OEM, the delivery company and anyone else you pay on this deal.</span>}
@@ -475,6 +485,7 @@ export default async function DealWorkspacePage({ params }: { params: Promise<{ 
                   )}
                   {canUpload && vendors.length === 0 && <span className="text-xs text-muted-foreground">An owner adds suppliers in Settings → Suppliers.</span>}
                 </div>
+                </>}
                 <p className="mt-4 text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">From the CRM</p>
                 <ul className="mt-1 divide-y divide-border/60">
                   {currentQuotes.flatMap((dealQuote) => [

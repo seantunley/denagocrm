@@ -7,6 +7,7 @@ import { DOCUMENT_TYPES_KEY, isPersonLabel, parseDocumentTypes } from "@/lib/doc
 import { getSetting, getRegionalSettings } from "@/lib/settings";
 import { prisma } from "@/lib/db";
 import { actingTenantId } from "@/lib/actingTenant";
+import { isModuleEnabled } from "@/lib/modules/enabled";
 import { SaveForm, SaveButton } from "@/components/SaveForm";
 import QuoteRowActions from "@/components/quotes/QuoteRowActions";
 import { StatusPill } from "@/components/visual-system";
@@ -99,7 +100,9 @@ function statusTone(status: string): "neutral" | "success" | "danger" | "info" {
   return "neutral";
 }
 
-function DocRow({ doc, revalidate, types, vendors }: { doc: Doc; revalidate: string; types: readonly string[]; vendors: readonly { id: string; name: string }[] }) {
+/** `vendors` null: the Suppliers module is off — no supplier is shown or offered on the row. */
+function DocRow({ doc: row, revalidate, types, vendors }: { doc: Doc; revalidate: string; types: readonly string[]; vendors: readonly { id: string; name: string }[] | null }) {
+  const doc = vendors === null ? { ...row, vendor: undefined } : row;
   // What it IS leads: a type somebody chose ("Supplier quote") is the document's
   // name on this list, with the file name beneath. A tag the CRM wrote keeps its
   // wording and its place in the small print.
@@ -134,7 +137,7 @@ function DocRow({ doc, revalidate, types, vendors }: { doc: Doc; revalidate: str
           <SaveForm action={relabelDocument.bind(null, doc.id, revalidate)} success="Label saved" className="grid gap-3 p-4">
             {doc.vendor !== undefined ? (
               // The supplier appears only for a supplier quote, invoice or proof of payment.
-              <DocumentLabelFields types={types} current={chosen && types.includes(chosen) ? chosen : ""} vendors={vendors} currentVendor={doc.vendor} />
+              <DocumentLabelFields types={types} current={chosen && types.includes(chosen) ? chosen : ""} vendors={vendors ?? []} currentVendor={doc.vendor} />
             ) : (
               // This page didn't load suppliers: no supplier field, so the one on file is kept.
               <label className="grid gap-1 text-xs text-muted-foreground">
@@ -205,7 +208,10 @@ export default async function DocumentsPanel({
   const moneyFmt = await getRegionalSettings();
   // The workspace's suppliers (Settings → Suppliers): the upload's and Label's supplier choice.
   const tenantId = await actingTenantId();
-  const vendors = await prisma.vendor.findMany({ where: { tenantId, deletedAt: null }, select: { id: true, name: true }, orderBy: { name: "asc" } });
+  // Null while the Suppliers module is off: no supplier choice on upload or Label, none shown on a row.
+  const vendors = (await isModuleEnabled("suppliers"))
+    ? await prisma.vendor.findMany({ where: { tenantId, deletedAt: null }, select: { id: true, name: true }, orderBy: { name: "asc" } })
+    : null;
   return (
     <div className="card">
       <div className="mb-4 flex items-center justify-between gap-3">
@@ -220,7 +226,7 @@ export default async function DocumentsPanel({
         >
           {/* What it is, and which quote it belongs to. It also carries the customer as the
               target — or the quote instead, when one is chosen: an upload names ONE record. */}
-          <DocumentUploadFields types={types} quotes={fileAgainst} contactId={contactId} vendors={vendors} defaultQuoteId={defaultQuoteId} />
+          <DocumentUploadFields types={types} quotes={fileAgainst} contactId={contactId} vendors={vendors ?? undefined} defaultQuoteId={defaultQuoteId} />
           {vehicleId && <input type="hidden" name="vehicleId" value={vehicleId} />}
           {jobCardId && <input type="hidden" name="jobCardId" value={jobCardId} />}
           <input type="hidden" name="revalidate" value={revalidate} />

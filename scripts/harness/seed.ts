@@ -20,6 +20,7 @@ import crypto from "node:crypto";
 import { basePrisma } from "../../src/lib/db";
 import { signFreshSession } from "../../src/lib/session";
 import { PERMISSIONS } from "../../src/lib/permissions";
+import { OPTIONAL_MODULE_IDS } from "../../src/lib/modules/registry";
 import type { ActingSession } from "./actingSession";
 
 /** Rows this harness plants, per tenant, addressable by the matrix. */
@@ -188,7 +189,9 @@ async function seedTenant(key: "A" | "B", suffix: string): Promise<TenantFixture
     tenantId,
     // Every optional pack granted: a module that is merely OFF would make an
     // action refuse for a reason unrelated to tenancy, which reads as a pass.
-    "inbox,marketing,automotive,workshop,reports",
+    // From the registry itself (2026-11-09): the hand-typed list had gone stale and missed six packs, Suppliers
+    // among them, so a supplier test "passed" its refusal for the wrong reason.
+    OPTIONAL_MODULE_IDS.join(","),
   );
 
   const memberUserId = uid();

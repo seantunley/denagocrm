@@ -131,7 +131,7 @@ test("the form: a dropdown of the workspace's types and of the customer's quotes
   // The quote REPLACES the customer as the target: never both in one form.
   assert.match(fields, /\{quoteId \? <input type="hidden" name="quoteId" value=\{quoteId\} \/> : contactId \? <input type="hidden" name="contactId" value=\{contactId\} \/> : null\}/);
   const panel = code("src/components/DocumentsPanel.tsx");
-  assert.match(panel, /<DocumentUploadFields types=\{types\} quotes=\{fileAgainst\} contactId=\{contactId\} vendors=\{vendors\} defaultQuoteId=\{defaultQuoteId\} \/>/);
+  assert.match(panel, /<DocumentUploadFields types=\{types\} quotes=\{fileAgainst\} contactId=\{contactId\} vendors=\{vendors \?\? undefined\} defaultQuoteId=\{defaultQuoteId\} \/>/);
   // The deal file passes no customer, so a quote is always the target there.
   assert.match(fields, /\{contactId && <option value="">The customer \(no quote\)<\/option>\}/);
   // The supplier is asked for only on a supplier quote, invoice or proof of payment (Sean: "Can this be conditional?").

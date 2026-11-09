@@ -564,6 +564,7 @@ export const assistantAndMoreArticles: HelpArticle[] = [
         "Upload a supplier's paper with **What is it?** set to *Supplier quote*, *Supplier invoice* or *Proof of payment — supplier*; a **Supplier** box then appears, and must be filled in. A supplier named on an upload is added to the deal's suppliers by itself.",
       ] },
       { type: "p", text: "Each supplier has its own page (click it in **Settings → Suppliers**): every deal it is on with what is still outstanding from it, its documents and its purchase orders. New purchase orders on the Stock page choose their supplier from the same list." },
+      { type: "callout", tone: "info", text: "Suppliers is a module. When it is switched off for a workspace, the supplier boxes, **Suppliers on this deal** and **Settings → Suppliers** disappear, the checklist asks for supplier papers by type alone, and purchase orders take a typed supplier name. Suppliers already named on documents are kept, ready for when it is switched back on." },
       { type: "callout", tone: "info", text: "Search anywhere in the CRM finds a document by its supplier's name too, and shows the quote and customer it is filed on." },
       { type: "h", text: "Using the readiness checklist" },
       { type: "steps", items: [

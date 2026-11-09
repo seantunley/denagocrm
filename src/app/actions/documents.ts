@@ -113,7 +113,10 @@ const SET_BY_CRM = "That document's label is set by the CRM and can't be changed
  * `tenantId` is the workspace that owns the record the document is filed against: a supplier from another
  * workspace is refused like an unknown id.
  */
-async function chosenVendorId(posted: unknown, type: string | null, tenantId: string | null): Promise<string | null> {
+async function chosenVendorId(posted: unknown, type: string | null, tenantId: string | null): Promise<string | null | undefined> {
+  // Suppliers module off: no supplier is asked for, and the one already on file is left as it is (undefined =
+  // not written) so switching the module back on loses nothing. A supplier quote is just a document type.
+  if (!(await isModuleEnabled("suppliers"))) return undefined;
   const wanted = String(posted ?? "").trim();
   if (!wanted) {
     if (isSupplierDocumentType(type)) refuse("Choose which supplier it is from — an owner adds suppliers in Settings → Suppliers.");
@@ -129,6 +132,7 @@ async function chosenVendorId(posted: unknown, type: string | null, tenantId: st
  * and the upload still stands — the supplier still counts on the checklist through the document itself.
  */
 async function dealSupplierFrom(quote: { id: string; leadId: string | null }, vendorId: string, tenantId: string, userId: string) {
+  if (!(await isModuleEnabled("suppliers"))) return;
   await linkVendorToDeal({ tenantId, quote, vendorId, userId }).catch((error) =>
     logError("deal-supplier-link", error, `quote=${quote.id}`, { tenantId, alert: false }),
   );

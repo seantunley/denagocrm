@@ -100,8 +100,10 @@ test("the deal file lists every signature request — no silent cap (review of #
 test("a new purchase order and its lines and units carry the workspace the supplier was checked in (review of #1040)", () => {
   const stock = readFileSync(new URL("../src/app/actions/stock.ts", import.meta.url), "utf8");
   const action = stock.slice(stock.indexOf("export async function createPurchaseOrder("), stock.indexOf("export async function receivePurchaseOrder("));
-  assert.match(action, /const tenantId = await actingTenantId\(\);\s*const vendor = await prisma\.vendor\.findFirst\(\{\s*where: \{ id: str\(formData\.get\("vendorId"\)\), tenantId, deletedAt: null \}/);
-  assert.match(action, /tx\.purchaseOrder\.create\(\{ data: \{ tenantId, supplier, vendorId: vendor\.id,/);
+  assert.match(action, /const tenantId = await actingTenantId\(\);/);
+  assert.match(action, /vendor = await prisma\.vendor\.findFirst\(\{\s*where: \{ id: str\(formData\.get\("vendorId"\)\), tenantId, deletedAt: null \}/);
+  assert.ok(action.indexOf("const tenantId = await actingTenantId();") < action.indexOf("prisma.vendor.findFirst("));
+  assert.match(action, /tx\.purchaseOrder\.create\(\{ data: \{ tenantId, supplier, vendorId: vendor\?\.id \?\? null,/);
   assert.match(action, /tx\.purchaseOrderLine\.create\(\{\s*data: \{\s*tenantId,/);
   assert.match(action, /Array\.from\(\{ length: line\.qty \}, \(\) => \(\{\s*tenantId,/);
 });
