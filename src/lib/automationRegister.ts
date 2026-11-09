@@ -254,6 +254,17 @@ export const AUTOMATIONS: Automation[] = [
 
   /* ── For the team only ───────────────────────────────────────────────── */
   {
+    key: "supplier-digest",
+    label: "Weekly supplier papers email",
+    does: "Every Monday morning, emails the workspace owner the supplier quotes, invoices and proofs of payment still missing on deals in progress (accepted, or delivered in the last 30 days), deal by deal, with a link to each. Only suppliers on a deal are listed, and nothing is sent when nothing is missing. Suppliers module only. No supplier or customer is contacted by it.",
+    reaches: "staff",
+    channels: ["email"],
+    when: "Mondays from 07:00 (workspace time), once a week",
+    setting: { key: "SUPPLIER_DIGEST", defaultOn: true },
+    cron: "/api/cron/automations",
+    phases: ["supplier-digest"],
+  },
+  {
     key: "activity-reminders",
     label: "Activity reminders",
     does: "Phone notifications to the team for calls and meetings coming up.",

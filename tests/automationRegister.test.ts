@@ -164,6 +164,8 @@ test("every switch on the page is actually obeyed by the code it names — none 
     // through — including the manual resend, which must not start a WhatsApp
     // message the owner never switched on.
     SIGNING_SIGNED_COPIES_WHATSAPP: ["src/lib/signing/completionFanout.ts"],
+    // The owner's weekly supplier-papers email: named once, checked first thing in the phase it runs as.
+    SUPPLIER_DIGEST: ["src/lib/supplierDigestRules.ts"],
   };
   const keys = AUTOMATIONS.flatMap((a) => (a.setting ? [a.setting.key] : []));
   assert.deepEqual(keys.filter((k) => !where[k]).sort(), [], "a switch with no known gate — add it here and gate the code");
@@ -178,6 +180,8 @@ test("every switch on the page is actually obeyed by the code it names — none 
   assert.match(fanout, /export const SIGNED_COPIES_WHATSAPP_SWITCH = "SIGNING_SIGNED_COPIES_WHATSAPP";/);
   assert.match(fanout, /if \(unaddressed\.length > 0 && \(await whatsAppCopiesOn\(\)\)\) \{/);
   assert.match(fanout, /return automationOn\(SIGNED_COPIES_WHATSAPP_SWITCH, tenantId\)/);
+  assert.match(code("src/lib/supplierDigestRules.ts"), /export const SUPPLIER_DIGEST_SWITCH = "SUPPLIER_DIGEST";/);
+  assert.match(code("src/lib/supplierDigest.ts"), /if \(!\(await automationOn\(SUPPLIER_DIGEST_SWITCH, tenantId\)\)\) return \{ skipped: "switched-off" \};/);
 });
 
 test("an unset or unreadable switch never messages a customer on a guess", () => {
