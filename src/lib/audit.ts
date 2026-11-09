@@ -272,11 +272,19 @@ async function auditTenantIds(entry: AuditEntry): Promise<AuditTenantIds> {
  * to auditing after the commit. That is the split this parameter exists to
  * close, so the type must not be the thing that reopens it.
  *
- * Only what the audit write actually touches is named here.
+ * Only what the audit write actually touches is named here — and ONLY that (2026-11-09). It was the union of
+ * both whole transaction clients, and checking a caller's transaction against two entire Prisma clients sat at
+ * TypeScript's instantiation-depth limit: `next build` failed with TS2589 at an unrelated logAuditStrict call
+ * (quoteOutcome.ts) when a change elsewhere moved the check order. Method syntax keeps it assignable from both
+ * clients' transactions; writeAudit narrows to BaseTx to call them, exactly as before.
  */
 type BaseTx = Parameters<Parameters<typeof basePrisma.$transaction>[0]>[0];
-type ScopedTx = Parameters<Parameters<typeof prisma.$transaction>[0]>[0];
-type AuditTx = BaseTx | ScopedTx;
+type AuditTx = {
+  /* eslint-disable @typescript-eslint/no-explicit-any -- a deliberately loose shape: see above */
+  $executeRaw(query: TemplateStringsArray, ...values: any[]): PromiseLike<unknown>;
+  auditLog: { create(args: any): PromiseLike<unknown> };
+  /* eslint-enable @typescript-eslint/no-explicit-any */
+};
 
 /**
  * Transaction options for a governance change that carries its audit inside the
@@ -317,7 +325,7 @@ async function writeAudit(entry: AuditEntry, tx?: AuditTx) {
     // differ, and a union of those wrappers is not callable. One narrowing here
     // keeps the two call sites honest rather than pushing the difference back
     // out to every caller.
-    const transaction = candidate as BaseTx;
+    const transaction = candidate as unknown as BaseTx;
     await transaction.$executeRaw`
       INSERT INTO "AuditEvent" (
         "id", "tenantId", "actorUserId", "actorName", "actorType", "eventType", "entityType", "entityId",

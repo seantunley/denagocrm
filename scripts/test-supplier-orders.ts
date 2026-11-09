@@ -83,6 +83,23 @@ async function main() {
       check(`${mode}: ordering from another workspace's supplier is refused and writes nothing`, leaked === 0 && (Boolean(foreign.threw) || Boolean((foreign.value as { error?: string } | null)?.error)), JSON.stringify(foreign).slice(0, 200));
     }
 
+    // The Suppliers module switched OFF for A: an order takes a typed supplier name again, and names no record.
+    __setTenantEnforcingForTests(false);
+    const granted = await basePrisma.tenant.findUnique({ where: { id: a.tenantId }, select: { modules: true } });
+    await basePrisma.tenant.update({ where: { id: a.tenantId }, data: { modules: (granted?.modules ?? "").split(",").filter((id) => id !== "suppliers").join(",") } });
+    try {
+      const typedRef = `PO-typed-${SFX}`;
+      const typed = await settled(actAsStaff(a, () => createPurchaseOrder(form({ supplier: `Typed OEM ${SFX}`, productId: productA.id, qty: "1", cost: "1000", reference: typedRef })), { enforcing: false }));
+      const typedOrder = await basePrisma.purchaseOrder.findFirst({ where: { reference: typedRef }, select: { tenantId: true, vendorId: true, supplier: true } });
+      check(
+        "module off: an order takes a typed supplier name and names no supplier record",
+        !typed.threw && !(typed.value as { error?: string } | null)?.error && typedOrder?.supplier === `Typed OEM ${SFX}` && typedOrder.vendorId === null && typedOrder.tenantId === a.tenantId,
+        JSON.stringify({ typed, typedOrder }).slice(0, 300),
+      );
+    } finally {
+      await basePrisma.tenant.update({ where: { id: a.tenantId }, data: { modules: granted?.modules ?? "" } });
+    }
+
     // P2 — every signature request on the deal, across a quote and its revision.
     __setTenantEnforcingForTests(false);
     const revision = await basePrisma.quote.create({
