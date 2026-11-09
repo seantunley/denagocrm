@@ -30,6 +30,29 @@ model Vendor {
   @@index([tenantId, name])
 }
 
+/// What a supplier's invoice says — read from the file by AI when it is filed as a "Supplier invoice", then
+/// CONFIRMED (or corrected) by a person before anyone relies on it (review section E, 2026-11-09). One per document.
+model SupplierInvoice {
+  id            String    @id @default(cuid())
+  tenantId      String
+  documentId    String    @unique
+  invoiceNumber String?
+  invoiceDate   DateTime?
+  dueDate       DateTime?
+  /// In cents of `currency` (as written on the invoice; null = not read).
+  totalCents    Int?
+  currency      String?
+  /// read (by AI, waiting for a person) | confirmed (a person checked it) | unreadable (nothing could be read)
+  status        String    @default("read")
+  readAt        DateTime  @default(now())
+  confirmedAt   DateTime?
+  confirmedById String?
+
+  @@unique([tenantId, id])
+  @@index([tenantId, status])
+  @@index([tenantId, dueDate])
+}
+
 /// A supplier asked for one of its papers on a deal through a link (2026-11-09, review section D): "Please upload
 /// your invoice for Q-1029". The link opens a public upload page; what arrives is filed on the quote already
 /// labelled with the type and the supplier. One file, once; it expires; staff can recall it. The token is stored as
