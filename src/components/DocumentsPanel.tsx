@@ -8,11 +8,18 @@ import { getSetting, getRegionalSettings } from "@/lib/settings";
 import { prisma } from "@/lib/db";
 import { actingTenantId } from "@/lib/actingTenant";
 import { isModuleEnabled } from "@/lib/modules/enabled";
+import { isSupplierInvoice } from "@/lib/supplierInvoiceRules";
+import { confirmSupplierInvoice, readSupplierInvoiceNow } from "@/app/actions/supplierInvoices";
 import { SaveForm, SaveButton } from "@/components/SaveForm";
 import QuoteRowActions from "@/components/quotes/QuoteRowActions";
 import { StatusPill } from "@/components/visual-system";
 import { formatDate, formatZAR } from "@/lib/format";
 import { withCurrency } from "@/lib/currencyRules";
+import { isSupplierQuote, partiesOf } from "@/lib/dealFile";
+import { quotePricing, type PricedLine } from "@/lib/pricing";
+import { saveQuoteLineCosts } from "@/app/actions/quoteCosts";
+import { requireUser } from "@/lib/auth";
+import { hasPermission } from "@/lib/permissions";
 import { FileText, Tag, Upload } from "lucide-react";
 
 function humanSize(bytes: number): string {
@@ -90,7 +97,64 @@ function statusTone(status: string): "neutral" | "success" | "danger" | "info" {
 }
 
 /** `vendors` null: the Suppliers module is off — no supplier is shown or offered on the row. */
-function DocRow({ doc: row, revalidate, types, vendors }: { doc: Doc; revalidate: string; types: readonly string[]; vendors: readonly { id: string; name: string }[] | null }) {
+type InvoiceRow = { invoiceNumber: string | null; invoiceDate: Date | null; dueDate: Date | null; totalCents: number | null; currency: string | null; status: string };
+/** Supplier invoice documents on the list → what was read from each (null: nothing yet). Absent: not an invoice. */
+type InvoiceMap = Map<string, InvoiceRow | null>;
+const day = (value: Date | null) => (value ? value.toISOString().slice(0, 10) : "");
+
+/**
+ * Under a supplier invoice: what was read from it, for a person to confirm or correct (lib/supplierInvoiceReader.ts).
+ * Nothing read is used until someone presses Confirm; a confirmed one shows as a line, with Edit.
+ */
+function InvoiceBox({ documentId, revalidate, invoice, money }: { documentId: string; revalidate: string; invoice: InvoiceRow | null; money: (cents: number, currency: string | null) => string }) {
+  const summary = invoice
+    ? [invoice.invoiceNumber, invoice.invoiceDate ? formatDate(invoice.invoiceDate) : null, invoice.totalCents !== null ? money(invoice.totalCents, invoice.currency) : null, invoice.dueDate ? `due ${formatDate(invoice.dueDate)}` : null].filter(Boolean).join(" · ")
+    : "";
+  const form = (
+    <SaveForm action={confirmSupplierInvoice.bind(null, documentId, revalidate)} success="Invoice confirmed" resetOnSuccess={false} className="mt-1.5 grid gap-1.5 sm:grid-cols-5">
+      <input name="invoiceNumber" defaultValue={invoice?.invoiceNumber ?? ""} placeholder="Invoice no." aria-label="Invoice number" className="input h-8 text-xs" />
+      <input name="invoiceDate" type="date" defaultValue={day(invoice?.invoiceDate ?? null)} aria-label="Invoice date" className="input h-8 text-xs" />
+      <input name="dueDate" type="date" defaultValue={day(invoice?.dueDate ?? null)} aria-label="Due date" className="input h-8 text-xs" />
+      <input name="total" defaultValue={invoice?.totalCents != null ? (invoice.totalCents / 100).toFixed(2) : ""} placeholder="Total" aria-label="Total" className="input h-8 text-xs" />
+      <div className="flex gap-1.5">
+        <input name="currency" defaultValue={invoice?.currency ?? ""} placeholder="ZAR" maxLength={3} aria-label="Currency" className="input h-8 w-16 text-xs uppercase" />
+        <SaveButton className="btn-primary btn-sm">Confirm</SaveButton>
+      </div>
+    </SaveForm>
+  );
+  if (invoice?.status === "confirmed") {
+    return (
+      <details className="text-xs text-muted-foreground">
+        <summary className="cursor-pointer"><span className="text-emerald-400">Invoice confirmed</span>{summary ? ` · ${summary}` : ""} — <span className="underline">edit</span></summary>
+        {form}
+      </details>
+    );
+  }
+  return (
+    <div className="rounded-lg border border-border/70 bg-muted/20 p-2 text-xs text-muted-foreground">
+      <div className="flex flex-wrap items-center gap-2">
+        <span>
+          {invoice?.status === "read" ? <>Read from the invoice — <strong className="text-foreground">check it and confirm</strong>{summary ? `: ${summary}` : ""}</> : invoice?.status === "unreadable" ? "Couldn't read this invoice — fill it in below." : "Not read yet."}
+        </span>
+        {invoice?.status !== "read" && (
+          <SaveForm action={readSupplierInvoiceNow.bind(null, documentId, revalidate)}>
+            <SaveButton className="text-xs font-medium text-primary hover:underline" pendingLabel="Reading…">Read invoice</SaveButton>
+          </SaveForm>
+        )}
+      </div>
+      {form}
+    </div>
+  );
+}
+
+function DocRow({ doc: row, revalidate, types, vendors, invoices, money }: {
+  doc: Doc;
+  revalidate: string;
+  types: readonly string[];
+  vendors: readonly { id: string; name: string }[] | null;
+  invoices: InvoiceMap;
+  money: (cents: number, currency: string | null) => string;
+}) {
   const doc = vendors === null ? { ...row, vendor: undefined } : row;
   // What it IS leads: a type somebody chose ("Supplier quote") is the document's
   // name on this list, with the file name beneath. A tag the CRM wrote keeps its
@@ -100,7 +164,7 @@ function DocRow({ doc: row, revalidate, types, vendors }: { doc: Doc; revalidate
   // What the deal file's search box matches (DealFileSearch).
   const search = [doc.fileName, chosen, system, doc.vendor?.name, doc.uploadedBy.name].filter(Boolean).join(" ").toLowerCase();
   return (
-    <li className="group flex items-center gap-3 py-2" data-search={search}>
+    <li className="group flex flex-wrap items-center gap-3 py-2" data-search={search}>
       <span className="grid size-8 shrink-0 place-items-center rounded-lg border border-border bg-muted/30 text-muted-foreground">
         <FileText className="size-3.5" />
       </span>
@@ -150,7 +214,49 @@ function DocRow({ doc: row, revalidate, types, vendors }: { doc: Doc; revalidate
           triggerClass="cursor-pointer text-xs text-slate-600 hover:text-red-500"
         />
       </div>
+      {invoices.has(doc.id) && (
+        <div className="basis-full pl-11">
+          <InvoiceBox documentId={doc.id} revalidate={revalidate} invoice={invoices.get(doc.id) ?? null} money={money} />
+        </div>
+      )}
     </li>
+  );
+}
+
+type CostItem = PricedLine & { id: string; description: string; costCents: number };
+
+/**
+ * Under a quote with a supplier quote on file: each line's cost per unit, from the supplier's paper, and the
+ * margin it gives. Internal — cost never reaches the customer's document.
+ */
+function QuoteCostsBox({ quoteId, items, taxInclusive, revalidate, money }: { quoteId: string; items: CostItem[]; taxInclusive: boolean; revalidate: string; money: (cents: number) => string }) {
+  const pricing = quotePricing(items, [], { taxInclusive });
+  return (
+    <details className="mt-2 rounded-lg border border-border/70 bg-muted/20 p-2 text-xs text-muted-foreground">
+      <summary className="cursor-pointer">
+        <span className="font-medium text-foreground">Costs from supplier quotes</span>
+        {pricing.costCents > 0
+          ? <> · margin <span className="tabular-nums text-foreground">{money(pricing.marginCents)} · {pricing.marginPct}%</span> <span className="text-[10px] uppercase tracking-wider">internal</span></>
+          : " · no costs entered yet"}
+      </summary>
+      <SaveForm action={saveQuoteLineCosts.bind(null, quoteId, revalidate)} success="Costs saved" resetOnSuccess={false} className="mt-2 grid gap-1.5">
+        <p>Cost per unit from the supplier, <strong>excl. VAT</strong>, in the quote&apos;s currency. A blank box leaves that line as it is.</p>
+        {items.map((item) => (
+          <label key={item.id} className="flex items-center gap-2">
+            <span className="min-w-0 flex-1 truncate text-foreground">{item.description}{item.qty !== 1 ? ` × ${item.qty}` : ""}</span>
+            <input
+              name={`cost_${item.id}`}
+              defaultValue={item.costCents > 0 ? (item.costCents / 100).toFixed(2) : ""}
+              placeholder="Cost"
+              inputMode="decimal"
+              aria-label={`Cost per unit for ${item.description}`}
+              className="input h-8 w-32 text-right text-xs tabular-nums"
+            />
+          </label>
+        ))}
+        <SaveButton className="btn-primary btn-sm justify-self-end">Save costs</SaveButton>
+      </SaveForm>
+    </details>
   );
 }
 
@@ -201,6 +307,36 @@ export default async function DocumentsPanel({
   const vendors = (await isModuleEnabled("suppliers"))
     ? await prisma.vendor.findMany({ where: { tenantId, deletedAt: null }, select: { id: true, name: true }, orderBy: { name: "asc" } })
     : null;
+  // A current quote with a supplier quote filed on it offers to take that supplier's prices as its costs.
+  // Only for someone who may edit quotes — cost and margin are theirs, and the save needs it.
+  const costQuoteIds = vendors === null || !(quoteGroups ?? []).length || !(await hasPermission(await requireUser(), "quotes.edit"))
+    ? []
+    : (quoteGroups ?? []).filter((group) => !group.superseded && group.documents.some((doc) => isSupplierQuote(doc.tag))).map((group) => group.id);
+  const costQuotes = costQuoteIds.length
+    ? await prisma.quote.findMany({
+        where: { tenantId, id: { in: costQuoteIds }, deletedAt: null },
+        select: {
+          id: true,
+          taxInclusive: true,
+          items: {
+            orderBy: { sortOrder: "asc" },
+            select: { id: true, description: true, qty: true, unitPriceCents: true, discountPct: true, taxRatePct: true, costCents: true, optional: true, selected: true },
+          },
+        },
+      })
+    : [];
+  // What each supplier invoice on this list says (read by AI, confirmed by a person) — Suppliers module only.
+  const invoiceDocIds = vendors === null
+    ? []
+    : [...documents, ...(quoteGroups ?? []).flatMap((group) => group.documents)].filter((doc) => isSupplierInvoice(doc.tag)).map((doc) => doc.id);
+  const invoiceRows = invoiceDocIds.length
+    ? await prisma.supplierInvoice.findMany({
+        where: { tenantId, documentId: { in: invoiceDocIds } },
+        select: { documentId: true, invoiceNumber: true, invoiceDate: true, dueDate: true, totalCents: true, currency: true, status: true },
+      })
+    : [];
+  const invoices: InvoiceMap = new Map(invoiceDocIds.map((id) => [id, invoiceRows.find((row) => row.documentId === id) ?? null]));
+  const invoiceMoney = (cents: number, currency: string | null) => formatZAR(cents, withCurrency(moneyFmt, currency));
   return (
     <div className="card">
       <div className="mb-4 flex items-center justify-between gap-3">
@@ -265,13 +401,31 @@ export default async function DocumentsPanel({
                 <p className="mt-2 text-xs text-slate-500">
                   No paperwork filed against this quote yet.
                 </p>
-              ) : (
-                <ul className="mt-1 divide-y divide-slate-800">
-                  {[...group.documents].sort(byLifecycle).map((doc) => (
-                    <DocRow key={doc.id} doc={doc} revalidate={revalidate} types={types} vendors={vendors} />
-                  ))}
-                </ul>
-              )}
+              ) : (() => {
+                // Customer, then each supplier by name — headings only once a supplier paper is on the quote.
+                const sections = partiesOf([...group.documents].sort(byLifecycle).map((doc) => (vendors === null ? { ...doc, vendor: undefined } : doc)));
+                const headed = sections.some((section) => section.supplier);
+                return sections.map((section) => (
+                  <div key={section.key} className={headed ? "mt-2" : ""}>
+                    {headed && (
+                      <p className={`text-[10px] font-semibold uppercase tracking-widest ${section.supplier ? "text-sky-300/80" : "text-emerald-300/80"}`}>
+                        {section.label} <span className="font-normal text-muted-foreground">· {section.docs.length}</span>
+                      </p>
+                    )}
+                    <ul className="mt-1 divide-y divide-slate-800">
+                      {section.docs.map((doc) => (
+                        <DocRow key={doc.id} doc={doc} revalidate={revalidate} types={types} vendors={vendors} invoices={invoices} money={invoiceMoney} />
+                      ))}
+                    </ul>
+                  </div>
+                ));
+              })()}
+              {(() => {
+                const quote = costQuotes.find((q) => q.id === group.id);
+                return quote && quote.items.length > 0 ? (
+                  <QuoteCostsBox quoteId={group.id} items={quote.items} taxInclusive={quote.taxInclusive} revalidate={revalidate} money={(cents) => formatZAR(cents, withCurrency(moneyFmt, group.currency))} />
+                ) : null;
+              })()}
             </div>
           ))}
         </div>
@@ -288,7 +442,7 @@ export default async function DocumentsPanel({
           )}
           <ul className="divide-y divide-slate-800">
             {documents.map((doc) => (
-              <DocRow key={doc.id} doc={doc} revalidate={revalidate} types={types} vendors={vendors} />
+              <DocRow key={doc.id} doc={doc} revalidate={revalidate} types={types} vendors={vendors} invoices={invoices} money={invoiceMoney} />
             ))}
           </ul>
         </>

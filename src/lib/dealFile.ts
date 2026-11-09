@@ -35,6 +35,33 @@ const same = (a: string | null | undefined, b: string) => (a ?? "").toLowerCase(
 
 export const isSupplierDocumentType = (tag: string | null | undefined): boolean =>
   SUPPLIER_DOCUMENT_TYPES.some((type) => same(tag, type));
+export type PartySection<T> = { key: string; label: string; docs: T[] };
+
+/**
+ * A quote's papers split by who they are with (Sean, 2026-11-09): the customer's side first, then each supplier's
+ * under its name (A–Z), then supplier papers with no supplier named (e.g. filed with the Suppliers module off).
+ * Order within a section is kept. `supplier` is false for the customer section.
+ */
+export function partiesOf<T extends { tag?: string | null; vendor?: { id: string; name: string } | null }>(docs: T[]): (PartySection<T> & { supplier: boolean })[] {
+  const customer = docs.filter((doc) => !doc.vendor && !isSupplierDocumentType(doc.tag));
+  const named = new Map<string, PartySection<T>>();
+  const unnamed: T[] = [];
+  for (const doc of docs) {
+    if (doc.vendor) {
+      const section = named.get(doc.vendor.id) ?? { key: doc.vendor.id, label: doc.vendor.name, docs: [] };
+      section.docs.push(doc);
+      named.set(doc.vendor.id, section);
+    } else if (isSupplierDocumentType(doc.tag)) unnamed.push(doc);
+  }
+  return [
+    ...(customer.length ? [{ key: "customer", label: "Customer", docs: customer, supplier: false }] : []),
+    ...[...named.values()].sort((a, b) => a.label.localeCompare(b.label)).map((section) => ({ ...section, label: `Supplier · ${section.label}`, supplier: true })),
+    ...(unnamed.length ? [{ key: "supplier:none", label: "Suppliers", docs: unnamed, supplier: true }] : []),
+  ];
+}
+
+/** A supplier's quote: its prices become the customer quote's costs (actions/quoteCosts.ts). */
+export const isSupplierQuote = (tag: string | null | undefined): boolean => same(tag, SUPPLIER_DOCUMENT_TYPES[0]);
 
 export function dealFileChecklist(
   quotes: readonly DealFileQuote[],

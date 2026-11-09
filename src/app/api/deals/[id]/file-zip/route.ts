@@ -7,7 +7,7 @@ import { isSameOrigin } from "@/lib/sameOrigin";
 import { loadDealFile } from "@/lib/dealFileData";
 import { isModuleEnabled } from "@/lib/modules/enabled";
 import { isAutomotiveOwnedDocument } from "@/lib/modules/registry";
-import { openFileStream } from "@/lib/storage";
+import { openFileStream, openStoredFile } from "@/lib/storage";
 import { quotePdf } from "@/lib/quotePdf";
 import { quotePdfFileName } from "@/lib/quoteEmail";
 import { getCompanyProfile } from "@/lib/companyProfile";
@@ -75,12 +75,21 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
     if (documents.length < file.documents.length) notes.push(`${file.documents.length - documents.length} automotive document(s) left out: the Automotive module is off.`);
     const typeOf = (tag: string | null) => (tag ? (isPersonLabel(tag) ? tag : SYSTEM_TAG_LABELS[tag] ?? tag) : "Not labelled");
 
+    // 3. The delivery checklist's photos (loadDealFile — empty with the Automotive module off), numbered in the order taken.
+    const photos = file.handoverPhotos;
+    const photoExt = (url: string) => /\.(jpe?g|png|webp|heic|gif)(\?|$)/i.exec(url)?.[1]?.toLowerCase() ?? "jpg";
+
     const paths = zipPaths([
       ...quotations.map((q) => ({ folder: q.folder, name: q.name })),
       ...documents.map((doc) => ({ folder: doc.quoteId && numberOf.has(doc.quoteId) ? `Q-${numberOf.get(doc.quoteId)}` : null, name: doc.fileName })),
+      ...photos.map((photo, i) => ({
+        folder: `Q-${numberOf.get(photo.quoteId) ?? quote.number}/Handover photos`,
+        name: `${String(i + 1).padStart(3, "0")} ${photo.step}.${photoExt(photo.url)}`,
+      })),
     ]);
     const quotationPaths = paths.slice(0, quotations.length);
-    const documentPaths = paths.slice(quotations.length);
+    const documentPaths = paths.slice(quotations.length, quotations.length + documents.length);
+    const photoPaths = paths.slice(quotations.length + documents.length);
 
     const customer = quoteBillTo(quote, fleet).name || "Customer";
     const cover = (missing: string[]) =>
@@ -104,13 +113,18 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
             type: typeOf(doc.tag),
             detail: [doc.vendor?.name, `uploaded ${formatDate(doc.createdAt, moneyFmt)} by ${doc.uploadedBy.name}`, humanBytes(doc.sizeBytes), missing.includes(doc.id) ? "MISSING FROM STORAGE — not in this ZIP" : null].filter(Boolean).join(" · "),
           })),
+          ...photos.map((photo, i) => ({
+            path: photoPaths[i],
+            type: "Handover photo (delivery checklist)",
+            detail: [photo.step, `taken ${formatDateTime(photo.capturedAt, moneyFmt)}`, missing.includes(photo.id) ? "MISSING FROM STORAGE — not in this ZIP" : null].filter(Boolean).join(" · "),
+          })),
         ],
         notes: [...notes, ...(missing.length ? [`${missing.length} file(s) could not be read from storage and are not in this ZIP.`] : [])],
       });
 
     await logAudit({
       action: "deal.file_downloaded",
-      summary: `Downloaded the deal file for Q-${quote.number} as a password-protected ZIP (${quotations.length + documents.length} files)`,
+      summary: `Downloaded the deal file for Q-${quote.number} as a password-protected ZIP (${quotations.length + documents.length + photos.length} files)`,
       ...(quote.leadId ? { leadId: quote.leadId } : {}),
       ...(quote.contactId ? { contactId: quote.contactId } : {}),
       user,
@@ -134,6 +148,16 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
             continue;
           }
           await zip.add(documentPaths[i], stream);
+        }
+        for (const [i, photo] of photos.entries()) {
+          let stream: ReadableStream<Uint8Array>;
+          try {
+            stream = (await openStoredFile(photo.url, tenantId)).stream;
+          } catch {
+            missing.push(photo.id);
+            continue;
+          }
+          await zip.add(photoPaths[i], stream);
         }
         await zip.add(`00 Cover sheet - Q-${quote.number}.pdf`, new Uint8ArrayReader(await cover(missing)));
         await zip.close();

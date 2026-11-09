@@ -61,7 +61,20 @@ export async function loadDealFile(quote: { id: string; leadId: string | null },
     declaredVendors,
     suppliersOn,
   );
-  return { tenantId, suppliersOn, dealQuotes, documents, signatures, documentTypes, declaredVendors, checklist };
+  // Photos taken in the delivery checklist (Tekili Farm, 2026-11-09: 13 handover photos the deal file never showed).
+  // They live with the checklist run, not as documents, and the deal leaves the Deliveries board once delivered —
+  // so this is the only place they can still be found. Deliveries are automotive paperwork, as on /api/files.
+  const handoverPhotos = dealQuoteIds.length && (await isModuleEnabled("automotive"))
+    ? await prisma.checklistPhoto.findMany({
+        where: { tenantId, entry: { run: { tenantId, hostType: "quote.delivery", hostId: { in: dealQuoteIds } } } },
+        select: { id: true, url: true, capturedAt: true, entry: { select: { labelSnapshot: true, run: { select: { hostId: true } } } } },
+        orderBy: { capturedAt: "asc" },
+      })
+    : [];
+  return {
+    tenantId, suppliersOn, dealQuotes, documents, signatures, documentTypes, declaredVendors, checklist,
+    handoverPhotos: handoverPhotos.map((photo) => ({ id: photo.id, url: photo.url, capturedAt: photo.capturedAt, step: photo.entry.labelSnapshot, quoteId: photo.entry.run.hostId })),
+  };
 }
 
 /**

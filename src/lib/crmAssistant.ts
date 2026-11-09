@@ -75,6 +75,7 @@ import { checkBacksOn, setCheckBacks, type CheckBack } from "./proactiveFollowUp
 import { findExistingContact } from "./contactMatch";
 import { DOCUMENT_TYPES_KEY, parseDocumentTypes } from "./documentLabels";
 import { isSupplierDocumentType } from "./dealFile";
+import { matchVendorByName } from "./vendors";
 import { paymentMethodLabel } from "./accountStatement";
 import { carriedUpload, holdUpload, linkUpload, photoUpload, uploadImage } from "./assistantUpload";
 import { actingTenantId } from "./actingTenant";
@@ -2868,14 +2869,31 @@ export async function resolveActions(
         const types = parseDocumentTypes(await getSetting(DOCUMENT_TYPES_KEY));
         label = types.find((type) => type.toLowerCase() === p.label!.trim().toLowerCase()) ?? null;
         if (!label) { problems.push(`"${p.label}" isn't one of your document types (${types.join(", ")}) — say which, or file it without one.`); continue; }
-        // uploadDocument refuses a supplier document with no supplier named, and DAX can't name one — said now, not at Confirm.
-        if (isSupplierDocumentType(label) && (await isModuleEnabled("suppliers"))) { problems.push(`A ${label.toLowerCase()} has to name its supplier — upload it from the deal file, or file it here without a type.`); continue; }
       }
+      // THE SUPPLIER, by the name they said, among this workspace's own (Suppliers module). A supplier quote, invoice or
+      // proof of payment must name one — uploadDocument refuses it at Confirm otherwise, so it is settled here.
+      let vendor: { id: string; name: string } | null = null;
+      const supplierType = label !== null && isSupplierDocumentType(label);
+      if ((supplierType || p.supplier) && (await isModuleEnabled("suppliers"))) {
+        const vendors = await prisma.vendor.findMany({
+          where: { tenantId: await actingTenantId(), deletedAt: null },
+          select: { id: true, name: true },
+          orderBy: { name: "asc" },
+        });
+        const listed = vendors.length ? `Your suppliers: ${vendors.map((v) => v.name).join(", ")}.` : "There are no suppliers yet — an owner adds them in Settings → Suppliers.";
+        if (!p.supplier) { problems.push(`Which supplier is this ${label!.toLowerCase()} from? ${listed}`); continue; }
+        const match = matchVendorByName(p.supplier, vendors);
+        if ("none" in match) { problems.push(`"${p.supplier}" isn't one of your suppliers. ${listed}`); continue; }
+        if ("ambiguous" in match) { problems.push(`"${p.supplier}" could be ${match.ambiguous.map((v) => v.name).join(" or ")} — which?`); continue; }
+        vendor = match.vendor;
+      }
+      const from = vendor ? ` from ${vendor.name}` : "";
       cards.push({
         id: `a${index}-file`, kind: "attach_file", leadId: found.leadId, leadLabel: found.where,
-        title: `File “${upload.fileName}” on ${found.where}${label ? ` as ${label}` : ""}`,
+        title: `File “${upload.fileName}” on ${found.where}${label ? ` as ${label}` : ""}${from}`,
         uploadId: upload.id, fileName: upload.fileName, target: found.target, label,
-        detail: [`File: ${upload.fileName}`, `Goes on: ${found.where}${label ? `, as ${label}` : ""}`, "Kept in its documents. Nobody is sent anything."].join("\n"),
+        ...(vendor ? { vendorId: vendor.id } : {}),
+        detail: [`File: ${upload.fileName}`, `Goes on: ${found.where}${label ? `, as ${label}` : ""}${from}`, "Kept in its documents. Nobody is sent anything."].join("\n"),
         // One Confirm files it once (fileHeldUpload reserves this key), however often the card is pressed.
         confirmKey: `qk_${randomBytes(16).toString("hex")}`,
         ...(p.reason ? { reason: p.reason } : {}),

@@ -39,7 +39,8 @@ export function safeName(name: string, fallback = "file"): string {
 export function zipPaths(entries: { folder: string | null; name: string }[]): string[] {
   const taken = new Set<string>();
   return entries.map(({ folder, name }) => {
-    const dir = folder ? `${safeName(folder, "folder")}/` : "";
+    // "Q-1025/Handover photos": each level cleaned on its own, so a nested folder stays nested and nothing escapes it.
+    const dir = folder ? `${folder.split("/").map((level) => safeName(level, "folder")).join("/")}/` : "";
     const base = safeName(name);
     const dot = base.lastIndexOf(".");
     const [stem, ext] = dot > 0 ? [base.slice(0, dot), base.slice(dot)] : [base, ""];

@@ -916,6 +916,36 @@
       ]
     }
   },
+  "DocumentRequest.DocumentRequest_tenantId_quoteId_fkey": {
+    "table": "DocumentRequest",
+    "constraint": "DocumentRequest_tenantId_quoteId_fkey",
+    "columns": [
+      "tenantId",
+      "quoteId"
+    ],
+    "references": {
+      "table": "Quote",
+      "columns": [
+        "tenantId",
+        "id"
+      ]
+    }
+  },
+  "DocumentRequest.DocumentRequest_tenantId_vendorId_fkey": {
+    "table": "DocumentRequest",
+    "constraint": "DocumentRequest_tenantId_vendorId_fkey",
+    "columns": [
+      "tenantId",
+      "vendorId"
+    ],
+    "references": {
+      "table": "Vendor",
+      "columns": [
+        "tenantId",
+        "id"
+      ]
+    }
+  },
   "Fleet.Fleet_tenantId_contactId_fkey": {
     "table": "Fleet",
     "constraint": "Fleet_tenantId_contactId_fkey",
@@ -2086,6 +2116,21 @@
       ]
     }
   },
+  "SupplierInvoice.SupplierInvoice_tenantId_documentId_fkey": {
+    "table": "SupplierInvoice",
+    "constraint": "SupplierInvoice_tenantId_documentId_fkey",
+    "columns": [
+      "tenantId",
+      "documentId"
+    ],
+    "references": {
+      "table": "Document",
+      "columns": [
+        "tenantId",
+        "id"
+      ]
+    }
+  },
   "SurveyResponse.SurveyResponse_tenantId_contactId_fkey": {
     "table": "SurveyResponse",
     "constraint": "SurveyResponse_tenantId_contactId_fkey",
@@ -2185,6 +2230,51 @@
     ],
     "references": {
       "table": "Product",
+      "columns": [
+        "tenantId",
+        "id"
+      ]
+    }
+  },
+  "VendorDelivery.VendorDelivery_tenantId_purchaseOrderId_fkey": {
+    "table": "VendorDelivery",
+    "constraint": "VendorDelivery_tenantId_purchaseOrderId_fkey",
+    "columns": [
+      "tenantId",
+      "purchaseOrderId"
+    ],
+    "references": {
+      "table": "PurchaseOrder",
+      "columns": [
+        "tenantId",
+        "id"
+      ]
+    }
+  },
+  "VendorDelivery.VendorDelivery_tenantId_quoteId_fkey": {
+    "table": "VendorDelivery",
+    "constraint": "VendorDelivery_tenantId_quoteId_fkey",
+    "columns": [
+      "tenantId",
+      "quoteId"
+    ],
+    "references": {
+      "table": "Quote",
+      "columns": [
+        "tenantId",
+        "id"
+      ]
+    }
+  },
+  "VendorDelivery.VendorDelivery_tenantId_vendorId_fkey": {
+    "table": "VendorDelivery",
+    "constraint": "VendorDelivery_tenantId_vendorId_fkey",
+    "columns": [
+      "tenantId",
+      "vendorId"
+    ],
+    "references": {
+      "table": "Vendor",
       "columns": [
         "tenantId",
         "id"

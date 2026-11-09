@@ -54,8 +54,9 @@ test("the ZIP is AES-256: opens with the password, refuses any other", async () 
   assert.equal(extra[8], 3);
 
   const [entry] = await new ZipReader(new BlobReader(new Blob([raw]))).getEntries();
-  assert.equal(new TextDecoder().decode(await entry.getData!(new Uint8ArrayWriter(), { password: "correct horse battery" })), "deal paper");
-  await assert.rejects(entry.getData!(new Uint8ArrayWriter(), { password: "wrong password!" }));
+  assert.ok(!entry.directory);
+  assert.equal(new TextDecoder().decode(await entry.getData(new Uint8ArrayWriter(), { password: "correct horse battery" })), "deal paper");
+  await assert.rejects(entry.getData(new Uint8ArrayWriter(), { password: "wrong password!" }));
 });
 
 test("the route: POST, same-site, the page's own gates and loader, workspace at the door, AES-256, streamed", () => {
@@ -70,13 +71,33 @@ test("the route: POST, same-site, the page's own gates and loader, workspace at 
   assert.match(route, /new ZipWriter\(writable, \{ password, encryptionStrength: 3, zipCrypto: false, useWebWorkers: false \}\)/);
   assert.match(route, /return new Response\(readable,/);
   // The password goes to the check and the encryptor and nowhere else: every line of code naming it is one of these.
-  const code = route.split("\n").filter((line) => !/^\s*(\/\/|\*|\/\*\*)/.test(line) && /\bpassword\b/.test(line)).map((line) => line.trim());
+  // (The word in "password-protected" is prose, not the variable.)
+  const code = route.split("\n").filter((line) => !/^\s*(\/\/|\*|\/\*\*)/.test(line) && /\bpassword\b(?!-)/.test(line)).map((line) => line.trim());
   assert.deepEqual(code, [
     'const password = String(form.get("password") ?? "");',
     'const problem = zipPasswordProblem(password, String(form.get("confirm") ?? ""));',
     "const zip = new ZipWriter(writable, { password, encryptionStrength: 3, zipCrypto: false, useWebWorkers: false });",
   ]);
   assert.match(route, /action: "deal\.file_downloaded"/);
+});
+
+test("a nested folder stays nested, and no level can climb out", () => {
+  assert.deepEqual(
+    zipPaths([{ folder: "Q-1025/Handover photos", name: "001 Front of cart.jpg" }, { folder: "Q-1025/../../x", name: "a.jpg" }]),
+    ["Q-1025/Handover photos/001 Front of cart.jpg", "Q-1025/folder/folder/x/a.jpg"],
+  );
+});
+
+test("handover photos: in the deal file and the ZIP, own workspace, delivery checklist only, Automotive only (Tekili Farm)", () => {
+  const loader = src("src/lib/dealFileData.ts");
+  assert.match(loader, /checklistPhoto\.findMany\(\{\s*where: \{ tenantId, entry: \{ run: \{ tenantId, hostType: "quote\.delivery", hostId: \{ in: dealQuoteIds \} \} \} \}/);
+  assert.match(loader, /dealQuoteIds\.length && \(await isModuleEnabled\("automotive"\)\)/);
+  const page = src("src/app/(app)/deals/[id]/page.tsx");
+  assert.match(page, /handoverPhotos\.length > 0 &&/);
+  assert.match(page, /storedFileSrc\(photo\.url\)/, "through the workspace-checked file route, never the raw store URL");
+  const route = src("src/app/api/deals/[id]/file-zip/route.ts");
+  assert.match(route, /stream = \(await openStoredFile\(photo\.url, tenantId\)\)\.stream;/);
+  assert.match(route, /folder: `Q-\$\{numberOf\.get\(photo\.quoteId\) \?\? quote\.number\}\/Handover photos`/);
 });
 
 test("the deal page and the ZIP read the deal file through ONE loader", () => {

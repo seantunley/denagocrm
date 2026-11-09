@@ -82,17 +82,43 @@ test("a checklist type the workspace removed says how to fix it", () => {
   assert.match(items.find((item) => item.label === "Supplier invoice")?.detail ?? "", /Settings → Document types/);
 });
 
+test("a quote's papers are grouped: the customer's, then each supplier's by name, then unnamed supplier papers", async () => {
+  const { partiesOf } = await import("../src/lib/dealFile");
+  const jet = { id: "v1", name: "Jetman Distributors" };
+  const acme = { id: "v2", name: "Acme Wraps" };
+  const docs = [
+    { id: "1", tag: "invoice", vendor: null },
+    { id: "2", tag: "Proof of payment — supplier", vendor: jet },
+    { id: "3", tag: "Proof of payment — customer", vendor: null },
+    { id: "4", tag: "Supplier quote", vendor: acme },
+    { id: "5", tag: "Supplier invoice", vendor: jet },
+    { id: "6", tag: "Supplier invoice", vendor: null },
+  ];
+  const sections = partiesOf(docs);
+  assert.deepEqual(sections.map((s) => [s.label, s.docs.map((d) => d.id)]), [
+    ["Customer", ["1", "3"]],
+    ["Supplier · Acme Wraps", ["4"]],
+    ["Supplier · Jetman Distributors", ["2", "5"]],
+    ["Suppliers", ["6"]],
+  ]);
+  // Only customer papers: one section, which the panel shows with no headings.
+  assert.deepEqual(partiesOf([{ tag: "invoice", vendor: null }]).map((s) => s.supplier), [false]);
+});
+
 test("the deal page shows the deal file for every quote on the lead, and only the current versions", () => {
   const page = readFileSync(new URL("../src/app/(app)/deals/[id]/page.tsx", import.meta.url), "utf8");
-  assert.match(page, /dealFileChecklist\(/);
-  assert.match(page, /getAccessibleQuoteIds\(user\)/);
-  assert.match(page, /replacedById: null/);
+  // The page reads its file through the shared loader (also the ZIP download's).
+  const data = readFileSync(new URL("../src/lib/dealFileData.ts", import.meta.url), "utf8");
+  assert.match(page, /await loadDealFile\(quote, user\)/);
+  assert.match(data, /dealFileChecklist\(/);
+  assert.match(data, /getAccessibleQuoteIds\(user\)/);
+  assert.match(data, /replacedById: null/);
 });
 
 test("the deal file lists every signature request — no silent cap (review of #1040)", () => {
   const page = readFileSync(new URL("../src/app/(app)/deals/[id]/page.tsx", import.meta.url), "utf8");
   const data = readFileSync(new URL("../src/lib/dealFileData.ts", import.meta.url), "utf8");
-  assert.match(page, /dealSignatureRequests\(dealQuoteIds\)/);
+  assert.match(data, /dealSignatureRequests\(dealQuoteIds\)/);
   assert.doesNotMatch(page, /signatureRequest\.findMany/);
   assert.doesNotMatch(data, /\btake:/);
 });

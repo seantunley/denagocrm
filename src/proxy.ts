@@ -43,6 +43,11 @@ const PUBLIC_PATHS = [
   // download is a POST that checks the link every time. See both routes' headers.
   "/f",
   "/api/f",
+  // Supplier document requests (lib/documentRequests.ts): a supplier with no account uploads the paper asked for
+  // through an expiring, single-use, recallable link. The page takes nothing; the upload is a POST that checks the
+  // link, the file's own bytes and its size every time. See both routes' headers.
+  "/u",
+  "/api/u",
   "/api/unsubscribe", // one-click marketing unsubscribe
   // Tenant brand logos. Consumed by the login pages, which render pre-auth by
   // definition; the route itself only ever streams the object a platform admin

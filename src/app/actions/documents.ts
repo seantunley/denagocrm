@@ -1,6 +1,10 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { after } from "next/server";
+import { runInTenantScope } from "@/lib/tenantScope";
+import { readSupplierInvoice } from "@/lib/supplierInvoiceReader";
+import { isSupplierInvoice } from "@/lib/supplierInvoiceRules";
 import { prisma } from "@/lib/db";
 import { logAudit } from "@/lib/audit";
 import { softDeleteRecord } from "@/lib/trash";
@@ -207,6 +211,12 @@ export async function uploadDocument(formData: FormData) {
       ...(quote?.leadId ? { leadId: quote.leadId } : {}),
       user,
     });
+    // A supplier invoice is read for its number, dates and total — AFTER the response, so the upload never waits on
+    // the AI, and in the document's own workspace. What it reads waits for a person to confirm (lib/supplierInvoiceReader.ts).
+    if (isSupplierInvoice(chosen.type) && tenantId) {
+      const owner = tenantId;
+      after(() => runInTenantScope({ tenantId: owner, system: false }, () => readSupplierInvoice(doc.id, owner)).catch(() => {}));
+    }
     revalidatePath(String(formData.get("revalidate") ?? "/"));
     return { success: "Uploaded" };
   });
