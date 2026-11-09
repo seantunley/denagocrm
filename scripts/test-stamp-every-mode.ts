@@ -69,13 +69,16 @@ async function main() {
     __setTenantEnforcingForTests(false);
     // Review of #1041: in A's scope, a row naming B is REFUSED and nothing is written; A's own, or null, is A's.
     const foreign = `stamp.foreign.${SFX}`;
-    const refused = await inA(() =>
-      prisma.stockEvent.create({ data: { tenantId: b.tenantId, eventType: foreign, performedById: b.memberUserId, performedByName: "Harness B member" } }),
-    ).then(() => false, () => true);
+    // AWAITED INSIDE the scope: a Prisma query is lazy — returned un-awaited, it would run after the scope closed.
+    const refused = await inA(async () => {
+      await prisma.stockEvent.create({ data: { tenantId: b.tenantId, eventType: foreign, performedById: b.memberUserId, performedByName: "Harness B member" } });
+    }).then(() => false, () => true);
     const foreignRows = await basePrisma.stockEvent.count({ where: { eventType: foreign } });
     check("enforcement off: work in A's scope can't create a row owned by B", refused && foreignRows === 0, `refused=${refused} rows=${foreignRows}`);
     const ownNull = `stamp.null.${SFX}`;
-    await inA(() => prisma.stockEvent.create({ data: { tenantId: null, eventType: ownNull, performedById: a.memberUserId, performedByName: actor.name } }));
+    await inA(async () => {
+      await prisma.stockEvent.create({ data: { tenantId: null, eventType: ownNull, performedById: a.memberUserId, performedByName: actor.name } });
+    });
     const nullRow = await basePrisma.stockEvent.findFirst({ where: { eventType: ownNull }, select: { tenantId: true } });
     check("enforcement off: an explicit null in A's scope becomes A", nullRow?.tenantId === a.tenantId, JSON.stringify(nullRow));
 
