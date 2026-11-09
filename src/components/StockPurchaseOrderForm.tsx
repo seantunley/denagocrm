@@ -21,8 +21,11 @@ const blankLine = (): Line => ({
   notes: "",
 });
 
-/** `vendors`: the workspace's suppliers (Settings → Suppliers) — an order names one of them, not a typed name. */
-export default function StockPurchaseOrderForm({ products, vendors }: { products: Product[]; vendors: { id: string; name: string }[] }) {
+/**
+ * `vendors`: the workspace's suppliers (Settings → Suppliers) — an order names one of them. Null while the
+ * Suppliers module is off: the supplier is typed, as before the module.
+ */
+export default function StockPurchaseOrderForm({ products, vendors }: { products: Product[]; vendors: { id: string; name: string }[] | null }) {
   const moneyFmt = useMoneyFormat();
   const [lines, setLines] = useState<Line[]>([blankLine()]);
   const totalUnits = lines.reduce((sum, line) => sum + Math.max(0, line.qty || 0), 0);
@@ -58,10 +61,14 @@ export default function StockPurchaseOrderForm({ products, vendors }: { products
 
       <CaptureSection title="Order details" description="Supplier-facing reference and expected arrival information." icon={ShoppingCart}>
         <CaptureField label="Supplier *">
-          <select name="vendorId" className="input" required defaultValue="">
-            <option value="" disabled>{vendors.length ? "Choose the supplier" : "No suppliers yet — Settings → Suppliers"}</option>
-            {vendors.map((vendor) => <option key={vendor.id} value={vendor.id}>{vendor.name}</option>)}
-          </select>
+          {vendors ? (
+            <select name="vendorId" className="input" required defaultValue="">
+              <option value="" disabled>{vendors.length ? "Choose the supplier" : "No suppliers yet — Settings → Suppliers"}</option>
+              {vendors.map((vendor) => <option key={vendor.id} value={vendor.id}>{vendor.name}</option>)}
+            </select>
+          ) : (
+            <input name="supplier" className="input" required />
+          )}
         </CaptureField>
         <CaptureField label="Supplier order reference"><input name="reference" className="input" placeholder="PO / order number" /></CaptureField>
         <CaptureField label="Expected delivery"><input name="expectedAt" type="date" className="input" /></CaptureField>

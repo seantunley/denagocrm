@@ -9,15 +9,22 @@ import { asActionResult, refuse, type ActionResult } from "@/lib/actionResult";
 import { requireQuoteAccess } from "@/lib/permissions";
 import { normaliseVendorName, vendorKind } from "@/lib/vendors";
 import { dealKey, linkVendorToDeal } from "@/lib/dealVendors";
+import { isModuleEnabled } from "@/lib/modules/enabled";
 
 /** Settings → Suppliers: the businesses deals and purchase orders name. Owner only; every change audited. */
 
 const PAGE = "/settings/vendors";
+
+/** Every action here belongs to the Suppliers module: refused, with a reason, when the workspace hasn't got it. */
+async function requireSuppliers() {
+  if (!(await isModuleEnabled("suppliers"))) refuse("Suppliers aren't switched on for this workspace.");
+}
 const field = (formData: FormData, key: string, max: number) => String(formData.get(key) ?? "").trim().slice(0, max) || null;
 
 export async function saveVendor(id: string | null, formData: FormData): Promise<ActionResult> {
   return asActionResult(async () => {
     const user = await requireTenantOwner();
+    await requireSuppliers();
     const tenantId = await actingTenantId();
     const name = field(formData, "name", 120);
     if (!name) refuse("Give the supplier a name.");
@@ -55,6 +62,7 @@ export async function saveVendor(id: string | null, formData: FormData): Promise
 export async function deleteVendor(id: string, formData: FormData): Promise<ActionResult> {
   return asActionResult(async () => {
     const user = await requireTenantOwner();
+    await requireSuppliers();
     const tenantId = await actingTenantId();
     const reason = String(formData.get("reason") ?? "").trim() || "No reason given";
     const vendor = await prisma.vendor.findFirst({ where: { id, tenantId, deletedAt: null }, select: { name: true } });
@@ -69,6 +77,7 @@ export async function deleteVendor(id: string, formData: FormData): Promise<Acti
 /** The quote a deal-page change is made from, in the acting workspace, with its deal. Access checked first. */
 async function dealQuote(quoteId: string) {
   const user = await requireQuoteAccess(quoteId, "documents.upload");
+  await requireSuppliers();
   const tenantId = await actingTenantId();
   const quote = await prisma.quote.findFirst({ where: { id: quoteId, tenantId, deletedAt: null }, select: { id: true, number: true, leadId: true, contactId: true } });
   if (!quote) refuse("That quote is no longer there — refresh the page.");

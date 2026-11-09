@@ -66,7 +66,7 @@ export const SETTINGS_NAV_GROUPS: SettingsNavGroup[] = [
       { key: "activity-types", label: "Activity types", href: "/settings/activity-types", keywords: ["activity", "activities", "types", "task", "tasks", "diary", "calendar", "meeting", "call", "test drive", "golf day", "custom type", "location"] },
       { key: "quotes", label: "Quotes", keywords: ["quote defaults", "terms"] },
       // Owner-only (no `permission`): mirrors the page and action's requireTenantOwner().
-      { key: "vendors", label: "Suppliers", href: "/settings/vendors", keywords: ["suppliers", "vendors", "oem", "delivery company", "transport", "wrapping", "deal file", "supplier invoice", "proof of payment"] },
+      { key: "vendors", label: "Suppliers", href: "/settings/vendors", module: "suppliers", keywords: ["suppliers", "vendors", "oem", "delivery company", "transport", "wrapping", "deal file", "supplier invoice", "proof of payment"] },
       { key: "import", label: "Import", keywords: ["contacts", "csv", "upload"] },
     ],
   },

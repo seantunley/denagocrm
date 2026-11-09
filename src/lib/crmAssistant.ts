@@ -2869,7 +2869,7 @@ export async function resolveActions(
         label = types.find((type) => type.toLowerCase() === p.label!.trim().toLowerCase()) ?? null;
         if (!label) { problems.push(`"${p.label}" isn't one of your document types (${types.join(", ")}) — say which, or file it without one.`); continue; }
         // uploadDocument refuses a supplier document with no supplier named, and DAX can't name one — said now, not at Confirm.
-        if (isSupplierDocumentType(label)) { problems.push(`A ${label.toLowerCase()} has to name its supplier — upload it from the deal file, or file it here without a type.`); continue; }
+        if (isSupplierDocumentType(label) && (await isModuleEnabled("suppliers"))) { problems.push(`A ${label.toLowerCase()} has to name its supplier — upload it from the deal file, or file it here without a type.`); continue; }
       }
       cards.push({
         id: `a${index}-file`, kind: "attach_file", leadId: found.leadId, leadLabel: found.where,

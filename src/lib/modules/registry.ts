@@ -15,7 +15,8 @@ export type ModuleId =
   | "automotive"
   | "commerce"
   | "portal"
-  | "multicurrency";
+  | "multicurrency"
+  | "suppliers";
 
 export type AppModule = {
   id: ModuleId;
@@ -90,6 +91,13 @@ export const MODULE_REGISTRY: AppModule[] = [
     description: "Quote, invoice and take payment in each customer's currency; totals are shown per currency.",
     // No pages of its own: it adds a currency to leads and quotes wherever they appear.
     routePrefixes: [],
+  },
+  {
+    id: "suppliers",
+    label: "Suppliers",
+    description: "Suppliers on deals and purchase orders: each deal's file asks every supplier for its quote, invoice and proof of payment.",
+    // Settings → Suppliers. The rest of it lives inside the deal file, documents and purchase orders.
+    routePrefixes: ["/settings/vendors"],
   },
 ];
 
