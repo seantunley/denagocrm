@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 import { JOURNEY_EVENT_TRIGGERS } from "../src/lib/journeyTypes";
 import { JOURNEY_TRIGGER_LABELS } from "../src/lib/journeyTriggers";
 import { journeyTemplateVars } from "../src/lib/journeyContext";
-import { deliveryDateText } from "../src/lib/deliveryDate";
+import { deliveryDateText, staleDeliveryRunReason } from "../src/lib/deliveryDate";
 
 /**
  * Sean, 2026-11-09: "I want journey trigger for the a delivery is scheduled and must use the variable of schedule
@@ -30,12 +30,33 @@ test("it fires from both of the board's doors — schedule and move — with the
   assert.match(read("src/app/actions/assistant.ts"), /card\.from \? await rescheduleDelivery\(card\.quoteId, form\) : await scheduleDelivery\(card\.quoteId, form\)/);
 });
 
-test("each day is its own occurrence, and the event goes through the lead-or-customer hand-over", () => {
+test("each scheduling CHANGE is its own occurrence — 14th → 16th → 14th fires three times (review of #1044)", () => {
   const events = read("src/lib/leadJourneyEvents.ts");
   const body = events.slice(events.indexOf("export async function emitDeliveryScheduledJourneyEvent("));
   assert.match(body, /await emitForLeadOrContact\("delivery_scheduled", quote, \{/);
-  assert.match(body, /occurrence: `quote:\$\{quote\.id\}:delivery:\$\{scheduledFor\.toISOString\(\)\.slice\(0, 10\)\}`/);
+  assert.match(body, /const changeId = randomUUID\(\);/);
+  assert.match(body, /occurrence: `quote:\$\{quote\.id\}:delivery:\$\{changeId\}`/);
+  assert.match(body, /changeId,/);
   assert.match(body, /deliveryDateText: deliveryDateText\(scheduledFor\)/);
+  assert.doesNotMatch(body, /occurrence: `quote:\$\{quote\.id\}:delivery:\$\{scheduledFor/, "the day alone is not an occurrence");
+});
+
+test("a run from an earlier scheduling change stops before it sends (review of #1044)", () => {
+  const event = { type: "delivery_scheduled", quoteId: "q1", changeId: "c1", deliveryDate: "2026-11-14" };
+  assert.equal(staleDeliveryRunReason(event, { day: "2026-11-14", latestChangeId: "c1" }), null, "still the latest change");
+  // Moved to the 16th: stops, naming the day that now stands.
+  assert.match(staleDeliveryRunReason(event, { day: "2026-11-16", latestChangeId: "c2" }) ?? "", /scheduled again \(now Monday, 16 November 2026\)/);
+  // Moved away and BACK to the 14th: same day, newer change — still stops, or the customer hears it twice.
+  assert.match(staleDeliveryRunReason(event, { day: "2026-11-14", latestChangeId: "c3" }) ?? "", /a newer run speaks for it/);
+  assert.match(staleDeliveryRunReason(event, { day: null, latestChangeId: "c1" }) ?? "", /no longer scheduled/);
+  assert.match(staleDeliveryRunReason(event, undefined) ?? "", /is gone/);
+  assert.equal(staleDeliveryRunReason({ type: "lead_created" }, undefined), null, "other triggers are never stale here");
+
+  const runner = read("src/lib/journeyRuns.ts");
+  const guard = runner.indexOf("staleDeliveryRunReason(");
+  assert.ok(guard > runner.indexOf("const owned = await prisma.journeyRun.count") && guard < runner.indexOf("result = await executeJourneyStep({"), "checked in front of every action, before it runs");
+  assert.match(runner, /payload: \{ path: \["quoteId"\], equals: deliveryEvent\.quoteId \}/);
+  assert.match(runner, /if \(stale\) \{[\s\S]{0,200}return finish\(stale\);/);
 });
 
 test("{{delivery_date}} is the board's day, written out — the same day the board shows", () => {

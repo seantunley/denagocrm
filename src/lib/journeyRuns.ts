@@ -2,6 +2,7 @@ import { Prisma } from "@prisma/client";
 import { prisma } from "./db";
 import { logAudit } from "./audit";
 import { executeJourneyStep, resolveTopLevelNext } from "./journeyStepExecutor";
+import { deliveryDay, staleDeliveryRunReason } from "./deliveryDate";
 import {
   journeyTemplateVars,
   loadJourneyContext,
@@ -789,6 +790,33 @@ export async function processOneRun(runId: string, stop: StopSignal = NEVER_STOP
       // more send, which would need cooperative cancellation to close.
       const owned = await prisma.journeyRun.count({ where: { id: run.id, status: "running" } });
       if (owned === 0) return false;
+
+      // A DELIVERY run re-checks, in front of every action, that it still speaks for the latest scheduling change
+      // (review of #1044): scheduled again since — another day, or back to the same one — it stops rather than
+      // announce an outdated day; the change started a newer run.
+      const deliveryEvent = (context.event ?? null) as Record<string, unknown> | null;
+      if (deliveryEvent?.type === "delivery_scheduled" && typeof deliveryEvent.quoteId === "string") {
+        const [quote, latest] = await Promise.all([
+          prisma.quote.findFirst({
+            where: { id: deliveryEvent.quoteId, tenantId: run.tenantId, deletedAt: null },
+            select: { deliveryScheduledFor: true },
+          }),
+          prisma.journeyEvent.findFirst({
+            where: { tenantId: run.tenantId, type: "delivery_scheduled", payload: { path: ["quoteId"], equals: deliveryEvent.quoteId } },
+            orderBy: { createdAt: "desc" },
+            select: { payload: true },
+          }),
+        ]);
+        const latestChangeId = (latest?.payload as Record<string, unknown> | null)?.changeId;
+        const stale = staleDeliveryRunReason(
+          deliveryEvent,
+          quote ? { day: deliveryDay(quote.deliveryScheduledFor), latestChangeId: typeof latestChangeId === "string" ? latestChangeId : null } : undefined,
+        );
+        if (stale) {
+          await updateStepLog({ runId: run.id, path, stepId: step.id, stepType: step.type, status: "skipped", note: stale });
+          return finish(stale);
+        }
+      }
 
       await updateStepLog({ runId: run.id, path, stepId: step.id, stepType: step.type, status: "running" });
 
