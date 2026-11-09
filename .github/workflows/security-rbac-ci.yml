@@ -415,6 +415,12 @@ jobs:
       - name: Isolation -- an invoice prints its own workspace's layout and banking, with enforcement off
         run: npm run test:invoice-workspace
 
+      # Review of #1040, enforcement off then on: a new purchase order (and its lines and units) carries its
+      # workspace and shows in its supplier's history; another workspace's supplier is refused; the deal file
+      # lists every signature request, not the newest 20.
+      - name: Isolation -- purchase orders keep their workspace; the deal file lists every signature request
+        run: npm run test:supplier-orders
+
       - name: Run two-tenant end-to-end CRM isolation suite
         # Ordinary CRM flows run as two different tenants through the REAL scoped
         # client under the restricted role -- the regression guard for real-flow

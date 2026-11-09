@@ -17,6 +17,8 @@ import {
 import { authorizeDocumentTarget } from "@/lib/documentUploadAuth";
 import { DOCUMENT_TYPES_KEY, SYSTEM_DOCUMENT_TAGS, chosenDocumentType, isPersonLabel, parseDocumentTypes } from "@/lib/documentLabels";
 import { getSetting } from "@/lib/settings";
+import { isSupplierDocumentType } from "@/lib/dealFile";
+import { linkVendorToDeal } from "@/lib/dealVendors";
 import { actingOwnerTenantId } from "@/lib/actingScope";
 import { requiredReason } from "@/lib/deleteReason";
 import { DOC_DEFS, defaultTemplate, mergeTemplate, isDocKey } from "@/lib/docTemplates";
@@ -106,6 +108,33 @@ const NOT_A_TYPE = "That document type is not on the list any more — refresh t
 const SET_BY_CRM = "That document's label is set by the CRM and can't be changed.";
 
 /**
+ * The supplier a document is from (deal file, 2026-11-09): one of the workspace's own live suppliers, or none.
+ * A supplier quote, invoice or proof of payment must name one — the deal file asks for all three PER supplier.
+ * `tenantId` is the workspace that owns the record the document is filed against: a supplier from another
+ * workspace is refused like an unknown id.
+ */
+async function chosenVendorId(posted: unknown, type: string | null, tenantId: string | null): Promise<string | null> {
+  const wanted = String(posted ?? "").trim();
+  if (!wanted) {
+    if (isSupplierDocumentType(type)) refuse("Choose which supplier it is from — an owner adds suppliers in Settings → Suppliers.");
+    return null;
+  }
+  const vendor = tenantId ? await prisma.vendor.findFirst({ where: { id: wanted, tenantId, deletedAt: null }, select: { id: true } }) : null;
+  if (!vendor) refuse("That supplier is not on the list any more — refresh the page and choose again.");
+  return vendor.id;
+}
+
+/**
+ * Put a document's supplier on its deal (DealVendor). After the document is saved, so a failure here is logged
+ * and the upload still stands — the supplier still counts on the checklist through the document itself.
+ */
+async function dealSupplierFrom(quote: { id: string; leadId: string | null }, vendorId: string, tenantId: string, userId: string) {
+  await linkVendorToDeal({ tenantId, quote, vendorId, userId }).catch((error) =>
+    logError("deal-supplier-link", error, `quote=${quote.id}`, { tenantId, alert: false }),
+  );
+}
+
+/**
  * Whose trail a change to a document belongs on.
  *
  * A file uploaded against a QUOTE carries the quote and no customer, so an entry
@@ -140,6 +169,8 @@ export async function uploadDocument(formData: FormData) {
     // `tenantId: null` — `scopeArgs` injects nothing while enforcement is dormant,
     // so an omitted tenantId is a null, not a default.
     const tenantId = await uploadTargetTenantId(target);
+    // Before the file is stored, like the type: a refusal leaves nothing behind.
+    const vendorId = await chosenVendorId(formData.get("vendorId"), chosen.type, tenantId);
     const storedName = await saveFile(buffer, file.name, mimeType, tenantId);
 
     const doc = await prisma.document.create({
@@ -155,16 +186,19 @@ export async function uploadDocument(formData: FormData) {
         jobCardId: target.kind === "jobCard" ? target.jobCardId : null,
         quoteId: target.kind === "quote" ? target.quoteId : null,
         tag: chosen.type,
+        vendorId,
         uploadedById: user.id,
       },
-      include: { vehicle: true, jobCard: true },
+      include: { vehicle: true, jobCard: true, vendor: { select: { name: true } } },
     });
     // Filed against a quote: said so in the trail, on that quote's customer and deal
     // (the quote is the one record this upload was authorised against).
-    const quote = doc.quoteId ? await prisma.quote.findUnique({ where: { id: doc.quoteId }, select: { number: true, contactId: true, leadId: true } }) : null;
+    const quote = doc.quoteId ? await prisma.quote.findUnique({ where: { id: doc.quoteId }, select: { id: true, number: true, contactId: true, leadId: true } }) : null;
+    // A supplier's paper on a deal puts that supplier on the deal, so its file asks for the rest of its papers.
+    if (quote && vendorId && tenantId) await dealSupplierFrom(quote, vendorId, tenantId, user.id);
     await logAudit({
       action: "document.uploaded",
-      summary: `Uploaded document “${file.name}”${chosen.type ? ` as ${chosen.type}` : ""}${quote ? ` against Q-${quote.number}` : ""}`,
+      summary: `Uploaded document “${file.name}”${chosen.type ? ` as ${chosen.type}` : ""}${doc.vendor ? ` from ${doc.vendor.name}` : ""}${quote ? ` against Q-${quote.number}` : ""}`,
       contactId: doc.contactId ?? doc.vehicle?.contactId ?? doc.jobCard?.contactId ?? quote?.contactId,
       ...(quote?.leadId ? { leadId: quote.leadId } : {}),
       user,
@@ -289,15 +323,22 @@ export async function relabelDocument(id: string, revalidate: string, formData: 
     const user = await requireDocumentAccess(id, "documents.upload");
     const chosen = chosenDocumentType(formData.get("label"), parseDocumentTypes(await getSetting(DOCUMENT_TYPES_KEY)));
     if (!chosen.ok) refuse(NOT_A_TYPE);
+    const owner = await prisma.document.findUnique({ where: { id }, select: { tenantId: true, vendorId: true } });
+    // A form with no supplier field (a page that doesn't show suppliers) keeps the one already named.
+    const vendorId = await chosenVendorId(formData.has("vendorId") ? formData.get("vendorId") : owner?.vendorId, chosen.type, owner?.tenantId ?? null);
     const changed = await prisma.document.updateMany({
       where: { id, deletedAt: null, OR: [{ tag: null }, { tag: { notIn: [...SYSTEM_DOCUMENT_TAGS] } }] },
-      data: { tag: chosen.type },
+      data: { tag: chosen.type, vendorId },
     });
     if (changed.count !== 1) refuse(SET_BY_CRM);
-    const doc = await prisma.document.findUnique({ where: { id }, select: { fileName: true, contactId: true, quoteId: true } });
+    const doc = await prisma.document.findUnique({ where: { id }, select: { fileName: true, contactId: true, quoteId: true, vendor: { select: { name: true } } } });
+    if (doc?.quoteId && vendorId && owner?.tenantId) {
+      const quote = await prisma.quote.findUnique({ where: { id: doc.quoteId }, select: { id: true, leadId: true } });
+      if (quote) await dealSupplierFrom(quote, vendorId, owner.tenantId, user.id);
+    }
     await logAudit({
       action: "document.relabelled",
-      summary: `Labelled document “${doc?.fileName ?? "document"}” ${chosen.type ? `as ${chosen.type}` : "as not labelled"}`,
+      summary: `Labelled document “${doc?.fileName ?? "document"}” ${chosen.type ? `as ${chosen.type}` : "as not labelled"}${doc?.vendor ? ` from ${doc.vendor.name}` : ""}`,
       ...(doc ? await documentTrail(doc) : {}),
       user,
     });
@@ -633,6 +674,7 @@ export async function replaceDocument(id: string, formData: FormData) {
         // verbatim: see replacementOwnerTenantId.
         tenantId,
         tag: old.tag,
+        vendorId: old.vendorId,
         uploadedById: user.id,
       },
     });

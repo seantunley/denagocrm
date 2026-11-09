@@ -65,6 +65,9 @@ test("upload: the type is checked before the file is stored, and saved as the do
   // Still exactly one authorised target — the quote OR the customer, never both.
   assert.match(actions, /if \(providedCount > 1\) \{\s*throw new Error\("A document can be filed against only one record\."\);/);
   assert.match(upload, /quoteId: target\.kind === "quote" \? target\.quoteId : null,/);
+  // The supplier is checked against the target's workspace before the file is stored, like the type.
+  assert.match(upload, /const vendorId = await chosenVendorId\(formData\.get\("vendorId"\), chosen\.type, tenantId\);/);
+  assert.ok(upload.indexOf("chosenVendorId(") < upload.indexOf("await saveFile("), "a refused supplier leaves no stored file behind");
 });
 
 test("relabel: only a document they can open, by someone who may upload, only to a listed type, and never over a tag the CRM wrote", () => {
@@ -74,7 +77,10 @@ test("relabel: only a document they can open, by someone who may upload, only to
   assert.match(relabel, /const user = await requireDocumentAccess\(id, "documents\.upload"\);/);
   assert.match(relabel, /if \(!chosen\.ok\) refuse\(NOT_A_TYPE\);/);
   // The update itself cannot match a row carrying a system tag, whatever the form says.
-  assert.match(relabel, /where: \{ id, deletedAt: null, OR: \[\{ tag: null \}, \{ tag: \{ notIn: \[\.\.\.SYSTEM_DOCUMENT_TAGS\] \} \}\] \},\s*data: \{ tag: chosen\.type \},/);
+  assert.match(relabel, /where: \{ id, deletedAt: null, OR: \[\{ tag: null \}, \{ tag: \{ notIn: \[\.\.\.SYSTEM_DOCUMENT_TAGS\] \} \}\] \},\s*data: \{ tag: chosen\.type, vendorId \},/);
+  // The supplier (deal file): one of the record's own workspace's, checked before the write; kept when the form doesn't offer one.
+  assert.match(relabel, /chosenVendorId\(formData\.has\("vendorId"\) \? formData\.get\("vendorId"\) : owner\?\.vendorId, chosen\.type, owner\?\.tenantId \?\? null\)/);
+  assert.ok(relabel.indexOf("chosenVendorId(") < relabel.indexOf("prisma.document.updateMany("));
   assert.match(relabel, /if \(changed\.count !== 1\) refuse\(/);
   assert.match(relabel, /action: "document\.relabelled",/);
   assert.ok(relabel.indexOf("requireDocumentAccess(") < relabel.indexOf("prisma.document.updateMany("));
@@ -111,7 +117,7 @@ test("a change to a document filed against a QUOTE is recorded on that quote's c
   assert.match(trail, /if \(doc\.contactId\) return \{ contactId: doc\.contactId \};/);
   assert.match(trail, /prisma\.quote\.findUnique\(\{ where: \{ id: doc\.quoteId \}, select: \{ contactId: true, leadId: true \} \}\)/);
   const relabel = actions.slice(actions.indexOf("export async function relabelDocument("), actions.indexOf("export async function deleteDocument("));
-  assert.match(relabel, /select: \{ fileName: true, contactId: true, quoteId: true \}/);
+  assert.match(relabel, /select: \{ fileName: true, contactId: true, quoteId: true, vendor: \{ select: \{ name: true \} \} \}/);
   assert.match(relabel, /\.\.\.\(doc \? await documentTrail\(doc\) : \{\}\),/);
   assert.doesNotMatch(relabel, /contactId: doc\?\.contactId,/);
   const rename = actions.slice(actions.indexOf("export async function renameDocument("), actions.indexOf("export async function moveDocument("));
@@ -120,12 +126,17 @@ test("a change to a document filed against a QUOTE is recorded on that quote's c
 
 test("the form: a dropdown of the workspace's types and of the customer's quotes — one target, and no free text", () => {
   const fields = code("src/components/DocumentUploadFields.tsx");
-  assert.match(fields, /<select name="label" defaultValue="" className="input h-9 text-sm">/);
+  assert.match(fields, /<select name="label" value=\{label\} onChange=\{\(event\) => setLabel\(event\.target\.value\)\} className="input h-9 text-sm">/);
   assert.doesNotMatch(fields, /<input[^>]*name="label"|datalist/, "a dropdown, not a box to type in");
   // The quote REPLACES the customer as the target: never both in one form.
   assert.match(fields, /\{quoteId \? <input type="hidden" name="quoteId" value=\{quoteId\} \/> : contactId \? <input type="hidden" name="contactId" value=\{contactId\} \/> : null\}/);
   const panel = code("src/components/DocumentsPanel.tsx");
-  assert.match(panel, /<DocumentUploadFields types=\{types\} quotes=\{fileAgainst\} contactId=\{contactId\} \/>/);
+  assert.match(panel, /<DocumentUploadFields types=\{types\} quotes=\{fileAgainst\} contactId=\{contactId\} vendors=\{vendors\} defaultQuoteId=\{defaultQuoteId\} \/>/);
+  // The deal file passes no customer, so a quote is always the target there.
+  assert.match(fields, /\{contactId && <option value="">The customer \(no quote\)<\/option>\}/);
+  // The supplier is asked for only on a supplier quote, invoice or proof of payment (Sean: "Can this be conditional?").
+  assert.match(fields, /\{vendors && isSupplierDocumentType\(label\) && <SupplierSelect vendors=\{vendors\} \/>\}/);
+  assert.match(fields, /isSupplierDocumentType\(label\) \? <SupplierSelect vendors=\{vendors\} current=\{currentVendor\} \/> : <input type="hidden" name="vendorId" value="" \/>/);
   assert.doesNotMatch(panel, /\{contactId && <input type="hidden" name="contactId"/, "the panel no longer adds the customer itself");
   // A quote a revision replaced is not offered.
   assert.match(panel, /\.filter\(\(group\) => !group\.superseded\)\.map\(\(group\) => \(\{ id: group\.id, label: `Q-\$\{group\.number\} \(\$\{group\.status\}\)` \}\)\)/);

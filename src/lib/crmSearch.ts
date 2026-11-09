@@ -188,11 +188,12 @@ export async function searchCrm(user: PermissionUser, rawTerm: string, options: 
       ? prisma.document.findMany({
           where: {
             ...scoped(documentIds),
-            OR: [{ fileName: contains }, { tag: contains }],
+            // The supplier's name finds its papers too ("Wrap Co invoice").
+            OR: [{ fileName: contains }, { tag: contains }, { vendor: { is: { name: contains } } }],
             deletedAt: null,
             ...(automotiveOn ? {} : { NOT: { OR: [{ vehicleId: { not: null } }, { jobCardId: { not: null } }, { tag: { in: [...AUTOMOTIVE_DELIVERY_TAGS] } }] } }),
           },
-          select: { id: true, fileName: true, tag: true, contact: { select: { firstName: true, lastName: true, company: true, isCompany: true } }, vehicle: { select: { model: true } } },
+          select: { id: true, fileName: true, tag: true, quoteId: true, vendor: { select: { name: true } }, contact: { select: { firstName: true, lastName: true, company: true, isCompany: true } }, vehicle: { select: { model: true } } },
           orderBy: { createdAt: "desc" },
           take,
         })
@@ -209,10 +210,19 @@ export async function searchCrm(user: PermissionUser, rawTerm: string, options: 
   // Names for the messages' and activities' customers and deals, in two reads.
   const leadIdsUsed = [...new Set([...shownMessages, ...activities].map((r) => r.leadId).filter((id): id is string => Boolean(id)))];
   const contactIdsUsed = [...new Set([...shownMessages, ...activities].map((r) => r.contactId).filter((id): id is string => Boolean(id)))];
-  const [leadNames, contactNames] = await Promise.all([
+  // The deal a document is filed on, so a result says "Q-1029 · Mrs Smith" rather than "Unfiled".
+  const docQuoteIds = [...new Set(documents.map((d) => d.quoteId).filter((id): id is string => Boolean(id)))];
+  const [leadNames, contactNames, docQuotes] = await Promise.all([
     leadIdsUsed.length ? prisma.lead.findMany({ where: { id: { in: leadIdsUsed } }, select: { id: true, title: true, name: true } }) : [],
     contactIdsUsed.length ? prisma.contact.findMany({ where: { id: { in: contactIdsUsed } }, select: { id: true, firstName: true, lastName: true, company: true, isCompany: true } }) : [],
+    docQuoteIds.length
+      ? prisma.quote.findMany({
+          where: { id: { in: docQuoteIds } },
+          select: { id: true, number: true, lead: { select: { name: true } }, contact: { select: { firstName: true, lastName: true, company: true, isCompany: true } } },
+        })
+      : [],
   ]);
+  const docDeal = new Map(docQuotes.map((q) => [q.id, [`Q-${q.number}`, q.contact ? contactName(q.contact) : q.lead?.name].filter(Boolean).join(" · ")]));
   const leadName = new Map(leadNames.map((l) => [l.id, l.title || l.name]));
   const customerName = new Map(contactNames.map((c) => [c.id, contactName(c)]));
   const whose = (r: { leadId: string | null; contactId: string | null }) =>
@@ -237,7 +247,7 @@ export async function searchCrm(user: PermissionUser, rawTerm: string, options: 
       href: recordHref(m),
     })),
     ...activities.map((a) => ({ type: "activity" as const, id: a.id, label: a.summary, sublabel: [a.type, day(a.dueDate), a.leadId || a.contactId ? whose(a) : null].filter(Boolean).join(" · "), snippet: a.note ? snippetAround(a.note, stems, 160) : undefined, href: recordHref(a, "activities") })),
-    ...documents.map((d) => ({ type: "document" as const, id: d.id, label: d.fileName, sublabel: [d.tag, d.contact ? contactName(d.contact) : d.vehicle?.model ?? "Unfiled"].filter(Boolean).join(" · "), href: `/api/files/${d.id}`, newTab: true })),
+    ...documents.map((d) => ({ type: "document" as const, id: d.id, label: d.fileName, sublabel: [d.tag, d.vendor?.name, (d.quoteId && docDeal.get(d.quoteId)) || (d.contact ? contactName(d.contact) : d.vehicle?.model ?? "Unfiled")].filter(Boolean).join(" · "), href: `/api/files/${d.id}`, newTab: true })),
     ...products.map((p) => ({ type: "product" as const, id: p.id, label: p.name, sublabel: formatZAR(p.basePriceCents, moneyFmt), href: `/products/${p.id}` })),
     ...knowledge.map((k) => ({ type: "knowledge" as const, id: k.id, label: k.title, sublabel: k.sourceLabel ?? "Approved answer", snippet: snippetAround(k.content, stems, 200), href: "/chatbot/knowledge" })),
   ];

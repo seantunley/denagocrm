@@ -49,7 +49,8 @@ export type RestoreOnlyModel =
   | "docBuilderTemplate"
   | "customDocTemplate"
   | "docInstance"
-  | "reusableBlock";
+  | "reusableBlock"
+  | "vendor";
 
 export const RESTORE_ONLY_MODELS: RestoreOnlyModel[] = [
   "fleet",
@@ -63,6 +64,7 @@ export const RESTORE_ONLY_MODELS: RestoreOnlyModel[] = [
   "customDocTemplate",
   "docInstance",
   "reusableBlock",
+  "vendor",
 ];
 
 export type RestorableModel = TrashModel | RestoreOnlyModel;

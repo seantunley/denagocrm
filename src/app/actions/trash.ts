@@ -28,6 +28,7 @@ const LIST_PATH: Record<RestorableModel, string> = {
   customDocTemplate: "/document-studio",
   docInstance: "/document-studio",
   reusableBlock: "/document-studio",
+  vendor: "/settings/vendors",
 };
 
 export async function restoreFromTrash(model: RestorableModel, id: string) {

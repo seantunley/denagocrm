@@ -74,36 +74,6 @@
       ]
     }
   },
-  "BotFlowEvaluation.BotFlowEvaluation_tenant_flow_fkey": {
-    "table": "BotFlowEvaluation",
-    "constraint": "BotFlowEvaluation_tenant_flow_fkey",
-    "columns": [
-      "tenantId",
-      "flowId"
-    ],
-    "references": {
-      "table": "BotFlow",
-      "columns": [
-        "tenantId",
-        "id"
-      ]
-    }
-  },
-  "BotFlowEvaluation.BotFlowEvaluation_tenant_flowVersion_fkey": {
-    "table": "BotFlowEvaluation",
-    "constraint": "BotFlowEvaluation_tenant_flowVersion_fkey",
-    "columns": [
-      "tenantId",
-      "flowVersionId"
-    ],
-    "references": {
-      "table": "BotFlowVersion",
-      "columns": [
-        "tenantId",
-        "id"
-      ]
-    }
-  },
   "BatteryCheck.BatteryCheck_tenantId_jobCardId_fkey": {
     "table": "BatteryCheck",
     "constraint": "BatteryCheck_tenantId_jobCardId_fkey",
@@ -128,6 +98,36 @@
     ],
     "references": {
       "table": "Vehicle",
+      "columns": [
+        "tenantId",
+        "id"
+      ]
+    }
+  },
+  "BotFlowEvaluation.BotFlowEvaluation_tenant_flowVersion_fkey": {
+    "table": "BotFlowEvaluation",
+    "constraint": "BotFlowEvaluation_tenant_flowVersion_fkey",
+    "columns": [
+      "tenantId",
+      "flowVersionId"
+    ],
+    "references": {
+      "table": "BotFlowVersion",
+      "columns": [
+        "tenantId",
+        "id"
+      ]
+    }
+  },
+  "BotFlowEvaluation.BotFlowEvaluation_tenant_flow_fkey": {
+    "table": "BotFlowEvaluation",
+    "constraint": "BotFlowEvaluation_tenant_flow_fkey",
+    "columns": [
+      "tenantId",
+      "flowId"
+    ],
+    "references": {
+      "table": "BotFlow",
       "columns": [
         "tenantId",
         "id"
@@ -691,6 +691,51 @@
       ]
     }
   },
+  "DealVendor.DealVendor_tenantId_leadId_fkey": {
+    "table": "DealVendor",
+    "constraint": "DealVendor_tenantId_leadId_fkey",
+    "columns": [
+      "tenantId",
+      "leadId"
+    ],
+    "references": {
+      "table": "Lead",
+      "columns": [
+        "tenantId",
+        "id"
+      ]
+    }
+  },
+  "DealVendor.DealVendor_tenantId_quoteId_fkey": {
+    "table": "DealVendor",
+    "constraint": "DealVendor_tenantId_quoteId_fkey",
+    "columns": [
+      "tenantId",
+      "quoteId"
+    ],
+    "references": {
+      "table": "Quote",
+      "columns": [
+        "tenantId",
+        "id"
+      ]
+    }
+  },
+  "DealVendor.DealVendor_tenantId_vendorId_fkey": {
+    "table": "DealVendor",
+    "constraint": "DealVendor_tenantId_vendorId_fkey",
+    "columns": [
+      "tenantId",
+      "vendorId"
+    ],
+    "references": {
+      "table": "Vendor",
+      "columns": [
+        "tenantId",
+        "id"
+      ]
+    }
+  },
   "DocBuilderTemplate.DocBuilderTemplate_tenantId_defaultWorkflowId_fkey": {
     "table": "DocBuilderTemplate",
     "constraint": "DocBuilderTemplate_tenantId_defaultWorkflowId_fkey",
@@ -850,6 +895,21 @@
     ],
     "references": {
       "table": "Vehicle",
+      "columns": [
+        "tenantId",
+        "id"
+      ]
+    }
+  },
+  "Document.Document_tenantId_vendorId_fkey": {
+    "table": "Document",
+    "constraint": "Document_tenantId_vendorId_fkey",
+    "columns": [
+      "tenantId",
+      "vendorId"
+    ],
+    "references": {
+      "table": "Vendor",
       "columns": [
         "tenantId",
         "id"
@@ -1360,6 +1420,21 @@
     ],
     "references": {
       "table": "Product",
+      "columns": [
+        "tenantId",
+        "id"
+      ]
+    }
+  },
+  "PurchaseOrder.PurchaseOrder_tenantId_vendorId_fkey": {
+    "table": "PurchaseOrder",
+    "constraint": "PurchaseOrder_tenantId_vendorId_fkey",
+    "columns": [
+      "tenantId",
+      "vendorId"
+    ],
+    "references": {
+      "table": "Vendor",
       "columns": [
         "tenantId",
         "id"

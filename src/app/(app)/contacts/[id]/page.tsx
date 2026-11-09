@@ -108,7 +108,7 @@ export default async function ContactDetailPage({
     include: {
       vehicles: { where: { deletedAt: null }, include: { serviceRecords: true, mileageLogs: true } },
       leads: { where: { deletedAt: null }, include: { stage: true, product: true, createdBy: true }, orderBy: { createdAt: "desc" } },
-      documents: { where: { deletedAt: null }, include: { uploadedBy: true }, orderBy: { createdAt: "desc" } },
+      documents: { where: { deletedAt: null }, include: { uploadedBy: true, vendor: { select: { id: true, name: true } } }, orderBy: { createdAt: "desc" } },
       // Quotes are shown ALONGSIDE the files in the Documents tab. Previously the
       // tab listed only Document rows, so a quote only appeared once somebody had
       // generated or uploaded a PDF for it — and an accepted, signed quote with no
@@ -156,7 +156,7 @@ export default async function ContactDetailPage({
   const quoteDocuments = contact.quotes.length
     ? await prisma.document.findMany({
         where: { quoteId: { in: contact.quotes.map((quote) => quote.id) }, deletedAt: null },
-        include: { uploadedBy: true },
+        include: { uploadedBy: true, vendor: { select: { id: true, name: true } } },
         orderBy: { createdAt: "desc" },
       })
     : [];

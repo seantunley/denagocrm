@@ -74,6 +74,7 @@ import { applyLearn, loadLearned, loadPlaybook, markNotesUsed, saveDecision, vis
 import { checkBacksOn, setCheckBacks, type CheckBack } from "./proactiveFollowUp";
 import { findExistingContact } from "./contactMatch";
 import { DOCUMENT_TYPES_KEY, parseDocumentTypes } from "./documentLabels";
+import { isSupplierDocumentType } from "./dealFile";
 import { paymentMethodLabel } from "./accountStatement";
 import { carriedUpload, holdUpload, linkUpload, photoUpload, uploadImage } from "./assistantUpload";
 import { actingTenantId } from "./actingTenant";
@@ -2867,6 +2868,8 @@ export async function resolveActions(
         const types = parseDocumentTypes(await getSetting(DOCUMENT_TYPES_KEY));
         label = types.find((type) => type.toLowerCase() === p.label!.trim().toLowerCase()) ?? null;
         if (!label) { problems.push(`"${p.label}" isn't one of your document types (${types.join(", ")}) — say which, or file it without one.`); continue; }
+        // uploadDocument refuses a supplier document with no supplier named, and DAX can't name one — said now, not at Confirm.
+        if (isSupplierDocumentType(label)) { problems.push(`A ${label.toLowerCase()} has to name its supplier — upload it from the deal file, or file it here without a type.`); continue; }
       }
       cards.push({
         id: `a${index}-file`, kind: "attach_file", leadId: found.leadId, leadLabel: found.where,
