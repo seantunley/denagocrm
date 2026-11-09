@@ -491,7 +491,7 @@ function StepFields({ step, onChange, depth, lists, hideNested = false }: { step
             {lists.templates.map((template) => <option key={template.id} value={template.id}>{template.name}</option>)}
           </select>
           <input className="input" placeholder="Email subject" value={String(config.subject ?? "")} onChange={(e) => set("subject", e.target.value)} />
-          <textarea className="input min-h-28" placeholder="Email body. Use {{first_name}}, {{name}}, {{model}}, {{value}}." value={String(config.body ?? "")} onChange={(e) => set("body", e.target.value)} />
+          <textarea className="input min-h-28" placeholder="Email body. Use {{first_name}}, {{name}}, {{model}}, {{value}} — and {{delivery_date}} on a delivery trigger." value={String(config.body ?? "")} onChange={(e) => set("body", e.target.value)} />
         </div>
       );
     case "send_sms":

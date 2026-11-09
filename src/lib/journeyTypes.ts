@@ -14,6 +14,8 @@ export const JOURNEY_EVENT_TRIGGERS = [
   "lead_lost",
   "quote_signed",
   "quote_declined",
+  // The deliveries board's Schedule / Move delivery (and DAX through them): {{delivery_date}} in its messages.
+  "delivery_scheduled",
   "delivered",
   "referral_earned",
   // Contact events (emitContactJourneyEvent). They used to fire the Google review

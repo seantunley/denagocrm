@@ -192,6 +192,9 @@ export function journeyTemplateVars(context: JourneyContext): Record<string, str
     model: String(event.model ?? lead.productName ?? "your purchase"),
     // Set by the purchase_anniversary scheduler; empty for every other trigger.
     years: String(event.years ?? ""),
+    // The day on the deliveries board ("Saturday, 14 November 2026"), from the delivery_scheduled trigger; empty
+    // for every other trigger.
+    delivery_date: String(event.deliveryDateText ?? ""),
     stage: String(lead.stageName ?? ""),
     value: String(Math.round(Number(lead.valueCents ?? 0) / 100)),
     // {{currency}}: the ISO code {{value}} is in — "ZAR", "RUB" (multicurrency module).

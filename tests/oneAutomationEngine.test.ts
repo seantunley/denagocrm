@@ -238,7 +238,8 @@ const EMITTED_EVENT_TRIGGERS = (() => {
     // lead (a job card completed, a vehicle delivered) — same gate, same contract.
     // emitQuoteJourneyEvent and emitTestDriveJourneyEvent are those same two,
     // chosen by whether the quote or booking has a lead (asserted just below).
-    for (const [, trigger] of shipped(rel).matchAll(/emit(?:Lead|Contact|Quote|TestDrive)JourneyEvent\(\s*"([a-z_]+)"/g)) {
+    // emitForLeadOrContact is the hand-over those two (and the delivery one) use; a literal trigger there is an emit.
+    for (const [, trigger] of shipped(rel).matchAll(/emit(?:(?:Lead|Contact|Quote|TestDrive)JourneyEvent|ForLeadOrContact)\(\s*"([a-z_]+)"/g)) {
       found.add(trigger);
     }
   }
