@@ -19,6 +19,25 @@ export const vendorKindLabel = (kind: string): string =>
 // Company-form words that don't make a business different: "Wrap Studio (Pty) Ltd" is "Wrap Studio".
 const LEGAL_SUFFIXES = new Set(["pty", "ltd", "limited", "proprietary", "cc", "inc", "llc", "plc", "npc", "soc"]);
 
+/**
+ * The supplier someone NAMED ("file this as Wrap Studio's invoice"), among the workspace's own. The same name
+ * (normalised) wins; otherwise one supplier whose name contains the words said, or is contained by them ("Wrap" →
+ * "Wrap Studio"). Two such, or none: no guess — the caller asks which.
+ */
+export function matchVendorByName<V extends { name: string }>(said: string, vendors: readonly V[]): { vendor: V } | { ambiguous: V[] } | { none: true } {
+  const wanted = normaliseVendorName(said);
+  if (!wanted) return { none: true };
+  const exact = vendors.filter((vendor) => normaliseVendorName(vendor.name) === wanted);
+  if (exact.length === 1) return { vendor: exact[0] };
+  if (exact.length > 1) return { ambiguous: exact };
+  const near = vendors.filter((vendor) => {
+    const name = normaliseVendorName(vendor.name);
+    return name.includes(wanted) || wanted.includes(name);
+  });
+  if (near.length === 1) return { vendor: near[0] };
+  return near.length ? { ambiguous: near } : { none: true };
+}
+
 /** The name two suppliers are compared by: lower case, no punctuation, no company-form words. */
 export function normaliseVendorName(name: string): string {
   return name
