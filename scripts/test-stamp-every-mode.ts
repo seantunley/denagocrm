@@ -9,7 +9,8 @@
  *
  * Two real workspaces. In both modes, work running in A's scope:
  *   - a stock timeline event (one of the 55, written with no tenantId) lands in A;
- *   - a create that NAMES a workspace keeps it — the not-enforcing stamp only fills, never overrides;
+ *   - with enforcement off, a create naming ANOTHER workspace is refused and writes nothing (review of #1041),
+ *     and an explicit null becomes A;
  *   - a staff-attributed audit entry with NO session (the WhatsApp case) lands in A.
  * And with no scope at all, nothing is guessed: the row stays without a workspace rather than going to the
  * founding one.
@@ -66,11 +67,17 @@ async function main() {
     }
 
     __setTenantEnforcingForTests(false);
-    // Only fills: a tenantId the caller names is kept. (Enforcement off; under enforcement the guard overrides.)
-    const named = `stamp.named.${SFX}`;
-    await inA(() => prisma.stockEvent.create({ data: { tenantId: b.tenantId, eventType: named, performedById: b.memberUserId, performedByName: "Harness B member" } }));
-    const namedRow = await basePrisma.stockEvent.findFirst({ where: { eventType: named }, select: { tenantId: true } });
-    check("enforcement off: a create that names its workspace keeps it", namedRow?.tenantId === b.tenantId, JSON.stringify(namedRow));
+    // Review of #1041: in A's scope, a row naming B is REFUSED and nothing is written; A's own, or null, is A's.
+    const foreign = `stamp.foreign.${SFX}`;
+    const refused = await inA(() =>
+      prisma.stockEvent.create({ data: { tenantId: b.tenantId, eventType: foreign, performedById: b.memberUserId, performedByName: "Harness B member" } }),
+    ).then(() => false, () => true);
+    const foreignRows = await basePrisma.stockEvent.count({ where: { eventType: foreign } });
+    check("enforcement off: work in A's scope can't create a row owned by B", refused && foreignRows === 0, `refused=${refused} rows=${foreignRows}`);
+    const ownNull = `stamp.null.${SFX}`;
+    await inA(() => prisma.stockEvent.create({ data: { tenantId: null, eventType: ownNull, performedById: a.memberUserId, performedByName: actor.name } }));
+    const nullRow = await basePrisma.stockEvent.findFirst({ where: { eventType: ownNull }, select: { tenantId: true } });
+    check("enforcement off: an explicit null in A's scope becomes A", nullRow?.tenantId === a.tenantId, JSON.stringify(nullRow));
 
     // No scope: nothing to give, and nothing guessed.
     const unscoped = `stamp.unscoped.${SFX}`;

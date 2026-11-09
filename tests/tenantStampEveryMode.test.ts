@@ -4,23 +4,24 @@ import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import ts from "typescript";
-import { fillMissingTenant } from "../src/lib/tenantGuard";
+import { stampScopeTenant, TenantScopeError } from "../src/lib/tenantGuard";
 
 /**
  * A NEW ROW GETS ITS WORKSPACE IN EVERY MODE (2026-11-09) — the unit half; the database half, with enforcement
  * off and on, is scripts/test-stamp-every-mode.ts.
  */
 
-test("fill: a row with no tenantId gets the scope's, one row or many", () => {
-  assert.deepEqual(fillMissingTenant({ data: { a: 1 } }, "data", "t1"), { data: { a: 1, tenantId: "t1" } });
-  assert.deepEqual(fillMissingTenant({ data: [{ a: 1 }, { a: 2 }] }, "data", "t1"), { data: [{ a: 1, tenantId: "t1" }, { a: 2, tenantId: "t1" }] });
-  assert.deepEqual(fillMissingTenant({ where: { id: "x" }, create: { a: 1 }, update: {} }, "create", "t1"), { where: { id: "x" }, create: { a: 1, tenantId: "t1" }, update: {} });
+test("stamp: a row with no tenantId, or null, gets the scope's — one row or many", () => {
+  assert.deepEqual(stampScopeTenant({ data: { a: 1 } }, "data", "t1"), { data: { a: 1, tenantId: "t1" } });
+  assert.deepEqual(stampScopeTenant({ data: { tenantId: null } }, "data", "t1"), { data: { tenantId: "t1" } });
+  assert.deepEqual(stampScopeTenant({ data: [{ a: 1 }, { a: 2, tenantId: "t1" }] }, "data", "t1"), { data: [{ a: 1, tenantId: "t1" }, { a: 2, tenantId: "t1" }] });
+  assert.deepEqual(stampScopeTenant({ where: { id: "x" }, create: { a: 1 }, update: {} }, "create", "t1"), { where: { id: "x" }, create: { a: 1, tenantId: "t1" }, update: {} });
 });
 
-test("fill: a tenantId the caller named — even null — is never overridden", () => {
-  assert.deepEqual(fillMissingTenant({ data: { tenantId: "t2" } }, "data", "t1"), { data: { tenantId: "t2" } });
-  assert.deepEqual(fillMissingTenant({ data: { tenantId: null } }, "data", "t1"), { data: { tenantId: null } });
-  assert.deepEqual(fillMissingTenant({ data: [{ tenantId: "t2" }, {}] }, "data", "t1"), { data: [{ tenantId: "t2" }, { tenantId: "t1" }] });
+test("stamp: a row naming ANOTHER workspace is refused, never written (review of #1041)", () => {
+  assert.throws(() => stampScopeTenant({ data: { tenantId: "t2" } }, "data", "t1", "StockEvent"), TenantScopeError);
+  assert.throws(() => stampScopeTenant({ data: [{ tenantId: "t1" }, { tenantId: "t2" }] }, "data", "t1"), TenantScopeError);
+  assert.throws(() => stampScopeTenant({ where: {}, create: { tenantId: "t2" }, update: {} }, "create", "t1"), TenantScopeError);
 });
 
 test("the guard stamps creates while NOT enforcing, from the scope only, never a guessed tenant", () => {
@@ -29,7 +30,7 @@ test("the guard stamps creates while NOT enforcing, from the scope only, never a
   const fn = db.slice(db.indexOf("function stampWhileNotEnforcing("), db.indexOf("function refuseNestedRelationWrite("));
   assert.match(fn, /if \(kind !== "create" && kind !== "upsert"\) return args;/);
   assert.match(fn, /if \(!scope \|\| scope\.system \|\| !scope\.tenantId\) return args;/);
-  assert.match(fn, /fillMissingTenant\(args, kind === "upsert" \? "create" : "data", scope\.tenantId\)/);
+  assert.match(fn, /stampScopeTenant\(args, kind === "upsert" \? "create" : "data", scope\.tenantId, model\)/);
   assert.doesNotMatch(fn, /DEFAULT_TENANT_ID/);
 });
 

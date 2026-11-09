@@ -9,7 +9,7 @@ import {
   scopeMutation,
   scopeUpsert,
   hasNestedRelationWrite,
-  fillMissingTenant,
+  stampScopeTenant,
   TenantScopeError,
 } from "./tenantGuard";
 
@@ -174,11 +174,11 @@ function scopeArgs(model: string, kind: ScopeKind, args: any): any {
  * on there. A row with no workspace belongs to nobody: its own workspace can't read it back and its composite
  * tenant keys can't check it.
  *
- * So a create (and an upsert's create) on a tenant-scoped model is given the tenant of the scope the work is
- * running in — the SAME tenant enforcement would stamp — whatever the mode. Differences from enforcement, both
- * deliberate:
- *   - it only FILLS a missing tenantId, never overrides one the caller named (enforcement overrides);
- *   - with no scope, or a system scope, it does nothing — there is no workspace to give, and guessing one
+ * So a create (and an upsert's create) on a tenant-scoped model gets the tenant of the scope the work is running
+ * in — the SAME tenant enforcement would stamp — whatever the mode (stampScopeTenant):
+ *   - no tenantId or null → the scope's;
+ *   - another workspace's → REFUSED (review of #1041): work for one workspace never creates another's row;
+ *   - with no scope, or a system scope, nothing happens — there is no workspace to give, and guessing one
  *     (the founding tenant) is the misattribution ownedWriteTenantId() exists to stop.
  * Reads and updates are untouched: their isolation is RLS's and enforcement's job, not this one's.
  */
@@ -187,7 +187,7 @@ function stampWhileNotEnforcing(model: string, kind: ScopeKind, args: any): any 
   if (!isTenantScopedModel(model)) return args;
   const scope = currentTenantScope();
   if (!scope || scope.system || !scope.tenantId) return args;
-  return fillMissingTenant(args, kind === "upsert" ? "create" : "data", scope.tenantId);
+  return stampScopeTenant(args, kind === "upsert" ? "create" : "data", scope.tenantId, model);
 }
 
 function refuseNestedRelationWrite(model: string, data: unknown): void {

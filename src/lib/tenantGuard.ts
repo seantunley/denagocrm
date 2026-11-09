@@ -238,22 +238,36 @@ export function scopeWhere(args: any, tenantId: string): any {
 }
 
 /**
+ * The not-enforcing stamp in db.ts: give `args[key]` (a create's `data` — one row or many — or an upsert's `create`)
+ * the scope's tenant, and REFUSE a row that names another (review of #1041).
+ *
+ *   - no tenantId, or null → the scope's. Null is not "nobody's": under a workspace's scope there is no ordinary
+ *     write that belongs to no workspace, and enforcement stamps the scope's over it too;
+ *   - the scope's own → kept;
+ *   - ANOTHER workspace's → TenantScopeError. Work done for one workspace must never quietly create a row owned by
+ *     another, enforcement or not. Enforcement overrides such a row with the scope's tenant; with it off there is
+ *     nothing to override with that is safer than stopping. Trusted cross-workspace work runs in a system scope
+ *     (or on basePrisma), which never reaches here.
+ */
+export function stampScopeTenant(args: any, key: "data" | "create", tenantId: string, model = "row"): any {
+  const stamp = (row: any) => {
+    if (!row || typeof row !== "object") return row;
+    if (row.tenantId == null) return { ...row, tenantId };
+    if (row.tenantId !== tenantId) {
+      throw new TenantScopeError(`A ${model} for another workspace can't be created in this workspace's scope`);
+    }
+    return row;
+  };
+  const value = args?.[key];
+  if (value == null) return args;
+  return { ...args, [key]: Array.isArray(value) ? value.map(stamp) : stamp(value) };
+}
+
+/**
  * create / createMany: force the owning tenant onto the row(s), overwriting any
  * client-supplied `tenantId`. This is the core anti-forgery rule — a write's
  * tenant comes from trusted context, never the payload.
  */
-/**
- * Give `args[key]` (a create's `data` — one row or many — or an upsert's `create`) the tenant, ONLY where it names
- * none. A tenantId the caller set, even null, is left alone. For the not-enforcing stamp in db.ts; enforcement's
- * stampCreate overrides instead.
- */
-export function fillMissingTenant(args: any, key: "data" | "create", tenantId: string): any {
-  const fill = (row: any) => (row && typeof row === "object" && !("tenantId" in row) ? { ...row, tenantId } : row);
-  const value = args?.[key];
-  if (value == null) return args;
-  return { ...args, [key]: Array.isArray(value) ? value.map(fill) : fill(value) };
-}
-
 export function stampCreate(args: any, tenantId: string): any {
   const next = { ...(args ?? {}) };
   if (Array.isArray(next.data)) {
