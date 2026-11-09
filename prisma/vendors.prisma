@@ -24,9 +24,41 @@ model Vendor {
   documents      Document[]
   purchaseOrders PurchaseOrder[]
   deals          DealVendor[]
+  deliveries     VendorDelivery[]
 
   @@unique([tenantId, id])
   @@index([tenantId, name])
+}
+
+/// A delivery booked with a transport supplier (vendors plan step 2, 2026-11-09): OUTBOUND to the customer on a
+/// deal (quoteId), or INBOUND to the warehouse on a purchase order (purchaseOrderId) — exactly one (a CHECK in the
+/// migration; both composite tenant FKs). Sent to the supplier only on a click; staff move the status along.
+/// No cost here: the delivery charge is already on the quote (Sean, 2026-11-09).
+model VendorDelivery {
+  id              String    @id @default(cuid())
+  tenantId        String
+  vendorId        String
+  vendor          Vendor    @relation(fields: [tenantId, vendorId], references: [tenantId, id], onDelete: Cascade)
+  quoteId         String?
+  purchaseOrderId String?
+  /// The day it is booked for.
+  scheduledFor    DateTime
+  fromAddress     String
+  toAddress       String
+  /// For the driver: gate code, contact on site, what to bring.
+  note            String?
+  /// requested | confirmed | collected | delivered | cancelled (lib/vendorDeliveryRules.ts).
+  status          String    @default("requested")
+  statusAt        DateTime  @default(now())
+  /// Where the booking went: the email address, or "copied" when staff sent it themselves (WhatsApp).
+  sentTo          String
+  createdById     String
+  createdAt       DateTime  @default(now())
+
+  @@unique([tenantId, id])
+  @@index([tenantId, quoteId])
+  @@index([tenantId, purchaseOrderId])
+  @@index([tenantId, vendorId])
 }
 
 /// A supplier declared on a deal, so the deal file asks for its papers before any arrive. The deal is its LEAD,

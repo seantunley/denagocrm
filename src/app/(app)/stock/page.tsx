@@ -37,6 +37,8 @@ import { listStockUnits, stockDashboard } from "@/lib/stockPlatform";
 import { getStockLabels } from "@/lib/stockLabels";
 import RecordContextMenu, { type RecordContextAction } from "@/components/RecordContextMenu";
 import { getRegionalSettings } from "@/lib/settings";
+import { getCompanyProfile } from "@/lib/companyProfile";
+import VendorDeliveries from "@/components/deliveries/VendorDeliveries";
 
 const STATUS: Record<string, { label: string; tone: "neutral" | "success" | "warning" | "danger" | "info" }> = {
   incoming: { label: "Incoming", tone: "info" },
@@ -97,6 +99,7 @@ export default async function StockPage({
       include: {
         _count: { select: { units: { where: { deletedAt: null, status: "incoming" } } } },
         units: { where: { deletedAt: null, status: "incoming" }, take: 1, include: { product: true } },
+        vendor: { select: { address: true } },
         lines: {
           orderBy: { createdAt: "asc" },
           include: {
@@ -127,6 +130,31 @@ export default async function StockPage({
       ORDER BY "openLeads" DESC, p."name" LIMIT 12
     `),
   ]);
+
+  // Booking the delivery of an open order into the warehouse with a transport supplier (Suppliers module only).
+  const [poBookings, transport, company] = vendors !== null && openPos.length
+    ? await Promise.all([
+        prisma.vendorDelivery.findMany({
+          where: { tenantId: await actingTenantId(), purchaseOrderId: { in: openPos.map((po) => po.id) } },
+          orderBy: { scheduledFor: "asc" },
+          select: { id: true, purchaseOrderId: true, status: true, scheduledFor: true, sentTo: true, vendor: { select: { name: true } } },
+        }),
+        canManage
+          ? prisma.vendor.findMany({ where: { tenantId: await actingTenantId(), kind: "transport", deletedAt: null }, select: { id: true, name: true, email: true }, orderBy: { name: "asc" } })
+          : Promise.resolve([]),
+        getCompanyProfile(),
+      ])
+    : [[], [], null];
+  const inboundBookings = (po: (typeof openPos)[number]) =>
+    vendors === null ? null : (
+      <VendorDeliveries
+        target={{ purchaseOrderId: po.id }}
+        bookings={poBookings.filter((booking) => booking.purchaseOrderId === po.id)}
+        vendors={transport}
+        defaults={{ date: po.expectedAt?.toISOString().slice(0, 10) ?? "", from: po.vendor?.address ?? "", to: company?.address ?? "" }}
+        canManage={canManage}
+      />
+    );
 
   const stockLabels = await getStockLabels();
   const labelBySlug = new Map(stockLabels.map((l) => [l.slug, l]));
@@ -243,6 +271,7 @@ export default async function StockPage({
               const overdue = Boolean(po.expectedAt && po.expectedAt < new Date());
               return <li key={po.id} className="py-3 first:pt-0 last:pb-0"><div className="flex items-start justify-between gap-3"><div className="min-w-0"><p className="truncate text-sm font-medium">{po.reference || `${po.supplier} order`}</p><p className="mt-0.5 text-xs text-muted-foreground">{po._count.units} unit{po._count.units === 1 ? "" : "s"}{po.expectedAt ? ` · due ${po.expectedAt.toLocaleDateString("en-ZA")}` : ""}</p></div>{overdue && <StatusPill tone="danger">Overdue</StatusPill>}</div>
                 {canManage && <div className="mt-2 flex gap-2">{po.lines.length > 0 ? <ModalTrigger label="Receive" title={`Receive — ${po.reference || `${po.supplier} order`}`} buttonClass="btn-primary btn-sm"><StockReceiveForm action={receivePurchaseOrder.bind(null, po.id)} lines={po.lines.map((line) => ({ id: line.id, name: line.product.name, color: line.color, ordered: line.orderedQty, received: line.receivedQty, outstanding: line._count.units }))} /></ModalTrigger> : <SaveForm success="Units received" action={receivePurchaseOrder.bind(null, po.id)}><SaveButton className="btn-primary btn-sm">Receive</SaveButton></SaveForm>}<ModalTrigger label="Cancel" title="Cancel purchase order" buttonClass="btn-secondary btn-sm"><SaveForm action={cancelPurchaseOrder.bind(null, po.id)} success="Purchase order cancelled" className="space-y-3"><p className="text-sm text-muted-foreground">Only outstanding incoming units will be removed. Previously received units remain in stock.</p><div><label className="label">Reason *</label><textarea name="reason" className="input min-h-24" required /></div><SaveButton className="btn-danger" pendingLabel="Cancelling…">Cancel order</SaveButton></SaveForm></ModalTrigger></div>}
+                {inboundBookings(po)}
               </li>;
             })}</ul>}
           </Surface>

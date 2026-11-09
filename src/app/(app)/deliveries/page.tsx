@@ -39,6 +39,10 @@ import { runsForHost, templatesForHostRecord } from "@/lib/checklists/store";
 import { deliveryNoteState } from "@/lib/deliveryNoteSigning";
 import { deliveryNoteSigning, type DeliveryNoteSigning } from "@/components/signing/deliveryNoteSigning";
 import { getRegionalSettings } from "@/lib/settings";
+import { isModuleEnabled } from "@/lib/modules/enabled";
+import { actingTenantId } from "@/lib/actingTenant";
+import { getCompanyProfile } from "@/lib/companyProfile";
+import VendorDeliveries from "@/components/deliveries/VendorDeliveries";
 
 export const metadata = { title: "Deliveries" };
 
@@ -112,6 +116,7 @@ export default async function DeliveriesPage() {
   }
   // One batched, tenant-scoped lookup for the board — see lib/quoteBillTo.ts.
   const fleetsById = await loadBillToFleets(prisma, quotes.map((quote) => quote.fleetId));
+  const moneyFmt = await getRegionalSettings();
   const docs = await prisma.document.findMany({
     where: { quoteId: { in: quotes.map((quote) => quote.id) }, deletedAt: null },
     select: { quoteId: true, tag: true },
@@ -149,6 +154,39 @@ export default async function DeliveriesPage() {
     sold: { label: "Handed over", cls: "border-border bg-muted/40 text-muted-foreground" },
   };
 
+  // Delivery bookings with a transport supplier, from "Schedule delivery" on (Suppliers module only).
+  const bookable = (await isModuleEnabled("suppliers")) ? quotes.filter((quote) => colOf(quote) === "schedule" || colOf(quote) === "deliver") : [];
+  const tenantId = await actingTenantId();
+  const [bookings, transport, company] = bookable.length
+    ? await Promise.all([
+        prisma.vendorDelivery.findMany({
+          where: { tenantId, quoteId: { in: bookable.map((quote) => quote.id) } },
+          orderBy: { scheduledFor: "asc" },
+          select: { id: true, quoteId: true, status: true, scheduledFor: true, sentTo: true, vendor: { select: { name: true } } },
+        }),
+        prisma.vendor.findMany({ where: { tenantId, kind: "transport", deletedAt: null }, select: { id: true, name: true, email: true }, orderBy: { name: "asc" } }),
+        getCompanyProfile(),
+      ])
+    : [[], [], null];
+  const deliveryBookings = (quote: (typeof quotes)[number]) => {
+    if (!bookable.includes(quote)) return null;
+    const delivery = quote.fees.filter((fee) => fee.kind === "delivery").reduce((sum, fee) => sum + fee.amountCents, 0);
+    return (
+      <VendorDeliveries
+        target={{ quoteId: quote.id }}
+        bookings={bookings.filter((booking) => booking.quoteId === quote.id)}
+        vendors={transport}
+        defaults={{
+          date: quote.deliveryScheduledFor?.toISOString().slice(0, 10) ?? "",
+          from: company?.address ?? "",
+          to: quoteBillTo(quote, fleetsById.get(quote.fleetId ?? "") ?? null).address,
+        }}
+        charge={delivery > 0 ? formatZAR(delivery, withCurrency(moneyFmt, quote.currency)) : null}
+        canManage={canManage}
+      />
+    );
+  };
+
   const count = (key: Col) => quotes.filter((quote) => colOf(quote) === key).length;
   const quoteTotal = (quote: (typeof quotes)[number]) =>
     quotePricing(quote.items, quote.fees, {
@@ -159,8 +197,6 @@ export default async function DeliveriesPage() {
   const pipelineValue = quotes.reduce((sum, quote) => sum + quoteTotal(quote), 0);
 
   const chip = "inline-flex items-center gap-1 rounded-md border border-border bg-muted/40 px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground";
-
-  const moneyFmt = await getRegionalSettings();
   return (
     <>
       <MobileOnly className="space-y-4">
@@ -198,6 +234,7 @@ export default async function DeliveriesPage() {
                         </div>
                         <p className="mt-2 text-[11px] text-muted-foreground">{photos} handover photo{photos === 1 ? "" : "s"}{quote.deliveryScheduledFor ? ` · ${formatDate(quote.deliveryScheduledFor)}` : ""}{quote.depositPaidCents != null ? ` · deposit ${formatZAR(quote.depositPaidCents, withCurrency(moneyFmt, quote.currency))}` : ""}</p>
                         {canManage && <FulfilmentCorrections quote={quote} moneyFmt={withCurrency(moneyFmt, quote.currency)} />}
+                        {deliveryBookings(quote)}
                         {/* Same tab on mobile, like the delivery note: keeps PWA back navigation. */}
                         <div className="mt-1.5 flex flex-wrap gap-x-3 gap-y-1">
                           {quotePrintLinks(quote).map((link) => (
@@ -441,6 +478,7 @@ export default async function DeliveriesPage() {
                             🧾 Print delivery note
                           </a>
                         )}
+                        {deliveryBookings(quote)}
                         {canManage && column.key === "deliver" && (
                           <div className="mt-2.5 space-y-3 border-t border-border/60 pt-2.5">
                             {checklist && (
