@@ -21,7 +21,9 @@ test("deal jacket composes existing records instead of adding a second deal mode
   assert.match(page, /stockReservations/);
   assert.match(page, /soldStock/);
   assert.match(page, /prisma\.document\.findMany/);
-  assert.match(page, /prisma\.signatureRequest\.findMany/);
+  // Every quote's signature requests, uncapped, through the shared read (review of #1040).
+  assert.match(page, /dealSignatureRequests\(dealQuoteIds\)/);
+  assert.match(read("src/lib/dealFileData.ts"), /prisma\.signatureRequest\.findMany/);
   // The workspace's own word for a deal (#1003), "Deal" by default.
   assert.match(page, /\{labels\.deal\.one\} timeline/);
   assert.match(page, /Ready to deliver\?/);
