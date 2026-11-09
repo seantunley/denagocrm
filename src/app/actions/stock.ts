@@ -91,8 +91,14 @@ export async function createPurchaseOrder(formData: FormData) {
     // The supplier is a record (Settings → Suppliers), one of this workspace's live ones — not a name typed afresh
     // each time, which drifted ("Denago" / "Denago OEM") from the deal file's suppliers. Its name is kept on the
     // order as ordered, which every existing reader of `supplier` shows.
+    //
+    // ONE workspace, resolved once, for the supplier check AND every row written below (review of #1040). The
+    // scoped client stamps tenantId only while enforcement is on; off or in monitor mode an omitted tenantId is a
+    // NULL — an order the supplier's history (filtered by workspace) never shows, and that its composite
+    // supplier key can't check.
+    const tenantId = await actingTenantId();
     const vendor = await prisma.vendor.findFirst({
-      where: { id: str(formData.get("vendorId")), tenantId: await actingTenantId(), deletedAt: null },
+      where: { id: str(formData.get("vendorId")), tenantId, deletedAt: null },
       select: { id: true, name: true },
     });
     if (!vendor) refuse("Choose the supplier — an owner adds suppliers in Settings → Suppliers.");
@@ -133,10 +139,11 @@ export async function createPurchaseOrder(formData: FormData) {
     }
 
     const order = await prisma.$transaction(async (tx) => {
-      const po = await tx.purchaseOrder.create({ data: { supplier, vendorId: vendor.id, reference, expectedAt, notes } });
+      const po = await tx.purchaseOrder.create({ data: { tenantId, supplier, vendorId: vendor.id, reference, expectedAt, notes } });
       for (const line of lines) {
         const poLine = await tx.purchaseOrderLine.create({
           data: {
+            tenantId,
             purchaseOrderId: po.id,
             productId: line.productId,
             color: line.color ?? null,
@@ -148,6 +155,7 @@ export async function createPurchaseOrder(formData: FormData) {
         });
         await tx.stockUnit.createMany({
           data: Array.from({ length: line.qty }, () => ({
+            tenantId,
             productId: line.productId,
             color: line.color ?? null,
             costCents: line.costCents,

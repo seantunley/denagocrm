@@ -36,6 +36,7 @@ import DealFileSearch from "@/components/deals/DealFileSearch";
 import { SaveForm, SaveButton } from "@/components/SaveForm";
 import { actingTenantId } from "@/lib/actingTenant";
 import { dealKey } from "@/lib/dealVendors";
+import { dealSignatureRequests } from "@/lib/dealFileData";
 import { vendorKindLabel } from "@/lib/vendors";
 import { addDealVendor, removeDealVendor } from "@/app/actions/vendors";
 import { withCurrency } from "@/lib/currencyRules";
@@ -173,12 +174,7 @@ export default async function DealWorkspacePage({ params }: { params: Promise<{ 
       },
       orderBy: { createdAt: "desc" },
     }),
-    prisma.signatureRequest.findMany({
-      where: { quoteId: { in: dealQuoteIds }, deletedAt: null },
-      select: { id: true, title: true, status: true, sentAt: true, completedAt: true, createdAt: true },
-      orderBy: { createdAt: "desc" },
-      take: 20,
-    }),
+    dealSignatureRequests(dealQuoteIds),
     getSetting(DOCUMENT_TYPES_KEY).then(parseDocumentTypes),
     hasAnyPermission(user, "documents.upload"),
     // The suppliers this deal declares (its lead's, or this quote's when it has no lead).

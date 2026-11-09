@@ -12,6 +12,7 @@ import VendorFields from "@/components/VendorFields";
 import { saveVendor, deleteVendor } from "@/app/actions/vendors";
 import { vendorKindLabel } from "@/lib/vendors";
 import { SUPPLIER_DOCUMENT_TYPES } from "@/lib/dealFile";
+import { vendorPurchaseOrders } from "@/lib/dealFileData";
 import { contactName, formatDate } from "@/lib/format";
 
 export const dynamic = "force-dynamic";
@@ -34,12 +35,7 @@ export default async function VendorPage({ params }: { params: Promise<{ id: str
       select: { id: true, fileName: true, tag: true, quoteId: true, createdAt: true, uploadedBy: { select: { name: true } } },
       orderBy: { createdAt: "desc" },
     }),
-    prisma.purchaseOrder.findMany({
-      where: { tenantId, vendorId: id, deletedAt: null },
-      select: { id: true, reference: true, status: true, orderedAt: true, expectedAt: true, _count: { select: { units: { where: { deletedAt: null } } } } },
-      orderBy: { orderedAt: "desc" },
-      take: 50,
-    }),
+    vendorPurchaseOrders(tenantId, id),
   ]);
 
   // Its deals: declared on the deal, or named on a document filed there. A deal is its lead (every quote on it),
