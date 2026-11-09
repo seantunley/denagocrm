@@ -126,7 +126,7 @@ test("a change to a document filed against a QUOTE is recorded on that quote's c
 
 test("the form: a dropdown of the workspace's types and of the customer's quotes — one target, and no free text", () => {
   const fields = code("src/components/DocumentUploadFields.tsx");
-  assert.match(fields, /<select name="label" defaultValue="" className="input h-9 text-sm">/);
+  assert.match(fields, /<select name="label" value=\{label\} onChange=\{\(event\) => setLabel\(event\.target\.value\)\} className="input h-9 text-sm">/);
   assert.doesNotMatch(fields, /<input[^>]*name="label"|datalist/, "a dropdown, not a box to type in");
   // The quote REPLACES the customer as the target: never both in one form.
   assert.match(fields, /\{quoteId \? <input type="hidden" name="quoteId" value=\{quoteId\} \/> : contactId \? <input type="hidden" name="contactId" value=\{contactId\} \/> : null\}/);
@@ -134,7 +134,9 @@ test("the form: a dropdown of the workspace's types and of the customer's quotes
   assert.match(panel, /<DocumentUploadFields types=\{types\} quotes=\{fileAgainst\} contactId=\{contactId\} vendors=\{vendors\} defaultQuoteId=\{defaultQuoteId\} \/>/);
   // The deal file passes no customer, so a quote is always the target there.
   assert.match(fields, /\{contactId && <option value="">The customer \(no quote\)<\/option>\}/);
-  assert.match(fields, /<select name="vendorId" defaultValue="" className="input h-9 text-sm">/);
+  // The supplier is asked for only on a supplier quote, invoice or proof of payment (Sean: "Can this be conditional?").
+  assert.match(fields, /\{vendors && isSupplierDocumentType\(label\) && <SupplierSelect vendors=\{vendors\} \/>\}/);
+  assert.match(fields, /isSupplierDocumentType\(label\) \? <SupplierSelect vendors=\{vendors\} current=\{currentVendor\} \/> : <input type="hidden" name="vendorId" value="" \/>/);
   assert.doesNotMatch(panel, /\{contactId && <input type="hidden" name="contactId"/, "the panel no longer adds the customer itself");
   // A quote a revision replaced is not offered.
   assert.match(panel, /\.filter\(\(group\) => !group\.superseded\)\.map\(\(group\) => \(\{ id: group\.id, label: `Q-\$\{group\.number\} \(\$\{group\.status\}\)` \}\)\)/);

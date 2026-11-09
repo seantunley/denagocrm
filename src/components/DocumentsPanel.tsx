@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { uploadDocument, deleteDocument, relabelDocument } from "@/app/actions/documents";
 import ConfirmDelete from "@/components/ConfirmDelete";
-import DocumentUploadFields from "@/components/DocumentUploadFields";
+import DocumentUploadFields, { DocumentLabelFields } from "@/components/DocumentUploadFields";
 import ModalTrigger from "@/components/Modal";
 import { DOCUMENT_TYPES_KEY, isPersonLabel, parseDocumentTypes } from "@/lib/documentLabels";
 import { getSetting, getRegionalSettings } from "@/lib/settings";
@@ -132,20 +132,16 @@ function DocRow({ doc, revalidate, types, vendors }: { doc: Doc; revalidate: str
       {isPersonLabel(doc.tag) && (
         <ModalTrigger label={<><Tag className="size-3" />{chosen ? "Relabel" : "Label"}</>} title={`Label “${doc.fileName}”`} buttonClass="inline-flex shrink-0 cursor-pointer items-center gap-1 text-xs text-muted-foreground hover:text-foreground">
           <SaveForm action={relabelDocument.bind(null, doc.id, revalidate)} success="Label saved" className="grid gap-3 p-4">
-            <label className="grid gap-1 text-xs text-muted-foreground">
-              What is it?
-              <select name="label" defaultValue={chosen && types.includes(chosen) ? chosen : ""} className="input h-9 text-sm">
-                <option value="">Not labelled</option>
-                {types.map((type) => <option key={type} value={type}>{type}</option>)}
-              </select>
-            </label>
-            {doc.vendor !== undefined && (
+            {doc.vendor !== undefined ? (
+              // The supplier appears only for a supplier quote, invoice or proof of payment.
+              <DocumentLabelFields types={types} current={chosen && types.includes(chosen) ? chosen : ""} vendors={vendors} currentVendor={doc.vendor} />
+            ) : (
+              // This page didn't load suppliers: no supplier field, so the one on file is kept.
               <label className="grid gap-1 text-xs text-muted-foreground">
-                Supplier
-                <select name="vendorId" defaultValue={doc.vendor?.id ?? ""} className="input h-9 text-sm">
-                  <option value="">None — not a supplier document</option>
-                  {doc.vendor && !vendors.some((vendor) => vendor.id === doc.vendor!.id) && <option value={doc.vendor.id}>{doc.vendor.name} (deleted)</option>}
-                  {vendors.map((vendor) => <option key={vendor.id} value={vendor.id}>{vendor.name}</option>)}
+                What is it?
+                <select name="label" defaultValue={chosen && types.includes(chosen) ? chosen : ""} className="input h-9 text-sm">
+                  <option value="">Not labelled</option>
+                  {types.map((type) => <option key={type} value={type}>{type}</option>)}
                 </select>
               </label>
             )}
