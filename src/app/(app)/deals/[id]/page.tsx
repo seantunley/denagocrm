@@ -186,6 +186,10 @@ export default async function DealWorkspacePage({ params }: { params: Promise<{ 
     currency: dealQuote.currency,
     createdAt: dealQuote.createdAt,
     documents: documents.filter((doc) => doc.quoteId === dealQuote.id),
+    // The delivery checklist's photos, under the quote that was handed over (through the workspace-checked file route).
+    handoverPhotos: handoverPhotos
+      .filter((photo) => photo.quoteId === dealQuote.id)
+      .map((photo) => ({ id: photo.id, src: storedFileSrc(photo.url), step: photo.step, takenAt: photo.capturedAt })),
   }));
   const currentQuotes = dealQuotes.filter((dealQuote) => dealQuote.supersededAt == null);
   // Upload goes on this quote, or the deal's current one when this one was revised.
@@ -498,37 +502,6 @@ export default async function DealWorkspacePage({ params }: { params: Promise<{ 
                 hideUpload={!canUpload || !uploadQuoteId}
                 revalidate={`/deals/${quote.id}`}
               />
-              {/* Photos taken in the delivery checklist — kept with the checklist, shown here so they stay findable
-                  once the deal has left the Deliveries board. */}
-              {handoverPhotos.length > 0 && (
-                <Surface className="p-5">
-                  <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">From the delivery checklist</p>
-                  <h2 className="mt-1 text-base font-semibold">Handover photos · {handoverPhotos.length}</h2>
-                  <div className="mt-3 grid grid-cols-3 gap-2 sm:grid-cols-4 lg:grid-cols-6">
-                    {handoverPhotos.map((photo) => {
-                      const src = storedFileSrc(photo.url) ?? undefined;
-                      const number = dealQuotes.find((q) => q.id === photo.quoteId)?.number;
-                      return (
-                        <a
-                          key={photo.id}
-                          href={src}
-                          target="_blank"
-                          rel="noreferrer"
-                          data-search={`handover photo ${photo.step}`.toLowerCase()}
-                          className="group block overflow-hidden rounded-lg border border-border bg-muted/20"
-                          title={`${photo.step} · ${formatDateTime(photo.capturedAt)}`}
-                        >
-                          {/* eslint-disable-next-line @next/next/no-img-element -- a stored, workspace-checked file, not a static asset */}
-                          <img src={src} alt={photo.step} loading="lazy" className="aspect-square w-full object-cover transition-transform group-hover:scale-105" />
-                          <p className="truncate px-1.5 py-1 text-[10px] text-muted-foreground">
-                            {photo.step}{dealQuotes.length > 1 && number ? ` · Q-${number}` : ""}
-                          </p>
-                        </a>
-                      );
-                    })}
-                  </div>
-                </Surface>
-              )}
             </div>
 
             <Surface className="p-5">

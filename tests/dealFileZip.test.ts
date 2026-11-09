@@ -173,8 +173,14 @@ test("handover photos: in the deal file and the ZIP, own workspace, delivery che
   assert.match(loader, /checklistPhoto\.findMany\(\{\s*where: \{ tenantId, entry: \{ run: \{ tenantId, hostType: "quote\.delivery", hostId: \{ in: dealQuoteIds \} \} \} \}/);
   assert.match(loader, /dealQuoteIds\.length && \(await isModuleEnabled\("automotive"\)\)/);
   const page = src("src/app/(app)/deals/[id]/page.tsx");
-  assert.match(page, /handoverPhotos\.length > 0 &&/);
-  assert.match(page, /storedFileSrc\(photo\.url\)/, "through the workspace-checked file route, never the raw store URL");
+  // Under the quote that was handed over — not in a box below every quote, where Sean looked and didn't find them.
+  assert.match(page, /handoverPhotos: handoverPhotos\s*\.filter\(\(photo\) => photo\.quoteId === dealQuote\.id\)/);
+  assert.match(page, /src: storedFileSrc\(photo\.url\)/, "through the workspace-checked file route, never the raw store URL");
+  assert.doesNotMatch(page, /From the delivery checklist<\/p>/, "no separate photo box below the quotes");
+  const panel = src("src/components/DocumentsPanel.tsx");
+  assert.match(panel, /group\.handoverPhotos && group\.handoverPhotos\.length > 0 &&/);
+  // A quote with photos but no uploads doesn't claim to have no paperwork.
+  assert.match(panel, /group\.documents\.length === 0 && !group\.handoverPhotos\?\.length \?/);
   const route = src("src/app/api/deals/[id]/file-zip/route.ts");
   assert.match(route, /addStored\(photoPaths\[i\], photo\.id, async \(\) => \(await openStoredFile\(photo\.url, tenantId\)\)\.stream\)/);
   assert.match(route, /folder: `Q-\$\{numberOf\.get\(photo\.quoteId\) \?\? quote\.number\}\/Handover photos`/);
