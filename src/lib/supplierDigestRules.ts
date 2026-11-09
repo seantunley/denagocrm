@@ -62,3 +62,21 @@ export function supplierDigestEmail(input: { brand: string; origin: string; deal
     ].join("\n"),
   };
 }
+
+/**
+ * Every row, one page at a time: `page(after)` returns up to `size` rows with ids after `after` (in id order),
+ * each page goes to `visit`, and paging stops at the first short page. Bounded memory, no row left out.
+ */
+export async function eachPage<T extends { id: string }>(
+  size: number,
+  page: (after: string | null) => Promise<T[]>,
+  visit: (rows: T[]) => Promise<void> | void,
+): Promise<void> {
+  let after: string | null = null;
+  for (;;) {
+    const rows = await page(after);
+    if (rows.length) await visit(rows);
+    if (rows.length < size) return;
+    after = rows[rows.length - 1].id;
+  }
+}

@@ -14,6 +14,7 @@ import {
   SUPPLIER_DIGEST_LAST_WEEK,
   SUPPLIER_DIGEST_SWITCH,
   supplierDigestEmail,
+  eachPage,
   type DigestDeal,
 } from "./supplierDigestRules";
 
@@ -26,18 +27,42 @@ const DELIVERED_WITHIN_DAYS = 30;
  */
 export async function missingSupplierPapers(tenantId: string): Promise<DigestDeal[]> {
   const since = new Date(Date.now() - DELIVERED_WITHIN_DAYS * 86_400_000);
-  const accepted = await prisma.quote.findMany({
-    where: { tenantId, deletedAt: null, supersededAt: null, status: "accepted", OR: [{ deliveredAt: null }, { deliveredAt: { gte: since } }] },
-    select: { id: true, number: true, leadId: true, fleetId: true, contact: true, lead: true },
-    orderBy: { createdAt: "desc" },
-    take: 100,
-  });
-  if (accepted.length === 0) return [];
+  const types = parseDocumentTypes(await getSetting(DOCUMENT_TYPES_KEY));
+  const deals: DigestDeal[] = [];
+  // Across pages: a deal with two accepted quotes is listed once, whichever page each lands on.
+  const seen = new Set<string>();
+  // EVERY qualifying deal, in pages of DIGEST_PAGE — a cap here silently left older deals out of the email.
+  await eachPage(
+    DIGEST_PAGE,
+    (after) =>
+      prisma.quote.findMany({
+        where: {
+          tenantId, deletedAt: null, supersededAt: null, status: "accepted",
+          OR: [{ deliveredAt: null }, { deliveredAt: { gte: since } }],
+          ...(after ? { id: { gt: after } } : {}),
+        },
+        select: { id: true, number: true, leadId: true, fleetId: true, contact: true, lead: true },
+        orderBy: { id: "asc" },
+        take: DIGEST_PAGE,
+      }),
+    async (accepted) => {
+      deals.push(...(await missingOnPage(tenantId, accepted, types, seen)));
+    },
+  );
+  // Newest deal first, as the page order no longer is.
+  return deals.sort((a, b) => b.quoteNumber - a.quoteNumber);
+}
+
+const DIGEST_PAGE = 100;
+
+type AcceptedQuote = Prisma.QuoteGetPayload<{ select: { id: true; number: true; leadId: true; fleetId: true; contact: true; lead: true } }>;
+
+async function missingOnPage(tenantId: string, accepted: AcceptedQuote[], types: string[], seen: Set<string>): Promise<DigestDeal[]> {
   const leadIds = [...new Set(accepted.flatMap((quote) => (quote.leadId ? [quote.leadId] : [])))];
   const quoteIds = accepted.map((quote) => quote.id);
   // The customer as every quote document names it — the fleet account when billed to one (quoteBillTo).
   const fleets = await loadBillToFleets(prisma, accepted.map((quote) => quote.fleetId));
-  const [allQuotes, links, types] = await Promise.all([
+  const [allQuotes, links] = await Promise.all([
     prisma.quote.findMany({
       where: { tenantId, deletedAt: null, OR: [{ leadId: { in: leadIds } }, { id: { in: quoteIds } }] },
       select: { id: true, leadId: true, number: true, status: true, invoicedAt: true, deliverySignatureRef: true },
@@ -46,14 +71,12 @@ export async function missingSupplierPapers(tenantId: string): Promise<DigestDea
       where: { tenantId, OR: [{ leadId: { in: leadIds } }, { quoteId: { in: quoteIds } }] },
       select: { leadId: true, quoteId: true, vendor: { select: { id: true, name: true } } },
     }),
-    getSetting(DOCUMENT_TYPES_KEY).then(parseDocumentTypes),
   ]);
   const docs = await prisma.document.findMany({
     where: { tenantId, quoteId: { in: allQuotes.map((quote) => quote.id) }, deletedAt: null, replacedById: null },
     select: { quoteId: true, tag: true, vendorId: true, vendor: { select: { name: true } } },
   });
 
-  const seen = new Set<string>();
   const deals: DigestDeal[] = [];
   for (const quote of accepted) {
     const root = quote.leadId ?? quote.id;

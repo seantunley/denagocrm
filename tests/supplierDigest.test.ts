@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { readFileSync } from "node:fs";
-import { digestWeekDue, isoWeekKey, supplierDigestEmail, SUPPLIER_DIGEST_SWITCH } from "../src/lib/supplierDigestRules";
+import { digestWeekDue, eachPage, isoWeekKey, supplierDigestEmail, SUPPLIER_DIGEST_SWITCH } from "../src/lib/supplierDigestRules";
 import { AUTOMATIONS } from "../src/lib/automationRegister";
 
 /** The owner's weekly supplier-papers email (review section E, 2026-11-09). */
@@ -48,4 +48,40 @@ test("visible and switchable, on the automations cron, Suppliers module only, on
   assert.match(lib, /updateMany\(\{ where: \{ tenantId, key: SUPPLIER_DIGEST_LAST_WEEK, value: stored\.value \}, data: \{ value: week \} \}\)/);
   assert.ok(lib.indexOf("Claim this week before anything goes out") < lib.indexOf("await sendEmail("));
   assert.match(lib, /!item\.key\.startsWith\("none:"\)/, "only suppliers actually on a deal");
+});
+
+test("paging reaches every qualifying quote — 250 of them, in pages of 100 (review #1047)", async () => {
+  const rows = Array.from({ length: 250 }, (_, i) => ({ id: `q${String(i).padStart(4, "0")}` }));
+  const asked: (string | null)[] = [];
+  const visited: string[] = [];
+  await eachPage(
+    100,
+    async (after) => {
+      asked.push(after);
+      return rows.filter((row) => after === null || row.id > after).slice(0, 100);
+    },
+    (page) => { visited.push(...page.map((row) => row.id)); },
+  );
+  assert.equal(visited.length, 250);
+  assert.deepEqual(visited, rows.map((row) => row.id));
+  assert.deepEqual(asked, [null, "q0099", "q0199"]);
+});
+
+test("an exact multiple of the page size ends on an empty page, not a missed one", async () => {
+  const rows = Array.from({ length: 200 }, (_, i) => ({ id: `q${String(i).padStart(4, "0")}` }));
+  let visited = 0;
+  let pages = 0;
+  await eachPage(100, async (after) => { pages++; return rows.filter((row) => after === null || row.id > after).slice(0, 100); }, (page) => { visited += page.length; });
+  assert.equal(visited, 200);
+  assert.equal(pages, 3);
+});
+
+test("the digest pages through every deal — no cap on how many quotes it looks at", () => {
+  const digest = read("src/lib/supplierDigest.ts");
+  assert.doesNotMatch(digest, /take: 100\b/);
+  assert.match(digest, /await eachPage\(\s*DIGEST_PAGE,/);
+  assert.match(digest, /\.\.\.\(after \? \{ id: \{ gt: after \} \} : \{\}\)/);
+  assert.match(digest, /orderBy: \{ id: "asc" \},\s*take: DIGEST_PAGE/);
+  // One deal across two pages is listed once.
+  assert.match(digest, /const seen = new Set<string>\(\);[\s\S]*missingOnPage\(tenantId, accepted, types, seen\)/);
 });
