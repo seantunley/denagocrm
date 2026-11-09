@@ -62,6 +62,11 @@ export type QuoteGroup = {
   currency: string | null;
   createdAt: Date;
   documents: Doc[];
+  /**
+   * Photos taken in this quote's delivery checklist (lib/dealFileData.ts handoverPhotos). Shown under the quote's
+   * papers — where people look for the handover — not in a box below every quote, where they went unseen.
+   */
+  handoverPhotos?: { id: string; src: string | null; step: string; takenAt: Date }[];
 };
 
 /** What each CRM-written tag means to someone reading the tab (shared with the deal-file ZIP). */
@@ -397,7 +402,7 @@ export default async function DocumentsPanel({
                   />
                 )}
               </div>
-              {group.documents.length === 0 ? (
+              {group.documents.length === 0 && !group.handoverPhotos?.length ? (
                 <p className="mt-2 text-xs text-slate-500">
                   No paperwork filed against this quote yet.
                 </p>
@@ -420,6 +425,29 @@ export default async function DocumentsPanel({
                   </div>
                 ));
               })()}
+              {group.handoverPhotos && group.handoverPhotos.length > 0 && (
+                <div className="mt-3" data-search="handover photos delivery checklist">
+                  <p className="text-[10px] font-semibold uppercase tracking-widest text-emerald-300/80">
+                    Handover photos <span className="font-normal text-muted-foreground">· {group.handoverPhotos.length} · from the delivery checklist</span>
+                  </p>
+                  <div className="mt-1.5 grid grid-cols-3 gap-2 sm:grid-cols-4 lg:grid-cols-6">
+                    {group.handoverPhotos.map((photo) => (
+                      <a
+                        key={photo.id}
+                        href={photo.src ?? undefined}
+                        target="_blank"
+                        rel="noreferrer"
+                        title={`${photo.step} · ${formatDate(photo.takenAt)}`}
+                        className="group block overflow-hidden rounded-lg border border-border bg-muted/20"
+                      >
+                        {/* eslint-disable-next-line @next/next/no-img-element -- a stored, workspace-checked file, not a static asset */}
+                        <img src={photo.src ?? undefined} alt={photo.step} loading="lazy" className="aspect-square w-full object-cover transition-transform group-hover:scale-105" />
+                        <p className="truncate px-1.5 py-1 text-[10px] text-muted-foreground">{photo.step}</p>
+                      </a>
+                    ))}
+                  </div>
+                </div>
+              )}
               {(() => {
                 const quote = costQuotes.find((q) => q.id === group.id);
                 return quote && quote.items.length > 0 ? (
