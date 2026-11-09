@@ -3,7 +3,7 @@ import { uploadDocument, deleteDocument, relabelDocument } from "@/app/actions/d
 import ConfirmDelete from "@/components/ConfirmDelete";
 import DocumentUploadFields, { DocumentLabelFields } from "@/components/DocumentUploadFields";
 import ModalTrigger from "@/components/Modal";
-import { DOCUMENT_TYPES_KEY, isPersonLabel, parseDocumentTypes } from "@/lib/documentLabels";
+import { DOCUMENT_TYPES_KEY, isPersonLabel, parseDocumentTypes, SYSTEM_TAG_LABELS } from "@/lib/documentLabels";
 import { getSetting, getRegionalSettings } from "@/lib/settings";
 import { prisma } from "@/lib/db";
 import { actingTenantId } from "@/lib/actingTenant";
@@ -57,19 +57,8 @@ export type QuoteGroup = {
   documents: Doc[];
 };
 
-/**
- * What each tag means to someone reading the tab. Untagged files keep their
- * filename only — a label of "other" tells the reader nothing.
- */
-const TAG_LABELS: Record<string, string> = {
-  signed: "Signed copy",
-  invoice: "Invoice",
-  pop: "Proof of payment",
-  "delivery-note": "Delivery note",
-  "delivery-photo": "Delivery photo",
-  "delivery-signature": "Handover signature",
-  checkin: "Check-in",
-};
+/** What each CRM-written tag means to someone reading the tab (shared with the deal-file ZIP). */
+const TAG_LABELS = SYSTEM_TAG_LABELS;
 
 /**
  * Paperwork reads in the order the deal happens — signed contract, invoice,

@@ -23,21 +23,17 @@ import {
   X,
 } from "lucide-react";
 import { prisma } from "@/lib/db";
-import { canAccessContact, canAccessLead, getAccessibleQuoteIds, hasAnyPermission, requireQuoteReadAccess, requireRoute } from "@/lib/permissions";
+import { canAccessContact, canAccessLead, hasAnyPermission, requireQuoteReadAccess, requireRoute } from "@/lib/permissions";
 import { formatDate, formatDateTime, formatZAR } from "@/lib/format";
 import { loadBillToFleet, quoteBillTo } from "@/lib/quoteBillTo";
 import { payableTotalCents } from "@/lib/pricing";
 import { isStatementInvoice } from "@/lib/accountStatement";
-import { getRegionalSettings, getSetting } from "@/lib/settings";
-import { DOCUMENT_TYPES_KEY, parseDocumentTypes } from "@/lib/documentLabels";
-import { dealFileChecklist } from "@/lib/dealFile";
+import { getRegionalSettings } from "@/lib/settings";
 import DocumentsPanel from "@/components/DocumentsPanel";
 import DealFileSearch from "@/components/deals/DealFileSearch";
 import { SaveForm, SaveButton } from "@/components/SaveForm";
-import { actingTenantId } from "@/lib/actingTenant";
-import { dealKey } from "@/lib/dealVendors";
-import { isModuleEnabled } from "@/lib/modules/enabled";
-import { dealSignatureRequests } from "@/lib/dealFileData";
+import { loadDealFile } from "@/lib/dealFileData";
+import DealFileZipButton from "@/components/deals/DealFileZipButton";
 import { vendorKindLabel } from "@/lib/vendors";
 import { addDealVendor, removeDealVendor } from "@/app/actions/vendors";
 import { withCurrency } from "@/lib/currencyRules";
@@ -152,55 +148,12 @@ export default async function DealWorkspacePage({ params }: { params: Promise<{ 
 
   // THE DEAL FILE (Sean, 2026-11-09): one file for the whole deal — every quote on the lead, revisions
   // included — not just this quote's. Only the quotes this person may open; a quote with no lead is its own deal.
-  const accessibleQuoteIds = await getAccessibleQuoteIds(user);
-  const dealQuotes = await prisma.quote.findMany({
-    where: {
-      deletedAt: null,
-      ...(quote.leadId ? { leadId: quote.leadId } : { id: quote.id }),
-      ...(accessibleQuoteIds ? { AND: [{ id: { in: accessibleQuoteIds } }] } : {}),
-    },
-    include: { items: true, fees: { orderBy: { sortOrder: "asc" } } },
-    orderBy: { createdAt: "desc" },
-  });
-  const dealQuoteIds = dealQuotes.map((dealQuote) => dealQuote.id);
-  const tenantId = await actingTenantId();
-  // The Suppliers module (granted per workspace in the tenant platform). Off: no suppliers on the deal, none named
-  // on its documents, and the checklist asks for supplier papers by type alone.
-  const suppliersOn = await isModuleEnabled("suppliers");
-  const [rawDocuments, signatures, documentTypes, canUpload, declared, vendors] = await Promise.all([
-    prisma.document.findMany({
-      // The current version of each file only — an older one is kept in its history (replacedById).
-      where: { quoteId: { in: dealQuoteIds }, deletedAt: null, replacedById: null },
-      select: {
-        id: true, fileName: true, tag: true, sizeBytes: true, createdAt: true, quoteId: true,
-        uploadedBy: { select: { name: true } },
-        vendor: { select: { id: true, name: true } },
-      },
-      orderBy: { createdAt: "desc" },
-    }),
-    dealSignatureRequests(dealQuoteIds),
-    getSetting(DOCUMENT_TYPES_KEY).then(parseDocumentTypes),
+  // The same loader builds the ZIP download (api/deals/[id]/file-zip), so the two can't disagree.
+  const { tenantId, suppliersOn, dealQuotes, documents, signatures, declaredVendors, checklist } = await loadDealFile(quote, user);
+  const [canUpload, vendors] = await Promise.all([
     hasAnyPermission(user, "documents.upload"),
-    // The suppliers this deal declares (its lead's, or this quote's when it has no lead).
-    suppliersOn
-      ? prisma.dealVendor.findMany({
-          where: { tenantId, ...dealKey(quote) },
-          select: { vendor: { select: { id: true, name: true, kind: true } } },
-          orderBy: { createdAt: "asc" },
-        })
-      : [],
     suppliersOn ? prisma.vendor.findMany({ where: { tenantId, deletedAt: null }, select: { id: true, name: true }, orderBy: { name: "asc" } }) : [],
   ]);
-  // Module off: the supplier on a document is neither shown nor counted (undefined = this page shows no supplier).
-  const documents = rawDocuments.map((doc) => ({ ...doc, vendor: suppliersOn ? doc.vendor : undefined }));
-  const declaredVendors = declared.map((link) => link.vendor);
-  const checklist = dealFileChecklist(
-    dealQuotes,
-    documents.map((doc) => ({ tag: doc.tag, vendorId: doc.vendor?.id ?? null, vendorName: doc.vendor?.name ?? null })),
-    documentTypes,
-    declaredVendors,
-    suppliersOn,
-  );
   const checklistDone = checklist.filter((item) => item.done).length;
   const quoteGroups = dealQuotes.map((dealQuote) => ({
     id: dealQuote.id,
@@ -452,7 +405,10 @@ export default async function DealWorkspacePage({ params }: { params: Promise<{ 
                       {documents.length} filed document{documents.length === 1 ? "" : "s"} across {dealQuotes.length} quote{dealQuotes.length === 1 ? "" : "s"} · {checklistDone} of {checklist.length} required on file
                     </p>
                   </div>
-                  <DealFileSearch targetId="deal-file" />
+                  <div className="flex flex-wrap items-start gap-2">
+                    <DealFileSearch targetId="deal-file" />
+                    <DealFileZipButton quoteId={quote.id} />
+                  </div>
                 </div>
                 {/* Declared up front, so the checklist asks for each supplier's papers before any arrive. Suppliers module only. */}
                 {suppliersOn && <>
