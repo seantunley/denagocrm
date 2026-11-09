@@ -46,6 +46,8 @@ export function dealFileChecklist(
    * A supplier named on a document counts too, declared or not.
    */
   declaredVendors: readonly { id: string; name: string }[] = [],
+  /** The Suppliers module: off, there is no supplier to choose, so the hint names only the document type. */
+  suppliersOn = true,
 ): ChecklistItem[] {
   const has = (...tags: string[]) => documents.some((doc) => tags.some((tag) => same(doc.tag, tag)));
   const offMenu = (type: string) =>
@@ -91,7 +93,9 @@ export function dealFileChecklist(
         label: vendorName ? `${type} — ${vendorName}` : type,
         // With no supplier named anywhere, a file of the type still counts (filed before suppliers existed).
         done: documents.some((doc) => doc.vendorId === vendorId && same(doc.tag, type)),
-        detail: offMenu(type) ?? (vendorName ? `Upload with ${vendorName} as the supplier` : "Upload it with the supplier chosen"),
+        detail:
+          offMenu(type) ??
+          (!suppliersOn ? `Upload it as “${type}”` : vendorName ? `Upload with ${vendorName} as the supplier` : "Upload it with the supplier chosen"),
       });
     }
   }

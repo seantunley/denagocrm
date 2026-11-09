@@ -41,6 +41,17 @@ test("every way in refuses or hides when the module is off", () => {
   assert.match(read("src/lib/crmAssistant.ts"), /isSupplierDocumentType\(label\) && \(await isModuleEnabled\("suppliers"\)\)/);
 });
 
+test("module off: the checklist names the document type, never a supplier box that isn't there (review of #1043)", async () => {
+  const { dealFileChecklist } = await import("../src/lib/dealFile");
+  const { DEFAULT_DOCUMENT_TYPES } = await import("../src/lib/documentLabels");
+  const quote = { number: 1, status: "sent", invoicedAt: null, deliverySignatureRef: null };
+  const off = dealFileChecklist([quote], [], DEFAULT_DOCUMENT_TYPES, [], false).filter((item) => item.label.startsWith("Supplier"));
+  assert.ok(off.length > 0);
+  for (const item of off) assert.doesNotMatch(item.detail, /supplier chosen|as the supplier/, item.label);
+  assert.match(off[0].detail, /Upload it as “Supplier quote”/);
+  assert.match(read("src/app/(app)/deals/[id]/page.tsx"), /declaredVendors,\s*suppliersOn,\s*\);/);
+});
+
 test("existing workspaces are granted it, once, so nothing they use disappears", () => {
   const sql = read("prisma/migrations/20261109200000_grant_suppliers_module/migration.sql");
   assert.match(sql, /UPDATE "Tenant"/);

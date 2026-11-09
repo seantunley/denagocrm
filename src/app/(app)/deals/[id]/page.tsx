@@ -199,6 +199,7 @@ export default async function DealWorkspacePage({ params }: { params: Promise<{ 
     documents.map((doc) => ({ tag: doc.tag, vendorId: doc.vendor?.id ?? null, vendorName: doc.vendor?.name ?? null })),
     documentTypes,
     declaredVendors,
+    suppliersOn,
   );
   const checklistDone = checklist.filter((item) => item.done).length;
   const quoteGroups = dealQuotes.map((dealQuote) => ({
