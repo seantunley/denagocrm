@@ -39,6 +39,8 @@ test("the email lists deals and their missing papers, and says nothing when noth
 test("visible and switchable, on the automations cron, Suppliers module only, once a week by claim", () => {
   const entry = AUTOMATIONS.find((a) => a.key === "supplier-digest");
   assert.equal(entry?.setting?.key, SUPPLIER_DIGEST_SWITCH);
+  // Off by default — nothing is sent until an owner switches it on (Sean, 2026-11-09).
+  assert.equal(entry?.setting?.defaultOn, false);
   assert.equal(entry?.reaches, "staff");
   assert.deepEqual(entry?.phases, ["supplier-digest"]);
   const cron = read("src/app/api/cron/automations/route.ts");

@@ -260,7 +260,8 @@ export const AUTOMATIONS: Automation[] = [
     reaches: "staff",
     channels: ["email"],
     when: "Mondays from 07:00 (workspace time), once a week",
-    setting: { key: "SUPPLIER_DIGEST", defaultOn: true },
+    // OFF until an owner switches it on (Sean, 2026-11-09: "must remain off by default").
+    setting: { key: "SUPPLIER_DIGEST", defaultOn: false },
     cron: "/api/cron/automations",
     phases: ["supplier-digest"],
   },
