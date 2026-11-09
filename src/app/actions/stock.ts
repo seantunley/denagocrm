@@ -88,8 +88,15 @@ async function assertUniqueSerial(serial: string | null, exceptId?: string) {
 export async function createPurchaseOrder(formData: FormData) {
   return asActionResult(async () => {
     const user = await requirePermission("stock.manage");
-    const supplier = str(formData.get("supplier"));
-    if (!supplier) refuse("Enter the supplier.");
+    // The supplier is a record (Settings → Suppliers), one of this workspace's live ones — not a name typed afresh
+    // each time, which drifted ("Denago" / "Denago OEM") from the deal file's suppliers. Its name is kept on the
+    // order as ordered, which every existing reader of `supplier` shows.
+    const vendor = await prisma.vendor.findFirst({
+      where: { id: str(formData.get("vendorId")), tenantId: await actingTenantId(), deletedAt: null },
+      select: { id: true, name: true },
+    });
+    if (!vendor) refuse("Choose the supplier — an owner adds suppliers in Settings → Suppliers.");
+    const supplier = vendor.name;
     const reference = str(formData.get("reference")) || null;
     const expectedAt = date(formData.get("expectedAt"));
     const notes = str(formData.get("notes")) || null;
@@ -126,7 +133,7 @@ export async function createPurchaseOrder(formData: FormData) {
     }
 
     const order = await prisma.$transaction(async (tx) => {
-      const po = await tx.purchaseOrder.create({ data: { supplier, reference, expectedAt, notes } });
+      const po = await tx.purchaseOrder.create({ data: { supplier, vendorId: vendor.id, reference, expectedAt, notes } });
       for (const line of lines) {
         const poLine = await tx.purchaseOrderLine.create({
           data: {

@@ -21,7 +21,8 @@ const blankLine = (): Line => ({
   notes: "",
 });
 
-export default function StockPurchaseOrderForm({ products }: { products: Product[] }) {
+/** `vendors`: the workspace's suppliers (Settings → Suppliers) — an order names one of them, not a typed name. */
+export default function StockPurchaseOrderForm({ products, vendors }: { products: Product[]; vendors: { id: string; name: string }[] }) {
   const moneyFmt = useMoneyFormat();
   const [lines, setLines] = useState<Line[]>([blankLine()]);
   const totalUnits = lines.reduce((sum, line) => sum + Math.max(0, line.qty || 0), 0);
@@ -56,7 +57,12 @@ export default function StockPurchaseOrderForm({ products }: { products: Product
       />
 
       <CaptureSection title="Order details" description="Supplier-facing reference and expected arrival information." icon={ShoppingCart}>
-        <CaptureField label="Supplier *"><input name="supplier" className="input" required /></CaptureField>
+        <CaptureField label="Supplier *">
+          <select name="vendorId" className="input" required defaultValue="">
+            <option value="" disabled>{vendors.length ? "Choose the supplier" : "No suppliers yet — Settings → Suppliers"}</option>
+            {vendors.map((vendor) => <option key={vendor.id} value={vendor.id}>{vendor.name}</option>)}
+          </select>
+        </CaptureField>
         <CaptureField label="Supplier order reference"><input name="reference" className="input" placeholder="PO / order number" /></CaptureField>
         <CaptureField label="Expected delivery"><input name="expectedAt" type="date" className="input" /></CaptureField>
         <CaptureField label="Internal notes"><input name="notes" className="input" placeholder="Shipping, payment or allocation context" /></CaptureField>

@@ -20,6 +20,7 @@ import {
   Truck,
   UserRound,
   Wrench,
+  X,
 } from "lucide-react";
 import { prisma } from "@/lib/db";
 import { canAccessContact, canAccessLead, getAccessibleQuoteIds, hasAnyPermission, requireQuoteReadAccess, requireRoute } from "@/lib/permissions";
@@ -32,6 +33,11 @@ import { DOCUMENT_TYPES_KEY, parseDocumentTypes } from "@/lib/documentLabels";
 import { dealFileChecklist } from "@/lib/dealFile";
 import DocumentsPanel from "@/components/DocumentsPanel";
 import DealFileSearch from "@/components/deals/DealFileSearch";
+import { SaveForm, SaveButton } from "@/components/SaveForm";
+import { actingTenantId } from "@/lib/actingTenant";
+import { dealKey } from "@/lib/dealVendors";
+import { vendorKindLabel } from "@/lib/vendors";
+import { addDealVendor, removeDealVendor } from "@/app/actions/vendors";
 import { withCurrency } from "@/lib/currencyRules";
 import DealPayments from "@/components/deals/DealPayments";
 import { primaryVehicleLine, showcaseImageRefFor } from "@/lib/docbuilder/vehicleShowcase";
@@ -155,7 +161,8 @@ export default async function DealWorkspacePage({ params }: { params: Promise<{ 
     orderBy: { createdAt: "desc" },
   });
   const dealQuoteIds = dealQuotes.map((dealQuote) => dealQuote.id);
-  const [documents, signatures, documentTypes, canUpload] = await Promise.all([
+  const tenantId = await actingTenantId();
+  const [documents, signatures, documentTypes, canUpload, declared, vendors] = await Promise.all([
     prisma.document.findMany({
       // The current version of each file only — an older one is kept in its history (replacedById).
       where: { quoteId: { in: dealQuoteIds }, deletedAt: null, replacedById: null },
@@ -174,11 +181,20 @@ export default async function DealWorkspacePage({ params }: { params: Promise<{ 
     }),
     getSetting(DOCUMENT_TYPES_KEY).then(parseDocumentTypes),
     hasAnyPermission(user, "documents.upload"),
+    // The suppliers this deal declares (its lead's, or this quote's when it has no lead).
+    prisma.dealVendor.findMany({
+      where: { tenantId, ...dealKey(quote) },
+      select: { vendor: { select: { id: true, name: true, kind: true } } },
+      orderBy: { createdAt: "asc" },
+    }),
+    prisma.vendor.findMany({ where: { tenantId, deletedAt: null }, select: { id: true, name: true }, orderBy: { name: "asc" } }),
   ]);
+  const declaredVendors = declared.map((link) => link.vendor);
   const checklist = dealFileChecklist(
     dealQuotes,
     documents.map((doc) => ({ tag: doc.tag, vendorId: doc.vendor?.id ?? null, vendorName: doc.vendor?.name ?? null })),
     documentTypes,
+    declaredVendors,
   );
   const checklistDone = checklist.filter((item) => item.done).length;
   const quoteGroups = dealQuotes.map((dealQuote) => ({
@@ -432,6 +448,36 @@ export default async function DealWorkspacePage({ params }: { params: Promise<{ 
                     </p>
                   </div>
                   <DealFileSearch targetId="deal-file" />
+                </div>
+                {/* Declared up front, so the checklist asks for each supplier's papers before any arrive. */}
+                <p className="mt-4 text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">Suppliers on this deal</p>
+                <div className="mt-2 flex flex-wrap items-center gap-2">
+                  {declaredVendors.length === 0 && <span className="text-xs text-muted-foreground">None yet — add the OEM, the delivery company and anyone else you pay on this deal.</span>}
+                  {declaredVendors.map((vendor) => (
+                    <span key={vendor.id} className="inline-flex items-center gap-1.5 rounded-full border border-border bg-muted/30 py-1 pl-3 pr-1.5 text-xs">
+                      <span className="font-medium">{vendor.name}</span>
+                      <span className="text-muted-foreground">{vendorKindLabel(vendor.kind)}</span>
+                      {canUpload && (
+                        <SaveForm action={removeDealVendor.bind(null, quote.id, vendor.id)} success={`${vendor.name} removed`}>
+                          <SaveButton className="grid size-5 place-items-center rounded-full text-muted-foreground hover:bg-muted hover:text-foreground" pendingLabel="…" aria-label={`Take ${vendor.name} off this deal`}>
+                            <X className="size-3" />
+                          </SaveButton>
+                        </SaveForm>
+                      )}
+                    </span>
+                  ))}
+                  {canUpload && vendors.some((vendor) => !declaredVendors.some((on) => on.id === vendor.id)) && (
+                    <SaveForm action={addDealVendor.bind(null, quote.id)} success="Supplier added" className="flex items-center gap-1.5">
+                      <select name="vendorId" required defaultValue="" className="input h-8 w-48 text-xs" aria-label="Supplier to add">
+                        <option value="" disabled>Add a supplier…</option>
+                        {vendors.filter((vendor) => !declaredVendors.some((on) => on.id === vendor.id)).map((vendor) => (
+                          <option key={vendor.id} value={vendor.id}>{vendor.name}</option>
+                        ))}
+                      </select>
+                      <SaveButton className="btn-secondary btn-sm">Add</SaveButton>
+                    </SaveForm>
+                  )}
+                  {canUpload && vendors.length === 0 && <span className="text-xs text-muted-foreground">An owner adds suppliers in Settings → Suppliers.</span>}
                 </div>
                 <p className="mt-4 text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">From the CRM</p>
                 <ul className="mt-1 divide-y divide-border/60">

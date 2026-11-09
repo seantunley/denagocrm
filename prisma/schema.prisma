@@ -281,7 +281,11 @@ model PurchaseOrder {
   id         String      @id @default(cuid())
   tenantId String? // Multi-tenancy (Phase B — additive/inert): owning tenant.
   reference  String? // supplier's PO / order number
-  supplier   String      @default("Denago")
+  supplier   String      @default("Denago") // the supplier's name as ordered (kept as written; vendorId is the record)
+  /// The supplier (Settings → Suppliers). Set on every new order; old orders backfilled by name. Its goods
+  /// receipts are from the same supplier through the order.
+  vendorId   String?
+  vendor     Vendor?     @relation(fields: [vendorId], references: [id], onDelete: SetNull)
   status     String      @default("ordered") // ordered | received | cancelled
   orderedAt  DateTime    @default(now())
   expectedAt DateTime?
@@ -295,6 +299,7 @@ model PurchaseOrder {
   stockEvents   StockEvent[]
   @@index([tenantId])
   @@unique([tenantId, id])
+  @@index([vendorId])
 }
 
 model StockUnit {

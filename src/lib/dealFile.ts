@@ -41,6 +41,11 @@ export function dealFileChecklist(
   documents: readonly DealFileDocument[],
   /** The workspace's document types: a checklist type missing from it can never be ticked, so it says so. */
   types: readonly string[],
+  /**
+   * The suppliers the deal declares (DealVendor) — asked for even before any of their papers arrive.
+   * A supplier named on a document counts too, declared or not.
+   */
+  declaredVendors: readonly { id: string; name: string }[] = [],
 ): ChecklistItem[] {
   const has = (...tags: string[]) => documents.some((doc) => tags.some((tag) => same(doc.tag, tag)));
   const offMenu = (type: string) =>
@@ -74,9 +79,10 @@ export function dealFileChecklist(
     },
   ];
 
-  // One set per supplier named on any of the deal's documents; none yet → the set unnamed, all missing.
+  // One set per supplier on the deal — declared, or named on any of its documents; none → the set unnamed, all missing.
   const suppliers = new Map<string, string>();
-  for (const doc of documents) if (doc.vendorId) suppliers.set(doc.vendorId, doc.vendorName ?? "Supplier");
+  for (const vendor of declaredVendors) suppliers.set(vendor.id, vendor.name);
+  for (const doc of documents) if (doc.vendorId && !suppliers.has(doc.vendorId)) suppliers.set(doc.vendorId, doc.vendorName ?? "Supplier");
   const supplierList = suppliers.size ? [...suppliers] : [[null, null] as const];
   for (const [vendorId, vendorName] of supplierList) {
     for (const type of SUPPLIER_DOCUMENT_TYPES) {

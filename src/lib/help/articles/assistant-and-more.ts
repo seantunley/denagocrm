@@ -559,10 +559,11 @@ export const assistantAndMoreArticles: HelpArticle[] = [
       { type: "h", text: "The deal file checklist" },
       { type: "p", text: "Every deal is checked for: the **Quote** (sent, not just a draft), the **Invoice**, the **Customer proof of payment**, the **Delivery paperwork**, and from **each supplier** on the deal — the OEM, the delivery company, a wrap shop — a **Supplier quote**, **Supplier invoice** and **Proof of payment — supplier**. Paperwork filed on the delivery board (the deposit's proof of payment, the delivery paperwork, the signed delivery note) ticks the same boxes as an upload." },
       { type: "steps", items: [
-        "An owner adds the suppliers once in **Settings → Suppliers**.",
-        "On the deal, upload the supplier's quote with **What is it?** set to *Supplier quote* and **Supplier** set to that supplier. A supplier document can't be uploaded without its supplier.",
-        "The checklist now asks for that supplier's invoice and proof of payment as well. A second supplier gets its own three lines.",
+        "An owner adds the suppliers once in **Settings → Suppliers**, saying what each one is (OEM, delivery, wrapping, finance, other).",
+        "On the deal, under **Suppliers on this deal**, add each supplier involved. The checklist now asks for each one's quote, invoice and proof of payment straight away.",
+        "Upload a supplier's paper with **What is it?** set to *Supplier quote*, *Supplier invoice* or *Proof of payment — supplier*; a **Supplier** box then appears, and must be filled in. A supplier named on an upload is added to the deal's suppliers by itself.",
       ] },
+      { type: "p", text: "Each supplier has its own page (click it in **Settings → Suppliers**): every deal it is on with what is still outstanding from it, its documents and its purchase orders. New purchase orders on the Stock page choose their supplier from the same list." },
       { type: "callout", tone: "info", text: "Search anywhere in the CRM finds a document by its supplier's name too, and shows the quote and customer it is filed on." },
       { type: "h", text: "Using the readiness checklist" },
       { type: "steps", items: [

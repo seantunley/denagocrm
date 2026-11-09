@@ -361,7 +361,11 @@ test("session GUCs really do span separate statements, in every migration that u
   // 20 → 21: 20261011090000_inbound_screening gives `inbox.spam` to every role
   // that already holds `inbox.reply`. Same tables, same reason: without the
   // escape the SELECT over RolePermission matches nothing and nobody is granted.
-  assert.equal(spans.length, 21, "twenty-one migrations set a session GUC");
+  //
+  // 21 → 22: 20261109160000_suppliers_on_deals_and_orders creates a supplier for each name already typed on a
+  // workspace's purchase orders and links the orders to it. Vendor and PurchaseOrder FORCE RLS — without the
+  // escape the INSERT and UPDATE would touch nothing and the migration would still be recorded as applied.
+  assert.equal(spans.length, 22, "twenty-two migrations set a session GUC");
   for (const { name, between } of spans) {
     assert.ok(between > 0, `${name}: a SET with no following statement would not need session pinning`);
   }

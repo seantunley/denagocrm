@@ -1,18 +1,48 @@
 /// A business the workspace buys from or pays: the OEM, a delivery company, a wrap shop (Sean, 2026-11-09).
-/// A supplier document in a deal's file names one, so the file can ask for each supplier's quote, invoice and
-/// proof of payment. Kept in Settings → Suppliers. No banking details (Sean: "No").
+/// A deal declares its suppliers (DealVendor) and its file then asks each one for its quote, invoice and proof
+/// of payment. Purchase orders name one too. Kept in Settings → Suppliers. No banking details (Sean: "No").
 model Vendor {
-  id        String    @id @default(cuid())
-  tenantId  String
-  name      String
-  phone     String?
-  email     String?
-  notes     String?
-  createdAt DateTime  @default(now())
-  updatedAt DateTime  @updatedAt
-  deletedAt DateTime?
+  id                 String    @id @default(cuid())
+  tenantId           String
+  name               String
+  /// What it is (lib/vendors.ts VENDOR_KINDS): oem | transport | wrap | finance | other.
+  kind               String    @default("other")
+  vatNumber          String?
+  registrationNumber String?
+  address            String?
+  /// e.g. "30 days from invoice".
+  paymentTerms       String?
+  /// The reference their invoices and our payments to them carry, for matching proof of payment.
+  paymentReference   String?
+  phone              String?
+  email              String?
+  notes              String?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+  deletedAt          DateTime?
 
-  documents Document[]
+  documents      Document[]
+  purchaseOrders PurchaseOrder[]
+  deals          DealVendor[]
 
+  @@unique([tenantId, id])
   @@index([tenantId, name])
+}
+
+/// A supplier declared on a deal, so the deal file asks for its papers before any arrive. The deal is its LEAD,
+/// or the quote itself for a quote with no lead — exactly one of the two (a CHECK in the migration). The lead and
+/// quote keys are composite tenant FKs in the migration SQL; one supplier once per deal (partial unique indexes).
+model DealVendor {
+  id          String   @id @default(cuid())
+  tenantId    String
+  leadId      String?
+  quoteId     String?
+  vendorId    String
+  vendor      Vendor   @relation(fields: [tenantId, vendorId], references: [tenantId, id], onDelete: Cascade)
+  createdById String?
+  createdAt   DateTime @default(now())
+
+  @@index([tenantId, leadId])
+  @@index([tenantId, quoteId])
+  @@index([tenantId, vendorId])
 }

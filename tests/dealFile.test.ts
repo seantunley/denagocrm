@@ -49,6 +49,29 @@ test("each supplier needs its own quote, invoice and proof of payment", () => {
   assert.deepEqual(supplierMissing, ["Supplier invoice — Wrap Co", "Proof of payment — supplier — Wrap Co"]);
 });
 
+test("a declared supplier is asked for before any of its papers arrive (review of #1040)", () => {
+  const items = dealFileChecklist([quote()], [doc("Supplier quote", "oem", "Denago")], DEFAULT_DOCUMENT_TYPES, [
+    { id: "oem", name: "Denago" },
+    { id: "wrap", name: "Wrap Studio" },
+  ]);
+  const wrap = items.filter((item) => item.label.endsWith("— Wrap Studio"));
+  assert.deepEqual(wrap.map((item) => [item.label, item.done]), [
+    ["Supplier quote — Wrap Studio", false],
+    ["Supplier invoice — Wrap Studio", false],
+    ["Proof of payment — supplier — Wrap Studio", false],
+  ]);
+  assert.equal(items.filter((item) => item.label.endsWith("— Denago")).length, 3, "declared and on a document: listed once");
+});
+
+test("a supplier's name compares without case, punctuation or the company form", async () => {
+  const { normaliseVendorName, vendorKind } = await import("../src/lib/vendors");
+  assert.equal(normaliseVendorName("Wrap Studio (Pty) Ltd"), normaliseVendorName("wrap studio"));
+  assert.equal(normaliseVendorName("A&B Transport CC"), normaliseVendorName("A and B transport"));
+  assert.notEqual(normaliseVendorName("Wrap Co"), normaliseVendorName("Wrap"));
+  assert.equal(vendorKind("transport"), "transport");
+  assert.equal(vendorKind("bank"), "other");
+});
+
 test("a supplier file filed before suppliers existed still counts", () => {
   const items = dealFileChecklist([quote()], [doc("supplier quote")], DEFAULT_DOCUMENT_TYPES);
   assert.equal(items.find((item) => item.label === "Supplier quote")?.done, true);

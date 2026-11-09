@@ -18,6 +18,7 @@ import { authorizeDocumentTarget } from "@/lib/documentUploadAuth";
 import { DOCUMENT_TYPES_KEY, SYSTEM_DOCUMENT_TAGS, chosenDocumentType, isPersonLabel, parseDocumentTypes } from "@/lib/documentLabels";
 import { getSetting } from "@/lib/settings";
 import { isSupplierDocumentType } from "@/lib/dealFile";
+import { linkVendorToDeal } from "@/lib/dealVendors";
 import { actingOwnerTenantId } from "@/lib/actingScope";
 import { requiredReason } from "@/lib/deleteReason";
 import { DOC_DEFS, defaultTemplate, mergeTemplate, isDocKey } from "@/lib/docTemplates";
@@ -124,6 +125,16 @@ async function chosenVendorId(posted: unknown, type: string | null, tenantId: st
 }
 
 /**
+ * Put a document's supplier on its deal (DealVendor). After the document is saved, so a failure here is logged
+ * and the upload still stands — the supplier still counts on the checklist through the document itself.
+ */
+async function dealSupplierFrom(quote: { id: string; leadId: string | null }, vendorId: string, tenantId: string, userId: string) {
+  await linkVendorToDeal({ tenantId, quote, vendorId, userId }).catch((error) =>
+    logError("deal-supplier-link", error, `quote=${quote.id}`, { tenantId, alert: false }),
+  );
+}
+
+/**
  * Whose trail a change to a document belongs on.
  *
  * A file uploaded against a QUOTE carries the quote and no customer, so an entry
@@ -182,7 +193,9 @@ export async function uploadDocument(formData: FormData) {
     });
     // Filed against a quote: said so in the trail, on that quote's customer and deal
     // (the quote is the one record this upload was authorised against).
-    const quote = doc.quoteId ? await prisma.quote.findUnique({ where: { id: doc.quoteId }, select: { number: true, contactId: true, leadId: true } }) : null;
+    const quote = doc.quoteId ? await prisma.quote.findUnique({ where: { id: doc.quoteId }, select: { id: true, number: true, contactId: true, leadId: true } }) : null;
+    // A supplier's paper on a deal puts that supplier on the deal, so its file asks for the rest of its papers.
+    if (quote && vendorId && tenantId) await dealSupplierFrom(quote, vendorId, tenantId, user.id);
     await logAudit({
       action: "document.uploaded",
       summary: `Uploaded document “${file.name}”${chosen.type ? ` as ${chosen.type}` : ""}${doc.vendor ? ` from ${doc.vendor.name}` : ""}${quote ? ` against Q-${quote.number}` : ""}`,
@@ -319,6 +332,10 @@ export async function relabelDocument(id: string, revalidate: string, formData: 
     });
     if (changed.count !== 1) refuse(SET_BY_CRM);
     const doc = await prisma.document.findUnique({ where: { id }, select: { fileName: true, contactId: true, quoteId: true, vendor: { select: { name: true } } } });
+    if (doc?.quoteId && vendorId && owner?.tenantId) {
+      const quote = await prisma.quote.findUnique({ where: { id: doc.quoteId }, select: { id: true, leadId: true } });
+      if (quote) await dealSupplierFrom(quote, vendorId, owner.tenantId, user.id);
+    }
     await logAudit({
       action: "document.relabelled",
       summary: `Labelled document “${doc?.fileName ?? "document"}” ${chosen.type ? `as ${chosen.type}` : "as not labelled"}${doc?.vendor ? ` from ${doc.vendor.name}` : ""}`,
