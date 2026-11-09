@@ -38,7 +38,8 @@ test("every way in refuses or hides when the module is off", () => {
   assert.match(read("src/app/actions/stock.ts"), /const supplier = vendor\?\.name \?\? str\(formData\.get\("supplier"\)\);/);
   assert.match(read("src/components/StockPurchaseOrderForm.tsx"), /<input name="supplier" className="input" required \/>/);
   assert.match(read("src/lib/crmSearch.ts"), /\.\.\.\(suppliersOn \? \[\{ vendor: \{ is: \{ name: contains \} \} \}\] : \[\]\)/);
-  assert.match(read("src/lib/crmAssistant.ts"), /isSupplierDocumentType\(label\) && \(await isModuleEnabled\("suppliers"\)\)/);
+  // DAX asks for and names a supplier only with the module on (since DAX names suppliers, 2026-11-09).
+  assert.match(read("src/lib/crmAssistant.ts"), /\(supplierType \|\| p\.supplier\) && \(await isModuleEnabled\("suppliers"\)\)/);
 });
 
 test("module off: the checklist names the document type, never a supplier box that isn't there (review of #1043)", async () => {

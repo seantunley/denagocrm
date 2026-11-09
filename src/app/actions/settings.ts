@@ -400,6 +400,8 @@ async function hasRecordedAmounts(): Promise<boolean> {
     // Sales targets are cents in the base, like everything above.
     prisma.target.findFirst({ where: { metric: "sales_value", value: { gt: 0 } }, select: { id: true } }),
     prisma.servicePackageItem.findFirst({ where: { unitPriceCents: { gt: 0 } }, select: { id: true } }),
+    // A supplier invoice total with no currency of its own is shown in the base.
+    prisma.supplierInvoice.findFirst({ where: { totalCents: { not: null }, currency: null }, select: { id: true } }),
     prisma.campaign.findFirst({
       where: { OR: [{ budgetCents: { gt: 0 } }, { targetRevenueCents: { gt: 0 } }, { revenueCents: { gt: 0 } }, { attributedRevenueCents: { gt: 0 } }] },
       select: { id: true },

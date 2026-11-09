@@ -361,8 +361,15 @@ export async function runAssistantAction(
         const target = (card.target ?? {}) as Record<string, unknown>;
         const keys = (["contactId", "vehicleId", "jobCardId", "quoteId"] as const).filter((key) => typeof target[key] === "string" && target[key]);
         if (keys.length !== 1 || typeof card.uploadId !== "string" || !CONFIRM_KEY.test(String(card.confirmKey ?? ""))) return untouched(STALE_CARD);
-        // Filed ONCE, and the held file is never thrown away to do it (fileHeldUpload — review of #934).
-        const filed = await fileHeldUpload(user.id, card.confirmKey, card.uploadId, { [keys[0]]: String(target[keys[0]]), ...(card.label ? { label: card.label } : {}) }, "file a document");
+        if (card.vendorId !== undefined && typeof card.vendorId !== "string") return untouched(STALE_CARD);
+        // Filed ONCE, and the held file is never thrown away to do it (fileHeldUpload — review of #934). The supplier
+        // goes through the same door: uploadDocument checks it is a live one of the record's workspace and puts it
+        // on the deal.
+        const filed = await fileHeldUpload(user.id, card.confirmKey, card.uploadId, {
+          [keys[0]]: String(target[keys[0]]),
+          ...(card.label ? { label: card.label } : {}),
+          ...(card.vendorId ? { vendorId: card.vendorId } : {}),
+        }, "file a document");
         if (filed === "gone") return untouched(UPLOAD_GONE);
         if (filed === "busy") return { ok: false, error: "That file is still being filed, or the last try was cut off — check the record's documents in a moment, and send it to DAX again if it's missing." };
         if (filed === "already") return { ok: true, success: `Already filed on ${card.leadLabel}` };

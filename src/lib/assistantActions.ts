@@ -89,6 +89,8 @@ export const proposedAction = z.discriminatedUnion("type", [
     jobCardId: leadId.optional(),
     quote: text.max(40).optional(),
     label: text.max(60).optional(),
+    // The supplier a supplier quote / invoice / proof of payment is from, as the person named it ("Wrap Studio").
+    supplier: text.max(120).optional(),
     reason,
   }).strict(),
   // RECORD MONEY RECEIVED on an invoiced quote — its deposit, or a payment after it — with the proof of payment
@@ -417,7 +419,7 @@ export const CREATE_CUSTOMER_RULE =
 /** Filing what was sent, recording money, forwarded messages and debriefs (Sean, 2026-11-02: "Do them all"). */
 export const FILE_AND_PAYMENT_RULE =
   "- attach_file: FILE what they sent — a PDF, a document, a photo — on ONE record's documents, when they ask (\"file this on Anna\", \"put this on Q-1030\", \"these are the check-in photos for job card 112\"): contactId (a customer), leadId (a deal — filed on its customer), vehicleId (a vehicle, e.g. trade-in or damage photos), jobCardId (a workshop job card), or quote (\"Q-1030\" — invoices, delivery notes, signed paperwork). Exactly one. " +
-  "\"label\": one of the workspace's document types when one fits — leave it out otherwise. It files the file sent with this message, or with the message just before when this is the reply about it; with nothing in front of you there is nothing to file — ask them to send it again. A screenshot to SEE on the timeline is a note with attachImage; a document to KEEP is attach_file. " +
+  "\"label\": one of the workspace's document types when one fits — leave it out otherwise. For a supplier quote, supplier invoice or supplier proof of payment, \"supplier\": the supplier's name as they said it (\"file this as Wrap Studio's invoice on Q-1030\") — put supplier papers on the deal's quote. It files the file sent with this message, or with the message just before when this is the reply about it; with nothing in front of you there is nothing to file — ask them to send it again. A screenshot to SEE on the timeline is a note with attachImage; a document to KEEP is attach_file. " +
   "When a file arrives with no instruction, say what it is and ask where to file it (and as what) — everything in one question; a proof of payment is matched instead (below).\n" +
   "- record_payment: RECORD MONEY RECEIVED on an invoiced quote when they ask, or when they send a PROOF OF PAYMENT (a bank notification, an EFT confirmation) and say it is for a quote: quote (\"Q-1030\"), amount in RANDS — as they said it, or as it reads on the proof — method (eft, card, cash, finance), receivedOn (the date on the proof, or today), reference when the proof shows one. " +
   "The CRM decides whether it is the DEPOSIT (none recorded yet — the proof is filed with it, and is required) or a later payment, and refuses more than is owing. Say the amount and date you read in your answer so they can check them; the card shows them again before Confirm. Never mark anything paid without the card. " +
@@ -823,7 +825,7 @@ export type ActionCard =
   // A new deal: for `lead.contactId`, or for a new person by name and number/email (the lead form links or creates the customer).
   | { id: string; kind: "create_lead"; leadId: null; leadLabel: string; title: string; lead: NewLead; detail: string; confirmKey: string; reason?: string }
   // A file the person sent (held: `uploadId`, theirs only), filed on ONE record through the documents form's upload.
-  | { id: string; kind: "attach_file"; leadId: string | null; leadLabel: string; title: string; uploadId: string; fileName: string; target: FileTarget; label: string | null; detail: string; confirmKey: string; reason?: string }
+  | { id: string; kind: "attach_file"; leadId: string | null; leadLabel: string; title: string; uploadId: string; fileName: string; target: FileTarget; label: string | null; vendorId?: string; detail: string; confirmKey: string; reason?: string }
   // Money received on an invoiced quote: `deposit` (with its proof, required) or a later payment (proof filed if sent).
   // `confirmKey` is the payment's idempotency key: a second Confirm records nothing more.
   | { id: string; kind: "record_payment"; leadId: string | null; leadLabel: string; title: string; quoteId: string; quoteNumber: number; deposit: boolean; amountCents: number; currency?: string | null; method: "eft" | "card" | "cash" | "finance"; receivedOn: string; reference: string | null; uploadId: string | null; fileName: string | null; detail: string; confirmKey: string; reason?: string }
