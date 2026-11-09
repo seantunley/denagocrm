@@ -38,6 +38,20 @@ export const SYSTEM_DOCUMENT_TAGS: ReadonlySet<string> = new Set([
   "checkin", "checkin-photo", "checkout-photo", "generated-pdf", "for-signing",
 ]);
 
+/**
+ * What each tag the CRM writes means to someone reading the file — the documents tab and the deal-file ZIP. Untagged
+ * files keep their filename only: a label of "other" tells the reader nothing.
+ */
+export const SYSTEM_TAG_LABELS: Readonly<Record<string, string>> = {
+  signed: "Signed copy",
+  invoice: "Invoice",
+  pop: "Proof of payment",
+  "delivery-note": "Delivery note",
+  "delivery-photo": "Delivery photo",
+  "delivery-signature": "Handover signature",
+  checkin: "Check-in",
+};
+
 export const DOCUMENT_TYPE_MAX = 60;
 export const DOCUMENT_TYPES_MAX = 40;
 

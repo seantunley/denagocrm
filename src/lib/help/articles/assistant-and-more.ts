@@ -556,6 +556,15 @@ export const assistantAndMoreArticles: HelpArticle[] = [
         ["Deal file (right)", "The checklist of what every deal must have on file, with how many are done — see below. **Open the file** jumps to the documents."],
         ["Deal file (main column)", "Every document for the whole deal — every quote on the lead, revisions included: the quotations, invoice, sales agreement and delivery note the CRM makes, the signature requests, and every uploaded file under the quote it belongs to. Type in **Search this deal's documents** to filter by name, type, supplier or who uploaded it. Upload a file here with its type and, for supplier paperwork, its supplier."],
       ] },
+      { type: "h", text: "Downloading the deal file (password-protected ZIP)" },
+      { type: "steps", items: [
+        "On the deal, press **Download ZIP** beside the search box in the deal file.",
+        "Type a password of at least 10 characters, twice, and press **Download**.",
+        "Send the ZIP to whoever needs it — the finance house, an auditor — and tell them the password a different way (an SMS or a call, not in the same email).",
+      ] },
+      { type: "p", text: "The ZIP holds a **cover sheet** first — the deal, its quotes, the checklist exactly as it stood when you downloaded it (done and missing) and a numbered index of every file — then each current quote's quotation PDF, every document filed on the deal and the handover photos, in a folder per quote. It is the same set you see on the deal page, so it doubles as an audit pack." },
+      { type: "p", text: "Under each quote, the filed papers are grouped: **Customer** first (the invoice, the customer's proof of payment, the delivery paperwork), then **Supplier · <name>** for each supplier — its quote, invoice and proof of payment together. **Handover photos** below the documents shows every photo taken in the delivery checklist, so they can still be found after the deal leaves the Deliveries board." },
+      { type: "callout", tone: "warning", text: "The ZIP is encrypted with AES-256. Windows' built-in **Extract all** can't open that kind — the recipient needs the free **7-Zip** or WinRAR on Windows, or **The Unarchiver** or Keka on a Mac. The CRM never stores the password, so it can't be recovered: if it's lost, download the file again with a new one. Every download is in the audit trail (who and when — never the password)." },
       { type: "h", text: "The deal file checklist" },
       { type: "p", text: "Every deal is checked for: the **Quote** (sent, not just a draft), the **Invoice**, the **Customer proof of payment**, the **Delivery paperwork**, and from **each supplier** on the deal — the OEM, the delivery company, a wrap shop — a **Supplier quote**, **Supplier invoice** and **Proof of payment — supplier**. Paperwork filed on the delivery board (the deposit's proof of payment, the delivery paperwork, the signed delivery note) ticks the same boxes as an upload." },
       { type: "steps", items: [

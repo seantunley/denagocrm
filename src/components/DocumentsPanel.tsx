@@ -3,7 +3,7 @@ import { uploadDocument, deleteDocument, relabelDocument } from "@/app/actions/d
 import ConfirmDelete from "@/components/ConfirmDelete";
 import DocumentUploadFields, { DocumentLabelFields } from "@/components/DocumentUploadFields";
 import ModalTrigger from "@/components/Modal";
-import { DOCUMENT_TYPES_KEY, isPersonLabel, parseDocumentTypes } from "@/lib/documentLabels";
+import { DOCUMENT_TYPES_KEY, isPersonLabel, parseDocumentTypes, SYSTEM_TAG_LABELS } from "@/lib/documentLabels";
 import { getSetting, getRegionalSettings } from "@/lib/settings";
 import { prisma } from "@/lib/db";
 import { actingTenantId } from "@/lib/actingTenant";
@@ -15,7 +15,7 @@ import QuoteRowActions from "@/components/quotes/QuoteRowActions";
 import { StatusPill } from "@/components/visual-system";
 import { formatDate, formatZAR } from "@/lib/format";
 import { withCurrency } from "@/lib/currencyRules";
-import { isSupplierQuote } from "@/lib/dealFile";
+import { isSupplierQuote, partiesOf } from "@/lib/dealFile";
 import { quotePricing, type PricedLine } from "@/lib/pricing";
 import { saveQuoteLineCosts } from "@/app/actions/quoteCosts";
 import { requireUser } from "@/lib/auth";
@@ -64,19 +64,8 @@ export type QuoteGroup = {
   documents: Doc[];
 };
 
-/**
- * What each tag means to someone reading the tab. Untagged files keep their
- * filename only — a label of "other" tells the reader nothing.
- */
-const TAG_LABELS: Record<string, string> = {
-  signed: "Signed copy",
-  invoice: "Invoice",
-  pop: "Proof of payment",
-  "delivery-note": "Delivery note",
-  "delivery-photo": "Delivery photo",
-  "delivery-signature": "Handover signature",
-  checkin: "Check-in",
-};
+/** What each CRM-written tag means to someone reading the tab (shared with the deal-file ZIP). */
+const TAG_LABELS = SYSTEM_TAG_LABELS;
 
 /**
  * Paperwork reads in the order the deal happens — signed contract, invoice,
@@ -412,13 +401,25 @@ export default async function DocumentsPanel({
                 <p className="mt-2 text-xs text-slate-500">
                   No paperwork filed against this quote yet.
                 </p>
-              ) : (
-                <ul className="mt-1 divide-y divide-slate-800">
-                  {[...group.documents].sort(byLifecycle).map((doc) => (
-                    <DocRow key={doc.id} doc={doc} revalidate={revalidate} types={types} vendors={vendors} invoices={invoices} money={invoiceMoney} />
-                  ))}
-                </ul>
-              )}
+              ) : (() => {
+                // Customer, then each supplier by name — headings only once a supplier paper is on the quote.
+                const sections = partiesOf([...group.documents].sort(byLifecycle).map((doc) => (vendors === null ? { ...doc, vendor: undefined } : doc)));
+                const headed = sections.some((section) => section.supplier);
+                return sections.map((section) => (
+                  <div key={section.key} className={headed ? "mt-2" : ""}>
+                    {headed && (
+                      <p className={`text-[10px] font-semibold uppercase tracking-widest ${section.supplier ? "text-sky-300/80" : "text-emerald-300/80"}`}>
+                        {section.label} <span className="font-normal text-muted-foreground">· {section.docs.length}</span>
+                      </p>
+                    )}
+                    <ul className="mt-1 divide-y divide-slate-800">
+                      {section.docs.map((doc) => (
+                        <DocRow key={doc.id} doc={doc} revalidate={revalidate} types={types} vendors={vendors} invoices={invoices} money={invoiceMoney} />
+                      ))}
+                    </ul>
+                  </div>
+                ));
+              })()}
               {(() => {
                 const quote = costQuotes.find((q) => q.id === group.id);
                 return quote && quote.items.length > 0 ? (

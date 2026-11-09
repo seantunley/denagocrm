@@ -1,4 +1,81 @@
 import { prisma } from "./db";
+import { getAccessibleQuoteIds, type PermissionUser } from "./permissions";
+import { actingTenantId } from "./actingTenant";
+import { isModuleEnabled } from "./modules/enabled";
+import { getSetting } from "./settings";
+import { DOCUMENT_TYPES_KEY, parseDocumentTypes } from "./documentLabels";
+import { dealFileChecklist } from "./dealFile";
+import { dealKey } from "./dealVendors";
+
+/**
+ * The deal file as the deal page shows it (Sean, 2026-11-09): every quote on the deal — its lead, revisions
+ * included, or the quote alone when it has no lead — that THIS person may open; the current version of each document
+ * filed on them; the signature requests; the suppliers declared on the deal; and the checklist. ONE loader for the
+ * page and the ZIP download, so the pack can never list or tick differently from the screen.
+ *
+ * With the Suppliers module off, no supplier is shown or counted (vendor undefined) and the checklist asks for
+ * supplier papers by type alone.
+ */
+export async function loadDealFile(quote: { id: string; leadId: string | null }, user: PermissionUser) {
+  const accessibleQuoteIds = await getAccessibleQuoteIds(user);
+  const dealQuotes = await prisma.quote.findMany({
+    where: {
+      deletedAt: null,
+      ...(quote.leadId ? { leadId: quote.leadId } : { id: quote.id }),
+      ...(accessibleQuoteIds ? { AND: [{ id: { in: accessibleQuoteIds } }] } : {}),
+    },
+    include: { items: true, fees: { orderBy: { sortOrder: "asc" } } },
+    orderBy: { createdAt: "desc" },
+  });
+  const dealQuoteIds = dealQuotes.map((dealQuote) => dealQuote.id);
+  const tenantId = await actingTenantId();
+  const suppliersOn = await isModuleEnabled("suppliers");
+  const [rawDocuments, signatures, documentTypes, declared] = await Promise.all([
+    prisma.document.findMany({
+      // The current version of each file only — an older one is kept in its history (replacedById).
+      where: { quoteId: { in: dealQuoteIds }, deletedAt: null, replacedById: null },
+      select: {
+        id: true, fileName: true, tag: true, sizeBytes: true, createdAt: true, quoteId: true,
+        storedName: true, mimeType: true, tenantId: true, vehicleId: true, jobCardId: true,
+        uploadedBy: { select: { name: true } },
+        vendor: { select: { id: true, name: true } },
+      },
+      orderBy: { createdAt: "desc" },
+    }),
+    dealSignatureRequests(dealQuoteIds),
+    getSetting(DOCUMENT_TYPES_KEY).then(parseDocumentTypes),
+    suppliersOn
+      ? prisma.dealVendor.findMany({
+          where: { tenantId, ...dealKey(quote) },
+          select: { vendor: { select: { id: true, name: true, kind: true } } },
+          orderBy: { createdAt: "asc" },
+        })
+      : [],
+  ]);
+  const documents = rawDocuments.map((doc) => ({ ...doc, vendor: suppliersOn ? doc.vendor : undefined }));
+  const declaredVendors = declared.map((link) => link.vendor);
+  const checklist = dealFileChecklist(
+    dealQuotes,
+    documents.map((doc) => ({ tag: doc.tag, vendorId: doc.vendor?.id ?? null, vendorName: doc.vendor?.name ?? null })),
+    documentTypes,
+    declaredVendors,
+    suppliersOn,
+  );
+  // Photos taken in the delivery checklist (Tekili Farm, 2026-11-09: 13 handover photos the deal file never showed).
+  // They live with the checklist run, not as documents, and the deal leaves the Deliveries board once delivered —
+  // so this is the only place they can still be found. Deliveries are automotive paperwork, as on /api/files.
+  const handoverPhotos = dealQuoteIds.length && (await isModuleEnabled("automotive"))
+    ? await prisma.checklistPhoto.findMany({
+        where: { tenantId, entry: { run: { tenantId, hostType: "quote.delivery", hostId: { in: dealQuoteIds } } } },
+        select: { id: true, url: true, capturedAt: true, entry: { select: { labelSnapshot: true, run: { select: { hostId: true } } } } },
+        orderBy: { capturedAt: "asc" },
+      })
+    : [];
+  return {
+    tenantId, suppliersOn, dealQuotes, documents, signatures, documentTypes, declaredVendors, checklist,
+    handoverPhotos: handoverPhotos.map((photo) => ({ id: photo.id, url: photo.url, capturedAt: photo.capturedAt, step: photo.entry.labelSnapshot, quoteId: photo.entry.run.hostId })),
+  };
+}
 
 /**
  * Reads behind the deal file and a supplier's page, here so a harness can drive the very query the page runs

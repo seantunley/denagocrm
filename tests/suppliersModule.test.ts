@@ -31,7 +31,8 @@ test("every way in refuses or hides when the module is off", () => {
   assert.match(docs, /if \(!\(await isModuleEnabled\("suppliers"\)\)\) return undefined;/);
   assert.match(docs, /async function dealSupplierFrom\([^)]*\) \{\s*if \(!\(await isModuleEnabled\("suppliers"\)\)\) return;/);
   // Deal page, documents panel, purchase orders, search and DAX all read the module.
-  assert.match(read("src/app/(app)/deals/[id]/page.tsx"), /const suppliersOn = await isModuleEnabled\("suppliers"\);/);
+  // The deal file is read through the shared loader (the page and the ZIP download alike).
+  assert.match(read("src/lib/dealFileData.ts"), /const suppliersOn = await isModuleEnabled\("suppliers"\);/);
   assert.match(read("src/app/(app)/deals/[id]/page.tsx"), /\{suppliersOn && <>/);
   assert.match(read("src/components/DocumentsPanel.tsx"), /const vendors = \(await isModuleEnabled\("suppliers"\)\)/);
   assert.match(read("src/app/actions/stock.ts"), /if \(await isModuleEnabled\("suppliers"\)\) \{\s*vendor = await prisma\.vendor\.findFirst/);
@@ -50,7 +51,7 @@ test("module off: the checklist names the document type, never a supplier box th
   assert.ok(off.length > 0);
   for (const item of off) assert.doesNotMatch(item.detail, /supplier chosen|as the supplier/, item.label);
   assert.match(off[0].detail, /Upload it as “Supplier quote”/);
-  assert.match(read("src/app/(app)/deals/[id]/page.tsx"), /declaredVendors,\s*suppliersOn,\s*\);/);
+  assert.match(read("src/lib/dealFileData.ts"), /declaredVendors,\s*suppliersOn,\s*\);/);
 });
 
 test("existing workspaces are granted it, once, so nothing they use disappears", () => {

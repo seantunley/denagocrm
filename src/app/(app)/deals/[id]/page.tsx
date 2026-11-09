@@ -23,21 +23,17 @@ import {
   X,
 } from "lucide-react";
 import { prisma } from "@/lib/db";
-import { canAccessContact, canAccessLead, getAccessibleQuoteIds, hasAnyPermission, requireQuoteReadAccess, requireRoute } from "@/lib/permissions";
+import { canAccessContact, canAccessLead, hasAnyPermission, requireQuoteReadAccess, requireRoute } from "@/lib/permissions";
 import { formatDate, formatDateTime, formatZAR } from "@/lib/format";
 import { loadBillToFleet, quoteBillTo } from "@/lib/quoteBillTo";
 import { payableTotalCents } from "@/lib/pricing";
 import { isStatementInvoice } from "@/lib/accountStatement";
-import { getRegionalSettings, getSetting } from "@/lib/settings";
-import { DOCUMENT_TYPES_KEY, parseDocumentTypes } from "@/lib/documentLabels";
-import { dealFileChecklist } from "@/lib/dealFile";
+import { getRegionalSettings } from "@/lib/settings";
 import DocumentsPanel from "@/components/DocumentsPanel";
 import DealFileSearch from "@/components/deals/DealFileSearch";
 import { SaveForm, SaveButton } from "@/components/SaveForm";
-import { actingTenantId } from "@/lib/actingTenant";
-import { dealKey } from "@/lib/dealVendors";
-import { isModuleEnabled } from "@/lib/modules/enabled";
-import { dealSignatureRequests } from "@/lib/dealFileData";
+import { loadDealFile } from "@/lib/dealFileData";
+import DealFileZipButton from "@/components/deals/DealFileZipButton";
 import { vendorKindLabel } from "@/lib/vendors";
 import { addDealVendor, removeDealVendor } from "@/app/actions/vendors";
 import { recallDocumentRequest } from "@/app/actions/documentRequests";
@@ -156,55 +152,13 @@ export default async function DealWorkspacePage({ params }: { params: Promise<{ 
 
   // THE DEAL FILE (Sean, 2026-11-09): one file for the whole deal — every quote on the lead, revisions
   // included — not just this quote's. Only the quotes this person may open; a quote with no lead is its own deal.
-  const accessibleQuoteIds = await getAccessibleQuoteIds(user);
-  const dealQuotes = await prisma.quote.findMany({
-    where: {
-      deletedAt: null,
-      ...(quote.leadId ? { leadId: quote.leadId } : { id: quote.id }),
-      ...(accessibleQuoteIds ? { AND: [{ id: { in: accessibleQuoteIds } }] } : {}),
-    },
-    include: { items: true, fees: { orderBy: { sortOrder: "asc" } } },
-    orderBy: { createdAt: "desc" },
-  });
-  const dealQuoteIds = dealQuotes.map((dealQuote) => dealQuote.id);
-  const tenantId = await actingTenantId();
-  // The Suppliers module (granted per workspace in the tenant platform). Off: no suppliers on the deal, none named
-  // on its documents, and the checklist asks for supplier papers by type alone.
-  const suppliersOn = await isModuleEnabled("suppliers");
-  const [rawDocuments, signatures, documentTypes, canUpload, declared, vendors] = await Promise.all([
-    prisma.document.findMany({
-      // The current version of each file only — an older one is kept in its history (replacedById).
-      where: { quoteId: { in: dealQuoteIds }, deletedAt: null, replacedById: null },
-      select: {
-        id: true, fileName: true, tag: true, sizeBytes: true, createdAt: true, quoteId: true,
-        uploadedBy: { select: { name: true } },
-        vendor: { select: { id: true, name: true } },
-      },
-      orderBy: { createdAt: "desc" },
-    }),
-    dealSignatureRequests(dealQuoteIds),
-    getSetting(DOCUMENT_TYPES_KEY).then(parseDocumentTypes),
+  // The same loader builds the ZIP download (api/deals/[id]/file-zip), so the two can't disagree.
+  const { tenantId, suppliersOn, dealQuotes, documents, signatures, declaredVendors, checklist, handoverPhotos } = await loadDealFile(quote, user);
+  const [canUpload, vendors] = await Promise.all([
     hasAnyPermission(user, "documents.upload"),
-    // The suppliers this deal declares (its lead's, or this quote's when it has no lead).
-    suppliersOn
-      ? prisma.dealVendor.findMany({
-          where: { tenantId, ...dealKey(quote) },
-          select: { vendor: { select: { id: true, name: true, kind: true } } },
-          orderBy: { createdAt: "asc" },
-        })
-      : [],
     suppliersOn ? prisma.vendor.findMany({ where: { tenantId, deletedAt: null }, select: { id: true, name: true, email: true }, orderBy: { name: "asc" } }) : [],
   ]);
-  // Module off: the supplier on a document is neither shown nor counted (undefined = this page shows no supplier).
-  const documents = rawDocuments.map((doc) => ({ ...doc, vendor: suppliersOn ? doc.vendor : undefined }));
-  const declaredVendors = declared.map((link) => link.vendor);
-  const checklist = dealFileChecklist(
-    dealQuotes,
-    documents.map((doc) => ({ tag: doc.tag, vendorId: doc.vendor?.id ?? null, vendorName: doc.vendor?.name ?? null })),
-    documentTypes,
-    declaredVendors,
-    suppliersOn,
-  );
+  const dealQuoteIds = dealQuotes.map((dealQuote) => dealQuote.id);
   const checklistDone = checklist.filter((item) => item.done).length;
   // Papers asked of suppliers through an upload link (lib/documentRequests.ts), for every quote on the deal.
   const requests = suppliersOn
@@ -472,7 +426,10 @@ export default async function DealWorkspacePage({ params }: { params: Promise<{ 
                       {documents.length} filed document{documents.length === 1 ? "" : "s"} across {dealQuotes.length} quote{dealQuotes.length === 1 ? "" : "s"} · {checklistDone} of {checklist.length} required on file
                     </p>
                   </div>
-                  <DealFileSearch targetId="deal-file" />
+                  <div className="flex flex-wrap items-start gap-2">
+                    <DealFileSearch targetId="deal-file" />
+                    <DealFileZipButton quoteId={quote.id} />
+                  </div>
                 </div>
                 {/* Declared up front, so the checklist asks for each supplier's papers before any arrive. Suppliers module only. */}
                 {suppliersOn && <>
@@ -541,6 +498,37 @@ export default async function DealWorkspacePage({ params }: { params: Promise<{ 
                 hideUpload={!canUpload || !uploadQuoteId}
                 revalidate={`/deals/${quote.id}`}
               />
+              {/* Photos taken in the delivery checklist — kept with the checklist, shown here so they stay findable
+                  once the deal has left the Deliveries board. */}
+              {handoverPhotos.length > 0 && (
+                <Surface className="p-5">
+                  <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">From the delivery checklist</p>
+                  <h2 className="mt-1 text-base font-semibold">Handover photos · {handoverPhotos.length}</h2>
+                  <div className="mt-3 grid grid-cols-3 gap-2 sm:grid-cols-4 lg:grid-cols-6">
+                    {handoverPhotos.map((photo) => {
+                      const src = storedFileSrc(photo.url) ?? undefined;
+                      const number = dealQuotes.find((q) => q.id === photo.quoteId)?.number;
+                      return (
+                        <a
+                          key={photo.id}
+                          href={src}
+                          target="_blank"
+                          rel="noreferrer"
+                          data-search={`handover photo ${photo.step}`.toLowerCase()}
+                          className="group block overflow-hidden rounded-lg border border-border bg-muted/20"
+                          title={`${photo.step} · ${formatDateTime(photo.capturedAt)}`}
+                        >
+                          {/* eslint-disable-next-line @next/next/no-img-element -- a stored, workspace-checked file, not a static asset */}
+                          <img src={src} alt={photo.step} loading="lazy" className="aspect-square w-full object-cover transition-transform group-hover:scale-105" />
+                          <p className="truncate px-1.5 py-1 text-[10px] text-muted-foreground">
+                            {photo.step}{dealQuotes.length > 1 && number ? ` · Q-${number}` : ""}
+                          </p>
+                        </a>
+                      );
+                    })}
+                  </div>
+                </Surface>
+              )}
             </div>
 
             <Surface className="p-5">
