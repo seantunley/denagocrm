@@ -35,6 +35,8 @@ const same = (a: string | null | undefined, b: string) => (a ?? "").toLowerCase(
 
 export const isSupplierDocumentType = (tag: string | null | undefined): boolean =>
   SUPPLIER_DOCUMENT_TYPES.some((type) => same(tag, type));
+/** A supplier's quote: its prices become the customer quote's costs (actions/quoteCosts.ts). */
+export const isSupplierQuote = (tag: string | null | undefined): boolean => same(tag, SUPPLIER_DOCUMENT_TYPES[0]);
 
 export function dealFileChecklist(
   quotes: readonly DealFileQuote[],
