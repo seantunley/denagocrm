@@ -68,7 +68,9 @@ export async function bookVendorDelivery(target: BookingTarget, formData: FormDa
     const toAddress = text(formData, "to", 300);
     if (!fromAddress || !toAddress) refuse("Say where it is collected from and where it goes.");
     const note = text(formData, "note", 1000) || null;
-    const send = formData.get("send") === "copy" ? "copy" : "email";
+    // email: sent now. copy: booked, message handed back to send by hand. record: already arranged — nothing to send.
+    const choice = formData.get("send");
+    const send = choice === "copy" || choice === "record" ? choice : "email";
     const email = text(formData, "email", 200) || vendor.email || "";
     if (send === "email" && !EMAIL.test(email)) refuse(`Give ${vendor.name}'s email address — or copy the booking and send it yourself.`);
 
@@ -81,7 +83,7 @@ export async function bookVendorDelivery(target: BookingTarget, formData: FormDa
         tenantId, vendorId: vendor.id,
         ...(outbound ? { quoteId: target.quoteId } : { purchaseOrderId: target.purchaseOrderId }),
         scheduledFor: day, fromAddress, toAddress, note,
-        sentTo: send === "email" ? email : "copied", createdById: user.id,
+        sentTo: send === "email" ? email : send === "copy" ? "copied" : "arranged by hand", createdById: user.id,
       },
       select: { id: true },
     });
@@ -97,7 +99,7 @@ export async function bookVendorDelivery(target: BookingTarget, formData: FormDa
 
     await logAudit({
       action: "delivery.booked",
-      summary: `Booked ${vendor.name} for ${reference} on ${dayLabel}${send === "email" ? ` — emailed to ${email}` : " — copied to send by hand"}`,
+      summary: `Booked ${vendor.name} for ${reference} on ${dayLabel}${send === "email" ? ` — emailed to ${email}` : send === "copy" ? " — copied to send by hand" : " — already arranged, recorded only"}`,
       ...(deal?.leadId ? { leadId: deal.leadId } : {}),
       ...(deal?.contactId ? { contactId: deal.contactId } : {}),
       user,
@@ -106,9 +108,9 @@ export async function bookVendorDelivery(target: BookingTarget, formData: FormDa
     });
     revalidatePath(outbound ? "/deliveries" : "/stock");
     if (outbound) revalidatePath(`/deals/${target.quoteId}`);
-    return send === "email"
-      ? { success: `Booking emailed to ${vendor.name}` }
-      : { success: "Booked — copy the message and send it", message: message.text, whatsapp: waMeLink(vendor.phone) };
+    if (send === "email") return { success: `Booking emailed to ${vendor.name}` };
+    if (send === "record") return { success: "Booking recorded — nothing was sent" };
+    return { success: "Booked — copy the message and send it", message: message.text, whatsapp: waMeLink(vendor.phone) };
   });
 }
 

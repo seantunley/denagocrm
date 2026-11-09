@@ -50,7 +50,8 @@ model VendorDelivery {
   /// requested | confirmed | collected | delivered | cancelled (lib/vendorDeliveryRules.ts).
   status          String    @default("requested")
   statusAt        DateTime  @default(now())
-  /// Where the booking went: the email address, or "copied" when staff sent it themselves (WhatsApp).
+  /// Where the booking went: the email address, "copied" when staff sent it themselves (WhatsApp), or
+  /// "arranged by hand" when it was already arranged (by phone) and only recorded here.
   sentTo          String
   createdById     String
   createdAt       DateTime  @default(now())

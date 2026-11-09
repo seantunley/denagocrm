@@ -41,6 +41,11 @@ test("booking: the right permission per direction, own workspace, module, and no
   assert.match(action, /vendor\.findFirst\(\{\s*where: \{ id: String\(formData\.get\("vendorId"\) \?\? ""\), tenantId, deletedAt: null \}/);
   assert.match(action, /if \(!sent\.ok\) \{[\s\S]*?vendorDelivery\.deleteMany\(\{ where: \{ id: booking\.id, tenantId \} \}\)/);
   assert.match(action, /linkVendorToDeal\(/, "a customer delivery puts the company on the deal, so its papers are expected");
+  // Only "email" sends; "copy" and "record" never reach sendEmail.
+  assert.match(action, /const send = choice === "copy" \|\| choice === "record" \? choice : "email";/);
+  assert.match(action, /if \(send === "email"\) \{\s*const sent = await sendEmail\(/);
+  assert.equal((action.match(/sendEmail\(/g) ?? []).length, 1, "one send, behind the email choice");
+  assert.match(action, /if \(send === "record"\) return \{ success: "Booking recorded — nothing was sent" \};/);
   assert.match(action, /action: "delivery\.booked"/);
 });
 
