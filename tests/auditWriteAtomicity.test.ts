@@ -75,9 +75,13 @@ test("the audit transaction type admits both clients", () => {
   // which is what the CRM actions use — so a caller that kept its tenant guard
   // could not hand over its transaction, and was pushed back to auditing after
   // the commit. The type must not be what reopens the gap it exists to close.
+  //
+  // Now STRUCTURAL (2026-11-09): only the two things the write touches, in method syntax so either client's
+  // transaction is assignable. The union of both whole clients tripped TS2589 in `next build`. That the scoped
+  // client's transaction is still accepted is proved by the typecheck: CRM actions pass theirs to logAuditStrict.
   assert.match(source, /type BaseTx = /);
-  assert.match(source, /type ScopedTx = /);
-  assert.match(source, /type AuditTx = BaseTx \| ScopedTx;/);
+  assert.match(source, /type AuditTx = \{\s*\$executeRaw\(query: TemplateStringsArray, \.\.\.values: any\[\]\): PromiseLike<unknown>;\s*auditLog: \{ create\(args: any\): PromiseLike<unknown> \};\s*\};/);
+  assert.doesNotMatch(source, /type AuditTx = BaseTx \| ScopedTx;/);
 });
 
 test("a contact already on file is reused instead of duplicated", () => {
