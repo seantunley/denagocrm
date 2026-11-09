@@ -533,7 +533,7 @@ export const assistantAndMoreArticles: HelpArticle[] = [
     summary: "See a quote's value, vehicle, stock, deposit, documents and delivery readiness together on one page.",
     category: "sales",
     audience: "everyone",
-    keywords: ["deal workspace", "deal jacket", "open deal", "deal sheet", "ready to deliver", "deal timeline", "deal file", "deposit", "PDI"],
+    keywords: ["deal workspace", "deal jacket", "open deal", "deal sheet", "ready to deliver", "deal timeline", "deal file", "deposit", "PDI", "supplier", "suppliers", "vendor", "supplier invoice", "proof of payment", "missing documents", "checklist"],
     body: [
       { type: "p", text: "The deal workspace gathers everything about one quote on a single page: what was sold, for how much, to whom, which unit is allocated, and how close the deal is to delivery. It is a place to read and to jump from — the changes themselves are still made in the quote, the lead and the delivery board." },
       { type: "h", text: "Opening it" },
@@ -553,8 +553,17 @@ export const assistantAndMoreArticles: HelpArticle[] = [
         ["Allocated stock", "Each physical unit reserved for or sold on this deal. Click one to open it."],
         ["Ready to deliver?", "A checklist: Agreement accepted, Deposit received, Stock allocated, PDI complete and Delivery booked."],
         ["Next action", "The next planned activity, with **Schedule activity**."],
-        ["Deal file", "The quotation and, once the quote is accepted, the invoice, sales agreement and delivery note, plus a count of filed documents and signature requests."],
+        ["Deal file (right)", "The checklist of what every deal must have on file, with how many are done — see below. **Open the file** jumps to the documents."],
+        ["Deal file (main column)", "Every document for the whole deal — every quote on the lead, revisions included: the quotations, invoice, sales agreement and delivery note the CRM makes, the signature requests, and every uploaded file under the quote it belongs to. Type in **Search this deal's documents** to filter by name, type, supplier or who uploaded it. Upload a file here with its type and, for supplier paperwork, its supplier."],
       ] },
+      { type: "h", text: "The deal file checklist" },
+      { type: "p", text: "Every deal is checked for: the **Quote** (sent, not just a draft), the **Invoice**, the **Customer proof of payment**, the **Delivery paperwork**, and from **each supplier** on the deal — the OEM, the delivery company, a wrap shop — a **Supplier quote**, **Supplier invoice** and **Proof of payment — supplier**. Paperwork filed on the delivery board (the deposit's proof of payment, the delivery paperwork, the signed delivery note) ticks the same boxes as an upload." },
+      { type: "steps", items: [
+        "An owner adds the suppliers once in **Settings → Suppliers**.",
+        "On the deal, upload the supplier's quote with **What is it?** set to *Supplier quote* and **Supplier** set to that supplier. A supplier document can't be uploaded without its supplier.",
+        "The checklist now asks for that supplier's invoice and proof of payment as well. A second supplier gets its own three lines.",
+      ] },
+      { type: "callout", tone: "info", text: "Search anywhere in the CRM finds a document by its supplier's name too, and shows the quote and customer it is filed on." },
       { type: "h", text: "Using the readiness checklist" },
       { type: "steps", items: [
         "Open the deal and look at **Ready to deliver?** on the right.",

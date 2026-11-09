@@ -1,0 +1,18 @@
+/// A business the workspace buys from or pays: the OEM, a delivery company, a wrap shop (Sean, 2026-11-09).
+/// A supplier document in a deal's file names one, so the file can ask for each supplier's quote, invoice and
+/// proof of payment. Kept in Settings → Suppliers. No banking details (Sean: "No").
+model Vendor {
+  id        String    @id @default(cuid())
+  tenantId  String
+  name      String
+  phone     String?
+  email     String?
+  notes     String?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  documents Document[]
+
+  @@index([tenantId, name])
+}

@@ -93,7 +93,7 @@ export default async function TrashPage() {
 
   // Records deleted with only `deletedAt` (no reason / deleted-by, never purged) —
   // see RESTORE_ONLY_MODELS. Who deleted them and why is in the audit log.
-  const [fleets, parts, stockUnits, surveys, competitors, signWorkflows, docTemplates, builderTemplates, studioTemplates, docInstances, blocks] =
+  const [fleets, parts, stockUnits, surveys, competitors, signWorkflows, docTemplates, builderTemplates, studioTemplates, docInstances, blocks, vendors] =
     await Promise.all([
       basePrisma.fleet.findMany({ where: { ...notNull, tenantId }, select: { id: true, name: true, deletedAt: true } }),
       basePrisma.part.findMany({ where: { ...notNull, tenantId }, select: { id: true, name: true, sku: true, deletedAt: true } }),
@@ -111,6 +111,7 @@ export default async function TrashPage() {
       basePrisma.customDocTemplate.findMany({ where: { ...notNull, tenantId }, select: { id: true, name: true, deletedAt: true } }),
       basePrisma.docInstance.findMany({ where: { ...notNull, tenantId }, select: { id: true, title: true, deletedAt: true } }),
       basePrisma.reusableBlock.findMany({ where: { ...notNull, tenantId }, select: { id: true, name: true, deletedAt: true } }),
+      basePrisma.vendor.findMany({ where: { ...notNull, tenantId }, select: { id: true, name: true, deletedAt: true } }),
     ]);
   const keptRow = (model: RestorableModel, id: string, label: string, detail: string, deletedAt: Date | null): Row => ({
     model, id, label, detail, deletedAt: deletedAt!, deletedByName: null, deleteReason: null, kept: true,
@@ -128,6 +129,7 @@ export default async function TrashPage() {
     ...studioTemplates.map((t) => keptRow("customDocTemplate", t.id, t.name, "Studio template", t.deletedAt)),
     ...docInstances.map((d) => keptRow("docInstance", d.id, d.title, "Studio document", d.deletedAt)),
     ...blocks.map((b) => keptRow("reusableBlock", b.id, b.name, "Reusable block", b.deletedAt)),
+    ...vendors.map((v) => keptRow("vendor", v.id, v.name, "Supplier", v.deletedAt)),
     ...contacts.map((c) => ({
       model: "contact" as const, id: c.id, label: contactName(c),
       detail: "Contact", deletedAt: c.deletedAt!, deletedByName: c.deletedByName, deleteReason: c.deleteReason,
