@@ -107,6 +107,21 @@ export async function resolveSecureFileTenant(
   return row ? { tenantId: row.tenantId } : null;
 }
 
+/**
+ * Owning tenant of a supplier document request (lib/documentRequests.ts) — a link that lets a supplier put a file
+ * on a deal. Hashed before it is looked up, like the secure file link; a closed request still resolves, so its page
+ * can say what became of it.
+ */
+export async function resolveDocumentRequestTenant(
+  token: string,
+): Promise<{ tenantId: string | null } | null> {
+  const row = await basePrisma.documentRequest.findUnique({
+    where: { token: hashSignToken(token) },
+    select: { tenantId: true },
+  });
+  return row ? { tenantId: row.tenantId } : null;
+}
+
 /** Owning tenant of an email's open-tracking token (the pixel in a sent email). */
 export async function resolveEmailOpenTenant(
   openToken: string,
