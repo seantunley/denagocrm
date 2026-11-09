@@ -170,17 +170,23 @@ test("a nested folder stays nested, and no level can climb out", () => {
 
 test("handover photos: in the deal file and the ZIP, own workspace, delivery checklist only, Automotive only (Tekili Farm)", () => {
   const loader = src("src/lib/dealFileData.ts");
-  assert.match(loader, /checklistPhoto\.findMany\(\{\s*where: \{ tenantId, entry: \{ run: \{ tenantId, hostType: "quote\.delivery", hostId: \{ in: dealQuoteIds \} \} \} \}/);
-  assert.match(loader, /dealQuoteIds\.length && \(await isModuleEnabled\("automotive"\)\)/);
-  const page = src("src/app/(app)/deals/[id]/page.tsx");
-  // Under the quote that was handed over — not in a box below every quote, where Sean looked and didn't find them.
-  assert.match(page, /handoverPhotos: handoverPhotos\s*\.filter\(\(photo\) => photo\.quoteId === dealQuote\.id\)/);
-  assert.match(page, /src: storedFileSrc\(photo\.url\)/, "through the workspace-checked file route, never the raw store URL");
-  assert.doesNotMatch(page, /From the delivery checklist<\/p>/, "no separate photo box below the quotes");
+  // ONE reader of a quote's handover photos, for the ZIP and for every page that lists a quote's papers.
+  assert.match(loader, /checklistPhoto\.findMany\(\{\s*where: \{ tenantId, entry: \{ run: \{ tenantId, hostType: "quote\.delivery", hostId: \{ in: quoteIds \} \} \} \}/);
+  assert.match(loader, /if \(quoteIds\.length === 0 \|\| !\(await isModuleEnabled\("automotive"\)\)\) return \[\];/);
+  assert.match(loader, /handoverPhotos: await handoverPhotosFor\(tenantId, dealQuoteIds\)/);
+  // The documents panel reads them ITSELF for whatever quotes it lists — the customer page showed none while only
+  // the deal page passed them in (Tekili Farm, 2026-11-09).
   const panel = src("src/components/DocumentsPanel.tsx");
-  assert.match(panel, /group\.handoverPhotos && group\.handoverPhotos\.length > 0 &&/);
+  assert.match(panel, /await handoverPhotosFor\(tenantId, \(quoteGroups \?\? \[\]\)\.map\(\(group\) => group\.id\)\)/);
+  assert.match(panel, /src: storedFileSrc\(photo\.url\)/, "through the workspace-checked file route, never the raw store URL");
+  assert.match(panel, /\{photosByQuote\.has\(group\.id\) && \(/, "under the quote that was handed over");
   // A quote with photos but no uploads doesn't claim to have no paperwork.
-  assert.match(panel, /group\.documents\.length === 0 && !group\.handoverPhotos\?\.length \?/);
+  assert.match(panel, /group\.documents\.length === 0 && !photosByQuote\.has\(group\.id\) \?/);
+  // Both pages that list quotes go through the panel with their quotes.
+  for (const page of ["src/app/(app)/deals/[id]/page.tsx", "src/app/(app)/contacts/[id]/page.tsx"]) {
+    assert.match(src(page), /quoteGroups=\{quoteGroups\}/, page);
+    assert.doesNotMatch(src(page), /From the delivery checklist<\/p>/, `${page}: no separate photo box`);
+  }
   const route = src("src/app/api/deals/[id]/file-zip/route.ts");
   assert.match(route, /addStored\(photoPaths\[i\], photo\.id, async \(\) => \(await openStoredFile\(photo\.url, tenantId\)\)\.stream\)/);
   assert.match(route, /folder: `Q-\$\{numberOf\.get\(photo\.quoteId\) \?\? quote\.number\}\/Handover photos`/);

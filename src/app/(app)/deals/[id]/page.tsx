@@ -153,7 +153,7 @@ export default async function DealWorkspacePage({ params }: { params: Promise<{ 
   // THE DEAL FILE (Sean, 2026-11-09): one file for the whole deal — every quote on the lead, revisions
   // included — not just this quote's. Only the quotes this person may open; a quote with no lead is its own deal.
   // The same loader builds the ZIP download (api/deals/[id]/file-zip), so the two can't disagree.
-  const { tenantId, suppliersOn, dealQuotes, documents, signatures, declaredVendors, checklist, handoverPhotos } = await loadDealFile(quote, user);
+  const { tenantId, suppliersOn, dealQuotes, documents, signatures, declaredVendors, checklist } = await loadDealFile(quote, user);
   const [canUpload, vendors] = await Promise.all([
     hasAnyPermission(user, "documents.upload"),
     suppliersOn ? prisma.vendor.findMany({ where: { tenantId, deletedAt: null }, select: { id: true, name: true, email: true }, orderBy: { name: "asc" } }) : [],
@@ -186,10 +186,7 @@ export default async function DealWorkspacePage({ params }: { params: Promise<{ 
     currency: dealQuote.currency,
     createdAt: dealQuote.createdAt,
     documents: documents.filter((doc) => doc.quoteId === dealQuote.id),
-    // The delivery checklist's photos, under the quote that was handed over (through the workspace-checked file route).
-    handoverPhotos: handoverPhotos
-      .filter((photo) => photo.quoteId === dealQuote.id)
-      .map((photo) => ({ id: photo.id, src: storedFileSrc(photo.url), step: photo.step, takenAt: photo.capturedAt })),
+    // Handover photos are read by DocumentsPanel itself, for every page that lists quotes.
   }));
   const currentQuotes = dealQuotes.filter((dealQuote) => dealQuote.supersededAt == null);
   // Upload goes on this quote, or the deal's current one when this one was revised.

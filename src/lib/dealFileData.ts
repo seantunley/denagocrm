@@ -61,20 +61,27 @@ export async function loadDealFile(quote: { id: string; leadId: string | null },
     declaredVendors,
     suppliersOn,
   );
-  // Photos taken in the delivery checklist (Tekili Farm, 2026-11-09: 13 handover photos the deal file never showed).
-  // They live with the checklist run, not as documents, and the deal leaves the Deliveries board once delivered —
-  // so this is the only place they can still be found. Deliveries are automotive paperwork, as on /api/files.
-  const handoverPhotos = dealQuoteIds.length && (await isModuleEnabled("automotive"))
-    ? await prisma.checklistPhoto.findMany({
-        where: { tenantId, entry: { run: { tenantId, hostType: "quote.delivery", hostId: { in: dealQuoteIds } } } },
-        select: { id: true, url: true, capturedAt: true, entry: { select: { labelSnapshot: true, run: { select: { hostId: true } } } } },
-        orderBy: { capturedAt: "asc" },
-      })
-    : [];
   return {
     tenantId, suppliersOn, dealQuotes, documents, signatures, documentTypes, declaredVendors, checklist,
-    handoverPhotos: handoverPhotos.map((photo) => ({ id: photo.id, url: photo.url, capturedAt: photo.capturedAt, step: photo.entry.labelSnapshot, quoteId: photo.entry.run.hostId })),
+    handoverPhotos: await handoverPhotosFor(tenantId, dealQuoteIds),
   };
+}
+
+/**
+ * Photos taken in these quotes' delivery checklists, oldest first (Tekili Farm, 2026-11-09: 13 handover photos no
+ * page showed). They live with the checklist run, not as documents, and a deal leaves the Deliveries board once
+ * delivered — so EVERY list of a quote's papers shows them: the documents panel reads them here for whatever quotes
+ * it lists (customer page and deal page alike), and so does the ZIP. Deliveries are automotive paperwork, as on
+ * /api/files: none with that module off.
+ */
+export async function handoverPhotosFor(tenantId: string, quoteIds: string[]) {
+  if (quoteIds.length === 0 || !(await isModuleEnabled("automotive"))) return [];
+  const photos = await prisma.checklistPhoto.findMany({
+    where: { tenantId, entry: { run: { tenantId, hostType: "quote.delivery", hostId: { in: quoteIds } } } },
+    select: { id: true, url: true, capturedAt: true, entry: { select: { labelSnapshot: true, run: { select: { hostId: true } } } } },
+    orderBy: { capturedAt: "asc" },
+  });
+  return photos.map((photo) => ({ id: photo.id, url: photo.url, capturedAt: photo.capturedAt, step: photo.entry.labelSnapshot, quoteId: photo.entry.run.hostId }));
 }
 
 /**
