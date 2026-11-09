@@ -47,6 +47,11 @@ const PUBLIC_PREFIXES = [
   // prefetch of the link downloads nothing. It streams exactly one file: the one
   // that link was made for, read as that link's own workspace.
   "f/",
+  // Supplier document request upload (lib/documentRequests.ts). PUBLIC BY NECESSITY: the supplier has no account,
+  // so the link is the authority — stored only as a hash, checked on every POST, single-use, dead once answered,
+  // recalled or expired, throttled. It takes exactly one file, judged by its own bytes (PDF or photo, ≤ 4 MB), and
+  // files it on the one quote the link was made for, in that link's own workspace.
+  "u/",
   // Domain reachability check. PUBLIC BY NECESSITY, and the necessity is the
   // whole function: we fetch it ourselves, over the internet, at the hostname
   // being verified, to learn whether that hostname reaches this deployment. A
