@@ -20,6 +20,7 @@ import {
   Warehouse,
 } from "lucide-react";
 import { prisma } from "@/lib/db";
+import { actingTenantId } from "@/lib/actingTenant";
 import ModalTrigger from "@/components/Modal";
 import StockUnitForm from "@/components/StockUnitForm";
 import StockPurchaseOrderForm from "@/components/StockPurchaseOrderForm";
@@ -77,6 +78,10 @@ export default async function StockPage({
   if (params.product) reportParams.set("product", params.product);
   if (params.location) reportParams.set("location", params.location);
   if (params.age) reportParams.set("age", params.age);
+  // The purchase order's supplier choice (Settings → Suppliers).
+  const vendors = canManage
+    ? await prisma.vendor.findMany({ where: { tenantId: await actingTenantId(), deletedAt: null }, select: { id: true, name: true }, orderBy: { name: "asc" } })
+    : [];
   const reportHref = `/api/pdf/stock-report${reportParams.toString() ? `?${reportParams}` : ""}`;
 
   const [dashboard, products, units, openPos, locations, demand] = await Promise.all([
@@ -145,7 +150,10 @@ export default async function StockPage({
           </a>
           {canManage && <>
             <ModalTrigger label={<><ShoppingCart className="size-4" /> Purchase order</>} title="New purchase order" buttonClass={buttonVariants({ size: "sm" })}>
-              <StockPurchaseOrderForm products={products.map((product) => ({ id: product.id, name: product.name, colors: product.colors.map((color) => color.name) }))} />
+              <StockPurchaseOrderForm
+                products={products.map((product) => ({ id: product.id, name: product.name, colors: product.colors.map((color) => color.name) }))}
+                vendors={vendors}
+              />
             </ModalTrigger>
             <ModalTrigger label={<><PackagePlus className="size-4" /> Add floor unit</>} title="Add a stock unit" buttonClass={buttonVariants({ variant: "outline", size: "sm" })}>
               <StockUnitForm action={addStockUnit} products={products.map((product) => ({ id: product.id, name: product.name, colors: product.colors.map((color) => color.name) }))} variant="dialog" />

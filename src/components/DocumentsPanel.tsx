@@ -1,10 +1,12 @@
 import Link from "next/link";
 import { uploadDocument, deleteDocument, relabelDocument } from "@/app/actions/documents";
 import ConfirmDelete from "@/components/ConfirmDelete";
-import DocumentUploadFields from "@/components/DocumentUploadFields";
+import DocumentUploadFields, { DocumentLabelFields } from "@/components/DocumentUploadFields";
 import ModalTrigger from "@/components/Modal";
 import { DOCUMENT_TYPES_KEY, isPersonLabel, parseDocumentTypes } from "@/lib/documentLabels";
 import { getSetting, getRegionalSettings } from "@/lib/settings";
+import { prisma } from "@/lib/db";
+import { actingTenantId } from "@/lib/actingTenant";
 import { SaveForm, SaveButton } from "@/components/SaveForm";
 import QuoteRowActions from "@/components/quotes/QuoteRowActions";
 import { StatusPill } from "@/components/visual-system";
@@ -33,6 +35,11 @@ type Doc = {
    * where the owner is the page you are already on.
    */
   ownerLabel?: string | null;
+  /**
+   * The supplier it is from. Undefined where the page didn't load it: that row then
+   * offers no supplier choice when relabelled, and the one on file is kept.
+   */
+  vendor?: { id: string; name: string } | null;
 };
 
 /** A quote and every piece of paper that belongs to it. */
@@ -92,14 +99,16 @@ function statusTone(status: string): "neutral" | "success" | "danger" | "info" {
   return "neutral";
 }
 
-function DocRow({ doc, revalidate, types }: { doc: Doc; revalidate: string; types: readonly string[] }) {
+function DocRow({ doc, revalidate, types, vendors }: { doc: Doc; revalidate: string; types: readonly string[]; vendors: readonly { id: string; name: string }[] }) {
   // What it IS leads: a type somebody chose ("Supplier quote") is the document's
   // name on this list, with the file name beneath. A tag the CRM wrote keeps its
   // wording and its place in the small print.
   const chosen = doc.tag && isPersonLabel(doc.tag) ? doc.tag : null;
   const system = doc.tag && !chosen ? TAG_LABELS[doc.tag] ?? null : null;
+  // What the deal file's search box matches (DealFileSearch).
+  const search = [doc.fileName, chosen, system, doc.vendor?.name, doc.uploadedBy.name].filter(Boolean).join(" ").toLowerCase();
   return (
-    <li className="group flex items-center gap-3 py-2">
+    <li className="group flex items-center gap-3 py-2" data-search={search}>
       <span className="grid size-8 shrink-0 place-items-center rounded-lg border border-border bg-muted/30 text-muted-foreground">
         <FileText className="size-3.5" />
       </span>
@@ -114,6 +123,7 @@ function DocRow({ doc, revalidate, types }: { doc: Doc; revalidate: string; type
         <p className="truncate text-xs text-slate-400">
           {chosen ? `${doc.fileName} · ` : ""}
           {system ? `${system} · ` : ""}
+          {doc.vendor ? `${doc.vendor.name} · ` : ""}
           {humanSize(doc.sizeBytes)} · {formatDate(doc.createdAt)} · {doc.uploadedBy.name}
           {doc.ownerLabel ? ` · ${doc.ownerLabel}` : ""}
         </p>
@@ -122,13 +132,19 @@ function DocRow({ doc, revalidate, types }: { doc: Doc; revalidate: string; type
       {isPersonLabel(doc.tag) && (
         <ModalTrigger label={<><Tag className="size-3" />{chosen ? "Relabel" : "Label"}</>} title={`Label “${doc.fileName}”`} buttonClass="inline-flex shrink-0 cursor-pointer items-center gap-1 text-xs text-muted-foreground hover:text-foreground">
           <SaveForm action={relabelDocument.bind(null, doc.id, revalidate)} success="Label saved" className="grid gap-3 p-4">
-            <label className="grid gap-1 text-xs text-muted-foreground">
-              What is it?
-              <select name="label" defaultValue={chosen && types.includes(chosen) ? chosen : ""} className="input h-9 text-sm">
-                <option value="">Not labelled</option>
-                {types.map((type) => <option key={type} value={type}>{type}</option>)}
-              </select>
-            </label>
+            {doc.vendor !== undefined ? (
+              // The supplier appears only for a supplier quote, invoice or proof of payment.
+              <DocumentLabelFields types={types} current={chosen && types.includes(chosen) ? chosen : ""} vendors={vendors} currentVendor={doc.vendor} />
+            ) : (
+              // This page didn't load suppliers: no supplier field, so the one on file is kept.
+              <label className="grid gap-1 text-xs text-muted-foreground">
+                What is it?
+                <select name="label" defaultValue={chosen && types.includes(chosen) ? chosen : ""} className="input h-9 text-sm">
+                  <option value="">Not labelled</option>
+                  {types.map((type) => <option key={type} value={type}>{type}</option>)}
+                </select>
+              </label>
+            )}
             <SaveButton className="btn-primary btn-sm">Save label</SaveButton>
           </SaveForm>
         </ModalTrigger>
@@ -156,7 +172,12 @@ export default async function DocumentsPanel({
   hideUpload = false,
   emptyText = "No documents uploaded.",
   quoteActions,
+  title = "Documents",
+  defaultQuoteId,
 }: {
+  title?: string;
+  /** The deal file: upload goes against one of `quoteGroups` (this one first), never the customer. */
+  defaultQuoteId?: string;
   documents: Doc[];
   /** Quote-by-quote grouping. Omit for the vehicle and job card panels. */
   quoteGroups?: QuoteGroup[];
@@ -182,10 +203,13 @@ export default async function DocumentsPanel({
   // A document can be filed against a quote that is still current — not one a revision replaced.
   const fileAgainst = (quoteGroups ?? []).filter((group) => !group.superseded).map((group) => ({ id: group.id, label: `Q-${group.number} (${group.status})` }));
   const moneyFmt = await getRegionalSettings();
+  // The workspace's suppliers (Settings → Suppliers): the upload's and Label's supplier choice.
+  const tenantId = await actingTenantId();
+  const vendors = await prisma.vendor.findMany({ where: { tenantId, deletedAt: null }, select: { id: true, name: true }, orderBy: { name: "asc" } });
   return (
     <div className="card">
       <div className="mb-4 flex items-center justify-between gap-3">
-        <h2 className="font-semibold">Documents</h2>
+        <h2 className="font-semibold">{title}</h2>
         <FileText className="size-4 text-primary" />
       </div>
 
@@ -196,7 +220,7 @@ export default async function DocumentsPanel({
         >
           {/* What it is, and which quote it belongs to. It also carries the customer as the
               target — or the quote instead, when one is chosen: an upload names ONE record. */}
-          <DocumentUploadFields types={types} quotes={fileAgainst} contactId={contactId} />
+          <DocumentUploadFields types={types} quotes={fileAgainst} contactId={contactId} vendors={vendors} defaultQuoteId={defaultQuoteId} />
           {vehicleId && <input type="hidden" name="vehicleId" value={vehicleId} />}
           {jobCardId && <input type="hidden" name="jobCardId" value={jobCardId} />}
           <input type="hidden" name="revalidate" value={revalidate} />
@@ -249,7 +273,7 @@ export default async function DocumentsPanel({
               ) : (
                 <ul className="mt-1 divide-y divide-slate-800">
                   {[...group.documents].sort(byLifecycle).map((doc) => (
-                    <DocRow key={doc.id} doc={doc} revalidate={revalidate} types={types} />
+                    <DocRow key={doc.id} doc={doc} revalidate={revalidate} types={types} vendors={vendors} />
                   ))}
                 </ul>
               )}
@@ -269,7 +293,7 @@ export default async function DocumentsPanel({
           )}
           <ul className="divide-y divide-slate-800">
             {documents.map((doc) => (
-              <DocRow key={doc.id} doc={doc} revalidate={revalidate} types={types} />
+              <DocRow key={doc.id} doc={doc} revalidate={revalidate} types={types} vendors={vendors} />
             ))}
           </ul>
         </>

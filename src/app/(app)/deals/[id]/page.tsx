@@ -20,14 +20,25 @@ import {
   Truck,
   UserRound,
   Wrench,
+  X,
 } from "lucide-react";
 import { prisma } from "@/lib/db";
-import { canAccessContact, canAccessLead, hasAnyPermission, requireQuoteReadAccess, requireRoute } from "@/lib/permissions";
+import { canAccessContact, canAccessLead, getAccessibleQuoteIds, hasAnyPermission, requireQuoteReadAccess, requireRoute } from "@/lib/permissions";
 import { formatDate, formatDateTime, formatZAR } from "@/lib/format";
 import { loadBillToFleet, quoteBillTo } from "@/lib/quoteBillTo";
 import { payableTotalCents } from "@/lib/pricing";
 import { isStatementInvoice } from "@/lib/accountStatement";
-import { getRegionalSettings } from "@/lib/settings";
+import { getRegionalSettings, getSetting } from "@/lib/settings";
+import { DOCUMENT_TYPES_KEY, parseDocumentTypes } from "@/lib/documentLabels";
+import { dealFileChecklist } from "@/lib/dealFile";
+import DocumentsPanel from "@/components/DocumentsPanel";
+import DealFileSearch from "@/components/deals/DealFileSearch";
+import { SaveForm, SaveButton } from "@/components/SaveForm";
+import { actingTenantId } from "@/lib/actingTenant";
+import { dealKey } from "@/lib/dealVendors";
+import { dealSignatureRequests } from "@/lib/dealFileData";
+import { vendorKindLabel } from "@/lib/vendors";
+import { addDealVendor, removeDealVendor } from "@/app/actions/vendors";
 import { withCurrency } from "@/lib/currencyRules";
 import DealPayments from "@/components/deals/DealPayments";
 import { primaryVehicleLine, showcaseImageRefFor } from "@/lib/docbuilder/vehicleShowcase";
@@ -138,20 +149,64 @@ export default async function DealWorkspacePage({ params }: { params: Promise<{ 
   });
   if (!quote || quote.deletedAt) notFound();
 
-  const [documents, signatures] = await Promise.all([
+  // THE DEAL FILE (Sean, 2026-11-09): one file for the whole deal — every quote on the lead, revisions
+  // included — not just this quote's. Only the quotes this person may open; a quote with no lead is its own deal.
+  const accessibleQuoteIds = await getAccessibleQuoteIds(user);
+  const dealQuotes = await prisma.quote.findMany({
+    where: {
+      deletedAt: null,
+      ...(quote.leadId ? { leadId: quote.leadId } : { id: quote.id }),
+      ...(accessibleQuoteIds ? { AND: [{ id: { in: accessibleQuoteIds } }] } : {}),
+    },
+    include: { items: true, fees: { orderBy: { sortOrder: "asc" } } },
+    orderBy: { createdAt: "desc" },
+  });
+  const dealQuoteIds = dealQuotes.map((dealQuote) => dealQuote.id);
+  const tenantId = await actingTenantId();
+  const [documents, signatures, documentTypes, canUpload, declared, vendors] = await Promise.all([
     prisma.document.findMany({
-      where: { quoteId: quote.id, deletedAt: null },
-      select: { id: true, fileName: true, tag: true, sizeBytes: true, createdAt: true, uploadedBy: { select: { name: true } } },
+      // The current version of each file only — an older one is kept in its history (replacedById).
+      where: { quoteId: { in: dealQuoteIds }, deletedAt: null, replacedById: null },
+      select: {
+        id: true, fileName: true, tag: true, sizeBytes: true, createdAt: true, quoteId: true,
+        uploadedBy: { select: { name: true } },
+        vendor: { select: { id: true, name: true } },
+      },
       orderBy: { createdAt: "desc" },
-      take: 30,
     }),
-    prisma.signatureRequest.findMany({
-      where: { quoteId: quote.id, deletedAt: null },
-      select: { id: true, title: true, status: true, sentAt: true, completedAt: true, createdAt: true },
-      orderBy: { createdAt: "desc" },
-      take: 20,
+    dealSignatureRequests(dealQuoteIds),
+    getSetting(DOCUMENT_TYPES_KEY).then(parseDocumentTypes),
+    hasAnyPermission(user, "documents.upload"),
+    // The suppliers this deal declares (its lead's, or this quote's when it has no lead).
+    prisma.dealVendor.findMany({
+      where: { tenantId, ...dealKey(quote) },
+      select: { vendor: { select: { id: true, name: true, kind: true } } },
+      orderBy: { createdAt: "asc" },
     }),
+    prisma.vendor.findMany({ where: { tenantId, deletedAt: null }, select: { id: true, name: true }, orderBy: { name: "asc" } }),
   ]);
+  const declaredVendors = declared.map((link) => link.vendor);
+  const checklist = dealFileChecklist(
+    dealQuotes,
+    documents.map((doc) => ({ tag: doc.tag, vendorId: doc.vendor?.id ?? null, vendorName: doc.vendor?.name ?? null })),
+    documentTypes,
+    declaredVendors,
+  );
+  const checklistDone = checklist.filter((item) => item.done).length;
+  const quoteGroups = dealQuotes.map((dealQuote) => ({
+    id: dealQuote.id,
+    number: dealQuote.number,
+    status: dealQuote.status,
+    signed: dealQuote.signedAt != null,
+    superseded: dealQuote.supersededAt != null,
+    totalCents: payableTotalCents(dealQuote),
+    currency: dealQuote.currency,
+    createdAt: dealQuote.createdAt,
+    documents: documents.filter((doc) => doc.quoteId === dealQuote.id),
+  }));
+  const currentQuotes = dealQuotes.filter((dealQuote) => dealQuote.supersededAt == null);
+  // Upload goes on this quote, or the deal's current one when this one was revised.
+  const uploadQuoteId = currentQuotes.some((dealQuote) => dealQuote.id === quote.id) ? quote.id : currentQuotes[0]?.id;
 
   const total = Math.round(payableTotalCents(quote));
   const depositAmount =
@@ -378,6 +433,85 @@ export default async function DealWorkspacePage({ params }: { params: Promise<{ 
               <DealPayments quote={quote} payments={payments} canRecord={canRecordPayments} statementHref={statementHref} today={today} moneyFmt={moneyFmt} />
             )}
 
+            <div id="deal-file" className="scroll-mt-20 space-y-3">
+              <Surface className="p-5">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">Everything on file</p>
+                    <h2 className="mt-1 text-base font-semibold">{labels.deal.one} file</h2>
+                    <p className="mt-0.5 text-xs text-muted-foreground">
+                      {documents.length} filed document{documents.length === 1 ? "" : "s"} across {dealQuotes.length} quote{dealQuotes.length === 1 ? "" : "s"} · {checklistDone} of {checklist.length} required on file
+                    </p>
+                  </div>
+                  <DealFileSearch targetId="deal-file" />
+                </div>
+                {/* Declared up front, so the checklist asks for each supplier's papers before any arrive. */}
+                <p className="mt-4 text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">Suppliers on this deal</p>
+                <div className="mt-2 flex flex-wrap items-center gap-2">
+                  {declaredVendors.length === 0 && <span className="text-xs text-muted-foreground">None yet — add the OEM, the delivery company and anyone else you pay on this deal.</span>}
+                  {declaredVendors.map((vendor) => (
+                    <span key={vendor.id} className="inline-flex items-center gap-1.5 rounded-full border border-border bg-muted/30 py-1 pl-3 pr-1.5 text-xs">
+                      <span className="font-medium">{vendor.name}</span>
+                      <span className="text-muted-foreground">{vendorKindLabel(vendor.kind)}</span>
+                      {canUpload && (
+                        <SaveForm action={removeDealVendor.bind(null, quote.id, vendor.id)} success={`${vendor.name} removed`}>
+                          <SaveButton className="grid size-5 place-items-center rounded-full text-muted-foreground hover:bg-muted hover:text-foreground" pendingLabel="…" aria-label={`Take ${vendor.name} off this deal`}>
+                            <X className="size-3" />
+                          </SaveButton>
+                        </SaveForm>
+                      )}
+                    </span>
+                  ))}
+                  {canUpload && vendors.some((vendor) => !declaredVendors.some((on) => on.id === vendor.id)) && (
+                    <SaveForm action={addDealVendor.bind(null, quote.id)} success="Supplier added" className="flex items-center gap-1.5">
+                      <select name="vendorId" required defaultValue="" className="input h-8 w-48 text-xs" aria-label="Supplier to add">
+                        <option value="" disabled>Add a supplier…</option>
+                        {vendors.filter((vendor) => !declaredVendors.some((on) => on.id === vendor.id)).map((vendor) => (
+                          <option key={vendor.id} value={vendor.id}>{vendor.name}</option>
+                        ))}
+                      </select>
+                      <SaveButton className="btn-secondary btn-sm">Add</SaveButton>
+                    </SaveForm>
+                  )}
+                  {canUpload && vendors.length === 0 && <span className="text-xs text-muted-foreground">An owner adds suppliers in Settings → Suppliers.</span>}
+                </div>
+                <p className="mt-4 text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">From the CRM</p>
+                <ul className="mt-1 divide-y divide-border/60">
+                  {currentQuotes.flatMap((dealQuote) => [
+                    { key: `${dealQuote.id}-q`, href: `/quotes/${dealQuote.id}/print`, icon: <FileText className="size-4 text-muted-foreground" />, label: `Quotation Q-${dealQuote.number}` },
+                    ...(dealQuote.status === "accepted"
+                      ? [
+                          { key: `${dealQuote.id}-i`, href: `/quotes/${dealQuote.id}/invoice`, icon: <ReceiptText className="size-4 text-muted-foreground" />, label: `Invoice Q-${dealQuote.number}` },
+                          { key: `${dealQuote.id}-a`, href: `/quotes/${dealQuote.id}/agreement`, icon: <FileSignature className="size-4 text-muted-foreground" />, label: `Sales agreement Q-${dealQuote.number}` },
+                          { key: `${dealQuote.id}-d`, href: `/quotes/${dealQuote.id}/delivery-note`, icon: <Truck className="size-4 text-muted-foreground" />, label: `Delivery note Q-${dealQuote.number}` },
+                        ]
+                      : []),
+                  ]).map((row) => (
+                    <li key={row.key} data-search={row.label.toLowerCase()}>
+                      <a href={row.href} target="_blank" rel="noreferrer" className="flex items-center gap-2 rounded-lg px-1 py-2 text-sm hover:bg-muted/40">{row.icon}{row.label}</a>
+                    </li>
+                  ))}
+                  {signatures.map((request) => (
+                    <li key={request.id} data-search={`${request.title} signature ${request.status}`.toLowerCase()}>
+                      <Link href={`/signatures/${request.id}`} className="flex items-center gap-2 rounded-lg px-1 py-2 text-sm hover:bg-muted/40">
+                        <FileSignature className="size-4 text-muted-foreground" />
+                        <span className="min-w-0 flex-1 truncate">{request.title}</span>
+                        <span className="text-xs text-muted-foreground">{request.status.replaceAll("_", " ")}</span>
+                      </Link>
+                    </li>
+                  ))}
+                </ul>
+              </Surface>
+              <DocumentsPanel
+                title="Filed documents"
+                documents={[]}
+                quoteGroups={quoteGroups}
+                defaultQuoteId={uploadQuoteId}
+                hideUpload={!canUpload || !uploadQuoteId}
+                revalidate={`/deals/${quote.id}`}
+              />
+            </div>
+
             <Surface className="p-5">
               <div className="flex items-center justify-between gap-3">
                 <div>
@@ -485,18 +619,14 @@ export default async function DealWorkspacePage({ params }: { params: Promise<{ 
               <div className="flex items-center gap-2">
                 <FileText className="size-5 text-muted-foreground" />
                 <h2 className="text-sm font-semibold">{labels.deal.one} file</h2>
+                <StatusPill tone={checklistDone === checklist.length ? "success" : "warning"}>{checklistDone} of {checklist.length}</StatusPill>
               </div>
-              <div className="mt-3 space-y-1.5">
-                <a href={`/quotes/${quote.id}/print`} target="_blank" rel="noreferrer" className="flex items-center gap-2 rounded-lg px-2.5 py-2 text-sm hover:bg-muted/40"><FileText className="size-4 text-muted-foreground" />Quotation</a>
-                {quote.status === "accepted" && <>
-                  <a href={`/quotes/${quote.id}/invoice`} target="_blank" rel="noreferrer" className="flex items-center gap-2 rounded-lg px-2.5 py-2 text-sm hover:bg-muted/40"><ReceiptText className="size-4 text-muted-foreground" />Invoice</a>
-                  <a href={`/quotes/${quote.id}/agreement`} target="_blank" rel="noreferrer" className="flex items-center gap-2 rounded-lg px-2.5 py-2 text-sm hover:bg-muted/40"><FileSignature className="size-4 text-muted-foreground" />Sales agreement</a>
-                  <a href={`/quotes/${quote.id}/delivery-note`} target="_blank" rel="noreferrer" className="flex items-center gap-2 rounded-lg px-2.5 py-2 text-sm hover:bg-muted/40"><Truck className="size-4 text-muted-foreground" />Delivery note</a>
-                </>}
+              <div className="mt-3 divide-y divide-border/60">
+                {checklist.map((item) => (
+                  <ReadinessRow key={item.key} done={item.done} label={item.label} detail={item.detail} />
+                ))}
               </div>
-              <div className="mt-4 border-t border-border pt-3 text-xs text-muted-foreground">
-                {documents.length} filed document{documents.length === 1 ? "" : "s"} · {signatures.length} signature request{signatures.length === 1 ? "" : "s"}
-              </div>
+              <a href="#deal-file" className="btn-secondary btn-sm mt-4 w-full"><FileText className="size-4" />Open the file</a>
             </Surface>
 
           </aside>

@@ -281,7 +281,11 @@ model PurchaseOrder {
   id         String      @id @default(cuid())
   tenantId String? // Multi-tenancy (Phase B — additive/inert): owning tenant.
   reference  String? // supplier's PO / order number
-  supplier   String      @default("Denago")
+  supplier   String      @default("Denago") // the supplier's name as ordered (kept as written; vendorId is the record)
+  /// The supplier (Settings → Suppliers). Set on every new order; old orders backfilled by name. Its goods
+  /// receipts are from the same supplier through the order.
+  vendorId   String?
+  vendor     Vendor?     @relation(fields: [vendorId], references: [id], onDelete: SetNull)
   status     String      @default("ordered") // ordered | received | cancelled
   orderedAt  DateTime    @default(now())
   expectedAt DateTime?
@@ -295,6 +299,7 @@ model PurchaseOrder {
   stockEvents   StockEvent[]
   @@index([tenantId])
   @@unique([tenantId, id])
+  @@index([vendorId])
 }
 
 model StockUnit {
@@ -1925,6 +1930,9 @@ model Document {
   quoteId      String? // fulfilment paperwork (invoice, proof of payment, delivery note)
   tag          String? // invoice | pop | delivery-note
   replacedById String? // newer version of this file (repository versioning)
+  /// The supplier a supplier document is from (the deal file's per-supplier checklist). Never grants access.
+  vendorId     String?
+  vendor       Vendor?  @relation(fields: [vendorId], references: [id], onDelete: SetNull)
 
   // Re-editable image markup (job-card check-in photos): vector shapes so the
   // markup can be reopened and adjusted; annotatedStoredName is the flattened
@@ -1941,6 +1949,7 @@ model Document {
   @@index([vehicleId])
   @@index([jobCardId])
   @@index([uploadedById])
+  @@index([vendorId])
 }
 
 model Vehicle {
