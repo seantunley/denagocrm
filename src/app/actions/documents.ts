@@ -22,6 +22,7 @@ import { authorizeDocumentTarget } from "@/lib/documentUploadAuth";
 import { DOCUMENT_TYPES_KEY, SYSTEM_DOCUMENT_TAGS, chosenDocumentType, isPersonLabel, parseDocumentTypes } from "@/lib/documentLabels";
 import { getSetting } from "@/lib/settings";
 import { isSupplierDocumentType } from "@/lib/dealFile";
+import { workspaceSupplierTypes } from "@/lib/dealFileConfig";
 import { linkVendorToDeal } from "@/lib/dealVendors";
 import { actingOwnerTenantId } from "@/lib/actingScope";
 import { requiredReason } from "@/lib/deleteReason";
@@ -123,7 +124,7 @@ async function chosenVendorId(posted: unknown, type: string | null, tenantId: st
   if (!(await isModuleEnabled("suppliers"))) return undefined;
   const wanted = String(posted ?? "").trim();
   if (!wanted) {
-    if (isSupplierDocumentType(type)) refuse("Choose which supplier it is from — an owner adds suppliers in Settings → Suppliers.");
+    if (isSupplierDocumentType(type, await workspaceSupplierTypes(tenantId))) refuse("Choose which supplier it is from — an owner adds suppliers in Settings → Suppliers.");
     return null;
   }
   const vendor = tenantId ? await prisma.vendor.findFirst({ where: { id: wanted, tenantId, deletedAt: null }, select: { id: true } }) : null;

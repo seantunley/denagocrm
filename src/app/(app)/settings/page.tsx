@@ -7,6 +7,7 @@ import {
   saveMyProfile,
   saveQuoteDefaults,
   saveDocumentTypes,
+  saveDealFileChecklist,
   saveRegionalSettings,
   saveEnabledCurrencies,
   saveWorkshopSettings,
@@ -48,6 +49,7 @@ import { COMMON_CURRENCIES } from "@/lib/currencyRules";
 import { formatDate, formatDateTime, formatZAR, regionalFrom } from "@/lib/format";
 import { DEFAULT_QUOTE_TERMS, quoteValidDays } from "@/lib/quoteExpiry";
 import { DOCUMENT_TYPES_KEY, DOCUMENT_TYPES_MAX, parseDocumentTypes } from "@/lib/documentLabels";
+import { DEAL_BUILTINS, DEAL_FILE_CHECKLIST_KEY, parseDealFileConfig } from "@/lib/dealFile";
 import { ABSOLUTE_SESSION_HOURS } from "@/lib/session";
 import { decryptValue } from "@/lib/settings";
 import { PUSH_KINDS } from "@/lib/push";
@@ -158,6 +160,8 @@ export default async function SettingsPage({
       return ""; // encrypted value, key unavailable in this environment
     }
   };
+  const documentTypes = parseDocumentTypes(setting(DOCUMENT_TYPES_KEY));
+  const dealFileConfig = parseDealFileConfig(setting(DEAL_FILE_CHECKLIST_KEY));
   const regional = regionalFrom(
     Object.fromEntries(Object.entries(REGIONAL_KEYS).map(([field, key]) => [field, setting(key)])),
   );
@@ -1010,6 +1014,52 @@ export default async function SettingsPage({
                   </p>
                 </div>
                 <SaveButton className="btn-primary">Save document types</SaveButton>
+              </SaveForm>
+            </Row>
+            <Row
+              title="Deal file checklist"
+              status={
+                <span className="badge bg-muted text-muted-foreground">
+                  {dealFileConfig.builtins.length + dealFileConfig.dealTypes.length} per deal · {dealFileConfig.supplierTypes.length} per supplier
+                </span>
+              }
+              action="Edit"
+            >
+              <p className="text-xs text-muted-foreground mb-4">
+                What every deal&apos;s file must hold, and what each supplier on a deal is asked for. A supplier can have its own
+                list instead — on its page in Settings → Suppliers. The documents come from Document types above.
+              </p>
+              <SaveForm success="Deal file checklist saved" resetOnSuccess={false} action={saveDealFileChecklist} className="space-y-5 max-w-xl">
+                <fieldset>
+                  <legend className="label">Every deal needs</legend>
+                  <div className="grid gap-1.5 sm:grid-cols-2">
+                    {DEAL_BUILTINS.map((builtin) => (
+                      <label key={builtin.id} className="flex items-center gap-2 text-sm">
+                        <input type="checkbox" name="builtin" value={builtin.id} defaultChecked={dealFileConfig.builtins.includes(builtin.id)} className="h-4 w-4" />
+                        {builtin.label}
+                      </label>
+                    ))}
+                    {documentTypes.map((type) => (
+                      <label key={type} className="flex items-center gap-2 text-sm">
+                        <input type="checkbox" name="dealType" value={type} defaultChecked={dealFileConfig.dealTypes.includes(type)} className="h-4 w-4" />
+                        {type}
+                      </label>
+                    ))}
+                  </div>
+                </fieldset>
+                <fieldset>
+                  <legend className="label">Each supplier on a deal is asked for</legend>
+                  <div className="grid gap-1.5 sm:grid-cols-2">
+                    {documentTypes.map((type) => (
+                      <label key={type} className="flex items-center gap-2 text-sm">
+                        <input type="checkbox" name="supplierType" value={type} defaultChecked={dealFileConfig.supplierTypes.includes(type)} className="h-4 w-4" />
+                        {type}
+                      </label>
+                    ))}
+                  </div>
+                  <p className="text-xs text-muted-foreground mt-1">A document of one of these asks which supplier it is from when it is filed.</p>
+                </fieldset>
+                <SaveButton className="btn-primary">Save deal file checklist</SaveButton>
               </SaveForm>
             </Row>
             <Row

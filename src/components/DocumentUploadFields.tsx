@@ -5,7 +5,7 @@ import { isSupplierDocumentType } from "@/lib/dealFile";
 
 type Vendor = { id: string; name: string };
 
-/** The supplier choice, shown only for the three supplier document types (upload and Label). */
+/** The supplier choice, shown only for a supplier's paper (the workspace's supplier lists — upload and Label). */
 function SupplierSelect({ vendors, current }: { vendors: readonly Vendor[]; current?: Vendor | null }) {
   return (
     <label className="grid gap-1 text-xs text-muted-foreground">
@@ -24,8 +24,10 @@ function SupplierSelect({ vendors, current }: { vendors: readonly Vendor[]; curr
  * Any other type sends an empty supplier, so a file relabelled away from "Supplier invoice"
  * stops counting for that supplier.
  */
-export function DocumentLabelFields({ types, current, vendors, currentVendor }: {
+export function DocumentLabelFields({ types, supplierTypes, current, vendors, currentVendor }: {
   types: readonly string[];
+  /** Which types are a supplier's paper (lib/dealFileConfig workspaceSupplierTypes). */
+  supplierTypes: readonly string[];
   current: string;
   vendors: readonly Vendor[];
   currentVendor: Vendor | null;
@@ -40,7 +42,7 @@ export function DocumentLabelFields({ types, current, vendors, currentVendor }: 
           {types.map((type) => <option key={type} value={type}>{type}</option>)}
         </select>
       </label>
-      {isSupplierDocumentType(label) ? <SupplierSelect vendors={vendors} current={currentVendor} /> : <input type="hidden" name="vendorId" value="" />}
+      {isSupplierDocumentType(label, supplierTypes) ? <SupplierSelect vendors={vendors} current={currentVendor} /> : <input type="hidden" name="vendorId" value="" />}
     </>
   );
 }
@@ -56,6 +58,7 @@ export function DocumentLabelFields({ types, current, vendors, currentVendor }: 
  */
 export default function DocumentUploadFields({
   types,
+  supplierTypes,
   quotes,
   contactId,
   vendors,
@@ -63,6 +66,8 @@ export default function DocumentUploadFields({
 }: {
   /** The workspace's document types (Settings → Quotes → Document types). */
   types: readonly string[];
+  /** Which types are a supplier's paper — those ask which supplier. */
+  supplierTypes: readonly string[];
   /** The customer's quotes to file against. Omit where there are none to choose (vehicle, job card). */
   quotes?: readonly { id: string; label: string }[];
   /** Offers "The customer (no quote)". Without it (the deal file) a quote is always the target. */
@@ -82,8 +87,8 @@ export default function DocumentUploadFields({
           {types.map((type) => <option key={type} value={type}>{type}</option>)}
         </select>
       </label>
-      {/* Only for a supplier quote, invoice or proof of payment — the deal file asks for those per supplier. */}
-      {vendors && isSupplierDocumentType(label) && <SupplierSelect vendors={vendors} />}
+      {/* Only for a supplier's paper — the deal file asks for those per supplier. */}
+      {vendors && isSupplierDocumentType(label, supplierTypes) && <SupplierSelect vendors={vendors} />}
       {quotes && quotes.length > 0 && (
         <label className="grid gap-1 text-xs text-muted-foreground">
           File against

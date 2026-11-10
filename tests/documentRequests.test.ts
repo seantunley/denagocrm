@@ -54,7 +54,8 @@ test("staff send nothing without a click; a failed email leaves no working link;
   const action = read("src/app/actions/documentRequests.ts");
   assert.match(action, /const user = await requireQuoteAccess\(quoteId, "documents\.upload"\);/);
   assert.match(action, /if \(!\(await isModuleEnabled\("suppliers"\)\)\) refuse\(/);
-  assert.match(action, /if \(!isSupplierDocumentType\(documentType\) \|\| !types\.includes\(documentType\)\) refuse\(/);
+  // Only a paper on THIS supplier's list (its own, or the default — 2026-11-10).
+  assert.match(action, /const asked = typesForSupplier\(await getDealFileConfig\(\), vendor\.requiredDocuments\);\s*if \(!asked\.includes\(documentType\) \|\| !types\.includes\(documentType\)\) refuse\(/);
   assert.match(action, /if \(!sent\.ok\) \{\s*\/\/ Not sent: the link must not be left working\.\s*await prisma\.documentRequest\.updateMany\(\{ where: \{ id: request\.id, tenantId \}, data: \{ revokedAt: new Date\(\) \} \}\);/);
   assert.match(action, /action: "deal\.document_requested",/);
   const page = read("src/app/(app)/deals/[id]/page.tsx");

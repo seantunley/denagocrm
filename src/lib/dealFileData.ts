@@ -5,6 +5,7 @@ import { isModuleEnabled } from "./modules/enabled";
 import { getSetting } from "./settings";
 import { DOCUMENT_TYPES_KEY, parseDocumentTypes } from "./documentLabels";
 import { dealFileChecklist } from "./dealFile";
+import { getDealFileConfig } from "./dealFileConfig";
 import { dealKey } from "./dealVendors";
 
 /**
@@ -30,7 +31,7 @@ export async function loadDealFile(quote: { id: string; leadId: string | null },
   const dealQuoteIds = dealQuotes.map((dealQuote) => dealQuote.id);
   const tenantId = await actingTenantId();
   const suppliersOn = await isModuleEnabled("suppliers");
-  const [rawDocuments, signatures, documentTypes, declared] = await Promise.all([
+  const [rawDocuments, signatures, documentTypes, declared, config] = await Promise.all([
     prisma.document.findMany({
       // The current version of each file only — an older one is kept in its history (replacedById).
       where: { quoteId: { in: dealQuoteIds }, deletedAt: null, replacedById: null },
@@ -38,7 +39,7 @@ export async function loadDealFile(quote: { id: string; leadId: string | null },
         id: true, fileName: true, tag: true, sizeBytes: true, createdAt: true, quoteId: true,
         storedName: true, mimeType: true, tenantId: true, vehicleId: true, jobCardId: true,
         uploadedBy: { select: { name: true } },
-        vendor: { select: { id: true, name: true } },
+        vendor: { select: { id: true, name: true, requiredDocuments: true } },
       },
       orderBy: { createdAt: "desc" },
     }),
@@ -47,17 +48,22 @@ export async function loadDealFile(quote: { id: string; leadId: string | null },
     suppliersOn
       ? prisma.dealVendor.findMany({
           where: { tenantId, ...dealKey(quote) },
-          select: { vendor: { select: { id: true, name: true, kind: true } } },
+          select: { vendor: { select: { id: true, name: true, kind: true, requiredDocuments: true } } },
           orderBy: { createdAt: "asc" },
         })
       : [],
+    getDealFileConfig(),
   ]);
-  const documents = rawDocuments.map((doc) => ({ ...doc, vendor: suppliersOn ? doc.vendor : undefined }));
+  const documents = rawDocuments.map((doc) => ({ ...doc, vendor: suppliersOn && doc.vendor ? { id: doc.vendor.id, name: doc.vendor.name } : undefined }));
   const declaredVendors = declared.map((link) => link.vendor);
   const checklist = dealFileChecklist(
     dealQuotes,
-    documents.map((doc) => ({ tag: doc.tag, vendorId: doc.vendor?.id ?? null, vendorName: doc.vendor?.name ?? null })),
+    rawDocuments.map((doc) => {
+      const vendor = suppliersOn ? doc.vendor : null;
+      return { tag: doc.tag, vendorId: vendor?.id ?? null, vendorName: vendor?.name ?? null, vendorRequiredDocuments: vendor?.requiredDocuments ?? null };
+    }),
     documentTypes,
+    config,
     declaredVendors,
     suppliersOn,
   );

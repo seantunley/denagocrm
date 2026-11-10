@@ -16,6 +16,7 @@ import { StatusPill } from "@/components/visual-system";
 import { formatDate, formatZAR } from "@/lib/format";
 import { withCurrency } from "@/lib/currencyRules";
 import { isSupplierQuote, partiesOf } from "@/lib/dealFile";
+import { workspaceSupplierTypes } from "@/lib/dealFileConfig";
 import { handoverPhotosFor } from "@/lib/dealFileData";
 import { storedFileSrc } from "@/lib/storedFileSrc";
 import { quotePricing, type PricedLine } from "@/lib/pricing";
@@ -149,10 +150,11 @@ function InvoiceBox({ documentId, revalidate, invoice, money }: { documentId: st
   );
 }
 
-function DocRow({ doc: row, revalidate, types, vendors, invoices, money }: {
+function DocRow({ doc: row, revalidate, types, supplierTypes, vendors, invoices, money }: {
   doc: Doc;
   revalidate: string;
   types: readonly string[];
+  supplierTypes: readonly string[];
   vendors: readonly { id: string; name: string }[] | null;
   invoices: InvoiceMap;
   money: (cents: number, currency: string | null) => string;
@@ -192,7 +194,7 @@ function DocRow({ doc: row, revalidate, types, vendors, invoices, money }: {
           <SaveForm action={relabelDocument.bind(null, doc.id, revalidate)} success="Label saved" className="grid gap-3 p-4">
             {doc.vendor !== undefined ? (
               // The supplier appears only for a supplier quote, invoice or proof of payment.
-              <DocumentLabelFields types={types} current={chosen && types.includes(chosen) ? chosen : ""} vendors={vendors ?? []} currentVendor={doc.vendor} />
+              <DocumentLabelFields types={types} supplierTypes={supplierTypes} current={chosen && types.includes(chosen) ? chosen : ""} vendors={vendors ?? []} currentVendor={doc.vendor} />
             ) : (
               // This page didn't load suppliers: no supplier field, so the one on file is kept.
               <label className="grid gap-1 text-xs text-muted-foreground">
@@ -315,6 +317,8 @@ export default async function DocumentsPanel({
   const vendors = (await isModuleEnabled("suppliers"))
     ? await prisma.vendor.findMany({ where: { tenantId, deletedAt: null }, select: { id: true, name: true }, orderBy: { name: "asc" } })
     : null;
+  // Which types are a supplier's paper — the workspace's lists (Settings → Quotes → Deal file checklist, each supplier's).
+  const supplierTypes = await workspaceSupplierTypes(tenantId);
   // A current quote with a supplier quote filed on it offers to take that supplier's prices as its costs.
   // Only for someone who may edit quotes — cost and margin are theirs, and the save needs it.
   const costQuoteIds = vendors === null || !(quoteGroups ?? []).length || !(await hasPermission(await requireUser(), "quotes.edit"))
@@ -359,7 +363,7 @@ export default async function DocumentsPanel({
         >
           {/* What it is, and which quote it belongs to. It also carries the customer as the
               target — or the quote instead, when one is chosen: an upload names ONE record. */}
-          <DocumentUploadFields types={types} quotes={fileAgainst} contactId={contactId} vendors={vendors ?? undefined} defaultQuoteId={defaultQuoteId} />
+          <DocumentUploadFields types={types} supplierTypes={supplierTypes} quotes={fileAgainst} contactId={contactId} vendors={vendors ?? undefined} defaultQuoteId={defaultQuoteId} />
           {vehicleId && <input type="hidden" name="vehicleId" value={vehicleId} />}
           {jobCardId && <input type="hidden" name="jobCardId" value={jobCardId} />}
           <input type="hidden" name="revalidate" value={revalidate} />
@@ -411,7 +415,7 @@ export default async function DocumentsPanel({
                 </p>
               ) : (() => {
                 // Customer, then each supplier by name — headings only once a supplier paper is on the quote.
-                const sections = partiesOf([...group.documents].sort(byLifecycle).map((doc) => (vendors === null ? { ...doc, vendor: undefined } : doc)));
+                const sections = partiesOf([...group.documents].sort(byLifecycle).map((doc) => (vendors === null ? { ...doc, vendor: undefined } : doc)), supplierTypes);
                 const headed = sections.some((section) => section.supplier);
                 return sections.map((section) => (
                   <div key={section.key} className={headed ? "mt-2" : ""}>
@@ -422,7 +426,7 @@ export default async function DocumentsPanel({
                     )}
                     <ul className="mt-1 divide-y divide-slate-800">
                       {section.docs.map((doc) => (
-                        <DocRow key={doc.id} doc={doc} revalidate={revalidate} types={types} vendors={vendors} invoices={invoices} money={invoiceMoney} />
+                        <DocRow key={doc.id} doc={doc} revalidate={revalidate} types={types} supplierTypes={supplierTypes} vendors={vendors} invoices={invoices} money={invoiceMoney} />
                       ))}
                     </ul>
                   </div>
@@ -473,7 +477,7 @@ export default async function DocumentsPanel({
           )}
           <ul className="divide-y divide-slate-800">
             {documents.map((doc) => (
-              <DocRow key={doc.id} doc={doc} revalidate={revalidate} types={types} vendors={vendors} invoices={invoices} money={invoiceMoney} />
+              <DocRow key={doc.id} doc={doc} revalidate={revalidate} types={types} supplierTypes={supplierTypes} vendors={vendors} invoices={invoices} money={invoiceMoney} />
             ))}
           </ul>
         </>

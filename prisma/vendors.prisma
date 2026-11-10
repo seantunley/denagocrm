@@ -17,6 +17,9 @@ model Vendor {
   phone              String?
   email              String?
   notes              String?
+  /// The deal-file documents asked of THIS supplier, as a JSON array of document types (Sean, 2026-11-10).
+  /// NULL = the workspace's default supplier list (lib/dealFile.ts DealFileConfig.supplierTypes).
+  requiredDocuments  Json?
   createdAt          DateTime  @default(now())
   updatedAt          DateTime  @updatedAt
   deletedAt          DateTime?

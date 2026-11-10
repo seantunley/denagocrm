@@ -44,10 +44,10 @@ test("every way in refuses or hides when the module is off", () => {
 });
 
 test("module off: the checklist names the document type, never a supplier box that isn't there (review of #1043)", async () => {
-  const { dealFileChecklist } = await import("../src/lib/dealFile");
+  const { dealFileChecklist, DEFAULT_DEAL_FILE_CONFIG } = await import("../src/lib/dealFile");
   const { DEFAULT_DOCUMENT_TYPES } = await import("../src/lib/documentLabels");
   const quote = { number: 1, status: "sent", invoicedAt: null, deliverySignatureRef: null };
-  const off = dealFileChecklist([quote], [], DEFAULT_DOCUMENT_TYPES, [], false).filter((item) => item.label.startsWith("Supplier"));
+  const off = dealFileChecklist([quote], [], DEFAULT_DOCUMENT_TYPES, DEFAULT_DEAL_FILE_CONFIG, [], false).filter((item) => item.label.startsWith("Supplier"));
   assert.ok(off.length > 0);
   for (const item of off) assert.doesNotMatch(item.detail, /supplier chosen|as the supplier/, item.label);
   assert.match(off[0].detail, /Upload it as “Supplier quote”/);

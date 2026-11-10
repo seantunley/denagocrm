@@ -169,12 +169,11 @@ export default async function DealWorkspacePage({ params }: { params: Promise<{ 
       })
     : [];
   const requestNow = new Date();
-  /** The checklist line's supplier and paper (its key is "<vendorId>:<type>"), when it can be asked for. */
-  const askable = (item: { key: string; done: boolean }) => {
-    if (item.done || !suppliersOn || !canUpload) return null;
-    const at = item.key.indexOf(":");
-    const vendor = vendors.find((v) => v.id === item.key.slice(0, at));
-    return vendor ? { vendor, documentType: item.key.slice(at + 1) } : null;
+  /** The checklist line's supplier and paper, when it can be asked for. */
+  const askable = (item: (typeof checklist)[number]) => {
+    if (item.done || !suppliersOn || !canUpload || !item.supplier?.vendorId) return null;
+    const vendor = vendors.find((v) => v.id === item.supplier!.vendorId);
+    return vendor ? { vendor, documentType: item.supplier.documentType } : null;
   };
   const quoteGroups = dealQuotes.map((dealQuote) => ({
     id: dealQuote.id,
