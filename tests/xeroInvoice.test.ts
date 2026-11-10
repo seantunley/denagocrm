@@ -5,6 +5,9 @@ import {
   buildXeroContact,
   buildXeroInvoice,
   chooseXeroOrganisation,
+  feeKindForXero,
+  parseXeroItemLink,
+  sellableXeroItems,
   liveInvoiceWithReference,
   matchXeroContact,
   pickTaxType,
@@ -91,6 +94,48 @@ test("tax types: exact active revenue rate; 0% prefers zero-rated; ambiguous or 
   const ambiguous = pickTaxType(twoStandard, 15);
   assert.equal(ambiguous.ok, false);
   assert.match(ambiguous.ok ? "" : ambiguous.error, /several sales tax rates at 15%/);
+});
+
+// ── Item codes ──────────────────────────────────────────────────────────────
+
+test("a linked product line carries its Xero item code and the item's account; wording, price and VAT stay the CRM's", () => {
+  const q = quote({
+    items: [{ description: "Denago Rover XL", qty: 1, unitPriceCents: 24_000_000, taxRatePct: 15, xeroItemCode: "RXL", xeroAccountCode: "4010" }],
+    fees: [
+      { label: "Cape Town", kind: "delivery", amountCents: 550_000, taxRatePct: 15, xeroItemCode: "DEL", xeroAccountCode: null },
+      { label: "Licensing", kind: "fee", amountCents: 120_000, taxRatePct: 15 },
+    ],
+  });
+  const [model, delivery, other] = buildXeroInvoice(q, { ...opts, salesAccount: "4000" }).LineItems;
+  assert.equal(model.ItemCode, "RXL");
+  assert.equal(model.AccountCode, "4010");
+  assert.equal(model.Description, "Denago Rover XL");
+  assert.equal(model.UnitAmount, 240000);
+  assert.equal(delivery.ItemCode, "DEL");
+  assert.equal(delivery.AccountCode, "4000", "an item with no sales account falls back to the workspace's");
+  assert.equal(delivery.Description, "Delivery — Cape Town");
+  assert.equal(other.ItemCode, undefined, "an unlinked fee goes without a code");
+});
+
+test("Xero items: only sold ones, sorted; fee settings and kinds", () => {
+  assert.deepEqual(
+    sellableXeroItems([
+      { ItemID: "2", Code: "RXL", Name: "Rover XL", SalesDetails: { AccountCode: "4010" } },
+      { ItemID: "1", Code: "DEL", Name: "Delivery", IsSold: true },
+      { ItemID: "3", Code: "PARTS-IN", Name: "Bought only", IsSold: false },
+      { ItemID: "4", Name: "No code" },
+    ]),
+    [
+      { id: "1", code: "DEL", name: "Delivery", accountCode: null },
+      { id: "2", code: "RXL", name: "Rover XL", accountCode: "4010" },
+    ],
+  );
+  assert.deepEqual(parseXeroItemLink('{"id":"1","code":"DEL","name":"Delivery"}'), { id: "1", code: "DEL", name: "Delivery" });
+  assert.equal(parseXeroItemLink(""), null);
+  assert.equal(parseXeroItemLink("not json"), null);
+  assert.equal(feeKindForXero("delivery"), "delivery");
+  assert.equal(feeKindForXero("fee"), "other");
+  assert.equal(feeKindForXero(null), "other");
 });
 
 // ── The customer ────────────────────────────────────────────────────────────

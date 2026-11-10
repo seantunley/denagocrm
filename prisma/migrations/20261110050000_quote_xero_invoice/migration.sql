@@ -11,3 +11,7 @@ ALTER TABLE "Quote" ADD COLUMN IF NOT EXISTS "xeroSentAt" TIMESTAMP(3);
 ALTER TABLE "Quote" ADD COLUMN IF NOT EXISTS "xeroSentByName" TEXT;
 ALTER TABLE "Contact" ADD COLUMN IF NOT EXISTS "xeroContactId" TEXT;
 ALTER TABLE "Fleet" ADD COLUMN IF NOT EXISTS "xeroContactId" TEXT;
+-- A product's link to a Xero item (Sean: "I will add items in Xero and link them"). The SKU is untouched.
+ALTER TABLE "Product" ADD COLUMN IF NOT EXISTS "xeroItemId" TEXT;
+ALTER TABLE "Product" ADD COLUMN IF NOT EXISTS "xeroItemCode" TEXT;
+ALTER TABLE "Product" ADD COLUMN IF NOT EXISTS "xeroItemName" TEXT;

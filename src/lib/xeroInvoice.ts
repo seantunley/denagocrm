@@ -25,11 +25,18 @@ export type XeroQuoteInput = {
   taxInclusive: boolean;
   currency: string | null;
   invoicedAt: Date | null;
-  items: Array<PricedLine & { description: string }>;
-  fees: Array<{ label: string; kind?: string | null; amountCents: number; taxRatePct?: number | null }>;
+  /**
+   * `xeroItemCode` / `xeroAccountCode`: the line's product is linked to a Xero item
+   * (looked up at send time) — its code is sent, and its sales account when Xero
+   * has one on the item. Description, price and VAT stay the CRM's either way.
+   */
+  items: Array<PricedLine & { description: string; xeroItemCode?: string | null; xeroAccountCode?: string | null }>;
+  /** A fee may carry the Xero item chosen for its kind (Settings → Xero: delivery fees / other fees). */
+  fees: Array<{ label: string; kind?: string | null; amountCents: number; taxRatePct?: number | null; xeroItemCode?: string | null; xeroAccountCode?: string | null }>;
 };
 
 export type XeroLine = {
+  ItemCode?: string;
   Description: string;
   Quantity: number;
   UnitAmount: number;
@@ -143,24 +150,27 @@ export function buildXeroInvoice(
         Description: item.description.slice(0, 4000) || "Item",
         Quantity: item.qty,
         UnitAmount: money(item.unitPriceCents),
-        AccountCode: account,
+        AccountCode: item.xeroAccountCode?.trim() || account,
         TaxType: taxType(rate),
         TaxAmount: money(splitTax(lineNetCents(item), rate, inclusive).tax),
       };
+      if (item.xeroItemCode) line.ItemCode = item.xeroItemCode;
       if (discount > 0) line.DiscountRate = discount;
       return line;
     }),
     ...quote.fees.map((fee) => {
       const rate = fee.taxRatePct ?? LEGACY_VAT_RATE_PCT;
-      return {
+      const line: XeroLine = {
         // The same wording the CRM invoice prints for a fee (pricing.feeRows).
         Description: (fee.kind === "delivery" ? `Delivery — ${fee.label}` : fee.label).slice(0, 4000) || "Fee",
         Quantity: 1,
         UnitAmount: money(fee.amountCents),
-        AccountCode: account,
+        AccountCode: fee.xeroAccountCode?.trim() || account,
         TaxType: taxType(rate),
         TaxAmount: money(splitTax(fee.amountCents, rate, inclusive).tax),
       };
+      if (fee.xeroItemCode) line.ItemCode = fee.xeroItemCode;
+      return line;
     }),
   ];
   const payload: XeroInvoicePayload = {
@@ -176,6 +186,37 @@ export function buildXeroInvoice(
   if (quote.currency) payload.CurrencyCode = quote.currency;
   return payload;
 }
+
+// ── Items ───────────────────────────────────────────────────────────────────
+
+/** A Xero item, as GET /Items returns it. */
+export type XeroItem = { ItemID?: string; Code?: string; Name?: string; IsSold?: boolean; SalesDetails?: { AccountCode?: string } };
+
+/** The items a product may be linked to: ones Xero sells, sorted by code. */
+export function sellableXeroItems(items: XeroItem[]): Array<{ id: string; code: string; name: string; accountCode: string | null }> {
+  return items
+    .filter((i) => i.ItemID && i.Code && i.IsSold !== false)
+    .map((i) => ({ id: i.ItemID!, code: i.Code!, name: i.Name ?? "", accountCode: i.SalesDetails?.AccountCode?.trim() || null }))
+    .sort((a, b) => a.code.localeCompare(b.code));
+}
+
+/** Settings keys holding the Xero item for fee lines, by fee kind. Value: JSON { id, code, name }. */
+export const XERO_FEE_ITEM_KEYS = { delivery: "XERO_DELIVERY_ITEM", other: "XERO_FEE_ITEM" } as const;
+export type XeroFeeKind = keyof typeof XERO_FEE_ITEM_KEYS;
+export type XeroItemLink = { id: string; code: string; name: string };
+
+/** A stored item link, or null for unset / unreadable. */
+export function parseXeroItemLink(raw: string | null | undefined): XeroItemLink | null {
+  try {
+    const v = JSON.parse(raw ?? "");
+    return v && typeof v.id === "string" && typeof v.code === "string" ? { id: v.id, code: v.code, name: String(v.name ?? "") } : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Which fee setting a fee line follows: a delivery fee its own, anything else "other fees". */
+export const feeKindForXero = (kind: string | null | undefined): XeroFeeKind => (kind === "delivery" ? "delivery" : "other");
 
 // ── Contacts ────────────────────────────────────────────────────────────────
 

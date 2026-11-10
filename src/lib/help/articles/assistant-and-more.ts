@@ -882,6 +882,14 @@ export const assistantAndMoreArticles: HelpArticle[] = [
         "Each line uses the Xero tax rate for its VAT percentage, with the CRM's own VAT amount, so the total is the same to the cent. If Xero has no sales rate at a percentage, or two that could fit, nothing is sent and the CRM says which.",
         "Only the invoice NUMBER differs — Xero numbers its own invoices.",
       ] },
+      { type: "h", text: "Xero items (item codes)" },
+      { type: "list", items: [
+        "Add your models and a Delivery item in Xero first (Xero → Products and services).",
+        "On each product in the CRM, under **Xero**, press **Choose from Xero** and pick its Xero item. Your own SKU is not changed — the link is separate.",
+        "In **Settings → Integrations → Xero**, choose the Xero item for **delivery fees** and, if you like, for **other fees**.",
+        "When a quote is sent, linked lines carry the Xero item's code and post to the item's sales account. The wording, price and VAT are still the CRM's, so the invoice still matches. Unlinked lines go across without a code.",
+        "If a linked item has been removed from Xero, the line is sent without a code and the CRM tells you which one to re-link.",
+      ] },
       { type: "h", text: "The customer in Xero" },
       { type: "list", items: [
         "The first time a customer is invoiced, the CRM looks for them in Xero — by email address, then by exact name. If they're there, that contact is used; if not, a new Xero contact is created with their name, email, phone, address and VAT number.",

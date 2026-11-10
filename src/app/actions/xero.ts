@@ -6,6 +6,7 @@ import { withActingStaffScope } from "@/lib/actingScope";
 import { actingTenantId } from "@/lib/actingTenant";
 import { prisma } from "@/lib/db";
 import { requireQuoteAccess, type PermissionUser } from "@/lib/permissions";
+import { requireTenantOwner } from "@/lib/auth";
 import { logAudit } from "@/lib/audit";
 import { logError } from "@/lib/errorLog";
 import { formatZAR } from "@/lib/format";
@@ -13,12 +14,16 @@ import { withCurrency } from "@/lib/currencyRules";
 import { payableTotalCents } from "@/lib/pricing";
 import { loadBillToFleet, quoteBillTo } from "@/lib/quoteBillTo";
 import { QUOTE_GONE } from "@/lib/quoteDelivery";
-import { getRegionalSettings, resolveIntegrationField } from "@/lib/settings";
+import { getRegionalSettings, getSetting, putSetting, resolveIntegrationField } from "@/lib/settings";
 import { deleteFile, saveFile } from "@/lib/storage";
 import { XeroNotConnected, xeroClient, type XeroClient } from "@/lib/xero";
 import {
+  XERO_FEE_ITEM_KEYS,
   buildXeroInvoice,
+  feeKindForXero,
+  parseXeroItemLink,
   quoteTaxRates,
+  type XeroFeeKind,
   totalsDiffer,
   xeroPdfFileName,
   xeroReference,
@@ -137,6 +142,7 @@ export async function sendQuoteToXero(quoteId: string): Promise<ActionResult> {
         let invoice = await client.findInvoiceByReference(reference);
         let contact: { contactId: string; created: boolean } | null = invoice?.contactId ? { contactId: invoice.contactId, created: false } : null;
         const adopted = Boolean(invoice);
+        let missingItems: string[] = [];
 
         if (!invoice) {
           const known = quote.fleetId
@@ -148,6 +154,37 @@ export async function sendQuoteToXero(quoteId: string): Promise<ActionResult> {
           );
           const taxTypes = await client.taxTypes(quoteTaxRates(quote));
           const salesAccount = (await resolveIntegrationField(tenantId, "xero", "XERO_SALES_ACCOUNT")) ?? "";
+
+          // Lines whose product is linked to a Xero item carry its CURRENT code (looked up by the
+          // stored ID, so a code renamed in Xero still works) and the item's sales account.
+          const productIds = [...new Set(quote.items.map((item) => item.productId).filter((id): id is string => Boolean(id)))];
+          const linked = productIds.length
+            ? await prisma.product.findMany({ where: { id: { in: productIds }, tenantId, xeroItemId: { not: null } }, select: { id: true, name: true, xeroItemId: true } })
+            : [];
+          // Fee lines follow Settings → Xero: the item for delivery fees, or for other fees.
+          const feeLinks = {
+            delivery: parseXeroItemLink(await getSetting(XERO_FEE_ITEM_KEYS.delivery)),
+            other: parseXeroItemLink(await getSetting(XERO_FEE_ITEM_KEYS.other)),
+          };
+          let items: Array<(typeof quote.items)[number] & { xeroItemCode?: string; xeroAccountCode?: string | null }> = quote.items;
+          let fees: Array<(typeof quote.fees)[number] & { xeroItemCode?: string; xeroAccountCode?: string | null }> = quote.fees;
+          const feeNeedsItems = quote.fees.some((fee) => feeLinks[feeKindForXero(fee.kind)]);
+          if (linked.length || feeNeedsItems) {
+            const inXero = new Map((await client.listItems()).map((x) => [x.id, x]));
+            missingItems = linked.filter((p) => !inXero.has(p.xeroItemId!)).map((p) => p.name);
+            const byProduct = new Map(linked.map((p) => [p.id, inXero.get(p.xeroItemId!)]));
+            items = quote.items.map((item) => {
+              const x = item.productId ? byProduct.get(item.productId) : undefined;
+              return x ? { ...item, xeroItemCode: x.code, xeroAccountCode: x.accountCode } : item;
+            });
+            fees = quote.fees.map((fee) => {
+              const link = feeLinks[feeKindForXero(fee.kind)];
+              const x = link ? inXero.get(link.id) : undefined;
+              if (link && !x) missingItems.push(feeKindForXero(fee.kind) === "delivery" ? "delivery fees" : "other fees");
+              return x ? { ...fee, xeroItemCode: x.code, xeroAccountCode: x.accountCode } : fee;
+            });
+            missingItems = [...new Set(missingItems)];
+          }
           const payload = buildXeroInvoice(
             {
               number: quote.number,
@@ -155,8 +192,8 @@ export async function sendQuoteToXero(quoteId: string): Promise<ActionResult> {
               taxInclusive: quote.taxInclusive,
               currency: quote.currency,
               invoicedAt: quote.invoicedAt,
-              items: quote.items,
-              fees: quote.fees,
+              items,
+              fees,
             },
             { contactId: contact.contactId, salesAccount, taxTypes },
           );
@@ -197,6 +234,9 @@ export async function sendQuoteToXero(quoteId: string): Promise<ActionResult> {
           adopted ? `Already in Xero as ${invoice.number ?? "an invoice"} — linked, nothing new created.` : `In Xero as ${invoice.number ?? "a draft invoice"}.`,
           contact?.created ? "New Xero contact created." : contact ? "Matched the customer's Xero contact." : "",
           pdfFiled ? "Xero's PDF is filed on the customer." : "Xero's PDF couldn't be fetched yet — press Refresh to file it.",
+          missingItems.length
+            ? `No longer in Xero, so sent without an item code: ${missingItems.join(", ")} — re-link it (product page, or Settings → Integrations → Xero for fees).`
+            : "",
           totalsDiffer(invoice.totalCents, crmTotal)
             ? `Check it: Xero's total is ${formatZAR(invoice.totalCents ?? 0, moneyFmt)}, the quote's is ${formatZAR(crmTotal, moneyFmt)}.`
             : "",
@@ -210,6 +250,95 @@ export async function sendQuoteToXero(quoteId: string): Promise<ActionResult> {
         });
         refuseXero(err);
       }
+    }),
+  );
+}
+
+/**
+ * The product page's "Xero item" dropdown: the items Xero sells, loaded when the
+ * owner opens it (not on every page view). Owner only, as editing a product is.
+ */
+export async function listXeroItems(): Promise<{ items: Array<{ id: string; code: string; name: string }> } | { error: string }> {
+  return withActingStaffScope(async () => {
+    await requireTenantOwner();
+    const tenantId = await actingTenantId();
+    try {
+      const items = await (await xeroClient(tenantId)).listItems();
+      return { items: items.map(({ id, code, name }) => ({ id, code, name })) };
+    } catch (err) {
+      if (err instanceof XeroNotConnected || (err instanceof Error && err.message.startsWith("Xero:"))) return { error: err.message };
+      await logError("xero-items", err, undefined, { tenantId, alert: false });
+      return { error: "Xero's items couldn't be loaded. Try again in a moment." };
+    }
+  });
+}
+
+/**
+ * Link a product to a Xero item (or unlink with an empty choice). The item is
+ * checked against Xero's list, so only a real, sellable item can be stored. The
+ * SKU is not touched — the two are separate on purpose.
+ */
+export async function linkProductToXeroItem(productId: string, formData: FormData): Promise<ActionResult> {
+  return asActionResult(() =>
+    withActingStaffScope(async () => {
+      const user = await requireTenantOwner();
+      const tenantId = await actingTenantId();
+      const product = await prisma.product.findFirst({ where: { id: productId, tenantId, deletedAt: null }, select: { name: true } });
+      if (!product) refuse("That product is not in this workspace.");
+      const itemId = String(formData.get("xeroItemId") ?? "").trim();
+      if (!itemId) {
+        await prisma.product.updateMany({ where: { id: productId, tenantId }, data: { xeroItemId: null, xeroItemCode: null, xeroItemName: null } });
+        await logAudit({ action: "product.xero_item_unlinked", summary: `${product.name} unlinked from its Xero item`, user });
+        revalidatePath(`/products/${productId}`);
+        return { success: "Unlinked from Xero." };
+      }
+      let item;
+      try {
+        item = (await (await xeroClient(tenantId)).listItems()).find((x) => x.id === itemId);
+      } catch (err) {
+        refuseXero(err);
+      }
+      if (!item) refuse("That item isn't in Xero (or isn't sold) any more — reload the list.");
+      await prisma.product.updateMany({
+        where: { id: productId, tenantId },
+        data: { xeroItemId: item.id, xeroItemCode: item.code, xeroItemName: item.name || null },
+      });
+      await logAudit({ action: "product.xero_item_linked", summary: `${product.name} linked to Xero item ${item.code}`, user });
+      revalidatePath(`/products/${productId}`);
+      return { success: `Linked to Xero item ${item.code}.` };
+    }),
+  );
+}
+
+/**
+ * Settings → Integrations → Xero: the Xero item delivery fees (or other fees) are
+ * sent under. Checked against Xero's list like a product link; empty unsets it.
+ */
+export async function linkFeeToXeroItem(kind: XeroFeeKind, formData: FormData): Promise<ActionResult> {
+  return asActionResult(() =>
+    withActingStaffScope(async () => {
+      const user = await requireTenantOwner();
+      const tenantId = await actingTenantId();
+      if (!(kind in XERO_FEE_ITEM_KEYS)) refuse("Unknown fee kind.");
+      const label = kind === "delivery" ? "delivery fees" : "other fees";
+      const itemId = String(formData.get("xeroItemId") ?? "").trim();
+      if (!itemId) {
+        await putSetting(XERO_FEE_ITEM_KEYS[kind], "");
+        await logAudit({ action: "xero.fee_item_unlinked", summary: `Xero item for ${label} cleared`, user });
+        revalidatePath("/settings/integrations");
+        return { success: `No Xero item for ${label}.` };
+      }
+      let item;
+      try {
+        item = (await (await xeroClient(tenantId)).listItems()).find((x) => x.id === itemId);
+      } catch (err) {
+        refuseXero(err);
+      }
+      if (!item) refuse("That item isn't in Xero (or isn't sold) any more — reload the list.");
+      await putSetting(XERO_FEE_ITEM_KEYS[kind], JSON.stringify({ id: item.id, code: item.code, name: item.name }));
+      await logAudit({ action: "xero.fee_item_linked", summary: `Xero item for ${label} set to ${item.code}`, user });
+      revalidatePath("/settings/integrations");
+      return { success: `${label[0].toUpperCase()}${label.slice(1)} go to Xero as ${item.code}.` };
     }),
   );
 }

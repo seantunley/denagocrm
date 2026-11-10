@@ -1,5 +1,8 @@
 import { requireTenantOwner, getActiveTenantId } from "@/lib/auth";
-import { hasTenantCredentialOverride, isSecretSettingKey, resolveIntegrationBundle } from "@/lib/settings";
+import { getSetting, hasTenantCredentialOverride, isSecretSettingKey, resolveIntegrationBundle } from "@/lib/settings";
+import XeroItemPicker from "@/components/XeroItemPicker";
+import { linkFeeToXeroItem } from "@/app/actions/xero";
+import { XERO_FEE_ITEM_KEYS, parseXeroItemLink } from "@/lib/xeroInvoice";
 import WorkspaceIntegrationRows from "@/components/settings/WorkspaceIntegrationRows";
 import {
   saveTenantCredentialOverride,
@@ -50,6 +53,10 @@ const XERO_NOTICES: Record<string, string> = {
 
 export default async function IntegrationsPage({ searchParams }: { searchParams?: Promise<{ xero?: string }> }) {
   const xeroNotice = XERO_NOTICES[(await searchParams)?.xero ?? ""] ?? null;
+  const xeroFeeItems = {
+    delivery: parseXeroItemLink(await getSetting(XERO_FEE_ITEM_KEYS.delivery)),
+    other: parseXeroItemLink(await getSetting(XERO_FEE_ITEM_KEYS.other)),
+  };
   // Entirely sensitive (credential management) — gate the whole page.
   // Uses requireTenantOwner so a tenant's own provisioned owner can manage
   // their credentials without needing the global platform owner role (a
@@ -212,6 +219,22 @@ export default async function IntegrationsPage({ searchParams }: { searchParams?
                     <a href="/api/integrations/xero/connect" className="btn-primary btn-sm mt-3 inline-flex">
                       {hasOverride.XERO_TENANT_ID ? "Reconnect Xero" : "Connect Xero"}
                     </a>
+                    {hasOverride.XERO_TENANT_ID && (
+                      <div className="mt-5 grid gap-5 border-t border-border pt-4 sm:grid-cols-2">
+                        <XeroItemPicker
+                          label="Xero item for delivery fees"
+                          current={xeroFeeItems.delivery}
+                          action={linkFeeToXeroItem.bind(null, "delivery")}
+                          hint="Delivery fee lines go to Xero under this item. Wording, amount and VAT stay the quote's."
+                        />
+                        <XeroItemPicker
+                          label="Xero item for other fees"
+                          current={xeroFeeItems.other}
+                          action={linkFeeToXeroItem.bind(null, "other")}
+                          hint="Any other fee on a quote. Leave unlinked to send fees without an item code."
+                        />
+                      </div>
+                    )}
                   </div>
                 )}
 

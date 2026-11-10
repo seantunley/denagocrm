@@ -9,7 +9,9 @@ import {
   matchXeroContact,
   pickTaxType,
   readXeroInvoice,
+  sellableXeroItems,
   xeroErrorMessage,
+  type XeroItem,
   type XeroBillTo,
   type XeroContact,
   type XeroInvoicePayload,
@@ -161,6 +163,8 @@ export type XeroClient = {
   getInvoice(invoiceId: string): Promise<XeroInvoiceSummary>;
   /** Xero's own PDF of the invoice. */
   getInvoicePdf(invoiceId: string): Promise<Buffer>;
+  /** The items Xero sells — for the product page's "Xero item" dropdown, and to look up codes at send time. */
+  listItems(): Promise<ReturnType<typeof sellableXeroItems>>;
 };
 
 export async function xeroClient(tenantId: string): Promise<XeroClient> {
@@ -251,6 +255,11 @@ export async function xeroClient(tenantId: string): Promise<XeroClient> {
       const invoice = readXeroInvoice(await json(`/Invoices/${encodeURIComponent(invoiceId)}`));
       if (!invoice) throw new Error("Xero: that invoice was not found.");
       return invoice;
+    },
+
+    async listItems() {
+      const body = (await json("/Items")) as { Items?: XeroItem[] } | null;
+      return sellableXeroItems(body?.Items ?? []);
     },
 
     async getInvoicePdf(invoiceId) {

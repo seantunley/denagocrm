@@ -248,6 +248,12 @@ model Product {
   tenantId String? // Multi-tenancy (Phase B — additive/inert): owning tenant.
   name           String
   sku            String?
+  /// The Xero item this product is linked to (picked from a dropdown on the product page). The ID is the link;
+  /// code and name are kept for display. The code sent on an invoice is looked up from the ID at send time, so
+  /// renaming the code in Xero doesn't break it. Our own `sku` stays independent.
+  xeroItemId     String?
+  xeroItemCode   String?
+  xeroItemName   String?
   category       String?
   basePriceCents Int      @default(0)
   description    String?
