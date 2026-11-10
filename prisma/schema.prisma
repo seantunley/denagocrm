@@ -499,6 +499,9 @@ model Contact {
   lastName      String?
   company       String?
   vatNumber     String? // VAT registration number — companies and fleet accounts only
+  /// This customer's contact in the workspace's Xero organisation (lib/xero.ts) — found or created on the first
+  /// "Send to Xero", then reused so every invoice for them lands on the same Xero contact.
+  xeroContactId String?
   email         String?
   phone         String?
   whatsapp      String?
@@ -2030,6 +2033,8 @@ model Fleet {
   vatNumber          String? // VAT registration number (same field name as Contact.vatNumber)
   billingEmail       String? // where invoices go — distinct from the manager's personal email
   billingPhone       String?
+  /// The fleet account's contact in Xero — a fleet quote is billed to the fleet, so its invoices go to this one.
+  xeroContactId      String?
   // Address fields reuse Contact's exact names and meanings rather than
   // inventing a parallel addressLine1/addressLine2 vocabulary for the same idea.
   address            String? // street address / estate + unit

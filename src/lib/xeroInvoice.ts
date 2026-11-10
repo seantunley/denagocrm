@@ -3,13 +3,21 @@
  * (lib/xero.ts does the HTTP). No server or database imports, so it is
  * unit-tested directly (tests/xeroInvoice.test.ts).
  *
- * Sean, 2026-11-10: "send the quote to Xero, then retrieve the invoice number
- * from Xero and store it on the record here. Our invoice numbers will be
- * different from Xero." So Xero numbers the invoice itself; ours goes in Xero's
- * Reference, which ties the two together from the Xero side.
+ * Sean, 2026-11-10: the Xero invoice must MATCH the CRM invoice — same customer,
+ * lines, prices, discounts, fees, VAT and total — numbered by Xero. Our invoice
+ * and quote numbers go in Xero's Reference, which is also how a send finds an
+ * invoice it already made.
  */
-import { includedLines, feeRows, type PricedLine } from "./pricing";
+import { includedLines, lineNetCents, splitTax, LEGACY_VAT_RATE_PCT, type PricedLine } from "./pricing";
 import { formatInvoiceNumber } from "./invoiceNumber";
+
+export type XeroBillTo = {
+  name: string;
+  email: string;
+  phone: string;
+  addressLines: string[];
+  vatNumber: string;
+};
 
 export type XeroQuoteInput = {
   number: number;
@@ -17,9 +25,8 @@ export type XeroQuoteInput = {
   taxInclusive: boolean;
   currency: string | null;
   invoicedAt: Date | null;
-  items: Array<PricedLine & { description: string; colorPreference?: string | null }>;
-  fees: Array<{ label: string; kind?: string | null; amountCents: number }>;
-  billTo: { name: string; email: string };
+  items: Array<PricedLine & { description: string }>;
+  fees: Array<{ label: string; kind?: string | null; amountCents: number; taxRatePct?: number | null }>;
 };
 
 export type XeroLine = {
@@ -27,18 +34,29 @@ export type XeroLine = {
   Quantity: number;
   UnitAmount: number;
   AccountCode: string;
+  TaxType: string;
+  TaxAmount: number;
   DiscountRate?: number;
 };
 
 export type XeroInvoicePayload = {
   Type: "ACCREC";
   Status: "DRAFT";
-  Contact: { Name: string; EmailAddress?: string };
+  Contact: { ContactID: string };
   Date: string;
   Reference: string;
   LineAmountTypes: "Inclusive" | "Exclusive";
   CurrencyCode?: string;
   LineItems: XeroLine[];
+};
+
+/** A Xero sales tax rate, as GET /TaxRates returns it. */
+export type XeroTaxRate = {
+  Name?: string;
+  TaxType?: string;
+  Status?: string;
+  EffectiveRate?: number | string;
+  CanApplyToRevenue?: boolean;
 };
 
 /** The sales account a line posts to when the workspace hasn't named one ("200" is Xero's default Sales). */
@@ -49,72 +67,199 @@ export function xeroDate(date: Date): string {
   return new Intl.DateTimeFormat("en-CA", { timeZone: "Africa/Johannesburg" }).format(date);
 }
 
-/** "INV-000123 · Q-1029": our invoice number and the quote, so the Xero invoice points back here. */
+/**
+ * "INV-000123 / Q-1029": our invoice number and the quote, so the Xero invoice
+ * points back here. Also the DURABLE key a send searches Xero for before creating
+ * anything — the quote number is unique in the workspace, and it outlives Xero's
+ * six-minute idempotency window.
+ */
 export function xeroReference(quote: Pick<XeroQuoteInput, "number" | "invoiceNumber">): string {
-  return quote.invoiceNumber ? `${formatInvoiceNumber(quote.invoiceNumber)} · Q-${quote.number}` : `Q-${quote.number}`;
+  return quote.invoiceNumber ? `${formatInvoiceNumber(quote.invoiceNumber)} / Q-${quote.number}` : `Q-${quote.number}`;
+}
+
+/** Every VAT rate the quote's charged lines and fees use, as percentages. */
+export function quoteTaxRates(quote: XeroQuoteInput): number[] {
+  return [
+    ...new Set([
+      ...includedLines(quote.items).map((item) => item.taxRatePct ?? LEGACY_VAT_RATE_PCT),
+      ...quote.fees.map((fee) => fee.taxRatePct ?? LEGACY_VAT_RATE_PCT),
+    ]),
+  ];
 }
 
 /**
- * The invoice Xero is asked to create — always a DRAFT. Nothing is approved or
- * emailed from here: whoever does the books finalises it in Xero.
+ * Xero's sales tax type for a VAT percentage. Only ACTIVE rates that may be used
+ * on revenue, at exactly that rate. One match → it. Several at 0% → the one named
+ * "zero rated" (a 0% sale on a vehicle invoice is zero-rated, not exempt). Still
+ * ambiguous, or none → an error that names them, rather than a guess that puts
+ * the VAT in the wrong box.
  *
- * Lines are exactly the ones the CRM's own invoice prints (includedLines + the
- * fees as rows), at the same prices and discounts, inclusive or exclusive of VAT
- * as the quote is. No TaxType is sent: each line takes its account's VAT rate in
- * Xero, and Xero's resulting total is stored and compared (see totalsDiffer),
- * rather than guessing Xero's tax codes.
+ * ponytail: rates are matched by percentage; add a per-rate override in Settings
+ * if a workspace ever has two live revenue rates at the same percentage.
  */
-export function buildXeroInvoice(quote: XeroQuoteInput, salesAccount: string, now: Date = new Date()): XeroInvoicePayload {
-  const account = salesAccount.trim() || DEFAULT_XERO_SALES_ACCOUNT;
+export function pickTaxType(rates: XeroTaxRate[], ratePct: number): { ok: true; taxType: string } | { ok: false; error: string } {
+  const candidates = rates.filter(
+    (r) => r.TaxType && r.Status === "ACTIVE" && r.CanApplyToRevenue !== false && Math.abs(Number(r.EffectiveRate) - ratePct) < 0.001,
+  );
+  if (candidates.length === 1) return { ok: true, taxType: candidates[0].TaxType! };
+  if (candidates.length > 1 && ratePct === 0) {
+    const zeroRated = candidates.filter((r) => /zero/i.test(r.Name ?? ""));
+    if (zeroRated.length === 1) return { ok: true, taxType: zeroRated[0].TaxType! };
+  }
+  if (candidates.length === 0) return { ok: false, error: `Xero has no active sales tax rate at ${ratePct}%.` };
+  return {
+    ok: false,
+    error: `Xero has several sales tax rates at ${ratePct}% (${candidates.map((r) => r.Name ?? r.TaxType).join(", ")}) — the CRM can't tell which one this invoice should use.`,
+  };
+}
+
+/**
+ * The invoice Xero is asked to create — always a DRAFT for the given Xero
+ * contact. Nothing is approved or emailed from here.
+ *
+ * Lines are exactly the CRM invoice's rows (includedLines, then the fees), with
+ * the same description, quantity, unit price and discount. Each carries the Xero
+ * tax type for its VAT rate AND the VAT amount the CRM computed for it
+ * (splitTax), so Xero's total is the CRM's to the cent.
+ */
+export function buildXeroInvoice(
+  quote: XeroQuoteInput,
+  opts: { contactId: string; salesAccount: string; taxTypes: Readonly<Record<string, string>> },
+  now: Date = new Date(),
+): XeroInvoicePayload {
+  const account = opts.salesAccount.trim() || DEFAULT_XERO_SALES_ACCOUNT;
+  const inclusive = quote.taxInclusive;
   const money = (cents: number) => Math.round(cents) / 100;
+  const taxType = (rate: number) => {
+    const type = opts.taxTypes[String(rate)];
+    if (!type) throw new Error(`No Xero tax type for ${rate}% VAT.`);
+    return type;
+  };
   const lines: XeroLine[] = [
     ...includedLines(quote.items).map((item) => {
+      const rate = item.taxRatePct ?? LEGACY_VAT_RATE_PCT;
       const discount = Math.min(100, Math.max(0, item.discountPct ?? 0));
       const line: XeroLine = {
-        Description: (item.colorPreference ? `${item.description} — ${item.colorPreference}` : item.description).slice(0, 4000) || "Item",
+        Description: item.description.slice(0, 4000) || "Item",
         Quantity: item.qty,
         UnitAmount: money(item.unitPriceCents),
         AccountCode: account,
+        TaxType: taxType(rate),
+        TaxAmount: money(splitTax(lineNetCents(item), rate, inclusive).tax),
       };
       if (discount > 0) line.DiscountRate = discount;
       return line;
     }),
-    ...feeRows(quote.fees).map((fee) => ({
-      Description: fee.description.slice(0, 4000) || "Fee",
-      Quantity: fee.qty,
-      UnitAmount: money(fee.unitPriceCents),
-      AccountCode: account,
-    })),
+    ...quote.fees.map((fee) => {
+      const rate = fee.taxRatePct ?? LEGACY_VAT_RATE_PCT;
+      return {
+        // The same wording the CRM invoice prints for a fee (pricing.feeRows).
+        Description: (fee.kind === "delivery" ? `Delivery — ${fee.label}` : fee.label).slice(0, 4000) || "Fee",
+        Quantity: 1,
+        UnitAmount: money(fee.amountCents),
+        AccountCode: account,
+        TaxType: taxType(rate),
+        TaxAmount: money(splitTax(fee.amountCents, rate, inclusive).tax),
+      };
+    }),
   ];
   const payload: XeroInvoicePayload = {
     Type: "ACCREC",
     Status: "DRAFT",
-    Contact: { Name: (quote.billTo.name.trim() || "Customer").slice(0, 255) },
+    Contact: { ContactID: opts.contactId },
+    // The date the CRM invoice carries (invoicedAt, else today — as it prints).
     Date: xeroDate(quote.invoicedAt ?? now),
     Reference: xeroReference(quote),
-    LineAmountTypes: quote.taxInclusive ? "Inclusive" : "Exclusive",
+    LineAmountTypes: inclusive ? "Inclusive" : "Exclusive",
     LineItems: lines,
   };
-  const email = quote.billTo.email.trim();
-  if (email) payload.Contact.EmailAddress = email;
   if (quote.currency) payload.CurrencyCode = quote.currency;
   return payload;
 }
 
-/** What the CRM keeps from a Xero invoice. */
-export type XeroInvoiceSummary = { id: string; number: string | null; status: string; totalCents: number | null };
+// ── Contacts ────────────────────────────────────────────────────────────────
 
-/** The first invoice in a Xero Invoices response, or null if there isn't one. */
-export function readXeroInvoice(body: unknown): XeroInvoiceSummary | null {
-  const invoice = (body as { Invoices?: unknown[] } | null)?.Invoices?.[0] as Record<string, unknown> | undefined;
+/** A Xero contact, as GET /Contacts returns it. */
+export type XeroContact = { ContactID?: string; Name?: string; EmailAddress?: string; ContactStatus?: string };
+
+const same = (a: string | undefined, b: string) => (a ?? "").trim().toLowerCase() === b.trim().toLowerCase();
+
+/**
+ * Which existing Xero contact is this customer? Same email address first (it
+ * identifies a person better than a name), then the same name — exact, ignoring
+ * case and spaces at the ends. Archived contacts are skipped: Xero won't invoice
+ * them. Two candidates → ambiguous, and the caller refuses rather than pick one.
+ */
+export function matchXeroContact(
+  contacts: XeroContact[],
+  billTo: Pick<XeroBillTo, "name" | "email">,
+): { kind: "match"; contactId: string } | { kind: "none" } | { kind: "ambiguous"; names: string[] } {
+  const live = contacts.filter((c) => c.ContactID && c.ContactStatus !== "ARCHIVED");
+  const pick = (found: XeroContact[]) =>
+    found.length === 1
+      ? ({ kind: "match", contactId: found[0].ContactID! } as const)
+      : found.length > 1
+        ? ({ kind: "ambiguous", names: found.map((c) => c.Name ?? c.ContactID!) } as const)
+        : null;
+  if (billTo.email.trim()) {
+    const byEmail = pick(live.filter((c) => same(c.EmailAddress, billTo.email)));
+    if (byEmail) return byEmail;
+  }
+  return pick(live.filter((c) => same(c.Name, billTo.name))) ?? { kind: "none" };
+}
+
+/** A new Xero contact from the customer the CRM invoice is billed to — name, email, phone, address, VAT number. */
+export function buildXeroContact(billTo: XeroBillTo): Record<string, unknown> {
+  const contact: Record<string, unknown> = { Name: billTo.name.trim().slice(0, 255) || "Customer" };
+  if (billTo.email.trim()) contact.EmailAddress = billTo.email.trim();
+  if (billTo.phone.trim()) contact.Phones = [{ PhoneType: "DEFAULT", PhoneNumber: billTo.phone.trim() }];
+  const lines = billTo.addressLines.map((l) => l.trim()).filter(Boolean).slice(0, 4);
+  if (lines.length) {
+    contact.Addresses = [Object.fromEntries([["AddressType", "POBOX"], ...lines.map((l, i) => [`AddressLine${i + 1}`, l.slice(0, 500)])])];
+  }
+  if (billTo.vatNumber.trim()) contact.TaxNumber = billTo.vatNumber.trim();
+  return contact;
+}
+
+// ── Reading Xero's answers ──────────────────────────────────────────────────
+
+/** What the CRM keeps from a Xero invoice. */
+export type XeroInvoiceSummary = {
+  id: string;
+  number: string | null;
+  status: string;
+  totalCents: number | null;
+  /** The Xero contact it is billed to. */
+  contactId: string | null;
+};
+
+function summary(invoice: Record<string, unknown> | undefined): XeroInvoiceSummary | null {
   if (!invoice || typeof invoice.InvoiceID !== "string") return null;
-  const total = typeof invoice.Total === "number" ? Math.round(invoice.Total * 100) : null;
+  const contact = invoice.Contact as { ContactID?: unknown } | undefined;
   return {
     id: invoice.InvoiceID,
     number: typeof invoice.InvoiceNumber === "string" && invoice.InvoiceNumber ? invoice.InvoiceNumber : null,
     status: typeof invoice.Status === "string" ? invoice.Status : "UNKNOWN",
-    totalCents: total,
+    totalCents: typeof invoice.Total === "number" ? Math.round(invoice.Total * 100) : null,
+    contactId: typeof contact?.ContactID === "string" ? contact.ContactID : null,
   };
+}
+
+/** The first invoice in a Xero Invoices response, or null if there isn't one. */
+export function readXeroInvoice(body: unknown): XeroInvoiceSummary | null {
+  return summary((body as { Invoices?: Record<string, unknown>[] } | null)?.Invoices?.[0]);
+}
+
+/**
+ * From a search by Reference: the live invoice this quote already has in Xero,
+ * if any. Voided and deleted ones don't count — they were cancelled on purpose,
+ * and a fresh send should make a new one.
+ */
+export function liveInvoiceWithReference(body: unknown, reference: string): XeroInvoiceSummary | null {
+  const invoices = ((body as { Invoices?: Record<string, unknown>[] } | null)?.Invoices ?? []).filter(
+    (i) => i.Type === "ACCREC" && i.Reference === reference && i.Status !== "VOIDED" && i.Status !== "DELETED",
+  );
+  return summary(invoices[0]);
 }
 
 /**
@@ -133,12 +278,29 @@ export function xeroErrorMessage(body: unknown, status: number): string {
   return typeof message === "string" ? message.trim() : `Xero answered ${status}.`;
 }
 
+/**
+ * Which Xero organisation the owner just authorised. Only the connection from
+ * THIS consent (its auth event) counts; with no event to match, only a single
+ * connected organisation is unambiguous. Anything else → null, and the connect
+ * is refused: picking "the most recent" could post invoices into another
+ * company's books.
+ */
+export function chooseXeroOrganisation(
+  connections: Array<{ tenantId?: string; tenantName?: string; tenantType?: string; authEventId?: string }>,
+  authEventId: string | null,
+): { tenantId: string; tenantName: string } | null {
+  const orgs = connections.filter((c) => c.tenantType === "ORGANISATION" && c.tenantId);
+  const fromThisConsent = authEventId ? orgs.filter((c) => c.authEventId === authEventId) : [];
+  const chosen = fromThisConsent.length === 1 ? fromThisConsent[0] : fromThisConsent.length === 0 && orgs.length === 1 ? orgs[0] : null;
+  return chosen ? { tenantId: chosen.tenantId!, tenantName: chosen.tenantName ?? "your Xero organisation" } : null;
+}
+
 /** Whether Xero's total and the CRM's differ by more than a cent of rounding. */
 export function totalsDiffer(xeroTotalCents: number | null, crmTotalCents: number): boolean {
   return xeroTotalCents !== null && Math.abs(xeroTotalCents - crmTotalCents) > 1;
 }
 
-/** Xero's statuses as people read them on the board. */
+/** Xero's statuses as people read them. */
 export function xeroStatusLabel(status: string | null): string {
   switch (status) {
     case "DRAFT": return "Draft";
@@ -155,4 +317,14 @@ export function xeroStatusLabel(status: string | null): string {
 /** The invoice in Xero, for the person signed in to Xero in their browser. */
 export function xeroInvoiceUrl(invoiceId: string): string {
   return `https://go.xero.com/AccountsReceivable/View.aspx?InvoiceID=${encodeURIComponent(invoiceId)}`;
+}
+
+/** The customer's contact page in Xero. */
+export function xeroContactUrl(contactId: string): string {
+  return `https://go.xero.com/Contacts/View/${encodeURIComponent(contactId)}`;
+}
+
+/** The file name Xero's PDF is kept under: "INV-0042 Xero invoice.pdf". */
+export function xeroPdfFileName(invoiceNumber: string | null, quoteNumber: number): string {
+  return `${(invoiceNumber ?? `Q-${quoteNumber}`).replace(/[\\/:*?"<>|]+/g, "-")} Xero invoice.pdf`;
 }

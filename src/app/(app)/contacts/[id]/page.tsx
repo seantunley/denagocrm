@@ -9,6 +9,8 @@ import { Popover, PopoverTrigger, PopoverContent } from "@/components/ui/popover
 import { Mail, Phone, MoreHorizontal, Info, CalendarDays } from "lucide-react";
 import SecureLinksPanel from "@/components/SecureLinksPanel";
 import CustomFieldsCard from "@/components/custom-fields/CustomFieldsCard";
+import { formatInvoiceNumber } from "@/lib/invoiceNumber";
+import { xeroContactUrl, xeroInvoiceUrl, xeroStatusLabel } from "@/lib/xeroInvoice";
 import DocumentsPanel from "@/components/DocumentsPanel";
 import PortalUploadsList, { type PortalUploadRow } from "@/components/PortalUploadsList";
 import ActivityPanel from "@/components/ActivityPanel";
@@ -467,6 +469,37 @@ export default async function ContactDetailPage({
                     )}
                   </div>
                   <CustomFieldsCard entity="contact" recordId={contact.id} />
+                  {/* Xero (Send to Xero on the Deliveries board): the customer's Xero contact and the
+                      invoices Xero made for their quotes. Xero's PDFs are under Documents as
+                      "Accounting invoice (Xero)". */}
+                  {(contact.xeroContactId || contact.quotes.some((q) => q.xeroInvoiceId)) && (
+                    <div className="card">
+                      <h3 className="font-semibold mb-3">Xero</h3>
+                      {contact.xeroContactId && (
+                        <p className="text-sm mb-2">
+                          <a href={xeroContactUrl(contact.xeroContactId)} target="_blank" rel="noreferrer" className="text-primary hover:underline">
+                            Customer in Xero
+                          </a>
+                          <span className="ml-2 text-[11px] text-muted-foreground">ID {contact.xeroContactId}</span>
+                        </p>
+                      )}
+                      <ul className="space-y-1.5 text-sm">
+                        {contact.quotes.filter((q) => q.xeroInvoiceId).map((q) => (
+                          <li key={q.id} className="flex flex-wrap items-baseline justify-between gap-2">
+                            <span>
+                              Xero {q.xeroInvoiceNumber ?? "invoice"}{" "}
+                              <span className="text-xs text-muted-foreground">
+                                · {xeroStatusLabel(q.xeroStatus)} · {formatInvoiceNumber(q.invoiceNumber)} / Q-{q.number}
+                              </span>
+                            </span>
+                            <a href={xeroInvoiceUrl(q.xeroInvoiceId!)} target="_blank" rel="noreferrer" className="text-xs text-primary hover:underline">
+                              Open in Xero
+                            </a>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
                   </div>
                 ),
               },

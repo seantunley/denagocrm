@@ -42,6 +42,8 @@ const XERO_NOTICES: Record<string, string> = {
   connected: "Xero is connected.",
   "missing-client": "The Xero app isn't set up on this CRM yet (XERO_CLIENT_ID and XERO_CLIENT_SECRET in the hosting settings).",
   denied: "Xero sign-in was cancelled.",
+  ambiguous:
+    "Xero didn't say which one organisation you chose, so nothing was connected (invoices must never go to the wrong books). Press Connect Xero again and tick only the one organisation.",
   invalid: "That Xero sign-in could not be read — please try again.",
   failed: "Xero sign-in could not be completed. Check the redirect URI in the Xero app matches this CRM's address, then try again.",
 };

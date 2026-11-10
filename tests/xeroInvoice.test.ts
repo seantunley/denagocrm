@@ -2,16 +2,25 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import {
+  buildXeroContact,
   buildXeroInvoice,
+  chooseXeroOrganisation,
+  liveInvoiceWithReference,
+  matchXeroContact,
+  pickTaxType,
+  quoteTaxRates,
   readXeroInvoice,
   totalsDiffer,
   xeroErrorMessage,
+  xeroPdfFileName,
   xeroReference,
   xeroStatusLabel,
   type XeroQuoteInput,
 } from "../src/lib/xeroInvoice";
+import { quotePricing } from "../src/lib/pricing";
 import { TENANT_CREDENTIAL_INTEGRATIONS } from "../src/lib/tenantCredentialFields";
 import { isSecretSettingKey } from "../src/lib/settings";
+import { SYSTEM_DOCUMENT_TAGS, SYSTEM_TAG_LABELS } from "../src/lib/documentLabels";
 
 const quote = (over: Partial<XeroQuoteInput> = {}): XeroQuoteInput => ({
   number: 1029,
@@ -20,84 +29,165 @@ const quote = (over: Partial<XeroQuoteInput> = {}): XeroQuoteInput => ({
   currency: null,
   invoicedAt: new Date("2026-11-10T22:30:00Z"), // 11 Nov in Johannesburg
   items: [
-    { description: "Denago Rover XL", qty: 1, unitPriceCents: 24_000_000, discountPct: 5, colorPreference: "Ocean Blue", taxRatePct: 15 },
+    { description: "Denago Rover XL", qty: 1, unitPriceCents: 24_000_000, discountPct: 5, taxRatePct: 15 },
     { description: "Roof", qty: 1, unitPriceCents: 450_000, optional: true, selected: false, taxRatePct: 15 },
     { description: "Trade-in", qty: 1, unitPriceCents: -5_000_000, taxRatePct: 15 },
   ],
-  fees: [{ label: "Cape Town", kind: "delivery", amountCents: 550_000 }],
-  billTo: { name: "Len Smith", email: "len@example.com" },
+  fees: [{ label: "Cape Town", kind: "delivery", amountCents: 550_000, taxRatePct: 15 }],
   ...over,
 });
+const opts = { contactId: "c-1", salesAccount: "", taxTypes: { "15": "OUTPUT", "0": "ZERORATEDOUTPUT" } };
 
-test("a quote becomes a DRAFT sales invoice with our numbers in the Reference", () => {
-  const x = buildXeroInvoice(quote(), "");
+// ── Matching the CRM invoice ───────────────────────────────────────────────
+
+test("a DRAFT sales invoice, for the Xero contact by ID, with our numbers in the Reference", () => {
+  const x = buildXeroInvoice(quote(), opts);
   assert.equal(x.Type, "ACCREC");
   assert.equal(x.Status, "DRAFT");
-  assert.equal(x.Reference, "INV-000123 · Q-1029");
+  assert.deepEqual(x.Contact, { ContactID: "c-1" });
+  assert.equal(x.Reference, "INV-000123 / Q-1029");
   assert.equal(x.Date, "2026-11-11");
   assert.equal(x.LineAmountTypes, "Inclusive");
-  assert.deepEqual(x.Contact, { Name: "Len Smith", EmailAddress: "len@example.com" });
   assert.equal(x.CurrencyCode, undefined);
 });
 
-test("lines match the CRM's own invoice: untaken optional left out, discount kept, fees as rows", () => {
-  const x = buildXeroInvoice(quote(), "4000");
+test("the lines are the CRM invoice's rows, each with its tax type and the CRM's own VAT amount", () => {
+  const x = buildXeroInvoice(quote(), { ...opts, salesAccount: "4000" });
   assert.deepEqual(x.LineItems, [
-    { Description: "Denago Rover XL — Ocean Blue", Quantity: 1, UnitAmount: 240000, AccountCode: "4000", DiscountRate: 5 },
-    { Description: "Trade-in", Quantity: 1, UnitAmount: -50000, AccountCode: "4000" },
-    { Description: "Delivery — Cape Town", Quantity: 1, UnitAmount: 5500, AccountCode: "4000" },
+    // R240 000 less 5% = R228 000 incl. → VAT 228000 − 228000/1.15 = 29 739.13
+    { Description: "Denago Rover XL", Quantity: 1, UnitAmount: 240000, AccountCode: "4000", TaxType: "OUTPUT", TaxAmount: 29739.13, DiscountRate: 5 },
+    { Description: "Trade-in", Quantity: 1, UnitAmount: -50000, AccountCode: "4000", TaxType: "OUTPUT", TaxAmount: -6521.74 },
+    { Description: "Delivery — Cape Town", Quantity: 1, UnitAmount: 5500, AccountCode: "4000", TaxType: "OUTPUT", TaxAmount: 717.39 },
   ]);
 });
 
-test("exclusive quotes, foreign currency, the default account and a missing name", () => {
-  const x = buildXeroInvoice(quote({ taxInclusive: false, currency: "USD", billTo: { name: " ", email: "" } }), "  ");
-  assert.equal(x.LineAmountTypes, "Exclusive");
-  assert.equal(x.CurrencyCode, "USD");
-  assert.equal(x.LineItems[0].AccountCode, "200");
-  assert.deepEqual(x.Contact, { Name: "Customer" });
-  assert.equal(xeroReference({ number: 7, invoiceNumber: null }), "Q-7");
+test("Xero's VAT adds up to exactly the CRM's VAT", () => {
+  for (const taxInclusive of [true, false]) {
+    const q = quote({ taxInclusive });
+    const x = buildXeroInvoice(q, opts);
+    const xeroVatCents = Math.round(x.LineItems.reduce((sum, line) => sum + line.TaxAmount, 0) * 100);
+    const crm = quotePricing(q.items, q.fees, { taxInclusive });
+    assert.equal(xeroVatCents, crm.taxCents, taxInclusive ? "inclusive" : "exclusive");
+  }
 });
 
-test("Xero's answers are read safely", () => {
-  assert.deepEqual(readXeroInvoice({ Invoices: [{ InvoiceID: "abc", InvoiceNumber: "INV-0042", Status: "DRAFT", Total: 2345.67 }] }), {
-    id: "abc", number: "INV-0042", status: "DRAFT", totalCents: 234567,
-  });
-  assert.equal(readXeroInvoice({}), null);
-  assert.equal(readXeroInvoice(null), null);
-  assert.equal(
-    xeroErrorMessage({ Elements: [{ ValidationErrors: [{ Message: "Account code '999' is not a valid code." }] }] }, 400),
-    "Account code '999' is not a valid code.",
+test("a rate with no Xero tax type stops the send rather than guess", () => {
+  assert.throws(() => buildXeroInvoice(quote({ fees: [{ label: "Export docs", amountCents: 1000, taxRatePct: 7 }] }), opts), /No Xero tax type for 7%/);
+  assert.deepEqual(quoteTaxRates(quote({ fees: [{ label: "x", amountCents: 1, taxRatePct: 0 }] })).sort(), [0, 15]);
+});
+
+test("tax types: exact active revenue rate; 0% prefers zero-rated; ambiguous or missing refuses", () => {
+  const rates = [
+    { Name: "Standard Rate Sales", TaxType: "OUTPUT", Status: "ACTIVE", EffectiveRate: 15, CanApplyToRevenue: true },
+    { Name: "Standard Rate Purchases", TaxType: "INPUT", Status: "ACTIVE", EffectiveRate: 15, CanApplyToRevenue: false },
+    { Name: "Old 14%", TaxType: "OUTPUT14", Status: "DELETED", EffectiveRate: 14, CanApplyToRevenue: true },
+    { Name: "Zero Rated Sales", TaxType: "ZERORATEDOUTPUT", Status: "ACTIVE", EffectiveRate: 0, CanApplyToRevenue: true },
+    { Name: "Exempt and Non-Supplies", TaxType: "EXEMPTOUTPUT", Status: "ACTIVE", EffectiveRate: 0, CanApplyToRevenue: true },
+  ];
+  assert.deepEqual(pickTaxType(rates, 15), { ok: true, taxType: "OUTPUT" });
+  assert.deepEqual(pickTaxType(rates, 0), { ok: true, taxType: "ZERORATEDOUTPUT" });
+  assert.equal(pickTaxType(rates, 14).ok, false, "a deleted rate is never used");
+  const twoStandard = [...rates, { Name: "Standard Rate Sales (Capital)", TaxType: "OUTPUTCAP", Status: "ACTIVE", EffectiveRate: 15, CanApplyToRevenue: true }];
+  const ambiguous = pickTaxType(twoStandard, 15);
+  assert.equal(ambiguous.ok, false);
+  assert.match(ambiguous.ok ? "" : ambiguous.error, /several sales tax rates at 15%/);
+});
+
+// ── The customer ────────────────────────────────────────────────────────────
+
+test("customer: email first, then exact name; archived skipped; two candidates refuse", () => {
+  const contacts = [
+    { ContactID: "a", Name: "Len Smith", EmailAddress: "len@example.com", ContactStatus: "ACTIVE" },
+    { ContactID: "b", Name: "Len Smith (Stellenbosch)", EmailAddress: "", ContactStatus: "ACTIVE" },
+    { ContactID: "c", Name: "Old Len", EmailAddress: "LEN@example.com", ContactStatus: "ARCHIVED" },
+  ];
+  assert.deepEqual(matchXeroContact(contacts, { name: "Someone else", email: " Len@Example.com " }), { kind: "match", contactId: "a" });
+  assert.deepEqual(matchXeroContact(contacts, { name: "len smith", email: "" }), { kind: "match", contactId: "a" });
+  assert.deepEqual(matchXeroContact(contacts, { name: "Len Smit", email: "" }), { kind: "none" }, "never a near match");
+  const twins = [...contacts, { ContactID: "d", Name: "Len Smith", ContactStatus: "ACTIVE" }];
+  assert.equal(matchXeroContact(twins, { name: "Len Smith", email: "" }).kind, "ambiguous");
+});
+
+test("a new Xero contact carries the CRM's billing details", () => {
+  assert.deepEqual(
+    buildXeroContact({ name: "Kaya Lodge", email: "accounts@kaya.co.za", phone: "021 555 0100", addressLines: ["1 Main Rd", "Constantia, Cape Town, 7806"], vatNumber: "4123456789" }),
+    {
+      Name: "Kaya Lodge",
+      EmailAddress: "accounts@kaya.co.za",
+      Phones: [{ PhoneType: "DEFAULT", PhoneNumber: "021 555 0100" }],
+      Addresses: [{ AddressType: "POBOX", AddressLine1: "1 Main Rd", AddressLine2: "Constantia, Cape Town, 7806" }],
+      TaxNumber: "4123456789",
+    },
   );
-  assert.equal(xeroErrorMessage({ Detail: "TokenExpired" }, 401), "TokenExpired");
+  assert.deepEqual(buildXeroContact({ name: " ", email: "", phone: "", addressLines: [], vatNumber: "" }), { Name: "Customer" });
+});
+
+// ── Never two invoices; never the wrong books ──────────────────────────────
+
+test("an invoice already in Xero for this quote is found by its Reference; voided ones don't count", () => {
+  const ref = xeroReference({ number: 1029, invoiceNumber: 123 });
+  const body = {
+    Invoices: [
+      { Type: "ACCREC", InvoiceID: "old", Reference: ref, Status: "VOIDED", Total: 1 },
+      { Type: "ACCREC", InvoiceID: "live", InvoiceNumber: "INV-0042", Reference: ref, Status: "DRAFT", Total: 228000, Contact: { ContactID: "c-9" } },
+    ],
+  };
+  assert.deepEqual(liveInvoiceWithReference(body, ref), { id: "live", number: "INV-0042", status: "DRAFT", totalCents: 22800000, contactId: "c-9" });
+  assert.equal(liveInvoiceWithReference({ Invoices: [{ Type: "ACCREC", InvoiceID: "x", Reference: ref, Status: "DELETED" }] }, ref), null);
+  assert.equal(liveInvoiceWithReference({ Invoices: [{ Type: "ACCREC", InvoiceID: "x", Reference: "INV-000124 / Q-1030", Status: "DRAFT" }] }, ref), null);
+});
+
+test("the organisation is the one from THIS consent, or the only one — never a guess", () => {
+  const two = [
+    { tenantId: "t1", tenantName: "Denago", tenantType: "ORGANISATION", authEventId: "e1" },
+    { tenantId: "t2", tenantName: "Other Co", tenantType: "ORGANISATION", authEventId: "e0" },
+  ];
+  assert.deepEqual(chooseXeroOrganisation(two, "e1"), { tenantId: "t1", tenantName: "Denago" });
+  assert.equal(chooseXeroOrganisation(two, null), null, "no event and two orgs → refuse");
+  assert.equal(chooseXeroOrganisation(two, "e-unknown"), null);
+  assert.deepEqual(chooseXeroOrganisation([two[0]], null), { tenantId: "t1", tenantName: "Denago" });
+  assert.equal(chooseXeroOrganisation([{ ...two[0], authEventId: "e1" }, { ...two[1], authEventId: "e1" }], "e1"), null);
+});
+
+test("wiring: reconcile before create, lock the refresh, workspace money format, granular scopes", () => {
+  const actions = readFileSync("src/app/actions/xero.ts", "utf8");
+  assert.ok(actions.indexOf("findInvoiceByReference(reference)") < actions.indexOf("client.createInvoice("), "search Xero before creating");
+  assert.match(actions, /requireQuoteAccess\(quoteId, "deliveries\.manage"\)/);
+  assert.match(actions, /xeroStatus: "SENDING"/);
+  assert.match(actions, /formatZAR\(crmTotal, moneyFmt\)/);
+  assert.doesNotMatch(actions, /formatZAR\([^,)]+\)/, "every amount uses the workspace's format");
+  const lib = readFileSync("src/lib/xero.ts", "utf8");
+  assert.match(lib, /pg_advisory_xact_lock\(hashtext\(\$\{`xero-token:\$\{tenantId\}`\}\)\)/);
+  assert.ok(lib.indexOf("pg_advisory_xact_lock") < lib.indexOf("grant_type: \"refresh_token\""), "lock before the refresh token is read and spent");
+  const scopes = lib.match(/export const XERO_SCOPES = "([^"]+)"/)?.[1] ?? "";
+  assert.match(scopes, /accounting\.invoices accounting\.contacts accounting\.settings\.read/);
+  assert.doesNotMatch(scopes, /accounting\.transactions/);
+  assert.match(lib, /process\.env\.XERO_CLIENT_ID/);
+  assert.match(readFileSync("src/app/api/integrations/xero/callback/route.ts", "utf8"), /activeTenantId !== pending\.tenantId/);
+});
+
+// ── Odds and ends ───────────────────────────────────────────────────────────
+
+test("answers, labels and file names", () => {
+  assert.deepEqual(readXeroInvoice({ Invoices: [{ InvoiceID: "abc", InvoiceNumber: "INV-0042", Status: "DRAFT", Total: 2345.67 }] }), {
+    id: "abc", number: "INV-0042", status: "DRAFT", totalCents: 234567, contactId: null,
+  });
+  assert.equal(readXeroInvoice(null), null);
+  assert.equal(xeroErrorMessage({ Elements: [{ ValidationErrors: [{ Message: "Account code '999' is not a valid code." }] }] }, 400), "Account code '999' is not a valid code.");
   assert.equal(xeroErrorMessage(null, 503), "Xero answered 503.");
   assert.equal(totalsDiffer(100_001, 100_000), false);
   assert.equal(totalsDiffer(100_500, 100_000), true);
-  assert.equal(totalsDiffer(null, 100_000), false);
-  assert.equal(xeroStatusLabel("AUTHORISED"), "Awaiting payment");
+  assert.equal(xeroStatusLabel("PAID"), "Paid");
+  assert.equal(xeroPdfFileName("INV-0042", 1029), "INV-0042 Xero invoice.pdf");
+  assert.equal(xeroPdfFileName(null, 1029), "Q-1029 Xero invoice.pdf");
+  assert.ok(SYSTEM_DOCUMENT_TAGS.has("accounting-invoice"), "nobody can relabel it");
+  assert.equal(SYSTEM_TAG_LABELS["accounting-invoice"], "Accounting invoice (Xero)");
 });
 
 test("each workspace holds only its own connection; the app's keys come from the hosting environment", () => {
   const xero = TENANT_CREDENTIAL_INTEGRATIONS.find((i) => i.id === "xero");
   assert.ok(xero);
-  assert.ok(xero.fields.every((f) => f.independent && f.required === false), "nothing per-workspace is required");
-  assert.ok(!xero.fields.some((f) => f.key === "XERO_CLIENT_ID" || f.key === "XERO_CLIENT_SECRET"), "never asked for twice");
-  assert.ok(isSecretSettingKey("XERO_REFRESH_TOKEN"), "the refresh token is encrypted at rest");
-  const lib = readFileSync("src/lib/xero.ts", "utf8");
-  assert.match(lib, /process\.env\.XERO_CLIENT_ID/);
-  assert.match(lib, /process\.env\.XERO_CLIENT_SECRET/);
-  assert.match(readFileSync("src/app/api/integrations/xero/connect/route.ts", "utf8"), /xeroApp\(\)\?\.clientId/);
-});
-
-test("wiring: granular scopes, draft-only, one invoice per quote, same door as invoicing", () => {
-  const scopes = readFileSync("src/lib/xero.ts", "utf8").match(/export const XERO_SCOPES = "([^"]+)"/)?.[1] ?? "";
-  assert.match(scopes, /accounting\.invoices accounting\.contacts/);
-  assert.doesNotMatch(scopes, /accounting\.transactions/, "new Xero apps refuse the legacy umbrella scope");
-  assert.match(scopes, /offline_access/);
-  const actions = readFileSync("src/app/actions/xero.ts", "utf8");
-  assert.match(actions, /requireQuoteAccess\(quoteId, "deliveries\.manage"\)/);
-  assert.match(actions, /xeroStatus: "SENDING"/);
-  assert.match(actions, /createXeroInvoice\(tenantId, payload, `crm-quote-\$\{quote\.id\}`\)/);
-  assert.doesNotMatch(readFileSync("src/lib/xeroInvoice.ts", "utf8"), /Status: "AUTHORISED"/);
-  const callback = readFileSync("src/app/api/integrations/xero/callback/route.ts", "utf8");
-  assert.match(callback, /activeTenantId !== pending\.tenantId/);
+  assert.ok(xero.fields.every((f) => f.independent && f.required === false));
+  assert.ok(!xero.fields.some((f) => f.key === "XERO_CLIENT_ID" || f.key === "XERO_CLIENT_SECRET"));
+  assert.ok(isSecretSettingKey("XERO_REFRESH_TOKEN"));
 });
