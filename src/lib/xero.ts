@@ -34,12 +34,21 @@ function basicAuth(clientId: string, clientSecret: string): string {
   return `Basic ${Buffer.from(`${clientId}:${clientSecret}`).toString("base64")}`;
 }
 
+/**
+ * The platform's Xero app, from the hosting environment (Vercel: XERO_CLIENT_ID,
+ * XERO_CLIENT_SECRET) — one app for every workspace. Null when it isn't set up.
+ */
+export function xeroApp(): { clientId: string; clientSecret: string } | null {
+  const clientId = process.env.XERO_CLIENT_ID?.trim();
+  const clientSecret = process.env.XERO_CLIENT_SECRET?.trim();
+  return clientId && clientSecret ? { clientId, clientSecret } : null;
+}
+
 async function appCredentials(tenantId: string) {
+  const app = xeroApp();
+  if (!app) throw new XeroNotConnected("The Xero app isn't set up on this CRM (XERO_CLIENT_ID / XERO_CLIENT_SECRET).");
   const bundle = await resolveIntegrationBundle(tenantId, "xero");
-  const clientId = bundle?.XERO_CLIENT_ID;
-  const clientSecret = bundle?.XERO_CLIENT_SECRET;
-  if (!bundle || !clientId || !clientSecret) throw new XeroNotConnected("Add the Xero client ID and secret in Settings → Integrations first.");
-  return { bundle, clientId, clientSecret };
+  return { bundle: bundle ?? ({} as Record<string, string | null>), ...app };
 }
 
 /** The auth event a token was issued for — matches the organisation chosen on Xero's consent screen. */
@@ -67,7 +76,7 @@ export async function exchangeXeroCode(input: { tenantId: string; code: string; 
   });
   const tokens = await response.json().catch(() => null);
   if (!response.ok || !tokens?.access_token || !tokens?.refresh_token) {
-    throw new Error("Xero sign-in could not be completed. Check the client ID, secret and redirect URI.");
+    throw new Error("Xero sign-in could not be completed. Check the app's client ID, secret and redirect URI.");
   }
 
   const connections = await fetch(`${API}/connections`, {

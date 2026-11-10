@@ -76,12 +76,16 @@ test("Xero's answers are read safely", () => {
   assert.equal(xeroStatusLabel("AUTHORISED"), "Awaiting payment");
 });
 
-test("Xero is a per-workspace integration whose secrets are encrypted", () => {
+test("each workspace holds only its own connection; the app's keys come from the hosting environment", () => {
   const xero = TENANT_CREDENTIAL_INTEGRATIONS.find((i) => i.id === "xero");
   assert.ok(xero);
-  assert.ok(isSecretSettingKey("XERO_CLIENT_SECRET"));
-  assert.ok(isSecretSettingKey("XERO_REFRESH_TOKEN"));
-  assert.equal(isSecretSettingKey("XERO_CLIENT_ID"), false);
+  assert.ok(xero.fields.every((f) => f.independent && f.required === false), "nothing per-workspace is required");
+  assert.ok(!xero.fields.some((f) => f.key === "XERO_CLIENT_ID" || f.key === "XERO_CLIENT_SECRET"), "never asked for twice");
+  assert.ok(isSecretSettingKey("XERO_REFRESH_TOKEN"), "the refresh token is encrypted at rest");
+  const lib = readFileSync("src/lib/xero.ts", "utf8");
+  assert.match(lib, /process\.env\.XERO_CLIENT_ID/);
+  assert.match(lib, /process\.env\.XERO_CLIENT_SECRET/);
+  assert.match(readFileSync("src/app/api/integrations/xero/connect/route.ts", "utf8"), /xeroApp\(\)\?\.clientId/);
 });
 
 test("wiring: granular scopes, draft-only, one invoice per quote, same door as invoicing", () => {

@@ -40,10 +40,10 @@ export const dynamic = "force-dynamic";
 /** What the Xero connect round trip came back with (?xero=…), in words. */
 const XERO_NOTICES: Record<string, string> = {
   connected: "Xero is connected.",
-  "missing-client": "Save the Xero client ID and secret first, then press Connect Xero.",
+  "missing-client": "The Xero app isn't set up on this CRM yet (XERO_CLIENT_ID and XERO_CLIENT_SECRET in the hosting settings).",
   denied: "Xero sign-in was cancelled.",
   invalid: "That Xero sign-in could not be read — please try again.",
-  failed: "Xero sign-in could not be completed. Check the client ID, secret and redirect URI in your Xero app, then try again.",
+  failed: "Xero sign-in could not be completed. Check the redirect URI in the Xero app matches this CRM's address, then try again.",
 };
 
 export default async function IntegrationsPage({ searchParams }: { searchParams?: Promise<{ xero?: string }> }) {
@@ -202,9 +202,9 @@ export default async function IntegrationsPage({ searchParams }: { searchParams?
                       {effectiveShown.XERO_ORG_NAME ? `Connected to ${effectiveShown.XERO_ORG_NAME}` : "Connect your Xero organisation"}
                     </p>
                     <p className="mt-1 text-xs text-muted-foreground">
-                      Save the client ID and secret below first. Connecting lets the Deliveries board send an accepted quote to
-                      Xero as a <b>draft</b> invoice and keep Xero&apos;s invoice number on the quote. Nothing is approved or
-                      emailed from the CRM — you finish the invoice in Xero.
+                      Connecting lets the Deliveries board send an accepted quote to Xero as a <b>draft</b> invoice and keep
+                      Xero&apos;s invoice number on the quote. Nothing is approved or emailed from the CRM — you finish the
+                      invoice in Xero. The sales account code below is optional.
                     </p>
                     {xeroNotice && <p className="mt-2 text-xs text-amber-300">{xeroNotice}</p>}
                     <a href="/api/integrations/xero/connect" className="btn-primary btn-sm mt-3 inline-flex">

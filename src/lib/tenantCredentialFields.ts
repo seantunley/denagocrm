@@ -63,12 +63,13 @@ export const TENANT_CREDENTIAL_INTEGRATIONS: readonly TenantCredentialIntegratio
     id: "xero",
     label: "Xero",
     description:
-      "Send an accepted quote to Xero as a draft invoice and keep Xero's invoice number on the quote. Create a Web app at developer.xero.com with the redirect URI https://<your CRM address>/api/integrations/xero/callback, paste its client ID and secret here, then press Connect Xero.",
+      "Send an accepted quote to Xero as a draft invoice and keep Xero's invoice number on the quote. Press Connect Xero and choose your organisation.",
+    // The Xero APP (client ID + secret) is the platform's, set once in the hosting
+    // environment (XERO_CLIENT_ID / XERO_CLIENT_SECRET) — one app connects every
+    // workspace's own organisation, which is how Xero apps work. So nothing here
+    // is required: each workspace only holds its own connection, which belongs to
+    // it whichever app it signed in through (as X's tokens do).
     fields: [
-      { key: "XERO_CLIENT_ID", label: "Client ID", placeholder: "From developer.xero.com → My Apps" },
-      { key: "XERO_CLIENT_SECRET", label: "Client secret", placeholder: "Generated in developer.xero.com" },
-      // The connected ORGANISATION and its sign-in belong to this workspace whichever
-      // app it signed in through (as X's tokens do), so they resolve independently.
       { key: "XERO_SALES_ACCOUNT", label: "Sales account code (optional)", placeholder: "200 — blank uses 200", required: false, independent: true },
       { key: "XERO_TENANT_ID", label: "Connected Xero organisation ID", placeholder: "Filled by Connect Xero", required: false, independent: true },
       { key: "XERO_ORG_NAME", label: "Connected Xero organisation", placeholder: "Filled by Connect Xero", required: false, independent: true },

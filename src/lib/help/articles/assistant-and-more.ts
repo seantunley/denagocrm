@@ -864,13 +864,11 @@ export const assistantAndMoreArticles: HelpArticle[] = [
       { type: "p", text: "The CRM issues its own invoice numbers (INV-000123). Xero numbers its invoices separately. **Send to Xero** creates the invoice in Xero and keeps Xero's number on the quote, next to the CRM's, so you can always see which invoices are done in Xero." },
       { type: "h", text: "Connect Xero (once)" },
       { type: "steps", items: [
-        "Sign in at **developer.xero.com**, open **My Apps → New app** and choose **Web app**.",
-        "Set the redirect URI to your CRM's web address followed by **/api/integrations/xero/callback** — the address you use to open the CRM, then that ending.",
-        "Copy the **Client ID**, then generate a **Client secret** and copy it too.",
-        "In the CRM, open **Settings → Integrations → Xero**, paste the client ID and the secret, and save each.",
-        "Optionally enter your **Sales account code** (blank uses 200, Xero's standard Sales account).",
+        "Open **Settings → Integrations → Xero**.",
+        "Optionally enter your **Sales account code** and save it (blank uses 200, Xero's standard Sales account).",
         "Press **Connect Xero**, sign in to Xero, tick your organisation and allow access. You come back to the CRM showing **Connected to** your organisation.",
       ] },
+      { type: "p", text: "Behind the scenes the CRM uses one Xero app, set up once by whoever hosts it (its client ID and secret live in the hosting settings, not on this page). If Connect Xero says the app isn't set up, that's where to look." },
       { type: "h", text: "Send a quote to Xero" },
       { type: "steps", items: [
         "On the **Deliveries** board, find the accepted quote.",

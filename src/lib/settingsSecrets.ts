@@ -24,7 +24,6 @@ export const MANAGED_SECRET_KEYS: ReadonlySet<string> = new Set([
   "X_CLIENT_SECRET",
   "X_WEBHOOK_SECRET",
   "XAI_API_KEY",
-  "XERO_CLIENT_SECRET",
 ]);
 
 /** Secrets WE generate (so regenerating them is safe). Externally-issued

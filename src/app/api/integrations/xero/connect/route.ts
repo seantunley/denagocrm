@@ -2,8 +2,7 @@ import crypto from "crypto";
 import { NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import { getActiveTenantId, requireTenantOwner } from "@/lib/auth";
-import { resolveIntegrationField } from "@/lib/settings";
-import { XERO_SCOPES } from "@/lib/xero";
+import { XERO_SCOPES, xeroApp } from "@/lib/xero";
 
 /**
  * "Connect Xero" — sends the workspace owner to Xero's consent screen. Same shape
@@ -14,7 +13,8 @@ export async function GET(request: Request) {
   await requireTenantOwner();
   const tenantId = await getActiveTenantId();
   if (!tenantId) return NextResponse.json({ error: "No active workspace." }, { status: 403 });
-  const clientId = await resolveIntegrationField(tenantId, "xero", "XERO_CLIENT_ID");
+  // The platform's one Xero app (Vercel env); each workspace connects its own organisation through it.
+  const clientId = xeroApp()?.clientId;
   if (!clientId) return NextResponse.redirect(new URL("/settings/integrations?xero=missing-client", request.url));
   const state = crypto.randomBytes(24).toString("base64url");
   const jar = await cookies();

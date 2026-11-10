@@ -25,7 +25,8 @@ import { isSecretSettingKey } from "../src/lib/settings";
 
 const EXPECTED_KEYS_BY_INTEGRATION: Record<string, string[]> = {
   x: ["X_CLIENT_ID", "X_CLIENT_SECRET", "X_WEBHOOK_SECRET", "X_ACCOUNT_ID", "X_USERNAME", "X_ACCESS_TOKEN", "X_REFRESH_TOKEN", "XAI_API_KEY", "XAI_MODEL", "XAI_DRAFTS_ENABLED"],
-  xero: ["XERO_CLIENT_ID", "XERO_CLIENT_SECRET", "XERO_SALES_ACCOUNT", "XERO_TENANT_ID", "XERO_ORG_NAME", "XERO_REFRESH_TOKEN"],
+  // The Xero APP's client ID/secret are hosting env vars (one app, every workspace) — not per-workspace fields.
+  xero: ["XERO_SALES_ACCOUNT", "XERO_TENANT_ID", "XERO_ORG_NAME", "XERO_REFRESH_TOKEN"],
   whatsapp: ["WA_PHONE_NUMBER_ID", "WA_ACCESS_TOKEN"],
   meta: ["META_PAGE_ACCESS_TOKEN"],
   // TELEGRAM IS DELIBERATELY ABSENT.
@@ -90,7 +91,6 @@ test("secret-vs-plain classification (isSecretSettingKey) matches what each fiel
     "X_ACCESS_TOKEN",
     "X_REFRESH_TOKEN",
     "XAI_API_KEY",
-    "XERO_CLIENT_SECRET",
     "XERO_REFRESH_TOKEN",
   ]);
   for (const integration of TENANT_CREDENTIAL_INTEGRATIONS) {
