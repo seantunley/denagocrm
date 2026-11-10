@@ -5,7 +5,7 @@ import { botConversationTenantId } from "@/lib/botTenant";
 import { currentInboundBotEventId } from "@/lib/botInboundEvent";
 import { matchByPhone } from "@/lib/whatsapp";
 import { logError } from "@/lib/errorLog";
-import { classifyInbound, SCREENING_MODEL } from "./classify";
+import { classifyInbound } from "./classify";
 import {
   SCREENING_POLICY_VERSION, NO_RELATIONSHIP, aiMayQuarantine, decideByRules, extractDomains, normalizeText,
   parseMode, parsePolicy, reasonText, type Relationship, type ScreeningClass, type ScreeningMode, type ScreeningPolicy,
@@ -196,11 +196,11 @@ async function decide(tenantId: string, input: ScreenInput, policy: ScreeningPol
   if (!ai.ok) {
     // Counted as a call only when one was really made.
     const attempted = ai.failure !== "not_configured";
-    return { ...base, aiUsed: attempted, model: attempted ? SCREENING_MODEL : null, quarantine: false, classification: "uncertain", uncertain: true, decidedBy: "fallback", reasonCodes: ["classifier_unavailable", ...verdict.reasonCodes], reason: "The filter could not check this one — let through.", failure: ai.failure };
+    return { ...base, aiUsed: attempted, model: attempted ? ai.model : null, quarantine: false, classification: "uncertain", uncertain: true, decidedBy: "fallback", reasonCodes: ["classifier_unavailable", ...verdict.reasonCodes], reason: "The filter could not check this one — let through.", failure: ai.failure };
   }
   const codes = [...ai.verdict.reasonCodes, ...verdict.reasonCodes];
   return {
-    aiUsed: true, model: SCREENING_MODEL, aiInputTokens: ai.inputTokens, aiOutputTokens: ai.outputTokens, failure: null,
+    aiUsed: true, model: ai.model, aiInputTokens: ai.inputTokens, aiOutputTokens: ai.outputTokens, failure: null,
     quarantine: aiMayQuarantine(ai.verdict, policy),
     classification: ai.verdict.classification,
     uncertain: ai.verdict.uncertain,

@@ -188,7 +188,8 @@ export function accountIdFromToken(token: string | undefined | null): string | n
  * be saved as research.
  */
 /** Prompt tokens sent, and how many of them the provider served from its prompt cache. */
-export type CodexUsage = { inputTokens: number; cachedTokens: number };
+/** outputTokens only when the stream reports it (review of #1056: screening meters ChatGPT calls too). */
+export type CodexUsage = { inputTokens: number; cachedTokens: number; outputTokens?: number };
 
 export function parseCodexStream(raw: string): { text: string; incomplete: boolean; failed: string | null; usage: CodexUsage | null } {
   let deltas = "";
@@ -199,9 +200,13 @@ export function parseCodexStream(raw: string): { text: string; incomplete: boole
   let failed: string | null = null;
   let usage: CodexUsage | null = null;
   const readUsage = (response: unknown) => {
-    const u = (response as { usage?: { input_tokens?: unknown; input_tokens_details?: { cached_tokens?: unknown } } } | undefined)?.usage;
+    const u = (response as { usage?: { input_tokens?: unknown; output_tokens?: unknown; input_tokens_details?: { cached_tokens?: unknown } } } | undefined)?.usage;
     if (u && typeof u.input_tokens === "number") {
-      usage = { inputTokens: u.input_tokens, cachedTokens: typeof u.input_tokens_details?.cached_tokens === "number" ? u.input_tokens_details.cached_tokens : 0 };
+      usage = {
+        inputTokens: u.input_tokens,
+        cachedTokens: typeof u.input_tokens_details?.cached_tokens === "number" ? u.input_tokens_details.cached_tokens : 0,
+        ...(typeof u.output_tokens === "number" ? { outputTokens: u.output_tokens } : {}),
+      };
     }
   };
 

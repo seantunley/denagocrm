@@ -477,7 +477,8 @@ async function readStreaming(body: ReadableStream<Uint8Array>, onText: (delta: s
 /* ── The call ──────────────────────────────────────────────────────── */
 
 export type CodexResult =
-  | { text: string; incomplete: boolean; usage?: CodexUsage | null }
+  /** model: the one that answered (a refused choice falls through the list). */
+  | { text: string; incomplete: boolean; usage?: CodexUsage | null; model?: string }
   | { error: string; transient?: true };
 
 /**
@@ -638,7 +639,7 @@ export async function codexRespond(input: {
         `Was ${configured ?? `the default (${CODEX_DEFAULT_MODEL})`}. Refused: ${refusals.join(", ") || "retired, skipped"}.`,
       );
     }
-    return { text: parsed.text, incomplete: parsed.incomplete, usage: parsed.usage };
+    return { text: parsed.text, incomplete: parsed.incomplete, usage: parsed.usage, model };
   }
 
   await logError("codex-research", "Every research model was refused", refusals.join(", "));
