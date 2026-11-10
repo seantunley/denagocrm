@@ -16,6 +16,8 @@ import { StatusPill } from "@/components/visual-system";
 import { formatDate, formatZAR } from "@/lib/format";
 import { withCurrency } from "@/lib/currencyRules";
 import { isSupplierQuote, partiesOf } from "@/lib/dealFile";
+import { handoverPhotosFor } from "@/lib/dealFileData";
+import { storedFileSrc } from "@/lib/storedFileSrc";
 import { quotePricing, type PricedLine } from "@/lib/pricing";
 import { saveQuoteLineCosts } from "@/app/actions/quoteCosts";
 import { requireUser } from "@/lib/auth";
@@ -62,11 +64,6 @@ export type QuoteGroup = {
   currency: string | null;
   createdAt: Date;
   documents: Doc[];
-  /**
-   * Photos taken in this quote's delivery checklist (lib/dealFileData.ts handoverPhotos). Shown under the quote's
-   * papers — where people look for the handover — not in a box below every quote, where they went unseen.
-   */
-  handoverPhotos?: { id: string; src: string | null; step: string; takenAt: Date }[];
 };
 
 /** What each CRM-written tag means to someone reading the tab (shared with the deal-file ZIP). */
@@ -309,6 +306,12 @@ export default async function DocumentsPanel({
   // The workspace's suppliers (Settings → Suppliers): the upload's and Label's supplier choice.
   const tenantId = await actingTenantId();
   // Null while the Suppliers module is off: no supplier choice on upload or Label, none shown on a row.
+  // Each listed quote's handover photos (its delivery checklist), read HERE so every page that lists a quote's
+  // papers shows them — the customer page did not, while the deal page did (Tekili Farm, 2026-11-09).
+  const photosByQuote = new Map<string, { id: string; src: string | null; step: string; takenAt: Date }[]>();
+  for (const photo of await handoverPhotosFor(tenantId, (quoteGroups ?? []).map((group) => group.id))) {
+    photosByQuote.set(photo.quoteId, [...(photosByQuote.get(photo.quoteId) ?? []), { id: photo.id, src: storedFileSrc(photo.url), step: photo.step, takenAt: photo.capturedAt }]);
+  }
   const vendors = (await isModuleEnabled("suppliers"))
     ? await prisma.vendor.findMany({ where: { tenantId, deletedAt: null }, select: { id: true, name: true }, orderBy: { name: "asc" } })
     : null;
@@ -402,7 +405,7 @@ export default async function DocumentsPanel({
                   />
                 )}
               </div>
-              {group.documents.length === 0 && !group.handoverPhotos?.length ? (
+              {group.documents.length === 0 && !photosByQuote.has(group.id) ? (
                 <p className="mt-2 text-xs text-slate-500">
                   No paperwork filed against this quote yet.
                 </p>
@@ -425,13 +428,13 @@ export default async function DocumentsPanel({
                   </div>
                 ));
               })()}
-              {group.handoverPhotos && group.handoverPhotos.length > 0 && (
+              {photosByQuote.has(group.id) && (
                 <div className="mt-3" data-search="handover photos delivery checklist">
                   <p className="text-[10px] font-semibold uppercase tracking-widest text-emerald-300/80">
-                    Handover photos <span className="font-normal text-muted-foreground">· {group.handoverPhotos.length} · from the delivery checklist</span>
+                    Handover photos <span className="font-normal text-muted-foreground">· {photosByQuote.get(group.id)!.length} · from the delivery checklist</span>
                   </p>
                   <div className="mt-1.5 grid grid-cols-3 gap-2 sm:grid-cols-4 lg:grid-cols-6">
-                    {group.handoverPhotos.map((photo) => (
+                    {photosByQuote.get(group.id)!.map((photo) => (
                       <a
                         key={photo.id}
                         href={photo.src ?? undefined}
