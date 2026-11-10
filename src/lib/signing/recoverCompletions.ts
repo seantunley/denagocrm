@@ -431,7 +431,7 @@ async function redrive(
     }
   }
 
-  // Signed copies are the owner's switch (on by default) — off, nothing is emailed.
+  // Signed copies are the owner's switch (off by default since 2026-11-09) — off, nothing is emailed.
   // (The sweep runs inside its tenant's scope — recoverStrandedCompletions.)
   const delivery = (await automationOn("SIGNING_SIGNED_COPIES"))
     ? await deliverCompletionEmails({

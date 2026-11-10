@@ -63,7 +63,7 @@ loaderKey._load = function (this: unknown, request: string, parent, isMain) {
   if (request === "@/lib/leadJourneyEvents") {
     return { emitLeadJourneyEvent: spy.emitLeadJourneyEvent };
   }
-  // The "Signed copies" switch (on by default, Sean's choice). Its real reader
+  // The "Signed copies" switch, faked ON here to test the sweep that sends (it is OFF by default). Its real reader
   // goes to the database through its own relative import, past the fake above —
   // without a database every sweep here failed on the read, not on the claim.
   if (request === "@/lib/automationSwitch") return { automationOn: async () => true };

@@ -73,9 +73,12 @@ test("anything that can reach a customer has a switch — off by default — or 
   for (const a of AUTOMATIONS.filter((x) => x.reaches === "customer")) {
     assert.ok(a.setting || a.managedAt, `${a.key}: no switch and no screen where it's switched on`);
   }
-  // Only the owner's explicit decision may default ON (signed copies: 2026-10-06, Sean chose "keep it on").
+  // NOTHING that reaches a customer starts ON (Sean, 2026-11-09 — signed copies, on by default since 2026-10-06,
+  // emailed Tekili Farm a signed delivery note while he believed every customer email was off). Each is
+  // switched on by an owner in Settings → Automatic jobs & messages, or not at all.
   const defaultOn = AUTOMATIONS.filter((a) => a.reaches === "customer" && a.setting?.defaultOn).map((a) => a.setting!.key);
-  assert.deepEqual(defaultOn, ["SIGNING_SIGNED_COPIES"]);
+  assert.deepEqual(defaultOn, []);
+  assert.equal(automationDefault("SIGNING_SIGNED_COPIES"), false);
   assert.equal(automationDefault("REVIEW_REQUESTS_AUTO"), false);
   assert.equal(automationDefault("NOT_A_SWITCH"), false, "an unknown switch is off");
 });

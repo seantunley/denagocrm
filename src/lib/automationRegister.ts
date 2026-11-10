@@ -145,7 +145,9 @@ export const AUTOMATIONS: Automation[] = [
     reaches: "customer",
     channels: ["email"],
     when: "When a signing request completes (and a retry sweep every 30 minutes)",
-    setting: { key: "SIGNING_SIGNED_COPIES", defaultOn: true },
+    // OFF until an owner switches it on (Sean, 2026-11-09). It was on by default from 2026-10-06, and a signed
+    // delivery note went to a customer (Tekili Farm, 22 Oct) while he believed every customer email was off.
+    setting: { key: "SIGNING_SIGNED_COPIES", defaultOn: false },
     cron: "/api/cron/automations",
     phases: ["stranded-completions"],
   },
