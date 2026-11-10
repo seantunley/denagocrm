@@ -1,6 +1,5 @@
 import "server-only";
-import { getProviderKey } from "@/lib/settings";
-import { recordAiUsage } from "@/lib/systemHealth";
+import { aiText } from "@/lib/aiText";
 import { REASON_CODES, parseAiVerdict, type AiVerdict, type ScreeningPolicy } from "./rules";
 
 export const SCREENING_MODEL = "claude-haiku-4-5";
@@ -55,31 +54,29 @@ export function buildClassifierUserContent(input: ClassifyInput): string {
 }
 
 /**
- * One bounded call: one attempt, a hard timeout, a small answer. It reuses the
- * workspace's existing Anthropic key and the CRM's AI usage counter — no new
- * provider. Never throws: every failure is a named result, and the caller lets
- * the message through.
+ * One bounded call: one attempt, a hard timeout, a small answer, on the
+ * workspace's own AI (ChatGPT by default, Claude if chosen — lib/aiText). Never
+ * throws: every failure is a named result, and the caller lets the message
+ * through.
  */
 export async function classifyInbound(input: ClassifyInput, policy: ScreeningPolicy): Promise<ClassifyResult> {
   const started = Date.now();
   const took = () => Date.now() - started;
-  try {
-    const apiKey = await getProviderKey("ANTHROPIC_API_KEY");
-    if (!apiKey) return { ok: false, failure: "not_configured", latencyMs: took() };
-    const res = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      signal: AbortSignal.timeout(policy.aiTimeoutMs),
-      headers: { "Content-Type": "application/json", "x-api-key": apiKey, "anthropic-version": "2023-06-01" },
-      body: JSON.stringify({ model: SCREENING_MODEL, max_tokens: 120, system: SYSTEM, messages: [{ role: "user", content: buildClassifierUserContent(input) }] }),
-    });
-    if (!res.ok) return { ok: false, failure: "http_error", latencyMs: took() };
-    const json = await res.json();
-    await recordAiUsage(json.usage, json.model);
-    const verdict = parseAiVerdict(String(json.content?.[0]?.text ?? ""));
-    if (!verdict) return { ok: false, failure: "invalid_answer", latencyMs: took() };
-    return { ok: true, verdict, inputTokens: json.usage?.input_tokens ?? null, outputTokens: json.usage?.output_tokens ?? null, latencyMs: took() };
-  } catch (error) {
-    const timedOut = error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError");
-    return { ok: false, failure: timedOut ? "timeout" : "error", latencyMs: took() };
+  // The workspace's AI — ChatGPT by default, Claude if chosen (lib/aiText). aiText never throws.
+  const answer = await aiText({
+    scope: "inbound-screening",
+    system: SYSTEM,
+    prompt: buildClassifierUserContent(input),
+    maxTokens: 120,
+    timeoutMs: policy.aiTimeoutMs,
+    claudeModel: SCREENING_MODEL,
+    quick: true,
+  });
+  if (!answer.ok) {
+    const failure = answer.failure === "not_configured" ? "not_configured" : answer.failure === "timeout" ? "timeout" : "http_error";
+    return { ok: false, failure, latencyMs: took() };
   }
+  const verdict = parseAiVerdict(answer.text);
+  if (!verdict) return { ok: false, failure: "invalid_answer", latencyMs: took() };
+  return { ok: true, verdict, inputTokens: answer.usage?.input_tokens ?? null, outputTokens: answer.usage?.output_tokens ?? null, latencyMs: took() };
 }

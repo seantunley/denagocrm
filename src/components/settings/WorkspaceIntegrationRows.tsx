@@ -8,6 +8,7 @@ import { connectTelegram, disconnectTelegram } from "@/app/actions/bot";
 import { getSetting } from "@/lib/settings";
 import { codexStatus, type CodexStatus } from "@/lib/codex";
 import { modelChoices } from "@/lib/codexProtocol";
+import { AI_PROVIDER_CHOICES, AI_PROVIDER_KEY, pickAiProvider } from "@/lib/aiProviderRules";
 import VoicePicker from "@/components/settings/VoicePicker";
 import { DEFAULT_TTS_MODEL, TTS_MODELS, VOICE_SPEEDS, elevenLabsVoices, modelTakesSpeed } from "@/lib/elevenlabs";
 import { STT_CUSTOMER_NAMES_KEY, TTS_MODEL_KEY, VOICE_SPEED_KEY } from "@/lib/voiceSettings";
@@ -22,6 +23,7 @@ const KEYS = [
   "GOOGLE_MAPS_BROWSER_API_KEY",
   "ANTHROPIC_API_KEY",
   "AI_AUTO_RESEARCH",
+  "AI_PROVIDER",
   "ELEVENLABS_API_KEY",
   "ELEVENLABS_VOICE_ID",
   "ELEVENLABS_TTS_MODEL",
@@ -51,6 +53,9 @@ export default async function WorkspaceIntegrationRows({ xAccountId }: { xAccoun
   const chatGpt: CodexStatus = await codexStatus().catch((): CodexStatus => ({ state: "disconnected" }));
   // The voices in the ElevenLabs account, for the picker; null (a typed ID instead) when there is no key or it fails.
   const voices = setting("ELEVENLABS_API_KEY") ? await elevenLabsVoices().catch(() => null) : null;
+  // What the chatbot and AI helpers actually run on now — the choice, or the other one when the choice isn't set up.
+  const aiInUse = pickAiProvider(setting("AI_PROVIDER"), chatGpt.state === "connected", Boolean(setting("ANTHROPIC_API_KEY")));
+  const aiChosen = setting("AI_PROVIDER") === "claude" ? "claude" : "chatgpt";
 
   return (
     <>
@@ -189,6 +194,41 @@ export default async function WorkspaceIntegrationRows({ xAccountId }: { xAccoun
       </Row>
 
       <Row
+        title="Which AI the CRM uses"
+        status={
+          aiInUse ? (
+            <span className="badge bg-emerald-500/15 text-emerald-300">{aiInUse === "chatgpt" ? "ChatGPT" : "Claude"}</span>
+          ) : (
+            <span className="badge bg-amber-500/15 text-amber-300">Not set up</span>
+          )
+        }
+      >
+        <p className="text-xs text-muted-foreground mb-4">
+          The customer chatbot, invoice reading, the ✨ message check, voice-note replies, spam screening and 🔎 research
+          run on this. ChatGPT (your subscription, no per-use cost) is the default; choose Claude once Anthropic credit is
+          loaded. DAX always uses ChatGPT. If the one chosen isn&apos;t set up, the other is used.
+        </p>
+        <SaveForm resetOnSuccess={false} action={saveSetting} className="flex gap-2 items-end">
+          <input type="hidden" name="key" value={AI_PROVIDER_KEY} />
+          <div className="flex-1">
+            <label className="label" htmlFor="ai-provider">AI</label>
+            <select id="ai-provider" name="value" className="input" defaultValue={aiChosen}>
+              {AI_PROVIDER_CHOICES.map((choice) => (
+                <option key={choice.id} value={choice.id}>{choice.label}</option>
+              ))}
+            </select>
+          </div>
+          <SaveButton className="btn-secondary btn-sm">Save</SaveButton>
+        </SaveForm>
+        {aiInUse && aiInUse !== aiChosen && (
+          <p className="mt-2 text-xs text-amber-300" role="status">
+            {aiChosen === "chatgpt" ? "ChatGPT isn't connected" : "There's no Anthropic key"}, so{" "}
+            {aiInUse === "chatgpt" ? "ChatGPT" : "Claude"} is being used.
+          </p>
+        )}
+      </Row>
+
+      <Row
         title="AI Assist (Claude)"
         status={
           setting("ANTHROPIC_API_KEY") ? (
@@ -199,8 +239,8 @@ export default async function WorkspaceIntegrationRows({ xAccountId }: { xAccoun
         }
       >
         <p className="text-xs text-muted-foreground mb-4">
-          Powers the ✨ message check, 🔎 lead research and (optionally) automatic research on new leads.
-          Suggestions only — the AI never changes data. Get a key at console.anthropic.com.
+          Pay-per-use Claude, used when &quot;Which AI the CRM uses&quot; is set to Claude (or ChatGPT isn&apos;t connected).
+          Suggestions only — the AI never changes data. Get a key and load credit at console.anthropic.com.
         </p>
         <div className="space-y-3">
           <SaveForm resetOnSuccess={false} action={saveSetting} className="flex gap-2 items-end">
@@ -231,7 +271,7 @@ export default async function WorkspaceIntegrationRows({ xAccountId }: { xAccoun
       </Row>
 
       <Row
-        title="ChatGPT subscription (DAX and research)"
+        title="ChatGPT subscription"
         status={
           chatGpt.state === "connected" ? (
             <span className="badge bg-emerald-500/15 text-emerald-300">Connected</span>
@@ -241,8 +281,8 @@ export default async function WorkspaceIntegrationRows({ xAccountId }: { xAccoun
         }
       >
         <p className="text-xs text-muted-foreground mb-4">
-          DAX&apos;s answers and 🔎 lead research run on your ChatGPT Plus or Pro plan instead of paying per token. Sign
-          in once with your ChatGPT account. The ✨ message check and the WhatsApp customer bot still use the Anthropic key.
+          DAX, the customer chatbot and the other AI helpers run on your ChatGPT Plus or Pro plan instead of paying per
+          token (unless &quot;Which AI the CRM uses&quot; is set to Claude). Sign in once with your ChatGPT account.
         </p>
         <div className="space-y-3">
           <ChatGptConnect initial={chatGpt} />

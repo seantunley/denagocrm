@@ -11,10 +11,10 @@ const src = (rel: string) => readFileSync(new URL(`../${rel}`, import.meta.url),
 const lib = src("src/lib/competitors.ts");
 const fn = (name: string) => lib.slice(lib.indexOf(`async function ${name}(`), lib.indexOf("\n}\n", lib.indexOf(`async function ${name}(`)));
 
-test("research and discovery use ChatGPT first, and never reach Anthropic when it is connected", () => {
+test("research and discovery use ChatGPT (the default AI), and never reach Anthropic on that path", () => {
   const call = fn("callWithWebSearch");
-  const codexBranch = call.slice(call.indexOf("if (await isCodexConnected())"), call.indexOf('const apiKey = await getProviderKey("ANTHROPIC_API_KEY")'));
-  assert.ok(call.indexOf("if (await isCodexConnected())") > -1 && call.indexOf("if (await isCodexConnected())") < call.indexOf("api.anthropic.com"));
+  const codexBranch = call.slice(call.indexOf("if (await usesChatGpt())"), call.indexOf('const apiKey = await getProviderKey("ANTHROPIC_API_KEY")'));
+  assert.ok(call.indexOf("if (await usesChatGpt())") > -1 && call.indexOf("if (await usesChatGpt())") < call.indexOf("api.anthropic.com"));
   assert.match(codexBranch, /codexRespond\(\{[\s\S]*webSearch: true,/);
   assert.match(codexBranch, /if \("error" in reply\) \{[\s\S]*return \{ error: reply\.error \};/, "a ChatGPT failure is returned, not retried on Anthropic");
   assert.doesNotMatch(codexBranch, /anthropic/i);
@@ -22,7 +22,7 @@ test("research and discovery use ChatGPT first, and never reach Anthropic when i
 
 test("daily change classification uses ChatGPT too", () => {
   const classify = fn("aiClassifyChange");
-  assert.ok(classify.indexOf("if (await isCodexConnected())") < classify.indexOf("api.anthropic.com"));
+  assert.ok(classify.indexOf("if (await usesChatGpt())") < classify.indexOf("api.anthropic.com"));
   assert.match(classify, /codexRespond\(\{ instructions: system, prompt: user, reasoningEffort: "low"/);
 });
 

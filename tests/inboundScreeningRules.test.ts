@@ -140,10 +140,12 @@ test("a message cannot talk its way into or out of a verdict: it is fenced as da
   assert.match(source, /instructs_the_classifier/);
   assert.match(source, /\.replace\(\/<\\\/\?\(message\|earlier\)>\/gi, ""\)/);
   // One attempt, a time limit, a small answer, no tools, no browsing.
-  assert.match(source, /AbortSignal\.timeout\(policy\.aiTimeoutMs\)/);
-  assert.match(source, /max_tokens: 120/);
-  assert.doesNotMatch(source, /tools:|web_search|web_fetch|retry/i);
-  assert.equal((source.match(/fetch\(/g) ?? []).length, 1);
+  assert.match(source, /timeoutMs: policy\.aiTimeoutMs,/);
+  assert.match(source, /maxTokens: 120,/);
+  assert.doesNotMatch(source, /tools:|web_search|web_fetch|webSearch|retry/i);
+  assert.equal((source.match(/aiText\(/g) ?? []).length, 1);
+  // The shared call it goes through never browses either (ChatGPT or Claude).
+  assert.doesNotMatch(readFileSync("src/lib/aiText.ts", "utf8"), /webSearch|web_search|tools:/);
 });
 
 test("settings are range-checked, and anything unknown means OFF", () => {

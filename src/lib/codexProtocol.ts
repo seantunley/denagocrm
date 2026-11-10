@@ -22,6 +22,9 @@
  */
 export const CODEX_DEFAULT_MODEL = "gpt-6-sol";
 
+/** The quicker model for short calls (the chatbot) — the one DAX's research step uses (crmAssistant PLAN_MODEL, measured). */
+export const CODEX_QUICK_MODEL = "gpt-6-astra";
+
 /**
  * What to try, in order, if the chosen model is refused.
  *

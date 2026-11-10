@@ -55,7 +55,9 @@ test("every chargeable usage write is awaited, never fired and forgotten", () =>
   const offenders = sources("src").filter((path) => /\bvoid\s+record(Ai)?Usage\(|record(Ai)?Usage\([^)]*\)\s*\.catch\(/.test(readFileSync(path, "utf8")));
   assert.deepEqual(offenders, [], "metering must be awaited");
   const callers = sources("src").filter((path) => readFileSync(path, "utf8").includes("recordAiUsage(json.usage"));
-  assert.ok(callers.length >= 6, "the AI callers are still found");
+  // 2026-11-10: the chatbot and the short helpers share ONE Claude call (lib/aiText), so fewer files meter it.
+  assert.ok(callers.length >= 3, "the AI callers are still found");
+  assert.ok(callers.some((path) => path.replace(/\\/g, "/").endsWith("src/lib/aiText.ts")), "the shared call is metered");
   for (const path of callers) {
     const calls = readFileSync(path, "utf8").match(/\S+ recordAiUsage\(json\.usage/g) ?? [];
     for (const call of calls) assert.equal(call, "await recordAiUsage(json.usage", path);

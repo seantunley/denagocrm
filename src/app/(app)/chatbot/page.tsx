@@ -82,8 +82,8 @@ export default async function ChatbotSettingsPage() {
             <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">AI assistant</p>
             <label className="flex items-center justify-between gap-4 cursor-pointer">
               <span>
-                <span className="text-sm font-medium">Claude replies to open questions</span>
-                <span className="block text-xs text-muted-foreground">Uses live product facts, canonical FAQ paths and only approved/current knowledge. Open-ended answers require high confidence; uncertain questions hand over.</span>
+                <span className="text-sm font-medium">AI replies to open questions</span>
+                <span className="block text-xs text-muted-foreground">Uses live product facts, canonical FAQ paths and only approved/current knowledge. Open-ended answers require high confidence; uncertain questions hand over. Runs on ChatGPT, or Claude if chosen (Settings → Integrations → Which AI the CRM uses).</span>
               </span>
               <input type="checkbox" name="aiEnabled" defaultChecked={aiEnabled} className="h-4 w-4 shrink-0" />
             </label>

@@ -7,6 +7,7 @@ import { requireDocumentAccess } from "@/lib/permissions";
 import { logAudit } from "@/lib/audit";
 import { isModuleEnabled } from "@/lib/modules/enabled";
 import { readSupplierInvoice } from "@/lib/supplierInvoiceReader";
+import { aiFailureText } from "@/lib/aiProviderRules";
 import { invoiceCents, invoiceDay, isSupplierInvoice } from "@/lib/supplierInvoiceRules";
 
 /** The supplier invoice document, in its own workspace, for someone who may open it and upload documents. */
@@ -28,7 +29,10 @@ export async function readSupplierInvoiceNow(documentId: string, revalidate: str
     revalidatePath(revalidate);
     if (outcome === "read") return { success: "Read — check it and confirm" };
     if (outcome === "confirmed-already") return { success: "Already confirmed" };
-    if (outcome === "not-configured") refuse("AI isn't set up for this workspace (Settings → Integrations), or Suppliers is off.");
+    if (outcome === "not-configured") refuse(aiFailureText("not_configured", ""));
+    if (outcome === "no-credit") refuse(aiFailureText("no_credit", ""));
+    if (outcome === "failed") refuse(aiFailureText("failed", "The AI couldn't read it just now"));
+    if (outcome === "scanned") refuse("It's a scanned PDF with no text in it, which ChatGPT can't be given — fill it in yourself below, or choose Claude in Settings → Integrations.");
     refuse("Nothing could be read from it — fill it in yourself below.");
   });
 }
