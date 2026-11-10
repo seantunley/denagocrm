@@ -74,7 +74,7 @@ import { applyLearn, loadLearned, loadPlaybook, markNotesUsed, saveDecision, vis
 import { checkBacksOn, setCheckBacks, type CheckBack } from "./proactiveFollowUp";
 import { findExistingContact } from "./contactMatch";
 import { DOCUMENT_TYPES_KEY, parseDocumentTypes } from "./documentLabels";
-import { isSupplierDocumentType } from "./dealFile";
+import { isSupplierOnlyType } from "./dealFile";
 import { matchVendorByName } from "./vendors";
 import { paymentMethodLabel } from "./accountStatement";
 import { carriedUpload, holdUpload, linkUpload, photoUpload, uploadImage } from "./assistantUpload";
@@ -2873,7 +2873,9 @@ export async function resolveActions(
       // THE SUPPLIER, by the name they said, among this workspace's own (Suppliers module). A supplier quote, invoice or
       // proof of payment must name one — uploadDocument refuses it at Confirm otherwise, so it is settled here.
       let vendor: { id: string; name: string } | null = null;
-      const supplierType = label !== null && isSupplierDocumentType(label);
+      // A supplier is REQUIRED only for a type whose name says supplier; any other type takes one when the person names
+      // it (p.supplier), and is the customer's otherwise (review of #1059).
+      const supplierType = label !== null && isSupplierOnlyType(label);
       if ((supplierType || p.supplier) && (await isModuleEnabled("suppliers"))) {
         const vendors = await prisma.vendor.findMany({
           where: { tenantId: await actingTenantId(), deletedAt: null },

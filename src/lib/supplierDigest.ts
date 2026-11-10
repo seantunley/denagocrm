@@ -4,7 +4,8 @@ import { prisma, basePrisma } from "./db";
 import { automationOn } from "./automationSwitch";
 import { getRegionalSettings, getSetting } from "./settings";
 import { DOCUMENT_TYPES_KEY, parseDocumentTypes } from "./documentLabels";
-import { dealFileChecklist } from "./dealFile";
+import { dealFileChecklist, type DealFileConfig } from "./dealFile";
+import { getDealFileConfig } from "./dealFileConfig";
 import { loadBillToFleets, quoteBillTo } from "./quoteBillTo";
 import { sendEmail } from "./email";
 import { tenantOrigin } from "./tenantOrigin";
@@ -28,6 +29,7 @@ const DELIVERED_WITHIN_DAYS = 30;
 export async function missingSupplierPapers(tenantId: string): Promise<DigestDeal[]> {
   const since = new Date(Date.now() - DELIVERED_WITHIN_DAYS * 86_400_000);
   const types = parseDocumentTypes(await getSetting(DOCUMENT_TYPES_KEY));
+  const config = await getDealFileConfig();
   const deals: DigestDeal[] = [];
   // Across pages: a deal with two accepted quotes is listed once, whichever page each lands on.
   const seen = new Set<string>();
@@ -46,7 +48,7 @@ export async function missingSupplierPapers(tenantId: string): Promise<DigestDea
         take: DIGEST_PAGE,
       }),
     async (accepted) => {
-      deals.push(...(await missingOnPage(tenantId, accepted, types, seen)));
+      deals.push(...(await missingOnPage(tenantId, accepted, types, config, seen)));
     },
   );
   // Newest deal first, as the page order no longer is.
@@ -57,7 +59,7 @@ const DIGEST_PAGE = 100;
 
 type AcceptedQuote = Prisma.QuoteGetPayload<{ select: { id: true; number: true; leadId: true; fleetId: true; contact: true; lead: true } }>;
 
-async function missingOnPage(tenantId: string, accepted: AcceptedQuote[], types: string[], seen: Set<string>): Promise<DigestDeal[]> {
+async function missingOnPage(tenantId: string, accepted: AcceptedQuote[], types: string[], config: DealFileConfig, seen: Set<string>): Promise<DigestDeal[]> {
   const leadIds = [...new Set(accepted.flatMap((quote) => (quote.leadId ? [quote.leadId] : [])))];
   const quoteIds = accepted.map((quote) => quote.id);
   // The customer as every quote document names it — the fleet account when billed to one (quoteBillTo).
@@ -69,12 +71,12 @@ async function missingOnPage(tenantId: string, accepted: AcceptedQuote[], types:
     }),
     prisma.dealVendor.findMany({
       where: { tenantId, OR: [{ leadId: { in: leadIds } }, { quoteId: { in: quoteIds } }] },
-      select: { leadId: true, quoteId: true, vendor: { select: { id: true, name: true } } },
+      select: { leadId: true, quoteId: true, vendor: { select: { id: true, name: true, requiredDocuments: true } } },
     }),
   ]);
   const docs = await prisma.document.findMany({
     where: { tenantId, quoteId: { in: allQuotes.map((quote) => quote.id) }, deletedAt: null, replacedById: null },
-    select: { quoteId: true, tag: true, vendorId: true, vendor: { select: { name: true } } },
+    select: { quoteId: true, tag: true, vendorId: true, vendor: { select: { name: true, requiredDocuments: true } } },
   });
 
   const deals: DigestDeal[] = [];
@@ -87,12 +89,15 @@ async function missingOnPage(tenantId: string, accepted: AcceptedQuote[], types:
     const declared = links.filter((link) => link.leadId === root || link.quoteId === root).map((link) => link.vendor);
     const checklist = dealFileChecklist(
       dealQuotes,
-      docs.filter((doc) => doc.quoteId && dealQuoteIds.has(doc.quoteId)).map((doc) => ({ tag: doc.tag, vendorId: doc.vendorId, vendorName: doc.vendor?.name ?? null })),
+      docs.filter((doc) => doc.quoteId && dealQuoteIds.has(doc.quoteId)).map((doc) => ({
+        tag: doc.tag, vendorId: doc.vendorId, vendorName: doc.vendor?.name ?? null, vendorRequiredDocuments: doc.vendor?.requiredDocuments ?? null,
+      })),
       types,
+      config,
       declared,
     );
-    // Supplier lines are keyed "<vendorId>:<type>"; "none:…" is the unnamed set for a deal with no supplier on it.
-    const missing = checklist.filter((item) => !item.done && item.key.includes(":") && !item.key.startsWith("none:")).map((item) => item.label);
+    // A named supplier's lines only — the unnamed set (no supplier on the deal) has vendorId null.
+    const missing = checklist.filter((item) => !item.done && item.supplier?.vendorId).map((item) => item.label);
     if (missing.length) {
       deals.push({
         quoteNumber: quote.number,

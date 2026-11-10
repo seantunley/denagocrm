@@ -49,7 +49,7 @@ test("visible and switchable, on the automations cron, Suppliers module only, on
   assert.match(lib, /if \(!\(await automationOn\(SUPPLIER_DIGEST_SWITCH, tenantId\)\)\) return \{ skipped: "switched-off" \};/);
   assert.match(lib, /updateMany\(\{ where: \{ tenantId, key: SUPPLIER_DIGEST_LAST_WEEK, value: stored\.value \}, data: \{ value: week \} \}\)/);
   assert.ok(lib.indexOf("Claim this week before anything goes out") < lib.indexOf("await sendEmail("));
-  assert.match(lib, /!item\.key\.startsWith\("none:"\)/, "only suppliers actually on a deal");
+  assert.match(lib, /!item\.done && item\.supplier\?\.vendorId/, "only suppliers actually on a deal");
 });
 
 test("paging reaches every qualifying quote — 250 of them, in pages of 100 (review #1047)", async () => {
@@ -85,5 +85,5 @@ test("the digest pages through every deal — no cap on how many quotes it looks
   assert.match(digest, /\.\.\.\(after \? \{ id: \{ gt: after \} \} : \{\}\)/);
   assert.match(digest, /orderBy: \{ id: "asc" \},\s*take: DIGEST_PAGE/);
   // One deal across two pages is listed once.
-  assert.match(digest, /const seen = new Set<string>\(\);[\s\S]*missingOnPage\(tenantId, accepted, types, seen\)/);
+  assert.match(digest, /const seen = new Set<string>\(\);[\s\S]*missingOnPage\(tenantId, accepted, types, config, seen\)/);
 });

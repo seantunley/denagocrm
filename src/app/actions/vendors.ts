@@ -10,6 +10,10 @@ import { requireQuoteAccess } from "@/lib/permissions";
 import { normaliseVendorName, vendorKind } from "@/lib/vendors";
 import { dealKey, linkVendorToDeal } from "@/lib/dealVendors";
 import { isModuleEnabled } from "@/lib/modules/enabled";
+import { Prisma } from "@prisma/client";
+import { getSetting } from "@/lib/settings";
+import { DOCUMENT_TYPES_KEY, parseDocumentTypes } from "@/lib/documentLabels";
+import { tickedTypes } from "@/lib/dealFile";
 
 /** Settings → Suppliers: the businesses deals and purchase orders name. Owner only; every change audited. */
 
@@ -55,6 +59,36 @@ export async function saveVendor(id: string | null, formData: FormData): Promise
     revalidatePath(PAGE);
     if (id) revalidatePath(`${PAGE}/${id}`);
     return { success: id ? "Supplier saved" : "Supplier added" };
+  });
+}
+
+/**
+ * What the deal file asks of THIS supplier (Sean, 2026-11-10: "different documents per supplier"): the workspace's
+ * default supplier list, or its own — chosen from the Document types, and possibly none at all.
+ */
+export async function saveVendorRequiredDocuments(id: string, formData: FormData): Promise<ActionResult> {
+  return asActionResult(async () => {
+    const user = await requireTenantOwner();
+    await requireSuppliers();
+    const tenantId = await actingTenantId();
+    const own = formData.get("mode") === "own";
+    const list = own ? tickedTypes(formData.getAll("type"), parseDocumentTypes(await getSetting(DOCUMENT_TYPES_KEY))) : null;
+    const vendor = await prisma.vendor.findFirst({ where: { id, tenantId, deletedAt: null }, select: { name: true } });
+    if (!vendor) refuse("That supplier is no longer there — refresh the page.");
+    const changed = await prisma.vendor.updateMany({
+      where: { id, tenantId, deletedAt: null },
+      data: { requiredDocuments: list === null ? Prisma.DbNull : list },
+    });
+    if (changed.count !== 1) refuse("That supplier is no longer there — refresh the page.");
+    await logAudit({
+      action: "vendor.required_documents",
+      summary: list === null
+        ? `Deal file: “${vendor.name}” uses the default supplier list`
+        : `Deal file: “${vendor.name}” is asked for ${list.join(", ") || "nothing"}`,
+      user,
+    });
+    revalidatePath(`${PAGE}/${id}`);
+    return { success: "Saved" };
   });
 }
 

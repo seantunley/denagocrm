@@ -10,9 +10,13 @@ import { SaveForm, SaveButton } from "@/components/SaveForm";
 import { StatusPill, Surface } from "@/components/visual-system";
 import ConfirmDelete from "@/components/ConfirmDelete";
 import VendorFields from "@/components/VendorFields";
-import { saveVendor, deleteVendor } from "@/app/actions/vendors";
+import { saveVendor, deleteVendor, saveVendorRequiredDocuments } from "@/app/actions/vendors";
 import { vendorKindLabel } from "@/lib/vendors";
-import { SUPPLIER_DOCUMENT_TYPES } from "@/lib/dealFile";
+import { documentTypeList, typesForSupplier } from "@/lib/dealFile";
+import { getDealFileConfig } from "@/lib/dealFileConfig";
+import { getSetting } from "@/lib/settings";
+import { DOCUMENT_TYPES_KEY, parseDocumentTypes } from "@/lib/documentLabels";
+import SupplierDocumentsFields from "@/components/settings/SupplierDocumentsFields";
 import { vendorPurchaseOrders } from "@/lib/dealFileData";
 import { contactName, formatDate } from "@/lib/format";
 import { deliveryStatusLabel } from "@/lib/vendorDeliveryRules";
@@ -31,6 +35,10 @@ export default async function VendorPage({ params }: { params: Promise<{ id: str
   const vendor = await prisma.vendor.findFirst({ where: { id, tenantId, deletedAt: null } });
   if (!vendor) notFound();
 
+  const [config, documentTypes] = await Promise.all([getDealFileConfig(), getSetting(DOCUMENT_TYPES_KEY).then(parseDocumentTypes)]);
+  // What the deal file asks of this supplier: its own list, or the default one.
+  const ownList = documentTypeList(vendor.requiredDocuments);
+  const asked = typesForSupplier(config, vendor.requiredDocuments);
   const [links, documents, orders, deliveries] = await Promise.all([
     prisma.dealVendor.findMany({ where: { tenantId, vendorId: id }, select: { leadId: true, quoteId: true } }),
     prisma.document.findMany({
@@ -86,7 +94,7 @@ export default async function VendorPage({ params }: { params: Promise<{ id: str
     const open = sorted.find((quote) => !quote.supersededAt) ?? sorted[0];
     const ids = new Set(sorted.map((quote) => quote.id));
     const filed = documents.filter((doc) => doc.quoteId && ids.has(doc.quoteId));
-    const missing = SUPPLIER_DOCUMENT_TYPES.filter((type) => !filed.some((doc) => (doc.tag ?? "").toLowerCase() === type.toLowerCase()));
+    const missing = asked.filter((type) => !filed.some((doc) => (doc.tag ?? "").toLowerCase() === type.toLowerCase()));
     const who = open.contact ? contactName(open.contact) : open.lead?.name ?? open.lead?.title ?? "Customer";
     return { href: `/deals/${open.id}`, label: `Q-${open.number} · ${who}`, status: open.status, missing, filed: filed.length };
   });
@@ -110,7 +118,7 @@ export default async function VendorPage({ params }: { params: Promise<{ id: str
                   <li key={deal.href}>
                     <Link href={deal.href} className="flex flex-wrap items-center gap-3 rounded-lg px-1 py-2 text-sm hover:bg-muted/30">
                       <span className="min-w-0 flex-1 truncate font-medium">{deal.label}</span>
-                      <span className="text-xs text-muted-foreground">{deal.missing.length ? `Missing: ${deal.missing.join(", ")}` : "All three on file"}</span>
+                      <span className="text-xs text-muted-foreground">{deal.missing.length ? `Missing: ${deal.missing.join(", ")}` : asked.length ? "All on file" : "Nothing asked of it"}</span>
                       <StatusPill tone="neutral">{deal.status}</StatusPill>
                     </Link>
                   </li>
@@ -196,6 +204,14 @@ export default async function VendorPage({ params }: { params: Promise<{ id: str
             <SaveButton className="btn-primary btn-sm">Save</SaveButton>
           </SaveForm>
           <p className="mt-3 text-xs text-muted-foreground"><Link href="/settings/vendors" className="underline">All suppliers</Link></p>
+          <div className="mt-5 border-t border-border/70 pt-4">
+            <h2 className="font-semibold">Documents needed from it</h2>
+            <p className="mt-1 text-xs text-muted-foreground">What each deal&apos;s file asks of this supplier. The default list is set in Settings → Quotes → Deal file checklist.</p>
+            <SaveForm action={saveVendorRequiredDocuments.bind(null, vendor.id)} success="Saved" resetOnSuccess={false} className="mt-3 grid gap-3">
+              <SupplierDocumentsFields types={documentTypes} defaults={config.supplierTypes} own={ownList} />
+              <SaveButton className="btn-secondary btn-sm">Save</SaveButton>
+            </SaveForm>
+          </div>
         </Surface>
       </div>
     </SettingsWorkspace>

@@ -41,7 +41,8 @@ import { isManagedSecret, isRegeneratable, keepBlankSubmit } from "@/lib/setting
 import { keyNamesAnInboundEndpoint, reconcileTenantChannels } from "@/lib/channelRegistration";
 import { setNextStepScheduling } from "@/lib/nextStepConfig";
 import { PUSH_KINDS } from "@/lib/push";
-import { logAuditStrict } from "@/lib/audit";
+import { logAudit, logAuditStrict } from "@/lib/audit";
+import { DEAL_BUILTINS, DEAL_FILE_CHECKLIST_KEY, tickedTypes, type DealFileConfig } from "@/lib/dealFile";
 import { bumpUserSessionVersion } from "@/lib/userSecurity";
 import { createUserInOwnerTenant } from "@/lib/tenantContext";
 import { deleteFile, saveFile } from "@/lib/storage";
@@ -373,6 +374,35 @@ export async function saveDocumentTypes(formData: FormData) {
     const raw = String(formData.get("types") ?? "");
     await putSetting(DOCUMENT_TYPES_KEY, raw.trim() ? parseDocumentTypes(raw).join("\n") : "");
     revalidatePath("/settings");
+  });
+}
+
+/**
+ * What the deal file asks for (Sean, 2026-11-10): the checks every deal needs, and what each supplier is asked for
+ * unless it has its own list (that one is saved on the supplier's page). Types only from the Document types list.
+ */
+export async function saveDealFileChecklist(formData: FormData) {
+  return asActionResult(async () => {
+    const user = await requireTenantOwner();
+    const types = parseDocumentTypes(await getSetting(DOCUMENT_TYPES_KEY));
+    const builtinIds = new Set(formData.getAll("builtin").map(String));
+    const config: DealFileConfig = {
+      builtins: DEAL_BUILTINS.map((builtin) => builtin.id).filter((id) => builtinIds.has(id)),
+      dealTypes: tickedTypes(formData.getAll("dealType"), types),
+      supplierTypes: tickedTypes(formData.getAll("supplierType"), types),
+    };
+    await putSetting(DEAL_FILE_CHECKLIST_KEY, JSON.stringify(config));
+    const named = [
+      ...DEAL_BUILTINS.filter((builtin) => config.builtins.includes(builtin.id)).map((builtin) => builtin.label),
+      ...config.dealTypes,
+    ];
+    await logAudit({
+      action: "settings.deal_file_checklist",
+      summary: `Deal file checklist: every deal — ${named.join(", ") || "nothing"}; each supplier — ${config.supplierTypes.join(", ") || "nothing"}`,
+      user,
+    });
+    revalidatePath("/settings");
+    return { success: "Deal file checklist saved" };
   });
 }
 

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { readFileSync } from "node:fs";
-import { dealFileChecklist } from "../src/lib/dealFile";
+import { dealFileChecklist, DEFAULT_DEAL_FILE_CONFIG as CFG } from "../src/lib/dealFile";
 import { DEFAULT_DOCUMENT_TYPES } from "../src/lib/documentLabels";
 
 const quote = (over: Partial<Parameters<typeof dealFileChecklist>[0][number]> = {}) => ({
@@ -11,7 +11,7 @@ const doc = (tag: string | null, vendorId: string | null = null, vendorName: str
 const missing = (items: ReturnType<typeof dealFileChecklist>) => items.filter((item) => !item.done).map((item) => item.label);
 
 test("a fresh deal is missing everything but the sent quote", () => {
-  const items = dealFileChecklist([quote()], [], DEFAULT_DOCUMENT_TYPES);
+  const items = dealFileChecklist([quote()], [], DEFAULT_DOCUMENT_TYPES, CFG);
   assert.deepEqual(missing(items), [
     "Invoice", "Customer proof of payment", "Delivery paperwork",
     "Supplier quote", "Supplier invoice", "Proof of payment — supplier",
@@ -19,7 +19,7 @@ test("a fresh deal is missing everything but the sent quote", () => {
 });
 
 test("a draft quote is not the quote on file", () => {
-  assert.equal(dealFileChecklist([quote({ status: "draft" })], [], DEFAULT_DOCUMENT_TYPES)[0].done, false);
+  assert.equal(dealFileChecklist([quote({ status: "draft" })], [], DEFAULT_DOCUMENT_TYPES, CFG)[0].done, false);
 });
 
 test("deliveries-board paperwork ticks the customer boxes", () => {
@@ -27,12 +27,13 @@ test("deliveries-board paperwork ticks the customer boxes", () => {
     [quote({ status: "accepted", invoicedAt: new Date() })],
     [doc("pop"), doc("delivery-note")],
     DEFAULT_DOCUMENT_TYPES,
+    CFG,
   );
   assert.deepEqual(missing(items).filter((label) => !label.startsWith("Supplier") && !label.startsWith("Proof of payment — supplier")), []);
 });
 
 test("the signed delivery note counts as the delivery paper", () => {
-  const items = dealFileChecklist([quote({ deliverySignatureRef: "x.png" })], [], DEFAULT_DOCUMENT_TYPES);
+  const items = dealFileChecklist([quote({ deliverySignatureRef: "x.png" })], [], DEFAULT_DOCUMENT_TYPES, CFG);
   assert.equal(items.find((item) => item.key === "delivery")?.done, true);
 });
 
@@ -44,13 +45,14 @@ test("each supplier needs its own quote, invoice and proof of payment", () => {
       doc("Supplier quote", "wrap", "Wrap Co"),
     ],
     DEFAULT_DOCUMENT_TYPES,
+    CFG,
   );
   const supplierMissing = missing(items).filter((label) => label.includes("—") && !label.startsWith("Customer"));
   assert.deepEqual(supplierMissing, ["Supplier invoice — Wrap Co", "Proof of payment — supplier — Wrap Co"]);
 });
 
 test("a declared supplier is asked for before any of its papers arrive (review of #1040)", () => {
-  const items = dealFileChecklist([quote()], [doc("Supplier quote", "oem", "Denago")], DEFAULT_DOCUMENT_TYPES, [
+  const items = dealFileChecklist([quote()], [doc("Supplier quote", "oem", "Denago")], DEFAULT_DOCUMENT_TYPES, CFG, [
     { id: "oem", name: "Denago" },
     { id: "wrap", name: "Wrap Studio" },
   ]);
@@ -73,12 +75,12 @@ test("a supplier's name compares without case, punctuation or the company form",
 });
 
 test("a supplier file filed before suppliers existed still counts", () => {
-  const items = dealFileChecklist([quote()], [doc("supplier quote")], DEFAULT_DOCUMENT_TYPES);
+  const items = dealFileChecklist([quote()], [doc("supplier quote")], DEFAULT_DOCUMENT_TYPES, CFG);
   assert.equal(items.find((item) => item.label === "Supplier quote")?.done, true);
 });
 
 test("a checklist type the workspace removed says how to fix it", () => {
-  const items = dealFileChecklist([quote()], [], ["ID document"]);
+  const items = dealFileChecklist([quote()], [], ["ID document"], CFG);
   assert.match(items.find((item) => item.label === "Supplier invoice")?.detail ?? "", /Settings → Document types/);
 });
 

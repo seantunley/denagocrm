@@ -13,7 +13,8 @@ import { brandForTenant, DEFAULT_BRAND } from "@/lib/tenantBrand";
 import { formatDateTime } from "@/lib/format";
 import { getSetting } from "@/lib/settings";
 import { DOCUMENT_TYPES_KEY, parseDocumentTypes } from "@/lib/documentLabels";
-import { isSupplierDocumentType } from "@/lib/dealFile";
+import { typesForSupplier } from "@/lib/dealFile";
+import { getDealFileConfig } from "@/lib/dealFileConfig";
 import { createDocumentRequest } from "@/lib/documentRequests";
 import { requestDays, requestEmail } from "@/lib/documentRequestRules";
 
@@ -36,12 +37,14 @@ export async function requestSupplierDocument(quoteId: string, formData: FormDat
     if (!quote) refuse("That quote is no longer there — refresh the page.");
     const vendor = await prisma.vendor.findFirst({
       where: { id: String(formData.get("vendorId") ?? ""), tenantId, deletedAt: null },
-      select: { id: true, name: true, email: true },
+      select: { id: true, name: true, email: true, requiredDocuments: true },
     });
     if (!vendor) refuse("Choose a supplier from the list.");
     const documentType = String(formData.get("documentType") ?? "");
     const types = parseDocumentTypes(await getSetting(DOCUMENT_TYPES_KEY));
-    if (!isSupplierDocumentType(documentType) || !types.includes(documentType)) refuse("Ask for a supplier quote, invoice or proof of payment.");
+    // Only a paper this supplier is asked for (its own list, or the default — Settings → Quotes → Deal file checklist).
+    const asked = typesForSupplier(await getDealFileConfig(), vendor.requiredDocuments);
+    if (!asked.includes(documentType) || !types.includes(documentType)) refuse(`Ask ${vendor.name} for one of the papers on its list (${asked.join(", ") || "none"}).`);
 
     const send = formData.get("send") === "link" ? "link" : "email";
     const to = String(formData.get("to") ?? vendor.email ?? "").trim();
