@@ -75,6 +75,16 @@ test("…but a tap, a number or an option's own words still follow that option",
   assert.equal(said(last(await talk(menu, ctx, ["hi", tap("menu", "prices")]))), "From R100");
   assert.equal(said(last(await talk(menu, ctx, ["hi", "2"]))), "Booking…");
   assert.equal(said(last(await talk(menu, ctx, ["hi", "prices"]))), "From R100");
+  assert.equal(said(last(await talk(menu, ctx, ["hi", "price"]))), "From R100", "the start of an option's word");
+  assert.equal(said(last(await talk(menu, ctx, ["hi", "Book a service!"]))), "Booking…");
+});
+
+test("…and a question that merely STARTS with a number, or hides inside an option's word, is a question", async () => {
+  const { ctx } = harness();
+  // "2 seater price?" is not option 2, and "ok" is not "B-ok a service".
+  for (const typed of ["2 seater price?", "1 more thing", "ok", "ice"]) {
+    assert.equal(said(last(await talk(menu, ctx, ["hi", typed]))), "AI ANSWER", typed);
+  }
 });
 
 test("…and an empty message, a stale tap or a route that leads nowhere shows the menu again, as before", async () => {
@@ -163,14 +173,10 @@ test("every starter with an assistant step answers typed questions at its menus"
   }
 });
 
-test("a nudge never nudges again: no 'if no reply' route leads to a question that has one", () => {
-  for (const template of FLOW_TEMPLATES) {
-    for (const node of Object.values(template.definition.nodes)) {
-      const route = "noReply" in node ? node.noReply?.next : undefined;
-      if (!route) continue;
-      const nudge = template.definition.nodes[route];
-      assert.ok(nudge, `${template.id}.${node.id}`);
-      assert.equal("noReply" in nudge ? nudge.noReply : undefined, undefined, `${template.id}.${route} would chase the customer`);
+test("no starter messages first: no 'if no reply' route anywhere — the owner turns those on (Sean, 2026-11-10)", () => {
+  for (const flow of [DEFAULT_FLOW, ...FLOW_TEMPLATES.map((template) => template.definition)]) {
+    for (const node of Object.values(flow.nodes)) {
+      assert.equal("noReply" in node ? node.noReply : undefined, undefined, `${node.id} would message the customer unprompted`);
     }
   }
 });
@@ -211,15 +217,6 @@ test("general assistant: 'talk to someone' says what will happen — by whether 
   assert.match(said(closedResult), /closed at the moment/);
   assert.doesNotMatch(said(closedResult), /for you now/);
   assert.equal(closed.calls.handoffs[0].reason, "Asked to talk to a person (after hours)");
-});
-
-test("general assistant: a booking left half-way gets one nudge, with a call back as the way out", async () => {
-  const { ctx, calls } = harness();
-  const results = await talk(DEFAULT_FLOW, ctx, ["hi", tap("welcome", "book"), "Sipho", "082 555 0101", { text: "", timedOut: true }, tap("bookNudge", "call")]);
-  assert.match(said(results[4]), /Still keen to get booked in/);
-  assert.ok(last(results).handedOff);
-  assert.equal(calls.handoffs[0].reason, "Service booking: asked for a call");
-  assert.match(calls.handoffs[0].summary ?? "", /Sipho/);
 });
 
 test("general assistant: fully booked is said once, and the team is told what the customer needs", async () => {
@@ -264,6 +261,10 @@ test("smart enquiry: what the customer already said is not asked again", async (
   const told = await talk(flow, all.ctx, ["hi", "Hi, Sipho here on 082 555 0101 — I need a quote for a fleet of 6"]);
   assert.equal(last(told).session?.nodeId, "check", "straight to the read-back");
   assert.match(said(last(told)), /Sipho[\s\S]*082 555 0101[\s\S]*fleet of 6/);
+  // The enquiry carries the words the customer approved — a summary the AI offers is not even kept.
+  await runFlow(flow, last(told).session!, tap("check", "yes"), all.ctx);
+  assert.equal(all.calls.bookings[0].vars.message, "Hi, Sipho here on 082 555 0101 — I need a quote for a fleet of 6");
+  assert.equal(all.calls.bookings[0].vars.service, undefined);
 
   const partial = harness({ extractData: async () => ({ ok: true, values: { name: "Sipho" } }) });
   const asked = await talk(flow, partial.ctx, ["hi", "Sipho here, need a quote"]);

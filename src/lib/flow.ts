@@ -380,10 +380,14 @@ function matchChoice(node: Extract<FlowNode, { type: "choice" }>, input: FlowInp
     const optId = input.choiceId.slice(node.id.length + 1);
     return node.options.find((o) => o.id === optId)?.next ?? null;
   }
-  const t = input.text.trim().toLowerCase();
-  const asNum = parseInt(t, 10);
-  if (!Number.isNaN(asNum) && node.options[asNum - 1]) return node.options[asNum - 1].next ?? null;
-  return node.options.find((o) => t && o.label.toLowerCase().replace(/[^a-z0-9 ]/g, "").includes(t))?.next ?? null;
+  // A typed reply picks an option only when it IS that option: the whole reply a number ("2", not "2 seater price?"),
+  // or words that start the label's own words ("price" → "Prices", but "ok" is not "B-ok-k a service"). Anything
+  // else is a question in their own words, for the semantic router or the menu's "anything else" route.
+  const raw = input.text.trim();
+  if (/^\d+$/.test(raw) && node.options[Number(raw) - 1]) return node.options[Number(raw) - 1].next ?? null;
+  const words = (s: string) => ` ${s.toLowerCase().replace(/[^a-z0-9 ]/g, " ").replace(/\s+/g, " ").trim()}`;
+  const t = words(raw);
+  return node.options.find((o) => t.trim() && words(o.label).includes(t))?.next ?? null;
 }
 async function semanticChoice(node: Extract<FlowNode, { type: "choice" }>, input: FlowInput, vars: Record<string, string>, ctx: FlowCtx) {
   if (!ctx.routeChoice || input.choiceId || !input.text.trim()) return null;
@@ -730,8 +734,9 @@ export async function runFlow(flow: Flow, session: FlowSession, input: FlowInput
  * - a typed question at a menu is answered (elseNext → the assistant), not met with the same menu again;
  * - a customer we already know is not asked who they are or for a number we already hold;
  * - "talk to someone" says what will actually happen, by whether the business is open right now;
- * - a booking abandoned half-way gets one gentle nudge, with a call back as the easy way out;
  * - every hand-off tells staff why, so nobody has to scroll the chat to find out.
+ * It never messages first: nothing is sent unless the customer has just written (no "if no reply" nudge — Sean,
+ * 2026-11-10: automatic sends stay off until the owner turns them on in the builder).
  */
 export const DEFAULT_FLOW: Flow = {
   start: "welcome",
@@ -748,11 +753,7 @@ export const DEFAULT_FLOW: Flow = {
     bookKnown: { id: "bookKnown", type: "message", text: "Sure thing, {{name}} — let's get you booked in.", next: "bookService" },
     bookName: { id: "bookName", type: "capture", text: "Sure — let's get you booked in. First, who am I chatting to?", variable: "name", next: "bookPhone" },
     bookPhone: { id: "bookPhone", type: "capture", text: "Thanks, {{name}}! What's the best number to reach you on?", variable: "phone", format: "phone", next: "bookService" },
-    bookService: { id: "bookService", type: "capture", text: "What would you like us to look at? A line or two is plenty.", variable: "service", next: "chooseSlot", noReply: { minutes: 60, next: "bookNudge" } },
-    bookNudge: { id: "bookNudge", type: "choice", text: "Still keen to get booked in? I can carry on where we left off, or ask the team to give you a call instead.", options: [
-      { id: "go", label: "▶️ Carry on", next: "bookService" }, { id: "call", label: "📞 Call me instead", next: "bookCallback" }, { id: "no", label: "Not right now", next: "bye" },
-    ] },
-    bookCallback: { id: "bookCallback", type: "handoff", text: "Done — I've asked the team to give you a call. 📞", reason: "Service booking: asked for a call", summary: "{{name}} started a service booking and asked to be called instead." },
+    bookService: { id: "bookService", type: "capture", text: "What would you like us to look at? A line or two is plenty.", variable: "service", next: "chooseSlot" },
     chooseSlot: { id: "chooseSlot", type: "slots", action: "book", text: "Here's what we have open — which one suits you?", noneText: "We're fully booked online at the moment, so I've passed your details to the team — someone will call you to find a time. 📞", failureText: "Sorry, I couldn't hold that time for you — I'm getting the team to book it with you directly.", next: "bookConfirm", unavailableNext: "slotsFull", failureNext: "slotHandoff" },
     slotsFull: { id: "slotsFull", type: "handoff", reason: "Service booking: no open slots online", summary: "{{name}} needs: {{service}}" },
     slotHandoff: { id: "slotHandoff", type: "handoff", reason: "Service booking: the chosen time could not be held", summary: "{{name}} needs: {{service}}" },

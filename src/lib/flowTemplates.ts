@@ -22,8 +22,8 @@ export type FlowTemplate = {
  * - READ IT BACK before anything is sent to the team, with a way to fix it.
  * - SAY WHAT HAPPENS NEXT, truthfully: by opening hours where the wait depends on them, and never "done" for an
  *   action that failed (every fallible step has its own failure route; `onFailure` catches anything else).
- * - ONE NUDGE, NOT A CHASE: the question where people drift off has a single "if no reply" route, and the nudge it
- *   leads to does not nudge again.
+ * - NEVER MESSAGES FIRST: no starter has an "if no reply" route or anything else that sends without the customer
+ *   having just written. Automatic sends stay off until the owner turns them on in the builder (Sean, 2026-11-10).
  * - HAND-OFFS CARRY A REASON (and what was captured), so staff do not have to scroll the chat to see why.
  */
 
@@ -47,19 +47,7 @@ const SERVICE_FLOW: Flow = {
     who: { id: "who", type: "condition", condition: { variable: "known", operator: "exists" }, trueNext: "service", falseNext: "name" },
     name: { id: "name", type: "capture", text: "First, who am I chatting to?", variable: "name", next: "phone" },
     phone: { id: "phone", type: "capture", text: "Thanks, {{name}}! And the best number to reach you on?", variable: "phone", format: "phone", next: "service" },
-    service: { id: "service", type: "capture", text: "What would you like us to look at? A line or two is plenty.", variable: "service", next: "slot", noReply: { minutes: 60, next: "nudge" } },
-    nudge: {
-      id: "nudge",
-      type: "choice",
-      text: "Still keen to get booked in? I can carry on where we left off, or ask the team to give you a call instead.",
-      options: [
-        { id: "go", label: "▶️ Carry on", next: "service" },
-        { id: "call", label: "📞 Call me instead", next: "callback" },
-        { id: "no", label: "Not right now", next: "later" },
-      ],
-    },
-    callback: { id: "callback", type: "handoff", text: "Done — I've asked the team to give you a call. 📞", reason: "Service booking: asked for a call", summary: "{{name}} started a service booking and asked to be called instead." },
-    later: { id: "later", type: "message", text: "No problem at all — message us here whenever you're ready. 👋", next: "end" },
+    service: { id: "service", type: "capture", text: "What would you like us to look at? A line or two is plenty.", variable: "service", next: "slot" },
     slot: { id: "slot", type: "slots", action: "book", text: "Got it. Here's what the workshop has open — which one suits you?", noneText: "The workshop is fully booked online at the moment, so I've passed your details to the team — someone will call you to find a time. 📞", failureText: "Sorry, I couldn't hold that time for you — I'm getting the team to book it with you directly.", next: "confirm", unavailableNext: "slotsFull", failureNext: "slotFallback" },
     slotsFull: { id: "slotsFull", type: "handoff", reason: "Service booking: no open slots online", summary: "{{name}} needs: {{service}}" },
     slotFallback: { id: "slotFallback", type: "handoff", reason: "Service booking: the chosen time could not be held", summary: "{{name}} needs: {{service}}" },
@@ -102,18 +90,7 @@ const SALES_FLOW: Flow = {
     demoKnown: { id: "demoKnown", type: "message", text: "Great, {{name}} — let's set that up.", next: "demoModel" },
     demoName: { id: "demoName", type: "capture", text: "Great — let's set that up. Who am I chatting to?", variable: "name", next: "demoPhone" },
     demoPhone: { id: "demoPhone", type: "capture", text: "Nice to meet you, {{name}}! What's the best number for the team to reach you on?", variable: "phone", format: "phone", next: "demoModel" },
-    demoModel: { id: "demoModel", type: "capture", text: "Which product would you like to see? If you're not sure yet, just say so.", variable: "model", next: "demoWhen", noReply: { minutes: 60, next: "demoNudge" } },
-    demoNudge: {
-      id: "demoNudge",
-      type: "choice",
-      text: "Still keen on a demo? I can carry on where we left off, or have someone from sales call you instead.",
-      options: [
-        { id: "go", label: "▶️ Carry on", next: "demoModel" },
-        { id: "call", label: "📞 Call me instead", next: "demoCall" },
-        { id: "no", label: "Not right now", next: "browsing" },
-      ],
-    },
-    demoCall: { id: "demoCall", type: "handoff", text: "Done — someone from sales will give you a call. 📞", reason: "Demo: asked for a call", summary: "{{name}} started a demo request and asked to be called instead." },
+    demoModel: { id: "demoModel", type: "capture", text: "Which product would you like to see? If you're not sure yet, just say so.", variable: "model", next: "demoWhen" },
     demoWhen: { id: "demoWhen", type: "capture", text: "Good choice. And when would suit you — this week, a Saturday morning, whenever you like?", variable: "date", next: "createDemo" },
     createDemo: { id: "createDemo", type: "booking", action: "demo", text: "Lovely — that's with the team now, {{name}}. Someone will be in touch to confirm a time.", failureText: "Sorry {{name}}, I couldn't log that on my side — I'm getting one of the team to set it up with you directly.", next: "demoDone", failureNext: "demoHandoff" },
     demoHandoff: { id: "demoHandoff", type: "handoff", reason: "Demo request could not be logged", summary: "{{name}} wants a demo of {{model}} ({{date}})." },
@@ -144,19 +121,7 @@ const LEAD_CAPTURE_FLOW: Flow = {
   onFailure: "teamHelp",
   nodes: {
     welcome: { id: "welcome", type: "message", text: "{{greeting}} Happy to help — I'll get the right person onto it.", next: "message" },
-    message: { id: "message", type: "capture", text: "What can we help you with? A sentence or two is perfect.", variable: "message", next: "who", noReply: { minutes: 60, next: "nudge" } },
-    nudge: {
-      id: "nudge",
-      type: "choice",
-      text: "Still there? No rush — I can carry on whenever you're ready, or ask someone to get in touch with you.",
-      options: [
-        { id: "go", label: "▶️ Carry on", next: "message" },
-        { id: "call", label: "📞 Contact me", next: "nudgeHandoff" },
-        { id: "no", label: "Not right now", next: "later" },
-      ],
-    },
-    nudgeHandoff: { id: "nudgeHandoff", type: "handoff", text: "Done — I've asked the team to get in touch. 📞", reason: "Enquiry: asked to be contacted" },
-    later: { id: "later", type: "message", text: "No problem at all — message us here whenever you're ready. 👋", next: "end" },
+    message: { id: "message", type: "capture", text: "What can we help you with? A sentence or two is perfect.", variable: "message", next: "who" },
     who: { id: "who", type: "condition", condition: { variable: "known", operator: "exists" }, trueNext: "phone", falseNext: "name" },
     name: { id: "name", type: "capture", text: "Got it. And who am I chatting to?", variable: "name", next: "phone" },
     phone: { id: "phone", type: "capture", text: "Thanks, {{name}}! What's the best number for the team to reach you on?", variable: "phone", format: "phone", next: "emailAsk" },
@@ -336,29 +301,17 @@ const FRONT_DESK_FLOW: Flow = {
  * reply — then asks only for what is still missing, reads it back and sends it to the team.
  *
  * Needs the AI switched on. Without it (or when it reads nothing) the same flow simply asks for the name and number
- * one at a time, so nobody is ever stuck. {{message}} is always the customer's own words; {{service}}, when the
- * assistant produced it, is its one-line summary — the enquiry uses the summary first.
+ * one at a time, so nobody is ever stuck. The enquiry carries {{message}}, the customer's own words exactly as they
+ * approved them at the read-back — never an AI summary, which could describe an earlier version after a fix.
  */
 const SMART_ENQUIRY_FLOW: Flow = {
   start: "hello",
   onFailure: "teamHelp",
   nodes: {
     hello: { id: "hello", type: "message", text: "{{greeting}} Happy to help.", next: "details" },
-    details: { id: "details", type: "capture", text: "Tell me what you're looking for, in your own words. If you add your name and the best number to reach you, I won't need to ask twice. 🙂", variable: "details", next: "keepWords", noReply: { minutes: 60, next: "nudge" } },
-    nudge: {
-      id: "nudge",
-      type: "choice",
-      text: "Still there? No rush — I can carry on whenever you're ready, or ask someone to get in touch with you.",
-      options: [
-        { id: "go", label: "▶️ Carry on", next: "details" },
-        { id: "call", label: "📞 Contact me", next: "nudgeHandoff" },
-        { id: "no", label: "Not right now", next: "later" },
-      ],
-    },
-    nudgeHandoff: { id: "nudgeHandoff", type: "handoff", text: "Done — I've asked the team to get in touch. 📞", reason: "Enquiry: asked to be contacted" },
-    later: { id: "later", type: "message", text: "No problem at all — message us here whenever you're ready. 👋", next: "end" },
+    details: { id: "details", type: "capture", text: "Tell me what you're looking for, in your own words. If you add your name and the best number to reach you, I won't need to ask twice. 🙂", variable: "details", next: "keepWords" },
     keepWords: { id: "keepWords", type: "set", variable: "message", value: "{{details}}", next: "read" },
-    read: { id: "read", type: "extract", sourceVariable: "details", instruction: "A customer is making an enquiry. name = the customer's own name. phone = the customer's contact number. email = the customer's email address. service = one short sentence saying what they want.", fields: ["name", "phone", "email", "service"], next: "hasName", failureNext: "hasName" },
+    read: { id: "read", type: "extract", sourceVariable: "details", instruction: "A customer is making an enquiry. name = the customer's own name. phone = the customer's contact number. email = the customer's email address.", fields: ["name", "phone", "email"], next: "hasName", failureNext: "hasName" },
     hasName: { id: "hasName", type: "condition", condition: { variable: "name", operator: "exists" }, trueNext: "hasPhone", falseNext: "askName" },
     askName: { id: "askName", type: "capture", text: "Thanks for that! Who am I chatting to?", variable: "name", next: "hasPhone" },
     hasPhone: { id: "hasPhone", type: "condition", condition: { variable: "phone", operator: "exists" }, trueNext: "check", falseNext: "askPhone" },
@@ -472,7 +425,7 @@ export const FLOW_TEMPLATES: FlowTemplate[] = [
   {
     id: "service",
     name: "Service booking",
-    description: "Take the job details, offer real workshop availability, and nudge once — with a call back — if the customer drifts off.",
+    description: "Take the job details, skip what you already know, and offer real workshop availability — or pass it to the team when nothing is open.",
     definition: SERVICE_FLOW,
   },
   {
