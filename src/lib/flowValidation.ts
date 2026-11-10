@@ -37,7 +37,9 @@ function optionsOf(node: unknown): FlowOption[] {
 function refs(node: FlowNode): string[] {
   // A question's "no reply" route is an edge like any other (lib/flowNoReply).
   const noReply = str((node as { noReply?: { next?: unknown } }).noReply?.next);
-  if (node.type === "choice") return [...optionsOf(node).flatMap((option) => option.next ? [option.next] : []), ...(noReply ? [noReply] : [])];
+  // So is a menu's "anything else" route (flow.ts elseNext).
+  const elseNext = str((node as { elseNext?: unknown }).elseNext);
+  if (node.type === "choice") return [...optionsOf(node).flatMap((option) => option.next ? [option.next] : []), ...(noReply ? [noReply] : []), ...(elseNext ? [elseNext] : [])];
   if (node.type === "condition") return [node.trueNext, node.falseNext].filter((value): value is string => Boolean(str(value)));
   if (node.type === "switch") return [...node.cases.map((item) => item.next), node.defaultNext].filter((value): value is string => Boolean(str(value)));
   if (node.type === "ai") return str(node.handoffNext) ? [str(node.handoffNext)] : [];
@@ -175,6 +177,8 @@ export function validateFlow(flow: Flow, channels: FlowChannel[] = ["whatsapp"],
   }
 
   const captured = new Set([...BUILTIN_VARS, ...shared]);
+  /** Values so far written only by an AI extract step — see the reuse check below. */
+  const aiReadOnly = new Set<string>();
   const hasBookingLookup = entries.some(([, node]) => node?.type === "booking" && node.action === "lookup");
   for (const [key, rawNode] of entries) {
     if (!rawNode || typeof rawNode !== "object") { issues.push(issue("error", "node.shape", `Node “${key}” is malformed.`, key)); continue; }
@@ -193,7 +197,14 @@ export function validateFlow(flow: Flow, channels: FlowChannel[] = ["whatsapp"],
         if (!/^\w+$/.test(variable)) issues.push(issue("error", "variable.invalid", "Captured variable names must contain only letters, numbers or underscores.", id));
         // Read-only: the shared value is put back every turn, so an answer saved over it would vanish.
         else if (shared.has(variable)) issues.push(issue("error", "variable.shared", `{{${variable}}} is a shared value (Flows → Shared values) — save this under another name.`, id));
-        else { if (captured.has(variable) && !BUILTIN_VARS.has(variable)) issues.push(issue("warning", "variable.reused", `Variable {{${variable}}} is captured more than once.`, id)); captured.add(variable); }
+        else {
+          // An AI extract and ONE question for the same value are a pair, not a mistake: "read it out of what they
+          // wrote, and ask only if it was not there" is what the extract step is for. A third writer still warns.
+          const fromAi = node.type === "extract";
+          if (captured.has(variable) && !BUILTIN_VARS.has(variable) && !fromAi && !aiReadOnly.has(variable)) issues.push(issue("warning", "variable.reused", `Variable {{${variable}}} is captured more than once.`, id));
+          if (fromAi && !captured.has(variable)) aiReadOnly.add(variable); else aiReadOnly.delete(variable);
+          captured.add(variable);
+        }
       }
       // A writing node whose variable is EMPTY writes nowhere at all.
       if ((node.type === "capture" || node.type === "captureFile" || node.type === "set") && !str(node.variable)) issues.push(issue("error", "variable.invalid", "Captured variable names must contain only letters, numbers or underscores.", id));
@@ -307,6 +318,7 @@ export function validateFlow(flow: Flow, channels: FlowChannel[] = ["whatsapp"],
       if (!(minutes >= NO_REPLY_MIN_MINUTES && minutes <= NO_REPLY_MAX_MINUTES)) issues.push(issue("error", "no_reply.minutes", `“If no reply” must wait between ${NO_REPLY_MIN_MINUTES} minutes and ${NO_REPLY_MAX_MINUTES / 60} hours — WhatsApp only lets the bot write within 24 hours of the customer's last message.`, id));
       if (!str(node.noReply.next)) issues.push(issue("warning", "no_reply.route", "Choose where to go if they don't reply — until then nothing happens when they go quiet.", id));
     }
+    if (node.type === "choice" && node.elseNext !== undefined && !str(node.elseNext)) issues.push(issue("warning", "choice.else_route", "Choose where to go if they type something else — until then the menu is simply shown again.", id));
     if (node.type === "crm") {
       const action = str(node.action);
       if (!["tag", "assign", "stage"].includes(action)) issues.push(issue("error", "crm.action", "Update the CRM needs an action: tag, salesperson or stage.", id));

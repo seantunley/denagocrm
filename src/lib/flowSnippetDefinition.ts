@@ -14,7 +14,7 @@ function remapNode(node: FlowNode, idMap: Map<string, string>): FlowNode {
   const next = (id?: string) => id ? idMap.get(id) : undefined;
   const id = idMap.get(node.id)!;
   if (node.type === "choice") {
-    return { ...node, id, options: node.options.map((option) => ({ ...option, next: next(option.next) })) };
+    return { ...node, id, options: node.options.map((option) => ({ ...option, next: next(option.next) })), ...(node.elseNext ? { elseNext: next(node.elseNext) } : {}) };
   }
   if (node.type === "condition") {
     return { ...node, id, trueNext: next(node.trueNext), falseNext: next(node.falseNext) };

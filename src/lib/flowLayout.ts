@@ -15,7 +15,7 @@ export function nextSteps(node: FlowNode): string[] {
   if (node.type === "choice") out.push(...node.options.map((o) => o.next));
   if (node.type === "switch") out.push(...node.cases.map((c) => c.next));
   if (node.type === "goto") out.push(node.target);
-  out.push(n.next, n.trueNext, n.falseNext, n.openNext, n.closedNext, n.defaultNext, n.handoffNext, n.unavailableNext, n.failureNext);
+  out.push(n.next, n.trueNext, n.falseNext, n.openNext, n.closedNext, n.defaultNext, n.handoffNext, n.elseNext, n.unavailableNext, n.failureNext);
   // A question's "If they don't reply" route (#988) is a way on like any other.
   out.push((n.noReply as { next?: unknown } | undefined)?.next);
   return [...new Set(out.filter((id): id is string => typeof id === "string" && id !== ""))];

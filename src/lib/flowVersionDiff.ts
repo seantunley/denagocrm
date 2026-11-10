@@ -59,6 +59,7 @@ function connections(flow: Flow): Connection[] {
     add("unavailable", "if none available ", n.unavailableNext);
     add("handoff", "on handoff ", n.handoffNext);
     add("default", "otherwise ", n.defaultNext);
+    add("else", "on anything else typed ", n.elseNext);
     if (node.type === "choice") node.options.forEach((o) => add(`opt:${o.id}`, `on “${o.label}” `, o.next));
     if (node.type === "switch") node.cases.forEach((c) => add(`case:${c.id}`, `on “${c.label || c.value}” `, c.next));
     if (node.type === "goto") add("goto", "jumps ", node.target);
@@ -66,7 +67,7 @@ function connections(flow: Flow): Connection[] {
   return out;
 }
 
-const WIRING = new Set(["next", "trueNext", "falseNext", "failureNext", "unavailableNext", "handoffNext", "defaultNext", "target", "targetLabel"]);
+const WIRING = new Set(["next", "trueNext", "falseNext", "failureNext", "unavailableNext", "handoffNext", "defaultNext", "elseNext", "target", "targetLabel"]);
 const FIELD_NAMES: Record<string, string> = {
   text: "wording", options: "choices", cases: "cases", variable: "saved as", value: "value", format: "answer format",
   url: "address", method: "method", headers: "headers", body: "request body", saveAs: "saved as", caption: "caption",
