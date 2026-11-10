@@ -4,6 +4,7 @@ import ConfirmActionDialog from "@/components/ConfirmActionDialog";
 import InboxReply from "@/components/InboxReply";
 import InboxSplit, { type InboxSplitItem } from "@/components/InboxSplit";
 import CreateQuoteButton from "@/components/quotes/CreateQuoteButton";
+import DealStageSelect from "@/components/inbox/DealStageSelect";
 import { markThreadRead, setThreadArchived } from "@/app/actions/communications";
 import { markAndBlockConversationSpam, markConversationSpam } from "@/app/actions/inboundSpam";
 import { SaveForm, SaveButton } from "@/components/SaveForm";
@@ -54,7 +55,9 @@ export type InboxDeal = {
   id: string;
   title: string;
   status: string;
-  stage: { name: string; color: string };
+  stage: { id: string; name: string; color: string };
+  /** Open stages it can be moved to from the rail — empty when it isn't open or the viewer may not move stages. */
+  stageOptions: { id: string; name: string }[];
   /** Formatted in the workspace's money format. */
   value: string | null;
   contactId: string | null;
@@ -86,7 +89,9 @@ function DealRail({ thread, deal, canCreateQuote, canBookTestDrive }: { thread: 
         <div className="flex items-center justify-between gap-2">
           <dt className="text-muted-foreground">Stage</dt>
           <dd className="flex min-w-0 items-center gap-1.5">
-            {deal.status === "open"
+            {deal.status === "open" && deal.stageOptions.length > 1
+              ? <DealStageSelect key={deal.stage.id} leadId={deal.id} stageId={deal.stage.id} color={deal.stage.color} stages={deal.stageOptions} />
+              : deal.status === "open"
               ? <><span className="size-2 shrink-0 rounded-full" style={{ backgroundColor: deal.stage.color }} /><span className="truncate">{deal.stage.name}</span></>
               : <StatusPill tone={deal.status === "won" ? "success" : "neutral"}>{deal.status}</StatusPill>}
           </dd>

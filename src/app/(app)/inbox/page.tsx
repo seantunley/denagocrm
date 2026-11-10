@@ -17,6 +17,7 @@ import { loadInboxComms, olderTurns } from "@/lib/inboxQuery";
 import { deliveryStateForMessages } from "@/lib/botOutbox";
 import { collaborationForThreads } from "@/lib/inboxCollaboration";
 import { listActingTenantStaff } from "@/lib/tenantActor";
+import { listPipelineStages } from "@/lib/pipelines";
 import { getRegionalSettings, resolveIntegrationBundle } from "@/lib/settings";
 import { formatDateTime, formatZAR } from "@/lib/format";
 import { withCurrency } from "@/lib/currencyRules";
@@ -91,12 +92,13 @@ export default async function InboxPage({ searchParams }: { searchParams: Promis
   ]);
   // THE DEAL BESIDE EACH CONVERSATION (the right rail) — only deals this person may open.
   const leadIds = [...new Set([...threadList, ...archivedList].map((thread) => thread.leadId).filter((id): id is string => Boolean(id)))];
-  const [openableLeadIds, money, canCreateQuote, automotiveOn, canManageActivities] = await Promise.all([
+  const [openableLeadIds, money, canCreateQuote, automotiveOn, canManageActivities, canChangeStage] = await Promise.all([
     getAccessibleLeadIds(user),
     getRegionalSettings(),
     hasPermission(user, "quotes.create"),
     isModuleEnabled("automotive"),
     hasPermission(user, "activities.manage"),
+    hasPermission(user, "leads.change_stage"),
   ]);
   const openable = openableLeadIds === null ? null : new Set(openableLeadIds);
   const dealIds = openable === null ? leadIds : leadIds.filter((id) => openable.has(id));
@@ -105,16 +107,22 @@ export default async function InboxPage({ searchParams }: { searchParams: Promis
         where: { id: { in: dealIds }, deletedAt: null },
         select: {
           id: true, title: true, status: true, valueCents: true, currency: true, contactId: true,
-          stage: { select: { name: true, color: true } },
+          stage: { select: { id: true, name: true, color: true, pipelineId: true } },
           activities: { where: { status: "planned", availabilityBlock: false }, orderBy: { dueDate: "asc" }, take: 1, select: { summary: true, dueDate: true } },
         },
       })
     : [];
+  // The stages an open deal can be moved to from the rail: its own pipeline's open stages, for someone who may move
+  // stages. Won and lost stay with Mark won / Mark lost, as on the board; moveLead re-checks everything.
+  const pipelineIds = canChangeStage ? [...new Set(dealRows.filter((deal) => deal.status === "open").map((deal) => deal.stage.pipelineId))] : [];
+  const openStages = new Map(await Promise.all(pipelineIds.map(async (pipelineId) =>
+    [pipelineId, (await listPipelineStages(pipelineId)).filter((stage) => !stage.isClosed).map(({ id, name }) => ({ id, name }))] as const)));
   const deals = new Map<string, InboxDeal>(dealRows.map((deal) => [deal.id, {
     id: deal.id,
     title: deal.title,
     status: deal.status,
-    stage: deal.stage,
+    stage: { id: deal.stage.id, name: deal.stage.name, color: deal.stage.color },
+    stageOptions: deal.status === "open" ? openStages.get(deal.stage.pipelineId) ?? [] : [],
     // In the deal's own currency (multicurrency module; NULL = the base).
     value: deal.valueCents ? formatZAR(deal.valueCents, withCurrency(money, deal.currency)) : null,
     contactId: deal.contactId,
