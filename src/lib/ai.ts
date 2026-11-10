@@ -30,17 +30,29 @@ export async function aiCheckDraft(input: {
   draft: string;
   customerName?: string | null;
   context?: string | null;
+  /**
+   * Names of the files going with the message. `undefined` = this surface can't
+   * say (the attachment check is then skipped rather than guessed); `[]` = none.
+   */
+  attachments?: string[];
 }): Promise<{ issues: string[] } | { error: string }> {
   // Whose messages these are: the workspace's own business, not Denago's.
   const company = (await getCompanyProfile().catch(() => null))?.name?.trim() || "a South African business";
+  const known = input.attachments !== undefined;
+  const attachmentRule = known
+    ? " the message saying something is attached when the 'Attached files' list is (none) — if any file is listed, a mention of an attachment is fine and must NOT be flagged,"
+    : "";
+  const attachedLine = known
+    ? `Attached files: ${input.attachments!.length ? input.attachments!.join(", ") : "(none)"}\n`
+    : "";
 
   try {
     const answer = await aiText({
       scope: "ai-check",
       system:
         `You proofread short outbound messages for ${company}. Check ONLY for:` +
-        " spelling/grammar errors (South African English), the customer's name spelled differently from the record, numbers or prices that look mistyped, references to attachments when none are mentioned as attached, and accidentally unprofessional tone. Respond with STRICT JSON: {\"issues\": [\"...\"]} — each issue one short sentence. If the message is fine, respond {\"issues\": []}. Never rewrite the message, never invent issues.",
-      prompt: `Customer on record: ${input.customerName ?? "(unknown)"}\n${
+        ` spelling/grammar errors (South African English), the customer's name spelled differently from the record, numbers or prices that look mistyped,${attachmentRule} and accidentally unprofessional tone. Respond with STRICT JSON: {"issues": ["..."]} — each issue one short sentence. If the message is fine, respond {"issues": []}. Never rewrite the message, never invent issues.`,
+      prompt: `Customer on record: ${input.customerName ?? "(unknown)"}\n${attachedLine}${
         input.context ? `Context: ${input.context}\n` : ""
       }\nDraft message:\n"""\n${input.draft.slice(0, 3000)}\n"""`,
       maxTokens: 500,
