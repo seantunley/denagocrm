@@ -9,7 +9,10 @@ import { contactName } from "@/lib/format";
 import { asActionResult, refuse } from "@/lib/actionResult";
 
 // Text profile fields the winner backfills from a loser only when it has none.
-const PROFILE_FIELDS = ["email", "phone", "whatsapp", "company", "address", "suburb", "city", "province", "postalCode", "notes"] as const;
+// xeroContactId is the customer's contact in XERO (lib/xero.ts), not a CRM contact:
+// the kept contact inherits the link if it has none, so its next invoice goes to the
+// Xero contact the duplicate was already invoiced under.
+const PROFILE_FIELDS = ["email", "phone", "whatsapp", "company", "address", "suburb", "city", "province", "postalCode", "notes", "xeroContactId"] as const;
 // Unique channel identities — must live on exactly one contact (or nowhere).
 // xUserId is unique per tenant rather than globally, but a merge never crosses
 // tenants, so the same move-or-drop rule holds; left behind, the deleted

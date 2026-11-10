@@ -32,6 +32,10 @@ const SPECIAL = new Set([
   "PortalPreference.contactId", // PK is contactId — merged conservatively (AND), POPIA
   "PortalAccessGrant.viewerContactId", // partial-unique indexes — mergePortalGrants
   "PortalAccessGrant.grantedContactId",
+  // Xero's contact ID, not a CRM contact. On a Contact the kept one inherits it (PROFILE_FIELDS);
+  // a fleet's is the fleet's own account in Xero and has nothing to do with merging people.
+  "Contact.xeroContactId",
+  "Fleet.xeroContactId",
 ]);
 
 test("every contact column in the schema is moved (or deliberately handled) by the merge", () => {
@@ -45,6 +49,7 @@ test("every contact column in the schema is moved (or deliberately handled) by t
 
 test("the specially-handled columns really are handled", () => {
   assert.match(merge, /await mergePortalGrants\(tx, keepId, loser\.id\);/);
+  assert.match(merge, /const PROFILE_FIELDS = \[[^\]]*"xeroContactId"[^\]]*\]/, "the kept contact inherits the duplicate's Xero link");
   assert.match(merge, /tx\.portalPreference\.findUnique\(\{ where: \{ contactId: loser\.id \} \}\)/);
 });
 
