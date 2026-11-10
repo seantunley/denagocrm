@@ -1532,6 +1532,16 @@ model Quote {
   /// the quote number with a prefix (Sean, 2026-10-07). Issued once, when the
   /// quote is accepted (lib/invoiceNumber.ts), and never reused.
   invoiceNumber        Int?
+  /// The invoice Xero made for this quote ("Send to Xero", lib/xero.ts). Xero numbers its own invoices, so
+  /// xeroInvoiceNumber is NOT invoiceNumber above — both are kept. xeroStatus is Xero's (DRAFT, AUTHORISED,
+  /// PAID, VOIDED…) as last read, or "SENDING" while a send holds the quote. xeroTotalCents is Xero's own
+  /// total, so a VAT difference between the two systems can be shown rather than missed.
+  xeroInvoiceId        String?
+  xeroInvoiceNumber    String?
+  xeroStatus           String?
+  xeroTotalCents       Int?
+  xeroSentAt           DateTime?
+  xeroSentByName       String?
   depositPaidAt        DateTime?
   depositPaidCents     Int? // amount actually received; null = recorded before amounts were captured
   deliveryScheduledFor DateTime?

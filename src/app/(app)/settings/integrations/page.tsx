@@ -37,7 +37,17 @@ export const dynamic = "force-dynamic";
  * Always the viewer's own active tenant. The platform owner additionally sees
  * the owner-only rows (WorkspaceIntegrationRows) that used to fill the old tab.
  */
-export default async function IntegrationsPage() {
+/** What the Xero connect round trip came back with (?xero=…), in words. */
+const XERO_NOTICES: Record<string, string> = {
+  connected: "Xero is connected.",
+  "missing-client": "Save the Xero client ID and secret first, then press Connect Xero.",
+  denied: "Xero sign-in was cancelled.",
+  invalid: "That Xero sign-in could not be read — please try again.",
+  failed: "Xero sign-in could not be completed. Check the client ID, secret and redirect URI in your Xero app, then try again.",
+};
+
+export default async function IntegrationsPage({ searchParams }: { searchParams?: Promise<{ xero?: string }> }) {
+  const xeroNotice = XERO_NOTICES[(await searchParams)?.xero ?? ""] ?? null;
   // Entirely sensitive (credential management) — gate the whole page.
   // Uses requireTenantOwner so a tenant's own provisioned owner can manage
   // their credentials without needing the global platform owner role (a
@@ -182,6 +192,23 @@ export default async function IntegrationsPage() {
                     <p className="mt-1 text-xs text-muted-foreground">OAuth securely grants DM read/write plus mention and reply capture. Tokens and the account mapping are stored only for the acting tenant.</p>
                     <a href="/api/integrations/x/connect" className="btn-primary btn-sm mt-3 inline-flex">
                       {hasOverride.X_ACCOUNT_ID ? "Reconnect X" : "Connect X account"}
+                    </a>
+                  </div>
+                )}
+
+                {integration.id === "xero" && (
+                  <div className="mb-5 rounded-lg border border-border bg-background/40 p-4">
+                    <p className="text-sm font-medium">
+                      {effectiveShown.XERO_ORG_NAME ? `Connected to ${effectiveShown.XERO_ORG_NAME}` : "Connect your Xero organisation"}
+                    </p>
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      Save the client ID and secret below first. Connecting lets the Deliveries board send an accepted quote to
+                      Xero as a <b>draft</b> invoice and keep Xero&apos;s invoice number on the quote. Nothing is approved or
+                      emailed from the CRM — you finish the invoice in Xero.
+                    </p>
+                    {xeroNotice && <p className="mt-2 text-xs text-amber-300">{xeroNotice}</p>}
+                    <a href="/api/integrations/xero/connect" className="btn-primary btn-sm mt-3 inline-flex">
+                      {hasOverride.XERO_TENANT_ID ? "Reconnect Xero" : "Connect Xero"}
                     </a>
                   </div>
                 )}

@@ -42,6 +42,10 @@ const SECRET_KEYS = new Set([
   "X_REFRESH_TOKEN",
   "X_WEBHOOK_SECRET",
   "XAI_API_KEY",
+  // Xero (lib/xero.ts): the app's secret, and the organisation's refresh token —
+  // which, until it is used or expires, can write invoices into the books.
+  "XERO_CLIENT_SECRET",
+  "XERO_REFRESH_TOKEN",
   // A workspace's ChatGPT sign-in (lib/codex.ts). The refresh token is as good
   // as the account's password for anything the Codex API can do, and the
   // pending device login can be completed by whoever holds it.
