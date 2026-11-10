@@ -41,7 +41,12 @@ export type HttpOutcome = ActionOutcome & { status?: number; body?: string };
 export type FlowNode = (
   | { id: string; type: "message"; text: string; next?: string }
   /** `noReply`: if the customer doesn't answer within `minutes`, carry on at `next` (lib/flowNoReply; WhatsApp). */
-  | { id: string; type: "choice"; text: string; options: FlowOption[]; noReply?: NoReply }
+  /**
+   * `elseNext`: where a TYPED reply that matches no option goes — e.g. the AI step, which answers what they wrote —
+   * instead of the same menu being shown again. A person asked "what do you want?" who answers in their own words
+   * expects a reply to those words, not the question repeated. Taps, and empty messages, never take it.
+   */
+  | { id: string; type: "choice"; text: string; options: FlowOption[]; noReply?: NoReply; elseNext?: string }
   | { id: string; type: "capture"; text: string; variable: string; format?: CaptureFormat; next?: string; noReply?: NoReply }
   | { id: string; type: "captureFile"; text: string; variable: string; next?: string; noReply?: NoReply }
   | { id: string; type: "image"; url: string; caption?: string; next?: string }
@@ -231,6 +236,13 @@ const FORMAT_RE: Record<string, RegExp> = {
   number: /^\d+$/,
   date: /\d/,
 };
+/** What a capture step says when the answer is not in its format — asked the way a person would ask again. */
+const CAPTURE_RETRY: Partial<Record<CaptureFormat, string>> = {
+  email: "Hmm, that doesn't look like an email address — could you type it again?",
+  phone: "Hmm, that doesn't look like a phone number — could you send it again, just the digits?",
+  number: "I just need a number for that one — could you send it again?",
+  date: "I couldn't read a date in that — could you send it again, e.g. 14 March?",
+};
 function validateCapture(format: CaptureFormat | undefined, text: string): boolean {
   if (!format || format === "text") return text.trim().length > 0;
   return FORMAT_RE[format]?.test(text.trim()) ?? true;
@@ -368,10 +380,14 @@ function matchChoice(node: Extract<FlowNode, { type: "choice" }>, input: FlowInp
     const optId = input.choiceId.slice(node.id.length + 1);
     return node.options.find((o) => o.id === optId)?.next ?? null;
   }
-  const t = input.text.trim().toLowerCase();
-  const asNum = parseInt(t, 10);
-  if (!Number.isNaN(asNum) && node.options[asNum - 1]) return node.options[asNum - 1].next ?? null;
-  return node.options.find((o) => t && o.label.toLowerCase().replace(/[^a-z0-9 ]/g, "").includes(t))?.next ?? null;
+  // A typed reply picks an option only when it IS that option: the whole reply a number ("2", not "2 seater price?"),
+  // or words that start the label's own words ("price" → "Prices", but "ok" is not "B-ok-k a service"). Anything
+  // else is a question in their own words, for the semantic router or the menu's "anything else" route.
+  const raw = input.text.trim();
+  if (/^\d+$/.test(raw) && node.options[Number(raw) - 1]) return node.options[Number(raw) - 1].next ?? null;
+  const words = (s: string) => ` ${s.toLowerCase().replace(/[^a-z0-9 ]/g, " ").replace(/\s+/g, " ").trim()}`;
+  const t = words(raw);
+  return node.options.find((o) => t.trim() && words(o.label).includes(t))?.next ?? null;
 }
 async function semanticChoice(node: Extract<FlowNode, { type: "choice" }>, input: FlowInput, vars: Record<string, string>, ctx: FlowCtx) {
   if (!ctx.routeChoice || input.choiceId || !input.text.trim()) return null;
@@ -502,21 +518,24 @@ export async function runFlow(flow: Flow, session: FlowSession, input: FlowInput
     } else if (cur?.type === "choice") {
       nodeId = matchChoice(cur, input);
       if (!nodeId) nodeId = await semanticChoice(cur, input, vars, ctx);
+      // Typed something that is not on the menu: the menu's "anything else" route, when it has one (see elseNext).
+      if (!nodeId && cur.elseNext && flow.nodes[cur.elseNext] && !input.choiceId && input.text.trim()) nodeId = cur.elseNext;
       if (!nodeId) {
         messages.push({ type: "choice", text: interpolate(cur.text, vars), options: cur.options.map((o) => ({ id: choiceId(cur.id, o.id), label: o.label, description: o.description })) });
         return { messages, session: { nodeId: cur.id, vars }, handedOff: false };
       }
     } else if (cur?.type === "capture") {
       if (!validateCapture(cur.format, input.text)) {
-        const hint = cur.format === "email" ? " (please enter a valid email)" : cur.format === "phone" ? " (please enter a valid phone number)" : cur.format === "number" ? " (please enter a number)" : "";
-        messages.push({ type: "text", text: interpolate(cur.text, vars) + hint });
+        // Said the way a person would say it: what was wrong with the answer, not the whole question again with a
+        // bracket on the end. An empty answer has nothing to correct, so the question is simply asked again.
+        messages.push({ type: "text", text: CAPTURE_RETRY[cur.format ?? "text"] ?? interpolate(cur.text, vars) });
         return { messages, session: { nodeId: cur.id, vars }, handedOff: false };
       }
       vars[cur.variable] = input.text.trim();
       nodeId = cur.next ?? null;
     } else if (cur?.type === "captureFile") {
       if (!input.fileUrl) {
-        messages.push({ type: "text", text: interpolate(cur.text, vars) + " (please attach a photo or file)" });
+        messages.push({ type: "text", text: "Nothing came through on my side — could you attach the photo or file and send it again? 📎" });
         return { messages, session: { nodeId: cur.id, vars }, handedOff: false };
       }
       vars[cur.variable] = input.fileUrl;
@@ -708,24 +727,44 @@ export async function runFlow(flow: Flow, session: FlowSession, input: FlowInput
   return { messages, session: null, handedOff: false, endedAt: lastNodeId };
 }
 
+/**
+ * The general assistant — the "General assistant" starter, and what a workspace that has never published a flow runs.
+ *
+ * Written to talk the way a person at the front desk would (2026-11-10):
+ * - a typed question at a menu is answered (elseNext → the assistant), not met with the same menu again;
+ * - a customer we already know is not asked who they are or for a number we already hold;
+ * - "talk to someone" says what will actually happen, by whether the business is open right now;
+ * - every hand-off tells staff why, so nobody has to scroll the chat to find out.
+ * It never messages first: nothing is sent unless the customer has just written (no "if no reply" nudge — Sean,
+ * 2026-11-10: automatic sends stay off until the owner turns them on in the builder).
+ */
 export const DEFAULT_FLOW: Flow = {
   start: "welcome",
+  onFailure: "teamHelp",
   nodes: {
-    welcome: { id: "welcome", type: "choice", text: "{{greeting}} How can we help today?", options: [
-      { id: "prices", label: "💰 Prices", next: "showPrices" }, { id: "book", label: "🔧 Book a service", next: "bookName" }, { id: "chat", label: "💬 Chat to us", next: "aiChat" },
+    welcome: { id: "welcome", type: "choice", text: "{{greeting}} What can I do for you today? Tap an option, or just type your question.", elseNext: "aiChat", options: [
+      { id: "prices", label: "💰 Prices", next: "showPrices" }, { id: "book", label: "🔧 Book a service", next: "bookWho" }, { id: "human", label: "🙋 Talk to someone", next: "human" },
     ] },
     showPrices: { id: "showPrices", type: "answer", answerSource: "pricelist", next: "afterPrices" },
-    afterPrices: { id: "afterPrices", type: "choice", text: "Anything else?", options: [
-      { id: "chat", label: "💬 Ask a question", next: "aiChat" }, { id: "menu", label: "🏠 Main menu", next: "welcome" }, { id: "done", label: "👍 No thanks", next: "bye" },
+    afterPrices: { id: "afterPrices", type: "choice", text: "Anything you'd like to know more about? Just ask — or pick one of these.", elseNext: "aiChat", options: [
+      { id: "chat", label: "💬 Ask a question", next: "aiChat" }, { id: "menu", label: "🏠 Main menu", next: "welcome" }, { id: "done", label: "👍 All good, thanks", next: "bye" },
     ] },
-    bookName: { id: "bookName", type: "capture", text: "Sure — let's get you booked in. What's your name?", variable: "name", next: "bookPhone" },
-    bookPhone: { id: "bookPhone", type: "capture", text: "Thanks {{name}}! What's the best contact number?", variable: "phone", format: "phone", next: "bookService" },
-    bookService: { id: "bookService", type: "capture", text: "What do you need us to help with?", variable: "service", next: "chooseSlot" },
-    chooseSlot: { id: "chooseSlot", type: "slots", action: "book", text: "Here are our next available service times — pick one:", noneText: "We're fully booked online just now — I've logged your request and the team will call you to find a time. 📞", next: "bookConfirm", unavailableNext: "slotHandoff", failureNext: "slotHandoff" },
-    slotHandoff: { id: "slotHandoff", type: "handoff", text: "I couldn't hold a time for you — the team will call you to book it." },
-    bookConfirm: { id: "bookConfirm", type: "message", text: "You're booked, {{name}}! 🛠 {{slot}}. We'll see you then — message *menu* if anything changes.", next: "end" },
+    bookWho: { id: "bookWho", type: "condition", condition: { variable: "known", operator: "exists" }, trueNext: "bookKnown", falseNext: "bookName" },
+    bookKnown: { id: "bookKnown", type: "message", text: "Sure thing, {{name}} — let's get you booked in.", next: "bookService" },
+    bookName: { id: "bookName", type: "capture", text: "Sure — let's get you booked in. First, who am I chatting to?", variable: "name", next: "bookPhone" },
+    bookPhone: { id: "bookPhone", type: "capture", text: "Thanks, {{name}}! What's the best number to reach you on?", variable: "phone", format: "phone", next: "bookService" },
+    bookService: { id: "bookService", type: "capture", text: "What would you like us to look at? A line or two is plenty.", variable: "service", next: "chooseSlot" },
+    chooseSlot: { id: "chooseSlot", type: "slots", action: "book", text: "Here's what we have open — which one suits you?", noneText: "We're fully booked online at the moment, so I've passed your details to the team — someone will call you to find a time. 📞", failureText: "Sorry, I couldn't hold that time for you — I'm getting the team to book it with you directly.", next: "bookConfirm", unavailableNext: "slotsFull", failureNext: "slotHandoff" },
+    slotsFull: { id: "slotsFull", type: "handoff", reason: "Service booking: no open slots online", summary: "{{name}} needs: {{service}}" },
+    slotHandoff: { id: "slotHandoff", type: "handoff", reason: "Service booking: the chosen time could not be held", summary: "{{name}} needs: {{service}}" },
+    bookConfirm: { id: "bookConfirm", type: "message", text: "All set, {{name}} — you're booked for {{slot}}. 🛠", next: "bookAfter" },
+    bookAfter: { id: "bookAfter", type: "message", text: "If anything changes before then, just message us here. See you soon!", next: "end" },
+    human: { id: "human", type: "hours", openNext: "humanOpen", closedNext: "humanClosed" },
+    humanOpen: { id: "humanOpen", type: "handoff", text: "No problem — I'm getting one of the team for you now. They'll reply right here. 🙌", reason: "Asked to talk to a person" },
+    humanClosed: { id: "humanClosed", type: "handoff", text: "We're closed at the moment, so I've left a note for the team — they'll reply right here as soon as we're back.", reason: "Asked to talk to a person (after hours)" },
     aiChat: { id: "aiChat", type: "ai" },
-    bye: { id: "bye", type: "message", text: "Cheers! Message *menu* any time to start again. 🛺", next: "end" },
+    teamHelp: { id: "teamHelp", type: "handoff", text: "Sorry — something went wrong on my side. I'm getting one of the team to help you from here.", reason: "A step in the flow failed" },
+    bye: { id: "bye", type: "message", text: "No problem at all! I'm here whenever you need — just say hi. 👋", next: "end" },
     end: { id: "end", type: "end" },
   },
 };

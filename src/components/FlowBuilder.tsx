@@ -277,6 +277,11 @@ function NodeCard({ data, selected }: NodeProps) {
               <Handle type="source" position={Position.Right} id={`opt:${o.id}`} className="!size-3 !border-2 !border-slate-950 transition-transform hover:!scale-125" style={{ background: meta.handle }} />
             </div>
           ))}
+          {n.elseNext !== undefined && (
+            <div className="relative border-t border-slate-800 px-3 py-1 text-[11px] text-sky-300">Types something else
+              <Handle type="source" position={Position.Right} id="else" className="!size-3 !border-2 !border-slate-950 transition-transform hover:!scale-125" style={{ background: "#38bdf8" }} />
+            </div>
+          )}
           {n.noReply && <NoReplyHandle minutes={n.noReply.minutes} />}
         </div>
       ) : (n.type === "capture" || n.type === "captureFile") && n.noReply ? (
@@ -687,6 +692,7 @@ export default function FlowBuilder({ flowId, initial, journeys = [], flows = []
         }
       };
       if ((n.type === "choice" || n.type === "capture" || n.type === "captureFile") && n.noReply) add("noreply", n.noReply.next, { label: "no reply", style: { stroke: "#a78bfa", strokeDasharray: "4 4" }, labelStyle: { fill: "#c4b5fd", fontSize: 10 }, labelBgStyle: { fill: "#0f172a" } });
+      if (n.type === "choice") add("else", n.elseNext, { label: "anything else", style: { stroke: "#38bdf8", strokeDasharray: "4 4" }, labelStyle: { fill: "#7dd3fc", fontSize: 10 }, labelBgStyle: { fill: "#0f172a" } });
       if (n.type === "choice") n.options.forEach((o) => add(`opt:${o.id}`, o.next, { label: o.label.slice(0, 24), labelStyle: { fill: "#cbd5e1", fontSize: 10 }, labelBgStyle: { fill: "#0f172a" } }));
       else if (n.type === "condition") {
         add("true", n.trueNext, { label: "Yes", style: { stroke: "#34d399" }, labelStyle: { fill: "#86efac", fontSize: 10 }, labelBgStyle: { fill: "#0f172a" } });
@@ -710,6 +716,7 @@ export default function FlowBuilder({ flowId, initial, journeys = [], flows = []
     if (!c.source || !c.target || !c.sourceHandle) return;
     patch(c.source, (n) => {
       if (c.sourceHandle === "noreply" && (n.type === "choice" || n.type === "capture" || n.type === "captureFile")) return { ...n, noReply: { minutes: n.noReply?.minutes ?? 30, next: c.target! } };
+      if (n.type === "choice" && c.sourceHandle === "else") return { ...n, elseNext: c.target! };
       if (n.type === "choice" && c.sourceHandle!.startsWith("opt:")) {
         const oid = c.sourceHandle!.slice(4);
         return { ...n, options: n.options.map((o) => (o.id === oid ? { ...o, next: c.target! } : o)) };
@@ -1172,6 +1179,8 @@ function RotateCcwIcon() { return <RotateCcw className="size-4" />; }
 
 function clearRefs(n: FlowNode, removedId: string): FlowNode {
   if ((n.type === "choice" || n.type === "capture" || n.type === "captureFile") && n.noReply?.next === removedId) n = { ...n, noReply: { minutes: n.noReply.minutes } };
+  // "" keeps the route switched on (its dot stays on the step) with nowhere to go yet — the same as a no-reply route.
+  if (n.type === "choice" && n.elseNext === removedId) n = { ...n, elseNext: "" };
   if (n.type === "choice") return { ...n, options: n.options.map((o) => (o.next === removedId ? { ...o, next: undefined } : o)) };
   if (n.type === "condition") return { ...n, trueNext: n.trueNext === removedId ? undefined : n.trueNext, falseNext: n.falseNext === removedId ? undefined : n.falseNext };
   if (n.type === "switch") return { ...n, cases: n.cases.map((item) => (item.next === removedId ? { ...item, next: undefined } : item)), defaultNext: n.defaultNext === removedId ? undefined : n.defaultNext };
@@ -1333,6 +1342,17 @@ function NodePanel({ node, isStart, nodeOptions, variables, journeys, flows, doc
       {node.type === "delay" && <><div><label className="label">Wait (seconds)</label><input className="input" type="number" min={1} max={604800} value={node.seconds} onChange={(e) => onChange({ ...node, seconds: Number(e.target.value) })} /></div><p className="text-xs text-slate-500">A QUIET HOLD, not a scheduled follow-up: the bot stays silent, and the flow resumes with the customer&apos;s next message after the time has passed. Nothing is sent when the timer expires — for a timed follow-up, use a Journey. Maximum: 7 days.</p></>}
       {node.type === "subflow" && <><div><label className="label">Published flow</label><select className="input" value={node.flowId} onChange={(e) => onChange({ ...node, flowId: e.target.value })}><option value="">Choose a reusable flow…</option>{flows.map((flow) => <option key={flow.id} value={flow.id}>{flow.name}</option>)}</select></div><p className="text-xs text-slate-500">When you publish this flow, it locks in the subflow&apos;s newest published version — publishing the subflow again later doesn&apos;t change this flow until you publish this one again. Synchronous only: a child that stops to wait for customer input follows the failure route instead.</p></>}
       {(node.type === "choice" || node.type === "capture" || node.type === "captureFile") && <NoReplyField node={node} nodeOptions={nodeOptions} onChange={onChange} />}
+      {node.type === "choice" && (
+        <div className="space-y-2 rounded-lg border border-white/10 p-3">
+          <label className="label" htmlFor={`else-${node.id}`}>If they type something else</label>
+          <select id={`else-${node.id}`} className="input" value={node.elseNext === undefined ? "" : "go"} onChange={(e) => onChange({ ...node, elseNext: e.target.value ? node.elseNext ?? "" : undefined })}>
+            <option value="">Show the menu again</option>
+            <option value="go">Go to…</option>
+          </select>
+          {node.elseNext !== undefined && <TargetPicker nodeOptions={nodeOptions} value={node.elseNext || undefined} onPick={(next) => onChange({ ...node, elseNext: next ?? "" })} />}
+          <p className="text-xs text-slate-500">For a reply in their own words that matches none of the options — e.g. send it to an AI assistant step, which answers what they wrote. Taps always follow their own option.</p>
+        </div>
+      )}
       {node.type === "choice" &&<div className="space-y-2"><div><div className="flex items-center justify-between"><label className="label" htmlFor={`prompt-${node.id}`}>Prompt</label><EmojiButton targetId={`prompt-${node.id}`} value={node.text} onChange={(text) => onChange({ ...node, text })} /></div><textarea id={`prompt-${node.id}`} className="input" rows={2} value={node.text} onChange={(e) => onChange({ ...node, text: e.target.value })} /></div><label className="label">Options</label>{node.options.map((o, i) => <div key={o.id} className="space-y-1.5 rounded-lg border border-slate-800 p-2"><div className="flex gap-1.5"><input className="input btn-sm flex-1" value={o.label} onChange={(e) => onChange({ ...node, options: node.options.map((x) => x.id === o.id ? { ...x, label: e.target.value } : x) })} /><button onClick={() => onChange({ ...node, options: node.options.filter((x) => x.id !== o.id) })} className="px-1 text-muted-foreground hover:text-red-400"><X className="size-4" /><span className="sr-only">Remove option</span></button></div><TargetPicker nodeOptions={nodeOptions} value={o.next} onPick={(v) => onChange({ ...node, options: node.options.map((x) => x.id === o.id ? { ...x, next: v } : x) })} />{i === 2 && node.options.length > 3 && <p className="text-[10px] text-amber-400">WhatsApp shows &gt;3 options as a list.</p>}</div>)}<button onClick={() => onChange({ ...node, options: [...node.options, { id: `o${Date.now().toString(36)}`, label: `Option ${node.options.length + 1}` }] })} className="btn-secondary btn-sm w-full">+ Add option</button></div>}
 
       {node.type === "document" && <><DocumentFilesField node={node} documents={documents} onChange={onChange} /><div><div className="flex items-center justify-between"><label className="label" htmlFor={`doc-cap-${node.id}`}>Caption (optional)</label><EmojiButton targetId={`doc-cap-${node.id}`} value={node.caption ?? ""} onChange={(caption) => onChange({ ...node, caption: caption || undefined })} /></div><input id={`doc-cap-${node.id}`} className="input" value={node.caption ?? ""} onChange={(e) => onChange({ ...node, caption: e.target.value || undefined })} placeholder="Here's our brochure, {{name}}" /></div><p className="text-xs text-slate-500">Your Library (brochures, price lists — the newest version is always sent) and general files. Files filed on a customer, vehicle, job card or quote are never offered: they are that customer&apos;s records.</p></>}

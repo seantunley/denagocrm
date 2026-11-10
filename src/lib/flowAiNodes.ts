@@ -11,7 +11,7 @@ import { connectionAllows } from "./flowConnections";
 
 export const AI_NODE_SPECS = {
   message: `{id,type:"message",text,next?}`,
-  choice: `{id,type:"choice",text,options:[{id,label,description?,next?}],noReply?:{minutes,next}}`,
+  choice: `{id,type:"choice",text,options:[{id,label,description?,next?}],noReply?:{minutes,next},elseNext?} — elseNext: where a typed reply that matches no option goes (e.g. the ai step)`,
   capture: `{id,type:"capture",text,variable,format?:"text"|"email"|"phone"|"number"|"date",next?,noReply?:{minutes,next}}`,
   captureFile: `{id,type:"captureFile",text,variable,next?,noReply?:{minutes,next}}`,
   image: `{id,type:"image",url,caption?,next?}`,
