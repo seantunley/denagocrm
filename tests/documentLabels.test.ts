@@ -135,8 +135,9 @@ test("the form: a dropdown of the workspace's types and of the customer's quotes
   // The deal file passes no customer, so a quote is always the target there.
   assert.match(fields, /\{contactId && <option value="">The customer \(no quote\)<\/option>\}/);
   // The supplier is asked for only on a supplier's paper (Sean: "Can this be conditional?") — the workspace's supplier lists.
-  assert.match(fields, /\{vendors && isSupplierDocumentType\(label, supplierTypes\) && <SupplierSelect vendors=\{vendors\} \/>\}/);
-  assert.match(fields, /isSupplierDocumentType\(label, supplierTypes\) \? <SupplierSelect vendors=\{vendors\} current=\{currentVendor\} \/> : <input type="hidden" name="vendorId" value="" \/>/);
+  // Offered for any type on a supplier list; REQUIRED only when the type's name says supplier (review of #1059).
+  assert.match(fields, /\{vendors && mayBeSupplierPaper\(label, supplierTypes\) && <SupplierSelect key=\{label\} vendors=\{vendors\} required=\{isSupplierOnlyType\(label\)\} \/>\}/);
+  assert.match(fields, /mayBeSupplierPaper\(label, supplierTypes\)\s*\? <SupplierSelect key=\{label\} vendors=\{vendors\} current=\{currentVendor\} required=\{isSupplierOnlyType\(label\)\} \/>\s*: <input type="hidden" name="vendorId" value="" \/>/);
   assert.doesNotMatch(panel, /\{contactId && <input type="hidden" name="contactId"/, "the panel no longer adds the customer itself");
   // A quote a revision replaced is not offered.
   assert.match(panel, /\.filter\(\(group\) => !group\.superseded\)\.map\(\(group\) => \(\{ id: group\.id, label: `Q-\$\{group\.number\} \(\$\{group\.status\}\)` \}\)\)/);

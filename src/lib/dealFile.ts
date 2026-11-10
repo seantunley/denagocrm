@@ -98,8 +98,8 @@ export function typesForSupplier(config: DealFileConfig, own: unknown): string[]
 }
 
 /**
- * Every type that is a SUPPLIER'S paper in this workspace — the default list and every supplier's own. Such a
- * document names its supplier (upload, DAX, requests) and is grouped under that supplier.
+ * Every type on any supplier list in this workspace — the default list and every supplier's own. An upload of one
+ * OFFERS a supplier box (mayBeSupplierPaper); it never makes a document a supplier's by itself.
  */
 export function supplierDocumentTypes(config: DealFileConfig, vendorLists: readonly unknown[] = []): string[] {
   const seen = new Set<string>();
@@ -139,22 +139,30 @@ export type ChecklistItem = {
 
 const same = (a: string | null | undefined, b: string) => (a ?? "").toLowerCase() === b.toLowerCase();
 
-/** Whether a type is a supplier's paper — `supplierTypes` from supplierDocumentTypes (the workspace's lists). */
-export const isSupplierDocumentType = (tag: string | null | undefined, supplierTypes: readonly string[]): boolean =>
-  supplierTypes.some((type) => same(tag, type));
+/*
+ * WHOSE PAPER IT IS COMES FROM THE DOCUMENT, NOT ITS TYPE (review of #1059). A type on some supplier's list can be the
+ * customer's paper too — a transport company asked for an ID document must not turn every customer ID into a
+ * supplier's. So: a document is a supplier's when it NAMES a supplier (Document.vendorId). The type only decides
+ *  - whether the upload OFFERS a supplier box (any type on any supplier list — optional), and
+ *  - whether it REQUIRES one: only the three types whose very name says supplier (SUPPLIER_DOCUMENT_TYPES).
+ */
+
+/** A type that is always a supplier's paper — its name says so ("Supplier quote" …). It must name the supplier. */
+export const isSupplierOnlyType = (tag: string | null | undefined): boolean =>
+  SUPPLIER_DOCUMENT_TYPES.some((type) => same(tag, type));
+
+/** Whether an upload of this type offers the (optional) supplier box — `supplierTypes` from supplierDocumentTypes. */
+export const mayBeSupplierPaper = (tag: string | null | undefined, supplierTypes: readonly string[]): boolean =>
+  isSupplierOnlyType(tag) || supplierTypes.some((type) => same(tag, type));
 export type PartySection<T> = { key: string; label: string; docs: T[] };
 
 /**
  * A quote's papers split by who they are with (Sean, 2026-11-09): the customer's side first, then each supplier's
- * under its name (A–Z), then supplier papers with no supplier named (e.g. filed with the Suppliers module off).
- * Order within a section is kept. `supplier` is false for the customer section.
+ * under its name (A–Z) — by the supplier the document names — then supplier-only papers with no supplier named
+ * (filed with the Suppliers module off, or before suppliers existed). Order within a section is kept.
  */
-export function partiesOf<T extends { tag?: string | null; vendor?: { id: string; name: string } | null }>(
-  docs: T[],
-  supplierTypes: readonly string[],
-): (PartySection<T> & { supplier: boolean })[] {
-  const isSupplierDocumentTypeHere = (tag: string | null | undefined) => isSupplierDocumentType(tag, supplierTypes);
-  const customer = docs.filter((doc) => !doc.vendor && !isSupplierDocumentTypeHere(doc.tag));
+export function partiesOf<T extends { tag?: string | null; vendor?: { id: string; name: string } | null }>(docs: T[]): (PartySection<T> & { supplier: boolean })[] {
+  const customer = docs.filter((doc) => !doc.vendor && !isSupplierOnlyType(doc.tag));
   const named = new Map<string, PartySection<T>>();
   const unnamed: T[] = [];
   for (const doc of docs) {
@@ -162,7 +170,7 @@ export function partiesOf<T extends { tag?: string | null; vendor?: { id: string
       const section = named.get(doc.vendor.id) ?? { key: doc.vendor.id, label: doc.vendor.name, docs: [] };
       section.docs.push(doc);
       named.set(doc.vendor.id, section);
-    } else if (isSupplierDocumentTypeHere(doc.tag)) unnamed.push(doc);
+    } else if (isSupplierOnlyType(doc.tag)) unnamed.push(doc);
   }
   return [
     ...(customer.length ? [{ key: "customer", label: "Customer", docs: customer, supplier: false }] : []),
@@ -189,7 +197,9 @@ export function dealFileChecklist(
   /** The Suppliers module: off, there is no supplier to choose, so the hint names only the document type. */
   suppliersOn = true,
 ): ChecklistItem[] {
-  const has = (...tags: string[]) => documents.some((doc) => tags.some((tag) => same(doc.tag, tag)));
+  // The customer's side counts the customer's papers only: a document naming a supplier is that supplier's (review of
+  // #1059 — a delivery company's ID document is not the customer's ID).
+  const has = (...tags: string[]) => documents.some((doc) => !doc.vendorId && tags.some((tag) => same(doc.tag, tag)));
   const offMenu = (type: string) =>
     types.some((listed) => same(listed, type)) ? null : `Add “${type}” to Settings → Document types to file it.`;
 

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { readFileSync } from "node:fs";
-import { dealFileChecklist, DEFAULT_DEAL_FILE_CONFIG as CFG, SUPPLIER_DOCUMENT_TYPES } from "../src/lib/dealFile";
+import { dealFileChecklist, DEFAULT_DEAL_FILE_CONFIG as CFG } from "../src/lib/dealFile";
 import { DEFAULT_DOCUMENT_TYPES } from "../src/lib/documentLabels";
 
 const quote = (over: Partial<Parameters<typeof dealFileChecklist>[0][number]> = {}) => ({
@@ -96,7 +96,7 @@ test("a quote's papers are grouped: the customer's, then each supplier's by name
     { id: "5", tag: "Supplier invoice", vendor: jet },
     { id: "6", tag: "Supplier invoice", vendor: null },
   ];
-  const sections = partiesOf(docs, SUPPLIER_DOCUMENT_TYPES);
+  const sections = partiesOf(docs);
   assert.deepEqual(sections.map((s) => [s.label, s.docs.map((d) => d.id)]), [
     ["Customer", ["1", "3"]],
     ["Supplier · Acme Wraps", ["4"]],
@@ -104,7 +104,7 @@ test("a quote's papers are grouped: the customer's, then each supplier's by name
     ["Suppliers", ["6"]],
   ]);
   // Only customer papers: one section, which the panel shows with no headings.
-  assert.deepEqual(partiesOf([{ tag: "invoice", vendor: null }], SUPPLIER_DOCUMENT_TYPES).map((s) => s.supplier), [false]);
+  assert.deepEqual(partiesOf([{ tag: "invoice", vendor: null }]).map((s) => s.supplier), [false]);
 });
 
 test("the deal page shows the deal file for every quote on the lead, and only the current versions", () => {

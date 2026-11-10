@@ -1,17 +1,23 @@
 "use client";
 
 import { useState } from "react";
-import { isSupplierDocumentType } from "@/lib/dealFile";
+import { isSupplierOnlyType, mayBeSupplierPaper } from "@/lib/dealFile";
 
 type Vendor = { id: string; name: string };
 
-/** The supplier choice, shown only for a supplier's paper (the workspace's supplier lists — upload and Label). */
-function SupplierSelect({ vendors, current }: { vendors: readonly Vendor[]; current?: Vendor | null }) {
+/**
+ * The supplier choice — shown only for a type on a supplier list. REQUIRED only for a type whose name says supplier
+ * ("Supplier invoice"); for any other (an ID document a delivery company is asked for) it is optional, and left
+ * empty the document is the customer's (review of #1059).
+ */
+function SupplierSelect({ vendors, current, required }: { vendors: readonly Vendor[]; current?: Vendor | null; required: boolean }) {
   return (
     <label className="grid gap-1 text-xs text-muted-foreground">
-      Supplier
-      <select name="vendorId" defaultValue={current?.id ?? ""} required className="input h-9 text-sm">
-        <option value="" disabled>{vendors.length ? "Choose the supplier" : "No suppliers yet — Settings → Suppliers"}</option>
+      {required ? "Supplier" : "From a supplier?"}
+      <select name="vendorId" defaultValue={current?.id ?? ""} required={required} className="input h-9 text-sm">
+        {required
+          ? <option value="" disabled>{vendors.length ? "Choose the supplier" : "No suppliers yet — Settings → Suppliers"}</option>
+          : <option value="">No — the customer&apos;s</option>}
         {current && !vendors.some((vendor) => vendor.id === current.id) && <option value={current.id}>{current.name} (deleted)</option>}
         {vendors.map((vendor) => <option key={vendor.id} value={vendor.id}>{vendor.name}</option>)}
       </select>
@@ -26,7 +32,7 @@ function SupplierSelect({ vendors, current }: { vendors: readonly Vendor[]; curr
  */
 export function DocumentLabelFields({ types, supplierTypes, current, vendors, currentVendor }: {
   types: readonly string[];
-  /** Which types are a supplier's paper (lib/dealFileConfig workspaceSupplierTypes). */
+  /** Types on any supplier list (lib/dealFileConfig workspaceSupplierTypes) — those offer the supplier box. */
   supplierTypes: readonly string[];
   current: string;
   vendors: readonly Vendor[];
@@ -42,7 +48,9 @@ export function DocumentLabelFields({ types, supplierTypes, current, vendors, cu
           {types.map((type) => <option key={type} value={type}>{type}</option>)}
         </select>
       </label>
-      {isSupplierDocumentType(label, supplierTypes) ? <SupplierSelect vendors={vendors} current={currentVendor} /> : <input type="hidden" name="vendorId" value="" />}
+      {mayBeSupplierPaper(label, supplierTypes)
+        ? <SupplierSelect key={label} vendors={vendors} current={currentVendor} required={isSupplierOnlyType(label)} />
+        : <input type="hidden" name="vendorId" value="" />}
     </>
   );
 }
@@ -66,7 +74,7 @@ export default function DocumentUploadFields({
 }: {
   /** The workspace's document types (Settings → Quotes → Document types). */
   types: readonly string[];
-  /** Which types are a supplier's paper — those ask which supplier. */
+  /** Types on any supplier list — those offer the supplier box (required only when the name says supplier). */
   supplierTypes: readonly string[];
   /** The customer's quotes to file against. Omit where there are none to choose (vehicle, job card). */
   quotes?: readonly { id: string; label: string }[];
@@ -88,7 +96,7 @@ export default function DocumentUploadFields({
         </select>
       </label>
       {/* Only for a supplier's paper — the deal file asks for those per supplier. */}
-      {vendors && isSupplierDocumentType(label, supplierTypes) && <SupplierSelect vendors={vendors} />}
+      {vendors && mayBeSupplierPaper(label, supplierTypes) && <SupplierSelect key={label} vendors={vendors} required={isSupplierOnlyType(label)} />}
       {quotes && quotes.length > 0 && (
         <label className="grid gap-1 text-xs text-muted-foreground">
           File against
