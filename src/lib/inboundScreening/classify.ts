@@ -73,7 +73,10 @@ export async function classifyInbound(input: ClassifyInput, policy: ScreeningPol
     quick: true,
   });
   if (!answer.ok) {
-    const failure = answer.failure === "not_configured" ? "not_configured" : answer.failure === "timeout" ? "timeout" : "http_error";
+    const failure = answer.failure === "not_configured" ? "not_configured"
+      : answer.failure === "timeout" ? "timeout"
+      : answer.failure === "unreachable" ? "error"
+      : "http_error";
     return { ok: false, failure, latencyMs: took() };
   }
   const verdict = parseAiVerdict(answer.text);

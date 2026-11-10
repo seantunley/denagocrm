@@ -39,7 +39,7 @@ export function chatTranscript(history: { role: "user" | "assistant"; content: s
 }
 
 /** What to tell a person when the AI call failed — the out-of-credit case by name (2026-11-10: it looked like a bad file). */
-export function aiFailureText(failure: "not_configured" | "no_credit" | "timeout" | "failed", what: string): string {
+export function aiFailureText(failure: "not_configured" | "no_credit" | "timeout" | "failed" | "unreachable", what: string): string {
   if (failure === "not_configured") return "AI isn't set up — connect ChatGPT or add a Claude key (Settings → Integrations).";
   if (failure === "no_credit") return "The Anthropic account is out of credit — top it up at console.anthropic.com, or switch to ChatGPT (Settings → Integrations).";
   if (failure === "timeout") return `${what} — the AI took too long. Try again.`;

@@ -20,7 +20,8 @@ export async function aiProvider(): Promise<AiProvider | null> {
 export type AiUsage = { input_tokens?: number; output_tokens?: number };
 export type AiTextResult =
   | { ok: true; text: string; provider: AiProvider; usage?: AiUsage }
-  | { ok: false; failure: "not_configured" | "no_credit" | "timeout" | "failed"; provider: AiProvider | null };
+  /** failed = the provider answered with an error; unreachable = it never answered (network). */
+  | { ok: false; failure: "not_configured" | "no_credit" | "timeout" | "failed" | "unreachable"; provider: AiProvider | null };
 
 /**
  * One text answer from the workspace's AI — the chatbot, invoice reading, the ✨ check and the other short helpers.
@@ -68,11 +69,14 @@ export async function aiText(
 
   const apiKey = await getProviderKey("ANTHROPIC_API_KEY");
   if (!apiKey) return { ok: false, failure: "not_configured", provider };
-  const content = [
-    ...(input.pdfBase64 ? [{ type: "document", source: { type: "base64", media_type: "application/pdf", data: input.pdfBase64 } }] : []),
-    ...(input.images ?? []).map((image) => ({ type: "image", source: { type: "base64", media_type: image.mediaType, data: image.base64 } })),
-    { type: "text", text: input.prompt ?? "" },
-  ];
+  // Text alone goes as a plain string, exactly as every caller sent it before; blocks only for a file.
+  const content = input.pdfBase64 || input.images?.length
+    ? [
+        ...(input.pdfBase64 ? [{ type: "document", source: { type: "base64", media_type: "application/pdf", data: input.pdfBase64 } }] : []),
+        ...(input.images ?? []).map((image) => ({ type: "image", source: { type: "base64", media_type: image.mediaType, data: image.base64 } })),
+        { type: "text", text: input.prompt ?? "" },
+      ]
+    : input.prompt ?? "";
   try {
     const res = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
@@ -97,6 +101,6 @@ export async function aiText(
   } catch (error) {
     const timedOut = error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError");
     await logError(input.scope, error instanceof Error ? error.name : "error").catch(() => {});
-    return { ok: false, failure: timedOut ? "timeout" : "failed", provider };
+    return { ok: false, failure: timedOut ? "timeout" : "unreachable", provider };
   }
 }
