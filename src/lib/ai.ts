@@ -3,7 +3,9 @@ import { prisma } from "./db";
 import { logError } from "./errorLog";
 import { recordAiUsage } from "./systemHealth";
 import { inheritedTenantId } from "./tenantWrite";
-import { codexRespond, isCodexConnected } from "./codex";
+import { codexRespond } from "./codex";
+import { aiProvider, aiText } from "./aiText";
+import { aiFailureText } from "./aiProviderRules";
 import {
   CHATGPT_RESEARCH_FORMAT_NOTE,
   corporateDomain,
@@ -14,8 +16,9 @@ import {
 import { getCompanyProfile } from "./companyProfile";
 import type { CronSliceContext } from "./tenantCron";
 
+/** The workspace has an AI: ChatGPT connected, or a Claude key (lib/aiText). */
 export async function isAiConfigured(): Promise<boolean> {
-  return Boolean(await getProviderKey("ANTHROPIC_API_KEY"));
+  return (await aiProvider()) !== null;
 }
 
 /**
@@ -28,44 +31,24 @@ export async function aiCheckDraft(input: {
   customerName?: string | null;
   context?: string | null;
 }): Promise<{ issues: string[] } | { error: string }> {
-  const apiKey = await getProviderKey("ANTHROPIC_API_KEY");
-  if (!apiKey) return { error: "AI Assist is not configured (Settings → Integrations)." };
   // Whose messages these are: the workspace's own business, not Denago's.
   const company = (await getCompanyProfile().catch(() => null))?.name?.trim() || "a South African business";
 
   try {
-    const res = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      signal: AbortSignal.timeout(20000),
-      headers: {
-        "Content-Type": "application/json",
-        "x-api-key": apiKey,
-        "anthropic-version": "2023-06-01",
-      },
-      body: JSON.stringify({
-        model: "claude-haiku-4-5",
-        max_tokens: 500,
-        system:
-          `You proofread short outbound messages for ${company}. Check ONLY for:` +
-          " spelling/grammar errors (South African English), the customer's name spelled differently from the record, numbers or prices that look mistyped, references to attachments when none are mentioned as attached, and accidentally unprofessional tone. Respond with STRICT JSON: {\"issues\": [\"...\"]} — each issue one short sentence. If the message is fine, respond {\"issues\": []}. Never rewrite the message, never invent issues.",
-        messages: [
-          {
-            role: "user",
-            content: `Customer on record: ${input.customerName ?? "(unknown)"}\n${
-              input.context ? `Context: ${input.context}\n` : ""
-            }\nDraft message:\n"""\n${input.draft.slice(0, 3000)}\n"""`,
-          },
-        ],
-      }),
+    const answer = await aiText({
+      scope: "ai-check",
+      system:
+        `You proofread short outbound messages for ${company}. Check ONLY for:` +
+        " spelling/grammar errors (South African English), the customer's name spelled differently from the record, numbers or prices that look mistyped, references to attachments when none are mentioned as attached, and accidentally unprofessional tone. Respond with STRICT JSON: {\"issues\": [\"...\"]} — each issue one short sentence. If the message is fine, respond {\"issues\": []}. Never rewrite the message, never invent issues.",
+      prompt: `Customer on record: ${input.customerName ?? "(unknown)"}\n${
+        input.context ? `Context: ${input.context}\n` : ""
+      }\nDraft message:\n"""\n${input.draft.slice(0, 3000)}\n"""`,
+      maxTokens: 500,
+      timeoutMs: 30_000,
+      quick: true,
     });
-    if (!res.ok) {
-      const text = await res.text().catch(() => "");
-      await logError("ai-check", `Anthropic API ${res.status}`, text.slice(0, 300));
-      return { error: `AI check failed (${res.status}).` };
-    }
-    const json = await res.json();
-    await recordAiUsage(json.usage, json.model);
-    const content: string = json.content?.[0]?.text ?? "{}";
+    if (!answer.ok) return { error: aiFailureText(answer.failure, "AI check failed") };
+    const content = answer.text || "{}";
     const match = content.match(/\{[\s\S]*\}/);
     const parsed = JSON.parse(match ? match[0] : "{}");
     return { issues: Array.isArray(parsed.issues) ? parsed.issues.slice(0, 8) : [] };
@@ -84,38 +67,25 @@ export async function aiVoiceNoteReply(input: {
   transcript: string;
   history: { from: "customer" | "us"; text: string }[];
 }): Promise<{ summary: string; reply: string } | { error: string }> {
-  const apiKey = await getProviderKey("ANTHROPIC_API_KEY");
-  if (!apiKey) return { error: "AI Assist is not configured (Settings → Integrations)." };
   const company = (await getCompanyProfile().catch(() => null))?.name?.trim() || "a South African business";
   const redact = (value: string) => value
     .replace(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi, "[email]")
     .replace(/(?:\+?\d[\d\s().-]{7,}\d)/g, "[phone]")
     .slice(0, 2_000);
   try {
-    const res = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      signal: AbortSignal.timeout(20000),
-      headers: { "Content-Type": "application/json", "x-api-key": apiKey, "anthropic-version": "2023-06-01" },
-      body: JSON.stringify({
-        model: "claude-haiku-4-5",
-        max_tokens: 500,
-        system:
-          `You help staff at ${company} answer a customer's WhatsApp voice note. Respond with STRICT JSON: ` +
-          '{"summary": "<one short line: what the customer said or wants>", "reply": "<a short, friendly WhatsApp reply in the customer\'s language>"}. ' +
-          "Never invent facts, prices, stock, dates or commitments: where an answer needs one, say the team will confirm. No greeting line on its own, no sign-off.",
-        messages: [{
-          role: "user",
-          content: `Recent messages (oldest first):\n${input.history.map((m) => `${m.from === "us" ? "Us" : "Customer"}: ${redact(m.text)}`).join("\n") || "(none)"}\n\nThe voice note, transcribed:\n"""\n${redact(input.transcript)}\n"""`,
-        }],
-      }),
+    const answer = await aiText({
+      scope: "ai-voice-note",
+      system:
+        `You help staff at ${company} answer a customer's WhatsApp voice note. Respond with STRICT JSON: ` +
+        '{"summary": "<one short line: what the customer said or wants>", "reply": "<a short, friendly WhatsApp reply in the customer\'s language>"}. ' +
+        "Never invent facts, prices, stock, dates or commitments: where an answer needs one, say the team will confirm. No greeting line on its own, no sign-off.",
+      prompt: `Recent messages (oldest first):\n${input.history.map((m) => `${m.from === "us" ? "Us" : "Customer"}: ${redact(m.text)}`).join("\n") || "(none)"}\n\nThe voice note, transcribed:\n"""\n${redact(input.transcript)}\n"""`,
+      maxTokens: 500,
+      timeoutMs: 30_000,
+      quick: true,
     });
-    if (!res.ok) {
-      await logError("ai-voice-note", `Anthropic API ${res.status}`);
-      return { error: `AI could not read it (${res.status}).` };
-    }
-    const json = await res.json();
-    await recordAiUsage(json.usage, json.model);
-    const content: string = json.content?.[0]?.text ?? "{}";
+    if (!answer.ok) return { error: aiFailureText(answer.failure, "AI could not read it") };
+    const content = answer.text || "{}";
     const parsed = JSON.parse(content.match(/\{[\s\S]*\}/)?.[0] ?? "{}");
     const summary = String(parsed.summary ?? "").trim().slice(0, 300);
     const reply = String(parsed.reply ?? "").trim().slice(0, 2_000);
@@ -264,7 +234,7 @@ async function stripResearchPreamble(summary: string): Promise<string> {
 
 /** Research can run: on a connected ChatGPT subscription, or on the Anthropic key. */
 export async function isResearchConfigured(): Promise<boolean> {
-  return (await isCodexConnected()) || (await isAiConfigured());
+  return isAiConfigured();
 }
 
 export async function aiResearch(
@@ -274,13 +244,14 @@ export async function aiResearch(
   },
   options: { model?: string; maxSearches?: number } = {},
 ): Promise<ResearchResult> {
-  // A workspace that has connected its ChatGPT subscription researches on that
-  // instead of pay-per-token Anthropic credit (lib/codex.ts). There is
-  // deliberately NO fallback to Anthropic when ChatGPT fails: the point of
-  // connecting it is that research stops spending API credit, and a silent
-  // fallback would bring the bill straight back without anyone choosing it.
-  const useChatGpt = await isCodexConnected();
-  const apiKey = useChatGpt ? null : await getProviderKey("ANTHROPIC_API_KEY");
+  // The workspace's AI (lib/aiText): its ChatGPT subscription by default, Claude
+  // when chosen in Settings → Integrations. There is deliberately NO fallback to
+  // Anthropic when ChatGPT fails: the point of connecting it is that research
+  // stops spending API credit, and a silent fallback would bring the bill
+  // straight back without anyone choosing it.
+  const provider = await aiProvider();
+  const useChatGpt = provider === "chatgpt";
+  const apiKey = provider === "claude" ? await getProviderKey("ANTHROPIC_API_KEY") : null;
   if (!useChatGpt && !apiKey) {
     return { error: "AI Assist is not configured (Settings → Integrations)." };
   }

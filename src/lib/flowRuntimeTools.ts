@@ -5,9 +5,8 @@ import { lookup as lookupCb } from "node:dns";
 import { isIP } from "node:net";
 import { Agent, fetch as undiciFetch } from "undici";
 import { prisma } from "./db";
-import { getProviderKey, getSetting } from "./settings";
 import { logError } from "./errorLog";
-import { recordAiUsage } from "./systemHealth";
+import { aiText } from "./aiText";
 import { runtimeFlowTenantId } from "./flowScope";
 import { renderKnowledgeForPrompt, searchBotKnowledge } from "./botKnowledge";
 import type { ExtractOutcome, Flow, FlowCtx, HttpOutcome, KnowledgeOutcome } from "./flow";
@@ -148,27 +147,15 @@ async function knowledgeAnswer(query: string): Promise<KnowledgeOutcome> {
 async function extractData(input: Parameters<NonNullable<FlowCtx["extractData"]>>[0]): Promise<ExtractOutcome> {
   const fields = [...new Set(input.fields.map((field) => field.trim()).filter(Boolean))].slice(0, 12);
   if (!fields.length) return { ok: false, reason: "No extraction fields were configured" };
-  const apiKey = await getProviderKey("ANTHROPIC_API_KEY");
-  if (!apiKey) return { ok: false, reason: "AI extraction is not configured" };
   const source = input.text.trim().slice(0, MAX_EXTRACT_TEXT);
   if (!source) return { ok: false, unavailable: true, reason: "There is no text to extract from" };
   const instruction = input.instruction.trim().slice(0, MAX_EXTRACT_INSTRUCTION);
   const fieldList = fields.join(", ");
   const system = `Extract structured values from the supplied customer text. Return exactly one JSON object and nothing else. Allowed keys: ${fieldList}.\nRules:\n- Never invent a value.\n- Omit a key when the text does not support it.\n- Every returned value must be a string.\n- Do not return keys outside the allowed list.\n${instruction ? `Task: ${instruction}` : ""}`;
   try {
-    const res = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      signal: AbortSignal.timeout(12_000),
-      headers: { "Content-Type": "application/json", "x-api-key": apiKey, "anthropic-version": "2023-06-01" },
-      body: JSON.stringify({ model: "claude-haiku-4-5", max_tokens: 350, system, messages: [{ role: "user", content: source }] }),
-    });
-    if (!res.ok) {
-      await logError("flow-ai-extract", `Anthropic ${res.status}`, (await res.text().catch(() => "")).slice(0, 200));
-      return { ok: false, reason: `AI extraction provider returned ${res.status}` };
-    }
-    const json = await res.json();
-    await recordAiUsage(json.usage, json.model);
-    const parsed = strictObject(String(json.content?.[0]?.text ?? ""));
+    const answer = await aiText({ scope: "flow-ai-extract", system, prompt: source, maxTokens: 350, timeoutMs: 20_000, quick: true });
+    if (!answer.ok) return { ok: false, reason: answer.failure === "not_configured" ? "AI extraction is not configured" : "AI extraction failed" };
+    const parsed = strictObject(answer.text);
     if (!parsed) return { ok: false, reason: "AI extraction returned invalid structured data" };
     const values: Record<string, string> = {};
     for (const field of fields) {

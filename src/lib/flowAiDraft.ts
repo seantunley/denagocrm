@@ -1,7 +1,6 @@
 import "server-only";
-import { getProviderKey } from "./settings";
 import { logError } from "./errorLog";
-import { recordAiUsage } from "./systemHealth";
+import { aiText } from "./aiText";
 import type { Flow } from "./flow";
 import { validateFlow, type FlowChannel, type FlowIssue } from "./flowValidation";
 import { aiDraftIssues, aiNodeGuide, aiRefsGuide, withAiRefLabels, type FlowAiRefs } from "./flowAiNodes";
@@ -33,8 +32,6 @@ export async function generateFlowDraft(input: {
   /** Names of the workspace's shared values ({{name}} in any text). */
   sharedNames?: string[];
 }): Promise<GeneratedFlowDraft | null> {
-  const apiKey = await getProviderKey("ANTHROPIC_API_KEY");
-  if (!apiKey) return null;
   const instruction = input.instruction.trim().slice(0, 3000);
   if (!instruction) return null;
   const journeys = input.refs.journeys;
@@ -89,19 +86,10 @@ OWNER INSTRUCTION:
 ${instruction}`;
 
   try {
-    const res = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      signal: AbortSignal.timeout(20_000),
-      headers: { "Content-Type": "application/json", "x-api-key": apiKey, "anthropic-version": "2023-06-01" },
-      body: JSON.stringify({ model: "claude-haiku-4-5", max_tokens: 5000, system, messages: [{ role: "user", content: "Return the complete replacement draft graph now." }] }),
-    });
-    if (!res.ok) {
-      await logError("bot-flow-ai-draft", `Anthropic ${res.status}`, (await res.text().catch(() => "")).slice(0, 200));
-      return null;
-    }
-    const json = await res.json();
-    await recordAiUsage(json.usage, json.model);
-    const parsed = strictJsonObject(String(json.content?.[0]?.text ?? ""));
+    // A whole graph is a big answer: ChatGPT gets a minute, at medium effort.
+    const answer = await aiText({ scope: "bot-flow-ai-draft", system, prompt: "Return the complete replacement draft graph now.", maxTokens: 5000, timeoutMs: 60_000, effort: "medium" });
+    if (!answer.ok) return null;
+    const parsed = strictJsonObject(answer.text);
     if (!parsed?.start || !parsed?.nodes || typeof parsed.nodes !== "object") {
       await logError("bot-flow-ai-draft", "Generated flow was outside the required graph contract").catch(() => {});
       return null;

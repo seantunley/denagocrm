@@ -7,7 +7,11 @@ import { logError } from "./errorLog";
 import { recordAiUsage } from "./systemHealth";
 import { safeFetchText } from "./safeFetch";
 import { inheritedTenantId } from "./tenantWrite";
-import { codexModel, codexRespond, isCodexConnected } from "./codex";
+import { codexModel, codexRespond } from "./codex";
+import { aiProvider } from "./aiText";
+
+/** ChatGPT unless the workspace chose Claude (Settings → Integrations) or has only a Claude key. */
+const usesChatGpt = async () => (await aiProvider()) === "chatgpt";
 import { safeCodexError } from "./codexErrors";
 import { stripInlineCitations } from "./researchPrompt";
 import { getCompanyProfile } from "./companyProfile";
@@ -136,7 +140,7 @@ async function aiClassifyChange(input: {
     let content: string;
     // On a connected ChatGPT subscription, as lead research is — and with no
     // fallback to Anthropic credit, for the same reason (lib/ai.ts aiResearch).
-    if (await isCodexConnected()) {
+    if (await usesChatGpt()) {
       const reply = await codexRespond({ instructions: system, prompt: user, reasoningEffort: "low", timeoutMs: 25000 });
       if ("error" in reply) {
         await logError("competitor-ai", "ChatGPT classification failed", safeCodexError(reply.error));
@@ -415,7 +419,7 @@ async function callWithWebSearch(opts: {
   maxUses?: number;
   timeoutMs?: number;
 }): Promise<WebSearchOut | { error: string }> {
-  if (await isCodexConnected()) {
+  if (await usesChatGpt()) {
     // Medium effort: the cron gives each call 90 seconds, and high effort runs
     // 50–80 seconds before the search is counted.
     const reply = await codexRespond({

@@ -447,8 +447,9 @@ test("EVERY CHATGPT ACTION IS OWNER-ONLY", () => {
 test("A CONNECTED SUBSCRIPTION NEVER QUIETLY FALLS BACK TO API CREDIT", () => {
   const ai = stripComments(src("src/lib/ai.ts"));
   const research = ai.slice(ai.indexOf("export async function aiResearch"), ai.indexOf("export async function runAutoResearch"));
-  assert.match(research, /const useChatGpt = await isCodexConnected\(\);/);
-  assert.match(research, /const apiKey = useChatGpt \? null : await getProviderKey\("ANTHROPIC_API_KEY"\);/);
+  // ChatGPT unless Claude is chosen (2026-11-10, lib/aiProviderRules) — and still no quiet switch on failure.
+  assert.match(research, /const provider = await aiProvider\(\);\s*const useChatGpt = provider === "chatgpt";/);
+  assert.match(research, /const apiKey = provider === "claude" \? await getProviderKey\("ANTHROPIC_API_KEY"\) : null;/);
   // The Anthropic loop is skipped entirely when ChatGPT is in use, and a
   // ChatGPT failure returns rather than dropping through to it.
   assert.match(research, /for \(let attempt = 0; !useChatGpt && attempt <= MAX_CONTINUATIONS; attempt\+\+\)/);

@@ -1,5 +1,5 @@
-import { recordAiUsage } from "./systemHealth";
-import { getProviderKey, getRegionalSettings, getSetting } from "./settings";
+import { aiProvider, aiText } from "./aiText";
+import { getRegionalSettings, getSetting } from "./settings";
 import { prisma } from "./db";
 import { logError } from "./errorLog";
 import { formatZAR } from "./format";
@@ -54,8 +54,9 @@ export async function getBotFaqs(): Promise<BotFaq[]> {
   }
 }
 
+/** Switched on, and the workspace has an AI to run it on — ChatGPT by default, Claude if chosen (lib/aiText). */
 export async function isBotAiEnabled(): Promise<boolean> {
-  return (await getSetting("BOT_AI_ENABLED")) === "true" && Boolean(await getProviderKey("ANTHROPIC_API_KEY"));
+  return (await getSetting("BOT_AI_ENABLED")) === "true" && (await aiProvider()) !== null;
 }
 
 function sanitize(msgs: BotMsg[]): BotMsg[] {
@@ -117,8 +118,7 @@ export async function routeBotChoice(input: {
   options: BotChoiceOption[];
 }): Promise<string | null> {
   if (!(await isBotAiEnabled())) return null;
-  const apiKey = await getProviderKey("ANTHROPIC_API_KEY");
-  if (!apiKey || !input.text.trim() || input.options.length < 2) return null;
+  if (!input.text.trim() || input.options.length < 2) return null;
 
   const optionList = input.options.map((option) => `[${option.id}] ${option.label}${option.description ? ` — ${option.description}` : ""}`).join("\n");
   const system = `You are a strict menu router. Map the customer's free-text reply to ONE of the supplied menu options only when their intent clearly matches it.
@@ -138,26 +138,11 @@ Rules:
 - Use confidence=high only when a normal human would clearly choose that menu item.
 - Do not answer the customer and do not add any other fields.`;
 
-  try {
-    const res = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      signal: AbortSignal.timeout(10000),
-      headers: { "Content-Type": "application/json", "x-api-key": apiKey, "anthropic-version": "2023-06-01" },
-      body: JSON.stringify({ model: "claude-haiku-4-5", max_tokens: 80, system, messages: [{ role: "user", content: input.text.trim() }] }),
-    });
-    if (!res.ok) {
-      await logError("bot-choice-router", `Anthropic ${res.status}`, (await res.text().catch(() => "")).slice(0, 200));
-      return null;
-    }
-    const json = await res.json();
-    await recordAiUsage(json.usage, json.model);
-    const parsed = strictJsonObject(String(json.content?.[0]?.text ?? ""));
-    if (!parsed || parsed.confidence !== "high" || typeof parsed.optionId !== "string") return null;
-    return input.options.some((option) => option.id === parsed.optionId) ? parsed.optionId : null;
-  } catch (e) {
-    await logError("bot-choice-router", e);
-    return null;
-  }
+  const answer = await aiText({ scope: "bot-choice-router", system, prompt: input.text.trim(), maxTokens: 80, timeoutMs: 10_000, quick: true });
+  if (!answer.ok) return null;
+  const parsed = strictJsonObject(answer.text);
+  if (!parsed || parsed.confidence !== "high" || typeof parsed.optionId !== "string") return null;
+  return input.options.some((option) => option.id === parsed.optionId) ? parsed.optionId : null;
 }
 
 /**
@@ -172,8 +157,8 @@ export async function generateBotReply(input: {
   /** The language the customer's voice note was in, when it wasn't English (e.g. "Afrikaans"). */
   language?: string | null;
 }): Promise<BotReplyDecision | null> {
-  const apiKey = await getProviderKey("ANTHROPIC_API_KEY");
-  if (!apiKey) return null;
+  const provider = await aiProvider();
+  if (!provider) return null;
 
   const latestQuestion = [...input.history].reverse().find((message) => message.role === "user")?.content ?? "";
   const [brief, hours, products, faqs, relevantKnowledge, company, regional] = await Promise.all([
@@ -255,19 +240,14 @@ ${input.voiceNote ? "- This arrived as a transcribed voice note. Reply naturally
 - When a pathway matches, STILL return its faqId, and ALSO put in "reply" a faithful ${input.language} translation of its APPROVED ANSWER: every price, number, name and condition exactly as given, nothing added, nothing left out.\n` : ""}`;
 
   try {
-    const res = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      signal: AbortSignal.timeout(15000),
-      headers: { "Content-Type": "application/json", "x-api-key": apiKey, "anthropic-version": "2023-06-01" },
-      body: JSON.stringify({ model: "claude-haiku-4-5", max_tokens: 500, system, messages: sanitize(input.history).slice(-14) }),
-    });
-    if (!res.ok) {
-      await logError("bot-ai", `Anthropic ${res.status}`, (await res.text().catch(() => "")).slice(0, 200));
-      return null;
-    }
-    const json = await res.json();
-    await recordAiUsage(json.usage, json.model);
-    const parsed = parseBotDecision(String(json.content?.[0]?.text ?? ""));
+    // ChatGPT gets a little longer than Claude did (15s): it answers in about 4–6 s, but a customer waiting a few
+    // more seconds beats no answer at all.
+    const answer = await aiText(
+      { scope: "bot-ai", system, history: sanitize(input.history).slice(-14), maxTokens: 500, timeoutMs: provider === "chatgpt" ? 25_000 : 15_000, quick: true },
+      provider,
+    );
+    if (!answer.ok) return null;
+    const parsed = parseBotDecision(answer.text);
     if (!parsed) {
       await logError("bot-ai", "Assistant returned a response outside the decision contract").catch(() => {});
       return null;

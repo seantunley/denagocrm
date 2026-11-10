@@ -32,7 +32,7 @@ test("a swap is shown only while its replacement is still the model in use", () 
 
 test("wired: a dropdown named for DAX, the swap recorded and shown — no free-text model box", () => {
   const row = code("src/components/settings/WorkspaceIntegrationRows.tsx");
-  assert.match(row, /title="ChatGPT subscription \(DAX and research\)"/);
+  assert.match(row, /title="ChatGPT subscription"/);
   assert.match(row, /<label className="label" htmlFor="codex-model">DAX and research model<\/label>/);
   assert.match(row, /<select id="codex-model" name="value" className="input font-mono" defaultValue=\{chatGpt\.model\}>/);
   assert.doesNotMatch(row, /<input name="value" className="input font-mono" defaultValue=\{chatGpt\.model\} \/>/);
