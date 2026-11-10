@@ -1,7 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import type { Prisma } from "@prisma/client";
+import { Prisma } from "@prisma/client";
 import { asActionResult, refuse, type ActionResult } from "@/lib/actionResult";
 import { prisma, basePrisma } from "@/lib/db";
 import { withEditableQuote } from "@/lib/quoteLock";
@@ -11,6 +11,9 @@ import {
   requireLeadAccess,
   requireQuoteAccess,
   requireCaseAccess,
+  requireVehicleAccess,
+  requireJobCardAccess,
+  requirePermission,
   type PermissionUser,
 } from "@/lib/permissions";
 import { logAudit } from "@/lib/audit";
@@ -18,12 +21,18 @@ import { withActingStaffScope } from "@/lib/actingScope";
 import {
   isCustomEntity,
   isFieldType,
+  isFieldShown,
+  isLinkTarget,
+  linkTargetExists,
+  parseShowWhen,
   slugifyKey,
   getFieldDefs,
   getFieldsWithValues,
+  loadLinkChoices,
   parseFieldValue,
   type CustomEntity,
   type FieldWithValue,
+  type LinkChoices,
 } from "@/lib/customFields";
 
 const str = (fd: FormData, k: string) => String(fd.get(k) ?? "").trim();
@@ -41,19 +50,37 @@ export async function saveCustomFieldDef(formData: FormData) {
     if (!label) refuse("Give the field a label.");
 
     const options =
-      type === "select"
-        ? str(formData, "options")
+      type === "select" || type === "multiselect"
+        ? [...new Set(str(formData, "options")
             .split("\n")
             .map((o) => o.trim())
-            .filter(Boolean)
+            .filter(Boolean))]
         : [];
+    if ((type === "select" || type === "multiselect") && options.length === 0) {
+      refuse("Add at least one option, one per line.");
+    }
+    const linkTo = type === "link" ? str(formData, "linkTo") : null;
+    if (type === "link" && !isLinkTarget(linkTo)) refuse("Choose what the field links to.");
     const required = formData.get("required") === "on";
     const active = formData.get("active") !== "off"; // default on
+
+    // "Show only when…" — another field of the SAME record type, never this one.
+    const whenKey = str(formData, "showWhenKey");
+    let showWhen: Prisma.InputJsonValue | typeof Prisma.DbNull = Prisma.DbNull;
+    if (whenKey) {
+      const siblings = await getFieldDefs(entity, { includeInactive: true });
+      const control = siblings.find((d) => d.key === whenKey);
+      if (!control || control.id === id) refuse("“Show only when” must name another field on the same record.");
+      const rule = parseShowWhen({ key: whenKey, op: str(formData, "showWhenOp"), value: str(formData, "showWhenValue") });
+      if (!rule) refuse("Choose how “Show only when” compares.");
+      if (rule.op !== "filled" && control.type !== "checkbox" && !rule.value) refuse("Say which answer shows this field.");
+      showWhen = rule;
+    }
 
     if (id) {
       await prisma.customFieldDef.update({
         where: { id },
-        data: { label, type, options, required, active },
+        data: { label, type, options, required, active, showWhen, linkTo },
       });
     } else {
       // Machine key must be unique within the entity — suffix on collision.
@@ -74,6 +101,8 @@ export async function saveCustomFieldDef(formData: FormData) {
           options,
           required,
           active,
+          showWhen,
+          linkTo,
           order: (max._max.order ?? 0) + 1,
         },
       });
@@ -113,8 +142,34 @@ async function requireEntityEdit(entity: CustomEntity, recordId: string): Promis
     case "lead": return requireLeadAccess(recordId, "leads.edit");
     case "quote": return requireQuoteAccess(recordId, "quotes.edit");
     case "case": return requireCaseAccess(recordId, "cases.manage");
+    case "vehicle": return requireVehicleAccess(recordId, "vehicles.manage");
+    case "jobcard": return requireJobCardAccess(recordId, "jobcards.manage");
+    // Same doors as editing the row itself (updateProduct / updateStockUnit), plus
+    // the row must be in this workspace — a role check alone is not row ownership.
+    case "product": {
+      const user = await requireTenantOwner();
+      if ((await prisma.product.count({ where: { id: recordId, deletedAt: null } })) !== 1) refuse("That product is not in this workspace.");
+      return user;
+    }
+    case "stock": {
+      const user = await requirePermission("stock.manage");
+      if ((await prisma.stockUnit.count({ where: { id: recordId, deletedAt: null } })) !== 1) refuse("That stock unit is not in this workspace.");
+      return user;
+    }
   }
 }
+
+/** Where each record type's detail page lives, for revalidation after a save. */
+const DETAIL_PATH: Record<CustomEntity, string> = {
+  contact: "/contacts",
+  lead: "/leads",
+  quote: "/quotes",
+  case: "/cases",
+  vehicle: "/vehicles",
+  jobcard: "/jobcards",
+  product: "/products",
+  stock: "/stock",
+};
 
 /**
  * Custom fields + current values for one record, for a client surface that
@@ -134,6 +189,22 @@ export async function recordCustomFields(
       return [];
     }
     return getFieldsWithValues(entity, recordId);
+  });
+}
+
+/**
+ * What the link fields on one record's form may point at — for the quote editor
+ * dialog, which cannot load them server-side. Same gate as recordCustomFields.
+ */
+export async function recordLinkChoices(entity: string, recordId: string): Promise<LinkChoices> {
+  return withActingStaffScope(async () => {
+    if (!isCustomEntity(entity)) return {};
+    try {
+      await requireEntityEdit(entity, recordId);
+    } catch {
+      return {};
+    }
+    return loadLinkChoices(await getFieldsWithValues(entity, recordId));
   });
 }
 
@@ -164,12 +235,17 @@ async function saveCustomFieldValuesBody(
   if (!isCustomEntity(entity)) throw new Error("Unknown entity");
   await requireEntityEdit(entity, recordId);
   const defs = await getFieldDefs(entity);
-  const basePath: Record<CustomEntity, string> = {
-    contact: "/contacts",
-    lead: "/leads",
-    quote: "/quotes",
-    case: "/cases",
-  };
+
+  const rawOf = (def: (typeof defs)[number]) =>
+    def.type === "checkbox"
+      ? formData.get(`cf_${def.id}`) === "on"
+        ? "true"
+        : "false"
+      : def.type === "multiselect"
+        ? JSON.stringify(formData.getAll(`cf_${def.id}`).map(String))
+        : str(formData, `cf_${def.id}`);
+  const submitted = new Map(defs.map((def) => [def.key, rawOf(def)]));
+  const defsByKey = new Map(defs.map((def) => [def.key, def]));
 
   // Parse+validate EVERY field first, collecting mutations and errors. Nothing
   // is written until all fields pass — otherwise an early field could persist
@@ -178,15 +254,16 @@ async function saveCustomFieldValuesBody(
   const mutations: Mutation[] = [];
   const errors: string[] = [];
   for (const def of defs) {
-    const raw =
-      def.type === "checkbox"
-        ? formData.get(`cf_${def.id}`) === "on"
-          ? "true"
-          : "false"
-        : str(formData, `cf_${def.id}`);
-    const parsed = parseFieldValue(def, raw);
+    // A field hidden by "Show only when…" is not on the form: it is neither
+    // required nor overwritten, so flipping the answer back brings its value back.
+    if (!isFieldShown(def, defsByKey, submitted)) continue;
+    const parsed = parseFieldValue(def, submitted.get(def.key) ?? "");
     if (!parsed.ok) {
       errors.push(parsed.error);
+      continue;
+    }
+    if (parsed.value && def.type === "link" && (!def.linkTo || !(await linkTargetExists(def.linkTo, parsed.value)))) {
+      errors.push(`${def.label} points at a record that isn't in this workspace.`);
       continue;
     }
     mutations.push({ defId: def.id, value: parsed.value });
@@ -216,5 +293,5 @@ async function saveCustomFieldValuesBody(
   } else {
     await basePrisma.$transaction(applyValues);
   }
-  revalidatePath(`${basePath[entity]}/${recordId}`);
+  revalidatePath(`${DETAIL_PATH[entity]}/${recordId}`);
 }

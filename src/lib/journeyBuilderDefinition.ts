@@ -54,6 +54,7 @@ export function initialConfig(type: string): Record<string, unknown> {
   if (type === "wait_for_trigger") return { triggers: ["quote_signed"], timeoutMinutes: 3 * 1440, continueOnTimeout: true };
   if (type === "wait_for_condition") return { condition: emptyGroup(), timeoutMinutes: 3 * 1440, continueOnTimeout: true };
   if (type === "variables") return { set: { note: "" } };
+  if (type === "set_field") return { entity: "lead", key: "", value: "" };
   if (type === "choose") return { options: [{ conditions: emptyGroup(), sequence: [newWaitStep()] }] };
   if (type === "repeat") return { mode: "count", count: 2, sequence: [newWaitStep()] };
   return {};

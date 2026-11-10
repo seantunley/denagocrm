@@ -19,6 +19,8 @@ const def = (over: Partial<FieldDef> = {}): FieldDef => ({
   required: false,
   order: 0,
   active: true,
+  showWhen: null,
+  linkTo: null,
   ...over,
 });
 
@@ -36,10 +38,10 @@ test("slugifyKey falls back to 'field' when nothing usable remains", () => {
 });
 
 test("isCustomEntity accepts the known entities and rejects others", () => {
-  for (const e of ["contact", "lead", "quote", "case"]) {
+  for (const e of ["contact", "lead", "quote", "case", "vehicle", "jobcard", "product", "stock"]) {
     assert.equal(isCustomEntity(e), true, `${e} should be a custom entity`);
   }
-  assert.equal(isCustomEntity("vehicle"), false);
+  assert.equal(isCustomEntity("supplier"), false);
   assert.equal(isCustomEntity(""), false);
 });
 

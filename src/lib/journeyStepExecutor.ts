@@ -23,6 +23,7 @@ import { sendReviewRequest } from "./reviewRequests";
 import { sendServiceDueReminder } from "./serviceReminders";
 import { remindSigner } from "./signingReminders";
 import { sendSurveyReminder } from "./surveyDistributionQueue";
+import { setCustomFieldByKey } from "./customFieldValues";
 
 export { resolveTopLevelNext } from "./journeyStepControl";
 
@@ -518,6 +519,20 @@ export async function executeJourneyStep(args: {
       if (!responseId) return { status: "skipped", note: "Survey reminder skipped: needs the “Automatic survey isn't answered” trigger" };
       if (!tenantId) return { status: "skipped", note: "Survey reminder skipped: the run has no workspace" };
       return moduleStepResult(await sendSurveyReminder(responseId, tenantId), "Survey reminder");
+    }
+
+    case "set_field": {
+      const entity = step.config.entity === "contact" ? "contact" : "lead";
+      const recordId = entity === "contact" ? contactId : leadId;
+      if (!recordId) return { status: "skipped", note: `Set field skipped: no ${entity}` };
+      const key = stringConfig(step, "key");
+      if (!key) return { status: "skipped", note: "Set field skipped: no field chosen" };
+      if (!tenantId) return { status: "skipped", note: "Set field skipped: the run has no workspace" };
+      // Not a decision but a fault when it refuses (field switched off, value no longer
+      // one of its options) — skipped with the reason, so the trace says why.
+      const result = await setCustomFieldByKey(entity, recordId, key, String(step.config.value ?? ""), tenantId);
+      if (!result.ok) return { status: "skipped", note: `Set field skipped: ${result.error}` };
+      return { status: "completed", note: result.cleared ? `${result.label} cleared` : `${result.label} set` };
     }
 
     case "add_tag":

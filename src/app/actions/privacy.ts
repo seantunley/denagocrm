@@ -71,10 +71,12 @@ export async function anonymizeContact(contactId: string) {
     await basePrisma.$transaction(async (tx) => {
       await tx.$queryRaw`SELECT "id" FROM "Contact" WHERE "id" = ${contactId} FOR UPDATE`;
 
-      const [leadIds, quoteIds, caseIds] = await Promise.all([
+      const [leadIds, quoteIds, caseIds, vehicleIds, jobCardIds] = await Promise.all([
         tx.lead.findMany({ where: { contactId }, select: { id: true } }).then((r) => r.map((x) => x.id)),
         tx.quote.findMany({ where: { contactId }, select: { id: true } }).then((r) => r.map((x) => x.id)),
         tx.customerCase.findMany({ where: { contactId }, select: { id: true } }).then((r) => r.map((x) => x.id)),
+        tx.vehicle.findMany({ where: { contactId, tenantId: contact.tenantId }, select: { id: true } }).then((r) => r.map((x) => x.id)),
+        tx.jobCard.findMany({ where: { contactId, tenantId: contact.tenantId }, select: { id: true } }).then((r) => r.map((x) => x.id)),
       ]);
 
       await tx.contact.update({
@@ -112,6 +114,8 @@ export async function anonymizeContact(contactId: string) {
       await erase(leadIds, "lead");
       await erase(quoteIds, "quote");
       await erase(caseIds, "case");
+      await erase(vehicleIds, "vehicle");
+      await erase(jobCardIds, "jobcard");
 
       await tx.consentRecord.create({
         data: {

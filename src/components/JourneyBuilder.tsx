@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useContext, useMemo, useState } from "react";
 import { currencySymbol } from "@/lib/format";
 import { useMoneyFormat } from "@/components/MoneyFormatProvider";
 import { messageEditorHref } from "@/lib/customerMessagePlaces";
@@ -12,13 +12,15 @@ import { JOURNEY_TRIGGER_LABELS, type JourneyTriggerSpec } from "@/lib/journeyTr
 import { BuilderSaveStatus, BuilderWorkspaceBar, BuilderWorkspaceShell } from "@/components/builder-workspace";
 import { JOURNEY_RUN_MODES, RUN_MODE_LEGACY_NOTE } from "@/lib/journeyRunModes";
 import { builderDefinition, builderSteps, conditionHasOwnTargets, emptyGroup, generatedStopId, initialConfig, isRecord, newWaitStep, type BuilderStep } from "@/lib/journeyBuilderDefinition";
-import JourneyConditionGroupEditor from "@/components/JourneyConditionGroupEditor";
+import JourneyConditionGroupEditor, { JourneyCustomFieldsContext, type JourneyCustomField } from "@/components/JourneyConditionGroupEditor";
 import JourneyCanvas from "@/components/JourneyCanvas";
 import { JourneyModulesContext, useModuleBlock } from "@/components/journeyModulesContext";
 import { missingModule, moduleLabel, TRIGGER_MODULE } from "@/lib/journeyModules";
 import ConfirmActionDialog from "@/components/ConfirmActionDialog";
 
 export type JourneyOption = { id: string; name: string };
+
+const NO_CUSTOM_FIELDS = { lead: [], contact: [] };
 
 /** Containers (Choose, Repeat) hold their own step lists, nested up to the parser's depth limit. */
 const CONTAINERS = new Set(["choose", "repeat"]);
@@ -65,7 +67,10 @@ export default function JourneyBuilder({
   submitAction,
   submitLabel = "Save journey draft",
   enabledModules,
+  customFields = NO_CUSTOM_FIELDS,
 }: {
+  /** The workspace's lead and contact custom fields — for conditions and the "Set a field" step. */
+  customFields?: { lead: JourneyCustomField[]; contact: JourneyCustomField[] };
   /** The workspace's enabled modules: triggers and steps of any other module aren't offered. Omitted → all. */
   enabledModules?: string[];
   stages: JourneyOption[];
@@ -152,6 +157,7 @@ export default function JourneyBuilder({
     // SaveForm shows the strict validation message ("two triggers share an ID")
     // instead of an error page. Not reset on success: the steps live in state.
     <JourneyModulesContext.Provider value={enabled}>
+    <JourneyCustomFieldsContext.Provider value={customFields}>
     <SaveForm action={submitAction ?? createJourney} resetOnSuccess={false} className="space-y-5">
       <input type="hidden" name="triggers" value={JSON.stringify(triggers)} />
       <input type="hidden" name="entryConditions" value={JSON.stringify(entryConditions)} />
@@ -380,6 +386,7 @@ export default function JourneyBuilder({
         </div>
       </BuilderWorkspaceShell>
     </SaveForm>
+    </JourneyCustomFieldsContext.Provider>
     </JourneyModulesContext.Provider>
   );
 }
@@ -490,6 +497,76 @@ function TimeoutField({ minutes, onChange }: { minutes: number; onChange: (minut
   );
 }
 
+/**
+ * "Set a field": which record, which of its custom fields, and the value — as the
+ * field's own control (its options, yes/no) where it has one. Checked again when
+ * the step runs, by the same parser the record's form uses.
+ */
+function SetFieldFields({ config, onChange }: { config: Record<string, unknown>; onChange: (config: Record<string, unknown>) => void }) {
+  const custom = useContext(JourneyCustomFieldsContext);
+  const entity = config.entity === "contact" ? "contact" : "lead";
+  const fields = custom[entity];
+  const key = String(config.key ?? "");
+  const value = String(config.value ?? "");
+  const def = fields.find((f) => f.key === key);
+  const set = (patch: Record<string, unknown>) => onChange({ ...config, ...patch });
+  return (
+    <div className="space-y-2">
+      <div className="grid gap-2 md:grid-cols-2">
+        <select className="input" aria-label="Record" value={entity} onChange={(e) => set({ entity: e.target.value, key: "", value: "" })}>
+          <option value="lead">The lead</option>
+          <option value="contact">The customer (contact)</option>
+        </select>
+        <select
+          className="input"
+          aria-label="Field"
+          value={key}
+          // A yes/no field starts on "Yes", matching what its control shows (an empty value would save "No").
+          onChange={(e) => set({ key: e.target.value, value: fields.find((f) => f.key === e.target.value)?.type === "checkbox" ? "true" : "" })}
+        >
+          <option value="">Choose a field</option>
+          {key && !def && <option value={key}>{key} (no longer active)</option>}
+          {fields.map((f) => <option key={f.key} value={f.key}>{f.label}</option>)}
+        </select>
+      </div>
+      {fields.length === 0 && (
+        <p className="text-xs text-slate-500">No {entity} fields yet — add them in Settings → Custom fields.</p>
+      )}
+      {def && (def.type === "checkbox" ? (
+        <select className="input" aria-label="Value" value={value || "true"} onChange={(e) => set({ value: e.target.value })}>
+          <option value="true">Yes</option><option value="false">No</option>
+        </select>
+      ) : def.type === "select" ? (
+        <select className="input" aria-label="Value" value={value} onChange={(e) => set({ value: e.target.value })}>
+          <option value="">Clear the field</option>
+          {def.options.map((o) => <option key={o} value={o}>{o}</option>)}
+        </select>
+      ) : def.type === "multiselect" ? (
+        <div className="flex flex-wrap gap-x-4 gap-y-1.5">
+          {def.options.map((o) => {
+            const picked = (() => { try { const p: unknown = JSON.parse(value || "[]"); return Array.isArray(p) ? p.map(String) : []; } catch { return []; } })();
+            return (
+              <label key={o} className="flex items-center gap-2 text-sm text-slate-300">
+                <input type="checkbox" checked={picked.includes(o)} onChange={(e) => set({ value: JSON.stringify(e.target.checked ? [...picked, o] : picked.filter((p) => p !== o)) })} />
+                {o}
+              </label>
+            );
+          })}
+        </div>
+      ) : (
+        <input
+          className="input"
+          aria-label="Value"
+          type={def.type === "number" || def.type === "currency" ? "number" : def.type === "date" ? "date" : "text"}
+          placeholder={def.type === "link" ? "Record id" : "Value (leave empty to clear the field)"}
+          value={value}
+          onChange={(e) => set({ value: e.target.value })}
+        />
+      ))}
+    </div>
+  );
+}
+
 /** `hideNested`: a Choose's branches and a Repeat's loop are left out — the canvas shows those steps as cards. */
 function StepFields({ step, onChange, depth, lists, hideNested = false }: { step: BuilderStep; onChange: (step: BuilderStep) => void; depth: number; lists: Lists; hideNested?: boolean }) {
   const { config } = step;
@@ -548,6 +625,8 @@ function StepFields({ step, onChange, depth, lists, hideNested = false }: { step
     case "add_tag":
     case "remove_tag":
       return <select className="input" value={String(config.tagId ?? "")} onChange={(e) => set("tagId", e.target.value)}><option value="">Choose tag</option>{lists.tags.map((tag) => <option key={tag.id} value={tag.id}>{tag.name}</option>)}</select>;
+    case "set_field":
+      return <SetFieldFields config={config} onChange={(next) => onChange({ ...step, config: next })} />;
 
     // The lead outcome steps. Each says which statuses it acts on, because "why did my step skip?" is otherwise a
     // question only the run trace can answer — and the answer is always the same one.

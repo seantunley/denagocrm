@@ -47,7 +47,7 @@ import {
   setQuoteStatus,
   type QuoteDraftInput,
 } from "@/app/actions/quotes";
-import { recordCustomFields, saveCustomFieldValues } from "@/app/actions/customFields";
+import { recordCustomFields, recordLinkChoices, saveCustomFieldValues } from "@/app/actions/customFields";
 import type { FieldWithValue } from "@/lib/customFields-helpers";
 import ConfirmDelete from "@/components/ConfirmDelete";
 import CustomFieldsForm from "@/components/custom-fields/CustomFieldsForm";
@@ -1377,6 +1377,7 @@ export function QuoteEditorDialog({
                       <CustomFieldsForm
                         fields={customFields}
                         action={saveCustomFieldValues.bind(null, "quote", savedQuote.id)}
+                        loadLinks={recordLinkChoices.bind(null, "quote", savedQuote.id)}
                         readOnly={!editable}
                         className="rounded-2xl border border-white/[0.08] bg-white/[0.025] p-4 sm:p-5"
                       />

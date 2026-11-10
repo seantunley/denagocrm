@@ -1,11 +1,17 @@
 import "server-only";
 import { prisma } from "@/lib/db";
+import { getCurrentUser } from "@/lib/auth";
+import { getAccessibleContactIds, getAccessibleLeadIds, getAccessibleVehicleIds } from "@/lib/permissions";
+import { contactName } from "@/lib/format";
 import {
   normalizeDef,
   type CustomEntity,
   type FieldDef,
   type FieldWithValue,
   type DefRow,
+  type LinkChoice,
+  type LinkChoices,
+  type LinkTarget,
 } from "./customFields-helpers";
 
 // ─── Custom fields (Path A, Phase 2) ─────────────────────────────────
@@ -18,32 +24,7 @@ import {
 // so `@/lib/customFields` stays the single import point for consumers.
 
 export * from "./customFields-helpers";
-
-/** Definitions for an entity, ordered. Active-only unless includeInactive. */
-export async function getFieldDefs(
-  entity: CustomEntity,
-  opts: { includeInactive?: boolean } = {},
-): Promise<FieldDef[]> {
-  const rows = await prisma.customFieldDef.findMany({
-    where: { entity, ...(opts.includeInactive ? {} : { active: true }) },
-    orderBy: [{ order: "asc" }, { createdAt: "asc" }],
-  });
-  return rows.map((r) => normalizeDef(r as DefRow));
-}
-
-/** Active definitions for an entity paired with a record's current values. */
-export async function getFieldsWithValues(
-  entity: CustomEntity,
-  recordId: string,
-): Promise<FieldWithValue[]> {
-  const defs = await getFieldDefs(entity);
-  if (defs.length === 0) return [];
-  const values = await prisma.customFieldValue.findMany({
-    where: { recordId, defId: { in: defs.map((d) => d.id) } },
-  });
-  const byDef = new Map(values.map((v) => [v.defId, v.value]));
-  return defs.map((def) => ({ def, value: byDef.get(def.id) ?? null }));
-}
+export * from "./customFieldValues";
 
 /** Does an entity have any active custom fields? Cheap gate for detail views. */
 export async function hasCustomFields(entity: CustomEntity): Promise<boolean> {
@@ -96,4 +77,86 @@ export async function deleteCustomValuesFor(
     where: { recordId: { in: recordIds }, def: { entity } },
   });
   return res.count;
+}
+
+// ─── Link-to-a-record fields ─────────────────────────────────────────
+
+// ponytail: the lead / vehicle pickers list the 500 most recent records the viewer
+// may see (plus whatever is already linked); add a search box like ContactPicker if
+// a workspace outgrows that.
+const LINK_LIST_CAP = 500;
+
+const narrow = (ids: string[] | null) => (ids === null ? {} : { id: { in: ids } });
+
+/**
+ * The records each link field on a form may point at, limited to what the
+ * current viewer may open. Contacts are searched live by the picker, so only the
+ * already-linked ones are preloaded. A linked record the viewer may not open is
+ * left out, so it shows as "a record you can't open" rather than leaking its name.
+ */
+export async function loadLinkChoices(fields: FieldWithValue[]): Promise<LinkChoices> {
+  const targets = new Set(fields.map((f) => f.def.linkTo).filter((t): t is LinkTarget => t != null));
+  if (targets.size === 0) return {};
+  const user = await getCurrentUser();
+  if (!user) return {};
+  const linked = (target: LinkTarget) =>
+    fields.filter((f) => f.def.linkTo === target && f.value).map((f) => f.value as string);
+  const choices: LinkChoices = {};
+
+  if (targets.has("contact")) {
+    const ids = await getAccessibleContactIds(user);
+    const rows = await prisma.contact.findMany({
+      where: { id: { in: linked("contact") }, deletedAt: null, ...(ids === null ? {} : { AND: [{ id: { in: ids } }] }) },
+      select: { id: true, firstName: true, lastName: true, company: true },
+    });
+    choices.contact = rows.map((c) => ({ id: c.id, label: contactName(c) }));
+  }
+  if (targets.has("lead")) {
+    const ids = await getAccessibleLeadIds(user);
+    const rows = await prisma.lead.findMany({
+      where: { deletedAt: null, ...narrow(ids) },
+      select: { id: true, title: true, name: true },
+      orderBy: { updatedAt: "desc" },
+      take: LINK_LIST_CAP,
+    });
+    choices.lead = await withLinked(rows.map((l) => ({ id: l.id, label: l.title || l.name })), linked("lead"), async (missing) =>
+      (await prisma.lead.findMany({ where: { id: { in: missing }, deletedAt: null, ...narrow(ids) }, select: { id: true, title: true, name: true } }))
+        .map((l) => ({ id: l.id, label: l.title || l.name })),
+    );
+  }
+  if (targets.has("vehicle")) {
+    const ids = await getAccessibleVehicleIds(user);
+    const label = (v: { model: string; regNumber: string | null; vin: string | null }) =>
+      [v.model, v.regNumber ?? v.vin].filter(Boolean).join(" · ");
+    const select = { id: true, model: true, regNumber: true, vin: true } as const;
+    const rows = await prisma.vehicle.findMany({
+      where: { deletedAt: null, ...narrow(ids) },
+      select,
+      orderBy: { createdAt: "desc" },
+      take: LINK_LIST_CAP,
+    });
+    choices.vehicle = await withLinked(rows.map((v) => ({ id: v.id, label: label(v) })), linked("vehicle"), async (missing) =>
+      (await prisma.vehicle.findMany({ where: { id: { in: missing }, deletedAt: null, ...narrow(ids) }, select }))
+        .map((v) => ({ id: v.id, label: label(v) })),
+    );
+  }
+  if (targets.has("product")) {
+    // The catalogue is workspace-wide; inactive models stay listed so an old link still reads.
+    choices.product = (await prisma.product.findMany({
+      where: { deletedAt: null },
+      select: { id: true, name: true },
+      orderBy: { name: "asc" },
+    })).map((p) => ({ id: p.id, label: p.name }));
+  }
+  return choices;
+}
+
+async function withLinked(
+  list: LinkChoice[],
+  linked: string[],
+  load: (missing: string[]) => Promise<LinkChoice[]>,
+): Promise<LinkChoice[]> {
+  const have = new Set(list.map((c) => c.id));
+  const missing = linked.filter((id) => !have.has(id));
+  return missing.length ? [...list, ...(await load(missing))] : list;
 }

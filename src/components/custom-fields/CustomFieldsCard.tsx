@@ -1,4 +1,4 @@
-import { getFieldsWithValues, type CustomEntity } from "@/lib/customFields";
+import { getFieldsWithValues, loadLinkChoices, type CustomEntity } from "@/lib/customFields";
 import { saveCustomFieldValues } from "@/app/actions/customFields";
 import CustomFieldsForm from "./CustomFieldsForm";
 
@@ -22,10 +22,12 @@ export default async function CustomFieldsCard({
 }) {
   const fields = await getFieldsWithValues(entity, recordId);
   if (fields.length === 0) return null;
+  const links = await loadLinkChoices(fields);
 
   return (
     <CustomFieldsForm
       fields={fields}
+      links={links}
       action={saveCustomFieldValues.bind(null, entity, recordId)}
       readOnly={readOnly}
     />

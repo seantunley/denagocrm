@@ -41,6 +41,7 @@ import {
   Wrench,
   X,
   Zap,
+  PencilLine,
   type LucideIcon,
 } from "lucide-react";
 import { toast } from "sonner";
@@ -128,6 +129,7 @@ const STEP_META: Record<string, { icon: LucideIcon; description: string }> = {
   lead_reopen: { icon: RotateCcw, description: "Put a won or lost lead back to open" },
   add_tag: { icon: Tag, description: "Tag the contact" },
   remove_tag: { icon: Tag, description: "Take a tag off the contact" },
+  set_field: { icon: PencilLine, description: "Fill in one of your own fields on the lead or contact" },
   wait: { icon: Clock, description: "Pause for minutes, hours or days" },
   wait_for_trigger: { icon: Zap, description: "Pause until something happens — e.g. a quote is signed" },
   wait_for_condition: { icon: Hourglass, description: "Pause until conditions become true" },

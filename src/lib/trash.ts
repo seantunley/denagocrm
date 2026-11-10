@@ -292,6 +292,9 @@ export async function purgeTrash(): Promise<number> {
     quote: "quote",
     lead: "lead",
     contact: "contact",
+    jobCard: "jobcard",
+    vehicle: "vehicle",
+    product: "product",
   };
 
   // Postgres table names for the FOR UPDATE lock below — a fixed whitelist,
@@ -300,6 +303,9 @@ export async function purgeTrash(): Promise<number> {
     quote: "Quote",
     lead: "Lead",
     contact: "Contact",
+    jobCard: "JobCard",
+    vehicle: "Vehicle",
+    product: "Product",
   };
 
   // children before parents so FK cascades behave predictably
@@ -347,12 +353,14 @@ export async function purgeTrash(): Promise<number> {
         // purge a record that left the trash mid-pass, and (for contacts) never
         // delete a restored contact's children. Records restored before we lock
         // fail the `deletedAt < cutoff` predicate and are excluded outright.
-        const locked = await tx.$queryRaw<{ id: string }[]>(Prisma.sql`
-          SELECT "id" FROM ${Prisma.raw(`"${table}"`)}
+        const locked = await tx.$queryRaw<{ id: string; tenantId: string | null }[]>(Prisma.sql`
+          SELECT "id", "tenantId" FROM ${Prisma.raw(`"${table}"`)}
           WHERE "id" IN (${Prisma.join(staleIds)}) AND "deletedAt" < ${cutoff}
           FOR UPDATE`);
         const ids = locked.map((r) => r.id);
         if (ids.length === 0) return { count: 0 };
+        // The workspaces the purged rows belong to — children cascading with them are in the same ones.
+        const tenants = [...new Set(locked.map((r) => r.tenantId).filter((t): t is string => Boolean(t)))];
 
         // Contact has ON DELETE RESTRICT children (support cases + portal uploads)
         // that otherwise block the delete and silently defeat retention / POPIA
@@ -379,6 +387,29 @@ export async function purgeTrash(): Promise<number> {
             });
           }
           await tx.customerCase.deleteMany({ where: { contactId: { in: ids } } });
+        }
+
+        // Vehicles and job cards CASCADE away with their contact (and job cards with
+        // their vehicle), so their custom values go first, the same way.
+        if (model === "contact" || model === "vehicle") {
+          const owner = model === "contact" ? { contactId: { in: ids } } : { vehicleId: { in: ids } };
+          const [vehicleRows, jobRows] = await Promise.all([
+            model === "contact"
+              ? tx.vehicle.findMany({ where: { ...owner, tenantId: { in: tenants } }, select: { id: true } })
+              : Promise.resolve([]),
+            tx.jobCard.findMany({ where: { ...owner, tenantId: { in: tenants } }, select: { id: true } }),
+          ]);
+          const cascaded: Array<[CustomEntity, string[]]> = [
+            ["vehicle", vehicleRows.map((r) => r.id)],
+            ["jobcard", jobRows.map((r) => r.id)],
+          ];
+          for (const [childEntity, childIds] of cascaded) {
+            if (childIds.length > 0) {
+              await tx.customFieldValue.deleteMany({
+                where: { recordId: { in: childIds }, def: { entity: childEntity }, tenantId: { in: tenants } },
+              });
+            }
+          }
         }
 
         // Custom values (EAV, no FK → no cascade) for exactly the rows removed.

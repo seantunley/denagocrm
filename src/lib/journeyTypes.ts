@@ -71,6 +71,9 @@ export const JOURNEY_STEP_TYPES = [
   "lead_reopen",
   "add_tag",
   "remove_tag",
+  // Writes one of the workspace's own fields (Settings → Custom fields) on the
+  // lead or the contact, validated exactly as the record's form validates it.
+  "set_field",
   "wait",
   "condition",
   "stop",
@@ -134,6 +137,7 @@ export const JOURNEY_STEP_LABELS: Record<JourneyStepType, string> = {
   lead_reopen: "Reopen lead",
   add_tag: "Add contact tag",
   remove_tag: "Remove contact tag",
+  set_field: "Set a field",
   wait: "Wait",
   condition: "Condition / branch",
   stop: "Stop journey",
@@ -256,7 +260,21 @@ export const VARIABLE_NAME = /^[a-zA-Z][a-zA-Z0-9_]{0,39}$/;
  */
 export const VARIABLE_FIELD = /^vars\.[a-zA-Z][a-zA-Z0-9_]{0,39}$/;
 
-export type ConditionField = (typeof CONDITION_FIELDS)[number] | `vars.${string}`;
+/**
+ * The workspace's own fields on the lead or the contact — Settings → Custom
+ * fields — as `lead.custom.<key>` / `contact.custom.<key>`. Open by namespace for
+ * the same reason as `vars.`: the workspace defines the keys, and they are
+ * slugified (`a-z0-9_`), so the dot-walk lands on `context.lead.custom[key]`.
+ */
+export const CUSTOM_FIELD_CONDITION = /^(lead|contact)\.custom\.[a-z0-9][a-z0-9_]{0,49}$/;
+/** A custom field key, as the "Set a field" step names it (slugifyKey output: never a leading "_"). */
+export const CUSTOM_FIELD_KEY = /^[a-z0-9][a-z0-9_]{0,49}$/;
+
+export type ConditionField =
+  | (typeof CONDITION_FIELDS)[number]
+  | `vars.${string}`
+  | `lead.custom.${string}`
+  | `contact.custom.${string}`;
 export type ConditionOperator =
   | "equals"
   | "not_equals"
@@ -515,7 +533,7 @@ export function parseConditionGroup(value: unknown): JourneyConditionGroup | nul
     // with. `vars.x` resolves through the same valueAtPath dot-walk as every
     // other field — `vars` is a flat map of strings, so there is nothing below
     // it to walk into.
-    if (!FIELDS.has(field) && !VARIABLE_FIELD.test(field)) {
+    if (!FIELDS.has(field) && !VARIABLE_FIELD.test(field) && !CUSTOM_FIELD_CONDITION.test(field)) {
       throw new Error(`Unsupported condition field: ${field}`);
     }
     if (!OPERATORS.has(operator)) throw new Error(`Unsupported condition operator: ${operator}`);
@@ -605,7 +623,23 @@ function parseStep(raw: unknown, budget: ParseBudget, depth: number, nested: boo
   if (type === "wait_for_condition") parseWaitForConditionConfig(config);
   if (type === "variables") parseVariablesConfig(config);
   if (isLeadOutcomeStep(type)) parseLeadOutcomeConfig(type, config);
+  if (type === "set_field") parseSetFieldConfig(config);
   return step;
+}
+
+/**
+ * `{ entity: "lead" | "contact", key, value }`. An unpicked field (empty key)
+ * saves, like an unpicked user on `assign_user`, and the step skips with a note.
+ * Whether the key and value suit the workspace's field is checked when it runs,
+ * by the same parser the record's form uses — a definition can't know them.
+ */
+function parseSetFieldConfig(config: Record<string, unknown>) {
+  const entity = config.entity ?? "lead";
+  if (entity !== "lead" && entity !== "contact") throw new Error("A set-field step sets a lead or a contact field");
+  const key = String(config.key ?? "");
+  if (key && !CUSTOM_FIELD_KEY.test(key)) throw new Error(`Unknown field key: ${key}`);
+  if (config.value != null && typeof config.value !== "string") throw new Error("A set-field value must be text");
+  if (String(config.value ?? "").length > 2000) throw new Error("A set-field value may be at most 2000 characters");
 }
 
 function parseSequenceInternal(

@@ -76,6 +76,7 @@ import {
 } from "@/lib/workshop-constants";
 import { getDefaultLabourRateCents, effectiveLabourRateCents, totalLoggedHours, jobProfit } from "@/lib/workshop";
 import { hasPermission } from "@/lib/permissions";
+import CustomFieldsCard from "@/components/custom-fields/CustomFieldsCard";
 import WatchButton from "@/components/WatchButton";
 import MentionTextarea from "@/components/MentionTextarea";
 import { watchState } from "@/lib/collaboration";
@@ -351,6 +352,7 @@ export default async function JobCardDetailPage({
               </SaveForm>
             </div>
           </Surface>
+          <CustomFieldsCard entity="jobcard" recordId={jobCard.id} readOnly={!canManageChecklists || jobCard.status === "collected"} />
           <div className="grid gap-4 md:grid-cols-3">
             <SaveForm success="Bay assigned" resetOnSuccess={false} action={setJobCardBay.bind(null, jobCard.id)} className="card space-y-2">
               <label className="label" htmlFor="bayId">Workshop bay</label>

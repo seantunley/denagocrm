@@ -34,9 +34,13 @@ for (const [file, names] of WRITES) {
 }
 
 test("the forms show the messages", () => {
+  // The field-definition form moved into its own client component (so each setting shows only when it applies).
   const page = src("src/app/(app)/settings/custom-fields/page.tsx");
-  assert.match(page, /<SaveForm action=\{saveCustomFieldDef\} resetOnSuccess=\{isNew\}/);
+  assert.match(page, /action=\{saveCustomFieldDef\}/);
   assert.doesNotMatch(page, /<form[^>]*\baction=\{/);
+  const defForm = src("src/components/custom-fields/CustomFieldDefForm.tsx");
+  assert.match(defForm, /<SaveForm action=\{action\} resetOnSuccess=\{isNew\}/);
+  assert.doesNotMatch(defForm, /<form[^>]*\baction=\{/);
   const timeline = src("src/components/LeadTimeline.tsx");
   assert.match(timeline, /<SaveForm action=\{pinAction\}/);
   assert.doesNotMatch(timeline, /<form action=\{pinAction\}/);

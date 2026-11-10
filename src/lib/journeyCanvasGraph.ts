@@ -270,7 +270,7 @@ export function stepSummary(step: BuilderStep): string {
 /** The palette's groups. Every step type is in exactly one (tests/journeyCanvas.test.ts). */
 export const JOURNEY_PALETTE = [
   { group: "messages", label: "Messages", types: ["send_email", "send_sms", "send_push", "send_review_request", "send_service_reminder", "send_signing_reminder", "send_survey_reminder"] },
-  { group: "crm", label: "CRM", types: ["create_activity", "move_stage", "assign_user", "lead_mark_won", "lead_mark_lost", "lead_reopen", "add_tag", "remove_tag"] },
+  { group: "crm", label: "CRM", types: ["create_activity", "move_stage", "assign_user", "lead_mark_won", "lead_mark_lost", "lead_reopen", "add_tag", "remove_tag", "set_field"] },
   { group: "timing", label: "Timing", types: ["wait", "wait_for_trigger", "wait_for_condition"] },
   { group: "logic", label: "Logic", types: ["condition", "choose", "repeat", "variables", "stop"] },
 ] as const satisfies readonly { group: string; label: string; types: readonly JourneyStepType[] }[];
