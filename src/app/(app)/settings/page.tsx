@@ -49,7 +49,7 @@ import { COMMON_CURRENCIES } from "@/lib/currencyRules";
 import { formatDate, formatDateTime, formatZAR, regionalFrom } from "@/lib/format";
 import { DEFAULT_QUOTE_TERMS, quoteValidDays } from "@/lib/quoteExpiry";
 import { DOCUMENT_TYPES_KEY, DOCUMENT_TYPES_MAX, parseDocumentTypes } from "@/lib/documentLabels";
-import { DEAL_BUILTINS, DEAL_FILE_CHECKLIST_KEY, parseDealFileConfig } from "@/lib/dealFile";
+import { DEAL_BUILTINS, DEAL_FILE_CHECKLIST_KEY, isSupplierOnlyType, parseDealFileConfig } from "@/lib/dealFile";
 import { ABSOLUTE_SESSION_HOURS } from "@/lib/session";
 import { decryptValue } from "@/lib/settings";
 import { PUSH_KINDS } from "@/lib/push";
@@ -1039,7 +1039,7 @@ export default async function SettingsPage({
                         {builtin.label}
                       </label>
                     ))}
-                    {documentTypes.map((type) => (
+                    {documentTypes.filter((type) => !isSupplierOnlyType(type)).map((type) => (
                       <label key={type} className="flex items-center gap-2 text-sm">
                         <input type="checkbox" name="dealType" value={type} defaultChecked={dealFileConfig.dealTypes.includes(type)} className="h-4 w-4" />
                         {type}

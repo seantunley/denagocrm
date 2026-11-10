@@ -78,7 +78,9 @@ export function parseDealFileConfig(raw: string | null | undefined): DealFileCon
     : [...DEFAULT_DEAL_FILE_CONFIG.builtins];
   return {
     builtins,
-    dealTypes: documentTypeList(saved.dealTypes) ?? [],
+    // A supplier-only type is never a deal-wide line: its file always names a supplier, and the deal's own lines count
+    // only files naming none — so it could never tick. Dropped here, it is gone for every reader and every saved value.
+    dealTypes: (documentTypeList(saved.dealTypes) ?? []).filter((type) => !isSupplierOnlyType(type)),
     supplierTypes: documentTypeList(saved.supplierTypes) ?? [...DEFAULT_DEAL_FILE_CONFIG.supplierTypes],
   };
 }
