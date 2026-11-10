@@ -22,6 +22,23 @@ test("nothing saved, or something unreadable, is today's checklist", () => {
   });
 });
 
+test("a supplier-only type ticked under 'Every deal needs' is not a deal-wide line that can never tick (Sean, 2026-11-10)", () => {
+  // The setting as saved on prod: supplier invoice + proof of payment ticked in BOTH lists.
+  const saved = '{"builtins":["quote"],"dealTypes":["Supplier invoice","Proof of payment — supplier","ID document"],"supplierTypes":["Supplier invoice","Proof of payment — supplier"]}';
+  const config = parseDealFileConfig(saved);
+  assert.deepEqual(config.dealTypes, ["ID document"]);
+  const items = dealFileChecklist([quote], [
+    { tag: "Supplier invoice", vendorId: "jet", vendorName: "Jetman Distributors" },
+    { tag: "Proof of payment — supplier", vendorId: "jet", vendorName: "Jetman Distributors" },
+  ], types, config);
+  assert.deepEqual(items.map((item) => [item.label, item.done]), [
+    ["Quote", true], ["ID document", false],
+    ["Supplier invoice — Jetman Distributors", true], ["Proof of payment — supplier — Jetman Distributors", true],
+  ]);
+  // The form does not offer them there either.
+  assert.match(read("src/app/(app)/settings/page.tsx"), /documentTypes\.filter\(\(type\) => !isSupplierOnlyType\(type\)\)\.map\(\(type\) => \(\s*<label key=\{type\} className="flex items-center gap-2 text-sm">\s*<input type="checkbox" name="dealType"/);
+});
+
 test("the owner's lists decide the deal's lines, and a supplier's own list replaces the default for it", () => {
   const config: DealFileConfig = { builtins: ["quote", "delivery"], dealTypes: ["ID document"], supplierTypes: ["Supplier invoice"] };
   const items = dealFileChecklist([quote], [], types, config, [
