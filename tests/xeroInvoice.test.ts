@@ -151,6 +151,16 @@ test("Settings' sales tax choice: only percentages with more than one live sales
       { taxType: "ACC28", name: "Accommodation under 28 days" },
     ] },
   ]);
+  // Review of #1068: the chosen rate is deactivated and ONE live 15% rate is left. The
+  // saved % is still offered (with that one rate), so the owner can change or clear it.
+  const oneLeft = za.filter((r) => r.TaxType !== "OUTPUTCAP" && r.TaxType !== "ACC28");
+  assert.deepEqual(xeroTaxRateChoices(oneLeft), [], "nothing to choose without a saved choice");
+  assert.deepEqual(xeroTaxRateChoices(oneLeft, [15]), [{ pct: 15, options: [{ taxType: "OUTPUT", name: "Standard Rate Sales" }] }]);
+  assert.deepEqual(xeroTaxRateChoices([], [15]), [{ pct: 15, options: [] }], "even with no live rate left, it can be cleared");
+  const actions = readFileSync("src/app/actions/xero.ts", "utf8");
+  assert.match(actions, /if \(!taxType\) \{\s*if \(!choices\[String\(pct\)\]\) refuse\("Choose a tax rate\."\);\s*delete choices\[String\(pct\)\];/, "an empty choice clears it");
+  assert.match(actions, /xeroTaxRateChoices\(await \(await xeroClient\(tenantId\)\)\.listTaxRates\(\), saved\)/, "the list offers saved percentages");
+  assert.match(readFileSync("src/components/XeroTaxRatePicker.tsx", "utf8"), /<option value="" disabled=\{!saved\}>\{saved \? "— Clear the choice —"/);
   assert.deepEqual(parseXeroTaxChoices('{"15":{"taxType":"OUTPUT","name":"Standard Rate Sales"}}'), { "15": { taxType: "OUTPUT", name: "Standard Rate Sales" } });
   assert.deepEqual(parseXeroTaxChoices(""), {});
   assert.deepEqual(parseXeroTaxChoices('{"15":{"name":"no type"}}'), {});

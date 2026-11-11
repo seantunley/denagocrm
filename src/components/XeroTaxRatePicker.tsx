@@ -47,18 +47,26 @@ export default function XeroTaxRatePicker({ current }: { current: XeroTaxChoices
       ) : groups.length === 0 ? (
         <p className="text-[11px] text-muted-foreground">Xero has one sales rate per percentage — nothing to choose.</p>
       ) : (
-        groups.map((group) => (
-          <SaveForm key={group.pct} action={chooseXeroTaxRate.bind(null, group.pct)} resetOnSuccess={false} className="flex flex-wrap items-center gap-2">
-            <span className="text-sm">VAT at {group.pct}%</span>
-            <select name="taxType" className="input !w-auto min-w-[14rem]" defaultValue={current[String(group.pct)]?.taxType ?? ""}>
-              <option value="" disabled>Choose a rate…</option>
-              {group.options.map((o) => (
-                <option key={o.taxType} value={o.taxType}>{o.name}</option>
-              ))}
-            </select>
-            <SaveButton className="btn-primary btn-sm" pendingLabel="Saving…">Save</SaveButton>
-          </SaveForm>
-        ))
+        groups.map((group) => {
+          const saved = current[String(group.pct)];
+          const stale = saved && !group.options.some((o) => o.taxType === saved.taxType);
+          return (
+            <SaveForm key={group.pct} action={chooseXeroTaxRate.bind(null, group.pct)} resetOnSuccess={false} className="flex flex-wrap items-center gap-2">
+              <span className="text-sm">VAT at {group.pct}%</span>
+              <select name="taxType" className="input !w-auto min-w-[14rem]" defaultValue={saved && !stale ? saved.taxType : ""}>
+                {/* With a saved choice, the empty option CLEARS it; without one it's only the prompt. */}
+                <option value="" disabled={!saved}>{saved ? "— Clear the choice —" : "Choose a rate…"}</option>
+                {group.options.map((o) => (
+                  <option key={o.taxType} value={o.taxType}>{o.name}</option>
+                ))}
+              </select>
+              <SaveButton className="btn-primary btn-sm" pendingLabel="Saving…">Save</SaveButton>
+              {stale && (
+                <span className="text-[11px] text-amber-300">&ldquo;{saved.name}&rdquo; is no longer live in Xero — choose another, or clear it.</span>
+              )}
+            </SaveForm>
+          );
+        })
       )}
       {error && <p className="text-[11px] text-amber-300">{error}</p>}
     </div>

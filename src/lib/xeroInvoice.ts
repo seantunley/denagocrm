@@ -234,12 +234,20 @@ export function parseXeroTaxChoices(raw: string | null | undefined): XeroTaxChoi
   }
 }
 
-/** Every VAT % where Xero has MORE THAN ONE live sales rate — the ones a person must choose between. */
-export function xeroTaxRateChoices(rates: XeroTaxRate[]): Array<{ pct: number; options: Array<{ taxType: string; name: string }> }> {
-  const pcts = [...new Set(rates.map((r) => Number(r.EffectiveRate)).filter((n) => Number.isFinite(n)))].sort((a, b) => b - a);
+/**
+ * Every VAT % where Xero has MORE THAN ONE live sales rate — the ones a person
+ * must choose between — plus every % that already has a saved choice (`saved`),
+ * however many rates Xero has left there, so a choice that went stale can always
+ * be changed or cleared (review of #1068).
+ */
+export function xeroTaxRateChoices(
+  rates: XeroTaxRate[],
+  saved: number[] = [],
+): Array<{ pct: number; options: Array<{ taxType: string; name: string }> }> {
+  const pcts = [...new Set([...rates.map((r) => Number(r.EffectiveRate)), ...saved].filter((n) => Number.isFinite(n)))].sort((a, b) => b - a);
   return pcts
     .map((pct) => ({ pct, options: salesRatesAt(rates, pct).map((r) => ({ taxType: r.TaxType!, name: r.Name ?? r.TaxType! })) }))
-    .filter((group) => group.options.length > 1);
+    .filter((group) => group.options.length > 1 || saved.includes(group.pct));
 }
 
 /**

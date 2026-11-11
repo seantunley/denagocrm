@@ -380,7 +380,9 @@ export async function listXeroTaxRateChoices(): Promise<{ groups: ReturnType<typ
     await requireTenantOwner();
     const tenantId = await actingTenantId();
     try {
-      return { groups: xeroTaxRateChoices(await (await xeroClient(tenantId)).listTaxRates()) };
+      // A % with a saved choice is always offered, so a stale choice can be changed or cleared.
+      const saved = Object.keys(parseXeroTaxChoices(await getWorkspaceSetting(tenantId, XERO_TAX_CHOICES_KEY))).map(Number);
+      return { groups: xeroTaxRateChoices(await (await xeroClient(tenantId)).listTaxRates(), saved) };
     } catch (err) {
       if (err instanceof XeroNotConnected || (err instanceof Error && err.message.startsWith("Xero:"))) return { error: err.message };
       await logError("xero-tax-rates", err, undefined, { tenantId, alert: false });
@@ -389,24 +391,35 @@ export async function listXeroTaxRateChoices(): Promise<{ groups: ReturnType<typ
   });
 }
 
-/** Save which Xero sales rate the CRM's VAT at `pct`% goes to — checked against Xero's live rates at that %. */
+/**
+ * Save which Xero sales rate the CRM's VAT at `pct`% goes to — checked against
+ * Xero's live sales rates at that %. An empty choice CLEARS it, so a choice that
+ * went stale (its rate deactivated in Xero) never leaves the owner stuck.
+ */
 export async function chooseXeroTaxRate(pct: number, formData: FormData): Promise<ActionResult> {
   return asActionResult(() =>
     withActingStaffScope(async () => {
       const user = await requireTenantOwner();
       const tenantId = await actingTenantId();
       const taxType = String(formData.get("taxType") ?? "").trim();
-      if (!Number.isFinite(pct) || !taxType) refuse("Choose a tax rate.");
+      if (!Number.isFinite(pct)) refuse("Choose a tax rate.");
+      const choices = parseXeroTaxChoices(await getWorkspaceSetting(tenantId, XERO_TAX_CHOICES_KEY));
+      if (!taxType) {
+        if (!choices[String(pct)]) refuse("Choose a tax rate.");
+        delete choices[String(pct)];
+        await putWorkspaceSetting(tenantId, XERO_TAX_CHOICES_KEY, JSON.stringify(choices));
+        await logAudit({ action: "xero.tax_rate_cleared", summary: `Xero tax rate choice for ${pct}% VAT cleared`, user });
+        revalidatePath("/settings/integrations");
+        return { success: `Choice for ${pct}% VAT cleared.` };
+      }
       let option: { taxType: string; name: string } | undefined;
       try {
-        const groups = xeroTaxRateChoices(await (await xeroClient(tenantId)).listTaxRates());
-        option = groups.find((g) => g.pct === pct)?.options.find((o) => o.taxType === taxType);
+        const rates = await (await xeroClient(tenantId)).listTaxRates();
+        option = xeroTaxRateChoices(rates, [pct]).find((g) => g.pct === pct)?.options.find((o) => o.taxType === taxType);
       } catch (err) {
         refuseXero(err);
       }
       if (!option) refuse(`That rate isn't one of Xero's live sales rates at ${pct}% any more — reload the list.`);
-      const choices = parseXeroTaxChoices(await getWorkspaceSetting(tenantId, XERO_TAX_CHOICES_KEY));
-      choices[String(pct)] = option;
       await putWorkspaceSetting(tenantId, XERO_TAX_CHOICES_KEY, JSON.stringify(choices));
       await logAudit({ action: "xero.tax_rate_chosen", summary: `VAT at ${pct}% goes to Xero as "${option.name}" (${option.taxType})`, user });
       revalidatePath("/settings/integrations");
