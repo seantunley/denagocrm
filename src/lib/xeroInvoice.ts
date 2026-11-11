@@ -455,6 +455,18 @@ function summary(invoice: Record<string, unknown> | undefined): XeroInvoiceSumma
 }
 
 /**
+ * Which open invoices "Refresh all" takes next: never tried first, then the ones
+ * tried longest ago — so each press moves on (the caller marks every one it takes
+ * as tried BEFORE trying it, success or not). Review of #1071: ordering by when an
+ * invoice was SENT took the same oldest batch on every press.
+ */
+export function nextXeroRefreshBatch<T extends { id: string; xeroCheckedAt: Date | null }>(rows: T[], cap: number): T[] {
+  return [...rows]
+    .sort((a, b) => (a.xeroCheckedAt?.getTime() ?? -Infinity) - (b.xeroCheckedAt?.getTime() ?? -Infinity) || a.id.localeCompare(b.id))
+    .slice(0, cap);
+}
+
+/**
  * The deposit to record from Xero (Sean, 2026-11-11: "payments come from Xero"):
  * what Xero has received, less the payments already recorded on the deal — the
  * deposit and those payments are ONE balance (quoteLedger.ts). Null when there is
@@ -463,10 +475,14 @@ function summary(invoice: Record<string, unknown> | undefined): XeroInvoiceSumma
  * final say (assertDepositFits).
  */
 export function depositFromXero(
-  quote: { invoicedAt: Date | null; depositPaidAt: Date | null },
+  quote: { invoicedAt: Date | null; depositPaidAt: Date | null; xeroInvoiceId: string | null },
+  /** The Xero invoice whose payment was read. The quote must STILL link it (review of #1071): after an
+   *  organisation switch the link is cleared, and the old organisation's payment must not land here. */
+  readFromInvoiceId: string,
   xeroPaidCents: number,
   livePaymentsCents: number,
 ): number | null {
+  if (quote.xeroInvoiceId !== readFromInvoiceId) return null;
   if (!quote.invoicedAt || quote.depositPaidAt) return null;
   const cents = xeroPaidCents - livePaymentsCents;
   return cents > 0 ? cents : null;
