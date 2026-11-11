@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import { getActiveTenantId, requireTenantOwner } from "@/lib/auth";
-import { XeroAmbiguousOrganisation, exchangeXeroCode } from "@/lib/xero";
+import { XeroAmbiguousOrganisation, XeroOrganisationInUse, exchangeXeroCode } from "@/lib/xero";
 import { logAudit } from "@/lib/audit";
 import { logError } from "@/lib/errorLog";
 
@@ -36,6 +36,7 @@ export async function GET(request: Request) {
     return back(forgotten ? "switched" : "connected");
   } catch (err) {
     if (err instanceof XeroAmbiguousOrganisation) return back("ambiguous");
+    if (err instanceof XeroOrganisationInUse) return back("in-use");
     await logError("xero-connect", err);
     return back("failed");
   }

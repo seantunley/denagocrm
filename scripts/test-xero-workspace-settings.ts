@@ -5,6 +5,9 @@
  * on. The general getSetting/putSetting resolve to the founding workspace while
  * enforcement is off, which is how one workspace's choice reached another.
  *
+ * Also: a Xero organisation already connected to another workspace — by its
+ * credential row OR through the settings-store fallback — is refused (#1069).
+ *
  *   npm run test:xero-workspace-settings      (DATABASE_URL = a disposable, migrated, seeded database)
  */
 import assert from "node:assert/strict";
@@ -53,7 +56,23 @@ const ok = (label: string) => console.log(`  ✓ ${++checks}. ${label}`);
       assert.deepEqual(rows.map((r) => r.tenantId).sort(), [A, B].sort(), `${mode}: one row per workspace`);
       ok(`enforcement ${mode}: two workspaces keep different Xero tax rates and fee items for the same 15%`);
     }
+
+    // One Xero organisation, one workspace (review of #1069): taken is taken wherever the
+    // connection lives — a credential row, or the settings store (the founding workspace's fallback).
+    const { xeroOrganisationTakenElsewhere } = await import("../src/lib/xero");
+    const takenFor = (tenantId: string, org: string) => basePrisma.$transaction((tx) => xeroOrganisationTakenElsewhere(tx, tenantId, org));
+    const ORG_CRED = `org-cred-${SFX}`;
+    const ORG_LEGACY = `org-legacy-${SFX}`;
+    await basePrisma.tenantIntegrationCredential.create({ data: { tenantId: A, key: "XERO_TENANT_ID", value: ORG_CRED } });
+    await basePrisma.appSetting.create({ data: { tenantId: A, key: "XERO_TENANT_ID", value: ORG_LEGACY } });
+    assert.equal(await takenFor(B, ORG_CRED), true, "connected to A by its credential row → B is refused");
+    assert.equal(await takenFor(B, ORG_LEGACY), true, "connected to A through the settings-store fallback → B is refused");
+    assert.equal(await takenFor(A, ORG_CRED), false, "A reconnecting its OWN organisation is fine");
+    assert.equal(await takenFor(A, ORG_LEGACY), false);
+    assert.equal(await takenFor(B, `org-free-${SFX}`), false, "an organisation nobody has is free");
+    ok("an organisation connected to another workspace is taken — by credential row or by the settings-store fallback");
   } finally {
+    await basePrisma.tenantIntegrationCredential.deleteMany({ where: { tenantId: { in: [A, B] } } });
     await basePrisma.appSetting.deleteMany({ where: { tenantId: { in: [A, B] } } });
     await basePrisma.tenant.deleteMany({ where: { id: { in: [A, B] } } });
     await basePrisma.$disconnect();

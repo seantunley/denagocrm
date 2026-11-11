@@ -868,11 +868,12 @@ export const assistantAndMoreArticles: HelpArticle[] = [
         "Optionally enter your **Sales account code** and save it (blank uses 200, Xero's standard Sales account).",
         "Press **Connect Xero**, sign in to Xero, tick your organisation and allow access. You come back to the CRM showing **Connected to** your organisation.",
       ] },
+      { type: "p", text: "A Xero organisation belongs to one workspace only. If it is already connected to another workspace, Connect Xero refuses and nothing changes." },
       { type: "p", text: "Behind the scenes the CRM uses one Xero app, set up once by whoever hosts it (its client ID and secret live in the hosting settings, not on this page). If Connect Xero says the app isn't set up, that's where to look." },
       { type: "h", text: "Send an invoice to Xero" },
       { type: "steps", items: [
         "On the **Deliveries** board, find the invoice (an accepted quote gets its own INV number).",
-        "Press **Send invoice to Xero**. The invoice is created in Xero as a **draft**, with the CRM's invoice and quote numbers (e.g. INV-000123 / Q-1029, followed by the quote's CRM code) in its Reference.",
+        "Press **Send invoice to Xero**. The invoice is created in Xero as a **draft**, with the CRM's invoice and quote numbers (e.g. INV-000123 / Q-1029) in its Reference.",
         "The card now shows Xero's invoice number and status, with **Open in Xero** and **Refresh**.",
         "Already delivered, and never sent? A delivered job leaves the Deliveries board, but every issued invoice is also on the customer's record, in the **Xero** card, with the same buttons.",
         "Finish the invoice in Xero — approve it, email it, record payment. Press **Refresh** to bring Xero's latest number and status (Awaiting payment, Paid…) back, and to file Xero's latest PDF.",

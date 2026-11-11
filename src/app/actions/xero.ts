@@ -37,6 +37,7 @@ import {
   totalsDiffer,
   xeroPdfFileName,
   xeroReference,
+  legacyXeroReference,
   xeroStatusLabel,
   type XeroInvoiceSummary,
 } from "@/lib/xeroInvoice";
@@ -178,8 +179,10 @@ export async function sendQuoteToXero(quoteId: string): Promise<ActionResult> {
         const reference = xeroReference(quote);
         const client = await xeroClient(tenantId);
 
-        // 2 — a send that already reached Xero is adopted, never repeated.
-        let invoice = await client.findInvoiceByReference(reference);
+        // 2 — a send that already reached Xero is adopted, never repeated: under
+        // today's Reference, or the longer one sends used before 2026-11-11.
+        let invoice =
+          (await client.findInvoiceByReference(reference)) ?? (await client.findInvoiceByReference(legacyXeroReference(quote)));
         let contact: { contactId: string; created: boolean } | null = invoice?.contactId ? { contactId: invoice.contactId, created: false } : null;
         const adopted = Boolean(invoice);
         let missingItems: string[] = [];

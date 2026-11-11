@@ -50,6 +50,8 @@ const TIMEOUT = 20_000;
 export class XeroNotConnected extends Error {}
 /** The consent didn't identify exactly one organisation — never guess with somebody's books. */
 export class XeroAmbiguousOrganisation extends Error {}
+/** The organisation is already connected to ANOTHER workspace — one Xero organisation, one workspace. */
+export class XeroOrganisationInUse extends Error {}
 
 /** The platform's Xero app, from the hosting environment. Null when it isn't set up. */
 export function xeroApp(): { clientId: string; clientSecret: string } | null {
@@ -116,6 +118,14 @@ export async function exchangeXeroCode(input: {
   const forgotten = await basePrisma.$transaction(
     async (tx) => {
       await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`xero-token:${input.tenantId}`}))`;
+      // One Xero organisation, one workspace (Sean, 2026-11-11: "Two workspaces will
+      // never share the same Xero") — enforced, not assumed: it's what lets the
+      // Reference be just "INV-000123 / Q-1029". Locked on the ORGANISATION, so two
+      // workspaces connecting it at the same moment can't both succeed.
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`xero-org:${org.tenantId}`}))`;
+      if (await xeroOrganisationTakenElsewhere(tx, input.tenantId, org.tenantId)) {
+        throw new XeroOrganisationInUse(`${org.tenantName} is already connected to another workspace.`);
+      }
       const previous = (await resolveIntegrationBundle(input.tenantId, "xero"))?.XERO_TENANT_ID;
       const cleared = previous && previous !== org.tenantId ? await forgetXeroLinks(tx, input.tenantId) : null;
       await putTenantCredentialBundle(
@@ -129,6 +139,19 @@ export async function exchangeXeroCode(input: {
   );
   await recordIntegrationVerified(input.tenantId, "xero");
   return { orgName: org.tenantName, forgotten };
+}
+
+/**
+ * Is this Xero organisation already connected to ANOTHER workspace? Checked in
+ * EVERY place a workspace's connection can live: its own credential rows, and the
+ * workspace settings store — which is where the founding workspace's older,
+ * platform-level values are, and what resolveIntegrationBundle falls back to for
+ * it (review of #1069). Call under the organisation's advisory lock.
+ */
+export async function xeroOrganisationTakenElsewhere(tx: SettingsTx, tenantId: string, xeroOrgId: string): Promise<boolean> {
+  // Deliberately across workspaces (every one but this): that IS the question.
+  if ((await tx.tenantIntegrationCredential.count({ where: { tenantId: { not: tenantId }, key: "XERO_TENANT_ID", value: xeroOrgId } })) > 0) return true;
+  return (await tx.appSetting.count({ where: { tenantId: { not: tenantId }, key: "XERO_TENANT_ID", value: xeroOrgId } })) > 0;
 }
 
 /**
@@ -296,7 +319,7 @@ export async function xeroClient(tenantId: string): Promise<XeroClient> {
     },
 
     async findInvoiceByReference(reference) {
-      // Our references are "INV-000123 / Q-1029 / <quote id>" — no quotes to escape in the where clause.
+      // Our references are "INV-000123 / Q-1029" — no quotes to escape in the where clause.
       const where = `Type=="ACCREC" AND Reference=="${reference.replace(/"/g, "")}"`;
       return liveInvoiceWithReference(await json(`/Invoices?where=${encodeURIComponent(where)}`), reference);
     },
