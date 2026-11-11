@@ -2,8 +2,9 @@ import { requireTenantOwner, getActiveTenantId } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 import { getWorkspaceSetting, hasTenantCredentialOverride, isSecretSettingKey, resolveIntegrationBundle } from "@/lib/settings";
 import XeroItemPicker from "@/components/XeroItemPicker";
-import { linkFeeToXeroItem } from "@/app/actions/xero";
-import { XERO_FEE_ITEM_KEYS, XERO_TAX_CHOICES_KEY, parseXeroItemLink, parseXeroTaxChoices } from "@/lib/xeroInvoice";
+import { linkFeeToXeroItem, setXeroPaymentsSource } from "@/app/actions/xero";
+import { XERO_FEE_ITEM_KEYS, XERO_PAYMENTS_SOURCE_KEY, XERO_TAX_CHOICES_KEY, parseXeroItemLink, parseXeroTaxChoices } from "@/lib/xeroInvoice";
+import { SaveForm, SaveButton } from "@/components/SaveForm";
 import XeroTaxRatePicker from "@/components/XeroTaxRatePicker";
 import WorkspaceIntegrationRows from "@/components/settings/WorkspaceIntegrationRows";
 import {
@@ -74,6 +75,7 @@ export default async function IntegrationsPage({ searchParams }: { searchParams?
     other: parseXeroItemLink(await xeroSetting(XERO_FEE_ITEM_KEYS.other)),
   };
   const xeroTaxChoices = parseXeroTaxChoices(await xeroSetting(XERO_TAX_CHOICES_KEY));
+  const paymentsFromXero = (await xeroSetting(XERO_PAYMENTS_SOURCE_KEY)) !== "crm";
   // Founding tenant falls back to platform credentials when no override is set.
   // Every other tenant gets null — they must configure their own credentials.
   const usesPlatformFallback = !tenantEnforcing() || tenantId === DEFAULT_TENANT_ID;
@@ -265,6 +267,21 @@ export default async function IntegrationsPage({ searchParams }: { searchParams?
                           hint="Any other fee on a quote. Leave unlinked to send fees without an item code."
                         />
                         <XeroTaxRatePicker current={xeroTaxChoices} />
+                        {/* Payments come from Xero (2026-11-11) — visible and switchable. */}
+                        <SaveForm action={setXeroPaymentsSource} resetOnSuccess={false} className="space-y-2">
+                          <p className="label">Payments</p>
+                          <label className="flex items-start gap-2 text-sm">
+                            <input type="checkbox" name="fromXero" defaultChecked={paymentsFromXero} className="mt-1" />
+                            <span>
+                              Payments come from Xero
+                              <span className="block text-[11px] text-muted-foreground">
+                                Record deposits and payments in Xero; Refresh brings them back, so the CRM&apos;s invoices and statements match Xero.
+                                Untick to record them in the CRM again — the CRM&apos;s own deposit and payment forms come back on every invoice.
+                              </span>
+                            </span>
+                          </label>
+                          <SaveButton className="btn-secondary btn-sm" pendingLabel="Saving…">Save</SaveButton>
+                        </SaveForm>
                       </div>
                     )}
                   </div>

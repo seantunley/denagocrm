@@ -71,7 +71,45 @@ const ok = (label: string) => console.log(`  ✓ ${++checks}. ${label}`);
     assert.equal(await takenFor(A, ORG_LEGACY), false);
     assert.equal(await takenFor(B, `org-free-${SFX}`), false, "an organisation nobody has is free");
     ok("an organisation connected to another workspace is taken — by credential row or by the settings-store fallback");
+
+    // An organisation switch (review of #1071): what was BROUGHT IN from Xero goes; money
+    // recorded BY HAND and only matched to Xero stays, unlinked. Workspace B is untouched.
+    const { forgetXeroLinks } = await import("../src/lib/xero");
+    const base = 900_000_000 + Math.floor(Math.random() * 90_000_000);
+    const mk = (id: string, tenantId: string, n: number, deposit: { cents: number; xeroId: string; created: boolean }) =>
+      basePrisma.quote.create({
+        data: {
+          id, number: n, tenantId, status: "accepted", invoiceNumber: n, invoicedAt: new Date(), xeroInvoiceId: `inv-${id}`, xeroStatus: "AUTHORISED",
+          depositPaidAt: new Date(), depositPaidCents: deposit.cents, xeroDepositPaymentId: deposit.xeroId, xeroDepositCreated: deposit.created,
+        },
+      });
+    const qBrought = `qb-${SFX}`, qByHand = `qh-${SFX}`, qOther = `qo-${SFX}`;
+    await mk(qBrought, A, base, { cents: 5_000_000, xeroId: `xp1-${SFX}`, created: true });
+    await mk(qByHand, A, base + 1, { cents: 4_000_000, xeroId: `xp2-${SFX}`, created: false });
+    await mk(qOther, B, base + 2, { cents: 1_000_000, xeroId: `xp9-${SFX}`, created: true });
+    const pay = (id: string, quoteId: string, tenantId: string, method: string, xeroPaymentId: string) =>
+      basePrisma.quotePayment.create({ data: { id, quoteId, tenantId, amountCents: 3_000_000, receivedAt: new Date(), method, createdByName: "t", xeroPaymentId } });
+    await pay(`pb-${SFX}`, qBrought, A, "xero", `xp3-${SFX}`); // brought in from Xero
+    await pay(`ph-${SFX}`, qByHand, A, "eft", `xp4-${SFX}`); // recorded by hand, matched
+    await pay(`po-${SFX}`, qOther, B, "xero", `xp8-${SFX}`); // another workspace
+    await basePrisma.$transaction((tx) => forgetXeroLinks(tx, A));
+    const q = (id: string) => basePrisma.quote.findUniqueOrThrow({ where: { id }, select: { depositPaidAt: true, depositPaidCents: true, xeroDepositPaymentId: true, xeroInvoiceId: true } });
+    const p = (id: string) => basePrisma.quotePayment.findUniqueOrThrow({ where: { id }, select: { voidedAt: true, xeroPaymentId: true } });
+    assert.equal((await q(qBrought)).depositPaidAt, null, "a deposit created from Xero is cleared");
+    const handDeposit = await q(qByHand);
+    assert.ok(handDeposit.depositPaidAt && handDeposit.depositPaidCents === 4_000_000, "a deposit recorded by hand is KEPT");
+    assert.equal(handDeposit.xeroDepositPaymentId, null, "…only unlinked");
+    const brought = await p(`pb-${SFX}`);
+    assert.ok(brought.voidedAt, "a payment brought in from Xero is voided");
+    assert.equal(brought.xeroPaymentId, `xp3-${SFX}`, "…keeping its PaymentID, so reconnecting the organisation restores it");
+    const byHand = await p(`ph-${SFX}`);
+    assert.equal(byHand.voidedAt, null, "a payment recorded by hand is KEPT");
+    assert.equal(byHand.xeroPaymentId, null, "…only unlinked");
+    assert.ok((await q(qOther)).depositPaidAt && !(await p(`po-${SFX}`)).voidedAt, "workspace B untouched");
+    ok("an organisation switch removes only what was brought in from Xero; hand-recorded money stays; other workspaces untouched");
   } finally {
+    await basePrisma.quotePayment.deleteMany({ where: { tenantId: { in: [A, B] } } });
+    await basePrisma.quote.deleteMany({ where: { tenantId: { in: [A, B] } } });
     await basePrisma.tenantIntegrationCredential.deleteMany({ where: { tenantId: { in: [A, B] } } });
     await basePrisma.appSetting.deleteMany({ where: { tenantId: { in: [A, B] } } });
     await basePrisma.tenant.deleteMany({ where: { id: { in: [A, B] } } });

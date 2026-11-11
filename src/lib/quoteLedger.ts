@@ -25,6 +25,7 @@
  */
 import { ActionRefusal } from "./actionFailure";
 import { invoiceTotalCents, isStatementInvoice, statementInvoiceLabel } from "./accountStatement";
+import { xeroOwnsPayments } from "./xeroInvoice";
 // Type-only: the transaction comes from the caller; this module never opens a client.
 import type { prisma } from "./db";
 
@@ -80,6 +81,8 @@ export type RecordPaymentInput = {
   idempotencyKey: string;
   createdById: string | null;
   createdByName: string;
+  /** paymentsComeFromXero(tenant) — required, so no caller can forget: an invoice in Xero takes its payments from there. */
+  paymentsFromXero: boolean;
 };
 
 export type RecordPaymentResult =
@@ -103,6 +106,9 @@ export async function recordPaymentInTx(tx: Tx, input: RecordPaymentInput, fmt: 
   }
 
   if (!isStatementInvoice(ledger.quote)) refuse("Payments can only be recorded against an accepted quote.");
+  // Payments come from Xero (2026-11-11): checked on the row read under the lock.
+  const xeroOwns = xeroOwnsPayments(ledger.quote, input.paymentsFromXero);
+  if (xeroOwns) refuse(xeroOwns);
   // A bank reference names one transfer. The same one twice is the same money twice.
   const reference = input.reference?.trim() || null;
   if (reference) {
@@ -134,10 +140,13 @@ export async function recordPaymentInTx(tx: Tx, input: RecordPaymentInput, fmt: 
 /** Void a payment recorded in error: kept, marked, no longer counted. Under the same lock as everything else. */
 export async function voidPaymentInTx(
   tx: Tx,
-  input: { quoteId: string; tenantId: string; paymentId: string; reason: string; voidedByName: string },
+  input: { quoteId: string; tenantId: string; paymentId: string; reason: string; voidedByName: string; paymentsFromXero: boolean },
 ) {
   const ledger = await lockQuoteLedger(tx, input.quoteId, input.tenantId);
   if (!ledger) refuse(LEDGER_QUOTE_GONE);
+  // A payment removed in Xero is voided by the next Refresh; by hand it would just come back.
+  const xeroOwns = xeroOwnsPayments(ledger.quote, input.paymentsFromXero);
+  if (xeroOwns) refuse(xeroOwns);
   const payment = ledger.payments.find((candidate) => candidate.id === input.paymentId);
   if (!payment) refuse("That payment is no longer available.");
   if (payment.voidedAt) refuse("That payment has already been voided.");

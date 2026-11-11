@@ -22,6 +22,8 @@ import { deliverQuote, QUOTE_GONE, type DeliveryEvidence } from "@/lib/quoteDeli
 import { getRegionalSettings } from "@/lib/settings";
 import { withCurrency } from "@/lib/currencyRules";
 import { emitDeliveryScheduledJourneyEvent } from "@/lib/leadJourneyEvents";
+import { paymentsComeFromXero } from "@/lib/xero";
+import { xeroOwnsPayments } from "@/lib/xeroInvoice";
 
 const MAX_FILE = 4 * 1024 * 1024;
 
@@ -126,7 +128,7 @@ export async function markInvoiced(quoteId: string, formData: FormData) {
       leadId: quote.leadId,
       user,
     });
-    revalidatePath("/deliveries");
+    revalidatePath("/deliveries"); revalidatePath("/invoices");
     revalidatePath(`/quotes/${quoteId}`);
   });
 }
@@ -141,6 +143,7 @@ export async function markDepositPaid(quoteId: string, formData: FormData) {
     if (!quote) refuse(QUOTE_GONE);
     if (!quote.invoicedAt) refuse("Invoice this quote before recording a deposit.");
     if (quote.depositPaidAt) refuse("The deposit is already recorded.");
+    const paymentsFromXero = await paymentsComeFromXero(tenantId);
     // The deposit is in the QUOTE's currency (multicurrency module) — read and said in it.
     const quoteFmt = withCurrency(moneyFmt, quote.currency);
     const amountCents = depositCents(formData, quoteFmt.currency);
@@ -182,6 +185,9 @@ export async function markDepositPaid(quoteId: string, formData: FormData) {
           const ledger = await lockQuoteLedger(tx, quoteId, tenantId);
           if (!ledger) refuse(QUOTE_GONE);
           if (ledger.quote.depositPaidAt) refuse("The deposit is already recorded.");
+          // Payments come from Xero (2026-11-11): an invoice in Xero takes its deposit from there.
+          const xeroOwns = xeroOwnsPayments(ledger.quote, paymentsFromXero);
+          if (xeroOwns) refuse(xeroOwns);
           assertDepositFits(ledger, amountCents, formatZAR);
           for (const document of documents) {
             // The QUOTE's owner, verbatim — this paperwork is the quote's, not the clerk's.
@@ -213,7 +219,7 @@ export async function markDepositPaid(quoteId: string, formData: FormData) {
       leadId: quote.leadId,
       user,
     });
-    revalidatePath("/deliveries");
+    revalidatePath("/deliveries"); revalidatePath("/invoices");
     revalidatePath(`/quotes/${quoteId}`);
   });
 }
@@ -233,10 +239,14 @@ export async function correctDepositAmount(quoteId: string, formData: FormData) 
     if (amountCents === quote.depositPaidCents) return { success: "That is already the recorded amount" };
     // Correcting the deposit UP can take the invoice past paid just as recording
     // it can, so it goes through the same locked check (quoteLedger.ts).
+    const paymentsFromXero = await paymentsComeFromXero(tenantId);
     const updated = await prisma.$transaction(async (tx) => {
       const ledger = await lockQuoteLedger(tx, quoteId, tenantId);
       if (!ledger) refuse(QUOTE_GONE);
       if (!ledger.quote.depositPaidAt) refuse("Record the deposit before correcting its amount.");
+      // From Xero: corrected there, then Refresh — a correction here would be undone by the next one.
+      const xeroOwns = xeroOwnsPayments(ledger.quote, paymentsFromXero);
+      if (xeroOwns) refuse(xeroOwns);
       assertDepositFits(ledger, amountCents, formatZAR);
       return tx.quote.updateMany({
         where: { id: quoteId, tenantId },
@@ -251,7 +261,7 @@ export async function correctDepositAmount(quoteId: string, formData: FormData) 
       leadId: quote.leadId,
       user,
     });
-    revalidatePath("/deliveries");
+    revalidatePath("/deliveries"); revalidatePath("/invoices");
     revalidatePath(`/quotes/${quoteId}`);
   });
 }
@@ -293,7 +303,7 @@ async function replaceStageDocument(quoteId: string, formData: FormData, kind: "
       leadId: quote.leadId,
       user,
     });
-    revalidatePath("/deliveries");
+    revalidatePath("/deliveries"); revalidatePath("/invoices");
     revalidatePath(`/quotes/${quoteId}`);
     revalidatePath("/documents");
   });
@@ -363,7 +373,7 @@ export async function scheduleDelivery(quoteId: string, formData: FormData) {
     });
     // Journeys on "Delivery is scheduled or moved" start now, with {{delivery_date}} = this day. Never rejects.
     await emitDeliveryScheduledJourneyEvent(quote, when, false);
-    revalidatePath("/deliveries");
+    revalidatePath("/deliveries"); revalidatePath("/invoices");
     revalidatePath(`/quotes/${quoteId}`);
     revalidatePath("/workshop-calendar");
   });
@@ -415,7 +425,7 @@ export async function rescheduleDelivery(quoteId: string, formData: FormData) {
     });
     // The same trigger, for the NEW day: the customer hears the date that now stands. Never rejects.
     await emitDeliveryScheduledJourneyEvent(quote, when, true);
-    revalidatePath("/deliveries");
+    revalidatePath("/deliveries"); revalidatePath("/invoices");
     revalidatePath(`/quotes/${quoteId}`);
     revalidatePath("/workshop-calendar");
   });
@@ -501,7 +511,7 @@ export async function registerDeliveryPhotos(
       leadId: quote.leadId,
       user,
     });
-    revalidatePath("/deliveries");
+    revalidatePath("/deliveries"); revalidatePath("/invoices");
     revalidatePath(`/quotes/${quoteId}`);
     return {
       success: failed
@@ -573,7 +583,7 @@ export async function uploadDeliveryPhotos(quoteId: string, formData: FormData) 
         user,
       });
     }
-    revalidatePath("/deliveries");
+    revalidatePath("/deliveries"); revalidatePath("/invoices");
     revalidatePath(`/quotes/${quoteId}`);
     return {
       success:

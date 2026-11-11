@@ -13,6 +13,7 @@ import { getRegionalSettings } from "@/lib/settings";
 import { withCurrency } from "@/lib/currencyRules";
 import { isPaymentMethod, paymentMethodLabel, statementInvoiceLabel } from "@/lib/accountStatement";
 import { recordPaymentInTx, voidPaymentInTx } from "@/lib/quoteLedger";
+import { paymentsComeFromXero } from "@/lib/xero";
 
 /*
  * Payments received against an invoice after its deposit (customer statements,
@@ -51,6 +52,7 @@ function refreshPaths(quoteId: string) {
   revalidatePath(`/deals/${quoteId}`);
   revalidatePath(`/quotes/${quoteId}`);
   revalidatePath("/deliveries");
+  revalidatePath("/invoices");
 }
 
 /**
@@ -77,13 +79,14 @@ export async function recordQuotePayment(quoteId: string, formData: FormData) {
     const reference = text(formData, "reference", MAX_REFERENCE);
     const note = text(formData, "note", MAX_NOTE);
     const idempotencyKey = String(formData.get("idempotencyKey") ?? "");
+    const paymentsFromXero = await paymentsComeFromXero(tenantId);
 
     let duplicate = false;
     try {
       await prisma.$transaction(async (tx) => {
         const result = await recordPaymentInTx(
           tx,
-          { quoteId, tenantId, amountCents, receivedAt, method, reference, note, idempotencyKey, createdById: user.id, createdByName: user.name },
+          { quoteId, tenantId, amountCents, receivedAt, method, reference, note, idempotencyKey, createdById: user.id, createdByName: user.name, paymentsFromXero },
           money,
         );
         // A resubmission records nothing new, so it audits nothing new either.
@@ -125,9 +128,10 @@ export async function voidQuotePayment(quoteId: string, paymentId: string, formD
     const regional = await getRegionalSettings();
     const reason = text(formData, "reason", MAX_NOTE);
     if (!reason || reason.length < 3) refuse("Say why this payment is being voided.");
+    const paymentsFromXero = await paymentsComeFromXero(tenantId);
 
     await prisma.$transaction(async (tx) => {
-      const { payment, ledger } = await voidPaymentInTx(tx, { quoteId, tenantId, paymentId, reason, voidedByName: user.name });
+      const { payment, ledger } = await voidPaymentInTx(tx, { quoteId, tenantId, paymentId, reason, voidedByName: user.name, paymentsFromXero });
       await logAuditStrict(
         {
           action: "payment.voided",

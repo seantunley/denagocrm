@@ -303,7 +303,7 @@ test("an invoice already in Xero for this quote is found by its Reference; voide
       { Type: "ACCREC", InvoiceID: "live", InvoiceNumber: "INV-0042", Reference: ref, Status: "DRAFT", Total: 228000, Contact: { ContactID: "c-9" } },
     ],
   };
-  assert.deepEqual(liveInvoiceWithReference(body, ref), { id: "live", number: "INV-0042", status: "DRAFT", totalCents: 22800000, contactId: "c-9" });
+  assert.deepEqual(liveInvoiceWithReference(body, ref), { id: "live", number: "INV-0042", status: "DRAFT", totalCents: 22800000, contactId: "c-9", amountPaidCents: 0, amountCreditedCents: 0, payments: [] });
   assert.equal(liveInvoiceWithReference({ Invoices: [{ Type: "ACCREC", InvoiceID: "x", Reference: ref, Status: "DELETED" }] }, ref), null);
   assert.equal(liveInvoiceWithReference({ Invoices: [{ Type: "ACCREC", InvoiceID: "x", Reference: "INV-000124 / Q-1030", Status: "DRAFT" }] }, ref), null);
 });
@@ -463,8 +463,9 @@ test("a send writes its result only while its own claim stands; a failed create 
 
 test("answers, labels and file names", () => {
   assert.deepEqual(readXeroInvoice({ Invoices: [{ InvoiceID: "abc", InvoiceNumber: "INV-0042", Status: "DRAFT", Total: 2345.67 }] }), {
-    id: "abc", number: "INV-0042", status: "DRAFT", totalCents: 234567, contactId: null,
+    id: "abc", number: "INV-0042", status: "DRAFT", totalCents: 234567, contactId: null, amountPaidCents: 0, amountCreditedCents: 0, payments: [],
   });
+  assert.equal(readXeroInvoice({ Invoices: [{ InvoiceID: "p", AmountPaid: 25000.5 }] })?.amountPaidCents, 2500050, "what Xero has received");
   assert.equal(readXeroInvoice(null), null);
   assert.equal(xeroErrorMessage({ Elements: [{ ValidationErrors: [{ Message: "Account code '999' is not a valid code." }] }] }, 400), "Account code '999' is not a valid code.");
   assert.equal(xeroErrorMessage(null, 503), "Xero answered 503.");

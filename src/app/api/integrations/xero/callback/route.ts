@@ -30,7 +30,7 @@ export async function GET(request: Request) {
       redirectUri: new URL("/api/integrations/xero/callback", request.url).toString(),
     });
     const cleared = forgotten
-      ? ` — a different organisation, so the links to the previous one were cleared (${forgotten.invoices} invoice(s), ${forgotten.customers} customer(s), ${forgotten.products} product(s), fee items)`
+      ? ` — a different organisation, so the links to the previous one were cleared (${forgotten.invoices} invoice(s), ${forgotten.customers} customer(s), ${forgotten.products} product(s), ${forgotten.payments} payment(s) brought back from it, fee items)`
       : "";
     await logAudit({ action: "integration.xero_connected", summary: `Connected Xero organisation “${orgName}”${cleared}`, user });
     return back(forgotten ? "switched" : "connected");
