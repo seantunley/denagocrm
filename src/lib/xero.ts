@@ -50,6 +50,8 @@ const TIMEOUT = 20_000;
 export class XeroNotConnected extends Error {}
 /** The consent didn't identify exactly one organisation — never guess with somebody's books. */
 export class XeroAmbiguousOrganisation extends Error {}
+/** The organisation is already connected to ANOTHER workspace — one Xero organisation, one workspace. */
+export class XeroOrganisationInUse extends Error {}
 
 /** The platform's Xero app, from the hosting environment. Null when it isn't set up. */
 export function xeroApp(): { clientId: string; clientSecret: string } | null {
@@ -116,6 +118,15 @@ export async function exchangeXeroCode(input: {
   const forgotten = await basePrisma.$transaction(
     async (tx) => {
       await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`xero-token:${input.tenantId}`}))`;
+      // One Xero organisation, one workspace (Sean, 2026-11-11: "Two workspaces will
+      // never share the same Xero") — enforced, not assumed: it's what lets the
+      // Reference be just "INV-000123 / Q-1029". Locked on the ORGANISATION, so two
+      // workspaces connecting it at the same moment can't both succeed.
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`xero-org:${org.tenantId}`}))`;
+      const elsewhere = await tx.tenantIntegrationCredential.count({
+        where: { key: "XERO_TENANT_ID", value: org.tenantId, tenantId: { not: input.tenantId } },
+      });
+      if (elsewhere > 0) throw new XeroOrganisationInUse(`${org.tenantName} is already connected to another workspace.`);
       const previous = (await resolveIntegrationBundle(input.tenantId, "xero"))?.XERO_TENANT_ID;
       const cleared = previous && previous !== org.tenantId ? await forgetXeroLinks(tx, input.tenantId) : null;
       await putTenantCredentialBundle(
@@ -296,7 +307,7 @@ export async function xeroClient(tenantId: string): Promise<XeroClient> {
     },
 
     async findInvoiceByReference(reference) {
-      // Our references are "INV-000123 / Q-1029 / <quote id>" — no quotes to escape in the where clause.
+      // Our references are "INV-000123 / Q-1029" — no quotes to escape in the where clause.
       const where = `Type=="ACCREC" AND Reference=="${reference.replace(/"/g, "")}"`;
       return liveInvoiceWithReference(await json(`/Invoices?where=${encodeURIComponent(where)}`), reference);
     },

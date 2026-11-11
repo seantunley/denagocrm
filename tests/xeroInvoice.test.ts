@@ -57,9 +57,20 @@ test("a DRAFT sales invoice, for the Xero contact by ID, with our numbers in the
   assert.equal(x.Type, "ACCREC");
   assert.equal(x.Status, "DRAFT");
   assert.deepEqual(x.Contact, { ContactID: "c-1" });
-  assert.equal(x.Reference, "INV-000123 / Q-1029 / cq1029abc");
-  // Numbers repeat across workspaces; the quote id doesn't — another workspace's Q-1029 is a different Reference.
-  assert.notEqual(xeroReference({ id: "other-ws-quote", number: 1029, invoiceNumber: 123 }), x.Reference);
+  // Sean, 2026-11-11: just our invoice and quote numbers — no long code.
+  assert.equal(x.Reference, "INV-000123 / Q-1029");
+  assert.equal(xeroReference({ number: 1029, invoiceNumber: null }), "Q-1029");
+  // Unique because one Xero organisation is connected to ONE workspace — enforced at connect, under a lock on the organisation.
+  const lib = readFileSync("src/lib/xero.ts", "utf8");
+  const exchange = lib.slice(lib.indexOf("export async function exchangeXeroCode("), lib.indexOf("async function forgetXeroLinks("));
+  const steps = [
+    "pg_advisory_xact_lock(hashtext(${`xero-org:${org.tenantId}`}))",
+    'where: { key: "XERO_TENANT_ID", value: org.tenantId, tenantId: { not: input.tenantId } },',
+    "if (elsewhere > 0) throw new XeroOrganisationInUse(",
+    "await putTenantCredentialBundle(",
+  ].map((s) => exchange.indexOf(s));
+  assert.ok(steps.every((at, i) => at > 0 && (i === 0 || at > steps[i - 1])), `lock the organisation, refuse if another workspace has it, then save: ${steps}`);
+  assert.match(readFileSync("src/app/api/integrations/xero/callback/route.ts", "utf8"), /if \(err instanceof XeroOrganisationInUse\) return back\("in-use"\);/);
   assert.equal(x.Date, "2026-11-11");
   assert.equal(x.LineAmountTypes, "Inclusive");
   assert.equal(x.CurrencyCode, undefined);
@@ -265,7 +276,7 @@ test("a new Xero contact carries the CRM's billing details", () => {
 // ── Never two invoices; never the wrong books ──────────────────────────────
 
 test("an invoice already in Xero for this quote is found by its Reference; voided ones don't count", () => {
-  const ref = xeroReference({ id: "cq1029abc", number: 1029, invoiceNumber: 123 });
+  const ref = xeroReference({ number: 1029, invoiceNumber: 123 });
   const body = {
     Invoices: [
       { Type: "ACCREC", InvoiceID: "old", Reference: ref, Status: "VOIDED", Total: 1 },

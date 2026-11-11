@@ -150,16 +150,15 @@ export function xeroDate(date: Date): string {
 }
 
 /**
- * "INV-000123 / Q-1029 / <quote id>": our invoice number and the quote, so the
- * Xero invoice points back here. Also the DURABLE key a send searches Xero for
- * before creating anything — it outlives Xero's six-minute idempotency window.
- * The numbers are only unique within one workspace; the quote id is unique
- * everywhere, so two workspaces sharing one Xero organisation can never adopt
- * each other's invoice.
+ * "INV-000123 / Q-1029": our invoice number and the quote, so the Xero invoice
+ * points back here (Sean, 2026-11-11: nothing else — no long code). Also the
+ * DURABLE key a send searches Xero for before creating anything — it outlives
+ * Xero's six-minute idempotency window. Unique because both numbers are unique in
+ * the workspace AND a Xero organisation is connected to one workspace only
+ * (exchangeXeroCode refuses an organisation another workspace has).
  */
-export function xeroReference(quote: Pick<XeroQuoteInput, "id" | "number" | "invoiceNumber">): string {
-  const numbers = quote.invoiceNumber ? `${formatInvoiceNumber(quote.invoiceNumber)} / Q-${quote.number}` : `Q-${quote.number}`;
-  return `${numbers} / ${quote.id}`;
+export function xeroReference(quote: Pick<XeroQuoteInput, "number" | "invoiceNumber">): string {
+  return quote.invoiceNumber ? `${formatInvoiceNumber(quote.invoiceNumber)} / Q-${quote.number}` : `Q-${quote.number}`;
 }
 
 /** Every VAT rate the quote's charged lines and fees use, as percentages. */

@@ -52,6 +52,8 @@ const XERO_NOTICES: Record<string, string> = {
   ambiguous:
     "Xero didn't say which one organisation you chose, so nothing was connected (invoices must never go to the wrong books). Press Connect Xero again and tick only the one organisation.",
   invalid: "That Xero sign-in could not be read — please try again.",
+  "in-use":
+    "That Xero organisation is already connected to another workspace, so nothing was connected. A Xero organisation belongs to one workspace only.",
   failed: "Xero sign-in could not be completed. Check the redirect URI in the Xero app matches this CRM's address, then try again.",
 };
 
