@@ -14,13 +14,17 @@ import { withCurrency } from "@/lib/currencyRules";
 import { payableTotalCents } from "@/lib/pricing";
 import { loadBillToFleet, quoteBillTo } from "@/lib/quoteBillTo";
 import { QUOTE_GONE } from "@/lib/quoteDelivery";
-import { getRegionalSettings, getSetting, putSetting, resolveIntegrationField } from "@/lib/settings";
+import { getRegionalSettings, getWorkspaceSetting, putWorkspaceSetting, resolveIntegrationField } from "@/lib/settings";
 import { deleteFile, saveFile } from "@/lib/storage";
 import { XeroNotConnected, xeroClient, type XeroClient } from "@/lib/xero";
 import { formatInvoiceNumber } from "@/lib/invoiceNumber";
 import {
   XERO_FEE_ITEM_KEYS,
   XERO_STALE_SEND_MS,
+  XERO_TAX_CHOICES_KEY,
+  parseXeroTaxChoices,
+  withXeroTaxChoice,
+  xeroTaxRateChoices,
   xeroInvoiceCancelled,
   xeroSendPlan,
   xeroSendUncertain,
@@ -188,7 +192,7 @@ export async function sendQuoteToXero(quoteId: string): Promise<ActionResult> {
             { name: billTo.name, email: billTo.email, phone: billTo.phone, addressLines: billTo.addressLines ?? (billTo.address ? [billTo.address] : []), vatNumber: billTo.vatNumber },
             known,
           );
-          const taxTypes = await client.taxTypes(quoteTaxRates(quote));
+          const taxTypes = await client.taxTypes(quoteTaxRates(quote), parseXeroTaxChoices(await getWorkspaceSetting(tenantId, XERO_TAX_CHOICES_KEY)));
           const salesAccount = (await resolveIntegrationField(tenantId, "xero", "XERO_SALES_ACCOUNT")) ?? "";
 
           // Lines whose product is linked to a Xero item carry its CURRENT code (looked up by the
@@ -199,8 +203,8 @@ export async function sendQuoteToXero(quoteId: string): Promise<ActionResult> {
             : [];
           // Fee lines follow Settings → Xero: the item for delivery fees, or for other fees.
           const feeLinks = {
-            delivery: parseXeroItemLink(await getSetting(XERO_FEE_ITEM_KEYS.delivery)),
-            other: parseXeroItemLink(await getSetting(XERO_FEE_ITEM_KEYS.other)),
+            delivery: parseXeroItemLink(await getWorkspaceSetting(tenantId, XERO_FEE_ITEM_KEYS.delivery)),
+            other: parseXeroItemLink(await getWorkspaceSetting(tenantId, XERO_FEE_ITEM_KEYS.other)),
           };
           let items: Array<(typeof quote.items)[number] & { xeroItemCode?: string; xeroAccountCode?: string | null }> = quote.items;
           let fees: Array<(typeof quote.fees)[number] & { xeroItemCode?: string; xeroAccountCode?: string | null }> = quote.fees;
@@ -368,6 +372,63 @@ export async function linkProductToXeroItem(productId: string, formData: FormDat
 }
 
 /**
+ * Settings → Integrations → Xero → Sales tax: every VAT % at which Xero has more
+ * than one live sales rate, with the options — loaded when the owner asks, not on
+ * every page view. A South African organisation has six at 15%.
+ */
+export async function listXeroTaxRateChoices(): Promise<{ groups: ReturnType<typeof xeroTaxRateChoices> } | { error: string }> {
+  return withActingStaffScope(async () => {
+    await requireTenantOwner();
+    const tenantId = await actingTenantId();
+    try {
+      // A % with a saved choice is always offered, so a stale choice can be changed or cleared.
+      const saved = Object.keys(parseXeroTaxChoices(await getWorkspaceSetting(tenantId, XERO_TAX_CHOICES_KEY))).map(Number);
+      return { groups: xeroTaxRateChoices(await (await xeroClient(tenantId)).listTaxRates(), saved) };
+    } catch (err) {
+      if (err instanceof XeroNotConnected || (err instanceof Error && err.message.startsWith("Xero:"))) return { error: err.message };
+      await logError("xero-tax-rates", err, undefined, { tenantId, alert: false });
+      return { error: "Xero's tax rates couldn't be loaded. Try again in a moment." };
+    }
+  });
+}
+
+/**
+ * Save which Xero sales rate the CRM's VAT at `pct`% goes to — checked against
+ * Xero's live sales rates at that %. An empty choice CLEARS it, so a choice that
+ * went stale (its rate deactivated in Xero) never leaves the owner stuck.
+ */
+export async function chooseXeroTaxRate(pct: number, formData: FormData): Promise<ActionResult> {
+  return asActionResult(() =>
+    withActingStaffScope(async () => {
+      const user = await requireTenantOwner();
+      const tenantId = await actingTenantId();
+      const taxType = String(formData.get("taxType") ?? "").trim();
+      if (!Number.isFinite(pct)) refuse("Choose a tax rate.");
+      const choices = parseXeroTaxChoices(await getWorkspaceSetting(tenantId, XERO_TAX_CHOICES_KEY));
+      if (!taxType) {
+        if (!choices[String(pct)]) refuse("Choose a tax rate.");
+        await putWorkspaceSetting(tenantId, XERO_TAX_CHOICES_KEY, withXeroTaxChoice(choices, pct, null));
+        await logAudit({ action: "xero.tax_rate_cleared", summary: `Xero tax rate choice for ${pct}% VAT cleared`, user });
+        revalidatePath("/settings/integrations");
+        return { success: `Choice for ${pct}% VAT cleared.` };
+      }
+      let option: { taxType: string; name: string } | undefined;
+      try {
+        const rates = await (await xeroClient(tenantId)).listTaxRates();
+        option = xeroTaxRateChoices(rates, [pct]).find((g) => g.pct === pct)?.options.find((o) => o.taxType === taxType);
+      } catch (err) {
+        refuseXero(err);
+      }
+      if (!option) refuse(`That rate isn't one of Xero's live sales rates at ${pct}% any more — reload the list.`);
+      await putWorkspaceSetting(tenantId, XERO_TAX_CHOICES_KEY, withXeroTaxChoice(choices, pct, option));
+      await logAudit({ action: "xero.tax_rate_chosen", summary: `VAT at ${pct}% goes to Xero as "${option.name}" (${option.taxType})`, user });
+      revalidatePath("/settings/integrations");
+      return { success: `VAT at ${pct}% now goes to Xero as ${option.name}.` };
+    }),
+  );
+}
+
+/**
  * Settings → Integrations → Xero: the Xero item delivery fees (or other fees) are
  * sent under. Checked against Xero's list like a product link; empty unsets it.
  */
@@ -380,7 +441,7 @@ export async function linkFeeToXeroItem(kind: XeroFeeKind, formData: FormData): 
       const label = kind === "delivery" ? "delivery fees" : "other fees";
       const itemId = String(formData.get("xeroItemId") ?? "").trim();
       if (!itemId) {
-        await putSetting(XERO_FEE_ITEM_KEYS[kind], "");
+        await putWorkspaceSetting(tenantId, XERO_FEE_ITEM_KEYS[kind], "");
         await logAudit({ action: "xero.fee_item_unlinked", summary: `Xero item for ${label} cleared`, user });
         revalidatePath("/settings/integrations");
         return { success: `No Xero item for ${label}.` };
@@ -392,7 +453,7 @@ export async function linkFeeToXeroItem(kind: XeroFeeKind, formData: FormData): 
         refuseXero(err);
       }
       if (!item) refuse("That item isn't in Xero (or isn't sold) any more — reload the list.");
-      await putSetting(XERO_FEE_ITEM_KEYS[kind], JSON.stringify({ id: item.id, code: item.code, name: item.name }));
+      await putWorkspaceSetting(tenantId, XERO_FEE_ITEM_KEYS[kind], JSON.stringify({ id: item.id, code: item.code, name: item.name }));
       await logAudit({ action: "xero.fee_item_linked", summary: `Xero item for ${label} set to ${item.code}`, user });
       revalidatePath("/settings/integrations");
       return { success: `${label[0].toUpperCase()}${label.slice(1)} go to Xero as ${item.code}.` };

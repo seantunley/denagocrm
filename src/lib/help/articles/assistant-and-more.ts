@@ -881,6 +881,7 @@ export const assistantAndMoreArticles: HelpArticle[] = [
       { type: "list", items: [
         "Same lines, quantities, prices, discounts and delivery fees as the CRM invoice prints, dated the same day.",
         "Each line uses the Xero tax rate for its VAT percentage, with the CRM's own VAT amount, so the total is the same to the cent. If Xero has no sales rate at a percentage, or two that could fit, nothing is sent and the CRM says which.",
+        "Several sales rates at the same percentage (a South African Xero has six at 15%)? Choose once in **Settings → Integrations → Xero → Sales tax** — for ordinary VAT, **Standard Rate Sales**. The list comes from Xero.",
         "Only the invoice NUMBER differs — Xero numbers its own invoices.",
       ] },
       { type: "h", text: "Xero items (item codes)" },

@@ -4,6 +4,8 @@ import { putTenantCredential, putTenantCredentialBundle, resolveIntegrationBundl
 import { recordIntegrationFailure, recordIntegrationVerified } from "./integrationConnection";
 import {
   XERO_FEE_ITEM_KEYS,
+  XERO_TAX_CHOICES_KEY,
+  type XeroTaxChoices,
   buildXeroContact,
   chooseXeroOrganisation,
   liveInvoiceWithReference,
@@ -148,7 +150,8 @@ async function forgetXeroLinks(tx: SettingsTx, tenantId: string): Promise<{ invo
     where: { tenantId, xeroItemId: { not: null } },
     data: { xeroItemId: null, xeroItemCode: null, xeroItemName: null },
   });
-  await tx.appSetting.updateMany({ where: { tenantId, key: { in: Object.values(XERO_FEE_ITEM_KEYS) } }, data: { value: "" } });
+  // Fee items and the sales tax choices are the old organisation's codes too.
+  await tx.appSetting.updateMany({ where: { tenantId, key: { in: [...Object.values(XERO_FEE_ITEM_KEYS), XERO_TAX_CHOICES_KEY] } }, data: { value: "" } });
   return { invoices: invoices.count, customers: contacts.count + fleets.count, products: products.count };
 }
 
@@ -195,8 +198,10 @@ async function xeroSession(tenantId: string): Promise<{ accessToken: string; xer
 
 /** One signed-in conversation with a workspace's Xero organisation. */
 export type XeroClient = {
-  /** Xero tax type per VAT % used (keys are the % as text), or the reason it can't be told. */
-  taxTypes(rates: number[]): Promise<Record<string, string>>;
+  /** Xero tax type per VAT % used (keys are the % as text), or the reason it can't be told. `chosen`: Settings' pick per %. */
+  taxTypes(rates: number[], chosen?: XeroTaxChoices): Promise<Record<string, string>>;
+  /** All of Xero's tax rates — for Settings' "Sales tax" choice. */
+  listTaxRates(): Promise<XeroTaxRate[]>;
   /** The customer's Xero contact: the remembered one if still live, else matched by email/name, else created. */
   resolveContact(billTo: XeroBillTo, knownContactId: string | null): Promise<{ contactId: string; created: boolean }>;
   /** A live invoice that already carries this Reference — the durable "was it already sent?" check. */
@@ -251,12 +256,16 @@ export async function xeroClient(tenantId: string): Promise<XeroClient> {
   };
 
   const client: XeroClient = {
-    async taxTypes(rates) {
+    async listTaxRates() {
       const body = (await json("/TaxRates")) as { TaxRates?: XeroTaxRate[] } | null;
-      const all = body?.TaxRates ?? [];
+      return body?.TaxRates ?? [];
+    },
+
+    async taxTypes(rates, chosen = {}) {
+      const all = await client.listTaxRates();
       const map: Record<string, string> = {};
       for (const rate of rates) {
-        const picked = pickTaxType(all, rate);
+        const picked = pickTaxType(all, rate, chosen[String(rate)]);
         if (!picked.ok) throw new Error(`Xero: ${picked.error}`);
         map[String(rate)] = picked.taxType;
       }

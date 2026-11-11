@@ -1,9 +1,10 @@
 import { requireTenantOwner, getActiveTenantId } from "@/lib/auth";
 import { prisma } from "@/lib/db";
-import { getSetting, hasTenantCredentialOverride, isSecretSettingKey, resolveIntegrationBundle } from "@/lib/settings";
+import { getWorkspaceSetting, hasTenantCredentialOverride, isSecretSettingKey, resolveIntegrationBundle } from "@/lib/settings";
 import XeroItemPicker from "@/components/XeroItemPicker";
 import { linkFeeToXeroItem } from "@/app/actions/xero";
-import { XERO_FEE_ITEM_KEYS, parseXeroItemLink } from "@/lib/xeroInvoice";
+import { XERO_FEE_ITEM_KEYS, XERO_TAX_CHOICES_KEY, parseXeroItemLink, parseXeroTaxChoices } from "@/lib/xeroInvoice";
+import XeroTaxRatePicker from "@/components/XeroTaxRatePicker";
 import WorkspaceIntegrationRows from "@/components/settings/WorkspaceIntegrationRows";
 import {
   saveTenantCredentialOverride,
@@ -56,10 +57,6 @@ const XERO_NOTICES: Record<string, string> = {
 
 export default async function IntegrationsPage({ searchParams }: { searchParams?: Promise<{ xero?: string }> }) {
   const xeroNotice = XERO_NOTICES[(await searchParams)?.xero ?? ""] ?? null;
-  const xeroFeeItems = {
-    delivery: parseXeroItemLink(await getSetting(XERO_FEE_ITEM_KEYS.delivery)),
-    other: parseXeroItemLink(await getSetting(XERO_FEE_ITEM_KEYS.other)),
-  };
   // Entirely sensitive (credential management) — gate the whole page.
   // Uses requireTenantOwner so a tenant's own provisioned owner can manage
   // their credentials without needing the global platform owner role (a
@@ -67,6 +64,14 @@ export default async function IntegrationsPage({ searchParams }: { searchParams?
   const user = await requireTenantOwner();
   const isPlatformOwner = user.role === "owner";
   const tenantId = await getActiveTenantId();
+  // THIS workspace's Xero codes — named explicitly, never the general settings
+  // (which fall back to the founding workspace when enforcement is off).
+  const xeroSetting = (key: string) => (tenantId ? getWorkspaceSetting(tenantId, key) : Promise.resolve(null));
+  const xeroFeeItems = {
+    delivery: parseXeroItemLink(await xeroSetting(XERO_FEE_ITEM_KEYS.delivery)),
+    other: parseXeroItemLink(await xeroSetting(XERO_FEE_ITEM_KEYS.other)),
+  };
+  const xeroTaxChoices = parseXeroTaxChoices(await xeroSetting(XERO_TAX_CHOICES_KEY));
   // Founding tenant falls back to platform credentials when no override is set.
   // Every other tenant gets null — they must configure their own credentials.
   const usesPlatformFallback = !tenantEnforcing() || tenantId === DEFAULT_TENANT_ID;
@@ -237,7 +242,7 @@ export default async function IntegrationsPage({ searchParams }: { searchParams?
                         Reconnecting to {effectiveShown.XERO_ORG_NAME ?? "the same organisation"} keeps everything. Choosing a
                         different organisation clears this workspace&apos;s links to this one: {xeroLinks.invoices} invoice
                         {xeroLinks.invoices === 1 ? "" : "s"}, {xeroLinks.customers} customer{xeroLinks.customers === 1 ? "" : "s"},{" "}
-                        {xeroLinks.products} product{xeroLinks.products === 1 ? "" : "s"} and the fee items. Filed Xero PDFs stay.
+                        {xeroLinks.products} product{xeroLinks.products === 1 ? "" : "s"}, the fee items and the sales tax choice. Filed Xero PDFs stay.
                       </p>
                     )}
                     <a href="/api/integrations/xero/connect" className="btn-primary btn-sm mt-3 inline-flex">
@@ -257,6 +262,7 @@ export default async function IntegrationsPage({ searchParams }: { searchParams?
                           action={linkFeeToXeroItem.bind(null, "other")}
                           hint="Any other fee on a quote. Leave unlinked to send fees without an item code."
                         />
+                        <XeroTaxRatePicker current={xeroTaxChoices} />
                       </div>
                     )}
                   </div>

@@ -11,6 +11,9 @@ import {
   liveInvoiceWithReference,
   matchXeroContact,
   pickTaxType,
+  parseXeroTaxChoices,
+  withXeroTaxChoice,
+  xeroTaxRateChoices,
   quoteTaxRates,
   readXeroInvoice,
   totalsDiffer,
@@ -101,7 +104,84 @@ test("tax types: exact active revenue rate; 0% prefers zero-rated; ambiguous or 
   const twoStandard = [...rates, { Name: "Standard Rate Sales (Capital)", TaxType: "OUTPUTCAP", Status: "ACTIVE", EffectiveRate: 15, CanApplyToRevenue: true }];
   const ambiguous = pickTaxType(twoStandard, 15);
   assert.equal(ambiguous.ok, false);
-  assert.match(ambiguous.ok ? "" : ambiguous.error, /several sales tax rates at 15%/);
+  assert.match(ambiguous.ok ? "" : ambiguous.error, /several sales tax rates at 15%.*Settings → Integrations → Xero → Sales tax/);
+  // The workspace's choice settles it — while Xero still has that rate live at that %.
+  const cap = { taxType: "OUTPUTCAP", name: "Standard Rate Sales - Capital Goods" };
+  assert.deepEqual(pickTaxType(twoStandard, 15, cap), { ok: true, taxType: "OUTPUTCAP" });
+  assert.deepEqual(pickTaxType(twoStandard, 15, { taxType: "OUTPUT", name: "Standard Rate Sales" }), { ok: true, taxType: "OUTPUT" });
+  assert.equal(pickTaxType(twoStandard, 15, { taxType: "INPUT", name: "Purchases" }).ok, false, "a purchases rate is never accepted as the choice");
+  assert.equal(pickTaxType(twoStandard, 15, { taxType: "OUTPUT14", name: "Old" }).ok, false, "nor a deleted / other-% one");
+  // Review of #1068: the chosen rate is deactivated in Xero and ONE 15% rate is left —
+  // refuse and ask, never quietly switch capital goods to the standard rate.
+  const capDeactivated = twoStandard.map((r) => (r.TaxType === "OUTPUTCAP" ? { ...r, Status: "ARCHIVED" } : r));
+  assert.deepEqual(pickTaxType(capDeactivated, 15), { ok: true, taxType: "OUTPUT" }, "with no choice, the one left is fine");
+  const refused = pickTaxType(capDeactivated, 15, cap);
+  assert.equal(refused.ok, false);
+  assert.match(refused.ok ? "" : refused.error, /"Standard Rate Sales - Capital Goods"\) is no longer a live sales rate in Xero\. Choose again/);
+});
+
+test("Xero settings are always read and written for a NAMED workspace, never the general settings", () => {
+  // getSetting/putSetting fall back to the founding workspace while enforcement is
+  // off — one workspace's Xero choice reached another that way (review of #1068).
+  for (const path of ["src/app/actions/xero.ts", "src/lib/xero.ts", "src/app/(app)/settings/integrations/page.tsx"]) {
+    const source = readFileSync(path, "utf8");
+    assert.doesNotMatch(source, /\b(getSetting|putSetting)\(/, `${path} uses the general settings`);
+  }
+  const actions = readFileSync("src/app/actions/xero.ts", "utf8");
+  for (const use of [
+    "getWorkspaceSetting(tenantId, XERO_TAX_CHOICES_KEY)",
+    "putWorkspaceSetting(tenantId, XERO_TAX_CHOICES_KEY,",
+    "getWorkspaceSetting(tenantId, XERO_FEE_ITEM_KEYS.delivery)",
+    "putWorkspaceSetting(tenantId, XERO_FEE_ITEM_KEYS[kind],",
+  ]) assert.ok(actions.includes(use), use);
+});
+
+test("Settings' sales tax choice: only percentages with more than one live sales rate are offered", () => {
+  // South Africa, 2026-11-11: six sales rates at 15%.
+  const za = [
+    { Name: "Standard Rate Sales", TaxType: "OUTPUT", Status: "ACTIVE", EffectiveRate: 15, CanApplyToRevenue: true },
+    { Name: "Standard Rate Sales - Capital Goods", TaxType: "OUTPUTCAP", Status: "ACTIVE", EffectiveRate: 15, CanApplyToRevenue: true },
+    { Name: "Accommodation under 28 days", TaxType: "ACC28", Status: "ACTIVE", EffectiveRate: 15, CanApplyToRevenue: true },
+    { Name: "Standard Rate Purchases", TaxType: "INPUT", Status: "ACTIVE", EffectiveRate: 15, CanApplyToRevenue: false },
+    { Name: "Zero Rated Sales", TaxType: "ZERORATEDOUTPUT", Status: "ACTIVE", EffectiveRate: 0, CanApplyToRevenue: true },
+  ];
+  assert.deepEqual(xeroTaxRateChoices(za), [
+    { pct: 15, options: [
+      { taxType: "OUTPUT", name: "Standard Rate Sales" },
+      { taxType: "OUTPUTCAP", name: "Standard Rate Sales - Capital Goods" },
+      { taxType: "ACC28", name: "Accommodation under 28 days" },
+    ] },
+  ]);
+  // Review of #1068: the chosen rate is deactivated and ONE live 15% rate is left. The
+  // saved % is still offered (with that one rate), so the owner can change or clear it.
+  const oneLeft = za.filter((r) => r.TaxType !== "OUTPUTCAP" && r.TaxType !== "ACC28");
+  assert.deepEqual(xeroTaxRateChoices(oneLeft), [], "nothing to choose without a saved choice");
+  assert.deepEqual(xeroTaxRateChoices(oneLeft, [15]), [{ pct: 15, options: [{ taxType: "OUTPUT", name: "Standard Rate Sales" }] }]);
+  assert.deepEqual(xeroTaxRateChoices([], [15]), [{ pct: 15, options: [] }], "even with no live rate left, it can be cleared");
+  // Review of #1068: a choice is actually STORED — save it, read it back, the send uses it.
+  const standard = { taxType: "OUTPUT", name: "Standard Rate Sales" };
+  const savedOnce = parseXeroTaxChoices(withXeroTaxChoice({}, 15, standard));
+  assert.deepEqual(savedOnce, { "15": standard }, "what is saved is what is read back");
+  const sixAt15 = [...za, { Name: "Change in use Sales", TaxType: "CHANGEUSE", Status: "ACTIVE", EffectiveRate: 15, CanApplyToRevenue: true }];
+  assert.equal(pickTaxType(sixAt15, 15).ok, false, "before the choice: refused as ambiguous");
+  assert.deepEqual(pickTaxType(sixAt15, 15, savedOnce["15"]), { ok: true, taxType: "OUTPUT" }, "after it: the chosen rate");
+  // Changing one % keeps the others; clearing removes only that one.
+  const two = parseXeroTaxChoices(withXeroTaxChoice(savedOnce, 0, { taxType: "ZERORATEDOUTPUT", name: "Zero Rated Sales" }));
+  assert.deepEqual(Object.keys(two).sort(), ["0", "15"]);
+  assert.deepEqual(parseXeroTaxChoices(withXeroTaxChoice(two, 15, null)), { "0": { taxType: "ZERORATEDOUTPUT", name: "Zero Rated Sales" } });
+  const actions = readFileSync("src/app/actions/xero.ts", "utf8");
+  // The action writes ONLY what withXeroTaxChoice builds — never the map it read.
+  assert.match(actions, /putWorkspaceSetting\(tenantId, XERO_TAX_CHOICES_KEY, withXeroTaxChoice\(choices, pct, option\)\)/, "a choice is saved");
+  assert.match(actions, /putWorkspaceSetting\(tenantId, XERO_TAX_CHOICES_KEY, withXeroTaxChoice\(choices, pct, null\)\)/, "an empty choice clears it");
+  assert.doesNotMatch(actions, /putWorkspaceSetting\(tenantId, XERO_TAX_CHOICES_KEY, JSON\.stringify\(choices\)\)/);
+  assert.match(actions, /xeroTaxRateChoices\(await \(await xeroClient\(tenantId\)\)\.listTaxRates\(\), saved\)/, "the list offers saved percentages");
+  assert.match(readFileSync("src/components/XeroTaxRatePicker.tsx", "utf8"), /<option value="" disabled=\{!saved\}>\{saved \? "— Clear the choice —"/);
+  assert.deepEqual(parseXeroTaxChoices('{"15":{"taxType":"OUTPUT","name":"Standard Rate Sales"}}'), { "15": { taxType: "OUTPUT", name: "Standard Rate Sales" } });
+  assert.deepEqual(parseXeroTaxChoices(""), {});
+  assert.deepEqual(parseXeroTaxChoices('{"15":{"name":"no type"}}'), {});
+  // Wired: the send uses the choice; an organisation switch forgets it with the other Xero codes.
+  assert.match(readFileSync("src/app/actions/xero.ts", "utf8"), /client\.taxTypes\(quoteTaxRates\(quote\), parseXeroTaxChoices\(await getWorkspaceSetting\(tenantId, XERO_TAX_CHOICES_KEY\)\)\)/);
+  assert.match(readFileSync("src/lib/xero.ts", "utf8"), /key: \{ in: \[\.\.\.Object\.values\(XERO_FEE_ITEM_KEYS\), XERO_TAX_CHOICES_KEY\] \}/);
 });
 
 // ── Item codes ──────────────────────────────────────────────────────────────
