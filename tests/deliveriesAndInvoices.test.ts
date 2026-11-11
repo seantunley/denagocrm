@@ -31,7 +31,7 @@ test("columns: what stands between the sale and the handover", () => {
 
 test("each desktop card: chips, ONE next step, the rest behind Details", () => {
   // With Xero connected, sending IS the invoice step; the upload form is the fallback.
-  assert.match(desktop, /column\.key === "payment" && !quote\.invoicedAt && \(\s*xeroConnected && quote\.invoiceNumber \? \(\s*<XeroInvoiceControl/);
+  assert.match(desktop, /column\.key === "payment" && !quote\.invoicedAt && \(\s*xeroConnected && quote\.invoiceNumber && !quote\.xeroExcludedAt \? \(\s*<XeroInvoiceControl/);
   assert.match(desktop, /\) : \(\s*<SaveForm success="Invoice recorded"[^>]*action=\{markInvoiced\.bind\(null, quote\.id\)\}/);
   // Deposit: from Xero by Refresh while payments come from Xero; by hand otherwise.
   assert.match(desktop, /\{xeroOwnsPayments\(quote, paymentsFromXero\) \? \(\s*<p[^>]*>Record the payment in Xero, then press Refresh — the first payment becomes the deposit\.<\/p>\s*\) : \(\s*<ModalTrigger label="Record the deposit by hand"/);
@@ -330,6 +330,29 @@ test("Invoices page: deposit, payments and the statement from each row — the d
   // Recording either refreshes the Invoices page.
   assert.match(src("src/app/actions/quotePayments.ts"), /revalidatePath\("\/deliveries"\);\s*revalidatePath\("\/invoices"\);/);
   assert.match(src("src/app/actions/fulfilment.ts"), /revalidatePath\("\/deliveries"\); revalidatePath\("\/invoices"\);/);
+});
+
+test("'Not for Xero': a historical invoice, marked by hand, is never offered to or sent to Xero; Undo takes it back", () => {
+  // Sean, 2026-11-11: INV-043153 / INV-043152 "are historical and were processed in a different way… Their invoices do not belong in Xero."
+  const set = actions.slice(actions.indexOf("export async function setNotForXero("), actions.indexOf("export async function setXeroPaymentsSource("));
+  assert.match(set, /requireQuoteAccess\(quoteId, "deliveries\.manage"\)/);
+  assert.match(set, /if \(quote\.xeroInvoiceId && !xeroInvoiceCancelled\(quote\.xeroStatus\)\) refuse\(/, "an invoice already in Xero is voided there first");
+  assert.match(set, /if \(xeroSendUncertain\(quote\.xeroStatus\)\) refuse\(/, "not mid-send");
+  assert.match(set, /\{ id: quoteId, tenantId, xeroExcludedAt: null, xeroInvoiceId: quote\.xeroInvoiceId, xeroStatus: quote\.xeroStatus \}/, "the write re-checks what was read");
+  assert.match(set, /action: exclude \? "quote\.not_for_xero" : "quote\.for_xero_again"/, "audited both ways");
+  // Sending refuses it — on the read AND in the claim.
+  assert.match(actions, /if \(quote\.xeroExcludedAt\) refuse\(`\$\{formatInvoiceNumber\(quote\.invoiceNumber\)\} is marked "Not for Xero"/);
+  assert.match(actions, /invoiceNumber: \{ not: null \},\s*xeroExcludedAt: null,\s*xeroInvoiceId: quote\.xeroInvoiceId,/);
+  // Shown as "Not for Xero · Undo" instead of the send button; offered beside it otherwise.
+  const control = src("src/components/XeroInvoiceControl.tsx");
+  assert.ok(control.indexOf("if (quote.xeroExcludedAt)") < control.indexOf("const sendButton"), "a marked invoice never shows the send button");
+  assert.match(control, /setNotForXero\.bind\(null, quote\.id, false\)/);
+  assert.match(control, /setNotForXero\.bind\(null, quote\.id, true\)/);
+  // Not counted as waiting for Xero; the board's invoice step falls back to the upload.
+  assert.match(src("src/app/(app)/invoices/page.tsx"), /const notInXero = rows\.filter\(\(r\) => !r\.quote\.xeroInvoiceId && !r\.quote\.xeroExcludedAt\);/);
+  assert.match(board, /xeroConnected && quote\.invoiceNumber && !quote\.xeroExcludedAt \? \(/);
+  // Its payments work as before: not in Xero, so xeroOwnsPayments never refuses them.
+  assert.equal(xeroOwnsPayments({ xeroInvoiceId: null, xeroStatus: null }, true), null);
 });
 
 test("Invoices page: the board's door, this workspace, only invoices this person may open", () => {

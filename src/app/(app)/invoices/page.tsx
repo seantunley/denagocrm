@@ -95,7 +95,8 @@ export default async function InvoicesPage({ searchParams }: { searchParams?: Pr
     return { quote, total, received, owing: total - received, who: billTo.name || "—", payments: own, statementHref };
   });
   const open = rows.filter((r) => r.owing > 0);
-  const notInXero = rows.filter((r) => !r.quote.xeroInvoiceId);
+  // Waiting to go to Xero — not the historical ones marked "Not for Xero".
+  const notInXero = rows.filter((r) => !r.quote.xeroInvoiceId && !r.quote.xeroExcludedAt);
   const listed = filter === "all" ? rows : filter === "xero" ? notInXero : open;
 
   return (
