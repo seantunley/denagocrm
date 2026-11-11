@@ -123,10 +123,9 @@ export async function exchangeXeroCode(input: {
       // Reference be just "INV-000123 / Q-1029". Locked on the ORGANISATION, so two
       // workspaces connecting it at the same moment can't both succeed.
       await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`xero-org:${org.tenantId}`}))`;
-      const elsewhere = await tx.tenantIntegrationCredential.count({
-        where: { key: "XERO_TENANT_ID", value: org.tenantId, tenantId: { not: input.tenantId } },
-      });
-      if (elsewhere > 0) throw new XeroOrganisationInUse(`${org.tenantName} is already connected to another workspace.`);
+      if (await xeroOrganisationTakenElsewhere(tx, input.tenantId, org.tenantId)) {
+        throw new XeroOrganisationInUse(`${org.tenantName} is already connected to another workspace.`);
+      }
       const previous = (await resolveIntegrationBundle(input.tenantId, "xero"))?.XERO_TENANT_ID;
       const cleared = previous && previous !== org.tenantId ? await forgetXeroLinks(tx, input.tenantId) : null;
       await putTenantCredentialBundle(
@@ -140,6 +139,19 @@ export async function exchangeXeroCode(input: {
   );
   await recordIntegrationVerified(input.tenantId, "xero");
   return { orgName: org.tenantName, forgotten };
+}
+
+/**
+ * Is this Xero organisation already connected to ANOTHER workspace? Checked in
+ * EVERY place a workspace's connection can live: its own credential rows, and the
+ * workspace settings store — which is where the founding workspace's older,
+ * platform-level values are, and what resolveIntegrationBundle falls back to for
+ * it (review of #1069). Call under the organisation's advisory lock.
+ */
+export async function xeroOrganisationTakenElsewhere(tx: SettingsTx, tenantId: string, xeroOrgId: string): Promise<boolean> {
+  // Deliberately across workspaces (every one but this): that IS the question.
+  if ((await tx.tenantIntegrationCredential.count({ where: { tenantId: { not: tenantId }, key: "XERO_TENANT_ID", value: xeroOrgId } })) > 0) return true;
+  return (await tx.appSetting.count({ where: { tenantId: { not: tenantId }, key: "XERO_TENANT_ID", value: xeroOrgId } })) > 0;
 }
 
 /**

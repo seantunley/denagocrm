@@ -161,6 +161,16 @@ export function xeroReference(quote: Pick<XeroQuoteInput, "number" | "invoiceNum
   return quote.invoiceNumber ? `${formatInvoiceNumber(quote.invoiceNumber)} / Q-${quote.number}` : `Q-${quote.number}`;
 }
 
+/**
+ * The Reference sends used before 2026-11-11 ("INV-000123 / Q-1029 / <quote id>").
+ * Never written any more — only SEARCHED for, so an invoice Xero made under the old
+ * format whose reply was lost is still found and linked on retry, not made twice
+ * (review of #1069).
+ */
+export function legacyXeroReference(quote: Pick<XeroQuoteInput, "id" | "number" | "invoiceNumber">): string {
+  return `${xeroReference(quote)} / ${quote.id}`;
+}
+
 /** Every VAT rate the quote's charged lines and fees use, as percentages. */
 export function quoteTaxRates(quote: XeroQuoteInput): number[] {
   return [

@@ -25,6 +25,7 @@ import {
   xeroStatusAfterFailedSend,
   xeroPdfFileName,
   xeroReference,
+  legacyXeroReference,
   xeroStatusLabel,
   type XeroQuoteInput,
 } from "../src/lib/xeroInvoice";
@@ -60,20 +61,39 @@ test("a DRAFT sales invoice, for the Xero contact by ID, with our numbers in the
   // Sean, 2026-11-11: just our invoice and quote numbers — no long code.
   assert.equal(x.Reference, "INV-000123 / Q-1029");
   assert.equal(xeroReference({ number: 1029, invoiceNumber: null }), "Q-1029");
+  assert.equal(x.Date, "2026-11-11");
+  assert.equal(x.LineAmountTypes, "Inclusive");
+  assert.equal(x.CurrencyCode, undefined);
   // Unique because one Xero organisation is connected to ONE workspace — enforced at connect, under a lock on the organisation.
   const lib = readFileSync("src/lib/xero.ts", "utf8");
   const exchange = lib.slice(lib.indexOf("export async function exchangeXeroCode("), lib.indexOf("async function forgetXeroLinks("));
   const steps = [
     "pg_advisory_xact_lock(hashtext(${`xero-org:${org.tenantId}`}))",
-    'where: { key: "XERO_TENANT_ID", value: org.tenantId, tenantId: { not: input.tenantId } },',
-    "if (elsewhere > 0) throw new XeroOrganisationInUse(",
+    "if (await xeroOrganisationTakenElsewhere(tx, input.tenantId, org.tenantId)) {",
+    "throw new XeroOrganisationInUse(",
     "await putTenantCredentialBundle(",
   ].map((s) => exchange.indexOf(s));
   assert.ok(steps.every((at, i) => at > 0 && (i === 0 || at > steps[i - 1])), `lock the organisation, refuse if another workspace has it, then save: ${steps}`);
   assert.match(readFileSync("src/app/api/integrations/xero/callback/route.ts", "utf8"), /if \(err instanceof XeroOrganisationInUse\) return back\("in-use"\);/);
-  assert.equal(x.Date, "2026-11-11");
-  assert.equal(x.LineAmountTypes, "Inclusive");
-  assert.equal(x.CurrencyCode, undefined);
+  // Every place a connection can live — credential rows AND the settings store (the founding workspace's fallback).
+  const taken = lib.slice(lib.indexOf("export async function xeroOrganisationTakenElsewhere("));
+  assert.match(taken, /tx\.tenantIntegrationCredential\.count\(\{ where: \{ tenantId: \{ not: tenantId \}, key: "XERO_TENANT_ID", value: xeroOrgId \} \}\)/);
+  assert.match(taken, /tx\.appSetting\.count\(\{ where: \{ tenantId: \{ not: tenantId \}, key: "XERO_TENANT_ID", value: xeroOrgId \} \}\)/);
+});
+
+test("an invoice made under the OLD long Reference and never confirmed is still found on retry — never made twice", () => {
+  // Review of #1069: sends before 2026-11-11 wrote "INV-… / Q-… / <quote id>". One whose reply was lost
+  // (UNCONFIRMED) must be found by the retry, which now writes the short Reference.
+  const q = { id: "cmvpkw3xv0001ig089nfn2vao", number: 1037, invoiceNumber: 43155 };
+  assert.equal(xeroReference(q), "INV-043155 / Q-1037", "new invoices: short");
+  assert.equal(legacyXeroReference(q), "INV-043155 / Q-1037 / cmvpkw3xv0001ig089nfn2vao", "exactly what the old sends wrote");
+  const xeroHasOld = { Invoices: [{ Type: "ACCREC", InvoiceID: "made-before", InvoiceNumber: "INV-0007", Reference: legacyXeroReference(q), Status: "DRAFT", Total: 100 }] };
+  assert.equal(liveInvoiceWithReference(xeroHasOld, xeroReference(q)), null, "the short search alone would miss it");
+  assert.equal(liveInvoiceWithReference(xeroHasOld, legacyXeroReference(q))?.id, "made-before", "the old-format search finds it");
+  const actions = readFileSync("src/app/actions/xero.ts", "utf8");
+  assert.match(actions, /\(await client\.findInvoiceByReference\(reference\)\) \?\? \(await client\.findInvoiceByReference\(legacyXeroReference\(quote\)\)\)/);
+  assert.ok(actions.indexOf("legacyXeroReference(quote)") < actions.indexOf("client.createInvoice("), "both searched before anything is created");
+  assert.doesNotMatch(readFileSync("src/lib/xeroInvoice.ts", "utf8"), /Reference: legacyXeroReference/, "the old format is never written");
 });
 
 test("the lines are the CRM invoice's rows, each with its tax type and the CRM's own VAT amount", () => {
