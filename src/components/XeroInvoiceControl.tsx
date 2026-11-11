@@ -1,5 +1,5 @@
 import { SaveForm, SaveButton } from "@/components/SaveForm";
-import { refreshXeroInvoice, sendQuoteToXero } from "@/app/actions/xero";
+import { refreshXeroInvoice, sendQuoteToXero, setNotForXero } from "@/app/actions/xero";
 import { XERO_UNCONFIRMED, totalsDiffer, xeroInvoiceCancelled, xeroInvoiceUrl, xeroSendUncertain, xeroStatusLabel } from "@/lib/xeroInvoice";
 
 /**
@@ -7,8 +7,9 @@ import { XERO_UNCONFIRMED, totalsDiffer, xeroInvoiceCancelled, xeroInvoiceUrl, x
  * INV number) can be sent — "quotes can change, invoices are final" (Sean,
  * 2026-11-11). After sending: Xero's OWN number and status beside ours, a link into
  * Xero and "Refresh" to pick up approval, payment or a void. Voided in Xero → it
- * can be sent again. Shown only to people who can invoice (deliveries.manage) and
- * only once Xero is connected — the actions re-check both.
+ * can be sent again. "Not for Xero" marks a historical invoice that never goes
+ * there. Shown only to people who can invoice (deliveries.manage) and only once
+ * Xero is connected — the actions re-check both.
  */
 export default function XeroInvoiceControl({
   quote,
@@ -21,12 +22,24 @@ export default function XeroInvoiceControl({
     xeroInvoiceNumber: string | null;
     xeroStatus: string | null;
     xeroTotalCents: number | null;
+    xeroExcludedAt: Date | null;
   };
   crmTotalCents: number;
 }) {
   const link = "text-[11px] text-primary hover:underline";
   if (!quote.invoiceNumber) {
     return <p className="mt-1.5 text-[11px] text-muted-foreground">No CRM invoice number, so it can&apos;t be sent to Xero.</p>;
+  }
+  // A historical invoice, processed before Xero (Sean, 2026-11-11): never offered to Xero.
+  if (quote.xeroExcludedAt) {
+    return (
+      <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1">
+        <span className="rounded-md border border-border bg-muted/40 px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">Not for Xero</span>
+        <SaveForm action={setNotForXero.bind(null, quote.id, false)} resetOnSuccess={false} className="inline">
+          <SaveButton className={link} pendingLabel="Undoing…">Undo</SaveButton>
+        </SaveForm>
+      </div>
+    );
   }
   const voided = Boolean(quote.xeroInvoiceId) && xeroInvoiceCancelled(quote.xeroStatus);
   const sendButton = (
@@ -42,8 +55,20 @@ export default function XeroInvoiceControl({
       </SaveButton>
     </SaveForm>
   );
+  const notForXero = (
+    <SaveForm action={setNotForXero.bind(null, quote.id, true)} resetOnSuccess={false} className="inline">
+      <SaveButton className={link} pendingLabel="Marking…">Not for Xero</SaveButton>
+    </SaveForm>
+  );
   // Not sent, or a send in progress / unfinished (a voided invoice being replaced stays linked until then).
-  if (!quote.xeroInvoiceId || xeroSendUncertain(quote.xeroStatus)) return <div className="mt-1.5">{sendButton}</div>;
+  if (!quote.xeroInvoiceId || xeroSendUncertain(quote.xeroStatus)) {
+    return (
+      <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1">
+        {sendButton}
+        {!quote.xeroInvoiceId && notForXero}
+      </div>
+    );
+  }
   const differs = !voided && totalsDiffer(quote.xeroTotalCents, crmTotalCents);
   return (
     <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1">
@@ -52,7 +77,10 @@ export default function XeroInvoiceControl({
       </span>
       <a href={xeroInvoiceUrl(quote.xeroInvoiceId)} target="_blank" rel="noreferrer" className={link}>Open in Xero</a>
       {voided ? (
-        sendButton
+        <>
+          {sendButton}
+          {notForXero}
+        </>
       ) : (
         <SaveForm action={refreshXeroInvoice.bind(null, quote.id)} resetOnSuccess={false} className="inline">
           <SaveButton className={link} pendingLabel="Refreshing…">Refresh</SaveButton>

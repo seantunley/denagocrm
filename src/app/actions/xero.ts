@@ -299,6 +299,7 @@ export async function sendQuoteToXero(quoteId: string): Promise<ActionResult> {
       if (!quote) refuse(QUOTE_GONE);
       // An invoice goes to Xero, never a quote: accepted, with its own INV number.
       if (quote.status !== "accepted" || !quote.invoiceNumber) refuse("Only an issued invoice (an accepted quote with its INV number) can be sent to Xero.");
+      if (quote.xeroExcludedAt) refuse(`${formatInvoiceNumber(quote.invoiceNumber)} is marked "Not for Xero". Undo that first if it should go to Xero.`);
       const plan = xeroSendPlan(quote);
       if (!plan.ok) {
         refuse(`${formatInvoiceNumber(quote.invoiceNumber)} is already in Xero as ${quote.xeroInvoiceNumber ?? "an invoice"}. Use Refresh to update it.`);
@@ -322,6 +323,7 @@ export async function sendQuoteToXero(quoteId: string): Promise<ActionResult> {
           deletedAt: null,
           supersededAt: null,
           invoiceNumber: { not: null },
+          xeroExcludedAt: null,
           xeroInvoiceId: quote.xeroInvoiceId,
           xeroStatus: quote.xeroStatus,
           // A send still running holds it; only a dead one (past any function's lifetime) is taken over.
@@ -608,6 +610,51 @@ export async function chooseXeroTaxRate(pct: number, formData: FormData): Promis
       await logAudit({ action: "xero.tax_rate_chosen", summary: `VAT at ${pct}% goes to Xero as "${option.name}" (${option.taxType})`, user });
       revalidatePath("/settings/integrations");
       return { success: `VAT at ${pct}% now goes to Xero as ${option.name}.` };
+    }),
+  );
+}
+
+/**
+ * "Not for Xero" (Sean, 2026-11-11: historical invoices "were processed in a
+ * different way… Their invoices do not belong in Xero"): marked one by one, an
+ * invoice is never offered to Xero, and its payments are recorded in the CRM as
+ * before. Undo takes it back. Refused for an invoice already in Xero (void it
+ * there first) or mid-send. deliveries.manage, this invoice's own workspace,
+ * audited; the write re-checks the state it read.
+ */
+export async function setNotForXero(quoteId: string, exclude: boolean): Promise<ActionResult> {
+  return asActionResult(() =>
+    withActingStaffScope(async () => {
+      const user = await requireQuoteAccess(quoteId, "deliveries.manage");
+      const tenantId = await actingTenantId();
+      const quote = await prisma.quote.findFirst({
+        where: { id: quoteId, tenantId },
+        select: { number: true, invoiceNumber: true, contactId: true, leadId: true, xeroInvoiceId: true, xeroInvoiceNumber: true, xeroStatus: true, xeroExcludedAt: true },
+      });
+      if (!quote) refuse(QUOTE_GONE);
+      const label = quote.invoiceNumber ? formatInvoiceNumber(quote.invoiceNumber) : `Q-${quote.number}`;
+      if (exclude) {
+        if (quote.xeroExcludedAt) return { success: `${label} is already marked "Not for Xero".` };
+        if (xeroSendUncertain(quote.xeroStatus)) refuse("A send to Xero is in progress or didn't finish — settle it first.");
+        if (quote.xeroInvoiceId && !xeroInvoiceCancelled(quote.xeroStatus)) refuse(`${label} is already in Xero as ${quote.xeroInvoiceNumber ?? "an invoice"} — void it in Xero first.`);
+      }
+      const updated = await prisma.quote.updateMany({
+        where: exclude
+          ? { id: quoteId, tenantId, xeroExcludedAt: null, xeroInvoiceId: quote.xeroInvoiceId, xeroStatus: quote.xeroStatus }
+          : { id: quoteId, tenantId, xeroExcludedAt: { not: null } },
+        data: exclude ? { xeroExcludedAt: new Date(), xeroExcludedByName: user.name } : { xeroExcludedAt: null, xeroExcludedByName: null },
+      });
+      if (updated.count !== 1) refuse("This invoice changed meanwhile — reload the page.");
+      await logAudit({
+        action: exclude ? "quote.not_for_xero" : "quote.for_xero_again",
+        summary: exclude ? `${label} marked "Not for Xero" — processed outside Xero` : `${label} can be sent to Xero again`,
+        contactId: quote.contactId,
+        leadId: quote.leadId,
+        user,
+      });
+      for (const path of ["/invoices", "/deliveries", `/deals/${quoteId}`]) revalidatePath(path);
+      if (quote.contactId) revalidatePath(`/contacts/${quote.contactId}`);
+      return { success: exclude ? `${label} won't be offered to Xero.` : `${label} can be sent to Xero again.` };
     }),
   );
 }

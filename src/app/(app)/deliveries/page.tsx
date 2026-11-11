@@ -500,7 +500,7 @@ export default async function DeliveriesPage() {
                             invoice IS the invoice step, and Refresh brings the deposit back
                             from Xero; uploads stay for workspaces without Xero. */}
                         {canManage && column.key === "payment" && !quote.invoicedAt && (
-                          xeroConnected && quote.invoiceNumber ? (
+                          xeroConnected && quote.invoiceNumber && !quote.xeroExcludedAt ? (
                             <XeroInvoiceControl quote={quote} crmTotalCents={total} />
                           ) : (
                             <SaveForm success="Invoice recorded" resetOnSuccess={false} action={markInvoiced.bind(null, quote.id)} className="mt-2.5 space-y-1.5">
