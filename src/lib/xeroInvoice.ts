@@ -68,6 +68,79 @@ export type XeroTaxRate = {
   CanApplyToRevenue?: boolean;
 };
 
+/**
+ * A send that has held the invoice this long is dead (a crashed request) and
+ * another send may take over. Longer than any Vercel function can run, so a send
+ * that is merely slow is never taken over while it still runs.
+ */
+export const XERO_STALE_SEND_MS = 15 * 60_000;
+
+/**
+ * A send that failed AFTER asking Xero to create the invoice: Xero may have it.
+ * Locked like a send in progress, but a new send may start at once — it searches
+ * Xero by Reference first, so it links the invoice if it exists.
+ */
+export const XERO_UNCONFIRMED = "UNCONFIRMED";
+
+/** Xero statuses that mean the invoice was cancelled in Xero. */
+export const XERO_CANCELLED_STATUSES = ["VOIDED", "DELETED"];
+export const xeroInvoiceCancelled = (status: string | null | undefined) => XERO_CANCELLED_STATUSES.includes(status ?? "");
+
+/** A send claimed it, or one failed after asking Xero to create: Xero may have an invoice the CRM doesn't. */
+export const xeroSendUncertain = (status: string | null | undefined) => status === "SENDING" || status === XERO_UNCONFIRMED;
+
+/**
+ * May this invoice be sent, and under which Idempotency-Key?
+ *
+ * A voided (or deleted) Xero invoice stays linked — `xeroInvoiceId` — until its
+ * REPLACEMENT is recorded; a send never clears it first. So every attempt at the
+ * same replacement, however many fail, derives the same key from it, and that key
+ * is never the original send's (review of #1067: a cleared link made the retry
+ * reuse the original key, and Xero could answer with the voided invoice).
+ */
+export function xeroSendPlan(
+  quote: { id: string; xeroInvoiceId: string | null; xeroStatus: string | null },
+): { ok: false } | { ok: true; replacing: string | null; idempotencyKey: string } {
+  if (quote.xeroInvoiceId && !xeroSendUncertain(quote.xeroStatus) && !xeroInvoiceCancelled(quote.xeroStatus)) return { ok: false };
+  const replacing = quote.xeroInvoiceId;
+  return { ok: true, replacing, idempotencyKey: replacing ? `crm-quote-${quote.id}-after-${replacing}` : `crm-quote-${quote.id}` };
+}
+
+/**
+ * What a failed send leaves behind. Once Xero was asked to create — or the send
+ * was itself retrying an unfinished one — Xero may have the invoice: UNCONFIRMED,
+ * locked until a send checks. Otherwise exactly what was there before: nothing, or
+ * the voided invoice still waiting for its replacement.
+ */
+export function xeroStatusAfterFailedSend(previous: string | null, createAttempted: boolean): string | null {
+  return createAttempted || xeroSendUncertain(previous) ? XERO_UNCONFIRMED : previous;
+}
+
+/**
+ * Sean, 2026-11-11: "Quotes can change, invoices are final." Once the invoice is
+ * in Xero the CRM won't move it back to draft, revise, cancel or trash it — not
+ * until it has been voided (or deleted) in Xero and Refresh has seen that. The
+ * reason to show, or null when it may change. Every writer that can undo an
+ * accepted quote asks this inside its locked transaction.
+ *
+ * A send that never finished stays locked however old it is: the CRM can't know
+ * whether Xero made the invoice. Sending again settles it — it searches Xero for
+ * the invoice first and links it if it was made.
+ */
+export function xeroLockReason(
+  quote: { number: number; invoiceNumber: number | null; xeroInvoiceId: string | null; xeroInvoiceNumber: string | null; xeroStatus: string | null; xeroSentAt: Date | null },
+  now: number = Date.now(),
+): string | null {
+  const ours = quote.invoiceNumber ? formatInvoiceNumber(quote.invoiceNumber) : `Q-${quote.number}`;
+  if (quote.xeroStatus === "SENDING" || quote.xeroStatus === XERO_UNCONFIRMED) {
+    return quote.xeroStatus === "SENDING" && quote.xeroSentAt && now - quote.xeroSentAt.getTime() < XERO_STALE_SEND_MS
+      ? `${ours} is being sent to Xero right now. Try again in a minute.`
+      : `${ours}: a send to Xero didn't finish, so the CRM can't tell whether Xero has it. Press Send invoice to Xero again — it checks Xero first and links the invoice if it was made.`;
+  }
+  if (!quote.xeroInvoiceId || xeroInvoiceCancelled(quote.xeroStatus)) return null;
+  return `${ours} is in Xero as ${quote.xeroInvoiceNumber ?? "an invoice"}, and an invoice is final. Void it in Xero first, then press Refresh on the Deliveries board.`;
+}
+
 /** The sales account a line posts to when the workspace hasn't named one ("200" is Xero's default Sales). */
 export const DEFAULT_XERO_SALES_ACCOUNT = "200";
 

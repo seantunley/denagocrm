@@ -11,6 +11,7 @@ import SecureLinksPanel from "@/components/SecureLinksPanel";
 import CustomFieldsCard from "@/components/custom-fields/CustomFieldsCard";
 import { formatInvoiceNumber } from "@/lib/invoiceNumber";
 import { xeroContactUrl, xeroInvoiceUrl, xeroStatusLabel } from "@/lib/xeroInvoice";
+import XeroInvoiceControl from "@/components/XeroInvoiceControl";
 import DocumentsPanel from "@/components/DocumentsPanel";
 import PortalUploadsList, { type PortalUploadRow } from "@/components/PortalUploadsList";
 import ActivityPanel from "@/components/ActivityPanel";
@@ -52,7 +53,7 @@ import { computeDue, dueColors, dueLabels } from "@/lib/serviceDue";
 import { isModuleEnabled } from "@/lib/modules/enabled";
 import { EntityDetailShell, PhoneActions, WideActions } from "@/components/entity-detail-shell";
 import { StatusPill } from "@/components/visual-system";
-import { getRegionalSettings } from "@/lib/settings";
+import { getRegionalSettings, resolveIntegrationField } from "@/lib/settings";
 import { getCurrencyOptions } from "@/lib/currency";
 import { withCurrency } from "@/lib/currencyRules";
 
@@ -128,6 +129,13 @@ export default async function ContactDetailPage({
     },
   });
   if (!contact) notFound();
+  // Xero from the customer too: a delivered invoice leaves the Deliveries board, and
+  // one that never went to Xero must still be sendable from somewhere.
+  const canSendXero =
+    Boolean(contact.tenantId) &&
+    (await hasPermission(user, "deliveries.manage")) &&
+    Boolean(await resolveIntegrationField(contact.tenantId!, "xero", "XERO_TENANT_ID"));
+  const issuedInvoices = contact.quotes.filter((q) => q.status === "accepted" && q.invoiceNumber && !q.supersededAt);
   // ONE TIMELINE (lib/customerTimeline.ts): everything filed on this customer AND
   // everything filed on any of their deals — a call logged on the deal, a quote
   // emailed from it. They used to show only on the deal's own page. A deal this
@@ -469,10 +477,32 @@ export default async function ContactDetailPage({
                     )}
                   </div>
                   <CustomFieldsCard entity="contact" recordId={contact.id} />
-                  {/* Xero (Send to Xero on the Deliveries board): the customer's Xero contact and the
-                      invoices Xero made for their quotes. Xero's PDFs are under Documents as
-                      "Accounting invoice (Xero)". */}
-                  {(contact.xeroContactId || contact.quotes.some((q) => q.xeroInvoiceId)) && (
+                  {/* Xero: the customer's Xero contact and the invoices Xero made for their quotes.
+                      People who can invoice also get every issued invoice here — delivered ones
+                      included — with the Deliveries board's Send / Refresh. Xero's PDFs are under
+                      Documents as "Accounting invoice (Xero)". */}
+                  {canSendXero && issuedInvoices.length > 0 && (
+                    <div className="card">
+                      <h3 className="font-semibold mb-1">Xero</h3>
+                      {contact.xeroContactId && (
+                        <p className="text-sm mb-2">
+                          <a href={xeroContactUrl(contact.xeroContactId)} target="_blank" rel="noreferrer" className="text-primary hover:underline">
+                            Customer in Xero
+                          </a>
+                        </p>
+                      )}
+                      <ul className="divide-y divide-border text-sm">
+                        {issuedInvoices.map((q) => (
+                          <li key={q.id} className="py-2">
+                            <span className="font-medium">{formatInvoiceNumber(q.invoiceNumber)}</span>
+                            <span className="text-xs text-muted-foreground"> · Q-{q.number}{q.deliveredAt ? " · delivered" : ""}</span>
+                            <XeroInvoiceControl quote={q} crmTotalCents={payableTotalCents(q)} />
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                  {!canSendXero && (contact.xeroContactId || contact.quotes.some((q) => q.xeroInvoiceId)) && (
                     <div className="card">
                       <h3 className="font-semibold mb-3">Xero</h3>
                       {contact.xeroContactId && (

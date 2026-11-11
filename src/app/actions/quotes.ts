@@ -2,6 +2,7 @@
 import { withActingStaffScope } from "@/lib/actingScope";
 
 import { asActionResult, ActionRefusal, refuse } from "@/lib/actionResult";
+import { xeroLockReason } from "@/lib/xeroInvoice";
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import type { Prisma } from "@prisma/client";
@@ -991,6 +992,8 @@ export async function createQuoteRevision(quoteId: string) {
         include: { items: true, fees: true },
       });
       if (!original || original.deletedAt || original.supersededAt || original.signedAt) return null;
+      const inXero = xeroLockReason(original);
+      if (inXero) throw new ActionRefusal(inXero);
       // A live signing request must be voided before revising — otherwise the
       // superseded quote would keep a live customer signing link.
       if (await hasOpenSignatureRequest(tx, quoteId)) return { blocked: true as const };
@@ -1187,6 +1190,8 @@ export async function setQuoteStatus(quoteId: string, status: string) {
       const before = await tx.quote.findUnique({ where: { id: quoteId } });
       // A cancelled quote is finished: Duplicate it to start again.
       if (!before || before.deletedAt || before.signedAt || before.supersededAt || before.status === "cancelled") return null;
+      const inXero = xeroLockReason(before);
+      if (inXero) throw new ActionRefusal(inXero);
       // Don't let staff manually decline a quote that's out for signature — void
       // the request first. (draft/sent moves are still allowed.)
       if (status === "declined" && (await hasOpenSignatureRequest(tx, quoteId))) {
@@ -1314,11 +1319,15 @@ export async function deleteQuote(id: string, formData: FormData) {
   return asActionResult(async () => {
     const user = await requireQuoteAccess(id, "quotes.delete");
     const reason = String(formData.get("reason") ?? "").trim() || "No reason given";
+    const actingTenant = await actingTenantId();
     // Void any live signing request AND soft-delete the quote in one locked
     // transaction, so a trashed quote can't still be signed via a live customer
     // link, and a concurrent signing start (which locks the same row) can't race.
     const { quote, reopenedLead } = await basePrisma.$transaction(async (tx) => {
       await tx.$executeRaw`SELECT id FROM "Quote" WHERE id = ${id} FOR UPDATE`;
+      const current = await tx.quote.findFirst({ where: { id, tenantId: actingTenant } });
+      const inXero = current ? xeroLockReason(current) : null;
+      if (inXero) throw new ActionRefusal(inXero);
       await tx.signatureRequest.updateMany({
         where: { quoteId: id, deletedAt: null, status: { notIn: [...CLOSED_REQUEST_STATUSES] } },
         data: { status: "voided" },

@@ -24,13 +24,16 @@ export async function GET(request: Request) {
     return NextResponse.json({ error: "Invalid Xero OAuth state." }, { status: 403 });
   }
   try {
-    const orgName = await exchangeXeroCode({
+    const { orgName, forgotten } = await exchangeXeroCode({
       tenantId: activeTenantId,
       code: url.searchParams.get("code")!,
       redirectUri: new URL("/api/integrations/xero/callback", request.url).toString(),
     });
-    await logAudit({ action: "integration.xero_connected", summary: `Connected Xero organisation “${orgName}”`, user });
-    return back("connected");
+    const cleared = forgotten
+      ? ` — a different organisation, so the links to the previous one were cleared (${forgotten.invoices} invoice(s), ${forgotten.customers} customer(s), ${forgotten.products} product(s), fee items)`
+      : "";
+    await logAudit({ action: "integration.xero_connected", summary: `Connected Xero organisation “${orgName}”${cleared}`, user });
+    return back(forgotten ? "switched" : "connected");
   } catch (err) {
     if (err instanceof XeroAmbiguousOrganisation) return back("ambiguous");
     await logError("xero-connect", err);

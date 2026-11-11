@@ -4,7 +4,7 @@ import { revalidatePath } from "next/cache";
 import { asActionResult, refuse, type ActionResult } from "@/lib/actionResult";
 import { withActingStaffScope } from "@/lib/actingScope";
 import { actingTenantId } from "@/lib/actingTenant";
-import { prisma } from "@/lib/db";
+import { basePrisma, prisma } from "@/lib/db";
 import { requireQuoteAccess, type PermissionUser } from "@/lib/permissions";
 import { requireTenantOwner } from "@/lib/auth";
 import { logAudit } from "@/lib/audit";
@@ -17,8 +17,14 @@ import { QUOTE_GONE } from "@/lib/quoteDelivery";
 import { getRegionalSettings, getSetting, putSetting, resolveIntegrationField } from "@/lib/settings";
 import { deleteFile, saveFile } from "@/lib/storage";
 import { XeroNotConnected, xeroClient, type XeroClient } from "@/lib/xero";
+import { formatInvoiceNumber } from "@/lib/invoiceNumber";
 import {
   XERO_FEE_ITEM_KEYS,
+  XERO_STALE_SEND_MS,
+  xeroInvoiceCancelled,
+  xeroSendPlan,
+  xeroSendUncertain,
+  xeroStatusAfterFailedSend,
   buildXeroInvoice,
   feeKindForXero,
   parseXeroItemLink,
@@ -30,9 +36,6 @@ import {
   xeroStatusLabel,
   type XeroInvoiceSummary,
 } from "@/lib/xeroInvoice";
-
-/** A send that has held the quote this long is assumed dead (a crashed request) and may be retried. */
-const STALE_SEND_MS = 2 * 60_000;
 
 /** Xero's refusals and "not connected" are things a person can fix — say them; anything else is logged. */
 function refuseXero(err: unknown): never {
@@ -57,24 +60,36 @@ async function fileXeroPdf(input: {
   const fileName = xeroPdfFileName(input.invoice.number, input.quote.number);
   const storedName = await saveFile(input.pdf, fileName, "application/pdf", input.tenantId);
   try {
-    const document = await prisma.document.create({
-      data: {
-        tenantId: input.tenantId,
-        fileName,
-        storedName,
-        mimeType: "application/pdf",
-        sizeBytes: input.pdf.length,
-        contactId: input.quote.contactId,
-        quoteId: input.quote.id,
-        tag: "accounting-invoice",
-        uploadedById: input.user.id,
-      },
-      select: { id: true },
+    // Filed only if the invoice STILL links this Xero invoice, checked under the
+    // quote's row lock: a PDF fetched over a connection that has since been
+    // switched to another organisation (forgetXeroLinks clears the link, locking
+    // the same row), or for an invoice another send has since replaced, is
+    // dropped — never filed on the customer (review of #1067).
+    const filed = await basePrisma.$transaction(async (tx) => {
+      await tx.$executeRaw`SELECT id FROM "Quote" WHERE id = ${input.quote.id} AND "tenantId" = ${input.tenantId} FOR UPDATE`;
+      const stillLinked = await tx.quote.count({ where: { id: input.quote.id, tenantId: input.tenantId, xeroInvoiceId: input.invoice.id } });
+      if (stillLinked !== 1) return false;
+      const document = await tx.document.create({
+        data: {
+          tenantId: input.tenantId,
+          fileName,
+          storedName,
+          mimeType: "application/pdf",
+          sizeBytes: input.pdf.length,
+          contactId: input.quote.contactId,
+          quoteId: input.quote.id,
+          tag: "accounting-invoice",
+          uploadedById: input.user.id,
+        },
+        select: { id: true },
+      });
+      await tx.document.updateMany({
+        where: { tenantId: input.tenantId, quoteId: input.quote.id, tag: "accounting-invoice", replacedById: null, id: { not: document.id } },
+        data: { replacedById: document.id },
+      });
+      return true;
     });
-    await prisma.document.updateMany({
-      where: { tenantId: input.tenantId, quoteId: input.quote.id, tag: "accounting-invoice", replacedById: null, id: { not: document.id } },
-      data: { replacedById: document.id },
-    });
+    if (!filed) throw new Error("the invoice no longer links this Xero invoice — PDF not filed");
   } catch (error) {
     await deleteFile(storedName).catch(() => {});
     throw error;
@@ -117,20 +132,41 @@ export async function sendQuoteToXero(quoteId: string): Promise<ActionResult> {
         include: { items: { orderBy: { sortOrder: "asc" } }, fees: { orderBy: { sortOrder: "asc" } }, contact: true, lead: true },
       });
       if (!quote) refuse(QUOTE_GONE);
-      if (quote.status !== "accepted") refuse("Only an accepted quote can be sent to Xero.");
-      if (quote.xeroInvoiceId) refuse(`Q-${quote.number} is already in Xero as ${quote.xeroInvoiceNumber ?? "an invoice"}. Use Refresh to update it.`);
+      // An invoice goes to Xero, never a quote: accepted, with its own INV number.
+      if (quote.status !== "accepted" || !quote.invoiceNumber) refuse("Only an issued invoice (an accepted quote with its INV number) can be sent to Xero.");
+      const plan = xeroSendPlan(quote);
+      if (!plan.ok) {
+        refuse(`${formatInvoiceNumber(quote.invoiceNumber)} is already in Xero as ${quote.xeroInvoiceNumber ?? "an invoice"}. Use Refresh to update it.`);
+      }
       if (!quote.contactId && !quote.fleetId) refuse("Link this quote to a customer first — the Xero invoice is filed on the customer.");
 
+      // The claim re-checks everything the read above checked, in ONE conditional
+      // write: a cancel or move back to draft that lands in between finds it claimed
+      // (xeroLockReason), or this finds it no longer accepted, or its Xero state
+      // moved on. A voided invoice being replaced STAYS linked until the new one is
+      // recorded (xeroSendPlan), so a retry after a failure replaces the same one.
+      // The claim's own timestamp is its token: every later write is conditional on
+      // it, so a send whose claim was taken over or cleared (Xero reconnected to
+      // another organisation) can't write its result into the CRM.
+      const claimAt = new Date();
       const claimed = await prisma.quote.updateMany({
         where: {
           id: quoteId,
           tenantId,
-          xeroInvoiceId: null,
-          OR: [{ xeroStatus: null }, { NOT: { xeroStatus: "SENDING" } }, { xeroSentAt: { lt: new Date(Date.now() - STALE_SEND_MS) } }],
+          status: "accepted",
+          deletedAt: null,
+          supersededAt: null,
+          invoiceNumber: { not: null },
+          xeroInvoiceId: quote.xeroInvoiceId,
+          xeroStatus: quote.xeroStatus,
+          // A send still running holds it; only a dead one (past any function's lifetime) is taken over.
+          OR: [{ xeroStatus: null }, { NOT: { xeroStatus: "SENDING" } }, { xeroSentAt: { lt: new Date(Date.now() - XERO_STALE_SEND_MS) } }],
         },
-        data: { xeroStatus: "SENDING", xeroSentAt: new Date() },
+        data: { xeroStatus: "SENDING", xeroSentAt: claimAt },
       });
-      if (claimed.count !== 1) refuse("This quote is already being sent to Xero.");
+      if (claimed.count !== 1) refuse("This invoice is already being sent to Xero, or it has just changed — reload the page.");
+      const ourClaim = { id: quoteId, tenantId, xeroStatus: "SENDING", xeroSentAt: claimAt };
+      let createAttempted = false;
 
       try {
         const fleet = await loadBillToFleet(prisma, quote.fleetId);
@@ -198,24 +234,41 @@ export async function sendQuoteToXero(quoteId: string): Promise<ActionResult> {
             },
             { contactId: contact.contactId, salesAccount, taxTypes },
           );
-          invoice = await client.createInvoice(payload, `crm-quote-${quote.id}`);
+          // A replacement for a voided invoice has its own key, the same on every retry (xeroSendPlan).
+          createAttempted = true;
+          invoice = await client.createInvoice(payload, plan.idempotencyKey);
         }
 
-        await prisma.quote.updateMany({
-          where: { id: quoteId, tenantId },
-          data: {
-            xeroInvoiceId: invoice.id,
-            xeroInvoiceNumber: invoice.number,
-            xeroStatus: invoice.status,
-            xeroTotalCents: invoice.totalCents,
-            xeroSentAt: new Date(),
-            xeroSentByName: user.name,
-          },
+        // Recorded only while OUR claim still stands, with the customer's Xero contact
+        // in the same transaction — if Xero was reconnected to another organisation
+        // meanwhile, nothing from the old one is written back.
+        const sentInvoice = invoice;
+        const sentContact = contact;
+        const recorded = await prisma.$transaction(async (tx) => {
+          const saved = await tx.quote.updateMany({
+            where: ourClaim,
+            data: {
+              xeroInvoiceId: sentInvoice.id,
+              xeroInvoiceNumber: sentInvoice.number,
+              xeroStatus: sentInvoice.status,
+              xeroTotalCents: sentInvoice.totalCents,
+              xeroSentAt: new Date(),
+              xeroSentByName: user.name,
+            },
+          });
+          if (saved.count !== 1) return false;
+          // The customer's Xero contact, remembered on the record the invoice is billed to.
+          if (sentContact) {
+            if (quote.fleetId) await tx.fleet.updateMany({ where: { id: quote.fleetId, tenantId }, data: { xeroContactId: sentContact.contactId } });
+            else if (quote.contactId) await tx.contact.updateMany({ where: { id: quote.contactId, tenantId }, data: { xeroContactId: sentContact.contactId } });
+          }
+          return true;
         });
-        // The customer's Xero contact, remembered on the record the invoice is billed to.
-        if (contact) {
-          if (quote.fleetId) await prisma.fleet.updateMany({ where: { id: quote.fleetId, tenantId }, data: { xeroContactId: contact.contactId } });
-          else if (quote.contactId) await prisma.contact.updateMany({ where: { id: quote.contactId, tenantId }, data: { xeroContactId: contact.contactId } });
+        if (!recorded) {
+          await logError("xero-send", new Error("send finished after its claim was cleared"), `quote=${quote.id} invoice=${invoice.id}`, { tenantId, alert: false });
+          refuse(
+            `Xero made invoice ${invoice.number ?? invoice.id}, but this invoice changed in the CRM while it was being sent (Xero was reconnected, or another send took over), so it wasn't linked. Check that invoice in Xero.`,
+          );
         }
         const pdfFiled = await tryFilePdf(client, { tenantId, quote, invoice, user });
 
@@ -244,10 +297,13 @@ export async function sendQuoteToXero(quoteId: string): Promise<ActionResult> {
         ];
         return { success: parts.filter(Boolean).join(" ") };
       } catch (err) {
-        // Release the claim so it can be tried again — only if nothing was recorded.
+        // Still our claim: release it (xeroStatusAfterFailedSend). Failed before Xero
+        // was asked to create anything → back as it was. Failed after, or while
+        // retrying an unfinished send → Xero may have it: UNCONFIRMED, locked until a
+        // new send checks Xero. The voided invoice being replaced stays linked.
         await prisma.quote.updateMany({
-          where: { id: quoteId, tenantId, xeroInvoiceId: null, xeroStatus: "SENDING" },
-          data: { xeroStatus: null, xeroSentAt: null },
+          where: ourClaim,
+          data: { xeroStatus: xeroStatusAfterFailedSend(quote.xeroStatus, createAttempted) },
         });
         refuseXero(err);
       }
@@ -360,6 +416,9 @@ export async function refreshXeroInvoice(quoteId: string): Promise<ActionResult>
       });
       if (!quote) refuse(QUOTE_GONE);
       if (!quote.xeroInvoiceId) refuse(`Q-${quote.number} has not been sent to Xero yet.`);
+      // Mid-send or unfinished: the linked invoice is the voided one being replaced —
+      // Refresh would only read that back. Send settles it.
+      if (xeroSendUncertain(quote.xeroStatus)) refuse("A send to Xero is in progress or didn't finish — press Send invoice to Xero to settle it.");
       let client: XeroClient;
       let invoice: XeroInvoiceSummary;
       try {
@@ -368,15 +427,24 @@ export async function refreshXeroInvoice(quoteId: string): Promise<ActionResult>
       } catch (err) {
         refuseXero(err);
       }
-      await prisma.quote.updateMany({
-        where: { id: quoteId, tenantId, xeroInvoiceId: quote.xeroInvoiceId },
+      const updated = await prisma.quote.updateMany({
+        // Only the state that was read: a send that claimed it meanwhile keeps its claim.
+        where: { id: quoteId, tenantId, xeroInvoiceId: quote.xeroInvoiceId, xeroStatus: quote.xeroStatus },
         data: { xeroInvoiceNumber: invoice.number, xeroStatus: invoice.status, xeroTotalCents: invoice.totalCents },
       });
+      // Nothing matched: a send took it over, or Xero was reconnected to another
+      // organisation meanwhile — stop here; nothing from this read is kept or filed.
+      if (updated.count !== 1) refuse("This invoice changed while it was being refreshed (a send, or Xero was reconnected) — reload the page.");
+      revalidatePath("/deliveries");
+      if (quote.contactId) revalidatePath(`/contacts/${quote.contactId}`);
+      if (xeroInvoiceCancelled(invoice.status)) {
+        // Voided in Xero: the CRM invoice is free again (xeroLockReason). No PDF of a voided invoice is filed.
+        if (quote.xeroStatus !== invoice.status) await logAudit({ action: "quote.xero_voided", summary: `Q-${quote.number}: Xero invoice ${invoice.number ?? invoice.id} is ${xeroStatusLabel(invoice.status).toLowerCase()} in Xero — unlocked in the CRM`, contactId: quote.contactId, user });
+        return { success: `Xero: ${invoice.number ?? "invoice"} · ${xeroStatusLabel(invoice.status)}. This invoice can be changed in the CRM again, or sent to Xero again.` };
+      }
       const changed = invoice.status !== quote.xeroStatus || invoice.number !== quote.xeroInvoiceNumber;
       const filed = await prisma.document.count({ where: { tenantId, quoteId, tag: "accounting-invoice", deletedAt: null } });
       const pdfFiled = changed || filed === 0 ? await tryFilePdf(client, { tenantId, quote, invoice, user }) : false;
-      revalidatePath("/deliveries");
-      if (quote.contactId) revalidatePath(`/contacts/${quote.contactId}`);
       return {
         success: `Xero: ${invoice.number ?? "invoice"} · ${xeroStatusLabel(invoice.status)}${pdfFiled ? " — latest PDF filed on the customer." : ""}`,
       };
