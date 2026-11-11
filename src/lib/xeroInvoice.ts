@@ -172,20 +172,29 @@ export function quoteTaxRates(quote: XeroQuoteInput): number[] {
   ];
 }
 
-/**
- * Xero's sales tax type for a VAT percentage. Only ACTIVE rates that may be used
- * on revenue, at exactly that rate. One match → it. Several at 0% → the one named
- * "zero rated" (a 0% sale on a vehicle invoice is zero-rated, not exempt). Still
- * ambiguous, or none → an error that names them, rather than a guess that puts
- * the VAT in the wrong box.
- *
- * ponytail: rates are matched by percentage; add a per-rate override in Settings
- * if a workspace ever has two live revenue rates at the same percentage.
- */
-export function pickTaxType(rates: XeroTaxRate[], ratePct: number): { ok: true; taxType: string } | { ok: false; error: string } {
-  const candidates = rates.filter(
+/** Xero's live sales tax rates at a VAT percentage. */
+function salesRatesAt(rates: XeroTaxRate[], ratePct: number): XeroTaxRate[] {
+  return rates.filter(
     (r) => r.TaxType && r.Status === "ACTIVE" && r.CanApplyToRevenue !== false && Math.abs(Number(r.EffectiveRate) - ratePct) < 0.001,
   );
+}
+
+/**
+ * Xero's sales tax type for a VAT percentage. Only ACTIVE rates that may be used
+ * on revenue, at exactly that rate. The workspace's own choice (Settings →
+ * Integrations → Xero → Sales tax) wins while Xero still has it live at that
+ * rate. Otherwise: one match → it. Several at 0% → the one named "zero rated" (a
+ * 0% sale on a vehicle invoice is zero-rated, not exempt). Still ambiguous, or
+ * none → an error that names them, rather than a guess that puts the VAT in the
+ * wrong box. A South African organisation has six sales rates at 15% (2026-11-11).
+ */
+export function pickTaxType(
+  rates: XeroTaxRate[],
+  ratePct: number,
+  chosen?: string | null,
+): { ok: true; taxType: string } | { ok: false; error: string } {
+  const candidates = salesRatesAt(rates, ratePct);
+  if (chosen && candidates.some((r) => r.TaxType === chosen)) return { ok: true, taxType: chosen };
   if (candidates.length === 1) return { ok: true, taxType: candidates[0].TaxType! };
   if (candidates.length > 1 && ratePct === 0) {
     const zeroRated = candidates.filter((r) => /zero/i.test(r.Name ?? ""));
@@ -194,8 +203,34 @@ export function pickTaxType(rates: XeroTaxRate[], ratePct: number): { ok: true; 
   if (candidates.length === 0) return { ok: false, error: `Xero has no active sales tax rate at ${ratePct}%.` };
   return {
     ok: false,
-    error: `Xero has several sales tax rates at ${ratePct}% (${candidates.map((r) => r.Name ?? r.TaxType).join(", ")}) — the CRM can't tell which one this invoice should use.`,
+    error: `Xero has several sales tax rates at ${ratePct}% (${candidates.map((r) => r.Name ?? r.TaxType).join(", ")}). Choose the one for ${ratePct}% VAT in Settings → Integrations → Xero → Sales tax, then send again.`,
   };
+}
+
+/** Settings key: the Xero sales tax rate chosen per VAT %. Value: JSON { "15": { taxType, name } }. */
+export const XERO_TAX_CHOICES_KEY = "XERO_TAX_RATES";
+export type XeroTaxChoices = Record<string, { taxType: string; name: string }>;
+
+export function parseXeroTaxChoices(raw: string | null | undefined): XeroTaxChoices {
+  try {
+    const v = JSON.parse(raw ?? "");
+    if (!v || typeof v !== "object" || Array.isArray(v)) return {};
+    return Object.fromEntries(
+      Object.entries(v as Record<string, { taxType?: unknown; name?: unknown }>)
+        .filter(([, c]) => c && typeof c.taxType === "string")
+        .map(([pct, c]) => [pct, { taxType: String(c.taxType), name: String(c.name ?? "") }]),
+    );
+  } catch {
+    return {};
+  }
+}
+
+/** Every VAT % where Xero has MORE THAN ONE live sales rate — the ones a person must choose between. */
+export function xeroTaxRateChoices(rates: XeroTaxRate[]): Array<{ pct: number; options: Array<{ taxType: string; name: string }> }> {
+  const pcts = [...new Set(rates.map((r) => Number(r.EffectiveRate)).filter((n) => Number.isFinite(n)))].sort((a, b) => b - a);
+  return pcts
+    .map((pct) => ({ pct, options: salesRatesAt(rates, pct).map((r) => ({ taxType: r.TaxType!, name: r.Name ?? r.TaxType! })) }))
+    .filter((group) => group.options.length > 1);
 }
 
 /**

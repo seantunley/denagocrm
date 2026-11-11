@@ -21,6 +21,9 @@ import { formatInvoiceNumber } from "@/lib/invoiceNumber";
 import {
   XERO_FEE_ITEM_KEYS,
   XERO_STALE_SEND_MS,
+  XERO_TAX_CHOICES_KEY,
+  parseXeroTaxChoices,
+  xeroTaxRateChoices,
   xeroInvoiceCancelled,
   xeroSendPlan,
   xeroSendUncertain,
@@ -188,7 +191,7 @@ export async function sendQuoteToXero(quoteId: string): Promise<ActionResult> {
             { name: billTo.name, email: billTo.email, phone: billTo.phone, addressLines: billTo.addressLines ?? (billTo.address ? [billTo.address] : []), vatNumber: billTo.vatNumber },
             known,
           );
-          const taxTypes = await client.taxTypes(quoteTaxRates(quote));
+          const taxTypes = await client.taxTypes(quoteTaxRates(quote), parseXeroTaxChoices(await getSetting(XERO_TAX_CHOICES_KEY)));
           const salesAccount = (await resolveIntegrationField(tenantId, "xero", "XERO_SALES_ACCOUNT")) ?? "";
 
           // Lines whose product is linked to a Xero item carry its CURRENT code (looked up by the
@@ -363,6 +366,51 @@ export async function linkProductToXeroItem(productId: string, formData: FormDat
       await logAudit({ action: "product.xero_item_linked", summary: `${product.name} linked to Xero item ${item.code}`, user });
       revalidatePath(`/products/${productId}`);
       return { success: `Linked to Xero item ${item.code}.` };
+    }),
+  );
+}
+
+/**
+ * Settings → Integrations → Xero → Sales tax: every VAT % at which Xero has more
+ * than one live sales rate, with the options — loaded when the owner asks, not on
+ * every page view. A South African organisation has six at 15%.
+ */
+export async function listXeroTaxRateChoices(): Promise<{ groups: ReturnType<typeof xeroTaxRateChoices> } | { error: string }> {
+  return withActingStaffScope(async () => {
+    await requireTenantOwner();
+    const tenantId = await actingTenantId();
+    try {
+      return { groups: xeroTaxRateChoices(await (await xeroClient(tenantId)).listTaxRates()) };
+    } catch (err) {
+      if (err instanceof XeroNotConnected || (err instanceof Error && err.message.startsWith("Xero:"))) return { error: err.message };
+      await logError("xero-tax-rates", err, undefined, { tenantId, alert: false });
+      return { error: "Xero's tax rates couldn't be loaded. Try again in a moment." };
+    }
+  });
+}
+
+/** Save which Xero sales rate the CRM's VAT at `pct`% goes to — checked against Xero's live rates at that %. */
+export async function chooseXeroTaxRate(pct: number, formData: FormData): Promise<ActionResult> {
+  return asActionResult(() =>
+    withActingStaffScope(async () => {
+      const user = await requireTenantOwner();
+      const tenantId = await actingTenantId();
+      const taxType = String(formData.get("taxType") ?? "").trim();
+      if (!Number.isFinite(pct) || !taxType) refuse("Choose a tax rate.");
+      let option: { taxType: string; name: string } | undefined;
+      try {
+        const groups = xeroTaxRateChoices(await (await xeroClient(tenantId)).listTaxRates());
+        option = groups.find((g) => g.pct === pct)?.options.find((o) => o.taxType === taxType);
+      } catch (err) {
+        refuseXero(err);
+      }
+      if (!option) refuse(`That rate isn't one of Xero's live sales rates at ${pct}% any more — reload the list.`);
+      const choices = parseXeroTaxChoices(await getSetting(XERO_TAX_CHOICES_KEY));
+      choices[String(pct)] = option;
+      await putSetting(XERO_TAX_CHOICES_KEY, JSON.stringify(choices));
+      await logAudit({ action: "xero.tax_rate_chosen", summary: `VAT at ${pct}% goes to Xero as "${option.name}" (${option.taxType})`, user });
+      revalidatePath("/settings/integrations");
+      return { success: `VAT at ${pct}% now goes to Xero as ${option.name}.` };
     }),
   );
 }

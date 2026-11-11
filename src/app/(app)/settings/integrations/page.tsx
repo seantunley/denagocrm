@@ -3,7 +3,8 @@ import { prisma } from "@/lib/db";
 import { getSetting, hasTenantCredentialOverride, isSecretSettingKey, resolveIntegrationBundle } from "@/lib/settings";
 import XeroItemPicker from "@/components/XeroItemPicker";
 import { linkFeeToXeroItem } from "@/app/actions/xero";
-import { XERO_FEE_ITEM_KEYS, parseXeroItemLink } from "@/lib/xeroInvoice";
+import { XERO_FEE_ITEM_KEYS, XERO_TAX_CHOICES_KEY, parseXeroItemLink, parseXeroTaxChoices } from "@/lib/xeroInvoice";
+import XeroTaxRatePicker from "@/components/XeroTaxRatePicker";
 import WorkspaceIntegrationRows from "@/components/settings/WorkspaceIntegrationRows";
 import {
   saveTenantCredentialOverride,
@@ -60,6 +61,7 @@ export default async function IntegrationsPage({ searchParams }: { searchParams?
     delivery: parseXeroItemLink(await getSetting(XERO_FEE_ITEM_KEYS.delivery)),
     other: parseXeroItemLink(await getSetting(XERO_FEE_ITEM_KEYS.other)),
   };
+  const xeroTaxChoices = parseXeroTaxChoices(await getSetting(XERO_TAX_CHOICES_KEY));
   // Entirely sensitive (credential management) — gate the whole page.
   // Uses requireTenantOwner so a tenant's own provisioned owner can manage
   // their credentials without needing the global platform owner role (a
@@ -237,7 +239,7 @@ export default async function IntegrationsPage({ searchParams }: { searchParams?
                         Reconnecting to {effectiveShown.XERO_ORG_NAME ?? "the same organisation"} keeps everything. Choosing a
                         different organisation clears this workspace&apos;s links to this one: {xeroLinks.invoices} invoice
                         {xeroLinks.invoices === 1 ? "" : "s"}, {xeroLinks.customers} customer{xeroLinks.customers === 1 ? "" : "s"},{" "}
-                        {xeroLinks.products} product{xeroLinks.products === 1 ? "" : "s"} and the fee items. Filed Xero PDFs stay.
+                        {xeroLinks.products} product{xeroLinks.products === 1 ? "" : "s"}, the fee items and the sales tax choice. Filed Xero PDFs stay.
                       </p>
                     )}
                     <a href="/api/integrations/xero/connect" className="btn-primary btn-sm mt-3 inline-flex">
@@ -257,6 +259,7 @@ export default async function IntegrationsPage({ searchParams }: { searchParams?
                           action={linkFeeToXeroItem.bind(null, "other")}
                           hint="Any other fee on a quote. Leave unlinked to send fees without an item code."
                         />
+                        <XeroTaxRatePicker current={xeroTaxChoices} />
                       </div>
                     )}
                   </div>
