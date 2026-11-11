@@ -14,6 +14,7 @@ import { formatInvoiceNumber } from "@/lib/invoiceNumber";
 import { invoiceTotalCents, receivedCents, statementInvoiceDate } from "@/lib/accountStatement";
 import { loadBillToFleets, quoteBillTo } from "@/lib/quoteBillTo";
 import { xeroStatusLabel } from "@/lib/xeroInvoice";
+import { ResponsiveEntityTable } from "@/components/responsive-patterns";
 
 export const metadata = { title: "Invoices" };
 
@@ -123,7 +124,7 @@ export default async function InvoicesPage({ searchParams }: { searchParams?: Pr
           {filter === "open" ? "Nothing owing — every issued invoice is paid." : filter === "xero" ? "Every issued invoice is in Xero." : "No issued invoices yet."}
         </div>
       ) : (
-        <div className="overflow-x-auto rounded-xl border border-border bg-card">
+        <ResponsiveEntityTable>
           <table className="table-base">
             <thead>
               <tr>
@@ -142,19 +143,19 @@ export default async function InvoicesPage({ searchParams }: { searchParams?: Pr
                 const fmt = withCurrency(moneyFmt, quote.currency);
                 return (
                   <tr key={quote.id}>
-                    <td className="whitespace-nowrap">
+                    <td data-primary className="whitespace-nowrap">
                       <a href={`/quotes/${quote.id}/invoice`} target="_blank" rel="noreferrer" className="font-medium text-primary hover:underline">
                         {formatInvoiceNumber(quote.invoiceNumber)}
                       </a>
                       <Link href={`/deals/${quote.id}`} className="ml-2 text-xs text-muted-foreground hover:underline">Q-{quote.number}</Link>
                     </td>
-                    <td>{quote.contact ? <Link href={`/contacts/${quote.contact.id}`} className="hover:underline">{who}</Link> : who}</td>
-                    <td className="whitespace-nowrap text-xs text-muted-foreground">{formatDate(statementInvoiceDate(quote))}</td>
-                    <td className="text-right tabular-nums">{formatZAR(total, fmt)}</td>
-                    <td className="text-right tabular-nums">{formatZAR(received, fmt)}</td>
-                    <td className={`text-right tabular-nums ${owing > 0 ? "text-amber-300" : "text-muted-foreground"}`}>{formatZAR(Math.max(0, owing), fmt)}</td>
-                    <td className="whitespace-nowrap text-xs text-muted-foreground">{deliveryStage(quote)}</td>
-                    <td className="min-w-[14rem]">
+                    <td data-label="Customer">{quote.contact ? <Link href={`/contacts/${quote.contact.id}`} className="hover:underline">{who}</Link> : who}</td>
+                    <td data-label="Date" className="whitespace-nowrap text-xs text-muted-foreground">{formatDate(statementInvoiceDate(quote))}</td>
+                    <td data-label="Total" className="text-right tabular-nums">{formatZAR(total, fmt)}</td>
+                    <td data-label="Received" className="text-right tabular-nums">{formatZAR(received, fmt)}</td>
+                    <td data-label="Owing" className={`text-right tabular-nums ${owing > 0 ? "text-amber-300" : "text-muted-foreground"}`}>{formatZAR(Math.max(0, owing), fmt)}</td>
+                    <td data-label="Delivery" className="whitespace-nowrap text-xs text-muted-foreground">{deliveryStage(quote)}</td>
+                    <td data-actions className="min-w-[14rem]">
                       {xeroConnected ? (
                         <XeroInvoiceControl quote={quote} crmTotalCents={total} />
                       ) : quote.xeroInvoiceId ? (
@@ -168,7 +169,7 @@ export default async function InvoicesPage({ searchParams }: { searchParams?: Pr
               })}
             </tbody>
           </table>
-        </div>
+        </ResponsiveEntityTable>
       )}
     </div>
   );
