@@ -198,8 +198,9 @@ async function syncPaymentsFromXero(input: {
         },
       });
     }
+    // Linked — or RE-linked, when Xero replaced the payment it was matched to (its old link goes).
     for (const { paymentId, xero } of plan.link) {
-      await tx.quotePayment.updateMany({ where: { id: paymentId, tenantId: input.tenantId, quoteId: input.quoteId, xeroPaymentId: null }, data: { xeroPaymentId: xero.id } });
+      await tx.quotePayment.updateMany({ where: { id: paymentId, tenantId: input.tenantId, quoteId: input.quoteId, voidedAt: null }, data: { xeroPaymentId: xero.id } });
     }
     for (const { paymentId, xero } of plan.update) {
       await tx.quotePayment.updateMany({ where: { id: paymentId, tenantId: input.tenantId, quoteId: input.quoteId }, data: { amountCents: xero.amountCents, receivedAt: xero.date } });

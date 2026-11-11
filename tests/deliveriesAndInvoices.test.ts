@@ -150,6 +150,27 @@ test("re-review of #1071: money recorded BY HAND, matched, then removed in Xero 
   assert.match(sync, /where: \{ id: \{ in: plan\.unlink \}, tenantId: input\.tenantId, quoteId: input\.quoteId \}, data: \{ xeroPaymentId: null \}/);
 });
 
+test("re-review of #1071: a hand-recorded payment whose Xero payment is REPLACED (new PaymentID) is re-matched, never counted twice", () => {
+  // R30 000 recorded by hand (c2), matched to Xero p2; in Xero p2 is replaced by p5 for the same R30 000.
+  const state = { deposit: { paidAt: day(1), cents: 5_000_000, xeroPaymentId: "p1", createdFromXero: true }, payments: [row("c2", "p2", 30_000, 5, { createdFromXero: false })] };
+  const plan = planXeroPaymentSync(state, [xp("p1", 1, 50_000), xp("p5", 6, 30_000)]);
+  assert.deepEqual(plan.link.map((l) => [l.paymentId, l.xero.id]), [["c2", "p5"]], "re-linked to the replacement");
+  assert.deepEqual([plan.create, plan.unlink, plan.void, plan.unmatched.payments], [[], [], [], []], "nothing new, nothing lost, nothing reported");
+  assert.equal(receivedAfterSync(state, plan), 8_000_000, "R80 000 — counted once, = Xero's");
+  // The deposit, the same: recorded by hand, matched to p1, p1 replaced by p6 for the same amount.
+  const dep = { deposit: { paidAt: day(1), cents: 5_000_000, xeroPaymentId: "p1", createdFromXero: false }, payments: [] };
+  const d = planXeroPaymentSync(dep, [xp("p6", 2, 50_000)]);
+  assert.deepEqual(d.deposit, { kind: "link", xeroPaymentId: "p6" });
+  assert.deepEqual([d.create, d.unmatched.depositCents], [[], null]);
+  assert.equal(receivedAfterSync(dep, d), 5_000_000);
+  // Replaced by a DIFFERENT amount: not the same money — kept, unlinked, reported; Xero's comes in.
+  const differs = planXeroPaymentSync(state, [xp("p1", 1, 50_000), xp("p5", 6, 25_000)]);
+  assert.deepEqual([differs.unlink, differs.create.map((x) => x.id)], [["c2"], ["p5"]]);
+  // The re-link is applied whatever the old link was.
+  const sync = actions.slice(actions.indexOf("async function syncPaymentsFromXero("), actions.indexOf("async function tryFilePdf("));
+  assert.match(sync, /where: \{ id: paymentId, tenantId: input\.tenantId, quoteId: input\.quoteId, voidedAt: null \}, data: \{ xeroPaymentId: xero\.id \}/);
+});
+
 test("money recorded by hand that Xero split differently: nothing changes, and the message says what's wrong and how to fix it", () => {
   // Q-1037 as it is on live: R100 000 deposit + R156 500 payment by hand; suppose Xero holds ONE R256 500 payment.
   const q1037 = { deposit: { paidAt: day(1), cents: 10_000_000, xeroPaymentId: null, createdFromXero: false }, payments: [row("c1", null, 156_500, 3, { createdFromXero: false })] };
