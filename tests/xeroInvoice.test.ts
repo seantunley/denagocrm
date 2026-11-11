@@ -256,6 +256,14 @@ test("every way to undo an accepted invoice asks xeroLockReason under the row lo
   assert.match(actions, /quote\.status !== "accepted" \|\| !quote\.invoiceNumber/, "only an issued invoice is sent");
 });
 
+test("a delivered invoice (off the Deliveries board) can still be sent, from the customer", () => {
+  const page = readFileSync("src/app/(app)/contacts/[id]/page.tsx", "utf8");
+  assert.match(page, /contact\.quotes\.filter\(\(q\) => q\.status === "accepted" && q\.invoiceNumber && !q\.supersededAt\)/, "delivered ones are not filtered out");
+  assert.match(page, /hasPermission\(user, "deliveries\.manage"\)/);
+  assert.match(page, /<XeroInvoiceControl quote=\{q\} crmTotalCents=\{payableTotalCents\(q\)\} \/>/);
+  assert.doesNotMatch(readFileSync("src/app/actions/xero.ts", "utf8"), /deliveredAt/, "sending doesn't refuse a delivered invoice");
+});
+
 test("connecting a DIFFERENT Xero organisation forgets every link to the old one", () => {
   const lib = readFileSync("src/lib/xero.ts", "utf8");
   assert.match(lib, /previous && previous !== org\.tenantId \? await forgetXeroLinks\(input\.tenantId\) : null/);

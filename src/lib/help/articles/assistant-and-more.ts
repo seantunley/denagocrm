@@ -874,6 +874,7 @@ export const assistantAndMoreArticles: HelpArticle[] = [
         "On the **Deliveries** board, find the invoice (an accepted quote gets its own INV number).",
         "Press **Send invoice to Xero**. The invoice is created in Xero as a **draft**, with the CRM's invoice and quote numbers (e.g. INV-000123 / Q-1029, followed by the quote's CRM code) in its Reference.",
         "The card now shows Xero's invoice number and status, with **Open in Xero** and **Refresh**.",
+        "Already delivered, and never sent? A delivered job leaves the Deliveries board, but every issued invoice is also on the customer's record, in the **Xero** card, with the same buttons.",
         "Finish the invoice in Xero — approve it, email it, record payment. Press **Refresh** to bring Xero's latest number and status (Awaiting payment, Paid…) back, and to file Xero's latest PDF.",
       ] },
       { type: "h", text: "The Xero invoice matches the CRM invoice" },
