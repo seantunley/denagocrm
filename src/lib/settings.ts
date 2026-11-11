@@ -395,10 +395,12 @@ export async function putTenantCredential(tenantId: string, key: string, value: 
 export async function putTenantCredentialBundle(
   tenantId: string,
   entries: Readonly<Record<string, string>>,
+  /** Inside a caller's transaction, so the bundle commits with the caller's other writes (Xero's organisation switch). */
+  inTx?: SettingsTx,
 ): Promise<void> {
   const rows = Object.entries(entries).filter(([, value]) => value !== "");
   if (rows.length === 0) return;
-  await basePrisma.$transaction(async (tx) => {
+  const write = async (tx: SettingsTx) => {
     for (const [key, value] of rows) {
       const stored = storedSettingValue(key, value);
       await tx.tenantIntegrationCredential.upsert({
@@ -407,7 +409,9 @@ export async function putTenantCredentialBundle(
         create: { tenantId, key, value: stored },
       });
     }
-  });
+  };
+  if (inTx) await write(inTx);
+  else await basePrisma.$transaction(write);
 }
 
 /**

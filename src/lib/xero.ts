@@ -1,6 +1,6 @@
 import "server-only";
 import { basePrisma } from "./db";
-import { putTenantCredential, putTenantCredentialBundle, resolveIntegrationBundle } from "./settings";
+import { putTenantCredential, putTenantCredentialBundle, resolveIntegrationBundle, type SettingsTx } from "./settings";
 import { recordIntegrationFailure, recordIntegrationVerified } from "./integrationConnection";
 import {
   XERO_FEE_ITEM_KEYS,
@@ -106,13 +106,25 @@ export async function exchangeXeroCode(input: {
   const org = connections.ok && Array.isArray(list) ? chooseXeroOrganisation(list, authEventId(tokens.access_token)) : null;
   if (!org) throw new XeroAmbiguousOrganisation("Xero didn't say which single organisation was connected.");
 
-  const previous = (await resolveIntegrationBundle(input.tenantId, "xero"))?.XERO_TENANT_ID;
-  const forgotten = previous && previous !== org.tenantId ? await forgetXeroLinks(input.tenantId) : null;
-  await putTenantCredentialBundle(input.tenantId, {
-    XERO_TENANT_ID: org.tenantId,
-    XERO_ORG_NAME: org.tenantName,
-    XERO_REFRESH_TOKEN: String(tokens.refresh_token),
-  });
+  // ONE transaction: the old organisation's links are cleared and the new
+  // connection saved together, or neither (review of #1067). Under the token lock,
+  // so a refresh can't save the old organisation's rotated token over this one. A
+  // send still running against the old organisation finds its claim cleared and
+  // records nothing (sendQuoteToXero writes only while its claim stands).
+  const forgotten = await basePrisma.$transaction(
+    async (tx) => {
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`xero-token:${input.tenantId}`}))`;
+      const previous = (await resolveIntegrationBundle(input.tenantId, "xero"))?.XERO_TENANT_ID;
+      const cleared = previous && previous !== org.tenantId ? await forgetXeroLinks(tx, input.tenantId) : null;
+      await putTenantCredentialBundle(
+        input.tenantId,
+        { XERO_TENANT_ID: org.tenantId, XERO_ORG_NAME: org.tenantName, XERO_REFRESH_TOKEN: String(tokens.refresh_token) },
+        tx,
+      );
+      return cleared;
+    },
+    { timeout: 45_000, maxWait: 45_000 },
+  );
   await recordIntegrationVerified(input.tenantId, "xero");
   return { orgName: org.tenantName, forgotten };
 }
@@ -125,21 +137,19 @@ export async function exchangeXeroCode(input: {
  * Xero" and locked, pointing at an organisation the CRM can no longer reach.
  * Xero PDFs already filed on customers are documents and stay where they are.
  */
-async function forgetXeroLinks(tenantId: string): Promise<{ invoices: number; customers: number; products: number }> {
-  return basePrisma.$transaction(async (tx) => {
-    const invoices = await tx.quote.updateMany({
-      where: { tenantId, OR: [{ xeroInvoiceId: { not: null } }, { xeroStatus: { not: null } }] },
-      data: { xeroInvoiceId: null, xeroInvoiceNumber: null, xeroStatus: null, xeroTotalCents: null, xeroSentAt: null, xeroSentByName: null },
-    });
-    const contacts = await tx.contact.updateMany({ where: { tenantId, xeroContactId: { not: null } }, data: { xeroContactId: null } });
-    const fleets = await tx.fleet.updateMany({ where: { tenantId, xeroContactId: { not: null } }, data: { xeroContactId: null } });
-    const products = await tx.product.updateMany({
-      where: { tenantId, xeroItemId: { not: null } },
-      data: { xeroItemId: null, xeroItemCode: null, xeroItemName: null },
-    });
-    await tx.appSetting.updateMany({ where: { tenantId, key: { in: Object.values(XERO_FEE_ITEM_KEYS) } }, data: { value: "" } });
-    return { invoices: invoices.count, customers: contacts.count + fleets.count, products: products.count };
+async function forgetXeroLinks(tx: SettingsTx, tenantId: string): Promise<{ invoices: number; customers: number; products: number }> {
+  const invoices = await tx.quote.updateMany({
+    where: { tenantId, OR: [{ xeroInvoiceId: { not: null } }, { xeroStatus: { not: null } }] },
+    data: { xeroInvoiceId: null, xeroInvoiceNumber: null, xeroStatus: null, xeroTotalCents: null, xeroSentAt: null, xeroSentByName: null },
   });
+  const contacts = await tx.contact.updateMany({ where: { tenantId, xeroContactId: { not: null } }, data: { xeroContactId: null } });
+  const fleets = await tx.fleet.updateMany({ where: { tenantId, xeroContactId: { not: null } }, data: { xeroContactId: null } });
+  const products = await tx.product.updateMany({
+    where: { tenantId, xeroItemId: { not: null } },
+    data: { xeroItemId: null, xeroItemCode: null, xeroItemName: null },
+  });
+  await tx.appSetting.updateMany({ where: { tenantId, key: { in: Object.values(XERO_FEE_ITEM_KEYS) } }, data: { value: "" } });
+  return { invoices: invoices.count, customers: contacts.count + fleets.count, products: products.count };
 }
 
 /**

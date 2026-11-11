@@ -21,6 +21,7 @@ import { formatInvoiceNumber } from "@/lib/invoiceNumber";
 import {
   XERO_FEE_ITEM_KEYS,
   XERO_STALE_SEND_MS,
+  XERO_UNCONFIRMED,
   xeroInvoiceCancelled,
   buildXeroInvoice,
   feeKindForXero,
@@ -129,6 +130,10 @@ export async function sendQuoteToXero(quoteId: string): Promise<ActionResult> {
       // write: a cancel or move back to draft that lands in between finds it claimed
       // (xeroLockReason), or this finds it no longer accepted. After a void in Xero
       // the old link is cleared here, so the new invoice replaces it.
+      // The claim's own timestamp is its token: every later write is conditional on
+      // it, so a send whose claim was taken over or cleared (Xero reconnected to
+      // another organisation) can't write its result into the CRM.
+      const claimAt = new Date();
       const claimed = await prisma.quote.updateMany({
         where: {
           id: quoteId,
@@ -142,9 +147,11 @@ export async function sendQuoteToXero(quoteId: string): Promise<ActionResult> {
             { OR: [{ xeroStatus: null }, { NOT: { xeroStatus: "SENDING" } }, { xeroSentAt: { lt: new Date(Date.now() - XERO_STALE_SEND_MS) } }] },
           ],
         },
-        data: { xeroStatus: "SENDING", xeroSentAt: new Date(), xeroInvoiceId: null, xeroInvoiceNumber: null, xeroTotalCents: null },
+        data: { xeroStatus: "SENDING", xeroSentAt: claimAt, xeroInvoiceId: null, xeroInvoiceNumber: null, xeroTotalCents: null },
       });
       if (claimed.count !== 1) refuse("This invoice is already being sent to Xero, or it has just changed — reload the page.");
+      const ourClaim = { id: quoteId, tenantId, xeroInvoiceId: null, xeroStatus: "SENDING", xeroSentAt: claimAt };
+      let createAttempted = false;
 
       try {
         const fleet = await loadBillToFleet(prisma, quote.fleetId);
@@ -213,24 +220,40 @@ export async function sendQuoteToXero(quoteId: string): Promise<ActionResult> {
             { contactId: contact.contactId, salesAccount, taxTypes },
           );
           // A send after a void needs its own key: Xero would answer the old one with the voided invoice.
+          createAttempted = true;
           invoice = await client.createInvoice(payload, resend ? `crm-quote-${quote.id}-after-${quote.xeroInvoiceId}` : `crm-quote-${quote.id}`);
         }
 
-        await prisma.quote.updateMany({
-          where: { id: quoteId, tenantId },
-          data: {
-            xeroInvoiceId: invoice.id,
-            xeroInvoiceNumber: invoice.number,
-            xeroStatus: invoice.status,
-            xeroTotalCents: invoice.totalCents,
-            xeroSentAt: new Date(),
-            xeroSentByName: user.name,
-          },
+        // Recorded only while OUR claim still stands, with the customer's Xero contact
+        // in the same transaction — if Xero was reconnected to another organisation
+        // meanwhile, nothing from the old one is written back.
+        const sentInvoice = invoice;
+        const sentContact = contact;
+        const recorded = await prisma.$transaction(async (tx) => {
+          const saved = await tx.quote.updateMany({
+            where: ourClaim,
+            data: {
+              xeroInvoiceId: sentInvoice.id,
+              xeroInvoiceNumber: sentInvoice.number,
+              xeroStatus: sentInvoice.status,
+              xeroTotalCents: sentInvoice.totalCents,
+              xeroSentAt: new Date(),
+              xeroSentByName: user.name,
+            },
+          });
+          if (saved.count !== 1) return false;
+          // The customer's Xero contact, remembered on the record the invoice is billed to.
+          if (sentContact) {
+            if (quote.fleetId) await tx.fleet.updateMany({ where: { id: quote.fleetId, tenantId }, data: { xeroContactId: sentContact.contactId } });
+            else if (quote.contactId) await tx.contact.updateMany({ where: { id: quote.contactId, tenantId }, data: { xeroContactId: sentContact.contactId } });
+          }
+          return true;
         });
-        // The customer's Xero contact, remembered on the record the invoice is billed to.
-        if (contact) {
-          if (quote.fleetId) await prisma.fleet.updateMany({ where: { id: quote.fleetId, tenantId }, data: { xeroContactId: contact.contactId } });
-          else if (quote.contactId) await prisma.contact.updateMany({ where: { id: quote.contactId, tenantId }, data: { xeroContactId: contact.contactId } });
+        if (!recorded) {
+          await logError("xero-send", new Error("send finished after its claim was cleared"), `quote=${quote.id} invoice=${invoice.id}`, { tenantId, alert: false });
+          refuse(
+            `Xero made invoice ${invoice.number ?? invoice.id}, but this invoice changed in the CRM while it was being sent (Xero was reconnected, or another send took over), so it wasn't linked. Check that invoice in Xero.`,
+          );
         }
         const pdfFiled = await tryFilePdf(client, { tenantId, quote, invoice, user });
 
@@ -259,10 +282,12 @@ export async function sendQuoteToXero(quoteId: string): Promise<ActionResult> {
         ];
         return { success: parts.filter(Boolean).join(" ") };
       } catch (err) {
-        // Release the claim so it can be tried again — only if nothing was recorded.
+        // Still our claim: release it. Failed before Xero was asked to create
+        // anything → free again. Failed after → Xero may have it: UNCONFIRMED stays
+        // locked until a new send checks Xero (xeroLockReason).
         await prisma.quote.updateMany({
-          where: { id: quoteId, tenantId, xeroInvoiceId: null, xeroStatus: "SENDING" },
-          data: { xeroStatus: null, xeroSentAt: null },
+          where: ourClaim,
+          data: createAttempted ? { xeroStatus: XERO_UNCONFIRMED } : { xeroStatus: null, xeroSentAt: null },
         });
         refuseXero(err);
       }

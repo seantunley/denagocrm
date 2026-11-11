@@ -17,6 +17,7 @@ import {
   xeroErrorMessage,
   xeroLockReason,
   XERO_STALE_SEND_MS,
+  XERO_UNCONFIRMED,
   xeroPdfFileName,
   xeroReference,
   xeroStatusLabel,
@@ -233,10 +234,13 @@ test("an invoice in Xero is locked until it is voided there", () => {
   assert.match(xeroLockReason(inXero, now) ?? "", /^INV-000123 is in Xero as INV-0042, and an invoice is final\. Void it in Xero first/);
   assert.equal(xeroLockReason({ ...inXero, xeroStatus: "VOIDED" }, now), null, "voided in Xero → free");
   assert.equal(xeroLockReason({ ...inXero, xeroStatus: "DELETED" }, now), null);
-  // Mid-send: locked while the claim is fresh, released when it's stale (a crashed send).
+  // Mid-send: locked. A send that never finished STAYS locked — the CRM can't know
+  // whether Xero made it; only a send that checks Xero settles it (review of #1067).
   const sending = { ...base, xeroStatus: "SENDING", xeroSentAt: new Date(now - 30_000) };
   assert.match(xeroLockReason(sending, now) ?? "", /being sent to Xero right now/);
-  assert.equal(xeroLockReason({ ...sending, xeroSentAt: new Date(now - XERO_STALE_SEND_MS - 1) }, now), null);
+  assert.match(xeroLockReason({ ...sending, xeroSentAt: new Date(now - XERO_STALE_SEND_MS - 1) }, now) ?? "", /didn't finish.*Send invoice to Xero again/);
+  assert.match(xeroLockReason({ ...sending, xeroSentAt: null }, now) ?? "", /didn't finish/);
+  assert.ok(XERO_STALE_SEND_MS >= 15 * 60_000, "longer than a function can run");
 });
 
 test("every way to undo an accepted invoice asks xeroLockReason under the row lock", () => {
@@ -266,12 +270,32 @@ test("a delivered invoice (off the Deliveries board) can still be sent, from the
 
 test("connecting a DIFFERENT Xero organisation forgets every link to the old one", () => {
   const lib = readFileSync("src/lib/xero.ts", "utf8");
-  assert.match(lib, /previous && previous !== org\.tenantId \? await forgetXeroLinks\(input\.tenantId\) : null/);
   const forget = lib.slice(lib.indexOf("async function forgetXeroLinks("));
   for (const model of ["quote", "contact", "fleet", "product", "appSetting"]) {
     assert.match(forget, new RegExp(`tx\\.${model}\\.updateMany\\(\\{\\s*where: \\{ tenantId,`), `${model} cleared, in this workspace only`);
   }
-  assert.ok(lib.indexOf("forgetXeroLinks(input.tenantId)") < lib.indexOf("await putTenantCredentialBundle(input.tenantId"), "compare with the OLD organisation before saving the new");
+  // Atomic (review of #1067): token lock → read the OLD organisation → clear → save the new, in ONE transaction.
+  const exchange = lib.slice(lib.indexOf("export async function exchangeXeroCode("), lib.indexOf("async function forgetXeroLinks("));
+  const steps = [
+    "await basePrisma.$transaction(",
+    "pg_advisory_xact_lock(hashtext(${`xero-token:${input.tenantId}`}))",
+    "previous && previous !== org.tenantId ? await forgetXeroLinks(tx, input.tenantId) : null",
+    "await putTenantCredentialBundle(",
+  ].map((s) => exchange.indexOf(s));
+  assert.ok(steps.every((at, i) => at > 0 && (i === 0 || at > steps[i - 1])), `in order, in one transaction: ${steps}`);
+  assert.match(exchange, /XERO_REFRESH_TOKEN: String\(tokens\.refresh_token\) \},\s*tx,\s*\)/, "the new connection is saved in the same transaction");
+  assert.match(readFileSync("src/lib/settings.ts", "utf8"), /if \(inTx\) await write\(inTx\);\s*else await basePrisma\.\$transaction\(write\);/);
+});
+
+test("a send writes its result only while its own claim stands; a failed create stays UNCONFIRMED", () => {
+  const actions = readFileSync("src/app/actions/xero.ts", "utf8");
+  assert.match(actions, /const ourClaim = \{ id: quoteId, tenantId, xeroInvoiceId: null, xeroStatus: "SENDING", xeroSentAt: claimAt \};/);
+  assert.match(actions, /const saved = await tx\.quote\.updateMany\(\{\s*where: ourClaim,/, "result recorded only under our claim");
+  assert.match(actions, /if \(saved\.count !== 1\) return false;\s*\/\/ The customer's Xero contact/, "and the contact link with it, or neither");
+  assert.match(actions, /where: ourClaim,\s*data: createAttempted \? \{ xeroStatus: XERO_UNCONFIRMED \} : \{ xeroStatus: null, xeroSentAt: null \},/);
+  assert.ok(actions.indexOf("createAttempted = true;") < actions.indexOf("client.createInvoice("));
+  const unconfirmed = { number: 1, invoiceNumber: 5, xeroInvoiceId: null, xeroInvoiceNumber: null, xeroStatus: XERO_UNCONFIRMED, xeroSentAt: null };
+  assert.match(xeroLockReason(unconfirmed) ?? "", /didn't finish/, "Xero may have it → locked until a send checks");
 });
 
 // ── Odds and ends ───────────────────────────────────────────────────────────

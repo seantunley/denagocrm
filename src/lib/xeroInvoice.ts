@@ -68,8 +68,19 @@ export type XeroTaxRate = {
   CanApplyToRevenue?: boolean;
 };
 
-/** A send that has held the quote this long is assumed dead (a crashed request) and may be retried. */
-export const XERO_STALE_SEND_MS = 2 * 60_000;
+/**
+ * A send that has held the invoice this long is dead (a crashed request) and
+ * another send may take over. Longer than any Vercel function can run, so a send
+ * that is merely slow is never taken over while it still runs.
+ */
+export const XERO_STALE_SEND_MS = 15 * 60_000;
+
+/**
+ * A send that failed AFTER asking Xero to create the invoice: Xero may have it.
+ * Locked like a send in progress, but a new send may start at once — it searches
+ * Xero by Reference first, so it links the invoice if it exists.
+ */
+export const XERO_UNCONFIRMED = "UNCONFIRMED";
 
 /** Xero statuses that mean the invoice was cancelled in Xero. */
 export const XERO_CANCELLED_STATUSES = ["VOIDED", "DELETED"];
@@ -81,14 +92,20 @@ export const xeroInvoiceCancelled = (status: string | null | undefined) => XERO_
  * until it has been voided (or deleted) in Xero and Refresh has seen that. The
  * reason to show, or null when it may change. Every writer that can undo an
  * accepted quote asks this inside its locked transaction.
+ *
+ * A send that never finished stays locked however old it is: the CRM can't know
+ * whether Xero made the invoice. Sending again settles it — it searches Xero for
+ * the invoice first and links it if it was made.
  */
 export function xeroLockReason(
   quote: { number: number; invoiceNumber: number | null; xeroInvoiceId: string | null; xeroInvoiceNumber: string | null; xeroStatus: string | null; xeroSentAt: Date | null },
   now: number = Date.now(),
 ): string | null {
   const ours = quote.invoiceNumber ? formatInvoiceNumber(quote.invoiceNumber) : `Q-${quote.number}`;
-  if (quote.xeroStatus === "SENDING" && quote.xeroSentAt && now - quote.xeroSentAt.getTime() < XERO_STALE_SEND_MS) {
-    return `${ours} is being sent to Xero right now. Try again in a minute.`;
+  if (quote.xeroStatus === "SENDING" || quote.xeroStatus === XERO_UNCONFIRMED) {
+    return quote.xeroStatus === "SENDING" && quote.xeroSentAt && now - quote.xeroSentAt.getTime() < XERO_STALE_SEND_MS
+      ? `${ours} is being sent to Xero right now. Try again in a minute.`
+      : `${ours}: a send to Xero didn't finish, so the CRM can't tell whether Xero has it. Press Send invoice to Xero again — it checks Xero first and links the invoice if it was made.`;
   }
   if (!quote.xeroInvoiceId || xeroInvoiceCancelled(quote.xeroStatus)) return null;
   return `${ours} is in Xero as ${quote.xeroInvoiceNumber ?? "an invoice"}, and an invoice is final. Void it in Xero first, then press Refresh on the Deliveries board.`;

@@ -1,6 +1,6 @@
 import { SaveForm, SaveButton } from "@/components/SaveForm";
 import { refreshXeroInvoice, sendQuoteToXero } from "@/app/actions/xero";
-import { totalsDiffer, xeroInvoiceCancelled, xeroInvoiceUrl, xeroStatusLabel } from "@/lib/xeroInvoice";
+import { XERO_UNCONFIRMED, totalsDiffer, xeroInvoiceCancelled, xeroInvoiceUrl, xeroStatusLabel } from "@/lib/xeroInvoice";
 
 /**
  * An invoice's Xero copy on the Deliveries board. Only an ISSUED invoice (with its
@@ -32,7 +32,13 @@ export default function XeroInvoiceControl({
   const sendButton = (
     <SaveForm action={sendQuoteToXero.bind(null, quote.id)} resetOnSuccess={false} className="inline">
       <SaveButton className="btn-secondary btn-sm" pendingLabel="Sending to Xero…">
-        {quote.xeroStatus === "SENDING" ? "Sending to Xero… (try again)" : voided ? "Send invoice to Xero again" : "Send invoice to Xero"}
+        {quote.xeroStatus === "SENDING"
+          ? "Sending to Xero… (try again)"
+          : quote.xeroStatus === XERO_UNCONFIRMED
+            ? "Send didn't finish — check Xero and link"
+            : voided
+              ? "Send invoice to Xero again"
+              : "Send invoice to Xero"}
       </SaveButton>
     </SaveForm>
   );
