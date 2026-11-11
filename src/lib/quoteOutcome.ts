@@ -12,6 +12,7 @@ import { formatZAR } from "./format";
 import { withCurrency } from "./currencyRules";
 import { clearedNurture } from "./leadNurture";
 import { getRegionalSettings } from "./settings";
+import { xeroLockReason } from "./xeroInvoice";
 
 /**
  * WHAT HAPPENS TO A QUOTE WHEN THE DEAL IS DECIDED — one definition.
@@ -190,6 +191,8 @@ export async function cancelQuoteInTx(
   if (quote.supersededAt) return { kind: "refused", message: "This version was superseded by a revision — cancel the current version instead." };
   if (quote.status === "cancelled") return { kind: "refused", message: `Quote Q-${quote.number} is already cancelled.` };
   if (quote.deliveredAt) return { kind: "refused", message: `Quote Q-${quote.number} has already been delivered, so it can't be cancelled.` };
+  const inXero = xeroLockReason(quote);
+  if (inXero) return { kind: "refused", message: inXero };
 
   const units = await tx.stockUnit.findMany({
     where: { soldQuoteId: quoteId, tenantId, deletedAt: null },

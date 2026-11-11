@@ -856,12 +856,12 @@ export const assistantAndMoreArticles: HelpArticle[] = [
   {
     slug: "xero",
     title: "Xero: sending invoices to your books",
-    summary: "Connect Xero, send an accepted quote to Xero as a draft invoice, and keep Xero's invoice number on the quote.",
+    summary: "Connect Xero, send an issued invoice to Xero as a draft, and keep Xero's invoice number beside the CRM's.",
     category: "admin",
     audience: "admins",
     keywords: ["xero", "accounting", "invoice", "send to xero", "invoice number", "books", "bookkeeping", "integration"],
     body: [
-      { type: "p", text: "The CRM issues its own invoice numbers (INV-000123). Xero numbers its invoices separately. **Send to Xero** creates the invoice in Xero and keeps Xero's number on the quote, next to the CRM's, so you can always see which invoices are done in Xero." },
+      { type: "p", text: "The CRM issues its own invoice numbers (INV-000123). Xero numbers its invoices separately. **Send invoice to Xero** creates the invoice in Xero and keeps Xero's number on the quote, next to the CRM's, so you can always see which invoices are done in Xero." },
       { type: "h", text: "Connect Xero (once)" },
       { type: "steps", items: [
         "Open **Settings → Integrations → Xero**.",
@@ -869,10 +869,10 @@ export const assistantAndMoreArticles: HelpArticle[] = [
         "Press **Connect Xero**, sign in to Xero, tick your organisation and allow access. You come back to the CRM showing **Connected to** your organisation.",
       ] },
       { type: "p", text: "Behind the scenes the CRM uses one Xero app, set up once by whoever hosts it (its client ID and secret live in the hosting settings, not on this page). If Connect Xero says the app isn't set up, that's where to look." },
-      { type: "h", text: "Send a quote to Xero" },
+      { type: "h", text: "Send an invoice to Xero" },
       { type: "steps", items: [
-        "On the **Deliveries** board, find the accepted quote.",
-        "Press **Send to Xero**. The invoice is created in Xero as a **draft**, with the CRM's invoice and quote numbers (e.g. INV-000123 / Q-1029, followed by the quote's CRM code) in its Reference.",
+        "On the **Deliveries** board, find the invoice (an accepted quote gets its own INV number).",
+        "Press **Send invoice to Xero**. The invoice is created in Xero as a **draft**, with the CRM's invoice and quote numbers (e.g. INV-000123 / Q-1029, followed by the quote's CRM code) in its Reference.",
         "The card now shows Xero's invoice number and status, with **Open in Xero** and **Refresh**.",
         "Finish the invoice in Xero — approve it, email it, record payment. Press **Refresh** to bring Xero's latest number and status (Awaiting payment, Paid…) back, and to file Xero's latest PDF.",
       ] },
@@ -905,6 +905,16 @@ export const assistantAndMoreArticles: HelpArticle[] = [
         "Nothing is approved or emailed from the CRM; it only ever creates a draft.",
         "One quote, one Xero invoice: before creating anything the CRM checks Xero for an invoice already carrying the quote's reference, and links that one instead — so a double click, or a retry after a dropped connection, never makes a second invoice.",
         "Only people who can invoice on the Deliveries board see the button.",
+      ] },
+      { type: "h", text: "Once it's in Xero, the invoice is final" },
+      { type: "list", items: [
+        "Quotes can change; invoices can't. After an invoice is sent to Xero, the CRM won't move it back to draft, revise, cancel or trash it, and says why.",
+        "To undo it, void (or delete) the invoice in Xero, then press **Refresh** on the Deliveries board. The CRM sees the void, unlocks the invoice, and offers **Send invoice to Xero again**.",
+      ] },
+      { type: "h", text: "Testing on Xero's demo company" },
+      { type: "list", items: [
+        "Connect the demo company first and send a test invoice to it.",
+        "When you're happy, press **Reconnect Xero** and choose your real organisation. Because it's a different organisation, the CRM clears every link to the demo one: test invoices can be sent again, and products and fees need linking to the real Xero items. Demo PDFs already filed on customers stay; delete them from the customer's Documents if you don't want them.",
       ] },
       { type: "callout", tone: "warning", text: "If Xero isn't used for 60 days, or access is removed in Xero, the connection lapses and Settings → Integrations shows **Reconnect needed**. Press **Reconnect Xero** — quotes already sent keep their Xero numbers." },
     ],

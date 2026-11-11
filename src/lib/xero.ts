@@ -3,6 +3,7 @@ import { basePrisma } from "./db";
 import { putTenantCredential, putTenantCredentialBundle, resolveIntegrationBundle } from "./settings";
 import { recordIntegrationFailure, recordIntegrationVerified } from "./integrationConnection";
 import {
+  XERO_FEE_ITEM_KEYS,
   buildXeroContact,
   chooseXeroOrganisation,
   liveInvoiceWithReference,
@@ -80,7 +81,11 @@ function authEventId(accessToken: string): string | null {
  * this consent connected, for this workspace only. Refuses
  * (XeroAmbiguousOrganisation) when that can't be told for certain.
  */
-export async function exchangeXeroCode(input: { tenantId: string; code: string; redirectUri: string }): Promise<string> {
+export async function exchangeXeroCode(input: {
+  tenantId: string;
+  code: string;
+  redirectUri: string;
+}): Promise<{ orgName: string; forgotten: { invoices: number; customers: number; products: number } | null }> {
   const app = requireApp();
   const response = await fetch(IDENTITY, {
     method: "POST",
@@ -101,13 +106,40 @@ export async function exchangeXeroCode(input: { tenantId: string; code: string; 
   const org = connections.ok && Array.isArray(list) ? chooseXeroOrganisation(list, authEventId(tokens.access_token)) : null;
   if (!org) throw new XeroAmbiguousOrganisation("Xero didn't say which single organisation was connected.");
 
+  const previous = (await resolveIntegrationBundle(input.tenantId, "xero"))?.XERO_TENANT_ID;
+  const forgotten = previous && previous !== org.tenantId ? await forgetXeroLinks(input.tenantId) : null;
   await putTenantCredentialBundle(input.tenantId, {
     XERO_TENANT_ID: org.tenantId,
     XERO_ORG_NAME: org.tenantName,
     XERO_REFRESH_TOKEN: String(tokens.refresh_token),
   });
   await recordIntegrationVerified(input.tenantId, "xero");
-  return org.tenantName;
+  return { orgName: org.tenantName, forgotten };
+}
+
+/**
+ * Xero's IDs belong to ONE organisation. Connecting a different one — the demo
+ * company first, then the real books (Sean, 2026-11-11) — forgets every link to
+ * the old: the quotes' Xero invoices, customers' and fleets' Xero contacts, the
+ * products' and fees' Xero items. Otherwise a test invoice would stay "already in
+ * Xero" and locked, pointing at an organisation the CRM can no longer reach.
+ * Xero PDFs already filed on customers are documents and stay where they are.
+ */
+async function forgetXeroLinks(tenantId: string): Promise<{ invoices: number; customers: number; products: number }> {
+  return basePrisma.$transaction(async (tx) => {
+    const invoices = await tx.quote.updateMany({
+      where: { tenantId, OR: [{ xeroInvoiceId: { not: null } }, { xeroStatus: { not: null } }] },
+      data: { xeroInvoiceId: null, xeroInvoiceNumber: null, xeroStatus: null, xeroTotalCents: null, xeroSentAt: null, xeroSentByName: null },
+    });
+    const contacts = await tx.contact.updateMany({ where: { tenantId, xeroContactId: { not: null } }, data: { xeroContactId: null } });
+    const fleets = await tx.fleet.updateMany({ where: { tenantId, xeroContactId: { not: null } }, data: { xeroContactId: null } });
+    const products = await tx.product.updateMany({
+      where: { tenantId, xeroItemId: { not: null } },
+      data: { xeroItemId: null, xeroItemCode: null, xeroItemName: null },
+    });
+    await tx.appSetting.updateMany({ where: { tenantId, key: { in: Object.values(XERO_FEE_ITEM_KEYS) } }, data: { value: "" } });
+    return { invoices: invoices.count, customers: contacts.count + fleets.count, products: products.count };
+  });
 }
 
 /**

@@ -68,6 +68,32 @@ export type XeroTaxRate = {
   CanApplyToRevenue?: boolean;
 };
 
+/** A send that has held the quote this long is assumed dead (a crashed request) and may be retried. */
+export const XERO_STALE_SEND_MS = 2 * 60_000;
+
+/** Xero statuses that mean the invoice was cancelled in Xero. */
+export const XERO_CANCELLED_STATUSES = ["VOIDED", "DELETED"];
+export const xeroInvoiceCancelled = (status: string | null | undefined) => XERO_CANCELLED_STATUSES.includes(status ?? "");
+
+/**
+ * Sean, 2026-11-11: "Quotes can change, invoices are final." Once the invoice is
+ * in Xero the CRM won't move it back to draft, revise, cancel or trash it — not
+ * until it has been voided (or deleted) in Xero and Refresh has seen that. The
+ * reason to show, or null when it may change. Every writer that can undo an
+ * accepted quote asks this inside its locked transaction.
+ */
+export function xeroLockReason(
+  quote: { number: number; invoiceNumber: number | null; xeroInvoiceId: string | null; xeroInvoiceNumber: string | null; xeroStatus: string | null; xeroSentAt: Date | null },
+  now: number = Date.now(),
+): string | null {
+  const ours = quote.invoiceNumber ? formatInvoiceNumber(quote.invoiceNumber) : `Q-${quote.number}`;
+  if (quote.xeroStatus === "SENDING" && quote.xeroSentAt && now - quote.xeroSentAt.getTime() < XERO_STALE_SEND_MS) {
+    return `${ours} is being sent to Xero right now. Try again in a minute.`;
+  }
+  if (!quote.xeroInvoiceId || xeroInvoiceCancelled(quote.xeroStatus)) return null;
+  return `${ours} is in Xero as ${quote.xeroInvoiceNumber ?? "an invoice"}, and an invoice is final. Void it in Xero first, then press Refresh on the Deliveries board.`;
+}
+
 /** The sales account a line posts to when the workspace hasn't named one ("200" is Xero's default Sales). */
 export const DEFAULT_XERO_SALES_ACCOUNT = "200";
 

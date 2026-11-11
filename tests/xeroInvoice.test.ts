@@ -15,6 +15,8 @@ import {
   readXeroInvoice,
   totalsDiffer,
   xeroErrorMessage,
+  xeroLockReason,
+  XERO_STALE_SEND_MS,
   xeroPdfFileName,
   xeroReference,
   xeroStatusLabel,
@@ -219,6 +221,49 @@ test("wiring: reconcile before create, lock the refresh, workspace money format,
   assert.doesNotMatch(scopes, /accounting\.transactions/);
   assert.match(lib, /process\.env\.XERO_CLIENT_ID/);
   assert.match(readFileSync("src/app/api/integrations/xero/callback/route.ts", "utf8"), /activeTenantId !== pending\.tenantId/);
+});
+
+// ── Invoices are final (Sean, 2026-11-11) ───────────────────────────────────
+
+test("an invoice in Xero is locked until it is voided there", () => {
+  const base = { number: 1029, invoiceNumber: 123, xeroInvoiceId: null, xeroInvoiceNumber: null, xeroStatus: null, xeroSentAt: null };
+  const now = Date.parse("2026-11-11T10:00:00Z");
+  assert.equal(xeroLockReason(base, now), null, "not in Xero → free");
+  const inXero = { ...base, xeroInvoiceId: "x1", xeroInvoiceNumber: "INV-0042", xeroStatus: "AUTHORISED" };
+  assert.match(xeroLockReason(inXero, now) ?? "", /^INV-000123 is in Xero as INV-0042, and an invoice is final\. Void it in Xero first/);
+  assert.equal(xeroLockReason({ ...inXero, xeroStatus: "VOIDED" }, now), null, "voided in Xero → free");
+  assert.equal(xeroLockReason({ ...inXero, xeroStatus: "DELETED" }, now), null);
+  // Mid-send: locked while the claim is fresh, released when it's stale (a crashed send).
+  const sending = { ...base, xeroStatus: "SENDING", xeroSentAt: new Date(now - 30_000) };
+  assert.match(xeroLockReason(sending, now) ?? "", /being sent to Xero right now/);
+  assert.equal(xeroLockReason({ ...sending, xeroSentAt: new Date(now - XERO_STALE_SEND_MS - 1) }, now), null);
+});
+
+test("every way to undo an accepted invoice asks xeroLockReason under the row lock", () => {
+  const quotes = readFileSync("src/app/actions/quotes.ts", "utf8");
+  const fn = (name: string) => quotes.slice(quotes.indexOf(`export async function ${name}(`), quotes.indexOf("\nexport ", quotes.indexOf(`export async function ${name}(`) + 1));
+  for (const name of ["setQuoteStatus", "createQuoteRevision", "deleteQuote"]) {
+    const body = fn(name);
+    assert.ok(body.indexOf("FOR UPDATE") > 0 && body.indexOf("FOR UPDATE") < body.indexOf("xeroLockReason("), `${name}: lock, then ask`);
+    assert.match(body, /if \(inXero\) throw new ActionRefusal\(inXero\);/, name);
+  }
+  const outcome = readFileSync("src/lib/quoteOutcome.ts", "utf8");
+  const cancel = outcome.slice(outcome.indexOf("export async function cancelQuoteInTx("), outcome.indexOf("export async function duplicateQuoteInTx("));
+  assert.match(cancel, /const inXero = xeroLockReason\(quote\);\s*if \(inXero\) return \{ kind: "refused", message: inXero \};/);
+  // Sending re-checks status in the claim itself, so a cancel landing between read and claim can't be missed.
+  const actions = readFileSync("src/app/actions/xero.ts", "utf8");
+  assert.match(actions, /status: "accepted",\s*deletedAt: null,\s*supersededAt: null,\s*invoiceNumber: \{ not: null \},/);
+  assert.match(actions, /quote\.status !== "accepted" \|\| !quote\.invoiceNumber/, "only an issued invoice is sent");
+});
+
+test("connecting a DIFFERENT Xero organisation forgets every link to the old one", () => {
+  const lib = readFileSync("src/lib/xero.ts", "utf8");
+  assert.match(lib, /previous && previous !== org\.tenantId \? await forgetXeroLinks\(input\.tenantId\) : null/);
+  const forget = lib.slice(lib.indexOf("async function forgetXeroLinks("));
+  for (const model of ["quote", "contact", "fleet", "product", "appSetting"]) {
+    assert.match(forget, new RegExp(`tx\\.${model}\\.updateMany\\(\\{\\s*where: \\{ tenantId,`), `${model} cleared, in this workspace only`);
+  }
+  assert.ok(lib.indexOf("forgetXeroLinks(input.tenantId)") < lib.indexOf("await putTenantCredentialBundle(input.tenantId"), "compare with the OLD organisation before saving the new");
 });
 
 // ── Odds and ends ───────────────────────────────────────────────────────────

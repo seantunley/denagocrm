@@ -43,6 +43,8 @@ export const dynamic = "force-dynamic";
 /** What the Xero connect round trip came back with (?xero=…), in words. */
 const XERO_NOTICES: Record<string, string> = {
   connected: "Xero is connected.",
+  switched:
+    "Xero is connected to a different organisation, so the links to the previous one were cleared: invoices can be sent again, and products and fees need linking to this organisation's items. Xero PDFs already filed on customers were kept.",
   "missing-client": "The Xero app isn't set up on this CRM yet (XERO_CLIENT_ID and XERO_CLIENT_SECRET in the hosting settings).",
   denied: "Xero sign-in was cancelled.",
   ambiguous:
