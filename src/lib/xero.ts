@@ -265,7 +265,7 @@ export async function xeroClient(tenantId: string): Promise<XeroClient> {
       const all = await client.listTaxRates();
       const map: Record<string, string> = {};
       for (const rate of rates) {
-        const picked = pickTaxType(all, rate, chosen[String(rate)]?.taxType);
+        const picked = pickTaxType(all, rate, chosen[String(rate)]);
         if (!picked.ok) throw new Error(`Xero: ${picked.error}`);
         map[String(rate)] = picked.taxType;
       }

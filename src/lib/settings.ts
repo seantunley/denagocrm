@@ -213,6 +213,25 @@ export async function getSetting(key: string): Promise<string | null> {
   return readSetting(await settingsOwnerTenantIdOrRecover(), key);
 }
 
+/**
+ * A setting of ONE named workspace, in either enforcement mode. getSetting/putSetting
+ * resolve to the founding workspace while enforcement is off, so a per-workspace
+ * value (a Xero organisation's tax and item codes) written through them would be
+ * shared by every workspace (review of #1068). Callers pass the acting tenantId.
+ */
+export async function getWorkspaceSetting(tenantId: string, key: string): Promise<string | null> {
+  return readSetting(tenantId, key);
+}
+
+export async function putWorkspaceSetting(tenantId: string, key: string, value: string, tx?: SettingsTx): Promise<void> {
+  const stored = storedSettingValue(key, value);
+  await (tx ?? basePrisma).appSetting.upsert({
+    where: { tenantId_key: { tenantId, key } },
+    update: { value: stored },
+    create: { tenantId, key, value: stored },
+  });
+}
+
 // basePrisma + explicit compound key: deterministic and RLS-safe (bypass is set,
 // and the exact tenantId is pinned — never an ambient/unqualified read).
 async function readSetting(tenantId: string, key: string): Promise<string | null> {

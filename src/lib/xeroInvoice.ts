@@ -182,8 +182,10 @@ function salesRatesAt(rates: XeroTaxRate[], ratePct: number): XeroTaxRate[] {
 /**
  * Xero's sales tax type for a VAT percentage. Only ACTIVE rates that may be used
  * on revenue, at exactly that rate. The workspace's own choice (Settings →
- * Integrations → Xero → Sales tax) wins while Xero still has it live at that
- * rate. Otherwise: one match → it. Several at 0% → the one named "zero rated" (a
+ * Integrations → Xero → Sales tax) is used while Xero still has it live at that
+ * rate — and once it isn't, the send REFUSES and asks for a new choice, never
+ * falling back to whatever rate is left (a chosen capital-goods rate must not
+ * quietly become the standard one; review of #1068). No choice: one match → it. Several at 0% → the one named "zero rated" (a
  * 0% sale on a vehicle invoice is zero-rated, not exempt). Still ambiguous, or
  * none → an error that names them, rather than a guess that puts the VAT in the
  * wrong box. A South African organisation has six sales rates at 15% (2026-11-11).
@@ -191,10 +193,17 @@ function salesRatesAt(rates: XeroTaxRate[], ratePct: number): XeroTaxRate[] {
 export function pickTaxType(
   rates: XeroTaxRate[],
   ratePct: number,
-  chosen?: string | null,
+  chosen?: { taxType: string; name: string } | null,
 ): { ok: true; taxType: string } | { ok: false; error: string } {
   const candidates = salesRatesAt(rates, ratePct);
-  if (chosen && candidates.some((r) => r.TaxType === chosen)) return { ok: true, taxType: chosen };
+  if (chosen) {
+    return candidates.some((r) => r.TaxType === chosen.taxType)
+      ? { ok: true, taxType: chosen.taxType }
+      : {
+          ok: false,
+          error: `The Xero rate chosen for ${ratePct}% VAT ("${chosen.name || chosen.taxType}") is no longer a live sales rate in Xero. Choose again in Settings → Integrations → Xero → Sales tax, then send again.`,
+        };
+  }
   if (candidates.length === 1) return { ok: true, taxType: candidates[0].TaxType! };
   if (candidates.length > 1 && ratePct === 0) {
     const zeroRated = candidates.filter((r) => /zero/i.test(r.Name ?? ""));

@@ -1,6 +1,6 @@
 import { requireTenantOwner, getActiveTenantId } from "@/lib/auth";
 import { prisma } from "@/lib/db";
-import { getSetting, hasTenantCredentialOverride, isSecretSettingKey, resolveIntegrationBundle } from "@/lib/settings";
+import { getWorkspaceSetting, hasTenantCredentialOverride, isSecretSettingKey, resolveIntegrationBundle } from "@/lib/settings";
 import XeroItemPicker from "@/components/XeroItemPicker";
 import { linkFeeToXeroItem } from "@/app/actions/xero";
 import { XERO_FEE_ITEM_KEYS, XERO_TAX_CHOICES_KEY, parseXeroItemLink, parseXeroTaxChoices } from "@/lib/xeroInvoice";
@@ -57,11 +57,6 @@ const XERO_NOTICES: Record<string, string> = {
 
 export default async function IntegrationsPage({ searchParams }: { searchParams?: Promise<{ xero?: string }> }) {
   const xeroNotice = XERO_NOTICES[(await searchParams)?.xero ?? ""] ?? null;
-  const xeroFeeItems = {
-    delivery: parseXeroItemLink(await getSetting(XERO_FEE_ITEM_KEYS.delivery)),
-    other: parseXeroItemLink(await getSetting(XERO_FEE_ITEM_KEYS.other)),
-  };
-  const xeroTaxChoices = parseXeroTaxChoices(await getSetting(XERO_TAX_CHOICES_KEY));
   // Entirely sensitive (credential management) — gate the whole page.
   // Uses requireTenantOwner so a tenant's own provisioned owner can manage
   // their credentials without needing the global platform owner role (a
@@ -69,6 +64,14 @@ export default async function IntegrationsPage({ searchParams }: { searchParams?
   const user = await requireTenantOwner();
   const isPlatformOwner = user.role === "owner";
   const tenantId = await getActiveTenantId();
+  // THIS workspace's Xero codes — named explicitly, never the general settings
+  // (which fall back to the founding workspace when enforcement is off).
+  const xeroSetting = (key: string) => (tenantId ? getWorkspaceSetting(tenantId, key) : Promise.resolve(null));
+  const xeroFeeItems = {
+    delivery: parseXeroItemLink(await xeroSetting(XERO_FEE_ITEM_KEYS.delivery)),
+    other: parseXeroItemLink(await xeroSetting(XERO_FEE_ITEM_KEYS.other)),
+  };
+  const xeroTaxChoices = parseXeroTaxChoices(await xeroSetting(XERO_TAX_CHOICES_KEY));
   // Founding tenant falls back to platform credentials when no override is set.
   // Every other tenant gets null — they must configure their own credentials.
   const usesPlatformFallback = !tenantEnforcing() || tenantId === DEFAULT_TENANT_ID;

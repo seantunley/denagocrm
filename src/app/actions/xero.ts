@@ -14,7 +14,7 @@ import { withCurrency } from "@/lib/currencyRules";
 import { payableTotalCents } from "@/lib/pricing";
 import { loadBillToFleet, quoteBillTo } from "@/lib/quoteBillTo";
 import { QUOTE_GONE } from "@/lib/quoteDelivery";
-import { getRegionalSettings, getSetting, putSetting, resolveIntegrationField } from "@/lib/settings";
+import { getRegionalSettings, getWorkspaceSetting, putWorkspaceSetting, resolveIntegrationField } from "@/lib/settings";
 import { deleteFile, saveFile } from "@/lib/storage";
 import { XeroNotConnected, xeroClient, type XeroClient } from "@/lib/xero";
 import { formatInvoiceNumber } from "@/lib/invoiceNumber";
@@ -191,7 +191,7 @@ export async function sendQuoteToXero(quoteId: string): Promise<ActionResult> {
             { name: billTo.name, email: billTo.email, phone: billTo.phone, addressLines: billTo.addressLines ?? (billTo.address ? [billTo.address] : []), vatNumber: billTo.vatNumber },
             known,
           );
-          const taxTypes = await client.taxTypes(quoteTaxRates(quote), parseXeroTaxChoices(await getSetting(XERO_TAX_CHOICES_KEY)));
+          const taxTypes = await client.taxTypes(quoteTaxRates(quote), parseXeroTaxChoices(await getWorkspaceSetting(tenantId, XERO_TAX_CHOICES_KEY)));
           const salesAccount = (await resolveIntegrationField(tenantId, "xero", "XERO_SALES_ACCOUNT")) ?? "";
 
           // Lines whose product is linked to a Xero item carry its CURRENT code (looked up by the
@@ -202,8 +202,8 @@ export async function sendQuoteToXero(quoteId: string): Promise<ActionResult> {
             : [];
           // Fee lines follow Settings → Xero: the item for delivery fees, or for other fees.
           const feeLinks = {
-            delivery: parseXeroItemLink(await getSetting(XERO_FEE_ITEM_KEYS.delivery)),
-            other: parseXeroItemLink(await getSetting(XERO_FEE_ITEM_KEYS.other)),
+            delivery: parseXeroItemLink(await getWorkspaceSetting(tenantId, XERO_FEE_ITEM_KEYS.delivery)),
+            other: parseXeroItemLink(await getWorkspaceSetting(tenantId, XERO_FEE_ITEM_KEYS.other)),
           };
           let items: Array<(typeof quote.items)[number] & { xeroItemCode?: string; xeroAccountCode?: string | null }> = quote.items;
           let fees: Array<(typeof quote.fees)[number] & { xeroItemCode?: string; xeroAccountCode?: string | null }> = quote.fees;
@@ -405,9 +405,9 @@ export async function chooseXeroTaxRate(pct: number, formData: FormData): Promis
         refuseXero(err);
       }
       if (!option) refuse(`That rate isn't one of Xero's live sales rates at ${pct}% any more — reload the list.`);
-      const choices = parseXeroTaxChoices(await getSetting(XERO_TAX_CHOICES_KEY));
+      const choices = parseXeroTaxChoices(await getWorkspaceSetting(tenantId, XERO_TAX_CHOICES_KEY));
       choices[String(pct)] = option;
-      await putSetting(XERO_TAX_CHOICES_KEY, JSON.stringify(choices));
+      await putWorkspaceSetting(tenantId, XERO_TAX_CHOICES_KEY, JSON.stringify(choices));
       await logAudit({ action: "xero.tax_rate_chosen", summary: `VAT at ${pct}% goes to Xero as "${option.name}" (${option.taxType})`, user });
       revalidatePath("/settings/integrations");
       return { success: `VAT at ${pct}% now goes to Xero as ${option.name}.` };
@@ -428,7 +428,7 @@ export async function linkFeeToXeroItem(kind: XeroFeeKind, formData: FormData): 
       const label = kind === "delivery" ? "delivery fees" : "other fees";
       const itemId = String(formData.get("xeroItemId") ?? "").trim();
       if (!itemId) {
-        await putSetting(XERO_FEE_ITEM_KEYS[kind], "");
+        await putWorkspaceSetting(tenantId, XERO_FEE_ITEM_KEYS[kind], "");
         await logAudit({ action: "xero.fee_item_unlinked", summary: `Xero item for ${label} cleared`, user });
         revalidatePath("/settings/integrations");
         return { success: `No Xero item for ${label}.` };
@@ -440,7 +440,7 @@ export async function linkFeeToXeroItem(kind: XeroFeeKind, formData: FormData): 
         refuseXero(err);
       }
       if (!item) refuse("That item isn't in Xero (or isn't sold) any more — reload the list.");
-      await putSetting(XERO_FEE_ITEM_KEYS[kind], JSON.stringify({ id: item.id, code: item.code, name: item.name }));
+      await putWorkspaceSetting(tenantId, XERO_FEE_ITEM_KEYS[kind], JSON.stringify({ id: item.id, code: item.code, name: item.name }));
       await logAudit({ action: "xero.fee_item_linked", summary: `Xero item for ${label} set to ${item.code}`, user });
       revalidatePath("/settings/integrations");
       return { success: `${label[0].toUpperCase()}${label.slice(1)} go to Xero as ${item.code}.` };
