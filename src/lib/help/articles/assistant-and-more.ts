@@ -872,7 +872,7 @@ export const assistantAndMoreArticles: HelpArticle[] = [
       { type: "h", text: "Send a quote to Xero" },
       { type: "steps", items: [
         "On the **Deliveries** board, find the accepted quote.",
-        "Press **Send to Xero**. The invoice is created in Xero as a **draft**, with the CRM's invoice and quote numbers (e.g. INV-000123 / Q-1029) in its Reference.",
+        "Press **Send to Xero**. The invoice is created in Xero as a **draft**, with the CRM's invoice and quote numbers (e.g. INV-000123 / Q-1029, followed by the quote's CRM code) in its Reference.",
         "The card now shows Xero's invoice number and status, with **Open in Xero** and **Refresh**.",
         "Finish the invoice in Xero — approve it, email it, record payment. Press **Refresh** to bring Xero's latest number and status (Awaiting payment, Paid…) back, and to file Xero's latest PDF.",
       ] },

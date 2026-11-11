@@ -26,6 +26,7 @@ import { isSecretSettingKey } from "../src/lib/settings";
 import { SYSTEM_DOCUMENT_TAGS, SYSTEM_TAG_LABELS } from "../src/lib/documentLabels";
 
 const quote = (over: Partial<XeroQuoteInput> = {}): XeroQuoteInput => ({
+  id: "cq1029abc",
   number: 1029,
   invoiceNumber: 123,
   taxInclusive: true,
@@ -48,7 +49,9 @@ test("a DRAFT sales invoice, for the Xero contact by ID, with our numbers in the
   assert.equal(x.Type, "ACCREC");
   assert.equal(x.Status, "DRAFT");
   assert.deepEqual(x.Contact, { ContactID: "c-1" });
-  assert.equal(x.Reference, "INV-000123 / Q-1029");
+  assert.equal(x.Reference, "INV-000123 / Q-1029 / cq1029abc");
+  // Numbers repeat across workspaces; the quote id doesn't — another workspace's Q-1029 is a different Reference.
+  assert.notEqual(xeroReference({ id: "other-ws-quote", number: 1029, invoiceNumber: 123 }), x.Reference);
   assert.equal(x.Date, "2026-11-11");
   assert.equal(x.LineAmountTypes, "Inclusive");
   assert.equal(x.CurrencyCode, undefined);
@@ -151,6 +154,10 @@ test("customer: email first, then exact name; archived skipped; two candidates r
   assert.deepEqual(matchXeroContact(contacts, { name: "Len Smit", email: "" }), { kind: "none" }, "never a near match");
   const twins = [...contacts, { ContactID: "d", Name: "Len Smith", ContactStatus: "ACTIVE" }];
   assert.equal(matchXeroContact(twins, { name: "Len Smith", email: "" }).kind, "ambiguous");
+  // Same name, different email: not silently the same person.
+  assert.deepEqual(matchXeroContact(contacts, { name: "Len Smith", email: "len.other@example.com" }), { kind: "conflict", name: "Len Smith" });
+  // Same name, Xero has no email on it: nothing contradicts the match.
+  assert.deepEqual(matchXeroContact(contacts, { name: "Len Smith (Stellenbosch)", email: "x@example.com" }), { kind: "match", contactId: "b" });
 });
 
 test("a new Xero contact carries the CRM's billing details", () => {
@@ -170,7 +177,7 @@ test("a new Xero contact carries the CRM's billing details", () => {
 // ── Never two invoices; never the wrong books ──────────────────────────────
 
 test("an invoice already in Xero for this quote is found by its Reference; voided ones don't count", () => {
-  const ref = xeroReference({ number: 1029, invoiceNumber: 123 });
+  const ref = xeroReference({ id: "cq1029abc", number: 1029, invoiceNumber: 123 });
   const body = {
     Invoices: [
       { Type: "ACCREC", InvoiceID: "old", Reference: ref, Status: "VOIDED", Total: 1 },

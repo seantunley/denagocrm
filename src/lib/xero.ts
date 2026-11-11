@@ -233,6 +233,11 @@ export async function xeroClient(tenantId: string): Promise<XeroClient> {
       if (match.kind === "ambiguous") {
         throw new Error(`Xero: more than one Xero contact matches this customer (${match.names.join(", ")}). Merge or rename them in Xero, then send again.`);
       }
+      if (match.kind === "conflict") {
+        throw new Error(
+          `Xero: Xero already has a contact called "${match.name}" with a different email address. If it is this customer, put the same email on both; if not, rename one of them. Then send again.`,
+        );
+      }
       const created = (await json("/Contacts", { method: "PUT", body: { Contacts: [buildXeroContact(billTo)] } })) as { Contacts?: XeroContact[] } | null;
       const contactId = created?.Contacts?.[0]?.ContactID;
       if (!contactId) throw new Error("Xero: the new contact was not returned.");
@@ -240,7 +245,7 @@ export async function xeroClient(tenantId: string): Promise<XeroClient> {
     },
 
     async findInvoiceByReference(reference) {
-      // Our references are "INV-000123 / Q-1029" — no quotes to escape in the where clause.
+      // Our references are "INV-000123 / Q-1029 / <quote id>" — no quotes to escape in the where clause.
       const where = `Type=="ACCREC" AND Reference=="${reference.replace(/"/g, "")}"`;
       return liveInvoiceWithReference(await json(`/Invoices?where=${encodeURIComponent(where)}`), reference);
     },

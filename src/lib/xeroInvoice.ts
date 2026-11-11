@@ -20,6 +20,8 @@ export type XeroBillTo = {
 };
 
 export type XeroQuoteInput = {
+  /** The quote's id — unique across every workspace, so it ends the Reference. */
+  id: string;
   number: number;
   invoiceNumber: number | null;
   taxInclusive: boolean;
@@ -75,13 +77,16 @@ export function xeroDate(date: Date): string {
 }
 
 /**
- * "INV-000123 / Q-1029": our invoice number and the quote, so the Xero invoice
- * points back here. Also the DURABLE key a send searches Xero for before creating
- * anything — the quote number is unique in the workspace, and it outlives Xero's
- * six-minute idempotency window.
+ * "INV-000123 / Q-1029 / <quote id>": our invoice number and the quote, so the
+ * Xero invoice points back here. Also the DURABLE key a send searches Xero for
+ * before creating anything — it outlives Xero's six-minute idempotency window.
+ * The numbers are only unique within one workspace; the quote id is unique
+ * everywhere, so two workspaces sharing one Xero organisation can never adopt
+ * each other's invoice.
  */
-export function xeroReference(quote: Pick<XeroQuoteInput, "number" | "invoiceNumber">): string {
-  return quote.invoiceNumber ? `${formatInvoiceNumber(quote.invoiceNumber)} / Q-${quote.number}` : `Q-${quote.number}`;
+export function xeroReference(quote: Pick<XeroQuoteInput, "id" | "number" | "invoiceNumber">): string {
+  const numbers = quote.invoiceNumber ? `${formatInvoiceNumber(quote.invoiceNumber)} / Q-${quote.number}` : `Q-${quote.number}`;
+  return `${numbers} / ${quote.id}`;
 }
 
 /** Every VAT rate the quote's charged lines and fees use, as percentages. */
@@ -230,11 +235,19 @@ const same = (a: string | undefined, b: string) => (a ?? "").trim().toLowerCase(
  * identifies a person better than a name), then the same name — exact, ignoring
  * case and spaces at the ends. Archived contacts are skipped: Xero won't invoice
  * them. Two candidates → ambiguous, and the caller refuses rather than pick one.
+ *
+ * A same-name contact whose email DIFFERS from the customer's is a different
+ * person until someone says otherwise → "conflict", and the caller refuses. It
+ * can't create a second one either: Xero contact names are unique.
  */
 export function matchXeroContact(
   contacts: XeroContact[],
   billTo: Pick<XeroBillTo, "name" | "email">,
-): { kind: "match"; contactId: string } | { kind: "none" } | { kind: "ambiguous"; names: string[] } {
+):
+  | { kind: "match"; contactId: string }
+  | { kind: "none" }
+  | { kind: "ambiguous"; names: string[] }
+  | { kind: "conflict"; name: string } {
   const live = contacts.filter((c) => c.ContactID && c.ContactStatus !== "ARCHIVED");
   const pick = (found: XeroContact[]) =>
     found.length === 1
@@ -242,11 +255,15 @@ export function matchXeroContact(
       : found.length > 1
         ? ({ kind: "ambiguous", names: found.map((c) => c.Name ?? c.ContactID!) } as const)
         : null;
-  if (billTo.email.trim()) {
-    const byEmail = pick(live.filter((c) => same(c.EmailAddress, billTo.email)));
+  const email = billTo.email.trim();
+  if (email) {
+    const byEmail = pick(live.filter((c) => same(c.EmailAddress, email)));
     if (byEmail) return byEmail;
   }
-  return pick(live.filter((c) => same(c.Name, billTo.name))) ?? { kind: "none" };
+  const byName = live.filter((c) => same(c.Name, billTo.name));
+  const clash = email ? byName.find((c) => c.EmailAddress?.trim() && !same(c.EmailAddress, email)) : undefined;
+  if (clash) return { kind: "conflict", name: clash.Name ?? billTo.name };
+  return pick(byName) ?? { kind: "none" };
 }
 
 /** A new Xero contact from the customer the CRM invoice is billed to — name, email, phone, address, VAT number. */

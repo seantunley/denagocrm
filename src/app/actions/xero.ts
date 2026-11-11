@@ -187,6 +187,7 @@ export async function sendQuoteToXero(quoteId: string): Promise<ActionResult> {
           }
           const payload = buildXeroInvoice(
             {
+              id: quote.id,
               number: quote.number,
               invoiceNumber: quote.invoiceNumber,
               taxInclusive: quote.taxInclusive,
