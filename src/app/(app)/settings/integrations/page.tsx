@@ -1,4 +1,5 @@
 import { requireTenantOwner, getActiveTenantId } from "@/lib/auth";
+import { prisma } from "@/lib/db";
 import { getSetting, hasTenantCredentialOverride, isSecretSettingKey, resolveIntegrationBundle } from "@/lib/settings";
 import XeroItemPicker from "@/components/XeroItemPicker";
 import { linkFeeToXeroItem } from "@/app/actions/xero";
@@ -84,6 +85,19 @@ export default async function IntegrationsPage({ searchParams }: { searchParams?
   // working, as opposed to merely being present. Empty map when nothing has ever
   // been through the guided flow.
   const connections = tenantId ? await getIntegrationConnections(tenantId) : new Map<string, IntegrationConnectionState>();
+
+  // What choosing a DIFFERENT Xero organisation on Reconnect would clear (lib/xero.ts
+  // forgetXeroLinks) — said before the click, so a slip to the demo company isn't a surprise.
+  const xeroLinks =
+    tenantId && hasOverride.XERO_TENANT_ID
+      ? {
+          invoices: await prisma.quote.count({ where: { tenantId, xeroInvoiceId: { not: null } } }),
+          customers:
+            (await prisma.contact.count({ where: { tenantId, xeroContactId: { not: null } } })) +
+            (await prisma.fleet.count({ where: { tenantId, xeroContactId: { not: null } } })),
+          products: await prisma.product.count({ where: { tenantId, xeroItemId: { not: null } } }),
+        }
+      : null;
 
   // Non-secret values to prefill a reconnect with, so an owner fixing an expired
   // token doesn't retype their hostname, port and username as well.
@@ -218,6 +232,14 @@ export default async function IntegrationsPage({ searchParams }: { searchParams?
                       invoice in Xero. The sales account code below is optional.
                     </p>
                     {xeroNotice && <p className="mt-2 text-xs text-amber-300">{xeroNotice}</p>}
+                    {xeroLinks && (
+                      <p className="mt-2 text-xs text-amber-300">
+                        Reconnecting to {effectiveShown.XERO_ORG_NAME ?? "the same organisation"} keeps everything. Choosing a
+                        different organisation clears this workspace&apos;s links to this one: {xeroLinks.invoices} invoice
+                        {xeroLinks.invoices === 1 ? "" : "s"}, {xeroLinks.customers} customer{xeroLinks.customers === 1 ? "" : "s"},{" "}
+                        {xeroLinks.products} product{xeroLinks.products === 1 ? "" : "s"} and the fee items. Filed Xero PDFs stay.
+                      </p>
+                    )}
                     <a href="/api/integrations/xero/connect" className="btn-primary btn-sm mt-3 inline-flex">
                       {hasOverride.XERO_TENANT_ID ? "Reconnect Xero" : "Connect Xero"}
                     </a>

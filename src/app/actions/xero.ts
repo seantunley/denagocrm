@@ -21,8 +21,10 @@ import { formatInvoiceNumber } from "@/lib/invoiceNumber";
 import {
   XERO_FEE_ITEM_KEYS,
   XERO_STALE_SEND_MS,
-  XERO_UNCONFIRMED,
   xeroInvoiceCancelled,
+  xeroSendPlan,
+  xeroSendUncertain,
+  xeroStatusAfterFailedSend,
   buildXeroInvoice,
   feeKindForXero,
   parseXeroItemLink,
@@ -120,16 +122,17 @@ export async function sendQuoteToXero(quoteId: string): Promise<ActionResult> {
       if (!quote) refuse(QUOTE_GONE);
       // An invoice goes to Xero, never a quote: accepted, with its own INV number.
       if (quote.status !== "accepted" || !quote.invoiceNumber) refuse("Only an issued invoice (an accepted quote with its INV number) can be sent to Xero.");
-      const resend = Boolean(quote.xeroInvoiceId) && xeroInvoiceCancelled(quote.xeroStatus);
-      if (quote.xeroInvoiceId && !resend) {
+      const plan = xeroSendPlan(quote);
+      if (!plan.ok) {
         refuse(`${formatInvoiceNumber(quote.invoiceNumber)} is already in Xero as ${quote.xeroInvoiceNumber ?? "an invoice"}. Use Refresh to update it.`);
       }
       if (!quote.contactId && !quote.fleetId) refuse("Link this quote to a customer first — the Xero invoice is filed on the customer.");
 
       // The claim re-checks everything the read above checked, in ONE conditional
       // write: a cancel or move back to draft that lands in between finds it claimed
-      // (xeroLockReason), or this finds it no longer accepted. After a void in Xero
-      // the old link is cleared here, so the new invoice replaces it.
+      // (xeroLockReason), or this finds it no longer accepted, or its Xero state
+      // moved on. A voided invoice being replaced STAYS linked until the new one is
+      // recorded (xeroSendPlan), so a retry after a failure replaces the same one.
       // The claim's own timestamp is its token: every later write is conditional on
       // it, so a send whose claim was taken over or cleared (Xero reconnected to
       // another organisation) can't write its result into the CRM.
@@ -142,15 +145,15 @@ export async function sendQuoteToXero(quoteId: string): Promise<ActionResult> {
           deletedAt: null,
           supersededAt: null,
           invoiceNumber: { not: null },
-          AND: [
-            resend ? { xeroInvoiceId: quote.xeroInvoiceId, xeroStatus: quote.xeroStatus } : { xeroInvoiceId: null },
-            { OR: [{ xeroStatus: null }, { NOT: { xeroStatus: "SENDING" } }, { xeroSentAt: { lt: new Date(Date.now() - XERO_STALE_SEND_MS) } }] },
-          ],
+          xeroInvoiceId: quote.xeroInvoiceId,
+          xeroStatus: quote.xeroStatus,
+          // A send still running holds it; only a dead one (past any function's lifetime) is taken over.
+          OR: [{ xeroStatus: null }, { NOT: { xeroStatus: "SENDING" } }, { xeroSentAt: { lt: new Date(Date.now() - XERO_STALE_SEND_MS) } }],
         },
-        data: { xeroStatus: "SENDING", xeroSentAt: claimAt, xeroInvoiceId: null, xeroInvoiceNumber: null, xeroTotalCents: null },
+        data: { xeroStatus: "SENDING", xeroSentAt: claimAt },
       });
       if (claimed.count !== 1) refuse("This invoice is already being sent to Xero, or it has just changed — reload the page.");
-      const ourClaim = { id: quoteId, tenantId, xeroInvoiceId: null, xeroStatus: "SENDING", xeroSentAt: claimAt };
+      const ourClaim = { id: quoteId, tenantId, xeroStatus: "SENDING", xeroSentAt: claimAt };
       let createAttempted = false;
 
       try {
@@ -219,9 +222,9 @@ export async function sendQuoteToXero(quoteId: string): Promise<ActionResult> {
             },
             { contactId: contact.contactId, salesAccount, taxTypes },
           );
-          // A send after a void needs its own key: Xero would answer the old one with the voided invoice.
+          // A replacement for a voided invoice has its own key, the same on every retry (xeroSendPlan).
           createAttempted = true;
-          invoice = await client.createInvoice(payload, resend ? `crm-quote-${quote.id}-after-${quote.xeroInvoiceId}` : `crm-quote-${quote.id}`);
+          invoice = await client.createInvoice(payload, plan.idempotencyKey);
         }
 
         // Recorded only while OUR claim still stands, with the customer's Xero contact
@@ -282,12 +285,13 @@ export async function sendQuoteToXero(quoteId: string): Promise<ActionResult> {
         ];
         return { success: parts.filter(Boolean).join(" ") };
       } catch (err) {
-        // Still our claim: release it. Failed before Xero was asked to create
-        // anything → free again. Failed after → Xero may have it: UNCONFIRMED stays
-        // locked until a new send checks Xero (xeroLockReason).
+        // Still our claim: release it (xeroStatusAfterFailedSend). Failed before Xero
+        // was asked to create anything → back as it was. Failed after, or while
+        // retrying an unfinished send → Xero may have it: UNCONFIRMED, locked until a
+        // new send checks Xero. The voided invoice being replaced stays linked.
         await prisma.quote.updateMany({
           where: ourClaim,
-          data: createAttempted ? { xeroStatus: XERO_UNCONFIRMED } : { xeroStatus: null, xeroSentAt: null },
+          data: { xeroStatus: xeroStatusAfterFailedSend(quote.xeroStatus, createAttempted) },
         });
         refuseXero(err);
       }
@@ -400,6 +404,9 @@ export async function refreshXeroInvoice(quoteId: string): Promise<ActionResult>
       });
       if (!quote) refuse(QUOTE_GONE);
       if (!quote.xeroInvoiceId) refuse(`Q-${quote.number} has not been sent to Xero yet.`);
+      // Mid-send or unfinished: the linked invoice is the voided one being replaced —
+      // Refresh would only read that back. Send settles it.
+      if (xeroSendUncertain(quote.xeroStatus)) refuse("A send to Xero is in progress or didn't finish — press Send invoice to Xero to settle it.");
       let client: XeroClient;
       let invoice: XeroInvoiceSummary;
       try {
@@ -409,7 +416,8 @@ export async function refreshXeroInvoice(quoteId: string): Promise<ActionResult>
         refuseXero(err);
       }
       await prisma.quote.updateMany({
-        where: { id: quoteId, tenantId, xeroInvoiceId: quote.xeroInvoiceId },
+        // Only the state that was read: a send that claimed it meanwhile keeps its claim.
+        where: { id: quoteId, tenantId, xeroInvoiceId: quote.xeroInvoiceId, xeroStatus: quote.xeroStatus },
         data: { xeroInvoiceNumber: invoice.number, xeroStatus: invoice.status, xeroTotalCents: invoice.totalCents },
       });
       revalidatePath("/deliveries");

@@ -18,6 +18,8 @@ import {
   xeroLockReason,
   XERO_STALE_SEND_MS,
   XERO_UNCONFIRMED,
+  xeroSendPlan,
+  xeroStatusAfterFailedSend,
   xeroPdfFileName,
   xeroReference,
   xeroStatusLabel,
@@ -260,6 +262,32 @@ test("every way to undo an accepted invoice asks xeroLockReason under the row lo
   assert.match(actions, /quote\.status !== "accepted" \|\| !quote\.invoiceNumber/, "only an issued invoice is sent");
 });
 
+test("void → resend fails → retry: the same replacement key every time, never the original's", () => {
+  const id = "cq1";
+  // First send.
+  const first = xeroSendPlan({ id, xeroInvoiceId: null, xeroStatus: null });
+  assert.deepEqual(first, { ok: true, replacing: null, idempotencyKey: "crm-quote-cq1" });
+  // In Xero and live → no second send.
+  assert.deepEqual(xeroSendPlan({ id, xeroInvoiceId: "old", xeroStatus: "AUTHORISED" }), { ok: false });
+  // Voided in Xero (Refresh saw it) → a replacement, keyed on the voided invoice.
+  const voided = { id, xeroInvoiceId: "old", xeroStatus: "VOIDED" };
+  const replace = xeroSendPlan(voided);
+  assert.deepEqual(replace, { ok: true, replacing: "old", idempotencyKey: "crm-quote-cq1-after-old" });
+  // The replacement fails after asking Xero to create: UNCONFIRMED, and the link to "old" is untouched (the claim never clears it).
+  const afterFail = { ...voided, xeroStatus: xeroStatusAfterFailedSend(voided.xeroStatus, true) };
+  assert.equal(afterFail.xeroStatus, XERO_UNCONFIRMED);
+  // The retry: the SAME key as the failed replacement — not the original send's.
+  assert.deepEqual(xeroSendPlan(afterFail), { ok: true, replacing: "old", idempotencyKey: "crm-quote-cq1-after-old" });
+  // A retry that fails BEFORE creating stays UNCONFIRMED (it was already uncertain), so the key holds again.
+  assert.equal(xeroStatusAfterFailedSend(XERO_UNCONFIRMED, false), XERO_UNCONFIRMED);
+  assert.deepEqual(xeroSendPlan({ ...afterFail, xeroStatus: xeroStatusAfterFailedSend(XERO_UNCONFIRMED, false) }), replace);
+  // A replacement that fails before creating anything is just still voided — free to try again, same key.
+  assert.equal(xeroStatusAfterFailedSend("VOIDED", false), "VOIDED");
+  assert.equal(xeroStatusAfterFailedSend(null, false), null, "a first send that never reached Xero is simply unsent");
+  // And it stays locked throughout the uncertainty.
+  assert.match(xeroLockReason({ number: 1, invoiceNumber: 2, xeroInvoiceNumber: "INV-9", xeroSentAt: null, ...afterFail }) ?? "", /didn't finish/);
+});
+
 test("a delivered invoice (off the Deliveries board) can still be sent, from the customer", () => {
   const page = readFileSync("src/app/(app)/contacts/[id]/page.tsx", "utf8");
   assert.match(page, /contact\.quotes\.filter\(\(q\) => q\.status === "accepted" && q\.invoiceNumber && !q\.supersededAt\)/, "delivered ones are not filtered out");
@@ -285,15 +313,22 @@ test("connecting a DIFFERENT Xero organisation forgets every link to the old one
   assert.ok(steps.every((at, i) => at > 0 && (i === 0 || at > steps[i - 1])), `in order, in one transaction: ${steps}`);
   assert.match(exchange, /XERO_REFRESH_TOKEN: String\(tokens\.refresh_token\) \},\s*tx,\s*\)/, "the new connection is saved in the same transaction");
   assert.match(readFileSync("src/lib/settings.ts", "utf8"), /if \(inTx\) await write\(inTx\);\s*else await basePrisma\.\$transaction\(write\);/);
+  // Said BEFORE the click, with what would be cleared (Sean, 2026-11-11).
+  const settings = readFileSync("src/app/(app)/settings/integrations/page.tsx", "utf8");
+  assert.match(settings, /Choosing a\s+different organisation clears this workspace&apos;s links to this one: \{xeroLinks\.invoices\} invoice/);
+  assert.match(settings, /prisma\.quote\.count\(\{ where: \{ tenantId, xeroInvoiceId: \{ not: null \} \} \}\)/);
 });
 
 test("a send writes its result only while its own claim stands; a failed create stays UNCONFIRMED", () => {
   const actions = readFileSync("src/app/actions/xero.ts", "utf8");
-  assert.match(actions, /const ourClaim = \{ id: quoteId, tenantId, xeroInvoiceId: null, xeroStatus: "SENDING", xeroSentAt: claimAt \};/);
+  assert.match(actions, /const ourClaim = \{ id: quoteId, tenantId, xeroStatus: "SENDING", xeroSentAt: claimAt \};/);
   assert.match(actions, /const saved = await tx\.quote\.updateMany\(\{\s*where: ourClaim,/, "result recorded only under our claim");
   assert.match(actions, /if \(saved\.count !== 1\) return false;\s*\/\/ The customer's Xero contact/, "and the contact link with it, or neither");
-  assert.match(actions, /where: ourClaim,\s*data: createAttempted \? \{ xeroStatus: XERO_UNCONFIRMED \} : \{ xeroStatus: null, xeroSentAt: null \},/);
-  assert.ok(actions.indexOf("createAttempted = true;") < actions.indexOf("client.createInvoice("));
+  assert.match(actions, /where: ourClaim,\s*data: \{ xeroStatus: xeroStatusAfterFailedSend\(quote\.xeroStatus, createAttempted\) \},/);
+  assert.ok(actions.indexOf("createAttempted = true;") < actions.indexOf("client.createInvoice(payload, plan.idempotencyKey)"));
+  // The claim never clears the link: a voided invoice stays until its replacement is recorded.
+  assert.match(actions, /data: \{ xeroStatus: "SENDING", xeroSentAt: claimAt \},/);
+  assert.match(actions, /if \(xeroSendUncertain\(quote\.xeroStatus\)\) refuse\(/, "Refresh doesn't read the voided invoice back over a send");
   const unconfirmed = { number: 1, invoiceNumber: 5, xeroInvoiceId: null, xeroInvoiceNumber: null, xeroStatus: XERO_UNCONFIRMED, xeroSentAt: null };
   assert.match(xeroLockReason(unconfirmed) ?? "", /didn't finish/, "Xero may have it → locked until a send checks");
 });

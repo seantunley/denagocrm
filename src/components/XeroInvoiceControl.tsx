@@ -1,6 +1,6 @@
 import { SaveForm, SaveButton } from "@/components/SaveForm";
 import { refreshXeroInvoice, sendQuoteToXero } from "@/app/actions/xero";
-import { XERO_UNCONFIRMED, totalsDiffer, xeroInvoiceCancelled, xeroInvoiceUrl, xeroStatusLabel } from "@/lib/xeroInvoice";
+import { XERO_UNCONFIRMED, totalsDiffer, xeroInvoiceCancelled, xeroInvoiceUrl, xeroSendUncertain, xeroStatusLabel } from "@/lib/xeroInvoice";
 
 /**
  * An invoice's Xero copy on the Deliveries board. Only an ISSUED invoice (with its
@@ -42,7 +42,8 @@ export default function XeroInvoiceControl({
       </SaveButton>
     </SaveForm>
   );
-  if (!quote.xeroInvoiceId) return <div className="mt-1.5">{sendButton}</div>;
+  // Not sent, or a send in progress / unfinished (a voided invoice being replaced stays linked until then).
+  if (!quote.xeroInvoiceId || xeroSendUncertain(quote.xeroStatus)) return <div className="mt-1.5">{sendButton}</div>;
   const differs = !voided && totalsDiffer(quote.xeroTotalCents, crmTotalCents);
   return (
     <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1">

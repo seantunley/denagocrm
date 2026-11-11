@@ -86,6 +86,36 @@ export const XERO_UNCONFIRMED = "UNCONFIRMED";
 export const XERO_CANCELLED_STATUSES = ["VOIDED", "DELETED"];
 export const xeroInvoiceCancelled = (status: string | null | undefined) => XERO_CANCELLED_STATUSES.includes(status ?? "");
 
+/** A send claimed it, or one failed after asking Xero to create: Xero may have an invoice the CRM doesn't. */
+export const xeroSendUncertain = (status: string | null | undefined) => status === "SENDING" || status === XERO_UNCONFIRMED;
+
+/**
+ * May this invoice be sent, and under which Idempotency-Key?
+ *
+ * A voided (or deleted) Xero invoice stays linked — `xeroInvoiceId` — until its
+ * REPLACEMENT is recorded; a send never clears it first. So every attempt at the
+ * same replacement, however many fail, derives the same key from it, and that key
+ * is never the original send's (review of #1067: a cleared link made the retry
+ * reuse the original key, and Xero could answer with the voided invoice).
+ */
+export function xeroSendPlan(
+  quote: { id: string; xeroInvoiceId: string | null; xeroStatus: string | null },
+): { ok: false } | { ok: true; replacing: string | null; idempotencyKey: string } {
+  if (quote.xeroInvoiceId && !xeroSendUncertain(quote.xeroStatus) && !xeroInvoiceCancelled(quote.xeroStatus)) return { ok: false };
+  const replacing = quote.xeroInvoiceId;
+  return { ok: true, replacing, idempotencyKey: replacing ? `crm-quote-${quote.id}-after-${replacing}` : `crm-quote-${quote.id}` };
+}
+
+/**
+ * What a failed send leaves behind. Once Xero was asked to create — or the send
+ * was itself retrying an unfinished one — Xero may have the invoice: UNCONFIRMED,
+ * locked until a send checks. Otherwise exactly what was there before: nothing, or
+ * the voided invoice still waiting for its replacement.
+ */
+export function xeroStatusAfterFailedSend(previous: string | null, createAttempted: boolean): string | null {
+  return createAttempted || xeroSendUncertain(previous) ? XERO_UNCONFIRMED : previous;
+}
+
 /**
  * Sean, 2026-11-11: "Quotes can change, invoices are final." Once the invoice is
  * in Xero the CRM won't move it back to draft, revise, cancel or trash it — not
