@@ -4,7 +4,7 @@ import { revalidatePath } from "next/cache";
 import { asActionResult, refuse, type ActionResult } from "@/lib/actionResult";
 import { withActingStaffScope } from "@/lib/actingScope";
 import { actingTenantId } from "@/lib/actingTenant";
-import { prisma } from "@/lib/db";
+import { basePrisma, prisma } from "@/lib/db";
 import { requireQuoteAccess, type PermissionUser } from "@/lib/permissions";
 import { requireTenantOwner } from "@/lib/auth";
 import { logAudit } from "@/lib/audit";
@@ -60,24 +60,36 @@ async function fileXeroPdf(input: {
   const fileName = xeroPdfFileName(input.invoice.number, input.quote.number);
   const storedName = await saveFile(input.pdf, fileName, "application/pdf", input.tenantId);
   try {
-    const document = await prisma.document.create({
-      data: {
-        tenantId: input.tenantId,
-        fileName,
-        storedName,
-        mimeType: "application/pdf",
-        sizeBytes: input.pdf.length,
-        contactId: input.quote.contactId,
-        quoteId: input.quote.id,
-        tag: "accounting-invoice",
-        uploadedById: input.user.id,
-      },
-      select: { id: true },
+    // Filed only if the invoice STILL links this Xero invoice, checked under the
+    // quote's row lock: a PDF fetched over a connection that has since been
+    // switched to another organisation (forgetXeroLinks clears the link, locking
+    // the same row), or for an invoice another send has since replaced, is
+    // dropped — never filed on the customer (review of #1067).
+    const filed = await basePrisma.$transaction(async (tx) => {
+      await tx.$executeRaw`SELECT id FROM "Quote" WHERE id = ${input.quote.id} AND "tenantId" = ${input.tenantId} FOR UPDATE`;
+      const stillLinked = await tx.quote.count({ where: { id: input.quote.id, tenantId: input.tenantId, xeroInvoiceId: input.invoice.id } });
+      if (stillLinked !== 1) return false;
+      const document = await tx.document.create({
+        data: {
+          tenantId: input.tenantId,
+          fileName,
+          storedName,
+          mimeType: "application/pdf",
+          sizeBytes: input.pdf.length,
+          contactId: input.quote.contactId,
+          quoteId: input.quote.id,
+          tag: "accounting-invoice",
+          uploadedById: input.user.id,
+        },
+        select: { id: true },
+      });
+      await tx.document.updateMany({
+        where: { tenantId: input.tenantId, quoteId: input.quote.id, tag: "accounting-invoice", replacedById: null, id: { not: document.id } },
+        data: { replacedById: document.id },
+      });
+      return true;
     });
-    await prisma.document.updateMany({
-      where: { tenantId: input.tenantId, quoteId: input.quote.id, tag: "accounting-invoice", replacedById: null, id: { not: document.id } },
-      data: { replacedById: document.id },
-    });
+    if (!filed) throw new Error("the invoice no longer links this Xero invoice — PDF not filed");
   } catch (error) {
     await deleteFile(storedName).catch(() => {});
     throw error;
@@ -415,11 +427,14 @@ export async function refreshXeroInvoice(quoteId: string): Promise<ActionResult>
       } catch (err) {
         refuseXero(err);
       }
-      await prisma.quote.updateMany({
+      const updated = await prisma.quote.updateMany({
         // Only the state that was read: a send that claimed it meanwhile keeps its claim.
         where: { id: quoteId, tenantId, xeroInvoiceId: quote.xeroInvoiceId, xeroStatus: quote.xeroStatus },
         data: { xeroInvoiceNumber: invoice.number, xeroStatus: invoice.status, xeroTotalCents: invoice.totalCents },
       });
+      // Nothing matched: a send took it over, or Xero was reconnected to another
+      // organisation meanwhile — stop here; nothing from this read is kept or filed.
+      if (updated.count !== 1) refuse("This invoice changed while it was being refreshed (a send, or Xero was reconnected) — reload the page.");
       revalidatePath("/deliveries");
       if (quote.contactId) revalidatePath(`/contacts/${quote.contactId}`);
       if (xeroInvoiceCancelled(invoice.status)) {

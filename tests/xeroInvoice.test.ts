@@ -262,6 +262,21 @@ test("every way to undo an accepted invoice asks xeroLockReason under the row lo
   assert.match(actions, /quote\.status !== "accepted" \|\| !quote\.invoiceNumber/, "only an issued invoice is sent");
 });
 
+test("a PDF is filed only while the invoice still links that Xero invoice; a refresh that matched nothing stops", () => {
+  const actions = readFileSync("src/app/actions/xero.ts", "utf8");
+  const file = actions.slice(actions.indexOf("async function fileXeroPdf("), actions.indexOf("async function tryFilePdf("));
+  const order = [
+    "FOR UPDATE",
+    "tx.quote.count({ where: { id: input.quote.id, tenantId: input.tenantId, xeroInvoiceId: input.invoice.id } })",
+    "if (stillLinked !== 1) return false;",
+    "tx.document.create(",
+  ].map((s) => file.indexOf(s));
+  assert.ok(order.every((at, i) => at > 0 && (i === 0 || at > order[i - 1])), `lock, re-check the link, then file: ${order}`);
+  assert.match(file, /if \(!filed\) throw new Error\(/, "an unfiled PDF is an error, and its stored copy is deleted");
+  const refresh = actions.slice(actions.indexOf("export async function refreshXeroInvoice("));
+  assert.ok(refresh.indexOf("if (updated.count !== 1) refuse(") > 0 && refresh.indexOf("if (updated.count !== 1) refuse(") < refresh.indexOf("tryFilePdf("), "stop before any PDF when the update matched nothing");
+});
+
 test("void → resend fails → retry: the same replacement key every time, never the original's", () => {
   const id = "cq1";
   // First send.
