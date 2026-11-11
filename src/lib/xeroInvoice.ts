@@ -248,7 +248,8 @@ export function matchXeroContact(
   | { kind: "none" }
   | { kind: "ambiguous"; names: string[] }
   | { kind: "conflict"; name: string } {
-  const live = contacts.filter((c) => c.ContactID && c.ContactStatus !== "ARCHIVED");
+  // One contact can come back from both the email and the name search — count it once.
+  const live = [...new Map(contacts.filter((c) => c.ContactID && c.ContactStatus !== "ARCHIVED").map((c) => [c.ContactID, c])).values()];
   const pick = (found: XeroContact[]) =>
     found.length === 1
       ? ({ kind: "match", contactId: found[0].ContactID! } as const)

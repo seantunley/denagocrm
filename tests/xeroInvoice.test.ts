@@ -154,6 +154,9 @@ test("customer: email first, then exact name; archived skipped; two candidates r
   assert.deepEqual(matchXeroContact(contacts, { name: "Len Smit", email: "" }), { kind: "none" }, "never a near match");
   const twins = [...contacts, { ContactID: "d", Name: "Len Smith", ContactStatus: "ACTIVE" }];
   assert.equal(matchXeroContact(twins, { name: "Len Smith", email: "" }).kind, "ambiguous");
+  // The email search and the name search both return the same contact: still one match.
+  assert.deepEqual(matchXeroContact([contacts[0], contacts[0]], { name: "Len Smith", email: "len@example.com" }), { kind: "match", contactId: "a" });
+  assert.deepEqual(matchXeroContact([contacts[0], { ...contacts[0] }], { name: "Len Smith", email: "" }), { kind: "match", contactId: "a" });
   // Same name, different email: not silently the same person.
   assert.deepEqual(matchXeroContact(contacts, { name: "Len Smith", email: "len.other@example.com" }), { kind: "conflict", name: "Len Smith" });
   // Same name, Xero has no email on it: nothing contradicts the match.
