@@ -150,6 +150,23 @@ test("re-review of #1071: money recorded BY HAND, matched, then removed in Xero 
   assert.match(sync, /where: \{ id: \{ in: plan\.unlink \}, tenantId: input\.tenantId, quoteId: input\.quoteId \}, data: \{ xeroPaymentId: null \}/);
 });
 
+test("money recorded by hand that Xero split differently: nothing changes, and the message says what's wrong and how to fix it", () => {
+  // Q-1037 as it is on live: R100 000 deposit + R156 500 payment by hand; suppose Xero holds ONE R256 500 payment.
+  const q1037 = { deposit: { paidAt: day(1), cents: 10_000_000, xeroPaymentId: null, createdFromXero: false }, payments: [row("c1", null, 156_500, 3, { createdFromXero: false })] };
+  const plan = planXeroPaymentSync(q1037, [xp("x1", 3, 256_500)]);
+  assert.equal(plan.unmatched.depositCents, 10_000_000);
+  assert.deepEqual(plan.unmatched.payments, [{ id: "c1", amountCents: 15_650_000 }]);
+  assert.ok(receivedAfterSync(q1037, plan) > 25_650_000, "both counted would pass the total → the sync refuses and changes nothing");
+  const sync = actions.slice(actions.indexOf("async function syncPaymentsFromXero("), actions.indexOf("async function tryFilePdf("));
+  assert.match(sync, /are split differently from Xero's payments \(\$\{xeros\}\), so they can't be matched — counting both would go past the invoice total, so nothing was changed\./);
+  assert.match(sync, /untick "Payments come from Xero" in Settings → Integrations → Xero, void the CRM's records on this invoice, tick it again and press Refresh/);
+  assert.ok(sync.indexOf("if (handDeposit || handPayments.length)") < sync.indexOf("Xero shows more received"), "the 'Xero has too much' wording is only for when nothing was recorded by hand");
+  // The same split, matched one-for-one, changes nothing and counts once.
+  const matched = planXeroPaymentSync(q1037, [xp("x1", 1, 100_000), xp("x2", 3, 156_500)]);
+  assert.deepEqual([matched.deposit.kind, matched.link.length, matched.create.length], ["link", 1, 0]);
+  assert.equal(receivedAfterSync(q1037, matched), 25_650_000);
+});
+
 test("review of #1071 (2): a partial answer from Xero changes NOTHING", () => {
   // Xero says R80 000 paid but lists only R50 000 of payments → no sync at all.
   assert.equal(xeroPaymentsComplete({ amountPaidCents: 8_000_000, payments: [xp("p1", 1, 50_000)] }), false);

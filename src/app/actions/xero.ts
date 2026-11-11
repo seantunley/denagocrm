@@ -217,6 +217,14 @@ async function syncPaymentsFromXero(input: {
   const fmt = withCurrency(await getRegionalSettings(), done.quote.currency);
   const money = (cents: number) => formatZAR(cents, fmt);
   if (done.kind === "too-much") {
+    const handDeposit = done.plan.unmatched.depositCents;
+    const handPayments = done.plan.unmatched.payments;
+    if (handDeposit || handPayments.length) {
+      // Money recorded by hand that Xero split differently (Sean, 2026-11-11) — not "Xero has too much".
+      const ours = [handDeposit ? `deposit ${money(handDeposit)}` : "", ...handPayments.map((p) => `payment ${money(p.amountCents)}`)].filter(Boolean).join(", ");
+      const xeros = input.invoice.payments.map((p) => money(p.amountCents)).join(", ") || "none";
+      return `The CRM's own records for this invoice (${ours}) are split differently from Xero's payments (${xeros}), so they can't be matched — counting both would go past the invoice total, so nothing was changed. To line them up: untick "Payments come from Xero" in Settings → Integrations → Xero, void the CRM's records on this invoice, tick it again and press Refresh — or record the payments in Xero the same way the CRM has them.`;
+    }
     return `Xero shows more received (${money(input.invoice.amountPaidCents)}) than this invoice's total — nothing was brought back. Check the invoice in Xero.`;
   }
   const { plan } = done;
