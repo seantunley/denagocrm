@@ -384,6 +384,12 @@ test("a PDF is filed only while the invoice still links that Xero invoice; a ref
   ].map((s) => file.indexOf(s));
   assert.ok(order.every((at, i) => at > 0 && (i === 0 || at > order[i - 1])), `lock, re-check the link, then file: ${order}`);
   assert.match(file, /if \(!filed\) throw new Error\(/, "an unfiled PDF is an error, and its stored copy is deleted");
+  // ONE Xero PDF per invoice (Sean, 2026-11-11: "it files two copies"): every older live copy
+  // for this invoice goes to the Trash in the same transaction as the new one is filed.
+  assert.match(
+    file,
+    /tx\.document\.updateMany\(\{\s*where: \{ tenantId: input\.tenantId, quoteId: input\.quote\.id, tag: "accounting-invoice", deletedAt: null, id: \{ not: document\.id \} \},\s*data: \{ replacedById: document\.id, deletedAt: new Date\(\), deletedByName: "Xero", deleteReason:/,
+  );
   const refresh = actions.slice(actions.indexOf("export async function refreshXeroInvoice("));
   assert.ok(refresh.indexOf("if (updated.count !== 1) refuse(") > 0 && refresh.indexOf("if (updated.count !== 1) refuse(") < refresh.indexOf("tryFilePdf("), "stop before any PDF when the update matched nothing");
 });

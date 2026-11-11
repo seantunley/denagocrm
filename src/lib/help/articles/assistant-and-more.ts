@@ -902,7 +902,7 @@ export const assistantAndMoreArticles: HelpArticle[] = [
       { type: "h", text: "On the customer's record" },
       { type: "list", items: [
         "A **Xero** card shows the customer's Xero contact and every Xero invoice made for their quotes, with links into Xero.",
-        "Xero's own PDF of the invoice is filed under **Documents** as **Accounting invoice (Xero)**. When the invoice is approved or paid and you press Refresh, the newer PDF becomes the current one and the older is kept as a previous version.",
+        "Xero's own PDF of the invoice is filed under **Documents** as **Accounting invoice (Xero)**. When the invoice is approved or paid and you press Refresh, the newer PDF replaces it — there is only ever one Xero PDF per invoice; the older copy goes to the Trash for 60 days.",
       ] },
       { type: "list", items: [
         "Nothing is approved or emailed from the CRM; it only ever creates a draft.",
