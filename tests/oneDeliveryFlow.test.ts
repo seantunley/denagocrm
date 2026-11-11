@@ -469,7 +469,8 @@ test("every correction is permissioned exactly like the stage it corrects", () =
 
 test("the corrections are where people work: desktop board AND mobile queue, one component", () => {
   const page = src("src/app/(app)/deliveries/page.tsx");
-  const uses = page.match(/\{canManage && <FulfilmentCorrections quote=\{quote\} moneyFmt=\{withCurrency\(moneyFmt, quote\.currency\)\} \/>\}/g) ?? [];
+  // Both behind each card's Details panel since 2026-11-11 (desktop: not on delivered cards — nothing left to correct).
+  const uses = page.match(/\{canManage && (?:column\.key !== "delivered" && )?<FulfilmentCorrections quote=\{quote\} moneyFmt=\{withCurrency\(moneyFmt, quote\.currency\)\} \/>\}/g) ?? [];
   assert.equal(uses.length, 2, "rendered in both the mobile and desktop views, behind deliveries.manage");
   const mobile = page.slice(page.indexOf("<MobileOnly"), page.indexOf("<DesktopOnly"));
   assert.match(mobile, /<FulfilmentCorrections quote=\{quote\} moneyFmt=\{withCurrency\(moneyFmt, quote\.currency\)\} \/>/, "the mobile queue has them");

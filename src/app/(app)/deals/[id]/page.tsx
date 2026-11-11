@@ -360,6 +360,7 @@ export default async function DealWorkspacePage({ params }: { params: Promise<{ 
                 {quote.contactId && <Link href={`/contacts/${quote.contactId}`} className="btn-secondary btn-sm"><UserRound className="size-4" />Customer</Link>}
                 {lead && <Link href={`/leads/${lead.id}`} className="btn-secondary btn-sm"><Activity className="size-4" />{labels.lead.one}</Link>}
                 {quote.status === "accepted" && <Link href="/deliveries" className="btn-secondary btn-sm"><Truck className="size-4" />Delivery board</Link>}
+                {quote.status === "accepted" && quote.invoiceNumber && <Link href="/invoices?show=all" className="btn-secondary btn-sm">Invoices</Link>}
               </div>
             </div>
           </div>

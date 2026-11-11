@@ -437,6 +437,8 @@ export type XeroInvoiceSummary = {
   totalCents: number | null;
   /** The Xero contact it is billed to. */
   contactId: string | null;
+  /** What Xero has received against it so far (0 when Xero doesn't say). */
+  amountPaidCents: number;
 };
 
 function summary(invoice: Record<string, unknown> | undefined): XeroInvoiceSummary | null {
@@ -448,7 +450,26 @@ function summary(invoice: Record<string, unknown> | undefined): XeroInvoiceSumma
     status: typeof invoice.Status === "string" ? invoice.Status : "UNKNOWN",
     totalCents: typeof invoice.Total === "number" ? Math.round(invoice.Total * 100) : null,
     contactId: typeof contact?.ContactID === "string" ? contact.ContactID : null,
+    amountPaidCents: typeof invoice.AmountPaid === "number" && invoice.AmountPaid > 0 ? Math.round(invoice.AmountPaid * 100) : 0,
   };
+}
+
+/**
+ * The deposit to record from Xero (Sean, 2026-11-11: "payments come from Xero"):
+ * what Xero has received, less the payments already recorded on the deal — the
+ * deposit and those payments are ONE balance (quoteLedger.ts). Null when there is
+ * nothing to record: Xero has received nothing, the deposit is already in, or the
+ * deal's own payments already account for it all. The ledger lock still has the
+ * final say (assertDepositFits).
+ */
+export function depositFromXero(
+  quote: { invoicedAt: Date | null; depositPaidAt: Date | null },
+  xeroPaidCents: number,
+  livePaymentsCents: number,
+): number | null {
+  if (!quote.invoicedAt || quote.depositPaidAt) return null;
+  const cents = xeroPaidCents - livePaymentsCents;
+  return cents > 0 ? cents : null;
 }
 
 /** The first invoice in a Xero Invoices response, or null if there isn't one. */

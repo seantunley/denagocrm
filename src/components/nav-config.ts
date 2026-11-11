@@ -10,6 +10,7 @@ import {
   FolderOpen,
   Library,
   Truck,
+  Wallet,
   Users,
   ListChecks,
   Megaphone,
@@ -92,6 +93,8 @@ export function buildNav(
   if (can("quotes.view_all", "quotes.view_owned")) crmLinks.push({ href: "/quotes", label: "Quotes", icon: FileText });
   if (can("signing.view", "signing.manage")) crmLinks.push({ href: "/signatures", label: "Signatures", icon: PenLine });
   if (can("deliveries.view", "deliveries.manage")) crmLinks.push({ href: "/deliveries", label: "Deliveries", icon: Truck });
+  // The money side of the board (2026-11-11): the same door — deliveries.* — as the board it came off.
+  if (can("deliveries.view", "deliveries.manage")) crmLinks.push({ href: "/invoices", label: "Invoices", icon: Wallet, keywords: ["xero", "owing", "paid", "deposit", "accounts"] });
   if (can("contacts.view_all", "contacts.view_owned")) crmLinks.push({ href: "/contacts", label: "Contacts", icon: Users });
   // fleets.* — the same rule ROUTE_RULES applies at the edge and requireRoute
   // applies on the page, so this link cannot appear for someone /fleets bounces.

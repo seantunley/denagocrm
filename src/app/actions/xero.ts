@@ -1,11 +1,11 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { asActionResult, refuse, type ActionResult } from "@/lib/actionResult";
+import { ActionRefusal, asActionResult, refuse, type ActionResult } from "@/lib/actionResult";
 import { withActingStaffScope } from "@/lib/actingScope";
 import { actingTenantId } from "@/lib/actingTenant";
 import { basePrisma, prisma } from "@/lib/db";
-import { requireQuoteAccess, type PermissionUser } from "@/lib/permissions";
+import { getAccessibleQuoteIds, requireAnyPermission, requireQuoteAccess, type PermissionUser } from "@/lib/permissions";
 import { requireTenantOwner } from "@/lib/auth";
 import { logAudit } from "@/lib/audit";
 import { logError } from "@/lib/errorLog";
@@ -28,6 +28,7 @@ import {
   xeroInvoiceCancelled,
   xeroSendPlan,
   xeroSendUncertain,
+  XERO_UNCONFIRMED,
   xeroStatusAfterFailedSend,
   buildXeroInvoice,
   feeKindForXero,
@@ -40,7 +41,9 @@ import {
   legacyXeroReference,
   xeroStatusLabel,
   type XeroInvoiceSummary,
+  depositFromXero,
 } from "@/lib/xeroInvoice";
+import { lockQuoteLedger } from "@/lib/quoteLedger";
 
 /** Xero's refusals and "not connected" are things a person can fix — say them; anything else is logged. */
 function refuseXero(err: unknown): never {
@@ -99,6 +102,42 @@ async function fileXeroPdf(input: {
     await deleteFile(storedName).catch(() => {});
     throw error;
   }
+}
+
+/**
+ * "Payments come from Xero" (Sean, 2026-11-11): when Xero shows money received and
+ * the deposit isn't recorded yet, record it — no proof-of-payment upload; Xero's
+ * own record of the payment is the proof. Through the SAME locked ledger as every
+ * other change to the invoice's money (quoteLedger.ts): what Xero received, less
+ * the payments already on the deal, and never past the CRM invoice's total — Xero
+ * showing more than that is a mismatch a person must look at, so nothing is
+ * recorded. Audited as coming from Xero. Returns the cents recorded, or null.
+ */
+async function recordDepositFromXero(input: { tenantId: string; quoteId: string; xeroPaidCents: number; user: PermissionUser }): Promise<number | null> {
+  if (input.xeroPaidCents <= 0) return null;
+  const done = await prisma.$transaction(async (tx) => {
+    const ledger = await lockQuoteLedger(tx, input.quoteId, input.tenantId);
+    if (!ledger) return null;
+    const cents = depositFromXero(ledger.quote, input.xeroPaidCents, ledger.paymentsCents);
+    if (cents === null || cents + ledger.paymentsCents > ledger.totalCents) return null;
+    const updated = await tx.quote.updateMany({
+      where: { id: input.quoteId, tenantId: input.tenantId, depositPaidAt: null },
+      data: { depositPaidAt: new Date(), depositPaidCents: cents },
+    });
+    return updated.count === 1 ? { cents, quote: ledger.quote } : null;
+  });
+  if (!done) return null;
+  const fmt = withCurrency(await getRegionalSettings(), done.quote.currency);
+  await logAudit({
+    action: "fulfilment.deposit_paid",
+    summary: `Q-${done.quote.number} deposit of ${formatZAR(done.cents, fmt)} recorded from Xero (Xero shows it received)`,
+    contactId: done.quote.contactId,
+    leadId: done.quote.leadId,
+    user: input.user,
+  });
+  revalidatePath("/deliveries");
+  revalidatePath("/invoices");
+  return done.cents;
 }
 
 /** Fetch and file the PDF; a failure here never undoes the invoice — it is said, and Refresh tries again. */
@@ -269,7 +308,10 @@ export async function sendQuoteToXero(quoteId: string): Promise<ActionResult> {
             if (quote.fleetId) await tx.fleet.updateMany({ where: { id: quote.fleetId, tenantId }, data: { xeroContactId: sentContact.contactId } });
             else if (quote.contactId) await tx.contact.updateMany({ where: { id: quote.contactId, tenantId }, data: { xeroContactId: sentContact.contactId } });
           }
-          return true;
+          // Sending to Xero IS the invoice step on the Deliveries board (Sean, 2026-11-11):
+          // no separate "Mark invoiced" upload — Xero's PDF is the invoice document.
+          const marked = await tx.quote.updateMany({ where: { id: quoteId, tenantId, invoicedAt: null }, data: { invoicedAt: new Date() } });
+          return { invoicedNow: marked.count === 1 };
         });
         if (!recorded) {
           await logError("xero-send", new Error("send finished after its claim was cleared"), `quote=${quote.id} invoice=${invoice.id}`, { tenantId, alert: false });
@@ -286,6 +328,17 @@ export async function sendQuoteToXero(quoteId: string): Promise<ActionResult> {
           leadId: quote.leadId,
           user,
         });
+        if (recorded.invoicedNow) {
+          await logAudit({
+            action: "fulfilment.invoiced",
+            summary: `Q-${quote.number} invoiced — sent to Xero as ${invoice.number ?? "an invoice"}`,
+            contactId: quote.contactId,
+            leadId: quote.leadId,
+            user,
+          });
+        }
+        // An invoice ADOPTED from Xero may already have money against it.
+        const depositCents = await recordDepositFromXero({ tenantId, quoteId, xeroPaidCents: invoice.amountPaidCents, user });
         revalidatePath("/deliveries");
         if (quote.contactId) revalidatePath(`/contacts/${quote.contactId}`);
 
@@ -295,6 +348,7 @@ export async function sendQuoteToXero(quoteId: string): Promise<ActionResult> {
           adopted ? `Already in Xero as ${invoice.number ?? "an invoice"} — linked, nothing new created.` : `In Xero as ${invoice.number ?? "a draft invoice"}.`,
           contact?.created ? "New Xero contact created." : contact ? "Matched the customer's Xero contact." : "",
           pdfFiled ? "Xero's PDF is filed on the customer." : "Xero's PDF couldn't be fetched yet — press Refresh to file it.",
+          depositCents ? `Xero shows ${formatZAR(depositCents, moneyFmt)} paid — recorded as the deposit.` : "",
           missingItems.length
             ? `No longer in Xero, so sent without an item code: ${missingItems.join(", ")} — re-link it (product page, or Settings → Integrations → Xero for fees).`
             : "",
@@ -474,44 +528,127 @@ export async function refreshXeroInvoice(quoteId: string): Promise<ActionResult>
     withActingStaffScope(async () => {
       const user = await requireQuoteAccess(quoteId, "deliveries.manage");
       const tenantId = await actingTenantId();
-      const quote = await prisma.quote.findFirst({
-        where: { id: quoteId, tenantId },
-        select: { id: true, number: true, contactId: true, xeroInvoiceId: true, xeroInvoiceNumber: true, xeroStatus: true },
-      });
-      if (!quote) refuse(QUOTE_GONE);
-      if (!quote.xeroInvoiceId) refuse(`Q-${quote.number} has not been sent to Xero yet.`);
-      // Mid-send or unfinished: the linked invoice is the voided one being replaced —
-      // Refresh would only read that back. Send settles it.
-      if (xeroSendUncertain(quote.xeroStatus)) refuse("A send to Xero is in progress or didn't finish — press Send invoice to Xero to settle it.");
-      let client: XeroClient;
-      let invoice: XeroInvoiceSummary;
       try {
-        client = await xeroClient(tenantId);
-        invoice = await client.getInvoice(quote.xeroInvoiceId);
+        const done = await refreshOneFromXero(await xeroClient(tenantId), tenantId, quoteId, user);
+        return { success: done.message };
       } catch (err) {
         refuseXero(err);
       }
-      const updated = await prisma.quote.updateMany({
-        // Only the state that was read: a send that claimed it meanwhile keeps its claim.
-        where: { id: quoteId, tenantId, xeroInvoiceId: quote.xeroInvoiceId, xeroStatus: quote.xeroStatus },
-        data: { xeroInvoiceNumber: invoice.number, xeroStatus: invoice.status, xeroTotalCents: invoice.totalCents },
+    }),
+  );
+}
+
+/** Statuses a "Refresh all" has nothing to learn from: settled, cancelled, or a send still to settle. */
+const REFRESH_ALL_SKIPS = ["PAID", "VOIDED", "DELETED", "SENDING", XERO_UNCONFIRMED];
+/** ponytail: one request at a time, capped per press — Xero allows 60 calls a minute; page it if a workspace ever has more open. */
+const REFRESH_ALL_CAP = 25;
+
+/**
+ * Invoices page → "Refresh all from Xero": every open invoice this person can see
+ * that is in Xero and not yet paid, oldest first, through the same routine as the
+ * per-invoice Refresh — number, status, PDF, and the deposit when Xero shows money
+ * received. One that fails is counted and named, never hides the rest.
+ */
+export async function refreshAllXeroInvoices(): Promise<ActionResult> {
+  return asActionResult(() =>
+    withActingStaffScope(async () => {
+      const user = await requireAnyPermission("deliveries.manage");
+      const tenantId = await actingTenantId();
+      const accessible = await getAccessibleQuoteIds(user);
+      const quotes = await prisma.quote.findMany({
+        where: {
+          tenantId,
+          status: "accepted",
+          deletedAt: null,
+          supersededAt: null,
+          xeroInvoiceId: { not: null },
+          NOT: { xeroStatus: { in: REFRESH_ALL_SKIPS } },
+          ...(accessible === null ? {} : { id: { in: accessible } }),
+        },
+        select: { id: true, number: true },
+        orderBy: { xeroSentAt: "asc" },
+        take: REFRESH_ALL_CAP,
       });
-      // Nothing matched: a send took it over, or Xero was reconnected to another
-      // organisation meanwhile — stop here; nothing from this read is kept or filed.
-      if (updated.count !== 1) refuse("This invoice changed while it was being refreshed (a send, or Xero was reconnected) — reload the page.");
-      revalidatePath("/deliveries");
-      if (quote.contactId) revalidatePath(`/contacts/${quote.contactId}`);
-      if (xeroInvoiceCancelled(invoice.status)) {
-        // Voided in Xero: the CRM invoice is free again (xeroLockReason). No PDF of a voided invoice is filed.
-        if (quote.xeroStatus !== invoice.status) await logAudit({ action: "quote.xero_voided", summary: `Q-${quote.number}: Xero invoice ${invoice.number ?? invoice.id} is ${xeroStatusLabel(invoice.status).toLowerCase()} in Xero — unlocked in the CRM`, contactId: quote.contactId, user });
-        return { success: `Xero: ${invoice.number ?? "invoice"} · ${xeroStatusLabel(invoice.status)}. This invoice can be changed in the CRM again, or sent to Xero again.` };
+      if (quotes.length === 0) return { success: "Nothing to refresh — every invoice in Xero is paid or settled." };
+      let client: XeroClient;
+      try {
+        client = await xeroClient(tenantId);
+      } catch (err) {
+        refuseXero(err);
       }
-      const changed = invoice.status !== quote.xeroStatus || invoice.number !== quote.xeroInvoiceNumber;
-      const filed = await prisma.document.count({ where: { tenantId, quoteId, tag: "accounting-invoice", deletedAt: null } });
-      const pdfFiled = changed || filed === 0 ? await tryFilePdf(client, { tenantId, quote, invoice, user }) : false;
+      let deposits = 0;
+      const failed: string[] = [];
+      for (const quote of quotes) {
+        try {
+          if ((await refreshOneFromXero(client, tenantId, quote.id, user)).depositCents) deposits += 1;
+        } catch (err) {
+          failed.push(`Q-${quote.number}`);
+          if (!(err instanceof ActionRefusal || err instanceof XeroNotConnected || (err instanceof Error && err.message.startsWith("Xero:")))) {
+            await logError("xero-refresh-all", err, `quote=${quote.id}`, { tenantId, alert: false });
+          }
+        }
+      }
+      revalidatePath("/invoices");
       return {
-        success: `Xero: ${invoice.number ?? "invoice"} · ${xeroStatusLabel(invoice.status)}${pdfFiled ? " — latest PDF filed on the customer." : ""}`,
+        success: [
+          `Refreshed ${quotes.length - failed.length} of ${quotes.length} from Xero.`,
+          deposits ? `${deposits} deposit${deposits === 1 ? "" : "s"} recorded from Xero.` : "",
+          failed.length ? `Couldn't refresh ${failed.join(", ")} — open it and press Refresh to see why.` : "",
+          quotes.length === REFRESH_ALL_CAP ? "There may be more — press again." : "",
+        ].filter(Boolean).join(" "),
       };
     }),
   );
+}
+
+/**
+ * Refresh ONE invoice from Xero — Xero's number, status and total; its newest PDF
+ * when it moved on (or none is filed yet); and the deposit when Xero shows money
+ * received (recordDepositFromXero). Refuses (ActionRefusal) or throws Xero's error;
+ * the callers say it.
+ */
+async function refreshOneFromXero(
+  client: XeroClient,
+  tenantId: string,
+  quoteId: string,
+  user: PermissionUser,
+): Promise<{ message: string; depositCents: number | null }> {
+  const quote = await prisma.quote.findFirst({
+    where: { id: quoteId, tenantId },
+    select: { id: true, number: true, contactId: true, currency: true, xeroInvoiceId: true, xeroInvoiceNumber: true, xeroStatus: true },
+  });
+  if (!quote) refuse(QUOTE_GONE);
+  if (!quote.xeroInvoiceId) refuse(`Q-${quote.number} has not been sent to Xero yet.`);
+  // Mid-send or unfinished: the linked invoice is the voided one being replaced —
+  // Refresh would only read that back. Send settles it.
+  if (xeroSendUncertain(quote.xeroStatus)) refuse("A send to Xero is in progress or didn't finish — press Send invoice to Xero to settle it.");
+  const invoice = await client.getInvoice(quote.xeroInvoiceId);
+  const updated = await prisma.quote.updateMany({
+    // Only the state that was read: a send that claimed it meanwhile keeps its claim.
+    where: { id: quoteId, tenantId, xeroInvoiceId: quote.xeroInvoiceId, xeroStatus: quote.xeroStatus },
+    data: { xeroInvoiceNumber: invoice.number, xeroStatus: invoice.status, xeroTotalCents: invoice.totalCents },
+  });
+  // Nothing matched: a send took it over, or Xero was reconnected to another
+  // organisation meanwhile — stop here; nothing from this read is kept or filed.
+  if (updated.count !== 1) refuse("This invoice changed while it was being refreshed (a send, or Xero was reconnected) — reload the page.");
+  revalidatePath("/deliveries");
+  revalidatePath("/invoices");
+  if (quote.contactId) revalidatePath(`/contacts/${quote.contactId}`);
+  if (xeroInvoiceCancelled(invoice.status)) {
+    // Voided in Xero: the CRM invoice is free again (xeroLockReason). No PDF of a voided invoice is filed.
+    if (quote.xeroStatus !== invoice.status) await logAudit({ action: "quote.xero_voided", summary: `Q-${quote.number}: Xero invoice ${invoice.number ?? invoice.id} is ${xeroStatusLabel(invoice.status).toLowerCase()} in Xero — unlocked in the CRM`, contactId: quote.contactId, user });
+    return { message: `Xero: ${invoice.number ?? "invoice"} · ${xeroStatusLabel(invoice.status)}. This invoice can be changed in the CRM again, or sent to Xero again.`, depositCents: null };
+  }
+  const changed = invoice.status !== quote.xeroStatus || invoice.number !== quote.xeroInvoiceNumber;
+  const filed = await prisma.document.count({ where: { tenantId, quoteId, tag: "accounting-invoice", deletedAt: null } });
+  const pdfFiled = changed || filed === 0 ? await tryFilePdf(client, { tenantId, quote, invoice, user }) : false;
+  const depositCents = await recordDepositFromXero({ tenantId, quoteId, xeroPaidCents: invoice.amountPaidCents, user });
+  const fmt = withCurrency(await getRegionalSettings(), quote.currency);
+  return {
+    message: [
+      `Xero: ${invoice.number ?? "invoice"} · ${xeroStatusLabel(invoice.status)}${pdfFiled ? " — latest PDF filed on the customer." : ""}`,
+      depositCents ? `Xero shows ${formatZAR(depositCents, fmt)} received — recorded as the deposit.` : "",
+    ].filter(Boolean).join(" "),
+    depositCents,
+  };
 }
