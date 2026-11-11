@@ -44,6 +44,8 @@ export function isPaymentMethod(value: string): value is PaymentMethod {
 }
 
 export function paymentMethodLabel(method: string): string {
+  // A payment brought back from Xero (method "xero") — labelled, but never one of the CRM form's choices.
+  if (method === "xero") return "Recorded in Xero";
   return isPaymentMethod(method) ? PAYMENT_METHODS[method] : method;
 }
 

@@ -1,9 +1,10 @@
 import "server-only";
 import { basePrisma } from "./db";
-import { putTenantCredential, putTenantCredentialBundle, resolveIntegrationBundle, type SettingsTx } from "./settings";
+import { getWorkspaceSetting, putTenantCredential, putTenantCredentialBundle, resolveIntegrationBundle, type SettingsTx } from "./settings";
 import { recordIntegrationFailure, recordIntegrationVerified } from "./integrationConnection";
 import {
   XERO_FEE_ITEM_KEYS,
+  XERO_PAYMENTS_SOURCE_KEY,
   XERO_TAX_CHOICES_KEY,
   type XeroTaxChoices,
   buildXeroContact,
@@ -89,7 +90,7 @@ export async function exchangeXeroCode(input: {
   tenantId: string;
   code: string;
   redirectUri: string;
-}): Promise<{ orgName: string; forgotten: { invoices: number; customers: number; products: number } | null }> {
+}): Promise<{ orgName: string; forgotten: { invoices: number; customers: number; products: number; payments: number } | null }> {
   const app = requireApp();
   const response = await fetch(IDENTITY, {
     method: "POST",
@@ -148,6 +149,17 @@ export async function exchangeXeroCode(input: {
  * platform-level values are, and what resolveIntegrationBundle falls back to for
  * it (review of #1069). Call under the organisation's advisory lock.
  */
+/**
+ * Do payments come from Xero in this workspace? Yes once Xero is connected (Sean,
+ * 2026-11-11: payments are recorded in Xero and pushed back) — unless the owner has
+ * switched them back to the CRM in Settings → Integrations → Xero. Per NAMED
+ * workspace, never the general settings.
+ */
+export async function paymentsComeFromXero(tenantId: string): Promise<boolean> {
+  if (!(await resolveIntegrationBundle(tenantId, "xero"))?.XERO_TENANT_ID) return false;
+  return (await getWorkspaceSetting(tenantId, XERO_PAYMENTS_SOURCE_KEY)) !== "crm";
+}
+
 export async function xeroOrganisationTakenElsewhere(tx: SettingsTx, tenantId: string, xeroOrgId: string): Promise<boolean> {
   // Deliberately across workspaces (every one but this): that IS the question.
   if ((await tx.tenantIntegrationCredential.count({ where: { tenantId: { not: tenantId }, key: "XERO_TENANT_ID", value: xeroOrgId } })) > 0) return true;
@@ -161,11 +173,24 @@ export async function xeroOrganisationTakenElsewhere(tx: SettingsTx, tenantId: s
  * products' and fees' Xero items. Otherwise a test invoice would stay "already in
  * Xero" and locked, pointing at an organisation the CRM can no longer reach.
  * Xero PDFs already filed on customers are documents and stay where they are.
+ *
+ * Payments brought back FROM the old organisation go too (payments come from Xero,
+ * 2026-11-11): its payment copies are voided — kept, marked, no longer counted — and
+ * a deposit that came from it is cleared, so a demo company's money never sits on
+ * a real invoice. The new organisation's Refresh brings its own.
  */
-async function forgetXeroLinks(tx: SettingsTx, tenantId: string): Promise<{ invoices: number; customers: number; products: number }> {
+async function forgetXeroLinks(tx: SettingsTx, tenantId: string): Promise<{ invoices: number; customers: number; products: number; payments: number }> {
+  const payments = await tx.quotePayment.updateMany({
+    where: { tenantId, xeroPaymentId: { not: null }, voidedAt: null },
+    data: { voidedAt: new Date(), voidedByName: "Xero", voidReason: "Brought back from the previous Xero organisation" },
+  });
+  const deposits = await tx.quote.updateMany({
+    where: { tenantId, xeroDepositPaymentId: { not: null } },
+    data: { depositPaidAt: null, depositPaidCents: null, xeroDepositPaymentId: null },
+  });
   const invoices = await tx.quote.updateMany({
     where: { tenantId, OR: [{ xeroInvoiceId: { not: null } }, { xeroStatus: { not: null } }] },
-    data: { xeroInvoiceId: null, xeroInvoiceNumber: null, xeroStatus: null, xeroTotalCents: null, xeroSentAt: null, xeroSentByName: null },
+    data: { xeroInvoiceId: null, xeroInvoiceNumber: null, xeroStatus: null, xeroTotalCents: null, xeroSentAt: null, xeroSentByName: null, xeroAmountPaidCents: null, xeroCheckedAt: null },
   });
   const contacts = await tx.contact.updateMany({ where: { tenantId, xeroContactId: { not: null } }, data: { xeroContactId: null } });
   const fleets = await tx.fleet.updateMany({ where: { tenantId, xeroContactId: { not: null } }, data: { xeroContactId: null } });
@@ -175,7 +200,7 @@ async function forgetXeroLinks(tx: SettingsTx, tenantId: string): Promise<{ invo
   });
   // Fee items and the sales tax choices are the old organisation's codes too.
   await tx.appSetting.updateMany({ where: { tenantId, key: { in: [...Object.values(XERO_FEE_ITEM_KEYS), XERO_TAX_CHOICES_KEY] } }, data: { value: "" } });
-  return { invoices: invoices.count, customers: contacts.count + fleets.count, products: products.count };
+  return { invoices: invoices.count, customers: contacts.count + fleets.count, products: products.count, payments: payments.count + deposits.count };
 }
 
 /**

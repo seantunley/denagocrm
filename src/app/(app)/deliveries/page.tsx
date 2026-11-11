@@ -40,7 +40,8 @@ import { deliveryNoteState } from "@/lib/deliveryNoteSigning";
 import { deliveryNoteSigning, type DeliveryNoteSigning } from "@/components/signing/deliveryNoteSigning";
 import { getRegionalSettings, resolveIntegrationField } from "@/lib/settings";
 import XeroInvoiceControl from "@/components/XeroInvoiceControl";
-import { xeroStatusLabel } from "@/lib/xeroInvoice";
+import { xeroOwnsPayments, xeroStatusLabel } from "@/lib/xeroInvoice";
+import { paymentsComeFromXero } from "@/lib/xero";
 import { isModuleEnabled } from "@/lib/modules/enabled";
 import { actingTenantId } from "@/lib/actingTenant";
 import { getCompanyProfile } from "@/lib/companyProfile";
@@ -184,6 +185,8 @@ export default async function DeliveriesPage() {
   const tenantId = await actingTenantId();
   // "Send to Xero" appears once this workspace has connected a Xero organisation (Settings → Integrations).
   const xeroConnected = canManage && Boolean(await resolveIntegrationField(tenantId, "xero", "XERO_TENANT_ID"));
+  // Payments come from Xero (2026-11-11): an invoice in Xero takes its deposit from there.
+  const paymentsFromXero = await paymentsComeFromXero(tenantId);
   const [bookings, transport, company] = bookable.length
     ? await Promise.all([
         prisma.vendorDelivery.findMany({
@@ -510,7 +513,9 @@ export default async function DeliveriesPage() {
                           xeroConnected && quote.xeroInvoiceId ? (
                             <div>
                               <XeroInvoiceControl quote={quote} crmTotalCents={total} />
-                              <p className="mt-1 text-[10px] text-muted-foreground/80">Refresh records the deposit once Xero shows a payment.</p>
+                              {xeroOwnsPayments(quote, paymentsFromXero) ? (
+                                <p className="mt-1 text-[10px] text-muted-foreground/80">Record the payment in Xero, then press Refresh — the first payment becomes the deposit.</p>
+                              ) : (
                               <ModalTrigger label="Record the deposit by hand" title={`Deposit — Q-${quote.number}`} buttonClass="mt-1 text-[11px] text-primary hover:underline">
                                 <SaveForm success="Deposit recorded" resetOnSuccess={false} action={markDepositPaid.bind(null, quote.id)} className="space-y-2">
                                   <input name="amount" inputMode="decimal" required placeholder={`Amount received (${currencySymbol(withCurrency(moneyFmt, quote.currency))})`} aria-label={`Deposit amount received in ${withCurrency(moneyFmt, quote.currency).currency}`} className="input" />
@@ -518,6 +523,7 @@ export default async function DeliveriesPage() {
                                   <SaveButton className="btn-primary btn-sm">Deposit paid</SaveButton>
                                 </SaveForm>
                               </ModalTrigger>
+                              )}
                             </div>
                           ) : (
                             <SaveForm success="Deposit recorded" resetOnSuccess={false} action={markDepositPaid.bind(null, quote.id)} className="mt-2.5 space-y-1.5">

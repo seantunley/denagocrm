@@ -41,6 +41,8 @@ import DocumentRequestButton from "@/components/deals/DocumentRequestButton";
 import { documentRequestState } from "@/lib/documentRequestRules";
 import { withCurrency } from "@/lib/currencyRules";
 import DealPayments from "@/components/deals/DealPayments";
+import { paymentsComeFromXero } from "@/lib/xero";
+import { xeroOwnsPayments } from "@/lib/xeroInvoice";
 import { primaryVehicleLine, showcaseImageRefFor } from "@/lib/docbuilder/vehicleShowcase";
 import { storedFileSrc } from "@/lib/storedFileSrc";
 import { getRecordLabels } from "@/lib/recordLabelsServer";
@@ -213,6 +215,8 @@ export default async function DealWorkspacePage({ params }: { params: Promise<{ 
       ? await prisma.quotePayment.findMany({ where: { quoteId: quote.id, tenantId: quote.tenantId }, orderBy: { receivedAt: "asc" } })
       : [];
   const canRecordPayments = invoice && (await hasAnyPermission(user, "deliveries.manage"));
+  // Payments come from Xero (2026-11-11): this invoice is in Xero, so its forms give way to Refresh.
+  const paymentsFromXeroHere = Boolean(quote.tenantId) && Boolean(xeroOwnsPayments(quote, await paymentsComeFromXero(quote.tenantId!)));
   // The statement this invoice appears on — the fleet's when billed to one — and
   // only as a link the viewer can actually open (the page re-checks both).
   // The statement in THIS deal's currency (multicurrency module): a statement covers one currency.
@@ -414,7 +418,7 @@ export default async function DealWorkspacePage({ params }: { params: Promise<{ 
             </Surface>
 
             {invoice && (
-              <DealPayments quote={quote} payments={payments} canRecord={canRecordPayments} statementHref={statementHref} today={today} moneyFmt={moneyFmt} />
+              <DealPayments quote={quote} payments={payments} canRecord={canRecordPayments} fromXero={paymentsFromXeroHere} statementHref={statementHref} today={today} moneyFmt={moneyFmt} />
             )}
 
             <div id="deal-file" className="scroll-mt-20 space-y-3">

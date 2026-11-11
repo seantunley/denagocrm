@@ -17,7 +17,8 @@ import { formatDate, formatZAR } from "@/lib/format";
 import { formatInvoiceNumber } from "@/lib/invoiceNumber";
 import { invoiceTotalCents, receivedCents, statementInvoiceDate } from "@/lib/accountStatement";
 import { loadBillToFleets, quoteBillTo } from "@/lib/quoteBillTo";
-import { xeroStatusLabel } from "@/lib/xeroInvoice";
+import { xeroOwnsPayments, xeroStatusLabel } from "@/lib/xeroInvoice";
+import { paymentsComeFromXero } from "@/lib/xero";
 import { ResponsiveEntityTable } from "@/components/responsive-patterns";
 
 export const metadata = { title: "Invoices" };
@@ -49,6 +50,7 @@ export default async function InvoicesPage({ searchParams }: { searchParams?: Pr
   const [quoteIds, canManage] = await Promise.all([getAccessibleQuoteIds(user), hasPermission(user, "deliveries.manage")]);
   const tenantId = await actingTenantId();
   const xeroConnected = canManage && Boolean(await resolveIntegrationField(tenantId, "xero", "XERO_TENANT_ID"));
+  const paymentsFromXero = await paymentsComeFromXero(tenantId);
   const moneyFmt = await getRegionalSettings();
 
   const quotes = await prisma.quote.findMany({
@@ -123,7 +125,9 @@ export default async function InvoicesPage({ searchParams }: { searchParams?: Pr
       />
       {xeroConnected && (
         <p className="text-xs text-muted-foreground">
-          Refresh brings back Xero&apos;s number, status and PDF — and records the deposit once Xero shows money received.
+          {paymentsFromXero
+            ? "Invoices are made here and sent to Xero; payments are recorded in Xero. Refresh brings back Xero's number, status, PDF and every payment — the first as the deposit — so these figures and the statements match Xero."
+            : "Refresh brings back Xero's number, status and PDF. Payments are recorded here in the CRM (Settings → Integrations → Xero)."}
         </p>
       )}
 
@@ -163,6 +167,9 @@ export default async function InvoicesPage({ searchParams }: { searchParams?: Pr
             <tbody>
               {listed.map(({ quote, total, received, owing, who, payments: own, statementHref }) => {
                 const fmt = withCurrency(moneyFmt, quote.currency);
+                const fromXero = Boolean(xeroOwnsPayments(quote, paymentsFromXero));
+                // Xero's own figure, as last brought back — said when the CRM's differs.
+                const xeroDiffers = fromXero && quote.xeroAmountPaidCents != null && quote.xeroAmountPaidCents !== received;
                 return (
                   <tr key={quote.id}>
                     <td data-primary className="whitespace-nowrap">
@@ -174,7 +181,10 @@ export default async function InvoicesPage({ searchParams }: { searchParams?: Pr
                     <td data-label="Customer">{quote.contact ? <Link href={`/contacts/${quote.contact.id}`} className="hover:underline">{who}</Link> : who}</td>
                     <td data-label="Date" className="whitespace-nowrap text-xs text-muted-foreground">{formatDate(statementInvoiceDate(quote))}</td>
                     <td data-label="Total" className="text-right tabular-nums">{formatZAR(total, fmt)}</td>
-                    <td data-label="Received" className="text-right tabular-nums">{formatZAR(received, fmt)}</td>
+                    <td data-label="Received" className="text-right tabular-nums">
+                      {formatZAR(received, fmt)}
+                      {xeroDiffers && <span className="block text-[10px] text-amber-300" title="Press Refresh to bring Xero's payments back">Xero: {formatZAR(quote.xeroAmountPaidCents ?? 0, fmt)}</span>}
+                    </td>
                     <td data-label="Owing" className={`text-right tabular-nums ${owing > 0 ? "text-amber-300" : "text-muted-foreground"}`}>{formatZAR(Math.max(0, owing), fmt)}</td>
                     <td data-label="Delivery" className="whitespace-nowrap text-xs text-muted-foreground">{deliveryStage(quote)}</td>
                     <td data-label="Money" className="whitespace-nowrap">
@@ -186,7 +196,7 @@ export default async function InvoicesPage({ searchParams }: { searchParams?: Pr
                         buttonClass="text-xs text-primary hover:underline"
                       >
                         <div className="space-y-4">
-                          {canManage && !quote.depositPaidAt && (
+                          {canManage && !fromXero && !quote.depositPaidAt && (
                             quote.invoicedAt ? (
                               <SaveForm success="Deposit recorded" resetOnSuccess={false} action={markDepositPaid.bind(null, quote.id)} className="space-y-2 rounded-xl border border-border p-4">
                                 <p className="text-sm font-medium">Record the deposit</p>
@@ -200,7 +210,7 @@ export default async function InvoicesPage({ searchParams }: { searchParams?: Pr
                               </p>
                             )
                           )}
-                          <DealPayments quote={quote} payments={own} canRecord={canManage} statementHref={statementHref} today={today} moneyFmt={fmt} />
+                          <DealPayments quote={quote} payments={own} canRecord={canManage} fromXero={fromXero} statementHref={statementHref} today={today} moneyFmt={fmt} />
                         </div>
                       </ModalTrigger>
                     </td>

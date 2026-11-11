@@ -909,6 +909,14 @@ export const assistantAndMoreArticles: HelpArticle[] = [
         "One quote, one Xero invoice: before creating anything the CRM checks Xero for an invoice already carrying the quote's reference, and links that one instead — so a double click, or a retry after a dropped connection, never makes a second invoice.",
         "Only people who can invoice on the Deliveries board see the button.",
       ] },
+      { type: "h", text: "Payments come from Xero" },
+      { type: "list", items: [
+        "Invoices are made in the CRM and sent to Xero. Payments are recorded in **Xero**.",
+        "Press **Refresh** on an invoice (or **Refresh all from Xero** on the Invoices page): every payment Xero has comes back to the CRM — the first as the **deposit**, the rest as payments, each with its date and reference — so the CRM's invoice, its received and owing, and the customer's statement match Xero.",
+        "A payment removed or corrected in Xero is voided or corrected here on the next Refresh. A deposit or payment recorded by hand earlier is matched to the Xero payment of the same amount, never counted twice; one Xero can't account for is pointed out.",
+        "While this is on, an invoice that is in Xero doesn't take deposits or payments recorded in the CRM — it says to record them in Xero. Invoices not in Xero work as before.",
+        "The CRM's own payment recording is kept: untick **Payments come from Xero** in Settings → Integrations → Xero and the deposit and payment forms come back on every invoice.",
+      ] },
       { type: "h", text: "Once it's in Xero, the invoice is final" },
       { type: "list", items: [
         "Quotes can change; invoices can't. After an invoice is sent to Xero, the CRM won't move it back to draft, revise, cancel or trash it, and says why.",

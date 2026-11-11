@@ -439,19 +439,176 @@ export type XeroInvoiceSummary = {
   contactId: string | null;
   /** What Xero has received against it so far (0 when Xero doesn't say). */
   amountPaidCents: number;
+  /** Credit notes / prepayments applied in Xero — not payments, so not brought back; said when present. */
+  amountCreditedCents: number;
+  /** Each payment Xero has recorded against it (a full invoice read; empty in search results). */
+  payments: XeroPayment[];
 };
+
+/** One payment recorded in Xero against an invoice. */
+export type XeroPayment = { id: string; date: Date; amountCents: number; reference: string | null };
+
+/** Xero's JSON dates: "/Date(1573755038314+0000)/", or an ISO string. Null when unreadable. */
+export function parseXeroDate(raw: unknown): Date | null {
+  if (typeof raw !== "string") return null;
+  const ms = /\/Date\((-?\d+)/.exec(raw)?.[1];
+  const date = ms ? new Date(Number(ms)) : new Date(raw);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+function paymentsOf(invoice: Record<string, unknown>): XeroPayment[] {
+  const raw = Array.isArray(invoice.Payments) ? (invoice.Payments as Record<string, unknown>[]) : [];
+  return raw.flatMap((p) => {
+    const date = parseXeroDate(p.Date);
+    const amount = typeof p.Amount === "number" ? Math.round(p.Amount * 100) : 0;
+    if (typeof p.PaymentID !== "string" || !date || amount <= 0 || p.Status === "DELETED") return [];
+    return [{ id: p.PaymentID, date, amountCents: amount, reference: typeof p.Reference === "string" && p.Reference.trim() ? p.Reference.trim().slice(0, 120) : null }];
+  });
+}
 
 function summary(invoice: Record<string, unknown> | undefined): XeroInvoiceSummary | null {
   if (!invoice || typeof invoice.InvoiceID !== "string") return null;
   const contact = invoice.Contact as { ContactID?: unknown } | undefined;
+  const cents = (v: unknown) => (typeof v === "number" && v > 0 ? Math.round(v * 100) : 0);
   return {
     id: invoice.InvoiceID,
     number: typeof invoice.InvoiceNumber === "string" && invoice.InvoiceNumber ? invoice.InvoiceNumber : null,
     status: typeof invoice.Status === "string" ? invoice.Status : "UNKNOWN",
     totalCents: typeof invoice.Total === "number" ? Math.round(invoice.Total * 100) : null,
     contactId: typeof contact?.ContactID === "string" ? contact.ContactID : null,
-    amountPaidCents: typeof invoice.AmountPaid === "number" && invoice.AmountPaid > 0 ? Math.round(invoice.AmountPaid * 100) : 0,
+    amountPaidCents: cents(invoice.AmountPaid),
+    amountCreditedCents: cents(invoice.AmountCredited),
+    payments: paymentsOf(invoice),
   };
+}
+
+// ── Payments come from Xero ─────────────────────────────────────────────────
+
+/** Settings key: where payments are recorded. "crm" puts the CRM's own forms back; anything else (default) = Xero. */
+export const XERO_PAYMENTS_SOURCE_KEY = "XERO_PAYMENTS_SOURCE";
+/** QuotePayment.method of a payment brought back from Xero — shown as "Recorded in Xero", never offered in the CRM's form. */
+export const XERO_PAYMENT_METHOD = "xero";
+
+/**
+ * Sean, 2026-11-11: "Invoices get made in CRM, pushed to Xero. Payments get
+ * recorded in Xero and pushed back to the CRM." — so while payments come from
+ * Xero, an invoice that is IN Xero takes its deposit and payments only from there;
+ * the CRM's own forms refuse it (they stay for invoices not in Xero, and come back
+ * for all with the Settings switch — "if Xero changes some day"). The refusal, or
+ * null when the CRM may record it.
+ */
+export function xeroOwnsPayments(
+  quote: { xeroInvoiceId: string | null; xeroStatus: string | null },
+  paymentsFromXero: boolean,
+): string | null {
+  if (!paymentsFromXero || !quote.xeroInvoiceId || xeroInvoiceCancelled(quote.xeroStatus)) return null;
+  return "Payments for this invoice come from Xero — record it in Xero, then press Refresh. (Settings → Integrations → Xero switches this back to the CRM.)";
+}
+
+/** What the CRM holds for one invoice's money, as a payment sync reads it. */
+export type CrmPaymentState = {
+  deposit: { paidAt: Date | null; cents: number | null; xeroPaymentId: string | null };
+  payments: Array<{ id: string; xeroPaymentId: string | null; amountCents: number; receivedAt: Date; voidedAt: Date | null }>;
+};
+
+export type XeroPaymentSyncPlan = {
+  /** keep · set (from a Xero payment) · link (a deposit recorded by hand IS this Xero payment) · update · clear (gone from Xero) */
+  deposit:
+    | { kind: "keep" }
+    | { kind: "set"; xeroPaymentId: string; cents: number; at: Date }
+    | { kind: "link"; xeroPaymentId: string }
+    | { kind: "update"; cents: number; at: Date }
+    | { kind: "clear" };
+  create: XeroPayment[];
+  /** A payment recorded by hand that IS this Xero payment (same amount) — linked, not duplicated. */
+  link: Array<{ paymentId: string; xero: XeroPayment }>;
+  update: Array<{ paymentId: string; xero: XeroPayment }>;
+  /** CRM copies of payments no longer in Xero (deleted or reversed there). */
+  void: string[];
+  /** Money recorded by hand in the CRM that no Xero payment accounts for — said, never silently kept or dropped. */
+  unmatched: { depositCents: number | null; payments: Array<{ id: string; amountCents: number }> };
+};
+
+/**
+ * Make the CRM's money for one invoice mirror Xero's payments, so the invoice and
+ * the statement match Xero. The earliest Xero payment is the deposit (the step the
+ * Deliveries board waits on); every other one is a payment, each remembered by its
+ * Xero PaymentID so nothing comes in twice. Money recorded by hand before is
+ * LINKED where a Xero payment of the same amount accounts for it, and reported
+ * where none does — never duplicated, never deleted. Pure: the caller applies it
+ * under the quote's ledger lock.
+ */
+export function planXeroPaymentSync(state: CrmPaymentState, xeroPayments: XeroPayment[]): XeroPaymentSyncPlan {
+  const xs = [...xeroPayments].sort((a, b) => a.date.getTime() - b.date.getTime() || a.id.localeCompare(b.id));
+  const linkedToPayment = new Set(state.payments.map((p) => p.xeroPaymentId).filter((id): id is string => Boolean(id)));
+  const used = new Set<string>();
+  const plan: XeroPaymentSyncPlan = { deposit: { kind: "keep" }, create: [], link: [], update: [], void: [], unmatched: { depositCents: null, payments: [] } };
+  const firstFree = () => xs.find((x) => !used.has(x.id) && !linkedToPayment.has(x.id));
+
+  const d = state.deposit;
+  let depositOpen = !d.paidAt;
+  if (d.xeroPaymentId) {
+    const x = xs.find((p) => p.id === d.xeroPaymentId);
+    if (!x) {
+      plan.deposit = { kind: "clear" };
+      depositOpen = true;
+    } else {
+      used.add(x.id);
+      if (x.amountCents !== d.cents) plan.deposit = { kind: "update", cents: x.amountCents, at: x.date };
+    }
+  } else if (d.paidAt) {
+    const x = xs.find((p) => !used.has(p.id) && !linkedToPayment.has(p.id) && p.amountCents === d.cents);
+    if (x) {
+      used.add(x.id);
+      plan.deposit = { kind: "link", xeroPaymentId: x.id };
+    } else {
+      plan.unmatched.depositCents = d.cents ?? 0;
+    }
+  }
+  if (depositOpen) {
+    const x = firstFree();
+    if (x) {
+      used.add(x.id);
+      plan.deposit = { kind: "set", xeroPaymentId: x.id, cents: x.amountCents, at: x.date };
+    }
+  }
+
+  const manualOpen = state.payments.filter((p) => !p.xeroPaymentId && !p.voidedAt);
+  for (const x of xs) {
+    if (used.has(x.id)) continue;
+    used.add(x.id);
+    const linked = state.payments.find((p) => p.xeroPaymentId === x.id);
+    if (linked) {
+      if (!linked.voidedAt && (linked.amountCents !== x.amountCents || linked.receivedAt.getTime() !== x.date.getTime())) plan.update.push({ paymentId: linked.id, xero: x });
+      continue;
+    }
+    const twin = manualOpen.findIndex((p) => p.amountCents === x.amountCents);
+    if (twin >= 0) {
+      plan.link.push({ paymentId: manualOpen[twin].id, xero: x });
+      manualOpen.splice(twin, 1);
+    } else {
+      plan.create.push(x);
+    }
+  }
+  const inXero = new Set(xs.map((x) => x.id));
+  plan.void = state.payments.filter((p) => p.xeroPaymentId && !p.voidedAt && !inXero.has(p.xeroPaymentId)).map((p) => p.id);
+  plan.unmatched.payments = manualOpen.map((p) => ({ id: p.id, amountCents: p.amountCents }));
+  return plan;
+}
+
+/** Received in the CRM once the plan is applied: the deposit plus every live payment — Xero's own figure when they match. */
+export function receivedAfterSync(state: CrmPaymentState, plan: XeroPaymentSyncPlan): number {
+  const depositCents =
+    plan.deposit.kind === "clear" ? 0
+      : plan.deposit.kind === "set" || plan.deposit.kind === "update" ? plan.deposit.cents
+        : state.deposit.paidAt ? state.deposit.cents ?? 0 : 0;
+  const voided = new Set(plan.void);
+  const updated = new Map(plan.update.map((u) => [u.paymentId, u.xero.amountCents]));
+  const linked = new Map(plan.link.map((l) => [l.paymentId, l.xero.amountCents]));
+  const payments = state.payments
+    .filter((p) => !p.voidedAt && !voided.has(p.id))
+    .reduce((sum, p) => sum + (updated.get(p.id) ?? linked.get(p.id) ?? p.amountCents), 0);
+  return depositCents + payments + plan.create.reduce((sum, x) => sum + x.amountCents, 0);
 }
 
 /**
@@ -464,28 +621,6 @@ export function nextXeroRefreshBatch<T extends { id: string; xeroCheckedAt: Date
   return [...rows]
     .sort((a, b) => (a.xeroCheckedAt?.getTime() ?? -Infinity) - (b.xeroCheckedAt?.getTime() ?? -Infinity) || a.id.localeCompare(b.id))
     .slice(0, cap);
-}
-
-/**
- * The deposit to record from Xero (Sean, 2026-11-11: "payments come from Xero"):
- * what Xero has received, less the payments already recorded on the deal — the
- * deposit and those payments are ONE balance (quoteLedger.ts). Null when there is
- * nothing to record: Xero has received nothing, the deposit is already in, or the
- * deal's own payments already account for it all. The ledger lock still has the
- * final say (assertDepositFits).
- */
-export function depositFromXero(
-  quote: { invoicedAt: Date | null; depositPaidAt: Date | null; xeroInvoiceId: string | null },
-  /** The Xero invoice whose payment was read. The quote must STILL link it (review of #1071): after an
-   *  organisation switch the link is cleared, and the old organisation's payment must not land here. */
-  readFromInvoiceId: string,
-  xeroPaidCents: number,
-  livePaymentsCents: number,
-): number | null {
-  if (quote.xeroInvoiceId !== readFromInvoiceId) return null;
-  if (!quote.invoicedAt || quote.depositPaidAt) return null;
-  const cents = xeroPaidCents - livePaymentsCents;
-  return cents > 0 ? cents : null;
 }
 
 /** The first invoice in a Xero Invoices response, or null if there isn't one. */

@@ -1554,6 +1554,10 @@ model Quote {
   /// When "Refresh all from Xero" last TRIED this invoice — set before each attempt, success or not —
   /// so repeated presses work through every open invoice instead of the same oldest batch.
   xeroCheckedAt        DateTime?
+  /// Payments come from Xero (Sean, 2026-11-11): the Xero PaymentID that became this invoice's
+  /// deposit, and what Xero last said has been paid — so the CRM can show when the two disagree.
+  xeroDepositPaymentId String?
+  xeroAmountPaidCents  Int?
   depositPaidAt        DateTime?
   depositPaidCents     Int? // amount actually received; null = recorded before amounts were captured
   deliveryScheduledFor DateTime?
@@ -1687,9 +1691,13 @@ model QuotePayment {
   /// One per payment FORM: a resubmission of the same form returns the payment
   /// it already recorded instead of writing a second (review of #924).
   idempotencyKey String?
+  /// Brought back from Xero (payments are recorded in Xero, 2026-11-11): its Xero PaymentID,
+  /// so a Refresh never brings it twice. Null for a payment recorded in the CRM.
+  xeroPaymentId String?
   createdAt     DateTime  @default(now())
 
   @@unique([tenantId, idempotencyKey])
+  @@unique([tenantId, xeroPaymentId])
   @@index([tenantId, quoteId, receivedAt])
 }
 
