@@ -60,9 +60,9 @@ function refuseXero(err: unknown): never {
 
 /**
  * File Xero's PDF on the CUSTOMER (and the quote) as the accounting invoice. A
- * newer copy — after the invoice was approved or paid in Xero — becomes the
- * current version and the older one is kept, marked as replaced, like any other
- * re-uploaded document.
+ * newer copy — after the invoice was approved or paid in Xero — becomes the one
+ * on the record, and the older goes to the Trash (60 days), so there is only ever
+ * one Xero PDF per invoice.
  */
 async function fileXeroPdf(input: {
   tenantId: string;
@@ -97,9 +97,12 @@ async function fileXeroPdf(input: {
         },
         select: { id: true },
       });
+      // ONE Xero PDF per invoice (Sean, 2026-11-11: "it files two copies"): the older
+      // copy goes to the Trash — recoverable for 60 days — still linked to the newer
+      // one, instead of staying in the Documents list beside it.
       await tx.document.updateMany({
-        where: { tenantId: input.tenantId, quoteId: input.quote.id, tag: "accounting-invoice", replacedById: null, id: { not: document.id } },
-        data: { replacedById: document.id },
+        where: { tenantId: input.tenantId, quoteId: input.quote.id, tag: "accounting-invoice", deletedAt: null, id: { not: document.id } },
+        data: { replacedById: document.id, deletedAt: new Date(), deletedByName: "Xero", deleteReason: "Replaced by Xero's newer PDF of this invoice" },
       });
       return true;
     });
