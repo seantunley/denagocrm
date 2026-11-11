@@ -1,7 +1,11 @@
 import Link from "next/link";
-import { Wallet, FileText, RefreshCw, Truck } from "lucide-react";
+import { Wallet, FileText, RefreshCw, Truck, CircleDollarSign } from "lucide-react";
+import ModalTrigger from "@/components/Modal";
+import DealPayments from "@/components/deals/DealPayments";
+import { markDepositPaid } from "@/app/actions/fulfilment";
+import { currencySymbol } from "@/lib/format";
 import { prisma } from "@/lib/db";
-import { getAccessibleQuoteIds, hasPermission, requireRoute } from "@/lib/permissions";
+import { canAccessContact, getAccessibleQuoteIds, hasAnyPermission, hasPermission, requireRoute } from "@/lib/permissions";
 import { WorkspaceHero } from "@/components/workspace-hero";
 import { SaveForm, SaveButton } from "@/components/SaveForm";
 import XeroInvoiceControl from "@/components/XeroInvoiceControl";
@@ -58,18 +62,35 @@ export default async function InvoicesPage({ searchParams }: { searchParams?: Pr
     include: { contact: true, items: true, fees: true },
     orderBy: { invoiceNumber: "desc" },
   });
+  // The full rows: the Money panel lists each payment (the deal page's DealPayments).
   const payments = quotes.length
-    ? await prisma.quotePayment.findMany({
-        where: { tenantId, quoteId: { in: quotes.map((q) => q.id) } },
-        select: { quoteId: true, amountCents: true, voidedAt: true },
-      })
+    ? await prisma.quotePayment.findMany({ where: { tenantId, quoteId: { in: quotes.map((q) => q.id) } }, orderBy: { receivedAt: "asc" } })
     : [];
   const fleetsById = await loadBillToFleets(prisma, quotes.map((q) => q.fleetId));
 
+  // The statement each invoice appears on — the fleet's when billed to one — only as a
+  // link this person can open; exactly the deal page's rule (the statement re-checks).
+  const canSeeFleets = await hasAnyPermission(user, "fleets.view", "fleets.manage");
+  const contactIds = [...new Set(quotes.map((q) => q.contactId).filter((id): id is string => Boolean(id)))];
+  const openableContacts = new Set(
+    (await Promise.all(contactIds.map(async (id) => ((await canAccessContact(user, id)) ? id : null)))).filter(Boolean),
+  );
+  const { timeZone } = moneyFmt;
+  const today = new Intl.DateTimeFormat("en-CA", { timeZone, year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
+
   const rows = quotes.map((quote) => {
     const total = invoiceTotalCents(quote);
-    const received = receivedCents(quote, payments.filter((p) => p.quoteId === quote.id));
-    return { quote, total, received, owing: total - received, who: quoteBillTo(quote, fleetsById.get(quote.fleetId ?? "") ?? null).name || "—" };
+    const own = payments.filter((p) => p.quoteId === quote.id);
+    const received = receivedCents(quote, own);
+    const billTo = quoteBillTo(quote, fleetsById.get(quote.fleetId ?? "") ?? null);
+    const currency = quote.currency ? `?currency=${encodeURIComponent(quote.currency)}` : "";
+    const statementHref =
+      billTo.isFleet && quote.fleetId
+        ? canSeeFleets ? `/fleets/${quote.fleetId}/statement${currency}` : null
+        : quote.contactId && openableContacts.has(quote.contactId)
+          ? `/contacts/${quote.contactId}/statement${currency}`
+          : null;
+    return { quote, total, received, owing: total - received, who: billTo.name || "—", payments: own, statementHref };
   });
   const open = rows.filter((r) => r.owing > 0);
   const notInXero = rows.filter((r) => !r.quote.xeroInvoiceId);
@@ -135,11 +156,12 @@ export default async function InvoicesPage({ searchParams }: { searchParams?: Pr
                 <th className="text-right">Received</th>
                 <th className="text-right">Owing</th>
                 <th>Delivery</th>
+                <th>Money</th>
                 <th>Xero</th>
               </tr>
             </thead>
             <tbody>
-              {listed.map(({ quote, total, received, owing, who }) => {
+              {listed.map(({ quote, total, received, owing, who, payments: own, statementHref }) => {
                 const fmt = withCurrency(moneyFmt, quote.currency);
                 return (
                   <tr key={quote.id}>
@@ -155,6 +177,33 @@ export default async function InvoicesPage({ searchParams }: { searchParams?: Pr
                     <td data-label="Received" className="text-right tabular-nums">{formatZAR(received, fmt)}</td>
                     <td data-label="Owing" className={`text-right tabular-nums ${owing > 0 ? "text-amber-300" : "text-muted-foreground"}`}>{formatZAR(Math.max(0, owing), fmt)}</td>
                     <td data-label="Delivery" className="whitespace-nowrap text-xs text-muted-foreground">{deliveryStage(quote)}</td>
+                    <td data-label="Money" className="whitespace-nowrap">
+                      {/* Deposit, payments and the statement — the deal page's own Payments panel
+                          (DealPayments), so the arithmetic and the forms are the same everywhere. */}
+                      <ModalTrigger
+                        label={<span className="inline-flex items-center gap-1"><CircleDollarSign className="size-3.5" />{canManage ? "Payments" : "View"}</span>}
+                        title={`${formatInvoiceNumber(quote.invoiceNumber)} · ${who}`}
+                        buttonClass="text-xs text-primary hover:underline"
+                      >
+                        <div className="space-y-4">
+                          {canManage && !quote.depositPaidAt && (
+                            quote.invoicedAt ? (
+                              <SaveForm success="Deposit recorded" resetOnSuccess={false} action={markDepositPaid.bind(null, quote.id)} className="space-y-2 rounded-xl border border-border p-4">
+                                <p className="text-sm font-medium">Record the deposit</p>
+                                <input name="amount" inputMode="decimal" required placeholder={`Amount received (${currencySymbol(fmt)})`} aria-label={`Deposit amount received in ${fmt.currency}`} className="input" />
+                                <input type="file" name="file" required accept=".pdf,image/*" className="block w-full text-xs text-muted-foreground file:btn-secondary file:btn-sm file:mr-2 file:border-0" />
+                                <SaveButton className="btn-primary btn-sm">Deposit paid</SaveButton>
+                              </SaveForm>
+                            ) : (
+                              <p className="rounded-xl border border-border p-4 text-xs text-muted-foreground">
+                                Invoice it first — Send invoice to Xero, or Mark invoiced on the Deliveries board — then the deposit can be recorded.
+                              </p>
+                            )
+                          )}
+                          <DealPayments quote={quote} payments={own} canRecord={canManage} statementHref={statementHref} today={today} moneyFmt={fmt} />
+                        </div>
+                      </ModalTrigger>
+                    </td>
                     <td data-actions className="min-w-[14rem]">
                       {xeroConnected ? (
                         <XeroInvoiceControl quote={quote} crmTotalCents={total} />

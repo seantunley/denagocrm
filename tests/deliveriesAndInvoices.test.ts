@@ -118,14 +118,26 @@ test("Refresh all from Xero: this person's own open invoices in THIS workspace, 
   assert.match(actions, /const REFRESH_ALL_SKIPS = \["PAID", "VOIDED", "DELETED", "SENDING", XERO_UNCONFIRMED\];/, "never refreshes over a send still to settle");
 });
 
+test("Invoices page: deposit, payments and the statement from each row — the deal page's own panel and rules", () => {
+  // Sean, 2026-11-11: "In the invoice page, can we have the option to record deposits, payments and get statements?"
+  const page = src("src/app/(app)/invoices/page.tsx");
+  assert.match(page, /<DealPayments quote=\{quote\} payments=\{own\} canRecord=\{canManage\} statementHref=\{statementHref\} today=\{today\} moneyFmt=\{fmt\} \/>/);
+  assert.match(page, /canManage && !quote\.depositPaidAt && \(\s*quote\.invoicedAt \? \(\s*<SaveForm success="Deposit recorded"[^>]*action=\{markDepositPaid\.bind\(null, quote\.id\)\}/, "deposit only once invoiced, behind deliveries.manage");
+  // The statement link only where this person can open it — the deal page's rule.
+  assert.match(page, /billTo\.isFleet && quote\.fleetId\s*\? canSeeFleets \? `\/fleets\/\$\{quote\.fleetId\}\/statement\$\{currency\}` : null\s*: quote\.contactId && openableContacts\.has\(quote\.contactId\)/);
+  assert.match(page, /prisma\.quotePayment\.findMany\(\{ where: \{ tenantId, quoteId: \{ in: quotes\.map/, "payments from this workspace only");
+  // Recording either refreshes the Invoices page.
+  assert.match(src("src/app/actions/quotePayments.ts"), /revalidatePath\("\/deliveries"\);\s*revalidatePath\("\/invoices"\);/);
+  assert.match(src("src/app/actions/fulfilment.ts"), /revalidatePath\("\/deliveries"\); revalidatePath\("\/invoices"\);/);
+});
+
 test("Invoices page: the board's door, this workspace, only invoices this person may open", () => {
   const page = src("src/app/(app)/invoices/page.tsx");
   assert.match(page, /const user = await requireRoute\("\/invoices"\);/);
   assert.deepEqual(ROUTE_RULES.find((r) => r.prefix === "/invoices"), { prefix: "/invoices", anyOf: ["deliveries.view", "deliveries.manage"] });
   assert.match(page, /where: \{\s*tenantId,\s*status: "accepted",\s*supersededAt: null,\s*invoiceNumber: \{ not: null \},\s*\.\.\.\(quoteIds === null \? \{\} : \{ id: \{ in: quoteIds \} \}\),/);
-  assert.match(page, /prisma\.quotePayment\.findMany\(\{\s*where: \{ tenantId, quoteId: \{ in: quotes\.map/);
   // The same money rules the statement and the deal use.
-  assert.match(page, /const total = invoiceTotalCents\(quote\);\s*const received = receivedCents\(quote,/);
+  assert.match(page, /const total = invoiceTotalCents\(quote\);[\s\S]{0,120}const received = receivedCents\(quote, own\);/);
   assert.match(src("src/components/nav-config.ts"), /if \(can\("deliveries\.view", "deliveries\.manage"\)\) crmLinks\.push\(\{ href: "\/invoices", label: "Invoices"/);
   assert.match(src("src/lib/modules/registry.ts"), /"\/deliveries", "\/invoices",/, "module-gated with the board");
 });

@@ -51,6 +51,7 @@ function refreshPaths(quoteId: string) {
   revalidatePath(`/deals/${quoteId}`);
   revalidatePath(`/quotes/${quoteId}`);
   revalidatePath("/deliveries");
+  revalidatePath("/invoices");
 }
 
 /**

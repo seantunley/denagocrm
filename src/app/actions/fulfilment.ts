@@ -126,7 +126,7 @@ export async function markInvoiced(quoteId: string, formData: FormData) {
       leadId: quote.leadId,
       user,
     });
-    revalidatePath("/deliveries");
+    revalidatePath("/deliveries"); revalidatePath("/invoices");
     revalidatePath(`/quotes/${quoteId}`);
   });
 }
@@ -213,7 +213,7 @@ export async function markDepositPaid(quoteId: string, formData: FormData) {
       leadId: quote.leadId,
       user,
     });
-    revalidatePath("/deliveries");
+    revalidatePath("/deliveries"); revalidatePath("/invoices");
     revalidatePath(`/quotes/${quoteId}`);
   });
 }
@@ -251,7 +251,7 @@ export async function correctDepositAmount(quoteId: string, formData: FormData) 
       leadId: quote.leadId,
       user,
     });
-    revalidatePath("/deliveries");
+    revalidatePath("/deliveries"); revalidatePath("/invoices");
     revalidatePath(`/quotes/${quoteId}`);
   });
 }
@@ -293,7 +293,7 @@ async function replaceStageDocument(quoteId: string, formData: FormData, kind: "
       leadId: quote.leadId,
       user,
     });
-    revalidatePath("/deliveries");
+    revalidatePath("/deliveries"); revalidatePath("/invoices");
     revalidatePath(`/quotes/${quoteId}`);
     revalidatePath("/documents");
   });
@@ -363,7 +363,7 @@ export async function scheduleDelivery(quoteId: string, formData: FormData) {
     });
     // Journeys on "Delivery is scheduled or moved" start now, with {{delivery_date}} = this day. Never rejects.
     await emitDeliveryScheduledJourneyEvent(quote, when, false);
-    revalidatePath("/deliveries");
+    revalidatePath("/deliveries"); revalidatePath("/invoices");
     revalidatePath(`/quotes/${quoteId}`);
     revalidatePath("/workshop-calendar");
   });
@@ -415,7 +415,7 @@ export async function rescheduleDelivery(quoteId: string, formData: FormData) {
     });
     // The same trigger, for the NEW day: the customer hears the date that now stands. Never rejects.
     await emitDeliveryScheduledJourneyEvent(quote, when, true);
-    revalidatePath("/deliveries");
+    revalidatePath("/deliveries"); revalidatePath("/invoices");
     revalidatePath(`/quotes/${quoteId}`);
     revalidatePath("/workshop-calendar");
   });
@@ -501,7 +501,7 @@ export async function registerDeliveryPhotos(
       leadId: quote.leadId,
       user,
     });
-    revalidatePath("/deliveries");
+    revalidatePath("/deliveries"); revalidatePath("/invoices");
     revalidatePath(`/quotes/${quoteId}`);
     return {
       success: failed
@@ -573,7 +573,7 @@ export async function uploadDeliveryPhotos(quoteId: string, formData: FormData) 
         user,
       });
     }
-    revalidatePath("/deliveries");
+    revalidatePath("/deliveries"); revalidatePath("/invoices");
     revalidatePath(`/quotes/${quoteId}`);
     return {
       success:
