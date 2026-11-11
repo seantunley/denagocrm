@@ -5,6 +5,7 @@ import { recordIntegrationFailure, recordIntegrationVerified } from "./integrati
 import {
   XERO_FEE_ITEM_KEYS,
   XERO_PAYMENTS_SOURCE_KEY,
+  XERO_PAYMENT_METHOD,
   XERO_TAX_CHOICES_KEY,
   type XeroTaxChoices,
   buildXeroContact,
@@ -175,19 +176,30 @@ export async function xeroOrganisationTakenElsewhere(tx: SettingsTx, tenantId: s
  * Xero PDFs already filed on customers are documents and stay where they are.
  *
  * Payments brought back FROM the old organisation go too (payments come from Xero,
- * 2026-11-11): its payment copies are voided — kept, marked, no longer counted — and
- * a deposit that came from it is cleared, so a demo company's money never sits on
- * a real invoice. The new organisation's Refresh brings its own.
+ * 2026-11-11), so a demo company's money never sits on a real invoice — but ONLY
+ * what was brought in (review of #1071): payments CREATED from Xero are voided —
+ * kept, marked, and keeping their Xero PaymentID so reconnecting the same
+ * organisation restores them — and a deposit created from Xero is cleared. Money
+ * recorded BY HAND and only matched to a Xero payment stays: it is just unlinked.
+ * The new organisation's Refresh brings its own.
  */
-async function forgetXeroLinks(tx: SettingsTx, tenantId: string): Promise<{ invoices: number; customers: number; products: number; payments: number }> {
-  const payments = await tx.quotePayment.updateMany({
-    where: { tenantId, xeroPaymentId: { not: null }, voidedAt: null },
+/** Exported for the real-database test (scripts/test-xero-workspace-settings.ts); called only by exchangeXeroCode. */
+export async function forgetXeroLinks(tx: SettingsTx, tenantId: string): Promise<{ invoices: number; customers: number; products: number; payments: number }> {
+  const brought = await tx.quotePayment.updateMany({
+    where: { tenantId, xeroPaymentId: { not: null }, method: XERO_PAYMENT_METHOD, voidedAt: null },
     data: { voidedAt: new Date(), voidedByName: "Xero", voidReason: "Brought back from the previous Xero organisation" },
   });
-  const deposits = await tx.quote.updateMany({
-    where: { tenantId, xeroDepositPaymentId: { not: null } },
-    data: { depositPaidAt: null, depositPaidCents: null, xeroDepositPaymentId: null },
+  // Recorded by hand, matched to the old organisation: the record stays, the link goes.
+  await tx.quotePayment.updateMany({
+    where: { tenantId, xeroPaymentId: { not: null }, NOT: { method: XERO_PAYMENT_METHOD } },
+    data: { xeroPaymentId: null },
   });
+  const deposits = await tx.quote.updateMany({
+    where: { tenantId, xeroDepositPaymentId: { not: null }, xeroDepositCreated: true },
+    data: { depositPaidAt: null, depositPaidCents: null, xeroDepositPaymentId: null, xeroDepositCreated: false },
+  });
+  await tx.quote.updateMany({ where: { tenantId, xeroDepositPaymentId: { not: null } }, data: { xeroDepositPaymentId: null } });
+  const payments = { count: brought.count };
   const invoices = await tx.quote.updateMany({
     where: { tenantId, OR: [{ xeroInvoiceId: { not: null } }, { xeroStatus: { not: null } }] },
     data: { xeroInvoiceId: null, xeroInvoiceNumber: null, xeroStatus: null, xeroTotalCents: null, xeroSentAt: null, xeroSentByName: null, xeroAmountPaidCents: null, xeroCheckedAt: null },

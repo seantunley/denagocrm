@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { nextXeroRefreshBatch, parseXeroDate, planXeroPaymentSync, readXeroInvoice, receivedAfterSync, xeroOwnsPayments } from "../src/lib/xeroInvoice";
+import { nextXeroRefreshBatch, parseXeroDate, planXeroPaymentSync, readXeroInvoice, receivedAfterSync, xeroOwnsPayments, xeroPaymentsComplete } from "../src/lib/xeroInvoice";
 import { isPaymentMethod, paymentMethodLabel } from "../src/lib/accountStatement";
 import { ROUTE_RULES } from "../src/lib/routeAccess";
 
@@ -60,27 +60,31 @@ test("sending to Xero marks the invoice invoiced — in the same transaction tha
 
 const day = (d: number) => new Date(Date.UTC(2026, 10, d, 12));
 const xp = (id: string, d: number, rand: number, reference: string | null = null) => ({ id, date: day(d), amountCents: rand * 100, reference });
-const none = { paidAt: null, cents: null, xeroPaymentId: null };
+const none = { paidAt: null, cents: null, xeroPaymentId: null, createdFromXero: false };
+type Row = { id: string; xeroPaymentId: string | null; amountCents: number; receivedAt: Date; voidedAt: Date | null; createdFromXero: boolean };
+const row = (id: string, xeroPaymentId: string | null, rand: number, d: number, extra: Partial<Row> = {}): Row => ({
+  id, xeroPaymentId, amountCents: rand * 100, receivedAt: day(d), voidedAt: null, createdFromXero: Boolean(xeroPaymentId), ...extra,
+});
 
 test("payments sync: the first Xero payment is the deposit, the rest are payments, and the CRM's received = Xero's", () => {
   const xero = [xp("p2", 5, 30_000, "EFT 2"), xp("p1", 1, 50_000, "EFT 1")];
   const plan = planXeroPaymentSync({ deposit: none, payments: [] }, xero);
-  assert.deepEqual(plan.deposit, { kind: "set", xeroPaymentId: "p1", cents: 5_000_000, at: day(1) }, "the EARLIEST is the deposit");
+  assert.deepEqual(plan.deposit, { kind: "set", xeroPaymentId: "p1", cents: 5_000_000, at: day(1), createdFromXero: true }, "the EARLIEST is the deposit");
   assert.deepEqual(plan.create.map((x) => x.id), ["p2"]);
   assert.equal(receivedAfterSync({ deposit: none, payments: [] }, plan), 8_000_000, "R80 000 — exactly what Xero has");
 
   // Refresh again with nothing new: nothing changes, nothing comes in twice.
-  const after = { deposit: { paidAt: day(1), cents: 5_000_000, xeroPaymentId: "p1" }, payments: [{ id: "c2", xeroPaymentId: "p2", amountCents: 3_000_000, receivedAt: day(5), voidedAt: null }] };
+  const after = { deposit: { paidAt: day(1), cents: 5_000_000, xeroPaymentId: "p1", createdFromXero: true }, payments: [row("c2", "p2", 30_000, 5)] };
   const again = planXeroPaymentSync(after, xero);
-  assert.deepEqual([again.deposit, again.create, again.update, again.void, again.link], [{ kind: "keep" }, [], [], [], []]);
+  assert.deepEqual([again.deposit, again.promote, again.create, again.update, again.restore, again.void, again.link], [{ kind: "keep" }, null, [], [], [], [], []]);
   assert.equal(receivedAfterSync(after, again), 8_000_000);
 });
 
 test("payments sync: money recorded by hand BEFORE is matched to Xero's, never doubled; what Xero can't account for is said", () => {
   // 1 Oak: deposit and a payment recorded by hand, the same money recorded in Xero → linked, not added again.
   const byHand = {
-    deposit: { paidAt: day(1), cents: 5_000_000, xeroPaymentId: null },
-    payments: [{ id: "c9", xeroPaymentId: null, amountCents: 3_000_000, receivedAt: day(4), voidedAt: null }],
+    deposit: { paidAt: day(1), cents: 5_000_000, xeroPaymentId: null, createdFromXero: false },
+    payments: [row("c9", null, 30_000, 4)],
   };
   const plan = planXeroPaymentSync(byHand, [xp("p1", 1, 50_000), xp("p2", 5, 30_000)]);
   assert.deepEqual(plan.deposit, { kind: "link", xeroPaymentId: "p1" });
@@ -88,26 +92,73 @@ test("payments sync: money recorded by hand BEFORE is matched to Xero's, never d
   assert.deepEqual(plan.create, [], "nothing duplicated");
   assert.equal(receivedAfterSync(byHand, plan), 8_000_000);
   // A deposit by hand that no Xero payment matches is REPORTED — kept, not dropped, not doubled.
-  const odd = planXeroPaymentSync({ deposit: { paidAt: day(1), cents: 4_000_000, xeroPaymentId: null }, payments: [] }, [xp("p1", 1, 50_000)]);
+  const odd = planXeroPaymentSync({ deposit: { paidAt: day(1), cents: 4_000_000, xeroPaymentId: null, createdFromXero: false }, payments: [] }, [xp("p1", 1, 50_000)]);
   assert.equal(odd.unmatched.depositCents, 4_000_000);
   assert.deepEqual(odd.create.map((x) => x.id), ["p1"], "Xero's payment still comes in, and the mismatch is said");
 });
 
-test("payments sync: removed in Xero → voided here; changed in Xero → corrected; deposit removed → the next becomes it", () => {
+test("payments sync: removed in Xero → voided here; changed in Xero → corrected", () => {
   const state = {
-    deposit: { paidAt: day(1), cents: 5_000_000, xeroPaymentId: "p1" },
-    payments: [
-      { id: "c2", xeroPaymentId: "p2", amountCents: 3_000_000, receivedAt: day(5), voidedAt: null },
-      { id: "c3", xeroPaymentId: "p3", amountCents: 1_000_000, receivedAt: day(6), voidedAt: null },
-    ],
+    deposit: { paidAt: day(1), cents: 5_000_000, xeroPaymentId: "p1", createdFromXero: true },
+    payments: [row("c2", "p2", 30_000, 5), row("c3", "p3", 10_000, 6)],
   };
   const changed = planXeroPaymentSync(state, [xp("p1", 1, 50_000), xp("p2", 5, 35_000)]);
   assert.deepEqual(changed.void, ["c3"], "p3 was removed in Xero");
   assert.deepEqual(changed.update.map((u) => [u.paymentId, u.xero.amountCents]), [["c2", 3_500_000]], "p2 corrected in Xero");
   assert.equal(receivedAfterSync(state, changed), 8_500_000);
-  const depositGone = planXeroPaymentSync({ deposit: state.deposit, payments: [] }, [xp("p4", 9, 20_000)]);
-  assert.deepEqual(depositGone.deposit, { kind: "set", xeroPaymentId: "p4", cents: 2_000_000, at: day(9) });
   assert.deepEqual(planXeroPaymentSync({ deposit: state.deposit, payments: [] }, []).deposit, { kind: "clear" }, "no payments left in Xero");
+});
+
+test("review of #1071 (1): deposit reversed in Xero → the earliest surviving payment BECOMES the deposit, counted once", () => {
+  // R50 000 deposit (p1) + R30 000 payment (p2, already a CRM payment record). p1 is reversed in Xero.
+  const state = { deposit: { paidAt: day(1), cents: 5_000_000, xeroPaymentId: "p1", createdFromXero: true }, payments: [row("c2", "p2", 30_000, 5)] };
+  const plan = planXeroPaymentSync(state, [xp("p2", 5, 30_000)]);
+  assert.deepEqual(plan.deposit, { kind: "set", xeroPaymentId: "p2", cents: 3_000_000, at: day(5), createdFromXero: true }, "not left in Awaiting payment");
+  assert.equal(plan.promote, "c2", "its payment record is retired…");
+  assert.deepEqual(plan.void, [], "…not voided as 'removed in Xero'");
+  assert.equal(receivedAfterSync(state, plan), 3_000_000, "…and the R30 000 is counted once, = Xero's");
+  // The next Refresh leaves it alone.
+  const next = { deposit: { paidAt: day(5), cents: 3_000_000, xeroPaymentId: "p2", createdFromXero: true }, payments: [row("c2", "p2", 30_000, 5, { voidedAt: day(9) })] };
+  const again = planXeroPaymentSync(next, [xp("p2", 5, 30_000)]);
+  assert.deepEqual([again.deposit, again.promote, again.restore, again.create], [{ kind: "keep" }, null, [], []]);
+  // A promoted record that was recorded BY HAND keeps that provenance on the deposit.
+  const byHand = planXeroPaymentSync({ deposit: state.deposit, payments: [row("c2", "p2", 30_000, 5, { createdFromXero: false })] }, [xp("p2", 5, 30_000)]);
+  assert.equal(byHand.deposit.kind === "set" && byHand.deposit.createdFromXero, false);
+});
+
+test("review of #1071 (2): a partial answer from Xero changes NOTHING", () => {
+  // Xero says R80 000 paid but lists only R50 000 of payments → no sync at all.
+  assert.equal(xeroPaymentsComplete({ amountPaidCents: 8_000_000, payments: [xp("p1", 1, 50_000)] }), false);
+  assert.equal(xeroPaymentsComplete({ amountPaidCents: 8_000_000, payments: [] }), false, "no details at all");
+  assert.equal(xeroPaymentsComplete({ amountPaidCents: 8_000_000, payments: [xp("p1", 1, 50_000), xp("p2", 5, 30_000)] }), true);
+  assert.equal(xeroPaymentsComplete({ amountPaidCents: 0, payments: [] }), true, "nothing paid, nothing listed");
+  const sync = actions.slice(actions.indexOf("async function syncPaymentsFromXero("), actions.indexOf("async function tryFilePdf("));
+  assert.ok(sync.indexOf("if (!xeroPaymentsComplete(input.invoice))") < sync.indexOf("prisma.$transaction("), "checked before anything is written");
+  assert.match(sync, /payment details don't add up to that — nothing was changed here/);
+});
+
+test("review of #1071 (3): an organisation switch removes only what was BROUGHT IN from Xero; reconnecting restores it", () => {
+  const forget = src("src/lib/xero.ts").slice(src("src/lib/xero.ts").indexOf("async function forgetXeroLinks("));
+  // Created from Xero → voided, keeping its PaymentID (for a reconnect).
+  assert.match(forget, /where: \{ tenantId, xeroPaymentId: \{ not: null \}, method: XERO_PAYMENT_METHOD, voidedAt: null \},\s*data: \{ voidedAt: new Date\(\), voidedByName: "Xero", voidReason:/);
+  // Recorded by hand, matched → stays live, only unlinked.
+  assert.match(forget, /where: \{ tenantId, xeroPaymentId: \{ not: null \}, NOT: \{ method: XERO_PAYMENT_METHOD \} \},\s*data: \{ xeroPaymentId: null \},/);
+  // Deposit created from Xero → cleared; recorded by hand → kept, unlinked.
+  assert.match(forget, /where: \{ tenantId, xeroDepositPaymentId: \{ not: null \}, xeroDepositCreated: true \},\s*data: \{ depositPaidAt: null, depositPaidCents: null, xeroDepositPaymentId: null, xeroDepositCreated: false \},/);
+  assert.match(forget, /tx\.quote\.updateMany\(\{ where: \{ tenantId, xeroDepositPaymentId: \{ not: null \} \}, data: \{ xeroDepositPaymentId: null \} \}\)/);
+  assert.ok(forget.indexOf("xeroDepositCreated: true") < forget.indexOf("data: { xeroDepositPaymentId: null } })"), "created deposits cleared BEFORE the rest are unlinked");
+  // Reconnecting the same organisation: the voided copies are restored, not duplicated (the PaymentID is unique).
+  const afterSwitch = { deposit: none, payments: [row("c2", "p2", 30_000, 5, { voidedAt: day(10) })] };
+  const reconnected = planXeroPaymentSync(afterSwitch, [xp("p1", 1, 50_000), xp("p2", 5, 30_000)]);
+  assert.deepEqual(reconnected.deposit, { kind: "set", xeroPaymentId: "p1", cents: 5_000_000, at: day(1), createdFromXero: true });
+  assert.deepEqual(reconnected.restore.map((r) => r.paymentId), ["c2"]);
+  assert.deepEqual(reconnected.create, [], "never a second record for the same Xero payment");
+  assert.equal(receivedAfterSync(afterSwitch, reconnected), 8_000_000);
+  // The deposit's provenance is stored with it, and cleared with it.
+  const sync = actions.slice(actions.indexOf("async function syncPaymentsFromXero("), actions.indexOf("async function tryFilePdf("));
+  assert.match(sync, /xeroDepositCreated: d\.createdFromXero/);
+  assert.match(sync, /data: \{ xeroDepositPaymentId: d\.xeroPaymentId, xeroDepositCreated: false \}/, "a matched deposit is recorded-by-hand");
+  assert.match(sync, /createdFromXero: p\.method === XERO_PAYMENT_METHOD,/);
 });
 
 test("Xero's payments are read from a full invoice, in Xero's own date format", () => {
@@ -164,11 +215,6 @@ test("the CRM's own payment forms stay — refused only for an invoice IN Xero w
   assert.ok(!isPaymentMethod("xero"));
 });
 
-test("an organisation switch voids payments brought from the old one and clears a deposit that came from it", () => {
-  const forget = src("src/lib/xero.ts").slice(src("src/lib/xero.ts").indexOf("async function forgetXeroLinks("));
-  assert.match(forget, /tx\.quotePayment\.updateMany\(\{\s*where: \{ tenantId, xeroPaymentId: \{ not: null \}, voidedAt: null \},/);
-  assert.match(forget, /where: \{ tenantId, xeroDepositPaymentId: \{ not: null \} \},\s*data: \{ depositPaidAt: null, depositPaidCents: null, xeroDepositPaymentId: null \},/);
-});
 
 test("an invoice linked to Xero before the invoice step existed is marked invoiced by Refresh — never over a date", () => {
   // Review of #1071: xeroInvoiceId set, invoicedAt null → stuck in Awaiting payment, no deposit possible.

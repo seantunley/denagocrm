@@ -1558,6 +1558,9 @@ model Quote {
   /// deposit, and what Xero last said has been paid — so the CRM can show when the two disagree.
   xeroDepositPaymentId String?
   xeroAmountPaidCents  Int?
+  /// True when the deposit was CREATED from a Xero payment; false when it was recorded by hand and
+  /// only matched to one. An organisation switch clears the first and keeps the second (review of #1071).
+  xeroDepositCreated   Boolean   @default(false)
   depositPaidAt        DateTime?
   depositPaidCents     Int? // amount actually received; null = recorded before amounts were captured
   deliveryScheduledFor DateTime?

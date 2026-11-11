@@ -44,6 +44,7 @@ import {
   nextXeroRefreshBatch,
   planXeroPaymentSync,
   receivedAfterSync,
+  xeroPaymentsComplete,
   XERO_PAYMENT_METHOD,
   XERO_PAYMENTS_SOURCE_KEY,
   type CrmPaymentState,
@@ -133,22 +134,48 @@ async function syncPaymentsFromXero(input: {
   user: PermissionUser;
 }): Promise<string | null> {
   if (!(await paymentsComeFromXero(input.tenantId))) return null;
+  // A partial answer from Xero must never clear a deposit or void a payment (review of #1071).
+  if (!xeroPaymentsComplete(input.invoice)) {
+    const fmt = withCurrency(await getRegionalSettings(), null);
+    return `Xero says ${formatZAR(input.invoice.amountPaidCents, fmt)} has been paid, but its payment details don't add up to that — nothing was changed here. Press Refresh again later.`;
+  }
   const done = await prisma.$transaction(async (tx) => {
     const ledger = await lockQuoteLedger(tx, input.quoteId, input.tenantId);
     if (!ledger || ledger.quote.xeroInvoiceId !== input.invoice.id) return null;
     const q = ledger.quote;
     const state: CrmPaymentState = {
-      deposit: { paidAt: q.depositPaidAt, cents: q.depositPaidCents, xeroPaymentId: q.xeroDepositPaymentId },
-      payments: ledger.payments.map((p) => ({ id: p.id, xeroPaymentId: p.xeroPaymentId, amountCents: p.amountCents, receivedAt: p.receivedAt, voidedAt: p.voidedAt })),
+      deposit: { paidAt: q.depositPaidAt, cents: q.depositPaidCents, xeroPaymentId: q.xeroDepositPaymentId, createdFromXero: q.xeroDepositCreated },
+      payments: ledger.payments.map((p) => ({
+        id: p.id, xeroPaymentId: p.xeroPaymentId, amountCents: p.amountCents, receivedAt: p.receivedAt, voidedAt: p.voidedAt,
+        createdFromXero: p.method === XERO_PAYMENT_METHOD,
+      })),
     };
     const plan = planXeroPaymentSync(state, input.invoice.payments);
     if (receivedAfterSync(state, plan) > ledger.totalCents) return { kind: "too-much" as const, quote: q, plan };
     const ours = { id: input.quoteId, tenantId: input.tenantId, xeroInvoiceId: input.invoice.id };
     const d = plan.deposit;
-    if (d.kind === "set") await tx.quote.updateMany({ where: ours, data: { depositPaidAt: d.at, depositPaidCents: d.cents, xeroDepositPaymentId: d.xeroPaymentId } });
-    if (d.kind === "link") await tx.quote.updateMany({ where: ours, data: { xeroDepositPaymentId: d.xeroPaymentId } });
+    if (d.kind === "set") {
+      await tx.quote.updateMany({
+        where: ours,
+        data: { depositPaidAt: d.at, depositPaidCents: d.cents, xeroDepositPaymentId: d.xeroPaymentId, xeroDepositCreated: d.createdFromXero },
+      });
+    }
+    if (d.kind === "link") await tx.quote.updateMany({ where: ours, data: { xeroDepositPaymentId: d.xeroPaymentId, xeroDepositCreated: false } });
     if (d.kind === "update") await tx.quote.updateMany({ where: ours, data: { depositPaidCents: d.cents, depositPaidAt: d.at } });
-    if (d.kind === "clear") await tx.quote.updateMany({ where: ours, data: { depositPaidAt: null, depositPaidCents: null, xeroDepositPaymentId: null } });
+    if (d.kind === "clear") await tx.quote.updateMany({ where: ours, data: { depositPaidAt: null, depositPaidCents: null, xeroDepositPaymentId: null, xeroDepositCreated: false } });
+    // The payment that became the deposit: retired as a payment, so the money is counted once.
+    if (plan.promote) {
+      await tx.quotePayment.updateMany({
+        where: { id: plan.promote, tenantId: input.tenantId, quoteId: input.quoteId, voidedAt: null },
+        data: { voidedAt: new Date(), voidedByName: "Xero", voidReason: "Became the deposit — the earlier payment was removed in Xero" },
+      });
+    }
+    for (const { paymentId, xero } of plan.restore) {
+      await tx.quotePayment.updateMany({
+        where: { id: paymentId, tenantId: input.tenantId, quoteId: input.quoteId },
+        data: { voidedAt: null, voidedByName: null, voidReason: null, amountCents: xero.amountCents, receivedAt: xero.date },
+      });
+    }
     for (const x of plan.create) {
       await tx.quotePayment.create({
         data: {
@@ -195,6 +222,7 @@ async function syncPaymentsFromXero(input: {
   if (plan.create.length) said.push(`${plan.create.length} payment${plan.create.length === 1 ? "" : "s"} (${money(plan.create.reduce((s, x) => s + x.amountCents, 0))})`);
   if (plan.update.length) said.push(`${plan.update.length} payment${plan.update.length === 1 ? "" : "s"} corrected`);
   if (plan.void.length) said.push(`${plan.void.length} payment${plan.void.length === 1 ? "" : "s"} voided (removed in Xero)`);
+  if (plan.restore.length) said.push(`${plan.restore.length} payment${plan.restore.length === 1 ? "" : "s"} restored`);
   const linked = plan.link.length + (plan.deposit.kind === "link" ? 1 : 0);
   if (said.length || linked) {
     await logAudit({
