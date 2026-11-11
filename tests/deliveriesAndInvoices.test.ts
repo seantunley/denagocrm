@@ -16,6 +16,9 @@ const src = (p: string) => readFileSync(p, "utf8").replace(/\r\n/g, "\n");
 const board = src("src/app/(app)/deliveries/page.tsx");
 const desktop = board.slice(board.indexOf("<DesktopOnly"), board.indexOf("function FulfilmentCorrections"));
 const actions = src("src/app/actions/xero.ts");
+/** Refresh, the payments sync and the PDF filing — shared by the Refresh buttons and the hourly check. */
+const lib = src("src/lib/xeroSync.ts");
+const refreshAll = actions.slice(actions.indexOf("export async function refreshAllXeroInvoices("), actions.indexOf("\nexport ", actions.indexOf("export async function refreshAllXeroInvoices(") + 1));
 
 test("columns: what stands between the sale and the handover", () => {
   assert.match(board, /type Col = "payment" \| "schedule" \| "deliver" \| "delivered";/);
@@ -145,7 +148,7 @@ test("re-review of #1071: money recorded BY HAND, matched, then removed in Xero 
   assert.deepEqual(planXeroPaymentSync({ ...payment, payments: [row("c2", "p2", 30_000, 5)] }, [xp("p1", 1, 50_000)]).void, ["c2"]);
   assert.deepEqual(planXeroPaymentSync({ deposit: { ...deposit.deposit, createdFromXero: true }, payments: [] }, []).deposit, { kind: "clear" });
   // Applied: the deposit keeps its money, the payment keeps its row.
-  const sync = actions.slice(actions.indexOf("async function syncPaymentsFromXero("), actions.indexOf("async function tryFilePdf("));
+  const sync = lib.slice(lib.indexOf("async function syncPaymentsFromXero("), lib.indexOf("async function tryFilePdf("));
   assert.match(sync, /if \(d\.kind === "unlink"\) await tx\.quote\.updateMany\(\{ where: ours, data: \{ xeroDepositPaymentId: null, xeroDepositCreated: false \} \}\);/);
   assert.match(sync, /where: \{ id: \{ in: plan\.unlink \}, tenantId: input\.tenantId, quoteId: input\.quoteId \}, data: \{ xeroPaymentId: null \}/);
 });
@@ -167,7 +170,7 @@ test("re-review of #1071: a hand-recorded payment whose Xero payment is REPLACED
   const differs = planXeroPaymentSync(state, [xp("p1", 1, 50_000), xp("p5", 6, 25_000)]);
   assert.deepEqual([differs.unlink, differs.create.map((x) => x.id)], [["c2"], ["p5"]]);
   // The re-link is applied whatever the old link was.
-  const sync = actions.slice(actions.indexOf("async function syncPaymentsFromXero("), actions.indexOf("async function tryFilePdf("));
+  const sync = lib.slice(lib.indexOf("async function syncPaymentsFromXero("), lib.indexOf("async function tryFilePdf("));
   assert.match(sync, /where: \{ id: paymentId, tenantId: input\.tenantId, quoteId: input\.quoteId, voidedAt: null \}, data: \{ xeroPaymentId: xero\.id \}/);
 });
 
@@ -178,7 +181,7 @@ test("money recorded by hand that Xero split differently: nothing changes, and t
   assert.equal(plan.unmatched.depositCents, 10_000_000);
   assert.deepEqual(plan.unmatched.payments, [{ id: "c1", amountCents: 15_650_000 }]);
   assert.ok(receivedAfterSync(q1037, plan) > 25_650_000, "both counted would pass the total → the sync refuses and changes nothing");
-  const sync = actions.slice(actions.indexOf("async function syncPaymentsFromXero("), actions.indexOf("async function tryFilePdf("));
+  const sync = lib.slice(lib.indexOf("async function syncPaymentsFromXero("), lib.indexOf("async function tryFilePdf("));
   assert.match(sync, /are split differently from Xero's payments \(\$\{xeros\}\), so they can't be matched — counting both would go past the invoice total, so nothing was changed\./);
   assert.match(sync, /untick "Payments come from Xero" in Settings → Integrations → Xero, void the CRM's records on this invoice, tick it again and press Refresh/);
   assert.ok(sync.indexOf("if (handDeposit || handPayments.length)") < sync.indexOf("Xero shows more received"), "the 'Xero has too much' wording is only for when nothing was recorded by hand");
@@ -194,7 +197,7 @@ test("review of #1071 (2): a partial answer from Xero changes NOTHING", () => {
   assert.equal(xeroPaymentsComplete({ amountPaidCents: 8_000_000, payments: [] }), false, "no details at all");
   assert.equal(xeroPaymentsComplete({ amountPaidCents: 8_000_000, payments: [xp("p1", 1, 50_000), xp("p2", 5, 30_000)] }), true);
   assert.equal(xeroPaymentsComplete({ amountPaidCents: 0, payments: [] }), true, "nothing paid, nothing listed");
-  const sync = actions.slice(actions.indexOf("async function syncPaymentsFromXero("), actions.indexOf("async function tryFilePdf("));
+  const sync = lib.slice(lib.indexOf("async function syncPaymentsFromXero("), lib.indexOf("async function tryFilePdf("));
   assert.ok(sync.indexOf("if (!xeroPaymentsComplete(input.invoice))") < sync.indexOf("prisma.$transaction("), "checked before anything is written");
   assert.match(sync, /payment details don't add up to that — nothing was changed here/);
 });
@@ -217,7 +220,7 @@ test("review of #1071 (3): an organisation switch removes only what was BROUGHT 
   assert.deepEqual(reconnected.create, [], "never a second record for the same Xero payment");
   assert.equal(receivedAfterSync(afterSwitch, reconnected), 8_000_000);
   // The deposit's provenance is stored with it, and cleared with it.
-  const sync = actions.slice(actions.indexOf("async function syncPaymentsFromXero("), actions.indexOf("async function tryFilePdf("));
+  const sync = lib.slice(lib.indexOf("async function syncPaymentsFromXero("), lib.indexOf("async function tryFilePdf("));
   assert.match(sync, /xeroDepositCreated: d\.createdFromXero/);
   assert.match(sync, /data: \{ xeroDepositPaymentId: d\.xeroPaymentId, xeroDepositCreated: false \}/, "a matched deposit is recorded-by-hand");
   assert.match(sync, /createdFromXero: p\.method === XERO_PAYMENT_METHOD,/);
@@ -242,7 +245,7 @@ test("Xero's payments are read from a full invoice, in Xero's own date format", 
 });
 
 test("the sync runs under the ledger lock, only for the still-linked invoice, never past the total, only while payments come from Xero", () => {
-  const sync = actions.slice(actions.indexOf("async function syncPaymentsFromXero("), actions.indexOf("async function tryFilePdf("));
+  const sync = lib.slice(lib.indexOf("async function syncPaymentsFromXero("), lib.indexOf("async function tryFilePdf("));
   assert.match(sync, /if \(!\(await paymentsComeFromXero\(input\.tenantId\)\)\) return null;/);
   assert.match(sync, /const ledger = await lockQuoteLedger\(tx, input\.quoteId, input\.tenantId\);\s*if \(!ledger \|\| ledger\.quote\.xeroInvoiceId !== input\.invoice\.id\) return null;/, "an organisation switch in between brings nothing (review of #1071)");
   assert.match(sync, /if \(receivedAfterSync\(state, plan\) > ledger\.totalCents\) return \{ kind: "too-much"/);
@@ -251,10 +254,10 @@ test("the sync runs under the ledger lock, only for the still-linked invoice, ne
   assert.match(sync, /voidReason: "Removed in Xero"/);
   assert.match(src("prisma/schema.prisma"), /@@unique\(\[tenantId, xeroPaymentId\]\)/, "and the database refuses the same Xero payment twice");
   // Both paths: Refresh, and an invoice adopted on send (its full read — a search result has no payments).
-  assert.match(actions, /const fromXero = await syncPaymentsFromXero\(\{ tenantId, quoteId, invoice, user \}\);/);
+  assert.match(lib, /const fromXero = await syncPaymentsFromXero\(\{ tenantId, quoteId, invoice, user \}\);/);
   assert.match(actions, /\.getInvoice\(invoice\.id\)\s*\.then\(\(full\) => syncPaymentsFromXero\(\{ tenantId, quoteId, invoice: full, user \}\)\)/);
   // Refresh all still takes a PAID invoice whose payments were never brought back.
-  assert.match(actions, /OR: \[\{ xeroStatus: \{ notIn: REFRESH_ALL_SKIPS \} \}, \{ xeroStatus: "PAID", xeroAmountPaidCents: null \}\],/);
+  assert.match(lib, /OR: \[\{ xeroStatus: \{ notIn: REFRESH_ALL_SKIPS \} \}, \{ xeroStatus: "PAID", xeroAmountPaidCents: null \}\],/);
 });
 
 test("the CRM's own payment forms stay — refused only for an invoice IN Xero while payments come from Xero; a switch brings them back", () => {
@@ -280,7 +283,7 @@ test("the CRM's own payment forms stay — refused only for an invoice IN Xero w
 
 test("an invoice linked to Xero before the invoice step existed is marked invoiced by Refresh — never over a date", () => {
   // Review of #1071: xeroInvoiceId set, invoicedAt null → stuck in Awaiting payment, no deposit possible.
-  const one = actions.slice(actions.indexOf("async function refreshOneFromXero("));
+  const one = lib.slice(lib.indexOf("async function refreshOneFromXero("));
   assert.match(one, /where: \{ id: quoteId, tenantId, xeroInvoiceId: invoice\.id, invoicedAt: null \},\s*data: \{ invoicedAt: new Date\(\) \},/);
   assert.ok(one.indexOf("if (xeroInvoiceCancelled(invoice.status))") < one.indexOf("invoicedAt: null"), "a voided invoice doesn't count");
   assert.ok(one.indexOf("invoicedAt: null") < one.indexOf("syncPaymentsFromXero("), "invoiced first, so the payments can follow in the same Refresh");
@@ -302,20 +305,54 @@ test("Refresh all advances: 30 open invoices are all reached in two presses", ()
   assert.deepEqual(new Set([...first, ...second]).size, 30, "every invoice reached");
   for (const id of rows.filter((r) => !first.includes(r.id)).map((r) => r.id)) assert.ok(second.includes(id), `${id} reached on the second press`);
   // The action: marks the batch tried BEFORE trying it, and picks with the same function.
-  const all = actions.slice(actions.indexOf("export async function refreshAllXeroInvoices("), actions.indexOf("async function refreshOneFromXero("));
+  const all = refreshAll;
   assert.match(all, /const quotes = nextXeroRefreshBatch\(open, REFRESH_ALL_CAP\);/);
   assert.ok(all.indexOf("data: { xeroCheckedAt: new Date() }") < all.indexOf("for (const quote of quotes)"), "marked tried before the attempts");
   assert.match(src("prisma/schema.prisma"), /xeroCheckedAt\s+DateTime\?/);
 });
 
 test("Refresh all from Xero: this person's own open invoices in THIS workspace, capped, one failure never hides the rest", () => {
-  const all = actions.slice(actions.indexOf("export async function refreshAllXeroInvoices("), actions.indexOf("async function refreshOneFromXero("));
+  const all = refreshAll;
   assert.match(all, /requireAnyPermission\("deliveries\.manage"\)/);
-  assert.match(all, /where: \{\s*tenantId,\s*status: "accepted",/);
-  assert.match(all, /\.\.\.\(accessible === null \? \{\} : \{ id: \{ in: accessible \} \}\)/);
+  assert.match(all, /where: openXeroInvoicesWhere\(tenantId, accessible\),/);
+  const where = lib.slice(lib.indexOf("export function openXeroInvoicesWhere("));
+  assert.match(where, /return \{\s*tenantId,\s*status: "accepted",/);
+  assert.match(where, /\.\.\.\(accessible === null \? \{\} : \{ id: \{ in: accessible \} \}\)/);
   assert.match(all, /nextXeroRefreshBatch\(open, REFRESH_ALL_CAP\)/);
   assert.match(all, /failed\.push\(`Q-\$\{quote\.number\}`\);/);
-  assert.match(actions, /const REFRESH_ALL_SKIPS = \["PAID", "VOIDED", "DELETED", "SENDING", XERO_UNCONFIRMED\];/, "never refreshes over a send still to settle");
+  assert.match(lib, /const REFRESH_ALL_SKIPS = \["PAID", "VOIDED", "DELETED", "SENDING", XERO_UNCONFIRMED\];/, "never refreshes over a send still to settle");
+});
+
+test("the hourly automatic Xero check: Refresh's own routine, per workspace, visible and switchable, never files a PDF", () => {
+  // Sean, 2026-11-11: "An automatic background check of Xero for payments. Today it happens when someone presses Refresh."
+  assert.match(src("vercel.json"), /"path": "\/api\/cron\/xero-payments",\s*"schedule": "40 \* \* \* \*"/);
+  const route = src("src/app/api/cron/xero-payments/route.ts");
+  assert.match(route, /if \(!isAuthorizedCron\(req\)\) return/);
+  assert.match(route, /runCronPerTenant\(/, "each workspace in its own scope");
+  const run = lib.slice(lib.indexOf("export async function runAutomaticXeroCheck("), lib.indexOf("export function openXeroInvoicesWhere("));
+  const order = [
+    "if (!(await paymentsComeFromXero(tenantId))) return { skipped:",
+    "if ((await getWorkspaceSetting(tenantId, XERO_AUTO_CHECK_KEY)) === \"off\") return { skipped: \"switched-off\" };",
+    "where: openXeroInvoicesWhere(tenantId, null)",
+    "nextXeroRefreshBatch(open, REFRESH_ALL_CAP)",
+    "data: { xeroCheckedAt: new Date() }",
+    "await refreshOneFromXero(client, tenantId, quote.id, null);",
+    "putWorkspaceSetting(tenantId, XERO_AUTO_CHECKED_AT_KEY,",
+  ].map((s) => run.indexOf(s));
+  assert.ok(order.every((at, i) => at > 0 && (i === 0 || at > order[i - 1])), `gated, picked like Refresh all, marked tried, then refreshed as nobody: ${order}`);
+  assert.match(run, /if \(shouldStop\(\)\) break;/, "stops before the run's time is up");
+  // No person → no PDF filed; a person's next Refresh files the newer one (xeroPdfStatus).
+  const one = lib.slice(lib.indexOf("export async function refreshOneFromXero("));
+  assert.match(one, /const pdfFiled = user && pdfStale \? await tryFilePdf\(/);
+  assert.match(one, /quote\.xeroPdfStatus !== invoice\.status/);
+  assert.match(lib.slice(lib.indexOf("async function fileXeroPdf("), lib.indexOf("export async function tryFilePdf(")), /xeroPdfStatus: input\.invoice\.status/);
+  assert.match(src("prisma/schema.prisma"), /xeroPdfStatus\s+String\?/);
+  // Visible and switchable, per workspace; on the automatic jobs page.
+  const page = src("src/app/(app)/settings/integrations/page.tsx");
+  assert.match(page, /\{paymentsFromXero && \(/, "shown only while payments come from Xero");
+  assert.match(page, /<input type="checkbox" name="autoCheck" defaultChecked=\{xeroAutoCheck\}/);
+  assert.match(actions, /putWorkspaceSetting\(tenantId, XERO_AUTO_CHECK_KEY, autoCheck \? "on" : "off"\)/);
+  assert.match(actions, /action: "xero\.auto_check"/);
 });
 
 test("Invoices page: deposit, payments and the statement from each row — the deal page's own panel and rules", () => {

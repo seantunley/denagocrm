@@ -341,6 +341,15 @@ export const AUTOMATIONS: Automation[] = [
     phases: ["meta-lead-sync", "google-reviews"],
   },
   {
+    key: "xero-payments",
+    label: "Xero payments check",
+    does: "Checks open invoices in Xero and brings new payments back to the CRM, as Refresh does. Only while payments come from Xero. Sends nothing.",
+    reaches: "nobody",
+    when: "Every hour",
+    managedAt: { label: "Integrations → Xero", href: "/settings/integrations" },
+    cron: "/api/cron/xero-payments",
+  },
+  {
     key: "stock-expiry",
     label: "Stock reservation expiry",
     does: "Releases stock reservations that have run out.",

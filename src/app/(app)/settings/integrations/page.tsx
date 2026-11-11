@@ -1,9 +1,10 @@
 import { requireTenantOwner, getActiveTenantId } from "@/lib/auth";
 import { prisma } from "@/lib/db";
-import { getWorkspaceSetting, hasTenantCredentialOverride, isSecretSettingKey, resolveIntegrationBundle } from "@/lib/settings";
+import { getRegionalSettings, getWorkspaceSetting, hasTenantCredentialOverride, isSecretSettingKey, resolveIntegrationBundle } from "@/lib/settings";
+import { formatDateTime } from "@/lib/format";
 import XeroItemPicker from "@/components/XeroItemPicker";
 import { linkFeeToXeroItem, setXeroPaymentsSource } from "@/app/actions/xero";
-import { XERO_FEE_ITEM_KEYS, XERO_PAYMENTS_SOURCE_KEY, XERO_TAX_CHOICES_KEY, parseXeroItemLink, parseXeroTaxChoices } from "@/lib/xeroInvoice";
+import { XERO_AUTO_CHECKED_AT_KEY, XERO_AUTO_CHECK_KEY, XERO_FEE_ITEM_KEYS, XERO_PAYMENTS_SOURCE_KEY, XERO_TAX_CHOICES_KEY, parseXeroItemLink, parseXeroTaxChoices } from "@/lib/xeroInvoice";
 import { SaveForm, SaveButton } from "@/components/SaveForm";
 import XeroTaxRatePicker from "@/components/XeroTaxRatePicker";
 import WorkspaceIntegrationRows from "@/components/settings/WorkspaceIntegrationRows";
@@ -76,6 +77,9 @@ export default async function IntegrationsPage({ searchParams }: { searchParams?
   };
   const xeroTaxChoices = parseXeroTaxChoices(await xeroSetting(XERO_TAX_CHOICES_KEY));
   const paymentsFromXero = (await xeroSetting(XERO_PAYMENTS_SOURCE_KEY)) !== "crm";
+  const xeroAutoCheck = (await xeroSetting(XERO_AUTO_CHECK_KEY)) !== "off";
+  const xeroAutoCheckedAt = await xeroSetting(XERO_AUTO_CHECKED_AT_KEY);
+  const regional = await getRegionalSettings();
   // Founding tenant falls back to platform credentials when no override is set.
   // Every other tenant gets null — they must configure their own credentials.
   const usesPlatformFallback = !tenantEnforcing() || tenantId === DEFAULT_TENANT_ID;
@@ -280,6 +284,20 @@ export default async function IntegrationsPage({ searchParams }: { searchParams?
                               </span>
                             </span>
                           </label>
+                          {/* The hourly automatic check (2026-11-11) — only relevant while payments come from Xero. */}
+                          {paymentsFromXero && (
+                            <label className="flex items-start gap-2 text-sm">
+                              <input type="hidden" name="autoCheckShown" value="1" />
+                              <input type="checkbox" name="autoCheck" defaultChecked={xeroAutoCheck} className="mt-1" />
+                              <span>
+                                Check Xero for payments automatically
+                                <span className="block text-[11px] text-muted-foreground">
+                                  Every hour the CRM checks your open invoices in Xero and brings back new payments, as Refresh does — no need to press it.
+                                  {xeroAutoCheck && (xeroAutoCheckedAt ? ` Last checked ${formatDateTime(xeroAutoCheckedAt, regional)}.` : " Not run yet.")}
+                                </span>
+                              </span>
+                            </label>
+                          )}
                           <SaveButton className="btn-secondary btn-sm" pendingLabel="Saving…">Save</SaveButton>
                         </SaveForm>
                       </div>
