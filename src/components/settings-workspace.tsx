@@ -84,7 +84,8 @@ export function SettingsWorkspace({
   const overview = current === "overview";
 
   return (
-    <div className="space-y-4">
+    // data-settings-page: SettingsModal refuses to open on top of a full Settings page.
+    <div className="space-y-4" data-settings-page>
       <PageHeader title={title} description={description}>{actions}</PageHeader>
       <SettingsFinder groups={shown} autoFocus={overview} />
       {overview ? (

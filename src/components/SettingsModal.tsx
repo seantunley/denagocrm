@@ -1,8 +1,12 @@
 "use client";
 
+import { useEffect, useSyncExternalStore } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { SettingsChromelessProvider } from "@/components/settings-workspace";
+
+const noSubscribe = () => () => {};
+const fullSettingsPageShown = () => document.querySelector("[data-settings-page]") !== null;
 
 /**
  * Shell for settings opened as an intercepted-route modal. The dialog is
@@ -16,11 +20,21 @@ import { SettingsChromelessProvider } from "@/components/settings-workspace";
  * opened its page UNDERNEATH the still-open modal. Next's documented alternative,
  * a catch-all @modal route, matches every URL and so turned every deliberate
  * <a href="/…"> in the app into a no-html-link-for-pages lint error.
+ *
+ * And it never opens on top of a full Settings page (Sean, 2026-11-11): the side
+ * menu on Integrations → Products stacked the catalogue as a popup over Settings,
+ * and closing it stepped back through the page underneath. The section loads as
+ * a full page instead — same URL, so Back still returns where you were.
  */
 export default function SettingsModal({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const pathname = usePathname();
+  const overSettings = useSyncExternalStore(noSubscribe, fullSettingsPageShown, () => false);
+  useEffect(() => {
+    if (overSettings && pathname.startsWith("/settings")) window.location.replace(window.location.href);
+  }, [overSettings, pathname]);
   if (!pathname.startsWith("/settings")) return null;
+  if (overSettings) return null;
   return (
     <Dialog open onOpenChange={(open) => { if (!open) router.back(); }}>
       <DialogContent
