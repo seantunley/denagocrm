@@ -1,5 +1,8 @@
 import { requireTenantOwner, getActiveTenantId } from "@/lib/auth";
-import { hasTenantCredentialOverride, isSecretSettingKey, resolveIntegrationBundle } from "@/lib/settings";
+import { getSetting, hasTenantCredentialOverride, isSecretSettingKey, resolveIntegrationBundle } from "@/lib/settings";
+import XeroItemPicker from "@/components/XeroItemPicker";
+import { linkFeeToXeroItem } from "@/app/actions/xero";
+import { XERO_FEE_ITEM_KEYS, parseXeroItemLink } from "@/lib/xeroInvoice";
 import WorkspaceIntegrationRows from "@/components/settings/WorkspaceIntegrationRows";
 import {
   saveTenantCredentialOverride,
@@ -37,7 +40,23 @@ export const dynamic = "force-dynamic";
  * Always the viewer's own active tenant. The platform owner additionally sees
  * the owner-only rows (WorkspaceIntegrationRows) that used to fill the old tab.
  */
-export default async function IntegrationsPage() {
+/** What the Xero connect round trip came back with (?xero=…), in words. */
+const XERO_NOTICES: Record<string, string> = {
+  connected: "Xero is connected.",
+  "missing-client": "The Xero app isn't set up on this CRM yet (XERO_CLIENT_ID and XERO_CLIENT_SECRET in the hosting settings).",
+  denied: "Xero sign-in was cancelled.",
+  ambiguous:
+    "Xero didn't say which one organisation you chose, so nothing was connected (invoices must never go to the wrong books). Press Connect Xero again and tick only the one organisation.",
+  invalid: "That Xero sign-in could not be read — please try again.",
+  failed: "Xero sign-in could not be completed. Check the redirect URI in the Xero app matches this CRM's address, then try again.",
+};
+
+export default async function IntegrationsPage({ searchParams }: { searchParams?: Promise<{ xero?: string }> }) {
+  const xeroNotice = XERO_NOTICES[(await searchParams)?.xero ?? ""] ?? null;
+  const xeroFeeItems = {
+    delivery: parseXeroItemLink(await getSetting(XERO_FEE_ITEM_KEYS.delivery)),
+    other: parseXeroItemLink(await getSetting(XERO_FEE_ITEM_KEYS.other)),
+  };
   // Entirely sensitive (credential management) — gate the whole page.
   // Uses requireTenantOwner so a tenant's own provisioned owner can manage
   // their credentials without needing the global platform owner role (a
@@ -183,6 +202,39 @@ export default async function IntegrationsPage() {
                     <a href="/api/integrations/x/connect" className="btn-primary btn-sm mt-3 inline-flex">
                       {hasOverride.X_ACCOUNT_ID ? "Reconnect X" : "Connect X account"}
                     </a>
+                  </div>
+                )}
+
+                {integration.id === "xero" && (
+                  <div className="mb-5 rounded-lg border border-border bg-background/40 p-4">
+                    <p className="text-sm font-medium">
+                      {effectiveShown.XERO_ORG_NAME ? `Connected to ${effectiveShown.XERO_ORG_NAME}` : "Connect your Xero organisation"}
+                    </p>
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      Connecting lets the Deliveries board send an accepted quote to Xero as a <b>draft</b> invoice and keep
+                      Xero&apos;s invoice number on the quote. Nothing is approved or emailed from the CRM — you finish the
+                      invoice in Xero. The sales account code below is optional.
+                    </p>
+                    {xeroNotice && <p className="mt-2 text-xs text-amber-300">{xeroNotice}</p>}
+                    <a href="/api/integrations/xero/connect" className="btn-primary btn-sm mt-3 inline-flex">
+                      {hasOverride.XERO_TENANT_ID ? "Reconnect Xero" : "Connect Xero"}
+                    </a>
+                    {hasOverride.XERO_TENANT_ID && (
+                      <div className="mt-5 grid gap-5 border-t border-border pt-4 sm:grid-cols-2">
+                        <XeroItemPicker
+                          label="Xero item for delivery fees"
+                          current={xeroFeeItems.delivery}
+                          action={linkFeeToXeroItem.bind(null, "delivery")}
+                          hint="Delivery fee lines go to Xero under this item. Wording, amount and VAT stay the quote's."
+                        />
+                        <XeroItemPicker
+                          label="Xero item for other fees"
+                          current={xeroFeeItems.other}
+                          action={linkFeeToXeroItem.bind(null, "other")}
+                          hint="Any other fee on a quote. Leave unlinked to send fees without an item code."
+                        />
+                      </div>
+                    )}
                   </div>
                 )}
 

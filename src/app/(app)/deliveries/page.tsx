@@ -38,7 +38,8 @@ import { deliveryHandoverReadiness, handoverRunSelection } from "@/lib/checklist
 import { runsForHost, templatesForHostRecord } from "@/lib/checklists/store";
 import { deliveryNoteState } from "@/lib/deliveryNoteSigning";
 import { deliveryNoteSigning, type DeliveryNoteSigning } from "@/components/signing/deliveryNoteSigning";
-import { getRegionalSettings } from "@/lib/settings";
+import { getRegionalSettings, resolveIntegrationField } from "@/lib/settings";
+import XeroInvoiceControl from "@/components/XeroInvoiceControl";
 import { isModuleEnabled } from "@/lib/modules/enabled";
 import { actingTenantId } from "@/lib/actingTenant";
 import { getCompanyProfile } from "@/lib/companyProfile";
@@ -157,6 +158,8 @@ export default async function DeliveriesPage() {
   // Delivery bookings with a transport supplier, from "Schedule delivery" on (Suppliers module only).
   const bookable = (await isModuleEnabled("suppliers")) ? quotes.filter((quote) => colOf(quote) === "schedule" || colOf(quote) === "deliver") : [];
   const tenantId = await actingTenantId();
+  // "Send to Xero" appears once this workspace has connected a Xero organisation (Settings → Integrations).
+  const xeroConnected = canManage && Boolean(await resolveIntegrationField(tenantId, "xero", "XERO_TENANT_ID"));
   const [bookings, transport, company] = bookable.length
     ? await Promise.all([
         prisma.vendorDelivery.findMany({
@@ -234,6 +237,7 @@ export default async function DeliveriesPage() {
                         </div>
                         <p className="mt-2 text-[11px] text-muted-foreground">{photos} handover photo{photos === 1 ? "" : "s"}{quote.deliveryScheduledFor ? ` · ${formatDate(quote.deliveryScheduledFor)}` : ""}{quote.depositPaidCents != null ? ` · deposit ${formatZAR(quote.depositPaidCents, withCurrency(moneyFmt, quote.currency))}` : ""}</p>
                         {canManage && <FulfilmentCorrections quote={quote} moneyFmt={withCurrency(moneyFmt, quote.currency)} />}
+                        {xeroConnected && <XeroInvoiceControl quote={quote} crmTotalCents={quoteTotal(quote)} />}
                         {deliveryBookings(quote)}
                         {/* Same tab on mobile, like the delivery note: keeps PWA back navigation. */}
                         <div className="mt-1.5 flex flex-wrap gap-x-3 gap-y-1">
@@ -429,6 +433,7 @@ export default async function DeliveriesPage() {
                         )}
 
                         {canManage && <FulfilmentCorrections quote={quote} moneyFmt={withCurrency(moneyFmt, quote.currency)} />}
+                        {xeroConnected && <XeroInvoiceControl quote={quote} crmTotalCents={total} />}
 
                         {stockByQuote.has(quote.id) && (() => {
                           const s = stockByQuote.get(quote.id)!;

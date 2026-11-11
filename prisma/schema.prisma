@@ -248,6 +248,12 @@ model Product {
   tenantId String? // Multi-tenancy (Phase B — additive/inert): owning tenant.
   name           String
   sku            String?
+  /// The Xero item this product is linked to (picked from a dropdown on the product page). The ID is the link;
+  /// code and name are kept for display. The code sent on an invoice is looked up from the ID at send time, so
+  /// renaming the code in Xero doesn't break it. Our own `sku` stays independent.
+  xeroItemId     String?
+  xeroItemCode   String?
+  xeroItemName   String?
   category       String?
   basePriceCents Int      @default(0)
   description    String?
@@ -499,6 +505,9 @@ model Contact {
   lastName      String?
   company       String?
   vatNumber     String? // VAT registration number — companies and fleet accounts only
+  /// This customer's contact in the workspace's Xero organisation (lib/xero.ts) — found or created on the first
+  /// "Send to Xero", then reused so every invoice for them lands on the same Xero contact.
+  xeroContactId String?
   email         String?
   phone         String?
   whatsapp      String?
@@ -1532,6 +1541,16 @@ model Quote {
   /// the quote number with a prefix (Sean, 2026-10-07). Issued once, when the
   /// quote is accepted (lib/invoiceNumber.ts), and never reused.
   invoiceNumber        Int?
+  /// The invoice Xero made for this quote ("Send to Xero", lib/xero.ts). Xero numbers its own invoices, so
+  /// xeroInvoiceNumber is NOT invoiceNumber above — both are kept. xeroStatus is Xero's (DRAFT, AUTHORISED,
+  /// PAID, VOIDED…) as last read, or "SENDING" while a send holds the quote. xeroTotalCents is Xero's own
+  /// total, so a VAT difference between the two systems can be shown rather than missed.
+  xeroInvoiceId        String?
+  xeroInvoiceNumber    String?
+  xeroStatus           String?
+  xeroTotalCents       Int?
+  xeroSentAt           DateTime?
+  xeroSentByName       String?
   depositPaidAt        DateTime?
   depositPaidCents     Int? // amount actually received; null = recorded before amounts were captured
   deliveryScheduledFor DateTime?
@@ -2020,6 +2039,8 @@ model Fleet {
   vatNumber          String? // VAT registration number (same field name as Contact.vatNumber)
   billingEmail       String? // where invoices go — distinct from the manager's personal email
   billingPhone       String?
+  /// The fleet account's contact in Xero — a fleet quote is billed to the fleet, so its invoices go to this one.
+  xeroContactId      String?
   // Address fields reuse Contact's exact names and meanings rather than
   // inventing a parallel addressLine1/addressLine2 vocabulary for the same idea.
   address            String? // street address / estate + unit
