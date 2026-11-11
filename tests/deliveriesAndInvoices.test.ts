@@ -126,6 +126,30 @@ test("review of #1071 (1): deposit reversed in Xero → the earliest surviving p
   assert.equal(byHand.deposit.kind === "set" && byHand.deposit.createdFromXero, false);
 });
 
+test("re-review of #1071: money recorded BY HAND, matched, then removed in Xero is KEPT — unlinked and reported", () => {
+  // A R30 000 payment recorded by hand, matched to Xero's p2; p2 is then removed in Xero.
+  const payment = { deposit: { paidAt: day(1), cents: 5_000_000, xeroPaymentId: "p1", createdFromXero: true }, payments: [row("c2", "p2", 30_000, 5, { createdFromXero: false })] };
+  const p = planXeroPaymentSync(payment, [xp("p1", 1, 50_000)]);
+  assert.deepEqual(p.void, [], "never voided");
+  assert.deepEqual(p.unlink, ["c2"], "only its Xero link is cleared");
+  assert.deepEqual(p.unmatched.payments, [{ id: "c2", amountCents: 3_000_000 }], "and it is reported for reconciling");
+  assert.equal(receivedAfterSync(payment, p), 8_000_000, "the CRM still counts it");
+  // A R50 000 deposit recorded by hand, matched to Xero's p1; p1 is then removed in Xero.
+  const deposit = { deposit: { paidAt: day(1), cents: 5_000_000, xeroPaymentId: "p1", createdFromXero: false }, payments: [] };
+  const d = planXeroPaymentSync(deposit, [xp("p2", 5, 30_000)]);
+  assert.deepEqual(d.deposit, { kind: "unlink" }, "never cleared");
+  assert.equal(d.unmatched.depositCents, 5_000_000, "reported");
+  assert.deepEqual(d.create.map((x) => x.id), ["p2"], "Xero's own payment still comes in, as a payment");
+  assert.equal(receivedAfterSync(deposit, d), 8_000_000);
+  // The same, CREATED from Xero: voided / cleared as before.
+  assert.deepEqual(planXeroPaymentSync({ ...payment, payments: [row("c2", "p2", 30_000, 5)] }, [xp("p1", 1, 50_000)]).void, ["c2"]);
+  assert.deepEqual(planXeroPaymentSync({ deposit: { ...deposit.deposit, createdFromXero: true }, payments: [] }, []).deposit, { kind: "clear" });
+  // Applied: the deposit keeps its money, the payment keeps its row.
+  const sync = actions.slice(actions.indexOf("async function syncPaymentsFromXero("), actions.indexOf("async function tryFilePdf("));
+  assert.match(sync, /if \(d\.kind === "unlink"\) await tx\.quote\.updateMany\(\{ where: ours, data: \{ xeroDepositPaymentId: null, xeroDepositCreated: false \} \}\);/);
+  assert.match(sync, /where: \{ id: \{ in: plan\.unlink \}, tenantId: input\.tenantId, quoteId: input\.quoteId \}, data: \{ xeroPaymentId: null \}/);
+});
+
 test("review of #1071 (2): a partial answer from Xero changes NOTHING", () => {
   // Xero says R80 000 paid but lists only R50 000 of payments → no sync at all.
   assert.equal(xeroPaymentsComplete({ amountPaidCents: 8_000_000, payments: [xp("p1", 1, 50_000)] }), false);

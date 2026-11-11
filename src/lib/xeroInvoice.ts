@@ -518,13 +518,20 @@ export type CrmPaymentState = {
 };
 
 export type XeroPaymentSyncPlan = {
-  /** keep · set (from a Xero payment) · link (a deposit recorded by hand IS this Xero payment) · update · clear (gone from Xero) */
+  /**
+   * keep · set (from a Xero payment) · link (a deposit recorded by hand IS this Xero payment) · update ·
+   * clear (one CREATED from Xero, gone from Xero) · unlink (one recorded BY HAND whose matched Xero
+   * payment is gone — kept, and reported).
+   */
   deposit:
     | { kind: "keep" }
     | { kind: "set"; xeroPaymentId: string; cents: number; at: Date; createdFromXero: boolean }
     | { kind: "link"; xeroPaymentId: string }
     | { kind: "update"; cents: number; at: Date }
-    | { kind: "clear" };
+    | { kind: "clear" }
+    | { kind: "unlink" };
+  /** Payments recorded BY HAND whose matched Xero payment is gone — kept, link cleared, reported (review of #1071). */
+  unlink: string[];
   /** A CRM payment record that BECAME the deposit (the earlier one was removed in Xero) — retired, so it isn't counted twice. */
   promote: string | null;
   create: XeroPayment[];
@@ -533,7 +540,7 @@ export type XeroPaymentSyncPlan = {
   update: Array<{ paymentId: string; xero: XeroPayment }>;
   /** A voided CRM copy whose Xero payment is (still, or again) in Xero — e.g. after reconnecting the organisation. */
   restore: Array<{ paymentId: string; xero: XeroPayment }>;
-  /** CRM copies of payments no longer in Xero (deleted or reversed there). */
+  /** CRM copies CREATED from Xero whose payment is no longer there (deleted or reversed) — voided. */
   void: string[];
   /** Money recorded by hand in the CRM that no Xero payment accounts for — said, never silently kept or dropped. */
   unmatched: { depositCents: number | null; payments: Array<{ id: string; amountCents: number }> };
@@ -565,7 +572,7 @@ export function planXeroPaymentSync(state: CrmPaymentState, xeroPayments: XeroPa
   const byXero = new Map(state.payments.filter((p) => p.xeroPaymentId).map((p) => [p.xeroPaymentId!, p]));
   const used = new Set<string>();
   const plan: XeroPaymentSyncPlan = {
-    deposit: { kind: "keep" }, promote: null, create: [], link: [], update: [], restore: [], void: [],
+    deposit: { kind: "keep" }, unlink: [], promote: null, create: [], link: [], update: [], restore: [], void: [],
     unmatched: { depositCents: null, payments: [] },
   };
 
@@ -573,9 +580,13 @@ export function planXeroPaymentSync(state: CrmPaymentState, xeroPayments: XeroPa
   let depositOpen = !d.paidAt;
   if (d.xeroPaymentId) {
     const x = xs.find((p) => p.id === d.xeroPaymentId);
-    if (!x) {
+    if (!x && d.createdFromXero) {
       plan.deposit = { kind: "clear" };
       depositOpen = true;
+    } else if (!x) {
+      // Recorded BY HAND, matched, now gone from Xero: the money stays — unlinked and reported, never cleared.
+      plan.deposit = { kind: "unlink" };
+      plan.unmatched.depositCents = d.cents ?? 0;
     } else {
       used.add(x.id);
       if (x.amountCents !== d.cents) plan.deposit = { kind: "update", cents: x.amountCents, at: x.date };
@@ -620,8 +631,11 @@ export function planXeroPaymentSync(state: CrmPaymentState, xeroPayments: XeroPa
     }
   }
   const inXero = new Set(xs.map((x) => x.id));
-  plan.void = state.payments.filter((p) => p.xeroPaymentId && !p.voidedAt && !inXero.has(p.xeroPaymentId)).map((p) => p.id);
-  plan.unmatched.payments = manualOpen.map((p) => ({ id: p.id, amountCents: p.amountCents }));
+  const goneFromXero = state.payments.filter((p) => p.xeroPaymentId && !p.voidedAt && !inXero.has(p.xeroPaymentId));
+  // Only what was CREATED from Xero is voided; money recorded BY HAND is kept, unlinked and reported.
+  plan.void = goneFromXero.filter((p) => p.createdFromXero).map((p) => p.id);
+  plan.unlink = goneFromXero.filter((p) => !p.createdFromXero).map((p) => p.id);
+  plan.unmatched.payments = [...manualOpen, ...goneFromXero.filter((p) => !p.createdFromXero)].map((p) => ({ id: p.id, amountCents: p.amountCents }));
   return plan;
 }
 

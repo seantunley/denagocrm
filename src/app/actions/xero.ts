@@ -163,6 +163,11 @@ async function syncPaymentsFromXero(input: {
     if (d.kind === "link") await tx.quote.updateMany({ where: ours, data: { xeroDepositPaymentId: d.xeroPaymentId, xeroDepositCreated: false } });
     if (d.kind === "update") await tx.quote.updateMany({ where: ours, data: { depositPaidCents: d.cents, depositPaidAt: d.at } });
     if (d.kind === "clear") await tx.quote.updateMany({ where: ours, data: { depositPaidAt: null, depositPaidCents: null, xeroDepositPaymentId: null, xeroDepositCreated: false } });
+    // Recorded by hand, its Xero match gone: the deposit stays; only the link goes.
+    if (d.kind === "unlink") await tx.quote.updateMany({ where: ours, data: { xeroDepositPaymentId: null, xeroDepositCreated: false } });
+    if (plan.unlink.length) {
+      await tx.quotePayment.updateMany({ where: { id: { in: plan.unlink }, tenantId: input.tenantId, quoteId: input.quoteId }, data: { xeroPaymentId: null } });
+    }
     // The payment that became the deposit: retired as a payment, so the money is counted once.
     if (plan.promote) {
       await tx.quotePayment.updateMany({
