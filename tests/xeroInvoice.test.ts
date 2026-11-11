@@ -12,6 +12,7 @@ import {
   matchXeroContact,
   pickTaxType,
   parseXeroTaxChoices,
+  withXeroTaxChoice,
   xeroTaxRateChoices,
   quoteTaxRates,
   readXeroInvoice,
@@ -157,8 +158,22 @@ test("Settings' sales tax choice: only percentages with more than one live sales
   assert.deepEqual(xeroTaxRateChoices(oneLeft), [], "nothing to choose without a saved choice");
   assert.deepEqual(xeroTaxRateChoices(oneLeft, [15]), [{ pct: 15, options: [{ taxType: "OUTPUT", name: "Standard Rate Sales" }] }]);
   assert.deepEqual(xeroTaxRateChoices([], [15]), [{ pct: 15, options: [] }], "even with no live rate left, it can be cleared");
+  // Review of #1068: a choice is actually STORED — save it, read it back, the send uses it.
+  const standard = { taxType: "OUTPUT", name: "Standard Rate Sales" };
+  const savedOnce = parseXeroTaxChoices(withXeroTaxChoice({}, 15, standard));
+  assert.deepEqual(savedOnce, { "15": standard }, "what is saved is what is read back");
+  const sixAt15 = [...za, { Name: "Change in use Sales", TaxType: "CHANGEUSE", Status: "ACTIVE", EffectiveRate: 15, CanApplyToRevenue: true }];
+  assert.equal(pickTaxType(sixAt15, 15).ok, false, "before the choice: refused as ambiguous");
+  assert.deepEqual(pickTaxType(sixAt15, 15, savedOnce["15"]), { ok: true, taxType: "OUTPUT" }, "after it: the chosen rate");
+  // Changing one % keeps the others; clearing removes only that one.
+  const two = parseXeroTaxChoices(withXeroTaxChoice(savedOnce, 0, { taxType: "ZERORATEDOUTPUT", name: "Zero Rated Sales" }));
+  assert.deepEqual(Object.keys(two).sort(), ["0", "15"]);
+  assert.deepEqual(parseXeroTaxChoices(withXeroTaxChoice(two, 15, null)), { "0": { taxType: "ZERORATEDOUTPUT", name: "Zero Rated Sales" } });
   const actions = readFileSync("src/app/actions/xero.ts", "utf8");
-  assert.match(actions, /if \(!taxType\) \{\s*if \(!choices\[String\(pct\)\]\) refuse\("Choose a tax rate\."\);\s*delete choices\[String\(pct\)\];/, "an empty choice clears it");
+  // The action writes ONLY what withXeroTaxChoice builds — never the map it read.
+  assert.match(actions, /putWorkspaceSetting\(tenantId, XERO_TAX_CHOICES_KEY, withXeroTaxChoice\(choices, pct, option\)\)/, "a choice is saved");
+  assert.match(actions, /putWorkspaceSetting\(tenantId, XERO_TAX_CHOICES_KEY, withXeroTaxChoice\(choices, pct, null\)\)/, "an empty choice clears it");
+  assert.doesNotMatch(actions, /putWorkspaceSetting\(tenantId, XERO_TAX_CHOICES_KEY, JSON\.stringify\(choices\)\)/);
   assert.match(actions, /xeroTaxRateChoices\(await \(await xeroClient\(tenantId\)\)\.listTaxRates\(\), saved\)/, "the list offers saved percentages");
   assert.match(readFileSync("src/components/XeroTaxRatePicker.tsx", "utf8"), /<option value="" disabled=\{!saved\}>\{saved \? "— Clear the choice —"/);
   assert.deepEqual(parseXeroTaxChoices('{"15":{"taxType":"OUTPUT","name":"Standard Rate Sales"}}'), { "15": { taxType: "OUTPUT", name: "Standard Rate Sales" } });

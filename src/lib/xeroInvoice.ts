@@ -235,6 +235,19 @@ export function parseXeroTaxChoices(raw: string | null | undefined): XeroTaxChoi
 }
 
 /**
+ * The stored value after setting (or, with null, clearing) the choice for one VAT
+ * %. The ONLY way the save action builds what it writes — so what it saves is
+ * exactly what parseXeroTaxChoices reads back (review of #1068: a save that
+ * validated the choice but wrote the old map reported success and stored nothing).
+ */
+export function withXeroTaxChoice(choices: XeroTaxChoices, pct: number, option: { taxType: string; name: string } | null): string {
+  const next = { ...choices };
+  if (option) next[String(pct)] = { taxType: option.taxType, name: option.name };
+  else delete next[String(pct)];
+  return JSON.stringify(next);
+}
+
+/**
  * Every VAT % where Xero has MORE THAN ONE live sales rate — the ones a person
  * must choose between — plus every % that already has a saved choice (`saved`),
  * however many rates Xero has left there, so a choice that went stale can always

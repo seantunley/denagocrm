@@ -20,7 +20,8 @@ const ok = (label: string) => console.log(`  ✓ ${++checks}. ${label}`);
   const { basePrisma } = await import("../src/lib/db");
   const { runInTenantScope } = await import("../src/lib/tenantScope");
   const { getWorkspaceSetting, putWorkspaceSetting } = await import("../src/lib/settings");
-  const { XERO_TAX_CHOICES_KEY, XERO_FEE_ITEM_KEYS, parseXeroTaxChoices, parseXeroItemLink } = await import("../src/lib/xeroInvoice");
+  // withXeroTaxChoice: the same builder the save action writes with, so this reads back exactly what it stores.
+  const { XERO_TAX_CHOICES_KEY, XERO_FEE_ITEM_KEYS, parseXeroTaxChoices, parseXeroItemLink, withXeroTaxChoice } = await import("../src/lib/xeroInvoice");
 
   await basePrisma.tenant.create({ data: { id: A, name: `Xero A ${SFX}`, slug: A, active: true } });
   await basePrisma.tenant.create({ data: { id: B, name: `Xero B ${SFX}`, slug: B, active: true } });
@@ -29,10 +30,10 @@ const ok = (label: string) => console.log(`  ✓ ${++checks}. ${label}`);
       process.env.TENANT_ENFORCEMENT = mode;
       // Each workspace saves its own choice for 15%, from inside its own scope — as the action does.
       await runInTenantScope({ tenantId: A, system: false }, () =>
-        putWorkspaceSetting(A, XERO_TAX_CHOICES_KEY, JSON.stringify({ "15": { taxType: "OUTPUT", name: "Standard Rate Sales" } })),
+        putWorkspaceSetting(A, XERO_TAX_CHOICES_KEY, withXeroTaxChoice({}, 15, { taxType: "OUTPUT", name: "Standard Rate Sales" })),
       );
       await runInTenantScope({ tenantId: B, system: false }, () =>
-        putWorkspaceSetting(B, XERO_TAX_CHOICES_KEY, JSON.stringify({ "15": { taxType: "OUTPUTCAP", name: "Standard Rate Sales - Capital Goods" } })),
+        putWorkspaceSetting(B, XERO_TAX_CHOICES_KEY, withXeroTaxChoice({}, 15, { taxType: "OUTPUTCAP", name: "Standard Rate Sales - Capital Goods" })),
       );
       await runInTenantScope({ tenantId: A, system: false }, () =>
         putWorkspaceSetting(A, XERO_FEE_ITEM_KEYS.delivery, JSON.stringify({ id: "item-a", code: "DEL-A", name: "Delivery A" })),

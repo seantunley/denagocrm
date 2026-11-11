@@ -23,6 +23,7 @@ import {
   XERO_STALE_SEND_MS,
   XERO_TAX_CHOICES_KEY,
   parseXeroTaxChoices,
+  withXeroTaxChoice,
   xeroTaxRateChoices,
   xeroInvoiceCancelled,
   xeroSendPlan,
@@ -406,8 +407,7 @@ export async function chooseXeroTaxRate(pct: number, formData: FormData): Promis
       const choices = parseXeroTaxChoices(await getWorkspaceSetting(tenantId, XERO_TAX_CHOICES_KEY));
       if (!taxType) {
         if (!choices[String(pct)]) refuse("Choose a tax rate.");
-        delete choices[String(pct)];
-        await putWorkspaceSetting(tenantId, XERO_TAX_CHOICES_KEY, JSON.stringify(choices));
+        await putWorkspaceSetting(tenantId, XERO_TAX_CHOICES_KEY, withXeroTaxChoice(choices, pct, null));
         await logAudit({ action: "xero.tax_rate_cleared", summary: `Xero tax rate choice for ${pct}% VAT cleared`, user });
         revalidatePath("/settings/integrations");
         return { success: `Choice for ${pct}% VAT cleared.` };
@@ -420,7 +420,7 @@ export async function chooseXeroTaxRate(pct: number, formData: FormData): Promis
         refuseXero(err);
       }
       if (!option) refuse(`That rate isn't one of Xero's live sales rates at ${pct}% any more — reload the list.`);
-      await putWorkspaceSetting(tenantId, XERO_TAX_CHOICES_KEY, JSON.stringify(choices));
+      await putWorkspaceSetting(tenantId, XERO_TAX_CHOICES_KEY, withXeroTaxChoice(choices, pct, option));
       await logAudit({ action: "xero.tax_rate_chosen", summary: `VAT at ${pct}% goes to Xero as "${option.name}" (${option.taxType})`, user });
       revalidatePath("/settings/integrations");
       return { success: `VAT at ${pct}% now goes to Xero as ${option.name}.` };
