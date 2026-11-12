@@ -33,12 +33,30 @@ test("offline recovery never lets a clean device cache shadow server truth", () 
   assert.match(runner, /persistTail\.current = write\.catch/);
 });
 
-test("connectivity is permanently visible in both app headers", () => {
+test("connectivity is permanently visible in both app headers — a dot on the avatar, spelled out in the account menu", () => {
+  // Sean, 2026-11-12: the "Online" badge became a dot on the avatar (option 2).
+  // AccountMenu renders in BOTH headers (mobile and desktop), so both show status.
   const shell = src("src/components/AppShell.tsx");
+  assert.doesNotMatch(shell, /<ConnectivityIndicator /, "no separate badge any more");
+  assert.equal((shell.match(/<AccountCluster /g) ?? []).length, 2, "mobile and desktop both carry the account menu");
+  const menu = src("src/components/AccountMenu.tsx");
+  assert.match(menu, /const connectivity = useConnectivity\(\{ tenantId, userId: user\.id \}\);/);
+  assert.match(menu, /<ConnectivityDot state=\{connectivity\} \/>/);
+  assert.match(menu, /aria-label=\{`Account — \$\{user\.name\}\. \$\{status\}`\}/, "screen readers hear the state on the button");
+  assert.match(menu, /<p aria-live="polite"[^>]*>[\s\S]*?\{status\}/, "and the menu says it in words");
   const indicator = src("src/components/ConnectivityIndicator.tsx");
-  assert.equal((shell.match(/<ConnectivityIndicator /g) ?? []).length, 2, "mobile and desktop both need status");
-  assert.match(indicator, /"Online" : "Offline"/);
   assert.match(indicator, /offlinePendingCount/);
+  assert.match(indicator, /state\.online \? "bg-emerald-400" : "bg-amber-400"/);
+  assert.match(indicator, /motion-safe:animate-ping/, "the busy ring never moves under reduced motion");
+});
+
+test("the connection in words", async () => {
+  const { connectivityText } = await import("../src/components/ConnectivityIndicator");
+  assert.equal(connectivityText({ online: true, pending: 0, syncing: false }), "Online — everything saved");
+  assert.equal(connectivityText({ online: true, pending: 3, syncing: false }), "Online — 3 changes waiting to sync");
+  assert.equal(connectivityText({ online: true, pending: 1, syncing: true }), "Syncing — 1 change waiting to sync");
+  assert.equal(connectivityText({ online: false, pending: 0, syncing: false }), "Offline — work is saved on this device");
+  assert.equal(connectivityText({ online: false, pending: 2, syncing: false }), "Offline — 2 changes waiting to sync, saved on this device");
 });
 
 test("all four configured checklist hosts are mounted on their record surfaces", () => {

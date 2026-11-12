@@ -22,7 +22,6 @@ import PhoneGate from "@/components/PhoneGate";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import ConnectivityIndicator from "@/components/ConnectivityIndicator";
 import { ActivityTypesProvider } from "@/components/ActivityTypesProvider";
 import { MoneyFormatProvider } from "@/components/MoneyFormatProvider";
 import { DEFAULT_REGIONAL, type MoneyFormat } from "@/lib/format";
@@ -213,9 +212,9 @@ export default function AppShell({
           so the logo is still optically centred, and it CLIPS rather than
           growing into the cluster. */}
       <header className="fixed inset-x-0 top-0 z-40 flex h-12 items-center gap-2 border-b border-sidebar-border bg-sidebar/90 px-2 backdrop-blur-xl lg:hidden">
-        <div className="w-[7.5rem] shrink-0">
-          <ConnectivityIndicator tenantId={tenantId} userId={user.id} />
-        </div>
+        {/* Kept empty so the logo stays centred; connection status is the dot on the avatar (AccountMenu). */}
+        <div className="w-[7.5rem] shrink-0" aria-hidden />
+
         {/* min-w-0 lets the flex item shrink below its content, overflow-hidden
             clips what is left. Together the centre column can never grow past its
             own width, so the logo cannot reach the cluster whatever it contains. */}
@@ -239,7 +238,6 @@ export default function AppShell({
         <div className="min-w-0 flex-1">
           <ClockWeather cities={weatherCities} />
         </div>
-        <ConnectivityIndicator tenantId={tenantId} userId={user.id} />
         <AccountCluster user={user} isOwner={ownsWorkspace(user)} tenantId={tenantId} unreadNotices={unreadNotices} birthdaysToday={birthdaysToday} />
       </header>
 

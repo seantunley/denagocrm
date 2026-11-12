@@ -15,6 +15,7 @@ import {
 import { logout } from "@/app/login/actions";
 import { APP_VERSION } from "@/lib/version";
 import { clearChecklistDeviceData, offlinePendingCount } from "@/lib/checklists/deviceStore";
+import ConnectivityDot, { connectivityText, useConnectivity } from "@/components/ConnectivityIndicator";
 import {
   Dialog,
   DialogClose,
@@ -75,7 +76,11 @@ export default function AccountMenu({
     await clearChecklistDeviceData();
     await logout();
   }
+  // Online / offline / syncing, as a dot on the avatar (replaced the "Online" badge, 2026-11-12).
+  const connectivity = useConnectivity({ tenantId, userId: user.id });
+  const status = connectivityText(connectivity);
   const avatar = (
+    <span className="relative shrink-0">
     <Avatar className="size-7 rounded-full">
       {user.avatarVersion ? (
         <AvatarImage
@@ -88,6 +93,8 @@ export default function AccountMenu({
         {initials(user.name)}
       </AvatarFallback>
     </Avatar>
+    <ConnectivityDot state={connectivity} />
+    </span>
   );
 
   return (
@@ -100,7 +107,7 @@ export default function AccountMenu({
             search on a phone. The dropdown still carries the name for that case. */}
         <button
           type="button"
-          aria-label={`Account — ${user.name}`}
+          aria-label={`Account — ${user.name}. ${status}`}
           className="flex items-center gap-2 rounded-lg p-0.5 text-left transition-colors hover:bg-sidebar-accent data-[state=open]:bg-sidebar-accent sm:pr-1.5"
         >
           {avatar}
@@ -125,14 +132,17 @@ export default function AccountMenu({
         {/* Who you are signed in as — now the fallback for phones, where the
             trigger's name column is hidden and the avatar stands alone. */}
         {compact && (
-          <>
-            <DropdownMenuLabel className="pb-1">
-              <span className="block truncate text-[13px] font-medium text-foreground">{user.name}</span>
-              <span className="block truncate text-[11px] font-normal capitalize text-muted-foreground">{user.role}</span>
-            </DropdownMenuLabel>
-            <DropdownMenuSeparator />
-          </>
+          <DropdownMenuLabel className="pb-1">
+            <span className="block truncate text-[13px] font-medium text-foreground">{user.name}</span>
+            <span className="block truncate text-[11px] font-normal capitalize text-muted-foreground">{user.role}</span>
+          </DropdownMenuLabel>
         )}
+        {/* The dot on the avatar, in words. Announced when it changes. */}
+        <p aria-live="polite" className="flex items-center gap-2 px-2 pb-1.5 pt-1 text-[11px] text-muted-foreground">
+          <span aria-hidden className={`size-2 shrink-0 rounded-full ${connectivity.online ? "bg-emerald-400" : "bg-amber-400"}`} />
+          {status}
+        </p>
+        <DropdownMenuSeparator />
         {/* Your own account first. These were reachable only by opening Settings
             and finding the right tab — and the password form additionally sat
             collapsed inside it, so `section=password` opens it on arrival rather

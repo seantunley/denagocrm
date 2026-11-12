@@ -1,12 +1,21 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { Cloud, CloudOff, Loader2 } from "lucide-react";
 import { offlinePendingCount, purgeChecklistDeviceData } from "@/lib/checklists/deviceStore";
 import type { OfflineScope } from "@/lib/checklists/queue";
 import { cn } from "@/lib/utils";
 
-export default function ConnectivityIndicator({ tenantId, userId }: OfflineScope) {
+/**
+ * Whether the app can reach the server, and what this device still holds.
+ *
+ * Shown as a small dot on the person's avatar (Sean, 2026-11-12: the "Online"
+ * badge replaced by option 2) — green when online, amber when offline, a
+ * pulsing ring while saved work is uploading or still waiting — with the same
+ * state spelled out at the top of the account menu (connectivityText).
+ */
+export type Connectivity = { online: boolean; pending: number; syncing: boolean };
+
+export function useConnectivity({ tenantId, userId }: OfflineScope): Connectivity {
   const [online, setOnline] = useState(true);
   const [pending, setPending] = useState(0);
   const [syncing, setSyncing] = useState(false);
@@ -34,21 +43,29 @@ export default function ConnectivityIndicator({ tenantId, userId }: OfflineScope
     };
   }, [refresh, tenantId, userId]);
 
-  const label = syncing ? "Syncing" : online ? "Online" : "Offline";
+  return { online, pending, syncing };
+}
+
+/** The state in words — the dot's tooltip, the account button's label and the menu's status line. */
+export function connectivityText({ online, pending, syncing }: Connectivity): string {
+  const waiting = pending > 0 ? `${pending} change${pending === 1 ? "" : "s"} waiting to sync` : "";
+  if (!online) return waiting ? `Offline — ${waiting}, saved on this device` : "Offline — work is saved on this device";
+  if (syncing) return waiting ? `Syncing — ${waiting}` : "Syncing";
+  return waiting ? `Online — ${waiting}` : "Online — everything saved";
+}
+
+/** The dot, sitting on the avatar's lower-right edge. A ring pulses while work is uploading or waiting. */
+export default function ConnectivityDot({ state }: { state: Connectivity }) {
+  const busy = state.syncing || (state.online && state.pending > 0);
   return (
-    <span
-      className={cn(
-        "inline-flex h-7 shrink-0 items-center gap-1.5 rounded-full border px-2 text-[10px] font-semibold",
-        online
-          ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-300"
-          : "border-amber-500/40 bg-amber-500/10 text-amber-200",
-      )}
-      title={pending > 0 ? `${pending} change${pending === 1 ? "" : "s"} waiting to sync` : label}
-      aria-live="polite"
-    >
-      {syncing ? <Loader2 className="size-3 animate-spin" /> : online ? <Cloud className="size-3" /> : <CloudOff className="size-3" />}
-      <span>{label}</span>
-      {pending > 0 && <span className="rounded-full bg-background/60 px-1 tabular-nums">{pending}</span>}
+    <span aria-hidden title={connectivityText(state)} className="pointer-events-none absolute -bottom-0.5 -right-0.5 grid size-3 place-items-center">
+      {busy && <span className="absolute inset-0 rounded-full bg-emerald-400/60 motion-safe:animate-ping" />}
+      <span
+        className={cn(
+          "relative size-2.5 rounded-full ring-2 ring-sidebar-accent",
+          state.online ? "bg-emerald-400" : "bg-amber-400",
+        )}
+      />
     </span>
   );
 }
