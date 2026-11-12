@@ -28,12 +28,14 @@ test("settings on a phone: the person's own account only", () => {
   assert.equal(linkOnPhone("/settings?tab=email"), false);
 });
 
-test("the phone menu is the full menu filtered: no Automation, Marketing or Governance group", () => {
+test("the phone menu is the full menu filtered: no Automation, Marketing, Insights or Admin group", () => {
   const { topLinks, groups } = buildNav(true, []);
   const phoneGroups = groups.map((g) => ({ key: g.key, links: g.links.filter((l) => linkOnPhone(l.href)) })).filter((g) => g.links.length > 0);
   const keys = phoneGroups.map((g) => g.key);
-  for (const gone of ["automation", "marketing", "governance", "platform", "stock"]) assert.ok(!keys.includes(gone), gone);
-  assert.deepEqual(topLinks.filter((l) => linkOnPhone(l.href)).map((l) => l.href), ["/", "/today"]);
+  // Sidebar redesign (2026-11-12): the same pages as before, in the new groups.
+  assert.deepEqual(keys, ["sales", "customers", "service"]);
+  for (const gone of ["automation", "marketing", "insights", "admin"]) assert.ok(!keys.includes(gone), gone);
+  assert.deepEqual(topLinks.filter((l) => linkOnPhone(l.href)).map((l) => l.href), ["/", "/today", "/inbox", "/cases", "/calendar"]);
   const nav = readFileSync("src/components/Nav.tsx", "utf8");
   assert.match(nav, /built\.groups\.map\(\(group\) => \(\{ \.\.\.group, links: group\.links\.filter\(\(link\) => linkOnPhone\(link\.href\)\) \}\)\)\.filter\(\(group\) => group\.links\.length > 0\)/);
   const shell = readFileSync("src/components/AppShell.tsx", "utf8");
