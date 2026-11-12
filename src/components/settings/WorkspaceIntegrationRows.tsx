@@ -1,8 +1,9 @@
+import type { ReactNode } from "react";
 import { SaveForm, SaveButton } from "@/components/SaveForm";
 import SecretReveal from "@/components/SecretReveal";
 import ClearSecret from "@/components/ClearSecret";
 import ChatGptConnect from "@/components/settings/ChatGptConnect";
-import { SettingsIntegrationRow as Row } from "@/components/settings-workspace";
+import type { IntegrationState } from "@/lib/integrationsCatalogue";
 import { saveSetting, regenerateSetting } from "@/app/actions/settings";
 import { connectTelegram, disconnectTelegram } from "@/app/actions/bot";
 import { getSetting } from "@/lib/settings";
@@ -46,7 +47,16 @@ const KEYS = [
  * page token, SMTP, IMAP, BulkSMS, Google reviews) are NOT here: the page's own
  * per-integration forms are the one place to edit them.
  */
-export default async function WorkspaceIntegrationRows({ xAccountId }: { xAccountId: string | null }) {
+/** One platform-owner row, for the page to group by purpose with the workspace's own integrations. */
+export type PlatformIntegrationRow = {
+  id: string;
+  title: string;
+  state: IntegrationState;
+  detail?: string | null;
+  body: ReactNode;
+};
+
+export default async function platformIntegrationRows({ xAccountId }: { xAccountId: string | null }): Promise<PlatformIntegrationRow[]> {
   const values = new Map(await Promise.all(KEYS.map(async (key) => [key, (await getSetting(key)) ?? ""] as const)));
   const setting = (key: (typeof KEYS)[number]) => values.get(key) ?? "";
   // A read that fails must not take the page down with it.
@@ -57,9 +67,14 @@ export default async function WorkspaceIntegrationRows({ xAccountId }: { xAccoun
   const aiInUse = pickAiProvider(setting("AI_PROVIDER"), chatGpt.state === "connected", Boolean(setting("ANTHROPIC_API_KEY")));
   const aiChosen = setting("AI_PROVIDER") === "claude" ? "claude" : "chatgpt";
 
-  return (
-    <>
-      <Row title="Webhooks (X, Meta, WhatsApp)" status={<span className="badge bg-muted text-muted-foreground">Platform</span>} action="View">
+  const on = (value: string): IntegrationState => (value ? "connected" : "not-set-up");
+  return [
+    {
+      id: "webhooks",
+      title: "Webhooks (X, Meta, WhatsApp)",
+      state: on(setting("META_VERIFY_TOKEN")),
+      body: (
+      <>
         <p className="text-xs text-muted-foreground mb-4">
           Where X, Meta (lead ads, Messenger and Instagram DMs) and WhatsApp deliver to. Subscribe Meta&apos;s
           webhook to the <b>leadgen</b> and <b>messages</b> fields, and WhatsApp&apos;s to <b>messages</b> — same
@@ -104,34 +119,31 @@ export default async function WorkspaceIntegrationRows({ xAccountId }: { xAccoun
             {setting("META_APP_SECRET") ? <ClearSecret settingKey="META_APP_SECRET" label="Meta app secret" /> : null}
           </SaveForm>
         </div>
-      </Row>
+      </>
+      ),
+    },
 
-      {/*
-        Telegram belongs HERE, with the other customer channels — and only here.
-        TENANT_CREDENTIAL_INTEGRATIONS deliberately has no Telegram entry: a token
-        stored as an override had no TELEGRAM_WEBHOOK_SECRET for
-        resolveTelegramTenant to find, so Telegram could never deliver.
+    /*
+      Telegram belongs HERE, with the other customer channels — and only here.
+      TENANT_CREDENTIAL_INTEGRATIONS deliberately has no Telegram entry: a token
+      stored as an override had no TELEGRAM_WEBHOOK_SECRET for
+      resolveTelegramTenant to find, so Telegram could never deliver.
 
-        `connectTelegram` is not a plain save. It stores the token, mints a
-        per-tenant webhook secret, calls Telegram's setWebhook, and records
-        whether that call succeeded — which is why the badge below can tell
-        "token stored" apart from "actually receiving".
-      */}
-      <Row
-        title="Telegram"
-        status={
-          !setting("TELEGRAM_BOT_TOKEN") ? (
-            <span className="badge bg-amber-500/15 text-amber-300">Not set up</span>
-          ) : setting("BOT_TG_ENABLED") === "true" ? (
-            <span className="badge bg-emerald-500/15 text-emerald-300">Connected</span>
-          ) : (
-            // The half-configured state, said out loud. A stored token with no
-            // registered webhook receives nothing, and silently looking connected
-            // is exactly how WhatsApp lost eighteen days.
-            <span className="badge bg-amber-500/15 text-amber-300">Token saved · webhook not registered</span>
-          )
-        }
-      >
+      `connectTelegram` is not a plain save. It stores the token, mints a
+      per-tenant webhook secret, calls Telegram's setWebhook, and records
+      whether that call succeeded — which is why the status can tell "token
+      stored" apart from "actually receiving".
+    */
+    {
+      id: "telegram",
+      title: "Telegram",
+      // The half-configured state, said out loud — and it rises to Needs attention. A stored
+      // token with no registered webhook receives nothing, and silently looking connected is
+      // exactly how WhatsApp lost eighteen days.
+      state: !setting("TELEGRAM_BOT_TOKEN") ? "not-set-up" : setting("BOT_TG_ENABLED") === "true" ? "connected" : "incomplete",
+      detail: setting("TELEGRAM_BOT_TOKEN") && setting("BOT_TG_ENABLED") !== "true" ? "Token saved, but Telegram didn't accept the webhook — nothing arrives" : null,
+      body: (
+      <>
         <p className="text-xs text-muted-foreground mb-4">
           Create a bot with <b>@BotFather</b> in Telegram, then paste the token it gives you. Connecting registers
           the webhook with Telegram for you — unlike WhatsApp and Meta, nothing needs configuring on their side.
@@ -158,18 +170,16 @@ export default async function WorkspaceIntegrationRows({ xAccountId }: { xAccoun
             </form>
           </div>
         )}
-      </Row>
-
-      <Row
-        title="Google Maps location autocomplete"
-        status={
-          setting("GOOGLE_MAPS_BROWSER_API_KEY") ? (
-            <span className="badge bg-emerald-500/15 text-emerald-300">Connected</span>
-          ) : (
-            <span className="badge bg-amber-500/15 text-amber-300">Text input fallback</span>
-          )
-        }
-      >
+      </>
+      ),
+    },
+    {
+      id: "google-maps",
+      title: "Google Maps address suggestions",
+      state: on(setting("GOOGLE_MAPS_BROWSER_API_KEY")),
+      detail: setting("GOOGLE_MAPS_BROWSER_API_KEY") ? null : "Without it, location fields are plain text boxes",
+      body: (
+      <>
         <p className="text-xs text-muted-foreground mb-4">
           Suggests verified South African addresses and places while booking test drives or scheduling meetings.
           Use a dedicated browser key with <b>Maps JavaScript API</b> and <b> Places API (New)</b> enabled,
@@ -191,18 +201,17 @@ export default async function WorkspaceIntegrationRows({ xAccountId }: { xAccoun
           </div>
           <SaveButton className="btn-primary">Save</SaveButton>
         </SaveForm>
-      </Row>
-
-      <Row
-        title="Which AI the CRM uses"
-        status={
-          aiInUse ? (
-            <span className="badge bg-emerald-500/15 text-emerald-300">{aiInUse === "chatgpt" ? "ChatGPT" : "Claude"}</span>
-          ) : (
-            <span className="badge bg-amber-500/15 text-amber-300">Not set up</span>
-          )
-        }
-      >
+      </>
+      ),
+    },
+    {
+      id: "ai-choice",
+      title: "Which AI the CRM uses",
+      // A status, not a value: which AI is in use goes on the detail line.
+      state: aiInUse ? "connected" : "not-set-up",
+      detail: aiInUse ? `Using ${aiInUse === "chatgpt" ? "ChatGPT" : "Claude"}${aiInUse !== aiChosen ? ` (${aiChosen === "chatgpt" ? "ChatGPT" : "Claude"} isn't set up)` : ""}` : null,
+      body: (
+      <>
         <p className="text-xs text-muted-foreground mb-4">
           The customer chatbot, invoice reading, the ✨ message check, voice-note replies, spam screening and 🔎 research
           run on this. ChatGPT (your subscription, no per-use cost) is the default; choose Claude once Anthropic credit is
@@ -226,18 +235,15 @@ export default async function WorkspaceIntegrationRows({ xAccountId }: { xAccoun
             {aiInUse === "chatgpt" ? "ChatGPT" : "Claude"} is being used.
           </p>
         )}
-      </Row>
-
-      <Row
-        title="AI Assist (Claude)"
-        status={
-          setting("ANTHROPIC_API_KEY") ? (
-            <span className="badge bg-emerald-500/15 text-emerald-300">Connected</span>
-          ) : (
-            <span className="badge bg-amber-500/15 text-amber-300">Not set up</span>
-          )
-        }
-      >
+      </>
+      ),
+    },
+    {
+      id: "claude",
+      title: "AI Assist (Claude)",
+      state: on(setting("ANTHROPIC_API_KEY")),
+      body: (
+      <>
         <p className="text-xs text-muted-foreground mb-4">
           Pay-per-use Claude, used when &quot;Which AI the CRM uses&quot; is set to Claude (or ChatGPT isn&apos;t connected).
           Suggestions only — the AI never changes data. Get a key and load credit at console.anthropic.com.
@@ -268,18 +274,16 @@ export default async function WorkspaceIntegrationRows({ xAccountId }: { xAccoun
             <SaveButton className="btn-secondary btn-sm">Save</SaveButton>
           </SaveForm>
         </div>
-      </Row>
-
-      <Row
-        title="ChatGPT subscription"
-        status={
-          chatGpt.state === "connected" ? (
-            <span className="badge bg-emerald-500/15 text-emerald-300">Connected</span>
-          ) : (
-            <span className="badge bg-amber-500/15 text-amber-300">Not connected</span>
-          )
-        }
-      >
+      </>
+      ),
+    },
+    {
+      id: "chatgpt",
+      title: "ChatGPT subscription",
+      state: chatGpt.state === "connected" ? "connected" : "not-set-up",
+      detail: chatGpt.state === "connected" ? `Model ${chatGpt.model}` : null,
+      body: (
+      <>
         <p className="text-xs text-muted-foreground mb-4">
           DAX, the customer chatbot and the other AI helpers run on your ChatGPT Plus or Pro plan instead of paying per
           token (unless &quot;Which AI the CRM uses&quot; is set to Claude). Sign in once with your ChatGPT account.
@@ -308,18 +312,16 @@ export default async function WorkspaceIntegrationRows({ xAccountId }: { xAccoun
             </p>
           )}
         </div>
-      </Row>
-
-      <Row
-        title="ElevenLabs (Voice)"
-        status={
-          setting("ELEVENLABS_API_KEY") ? (
-            <span className="badge bg-emerald-500/15 text-emerald-300">Connected</span>
-          ) : (
-            <span className="badge bg-amber-500/15 text-amber-300">Not set up</span>
-          )
-        }
-      >
+      </>
+      ),
+    },
+    {
+      id: "elevenlabs",
+      title: "ElevenLabs (Voice)",
+      state: on(setting("ELEVENLABS_API_KEY")),
+      detail: setting("ELEVENLABS_API_KEY") && setting("WHATSAPP_VOICE_REPLIES") === "true" ? "Replies to voice notes with a voice note" : null,
+      body: (
+      <>
         <p className="text-xs text-muted-foreground mb-4">
           Voice for the WhatsApp assistant: transcribes inbound voice notes, and (with the toggle on) replies to a
           customer&apos;s voice note with a synthesised voice note — mirroring the customer. Get a key and copy a
@@ -395,9 +397,15 @@ export default async function WorkspaceIntegrationRows({ xAccountId }: { xAccoun
             <SaveButton className="btn-secondary btn-sm">Save</SaveButton>
           </SaveForm>
         </div>
-      </Row>
-
-      <Row title="Website lead intake API" status={<span className="badge bg-emerald-500/15 text-emerald-300">Active</span>} action="View">
+      </>
+      ),
+    },
+    {
+      id: "intake",
+      title: "Website lead intake",
+      state: on(setting("INTAKE_API_KEY")),
+      body: (
+      <>
         <p className="text-xs text-muted-foreground mb-4">
           POST leads from the website or landing pages with the <code>X-Api-Key</code> header. Fields: name
           (required), email, phone, message, model, color, source.
@@ -413,7 +421,8 @@ export default async function WorkspaceIntegrationRows({ xAccountId }: { xAccoun
             </div>
           </div>
         </div>
-      </Row>
-    </>
-  );
+      </>
+      ),
+    },
+  ];
 }

@@ -6,7 +6,18 @@ import { linkFeeToXeroItem, setXeroPaymentsSource } from "@/app/actions/xero";
 import { XERO_FEE_ITEM_KEYS, XERO_PAYMENTS_SOURCE_KEY, XERO_TAX_CHOICES_KEY, parseXeroItemLink, parseXeroTaxChoices } from "@/lib/xeroInvoice";
 import { SaveForm, SaveButton } from "@/components/SaveForm";
 import XeroTaxRatePicker from "@/components/XeroTaxRatePicker";
-import WorkspaceIntegrationRows from "@/components/settings/WorkspaceIntegrationRows";
+import platformIntegrationRows from "@/components/settings/WorkspaceIntegrationRows";
+import IntegrationTestButton from "@/components/settings/IntegrationTestButton";
+import {
+  INTEGRATION_META,
+  STATE_LABEL,
+  STATE_TONE,
+  checkedAgo,
+  connectedTo,
+  groupIntegrationRows,
+  integrationAction,
+  workspaceIntegrationState,
+} from "@/lib/integrationsCatalogue";
 import {
   saveTenantCredentialOverride,
   clearTenantCredentialOverride,
@@ -141,41 +152,10 @@ export default async function IntegrationsPage({ searchParams }: { searchParams?
     }
   }
 
-  return (
-    <SettingsWorkspace
-      current="integrations"
-      title="Integrations"
-      description="Connect this workspace's channels and services. Each field shows where the value in use comes from."
-      groups={SETTINGS_NAV_GROUPS}
-    >
-      <section className="card p-5 text-sm text-muted-foreground">
-        {usesPlatformFallback ? (
-          <p>
-            Saving here gives this workspace its <b>own</b> credentials for that integration. They take over only
-            once <b>every required field</b> is set — until then the integration keeps using the values already in
-            settings (shown as <i>platform default</i>). Clear them to go back to those. Secret values cannot be
-            viewed again here, only whether they are set.
-          </p>
-        ) : (
-          <p>
-            Each integration below requires its own credentials — this tenant does <b>not</b>{" "}
-            use the platform&apos;s shared accounts. Integrations shown as{" "}
-            <span className="text-red-400 font-medium">Not configured</span> are unavailable
-            until you save credentials for them. Saved values cannot be viewed again here, only
-            whether credentials are currently set.
-          </p>
-        )}
-      </section>
-
-      {!tenantId ? (
-        <section className="card p-5 text-sm text-muted-foreground">
-          No active tenant is resolved for your account yet, so there&apos;s nothing to override here.
-          Once your account resolves to a single active tenant, its per-integration overrides will
-          appear on this page.
-        </section>
-      ) : (
-        <section className="card p-0 divide-y divide-border/50">
-          {TENANT_CREDENTIAL_INTEGRATIONS.map((integration) => {
+  // Each per-workspace integration as a row (settings-screens-improvements.md):
+  // its state in the ONE vocabulary (lib/integrationsCatalogue.ts), what it is
+  // connected to and when it was last checked, and its settings behind it.
+  const workspaceRows = !tenantId ? [] : TENANT_CREDENTIAL_INTEGRATIONS.map((integration) => {
             const status = integrationOverrideStatus(integration, hasOverride);
             // The workspace's own values are in use only when every required one is
             // set ("active"), the same all-or-nothing rule resolveIntegrationBundle
@@ -187,38 +167,28 @@ export default async function IntegrationsPage({ searchParams }: { searchParams?
             const connection = connections.get(integration.id) ?? null;
             const needsReauth = connection?.status === "reauth_required";
             const guided = hasIntegrationFlow(integration.id);
-            return (
-              <SettingsIntegrationRow
-                key={integration.id}
-                title={integration.label}
-                action={needsReauth ? "Reconnect" : guided ? "Set up" : "Configure"}
-                status={
-                  // Verification beats presence: an integration whose token has
-                  // expired is "active" by the old field-presence rule but is in
-                  // fact broken, and saying "Active" there is exactly the silent
-                  // failure this feature exists to end.
-                  needsReauth ? (
-                    <span className="badge bg-red-500/15 text-red-400">Reconnect needed</span>
-                  ) : connection?.lastVerifiedAt ? (
-                    <span className="badge bg-emerald-500/15 text-emerald-300">Connected</span>
-                  ) : ownInUse ? (
-                    <span className="badge bg-amber-500/15 text-amber-300">Own credentials · not verified</span>
-                  ) : status === "incomplete" ? (
-                    <span className="badge bg-amber-500/15 text-amber-300">
-                      {defaultInUse ? "Using platform default · own values incomplete" : "Incomplete"}
-                    </span>
-                  ) : defaultInUse ? (
-                    <span className="badge bg-muted text-muted-foreground">Platform default</span>
-                  ) : usesPlatformFallback ? (
-                    // Said only when the default is actually there: "Platform default"
-                    // over an empty setting looked configured and was not.
-                    <span className="badge bg-amber-500/15 text-amber-300">Not set up</span>
-                  ) : (
-                    <span className="badge bg-red-500/15 text-red-400">Not configured</span>
-                  )
-                }
-              >
+            // Verification beats presence: an integration whose token has expired is
+            // "active" by the field-presence rule but is in fact broken — Reconnect needed.
+            // "Using shared setup" is said only when the shared values are actually there.
+            const state = workspaceIntegrationState({
+              needsReauth,
+              verified: Boolean(connection?.lastVerifiedAt),
+              ownStatus: status,
+              sharedInUse: defaultInUse,
+            });
+            const detail =
+              [
+                connectedTo(integration.id, effectiveShown),
+                state === "shared" ? "Using the shared setup" : null,
+                state === "incomplete" ? "Some of this workspace's own values are missing" : null,
+                connection?.lastVerifiedAt ? `last checked ${checkedAgo(connection.lastVerifiedAt)}` : null,
+              ].filter(Boolean).join(" · ") || null;
+            return { id: integration.id, title: integration.label, state, detail, body: (
+              <>
                 <p className="text-xs text-muted-foreground mb-4">{integration.description}</p>
+
+                {/* "So nobody finds out from a customer that email stopped" — a re-test of what is saved. */}
+                {guided && state !== "not-set-up" && state !== "incomplete" && <IntegrationTestButton integrationId={integration.id} />}
 
                 {integration.id === "x" && (
                   <div className="mb-5 rounded-lg border border-border bg-background/40 p-4">
@@ -364,7 +334,7 @@ export default async function IntegrationsPage({ searchParams }: { searchParams?
                               {source === "own" ? (
                                 <span className="text-xs font-normal text-emerald-400">(this workspace&apos;s own)</span>
                               ) : source === "default" ? (
-                                <span className="text-xs font-normal text-muted-foreground">(platform default, from settings)</span>
+                                <span className="text-xs font-normal text-muted-foreground">(shared setup)</span>
                               ) : (
                                 <span className="text-xs font-normal text-muted-foreground">(not set)</span>
                               )}
@@ -403,7 +373,7 @@ export default async function IntegrationsPage({ searchParams }: { searchParams?
                           <form action={clearTenantCredentialOverride.bind(null, field.key)}>
                             <button
                               className="btn-secondary"
-                              title={`Clear this workspace's own ${field.label} — it goes back to the platform default, if there is one`}
+                              title={`Clear this workspace's own ${field.label} — it goes back to the shared setup, if there is one`}
                             >
                               Clear
                             </button>
@@ -413,19 +383,73 @@ export default async function IntegrationsPage({ searchParams }: { searchParams?
                     );
                   })}
                 </div>
-              </SettingsIntegrationRow>
-            );
-          })}
+              </>
+            ) };
+          });
+
+  // The platform owner's own rows (webhooks, Telegram, AI, voice, intake…), from
+  // the old Settings → Integrations tab — owner-only, as that tab was — filed
+  // under the same purposes as the workspace's own.
+  const platformRows = isPlatformOwner ? await platformIntegrationRows({ xAccountId: effectiveShown.X_ACCOUNT_ID ?? null }) : [];
+  const grouped = groupIntegrationRows([...workspaceRows, ...platformRows]);
+
+  return (
+    <SettingsWorkspace
+      current="integrations"
+      title="Integrations"
+      description="Connect the channels and services this workspace uses."
+      groups={SETTINGS_NAV_GROUPS}
+    >
+      {/* Plain intro; the detail is on demand. */}
+      <details className="card p-4 text-sm text-muted-foreground">
+        <summary className="cursor-pointer select-none text-foreground">How this works</summary>
+        {usesPlatformFallback ? (
+          <p className="mt-2">
+            Saving here gives this workspace its <b>own</b> settings for that integration. They take over only once
+            <b> every required field</b> is set — until then it keeps using the <b>shared setup</b>. Clear them to go back to
+            it. Passwords and keys can&apos;t be viewed again once saved, only whether they are set.
+          </p>
+        ) : (
+          <p className="mt-2">
+            This workspace needs its own settings for each integration — it doesn&apos;t use a shared setup. An integration
+            that is <b>Not set up</b> can&apos;t be used until you connect it. Passwords and keys can&apos;t be viewed again once
+            saved, only whether they are set.
+          </p>
+        )}
+      </details>
+
+      {!tenantId && (
+        <section className="card p-5 text-sm text-muted-foreground">
+          Your account isn&apos;t linked to a workspace yet, so there&apos;s nothing to connect here.
         </section>
       )}
 
-      {/* The platform owner's own rows (webhooks, Telegram, AI, voice, intake…),
-          from the old Settings → Integrations tab — owner-only, as that tab was. */}
-      {isPlatformOwner && (
-        <section className="card p-0 divide-y divide-border/50">
-          <WorkspaceIntegrationRows xAccountId={effectiveShown.X_ACCOUNT_ID ?? null} />
+      {grouped.map(({ group, rows }) => (
+        <section key={group.key} aria-labelledby={`integrations-${group.key}`} className="space-y-2">
+          <div className="px-1">
+            <h2 id={`integrations-${group.key}`} className={`text-sm font-semibold ${group.key === "attention" ? "text-amber-200" : "text-foreground"}`}>{group.label}</h2>
+            <p className="text-xs text-muted-foreground">{group.description}</p>
+          </div>
+          <div className={`card p-0 ${group.key === "attention" ? "border-amber-500/30" : ""}`}>
+            {rows.map((row) => {
+              const meta = INTEGRATION_META[row.id];
+              return (
+                <SettingsIntegrationRow
+                  key={row.id}
+                  title={row.title}
+                  mark={meta?.mark}
+                  purpose={meta?.purpose}
+                  detail={row.detail}
+                  action={integrationAction(row.state)}
+                  status={<span className={`badge ${STATE_TONE[row.state]}`}>{STATE_LABEL[row.state]}</span>}
+                >
+                  {row.body}
+                </SettingsIntegrationRow>
+              );
+            })}
+          </div>
         </section>
-      )}
+      ))}
     </SettingsWorkspace>
   );
 }
