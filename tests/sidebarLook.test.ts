@@ -24,9 +24,11 @@ test("depth is tokens, applied by utilities — no recipe hard-coded in a compon
 });
 
 test("where you are is a raised pill; the pinned icon takes the accent; links in a group are text on a guide line", () => {
-  assert.match(nav, /const RAISED = "depth-raised font-semibold text-sidebar-accent-foreground";/);
+  // The pill: depth-raised behind the current link (since PR 3 it glides between links).
+  assert.match(nav, /className="depth-raised absolute inset-0 -z-10 rounded-\[10px\]"/);
+  assert.match(nav, /const RAISED = "font-semibold text-sidebar-accent-foreground";/);
   assert.match(nav, /<link\.icon className=\{cn\("size-\[18px\] shrink-0", active && "text-primary"\)\}/);
-  assert.match(nav, /className="ml-5 flex flex-col gap-0\.5 border-l border-white\/\[0\.12\] pl-\[9px\]"/);
+  assert.match(nav, /className="ml-5 flex flex-col gap-0\.5 border-l border-white\/\[0\.12\] pl-\[9px\]/);
   // ChildLink has no icon.
   const child = nav.slice(nav.indexOf("function ChildLink("));
   assert.doesNotMatch(child, /link\.icon/);
