@@ -1016,7 +1016,7 @@ export default function CalendarWorkspace({
       </section>
 
       <section className="lg:hidden">
-        <div className="sticky top-14 z-20 -mx-1 overflow-x-auto border-y border-border bg-background/95 px-1 py-3 backdrop-blur">
+        <div className="sticky top-14 z-20 -mx-1 overflow-x-auto border-y border-border bg-background/95 px-1 py-3 backdrop-blur lg:top-[66px]">
           <div className="flex min-w-max gap-2">
             {monthDays.map((day) => {
               const count = eventsByDate.get(day.key)?.length ?? 0;

@@ -37,7 +37,8 @@ test("the inbox badge counts the inbox's own channel list, X included", () => {
 });
 
 test("a collapsed sidebar group shows the total of its badges", () => {
-  assert.match(src("src/components/Nav.tsx"), /const hidden = isCollapsed \? group\.links\.reduce/);
+  assert.match(src("src/components/Nav.tsx"), /const hidden = expanded \? 0 : groupTotal\(group\);/);
+  assert.match(src("src/components/Nav.tsx"), /const groupTotal = \(group: NavGroup\) => group\.links\.reduce/);
 });
 
 test("job card Delete is a text link under More, not a red button beside Print", () => {

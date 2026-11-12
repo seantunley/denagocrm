@@ -70,7 +70,7 @@ export default function QuickActions({
   return (
     <DropdownMenu open={open} onOpenChange={setOpen}>
       <DropdownMenuTrigger asChild>
-        <button className="flex w-full items-center gap-2 rounded-md bg-primary px-2.5 py-1.5 text-[13px] font-medium text-primary-foreground shadow-sm transition-colors hover:bg-primary/90">
+        <button className="flex min-h-11 w-full items-center gap-2.5 rounded-[10px] bg-primary depth-sheen px-3 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90 pointer-fine:min-h-9">
           <Plus className="size-4" />
           <span className="flex-1 text-left">Quick actions</span>
           <kbd className="rounded border border-white/20 bg-white/10 px-1.5 py-0.5 text-[10px] font-medium">N</kbd>
