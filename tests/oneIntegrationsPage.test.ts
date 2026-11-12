@@ -62,12 +62,13 @@ test("the platform owner's rows are owner-only and never edit a per-workspace cr
 
 test("each field's source follows the senders' all-or-nothing bundle rule", () => {
   // Own values count only once every required field is set (status "active").
-  assert.match(page, /const ownInUse = status === "active";/);
+  assert.match(page, /const ownInUse = ownStatus === "active";/);
   assert.match(page, /const ownCounts = field\.independent \? isSet && effectiveSet\[field\.key\] : ownInUse && isSet;/);
   assert.match(page, /const source = ownCounts \? "own" : effectiveSet\[field\.key\] \? "default" : "unset";/);
   assert.match(page, /const savedNotInUse = isSet && !ownCounts;/);
   // "Using shared setup" (the old "Platform default") only when the shared values are really there.
-  assert.match(page, /sharedInUse: defaultInUse,/);
+  assert.match(page, /const \{ ownStatus, sharedInUse \} = workspaceValueUse\(/);
+  assert.match(src("src/lib/integrationsCatalogue.ts"), /input\.requiredKeys\.length > 0 && input\.requiredKeys\.every/, "an empty required list is not 'all shared values present'");
   assert.match(src("src/lib/integrationsCatalogue.ts"), /if \(input\.sharedInUse\) return "shared";\s*return "not-set-up";/);
 });
 

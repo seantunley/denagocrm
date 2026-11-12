@@ -17,6 +17,7 @@ import {
   groupIntegrationRows,
   integrationAction,
   workspaceIntegrationState,
+  workspaceValueUse,
 } from "@/lib/integrationsCatalogue";
 import {
   saveTenantCredentialOverride,
@@ -156,31 +157,39 @@ export default async function IntegrationsPage({ searchParams }: { searchParams?
   // its state in the ONE vocabulary (lib/integrationsCatalogue.ts), what it is
   // connected to and when it was last checked, and its settings behind it.
   const workspaceRows = !tenantId ? [] : TENANT_CREDENTIAL_INTEGRATIONS.map((integration) => {
-            const status = integrationOverrideStatus(integration, hasOverride);
             // The workspace's own values are in use only when every required one is
             // set ("active"), the same all-or-nothing rule resolveIntegrationBundle
-            // applies for the senders.
-            const ownInUse = status === "active";
-            const defaultInUse =
-              !ownInUse &&
-              integration.fields.filter((field) => field.required !== false && !field.independent).every((field) => effectiveSet[field.key]);
+            // applies for the senders. Xero is judged by its connected organisation.
+            const { ownStatus, sharedInUse } = workspaceValueUse({
+              integrationId: integration.id,
+              overrideStatus: integrationOverrideStatus(integration, hasOverride),
+              requiredKeys: integration.fields.filter((field) => field.required !== false && !field.independent).map((field) => field.key),
+              hasOverride,
+              effectiveSet,
+            });
+            const ownInUse = ownStatus === "active";
             const connection = connections.get(integration.id) ?? null;
             const needsReauth = connection?.status === "reauth_required";
             const guided = hasIntegrationFlow(integration.id);
             // Verification beats presence: an integration whose token has expired is
-            // "active" by the field-presence rule but is in fact broken — Reconnect needed.
-            // "Using shared setup" is said only when the shared values are actually there.
+            // "active" by the field-presence rule but is in fact broken — Reconnect needed;
+            // one typed in but never proven is "Saved, not checked", never Connected.
             const state = workspaceIntegrationState({
               needsReauth,
               verified: Boolean(connection?.lastVerifiedAt),
-              ownStatus: status,
-              sharedInUse: defaultInUse,
+              ownStatus,
+              sharedInUse,
             });
             const detail =
               [
                 // What it's connected to — only while it IS in use; a stray value on a "Not set up" row misleads.
                 state === "connected" || state === "shared" ? connectedTo(integration.id, effectiveShown) : null,
                 state === "shared" ? "Using the shared setup" : null,
+                state === "unverified"
+                  ? guided
+                    ? "Saved but never tested — open it and press Test connection"
+                    : "Saved but not yet seen working — it's confirmed the first time it's used"
+                  : null,
                 state === "incomplete" ? "Some of this workspace's own values are missing" : null,
                 connection?.lastVerifiedAt ? `last checked ${checkedAgo(connection.lastVerifiedAt)}` : null,
               ].filter(Boolean).join(" · ") || null;
@@ -417,6 +426,10 @@ export default async function IntegrationsPage({ searchParams }: { searchParams?
             saved, only whether they are set.
           </p>
         )}
+        <p className="mt-2">
+          <b>Connected</b> means it has been seen working — a test passed, a message went out, or you signed in to it.
+          Settings you&apos;ve saved that haven&apos;t been proven yet show as <b>Saved, not checked</b>.
+        </p>
       </details>
 
       {!tenantId && (

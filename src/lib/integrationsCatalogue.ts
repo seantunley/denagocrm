@@ -42,11 +42,15 @@ export const INTEGRATION_META: Record<string, IntegrationMeta> = {
   webhooks: { group: "other", purpose: "The addresses X, Meta and WhatsApp deliver messages to.", mark: { text: "⇄", tone: "bg-slate-500/20 text-slate-200" } },
 };
 
-/** The ONE vocabulary: three states, plus two that need attention and rise to the top. */
-export type IntegrationState = "connected" | "shared" | "not-set-up" | "reconnect" | "incomplete";
+/**
+ * The ONE vocabulary: three states, "saved but never checked", and two that need
+ * attention and rise to the top.
+ */
+export type IntegrationState = "connected" | "unverified" | "shared" | "not-set-up" | "reconnect" | "incomplete";
 
 export const STATE_LABEL: Record<IntegrationState, string> = {
   connected: "Connected",
+  unverified: "Saved, not checked",
   shared: "Using shared setup",
   "not-set-up": "Not set up",
   reconnect: "Reconnect needed",
@@ -55,6 +59,7 @@ export const STATE_LABEL: Record<IntegrationState, string> = {
 
 export const STATE_TONE: Record<IntegrationState, string> = {
   connected: "bg-emerald-500/15 text-emerald-300",
+  unverified: "bg-amber-500/15 text-amber-300",
   shared: "bg-muted text-muted-foreground",
   "not-set-up": "bg-muted text-muted-foreground",
   reconnect: "bg-red-500/15 text-red-300",
@@ -63,17 +68,40 @@ export const STATE_TONE: Record<IntegrationState, string> = {
 
 export const needsAttention = (state: IntegrationState) => state === "reconnect" || state === "incomplete";
 
-/** One button that matches the state: Connect when there's nothing, Fix when it's broken, Manage otherwise. */
-export function integrationAction(state: IntegrationState): "Connect" | "Manage" | "Fix" {
+/** One button that matches the state: Connect when there's nothing, Check when it was never tested, Fix when it's broken, Manage otherwise. */
+export function integrationAction(state: IntegrationState): "Connect" | "Check" | "Manage" | "Fix" {
   if (state === "not-set-up") return "Connect";
+  if (state === "unverified") return "Check";
   if (needsAttention(state)) return "Fix";
   return "Manage";
 }
 
 /**
- * A per-workspace integration's state, from the same facts the page always used:
- * whether a sender marked it broken, whether it was last seen working, whether
- * this workspace's own values are complete, and whether a shared default is in use.
+ * Which values a per-workspace integration runs on: its own, half its own, or the shared setup.
+ *
+ * Xero is an OAuth connection, not typed values — every field is optional and
+ * nothing is shared (an organisation belongs to one workspace). Its own setup IS
+ * the connected organisation, and there is never a shared one: an empty
+ * required-field list must not read as "every shared value is there" (review of #1083).
+ */
+export function workspaceValueUse(input: {
+  integrationId: string;
+  overrideStatus: "active" | "incomplete" | "default";
+  requiredKeys: readonly string[];
+  hasOverride: Record<string, boolean>;
+  effectiveSet: Record<string, boolean>;
+}): { ownStatus: "active" | "incomplete" | "default"; sharedInUse: boolean } {
+  if (input.integrationId === "xero") return { ownStatus: input.hasOverride.XERO_TENANT_ID ? "active" : "default", sharedInUse: false };
+  const ownStatus = input.overrideStatus;
+  // The shared values are in use only when this workspace's own set isn't, and every required one is there.
+  const sharedInUse = ownStatus !== "active" && input.requiredKeys.length > 0 && input.requiredKeys.every((key) => input.effectiveSet[key]);
+  return { ownStatus, sharedInUse };
+}
+
+/**
+ * A per-workspace integration's state. "Connected" needs BOTH: values in use, and
+ * the last check (a test, a successful send, the Xero sign-in) passed. Values typed
+ * in but never proven are "Saved, not checked" — not Connected (review of #1083).
  */
 export function workspaceIntegrationState(input: {
   needsReauth: boolean;
@@ -82,7 +110,9 @@ export function workspaceIntegrationState(input: {
   sharedInUse: boolean;
 }): IntegrationState {
   if (input.needsReauth) return "reconnect";
-  if (input.verified || input.ownStatus === "active") return "connected";
+  const inUse = input.ownStatus === "active" || input.sharedInUse;
+  if (input.verified && inUse) return "connected";
+  if (input.ownStatus === "active") return "unverified";
   if (input.ownStatus === "incomplete") return "incomplete";
   if (input.sharedInUse) return "shared";
   return "not-set-up";
