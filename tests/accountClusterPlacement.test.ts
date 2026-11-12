@@ -139,7 +139,8 @@ test("an avatar-only trigger still says who you are", () => {
   // The sidebar showed the name next to the avatar. Behind an avatar alone it
   // has to be in the menu, or you cannot tell which account you are signed into.
   const menu = src("src/components/AccountMenu.tsx");
-  assert.match(menu, /aria-label=\{`Account — \$\{user\.name\}`\}/);
+  // Since 2026-11-12 the label also carries the connection state (the dot on the avatar).
+  assert.match(menu, /aria-label=\{`Account — \$\{user\.name\}\. \$\{status\}`\}/);
   const compactHeader = menu.slice(menu.indexOf("{compact && ("), menu.indexOf("v{APP_VERSION}"));
   assert.match(compactHeader, /\{user\.name\}/);
   assert.match(compactHeader, /\{user\.role\}/);
