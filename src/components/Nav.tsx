@@ -28,8 +28,13 @@ const BADGE_MEANING: Record<string, string> = {
 };
 
 const ROW = "min-h-11 pointer-fine:min-h-9 rounded-[10px]";
-const HOVER = "hover:bg-sidebar-accent hover:text-sidebar-accent-foreground";
+const HOVER = "hover:bg-sidebar-accent/70 hover:text-sidebar-accent-foreground";
 const RAIL_BUTTON = "relative grid size-11 shrink-0 place-items-center rounded-[10px] transition-colors";
+/** Where you are: raised off the sidebar (globals.css depth-*). */
+const RAISED = "bg-sidebar-accent depth-raised";
+/** A standing button that lifts a pixel under the pointer — never when motion is reduced. */
+const LIFT = "bg-card depth-raised transition-transform hover:-translate-y-px active:translate-y-0 motion-reduce:transition-none motion-reduce:hover:translate-y-0";
+const RAIL_BADGE = "absolute right-0 top-0.5 flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-primary depth-sheen px-1 text-[11px] font-bold tabular-nums text-zinc-950";
 
 const countText = (n: number) => (n > 99 ? "99+" : String(n));
 const badgeLabel = (href: string, n: number) => `${n} ${BADGE_MEANING[href] ?? "waiting"}`;
@@ -39,7 +44,7 @@ function Count({ n, label, className }: { n: number; label: string; className?: 
     <span
       aria-label={label}
       title={label}
-      className={cn("inline-flex h-[22px] min-w-[22px] items-center justify-center rounded-full bg-primary px-1.5 text-xs font-bold tabular-nums text-zinc-950", className)}
+      className={cn("inline-flex h-[22px] min-w-[22px] items-center justify-center rounded-full bg-primary depth-sheen px-1.5 text-xs font-bold tabular-nums text-zinc-950", className)}
     >
       {countText(n)}
     </span>
@@ -109,15 +114,15 @@ export default function Nav({
                   href={link.href}
                   aria-label={label}
                   aria-current={isActive(link.href) ? "page" : undefined}
-                  className={cn(RAIL_BUTTON, isActive(link.href) ? "bg-sidebar-accent text-primary" : cn("text-sidebar-foreground", HOVER))}
+                  className={cn(RAIL_BUTTON, isActive(link.href) ? cn(RAISED, "text-primary") : cn("text-sidebar-foreground", HOVER))}
                 >
                   <link.icon className="size-5" aria-hidden />
-                  {n > 0 && <span aria-hidden className="absolute right-0 top-0.5 flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-primary px-1 text-[11px] font-bold tabular-nums text-zinc-950">{countText(n)}</span>}
+                  {n > 0 && <span aria-hidden className={RAIL_BADGE}>{countText(n)}</span>}
                 </Link>
               </RailTip>
             );
           })}
-          <div aria-hidden className="my-2 h-px w-8 shrink-0 bg-sidebar-border" />
+          <div aria-hidden className="depth-groove my-2 w-8 shrink-0" />
           {groups.map((group) => (
             <RailGroup key={group.key} group={group} active={group.key === activeGroup} isActive={isActive} badges={badges} total={groupTotal(group)} />
           ))}
@@ -126,7 +131,7 @@ export default function Nav({
           <footer className="flex w-full flex-col items-center gap-1 border-t border-sidebar-border pt-3">
             {footerLinks.map((link) => (
               <RailTip key={link.href} label={link.label}>
-                <Link href={link.href} aria-label={link.label} className={cn(RAIL_BUTTON, "border border-sidebar-border text-sidebar-foreground", HOVER)}>
+                <Link href={link.href} aria-label={link.label} className={cn(RAIL_BUTTON, LIFT, "text-sidebar-foreground")}>
                   <link.icon className="size-5 text-primary" aria-hidden />
                 </Link>
               </RailTip>
@@ -163,7 +168,7 @@ export default function Nav({
               className={cn(
                 ROW,
                 "flex items-center gap-3 px-3 text-sm transition-colors",
-                active ? "bg-sidebar-accent font-semibold text-sidebar-accent-foreground" : cn("font-medium text-sidebar-foreground", HOVER),
+                active ? cn(RAISED, "font-semibold text-sidebar-accent-foreground") : cn("font-medium text-sidebar-foreground", HOVER),
               )}
             >
               <link.icon className={cn("size-[18px] shrink-0", active ? "text-primary" : "text-sidebar-foreground")} aria-hidden />
@@ -173,7 +178,7 @@ export default function Nav({
           );
         })}
 
-        {groups.length > 0 && <div aria-hidden className="mx-1 my-2.5 h-px shrink-0 bg-sidebar-border" />}
+        {groups.length > 0 && <div aria-hidden className="depth-groove mx-1 my-2.5 shrink-0" />}
 
         {groups.map((group) => {
           const expanded = open === group.key;
@@ -187,7 +192,7 @@ export default function Nav({
                 aria-expanded={expanded}
                 aria-controls={panelId}
                 onClick={() => setOpen(expanded ? null : group.key)}
-                className={cn(ROW, "flex w-full items-center gap-3 px-3 text-left text-sm font-medium text-sidebar-foreground transition-colors", HOVER)}
+                className={cn(ROW, "flex w-full items-center gap-3 px-3 text-left text-sm transition-colors", expanded ? "font-semibold text-sidebar-accent-foreground" : "font-medium text-sidebar-foreground", HOVER)}
               >
                 <group.icon className={cn("size-[18px] shrink-0", group.key === activeGroup && "text-primary")} aria-hidden />
                 <span className="min-w-0 flex-1 truncate">{group.label}</span>
@@ -213,7 +218,7 @@ export default function Nav({
               key={link.href}
               href={link.href}
               aria-current={isActive(link.href) ? "page" : undefined}
-              className={cn(ROW, "flex items-center gap-3 border border-sidebar-border px-3 text-sm font-medium text-sidebar-foreground transition-colors", HOVER)}
+              className={cn(ROW, LIFT, "flex items-center gap-3 px-3 text-sm font-medium text-sidebar-foreground")}
             >
               <link.icon className="size-[18px] shrink-0 text-primary" aria-hidden />
               <span>{link.label}</span>
@@ -247,12 +252,12 @@ function ChildLink({ link, active, badge = 0 }: { link: NavLink; active: boolean
       className={cn(
         ROW,
         "flex items-center gap-2.5 px-3 text-sm transition-colors",
-        active ? "bg-sidebar-accent font-semibold text-sidebar-accent-foreground" : cn("text-sidebar-foreground", HOVER),
+        active ? cn(RAISED, "font-semibold text-sidebar-accent-foreground") : cn("text-sidebar-foreground", HOVER),
       )}
     >
       <span className="min-w-0 flex-1 truncate">{link.label}</span>
       {badge > 0 && <Count n={badge} label={badgeLabel(link.href, badge)} />}
-      {active && badge === 0 && <span aria-hidden className="size-2 shrink-0 rounded-full bg-primary" />}
+      {active && badge === 0 && <span aria-hidden className="size-2 shrink-0 rounded-full bg-primary shadow-[0_0_0_3px_oklch(0_0_0/25%)]" />}
     </Link>
   );
 }
@@ -313,10 +318,10 @@ function RailGroup({
           aria-label={total > 0 ? `${group.label}, ${total} waiting` : group.label}
           onMouseEnter={show}
           onMouseLeave={hide}
-          className={cn(RAIL_BUTTON, active || open ? "bg-sidebar-accent text-primary" : cn("text-sidebar-foreground", HOVER))}
+          className={cn(RAIL_BUTTON, active || open ? cn(RAISED, "text-primary") : cn("text-sidebar-foreground", HOVER))}
         >
           <group.icon className="size-5" aria-hidden />
-          {total > 0 && <span aria-hidden className="absolute right-0 top-0.5 flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-primary px-1 text-[11px] font-bold tabular-nums text-zinc-950">{countText(total)}</span>}
+          {total > 0 && <span aria-hidden className={RAIL_BADGE}>{countText(total)}</span>}
         </button>
       </PopoverTrigger>
       <PopoverContent
@@ -325,17 +330,17 @@ function RailGroup({
         sideOffset={14}
         onMouseEnter={hold}
         onMouseLeave={hide}
-        className="w-60 rounded-[14px] border-sidebar-border bg-card p-2 shadow-[0_16px_40px_rgba(0,0,0,.45)]"
+        className="depth-flyout w-60 rounded-[14px] border-0 bg-[oklch(0.235_0.005_264)] p-2"
       >
         <nav aria-label={group.label} className="flex flex-col gap-0.5">
           <p className="px-3 pb-1.5 pt-2 text-xs font-semibold uppercase tracking-[0.04em] text-muted-foreground">{group.label}</p>
           {group.links.map((link) => (
             <Link key={link.href} href={link.href} onClick={() => setOpen(false)} aria-current={isActive(link.href) ? "page" : undefined}
-              className={cn(ROW, "flex items-center gap-2.5 px-3 text-sm transition-colors", isActive(link.href) ? "bg-sidebar-accent font-semibold text-foreground" : cn("text-sidebar-foreground", HOVER))}
+              className={cn(ROW, "flex items-center gap-2.5 px-3 text-sm transition-colors", isActive(link.href) ? "bg-[oklch(0.3_0.006_264)] depth-raised font-semibold text-foreground" : cn("text-sidebar-foreground", HOVER))}
             >
               <span className="min-w-0 flex-1 truncate">{link.label}</span>
               {(badges[link.href] ?? 0) > 0 && <Count n={badges[link.href]} label={badgeLabel(link.href, badges[link.href])} />}
-              {isActive(link.href) && !(badges[link.href] > 0) && <span aria-hidden className="size-2 shrink-0 rounded-full bg-primary" />}
+              {isActive(link.href) && !(badges[link.href] > 0) && <span aria-hidden className="size-2 shrink-0 rounded-full bg-primary shadow-[0_0_0_3px_oklch(0_0_0/25%)]" />}
             </Link>
           ))}
         </nav>

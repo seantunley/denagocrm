@@ -116,7 +116,7 @@ function SidebarInner({ user, inboxWaiting = 0, casesWaiting = 0, activitiesOver
   const isOwner = ownsWorkspace(user);
   const name = brand?.displayName ?? "Denago Cape Town";
   const tile = (
-    <span aria-hidden className="grid size-9 shrink-0 place-items-center rounded-[10px] bg-primary text-base font-bold text-zinc-950">
+    <span aria-hidden className="grid size-9 shrink-0 place-items-center rounded-[10px] bg-primary depth-sheen text-base font-bold text-zinc-950 shadow-[inset_0_1px_0_oklch(1_0_0/38%),0_2px_6px_oklch(0_0_0/50%)]">
       {name.trim().charAt(0).toUpperCase() || "D"}
     </span>
   );
@@ -144,7 +144,7 @@ function SidebarInner({ user, inboxWaiting = 0, casesWaiting = 0, activitiesOver
           onClick={openCommandMenu}
           aria-label="Search or jump to"
           title="Search or jump to (⌘K)"
-          className="grid size-11 shrink-0 place-items-center rounded-[10px] border border-sidebar-border bg-card text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
+          className="depth-recessed grid size-11 shrink-0 place-items-center rounded-[10px] text-muted-foreground transition-colors hover:text-sidebar-accent-foreground"
         >
           <Search className="size-[18px]" />
         </button>
@@ -168,11 +168,11 @@ function SidebarInner({ user, inboxWaiting = 0, casesWaiting = 0, activitiesOver
       <button
         type="button"
         onClick={openCommandMenu}
-        className="flex min-h-11 w-full items-center gap-2.5 rounded-[10px] border border-sidebar-border bg-card px-3 text-left text-sm text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground pointer-fine:min-h-9"
+        className="depth-recessed flex min-h-11 w-full items-center gap-2.5 rounded-[10px] px-3 text-left text-sm text-muted-foreground transition-colors hover:text-sidebar-accent-foreground pointer-fine:min-h-9"
       >
         <Search className="size-4 shrink-0" />
         <span className="flex-1">Search or jump to…</span>
-        <kbd className="rounded-md border border-sidebar-border px-1.5 py-0.5 text-[11px] font-semibold text-muted-foreground">⌘K</kbd>
+        <kbd className="depth-key rounded-md px-1.5 py-0.5 text-[11px] font-semibold text-muted-foreground">⌘K</kbd>
       </button>
       {/* On the phone, Capture on the bottom bar is the way to start something. */}
       {!phone && <QuickActions isAdmin={isOwner} permissions={user.permissions} enabledModules={enabledModules} />}
@@ -295,7 +295,14 @@ export default function AppShell({
       {/* Desktop top bar. Sticky rather than static: these are the controls you
           reach for from anywhere in a long page, and the sidebar footer they came
           from was always on screen. */}
-      <header className={`fixed right-0 top-0 z-30 hidden h-14 items-center gap-4 border-b border-sidebar-border bg-background/80 px-5 backdrop-blur-xl lg:flex ${offset}`}>
+      {/* SUBTLE DEPTH (sidebar redesign, 2026-11-12): on a desktop the page sits on a panel raised off the
+          sidebar — 10px down, its top-left corner rounded, a highlight on its edge and a shadow towards the
+          sidebar. The sidebar's colour fills the strip above it (and, behind, the corner); the top bar rides
+          the panel. */}
+      <div aria-hidden className={`pointer-events-none fixed right-0 top-0 -z-30 hidden h-8 bg-sidebar lg:block ${offset}`} />
+      <div aria-hidden className={`pointer-events-none fixed bottom-0 right-0 top-2.5 -z-20 hidden rounded-tl-[18px] bg-background depth-panel lg:block ${offset}`} />
+      <div aria-hidden className={`pointer-events-none fixed right-0 top-0 z-30 hidden h-2.5 bg-sidebar lg:block ${offset}`} />
+      <header className={`fixed right-0 top-2.5 z-30 hidden h-14 items-center gap-4 rounded-tl-[18px] border-b border-sidebar-border bg-background/80 px-5 backdrop-blur-xl lg:flex ${offset}`}>
         <div className="min-w-0 flex-1">
           <ClockWeather cities={weatherCities} />
         </div>
@@ -322,7 +329,7 @@ export default function AppShell({
       />
 
       {/* Desktop sidebar */}
-      <aside className={`fixed inset-y-0 left-0 z-40 hidden border-r border-sidebar-border lg:flex lg:flex-col ${rail ? "w-[72px]" : "w-70"}`}>
+      <aside className={`fixed inset-y-0 left-0 z-40 hidden lg:flex lg:flex-col ${rail ? "w-[72px]" : "w-70"}`}>
         <SidebarInner user={user} inboxWaiting={inboxWaiting} casesWaiting={casesWaiting} activitiesOverdue={activitiesOverdue} enabledModules={enabledModules} brand={brand} rail={rail} onToggleRail={toggleRail} />
       </aside>
 
@@ -330,7 +337,7 @@ export default function AppShell({
         <div className={`pointer-events-none fixed inset-x-0 top-0 -z-10 h-72 bg-[radial-gradient(circle_at_65%_0%,rgba(249,115,22,.045),transparent_42%)] ${offset}`} />
         {/* No width cap: the page runs to the same edges as the top bar (both lg:px-5). Capped and centred, it sat
             inside the bar on a wide screen — the bar's ends hung out past the content and the two never lined up. */}
-        <div className="denago-workspace p-3 pb-24 pt-15 sm:p-4 sm:pb-24 sm:pt-16 lg:p-5 lg:pt-19">
+        <div className="denago-workspace p-3 pb-24 pt-15 sm:p-4 sm:pb-24 sm:pt-16 lg:p-5 lg:pt-[86px]">
           {/* ClockWeather moved into the top bar — it was already desktop-only
               furniture at the top of the page, so the bar is where it belongs
               and the page keeps the vertical space the bar takes. */}
