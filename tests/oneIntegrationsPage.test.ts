@@ -51,7 +51,8 @@ test("one nav entry, open to tenant owners", () => {
 
 test("the platform owner's rows are owner-only and never edit a per-workspace credential", () => {
   assert.match(page, /const isPlatformOwner = user\.role === "owner";/);
-  assert.match(page, /\{isPlatformOwner && \(\s*<section[^>]*>\s*<WorkspaceIntegrationRows /);
+  // Since the screen was grouped by purpose (2026-11-12) its rows are listed with the workspace's own — for the platform owner only.
+  assert.match(page, /const platformRows = isPlatformOwner \? await platformIntegrationRows\(/);
   // Those keys have exactly one form: the page's own, which writes the override.
   const keys = TENANT_CREDENTIAL_INTEGRATIONS.flatMap((integration) => integration.fields.map((field) => field.key));
   for (const key of keys) {
@@ -61,12 +62,14 @@ test("the platform owner's rows are owner-only and never edit a per-workspace cr
 
 test("each field's source follows the senders' all-or-nothing bundle rule", () => {
   // Own values count only once every required field is set (status "active").
-  assert.match(page, /const ownInUse = status === "active";/);
+  assert.match(page, /const ownInUse = ownStatus === "active";/);
   assert.match(page, /const ownCounts = field\.independent \? isSet && effectiveSet\[field\.key\] : ownInUse && isSet;/);
   assert.match(page, /const source = ownCounts \? "own" : effectiveSet\[field\.key\] \? "default" : "unset";/);
   assert.match(page, /const savedNotInUse = isSet && !ownCounts;/);
-  // "Platform default" only when the default is really there.
-  assert.match(page, /\) : defaultInUse \? \(\s*<span className="badge bg-muted text-muted-foreground">Platform default<\/span>/);
+  // "Using shared setup" (the old "Platform default") only when the shared values are really there.
+  assert.match(page, /const \{ ownStatus, sharedInUse \} = workspaceValueUse\(/);
+  assert.match(src("src/lib/integrationsCatalogue.ts"), /input\.requiredKeys\.length > 0 && input\.requiredKeys\.every/, "an empty required list is not 'all shared values present'");
+  assert.match(src("src/lib/integrationsCatalogue.ts"), /if \(input\.sharedInUse\) return "shared";\s*return "not-set-up";/);
 });
 
 test("Google reviews is read the way its fetcher reads it", () => {

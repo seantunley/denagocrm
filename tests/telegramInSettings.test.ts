@@ -39,7 +39,7 @@ const CHATBOT = "src/app/(app)/chatbot/page.tsx";
 
 test("Telegram is on the Integrations screen with the other channels", () => {
   const source = read(SETTINGS);
-  assert.match(source, /title="Telegram"/, "Settings → Integrations must list Telegram");
+  assert.match(source, /title: "Telegram"/, "Settings → Integrations must list Telegram");
 });
 
 test("connecting from Settings REGISTERS the webhook, rather than just storing a token", () => {
@@ -63,7 +63,9 @@ test("the badge distinguishes 'token stored' from 'actually receiving'", () => {
   // registration must not read as Connected.
   const source = read(SETTINGS);
   assert.match(source, /setting\("BOT_TG_ENABLED"\) === "true"/);
-  assert.match(source, /webhook not registered/i);
+  // A stored token Telegram didn't accept is "Half set up" — it rises to Needs attention — and says why.
+  assert.match(source, /state: !setting\("TELEGRAM_BOT_TOKEN"\) \? "not-set-up" : setting\("BOT_TG_ENABLED"\) === "true" \? "connected" : "incomplete",/);
+  assert.match(source, /Telegram didn't accept the webhook — nothing arrives/);
 });
 
 test("A CHANNEL IS CONFIGURED IN ONE PLACE — Telegram is not on the chatbot page at all", () => {

@@ -204,21 +204,46 @@ export function SettingsSection({
   );
 }
 
+/**
+ * One integration (or other connectable thing) as a row: its mark, its name,
+ * one line on what it's for and one on what it's connected to, its status, and
+ * the button that matches that status. Opens to its settings.
+ */
 export function SettingsIntegrationRow({
   title,
   status,
   action = "Configure",
+  mark,
+  purpose,
+  detail,
   children,
 }: {
   title: string;
   status?: ReactNode;
   action?: string;
+  /** A small brand mark, so the list scans at a glance. */
+  mark?: { text: string; tone: string };
+  /** One line on why you'd bother. */
+  purpose?: ReactNode;
+  /** What it's connected to, and when it was last checked. */
+  detail?: ReactNode;
   children: ReactNode;
 }) {
   return (
     <details className="group border-b border-border last:border-b-0">
       <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-3.5 py-3 transition hover:bg-muted/20 [&::-webkit-details-marker]:hidden sm:px-4">
-        <span className="flex min-w-0 items-center gap-2 text-sm font-medium text-foreground">{title}{status}</span>
+        <span className="flex min-w-0 items-center gap-3">
+          {mark && (
+            <span aria-hidden className={cn("grid size-9 shrink-0 place-items-center rounded-lg text-[11px] font-bold tracking-tight", mark.tone)}>
+              {mark.text}
+            </span>
+          )}
+          <span className="min-w-0">
+            <span className="flex flex-wrap items-center gap-2 text-sm font-medium text-foreground">{title}{status}</span>
+            {purpose && <span className="mt-0.5 block text-xs text-muted-foreground">{purpose}</span>}
+            {detail && <span className="mt-0.5 block truncate text-[11px] text-muted-foreground/80">{detail}</span>}
+          </span>
+        </span>
         <span className="btn-secondary btn-sm shrink-0">{action}</span>
       </summary>
       <div className="border-t border-border bg-background/20 px-3.5 py-4 sm:px-4">{children}</div>
