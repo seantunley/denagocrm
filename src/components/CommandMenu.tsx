@@ -263,17 +263,18 @@ export default function CommandMenu({
 
         <CommandGroup heading="Go to">
           {shownTopLinks.map((link) => (
-            <CommandItem key={link.href} value={`page ${link.label}`} onSelect={() => go(link.href)}>
+            <CommandItem key={link.href} value={`page ${link.label} ${link.keywords?.join(" ") ?? ""}`} onSelect={() => go(link.href)}>
               <link.icon className="size-4 text-muted-foreground" />
               {link.label}
             </CommandItem>
           ))}
         </CommandGroup>
 
+        {/* Keywords in each value: a link is found by its old name ("Workshop Cal", "Repairs") after the sidebar regroup. */}
         {shownGroups.map((group) => (
           <CommandGroup key={group.key} heading={group.label}>
             {group.links.map((link) => (
-              <CommandItem key={link.href} value={`${group.label} ${link.label}`} onSelect={() => go(link.href)}>
+              <CommandItem key={link.href} value={`${group.label} ${link.label} ${link.keywords?.join(" ") ?? ""}`} onSelect={() => go(link.href)}>
                 <link.icon className="size-4 text-muted-foreground" />
                 {link.label}
               </CommandItem>
