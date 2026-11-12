@@ -68,7 +68,7 @@ test("each row says what it's connected to and when it was last checked — neve
   assert.equal(checkedAgo(new Date("2026-11-12T09:00:00Z"), now), "3 hours ago");
   // The page reads them from effectiveShown, which the page fills with non-secret values only.
   const page = src("src/app/(app)/settings/integrations/page.tsx");
-  assert.match(page, /connectedTo\(integration\.id, effectiveShown\)/);
+  assert.match(page, /state === "connected" \|\| state === "shared" \? connectedTo\(integration\.id, effectiveShown\) : null,/, "only while in use");
   assert.match(page, /if \(isSecretSettingKey\(key\)\) continue;/);
 });
 

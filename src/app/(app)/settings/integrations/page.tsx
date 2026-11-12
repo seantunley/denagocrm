@@ -178,7 +178,8 @@ export default async function IntegrationsPage({ searchParams }: { searchParams?
             });
             const detail =
               [
-                connectedTo(integration.id, effectiveShown),
+                // What it's connected to — only while it IS in use; a stray value on a "Not set up" row misleads.
+                state === "connected" || state === "shared" ? connectedTo(integration.id, effectiveShown) : null,
                 state === "shared" ? "Using the shared setup" : null,
                 state === "incomplete" ? "Some of this workspace's own values are missing" : null,
                 connection?.lastVerifiedAt ? `last checked ${checkedAgo(connection.lastVerifiedAt)}` : null,
