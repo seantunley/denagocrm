@@ -135,6 +135,8 @@ export type RunnerEntry = {
   /** Photos that have already reached the server for this entry. */
   photoCount: number;
   photos: Array<{ id: string; url: string }>;
+  /** Server photos deleted on this phone — an older copy of the run must not bring them back (mergeRunEntries). */
+  removedPhotoIds?: string[];
 };
 
 export type RunnerRun = {
@@ -539,6 +541,9 @@ export default function ChecklistRunner({
         setProblem(result.error);
         return;
       }
+      // It reached the server, so a page copy rendered since may list it — don't let that bring it back.
+      const entry = session?.entries.find((item) => item.id === entryId);
+      if (entry) patch(entryId, { removedPhotoIds: [...(entry.removedPhotoIds ?? []), photoId] });
     }
     setCaptures((previous) => ({
       ...previous,
@@ -553,6 +558,7 @@ export default function ChecklistRunner({
     patch(entry.id, {
       photoCount: Math.max(0, entry.photoCount - 1),
       photos: entry.photos.filter((photo) => photo.id !== photoId),
+      removedPhotoIds: [...(entry.removedPhotoIds ?? []), photoId],
     });
   }
 

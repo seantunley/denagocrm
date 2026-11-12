@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { mergeRunEntries } from "../src/lib/checklists/mergeRunEntries";
+import { mergeRunEntries, type MergeableEntry } from "../src/lib/checklists/mergeRunEntries";
 
 /**
  * Sean, 2026-11-12, on a live handover: "Save for later does nothing and saves
@@ -10,7 +10,7 @@ import { mergeRunEntries } from "../src/lib/checklists/mergeRunEntries";
  */
 const src = (p: string) => readFileSync(p, "utf8").replace(/\r\n/g, "\n");
 const runner = src("src/components/checklists/ChecklistRunner.tsx");
-const e = (id: string, status: string, photos: string[] = []) => ({ id, status, photoCount: photos.length, photos: photos.map((p) => ({ id: p, url: `u/${p}` })) });
+const e = (id: string, status: string, photos: string[] = []): MergeableEntry => ({ id, status, photoCount: photos.length, photos: photos.map((p) => ({ id: p, url: `u/${p}` })) });
 
 test("a reopen never loses an answer: each step takes whichever copy has one", () => {
   // Server: steps 1–4 done. Phone: an older copy (1–2 done) plus step 5 done since.
@@ -27,6 +27,25 @@ test("a reopen never loses an answer: each step takes whichever copy has one", (
   // Wired into the reopen, both for a saved phone copy and for this screen's own copy.
   assert.match(runner, /mergeRunEntries\(fromServer\.entries, stored\.entries\)/);
   assert.match(runner, /mergeRunEntries\(fromServer\.entries, session\.entries\)/);
+});
+
+test("review of #1074: a photo deleted on the phone stays deleted when an older copy is merged back", () => {
+  // Step with a limit of 2 holds photos a and b. The person deletes b, closes, reopens —
+  // the page's copy was rendered before the delete and still lists b.
+  const stale = [e("s1", "done", ["a", "b"])];
+  const phone = [{ ...e("s1", "done", ["a"]), removedPhotoIds: ["b"] }];
+  const merged = mergeRunEntries(stale, phone);
+  assert.deepEqual(merged[0].photos.map((p) => p.id), ["a"], "b doesn't come back");
+  assert.equal(merged[0].photoCount, 1, "counted from what remains, so a replacement can still be taken");
+  assert.deepEqual(merged[0].removedPhotoIds, ["b"], "and the deletion is remembered for the next reopen");
+  // A photo the phone never knew about (taken on another device) still comes in.
+  assert.deepEqual(mergeRunEntries([e("s1", "done", ["a", "c"])], phone)[0].photos.map((p) => p.id), ["a", "c"]);
+  // Both ways of deleting a photo that reached the server record it.
+  const drop = runner.slice(runner.indexOf("async function dropServerPhoto("));
+  assert.match(drop, /removedPhotoIds: \[\.\.\.\(entry\.removedPhotoIds \?\? \[\]\), photoId\],/);
+  const dropCapture = runner.slice(runner.indexOf("async function dropCapture("), runner.indexOf("async function dropServerPhoto("));
+  assert.match(dropCapture, /patch\(entryId, \{ removedPhotoIds: \[\.\.\.\(entry\.removedPhotoIds \?\? \[\]\), photoId\] \}\)/);
+  assert.ok(dropCapture.indexOf("deleteChecklistPhoto(photoId)") < dropCapture.indexOf("removedPhotoIds"), "only once the server has deleted it");
 });
 
 test("the server never turns an answered step back into 'not done'", () => {
