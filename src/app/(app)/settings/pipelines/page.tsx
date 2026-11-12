@@ -1,6 +1,7 @@
 import { Plus, Zap } from "lucide-react";
 import { SaveForm, SaveButton } from "@/components/SaveForm";
 import { requirePermission } from "@/lib/permissions";
+import { getActiveTenantId } from "@/lib/auth";
 import { listSalesPipelines, listPipelineStages } from "@/lib/pipelines";
 import {
   archiveSalesPipeline,
@@ -22,6 +23,7 @@ import {
 } from "@/lib/pipelineStageActions";
 import { stageJourneyNames } from "@/lib/journeyStageBadges";
 import StageRulesEditor from "@/components/StageRulesEditor";
+import { getFieldDefs } from "@/lib/customFields";
 import {
   parseStageCriteria,
   parseStageGateMode,
@@ -78,6 +80,11 @@ export default async function PipelineSettingsPage() {
     pipelines.map(async (pipeline) => stagesByPipeline.set(pipeline.id, await listPipelineStages(pipeline.id)))
   );
   const automationRulesByStage = await stageJourneyNames();
+  // The lead's own fields a rule may test (Settings → Custom fields → Leads).
+  const fieldsTenantId = await getActiveTenantId();
+  const leadFields = fieldsTenantId
+    ? (await getFieldDefs("lead", { tenantId: fieldsTenantId })).map((d) => ({ key: d.key, label: d.label, type: d.type, options: d.options }))
+    : [];
 
   return (
     <SettingsWorkspace
@@ -264,12 +271,14 @@ export default async function PipelineSettingsPage() {
                         stageName={stage.name}
                         {...readCriteria(stage.entryCriteria)}
                         defaultMode={parseStageGateMode(stage.entryGateMode)}
+                        customFields={leadFields}
                       />
                       <StageRulesEditor
                         direction="exit"
                         stageName={stage.name}
                         {...readCriteria(stage.exitCriteria)}
                         defaultMode={parseStageGateMode(stage.exitGateMode)}
+                        customFields={leadFields}
                       />
                     </SaveForm>
                     </details>

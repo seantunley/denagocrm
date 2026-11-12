@@ -25,7 +25,6 @@
   "src/app/actions/accessControl.ts::bypass-raw::RolePermission": 3,
   "src/app/actions/accessControl.ts::bypass-raw::UserRole": 1,
   "src/app/actions/accessControl.ts::unknown-client::RolePermission": 1,
-  "src/app/actions/customFields.ts::unknown-client::CustomFieldValue": 2,
   "src/app/actions/helpdesk.ts::bypass-read::SupportMailbox": 2,
   "src/app/actions/helpdesk.ts::bypass-write::CustomerCase": 1,
   "src/app/actions/jobcards.ts::bypass-raw::JobCard": 1,

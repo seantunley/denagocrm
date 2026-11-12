@@ -1,6 +1,7 @@
 import "server-only";
 
 import { prisma } from "./db";
+import { customRuleValues } from "./customFieldValues";
 import type { StageGateFacts } from "./stageGate";
 
 /**
@@ -57,6 +58,7 @@ export async function stageGateFactsForLead(
       source: true,
       contactId: true,
       stageEnteredAt: true,
+      tenantId: true,
       contact: { select: { email: true, phone: true } },
     },
   });
@@ -66,7 +68,7 @@ export async function stageGateFactsForLead(
   // that is not there.
   if (!lead) return null;
 
-  const [quotes, activityCounts] = await Promise.all([
+  const [quotes, activityCounts, custom] = await Promise.all([
     // Ordered so `latestStatus` means "the most recently raised quote", which is
     // what someone writing "latest quote status is accepted" has in mind. The ids
     // come back with them because the signature counts hang off the same rows —
@@ -85,6 +87,10 @@ export async function stageGateFactsForLead(
       where: { leadId },
       _count: { _all: true },
     }),
+    // The lead's OWN workspace's fields (review of #1064): another workspace with the
+    // same field key must never feed this lead's rule facts. A lead with no workspace
+    // has no custom facts — never a guess.
+    lead.tenantId ? customRuleValues("lead", leadId, lead.tenantId) : Promise.resolve({}),
   ]);
   const signatures = await signatureCounts(quotes.map((quote) => quote.id));
 
@@ -133,6 +139,7 @@ export async function stageGateFactsForLead(
       // it does on the card, or a rule written from the board misfires by one.
       ageDays: Math.max(0, Math.floor((now.getTime() - lead.stageEnteredAt.getTime()) / DAY_MS)),
     },
+    custom,
   };
 }
 

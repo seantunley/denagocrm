@@ -3617,11 +3617,15 @@ model CompetitorBrief {
 model CustomFieldDef {
   id        String   @id @default(cuid())
   tenantId String? // Multi-tenancy (Phase B — additive/inert): owning tenant.
-  entity    String // contact | lead | quote | case
+  entity    String // contact | lead | quote | case | vehicle | jobcard | product | stock
   key       String // machine key, unique within an entity
   label     String
-  type      String   @default("text") // text | textarea | number | date | select | checkbox | url
-  options   Json? // string[] for select
+  type      String   @default("text") // text | textarea | number | currency | date | select | multiselect | checkbox | url | link
+  options   Json? // string[] for select / multiselect
+  /// "Show only when…": NULL = always; else { key, op: equals|not_equals|filled, value? } on another field of the same entity.
+  showWhen  Json?
+  /// For a "link" field: contact | lead | vehicle | product.
+  linkTo    String?
   required  Boolean  @default(false)
   order     Int      @default(0)
   active    Boolean  @default(true)
@@ -3630,7 +3634,8 @@ model CustomFieldDef {
 
   values CustomFieldValue[]
 
-  @@unique([entity, key])
+  /// A key is unique within ONE workspace (review of #1064) — two workspaces may both have "finance_house".
+  @@unique([tenantId, entity, key])
   @@index([entity, active, order])
   @@index([tenantId])
   @@unique([tenantId, id])

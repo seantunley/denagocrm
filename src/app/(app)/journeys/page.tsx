@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { Activity, Mail, Workflow } from "lucide-react";
-import { isTenantOwner } from "@/lib/auth";
+import { getActiveTenantId, isTenantOwner } from "@/lib/auth";
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { leadOptionLabels } from "@/lib/leadOption";
@@ -8,6 +8,7 @@ import { listActingTenantStaff } from "@/lib/tenantActor";
 import { requireRoute, getAccessibleLeadIds } from "@/lib/permissions";
 import { formatDateTime } from "@/lib/format";
 import JourneyBuilder, { type JourneyBuilderDefaults } from "@/components/JourneyBuilder";
+import { getFieldDefs } from "@/lib/customFields";
 import JourneyTestRun from "@/components/JourneyTestRun";
 import JourneyDryRun from "@/components/JourneyDryRun";
 import { parseRunMode } from "@/lib/journeyArbitration";
@@ -167,7 +168,21 @@ export default async function JourneysPage() {
     }),
   ]);
   // The workspace's modules: the builder offers no trigger or step of a module it hasn't got (journeyModules.ts).
-  const options = { stages, users, templates, tags, segments, enabledModules: [...(await getEnabledModuleIds())] };
+  // THIS workspace's fields, named explicitly (review of #1064).
+  const fieldsTenantId = await getActiveTenantId();
+  const fieldList = async (entity: "lead" | "contact") =>
+    fieldsTenantId
+      ? (await getFieldDefs(entity, { tenantId: fieldsTenantId })).map((d) => ({ key: d.key, label: d.label, type: d.type, options: d.options }))
+      : [];
+  const options = {
+    stages,
+    users,
+    templates,
+    tags,
+    segments,
+    enabledModules: [...(await getEnabledModuleIds())],
+    customFields: { lead: await fieldList("lead"), contact: await fieldList("contact") },
+  };
   // Same rule as the quote editor: `title` is the model, which repeats across
   // leads, so preferring it makes every option read the same.
   const leadOptions = leadOptionLabels(testLeads).map((lead) => ({

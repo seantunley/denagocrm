@@ -1,7 +1,20 @@
 "use client";
 
-import { CONDITION_FIELDS } from "@/lib/journeyTypes";
+import { createContext, useContext } from "react";
+import { CONDITION_FIELDS, CUSTOM_FIELD_CONDITION } from "@/lib/journeyTypes";
 import { emptyGroup, isRecord, type ConditionGroup } from "@/lib/journeyBuilderDefinition";
+
+/** One of the workspace's own fields, as the journey builder offers it. */
+export type JourneyCustomField = { key: string; label: string; type: string; options: string[] };
+/**
+ * The workspace's lead and contact custom fields, provided once by JourneyBuilder
+ * so every condition editor (however deeply nested) and the "Set a field" step can
+ * offer them without threading a prop through each container.
+ */
+export const JourneyCustomFieldsContext = createContext<{ lead: JourneyCustomField[]; contact: JourneyCustomField[] }>({
+  lead: [],
+  contact: [],
+});
 
 /**
  * One editor for every condition group a journey holds — a Condition step, "Wait until true", a Choose branch and a
@@ -66,15 +79,37 @@ export default function JourneyConditionGroupEditor({ value, onChange, depth = 0
 function Clause({ clause, onChange, onRemove }: { clause: Record<string, unknown>; onChange: (next: Record<string, unknown>) => void; onRemove: () => void }) {
   const field = String(clause.field ?? "");
   const operator = String(clause.operator ?? "equals");
+  const custom = useContext(JourneyCustomFieldsContext);
   const isVariable = field.startsWith("vars.");
-  const known = (CONDITION_FIELDS as readonly string[]).includes(field);
+  const customOptions = [
+    ...custom.lead.map((c) => ({ value: `lead.custom.${c.key}`, label: `Lead: ${c.label}`, def: c })),
+    ...custom.contact.map((c) => ({ value: `contact.custom.${c.key}`, label: `Customer: ${c.label}`, def: c })),
+  ];
+  const customHit = customOptions.find((o) => o.value === field);
+  const known = (CONDITION_FIELDS as readonly string[]).includes(field) || Boolean(customHit);
   const noValue = operator === "is_empty" || operator === "is_not_empty";
+  // A dropdown / tick-several / yes-no field offers its own answers instead of a free-text box.
+  const answers =
+    customHit?.def.type === "checkbox"
+      ? [{ value: "true", label: "Yes" }, { value: "false", label: "No" }]
+      : customHit && customHit.def.options.length > 0 && operator !== "in"
+        ? customHit.def.options.map((o) => ({ value: o, label: o }))
+        : null;
   return (
     <div className="grid md:grid-cols-[1.4fr_1fr_1.4fr_auto] gap-2 items-start">
       <div className="space-y-1">
         <select className="input" aria-label="Field" value={isVariable ? VARIABLE : field} onChange={(e) => onChange({ ...clause, field: e.target.value === VARIABLE ? "vars." : e.target.value })}>
-          {!known && !isVariable && <option value={field}>{field || "Choose a field"}</option>}
+          {!known && !isVariable && (
+            <option value={field}>
+              {CUSTOM_FIELD_CONDITION.test(field) ? `${field} (field no longer active)` : field || "Choose a field"}
+            </option>
+          )}
           {CONDITION_FIELDS.map((f) => <option key={f} value={f}>{FIELD_LABELS[f] ?? f}</option>)}
+          {customOptions.length > 0 && (
+            <optgroup label="Your fields">
+              {customOptions.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+            </optgroup>
+          )}
           <option value={VARIABLE}>A journey variable…</option>
         </select>
         {isVariable && <input className="input" aria-label="Variable name" placeholder="variable name" value={field.slice(5)} onChange={(e) => onChange({ ...clause, field: `vars.${e.target.value.trim()}` })} />}
@@ -82,7 +117,12 @@ function Clause({ clause, onChange, onRemove }: { clause: Record<string, unknown
       <select className="input" aria-label="Operator" value={operator} onChange={(e) => onChange({ ...clause, operator: e.target.value })}>
         {OPERATORS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
       </select>
-      {noValue ? <span /> : <input className="input" aria-label="Value" placeholder="Value" value={clause.value == null ? "" : String(clause.value)} onChange={(e) => onChange({ ...clause, value: e.target.value })} />}
+      {noValue ? <span /> : answers ? (
+        <select className="input" aria-label="Value" value={clause.value == null ? "" : String(clause.value)} onChange={(e) => onChange({ ...clause, value: e.target.value })}>
+          <option value="" disabled>Choose…</option>
+          {answers.map((a) => <option key={a.value} value={a.value}>{a.label}</option>)}
+        </select>
+      ) : <input className="input" aria-label="Value" placeholder="Value" value={clause.value == null ? "" : String(clause.value)} onChange={(e) => onChange({ ...clause, value: e.target.value })} />}
       <button type="button" className="text-xs text-red-400 px-2 py-2" onClick={onRemove}>Remove</button>
     </div>
   );

@@ -365,7 +365,10 @@ test("session GUCs really do span separate statements, in every migration that u
   // 21 → 22: 20261109160000_suppliers_on_deals_and_orders creates a supplier for each name already typed on a
   // workspace's purchase orders and links the orders to it. Vendor and PurchaseOrder FORCE RLS — without the
   // escape the INSERT and UPDATE would touch nothing and the migration would still be recorded as applied.
-  assert.equal(spans.length, 22, "twenty-two migrations set a session GUC");
+  //
+  // 22 → 23: 20261112005000_custom_field_legacy_workspace stamps custom-field definitions and values saved
+  // with no workspace (review of #1064). Both tables FORCE RLS — the same reason.
+  assert.equal(spans.length, 23, "twenty-three migrations set a session GUC");
   for (const { name, between } of spans) {
     assert.ok(between > 0, `${name}: a SET with no following statement would not need session pinning`);
   }

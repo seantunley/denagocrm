@@ -77,9 +77,9 @@ export async function searchCrm(user: PermissionUser, rawTerm: string, options: 
     ]);
 
   // Custom field values that match, by the kind of record they belong to.
-  const custom: Record<CustomEntity, string[]> = { contact: [], lead: [], quote: [], case: [] };
+  const custom: Record<CustomEntity, string[]> = { contact: [], lead: [], quote: [], case: [], vehicle: [], jobcard: [], product: [], stock: [] };
   for (const row of await prisma.customFieldValue.findMany({
-    where: { value: contains, def: { entity: { in: ["contact", "lead", "quote", "case"] } } },
+    where: { value: contains, def: { entity: { in: ["contact", "lead", "quote", "case", "vehicle", "jobcard"] } } },
     select: { recordId: true, def: { select: { entity: true } } },
     take: 200,
   })) {
@@ -135,7 +135,7 @@ export async function searchCrm(user: PermissionUser, rawTerm: string, options: 
       : skip<never>(),
     want.has("vehicle") && automotiveOn && !empty(vehicleIds)
       ? prisma.vehicle.findMany({
-          where: { ...scoped(vehicleIds), OR: [{ model: contains }, { vin: contains }, { regNumber: contains }] },
+          where: { ...scoped(vehicleIds), OR: [{ model: contains }, { vin: contains }, { regNumber: contains }, ...customMatch("vehicle")] },
           select: { id: true, model: true, regNumber: true, vin: true, contact: { select: { firstName: true, lastName: true, company: true, isCompany: true } } },
           orderBy: { createdAt: "desc" },
           take,
@@ -143,7 +143,7 @@ export async function searchCrm(user: PermissionUser, rawTerm: string, options: 
       : skip<never>(),
     want.has("jobcard") && automotiveOn && !empty(jobCardIds)
       ? prisma.jobCard.findMany({
-          where: { ...scoped(jobCardIds), OR: [{ description: contains }, ...(numeric === null ? [] : [{ number: numeric }])] },
+          where: { ...scoped(jobCardIds), OR: [{ description: contains }, ...(numeric === null ? [] : [{ number: numeric }]), ...customMatch("jobcard")] },
           select: { id: true, number: true, description: true, vehicle: { select: { model: true } }, contact: { select: { firstName: true, lastName: true, company: true, isCompany: true } } },
           orderBy: { openedAt: "desc" },
           take,

@@ -9,11 +9,18 @@ import {
   STAGE_GATE_MODES,
   STAGE_GATE_MODE_LABELS,
   STAGE_OPERATOR_LABELS,
+  customCriterionKind,
+  customCriterionLabel,
+  isCustomCriterion,
   operatorsForField,
+  type AnyStageCriterionField,
   type StageCriteriaGroup,
-  type StageCriterionField,
+  type StageCriterionKind,
   type StageGateMode,
 } from "@/lib/stageGate";
+
+/** A lead custom field the rule may test — key, label and type from Settings → Custom fields. */
+export type RuleCustomField = { key: string; label: string; type: string; options: string[] };
 import type { ConditionOperator } from "@/lib/journeyTypes";
 
 /**
@@ -48,7 +55,9 @@ export default function StageRulesEditor({
   readOnly,
   defaultMode,
   wouldNotPass,
+  customFields = [],
 }: {
+  customFields?: RuleCustomField[];
   direction: "entry" | "exit";
   stageName: string;
   criteria: StageCriteriaGroup | null;
@@ -83,6 +92,14 @@ export default function StageRulesEditor({
         })),
   );
   const [mode, setMode] = useState<StageGateMode>(defaultMode);
+
+  const customOf = (field: AnyStageCriterionField) =>
+    isCustomCriterion(field) ? customFields.find((c) => `custom.${c.key}` === field) : undefined;
+  const kindOf = (field: AnyStageCriterionField): StageCriterionKind => {
+    if (!isCustomCriterion(field)) return STAGE_CRITERION_KINDS[field];
+    return customCriterionKind(customOf(field)?.type ?? "text");
+  };
+  const opsOf = (field: AnyStageCriterionField) => operatorsForField(field, kindOf(field));
 
   const serialised = rows.length === 0
       ? ""
@@ -157,12 +174,12 @@ export default function StageRulesEditor({
                 className="input h-8 w-auto flex-1 py-0 text-xs"
                 value={row.field}
                 onChange={(event) => {
-                  const field = event.target.value as StageCriterionField;
+                  const field = event.target.value as AnyStageCriterionField;
                   // The operator has to be re-picked with the field: "is at least"
                   // is meaningless on a text field, and leaving a stale one would
                   // post a pair the parser rejects with a message about a
                   // combination the person never deliberately chose.
-                  setRows(replace(rows, index, { field, operator: operatorsForField(field)[0], value: "" }));
+                  setRows(replace(rows, index, { field, operator: opsOf(field)[0], value: "" }));
                 }}
               >
                 {STAGE_CRITERION_FIELDS.map((field) => (
@@ -170,6 +187,17 @@ export default function StageRulesEditor({
                     {STAGE_CRITERION_LABELS[field]}
                   </option>
                 ))}
+                {(customFields.length > 0 || (isCustomCriterion(row.field) && !customOf(row.field))) && (
+                  <optgroup label="Your fields">
+                    {customFields.map((c) => (
+                      <option key={c.key} value={`custom.${c.key}`}>{c.label}</option>
+                    ))}
+                    {/* A field since deleted or switched off stays visible as itself rather than silently changing. */}
+                    {isCustomCriterion(row.field) && !customOf(row.field) && (
+                      <option value={row.field}>{customCriterionLabel(row.field)} (no longer active)</option>
+                    )}
+                  </optgroup>
+                )}
               </select>
 
               <select
@@ -180,15 +208,28 @@ export default function StageRulesEditor({
                   setRows(replace(rows, index, { ...row, operator: event.target.value as ConditionOperator }))
                 }
               >
-                {operatorsForField(row.field).map((operator) => (
+                {opsOf(row.field).map((operator) => (
                   <option key={operator} value={operator}>
                     {STAGE_OPERATOR_LABELS[operator]}
                   </option>
                 ))}
               </select>
 
-              {!valueless(row.operator) &&
-                (STAGE_CRITERION_KINDS[row.field] === "boolean" ? (
+              {!valueless(row.operator) && (customOf(row.field)?.options.length ?? 0) > 0 && (
+                <select
+                  aria-label="Condition value"
+                  className="input h-8 w-auto py-0 text-xs"
+                  value={row.value}
+                  onChange={(event) => setRows(replace(rows, index, { ...row, value: event.target.value }))}
+                >
+                  <option value="" disabled>Choose…</option>
+                  {customOf(row.field)!.options.map((o) => (
+                    <option key={o} value={o}>{o}</option>
+                  ))}
+                </select>
+              )}
+              {!valueless(row.operator) && !((customOf(row.field)?.options.length ?? 0) > 0) &&
+                (kindOf(row.field) === "boolean" ? (
                   <select
                     aria-label="Condition value"
                     className="input h-8 w-auto py-0 text-xs"
@@ -202,7 +243,7 @@ export default function StageRulesEditor({
                   <input
                     aria-label="Condition value"
                     className="input h-8 w-28 py-0 text-xs"
-                    type={STAGE_CRITERION_KINDS[row.field] === "number" ? "number" : "text"}
+                    type={kindOf(row.field) === "number" ? "number" : customOf(row.field)?.type === "date" ? "date" : "text"}
                     value={row.value}
                     onChange={(event) => setRows(replace(rows, index, { ...row, value: event.target.value }))}
                   />
@@ -227,7 +268,7 @@ export default function StageRulesEditor({
               onClick={() =>
                 setRows([
                   ...rows,
-                  { field: DEFAULT_FIELD, operator: operatorsForField(DEFAULT_FIELD)[0], value: "" },
+                  { field: DEFAULT_FIELD, operator: opsOf(DEFAULT_FIELD)[0], value: "" },
                 ])
               }
             >
@@ -251,10 +292,10 @@ export default function StageRulesEditor({
   );
 }
 
-type Row = { field: StageCriterionField; operator: ConditionOperator; value: string };
+type Row = { field: AnyStageCriterionField; operator: ConditionOperator; value: string };
 
 /** The field a new clause starts on — the one people reach for first. */
-const DEFAULT_FIELD: StageCriterionField = "quote.count";
+const DEFAULT_FIELD: AnyStageCriterionField = "quote.count";
 
 function valueless(operator: ConditionOperator): boolean {
   return operator === "is_empty" || operator === "is_not_empty";

@@ -26,6 +26,7 @@ import { EntityDetailShell } from "@/components/entity-detail-shell";
 import { StatusPill } from "@/components/visual-system";
 import { requireUser } from "@/lib/auth";
 import { hasPermission } from "@/lib/permissions";
+import CustomFieldsCard from "@/components/custom-fields/CustomFieldsCard";
 import ChecklistCard from "@/components/checklists/ChecklistCard";
 import { runsForHost, templatesForHostRecord } from "@/lib/checklists/store";
 
@@ -155,6 +156,7 @@ export default async function VehicleDetailPage({
 
       <div className="grid lg:grid-cols-2 gap-6 items-start">
         <div className="space-y-6">
+          <CustomFieldsCard entity="vehicle" recordId={vehicle.id} readOnly={!canManageChecklists} />
           <div className="card">
             <h2 className="font-semibold mb-4">Service history</h2>
             <form

@@ -72,6 +72,7 @@ function wouldDo(step: JourneyStep, vars: Record<string, string>): string {
     case "lead_reopen": return "Would reopen the lead";
     case "add_tag": return "Would add a tag";
     case "remove_tag": return "Would remove a tag";
+    case "set_field": return c.key ? `Would set the ${c.entity === "contact" ? "contact" : "lead"}'s “${text(c.key)}” to “${text(c.value)}”` : "Would set a field (none chosen yet)";
     case "send_review_request": return "Would send a review request";
     case "send_service_reminder": return "Would send a service reminder";
     case "send_signing_reminder": return "Would send a signing reminder";

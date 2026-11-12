@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { SaveForm, SaveButton } from "@/components/SaveForm";
+import CustomFieldsCard from "@/components/custom-fields/CustomFieldsCard";
 import { notFound } from "next/navigation";
 import { Prisma } from "@prisma/client";
 import {
@@ -207,6 +208,7 @@ export default async function StockUnitPage({ params }: { params: Promise<{ id: 
 
       <div className="grid gap-5 xl:grid-cols-[minmax(0,1.35fr)_minmax(20rem,0.8fr)]">
         <div className="space-y-5">
+          <CustomFieldsCard entity="stock" recordId={unit.id} readOnly={!canManage} />
           {canManage && (
             <Surface className="p-5">
               <SectionHeading title="Workflow actions" description="Only valid transitions for this unit's current state are available." />

@@ -49,7 +49,7 @@ import {
  * feeding it a different vocabulary is exactly as safe as feeding it its own.
  */
 export type StageCriterion = {
-  field: StageCriterionField;
+  field: AnyStageCriterionField;
   operator: ConditionOperator;
   value?: unknown;
 };
@@ -152,6 +152,35 @@ export const STAGE_CRITERION_FIELDS = [
 export type StageCriterionField = (typeof STAGE_CRITERION_FIELDS)[number];
 
 /**
+ * A lead's own custom field, `custom.<key>` — open by NAMESPACE, the way journeys
+ * allow `vars.<name>`, because the workspace defines the keys. Keys are slugified
+ * (`a-z0-9_`), so the evaluator's dot-walk lands on `facts.custom[key]`.
+ */
+export const CUSTOM_CRITERION = /^custom\.[a-z0-9][a-z0-9_]{0,49}$/;
+export type CustomCriterionField = `custom.${string}`;
+export type AnyStageCriterionField = StageCriterionField | CustomCriterionField;
+
+export function isCustomCriterion(field: string): field is CustomCriterionField {
+  return CUSTOM_CRITERION.test(field);
+}
+
+/**
+ * How a custom field's type compares in a rule. A date compares as text (is /
+ * is not / empty): the evaluator's "more than" is numeric and a stored date is not.
+ */
+export function customCriterionKind(fieldType: string): StageCriterionKind {
+  if (fieldType === "number" || fieldType === "currency") return "number";
+  if (fieldType === "checkbox") return "boolean";
+  return "text";
+}
+
+/** "custom.finance_house" → "Finance house", for wording when the field's label isn't at hand. */
+export function customCriterionLabel(field: string): string {
+  const words = field.slice("custom.".length).replace(/_/g, " ").trim();
+  return words ? words[0].toUpperCase() + words.slice(1) : field;
+}
+
+/**
  * Labels live BESIDE the list, in one place. Two copies of a label list drift;
  * `journeyTypes` says so in as many words, and `marketingAudiences` is the local
  * proof — its client re-declares the field list by hand.
@@ -210,7 +239,16 @@ const OPERATORS_BY_KIND: Record<StageCriterionKind, readonly ConditionOperator[]
   date: ["is_not_empty", "is_empty", "greater_than", "less_than"],
 };
 
-export function operatorsForField(field: StageCriterionField): readonly ConditionOperator[] {
+/**
+ * A custom field's kind comes from its definition, which this pure module does
+ * not have: the editor passes it. Without one (the save-time parser) a custom
+ * field may use any gate operator.
+ */
+export function operatorsForField(
+  field: AnyStageCriterionField,
+  customKind?: StageCriterionKind,
+): readonly ConditionOperator[] {
+  if (isCustomCriterion(field)) return customKind ? OPERATORS_BY_KIND[customKind] : STAGE_GATE_OPERATORS;
   return OPERATORS_BY_KIND[STAGE_CRITERION_KINDS[field]];
 }
 
@@ -284,6 +322,8 @@ export type StageGateFacts = {
   activity: { plannedCount: number; overdueCount: number; testDriveCount: number };
   signature: { completedCount: number; pendingCount: number };
   stage: { ageDays: number };
+  /** The lead's custom fields by key (customRuleValues). Optional so older fact builders still type. */
+  custom?: Record<string, unknown>;
 };
 
 export type StageGate = {
@@ -468,8 +508,9 @@ export function evaluateStageMove(input: StageMoveInput): StageGateVerdict {
  * warned with.
  */
 export function describeUnmet(unmet: UnmetCriterion): string {
-  const label =
-    STAGE_CRITERION_LABELS[unmet.field as StageCriterionField] ?? unmet.field;
+  const label = isCustomCriterion(unmet.field)
+    ? customCriterionLabel(unmet.field)
+    : (STAGE_CRITERION_LABELS[unmet.field as StageCriterionField] ?? unmet.field);
   const operator = STAGE_OPERATOR_LABELS[unmet.operator] ?? unmet.operator;
   if (VALUELESS.has(unmet.operator)) return `${label} ${operator}`;
   const expected = Array.isArray(unmet.expected)
@@ -522,20 +563,21 @@ export function parseStageCriteria(value: unknown): StageCriteriaGroup | null {
     }
     const field = String(condition.field ?? "");
     const operator = String(condition.operator ?? "");
-    if (!fields.has(field)) throw new Error(`Unsupported stage condition field: ${field}`);
+    if (!fields.has(field) && !isCustomCriterion(field)) throw new Error(`Unsupported stage condition field: ${field}`);
     if (!operators.has(operator)) throw new Error(`Unsupported stage condition operator: ${operator}`);
     const typed = operator as ConditionOperator;
-    if (!operatorsForField(field as StageCriterionField).includes(typed)) {
-      throw new Error(
-        `“${STAGE_OPERATOR_LABELS[typed]}” cannot be used with “${STAGE_CRITERION_LABELS[field as StageCriterionField]}”`,
-      );
+    const typedField = field as AnyStageCriterionField;
+    const label = isCustomCriterion(typedField)
+      ? customCriterionLabel(typedField)
+      : STAGE_CRITERION_LABELS[typedField];
+    if (!operatorsForField(typedField).includes(typed)) {
+      throw new Error(`“${STAGE_OPERATOR_LABELS[typed]}” cannot be used with “${label}”`);
     }
     // A valueless operator carries no value: storing one would show up in the
     // editor next release as a value the rule does not actually use.
-    const typedField = field as StageCriterionField;
     if (VALUELESS.has(typed)) return { field: typedField, operator: typed };
     if (condition.value == null || condition.value === "") {
-      throw new Error(`“${STAGE_CRITERION_LABELS[typedField]}” needs a value`);
+      throw new Error(`“${label}” needs a value`);
     }
     return { field: typedField, operator: typed, value: condition.value };
   });

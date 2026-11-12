@@ -10,6 +10,7 @@ import {
 import ConfirmDelete from "@/components/ConfirmDelete";
 import { SaveForm, SaveButton } from "@/components/SaveForm";
 import ProductShowcaseForm from "@/components/ProductShowcaseForm";
+import CustomFieldsCard from "@/components/custom-fields/CustomFieldsCard";
 import { EntityDetailShell } from "@/components/entity-detail-shell";
 import { StatusPill } from "@/components/visual-system";
 import { currencySymbol, formatZAR } from "@/lib/format";
@@ -138,6 +139,7 @@ export default async function ProductDetailPage({
         </div>
 
         <ProductShowcaseForm product={product} />
+        <CustomFieldsCard entity="product" recordId={product.id} />
         {xeroConnected && (
           <div className="card">
             <h2 className="font-semibold mb-3">Xero</h2>

@@ -2,6 +2,7 @@ import { prisma } from "./db";
 import { contactName } from "./format";
 import { getRegionalSettings } from "./settings";
 import { journeyVars, variableTemplateVars } from "./journeyVariables";
+import { customRuleValues } from "./customFieldValues";
 
 export type JourneyEntityType = "lead" | "contact";
 
@@ -56,6 +57,15 @@ function compactContact(contact: {
   };
 }
 
+/**
+ * The record's custom fields for conditions (`lead.custom.<key>`). The runner may
+ * be system-scoped, so the workspace is named from the row itself; a row with no
+ * workspace gets none rather than a lookup across every workspace's fields.
+ */
+async function customFor(entity: "lead" | "contact", id: string, tenantId: string | null) {
+  return tenantId ? customRuleValues(entity, id, tenantId) : {};
+}
+
 export async function loadJourneyContext(
   entityType: JourneyEntityType,
   entityId: string,
@@ -80,10 +90,13 @@ export async function loadJourneyContext(
       },
     });
     if (!lead) return null;
-    const contact = lead.contact ? compactContact(lead.contact) : null;
+    const contact = lead.contact
+      ? { ...compactContact(lead.contact), custom: await customFor("contact", lead.contact.id, lead.contact.tenantId) }
+      : null;
     return {
       event,
       lead: {
+        custom: await customFor("lead", lead.id, lead.tenantId),
         id: lead.id,
         title: lead.title,
         name: lead.name,
@@ -128,9 +141,10 @@ export async function loadJourneyContext(
   const latestLead = contact.leads[0];
   return {
     event,
-    contact: compactContact(contact),
+    contact: { ...compactContact(contact), custom: await customFor("contact", contact.id, contact.tenantId) },
     lead: latestLead
       ? {
+          custom: await customFor("lead", latestLead.id, latestLead.tenantId),
           id: latestLead.id,
           title: latestLead.title,
           name: latestLead.name,
