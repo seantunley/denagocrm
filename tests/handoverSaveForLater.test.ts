@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { mergeRunEntries } from "../src/lib/checklists/mergeRunEntries";
+import { mergeRunEntries, type MergeableEntry } from "../src/lib/checklists/mergeRunEntries";
 
 /**
  * Sean, 2026-11-12, on a live handover: "Save for later does nothing and saves
@@ -10,7 +10,7 @@ import { mergeRunEntries } from "../src/lib/checklists/mergeRunEntries";
  */
 const src = (p: string) => readFileSync(p, "utf8").replace(/\r\n/g, "\n");
 const runner = src("src/components/checklists/ChecklistRunner.tsx");
-const e = (id: string, status: string, photos: string[] = []) => ({ id, status, photoCount: photos.length, photos: photos.map((p) => ({ id: p, url: `u/${p}` })) });
+const e = (id: string, status: string, photos: string[] = []): MergeableEntry => ({ id, status, photoCount: photos.length, photos: photos.map((p) => ({ id: p, url: `u/${p}` })) });
 
 test("a reopen never loses an answer: each step takes whichever copy has one", () => {
   // Server: steps 1–4 done. Phone: an older copy (1–2 done) plus step 5 done since.
