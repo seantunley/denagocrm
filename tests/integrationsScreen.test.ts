@@ -35,6 +35,11 @@ test("review of #1083: credentials typed in but never proven are NOT Connected",
   assert.equal(s({ ownStatus: "active" }), "unverified", "SMTP/WhatsApp saved by hand, never tested");
   assert.equal(integrationAction("unverified"), "Check", "with a clear next step");
   assert.equal(s({ verified: true }), "not-set-up", "an old verdict with no values in use proves nothing");
+  assert.equal(
+    s({ verified: true, ownStatus: "incomplete", sharedInUse: true }),
+    "incomplete",
+    "a send through the shared setup proves the shared values — the half-entered own ones still need attention",
+  );
   const page = src("src/app/(app)/settings/integrations/page.tsx");
   assert.match(page, /Saved but never tested — open it and press Test connection/);
   assert.match(page, /guided && state !== "not-set-up" && state !== "incomplete" && <IntegrationTestButton/, "the Test button is there for it");

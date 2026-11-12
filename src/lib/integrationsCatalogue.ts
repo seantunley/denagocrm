@@ -110,10 +110,12 @@ export function workspaceIntegrationState(input: {
   sharedInUse: boolean;
 }): IntegrationState {
   if (input.needsReauth) return "reconnect";
+  // Half-entered own values stay in Needs attention even while the shared setup keeps
+  // sending successfully — that success proves the shared values, not these (re-review of #1083).
+  if (input.ownStatus === "incomplete") return "incomplete";
   const inUse = input.ownStatus === "active" || input.sharedInUse;
   if (input.verified && inUse) return "connected";
   if (input.ownStatus === "active") return "unverified";
-  if (input.ownStatus === "incomplete") return "incomplete";
   if (input.sharedInUse) return "shared";
   return "not-set-up";
 }
