@@ -19,9 +19,9 @@ export function getSearchDestinations({
   isPlatformOwner?: boolean;
   permissions?: string[];
 }): SearchDestination[] {
-  const { topLinks, groups } = buildNav(isAdmin, permissions);
+  const { topLinks, groups, footerLinks } = buildNav(isAdmin, permissions);
   const destinations: SearchDestination[] = [
-    ...topLinks.map((item) => ({ ...item, group: "Workspace", keywords: item.keywords ?? [] })),
+    ...[...topLinks, ...footerLinks].map((item) => ({ ...item, group: "Workspace", keywords: item.keywords ?? [] })),
     ...groups.flatMap((group) =>
       group.links.map((item) => ({
         ...item,

@@ -93,5 +93,5 @@ test("Builder-only users (docbuilder.view/manage) still reach Document Studio, a
   const builderOnly = page.slice(page.indexOf('if (!(await hasPermission(user, "document_templates.manage")))'), page.indexOf("const [canCreateDocument"));
   assert.match(builderOnly, /<BuilderSection user=\{user\} q=\{q\} \/>/);
   assert.doesNotMatch(builderOnly, /createDocTemplate|customDocTemplate|listStudioClauses/);
-  assert.match(src("src/components/nav-config.ts"), /can\("document_templates\.manage", "docbuilder\.view", "docbuilder\.manage"\)\) platformLinks\.push\(\{ href: "\/document-studio"/);
+  assert.match(src("src/components/nav-config.ts"), /can\("document_templates\.manage", "docbuilder\.view", "docbuilder\.manage"\)\) adminLinks\.push\(\{ href: "\/document-studio"/);
 });

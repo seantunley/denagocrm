@@ -42,22 +42,23 @@ test("the account menu is reachable on every breakpoint", () => {
   assert.match(mobileBar, /<AccountCluster /);
 });
 
-test("the sidebar footer is gone, not merely hidden", () => {
-  // Leaving it rendered would keep the height it was taking, which is the whole
-  // point of the move.
+test("the sidebar footer carries no menus — only the redesign's slim links", () => {
+  // The menus (Help, Settings, the account) stay in the top bar. The sidebar
+  // redesign (2026-11-12) put back a slim footer of plain links — Ask the CRM,
+  // your name, Help, Settings — not the dropdown menus that took the height.
   const shell = src("src/components/AppShell.tsx");
   const sidebar = shell.slice(shell.indexOf("function SidebarInner("), shell.indexOf("export default function AppShell"));
   assert.doesNotMatch(sidebar, /Help, Settings & user/);
   assert.doesNotMatch(sidebar, /<SidebarHelpSettings/, "the sidebar no longer carries these");
   assert.doesNotMatch(sidebar, /<AccountMenu/);
   // The nav keeps its scroll region, which is what gains the space.
-  assert.match(sidebar, /flex-1 overflow-y-auto/);
+  assert.match(src("src/components/Nav.tsx"), /flex min-h-0 flex-1 flex-col gap-0\.5 overflow-y-auto/);
 });
 
 test("the page reserves the height the fixed bar takes", () => {
   // A fixed bar over unpadded content hides the first rows of every page.
   const shell = src("src/components/AppShell.tsx");
-  assert.match(shell, /fixed left-60 right-0 top-0 z-30[^"]*h-14/, "bar is fixed, and to the right of the sidebar");
+  assert.match(shell, /fixed right-0 top-0 z-30[^`]*h-14[^`]*\$\{offset\}/, "bar is fixed, and to the right of the sidebar");
   assert.match(shell, /lg:pt-19/, "content clears it");
 });
 

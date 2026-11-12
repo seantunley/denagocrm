@@ -74,7 +74,10 @@ export default function CommandMenu({
   openRef.current = open;
   const enabledSet = enabledModules ? new Set(enabledModules) : undefined;
   const labels = useRecordLabels();
-  const { topLinks, groups } = buildNav(isAdmin, permissions, enabledSet, navLabelOverrides(labels));
+  const nav = buildNav(isAdmin, permissions, enabledSet, navLabelOverrides(labels));
+  // The sidebar footer's Ask the CRM is a page like the pinned ones.
+  const topLinks = [...nav.topLinks, ...nav.footerLinks];
+  const { groups } = nav;
   const granted = new Set(permissions);
   const can = (...keys: string[]) => isAdmin || keys.some((key) => granted.has(key));
   const packOn = (href: string) => !enabledSet || isPathEnabled(href, enabledSet);
@@ -263,17 +266,18 @@ export default function CommandMenu({
 
         <CommandGroup heading="Go to">
           {shownTopLinks.map((link) => (
-            <CommandItem key={link.href} value={`page ${link.label}`} onSelect={() => go(link.href)}>
+            <CommandItem key={link.href} value={`page ${link.label} ${link.keywords?.join(" ") ?? ""}`} onSelect={() => go(link.href)}>
               <link.icon className="size-4 text-muted-foreground" />
               {link.label}
             </CommandItem>
           ))}
         </CommandGroup>
 
+        {/* Keywords in each value: a link is found by its old name ("Workshop Cal", "Repairs") after the sidebar redesign. */}
         {shownGroups.map((group) => (
           <CommandGroup key={group.key} heading={group.label}>
             {group.links.map((link) => (
-              <CommandItem key={link.href} value={`${group.label} ${link.label}`} onSelect={() => go(link.href)}>
+              <CommandItem key={link.href} value={`${group.label} ${link.label} ${link.keywords?.join(" ") ?? ""}`} onSelect={() => go(link.href)}>
                 <link.icon className="size-4 text-muted-foreground" />
                 {link.label}
               </CommandItem>

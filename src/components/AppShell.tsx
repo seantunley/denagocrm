@@ -1,12 +1,14 @@
 "use client";
 
-import { useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import BrandLogo from "@/components/BrandLogo";
 import { usePathname } from "next/navigation";
 import Link from "next/link";
 import {
   Bell,
   Cake,
+  PanelLeftClose,
+  PanelLeftOpen,
   Search,
 } from "lucide-react";
 import Nav from "@/components/Nav";
@@ -105,44 +107,82 @@ function AccountCluster({ user, isOwner, tenantId, unreadNotices = 0, birthdaysT
   );
 }
 
-function SidebarInner({ user, inboxWaiting = 0, casesWaiting = 0, activitiesOverdue = 0, enabledModules, brand, phone = false }: { user: ShellUser; inboxWaiting?: number; casesWaiting?: number; activitiesOverdue?: number; enabledModules?: string[]; brand?: { logoUrl: string | null; displayName: string }; phone?: boolean }) {
+/**
+ * The sidebar (redesign, 2026-11-12): the workspace header with its collapse
+ * button, "Search or jump to…" (the command palette), Quick actions, then the
+ * menu and its footer (Nav). `rail`: the collapsed 72px strip of icons.
+ */
+function SidebarInner({ user, inboxWaiting = 0, casesWaiting = 0, activitiesOverdue = 0, enabledModules, brand, phone = false, rail = false, onToggleRail }: { user: ShellUser; inboxWaiting?: number; casesWaiting?: number; activitiesOverdue?: number; enabledModules?: string[]; brand?: { logoUrl: string | null; displayName: string }; phone?: boolean; rail?: boolean; onToggleRail?: () => void }) {
   const isOwner = ownsWorkspace(user);
-  return (
-    <div className="relative flex h-full flex-col overflow-hidden bg-sidebar">
-      <div className="pointer-events-none absolute -left-28 top-24 size-64 rounded-full bg-orange-500/[0.055] blur-3xl" />
-      {/* Brand */}
-      <div className="flex h-16 items-center border-b border-sidebar-border px-4">
-        <BrandLogo
-          logoUrl={brand?.logoUrl ?? null}
-          alt={brand?.displayName ?? "Denago Cape Town"}
-          className="h-8 w-auto object-contain"
-        />
-      </div>
+  const name = brand?.displayName ?? "Denago Cape Town";
+  const tile = (
+    <span aria-hidden className="grid size-9 shrink-0 place-items-center rounded-[10px] bg-primary text-base font-bold text-zinc-950">
+      {name.trim().charAt(0).toUpperCase() || "D"}
+    </span>
+  );
+  const collapse = onToggleRail && (
+    <button
+      type="button"
+      onClick={onToggleRail}
+      aria-label={rail ? "Expand sidebar" : "Collapse sidebar"}
+      aria-pressed={rail}
+      title={rail ? "Expand sidebar" : "Collapse sidebar"}
+      className="grid size-11 shrink-0 place-items-center rounded-[10px] text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground pointer-fine:size-9"
+    >
+      {rail ? <PanelLeftOpen className="size-[18px]" /> : <PanelLeftClose className="size-[18px]" />}
+    </button>
+  );
+  const badges = { "/inbox": inboxWaiting, "/cases": casesWaiting, "/activities": activitiesOverdue };
 
-      {/* Command trigger + quick actions */}
-      <div className="relative space-y-2 px-3 pt-3">
+  if (rail) {
+    return (
+      <div className="flex h-full flex-col items-center gap-3 bg-sidebar py-4">
+        {tile}
+        {collapse}
         <button
+          type="button"
           onClick={openCommandMenu}
-          className="flex w-full items-center gap-2 rounded-md border border-sidebar-border bg-sidebar-accent/40 px-2.5 py-1.5 text-[13px] text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
+          aria-label="Search or jump to"
+          title="Search or jump to (⌘K)"
+          className="grid size-11 shrink-0 place-items-center rounded-[10px] border border-sidebar-border bg-card text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
         >
-          <Search className="size-4" />
-          <span className="flex-1 text-left">Search…</span>
-          <kbd className="rounded border border-sidebar-border bg-background/60 px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
-            ⌘K
-          </kbd>
+          <Search className="size-[18px]" />
         </button>
-        {/* On the phone, Capture on the bottom bar is the way to start something. */}
-        {!phone && <QuickActions isAdmin={isOwner} permissions={user.permissions} enabledModules={enabledModules} />}
+        <Nav rail user={user} isAdmin={isOwner} permissions={user.permissions} enabledModules={enabledModules} badges={badges} />
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex h-full flex-col gap-3 bg-sidebar px-3 py-4">
+      {/* The workspace: its letter, its name, and the collapse button. */}
+      <div className="flex items-center gap-3 px-1">
+        {tile}
+        <div className="flex min-w-0 flex-1 flex-col">
+          <span className="truncate text-sm font-semibold text-sidebar-accent-foreground">{name}</span>
+          <span className="text-xs text-muted-foreground">Workspace</span>
+        </div>
+        {collapse}
       </div>
 
-      {/* Nav */}
-      <div className="relative flex-1 overflow-y-auto px-3 py-3">
-        <Nav isAdmin={isOwner} permissions={user.permissions} enabledModules={enabledModules} badges={{ "/inbox": inboxWaiting, "/cases": casesWaiting, "/activities": activitiesOverdue }} phone={phone} />
-      </div>
+      <button
+        type="button"
+        onClick={openCommandMenu}
+        className="flex min-h-11 w-full items-center gap-2.5 rounded-[10px] border border-sidebar-border bg-card px-3 text-left text-sm text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground pointer-fine:min-h-9"
+      >
+        <Search className="size-4 shrink-0" />
+        <span className="flex-1">Search or jump to…</span>
+        <kbd className="rounded-md border border-sidebar-border px-1.5 py-0.5 text-[11px] font-semibold text-muted-foreground">⌘K</kbd>
+      </button>
+      {/* On the phone, Capture on the bottom bar is the way to start something. */}
+      {!phone && <QuickActions isAdmin={isOwner} permissions={user.permissions} enabledModules={enabledModules} />}
 
+      <Nav user={user} isAdmin={isOwner} permissions={user.permissions} enabledModules={enabledModules} badges={badges} phone={phone} />
     </div>
   );
 }
+
+const RAIL_KEY = "denago-sidebar-rail";
 
 export default function AppShell({
   user,
@@ -193,6 +233,26 @@ export default function AppShell({
 }) {
   const [mobileOpen, setMobileOpen] = useState(false);
   const pathname = usePathname();
+  // The collapsed rail, remembered per browser (a per-viewer convenience). Read
+  // after mount: the server renders the full sidebar, which is the default.
+  const [rail, setRail] = useState(false);
+  useEffect(() => {
+    try {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- browser-only storage, read once after hydration
+      if (localStorage.getItem(RAIL_KEY) === "1") setRail(true);
+    } catch {}
+  }, []);
+  const toggleRail = () => {
+    setRail((was) => {
+      try {
+        localStorage.setItem(RAIL_KEY, was ? "0" : "1");
+      } catch {}
+      return !was;
+    });
+  };
+  // 280px open, 72px as a rail — the top bar and the page start where it ends.
+  const offset = rail ? "lg:left-[72px]" : "lg:left-70";
+  const pad = rail ? "lg:pl-[72px]" : "lg:pl-70";
 
   return (
     <TooltipProvider delayDuration={250}>
@@ -235,7 +295,7 @@ export default function AppShell({
       {/* Desktop top bar. Sticky rather than static: these are the controls you
           reach for from anywhere in a long page, and the sidebar footer they came
           from was always on screen. */}
-      <header className="fixed left-60 right-0 top-0 z-30 hidden h-14 items-center gap-4 border-b border-sidebar-border bg-background/80 px-5 backdrop-blur-xl lg:flex">
+      <header className={`fixed right-0 top-0 z-30 hidden h-14 items-center gap-4 border-b border-sidebar-border bg-background/80 px-5 backdrop-blur-xl lg:flex ${offset}`}>
         <div className="min-w-0 flex-1">
           <ClockWeather cities={weatherCities} />
         </div>
@@ -262,12 +322,12 @@ export default function AppShell({
       />
 
       {/* Desktop sidebar */}
-      <aside className="fixed inset-y-0 left-0 z-40 hidden w-60 border-r border-sidebar-border lg:flex lg:flex-col">
-        <SidebarInner user={user} inboxWaiting={inboxWaiting} casesWaiting={casesWaiting} activitiesOverdue={activitiesOverdue} enabledModules={enabledModules} brand={brand} />
+      <aside className={`fixed inset-y-0 left-0 z-40 hidden border-r border-sidebar-border lg:flex lg:flex-col ${rail ? "w-[72px]" : "w-70"}`}>
+        <SidebarInner user={user} inboxWaiting={inboxWaiting} casesWaiting={casesWaiting} activitiesOverdue={activitiesOverdue} enabledModules={enabledModules} brand={brand} rail={rail} onToggleRail={toggleRail} />
       </aside>
 
-      <main className="relative lg:pl-60">
-        <div className="pointer-events-none fixed inset-x-0 top-0 -z-10 h-72 bg-[radial-gradient(circle_at_65%_0%,rgba(249,115,22,.045),transparent_42%)] lg:left-60" />
+      <main className={`relative ${pad}`}>
+        <div className={`pointer-events-none fixed inset-x-0 top-0 -z-10 h-72 bg-[radial-gradient(circle_at_65%_0%,rgba(249,115,22,.045),transparent_42%)] ${offset}`} />
         {/* No width cap: the page runs to the same edges as the top bar (both lg:px-5). Capped and centred, it sat
             inside the bar on a wide screen — the bar's ends hung out past the content and the two never lined up. */}
         <div className="denago-workspace p-3 pb-24 pt-15 sm:p-4 sm:pb-24 sm:pt-16 lg:p-5 lg:pt-19">
