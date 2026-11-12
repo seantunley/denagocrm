@@ -139,28 +139,31 @@ export function ManageDocumentDialog({
 }) {
   return (
       <Dialog open={open} onOpenChange={onOpenChange}>
-        <ResponsiveDialogContent className="sm:max-w-md">
-          <DialogHeader>
-            <DialogTitle className="truncate">Manage — {doc.fileName}</DialogTitle>
+        <ResponsiveDialogContent className="overflow-x-hidden sm:max-w-lg">
+          <DialogHeader className="min-w-0">
+            {/* pr-8 keeps a long file name clear of the dialog's close ✕. */}
+            <DialogTitle className="truncate pr-8" title={doc.fileName}>Manage — {doc.fileName}</DialogTitle>
           </DialogHeader>
 
-          <SaveForm action={renameDocument.bind(null, doc.id)} resetOnSuccess={false} className="space-y-2">
+          <SaveForm action={renameDocument.bind(null, doc.id)} resetOnSuccess={false} className="min-w-0 space-y-2">
             <label className="block text-xs font-medium text-muted-foreground">Name & tag</label>
-            <div className="flex gap-2">
-              <input name="fileName" defaultValue={doc.fileName} className={input} required />
+            {/* The name takes what the label leaves (min-w-0 lets it shrink); on a phone they stack.
+                It was `w-full` beside a fixed-width label, so the row was wider than the dialog. */}
+            <div className="flex flex-col gap-2 sm:flex-row">
+              <input name="fileName" defaultValue={doc.fileName} className={`${input} min-w-0 sm:flex-1`} required />
               {/* A label the CRM set (signed copy, the customer's proof of payment…) is what other screens
                   read, so it is shown and not offered for change — and "pop" or "invoice" are no longer
                   choices here. Anything else is one of the workspace's document types. No `tag` is posted
                   for a CRM-set label, which the action reads as "leave it". */}
               {isPersonLabel(doc.tag) ? (
-                <select name="tag" defaultValue={doc.tag ?? ""} className={`${input} !w-48`}>
+                <select name="tag" defaultValue={doc.tag ?? ""} className={`${input} shrink-0 sm:!w-48`}>
                   <option value="">Not labelled</option>
                   {/* An older label that is on no list any more stays selectable as itself, so saving the name does not drop it. */}
                   {doc.tag && !(targets.documentTypes ?? []).includes(doc.tag) && <option value={doc.tag}>{doc.tag}</option>}
                   {(targets.documentTypes ?? []).map((type) => <option key={type} value={type}>{type}</option>)}
                 </select>
               ) : (
-                <span className={`${input} !w-48 truncate text-muted-foreground`} title="Set by the CRM">{doc.tag} · set by the CRM</span>
+                <span className={`${input} shrink-0 truncate text-muted-foreground sm:!w-48`} title="Set by the CRM">{doc.tag} · set by the CRM</span>
               )}
             </div>
             <SaveButton className={buttonVariants({ size: "sm" })}>Save</SaveButton>
