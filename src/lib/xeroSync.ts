@@ -276,7 +276,8 @@ export const REFRESH_ALL_CAP = 25;
  * The hourly automatic payments check (api/cron/xero-payments), for ONE workspace:
  * while payments come from Xero and the owner hasn't switched it off (Settings →
  * Integrations → Xero — visible, switchable), the same routine as "Refresh all"
- * over its open invoices in Xero — up to 25 a run, never-tried / longest-ago-tried
+ * over its open invoices in Xero, and once a day each over its PAID ones (a
+ * payment reversed in Xero) — up to 25 a run, never-tried / longest-ago-tried
  * first, each marked tried before it's tried, so successive runs reach them all.
  * Audited as the automatic check (no person); never files a PDF (xeroPdfStatus).
  * Stops early when the run's time is nearly up, or when Xero says the connection
@@ -288,7 +289,11 @@ export async function runAutomaticXeroCheck(
 ): Promise<{ checked: number; failed: number } | { skipped: string }> {
   if (!(await paymentsComeFromXero(tenantId))) return { skipped: "payments-not-from-xero" };
   if ((await getWorkspaceSetting(tenantId, XERO_AUTO_CHECK_KEY)) === "off") return { skipped: "switched-off" };
-  const open = await prisma.quote.findMany({ where: openXeroInvoicesWhere(tenantId, null), select: { id: true, xeroCheckedAt: true } });
+  // Paid invoices too, about once a day each — oldest-checked first, inside the same 25 a run.
+  const open = await prisma.quote.findMany({
+    where: openXeroInvoicesWhere(tenantId, null, new Date(Date.now() - XERO_PAID_REVISIT_MS)),
+    select: { id: true, xeroCheckedAt: true },
+  });
   let checked = 0;
   let failed = 0;
   if (open.length) {
@@ -319,15 +324,27 @@ export async function runAutomaticXeroCheck(
   return { checked, failed };
 }
 
-/** The open invoices in Xero a refresh is worth trying — in this workspace (and, for a person, only theirs). */
-export function openXeroInvoicesWhere(tenantId: string, accessible: string[] | null) {
+/** How often the automatic check looks again at an invoice that is already PAID in Xero. */
+export const XERO_PAID_REVISIT_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * The open invoices in Xero a refresh is worth trying — in this workspace (and, for a person, only theirs).
+ * `paidCheckedBefore`: also a PAID one last checked before then — a payment
+ * reversed or refunded in Xero turns it unpaid, and only a look brings that back
+ * (review of #1073). The automatic check passes it; Refresh all doesn't.
+ */
+export function openXeroInvoicesWhere(tenantId: string, accessible: string[] | null, paidCheckedBefore?: Date) {
   return {
     tenantId,
     status: "accepted",
     deletedAt: null,
     supersededAt: null,
     xeroInvoiceId: { not: null },
-    OR: [{ xeroStatus: { notIn: REFRESH_ALL_SKIPS } }, { xeroStatus: "PAID", xeroAmountPaidCents: null }],
+    OR: [
+      { xeroStatus: { notIn: REFRESH_ALL_SKIPS } },
+      { xeroStatus: "PAID", xeroAmountPaidCents: null },
+      ...(paidCheckedBefore ? [{ xeroStatus: "PAID", OR: [{ xeroCheckedAt: null }, { xeroCheckedAt: { lt: paidCheckedBefore } }] }] : []),
+    ],
     ...(accessible === null ? {} : { id: { in: accessible } }),
   };
 }

@@ -257,7 +257,7 @@ test("the sync runs under the ledger lock, only for the still-linked invoice, ne
   assert.match(lib, /const fromXero = await syncPaymentsFromXero\(\{ tenantId, quoteId, invoice, user \}\);/);
   assert.match(actions, /\.getInvoice\(invoice\.id\)\s*\.then\(\(full\) => syncPaymentsFromXero\(\{ tenantId, quoteId, invoice: full, user \}\)\)/);
   // Refresh all still takes a PAID invoice whose payments were never brought back.
-  assert.match(lib, /OR: \[\{ xeroStatus: \{ notIn: REFRESH_ALL_SKIPS \} \}, \{ xeroStatus: "PAID", xeroAmountPaidCents: null \}\],/);
+  assert.match(lib, /OR: \[\s*\{ xeroStatus: \{ notIn: REFRESH_ALL_SKIPS \} \},\s*\{ xeroStatus: "PAID", xeroAmountPaidCents: null \},/);
 });
 
 test("the CRM's own payment forms stay — refused only for an invoice IN Xero while payments come from Xero; a switch brings them back", () => {
@@ -333,7 +333,7 @@ test("the hourly automatic Xero check: Refresh's own routine, per workspace, vis
   const order = [
     "if (!(await paymentsComeFromXero(tenantId))) return { skipped:",
     "if ((await getWorkspaceSetting(tenantId, XERO_AUTO_CHECK_KEY)) === \"off\") return { skipped: \"switched-off\" };",
-    "where: openXeroInvoicesWhere(tenantId, null)",
+    "where: openXeroInvoicesWhere(tenantId, null, new Date(Date.now() - XERO_PAID_REVISIT_MS))",
     "nextXeroRefreshBatch(open, REFRESH_ALL_CAP)",
     "data: { xeroCheckedAt: new Date() }",
     "await refreshOneFromXero(client, tenantId, quote.id, null);",
@@ -353,6 +353,32 @@ test("the hourly automatic Xero check: Refresh's own routine, per workspace, vis
   assert.match(page, /<input type="checkbox" name="autoCheck" defaultChecked=\{xeroAutoCheck\}/);
   assert.match(actions, /putWorkspaceSetting\(tenantId, XERO_AUTO_CHECK_KEY, autoCheck \? "on" : "off"\)/);
   assert.match(actions, /action: "xero\.auto_check"/);
+});
+
+test("review of #1073: a PAID invoice whose payment is reversed in Xero is looked at again, and comes back unpaid", () => {
+  // The hourly check revisits PAID invoices about once a day each, inside the same capped batch.
+  const where = lib.slice(lib.indexOf("export function openXeroInvoicesWhere("), lib.indexOf("export async function refreshOneFromXero("));
+  assert.match(where, /\.\.\.\(paidCheckedBefore \? \[\{ xeroStatus: "PAID", OR: \[\{ xeroCheckedAt: null \}, \{ xeroCheckedAt: \{ lt: paidCheckedBefore \} \}\] \}\] : \[\]\),/);
+  assert.match(lib, /export const XERO_PAID_REVISIT_MS = 24 \* 60 \* 60 \* 1000;/);
+  assert.match(refreshAll, /where: openXeroInvoicesWhere\(tenantId, accessible\),/, "a person's Refresh all is unchanged");
+  // A paid invoice checked yesterday is picked before open ones checked an hour ago — it's the longest-ago tried.
+  const now = Date.parse("2026-11-12T12:00:00Z");
+  const batch = nextXeroRefreshBatch(
+    [
+      { id: "open-recent", xeroCheckedAt: new Date(now - 3_600_000) },
+      { id: "paid-yesterday", xeroCheckedAt: new Date(now - 25 * 3_600_000) },
+    ],
+    1,
+  );
+  assert.deepEqual(batch.map((q) => q.id), ["paid-yesterday"]);
+  // Xero now holds only the deposit — the R30 000 payment was reversed. Brought from Xero: voided here, and the total drops.
+  const paid = { deposit: { paidAt: day(1), cents: 5_000_000, xeroPaymentId: "p1", createdFromXero: true }, payments: [row("c2", "p2", 30_000, 5)] };
+  const reversed = planXeroPaymentSync(paid, [xp("p1", 1, 50_000)]);
+  assert.deepEqual(reversed.void, ["c2"], "the reversed payment is voided in the CRM");
+  assert.equal(receivedAfterSync(paid, reversed), 5_000_000, "received = what Xero still holds");
+  assert.equal(xeroPaymentsComplete({ amountPaidCents: 5_000_000, payments: [xp("p1", 1, 50_000)] }), true, "and that answer is complete, so it is applied");
+  // Everything reversed: the deposit brought from Xero is cleared too.
+  assert.deepEqual(planXeroPaymentSync(paid, []).deposit, { kind: "clear" });
 });
 
 test("Invoices page: deposit, payments and the statement from each row — the deal page's own panel and rules", () => {
