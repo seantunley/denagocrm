@@ -70,7 +70,7 @@ export const MODULE_REGISTRY: AppModule[] = [
     description: "Vehicles, fleets, test drives, job cards, warranty, service and deliveries.",
     routePrefixes: [
       "/vehicles", "/fleets", "/test-drives", "/jobcards", "/warranty",
-      "/service-due", "/workshop-calendar", "/parts", "/deliveries",
+      "/service-due", "/workshop-calendar", "/parts", "/deliveries", "/invoices",
     ],
   },
   {

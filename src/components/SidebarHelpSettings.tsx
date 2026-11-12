@@ -3,12 +3,8 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
-  Activity,
-  BellRing,
   BookOpen,
-  Building2,
   ChevronRight,
-  Database,
   ExternalLink,
   FileText,
   Info,
@@ -17,12 +13,9 @@ import {
   Rocket,
   Settings,
   Settings2,
-  ShieldCheck,
-  SlidersHorizontal,
-  UserRound,
-  Wrench,
   type LucideIcon,
 } from "lucide-react";
+import { SETTINGS_GROUP_ICONS } from "@/components/settingsIcons";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -44,17 +37,7 @@ const ICON_TRIGGER =
 const PANEL =
   "overflow-hidden rounded-2xl border-sidebar-border/80 bg-popover/98 p-0 shadow-[0_24px_80px_rgba(0,0,0,.38)] backdrop-blur-xl";
 
-const GROUP_ICONS: Record<string, LucideIcon> = {
-  Workspace: Settings2,
-  Personal: UserRound,
-  Organisation: Building2,
-  "Sales & CRM": SlidersHorizontal,
-  Operations: Wrench,
-  Communications: BellRing,
-  "Documents & Data": Database,
-  "Security & Access": ShieldCheck,
-  System: Activity,
-};
+const GROUP_ICONS: Record<string, LucideIcon> = SETTINGS_GROUP_ICONS;
 
 /**
  * Icon-only triggers for the top bar, full rows for the sidebar.

@@ -3,39 +3,20 @@
 import Link from "next/link";
 import { createContext, useContext, useMemo, useState, type ReactNode } from "react";
 import {
-  BellRing,
   BookOpenText,
-  Boxes,
-  Building2,
   Cable,
   ChevronRight,
-  Database,
   Search,
   Settings2,
-  ShieldCheck,
-  SlidersHorizontal,
-  UserRound,
-  Wrench,
   type LucideIcon,
 } from "lucide-react";
 import SettingsNav from "@/components/SettingsNav";
 import { PageHeader } from "@/components/page-header";
 import { Surface } from "@/components/visual-system";
-import { settingsDestination, visibleSettingsGroups, type SettingsGroup } from "@/lib/settings-navigation";
+import { settingsByArea, settingsDestination, visibleSettingsGroups, type SettingsGroup } from "@/lib/settings-navigation";
 import { useSettingsViewer } from "@/components/SettingsViewer";
+import { SETTINGS_GROUP_ICONS } from "@/components/settingsIcons";
 import { cn } from "@/lib/utils";
-
-const groupIcons: Record<string, LucideIcon> = {
-  Workspace: Settings2,
-  Personal: UserRound,
-  "Sales & CRM": SlidersHorizontal,
-  Operations: Wrench,
-  Communications: BellRing,
-  Organisation: Building2,
-  "Security & Access": ShieldCheck,
-  "Documents & Data": Database,
-  System: Boxes,
-};
 
 /**
  * When true, SettingsWorkspace renders only the active section (title + content)
@@ -84,7 +65,8 @@ export function SettingsWorkspace({
   const overview = current === "overview";
 
   return (
-    <div className="space-y-4">
+    // data-settings-page: SettingsModal refuses to open on top of a full Settings page.
+    <div className="space-y-4" data-settings-page>
       <PageHeader title={title} description={description}>{actions}</PageHeader>
       <SettingsFinder groups={shown} autoFocus={overview} />
       {overview ? (
@@ -145,27 +127,50 @@ function SettingsFinder({ groups, autoFocus = false }: { groups: SettingsGroup[]
   );
 }
 
+/**
+ * The settings home (stage 2 of the reorganisation): the three areas — My
+ * account, Workspace, Admin — each with a card per group saying what is in it,
+ * its entries as links. Admin sits last, set apart: it is the system, not the
+ * workspace's setup. Only what this viewer may open (`groups` is already filtered).
+ */
 export function SettingsOverview({ groups }: { groups: SettingsGroup[] }) {
   return (
-    <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-      {groups.filter((group) => group.label !== "Workspace").map((group) => {
-        const Icon = groupIcons[group.label] ?? Cable;
-        return (
-          <Surface key={group.label} className="p-4">
-            <div className="flex items-center gap-3">
-              <span className="grid size-9 place-items-center rounded-lg border border-primary/20 bg-primary/10 text-primary"><Icon className="size-4" /></span>
-              <div><h2 className="font-semibold tracking-tight text-foreground">{group.label}</h2><p className="text-xs text-muted-foreground">{group.items.length} configuration area{group.items.length === 1 ? "" : "s"}</p></div>
-            </div>
-            <div className="mt-3 divide-y divide-border border-t border-border">
-              {group.items.map((item) => (
-                <Link key={item.key} href={settingsDestination(item)} className="flex items-center justify-between gap-3 py-2.5 text-sm text-muted-foreground transition hover:text-foreground">
-                  {item.label}<ChevronRight className="size-4 shrink-0" />
-                </Link>
-              ))}
-            </div>
-          </Surface>
-        );
-      })}
+    <div className="space-y-6">
+      {settingsByArea(groups).map(({ area, groups: inArea }) => (
+        <section
+          key={area.key}
+          aria-labelledby={`settings-area-${area.key}`}
+          className={cn("space-y-3", area.key === "admin" && "border-t border-dashed border-border pt-5")}
+        >
+          <div>
+            <h2 id={`settings-area-${area.key}`} className="text-xs font-semibold uppercase tracking-[0.12em] text-muted-foreground">{area.label}</h2>
+            <p className="mt-0.5 text-xs text-muted-foreground/80">{area.description}</p>
+          </div>
+          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+            {inArea.map((group) => {
+              const Icon = SETTINGS_GROUP_ICONS[group.label] ?? Cable;
+              return (
+                <Surface key={group.label} className="p-4">
+                  <div className="flex items-start gap-3">
+                    <span className="grid size-9 shrink-0 place-items-center rounded-lg border border-primary/20 bg-primary/10 text-primary"><Icon className="size-4" /></span>
+                    <div className="min-w-0">
+                      <h3 className="font-semibold tracking-tight text-foreground">{group.label}</h3>
+                      <p className="text-xs leading-5 text-muted-foreground">{group.description}</p>
+                    </div>
+                  </div>
+                  <div className="mt-3 divide-y divide-border border-t border-border">
+                    {group.items.map((item) => (
+                      <Link key={item.key} href={settingsDestination(item)} className="flex items-center justify-between gap-3 py-2.5 text-sm text-muted-foreground transition hover:text-foreground">
+                        {item.label}<ChevronRight className="size-4 shrink-0" />
+                      </Link>
+                    ))}
+                  </div>
+                </Surface>
+              );
+            })}
+          </div>
+        </section>
+      ))}
     </div>
   );
 }

@@ -6,6 +6,46 @@
 @custom-variant short (@media (max-height: 520px));
 
 /* ─────────────────────────────────────────────────────────────────────────
+   Subtle depth (sidebar brief PR 2; the canvas board "Sidebar — with subtle
+   depth", 2026-11-12). Light from above; three surface levels — the sidebar
+   (lowest), the page sheet, floating panels — and two recipes, raised and
+   inset. The values are the --depth-* tokens in :root; these utilities only
+   apply them, so a light theme (if one is ever added) re-sets the tokens with
+   lower shadow opacity and nothing here changes.
+   ──────────────────────────────────────────────────────────────────────── */
+@utility depth-raised {
+  background-color: var(--depth-raised);
+  background-image: var(--depth-raised-sheen);
+  box-shadow: var(--depth-raised-shadow);
+}
+@utility depth-inset {
+  background-color: var(--depth-inset);
+  box-shadow: var(--depth-inset-shadow);
+}
+@utility depth-key {
+  background-color: var(--depth-key);
+  box-shadow: var(--depth-key-shadow);
+}
+@utility depth-sheen {
+  background-image: var(--depth-sheen);
+  box-shadow: var(--depth-sheen-shadow);
+}
+@utility depth-groove {
+  height: 2px;
+  border-radius: 2px;
+  background-color: var(--depth-groove);
+  box-shadow: 0 1px 0 var(--depth-edge);
+}
+@utility depth-float {
+  background-color: var(--depth-float);
+  background-image: var(--depth-float-sheen);
+  box-shadow: var(--depth-float-shadow);
+}
+@utility depth-sheet {
+  box-shadow: var(--depth-sheet-shadow);
+}
+
+/* ─────────────────────────────────────────────────────────────────────────
    Design tokens — Linear-style dark, Denago orange accent.
    New (shadcn/Radix) components consume these via @theme mappings below.
    Legacy utilities and component primitives intentionally share the same
@@ -45,8 +85,26 @@
   --input: oklch(1 0 0 / 12%);
   --ring: oklch(0.672 0.186 41.5 / 60%);
 
-  --sidebar: oklch(0.151 0.004 264);
+  /* The lowest surface: a shade darker than the page, which sits on it as a sheet (sidebar brief PR 2). */
+  --sidebar: oklch(0.14 0.004 264);
   --sidebar-foreground: oklch(0.86 0.006 264);
+
+  /* Subtle depth — see the depth-* utilities at the top of this file. */
+  --depth-raised: oklch(0.255 0.006 264);
+  --depth-raised-sheen: linear-gradient(180deg, oklch(1 0 0 / 6%), oklch(1 0 0 / 0%));
+  --depth-raised-shadow: inset 0 1px 0 oklch(1 0 0 / 11%), 0 1px 2px oklch(0 0 0 / 55%), 0 8px 16px -8px oklch(0 0 0 / 70%);
+  --depth-inset: oklch(0.115 0.004 264);
+  --depth-inset-shadow: inset 0 2px 4px oklch(0 0 0 / 60%), 0 1px 0 oklch(1 0 0 / 7%);
+  --depth-key: oklch(0.2 0.005 264);
+  --depth-key-shadow: inset 0 1px 0 oklch(1 0 0 / 10%), 0 1px 2px oklch(0 0 0 / 50%);
+  --depth-sheen: linear-gradient(180deg, oklch(1 0 0 / 24%), oklch(1 0 0 / 0%) 70%);
+  --depth-sheen-shadow: inset 0 1px 0 oklch(1 0 0 / 38%), 0 1px 3px oklch(0 0 0 / 50%);
+  --depth-groove: oklch(0 0 0 / 45%);
+  --depth-edge: oklch(1 0 0 / 6%);
+  --depth-float: oklch(0.235 0.005 264);
+  --depth-float-sheen: linear-gradient(180deg, oklch(1 0 0 / 5%), oklch(1 0 0 / 0%) 40%);
+  --depth-float-shadow: inset 0 1px 0 oklch(1 0 0 / 14%), 0 0 0 1px oklch(0 0 0 / 40%), 0 2px 6px oklch(0 0 0 / 45%), 0 28px 56px -12px oklch(0 0 0 / 75%);
+  --depth-sheet-shadow: inset 1px 1px 0 oklch(1 0 0 / 8%), -14px 0 28px -10px oklch(0 0 0 / 65%);
   --sidebar-primary: oklch(0.672 0.186 41.5);
   --sidebar-primary-foreground: oklch(0.99 0 0);
   --sidebar-accent: oklch(0.246 0.006 264);

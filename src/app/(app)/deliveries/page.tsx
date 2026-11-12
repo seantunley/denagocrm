@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { SaveForm, SaveButton } from "@/components/SaveForm";
-import { Truck, FileText, Wallet, CalendarClock, PackageCheck, ArrowRight, Camera } from "lucide-react";
+import { Truck, FileText, Wallet, CalendarClock, PackageCheck, ArrowRight, CheckCircle2, PanelRightOpen } from "lucide-react";
 import DirectPhotoUploader from "@/components/DirectPhotoUploader";
 import { prisma } from "@/lib/db";
 import {
@@ -38,7 +38,10 @@ import { deliveryHandoverReadiness, handoverRunSelection } from "@/lib/checklist
 import { runsForHost, templatesForHostRecord } from "@/lib/checklists/store";
 import { deliveryNoteState } from "@/lib/deliveryNoteSigning";
 import { deliveryNoteSigning, type DeliveryNoteSigning } from "@/components/signing/deliveryNoteSigning";
-import { getRegionalSettings } from "@/lib/settings";
+import { getRegionalSettings, resolveIntegrationField } from "@/lib/settings";
+import XeroInvoiceControl from "@/components/XeroInvoiceControl";
+import { xeroOwnsPayments, xeroStatusLabel } from "@/lib/xeroInvoice";
+import { paymentsComeFromXero } from "@/lib/xero";
 import { isModuleEnabled } from "@/lib/modules/enabled";
 import { actingTenantId } from "@/lib/actingTenant";
 import { getCompanyProfile } from "@/lib/companyProfile";
@@ -46,7 +49,14 @@ import VendorDeliveries from "@/components/deliveries/VendorDeliveries";
 
 export const metadata = { title: "Deliveries" };
 
-type Col = "invoice" | "deposit" | "schedule" | "deliver";
+/**
+ * The columns are what stands between the sale and the handover (Sean, 2026-11-11:
+ * "too much stuff is happening around that deliveries board"): money first —
+ * invoiced AND deposit in, as one step — then the date, then the day itself. Each
+ * card shows ONE next step; everything else is behind its Details button. The full
+ * money picture (totals, paid, owing, Xero) is the Invoices page.
+ */
+type Col = "payment" | "schedule" | "deliver" | "delivered";
 
 const columns: {
   key: Col;
@@ -55,10 +65,10 @@ const columns: {
   accent: string;
   icon: React.ReactNode;
 }[] = [
-  { key: "invoice", title: "To invoice", hint: "Signed — send & upload the invoice", accent: "#3b82f6", icon: <FileText className="size-3.5" /> },
-  { key: "deposit", title: "Awaiting deposit", hint: "Upload proof of payment when it lands", accent: "#f59e0b", icon: <Wallet className="size-3.5" /> },
-  { key: "schedule", title: "Schedule delivery", hint: "Pick the date — goes on the workshop calendar", accent: "#a855f7", icon: <CalendarClock className="size-3.5" /> },
-  { key: "deliver", title: "Scheduled", hint: "Mark delivered on handover day", accent: "#10b981", icon: <PackageCheck className="size-3.5" /> },
+  { key: "payment", title: "Awaiting payment", hint: "Invoice it, then the deposit", accent: "#f59e0b", icon: <Wallet className="size-3.5" /> },
+  { key: "schedule", title: "Ready to schedule", hint: "Paid — pick the delivery date", accent: "#a855f7", icon: <CalendarClock className="size-3.5" /> },
+  { key: "deliver", title: "Scheduled", hint: "Hand it over on the day", accent: "#10b981", icon: <PackageCheck className="size-3.5" /> },
+  { key: "delivered", title: "Delivered this month", hint: "Handed over — kept here until the month ends", accent: "#64748b", icon: <CheckCircle2 className="size-3.5" /> },
 ];
 
 export default async function DeliveriesPage() {
@@ -96,7 +106,22 @@ export default async function DeliveriesPage() {
    * helper had always been below it, and nothing before that had reached up.
    */
   const colOf = (quote: (typeof quotes)[number]): Col =>
-    !quote.invoicedAt ? "invoice" : !quote.depositPaidAt ? "deposit" : !quote.deliveryScheduledFor ? "schedule" : "deliver";
+    quote.deliveredAt ? "delivered" : !quote.invoicedAt || !quote.depositPaidAt ? "payment" : !quote.deliveryScheduledFor ? "schedule" : "deliver";
+
+  // Handed over since the 1st — the board's last column, so a delivery doesn't vanish the moment it's done.
+  const monthStart = new Date();
+  monthStart.setDate(1);
+  monthStart.setHours(0, 0, 0, 0);
+  const delivered = await prisma.quote.findMany({
+    where: {
+      status: "accepted",
+      deliveredAt: { gte: monthStart },
+      supersededAt: null,
+      ...(quoteIds === null ? {} : { id: { in: quoteIds } }),
+    },
+    include: { contact: true, lead: { include: { product: true } }, items: true, fees: true },
+    orderBy: { deliveredAt: "desc" },
+  });
 
   const checklistByQuote = new Map<string, {
     templates: Awaited<ReturnType<typeof templatesForHostRecord>>;
@@ -115,10 +140,11 @@ export default async function DeliveriesPage() {
     }));
   }
   // One batched, tenant-scoped lookup for the board — see lib/quoteBillTo.ts.
-  const fleetsById = await loadBillToFleets(prisma, quotes.map((quote) => quote.fleetId));
+  const onBoard = [...quotes, ...delivered];
+  const fleetsById = await loadBillToFleets(prisma, onBoard.map((quote) => quote.fleetId));
   const moneyFmt = await getRegionalSettings();
   const docs = await prisma.document.findMany({
-    where: { quoteId: { in: quotes.map((quote) => quote.id) }, deletedAt: null },
+    where: { quoteId: { in: onBoard.map((quote) => quote.id) }, deletedAt: null },
     select: { quoteId: true, tag: true },
   });
   const photoCount = (quoteId: string) =>
@@ -157,6 +183,10 @@ export default async function DeliveriesPage() {
   // Delivery bookings with a transport supplier, from "Schedule delivery" on (Suppliers module only).
   const bookable = (await isModuleEnabled("suppliers")) ? quotes.filter((quote) => colOf(quote) === "schedule" || colOf(quote) === "deliver") : [];
   const tenantId = await actingTenantId();
+  // "Send to Xero" appears once this workspace has connected a Xero organisation (Settings → Integrations).
+  const xeroConnected = canManage && Boolean(await resolveIntegrationField(tenantId, "xero", "XERO_TENANT_ID"));
+  // Payments come from Xero (2026-11-11): an invoice in Xero takes its deposit from there.
+  const paymentsFromXero = await paymentsComeFromXero(tenantId);
   const [bookings, transport, company] = bookable.length
     ? await Promise.all([
         prisma.vendorDelivery.findMany({
@@ -233,16 +263,26 @@ export default async function DeliveriesPage() {
                           <span className="shrink-0 rounded-full bg-muted px-2 py-1 text-[10px] font-medium text-muted-foreground">{stage?.title}</span>
                         </div>
                         <p className="mt-2 text-[11px] text-muted-foreground">{photos} handover photo{photos === 1 ? "" : "s"}{quote.deliveryScheduledFor ? ` · ${formatDate(quote.deliveryScheduledFor)}` : ""}{quote.depositPaidCents != null ? ` · deposit ${formatZAR(quote.depositPaidCents, withCurrency(moneyFmt, quote.currency))}` : ""}</p>
-                        {canManage && <FulfilmentCorrections quote={quote} moneyFmt={withCurrency(moneyFmt, quote.currency)} />}
-                        {deliveryBookings(quote)}
-                        {/* Same tab on mobile, like the delivery note: keeps PWA back navigation. */}
-                        <div className="mt-1.5 flex flex-wrap gap-x-3 gap-y-1">
-                          {quotePrintLinks(quote).map((link) => (
-                            <a key={link.href} href={link.href} className="text-xs text-primary hover:underline">
-                              {link.label}
-                            </a>
-                          ))}
-                        </div>
+                        {/* The phone is the handover tool: money and paperwork sit behind Details. */}
+                        <ModalTrigger
+                          label={<span className="inline-flex items-center gap-1"><PanelRightOpen className="size-3.5" /> Details</span>}
+                          title={`Q-${quote.number} · ${who}`}
+                          buttonClass="mt-1.5 text-xs text-primary hover:underline"
+                        >
+                          <div className="space-y-4">
+                            {/* Same tab on mobile, like the delivery note: keeps PWA back navigation. */}
+                            <div className="flex flex-wrap gap-x-3 gap-y-1">
+                              {quotePrintLinks(quote).map((link) => (
+                                <a key={link.href} href={link.href} className="text-xs text-primary hover:underline">
+                                  {link.label}
+                                </a>
+                              ))}
+                            </div>
+                            {canManage && <FulfilmentCorrections quote={quote} moneyFmt={withCurrency(moneyFmt, quote.currency)} />}
+                            {xeroConnected && <XeroInvoiceControl quote={quote} crmTotalCents={quoteTotal(quote)} />}
+                            {deliveryBookings(quote)}
+                          </div>
+                        </ModalTrigger>
                       </div>
                     </div>
                     {canManage && (
@@ -329,19 +369,24 @@ export default async function DeliveriesPage() {
         title="Deliveries"
         description={
           canManage
-            ? "Invoice, deposit, scheduling and handover — the whole delivery flow in one board."
+            ? "From sale to handover: get paid, pick the date, hand it over. Each card shows its next step — Details has the rest."
             : "Read-only visibility of vehicles moving through to handover."
         }
-        actions={<Link href="/quotes" className="btn-secondary btn-sm"><FileText className="size-4" /> Open quotes</Link>}
+        actions={
+          <div className="flex gap-2">
+            <Link href="/invoices" className="btn-secondary btn-sm"><Wallet className="size-4" /> Invoices</Link>
+            <Link href="/quotes" className="btn-secondary btn-sm"><FileText className="size-4" /> Open quotes</Link>
+          </div>
+        }
         stats={[
           { label: "Active handovers", value: quotes.length, detail: formatZAR(Math.round(pipelineValue), moneyFmt), icon: Truck },
-          { label: "To invoice", value: count("invoice"), detail: "Accepted, ready to invoice", icon: FileText, tone: "primary" },
-          { label: "Awaiting deposit", value: count("deposit"), detail: "Payment confirmation", icon: Wallet, tone: count("deposit") ? "warning" : "default" },
-          { label: "Ready / scheduled", value: count("schedule") + count("deliver"), detail: "Handover pipeline", icon: PackageCheck, tone: "success" },
+          { label: "Awaiting payment", value: count("payment"), detail: "Invoice and deposit", icon: Wallet, tone: count("payment") ? "warning" : "default" },
+          { label: "Ready to schedule", value: count("schedule"), detail: "Paid — needs a date", icon: CalendarClock, tone: "primary" },
+          { label: "Scheduled", value: count("deliver"), detail: `${delivered.length} delivered this month`, icon: PackageCheck, tone: "success" },
         ]}
       />
 
-      {quotes.length === 0 ? (
+      {onBoard.length === 0 ? (
         <div className="rounded-xl border border-border bg-card p-10 text-center shadow-sm">
           <div className="mx-auto mb-4 grid size-12 place-items-center rounded-full border border-border bg-muted/40 text-muted-foreground">
             <Truck className="size-6" aria-hidden="true" />
@@ -349,7 +394,7 @@ export default async function DeliveriesPage() {
           <h2 className="text-base font-semibold text-foreground">No handovers in progress</h2>
           <p className="mx-auto mt-1.5 max-w-md text-sm text-muted-foreground">
             A quote lands on this board the moment it&apos;s <strong className="font-medium text-foreground">accepted</strong> — then
-            moves through invoice → deposit → scheduling → handover, and drops off once you mark it delivered.
+            moves through payment → scheduling → handover, and sits in “Delivered this month” once it&apos;s handed over.
             You have no accepted quotes waiting for delivery yet.
           </p>
           <Link
@@ -360,13 +405,13 @@ export default async function DeliveriesPage() {
             <ArrowRight className="size-4" aria-hidden="true" />
           </Link>
           <p className="mt-3 text-xs text-muted-foreground/70">
-            Accept a quote (or have the customer sign it) and it&apos;ll appear in “To invoice”.
+            Accept a quote (or have the customer sign it) and it&apos;ll appear in “Awaiting payment”.
           </p>
         </div>
       ) : (
         <div className="grid items-start gap-4 md:grid-cols-2 xl:grid-cols-4">
           {columns.map((column) => {
-            const cards = quotes.filter((quote) => colOf(quote) === column.key);
+            const cards = onBoard.filter((quote) => colOf(quote) === column.key);
             return (
               <section key={column.key} className="overflow-hidden rounded-2xl border border-border bg-card/40">
                 <header className="relative border-b border-border bg-card/80 px-3.5 py-3">
@@ -417,54 +462,76 @@ export default async function DeliveriesPage() {
                         </p>
                         <p className="truncate text-xs text-muted-foreground">{model}</p>
 
-                        {(hasDoc(quote.id, "invoice") || hasDoc(quote.id, "pop") || photos > 0 || quote.deliveryScheduledFor) && (
-                          <div className="mt-2 flex flex-wrap gap-1.5">
-                            {hasDoc(quote.id, "invoice") && <span className={chip}><FileText className="size-2.5" /> Invoice</span>}
-                            {hasDoc(quote.id, "pop") && <span className={chip}><Wallet className="size-2.5" /> POP{quote.depositPaidCents != null ? ` · ${formatZAR(quote.depositPaidCents, withCurrency(moneyFmt, quote.currency))}` : ""}</span>}
-                            {photos > 0 && <span className={chip}>📷 {photos}</span>}
-                            {quote.deliveryScheduledFor && (
-                              <span className={chip}><Truck className="size-2.5" /> {formatDate(quote.deliveryScheduledFor)}</span>
-                            )}
-                          </div>
-                        )}
-
-                        {canManage && <FulfilmentCorrections quote={quote} moneyFmt={withCurrency(moneyFmt, quote.currency)} />}
-
-                        {stockByQuote.has(quote.id) && (() => {
-                          const s = stockByQuote.get(quote.id)!;
-                          const meta = STOCK_CHIP[s.status] ?? { label: s.status.replaceAll("_", " "), cls: "border-border bg-muted/40 text-muted-foreground" };
-                          return (
-                            <Link
-                              href={`/stock/${s.unitId}`}
-                              className={`mt-2 inline-flex items-center gap-1 rounded-md border px-1.5 py-0.5 text-[10px] font-medium ${meta.cls}`}
-                              title="Allocated stock — open the unit"
-                            >
-                              <PackageCheck className="size-2.5" /> {meta.label}{s.count > 1 ? ` · ${s.count} units` : ""}
-                            </Link>
-                          );
-                        })()}
-
-                        {/* Every card is an accepted quote that passed getAccessibleQuoteIds
-                            — the gate the invoice/agreement print routes apply. */}
-                        <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1">
-                          {quotePrintLinks(quote).map((link) => (
-                            <a key={link.href} href={link.href} target="_blank" rel="noreferrer" className="text-xs text-primary hover:underline">
-                              🧾 {link.label}
-                            </a>
-                          ))}
+                        {/* STATUS — chips only. */}
+                        <div className="mt-2 flex flex-wrap gap-1.5">
+                          {quote.xeroInvoiceId ? (
+                            <span className={chip}><FileText className="size-2.5" /> Xero {quote.xeroInvoiceNumber ?? "invoice"} · {xeroStatusLabel(quote.xeroStatus)}</span>
+                          ) : quote.invoicedAt || hasDoc(quote.id, "invoice") ? (
+                            <span className={chip}><FileText className="size-2.5" /> Invoiced</span>
+                          ) : (
+                            <span className={chip}><FileText className="size-2.5" /> Not invoiced</span>
+                          )}
+                          {quote.depositPaidAt ? (
+                            <span className={chip}><Wallet className="size-2.5" /> Deposit{quote.depositPaidCents != null ? ` · ${formatZAR(quote.depositPaidCents, withCurrency(moneyFmt, quote.currency))}` : ""}</span>
+                          ) : quote.invoicedAt ? (
+                            <span className={chip}><Wallet className="size-2.5" /> Deposit due</span>
+                          ) : null}
+                          {photos > 0 && <span className={chip}>📷 {photos}</span>}
+                          {quote.deliveryScheduledFor && !quote.deliveredAt && (
+                            <span className={chip}><Truck className="size-2.5" /> {formatDate(quote.deliveryScheduledFor)}</span>
+                          )}
+                          {quote.deliveredAt && <span className={chip}><CheckCircle2 className="size-2.5" /> Delivered {formatDate(quote.deliveredAt)}</span>}
+                          {stockByQuote.has(quote.id) && (() => {
+                            const s = stockByQuote.get(quote.id)!;
+                            const meta = STOCK_CHIP[s.status] ?? { label: s.status.replaceAll("_", " "), cls: "border-border bg-muted/40 text-muted-foreground" };
+                            return (
+                              <Link
+                                href={`/stock/${s.unitId}`}
+                                className={`inline-flex items-center gap-1 rounded-md border px-1.5 py-0.5 text-[10px] font-medium ${meta.cls}`}
+                                title="Allocated stock — open the unit"
+                              >
+                                <PackageCheck className="size-2.5" /> {meta.label}{s.count > 1 ? ` · ${s.count} units` : ""}
+                              </Link>
+                            );
+                          })()}
                         </div>
-                        {canManage && column.key === "invoice" && (
-                          <SaveForm success="Invoice recorded" resetOnSuccess={false} action={markInvoiced.bind(null, quote.id)} className="mt-2.5 space-y-1.5">
-                            <input type="file" name="file" required accept=".pdf,image/*" className="block w-full text-xs text-muted-foreground file:btn-secondary file:btn-sm file:mr-2 file:border-0" />
-                            <SaveButton className="btn-primary btn-sm w-full">Mark invoiced</SaveButton>
-                          </SaveForm>
+
+                        {/* THE NEXT STEP — one per card. With Xero connected, sending the
+                            invoice IS the invoice step, and Refresh brings the deposit back
+                            from Xero; uploads stay for workspaces without Xero. */}
+                        {canManage && column.key === "payment" && !quote.invoicedAt && (
+                          xeroConnected && quote.invoiceNumber && !quote.xeroExcludedAt ? (
+                            <XeroInvoiceControl quote={quote} crmTotalCents={total} />
+                          ) : (
+                            <SaveForm success="Invoice recorded" resetOnSuccess={false} action={markInvoiced.bind(null, quote.id)} className="mt-2.5 space-y-1.5">
+                              <input type="file" name="file" required accept=".pdf,image/*" className="block w-full text-xs text-muted-foreground file:btn-secondary file:btn-sm file:mr-2 file:border-0" />
+                              <SaveButton className="btn-primary btn-sm w-full">Mark invoiced</SaveButton>
+                            </SaveForm>
+                          )
                         )}
-                        {canManage && column.key === "deposit" && (
-                          <SaveForm success="Deposit recorded" resetOnSuccess={false} action={markDepositPaid.bind(null, quote.id)} className="mt-2.5 space-y-1.5">
-                            <input name="amount" inputMode="decimal" required placeholder={`Amount received (${currencySymbol(withCurrency(moneyFmt, quote.currency))})`} aria-label={`Deposit amount received in ${withCurrency(moneyFmt, quote.currency).currency}`} className="input text-xs py-1.5" />
-                            <input type="file" name="file" required accept=".pdf,image/*" className="block w-full text-xs text-muted-foreground file:btn-secondary file:btn-sm file:mr-2 file:border-0" />
-                            <SaveButton className="btn-primary btn-sm w-full">Deposit paid</SaveButton>
-                          </SaveForm>
+                        {canManage && column.key === "payment" && quote.invoicedAt && (
+                          xeroConnected && quote.xeroInvoiceId ? (
+                            <div>
+                              <XeroInvoiceControl quote={quote} crmTotalCents={total} />
+                              {xeroOwnsPayments(quote, paymentsFromXero) ? (
+                                <p className="mt-1 text-[10px] text-muted-foreground/80">Record the payment in Xero, then press Refresh — the first payment becomes the deposit.</p>
+                              ) : (
+                              <ModalTrigger label="Record the deposit by hand" title={`Deposit — Q-${quote.number}`} buttonClass="mt-1 text-[11px] text-primary hover:underline">
+                                <SaveForm success="Deposit recorded" resetOnSuccess={false} action={markDepositPaid.bind(null, quote.id)} className="space-y-2">
+                                  <input name="amount" inputMode="decimal" required placeholder={`Amount received (${currencySymbol(withCurrency(moneyFmt, quote.currency))})`} aria-label={`Deposit amount received in ${withCurrency(moneyFmt, quote.currency).currency}`} className="input" />
+                                  <input type="file" name="file" required accept=".pdf,image/*" className="block w-full text-xs text-muted-foreground file:btn-secondary file:btn-sm file:mr-2 file:border-0" />
+                                  <SaveButton className="btn-primary btn-sm">Deposit paid</SaveButton>
+                                </SaveForm>
+                              </ModalTrigger>
+                              )}
+                            </div>
+                          ) : (
+                            <SaveForm success="Deposit recorded" resetOnSuccess={false} action={markDepositPaid.bind(null, quote.id)} className="mt-2.5 space-y-1.5">
+                              <input name="amount" inputMode="decimal" required placeholder={`Amount received (${currencySymbol(withCurrency(moneyFmt, quote.currency))})`} aria-label={`Deposit amount received in ${withCurrency(moneyFmt, quote.currency).currency}`} className="input text-xs py-1.5" />
+                              <input type="file" name="file" required accept=".pdf,image/*" className="block w-full text-xs text-muted-foreground file:btn-secondary file:btn-sm file:mr-2 file:border-0" />
+                              <SaveButton className="btn-primary btn-sm w-full">Deposit paid</SaveButton>
+                            </SaveForm>
+                          )
                         )}
                         {canManage && column.key === "schedule" && (
                           <SaveForm success="Delivery scheduled" resetOnSuccess={false} action={scheduleDelivery.bind(null, quote.id)} className="mt-2.5 space-y-1.5">
@@ -473,14 +540,41 @@ export default async function DeliveriesPage() {
                             <SaveButton className="btn-primary btn-sm w-full">Schedule delivery</SaveButton>
                           </SaveForm>
                         )}
-                        {(column.key === "schedule" || column.key === "deliver") && (
-                          <a href={`/quotes/${quote.id}/delivery-note`} target="_blank" rel="noreferrer" className="mt-2 block text-xs text-primary hover:underline">
-                            🧾 Print delivery note
-                          </a>
-                        )}
-                        {deliveryBookings(quote)}
+
+                        {/* DETAILS — everything that isn't the next step. Every card is an
+                            accepted quote that passed getAccessibleQuoteIds — the gate the
+                            invoice/agreement print routes apply. */}
+                        <ModalTrigger
+                          label={<span className="inline-flex items-center gap-1"><PanelRightOpen className="size-3.5" /> Details</span>}
+                          title={`Q-${quote.number} · ${who}`}
+                          buttonClass="mt-2 text-xs text-primary hover:underline"
+                        >
+                          <div className="space-y-4">
+                            <div className="flex flex-wrap gap-x-4 gap-y-1">
+                              {quotePrintLinks(quote).map((link) => (
+                                <a key={link.href} href={link.href} target="_blank" rel="noreferrer" className="text-sm text-primary hover:underline">
+                                  🧾 {link.label}
+                                </a>
+                              ))}
+                              {(column.key === "schedule" || column.key === "deliver" || column.key === "delivered") && (
+                                <a href={`/quotes/${quote.id}/delivery-note`} target="_blank" rel="noreferrer" className="text-sm text-primary hover:underline">
+                                  🧾 Print delivery note
+                                </a>
+                              )}
+                            </div>
+                            {canManage && column.key !== "delivered" && <FulfilmentCorrections quote={quote} moneyFmt={withCurrency(moneyFmt, quote.currency)} />}
+                            {xeroConnected && column.key !== "payment" && <XeroInvoiceControl quote={quote} crmTotalCents={total} />}
+                            {deliveryBookings(quote)}
+                          </div>
+                        </ModalTrigger>
+
                         {canManage && column.key === "deliver" && (
-                          <div className="mt-2.5 space-y-3 border-t border-border/60 pt-2.5">
+                          <ModalTrigger
+                            label={<span className="inline-flex items-center gap-1.5"><PackageCheck className="size-4" /> Open handover</span>}
+                            title={`Handover — Q-${quote.number} · ${who}`}
+                            buttonClass="btn-primary btn-sm mt-2.5 w-full justify-center"
+                          >
+                          <div className="space-y-3">
                             {checklist && (
                               <ChecklistCard
                                 tenantId={quote.tenantId ?? ""}
@@ -514,6 +608,7 @@ export default async function DeliveriesPage() {
                               label={handover?.configured ? "Add additional delivery photos" : "Add delivery photos"}
                             />
                           </div>
+                          </ModalTrigger>
                         )}
                       </div>
                     );

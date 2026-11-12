@@ -30,6 +30,7 @@ export default function DealPayments({
   quote,
   payments,
   canRecord,
+  fromXero = false,
   statementHref,
   today,
   moneyFmt,
@@ -40,6 +41,8 @@ export default function DealPayments({
   payments: DealPayment[];
   /** deliveries.manage — the same grant that records the deposit. */
   canRecord: boolean;
+  /** The invoice is in Xero and payments come from Xero (xeroOwnsPayments): the forms give way to Refresh. */
+  fromXero?: boolean;
   statementHref: string | null;
   /** YYYY-MM-DD in the workspace's time zone, for the date field's default. */
   today: string;
@@ -91,7 +94,7 @@ export default function DealPayments({
             </div>
             <div className="flex shrink-0 flex-col items-end gap-1">
               <span className={payment.voidedAt ? "tabular-nums text-muted-foreground line-through" : "tabular-nums"}>−{formatZAR(payment.amountCents, moneyFmt)}</span>
-              {canRecord && !payment.voidedAt && (
+              {canRecord && !fromXero && !payment.voidedAt && (
                 <ModalTrigger label="Void" title="Void this payment" buttonClass="text-xs text-primary hover:underline">
                   <SaveForm success="Payment voided" action={voidQuotePayment.bind(null, quote.id, payment.id)} className="space-y-3">
                     <p className="text-sm text-muted-foreground">
@@ -118,8 +121,14 @@ export default function DealPayments({
         </p>
       )}
 
+      {fromXero && (
+        <p className="mt-3 rounded-lg border border-sky-500/30 bg-sky-500/10 p-2.5 text-xs text-sky-200">
+          Payments for this invoice come from Xero: record them there, then press Refresh — they appear here, so this invoice and the statement match Xero.
+        </p>
+      )}
+
       <div className="mt-4 flex flex-wrap gap-2">
-        {canRecord && owing > 0 && (
+        {canRecord && !fromXero && owing > 0 && (
           <ModalTrigger label="Record payment" title="Record a payment" buttonClass="btn-primary btn-sm">
             <SaveForm success="Payment recorded" action={recordQuotePayment.bind(null, quote.id)} className="space-y-3">
               <input type="hidden" name="idempotencyKey" value={formKey} />

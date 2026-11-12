@@ -412,7 +412,7 @@ export default function EmailComposer({ defaultTo, templates, smtpConfigured, le
                 <button type="submit" className="btn-primary gap-2" disabled={busy || Boolean(state?.ok)}><Send className="size-4" />{pending ? "Sending…" : checking ? "Checking…" : "Send email"}</button>
                 <button type="button" onClick={() => setScheduleOpen((shown) => !shown)} aria-expanded={scheduleOpen} className="btn-secondary gap-1.5" disabled={busy || Boolean(state?.ok)} title="Send it later, at a time you choose"><Clock className="size-4" />Send later</button>
                 <button type="button" onClick={() => void showPreview()} className="btn-secondary gap-1.5" disabled={previewing || busy}><Eye className="size-4" />{previewing ? "Preparing…" : "Preview"}</button>
-                <AiCheckButton getDraft={() => editor?.getText() ?? ""} contactId={contactId} leadId={leadId} configured={aiConfigured} label="Check wording" />
+                <AiCheckButton getDraft={() => editor?.getText() ?? ""} getAttachments={() => allFiles.map((f) => f.name)} contactId={contactId} leadId={leadId} configured={aiConfigured} label="Check wording" />
                 {savedAt && !state?.ok && <span role="status" className="ml-auto text-xs text-muted-foreground">Draft saved {savedAt}</span>}
                 <button type="button" disabled={busy} className={`${TOOL} ${savedAt && !state?.ok ? "" : "ml-auto"}`} onClick={() => dirty ? setDiscardOpen(true) : closeComposer()}>{state?.ok ? "Close" : "Discard"}</button>
               </div>

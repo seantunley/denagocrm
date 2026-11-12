@@ -383,7 +383,7 @@ test("OLD LIBRARY LINKS AND THE NAV LEAD TO THE MERGED PAGE", () => {
 
   const nav = src("src/components/nav-config.ts");
   assert.ok(!nav.includes('href: "/library"'), "no second nav entry for the Library");
-  assert.match(nav, /"document_templates\.manage", "library\.view", "library\.manage"\)\) \{\s*crmLinks\.push\(\{ href: "\/documents"/);
+  assert.match(nav, /"document_templates\.manage", "library\.view", "library\.manage"\)\) \{\s*customerLinks\.push\(\{ href: "\/documents"/);
 
   // Changes made from the Documents page refresh the Documents page.
   const actions = src("src/app/actions/library.ts");

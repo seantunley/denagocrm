@@ -14,7 +14,10 @@ import CustomFieldsCard from "@/components/custom-fields/CustomFieldsCard";
 import { EntityDetailShell } from "@/components/entity-detail-shell";
 import { StatusPill } from "@/components/visual-system";
 import { currencySymbol, formatZAR } from "@/lib/format";
-import { getRegionalSettings } from "@/lib/settings";
+import { getRegionalSettings, resolveIntegrationField } from "@/lib/settings";
+import { getActiveTenantId } from "@/lib/auth";
+import XeroItemPicker from "@/components/XeroItemPicker";
+import { linkProductToXeroItem } from "@/app/actions/xero";
 
 export default async function ProductDetailPage({
   params,
@@ -33,6 +36,9 @@ export default async function ProductDetailPage({
   if (!product) notFound();
 
   const moneyFmt = await getRegionalSettings();
+  const tenantId = await getActiveTenantId();
+  // The "Xero item" link shows once this workspace has connected Xero.
+  const xeroConnected = Boolean(tenantId && (await resolveIntegrationField(tenantId, "xero", "XERO_TENANT_ID")));
   return (
     <EntityDetailShell
       backHref="/products"
@@ -134,6 +140,17 @@ export default async function ProductDetailPage({
 
         <ProductShowcaseForm product={product} />
         <CustomFieldsCard entity="product" recordId={product.id} />
+        {xeroConnected && (
+          <div className="card">
+            <h2 className="font-semibold mb-3">Xero</h2>
+            <XeroItemPicker
+              label="Xero item"
+              current={product.xeroItemId && product.xeroItemCode ? { code: product.xeroItemCode, name: product.xeroItemName ?? "" } : null}
+              action={linkProductToXeroItem.bind(null, product.id)}
+              hint="Invoice lines for this model are sent to Xero under this item. Your SKU stays your own."
+            />
+          </div>
+        )}
       </div>
     </EntityDetailShell>
   );

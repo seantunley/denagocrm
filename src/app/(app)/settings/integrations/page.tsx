@@ -1,5 +1,11 @@
 import { requireTenantOwner, getActiveTenantId } from "@/lib/auth";
-import { hasTenantCredentialOverride, isSecretSettingKey, resolveIntegrationBundle } from "@/lib/settings";
+import { prisma } from "@/lib/db";
+import { getWorkspaceSetting, hasTenantCredentialOverride, isSecretSettingKey, resolveIntegrationBundle } from "@/lib/settings";
+import XeroItemPicker from "@/components/XeroItemPicker";
+import { linkFeeToXeroItem, setXeroPaymentsSource } from "@/app/actions/xero";
+import { XERO_FEE_ITEM_KEYS, XERO_PAYMENTS_SOURCE_KEY, XERO_TAX_CHOICES_KEY, parseXeroItemLink, parseXeroTaxChoices } from "@/lib/xeroInvoice";
+import { SaveForm, SaveButton } from "@/components/SaveForm";
+import XeroTaxRatePicker from "@/components/XeroTaxRatePicker";
 import WorkspaceIntegrationRows from "@/components/settings/WorkspaceIntegrationRows";
 import {
   saveTenantCredentialOverride,
@@ -37,7 +43,23 @@ export const dynamic = "force-dynamic";
  * Always the viewer's own active tenant. The platform owner additionally sees
  * the owner-only rows (WorkspaceIntegrationRows) that used to fill the old tab.
  */
-export default async function IntegrationsPage() {
+/** What the Xero connect round trip came back with (?xero=…), in words. */
+const XERO_NOTICES: Record<string, string> = {
+  connected: "Xero is connected.",
+  switched:
+    "Xero is connected to a different organisation, so the links to the previous one were cleared: invoices can be sent again, and products and fees need linking to this organisation's items. Xero PDFs already filed on customers were kept.",
+  "missing-client": "The Xero app isn't set up on this CRM yet (XERO_CLIENT_ID and XERO_CLIENT_SECRET in the hosting settings).",
+  denied: "Xero sign-in was cancelled.",
+  ambiguous:
+    "Xero didn't say which one organisation you chose, so nothing was connected (invoices must never go to the wrong books). Press Connect Xero again and tick only the one organisation.",
+  invalid: "That Xero sign-in could not be read — please try again.",
+  "in-use":
+    "That Xero organisation is already connected to another workspace, so nothing was connected. A Xero organisation belongs to one workspace only.",
+  failed: "Xero sign-in could not be completed. Check the redirect URI in the Xero app matches this CRM's address, then try again.",
+};
+
+export default async function IntegrationsPage({ searchParams }: { searchParams?: Promise<{ xero?: string }> }) {
+  const xeroNotice = XERO_NOTICES[(await searchParams)?.xero ?? ""] ?? null;
   // Entirely sensitive (credential management) — gate the whole page.
   // Uses requireTenantOwner so a tenant's own provisioned owner can manage
   // their credentials without needing the global platform owner role (a
@@ -45,6 +67,15 @@ export default async function IntegrationsPage() {
   const user = await requireTenantOwner();
   const isPlatformOwner = user.role === "owner";
   const tenantId = await getActiveTenantId();
+  // THIS workspace's Xero codes — named explicitly, never the general settings
+  // (which fall back to the founding workspace when enforcement is off).
+  const xeroSetting = (key: string) => (tenantId ? getWorkspaceSetting(tenantId, key) : Promise.resolve(null));
+  const xeroFeeItems = {
+    delivery: parseXeroItemLink(await xeroSetting(XERO_FEE_ITEM_KEYS.delivery)),
+    other: parseXeroItemLink(await xeroSetting(XERO_FEE_ITEM_KEYS.other)),
+  };
+  const xeroTaxChoices = parseXeroTaxChoices(await xeroSetting(XERO_TAX_CHOICES_KEY));
+  const paymentsFromXero = (await xeroSetting(XERO_PAYMENTS_SOURCE_KEY)) !== "crm";
   // Founding tenant falls back to platform credentials when no override is set.
   // Every other tenant gets null — they must configure their own credentials.
   const usesPlatformFallback = !tenantEnforcing() || tenantId === DEFAULT_TENANT_ID;
@@ -63,6 +94,19 @@ export default async function IntegrationsPage() {
   // working, as opposed to merely being present. Empty map when nothing has ever
   // been through the guided flow.
   const connections = tenantId ? await getIntegrationConnections(tenantId) : new Map<string, IntegrationConnectionState>();
+
+  // What choosing a DIFFERENT Xero organisation on Reconnect would clear (lib/xero.ts
+  // forgetXeroLinks) — said before the click, so a slip to the demo company isn't a surprise.
+  const xeroLinks =
+    tenantId && hasOverride.XERO_TENANT_ID
+      ? {
+          invoices: await prisma.quote.count({ where: { tenantId, xeroInvoiceId: { not: null } } }),
+          customers:
+            (await prisma.contact.count({ where: { tenantId, xeroContactId: { not: null } } })) +
+            (await prisma.fleet.count({ where: { tenantId, xeroContactId: { not: null } } })),
+          products: await prisma.product.count({ where: { tenantId, xeroItemId: { not: null } } }),
+        }
+      : null;
 
   // Non-secret values to prefill a reconnect with, so an owner fixing an expired
   // token doesn't retype their hostname, port and username as well.
@@ -183,6 +227,63 @@ export default async function IntegrationsPage() {
                     <a href="/api/integrations/x/connect" className="btn-primary btn-sm mt-3 inline-flex">
                       {hasOverride.X_ACCOUNT_ID ? "Reconnect X" : "Connect X account"}
                     </a>
+                  </div>
+                )}
+
+                {integration.id === "xero" && (
+                  <div className="mb-5 rounded-lg border border-border bg-background/40 p-4">
+                    <p className="text-sm font-medium">
+                      {effectiveShown.XERO_ORG_NAME ? `Connected to ${effectiveShown.XERO_ORG_NAME}` : "Connect your Xero organisation"}
+                    </p>
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      Connecting lets the Deliveries board send an accepted quote to Xero as a <b>draft</b> invoice and keep
+                      Xero&apos;s invoice number on the quote. Nothing is approved or emailed from the CRM — you finish the
+                      invoice in Xero. The sales account code below is optional.
+                    </p>
+                    {xeroNotice && <p className="mt-2 text-xs text-amber-300">{xeroNotice}</p>}
+                    {xeroLinks && (
+                      <p className="mt-2 text-xs text-amber-300">
+                        Reconnecting to {effectiveShown.XERO_ORG_NAME ?? "the same organisation"} keeps everything. Choosing a
+                        different organisation clears this workspace&apos;s links to this one: {xeroLinks.invoices} invoice
+                        {xeroLinks.invoices === 1 ? "" : "s"}, {xeroLinks.customers} customer{xeroLinks.customers === 1 ? "" : "s"},{" "}
+                        {xeroLinks.products} product{xeroLinks.products === 1 ? "" : "s"}, the fee items and the sales tax choice. Filed Xero PDFs stay.
+                      </p>
+                    )}
+                    <a href="/api/integrations/xero/connect" className="btn-primary btn-sm mt-3 inline-flex">
+                      {hasOverride.XERO_TENANT_ID ? "Reconnect Xero" : "Connect Xero"}
+                    </a>
+                    {hasOverride.XERO_TENANT_ID && (
+                      <div className="mt-5 grid gap-5 border-t border-border pt-4 sm:grid-cols-2">
+                        <XeroItemPicker
+                          label="Xero item for delivery fees"
+                          current={xeroFeeItems.delivery}
+                          action={linkFeeToXeroItem.bind(null, "delivery")}
+                          hint="Delivery fee lines go to Xero under this item. Wording, amount and VAT stay the quote's."
+                        />
+                        <XeroItemPicker
+                          label="Xero item for other fees"
+                          current={xeroFeeItems.other}
+                          action={linkFeeToXeroItem.bind(null, "other")}
+                          hint="Any other fee on a quote. Leave unlinked to send fees without an item code."
+                        />
+                        <XeroTaxRatePicker current={xeroTaxChoices} />
+                        {/* Payments come from Xero (2026-11-11) — visible and switchable. */}
+                        <SaveForm action={setXeroPaymentsSource} resetOnSuccess={false} className="space-y-2">
+                          <p className="label">Payments</p>
+                          <label className="flex items-start gap-2 text-sm">
+                            <input type="checkbox" name="fromXero" defaultChecked={paymentsFromXero} className="mt-1" />
+                            <span>
+                              Payments come from Xero
+                              <span className="block text-[11px] text-muted-foreground">
+                                Record deposits and payments in Xero; Refresh brings them back, so the CRM&apos;s invoices and statements match Xero.
+                                Untick to record them in the CRM again — the CRM&apos;s own deposit and payment forms come back on every invoice.
+                              </span>
+                            </span>
+                          </label>
+                          <SaveButton className="btn-secondary btn-sm" pendingLabel="Saving…">Save</SaveButton>
+                        </SaveForm>
+                      </div>
+                    )}
                   </div>
                 )}
 

@@ -1,16 +1,71 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { readFileSync } from "node:fs";
-import { SETTINGS_NAV_GROUPS, visibleSettingsGroups } from "../src/lib/settings-navigation";
+import { SETTINGS_AREAS, SETTINGS_NAV_GROUPS, pickerGroupLabel, settingsByArea, visibleSettingsGroups } from "../src/lib/settings-navigation";
 
-test("security settings are grouped together", () => {
-  const security = SETTINGS_NAV_GROUPS.find((group) => group.label === "Security & Access");
-  assert.deepEqual(security?.items.map((item) => item.key), [
-    "team",
-    "portal-access",
-    "security",
-    "sessions",
-  ]);
+// Review of #1076: the tablet/phone picker kept showing the group it started on
+// after navigating to another section without a remount (/settings?tab=…).
+test("the settings picker follows the section you are on, and a group you pick holds until you move", () => {
+  const groups = SETTINGS_NAV_GROUPS;
+  // Arrive on Profile & sign-in: My account.
+  assert.equal(pickerGroupLabel(groups, "account", null), "My account");
+  // Navigate to Quotes with no remount and no choice made: Sales, not My account.
+  assert.equal(pickerGroupLabel(groups, "quotes", null), "Sales");
+  // Pick Messaging while on Quotes (before choosing a setting): Messaging shows.
+  const picked = { section: "quotes", group: "Messaging" };
+  assert.equal(pickerGroupLabel(groups, "quotes", picked), "Messaging");
+  // Then go to Email (or anywhere): the new section's group, the old pick forgotten.
+  assert.equal(pickerGroupLabel(groups, "email", picked), "Messaging");
+  assert.equal(pickerGroupLabel(groups, "company", picked), "Business");
+  // The picker uses it, and keeps no stale copy of its own.
+  const picker = readFileSync(new URL("../src/components/SettingsNav.tsx", import.meta.url), "utf8");
+  assert.match(picker, /const chosen = pickerGroupLabel\(groups, current, choice\);/);
+  assert.match(picker, /const setChosen = \(label: string\) => setChoice\(\{ section: current, group: label \}\);/);
+  assert.doesNotMatch(picker, /useState\(currentGroup/);
+});
+
+// Settings reorganisation (settings-reorganisation-plan.md, 2026-11-12): split
+// first by who a setting is for, then by the job it does.
+test("three areas — my account, the workspace, admin — each group in one, with a line on what it holds", () => {
+  assert.deepEqual(SETTINGS_AREAS.map((area) => area.key), ["account", "workspace", "admin"]);
+  assert.deepEqual(
+    SETTINGS_NAV_GROUPS.map((group) => `${group.area}:${group.label}`),
+    [
+      "account:My account",
+      "workspace:Business",
+      "workspace:People & access",
+      "workspace:Sales",
+      "workspace:Records",
+      "workspace:Workshop & stock",
+      "workspace:Messaging",
+      "workspace:Documents & signing",
+      "workspace:Automation & AI",
+      "admin:System",
+    ],
+  );
+  for (const group of SETTINGS_NAV_GROUPS) assert.ok(group.description.length > 20, `${group.label} says what is in it`);
+  // Areas keep their order, and a viewer with nothing in one doesn't see its heading.
+  assert.deepEqual(settingsByArea(SETTINGS_NAV_GROUPS).map((entry) => entry.area.key), ["account", "workspace", "admin"]);
+  assert.deepEqual(settingsByArea(visibleSettingsGroups({ isOwner: false, permissions: [] })).map((entry) => entry.area.key), ["account", "workspace"]);
+});
+
+test("one subject, one shelf: the pieces that belong together sit together", () => {
+  const groupOf = (key: string) => SETTINGS_NAV_GROUPS.find((group) => group.items.some((item) => item.key === key))?.label;
+  for (const key of ["team", "lead-routing", "portal-access", "sessions"]) assert.equal(groupOf(key), "People & access", key);
+  for (const key of ["email", "signature-banners", "helpdesk", "integrations"]) assert.equal(groupOf(key), "Messaging", key);
+  for (const key of ["workshop", "workshop-settings", "products", "stock"]) assert.equal(groupOf(key), "Workshop & stock", key);
+  for (const key of ["documents", "signing-workflows", "signing-security"]) assert.equal(groupOf(key), "Documents & signing", key);
+  for (const key of ["assistant", "automations", "automatic"]) assert.equal(groupOf(key), "Automation & AI", key);
+  for (const key of ["modules", "security", "backups", "system", "queues"]) assert.equal(groupOf(key), "System", key);
+  // Clearer names; the old words still find them.
+  const item = (key: string) => SETTINGS_NAV_GROUPS.flatMap((group) => group.items).find((entry) => entry.key === key)!;
+  assert.equal(item("account").label, "Profile & sign-in");
+  assert.ok(item("account").keywords?.includes("my account"));
+  assert.equal(item("team").label, "Team & roles");
+  assert.ok(item("team").keywords?.includes("team & access"));
+  assert.equal(item("security").label, "Security checks");
+  // The group of one ("Workspace" → "Settings overview") is gone: /settings itself is the home.
+  assert.ok(!SETTINGS_NAV_GROUPS.flatMap((group) => group.items).some((entry) => entry.key === "overview"));
 });
 
 test("settings reorganisation keeps every destination unique", () => {

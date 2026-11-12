@@ -36,6 +36,8 @@ export const DEFAULT_DOCUMENT_TYPES: readonly string[] = [
 export const SYSTEM_DOCUMENT_TAGS: ReadonlySet<string> = new Set([
   "signed", "invoice", "pop", "delivery-note", "delivery-photo", "delivery-signature",
   "checkin", "checkin-photo", "checkout-photo", "generated-pdf", "for-signing",
+  // Xero's own PDF of a quote's invoice (lib/xero.ts) — the accounting invoice, beside the CRM's "invoice".
+  "accounting-invoice",
 ]);
 
 /**
@@ -45,6 +47,7 @@ export const SYSTEM_DOCUMENT_TAGS: ReadonlySet<string> = new Set([
 export const SYSTEM_TAG_LABELS: Readonly<Record<string, string>> = {
   signed: "Signed copy",
   invoice: "Invoice",
+  "accounting-invoice": "Accounting invoice (Xero)",
   pop: "Proof of payment",
   "delivery-note": "Delivery note",
   "delivery-photo": "Delivery photo",

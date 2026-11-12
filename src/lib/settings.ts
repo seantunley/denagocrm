@@ -42,6 +42,10 @@ const SECRET_KEYS = new Set([
   "X_REFRESH_TOKEN",
   "X_WEBHOOK_SECRET",
   "XAI_API_KEY",
+  // Xero (lib/xero.ts): the organisation's refresh token — which, until it is
+  // used or expires, can write invoices into the books. (The app's own secret is
+  // a hosting environment variable, never stored here.)
+  "XERO_REFRESH_TOKEN",
   // A workspace's ChatGPT sign-in (lib/codex.ts). The refresh token is as good
   // as the account's password for anything the Codex API can do, and the
   // pending device login can be completed by whoever holds it.
@@ -207,6 +211,25 @@ function settingsOwnerTenantId(): string {
 
 export async function getSetting(key: string): Promise<string | null> {
   return readSetting(await settingsOwnerTenantIdOrRecover(), key);
+}
+
+/**
+ * A setting of ONE named workspace, in either enforcement mode. getSetting/putSetting
+ * resolve to the founding workspace while enforcement is off, so a per-workspace
+ * value (a Xero organisation's tax and item codes) written through them would be
+ * shared by every workspace (review of #1068). Callers pass the acting tenantId.
+ */
+export async function getWorkspaceSetting(tenantId: string, key: string): Promise<string | null> {
+  return readSetting(tenantId, key);
+}
+
+export async function putWorkspaceSetting(tenantId: string, key: string, value: string, tx?: SettingsTx): Promise<void> {
+  const stored = storedSettingValue(key, value);
+  await (tx ?? basePrisma).appSetting.upsert({
+    where: { tenantId_key: { tenantId, key } },
+    update: { value: stored },
+    create: { tenantId, key, value: stored },
+  });
 }
 
 // basePrisma + explicit compound key: deterministic and RLS-safe (bypass is set,
@@ -391,10 +414,12 @@ export async function putTenantCredential(tenantId: string, key: string, value: 
 export async function putTenantCredentialBundle(
   tenantId: string,
   entries: Readonly<Record<string, string>>,
+  /** Inside a caller's transaction, so the bundle commits with the caller's other writes (Xero's organisation switch). */
+  inTx?: SettingsTx,
 ): Promise<void> {
   const rows = Object.entries(entries).filter(([, value]) => value !== "");
   if (rows.length === 0) return;
-  await basePrisma.$transaction(async (tx) => {
+  const write = async (tx: SettingsTx) => {
     for (const [key, value] of rows) {
       const stored = storedSettingValue(key, value);
       await tx.tenantIntegrationCredential.upsert({
@@ -403,7 +428,9 @@ export async function putTenantCredentialBundle(
         create: { tenantId, key, value: stored },
       });
     }
-  });
+  };
+  if (inTx) await write(inTx);
+  else await basePrisma.$transaction(write);
 }
 
 /**

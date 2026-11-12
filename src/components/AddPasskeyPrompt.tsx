@@ -57,7 +57,7 @@ export default function AddPasskeyPrompt({ email }: { email: string }) {
         setMessage("This device already has a passkey for you. Use it next time.");
         return;
       }
-      setMessage("Couldn't add a passkey. You can try again from Settings → My Account.");
+      setMessage("Couldn't add a passkey. You can try again from Settings → Profile & sign-in.");
     } finally {
       setBusy(false);
     }

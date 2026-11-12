@@ -68,7 +68,8 @@ test("other integrations keep the plain set rule", async () => {
   });
   assert.equal(smtp?.SMTP_HOST, "platform-host");
   for (const integration of TENANT_CREDENTIAL_INTEGRATIONS) {
-    if (integration.id !== "x") assert.ok(integration.fields.every((field) => !field.independent), `${integration.id} has no independent fields`);
+    // X and Xero: the connected account's sign-in belongs to the workspace whichever app it came through.
+    if (integration.id !== "x" && integration.id !== "xero") assert.ok(integration.fields.every((field) => !field.independent), `${integration.id} has no independent fields`);
   }
 });
 

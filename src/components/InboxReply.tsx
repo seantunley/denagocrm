@@ -482,6 +482,7 @@ ${el.value.slice(end)}`;
         </label>
         <AiCheckButton
           getDraft={() => textRef.current?.value ?? ""}
+          getAttachments={() => (fileName ? [fileName] : [])}
           contactId={contactId}
           leadId={leadId}
           configured={aiConfigured}

@@ -68,7 +68,7 @@ body::before {
   animation: hw-bob 6s ease-in-out infinite; transform-origin: top center; }
 .hw-thread { width: 1px; height: 90px; background: oklch(0.92 0.03 300 / 60%); }
 .hw-pumpkins { position: absolute; bottom: 14px; left: 18px; display: flex; align-items: flex-end; gap: 4px; }
-@media (min-width: 1024px) { .hw-pumpkins { left: calc(240px + 18px); } }
+@media (min-width: 1024px) { .hw-pumpkins { left: calc(280px + 18px); } }
 @media (max-width: 767px) { .hw-pumpkins { display: none; } .hw-web { width: 110px; height: 110px; } .hw-spider { right: 64px; } }
 .hw-pumpkin { filter: drop-shadow(0 0 10px oklch(0.75 0.18 60 / 55%)); }
 .hw-face { animation: hw-flicker 3.2s ease-in-out infinite; }

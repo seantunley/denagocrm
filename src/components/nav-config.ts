@@ -10,6 +10,7 @@ import {
   FolderOpen,
   Library,
   Truck,
+  Wallet,
   Users,
   ListChecks,
   Megaphone,
@@ -43,7 +44,8 @@ import { DaxIcon } from "@/components/DaxIcon";
 
 /** `keywords`: other words search should find the link by (e.g. an old name). */
 export type NavLink = { href: string; label: string; icon: LucideIcon; keywords?: string[] };
-export type NavGroup = { key: string; label: string; links: NavLink[] };
+/** A group's heading carries its icon; the links inside it are text (sidebar redesign, 2026-11-12). */
+export type NavGroup = { key: string; label: string; icon: LucideIcon; links: NavLink[] };
 
 /**
  * The nav is built from RBAC alone. It used to also take the per-user module
@@ -63,115 +65,119 @@ export function buildNav(
   const permissions = new Set(permissionList);
   const can = (...keys: string[]) => isAdmin || keys.some((key) => permissions.has(key));
 
-  // Home is the "what to do next" screen. The dashboards — charts and cards people arranged — have their own entry,
-  // so moving them off the home screen did not move them out of sight.
-  const topLinks: NavLink[] = [
-    { href: "/", label: "Home", icon: House, keywords: ["start", "do next", "overview"] },
-    { href: "/d/home", label: "Dashboards", icon: LayoutDashboard, keywords: ["dashboard", "charts", "cards", "widgets"] },
-  ];
+  /*
+   * SIDEBAR REGROUP (sidebar-implementation-brief.md PR 1, 2026-11-12): in the
+   * order work happens in a dealership. Pinned = where you start and what is
+   * waiting (Inbox and Help desk keep their counts in sight); then Sales,
+   * Customers, Service, Marketing, Insights, Automation and Admin. Only WHERE a
+   * link sits changed — every `can(…)` below is the one it had before, word for
+   * word, and tests/sidebarRegroup.test.ts holds the before/after link sets per role.
+   */
+  const topLinks: NavLink[] = [{ href: "/", label: "Home", icon: House, keywords: ["start", "do next", "overview"] }];
   if (can("leads.view_all", "leads.view_owned")) topLinks.push({ href: "/today", label: "Today", icon: Sun, keywords: ["lead score", "who to call", "next"] });
-  if (can("reports.view", "reports.view_all", "reports.view_team")) {
-    topLinks.push({ href: "/reports", label: "Reports", icon: ChartColumnIncreasing });
-    topLinks.push({ href: "/targets", label: "Targets", icon: Target });
-  }
-  if (can("forecast.view", "forecast.manage")) topLinks.push({ href: "/forecast", label: "Forecast", icon: TrendingUp });
+  // Public comments are the inbox's Comments tab (one inbox, batch 6).
+  if (can("inbox.view", "inbox.reply")) topLinks.push({ href: "/inbox", label: "Inbox", icon: MessageSquare, keywords: ["social", "messages", "whatsapp", "facebook"] });
+  if (can("cases.view_all", "cases.view_owned")) topLinks.push({ href: "/cases", label: "Help desk", icon: Ticket, keywords: ["cases", "tickets", "support"] });
+  if (can("activities.view", "activities.manage")) topLinks.push({ href: "/calendar", label: "Calendar", icon: CalendarDays });
 
   const groups: NavGroup[] = [];
 
-  const socialLinks: NavLink[] = [];
-  if (can("inbox.view", "inbox.reply")) {
-    // Public comments are the inbox's Comments tab (one inbox, batch 6).
-    socialLinks.push({ href: "/inbox", label: "Inbox", icon: MessageSquare });
-  }
-  if (socialLinks.length) groups.push({ key: "social", label: "Social", links: socialLinks });
+  const salesLinks: NavLink[] = [];
+  if (can("leads.view_all", "leads.view_owned")) salesLinks.push({ href: "/leads", label: labels["/leads"] ?? "Leads", icon: SquareKanban, keywords: ["leads"] });
+  if (can("quotes.view_all", "quotes.view_owned")) salesLinks.push({ href: "/quotes", label: "Quotes", icon: FileText });
+  if (can("activities.view", "activities.manage")) salesLinks.push({ href: "/test-drives", label: "Test Drives", icon: Route });
+  if (can("signing.view", "signing.manage")) salesLinks.push({ href: "/signatures", label: "Signatures", icon: PenLine });
+  if (can("deliveries.view", "deliveries.manage")) salesLinks.push({ href: "/deliveries", label: "Deliveries", icon: Truck });
+  // The money side of the board (2026-11-11): the same door — deliveries.* — as the board it came off.
+  if (can("deliveries.view", "deliveries.manage")) salesLinks.push({ href: "/invoices", label: "Invoices", icon: Wallet, keywords: ["xero", "owing", "paid", "deposit", "accounts"] });
+  if (can("stock.view", "stock.manage")) salesLinks.push({ href: "/stock", label: "Stock", icon: Package, keywords: ["inventory", "units"] });
+  if (salesLinks.length) groups.push({ key: "sales", label: "Sales", icon: TrendingUp, links: salesLinks });
 
-  const crmLinks: NavLink[] = [];
-  if (can("activities.view", "activities.manage")) crmLinks.push({ href: "/calendar", label: "Calendar", icon: CalendarDays });
-  if (can("activities.view", "activities.manage")) crmLinks.push({ href: "/test-drives", label: "Test Drives", icon: Route });
-  if (can("leads.view_all", "leads.view_owned")) crmLinks.push({ href: "/leads", label: labels["/leads"] ?? "Leads", icon: SquareKanban, keywords: ["leads"] });
-  if (can("quotes.view_all", "quotes.view_owned")) crmLinks.push({ href: "/quotes", label: "Quotes", icon: FileText });
-  if (can("signing.view", "signing.manage")) crmLinks.push({ href: "/signatures", label: "Signatures", icon: PenLine });
-  if (can("deliveries.view", "deliveries.manage")) crmLinks.push({ href: "/deliveries", label: "Deliveries", icon: Truck });
-  if (can("contacts.view_all", "contacts.view_owned")) crmLinks.push({ href: "/contacts", label: "Contacts", icon: Users });
+  const customerLinks: NavLink[] = [];
+  if (can("contacts.view_all", "contacts.view_owned")) customerLinks.push({ href: "/contacts", label: "Contacts", icon: Users });
   // fleets.* — the same rule ROUTE_RULES applies at the edge and requireRoute
   // applies on the page, so this link cannot appear for someone /fleets bounces.
-  if (can("fleets.view", "fleets.manage")) crmLinks.push({ href: "/fleets", label: "Fleets", icon: Building2 });
-  if (can("activities.view", "activities.manage")) crmLinks.push({ href: "/activities", label: "Activities", icon: ListChecks });
-  if (can("contacts.view_all", "contacts.view_owned")) crmLinks.push({ href: "/health", label: "Customer Health", icon: HeartPulse });
-  if (can("contacts.view_all", "contacts.view_owned")) crmLinks.push({ href: "/birthdays", label: "Birthdays", icon: Cake, keywords: ["birthday", "birthdays", "dob"] });
-  if (can("contacts.view_all", "contacts.view_owned")) crmLinks.push({ href: "/data-quality", label: "Data quality", icon: ShieldCheck, keywords: ["duplicates", "missing details", "data quality", "clean up"] });
+  if (can("fleets.view", "fleets.manage")) customerLinks.push({ href: "/fleets", label: "Fleets", icon: Building2 });
+  if (can("activities.view", "activities.manage")) customerLinks.push({ href: "/activities", label: "Activities", icon: ListChecks });
+  if (can("contacts.view_all", "contacts.view_owned")) customerLinks.push({ href: "/health", label: "Customer Health", icon: HeartPulse });
+  if (can("contacts.view_all", "contacts.view_owned")) customerLinks.push({ href: "/birthdays", label: "Birthdays", icon: Cake, keywords: ["birthday", "birthdays", "dob"] });
   // One entry for Documents and the Library merged into it. The page opens
   // library-only access straight on the Library, the only part it can see.
   if (can("documents.view_all", "documents.view_owned", "documents.upload", "documents.manage", "document_templates.manage", "library.view", "library.manage")) {
-    crmLinks.push({ href: "/documents", label: "Documents", icon: FolderOpen, keywords: ["document library", "brochures", "price lists", "spec sheets"] });
+    customerLinks.push({ href: "/documents", label: "Documents", icon: FolderOpen, keywords: ["document library", "brochures", "price lists", "spec sheets"] });
   }
-  if (crmLinks.length) groups.push({ key: "crm", label: "CRM", links: crmLinks });
+  if (customerLinks.length) groups.push({ key: "customers", label: "Customers", icon: Users, links: customerLinks });
 
-  if (can("cases.view_all", "cases.view_owned")) {
-    groups.push({ key: "helpdesk", label: "Help desk", links: [{ href: "/cases", label: "Help desk", icon: Ticket }] });
+  const serviceLinks: NavLink[] = [];
+  if (can("activities.view", "activities.manage") && can("jobcards.view_all", "jobcards.view_owned")) {
+    serviceLinks.push({ href: "/workshop-calendar", label: "Workshop calendar", icon: CalendarClock, keywords: ["workshop cal", "bookings"] });
   }
+  if (can("jobcards.view_all", "jobcards.view_owned")) serviceLinks.push({ href: "/jobcards", label: labels["/jobcards"] ?? "Job Cards", icon: Wrench, keywords: ["job cards"] });
+  if (can("vehicles.view_all", "vehicles.view_owned")) {
+    serviceLinks.push({ href: "/vehicles", label: "Vehicles", icon: CarFront });
+    serviceLinks.push({ href: "/service-due", label: "Service Due", icon: Clock4 });
+  }
+  if (can("warranty.view", "warranty.manage")) serviceLinks.push({ href: "/warranty", label: "Warranty", icon: ShieldCheck });
+  if (can("parts.view", "parts.manage")) serviceLinks.push({ href: "/parts", label: "Parts", icon: Cog });
+  if (serviceLinks.length) groups.push({ key: "service", label: "Service", icon: Wrench, links: serviceLinks });
 
+  // Also the Marketing workspace's own tabs (marketing-workspace-nav.ts). Overview and Survey insights stay as
+  // links until each folds into its parent screen (plan stage 4): Overview → Campaigns, Survey insights → Surveys.
   const marketingLinks: NavLink[] = [];
   if (can("campaigns.view", "campaigns.manage")) {
-    marketingLinks.push({ href: "/marketing/overview", label: "Overview", icon: LayoutDashboard });
+    marketingLinks.push({ href: "/marketing/overview", label: "Overview", icon: LayoutDashboard, keywords: ["marketing overview"] });
     marketingLinks.push({ href: "/marketing/campaigns", label: "Campaigns", icon: Megaphone });
-    marketingLinks.push({ href: "/marketing/calendar", label: "Calendar", icon: CalendarDays });
     marketingLinks.push({ href: "/marketing/audiences", label: "Audiences", icon: Users });
     marketingLinks.push({ href: "/marketing/templates", label: "Templates", icon: Library });
+    marketingLinks.push({ href: "/marketing/calendar", label: "Calendar", icon: CalendarDays, keywords: ["marketing calendar", "content calendar"] });
   }
   if (can("surveys.view", "surveys.manage")) {
     marketingLinks.push({ href: "/marketing/surveys", label: "Surveys", icon: ClipboardList });
     marketingLinks.push({ href: "/marketing/surveys/insights", label: "Survey insights", icon: HeartPulse });
   }
   if (can("referrals.view", "referrals.manage")) marketingLinks.push({ href: "/referrals", label: "Referrals", icon: Gift });
-  if (marketingLinks.length) groups.push({ key: "marketing", label: "Marketing", links: marketingLinks });
+  if (marketingLinks.length) groups.push({ key: "marketing", label: "Marketing", icon: Megaphone, links: marketingLinks });
 
-  if (can("stock.view", "stock.manage")) {
-    groups.push({ key: "stock", label: "Stock", links: [{ href: "/stock", label: "Stock", icon: Package }] });
+  const insightLinks: NavLink[] = [];
+  // The dashboards — charts and cards people arranged — have their own entry, so
+  // moving them off the home screen did not move them out of sight.
+  insightLinks.push({ href: "/d/home", label: "Dashboards", icon: LayoutDashboard, keywords: ["dashboard", "charts", "cards", "widgets"] });
+  if (can("reports.view", "reports.view_all", "reports.view_team")) {
+    insightLinks.push({ href: "/reports", label: "Reports", icon: ChartColumnIncreasing });
+    insightLinks.push({ href: "/targets", label: "Targets", icon: Target });
   }
-
-  const workshopLinks: NavLink[] = [];
-  if (can("activities.view", "activities.manage") && can("jobcards.view_all", "jobcards.view_owned")) {
-    workshopLinks.push({ href: "/workshop-calendar", label: "Workshop Cal", icon: CalendarClock });
+  if (can("forecast.view", "forecast.manage")) insightLinks.push({ href: "/forecast", label: "Forecast", icon: TrendingUp });
+  if (can("jobcards.view_all", "jobcards.view_owned")) insightLinks.push({ href: "/jobcards/insights", label: "Workshop Insights", icon: TrendingUp });
+  if (isAdmin) insightLinks.push({ href: "/competitors", label: "Competitors", icon: Radar });
+  // Anyone who can see leads, quotes or activities: it only ever shows them
+  // what their own lists already would.
+  if (can("leads.view_all", "leads.view_owned", "quotes.view_all", "quotes.view_owned", "activities.view", "activities.manage")) {
+    insightLinks.push({ href: "/assistant", label: "Ask the CRM", icon: DaxIcon, keywords: ["dax", "assistant", "ai"] });
   }
-  if (can("vehicles.view_all", "vehicles.view_owned")) {
-    workshopLinks.push({ href: "/vehicles", label: "Vehicles", icon: CarFront });
-    workshopLinks.push({ href: "/service-due", label: "Service Due", icon: Clock4 });
-  }
-  if (can("warranty.view", "warranty.manage")) workshopLinks.push({ href: "/warranty", label: "Warranty", icon: ShieldCheck });
-  if (can("jobcards.view_all", "jobcards.view_owned")) workshopLinks.push({ href: "/jobcards", label: labels["/jobcards"] ?? "Job Cards", icon: Wrench, keywords: ["job cards"] });
-  if (can("jobcards.view_all", "jobcards.view_owned")) workshopLinks.push({ href: "/jobcards/insights", label: "Workshop Insights", icon: TrendingUp });
-  if (can("parts.view", "parts.manage")) workshopLinks.push({ href: "/parts", label: "Parts", icon: Cog });
-  if (workshopLinks.length) groups.push({ key: "workshop", label: "Workshop", links: workshopLinks });
+  groups.push({ key: "insights", label: "Insights", icon: ChartColumnIncreasing, links: insightLinks });
 
   const automationLinks: NavLink[] = [];
   // /automations is now a redirect to /journeys (the AutomationRule engine is
   // retired) — link the survivor directly rather than sending every click
   // through a bounce.
   if (can("journeys.manage")) automationLinks.push({ href: "/journeys", label: "Journeys", icon: Zap });
-  // Anyone who can see leads, quotes or activities: it only ever shows them
-  // what their own lists already would.
-  if (can("leads.view_all", "leads.view_owned", "quotes.view_all", "quotes.view_owned", "activities.view", "activities.manage")) {
-    automationLinks.push({ href: "/assistant", label: "Ask the CRM", icon: DaxIcon });
-  }
   if (isAdmin) {
     automationLinks.push({ href: "/chatbot", label: "Chatbot", icon: Bot });
+    // Kept until it folds into Chatbot as a tab (plan stage 4).
     automationLinks.push({ href: "/bot-builder", label: "Flow builder", icon: Network });
-    automationLinks.push({ href: "/competitors", label: "Competitors", icon: Radar });
   }
-  if (automationLinks.length) groups.push({ key: "automation", label: "Automation", links: automationLinks });
+  if (automationLinks.length) groups.push({ key: "automation", label: "Automation", icon: Zap, links: automationLinks });
 
-  const platformLinks: NavLink[] = [];
-  if (can("document_templates.manage", "docbuilder.view", "docbuilder.manage")) platformLinks.push({ href: "/document-studio", label: "Document Studio", icon: FileText });
-  if (platformLinks.length) groups.push({ key: "platform", label: "Platform", links: platformLinks });
-
-  const governanceLinks: NavLink[] = [];
-  if (can("audit.view")) governanceLinks.push({ href: "/audit", label: "Audit log", icon: ScrollText });
+  const adminLinks: NavLink[] = [];
+  if (can("document_templates.manage", "docbuilder.view", "docbuilder.manage")) adminLinks.push({ href: "/document-studio", label: "Document Studio", icon: FileText });
+  if (can("contacts.view_all", "contacts.view_owned")) adminLinks.push({ href: "/data-quality", label: "Data quality", icon: ShieldCheck, keywords: ["duplicates", "missing details", "data quality", "clean up"] });
+  if (can("audit.view")) adminLinks.push({ href: "/audit", label: "Audit log", icon: ScrollText });
   // `isAdmin`, not `can(...)`, to match ROUTE_RULES' `{ prefix: "/repairs",
   // owner: true }`. A `can(...)` list here would be a second, independently
   // authored answer to a question the route table already answers.
-  if (isAdmin) governanceLinks.push({ href: "/repairs", label: "Repairs", icon: Hammer });
-  if (governanceLinks.length) groups.push({ key: "governance", label: "Governance", links: governanceLinks });
+  // A system-health page (a journey that stopped sending, a credential that stopped working) — not vehicle repairs.
+  if (isAdmin) adminLinks.push({ href: "/repairs", label: "System repairs", icon: Hammer, keywords: ["repairs", "health", "problems"] });
+  if (adminLinks.length) groups.push({ key: "admin", label: "Admin", icon: ShieldCheck, links: adminLinks });
 
   if (enabledModules) {
     const visibleTop = topLinks.filter((link) => isPathEnabled(link.href, enabledModules));
@@ -184,7 +190,11 @@ export function buildNav(
   return { topLinks, groups };
 }
 
+/** Every link the menu can show this person — pinned and grouped — for search and the palette. */
+export function allNavLinks(nav: ReturnType<typeof buildNav>): NavLink[] {
+  return [...nav.topLinks, ...nav.groups.flatMap((group) => group.links)];
+}
+
 export function flatNav(isAdmin: boolean, permissions: string[] = []): NavLink[] {
-  const { topLinks, groups } = buildNav(isAdmin, permissions);
-  return [...topLinks, ...groups.flatMap((group) => group.links)];
+  return allNavLinks(buildNav(isAdmin, permissions));
 }

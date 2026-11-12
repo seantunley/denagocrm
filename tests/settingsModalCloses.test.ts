@@ -11,7 +11,17 @@ import { existsSync, readFileSync } from "node:fs";
 const modal = readFileSync("src/components/SettingsModal.tsx", "utf8");
 
 test("the Settings modal closes itself once the URL leaves /settings", () => {
-  assert.match(modal, /const pathname = usePathname\(\);\s*if \(!pathname\.startsWith\("\/settings"\)\) return null;/);
+  assert.match(modal, /if \(!pathname\.startsWith\("\/settings"\)\) return null;/);
+});
+
+test("the Settings modal never stacks on top of a full Settings page", () => {
+  // Integrations → side menu → Products opened the catalogue as a popup over
+  // Settings, and closing it stepped back through the page underneath.
+  const workspace = readFileSync("src/components/settings-workspace.tsx", "utf8");
+  assert.match(workspace, /<div className="space-y-4" data-settings-page>/, "full Settings pages are marked");
+  assert.match(modal, /document\.querySelector\("\[data-settings-page\]"\)/);
+  assert.match(modal, /if \(overSettings\) return null;/);
+  assert.match(modal, /window\.location\.replace\(window\.location\.href\)/, "loads the section as a full page instead");
 });
 
 test("no catch-all @modal route: it matches every URL and breaks no-html-link-for-pages", () => {
