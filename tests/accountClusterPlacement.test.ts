@@ -50,15 +50,17 @@ test("the sidebar footer is gone, not merely hidden", () => {
   assert.doesNotMatch(sidebar, /Help, Settings & user/);
   assert.doesNotMatch(sidebar, /<SidebarHelpSettings/, "the sidebar no longer carries these");
   assert.doesNotMatch(sidebar, /<AccountMenu/);
-  // The nav keeps its scroll region, which is what gains the space.
-  assert.match(sidebar, /flex-1 overflow-y-auto/);
+  // The nav keeps its scroll region (it scrolls itself; brand and search stay put).
+  assert.match(sidebar, /<div className="flex min-h-0 flex-1 flex-col">/);
+  assert.match(src("src/components/Nav.tsx"), /flex min-h-0 flex-1 flex-col gap-0\.5 overflow-y-auto/);
 });
 
 test("the page reserves the height the fixed bar takes", () => {
-  // A fixed bar over unpadded content hides the first rows of every page.
+  // A fixed bar over unpadded content hides the first rows of every page. Since
+  // the sidebar brief's PR 2 the bar rides the page sheet, 10px down.
   const shell = src("src/components/AppShell.tsx");
-  assert.match(shell, /fixed left-60 right-0 top-0 z-30[^"]*h-14/, "bar is fixed, and to the right of the sidebar");
-  assert.match(shell, /lg:pt-19/, "content clears it");
+  assert.match(shell, /fixed right-0 top-2\.5 z-30[^"]*h-14[^"]*lg:left-70/, "bar is fixed, on the sheet, to the right of the sidebar");
+  assert.match(shell, /lg:pt-\[86px\]/, "content clears it");
 });
 
 test("ClockWeather moved rather than being duplicated or dropped", () => {

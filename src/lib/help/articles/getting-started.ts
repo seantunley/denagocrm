@@ -39,7 +39,7 @@ export const gettingStartedArticles: HelpArticle[] = [
         "You'll land on Home.",
       ] },
       { type: "h", text: "Turn on two-factor authentication" },
-      { type: "p", text: "Two-factor authentication (2FA) adds a second step so a stolen password alone can't get in. Set it up under **Settings → My Account** (or Security)." },
+      { type: "p", text: "Two-factor authentication (2FA) adds a second step so a stolen password alone can't get in. Set it up under **Settings → Profile & sign-in**." },
       { type: "steps", items: [
         "Open Settings and find the two-factor / authenticator option.",
         "Scan the QR code with an authenticator app (Google Authenticator, Authy, 1Password, etc.).",
@@ -89,7 +89,7 @@ export const gettingStartedArticles: HelpArticle[] = [
         "**Ownership** — many records have an owner. Some permissions grant access to everything; others only to records assigned to you or your team.",
       ] },
       { type: "callout", tone: "info", text: "The **owner** role sees and manages everything. Everyone else gets exactly the modules and permissions an administrator assigns." },
-      { type: "p", text: "If you need access to something, ask an administrator — they can adjust your role or permissions under Settings → Team & access. Administrators should see the Administration section of this manual." },
+      { type: "p", text: "If you need access to something, ask an administrator — they can adjust your role or permissions under Settings → Team & roles. Administrators should see the Administration section of this manual." },
     ],
   },
   {

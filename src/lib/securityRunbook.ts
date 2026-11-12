@@ -241,7 +241,7 @@ export async function runSecurityChecks(): Promise<RunbookRun> {
       no2fa.length === 0
         ? "Every user has 2FA enabled."
         : `Without 2FA: ${no2fa.map((u) => u.name).join(", ")}.`,
-    fix: no2fa.length ? "Ask them to enable 2FA under Settings → My Account." : undefined,
+    fix: no2fa.length ? "Ask them to enable 2FA under Settings → Profile & sign-in." : undefined,
   });
 
   /*

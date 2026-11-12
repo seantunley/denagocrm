@@ -106,11 +106,12 @@ function AccountCluster({ user, isOwner, tenantId, unreadNotices = 0, birthdaysT
 
 function SidebarInner({ user, inboxWaiting = 0, casesWaiting = 0, activitiesOverdue = 0, enabledModules, brand, phone = false }: { user: ShellUser; inboxWaiting?: number; casesWaiting?: number; activitiesOverdue?: number; enabledModules?: string[]; brand?: { logoUrl: string | null; displayName: string }; phone?: boolean }) {
   const isOwner = ownsWorkspace(user);
+  // Sidebar brief PR 2 ("with subtle depth"): the sidebar is the lowest surface.
+  // The brand stays the workspace's logo; Help, Settings and the account stay top-right.
   return (
-    <div className="relative flex h-full flex-col overflow-hidden bg-sidebar">
-      <div className="pointer-events-none absolute -left-28 top-24 size-64 rounded-full bg-orange-500/[0.055] blur-3xl" />
+    <div className="relative flex h-full flex-col gap-3 bg-sidebar px-3 py-4">
       {/* Brand */}
-      <div className="flex h-16 items-center border-b border-sidebar-border px-4">
+      <div className="flex h-9 items-center px-1">
         <BrandLogo
           logoUrl={brand?.logoUrl ?? null}
           alt={brand?.displayName ?? "Denago Cape Town"}
@@ -118,27 +119,25 @@ function SidebarInner({ user, inboxWaiting = 0, casesWaiting = 0, activitiesOver
         />
       </div>
 
-      {/* Command trigger + quick actions */}
-      <div className="relative space-y-2 px-3 pt-3">
+      {/* Command trigger — an inset well — and quick actions */}
+      <div className="space-y-2">
         <button
+          type="button"
           onClick={openCommandMenu}
-          className="flex w-full items-center gap-2 rounded-md border border-sidebar-border bg-sidebar-accent/40 px-2.5 py-1.5 text-[13px] text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
+          className="depth-inset flex min-h-11 w-full items-center gap-2.5 rounded-[10px] px-3 text-left text-sm text-muted-foreground transition-colors hover:text-sidebar-accent-foreground pointer-fine:min-h-9"
         >
-          <Search className="size-4" />
-          <span className="flex-1 text-left">Search…</span>
-          <kbd className="rounded border border-sidebar-border bg-background/60 px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
-            ⌘K
-          </kbd>
+          <Search className="size-4 shrink-0" />
+          <span className="flex-1">Search or jump to…</span>
+          <kbd className="depth-key rounded-md px-1.5 py-0.5 text-[11px] font-semibold text-muted-foreground">⌘K</kbd>
         </button>
         {/* On the phone, Capture on the bottom bar is the way to start something. */}
         {!phone && <QuickActions isAdmin={isOwner} permissions={user.permissions} enabledModules={enabledModules} />}
       </div>
 
-      {/* Nav */}
-      <div className="relative flex-1 overflow-y-auto px-3 py-3">
+      {/* Nav — scrolls on its own; the brand and search stay put. */}
+      <div className="flex min-h-0 flex-1 flex-col">
         <Nav isAdmin={isOwner} permissions={user.permissions} enabledModules={enabledModules} badges={{ "/inbox": inboxWaiting, "/cases": casesWaiting, "/activities": activitiesOverdue }} phone={phone} />
       </div>
-
     </div>
   );
 }
@@ -234,7 +233,13 @@ export default function AppShell({
       {/* Desktop top bar. Sticky rather than static: these are the controls you
           reach for from anywhere in a long page, and the sidebar footer they came
           from was always on screen. */}
-      <header className="fixed left-60 right-0 top-0 z-30 hidden h-14 items-center gap-4 border-b border-sidebar-border bg-background/80 px-5 backdrop-blur-xl lg:flex">
+      {/* SUBTLE DEPTH (sidebar brief PR 2): on a desktop the page sits on a sheet laid over the sidebar — 10px
+          down, its top-left corner rounded, a light inner edge and a soft shadow at the join, no hard border.
+          The sidebar's colour fills the strip above it (and, behind, the corner); the top bar rides the sheet. */}
+      <div aria-hidden className="pointer-events-none fixed right-0 top-0 -z-30 hidden h-8 bg-sidebar lg:left-70 lg:block" />
+      <div aria-hidden className="pointer-events-none fixed bottom-0 right-0 top-2.5 -z-20 hidden rounded-tl-[18px] bg-background depth-sheet lg:left-70 lg:block" />
+      <div aria-hidden className="pointer-events-none fixed right-0 top-0 z-30 hidden h-2.5 bg-sidebar lg:left-70 lg:block" />
+      <header className="fixed right-0 top-2.5 z-30 hidden h-14 items-center gap-4 rounded-tl-[18px] border-b border-sidebar-border bg-background/80 px-5 backdrop-blur-xl lg:left-70 lg:flex">
         <div className="min-w-0 flex-1">
           <ClockWeather cities={weatherCities} />
         </div>
@@ -260,15 +265,15 @@ export default function AppShell({
       />
 
       {/* Desktop sidebar */}
-      <aside className="fixed inset-y-0 left-0 z-40 hidden w-60 border-r border-sidebar-border lg:flex lg:flex-col">
+      <aside className="fixed inset-y-0 left-0 z-40 hidden w-70 lg:flex lg:flex-col">
         <SidebarInner user={user} inboxWaiting={inboxWaiting} casesWaiting={casesWaiting} activitiesOverdue={activitiesOverdue} enabledModules={enabledModules} brand={brand} />
       </aside>
 
-      <main className="relative lg:pl-60">
-        <div className="pointer-events-none fixed inset-x-0 top-0 -z-10 h-72 bg-[radial-gradient(circle_at_65%_0%,rgba(249,115,22,.045),transparent_42%)] lg:left-60" />
+      <main className="relative lg:pl-70">
+        <div className="pointer-events-none fixed inset-x-0 top-0 -z-10 h-72 bg-[radial-gradient(circle_at_65%_0%,rgba(249,115,22,.045),transparent_42%)] lg:left-70" />
         {/* No width cap: the page runs to the same edges as the top bar (both lg:px-5). Capped and centred, it sat
             inside the bar on a wide screen — the bar's ends hung out past the content and the two never lined up. */}
-        <div className="denago-workspace p-3 pb-24 pt-15 sm:p-4 sm:pb-24 sm:pt-16 lg:p-5 lg:pt-19">
+        <div className="denago-workspace p-3 pb-24 pt-15 sm:p-4 sm:pb-24 sm:pt-16 lg:p-5 lg:pt-[86px]">
           {/* ClockWeather moved into the top bar — it was already desktop-only
               furniture at the top of the page, so the bar is where it belongs
               and the page keeps the vertical space the bar takes. */}

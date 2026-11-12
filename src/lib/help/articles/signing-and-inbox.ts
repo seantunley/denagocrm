@@ -294,7 +294,7 @@ export const signingAndInboxArticles: HelpArticle[] = [
     audience: "admins",
     keywords: ["signing permission", "who can sign", "access", "roles", "view signatures", "manage signatures", "can't see signatures", "owner only"],
     body: [
-      { type: "p", text: "Signing has two permissions, listed under **Documents** when you open a role in **Settings → Team & access**. Holding either one puts **Signatures** in a person's menu." },
+      { type: "p", text: "Signing has two permissions, listed under **Documents** when you open a role in **Settings → Team & roles**. Holding either one puts **Signatures** in a person's menu." },
       { type: "table", headers: ["Permission", "What it allows"], rows: [
         ["**signing.view** — View signature requests on accessible quotes, job cards and documents", "Open the Signatures hub and a request's page, read recipients, engagement and the audit trail, download the evidence pack, and decide an approval assigned to them."],
         ["**signing.manage** — Send, remind, withdraw and sign in person on accessible quotes, job cards and documents", "Everything above, plus **Send for signing**, **Resend**, **Void**, **Remind**, changing a recipient's email or phone, **Sign in person**, **Retry**, **Send signed copy again**, and resending or reassigning an approval."],
@@ -315,7 +315,7 @@ export const signingAndInboxArticles: HelpArticle[] = [
       ] },
       { type: "h", text: "Give someone access" },
       { type: "steps", items: [
-        "Open **Settings → Team & access** and go to **Roles & permissions**.",
+        "Open **Settings → Team & roles** and go to **Roles & permissions**.",
         "Open the role the person holds.",
         "Under **Documents**, tick **signing.view**, **signing.manage**, or both.",
         "Click **Save permissions**.",
@@ -600,7 +600,7 @@ export const signingAndInboxArticles: HelpArticle[] = [
       { type: "h", text: "In Observe only mode" },
       { type: "p", text: "Messages in **Observe — would have held** are already in your inbox. Mark them **Not spam** or **Confirm spam** to judge the filter before you enable Quarantine. Nothing is sent again or moved." },
       { type: "callout", tone: "info", text: "Nothing is deleted automatically. The **Last 30 days** panel counts what was screened, held, restored and missed — these are counts of what happened, not an accuracy score." },
-      { type: "callout", tone: "info", text: "Anyone who can open the inbox can read the Spam tab. The buttons need the **inbox.spam** permission (“Review quarantined messages: restore, block or always allow a sender”), found under **Inbox** in **Settings → Team & access**. Every role that could already reply in the inbox was given it." },
+      { type: "callout", tone: "info", text: "Anyone who can open the inbox can read the Spam tab. The buttons need the **inbox.spam** permission (“Review quarantined messages: restore, block or always allow a sender”), found under **Inbox** in **Settings → Team & roles**. Every role that could already reply in the inbox was given it." },
     ],
   },
   {
