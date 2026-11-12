@@ -5,7 +5,8 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { ChevronRight } from "lucide-react";
 import { LayoutGroup, MotionConfig, motion } from "framer-motion";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Popover, PopoverAnchor, PopoverContent } from "@/components/ui/popover";
+import { FLYOUT_CLOSED, flyoutTakesFocus, railFlyout, type FlyoutEvent, type FlyoutState } from "@/lib/railFlyout";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { buildNav, type NavGroup, type NavLink } from "@/components/nav-config";
 import { cn } from "@/lib/utils";
@@ -257,10 +258,12 @@ function RailTip({ label, children }: { label: string; children: ReactElement })
 
 /**
  * A group on the rail: its icon, and its links in a flyout beside it — the top
- * depth level (depth-float), scaling up slightly from the icon. Opens on hover
- * and on click; closes on Escape, on clicking away, or on leaving it. Radix's
- * popover is the keyboard path: Enter opens it, focus moves in, and closing
- * returns focus to the icon.
+ * depth level (depth-float), scaling up slightly from the icon. When it opens
+ * and closes, and whether it takes focus, is lib/railFlyout.ts (review of #1081):
+ * hover opens it without taking focus; clicking a hovered icon keeps it open;
+ * a click or key opening moves focus in, and closing that one returns focus to
+ * the icon. The icon is the popover's ANCHOR, not its trigger, so Radix's own
+ * click-toggle never fights the rules.
  */
 function RailGroup({
   group,
@@ -275,45 +278,80 @@ function RailGroup({
   badges: Record<string, number>;
   total: number;
 }) {
-  const [open, setOpen] = useState(false);
+  const [state, setState] = useState<FlyoutState>(FLYOUT_CLOSED);
+  const open = state.open;
+  const button = useRef<HTMLButtonElement | null>(null);
+  const panel = useRef<HTMLElement | null>(null);
+  const lastVia = useRef<"hover" | "click" | null>(null);
   const closing = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const panelId = `rail-flyout-${group.key}`;
+  const send = (event: FlyoutEvent) =>
+    setState((previous) => {
+      const next = railFlyout(previous, event);
+      if (next.open) lastVia.current = next.via;
+      // A click or key opening takes focus to the first link — including hover-then-click, when it is
+      // already open. Done here, not by Radix: its auto-focus skips links and would land on the panel.
+      if (flyoutTakesFocus(next) && !flyoutTakesFocus(previous)) {
+        requestAnimationFrame(() => panel.current?.querySelector<HTMLElement>("a")?.focus());
+      }
+      return next;
+    });
   const hold = () => {
     if (closing.current) clearTimeout(closing.current);
     closing.current = null;
   };
-  const show = () => {
+  const enter = () => {
     hold();
-    setOpen(true);
+    send("pointer-enter");
   };
-  const hide = () => {
+  const leave = () => {
     hold();
-    closing.current = setTimeout(() => setOpen(false), 150);
+    closing.current = setTimeout(() => send("pointer-leave"), 150);
   };
   useEffect(() => hold, []);
 
   return (
-    <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger asChild>
+    <Popover open={open} onOpenChange={(next) => !next && send("dismiss")}>
+      <PopoverAnchor asChild>
         <button
+          ref={button}
           type="button"
           aria-label={total > 0 ? `${group.label}, ${total} waiting` : group.label}
-          onMouseEnter={show}
-          onMouseLeave={hide}
+          aria-expanded={open}
+          aria-controls={open ? panelId : undefined}
+          onClick={() => {
+            hold();
+            send("click");
+          }}
+          onMouseEnter={enter}
+          onMouseLeave={leave}
           className={cn(RAIL_BUTTON, active || open ? "depth-raised text-primary" : cn("text-sidebar-foreground", HOVER))}
         >
           <group.icon className="size-5" aria-hidden />
           {total > 0 && <RailCount n={total} />}
         </button>
-      </PopoverTrigger>
+      </PopoverAnchor>
       <PopoverContent
+        id={panelId}
         side="right"
         align="start"
         sideOffset={14}
         onMouseEnter={hold}
-        onMouseLeave={hide}
+        onMouseLeave={leave}
+        // Focus is placed by `send` above: hovering never takes it; a click or key opening moves it to the first link.
+        onOpenAutoFocus={(event) => event.preventDefault()}
+        // Closing a click/key-opened flyout returns focus to its icon; a hover one leaves focus where it was.
+        onCloseAutoFocus={(event) => {
+          event.preventDefault();
+          if (lastVia.current === "click") button.current?.focus();
+        }}
+        // The icon handles its own clicks — as "outside", Radix would close it a moment before the click reopened it.
+        onInteractOutside={(event) => {
+          if (button.current?.contains(event.target as Node)) event.preventDefault();
+        }}
         className="depth-float w-60 rounded-[14px] border-0 bg-[var(--depth-float)] p-2 motion-reduce:animate-none"
       >
-        <nav aria-label={group.label} className="flex flex-col gap-0.5">
+        <nav ref={panel} aria-label={group.label} className="flex flex-col gap-0.5">
           <p className="px-3 pb-1.5 pt-2 text-xs font-semibold uppercase tracking-[0.04em] text-muted-foreground">{group.label}</p>
           {group.links.map((link) => {
             const here = isActive(link.href);
@@ -322,7 +360,7 @@ function RailGroup({
               <Link
                 key={link.href}
                 href={link.href}
-                onClick={() => setOpen(false)}
+                onClick={() => send("dismiss")}
                 aria-current={here ? "page" : undefined}
                 className={cn(ROW, "flex items-center gap-2.5 px-3 text-sm transition-colors", here ? "depth-raised font-semibold text-foreground" : cn("text-sidebar-foreground", HOVER))}
               >
